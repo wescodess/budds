@@ -17,6 +17,14 @@ export default defineNuxtConfig({
       guest: '/',
     },
   },
+  devServer: {
+    port: 3002,
+  },
+  runtimeConfig: {
+    public: {
+      siteUrl: process.env.NUXT_PUBLIC_SITE_URL || 'http://localhost:3002',
+    },
+  },
   routeRules: {
     '/app/**': { auth: 'user' as const },
     '/login': { auth: 'guest' as const },
