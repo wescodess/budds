@@ -21,6 +21,12 @@ export default defineNuxtConfig({
     port: 3002,
   },
   runtimeConfig: {
+    cloudflareAccountId: process.env.CF_ACCOUNT_ID,
+    cloudflareAiGatewayId: process.env.CLOUDFLARE_AI_GATEWAY_ID,
+    cloudflareAiGatewayApiKey: process.env.CLOUDFLARE_AI_GATEWAY_API_KEY,
+    cloudflareAiSearchInstance: process.env.CLOUDFLARE_AI_SEARCH_INSTANCE,
+    cloudflareAiSearchToken: process.env.CLOUDFLARE_AI_SEARCH_TOKEN,
+    openrouterApiKey: process.env.OPENROUTER_API_KEY,
     public: {
       siteUrl: process.env.NUXT_PUBLIC_SITE_URL || 'http://localhost:3002',
     },
