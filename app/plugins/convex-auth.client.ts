@@ -22,7 +22,6 @@ export default defineNuxtPlugin(() => {
     if (!isReady) return
 
     if (isLoggedIn) {
-      convexAuthReady.value = false
       convexClient.setAuth(fetchToken, (isAuthenticated: boolean) => {
         convexAuthReady.value = true
         if (isAuthenticated && !upsertDone) {

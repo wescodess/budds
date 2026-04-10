@@ -44,8 +44,9 @@ async function handleCreateSubfolder() {
 <template>
   <div class="flex flex-1 flex-col p-6">
     <div class="mb-6 flex items-center justify-between">
-      <h1 data-testid="folder-heading" class="text-2xl font-bold tracking-tight">
-        {{ folder?.name ?? 'Loading...' }}
+      <UiSkeleton v-if="!folder" class="h-8 w-48 rounded-md" />
+      <h1 v-else data-testid="folder-heading" class="text-2xl font-bold tracking-tight">
+        {{ folder.name }}
       </h1>
       <UiButton
         v-if="folderDepth < 3"

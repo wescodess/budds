@@ -13,6 +13,7 @@ import {
   FileText,
   MessagesSquare,
 } from 'lucide-vue-next'
+import type { Id } from '~~/convex/_generated/dataModel'
 
 useHead({
   link: [
@@ -41,7 +42,7 @@ const isMobileView = useMediaQuery('(max-width: 767px)')
 const route = useRoute()
 const isDashboard = computed(() => route.path === '/app')
 
-const { allFolders, createFolder, createSubfolder } = useFolders()
+const { allFolders, allFoldersLoading, createFolder, createSubfolder, renameFolder, deleteFolder } = useFolders()
 
 const isFolderRoute = computed(() => route.path.startsWith('/app/folders/'))
 const currentFolderId = computed(() => {
@@ -95,6 +96,90 @@ async function handleCreateSubfolder(parentId: string) {
   } catch (e: any) {
     const { toast } = await import('vue-sonner')
     toast.error(e.message || 'Failed to create subfolder')
+  }
+}
+
+async function handleRename(folderId: Id<'folders'>, name: string) {
+  try {
+    await renameFolder(folderId, name)
+  } catch (e: any) {
+    const { toast } = await import('vue-sonner')
+    toast.error(e.message || 'Failed to rename folder')
+  }
+}
+
+const showDeleteDialog = ref(false)
+const isDeleting = ref(false)
+const folderToDelete = ref<{ _id: Id<'folders'>; name: string } | null>(null)
+
+function countDescendants(folderId: string): { subfolderCount: number; documentCount: number } {
+  if (!allFolders?.value) return { subfolderCount: 0, documentCount: 0 }
+  let count = 0
+  const stack = [folderId]
+  while (stack.length > 0) {
+    const parentId = stack.pop()!
+    for (const f of allFolders.value) {
+      if (f.parentId === parentId) {
+        count++
+        stack.push(f._id)
+      }
+    }
+  }
+  return { subfolderCount: count, documentCount: 0 }
+}
+
+const deleteDescription = computed(() => {
+  if (!folderToDelete.value) return ''
+  const c = countDescendants(folderToDelete.value._id)
+  if (c.subfolderCount === 0 && c.documentCount === 0) {
+    return `Are you sure you want to delete "${folderToDelete.value.name}"?`
+  }
+  const parts: string[] = []
+  if (c.subfolderCount > 0) parts.push(`${c.subfolderCount} subfolder${c.subfolderCount > 1 ? 's' : ''}`)
+  if (c.documentCount > 0) parts.push(`${c.documentCount} document${c.documentCount > 1 ? 's' : ''}`)
+  return `Delete "${folderToDelete.value.name}" and all ${parts.join(' and ')} inside?`
+})
+
+function handleDeleteRequest(folder: { _id: Id<'folders'>; name: string }) {
+  folderToDelete.value = folder
+  showDeleteDialog.value = true
+}
+
+function collectDescendantIds(folderId: string): Set<string> {
+  const ids = new Set<string>([folderId])
+  if (!allFolders?.value) return ids
+  const stack = [folderId]
+  while (stack.length > 0) {
+    const parentId = stack.pop()!
+    for (const f of allFolders.value) {
+      if (f.parentId === parentId && !ids.has(f._id)) {
+        ids.add(f._id)
+        stack.push(f._id)
+      }
+    }
+  }
+  return ids
+}
+
+async function executeDelete() {
+  if (!folderToDelete.value || isDeleting.value) return
+  isDeleting.value = true
+  const deletedId = folderToDelete.value._id
+  const affectedIds = collectDescendantIds(deletedId)
+  try {
+    await deleteFolder(deletedId)
+    const { toast } = await import('vue-sonner')
+    toast.success('Folder deleted')
+    if (route.params.id && affectedIds.has(route.params.id as string)) {
+      navigateTo('/app')
+    }
+  } catch (e: any) {
+    const { toast } = await import('vue-sonner')
+    toast.error(e.message || 'Failed to delete folder')
+  } finally {
+    showDeleteDialog.value = false
+    folderToDelete.value = null
+    isDeleting.value = false
   }
 }
 </script>
@@ -162,15 +247,20 @@ async function handleCreateSubfolder(parentId: string) {
                 @keydown.escape="showNewFolderInput = false"
               />
             </div>
-            <template v-if="allFolders && allFolders.length > 0">
+            <div v-if="allFoldersLoading" class="space-y-1 px-3 py-2">
+              <UiSkeleton v-for="i in 3" :key="i" class="h-7 w-full rounded-md" />
+            </div>
+            <template v-else-if="allFolders && allFolders.length > 0">
               <SidebarFolderTree
                 :folders="allFolders"
                 :active-folder="currentFolderId"
                 @create-subfolder="handleCreateSubfolder"
+                @rename="handleRename"
+                @delete="handleDeleteRequest"
               />
             </template>
             <div
-              v-else-if="!allFolders || allFolders.length === 0"
+              v-else
               data-testid="sidebar-folders-empty"
               class="px-3 py-6 text-center text-sm text-muted-foreground"
             >
@@ -365,5 +455,26 @@ async function handleCreateSubfolder(parentId: string) {
       </div>
     </UiSidebarInset>
   </UiSidebarProvider>
+
+  <UiAlertDialog v-model:open="showDeleteDialog">
+    <UiAlertDialogContent>
+      <UiAlertDialogHeader>
+        <UiAlertDialogTitle>Delete folder</UiAlertDialogTitle>
+        <UiAlertDialogDescription>
+          {{ deleteDescription }}
+        </UiAlertDialogDescription>
+      </UiAlertDialogHeader>
+      <UiAlertDialogFooter>
+        <UiAlertDialogCancel>Cancel</UiAlertDialogCancel>
+        <UiAlertDialogAction
+          class="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+          @click="executeDelete"
+        >
+          Delete
+        </UiAlertDialogAction>
+      </UiAlertDialogFooter>
+    </UiAlertDialogContent>
+  </UiAlertDialog>
+
   <UiSonner />
 </template>
