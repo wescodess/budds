@@ -1,0 +1,86 @@
+# generated: 2026-04-09
+# last_updated: 2026-04-09
+# project: budds
+# project_key: NOKEY
+# tracking_system: file-system
+# story_location: _bmad-output/implementation-artifacts
+
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+#
+# Epic Status Transitions:
+#   - backlog → in-progress: Automatically when first story is created (via create-story)
+#   - in-progress → done: Manually when all stories reach 'done' status
+#
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created in stories folder
+#   - in-progress: Developer actively working on implementation
+#   - review: Ready for code review (via Dev's code-review workflow)
+#   - done: Story completed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+#
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when first story is created
+# - Stories can be worked in parallel if team capacity allows
+# - SM typically creates next story after previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+
+generated: 2026-04-09
+last_updated: 2026-04-09
+project: budds
+
+project_key: NOKEY
+tracking_system: file-system
+story_location: _bmad-output/implementation-artifacts
+
+development_status:
+  epic-1: in-progress
+  1-1-verify-and-harden-authentication-flow: done
+  1-2-app-shell-layout-with-responsive-navigation: backlog
+  1-3-dashboard-home-view: backlog
+  epic-1-retrospective: optional
+
+  epic-2: backlog
+  2-1-create-and-navigate-folder-hierarchy: backlog
+  2-2-rename-and-delete-folders: backlog
+  epic-2-retrospective: optional
+
+  epic-3: backlog
+  3-1-upload-files-and-track-processing-status: backlog
+  3-2-document-ingestion-pipeline-with-per-user-isolation: backlog
+  3-3-delete-documents-and-move-between-folders: backlog
+  epic-3-retrospective: optional
+
+  epic-4: backlog
+  4-1-folder-scoped-rag-chat-with-source-citations: backlog
+  4-2-streaming-chat-responses: backlog
+  4-3-model-selection: backlog
+  4-4-chat-history-and-conversation-management: backlog
+  epic-4-retrospective: optional
+
+  epic-5: backlog
+  5-1-account-deletion-with-cascading-data-cleanup: backlog
+  5-2-document-deletion-index-cleanup-validation: backlog
+  5-3-data-export-and-legal-pages: backlog
+  epic-5-retrospective: optional
+
+  epic-6: backlog
+  6-1-generate-quiz-from-folder-documents: backlog
+  6-2-take-quiz-and-view-results: backlog
+  6-3-edit-questions-and-view-previous-quizzes: backlog
+  epic-6-retrospective: optional
+
+  epic-7: backlog
+  7-1-generate-flash-cards-from-folder-documents: backlog
+  7-2-study-flash-cards: backlog
+  7-3-edit-delete-and-manage-flash-card-sets: backlog
+  epic-7-retrospective: optional
