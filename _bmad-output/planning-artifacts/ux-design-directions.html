@@ -1,0 +1,1050 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Budds — UX Design Directions</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #09090b;
+    --fg: #fafafa;
+    --card: #18181b;
+    --card-fg: #fafafa;
+    --muted: #27272a;
+    --muted-fg: #a1a1aa;
+    --border: rgba(255,255,255,0.1);
+    --primary: #e4e4e7;
+    --primary-fg: #18181b;
+    --accent-blue: #60a5fa;
+    --accent-teal: #2dd4bf;
+    --accent-green: #4ade80;
+    --accent-amber: #fbbf24;
+    --destructive: #f87171;
+    --radius: 10px;
+  }
+
+  body {
+    font-family: 'Inter', -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    line-height: 1.57;
+    font-size: 14px;
+  }
+
+  /* Navigation */
+  .nav {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 100;
+    background: rgba(9,9,11,0.9);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+    padding: 12px 24px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  .nav h1 { font-size: 16px; font-weight: 700; white-space: nowrap; }
+  .nav-tabs {
+    display: flex;
+    gap: 4px;
+    overflow-x: auto;
+    flex: 1;
+  }
+  .nav-tab {
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    white-space: nowrap;
+    color: var(--muted-fg);
+    border: 1px solid transparent;
+    background: none;
+    transition: all 0.15s;
+  }
+  .nav-tab:hover { color: var(--fg); background: var(--muted); }
+  .nav-tab.active { color: var(--fg); background: var(--muted); border-color: var(--border); }
+
+  .content { padding-top: 60px; }
+
+  /* Direction Container */
+  .direction {
+    display: none;
+    min-height: calc(100vh - 60px);
+    padding: 32px;
+  }
+  .direction.active { display: block; }
+  .direction-header {
+    margin-bottom: 32px;
+    max-width: 800px;
+  }
+  .direction-header h2 { font-size: 24px; font-weight: 700; margin-bottom: 8px; }
+  .direction-header p { color: var(--muted-fg); font-size: 14px; line-height: 1.6; }
+  .direction-header .tags { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  .tag {
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 500;
+    border: 1px solid var(--border);
+    color: var(--muted-fg);
+  }
+
+  /* Mockup Frame */
+  .mockup {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    background: var(--bg);
+    max-width: 1200px;
+    height: 680px;
+    display: flex;
+  }
+
+  /* Sidebar Styles */
+  .sidebar {
+    width: 256px;
+    min-width: 256px;
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    background: var(--card);
+  }
+  .sidebar-header {
+    padding: 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .sidebar-header h3 { font-size: 14px; font-weight: 600; }
+  .sidebar-section { padding: 8px; flex: 1; overflow-y: auto; }
+  .sidebar-label {
+    padding: 4px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted-fg);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  /* Tree items */
+  .tree-item {
+    padding: 6px 8px;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--muted-fg);
+    transition: all 0.1s;
+  }
+  .tree-item:hover { background: var(--muted); color: var(--fg); }
+  .tree-item.active { background: var(--muted); color: var(--fg); }
+  .tree-item .icon { font-size: 14px; opacity: 0.7; }
+  .tree-item.nested { padding-left: 24px; }
+  .tree-item.deep-nested { padding-left: 40px; }
+  .tree-item .badge {
+    margin-left: auto;
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: var(--muted);
+  }
+
+  /* Main content */
+  .main { flex: 1; display: flex; flex-direction: column; }
+  .main-header {
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .breadcrumb { font-size: 13px; color: var(--muted-fg); display: flex; gap: 6px; align-items: center; }
+  .breadcrumb span { color: var(--fg); font-weight: 500; }
+
+  /* Chat area */
+  .chat-area { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+
+  .message { max-width: 85%; }
+  .message.user { align-self: flex-end; }
+  .message.assistant { align-self: flex-start; }
+  .message-bubble {
+    padding: 12px 16px;
+    border-radius: var(--radius);
+    font-size: 14px;
+    line-height: 1.6;
+  }
+  .message.user .message-bubble { background: var(--muted); }
+  .message.assistant .message-bubble { background: transparent; border: 1px solid var(--border); }
+  .message-meta {
+    font-size: 11px;
+    color: var(--muted-fg);
+    margin-top: 4px;
+    padding: 0 4px;
+  }
+
+  /* Citations */
+  .citation-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    cursor: pointer;
+    vertical-align: middle;
+    margin: 0 1px;
+    transition: all 0.1s;
+  }
+  .citation-blue { background: rgba(96,165,250,0.2); color: var(--accent-blue); }
+  .citation-blue:hover { background: rgba(96,165,250,0.35); }
+  .citation-teal { background: rgba(45,212,191,0.2); color: var(--accent-teal); }
+  .citation-teal:hover { background: rgba(45,212,191,0.35); }
+
+  /* Source panel */
+  .source-panel {
+    width: 300px;
+    min-width: 300px;
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    background: var(--card);
+  }
+  .source-panel-header {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .source-card {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+  .source-card:hover { background: var(--muted); }
+  .source-card-title {
+    font-size: 12px;
+    font-weight: 600;
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .source-card-text {
+    font-size: 12px;
+    color: var(--muted-fg);
+    line-height: 1.5;
+    font-family: 'Courier New', monospace;
+    background: rgba(255,255,255,0.03);
+    padding: 8px;
+    border-radius: 6px;
+    margin-top: 6px;
+  }
+  .source-card .score {
+    font-size: 10px;
+    color: var(--accent-green);
+    font-weight: 500;
+  }
+
+  /* Chat input */
+  .chat-input-area {
+    padding: 16px 20px;
+    border-top: 1px solid var(--border);
+  }
+  .chat-input {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--muted);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 16px;
+  }
+  .chat-input input {
+    flex: 1;
+    background: none;
+    border: none;
+    outline: none;
+    color: var(--fg);
+    font-size: 14px;
+    font-family: inherit;
+  }
+  .chat-input input::placeholder { color: var(--muted-fg); }
+  .send-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    border: none;
+    background: var(--primary);
+    color: var(--primary-fg);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+  }
+  .model-indicator {
+    font-size: 11px;
+    color: var(--muted-fg);
+    margin-top: 6px;
+    padding: 0 4px;
+  }
+
+  /* Direction-specific overrides */
+
+  /* D2: Compact sidebar, wider chat */
+  .d2 .sidebar { width: 220px; min-width: 220px; }
+  .d2 .source-panel { width: 0; min-width: 0; display: none; }
+  .d2 .inline-sources {
+    margin-top: 8px;
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .d2 .inline-source-chip {
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    background: rgba(96,165,250,0.1);
+    color: var(--accent-blue);
+    border: 1px solid rgba(96,165,250,0.2);
+    cursor: pointer;
+    transition: all 0.1s;
+  }
+  .d2 .inline-source-chip:hover { background: rgba(96,165,250,0.2); }
+
+  /* D3: Full-width, no sidebar */
+  .d3 .sidebar { display: none; }
+  .d3 .top-bar {
+    padding: 8px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .d3 .folder-pill {
+    padding: 5px 14px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 500;
+    background: var(--muted);
+    border: 1px solid var(--border);
+    cursor: pointer;
+  }
+  .d3 .folder-pill.active { border-color: var(--accent-blue); color: var(--accent-blue); }
+
+  /* D4: Study mode focus */
+  .d4 .study-tabs {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .d4 .study-tab {
+    padding: 10px 20px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--muted-fg);
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+  }
+  .d4 .study-tab.active { color: var(--fg); border-bottom-color: var(--accent-blue); }
+
+  /* D5: Card layout */
+  .d5 .card-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+    padding: 20px;
+  }
+  .d5 .feature-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .d5 .feature-card:hover { border-color: var(--muted-fg); }
+  .d5 .feature-card h4 { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+  .d5 .feature-card p { font-size: 12px; color: var(--muted-fg); }
+  .d5 .feature-card .card-icon { font-size: 24px; margin-bottom: 12px; }
+
+  /* D6: Split view */
+  .d6 .split { display: flex; flex: 1; }
+  .d6 .split-left, .d6 .split-right { flex: 1; display: flex; flex-direction: column; }
+  .d6 .split-right { border-left: 1px solid var(--border); }
+  .d6 .split-header {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  /* Flashcard mockup */
+  .flashcard {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 40px;
+    text-align: center;
+    max-width: 400px;
+    margin: 20px auto;
+    cursor: pointer;
+    transition: all 0.2s;
+    min-height: 200px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+  .flashcard:hover { border-color: var(--muted-fg); }
+  .flashcard h3 { font-size: 18px; font-weight: 600; margin-bottom: 8px; }
+  .flashcard p { color: var(--muted-fg); font-size: 13px; }
+  .flashcard .card-count { margin-top: 16px; font-size: 12px; color: var(--muted-fg); }
+
+  /* File upload zone */
+  .upload-zone {
+    border: 2px dashed var(--border);
+    border-radius: var(--radius);
+    padding: 40px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .upload-zone:hover { border-color: var(--muted-fg); background: rgba(255,255,255,0.02); }
+  .upload-zone .icon { font-size: 32px; margin-bottom: 12px; opacity: 0.5; }
+  .upload-zone p { color: var(--muted-fg); font-size: 13px; }
+  .upload-zone .cta { color: var(--accent-blue); font-weight: 500; }
+
+  /* File list */
+  .file-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    transition: background 0.1s;
+  }
+  .file-item:hover { background: var(--muted); }
+  .file-item .file-icon { opacity: 0.5; }
+  .file-item .file-name { flex: 1; }
+  .file-item .file-status { font-size: 11px; font-weight: 500; }
+  .file-item .file-status.success { color: var(--accent-green); }
+  .file-item .file-status.processing { color: var(--accent-amber); }
+  .file-item .file-status.error { color: var(--destructive); }
+
+  /* Action buttons */
+  .btn {
+    padding: 7px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    border: 1px solid var(--border);
+    background: var(--muted);
+    color: var(--fg);
+    cursor: pointer;
+    transition: all 0.1s;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .btn:hover { background: var(--border); }
+  .btn-primary { background: var(--primary); color: var(--primary-fg); border-color: var(--primary); }
+  .btn-primary:hover { opacity: 0.9; }
+
+  /* Empty state */
+  .empty-state {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 40px;
+    text-align: center;
+  }
+  .empty-state h3 { font-size: 18px; font-weight: 600; margin-bottom: 8px; }
+  .empty-state p { color: var(--muted-fg); font-size: 14px; max-width: 400px; margin-bottom: 20px; }
+
+  /* Comparison section */
+  .comparison {
+    padding: 40px 32px;
+    max-width: 1200px;
+  }
+  .comparison h2 { font-size: 20px; font-weight: 700; margin-bottom: 24px; }
+  .comparison-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+  .comparison-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+  }
+  .comparison-card h4 { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+  .comparison-card p { font-size: 12px; color: var(--muted-fg); line-height: 1.6; }
+  .comparison-card .pro { color: var(--accent-green); font-size: 12px; margin-top: 8px; }
+  .comparison-card .con { color: var(--accent-amber); font-size: 12px; margin-top: 4px; }
+</style>
+</head>
+<body>
+
+<nav class="nav">
+  <h1>Budds — Design Directions</h1>
+  <div class="nav-tabs">
+    <button class="nav-tab active" onclick="showDirection('d1')">D1: Classic Panel</button>
+    <button class="nav-tab" onclick="showDirection('d2')">D2: Inline Citations</button>
+    <button class="nav-tab" onclick="showDirection('d3')">D3: Full-Width Chat</button>
+    <button class="nav-tab" onclick="showDirection('d4')">D4: Study Mode Tabs</button>
+    <button class="nav-tab" onclick="showDirection('d5')">D5: Dashboard Home</button>
+    <button class="nav-tab" onclick="showDirection('d6')">D6: Split View</button>
+    <button class="nav-tab" onclick="showDirection('compare')">Compare</button>
+  </div>
+</nav>
+
+<div class="content">
+
+  <!-- Direction 1: Classic Three-Panel -->
+  <div id="d1" class="direction active">
+    <div class="direction-header">
+      <h2>D1: Classic Three-Panel Layout</h2>
+      <p>Sidebar for navigation + main chat panel + collapsible source panel. Follows the ChatGPT/NotebookLM mental model. Source citations expand in a dedicated right panel for easy verification.</p>
+      <div class="tags">
+        <span class="tag">Familiar pattern</span>
+        <span class="tag">Source panel always visible</span>
+        <span class="tag">Three-column desktop</span>
+      </div>
+    </div>
+    <div class="mockup">
+      <div class="sidebar">
+        <div class="sidebar-header">
+          <h3>📚 Budds</h3>
+          <button class="btn" style="padding:4px 8px;font-size:11px">+ New</button>
+        </div>
+        <div class="sidebar-section">
+          <div class="sidebar-label">Folders</div>
+          <div class="tree-item">📂 Fall 2026</div>
+          <div class="tree-item nested active">📁 Organic Chemistry</div>
+          <div class="tree-item deep-nested">📄 Midterm 1 <span class="badge">18</span></div>
+          <div class="tree-item deep-nested">📄 Midterm 2 <span class="badge">12</span></div>
+          <div class="tree-item nested">📁 Biology 201</div>
+          <div class="tree-item nested">📁 Statistics</div>
+          <div class="tree-item">📂 Spring 2027</div>
+          <div style="height:16px"></div>
+          <div class="sidebar-label">Recent Chats</div>
+          <div class="tree-item">💬 SN1 vs SN2 reactions</div>
+          <div class="tree-item">💬 Enzyme kinetics review</div>
+          <div class="tree-item">💬 Stereochemistry basics</div>
+        </div>
+      </div>
+      <div class="main">
+        <div class="main-header">
+          <div class="breadcrumb">Fall 2026 › <span>Organic Chemistry</span> › Midterm 1</div>
+          <div style="margin-left:auto;display:flex;gap:8px">
+            <button class="btn" style="font-size:11px">⚡ Generate Cards</button>
+            <button class="btn" style="font-size:11px">📝 Quiz</button>
+          </div>
+        </div>
+        <div class="chat-area">
+          <div class="message user">
+            <div class="message-bubble">What are the key differences between SN1 and SN2 reactions?</div>
+          </div>
+          <div class="message assistant">
+            <div class="message-bubble">
+              SN1 and SN2 reactions differ in several fundamental ways:<br><br>
+              <strong>SN2 (bimolecular)</strong> proceeds in a single concerted step where the nucleophile attacks the substrate simultaneously as the leaving group departs <span class="citation-badge citation-blue">1</span>. The rate depends on both substrate and nucleophile concentration.<br><br>
+              <strong>SN1 (unimolecular)</strong> proceeds in two steps: first the leaving group departs to form a carbocation intermediate, then the nucleophile attacks <span class="citation-badge citation-blue">2</span>. The rate depends only on substrate concentration.<br><br>
+              Key distinguishing factors include substrate structure (SN2 favors primary carbons, SN1 favors tertiary) <span class="citation-badge citation-blue">3</span>, solvent effects, and stereochemical outcomes (SN2 gives inversion, SN1 gives racemization).
+            </div>
+            <div class="message-meta">Claude Sonnet 4.5 · 3 sources</div>
+          </div>
+          <div class="message user">
+            <div class="message-bubble">Can you explain the stereochemistry of SN2 in more detail?</div>
+          </div>
+        </div>
+        <div class="chat-input-area">
+          <div class="chat-input">
+            <input placeholder="Ask about your Organic Chemistry materials..." />
+            <button class="send-btn">↑</button>
+          </div>
+          <div class="model-indicator">Using Claude Sonnet 4.5 (recommended) · Searching 18 documents</div>
+        </div>
+      </div>
+      <div class="source-panel">
+        <div class="source-panel-header">
+          Sources <span style="font-size:11px;color:var(--muted-fg);font-weight:400">3 found</span>
+        </div>
+        <div class="source-card">
+          <div class="source-card-title">
+            <span class="citation-badge citation-blue">1</span>
+            Lecture 7 — Nucleophilic Substitution
+            <span class="score">0.94</span>
+          </div>
+          <div class="source-card-text">"In an SN2 reaction, the nucleophile approaches the electrophilic carbon from the back side, opposite to the leaving group, in a single concerted step..."</div>
+        </div>
+        <div class="source-card">
+          <div class="source-card-title">
+            <span class="citation-badge citation-blue">2</span>
+            Lecture 8 — SN1 Mechanism
+            <span class="score">0.91</span>
+          </div>
+          <div class="source-card-text">"The SN1 mechanism proceeds through a carbocation intermediate. Step 1: ionization of the leaving group. Step 2: nucleophilic attack on the carbocation..."</div>
+        </div>
+        <div class="source-card">
+          <div class="source-card-title">
+            <span class="citation-badge citation-blue">3</span>
+            Study Guide Ch. 6
+            <span class="score">0.87</span>
+          </div>
+          <div class="source-card-text">"Primary substrates favor SN2, tertiary substrates favor SN1. Secondary substrates can go either way depending on other factors..."</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Direction 2: Inline Citations (No Source Panel) -->
+  <div id="d2" class="direction d2">
+    <div class="direction-header">
+      <h2>D2: Inline Citations, No Source Panel</h2>
+      <p>Sources appear as expandable chips directly below each message instead of a separate panel. Maximizes chat width. Sources expand inline on click. More immersive conversational feel.</p>
+      <div class="tags">
+        <span class="tag">Two-column layout</span>
+        <span class="tag">Inline source expansion</span>
+        <span class="tag">Maximum chat width</span>
+      </div>
+    </div>
+    <div class="mockup">
+      <div class="sidebar">
+        <div class="sidebar-header">
+          <h3>📚 Budds</h3>
+          <button class="btn" style="padding:4px 8px;font-size:11px">+</button>
+        </div>
+        <div class="sidebar-section">
+          <div class="sidebar-label">Folders</div>
+          <div class="tree-item active">📁 Organic Chemistry</div>
+          <div class="tree-item nested">Midterm 1 <span class="badge">18</span></div>
+          <div class="tree-item nested">Midterm 2 <span class="badge">12</span></div>
+          <div class="tree-item">📁 Biology 201</div>
+          <div class="tree-item">📁 Statistics</div>
+          <div style="height:16px"></div>
+          <div class="sidebar-label">Chats</div>
+          <div class="tree-item active">💬 SN1 vs SN2 reactions</div>
+          <div class="tree-item">💬 Enzyme kinetics</div>
+        </div>
+      </div>
+      <div class="main">
+        <div class="main-header">
+          <div class="breadcrumb">Fall 2026 › <span>Organic Chemistry</span> › Midterm 1</div>
+          <div style="margin-left:auto;display:flex;gap:8px">
+            <button class="btn" style="font-size:11px">⚡ Cards</button>
+            <button class="btn" style="font-size:11px">📝 Quiz</button>
+          </div>
+        </div>
+        <div class="chat-area">
+          <div class="message user">
+            <div class="message-bubble">What are the key differences between SN1 and SN2 reactions?</div>
+          </div>
+          <div class="message assistant">
+            <div class="message-bubble">
+              SN1 and SN2 reactions differ in several fundamental ways:<br><br>
+              <strong>SN2</strong> proceeds in a single concerted step <span class="citation-badge citation-teal">1</span>. The rate depends on both substrate and nucleophile concentration.<br><br>
+              <strong>SN1</strong> proceeds through a carbocation intermediate <span class="citation-badge citation-teal">2</span>. The rate depends only on substrate concentration.<br><br>
+              Substrate structure determines the pathway: primary favors SN2, tertiary favors SN1 <span class="citation-badge citation-teal">3</span>.
+            </div>
+            <div class="inline-sources">
+              <span class="inline-source-chip">📄 Lecture 7 — slide 14</span>
+              <span class="inline-source-chip">📄 Lecture 8 — p.3</span>
+              <span class="inline-source-chip">📄 Study Guide Ch.6</span>
+            </div>
+            <div class="message-meta">Claude Sonnet 4.5 · 3 sources</div>
+          </div>
+        </div>
+        <div class="chat-input-area">
+          <div class="chat-input">
+            <input placeholder="Ask about your materials..." />
+            <button class="send-btn">↑</button>
+          </div>
+          <div class="model-indicator">Claude Sonnet 4.5 · 18 documents indexed</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Direction 3: Full-Width Chat -->
+  <div id="d3" class="direction d3">
+    <div class="direction-header">
+      <h2>D3: Full-Width Immersive Chat</h2>
+      <p>No persistent sidebar. Folder context shown as pills in a top bar. Maximizes the conversational experience. Sidebar accessible via hamburger menu. Closest to ChatGPT's focused feel.</p>
+      <div class="tags">
+        <span class="tag">Full-width chat</span>
+        <span class="tag">Folder pills</span>
+        <span class="tag">Mobile-first</span>
+        <span class="tag">Most immersive</span>
+      </div>
+    </div>
+    <div class="mockup" style="flex-direction:column">
+      <div class="main-header" style="gap:8px">
+        <button class="btn" style="padding:6px 8px">☰</button>
+        <h3 style="font-size:14px;font-weight:600">Budds</h3>
+        <div style="margin-left:12px;display:flex;gap:6px">
+          <span class="folder-pill active">📁 Organic Chemistry</span>
+          <span class="folder-pill">📁 Biology 201</span>
+          <span class="folder-pill">📁 Statistics</span>
+        </div>
+        <div style="margin-left:auto;display:flex;gap:6px">
+          <button class="btn" style="font-size:11px">⚡ Cards</button>
+          <button class="btn" style="font-size:11px">📝 Quiz</button>
+        </div>
+      </div>
+      <div class="chat-area" style="max-width:760px;margin:0 auto;width:100%">
+        <div class="message user">
+          <div class="message-bubble">What are the key differences between SN1 and SN2 reactions?</div>
+        </div>
+        <div class="message assistant" style="max-width:100%">
+          <div class="message-bubble">
+            SN1 and SN2 reactions differ fundamentally in mechanism, kinetics, and stereochemistry:<br><br>
+            <strong>SN2 (bimolecular nucleophilic substitution)</strong><br>
+            Proceeds in a single concerted step where the nucleophile attacks from the back side <span class="citation-badge citation-blue">1</span>. Rate = k[substrate][nucleophile]. Produces inversion of configuration (Walden inversion).<br><br>
+            <strong>SN1 (unimolecular nucleophilic substitution)</strong><br>
+            Two-step process through a planar carbocation intermediate <span class="citation-badge citation-blue">2</span>. Rate = k[substrate]. Produces racemization because nucleophile can attack from either face.<br><br>
+            The choice between pathways depends primarily on substrate structure: methyl and primary substrates favor SN2, while tertiary substrates favor SN1 <span class="citation-badge citation-blue">3</span>.
+          </div>
+          <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+            <div style="font-size:11px;padding:6px 12px;background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.15);border-radius:8px;cursor:pointer">
+              <span style="color:var(--accent-blue);font-weight:500">📄 Lecture 7, slide 14</span>
+              <span style="color:var(--muted-fg)"> — "In an SN2 reaction, the nucleophile approaches..."</span>
+            </div>
+            <div style="font-size:11px;padding:6px 12px;background:rgba(96,165,250,0.08);border:1px solid rgba(96,165,250,0.15);border-radius:8px;cursor:pointer">
+              <span style="color:var(--accent-blue);font-weight:500">📄 Lecture 8, p.3</span>
+              <span style="color:var(--muted-fg)"> — "The SN1 mechanism proceeds through..."</span>
+            </div>
+          </div>
+          <div class="message-meta">Claude Sonnet 4.5 · 3 sources · Organic Chemistry / Midterm 1</div>
+        </div>
+      </div>
+      <div class="chat-input-area" style="max-width:760px;margin:0 auto;width:100%">
+        <div class="chat-input">
+          <input placeholder="Ask about your Organic Chemistry materials..." />
+          <button class="send-btn">↑</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Direction 4: Study Mode Tabs -->
+  <div id="d4" class="direction d4">
+    <div class="direction-header">
+      <h2>D4: Study Mode Tabs</h2>
+      <p>Chat, Cards, and Quiz as tabs within the same folder context. Makes mode-switching explicit and visible. Students always know what modes are available. Tab-based mental model.</p>
+      <div class="tags">
+        <span class="tag">Tab-based modes</span>
+        <span class="tag">Explicit study modes</span>
+        <span class="tag">Folder-centric</span>
+      </div>
+    </div>
+    <div class="mockup">
+      <div class="sidebar">
+        <div class="sidebar-header">
+          <h3>📚 Budds</h3>
+        </div>
+        <div class="sidebar-section">
+          <div class="sidebar-label">Folders</div>
+          <div class="tree-item active">📁 Organic Chemistry</div>
+          <div class="tree-item nested">Midterm 1 <span class="badge">18</span></div>
+          <div class="tree-item">📁 Biology 201</div>
+          <div class="tree-item">📁 Statistics</div>
+        </div>
+      </div>
+      <div class="main">
+        <div class="main-header">
+          <div class="breadcrumb">Fall 2026 › <span>Organic Chemistry</span> › Midterm 1</div>
+        </div>
+        <div class="study-tabs">
+          <div class="study-tab active">💬 Chat</div>
+          <div class="study-tab">⚡ Flash Cards</div>
+          <div class="study-tab">📝 Quiz</div>
+          <div class="study-tab">📄 Documents</div>
+        </div>
+        <div class="chat-area">
+          <div class="message user">
+            <div class="message-bubble">Explain SN1 vs SN2 reactions</div>
+          </div>
+          <div class="message assistant">
+            <div class="message-bubble">
+              SN2 proceeds in one step with backside attack <span class="citation-badge citation-blue">1</span>. SN1 goes through a carbocation intermediate <span class="citation-badge citation-blue">2</span>. Primary substrates favor SN2, tertiary favor SN1 <span class="citation-badge citation-blue">3</span>.
+            </div>
+            <div class="message-meta">Claude Sonnet 4.5 · 3 sources</div>
+          </div>
+        </div>
+        <div class="chat-input-area">
+          <div class="chat-input">
+            <input placeholder="Ask about Midterm 1 materials..." />
+            <button class="send-btn">↑</button>
+          </div>
+        </div>
+      </div>
+      <div class="source-panel">
+        <div class="source-panel-header">Sources</div>
+        <div class="source-card">
+          <div class="source-card-title">
+            <span class="citation-badge citation-blue">1</span> Lecture 7
+            <span class="score">0.94</span>
+          </div>
+          <div class="source-card-text">"In an SN2 reaction, the nucleophile approaches from the back side..."</div>
+        </div>
+        <div class="source-card">
+          <div class="source-card-title">
+            <span class="citation-badge citation-blue">2</span> Lecture 8
+            <span class="score">0.91</span>
+          </div>
+          <div class="source-card-text">"The SN1 mechanism proceeds through a carbocation intermediate..."</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Direction 5: Dashboard Home -->
+  <div id="d5" class="direction d5">
+    <div class="direction-header">
+      <h2>D5: Dashboard Home</h2>
+      <p>A card-based home view that serves as the entry point. Shows folder overview, recent activity, and quick actions. Students see their entire knowledge base at a glance before diving into a specific mode.</p>
+      <div class="tags">
+        <span class="tag">Overview-first</span>
+        <span class="tag">Card-based dashboard</span>
+        <span class="tag">Activity summary</span>
+      </div>
+    </div>
+    <div class="mockup" style="flex-direction:column">
+      <div class="main-header">
+        <h3 style="font-size:16px;font-weight:700">📚 Budds</h3>
+        <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+          <span style="font-size:12px;color:var(--muted-fg)">Welcome back, Priya</span>
+          <div style="width:28px;height:28px;border-radius:999px;background:var(--muted);display:flex;align-items:center;justify-content:center;font-size:12px">P</div>
+        </div>
+      </div>
+      <div style="flex:1;overflow-y:auto;padding:24px 32px">
+        <h2 style="font-size:20px;font-weight:700;margin-bottom:4px">Your Knowledge Base</h2>
+        <p style="color:var(--muted-fg);font-size:13px;margin-bottom:24px">3 courses · 42 documents · 6 study sessions this week</p>
+        <div class="card-grid">
+          <div class="feature-card">
+            <div class="card-icon">🧪</div>
+            <h4>Organic Chemistry</h4>
+            <p>18 documents · Last studied 2h ago</p>
+            <div style="margin-top:12px;display:flex;gap:6px">
+              <button class="btn" style="font-size:11px;padding:4px 10px">💬 Chat</button>
+              <button class="btn" style="font-size:11px;padding:4px 10px">⚡ Cards</button>
+            </div>
+          </div>
+          <div class="feature-card">
+            <div class="card-icon">🧬</div>
+            <h4>Biology 201</h4>
+            <p>12 documents · Last studied yesterday</p>
+            <div style="margin-top:12px;display:flex;gap:6px">
+              <button class="btn" style="font-size:11px;padding:4px 10px">💬 Chat</button>
+              <button class="btn" style="font-size:11px;padding:4px 10px">⚡ Cards</button>
+            </div>
+          </div>
+          <div class="feature-card">
+            <div class="card-icon">📊</div>
+            <h4>Statistics</h4>
+            <p>8 documents · Last studied 3 days ago</p>
+            <div style="margin-top:12px;display:flex;gap:6px">
+              <button class="btn" style="font-size:11px;padding:4px 10px">💬 Chat</button>
+              <button class="btn" style="font-size:11px;padding:4px 10px">⚡ Cards</button>
+            </div>
+          </div>
+          <div class="feature-card" style="border-style:dashed;display:flex;flex-direction:column;align-items:center;justify-content:center">
+            <div class="card-icon">➕</div>
+            <h4>Add Course</h4>
+            <p>Upload materials for a new course</p>
+          </div>
+        </div>
+        <h3 style="font-size:16px;font-weight:600;margin-top:32px;margin-bottom:12px">Recent Activity</h3>
+        <div style="display:flex;flex-direction:column;gap:4px">
+          <div class="file-item">
+            <span class="file-icon">💬</span>
+            <span class="file-name">SN1 vs SN2 reactions — Organic Chemistry</span>
+            <span style="font-size:11px;color:var(--muted-fg)">2 hours ago</span>
+          </div>
+          <div class="file-item">
+            <span class="file-icon">⚡</span>
+            <span class="file-name">24 flash cards generated — Enzyme Kinetics</span>
+            <span style="font-size:11px;color:var(--muted-fg)">Yesterday</span>
+          </div>
+          <div class="file-item">
+            <span class="file-icon">📄</span>
+            <span class="file-name">3 files uploaded — Biology 201</span>
+            <span style="font-size:11px;color:var(--muted-fg)">2 days ago</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Direction 6: Split View -->
+  <div id="d6" class="direction d6">
+    <div class="direction-header">
+      <h2>D6: Split View — Chat + Study Side-by-Side</h2>
+      <p>Chat on the left, study materials (cards/quiz/sources) on the right. Students can chat to understand and see their flash cards generating in real-time on the other side. Maximum understand-to-retain flow.</p>
+      <div class="tags">
+        <span class="tag">Side-by-side</span>
+        <span class="tag">Simultaneous modes</span>
+        <span class="tag">Desktop-optimized</span>
+      </div>
+    </div>
+    <div class="mockup" style="flex-direction:column">
+      <div class="main-header">
+        <div class="breadcrumb">📁 Organic Chemistry › <span>Midterm 1</span></div>
+        <div style="margin-left:auto;font-size:12px;color:var(--muted-fg)">18 documents indexed</div>
+      </div>
+      <div class="split" style="flex:1">
+        <div class="split-left">
+          <div class="split-header">💬 Chat</div>
+          <div class="chat-area">
+            <div class="message user">
+              <div class="message-bubble">What are SN1 vs SN2 reactions?</div>
+            </div>
+            <div class="message assistant">
+              <div class="message-bubble">
+                SN2 is a concerted mechanism with backside attack <span class="citation-badge citation-blue">1</span>. SN1 goes through a carbocation <span class="citation-badge citation-blue">2</span>.
+              </div>
+              <div class="message-meta">3 sources</div>
+            </div>
+            <div class="message user">
+              <div class="message-bubble">Generate flash cards for this topic</div>
+            </div>
+            <div class="message assistant">
+              <div class="message-bubble">
+                ✅ Generated 8 flash cards for nucleophilic substitution. You can review them in the study panel →
+              </div>
+            </div>
+          </div>
+          <div class="chat-input-area">
+            <div class="chat-input">
+              <input placeholder="Ask or generate study materials..." />
+              <button class="send-btn">↑</button>
+            </div>
+          </div>
+        </div>
+        <div class="split-right">
+          <div class="split-header">
+            ⚡ Flash Cards
+            <span style="font-size:11px;color:var(--muted-fg);font-weight:400;margin-left:auto">3 / 8</span>
+          </div>
+          <div style="flex:1;display:flex;align-items:center;justify-content:center;padding:20px">
+            <div class="flashcard">
+              <p style="font-size:11px;color:var(--accent-blue);margin-bottom:16px">Card 3 of 8</p>
+              <h3>What type of substrate favors SN2 reactions?</h3>
+              <p style="margin-top:12px">Tap to reveal answer</p>
+              <div class="card-count">
+                <span style="color:var(--accent-blue)">📄 Source: Lecture 7, slide 14</span>
+              </div>
+            </div>
+          </div>
+          <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;justify-content:center;gap:12px">
+            <button class="btn">← Previous</button>
+            <button class="btn">Flip</button>
+            <button class="btn">Next →</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Comparison View -->
+  <div id="compare" class="direction comparison">
+    <h2>Design Direction Comparison</h2>
+    <div class="comparison-grid">
+      <div class="comparison-card">
+        <h4>D1: Classic Three-Panel</h4>
+        <p>Sidebar + Chat + Source Panel. Most familiar pattern. Sources always visible.</p>
+        <div class="pro">✓ Proven pattern (NotebookLM, ChatGPT)</div>
+        <div class="pro">✓ Sources always accessible</div>
+        <div class="con">⚠ Three columns tight on smaller screens</div>
+        <div class="con">⚠ Source panel takes space even when not needed</div>
+      </div>
+      <div class="comparison-card">
+        <h4>D2: Inline Citations</h4>
+        <p>Sidebar + wide chat. Sources as expandable chips below messages.</p>
+        <div class="pro">✓ Maximum chat width</div>
+        <div class="pro">✓ Sources in context of message</div>
+        <div class="con">⚠ Can't compare sources across messages easily</div>
+      </div>
+      <div class="comparison-card">
+        <h4>D3: Full-Width Chat</h4>
+        <p>No sidebar. Folder context as pills. Focused conversational experience.</p>
+        <div class="pro">✓ Most immersive chat experience</div>
+        <div class="pro">✓ Best mobile parity</div>
+        <div class="con">⚠ Folder navigation requires extra step</div>
+        <div class="con">⚠ No persistent tree view</div>
+      </div>
+      <div class="comparison-card">
+        <h4>D4: Study Mode Tabs</h4>
+        <p>Tabs for Chat/Cards/Quiz/Docs within folder context.</p>
+        <div class="pro">✓ Clear mode separation</div>
+        <div class="pro">✓ All features discoverable</div>
+        <div class="con">⚠ Can't see chat + cards simultaneously</div>
+        <div class="con">⚠ Tab switching interrupts flow</div>
+      </div>
+      <div class="comparison-card">
+        <h4>D5: Dashboard Home</h4>
+        <p>Card-based overview as entry point before diving into study modes.</p>
+        <div class="pro">✓ Great for returning users</div>
+        <div class="pro">✓ Shows knowledge base at a glance</div>
+        <div class="con">⚠ Extra click to start studying</div>
+        <div class="con">⚠ Not a complete layout (needs inner view)</div>
+      </div>
+      <div class="comparison-card">
+        <h4>D6: Split View</h4>
+        <p>Chat + Study materials side by side. Maximum understand-to-retain flow.</p>
+        <div class="pro">✓ Seamless mode transition</div>
+        <div class="pro">✓ Chat and cards in parallel</div>
+        <div class="con">⚠ Desktop-only (too cramped on mobile)</div>
+        <div class="con">⚠ Complex layout to implement</div>
+      </div>
+    </div>
+    <div style="margin-top:32px;padding:24px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius)">
+      <h3 style="font-size:16px;font-weight:700;margin-bottom:12px">Recommended Combination</h3>
+      <p style="color:var(--muted-fg);line-height:1.7">
+        <strong style="color:var(--fg)">D4 (Study Mode Tabs) as the primary structure</strong> with <strong style="color:var(--fg)">D1's source panel</strong> for the chat tab,
+        <strong style="color:var(--fg)">D5's dashboard</strong> as the home/entry view, and
+        <strong style="color:var(--fg)">D3's full-width approach for mobile</strong>.
+        This gives explicit study mode discovery (tabs), familiar chat+sources layout, a welcoming home view, and mobile-first responsive behavior.
+      </p>
+    </div>
+  </div>
+
+</div>
+
+<script>
+function showDirection(id) {
+  document.querySelectorAll('.direction').forEach(d => d.classList.remove('active'));
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  event.target.classList.add('active');
+}
+</script>
+
+</body>
+</html>

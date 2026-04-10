@@ -14,7 +14,8 @@ export default defineNuxtConfig({
   auth: {
     redirects: {
       login: '/login',
-      guest: '/',
+      guest: '/app',
+      logout: '/login',
     },
   },
   devServer: {
@@ -32,6 +33,7 @@ export default defineNuxtConfig({
     },
   },
   routeRules: {
+    '/app': { redirect: '/app/chat' },
     '/app/**': { auth: 'user' as const },
     '/login': { auth: 'guest' as const },
   },

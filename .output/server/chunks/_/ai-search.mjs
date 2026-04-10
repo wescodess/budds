@@ -1,24 +1,30 @@
 import { u as useRuntimeConfig, c as createError } from '../nitro/nitro.mjs';
 
 async function searchDocuments(params) {
-  var _a, _b, _c;
   const config = useRuntimeConfig();
   const { cloudflareAccountId, cloudflareAiSearchInstance, cloudflareAiSearchToken } = config;
-  const url = `https://api.cloudflare.com/client/v4/accounts/${cloudflareAccountId}/autorag/rags/${cloudflareAiSearchInstance}/search`;
+  if (!cloudflareAccountId || !cloudflareAiSearchInstance || !cloudflareAiSearchToken) {
+    throw createError({ statusCode: 500, message: "Missing Cloudflare AI Search configuration. Check CF_ACCOUNT_ID, CLOUDFLARE_AI_SEARCH_INSTANCE, and CLOUDFLARE_AI_SEARCH_TOKEN env vars." });
+  }
+  const url = `https://api.cloudflare.com/client/v4/accounts/${cloudflareAccountId}/ai-search/instances/${cloudflareAiSearchInstance}/search`;
+  const body = {
+    messages: [{ role: "user", content: params.query }]
+  };
+  const searchOptions = {};
+  if (params.max_num_results) searchOptions.max_num_results = params.max_num_results;
+  if (params.score_threshold) searchOptions.score_threshold = params.score_threshold;
+  if (params.reranking !== void 0) searchOptions.reranking = { enabled: params.reranking };
+  if (params.filters) searchOptions.filters = params.filters;
+  if (Object.keys(searchOptions).length > 0) {
+    body.ai_search_options = searchOptions;
+  }
   const response = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "Authorization": `Bearer ${cloudflareAiSearchToken}`
     },
-    body: JSON.stringify({
-      query: params.query,
-      rewrite_query: (_a = params.rewrite_query) != null ? _a : true,
-      max_num_results: (_b = params.max_num_results) != null ? _b : 10,
-      ranking_options: params.ranking_options,
-      reranking: (_c = params.reranking) != null ? _c : { enabled: true },
-      filters: params.filters
-    })
+    body: JSON.stringify(body)
   });
   if (!response.ok) {
     const error = await response.text();

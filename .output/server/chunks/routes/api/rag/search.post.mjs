@@ -9,6 +9,8 @@ import 'node:path';
 import 'node:crypto';
 import 'node:url';
 import 'better-sqlite3';
+import '@convex-dev/better-auth/plugins';
+import '@convex-dev/better-auth/auth-config';
 import 'better-auth';
 
 const search_post = defineEventHandler(async (event) => {
@@ -17,13 +19,12 @@ const search_post = defineEventHandler(async (event) => {
   if (!((_a = body.query) == null ? void 0 : _a.trim())) {
     throw createError({ statusCode: 400, message: "query is required" });
   }
-  const results = await searchDocuments({
+  return await searchDocuments({
     query: body.query,
     max_num_results: body.max_num_results,
-    ranking_options: body.score_threshold ? { score_threshold: body.score_threshold } : void 0,
+    score_threshold: body.score_threshold,
     filters: body.filters
   });
-  return results;
 });
 
 export { search_post as default };

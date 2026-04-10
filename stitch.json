@@ -1,0 +1,17 @@
+{
+  "projectId": "2926819289448574055",
+  "projectName": "projects/2926819289448574055",
+  "title": "Budds — Learning Compiler",
+  "approvedScreens": {
+    "landing": "8e27e78bc8bf4d4981e1c65a9399ce86",
+    "auth": "03c1181b43de47f2b60e5e758905bf22",
+    "chat-void": "6a1a5b78cc46434eb8a021f822f4e7a7",
+    "knowledge-drawer": "cf69583898d54d28ac43e17921baeb83",
+    "flash-cards-void": "85521d3e8e5d4374afb271aac41ccb2a",
+    "quiz-void": "9702ac3d2d674f139d351dde8782e776",
+    "dashboard": "99ce0074f0d941f8a00c9c4c28668db0"
+  },
+  "designSystemId": "assets/11175050301981891392",
+  "foundationComplete": true,
+  "completedAt": "2026-04-09"
+}

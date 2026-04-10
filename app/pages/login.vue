@@ -4,7 +4,7 @@ definePageMeta({ auth: 'guest' })
 const { signIn } = useUserSession()
 
 async function loginWithGoogle() {
-  await signIn.social({ provider: 'google', callbackURL: '/' })
+  await signIn.social({ provider: 'google', callbackURL: '/app' })
 }
 </script>
 
