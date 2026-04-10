@@ -61,16 +61,24 @@ If `auto`:
 
 > **Note:** `${timestamp}` is a placeholder the agent should replace with a unique value (e.g., epoch seconds) for session isolation.
 
+- **Preferred:** Try Chrome MCP first — lightweight, no session management, uses browser tabs directly
+  - `navigate_page` to open URLs, `take_snapshot` to inspect elements, `click`/`fill` for interaction
 - **Simple recording** (snapshot selectors, capture structure): Use CLI
   - `playwright-cli -s=tea-atdd-${timestamp} open <url>` → `playwright-cli -s=tea-atdd-${timestamp} snapshot` → extract refs
 - **Complex recording** (drag/drop, wizards, multi-step state): Use MCP
   - Full browser automation with rich tool semantics
-- **Fallback:** If preferred tool unavailable, use the other; if neither, skip recording
+- **Fallback chain:** Chrome MCP → CLI → MCP → skip recording
 
 If `cli`:
 
 - Use Playwright CLI for all recording
 - `playwright-cli -s=tea-atdd-${timestamp} open <url>`, `snapshot`, `screenshot`, `click <ref>`, etc.
+
+If `chrome-mcp`:
+
+- Use Chrome MCP tools for browser interaction — `navigate_page` to open URLs, `take_snapshot` to inspect elements, `click`/`fill` for interaction, `evaluate_script` for assertions
+- No session management needed (uses browser tabs)
+- Record selectors and interactions from snapshot output
 
 If `mcp`:
 

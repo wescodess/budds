@@ -1,6 +1,7 @@
 <script setup lang="ts">
 definePageMeta({ layout: false })
 
+const { signOut } = useUserSession()
 const { messages, loading, error, chat, clearMessages } = useRag()
 
 const query = ref('')
@@ -56,6 +57,12 @@ function toggleSources(index: number) {
           @click="clearMessages"
         >
           Clear
+        </button>
+        <button
+          class="rounded-md border border-zinc-700 px-3 py-1.5 text-sm text-zinc-400 transition hover:bg-red-900/50 hover:text-red-300"
+          @click="signOut()"
+        >
+          Sign out
         </button>
       </div>
     </header>

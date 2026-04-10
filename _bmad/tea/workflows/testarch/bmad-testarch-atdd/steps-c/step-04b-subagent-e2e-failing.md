@@ -61,14 +61,28 @@ Story: User Registration
 
 **Automation mode:** `config.tea_browser_automation`
 
-If `auto` (fall back to MCP if CLI unavailable; if neither available, generate from best practices):
+If `auto` (try Chrome MCP first → CLI → MCP → generate from best practices):
 
-- Open the target page first, then verify selectors with a snapshot:
+- **Chrome MCP** (preferred): Open the target page and inspect elements:
+  `navigate_page` to `<target_url>` → `take_snapshot` → map snapshot elements to Playwright locators
+  - snapshot element `button "Submit"` → `page.getByRole('button', { name: 'Submit' })`
+  - snapshot element `textbox "Email"` → `page.getByRole('textbox', { name: 'Email' })`
+  No session cleanup needed (uses browser tabs).
+- **CLI fallback**: Open the target page first, then verify selectors with a snapshot:
   `playwright-cli -s=tea-atdd-{{timestamp}} open <target_url>`
   `playwright-cli -s=tea-atdd-{{timestamp}} snapshot` → map refs to Playwright locators
   - ref `{role: "button", name: "Submit"}` → `page.getByRole('button', { name: 'Submit' })`
   - ref `{role: "textbox", name: "Email"}` → `page.getByRole('textbox', { name: 'Email' })`
-- `playwright-cli -s=tea-atdd-{{timestamp}} close` when done
+- `playwright-cli -s=tea-atdd-{{timestamp}} close` when done (CLI only)
+
+If `chrome-mcp` (Chrome MCP only — do NOT fall back to Playwright; generate from best practices if Chrome MCP unavailable):
+
+- Open the target page and inspect elements:
+  `navigate_page` to `<target_url>` → `take_snapshot` → map snapshot elements to Playwright locators
+  - snapshot element `button "Submit"` → `page.getByRole('button', { name: 'Submit' })`
+  - snapshot element `textbox "Email"` → `page.getByRole('textbox', { name: 'Email' })`
+- Use `click`/`fill` for interaction verification, `evaluate_script` for DOM assertions
+- No session management needed (uses browser tabs)
 
 If `cli` (CLI only — do NOT fall back to MCP; generate from best practices if CLI unavailable):
 

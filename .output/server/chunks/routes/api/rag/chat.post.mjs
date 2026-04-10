@@ -1,4 +1,4 @@
-import { u as useRuntimeConfig, c as createError, d as defineEventHandler, r as readBody, s as setResponseHeader, a as sendStream } from '../../../nitro/nitro.mjs';
+import { c as createError, u as useRuntimeConfig, d as defineEventHandler, r as readBody, s as setResponseHeader, a as sendStream } from '../../../nitro/nitro.mjs';
 import { s as searchDocuments } from '../../../_/ai-search.mjs';
 import 'node:http';
 import 'node:https';
@@ -9,22 +9,32 @@ import 'node:path';
 import 'node:crypto';
 import 'node:url';
 import 'better-sqlite3';
+import '@convex-dev/better-auth/plugins';
+import '@convex-dev/better-auth/auth-config';
 import 'better-auth';
 
-function getGatewayBaseUrl() {
+function getGatewayConfig() {
   const config = useRuntimeConfig();
-  return `https://gateway.ai.cloudflare.com/v1/${config.cloudflareAccountId}/${config.cloudflareAiGatewayId}`;
+  if (!config.cloudflareAccountId || !config.cloudflareAiGatewayId || !config.openrouterApiKey) {
+    throw createError({ statusCode: 500, message: "Missing AI Gateway configuration. Check CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_AI_GATEWAY_ID, and OPENROUTER_API_KEY env vars." });
+  }
+  const baseUrl = `https://gateway.ai.cloudflare.com/v1/${config.cloudflareAccountId}/${config.cloudflareAiGatewayId}`;
+  const headers = {
+    "Content-Type": "application/json",
+    "Authorization": `Bearer ${config.openrouterApiKey}`
+  };
+  if (config.cloudflareAiGatewayApiKey) {
+    headers["cf-aig-authorization"] = `Bearer ${config.cloudflareAiGatewayApiKey}`;
+  }
+  return { baseUrl, headers };
 }
 async function generateCompletion(params) {
   var _a, _b;
-  const config = useRuntimeConfig();
-  const url = `${getGatewayBaseUrl()}/openrouter/v1/chat/completions`;
+  const { baseUrl, headers } = getGatewayConfig();
+  const url = `${baseUrl}/openrouter/v1/chat/completions`;
   const response = await fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${config.openrouterApiKey}`
-    },
+    headers,
     body: JSON.stringify({
       model: params.model,
       messages: params.messages,
@@ -41,14 +51,11 @@ async function generateCompletion(params) {
 }
 async function generateCompletionStream(params) {
   var _a, _b;
-  const config = useRuntimeConfig();
-  const url = `${getGatewayBaseUrl()}/openrouter/v1/chat/completions`;
+  const { baseUrl, headers } = getGatewayConfig();
+  const url = `${baseUrl}/openrouter/v1/chat/completions`;
   const response = await fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${config.openrouterApiKey}`
-    },
+    headers,
     body: JSON.stringify({
       model: params.model,
       messages: params.messages,
@@ -69,7 +76,7 @@ Use the context below to answer the user's question accurately.
 If the context doesn't contain enough information to answer, say so clearly.
 Always cite which source documents your answer is based on when possible.`;
 const chat_post = defineEventHandler(async (event) => {
-  var _a, _b, _c, _d, _e, _f, _g;
+  var _a, _b, _c, _d, _e, _f, _g, _h;
   const body = await readBody(event);
   if (!((_a = body.query) == null ? void 0 : _a.trim())) {
     throw createError({ statusCode: 400, message: "query is required" });
@@ -80,10 +87,11 @@ const chat_post = defineEventHandler(async (event) => {
   const searchResults = await searchDocuments({
     query: body.query,
     max_num_results: (_c = body.max_num_results) != null ? _c : 10,
-    ranking_options: body.score_threshold ? { score_threshold: body.score_threshold } : void 0,
+    score_threshold: body.score_threshold,
     filters: body.filters
   });
-  const context = searchResults.data.map((chunk, i) => {
+  const chunks = (_d = searchResults.data) != null ? _d : [];
+  const context = chunks.map((chunk, i) => {
     var _a2, _b2;
     const source = ((_a2 = chunk.attributes) == null ? void 0 : _a2.filename) || ((_b2 = chunk.attributes) == null ? void 0 : _b2.url) || `Source ${i + 1}`;
     return `[${source}]
@@ -103,7 +111,7 @@ ${context}`
       content: "I've reviewed the provided context. How can I help you?"
     });
   }
-  if ((_d = body.history) == null ? void 0 : _d.length) {
+  if ((_e = body.history) == null ? void 0 : _e.length) {
     messages.push(...body.history);
   }
   messages.push({ role: "user", content: body.query });
@@ -125,10 +133,10 @@ ${context}`
     max_tokens: body.max_tokens
   });
   return {
-    answer: (_g = (_f = (_e = completion.choices[0]) == null ? void 0 : _e.message) == null ? void 0 : _f.content) != null ? _g : "",
+    answer: (_h = (_g = (_f = completion.choices[0]) == null ? void 0 : _f.message) == null ? void 0 : _g.content) != null ? _h : "",
     model: completion.model,
     usage: completion.usage,
-    sources: searchResults.data.map((chunk) => ({
+    sources: chunks.map((chunk) => ({
       content: chunk.content,
       score: chunk.score,
       attributes: chunk.attributes

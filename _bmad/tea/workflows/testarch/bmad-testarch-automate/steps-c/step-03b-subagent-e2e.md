@@ -49,14 +49,31 @@ From the coverage plan (Step 2 output), identify:
 
 **Automation mode:** `config.tea_browser_automation`
 
-If `auto` (fall back to MCP if CLI unavailable; if neither available, generate from best practices):
+If `auto` (try Chrome MCP first, then Playwright CLI, then Playwright MCP; if none available, generate from best practices):
 
-- Open the target page first, then verify selectors with a snapshot:
+- **Chrome MCP path:**
+  `navigate_page` → open `<target_url>`
+  `take_snapshot` → inspect page structure and accessible names, map to Playwright locators
+  - snapshot element `{role: "button", name: "Submit"}` → `page.getByRole('button', { name: 'Submit' })`
+  - snapshot element `{role: "textbox", name: "Email"}` → `page.getByRole('textbox', { name: 'Email' })`
+  `evaluate_script` → check dynamic state if needed
+  `close_page` when done
+
+- **Playwright CLI fallback:**
   `playwright-cli -s=tea-automate-{{timestamp}} open <target_url>`
   `playwright-cli -s=tea-automate-{{timestamp}} snapshot` → map refs to Playwright locators
   - ref `{role: "button", name: "Submit"}` → `page.getByRole('button', { name: 'Submit' })`
   - ref `{role: "textbox", name: "Email"}` → `page.getByRole('textbox', { name: 'Email' })`
-- `playwright-cli -s=tea-automate-{{timestamp}} close` when done
+  `playwright-cli -s=tea-automate-{{timestamp}} close` when done
+
+If `chrome-mcp` (Chrome MCP only — do NOT fall back to CLI; generate from best practices if Chrome MCP unavailable):
+
+- `navigate_page` → open `<target_url>`
+- `take_snapshot` → inspect page structure and accessible names, map to Playwright locators
+  - snapshot element `{role: "button", name: "Submit"}` → `page.getByRole('button', { name: 'Submit' })`
+  - snapshot element `{role: "textbox", name: "Email"}` → `page.getByRole('textbox', { name: 'Email' })`
+- `evaluate_script` → check dynamic state if needed
+- `close_page` when done
 
 If `cli` (CLI only — do NOT fall back to MCP; generate from best practices if CLI unavailable):
 
@@ -67,7 +84,7 @@ If `cli` (CLI only — do NOT fall back to MCP; generate from best practices if 
   - ref `{role: "textbox", name: "Email"}` → `page.getByRole('textbox', { name: 'Email' })`
 - `playwright-cli -s=tea-automate-{{timestamp}} close` when done
 
-> **Session Hygiene:** Always close sessions using `playwright-cli -s=tea-automate-{{timestamp}} close`. Do NOT use `close-all` — it kills every session on the machine and breaks parallel execution.
+> **Session Hygiene:** Always close Playwright CLI sessions using `playwright-cli -s=tea-automate-{{timestamp}} close`. Do NOT use `close-all` — it kills every session on the machine and breaks parallel execution. For Chrome MCP, always call `close_page` when done.
 
 If `mcp`:
 

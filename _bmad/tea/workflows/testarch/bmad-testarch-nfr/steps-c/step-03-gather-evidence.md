@@ -47,20 +47,30 @@ Collect evidence for:
 
 ---
 
-## 2. Browser-Based Evidence Collection (if `tea_browser_automation` is `cli` or `auto`)
+## 2. Browser-Based Evidence Collection (if `tea_browser_automation` is `cli`, `chrome-mcp`, or `auto`)
 
-> **Fallback:** If CLI is not installed, fall back to MCP (if available) or skip browser-based evidence collection.
+> **Fallback:** If the preferred tool is not available, try the next in the auto fallback chain (Chrome MCP → Playwright CLI → Playwright MCP → none) or skip browser-based evidence collection.
+
+**Chrome MCP Evidence (if `tea_browser_automation` is `chrome-mcp` or `auto` — preferred):**
+
+For performance and security categories, Chrome MCP can gather live evidence:
+
+1. `mcp__chrome-mcp__new_page(url=<target_url>, isolatedContext="tea-nfr")`
+2. `mcp__chrome-mcp__list_network_requests(resourceTypes=["fetch", "xhr"])` → capture response times and payload sizes
+3. `mcp__chrome-mcp__take_screenshot(filePath="{test_artifacts}/nfr/perf-<page>.png")`
+4. `mcp__chrome-mcp__lighthouse_audit(categories=["performance", "accessibility", "best-practices"])` → automated audit
+5. `mcp__chrome-mcp__close_page(pageId=N)`
+
+**CLI Evidence (if `tea_browser_automation` is `cli` or `auto` fallback):**
 
 For performance and security categories, CLI can gather live evidence:
-
-**Performance evidence (page load, response times):**
 
 1. `playwright-cli -s=tea-nfr open <target_url>`
 2. `playwright-cli -s=tea-nfr network` → capture response times and payload sizes
 3. `playwright-cli -s=tea-nfr screenshot --filename={test_artifacts}/nfr/perf-<page>.png`
 4. `playwright-cli -s=tea-nfr close`
 
-> **Session Hygiene:** Always close sessions using `playwright-cli -s=tea-nfr close`. Do NOT use `close-all` — it kills every session on the machine and breaks parallel execution.
+> **Session Hygiene:** For CLI, always close sessions using `playwright-cli -s=tea-nfr close`. Do NOT use `close-all` — it kills every session on the machine and breaks parallel execution. For Chrome MCP, always close pages using `close_page`.
 
 Store artifacts under `{test_artifacts}/nfr/`
 

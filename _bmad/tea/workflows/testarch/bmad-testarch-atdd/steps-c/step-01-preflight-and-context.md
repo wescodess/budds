@@ -153,6 +153,10 @@ Use `{knowledgeIndex}` to load:
 
 - `playwright-cli.md`
 
+**Chrome MCP (if tea_browser_automation is "chrome-mcp" or "auto" and {detected_stack} is `frontend` or `fullstack`):**
+
+- `chrome-mcp.md`
+
 **MCP Patterns (if tea_browser_automation is "mcp" or "auto" and {detected_stack} is `frontend` or `fullstack`):**
 
 - (existing MCP-related fragments, if any are added in future)

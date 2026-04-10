@@ -1,0 +1,1 @@
+import{_ as o,A as n,B as r,z as t}from"./YHBc1NFB.js";const c={};function s(a,e){return t(),n("div",null,[...e[0]||(e[0]=[r("h1",null,"Welcome to your new project",-1)])])}const _=o(c,[["render",s]]);export{_ as default};
