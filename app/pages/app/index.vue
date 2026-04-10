@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { FolderOpen } from 'lucide-vue-next'
 
-const { folders, isLoading, createFolder, isCreating } = await useFolders()
+const { folders, isLoading, createFolder, isCreating } = useFolders()
 </script>
 
 <template>
