@@ -9,7 +9,9 @@
     "preview": "nuxt preview",
     "postinstall": "nuxt prepare",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:component": "vitest run --config vitest.config.component.ts",
+    "test:component:watch": "vitest --config vitest.config.component.ts"
   },
   "dependencies": {
     "@convex-dev/better-auth": "^0.11.4",
@@ -46,6 +48,9 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "better-sqlite3"
-    ]
+    ],
+    "patchedDependencies": {
+      "nuxt-convex@0.0.6": "patches/nuxt-convex@0.0.6.patch"
+    }
   }
 }

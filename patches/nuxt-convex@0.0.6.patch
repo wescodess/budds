@@ -1,0 +1,20 @@
+diff --git a/dist/runtime/composables/useConvexQuery.js b/dist/runtime/composables/useConvexQuery.js
+index 6900025d29382b9e868ad30b71449d2d5691b2b5..6c1998d21f60131b7f3b01415f21aeb35885ff1f 100644
+--- a/dist/runtime/composables/useConvexQuery.js
++++ b/dist/runtime/composables/useConvexQuery.js
+@@ -1,5 +1,6 @@
+ import { useAsyncData, useNuxtApp, useRuntimeConfig } from "#imports";
+ import { CONVEX_INJECTION_KEY } from "@convex-vue/core";
++import { getFunctionName } from "convex/server";
+ import { inject, onScopeDispose, ref, toValue, watch } from "vue";
+ export async function useConvexQuery(query, args, options = {}) {
+   const nuxtApp = useNuxtApp();
+@@ -18,7 +19,7 @@ export async function useConvexQuery(query, args, options = {}) {
+   return useConvexQueryClient(query, args, client);
+ }
+ async function useConvexQuerySSR(query, args, options, convexUrl, client) {
+-  const queryName = query._name ?? "unknown";
++  const queryName = getFunctionName(query) ?? "unknown";
+   const sortedArgs = sortObjectKeys(toValue(args));
+   const key = `convex:${queryName}:${JSON.stringify(sortedArgs)}`;
+   const asyncData = await useAsyncData(

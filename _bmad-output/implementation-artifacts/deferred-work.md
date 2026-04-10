@@ -1,5 +1,11 @@
 # Deferred Work
 
+## Resolved during Epic 1 retrospective prep (2026-04-10)
+
+- **~~Component test infrastructure not runnable~~** — Added `vitest.config.component.ts` with `@nuxt/test-utils` nuxt environment + happy-dom. Added `test:component` npm script. All 8 test files (59 tests) now discoverable.
+- **~~`lastActivity` shows folder `_creationTime` not actual last activity~~** — Added `updatedAt` field to folders schema. `CourseCard.vue` now uses `updatedAt ?? _creationTime`. `createFolder` sets `updatedAt: Date.now()`.
+- **~~JWKS bootstrap undocumented~~** — Created `scripts/bootstrap-jwks.sh` automation script and documented setup steps in `CLAUDE.md`.
+
 ## Deferred from: code review of 1-1-verify-and-harden-authentication-flow (2026-04-09)
 
 - **Unprotected `/api/rag/*` routes** — No auth on `server/api/rag/chat.post.ts` and `search.post.ts`. Any unauthenticated user can POST to these endpoints and consume AI API credits. Add `routeRules` auth or server-side session validation.

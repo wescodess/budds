@@ -5,7 +5,7 @@ import { createFolder } from '../../support/factories/folder.factory'
 describe('DashboardCourseCard — AC1: Course Card Display', () => {
   it.skip('[P0] should render folder name', async () => {
     const folder = createFolder({ name: 'Math 101' })
-    const DashboardCourseCard = await import('~/components/dashboard/DashboardCourseCard.vue')
+    const DashboardCourseCard = await import('~/components/dashboard/CourseCard.vue')
 
     const wrapper = await mountSuspended(DashboardCourseCard.default, {
       props: { folder, documentCount: folder.documentCount, lastActivity: folder._creationTime },
@@ -16,7 +16,7 @@ describe('DashboardCourseCard — AC1: Course Card Display', () => {
 
   it.skip('[P0] should display document count badge', async () => {
     const folder = createFolder({ documentCount: 5 })
-    const DashboardCourseCard = await import('~/components/dashboard/DashboardCourseCard.vue')
+    const DashboardCourseCard = await import('~/components/dashboard/CourseCard.vue')
 
     const wrapper = await mountSuspended(DashboardCourseCard.default, {
       props: { folder, documentCount: 5, lastActivity: folder._creationTime },
@@ -29,7 +29,7 @@ describe('DashboardCourseCard — AC1: Course Card Display', () => {
 
   it.skip('[P0] should display last activity timestamp', async () => {
     const folder = createFolder()
-    const DashboardCourseCard = await import('~/components/dashboard/DashboardCourseCard.vue')
+    const DashboardCourseCard = await import('~/components/dashboard/CourseCard.vue')
 
     const wrapper = await mountSuspended(DashboardCourseCard.default, {
       props: { folder, documentCount: folder.documentCount, lastActivity: folder._creationTime },
@@ -42,7 +42,7 @@ describe('DashboardCourseCard — AC1: Course Card Display', () => {
 
   it.skip('[P0] should navigate to folder view on click', async () => {
     const folder = createFolder({ _id: 'folder_abc123' })
-    const DashboardCourseCard = await import('~/components/dashboard/DashboardCourseCard.vue')
+    const DashboardCourseCard = await import('~/components/dashboard/CourseCard.vue')
 
     const wrapper = await mountSuspended(DashboardCourseCard.default, {
       props: { folder, documentCount: folder.documentCount, lastActivity: folder._creationTime },
@@ -57,7 +57,7 @@ describe('DashboardCourseCard — AC1: Course Card Display', () => {
 
   it.skip('[P1] should show quick action buttons (Chat and Cards)', async () => {
     const folder = createFolder()
-    const DashboardCourseCard = await import('~/components/dashboard/DashboardCourseCard.vue')
+    const DashboardCourseCard = await import('~/components/dashboard/CourseCard.vue')
 
     const wrapper = await mountSuspended(DashboardCourseCard.default, {
       props: { folder, documentCount: folder.documentCount, lastActivity: folder._creationTime },
@@ -71,7 +71,7 @@ describe('DashboardCourseCard — AC1: Course Card Display', () => {
 
   it.skip('[P1] should apply card background and border styling', async () => {
     const folder = createFolder()
-    const DashboardCourseCard = await import('~/components/dashboard/DashboardCourseCard.vue')
+    const DashboardCourseCard = await import('~/components/dashboard/CourseCard.vue')
 
     const wrapper = await mountSuspended(DashboardCourseCard.default, {
       props: { folder, documentCount: folder.documentCount, lastActivity: folder._creationTime },
