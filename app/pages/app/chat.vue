@@ -1,7 +1,4 @@
 <script setup lang="ts">
-definePageMeta({ layout: false })
-
-const { signOut } = useUserSession()
 const { messages, loading, error, chat, clearMessages } = useRag()
 
 const query = ref('')
@@ -40,38 +37,31 @@ function toggleSources(index: number) {
 </script>
 
 <template>
-  <div class="flex h-screen flex-col bg-zinc-950 text-zinc-100">
-    <header class="flex items-center justify-between border-b border-zinc-800 px-6 py-3">
-      <h1 class="text-lg font-semibold">RAG Chat</h1>
-      <div class="flex items-center gap-3">
-        <select
-          v-model="selectedModel"
-          class="rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-100 outline-none focus:border-zinc-500"
-        >
-          <option v-for="model in models" :key="model.value" :value="model.value">
-            {{ model.label }}
-          </option>
-        </select>
-        <button
-          class="rounded-md border border-zinc-700 px-3 py-1.5 text-sm text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-100"
-          @click="clearMessages"
-        >
-          Clear
-        </button>
-        <button
-          class="rounded-md border border-zinc-700 px-3 py-1.5 text-sm text-zinc-400 transition hover:bg-red-900/50 hover:text-red-300"
-          @click="signOut()"
-        >
-          Sign out
-        </button>
-      </div>
-    </header>
+  <div class="flex h-full flex-col">
+    <div class="flex items-center gap-2 border-b border-border px-4 py-2">
+      <select
+        v-model="selectedModel"
+        class="rounded-md border border-input bg-card px-3 py-1.5 text-sm text-foreground outline-none focus:ring-2 focus:ring-ring"
+      >
+        <option v-for="model in models" :key="model.value" :value="model.value">
+          {{ model.label }}
+        </option>
+      </select>
+      <button
+        class="rounded-md border border-input px-3 py-1.5 text-sm text-muted-foreground transition hover:bg-accent/10 hover:text-foreground"
+        @click="clearMessages"
+      >
+        Clear
+      </button>
+    </div>
 
-    <div ref="chatContainer" class="flex-1 overflow-y-auto px-6 py-4">
+    <div ref="chatContainer" class="flex-1 overflow-y-auto px-4 py-4">
       <div v-if="messages.length === 0" class="flex h-full items-center justify-center">
         <div class="text-center">
-          <p class="text-lg text-zinc-500">Ask a question about your documents</p>
-          <p class="mt-1 text-sm text-zinc-600">Powered by AI Search + {{ models.find(m => m.value === selectedModel)?.label }}</p>
+          <p class="text-lg text-muted-foreground">Ask a question about your documents</p>
+          <p class="mt-1 text-sm text-muted-foreground/60">
+            Powered by AI Search + {{ models.find(m => m.value === selectedModel)?.label }}
+          </p>
         </div>
       </div>
 
@@ -82,15 +72,15 @@ function toggleSources(index: number) {
           :class="[
             'rounded-lg px-4 py-3',
             msg.role === 'user'
-              ? 'ml-auto max-w-[80%] bg-zinc-800'
-              : 'max-w-[90%] bg-zinc-900 border border-zinc-800',
+              ? 'ml-auto max-w-[80%] bg-secondary'
+              : 'max-w-[90%] bg-card border border-border',
           ]"
         >
           <p class="whitespace-pre-wrap text-sm leading-relaxed">{{ msg.content }}</p>
 
           <div v-if="msg.sources?.length" class="mt-2">
             <button
-              class="text-xs text-zinc-500 underline-offset-2 hover:text-zinc-300 hover:underline"
+              class="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
               @click="toggleSources(i)"
             >
               {{ showSources === i ? 'Hide' : 'Show' }} {{ msg.sources.length }} sources
@@ -100,43 +90,43 @@ function toggleSources(index: number) {
               <div
                 v-for="(source, si) in msg.sources"
                 :key="si"
-                class="rounded border border-zinc-700 bg-zinc-950 p-2.5 text-xs"
+                class="rounded border border-border bg-background p-2.5 text-xs"
               >
-                <div class="mb-1 flex items-center justify-between text-zinc-500">
+                <div class="mb-1 flex items-center justify-between text-muted-foreground">
                   <span>{{ source.attributes?.filename || source.attributes?.url || `Source ${si + 1}` }}</span>
                   <span>Score: {{ (source.score * 100).toFixed(0) }}%</span>
                 </div>
-                <p class="line-clamp-3 text-zinc-400">{{ source.content }}</p>
+                <p class="line-clamp-3 text-muted-foreground/80">{{ source.content }}</p>
               </div>
             </div>
           </div>
         </div>
 
-        <div v-if="loading" class="max-w-[90%] rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-3">
-          <div class="flex items-center gap-2 text-sm text-zinc-500">
-            <span class="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-zinc-500" />
+        <div v-if="loading" class="max-w-[90%] rounded-lg border border-border bg-card px-4 py-3">
+          <div class="flex items-center gap-2 text-sm text-muted-foreground">
+            <span class="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
             Searching documents and generating response...
           </div>
         </div>
       </div>
     </div>
 
-    <div v-if="error" class="border-t border-red-900 bg-red-950/50 px-6 py-2 text-sm text-red-400">
+    <div v-if="error" class="border-t border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">
       {{ error }}
     </div>
 
-    <form class="border-t border-zinc-800 px-6 py-4" @submit.prevent="handleSubmit">
+    <form class="border-t border-border px-4 py-4" @submit.prevent="handleSubmit">
       <div class="mx-auto flex max-w-3xl gap-2">
         <input
           v-model="query"
           type="text"
           placeholder="Ask a question..."
-          class="flex-1 rounded-md border border-zinc-700 bg-zinc-900 px-4 py-2.5 text-sm text-zinc-100 placeholder-zinc-500 outline-none focus:border-zinc-500"
+          class="flex-1 rounded-md border border-input bg-card px-4 py-2.5 text-sm text-foreground placeholder-muted-foreground outline-none focus:ring-2 focus:ring-ring"
           :disabled="loading"
         />
         <button
           type="submit"
-          class="rounded-md bg-zinc-100 px-5 py-2.5 text-sm font-medium text-zinc-900 transition hover:bg-zinc-200 disabled:opacity-50"
+          class="rounded-md bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition hover:bg-primary/90 disabled:opacity-50"
           :disabled="loading || !query.trim()"
         >
           Send
