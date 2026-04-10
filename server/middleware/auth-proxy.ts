@@ -1,13 +1,17 @@
 export default defineEventHandler(async (event) => {
+  if (!event.path.startsWith('/api/auth/')) return
+
   const convexSiteUrl = process.env.CONVEX_SITE_URL
-  const target = new URL(event.path, convexSiteUrl!)
+  if (!convexSiteUrl) return
+
+  const target = new URL(event.path, convexSiteUrl)
 
   const headers = new Headers()
   for (const [key, value] of Object.entries(getRequestHeaders(event))) {
     if (key === 'host') continue
     if (value) headers.set(key, String(value))
   }
-  headers.set('host', new URL(convexSiteUrl!).host)
+  headers.set('host', new URL(convexSiteUrl).host)
 
   const body = event.method !== 'GET' && event.method !== 'HEAD'
     ? await readRawBody(event, false)

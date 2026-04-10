@@ -9,7 +9,7 @@ Convex agent skills for common tasks can be installed by running `npx convex ai-
 ## Auth Setup
 
 Auth uses Better Auth running on Convex HTTP actions (`convex/auth.ts` + `convex/http.ts`).
-`@onmax/nuxt-better-auth` runs in `clientOnly` mode — sessions are managed by Convex, not the Nuxt server.
+`@onmax/nuxt-better-auth` runs in SSR mode (`clientOnly: false`) — the Nuxt server validates sessions via the auth proxy (`server/api/auth/[...].ts`) which forwards to Convex. A server middleware (`server/middleware/convex-token.ts`) fetches Convex JWT tokens during SSR so authenticated queries can run server-side.
 
 Required Convex env vars (set via `npx convex env set`):
 - `BETTER_AUTH_SECRET`
