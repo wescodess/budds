@@ -14,6 +14,7 @@ export default defineNuxtPlugin((nuxtApp) => {
   if (!convexClient) return
 
   const { loggedIn, ready } = useUserSession()
+  const convexAuthReady = ref(false)
 
   let upsertDone = false
 
@@ -30,7 +31,9 @@ export default defineNuxtPlugin((nuxtApp) => {
     if (!isReady) return
 
     if (isLoggedIn) {
+      convexAuthReady.value = false
       convexClient.setAuth(fetchToken, (isAuthenticated: boolean) => {
+        convexAuthReady.value = true
         if (isAuthenticated && !upsertDone) {
           convexClient.mutation(upsertUserRef, {})
             .then(() => { upsertDone = true })
@@ -39,7 +42,10 @@ export default defineNuxtPlugin((nuxtApp) => {
       })
     } else {
       upsertDone = false
+      convexAuthReady.value = true
       convexClient.client.clearAuth()
     }
   }, { immediate: true })
+
+  return { provide: { convexAuthReady } }
 })
