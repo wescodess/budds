@@ -12,7 +12,7 @@ export default defineNuxtConfig({
     componentDir: '@/components/ui',
   },
   auth: {
-    clientOnly: true,
+    clientOnly: false,
     redirects: {
       login: '/login',
       guest: '/app',

@@ -19,8 +19,8 @@ export function useFolders() {
     ? useConvexMutation(api.folders.deleteFolder)
     : { mutate: async (_args: { id: Id<'folders'> }) => {}, isLoading: ref(false) }
 
-  const { data: topLevelData, pending: isLoading } = useConvexQuery(api.folders.listTopLevelFolders, {}, { ssr: false })
-  const { data: allFoldersData, pending: allFoldersLoading } = useConvexQuery(api.folders.listAllFolders, {}, { ssr: false })
+  const { data: topLevelData, pending: isLoading } = useConvexQuery(api.folders.listTopLevelFolders, {})
+  const { data: allFoldersData, pending: allFoldersLoading } = useConvexQuery(api.folders.listAllFolders, {})
 
   const convexAuthReady = import.meta.client
     ? useNuxtApp().$convexAuthReady as Ref<boolean>
@@ -79,7 +79,6 @@ export function useFolderDetail(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
   const { data: folder } = useConvexQuery(
     api.folders.getFolder,
     computed(() => ({ id: id.value })),
-    { ssr: false },
   )
 
   return {

@@ -247,10 +247,10 @@ async function executeDelete() {
                 @keydown.escape="showNewFolderInput = false"
               />
             </div>
-            <div v-if="allFoldersLoading" class="space-y-1 px-3 py-2">
+            <div v-if="allFoldersLoading || !allFolders" class="space-y-1 px-3 py-2">
               <UiSkeleton v-for="i in 3" :key="i" class="h-7 w-full rounded-md" />
             </div>
-            <template v-else-if="allFolders && allFolders.length > 0">
+            <template v-else-if="allFolders.length > 0">
               <SidebarFolderTree
                 :folders="allFolders"
                 :active-folder="currentFolderId"

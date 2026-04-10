@@ -6,7 +6,7 @@ settings:
 
 patchedDependencies:
   nuxt-convex@0.0.6:
-    hash: f5benex75rz7fkyo7xqky4ujum
+    hash: m7i5tmnmfypgbluyg732m2soni
     path: patches/nuxt-convex@0.0.6.patch
 
 importers:
@@ -54,7 +54,7 @@ importers:
         version: 4.4.2(otheqn6ft4n5qk6g7fdbd7bkmm)
       nuxt-convex:
         specifier: 0.0.6
-        version: 0.0.6(patch_hash=f5benex75rz7fkyo7xqky4ujum)(@convex-vue/core@0.0.4(react@19.2.4)(typescript@5.9.3))(convex@1.34.1(react@19.2.4))(magicast@0.5.2)
+        version: 0.0.6(patch_hash=m7i5tmnmfypgbluyg732m2soni)(@convex-vue/core@0.0.4(react@19.2.4)(typescript@5.9.3))(convex@1.34.1(react@19.2.4))(magicast@0.5.2)
       reka-ui:
         specifier: ^2.9.5
         version: 2.9.5(vue@3.5.32(typescript@5.9.3))
@@ -10439,7 +10439,7 @@ snapshots:
     dependencies:
       boolbase: 1.0.0
 
-  nuxt-convex@0.0.6(patch_hash=f5benex75rz7fkyo7xqky4ujum)(@convex-vue/core@0.0.4(react@19.2.4)(typescript@5.9.3))(convex@1.34.1(react@19.2.4))(magicast@0.5.2):
+  nuxt-convex@0.0.6(patch_hash=m7i5tmnmfypgbluyg732m2soni)(@convex-vue/core@0.0.4(react@19.2.4)(typescript@5.9.3))(convex@1.34.1(react@19.2.4))(magicast@0.5.2):
     dependencies:
       '@convex-vue/core': 0.0.4(react@19.2.4)(typescript@5.9.3)
       '@nuxt/kit': 4.4.2(magicast@0.5.2)

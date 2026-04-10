@@ -1,5 +1,5 @@
 diff --git a/dist/runtime/composables/useConvexQuery.js b/dist/runtime/composables/useConvexQuery.js
-index 6900025d29382b9e868ad30b71449d2d5691b2b5..520b5c7ecf58a18e5c0369268b32143f9bd7f670 100644
+index 6900025..7f21d8a 100644
 --- a/dist/runtime/composables/useConvexQuery.js
 +++ b/dist/runtime/composables/useConvexQuery.js
 @@ -1,7 +1,8 @@
@@ -12,7 +12,7 @@ index 6900025d29382b9e868ad30b71449d2d5691b2b5..520b5c7ecf58a18e5c0369268b32143f
    const nuxtApp = useNuxtApp();
    const config = useRuntimeConfig();
    const convexUrl = config.public.convex?.url;
-@@ -17,11 +18,11 @@ export async function useConvexQuery(query, args, options = {}) {
+@@ -17,25 +18,38 @@ export async function useConvexQuery(query, args, options = {}) {
    }
    return useConvexQueryClient(query, args, client);
  }
@@ -27,7 +27,11 @@ index 6900025d29382b9e868ad30b71449d2d5691b2b5..520b5c7ecf58a18e5c0369268b32143f
      key,
      async () => {
        const { fetchQuery } = await import("convex/nextjs");
-@@ -30,12 +31,23 @@ async function useConvexQuerySSR(query, args, options, convexUrl, client) {
+-      return fetchQuery(query, toValue(args), { url: convexUrl });
++      const nuxtApp = useNuxtApp();
++      const token = import.meta.server ? nuxtApp.ssrContext?.event?.context?.convexToken : undefined;
++      return fetchQuery(query, toValue(args), { url: convexUrl, token });
+     },
      { ...options, server: options.ssr ?? true }
    );
    if (import.meta.client) {
