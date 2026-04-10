@@ -8,4 +8,13 @@ export default defineSchema({
     email: v.optional(v.string()),
     avatarUrl: v.optional(v.string()),
   }).index('by_tokenIdentifier', ['tokenIdentifier']),
+
+  folders: defineTable({
+    userId: v.string(),
+    name: v.string(),
+    parentId: v.optional(v.id('folders')),
+    documentCount: v.number(),
+  })
+    .index('by_userId', ['userId'])
+    .index('by_userId_and_parentId', ['userId', 'parentId']),
 })

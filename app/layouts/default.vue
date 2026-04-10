@@ -37,6 +37,8 @@ function toggleTheme() {
 
 const activeTab = ref('chat')
 const isMobileView = useMediaQuery('(max-width: 767px)')
+const route = useRoute()
+const isDashboard = computed(() => route.path === '/app')
 </script>
 
 <template>
@@ -148,7 +150,7 @@ const isMobileView = useMediaQuery('(max-width: 767px)')
         <nav data-testid="breadcrumb-nav" class="flex-1">
           <UiBreadcrumb>
             <UiBreadcrumbList>
-              <template v-if="isMobileView">
+              <template v-if="isMobileView && !isDashboard">
                 <UiBreadcrumbItem data-testid="breadcrumb-mobile">
                   <UiBreadcrumbLink as-child>
                     <NuxtLink to="/app" data-testid="breadcrumb-back" class="flex items-center gap-1">
@@ -156,6 +158,11 @@ const isMobileView = useMediaQuery('(max-width: 767px)')
                       Home
                     </NuxtLink>
                   </UiBreadcrumbLink>
+                </UiBreadcrumbItem>
+              </template>
+              <template v-else-if="isDashboard">
+                <UiBreadcrumbItem>
+                  <UiBreadcrumbPage>Home</UiBreadcrumbPage>
                 </UiBreadcrumbItem>
               </template>
               <template v-else>
@@ -171,7 +178,11 @@ const isMobileView = useMediaQuery('(max-width: 767px)')
       </header>
 
       <div class="flex flex-1 flex-col overflow-hidden">
-        <UiTabs v-model="activeTab" class="flex flex-1 flex-col">
+        <template v-if="isDashboard">
+          <slot />
+        </template>
+
+        <UiTabs v-else v-model="activeTab" class="flex flex-1 flex-col">
           <div data-testid="tabs-container" class="overflow-x-auto border-b border-border px-4">
             <UiTabsList class="h-10 w-full justify-start gap-0 rounded-none bg-transparent p-0">
               <UiTabsTrigger
