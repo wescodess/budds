@@ -1,5 +1,5 @@
 <script setup lang="ts">
-definePageMeta({ auth: 'guest' })
+definePageMeta({ layout: false, auth: 'guest' })
 
 const { signIn } = useUserSession()
 
