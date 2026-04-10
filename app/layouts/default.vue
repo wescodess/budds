@@ -2,6 +2,7 @@
 import { useColorMode, useMediaQuery } from '@vueuse/core'
 import {
   FolderOpen,
+  FolderPlus,
   MessageSquare,
   Sun,
   Moon,
@@ -39,6 +40,63 @@ const activeTab = ref('chat')
 const isMobileView = useMediaQuery('(max-width: 767px)')
 const route = useRoute()
 const isDashboard = computed(() => route.path === '/app')
+
+const { allFolders, createFolder, createSubfolder } = useFolders()
+
+const isFolderRoute = computed(() => route.path.startsWith('/app/folders/'))
+const currentFolderId = computed(() => {
+  if (!isFolderRoute.value) return null
+  return route.params.id as string
+})
+
+const currentFolderData = computed(() => {
+  if (!isFolderRoute.value || !allFolders?.value || !currentFolderId.value) return null
+  return allFolders.value.find((f: any) => f._id === currentFolderId.value) ?? null
+})
+
+const folderAncestors = computed(() => {
+  if (!currentFolderData.value || !allFolders?.value) return []
+  const folderMap = new Map(allFolders.value.map((f: any) => [f._id, f]))
+  const ancestors: { _id: string; name: string }[] = []
+  let parentId = currentFolderData.value.parentId
+  const seen = new Set<string>()
+  while (parentId) {
+    if (seen.has(parentId)) break
+    seen.add(parentId)
+    const parent = folderMap.get(parentId)
+    if (!parent) break
+    ancestors.unshift({ _id: parent._id, name: parent.name })
+    parentId = parent.parentId
+  }
+  return ancestors
+})
+
+const showNewFolderInput = ref(false)
+const newFolderName = ref('')
+
+async function handleCreateFolder() {
+  const name = newFolderName.value.trim()
+  if (!name) return
+  try {
+    await createFolder(name)
+    newFolderName.value = ''
+    showNewFolderInput.value = false
+  } catch (e: any) {
+    const { toast } = await import('vue-sonner')
+    toast.error(e.message || 'Failed to create folder')
+  }
+}
+
+async function handleCreateSubfolder(parentId: string) {
+  const name = prompt('Subfolder name')
+  if (!name?.trim()) return
+  try {
+    await createSubfolder(name.trim(), parentId as any)
+  } catch (e: any) {
+    const { toast } = await import('vue-sonner')
+    toast.error(e.message || 'Failed to create subfolder')
+  }
+}
 </script>
 
 <template>
@@ -77,12 +135,42 @@ const isDashboard = computed(() => route.path === '/app')
 
       <UiSidebarContent>
         <UiSidebarGroup data-testid="sidebar-folders-group">
-          <UiSidebarGroupLabel>
-            <FolderOpen class="mr-2 h-4 w-4" />
-            Folders
+          <UiSidebarGroupLabel class="flex items-center justify-between">
+            <span class="flex items-center">
+              <FolderOpen class="mr-2 h-4 w-4" />
+              Folders
+            </span>
+            <UiButton
+              variant="ghost"
+              size="icon"
+              data-testid="new-root-folder-button"
+              class="h-5 w-5 text-muted-foreground hover:text-foreground"
+              @click="showNewFolderInput = !showNewFolderInput"
+            >
+              <FolderPlus class="h-3.5 w-3.5" />
+              <span class="sr-only">New folder</span>
+            </UiButton>
           </UiSidebarGroupLabel>
           <UiSidebarGroupContent>
+            <div v-if="showNewFolderInput" class="px-3 py-1">
+              <UiInput
+                v-model="newFolderName"
+                placeholder="Folder name"
+                class="h-7 text-sm"
+                data-testid="new-folder-input"
+                @keydown.enter="handleCreateFolder"
+                @keydown.escape="showNewFolderInput = false"
+              />
+            </div>
+            <template v-if="allFolders && allFolders.length > 0">
+              <SidebarFolderTree
+                :folders="allFolders"
+                :active-folder="currentFolderId"
+                @create-subfolder="handleCreateSubfolder"
+              />
+            </template>
             <div
+              v-else-if="!allFolders || allFolders.length === 0"
               data-testid="sidebar-folders-empty"
               class="px-3 py-6 text-center text-sm text-muted-foreground"
             >
@@ -163,6 +251,30 @@ const isDashboard = computed(() => route.path === '/app')
               <template v-else-if="isDashboard">
                 <UiBreadcrumbItem>
                   <UiBreadcrumbPage>Home</UiBreadcrumbPage>
+                </UiBreadcrumbItem>
+              </template>
+              <template v-else-if="isFolderRoute">
+                <UiBreadcrumbItem>
+                  <UiBreadcrumbLink as-child>
+                    <NuxtLink to="/app">Home</NuxtLink>
+                  </UiBreadcrumbLink>
+                </UiBreadcrumbItem>
+                <template v-for="ancestor in folderAncestors" :key="ancestor._id">
+                  <UiBreadcrumbSeparator />
+                  <UiBreadcrumbItem>
+                    <UiBreadcrumbLink
+                      as-child
+                      :data-testid="`breadcrumb-folder-${ancestor._id}`"
+                    >
+                      <NuxtLink :to="`/app/folders/${ancestor._id}`">{{ ancestor.name }}</NuxtLink>
+                    </UiBreadcrumbLink>
+                  </UiBreadcrumbItem>
+                </template>
+                <UiBreadcrumbSeparator />
+                <UiBreadcrumbItem>
+                  <UiBreadcrumbPage data-testid="breadcrumb-folder-current">
+                    {{ currentFolderData?.name ?? '...' }}
+                  </UiBreadcrumbPage>
                 </UiBreadcrumbItem>
               </template>
               <template v-else>
@@ -253,4 +365,5 @@ const isDashboard = computed(() => route.path === '/app')
       </div>
     </UiSidebarInset>
   </UiSidebarProvider>
+  <UiSonner />
 </template>

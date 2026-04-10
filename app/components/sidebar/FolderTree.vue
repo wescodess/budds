@@ -1,20 +1,23 @@
 <script setup lang="ts">
 import { TreeRoot, TreeItem } from 'reka-ui'
-import { ChevronRight, FolderOpen, Folder } from 'lucide-vue-next'
+import { ChevronRight, FolderOpen, Folder, Plus } from 'lucide-vue-next'
 import type { Doc, Id } from '~~/convex/_generated/dataModel'
 
 interface FolderNode {
   _id: Id<'folders'>
   name: string
   children: FolderNode[]
+  depth: number
 }
 
 const props = defineProps<{
   folders: Doc<'folders'>[] | null
+  activeFolder?: string | null
 }>()
 
 const emit = defineEmits<{
   select: [folderId: Id<'folders'>]
+  createSubfolder: [parentId: Id<'folders'>]
 }>()
 
 const expanded = ref<string[]>([])
@@ -30,16 +33,17 @@ const tree = computed<FolderNode[]>(() => {
     byParent.set(key, list)
   }
 
-  function build(parentId: string | undefined): FolderNode[] {
+  function build(parentId: string | undefined, depth: number): FolderNode[] {
     const items = byParent.get(parentId ?? 'root') ?? []
     return items.map((f) => ({
       _id: f._id,
       name: f.name,
-      children: build(f._id),
+      depth,
+      children: build(f._id, depth + 1),
     }))
   }
 
-  return build(undefined)
+  return build(undefined, 1)
 })
 
 function getKey(item: FolderNode) {
@@ -53,6 +57,11 @@ function getChildren(item: FolderNode) {
 function onSelect(item: FolderNode) {
   emit('select', item._id)
   navigateTo(`/app/folders/${item._id}`)
+}
+
+function onAddSubfolder(e: Event, item: FolderNode) {
+  e.stopPropagation()
+  emit('createSubfolder', item._id)
 }
 </script>
 
@@ -72,7 +81,9 @@ function onSelect(item: FolderNode) {
           v-slot="{ isExpanded }"
           :value="item.value"
           :level="item.level"
-          class="group flex cursor-pointer items-center gap-1 rounded-md px-2 py-1.5 text-sm text-sidebar-foreground outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring data-[selected]:bg-muted"
+          :data-testid="`folder-tree-item-${item.value._id}`"
+          class="group flex cursor-pointer items-center gap-1 rounded-md px-2 py-1.5 text-sm text-sidebar-foreground outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring data-selected:bg-muted"
+          :class="{ 'bg-muted': activeFolder && item.value._id === activeFolder }"
           :style="{ paddingLeft: `${(item.level - 1) * 12 + 8}px` }"
           @click="onSelect(item.value)"
         >
@@ -92,7 +103,16 @@ function onSelect(item: FolderNode) {
             class="h-4 w-4 shrink-0 text-muted-foreground"
           />
 
-          <span class="truncate">{{ item.value.name }}</span>
+          <span class="flex-1 truncate">{{ item.value.name }}</span>
+
+          <button
+            v-if="item.value.depth < 3"
+            :data-testid="`add-subfolder-${item.value._id}`"
+            class="ml-auto hidden h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground group-hover:flex group-focus-within:flex"
+            @click="onAddSubfolder($event, item.value)"
+          >
+            <Plus class="h-3 w-3" />
+          </button>
         </TreeItem>
       </div>
     </template>
