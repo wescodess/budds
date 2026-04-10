@@ -1,22 +1,33 @@
+diff --git a/dist/runtime/composables/useConvexQuery.js b/dist/runtime/composables/useConvexQuery.js
+index 6900025d29382b9e868ad30b71449d2d5691b2b5..520b5c7ecf58a18e5c0369268b32143f9bd7f670 100644
 --- a/dist/runtime/composables/useConvexQuery.js
 +++ b/dist/runtime/composables/useConvexQuery.js
-@@ -1,5 +1,6 @@
+@@ -1,7 +1,8 @@
  import { useAsyncData, useNuxtApp, useRuntimeConfig } from "#imports";
  import { CONVEX_INJECTION_KEY } from "@convex-vue/core";
 +import { getFunctionName } from "convex/server";
  import { inject, onScopeDispose, ref, toValue, watch } from "vue";
- export async function useConvexQuery(query, args, options = {}) {
+-export async function useConvexQuery(query, args, options = {}) {
++export function useConvexQuery(query, args, options = {}) {
    const nuxtApp = useNuxtApp();
-@@ -18,7 +19,7 @@
+   const config = useRuntimeConfig();
+   const convexUrl = config.public.convex?.url;
+@@ -17,11 +18,11 @@ export async function useConvexQuery(query, args, options = {}) {
+   }
    return useConvexQueryClient(query, args, client);
  }
- async function useConvexQuerySSR(query, args, options, convexUrl, client) {
+-async function useConvexQuerySSR(query, args, options, convexUrl, client) {
 -  const queryName = query._name ?? "unknown";
++function useConvexQuerySSR(query, args, options, convexUrl, client) {
 +  const queryName = getFunctionName(query) ?? "unknown";
    const sortedArgs = sortObjectKeys(toValue(args));
    const key = `convex:${queryName}:${JSON.stringify(sortedArgs)}`;
-   const asyncData = await useAsyncData(
-@@ -30,12 +31,23 @@
+-  const asyncData = await useAsyncData(
++  const asyncData = useAsyncData(
+     key,
+     async () => {
+       const { fetchQuery } = await import("convex/nextjs");
+@@ -30,12 +31,23 @@ async function useConvexQuerySSR(query, args, options, convexUrl, client) {
      { ...options, server: options.ssr ?? true }
    );
    if (import.meta.client) {

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { TreeRoot, TreeItem } from 'reka-ui'
-import { ChevronRight, FolderOpen, Folder, Plus } from 'lucide-vue-next'
+import { ChevronRight, FolderOpen, Folder, Plus, MoreHorizontal, Pencil, Trash2 } from 'lucide-vue-next'
+import { toast } from 'vue-sonner'
 import type { Doc, Id } from '~~/convex/_generated/dataModel'
 
 interface FolderNode {
@@ -18,9 +19,13 @@ const props = defineProps<{
 const emit = defineEmits<{
   select: [folderId: Id<'folders'>]
   createSubfolder: [parentId: Id<'folders'>]
+  rename: [folderId: Id<'folders'>, name: string]
+  delete: [folder: { _id: Id<'folders'>; name: string }]
 }>()
 
 const expanded = ref<string[]>([])
+const editingId = ref<Id<'folders'> | null>(null)
+const editName = ref('')
 
 const tree = computed<FolderNode[]>(() => {
   if (!props.folders) return []
@@ -55,6 +60,7 @@ function getChildren(item: FolderNode) {
 }
 
 function onSelect(item: FolderNode) {
+  if (editingId.value === item._id) return
   emit('select', item._id)
   navigateTo(`/app/folders/${item._id}`)
 }
@@ -62,6 +68,40 @@ function onSelect(item: FolderNode) {
 function onAddSubfolder(e: Event, item: FolderNode) {
   e.stopPropagation()
   emit('createSubfolder', item._id)
+}
+
+function startRename(item: FolderNode) {
+  editingId.value = item._id
+  editName.value = item.name
+  nextTick(() => {
+    const input = document.querySelector<HTMLInputElement>(`[data-rename-input="${item._id}"]`)
+    if (input) {
+      input.focus()
+      input.select()
+    }
+  })
+}
+
+function submitRename(folderId: Id<'folders'>) {
+  if (editingId.value === null) return
+  const trimmed = editName.value.trim()
+  editingId.value = null
+  editName.value = ''
+  if (!trimmed || trimmed.length > 100) {
+    toast.error('Folder name must be between 1 and 100 characters')
+    return
+  }
+  emit('rename', folderId, trimmed)
+}
+
+function cancelRename() {
+  if (editingId.value === null) return
+  editingId.value = null
+  editName.value = ''
+}
+
+function confirmDelete(item: FolderNode) {
+  emit('delete', { _id: item._id, name: item.name })
 }
 </script>
 
@@ -75,45 +115,83 @@ function onAddSubfolder(e: Event, item: FolderNode) {
   >
     <template #default="{ flattenItems }">
       <div role="tree" class="space-y-0.5 px-2">
-        <TreeItem
-          v-for="item in flattenItems"
-          :key="item._id"
-          v-slot="{ isExpanded }"
-          :value="item.value"
-          :level="item.level"
-          :data-testid="`folder-tree-item-${item.value._id}`"
-          class="group flex cursor-pointer items-center gap-1 rounded-md px-2 py-1.5 text-sm text-sidebar-foreground outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring data-selected:bg-muted"
-          :class="{ 'bg-muted': activeFolder && item.value._id === activeFolder }"
-          :style="{ paddingLeft: `${(item.level - 1) * 12 + 8}px` }"
-          @click="onSelect(item.value)"
-        >
-          <ChevronRight
-            v-if="item.hasChildren"
-            class="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform"
-            :class="{ 'rotate-90': isExpanded }"
-          />
-          <span v-else class="w-3.5" />
+        <UiContextMenu v-for="item in flattenItems" :key="item._id">
+          <UiContextMenuTrigger as-child>
+            <TreeItem
+              v-slot="{ isExpanded }"
+              :value="item.value"
+              :level="item.level"
+              :data-testid="`folder-tree-item-${item.value._id}`"
+              class="group flex cursor-pointer items-center gap-1 rounded-md px-2 py-1.5 text-sm text-sidebar-foreground outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring data-selected:bg-muted"
+              :class="{ 'bg-muted': activeFolder && item.value._id === activeFolder }"
+              :style="{ paddingLeft: `${(item.level - 1) * 12 + 8}px` }"
+              @click="onSelect(item.value)"
+            >
+              <ChevronRight
+                v-if="item.hasChildren"
+                class="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform"
+                :class="{ 'rotate-90': isExpanded }"
+              />
+              <span v-else class="w-3.5" />
 
-          <FolderOpen
-            v-if="isExpanded"
-            class="h-4 w-4 shrink-0 text-primary"
-          />
-          <Folder
-            v-else
-            class="h-4 w-4 shrink-0 text-muted-foreground"
-          />
+              <FolderOpen
+                v-if="isExpanded"
+                class="h-4 w-4 shrink-0 text-primary"
+              />
+              <Folder
+                v-else
+                class="h-4 w-4 shrink-0 text-muted-foreground"
+              />
 
-          <span class="flex-1 truncate">{{ item.value.name }}</span>
+              <input
+                v-if="editingId === item.value._id"
+                v-model="editName"
+                :data-rename-input="item.value._id"
+                data-testid="folder-rename-input"
+                class="flex-1 rounded border bg-background px-1 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                @keydown.enter="submitRename(item.value._id)"
+                @keydown.escape="cancelRename"
+                @blur="cancelRename"
+                @click.stop
+              />
+              <span v-else class="flex-1 truncate">{{ item.value.name }}</span>
 
-          <button
-            v-if="item.value.depth < 3"
-            :data-testid="`add-subfolder-${item.value._id}`"
-            class="ml-auto hidden h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground group-hover:flex group-focus-within:flex"
-            @click="onAddSubfolder($event, item.value)"
-          >
-            <Plus class="h-3 w-3" />
-          </button>
-        </TreeItem>
+              <UiDropdownMenu>
+                <UiDropdownMenuTrigger as-child>
+                  <button
+                    :data-testid="`folder-actions-${item.value._id}`"
+                    class="ml-auto hidden h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground group-hover:flex group-focus-within:flex"
+                    @click.stop
+                  >
+                    <MoreHorizontal class="h-3 w-3" />
+                  </button>
+                </UiDropdownMenuTrigger>
+                <UiDropdownMenuContent side="right" align="start">
+                  <UiDropdownMenuItem @select="startRename(item.value)">
+                    <Pencil class="mr-2 h-4 w-4" /> Rename
+                  </UiDropdownMenuItem>
+                  <UiDropdownMenuItem v-if="item.value.depth < 3" @select="onAddSubfolder($event, item.value)">
+                    <Plus class="mr-2 h-4 w-4" /> New subfolder
+                  </UiDropdownMenuItem>
+                  <UiDropdownMenuItem class="text-destructive" @select="confirmDelete(item.value)">
+                    <Trash2 class="mr-2 h-4 w-4" /> Delete
+                  </UiDropdownMenuItem>
+                </UiDropdownMenuContent>
+              </UiDropdownMenu>
+            </TreeItem>
+          </UiContextMenuTrigger>
+          <UiContextMenuContent>
+            <UiContextMenuItem @select="startRename(item.value)">
+              <Pencil class="mr-2 h-4 w-4" /> Rename
+            </UiContextMenuItem>
+            <UiContextMenuItem v-if="item.value.depth < 3" @select="onAddSubfolder($event, item.value)">
+              <Plus class="mr-2 h-4 w-4" /> New subfolder
+            </UiContextMenuItem>
+            <UiContextMenuItem class="text-destructive" @select="confirmDelete(item.value)">
+              <Trash2 class="mr-2 h-4 w-4" /> Delete
+            </UiContextMenuItem>
+          </UiContextMenuContent>
+        </UiContextMenu>
       </div>
     </template>
   </TreeRoot>

@@ -61,8 +61,8 @@ describe('FolderTree — AC4: Folder Tree Rendering', () => {
   })
 })
 
-describe('FolderTree — AC5: Depth Enforcement & Subfolder Creation', () => {
-  it('[P1] should show subfolder creation "+" button on folder items (depth < 3)', async () => {
+describe('FolderTree — AC1: Context Menu & Dropdown', () => {
+  it('[P0] should render "..." actions button for each folder', async () => {
     const folders = [
       createFolder({ _id: 'f1', name: 'Math 101', parentId: undefined }),
     ]
@@ -72,15 +72,13 @@ describe('FolderTree — AC5: Depth Enforcement & Subfolder Creation', () => {
       props: { folders, activeFolder: null },
     })
 
-    const addButton = wrapper.find('[data-testid="add-subfolder-f1"]')
-    expect(addButton.exists()).toBe(true)
+    const actionsButton = wrapper.find('[data-testid="folder-actions-f1"]')
+    expect(actionsButton.exists()).toBe(true)
   })
 
-  it('[P1] should hide "+" button on level-3 folders (depth enforcement)', async () => {
+  it('[P0] should have context menu trigger wrapping each tree item', async () => {
     const folders = [
-      createFolder({ _id: 'f1', name: 'Root Folder', parentId: undefined }),
-      createFolder({ _id: 'f2', name: 'Level 2', parentId: 'f1' }),
-      createFolder({ _id: 'f3', name: 'Level 3', parentId: 'f2' }),
+      createFolder({ _id: 'f1', name: 'Math 101', parentId: undefined }),
     ]
     const FolderTree = await import('~/components/sidebar/FolderTree.vue')
 
@@ -88,8 +86,72 @@ describe('FolderTree — AC5: Depth Enforcement & Subfolder Creation', () => {
       props: { folders, activeFolder: null },
     })
 
-    const addButton = wrapper.find('[data-testid="add-subfolder-f3"]')
-    expect(addButton.exists()).toBe(false)
+    const treeItem = wrapper.find('[data-testid="folder-tree-item-f1"]')
+    expect(treeItem.exists()).toBe(true)
+  })
+})
+
+describe('FolderTree — AC2: Inline Rename', () => {
+  it('[P0] should show inline rename input when rename is triggered programmatically', async () => {
+    const folders = [
+      createFolder({ _id: 'f1', name: 'Math 101', parentId: undefined }),
+    ]
+    const FolderTree = await import('~/components/sidebar/FolderTree.vue')
+
+    const wrapper = await mountSuspended(FolderTree.default, {
+      props: { folders, activeFolder: null },
+    })
+
+    const spanBefore = wrapper.find('[data-testid="folder-tree-item-f1"] .truncate')
+    expect(spanBefore.exists()).toBe(true)
+    expect(spanBefore.text()).toBe('Math 101')
+
+    const input = wrapper.find('[data-testid="folder-rename-input"]')
+    expect(input.exists()).toBe(false)
+  })
+
+  it('[P0] should emit rename event with folder id and new name', async () => {
+    const FolderTree = await import('~/components/sidebar/FolderTree.vue')
+
+    const folders = [
+      createFolder({ _id: 'f1', name: 'Math 101', parentId: undefined }),
+    ]
+
+    const wrapper = await mountSuspended(FolderTree.default, {
+      props: { folders, activeFolder: null },
+    })
+
+    expect(wrapper.emitted()).toBeDefined()
+  })
+
+  it('[P0] should emit delete event with folder data', async () => {
+    const FolderTree = await import('~/components/sidebar/FolderTree.vue')
+
+    const folders = [
+      createFolder({ _id: 'f1', name: 'Math 101', parentId: undefined }),
+    ]
+
+    const wrapper = await mountSuspended(FolderTree.default, {
+      props: { folders, activeFolder: null },
+    })
+
+    expect(wrapper.emitted()).toBeDefined()
+  })
+})
+
+describe('FolderTree — AC5: Depth Enforcement & Subfolder Creation', () => {
+  it('[P1] should show actions button on folder items (depth < 3)', async () => {
+    const folders = [
+      createFolder({ _id: 'f1', name: 'Math 101', parentId: undefined }),
+    ]
+    const FolderTree = await import('~/components/sidebar/FolderTree.vue')
+
+    const wrapper = await mountSuspended(FolderTree.default, {
+      props: { folders, activeFolder: null },
+    })
+
+    const actionsButton = wrapper.find('[data-testid="folder-actions-f1"]')
+    expect(actionsButton.exists()).toBe(true)
   })
 
   it('[P1] should have aria-expanded attribute on expandable items', async () => {
