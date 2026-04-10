@@ -8,10 +8,11 @@ const props = defineProps<{
     _creationTime: number
     name: string
     documentCount: number
+    updatedAt?: number
   }
 }>()
 
-const lastActivity = useTimeAgo(() => props.folder._creationTime)
+const lastActivity = useTimeAgo(() => props.folder.updatedAt ?? props.folder._creationTime)
 </script>
 
 <template>

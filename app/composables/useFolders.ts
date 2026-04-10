@@ -4,16 +4,18 @@ import type { Doc } from '../../convex/_generated/dataModel'
 export async function useFolders() {
   const { data, pending: isLoading } = await useConvexQuery(api.folders.listTopLevelFolders, {})
 
-  const { mutate, isLoading: isCreating } = useConvexMutation(api.folders.createFolder)
+  const mutation = import.meta.client
+    ? useConvexMutation(api.folders.createFolder)
+    : { mutate: async (_args: { name: string }) => {}, isLoading: ref(false) }
 
   async function createFolder(name: string) {
-    await mutate({ name })
+    await mutation.mutate({ name })
   }
 
   return {
     folders: data as Ref<Doc<'folders'>[] | null>,
     isLoading,
     createFolder,
-    isCreating,
+    isCreating: mutation.isLoading,
   }
 }

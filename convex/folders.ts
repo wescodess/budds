@@ -1,6 +1,21 @@
 import { v } from 'convex/values'
 import { mutation, query } from './_generated/server'
 
+export const listAllFolders = query({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) return []
+
+    const userId = identity.tokenIdentifier
+
+    return await ctx.db
+      .query('folders')
+      .withIndex('by_userId', (q) => q.eq('userId', userId))
+      .collect()
+  },
+})
+
 export const listTopLevelFolders = query({
   args: {},
   handler: async (ctx) => {
@@ -36,6 +51,7 @@ export const createFolder = mutation({
       name,
       parentId: undefined,
       documentCount: 0,
+      updatedAt: Date.now(),
     })
   },
 })

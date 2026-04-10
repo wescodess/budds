@@ -14,6 +14,7 @@ export default defineSchema({
     name: v.string(),
     parentId: v.optional(v.id('folders')),
     documentCount: v.number(),
+    updatedAt: v.optional(v.number()),
   })
     .index('by_userId', ['userId'])
     .index('by_userId_and_parentId', ['userId', 'parentId']),
