@@ -41,6 +41,11 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-citation-blue: var(--citation-blue);
+  --color-citation-teal: var(--citation-teal);
+  --color-source-highlight: var(--source-highlight);
 }
 
 :root {
@@ -76,6 +81,11 @@
   --sidebar-accent-foreground: oklch(0.168 0.008 49.0);
   --sidebar-border: oklch(0.87 0.006 73.6);
   --sidebar-ring: oklch(0.769 0.163 75.8);
+  --success: oklch(0.765 0.154 162.48);
+  --warning: oklch(0.762 0.152 55.5);
+  --citation-blue: oklch(0.623 0.159 255.1);
+  --citation-teal: oklch(0.696 0.17 162.48);
+  --source-highlight: oklch(0.879 0.156 86.1 / 12%);
 }
 
 .dark {
@@ -110,6 +120,11 @@
   --sidebar-accent-foreground: oklch(0.985 0.001 106.4);
   --sidebar-border: oklch(1 0 0 / 12%);
   --sidebar-ring: oklch(0.769 0.163 75.8);
+  --success: oklch(0.765 0.154 162.48);
+  --warning: oklch(0.762 0.152 55.5);
+  --citation-blue: oklch(0.623 0.159 255.1);
+  --citation-teal: oklch(0.696 0.17 162.48);
+  --source-highlight: oklch(0.769 0.163 75.8 / 8%);
 }
 
 @layer base {
@@ -118,5 +133,16 @@
   }
   body {
     @apply bg-background text-foreground;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
   }
+}
+
+@utility font-dm-sans {
+  font-family: 'DM Sans', sans-serif;
+}
+
+@utility font-inter {
+  font-family: 'Inter', sans-serif;
 }
