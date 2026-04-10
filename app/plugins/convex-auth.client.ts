@@ -2,17 +2,8 @@ import { makeFunctionReference } from 'convex/server'
 
 const upsertUserRef = makeFunctionReference<'mutation'>('users:upsertUser')
 
-export default defineNuxtPlugin((nuxtApp) => {
-  const provides = nuxtApp.vueApp._context.provides
-  let convexClient: any = null
-  for (const key of Object.getOwnPropertySymbols(provides)) {
-    if (key.description === 'convex-client') {
-      convexClient = provides[key]
-      break
-    }
-  }
-  if (!convexClient) return
-
+export default defineNuxtPlugin(() => {
+  const convexClient = useConvex()
   const { loggedIn, ready } = useUserSession()
   const convexAuthReady = ref(false)
 
@@ -31,7 +22,6 @@ export default defineNuxtPlugin((nuxtApp) => {
     if (!isReady) return
 
     if (isLoggedIn) {
-      convexAuthReady.value = false
       convexClient.setAuth(fetchToken, (isAuthenticated: boolean) => {
         convexAuthReady.value = true
         if (isAuthenticated && !upsertDone) {

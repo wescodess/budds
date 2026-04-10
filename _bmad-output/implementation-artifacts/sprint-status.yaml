@@ -36,6 +36,9 @@
 
 generated: 2026-04-09
 last_updated: '2026-04-10'
+# Code review completed 2026-04-10: 7 patches applied, 4 deferred, 5 dismissed
+
+
 
 
 retrospective_location: _bmad-output/implementation-artifacts/epic-1-retro-2026-04-10.md
@@ -54,7 +57,7 @@ development_status:
 
   epic-2: in-progress
   2-1-create-and-navigate-folder-hierarchy: done
-  2-2-rename-and-delete-folders: backlog
+  2-2-rename-and-delete-folders: done
   epic-2-retrospective: optional
 
   epic-3: backlog
