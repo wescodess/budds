@@ -61,6 +61,89 @@ describe('FolderTree — AC4: Folder Tree Rendering', () => {
   })
 })
 
+describe('FolderTree — AC1: Context Menu', () => {
+  it.skip('[P0] should show context menu with Rename and Delete on right-click', async () => {
+    const folders = [
+      createFolder({ _id: 'f1', name: 'Math 101', parentId: undefined }),
+    ]
+    const FolderTree = await import('~/components/sidebar/FolderTree.vue')
+
+    const wrapper = await mountSuspended(FolderTree.default, {
+      props: { folders, activeFolder: null },
+    })
+
+    const treeItem = wrapper.find('[data-testid="folder-tree-item-f1"]')
+    await treeItem.trigger('contextmenu')
+
+    const renameOption = wrapper.find('[data-testid="context-menu-rename"]')
+    const deleteOption = wrapper.find('[data-testid="context-menu-delete"]')
+    expect(renameOption.exists()).toBe(true)
+    expect(deleteOption.exists()).toBe(true)
+    expect(renameOption.text()).toContain('Rename')
+    expect(deleteOption.text()).toContain('Delete')
+  })
+
+  it.skip('[P1] should show "..." dropdown menu button', async () => {
+    const folders = [
+      createFolder({ _id: 'f1', name: 'Math 101', parentId: undefined }),
+    ]
+    const FolderTree = await import('~/components/sidebar/FolderTree.vue')
+
+    const wrapper = await mountSuspended(FolderTree.default, {
+      props: { folders, activeFolder: null },
+    })
+
+    const moreButton = wrapper.find('[data-testid="folder-more-menu-f1"]')
+    expect(moreButton.exists()).toBe(true)
+  })
+})
+
+describe('FolderTree — AC2: Inline Rename', () => {
+  it.skip('[P0] should show inline input when rename is triggered', async () => {
+    const folders = [
+      createFolder({ _id: 'f1', name: 'Math 101', parentId: undefined }),
+    ]
+    const FolderTree = await import('~/components/sidebar/FolderTree.vue')
+
+    const wrapper = await mountSuspended(FolderTree.default, {
+      props: { folders, activeFolder: null },
+    })
+
+    const treeItem = wrapper.find('[data-testid="folder-tree-item-f1"]')
+    await treeItem.trigger('contextmenu')
+
+    const renameOption = wrapper.find('[data-testid="context-menu-rename"]')
+    await renameOption.trigger('click')
+
+    const input = wrapper.find('[data-testid="rename-input-f1"]')
+    expect(input.exists()).toBe(true)
+    expect((input.element as HTMLInputElement).value).toBe('Math 101')
+  })
+
+  it.skip('[P1] should confirm rename on Enter and cancel on Escape', async () => {
+    const folders = [
+      createFolder({ _id: 'f1', name: 'Math 101', parentId: undefined }),
+    ]
+    const FolderTree = await import('~/components/sidebar/FolderTree.vue')
+
+    const wrapper = await mountSuspended(FolderTree.default, {
+      props: { folders, activeFolder: null },
+    })
+
+    const treeItem = wrapper.find('[data-testid="folder-tree-item-f1"]')
+    await treeItem.trigger('contextmenu')
+    const renameOption = wrapper.find('[data-testid="context-menu-rename"]')
+    await renameOption.trigger('click')
+
+    const input = wrapper.find('[data-testid="rename-input-f1"]')
+    await input.setValue('Updated Name')
+    await input.trigger('keydown.escape')
+
+    const nameSpan = wrapper.find('[data-testid="folder-tree-item-f1"]')
+    expect(nameSpan.text()).toContain('Math 101')
+  })
+})
+
 describe('FolderTree — AC5: Depth Enforcement & Subfolder Creation', () => {
   it('[P1] should show subfolder creation "+" button on folder items (depth < 3)', async () => {
     const folders = [

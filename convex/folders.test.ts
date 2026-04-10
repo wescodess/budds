@@ -327,6 +327,213 @@ describe('folders.getFolder', () => {
   })
 })
 
+describe('folders.renameFolder', () => {
+  it.skip('[P0] should rename a folder for authenticated owner', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Math 101' })
+    // @ts-expect-error — RED: renameFolder not yet implemented
+    await asUser.mutation(api.folders.renameFolder, { id: folderId, name: 'Mathematics 101' })
+    const folder = await asUser.query(api.folders.getFolder, { id: folderId })
+    expect(folder!.name).toBe('Mathematics 101')
+  })
+
+  it.skip('[P0] should reject empty name', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Math 101' })
+    await expect(
+      // @ts-expect-error — RED: renameFolder not yet implemented
+      asUser.mutation(api.folders.renameFolder, { id: folderId, name: '' }),
+    ).rejects.toThrow()
+  })
+
+  it.skip('[P0] should reject whitespace-only name', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Math 101' })
+    await expect(
+      // @ts-expect-error — RED: renameFolder not yet implemented
+      asUser.mutation(api.folders.renameFolder, { id: folderId, name: '   ' }),
+    ).rejects.toThrow()
+  })
+
+  it.skip('[P0] should reject name longer than 100 characters', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Math 101' })
+    const longName = 'a'.repeat(101)
+    await expect(
+      // @ts-expect-error — RED: renameFolder not yet implemented
+      asUser.mutation(api.folders.renameFolder, { id: folderId, name: longName }),
+    ).rejects.toThrow()
+  })
+
+  it.skip('[P1] should trim whitespace from name', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Math 101' })
+    // @ts-expect-error — RED: renameFolder not yet implemented
+    await asUser.mutation(api.folders.renameFolder, { id: folderId, name: '  Mathematics 101  ' })
+    const folder = await asUser.query(api.folders.getFolder, { id: folderId })
+    expect(folder!.name).toBe('Mathematics 101')
+  })
+
+  it.skip('[P1] should update updatedAt timestamp', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Math 101' })
+    const before = await asUser.query(api.folders.getFolder, { id: folderId })
+    // @ts-expect-error — RED: renameFolder not yet implemented
+    await asUser.mutation(api.folders.renameFolder, { id: folderId, name: 'Updated' })
+    const after = await asUser.query(api.folders.getFolder, { id: folderId })
+    expect(after!.updatedAt).toBeGreaterThanOrEqual(before!.updatedAt!)
+  })
+
+  it.skip('[P1] should reject renaming another user\'s folder', async () => {
+    const t = convexTest(schema, modules)
+    const asUser1 = t.withIdentity(TEST_IDENTITY)
+    const asUser2 = t.withIdentity(OTHER_IDENTITY)
+    const folderId = await asUser1.mutation(api.folders.createFolder, { name: 'User1 Folder' })
+    await expect(
+      // @ts-expect-error — RED: renameFolder not yet implemented
+      asUser2.mutation(api.folders.renameFolder, { id: folderId, name: 'Hijacked' }),
+    ).rejects.toThrow()
+  })
+
+  it.skip('[P1] should reject unauthenticated user', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Math 101' })
+    await expect(
+      // @ts-expect-error — RED: renameFolder not yet implemented
+      t.mutation(api.folders.renameFolder, { id: folderId, name: 'Hacked' }),
+    ).rejects.toThrow()
+  })
+})
+
+describe('folders.deleteFolder', () => {
+  it.skip('[P0] should delete a leaf folder', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'To Delete' })
+    // @ts-expect-error — RED: deleteFolder not yet implemented
+    await asUser.mutation(api.folders.deleteFolder, { id: folderId })
+    const folder = await asUser.query(api.folders.getFolder, { id: folderId })
+    expect(folder).toBeNull()
+  })
+
+  it.skip('[P0] should cascade delete folder with direct children', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const parentId = await asUser.mutation(api.folders.createFolder, { name: 'Parent' })
+    const child1 = await asUser.mutation(api.folders.createSubfolder, { name: 'Child 1', parentId })
+    const child2 = await asUser.mutation(api.folders.createSubfolder, { name: 'Child 2', parentId })
+    // @ts-expect-error — RED: deleteFolder not yet implemented
+    await asUser.mutation(api.folders.deleteFolder, { id: parentId })
+    const all = await asUser.query(api.folders.listAllFolders)
+    expect(all).toHaveLength(0)
+  })
+
+  it.skip('[P0] should cascade delete 3-level nested hierarchy', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const level1 = await asUser.mutation(api.folders.createFolder, { name: 'Level 1' })
+    const level2 = await asUser.mutation(api.folders.createSubfolder, { name: 'Level 2', parentId: level1 })
+    const level3 = await asUser.mutation(api.folders.createSubfolder, { name: 'Level 3', parentId: level2 })
+    // @ts-expect-error — RED: deleteFolder not yet implemented
+    await asUser.mutation(api.folders.deleteFolder, { id: level1 })
+    const all = await asUser.query(api.folders.listAllFolders)
+    expect(all).toHaveLength(0)
+  })
+
+  it.skip('[P0] should return count of deleted items', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const parentId = await asUser.mutation(api.folders.createFolder, { name: 'Parent' })
+    await asUser.mutation(api.folders.createSubfolder, { name: 'Child 1', parentId })
+    await asUser.mutation(api.folders.createSubfolder, { name: 'Child 2', parentId })
+    // @ts-expect-error — RED: deleteFolder not yet implemented
+    const result = await asUser.mutation(api.folders.deleteFolder, { id: parentId })
+    expect(result).toEqual({ deletedFolders: 3, deletedDocuments: 0 })
+  })
+
+  it.skip('[P1] should reject deleting another user\'s folder', async () => {
+    const t = convexTest(schema, modules)
+    const asUser1 = t.withIdentity(TEST_IDENTITY)
+    const asUser2 = t.withIdentity(OTHER_IDENTITY)
+    const folderId = await asUser1.mutation(api.folders.createFolder, { name: 'User1 Folder' })
+    await expect(
+      // @ts-expect-error — RED: deleteFolder not yet implemented
+      asUser2.mutation(api.folders.deleteFolder, { id: folderId }),
+    ).rejects.toThrow()
+  })
+
+  it.skip('[P1] should reject unauthenticated user', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Math 101' })
+    await expect(
+      // @ts-expect-error — RED: deleteFolder not yet implemented
+      t.mutation(api.folders.deleteFolder, { id: folderId }),
+    ).rejects.toThrow()
+  })
+})
+
+describe('folders.getFolderDescendantCounts', () => {
+  it.skip('[P0] should return zero counts for empty folder', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Empty' })
+    // @ts-expect-error — RED: getFolderDescendantCounts not yet implemented
+    const counts = await asUser.query(api.folders.getFolderDescendantCounts, { id: folderId })
+    expect(counts).toEqual({ subfolderCount: 0, documentCount: 0 })
+  })
+
+  it.skip('[P0] should return correct counts for folder with direct children', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const parentId = await asUser.mutation(api.folders.createFolder, { name: 'Parent' })
+    await asUser.mutation(api.folders.createSubfolder, { name: 'Child 1', parentId })
+    await asUser.mutation(api.folders.createSubfolder, { name: 'Child 2', parentId })
+    // @ts-expect-error — RED: getFolderDescendantCounts not yet implemented
+    const counts = await asUser.query(api.folders.getFolderDescendantCounts, { id: parentId })
+    expect(counts).toEqual({ subfolderCount: 2, documentCount: 0 })
+  })
+
+  it.skip('[P0] should return correct counts for 3-level hierarchy', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const level1 = await asUser.mutation(api.folders.createFolder, { name: 'Level 1' })
+    const level2 = await asUser.mutation(api.folders.createSubfolder, { name: 'Level 2', parentId: level1 })
+    await asUser.mutation(api.folders.createSubfolder, { name: 'Level 3a', parentId: level2 })
+    await asUser.mutation(api.folders.createSubfolder, { name: 'Level 3b', parentId: level2 })
+    // @ts-expect-error — RED: getFolderDescendantCounts not yet implemented
+    const counts = await asUser.query(api.folders.getFolderDescendantCounts, { id: level1 })
+    expect(counts).toEqual({ subfolderCount: 3, documentCount: 0 })
+  })
+
+  it.skip('[P1] should reject unauthenticated user', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Test' })
+    await expect(
+      // @ts-expect-error — RED: getFolderDescendantCounts not yet implemented
+      t.query(api.folders.getFolderDescendantCounts, { id: folderId }),
+    ).rejects.toThrow()
+  })
+
+  it.skip('[P1] should reject another user\'s folder', async () => {
+    const t = convexTest(schema, modules)
+    const asUser1 = t.withIdentity(TEST_IDENTITY)
+    const asUser2 = t.withIdentity(OTHER_IDENTITY)
+    const folderId = await asUser1.mutation(api.folders.createFolder, { name: 'Private' })
+    // @ts-expect-error — RED: getFolderDescendantCounts not yet implemented
+    const counts = await asUser2.query(api.folders.getFolderDescendantCounts, { id: folderId })
+    expect(counts).toBeNull()
+  })
+})
+
 describe('folders.listAllFolders', () => {
   it('[P0] should return all folders for authenticated user', async () => {
     const t = convexTest(schema, modules)

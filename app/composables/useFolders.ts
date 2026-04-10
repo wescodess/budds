@@ -21,11 +21,17 @@ export function useFolders() {
   async function createFolder(name: string) {
     await until(convexAuthReady).toBe(true, { timeout: 5000 })
     await createFolderMutation.mutate({ name })
+    if (createFolderMutation.error.value) {
+      throw createFolderMutation.error.value
+    }
   }
 
   async function createSubfolder(name: string, parentId: Id<'folders'>) {
     await until(convexAuthReady).toBe(true, { timeout: 5000 })
     await createSubfolderMutation.mutate({ name, parentId })
+    if (createSubfolderMutation.error.value) {
+      throw createSubfolderMutation.error.value
+    }
   }
 
   return {

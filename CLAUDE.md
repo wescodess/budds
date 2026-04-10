@@ -6,14 +6,19 @@ When working on Convex code, **always read `convex/_generated/ai/guidelines.md` 
 Convex agent skills for common tasks can be installed by running `npx convex ai-files install`.
 <!-- convex-ai-end -->
 
-## Auth Setup (JWKS Bootstrap)
+## Auth Setup
 
-Convex auth requires a one-time JWKS bootstrap after first Google login:
+Auth uses Better Auth running on Convex HTTP actions (`convex/auth.ts` + `convex/http.ts`).
+`@onmax/nuxt-better-auth` runs in `clientOnly` mode — sessions are managed by Convex, not the Nuxt server.
 
-1. Start dev servers: `pnpm dev` and `npx convex dev`
-2. Log in with Google once (generates JWKS keys in SQLite)
-3. Run `./scripts/bootstrap-jwks.sh`
-4. Restart `npx convex dev`
+Required Convex env vars (set via `npx convex env set`):
+- `BETTER_AUTH_SECRET`
+- `SITE_URL` (Nuxt app origin, e.g. `http://localhost:3002`)
+- `CONVEX_SITE_URL` (Convex HTTP URL)
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+
+Google OAuth redirect URI must point to `${CONVEX_SITE_URL}/api/auth/callback/google`.
 
 ## Testing
 
