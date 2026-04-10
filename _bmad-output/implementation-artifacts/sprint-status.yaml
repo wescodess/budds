@@ -38,6 +38,7 @@ generated: 2026-04-09
 last_updated: '2026-04-10'
 
 
+
 retrospective_location: _bmad-output/implementation-artifacts/epic-1-retro-2026-04-10.md
 project: budds
 
@@ -54,7 +55,7 @@ development_status:
 
   epic-2: in-progress
   2-1-create-and-navigate-folder-hierarchy: done
-  2-2-rename-and-delete-folders: backlog
+  2-2-rename-and-delete-folders: ready-for-dev
   epic-2-retrospective: optional
 
   epic-3: backlog
