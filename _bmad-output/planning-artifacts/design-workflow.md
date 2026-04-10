@@ -46,6 +46,51 @@ Generates specific screens/components within the established system.
 | Colors/spacing subtly diverge | Automated QA after every generation round. | `compare_designs` |
 | Stitch can't perfectly match across sessions | Lock Tailwind tokens in code. Once in code, real components are source of truth. | `generate_design_tokens` |
 | Late-added screens don't match early ones | Batch-generate related screens. Reference existing screens in prompts. | `batch_generate_screens` |
+| Generated screens ignore competitor patterns | Include competitor pattern descriptions from research report in every generation prompt. | N/A (prompt discipline) |
+
+---
+
+## Competitive References Strategy
+
+Competitor research feeds into Stitch generation as **textual descriptions in prompts**, not as image inputs. Stitch is a text-to-design tool — it cannot accept screenshots as visual references. The enforcement mechanism is:
+
+### How It Works
+
+1. **Research report as source of truth** — `_bmad-output/research/product-research-report.md` contains detailed UX pattern descriptions, feature matrices, and design recommendations extracted from competitor products (NotebookLM, Atlas, etc.)
+
+2. **Screenshots as human review aids** — `_bmad-output/research/screenshots/` contains UI screenshots organized by competitor. These are for the **user** to visually reference during direction selection, not for Stitch consumption.
+
+3. **Textual pattern injection into prompts** — When crafting Stitch generation prompts, the skill extracts relevant patterns from the research report and describes them explicitly. Examples:
+   - "3-panel persistent layout with sources on left, chat in center, output tools on right (inspired by NotebookLM's workspace)"
+   - "Multi-step wizard for quiz creation: select resources → customize questions → configure settings (inspired by Atlas's progressive disclosure pattern)"
+   - "Source checkboxes for selective AI context inclusion (NotebookLM pattern)"
+
+4. **Per-direction attribution** — Each generated direction explicitly names which competitor pattern it draws from or improves upon, so the user can evaluate directions against known references.
+
+### Enforcement Points
+
+| Tier | Step | What Gets Injected |
+|------|------|--------------------|
+| Tier 1 | Step 1 (Context) | Load research report alongside PRD/UX spec. Extract competitive patterns. |
+| Tier 1 | Step 2 (Design System) | Include competitive context in design system prompts (dark mode, design aesthetic influences). |
+| Tier 1 | Step 4 (Core Layouts) | Each layout direction references a specific competitor pattern in its prompt. |
+| Tier 2 | Step 1 (Assess) | Load research report. Identify which competitor patterns apply to this story's feature area. |
+| Tier 2 | Step 2 (Generate) | Describe the relevant competitor pattern in the generation prompt. |
+
+### Feature-to-Competitor Pattern Map
+
+| Budds Feature Area | Competitor Reference | Pattern to Borrow/Improve |
+|--------------------|---------------------|---------------------------|
+| Main workspace | NotebookLM | 3-panel persistent layout (Sources \| Chat \| Studio) |
+| Course organization | Atlas | Folder > Space hierarchy |
+| Source management | NotebookLM | Per-source checkboxes for context selection |
+| Chat interface | NotebookLM | Chat configuration modes (Default/Learning Guide/Custom) |
+| Quiz creation | Atlas | Multi-step wizard with progressive disclosure |
+| Flashcards | Both (validated) | Dedicated flashcard interface |
+| Global search | Atlas | "Ask Atlas anything..." home page input |
+| Inline references | Atlas | "Type / to reference resources" command pattern |
+| Note-taking | NotebookLM | Rich text editor + "Convert to source" upgrade path |
+| Sharing | Atlas | Public/Private toggle per artifact |
 
 ---
 
@@ -56,6 +101,8 @@ Generates specific screens/components within the established system.
 | `DESIGN.md` | Project root | Source of truth for visual design system. Fed to every Stitch generation call. |
 | `stitch.json` | Project root | Persists Stitch project ID for workspace association. |
 | `style-guide.json` | `app/assets/` | Extracted design tokens synced with Tailwind config. |
+| `product-research-report.md` | `_bmad-output/research/` | Competitive research with UX patterns, feature matrices, and design recommendations. |
+| `screenshots/` | `_bmad-output/research/screenshots/` | Competitor UI screenshots for human reference during design reviews. |
 
 ---
 
@@ -118,3 +165,4 @@ Generates specific screens/components within the established system.
 | Lighter funnel for per-story (3→1) | Full funnel (5→3→2→1) too heavy for individual stories. Foundation absorbs the exploration cost. |
 | Code is final source of truth | Stitch generates exploration mockups. Real Vue components with locked tokens enforce production consistency. |
 | Cleanup after each session | Prevents Stitch project bloat. Rejected screens don't pollute future `extract_design_context` calls. |
+| Competitor patterns via text, not images | Stitch is text-to-design. Screenshots are for human review; prompts carry the pattern descriptions. |

@@ -123,7 +123,11 @@ Read `{config_source}` and check `tea_use_playwright_utils`, `tea_use_pactjs_uti
 - `component-tdd.md`
 - `ci-burn-in.md`
 
-**Playwright CLI (if `tea_browser_automation` is "cli" or "auto"):**
+**Chrome MCP (if `tea_browser_automation` is "chrome-mcp" or "auto" and `{detected_stack}` is `frontend` or `fullstack`):**
+
+- `chrome-mcp.md`
+
+**Playwright CLI (if `tea_browser_automation` is "cli" or "auto" and `{detected_stack}` is `frontend` or `fullstack`):**
 
 - `playwright-cli.md`
 

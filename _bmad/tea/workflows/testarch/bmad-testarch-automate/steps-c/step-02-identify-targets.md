@@ -54,7 +54,7 @@ Determine what needs to be tested and select appropriate test levels and priorit
 
 **Browser Exploration (if `tea_browser_automation` is `cli` or `auto`):**
 
-> **Fallback:** If CLI is not installed, fall back to MCP (if available) or skip browser exploration and rely on code/doc analysis.
+> **Fallback:** If CLI is not installed, fall back to Chrome MCP, then Playwright MCP (if available), or skip browser exploration and rely on code/doc analysis.
 
 Use CLI to explore the application and identify testable pages/flows:
 
@@ -64,6 +64,18 @@ Use CLI to explore the application and identify testable pages/flows:
 4. `playwright-cli -s=tea-automate close`
 
 > **Session Hygiene:** Always close sessions using `playwright-cli -s=tea-automate close`. Do NOT use `close-all` — it kills every session on the machine and breaks parallel execution.
+
+**Browser Exploration (if `tea_browser_automation` is `chrome-mcp` or `auto`):**
+
+> **Auto fallback order:** Try Chrome MCP first, then Playwright CLI, then Playwright MCP.
+
+Use Chrome MCP tools to explore the application and identify testable pages/flows:
+
+1. `navigate_page` → open `<target_url>` in the browser
+2. `take_snapshot` → inspect page structure, accessible names, and element hierarchy
+3. Analyze snapshot output to identify testable elements and flows
+4. `evaluate_script` → check dynamic state, route guards, or conditional rendering if needed
+5. `close_page` when done
 
 **If {detected_stack} is `backend` or `fullstack`:**
 

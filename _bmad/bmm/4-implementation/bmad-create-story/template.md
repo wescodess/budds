@@ -21,16 +21,6 @@ so that {{benefit}}.
 - [ ] Task 2 (AC: #)
   - [ ] Subtask 2.1
 
-## UI Design Assets
-
-<!-- Populated by Step 4b UI Design Assessment. Remove section if story has no frontend UI work. -->
-
-- **Design System:** [DESIGN.md reference or "N/A — no UI work"]
-- **Stitch Screens:** [Approved screen IDs or "N/A"]
-- **Generated Components:** [File paths of Vue components created for this story]
-- **Reused Components:** [Existing foundation components applicable to this story]
-- **Design Notes:** [Any trade-offs, accessibility findings, or consistency decisions]
-
 ## Dev Notes
 
 - Relevant architecture patterns and constraints

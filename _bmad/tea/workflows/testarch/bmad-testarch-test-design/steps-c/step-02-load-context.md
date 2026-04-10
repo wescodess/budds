@@ -101,11 +101,19 @@ If epic-level:
 - Identify coverage gaps and flaky areas
 - Note existing fixture and test patterns
 
-### Browser Exploration (if `tea_browser_automation` is `cli` or `auto`)
+### Browser Exploration (if `tea_browser_automation` is `cli`, `chrome-mcp`, or `auto`)
 
-> **Fallback:** If CLI is not installed, fall back to MCP (if available) or skip browser exploration and rely on code/doc analysis.
+> **Fallback:** If the preferred tool is not available, try the next in the auto fallback chain (Chrome MCP → Playwright CLI → Playwright MCP → none) or skip browser exploration and rely on code/doc analysis.
 
-**CLI Exploration Steps:**
+**Chrome MCP (if `tea_browser_automation` is `chrome-mcp` or `auto` — preferred):**
+
+1. `mcp__chrome-mcp__navigate_page(url=<target_url>)` or `mcp__chrome-mcp__new_page(url=<target_url>, isolatedContext="tea-explore")`
+2. `mcp__chrome-mcp__take_snapshot()` → capture a11y tree with element UIDs
+3. `mcp__chrome-mcp__take_screenshot(filePath="{test_artifacts}/exploration/explore-<page>.png")`
+4. Analyze snapshot output to identify testable elements and flows
+5. `mcp__chrome-mcp__close_page(pageId=N)`
+
+**CLI Exploration Steps (if `tea_browser_automation` is `cli` or `auto` fallback):**
 All commands use the same named session to target the correct browser:
 
 1. `playwright-cli -s=tea-explore open <target_url>`
@@ -116,7 +124,7 @@ All commands use the same named session to target the correct browser:
 
 Store artifacts under `{test_artifacts}/exploration/`
 
-> **Session Hygiene:** Always close sessions using `playwright-cli -s=tea-explore close`. Do NOT use `close-all` — it kills every session on the machine and breaks parallel execution.
+> **Session Hygiene:** For CLI, always close sessions using `playwright-cli -s=tea-explore close`. Do NOT use `close-all` — it kills every session on the machine and breaks parallel execution. For Chrome MCP, always close pages using `close_page`.
 
 ---
 
@@ -176,7 +184,11 @@ Use `{knowledgeIndex}` to select and load only relevant fragments.
 - `test-levels-framework.md`
 - `test-priorities-matrix.md`
 
-**Playwright CLI (if `tea_browser_automation` is "cli" or "auto"):**
+**Chrome MCP (if `tea_browser_automation` is "chrome-mcp" or "auto" and `{detected_stack}` is `frontend` or `fullstack`):**
+
+- `chrome-mcp.md`
+
+**Playwright CLI (if `tea_browser_automation` is "cli" or "auto" and `{detected_stack}` is `frontend` or `fullstack`):**
 
 - `playwright-cli.md`
 

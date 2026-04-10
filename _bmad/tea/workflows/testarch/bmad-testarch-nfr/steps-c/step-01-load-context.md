@@ -74,7 +74,11 @@ From `{knowledgeIndex}` load:
 - `playwright-config.md`
 - `error-handling.md`
 
-**Playwright CLI (if `tea_browser_automation` is "cli" or "auto"):**
+**Chrome MCP (if `tea_browser_automation` is "chrome-mcp" or "auto" and `{detected_stack}` is `frontend` or `fullstack`):**
+
+- `chrome-mcp.md`
+
+**Playwright CLI (if `tea_browser_automation` is "cli" or "auto" and `{detected_stack}` is `frontend` or `fullstack`):**
 
 - `playwright-cli.md`
 

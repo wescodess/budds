@@ -187,6 +187,10 @@ Use `{knowledgeIndex}` and load only what is required.
 
 - `playwright-cli.md`
 
+**Chrome MCP (if tea_browser_automation is "chrome-mcp" or "auto"):**
+
+- `chrome-mcp.md`
+
 **MCP Patterns (if tea_browser_automation is "mcp" or "auto"):**
 
 - (existing MCP-related fragments, if any are added in future)

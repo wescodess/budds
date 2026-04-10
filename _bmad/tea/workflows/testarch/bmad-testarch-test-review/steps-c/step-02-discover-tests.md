@@ -58,11 +58,20 @@ Collect:
 
 ---
 
-## 3. Evidence Collection (if `tea_browser_automation` is `cli` or `auto`)
+## 3. Evidence Collection (if `tea_browser_automation` is `cli`, `chrome-mcp`, or `auto`)
 
-> **Fallback:** If CLI is not installed, fall back to MCP (if available) or skip evidence collection.
+> **Fallback:** If the preferred tool is not available, try the next in the auto fallback chain (Chrome MCP → Playwright CLI → Playwright MCP → none) or skip evidence collection.
 
-**CLI Evidence Collection:**
+**Chrome MCP Evidence Collection (if `tea_browser_automation` is `chrome-mcp` or `auto` — preferred):**
+
+1. `mcp__chrome-mcp__new_page(url=<target_url>, isolatedContext="tea-review")`
+2. `mcp__chrome-mcp__take_snapshot()` → capture a11y tree with element UIDs
+3. Execute the flow under review using `click`, `fill`, `navigate_page` etc.
+4. `mcp__chrome-mcp__list_network_requests(resourceTypes=["fetch", "xhr"])` → capture network traffic
+5. `mcp__chrome-mcp__take_screenshot(filePath="{test_artifacts}/review-evidence.png")`
+6. `mcp__chrome-mcp__close_page(pageId=N)`
+
+**CLI Evidence Collection (if `tea_browser_automation` is `cli` or `auto` fallback):**
 All commands use the same named session to target the correct browser:
 
 1. `playwright-cli -s=tea-review open <target_url>`
@@ -80,7 +89,7 @@ After capturing `trace.zip`, prefer Playwright's newer trace CLI for local or do
 - `npx playwright trace action <n>` / `trace snapshot <n> --name after` for root-cause details
 - `npx playwright trace close` when done
 
-> **Session Hygiene:** Always close sessions using `playwright-cli -s=tea-review close`. Do NOT use `close-all` — it kills every session on the machine and breaks parallel execution.
+> **Session Hygiene:** For CLI, always close sessions using `playwright-cli -s=tea-review close`. Do NOT use `close-all` — it kills every session on the machine and breaks parallel execution. For Chrome MCP, always close pages using `close_page`.
 
 ---
 
