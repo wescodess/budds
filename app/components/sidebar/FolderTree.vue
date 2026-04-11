@@ -18,7 +18,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   select: [folderId: Id<'folders'>]
-  createSubfolder: [parentId: Id<'folders'>]
+  createSubfolder: [parentId: Id<'folders'>, name: string]
   rename: [folderId: Id<'folders'>, name: string]
   delete: [folder: { _id: Id<'folders'>; name: string }]
 }>()
@@ -26,6 +26,8 @@ const emit = defineEmits<{
 const expanded = ref<string[]>([])
 const editingId = ref<Id<'folders'> | null>(null)
 const editName = ref('')
+const creatingParentId = ref<Id<'folders'> | null>(null)
+const newSubfolderName = ref('')
 
 const tree = computed<FolderNode[]>(() => {
   if (!props.folders) return []
@@ -67,7 +69,33 @@ function onSelect(item: FolderNode) {
 
 function onAddSubfolder(e: Event, item: FolderNode) {
   e.stopPropagation()
-  emit('createSubfolder', item._id)
+  creatingParentId.value = item._id
+  newSubfolderName.value = ''
+  if (!expanded.value.includes(item._id)) {
+    expanded.value = [...expanded.value, item._id]
+  }
+  nextTick(() => {
+    const input = document.querySelector<HTMLInputElement>(`[data-subfolder-input="${item._id}"]`)
+    input?.focus()
+  })
+}
+
+function submitCreateSubfolder() {
+  if (!creatingParentId.value) return
+  const trimmed = newSubfolderName.value.trim()
+  const parentId = creatingParentId.value
+  creatingParentId.value = null
+  newSubfolderName.value = ''
+  if (!trimmed || trimmed.length > 100) {
+    if (trimmed && trimmed.length > 100) toast.error('Folder name must be between 1 and 100 characters')
+    return
+  }
+  emit('createSubfolder', parentId, trimmed)
+}
+
+function cancelCreateSubfolder() {
+  creatingParentId.value = null
+  newSubfolderName.value = ''
 }
 
 function startRename(item: FolderNode) {
@@ -115,7 +143,8 @@ function confirmDelete(item: FolderNode) {
   >
     <template #default="{ flattenItems }">
       <div role="tree" class="space-y-0.5 px-2">
-        <UiContextMenu v-for="item in flattenItems" :key="item._id">
+        <template v-for="item in flattenItems" :key="item._id">
+        <UiContextMenu>
           <UiContextMenuTrigger as-child>
             <TreeItem
               v-slot="{ isExpanded }"
@@ -192,6 +221,25 @@ function confirmDelete(item: FolderNode) {
             </UiContextMenuItem>
           </UiContextMenuContent>
         </UiContextMenu>
+        <div
+          v-if="creatingParentId === item.value._id"
+          class="flex items-center gap-1 rounded-md px-2 py-1"
+          :style="{ paddingLeft: `${item.level * 12 + 8}px` }"
+        >
+          <Folder class="h-4 w-4 shrink-0 text-muted-foreground" />
+          <input
+            v-model="newSubfolderName"
+            :data-subfolder-input="item.value._id"
+            data-testid="subfolder-name-input"
+            placeholder="Subfolder name"
+            class="flex-1 rounded border bg-background px-1 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            @keydown.enter="submitCreateSubfolder"
+            @keydown.escape="cancelCreateSubfolder"
+            @blur="cancelCreateSubfolder"
+            @click.stop
+          />
+        </div>
+        </template>
       </div>
     </template>
   </TreeRoot>
