@@ -1,4 +1,6 @@
 export default defineEventHandler(async (event) => {
+  await requireUserSession(event)
+
   const body = await readBody<{
     query: string
     max_num_results?: number

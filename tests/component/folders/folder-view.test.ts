@@ -1,5 +1,34 @@
-import { describe, it, expect } from 'vitest'
-import { mountSuspended } from '@nuxt/test-utils/runtime'
+import { describe, it, expect, vi } from 'vitest'
+import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
+
+const mockFolder = ref<any>({ _id: 'folder1', name: 'Biology 101', parentId: undefined, userId: 'u1', documentCount: 0 })
+const mockAllFolders = ref<any[]>([
+  { _id: 'folder1', name: 'Biology 101', parentId: undefined, userId: 'u1', documentCount: 0 },
+])
+
+mockNuxtImport('useFolderDetail', () => {
+  return () => ({
+    folder: mockFolder,
+  })
+})
+
+mockNuxtImport('useFolders', () => {
+  return () => ({
+    folders: ref(null),
+    allFolders: mockAllFolders,
+    allFoldersLoading: ref(false),
+    isLoading: ref(false),
+    createFolder: vi.fn(),
+    createSubfolder: vi.fn(),
+    renameFolder: vi.fn(),
+    deleteFolder: vi.fn(),
+    isCreating: ref(false),
+  })
+})
+
+mockNuxtImport('useRoute', () => {
+  return () => ({ path: '/app/folders/folder1', params: { id: 'folder1' } })
+})
 
 const folderViewPath = ['~', 'pages', 'app', 'folders', '[id].vue'].join('/')
 

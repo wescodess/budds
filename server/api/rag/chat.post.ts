@@ -4,6 +4,8 @@ If the context doesn't contain enough information to answer, say so clearly.
 Always cite which source documents your answer is based on when possible.`
 
 export default defineEventHandler(async (event) => {
+  await requireUserSession(event)
+
   const body = await readBody<{
     query: string
     model: string

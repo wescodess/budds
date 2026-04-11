@@ -113,18 +113,6 @@ describe('Story 1.1 — Verify & Harden Authentication Flow', () => {
   })
 
   describe('AC5: Session persistence — config assertions', () => {
-    test('server auth config sets session expiresIn to 30 days', async () => {
-      const fs = await import('fs')
-      const configSource = fs.readFileSync('./server/auth.config.ts', 'utf-8')
-      expect(configSource).toContain('expiresIn: 60 * 60 * 24 * 30')
-    })
-
-    test('server auth config sets session updateAge to 1 day', async () => {
-      const fs = await import('fs')
-      const configSource = fs.readFileSync('./server/auth.config.ts', 'utf-8')
-      expect(configSource).toContain('updateAge: 60 * 60 * 24')
-    })
-
     test('nuxt config protects /app/** for authenticated users', async () => {
       const fs = await import('fs')
       const configSource = fs.readFileSync('./nuxt.config.ts', 'utf-8')

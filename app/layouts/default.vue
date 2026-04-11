@@ -88,11 +88,9 @@ async function handleCreateFolder() {
   }
 }
 
-async function handleCreateSubfolder(parentId: string) {
-  const name = prompt('Subfolder name')
-  if (!name?.trim()) return
+async function handleCreateSubfolder(parentId: string, name: string) {
   try {
-    await createSubfolder(name.trim(), parentId as any)
+    await createSubfolder(name, parentId as any)
   } catch (e: any) {
     const { toast } = await import('vue-sonner')
     toast.error(e.message || 'Failed to create subfolder')
