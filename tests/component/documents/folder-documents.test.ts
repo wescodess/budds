@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
+import { flushPromises } from '@vue/test-utils'
 import { createDocument } from '../../support/factories/document.factory'
 
 const mockFolder = ref<any>({
@@ -50,6 +51,17 @@ mockNuxtImport('useDocuments', () => {
   })
 })
 
+mockNuxtImport('useChat', () => {
+  return () => ({
+    messages: ref([]),
+    loading: ref(false),
+    error: ref(null),
+    hasIndexedDocuments: ref(false),
+    sendMessage: vi.fn(),
+    clearMessages: vi.fn(),
+  })
+})
+
 mockNuxtImport('useRoute', () => {
   return () => ({ path: '/app/folders/folder1', params: { id: 'folder1' } })
 })
@@ -57,10 +69,16 @@ mockNuxtImport('useRoute', () => {
 const folderViewPath = ['~', 'pages', 'app', 'folders', '[id].vue'].join('/')
 
 describe('Folder Detail Page — Document Integration (AC #1, #3, #7)', () => {
+  async function switchToDocumentsTab(wrapper: any) {
+    ;(wrapper.vm as any).activeTab = 'documents'
+    await flushPromises()
+  }
+
   it('[P0] should render FileUploadZone component', async () => {
     const FolderView = await import(folderViewPath)
 
     const wrapper = await mountSuspended(FolderView.default)
+    await switchToDocumentsTab(wrapper)
 
     const uploadZone = wrapper.findComponent({ name: 'FileUploadZone' })
     expect(uploadZone.exists()).toBe(true)
@@ -70,6 +88,7 @@ describe('Folder Detail Page — Document Integration (AC #1, #3, #7)', () => {
     const FolderView = await import(folderViewPath)
 
     const wrapper = await mountSuspended(FolderView.default)
+    await switchToDocumentsTab(wrapper)
 
     expect(wrapper.text()).toContain('lecture-1.pdf')
     expect(wrapper.text()).toContain('notes.pdf')
@@ -81,6 +100,7 @@ describe('Folder Detail Page — Document Integration (AC #1, #3, #7)', () => {
 
     const FolderView = await import(folderViewPath)
     const wrapper = await mountSuspended(FolderView.default)
+    await switchToDocumentsTab(wrapper)
 
     const uploadZone = wrapper.findComponent({ name: 'FileUploadZone' })
     expect(uploadZone.exists()).toBe(true)

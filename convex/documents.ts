@@ -162,6 +162,16 @@ export const moveDocument = mutation({
 
     await ctx.db.patch(args.id, { folderId: args.destinationFolderId })
 
+    if (doc.status === 'success') {
+      await ctx.scheduler.runAfter(0, internal.documentActions.updateDocumentAiSearchMetadata, {
+        documentId: String(args.id),
+        userId,
+        folderId: String(args.destinationFolderId),
+        filename: doc.filename,
+        r2Key: doc.r2Key,
+      })
+    }
+
     if (srcFolder) {
       await ctx.db.patch(doc.folderId, {
         documentCount: Math.max(0, srcFolder.documentCount - 1),

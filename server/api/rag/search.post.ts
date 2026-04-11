@@ -1,5 +1,4 @@
 export default defineEventHandler(async (event) => {
-  await requireUserSession(event)
   const userId = getConvexTokenIdentifier(event)
 
   const body = await readBody<{
