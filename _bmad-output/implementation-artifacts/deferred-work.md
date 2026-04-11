@@ -14,6 +14,15 @@
 - **~~`lastActivity` shows folder `_creationTime` not actual last activity~~** — Added `updatedAt` field to folders schema. `CourseCard.vue` now uses `updatedAt ?? _creationTime`. `createFolder` sets `updatedAt: Date.now()`.
 - **~~JWKS bootstrap undocumented~~** — Created `scripts/bootstrap-jwks.sh` automation script and documented setup steps in `CLAUDE.md`.
 
+## Deferred from: code review of story-3.2 (2026-04-11)
+
+- **`deleteDocument` does not remove document from Cloudflare AI Search index** — Deleted documents remain searchable. Story 3.3 ("Delete Documents and Move Between Folders") should handle AI Search cleanup.
+- **No retry/idempotency mechanism for Cloudflare upsert** — Transient Cloudflare failures permanently mark documents as "failed" with no recovery path. Consider a retry queue or manual re-ingest action.
+- **Race condition: file deletion between `createDocument` commit and `ingestDocument` execution** — If a user deletes a document before the scheduled action runs, ingestion fails with "File not found". Handled gracefully but not preventable.
+- **No timeout wrapping for `pdf-parse`** — Malformed/corrupt PDFs could hang the action. Convex platform timeout (~300s) provides a safety net but the user sees a stuck "processing" state.
+- **`pdf-parse` npm package test-file side effect** — On import, `pdf-parse` attempts to load a test PDF fixture from `node_modules`. May crash in Convex's serverless Node runtime if the fixture is excluded from deployment.
+- **Documents table lacks `createdAt`/`updatedAt` fields** — Cannot track processing duration or identify stale "processing" documents. Observability gap, not a functional bug.
+
 ## Deferred from: code review of story-3.1 (2026-04-11)
 
 - **`updateDocumentStatus` doesn't clear `failureReason` on non-failure transitions** — When status moves from 'failed' to 'success'/'processing', old `failureReason` persists in DB. Not user-visible (FileStatusItem only renders it for 'failed') but stale data.

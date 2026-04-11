@@ -5,6 +5,7 @@ Always cite which source documents your answer is based on when possible.`
 
 export default defineEventHandler(async (event) => {
   await requireUserSession(event)
+  const userId = getConvexTokenIdentifier(event)
 
   const body = await readBody<{
     query: string
@@ -28,6 +29,7 @@ export default defineEventHandler(async (event) => {
 
   const searchResults = await searchDocuments({
     query: body.query,
+    userId,
     max_num_results: body.max_num_results ?? 10,
     score_threshold: body.score_threshold,
     filters: body.filters,

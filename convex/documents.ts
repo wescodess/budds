@@ -1,5 +1,6 @@
 import { v } from 'convex/values'
 import { mutation, query, internalMutation } from './_generated/server'
+import { internal } from './_generated/api'
 
 export const generateUploadUrl = mutation({
   args: {},
@@ -52,6 +53,14 @@ export const createDocument = mutation({
       updatedAt: Date.now(),
     })
 
+    await ctx.scheduler.runAfter(0, internal.documentActions.ingestDocument, {
+      documentId: docId,
+      fileId: args.fileId,
+      userId,
+      folderId: args.folderId,
+      filename: args.filename,
+    })
+
     return docId
   },
 })
@@ -83,7 +92,7 @@ export const updateDocumentStatus = internalMutation({
   handler: async (ctx, args) => {
     await ctx.db.patch(args.id, {
       status: args.status,
-      ...(args.failureReason !== undefined && { failureReason: args.failureReason }),
+      failureReason: args.failureReason,
     })
   },
 })
