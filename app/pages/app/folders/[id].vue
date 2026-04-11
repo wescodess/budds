@@ -237,24 +237,27 @@ async function handleUpload(files: File[]) {
             <template v-else>
               <div ref="chatScrollRef" role="log" class="flex-1 space-y-4 overflow-y-auto p-4">
                 <template v-for="(msg, i) in messages" :key="i">
-                  <ChatChatMessage
+                  <ChatMessage
                     :role="msg.role"
                     :content="msg.content"
                     :sources="msg.sources"
                     @citation-click="(citIndex: number) => handleCitationClick(i, citIndex)"
                   />
-                  <div
-                    v-if="!isDesktop && expandedInlineCitation?.messageIndex === i && getSourceForInlineCitation(i, expandedInlineCitation.citationIndex)"
-                    class="mx-auto max-w-[85%] rounded-lg border bg-muted/50 p-3"
-                  >
-                    <ChatSourceCard
-                      :index="expandedInlineCitation.citationIndex"
-                      :filename="getSourceForInlineCitation(i, expandedInlineCitation.citationIndex)!.filename"
-                      :content="getSourceForInlineCitation(i, expandedInlineCitation.citationIndex)!.content"
-                      :score="getSourceForInlineCitation(i, expandedInlineCitation.citationIndex)!.score"
-                      highlighted
-                    />
-                  </div>
+                  <template v-if="!isDesktop && expandedInlineCitation?.messageIndex === i">
+                    <div
+                      v-for="src in [getSourceForInlineCitation(i, expandedInlineCitation.citationIndex)].filter(Boolean)"
+                      :key="expandedInlineCitation.citationIndex"
+                      class="mx-auto max-w-[85%] rounded-lg border bg-muted/50 p-3"
+                    >
+                      <ChatSourceCard
+                        :index="expandedInlineCitation.citationIndex"
+                        :filename="src!.filename"
+                        :content="src!.content"
+                        :score="src!.score"
+                        highlighted
+                      />
+                    </div>
+                  </template>
                 </template>
                 <div v-if="loading" class="mr-auto max-w-[85%] rounded-lg border px-4 py-3">
                   <div class="flex items-center gap-2 text-sm text-muted-foreground">
@@ -268,7 +271,7 @@ async function handleUpload(files: File[]) {
               </div>
             </template>
 
-            <ChatChatInput
+            <ChatInput
               ref="chatInputRef"
               :disabled="!hasIndexedDocuments"
               :placeholder="folder ? `Ask about your ${folder.name} materials...` : 'Ask a question...'"

@@ -1,5 +1,5 @@
 import { faker } from '@faker-js/faker'
-import type { Source, ChatMessage as ChatMessageData } from '~/composables/useChat'
+import type { Source, UIChatMessage as ChatMessageData } from '~/composables/useChat'
 
 export const createSource = (overrides: Partial<Source> = {}): Source => ({
   content: faker.lorem.paragraph(),

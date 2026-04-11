@@ -6,7 +6,7 @@ export interface Source {
   filename: string
 }
 
-export interface ChatMessage {
+export interface UIChatMessage {
   role: 'user' | 'assistant'
   content: string
   sources?: Source[]
@@ -28,7 +28,7 @@ const DEFAULT_MODEL = 'openai/gpt-4o-mini'
 export function useChat(folderId: Ref<Id<'folders'>>) {
   const { documents } = useDocuments(folderId)
 
-  const messages = ref<ChatMessage[]>([])
+  const messages = ref<UIChatMessage[]>([])
   const loading = ref(false)
   const error = ref<string | null>(null)
 
@@ -37,6 +37,7 @@ export function useChat(folderId: Ref<Id<'folders'>>) {
   )
 
   async function sendMessage(query: string) {
+    if (loading.value) return
     error.value = null
     messages.value.push({ role: 'user', content: query })
     loading.value = true

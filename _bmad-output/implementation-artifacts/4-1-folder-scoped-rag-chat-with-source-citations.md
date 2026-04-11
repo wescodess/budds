@@ -1,6 +1,6 @@
 # Story 4.1: Folder-Scoped RAG Chat with Source Citations
 
-Status: review
+Status: done
 
 ## Story
 

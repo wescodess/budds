@@ -1,10 +1,11 @@
+import type { ChatMessage } from '../../utils/ai-gateway'
+
 const SYSTEM_PROMPT = `You are a helpful assistant that answers questions based on the provided context.
 Use the context below to answer the user's question accurately.
 If the context doesn't contain enough information to answer, say so clearly.
 When citing sources, use inline numbered references like [1], [2], etc. corresponding to the provided source passages. Each number maps to the source passage at that index.`
 
 export default defineEventHandler(async (event) => {
-  await requireUserSession(event)
   const userId = getConvexTokenIdentifier(event)
 
   const body = await readBody<{
@@ -43,8 +44,8 @@ export default defineEventHandler(async (event) => {
 
   const context = chunks
     .map((chunk, i) => {
-      const source = chunk.attributes?.filename || chunk.attributes?.url || `Source ${i + 1}`
-      return `[${source}]\n${chunk.content}`
+      const label = chunk.attributes?.filename || chunk.attributes?.url || 'unknown'
+      return `[Source ${i + 1}: ${label}]\n${chunk.content}`
     })
     .join('\n\n---\n\n')
 
@@ -64,7 +65,10 @@ export default defineEventHandler(async (event) => {
   }
 
   if (body.history?.length) {
-    messages.push(...body.history)
+    const safeHistory = body.history.filter(
+      (m): m is ChatMessage => m.role === 'user' || m.role === 'assistant',
+    )
+    messages.push(...safeHistory)
   }
 
   messages.push({ role: 'user', content: body.query })

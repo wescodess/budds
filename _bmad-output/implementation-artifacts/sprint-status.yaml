@@ -36,6 +36,7 @@
 
 generated: 2026-04-09
 last_updated: '2026-04-11'
+# Code review completed 2026-04-11: 7 fixes applied (2 P0, 3 P1, 2 P2), 0 deferred, 0 dismissed (story 4.1)
 # Story 4.1 dev started 2026-04-11
 # Story 4.1 created 2026-04-11
 # Epic 3 retrospective completed 2026-04-11
@@ -75,7 +76,7 @@ development_status:
   epic-3-retrospective: done
 
   epic-4: in-progress
-  4-1-folder-scoped-rag-chat-with-source-citations: review
+  4-1-folder-scoped-rag-chat-with-source-citations: done
   4-2-streaming-chat-responses: backlog
   4-3-model-selection: backlog
   4-4-chat-history-and-conversation-management: backlog

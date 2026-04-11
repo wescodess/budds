@@ -4,7 +4,6 @@ vi.stubGlobal('useRuntimeConfig', vi.fn())
 vi.stubGlobal('createError', (opts: { statusCode: number; message: string }) =>
   Object.assign(new Error(opts.message), { statusCode: opts.statusCode }),
 )
-vi.stubGlobal('requireUserSession', vi.fn())
 vi.stubGlobal('getConvexTokenIdentifier', vi.fn(() => 'https://auth.example.com|user_test_123'))
 vi.stubGlobal('readBody', vi.fn())
 vi.stubGlobal('searchDocuments', vi.fn())
@@ -22,7 +21,6 @@ describe('POST /api/rag/chat — folderId enforcement (AC #1)', () => {
     vi.mocked(globalThis.readBody as any).mockReset()
     vi.mocked(globalThis.searchDocuments as any).mockReset()
     vi.mocked(globalThis.generateCompletion as any).mockReset()
-    vi.mocked(globalThis.requireUserSession as any).mockReset()
   })
 
   test('[P0] should return 400 when folderId is missing from request body', async () => {
