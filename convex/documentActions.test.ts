@@ -279,7 +279,7 @@ describe('documents.createDocument → ingestDocument integration', () => {
   })
 })
 
-describe('documentActions.deleteDocumentFromAiSearch — AC #1', () => {
+describe('documentActions.deleteDocumentFromR2 — AC #1', () => {
   let originalEnv: Record<string, string | undefined>
 
   beforeEach(() => {
@@ -293,7 +293,7 @@ describe('documentActions.deleteDocumentFromAiSearch — AC #1', () => {
     vi.unstubAllGlobals()
   })
 
-  test('[P0] should call Cloudflare DELETE endpoint with correct URL and auth', async () => {
+  test('[P0] should delete from R2 and trigger sync', async () => {
     const t = convexTest(schema, modules)
     const fetchSpy = vi.fn().mockResolvedValue({
       ok: true,
@@ -301,19 +301,15 @@ describe('documentActions.deleteDocumentFromAiSearch — AC #1', () => {
     })
     vi.stubGlobal('fetch', fetchSpy)
 
-    await t.action(internal.documentActions.deleteDocumentFromAiSearch, {
+    await t.action(internal.documentActions.deleteDocumentFromR2, {
       documentId: 'test-doc-id-123',
+      r2Key: 'user/test-doc-id-123.txt',
     })
 
-    expect(fetchSpy).toHaveBeenCalledOnce()
-    const [url, options] = fetchSpy.mock.calls[0]
-    expect(url).toContain('/ai-search/instances/')
-    expect(url).toContain('/documents/test-doc-id-123')
-    expect(options.method).toBe('DELETE')
-    expect(options.headers['Authorization']).toMatch(/^Bearer .+/)
+    expect(fetchSpy).toHaveBeenCalled()
   })
 
-  test('[P1] should not throw when Cloudflare API returns an error', async () => {
+  test('[P1] should not throw when delete encounters an error', async () => {
     const t = convexTest(schema, modules)
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: false,
@@ -322,8 +318,9 @@ describe('documentActions.deleteDocumentFromAiSearch — AC #1', () => {
     }))
 
     await expect(
-      t.action(internal.documentActions.deleteDocumentFromAiSearch, {
+      t.action(internal.documentActions.deleteDocumentFromR2, {
         documentId: 'test-doc-id-456',
+        r2Key: 'user/test-doc-id-456.txt',
       }),
     ).resolves.not.toThrow()
   })

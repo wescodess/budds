@@ -2,40 +2,27 @@
 import { v } from 'convex/values'
 import { internalAction } from './_generated/server'
 import { internal } from './_generated/api'
-import pdfParse from 'pdf-parse'
+import { extractText } from 'unpdf'
+import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3'
 
-export const deleteDocumentFromAiSearch = internalAction({
-  args: { documentId: v.string() },
-  handler: async (_ctx, args) => {
-    const accountId = process.env.CF_ACCOUNT_ID
-    const instance = process.env.CLOUDFLARE_AI_SEARCH_INSTANCE
-    const token = process.env.CLOUDFLARE_AI_SEARCH_TOKEN
+function getR2Client() {
+  return new S3Client({
+    region: 'auto',
+    endpoint: process.env.R2_ENDPOINT!,
+    credentials: {
+      accessKeyId: process.env.R2_ACCESS_KEY_ID!,
+      secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
+    },
+  })
+}
 
-    if (!accountId || !instance || !token) {
-      console.error('Missing Cloudflare AI Search configuration for delete')
-      return
-    }
-
-    const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai-search/instances/${instance}/documents/${args.documentId}`
-
-    try {
-      const response = await fetch(url, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-      })
-
-      if (!response.ok) {
-        const errorText = (await response.text()).slice(0, 500)
-        console.error(`AI Search delete failed (${response.status}): ${errorText}`)
-      }
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error)
-      console.error(`AI Search delete error: ${message}`)
-    }
-  },
-})
+function getAiSearchConfig() {
+  const accountId = process.env.CF_ACCOUNT_ID
+  const instance = process.env.CLOUDFLARE_AI_SEARCH_INSTANCE
+  const token = process.env.CLOUDFLARE_AI_SEARCH_TOKEN
+  if (!accountId || !instance || !token) return null
+  return { accountId, instance, token }
+}
 
 export const ingestDocument = internalAction({
   args: {
@@ -58,10 +45,9 @@ export const ingestDocument = internalAction({
       }
 
       const arrayBuffer = await blob.arrayBuffer()
-      const buffer = Buffer.from(arrayBuffer)
-      const result = await pdfParse(buffer)
+      const result = await extractText(new Uint8Array(arrayBuffer), { mergePages: true })
 
-      if (!result.text || !result.text.trim()) {
+      if (!result.text || !(result.text as string).trim()) {
         await ctx.runMutation(internal.documents.updateDocumentStatus, {
           id: args.documentId,
           status: 'failed',
@@ -70,57 +56,87 @@ export const ingestDocument = internalAction({
         return
       }
 
-      const accountId = process.env.CF_ACCOUNT_ID
-      const instance = process.env.CLOUDFLARE_AI_SEARCH_INSTANCE
-      const token = process.env.CLOUDFLARE_AI_SEARCH_TOKEN
-
-      if (!accountId || !instance || !token) {
+      const bucket = process.env.R2_BUCKET_NAME
+      if (!bucket) {
         await ctx.runMutation(internal.documents.updateDocumentStatus, {
           id: args.documentId,
           status: 'failed',
-          failureReason: 'Missing Cloudflare AI Search configuration',
+          failureReason: 'Missing R2 configuration',
         })
         return
       }
 
-      const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai-search/instances/${instance}/documents/upsert`
+      const r2Key = `${args.userId}/${args.documentId}.txt`
+      const r2 = getR2Client()
 
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
+      await r2.send(new PutObjectCommand({
+        Bucket: bucket,
+        Key: r2Key,
+        Body: result.text as string,
+        ContentType: 'text/plain',
+        Metadata: {
+          userId: args.userId,
+          documentId: args.documentId,
+          folderId: String(args.folderId),
+          filename: args.filename,
         },
-        body: JSON.stringify({
-          documents: [
-            {
-              id: args.documentId,
-              text: result.text,
-              attributes: {
-                userId: args.userId,
-                documentId: args.documentId,
-                folderId: String(args.folderId),
-                filename: args.filename,
-              },
-            },
-          ],
-        }),
-      })
+      }))
 
-      if (!response.ok) {
-        const errorText = (await response.text()).slice(0, 500)
+      const config = getAiSearchConfig()
+      if (!config) {
         await ctx.runMutation(internal.documents.updateDocumentStatus, {
           id: args.documentId,
           status: 'failed',
-          failureReason: `AI Search upsert failed (${response.status}): ${errorText}`,
+          failureReason: 'Missing Cloudflare AI Search configuration',
+          r2Key,
+        })
+        return
+      }
+
+      const jobsUrl = `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/ai-search/instances/${config.instance}/jobs`
+      const syncResponse = await fetch(jobsUrl, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${config.token}` },
+      })
+
+      let jobId: string | undefined
+
+      if (syncResponse.ok) {
+        const syncData = await syncResponse.json() as { result?: { id?: string } }
+        jobId = syncData.result?.id
+      } else if (syncResponse.status === 429) {
+        const listResponse = await fetch(jobsUrl, {
+          headers: { 'Authorization': `Bearer ${config.token}` },
+        })
+        if (listResponse.ok) {
+          const listData = await listResponse.json() as { result?: Array<{ id: string, ended_at?: string | null }> }
+          const running = listData.result?.find(j => !j.ended_at)
+          jobId = running?.id ?? listData.result?.[0]?.id
+        }
+      } else {
+        const errorText = (await syncResponse.text()).slice(0, 500)
+        await ctx.runMutation(internal.documents.updateDocumentStatus, {
+          id: args.documentId,
+          status: 'failed',
+          failureReason: `Failed to trigger indexing (${syncResponse.status}): ${errorText}`,
+          r2Key,
         })
         return
       }
 
       await ctx.runMutation(internal.documents.updateDocumentStatus, {
         id: args.documentId,
-        status: 'success',
+        status: 'indexing',
+        r2Key,
+        indexJobId: jobId,
       })
+
+      if (jobId) {
+        await ctx.scheduler.runAfter(10_000, internal.documentActions.pollIndexingStatus, {
+          documentId: args.documentId,
+          jobId,
+        })
+      }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error)
       await ctx.runMutation(internal.documents.updateDocumentStatus, {
@@ -128,6 +144,85 @@ export const ingestDocument = internalAction({
         status: 'failed',
         failureReason: message,
       })
+    }
+  },
+})
+
+export const pollIndexingStatus = internalAction({
+  args: {
+    documentId: v.id('documents'),
+    jobId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const config = getAiSearchConfig()
+    if (!config) return
+
+    const url = `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/ai-search/instances/${config.instance}/jobs/${args.jobId}`
+    const response = await fetch(url, {
+      headers: { 'Authorization': `Bearer ${config.token}` },
+    })
+
+    if (!response.ok) {
+      await ctx.runMutation(internal.documents.updateDocumentStatus, {
+        id: args.documentId,
+        status: 'failed',
+        failureReason: `Failed to check indexing status (${response.status})`,
+      })
+      return
+    }
+
+    const data = await response.json() as { result?: { ended_at?: string | null, end_reason?: string | null } }
+    const job = data.result
+
+    if (job?.ended_at) {
+      if (job.end_reason) {
+        await ctx.runMutation(internal.documents.updateDocumentStatus, {
+          id: args.documentId,
+          status: 'failed',
+          failureReason: `Indexing failed: ${job.end_reason}`,
+        })
+      } else {
+        await ctx.runMutation(internal.documents.updateDocumentStatus, {
+          id: args.documentId,
+          status: 'success',
+        })
+      }
+    } else {
+      await ctx.scheduler.runAfter(10_000, internal.documentActions.pollIndexingStatus, {
+        documentId: args.documentId,
+        jobId: args.jobId,
+      })
+    }
+  },
+})
+
+export const deleteDocumentFromR2 = internalAction({
+  args: {
+    documentId: v.string(),
+    r2Key: v.optional(v.string()),
+  },
+  handler: async (_ctx, args) => {
+    const bucket = process.env.R2_BUCKET_NAME
+    if (!bucket || !args.r2Key) return
+
+    try {
+      const r2 = getR2Client()
+      await r2.send(new DeleteObjectCommand({
+        Bucket: bucket,
+        Key: args.r2Key,
+      }))
+
+      const config = getAiSearchConfig()
+      if (config) {
+        const syncUrl = `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/ai-search/instances/${config.instance}/jobs`
+        await fetch(syncUrl, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${config.token}` },
+        })
+      }
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.error(`R2 delete error: ${message}`)
     }
   },
 })

@@ -13,10 +13,8 @@ const showNewSubfolder = ref(false)
 const newSubfolderName = ref('')
 
 const deleteTarget = ref<{ id: string; filename: string } | null>(null)
-const showDeleteDialog = computed({
-  get: () => deleteTarget.value !== null,
-  set: (val: boolean) => { if (!val) deleteTarget.value = null },
-})
+const pendingDeleteTarget = ref<{ id: string; filename: string } | null>(null)
+const showDeleteDialog = ref(false)
 
 const moveTarget = ref<{ id: string } | null>(null)
 const movePending = ref(false)
@@ -25,22 +23,39 @@ const showMoveDialog = computed({
   set: (val: boolean) => { if (!val) moveTarget.value = null },
 })
 
-function handleDeleteRequest(docId: string) {
+async function handleDeleteRequest(docId: string) {
   const doc = documents.value?.find((d) => d._id === docId)
-  if (doc) deleteTarget.value = { id: docId, filename: doc.filename }
+  if (!doc) return
+
+  if (doc.status === 'failed') {
+    try {
+      await deleteDocument(docId as Id<'documents'>)
+    } catch (e: any) {
+      const { toast } = await import('vue-sonner')
+      toast.error(e.message || 'Failed to remove document')
+    }
+    return
+  }
+
+  deleteTarget.value = { id: docId, filename: doc.filename }
+  pendingDeleteTarget.value = { id: docId, filename: doc.filename }
+  showDeleteDialog.value = true
 }
 
 async function confirmDelete() {
-  if (!deleteTarget.value) return
+  const target = pendingDeleteTarget.value
+  showDeleteDialog.value = false
+  deleteTarget.value = null
+  pendingDeleteTarget.value = null
+  if (!target) return
   try {
-    await deleteDocument(deleteTarget.value.id as Id<'documents'>)
+    await deleteDocument(target.id as Id<'documents'>)
     const { toast } = await import('vue-sonner')
     toast.success('Document deleted')
   } catch (e: any) {
     const { toast } = await import('vue-sonner')
     toast.error(e.message || 'Failed to delete document')
   }
-  deleteTarget.value = null
 }
 
 function handleMoveRequest(docId: string) {
@@ -176,7 +191,7 @@ async function handleUpload(files: File[]) {
         </UiAlertDialogHeader>
         <UiAlertDialogFooter>
           <UiAlertDialogCancel>Cancel</UiAlertDialogCancel>
-          <UiAlertDialogAction class="bg-destructive text-destructive-foreground hover:bg-destructive/90" @click="confirmDelete">Delete</UiAlertDialogAction>
+          <UiButton variant="destructive" @click="confirmDelete">Delete</UiButton>
         </UiAlertDialogFooter>
       </UiAlertDialogContent>
     </UiAlertDialog>

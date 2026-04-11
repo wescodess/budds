@@ -106,11 +106,23 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
   }
 
   async function deleteDocument(docId: Id<'documents'>) {
-    await deleteDocumentMutation.mutate({ id: docId })
+    const result = await deleteDocumentMutation.mutate({ id: docId })
+    if ((deleteDocumentMutation as any).error?.value) {
+      const err = (deleteDocumentMutation as any).error.value
+      ;(deleteDocumentMutation as any).error.value = undefined
+      throw err
+    }
+    return result
   }
 
   async function moveDocument(docId: Id<'documents'>, destinationFolderId: Id<'folders'>) {
-    await moveDocumentMutation.mutate({ id: docId, destinationFolderId })
+    const result = await moveDocumentMutation.mutate({ id: docId, destinationFolderId })
+    if ((moveDocumentMutation as any).error?.value) {
+      const err = (moveDocumentMutation as any).error.value
+      ;(moveDocumentMutation as any).error.value = undefined
+      throw err
+    }
+    return result
   }
 
   return {

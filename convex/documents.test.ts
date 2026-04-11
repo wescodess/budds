@@ -368,7 +368,7 @@ describe('documents.deleteDocument — AC #1, #3', () => {
     expect(fileUrl).toBeNull()
   })
 
-  it('[P0] should schedule deleteDocumentFromAiSearch when doc status is success', async () => {
+  it('[P0] should schedule deleteDocumentFromR2 when doc status is success', async () => {
     const t = convexTest(schema, modules)
     const asUser = t.withIdentity(TEST_IDENTITY)
     const { folderId, docId } = await createDocInFolder(t, asUser)
@@ -383,8 +383,8 @@ describe('documents.deleteDocument — AC #1, #3', () => {
     const scheduledFunctions = await t.run(async (ctx) => {
       const jobs = await ctx.db.system.query('_scheduled_functions').collect()
       return jobs.filter((j: any) =>
-        j.name === 'documentActions:deleteDocumentFromAiSearch'
-        || j.name === 'documentActions.deleteDocumentFromAiSearch',
+        j.name === 'documentActions:deleteDocumentFromR2'
+        || j.name === 'documentActions.deleteDocumentFromR2',
       )
     })
     expect(scheduledFunctions.length).toBeGreaterThan(0)
@@ -400,8 +400,8 @@ describe('documents.deleteDocument — AC #1, #3', () => {
     const scheduledFunctions = await t.run(async (ctx) => {
       const jobs = await ctx.db.system.query('_scheduled_functions').collect()
       return jobs.filter((j: any) =>
-        j.name === 'documentActions:deleteDocumentFromAiSearch'
-        || j.name === 'documentActions.deleteDocumentFromAiSearch',
+        j.name === 'documentActions:deleteDocumentFromR2'
+        || j.name === 'documentActions.deleteDocumentFromR2',
       )
     })
     expect(scheduledFunctions).toHaveLength(0)
@@ -423,8 +423,8 @@ describe('documents.deleteDocument — AC #1, #3', () => {
     const scheduledFunctions = await t.run(async (ctx) => {
       const jobs = await ctx.db.system.query('_scheduled_functions').collect()
       return jobs.filter((j: any) =>
-        j.name === 'documentActions:deleteDocumentFromAiSearch'
-        || j.name === 'documentActions.deleteDocumentFromAiSearch',
+        j.name === 'documentActions:deleteDocumentFromR2'
+        || j.name === 'documentActions.deleteDocumentFromR2',
       )
     })
     expect(scheduledFunctions).toHaveLength(0)
