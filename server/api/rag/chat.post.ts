@@ -1,19 +1,20 @@
+import type { ChatMessage } from '../../utils/ai-gateway'
+
 const SYSTEM_PROMPT = `You are a helpful assistant that answers questions based on the provided context.
 Use the context below to answer the user's question accurately.
 If the context doesn't contain enough information to answer, say so clearly.
-Always cite which source documents your answer is based on when possible.`
+When citing sources, use inline numbered references like [1], [2], etc. corresponding to the provided source passages. Each number maps to the source passage at that index.`
 
 export default defineEventHandler(async (event) => {
-  await requireUserSession(event)
   const userId = getConvexTokenIdentifier(event)
 
   const body = await readBody<{
     query: string
     model: string
+    folderId: string
     history?: ChatMessage[]
     max_num_results?: number
     score_threshold?: number
-    filters?: Record<string, unknown>
     temperature?: number
     max_tokens?: number
     stream?: boolean
@@ -27,20 +28,24 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, message: 'model is required' })
   }
 
+  if (!body.folderId?.trim()) {
+    throw createError({ statusCode: 400, message: 'folderId is required' })
+  }
+
   const searchResults = await searchDocuments({
     query: body.query,
     userId,
     max_num_results: body.max_num_results ?? 10,
     score_threshold: body.score_threshold,
-    filters: body.filters,
+    filters: { folderId: body.folderId },
   })
 
   const chunks = searchResults.data ?? []
 
   const context = chunks
     .map((chunk, i) => {
-      const source = chunk.attributes?.filename || chunk.attributes?.url || `Source ${i + 1}`
-      return `[${source}]\n${chunk.content}`
+      const label = chunk.attributes?.filename || chunk.attributes?.url || 'unknown'
+      return `[Source ${i + 1}: ${label}]\n${chunk.content}`
     })
     .join('\n\n---\n\n')
 
@@ -60,7 +65,10 @@ export default defineEventHandler(async (event) => {
   }
 
   if (body.history?.length) {
-    messages.push(...body.history)
+    const safeHistory = body.history.filter(
+      (m): m is ChatMessage => m.role === 'user' || m.role === 'assistant',
+    )
+    messages.push(...safeHistory)
   }
 
   messages.push({ role: 'user', content: body.query })

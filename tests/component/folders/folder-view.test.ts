@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
+import { flushPromises } from '@vue/test-utils'
 
 const mockFolder = ref<any>({ _id: 'folder1', name: 'Biology 101', parentId: undefined, userId: 'u1', documentCount: 0 })
 const mockAllFolders = ref<any[]>([
@@ -26,6 +27,28 @@ mockNuxtImport('useFolders', () => {
   })
 })
 
+mockNuxtImport('useChat', () => {
+  return () => ({
+    messages: ref([]),
+    loading: ref(false),
+    error: ref(null),
+    hasIndexedDocuments: ref(false),
+    sendMessage: vi.fn(),
+    clearMessages: vi.fn(),
+  })
+})
+
+mockNuxtImport('useDocuments', () => {
+  return () => ({
+    documents: ref([]),
+    uploading: ref(false),
+    uploadProgress: ref(new Map()),
+    uploadFiles: vi.fn(),
+    deleteDocument: vi.fn(),
+    moveDocument: vi.fn(),
+  })
+})
+
 mockNuxtImport('useRoute', () => {
   return () => ({ path: '/app/folders/folder1', params: { id: 'folder1' } })
 })
@@ -43,10 +66,13 @@ describe('FolderView — AC4: Folder Detail Page', () => {
     expect(heading.text()).toBeTruthy()
   })
 
-  it('[P0] should show "Documents will appear here" empty state', async () => {
+  it('[P0] should show "Documents will appear here" empty state in Documents tab', async () => {
     const FolderView = await import(folderViewPath)
 
     const wrapper = await mountSuspended(FolderView.default)
+
+    ;(wrapper.vm as any).activeTab = 'documents'
+    await flushPromises()
 
     const emptyState = wrapper.find('[data-testid="folder-empty-state"]')
     expect(emptyState.exists()).toBe(true)
