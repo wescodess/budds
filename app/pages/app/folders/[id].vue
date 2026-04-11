@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { FolderPlus, FileText } from 'lucide-vue-next'
+import { FolderPlus, FileText, MessageSquare } from 'lucide-vue-next'
+import { useMediaQuery } from '@vueuse/core'
 import type { Id } from '~~/convex/_generated/dataModel'
 
 const route = useRoute()
@@ -8,6 +9,9 @@ const folderId = computed(() => route.params.id as Id<'folders'>)
 const { folder } = useFolderDetail(folderId)
 const { allFolders, createSubfolder } = useFolders()
 const { documents, uploading, uploadFiles, deleteDocument, moveDocument } = useDocuments(folderId)
+const { messages, loading, error, hasIndexedDocuments, sendMessage } = useChat(folderId)
+
+const isDesktop = useMediaQuery('(min-width: 1024px)')
 
 const showNewSubfolder = ref(false)
 const newSubfolderName = ref('')
@@ -22,6 +26,65 @@ const showMoveDialog = computed({
   get: () => moveTarget.value !== null,
   set: (val: boolean) => { if (!val) moveTarget.value = null },
 })
+
+const activeTab = ref('chat')
+const sourcePanelOpen = ref(false)
+const activeCitationIndex = ref<number | null>(null)
+const activeMessageIndex = ref<number | null>(null)
+const expandedInlineCitation = ref<{ messageIndex: number; citationIndex: number } | null>(null)
+const chatInputRef = ref<{ focus: () => void } | null>(null)
+const chatScrollRef = ref<HTMLElement | null>(null)
+
+const allSources = computed(() => {
+  if (activeMessageIndex.value === null) return []
+  const msg = messages.value[activeMessageIndex.value]
+  return msg?.sources ?? []
+})
+
+function handleCitationClick(messageIndex: number, citationIndex: number) {
+  if (isDesktop.value) {
+    activeMessageIndex.value = messageIndex
+    activeCitationIndex.value = citationIndex - 1
+    sourcePanelOpen.value = true
+  } else {
+    const same = expandedInlineCitation.value?.messageIndex === messageIndex
+      && expandedInlineCitation.value?.citationIndex === citationIndex
+    expandedInlineCitation.value = same ? null : { messageIndex, citationIndex }
+  }
+}
+
+function getSourceForInlineCitation(messageIndex: number, citationIndex: number) {
+  const msg = messages.value[messageIndex]
+  return msg?.sources?.[citationIndex - 1]
+}
+
+watch(() => messages.value.length, () => {
+  nextTick(() => {
+    chatScrollRef.value?.scrollTo({ top: chatScrollRef.value.scrollHeight, behavior: 'smooth' })
+  })
+})
+
+function handleSlashShortcut(e: KeyboardEvent) {
+  if (e.key !== '/' || activeTab.value !== 'chat') return
+  const tag = (e.target as HTMLElement)?.tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+  e.preventDefault()
+  chatInputRef.value?.focus()
+}
+
+onMounted(() => {
+  document.addEventListener('keydown', handleSlashShortcut)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('keydown', handleSlashShortcut)
+})
+
+async function handleSendMessage(query: string) {
+  expandedInlineCitation.value = null
+  activeMessageIndex.value = null
+  await sendMessage(query)
+}
 
 async function handleDeleteRequest(docId: string) {
   const doc = documents.value?.find((d) => d._id === docId)
@@ -147,39 +210,118 @@ async function handleUpload(files: File[]) {
       />
     </div>
 
-    <DocumentsFileUploadZone
-      :folder-id="folderId"
-      :disabled="uploading"
-      class="mb-6"
-      @upload="handleUpload"
-    />
+    <UiTabs v-model="activeTab" class="flex flex-1 flex-col">
+      <UiTabsList>
+        <UiTabsTrigger value="chat">
+          <MessageSquare class="mr-1.5 h-4 w-4" />
+          Chat
+        </UiTabsTrigger>
+        <UiTabsTrigger value="documents">
+          <FileText class="mr-1.5 h-4 w-4" />
+          Documents
+        </UiTabsTrigger>
+      </UiTabsList>
 
-    <div v-if="documents && documents.length > 0" class="space-y-2">
-      <DocumentsFileStatusItem
-        v-for="doc in documents"
-        :key="doc._id"
-        :filename="doc.filename"
-        :status="doc.status"
-        :file-size="doc.fileSize"
-        :created-at="doc._creationTime"
-        :failure-reason="doc.failureReason"
-        :document-id="doc._id"
-        @delete="handleDeleteRequest"
-        @move="handleMoveRequest"
-      />
-    </div>
+      <UiTabsContent value="chat" class="flex flex-1 flex-col overflow-hidden">
+        <div class="flex flex-1 overflow-hidden">
+          <div class="flex flex-1 flex-col overflow-hidden">
+            <template v-if="!hasIndexedDocuments">
+              <div class="flex flex-1 items-center justify-center text-muted-foreground">
+                <div class="text-center">
+                  <FileText class="mx-auto mb-3 h-12 w-12 opacity-40" />
+                  <p class="text-lg font-medium">Upload documents to start chatting</p>
+                </div>
+              </div>
+            </template>
 
-    <div
-      v-else-if="!documents || documents.length === 0"
-      data-testid="folder-empty-state"
-      class="flex flex-1 items-center justify-center text-muted-foreground"
-    >
-      <div class="text-center">
-        <FileText class="mx-auto mb-3 h-12 w-12 opacity-40" />
-        <p class="text-lg font-medium">Documents will appear here</p>
-        <p class="mt-1 text-sm">Upload files to get started</p>
-      </div>
-    </div>
+            <template v-else>
+              <div ref="chatScrollRef" role="log" class="flex-1 space-y-4 overflow-y-auto p-4">
+                <template v-for="(msg, i) in messages" :key="i">
+                  <ChatChatMessage
+                    :role="msg.role"
+                    :content="msg.content"
+                    :sources="msg.sources"
+                    @citation-click="(citIndex: number) => handleCitationClick(i, citIndex)"
+                  />
+                  <div
+                    v-if="!isDesktop && expandedInlineCitation?.messageIndex === i && getSourceForInlineCitation(i, expandedInlineCitation.citationIndex)"
+                    class="mx-auto max-w-[85%] rounded-lg border bg-muted/50 p-3"
+                  >
+                    <ChatSourceCard
+                      :index="expandedInlineCitation.citationIndex"
+                      :filename="getSourceForInlineCitation(i, expandedInlineCitation.citationIndex)!.filename"
+                      :content="getSourceForInlineCitation(i, expandedInlineCitation.citationIndex)!.content"
+                      :score="getSourceForInlineCitation(i, expandedInlineCitation.citationIndex)!.score"
+                      highlighted
+                    />
+                  </div>
+                </template>
+                <div v-if="loading" class="mr-auto max-w-[85%] rounded-lg border px-4 py-3">
+                  <div class="flex items-center gap-2 text-sm text-muted-foreground">
+                    <div class="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                    Thinking...
+                  </div>
+                </div>
+                <div v-if="error" class="text-center text-sm text-destructive">
+                  {{ error }}
+                </div>
+              </div>
+            </template>
+
+            <ChatChatInput
+              ref="chatInputRef"
+              :disabled="!hasIndexedDocuments"
+              :placeholder="folder ? `Ask about your ${folder.name} materials...` : 'Ask a question...'"
+              @submit="handleSendMessage"
+            />
+          </div>
+
+          <ChatSourcePanel
+            v-if="isDesktop"
+            :sources="allSources"
+            :active-citation-index="activeCitationIndex"
+            :open="sourcePanelOpen"
+            @close="sourcePanelOpen = false"
+          />
+        </div>
+      </UiTabsContent>
+
+      <UiTabsContent value="documents" class="flex-1">
+        <DocumentsFileUploadZone
+          :folder-id="folderId"
+          :disabled="uploading"
+          class="mb-6"
+          @upload="handleUpload"
+        />
+
+        <div v-if="documents && documents.length > 0" class="space-y-2">
+          <DocumentsFileStatusItem
+            v-for="doc in documents"
+            :key="doc._id"
+            :filename="doc.filename"
+            :status="doc.status"
+            :file-size="doc.fileSize"
+            :created-at="doc._creationTime"
+            :failure-reason="doc.failureReason"
+            :document-id="doc._id"
+            @delete="handleDeleteRequest"
+            @move="handleMoveRequest"
+          />
+        </div>
+
+        <div
+          v-else-if="!documents || documents.length === 0"
+          data-testid="folder-empty-state"
+          class="flex flex-1 items-center justify-center py-12 text-muted-foreground"
+        >
+          <div class="text-center">
+            <FileText class="mx-auto mb-3 h-12 w-12 opacity-40" />
+            <p class="text-lg font-medium">Documents will appear here</p>
+            <p class="mt-1 text-sm">Upload files to get started</p>
+          </div>
+        </div>
+      </UiTabsContent>
+    </UiTabs>
 
     <UiAlertDialog v-model:open="showDeleteDialog">
       <UiAlertDialogContent>
