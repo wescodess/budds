@@ -18,4 +18,18 @@ export default defineSchema({
   })
     .index('by_userId', ['userId'])
     .index('by_userId_and_parentId', ['userId', 'parentId']),
+
+  documents: defineTable({
+    userId: v.string(),
+    folderId: v.id('folders'),
+    filename: v.string(),
+    fileId: v.id('_storage'),
+    status: v.union(v.literal('processing'), v.literal('success'), v.literal('failed')),
+    fileSize: v.number(),
+    failureReason: v.optional(v.string()),
+  })
+    .index('by_userId', ['userId'])
+    .index('by_folderId', ['folderId'])
+    .index('by_userId_and_folderId', ['userId', 'folderId'])
+    .index('by_status', ['status']),
 })
