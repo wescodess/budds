@@ -6,7 +6,7 @@ defineOptions({ name: 'FileStatusItem' })
 
 const props = defineProps<{
   filename: string
-  status: 'processing' | 'success' | 'failed'
+  status: 'processing' | 'indexing' | 'success' | 'failed'
   fileSize: number
   createdAt: number
   failureReason?: string
@@ -37,9 +37,13 @@ function formatDate(timestamp: number): string {
 <template>
   <div class="flex items-center gap-3 rounded-lg border px-4 py-3">
     <div class="shrink-0">
-      <Loader2 v-if="status === 'processing'" class="h-5 w-5 animate-spin text-amber-500" />
+      <Loader2 v-if="status === 'processing' || status === 'indexing'" class="h-5 w-5 animate-spin text-amber-500" />
       <CheckCircle2 v-else-if="status === 'success'" class="h-5 w-5 text-green-500" />
-      <XCircle v-else class="h-5 w-5 text-red-500" />
+      <XCircle
+        v-else
+        class="h-5 w-5 cursor-pointer text-red-500 hover:text-red-700"
+        @click="documentId && emit('delete', documentId)"
+      />
     </div>
 
     <div class="min-w-0 flex-1">
@@ -47,6 +51,9 @@ function formatDate(timestamp: number): string {
       <div aria-live="polite" class="text-xs text-muted-foreground">
         <template v-if="status === 'processing'">
           {{ formatFileSize(fileSize) }} · Processing...
+        </template>
+        <template v-else-if="status === 'indexing'">
+          {{ formatFileSize(fileSize) }} · Indexing...
         </template>
         <template v-else-if="status === 'success'">
           {{ formatFileSize(fileSize) }} · {{ formatDate(createdAt) }}

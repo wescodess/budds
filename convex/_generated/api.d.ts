@@ -9,6 +9,8 @@
  */
 
 import type * as auth from "../auth.js";
+import type * as documentActions from "../documentActions.js";
+import type * as documents from "../documents.js";
 import type * as folders from "../folders.js";
 import type * as http from "../http.js";
 import type * as users from "../users.js";
@@ -21,6 +23,8 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   auth: typeof auth;
+  documentActions: typeof documentActions;
+  documents: typeof documents;
   folders: typeof folders;
   http: typeof http;
   users: typeof users;

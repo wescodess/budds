@@ -86,14 +86,19 @@ export const listDocumentsByFolder = query({
 export const updateDocumentStatus = internalMutation({
   args: {
     id: v.id('documents'),
-    status: v.union(v.literal('processing'), v.literal('success'), v.literal('failed')),
+    status: v.union(v.literal('processing'), v.literal('indexing'), v.literal('success'), v.literal('failed')),
     failureReason: v.optional(v.string()),
+    indexJobId: v.optional(v.string()),
+    r2Key: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await ctx.db.patch(args.id, {
+    const patch: Record<string, unknown> = {
       status: args.status,
       failureReason: args.failureReason,
-    })
+    }
+    if (args.indexJobId !== undefined) patch.indexJobId = args.indexJobId
+    if (args.r2Key !== undefined) patch.r2Key = args.r2Key
+    await ctx.db.patch(args.id, patch)
   },
 })
 
@@ -109,9 +114,10 @@ export const deleteDocument = mutation({
       throw new Error('Document not found')
     }
 
-    if (doc.status === 'success') {
-      await ctx.scheduler.runAfter(0, internal.documentActions.deleteDocumentFromAiSearch, {
+    if (doc.status === 'success' || doc.status === 'indexing') {
+      await ctx.scheduler.runAfter(0, internal.documentActions.deleteDocumentFromR2, {
         documentId: args.id,
+        r2Key: doc.r2Key,
       })
     }
 
