@@ -7,6 +7,7 @@ const folderId = computed(() => route.params.id as Id<'folders'>)
 
 const { folder } = useFolderDetail(folderId)
 const { allFolders, createSubfolder } = useFolders()
+const { documents, uploading, uploadFiles } = useDocuments(folderId)
 
 const showNewSubfolder = ref(false)
 const newSubfolderName = ref('')
@@ -37,6 +38,15 @@ async function handleCreateSubfolder() {
   } catch (e: any) {
     const { toast } = await import('vue-sonner')
     toast.error(e.message || 'Failed to create subfolder')
+  }
+}
+
+async function handleUpload(files: File[]) {
+  try {
+    await uploadFiles(files, folderId.value)
+  } catch (e: any) {
+    const { toast } = await import('vue-sonner')
+    toast.error(e.message || 'Upload failed')
   }
 }
 </script>
@@ -70,7 +80,27 @@ async function handleCreateSubfolder() {
       />
     </div>
 
+    <DocumentsFileUploadZone
+      :folder-id="folderId"
+      :disabled="uploading"
+      class="mb-6"
+      @upload="handleUpload"
+    />
+
+    <div v-if="documents && documents.length > 0" class="space-y-2">
+      <DocumentsFileStatusItem
+        v-for="doc in documents"
+        :key="doc._id"
+        :filename="doc.filename"
+        :status="doc.status"
+        :file-size="doc.fileSize"
+        :created-at="doc._creationTime"
+        :failure-reason="doc.failureReason"
+      />
+    </div>
+
     <div
+      v-else-if="!documents || documents.length === 0"
       data-testid="folder-empty-state"
       class="flex flex-1 items-center justify-center text-muted-foreground"
     >
