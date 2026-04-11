@@ -14,6 +14,10 @@
 - **~~`lastActivity` shows folder `_creationTime` not actual last activity~~** — Added `updatedAt` field to folders schema. `CourseCard.vue` now uses `updatedAt ?? _creationTime`. `createFolder` sets `updatedAt: Date.now()`.
 - **~~JWKS bootstrap undocumented~~** — Created `scripts/bootstrap-jwks.sh` automation script and documented setup steps in `CLAUDE.md`.
 
+## Deferred from: code review of story-3.3 (2026-04-11)
+
+- **Move folder picker renders flat list, not a tree** — Spec mentions "folder tree via a Dialog" but implementation shows a flat list of all folders. Nested folders with the same name are indistinguishable. UX enhancement, not a functional bug.
+
 ## Deferred from: code review of story-3.2 (2026-04-11)
 
 - **`deleteDocument` does not remove document from Cloudflare AI Search index** — Deleted documents remain searchable. Story 3.3 ("Delete Documents and Move Between Folders") should handle AI Search cleanup.

@@ -109,6 +109,12 @@ export const deleteDocument = mutation({
       throw new Error('Document not found')
     }
 
+    if (doc.status === 'success') {
+      await ctx.scheduler.runAfter(0, internal.documentActions.deleteDocumentFromAiSearch, {
+        documentId: args.id,
+      })
+    }
+
     const folder = await ctx.db.get(doc.folderId)
     if (folder) {
       await ctx.db.patch(doc.folderId, {
@@ -119,5 +125,47 @@ export const deleteDocument = mutation({
 
     await ctx.storage.delete(doc.fileId)
     await ctx.db.delete(args.id)
+  },
+})
+
+export const moveDocument = mutation({
+  args: {
+    id: v.id('documents'),
+    destinationFolderId: v.id('folders'),
+  },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) throw new Error('Unauthenticated')
+
+    const userId = identity.tokenIdentifier
+    const doc = await ctx.db.get(args.id)
+    if (!doc || doc.userId !== userId) {
+      throw new Error('Document not found')
+    }
+
+    if (doc.folderId === args.destinationFolderId) {
+      throw new Error('Document is already in this folder')
+    }
+
+    const destFolder = await ctx.db.get(args.destinationFolderId)
+    if (!destFolder || destFolder.userId !== userId) {
+      throw new Error('Folder not found')
+    }
+
+    const srcFolder = await ctx.db.get(doc.folderId)
+
+    await ctx.db.patch(args.id, { folderId: args.destinationFolderId })
+
+    if (srcFolder) {
+      await ctx.db.patch(doc.folderId, {
+        documentCount: Math.max(0, srcFolder.documentCount - 1),
+        updatedAt: Date.now(),
+      })
+    }
+
+    await ctx.db.patch(args.destinationFolderId, {
+      documentCount: destFolder.documentCount + 1,
+      updatedAt: Date.now(),
+    })
   },
 })
