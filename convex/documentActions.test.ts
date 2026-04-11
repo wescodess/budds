@@ -278,3 +278,53 @@ describe('documents.createDocument → ingestDocument integration', () => {
     expect(body.documents[0].attributes.filename).toBe('scheduled.pdf')
   })
 })
+
+describe('documentActions.deleteDocumentFromAiSearch — AC #1', () => {
+  let originalEnv: Record<string, string | undefined>
+
+  beforeEach(() => {
+    originalEnv = { ...process.env }
+    Object.assign(process.env, CF_ENV)
+    vi.stubGlobal('fetch', vi.fn())
+  })
+
+  afterEach(() => {
+    process.env = originalEnv
+    vi.unstubAllGlobals()
+  })
+
+  test('[P0] should call Cloudflare DELETE endpoint with correct URL and auth', async () => {
+    const t = convexTest(schema, modules)
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ success: true }),
+    })
+    vi.stubGlobal('fetch', fetchSpy)
+
+    await t.action(internal.documentActions.deleteDocumentFromAiSearch, {
+      documentId: 'test-doc-id-123',
+    })
+
+    expect(fetchSpy).toHaveBeenCalledOnce()
+    const [url, options] = fetchSpy.mock.calls[0]
+    expect(url).toContain('/ai-search/instances/')
+    expect(url).toContain('/documents/test-doc-id-123')
+    expect(options.method).toBe('DELETE')
+    expect(options.headers['Authorization']).toMatch(/^Bearer .+/)
+  })
+
+  test('[P1] should not throw when Cloudflare API returns an error', async () => {
+    const t = convexTest(schema, modules)
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      text: () => Promise.resolve('Internal Server Error'),
+    }))
+
+    await expect(
+      t.action(internal.documentActions.deleteDocumentFromAiSearch, {
+        documentId: 'test-doc-id-456',
+      }),
+    ).resolves.not.toThrow()
+  })
+})

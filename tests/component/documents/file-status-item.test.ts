@@ -101,3 +101,70 @@ describe('FileStatusItem — AC #3', () => {
     expect(liveRegion.exists()).toBe(true)
   })
 })
+
+describe('FileStatusItem — Action Menu (AC #1, #2)', () => {
+  it('[P0] should render a dropdown action menu with trigger button', async () => {
+    const FileStatusItem = await import(statusItemPath)
+
+    const wrapper = await mountSuspended(FileStatusItem.default, {
+      props: {
+        filename: 'notes.pdf',
+        status: 'success' as const,
+        fileSize: 1024,
+        createdAt: Date.now(),
+        documentId: 'doc_abc123',
+      },
+    })
+
+    const trigger = wrapper.find('[data-testid="document-actions-trigger"]')
+    expect(trigger.exists()).toBe(true)
+  })
+
+  it('[P0] should emit delete event with document ID when Delete is clicked', async () => {
+    const FileStatusItem = await import(statusItemPath)
+
+    const wrapper = await mountSuspended(FileStatusItem.default, {
+      props: {
+        filename: 'old-notes.pdf',
+        status: 'success' as const,
+        fileSize: 2048,
+        createdAt: Date.now(),
+        documentId: 'doc_delete_target',
+      },
+    })
+
+    const trigger = wrapper.find('[data-testid="document-actions-trigger"]')
+    await trigger.trigger('click')
+
+    const deleteItem = wrapper.find('[data-testid="action-delete"]')
+    expect(deleteItem.exists()).toBe(true)
+    await deleteItem.trigger('click')
+
+    expect(wrapper.emitted('delete')).toBeTruthy()
+    expect(wrapper.emitted('delete')![0]).toEqual(['doc_delete_target'])
+  })
+
+  it('[P0] should emit move event with document ID when Move to folder is clicked', async () => {
+    const FileStatusItem = await import(statusItemPath)
+
+    const wrapper = await mountSuspended(FileStatusItem.default, {
+      props: {
+        filename: 'moveable.pdf',
+        status: 'success' as const,
+        fileSize: 4096,
+        createdAt: Date.now(),
+        documentId: 'doc_move_target',
+      },
+    })
+
+    const trigger = wrapper.find('[data-testid="document-actions-trigger"]')
+    await trigger.trigger('click')
+
+    const moveItem = wrapper.find('[data-testid="action-move"]')
+    expect(moveItem.exists()).toBe(true)
+    await moveItem.trigger('click')
+
+    expect(wrapper.emitted('move')).toBeTruthy()
+    expect(wrapper.emitted('move')![0]).toEqual(['doc_move_target'])
+  })
+})
