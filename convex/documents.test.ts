@@ -312,22 +312,28 @@ describe('documents.updateDocumentStatus (internal)', () => {
   })
 })
 
-describe('documents.deleteDocument (stub)', () => {
-  it('[P1] should decrement folder documentCount', async () => {
-    const t = convexTest(schema, modules)
-    const asUser = t.withIdentity(TEST_IDENTITY)
-
+describe('documents.deleteDocument — AC #1, #3', () => {
+  async function createDocInFolder(
+    t: ReturnType<typeof convexTest>,
+    asUser: ReturnType<ReturnType<typeof convexTest>['withIdentity']>,
+  ) {
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Folder' })
     const storageId = await t.run(async (ctx) => {
       return await ctx.storage.store(new Blob(['pdf'], { type: 'application/pdf' }))
     })
-
     const docId = await asUser.mutation(api.documents.createDocument, {
       folderId,
       filename: 'test.pdf',
       fileId: storageId,
       fileSize: 1024,
     })
+    return { folderId, storageId, docId }
+  }
+
+  it('[P0] should decrement folder documentCount', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const { folderId, docId } = await createDocInFolder(t, asUser)
 
     const folderBefore = await asUser.query(api.folders.getFolder, { id: folderId })
     expect(folderBefore!.documentCount).toBe(1)
@@ -336,5 +342,250 @@ describe('documents.deleteDocument (stub)', () => {
 
     const folderAfter = await asUser.query(api.folders.getFolder, { id: folderId })
     expect(folderAfter!.documentCount).toBe(0)
+  })
+
+  it('[P0] should delete the document record from the database', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const { folderId, docId } = await createDocInFolder(t, asUser)
+
+    await asUser.mutation(api.documents.deleteDocument, { id: docId })
+
+    const docs = await asUser.query(api.documents.listDocumentsByFolder, { folderId })
+    expect(docs).toHaveLength(0)
+  })
+
+  it('[P0] should delete the file from storage', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const { storageId, docId } = await createDocInFolder(t, asUser)
+
+    await asUser.mutation(api.documents.deleteDocument, { id: docId })
+
+    const fileUrl = await t.run(async (ctx) => {
+      return await ctx.storage.getUrl(storageId)
+    })
+    expect(fileUrl).toBeNull()
+  })
+
+  it('[P0] should schedule deleteDocumentFromAiSearch when doc status is success', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const { folderId, docId } = await createDocInFolder(t, asUser)
+
+    await t.mutation(internal.documents.updateDocumentStatus, {
+      id: docId,
+      status: 'success',
+    })
+
+    await asUser.mutation(api.documents.deleteDocument, { id: docId })
+
+    const scheduledFunctions = await t.run(async (ctx) => {
+      const jobs = await ctx.db.system.query('_scheduled_functions').collect()
+      return jobs.filter((j: any) =>
+        j.name === 'documentActions:deleteDocumentFromAiSearch'
+        || j.name === 'documentActions.deleteDocumentFromAiSearch',
+      )
+    })
+    expect(scheduledFunctions.length).toBeGreaterThan(0)
+  })
+
+  it('[P0] should NOT schedule AI Search cleanup when doc status is processing', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const { docId } = await createDocInFolder(t, asUser)
+
+    await asUser.mutation(api.documents.deleteDocument, { id: docId })
+
+    const scheduledFunctions = await t.run(async (ctx) => {
+      const jobs = await ctx.db.system.query('_scheduled_functions').collect()
+      return jobs.filter((j: any) =>
+        j.name === 'documentActions:deleteDocumentFromAiSearch'
+        || j.name === 'documentActions.deleteDocumentFromAiSearch',
+      )
+    })
+    expect(scheduledFunctions).toHaveLength(0)
+  })
+
+  it('[P1] should NOT schedule AI Search cleanup when doc status is failed', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const { docId } = await createDocInFolder(t, asUser)
+
+    await t.mutation(internal.documents.updateDocumentStatus, {
+      id: docId,
+      status: 'failed',
+      failureReason: 'Some error',
+    })
+
+    await asUser.mutation(api.documents.deleteDocument, { id: docId })
+
+    const scheduledFunctions = await t.run(async (ctx) => {
+      const jobs = await ctx.db.system.query('_scheduled_functions').collect()
+      return jobs.filter((j: any) =>
+        j.name === 'documentActions:deleteDocumentFromAiSearch'
+        || j.name === 'documentActions.deleteDocumentFromAiSearch',
+      )
+    })
+    expect(scheduledFunctions).toHaveLength(0)
+  })
+
+  it('[P0] should reject unauthenticated user', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const { docId } = await createDocInFolder(t, asUser)
+
+    await expect(
+      t.mutation(api.documents.deleteDocument, { id: docId }),
+    ).rejects.toThrow()
+  })
+
+  it('[P0] should reject deleting another user\'s document', async () => {
+    const t = convexTest(schema, modules)
+    const asUser1 = t.withIdentity(TEST_IDENTITY)
+    const asUser2 = t.withIdentity(OTHER_IDENTITY)
+    const { docId } = await createDocInFolder(t, asUser1)
+
+    await expect(
+      asUser2.mutation(api.documents.deleteDocument, { id: docId }),
+    ).rejects.toThrow('Document not found')
+  })
+})
+
+describe('documents.moveDocument — AC #2', () => {
+  async function createDocInFolder(
+    t: ReturnType<typeof convexTest>,
+    asUser: ReturnType<ReturnType<typeof convexTest>['withIdentity']>,
+    folderName = 'Source Folder',
+  ) {
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: folderName })
+    const storageId = await t.run(async (ctx) => {
+      return await ctx.storage.store(new Blob(['pdf'], { type: 'application/pdf' }))
+    })
+    const docId = await asUser.mutation(api.documents.createDocument, {
+      folderId,
+      filename: 'movable.pdf',
+      fileId: storageId,
+      fileSize: 1024,
+    })
+    return { folderId, storageId, docId }
+  }
+
+  it('[P0] should update document folderId to destination', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const { folderId: srcFolder, docId } = await createDocInFolder(t, asUser, 'Source')
+    const destFolder = await asUser.mutation(api.folders.createFolder, { name: 'Destination' })
+
+    await asUser.mutation(api.documents.moveDocument, {
+      id: docId,
+      destinationFolderId: destFolder,
+    })
+
+    const srcDocs = await asUser.query(api.documents.listDocumentsByFolder, { folderId: srcFolder })
+    const destDocs = await asUser.query(api.documents.listDocumentsByFolder, { folderId: destFolder })
+
+    expect(srcDocs).toHaveLength(0)
+    expect(destDocs).toHaveLength(1)
+    expect(destDocs[0].folderId).toBe(destFolder)
+  })
+
+  it('[P0] should decrement source and increment destination documentCount', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const { folderId: srcFolder, docId } = await createDocInFolder(t, asUser, 'Source')
+    const destFolder = await asUser.mutation(api.folders.createFolder, { name: 'Destination' })
+
+    const srcBefore = await asUser.query(api.folders.getFolder, { id: srcFolder })
+    const destBefore = await asUser.query(api.folders.getFolder, { id: destFolder })
+    expect(srcBefore!.documentCount).toBe(1)
+    expect(destBefore!.documentCount).toBe(0)
+
+    await asUser.mutation(api.documents.moveDocument, {
+      id: docId,
+      destinationFolderId: destFolder,
+    })
+
+    const srcAfter = await asUser.query(api.folders.getFolder, { id: srcFolder })
+    const destAfter = await asUser.query(api.folders.getFolder, { id: destFolder })
+    expect(srcAfter!.documentCount).toBe(0)
+    expect(destAfter!.documentCount).toBe(1)
+  })
+
+  it('[P1] should update both folders updatedAt timestamps', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const { folderId: srcFolder, docId } = await createDocInFolder(t, asUser, 'Source')
+    const destFolder = await asUser.mutation(api.folders.createFolder, { name: 'Destination' })
+
+    const srcBefore = await asUser.query(api.folders.getFolder, { id: srcFolder })
+    const destBefore = await asUser.query(api.folders.getFolder, { id: destFolder })
+
+    await asUser.mutation(api.documents.moveDocument, {
+      id: docId,
+      destinationFolderId: destFolder,
+    })
+
+    const srcAfter = await asUser.query(api.folders.getFolder, { id: srcFolder })
+    const destAfter = await asUser.query(api.folders.getFolder, { id: destFolder })
+    expect(srcAfter!.updatedAt).toBeGreaterThanOrEqual(srcBefore!.updatedAt ?? 0)
+    expect(destAfter!.updatedAt).toBeGreaterThanOrEqual(destBefore!.updatedAt ?? 0)
+  })
+
+  it('[P1] should throw error when moving to same folder', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const { folderId, docId } = await createDocInFolder(t, asUser)
+
+    await expect(
+      asUser.mutation(api.documents.moveDocument, {
+        id: docId,
+        destinationFolderId: folderId,
+      }),
+    ).rejects.toThrow()
+  })
+
+  it('[P0] should reject moving another user\'s document', async () => {
+    const t = convexTest(schema, modules)
+    const asUser1 = t.withIdentity(TEST_IDENTITY)
+    const asUser2 = t.withIdentity(OTHER_IDENTITY)
+    const { docId } = await createDocInFolder(t, asUser1)
+    const otherFolder = await asUser2.mutation(api.folders.createFolder, { name: 'Other Folder' })
+
+    await expect(
+      asUser2.mutation(api.documents.moveDocument, {
+        id: docId,
+        destinationFolderId: otherFolder,
+      }),
+    ).rejects.toThrow('Document not found')
+  })
+
+  it('[P0] should reject moving to another user\'s folder', async () => {
+    const t = convexTest(schema, modules)
+    const asUser1 = t.withIdentity(TEST_IDENTITY)
+    const asUser2 = t.withIdentity(OTHER_IDENTITY)
+    const { docId } = await createDocInFolder(t, asUser1)
+    const otherFolder = await asUser2.mutation(api.folders.createFolder, { name: 'Other Folder' })
+
+    await expect(
+      asUser1.mutation(api.documents.moveDocument, {
+        id: docId,
+        destinationFolderId: otherFolder,
+      }),
+    ).rejects.toThrow('Folder not found')
+  })
+
+  it('[P0] should reject unauthenticated user', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const { docId } = await createDocInFolder(t, asUser)
+    const destFolder = await asUser.mutation(api.folders.createFolder, { name: 'Dest' })
+
+    await expect(
+      t.mutation(api.documents.moveDocument, {
+        id: docId,
+        destinationFolderId: destFolder,
+      }),
+    ).rejects.toThrow()
   })
 })

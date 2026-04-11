@@ -36,6 +36,7 @@
 
 generated: 2026-04-09
 last_updated: '2026-04-11'
+# Code review completed 2026-04-11: 2 patches applied, 1 deferred, 3 dismissed (story 3.3)
 # Code review completed 2026-04-11: 5 patches applied, 6 deferred, 10 dismissed
 # Dev story 3.2 in-progress 2026-04-11
 # Dev story 3.2 created 2026-04-11
@@ -67,7 +68,7 @@ development_status:
   epic-3: in-progress
   3-1-upload-files-and-track-processing-status: done
   3-2-document-ingestion-pipeline-with-per-user-isolation: done
-  3-3-delete-documents-and-move-between-folders: backlog
+  3-3-delete-documents-and-move-between-folders: done
   epic-3-retrospective: optional
 
   epic-4: backlog

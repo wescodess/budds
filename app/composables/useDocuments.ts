@@ -18,6 +18,14 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
         isLoading: ref(false),
       }
 
+  const deleteDocumentMutation = import.meta.client
+    ? useConvexMutation(api.documents.deleteDocument)
+    : { mutate: async (_args: { id: Id<'documents'> }) => {}, isLoading: ref(false) }
+
+  const moveDocumentMutation = import.meta.client
+    ? useConvexMutation(api.documents.moveDocument)
+    : { mutate: async (_args: { id: Id<'documents'>; destinationFolderId: Id<'folders'> }) => {}, isLoading: ref(false) }
+
   const { data: documentsData } = useConvexQuery(
     api.documents.listDocumentsByFolder,
     computed(() => ({ folderId: id.value })),
@@ -97,10 +105,20 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
     }
   }
 
+  async function deleteDocument(docId: Id<'documents'>) {
+    await deleteDocumentMutation.mutate({ id: docId })
+  }
+
+  async function moveDocument(docId: Id<'documents'>, destinationFolderId: Id<'folders'>) {
+    await moveDocumentMutation.mutate({ id: docId, destinationFolderId })
+  }
+
   return {
     documents: documentsData as Ref<Doc<'documents'>[] | null>,
     uploading,
     uploadProgress,
     uploadFiles,
+    deleteDocument,
+    moveDocument,
   }
 }

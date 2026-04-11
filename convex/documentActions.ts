@@ -4,6 +4,39 @@ import { internalAction } from './_generated/server'
 import { internal } from './_generated/api'
 import pdfParse from 'pdf-parse'
 
+export const deleteDocumentFromAiSearch = internalAction({
+  args: { documentId: v.string() },
+  handler: async (_ctx, args) => {
+    const accountId = process.env.CF_ACCOUNT_ID
+    const instance = process.env.CLOUDFLARE_AI_SEARCH_INSTANCE
+    const token = process.env.CLOUDFLARE_AI_SEARCH_TOKEN
+
+    if (!accountId || !instance || !token) {
+      console.error('Missing Cloudflare AI Search configuration for delete')
+      return
+    }
+
+    const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai-search/instances/${instance}/documents/${args.documentId}`
+
+    try {
+      const response = await fetch(url, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      })
+
+      if (!response.ok) {
+        const errorText = (await response.text()).slice(0, 500)
+        console.error(`AI Search delete failed (${response.status}): ${errorText}`)
+      }
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.error(`AI Search delete error: ${message}`)
+    }
+  },
+})
+
 export const ingestDocument = internalAction({
   args: {
     documentId: v.id('documents'),
