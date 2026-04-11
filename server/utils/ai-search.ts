@@ -15,6 +15,7 @@ export interface AISearchResponse {
 
 export interface AISearchParams {
   query: string
+  userId: string
   max_num_results?: number
   score_threshold?: number
   reranking?: boolean
@@ -24,6 +25,10 @@ export interface AISearchParams {
 export async function searchDocuments(params: AISearchParams): Promise<AISearchResponse> {
   const config = useRuntimeConfig()
   const { cloudflareAccountId, cloudflareAiSearchInstance, cloudflareAiSearchToken } = config
+
+  if (!params.userId) {
+    throw createError({ statusCode: 500, message: 'userId is required for AI Search queries' })
+  }
 
   if (!cloudflareAccountId || !cloudflareAiSearchInstance || !cloudflareAiSearchToken) {
     throw createError({ statusCode: 500, message: 'Missing Cloudflare AI Search configuration. Check CF_ACCOUNT_ID, CLOUDFLARE_AI_SEARCH_INSTANCE, and CLOUDFLARE_AI_SEARCH_TOKEN env vars.' })
@@ -36,10 +41,12 @@ export async function searchDocuments(params: AISearchParams): Promise<AISearchR
   }
 
   const searchOptions: Record<string, unknown> = {}
-  if (params.max_num_results) searchOptions.max_num_results = params.max_num_results
-  if (params.score_threshold) searchOptions.score_threshold = params.score_threshold
+  if (params.max_num_results !== undefined) searchOptions.max_num_results = params.max_num_results
+  if (params.score_threshold !== undefined) searchOptions.score_threshold = params.score_threshold
   if (params.reranking !== undefined) searchOptions.reranking = { enabled: params.reranking }
-  if (params.filters) searchOptions.filters = params.filters
+
+  const filters: Record<string, unknown> = { ...params.filters, userId: params.userId }
+  searchOptions.filters = filters
 
   if (Object.keys(searchOptions).length > 0) {
     body.ai_search_options = searchOptions

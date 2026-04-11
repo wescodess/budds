@@ -1,5 +1,6 @@
 export default defineEventHandler(async (event) => {
   await requireUserSession(event)
+  const userId = getConvexTokenIdentifier(event)
 
   const body = await readBody<{
     query: string
@@ -14,6 +15,7 @@ export default defineEventHandler(async (event) => {
 
   return await searchDocuments({
     query: body.query,
+    userId,
     max_num_results: body.max_num_results,
     score_threshold: body.score_threshold,
     filters: body.filters,
