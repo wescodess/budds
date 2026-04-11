@@ -32,7 +32,9 @@ watch(() => props.activeCitationIndex, (index) => {
     <div class="flex items-center justify-between border-b px-4 py-3">
       <h3 class="text-sm font-semibold">Sources</h3>
       <button
+        type="button"
         data-testid="source-panel-close"
+        aria-label="Close sources panel"
         class="inline-flex h-6 w-6 items-center justify-center rounded-md hover:bg-accent"
         @click="emit('close')"
       >

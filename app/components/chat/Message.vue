@@ -32,7 +32,7 @@ const parsedContent = computed((): ContentPart[] => {
     if (match.index > lastIndex) {
       parts.push({ type: 'text', value: props.content.slice(lastIndex, match.index) })
     }
-    parts.push({ type: 'citation', value: match[0], index: parseInt(match[1]) })
+    parts.push({ type: 'citation', value: match[0], index: parseInt(match[1]!) })
     lastIndex = regex.lastIndex
   }
 

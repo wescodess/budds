@@ -27,6 +27,6 @@ const props = defineProps<{
         {{ Math.round(props.score * 100) }}%
       </UiBadge>
     </div>
-    <p class="font-mono text-sm text-muted-foreground">{{ props.content }}</p>
+    <p class="break-all font-mono text-sm text-muted-foreground">{{ props.content }}</p>
   </div>
 </template>

@@ -27,7 +27,7 @@ describe('CitationBadge — AC #2, #3, #4', () => {
       },
     })
 
-    const button = wrapper.find('[role="button"]')
+    const button = wrapper.find('button')
     await button.trigger('click')
 
     expect(wrapper.emitted('click')).toBeTruthy()
@@ -44,11 +44,11 @@ describe('CitationBadge — AC #2, #3, #4', () => {
       },
     })
 
-    const button = wrapper.find('[role="button"]')
+    const button = wrapper.find('button')
     expect(button.attributes('aria-label')).toBe('Source 2 from chemistry-notes.pdf')
   })
 
-  it('[P0] should be keyboard focusable with role="button"', async () => {
+  it('[P0] should be keyboard focusable as a native button', async () => {
     const CitationBadge = await import(citationBadgePath)
 
     const wrapper = await mountSuspended(CitationBadge.default, {
@@ -58,8 +58,8 @@ describe('CitationBadge — AC #2, #3, #4', () => {
       },
     })
 
-    const button = wrapper.find('[role="button"]')
+    const button = wrapper.find('button')
     expect(button.exists()).toBe(true)
-    expect(button.element.tagName.toLowerCase()).toBe('button')
+    expect(button.attributes('type')).toBe('button')
   })
 })

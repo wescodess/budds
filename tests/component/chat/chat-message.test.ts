@@ -50,7 +50,7 @@ describe('ChatMessage — AC #1, #2', () => {
       },
     })
 
-    const badges = wrapper.findAll('[role="button"]')
+    const badges = wrapper.findAll('button[type="button"]')
     expect(badges.length).toBeGreaterThanOrEqual(2)
     expect(wrapper.text()).toContain('1')
     expect(wrapper.text()).toContain('2')
@@ -80,7 +80,7 @@ describe('ChatMessage — AC #1, #2', () => {
       },
     })
 
-    const badges = wrapper.findAll('[role="button"]')
+    const badges = wrapper.findAll('button[type="button"]')
     expect(badges.length).toBe(0)
   })
 })
