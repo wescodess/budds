@@ -36,6 +36,7 @@
 
 generated: 2026-04-09
 last_updated: '2026-04-12'
+# Story 4.4 code review PASS 2026-04-12: 5 deferred items (no blockers), status → done
 # Story 4.4 dev completed, status → review 2026-04-12
 # Story 4.4 dev started 2026-04-12
 # Story 4.4 created 2026-04-11
@@ -86,7 +87,7 @@ development_status:
   4-1-folder-scoped-rag-chat-with-source-citations: done
   4-2-streaming-chat-responses: done
   4-3-model-selection: done
-  4-4-chat-history-and-conversation-management: review
+  4-4-chat-history-and-conversation-management: done
   epic-4-retrospective: optional
 
   epic-5: backlog
