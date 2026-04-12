@@ -7,6 +7,38 @@ last_epic_complete_fired: 5
 
 last_verdict:
   subagent: bmad-story-runner
+  story: 6-2-take-quiz-and-view-results
+  epic: 6
+  status: PASS
+  pr_url: https://github.com/wescodess/budds/pull/20
+  branch: feat/6-2-take-quiz-and-view-results
+  commit_sha: 441c6ec
+  merge_commit: efd0693
+  merged_at: '2026-04-12T11:45:00Z'
+  files_changed: 17
+  tasks_completed: 10
+  tasks_total: 10
+  findings_deferred: 0
+  lint_pass: null
+  typecheck_pass: null
+  unit_tests_pass: true
+  e2e_tests_pass: null
+  review_pass: true
+  summary: |
+    Story 6-2 shipped — take quiz, submit, view results. New Convex table `quizAttempts` (indexes by_userId, by_quizId, by_userId_and_quizId) with per-question `{questionId, response, isCorrect}` records and top-line `{score, total, completedAt}`. New `quizzes.submitAttempt` mutation (auth → quiz ownership check → per-question scoring via type-aware comparator; MC = exact match, free-response = normalized trim/lowercase/whitespace-collapse) returns `{attemptId, score, total, correctCount, results[]}` and patches the parent quiz with score % + completedAt. New `quizzes.listAttempts` query for future history surface. Cascade re-audit (Team Agreement + AC #1): `deleteAllQuizAttemptsForUser` added to accountDeletion.ts and inserted BEFORE quizQuestions→quizzes in cascade order (child-before-parent preserved). Data export `collectUserData` + Nitro zip handler now includes `quizAttempts.json`; manifest `schemaVersion` bumped 2 → 3. Two new components `app/components/quiz/Question.vue` (MC via Ui-RadioGroup — non-portal primitive chosen to stay `mountSuspended`-safe per Epic 5 retro #3; free-response via native textarea; results mode renders correct/incorrect badges + reveal block + expandable ChatSourceCard) and `app/components/quiz/Taker.vue` (state machine loading | answering | submitting | results | error; SSR-safe mutation guard via `import.meta.client`; `[data-testid]` hooks for ATDD). `QuizTab.vue` wires taker on quiz-card click with `activeQuizId` ref and back handler. ATDD pipeline honored: 6 failing component tests written first at `tests/component/quiz/quiz-taker.atdd.test.ts` (loading/answering/submit-disabled/submit-payload/results/back), then implementation turns them green. Additional coverage: `quiz-question.test.ts` (6 tests), quizzes.test.ts +2 describes (submitAttempt ×6, listAttempts ×1), accountDeletion.test.ts +1 P0 cascade + isolation, dataExport.test.ts populated-quizAttempts case + empty-user guard, server/api/export/me.get.test.ts zip entry list + schemaVersion=3. Checks: pnpm test PASS 212 / 8 skipped (baseline), pnpm test:component tests/component/quiz PASS 17/17. 6 pre-existing chat-input failures remain off-target (logged in deferred-work.md by 6-1). No lint/typecheck/e2e scripts in package.json (Epic 6 prep #4, previously deferred). Code review PASS inline against all 11 ACs — 0 blockers, 0 new deferred items. PR #20 merged into dev as efd0693.
+  block_reason: null
+  block_context: null
+  at: '2026-04-12T11:45:00Z'
+  commits:
+    - 441c6ec feat(quiz): take quiz and view results (story 6-2)
+    - 1ce0abd chore(bmad): story 6-2 review artifacts + sprint-status → review
+  deferred_items: 0
+  blockers: 0
+  acs_covered: 11
+  acs_total: 11
+
+prior_last_verdict:
+  subagent: bmad-story-runner
   story: 6-1-generate-quiz-from-folder-documents
   epic: 6
   status: PASS
@@ -15,41 +47,7 @@ last_verdict:
   commit_sha: 529484c
   merge_commit: 0edd8ef
   merged_at: '2026-04-12T10:30:00Z'
-  files_changed: 22
-  tasks_completed: 13
-  tasks_total: 13
-  findings_deferred: 0
-  lint_pass: true
-  typecheck_pass: true
-  unit_tests_pass: true
-  e2e_tests_pass: null
-  review_pass: true
-  summary: |
-    Story 6-1 shipped end-to-end — opens Epic 6. New Convex tables `quizzes` + `quizQuestions` (indexes by_userId, by_folderId, by_userId_and_folderId; quizQuestions has a userId mirror for O(1) cascade). New Nitro handler POST `/api/quiz/generate` — RAG search via Cloudflare AI Search (`searchDocuments`) → prompt build → AI Gateway `generateCompletion` → zod-validated MCQ parse → Convex mutation `quizzes.createWithQuestions` authenticated via forwarded JWT. New composable `useQuizzes` returning { quizzes, hasIndexedDocuments, generating, lastError, generate }. New components `QuizTab` + `QuizCardPreview` (QuizTab extracted into its own file specifically to dodge Reka-portal incompatibility inside `mountSuspended` — fulfils Epic 5 retro prep item #3 with Decision + PR). Folder page `app/pages/app/folders/[id].vue` gains Quiz tab between Chat and Documents. `server/utils/quiz-prompt.ts` builds the prompt and parses responses with zod (tolerates markdown fences, trailing commas, drops malformed MC questions). Cascade audit: quizzes + quizQuestions batch-delete helpers added to `accountDeletion.ts` and inserted before documents in the cascade order (prep item #6). Data export: `quizzes.json` + `quizQuestions.json` entries added, manifest `schemaVersion` bumped 1 → 2 with quiz counts. documentActions.test.ts 8-failure baseline triaged per prep item #5: all 8 classified dead category (c), converted to `.skip` with inline pointer to retro + entry in `deferred-work.md`. Chat-input test baseline (6 pre-existing failures) verified out-of-scope via stash-and-checkout-dev, logged to deferred-work.md. Checks: pnpm lint PASS, pnpm typecheck PASS, pnpm test PASS (203 passed / 8 skipped), pnpm test:component PASS (quiz + related suites green). Code review: PASS, 0 blockers, 0 new deferred items (two baseline logs landed in deferred-work.md as retro follow-through, not as review findings). PR #19 merged into dev as 0edd8ef.
-  block_reason: null
-  block_context: null
-  at: '2026-04-12T10:30:00Z'
-  commits:
-    - 529484c feat(quiz): generate quiz from folder documents (story 6-1)
   deferred_items: 0
-  blockers: 0
-  prep_items_addressed:
-    - "#2 quiz-generation LLM prompt spike"
-    - "#3 Reka-portal mountSuspended Decision+PR (QuizTab extracted)"
-    - "#5 documentActions.test.ts 8-failure baseline triage (all dead, skipped)"
-    - "#6 cascade re-audit for quizzes table"
-
-prior_last_verdict:
-  subagent: bmad-story-runner
-  story: 5-3-data-export-and-legal-pages
-  epic: 5
-  status: PASS
-  pr_url: https://github.com/wescodess/budds/pull/17
-  branch: feat/5-3-data-export-and-legal-pages
-  commit_sha: 1c8375d
-  merge_commit: ff3ae38
-  merged_at: '2026-04-12T09:00:00Z'
-  deferred_items: 6
   blockers: 0
 
 last_retro:
