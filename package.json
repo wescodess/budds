@@ -27,6 +27,7 @@
     "clsx": "^2.1.1",
     "convex": "1.34.1",
     "embla-carousel-vue": "^8.6.0",
+    "fflate": "^0.8.2",
     "lucide-vue-next": "^1.0.0",
     "nuxt": "^4.0.0",
     "nuxt-convex": "0.0.6",
