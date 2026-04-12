@@ -95,6 +95,101 @@ export const listByFolder = query({
   },
 })
 
+export const updateCard = mutation({
+  args: {
+    cardId: v.id('flashcards'),
+    front: v.string(),
+    back: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) throw new Error('Unauthenticated')
+
+    const userId = identity.tokenIdentifier
+
+    const existing = await ctx.db.get(args.cardId)
+    if (!existing || existing.userId !== userId) {
+      throw new Error('Card not found')
+    }
+
+    const trimmedFront = args.front.trim()
+    if (trimmedFront.length === 0) {
+      throw new Error('Front text required')
+    }
+
+    const trimmedBack = args.back.trim()
+    if (trimmedBack.length === 0) {
+      throw new Error('Back text required')
+    }
+
+    await ctx.db.patch(args.cardId, {
+      front: trimmedFront,
+      back: trimmedBack,
+    })
+
+    return await ctx.db.get(args.cardId)
+  },
+})
+
+export const deleteCard = mutation({
+  args: { cardId: v.id('flashcards') },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) throw new Error('Unauthenticated')
+
+    const userId = identity.tokenIdentifier
+
+    const card = await ctx.db.get(args.cardId)
+    if (!card || card.userId !== userId) {
+      throw new Error('Card not found')
+    }
+
+    const set = await ctx.db.get(card.setId)
+    await ctx.db.delete(args.cardId)
+
+    let nextCount = 0
+    if (set && set.userId === userId) {
+      nextCount = Math.max(0, set.cardCount - 1)
+      await ctx.db.patch(set._id, { cardCount: nextCount })
+    }
+
+    return { setId: card.setId, cardCount: nextCount }
+  },
+})
+
+export const deleteSet = mutation({
+  args: { setId: v.id('flashcardSets') },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) throw new Error('Unauthenticated')
+
+    const userId = identity.tokenIdentifier
+
+    const set = await ctx.db.get(args.setId)
+    if (!set || set.userId !== userId) {
+      throw new Error('Set not found')
+    }
+
+    let deletedCards = 0
+    while (true) {
+      const batch = await ctx.db
+        .query('flashcards')
+        .withIndex('by_setId', (q) => q.eq('setId', args.setId))
+        .take(500)
+      if (batch.length === 0) break
+      for (const row of batch) {
+        await ctx.db.delete(row._id)
+        deletedCards += 1
+      }
+      if (batch.length < 500) break
+    }
+
+    await ctx.db.delete(args.setId)
+
+    return { deletedCards }
+  },
+})
+
 export const getSetWithCards = query({
   args: { id: v.id('flashcardSets') },
   handler: async (ctx, args) => {
