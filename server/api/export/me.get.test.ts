@@ -112,6 +112,7 @@ describe('GET /api/export/me', () => {
         'conversations.json',
         'documents.json',
         'documents/d1.pdf',
+        'flashcardSets.json',
         'flashcards.json',
         'folders.json',
         'manifest.json',
@@ -123,7 +124,7 @@ describe('GET /api/export/me', () => {
     )
 
     const manifest = JSON.parse(strFromU8(entries['manifest.json']!))
-    expect(manifest.schemaVersion).toBe(3)
+    expect(manifest.schemaVersion).toBe(4)
     expect(manifest.userId).toBe('tok|user1')
     expect(manifest.counts.documents).toBe(1)
     expect(manifest.unresolvedDocuments).toEqual([])

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { FolderPlus, FileText, MessageSquare, Plus, ClipboardList } from 'lucide-vue-next'
+import { FolderPlus, FileText, MessageSquare, Plus, ClipboardList, Layers } from 'lucide-vue-next'
 import { useMediaQuery } from '@vueuse/core'
 import { api } from '#convex/api'
 import type { Id } from '~~/convex/_generated/dataModel'
@@ -307,8 +307,11 @@ async function handleUpload(files: File[]) {
             <MessageSquare class="mr-1.5 h-4 w-4" />
             Chat
           </UiTabsTrigger>
-          <!-- UX-DR1 hybrid tab order: Chat, Flash Cards, Quiz, Documents. Flash Cards is Epic 7,
-               so for V1.1 the rendered order is Chat, Quiz, Documents. -->
+          <!-- UX-DR1 hybrid tab order: Chat, Flash Cards, Quiz, Documents (full order realized in V1.2 via Story 7.1). -->
+          <UiTabsTrigger value="flashcards" data-testid="flashcards-tab-trigger">
+            <Layers class="mr-1.5 h-4 w-4" />
+            Flash Cards
+          </UiTabsTrigger>
           <UiTabsTrigger value="quiz" data-testid="quiz-tab-trigger">
             <ClipboardList class="mr-1.5 h-4 w-4" />
             Quiz
@@ -403,6 +406,10 @@ async function handleUpload(files: File[]) {
             @close="sourcePanelOpen = false"
           />
         </div>
+      </UiTabsContent>
+
+      <UiTabsContent value="flashcards" class="flex-1">
+        <FlashcardsTab :folder-id="folderId" />
       </UiTabsContent>
 
       <UiTabsContent value="quiz" class="flex-1">

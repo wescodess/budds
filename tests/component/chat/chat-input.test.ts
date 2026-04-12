@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 
-const chatInputPath = ['~', 'components', 'chat', 'ChatInput.vue'].join('/')
+const chatInputPath = ['~', 'components', 'chat', 'Input.vue'].join('/')
 
 describe('ChatInput — AC #6', () => {
   it('[P0] should emit submit with trimmed message when Enter is pressed', async () => {

@@ -90,6 +90,8 @@ export const deleteAccountCascade = internalMutation({
     await deleteAllQuizAttemptsForUser(ctx, userId)
     await deleteAllQuizQuestionsForUser(ctx, userId)
     await deleteAllQuizzesForUser(ctx, userId)
+    await deleteAllFlashcardsForUser(ctx, userId)
+    await deleteAllFlashcardSetsForUser(ctx, userId)
     await deleteAllDocumentsForUser(ctx, userId)
     await deleteAllFoldersForUser(ctx, userId)
 
@@ -174,6 +176,30 @@ async function deleteAllQuizzesForUser(ctx: MutationCtx, userId: string) {
   while (true) {
     const batch = await ctx.db
       .query('quizzes')
+      .withIndex('by_userId', (q) => q.eq('userId', userId))
+      .take(500)
+    if (batch.length === 0) break
+    for (const row of batch) await ctx.db.delete(row._id)
+    if (batch.length < 500) break
+  }
+}
+
+async function deleteAllFlashcardsForUser(ctx: MutationCtx, userId: string) {
+  while (true) {
+    const batch = await ctx.db
+      .query('flashcards')
+      .withIndex('by_userId', (q) => q.eq('userId', userId))
+      .take(500)
+    if (batch.length === 0) break
+    for (const row of batch) await ctx.db.delete(row._id)
+    if (batch.length < 500) break
+  }
+}
+
+async function deleteAllFlashcardSetsForUser(ctx: MutationCtx, userId: string) {
+  while (true) {
+    const batch = await ctx.db
+      .query('flashcardSets')
       .withIndex('by_userId', (q) => q.eq('userId', userId))
       .take(500)
     if (batch.length === 0) break
