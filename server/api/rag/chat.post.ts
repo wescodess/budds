@@ -82,11 +82,37 @@ export default defineEventHandler(async (event) => {
       stream: true,
     })
 
+    const sources = chunks.map((chunk) => ({
+      content: chunk.content,
+      score: chunk.score,
+      attributes: chunk.attributes,
+    }))
+
+    const encoder = new TextEncoder()
+    const sourcesEvent = `event: sources\ndata: ${JSON.stringify(sources)}\n\n`
+
+    const transformedStream = new ReadableStream({
+      async start(controller) {
+        controller.enqueue(encoder.encode(sourcesEvent))
+        const reader = stream.getReader()
+        try {
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            controller.enqueue(value)
+          }
+          controller.close()
+        } catch (err) {
+          controller.error(err)
+        }
+      },
+    })
+
     setResponseHeader(event, 'Content-Type', 'text/event-stream')
     setResponseHeader(event, 'Cache-Control', 'no-cache')
     setResponseHeader(event, 'Connection', 'keep-alive')
 
-    return sendStream(event, stream)
+    return sendStream(event, transformedStream)
   }
 
   const completion = await generateCompletion({

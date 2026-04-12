@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import { createAssistantMessage, createUserMessage, createSources } from '../../support/factories/chat.factory'
 
-const chatMessagePath = ['~', 'components', 'chat', 'ChatMessage.vue'].join('/')
+const chatMessagePath = ['~', 'components', 'chat', 'Message.vue'].join('/')
 
 describe('ChatMessage — AC #1, #2', () => {
   it('[P0] should render user message with bg-muted and right-aligned', async () => {
@@ -82,5 +82,52 @@ describe('ChatMessage — AC #1, #2', () => {
 
     const badges = wrapper.findAll('button[type="button"]')
     expect(badges.length).toBe(0)
+  })
+})
+
+describe('ChatMessage — streaming (AC #1, #3)', () => {
+  it('[P0] should render blinking cursor when streaming=true on assistant message', async () => {
+    const ChatMessage = await import(chatMessagePath)
+
+    const wrapper = await mountSuspended(ChatMessage.default, {
+      props: {
+        role: 'assistant',
+        content: 'Generating response...',
+        streaming: true,
+      },
+    })
+
+    const cursor = wrapper.find('[data-testid="streaming-cursor"]')
+    expect(cursor.exists()).toBe(true)
+  })
+
+  it('[P0] should not render cursor when streaming=false', async () => {
+    const ChatMessage = await import(chatMessagePath)
+
+    const wrapper = await mountSuspended(ChatMessage.default, {
+      props: {
+        role: 'assistant',
+        content: 'Complete response.',
+        streaming: false,
+      },
+    })
+
+    const cursor = wrapper.find('[data-testid="streaming-cursor"]')
+    expect(cursor.exists()).toBe(false)
+  })
+
+  it('[P0] should not render cursor for user messages even with streaming=true', async () => {
+    const ChatMessage = await import(chatMessagePath)
+
+    const wrapper = await mountSuspended(ChatMessage.default, {
+      props: {
+        role: 'user',
+        content: 'My question',
+        streaming: true,
+      },
+    })
+
+    const cursor = wrapper.find('[data-testid="streaming-cursor"]')
+    expect(cursor.exists()).toBe(false)
   })
 })
