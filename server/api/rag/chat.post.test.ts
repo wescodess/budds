@@ -111,3 +111,119 @@ describe('POST /api/rag/chat — folderId enforcement (AC #1)', () => {
     expect(result.sources[0].attributes.filename).toBe('genetics.pdf')
   })
 })
+
+describe('POST /api/rag/chat — streaming (AC #1, #2)', () => {
+  beforeEach(() => {
+    vi.mocked(globalThis.readBody as any).mockReset()
+    vi.mocked(globalThis.searchDocuments as any).mockReset()
+    vi.mocked(globalThis.generateCompletion as any).mockReset()
+    vi.mocked(globalThis.generateCompletionStream as any).mockReset()
+    vi.mocked(globalThis.setResponseHeader as any).mockReset()
+    vi.mocked(globalThis.sendStream as any).mockReset()
+  })
+
+  test('[P0] should call generateCompletionStream when stream: true', async () => {
+    const mockStream = new ReadableStream({
+      start(controller) { controller.close() },
+    })
+    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+      query: 'What is photosynthesis?',
+      model: 'openai/gpt-4o-mini',
+      folderId: 'folder_abc',
+      stream: true,
+    })
+    vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({ data: [] })
+    vi.mocked(globalThis.generateCompletionStream as any).mockResolvedValue(mockStream)
+    vi.mocked(globalThis.sendStream as any).mockReturnValue(undefined)
+
+    await handler(mockEvent)
+
+    expect(globalThis.generateCompletionStream).toHaveBeenCalledWith(
+      expect.objectContaining({ stream: true }),
+    )
+    expect(globalThis.generateCompletion).not.toHaveBeenCalled()
+  })
+
+  test('[P0] should set SSE headers for streaming response', async () => {
+    const mockStream = new ReadableStream({
+      start(controller) { controller.close() },
+    })
+    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+      query: 'Test',
+      model: 'openai/gpt-4o-mini',
+      folderId: 'folder_abc',
+      stream: true,
+    })
+    vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({ data: [] })
+    vi.mocked(globalThis.generateCompletionStream as any).mockResolvedValue(mockStream)
+    vi.mocked(globalThis.sendStream as any).mockReturnValue(undefined)
+
+    await handler(mockEvent)
+
+    expect(globalThis.setResponseHeader).toHaveBeenCalledWith(mockEvent, 'Content-Type', 'text/event-stream')
+    expect(globalThis.setResponseHeader).toHaveBeenCalledWith(mockEvent, 'Cache-Control', 'no-cache')
+    expect(globalThis.setResponseHeader).toHaveBeenCalledWith(mockEvent, 'Connection', 'keep-alive')
+  })
+
+  test('[P0] should call sendStream with the transformed stream', async () => {
+    const mockStream = new ReadableStream({
+      start(controller) { controller.close() },
+    })
+    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+      query: 'Test',
+      model: 'openai/gpt-4o-mini',
+      folderId: 'folder_abc',
+      stream: true,
+    })
+    vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({ data: [] })
+    vi.mocked(globalThis.generateCompletionStream as any).mockResolvedValue(mockStream)
+    vi.mocked(globalThis.sendStream as any).mockReturnValue(undefined)
+
+    await handler(mockEvent)
+
+    expect(globalThis.sendStream).toHaveBeenCalledWith(mockEvent, expect.any(ReadableStream))
+  })
+
+  test('[P0] should prepend sources event in the transformed stream', async () => {
+    const mockStream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n'))
+        controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'))
+        controller.close()
+      },
+    })
+    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+      query: 'What is DNA?',
+      model: 'openai/gpt-4o-mini',
+      folderId: 'folder_bio',
+      stream: true,
+    })
+    vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({
+      data: [
+        { id: '1', content: 'DNA content', score: 0.9, attributes: { filename: 'bio.pdf' } },
+      ],
+    })
+    vi.mocked(globalThis.generateCompletionStream as any).mockResolvedValue(mockStream)
+
+    let capturedStream: ReadableStream | null = null
+    vi.mocked(globalThis.sendStream as any).mockImplementation((_event: any, stream: ReadableStream) => {
+      capturedStream = stream
+    })
+
+    await handler(mockEvent)
+
+    const reader = capturedStream!.getReader()
+    const decoder = new TextDecoder()
+    let output = ''
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      output += decoder.decode(value, { stream: true })
+    }
+
+    expect(output).toContain('event: sources')
+    expect(output).toContain('"content":"DNA content"')
+    expect(output).toContain('"score":0.9')
+    expect(output).toContain('data: {"choices"')
+  })
+})
