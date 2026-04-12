@@ -14,6 +14,15 @@
 - **~~`lastActivity` shows folder `_creationTime` not actual last activity~~** — Added `updatedAt` field to folders schema. `CourseCard.vue` now uses `updatedAt ?? _creationTime`. `createFolder` sets `updatedAt: Date.now()`.
 - **~~JWKS bootstrap undocumented~~** — Created `scripts/bootstrap-jwks.sh` automation script and documented setup steps in `CLAUDE.md`.
 
+## Deferred from: code review of story-5.3 (2026-04-12)
+
+- **Governing-law jurisdiction placeholder in `app/pages/terms.vue` section 5.** Tier-3 legal decision intentionally not picked by the agent. Must be finalised by the project owner (counsel) before general availability; during private beta the placeholder is acceptable and transparent to users.
+- **No rate-limit / abuse guard on `GET /api/export/me`.** An authenticated user can spam exports in a loop, triggering repeated Convex scans + R2 fetches + zip assembly. Acceptable for private beta; add a per-user rate limiter (e.g., once per 5 minutes) before GA.
+- **Mid-stream error handling truncates the zip without client signal.** If a `fetch(blobUrl)` fails after headers are flushed, `writer.abort(err)` tears down the response and the client ends up with a corrupt `.zip`. AC #4 requires streaming so fixing this means either buffering+finalising manifest on error, or emitting a sentinel entry. Defer: realistic failure rate is low, and the manifest's `unresolvedDocuments` list already captures the typical case (blob-missing, handled before streaming). Follow-up: add server-side error logging so silent partial exports are observable.
+- **`collectUserData` is unbounded.** Convex caps single-query reads at 16,384 documents. An extreme-outlier user with more conversations/messages than that would see a 500 from Convex. Realistic V1 usage is far under the cap (AC #4 targets 500 docs), but when we exceed ~5k messages per user we should paginate the query and stream JSON entries rather than buffering the full arrays.
+- **No `pnpm lint` / `pnpm typecheck` scripts.** `package.json` has only `build`, `dev`, `test`, `test:component`. Adding `"lint": "eslint ."` and `"typecheck": "vue-tsc --noEmit"` would let the bmad-story-runner run the full check pipeline and reduce drift. Low urgency — `pnpm test` is the gate today.
+- **`collectUserData` returns full document rows including `r2Key`, `indexJobId`, `failureReason`.** Acceptable since they describe the user's own data, but a security-conscious review may want to mask internal ingestion identifiers. Revisit if the export becomes a customer-facing artifact with compliance requirements.
+
 ## Deferred from: code review of story-5.2 (2026-04-12)
 
 - **`deleteDocumentFromR2` internal action is now dead code** — `convex/documentActions.ts:259-289` is no longer referenced after Story 5.2 rerouted `documents.deleteDocument` through the `pendingCleanup` queue. Safe to delete in a follow-up commit (single file, no API surface change — it is an `internalAction`). Deferred to avoid widening the diff during the cleanup-path refactor.

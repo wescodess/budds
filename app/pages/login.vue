@@ -18,6 +18,11 @@ async function loginWithGoogle() {
       >
         Continue with Google
       </button>
+      <div class="flex items-center justify-center gap-4 text-xs text-muted-foreground">
+        <NuxtLink to="/terms" class="hover:text-foreground">Terms of Service</NuxtLink>
+        <span aria-hidden="true">·</span>
+        <NuxtLink to="/privacy" class="hover:text-foreground">Privacy Policy</NuxtLink>
+      </div>
     </div>
   </div>
 </template>
