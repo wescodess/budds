@@ -17,6 +17,11 @@ const { data: quizData } = useConvexQuery(
   computed(() => ({ id: props.quizId })),
 )
 
+const { data: attemptsData } = useConvexQuery(
+  api.quizzes.listAttempts,
+  computed(() => ({ quizId: props.quizId })),
+)
+
 const submitAttemptMutation = import.meta.client
   ? useConvexMutation(api.quizzes.submitAttempt)
   : {
@@ -26,25 +31,58 @@ const submitAttemptMutation = import.meta.client
 
 type TakerState = 'loading' | 'answering' | 'submitting' | 'results' | 'error'
 const state = ref<TakerState>('loading')
+const reviewMode = ref(false)
 const answerState = ref<Record<string, string>>({})
 const resultsByQuestion = ref<Record<string, QuestionResult>>({})
 const scoreSummary = ref<{ correct: number; total: number } | null>(null)
+const hydratedFromAttempt = ref(false)
 
 const quiz = computed(() => quizData.value?.quiz ?? null)
 const questions = computed(() => quizData.value?.questions ?? [])
 
+function hydrateFromAttempt() {
+  const quizLoaded = quizData.value
+  const attempts = attemptsData.value
+  if (!quizLoaded || !attempts || attempts.length === 0) return
+  const latest = attempts[0]
+  if (!latest) return
+  const byId: Record<string, QuestionResult> = {}
+  const questionMap = new Map<string, { correctAnswer: string }>()
+  for (const q of quizLoaded.questions ?? []) {
+    questionMap.set(String(q._id), { correctAnswer: q.correctAnswer })
+  }
+  for (const a of latest.answers ?? []) {
+    const qid = String(a.questionId)
+    byId[qid] = {
+      isCorrect: a.isCorrect,
+      correctAnswer: questionMap.get(qid)?.correctAnswer ?? '',
+      userResponse: a.response,
+    }
+  }
+  resultsByQuestion.value = byId
+  scoreSummary.value = { correct: latest.score, total: latest.total }
+  reviewMode.value = true
+  state.value = 'results'
+  hydratedFromAttempt.value = true
+}
+
 watch(
-  quizData,
-  (val) => {
-    if (state.value === 'submitting' || state.value === 'results') return
-    if (val === undefined) {
-      state.value = 'loading'
+  [quizData, attemptsData],
+  ([quizVal, attemptsVal]) => {
+    if (state.value === 'submitting') return
+    if (quizVal === undefined) {
+      if (!hydratedFromAttempt.value) state.value = 'loading'
       return
     }
-    if (val === null) {
+    if (quizVal === null) {
       state.value = 'error'
       return
     }
+    if (!hydratedFromAttempt.value && Array.isArray(attemptsVal) && attemptsVal.length > 0) {
+      hydrateFromAttempt()
+      return
+    }
+    if (state.value === 'results') return
     state.value = 'answering'
   },
   { immediate: true },
@@ -110,6 +148,15 @@ const scorePercent = computed(() => {
   return Math.round((scoreSummary.value.correct / scoreSummary.value.total) * 100)
 })
 
+function handleRetake() {
+  answerState.value = {}
+  resultsByQuestion.value = {}
+  scoreSummary.value = null
+  reviewMode.value = false
+  hydratedFromAttempt.value = true
+  state.value = 'answering'
+}
+
 function handleBack() {
   emit('back')
 }
@@ -150,15 +197,23 @@ function handleBack() {
         <p class="mt-1 text-lg text-muted-foreground" data-testid="quiz-results-percent">
           {{ scorePercent }}%
         </p>
-        <UiButton
-          class="mt-4"
-          variant="outline"
-          size="sm"
-          data-testid="quiz-results-back"
-          @click="handleBack"
-        >
-          Back to quiz list
-        </UiButton>
+        <div class="mt-4 flex items-center justify-center gap-2">
+          <UiButton
+            variant="outline"
+            size="sm"
+            data-testid="quiz-results-back"
+            @click="handleBack"
+          >
+            Back to quiz list
+          </UiButton>
+          <UiButton
+            size="sm"
+            data-testid="quiz-taker-retake"
+            @click="handleRetake"
+          >
+            Retake quiz
+          </UiButton>
+        </div>
       </div>
 
       <div class="space-y-3">

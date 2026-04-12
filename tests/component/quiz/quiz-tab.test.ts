@@ -25,6 +25,15 @@ mockNuxtImport('useQuizzes', () => {
   })
 })
 
+const mockDeleteQuiz = vi.fn()
+
+mockNuxtImport('useConvexMutation', () => {
+  return (_api: unknown) => ({
+    mutate: mockDeleteQuiz,
+    isLoading: ref(false),
+  })
+})
+
 const quizTabPath = ['~', 'components', 'quiz', 'Tab.vue'].join('/')
 
 describe('QuizTab — Story 6.1 AC #5, #6, #7', () => {
@@ -34,6 +43,7 @@ describe('QuizTab — Story 6.1 AC #5, #6, #7', () => {
     mockGenerating.value = false
     mockLastError.value = null
     mockGenerate.mockReset()
+    mockDeleteQuiz.mockReset()
   })
 
   it('[P0] renders empty-no-docs state when no indexed documents exist', async () => {
@@ -112,6 +122,61 @@ describe('QuizTab — Story 6.1 AC #5, #6, #7', () => {
     expect(wrapper.text()).toContain('Krebs Cycle Quiz')
     expect(wrapper.find('[data-testid="quiz-score-badge"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="quiz-score-badge"]').text()).toContain('80')
+  })
+
+  it('[P0] quiz-card-menu toggles inline actions row with Edit and Delete (Story 6.3 AC #3)', async () => {
+    const QuizTab = await import(quizTabPath)
+    mockHasIndexedDocuments.value = true
+    mockQuizzes.value = [
+      {
+        _id: 'quiz_1',
+        _creationTime: Date.now(),
+        title: 'Bio',
+        status: 'ready',
+        questionCount: 5,
+      },
+    ]
+
+    const wrapper = await mountSuspended(QuizTab.default, {
+      props: { folderId: 'folder_abc' },
+    })
+
+    expect(wrapper.find('[data-testid="quiz-card-actions"]').exists()).toBe(false)
+    await wrapper.find('[data-testid="quiz-card-menu"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="quiz-card-actions"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="quiz-card-edit"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="quiz-card-delete"]').exists()).toBe(true)
+  })
+
+  it('[P0] delete flow: Delete → Confirm delete invokes deleteQuiz mutation (Story 6.3 AC #4)', async () => {
+    const QuizTab = await import(quizTabPath)
+    mockHasIndexedDocuments.value = true
+    mockQuizzes.value = [
+      {
+        _id: 'quiz_1',
+        _creationTime: Date.now(),
+        title: 'Bio',
+        status: 'ready',
+        questionCount: 5,
+      },
+    ]
+    mockDeleteQuiz.mockResolvedValue(undefined)
+
+    const wrapper = await mountSuspended(QuizTab.default, {
+      props: { folderId: 'folder_abc' },
+    })
+
+    await wrapper.find('[data-testid="quiz-card-menu"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="quiz-card-delete"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="quiz-card-delete-confirm"]').exists()).toBe(true)
+    await wrapper.find('[data-testid="quiz-card-delete-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(mockDeleteQuiz).toHaveBeenCalledTimes(1)
+    expect(mockDeleteQuiz.mock.calls[0]![0]).toEqual({ quizId: 'quiz_1' })
   })
 
   it('[P1] renders shimmer placeholders while generating', async () => {
