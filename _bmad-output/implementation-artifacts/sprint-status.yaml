@@ -36,6 +36,7 @@
 
 generated: 2026-04-09
 last_updated: '2026-04-12'
+# Epic 4 retrospective completed 2026-04-12 (epic-4-retro-2026-04-12.md); epic-4 → done, epic-4-retrospective → done; 5 Epic 5 prep items identified (2 P0, 3 P1)
 # Story 4.4 code review PASS 2026-04-12: 5 deferred items (no blockers), status → done
 # Story 4.4 dev completed, status → review 2026-04-12
 # Story 4.4 dev started 2026-04-12
@@ -58,7 +59,7 @@ story_location_note: Story 3.2 created 2026-04-11
 
 
 
-retrospective_location: _bmad-output/implementation-artifacts/epic-3-retro-2026-04-11.md
+retrospective_location: _bmad-output/implementation-artifacts/epic-4-retro-2026-04-12.md
 project: budds
 
 project_key: NOKEY
@@ -83,12 +84,12 @@ development_status:
   3-3-delete-documents-and-move-between-folders: done
   epic-3-retrospective: done
 
-  epic-4: in-progress
+  epic-4: done
   4-1-folder-scoped-rag-chat-with-source-citations: done
   4-2-streaming-chat-responses: done
   4-3-model-selection: done
   4-4-chat-history-and-conversation-management: done
-  epic-4-retrospective: optional
+  epic-4-retrospective: done
 
   epic-5: backlog
   5-1-account-deletion-with-cascading-data-cleanup: backlog
