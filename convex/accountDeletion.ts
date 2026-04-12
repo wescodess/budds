@@ -12,6 +12,42 @@ export function backoffMs(attempts: number): number {
   return Math.min(BASE_BACKOFF_MS * Math.pow(2, capped), MAX_BACKOFF_MS)
 }
 
+export async function enqueueDocumentCleanup(
+  ctx: MutationCtx,
+  args: {
+    userId: string
+    documentId: string
+    status: Doc<'documents'>['status']
+    r2Key?: string
+  },
+): Promise<{ r2Enqueued: boolean; aiSearchEnqueued: boolean }> {
+  let r2Enqueued = false
+  let aiSearchEnqueued = false
+
+  if (args.r2Key) {
+    await ctx.db.insert('pendingCleanup', {
+      userId: args.userId,
+      documentId: args.documentId,
+      r2Key: args.r2Key,
+      kind: 'r2',
+      attempts: 0,
+    })
+    r2Enqueued = true
+  }
+
+  if (args.status === 'success' || args.status === 'indexing') {
+    await ctx.db.insert('pendingCleanup', {
+      userId: args.userId,
+      documentId: args.documentId,
+      kind: 'ai-search',
+      attempts: 0,
+    })
+    aiSearchEnqueued = true
+  }
+
+  return { r2Enqueued, aiSearchEnqueued }
+}
+
 export const deleteAccountCascade = internalMutation({
   args: {},
   handler: async (ctx) => {
@@ -28,24 +64,13 @@ export const deleteAccountCascade = internalMutation({
     let enqueuedAiSearchPerDoc = 0
 
     for (const doc of documents) {
-      if (doc.r2Key) {
-        await ctx.db.insert('pendingCleanup', {
-          userId,
-          documentId: String(doc._id),
-          r2Key: doc.r2Key,
-          kind: 'r2',
-          attempts: 0,
-        })
-      }
-      if (doc.status === 'success' || doc.status === 'indexing') {
-        await ctx.db.insert('pendingCleanup', {
-          userId,
-          documentId: String(doc._id),
-          kind: 'ai-search',
-          attempts: 0,
-        })
-        enqueuedAiSearchPerDoc++
-      }
+      const { aiSearchEnqueued } = await enqueueDocumentCleanup(ctx, {
+        userId,
+        documentId: String(doc._id),
+        status: doc.status,
+        r2Key: doc.r2Key,
+      })
+      if (aiSearchEnqueued) enqueuedAiSearchPerDoc++
       try {
         await ctx.storage.delete(doc.fileId)
       } catch {
