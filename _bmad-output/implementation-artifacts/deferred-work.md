@@ -1,5 +1,13 @@
 # Deferred Work
 
+## Deferred from: code review of story-7.1 (2026-04-12)
+
+- **AC #6 cosmetic deviation — Generate button hidden during generating instead of showing "Generating…" spinner label.** `app/components/flashcards/Tab.vue` renders the shimmer branch (`v-else-if="generating"`) without a disabled button. AC wording requested "button shows a spinner and the label 'Generating…'; the button is disabled; no layout shift". Functionally equivalent (user cannot double-submit), but literal AC text not satisfied. One-line template addition would restore strict compliance.
+- **`sourceDocumentId` resolution allows cross-folder same-user documents.** `convex/flashcards.ts` `createSetWithCards` accepts any documents row the user owns, not only rows inside `args.folderId`. Not a tenant leak (ownership still enforced), but a card provenance can point at a doc outside the containing folder if the LLM fabricates a matching documentId. Tighten by additionally asserting `doc.folderId === args.folderId` at resolution time.
+- **Out-of-range `sourceIndex` silently falls back without logging.** `server/api/flashcards/generate.post.ts:61` uses `chunks[c.sourceIndex] ?? chunks[index] ?? chunks[0]!` — if the LLM emits nonsense indexes, the card text references a mismatched chunk with no observability. Add `console.warn` on first out-of-range hit per request for triage.
+- **No rate limiting on `POST /api/flashcards/generate`.** Cost-bearing path (AI Search + AI Gateway). Same class as `/api/quiz/generate` and `/api/export/me`. Defer to V1.x global abuse guard.
+- **Trailing-comma cleaner regex `,(\s*[}\]])` is over-broad.** `server/utils/flashcard-prompt.ts#tryJsonParse` could in theory strip `,]` inside a quoted string. Realistic LLM risk is near-zero but technically incorrect; replace with a tolerant-parser dependency in a follow-up if reliability ever degrades.
+
 ## Resolved during Epic 2 retrospective prep (2026-04-11)
 
 - **~~Unprotected `/api/rag/*` routes~~** — Added `requireUserSession(event)` to `chat.post.ts` and `search.post.ts`. Unauthenticated requests now return 401.
@@ -113,14 +121,6 @@ Skipped cases:
 
 **Follow-up story scope (bounded):** rewrite `documentActions.test.ts` to mock `S3Client` and the AI Search jobs endpoint; re-assert status transitions, metadata fields on the R2 PUT, and the sync-job POST. Out of scope for 6-1 — already folded in the 30-min budget triage decision.
 
-## Deferred from: Story 6-1 — tests/component/chat/chat-input.test.ts baseline (2026-04-12)
+## ~~Deferred from: Story 6-1 — tests/component/chat/chat-input.test.ts baseline (2026-04-12)~~ — Resolved in Story 7.1 (2026-04-12)
 
-Independently discovered during Story 6-1's full `pnpm test:component` run: 6 tests in `tests/component/chat/chat-input.test.ts` fail on the Epic 5 baseline (verified via `git stash` + branch-checkout on 2026-04-12). Not caused by 6-1 — kept out of scope per the story's 30-minute triage budget framing. All 6 target the same file; likely a similar ingestion-style drift (component API changed). Follow-up story: audit `ChatInput.vue` event/disabled contract vs the test's assertions; same "fix, delete, or .skip" options as the documentActions triage.
-
-Failing cases:
-- [P0] should emit submit with trimmed message when Enter is pressed
-- [P0] should insert newline on Shift+Enter instead of submitting
-- [P0] should prevent empty or whitespace-only submissions
-- [P0] should disable textarea and send button when disabled prop is true
-- [P1] should disable send button when input is empty
-- [P1] should expose focus() method via defineExpose
+All 6 failures shared a single root cause: `chatInputPath` pointed at `~/components/chat/ChatInput.vue`, but the production file lives at `~/components/chat/Input.vue` (Nuxt auto-component convention). One-line fix in `tests/component/chat/chat-input.test.ts`. All 6 tests now pass. Task 9 of Story 7.1 under the 30-min prep-P0-#1 triage budget.
