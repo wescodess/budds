@@ -1,6 +1,6 @@
 mode: running
 current_phase: epic-story
-current_story: 6-1-generate-quiz-from-folder-documents
+current_story: 6-2-take-quiz-and-view-results
 current_epic: 6
 retry_count: 0
 last_epic_complete_fired: 5
@@ -101,8 +101,8 @@ paths:
   ux_spec: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/ux-design-specification.md
 
 counters:
-  stories_completed_this_run: 4
-  stories_completed_total: 4
+  stories_completed_this_run: 5
+  stories_completed_total: 5
 
 escalation:
   pending: null
@@ -156,6 +156,8 @@ escalation:
 
 decisions_log:
   - ts: '2026-04-12'
+    decision: story-runner PASS for 6-1 (0 deferred, 0 blockers, 4 retro prep items addressed — #2 #3 #5 #6). PR #19 merged 0edd8ef. Telegram notified. 5-story checkpoint reached (5/5 this run); continuing to 6-2 per auto-decision policy.
+  - ts: '2026-04-12'
     decision: epic-boundary 5→6 — user chose proceed_to_6_1_with_prep_inside (matches Epic 5 precedent). 8 prep items fold into story ACs; P0 #3 (Reka-portal mountSuspended) as sub-task of 6-1 with BLOCKED escape if scope explodes. Checkpointing state; spawning bmad-story-runner for 6-1.
   - ts: '2026-04-12'
     decision: start invoked; classified next item as 4-4 in review state with dirty workspace; escalated rather than autospawn runner
@@ -171,6 +173,13 @@ decisions_log:
     decision: story-runner PASS for 5-3 (6 deferred, 0 blockers); PR #17 merged ff3ae38. All epic-5 application stories done. Epic-boundary escalation raised (retro optional) — halting for user.
 
 run_log:
+  - ts: '2026-04-12'
+    mode: resume
+    note: |
+      Spawned bmad-story-runner for 6-1 (after user answer: proceed_to_6_1_with_prep_inside, state checkpointed c488b02).
+      Runner PASS: PR #19 merged 0edd8ef, 22 files, 13/13 tasks, lint+typecheck+unit+component PASS, 0 deferred, 0 blockers.
+      Retro prep items addressed inside story: #2 (prompt spike), #3 (Reka-portal — QuizTab extracted, Decision+PR), #5 (documentActions baseline triaged + skipped), #6 (cascade re-audit). Runner self-updated sprint-status 6-1 → done, epic-6 → in-progress.
+      Counters 4→5 this-run. 5-story checkpoint tripped. Telegram notified (PASS + checkpoint). Proceeding to 6-2.
   - ts: '2026-04-12'
     mode: resume
     note: |
