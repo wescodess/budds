@@ -1,6 +1,6 @@
 mode: running
 current_phase: epic-story
-current_story: 6-2-take-quiz-and-view-results
+current_story: 6-3-edit-questions-and-view-previous-quizzes
 current_epic: 6
 retry_count: 0
 last_epic_complete_fired: 5
@@ -99,8 +99,8 @@ paths:
   ux_spec: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/ux-design-specification.md
 
 counters:
-  stories_completed_this_run: 5
-  stories_completed_total: 5
+  stories_completed_this_run: 6
+  stories_completed_total: 6
 
 escalation:
   pending: null
@@ -154,6 +154,8 @@ escalation:
 
 decisions_log:
   - ts: '2026-04-12'
+    decision: story-runner PASS for 6-2 (0 deferred, 0 blockers, 11/11 ACs, quizAttempts table + submit/score pipeline + cascade re-audit + export schema v3). PR #20 merged efd0693. Telegram notified. Advancing to 6-3.
+  - ts: '2026-04-12'
     decision: story-runner PASS for 6-1 (0 deferred, 0 blockers, 4 retro prep items addressed — #2 #3 #5 #6). PR #19 merged 0edd8ef. Telegram notified. 5-story checkpoint reached (5/5 this run); continuing to 6-2 per auto-decision policy.
   - ts: '2026-04-12'
     decision: epic-boundary 5→6 — user chose proceed_to_6_1_with_prep_inside (matches Epic 5 precedent). 8 prep items fold into story ACs; P0 #3 (Reka-portal mountSuspended) as sub-task of 6-1 with BLOCKED escape if scope explodes. Checkpointing state; spawning bmad-story-runner for 6-1.
@@ -171,6 +173,12 @@ decisions_log:
     decision: story-runner PASS for 5-3 (6 deferred, 0 blockers); PR #17 merged ff3ae38. All epic-5 application stories done. Epic-boundary escalation raised (retro optional) — halting for user.
 
 run_log:
+  - ts: '2026-04-12'
+    mode: resume
+    note: |
+      Spawned bmad-story-runner for 6-2. Runner PASS: PR #20 merged efd0693, 17 files, 10/10 tasks, 11/11 ACs, unit+component PASS (212/8-skip; quiz suite 17/17), 0 deferred, 0 blockers.
+      New quizAttempts table + submitAttempt/listAttempts. Cascade re-audit child-before-parent preserved. Export schema v2→v3 with quizAttempts.json. Reka-portal safety maintained (RadioGroup over portal primitives). ATDD honored (6 failing tests first, then impl).
+      Runner self-committed status changes (201c348) and verdict (2ebef53). Counters 5→6 this-run. Telegram notified. Advancing to 6-3.
   - ts: '2026-04-12'
     mode: resume
     note: |
