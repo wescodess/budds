@@ -6,44 +6,44 @@ retry_count: 0
 
 last_verdict:
   subagent: bmad-story-runner
-  story: 5-2-document-deletion-index-cleanup-validation
+  story: 5-3-data-export-and-legal-pages
   epic: 5
   status: PASS
-  pr_url: https://github.com/wescodess/budds/pull/16
-  branch: feat/5-2-document-deletion-index-cleanup-validation
-  commit_sha: a0522104d26bd1ae9d3c28b0c4b61a3de82ba45d
-  merge_commit: ce18bd5
-  merged_at: '2026-04-12T08:15:00Z'
-  files_changed: 9
-  tasks_completed: 8
-  tasks_total: 8
-  findings_deferred: 1
+  pr_url: https://github.com/wescodess/budds/pull/17
+  branch: feat/5-3-data-export-and-legal-pages
+  commit_sha: 1c8375d
+  merge_commit: ff3ae38
+  merged_at: '2026-04-12T09:00:00Z'
+  files_changed: 14
+  tasks_completed: 13
+  tasks_total: 13
+  findings_deferred: 6
   lint_pass: null
   typecheck_pass: null
   unit_tests_pass: true
   e2e_tests_pass: null
   review_pass: true
   summary: |
-    Story 5.2 shipped end-to-end. Closes the Story 3.3 deferred gap where `documents.deleteDocument` never removed chunks from the Cloudflare AI Search index. Introduced a shared `enqueueDocumentCleanup` helper in `convex/accountDeletion.ts` consumed by three call sites (account cascade, per-document delete, folder cascade) — reuses Story 5.1's `pendingCleanup` durable queue + `drainPendingCleanup` retry worker (exponential backoff, 10-attempt cap, idempotent). Also fixed an Epic 2-era latent bug in `folders.deleteFolder` where `deletedDocuments` was hardcoded to `0` — cascade now actually deletes documents, their Convex file blobs, and enqueues external cleanup. No schema changes; no UI changes. 10 new Convex integration tests (6 on `documents.deleteDocument`, 4 on `folders.deleteFolder` cascade); 3 pre-existing tests updated to assert the new scheduler target (`drainPendingCleanup`). Full suite parity with 5.1 baseline (170/178 pass, 8 pre-existing documentActions failures; component 64+78-skipped+6-pre-existing chat-input failures). Code review: 0 blockers, 1 deferred item (orphaned `deleteDocumentFromR2` internal action — safe follow-up deletion). PR #16 merged into dev as ce18bd5.
+    Story 5.3 shipped end-to-end. Closes the final Epic 5 application story (user-data rights — export + legal pages). Added `GET /api/export/me` that streams a `.zip` via `fflate.Zip` + `TransformStream`, containing `manifest.json` (schemaVersion 1, counts, unresolvedDocuments), per-collection JSONs (folders/documents/conversations/messages/quizzes/flashcards), and original PDF bytes per resolvable document. Two new Convex queries in `convex/dataExport.ts`, both scoped via `ctx.auth.getUserIdentity()` — no `userId` args. Sidebar footer menu gains "Export my data" with spinner + toast feedback; login page footer links to new `/terms` and `/privacy` pages, both SSR with `layout:false`. 10 new tests (7 `convex-test` for isolation + shape, 3 streaming-zip tests using `unzipSync` for bit-for-bit assertion). Full suite: 180/188 (carried-forward 8 `documentActions.test.ts` baseline failures, unrelated). Skipped tea-atdd because browser blob-download flows are unreliable in Playwright and substituted higher-fidelity integration tests. Governing-law jurisdiction intentionally left as a placeholder per tier-3 legal-decision escalation policy. Code review: 0 blockers, 6 deferred items (governing-law placeholder, no rate-limit on export, mid-stream error telemetry, Convex 16k-doc cap, missing lint/typecheck scripts, r2Key leak-vs-own-data acceptability). PR #17 merged into dev as ff3ae38. Mid-run recovered from a self-inflicted `git checkout` that reverted tracked changes — restored via `git stash pop`, no data loss, noted in story Decisions log for audit.
   block_reason: null
   block_context: null
-  at: '2026-04-12T08:15:00Z'
+  at: '2026-04-12T09:00:00Z'
   commits:
-    - a052210 feat: add AI Search chunk cleanup to document + folder delete paths
-    - 392cbca chore(bmad): close story 5.2 — code review PASS, 1 deferred item logged
-  deferred_items: 1
+    - 1c8375d feat: add data export and legal pages
+    - dcf85bc chore(bmad): close story 5.3 — code review PASS, 6 deferred items logged
+  deferred_items: 6
   blockers: 0
 
 prior_last_verdict:
-  story: 5-1-account-deletion-with-cascading-data-cleanup
+  story: 5-2-document-deletion-index-cleanup-validation
   status: PASS
   commits:
-    - 965e793 feat: add account deletion with cascading data cleanup
-    - 72ca242 chore(bmad): close story 5.1 — code review PASS, 4 deferred items logged
-  pr_url: https://github.com/wescodess/budds/pull/15
-  merge_commit: c8a6955
-  merged_at: '2026-04-12T07:33:33Z'
-  deferred_items: 4
+    - a052210 feat: add AI Search chunk cleanup to document + folder delete paths
+    - 392cbca chore(bmad): close story 5.2 — code review PASS, 1 deferred item logged
+  pr_url: https://github.com/wescodess/budds/pull/16
+  merge_commit: ce18bd5
+  merged_at: '2026-04-12T08:15:00Z'
+  deferred_items: 1
   blockers: 0
 
 last_retro:
@@ -91,8 +91,8 @@ paths:
   ux_spec: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/ux-design-specification.md
 
 counters:
-  stories_completed_this_run: 3
-  stories_completed_total: 3
+  stories_completed_this_run: 4
+  stories_completed_total: 4
 
 escalation:
   pending: null
