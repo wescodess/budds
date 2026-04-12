@@ -1,6 +1,6 @@
 # Story 7.3: Edit, Delete, and Manage Flash Card Sets
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -250,6 +250,32 @@ No files deleted.
 
 ### Decisions
 
+- **No-portal inline swap-in-place pattern** — both Tab row actions and Editor per-card actions use plain `v-if` blocks swapping Edit/Delete with Confirm-delete/Cancel. Matches the 6-3 quiz template verbatim; zero Reka-portaled primitives. Enables `mountSuspended` coverage of all flows.
+- **Child-before-parent cascade in deleteSet** — iterates `flashcards` by `by_setId` in 500-row batches, deletes each, then deletes the parent `flashcardSets` row. Mirrors the `deleteAllFlashcardsForUser` ordering already in account cascade.
+- **Source-field immutability in updateCard (defense in depth)** — Convex arg validator rejects any field other than `{cardId, front, back}`; `ctx.db.patch` only touches those fields; Convex unit test asserts pre/post equality on `setId`, `userId`, `order`, `sourceDocumentId`, `sourceChunkContent`, `sourceFilename`.
+- **schemaVersion unchanged at 4** — no new tables, no new indexes, no `convex/schema.ts` diff, no `convex/dataExport.ts` bump. Confirmed by `git diff --name-only HEAD~1 HEAD` showing neither file touched.
+- **Atomic cardCount decrement** — `deleteCard` performs `ctx.db.delete` + `ctx.db.patch(set, { cardCount })` inside the same mutation transaction (Convex mutations are transactional). No race, no stale read.
+- **No SSR client-only regression** — `useConvexMutation` calls are wrapped in `import.meta.client` SSR-guards matching the pattern shipped in 6-3 quiz/Tab.vue and 7-2 flashcards/Tab.vue.
+
 ### File List
 
+New files:
+- `app/components/flashcards/Editor.vue` — in-tab editor surface with per-card read/edit/confirm-delete rows
+- `tests/component/flashcards/flashcards-editor.atdd.test.ts` — red-first ATDD scaffold for Task 4
+
+Modified files:
+- `app/components/flashcards/Tab.vue` — set-row ellipsis menu + inline actions row + editor-branch
+- `convex/flashcards.ts` — `updateCard`, `deleteCard`, `deleteSet` mutations
+- `convex/flashcards.test.ts` — 11 new `[P0]` unit tests across the three mutations
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` — status progression
+
+Unchanged (verified):
+- `convex/schema.ts`, `convex/dataExport.ts`, `convex/accountDeletion.ts`, `app/composables/useFlashcards.ts`, `app/components/flashcards/Study.vue`
+
 ### Change Log
+
+- **Convex mutations**: `flashcards.updateCard` (trim + non-empty server validation, identity+ownership gate, patches only `front`/`back`), `flashcards.deleteCard` (cascade-safe parent count decrement floor-0), `flashcards.deleteSet` (batched child-before-parent cascade with `{ deletedCards }` return).
+- **Tab.vue**: added `openMenuSetId`, `confirmingDeleteSetId`, `editingSetId`, `deleting`, `liveMessage` refs; ellipsis icon per set row; inline actions row with swap-in-place confirm-delete; editor-branch `v-if` above study-branch; polite live-region for delete-success announcement.
+- **Editor.vue**: loading/error/ready tri-state; per-card read-only row; per-card edit mode (front + back textareas + Save/Cancel + inline error); per-card confirm-delete swap; back-to-sets emit; source citation badge + chunk preview always visible but read-only.
+- **Tests**: 31/31 flashcards component tests pass (6 new ATDD cases for Editor.vue flow); 11 new Convex unit tests pass (3 describes × unauth/cross-user/success + cascade scope + last-card-zero invariant + source-field immutability).
+- **Schema stability**: `convex/schema.ts` unchanged, `convex/dataExport.ts` schemaVersion remains 4.
