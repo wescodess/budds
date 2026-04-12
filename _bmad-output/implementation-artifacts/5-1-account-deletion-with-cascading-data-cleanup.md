@@ -1,6 +1,6 @@
 # Story 5.1: Account Deletion with Cascading Data Cleanup
 
-Status: review
+Status: done
 
 ## Story
 
