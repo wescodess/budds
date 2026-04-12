@@ -282,7 +282,85 @@ export const deleteDocumentFromR2 = internalAction({
       }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error)
-      console.error(`R2 delete error: ${message}`)
+      const isNotFound = message.includes('NoSuchKey') || message.includes('404')
+      if (!isNotFound) console.error(`R2 delete error: ${message}`)
+    }
+  },
+})
+
+function isAwsNotFound(error: unknown): boolean {
+  if (!error) return false
+  const e = error as { name?: string; Code?: string; $metadata?: { httpStatusCode?: number } }
+  if (e.name === 'NoSuchKey' || e.Code === 'NoSuchKey') return true
+  if (e.$metadata?.httpStatusCode === 404) return true
+  const msg = error instanceof Error ? error.message : String(error)
+  return msg.includes('NoSuchKey') || msg.includes('404')
+}
+
+export const performCleanupAttempt = internalAction({
+  args: {
+    kind: v.union(v.literal('ai-search'), v.literal('r2')),
+    userId: v.string(),
+    documentId: v.string(),
+    r2Key: v.optional(v.string()),
+  },
+  handler: async (_ctx, args): Promise<{ ok: true } | { ok: false; error: string }> => {
+    try {
+      if (args.kind === 'r2') {
+        if (!args.r2Key) return { ok: true }
+        const bucket = process.env.R2_BUCKET_NAME
+        if (!bucket) return { ok: true }
+        try {
+          const r2 = getR2Client()
+          await r2.send(new DeleteObjectCommand({ Bucket: bucket, Key: args.r2Key }))
+          return { ok: true }
+        } catch (error: unknown) {
+          if (isAwsNotFound(error)) return { ok: true }
+          const msg = error instanceof Error ? error.message : String(error)
+          return { ok: false, error: `R2 delete failed: ${msg}` }
+        }
+      }
+
+      const config = getAiSearchConfig()
+      if (!config) return { ok: true }
+
+      if (args.documentId === '__user_bulk__') {
+        const listUrl = `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/ai-search/instances/${config.instance}/documents?filter=${encodeURIComponent(`userId:${args.userId}`)}`
+        const listRes = await fetch(listUrl, {
+          headers: { 'Authorization': `Bearer ${config.token}` },
+        })
+        if (listRes.status === 404) return { ok: true }
+        if (!listRes.ok) {
+          const text = (await listRes.text()).slice(0, 500)
+          return { ok: false, error: `AI Search list failed (${listRes.status}): ${text}` }
+        }
+        const data = (await listRes.json()) as { result?: Array<{ id?: string }> }
+        const ids = (data.result ?? []).map((r) => r.id).filter((id): id is string => typeof id === 'string')
+        if (ids.length === 0) return { ok: true }
+
+        for (const id of ids) {
+          const res = await fetch(
+            `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/ai-search/instances/${config.instance}/documents/${encodeURIComponent(id)}`,
+            { method: 'DELETE', headers: { 'Authorization': `Bearer ${config.token}` } },
+          )
+          if (!res.ok && res.status !== 404) {
+            const text = (await res.text()).slice(0, 500)
+            return { ok: false, error: `AI Search delete ${id} failed (${res.status}): ${text}` }
+          }
+        }
+        return { ok: true }
+      }
+
+      const res = await fetch(
+        `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/ai-search/instances/${config.instance}/documents/${encodeURIComponent(args.documentId)}`,
+        { method: 'DELETE', headers: { 'Authorization': `Bearer ${config.token}` } },
+      )
+      if (res.ok || res.status === 404) return { ok: true }
+      const text = (await res.text()).slice(0, 500)
+      return { ok: false, error: `AI Search delete failed (${res.status}): ${text}` }
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error)
+      return { ok: false, error: msg }
     }
   },
 })

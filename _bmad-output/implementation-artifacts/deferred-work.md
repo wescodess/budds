@@ -14,6 +14,13 @@
 - **~~`lastActivity` shows folder `_creationTime` not actual last activity~~** — Added `updatedAt` field to folders schema. `CourseCard.vue` now uses `updatedAt ?? _creationTime`. `createFolder` sets `updatedAt: Date.now()`.
 - **~~JWKS bootstrap undocumented~~** — Created `scripts/bootstrap-jwks.sh` automation script and documented setup steps in `CLAUDE.md`.
 
+## Deferred from: code review of story-5.1 (2026-04-12)
+
+- **`getR2Client()` non-null-asserts R2 credentials** — `convex/documentActions.ts:9-17` uses `process.env.R2_ENDPOINT!`, `R2_ACCESS_KEY_ID!`, `R2_SECRET_ACCESS_KEY!`. The new `performCleanupAttempt(kind:'r2')` path only guards `R2_BUCKET_NAME`. In the extremely unlikely event of a partial env misconfig, client construction succeeds with `undefined!` creds and fails cryptically at `.send()`. Mirror the `getAiSearchConfig()` early-return pattern for all four vars. Out of scope for 5.1 (shared infra touched by `ingestDocument`).
+- **No alerting on `pendingCleanup` rows nearing MAX_ATTEMPTS** — For NFR13 (24-hour external-data removal guarantee), persistent cleanup failures need operational visibility. Today they only hit `console.error` via `recordRetry.lastError`. Add a cron/alert on `pendingCleanup` rows where `attempts >= 7` so on-call is notified before the 10-attempt cap hard-fails. Candidate for Epic 5 observability follow-up.
+- **`drainPendingCleanup` reschedule uses min-attempts backoff across all failing rows** — If one row is fresh (`attempts=0→1`) and another is near-dead (`attempts=9→10`), the action reschedules at `backoffMs(1) = 60s`, causing extra polling for the older row. Correctness is preserved (per-row attempts still track), but slight wasted polling. Consider per-row backoff via individual scheduled tasks or separate the drain loop by attempt tier.
+- **Bulk AI Search drain may run before provider indexes deletions** — `deleteAccountCascade` schedules `drainPendingCleanup` with `runAfter(0)`, and the `__user_bulk__` list-by-filter endpoint has eventual-consistency semantics. First pass may return 0 matches even though per-doc deletes still need to happen; the per-doc backstop rows cover this and the retry loop self-heals. No functional issue, just occasional no-op first pass.
+
 ## Deferred from: code review of story-4.4 (2026-04-12)
 
 - **`route.query.conversationId` array-case in delete redirect** — `app/layouts/default.vue` compares `route.query.conversationId` to the deleted `target._id` with `===`. If the query ever arrives as an array (`?conversationId=a&conversationId=b`), the comparison is false and the redirect is skipped. Add the same defensive guard as `app/pages/app/folders/[id].vue:12-14` (`if (!q || Array.isArray(q)) return null`).

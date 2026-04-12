@@ -203,6 +203,52 @@ async function executeDeleteConversation() {
   }
 }
 
+const showDeleteAccountDialog = ref(false)
+const deleteAccountConfirmInput = ref('')
+const isDeletingAccount = ref(false)
+
+const canConfirmDeleteAccount = computed(() => {
+  const value = deleteAccountConfirmInput.value.trim()
+  if (value === 'DELETE') return true
+  const email = user.value?.email
+  if (typeof email === 'string' && email.length > 0) {
+    return value.toLowerCase() === email.toLowerCase()
+  }
+  return false
+})
+
+function openDeleteAccountDialog() {
+  deleteAccountConfirmInput.value = ''
+  showDeleteAccountDialog.value = true
+}
+
+async function executeDeleteAccount() {
+  if (!canConfirmDeleteAccount.value || isDeletingAccount.value) return
+  isDeletingAccount.value = true
+  try {
+    await $fetch('/api/auth/delete-user', {
+      method: 'POST',
+      body: {},
+    })
+    const { toast } = await import('vue-sonner')
+    toast.success('Your account and all data have been deleted.')
+    try {
+      await signOut()
+    } catch {
+      // session may already be invalidated by Better Auth; ignore
+    }
+    await navigateTo('/')
+  } catch (e: any) {
+    console.error('Account deletion failed', e)
+    const { toast } = await import('vue-sonner')
+    toast.error(e?.data?.message || e?.message || 'We could not delete your account. Please try again.')
+  } finally {
+    isDeletingAccount.value = false
+    showDeleteAccountDialog.value = false
+    deleteAccountConfirmInput.value = ''
+  }
+}
+
 async function executeDelete() {
   if (!folderToDelete.value || isDeleting.value) return
   isDeleting.value = true
@@ -393,16 +439,37 @@ async function executeDelete() {
           >
             {{ user?.name || 'User' }}
           </span>
-          <UiButton
-            variant="ghost"
-            size="icon"
-            data-testid="sidebar-sign-out"
-            class="h-7 w-7 text-muted-foreground hover:text-destructive"
-            @click="signOut()"
-          >
-            <LogOut class="h-4 w-4" />
-            <span class="sr-only">Sign out</span>
-          </UiButton>
+          <UiDropdownMenu>
+            <UiDropdownMenuTrigger as-child>
+              <UiButton
+                variant="ghost"
+                size="icon"
+                data-testid="sidebar-user-menu-trigger"
+                class="h-7 w-7 text-muted-foreground hover:text-foreground"
+              >
+                <MoreHorizontal class="h-4 w-4" />
+                <span class="sr-only">User menu</span>
+              </UiButton>
+            </UiDropdownMenuTrigger>
+            <UiDropdownMenuContent align="end" class="w-48">
+              <UiDropdownMenuItem
+                data-testid="sidebar-menu-sign-out"
+                @click="signOut()"
+              >
+                <LogOut class="mr-2 h-4 w-4" />
+                Sign out
+              </UiDropdownMenuItem>
+              <UiDropdownMenuSeparator />
+              <UiDropdownMenuItem
+                data-testid="sidebar-menu-delete-account"
+                class="text-destructive focus:text-destructive"
+                @click="openDeleteAccountDialog"
+              >
+                <Trash2 class="mr-2 h-4 w-4" />
+                Delete account
+              </UiDropdownMenuItem>
+            </UiDropdownMenuContent>
+          </UiDropdownMenu>
         </div>
       </UiSidebarFooter>
     </UiSidebar>
@@ -577,6 +644,46 @@ async function executeDelete() {
           @click="executeDeleteConversation"
         >
           Delete
+        </UiAlertDialogAction>
+      </UiAlertDialogFooter>
+    </UiAlertDialogContent>
+  </UiAlertDialog>
+
+  <UiAlertDialog v-model:open="showDeleteAccountDialog">
+    <UiAlertDialogContent data-testid="delete-account-dialog">
+      <UiAlertDialogHeader>
+        <UiAlertDialogTitle>Delete your account?</UiAlertDialogTitle>
+        <UiAlertDialogDescription>
+          This will permanently delete your account, all folders, documents, chat history, quizzes, and flash cards. This action cannot be undone.
+        </UiAlertDialogDescription>
+      </UiAlertDialogHeader>
+      <div class="grid gap-2 py-2">
+        <label for="delete-account-confirm" class="text-sm text-muted-foreground">
+          Type <span class="font-mono font-semibold text-foreground">DELETE</span> or your email to confirm.
+        </label>
+        <UiInput
+          id="delete-account-confirm"
+          v-model="deleteAccountConfirmInput"
+          data-testid="delete-account-confirm-input"
+          :disabled="isDeletingAccount"
+          autocomplete="off"
+          spellcheck="false"
+        />
+      </div>
+      <UiAlertDialogFooter>
+        <UiAlertDialogCancel
+          data-testid="delete-account-cancel-button"
+          :disabled="isDeletingAccount"
+        >
+          Cancel
+        </UiAlertDialogCancel>
+        <UiAlertDialogAction
+          data-testid="delete-account-confirm-button"
+          class="bg-destructive text-destructive-foreground hover:bg-destructive/90 disabled:pointer-events-none disabled:opacity-50"
+          :disabled="!canConfirmDeleteAccount || isDeletingAccount"
+          @click="executeDeleteAccount"
+        >
+          {{ isDeletingAccount ? 'Deleting…' : 'Delete account' }}
         </UiAlertDialogAction>
       </UiAlertDialogFooter>
     </UiAlertDialogContent>
