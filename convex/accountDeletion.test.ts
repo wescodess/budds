@@ -204,6 +204,73 @@ describe('accountDeletion.deleteAccountCascade', () => {
     expect(afterExists[1]).toBeNull()
   })
 
+  test('[P0] should remove caller\'s quizzes + quizQuestions, leaving another user\'s untouched', async () => {
+    const t = convexTest(schema, modules)
+    const asUserA = t.withIdentity(TEST_IDENTITY)
+    const asUserB = t.withIdentity(OTHER_IDENTITY)
+
+    const folderA = await asUserA.mutation(api.folders.createFolder, { name: 'Alice Quiz Folder' })
+    const folderB = await asUserB.mutation(api.folders.createFolder, { name: 'Bob Quiz Folder' })
+
+    const sharedQuestions = [
+      {
+        order: 0,
+        question: 'Q1',
+        type: 'free-response' as const,
+        correctAnswer: 'A1',
+        sourceChunkContent: 'chunk',
+        sourceFilename: 'doc.pdf',
+      },
+      {
+        order: 1,
+        question: 'Q2',
+        type: 'free-response' as const,
+        correctAnswer: 'A2',
+        sourceChunkContent: 'chunk',
+        sourceFilename: 'doc.pdf',
+      },
+    ]
+
+    await asUserA.mutation(api.quizzes.createWithQuestions, {
+      folderId: folderA,
+      title: 'Alice Quiz',
+      questions: sharedQuestions,
+    })
+    const bResult = await asUserB.mutation(api.quizzes.createWithQuestions, {
+      folderId: folderB,
+      title: 'Bob Quiz',
+      questions: sharedQuestions,
+    })
+
+    await asUserA.mutation(internal.accountDeletion.deleteAccountCascade, {})
+
+    const aQuizzes = await t.run(async (ctx) => {
+      return (await ctx.db.query('quizzes').collect()).filter(
+        (r) => r.userId === TEST_IDENTITY.tokenIdentifier,
+      )
+    })
+    const aQuestions = await t.run(async (ctx) => {
+      return (await ctx.db.query('quizQuestions').collect()).filter(
+        (r) => r.userId === TEST_IDENTITY.tokenIdentifier,
+      )
+    })
+    expect(aQuizzes).toHaveLength(0)
+    expect(aQuestions).toHaveLength(0)
+
+    const bQuizzes = await t.run(async (ctx) => {
+      return (await ctx.db.query('quizzes').collect()).filter(
+        (r) => r.userId === OTHER_IDENTITY.tokenIdentifier,
+      )
+    })
+    const bQuestions = await t.run(async (ctx) => {
+      return (await ctx.db.query('quizQuestions').collect()).filter(
+        (r) => r.userId === OTHER_IDENTITY.tokenIdentifier,
+      )
+    })
+    expect(bQuizzes.map((r) => r._id)).toContain(bResult.quizId)
+    expect(bQuestions).toHaveLength(2)
+  })
+
   test('[P1] post-cascade queries return empty for the caller', async () => {
     const t = convexTest(schema, modules)
     const asUser = t.withIdentity(TEST_IDENTITY)
