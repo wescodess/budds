@@ -14,6 +14,10 @@
 - **~~`lastActivity` shows folder `_creationTime` not actual last activity~~** — Added `updatedAt` field to folders schema. `CourseCard.vue` now uses `updatedAt ?? _creationTime`. `createFolder` sets `updatedAt: Date.now()`.
 - **~~JWKS bootstrap undocumented~~** — Created `scripts/bootstrap-jwks.sh` automation script and documented setup steps in `CLAUDE.md`.
 
+## Deferred from: code review of story-5.2 (2026-04-12)
+
+- **`deleteDocumentFromR2` internal action is now dead code** — `convex/documentActions.ts:259-289` is no longer referenced after Story 5.2 rerouted `documents.deleteDocument` through the `pendingCleanup` queue. Safe to delete in a follow-up commit (single file, no API surface change — it is an `internalAction`). Deferred to avoid widening the diff during the cleanup-path refactor.
+
 ## Deferred from: code review of story-5.1 (2026-04-12)
 
 - **`getR2Client()` non-null-asserts R2 credentials** — `convex/documentActions.ts:9-17` uses `process.env.R2_ENDPOINT!`, `R2_ACCESS_KEY_ID!`, `R2_SECRET_ACCESS_KEY!`. The new `performCleanupAttempt(kind:'r2')` path only guards `R2_BUCKET_NAME`. In the extremely unlikely event of a partial env misconfig, client construction succeeds with `undefined!` creds and fails cryptically at `.send()`. Mirror the `getAiSearchConfig()` early-return pattern for all four vars. Out of scope for 5.1 (shared infra touched by `ingestDocument`).
@@ -43,7 +47,7 @@
 
 ## Deferred from: code review of story-3.2 (2026-04-11)
 
-- **`deleteDocument` does not remove document from Cloudflare AI Search index** — Deleted documents remain searchable. Story 3.3 ("Delete Documents and Move Between Folders") should handle AI Search cleanup.
+- **~~`deleteDocument` does not remove document from Cloudflare AI Search index~~** — Deleted documents remain searchable. Story 3.3 ("Delete Documents and Move Between Folders") should handle AI Search cleanup. — Resolved in Story 5.2 (2026-04-12) via durable `pendingCleanup` queue reusing the Story 5.1 retry worker.
 - **No retry/idempotency mechanism for Cloudflare upsert** — Transient Cloudflare failures permanently mark documents as "failed" with no recovery path. Consider a retry queue or manual re-ingest action.
 - **Race condition: file deletion between `createDocument` commit and `ingestDocument` execution** — If a user deletes a document before the scheduled action runs, ingestion fails with "File not found". Handled gracefully but not preventable.
 - **No timeout wrapping for `pdf-parse`** — Malformed/corrupt PDFs could hang the action. Convex platform timeout (~300s) provides a safety net but the user sees a stuck "processing" state.

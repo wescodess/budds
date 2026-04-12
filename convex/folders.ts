@@ -2,6 +2,8 @@ import { v } from 'convex/values'
 import type { Id, Doc } from './_generated/dataModel'
 import type { QueryCtx, MutationCtx } from './_generated/server'
 import { mutation, query } from './_generated/server'
+import { internal } from './_generated/api'
+import { enqueueDocumentCleanup } from './accountDeletion'
 
 export const listAllFolders = query({
   args: {},
@@ -182,13 +184,48 @@ export const deleteFolder = mutation({
     if (!folder || folder.userId !== userId) throw new Error('Folder not found')
 
     const descendants = await collectDescendants(ctx, userId, args.id)
+    const folderIds: Id<'folders'>[] = [...descendants.map((d) => d._id), args.id]
+
+    let deletedDocuments = 0
+    let anyCleanupEnqueued = false
+
+    for (const folderId of folderIds) {
+      const docs = await ctx.db
+        .query('documents')
+        .withIndex('by_folderId', (q) => q.eq('folderId', folderId))
+        .collect()
+
+      for (const doc of docs) {
+        if (doc.userId !== userId) continue
+
+        const { r2Enqueued, aiSearchEnqueued } = await enqueueDocumentCleanup(ctx, {
+          userId,
+          documentId: String(doc._id),
+          status: doc.status,
+          r2Key: doc.r2Key,
+        })
+        if (r2Enqueued || aiSearchEnqueued) anyCleanupEnqueued = true
+
+        try {
+          await ctx.storage.delete(doc.fileId)
+        } catch {
+          // best-effort; blob may already be gone
+        }
+        await ctx.db.delete(doc._id)
+        deletedDocuments++
+      }
+    }
 
     for (let i = descendants.length - 1; i >= 0; i--) {
       await ctx.db.delete(descendants[i]!._id)
     }
     await ctx.db.delete(args.id)
 
-    return { deletedFolders: descendants.length + 1, deletedDocuments: 0 }
+    if (anyCleanupEnqueued) {
+      await ctx.scheduler.runAfter(0, internal.accountDeletion.drainPendingCleanup, { userId })
+    }
+
+    return { deletedFolders: descendants.length + 1, deletedDocuments }
   },
 })
 

@@ -1,6 +1,7 @@
 import { v } from 'convex/values'
 import { mutation, query, internalMutation } from './_generated/server'
 import { internal } from './_generated/api'
+import { enqueueDocumentCleanup } from './accountDeletion'
 
 export const generateUploadUrl = mutation({
   args: {},
@@ -114,12 +115,12 @@ export const deleteDocument = mutation({
       throw new Error('Document not found')
     }
 
-    if (doc.status === 'success' || doc.status === 'indexing') {
-      await ctx.scheduler.runAfter(0, internal.documentActions.deleteDocumentFromR2, {
-        documentId: args.id,
-        r2Key: doc.r2Key,
-      })
-    }
+    const { r2Enqueued, aiSearchEnqueued } = await enqueueDocumentCleanup(ctx, {
+      userId,
+      documentId: String(doc._id),
+      status: doc.status,
+      r2Key: doc.r2Key,
+    })
 
     const folder = await ctx.db.get(doc.folderId)
     if (folder) {
@@ -129,8 +130,16 @@ export const deleteDocument = mutation({
       })
     }
 
-    await ctx.storage.delete(doc.fileId)
+    try {
+      await ctx.storage.delete(doc.fileId)
+    } catch {
+      // best-effort; blob may already be gone
+    }
     await ctx.db.delete(args.id)
+
+    if (r2Enqueued || aiSearchEnqueued) {
+      await ctx.scheduler.runAfter(0, internal.accountDeletion.drainPendingCleanup, { userId })
+    }
   },
 })
 
