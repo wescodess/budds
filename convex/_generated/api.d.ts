@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as accountDeletion from "../accountDeletion.js";
 import type * as auth from "../auth.js";
 import type * as conversations from "../conversations.js";
 import type * as documentActions from "../documentActions.js";
@@ -24,6 +25,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  accountDeletion: typeof accountDeletion;
   auth: typeof auth;
   conversations: typeof conversations;
   documentActions: typeof documentActions;

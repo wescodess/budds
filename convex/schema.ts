@@ -58,5 +58,19 @@ export default defineSchema({
       ),
     ),
     model: v.optional(v.string()),
-  }).index('by_conversationId', ['conversationId']),
+  })
+    .index('by_conversationId', ['conversationId'])
+    .index('by_userId', ['userId']),
+
+  pendingCleanup: defineTable({
+    userId: v.string(),
+    documentId: v.string(),
+    r2Key: v.optional(v.string()),
+    kind: v.union(v.literal('ai-search'), v.literal('r2')),
+    attempts: v.number(),
+    lastAttemptAt: v.optional(v.number()),
+    lastError: v.optional(v.string()),
+  })
+    .index('by_userId', ['userId'])
+    .index('by_kind_and_attempts', ['kind', 'attempts']),
 })
