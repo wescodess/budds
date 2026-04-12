@@ -22,6 +22,7 @@ interface ChatResponse {
     score: number
     attributes: { filename?: string }
   }>
+  modelFallback?: { requested: string; actual: string }
 }
 
 interface RawSource {
@@ -30,7 +31,7 @@ interface RawSource {
   attributes: { filename?: string }
 }
 
-const DEFAULT_MODEL = 'openai/gpt-4o-mini'
+import { DEFAULT_MODEL, isValidModel, getModelLabel } from '~/constants/models'
 
 function mapSources(raw: RawSource[]): Source[] {
   return raw.map(s => ({
@@ -48,6 +49,13 @@ export function useChat(folderId: Ref<Id<'folders'>>) {
   const loading = ref(false)
   const streaming = ref(false)
   const error = ref<string | null>(null)
+  const selectedModel = ref(DEFAULT_MODEL)
+
+  function selectModel(modelValue: string) {
+    if (isValidModel(modelValue)) {
+      selectedModel.value = modelValue
+    }
+  }
 
   const hasIndexedDocuments = computed(() =>
     documents.value?.some(d => d.status === 'success') ?? false,
@@ -59,7 +67,7 @@ export function useChat(folderId: Ref<Id<'folders'>>) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         query,
-        model: DEFAULT_MODEL,
+        model: selectedModel.value,
         folderId: folderId.value,
         stream: true,
       }),
@@ -105,6 +113,20 @@ export function useChat(folderId: Ref<Id<'folders'>>) {
             if (data === '[DONE]') {
               flushTokenBuffer()
               streaming.value = false
+              continue
+            }
+
+            if (currentEventType === 'model-fallback') {
+              try {
+                const fallback = JSON.parse(data) as { requested: string; actual: string }
+                selectedModel.value = isValidModel(fallback.actual) ? fallback.actual : DEFAULT_MODEL
+                import('vue-sonner').then(({ toast }) => {
+                  toast.info(`Selected model unavailable, using ${getModelLabel(selectedModel.value)}`)
+                }).catch(() => {})
+              } catch (e) {
+                if (import.meta.dev) console.warn('[useChat] Failed to parse model-fallback SSE data:', data, e)
+              }
+              currentEventType = ''
               continue
             }
 
@@ -155,10 +177,16 @@ export function useChat(folderId: Ref<Id<'folders'>>) {
       method: 'POST',
       body: {
         query,
-        model: DEFAULT_MODEL,
+        model: selectedModel.value,
         folderId: folderId.value,
       },
     })
+
+    if (data.modelFallback) {
+      selectedModel.value = isValidModel(data.modelFallback.actual) ? data.modelFallback.actual : DEFAULT_MODEL
+      const { toast } = await import('vue-sonner')
+      toast.info(`Selected model unavailable, using ${getModelLabel(selectedModel.value)}`)
+    }
 
     messages.value.push({
       role: 'assistant',
@@ -202,7 +230,9 @@ export function useChat(folderId: Ref<Id<'folders'>>) {
     streaming,
     error,
     hasIndexedDocuments,
+    selectedModel,
     sendMessage,
+    selectModel,
     clearMessages,
   }
 }
