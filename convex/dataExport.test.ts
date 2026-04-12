@@ -90,6 +90,52 @@ describe('dataExport.collectUserData', () => {
     expect(result.documents).toEqual([])
     expect(result.conversations).toEqual([])
     expect(result.messages).toEqual([])
+    expect(result.quizzes).toEqual([])
+    expect(result.quizQuestions).toEqual([])
+  })
+
+  test('returns quizzes + quizQuestions scoped to the caller', async () => {
+    const t = convexTest(schema, modules)
+    const a = await seedUser(t, USER_A)
+    const b = await seedUser(t, USER_B)
+
+    const questions = [
+      {
+        order: 0,
+        question: 'Q1',
+        type: 'free-response' as const,
+        correctAnswer: 'A1',
+        sourceChunkContent: 'c1',
+        sourceFilename: 'f.pdf',
+      },
+      {
+        order: 1,
+        question: 'Q2',
+        type: 'free-response' as const,
+        correctAnswer: 'A2',
+        sourceChunkContent: 'c2',
+        sourceFilename: 'f.pdf',
+      },
+    ]
+
+    await a.asUser.mutation(api.quizzes.createWithQuestions, {
+      folderId: a.folderId,
+      title: 'Alice Quiz',
+      questions,
+    })
+    await b.asUser.mutation(api.quizzes.createWithQuestions, {
+      folderId: b.folderId,
+      title: 'Bob Quiz',
+      questions,
+    })
+
+    const result = await a.asUser.query(api.dataExport.collectUserData, {})
+
+    expect(result.quizzes).toHaveLength(1)
+    expect(result.quizzes[0]!.title).toBe('Alice Quiz')
+    expect(result.quizzes.every((q: any) => q.userId === USER_A.tokenIdentifier)).toBe(true)
+    expect(result.quizQuestions).toHaveLength(2)
+    expect(result.quizQuestions.every((q: any) => q.userId === USER_A.tokenIdentifier)).toBe(true)
   })
 
   test('returned rows contain expected fields', async () => {

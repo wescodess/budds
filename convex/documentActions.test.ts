@@ -1,6 +1,18 @@
 /// <reference types="vite/client" />
 import { convexTest } from 'convex-test'
-import { describe, expect, test, vi, beforeEach, afterEach } from 'vitest'
+import { describe, expect, test as rawTest, vi, beforeEach, afterEach } from 'vitest'
+
+// STORY 6-1 triage (AC #11, Task 9): the 8 tests marked `test.skip` below assumed
+// the legacy pdf-parse + fetch-based AI Search upsert ingestion flow. The production
+// code in documentActions.ts now uses `unpdf`'s extractText plus the S3 SDK to put
+// to R2 and only fetches the AI Search jobs endpoint for sync — so the pdf-parse
+// mocks, the `/documents/upsert` URL assertions, and the "deleteDocumentFromR2
+// triggers fetch" assertion no longer model the real code path. Classified (c) dead
+// per the Epic 5 retro's three-option framing; skipped (not deleted) so a future
+// story that rewrites ingestion-layer tests against the unpdf/S3 flow can read the
+// intent here. See epic-5-retro-2026-04-12.md "documentActions.test.ts baseline".
+const test = rawTest
+const skip = rawTest.skip
 import { api, internal } from './_generated/api'
 import schema from './schema'
 
@@ -53,7 +65,7 @@ describe('documentActions.ingestDocument', () => {
     vi.unstubAllGlobals()
   })
 
-  test('[P0] should extract text from PDF and update status to success', async () => {
+  skip('[P0] should extract text from PDF and update status to success', async () => {
     const t = convexTest(schema, modules)
     const asUser = t.withIdentity(TEST_IDENTITY)
     const { folderId, storageId, docId } = await setupDocumentWithStorage(t, asUser)
@@ -77,7 +89,7 @@ describe('documentActions.ingestDocument', () => {
     expect(docs[0].failureReason).toBeUndefined()
   })
 
-  test('[P0] should upsert to Cloudflare AI Search with correct metadata', async () => {
+  skip('[P0] should upsert to Cloudflare AI Search with correct metadata', async () => {
     const t = convexTest(schema, modules)
     const asUser = t.withIdentity(TEST_IDENTITY)
     const { folderId, storageId, docId } = await setupDocumentWithStorage(t, asUser)
@@ -116,7 +128,7 @@ describe('documentActions.ingestDocument', () => {
     )
   })
 
-  test('[P0] should fail with reason when PDF has no extractable text', async () => {
+  skip('[P0] should fail with reason when PDF has no extractable text', async () => {
     const t = convexTest(schema, modules)
     const asUser = t.withIdentity(TEST_IDENTITY)
     const { folderId, storageId, docId } = await setupDocumentWithStorage(t, asUser)
@@ -138,7 +150,7 @@ describe('documentActions.ingestDocument', () => {
     )
   })
 
-  test('[P0] should fail with error details when AI Search API returns error', async () => {
+  skip('[P0] should fail with error details when AI Search API returns error', async () => {
     const t = convexTest(schema, modules)
     const asUser = t.withIdentity(TEST_IDENTITY)
     const { folderId, storageId, docId } = await setupDocumentWithStorage(t, asUser)
@@ -185,7 +197,7 @@ describe('documentActions.ingestDocument', () => {
     expect(docs[0].failureReason).toContain('File not found in storage')
   })
 
-  test('[P1] should include authorization header in AI Search request', async () => {
+  skip('[P1] should include authorization header in AI Search request', async () => {
     const t = convexTest(schema, modules)
     const asUser = t.withIdentity(TEST_IDENTITY)
     const { folderId, storageId, docId } = await setupDocumentWithStorage(t, asUser)
@@ -226,7 +238,7 @@ describe('documents.createDocument → ingestDocument integration', () => {
     vi.unstubAllGlobals()
   })
 
-  test('[P0] should transition document from processing to success after ingestion', async () => {
+  skip('[P0] should transition document from processing to success after ingestion', async () => {
     const t = convexTest(schema, modules)
     const asUser = t.withIdentity(TEST_IDENTITY)
     const { folderId, storageId, docId } = await setupDocumentWithStorage(t, asUser)
@@ -252,7 +264,7 @@ describe('documents.createDocument → ingestDocument integration', () => {
     expect(docsAfter[0].status).toBe('success')
   })
 
-  test('[P0] should pass correct userId and filename through ingestion flow', async () => {
+  skip('[P0] should pass correct userId and filename through ingestion flow', async () => {
     const t = convexTest(schema, modules)
     const asUser = t.withIdentity(TEST_IDENTITY)
     const { folderId, storageId, docId } = await setupDocumentWithStorage(t, asUser)
@@ -293,7 +305,7 @@ describe('documentActions.deleteDocumentFromR2 — AC #1', () => {
     vi.unstubAllGlobals()
   })
 
-  test('[P0] should delete from R2 and trigger sync', async () => {
+  skip('[P0] should delete from R2 and trigger sync', async () => {
     const t = convexTest(schema, modules)
     const fetchSpy = vi.fn().mockResolvedValue({
       ok: true,

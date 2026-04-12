@@ -96,3 +96,31 @@
 - **Component tests lack interaction-level coverage** — Rename/delete tests only verify element existence, not actual user interaction flows (trigger rename → type → Enter → verify emit).
 - **`onSelect` both emits and navigates** — FolderTree emits `select` event AND calls `navigateTo` directly, leaking navigation responsibility. Pre-existing from Story 2.1.
 - **Dynamic `await import('vue-sonner')` on every toast call** — Imports vue-sonner fresh on every error/success path instead of a top-level import. Pre-existing pattern across the app.
+
+## Deferred from: Story 6-1 — documentActions.test.ts baseline triage (2026-04-12)
+
+Story 6-1 AC #11 / Task 9 retired the 8-failure baseline in `convex/documentActions.test.ts` with a one-pass triage (30-min budget, Epic 5 retro "fix, delete, or .skip with a link" framing). All 8 classified as category (c) — **dead**: the tests assume a legacy ingestion flow (`pdf-parse` mock + fetch-based AI Search `/documents/upsert` endpoint) that was replaced by `unpdf`'s `extractText` plus S3 SDK PUT to R2 + a sync-job fetch. The tests are now `.skip`'d with an in-file comment pointing to this section and `epic-5-retro-2026-04-12.md`. They are preserved (not deleted) so a future ingestion-rewrite story can read the original intent and write replacement tests against the unpdf/S3 path.
+
+Skipped cases:
+- [P0] should extract text from PDF and update status to success — pdf-parse mock no longer wired (unpdf used now)
+- [P0] should upsert to Cloudflare AI Search with correct metadata — production code uses R2 PUT + sync job, no `/documents/upsert` fetch
+- [P0] should fail with reason when PDF has no extractable text — pdf-parse mock unused; needs rewrite against unpdf
+- [P0] should fail with error details when AI Search API returns error — flow changed; 503 now surfaces from jobs endpoint, not upsert
+- [P1] should include authorization header in AI Search request — fetch spy sees S3-SDK call, not AI Search fetch
+- [P0] should transition document from processing to success after ingestion — depends on above dead mocks
+- [P0] should pass correct userId and filename through ingestion flow — asserts shape of removed upsert body
+- [P0] should delete from R2 and trigger sync — production uses S3 DeleteObjectCommand, no fetch to spy
+
+**Follow-up story scope (bounded):** rewrite `documentActions.test.ts` to mock `S3Client` and the AI Search jobs endpoint; re-assert status transitions, metadata fields on the R2 PUT, and the sync-job POST. Out of scope for 6-1 — already folded in the 30-min budget triage decision.
+
+## Deferred from: Story 6-1 — tests/component/chat/chat-input.test.ts baseline (2026-04-12)
+
+Independently discovered during Story 6-1's full `pnpm test:component` run: 6 tests in `tests/component/chat/chat-input.test.ts` fail on the Epic 5 baseline (verified via `git stash` + branch-checkout on 2026-04-12). Not caused by 6-1 — kept out of scope per the story's 30-minute triage budget framing. All 6 target the same file; likely a similar ingestion-style drift (component API changed). Follow-up story: audit `ChatInput.vue` event/disabled contract vs the test's assertions; same "fix, delete, or .skip" options as the documentActions triage.
+
+Failing cases:
+- [P0] should emit submit with trimmed message when Enter is pressed
+- [P0] should insert newline on Shift+Enter instead of submitting
+- [P0] should prevent empty or whitespace-only submissions
+- [P0] should disable textarea and send button when disabled prop is true
+- [P1] should disable send button when input is empty
+- [P1] should expose focus() method via defineExpose
