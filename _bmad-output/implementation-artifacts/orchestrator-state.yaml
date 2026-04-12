@@ -7,6 +7,47 @@ last_epic_complete_fired: 6
 
 last_verdict:
   subagent: bmad-story-runner
+  story: 7-1-generate-flash-cards-from-folder-documents
+  epic: 7
+  status: PASS
+  pr_url: https://github.com/wescodess/budds/pull/23
+  branch: feat/7-1-generate-flash-cards-from-folder-documents
+  commit_sha: 34fa793
+  merge_commit: 801b603
+  merged_at: '2026-04-12T13:00:00Z'
+  files_changed: 18
+  tasks_completed: 10
+  tasks_total: 10
+  findings_deferred: 5
+  lint_pass: null
+  typecheck_pass: null
+  unit_tests_pass: true
+  e2e_tests_pass: null
+  review_pass: true
+  summary: |
+    Story 7-1 shipped — Epic 7 opened. Flash-card generation from indexed folder documents end-to-end.
+    Convex: new `flashcardSets` + `flashcards` tables (with `userId` mirror for cascade); `flashcards.createSetWithCards` (folder-ownership gate, trimmedTitle fallback, per-card `sourceDocumentId` normalize+own), `flashcards.listByFolder` (indexed by_userId_and_folderId), `flashcards.getSetWithCards` (null for non-owners, cards sorted by order). 7 convex-test cases + 1 new accountDeletion isolation test (child-before-parent verified: flashcards → flashcardSets → documents → folders).
+    Server: `server/utils/flashcard-prompt.ts` with zod-validated response schema and tolerant JSON parse (strips fences, patches trailing commas); 8 node-env unit tests. `server/api/flashcards/generate.post.ts` wires `getConvexTokenIdentifier` → `searchDocuments (folderId filter)` → `generateCompletion (temp 0.3)` → `parseFlashcardResponse` → `ConvexHttpClient.mutation(api.flashcards.createSetWithCards)`. 7 handler tests (401/400/422/502/happy + disallowed-model fallback + zod round-trip).
+    UI: `app/composables/useFlashcards.ts` exposes `{sets, hasIndexedDocuments, generating, lastError, generate}`; `app/components/flashcards/Tab.vue` with three states (no-docs / empty-ready / list) and shimmer during generation — zero Reka-portaled primitives (Epic 6 retro Team Agreement preserved). ATDD red-first authored before impl (5 component tests).
+    Folder page: Flash Cards tab inserted between Chat and Quiz — completes UX-DR1 tab order for V1.2.
+    Data export: schema migrated v3 → v4. New `flashcardSets.json` + `flashcards.json` entries; manifest counts extended. 2 export tests updated.
+    Prep folded in inline: P0 #1 — chat-input baseline (6 failures) resolved with one-line path fix (`ChatInput.vue` → `Input.vue`, matching Nuxt auto-component convention, cross-checked against `chat-message.test.ts` pattern). P0 #2 — cascade re-audit: `deleteAllFlashcardsForUser` + `deleteAllFlashcardSetsForUser` inserted before `deleteAllDocumentsForUser` in `deleteAccountCascade`; new isolation test seeds user-A+user-B, asserts A's rows purged while B's survive.
+    Test counters: pnpm test 245 passed / 8 skipped (was 221, +24 net); pnpm test:component 109 passed / 78 skipped / 0 failed. All 11 flashcards + 6 chat-input tests green.
+    Code review PASS inline against 13/13 ACs — 0 blockers, 5 deferred (all logged under `deferred-work.md` "code review of story-7.1" heading): (1) AC #6 cosmetic — generate button hidden during shimmer instead of labelled "Generating…" with spinner; (2) `sourceDocumentId` resolution accepts any same-user doc, not only folder-scoped; (3) out-of-range `sourceIndex` silently falls back without logging; (4) no rate limit on POST /api/flashcards/generate (parity with quiz/export); (5) trailing-comma cleaner regex is technically over-broad.
+    Decisions (tier-1 defaults): SRS out of scope for V1.2 (study flow lands in 7-2); cross-folder flash-card generation NOT supported in V1.2; no per-card rating schema in V1.2. All three documented in story Dev Agent Record.
+    PR #23 merged into dev as 801b603; branch deleted remote. sprint-status 7-1 → done; epic-7 remains in-progress.
+  block_reason: null
+  block_context: null
+  at: '2026-04-12T13:00:00Z'
+  commits:
+    - 34fa793 feat(flashcards): generate flash cards from folder documents (story 7.1)
+  deferred_items: 5
+  blockers: 0
+  acs_covered: 13
+  acs_total: 13
+
+prior_last_verdict:
+  subagent: bmad-story-runner
   story: 6-3-edit-questions-and-view-previous-quizzes
   epic: 6
   status: PASS
@@ -40,19 +81,6 @@ last_verdict:
   blockers: 0
   acs_covered: 13
   acs_total: 13
-
-prior_last_verdict:
-  subagent: bmad-story-runner
-  story: 6-2-take-quiz-and-view-results
-  epic: 6
-  status: PASS
-  pr_url: https://github.com/wescodess/budds/pull/20
-  branch: feat/6-2-take-quiz-and-view-results
-  commit_sha: 441c6ec
-  merge_commit: efd0693
-  merged_at: '2026-04-12T11:45:00Z'
-  deferred_items: 0
-  blockers: 0
 
 last_retro:
   epic: 6
@@ -113,8 +141,8 @@ paths:
   ux_spec: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/ux-design-specification.md
 
 counters:
-  stories_completed_this_run: 7
-  stories_completed_total: 7
+  stories_completed_this_run: 8
+  stories_completed_total: 8
 
 escalation:
   pending: null
