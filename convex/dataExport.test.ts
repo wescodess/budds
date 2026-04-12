@@ -93,6 +93,38 @@ describe('dataExport.collectUserData', () => {
     expect(result.quizzes).toEqual([])
     expect(result.quizQuestions).toEqual([])
     expect(result.quizAttempts).toEqual([])
+    expect(result.flashcardSets).toEqual([])
+    expect(result.flashcards).toEqual([])
+  })
+
+  test('returns flashcardSets + flashcards scoped to the caller (Story 7.1)', async () => {
+    const t = convexTest(schema, modules)
+    const a = await seedUser(t, USER_A)
+    const b = await seedUser(t, USER_B)
+
+    const cards = [
+      { order: 0, front: 'F1', back: 'B1', sourceChunkContent: 'c1', sourceFilename: 'f.pdf' },
+      { order: 1, front: 'F2', back: 'B2', sourceChunkContent: 'c2', sourceFilename: 'f.pdf' },
+    ]
+
+    await a.asUser.mutation(api.flashcards.createSetWithCards, {
+      folderId: a.folderId,
+      title: 'Alice Set',
+      cards,
+    })
+    await b.asUser.mutation(api.flashcards.createSetWithCards, {
+      folderId: b.folderId,
+      title: 'Bob Set',
+      cards,
+    })
+
+    const result = await a.asUser.query(api.dataExport.collectUserData, {})
+
+    expect(result.flashcardSets).toHaveLength(1)
+    expect(result.flashcardSets[0]!.title).toBe('Alice Set')
+    expect(result.flashcardSets.every((s: any) => s.userId === USER_A.tokenIdentifier)).toBe(true)
+    expect(result.flashcards).toHaveLength(2)
+    expect(result.flashcards.every((c: any) => c.userId === USER_A.tokenIdentifier)).toBe(true)
   })
 
   test('returns quizzes + quizQuestions scoped to the caller', async () => {

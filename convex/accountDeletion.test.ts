@@ -334,6 +334,59 @@ describe('accountDeletion.deleteAccountCascade', () => {
     expect(bAttempts).toHaveLength(1)
   })
 
+  test('[P0] should remove caller\'s flashcardSets + flashcards, leaving another user\'s untouched (Story 7.1)', async () => {
+    const t = convexTest(schema, modules)
+    const asUserA = t.withIdentity(TEST_IDENTITY)
+    const asUserB = t.withIdentity(OTHER_IDENTITY)
+
+    const folderA = await asUserA.mutation(api.folders.createFolder, { name: 'A folder' })
+    const folderB = await asUserB.mutation(api.folders.createFolder, { name: 'B folder' })
+
+    const cards = [
+      { order: 0, front: 'F1', back: 'B1', sourceChunkContent: 'src', sourceFilename: 'f.pdf' },
+      { order: 1, front: 'F2', back: 'B2', sourceChunkContent: 'src', sourceFilename: 'f.pdf' },
+    ]
+
+    const aResult = await asUserA.mutation(api.flashcards.createSetWithCards, {
+      folderId: folderA,
+      title: 'A Set',
+      cards,
+    })
+    const bResult = await asUserB.mutation(api.flashcards.createSetWithCards, {
+      folderId: folderB,
+      title: 'B Set',
+      cards,
+    })
+
+    await asUserA.mutation(internal.accountDeletion.deleteAccountCascade, {})
+
+    const aSets = await t.run(async (ctx) => {
+      return (await ctx.db.query('flashcardSets').collect()).filter(
+        (r) => r.userId === TEST_IDENTITY.tokenIdentifier,
+      )
+    })
+    const aCards = await t.run(async (ctx) => {
+      return (await ctx.db.query('flashcards').collect()).filter(
+        (r) => r.userId === TEST_IDENTITY.tokenIdentifier,
+      )
+    })
+    expect(aSets).toHaveLength(0)
+    expect(aCards).toHaveLength(0)
+
+    const bSets = await t.run(async (ctx) => {
+      return (await ctx.db.query('flashcardSets').collect()).filter(
+        (r) => r.userId === OTHER_IDENTITY.tokenIdentifier,
+      )
+    })
+    const bCards = await t.run(async (ctx) => {
+      return (await ctx.db.query('flashcards').collect()).filter(
+        (r) => r.userId === OTHER_IDENTITY.tokenIdentifier,
+      )
+    })
+    expect(bSets.map((r) => r._id)).toContain(bResult.setId)
+    expect(bCards).toHaveLength(2)
+  })
+
   test('[P1] post-cascade queries return empty for the caller', async () => {
     const t = convexTest(schema, modules)
     const asUser = t.withIdentity(TEST_IDENTITY)
