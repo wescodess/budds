@@ -36,6 +36,7 @@
 
 generated: 2026-04-09
 last_updated: '2026-04-12'
+# Epic 6 retrospective completed 2026-04-12 (epic-6-retro-2026-04-12.md); epic-6 → done, epic-6-retrospective → done; 7 Epic 7 prep items (2 P0 eng, 1 P0 pre-GA non-eng, 2 P1, 2 P2); 0 new deferred items added — first epic with zero deferred items
 # Story 6.3 code review PASS 2026-04-12: PR #21 merged, status → done; all Epic 6 application stories complete. New Convex updateQuestion + deleteQuiz; Editor.vue in-tab surface; Taker.vue review-mode + retake; inline non-portal card actions + delete-confirm. +9 Convex tests, +17 quiz component tests (34/34 pass)
 # Story 6.3 dev completed, status → review 2026-04-12 (ATDD green, 221 Convex PASS, 34 quiz component PASS)
 # Story 6.2 code review PASS 2026-04-12: PR #20 merged, status → done; quizAttempts table + submitAttempt/listAttempts + cascade + export schemaVersion→3; 17 quiz component tests, +2 Convex describes, +export coverage
@@ -70,7 +71,7 @@ story_location_note: Story 3.2 created 2026-04-11
 
 
 
-retrospective_location: _bmad-output/implementation-artifacts/epic-5-retro-2026-04-12.md
+retrospective_location: _bmad-output/implementation-artifacts/epic-6-retro-2026-04-12.md
 project: budds
 
 project_key: NOKEY
@@ -108,11 +109,11 @@ development_status:
   5-3-data-export-and-legal-pages: done
   epic-5-retrospective: done
 
-  epic-6: in-progress
+  epic-6: done
   6-1-generate-quiz-from-folder-documents: done
   6-2-take-quiz-and-view-results: done
   6-3-edit-questions-and-view-previous-quizzes: done
-  epic-6-retrospective: optional
+  epic-6-retrospective: done
 
   epic-7: backlog
   7-1-generate-flash-cards-from-folder-documents: backlog
