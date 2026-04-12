@@ -1,11 +1,54 @@
 mode: running
 current_phase: epic-story
-current_story: 7-2-study-flash-cards
+current_story: 7-3-edit-delete-and-manage-flash-card-sets
 current_epic: 7
 retry_count: 0
 last_epic_complete_fired: 6
 
 last_verdict:
+  subagent: bmad-story-runner
+  story: 7-2-study-flash-cards
+  epic: 7
+  status: PASS
+  pr_url: https://github.com/wescodess/budds/pull/24
+  branch: feat/7-2-study-flash-cards
+  commit_sha: '5800196'
+  merge_commit: 2245fa9
+  merged_at: '2026-04-12T13:30:00Z'
+  files_changed: 6
+  tasks_completed: 9
+  tasks_total: 9
+  findings_deferred: 0
+  lint_pass: null
+  typecheck_pass: null
+  unit_tests_pass: true
+  e2e_tests_pass: null
+  review_pass: true
+  summary: |
+    Story 7-2 shipped — card-by-card flash card study flow.
+    New app/components/flashcards/Study.vue: 3D CSS flip surface (rotateY 180deg + backface-visibility: hidden); progress indicator X / N; Next/Previous with disabled-at-0; inline completion summary ("You finished! You reviewed N cards" + Restart + Back to list); top-level Back button.
+    Keyboard: document-level keydown listener (Space flips, ArrowLeft/ArrowRight navigate, Escape emits back) with INPUT/TEXTAREA target guard, removed on unmount. Card viewer is tabindex=0 + role=button + aria-pressed toggles on flip + aria-label swaps to "Showing answer: ...".
+    Touch: @vueuse/core useSwipe (already a dep), 40px threshold. Swipe-left → Next, swipe-right → Previous. Button parity preserved.
+    Source citation: inline reveal using existing ChatCitationBadge + ChatSourceCard primitives — zero portaled components inside Study.vue subtree (Epic 5/6 retro standing rule preserved for V1.x).
+    prefers-reduced-motion: pure CSS @media (prefers-reduced-motion: reduce) { .flashcard-flip-inner { transition: none !important } } — no JS matchMedia detection, no reactivity needed, browser re-evaluates on OS-level change without re-render.
+    Tab.vue rewired from 7-1 placeholder: activeSetId ref branch renders <FlashcardsStudy> when a set card is clicked; emit back clears the ref and returns to list. handleSetSelect TODO removed.
+    No new persisted tables (SRS explicitly out of V1.2 per 7-1 Dev Notes open-product-decisions). convex/schema.ts, accountDeletion.ts, dataExport.ts untouched. schemaVersion stays at 4.
+    Tests: ATDD red-first authored pre-impl (tests/component/flashcards/flashcards-study.atdd.test.ts, 8 assertions covering front → flip → Next → completion → Restart → Back → source toggle). Full coverage suite (tests/component/flashcards/flashcards-study.test.ts, 12 assertions across AC #11 a–h plus unavailable + empty load states).
+    Test counters: pnpm test 245 passed / 8 skipped (unchanged, no unit-layer changes); pnpm test:component 129 passed / 78 skipped (was 109/78; +20 net new).
+    Inline code review PASS against 13/13 ACs — 0 blockers, 0 new deferred items.
+    PR #24 merged into dev as 2245fa9; branch deleted remote. sprint-status 7-2 → done; epic-7 remains in-progress (7-3 next).
+  block_reason: null
+  block_context: null
+  at: '2026-04-12T13:30:00Z'
+  commits:
+    - 5800196 feat(flashcards): study flash cards with flip, keyboard, swipe (story 7.2)
+    - c80560b chore(bmad): close story 7-2 — code review PASS, 0 deferred items
+  deferred_items: 0
+  blockers: 0
+  acs_covered: 13
+  acs_total: 13
+
+prior_last_verdict:
   subagent: bmad-story-runner
   story: 7-1-generate-flash-cards-from-folder-documents
   epic: 7
@@ -42,42 +85,6 @@ last_verdict:
   commits:
     - 34fa793 feat(flashcards): generate flash cards from folder documents (story 7.1)
   deferred_items: 5
-  blockers: 0
-  acs_covered: 13
-  acs_total: 13
-
-prior_last_verdict:
-  subagent: bmad-story-runner
-  story: 6-3-edit-questions-and-view-previous-quizzes
-  epic: 6
-  status: PASS
-  pr_url: https://github.com/wescodess/budds/pull/21
-  branch: feat/6-3-edit-questions-and-view-previous-quizzes
-  commit_sha: 43566c5
-  merge_commit: 4bea80e
-  merged_at: '2026-04-12T12:30:00Z'
-  files_changed: 11
-  tasks_completed: 8
-  tasks_total: 8
-  findings_deferred: 0
-  lint_pass: null
-  typecheck_pass: null
-  unit_tests_pass: true
-  e2e_tests_pass: null
-  review_pass: true
-  summary: |
-    Story 6-3 shipped — edit questions, delete quizzes, and review previous attempts. Closes Epic 6 application stories.
-    Convex: new `quizzes.updateQuestion` mutation (auth + ownership + validation — empty-text / MC ≥ 2 options / correctAnswer ∈ options; preserves source citation immutability per epics.md line 851; `sourceDocumentId`, `sourceChunkContent`, `sourceFilename`, `order`, `type`, `quizId`, `userId` are not patched) and `quizzes.deleteQuiz` mutation (child-before-parent cascade: attempts → questions → quiz row via `by_quizId` index, matching `accountDeletion.ts` order). +9 convex tests (6 updateQuestion + 3 deleteQuiz) — auth reject, cross-user reject, empty-text reject, MC correct-not-in-options reject, MC persist + preserve-immutable-fields, free-response strips options, deleteQuiz isolation (user-B rows survive).
-    UI: new `app/components/quiz/Editor.vue` in-tab surface. Per-question inline Edit form with MC options editor (add/remove/radio-selected-correct tracked by INDEX so option-text edits don't break the binding) or free-response correct-answer textarea. Client-side validation mirrors server; same `quiz-editor-question-error` line surfaces either source. `Tab.vue` gains `quiz-card-menu` (ellipsis) → inline Edit/Delete actions row → inline `Confirm delete` + `Cancel` swap (no AlertDialog — Reka-portal discipline per Epic 5 retro prep #3 / AC #12). Success-delete announces via `aria-live="polite"` region. `Taker.vue` adds `useConvexQuery(api.quizzes.listAttempts)` alongside `getWithQuestions`; on mount, if a prior attempt exists, hydrates `resultsByQuestion` + `scoreSummary` from the most-recent attempt and enters review mode (score header + per-question badges + source-reveal). `Retake quiz` button resets answering state; new `submitAttempt` call inserts a new attempt (most-recent-wins unchanged).
-    ATDD honored: 5 failing `quiz-editor.atdd.test.ts` assertions authored pre-Task-2 (loading / rows / MC form appears / Save payload / Cancel). Then implementation. +17 quiz component tests total added (5 editor ATDD + 8 editor + 2 taker-review + 2 tab menu/delete) — 34/34 quiz component tests pass. 221 Convex/server tests pass (+ 8 skipped baseline).
-    Schema unchanged; no new tables; no export-schema bump (stays at v3 from 6-2); `accountDeletion.ts` + `dataExport.ts` untouched. Cascade re-audit is a no-op (no new table joined the graph — `deleteQuiz` is per-quiz not per-user). Attempts are point-in-time snapshots — editing a question's `correctAnswer` does NOT retroactively rescore past attempts (intentional V1.1 simplification; deferred-work.md entry only if smoke test reveals user confusion).
-    Reka-portal discipline preserved (AC #12): zero new portaled primitives (inline actions row, inline delete-confirm, in-tab editor expander). Code review PASS inline against all 13 ACs — 0 blockers, 0 new deferred items. PR #21 merged into dev as 4bea80e.
-  block_reason: null
-  block_context: null
-  at: '2026-04-12T12:30:00Z'
-  commits:
-    - 43566c5 feat(quiz): edit questions, delete quiz, review previous attempts (story 6-3)
-  deferred_items: 0
   blockers: 0
   acs_covered: 13
   acs_total: 13
@@ -141,8 +148,8 @@ paths:
   ux_spec: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/ux-design-specification.md
 
 counters:
-  stories_completed_this_run: 8
-  stories_completed_total: 8
+  stories_completed_this_run: 9
+  stories_completed_total: 9
 
 escalation:
   pending: null
@@ -217,6 +224,8 @@ escalation:
 
 decisions_log:
   - ts: '2026-04-12'
+    decision: story-runner PASS for 7-2 (0 deferred, 0 blockers, 13/13 ACs, 6 files, +20 component tests net). PR #24 merged 2245fa9. New app/components/flashcards/Study.vue (3D CSS flip, keyboard Space/Arrows/Escape guarded, @vueuse useSwipe 40px, inline source toggle reusing ChatCitationBadge+ChatSourceCard, CSS-only prefers-reduced-motion). Tab.vue rewired from 7-1 placeholder (activeSetId ref branch). Zero schema/cascade/export changes — ephemeral session state per 7-1 V1.2 framing. Reka-portal discipline preserved. Counters 8→9 this-run. Advancing to 7-3.
+  - ts: '2026-04-12'
     decision: story-runner PASS for 7-1 (5 deferred, 0 blockers, 13/13 ACs, 18 files, +24 unit tests net). PR #23 merged 801b603. Epic 6 retro P0 #1 (chat-input baseline 6 failures → resolved via path fix ChatInput.vue → Input.vue) and P0 #2 (cascade re-audit — deleteAllFlashcardsForUser + deleteAllFlashcardSetsForUser inserted child-before-parent before deleteAllDocumentsForUser) both folded inline. Data export schema v3→v4. Counters 7→8 this-run. Telegram notified. Advancing to 7-2.
   - ts: '2026-04-12'
     decision: epic-boundary 6→7 — user chose proceed_to_7_1_with_prep_inside (matches Epic 5/6 precedent). P0 #1 (chat-input baseline triage) and P0 #2 (cascade re-audit for flashcards) fold into 7-1 ACs. Story-runner instructed to honor 30-min triage budget for baseline + child-before-parent cascade insertion. BLOCKED escape if scope explodes. Checkpointing state; spawning bmad-story-runner for 7-1.
@@ -244,6 +253,18 @@ decisions_log:
     decision: story-runner PASS for 5-3 (6 deferred, 0 blockers); PR #17 merged ff3ae38. All epic-5 application stories done. Epic-boundary escalation raised (retro optional) — halting for user.
 
 run_log:
+  - ts: '2026-04-12'
+    mode: resume
+    note: |
+      Spawned bmad-story-runner for 7-2. Runner PASS: PR #24 merged 2245fa9, 6 files, 9/9 tasks, 13/13 ACs, 0 deferred, 0 blockers.
+      New app/components/flashcards/Study.vue — card-by-card flip study surface. 3D CSS flip (rotateY + backface-visibility), progress X / N, Next/Previous disabled-at-0, inline completion summary with Restart + Back to list.
+      Keyboard: document-level keydown (Space/ArrowLeft/ArrowRight/Escape) with INPUT/TEXTAREA target guard. Touch: @vueuse/core useSwipe at 40px threshold. Button parity preserved.
+      Source citation: inline reveal using existing ChatCitationBadge + ChatSourceCard (no portaled primitives — Epic 5/6 retro standing rule preserved for V1.x).
+      prefers-reduced-motion: pure CSS @media query (no JS matchMedia). Tab.vue rewired — activeSetId ref branch renders Study; 7-1 placeholder removed.
+      Zero new persisted tables, zero cascade changes, zero schemaVersion bump (stays at 4) — ephemeral session state per 7-1 V1.2 Dev Notes framing.
+      ATDD red-first authored pre-impl (8 assertions). Full coverage (12 assertions) across AC #11 a–h + unavailable + empty.
+      Test counters: pnpm test 245/8-skip (unchanged); pnpm test:component 129/78-skip (was 109/78; +20 net new).
+      Counters 8→9 this-run. Advancing to 7-3.
   - ts: '2026-04-12'
     mode: resume
     note: |
