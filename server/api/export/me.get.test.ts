@@ -116,13 +116,14 @@ describe('GET /api/export/me', () => {
         'folders.json',
         'manifest.json',
         'messages.json',
+        'quizAttempts.json',
         'quizQuestions.json',
         'quizzes.json',
       ].sort(),
     )
 
     const manifest = JSON.parse(strFromU8(entries['manifest.json']!))
-    expect(manifest.schemaVersion).toBe(2)
+    expect(manifest.schemaVersion).toBe(3)
     expect(manifest.userId).toBe('tok|user1')
     expect(manifest.counts.documents).toBe(1)
     expect(manifest.unresolvedDocuments).toEqual([])

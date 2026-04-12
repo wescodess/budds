@@ -129,3 +129,124 @@ export const getWithQuestions = query({
     return { quiz, questions }
   },
 })
+
+function normalizeForCompare(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+function scoreAnswer(
+  type: 'multiple-choice' | 'free-response',
+  response: string,
+  correctAnswer: string,
+): boolean {
+  if (type === 'multiple-choice') {
+    return response === correctAnswer
+  }
+  return normalizeForCompare(response) === normalizeForCompare(correctAnswer)
+}
+
+export const submitAttempt = mutation({
+  args: {
+    quizId: v.id('quizzes'),
+    answers: v.array(
+      v.object({
+        questionId: v.id('quizQuestions'),
+        response: v.string(),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) throw new Error('Unauthenticated')
+
+    const userId = identity.tokenIdentifier
+
+    const quiz = await ctx.db.get(args.quizId)
+    if (!quiz || quiz.userId !== userId) {
+      throw new Error('Quiz not found')
+    }
+
+    const questions = await ctx.db
+      .query('quizQuestions')
+      .withIndex('by_quizId', (q) => q.eq('quizId', args.quizId))
+      .collect()
+
+    const questionMap = new Map<string, (typeof questions)[number]>(
+      questions.map((q) => [q._id as unknown as string, q]),
+    )
+
+    for (const a of args.answers) {
+      const q = questionMap.get(a.questionId as unknown as string)
+      if (!q || q.userId !== userId) {
+        throw new Error('Invalid question')
+      }
+    }
+
+    const scoredAnswers = args.answers.map((a) => {
+      const q = questionMap.get(a.questionId as unknown as string)!
+      return {
+        questionId: a.questionId,
+        response: a.response,
+        isCorrect: scoreAnswer(q.type, a.response, q.correctAnswer),
+      }
+    })
+
+    const correctCount = scoredAnswers.filter((a) => a.isCorrect).length
+    const total = questions.length
+    const completedAt = Date.now()
+    const percentage = total > 0 ? Math.round((correctCount / total) * 100) : 0
+
+    const attemptId = await ctx.db.insert('quizAttempts', {
+      userId,
+      quizId: args.quizId,
+      answers: scoredAnswers,
+      score: correctCount,
+      total,
+      completedAt,
+    })
+
+    await ctx.db.patch(args.quizId, {
+      score: percentage,
+      completedAt,
+    })
+
+    const results = scoredAnswers.map((a) => {
+      const q = questionMap.get(a.questionId as unknown as string)!
+      return {
+        questionId: a.questionId,
+        isCorrect: a.isCorrect,
+        correctAnswer: q.correctAnswer,
+        userResponse: a.response,
+      }
+    })
+
+    return {
+      attemptId,
+      score: correctCount,
+      total,
+      correctCount,
+      results,
+    }
+  },
+})
+
+export const listAttempts = query({
+  args: { quizId: v.id('quizzes') },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) return []
+
+    const userId = identity.tokenIdentifier
+
+    const quiz = await ctx.db.get(args.quizId)
+    if (!quiz || quiz.userId !== userId) return []
+
+    return await ctx.db
+      .query('quizAttempts')
+      .withIndex('by_userId_and_quizId', (q) =>
+        q.eq('userId', userId).eq('quizId', args.quizId),
+      )
+      .order('desc')
+      .collect()
+  },
+})

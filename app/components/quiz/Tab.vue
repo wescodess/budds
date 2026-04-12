@@ -15,6 +15,7 @@ const {
 } = useQuizzes(toRef(props, 'folderId'))
 
 const expandedQuizPreview = ref<string | null>(null)
+const activeQuizId = ref<Id<'quizzes'> | null>(null)
 
 async function handleGenerate() {
   try {
@@ -32,14 +33,22 @@ function togglePreview(id: string) {
   expandedQuizPreview.value = expandedQuizPreview.value === id ? null : id
 }
 
-function handleCardSelect(_quizId: string) {
-  // TODO(story 6.2): navigate to take-quiz view
+function handleCardSelect(quizId: string) {
+  activeQuizId.value = quizId as Id<'quizzes'>
+}
+
+function handleTakerBack() {
+  activeQuizId.value = null
 }
 </script>
 
 <template>
   <div data-testid="quiz-tab-content">
-    <template v-if="!hasIndexedDocuments">
+    <template v-if="activeQuizId">
+      <QuizTaker :quiz-id="activeQuizId" @back="handleTakerBack" />
+    </template>
+
+    <template v-else-if="!hasIndexedDocuments">
       <div
         data-testid="quiz-empty-no-docs"
         class="flex flex-1 items-center justify-center py-12 text-muted-foreground"
