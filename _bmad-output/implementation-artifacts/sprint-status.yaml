@@ -36,6 +36,7 @@
 
 generated: 2026-04-09
 last_updated: '2026-04-12'
+# Epic 7 retrospective completed 2026-04-12 (epic-7-retro-2026-04-12.md); epic-7 → done, epic-7-retrospective → done; V1.2 shipped — closes the pre-GA sprint plan (epics 1–7). Seventh consecutive 100% epic. Pre-launch checklist promoted: P0 pnpm lint/typecheck (3-epic drift), P0 governing-law finalise, P0 unified rate-limit across export/quiz/flashcards generate. 5 new deferred items (all Story 7-1); 7-2/7-3 shipped with 0 deferred.
 # Story 7.3 dev completed + code review PASS 2026-04-12: status → review then done (pre-PR); new app/components/flashcards/Editor.vue (in-tab editor, inline per-card edit + confirm-delete swap, no portals); Tab.vue ellipsis menu + inline actions row + editor-branch; Convex updateCard/deleteCard/deleteSet with identity+ownership + child-before-parent cascade + atomic cardCount decrement; +11 Convex [P0] tests, +6 Editor ATDD tests (31/31 flashcards component tests pass, 256 Convex tests pass); schemaVersion unchanged at 4; 0 blockers, 0 deferred items
 # Story 7.2 code review PASS 2026-04-12: PR #24 merged 2245fa9, status → done; new app/components/flashcards/Study.vue (3D CSS flip, keyboard Space/Arrows/Escape, @vueuse useSwipe 40px, inline source toggle, prefers-reduced-motion via CSS @media); Tab.vue rewired from 7-1 placeholder (activeSetId ref branch); zero new tables, zero cascade changes, schemaVersion unchanged at 4; +20 net component tests; 0 deferred items, 0 blockers, 13/13 ACs
 # Story 7.1 code review PASS 2026-04-12: 5 deferred items (no blockers), PR #23 merged, status → done; opens Epic 7 with flashcardSets + flashcards tables, POST /api/flashcards/generate, Flash Cards tab. Epic 7 prep P0 #1 (chat-input path fix, 6 tests unskipped) + P0 #2 (cascade re-audit + schemaVersion 3→4) folded in inline.
@@ -75,7 +76,7 @@ story_location_note: Story 3.2 created 2026-04-11
 
 
 
-retrospective_location: _bmad-output/implementation-artifacts/epic-6-retro-2026-04-12.md
+retrospective_location: _bmad-output/implementation-artifacts/epic-7-retro-2026-04-12.md
 project: budds
 
 project_key: NOKEY
@@ -119,8 +120,8 @@ development_status:
   6-3-edit-questions-and-view-previous-quizzes: done
   epic-6-retrospective: done
 
-  epic-7: in-progress
+  epic-7: done
   7-1-generate-flash-cards-from-folder-documents: done
   7-2-study-flash-cards: done
   7-3-edit-delete-and-manage-flash-card-sets: done
-  epic-7-retrospective: optional
+  epic-7-retrospective: done
