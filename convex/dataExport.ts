@@ -49,6 +49,16 @@ export const collectUserData = query({
       .withIndex('by_userId', (q) => q.eq('userId', userId))
       .collect()
 
+    const flashcardSets = await ctx.db
+      .query('flashcardSets')
+      .withIndex('by_userId', (q) => q.eq('userId', userId))
+      .collect()
+
+    const flashcards = await ctx.db
+      .query('flashcards')
+      .withIndex('by_userId', (q) => q.eq('userId', userId))
+      .collect()
+
     return {
       userId,
       user: userRow
@@ -68,6 +78,8 @@ export const collectUserData = query({
       quizzes,
       quizQuestions,
       quizAttempts,
+      flashcardSets,
+      flashcards,
     }
   },
 })

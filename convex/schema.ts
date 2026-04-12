@@ -91,6 +91,32 @@ export default defineSchema({
     .index('by_quizId', ['quizId'])
     .index('by_userId', ['userId']),
 
+  flashcardSets: defineTable({
+    userId: v.string(),
+    folderId: v.id('folders'),
+    title: v.string(),
+    status: v.union(v.literal('generating'), v.literal('ready'), v.literal('failed')),
+    failureReason: v.optional(v.string()),
+    model: v.optional(v.string()),
+    cardCount: v.number(),
+  })
+    .index('by_userId', ['userId'])
+    .index('by_folderId', ['folderId'])
+    .index('by_userId_and_folderId', ['userId', 'folderId']),
+
+  flashcards: defineTable({
+    setId: v.id('flashcardSets'),
+    userId: v.string(),
+    order: v.number(),
+    front: v.string(),
+    back: v.string(),
+    sourceDocumentId: v.optional(v.id('documents')),
+    sourceChunkContent: v.string(),
+    sourceFilename: v.string(),
+  })
+    .index('by_setId', ['setId'])
+    .index('by_userId', ['userId']),
+
   quizAttempts: defineTable({
     userId: v.string(),
     quizId: v.id('quizzes'),
