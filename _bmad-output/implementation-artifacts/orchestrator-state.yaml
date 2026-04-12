@@ -1,5 +1,5 @@
-mode: escalated
-current_phase: epic-boundary
+mode: running
+current_phase: epic-story
 current_story: 7-1-generate-flash-cards-from-folder-documents
 current_epic: 7
 retry_count: 0
@@ -117,32 +117,20 @@ counters:
   stories_completed_total: 7
 
 escalation:
-  pending:
-    question: |
-      Epic 6 retrospective merged (PR #22, 7664f9b). Crossing into Epic 7 (Flashcards, 3 stories).
-      Epic 6 retro identified 7 prep items: 2 P0 engineering, 1 P0 pre-GA non-eng, 2 P1, 2 P2.
-
-      P0 prep items:
-        1. Decide on chat-input.test.ts 6-failure baseline (Dana) — must happen in first Epic 7 PR or as 30-min triage at Epic 7 start
-        2. Cascade re-audit checklist for flashcards + flashcardSets tables (Charlie) — fold into 7-1
-        4. Finalise governing-law jurisdiction in /terms (palmwine) — non-engineering, parallel
-
-      Precedent: Epics 5 & 6 used "proceed_to_first_story_with_prep_inside". Epic 6 retro reaffirms this:
-      "prep items shipped as story ACs close at 100%; named-but-unscoped items drift."
-
-      Options:
-        a) proceed_to_7_1_with_prep_inside — match Epic 5/6 precedent; chat-input baseline + cascade audit fold into 7-1
-        b) create_prep_story_for_chat_input_baseline — dedicated triage story first (analogous to "create prep story" option in Epic 5 boundary)
-        c) run_sprint_planning — full bmad-bmm-workflows-sprint-planning for Epic 7
-    recommended_default: proceed_to_7_1_with_prep_inside
-    options:
-      - proceed_to_7_1_with_prep_inside
-      - create_prep_story_for_chat_input_baseline
-      - run_sprint_planning
-    asked_at: '2026-04-12'
-    context_ref: _bmad-output/implementation-artifacts/epic-6-retro-2026-04-12.md#L150-L180
-    raised_from_state: epic-boundary
+  pending: null
   log:
+    - ts: '2026-04-12'
+      question: |
+        Epic 6→7 boundary. 7 prep items (2 P0 eng: chat-input baseline + cascade audit checklist).
+        proceed_to_7_1_with_prep_inside, create_prep_story_for_chat_input_baseline, or run_sprint_planning?
+      answer: proceed_to_7_1_with_prep_inside
+      answered_at: '2026-04-12'
+      resolution: |
+        User matched Epic 5/6 precedent. P0 #1 (chat-input baseline triage) and P0 #2 (cascade re-audit)
+        fold into 7-1. Story-runner instructed to triage chat-input.test.ts inside the 30-min budget
+        framing per Epic 5 retro pattern, and to insert flashcard tables child-before-parent in
+        accountDeletion before the documents step. BLOCKED escape preserved if scope explodes.
+        Spawning bmad-story-runner for 7-1.
     - ts: '2026-04-12'
       question: |
         Epic 6 boundary — retro optional. run_retro_first or skip_retro_proceed_to_7_1?
@@ -200,6 +188,8 @@ escalation:
         Ran bmad-bmm-workflows-retrospective. Produced epic-4-retro-2026-04-12.md covering: 4/4 stories, review metrics, Epic 3 retro follow-through (3/3), 7 new deferred items, 5 Epic 5 prep items. Opened PR #14, merged (0892314). sprint-status epic-4 → done, epic-4-retrospective → done.
 
 decisions_log:
+  - ts: '2026-04-12'
+    decision: epic-boundary 6→7 — user chose proceed_to_7_1_with_prep_inside (matches Epic 5/6 precedent). P0 #1 (chat-input baseline triage) and P0 #2 (cascade re-audit for flashcards) fold into 7-1 ACs. Story-runner instructed to honor 30-min triage budget for baseline + child-before-parent cascade insertion. BLOCKED escape if scope explodes. Checkpointing state; spawning bmad-story-runner for 7-1.
   - ts: '2026-04-12'
     decision: Epic 6 retrospective produced and merged (PR #22, 7664f9b — epic-6-retro-2026-04-12.md). epic-6 + epic-6-retrospective → done. 7 Epic 7 prep items identified (2 P0 eng, 1 P0 pre-GA non-eng, 2 P1, 2 P2). Raising Epic 7 prep escalation; recommended proceed_to_7_1_with_prep_inside (matches Epic 5/6 precedent).
   - ts: '2026-04-12'
