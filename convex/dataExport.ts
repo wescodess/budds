@@ -44,6 +44,11 @@ export const collectUserData = query({
       .withIndex('by_userId', (q) => q.eq('userId', userId))
       .collect()
 
+    const quizAttempts = await ctx.db
+      .query('quizAttempts')
+      .withIndex('by_userId', (q) => q.eq('userId', userId))
+      .collect()
+
     return {
       userId,
       user: userRow
@@ -62,6 +67,7 @@ export const collectUserData = query({
       messages,
       quizzes,
       quizQuestions,
+      quizAttempts,
     }
   },
 })

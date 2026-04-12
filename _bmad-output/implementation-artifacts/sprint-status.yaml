@@ -106,7 +106,7 @@ development_status:
 
   epic-6: in-progress
   6-1-generate-quiz-from-folder-documents: done
-  6-2-take-quiz-and-view-results: backlog
+  6-2-take-quiz-and-view-results: review
   6-3-edit-questions-and-view-previous-quizzes: backlog
   epic-6-retrospective: optional
 

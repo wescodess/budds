@@ -92,6 +92,7 @@ describe('dataExport.collectUserData', () => {
     expect(result.messages).toEqual([])
     expect(result.quizzes).toEqual([])
     expect(result.quizQuestions).toEqual([])
+    expect(result.quizAttempts).toEqual([])
   })
 
   test('returns quizzes + quizQuestions scoped to the caller', async () => {
@@ -136,6 +137,55 @@ describe('dataExport.collectUserData', () => {
     expect(result.quizzes.every((q: any) => q.userId === USER_A.tokenIdentifier)).toBe(true)
     expect(result.quizQuestions).toHaveLength(2)
     expect(result.quizQuestions.every((q: any) => q.userId === USER_A.tokenIdentifier)).toBe(true)
+  })
+
+  test('returns quizAttempts scoped to the caller (Story 6.2)', async () => {
+    const t = convexTest(schema, modules)
+    const a = await seedUser(t, USER_A)
+    const b = await seedUser(t, USER_B)
+
+    const questions = [
+      {
+        order: 0,
+        question: 'Q1',
+        type: 'free-response' as const,
+        correctAnswer: 'A1',
+        sourceChunkContent: 'c1',
+        sourceFilename: 'f.pdf',
+      },
+    ]
+
+    const aQuiz = await a.asUser.mutation(api.quizzes.createWithQuestions, {
+      folderId: a.folderId,
+      title: 'A',
+      questions,
+    })
+    const bQuiz = await b.asUser.mutation(api.quizzes.createWithQuestions, {
+      folderId: b.folderId,
+      title: 'B',
+      questions,
+    })
+
+    const aQs = await t.run(async (ctx) =>
+      ctx.db.query('quizQuestions').withIndex('by_quizId', (q) => q.eq('quizId', aQuiz.quizId)).collect(),
+    )
+    const bQs = await t.run(async (ctx) =>
+      ctx.db.query('quizQuestions').withIndex('by_quizId', (q) => q.eq('quizId', bQuiz.quizId)).collect(),
+    )
+
+    await a.asUser.mutation(api.quizzes.submitAttempt, {
+      quizId: aQuiz.quizId,
+      answers: [{ questionId: aQs[0]!._id, response: 'A1' }],
+    })
+    await b.asUser.mutation(api.quizzes.submitAttempt, {
+      quizId: bQuiz.quizId,
+      answers: [{ questionId: bQs[0]!._id, response: 'A1' }],
+    })
+
+    const result = await a.asUser.query(api.dataExport.collectUserData, {})
+
+    expect(result.quizAttempts).toHaveLength(1)
+    expect(result.quizAttempts.every((a: any) => a.userId === USER_A.tokenIdentifier)).toBe(true)
   })
 
   test('returned rows contain expected fields', async () => {

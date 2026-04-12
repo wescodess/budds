@@ -87,6 +87,7 @@ export const deleteAccountCascade = internalMutation({
 
     await deleteAllMessagesForUser(ctx, userId)
     await deleteAllConversationsForUser(ctx, userId)
+    await deleteAllQuizAttemptsForUser(ctx, userId)
     await deleteAllQuizQuestionsForUser(ctx, userId)
     await deleteAllQuizzesForUser(ctx, userId)
     await deleteAllDocumentsForUser(ctx, userId)
@@ -137,6 +138,18 @@ async function deleteAllDocumentsForUser(ctx: MutationCtx, userId: string) {
   while (true) {
     const batch = await ctx.db
       .query('documents')
+      .withIndex('by_userId', (q) => q.eq('userId', userId))
+      .take(500)
+    if (batch.length === 0) break
+    for (const row of batch) await ctx.db.delete(row._id)
+    if (batch.length < 500) break
+  }
+}
+
+async function deleteAllQuizAttemptsForUser(ctx: MutationCtx, userId: string) {
+  while (true) {
+    const batch = await ctx.db
+      .query('quizAttempts')
       .withIndex('by_userId', (q) => q.eq('userId', userId))
       .take(500)
     if (batch.length === 0) break
