@@ -6,6 +6,7 @@ const props = defineProps<{
   role: 'user' | 'assistant'
   content: string
   sources?: Source[]
+  streaming?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -68,6 +69,17 @@ function getFilenameForIndex(index: number): string {
           @click="emit('citation-click', part.index)"
         />
       </template>
+      <span
+        v-if="props.streaming && props.role === 'assistant'"
+        data-testid="streaming-cursor"
+        class="ml-0.5 inline-block h-4 w-0.5 translate-y-0.5 bg-foreground animate-pulse motion-reduce:hidden"
+        aria-hidden="true"
+      />
+      <span
+        v-if="props.streaming && props.role === 'assistant'"
+        class="ml-1 hidden text-muted-foreground motion-reduce:inline"
+        aria-hidden="true"
+      >...</span>
     </div>
   </div>
 </template>
