@@ -121,5 +121,5 @@ development_status:
   epic-7: in-progress
   7-1-generate-flash-cards-from-folder-documents: done
   7-2-study-flash-cards: done
-  7-3-edit-delete-and-manage-flash-card-sets: backlog
+  7-3-edit-delete-and-manage-flash-card-sets: ready-for-dev
   epic-7-retrospective: optional

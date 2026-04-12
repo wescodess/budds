@@ -139,6 +139,289 @@ describe('flashcards.listByFolder', () => {
   })
 })
 
+describe('flashcards.updateCard', () => {
+  test('[P0] rejects unauthenticated callers', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
+    const { setId } = await asUser.mutation(api.flashcards.createSetWithCards, {
+      folderId,
+      title: 'Set',
+      cards: sampleCards(),
+    })
+    const cards = await t.run((ctx) =>
+      ctx.db.query('flashcards').withIndex('by_setId', (q) => q.eq('setId', setId)).collect(),
+    )
+
+    await expect(
+      t.mutation(api.flashcards.updateCard, {
+        cardId: cards[0]!._id,
+        front: 'New',
+        back: 'New',
+      }),
+    ).rejects.toThrow(/Unauthenticated/)
+  })
+
+  test('[P0] rejects when card belongs to another user', async () => {
+    const t = convexTest(schema, modules)
+    const asA = t.withIdentity(USER_A)
+    const asB = t.withIdentity(USER_B)
+    const folderA = await asA.mutation(api.folders.createFolder, { name: 'Bio' })
+    const { setId } = await asA.mutation(api.flashcards.createSetWithCards, {
+      folderId: folderA,
+      title: 'Alice',
+      cards: sampleCards(),
+    })
+    const cards = await t.run((ctx) =>
+      ctx.db.query('flashcards').withIndex('by_setId', (q) => q.eq('setId', setId)).collect(),
+    )
+
+    await expect(
+      asB.mutation(api.flashcards.updateCard, {
+        cardId: cards[0]!._id,
+        front: 'Hack',
+        back: 'Hack',
+      }),
+    ).rejects.toThrow(/Card not found/)
+  })
+
+  test('[P0] rejects empty front or back (trimmed)', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
+    const { setId } = await asUser.mutation(api.flashcards.createSetWithCards, {
+      folderId,
+      title: 'Set',
+      cards: sampleCards(),
+    })
+    const cards = await t.run((ctx) =>
+      ctx.db.query('flashcards').withIndex('by_setId', (q) => q.eq('setId', setId)).collect(),
+    )
+
+    await expect(
+      asUser.mutation(api.flashcards.updateCard, {
+        cardId: cards[0]!._id,
+        front: '   ',
+        back: 'ok',
+      }),
+    ).rejects.toThrow(/Front text required/)
+
+    await expect(
+      asUser.mutation(api.flashcards.updateCard, {
+        cardId: cards[0]!._id,
+        front: 'ok',
+        back: '   ',
+      }),
+    ).rejects.toThrow(/Back text required/)
+  })
+
+  test('[P0] updates only front + back, preserves source + order + owner', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
+    const { setId } = await asUser.mutation(api.flashcards.createSetWithCards, {
+      folderId,
+      title: 'Set',
+      cards: sampleCards(),
+    })
+    const cards = await t.run((ctx) =>
+      ctx.db.query('flashcards').withIndex('by_setId', (q) => q.eq('setId', setId)).collect(),
+    )
+    const original = cards[0]!
+
+    await asUser.mutation(api.flashcards.updateCard, {
+      cardId: original._id,
+      front: '  Updated front  ',
+      back: 'Updated back',
+    })
+
+    const after = await t.run((ctx) => ctx.db.get(original._id))
+    expect(after?.front).toBe('Updated front')
+    expect(after?.back).toBe('Updated back')
+    expect(after?.setId).toBe(original.setId)
+    expect(after?.userId).toBe(original.userId)
+    expect(after?.order).toBe(original.order)
+    expect(after?.sourceDocumentId).toBe(original.sourceDocumentId)
+    expect(after?.sourceChunkContent).toBe(original.sourceChunkContent)
+    expect(after?.sourceFilename).toBe(original.sourceFilename)
+  })
+})
+
+describe('flashcards.deleteCard', () => {
+  test('[P0] rejects unauthenticated callers', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
+    const { setId } = await asUser.mutation(api.flashcards.createSetWithCards, {
+      folderId,
+      title: 'Set',
+      cards: sampleCards(),
+    })
+    const cards = await t.run((ctx) =>
+      ctx.db.query('flashcards').withIndex('by_setId', (q) => q.eq('setId', setId)).collect(),
+    )
+
+    await expect(
+      t.mutation(api.flashcards.deleteCard, { cardId: cards[0]!._id }),
+    ).rejects.toThrow(/Unauthenticated/)
+  })
+
+  test('[P0] rejects when card belongs to another user', async () => {
+    const t = convexTest(schema, modules)
+    const asA = t.withIdentity(USER_A)
+    const asB = t.withIdentity(USER_B)
+    const folderA = await asA.mutation(api.folders.createFolder, { name: 'Bio' })
+    const { setId } = await asA.mutation(api.flashcards.createSetWithCards, {
+      folderId: folderA,
+      title: 'Alice',
+      cards: sampleCards(),
+    })
+    const cards = await t.run((ctx) =>
+      ctx.db.query('flashcards').withIndex('by_setId', (q) => q.eq('setId', setId)).collect(),
+    )
+
+    await expect(
+      asB.mutation(api.flashcards.deleteCard, { cardId: cards[0]!._id }),
+    ).rejects.toThrow(/Card not found/)
+  })
+
+  test('[P0] removes card and decrements parent cardCount', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
+    const { setId } = await asUser.mutation(api.flashcards.createSetWithCards, {
+      folderId,
+      title: 'Set',
+      cards: sampleCards(),
+    })
+    const cards = await t.run((ctx) =>
+      ctx.db.query('flashcards').withIndex('by_setId', (q) => q.eq('setId', setId)).collect(),
+    )
+
+    const result = await asUser.mutation(api.flashcards.deleteCard, {
+      cardId: cards[0]!._id,
+    })
+    expect(result.setId).toBe(setId)
+    expect(result.cardCount).toBe(1)
+
+    const survivors = await t.run((ctx) =>
+      ctx.db.query('flashcards').withIndex('by_setId', (q) => q.eq('setId', setId)).collect(),
+    )
+    expect(survivors).toHaveLength(1)
+
+    const set = await t.run((ctx) => ctx.db.get(setId))
+    expect(set?.cardCount).toBe(1)
+  })
+
+  test('[P0] deleting last card leaves set with cardCount 0', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
+    const { setId } = await asUser.mutation(api.flashcards.createSetWithCards, {
+      folderId,
+      title: 'Set',
+      cards: sampleCards(),
+    })
+    const cards = await t.run((ctx) =>
+      ctx.db.query('flashcards').withIndex('by_setId', (q) => q.eq('setId', setId)).collect(),
+    )
+
+    for (const c of cards) {
+      await asUser.mutation(api.flashcards.deleteCard, { cardId: c._id })
+    }
+
+    const set = await t.run((ctx) => ctx.db.get(setId))
+    expect(set?.cardCount).toBe(0)
+    const survivors = await t.run((ctx) =>
+      ctx.db.query('flashcards').withIndex('by_setId', (q) => q.eq('setId', setId)).collect(),
+    )
+    expect(survivors).toHaveLength(0)
+  })
+})
+
+describe('flashcards.deleteSet', () => {
+  test('[P0] rejects unauthenticated callers', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
+    const { setId } = await asUser.mutation(api.flashcards.createSetWithCards, {
+      folderId,
+      title: 'Set',
+      cards: sampleCards(),
+    })
+
+    await expect(
+      t.mutation(api.flashcards.deleteSet, { setId }),
+    ).rejects.toThrow(/Unauthenticated/)
+  })
+
+  test('[P0] rejects when set belongs to another user', async () => {
+    const t = convexTest(schema, modules)
+    const asA = t.withIdentity(USER_A)
+    const asB = t.withIdentity(USER_B)
+    const folderA = await asA.mutation(api.folders.createFolder, { name: 'Bio' })
+    const { setId } = await asA.mutation(api.flashcards.createSetWithCards, {
+      folderId: folderA,
+      title: 'Alice',
+      cards: sampleCards(),
+    })
+
+    await expect(
+      asB.mutation(api.flashcards.deleteSet, { setId }),
+    ).rejects.toThrow(/Set not found/)
+  })
+
+  test('[P0] cascades child cards then parent set; siblings and other users untouched', async () => {
+    const t = convexTest(schema, modules)
+    const asA = t.withIdentity(USER_A)
+    const asB = t.withIdentity(USER_B)
+
+    const folderA = await asA.mutation(api.folders.createFolder, { name: 'Bio' })
+    const folderB = await asB.mutation(api.folders.createFolder, { name: 'Bio' })
+
+    const { setId: setA1 } = await asA.mutation(api.flashcards.createSetWithCards, {
+      folderId: folderA,
+      title: 'A1',
+      cards: sampleCards(),
+    })
+    const { setId: setA2 } = await asA.mutation(api.flashcards.createSetWithCards, {
+      folderId: folderA,
+      title: 'A2',
+      cards: sampleCards(),
+    })
+    const { setId: setB1 } = await asB.mutation(api.flashcards.createSetWithCards, {
+      folderId: folderB,
+      title: 'B1',
+      cards: sampleCards(),
+    })
+
+    const result = await asA.mutation(api.flashcards.deleteSet, { setId: setA1 })
+    expect(result.deletedCards).toBe(2)
+
+    const deletedSet = await t.run((ctx) => ctx.db.get(setA1))
+    expect(deletedSet).toBeNull()
+
+    const deletedCards = await t.run((ctx) =>
+      ctx.db.query('flashcards').withIndex('by_setId', (q) => q.eq('setId', setA1)).collect(),
+    )
+    expect(deletedCards).toEqual([])
+
+    const siblingSet = await t.run((ctx) => ctx.db.get(setA2))
+    expect(siblingSet).not.toBeNull()
+    const siblingCards = await t.run((ctx) =>
+      ctx.db.query('flashcards').withIndex('by_setId', (q) => q.eq('setId', setA2)).collect(),
+    )
+    expect(siblingCards).toHaveLength(2)
+
+    const foreignSet = await t.run((ctx) => ctx.db.get(setB1))
+    expect(foreignSet).not.toBeNull()
+    const foreignCards = await t.run((ctx) =>
+      ctx.db.query('flashcards').withIndex('by_setId', (q) => q.eq('setId', setB1)).collect(),
+    )
+    expect(foreignCards).toHaveLength(2)
+  })
+})
+
 describe('flashcards.getSetWithCards', () => {
   test('[P0] returns null for a set owned by another user', async () => {
     const t = convexTest(schema, modules)
