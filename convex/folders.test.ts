@@ -560,3 +560,181 @@ describe('folders.listAllFolders', () => {
     expect(user1All[0].name).toBe('User1 Folder')
   })
 })
+
+describe('folders.deleteFolder cascade (story 5.2)', () => {
+  it('[P0] should delete all documents in folder and enqueue their cleanup', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Cascade' })
+
+    const storageSuccessId = await t.run(async (ctx) => {
+      return await ctx.storage.store(new Blob(['success'], { type: 'application/pdf' }))
+    })
+    const storageProcessingId = await t.run(async (ctx) => {
+      return await ctx.storage.store(new Blob(['processing'], { type: 'application/pdf' }))
+    })
+
+    const docSuccessId = await asUser.mutation(api.documents.createDocument, {
+      folderId,
+      filename: 'success.pdf',
+      fileId: storageSuccessId,
+      fileSize: 1024,
+    })
+    const docProcessingId = await asUser.mutation(api.documents.createDocument, {
+      folderId,
+      filename: 'processing.pdf',
+      fileId: storageProcessingId,
+      fileSize: 512,
+    })
+
+    await t.run(async (ctx) => {
+      await ctx.db.patch(docSuccessId, {
+        status: 'success',
+        r2Key: `${TEST_IDENTITY.tokenIdentifier}/${docSuccessId}.txt`,
+      })
+    })
+
+    const result = await asUser.mutation(api.folders.deleteFolder, { id: folderId })
+    expect(result).toEqual({ deletedFolders: 1, deletedDocuments: 2 })
+
+    const remainingDocs = await t.run(async (ctx) => {
+      return (await ctx.db.query('documents').collect()).filter(
+        (d) => d.userId === TEST_IDENTITY.tokenIdentifier,
+      )
+    })
+    expect(remainingDocs).toHaveLength(0)
+
+    const remainingFolder = await t.run(async (ctx) => ctx.db.get(folderId))
+    expect(remainingFolder).toBeNull()
+
+    const rows = await t.run(async (ctx) => {
+      return await ctx.db
+        .query('pendingCleanup')
+        .withIndex('by_userId', (q) => q.eq('userId', TEST_IDENTITY.tokenIdentifier))
+        .collect()
+    })
+    const r2Rows = rows.filter((r) => r.kind === 'r2')
+    const aiRows = rows.filter((r) => r.kind === 'ai-search')
+    expect(r2Rows).toHaveLength(1)
+    expect(aiRows).toHaveLength(1)
+    expect(r2Rows[0].documentId).toBe(String(docSuccessId))
+    expect(aiRows[0].documentId).toBe(String(docSuccessId))
+  })
+
+  it('[P0] should cascade into descendant folders and clean up their documents', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+
+    const rootId = await asUser.mutation(api.folders.createFolder, { name: 'Root' })
+    const childId = await asUser.mutation(api.folders.createSubfolder, {
+      name: 'Child',
+      parentId: rootId,
+    })
+
+    const s1 = await t.run(async (ctx) => ctx.storage.store(new Blob(['r'], { type: 'application/pdf' })))
+    const s2 = await t.run(async (ctx) => ctx.storage.store(new Blob(['c'], { type: 'application/pdf' })))
+
+    const rootDocId = await asUser.mutation(api.documents.createDocument, {
+      folderId: rootId,
+      filename: 'root.pdf',
+      fileId: s1,
+      fileSize: 100,
+    })
+    const childDocId = await asUser.mutation(api.documents.createDocument, {
+      folderId: childId,
+      filename: 'child.pdf',
+      fileId: s2,
+      fileSize: 100,
+    })
+
+    await t.run(async (ctx) => {
+      await ctx.db.patch(rootDocId, { status: 'success', r2Key: `${TEST_IDENTITY.tokenIdentifier}/r.txt` })
+      await ctx.db.patch(childDocId, { status: 'success', r2Key: `${TEST_IDENTITY.tokenIdentifier}/c.txt` })
+    })
+
+    const result = await asUser.mutation(api.folders.deleteFolder, { id: rootId })
+    expect(result).toEqual({ deletedFolders: 2, deletedDocuments: 2 })
+
+    const docsLeft = await t.run(async (ctx) => {
+      return (await ctx.db.query('documents').collect()).filter(
+        (d) => d.userId === TEST_IDENTITY.tokenIdentifier,
+      )
+    })
+    expect(docsLeft).toHaveLength(0)
+
+    const foldersLeft = await t.run(async (ctx) => {
+      return (await ctx.db.query('folders').collect()).filter(
+        (f) => f.userId === TEST_IDENTITY.tokenIdentifier,
+      )
+    })
+    expect(foldersLeft).toHaveLength(0)
+
+    const rows = await t.run(async (ctx) => {
+      return await ctx.db
+        .query('pendingCleanup')
+        .withIndex('by_userId', (q) => q.eq('userId', TEST_IDENTITY.tokenIdentifier))
+        .collect()
+    })
+    expect(rows.filter((r) => r.kind === 'r2')).toHaveLength(2)
+    expect(rows.filter((r) => r.kind === 'ai-search')).toHaveLength(2)
+  })
+
+  it('[P0] should not touch another user\'s folder or documents', async () => {
+    const t = convexTest(schema, modules)
+    const asUserA = t.withIdentity(TEST_IDENTITY)
+    const asUserB = t.withIdentity(OTHER_IDENTITY)
+
+    const folderA = await asUserA.mutation(api.folders.createFolder, { name: 'A' })
+    const folderB = await asUserB.mutation(api.folders.createFolder, { name: 'B' })
+
+    const sA = await t.run(async (ctx) => ctx.storage.store(new Blob(['a'], { type: 'application/pdf' })))
+    const sB = await t.run(async (ctx) => ctx.storage.store(new Blob(['b'], { type: 'application/pdf' })))
+
+    const docA = await asUserA.mutation(api.documents.createDocument, {
+      folderId: folderA, filename: 'a.pdf', fileId: sA, fileSize: 100,
+    })
+    const docB = await asUserB.mutation(api.documents.createDocument, {
+      folderId: folderB, filename: 'b.pdf', fileId: sB, fileSize: 100,
+    })
+
+    await t.run(async (ctx) => {
+      await ctx.db.patch(docA, { status: 'success', r2Key: `${TEST_IDENTITY.tokenIdentifier}/a.txt` })
+      await ctx.db.patch(docB, { status: 'success', r2Key: `${OTHER_IDENTITY.tokenIdentifier}/b.txt` })
+    })
+
+    await asUserA.mutation(api.folders.deleteFolder, { id: folderA })
+
+    const bFolder = await t.run(async (ctx) => ctx.db.get(folderB))
+    expect(bFolder).not.toBeNull()
+
+    const bDoc = await t.run(async (ctx) => ctx.db.get(docB))
+    expect(bDoc).not.toBeNull()
+
+    const bPending = await t.run(async (ctx) => {
+      return await ctx.db
+        .query('pendingCleanup')
+        .withIndex('by_userId', (q) => q.eq('userId', OTHER_IDENTITY.tokenIdentifier))
+        .collect()
+    })
+    expect(bPending).toHaveLength(0)
+  })
+
+  it('[P1] empty-folder delete enqueues no pendingCleanup rows', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Empty' })
+
+    const result = await asUser.mutation(api.folders.deleteFolder, { id: folderId })
+    expect(result).toEqual({ deletedFolders: 1, deletedDocuments: 0 })
+
+    const rows = await t.run(async (ctx) => {
+      return await ctx.db
+        .query('pendingCleanup')
+        .withIndex('by_userId', (q) => q.eq('userId', TEST_IDENTITY.tokenIdentifier))
+        .collect()
+    })
+    expect(rows).toHaveLength(0)
+  })
+})
