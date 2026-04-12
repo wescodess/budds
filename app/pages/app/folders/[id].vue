@@ -1,15 +1,33 @@
 <script setup lang="ts">
-import { FolderPlus, FileText, MessageSquare } from 'lucide-vue-next'
+import { FolderPlus, FileText, MessageSquare, Plus } from 'lucide-vue-next'
 import { useMediaQuery } from '@vueuse/core'
+import { api } from '#convex/api'
 import type { Id } from '~~/convex/_generated/dataModel'
 
 const route = useRoute()
+const router = useRouter()
 const folderId = computed(() => route.params.id as Id<'folders'>)
+const conversationIdRef = computed<Id<'conversations'> | null>(() => {
+  const q = route.query?.conversationId
+  if (!q || Array.isArray(q)) return null
+  return q as Id<'conversations'>
+})
 
 const { folder } = useFolderDetail(folderId)
 const { allFolders, createSubfolder } = useFolders()
 const { documents, uploading, uploadFiles, deleteDocument, moveDocument } = useDocuments(folderId)
-const { messages, loading, streaming, error, hasIndexedDocuments, selectedModel, sendMessage, selectModel } = useChat(folderId)
+const {
+  messages,
+  loading,
+  streaming,
+  error,
+  hasIndexedDocuments,
+  selectedModel,
+  sendMessage,
+  selectModel,
+  loadConversation,
+  startNewConversation,
+} = useChat(folderId, conversationIdRef)
 
 const isDesktop = useMediaQuery('(min-width: 1024px)')
 
@@ -83,12 +101,73 @@ function handleSlashShortcut(e: KeyboardEvent) {
   chatInputRef.value?.focus()
 }
 
+function handleNewChatShortcut(e: KeyboardEvent) {
+  if (e.key.toLowerCase() !== 'n' || !(e.ctrlKey || e.metaKey)) return
+  if (activeTab.value !== 'chat') return
+  const tag = (e.target as HTMLElement)?.tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return
+  e.preventDefault()
+  handleNewChat()
+}
+
+function handleNewChat() {
+  startNewConversation()
+  const { conversationId: _dropped, ...rest } = route.query ?? {}
+  void router.replace({ query: rest })
+}
+
+async function hydrateFromRoute() {
+  if (!import.meta.client) return
+  if (conversationIdRef.value) {
+    try {
+      await loadConversation(conversationIdRef.value)
+    } catch {
+      // conversation may not exist; ignore
+    }
+    return
+  }
+
+  try {
+    const client = useConvex()
+    const convo = await client.query(api.conversations.getMostRecentForFolder, {
+      folderId: folderId.value,
+    })
+    if (convo?._id) {
+      await loadConversation(convo._id as Id<'conversations'>)
+      void router.replace({ query: { ...route.query, conversationId: convo._id } })
+    }
+  } catch {
+    // best-effort hydration
+  }
+}
+
+watch(folderId, () => {
+  startNewConversation()
+  void hydrateFromRoute()
+})
+
+watch(conversationIdRef, async (next, prev) => {
+  if (next === prev) return
+  if (next) {
+    try {
+      await loadConversation(next)
+    } catch {
+      // ignore
+    }
+  } else {
+    startNewConversation()
+  }
+})
+
 onMounted(() => {
   document.addEventListener('keydown', handleSlashShortcut)
+  document.addEventListener('keydown', handleNewChatShortcut)
+  void hydrateFromRoute()
 })
 
 onUnmounted(() => {
   document.removeEventListener('keydown', handleSlashShortcut)
+  document.removeEventListener('keydown', handleNewChatShortcut)
 })
 
 async function handleSendMessage(query: string) {
@@ -222,16 +301,28 @@ async function handleUpload(files: File[]) {
     </div>
 
     <UiTabs v-model="activeTab" class="flex flex-1 flex-col">
-      <UiTabsList>
-        <UiTabsTrigger value="chat">
-          <MessageSquare class="mr-1.5 h-4 w-4" />
-          Chat
-        </UiTabsTrigger>
-        <UiTabsTrigger value="documents">
-          <FileText class="mr-1.5 h-4 w-4" />
-          Documents
-        </UiTabsTrigger>
-      </UiTabsList>
+      <div class="flex items-center justify-between">
+        <UiTabsList>
+          <UiTabsTrigger value="chat">
+            <MessageSquare class="mr-1.5 h-4 w-4" />
+            Chat
+          </UiTabsTrigger>
+          <UiTabsTrigger value="documents">
+            <FileText class="mr-1.5 h-4 w-4" />
+            Documents
+          </UiTabsTrigger>
+        </UiTabsList>
+        <UiButton
+          v-if="activeTab === 'chat'"
+          variant="outline"
+          size="sm"
+          data-testid="chat-new-button"
+          @click="handleNewChat"
+        >
+          <Plus class="mr-1.5 h-4 w-4" />
+          New Chat
+        </UiButton>
+      </div>
 
       <UiTabsContent value="chat" class="flex flex-1 flex-col overflow-hidden">
         <div class="flex flex-1 overflow-hidden">

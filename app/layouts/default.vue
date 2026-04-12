@@ -12,7 +12,10 @@ import {
   HelpCircle,
   FileText,
   MessagesSquare,
+  MoreHorizontal,
+  Trash2,
 } from 'lucide-vue-next'
+import { api } from '#convex/api'
 import type { Id } from '~~/convex/_generated/dataModel'
 
 useHead({
@@ -159,6 +162,47 @@ function collectDescendantIds(folderId: string): Set<string> {
   return ids
 }
 
+const { data: recentChatsData } = useConvexQuery(api.conversations.listRecentForUser, {})
+const recentChats = computed(() => recentChatsData.value ?? [])
+
+const deleteConversationMutation = import.meta.client
+  ? useConvexMutation(api.conversations.deleteConversation)
+  : { mutate: async (_args: { id: Id<'conversations'> }) => {}, isLoading: ref(false) }
+
+const showDeleteConvoDialog = ref(false)
+const convoToDelete = ref<{ _id: Id<'conversations'>; title: string; folderId: Id<'folders'> } | null>(null)
+
+function handleDeleteConversationRequest(convo: { _id: Id<'conversations'>; title: string; folderId: Id<'folders'> }) {
+  convoToDelete.value = convo
+  showDeleteConvoDialog.value = true
+}
+
+async function executeDeleteConversation() {
+  const target = convoToDelete.value
+  if (!target) return
+  try {
+    await deleteConversationMutation.mutate({ id: target._id })
+    if ((deleteConversationMutation as any).error?.value) {
+      const err = (deleteConversationMutation as any).error.value
+      ;(deleteConversationMutation as any).error.value = undefined
+      throw err
+    }
+    const { toast } = await import('vue-sonner')
+    toast.success('Conversation deleted')
+
+    const activeConvoId = route.query.conversationId
+    if (activeConvoId === target._id) {
+      navigateTo(`/app/folders/${target.folderId}`)
+    }
+  } catch (e: any) {
+    const { toast } = await import('vue-sonner')
+    toast.error(e?.message || 'Failed to delete conversation')
+  } finally {
+    showDeleteConvoDialog.value = false
+    convoToDelete.value = null
+  }
+}
+
 async function executeDelete() {
   if (!folderToDelete.value || isDeleting.value) return
   isDeleting.value = true
@@ -276,7 +320,51 @@ async function executeDelete() {
             Recent Chats
           </UiSidebarGroupLabel>
           <UiSidebarGroupContent>
+            <template v-if="recentChats.length > 0">
+              <UiSidebarMenu>
+                <UiSidebarMenuItem
+                  v-for="convo in recentChats"
+                  :key="convo._id"
+                  data-testid="sidebar-chat-item"
+                  :data-conversation-id="convo._id"
+                  class="group/chat-item relative"
+                >
+                  <UiSidebarMenuButton as-child class="h-auto py-2">
+                    <NuxtLink :to="`/app/folders/${convo.folderId}?conversationId=${convo._id}`">
+                      <div class="flex min-w-0 flex-col">
+                        <span class="truncate text-sm">{{ convo.title }}</span>
+                        <span class="truncate text-xs text-muted-foreground">
+                          {{ convo.folderName }}
+                        </span>
+                      </div>
+                    </NuxtLink>
+                  </UiSidebarMenuButton>
+                  <UiDropdownMenu>
+                    <UiDropdownMenuTrigger as-child>
+                      <UiSidebarMenuAction
+                        :data-testid="`sidebar-chat-actions-${convo._id}`"
+                        class="opacity-0 transition-opacity group-hover/chat-item:opacity-100 focus:opacity-100 data-[state=open]:opacity-100"
+                      >
+                        <MoreHorizontal class="h-4 w-4" />
+                        <span class="sr-only">More actions</span>
+                      </UiSidebarMenuAction>
+                    </UiDropdownMenuTrigger>
+                    <UiDropdownMenuContent align="end">
+                      <UiDropdownMenuItem
+                        :data-testid="`sidebar-chat-delete-${convo._id}`"
+                        class="text-destructive focus:text-destructive"
+                        @select="handleDeleteConversationRequest({ _id: convo._id, title: convo.title, folderId: convo.folderId })"
+                      >
+                        <Trash2 class="mr-2 h-4 w-4" />
+                        Delete
+                      </UiDropdownMenuItem>
+                    </UiDropdownMenuContent>
+                  </UiDropdownMenu>
+                </UiSidebarMenuItem>
+              </UiSidebarMenu>
+            </template>
             <div
+              v-else
               data-testid="sidebar-chats-empty"
               class="px-3 py-6 text-center text-sm text-muted-foreground"
             >
@@ -467,6 +555,26 @@ async function executeDelete() {
         <UiAlertDialogAction
           class="bg-destructive text-destructive-foreground hover:bg-destructive/90"
           @click="executeDelete"
+        >
+          Delete
+        </UiAlertDialogAction>
+      </UiAlertDialogFooter>
+    </UiAlertDialogContent>
+  </UiAlertDialog>
+
+  <UiAlertDialog v-model:open="showDeleteConvoDialog">
+    <UiAlertDialogContent data-testid="delete-conversation-dialog">
+      <UiAlertDialogHeader>
+        <UiAlertDialogTitle>Delete conversation?</UiAlertDialogTitle>
+        <UiAlertDialogDescription>
+          "{{ convoToDelete?.title }}" and all of its messages will be permanently removed.
+        </UiAlertDialogDescription>
+      </UiAlertDialogHeader>
+      <UiAlertDialogFooter>
+        <UiAlertDialogCancel>Cancel</UiAlertDialogCancel>
+        <UiAlertDialogAction
+          class="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+          @click="executeDeleteConversation"
         >
           Delete
         </UiAlertDialogAction>
