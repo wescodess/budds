@@ -60,7 +60,8 @@ export default defineEventHandler(async (event) => {
       addJson('documents.json', data.documents)
       addJson('conversations.json', data.conversations)
       addJson('messages.json', data.messages)
-      addJson('quizzes.json', [])
+      addJson('quizzes.json', data.quizzes ?? [])
+      addJson('quizQuestions.json', data.quizQuestions ?? [])
       addJson('flashcards.json', [])
 
       for (const doc of data.documents) {
@@ -103,7 +104,7 @@ export default defineEventHandler(async (event) => {
       }
 
       addJson('manifest.json', {
-        schemaVersion: 1,
+        schemaVersion: 2,
         exportedAt: new Date().toISOString(),
         userId: data.userId,
         user: data.user
@@ -117,6 +118,8 @@ export default defineEventHandler(async (event) => {
           documents: data.documents.length,
           conversations: data.conversations.length,
           messages: data.messages.length,
+          quizzes: data.quizzes?.length ?? 0,
+          quizQuestions: data.quizQuestions?.length ?? 0,
         },
         unresolvedDocuments,
       })
