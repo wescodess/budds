@@ -34,4 +34,29 @@ export default defineSchema({
     .index('by_folderId', ['folderId'])
     .index('by_userId_and_folderId', ['userId', 'folderId'])
     .index('by_status', ['status']),
+
+  conversations: defineTable({
+    userId: v.string(),
+    folderId: v.id('folders'),
+    title: v.string(),
+  })
+    .index('by_userId', ['userId'])
+    .index('by_userId_and_folderId', ['userId', 'folderId']),
+
+  messages: defineTable({
+    conversationId: v.id('conversations'),
+    userId: v.string(),
+    role: v.union(v.literal('user'), v.literal('assistant')),
+    content: v.string(),
+    sources: v.optional(
+      v.array(
+        v.object({
+          content: v.string(),
+          score: v.number(),
+          filename: v.string(),
+        }),
+      ),
+    ),
+    model: v.optional(v.string()),
+  }).index('by_conversationId', ['conversationId']),
 })
