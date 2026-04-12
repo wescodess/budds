@@ -1,0 +1,61 @@
+import { v } from 'convex/values'
+import { mutation, query } from './_generated/server'
+
+const sourcesValidator = v.array(
+  v.object({
+    content: v.string(),
+    score: v.number(),
+    filename: v.string(),
+  }),
+)
+
+export const listByConversation = query({
+  args: { conversationId: v.id('conversations') },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) throw new Error('Unauthenticated')
+
+    const userId = identity.tokenIdentifier
+
+    const convo = await ctx.db.get(args.conversationId)
+    if (!convo || convo.userId !== userId) {
+      throw new Error('Conversation not found')
+    }
+
+    return await ctx.db
+      .query('messages')
+      .withIndex('by_conversationId', (q) => q.eq('conversationId', args.conversationId))
+      .order('asc')
+      .take(500)
+  },
+})
+
+export const appendMessage = mutation({
+  args: {
+    conversationId: v.id('conversations'),
+    role: v.union(v.literal('user'), v.literal('assistant')),
+    content: v.string(),
+    sources: v.optional(sourcesValidator),
+    model: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) throw new Error('Unauthenticated')
+
+    const userId = identity.tokenIdentifier
+
+    const convo = await ctx.db.get(args.conversationId)
+    if (!convo || convo.userId !== userId) {
+      throw new Error('Conversation not found')
+    }
+
+    return await ctx.db.insert('messages', {
+      conversationId: args.conversationId,
+      userId,
+      role: args.role,
+      content: args.content,
+      sources: args.sources,
+      model: args.model,
+    })
+  },
+})

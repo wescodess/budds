@@ -35,7 +35,10 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-09
-last_updated: '2026-04-11'
+last_updated: '2026-04-12'
+# Story 4.4 dev completed, status → review 2026-04-12
+# Story 4.4 dev started 2026-04-12
+# Story 4.4 created 2026-04-11
 # Code review completed 2026-04-11: 6 patches applied, 1 runtime-fallback decision fixed, 1 deferred, 10 dismissed (story 4.3)
 # Story 4.3 dev completed, status → review 2026-04-11
 # Story 4.3 created 2026-04-11
@@ -83,7 +86,7 @@ development_status:
   4-1-folder-scoped-rag-chat-with-source-citations: done
   4-2-streaming-chat-responses: done
   4-3-model-selection: done
-  4-4-chat-history-and-conversation-management: backlog
+  4-4-chat-history-and-conversation-management: review
   epic-4-retrospective: optional
 
   epic-5: backlog
