@@ -36,6 +36,8 @@
 
 generated: 2026-04-09
 last_updated: '2026-04-12'
+# Story 6.2 code review PASS 2026-04-12: PR #20 merged, status → done; quizAttempts table + submitAttempt/listAttempts + cascade + export schemaVersion→3; 17 quiz component tests, +2 Convex describes, +export coverage
+# Story 6.2 dev completed, status → review 2026-04-12 (ATDD green, 17 quiz tests pass, 212+ Convex/server tests pass)
 # Story 6.1 code review PASS 2026-04-12: PR #19 merged, status → done; Epic 6 prep items #2 (quiz prompt spike), #3 (QuizTab extracted for mountSuspended), #5 (documentActions 8-failure triage → skip+log), #6 (cascade re-audit) folded in
 # Story 6.1 dev completed, status → review 2026-04-12 (Epic 6 prep items #2, #3, #5, #6 folded in)
 # Epic 5 retrospective completed 2026-04-12 (epic-5-retro-2026-04-12.md); epic-5 → done, epic-5-retrospective → done; 8 Epic 6 prep items identified (3 P0 incl. 1 escalated from P1, 3 P1, 2 P2)
@@ -106,7 +108,7 @@ development_status:
 
   epic-6: in-progress
   6-1-generate-quiz-from-folder-documents: done
-  6-2-take-quiz-and-view-results: review
+  6-2-take-quiz-and-view-results: done
   6-3-edit-questions-and-view-previous-quizzes: backlog
   epic-6-retrospective: optional
 
