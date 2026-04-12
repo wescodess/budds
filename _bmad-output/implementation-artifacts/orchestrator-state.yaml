@@ -1,7 +1,7 @@
-mode: running
-current_phase: retro
-current_story: epic-6-retrospective
-current_epic: 6
+mode: escalated
+current_phase: epic-boundary
+current_story: 7-1-generate-flash-cards-from-folder-documents
+current_epic: 7
 retry_count: 0
 last_epic_complete_fired: 6
 
@@ -55,31 +55,41 @@ prior_last_verdict:
   blockers: 0
 
 last_retro:
-  epic: 4
-  file: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts/epic-4-retro-2026-04-12.md
-  pr_url: https://github.com/wescodess/budds/pull/14
-  merge_commit: '0892314'
+  epic: 6
+  file: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts/epic-6-retro-2026-04-12.md
+  pr_url: https://github.com/wescodess/budds/pull/22
+  merge_commit: '7664f9b'
+  new_deferred_items: 0
+  cumulative_completion: '6/6 epics at 100%; first epic with 0 new deferred items'
   prep_items_identified:
     - id: 1
-      owner: Charlie (Senior Dev)
+      owner: Dana (QA Engineer)
       priority: P0
-      title: Cascade-delete audit for account deletion
+      title: Decide on chat-input.test.ts 6-failure baseline (fix / delete / .skip)
     - id: 2
       owner: Charlie (Senior Dev)
       priority: P0
-      title: Idempotent/retryable AI Search delete path
+      title: Cascade re-audit checklist for flashcards + flashcardSets tables
     - id: 3
-      owner: Dana (QA Engineer)
+      owner: Elena (Junior Dev)
       priority: P1
-      title: Spike data-export package format
+      title: Add pnpm lint + pnpm typecheck scripts (rolled forward from Epic 5)
     - id: 4
-      owner: Elena (Junior Dev)
-      priority: P1
-      title: Resolve Reka-portal mountSuspended test pattern
+      owner: palmwine (Project Lead)
+      priority: P0 (pre-GA)
+      title: Finalise governing-law jurisdiction in /terms (rolled forward)
     - id: 5
+      owner: Charlie (Senior Dev)
+      priority: P1 (pre-GA)
+      title: Add per-user rate-limit on GET /api/export/me (rolled forward)
+    - id: 6
+      owner: Charlie (Senior Dev)
+      priority: P2
+      title: Remove orphaned deleteDocumentFromR2 internal action (rolled forward)
+    - id: 7
       owner: Elena (Junior Dev)
-      priority: P1
-      title: Unify /app/chat onto useChat or deprecate
+      priority: P2
+      title: Unify /app/chat onto useChat or deprecate (rolled forward)
 
 config:
   max_retries_per_story: 3
@@ -107,7 +117,31 @@ counters:
   stories_completed_total: 7
 
 escalation:
-  pending: null
+  pending:
+    question: |
+      Epic 6 retrospective merged (PR #22, 7664f9b). Crossing into Epic 7 (Flashcards, 3 stories).
+      Epic 6 retro identified 7 prep items: 2 P0 engineering, 1 P0 pre-GA non-eng, 2 P1, 2 P2.
+
+      P0 prep items:
+        1. Decide on chat-input.test.ts 6-failure baseline (Dana) — must happen in first Epic 7 PR or as 30-min triage at Epic 7 start
+        2. Cascade re-audit checklist for flashcards + flashcardSets tables (Charlie) — fold into 7-1
+        4. Finalise governing-law jurisdiction in /terms (palmwine) — non-engineering, parallel
+
+      Precedent: Epics 5 & 6 used "proceed_to_first_story_with_prep_inside". Epic 6 retro reaffirms this:
+      "prep items shipped as story ACs close at 100%; named-but-unscoped items drift."
+
+      Options:
+        a) proceed_to_7_1_with_prep_inside — match Epic 5/6 precedent; chat-input baseline + cascade audit fold into 7-1
+        b) create_prep_story_for_chat_input_baseline — dedicated triage story first (analogous to "create prep story" option in Epic 5 boundary)
+        c) run_sprint_planning — full bmad-bmm-workflows-sprint-planning for Epic 7
+    recommended_default: proceed_to_7_1_with_prep_inside
+    options:
+      - proceed_to_7_1_with_prep_inside
+      - create_prep_story_for_chat_input_baseline
+      - run_sprint_planning
+    asked_at: '2026-04-12'
+    context_ref: _bmad-output/implementation-artifacts/epic-6-retro-2026-04-12.md#L150-L180
+    raised_from_state: epic-boundary
   log:
     - ts: '2026-04-12'
       question: |
@@ -116,6 +150,8 @@ escalation:
       answered_at: '2026-04-12'
       resolution: |
         Matches Epic 4 / Epic 5 precedent. Invoking bmad-bmm-workflows-retrospective for Epic 6.
+        Produced epic-6-retro-2026-04-12.md (PR #22, merged 7664f9b). 7 Epic 7 prep items.
+        Sprint-status: epic-6 → done, epic-6-retrospective → done. Raising Epic 7 prep escalation.
     - ts: '2026-04-12'
       question: |
         Epic 5→6 boundary. 8 prep items (3 P0 incl. Reka-portal mountSuspended flagged "Decision + PR").
@@ -165,6 +201,8 @@ escalation:
 
 decisions_log:
   - ts: '2026-04-12'
+    decision: Epic 6 retrospective produced and merged (PR #22, 7664f9b — epic-6-retro-2026-04-12.md). epic-6 + epic-6-retrospective → done. 7 Epic 7 prep items identified (2 P0 eng, 1 P0 pre-GA non-eng, 2 P1, 2 P2). Raising Epic 7 prep escalation; recommended proceed_to_7_1_with_prep_inside (matches Epic 5/6 precedent).
+  - ts: '2026-04-12'
     decision: story-runner PASS for 6-3 (0 deferred, 0 blockers, 13/13 ACs, updateQuestion+deleteQuiz mutations, review-mode taker, inline delete-confirm preserves Reka-portal discipline). PR #21 merged 4bea80e. Epic 6 application stories 3/3 done with 0 cumulative deferred items. Raising epic-6 boundary escalation (retro optional) — halting.
   - ts: '2026-04-12'
     decision: story-runner PASS for 6-2 (0 deferred, 0 blockers, 11/11 ACs, quizAttempts table + submit/score pipeline + cascade re-audit + export schema v3). PR #20 merged efd0693. Telegram notified. Advancing to 6-3.
@@ -186,6 +224,10 @@ decisions_log:
     decision: story-runner PASS for 5-3 (6 deferred, 0 blockers); PR #17 merged ff3ae38. All epic-5 application stories done. Epic-boundary escalation raised (retro optional) — halting for user.
 
 run_log:
+  - ts: '2026-04-12'
+    mode: resume
+    note: |
+      Epic 6 boundary user answer: run_retro_first. Invoked bmad-bmm-workflows-retrospective. Produced epic-6-retro-2026-04-12.md (cumulative 0 new deferred items — first epic with that property). Opened PR #22 against dev, merged via squash 7664f9b. Local rebase resolved one orchestrator-state conflict (mode/phase divergence at retro boundary), 1 prior boundary commit dropped as already-upstream. sprint-status: epic-6 → done, epic-6-retrospective → done, retrospective_location bumped. last_retro field updated to epic-6 with 7 prep items. Counters unchanged at 7/7. Raising Epic 7 prep escalation (Epic 5→6 boundary precedent: proceed_to_first_story_with_prep_inside).
   - ts: '2026-04-12'
     mode: resume
     note: |
