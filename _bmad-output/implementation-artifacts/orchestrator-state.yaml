@@ -1,8 +1,9 @@
 mode: running
 current_phase: epic-story
-current_story: 5-3-data-export-and-legal-pages
-current_epic: 5
+current_story: 6-1-generate-quiz-from-folder-documents
+current_epic: 6
 retry_count: 0
+last_epic_complete_fired: 5
 
 last_verdict:
   subagent: bmad-story-runner
@@ -99,6 +100,24 @@ escalation:
   log:
     - ts: '2026-04-12'
       question: |
+        Epic 5→6 boundary. 8 prep items (3 P0 incl. Reka-portal mountSuspended flagged "Decision + PR").
+        proceed_to_6_1_with_prep_inside (Epic 5 precedent), create_prep_story_for_reka_portal, or run_sprint_planning?
+      answer: proceed_to_6_1_with_prep_inside
+      answered_at: '2026-04-12'
+      resolution: |
+        User matched Epic 5 precedent. All 8 prep items fold into Epic 6 story ACs / deferred-work.md.
+        P0 #3 (Reka-portal mountSuspended) becomes a sub-task inside 6-1; if scope explodes during dev,
+        story-runner should raise BLOCKED rather than silently expand. Spawning bmad-story-runner for 6-1.
+    - ts: '2026-04-12'
+      question: |
+        Epic 5 application stories 3/3 done (5-1, 5-2, 5-3). `epic-5-retrospective: optional`.
+        Proceed to Epic 6, or run epic-5 retrospective first?
+      answer: run_retro_first
+      answered_at: '2026-04-12'
+      resolution: |
+        Invoking bmad-bmm-workflows-retrospective for Epic 5.
+    - ts: '2026-04-12'
+      question: |
         Epic 5 prep representation — run sprint-planning, create prep stories, or proceed to 5-1 with prep inside?
       answer: proceed_to_5_1_with_prep_inside
       answered_at: '2026-04-12'
@@ -128,6 +147,8 @@ escalation:
 
 decisions_log:
   - ts: '2026-04-12'
+    decision: epic-boundary 5→6 — user chose proceed_to_6_1_with_prep_inside (matches Epic 5 precedent). 8 prep items fold into story ACs; P0 #3 (Reka-portal mountSuspended) as sub-task of 6-1 with BLOCKED escape if scope explodes. Checkpointing state; spawning bmad-story-runner for 6-1.
+  - ts: '2026-04-12'
     decision: start invoked; classified next item as 4-4 in review state with dirty workspace; escalated rather than autospawn runner
   - ts: '2026-04-12'
     decision: user chose commit_current_work_then_resume; committed WIP as 49ea136; spawned bmad-story-runner for 4-4
@@ -137,8 +158,15 @@ decisions_log:
     decision: all epic-4 stories done; escalated epic-boundary; user chose run_epic_4_retrospective_first
   - ts: '2026-04-12'
     decision: epic 4 retrospective produced and merged (PR #14, 0892314); escalating sprint-planning decision for epic 5 prep
+  - ts: '2026-04-12'
+    decision: story-runner PASS for 5-3 (6 deferred, 0 blockers); PR #17 merged ff3ae38. All epic-5 application stories done. Epic-boundary escalation raised (retro optional) — halting for user.
 
 run_log:
+  - ts: '2026-04-12'
+    mode: resume
+    note: |
+      State on entry: mode=escalated, phase=epic-boundary, story=epic-5-retrospective (stale — retro merged earlier).
+      Re-classified next item: epic-6 backlog → 6-1-generate-quiz-from-folder-documents. Read epic-5-retro for Epic 6 prep plan (8 items). P0 #3 (Reka-portal mountSuspended) explicitly flagged in retro as needing its own PR — does not cleanly fit Epic 5 "prep-inside" precedent. Raising tier-3 epic-boundary escalation with 3 options; recommended proceed_to_6_1_with_prep_inside. Halting.
   - ts: '2026-04-12'
     mode: start
     note: |
@@ -155,3 +183,7 @@ run_log:
     mode: resume
     note: |
       Escalated epic-boundary 4→5. User: run_epic_4_retrospective_first. Ran bmad-bmm-workflows-retrospective; produced epic-4-retro-2026-04-12.md. PR #14 merged 0892314. epic-4 + epic-4-retrospective → done. Next: escalate prep-sprint decision for epic 5.
+  - ts: '2026-04-12'
+    mode: resume
+    note: |
+      Workspace checkpoint ab5a506. Spawned bmad-story-runner for 5-3. Returned PASS (PR #17 merged ff3ae38, 6 deferred, 0 blockers, 10 new tests). sprint-status 5-3 → done. All epic-5 application stories complete. Raising epic-boundary escalation (epic-5-retrospective optional) per spec.
