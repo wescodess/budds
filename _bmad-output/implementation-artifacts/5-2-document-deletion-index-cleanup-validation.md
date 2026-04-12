@@ -1,6 +1,6 @@
 # Story 5.2: Document Deletion Index Cleanup Validation
 
-Status: review
+Status: done
 
 ## Story
 
@@ -204,4 +204,5 @@ Claude Opus 4.6 (claude-opus-4-6) — bmad-story-runner
 
 ### Change Log
 
+- 2026-04-12: Code review PASS — 0 blockers, 1 deferred item (orphaned `deleteDocumentFromR2` internal action — safe one-liner removal for a follow-up commit). Closed Story 3.3 deferred AI-Search-cleanup gap.
 - 2026-04-12: Story 5.2 implemented. Per-document and folder-cascade delete paths now enqueue `pendingCleanup` rows for Cloudflare AI Search chunk removal (previously missing) and Cloudflare R2 object deletion (previously a fire-and-forget scheduler call). Both share a new `enqueueDocumentCleanup` helper in `convex/accountDeletion.ts`; both schedule the existing `drainPendingCleanup` worker from Story 5.1. `folders.deleteFolder` now correctly returns the number of deleted documents (was `0` — an Epic 2-era bug revealed once Epic 3 added a real `documents` table). Closes the Story 3.3 deferred AI-Search-cleanup gap.
