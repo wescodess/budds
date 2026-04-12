@@ -36,6 +36,7 @@
 
 generated: 2026-04-09
 last_updated: '2026-04-12'
+# Story 5.3 code review PASS 2026-04-12: 6 deferred items (no blockers), PR #17 merged, status → done; all Epic 5 application stories complete
 # Story 5.3 created 2026-04-12 (ready-for-dev)
 # Story 5.2 code review PASS 2026-04-12: 1 deferred item (orphaned deleteDocumentFromR2), closes Story 3.3 AI-Search-cleanup gap, status → done
 # Story 5.1 code review PASS 2026-04-12: 4 deferred items (no blockers), PR #15 merged, status → done
@@ -97,7 +98,7 @@ development_status:
   epic-5: in-progress
   5-1-account-deletion-with-cascading-data-cleanup: done
   5-2-document-deletion-index-cleanup-validation: done
-  5-3-data-export-and-legal-pages: review
+  5-3-data-export-and-legal-pages: done
   epic-5-retrospective: optional
 
   epic-6: backlog
