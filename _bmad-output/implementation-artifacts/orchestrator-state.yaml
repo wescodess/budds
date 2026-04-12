@@ -1,0 +1,157 @@
+mode: running
+current_phase: epic-story
+current_story: 5-3-data-export-and-legal-pages
+current_epic: 5
+retry_count: 0
+
+last_verdict:
+  subagent: bmad-story-runner
+  story: 5-2-document-deletion-index-cleanup-validation
+  epic: 5
+  status: PASS
+  pr_url: https://github.com/wescodess/budds/pull/16
+  branch: feat/5-2-document-deletion-index-cleanup-validation
+  commit_sha: a0522104d26bd1ae9d3c28b0c4b61a3de82ba45d
+  merge_commit: ce18bd5
+  merged_at: '2026-04-12T08:15:00Z'
+  files_changed: 9
+  tasks_completed: 8
+  tasks_total: 8
+  findings_deferred: 1
+  lint_pass: null
+  typecheck_pass: null
+  unit_tests_pass: true
+  e2e_tests_pass: null
+  review_pass: true
+  summary: |
+    Story 5.2 shipped end-to-end. Closes the Story 3.3 deferred gap where `documents.deleteDocument` never removed chunks from the Cloudflare AI Search index. Introduced a shared `enqueueDocumentCleanup` helper in `convex/accountDeletion.ts` consumed by three call sites (account cascade, per-document delete, folder cascade) — reuses Story 5.1's `pendingCleanup` durable queue + `drainPendingCleanup` retry worker (exponential backoff, 10-attempt cap, idempotent). Also fixed an Epic 2-era latent bug in `folders.deleteFolder` where `deletedDocuments` was hardcoded to `0` — cascade now actually deletes documents, their Convex file blobs, and enqueues external cleanup. No schema changes; no UI changes. 10 new Convex integration tests (6 on `documents.deleteDocument`, 4 on `folders.deleteFolder` cascade); 3 pre-existing tests updated to assert the new scheduler target (`drainPendingCleanup`). Full suite parity with 5.1 baseline (170/178 pass, 8 pre-existing documentActions failures; component 64+78-skipped+6-pre-existing chat-input failures). Code review: 0 blockers, 1 deferred item (orphaned `deleteDocumentFromR2` internal action — safe follow-up deletion). PR #16 merged into dev as ce18bd5.
+  block_reason: null
+  block_context: null
+  at: '2026-04-12T08:15:00Z'
+  commits:
+    - a052210 feat: add AI Search chunk cleanup to document + folder delete paths
+    - 392cbca chore(bmad): close story 5.2 — code review PASS, 1 deferred item logged
+  deferred_items: 1
+  blockers: 0
+
+prior_last_verdict:
+  story: 5-1-account-deletion-with-cascading-data-cleanup
+  status: PASS
+  commits:
+    - 965e793 feat: add account deletion with cascading data cleanup
+    - 72ca242 chore(bmad): close story 5.1 — code review PASS, 4 deferred items logged
+  pr_url: https://github.com/wescodess/budds/pull/15
+  merge_commit: c8a6955
+  merged_at: '2026-04-12T07:33:33Z'
+  deferred_items: 4
+  blockers: 0
+
+last_retro:
+  epic: 4
+  file: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts/epic-4-retro-2026-04-12.md
+  pr_url: https://github.com/wescodess/budds/pull/14
+  merge_commit: '0892314'
+  prep_items_identified:
+    - id: 1
+      owner: Charlie (Senior Dev)
+      priority: P0
+      title: Cascade-delete audit for account deletion
+    - id: 2
+      owner: Charlie (Senior Dev)
+      priority: P0
+      title: Idempotent/retryable AI Search delete path
+    - id: 3
+      owner: Dana (QA Engineer)
+      priority: P1
+      title: Spike data-export package format
+    - id: 4
+      owner: Elena (Junior Dev)
+      priority: P1
+      title: Resolve Reka-portal mountSuspended test pattern
+    - id: 5
+      owner: Elena (Junior Dev)
+      priority: P1
+      title: Unify /app/chat onto useChat or deprecate
+
+config:
+  max_retries_per_story: 3
+  max_stories_without_user_checkin: 5
+
+paths:
+  project_root: /Users/wesleyukadike/Desktop/budds
+  artifacts_dir: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts
+  planning_dir: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts
+  sprint_status: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts/sprint-status.yaml
+  deferred_work: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts/deferred-work.md
+  state_file: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts/orchestrator-state.yaml
+  tech_spec: null
+  epics_file: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/epics.md
+  architecture: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/architecture.md
+  prd: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/prd.md
+  ux_spec: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/ux-design-specification.md
+
+counters:
+  stories_completed_this_run: 3
+  stories_completed_total: 3
+
+escalation:
+  pending: null
+  log:
+    - ts: '2026-04-12'
+      question: |
+        Epic 5 prep representation — run sprint-planning, create prep stories, or proceed to 5-1 with prep inside?
+      answer: proceed_to_5_1_with_prep_inside
+      answered_at: '2026-04-12'
+      resolution: |
+        Matches repo precedent (epics 1–4 never used prep-sprint-epic-N entries; retro prep items were absorbed into next epic's stories + deferred-work.md). Story 5-1's ACs already encompass P0 prep items 1 (cascade-delete audit) and 2 (retry on partial failure, NFR13). Spawning bmad-story-runner for 5-1 directly.
+    - ts: '2026-04-12'
+      question: |
+        Story 4-4 in review with uncommitted dev work on dirty branch. Spawning story-runner would likely halt with dirty_workspace. How to proceed?
+      answer: commit_current_work_then_resume
+      answered_at: '2026-04-12'
+      resolution: |
+        Committed 14 files as 49ea136. Resumed, spawned bmad-story-runner which returned PASS with 5 deferred items. Orchestrator closed story: committed review artifacts (a95f66a), pushed branch, opened PR #13 against dev, merged (700faab). sprint-status 4-4 → done.
+    - ts: '2026-04-12'
+      question: |
+        Base-branch ambiguity — local main has different history than feat branch. PRs against main or dev?
+      answer: target_dev_main_is_prod
+      answered_at: '2026-04-12'
+      resolution: |
+        User clarified: main is production, dev is integration trunk. All future PRs target dev. Saved to memory (project_branching_convention.md).
+    - ts: '2026-04-12'
+      question: |
+        Epic 4 all stories done; epic-4-retrospective optional. Proceed to epic 5 or run retro first?
+      answer: run_epic_4_retrospective_first
+      answered_at: '2026-04-12'
+      resolution: |
+        Ran bmad-bmm-workflows-retrospective. Produced epic-4-retro-2026-04-12.md covering: 4/4 stories, review metrics, Epic 3 retro follow-through (3/3), 7 new deferred items, 5 Epic 5 prep items. Opened PR #14, merged (0892314). sprint-status epic-4 → done, epic-4-retrospective → done.
+
+decisions_log:
+  - ts: '2026-04-12'
+    decision: start invoked; classified next item as 4-4 in review state with dirty workspace; escalated rather than autospawn runner
+  - ts: '2026-04-12'
+    decision: user chose commit_current_work_then_resume; committed WIP as 49ea136; spawned bmad-story-runner for 4-4
+  - ts: '2026-04-12'
+    decision: story-runner returned PASS (5 deferred, 0 blockers); escalated base-branch ambiguity; user clarified dev-is-trunk; pushed branch, opened PR #13 against dev, merged via merge commit 700faab; sprint-status 4-4 → done
+  - ts: '2026-04-12'
+    decision: all epic-4 stories done; escalated epic-boundary; user chose run_epic_4_retrospective_first
+  - ts: '2026-04-12'
+    decision: epic 4 retrospective produced and merged (PR #14, 0892314); escalating sprint-planning decision for epic 5 prep
+
+run_log:
+  - ts: '2026-04-12'
+    mode: start
+    note: |
+      Paths resolved. First non-done/non-optional item: 4-4 (review). Workspace dirty. Escalating.
+  - ts: '2026-04-12'
+    mode: escalate
+    note: |
+      User: commit_current_work_then_resume. Committed 49ea136. Spawned bmad-story-runner for 4-4.
+  - ts: '2026-04-12'
+    mode: resume
+    note: |
+      Runner PASS for 4-4. Escalated base-branch; user: dev. Pushed, PR #13, merged 700faab. 4-4 → done.
+  - ts: '2026-04-12'
+    mode: resume
+    note: |
+      Escalated epic-boundary 4→5. User: run_epic_4_retrospective_first. Ran bmad-bmm-workflows-retrospective; produced epic-4-retro-2026-04-12.md. PR #14 merged 0892314. epic-4 + epic-4-retrospective → done. Next: escalate prep-sprint decision for epic 5.
