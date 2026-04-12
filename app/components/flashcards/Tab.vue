@@ -14,6 +14,8 @@ const {
   generate,
 } = useFlashcards(toRef(props, 'folderId'))
 
+const activeSetId = ref<Id<'flashcardSets'> | null>(null)
+
 async function handleGenerate() {
   try {
     await generate()
@@ -26,14 +28,22 @@ async function handleGenerate() {
   }
 }
 
-function handleSetSelect(_setId: string) {
-  // TODO(story 7.2): navigate to study view
+function handleSetSelect(setId: string) {
+  activeSetId.value = setId as Id<'flashcardSets'>
+}
+
+function handleStudyBack() {
+  activeSetId.value = null
 }
 </script>
 
 <template>
   <div data-testid="flashcards-tab-content">
-    <template v-if="!hasIndexedDocuments">
+    <template v-if="activeSetId">
+      <FlashcardsStudy :set-id="activeSetId" @back="handleStudyBack" />
+    </template>
+
+    <template v-else-if="!hasIndexedDocuments">
       <div
         data-testid="flashcards-empty-no-docs"
         class="flex flex-1 items-center justify-center py-12 text-muted-foreground"
