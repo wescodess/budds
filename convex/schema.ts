@@ -91,6 +91,24 @@ export default defineSchema({
     .index('by_quizId', ['quizId'])
     .index('by_userId', ['userId']),
 
+  quizAttempts: defineTable({
+    userId: v.string(),
+    quizId: v.id('quizzes'),
+    answers: v.array(
+      v.object({
+        questionId: v.id('quizQuestions'),
+        response: v.string(),
+        isCorrect: v.boolean(),
+      }),
+    ),
+    score: v.number(),
+    total: v.number(),
+    completedAt: v.number(),
+  })
+    .index('by_userId', ['userId'])
+    .index('by_quizId', ['quizId'])
+    .index('by_userId_and_quizId', ['userId', 'quizId']),
+
   pendingCleanup: defineTable({
     userId: v.string(),
     documentId: v.string(),
