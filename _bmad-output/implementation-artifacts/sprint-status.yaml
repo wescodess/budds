@@ -36,6 +36,7 @@
 
 generated: 2026-04-09
 last_updated: '2026-04-12'
+# Story 6.1 code review PASS 2026-04-12: PR #19 merged, status → done; Epic 6 prep items #2 (quiz prompt spike), #3 (QuizTab extracted for mountSuspended), #5 (documentActions 8-failure triage → skip+log), #6 (cascade re-audit) folded in
 # Story 6.1 dev completed, status → review 2026-04-12 (Epic 6 prep items #2, #3, #5, #6 folded in)
 # Epic 5 retrospective completed 2026-04-12 (epic-5-retro-2026-04-12.md); epic-5 → done, epic-5-retrospective → done; 8 Epic 6 prep items identified (3 P0 incl. 1 escalated from P1, 3 P1, 2 P2)
 # Story 5.3 code review PASS 2026-04-12: 6 deferred items (no blockers), PR #17 merged, status → done; all Epic 5 application stories complete
@@ -104,7 +105,7 @@ development_status:
   epic-5-retrospective: done
 
   epic-6: in-progress
-  6-1-generate-quiz-from-folder-documents: review
+  6-1-generate-quiz-from-folder-documents: done
   6-2-take-quiz-and-view-results: backlog
   6-3-edit-questions-and-view-previous-quizzes: backlog
   epic-6-retrospective: optional
