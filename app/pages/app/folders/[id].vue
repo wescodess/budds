@@ -9,7 +9,7 @@ const folderId = computed(() => route.params.id as Id<'folders'>)
 const { folder } = useFolderDetail(folderId)
 const { allFolders, createSubfolder } = useFolders()
 const { documents, uploading, uploadFiles, deleteDocument, moveDocument } = useDocuments(folderId)
-const { messages, loading, error, hasIndexedDocuments, sendMessage } = useChat(folderId)
+const { messages, loading, streaming, error, hasIndexedDocuments, sendMessage } = useChat(folderId)
 
 const isDesktop = useMediaQuery('(min-width: 1024px)')
 
@@ -63,6 +63,17 @@ watch(() => messages.value.length, () => {
     chatScrollRef.value?.scrollTo({ top: chatScrollRef.value.scrollHeight, behavior: 'smooth' })
   })
 })
+
+watch(
+  () => messages.value[messages.value.length - 1]?.content.length,
+  () => {
+    if (streaming.value) {
+      nextTick(() => {
+        chatScrollRef.value?.scrollTo({ top: chatScrollRef.value.scrollHeight, behavior: 'auto' })
+      })
+    }
+  },
+)
 
 function handleSlashShortcut(e: KeyboardEvent) {
   if (e.key !== '/' || activeTab.value !== 'chat') return
@@ -235,12 +246,13 @@ async function handleUpload(files: File[]) {
             </template>
 
             <template v-else>
-              <div ref="chatScrollRef" role="log" class="flex-1 space-y-4 overflow-y-auto p-4">
+              <div ref="chatScrollRef" role="log" aria-live="polite" aria-atomic="false" aria-relevant="additions" class="flex-1 space-y-4 overflow-y-auto p-4">
                 <template v-for="(msg, i) in messages" :key="i">
                   <ChatMessage
                     :role="msg.role"
                     :content="msg.content"
                     :sources="msg.sources"
+                    :streaming="streaming && i === messages.length - 1"
                     @citation-click="(citIndex: number) => handleCitationClick(i, citIndex)"
                   />
                   <template v-if="!isDesktop && expandedInlineCitation?.messageIndex === i">
@@ -259,7 +271,7 @@ async function handleUpload(files: File[]) {
                     </div>
                   </template>
                 </template>
-                <div v-if="loading" class="mr-auto max-w-[85%] rounded-lg border px-4 py-3">
+                <div v-if="loading && !streaming" class="mr-auto max-w-[85%] rounded-lg border px-4 py-3">
                   <div class="flex items-center gap-2 text-sm text-muted-foreground">
                     <div class="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
                     Thinking...
@@ -273,7 +285,7 @@ async function handleUpload(files: File[]) {
 
             <ChatInput
               ref="chatInputRef"
-              :disabled="!hasIndexedDocuments"
+              :disabled="!hasIndexedDocuments || loading"
               :placeholder="folder ? `Ask about your ${folder.name} materials...` : 'Ask a question...'"
               @submit="handleSendMessage"
             />
