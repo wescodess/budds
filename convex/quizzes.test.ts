@@ -408,3 +408,266 @@ describe('quizzes.listAttempts', () => {
     expect(bView).toEqual([])
   })
 })
+
+describe('quizzes.updateQuestion', () => {
+  test('[P0] rejects unauthenticated callers', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
+    const { quizId } = await asUser.mutation(api.quizzes.createWithQuestions, {
+      folderId,
+      title: 'Q',
+      questions: sampleQuestions(),
+    })
+    const questions = await t.run(async (ctx) =>
+      ctx.db.query('quizQuestions').withIndex('by_quizId', (q) => q.eq('quizId', quizId)).collect(),
+    )
+
+    await expect(
+      t.mutation(api.quizzes.updateQuestion, {
+        questionId: questions[0]!._id,
+        question: 'New text',
+        options: ['A', 'B', 'C', 'D'],
+        correctAnswer: 'A',
+      }),
+    ).rejects.toThrow(/Unauthenticated/)
+  })
+
+  test('[P0] rejects when question is owned by another user', async () => {
+    const t = convexTest(schema, modules)
+    const asA = t.withIdentity(USER_A)
+    const asB = t.withIdentity(USER_B)
+    const folderA = await asA.mutation(api.folders.createFolder, { name: 'Bio' })
+    const { quizId } = await asA.mutation(api.quizzes.createWithQuestions, {
+      folderId: folderA,
+      title: 'A',
+      questions: sampleQuestions(),
+    })
+    const questions = await t.run(async (ctx) =>
+      ctx.db.query('quizQuestions').withIndex('by_quizId', (q) => q.eq('quizId', quizId)).collect(),
+    )
+
+    await expect(
+      asB.mutation(api.quizzes.updateQuestion, {
+        questionId: questions[0]!._id,
+        question: 'Hack',
+        options: ['A', 'B', 'C', 'D'],
+        correctAnswer: 'A',
+      }),
+    ).rejects.toThrow(/Question not found/)
+  })
+
+  test('[P0] rejects empty question text', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
+    const { quizId } = await asUser.mutation(api.quizzes.createWithQuestions, {
+      folderId,
+      title: 'Q',
+      questions: sampleQuestions(),
+    })
+    const questions = await t.run(async (ctx) =>
+      ctx.db.query('quizQuestions').withIndex('by_quizId', (q) => q.eq('quizId', quizId)).collect(),
+    )
+
+    await expect(
+      asUser.mutation(api.quizzes.updateQuestion, {
+        questionId: questions[0]!._id,
+        question: '   ',
+        options: ['A', 'B', 'C', 'D'],
+        correctAnswer: 'A',
+      }),
+    ).rejects.toThrow(/Question text required/)
+  })
+
+  test('[P0] rejects MC correct answer not in options', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
+    const { quizId } = await asUser.mutation(api.quizzes.createWithQuestions, {
+      folderId,
+      title: 'Q',
+      questions: sampleQuestions(),
+    })
+    const questions = await t.run(async (ctx) =>
+      ctx.db.query('quizQuestions').withIndex('by_quizId', (q) => q.eq('quizId', quizId)).collect(),
+    )
+    const mcQ = questions.find((q) => q.type === 'multiple-choice')!
+
+    await expect(
+      asUser.mutation(api.quizzes.updateQuestion, {
+        questionId: mcQ._id,
+        question: 'What is ATP?',
+        options: ['A', 'B', 'C', 'D'],
+        correctAnswer: 'Z',
+      }),
+    ).rejects.toThrow(/Correct answer must match an option/)
+  })
+
+  test('[P0] MC persists new options + correct answer; preserves immutable fields', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
+    const { quizId } = await asUser.mutation(api.quizzes.createWithQuestions, {
+      folderId,
+      title: 'Q',
+      questions: sampleQuestions(),
+    })
+    const questions = await t.run(async (ctx) =>
+      ctx.db.query('quizQuestions').withIndex('by_quizId', (q) => q.eq('quizId', quizId)).collect(),
+    )
+    const mcQ = questions.find((q) => q.type === 'multiple-choice')!
+    const originalSourceFilename = mcQ.sourceFilename
+    const originalSourceChunk = mcQ.sourceChunkContent
+    const originalOrder = mcQ.order
+
+    await asUser.mutation(api.quizzes.updateQuestion, {
+      questionId: mcQ._id,
+      question: 'Updated question?',
+      options: ['Alpha', 'Beta', 'Gamma'],
+      correctAnswer: 'Beta',
+    })
+
+    const updated = await t.run(async (ctx) => ctx.db.get(mcQ._id))
+    expect(updated!.question).toBe('Updated question?')
+    expect(updated!.options).toEqual(['Alpha', 'Beta', 'Gamma'])
+    expect(updated!.correctAnswer).toBe('Beta')
+    expect(updated!.sourceFilename).toBe(originalSourceFilename)
+    expect(updated!.sourceChunkContent).toBe(originalSourceChunk)
+    expect(updated!.order).toBe(originalOrder)
+    expect(updated!.type).toBe('multiple-choice')
+    expect(updated!.quizId).toBe(quizId)
+    expect(updated!.userId).toBe(USER_A.tokenIdentifier)
+  })
+
+  test('[P0] free-response strips provided options (stored as undefined)', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
+    const { quizId } = await asUser.mutation(api.quizzes.createWithQuestions, {
+      folderId,
+      title: 'Q',
+      questions: sampleQuestions(),
+    })
+    const questions = await t.run(async (ctx) =>
+      ctx.db.query('quizQuestions').withIndex('by_quizId', (q) => q.eq('quizId', quizId)).collect(),
+    )
+    const frQ = questions.find((q) => q.type === 'free-response')!
+
+    await asUser.mutation(api.quizzes.updateQuestion, {
+      questionId: frQ._id,
+      question: 'Describe cellular respiration.',
+      options: ['ignored', 'also ignored'],
+      correctAnswer: 'Process that converts glucose to ATP.',
+    })
+
+    const updated = await t.run(async (ctx) => ctx.db.get(frQ._id))
+    expect(updated!.question).toBe('Describe cellular respiration.')
+    expect(updated!.correctAnswer).toBe('Process that converts glucose to ATP.')
+    expect(updated!.options).toBeUndefined()
+  })
+})
+
+describe('quizzes.deleteQuiz', () => {
+  test('[P0] rejects unauthenticated callers', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
+    const { quizId } = await asUser.mutation(api.quizzes.createWithQuestions, {
+      folderId,
+      title: 'Q',
+      questions: sampleQuestions(),
+    })
+
+    await expect(
+      t.mutation(api.quizzes.deleteQuiz, { quizId }),
+    ).rejects.toThrow(/Unauthenticated/)
+  })
+
+  test('[P0] rejects when quiz is owned by another user', async () => {
+    const t = convexTest(schema, modules)
+    const asA = t.withIdentity(USER_A)
+    const asB = t.withIdentity(USER_B)
+    const folderA = await asA.mutation(api.folders.createFolder, { name: 'Bio' })
+    const { quizId } = await asA.mutation(api.quizzes.createWithQuestions, {
+      folderId: folderA,
+      title: 'A',
+      questions: sampleQuestions(),
+    })
+
+    await expect(
+      asB.mutation(api.quizzes.deleteQuiz, { quizId }),
+    ).rejects.toThrow(/Quiz not found/)
+  })
+
+  test('[P0] removes attempts, questions, and quiz for caller; foreign rows survive', async () => {
+    const t = convexTest(schema, modules)
+    const asA = t.withIdentity(USER_A)
+    const asB = t.withIdentity(USER_B)
+
+    const folderA = await asA.mutation(api.folders.createFolder, { name: 'Bio' })
+    const folderB = await asB.mutation(api.folders.createFolder, { name: 'Bio' })
+
+    const { quizId: quizA } = await asA.mutation(api.quizzes.createWithQuestions, {
+      folderId: folderA,
+      title: 'Alice',
+      questions: sampleQuestions(),
+    })
+    const questionsA = await t.run(async (ctx) =>
+      ctx.db.query('quizQuestions').withIndex('by_quizId', (q) => q.eq('quizId', quizA)).collect(),
+    )
+    await asA.mutation(api.quizzes.submitAttempt, {
+      quizId: quizA,
+      answers: [
+        { questionId: questionsA[0]!._id, response: 'Energy currency' },
+        { questionId: questionsA[1]!._id, response: 'something' },
+      ],
+    })
+
+    const { quizId: quizB } = await asB.mutation(api.quizzes.createWithQuestions, {
+      folderId: folderB,
+      title: 'Bob',
+      questions: sampleQuestions(),
+    })
+    const questionsB = await t.run(async (ctx) =>
+      ctx.db.query('quizQuestions').withIndex('by_quizId', (q) => q.eq('quizId', quizB)).collect(),
+    )
+    await asB.mutation(api.quizzes.submitAttempt, {
+      quizId: quizB,
+      answers: [
+        { questionId: questionsB[0]!._id, response: 'Energy currency' },
+        { questionId: questionsB[1]!._id, response: 'bob answer' },
+      ],
+    })
+
+    const result = await asA.mutation(api.quizzes.deleteQuiz, { quizId: quizA })
+    expect(result.deletedAttempts).toBe(1)
+    expect(result.deletedQuestions).toBe(2)
+
+    const surviveQuizA = await t.run(async (ctx) => ctx.db.get(quizA))
+    expect(surviveQuizA).toBeNull()
+
+    const surviveQuestionsA = await t.run(async (ctx) =>
+      ctx.db.query('quizQuestions').withIndex('by_quizId', (q) => q.eq('quizId', quizA)).collect(),
+    )
+    expect(surviveQuestionsA).toEqual([])
+
+    const surviveAttemptsA = await t.run(async (ctx) =>
+      ctx.db.query('quizAttempts').withIndex('by_quizId', (q) => q.eq('quizId', quizA)).collect(),
+    )
+    expect(surviveAttemptsA).toEqual([])
+
+    const surviveQuizB = await t.run(async (ctx) => ctx.db.get(quizB))
+    expect(surviveQuizB).not.toBeNull()
+
+    const surviveQuestionsB = await t.run(async (ctx) =>
+      ctx.db.query('quizQuestions').withIndex('by_quizId', (q) => q.eq('quizId', quizB)).collect(),
+    )
+    expect(surviveQuestionsB).toHaveLength(2)
+
+    const surviveAttemptsB = await t.run(async (ctx) =>
+      ctx.db.query('quizAttempts').withIndex('by_quizId', (q) => q.eq('quizId', quizB)).collect(),
+    )
+    expect(surviveAttemptsB).toHaveLength(1)
+  })
+})

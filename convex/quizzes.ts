@@ -250,3 +250,95 @@ export const listAttempts = query({
       .collect()
   },
 })
+
+export const updateQuestion = mutation({
+  args: {
+    questionId: v.id('quizQuestions'),
+    question: v.string(),
+    options: v.optional(v.array(v.string())),
+    correctAnswer: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) throw new Error('Unauthenticated')
+
+    const userId = identity.tokenIdentifier
+
+    const existing = await ctx.db.get(args.questionId)
+    if (!existing || existing.userId !== userId) {
+      throw new Error('Question not found')
+    }
+
+    const trimmedQuestion = args.question.trim()
+    if (trimmedQuestion.length === 0) {
+      throw new Error('Question text required')
+    }
+
+    const trimmedCorrect = args.correctAnswer.trim()
+    if (trimmedCorrect.length === 0) {
+      throw new Error('Correct answer required')
+    }
+
+    let nextOptions: string[] | undefined
+
+    if (existing.type === 'multiple-choice') {
+      const opts = args.options ?? []
+      const cleaned = opts.map((o) => o.trim()).filter((o) => o.length > 0)
+      if (cleaned.length < 2) {
+        throw new Error('Options required')
+      }
+      if (!cleaned.includes(trimmedCorrect)) {
+        throw new Error('Correct answer must match an option')
+      }
+      nextOptions = cleaned
+    } else {
+      nextOptions = undefined
+    }
+
+    await ctx.db.patch(args.questionId, {
+      question: trimmedQuestion,
+      correctAnswer: trimmedCorrect,
+      options: nextOptions,
+    })
+
+    return await ctx.db.get(args.questionId)
+  },
+})
+
+export const deleteQuiz = mutation({
+  args: { quizId: v.id('quizzes') },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) throw new Error('Unauthenticated')
+
+    const userId = identity.tokenIdentifier
+
+    const quiz = await ctx.db.get(args.quizId)
+    if (!quiz || quiz.userId !== userId) {
+      throw new Error('Quiz not found')
+    }
+
+    const attempts = await ctx.db
+      .query('quizAttempts')
+      .withIndex('by_quizId', (q) => q.eq('quizId', args.quizId))
+      .collect()
+    for (const a of attempts) {
+      await ctx.db.delete(a._id)
+    }
+
+    const questions = await ctx.db
+      .query('quizQuestions')
+      .withIndex('by_quizId', (q) => q.eq('quizId', args.quizId))
+      .collect()
+    for (const q of questions) {
+      await ctx.db.delete(q._id)
+    }
+
+    await ctx.db.delete(args.quizId)
+
+    return {
+      deletedAttempts: attempts.length,
+      deletedQuestions: questions.length,
+    }
+  },
+})
