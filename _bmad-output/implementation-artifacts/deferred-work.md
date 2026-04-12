@@ -14,6 +14,14 @@
 - **~~`lastActivity` shows folder `_creationTime` not actual last activity~~** — Added `updatedAt` field to folders schema. `CourseCard.vue` now uses `updatedAt ?? _creationTime`. `createFolder` sets `updatedAt: Date.now()`.
 - **~~JWKS bootstrap undocumented~~** — Created `scripts/bootstrap-jwks.sh` automation script and documented setup steps in `CLAUDE.md`.
 
+## Deferred from: code review of story-4.4 (2026-04-12)
+
+- **`route.query.conversationId` array-case in delete redirect** — `app/layouts/default.vue` compares `route.query.conversationId` to the deleted `target._id` with `===`. If the query ever arrives as an array (`?conversationId=a&conversationId=b`), the comparison is false and the redirect is skipped. Add the same defensive guard as `app/pages/app/folders/[id].vue:12-14` (`if (!q || Array.isArray(q)) return null`).
+- **Silent user-message persistence failures** — `useChat.sendMessage` fires `persistMessage(convoId, 'user', query)` without awaiting. If Convex rejects the mutation (transient error), the user sees the message in the UI but it never lands in DB, producing a reload-time inconsistency. Story accepted this tradeoff; consider a retry queue or optimistic-rollback pattern later.
+- **Theoretical ordering race between user and assistant persistence** — User-message `appendMessage` is fire-and-forget (step 3) while assistant persist runs in the streaming `finally` (step 5). In practice the user mutation commits first, but if it fails silently a conversation can end up with only an assistant reply. Coupled with the silent-failure item above.
+- **Sidebar-recent-chats and new-chat component tests are `.skip`** — Following the repo's documented precedent for Reka UI portaled content + `mountSuspended` mocking difficulty (same gap as story 4.3). Backfill when a stable mounting pattern lands for Reka portals.
+- **`executeDeleteConversation` drops all non-`conversationId` query params on redirect** — The navigate-to target hard-codes `/app/folders/${target.folderId}` with no query. If future tabs or filters are encoded as query params, they get dropped. Preserve the rest of `route.query` minus `conversationId`.
+
 ## Deferred from: code review of story-4.3 (2026-04-11)
 
 - **chat.vue uses native `<select>`, `useRag`, no fallback handling** — Pre-existing: `/app/chat` page uses the `useRag` composable (not `useChat`), a native `<select>` element, and has no model fallback handling. Story 4.3 scope only centralizes the models array for this page (Task 1). Full conversion should happen when this page gets the `useChat` composable or is deprecated.
