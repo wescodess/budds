@@ -14,6 +14,7 @@ import {
   MessagesSquare,
   MoreHorizontal,
   Trash2,
+  Download,
 } from 'lucide-vue-next'
 import { api } from '#convex/api'
 import type { Id } from '~~/convex/_generated/dataModel'
@@ -206,6 +207,47 @@ async function executeDeleteConversation() {
 const showDeleteAccountDialog = ref(false)
 const deleteAccountConfirmInput = ref('')
 const isDeletingAccount = ref(false)
+const isExportingData = ref(false)
+
+function parseFilenameFromDisposition(header: string | null): string | null {
+  if (!header) return null
+  const match = header.match(/filename="?([^";]+)"?/i)
+  return match?.[1] ?? null
+}
+
+async function executeExportData() {
+  if (isExportingData.value) return
+  isExportingData.value = true
+  try {
+    const res = await fetch('/api/export/me', { method: 'GET', credentials: 'include' })
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      throw new Error(text || `Export failed (${res.status})`)
+    }
+    const blob = await res.blob()
+    const filename =
+      parseFilenameFromDisposition(res.headers.get('content-disposition'))
+      ?? `budds-export-${new Date().toISOString().slice(0, 10)}.zip`
+
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+
+    const { toast } = await import('vue-sonner')
+    toast.success('Your data export is ready.')
+  } catch (e: any) {
+    console.error('Data export failed', e)
+    const { toast } = await import('vue-sonner')
+    toast.error(e?.message || 'We could not export your data. Please try again.')
+  } finally {
+    isExportingData.value = false
+  }
+}
 
 const canConfirmDeleteAccount = computed(() => {
   const value = deleteAccountConfirmInput.value.trim()
@@ -460,6 +502,14 @@ async function executeDelete() {
                 Sign out
               </UiDropdownMenuItem>
               <UiDropdownMenuSeparator />
+              <UiDropdownMenuItem
+                data-testid="sidebar-menu-export-data"
+                :disabled="isExportingData"
+                @select.prevent="executeExportData"
+              >
+                <Download class="mr-2 h-4 w-4" />
+                {{ isExportingData ? 'Exporting…' : 'Export my data' }}
+              </UiDropdownMenuItem>
               <UiDropdownMenuItem
                 data-testid="sidebar-menu-delete-account"
                 class="text-destructive focus:text-destructive"

@@ -11,6 +11,7 @@
 import type * as accountDeletion from "../accountDeletion.js";
 import type * as auth from "../auth.js";
 import type * as conversations from "../conversations.js";
+import type * as dataExport from "../dataExport.js";
 import type * as documentActions from "../documentActions.js";
 import type * as documents from "../documents.js";
 import type * as folders from "../folders.js";
@@ -28,6 +29,7 @@ declare const fullApi: ApiFromModules<{
   accountDeletion: typeof accountDeletion;
   auth: typeof auth;
   conversations: typeof conversations;
+  dataExport: typeof dataExport;
   documentActions: typeof documentActions;
   documents: typeof documents;
   folders: typeof folders;
