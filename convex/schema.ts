@@ -62,6 +62,35 @@ export default defineSchema({
     .index('by_conversationId', ['conversationId'])
     .index('by_userId', ['userId']),
 
+  quizzes: defineTable({
+    userId: v.string(),
+    folderId: v.id('folders'),
+    title: v.string(),
+    status: v.union(v.literal('generating'), v.literal('ready'), v.literal('failed')),
+    failureReason: v.optional(v.string()),
+    model: v.optional(v.string()),
+    score: v.optional(v.number()),
+    completedAt: v.optional(v.number()),
+  })
+    .index('by_userId', ['userId'])
+    .index('by_folderId', ['folderId'])
+    .index('by_userId_and_folderId', ['userId', 'folderId']),
+
+  quizQuestions: defineTable({
+    quizId: v.id('quizzes'),
+    userId: v.string(),
+    order: v.number(),
+    question: v.string(),
+    type: v.union(v.literal('multiple-choice'), v.literal('free-response')),
+    options: v.optional(v.array(v.string())),
+    correctAnswer: v.string(),
+    sourceDocumentId: v.optional(v.id('documents')),
+    sourceChunkContent: v.string(),
+    sourceFilename: v.string(),
+  })
+    .index('by_quizId', ['quizId'])
+    .index('by_userId', ['userId']),
+
   pendingCleanup: defineTable({
     userId: v.string(),
     documentId: v.string(),
