@@ -14,6 +14,10 @@
 - **~~`lastActivity` shows folder `_creationTime` not actual last activity~~** — Added `updatedAt` field to folders schema. `CourseCard.vue` now uses `updatedAt ?? _creationTime`. `createFolder` sets `updatedAt: Date.now()`.
 - **~~JWKS bootstrap undocumented~~** — Created `scripts/bootstrap-jwks.sh` automation script and documented setup steps in `CLAUDE.md`.
 
+## Deferred from: code review of story-4.3 (2026-04-11)
+
+- **chat.vue uses native `<select>`, `useRag`, no fallback handling** — Pre-existing: `/app/chat` page uses the `useRag` composable (not `useChat`), a native `<select>` element, and has no model fallback handling. Story 4.3 scope only centralizes the models array for this page (Task 1). Full conversion should happen when this page gets the `useChat` composable or is deprecated.
+
 ## Deferred from: code review of story-4.2 (2026-04-11)
 
 - **Streaming test doesn't verify source-before-AI ordering** — Test uses `expect(output).toContain` to check both sources and AI data exist, but doesn't assert their relative order. The transform's purpose is that sources come first. Add an `indexOf` comparison.

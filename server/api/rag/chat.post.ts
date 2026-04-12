@@ -28,6 +28,13 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, message: 'model is required' })
   }
 
+  const requestedModel = body.model
+  let modelFallback: { requested: string; actual: string } | undefined
+  if (!isAllowedModel(requestedModel)) {
+    body.model = SERVER_DEFAULT_MODEL
+    modelFallback = { requested: requestedModel, actual: SERVER_DEFAULT_MODEL }
+  }
+
   if (!body.folderId?.trim()) {
     throw createError({ statusCode: 400, message: 'folderId is required' })
   }
@@ -73,14 +80,24 @@ export default defineEventHandler(async (event) => {
 
   messages.push({ role: 'user', content: body.query })
 
+  const completionParams = {
+    messages,
+    temperature: body.temperature,
+    max_tokens: body.max_tokens,
+  }
+
   if (body.stream) {
-    const stream = await generateCompletionStream({
-      model: body.model,
-      messages,
-      temperature: body.temperature,
-      max_tokens: body.max_tokens,
-      stream: true,
-    })
+    let stream: ReadableStream
+    try {
+      stream = await generateCompletionStream({ model: body.model, ...completionParams, stream: true })
+    } catch (err: any) {
+      if (body.model !== SERVER_DEFAULT_MODEL) {
+        modelFallback = { requested: body.model, actual: SERVER_DEFAULT_MODEL }
+        stream = await generateCompletionStream({ model: SERVER_DEFAULT_MODEL, ...completionParams, stream: true })
+      } else {
+        throw err
+      }
+    }
 
     const sources = chunks.map((chunk) => ({
       content: chunk.content,
@@ -89,10 +106,14 @@ export default defineEventHandler(async (event) => {
     }))
 
     const encoder = new TextEncoder()
+    const fallbackEvent = modelFallback
+      ? `event: model-fallback\ndata: ${JSON.stringify(modelFallback)}\n\n`
+      : ''
     const sourcesEvent = `event: sources\ndata: ${JSON.stringify(sources)}\n\n`
 
     const transformedStream = new ReadableStream({
       async start(controller) {
+        if (fallbackEvent) controller.enqueue(encoder.encode(fallbackEvent))
         controller.enqueue(encoder.encode(sourcesEvent))
         const reader = stream.getReader()
         try {
@@ -115,12 +136,17 @@ export default defineEventHandler(async (event) => {
     return sendStream(event, transformedStream)
   }
 
-  const completion = await generateCompletion({
-    model: body.model,
-    messages,
-    temperature: body.temperature,
-    max_tokens: body.max_tokens,
-  })
+  let completion: Awaited<ReturnType<typeof generateCompletion>>
+  try {
+    completion = await generateCompletion({ model: body.model, ...completionParams })
+  } catch (err: any) {
+    if (body.model !== SERVER_DEFAULT_MODEL) {
+      modelFallback = { requested: body.model, actual: SERVER_DEFAULT_MODEL }
+      completion = await generateCompletion({ model: SERVER_DEFAULT_MODEL, ...completionParams })
+    } else {
+      throw err
+    }
+  }
 
   return {
     answer: completion.choices[0]?.message?.content ?? '',
@@ -131,5 +157,6 @@ export default defineEventHandler(async (event) => {
       score: chunk.score,
       attributes: chunk.attributes,
     })),
+    ...(modelFallback && { modelFallback }),
   }
 })

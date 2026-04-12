@@ -9,7 +9,7 @@ const folderId = computed(() => route.params.id as Id<'folders'>)
 const { folder } = useFolderDetail(folderId)
 const { allFolders, createSubfolder } = useFolders()
 const { documents, uploading, uploadFiles, deleteDocument, moveDocument } = useDocuments(folderId)
-const { messages, loading, streaming, error, hasIndexedDocuments, sendMessage } = useChat(folderId)
+const { messages, loading, streaming, error, hasIndexedDocuments, selectedModel, sendMessage, selectModel } = useChat(folderId)
 
 const isDesktop = useMediaQuery('(min-width: 1024px)')
 
@@ -283,6 +283,13 @@ async function handleUpload(files: File[]) {
               </div>
             </template>
 
+            <div class="flex items-center px-4 pt-2">
+              <ChatModelSelector
+                :model-value="selectedModel"
+                :disabled="loading"
+                @update:model-value="selectModel"
+              />
+            </div>
             <ChatInput
               ref="chatInputRef"
               :disabled="!hasIndexedDocuments || loading"

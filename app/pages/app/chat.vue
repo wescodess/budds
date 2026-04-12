@@ -2,19 +2,10 @@
 const { messages, loading, error, chat, clearMessages } = useRag()
 
 const query = ref('')
-const selectedModel = ref('anthropic/claude-sonnet-4-5')
-const showSources = ref<number | null>(null)
+import { MODELS, DEFAULT_MODEL } from '~/constants/models'
 
-const models = [
-  { label: 'Claude Sonnet 4.5', value: 'anthropic/claude-sonnet-4-5' },
-  { label: 'Claude Haiku 3.5', value: 'anthropic/claude-3.5-haiku' },
-  { label: 'GPT-4o', value: 'openai/gpt-4o' },
-  { label: 'GPT-4o Mini', value: 'openai/gpt-4o-mini' },
-  { label: 'Gemini 2.5 Flash', value: 'google/gemini-2.5-flash-preview' },
-  { label: 'Llama 3.1 70B', value: 'meta-llama/llama-3.1-70b-instruct' },
-  { label: 'DeepSeek V3', value: 'deepseek/deepseek-chat-v3-0324' },
-  { label: 'Mistral Large', value: 'mistralai/mistral-large-latest' },
-]
+const selectedModel = ref(DEFAULT_MODEL)
+const showSources = ref<number | null>(null)
 
 const chatContainer = ref<HTMLElement>()
 
@@ -43,7 +34,7 @@ function toggleSources(index: number) {
         v-model="selectedModel"
         class="rounded-md border border-input bg-card px-3 py-1.5 text-sm text-foreground outline-none focus:ring-2 focus:ring-ring"
       >
-        <option v-for="model in models" :key="model.value" :value="model.value">
+        <option v-for="model in MODELS" :key="model.value" :value="model.value">
           {{ model.label }}
         </option>
       </select>
@@ -60,7 +51,7 @@ function toggleSources(index: number) {
         <div class="text-center">
           <p class="text-lg text-muted-foreground">Ask a question about your documents</p>
           <p class="mt-1 text-sm text-muted-foreground/60">
-            Powered by AI Search + {{ models.find(m => m.value === selectedModel)?.label }}
+            Powered by AI Search + {{ MODELS.find(m => m.value === selectedModel)?.label }}
           </p>
         </div>
       </div>
