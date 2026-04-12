@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { Layers, Plus } from 'lucide-vue-next'
+import { Layers, MoreHorizontal, Pencil, Plus, Trash2 } from 'lucide-vue-next'
+import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 
 const props = defineProps<{
@@ -15,6 +16,18 @@ const {
 } = useFlashcards(toRef(props, 'folderId'))
 
 const activeSetId = ref<Id<'flashcardSets'> | null>(null)
+const editingSetId = ref<Id<'flashcardSets'> | null>(null)
+const openMenuSetId = ref<string | null>(null)
+const confirmingDeleteSetId = ref<string | null>(null)
+const deleting = ref(false)
+const liveMessage = ref('')
+
+const deleteSetMutation = import.meta.client
+  ? useConvexMutation(api.flashcards.deleteSet)
+  : {
+      mutate: async (_args: unknown): Promise<any> => null,
+      isLoading: ref(false),
+    }
 
 async function handleGenerate() {
   try {
@@ -35,11 +48,64 @@ function handleSetSelect(setId: string) {
 function handleStudyBack() {
   activeSetId.value = null
 }
+
+function handleEditorBack() {
+  editingSetId.value = null
+}
+
+function toggleMenu(setId: string) {
+  openMenuSetId.value = openMenuSetId.value === setId ? null : setId
+  if (openMenuSetId.value !== setId) {
+    confirmingDeleteSetId.value = null
+  }
+}
+
+function handleEditSet(setId: string) {
+  openMenuSetId.value = null
+  confirmingDeleteSetId.value = null
+  editingSetId.value = setId as Id<'flashcardSets'>
+}
+
+function handleDeleteClick(setId: string) {
+  confirmingDeleteSetId.value = setId
+}
+
+function handleDeleteCancel() {
+  confirmingDeleteSetId.value = null
+}
+
+async function handleDeleteConfirm(setId: string) {
+  deleting.value = true
+  try {
+    await deleteSetMutation.mutate({ setId } as any)
+    confirmingDeleteSetId.value = null
+    openMenuSetId.value = null
+    liveMessage.value = 'Flash card set deleted'
+    setTimeout(() => {
+      if (liveMessage.value === 'Flash card set deleted') liveMessage.value = ''
+    }, 3000)
+    const { toast } = await import('vue-sonner')
+    toast.success('Flash card set deleted')
+  }
+  catch (e: any) {
+    const { toast } = await import('vue-sonner')
+    toast.error(e?.message || 'Failed to delete flash card set')
+  }
+  finally {
+    deleting.value = false
+  }
+}
 </script>
 
 <template>
   <div data-testid="flashcards-tab-content">
-    <template v-if="activeSetId">
+    <span class="sr-only" aria-live="polite" data-testid="flashcards-tab-live">{{ liveMessage }}</span>
+
+    <template v-if="editingSetId">
+      <FlashcardsEditor :set-id="editingSetId" @back="handleEditorBack" />
+    </template>
+
+    <template v-else-if="activeSetId">
       <FlashcardsStudy :set-id="activeSetId" @back="handleStudyBack" />
     </template>
 
@@ -105,6 +171,64 @@ function handleStudyBack() {
                 {{ set.cardCount }} cards
               </p>
             </div>
+            <button
+              type="button"
+              class="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+              data-testid="flashcards-set-menu"
+              aria-label="Flash card set actions"
+              @click.stop="toggleMenu(set._id)"
+            >
+              <MoreHorizontal class="h-4 w-4" />
+            </button>
+          </div>
+
+          <div
+            v-if="openMenuSetId === set._id"
+            class="flex items-center gap-2 border-t px-4 py-2"
+            data-testid="flashcards-set-actions"
+          >
+            <template v-if="confirmingDeleteSetId === set._id">
+              <UiButton
+                variant="destructive"
+                size="sm"
+                :disabled="deleting"
+                data-testid="flashcards-set-delete-confirm"
+                @click.stop="handleDeleteConfirm(set._id)"
+              >
+                <Trash2 class="mr-1.5 h-3 w-3" />
+                Confirm delete
+              </UiButton>
+              <UiButton
+                variant="ghost"
+                size="sm"
+                :disabled="deleting"
+                data-testid="flashcards-set-delete-cancel"
+                @click.stop="handleDeleteCancel"
+              >
+                Cancel
+              </UiButton>
+            </template>
+            <template v-else>
+              <UiButton
+                variant="outline"
+                size="sm"
+                data-testid="flashcards-set-edit"
+                @click.stop="handleEditSet(set._id)"
+              >
+                <Pencil class="mr-1.5 h-3 w-3" />
+                Edit
+              </UiButton>
+              <UiButton
+                variant="ghost"
+                size="sm"
+                class="text-destructive hover:text-destructive"
+                data-testid="flashcards-set-delete"
+                @click.stop="handleDeleteClick(set._id)"
+              >
+                <Trash2 class="mr-1.5 h-3 w-3" />
+                Delete
+              </UiButton>
+            </template>
           </div>
         </div>
       </div>
