@@ -1,6 +1,7 @@
 import { ConvexHttpClient } from 'convex/browser'
 import { api } from '../../../convex/_generated/api'
 import type { Id } from '../../../convex/_generated/dataModel'
+import type { AISearchChunk } from '../../utils/ai-search'
 
 const SEED_QUERY = 'key terms, definitions, facts to memorize'
 
@@ -25,13 +26,31 @@ export default defineEventHandler(async (event) => {
   const searchResults = await searchDocuments({
     query: SEED_QUERY,
     userId,
+    folderId: body.folderId,
     max_num_results: 16,
-    filters: { folderId: body.folderId },
+    score_threshold: 0.1,
   })
 
-  const chunks = searchResults.data ?? []
+  let chunks: AISearchChunk[] = searchResults.data ?? []
 
   if (chunks.length < 2) {
+    const folderDocs = await fetchFolderDocs({ userId, folderId: body.folderId, maxChars: 80_000 })
+    if (folderDocs.length > 0) {
+      chunks = folderDocs.map((doc): AISearchChunk => ({
+        id: doc.key,
+        content: doc.content,
+        score: 1,
+        attributes: {
+          filename: doc.filename,
+          folderId: body.folderId,
+          documentId: doc.documentId,
+          userId,
+        },
+      }))
+    }
+  }
+
+  if (chunks.length === 0) {
     throw createError({
       statusCode: 422,
       message: 'Not enough indexed content to generate flash cards',

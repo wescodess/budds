@@ -16,6 +16,10 @@ function getR2Client() {
   })
 }
 
+function sanitizeUserSegment(userId: string): string {
+  return userId.replace(/^https?:\/\//, '').replace(/[|:]/g, '_')
+}
+
 function getAiSearchConfig() {
   const accountId = process.env.CF_ACCOUNT_ID
   const instance = process.env.CLOUDFLARE_AI_SEARCH_INSTANCE
@@ -66,7 +70,7 @@ export const ingestDocument = internalAction({
         return
       }
 
-      const r2Key = `${args.userId}/${args.documentId}.txt`
+      const r2Key = `${sanitizeUserSegment(args.userId)}/${args.folderId}/${args.documentId}.txt`
       const r2 = getR2Client()
 
       await r2.send(new PutObjectCommand({

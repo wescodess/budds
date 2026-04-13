@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url'
 import tailwindcss from '@tailwindcss/vite'
 
 export default defineNuxtConfig({
@@ -5,6 +6,11 @@ export default defineNuxtConfig({
   compatibilityDate: '2025-01-01',
   vite: {
     plugins: [tailwindcss()],
+  },
+  nitro: {
+    externals: {
+      inline: [fileURLToPath(new URL('./convex/_generated/', import.meta.url))],
+    },
   },
   modules: ['shadcn-nuxt', 'nuxt-convex', '@onmax/nuxt-better-auth'],
   shadcn: {
@@ -29,6 +35,10 @@ export default defineNuxtConfig({
     cloudflareAiSearchInstance: process.env.CLOUDFLARE_AI_SEARCH_INSTANCE,
     cloudflareAiSearchToken: process.env.CLOUDFLARE_AI_SEARCH_TOKEN,
     openrouterApiKey: process.env.OPENROUTER_API_KEY,
+    r2Endpoint: process.env.R2_ENDPOINT,
+    r2AccessKeyId: process.env.R2_ACCESS_KEY_ID,
+    r2SecretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
+    r2BucketName: process.env.R2_BUCKET_NAME,
     public: {
       siteUrl: process.env.NUXT_PUBLIC_SITE_URL || 'http://localhost:3002',
     },

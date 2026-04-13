@@ -69,9 +69,9 @@ export function useRag() {
   }
 
   async function search(query: string, options?: {
+    folderId?: string
     max_num_results?: number
     score_threshold?: number
-    filters?: Record<string, unknown>
   }) {
     error.value = null
     loading.value = true

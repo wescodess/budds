@@ -7,6 +7,7 @@ vi.stubGlobal('createError', (opts: { statusCode: number; message: string }) =>
 vi.stubGlobal('getConvexTokenIdentifier', vi.fn(() => 'https://auth.example.com|user_test_123'))
 vi.stubGlobal('readBody', vi.fn())
 vi.stubGlobal('searchDocuments', vi.fn())
+vi.stubGlobal('fetchFolderDocs', vi.fn(async () => []))
 vi.stubGlobal('generateCompletion', vi.fn())
 vi.stubGlobal('generateCompletionStream', vi.fn())
 vi.stubGlobal('setResponseHeader', vi.fn())
@@ -54,9 +55,7 @@ describe('POST /api/rag/chat — folderId enforcement (AC #1)', () => {
     await handler(mockEvent)
 
     expect(globalThis.searchDocuments).toHaveBeenCalledWith(
-      expect.objectContaining({
-        filters: expect.objectContaining({ folderId: 'folder_abc123' }),
-      }),
+      expect.objectContaining({ folderId: 'folder_abc123' }),
     )
   })
 
@@ -78,7 +77,7 @@ describe('POST /api/rag/chat — folderId enforcement (AC #1)', () => {
     expect(globalThis.searchDocuments).toHaveBeenCalledWith(
       expect.objectContaining({
         userId: 'https://auth.example.com|user_test_123',
-        filters: expect.objectContaining({ folderId: 'folder_xyz789' }),
+        folderId: 'folder_xyz789',
       }),
     )
   })

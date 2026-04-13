@@ -42,19 +42,41 @@ export default defineEventHandler(async (event) => {
   const searchResults = await searchDocuments({
     query: body.query,
     userId,
+    folderId: body.folderId,
     max_num_results: body.max_num_results ?? 10,
-    score_threshold: body.score_threshold,
-    filters: { folderId: body.folderId },
+    score_threshold: body.score_threshold ?? 0.1,
   })
 
   const chunks = searchResults.data ?? []
 
-  const context = chunks
-    .map((chunk, i) => {
-      const label = chunk.attributes?.filename || chunk.attributes?.url || 'unknown'
-      return `[Source ${i + 1}: ${label}]\n${chunk.content}`
-    })
-    .join('\n\n---\n\n')
+  const summarizationIntent = /\b(summari[sz]e|summary|overview|outline|tl;?dr|main points|key points|what(?:'s| is| are) (?:in|this|these|the)\b|tell me about)\b/i.test(body.query)
+  const needsFallback = chunks.length < 3 || summarizationIntent
+
+  let context: string
+  if (needsFallback) {
+    const folderDocs = await fetchFolderDocs({ userId, folderId: body.folderId, maxChars: 80_000 })
+    if (folderDocs.length > 0) {
+      context = folderDocs
+        .map((doc, i) => `[Source ${i + 1}: ${doc.filename ?? doc.documentId}]\n${doc.content}`)
+        .join('\n\n---\n\n')
+    }
+    else {
+      context = chunks
+        .map((chunk, i) => {
+          const label = chunk.attributes?.filename || chunk.attributes?.url || 'unknown'
+          return `[Source ${i + 1}: ${label}]\n${chunk.content}`
+        })
+        .join('\n\n---\n\n')
+    }
+  }
+  else {
+    context = chunks
+      .map((chunk, i) => {
+        const label = chunk.attributes?.filename || chunk.attributes?.url || 'unknown'
+        return `[Source ${i + 1}: ${label}]\n${chunk.content}`
+      })
+      .join('\n\n---\n\n')
+  }
 
   const messages: ChatMessage[] = [
     { role: 'system', content: SYSTEM_PROMPT },
