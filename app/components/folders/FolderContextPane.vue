@@ -85,21 +85,14 @@ const emit = defineEmits<{
     </header>
 
     <section
-      data-testid="folder-context-knowledge-placeholder"
-      class="rounded-xl border bg-card p-4"
+      data-testid="folder-context-knowledge"
+      class="flex min-h-0 flex-1 flex-col rounded-xl border bg-card p-3"
     >
-      <div class="mb-3 flex items-center justify-between">
-        <h3 class="text-sm font-semibold tracking-tight">Knowledge tree</h3>
-        <span class="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-primary">
-          G4
-        </span>
-      </div>
-      <div class="space-y-2">
-        <div v-for="i in 3" :key="i" class="h-3 w-full rounded bg-muted/60" />
-      </div>
-      <p class="mt-3 text-xs text-muted-foreground">
-        Subfolder tree and quick file actions arrive in G4.
-      </p>
+      <slot name="knowledge">
+        <div data-testid="folder-context-knowledge-placeholder" class="space-y-2">
+          <div v-for="i in 3" :key="i" class="h-3 w-full rounded bg-muted/60" />
+        </div>
+      </slot>
     </section>
   </aside>
 </template>
