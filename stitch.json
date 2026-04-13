@@ -10,7 +10,12 @@
     "flash-cards-void": "85521d3e8e5d4374afb271aac41ccb2a",
     "quiz-void": "9702ac3d2d674f139d351dde8782e776",
     "dashboard": "99ce0074f0d941f8a00c9c4c28668db0",
-    "dashboard-atlas": "389a652f8e07495a826028af9f01b567"
+    "dashboard-atlas": "389a652f8e07495a826028af9f01b567",
+    "g3-folder-3pane-default": "4bc72d3bd5ae451e80e3450fbb5499c7",
+    "g3-folder-3pane-helper-open": "3a5e62149a4b495f87baedc1368586e2",
+    "g3-folder-3pane-flipped": "e29135ced58046dcb6762fe11201f5ef",
+    "g3-folder-3pane-tablet": "30a7ec0137c14820a4a5ae6aaa8a5ee6",
+    "g3-folder-3pane-mobile": "e197f4e451684e1d8975b90295d24fc7"
   },
   "designSystemId": "assets/11175050301981891392",
   "foundationComplete": true,
