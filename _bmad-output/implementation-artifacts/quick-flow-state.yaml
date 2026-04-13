@@ -1,0 +1,101 @@
+schema_version: 1
+mode: running
+current_phase: implement
+spec_slug: g2-atlas-style-home-sidebar
+spec_path: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts/spec-g2-atlas-style-home-sidebar.md
+goal_or_spec: "G2: Atlas-style home sidebar"
+input_type: goal
+is_ui: true
+review_rounds: 0
+retry_count: 0
+branch: null
+pr_url: null
+commit_sha: null
+design:
+  approved: true
+  screens:
+    - name: g2-rail-proposal
+      path: _bmad-output/implementation-artifacts/design-screens/g2-atlas-style-home-sidebar.md
+      generated_at: 2026-04-13T00:00:00Z
+  workspace_project_id: null
+  approved_at: 2026-04-13T00:00:00Z
+  approved_by: terminal
+escalation:
+  pending: null
+  log:
+    - question: "Approve Atlas-rail design proposal for G2?"
+      answer: "approve_with_revisions: drop General Chat from rail; + with list; empty-state + tile with larger tooltip"
+      recommended_default: request_revision
+      followed_default: false
+      asked_at: 2026-04-13T00:00:00Z
+      answered_at: 2026-04-13T00:00:00Z
+      auto_resolved: false
+decisions_log:
+  - at: 2026-04-13T00:00:00Z
+    tier: 1
+    category: intake
+    decision: "is_ui=true (sidebar/layout keyword)"
+    reasoning: "goal mentions 'sidebar' — UI change"
+    phase: intake
+run_log:
+  - at: 2026-04-13T00:00:00Z
+    mode: running
+    event: invoked
+    from_state: idle
+    to_state: intake
+    note: "start G2: Atlas-style home sidebar"
+  - at: 2026-04-13T00:00:00Z
+    mode: running
+    event: transition
+    from_state: intake
+    to_state: design
+    note: "is_ui=true → DESIGN phase"
+  - at: 2026-04-13T00:00:00Z
+    event: transition
+    from_state: escalated
+    to_state: clarify
+    note: "DESIGN approved (revisions: drop General Chat from rail)"
+last_verdict: null
+config:
+  max_retries_per_check: 3
+  max_review_rounds: 2
+  max_deferred_per_spec: 8
+  max_runtime_hours_per_invocation: 6
+  poll_merge_max_minutes: 30
+  poll_merge_interval_seconds: 15
+  auto_merge_on_review_pass: true
+  auto_add_arch_permitted_deps: true
+  notifications:
+    telegram:
+      enabled: true
+      chat_id: "637527821"
+      progress_message_id: null
+      notify_on:
+        escalation: true
+        blocked: true
+        design_ready: true
+        phase_start: true
+        loopback: true
+        review_pass: false
+        pr_opened: true
+        merge_complete: true
+        run_complete: true
+paths:
+  project_root: /Users/wesleyukadike/Desktop/budds
+  artifacts_dir: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts
+  steps_dir: /Users/wesleyukadike/Desktop/budds/_bmad/bmm/4-implementation/bmad-quick-dev
+  state_file: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts/quick-flow-state.yaml
+  deferred_work: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts/deferred-work.md
+  design_cache: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts/design-screens
+counters:
+  files_changed: 0
+  tasks_completed: 0
+  tasks_total: 0
+  findings_deferred: 0
+  loopback_rounds_used: 0
+  escalations_raised_total: 0
+  auto_decisions_total: 1
+  check_retries_total: 0
+created_at: 2026-04-13T00:00:00Z
+last_updated: 2026-04-13T00:00:00Z
+last_invocation_at: 2026-04-13T00:00:00Z
