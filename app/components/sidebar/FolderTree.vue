@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { TreeRoot, TreeItem } from 'reka-ui'
-import { ChevronRight, FolderOpen, Folder, Plus, MoreHorizontal, Pencil, Trash2 } from 'lucide-vue-next'
+import { ChevronRight, Plus, MoreHorizontal, Pencil, Settings2, Trash2 } from 'lucide-vue-next'
 import { toast } from 'vue-sonner'
 import type { Doc, Id } from '~~/convex/_generated/dataModel'
 
 interface FolderNode {
   _id: Id<'folders'>
   name: string
+  color: string | undefined
+  icon: string | undefined
   children: FolderNode[]
   depth: number
 }
@@ -18,16 +20,15 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   select: [folderId: Id<'folders'>]
-  createSubfolder: [parentId: Id<'folders'>, name: string]
+  newSubfolder: [parentId: Id<'folders'>]
   rename: [folderId: Id<'folders'>, name: string]
   delete: [folder: { _id: Id<'folders'>; name: string }]
+  edit: [folder: Doc<'folders'>]
 }>()
 
 const expanded = ref<string[]>([])
 const editingId = ref<Id<'folders'> | null>(null)
 const editName = ref('')
-const creatingParentId = ref<Id<'folders'> | null>(null)
-const newSubfolderName = ref('')
 
 const tree = computed<FolderNode[]>(() => {
   if (!props.folders) return []
@@ -45,6 +46,8 @@ const tree = computed<FolderNode[]>(() => {
     return items.map((f) => ({
       _id: f._id,
       name: f.name,
+      color: f.color,
+      icon: f.icon,
       depth,
       children: build(f._id, depth + 1),
     }))
@@ -67,35 +70,8 @@ function onSelect(item: FolderNode) {
   navigateTo(`/app/folders/${item._id}`)
 }
 
-function onAddSubfolder(e: Event, item: FolderNode) {
-  e.stopPropagation()
-  creatingParentId.value = item._id
-  newSubfolderName.value = ''
-  if (!expanded.value.includes(item._id)) {
-    expanded.value = [...expanded.value, item._id]
-  }
-  nextTick(() => {
-    const input = document.querySelector<HTMLInputElement>(`[data-subfolder-input="${item._id}"]`)
-    input?.focus()
-  })
-}
-
-function submitCreateSubfolder() {
-  if (!creatingParentId.value) return
-  const trimmed = newSubfolderName.value.trim()
-  const parentId = creatingParentId.value
-  creatingParentId.value = null
-  newSubfolderName.value = ''
-  if (!trimmed || trimmed.length > 100) {
-    if (trimmed && trimmed.length > 100) toast.error('Folder name must be between 1 and 100 characters')
-    return
-  }
-  emit('createSubfolder', parentId, trimmed)
-}
-
-function cancelCreateSubfolder() {
-  creatingParentId.value = null
-  newSubfolderName.value = ''
+function requestNewSubfolder(item: FolderNode) {
+  emit('newSubfolder', item._id)
 }
 
 function startRename(item: FolderNode) {
@@ -131,6 +107,12 @@ function cancelRename() {
 function confirmDelete(item: FolderNode) {
   emit('delete', { _id: item._id, name: item.name })
 }
+
+function requestEdit(item: FolderNode) {
+  cancelRename()
+  const source = props.folders?.find((f) => f._id === item._id)
+  if (source) emit('edit', source)
+}
 </script>
 
 <template>
@@ -163,13 +145,10 @@ function confirmDelete(item: FolderNode) {
               />
               <span v-else class="w-3.5" />
 
-              <FolderOpen
-                v-if="isExpanded"
-                class="h-4 w-4 shrink-0 text-primary"
-              />
-              <Folder
-                v-else
-                class="h-4 w-4 shrink-0 text-muted-foreground"
+              <FoldersFolderBadge
+                :color="item.value.color ?? undefined"
+                :icon="item.value.icon ?? undefined"
+                size="sm"
               />
 
               <input
@@ -199,7 +178,13 @@ function confirmDelete(item: FolderNode) {
                   <UiDropdownMenuItem @select="startRename(item.value)">
                     <Pencil class="mr-2 h-4 w-4" /> Rename
                   </UiDropdownMenuItem>
-                  <UiDropdownMenuItem v-if="item.value.depth < 3" @select="onAddSubfolder($event, item.value)">
+                  <UiDropdownMenuItem
+                    :data-testid="`folder-edit-${item.value._id}`"
+                    @select="requestEdit(item.value)"
+                  >
+                    <Settings2 class="mr-2 h-4 w-4" /> Edit
+                  </UiDropdownMenuItem>
+                  <UiDropdownMenuItem v-if="item.value.depth < 3" @select="requestNewSubfolder(item.value)">
                     <Plus class="mr-2 h-4 w-4" /> New subfolder
                   </UiDropdownMenuItem>
                   <UiDropdownMenuItem class="text-destructive" @select="confirmDelete(item.value)">
@@ -213,7 +198,10 @@ function confirmDelete(item: FolderNode) {
             <UiContextMenuItem @select="startRename(item.value)">
               <Pencil class="mr-2 h-4 w-4" /> Rename
             </UiContextMenuItem>
-            <UiContextMenuItem v-if="item.value.depth < 3" @select="onAddSubfolder($event, item.value)">
+            <UiContextMenuItem @select="requestEdit(item.value)">
+              <Settings2 class="mr-2 h-4 w-4" /> Edit
+            </UiContextMenuItem>
+            <UiContextMenuItem v-if="item.value.depth < 3" @select="requestNewSubfolder(item.value)">
               <Plus class="mr-2 h-4 w-4" /> New subfolder
             </UiContextMenuItem>
             <UiContextMenuItem class="text-destructive" @select="confirmDelete(item.value)">
@@ -221,24 +209,6 @@ function confirmDelete(item: FolderNode) {
             </UiContextMenuItem>
           </UiContextMenuContent>
         </UiContextMenu>
-        <div
-          v-if="creatingParentId === item.value._id"
-          class="flex items-center gap-1 rounded-md px-2 py-1"
-          :style="{ paddingLeft: `${item.level * 12 + 8}px` }"
-        >
-          <Folder class="h-4 w-4 shrink-0 text-muted-foreground" />
-          <input
-            v-model="newSubfolderName"
-            :data-subfolder-input="item.value._id"
-            data-testid="subfolder-name-input"
-            placeholder="Subfolder name"
-            class="flex-1 rounded border bg-background px-1 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            @keydown.enter="submitCreateSubfolder"
-            @keydown.escape="cancelCreateSubfolder"
-            @blur="cancelCreateSubfolder"
-            @click.stop
-          />
-        </div>
         </template>
       </div>
     </template>

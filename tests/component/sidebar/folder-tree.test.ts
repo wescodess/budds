@@ -139,6 +139,38 @@ describe('FolderTree — AC2: Inline Rename', () => {
   })
 })
 
+describe('FolderTree — Folder Badge', () => {
+  it('[P0] should render FolderBadge with the folder color key', async () => {
+    const folders = [
+      createFolder({ _id: 'f1', name: 'Chem', parentId: undefined, color: 'iris', icon: 'atom' }),
+    ]
+    const FolderTree = await import('~/components/sidebar/FolderTree.vue')
+
+    const wrapper = await mountSuspended(FolderTree.default, {
+      props: { folders, activeFolder: null },
+    })
+
+    const badge = wrapper.find('[data-folder-color="iris"]')
+    expect(badge.exists()).toBe(true)
+    expect(badge.attributes('data-folder-icon')).toBe('atom')
+  })
+
+  it('[P0] should fall back to slate-tide and folder defaults when missing', async () => {
+    const folders = [
+      createFolder({ _id: 'f1', name: 'Legacy', parentId: undefined, color: undefined, icon: undefined }),
+    ]
+    const FolderTree = await import('~/components/sidebar/FolderTree.vue')
+
+    const wrapper = await mountSuspended(FolderTree.default, {
+      props: { folders, activeFolder: null },
+    })
+
+    const badge = wrapper.find('[data-folder-color="slate-tide"]')
+    expect(badge.exists()).toBe(true)
+    expect(badge.attributes('data-folder-icon')).toBe('folder')
+  })
+})
+
 describe('FolderTree — AC5: Depth Enforcement & Subfolder Creation', () => {
   it('[P1] should show actions button on folder items (depth < 3)', async () => {
     const folders = [

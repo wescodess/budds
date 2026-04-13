@@ -1,9 +1,43 @@
-import { v } from 'convex/values'
+import { ConvexError, v } from 'convex/values'
 import type { Id, Doc } from './_generated/dataModel'
 import type { QueryCtx, MutationCtx } from './_generated/server'
-import { mutation, query } from './_generated/server'
+import { internalMutation, mutation, query } from './_generated/server'
 import { internal } from './_generated/api'
 import { enqueueDocumentCleanup } from './accountDeletion'
+import { DEFAULT_COLOR_KEY, isValidColorKey } from './folderPalette'
+import { DEFAULT_ICON_KEY, isValidIconKey } from './folderIcons'
+
+function normalizeName(name: string): string {
+  const trimmed = name.trim()
+  if (!trimmed || trimmed.length > 100) {
+    throw new ConvexError('Folder name must be between 1 and 100 characters')
+  }
+  return trimmed
+}
+
+function normalizeDescription(description: string | undefined): string {
+  const value = description ?? ''
+  if (value.length > 280) {
+    throw new ConvexError('Description must be 280 characters or fewer')
+  }
+  return value
+}
+
+function resolveColor(color: string | undefined): string {
+  if (color === undefined) return DEFAULT_COLOR_KEY
+  if (!isValidColorKey(color)) {
+    throw new ConvexError(`Invalid color: ${color}`)
+  }
+  return color
+}
+
+function resolveIcon(icon: string | undefined): string {
+  if (icon === undefined) return DEFAULT_ICON_KEY
+  if (!isValidIconKey(icon)) {
+    throw new ConvexError(`Invalid icon: ${icon}`)
+  }
+  return icon
+}
 
 export const listAllFolders = query({
   args: {},
@@ -39,16 +73,21 @@ export const listTopLevelFolders = query({
 })
 
 export const createFolder = mutation({
-  args: { name: v.string() },
+  args: {
+    name: v.string(),
+    description: v.optional(v.string()),
+    color: v.optional(v.string()),
+    icon: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity()
     if (!identity) throw new Error('Unauthenticated')
 
     const userId = identity.tokenIdentifier
-    const name = args.name.trim()
-    if (!name || name.length > 100) {
-      throw new Error('Folder name must be between 1 and 100 characters')
-    }
+    const name = normalizeName(args.name)
+    const description = normalizeDescription(args.description)
+    const color = resolveColor(args.color)
+    const icon = resolveIcon(args.icon)
 
     return await ctx.db.insert('folders', {
       userId,
@@ -56,6 +95,9 @@ export const createFolder = mutation({
       parentId: undefined,
       documentCount: 0,
       updatedAt: Date.now(),
+      description,
+      color,
+      icon,
     })
   },
 })
@@ -64,16 +106,19 @@ export const createSubfolder = mutation({
   args: {
     name: v.string(),
     parentId: v.id('folders'),
+    description: v.optional(v.string()),
+    color: v.optional(v.string()),
+    icon: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity()
     if (!identity) throw new Error('Unauthenticated')
 
     const userId = identity.tokenIdentifier
-    const name = args.name.trim()
-    if (!name || name.length > 100) {
-      throw new Error('Folder name must be between 1 and 100 characters')
-    }
+    const name = normalizeName(args.name)
+    const description = normalizeDescription(args.description)
+    const color = resolveColor(args.color)
+    const icon = resolveIcon(args.icon)
 
     const parent = await ctx.db.get(args.parentId)
     if (!parent || parent.userId !== userId) {
@@ -102,6 +147,9 @@ export const createSubfolder = mutation({
       parentId: args.parentId,
       documentCount: 0,
       updatedAt: Date.now(),
+      description,
+      color,
+      icon,
     })
   },
 })
@@ -164,12 +212,46 @@ export const renameFolder = mutation({
     const folder = await ctx.db.get(args.id)
     if (!folder || folder.userId !== userId) throw new Error('Folder not found')
 
-    const name = args.name.trim()
-    if (!name || name.length > 100) {
-      throw new Error('Folder name must be between 1 and 100 characters')
-    }
+    const name = normalizeName(args.name)
 
     await ctx.db.patch(args.id, { name, updatedAt: Date.now() })
+  },
+})
+
+export const updateFolder = mutation({
+  args: {
+    id: v.id('folders'),
+    name: v.optional(v.string()),
+    description: v.optional(v.string()),
+    color: v.optional(v.string()),
+    icon: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) throw new Error('Unauthenticated')
+
+    const userId = identity.tokenIdentifier
+    const folder = await ctx.db.get(args.id)
+    if (!folder || folder.userId !== userId) throw new Error('Folder not found')
+
+    const patch: Partial<Doc<'folders'>> = { updatedAt: Date.now() }
+
+    if (args.name !== undefined) patch.name = normalizeName(args.name)
+    if (args.description !== undefined) patch.description = normalizeDescription(args.description)
+    if (args.color !== undefined) {
+      if (!isValidColorKey(args.color)) {
+        throw new ConvexError(`Invalid color: ${args.color}`)
+      }
+      patch.color = args.color
+    }
+    if (args.icon !== undefined) {
+      if (!isValidIconKey(args.icon)) {
+        throw new ConvexError(`Invalid icon: ${args.icon}`)
+      }
+      patch.icon = args.icon
+    }
+
+    await ctx.db.patch(args.id, patch)
   },
 })
 
@@ -245,3 +327,21 @@ export const getFolderDescendantCounts = query({
   },
 })
 
+export const backfillFolderDefaults = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const folders = await ctx.db.query('folders').take(2000)
+    let patched = 0
+    for (const folder of folders) {
+      const patch: Partial<Doc<'folders'>> = {}
+      if (folder.color === undefined) patch.color = DEFAULT_COLOR_KEY
+      if (folder.icon === undefined) patch.icon = DEFAULT_ICON_KEY
+      if (folder.description === undefined) patch.description = ''
+      if (Object.keys(patch).length > 0) {
+        await ctx.db.patch(folder._id, patch)
+        patched++
+      }
+    }
+    return { patched }
+  },
+})

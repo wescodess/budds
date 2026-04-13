@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 import { convexTest } from 'convex-test'
 import { describe, expect, it } from 'vitest'
-import { api } from './_generated/api'
+import { api, internal } from './_generated/api'
 import schema from './schema'
 
 const modules = import.meta.glob('./**/*.ts')
@@ -736,5 +736,211 @@ describe('folders.deleteFolder cascade (story 5.2)', () => {
         .collect()
     })
     expect(rows).toHaveLength(0)
+  })
+})
+
+describe('folders.createFolder metadata', () => {
+  it('[P0] persists description, color, and icon when provided', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+
+    const id = await asUser.mutation(api.folders.createFolder, {
+      name: 'Quantum Physics',
+      description: 'Study notes and problem sets',
+      color: 'iris',
+      icon: 'atom',
+    })
+
+    const folder = await asUser.query(api.folders.getFolder, { id })
+    expect(folder!.description).toBe('Study notes and problem sets')
+    expect(folder!.color).toBe('iris')
+    expect(folder!.icon).toBe('atom')
+  })
+
+  it('[P0] applies defaults when metadata is omitted', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+
+    const id = await asUser.mutation(api.folders.createFolder, { name: 'Scratch' })
+
+    const folder = await asUser.query(api.folders.getFolder, { id })
+    expect(folder!.color).toBe('slate-tide')
+    expect(folder!.icon).toBe('folder')
+    expect(folder!.description).toBe('')
+  })
+
+  it('[P0] rejects an invalid color key', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+
+    await expect(
+      asUser.mutation(api.folders.createFolder, { name: 'X', color: 'hotpink' }),
+    ).rejects.toThrow(/Invalid color/)
+  })
+
+  it('[P0] rejects an invalid icon key', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+
+    await expect(
+      asUser.mutation(api.folders.createFolder, { name: 'X', icon: 'tardis' }),
+    ).rejects.toThrow(/Invalid icon/)
+  })
+
+  it('[P1] rejects description longer than 280 chars', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+
+    await expect(
+      asUser.mutation(api.folders.createFolder, {
+        name: 'X',
+        description: 'x'.repeat(281),
+      }),
+    ).rejects.toThrow()
+  })
+})
+
+describe('folders.createSubfolder metadata', () => {
+  it('[P0] persists metadata and validates color/icon', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+
+    const parentId = await asUser.mutation(api.folders.createFolder, { name: 'Parent' })
+    const childId = await asUser.mutation(api.folders.createSubfolder, {
+      name: 'Kid',
+      parentId,
+      color: 'jade',
+      icon: 'leaf',
+    })
+
+    const child = await asUser.query(api.folders.getFolder, { id: childId })
+    expect(child!.color).toBe('jade')
+    expect(child!.icon).toBe('leaf')
+    expect(child!.description).toBe('')
+  })
+
+  it('[P0] rejects invalid color on subfolder', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const parentId = await asUser.mutation(api.folders.createFolder, { name: 'Parent' })
+
+    await expect(
+      asUser.mutation(api.folders.createSubfolder, {
+        name: 'Kid',
+        parentId,
+        color: 'neon',
+      }),
+    ).rejects.toThrow(/Invalid color/)
+  })
+})
+
+describe('folders.updateFolder', () => {
+  it('[P0] patches name only', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const id = await asUser.mutation(api.folders.createFolder, { name: 'Before' })
+
+    await asUser.mutation(api.folders.updateFolder, { id, name: 'After' })
+
+    const folder = await asUser.query(api.folders.getFolder, { id })
+    expect(folder!.name).toBe('After')
+    expect(folder!.color).toBe('slate-tide')
+  })
+
+  it('[P0] patches color without touching icon', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const id = await asUser.mutation(api.folders.createFolder, {
+      name: 'X',
+      color: 'ember',
+      icon: 'atom',
+    })
+
+    await asUser.mutation(api.folders.updateFolder, { id, color: 'jade' })
+
+    const folder = await asUser.query(api.folders.getFolder, { id })
+    expect(folder!.color).toBe('jade')
+    expect(folder!.icon).toBe('atom')
+  })
+
+  it('[P0] rejects invalid color', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const id = await asUser.mutation(api.folders.createFolder, { name: 'X' })
+
+    await expect(
+      asUser.mutation(api.folders.updateFolder, { id, color: 'bogus' }),
+    ).rejects.toThrow(/Invalid color/)
+  })
+
+  it('[P0] rejects invalid icon', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const id = await asUser.mutation(api.folders.createFolder, { name: 'X' })
+
+    await expect(
+      asUser.mutation(api.folders.updateFolder, { id, icon: 'nope' }),
+    ).rejects.toThrow(/Invalid icon/)
+  })
+
+  it('[P1] rejects another users folder', async () => {
+    const t = convexTest(schema, modules)
+    const asUserA = t.withIdentity(TEST_IDENTITY)
+    const asUserB = t.withIdentity(OTHER_IDENTITY)
+    const id = await asUserA.mutation(api.folders.createFolder, { name: 'A' })
+
+    await expect(
+      asUserB.mutation(api.folders.updateFolder, { id, name: 'hijacked' }),
+    ).rejects.toThrow()
+  })
+
+  it('[P1] rejects unauthenticated caller', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const id = await asUser.mutation(api.folders.createFolder, { name: 'X' })
+
+    await expect(
+      t.mutation(api.folders.updateFolder, { id, name: 'Y' }),
+    ).rejects.toThrow()
+  })
+})
+
+describe('folders.backfillFolderDefaults', () => {
+  it('[P0] patches legacy folders missing color/icon/description', async () => {
+    const t = convexTest(schema, modules)
+
+    const legacyId = await t.run(async (ctx) => {
+      return await ctx.db.insert('folders', {
+        userId: 'user_legacy',
+        name: 'Legacy',
+        parentId: undefined,
+        documentCount: 0,
+      })
+    })
+
+    const first = await t.mutation(internal.folders.backfillFolderDefaults, {})
+    expect(first.patched).toBeGreaterThanOrEqual(1)
+
+    const legacy = await t.run(async (ctx) => ctx.db.get(legacyId))
+    expect(legacy!.color).toBe('slate-tide')
+    expect(legacy!.icon).toBe('folder')
+    expect(legacy!.description).toBe('')
+  })
+
+  it('[P0] is idempotent — second run patches zero rows', async () => {
+    const t = convexTest(schema, modules)
+
+    await t.run(async (ctx) => {
+      await ctx.db.insert('folders', {
+        userId: 'user_legacy',
+        name: 'Legacy',
+        parentId: undefined,
+        documentCount: 0,
+      })
+    })
+
+    await t.mutation(internal.folders.backfillFolderDefaults, {})
+    const second = await t.mutation(internal.folders.backfillFolderDefaults, {})
+    expect(second.patched).toBe(0)
   })
 })
