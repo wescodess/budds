@@ -1,5 +1,32 @@
 # Deferred Work
 
+## Deferred from: round-2 review of spec-folder-metadata-and-create-modal (2026-04-13)
+
+- **`getFolderDescendantCounts` (`convex/folders.ts`) returns `documentCount: 0` across all descendants.** Pre-existing bug — never sums stored counts. Any caller that surfaces "X documents will be deleted" gets a falsely reassuring zero. Fix: `descendants.reduce((s,d)=>s+d.documentCount,0) + folder.documentCount`.
+- **`CourseCard.vue` quick-action buttons ("Chat" / "Flash Cards") are announced to screen readers but have no handlers.** Pre-existing regression (unrelated to G1 badge change). Either wire them or remove the `sr-only` labels.
+- **`IconSelect.vue` `resolveIcon` is uncached.** Every keystroke re-resolves PascalCase lookups for every tile. Safe today; memoize via module-level `Map<string, Component>` once catalog grows.
+- **IconSelect tint uses string concatenation `${colorHex}26`.** Assumes `#RRGGBB`. Brittle if the palette ever emits shorthand or `rgb()`. Switch to an `rgba()` computation.
+- **`app/pages/index.vue` has dead defensive code:** `(folder as any).documentCount ?? 0` and `allFolders as any` in `FolderPickerDialog` binding. Schema guarantees shape; remove casts to restore type safety.
+
+## Deferred from: review of spec-folder-metadata-and-create-modal (2026-04-13)
+
+- **`backfillFolderDefaults` capped at 2000 rows per run.** Uses `.take(2000)`; correct and idempotent, but a user with >2000 folders would need multiple invocations. Document the run-until-zero operator contract or switch to cursor pagination when usage approaches the cap.
+- **`updateFolder` has no optimistic-concurrency guard.** Two tabs editing the same folder race last-writer-wins. Realistic exposure on a single-user app is low; revisit with an `updatedAt` compare-and-swap if cross-device sync becomes a visible problem.
+- **`useFolders` exports dual create signatures + an SSR stub.** `createFolder(name, opts?)` kept for callers, new widened overload for the modal. SSR stub returns empty reactives. Consolidate once all callers move to the object-arg form and SSR data-fetching lands.
+- **Lucide dynamic PascalCase lookup silently falls back to `Folder`.** `IconSelect`/`FolderBadge` resolve icons via `toPascalCase(key)` against the lucide namespace — a typo in the catalog or a lucide rename yields the fallback with no console warning. Add a dev-only assertion or a compile-time catalog check.
+- **IconSelect search matches only the icon key, not synonyms.** Searching "test" won't find `flask-conical`. Add a keyword index to `FOLDER_ICON_GROUPS` entries when the catalog grows past ~60 icons.
+- **No unsaved-changes guard on `FolderFormModal`.** Closing the modal (Esc / overlay click) drops edits silently. Acceptable for a 2-field form; add a confirm-on-dirty guard if description length grows or more fields are added.
+- **Description whitespace-trim policy not specified.** Server accepts leading/trailing spaces today. Decide whether to trim on write; currently handled as-is.
+- **No runtime assertion that `FOLDER_COLOR_KEYS` / `FOLDER_ICON_KEYS` are duplicate-free.** A copy-paste in the catalog would validate successfully at mutation time but break the UI. Add a unit test asserting the set-size equals the array length.
+
+## Deferred from: UI-revamp folder UX multi-goal split (2026-04-13)
+
+Parent intent: folder UX overhaul (schema + sidebar + layout + drawer). Started with **G1 — Folder metadata + create modal** as `spec-folder-metadata-and-create-modal.md`. Remaining goals deferred to sequential follow-up specs after G1 ships:
+
+- **G2 — Atlas-style home sidebar.** Replace current dashboard sidebar with compact Atlas-style rail: logo, root folders only (folders without parents), create-folder CTA. Reference: `docs/screenshots/Screenshot 2026-04-12 at 8.35.10 PM.png`. Consumes G1's `color` + `icon` fields to render folder entries.
+- **G3 — Folder page 3-pane layout.** Left folder sidebar + resizable middle (primary: chat/flashcards/quiz) + resizable right helper pane (citations/transcripts/future). Position-flip toggle swaps middle↔right. Helper hidden by default; citations (and future equivalents in flashcards/quiz tabs) prompt it open. Resize + flip state persisted **per-folder**. Mobile collapses to stacked. Reference: `docs/screenshots/Screenshot 2026-04-12 at 11.52.19 PM.png`.
+- **G4 — Left-sidebar drawer (Members / Knowledge).** Drawer floats-over middle+right (not push), triggered from left sidebar. Knowledge view **replaces the current `Documents` tab**: shows folder+subfolder tree (subfolders labeled "folders" in UI), with files-of-selected-folder listed below. Clicking a tree node selects+expands it and lists its files. Members entry is a stub only. Consumes G1 icons/colors in the tree.
+
 ## Deferred from: code review of story-7.1 (2026-04-12)
 
 - **AC #6 cosmetic deviation — Generate button hidden during generating instead of showing "Generating…" spinner label.** `app/components/flashcards/Tab.vue` renders the shimmer branch (`v-else-if="generating"`) without a disabled button. AC wording requested "button shows a spinner and the label 'Generating…'; the button is disabled; no layout shift". Functionally equivalent (user cannot double-submit), but literal AC text not satisfied. One-line template addition would restore strict compliance.

@@ -86,6 +86,26 @@
   --citation-blue: oklch(0.623 0.159 255.1);
   --citation-teal: oklch(0.696 0.17 162.48);
   --source-highlight: oklch(0.879 0.156 86.1 / 12%);
+  --color-folder-ember: #f59e0b;
+  --color-folder-ochre: #d97706;
+  --color-folder-saffron: #eab308;
+  --color-folder-persimmon: #ef4444;
+  --color-folder-sangria: #be123c;
+  --color-folder-coral: #fb7185;
+  --color-folder-rose-quartz: #ec4899;
+  --color-folder-orchid: #d946ef;
+  --color-folder-iris: #8b5cf6;
+  --color-folder-indigo-ink: #6366f1;
+  --color-folder-lagoon: #0ea5e9;
+  --color-folder-cerulean: #2563eb;
+  --color-folder-teal-bloom: #14b8a6;
+  --color-folder-jade: #10b981;
+  --color-folder-mantis: #84cc16;
+  --color-folder-moss: #65a30d;
+  --color-folder-mocha: #92400e;
+  --color-folder-dune: #a16207;
+  --color-folder-slate-tide: #475569;
+  --color-folder-graphite: #374151;
 }
 
 .dark {
@@ -125,6 +145,26 @@
   --citation-blue: oklch(0.623 0.159 255.1);
   --citation-teal: oklch(0.696 0.17 162.48);
   --source-highlight: oklch(0.769 0.163 75.8 / 8%);
+  --color-folder-ember: #f59e0b;
+  --color-folder-ochre: #d97706;
+  --color-folder-saffron: #eab308;
+  --color-folder-persimmon: #ef4444;
+  --color-folder-sangria: #be123c;
+  --color-folder-coral: #fb7185;
+  --color-folder-rose-quartz: #ec4899;
+  --color-folder-orchid: #d946ef;
+  --color-folder-iris: #8b5cf6;
+  --color-folder-indigo-ink: #6366f1;
+  --color-folder-lagoon: #0ea5e9;
+  --color-folder-cerulean: #2563eb;
+  --color-folder-teal-bloom: #14b8a6;
+  --color-folder-jade: #10b981;
+  --color-folder-mantis: #84cc16;
+  --color-folder-moss: #65a30d;
+  --color-folder-mocha: #92400e;
+  --color-folder-dune: #a16207;
+  --color-folder-slate-tide: #475569;
+  --color-folder-graphite: #374151;
 }
 
 @layer base {

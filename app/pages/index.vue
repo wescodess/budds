@@ -3,7 +3,7 @@ import { BookOpen, ClipboardList, Layers, Calculator, PenLine, Mic, FileText } f
 import { api } from '#convex/api'
 
 const { user } = useUserSession()
-const { folders, allFolders, isLoading, allFoldersLoading, createFolder, isCreating } = useFolders()
+const { folders, allFolders, isLoading, allFoldersLoading } = useFolders()
 const router = useRouter()
 
 const hydrated = ref(false)
@@ -59,9 +59,6 @@ function handleFolderPicked(folderId: string) {
   void router.push({ path: `/app/folders/${folderId}`, query })
 }
 
-async function handleInlineCreate(name: string) {
-  await createFolder(name)
-}
 </script>
 
 <template>
@@ -151,7 +148,7 @@ async function handleInlineCreate(name: string) {
             <p class="mb-4 font-dm-sans text-sm font-semibold text-foreground">
               Start by creating a course folder
             </p>
-            <DashboardAddCourseCard :create-folder="handleInlineCreate" :is-creating="isCreating" inline />
+            <DashboardAddCourseCard inline />
           </div>
 
           <DashboardCoursesCarousel v-else :count="folders.length + 1">
@@ -163,7 +160,7 @@ async function handleInlineCreate(name: string) {
               <DashboardCourseCard :folder="{ ...folder, documentCount: (folder as any).documentCount ?? 0 }" />
             </div>
             <div class="w-[200px] shrink-0 snap-start">
-              <DashboardAddCourseCard :create-folder="handleInlineCreate" :is-creating="isCreating" />
+              <DashboardAddCourseCard />
             </div>
           </DashboardCoursesCarousel>
         </section>

@@ -19,7 +19,7 @@ import {
   Sparkles,
 } from 'lucide-vue-next'
 import { api } from '#convex/api'
-import type { Id } from '~~/convex/_generated/dataModel'
+import type { Doc, Id } from '~~/convex/_generated/dataModel'
 
 useHead({
   link: [
@@ -50,7 +50,7 @@ const isDashboard = computed(() => route.path === '/')
 const isChatRoute = computed(() => route.path === '/chat')
 const isStandaloneRoute = computed(() => isDashboard.value || isChatRoute.value)
 
-const { allFolders, allFoldersLoading, createFolder, createSubfolder, renameFolder, deleteFolder } = useFolders()
+const { allFolders, allFoldersLoading, renameFolder, deleteFolder } = useFolders()
 
 const isFolderRoute = computed(() => route.path.startsWith('/app/folders/'))
 const currentFolderId = computed(() => {
@@ -80,29 +80,30 @@ const folderAncestors = computed(() => {
   return ancestors
 })
 
-const showNewFolderInput = ref(false)
-const newFolderName = ref('')
+const showFolderModal = ref(false)
+const folderModalMode = ref<'create' | 'edit'>('create')
+const editingFolder = ref<Doc<'folders'> | null>(null)
+const folderModalParentId = ref<Id<'folders'> | null>(null)
 
-async function handleCreateFolder() {
-  const name = newFolderName.value.trim()
-  if (!name) return
-  try {
-    await createFolder(name)
-    newFolderName.value = ''
-    showNewFolderInput.value = false
-  } catch (e: any) {
-    const { toast } = await import('vue-sonner')
-    toast.error(e.message || 'Failed to create folder')
-  }
+function openCreateFolder() {
+  folderModalMode.value = 'create'
+  editingFolder.value = null
+  folderModalParentId.value = null
+  showFolderModal.value = true
 }
 
-async function handleCreateSubfolder(parentId: string, name: string) {
-  try {
-    await createSubfolder(name, parentId as any)
-  } catch (e: any) {
-    const { toast } = await import('vue-sonner')
-    toast.error(e.message || 'Failed to create subfolder')
-  }
+function openEditFolder(folder: Doc<'folders'>) {
+  folderModalMode.value = 'edit'
+  editingFolder.value = folder
+  folderModalParentId.value = null
+  showFolderModal.value = true
+}
+
+function handleNewSubfolder(parentId: Id<'folders'>) {
+  folderModalMode.value = 'create'
+  editingFolder.value = null
+  folderModalParentId.value = parentId
+  showFolderModal.value = true
 }
 
 async function handleRename(folderId: Id<'folders'>, name: string) {
@@ -398,23 +399,13 @@ async function executeDelete() {
               size="icon"
               data-testid="new-root-folder-button"
               class="h-5 w-5 text-muted-foreground hover:text-foreground"
-              @click="showNewFolderInput = !showNewFolderInput"
+              @click="openCreateFolder"
             >
               <FolderPlus class="h-3.5 w-3.5" />
               <span class="sr-only">New folder</span>
             </UiButton>
           </UiSidebarGroupLabel>
           <UiSidebarGroupContent>
-            <div v-if="showNewFolderInput" class="px-3 py-1">
-              <UiInput
-                v-model="newFolderName"
-                placeholder="Folder name"
-                class="h-7 text-sm"
-                data-testid="new-folder-input"
-                @keydown.enter="handleCreateFolder"
-                @keydown.escape="showNewFolderInput = false"
-              />
-            </div>
             <div v-if="allFoldersLoading || !allFolders" class="space-y-1 px-3 py-2">
               <UiSkeleton v-for="i in 3" :key="i" class="h-7 w-full rounded-md" />
             </div>
@@ -422,9 +413,10 @@ async function executeDelete() {
               <SidebarFolderTree
                 :folders="allFolders"
                 :active-folder="currentFolderId"
-                @create-subfolder="handleCreateSubfolder"
+                @new-subfolder="handleNewSubfolder"
                 @rename="handleRename"
                 @delete="handleDeleteRequest"
+                @edit="openEditFolder"
               />
             </template>
             <div
@@ -799,6 +791,13 @@ async function executeDelete() {
       </UiAlertDialogFooter>
     </UiAlertDialogContent>
   </UiAlertDialog>
+
+  <FoldersFolderFormModal
+    v-model:open="showFolderModal"
+    :mode="folderModalMode"
+    :folder="editingFolder"
+    :parent-id="folderModalParentId ?? undefined"
+  />
 
   <UiSonner />
 </template>

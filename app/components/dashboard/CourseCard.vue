@@ -9,6 +9,8 @@ const props = defineProps<{
     name: string
     documentCount: number
     updatedAt?: number
+    color?: string
+    icon?: string
   }
 }>()
 
@@ -19,11 +21,14 @@ const lastActivity = useTimeAgo(() => props.folder.updatedAt ?? props.folder._cr
   <NuxtLink :to="`/app/folders/${folder._id}`" class="group" data-testid="course-card">
     <UiCard class="h-[140px] border border-border bg-card p-4 transition-colors hover:border-foreground/20">
       <div class="flex h-full flex-col justify-between">
-        <div>
-          <p class="truncate font-dm-sans text-sm font-medium text-foreground">{{ folder.name }}</p>
-          <UiBadge variant="secondary" class="mt-2" data-testid="folder-doc-count">
-            {{ folder.documentCount }} {{ folder.documentCount === 1 ? 'doc' : 'docs' }}
-          </UiBadge>
+        <div class="flex items-start gap-2">
+          <FoldersFolderBadge :color="folder.color" :icon="folder.icon" size="md" />
+          <div class="min-w-0 flex-1">
+            <p class="truncate font-dm-sans text-sm font-medium text-foreground">{{ folder.name }}</p>
+            <UiBadge variant="secondary" class="mt-2" data-testid="folder-doc-count">
+              {{ folder.documentCount }} {{ folder.documentCount === 1 ? 'doc' : 'docs' }}
+            </UiBadge>
+          </div>
         </div>
         <div class="flex items-center justify-between">
           <span class="font-inter text-xs font-medium text-muted-foreground" data-testid="folder-last-activity">
