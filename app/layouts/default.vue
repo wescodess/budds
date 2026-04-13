@@ -15,6 +15,8 @@ import {
   MoreHorizontal,
   Trash2,
   Download,
+  Home,
+  Sparkles,
 } from 'lucide-vue-next'
 import { api } from '#convex/api'
 import type { Id } from '~~/convex/_generated/dataModel'
@@ -44,7 +46,9 @@ function toggleTheme() {
 const activeTab = ref('chat')
 const isMobileView = useMediaQuery('(max-width: 767px)')
 const route = useRoute()
-const isDashboard = computed(() => route.path === '/app')
+const isDashboard = computed(() => route.path === '/')
+const isChatRoute = computed(() => route.path === '/chat')
+const isStandaloneRoute = computed(() => isDashboard.value || isChatRoute.value)
 
 const { allFolders, allFoldersLoading, createFolder, createSubfolder, renameFolder, deleteFolder } = useFolders()
 
@@ -301,7 +305,7 @@ async function executeDelete() {
     const { toast } = await import('vue-sonner')
     toast.success('Folder deleted')
     if (route.params.id && affectedIds.has(route.params.id as string)) {
-      navigateTo('/app')
+      navigateTo('/')
     }
   } catch (e: any) {
     const { toast } = await import('vue-sonner')
@@ -326,19 +330,19 @@ async function executeDelete() {
   <UiSidebarProvider>
     <UiSidebar
       data-testid="app-sidebar"
-      collapsible="offcanvas"
+      collapsible="icon"
       class="border-r border-sidebar-border"
     >
       <UiSidebarHeader class="px-3 py-4">
         <div class="flex items-center justify-between">
-          <span class="font-dm-sans text-lg font-bold tracking-tight text-sidebar-foreground">
+          <span class="font-dm-sans text-lg font-bold tracking-tight text-sidebar-foreground group-data-[collapsible=icon]:hidden">
             Budds
           </span>
           <UiButton
             variant="ghost"
             size="icon"
             data-testid="theme-toggle"
-            class="h-7 w-7 text-muted-foreground hover:text-foreground"
+            class="h-7 w-7 text-muted-foreground hover:text-foreground group-data-[collapsible=icon]:hidden"
             @click="toggleTheme"
           >
             <Sun v-if="mode === 'dark'" class="h-4 w-4" />
@@ -349,6 +353,40 @@ async function executeDelete() {
       </UiSidebarHeader>
 
       <UiSidebarContent>
+        <UiSidebarGroup data-testid="sidebar-nav-group">
+          <UiSidebarGroupContent>
+            <UiSidebarMenu>
+              <UiSidebarMenuItem>
+                <UiSidebarMenuButton
+                  as-child
+                  tooltip="Home"
+                  :is-active="isDashboard"
+                  data-testid="sidebar-nav-home"
+                >
+                  <NuxtLink to="/">
+                    <Home class="h-4 w-4" />
+                    <span>Home</span>
+                  </NuxtLink>
+                </UiSidebarMenuButton>
+              </UiSidebarMenuItem>
+              <UiSidebarMenuItem>
+                <UiSidebarMenuButton
+                  as-child
+                  tooltip="General Chat"
+                  :is-active="isChatRoute"
+                  data-testid="sidebar-nav-chat"
+                >
+                  <NuxtLink to="/chat">
+                    <Sparkles class="h-4 w-4" />
+                    <span>General Chat</span>
+                  </NuxtLink>
+                </UiSidebarMenuButton>
+              </UiSidebarMenuItem>
+            </UiSidebarMenu>
+          </UiSidebarGroupContent>
+        </UiSidebarGroup>
+
+        <div class="group-data-[collapsible=icon]:hidden">
         <UiSidebarGroup data-testid="sidebar-folders-group">
           <UiSidebarGroupLabel class="flex items-center justify-between">
             <span class="flex items-center">
@@ -461,10 +499,22 @@ async function executeDelete() {
             </div>
           </UiSidebarGroupContent>
         </UiSidebarGroup>
+        </div>
       </UiSidebarContent>
 
       <UiSidebarFooter class="border-t border-sidebar-border p-3">
-        <div class="flex items-center gap-3">
+        <UiButton
+          variant="ghost"
+          size="icon"
+          data-testid="theme-toggle-collapsed"
+          class="mb-2 hidden h-8 w-8 self-center text-muted-foreground hover:text-foreground group-data-[collapsible=icon]:inline-flex"
+          @click="toggleTheme"
+        >
+          <Sun v-if="mode === 'dark'" class="h-4 w-4" />
+          <Moon v-else class="h-4 w-4" />
+          <span class="sr-only">Toggle theme</span>
+        </UiButton>
+        <div class="flex items-center gap-3 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0">
           <UiAvatar data-testid="sidebar-user-avatar" class="h-8 w-8">
             <UiAvatarImage
               v-if="user?.image"
@@ -477,7 +527,7 @@ async function executeDelete() {
           </UiAvatar>
           <span
             data-testid="sidebar-user-name"
-            class="flex-1 truncate text-sm font-medium text-sidebar-foreground"
+            class="flex-1 truncate text-sm font-medium text-sidebar-foreground group-data-[collapsible=icon]:hidden"
           >
             {{ user?.name || 'User' }}
           </span>
@@ -487,7 +537,7 @@ async function executeDelete() {
                 variant="ghost"
                 size="icon"
                 data-testid="sidebar-user-menu-trigger"
-                class="h-7 w-7 text-muted-foreground hover:text-foreground"
+                class="h-7 w-7 text-muted-foreground hover:text-foreground group-data-[collapsible=icon]:hidden"
               >
                 <MoreHorizontal class="h-4 w-4" />
                 <span class="sr-only">User menu</span>
@@ -534,7 +584,7 @@ async function executeDelete() {
               <template v-if="isMobileView && !isDashboard">
                 <UiBreadcrumbItem data-testid="breadcrumb-mobile">
                   <UiBreadcrumbLink as-child>
-                    <NuxtLink to="/app" data-testid="breadcrumb-back" class="flex items-center gap-1">
+                    <NuxtLink to="/" data-testid="breadcrumb-back" class="flex items-center gap-1">
                       <ArrowLeft class="h-4 w-4" />
                       Home
                     </NuxtLink>
@@ -546,10 +596,21 @@ async function executeDelete() {
                   <UiBreadcrumbPage>Home</UiBreadcrumbPage>
                 </UiBreadcrumbItem>
               </template>
+              <template v-else-if="isChatRoute">
+                <UiBreadcrumbItem>
+                  <UiBreadcrumbLink as-child>
+                    <NuxtLink to="/">Home</NuxtLink>
+                  </UiBreadcrumbLink>
+                </UiBreadcrumbItem>
+                <UiBreadcrumbSeparator />
+                <UiBreadcrumbItem>
+                  <UiBreadcrumbPage>General Chat</UiBreadcrumbPage>
+                </UiBreadcrumbItem>
+              </template>
               <template v-else-if="isFolderRoute">
                 <UiBreadcrumbItem>
                   <UiBreadcrumbLink as-child>
-                    <NuxtLink to="/app">Home</NuxtLink>
+                    <NuxtLink to="/">Home</NuxtLink>
                   </UiBreadcrumbLink>
                 </UiBreadcrumbItem>
                 <template v-for="ancestor in folderAncestors" :key="ancestor._id">
@@ -573,7 +634,7 @@ async function executeDelete() {
               <template v-else>
                 <UiBreadcrumbItem>
                   <UiBreadcrumbLink as-child>
-                    <NuxtLink to="/app">Home</NuxtLink>
+                    <NuxtLink to="/">Home</NuxtLink>
                   </UiBreadcrumbLink>
                 </UiBreadcrumbItem>
               </template>
@@ -583,7 +644,7 @@ async function executeDelete() {
       </header>
 
       <div class="flex flex-1 flex-col overflow-hidden">
-        <template v-if="isDashboard">
+        <template v-if="isStandaloneRoute">
           <slot />
         </template>
 
