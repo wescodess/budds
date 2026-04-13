@@ -31,12 +31,10 @@ describe('FolderContextPane', () => {
     expect(name.text()).toBe('Organic Chemistry')
   })
 
-  it('[P0] renders Knowledge tree (G4) placeholder', async () => {
+  it('[P0] renders knowledge section with fallback placeholder when no slot provided', async () => {
     const wrapper = await mountPane({ folder, ancestors: [], canCreateSubfolder: true })
-    const placeholder = wrapper.find('[data-testid="folder-context-knowledge-placeholder"]')
-    expect(placeholder.exists()).toBe(true)
-    expect(placeholder.text()).toContain('Knowledge tree')
-    expect(placeholder.text()).toContain('G4')
+    expect(wrapper.find('[data-testid="folder-context-knowledge"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="folder-context-knowledge-placeholder"]').exists()).toBe(true)
   })
 
   it('[P0] renders breadcrumb when ancestors are provided', async () => {
