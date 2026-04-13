@@ -14,7 +14,7 @@ const conversationIdRef = computed<Id<'conversations'> | null>(() => {
 })
 
 const { folder } = useFolderDetail(folderId)
-const { allFolders, createSubfolder } = useFolders()
+const { allFolders } = useFolders()
 const { documents, uploading, uploadFiles, deleteDocument, moveDocument } = useDocuments(folderId)
 const {
   messages,
@@ -31,8 +31,7 @@ const {
 
 const isDesktop = useMediaQuery('(min-width: 1024px)')
 
-const showNewSubfolder = ref(false)
-const newSubfolderName = ref('')
+const showSubfolderModal = ref(false)
 
 const deleteTarget = ref<{ id: string; filename: string } | null>(null)
 const pendingDeleteTarget = ref<{ id: string; filename: string } | null>(null)
@@ -45,7 +44,17 @@ const showMoveDialog = computed({
   set: (val: boolean) => { if (!val) moveTarget.value = null },
 })
 
-const activeTab = ref('chat')
+const allowedTabs = ['chat', 'flashcards', 'quiz', 'documents'] as const
+type TabValue = typeof allowedTabs[number]
+const initialTab = computed<TabValue>(() => {
+  const t = route.query?.tab
+  return typeof t === 'string' && (allowedTabs as readonly string[]).includes(t) ? (t as TabValue) : 'chat'
+})
+const activeTab = ref<TabValue>(initialTab.value)
+
+watch(() => route.query.tab, () => {
+  activeTab.value = initialTab.value
+})
 const sourcePanelOpen = ref(false)
 const activeCitationIndex = ref<number | null>(null)
 const activeMessageIndex = ref<number | null>(null)
@@ -163,6 +172,12 @@ onMounted(() => {
   document.addEventListener('keydown', handleSlashShortcut)
   document.addEventListener('keydown', handleNewChatShortcut)
   void hydrateFromRoute()
+  const promptParam = route.query?.prompt
+  if (typeof promptParam === 'string' && promptParam.trim()) {
+    nextTick(() => chatInputRef.value?.focus())
+    const { prompt: _drop, ...rest } = route.query ?? {}
+    void router.replace({ query: rest })
+  }
 })
 
 onUnmounted(() => {
@@ -248,19 +263,6 @@ const folderDepth = computed(() => {
   return depth
 })
 
-async function handleCreateSubfolder() {
-  const name = newSubfolderName.value.trim()
-  if (!name) return
-  try {
-    await createSubfolder(name, folderId.value)
-    newSubfolderName.value = ''
-    showNewSubfolder.value = false
-  } catch (e: any) {
-    const { toast } = await import('vue-sonner')
-    toast.error(e.message || 'Failed to create subfolder')
-  }
-}
-
 async function handleUpload(files: File[]) {
   try {
     await uploadFiles(files, folderId.value)
@@ -283,22 +285,18 @@ async function handleUpload(files: File[]) {
         variant="outline"
         size="sm"
         data-testid="new-subfolder-button"
-        @click="showNewSubfolder = !showNewSubfolder"
+        @click="showSubfolderModal = true"
       >
         <FolderPlus class="mr-1.5 h-4 w-4" />
         New Subfolder
       </UiButton>
     </div>
 
-    <div v-if="showNewSubfolder" class="mb-4 max-w-sm">
-      <UiInput
-        v-model="newSubfolderName"
-        placeholder="Subfolder name"
-        class="h-8 text-sm"
-        @keydown.enter="handleCreateSubfolder"
-        @keydown.escape="showNewSubfolder = false"
-      />
-    </div>
+    <FoldersFolderFormModal
+      v-model:open="showSubfolderModal"
+      mode="create"
+      :parent-id="folderId"
+    />
 
     <UiTabs v-model="activeTab" class="flex flex-1 flex-col">
       <div class="flex items-center justify-between">

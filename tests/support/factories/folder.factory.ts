@@ -5,6 +5,9 @@ interface FolderData {
   userId: string
   parentId?: string
   documentCount: number
+  description?: string
+  color?: string
+  icon?: string
 }
 
 interface FolderDoc extends FolderData {
@@ -25,6 +28,9 @@ export const createFolder = (overrides: Partial<FolderDoc> = {}): FolderDoc => (
   ]),
   userId: faker.string.alphanumeric(32),
   documentCount: faker.number.int({ min: 0, max: 25 }),
+  description: '',
+  color: 'slate-tide',
+  icon: 'folder',
   ...overrides,
 })
 
