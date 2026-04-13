@@ -285,6 +285,11 @@ function toggleHelper() {
   else { sourcePanelOpen.value = true; layout.openHelper() }
 }
 
+const subfolders = computed(() => {
+  if (!allFolders?.value || !folder.value) return []
+  return allFolders.value.filter((f: any) => f.parentId === folder.value?._id)
+})
+
 const folderAncestors = computed(() => {
   if (!allFolders?.value || !folder.value) return [] as Array<{ _id: string; name: string }>
   const map = new Map(allFolders.value.map((f: any) => [f._id, f]))
@@ -377,7 +382,20 @@ async function handleUpload(files: File[]) {
           @edit="showEditFolderModal = true"
           @delete="showFolderDeleteDialog = true"
           @new-subfolder="showSubfolderModal = true"
-        />
+        >
+          <template #knowledge>
+            <FoldersFolderKnowledgeTree
+              :subfolders="subfolders"
+              :documents="documents ?? []"
+              :can-create-subfolder="folderDepth < 3"
+              @open-subfolder="(id) => router.push(`/app/folders/${id}`)"
+              @new-subfolder="showSubfolderModal = true"
+              @upload-files="(files) => uploadFiles(files, folderId)"
+              @delete-document="(id) => handleDeleteRequest(id)"
+              @move-document="(id) => { moveTarget = { id } }"
+            />
+          </template>
+        </FoldersFolderContextPane>
       </UiResizablePanel>
       <UiResizableHandle with-handle />
 
