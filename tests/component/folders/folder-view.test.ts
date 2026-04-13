@@ -84,8 +84,7 @@ describe('FolderView — AC4: Folder Detail Page', () => {
 
     const wrapper = await mountSuspended(FolderView.default)
 
-    const newSubfolderBtn = wrapper.find('[data-testid="new-subfolder-button"]')
-    expect(newSubfolderBtn.exists()).toBe(true)
-    expect(newSubfolderBtn.text()).toContain('New Subfolder')
+    const menuTrigger = wrapper.find('[data-testid="folder-context-menu"]')
+    expect(menuTrigger.exists()).toBe(true)
   })
 })
