@@ -16,6 +16,7 @@ vi.stubGlobal('createError', (opts: { statusCode: number; message: string }) =>
 vi.stubGlobal('getConvexTokenIdentifier', vi.fn(() => 'https://auth.example.com|user_test_123'))
 vi.stubGlobal('readBody', vi.fn())
 vi.stubGlobal('searchDocuments', vi.fn())
+vi.stubGlobal('fetchFolderDocs', vi.fn(async () => []))
 vi.stubGlobal('generateCompletion', vi.fn())
 vi.stubGlobal('defineEventHandler', (handler: Function) => handler)
 vi.stubGlobal('buildQuizPrompt', (await import('../../utils/quiz-prompt')).buildQuizPrompt)
@@ -93,11 +94,10 @@ describe('POST /api/quiz/generate', () => {
     expect(err.message).toContain('folderId')
   })
 
-  test('[P0] 422 when AI Search returns fewer than 2 chunks (LLM not called)', async () => {
+  test('[P0] 422 when both AI Search and folder-doc fallback are empty (LLM not called)', async () => {
     vi.mocked(globalThis.readBody as any).mockResolvedValue({ folderId: 'folder_abc' })
-    vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({
-      data: [{ id: '1', content: 'one chunk', score: 0.9, attributes: { filename: 'a.pdf' } }],
-    })
+    vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({ data: [] })
+    vi.mocked(globalThis.fetchFolderDocs as any).mockResolvedValue([])
 
     const err = await (handler(makeEvent()) as Promise<any>).catch((e: any) => e)
     expect(err.statusCode).toBe(422)

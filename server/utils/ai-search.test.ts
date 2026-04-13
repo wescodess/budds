@@ -6,7 +6,7 @@ vi.stubGlobal('createError', (opts: { statusCode: number; message: string }) =>
 )
 vi.stubGlobal('fetch', vi.fn())
 
-const { searchDocuments } = await import('./ai-search')
+const { searchDocuments, sanitizeUserSegment } = await import('./ai-search')
 
 const validConfig = {
   cloudflareAccountId: 'test-account',
@@ -14,41 +14,96 @@ const validConfig = {
   cloudflareAiSearchToken: 'test-token',
 }
 
+function mockCfResponse(chunks: unknown[]) {
+  return {
+    ok: true,
+    json: () => Promise.resolve({ success: true, result: { search_query: 'q', chunks } }),
+  } as any
+}
+
+describe('sanitizeUserSegment', () => {
+  test('strips protocol and replaces | and :', () => {
+    expect(sanitizeUserSegment('https://foo.example.com|abc123')).toBe('foo.example.com_abc123')
+    expect(sanitizeUserSegment('user_plain')).toBe('user_plain')
+  })
+})
+
 describe('searchDocuments', () => {
   beforeEach(() => {
     vi.mocked(globalThis.fetch).mockReset()
     vi.mocked((globalThis as any).useRuntimeConfig).mockReturnValue(validConfig)
   })
 
-  test('returns search results for a valid query', async () => {
-    const mockResponse = {
-      data: [{ id: '1', content: 'test content', score: 0.95, attributes: { filename: 'doc.pdf' } }],
-    }
-    vi.mocked(globalThis.fetch).mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve(mockResponse),
-    } as any)
-
-    const result = await searchDocuments({ query: 'test query', userId: 'user_123' })
-
-    expect(result).toEqual(mockResponse)
-    expect(globalThis.fetch).toHaveBeenCalledWith(
-      'https://api.cloudflare.com/client/v4/accounts/test-account/ai-search/instances/test-instance/search',
-      expect.objectContaining({
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer test-token',
+  test('returns mapped chunks from CF response shape', async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockCfResponse([
+      {
+        id: 'chunk-1',
+        type: 'text',
+        score: 0.87,
+        text: 'Extracted passage.',
+        item: {
+          key: 'cautious-elephant-39.convex.site_user123/folderABC/docXYZ.txt',
+          timestamp: 1,
+          metadata: {
+            userid: 'https://cautious-elephant-39.convex.site|user123',
+            folderid: 'folderABC',
+            documentid: 'docXYZ',
+            filename: 'docXYZ.txt',
+          },
         },
-      }),
-    )
+      },
+    ]))
+
+    const result = await searchDocuments({ query: 'test', userId: 'https://cautious-elephant-39.convex.site|user123', folderId: 'folderABC' })
+
+    expect(result.data).toHaveLength(1)
+    expect(result.data[0]).toMatchObject({
+      id: 'chunk-1',
+      content: 'Extracted passage.',
+      score: 0.87,
+      attributes: {
+        filename: 'docXYZ.txt',
+        folderId: 'folderABC',
+        documentId: 'docXYZ',
+      },
+    })
+  })
+
+  test('filters out chunks that do not belong to the requesting user', async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockCfResponse([
+      { id: 'a', score: 0.9, text: 'mine', item: { metadata: { userid: 'user_123', folderid: 'f1', documentid: 'd1', filename: 'a.txt' } } },
+      { id: 'b', score: 0.8, text: 'someone else', item: { metadata: { userid: 'user_other', folderid: 'f1', documentid: 'd2', filename: 'b.txt' } } },
+    ]))
+
+    const result = await searchDocuments({ query: 'test', userId: 'user_123' })
+
+    expect(result.data).toHaveLength(1)
+    expect(result.data[0].id).toBe('a')
+  })
+
+  test('filters out chunks outside the requested folder when folderId provided', async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockCfResponse([
+      { id: 'a', score: 0.9, text: 'in folder', item: { metadata: { userid: 'user_123', folderid: 'f1', documentid: 'd1', filename: 'a.txt' } } },
+      { id: 'b', score: 0.8, text: 'other folder', item: { metadata: { userid: 'user_123', folderid: 'f2', documentid: 'd2', filename: 'b.txt' } } },
+    ]))
+
+    const result = await searchDocuments({ query: 'test', userId: 'user_123', folderId: 'f1' })
+
+    expect(result.data).toHaveLength(1)
+    expect(result.data[0].id).toBe('a')
+  })
+
+  test('does not send retrieval filters in request body', async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockCfResponse([]))
+
+    await searchDocuments({ query: 'test', userId: 'https://x.com|user_123', folderId: 'folder_abc' })
+
+    const body = JSON.parse(vi.mocked(globalThis.fetch).mock.calls[0][1]!.body as string)
+    expect(body.ai_search_options?.retrieval).toBeUndefined()
   })
 
   test('sends query as user message in request body', async () => {
-    vi.mocked(globalThis.fetch).mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve({ data: [] }),
-    } as any)
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockCfResponse([]))
 
     await searchDocuments({ query: 'how does auth work', userId: 'user_123' })
 
@@ -64,39 +119,24 @@ describe('searchDocuments', () => {
     )
   })
 
-  test('includes search options when provided', async () => {
-    vi.mocked(globalThis.fetch).mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve({ data: [] }),
-    } as any)
+  test('includes max_num_results, score_threshold, reranking when provided', async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockCfResponse([]))
 
     await searchDocuments({
       query: 'test',
       userId: 'user_123',
       max_num_results: 5,
       score_threshold: 0.8,
-      filters: { category: 'docs' },
+      reranking: true,
     })
 
     const body = JSON.parse(vi.mocked(globalThis.fetch).mock.calls[0][1]!.body as string)
-    expect(body.ai_search_options).toEqual({
+    expect(body.ai_search_options).toMatchObject({
       max_num_results: 5,
       score_threshold: 0.8,
-      filters: { category: 'docs', userId: 'user_123' },
+      reranking: { enabled: true },
     })
-  })
-
-  test('always includes ai_search_options with userId filter even when no other options provided', async () => {
-    vi.mocked(globalThis.fetch).mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve({ data: [] }),
-    } as any)
-
-    await searchDocuments({ query: 'test', userId: 'user_123' })
-
-    const body = JSON.parse(vi.mocked(globalThis.fetch).mock.calls[0][1]!.body as string)
-    expect(body.ai_search_options).toBeDefined()
-    expect(body.ai_search_options.filters.userId).toBe('user_123')
+    expect(body.ai_search_options.retrieval).toBeUndefined()
   })
 
   test('throws on API error response', async () => {
@@ -109,69 +149,5 @@ describe('searchDocuments', () => {
     await expect(searchDocuments({ query: 'test', userId: 'user_123' })).rejects.toThrow(
       'AI Search error: Internal Server Error',
     )
-  })
-
-  test('includes reranking option when specified', async () => {
-    vi.mocked(globalThis.fetch).mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve({ data: [] }),
-    } as any)
-
-    await searchDocuments({ query: 'test', userId: 'user_123', reranking: true })
-
-    const body = JSON.parse(vi.mocked(globalThis.fetch).mock.calls[0][1]!.body as string)
-    expect(body.ai_search_options.reranking).toEqual({ enabled: true })
-  })
-})
-
-describe('searchDocuments userId enforcement', () => {
-  beforeEach(() => {
-    vi.mocked(globalThis.fetch).mockReset()
-    vi.mocked((globalThis as any).useRuntimeConfig).mockReturnValue(validConfig)
-  })
-
-  test('[P0] should always inject userId into filters', async () => {
-    vi.mocked(globalThis.fetch).mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve({ data: [] }),
-    } as any)
-
-    await searchDocuments({ query: 'test', userId: 'user_123' })
-
-    const body = JSON.parse(vi.mocked(globalThis.fetch).mock.calls[0][1]!.body as string)
-    expect(body.ai_search_options.filters.userId).toBe('user_123')
-  })
-
-  test('[P0] should merge userId with caller-provided filters', async () => {
-    vi.mocked(globalThis.fetch).mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve({ data: [] }),
-    } as any)
-
-    await searchDocuments({
-      query: 'test',
-      userId: 'user_123',
-      filters: { folderId: 'folder_abc' },
-    })
-
-    const body = JSON.parse(vi.mocked(globalThis.fetch).mock.calls[0][1]!.body as string)
-    expect(body.ai_search_options.filters.userId).toBe('user_123')
-    expect(body.ai_search_options.filters.folderId).toBe('folder_abc')
-  })
-
-  test('[P0] should not allow caller to override userId filter', async () => {
-    vi.mocked(globalThis.fetch).mockResolvedValueOnce({
-      ok: true,
-      json: () => Promise.resolve({ data: [] }),
-    } as any)
-
-    await searchDocuments({
-      query: 'test',
-      userId: 'user_123',
-      filters: { userId: 'user_MALICIOUS' },
-    })
-
-    const body = JSON.parse(vi.mocked(globalThis.fetch).mock.calls[0][1]!.body as string)
-    expect(body.ai_search_options.filters.userId).toBe('user_123')
   })
 })
