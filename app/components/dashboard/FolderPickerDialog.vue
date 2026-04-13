@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Folder, FolderPlus } from 'lucide-vue-next'
+import { FolderPlus } from 'lucide-vue-next'
 import type { Doc } from '~~/convex/_generated/dataModel'
 
 const props = defineProps<{
@@ -48,7 +48,7 @@ function handleSelect(id: string) {
             :data-folder-id="folder._id"
             @click="handleSelect(folder._id)"
           >
-            <Folder class="h-4 w-4 text-primary" />
+            <FoldersFolderBadge :color="folder.color" :icon="folder.icon" size="sm" />
             <span class="truncate font-medium text-foreground">{{ folder.name }}</span>
           </button>
         </template>
