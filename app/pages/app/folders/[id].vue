@@ -45,7 +45,17 @@ const showMoveDialog = computed({
   set: (val: boolean) => { if (!val) moveTarget.value = null },
 })
 
-const activeTab = ref('chat')
+const allowedTabs = ['chat', 'flashcards', 'quiz', 'documents'] as const
+type TabValue = typeof allowedTabs[number]
+const initialTab = computed<TabValue>(() => {
+  const t = route.query?.tab
+  return typeof t === 'string' && (allowedTabs as readonly string[]).includes(t) ? (t as TabValue) : 'chat'
+})
+const activeTab = ref<TabValue>(initialTab.value)
+
+watch(() => route.query.tab, () => {
+  activeTab.value = initialTab.value
+})
 const sourcePanelOpen = ref(false)
 const activeCitationIndex = ref<number | null>(null)
 const activeMessageIndex = ref<number | null>(null)
@@ -163,6 +173,12 @@ onMounted(() => {
   document.addEventListener('keydown', handleSlashShortcut)
   document.addEventListener('keydown', handleNewChatShortcut)
   void hydrateFromRoute()
+  const promptParam = route.query?.prompt
+  if (typeof promptParam === 'string' && promptParam.trim()) {
+    nextTick(() => chatInputRef.value?.focus())
+    const { prompt: _drop, ...rest } = route.query ?? {}
+    void router.replace({ query: rest })
+  }
 })
 
 onUnmounted(() => {
