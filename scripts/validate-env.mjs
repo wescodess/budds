@@ -45,8 +45,11 @@ const mergedEnv = {
   ...process.env,
 }
 
-const requirements = [
+const blockingRequirements = [
   { kind: 'secret', label: 'Better Auth secret', names: ['NUXT_BETTER_AUTH_SECRET', 'BETTER_AUTH_SECRET'] },
+]
+
+const advisoryRequirements = [
   { kind: 'var', label: 'Google OAuth client id', names: ['GOOGLE_CLIENT_ID'] },
   { kind: 'secret', label: 'Google OAuth client secret', names: ['GOOGLE_CLIENT_SECRET'] },
   { kind: 'var', label: 'Convex deployment URL', names: ['CONVEX_URL', 'NUXT_PUBLIC_CONVEX_URL'] },
@@ -66,60 +69,83 @@ function formatNames(names) {
   return names.length === 1 ? names[0] : names.join(' or ')
 }
 
-const missing = requirements.filter(({ names }) => !names.some((name) => {
-  const value = mergedEnv[name]
-  return typeof value === 'string' && value.trim().length > 0
-}))
+function findMissing(requirements) {
+  return requirements.filter(({ names }) => !names.some((name) => {
+    const value = mergedEnv[name]
+    return typeof value === 'string' && value.trim().length > 0
+  }))
+}
+
+const missingBlocking = findMissing(blockingRequirements)
+const missingAdvisory = findMissing(advisoryRequirements)
 
 const betterAuthSecret = mergedEnv.NUXT_BETTER_AUTH_SECRET || mergedEnv.BETTER_AUTH_SECRET || ''
-const invalid = []
+const invalidBlocking = []
 
 if (betterAuthSecret && betterAuthSecret.length < 32) {
-  invalid.push({
+  invalidBlocking.push({
     kind: 'secret',
     label: 'Better Auth secret must be at least 32 characters',
     names: ['NUXT_BETTER_AUTH_SECRET', 'BETTER_AUTH_SECRET'],
   })
 }
 
-if (missing.length === 0 && invalid.length === 0) {
+if (missingBlocking.length === 0 && invalidBlocking.length === 0 && missingAdvisory.length === 0) {
   process.exit(0)
 }
 
-const lines = [
-  '',
-  `[budds env] Missing required environment configuration for ${phase}.`,
-  '[budds env] Set these in Cloudflare Pages: Settings > Variables and Secrets.',
-  '[budds env] Use encrypted Secrets for sensitive values and plain Variables for non-sensitive values.',
-]
+const lines = ['']
 
-if (missing.length > 0) {
+if (missingBlocking.length > 0 || invalidBlocking.length > 0) {
+  lines.push(`[budds env] Missing required environment configuration for ${phase}.`)
+  lines.push('[budds env] Set these in Cloudflare Pages: Settings > Variables and Secrets.')
+  lines.push('[budds env] Use encrypted Secrets for sensitive values and plain Variables for non-sensitive values.')
+} else if (missingAdvisory.length > 0) {
+  lines.push(`[budds env] Optional runtime environment variables are missing for ${phase}.`)
+  lines.push('[budds env] Build can continue, but related runtime features may fail if these are not configured in Cloudflare Pages.')
+}
+
+if (missingBlocking.length > 0) {
   lines.push('')
-  lines.push('Missing:')
-  for (const entry of missing) {
+  lines.push('Missing required:')
+  for (const entry of missingBlocking) {
     lines.push(`- [${entry.kind}] ${entry.label}: ${formatNames(entry.names)}`)
   }
 }
 
-if (invalid.length > 0) {
+if (invalidBlocking.length > 0) {
   lines.push('')
-  lines.push('Invalid:')
-  for (const entry of invalid) {
+  lines.push('Invalid required:')
+  for (const entry of invalidBlocking) {
+    lines.push(`- [${entry.kind}] ${entry.label}: ${formatNames(entry.names)}`)
+  }
+}
+
+if (missingAdvisory.length > 0) {
+  lines.push('')
+  lines.push('Missing runtime-only:')
+  for (const entry of missingAdvisory) {
     lines.push(`- [${entry.kind}] ${entry.label}: ${formatNames(entry.names)}`)
   }
 }
 
 lines.push('')
-lines.push('Example split:')
+lines.push('Recommended split:')
 lines.push('- Secrets: BETTER_AUTH_SECRET, GOOGLE_CLIENT_SECRET, CLOUDFLARE_AI_GATEWAY_API_KEY, CLOUDFLARE_AI_SEARCH_TOKEN, OPENROUTER_API_KEY, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY')
 lines.push('- Variables: GOOGLE_CLIENT_ID, CONVEX_URL, CF_ACCOUNT_ID, CLOUDFLARE_AI_GATEWAY_ID, CLOUDFLARE_AI_SEARCH_INSTANCE, R2_BUCKET_NAME, R2_ENDPOINT')
 lines.push('')
 
 const output = `${lines.join('\n')}\n`
 
-if (strict) {
+if (strict && (missingBlocking.length > 0 || invalidBlocking.length > 0)) {
   process.stderr.write(output)
   process.exit(1)
 }
 
-process.stderr.write(`${output}[budds env] Continuing because strict validation is off.\n`)
+if (missingAdvisory.length > 0 || missingBlocking.length > 0 || invalidBlocking.length > 0) {
+  process.stderr.write(output)
+}
+
+if (!strict && (missingBlocking.length > 0 || invalidBlocking.length > 0)) {
+  process.stderr.write('[budds env] Continuing because strict validation is off.\n')
+}
