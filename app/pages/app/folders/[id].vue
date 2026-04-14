@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { FolderPlus, FileText, MessageSquare, Plus, ClipboardList, Layers } from 'lucide-vue-next'
+import { FolderPlus, FileText, MessageSquare, Plus, ClipboardList, Layers, PanelRight } from 'lucide-vue-next'
 import { useMediaQuery } from '@vueuse/core'
 import { api } from '#convex/api'
 import type { Id } from '~~/convex/_generated/dataModel'
+
+definePageMeta({ layout: 'folder' })
 
 const route = useRoute()
 const router = useRouter()
@@ -52,9 +54,14 @@ const initialTab = computed<TabValue>(() => {
 })
 const activeTab = ref<TabValue>(initialTab.value)
 
-watch(() => route.query.tab, () => {
+watch(() => route.query?.tab, () => {
   activeTab.value = initialTab.value
 })
+
+function onTabChange(next: TabValue) {
+  activeTab.value = next
+  void router.replace({ query: { ...(route.query ?? {}), tab: next } })
+}
 const sourcePanelOpen = ref(false)
 const activeCitationIndex = ref<number | null>(null)
 const activeMessageIndex = ref<number | null>(null)
@@ -274,23 +281,60 @@ async function handleUpload(files: File[]) {
 </script>
 
 <template>
-  <div class="flex flex-1 flex-col p-6">
-    <div class="mb-6 flex items-center justify-between">
-      <UiSkeleton v-if="!folder" class="h-8 w-48 rounded-md" />
-      <h1 v-else data-testid="folder-heading" class="text-2xl font-bold tracking-tight">
-        {{ folder.name }}
-      </h1>
-      <UiButton
-        v-if="folderDepth < 3"
-        variant="outline"
-        size="sm"
-        data-testid="new-subfolder-button"
-        @click="showSubfolderModal = true"
-      >
-        <FolderPlus class="mr-1.5 h-4 w-4" />
-        New Subfolder
-      </UiButton>
-    </div>
+  <FolderShell
+    :folder-id="folderId"
+    :folder="folder ?? null"
+    :active-tab="activeTab"
+    @update:active-tab="onTabChange"
+    @new-void="showSubfolderModal = true"
+  >
+    <template #top-bar="{ drawerOpen, toggleDrawer }">
+      <div class="flex items-center justify-between gap-3 border-b border-border/60 px-6 py-4">
+        <div class="flex min-w-0 items-center gap-3">
+          <button
+            type="button"
+            data-testid="drawer-toggle"
+            :class="[
+              'flex h-9 w-9 items-center justify-center rounded-lg border border-border/60 bg-card text-primary transition hover:bg-primary/10',
+              drawerOpen && 'bg-primary/10',
+            ]"
+            :aria-label="drawerOpen ? 'Close folder tree' : 'Open folder tree'"
+            @click="toggleDrawer"
+          >
+            <PanelRight class="h-4 w-4" />
+          </button>
+          <div class="min-w-0">
+            <UiSkeleton v-if="!folder" class="h-6 w-40 rounded-md" />
+            <h1 v-else data-testid="folder-heading" class="truncate text-xl font-semibold tracking-tight text-foreground">
+              {{ folder.name }}
+            </h1>
+            <p class="text-xs text-muted-foreground">My folder › {{ folder?.name ?? '…' }}</p>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <UiButton
+            v-if="activeTab === 'chat'"
+            variant="outline"
+            size="sm"
+            data-testid="chat-new-button"
+            @click="handleNewChat"
+          >
+            <Plus class="mr-1.5 h-4 w-4" />
+            New Chat
+          </UiButton>
+          <UiButton
+            v-if="folderDepth < 3"
+            variant="outline"
+            size="sm"
+            data-testid="new-subfolder-button"
+            @click="showSubfolderModal = true"
+          >
+            <FolderPlus class="mr-1.5 h-4 w-4" />
+            New Subfolder
+          </UiButton>
+        </div>
+      </div>
+    </template>
 
     <FoldersFolderFormModal
       v-model:open="showSubfolderModal"
@@ -298,38 +342,13 @@ async function handleUpload(files: File[]) {
       :parent-id="folderId"
     />
 
-    <UiTabs v-model="activeTab" class="flex flex-1 flex-col">
-      <div class="flex items-center justify-between">
-        <UiTabsList>
-          <UiTabsTrigger value="chat">
-            <MessageSquare class="mr-1.5 h-4 w-4" />
-            Chat
-          </UiTabsTrigger>
-          <!-- UX-DR1 hybrid tab order: Chat, Flash Cards, Quiz, Documents (full order realized in V1.2 via Story 7.1). -->
-          <UiTabsTrigger value="flashcards" data-testid="flashcards-tab-trigger">
-            <Layers class="mr-1.5 h-4 w-4" />
-            Flash Cards
-          </UiTabsTrigger>
-          <UiTabsTrigger value="quiz" data-testid="quiz-tab-trigger">
-            <ClipboardList class="mr-1.5 h-4 w-4" />
-            Quiz
-          </UiTabsTrigger>
-          <UiTabsTrigger value="documents">
-            <FileText class="mr-1.5 h-4 w-4" />
-            Documents
-          </UiTabsTrigger>
-        </UiTabsList>
-        <UiButton
-          v-if="activeTab === 'chat'"
-          variant="outline"
-          size="sm"
-          data-testid="chat-new-button"
-          @click="handleNewChat"
-        >
-          <Plus class="mr-1.5 h-4 w-4" />
-          New Chat
-        </UiButton>
-      </div>
+    <UiTabs v-model="activeTab" class="flex h-full flex-1 flex-col">
+      <UiTabsList class="sr-only">
+        <UiTabsTrigger value="chat">Chat</UiTabsTrigger>
+        <UiTabsTrigger value="flashcards">Flash Cards</UiTabsTrigger>
+        <UiTabsTrigger value="quiz">Quiz</UiTabsTrigger>
+        <UiTabsTrigger value="documents">Documents</UiTabsTrigger>
+      </UiTabsList>
 
       <UiTabsContent value="chat" class="flex flex-1 flex-col overflow-hidden">
         <div class="flex flex-1 overflow-hidden">
@@ -414,40 +433,20 @@ async function handleUpload(files: File[]) {
         <QuizTab :folder-id="folderId" />
       </UiTabsContent>
 
-      <UiTabsContent value="documents" class="flex-1">
+      <UiTabsContent value="documents" class="flex flex-1 flex-col gap-6 overflow-y-auto p-6">
         <DocumentsFileUploadZone
           :folder-id="folderId"
           :disabled="uploading"
-          class="mb-6"
           @upload="handleUpload"
         />
-
-        <div v-if="documents && documents.length > 0" class="space-y-2">
-          <DocumentsFileStatusItem
-            v-for="doc in documents"
-            :key="doc._id"
-            :filename="doc.filename"
-            :status="doc.status"
-            :file-size="doc.fileSize"
-            :created-at="doc._creationTime"
-            :failure-reason="doc.failureReason"
-            :document-id="doc._id"
-            @delete="handleDeleteRequest"
-            @move="handleMoveRequest"
-          />
-        </div>
-
-        <div
-          v-else-if="!documents || documents.length === 0"
-          data-testid="folder-empty-state"
-          class="flex flex-1 items-center justify-center py-12 text-muted-foreground"
-        >
-          <div class="text-center">
-            <FileText class="mx-auto mb-3 h-12 w-12 opacity-40" />
-            <p class="text-lg font-medium">Documents will appear here</p>
-            <p class="mt-1 text-sm">Upload files to get started</p>
-          </div>
-        </div>
+        <FolderShellFilesList
+          :documents="documents"
+          @delete="handleDeleteRequest"
+          @move="handleMoveRequest"
+          @open="() => undefined"
+          @rename="() => undefined"
+          @download="() => undefined"
+        />
       </UiTabsContent>
     </UiTabs>
 
@@ -485,5 +484,5 @@ async function handleUpload(files: File[]) {
         </div>
       </UiDialogContent>
     </UiDialog>
-  </div>
+  </FolderShell>
 </template>
