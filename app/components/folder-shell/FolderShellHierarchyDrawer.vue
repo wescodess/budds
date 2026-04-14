@@ -5,12 +5,13 @@ import type { Doc, Id } from '~~/convex/_generated/dataModel'
 
 defineOptions({ name: 'FolderShellHierarchyDrawer' })
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   folderId: Id<'folders'>
   folder: Doc<'folders'> | null
   railWidth: number
   fullWidth?: boolean
-}>()
+  section?: 'knowledge' | 'members'
+}>(), { section: 'knowledge' })
 
 const emit = defineEmits<{ close: [] }>()
 
@@ -178,11 +179,15 @@ async function onFiles(e: Event) {
 
       <header class="flex items-center justify-between gap-3 border-b border-border/60 px-5 py-4">
         <div class="min-w-0">
-          <p class="text-[10px] uppercase tracking-widest text-muted-foreground">Folder hierarchy</p>
-          <h2 class="truncate text-lg font-semibold text-foreground">My folder</h2>
+          <p class="text-[10px] uppercase tracking-widest text-muted-foreground">
+            {{ section === 'members' ? 'Collaboration' : 'Folder hierarchy' }}
+          </p>
+          <h2 class="truncate text-lg font-semibold text-foreground">
+            {{ section === 'members' ? 'Members' : (folder?.name ?? 'My folder') }}
+          </h2>
         </div>
         <div class="flex items-center gap-2">
-          <UiButton variant="ghost" size="sm" class="gap-1.5 text-primary hover:text-primary" @click="openNewFolder(null)">
+          <UiButton v-if="section === 'knowledge'" variant="ghost" size="sm" class="gap-1.5 text-primary hover:text-primary" @click="openNewFolder(null)">
             <FolderPlus class="h-4 w-4" />
             New folder
           </UiButton>
@@ -198,6 +203,7 @@ async function onFiles(e: Event) {
         </div>
       </header>
 
+      <template v-if="section === 'knowledge'">
       <div class="px-5 pt-3">
         <div class="relative">
           <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -263,6 +269,20 @@ async function onFiles(e: Event) {
           @download="() => undefined"
         />
       </div>
+
+      </template>
+
+      <template v-else-if="section === 'members'">
+        <div class="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 py-14 text-center">
+          <div class="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary">
+            <FolderPlus class="h-5 w-5" />
+          </div>
+          <p class="text-sm font-medium text-foreground">Invite collaborators</p>
+          <p class="max-w-xs text-xs text-muted-foreground">
+            Members management is coming soon. You'll be able to invite teammates and manage access here.
+          </p>
+        </div>
+      </template>
 
       <footer class="flex items-center justify-between gap-3 border-t border-border/60 px-5 py-3 text-xs">
         <div class="min-w-0 truncate text-muted-foreground">

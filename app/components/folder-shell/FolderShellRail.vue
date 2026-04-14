@@ -23,10 +23,12 @@ const props = defineProps<{
   folder: Doc<'folders'> | null
   activeTab: TabValue
   compact?: boolean
+  drawerSection?: 'knowledge' | 'members' | null
 }>()
 
 const emit = defineEmits<{
   'update:activeTab': [value: TabValue]
+  'open-drawer': [section: 'knowledge' | 'members']
   'new-void': []
 }>()
 
@@ -94,14 +96,16 @@ async function onLogout() {
         label="Members"
         :compact="compact"
         :count="3"
+        :active="drawerSection === 'members'"
         :icon="Users"
+        @click="emit('open-drawer', 'members')"
       />
       <FolderShellRailItem
         label="Knowledge"
         :compact="compact"
-        :active="knowledgeActive"
+        :active="drawerSection === 'knowledge' || knowledgeActive"
         :icon="BookOpen"
-        @click="select('documents')"
+        @click="emit('open-drawer', 'knowledge')"
       />
 
       <div class="my-3 h-px bg-border/60" />

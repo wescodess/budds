@@ -17,6 +17,7 @@ const emit = defineEmits<{
 }>()
 
 const drawerOpen = useLocalStorage('g3.drawer.open', false)
+const drawerSection = useLocalStorage<'knowledge' | 'members'>('g3.drawer.section', 'knowledge')
 const isDesktop = useMediaQuery('(min-width: 1024px)')
 
 const keys = useMagicKeys()
@@ -25,6 +26,14 @@ whenever(toggleKey, () => { drawerOpen.value = !drawerOpen.value })
 
 function closeDrawer() { drawerOpen.value = false }
 function toggleDrawer() { drawerOpen.value = !drawerOpen.value }
+function openDrawerSection(section: 'knowledge' | 'members') {
+  if (drawerOpen.value && drawerSection.value === section) {
+    drawerOpen.value = false
+    return
+  }
+  drawerSection.value = section
+  drawerOpen.value = true
+}
 
 function onTabChange(tab: 'chat' | 'flashcards' | 'quiz' | 'documents') {
   emit('update:activeTab', tab)
@@ -38,7 +47,9 @@ function onTabChange(tab: 'chat' | 'flashcards' | 'quiz' | 'documents') {
       :folder-id="folderId"
       :active-tab="activeTab"
       :compact="!isDesktop"
+      :drawer-section="drawerOpen ? drawerSection : null"
       @update:active-tab="onTabChange"
+      @open-drawer="openDrawerSection"
       @new-void="emit('new-void')"
     />
 
@@ -55,6 +66,7 @@ function onTabChange(tab: 'chat' | 'flashcards' | 'quiz' | 'documents') {
       :folder="folder"
       :rail-width="isDesktop ? 240 : 64"
       :full-width="!isDesktop"
+      :section="drawerSection"
       @close="closeDrawer"
     />
   </div>
