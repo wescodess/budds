@@ -17,12 +17,13 @@ function buildScope(options: { folderIds?: string[]; fileIds?: string[] } = {}) 
     ...[...folderIds.value].map(id => ({ kind: 'folder', id, label: folderMeta.value.get(id)?.name })),
     ...[...fileIds.value].map(id => ({ kind: 'file', id, label: fileMeta.value.get(id)?.filename })),
   ])
+  const totalFolderCount = computed(() => folderIds.value.size)
   const totalFileCount = computed(() =>
     [...folderIds.value].reduce((n, id) => n + (folderMeta.value.get(id)?.descendantFileCount ?? 0), 0)
     + fileIds.value.size,
   )
   return {
-    folderIds, fileIds, folderMeta, fileMeta, hasSelection, chips, totalFileCount,
+    folderIds, fileIds, folderMeta, fileMeta, hasSelection, chips, totalFolderCount, totalFileCount,
     isFolderSelected: (id: any) => folderIds.value.has(id),
     isFileSelected: (id: any) => fileIds.value.has(id),
     folderState: () => 'off' as const,

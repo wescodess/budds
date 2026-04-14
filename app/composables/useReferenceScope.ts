@@ -31,6 +31,7 @@ export function useReferenceScope() {
   const fileMeta = ref<Map<string, ScopeFileSummary>>(new Map())
 
   const hasSelection = computed(() => folderIds.value.size > 0 || fileIds.value.size > 0)
+  const totalFolderCount = computed(() => folderIds.value.size)
 
   const totalFileCount = computed(() => {
     let count = 0
@@ -54,6 +55,14 @@ export function useReferenceScope() {
     }
     return out
   })
+
+  function rememberFolder(folder: ScopeFolderSummary) {
+    folderMeta.value.set(folder.id as unknown as string, folder)
+  }
+
+  function rememberFile(file: ScopeFileSummary) {
+    fileMeta.value.set(file.id as unknown as string, file)
+  }
 
   function isFolderSelected(id: Id<'folders'>): boolean {
     return folderIds.value.has(id)
@@ -84,7 +93,7 @@ export function useReferenceScope() {
   }
 
   function toggleFolder(folder: ScopeFolderSummary) {
-    folderMeta.value.set(folder.id as unknown as string, folder)
+    rememberFolder(folder)
     if (folderIds.value.has(folder.id)) {
       folderIds.value.delete(folder.id)
     } else {
@@ -94,13 +103,29 @@ export function useReferenceScope() {
   }
 
   function toggleFile(file: ScopeFileSummary) {
-    fileMeta.value.set(file.id as unknown as string, file)
+    rememberFile(file)
     if (fileIds.value.has(file.id)) {
       fileIds.value.delete(file.id)
     } else {
       fileIds.value.add(file.id)
     }
     fileIds.value = new Set(fileIds.value)
+  }
+
+  function selectFolder(folder: ScopeFolderSummary) {
+    rememberFolder(folder)
+    if (folderIds.value.has(folder.id)) return false
+    folderIds.value.add(folder.id)
+    folderIds.value = new Set(folderIds.value)
+    return true
+  }
+
+  function selectFile(file: ScopeFileSummary) {
+    rememberFile(file)
+    if (fileIds.value.has(file.id)) return false
+    fileIds.value.add(file.id)
+    fileIds.value = new Set(fileIds.value)
+    return true
   }
 
   function removeChip(chip: ScopeChip) {
@@ -132,6 +157,7 @@ export function useReferenceScope() {
     folderMeta,
     fileMeta,
     hasSelection,
+    totalFolderCount,
     totalFileCount,
     chips,
     isFolderSelected,
@@ -139,6 +165,8 @@ export function useReferenceScope() {
     folderState,
     toggleFolder,
     toggleFile,
+    selectFolder,
+    selectFile,
     removeChip,
     clear,
     toPayload,

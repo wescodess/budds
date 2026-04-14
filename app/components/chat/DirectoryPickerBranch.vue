@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
-import type { useReferenceScope } from '~/composables/useReferenceScope'
+import type { ScopeFileSummary, ScopeFolderSummary, useReferenceScope } from '~/composables/useReferenceScope'
 
 const props = defineProps<{
   folderId: Id<'folders'>
@@ -12,6 +12,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'toggle-expand': [folderId: Id<'folders'>]
+  'pick-folder': [folder: ScopeFolderSummary]
+  'pick-file': [file: ScopeFileSummary]
 }>()
 
 const { data, pending } = useConvexQuery(api.folders.listSubtree, { folderId: props.folderId })
@@ -21,6 +23,7 @@ const files = computed(() => data.value?.files ?? [])
 const isEmpty = computed(() =>
   !pending.value && subfolders.value.length === 0 && files.value.length === 0,
 )
+const rowStickyTop = computed(() => props.depth * 40)
 
 function folderState(id: Id<'folders'>) {
   return props.scope.isFolderSelected(id) ? 'on' : 'off'
@@ -31,33 +34,20 @@ function formatSize(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
+
+function pickFolder(folder: typeof subfolders.value[number]) {
+  props.scope.selectFolder(folder)
+  emit('pick-folder', folder)
+}
+
+function pickFile(file: typeof files.value[number]) {
+  props.scope.selectFile(file)
+  emit('pick-file', file)
+}
 </script>
 
 <template>
   <div>
-    <ChatDirectoryPickerRow
-      v-for="sub in subfolders"
-      :key="sub.id"
-      kind="folder"
-      :label="sub.name"
-      :badge="`${sub.descendantFileCount} file${sub.descendantFileCount === 1 ? '' : 's'}`"
-      :state="folderState(sub.id)"
-      :depth="props.depth"
-      :expandable="sub.hasChildren || sub.fileCount > 0"
-      :expanded="props.expanded.has(sub.id as unknown as string)"
-      @toggle="props.scope.toggleFolder(sub)"
-      @toggle-expand="emit('toggle-expand', sub.id)"
-    />
-    <template v-for="sub in subfolders" :key="`${sub.id}-children`">
-      <ChatDirectoryPickerBranch
-        v-if="props.expanded.has(sub.id as unknown as string)"
-        :folder-id="sub.id"
-        :depth="props.depth + 1"
-        :scope="props.scope"
-        :expanded="props.expanded"
-        @toggle-expand="(id) => emit('toggle-expand', id)"
-      />
-    </template>
     <ChatDirectoryPickerRow
       v-for="file in files"
       :key="file.id"
@@ -66,8 +56,44 @@ function formatSize(bytes: number): string {
       :sublabel="formatSize(file.fileSize)"
       :state="props.scope.isFileSelected(file.id) ? 'on' : 'off'"
       :depth="props.depth"
-      @toggle="props.scope.toggleFile(file)"
+      @toggle="pickFile(file)"
     />
+
+    <div
+      v-for="sub in subfolders"
+      :key="sub.id"
+      class="relative"
+    >
+      <ChatDirectoryPickerRow
+        kind="folder"
+        :label="sub.name"
+        :badge="`${sub.descendantFileCount} file${sub.descendantFileCount === 1 ? '' : 's'}`"
+        :state="folderState(sub.id)"
+        :depth="props.depth"
+        :expandable="sub.hasChildren || sub.fileCount > 0"
+        :expanded="props.expanded.has(sub.id as unknown as string)"
+        :sticky="props.expanded.has(sub.id as unknown as string)"
+        :sticky-top="rowStickyTop"
+        @toggle="pickFolder(sub)"
+        @toggle-expand="emit('toggle-expand', sub.id)"
+      />
+
+      <div
+        v-if="props.expanded.has(sub.id as unknown as string)"
+        class="relative"
+      >
+        <ChatDirectoryPickerBranch
+          :folder-id="sub.id"
+          :depth="props.depth + 1"
+          :scope="props.scope"
+          :expanded="props.expanded"
+          @toggle-expand="(id) => emit('toggle-expand', id)"
+          @pick-folder="(folder) => emit('pick-folder', folder)"
+          @pick-file="(file) => emit('pick-file', file)"
+        />
+      </div>
+    </div>
+
     <div
       v-if="pending"
       :style="{ paddingLeft: `${props.depth * 16 + 40}px` }"

@@ -13,6 +13,7 @@ import type * as auth from "../auth.js";
 import type * as conversations from "../conversations.js";
 import type * as dataExport from "../dataExport.js";
 import type * as documentActions from "../documentActions.js";
+import type * as documentImports from "../documentImports.js";
 import type * as documents from "../documents.js";
 import type * as flashcards from "../flashcards.js";
 import type * as folderIcons from "../folderIcons.js";
@@ -35,6 +36,7 @@ declare const fullApi: ApiFromModules<{
   conversations: typeof conversations;
   dataExport: typeof dataExport;
   documentActions: typeof documentActions;
+  documentImports: typeof documentImports;
   documents: typeof documents;
   flashcards: typeof flashcards;
   folderIcons: typeof folderIcons;

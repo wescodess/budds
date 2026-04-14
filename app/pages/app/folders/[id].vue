@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { FolderPlus, FileText, MessageSquare, Plus, ClipboardList, Layers, PanelRight, ArrowLeftRight } from 'lucide-vue-next'
+import { FileText, MessageSquare, ClipboardList, Layers, PanelRight, ArrowLeftRight } from 'lucide-vue-next'
 import { useMediaQuery } from '@vueuse/core'
 import { api } from '#convex/api'
 import type { Id } from '~~/convex/_generated/dataModel'
@@ -19,7 +19,7 @@ const conversationIdRef = computed<Id<'conversations'> | null>(() => {
 
 const { folder } = useFolderDetail(folderId)
 const { allFolders } = useFolders()
-const { documents, uploading, uploadFiles, deleteDocument, moveDocument } = useDocuments(folderId)
+const { documents, attachmentStatus, uploading, importingLink, uploadFiles, importDocumentFromUrl, deleteDocument, moveDocument } = useDocuments(folderId)
 const {
   messages,
   loading,
@@ -38,7 +38,6 @@ const referenceScope = useReferenceScope()
 
 const isDesktop = useMediaQuery('(min-width: 1024px)')
 
-const showSubfolderModal = ref(false)
 const newVoidOpen = ref(false)
 const creatingVoid = ref(false)
 
@@ -381,22 +380,6 @@ async function confirmMove(destFolderId: Id<'folders'>) {
   }
 }
 
-const folderDepth = computed(() => {
-  if (!allFolders?.value || !folderId.value) return 1
-  let depth = 1
-  let currentId = folderId.value as string
-  const folderMap = new Map(allFolders.value.map((f: any) => [f._id, f]))
-  const seen = new Set<string>()
-  let current = folderMap.get(currentId)
-  while (current?.parentId) {
-    if (seen.has(current.parentId)) break
-    seen.add(current.parentId)
-    depth++
-    current = folderMap.get(current.parentId)
-  }
-  return depth
-})
-
 async function handleUpload(files: File[]) {
   try {
     await uploadFiles(files, folderId.value)
@@ -405,6 +388,17 @@ async function handleUpload(files: File[]) {
   } catch (e: any) {
     const { toast } = await import('vue-sonner')
     toast.error(e.message || 'Upload failed')
+  }
+}
+
+async function handleImportLink(url: string) {
+  try {
+    const result = await importDocumentFromUrl(url, folderId.value)
+    const { toast } = await import('vue-sonner')
+    toast.success(`Imported ${result?.filename ?? 'document'}`)
+  } catch (e: any) {
+    const { toast } = await import('vue-sonner')
+    toast.error(e.message || 'Import failed')
   }
 }
 </script>
@@ -419,7 +413,7 @@ async function handleUpload(files: File[]) {
     @new-void="newVoidOpen = true"
     @select-void="onSelectVoid"
   >
-    <template #top-bar="{ drawerOpen, toggleDrawer }">
+    <template #top-bar="{ railCollapsed, toggleRail, drawerOpen, toggleDrawer }">
       <div class="flex items-center justify-between gap-3 border-b border-border/60 px-6 py-4">
         <div class="flex min-w-0 items-center gap-3">
           <button
@@ -427,10 +421,10 @@ async function handleUpload(files: File[]) {
             data-testid="drawer-toggle"
             :class="[
               'flex h-9 w-9 items-center justify-center rounded-lg border border-border/60 bg-card text-primary transition hover:bg-primary/10',
-              drawerOpen && 'bg-primary/10',
+              (!isDesktop && drawerOpen) || (isDesktop && !railCollapsed) ? 'bg-primary/10' : '',
             ]"
-            :aria-label="drawerOpen ? 'Close folder tree' : 'Open folder tree'"
-            @click="toggleDrawer"
+            :aria-label="isDesktop ? (railCollapsed ? 'Expand sidebar' : 'Collapse sidebar') : (drawerOpen ? 'Close folder tree' : 'Open folder tree')"
+            @click="isDesktop ? toggleRail() : toggleDrawer()"
           >
             <PanelRight class="h-4 w-4" />
           </button>
@@ -439,39 +433,17 @@ async function handleUpload(files: File[]) {
             <h1 v-else data-testid="folder-heading" class="truncate text-xl font-semibold tracking-tight text-foreground">
               {{ folder.name }}
             </h1>
-            <p class="text-xs text-muted-foreground">My folder › {{ folder?.name ?? '…' }}</p>
+            <p class="text-xs text-muted-foreground">
+              <NuxtLink to="/" class="transition-colors hover:text-foreground">
+                Home
+              </NuxtLink>
+              <span class="px-1">›</span>
+              <span>{{ folder?.name ?? '…' }}</span>
+            </p>
           </div>
-        </div>
-        <div class="flex items-center gap-2">
-          <UiButton
-            v-if="activeTab === 'chat'"
-            variant="outline"
-            size="sm"
-            data-testid="chat-new-button"
-            @click="handleNewChat"
-          >
-            <Plus class="mr-1.5 h-4 w-4" />
-            New Chat
-          </UiButton>
-          <UiButton
-            v-if="folderDepth < 3"
-            variant="outline"
-            size="sm"
-            data-testid="new-subfolder-button"
-            @click="showSubfolderModal = true"
-          >
-            <FolderPlus class="mr-1.5 h-4 w-4" />
-            New Subfolder
-          </UiButton>
         </div>
       </div>
     </template>
-
-    <FoldersFolderFormModal
-      v-model:open="showSubfolderModal"
-      mode="create"
-      :parent-id="folderId"
-    />
 
     <VoidsCreateVoidDialog
       v-model:open="newVoidOpen"
@@ -574,9 +546,13 @@ async function handleUpload(files: File[]) {
                     <ChatInput
                       ref="chatInputRef"
                       :disabled="!hasIndexedDocuments || loading"
+                      :attachment-status="attachmentStatus"
+                      :busy="uploading || importingLink"
                       :placeholder="folder ? `Ask about your ${folder.name} materials...` : 'Ask a question...'"
                       :folder-id="folderId"
                       :scope="referenceScope"
+                      @upload-files="handleUpload"
+                      @import-link="handleImportLink"
                       @submit="handleSendMessage"
                     />
                   </div>
@@ -644,9 +620,13 @@ async function handleUpload(files: File[]) {
                     <ChatInput
                       ref="chatInputRef"
                       :disabled="!hasIndexedDocuments || loading"
+                      :attachment-status="attachmentStatus"
+                      :busy="uploading || importingLink"
                       :placeholder="folder ? `Ask about your ${folder.name} materials...` : 'Ask a question...'"
                       :folder-id="folderId"
                       :scope="referenceScope"
+                      @upload-files="handleUpload"
+                      @import-link="handleImportLink"
                       @submit="handleSendMessage"
                     />
                   </div>
@@ -735,9 +715,13 @@ async function handleUpload(files: File[]) {
             <ChatInput
               ref="chatInputRef"
               :disabled="!hasIndexedDocuments || loading"
+              :attachment-status="attachmentStatus"
+              :busy="uploading || importingLink"
               :placeholder="folder ? `Ask about your ${folder.name} materials...` : 'Ask a question...'"
               :folder-id="folderId"
               :scope="referenceScope"
+              @upload-files="handleUpload"
+              @import-link="handleImportLink"
               @submit="handleSendMessage"
             />
           </div>

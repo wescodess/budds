@@ -45,7 +45,7 @@ const remaining = computed(() => Math.max(0, props.sources.length - MAX.value))
     </span>
     <button
       type="button"
-      class="ml-auto inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded px-1"
+      class="ml-auto inline-flex items-center gap-1 rounded px-1 text-xs font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       data-testid="view-all-references"
       @click="emit('view-all')"
     >
