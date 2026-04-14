@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { X, FolderPlus, Search, Plus, Link as LinkIcon, Upload } from 'lucide-vue-next'
+import { X, FolderPlus, Search, Plus, Link as LinkIcon, Upload, Pencil } from 'lucide-vue-next'
 import { onKeyStroke } from '@vueuse/core'
+import { api } from '#convex/api'
 import type { Doc, Id } from '~~/convex/_generated/dataModel'
 
 defineOptions({ name: 'FolderShellHierarchyDrawer' })
@@ -18,16 +19,76 @@ const emit = defineEmits<{ close: [] }>()
 const router = useRouter()
 const { allFolders } = useFolders()
 const { documents, uploadFiles, deleteDocument, moveDocument } = useDocuments(computed(() => props.folderId))
+const { data: folderCounts } = useConvexQuery(api.documents.countsByFolder, computed(() => ({})))
+
+const directCountByFolder = computed(() => {
+  const map = new Map<string, number>()
+  for (const c of folderCounts.value ?? []) map.set(c.folderId, c.count)
+  return map
+})
+
+const totalCountByFolder = computed(() => {
+  const all = allFolders.value ?? []
+  const direct = directCountByFolder.value
+  const childrenByParent = new Map<string, Doc<'folders'>[]>()
+  for (const f of all) {
+    const p = (f.parentId as unknown as string | undefined) ?? ''
+    if (!p) continue
+    if (!childrenByParent.has(p)) childrenByParent.set(p, [])
+    childrenByParent.get(p)!.push(f)
+  }
+  const totals = new Map<string, number>()
+  function walk(id: string): number {
+    if (totals.has(id)) return totals.get(id)!
+    let sum = direct.get(id) ?? 0
+    for (const child of childrenByParent.get(id) ?? []) {
+      sum += walk(child._id as unknown as string)
+    }
+    totals.set(id, sum)
+    return sum
+  }
+  for (const f of all) walk(f._id as unknown as string)
+  return totals
+})
 
 const panelRef = ref<HTMLElement | null>(null)
 onKeyStroke('Escape', () => emit('close'))
 
 const search = ref('')
-const filteredFolders = computed(() => {
+const descendantFolders = computed(() => {
   const all = allFolders.value ?? []
+  const rootId = props.folderId as unknown as string
+  const childrenByParent = new Map<string, Doc<'folders'>[]>()
+  for (const f of all) {
+    const p = (f.parentId as unknown as string | undefined) ?? ''
+    if (!p) continue
+    if (!childrenByParent.has(p)) childrenByParent.set(p, [])
+    childrenByParent.get(p)!.push(f)
+  }
+  const out: Doc<'folders'>[] = []
+  const stack = [rootId]
+  const seen = new Set<string>()
+  while (stack.length) {
+    const id = stack.pop()!
+    for (const child of childrenByParent.get(id) ?? []) {
+      const cid = child._id as unknown as string
+      if (seen.has(cid)) continue
+      seen.add(cid)
+      out.push(child)
+      stack.push(cid)
+    }
+  }
+  return out
+})
+const directChildren = computed(() => {
+  const rootId = props.folderId as unknown as string
+  return descendantFolders.value.filter(f => (f.parentId as unknown as string) === rootId)
+})
+const filteredFolders = computed(() => {
+  const scoped = descendantFolders.value
   const q = search.value.trim().toLowerCase()
-  if (!q) return all
-  return all.filter(f => f.name.toLowerCase().includes(q))
+  if (!q) return scoped
+  return scoped.filter(f => f.name.toLowerCase().includes(q))
 })
 
 const filteredDocs = computed(() => {
@@ -146,7 +207,11 @@ async function onFiles(e: Event) {
   const t = e.target as HTMLInputElement
   const files = Array.from(t.files ?? [])
   if (files.length > 0) {
-    try { await uploadFiles(files, props.folderId) }
+    try {
+      await uploadFiles(files, props.folderId)
+      const { toast } = await import('vue-sonner')
+      toast.success(files.length === 1 ? 'Document uploaded' : `${files.length} documents uploaded`)
+    }
     catch (err: any) {
       const { toast } = await import('vue-sonner')
       toast.error(err?.message || 'Upload failed')
@@ -201,9 +266,13 @@ async function onFiles(e: Event) {
           </h2>
         </div>
         <div class="flex items-center gap-2">
-          <UiButton v-if="section === 'knowledge'" variant="ghost" size="sm" class="gap-1.5 text-primary hover:text-primary" @click="openNewFolder(null)">
+          <UiButton v-if="section === 'knowledge' && folder" variant="ghost" size="sm" class="gap-1.5 text-primary hover:text-primary" @click="onRenameFolder(folder)">
+            <Pencil class="h-4 w-4" />
+            Edit folder
+          </UiButton>
+          <UiButton v-if="section === 'knowledge'" variant="ghost" size="sm" class="gap-1.5 text-primary hover:text-primary" @click="openNewFolder(folderId)">
             <FolderPlus class="h-4 w-4" />
-            New folder
+            New subfolder
           </UiButton>
           <UiKbd class="hidden md:inline-flex">⌘B</UiKbd>
           <button
@@ -232,27 +301,65 @@ async function onFiles(e: Event) {
 
       <section class="mt-3 flex min-h-0 flex-col px-3">
         <div class="flex items-center justify-between px-2 pb-1 text-[10px] uppercase tracking-widest text-muted-foreground">
-          <span>Folders</span>
+          <span>Subfolders</span>
         </div>
         <div class="max-h-[65%] min-h-60 overflow-y-auto pr-1">
           <FolderShellTree
+            v-if="directChildren.length > 0"
             :folders="filteredFolders"
             :active-id="folderId"
+            :root-parent-id="folderId"
+            :direct-counts="directCountByFolder"
+            :total-counts="totalCountByFolder"
             @select="selectFolder"
             @rename="onRenameFolder"
             @delete="onDeleteFolderRequest"
             @new-subfolder="(pid) => openNewFolder(pid)"
           />
+          <div
+            v-else
+            class="mx-2 flex flex-col items-center gap-2 rounded-lg border border-dashed border-border/60 px-4 py-6 text-center"
+          >
+            <p class="text-sm font-medium text-foreground">No subfolders yet</p>
+            <p class="text-xs text-muted-foreground">Organize this folder by adding a subfolder or files.</p>
+            <div class="mt-1 flex items-center gap-2">
+              <UiButton size="sm" variant="secondary" class="gap-1.5" @click="openNewFolder(folderId)">
+                <FolderPlus class="h-3.5 w-3.5" /> New subfolder
+              </UiButton>
+              <UiButton size="sm" variant="ghost" class="gap-1.5 text-primary hover:text-primary" @click="triggerUpload">
+                <Upload class="h-3.5 w-3.5" /> Add files
+              </UiButton>
+            </div>
+          </div>
         </div>
       </section>
 
       <div class="mx-5 my-3 border-t border-border/60" />
 
-      <section class="flex items-center justify-between px-5 pb-2 text-xs">
+      <section class="flex items-center justify-between gap-2 px-5 pb-2 text-xs">
         <div class="flex min-w-0 items-center gap-1 text-muted-foreground">
-          <span>Files in</span>
-          <span class="mx-1">›</span>
-          <span class="truncate font-medium text-primary">{{ folder?.name ?? '…' }}</span>
+          <span class="shrink-0">Files in</span>
+          <div class="flex min-w-0 items-center truncate">
+            <template v-for="(f, i) in breadcrumb" :key="f._id">
+              <span v-if="i > 0" class="mx-1 shrink-0">›</span>
+              <button
+                type="button"
+                :disabled="f._id === folderId"
+                :class="[
+                  'truncate rounded px-1 transition',
+                  f._id === folderId
+                    ? 'font-medium text-primary cursor-default'
+                    : 'hover:bg-muted hover:text-foreground',
+                ]"
+                @click="selectFolder(f._id)"
+              >
+                {{ f.name }}
+              </button>
+            </template>
+          </div>
+          <span class="ml-1.5 shrink-0 rounded-full bg-muted/60 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+            {{ directCountByFolder.get(folderId as unknown as string) ?? 0 }}
+          </span>
         </div>
         <UiDropdownMenu>
           <UiDropdownMenuTrigger as-child>
@@ -290,17 +397,6 @@ async function onFiles(e: Event) {
         <FolderShellMembersPanel :folder="folder" />
       </template>
 
-      <footer class="flex items-center justify-between gap-3 border-t border-border/60 px-5 py-3 text-xs">
-        <div class="min-w-0 truncate text-muted-foreground">
-          <template v-for="(f, i) in breadcrumb" :key="f._id">
-            <span v-if="i > 0" class="mx-1">›</span>
-            <span :class="f._id === folderId ? 'font-medium text-primary' : ''">{{ f.name }}</span>
-          </template>
-        </div>
-        <UiButton variant="ghost" size="sm" class="gap-1 text-primary hover:text-primary" @click="emit('close')">
-          Open folder →
-        </UiButton>
-      </footer>
     </aside>
     </Transition>
 

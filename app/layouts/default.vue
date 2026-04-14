@@ -109,6 +109,8 @@ function handleNewSubfolder(parentId: Id<'folders'>) {
 async function handleRename(folderId: Id<'folders'>, name: string) {
   try {
     await renameFolder(folderId, name)
+    const { toast } = await import('vue-sonner')
+    toast.success('Folder renamed')
   } catch (e: any) {
     const { toast } = await import('vue-sonner')
     toast.error(e.message || 'Failed to rename folder')
@@ -799,5 +801,4 @@ async function executeDelete() {
     :parent-id="folderModalParentId ?? undefined"
   />
 
-  <UiSonner />
 </template>

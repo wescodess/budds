@@ -12,6 +12,8 @@ const props = defineProps<{
   activeId: Id<'folders'>
   expanded: Set<string>
   depth: number
+  directCounts?: Map<string, number>
+  totalCounts?: Map<string, number>
 }>()
 
 const emit = defineEmits<{
@@ -26,6 +28,15 @@ const kids = computed(() => props.childrenOf(props.folder._id as unknown as stri
 const isOpen = computed(() => props.expanded.has(props.folder._id as unknown as string))
 const isActive = computed(() => props.folder._id === props.activeId)
 const hasKids = computed(() => kids.value.length > 0)
+const folderKey = computed(() => props.folder._id as unknown as string)
+const directCount = computed(() => props.directCounts?.get(folderKey.value) ?? 0)
+const totalCount = computed(() => props.totalCounts?.get(folderKey.value) ?? directCount.value)
+const countLabel = computed(() => {
+  if (hasKids.value && totalCount.value !== directCount.value) {
+    return `${directCount.value} / ${totalCount.value}`
+  }
+  return String(directCount.value)
+})
 </script>
 
 <template>
@@ -61,6 +72,12 @@ const hasKids = computed(() => kids.value.length > 0)
       >
         <Folder :class="['h-3.5 w-3.5 shrink-0', isActive ? 'text-primary' : 'text-muted-foreground']" />
         <span class="truncate">{{ folder.name }}</span>
+        <span
+          :title="hasKids ? `${directCount} here, ${totalCount} with subfolders` : `${directCount} files`"
+          class="ml-auto shrink-0 rounded-full bg-muted/60 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+        >
+          {{ countLabel }}
+        </span>
       </button>
       <UiDropdownMenu>
         <UiDropdownMenuTrigger as-child>
@@ -75,7 +92,7 @@ const hasKids = computed(() => kids.value.length > 0)
         </UiDropdownMenuTrigger>
         <UiDropdownMenuContent align="end" class="w-40">
           <UiDropdownMenuItem @click="emit('rename', folder)">
-            <Pencil class="mr-2 h-4 w-4" /> Rename
+            <Pencil class="mr-2 h-4 w-4" /> Edit details
           </UiDropdownMenuItem>
           <UiDropdownMenuItem @click="emit('new-subfolder', folder._id)">
             <FolderPlus class="mr-2 h-4 w-4" /> New subfolder
@@ -96,6 +113,8 @@ const hasKids = computed(() => kids.value.length > 0)
         :active-id="activeId"
         :expanded="expanded"
         :depth="depth + 1"
+        :direct-counts="directCounts"
+        :total-counts="totalCounts"
         @toggle="(id) => emit('toggle', id)"
         @select="(id) => emit('select', id)"
         @rename="(f) => emit('rename', f)"

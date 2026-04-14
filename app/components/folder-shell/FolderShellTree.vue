@@ -10,6 +10,9 @@ const props = defineProps<{
   folders: F[]
   activeId: Id<'folders'>
   initiallyExpandPath?: boolean
+  rootParentId?: Id<'folders'> | null
+  directCounts?: Map<string, number>
+  totalCounts?: Map<string, number>
 }>()
 
 const emit = defineEmits<{
@@ -30,7 +33,10 @@ const byParent = computed(() => {
   return map
 })
 
-const roots = computed(() => byParent.value.get(null) ?? [])
+const roots = computed(() => {
+  const key = (props.rootParentId as string | null | undefined) ?? null
+  return byParent.value.get(key) ?? []
+})
 
 const ancestorIds = computed(() => {
   const ids = new Set<string>()
@@ -69,6 +75,8 @@ function childrenOf(id: string): F[] {
       :active-id="activeId"
       :expanded="expanded"
       :depth="0"
+      :direct-counts="directCounts"
+      :total-counts="totalCounts"
       @toggle="toggle"
       @select="(id) => emit('select', id)"
       @rename="(folder) => emit('rename', folder)"

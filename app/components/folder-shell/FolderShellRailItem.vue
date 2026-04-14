@@ -32,7 +32,7 @@ defineProps<{
     <component :is="icon" class="h-4 w-4 shrink-0" />
     <span v-if="!compact" class="flex-1 truncate text-left">{{ label }}</span>
     <span
-      v-if="!compact && count !== undefined && count !== null && count > 0"
+      v-if="!compact && count !== undefined && count !== null"
       class="rounded-full bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground"
     >
       {{ count }}
