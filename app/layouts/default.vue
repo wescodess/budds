@@ -1,6 +1,9 @@
 <script setup lang="ts">
-import { useColorMode, useMediaQuery } from '@vueuse/core'
+import { useMediaQuery } from '@vueuse/core'
 import {
+  FolderOpen,
+  FolderPlus,
+  MessageSquare,
   Sun,
   Moon,
   LogOut,
@@ -9,9 +12,9 @@ import {
   HelpCircle,
   FileText,
   MoreHorizontal,
+  Pencil,
   Trash2,
   Download,
-  MessageSquare,
 } from 'lucide-vue-next'
 import type { Doc, Id } from '~~/convex/_generated/dataModel'
 
@@ -23,19 +26,7 @@ useHead({
 })
 
 const { signOut, user } = useUserSession()
-
-const mode = useColorMode({
-  attribute: 'class',
-  modes: {
-    dark: 'dark',
-    light: 'light',
-  },
-  initialValue: 'dark',
-})
-
-function toggleTheme() {
-  mode.value = mode.value === 'dark' ? 'light' : 'dark'
-}
+const { mode, toggleTheme } = useAppTheme()
 
 const activeTab = ref('chat')
 const isMobileView = useMediaQuery('(max-width: 767px)')
@@ -44,7 +35,7 @@ const isDashboard = computed(() => route.path === '/')
 const isChatRoute = computed(() => route.path === '/chat')
 const isStandaloneRoute = computed(() => isDashboard.value || isChatRoute.value)
 
-const { allFolders, allFoldersLoading, renameFolder, deleteFolder } = useFolders()
+const { allFolders, allFoldersLoading, deleteFolder } = useFolders()
 
 const isFolderRoute = computed(() => route.path.startsWith('/app/folders/'))
 const currentFolderId = computed(() => {
@@ -74,20 +65,6 @@ const folderAncestors = computed(() => {
   return ancestors
 })
 
-const activeRootId = computed<string | null>(() => {
-  if (!currentFolderData.value || !allFolders?.value) return null
-  const folderMap = new Map(allFolders.value.map((f: any) => [f._id, f]))
-  let cursor: any = currentFolderData.value
-  const seen = new Set<string>()
-  while (cursor) {
-    if (!cursor.parentId) return cursor._id as string
-    if (seen.has(cursor._id)) return null
-    seen.add(cursor._id)
-    cursor = folderMap.get(cursor.parentId)
-  }
-  return null
-})
-
 const showFolderModal = ref(false)
 const folderModalMode = ref<'create' | 'edit'>('create')
 const editingFolder = ref<Doc<'folders'> | null>(null)
@@ -97,6 +74,20 @@ function openCreateFolder() {
   folderModalMode.value = 'create'
   editingFolder.value = null
   folderModalParentId.value = null
+  showFolderModal.value = true
+}
+
+function openEditFolder(folder: Doc<'folders'>) {
+  folderModalMode.value = 'edit'
+  editingFolder.value = folder
+  folderModalParentId.value = null
+  showFolderModal.value = true
+}
+
+function handleNewSubfolder(parentId: Id<'folders'>) {
+  folderModalMode.value = 'create'
+  editingFolder.value = null
+  folderModalParentId.value = parentId
   showFolderModal.value = true
 }
 
@@ -132,6 +123,11 @@ const deleteDescription = computed(() => {
   return `Delete "${folderToDelete.value.name}" and all ${parts.join(' and ')} inside?`
 })
 
+function handleDeleteRequest(folder: { _id: Id<'folders'>; name: string }) {
+  folderToDelete.value = folder
+  showDeleteDialog.value = true
+}
+
 function collectDescendantIds(folderId: string): Set<string> {
   const ids = new Set<string>([folderId])
   if (!allFolders?.value) return ids
@@ -147,6 +143,8 @@ function collectDescendantIds(folderId: string): Set<string> {
   }
   return ids
 }
+
+const rootFolders = computed(() => (allFolders.value ?? []).filter(folder => !folder.parentId))
 
 const showDeleteAccountDialog = ref(false)
 const deleteAccountConfirmInput = ref('')
@@ -256,8 +254,6 @@ async function executeDelete() {
     isDeleting.value = false
   }
 }
-
-void renameFolder
 </script>
 
 <template>
@@ -269,91 +265,204 @@ void renameFolder
     Skip to content
   </a>
 
-  <UiSidebarProvider :style="{ '--sidebar-width': '3.5rem', '--sidebar-width-icon': '3.5rem' }">
+  <UiSidebarProvider>
     <UiSidebar
       data-testid="app-sidebar"
+      collapsible="icon"
       class="border-r border-sidebar-border"
     >
-      <UiSidebarContent class="overflow-x-hidden p-0">
-        <SidebarHomeRail
-          :folders="allFolders"
-          :loading="allFoldersLoading"
-          :active-root-id="activeRootId"
-          :is-home="isDashboard"
-          @create="openCreateFolder"
-        />
+      <UiSidebarHeader class="px-3 py-4">
+        <div class="flex items-center justify-between">
+          <NuxtLink to="/" class="flex min-w-0 flex-1 items-center gap-2 group-data-[collapsible=icon]:justify-center">
+            <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/15 text-primary">
+              <BookOpen class="h-4 w-4" />
+            </div>
+            <div class="min-w-0 group-data-[collapsible=icon]:hidden">
+              <p class="font-dm-sans text-lg font-bold tracking-tight text-sidebar-foreground">
+                Budds
+              </p>
+              <p class="text-[10px] uppercase tracking-widest text-muted-foreground">
+                Learning Compiler
+              </p>
+            </div>
+          </NuxtLink>
+          <UiButton
+            variant="ghost"
+            size="icon"
+            data-testid="theme-toggle"
+            class="h-7 w-7 text-muted-foreground hover:text-foreground group-data-[collapsible=icon]:hidden"
+            @click="toggleTheme"
+          >
+            <Sun v-if="mode === 'dark'" class="h-4 w-4" />
+            <Moon v-else class="h-4 w-4" />
+            <span class="sr-only">Toggle theme</span>
+          </UiButton>
+        </div>
+      </UiSidebarHeader>
+
+      <UiSidebarContent>
+        <UiSidebarGroup data-testid="sidebar-folders-group">
+          <UiSidebarGroupLabel class="flex items-center justify-between">
+            <span class="flex items-center">
+              <FolderOpen class="mr-2 h-4 w-4" />
+              Folders
+            </span>
+          </UiSidebarGroupLabel>
+          <UiSidebarGroupContent>
+            <div v-if="allFoldersLoading || !allFolders" class="space-y-1 px-3 py-2">
+              <UiSkeleton v-for="i in 3" :key="i" class="h-7 w-full rounded-md" />
+            </div>
+            <template v-else-if="rootFolders.length > 0">
+              <UiSidebarMenu>
+                <UiSidebarMenuItem
+                  v-for="folder in rootFolders"
+                  :key="folder._id"
+                  class="group/folder-item relative"
+                >
+                  <UiSidebarMenuButton
+                    as-child
+                    class="h-auto py-2 group-data-[collapsible=icon]:justify-center"
+                    :tooltip="folder.name"
+                    :is-active="currentFolderId === folder._id"
+                    :data-testid="`sidebar-folder-${folder._id}`"
+                  >
+                    <NuxtLink
+                      :to="`/app/folders/${folder._id}`"
+                      class="flex min-w-0 items-center gap-2 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0 group-data-[collapsible=icon]:px-0"
+                    >
+                      <FoldersFolderBadge :color="folder.color ?? undefined" :icon="folder.icon ?? undefined" size="md" />
+                      <span class="group-data-[collapsible=icon]:hidden">{{ folder.name }}</span>
+                    </NuxtLink>
+                  </UiSidebarMenuButton>
+                  <UiDropdownMenu>
+                    <UiDropdownMenuTrigger as-child>
+                      <UiSidebarMenuAction
+                        :data-testid="`sidebar-folder-actions-${folder._id}`"
+                        class="opacity-0 transition-opacity group-hover/folder-item:opacity-100 focus:opacity-100 data-[state=open]:opacity-100 group-data-[collapsible=icon]:hidden"
+                      >
+                        <MoreHorizontal class="h-4 w-4" />
+                        <span class="sr-only">Folder actions</span>
+                      </UiSidebarMenuAction>
+                    </UiDropdownMenuTrigger>
+                    <UiDropdownMenuContent align="end">
+                      <UiDropdownMenuItem @select="openEditFolder(folder)">
+                        <Pencil class="mr-2 h-4 w-4" />
+                        Edit
+                      </UiDropdownMenuItem>
+                      <UiDropdownMenuItem @select="handleNewSubfolder(folder._id)">
+                        <FolderPlus class="mr-2 h-4 w-4" />
+                        New subfolder
+                      </UiDropdownMenuItem>
+                      <UiDropdownMenuItem
+                        class="text-destructive focus:text-destructive"
+                        @select="handleDeleteRequest({ _id: folder._id, name: folder.name })"
+                      >
+                        <Trash2 class="mr-2 h-4 w-4" />
+                        Delete
+                      </UiDropdownMenuItem>
+                    </UiDropdownMenuContent>
+                  </UiDropdownMenu>
+                </UiSidebarMenuItem>
+              </UiSidebarMenu>
+            </template>
+            <div
+              v-else
+              data-testid="sidebar-folders-empty"
+              class="px-3 py-6 text-center text-sm text-muted-foreground"
+            >
+              <FolderOpen class="mx-auto mb-2 h-8 w-8 opacity-40" />
+              No folders yet
+            </div>
+          </UiSidebarGroupContent>
+        </UiSidebarGroup>
       </UiSidebarContent>
 
-      <UiSidebarFooter class="items-center gap-2 border-t border-sidebar-border p-2">
-        <UiTooltip>
-          <UiTooltipTrigger as-child>
-            <UiButton
-              variant="ghost"
-              size="icon"
-              data-testid="theme-toggle"
-              class="h-9 w-9 text-muted-foreground hover:text-foreground"
-              @click="toggleTheme"
-            >
-              <Sun v-if="mode === 'dark'" class="h-4 w-4" />
-              <Moon v-else class="h-4 w-4" />
-              <span class="sr-only">Toggle theme</span>
-            </UiButton>
-          </UiTooltipTrigger>
-          <UiTooltipContent side="right">Toggle theme</UiTooltipContent>
-        </UiTooltip>
+      <div class="border-t border-sidebar-border p-3">
+        <UiButton
+          variant="default"
+          data-testid="new-root-folder-button"
+          class="w-full gap-2 rounded-xl group-data-[collapsible=icon]:h-8 group-data-[collapsible=icon]:w-8 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
+          @click="openCreateFolder"
+        >
+          <FolderPlus class="h-4 w-4 shrink-0" />
+          <span class="group-data-[collapsible=icon]:hidden">Create Folder</span>
+        </UiButton>
+      </div>
 
-        <UiDropdownMenu>
-          <UiDropdownMenuTrigger as-child>
-            <button
-              type="button"
-              data-testid="sidebar-user-menu-trigger"
-              class="flex h-9 w-9 items-center justify-center rounded-full transition-colors hover:bg-sidebar-accent"
-            >
-              <UiAvatar data-testid="sidebar-user-avatar" class="h-8 w-8">
-                <UiAvatarImage
-                  v-if="user?.image"
-                  :src="user.image"
-                  :alt="user?.name || 'User'"
-                />
-                <UiAvatarFallback class="bg-primary/10 text-xs text-primary">
-                  {{ user?.name?.charAt(0)?.toUpperCase() || 'U' }}
-                </UiAvatarFallback>
-              </UiAvatar>
-              <span data-testid="sidebar-user-name" class="sr-only">{{ user?.name || 'User' }}</span>
-            </button>
-          </UiDropdownMenuTrigger>
-          <UiDropdownMenuContent align="end" side="right" class="w-48">
-            <UiDropdownMenuItem
-              data-testid="sidebar-menu-sign-out"
-              @click="signOut()"
-            >
-              <LogOut class="mr-2 h-4 w-4" />
-              Sign out
-            </UiDropdownMenuItem>
-            <UiDropdownMenuSeparator />
-            <UiDropdownMenuItem
-              data-testid="sidebar-menu-export-data"
-              :disabled="isExportingData"
-              @select.prevent="executeExportData"
-            >
-              <Download class="mr-2 h-4 w-4" />
-              {{ isExportingData ? 'Exporting…' : 'Export my data' }}
-            </UiDropdownMenuItem>
-            <UiDropdownMenuItem
-              data-testid="sidebar-menu-delete-account"
-              class="text-destructive focus:text-destructive"
-              @click="openDeleteAccountDialog"
-            >
-              <Trash2 class="mr-2 h-4 w-4" />
-              Delete account
-            </UiDropdownMenuItem>
-          </UiDropdownMenuContent>
-        </UiDropdownMenu>
+      <UiSidebarFooter class="border-t border-sidebar-border p-3">
+        <UiButton
+          variant="ghost"
+          size="icon"
+          data-testid="theme-toggle-collapsed"
+          class="mb-2 hidden h-8 w-8 self-center text-muted-foreground hover:text-foreground group-data-[collapsible=icon]:inline-flex"
+          @click="toggleTheme"
+        >
+          <Sun v-if="mode === 'dark'" class="h-4 w-4" />
+          <Moon v-else class="h-4 w-4" />
+          <span class="sr-only">Toggle theme</span>
+        </UiButton>
+        <div class="flex items-center gap-3 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0">
+          <UiAvatar data-testid="sidebar-user-avatar" class="h-8 w-8">
+            <UiAvatarImage
+              v-if="user?.image"
+              :src="user.image"
+              :alt="user?.name || 'User'"
+            />
+            <UiAvatarFallback class="bg-primary/10 text-xs text-primary">
+              {{ user?.name?.charAt(0)?.toUpperCase() || 'U' }}
+            </UiAvatarFallback>
+          </UiAvatar>
+          <span
+            data-testid="sidebar-user-name"
+            class="flex-1 truncate text-sm font-medium text-sidebar-foreground group-data-[collapsible=icon]:hidden"
+          >
+            {{ user?.name || 'User' }}
+          </span>
+          <UiDropdownMenu>
+            <UiDropdownMenuTrigger as-child>
+              <UiButton
+                variant="ghost"
+                size="icon"
+                data-testid="sidebar-user-menu-trigger"
+                class="h-7 w-7 text-muted-foreground hover:text-foreground group-data-[collapsible=icon]:hidden"
+              >
+                <MoreHorizontal class="h-4 w-4" />
+                <span class="sr-only">User menu</span>
+              </UiButton>
+            </UiDropdownMenuTrigger>
+            <UiDropdownMenuContent align="end" class="w-48">
+              <UiDropdownMenuItem
+                data-testid="sidebar-menu-sign-out"
+                @click="signOut()"
+              >
+                <LogOut class="mr-2 h-4 w-4" />
+                Sign out
+              </UiDropdownMenuItem>
+              <UiDropdownMenuSeparator />
+              <UiDropdownMenuItem
+                data-testid="sidebar-menu-export-data"
+                :disabled="isExportingData"
+                @select.prevent="executeExportData"
+              >
+                <Download class="mr-2 h-4 w-4" />
+                {{ isExportingData ? 'Exporting…' : 'Export my data' }}
+              </UiDropdownMenuItem>
+              <UiDropdownMenuItem
+                data-testid="sidebar-menu-delete-account"
+                class="text-destructive focus:text-destructive"
+                @click="openDeleteAccountDialog"
+              >
+                <Trash2 class="mr-2 h-4 w-4" />
+                Delete account
+              </UiDropdownMenuItem>
+            </UiDropdownMenuContent>
+          </UiDropdownMenu>
+        </div>
       </UiSidebarFooter>
     </UiSidebar>
 
-    <UiSidebarInset id="main-content" data-testid="main-content">
-      <header class="flex items-center gap-2 border-b border-border px-4 py-2">
+    <UiSidebarInset id="main-content" data-testid="main-content" class="overflow-y-auto">
+      <header class="sticky top-0 z-20 flex items-center gap-2 border-b border-border bg-background/90 px-4 py-2 backdrop-blur supports-[backdrop-filter]:bg-background/80">
         <UiSidebarTrigger data-testid="sidebar-trigger" />
 
         <nav data-testid="breadcrumb-nav" class="flex-1">
@@ -421,7 +530,7 @@ void renameFolder
         </nav>
       </header>
 
-      <div class="flex flex-1 flex-col overflow-hidden">
+      <div :class="['flex flex-1 flex-col', isDashboard ? '' : 'overflow-hidden']">
         <template v-if="isStandaloneRoute">
           <slot />
         </template>
@@ -565,5 +674,4 @@ void renameFolder
     :parent-id="folderModalParentId ?? undefined"
   />
 
-  <UiSonner />
 </template>

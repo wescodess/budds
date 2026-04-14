@@ -1,6 +1,7 @@
 import { useMediaQuery } from '@vueuse/core'
 import { api } from '#convex/api'
 import type { Id } from '../../convex/_generated/dataModel'
+import { normalizeAssistantCitations } from '~/utils/normalize-assistant-citations'
 
 export interface Source {
   content: string
@@ -47,16 +48,22 @@ function deriveTitle(query: string): string {
   return trimmed || 'New conversation'
 }
 
+function normalizeAssistantMessageContent(content: string): string {
+  return normalizeAssistantCitations(content)
+}
+
 export function useChat(
   folderId: Ref<Id<'folders'>>,
   conversationId?: Ref<Id<'conversations'> | null>,
 ) {
   const { documents } = useDocuments(folderId)
   const prefersReducedMotion = useMediaQuery('(prefers-reduced-motion: reduce)')
+  const convexClient = import.meta.client ? useConvex() : null
 
   const messages = ref<UIChatMessage[]>([])
   const loading = ref(false)
   const streaming = ref(false)
+  const thinking = ref(false)
   const error = ref<string | null>(null)
   const selectedModel = ref(DEFAULT_MODEL)
   const currentConversationId = ref<Id<'conversations'> | null>(conversationId?.value ?? null)
@@ -137,7 +144,10 @@ export function useChat(
     }
   }
 
-  async function sendStreaming(query: string): Promise<boolean> {
+  async function sendStreaming(
+    query: string,
+    scope?: { folderIds?: Id<'folders'>[]; fileIds?: Id<'documents'>[] },
+  ): Promise<boolean> {
     const response = await fetch('/api/rag/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -146,6 +156,7 @@ export function useChat(
         model: selectedModel.value,
         folderId: folderId.value,
         stream: true,
+        ...(scope ? { scope } : {}),
       }),
     })
 
@@ -221,6 +232,7 @@ export function useChat(
               const parsed = JSON.parse(data)
               const token = parsed.choices?.[0]?.delta?.content
               if (token) {
+                if (thinking.value) thinking.value = false
                 if (prefersReducedMotion.value) {
                   tokenBuffer += token
                   if (tokenBuffer.length >= 50 || /[.!?]\s*$/.test(tokenBuffer)) {
@@ -248,13 +260,17 @@ export function useChat(
     return true
   }
 
-  async function sendNonStreaming(query: string) {
+  async function sendNonStreaming(
+    query: string,
+    scope?: { folderIds?: Id<'folders'>[]; fileIds?: Id<'documents'>[] },
+  ) {
     const data = await $fetch<ChatResponse>('/api/rag/chat', {
       method: 'POST',
       body: {
         query,
         model: selectedModel.value,
         folderId: folderId.value,
+        ...(scope ? { scope } : {}),
       },
     })
 
@@ -266,12 +282,15 @@ export function useChat(
 
     messages.value.push({
       role: 'assistant',
-      content: data.answer ?? '',
+      content: normalizeAssistantMessageContent(data.answer ?? ''),
       sources: mapSources(data.sources ?? []),
     })
   }
 
-  async function sendMessage(query: string) {
+  async function sendMessage(
+    query: string,
+    scope?: { folderIds?: Id<'folders'>[]; fileIds?: Id<'documents'>[] },
+  ) {
     if (loading.value) return
     error.value = null
 
@@ -285,6 +304,7 @@ export function useChat(
 
     messages.value.push({ role: 'user', content: query })
     loading.value = true
+    thinking.value = true
 
     if (convoId) {
       void persistMessage(convoId, 'user', query)
@@ -292,19 +312,20 @@ export function useChat(
 
     try {
       const streamingIdx = messages.value.length
-      const streamed = await sendStreaming(query).catch(() => false)
+      const streamed = await sendStreaming(query, scope).catch(() => false)
 
       if (!streamed) {
         if (messages.value[streamingIdx]?.role === 'assistant') {
           messages.value.splice(streamingIdx, 1)
         }
-        await sendNonStreaming(query)
+        await sendNonStreaming(query, scope)
       }
     } catch (e: any) {
       error.value = e.data?.message || e.message || 'Failed to get response'
     } finally {
       loading.value = false
       streaming.value = false
+      thinking.value = false
 
       const assistantMsg = messages.value[messages.value.length - 1]
       if (
@@ -313,7 +334,9 @@ export function useChat(
         && assistantMsg?.role === 'assistant'
         && assistantMsg.content
       ) {
-        void persistMessage(convoId, 'assistant', assistantMsg.content, {
+        const normalizedContent = normalizeAssistantMessageContent(assistantMsg.content)
+        assistantMsg.content = normalizedContent
+        void persistMessage(convoId, 'assistant', normalizedContent, {
           sources: assistantMsg.sources,
           model: selectedModel.value,
         })
@@ -322,9 +345,8 @@ export function useChat(
   }
 
   async function loadConversation(conversationIdToLoad: Id<'conversations'>) {
-    if (!import.meta.client) return
-    const client = useConvex()
-    const rows = await client.query(api.messages.listByConversation, {
+    if (!import.meta.client || !convexClient) return
+    const rows = await convexClient.query(api.messages.listByConversation, {
       conversationId: conversationIdToLoad,
     }) as Array<{
       role: 'user' | 'assistant'
@@ -334,7 +356,7 @@ export function useChat(
 
     messages.value = rows.map(r => ({
       role: r.role,
-      content: r.content,
+      content: r.role === 'assistant' ? normalizeAssistantMessageContent(r.content) : r.content,
       sources: r.sources,
     }))
     currentConversationId.value = conversationIdToLoad
@@ -355,6 +377,7 @@ export function useChat(
     messages,
     loading,
     streaming,
+    thinking,
     error,
     hasIndexedDocuments,
     selectedModel,

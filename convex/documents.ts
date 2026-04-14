@@ -84,6 +84,29 @@ export const listDocumentsByFolder = query({
   },
 })
 
+export const countsByFolder = query({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) return [] as Array<{ folderId: string; count: number }>
+
+    const userId = identity.tokenIdentifier
+
+    const docs = await ctx.db
+      .query('documents')
+      .withIndex('by_userId', (q) => q.eq('userId', userId))
+      .collect()
+
+    const counts = new Map<string, number>()
+    for (const d of docs) {
+      const key = d.folderId as unknown as string
+      counts.set(key, (counts.get(key) ?? 0) + 1)
+    }
+
+    return Array.from(counts.entries()).map(([folderId, count]) => ({ folderId, count }))
+  },
+})
+
 export const updateDocumentStatus = internalMutation({
   args: {
     id: v.id('documents'),

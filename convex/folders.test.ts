@@ -944,3 +944,202 @@ describe('folders.backfillFolderDefaults', () => {
     expect(second.patched).toBe(0)
   })
 })
+
+describe('folders.listSubtree', () => {
+  it('[P0] returns subfolders and successful files owned by user', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const rootId = await asUser.mutation(api.folders.createFolder, { name: 'Root' })
+    const subId = await asUser.mutation(api.folders.createSubfolder, {
+      parentId: rootId,
+      name: 'Sub',
+    })
+
+    await t.run(async (ctx) => {
+      const fileId = await ctx.storage.store(new Blob(['pdf'], { type: 'application/pdf' }))
+      await ctx.db.insert('documents', {
+        userId: TEST_IDENTITY.tokenIdentifier,
+        folderId: rootId,
+        filename: 'root.pdf',
+        fileId: fileId as any,
+        status: 'success',
+        fileSize: 100,
+      })
+      await ctx.db.insert('documents', {
+        userId: TEST_IDENTITY.tokenIdentifier,
+        folderId: subId,
+        filename: 'sub.pdf',
+        fileId: fileId as any,
+        status: 'success',
+        fileSize: 200,
+      })
+      await ctx.db.insert('documents', {
+        userId: TEST_IDENTITY.tokenIdentifier,
+        folderId: rootId,
+        filename: 'processing.pdf',
+        fileId: fileId as any,
+        status: 'processing',
+        fileSize: 50,
+      })
+    })
+
+    const result = await asUser.query(api.folders.listSubtree, { folderId: rootId })
+    expect(result.subfolders).toHaveLength(1)
+    expect(result.subfolders[0]!.name).toBe('Sub')
+    expect(result.subfolders[0]!.descendantFileCount).toBe(1)
+    expect(result.files).toHaveLength(1)
+    expect(result.files[0]!.filename).toBe('root.pdf')
+  })
+
+  it('[P0] returns empty when folder belongs to another user', async () => {
+    const t = convexTest(schema, modules)
+    const asUser1 = t.withIdentity(TEST_IDENTITY)
+    const asUser2 = t.withIdentity(OTHER_IDENTITY)
+    const otherRoot = await asUser2.mutation(api.folders.createFolder, { name: 'Other' })
+
+    const result = await asUser1.query(api.folders.listSubtree, { folderId: otherRoot })
+    expect(result.subfolders).toEqual([])
+    expect(result.files).toEqual([])
+  })
+})
+
+describe('folders.searchScopeItems', () => {
+  it('[P0] returns the full scope inventory for frontend-first filtering', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const rootId = await asUser.mutation(api.folders.createFolder, { name: 'Root' })
+    const subId = await asUser.mutation(api.folders.createSubfolder, {
+      parentId: rootId,
+      name: 'Week 1',
+    })
+
+    await t.run(async (ctx) => {
+      const fileId = await ctx.storage.store(new Blob(['pdf'], { type: 'application/pdf' }))
+      await ctx.db.insert('documents', {
+        userId: TEST_IDENTITY.tokenIdentifier,
+        folderId: rootId,
+        filename: 'overview.pdf',
+        fileId: fileId as any,
+        status: 'success',
+        fileSize: 100,
+      })
+      await ctx.db.insert('documents', {
+        userId: TEST_IDENTITY.tokenIdentifier,
+        folderId: subId,
+        filename: 'lecture-1.pdf',
+        fileId: fileId as any,
+        status: 'success',
+        fileSize: 200,
+      })
+      await ctx.db.insert('documents', {
+        userId: TEST_IDENTITY.tokenIdentifier,
+        folderId: subId,
+        filename: 'draft.pdf',
+        fileId: fileId as any,
+        status: 'processing',
+        fileSize: 50,
+      })
+    })
+
+    const result = await asUser.query(api.folders.searchScopeItems, {
+      rootFolderId: rootId,
+      search: '',
+    })
+
+    expect(result.folders).toHaveLength(1)
+    expect(result.folders[0]!.name).toBe('Week 1')
+    expect(result.folders[0]!.descendantFileCount).toBe(1)
+    expect(result.files.map(file => file.filename)).toEqual(['overview.pdf', 'lecture-1.pdf'])
+  })
+})
+
+describe('folders.resolveScope', () => {
+  it('[P0] expands folders into descendant documents and deduplicates with fileIds', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const rootId = await asUser.mutation(api.folders.createFolder, { name: 'Root' })
+    const subId = await asUser.mutation(api.folders.createSubfolder, {
+      parentId: rootId,
+      name: 'Sub',
+    })
+
+    let rootDoc: any, subDoc: any
+    await t.run(async (ctx) => {
+      const fileId = await ctx.storage.store(new Blob(['pdf'], { type: 'application/pdf' }))
+      rootDoc = await ctx.db.insert('documents', {
+        userId: TEST_IDENTITY.tokenIdentifier,
+        folderId: rootId,
+        filename: 'root.pdf',
+        fileId: fileId as any,
+        status: 'success',
+        fileSize: 100,
+      })
+      subDoc = await ctx.db.insert('documents', {
+        userId: TEST_IDENTITY.tokenIdentifier,
+        folderId: subId,
+        filename: 'sub.pdf',
+        fileId: fileId as any,
+        status: 'success',
+        fileSize: 200,
+      })
+    })
+
+    const result = await asUser.query(api.folders.resolveScope, {
+      folderIds: [rootId],
+      fileIds: [rootDoc, subDoc],
+    })
+    expect(result.documentIds).toHaveLength(2)
+    expect(result.documentIds).toContain(rootDoc)
+    expect(result.documentIds).toContain(subDoc)
+    expect(result.ownedFolderIds).toEqual([rootId])
+  })
+
+  it('[P0] ignores folders and files not owned by caller', async () => {
+    const t = convexTest(schema, modules)
+    const asUser1 = t.withIdentity(TEST_IDENTITY)
+    const asUser2 = t.withIdentity(OTHER_IDENTITY)
+    const otherRoot = await asUser2.mutation(api.folders.createFolder, { name: 'Other' })
+
+    let otherDoc: any
+    await t.run(async (ctx) => {
+      const fileId = await ctx.storage.store(new Blob(['pdf'], { type: 'application/pdf' }))
+      otherDoc = await ctx.db.insert('documents', {
+        userId: OTHER_IDENTITY.tokenIdentifier,
+        folderId: otherRoot,
+        filename: 'other.pdf',
+        fileId: fileId as any,
+        status: 'success',
+        fileSize: 100,
+      })
+    })
+
+    const result = await asUser1.query(api.folders.resolveScope, {
+      folderIds: [otherRoot],
+      fileIds: [otherDoc],
+    })
+    expect(result.documentIds).toEqual([])
+    expect(result.ownedFolderIds).toEqual([])
+  })
+
+  it('[P0] excludes documents that are not successfully indexed', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const rootId = await asUser.mutation(api.folders.createFolder, { name: 'Root' })
+
+    await t.run(async (ctx) => {
+      const fileId = await ctx.storage.store(new Blob(['pdf'], { type: 'application/pdf' }))
+      await ctx.db.insert('documents', {
+        userId: TEST_IDENTITY.tokenIdentifier,
+        folderId: rootId,
+        filename: 'failed.pdf',
+        fileId: fileId as any,
+        status: 'failed',
+        fileSize: 100,
+      })
+    })
+
+    const result = await asUser.query(api.folders.resolveScope, { folderIds: [rootId] })
+    expect(result.documentIds).toEqual([])
+    expect(result.ownedFolderIds).toEqual([rootId])
+  })
+})

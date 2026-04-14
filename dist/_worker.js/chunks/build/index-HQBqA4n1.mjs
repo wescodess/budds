@@ -1,0 +1,2 @@
+import{v as e}from"./server.mjs";import{b as o}from"../routes/renderer.mjs";import"../nitro/nitro.mjs";import"node:net";import"node:stream";import"node:events";import"node:buffer";import"node:process";import"cloudflare:workers";import"node:timers";const r=e.defineComponent({__name:"index",__ssrInlineRender:!0,setup:e=>(e,r,t,n)=>{r(`<div${o(n)}></div>`)}}),t=r.setup;r.setup=(o,r)=>{const n=e.useSSRContext();return(n.modules||(n.modules=new Set)).add("pages/app/index.vue"),t?t(o,r):void 0};export{r as default};
+//# sourceMappingURL=index-HQBqA4n1.mjs.map
