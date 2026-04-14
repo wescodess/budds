@@ -1,7 +1,7 @@
 export default defineEventHandler(async (event) => {
   if (!event.path.startsWith('/api/auth/')) return
 
-  const convexSiteUrl = process.env.CONVEX_SITE_URL
+  const { convexSiteUrl } = useRuntimeConfig(event)
   if (!convexSiteUrl) return
 
   const target = new URL(event.path, convexSiteUrl)

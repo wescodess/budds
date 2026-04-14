@@ -49,6 +49,7 @@ export default defineNuxtConfig({
     port: 3002,
   },
   runtimeConfig: {
+    convexSiteUrl: process.env.NUXT_CONVEX_SITE_URL || process.env.CONVEX_SITE_URL || '',
     cloudflareAccountId: process.env.CF_ACCOUNT_ID,
     cloudflareAiGatewayId: process.env.CLOUDFLARE_AI_GATEWAY_ID,
     cloudflareAiGatewayApiKey: process.env.CLOUDFLARE_AI_GATEWAY_API_KEY,
@@ -60,7 +61,7 @@ export default defineNuxtConfig({
     r2SecretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
     r2BucketName: process.env.R2_BUCKET_NAME,
     public: {
-      siteUrl: process.env.NUXT_PUBLIC_SITE_URL || 'http://localhost:3002',
+      siteUrl: process.env.NUXT_PUBLIC_SITE_URL || '',
     },
   },
   routeRules: {
