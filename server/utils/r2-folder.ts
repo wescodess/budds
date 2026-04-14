@@ -1,5 +1,6 @@
 import { S3Client, ListObjectsV2Command, GetObjectCommand } from '@aws-sdk/client-s3'
 import { sanitizeUserSegment } from './ai-search'
+import { readConfiguredRuntimeValue } from './runtime-config'
 
 export interface FolderDoc {
   key: string
@@ -15,7 +16,18 @@ export interface FetchFolderDocsParams {
 }
 
 function getR2Client() {
-  const { r2Endpoint, r2AccessKeyId, r2SecretAccessKey } = useRuntimeConfig()
+  const config = useRuntimeConfig()
+  const r2Endpoint = readConfiguredRuntimeValue(config.r2Endpoint, 'NUXT_R2_ENDPOINT', 'R2_ENDPOINT')
+  const r2AccessKeyId = readConfiguredRuntimeValue(
+    config.r2AccessKeyId,
+    'NUXT_R2_ACCESS_KEY_ID',
+    'R2_ACCESS_KEY_ID',
+  )
+  const r2SecretAccessKey = readConfiguredRuntimeValue(
+    config.r2SecretAccessKey,
+    'NUXT_R2_SECRET_ACCESS_KEY',
+    'R2_SECRET_ACCESS_KEY',
+  )
   if (!r2Endpoint || !r2AccessKeyId || !r2SecretAccessKey) return null
   return new S3Client({
     region: 'auto',
@@ -25,7 +37,8 @@ function getR2Client() {
 }
 
 export async function fetchFolderDocs(params: FetchFolderDocsParams): Promise<FolderDoc[]> {
-  const { r2BucketName } = useRuntimeConfig()
+  const config = useRuntimeConfig()
+  const r2BucketName = readConfiguredRuntimeValue(config.r2BucketName, 'NUXT_R2_BUCKET_NAME', 'R2_BUCKET_NAME')
   if (!r2BucketName) return []
   const client = getR2Client()
   if (!client) return []

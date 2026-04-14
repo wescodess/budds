@@ -61,7 +61,7 @@ function toConvexSiteUrl(url: string) {
 }
 
 const convexUrl = readConfiguredValue('NUXT_PUBLIC_CONVEX_URL', 'CONVEX_URL')
-const convexSiteUrl = readConfiguredValue('NUXT_CONVEX_SITE_URL', 'CONVEX_SITE_URL') || toConvexSiteUrl(convexUrl)
+const convexSiteUrl = toConvexSiteUrl(convexUrl)
 const publicSiteUrl = readConfiguredValue('NUXT_PUBLIC_SITE_URL')
 
 export default defineNuxtConfig({
@@ -119,16 +119,16 @@ export default defineNuxtConfig({
     // NUXT_-prefixed env vars at runtime on Cloudflare Pages Workers.
     // e.g. runtimeConfig key "cloudflareAccountId" ← env "NUXT_CLOUDFLARE_ACCOUNT_ID"
     convexSiteUrl,
-    cloudflareAccountId: process.env.CF_ACCOUNT_ID || '',
-    cloudflareAiGatewayId: process.env.CLOUDFLARE_AI_GATEWAY_ID || '',
-    cloudflareAiGatewayApiKey: process.env.CLOUDFLARE_AI_GATEWAY_API_KEY || '',
-    cloudflareAiSearchInstance: process.env.CLOUDFLARE_AI_SEARCH_INSTANCE || '',
-    cloudflareAiSearchToken: process.env.CLOUDFLARE_AI_SEARCH_TOKEN || '',
-    openrouterApiKey: process.env.OPENROUTER_API_KEY || '',
-    r2Endpoint: process.env.R2_ENDPOINT || '',
-    r2AccessKeyId: process.env.R2_ACCESS_KEY_ID || '',
-    r2SecretAccessKey: process.env.R2_SECRET_ACCESS_KEY || '',
-    r2BucketName: process.env.R2_BUCKET_NAME || '',
+    cloudflareAccountId: readConfiguredValue('NUXT_CLOUDFLARE_ACCOUNT_ID', 'CF_ACCOUNT_ID'),
+    cloudflareAiGatewayId: readConfiguredValue('NUXT_CLOUDFLARE_AI_GATEWAY_ID', 'CLOUDFLARE_AI_GATEWAY_ID'),
+    cloudflareAiGatewayApiKey: readConfiguredValue('NUXT_CLOUDFLARE_AI_GATEWAY_API_KEY', 'CLOUDFLARE_AI_GATEWAY_API_KEY'),
+    cloudflareAiSearchInstance: readConfiguredValue('NUXT_CLOUDFLARE_AI_SEARCH_INSTANCE', 'CLOUDFLARE_AI_SEARCH_INSTANCE'),
+    cloudflareAiSearchToken: readConfiguredValue('NUXT_CLOUDFLARE_AI_SEARCH_TOKEN', 'CLOUDFLARE_AI_SEARCH_TOKEN'),
+    openrouterApiKey: readConfiguredValue('NUXT_OPENROUTER_API_KEY', 'OPENROUTER_API_KEY'),
+    r2Endpoint: readConfiguredValue('NUXT_R2_ENDPOINT', 'R2_ENDPOINT'),
+    r2AccessKeyId: readConfiguredValue('NUXT_R2_ACCESS_KEY_ID', 'R2_ACCESS_KEY_ID'),
+    r2SecretAccessKey: readConfiguredValue('NUXT_R2_SECRET_ACCESS_KEY', 'R2_SECRET_ACCESS_KEY'),
+    r2BucketName: readConfiguredValue('NUXT_R2_BUCKET_NAME', 'R2_BUCKET_NAME'),
     public: {
       siteUrl: publicSiteUrl,
     },

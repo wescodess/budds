@@ -24,6 +24,14 @@ describe('generateCompletion', () => {
   beforeEach(() => {
     vi.mocked(globalThis.fetch).mockReset()
     vi.mocked((globalThis as any).useRuntimeConfig).mockReturnValue(validConfig)
+    delete process.env.NUXT_CLOUDFLARE_ACCOUNT_ID
+    delete process.env.CF_ACCOUNT_ID
+    delete process.env.NUXT_CLOUDFLARE_AI_GATEWAY_ID
+    delete process.env.CLOUDFLARE_AI_GATEWAY_ID
+    delete process.env.NUXT_CLOUDFLARE_AI_GATEWAY_API_KEY
+    delete process.env.CLOUDFLARE_AI_GATEWAY_API_KEY
+    delete process.env.NUXT_OPENROUTER_API_KEY
+    delete process.env.OPENROUTER_API_KEY
   })
 
   test('returns completion response for valid params', async () => {
@@ -86,6 +94,28 @@ describe('generateCompletion', () => {
     )
   })
 
+  test('falls back to NUXT_ env vars when runtime config is empty', async () => {
+    vi.mocked((globalThis as any).useRuntimeConfig).mockReturnValue({})
+    process.env.NUXT_CLOUDFLARE_ACCOUNT_ID = 'env-account'
+    process.env.NUXT_CLOUDFLARE_AI_GATEWAY_ID = 'env-gateway'
+    process.env.NUXT_OPENROUTER_API_KEY = 'env-openrouter'
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({}),
+    } as any)
+
+    await generateCompletion(baseParams)
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      'https://gateway.ai.cloudflare.com/v1/env-account/env-gateway/openrouter/v1/chat/completions',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: 'Bearer env-openrouter',
+        }),
+      }),
+    )
+  })
+
   test('throws on API error response', async () => {
     vi.mocked(globalThis.fetch).mockResolvedValueOnce({
       ok: false,
@@ -117,6 +147,14 @@ describe('generateCompletionStream', () => {
   beforeEach(() => {
     vi.mocked(globalThis.fetch).mockReset()
     vi.mocked((globalThis as any).useRuntimeConfig).mockReturnValue(validConfig)
+    delete process.env.NUXT_CLOUDFLARE_ACCOUNT_ID
+    delete process.env.CF_ACCOUNT_ID
+    delete process.env.NUXT_CLOUDFLARE_AI_GATEWAY_ID
+    delete process.env.CLOUDFLARE_AI_GATEWAY_ID
+    delete process.env.NUXT_CLOUDFLARE_AI_GATEWAY_API_KEY
+    delete process.env.CLOUDFLARE_AI_GATEWAY_API_KEY
+    delete process.env.NUXT_OPENROUTER_API_KEY
+    delete process.env.OPENROUTER_API_KEY
   })
 
   test('returns a ReadableStream on success', async () => {

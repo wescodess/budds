@@ -32,6 +32,12 @@ describe('searchDocuments', () => {
   beforeEach(() => {
     vi.mocked(globalThis.fetch).mockReset()
     vi.mocked((globalThis as any).useRuntimeConfig).mockReturnValue(validConfig)
+    delete process.env.NUXT_CLOUDFLARE_ACCOUNT_ID
+    delete process.env.CF_ACCOUNT_ID
+    delete process.env.NUXT_CLOUDFLARE_AI_SEARCH_INSTANCE
+    delete process.env.CLOUDFLARE_AI_SEARCH_INSTANCE
+    delete process.env.NUXT_CLOUDFLARE_AI_SEARCH_TOKEN
+    delete process.env.CLOUDFLARE_AI_SEARCH_TOKEN
   })
 
   test('returns mapped chunks from CF response shape', async () => {
@@ -116,6 +122,25 @@ describe('searchDocuments', () => {
 
     await expect(searchDocuments({ query: 'test', userId: 'user_123' })).rejects.toThrow(
       'Missing Cloudflare AI Search configuration',
+    )
+  })
+
+  test('falls back to NUXT_ env vars when runtime config is empty', async () => {
+    vi.mocked((globalThis as any).useRuntimeConfig).mockReturnValue({})
+    process.env.NUXT_CLOUDFLARE_ACCOUNT_ID = 'env-account'
+    process.env.NUXT_CLOUDFLARE_AI_SEARCH_INSTANCE = 'env-instance'
+    process.env.NUXT_CLOUDFLARE_AI_SEARCH_TOKEN = 'env-token'
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockCfResponse([]))
+
+    await searchDocuments({ query: 'test', userId: 'user_123' })
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      'https://api.cloudflare.com/client/v4/accounts/env-account/ai-search/instances/env-instance/search',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: 'Bearer env-token',
+        }),
+      }),
     )
   })
 

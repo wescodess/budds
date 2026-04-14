@@ -2,6 +2,7 @@ import { ConvexHttpClient } from 'convex/browser'
 import { api } from '../../../convex/_generated/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 import type { AISearchChunk } from '../../utils/ai-search'
+import { readConfiguredRuntimeValue } from '../../utils/runtime-config'
 
 const SEED_QUERY = 'key concepts, definitions, and facts'
 
@@ -92,7 +93,12 @@ export default defineEventHandler(async (event) => {
   })
 
   const token = event.context.convexToken as string | undefined
-  const convexUrl = process.env.CONVEX_URL || process.env.NUXT_PUBLIC_CONVEX_URL
+  const runtimeConfig = useRuntimeConfig(event)
+  const convexUrl = readConfiguredRuntimeValue(
+    runtimeConfig.public?.convex?.url,
+    'NUXT_PUBLIC_CONVEX_URL',
+    'CONVEX_URL',
+  )
   if (!token || !convexUrl) {
     throw createError({ statusCode: 500, message: 'Convex client not configured' })
   }
