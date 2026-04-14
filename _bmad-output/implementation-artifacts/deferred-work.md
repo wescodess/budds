@@ -5,6 +5,12 @@
 - **T15 (page-level integration test) deferred.** Testing that `rail-new-void` click opens `CreateVoidDialog` in `app/pages/app/folders/[id].vue` requires a mounted page test with Convex mocks for `useConvexQuery(api.conversations.listRecentForUser)`, `api.flashcards.listByFolder`, `api.quizzes.listByFolder`, `api.documents.countsByFolder`, plus `useFolders` and router setup. No harness exists yet. Covered today by: (a) `CreateVoidDialog` unit tests (5), (b) `FolderShell` → `FolderShellRail` `new-void` event propagation is structural/grep-verifiable, (c) manual smoke. Land the integration test alongside a general Convex-mock harness for page tests.
 - **Flashcards/Quiz dialog dispatch is a tab-switch only.** No `flashcardSets` or `quizzes` row is created at dialog submit — voids of those types are produced by their respective generator UX (existing). If UX ever wants "empty void rows" for these types (e.g. so they appear in the rail counter immediately), add `createEmptySet` / `createEmptyQuiz` mutations and call from `onCreateVoid`.
 
+## Deferred from: g2-atlas-style-home-sidebar implementation (2026-04-13)
+
+- **Mobile sheet does not expand labels next to badges.** Spec AC said the mobile sheet should render folder names alongside badges. Current implementation reuses `HomeRail` unchanged inside the sheet — icon-only with sr-only labels + tooltips. Functionally accessible, visually identical to desktop. Add an `expanded?: boolean` prop to `HomeRail` and pass `true` from inside the mobile branch when G3/G4 land. No regression vs prior sidebar (which also didn't bother).
+- **Pre-existing 7 component test failures on `ui-revamp` branch** (`folder-view.test.ts`, `folder-documents.test.ts`, `folder-breadcrumb.test.ts`) — unrelated to G2; setup error in `app/pages/app/folders/[id].vue`. Likely fallout from a prior in-flight refactor on this branch. Investigate in a follow-up.
+- **Pre-existing `convex/users.test.ts > nuxt config redirects guest to /app` failure** on this branch — unrelated.
+
 ## Deferred from: round-2 review of spec-folder-metadata-and-create-modal (2026-04-13)
 
 - **`getFolderDescendantCounts` (`convex/folders.ts`) returns `documentCount: 0` across all descendants.** Pre-existing bug — never sums stored counts. Any caller that surfaces "X documents will be deleted" gets a falsely reassuring zero. Fix: `descendants.reduce((s,d)=>s+d.documentCount,0) + folder.documentCount`.
