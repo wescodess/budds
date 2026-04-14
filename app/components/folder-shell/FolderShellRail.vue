@@ -9,7 +9,6 @@ import {
   Settings,
   HelpCircle,
   LogOut,
-  ArrowLeft,
 } from 'lucide-vue-next'
 import { api } from '#convex/api'
 import type { Id, Doc } from '~~/convex/_generated/dataModel'
@@ -141,33 +140,39 @@ async function onLogout() {
   <aside
     data-testid="folder-rail"
     :class="[
-      'relative z-30 flex shrink-0 flex-col border-r border-border/60 bg-card/80 backdrop-blur-sm',
-      compact ? 'w-16' : 'w-60',
+      'relative z-30 flex shrink-0 flex-col overflow-hidden border-r border-border/60 bg-card/80 backdrop-blur-sm transition-[width] duration-[280ms] ease-[cubic-bezier(0.22,1,0.36,1)]',
     ]"
+    :style="{ width: compact ? '4rem' : '15rem' }"
   >
-    <div class="flex items-center gap-2 px-4 pt-5 pb-3">
+    <div
+      :class="[
+        'flex items-center px-4 pt-5 pb-3 transition-[gap] duration-200 ease-out',
+        compact ? 'justify-center gap-0' : 'gap-2',
+      ]"
+    >
       <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/15 text-primary">
         <BookOpen class="h-4 w-4" />
       </div>
-      <div v-if="!compact" class="min-w-0">
+      <div
+        :class="[
+          'min-w-0 overflow-hidden whitespace-nowrap transition-[max-width,opacity,transform] duration-200 ease-out',
+          compact ? 'max-w-0 translate-x-1 opacity-0' : 'max-w-40 translate-x-0 opacity-100',
+        ]"
+      >
         <p class="text-sm font-semibold leading-tight tracking-tight text-foreground">Budds</p>
         <p class="text-[10px] uppercase tracking-widest text-muted-foreground">Learning Compiler</p>
       </div>
     </div>
 
-    <NuxtLink
-      to="/"
-      :class="[
-        'mx-3 mb-3 flex items-center gap-2 rounded-md px-2 py-1.5 text-xs font-medium text-primary/80 transition hover:bg-primary/10 hover:text-primary',
-        compact && 'justify-center px-0',
-      ]"
-    >
-      <ArrowLeft class="h-3.5 w-3.5 shrink-0" />
-      <span v-if="!compact" class="truncate">{{ folder?.name ?? 'Back' }}</span>
-    </NuxtLink>
-
     <nav class="flex-1 overflow-y-auto px-2 pb-4">
-      <div v-if="!compact" class="px-2 pb-1 text-[10px] uppercase tracking-widest text-muted-foreground">Workspace</div>
+      <div
+        :class="[
+          'overflow-hidden px-2 text-[10px] uppercase tracking-widest text-muted-foreground transition-[max-height,opacity,padding] duration-200 ease-out',
+          compact ? 'max-h-0 pb-0 opacity-0' : 'max-h-6 pb-1 opacity-100',
+        ]"
+      >
+        Workspace
+      </div>
       <FolderShellRailItem
         label="Members"
         :compact="compact"
@@ -186,7 +191,14 @@ async function onLogout() {
       />
 
       <div class="my-3 h-px bg-border/60" />
-      <div v-if="!compact" class="px-2 pb-1 text-[10px] uppercase tracking-widest text-muted-foreground">Voids</div>
+      <div
+        :class="[
+          'overflow-hidden px-2 text-[10px] uppercase tracking-widest text-muted-foreground transition-[max-height,opacity,padding] duration-200 ease-out',
+          compact ? 'max-h-0 pb-0 opacity-0' : 'max-h-6 pb-1 opacity-100',
+        ]"
+      >
+        Voids
+      </div>
 
       <template v-if="hasVoids">
         <FolderShellRailItem
@@ -235,11 +247,21 @@ async function onLogout() {
         v-if="hasVoids"
         size="sm"
         data-testid="rail-new-void"
-        :class="['w-full gap-1.5 rounded-full', compact && 'px-0']"
+        :class="[
+          'w-full rounded-full transition-[gap,padding] duration-200 ease-out',
+          compact ? 'gap-0 px-0' : 'gap-1.5',
+        ]"
         @click="emit('new-void')"
       >
         <Plus class="h-4 w-4" />
-        <span v-if="!compact">New Void</span>
+        <span
+          :class="[
+            'overflow-hidden whitespace-nowrap transition-[max-width,opacity,transform] duration-200 ease-out',
+            compact ? 'max-w-0 translate-x-1 opacity-0' : 'max-w-24 translate-x-0 opacity-100',
+          ]"
+        >
+          New Void
+        </span>
       </UiButton>
       <div :class="[hasVoids && 'mt-3', 'flex items-center gap-1', compact ? 'flex-col' : 'justify-between px-1']">
         <button class="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="Settings">

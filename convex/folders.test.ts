@@ -1003,6 +1003,56 @@ describe('folders.listSubtree', () => {
   })
 })
 
+describe('folders.searchScopeItems', () => {
+  it('[P0] returns the full scope inventory for frontend-first filtering', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const rootId = await asUser.mutation(api.folders.createFolder, { name: 'Root' })
+    const subId = await asUser.mutation(api.folders.createSubfolder, {
+      parentId: rootId,
+      name: 'Week 1',
+    })
+
+    await t.run(async (ctx) => {
+      const fileId = await ctx.storage.store(new Blob(['pdf'], { type: 'application/pdf' }))
+      await ctx.db.insert('documents', {
+        userId: TEST_IDENTITY.tokenIdentifier,
+        folderId: rootId,
+        filename: 'overview.pdf',
+        fileId: fileId as any,
+        status: 'success',
+        fileSize: 100,
+      })
+      await ctx.db.insert('documents', {
+        userId: TEST_IDENTITY.tokenIdentifier,
+        folderId: subId,
+        filename: 'lecture-1.pdf',
+        fileId: fileId as any,
+        status: 'success',
+        fileSize: 200,
+      })
+      await ctx.db.insert('documents', {
+        userId: TEST_IDENTITY.tokenIdentifier,
+        folderId: subId,
+        filename: 'draft.pdf',
+        fileId: fileId as any,
+        status: 'processing',
+        fileSize: 50,
+      })
+    })
+
+    const result = await asUser.query(api.folders.searchScopeItems, {
+      rootFolderId: rootId,
+      search: '',
+    })
+
+    expect(result.folders).toHaveLength(1)
+    expect(result.folders[0]!.name).toBe('Week 1')
+    expect(result.folders[0]!.descendantFileCount).toBe(1)
+    expect(result.files.map(file => file.filename)).toEqual(['overview.pdf', 'lecture-1.pdf'])
+  })
+})
+
 describe('folders.resolveScope', () => {
   it('[P0] expands folders into descendant documents and deduplicates with fileIds', async () => {
     const t = convexTest(schema, modules)

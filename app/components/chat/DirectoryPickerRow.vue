@@ -12,6 +12,8 @@ const props = defineProps<{
   expandable?: boolean
   depth?: number
   loading?: boolean
+  sticky?: boolean
+  stickyTop?: number
 }>()
 
 const emit = defineEmits<{
@@ -19,13 +21,17 @@ const emit = defineEmits<{
   'toggle-expand': []
 }>()
 
-const indent = computed(() => ({ paddingLeft: `${(props.depth ?? 0) * 16 + 8}px` }))
+const rowStyle = computed(() => ({
+  paddingLeft: `${(props.depth ?? 0) * 16 + 8}px`,
+  ...(props.sticky ? { top: `${props.stickyTop ?? 0}px` } : {}),
+}))
 </script>
 
 <template>
   <div
     :data-testid="`picker-row-${props.kind}`"
-    :style="indent"
+    :style="rowStyle"
+    :class="props.sticky ? 'sticky z-20 bg-card/95 shadow-[0_1px_0_hsl(var(--border))] backdrop-blur supports-[backdrop-filter]:bg-card/85' : ''"
     class="group flex items-center gap-2 rounded-xl px-2 py-1.5 text-sm hover:bg-accent/10"
   >
     <button
@@ -57,7 +63,7 @@ const indent = computed(() => ({ paddingLeft: `${(props.depth ?? 0) * 16 + 8}px`
     <button
       type="button"
       class="flex min-w-0 flex-1 items-center gap-2 text-left"
-      @click="props.kind === 'folder' && props.expandable ? emit('toggle-expand') : emit('toggle')"
+      @click="emit('toggle')"
     >
       <span class="truncate text-foreground">{{ props.label }}</span>
       <span

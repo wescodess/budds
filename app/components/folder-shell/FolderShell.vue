@@ -22,6 +22,8 @@ const emit = defineEmits<{
 const drawerOpen = ref(false)
 const drawerSection = ref<'knowledge' | 'members'>('knowledge')
 const isDesktop = ref(true)
+const railCollapsed = ref(false)
+const RAIL_COLLAPSED_KEY = 'g4.folder-shell.rail-collapsed'
 
 onMounted(() => {
   try {
@@ -29,6 +31,8 @@ onMounted(() => {
     if (stored !== null) drawerOpen.value = stored === 'true'
     const sec = localStorage.getItem('g3.drawer.section')
     if (sec === 'knowledge' || sec === 'members') drawerSection.value = sec
+    const rail = localStorage.getItem(RAIL_COLLAPSED_KEY)
+    if (rail !== null) railCollapsed.value = rail === 'true'
   } catch { /* ignore */ }
   const mq = window.matchMedia('(min-width: 1024px)')
   isDesktop.value = mq.matches
@@ -39,6 +43,7 @@ onMounted(() => {
 
 watch(drawerOpen, (v) => { try { localStorage.setItem('g3.drawer.open', String(v)) } catch { /* ignore */ } })
 watch(drawerSection, (v) => { try { localStorage.setItem('g3.drawer.section', v) } catch { /* ignore */ } })
+watch(railCollapsed, (v) => { try { localStorage.setItem(RAIL_COLLAPSED_KEY, String(v)) } catch { /* ignore */ } })
 
 const keys = useMagicKeys()
 const toggleKey = computed(() => Boolean(keys['Meta+B']?.value || keys['Ctrl+B']?.value))
@@ -54,6 +59,14 @@ function openDrawerSection(section: 'knowledge' | 'members') {
   drawerSection.value = section
   drawerOpen.value = true
 }
+
+function toggleRail() {
+  if (!isDesktop.value) return
+  railCollapsed.value = !railCollapsed.value
+}
+
+const railCompact = computed(() => !isDesktop.value || railCollapsed.value)
+const railWidth = computed(() => railCompact.value ? 64 : 240)
 
 function onTabChange(tab: 'chat' | 'flashcards' | 'quiz' | 'documents') {
   emit('update:activeTab', tab)
@@ -106,7 +119,7 @@ provide('folderShellThemeStyle', themeStyle)
       :folder-id="folderId"
       :active-tab="activeTab"
       :active-conversation-id="activeConversationId"
-      :compact="!isDesktop"
+      :compact="railCompact"
       :drawer-section="drawerOpen ? drawerSection : null"
       @update:active-tab="onTabChange"
       @open-drawer="openDrawerSection"
@@ -115,17 +128,23 @@ provide('folderShellThemeStyle', themeStyle)
     />
 
     <div class="relative flex flex-1 flex-col overflow-hidden">
-      <slot name="top-bar" :drawer-open="drawerOpen" :toggle-drawer="toggleDrawer" />
+      <slot
+        name="top-bar"
+        :drawer-open="drawerOpen"
+        :toggle-drawer="toggleDrawer"
+        :rail-collapsed="railCollapsed"
+        :toggle-rail="toggleRail"
+      />
       <div class="flex-1 overflow-hidden">
         <slot />
       </div>
     </div>
 
     <FolderShellHierarchyDrawer
-      v-if="drawerOpen"
+      :open="drawerOpen"
       :folder-id="folderId"
       :folder="folder"
-      :rail-width="isDesktop ? 240 : 64"
+      :rail-width="railWidth"
       :full-width="!isDesktop"
       :section="drawerSection"
       @close="closeDrawer"

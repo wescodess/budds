@@ -202,6 +202,39 @@ async function collectDescendants(
   return all
 }
 
+async function getFolderDocumentStats(
+  ctx: QueryCtx | MutationCtx,
+  userId: string,
+  folderId: Id<'folders'>,
+) {
+  const directDocs = await ctx.db
+    .query('documents')
+    .withIndex('by_userId_and_folderId', (q) =>
+      q.eq('userId', userId).eq('folderId', folderId),
+    )
+    .collect()
+  const successfulDirectDocs = directDocs.filter(doc => doc.status === 'success')
+
+  const descendants = await collectDescendants(ctx, userId, folderId)
+  let descendantFileCount = successfulDirectDocs.length
+
+  for (const descendant of descendants) {
+    const docs = await ctx.db
+      .query('documents')
+      .withIndex('by_userId_and_folderId', (q) =>
+        q.eq('userId', userId).eq('folderId', descendant._id),
+      )
+      .collect()
+    descendantFileCount += docs.filter(doc => doc.status === 'success').length
+  }
+
+  return {
+    fileCount: successfulDirectDocs.length,
+    descendantFileCount,
+    hasChildren: descendants.length > 0,
+  }
+}
+
 export const renameFolder = mutation({
   args: { id: v.id('folders'), name: v.string() },
   handler: async (ctx, args) => {
@@ -330,31 +363,15 @@ export const listSubtree = query({
 
     const subfolders = []
     for (const child of children) {
-      const directDocs = await ctx.db
-        .query('documents')
-        .withIndex('by_userId_and_folderId', (q) =>
-          q.eq('userId', userId).eq('folderId', child._id),
-        )
-        .collect()
-      const descendants = await collectDescendants(ctx, userId, child._id)
-      let descendantFileCount = directDocs.length
-      for (const d of descendants) {
-        const docs = await ctx.db
-          .query('documents')
-          .withIndex('by_userId_and_folderId', (q) =>
-            q.eq('userId', userId).eq('folderId', d._id),
-          )
-          .collect()
-        descendantFileCount += docs.length
-      }
+      const stats = await getFolderDocumentStats(ctx, userId, child._id)
       subfolders.push({
         id: child._id,
         name: child.name,
         color: child.color,
         icon: child.icon,
-        fileCount: directDocs.length,
-        descendantFileCount,
-        hasChildren: descendants.length > 0,
+        fileCount: stats.fileCount,
+        descendantFileCount: stats.descendantFileCount,
+        hasChildren: stats.hasChildren,
       })
     }
 
@@ -374,6 +391,63 @@ export const listSubtree = query({
       }))
 
     return { subfolders, files }
+  },
+})
+
+export const searchScopeItems = query({
+  args: {
+    rootFolderId: v.id('folders'),
+    search: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) return { folders: [], files: [] }
+
+    const userId = identity.tokenIdentifier
+    const root = await ctx.db.get(args.rootFolderId)
+    if (!root || root.userId !== userId) return { folders: [], files: [] }
+
+    const descendants = await collectDescendants(ctx, userId, args.rootFolderId)
+    const descendantIds: Id<'folders'>[] = [args.rootFolderId, ...descendants.map(folder => folder._id)]
+
+    const folders = []
+    for (const folder of descendants) {
+      const stats = await getFolderDocumentStats(ctx, userId, folder._id)
+      folders.push({
+        id: folder._id,
+        name: folder.name,
+        color: folder.color,
+        icon: folder.icon,
+        fileCount: stats.fileCount,
+        descendantFileCount: stats.descendantFileCount,
+        hasChildren: stats.hasChildren,
+      })
+      if (folders.length >= 20) break
+    }
+
+    const files = []
+    for (const folderId of descendantIds) {
+      const docs = await ctx.db
+        .query('documents')
+        .withIndex('by_userId_and_folderId', (q) =>
+          q.eq('userId', userId).eq('folderId', folderId),
+        )
+        .take(200)
+
+      for (const doc of docs) {
+        if (doc.status !== 'success') continue
+        files.push({
+          id: doc._id,
+          filename: doc.filename,
+          fileSize: doc.fileSize,
+        })
+        if (files.length >= 30) break
+      }
+
+      if (files.length >= 30) break
+    }
+
+    return { folders, files }
   },
 })
 

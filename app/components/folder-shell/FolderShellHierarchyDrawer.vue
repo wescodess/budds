@@ -7,12 +7,16 @@ import type { Doc, Id } from '~~/convex/_generated/dataModel'
 defineOptions({ name: 'FolderShellHierarchyDrawer' })
 
 const props = withDefaults(defineProps<{
+  open?: boolean
   folderId: Id<'folders'>
   folder: Doc<'folders'> | null
   railWidth: number
   fullWidth?: boolean
   section?: 'knowledge' | 'members'
-}>(), { section: 'knowledge' })
+}>(), {
+  open: false,
+  section: 'knowledge',
+})
 
 const emit = defineEmits<{ close: [] }>()
 
@@ -53,6 +57,20 @@ const totalCountByFolder = computed(() => {
 
 const panelRef = ref<HTMLElement | null>(null)
 onKeyStroke('Escape', () => emit('close'))
+
+const drawerShellStyle = computed<Record<string, string>>(() => ({
+  '--drawer-target-width': props.fullWidth ? '100vw' : 'min(55vw, 720px)',
+  left: props.fullWidth ? '0px' : `${props.railWidth}px`,
+  width: props.open ? 'var(--drawer-target-width)' : '0px',
+}))
+
+const drawerOverlayStyle = computed<Record<string, string>>(() => ({
+  left: props.fullWidth ? '0px' : `${props.railWidth}px`,
+}))
+
+const drawerPanelStyle = computed<Record<string, string>>(() => ({
+  width: 'var(--drawer-target-width)',
+}))
 
 const search = ref('')
 const descendantFolders = computed(() => {
@@ -223,38 +241,35 @@ async function onFiles(e: Event) {
 
 <template>
   <div
-    class="pointer-events-none fixed inset-0 z-40"
+    :class="[
+      'pointer-events-none fixed inset-0',
+      fullWidth ? 'z-40' : 'z-20',
+    ]"
     data-testid="folder-drawer-root"
+    :aria-hidden="props.open ? 'false' : 'true'"
   >
-    <Transition
-      enter-active-class="transition-opacity duration-[220ms] ease-out"
-      leave-active-class="transition-opacity duration-[220ms] ease-out"
-      enter-from-class="opacity-0"
-      leave-to-class="opacity-0"
-      appear
+    <div
+      :class="[
+        'absolute inset-y-0 right-0 bg-black/45 backdrop-blur-[3px] transition-opacity duration-[260ms] ease-[cubic-bezier(0.22,1,0.36,1)]',
+        props.open ? 'pointer-events-auto opacity-100' : 'pointer-events-none opacity-0',
+      ]"
+      :style="drawerOverlayStyle"
+      @click="emit('close')"
+    />
+    <div
+      :class="[
+        'absolute top-0 h-full overflow-hidden transition-[left,width] duration-[360ms] ease-[cubic-bezier(0.22,1,0.36,1)]',
+        props.open ? 'pointer-events-auto' : 'pointer-events-none',
+      ]"
+      :style="drawerShellStyle"
     >
-      <div
-        class="pointer-events-auto absolute inset-0 bg-black/45 backdrop-blur-[3px]"
-        :style="!fullWidth ? { left: railWidth + 'px' } : undefined"
-        @click="emit('close')"
-      />
-    </Transition>
-    <Transition
-      enter-active-class="transition-transform duration-[240ms] ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform"
-      leave-active-class="transition-transform duration-[240ms] ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform"
-      enter-from-class="-translate-x-6"
-      leave-to-class="-translate-x-6"
-      appear
-    >
-    <aside
-      ref="panelRef"
-      data-testid="folder-drawer"
-      class="pointer-events-auto absolute top-0 flex h-full flex-col border-r border-border/60 bg-card shadow-2xl"
-      :style="fullWidth
-        ? { left: '0px', width: '100vw' }
-        : { left: railWidth + 'px', width: 'min(55vw, 720px)' }"
-    >
-      <span class="absolute left-0 top-0 h-2/5 w-0.5 bg-primary/80" />
+      <aside
+        ref="panelRef"
+        data-testid="folder-drawer"
+        class="absolute inset-y-0 left-0 flex h-full flex-col border-r border-border/60 bg-card shadow-2xl"
+        :style="drawerPanelStyle"
+      >
+        <span class="absolute left-0 top-0 h-2/5 w-0.5 bg-primary/80" />
 
       <header class="flex items-center justify-between gap-3 border-b border-border/60 px-5 py-4">
         <div class="min-w-0">
@@ -397,8 +412,8 @@ async function onFiles(e: Event) {
         <FolderShellMembersPanel :folder="folder" />
       </template>
 
-    </aside>
-    </Transition>
+      </aside>
+    </div>
 
     <FoldersFolderFormModal
       v-model:open="showFolderModal"
