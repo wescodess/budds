@@ -10,7 +10,8 @@
     "flash-cards-void": "85521d3e8e5d4374afb271aac41ccb2a",
     "quiz-void": "9702ac3d2d674f139d351dde8782e776",
     "dashboard": "99ce0074f0d941f8a00c9c4c28668db0",
-    "dashboard-atlas": "389a652f8e07495a826028af9f01b567"
+    "dashboard-atlas": "389a652f8e07495a826028af9f01b567",
+    "create-void-modal": "184ea1190d144db7bc079fab439f4958"
   },
   "designSystemId": "assets/11175050301981891392",
   "foundationComplete": true,

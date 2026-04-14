@@ -1,18 +1,25 @@
 version: 1
 mode: running
-current_phase: spec
-spec_slug: g3-folder-three-pane-revamp
+current_phase: design
+spec_slug: g4-chats-void-enhancements
 input_type: goal
 goal_or_spec: |
-  G3: Folder page three-pane revamp — fixed (non-resizable) left rail with
-  Members, Knowledge, and voids list (Chats, Flashcards, Quiz); right-edge
-  toggle opens a drawer (~55% width overlay) containing the folder hierarchy;
-  main pane shows the active folder's files with per-file status chips and a
-  hamburger menu for file options (rename/move/delete/etc.). Must closely
-  resemble docs/screenshots/Screenshot 2026-04-13 at 10.25.19 PM.png
+  G4: Chats void enhancements —
+  (1) Render assistant responses via a markdown formatter (research best fit
+  for this Nuxt project; ship as a reusable skill).
+  (2) Show a 'thinking' indicator before the response starts streaming.
+  (3) Inline citations in the bubble with a few reference chips below;
+  'View all references' opens the helper section listing every citation+
+  reference; hovering an inline citation shows a snippet + useful metadata.
+  (4) Directory component — expandable folder tree (click a folder to reveal
+  its subfolders and files with counts) that lets the user select any
+  combination of folders / subfolders / individual files. Selection is passed
+  to chat as reference scope: folder → all its files; file → just that file.
+  Cover edge cases: empty folders, partial selection, mixed parent+child,
+  large trees, loading, permission/access, deselect propagation.
 is_ui: true
 review_rounds: 0
-branch: null
+branch: ui-revamp
 pr_url: null
 paths:
   project_root: /Users/wesleyukadike/Desktop/budds
@@ -22,32 +29,24 @@ paths:
   deferred_work: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts/deferred-work.md
   design_cache: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts/design-screens
 design:
-  approved: true
-  stitch_project_id: "2926819289448574055"
-  reference_screenshot: docs/screenshots/Screenshot 2026-04-13 at 10.25.19 PM.png
-  screens:
-    - id: 898d1fe0f46e407ca96b88746eb8684d
-      label: drawer-closed-files-list
-      image: screen_898d1fe0f46e407ca96b88746eb8684d.png
-    - id: da40666b5c4c44ae959b614a8fa60cea
-      label: drawer-open-folders-and-files
-      image: screen_da40666b5c4c44ae959b614a8fa60cea.png
-      notes: "drawer anchored to left rail's right edge; folders tree on top, active folder's files below w/ status pills + open kebab menu; supersedes b5c6e55083ec4fbeac0d0de0eec65fd7"
+  approved: false
+  stitch_project_id: null
+  reference_screenshot: null
+  screens: []
 escalation:
   pending: null
-  log:
-    - question: "Approve proposed G3 folder-page screens"
-      answer: approve
-      recommended_default: request_revision
-      followed_default: false
-      asked_at: 2026-04-13
-      answered_at: 2026-04-13
-      raised_from_state: design
+  log: []
 decisions_log: []
 run_log:
-  - ts: 2026-04-13
+  - ts: 2026-04-14
     event: start
-    detail: "intake → design (is_ui=true)"
+    detail: "G4 kicked off; is_ui=true → entering design"
+  - ts: 2026-04-14
+    event: intake_complete
+    detail: "slug=g4-chats-void-enhancements, input_type=goal, is_ui=true (chat bubble states + directory picker are clearly UI surfaces)"
+  - ts: 2026-04-14
+    event: phase_transition
+    detail: "intake → design"
 config:
   notifications:
     telegram:

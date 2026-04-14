@@ -3,6 +3,7 @@ import { FolderPlus, FileText, MessageSquare, Plus, ClipboardList, Layers, Panel
 import { useMediaQuery } from '@vueuse/core'
 import { api } from '#convex/api'
 import type { Id } from '~~/convex/_generated/dataModel'
+import type { VoidType } from '~/components/voids/CreateVoidDialog.vue'
 
 definePageMeta({ layout: 'folder' })
 
@@ -34,6 +35,56 @@ const {
 const isDesktop = useMediaQuery('(min-width: 1024px)')
 
 const showSubfolderModal = ref(false)
+const newVoidOpen = ref(false)
+const creatingVoid = ref(false)
+
+const createConversationMutation = import.meta.client
+  ? useConvexMutation(api.conversations.createConversation)
+  : {
+      mutate: async (_args: { folderId: Id<'folders'>; title: string }) =>
+        '' as unknown as Id<'conversations'>,
+    }
+
+function unwrapConvexError(err: any): string {
+  if (err?.data?.message && typeof err.data.message === 'string') return err.data.message
+  const raw = typeof err?.message === 'string' ? err.message : ''
+  return raw.replace(/^\[CONVEX [^\]]+\]\s*/, '').replace(/^ConvexError:\s*/, '').trim()
+}
+
+async function onCreateVoid(type: VoidType) {
+  if (creatingVoid.value) return
+  creatingVoid.value = true
+  try {
+    if (type === 'chat') {
+      const newId = (await createConversationMutation.mutate({
+        folderId: folderId.value,
+        title: 'New chat',
+      })) as Id<'conversations'>
+      activeTab.value = 'chat'
+      void router.replace({ query: { ...(route.query ?? {}), tab: 'chat', conversationId: newId } })
+    } else {
+      activeTab.value = type
+      void router.replace({ query: { ...(route.query ?? {}), tab: type } })
+    }
+    newVoidOpen.value = false
+  } catch (e: any) {
+    const { toast } = await import('vue-sonner')
+    toast.error(unwrapConvexError(e) || 'Failed to create void')
+  } finally {
+    creatingVoid.value = false
+  }
+}
+
+function onSelectVoid({ type, id }: { type: 'chat' | 'flashcards' | 'quiz'; id: string }) {
+  activeTab.value = type
+  const base = { ...(route.query ?? {}) }
+  if (type === 'chat') {
+    void router.replace({ query: { ...base, tab: 'chat', conversationId: id } })
+  } else {
+    const { conversationId: _dropped, ...rest } = base
+    void router.replace({ query: { ...rest, tab: type } })
+  }
+}
 
 const deleteTarget = ref<{ id: string; filename: string } | null>(null)
 const pendingDeleteTarget = ref<{ id: string; filename: string } | null>(null)
@@ -287,8 +338,10 @@ async function handleUpload(files: File[]) {
     :folder-id="folderId"
     :folder="folder ?? null"
     :active-tab="activeTab"
+    :active-conversation-id="conversationIdRef ? (conversationIdRef as unknown as string) : null"
     @update:active-tab="onTabChange"
-    @new-void="showSubfolderModal = true"
+    @new-void="newVoidOpen = true"
+    @select-void="onSelectVoid"
   >
     <template #top-bar="{ drawerOpen, toggleDrawer }">
       <div class="flex items-center justify-between gap-3 border-b border-border/60 px-6 py-4">
@@ -342,6 +395,13 @@ async function handleUpload(files: File[]) {
       v-model:open="showSubfolderModal"
       mode="create"
       :parent-id="folderId"
+    />
+
+    <VoidsCreateVoidDialog
+      v-model:open="newVoidOpen"
+      :folder-name="folder?.name ?? ''"
+      :submitting="creatingVoid"
+      @create="onCreateVoid"
     />
 
     <UiTabs v-model="activeTab" class="flex h-full flex-1 flex-col">

@@ -1,5 +1,10 @@
 # Deferred Work
 
+## Deferred from: spec-g3 amendment (2026-04-14) — CreateVoidDialog wiring
+
+- **T15 (page-level integration test) deferred.** Testing that `rail-new-void` click opens `CreateVoidDialog` in `app/pages/app/folders/[id].vue` requires a mounted page test with Convex mocks for `useConvexQuery(api.conversations.listRecentForUser)`, `api.flashcards.listByFolder`, `api.quizzes.listByFolder`, `api.documents.countsByFolder`, plus `useFolders` and router setup. No harness exists yet. Covered today by: (a) `CreateVoidDialog` unit tests (5), (b) `FolderShell` → `FolderShellRail` `new-void` event propagation is structural/grep-verifiable, (c) manual smoke. Land the integration test alongside a general Convex-mock harness for page tests.
+- **Flashcards/Quiz dialog dispatch is a tab-switch only.** No `flashcardSets` or `quizzes` row is created at dialog submit — voids of those types are produced by their respective generator UX (existing). If UX ever wants "empty void rows" for these types (e.g. so they appear in the rail counter immediately), add `createEmptySet` / `createEmptyQuiz` mutations and call from `onCreateVoid`.
+
 ## Deferred from: round-2 review of spec-folder-metadata-and-create-modal (2026-04-13)
 
 - **`getFolderDescendantCounts` (`convex/folders.ts`) returns `documentCount: 0` across all descendants.** Pre-existing bug — never sums stored counts. Any caller that surfaces "X documents will be deleted" gets a falsely reassuring zero. Fix: `descendants.reduce((s,d)=>s+d.documentCount,0) + folder.documentCount`.

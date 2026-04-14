@@ -53,6 +53,7 @@ export function useChat(
 ) {
   const { documents } = useDocuments(folderId)
   const prefersReducedMotion = useMediaQuery('(prefers-reduced-motion: reduce)')
+  const convexClient = import.meta.client ? useConvex() : null
 
   const messages = ref<UIChatMessage[]>([])
   const loading = ref(false)
@@ -322,9 +323,8 @@ export function useChat(
   }
 
   async function loadConversation(conversationIdToLoad: Id<'conversations'>) {
-    if (!import.meta.client) return
-    const client = useConvex()
-    const rows = await client.query(api.messages.listByConversation, {
+    if (!import.meta.client || !convexClient) return
+    const rows = await convexClient.query(api.messages.listByConversation, {
       conversationId: conversationIdToLoad,
     }) as Array<{
       role: 'user' | 'assistant'

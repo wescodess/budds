@@ -10,11 +10,13 @@ const props = defineProps<{
   folderId: Id<'folders'>
   folder: Doc<'folders'> | null
   activeTab: 'chat' | 'flashcards' | 'quiz' | 'documents'
+  activeConversationId?: string | null
 }>()
 
 const emit = defineEmits<{
   'update:activeTab': [value: 'chat' | 'flashcards' | 'quiz' | 'documents']
   'new-void': []
+  'select-void': [value: { type: 'chat' | 'flashcards' | 'quiz'; id: string }]
 }>()
 
 const drawerOpen = ref(false)
@@ -101,11 +103,13 @@ const themeStyle = computed(() => {
       :folder="folder"
       :folder-id="folderId"
       :active-tab="activeTab"
+      :active-conversation-id="activeConversationId"
       :compact="!isDesktop"
       :drawer-section="drawerOpen ? drawerSection : null"
       @update:active-tab="onTabChange"
       @open-drawer="openDrawerSection"
       @new-void="emit('new-void')"
+      @select-void="(payload) => emit('select-void', payload)"
     />
 
     <div class="relative flex flex-1 flex-col overflow-hidden">
