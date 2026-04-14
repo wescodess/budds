@@ -1,9 +1,12 @@
 <script setup lang="ts">
-import { FolderPlus, FileText, MessageSquare, Plus, ClipboardList, Layers, ArrowLeftRight, BookOpen } from 'lucide-vue-next'
+import { FileText, MessageSquare, ClipboardList, Layers, PanelRight, ArrowLeftRight } from 'lucide-vue-next'
 import { useMediaQuery } from '@vueuse/core'
-import { useFolderLayout } from '~/composables/useFolderLayout'
 import { api } from '#convex/api'
 import type { Id } from '~~/convex/_generated/dataModel'
+import type { VoidType } from '~/components/voids/CreateVoidDialog.vue'
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
+
+definePageMeta({ layout: 'folder' })
 
 const route = useRoute()
 const router = useRouter()
@@ -16,11 +19,12 @@ const conversationIdRef = computed<Id<'conversations'> | null>(() => {
 
 const { folder } = useFolderDetail(folderId)
 const { allFolders } = useFolders()
-const { documents, uploading, uploadFiles, deleteDocument, moveDocument } = useDocuments(folderId)
+const { documents, attachmentStatus, uploading, importingLink, uploadFiles, importDocumentFromUrl, deleteDocument, moveDocument } = useDocuments(folderId)
 const {
   messages,
   loading,
   streaming,
+  thinking,
   error,
   hasIndexedDocuments,
   selectedModel,
@@ -30,14 +34,65 @@ const {
   startNewConversation,
 } = useChat(folderId, conversationIdRef)
 
+const referenceScope = useReferenceScope()
+const seededFolder = computed(() =>
+  folder.value
+  ?? allFolders.value?.find(candidate => candidate._id === folderId.value)
+  ?? null,
+)
+
 const isDesktop = useMediaQuery('(min-width: 1024px)')
-const isTabletOrAbove = useMediaQuery('(min-width: 768px)')
 
-const layout = useFolderLayout(computed(() => folderId.value as string))
+const newVoidOpen = ref(false)
+const creatingVoid = ref(false)
 
-const showSubfolderModal = ref(false)
-const showEditFolderModal = ref(false)
-const showFolderDeleteDialog = ref(false)
+const createConversationMutation = import.meta.client
+  ? useConvexMutation(api.conversations.createConversation)
+  : {
+      mutate: async (_args: { folderId: Id<'folders'>; title: string }) =>
+        '' as unknown as Id<'conversations'>,
+    }
+
+function unwrapConvexError(err: any): string {
+  if (err?.data?.message && typeof err.data.message === 'string') return err.data.message
+  const raw = typeof err?.message === 'string' ? err.message : ''
+  return raw.replace(/^\[CONVEX [^\]]+\]\s*/, '').replace(/^ConvexError:\s*/, '').trim()
+}
+
+async function onCreateVoid(type: VoidType) {
+  if (creatingVoid.value) return
+  creatingVoid.value = true
+  try {
+    if (type === 'chat') {
+      const newId = (await createConversationMutation.mutate({
+        folderId: folderId.value,
+        title: 'New chat',
+      })) as Id<'conversations'>
+      activeTab.value = 'chat'
+      void router.replace({ query: { ...(route.query ?? {}), tab: 'chat', conversationId: newId } })
+    } else {
+      activeTab.value = type
+      void router.replace({ query: { ...(route.query ?? {}), tab: type } })
+    }
+    newVoidOpen.value = false
+  } catch (e: any) {
+    const { toast } = await import('vue-sonner')
+    toast.error(unwrapConvexError(e) || 'Failed to create void')
+  } finally {
+    creatingVoid.value = false
+  }
+}
+
+function onSelectVoid({ type, id }: { type: 'chat' | 'flashcards' | 'quiz'; id: string }) {
+  activeTab.value = type
+  const base = { ...(route.query ?? {}) }
+  if (type === 'chat') {
+    void router.replace({ query: { ...base, tab: 'chat', conversationId: id } })
+  } else {
+    const { conversationId: _dropped, ...rest } = base
+    void router.replace({ query: { ...rest, tab: type } })
+  }
+}
 
 const deleteTarget = ref<{ id: string; filename: string } | null>(null)
 const pendingDeleteTarget = ref<{ id: string; filename: string } | null>(null)
@@ -61,12 +116,28 @@ const activeTab = ref<TabValue>(initialTab.value)
 watch(() => route.query?.tab, () => {
   activeTab.value = initialTab.value
 })
+
+function onTabChange(next: TabValue) {
+  activeTab.value = next
+  void router.replace({ query: { ...(route.query ?? {}), tab: next } })
+}
 const sourcePanelOpen = ref(false)
+const sourcePanelSide = ref<'left' | 'right'>('right')
 const activeCitationIndex = ref<number | null>(null)
 const activeMessageIndex = ref<number | null>(null)
 const expandedInlineCitation = ref<{ messageIndex: number; citationIndex: number } | null>(null)
 const chatInputRef = ref<{ focus: () => void } | null>(null)
 const chatScrollRef = ref<HTMLElement | null>(null)
+const SOURCE_PANEL_SIDE_KEY = 'g4.chat.source-panel.side'
+const PANEL_FLIP_DRAG_THRESHOLD = 4
+
+const isSourcePanelLeading = computed(() => sourcePanelSide.value === 'left')
+const flipPanelAriaLabel = computed(() =>
+  isSourcePanelLeading.value ? 'Move sources panel to the right' : 'Move sources panel to the left',
+)
+
+const panelFlipPointerStart = ref<{ x: number; y: number } | null>(null)
+const suppressNextPanelFlipClick = ref(false)
 
 const allSources = computed(() => {
   if (activeMessageIndex.value === null) return []
@@ -79,12 +150,6 @@ function handleCitationClick(messageIndex: number, citationIndex: number) {
     activeMessageIndex.value = messageIndex
     activeCitationIndex.value = citationIndex - 1
     sourcePanelOpen.value = true
-    layout.openHelper()
-  } else if (isTabletOrAbove.value) {
-    activeMessageIndex.value = messageIndex
-    activeCitationIndex.value = citationIndex - 1
-    sourcePanelOpen.value = true
-    layout.openHelper()
   } else {
     const same = expandedInlineCitation.value?.messageIndex === messageIndex
       && expandedInlineCitation.value?.citationIndex === citationIndex
@@ -95,6 +160,39 @@ function handleCitationClick(messageIndex: number, citationIndex: number) {
 function getSourceForInlineCitation(messageIndex: number, citationIndex: number) {
   const msg = messages.value[messageIndex]
   return msg?.sources?.[citationIndex - 1]
+}
+
+function toggleSourcePanelSide() {
+  sourcePanelSide.value = sourcePanelSide.value === 'left' ? 'right' : 'left'
+}
+
+function handlePanelFlipPointerDown(event: PointerEvent) {
+  panelFlipPointerStart.value = { x: event.clientX, y: event.clientY }
+  suppressNextPanelFlipClick.value = false
+}
+
+function handlePanelFlipPointerMove(event: PointerEvent) {
+  const start = panelFlipPointerStart.value
+  if (!start) return
+
+  if (
+    Math.abs(event.clientX - start.x) > PANEL_FLIP_DRAG_THRESHOLD
+    || Math.abs(event.clientY - start.y) > PANEL_FLIP_DRAG_THRESHOLD
+  ) {
+    suppressNextPanelFlipClick.value = true
+  }
+}
+
+function handlePanelFlipPointerEnd() {
+  panelFlipPointerStart.value = null
+}
+
+function handlePanelFlipClick() {
+  if (suppressNextPanelFlipClick.value) {
+    suppressNextPanelFlipClick.value = false
+    return
+  }
+  toggleSourcePanelSide()
 }
 
 watch(() => messages.value.length, () => {
@@ -181,8 +279,17 @@ watch(conversationIdRef, async (next, prev) => {
 })
 
 onMounted(() => {
+  try {
+    const stored = localStorage.getItem(SOURCE_PANEL_SIDE_KEY)
+    if (stored === 'left' || stored === 'right') sourcePanelSide.value = stored
+  } catch {
+    // ignore storage failures
+  }
   document.addEventListener('keydown', handleSlashShortcut)
   document.addEventListener('keydown', handleNewChatShortcut)
+  document.addEventListener('pointermove', handlePanelFlipPointerMove)
+  document.addEventListener('pointerup', handlePanelFlipPointerEnd)
+  document.addEventListener('pointercancel', handlePanelFlipPointerEnd)
   void hydrateFromRoute()
   const promptParam = route.query?.prompt
   if (typeof promptParam === 'string' && promptParam.trim()) {
@@ -195,12 +302,31 @@ onMounted(() => {
 onUnmounted(() => {
   document.removeEventListener('keydown', handleSlashShortcut)
   document.removeEventListener('keydown', handleNewChatShortcut)
+  document.removeEventListener('pointermove', handlePanelFlipPointerMove)
+  document.removeEventListener('pointerup', handlePanelFlipPointerEnd)
+  document.removeEventListener('pointercancel', handlePanelFlipPointerEnd)
+})
+
+watch(sourcePanelSide, (value) => {
+  try {
+    localStorage.setItem(SOURCE_PANEL_SIDE_KEY, value)
+  } catch {
+    // ignore storage failures
+  }
 })
 
 async function handleSendMessage(query: string) {
   expandedInlineCitation.value = null
   activeMessageIndex.value = null
-  await sendMessage(query)
+  await sendMessage(query, referenceScope.toPayload())
+}
+
+function handleViewAllReferences(messageIndex: number) {
+  activeMessageIndex.value = messageIndex
+  activeCitationIndex.value = null
+  if (isDesktop.value) {
+    sourcePanelOpen.value = true
+  }
 }
 
 async function handleDeleteRequest(docId: string) {
@@ -259,221 +385,283 @@ async function confirmMove(destFolderId: Id<'folders'>) {
   }
 }
 
-const folderDepth = computed(() => {
-  if (!allFolders?.value || !folderId.value) return 1
-  let depth = 1
-  let currentId = folderId.value as string
-  const folderMap = new Map(allFolders.value.map((f: any) => [f._id, f]))
-  const seen = new Set<string>()
-  let current = folderMap.get(currentId)
-  while (current?.parentId) {
-    if (seen.has(current.parentId)) break
-    seen.add(current.parentId)
-    depth++
-    current = folderMap.get(current.parentId)
-  }
-  return depth
-})
-
-function closeHelper() {
-  sourcePanelOpen.value = false
-  layout.closeHelper()
-}
-
-function toggleHelper() {
-  if (layout.helperOpen.value) closeHelper()
-  else { sourcePanelOpen.value = true; layout.openHelper() }
-}
-
-const subfolders = computed(() => {
-  if (!allFolders?.value || !folder.value) return []
-  return allFolders.value.filter((f: any) => f.parentId === folder.value?._id)
-})
-
-const folderAncestors = computed(() => {
-  if (!allFolders?.value || !folder.value) return [] as Array<{ _id: string; name: string }>
-  const map = new Map(allFolders.value.map((f: any) => [f._id, f]))
-  const chain: Array<{ _id: string; name: string }> = []
-  let current = folder.value as any
-  const seen = new Set<string>()
-  while (current?.parentId) {
-    if (seen.has(current.parentId)) break
-    seen.add(current.parentId)
-    const parent = map.get(current.parentId)
-    if (!parent) break
-    chain.unshift({ _id: parent._id, name: parent.name })
-    current = parent
-  }
-  return chain
-})
-
-const { deleteFolder } = useFolders()
-
-async function confirmDeleteFolder() {
-  showFolderDeleteDialog.value = false
-  if (!folder.value) return
-  try {
-    await deleteFolder(folder.value._id as Id<'folders'>)
-    const { toast } = await import('vue-sonner')
-    toast.success('Folder deleted')
-    void router.replace('/app')
-  } catch (e: any) {
-    const { toast } = await import('vue-sonner')
-    toast.error(e.message || 'Failed to delete folder')
-  }
-}
-
 async function handleUpload(files: File[]) {
   try {
     await uploadFiles(files, folderId.value)
+    const { toast } = await import('vue-sonner')
+    toast.success(files.length === 1 ? 'Document uploaded' : `${files.length} documents uploaded`)
   } catch (e: any) {
     const { toast } = await import('vue-sonner')
     toast.error(e.message || 'Upload failed')
   }
 }
+
+async function handleImportLink(url: string) {
+  try {
+    const result = await importDocumentFromUrl(url, folderId.value)
+    const { toast } = await import('vue-sonner')
+    toast.success(`Imported ${result?.filename ?? 'document'}`)
+  } catch (e: any) {
+    const { toast } = await import('vue-sonner')
+    toast.error(e.message || 'Import failed')
+  }
+}
 </script>
 
 <template>
-  <div data-testid="folder-page" class="flex h-full flex-1 flex-col">
-    <FoldersFolderFormModal
-      v-model:open="showSubfolderModal"
-      mode="create"
-      :parent-id="folderId"
-    />
-    <FoldersFolderFormModal
-      v-if="folder"
-      v-model:open="showEditFolderModal"
-      mode="edit"
-      :folder="folder"
-    />
-    <UiAlertDialog v-model:open="showFolderDeleteDialog">
-      <UiAlertDialogContent>
-        <UiAlertDialogHeader>
-          <UiAlertDialogTitle>Delete folder</UiAlertDialogTitle>
-          <UiAlertDialogDescription>
-            Delete {{ folder?.name }}? Subfolders and documents inside will be removed.
-          </UiAlertDialogDescription>
-        </UiAlertDialogHeader>
-        <UiAlertDialogFooter>
-          <UiAlertDialogCancel>Cancel</UiAlertDialogCancel>
-          <UiButton variant="destructive" @click="confirmDeleteFolder">Delete</UiButton>
-        </UiAlertDialogFooter>
-      </UiAlertDialogContent>
-    </UiAlertDialog>
-
-    <UiResizablePanelGroup
-      v-if="isDesktop"
-      direction="horizontal"
-      data-testid="folder-three-pane"
-      :data-flipped="layout.flipped.value"
-      :data-helper-open="layout.helperOpen.value"
-      class="flex-1"
-    >
-      <UiResizablePanel
-        :default-size="layout.paneA.value"
-        :min-size="14"
-        data-testid="folder-pane-a"
-        @resize="(s) => (layout.paneA.value = s)"
-      >
-        <FoldersFolderContextPane
-          :folder="folder"
-          :ancestors="folderAncestors"
-          :can-create-subfolder="folderDepth < 3"
-          @edit="showEditFolderModal = true"
-          @delete="showFolderDeleteDialog = true"
-          @new-subfolder="showSubfolderModal = true"
-        >
-          <template #knowledge>
-            <FoldersFolderKnowledgeTree
-              :subfolders="subfolders"
-              :documents="documents ?? []"
-              :can-create-subfolder="folderDepth < 3"
-              @open-subfolder="(id) => router.push(`/app/folders/${id}`)"
-              @new-subfolder="showSubfolderModal = true"
-              @upload-files="(files) => uploadFiles(files, folderId)"
-              @delete-document="(id) => handleDeleteRequest(id)"
-              @move-document="(id) => { moveTarget = { id } }"
-            />
-          </template>
-        </FoldersFolderContextPane>
-      </UiResizablePanel>
-      <UiResizableHandle with-handle />
-
-      <UiResizablePanel
-        :default-size="layout.flipped.value && layout.helperOpen.value ? layout.paneC.value : layout.paneB.value"
-        :min-size="20"
-        data-testid="folder-pane-mid"
-        @resize="(s) => { if (layout.flipped.value && layout.helperOpen.value) layout.paneC.value = s; else layout.paneB.value = s }"
-      >
-        <template v-if="layout.flipped.value && layout.helperOpen.value">
-          <FoldersFolderHelperPane
-            :sources="allSources"
-            :active-citation-index="activeCitationIndex"
-            data-testid="folder-helper-pane-mid"
-            @close="closeHelper"
-          />
-        </template>
-        <template v-else>
-          <div data-testid="folder-pane-primary" class="flex h-full flex-col p-4">
-            <UiTabs v-model="activeTab" class="flex flex-1 flex-col">
-      <div class="flex items-center justify-between">
-        <UiTabsList>
-          <UiTabsTrigger value="chat">
-            <MessageSquare class="mr-1.5 h-4 w-4" />
-            Chat
-          </UiTabsTrigger>
-          <!-- UX-DR1 hybrid tab order: Chat, Flash Cards, Quiz, Documents (full order realized in V1.2 via Story 7.1). -->
-          <UiTabsTrigger value="flashcards" data-testid="flashcards-tab-trigger">
-            <Layers class="mr-1.5 h-4 w-4" />
-            Flash Cards
-          </UiTabsTrigger>
-          <UiTabsTrigger value="quiz" data-testid="quiz-tab-trigger">
-            <ClipboardList class="mr-1.5 h-4 w-4" />
-            Quiz
-          </UiTabsTrigger>
-          <UiTabsTrigger value="documents">
-            <FileText class="mr-1.5 h-4 w-4" />
-            Documents
-          </UiTabsTrigger>
-        </UiTabsList>
-        <div class="flex items-center gap-2">
-          <UiButton
-            v-if="activeTab === 'chat'"
-            variant="outline"
-            size="sm"
-            data-testid="folder-sources-button"
-            :aria-pressed="layout.helperOpen.value"
-            @click="toggleHelper"
+  <FolderShell
+    :folder-id="folderId"
+    :folder="seededFolder"
+    :active-tab="activeTab"
+    :active-conversation-id="conversationIdRef ? (conversationIdRef as unknown as string) : null"
+    @update:active-tab="onTabChange"
+    @new-void="newVoidOpen = true"
+    @select-void="onSelectVoid"
+  >
+    <template #top-bar="{ railCollapsed, toggleRail, drawerOpen, toggleDrawer }">
+      <div class="sticky top-0 z-20 flex items-center justify-between gap-3 border-b border-border/60 bg-background/90 px-6 py-4 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+        <div class="flex min-w-0 items-center gap-3">
+          <button
+            type="button"
+            data-testid="drawer-toggle"
+            :class="[
+              'flex h-9 w-9 items-center justify-center rounded-lg border border-border/60 bg-card text-primary transition hover:bg-primary/10',
+              (!isDesktop && drawerOpen) || (isDesktop && !railCollapsed) ? 'bg-primary/10' : '',
+            ]"
+            :aria-label="isDesktop ? (railCollapsed ? 'Expand sidebar' : 'Collapse sidebar') : (drawerOpen ? 'Close folder tree' : 'Open folder tree')"
+            @click="isDesktop ? toggleRail() : toggleDrawer()"
           >
-            <BookOpen class="mr-1.5 h-4 w-4" />
-            Sources
-          </UiButton>
-          <UiButton
-            v-if="layout.helperOpen.value"
-            variant="ghost"
-            size="icon"
-            data-testid="folder-flip-toggle"
-            aria-label="Flip pane order"
-            @click="layout.flip"
-          >
-            <ArrowLeftRight class="h-4 w-4" />
-          </UiButton>
-          <UiButton
-            v-if="activeTab === 'chat'"
-            variant="outline"
-            size="sm"
-            data-testid="chat-new-button"
-            @click="handleNewChat"
-          >
-            <Plus class="mr-1.5 h-4 w-4" />
-            New Chat
-          </UiButton>
+            <PanelRight class="h-4 w-4" />
+          </button>
+          <div class="min-w-0">
+            <UiSkeleton v-if="!folder" class="h-6 w-40 rounded-md" />
+            <h1 v-else data-testid="folder-heading" class="truncate text-xl font-semibold tracking-tight text-foreground">
+              {{ folder.name }}
+            </h1>
+            <p class="text-xs text-muted-foreground">
+              <NuxtLink to="/" class="transition-colors hover:text-foreground">
+                Home
+              </NuxtLink>
+              <span class="px-1">›</span>
+              <span>{{ folder?.name ?? '…' }}</span>
+            </p>
+          </div>
         </div>
       </div>
+    </template>
+
+    <VoidsCreateVoidDialog
+      v-model:open="newVoidOpen"
+      :folder-name="folder?.name ?? ''"
+      :submitting="creatingVoid"
+      @create="onCreateVoid"
+    />
+
+    <UiTabs v-model="activeTab" class="flex h-full flex-1 flex-col">
+      <UiTabsList class="sr-only">
+        <UiTabsTrigger value="chat">Chat</UiTabsTrigger>
+        <UiTabsTrigger value="flashcards">Flash Cards</UiTabsTrigger>
+        <UiTabsTrigger value="quiz">Quiz</UiTabsTrigger>
+        <UiTabsTrigger value="documents">Documents</UiTabsTrigger>
+      </UiTabsList>
 
       <UiTabsContent value="chat" class="flex flex-1 flex-col overflow-hidden">
         <div class="flex flex-1 overflow-hidden">
-          <div class="flex flex-1 flex-col overflow-hidden">
+          <template v-if="isDesktop && sourcePanelOpen">
+            <ResizablePanelGroup direction="horizontal" class="flex-1">
+              <template v-if="isSourcePanelLeading">
+                <ResizablePanel :default-size="28" :min-size="20" :max-size="45" class="min-w-[18rem]">
+                  <ChatSourcePanel
+                    :sources="allSources"
+                    :active-citation-index="activeCitationIndex"
+                    :open="sourcePanelOpen"
+                    side="left"
+                    @close="sourcePanelOpen = false"
+                  />
+                </ResizablePanel>
+                <ResizableHandle with-handle>
+                  <button
+                    type="button"
+                    data-testid="source-panel-flip"
+                    :aria-label="flipPanelAriaLabel"
+                    class="inline-flex h-6 w-6 items-center justify-center rounded border bg-background text-foreground shadow-sm transition-colors hover:bg-accent"
+                    @pointerdown="handlePanelFlipPointerDown"
+                    @click.stop="handlePanelFlipClick"
+                  >
+                    <ArrowLeftRight class="h-3.5 w-3.5" />
+                  </button>
+                </ResizableHandle>
+                <ResizablePanel :default-size="72" :min-size="40">
+                  <div class="flex h-full flex-1 flex-col overflow-hidden">
+                    <template v-if="!hasIndexedDocuments">
+                      <div class="flex flex-1 items-center justify-center text-muted-foreground">
+                        <div class="text-center">
+                          <FileText class="mx-auto mb-3 h-12 w-12 opacity-40" />
+                          <p class="text-lg font-medium">Upload documents to start chatting</p>
+                        </div>
+                      </div>
+                    </template>
+
+                    <template v-else>
+                      <div ref="chatScrollRef" role="log" aria-live="polite" aria-atomic="false" aria-relevant="additions" class="flex-1 space-y-4 overflow-y-auto p-4">
+                        <template v-for="(msg, i) in messages" :key="i">
+                          <ChatMessage
+                            :role="msg.role"
+                            :content="msg.content"
+                            :sources="msg.sources"
+                            :streaming="streaming && i === messages.length - 1"
+                            @citation-click="(citIndex: number) => handleCitationClick(i, citIndex)"
+                          />
+                          <ChatReferenceChips
+                            v-if="msg.role === 'assistant' && (msg.sources?.length ?? 0) > 0"
+                            :sources="msg.sources ?? []"
+                            @view-all="handleViewAllReferences(i)"
+                            @chip-click="(citIndex: number) => handleCitationClick(i, citIndex)"
+                          />
+                          <template v-if="!isDesktop && expandedInlineCitation?.messageIndex === i">
+                            <div
+                              v-for="src in [getSourceForInlineCitation(i, expandedInlineCitation.citationIndex)].filter(Boolean)"
+                              :key="expandedInlineCitation.citationIndex"
+                              class="mx-auto max-w-[85%] rounded-lg border bg-muted/50 p-3"
+                            >
+                              <ChatSourceCard
+                                :index="expandedInlineCitation.citationIndex"
+                                :filename="src!.filename"
+                                :content="src!.content"
+                                :score="src!.score"
+                                highlighted
+                              />
+                            </div>
+                          </template>
+                        </template>
+                        <ChatThinkingRow v-if="thinking" :model="selectedModel" />
+                        <div v-if="error" class="text-center text-sm text-destructive">
+                          {{ error }}
+                        </div>
+                      </div>
+                    </template>
+
+                    <div class="flex items-center px-4 pt-2">
+                      <ChatModelSelector
+                        :model-value="selectedModel"
+                        :disabled="loading"
+                        @update:model-value="selectModel"
+                      />
+                    </div>
+                    <ChatInput
+                      ref="chatInputRef"
+                      :disabled="!hasIndexedDocuments || loading"
+                      :attachment-status="attachmentStatus"
+                      :busy="uploading || importingLink"
+                      :placeholder="folder ? `Ask about your ${folder.name} materials...` : 'Ask a question...'"
+                      :folder-id="folderId"
+                      :scope="referenceScope"
+                      @upload-files="handleUpload"
+                      @import-link="handleImportLink"
+                      @submit="handleSendMessage"
+                    />
+                  </div>
+                </ResizablePanel>
+              </template>
+
+              <template v-else>
+                <ResizablePanel :default-size="72" :min-size="40">
+                  <div class="flex h-full flex-1 flex-col overflow-hidden">
+                    <template v-if="!hasIndexedDocuments">
+                      <div class="flex flex-1 items-center justify-center text-muted-foreground">
+                        <div class="text-center">
+                          <FileText class="mx-auto mb-3 h-12 w-12 opacity-40" />
+                          <p class="text-lg font-medium">Upload documents to start chatting</p>
+                        </div>
+                      </div>
+                    </template>
+
+                    <template v-else>
+                      <div ref="chatScrollRef" role="log" aria-live="polite" aria-atomic="false" aria-relevant="additions" class="flex-1 space-y-4 overflow-y-auto p-4">
+                        <template v-for="(msg, i) in messages" :key="i">
+                          <ChatMessage
+                            :role="msg.role"
+                            :content="msg.content"
+                            :sources="msg.sources"
+                            :streaming="streaming && i === messages.length - 1"
+                            @citation-click="(citIndex: number) => handleCitationClick(i, citIndex)"
+                          />
+                          <ChatReferenceChips
+                            v-if="msg.role === 'assistant' && (msg.sources?.length ?? 0) > 0"
+                            :sources="msg.sources ?? []"
+                            @view-all="handleViewAllReferences(i)"
+                            @chip-click="(citIndex: number) => handleCitationClick(i, citIndex)"
+                          />
+                          <template v-if="!isDesktop && expandedInlineCitation?.messageIndex === i">
+                            <div
+                              v-for="src in [getSourceForInlineCitation(i, expandedInlineCitation.citationIndex)].filter(Boolean)"
+                              :key="expandedInlineCitation.citationIndex"
+                              class="mx-auto max-w-[85%] rounded-lg border bg-muted/50 p-3"
+                            >
+                              <ChatSourceCard
+                                :index="expandedInlineCitation.citationIndex"
+                                :filename="src!.filename"
+                                :content="src!.content"
+                                :score="src!.score"
+                                highlighted
+                              />
+                            </div>
+                          </template>
+                        </template>
+                        <ChatThinkingRow v-if="thinking" :model="selectedModel" />
+                        <div v-if="error" class="text-center text-sm text-destructive">
+                          {{ error }}
+                        </div>
+                      </div>
+                    </template>
+
+                    <div class="flex items-center px-4 pt-2">
+                      <ChatModelSelector
+                        :model-value="selectedModel"
+                        :disabled="loading"
+                        @update:model-value="selectModel"
+                      />
+                    </div>
+                    <ChatInput
+                      ref="chatInputRef"
+                      :disabled="!hasIndexedDocuments || loading"
+                      :attachment-status="attachmentStatus"
+                      :busy="uploading || importingLink"
+                      :placeholder="folder ? `Ask about your ${folder.name} materials...` : 'Ask a question...'"
+                      :folder-id="folderId"
+                      :scope="referenceScope"
+                      @upload-files="handleUpload"
+                      @import-link="handleImportLink"
+                      @submit="handleSendMessage"
+                    />
+                  </div>
+                </ResizablePanel>
+                <ResizableHandle with-handle>
+                  <button
+                    type="button"
+                    data-testid="source-panel-flip"
+                    :aria-label="flipPanelAriaLabel"
+                    class="inline-flex h-6 w-6 items-center justify-center rounded border bg-background text-foreground shadow-sm transition-colors hover:bg-accent"
+                    @pointerdown="handlePanelFlipPointerDown"
+                    @click.stop="handlePanelFlipClick"
+                  >
+                    <ArrowLeftRight class="h-3.5 w-3.5" />
+                  </button>
+                </ResizableHandle>
+                <ResizablePanel :default-size="28" :min-size="20" :max-size="45" class="min-w-[18rem]">
+                  <ChatSourcePanel
+                    :sources="allSources"
+                    :active-citation-index="activeCitationIndex"
+                    :open="sourcePanelOpen"
+                    side="right"
+                    @close="sourcePanelOpen = false"
+                  />
+                </ResizablePanel>
+              </template>
+            </ResizablePanelGroup>
+          </template>
+
+          <div v-else class="flex flex-1 flex-col overflow-hidden">
             <template v-if="!hasIndexedDocuments">
               <div class="flex flex-1 items-center justify-center text-muted-foreground">
                 <div class="text-center">
@@ -493,6 +681,12 @@ async function handleUpload(files: File[]) {
                     :streaming="streaming && i === messages.length - 1"
                     @citation-click="(citIndex: number) => handleCitationClick(i, citIndex)"
                   />
+                  <ChatReferenceChips
+                    v-if="msg.role === 'assistant' && (msg.sources?.length ?? 0) > 0"
+                    :sources="msg.sources ?? []"
+                    @view-all="handleViewAllReferences(i)"
+                    @chip-click="(citIndex: number) => handleCitationClick(i, citIndex)"
+                  />
                   <template v-if="!isDesktop && expandedInlineCitation?.messageIndex === i">
                     <div
                       v-for="src in [getSourceForInlineCitation(i, expandedInlineCitation.citationIndex)].filter(Boolean)"
@@ -509,12 +703,7 @@ async function handleUpload(files: File[]) {
                     </div>
                   </template>
                 </template>
-                <div v-if="loading && !streaming" class="mr-auto max-w-[85%] rounded-lg border px-4 py-3">
-                  <div class="flex items-center gap-2 text-sm text-muted-foreground">
-                    <div class="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                    Thinking...
-                  </div>
-                </div>
+                <ChatThinkingRow v-if="thinking" :model="selectedModel" />
                 <div v-if="error" class="text-center text-sm text-destructive">
                   {{ error }}
                 </div>
@@ -531,11 +720,16 @@ async function handleUpload(files: File[]) {
             <ChatInput
               ref="chatInputRef"
               :disabled="!hasIndexedDocuments || loading"
+              :attachment-status="attachmentStatus"
+              :busy="uploading || importingLink"
               :placeholder="folder ? `Ask about your ${folder.name} materials...` : 'Ask a question...'"
+              :folder-id="folderId"
+              :scope="referenceScope"
+              @upload-files="handleUpload"
+              @import-link="handleImportLink"
               @submit="handleSendMessage"
             />
           </div>
-
         </div>
       </UiTabsContent>
 
@@ -547,252 +741,22 @@ async function handleUpload(files: File[]) {
         <QuizTab :folder-id="folderId" />
       </UiTabsContent>
 
-      <UiTabsContent value="documents" class="flex-1">
+      <UiTabsContent value="documents" class="flex flex-1 flex-col gap-6 overflow-y-auto p-6">
         <DocumentsFileUploadZone
           :folder-id="folderId"
           :disabled="uploading"
-          class="mb-6"
           @upload="handleUpload"
         />
-
-        <div v-if="documents && documents.length > 0" class="space-y-2">
-          <DocumentsFileStatusItem
-            v-for="doc in documents"
-            :key="doc._id"
-            :filename="doc.filename"
-            :status="doc.status"
-            :file-size="doc.fileSize"
-            :created-at="doc._creationTime"
-            :failure-reason="doc.failureReason"
-            :document-id="doc._id"
-            @delete="handleDeleteRequest"
-            @move="handleMoveRequest"
-          />
-        </div>
-
-        <div
-          v-else-if="!documents || documents.length === 0"
-          data-testid="folder-empty-state"
-          class="flex flex-1 items-center justify-center py-12 text-muted-foreground"
-        >
-          <div class="text-center">
-            <FileText class="mx-auto mb-3 h-12 w-12 opacity-40" />
-            <p class="text-lg font-medium">Documents will appear here</p>
-            <p class="mt-1 text-sm">Upload files to get started</p>
-          </div>
-        </div>
+        <FolderShellFilesList
+          :documents="documents"
+          @delete="handleDeleteRequest"
+          @move="handleMoveRequest"
+          @open="() => undefined"
+          @rename="() => undefined"
+          @download="() => undefined"
+        />
       </UiTabsContent>
     </UiTabs>
-          </div>
-        </template>
-      </UiResizablePanel>
-
-      <template v-if="layout.helperOpen.value && !layout.flipped.value">
-        <UiResizableHandle with-handle />
-        <UiResizablePanel
-          :default-size="layout.paneC.value"
-          :min-size="20"
-          data-testid="folder-pane-c"
-          @resize="(s) => (layout.paneC.value = s)"
-        >
-          <FoldersFolderHelperPane
-            :sources="allSources"
-            :active-citation-index="activeCitationIndex"
-            data-testid="folder-helper-pane-end"
-            @close="closeHelper"
-          />
-        </UiResizablePanel>
-      </template>
-
-      <template v-if="layout.helperOpen.value && layout.flipped.value">
-        <UiResizableHandle with-handle />
-        <UiResizablePanel
-          :default-size="layout.paneB.value"
-          :min-size="20"
-          data-testid="folder-pane-c"
-          @resize="(s) => (layout.paneB.value = s)"
-        >
-          <div class="flex h-full flex-col p-4">
-            <UiTabs v-model="activeTab" class="flex flex-1 flex-col">
-              <div class="flex items-center justify-between">
-                <UiTabsList>
-                  <UiTabsTrigger value="chat">
-                    <MessageSquare class="mr-1.5 h-4 w-4" />
-                    Chat
-                  </UiTabsTrigger>
-                  <UiTabsTrigger value="flashcards">
-                    <Layers class="mr-1.5 h-4 w-4" />
-                    Flash Cards
-                  </UiTabsTrigger>
-                  <UiTabsTrigger value="quiz">
-                    <ClipboardList class="mr-1.5 h-4 w-4" />
-                    Quiz
-                  </UiTabsTrigger>
-                  <UiTabsTrigger value="documents">
-                    <FileText class="mr-1.5 h-4 w-4" />
-                    Documents
-                  </UiTabsTrigger>
-                </UiTabsList>
-                <div class="flex items-center gap-2">
-                  <UiButton
-                    variant="outline"
-                    size="sm"
-                    :aria-pressed="layout.helperOpen.value"
-                    @click="toggleHelper"
-                  >
-                    <BookOpen class="mr-1.5 h-4 w-4" />
-                    Sources
-                  </UiButton>
-                  <UiButton
-                    variant="ghost"
-                    size="icon"
-                    aria-label="Flip pane order"
-                    @click="layout.flip"
-                  >
-                    <ArrowLeftRight class="h-4 w-4" />
-                  </UiButton>
-                </div>
-              </div>
-              <UiTabsContent value="chat" class="flex flex-1 flex-col overflow-hidden">
-                <div class="flex flex-1 flex-col overflow-hidden">
-                  <div ref="chatScrollRef" role="log" aria-live="polite" class="flex-1 space-y-4 overflow-y-auto p-4">
-                    <ChatMessage
-                      v-for="(msg, i) in messages"
-                      :key="i"
-                      :role="msg.role"
-                      :content="msg.content"
-                      :sources="msg.sources"
-                      :streaming="streaming && i === messages.length - 1"
-                      @citation-click="(citIndex: number) => handleCitationClick(i, citIndex)"
-                    />
-                  </div>
-                  <ChatInput
-                    ref="chatInputRef"
-                    :disabled="!hasIndexedDocuments || loading"
-                    :placeholder="folder ? `Ask about your ${folder.name} materials...` : 'Ask a question...'"
-                    @submit="handleSendMessage"
-                  />
-                </div>
-              </UiTabsContent>
-            </UiTabs>
-          </div>
-        </UiResizablePanel>
-      </template>
-    </UiResizablePanelGroup>
-
-    <div v-else class="flex flex-1 flex-col p-6">
-      <div class="mb-6 flex items-center justify-between">
-        <UiSkeleton v-if="!folder" class="h-8 w-48 rounded-md" />
-        <h1 v-else data-testid="folder-heading" class="text-2xl font-bold tracking-tight">
-          {{ folder.name }}
-        </h1>
-        <UiButton
-          v-if="folderDepth < 3"
-          variant="outline"
-          size="sm"
-          data-testid="new-subfolder-button"
-          @click="showSubfolderModal = true"
-        >
-          <FolderPlus class="mr-1.5 h-4 w-4" />
-          New Subfolder
-        </UiButton>
-      </div>
-      <UiTabs v-model="activeTab" class="flex flex-1 flex-col">
-        <UiTabsList>
-          <UiTabsTrigger value="chat">
-            <MessageSquare class="mr-1.5 h-4 w-4" />
-            Chat
-          </UiTabsTrigger>
-          <UiTabsTrigger value="flashcards" data-testid="flashcards-tab-trigger">
-            <Layers class="mr-1.5 h-4 w-4" />
-            Flash Cards
-          </UiTabsTrigger>
-          <UiTabsTrigger value="quiz" data-testid="quiz-tab-trigger">
-            <ClipboardList class="mr-1.5 h-4 w-4" />
-            Quiz
-          </UiTabsTrigger>
-          <UiTabsTrigger value="documents">
-            <FileText class="mr-1.5 h-4 w-4" />
-            Documents
-          </UiTabsTrigger>
-        </UiTabsList>
-        <UiTabsContent value="chat" class="flex flex-1 flex-col overflow-hidden">
-          <div class="flex flex-1 flex-col overflow-hidden">
-            <div ref="chatScrollRef" role="log" aria-live="polite" class="flex-1 space-y-4 overflow-y-auto p-4">
-              <template v-for="(msg, i) in messages" :key="i">
-                <ChatMessage
-                  :role="msg.role"
-                  :content="msg.content"
-                  :sources="msg.sources"
-                  :streaming="streaming && i === messages.length - 1"
-                  @citation-click="(citIndex: number) => handleCitationClick(i, citIndex)"
-                />
-                <template v-if="expandedInlineCitation?.messageIndex === i">
-                  <div
-                    v-for="src in [getSourceForInlineCitation(i, expandedInlineCitation.citationIndex)].filter(Boolean)"
-                    :key="expandedInlineCitation.citationIndex"
-                    class="mx-auto max-w-[85%] rounded-lg border bg-muted/50 p-3"
-                  >
-                    <ChatSourceCard
-                      :index="expandedInlineCitation.citationIndex"
-                      :filename="src!.filename"
-                      :content="src!.content"
-                      :score="src!.score"
-                      highlighted
-                    />
-                  </div>
-                </template>
-              </template>
-            </div>
-            <ChatInput
-              ref="chatInputRef"
-              :disabled="!hasIndexedDocuments || loading"
-              :placeholder="folder ? `Ask about your ${folder.name} materials...` : 'Ask a question...'"
-              @submit="handleSendMessage"
-            />
-          </div>
-        </UiTabsContent>
-        <UiTabsContent value="flashcards" class="flex-1">
-          <FlashcardsTab :folder-id="folderId" />
-        </UiTabsContent>
-        <UiTabsContent value="quiz" class="flex-1">
-          <QuizTab :folder-id="folderId" />
-        </UiTabsContent>
-        <UiTabsContent value="documents" class="flex-1">
-          <DocumentsFileUploadZone
-            :folder-id="folderId"
-            :disabled="uploading"
-            class="mb-6"
-            @upload="handleUpload"
-          />
-          <div v-if="documents && documents.length > 0" class="space-y-2">
-            <DocumentsFileStatusItem
-              v-for="doc in documents"
-              :key="doc._id"
-              :filename="doc.filename"
-              :status="doc.status"
-              :file-size="doc.fileSize"
-              :created-at="doc._creationTime"
-              :failure-reason="doc.failureReason"
-              :document-id="doc._id"
-              @delete="handleDeleteRequest"
-              @move="handleMoveRequest"
-            />
-          </div>
-          <div
-            v-else-if="!documents || documents.length === 0"
-            data-testid="folder-empty-state"
-            class="flex flex-1 items-center justify-center py-12 text-muted-foreground"
-          >
-            <div class="text-center">
-              <FileText class="mx-auto mb-3 h-12 w-12 opacity-40" />
-              <p class="text-lg font-medium">Documents will appear here</p>
-              <p class="mt-1 text-sm">Upload files to get started</p>
-            </div>
-          </div>
-        </UiTabsContent>
-      </UiTabs>
-    </div>
 
     <UiAlertDialog v-model:open="showDeleteDialog">
       <UiAlertDialogContent>
@@ -828,5 +792,5 @@ async function handleUpload(files: File[]) {
         </div>
       </UiDialogContent>
     </UiDialog>
-  </div>
+  </FolderShell>
 </template>

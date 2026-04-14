@@ -23,6 +23,8 @@ describe('POST /api/rag/chat — folderId enforcement (AC #1)', () => {
   beforeEach(() => {
     vi.mocked(globalThis.readBody as any).mockReset()
     vi.mocked(globalThis.searchDocuments as any).mockReset()
+    vi.mocked(globalThis.fetchFolderDocs as any).mockReset()
+    vi.mocked(globalThis.fetchFolderDocs as any).mockResolvedValue([])
     vi.mocked(globalThis.generateCompletion as any).mockReset()
   })
 
@@ -111,12 +113,75 @@ describe('POST /api/rag/chat — folderId enforcement (AC #1)', () => {
     )
     expect(result.sources[0].attributes.filename).toBe('genetics.pdf')
   })
+
+  test('[P1] should instruct the model to use only numeric inline citations', async () => {
+    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+      query: 'What is DNA?',
+      model: 'openai/gpt-4o-mini',
+      folderId: 'folder_bio101',
+    })
+    vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({ data: [] })
+    vi.mocked(globalThis.generateCompletion as any).mockResolvedValue({
+      choices: [{ message: { content: 'DNA stores genetic information [1].' } }],
+      model: 'openai/gpt-4o-mini',
+      usage: {},
+    })
+
+    await handler(mockEvent)
+
+    const params = vi.mocked(globalThis.generateCompletion as any).mock.calls[0][0]
+    expect(params.messages[0].content).toContain('Use only the [N] format for citations.')
+    expect(params.messages[0].content).toContain('Do not write citations as (Source 1), Source 1, or [Source 1: filename].')
+    expect(params.messages[0].content).toContain('Do not include a trailing "References" or "Sources" section in the answer.')
+  })
+
+  test('[P0] should return fallback folder docs as sources when chunk search is empty', async () => {
+    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+      query: 'Summarize this folder',
+      model: 'openai/gpt-4o-mini',
+      folderId: 'folder_bio101',
+    })
+    vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({ data: [] })
+    vi.mocked(globalThis.fetchFolderDocs as any).mockResolvedValue([
+      {
+        key: 'user/folder/doc-1.txt',
+        documentId: 'doc-1',
+        filename: 'chapter-1.pdf',
+        content: 'Chapter one summary content',
+      },
+      {
+        key: 'user/folder/doc-2.txt',
+        documentId: 'doc-2',
+        filename: 'chapter-2.pdf',
+        content: 'Chapter two summary content',
+      },
+    ])
+    vi.mocked(globalThis.generateCompletion as any).mockResolvedValue({
+      choices: [{ message: { content: 'Summary [1] [2]' } }],
+      model: 'openai/gpt-4o-mini',
+      usage: {},
+    })
+
+    const result = await handler(mockEvent)
+
+    expect(result.sources).toHaveLength(2)
+    expect(result.sources[0]).toEqual(
+      expect.objectContaining({
+        content: 'Chapter one summary content',
+        score: 1,
+      }),
+    )
+    expect(result.sources[0].attributes.filename).toBe('chapter-1.pdf')
+    expect(result.sources[1].attributes.documentId).toBe('doc-2')
+  })
 })
 
 describe('POST /api/rag/chat — streaming (AC #1, #2)', () => {
   beforeEach(() => {
     vi.mocked(globalThis.readBody as any).mockReset()
     vi.mocked(globalThis.searchDocuments as any).mockReset()
+    vi.mocked(globalThis.fetchFolderDocs as any).mockReset()
+    vi.mocked(globalThis.fetchFolderDocs as any).mockResolvedValue([])
     vi.mocked(globalThis.generateCompletion as any).mockReset()
     vi.mocked(globalThis.generateCompletionStream as any).mockReset()
     vi.mocked(globalThis.setResponseHeader as any).mockReset()
@@ -227,12 +292,61 @@ describe('POST /api/rag/chat — streaming (AC #1, #2)', () => {
     expect(output).toContain('"score":0.9')
     expect(output).toContain('data: {"choices"')
   })
+
+  test('[P0] should emit fallback folder docs in the sources SSE event when chunk search is empty', async () => {
+    const mockStream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"Summary"}}]}\n\n'))
+        controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'))
+        controller.close()
+      },
+    })
+    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+      query: 'Summarize this folder',
+      model: 'openai/gpt-4o-mini',
+      folderId: 'folder_bio',
+      stream: true,
+    })
+    vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({ data: [] })
+    vi.mocked(globalThis.fetchFolderDocs as any).mockResolvedValue([
+      {
+        key: 'user/folder/doc-1.txt',
+        documentId: 'doc-1',
+        filename: 'bio-notes.pdf',
+        content: 'Fallback source content',
+      },
+    ])
+    vi.mocked(globalThis.generateCompletionStream as any).mockResolvedValue(mockStream)
+
+    let capturedStream: ReadableStream | null = null
+    vi.mocked(globalThis.sendStream as any).mockImplementation((_event: any, stream: ReadableStream) => {
+      capturedStream = stream
+    })
+
+    await handler(mockEvent)
+
+    const reader = capturedStream!.getReader()
+    const decoder = new TextDecoder()
+    let output = ''
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      output += decoder.decode(value, { stream: true })
+    }
+
+    expect(output).toContain('event: sources')
+    expect(output).toContain('"content":"Fallback source content"')
+    expect(output).toContain('"filename":"bio-notes.pdf"')
+    expect(output).toContain('"documentId":"doc-1"')
+  })
 })
 
 describe('POST /api/rag/chat — model validation (AC #4)', () => {
   beforeEach(() => {
     vi.mocked(globalThis.readBody as any).mockReset()
     vi.mocked(globalThis.searchDocuments as any).mockReset()
+    vi.mocked(globalThis.fetchFolderDocs as any).mockReset()
+    vi.mocked(globalThis.fetchFolderDocs as any).mockResolvedValue([])
     vi.mocked(globalThis.generateCompletion as any).mockReset()
     vi.mocked(globalThis.generateCompletionStream as any).mockReset()
     vi.mocked(globalThis.setResponseHeader as any).mockReset()

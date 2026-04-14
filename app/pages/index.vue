@@ -62,8 +62,8 @@ function handleFolderPicked(folderId: string) {
 </script>
 
 <template>
-  <div class="flex flex-1 flex-col overflow-hidden">
-    <div class="flex-1 overflow-y-auto px-4 py-6 sm:px-6">
+  <div class="flex min-h-full min-w-0 flex-1 flex-col">
+    <div class="flex-1 overflow-x-hidden px-4 py-6 sm:px-6">
       <div class="mx-auto flex w-full max-w-4xl flex-col gap-6">
         <DashboardGreeting
           :name="user?.name ?? null"

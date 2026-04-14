@@ -3,6 +3,13 @@ import { mountSuspended } from '@nuxt/test-utils/runtime'
 
 const chatInputPath = ['~', 'components', 'chat', 'Input.vue'].join('/')
 
+async function setComposerText(wrapper: any, value: string) {
+  const editor = wrapper.get('[data-testid="chat-composer-editor"]')
+  ;(editor.element as HTMLDivElement).textContent = value
+  await editor.trigger('input')
+  return editor
+}
+
 describe('ChatInput — AC #6', () => {
   it('[P0] should emit submit with trimmed message when Enter is pressed', async () => {
     const ChatInput = await import(chatInputPath)
@@ -13,9 +20,8 @@ describe('ChatInput — AC #6', () => {
       },
     })
 
-    const textarea = wrapper.find('textarea')
-    await textarea.setValue('What is photosynthesis?')
-    await textarea.trigger('keydown', { key: 'Enter' })
+    const editor = await setComposerText(wrapper, 'What is photosynthesis?')
+    await editor.trigger('keydown', { key: 'Enter' })
 
     expect(wrapper.emitted('submit')).toBeTruthy()
     expect(wrapper.emitted('submit')![0]).toEqual(['What is photosynthesis?'])
@@ -26,9 +32,8 @@ describe('ChatInput — AC #6', () => {
 
     const wrapper = await mountSuspended(ChatInput.default)
 
-    const textarea = wrapper.find('textarea')
-    await textarea.setValue('Line 1')
-    await textarea.trigger('keydown', { key: 'Enter', shiftKey: true })
+    const editor = await setComposerText(wrapper, 'Line 1')
+    await editor.trigger('keydown', { key: 'Enter', shiftKey: true })
 
     expect(wrapper.emitted('submit')).toBeFalsy()
   })
@@ -38,14 +43,13 @@ describe('ChatInput — AC #6', () => {
 
     const wrapper = await mountSuspended(ChatInput.default)
 
-    const textarea = wrapper.find('textarea')
-    await textarea.setValue('   ')
-    await textarea.trigger('keydown', { key: 'Enter' })
+    const editor = await setComposerText(wrapper, '   ')
+    await editor.trigger('keydown', { key: 'Enter' })
 
     expect(wrapper.emitted('submit')).toBeFalsy()
   })
 
-  it('[P0] should disable textarea and send button when disabled prop is true', async () => {
+  it('[P0] should disable the editor and send button when disabled prop is true', async () => {
     const ChatInput = await import(chatInputPath)
 
     const wrapper = await mountSuspended(ChatInput.default, {
@@ -54,10 +58,11 @@ describe('ChatInput — AC #6', () => {
       },
     })
 
-    const textarea = wrapper.find('textarea')
-    expect(textarea.attributes('disabled')).toBeDefined()
+    const editor = wrapper.get('[data-testid="chat-composer-editor"]')
+    expect(editor.attributes('contenteditable')).toBe('false')
+    expect(editor.attributes('aria-disabled')).toBe('true')
 
-    const sendButton = wrapper.find('button')
+    const sendButton = wrapper.get('[data-testid="chat-send-button"]')
     expect(sendButton.attributes('disabled')).toBeDefined()
   })
 
@@ -66,7 +71,7 @@ describe('ChatInput — AC #6', () => {
 
     const wrapper = await mountSuspended(ChatInput.default)
 
-    const sendButton = wrapper.find('button')
+    const sendButton = wrapper.get('[data-testid="chat-send-button"]')
     expect(sendButton.attributes('disabled')).toBeDefined()
   })
 

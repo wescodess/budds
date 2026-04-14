@@ -1,101 +1,111 @@
-schema_version: 1
+version: 1
 mode: running
 current_phase: implement
-spec_slug: g2-atlas-style-home-sidebar
-spec_path: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts/spec-g2-atlas-style-home-sidebar.md
-goal_or_spec: "G2: Atlas-style home sidebar"
+spec_slug: g4-chats-void-enhancements
 input_type: goal
+goal_or_spec: |
+  G4: Chats void enhancements —
+  (1) Render assistant responses via a markdown formatter (research best fit
+  for this Nuxt project; ship as a reusable skill).
+  (2) Show a 'thinking' indicator before the response starts streaming.
+  (3) Inline citations in the bubble with a few reference chips below;
+  'View all references' opens the helper section listing every citation+
+  reference; hovering an inline citation shows a snippet + useful metadata.
+  (4) Directory component — expandable folder tree (click a folder to reveal
+  its subfolders and files with counts) that lets the user select any
+  combination of folders / subfolders / individual files. Selection is passed
+  to chat as reference scope: folder → all its files; file → just that file.
+  Cover edge cases: empty folders, partial selection, mixed parent+child,
+  large trees, loading, permission/access, deselect propagation.
 is_ui: true
 review_rounds: 0
-retry_count: 0
-branch: null
+branch: ui-revamp
 pr_url: null
-commit_sha: null
-design:
-  approved: true
-  screens:
-    - name: g2-rail-proposal
-      path: _bmad-output/implementation-artifacts/design-screens/g2-atlas-style-home-sidebar.md
-      generated_at: 2026-04-13T00:00:00Z
-  workspace_project_id: null
-  approved_at: 2026-04-13T00:00:00Z
-  approved_by: terminal
-escalation:
-  pending: null
-  log:
-    - question: "Approve Atlas-rail design proposal for G2?"
-      answer: "approve_with_revisions: drop General Chat from rail; + with list; empty-state + tile with larger tooltip"
-      recommended_default: request_revision
-      followed_default: false
-      asked_at: 2026-04-13T00:00:00Z
-      answered_at: 2026-04-13T00:00:00Z
-      auto_resolved: false
-decisions_log:
-  - at: 2026-04-13T00:00:00Z
-    tier: 1
-    category: intake
-    decision: "is_ui=true (sidebar/layout keyword)"
-    reasoning: "goal mentions 'sidebar' — UI change"
-    phase: intake
-run_log:
-  - at: 2026-04-13T00:00:00Z
-    mode: running
-    event: invoked
-    from_state: idle
-    to_state: intake
-    note: "start G2: Atlas-style home sidebar"
-  - at: 2026-04-13T00:00:00Z
-    mode: running
-    event: transition
-    from_state: intake
-    to_state: design
-    note: "is_ui=true → DESIGN phase"
-  - at: 2026-04-13T00:00:00Z
-    event: transition
-    from_state: escalated
-    to_state: clarify
-    note: "DESIGN approved (revisions: drop General Chat from rail)"
-last_verdict: null
-config:
-  max_retries_per_check: 3
-  max_review_rounds: 2
-  max_deferred_per_spec: 8
-  max_runtime_hours_per_invocation: 6
-  poll_merge_max_minutes: 30
-  poll_merge_interval_seconds: 15
-  auto_merge_on_review_pass: true
-  auto_add_arch_permitted_deps: true
-  notifications:
-    telegram:
-      enabled: true
-      chat_id: "637527821"
-      progress_message_id: null
-      notify_on:
-        escalation: true
-        blocked: true
-        design_ready: true
-        phase_start: true
-        loopback: true
-        review_pass: false
-        pr_opened: true
-        merge_complete: true
-        run_complete: true
 paths:
   project_root: /Users/wesleyukadike/Desktop/budds
   artifacts_dir: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts
-  steps_dir: /Users/wesleyukadike/Desktop/budds/_bmad/bmm/4-implementation/bmad-quick-dev
   state_file: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts/quick-flow-state.yaml
+  steps_dir: /Users/wesleyukadike/Desktop/budds/_bmad/bmm/4-implementation/bmad-quick-dev
   deferred_work: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts/deferred-work.md
   design_cache: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts/design-screens
-counters:
-  files_changed: 0
-  tasks_completed: 0
-  tasks_total: 0
-  findings_deferred: 0
-  loopback_rounds_used: 0
-  escalations_raised_total: 0
-  auto_decisions_total: 1
-  check_retries_total: 0
-created_at: 2026-04-13T00:00:00Z
-last_updated: 2026-04-13T00:00:00Z
-last_invocation_at: 2026-04-13T00:00:00Z
+design:
+  approved: true
+  approved_at: 2026-04-14
+  stitch_project_id: "2926819289448574055"
+  reference_screenshot: docs/screenshots/Screenshot 2026-04-13 at 10.25.19 PM.png
+  screens:
+    - id: e1f5dd4cfe7d437c92844f85178defb2
+      label: chat-void-markdown-and-thinking
+      image: _bmad-output/implementation-artifacts/design-screens/screen_e1f5dd4cfe7d437c92844f85178defb2.png
+      notes: "full chat void with markdown rendered (h2, inline code, code block syntax hl, bullet/ordered lists, blockquote, table) + 'Thinking…' state row with model label. a11y 85/100 (input labels — tracked as implementation AC)"
+    - id: a0194c5dde06409abb14834eb0fd7c03
+      label: chat-bubble-citations-and-hovercard
+      image: _bmad-output/implementation-artifacts/design-screens/screen_a0194c5dde06409abb14834eb0fd7c03.png
+      notes: "assistant message with [1][2][3] amber pills inline; 3 reference chips below; 'View all references →' link; hover tooltip over [2] showing filename + meta (page/section/relevance) + 3-line mono excerpt + 'Open in knowledge' link. a11y 85/100"
+    - id: dc26d3464bbf41339b8a816a9f5adcf6
+      label: helper-panel-all-references
+      image: _bmad-output/implementation-artifacts/design-screens/screen_dc26d3464bbf41339b8a816a9f5adcf6.png
+      notes: "right-side helper panel grouped by citation number; filename + filetype icon + mono excerpt + page/section/relevance meta + 'Open in knowledge' per group; close X; main pane dimmed. a11y 85/100"
+    - id: c28492deec024512946b955d518ec06f
+      label: directory-picker-tree-component
+      image: _bmad-output/implementation-artifacts/design-screens/screen_c28492deec024512946b955d518ec06f.png
+      notes: "standalone directory picker: header ('Reference scope' + '5 files selected' + Clear), search row, tree body with checkbox states unchecked/checked/indeterminate, count pills per folder, empty folder row, loading skeleton row, 'Select all in folder' hint strip, footer counter + Cancel/Use as context buttons. a11y 85/100"
+    - id: 6a7ec821b9f04aad80079092dfcb8f7a
+      label: directory-picker-in-chat-input
+      image: _bmad-output/implementation-artifacts/design-screens/screen_6a7ec821b9f04aad80079092dfcb8f7a.png
+      notes: "Budds-branded chat input context: reference-scope chip strip above input + paperclip trigger + open popover anchored to trigger showing the directory picker. SUPERSEDES rejected variant cff4cb3b08ca4f569bb51e3bfe156592 (branded 'Nocturne' — drift). a11y pending"
+escalation:
+  pending: null
+  log:
+    - question: "Approve the 5 proposed G4 screens for Chats-void enhancements"
+      answer: approve
+      recommended_default: request_revision
+      followed_default: false
+      asked_at: 2026-04-14
+      answered_at: 2026-04-14
+      raised_from_state: design
+decisions_log: []
+run_log:
+  - ts: 2026-04-14
+    event: start
+    detail: "G4 kicked off; is_ui=true → entering design"
+  - ts: 2026-04-14
+    event: intake_complete
+    detail: "slug=g4-chats-void-enhancements, input_type=goal, is_ui=true (chat bubble states + directory picker are clearly UI surfaces)"
+  - ts: 2026-04-14
+    event: phase_transition
+    detail: "intake → design"
+  - ts: 2026-04-14
+    event: design_screens_generated
+    detail: "5 screens batched via stitch-ui-story-design. Screen 5 first gen drifted to 'Nocturne' brand → re-rolled as 6a7ec821b9f04aad80079092dfcb8f7a. A11y auto-check 85/100 for all 4 completed audits (generic input-label warning — tracked as impl AC)."
+  - ts: 2026-04-14
+    event: escalation_raised
+    detail: "DESIGN approval (no auto-resolve per feedback_design_first.md)"
+  - ts: 2026-04-14
+    event: design_approved
+    detail: "User approved all 5 screens. Advancing to clarify."
+  - ts: 2026-04-14
+    event: clarify_complete
+    detail: "Markdown renderer pick: @nuxtjs/mdc (SSR + Shiki + sanitize + Vue component mapping — one-module solution). Tier-1 auto-resolved: hovercard meta limited to filename+score+excerpt (backend lacks page/section; deferred). Reference scope API = optional {folderIds,fileIds} on /api/rag/chat, server validates ownership and expands folderIds."
+  - ts: 2026-04-14
+    event: spec_written
+    detail: "spec-g4-chats-void-enhancements.md (status: ready-for-dev). 18 execution tasks, 14 ACs, I/O matrix covers 17 scenarios. Advancing to implement."
+  - ts: 2026-04-14
+    event: phase_transition
+    detail: "clarify → spec → implement"
+config:
+  notifications:
+    telegram:
+      enabled: false
+    notify_on:
+      design_ready: true
+      phase_start: true
+      loopback: true
+      review_pass: true
+      pr_opened: true
+      merge_complete: true
+      escalation: true
+      blocked: true
+      run_complete: true
+  auto_merge_on_review_pass: true
+  max_deferred_per_spec: 8

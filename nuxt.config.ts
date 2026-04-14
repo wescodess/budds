@@ -8,11 +8,31 @@ export default defineNuxtConfig({
     plugins: [tailwindcss()],
   },
   nitro: {
+    preset: 'cloudflare_pages',
     externals: {
       inline: [fileURLToPath(new URL('./convex/_generated/', import.meta.url))],
     },
   },
-  modules: ['shadcn-nuxt', 'nuxt-convex', '@onmax/nuxt-better-auth'],
+  modules: ['shadcn-nuxt', 'nuxt-convex', '@onmax/nuxt-better-auth', '@nuxtjs/mdc'],
+  components: [
+    { path: '~/components/global', global: true },
+    '~/components',
+  ],
+  mdc: {
+    highlight: {
+      theme: {
+        default: 'github-dark-default',
+        dark: 'github-dark-default',
+      },
+      langs: ['ts', 'js', 'jsx', 'tsx', 'vue', 'bash', 'shell', 'json', 'md', 'python', 'sql', 'html', 'css', 'diff', 'yaml'],
+    },
+    components: {
+      prose: true,
+      map: {
+        citation: 'Citation',
+      },
+    },
+  },
   shadcn: {
     prefix: 'Ui',
     componentDir: '@/components/ui',
