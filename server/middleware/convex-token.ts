@@ -2,7 +2,7 @@ export default defineEventHandler(async (event) => {
   const cookie = getRequestHeader(event, 'cookie')
   if (!cookie) return
 
-  const convexSiteUrl = process.env.CONVEX_SITE_URL
+  const { convexSiteUrl } = useRuntimeConfig(event)
   if (!convexSiteUrl) return
 
   try {
