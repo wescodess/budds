@@ -70,11 +70,12 @@ const themeStyle = computed(() => {
   const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
   const fg = luminance > 0.55 ? '#0b0b0b' : '#ffffff'
   return {
-    '--color-primary': hex,
-    '--color-primary-foreground': fg,
-    '--color-ring': hex,
-    '--color-sidebar-primary': hex,
-    '--color-sidebar-ring': hex,
+    '--primary': hex,
+    '--primary-foreground': fg,
+    '--ring': hex,
+    '--sidebar-primary': hex,
+    '--sidebar-primary-foreground': fg,
+    '--sidebar-ring': hex,
   } as Record<string, string>
 })
 </script>
