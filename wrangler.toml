@@ -17,3 +17,7 @@ bucket_name = "budds"
 # ── Non-secret environment variables ─────────────────────────
 [vars]
 NUXT_PUBLIC_SITE_URL = "https://budds.pages.dev"
+CONVEX_URL = "https://trustworthy-mink-186.convex.cloud"
+NUXT_PUBLIC_CONVEX_URL = "https://trustworthy-mink-186.convex.cloud"
+
+

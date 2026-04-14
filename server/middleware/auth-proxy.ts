@@ -1,7 +1,10 @@
+import { getConvexSiteUrl } from '../utils/convex-site-url'
+
 export default defineEventHandler(async (event) => {
   if (!event.path.startsWith('/api/auth/')) return
 
-  const { convexSiteUrl } = useRuntimeConfig(event)
+  const config = useRuntimeConfig(event)
+  const convexSiteUrl = getConvexSiteUrl(config)
   if (!convexSiteUrl) return
 
   const target = new URL(event.path, convexSiteUrl)
