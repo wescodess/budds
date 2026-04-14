@@ -20,7 +20,11 @@ const { allFolders } = useFolders()
 const { documents, uploadFiles, deleteDocument, moveDocument } = useDocuments(computed(() => props.folderId))
 
 const panelRef = ref<HTMLElement | null>(null)
-onClickOutside(panelRef, () => emit('close'))
+onClickOutside(panelRef, (e) => {
+  const el = e.target as HTMLElement | null
+  if (el?.closest('[data-radix-popper-content-wrapper],[role="menu"],[role="dialog"],[data-reka-popper-content-wrapper],[data-reka-menu-content]')) return
+  emit('close')
+})
 onKeyStroke('Escape', () => emit('close'))
 
 const search = ref('')
@@ -220,7 +224,7 @@ async function onFiles(e: Event) {
         <div class="flex items-center justify-between px-2 pb-1 text-[10px] uppercase tracking-widest text-muted-foreground">
           <span>Folders</span>
         </div>
-        <div class="max-h-[45%] overflow-y-auto pr-1">
+        <div class="max-h-[65%] min-h-60 overflow-y-auto pr-1">
           <FolderShellTree
             :folders="filteredFolders"
             :active-id="folderId"
