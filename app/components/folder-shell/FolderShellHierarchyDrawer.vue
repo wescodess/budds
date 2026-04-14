@@ -162,8 +162,8 @@ async function onFiles(e: Event) {
     data-testid="folder-drawer-root"
   >
     <Transition
-      enter-active-class="transition-opacity duration-200 ease-out"
-      leave-active-class="transition-opacity duration-150 ease-in"
+      enter-active-class="transition-opacity duration-[220ms] ease-out"
+      leave-active-class="transition-opacity duration-[220ms] ease-out"
       enter-from-class="opacity-0"
       leave-to-class="opacity-0"
       appear
@@ -175,16 +175,16 @@ async function onFiles(e: Event) {
       />
     </Transition>
     <Transition
-      enter-active-class="transition-transform duration-300 ease-out"
-      leave-active-class="transition-transform duration-200 ease-in"
-      enter-from-class="-translate-x-4 opacity-0"
-      leave-to-class="-translate-x-4 opacity-0"
+      enter-active-class="transition-transform duration-[260ms] ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform"
+      leave-active-class="transition-transform duration-[220ms] ease-[cubic-bezier(0.4,0,0.2,1)] will-change-transform"
+      enter-from-class="-translate-x-6"
+      leave-to-class="-translate-x-6"
       appear
     >
     <aside
       ref="panelRef"
       data-testid="folder-drawer"
-      class="pointer-events-auto absolute top-0 flex h-full flex-col border-r border-border/60 bg-card shadow-2xl transition-opacity"
+      class="pointer-events-auto absolute top-0 flex h-full flex-col border-r border-border/60 bg-card shadow-2xl"
       :style="fullWidth
         ? { left: '0px', width: '100vw' }
         : { left: railWidth + 'px', width: 'min(55vw, 720px)' }"
