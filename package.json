@@ -5,6 +5,7 @@
   "packageManager": "pnpm@9.12.3",
   "scripts": {
     "build": "nuxt build",
+    "deploy": "nuxt build && npx wrangler pages deploy .output/public/",
     "dev": "nuxt dev",
     "generate": "nuxt generate",
     "preview": "nuxt preview",

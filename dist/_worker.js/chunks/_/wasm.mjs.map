@@ -1,0 +1,1 @@
+{"version":3,"file":"wasm.mjs","sources":["../../../../node_modules/.pnpm/@shikijs+engine-oniguruma@4.0.2/node_modules/@shikijs/engine-oniguruma/dist/wasm-inlined.mjs"],"names":["wasmBinary","Uint8Array","from","atob","c","charCodeAt","getWasmInstance","async","info","WebAssembly","instantiate","then","wasm","instance","exports"],"mappings":"","x_google_ignoreList":[0]}
