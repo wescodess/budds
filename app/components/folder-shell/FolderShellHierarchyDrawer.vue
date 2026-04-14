@@ -22,7 +22,7 @@ const { documents, uploadFiles, deleteDocument, moveDocument } = useDocuments(co
 const panelRef = ref<HTMLElement | null>(null)
 onClickOutside(panelRef, (e) => {
   const el = e.target as HTMLElement | null
-  if (el?.closest('[role="menu"],[role="dialog"],[role="alertdialog"],[data-reka-popper-content-wrapper],[data-reka-menu-content],[data-reka-menubar-content],[data-dismissable-layer]')) return
+  if (el?.closest('[data-testid="folder-rail"],[role="menu"],[role="dialog"],[role="alertdialog"],[data-reka-popper-content-wrapper],[data-reka-menu-content],[data-reka-menubar-content],[data-dismissable-layer]')) return
   emit('close')
 })
 onKeyStroke('Escape', () => emit('close'))
