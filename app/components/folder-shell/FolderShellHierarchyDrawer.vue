@@ -158,18 +158,18 @@ async function onFiles(e: Event) {
 
 <template>
   <div
-    class="pointer-events-auto fixed inset-0 z-40"
+    class="pointer-events-none fixed inset-0 z-40"
     data-testid="folder-drawer-root"
   >
     <div
-      class="absolute inset-0 bg-black/45 backdrop-blur-[3px]"
+      class="pointer-events-auto absolute inset-0 bg-black/45 backdrop-blur-[3px]"
       :style="!fullWidth ? { left: railWidth + 'px' } : undefined"
       @click="emit('close')"
     />
     <aside
       ref="panelRef"
       data-testid="folder-drawer"
-      class="absolute top-0 flex h-full flex-col border-r border-border/60 bg-card shadow-2xl"
+      class="pointer-events-auto absolute top-0 flex h-full flex-col border-r border-border/60 bg-card shadow-2xl"
       :style="fullWidth
         ? { left: '0px', width: '100vw' }
         : { left: railWidth + 'px', width: 'min(55vw, 720px)' }"
