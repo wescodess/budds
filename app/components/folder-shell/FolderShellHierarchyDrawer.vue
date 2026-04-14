@@ -273,15 +273,7 @@ async function onFiles(e: Event) {
       </template>
 
       <template v-else-if="section === 'members'">
-        <div class="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 py-14 text-center">
-          <div class="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary">
-            <FolderPlus class="h-5 w-5" />
-          </div>
-          <p class="text-sm font-medium text-foreground">Invite collaborators</p>
-          <p class="max-w-xs text-xs text-muted-foreground">
-            Members management is coming soon. You'll be able to invite teammates and manage access here.
-          </p>
-        </div>
+        <FolderShellMembersPanel :folder="folder" />
       </template>
 
       <footer class="flex items-center justify-between gap-3 border-t border-border/60 px-5 py-3 text-xs">
