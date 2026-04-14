@@ -3,6 +3,42 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import tailwindcss from '@tailwindcss/vite'
 
+function parseDotenvFiles() {
+  const dotenvPaths = [
+    path.resolve(process.cwd(), '.env'),
+    path.resolve(process.cwd(), '.env.local'),
+  ]
+  const entries: Record<string, string> = {}
+
+  for (const dotenvPath of dotenvPaths) {
+    if (!fs.existsSync(dotenvPath)) continue
+
+    const source = fs.readFileSync(dotenvPath, 'utf8')
+
+    for (const rawLine of source.split(/\r?\n/)) {
+      const line = rawLine.trim()
+      if (!line || line.startsWith('#')) continue
+
+      const separatorIndex = line.indexOf('=')
+      if (separatorIndex < 1) continue
+
+      const key = line.slice(0, separatorIndex).trim()
+      let value = line.slice(separatorIndex + 1).trim()
+
+      if (
+        (value.startsWith('"') && value.endsWith('"'))
+        || (value.startsWith("'") && value.endsWith("'"))
+      ) {
+        value = value.slice(1, -1)
+      }
+
+      entries[key] = value
+    }
+  }
+
+  return entries
+}
+
 function parseWranglerVars() {
   const wranglerPath = path.resolve(process.cwd(), 'wrangler.toml')
   if (!fs.existsSync(wranglerPath)) return {}
@@ -42,11 +78,12 @@ function parseWranglerVars() {
   return entries
 }
 
+const dotenvVars = parseDotenvFiles()
 const wranglerVars = parseWranglerVars()
 
 function readConfiguredValue(...names: string[]) {
   for (const name of names) {
-    const value = process.env[name] || wranglerVars[name]
+    const value = process.env[name] || dotenvVars[name] || wranglerVars[name]
     if (typeof value === 'string' && value.trim().length > 0) {
       return value.trim()
     }
@@ -131,6 +168,9 @@ export default defineNuxtConfig({
     r2BucketName: readConfiguredValue('NUXT_R2_BUCKET_NAME', 'R2_BUCKET_NAME'),
     public: {
       siteUrl: publicSiteUrl,
+      convex: {
+        url: convexUrl,
+      },
     },
   },
   routeRules: {
