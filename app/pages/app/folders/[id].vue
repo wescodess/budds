@@ -273,6 +273,8 @@ const folderDepth = computed(() => {
 async function handleUpload(files: File[]) {
   try {
     await uploadFiles(files, folderId.value)
+    const { toast } = await import('vue-sonner')
+    toast.success(files.length === 1 ? 'Document uploaded' : `${files.length} documents uploaded`)
   } catch (e: any) {
     const { toast } = await import('vue-sonner')
     toast.error(e.message || 'Upload failed')

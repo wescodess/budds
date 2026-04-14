@@ -52,6 +52,46 @@ const { data: quizzesData } = useConvexQuery(
 )
 const quizCount = computed(() => (quizzesData.value as any[] | undefined)?.length ?? 0)
 
+const { allFolders } = useFolders()
+const { data: folderCounts } = useConvexQuery(api.documents.countsByFolder, {})
+const knowledgeCount = computed(() => {
+  const counts = new Map<string, number>()
+  for (const c of (folderCounts.value ?? []) as Array<{ folderId: string; count: number }>) {
+    counts.set(c.folderId, c.count)
+  }
+  const all = allFolders.value ?? []
+  const childrenByParent = new Map<string, string[]>()
+  for (const f of all) {
+    const p = (f.parentId as unknown as string | undefined) ?? ''
+    if (!p) continue
+    if (!childrenByParent.has(p)) childrenByParent.set(p, [])
+    childrenByParent.get(p)!.push(f._id as unknown as string)
+  }
+  const byId = new Map(all.map(f => [f._id as unknown as string, f]))
+  let cursor = byId.get(props.folderId as unknown as string) ?? null
+  const visited = new Set<string>()
+  while (cursor?.parentId) {
+    const pid = cursor.parentId as unknown as string
+    if (visited.has(pid)) break
+    visited.add(pid)
+    const parent = byId.get(pid)
+    if (!parent) break
+    cursor = parent
+  }
+  const rootId = (cursor?._id as unknown as string) ?? (props.folderId as unknown as string)
+  const seen = new Set<string>()
+  const stack = [rootId]
+  let total = 0
+  while (stack.length) {
+    const id = stack.pop()!
+    if (seen.has(id)) continue
+    seen.add(id)
+    total += counts.get(id) ?? 0
+    for (const c of childrenByParent.get(id) ?? []) stack.push(c)
+  }
+  return total
+})
+
 const knowledgeActive = computed(() => props.activeTab === 'documents')
 function select(tab: TabValue) { emit('update:activeTab', tab) }
 
@@ -103,6 +143,7 @@ async function onLogout() {
       <FolderShellRailItem
         label="Knowledge"
         :compact="compact"
+        :count="knowledgeCount"
         :active="drawerSection === 'knowledge' || knowledgeActive"
         :icon="BookOpen"
         @click="emit('open-drawer', 'knowledge')"

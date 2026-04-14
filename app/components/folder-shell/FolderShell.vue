@@ -83,14 +83,14 @@ const themeStyle = computed(() => {
     '--sidebar-primary': hex,
     '--sidebar-primary-foreground': fg,
     '--sidebar-ring': hex,
-    '--background': mix(ink, tint, 0.14 + luminance * 0.18),
-    '--card': mix(slate, tint, 0.16 + luminance * 0.18),
-    '--popover': mix(slate, tint, 0.16 + luminance * 0.18),
-    '--muted': mix(slate, tint, 0.2 + luminance * 0.18),
-    '--accent': mix(slate, tint, 0.25 + luminance * 0.2),
-    '--sidebar': mix(ink, tint, 0.16 + luminance * 0.2),
-    '--sidebar-accent': mix(slate, tint, 0.25 + luminance * 0.2),
-    '--border': mix(slate, tint, 0.3 + luminance * 0.15),
+    '--background': mix(ink, tint, 0.22 - luminance * 0.14),
+    '--card': mix(slate, tint, 0.24 - luminance * 0.14),
+    '--popover': mix(slate, tint, 0.24 - luminance * 0.14),
+    '--muted': mix(slate, tint, 0.28 - luminance * 0.14),
+    '--accent': mix(slate, tint, 0.34 - luminance * 0.16),
+    '--sidebar': mix(ink, tint, 0.24 - luminance * 0.16),
+    '--sidebar-accent': mix(slate, tint, 0.34 - luminance * 0.16),
+    '--border': mix(slate, tint, 0.36 - luminance * 0.12),
   } as Record<string, string>
 })
 </script>
