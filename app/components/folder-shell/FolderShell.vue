@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { useLocalStorage, useMagicKeys, whenever, useMediaQuery } from '@vueuse/core'
+import { useMagicKeys, whenever } from '@vueuse/core'
 import type { Id } from '~~/convex/_generated/dataModel'
 import type { Doc } from '~~/convex/_generated/dataModel'
 
@@ -16,9 +16,26 @@ const emit = defineEmits<{
   'new-void': []
 }>()
 
-const drawerOpen = useLocalStorage('g3.drawer.open', false)
-const drawerSection = useLocalStorage<'knowledge' | 'members'>('g3.drawer.section', 'knowledge')
-const isDesktop = useMediaQuery('(min-width: 1024px)')
+const drawerOpen = ref(false)
+const drawerSection = ref<'knowledge' | 'members'>('knowledge')
+const isDesktop = ref(true)
+
+onMounted(() => {
+  try {
+    const stored = localStorage.getItem('g3.drawer.open')
+    if (stored !== null) drawerOpen.value = stored === 'true'
+    const sec = localStorage.getItem('g3.drawer.section')
+    if (sec === 'knowledge' || sec === 'members') drawerSection.value = sec
+  } catch { /* ignore */ }
+  const mq = window.matchMedia('(min-width: 1024px)')
+  isDesktop.value = mq.matches
+  const onChange = (e: MediaQueryListEvent) => { isDesktop.value = e.matches }
+  mq.addEventListener('change', onChange)
+  onBeforeUnmount(() => mq.removeEventListener('change', onChange))
+})
+
+watch(drawerOpen, (v) => { try { localStorage.setItem('g3.drawer.open', String(v)) } catch { /* ignore */ } })
+watch(drawerSection, (v) => { try { localStorage.setItem('g3.drawer.section', v) } catch { /* ignore */ } })
 
 const keys = useMagicKeys()
 const toggleKey = computed(() => Boolean(keys['Meta+B']?.value || keys['Ctrl+B']?.value))
