@@ -6,6 +6,7 @@ is_ui: true
 design_screens:
   - stitch:898d1fe0f46e407ca96b88746eb8684d (drawer closed — files list)
   - stitch:da40666b5c4c44ae959b614a8fa60cea (drawer open — hierarchy + files)
+  - stitch:184ea1190d144db7bc079fab439f4958 (create-void modal — 3-col type picker)
 reference: docs/screenshots/Screenshot 2026-04-13 at 10.25.19 PM.png
 ---
 
@@ -92,4 +93,58 @@ Non-goals:
 
 ## Spec Change Log
 
-_empty_
+**2026-04-14 — Scope refinement: folder-scoped voids + CreateVoidDialog dispatch.**
+
+- **Trigger (user):** "A void is a dedicated space for a type of interaction (chat, flashcard, quiz). Click 'Create void' from the rail → type-picker modal (masonry, like the dashboard block grid). When a void is created it is tied to the folder it was created in and can only be viewed in that folder or have access to the resources (members and knowledge) in that folder."
+- **Discovery:** `conversations`, `quizzes`, `flashcardSets` already carry `folderId: v.id('folders')` in `convex/schema.ts`. Folder-scoping is already a schema invariant; no migration, no new FK needed. The gap is purely UX: the rail's `New Void` button currently opens the subfolder modal (`[id].vue:291` → `@new-void="showSubfolderModal = true"`), which is a placeholder misuse.
+- **Design approved:** Stitch screen `184ea1190d144db7bc079fab439f4958` (Direction A, 3-col grid, a11y 100/100). Component shipped at `app/components/voids/CreateVoidDialog.vue` with 4 passing tests in `tests/component/voids/create-void-dialog.test.ts`.
+
+### Added tasks
+
+- [ ] T13 — Wire `CreateVoidDialog` into `app/pages/app/folders/[id].vue`:
+    - Replace the `@new-void="showSubfolderModal = true"` handler with `@new-void="newVoidOpen = true"`.
+    - Render `<CreateVoidDialog v-model:open="newVoidOpen" :folder-name="folder?.name ?? ''" @create="onCreateVoid" />` alongside the existing subfolder modal.
+    - `onCreateVoid(type)` dispatches by `VoidType`:
+      - `chat` → call `api.conversations.createConversation({ folderId, title: 'New chat' })`; on success, `activeTab = 'chat'` + push `?tab=chat&conversation=<newId>` so the chat view auto-loads the new conversation. Close dialog. Toast `Chat void created`.
+      - `flashcards` → `activeTab = 'flashcards'` + push `?tab=flashcards`. Existing flashcards tab handles generator entry. Close dialog. (No mutation at dialog-submit time; `flashcardSets` rows are produced by the generator flow.)
+      - `quiz` → `activeTab = 'quiz'` + push `?tab=quiz`. Same rationale as flashcards. Close dialog.
+    - On any dispatch failure, `toast.error(unwrapConvexError(e))` and leave the dialog open with submit re-enabled.
+- [ ] T14 — Extend `tests/component/voids/create-void-dialog.test.ts` with a "disabled submit stays disabled during in-flight submit" assertion (guards against double-submit on chat path).
+- [ ] T15 — Add page-level integration test or expand an existing folder-page smoke to assert: clicking `[data-testid="rail-new-void"]` opens `[data-testid="create-void-dialog"]` and the old subfolder modal stays closed.
+- [ ] T16 — Delete the now-orphaned `showSubfolderModal` wiring **only if** no other call site depends on it; otherwise, leave subfolder creation on its own dedicated trigger (not the rail's Create Void). Verify by grep of `showSubfolderModal` usage.
+
+### Added AC
+
+11. Clicking `New Void` in the rail opens `CreateVoidDialog` populated with the active folder's name in the title. The subfolder modal does **not** open.
+12. With no type selected, the primary CTA is disabled. Selecting a type enables the CTA and updates its label (`Create chat void` / `Create flash cards void` / `Create quiz void`). Unselected cards dim to 60% opacity; selected card shows the amber 1.5px border + dot indicator.
+13. Submitting with `type=chat` creates a conversation under `folderId` and navigates to `?tab=chat&conversation=<newId>`. Submitting with `flashcards` or `quiz` switches `?tab=` only (no row created at submit time — deferred to each type's generator surface).
+14. On mutation failure the dialog stays open, submit is re-enabled, and a toast with the unwrapped error is shown.
+15. No schema change lands in this spec. `convex/schema.ts` is untouched. Any future multi-type unified `voids` table is explicitly deferred.
+
+### Non-goals (this amendment)
+
+- Unified `voids` table migration.
+- Unified `listVoids(folderId)` query. The rail continues to sum counts from the three typed tables.
+- Members enforcement (voids already implicitly "inherit members" via `folderId` ownership; no explicit membership table yet).
+- Changes to the Flashcards / Quiz generator UX — out of scope; this amendment only routes into their existing entry points.
+
+**2026-04-14 (b) — Scope refinement: rail lists individual folder-scoped voids.**
+
+- **Trigger (user):** "In the sidebar, in the voids section, we only want to see voids created and attached to the folder we currently are in. If no voids show CTA and the create button below should be hidden."
+- **Change:** `FolderShellRail` no longer renders three fixed type rows (Chats / Flashcards / Quiz) with counts. It now renders one row per individual void instance belonging to the current folder, sorted by `_creationTime` desc, with the type icon (chat = `MessageSquare`, flashcards = `Layers`, quiz = `ClipboardList`) and the void title. Conversations are filtered to the current `folderId`; flashcard sets and quizzes are already scoped by `api.*.listByFolder({ folderId })`.
+- **Empty state:** when the folder has zero voids, the rail renders an inline dashed-border empty block with copy "No voids in this folder yet." and a primary `Create your first void` button (`data-testid="rail-voids-empty-cta"`). In compact mode the empty state collapses to a single `+` square icon button (`data-testid="rail-voids-empty-compact"`).
+- **Bottom CTA:** the persistent `+ New Void` footer button (`data-testid="rail-new-void"`) is hidden when the list is empty (the inline CTA takes over) and shown when at least one void exists.
+
+### Added tasks
+
+- [ ] T17 — `FolderShellRail`: add `activeConversationId?: string | null` prop and `select-void: [{ type, id }]` emit. Replace the type-count items with `v-for` over `voids`. Add empty-state block + compact variant. Wrap bottom `+ New Void` with `v-if="hasVoids"`.
+- [ ] T18 — `FolderShell`: thread the new prop and event straight through to the parent page.
+- [ ] T19 — `[id].vue`: implement `onSelectVoid({ type, id })`. For `chat`, update `?tab=chat&conversationId=<id>`. For `flashcards`/`quiz`, switch `?tab=` and strip the stale `conversationId`.
+- [ ] T20 — Update `tests/component/folder-shell/folder-shell-rail.test.ts` for the new structure (empty-state block, compact `+` button, per-instance rows, hidden bottom CTA when empty). Defer until the rail test file is revisited.
+
+### Added AC
+
+16. When the current folder has zero chat / flashcard / quiz rows, the rail shows the inline empty-state CTA and hides the bottom `+ New Void` footer button.
+17. When the current folder has one or more voids, the rail lists each void on its own row (chat rows show conversation title, flash card rows show set title, quiz rows show quiz title), the bottom `+ New Void` footer button is visible, and the inline empty state is not rendered.
+18. Clicking a void row switches `?tab=` to that void's type and, for chat rows, loads that specific conversation via `?conversationId=<id>`. Clicking a flashcard or quiz row switches the tab only.
+19. The active row highlight follows the URL: a chat row is active iff `?tab=chat` **and** `?conversationId=<row-id>`; a flashcards or quiz row is active iff `?tab=` matches its type (current iteration — single-active row per non-chat type is acceptable until the flashcards/quiz generators produce addressable `?id=` surfaces).

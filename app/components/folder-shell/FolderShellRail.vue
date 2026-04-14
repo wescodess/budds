@@ -17,11 +17,14 @@ import type { Id, Doc } from '~~/convex/_generated/dataModel'
 defineOptions({ name: 'FolderShellRail' })
 
 type TabValue = 'chat' | 'flashcards' | 'quiz' | 'documents'
+type VoidKind = 'chat' | 'flashcards' | 'quiz'
+type VoidItem = { id: string; type: VoidKind; title: string; updatedAt: number }
 
 const props = defineProps<{
   folderId: Id<'folders'>
   folder: Doc<'folders'> | null
   activeTab: TabValue
+  activeConversationId?: string | null
   compact?: boolean
   drawerSection?: 'knowledge' | 'members' | null
 }>()
@@ -30,27 +33,61 @@ const emit = defineEmits<{
   'update:activeTab': [value: TabValue]
   'open-drawer': [section: 'knowledge' | 'members']
   'new-void': []
+  'select-void': [value: { type: VoidKind; id: string }]
 }>()
 
 const { signOut } = useUserSession()
 
 const { data: convosData } = useConvexQuery(api.conversations.listRecentForUser, {})
-const chatCount = computed(() => {
-  const all = (convosData.value as Array<{ folderId: string }> | undefined) ?? []
-  return all.filter(c => c.folderId === props.folderId).length
-})
 
 const { data: flashSetsData } = useConvexQuery(
   api.flashcards.listByFolder,
   computed(() => ({ folderId: props.folderId })),
 )
-const flashCount = computed(() => (flashSetsData.value as any[] | undefined)?.length ?? 0)
 
 const { data: quizzesData } = useConvexQuery(
   api.quizzes.listByFolder,
   computed(() => ({ folderId: props.folderId })),
 )
-const quizCount = computed(() => (quizzesData.value as any[] | undefined)?.length ?? 0)
+
+const voids = computed<VoidItem[]>(() => {
+  const folderIdStr = props.folderId as unknown as string
+  const chats = ((convosData.value as Array<any> | undefined) ?? [])
+    .filter(c => (c.folderId as unknown as string) === folderIdStr)
+    .map<VoidItem>(c => ({
+      id: c._id as string,
+      type: 'chat',
+      title: c.title?.trim() || 'Untitled chat',
+      updatedAt: (c._creationTime as number) ?? 0,
+    }))
+  const flashes = ((flashSetsData.value as Array<any> | undefined) ?? []).map<VoidItem>(f => ({
+    id: f._id as string,
+    type: 'flashcards',
+    title: f.title?.trim() || 'Flash card set',
+    updatedAt: (f._creationTime as number) ?? 0,
+  }))
+  const quizs = ((quizzesData.value as Array<any> | undefined) ?? []).map<VoidItem>(q => ({
+    id: q._id as string,
+    type: 'quiz',
+    title: q.title?.trim() || 'Quiz',
+    updatedAt: (q._creationTime as number) ?? 0,
+  }))
+  return [...chats, ...flashes, ...quizs].sort((a, b) => b.updatedAt - a.updatedAt)
+})
+
+const hasVoids = computed(() => voids.value.length > 0)
+
+const voidIcon: Record<VoidKind, typeof MessageSquare> = {
+  chat: MessageSquare,
+  flashcards: Layers,
+  quiz: ClipboardList,
+}
+
+function isVoidActive(v: VoidItem): boolean {
+  if (v.type !== props.activeTab) return false
+  if (v.type === 'chat') return props.activeConversationId === v.id
+  return false
+}
 
 const { allFolders } = useFolders()
 const { data: folderCounts } = useConvexQuery(api.documents.countsByFolder, {})
@@ -93,7 +130,6 @@ const knowledgeCount = computed(() => {
 })
 
 const knowledgeActive = computed(() => props.activeTab === 'documents')
-function select(tab: TabValue) { emit('update:activeTab', tab) }
 
 async function onLogout() {
   try { await signOut() } catch { /* ignore */ }
@@ -151,34 +187,52 @@ async function onLogout() {
 
       <div class="my-3 h-px bg-border/60" />
       <div v-if="!compact" class="px-2 pb-1 text-[10px] uppercase tracking-widest text-muted-foreground">Voids</div>
-      <FolderShellRailItem
-        label="Chats"
-        :compact="compact"
-        :count="chatCount"
-        :active="activeTab === 'chat'"
-        :icon="MessageSquare"
-        @click="select('chat')"
-      />
-      <FolderShellRailItem
-        label="Flashcards"
-        :compact="compact"
-        :count="flashCount"
-        :active="activeTab === 'flashcards'"
-        :icon="Layers"
-        @click="select('flashcards')"
-      />
-      <FolderShellRailItem
-        label="Quiz"
-        :compact="compact"
-        :count="quizCount"
-        :active="activeTab === 'quiz'"
-        :icon="ClipboardList"
-        @click="select('quiz')"
-      />
+
+      <template v-if="hasVoids">
+        <FolderShellRailItem
+          v-for="v in voids"
+          :key="`${v.type}-${v.id}`"
+          :label="v.title"
+          :compact="compact"
+          :active="isVoidActive(v)"
+          :icon="voidIcon[v.type]"
+          :data-testid="`rail-void-${v.type}-${v.id}`"
+          @click="emit('select-void', { type: v.type, id: v.id })"
+        />
+      </template>
+      <div
+        v-else-if="!compact"
+        class="mt-2 rounded-md border border-dashed border-border/60 bg-card/40 p-3"
+        data-testid="rail-voids-empty"
+      >
+        <p class="text-xs leading-relaxed text-muted-foreground">
+          No voids in this folder yet.
+        </p>
+        <UiButton
+          size="sm"
+          data-testid="rail-voids-empty-cta"
+          class="mt-2 w-full gap-1.5 rounded-full"
+          @click="emit('new-void')"
+        >
+          <Plus class="h-3.5 w-3.5" />
+          Create your first void
+        </UiButton>
+      </div>
+      <button
+        v-else
+        type="button"
+        data-testid="rail-voids-empty-compact"
+        class="mx-auto mt-2 flex h-8 w-8 items-center justify-center rounded-md bg-primary text-primary-foreground transition hover:opacity-90"
+        aria-label="Create your first void"
+        @click="emit('new-void')"
+      >
+        <Plus class="h-4 w-4" />
+      </button>
     </nav>
 
     <div class="border-t border-border/60 p-3">
       <UiButton
+        v-if="hasVoids"
         size="sm"
         data-testid="rail-new-void"
         :class="['w-full gap-1.5 rounded-full', compact && 'px-0']"
@@ -187,7 +241,7 @@ async function onLogout() {
         <Plus class="h-4 w-4" />
         <span v-if="!compact">New Void</span>
       </UiButton>
-      <div :class="['mt-3 flex items-center gap-1', compact ? 'flex-col' : 'justify-between px-1']">
+      <div :class="[hasVoids && 'mt-3', 'flex items-center gap-1', compact ? 'flex-col' : 'justify-between px-1']">
         <button class="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="Settings">
           <Settings class="h-4 w-4" />
         </button>
