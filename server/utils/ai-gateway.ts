@@ -1,3 +1,5 @@
+import { readConfiguredRuntimeValue } from './runtime-config'
+
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant'
   content: string
@@ -28,20 +30,43 @@ export interface GenerateResponse {
 
 function getGatewayConfig() {
   const config = useRuntimeConfig()
+  const accountId = readConfiguredRuntimeValue(
+    config.cloudflareAccountId,
+    'NUXT_CLOUDFLARE_ACCOUNT_ID',
+    'CF_ACCOUNT_ID',
+  )
+  const gatewayId = readConfiguredRuntimeValue(
+    config.cloudflareAiGatewayId,
+    'NUXT_CLOUDFLARE_AI_GATEWAY_ID',
+    'CLOUDFLARE_AI_GATEWAY_ID',
+  )
+  const gatewayApiKey = readConfiguredRuntimeValue(
+    config.cloudflareAiGatewayApiKey,
+    'NUXT_CLOUDFLARE_AI_GATEWAY_API_KEY',
+    'CLOUDFLARE_AI_GATEWAY_API_KEY',
+  )
+  const openrouterApiKey = readConfiguredRuntimeValue(
+    config.openrouterApiKey,
+    'NUXT_OPENROUTER_API_KEY',
+    'OPENROUTER_API_KEY',
+  )
 
-  if (!config.cloudflareAccountId || !config.cloudflareAiGatewayId || !config.openrouterApiKey) {
-    throw createError({ statusCode: 500, message: 'Missing AI Gateway configuration. Check CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_AI_GATEWAY_ID, and OPENROUTER_API_KEY env vars.' })
+  if (!accountId || !gatewayId || !openrouterApiKey) {
+    throw createError({
+      statusCode: 500,
+      message: 'Missing AI Gateway configuration. Check NUXT_CLOUDFLARE_ACCOUNT_ID/CF_ACCOUNT_ID, NUXT_CLOUDFLARE_AI_GATEWAY_ID/CLOUDFLARE_AI_GATEWAY_ID, and NUXT_OPENROUTER_API_KEY/OPENROUTER_API_KEY.',
+    })
   }
 
-  const baseUrl = `https://gateway.ai.cloudflare.com/v1/${config.cloudflareAccountId}/${config.cloudflareAiGatewayId}`
+  const baseUrl = `https://gateway.ai.cloudflare.com/v1/${accountId}/${gatewayId}`
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    'Authorization': `Bearer ${config.openrouterApiKey}`,
+    'Authorization': `Bearer ${openrouterApiKey}`,
   }
 
-  if (config.cloudflareAiGatewayApiKey) {
-    headers['cf-aig-authorization'] = `Bearer ${config.cloudflareAiGatewayApiKey}`
+  if (gatewayApiKey) {
+    headers['cf-aig-authorization'] = `Bearer ${gatewayApiKey}`
   }
 
   return { baseUrl, headers }

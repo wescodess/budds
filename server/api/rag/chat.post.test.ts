@@ -174,6 +174,36 @@ describe('POST /api/rag/chat — folderId enforcement (AC #1)', () => {
     expect(result.sources[0].attributes.filename).toBe('chapter-1.pdf')
     expect(result.sources[1].attributes.documentId).toBe('doc-2')
   })
+
+  test('[P1] should continue with chunk context when folder-doc fallback throws', async () => {
+    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+      query: 'Summarize this folder',
+      model: 'openai/gpt-4o-mini',
+      folderId: 'folder_bio101',
+    })
+    vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({
+      data: [
+        {
+          id: '1',
+          content: 'Indexed chunk content',
+          score: 0.93,
+          attributes: { filename: 'chapter-1.pdf', userId: 'u1' },
+        },
+      ],
+    })
+    vi.mocked(globalThis.fetchFolderDocs as any).mockRejectedValue(new Error('R2 unavailable'))
+    vi.mocked(globalThis.generateCompletion as any).mockResolvedValue({
+      choices: [{ message: { content: 'Summary [1]' } }],
+      model: 'openai/gpt-4o-mini',
+      usage: {},
+    })
+
+    const result = await handler(mockEvent)
+
+    expect(result.answer).toBe('Summary [1]')
+    expect(result.sources).toHaveLength(1)
+    expect(result.sources[0].content).toBe('Indexed chunk content')
+  })
 })
 
 describe('POST /api/rag/chat — streaming (AC #1, #2)', () => {

@@ -93,7 +93,6 @@ const advisoryRequirements = [
   { kind: 'var', label: 'Google OAuth client id', names: ['GOOGLE_CLIENT_ID'] },
   { kind: 'secret', label: 'Google OAuth client secret', names: ['GOOGLE_CLIENT_SECRET'] },
   { kind: 'var', label: 'Convex deployment URL', names: ['CONVEX_URL', 'NUXT_PUBLIC_CONVEX_URL'] },
-  { kind: 'var', label: 'Convex site URL', names: ['NUXT_CONVEX_SITE_URL', 'CONVEX_SITE_URL'] },
   { kind: 'var', label: 'Cloudflare account id', names: ['CF_ACCOUNT_ID', 'NUXT_CLOUDFLARE_ACCOUNT_ID'] },
   { kind: 'var', label: 'Cloudflare AI Gateway id', names: ['CLOUDFLARE_AI_GATEWAY_ID', 'NUXT_CLOUDFLARE_AI_GATEWAY_ID'] },
   { kind: 'secret', label: 'Cloudflare AI Gateway API key', names: ['CLOUDFLARE_AI_GATEWAY_API_KEY', 'NUXT_CLOUDFLARE_AI_GATEWAY_API_KEY'] },
@@ -173,7 +172,11 @@ if (missingAdvisory.length > 0) {
 lines.push('')
 lines.push('Recommended split for Cloudflare Pages (Settings > Variables and Secrets):')
 lines.push('- Secrets: BETTER_AUTH_SECRET, GOOGLE_CLIENT_SECRET, NUXT_CLOUDFLARE_AI_GATEWAY_API_KEY, NUXT_CLOUDFLARE_AI_SEARCH_TOKEN, NUXT_OPENROUTER_API_KEY, NUXT_R2_ACCESS_KEY_ID, NUXT_R2_SECRET_ACCESS_KEY')
-lines.push('- Variables (set in wrangler.toml [vars]): GOOGLE_CLIENT_ID, CONVEX_URL, NUXT_PUBLIC_CONVEX_URL, NUXT_CONVEX_SITE_URL, NUXT_CLOUDFLARE_ACCOUNT_ID, NUXT_CLOUDFLARE_AI_GATEWAY_ID, NUXT_CLOUDFLARE_AI_SEARCH_INSTANCE, NUXT_R2_BUCKET_NAME, NUXT_R2_ENDPOINT')
+lines.push('- Variables in wrangler.toml [vars]: GOOGLE_CLIENT_ID, NUXT_CLOUDFLARE_ACCOUNT_ID, NUXT_CLOUDFLARE_AI_GATEWAY_ID, NUXT_CLOUDFLARE_AI_SEARCH_INSTANCE, NUXT_R2_BUCKET_NAME, NUXT_R2_ENDPOINT')
+lines.push('- Local dev: set CONVEX_URL in .env.local (NUXT_PUBLIC_CONVEX_URL is optional because the app falls back to CONVEX_URL)')
+lines.push('- Cloudflare Pages preview: set CONVEX_URL and NUXT_PUBLIC_CONVEX_URL to https://cautious-elephant-39.convex.cloud')
+lines.push('- Cloudflare Pages production: set CONVEX_URL and NUXT_PUBLIC_CONVEX_URL to https://trustworthy-mink-186.convex.cloud')
+lines.push('- Do not set NUXT_CONVEX_SITE_URL separately; the app derives it from CONVEX_URL')
 lines.push('')
 
 const output = `${lines.join('\n')}\n`
