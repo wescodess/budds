@@ -115,17 +115,20 @@ export default defineNuxtConfig({
     port: 3002,
   },
   runtimeConfig: {
+    // Use process.env fallbacks for local dev (.env), but Nuxt auto-resolves
+    // NUXT_-prefixed env vars at runtime on Cloudflare Pages Workers.
+    // e.g. runtimeConfig key "cloudflareAccountId" ← env "NUXT_CLOUDFLARE_ACCOUNT_ID"
     convexSiteUrl,
-    cloudflareAccountId: process.env.CF_ACCOUNT_ID,
-    cloudflareAiGatewayId: process.env.CLOUDFLARE_AI_GATEWAY_ID,
-    cloudflareAiGatewayApiKey: process.env.CLOUDFLARE_AI_GATEWAY_API_KEY,
-    cloudflareAiSearchInstance: process.env.CLOUDFLARE_AI_SEARCH_INSTANCE,
-    cloudflareAiSearchToken: process.env.CLOUDFLARE_AI_SEARCH_TOKEN,
-    openrouterApiKey: process.env.OPENROUTER_API_KEY,
-    r2Endpoint: process.env.R2_ENDPOINT,
-    r2AccessKeyId: process.env.R2_ACCESS_KEY_ID,
-    r2SecretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
-    r2BucketName: process.env.R2_BUCKET_NAME,
+    cloudflareAccountId: process.env.CF_ACCOUNT_ID || '',
+    cloudflareAiGatewayId: process.env.CLOUDFLARE_AI_GATEWAY_ID || '',
+    cloudflareAiGatewayApiKey: process.env.CLOUDFLARE_AI_GATEWAY_API_KEY || '',
+    cloudflareAiSearchInstance: process.env.CLOUDFLARE_AI_SEARCH_INSTANCE || '',
+    cloudflareAiSearchToken: process.env.CLOUDFLARE_AI_SEARCH_TOKEN || '',
+    openrouterApiKey: process.env.OPENROUTER_API_KEY || '',
+    r2Endpoint: process.env.R2_ENDPOINT || '',
+    r2AccessKeyId: process.env.R2_ACCESS_KEY_ID || '',
+    r2SecretAccessKey: process.env.R2_SECRET_ACCESS_KEY || '',
+    r2BucketName: process.env.R2_BUCKET_NAME || '',
     public: {
       siteUrl: publicSiteUrl,
     },

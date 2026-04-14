@@ -93,16 +93,17 @@ const advisoryRequirements = [
   { kind: 'var', label: 'Google OAuth client id', names: ['GOOGLE_CLIENT_ID'] },
   { kind: 'secret', label: 'Google OAuth client secret', names: ['GOOGLE_CLIENT_SECRET'] },
   { kind: 'var', label: 'Convex deployment URL', names: ['CONVEX_URL', 'NUXT_PUBLIC_CONVEX_URL'] },
-  { kind: 'var', label: 'Cloudflare account id', names: ['CF_ACCOUNT_ID'] },
-  { kind: 'var', label: 'Cloudflare AI Gateway id', names: ['CLOUDFLARE_AI_GATEWAY_ID'] },
-  { kind: 'secret', label: 'Cloudflare AI Gateway API key', names: ['CLOUDFLARE_AI_GATEWAY_API_KEY'] },
-  { kind: 'var', label: 'Cloudflare AI Search instance', names: ['CLOUDFLARE_AI_SEARCH_INSTANCE'] },
-  { kind: 'secret', label: 'Cloudflare AI Search token', names: ['CLOUDFLARE_AI_SEARCH_TOKEN'] },
-  { kind: 'secret', label: 'OpenRouter API key', names: ['OPENROUTER_API_KEY'] },
-  { kind: 'var', label: 'R2 bucket name', names: ['R2_BUCKET_NAME'] },
-  { kind: 'var', label: 'R2 endpoint', names: ['R2_ENDPOINT'] },
-  { kind: 'secret', label: 'R2 access key id', names: ['R2_ACCESS_KEY_ID'] },
-  { kind: 'secret', label: 'R2 secret access key', names: ['R2_SECRET_ACCESS_KEY'] },
+  { kind: 'var', label: 'Convex site URL', names: ['NUXT_CONVEX_SITE_URL', 'CONVEX_SITE_URL'] },
+  { kind: 'var', label: 'Cloudflare account id', names: ['CF_ACCOUNT_ID', 'NUXT_CLOUDFLARE_ACCOUNT_ID'] },
+  { kind: 'var', label: 'Cloudflare AI Gateway id', names: ['CLOUDFLARE_AI_GATEWAY_ID', 'NUXT_CLOUDFLARE_AI_GATEWAY_ID'] },
+  { kind: 'secret', label: 'Cloudflare AI Gateway API key', names: ['CLOUDFLARE_AI_GATEWAY_API_KEY', 'NUXT_CLOUDFLARE_AI_GATEWAY_API_KEY'] },
+  { kind: 'var', label: 'Cloudflare AI Search instance', names: ['CLOUDFLARE_AI_SEARCH_INSTANCE', 'NUXT_CLOUDFLARE_AI_SEARCH_INSTANCE'] },
+  { kind: 'secret', label: 'Cloudflare AI Search token', names: ['CLOUDFLARE_AI_SEARCH_TOKEN', 'NUXT_CLOUDFLARE_AI_SEARCH_TOKEN'] },
+  { kind: 'secret', label: 'OpenRouter API key', names: ['OPENROUTER_API_KEY', 'NUXT_OPENROUTER_API_KEY'] },
+  { kind: 'var', label: 'R2 bucket name', names: ['R2_BUCKET_NAME', 'NUXT_R2_BUCKET_NAME'] },
+  { kind: 'var', label: 'R2 endpoint', names: ['R2_ENDPOINT', 'NUXT_R2_ENDPOINT'] },
+  { kind: 'secret', label: 'R2 access key id', names: ['R2_ACCESS_KEY_ID', 'NUXT_R2_ACCESS_KEY_ID'] },
+  { kind: 'secret', label: 'R2 secret access key', names: ['R2_SECRET_ACCESS_KEY', 'NUXT_R2_SECRET_ACCESS_KEY'] },
 ]
 
 function formatNames(names) {
@@ -170,9 +171,9 @@ if (missingAdvisory.length > 0) {
 }
 
 lines.push('')
-lines.push('Recommended split:')
-lines.push('- Secrets: BETTER_AUTH_SECRET, GOOGLE_CLIENT_SECRET, CLOUDFLARE_AI_GATEWAY_API_KEY, CLOUDFLARE_AI_SEARCH_TOKEN, OPENROUTER_API_KEY, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY')
-lines.push('- Variables: GOOGLE_CLIENT_ID, CONVEX_URL, CF_ACCOUNT_ID, CLOUDFLARE_AI_GATEWAY_ID, CLOUDFLARE_AI_SEARCH_INSTANCE, R2_BUCKET_NAME, R2_ENDPOINT')
+lines.push('Recommended split for Cloudflare Pages (Settings > Variables and Secrets):')
+lines.push('- Secrets: BETTER_AUTH_SECRET, GOOGLE_CLIENT_SECRET, NUXT_CLOUDFLARE_AI_GATEWAY_API_KEY, NUXT_CLOUDFLARE_AI_SEARCH_TOKEN, NUXT_OPENROUTER_API_KEY, NUXT_R2_ACCESS_KEY_ID, NUXT_R2_SECRET_ACCESS_KEY')
+lines.push('- Variables (set in wrangler.toml [vars]): GOOGLE_CLIENT_ID, CONVEX_URL, NUXT_PUBLIC_CONVEX_URL, NUXT_CONVEX_SITE_URL, NUXT_CLOUDFLARE_ACCOUNT_ID, NUXT_CLOUDFLARE_AI_GATEWAY_ID, NUXT_CLOUDFLARE_AI_SEARCH_INSTANCE, NUXT_R2_BUCKET_NAME, NUXT_R2_ENDPOINT')
 lines.push('')
 
 const output = `${lines.join('\n')}\n`
