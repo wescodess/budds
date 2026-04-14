@@ -24,6 +24,39 @@ const drawerSection = ref<'knowledge' | 'members'>('knowledge')
 const isDesktop = ref(true)
 const railCollapsed = ref(false)
 const RAIL_COLLAPSED_KEY = 'g4.folder-shell.rail-collapsed'
+const cachedFolderColor = ref<string | null>(null)
+const FOLDER_THEME_CACHE_PREFIX = 'g4.folder-shell.theme.'
+const folderThemeCacheKey = computed(() => `${FOLDER_THEME_CACHE_PREFIX}${props.folderId as string}`)
+const { mode } = useAppTheme()
+const managedBodyThemeKeys = [
+  '--foreground',
+  '--primary',
+  '--primary-foreground',
+  '--ring',
+  '--background',
+  '--card',
+  '--card-foreground',
+  '--popover',
+  '--popover-foreground',
+  '--secondary',
+  '--secondary-foreground',
+  '--muted',
+  '--muted-foreground',
+  '--accent',
+  '--accent-foreground',
+  '--border',
+  '--input',
+  '--sidebar',
+  '--sidebar-foreground',
+  '--sidebar-accent',
+  '--sidebar-accent-foreground',
+  '--sidebar-border',
+  '--sidebar-primary',
+  '--sidebar-primary-foreground',
+  '--sidebar-ring',
+] as const
+const originalBodyThemeValues = new Map<string, string>()
+let bodyThemeSnapshotCaptured = false
 
 onMounted(() => {
   try {
@@ -33,6 +66,8 @@ onMounted(() => {
     if (sec === 'knowledge' || sec === 'members') drawerSection.value = sec
     const rail = localStorage.getItem(RAIL_COLLAPSED_KEY)
     if (rail !== null) railCollapsed.value = rail === 'true'
+    const cachedColor = localStorage.getItem(folderThemeCacheKey.value)
+    if (cachedColor) cachedFolderColor.value = cachedColor
   } catch { /* ignore */ }
   const mq = window.matchMedia('(min-width: 1024px)')
   isDesktop.value = mq.matches
@@ -44,6 +79,23 @@ onMounted(() => {
 watch(drawerOpen, (v) => { try { localStorage.setItem('g3.drawer.open', String(v)) } catch { /* ignore */ } })
 watch(drawerSection, (v) => { try { localStorage.setItem('g3.drawer.section', v) } catch { /* ignore */ } })
 watch(railCollapsed, (v) => { try { localStorage.setItem(RAIL_COLLAPSED_KEY, String(v)) } catch { /* ignore */ } })
+watch(folderThemeCacheKey, (key) => {
+  if (!import.meta.client) return
+  try {
+    cachedFolderColor.value = localStorage.getItem(key)
+  } catch {
+    cachedFolderColor.value = null
+  }
+})
+watch(() => props.folder?.color, (color) => {
+  if (!import.meta.client || !color) return
+  cachedFolderColor.value = color
+  try {
+    localStorage.setItem(folderThemeCacheKey.value, color)
+  } catch {
+    // ignore storage failures
+  }
+}, { immediate: true })
 
 const keys = useMagicKeys()
 const toggleKey = computed(() => Boolean(keys['Meta+B']?.value || keys['Ctrl+B']?.value))
@@ -67,6 +119,7 @@ function toggleRail() {
 
 const railCompact = computed(() => !isDesktop.value || railCollapsed.value)
 const railWidth = computed(() => railCompact.value ? 64 : 240)
+const resolvedThemeColor = computed(() => props.folder?.color || cachedFolderColor.value || null)
 
 function onTabChange(tab: 'chat' | 'flashcards' | 'quiz' | 'documents') {
   emit('update:activeTab', tab)
@@ -84,29 +137,135 @@ function mix(a: { r: number, g: number, b: number }, b: { r: number, g: number, 
   return `rgb(${ch(a.r, b.r)} ${ch(a.g, b.g)} ${ch(a.b, b.b)})`
 }
 
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value))
+}
+
+function captureOriginalBodyThemeValues() {
+  if (!import.meta.client || bodyThemeSnapshotCaptured || !document.body) return
+  const body = document.body
+  for (const key of managedBodyThemeKeys) {
+    originalBodyThemeValues.set(key, body.style.getPropertyValue(key))
+  }
+  bodyThemeSnapshotCaptured = true
+}
+
+function syncBodyTheme(style: Record<string, string>) {
+  if (!import.meta.client || !document.body) return
+  captureOriginalBodyThemeValues()
+  const body = document.body
+  const hasTheme = Object.keys(style).length > 0
+  for (const key of managedBodyThemeKeys) {
+    const nextValue = style[key]
+    if (nextValue) {
+      body.style.setProperty(key, nextValue)
+    } else {
+      body.style.removeProperty(key)
+    }
+  }
+  if (hasTheme) {
+    body.dataset.folderTheme = 'active'
+  } else {
+    delete body.dataset.folderTheme
+  }
+}
+
 const themeStyle = computed(() => {
-  const hex = getColor(props.folder?.color || DEFAULT_COLOR_KEY).hex
+  if (!resolvedThemeColor.value) return {} as Record<string, string>
+
+  const hex = getColor(resolvedThemeColor.value || DEFAULT_COLOR_KEY).hex
   const tint = hexToRgb(hex)
-  const ink = { r: 12, g: 12, b: 14 }
-  const slate = { r: 28, g: 25, b: 23 }
+  const isDarkMode = mode.value === 'dark'
+  const palette = isDarkMode
+    ? {
+        background: { r: 12, g: 12, b: 14 },
+        card: { r: 28, g: 25, b: 23 },
+        popover: { r: 28, g: 25, b: 23 },
+        secondary: { r: 34, g: 30, b: 28 },
+        muted: { r: 38, g: 34, b: 31 },
+        accent: { r: 52, g: 46, b: 42 },
+        input: { r: 46, g: 41, b: 38 },
+        sidebar: { r: 18, g: 16, b: 15 },
+        sidebarAccent: { r: 42, g: 38, b: 34 },
+        border: { r: 88, g: 80, b: 73 },
+        backgroundMix: clamp(0.22 - ((0.2126 * tint.r + 0.7152 * tint.g + 0.0722 * tint.b) / 255) * 0.14, 0.06, 0.22),
+        cardMix: clamp(0.24 - ((0.2126 * tint.r + 0.7152 * tint.g + 0.0722 * tint.b) / 255) * 0.14, 0.08, 0.24),
+        mutedMix: clamp(0.28 - ((0.2126 * tint.r + 0.7152 * tint.g + 0.0722 * tint.b) / 255) * 0.14, 0.1, 0.28),
+        accentMix: clamp(0.34 - ((0.2126 * tint.r + 0.7152 * tint.g + 0.0722 * tint.b) / 255) * 0.16, 0.14, 0.34),
+        inputMix: clamp(0.26 - ((0.2126 * tint.r + 0.7152 * tint.g + 0.0722 * tint.b) / 255) * 0.12, 0.1, 0.26),
+        sidebarMix: clamp(0.24 - ((0.2126 * tint.r + 0.7152 * tint.g + 0.0722 * tint.b) / 255) * 0.16, 0.08, 0.24),
+        borderMix: clamp(0.36 - ((0.2126 * tint.r + 0.7152 * tint.g + 0.0722 * tint.b) / 255) * 0.12, 0.14, 0.36),
+      }
+    : {
+        background: { r: 247, g: 244, b: 239 },
+        card: { r: 255, g: 251, b: 246 },
+        popover: { r: 255, g: 250, b: 244 },
+        secondary: { r: 243, g: 236, b: 229 },
+        muted: { r: 240, g: 233, b: 225 },
+        accent: { r: 235, g: 225, b: 214 },
+        input: { r: 226, g: 217, b: 208 },
+        sidebar: { r: 244, g: 238, b: 231 },
+        sidebarAccent: { r: 236, g: 227, b: 217 },
+        border: { r: 214, g: 205, b: 194 },
+        backgroundMix: clamp(0.08 + ((0.2126 * tint.r + 0.7152 * tint.g + 0.0722 * tint.b) / 255) * 0.04, 0.08, 0.14),
+        cardMix: clamp(0.06 + ((0.2126 * tint.r + 0.7152 * tint.g + 0.0722 * tint.b) / 255) * 0.03, 0.06, 0.12),
+        mutedMix: clamp(0.1 + ((0.2126 * tint.r + 0.7152 * tint.g + 0.0722 * tint.b) / 255) * 0.04, 0.1, 0.18),
+        accentMix: clamp(0.16 + ((0.2126 * tint.r + 0.7152 * tint.g + 0.0722 * tint.b) / 255) * 0.04, 0.16, 0.24),
+        inputMix: clamp(0.11 + ((0.2126 * tint.r + 0.7152 * tint.g + 0.0722 * tint.b) / 255) * 0.04, 0.11, 0.19),
+        sidebarMix: clamp(0.09 + ((0.2126 * tint.r + 0.7152 * tint.g + 0.0722 * tint.b) / 255) * 0.04, 0.09, 0.16),
+        borderMix: clamp(0.14 + ((0.2126 * tint.r + 0.7152 * tint.g + 0.0722 * tint.b) / 255) * 0.04, 0.14, 0.22),
+      }
   const luminance = (0.2126 * tint.r + 0.7152 * tint.g + 0.0722 * tint.b) / 255
   const fg = luminance > 0.55 ? '#0b0b0b' : '#ffffff'
+  const text = isDarkMode ? 'oklch(0.985 0.001 106.4)' : 'oklch(0.168 0.008 49.0)'
+  const mutedText = isDarkMode ? 'oklch(0.706 0.011 73.6)' : 'oklch(0.553 0.013 58.1)'
   return {
+    '--foreground': text,
     '--primary': hex,
     '--primary-foreground': fg,
     '--ring': hex,
+    '--card-foreground': text,
+    '--popover-foreground': text,
+    '--secondary': mix(palette.secondary, tint, palette.mutedMix),
+    '--secondary-foreground': text,
     '--sidebar-primary': hex,
     '--sidebar-primary-foreground': fg,
     '--sidebar-ring': hex,
-    '--background': mix(ink, tint, 0.22 - luminance * 0.14),
-    '--card': mix(slate, tint, 0.24 - luminance * 0.14),
-    '--popover': mix(slate, tint, 0.24 - luminance * 0.14),
-    '--muted': mix(slate, tint, 0.28 - luminance * 0.14),
-    '--accent': mix(slate, tint, 0.34 - luminance * 0.16),
-    '--sidebar': mix(ink, tint, 0.24 - luminance * 0.16),
-    '--sidebar-accent': mix(slate, tint, 0.34 - luminance * 0.16),
-    '--border': mix(slate, tint, 0.36 - luminance * 0.12),
+    '--background': mix(palette.background, tint, palette.backgroundMix),
+    '--card': mix(palette.card, tint, palette.cardMix),
+    '--popover': mix(palette.popover, tint, palette.cardMix),
+    '--muted': mix(palette.muted, tint, palette.mutedMix),
+    '--muted-foreground': mutedText,
+    '--accent': mix(palette.accent, tint, palette.accentMix),
+    '--accent-foreground': text,
+    '--input': mix(palette.input, tint, palette.inputMix),
+    '--sidebar': mix(palette.sidebar, tint, palette.sidebarMix),
+    '--sidebar-foreground': text,
+    '--sidebar-accent': mix(palette.sidebarAccent, tint, palette.accentMix),
+    '--sidebar-accent-foreground': text,
+    '--border': mix(palette.border, tint, palette.borderMix),
+    '--sidebar-border': mix(palette.border, tint, palette.borderMix),
   } as Record<string, string>
+})
+
+onMounted(() => syncBodyTheme(themeStyle.value))
+
+watch(themeStyle, (style) => {
+  syncBodyTheme(style)
+}, { immediate: true })
+
+onBeforeUnmount(() => {
+  if (!import.meta.client || !bodyThemeSnapshotCaptured || !document.body) return
+  const body = document.body
+  for (const key of managedBodyThemeKeys) {
+    const original = originalBodyThemeValues.get(key) ?? ''
+    if (original) {
+      body.style.setProperty(key, original)
+    } else {
+      body.style.removeProperty(key)
+    }
+  }
+  delete body.dataset.folderTheme
 })
 
 provide('folderShellThemeStyle', themeStyle)

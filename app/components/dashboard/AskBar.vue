@@ -21,12 +21,12 @@ function onKeydown(e: KeyboardEvent) {
 </script>
 
 <template>
-  <div class="pointer-events-none sticky bottom-0 z-20 flex flex-col items-center gap-1 bg-gradient-to-t from-background via-background to-transparent px-4 pb-4 pt-6">
+  <div class="pointer-events-none sticky bottom-0 z-20 mt-auto flex w-full shrink-0 flex-col items-center gap-1 overflow-x-hidden bg-gradient-to-t from-background via-background to-transparent px-4 pb-4 pt-6">
     <p class="pointer-events-auto font-inter text-[11px] text-muted-foreground">
       General chat — not tied to a course
     </p>
     <form
-      class="pointer-events-auto flex w-full max-w-2xl items-center gap-2 rounded-xl border border-input bg-card px-3 py-2 shadow-sm focus-within:border-primary/60 focus-within:ring-2 focus-within:ring-ring"
+      class="pointer-events-auto flex min-w-0 w-full max-w-2xl items-center gap-2 rounded-xl border border-input bg-card px-3 py-2 shadow-sm focus-within:border-primary/60 focus-within:ring-2 focus-within:ring-ring"
       data-testid="dashboard-ask-bar"
       @submit.prevent="submit"
     >

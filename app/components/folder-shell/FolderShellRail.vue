@@ -144,9 +144,10 @@ async function onLogout() {
     ]"
     :style="{ width: compact ? '4rem' : '15rem' }"
   >
-    <div
+    <NuxtLink
+      to="/"
       :class="[
-        'flex items-center px-4 pt-5 pb-3 transition-[gap] duration-200 ease-out',
+        'flex w-full items-center px-4 pt-5 pb-3 transition-[gap] duration-200 ease-out',
         compact ? 'justify-center gap-0' : 'gap-2',
       ]"
     >
@@ -162,7 +163,7 @@ async function onLogout() {
         <p class="text-sm font-semibold leading-tight tracking-tight text-foreground">Budds</p>
         <p class="text-[10px] uppercase tracking-widest text-muted-foreground">Learning Compiler</p>
       </div>
-    </div>
+    </NuxtLink>
 
     <nav class="flex-1 overflow-y-auto px-2 pb-4">
       <div

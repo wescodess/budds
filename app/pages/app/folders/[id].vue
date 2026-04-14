@@ -35,6 +35,11 @@ const {
 } = useChat(folderId, conversationIdRef)
 
 const referenceScope = useReferenceScope()
+const seededFolder = computed(() =>
+  folder.value
+  ?? allFolders.value?.find(candidate => candidate._id === folderId.value)
+  ?? null,
+)
 
 const isDesktop = useMediaQuery('(min-width: 1024px)')
 
@@ -406,7 +411,7 @@ async function handleImportLink(url: string) {
 <template>
   <FolderShell
     :folder-id="folderId"
-    :folder="folder ?? null"
+    :folder="seededFolder"
     :active-tab="activeTab"
     :active-conversation-id="conversationIdRef ? (conversationIdRef as unknown as string) : null"
     @update:active-tab="onTabChange"
@@ -414,7 +419,7 @@ async function handleImportLink(url: string) {
     @select-void="onSelectVoid"
   >
     <template #top-bar="{ railCollapsed, toggleRail, drawerOpen, toggleDrawer }">
-      <div class="flex items-center justify-between gap-3 border-b border-border/60 px-6 py-4">
+      <div class="sticky top-0 z-20 flex items-center justify-between gap-3 border-b border-border/60 bg-background/90 px-6 py-4 backdrop-blur supports-[backdrop-filter]:bg-background/80">
         <div class="flex min-w-0 items-center gap-3">
           <button
             type="button"

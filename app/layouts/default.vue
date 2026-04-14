@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { useColorMode, useMediaQuery } from '@vueuse/core'
+import { useMediaQuery } from '@vueuse/core'
 import {
   FolderOpen,
   FolderPlus,
@@ -11,14 +11,11 @@ import {
   BookOpen,
   HelpCircle,
   FileText,
-  MessagesSquare,
   MoreHorizontal,
+  Pencil,
   Trash2,
   Download,
-  Home,
-  Sparkles,
 } from 'lucide-vue-next'
-import { api } from '#convex/api'
 import type { Doc, Id } from '~~/convex/_generated/dataModel'
 
 useHead({
@@ -29,19 +26,7 @@ useHead({
 })
 
 const { signOut, user } = useUserSession()
-
-const mode = useColorMode({
-  attribute: 'class',
-  modes: {
-    dark: 'dark',
-    light: 'light',
-  },
-  initialValue: 'dark',
-})
-
-function toggleTheme() {
-  mode.value = mode.value === 'dark' ? 'light' : 'dark'
-}
+const { mode, toggleTheme } = useAppTheme()
 
 const activeTab = ref('chat')
 const isMobileView = useMediaQuery('(max-width: 767px)')
@@ -50,7 +35,7 @@ const isDashboard = computed(() => route.path === '/')
 const isChatRoute = computed(() => route.path === '/chat')
 const isStandaloneRoute = computed(() => isDashboard.value || isChatRoute.value)
 
-const { allFolders, allFoldersLoading, renameFolder, deleteFolder } = useFolders()
+const { allFolders, allFoldersLoading, deleteFolder } = useFolders()
 
 const isFolderRoute = computed(() => route.path.startsWith('/app/folders/'))
 const currentFolderId = computed(() => {
@@ -106,17 +91,6 @@ function handleNewSubfolder(parentId: Id<'folders'>) {
   showFolderModal.value = true
 }
 
-async function handleRename(folderId: Id<'folders'>, name: string) {
-  try {
-    await renameFolder(folderId, name)
-    const { toast } = await import('vue-sonner')
-    toast.success('Folder renamed')
-  } catch (e: any) {
-    const { toast } = await import('vue-sonner')
-    toast.error(e.message || 'Failed to rename folder')
-  }
-}
-
 const showDeleteDialog = ref(false)
 const isDeleting = ref(false)
 const folderToDelete = ref<{ _id: Id<'folders'>; name: string } | null>(null)
@@ -170,46 +144,7 @@ function collectDescendantIds(folderId: string): Set<string> {
   return ids
 }
 
-const { data: recentChatsData } = useConvexQuery(api.conversations.listRecentForUser, {})
-const recentChats = computed(() => recentChatsData.value ?? [])
-
-const deleteConversationMutation = import.meta.client
-  ? useConvexMutation(api.conversations.deleteConversation)
-  : { mutate: async (_args: { id: Id<'conversations'> }) => {}, isLoading: ref(false) }
-
-const showDeleteConvoDialog = ref(false)
-const convoToDelete = ref<{ _id: Id<'conversations'>; title: string; folderId: Id<'folders'> } | null>(null)
-
-function handleDeleteConversationRequest(convo: { _id: Id<'conversations'>; title: string; folderId: Id<'folders'> }) {
-  convoToDelete.value = convo
-  showDeleteConvoDialog.value = true
-}
-
-async function executeDeleteConversation() {
-  const target = convoToDelete.value
-  if (!target) return
-  try {
-    await deleteConversationMutation.mutate({ id: target._id })
-    if ((deleteConversationMutation as any).error?.value) {
-      const err = (deleteConversationMutation as any).error.value
-      ;(deleteConversationMutation as any).error.value = undefined
-      throw err
-    }
-    const { toast } = await import('vue-sonner')
-    toast.success('Conversation deleted')
-
-    const activeConvoId = route.query.conversationId
-    if (activeConvoId === target._id) {
-      navigateTo(`/app/folders/${target.folderId}`)
-    }
-  } catch (e: any) {
-    const { toast } = await import('vue-sonner')
-    toast.error(e?.message || 'Failed to delete conversation')
-  } finally {
-    showDeleteConvoDialog.value = false
-    convoToDelete.value = null
-  }
-}
+const rootFolders = computed(() => (allFolders.value ?? []).filter(folder => !folder.parentId))
 
 const showDeleteAccountDialog = ref(false)
 const deleteAccountConfirmInput = ref('')
@@ -338,9 +273,19 @@ async function executeDelete() {
     >
       <UiSidebarHeader class="px-3 py-4">
         <div class="flex items-center justify-between">
-          <span class="font-dm-sans text-lg font-bold tracking-tight text-sidebar-foreground group-data-[collapsible=icon]:hidden">
-            Budds
-          </span>
+          <NuxtLink to="/" class="flex min-w-0 flex-1 items-center gap-2 group-data-[collapsible=icon]:justify-center">
+            <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/15 text-primary">
+              <BookOpen class="h-4 w-4" />
+            </div>
+            <div class="min-w-0 group-data-[collapsible=icon]:hidden">
+              <p class="font-dm-sans text-lg font-bold tracking-tight text-sidebar-foreground">
+                Budds
+              </p>
+              <p class="text-[10px] uppercase tracking-widest text-muted-foreground">
+                Learning Compiler
+              </p>
+            </div>
+          </NuxtLink>
           <UiButton
             variant="ghost"
             size="icon"
@@ -356,124 +301,61 @@ async function executeDelete() {
       </UiSidebarHeader>
 
       <UiSidebarContent>
-        <UiSidebarGroup data-testid="sidebar-nav-group">
-          <UiSidebarGroupContent>
-            <UiSidebarMenu>
-              <UiSidebarMenuItem>
-                <UiSidebarMenuButton
-                  as-child
-                  tooltip="Home"
-                  :is-active="isDashboard"
-                  data-testid="sidebar-nav-home"
-                >
-                  <NuxtLink to="/">
-                    <Home class="h-4 w-4" />
-                    <span>Home</span>
-                  </NuxtLink>
-                </UiSidebarMenuButton>
-              </UiSidebarMenuItem>
-              <UiSidebarMenuItem>
-                <UiSidebarMenuButton
-                  as-child
-                  tooltip="General Chat"
-                  :is-active="isChatRoute"
-                  data-testid="sidebar-nav-chat"
-                >
-                  <NuxtLink to="/chat">
-                    <Sparkles class="h-4 w-4" />
-                    <span>General Chat</span>
-                  </NuxtLink>
-                </UiSidebarMenuButton>
-              </UiSidebarMenuItem>
-            </UiSidebarMenu>
-          </UiSidebarGroupContent>
-        </UiSidebarGroup>
-
-        <div class="group-data-[collapsible=icon]:hidden">
         <UiSidebarGroup data-testid="sidebar-folders-group">
           <UiSidebarGroupLabel class="flex items-center justify-between">
             <span class="flex items-center">
               <FolderOpen class="mr-2 h-4 w-4" />
               Folders
             </span>
-            <UiButton
-              variant="ghost"
-              size="icon"
-              data-testid="new-root-folder-button"
-              class="h-5 w-5 text-muted-foreground hover:text-foreground"
-              @click="openCreateFolder"
-            >
-              <FolderPlus class="h-3.5 w-3.5" />
-              <span class="sr-only">New folder</span>
-            </UiButton>
           </UiSidebarGroupLabel>
           <UiSidebarGroupContent>
             <div v-if="allFoldersLoading || !allFolders" class="space-y-1 px-3 py-2">
               <UiSkeleton v-for="i in 3" :key="i" class="h-7 w-full rounded-md" />
             </div>
-            <template v-else-if="allFolders.length > 0">
-              <SidebarFolderTree
-                :folders="allFolders"
-                :active-folder="currentFolderId"
-                @new-subfolder="handleNewSubfolder"
-                @rename="handleRename"
-                @delete="handleDeleteRequest"
-                @edit="openEditFolder"
-              />
-            </template>
-            <div
-              v-else
-              data-testid="sidebar-folders-empty"
-              class="px-3 py-6 text-center text-sm text-muted-foreground"
-            >
-              <FolderOpen class="mx-auto mb-2 h-8 w-8 opacity-40" />
-              No folders yet
-            </div>
-          </UiSidebarGroupContent>
-        </UiSidebarGroup>
-
-        <UiSeparator />
-
-        <UiSidebarGroup data-testid="sidebar-chats-group">
-          <UiSidebarGroupLabel>
-            <MessagesSquare class="mr-2 h-4 w-4" />
-            Recent Chats
-          </UiSidebarGroupLabel>
-          <UiSidebarGroupContent>
-            <template v-if="recentChats.length > 0">
+            <template v-else-if="rootFolders.length > 0">
               <UiSidebarMenu>
                 <UiSidebarMenuItem
-                  v-for="convo in recentChats"
-                  :key="convo._id"
-                  data-testid="sidebar-chat-item"
-                  :data-conversation-id="convo._id"
-                  class="group/chat-item relative"
+                  v-for="folder in rootFolders"
+                  :key="folder._id"
+                  class="group/folder-item relative"
                 >
-                  <UiSidebarMenuButton as-child class="h-auto py-2">
-                    <NuxtLink :to="`/app/folders/${convo.folderId}?conversationId=${convo._id}`">
-                      <div class="flex min-w-0 flex-col">
-                        <span class="truncate text-sm">{{ convo.title }}</span>
-                        <span class="truncate text-xs text-muted-foreground">
-                          {{ convo.folderName }}
-                        </span>
-                      </div>
+                  <UiSidebarMenuButton
+                    as-child
+                    class="h-auto py-2 group-data-[collapsible=icon]:justify-center"
+                    :tooltip="folder.name"
+                    :is-active="currentFolderId === folder._id"
+                    :data-testid="`sidebar-folder-${folder._id}`"
+                  >
+                    <NuxtLink
+                      :to="`/app/folders/${folder._id}`"
+                      class="flex min-w-0 items-center gap-2 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0 group-data-[collapsible=icon]:px-0"
+                    >
+                      <FoldersFolderBadge :color="folder.color ?? undefined" :icon="folder.icon ?? undefined" size="md" />
+                      <span class="group-data-[collapsible=icon]:hidden">{{ folder.name }}</span>
                     </NuxtLink>
                   </UiSidebarMenuButton>
                   <UiDropdownMenu>
                     <UiDropdownMenuTrigger as-child>
                       <UiSidebarMenuAction
-                        :data-testid="`sidebar-chat-actions-${convo._id}`"
-                        class="opacity-0 transition-opacity group-hover/chat-item:opacity-100 focus:opacity-100 data-[state=open]:opacity-100"
+                        :data-testid="`sidebar-folder-actions-${folder._id}`"
+                        class="opacity-0 transition-opacity group-hover/folder-item:opacity-100 focus:opacity-100 data-[state=open]:opacity-100 group-data-[collapsible=icon]:hidden"
                       >
                         <MoreHorizontal class="h-4 w-4" />
-                        <span class="sr-only">More actions</span>
+                        <span class="sr-only">Folder actions</span>
                       </UiSidebarMenuAction>
                     </UiDropdownMenuTrigger>
                     <UiDropdownMenuContent align="end">
+                      <UiDropdownMenuItem @select="openEditFolder(folder)">
+                        <Pencil class="mr-2 h-4 w-4" />
+                        Edit
+                      </UiDropdownMenuItem>
+                      <UiDropdownMenuItem @select="handleNewSubfolder(folder._id)">
+                        <FolderPlus class="mr-2 h-4 w-4" />
+                        New subfolder
+                      </UiDropdownMenuItem>
                       <UiDropdownMenuItem
-                        :data-testid="`sidebar-chat-delete-${convo._id}`"
                         class="text-destructive focus:text-destructive"
-                        @select="handleDeleteConversationRequest({ _id: convo._id, title: convo.title, folderId: convo.folderId })"
+                        @select="handleDeleteRequest({ _id: folder._id, name: folder.name })"
                       >
                         <Trash2 class="mr-2 h-4 w-4" />
                         Delete
@@ -485,16 +367,27 @@ async function executeDelete() {
             </template>
             <div
               v-else
-              data-testid="sidebar-chats-empty"
+              data-testid="sidebar-folders-empty"
               class="px-3 py-6 text-center text-sm text-muted-foreground"
             >
-              <MessageSquare class="mx-auto mb-2 h-8 w-8 opacity-40" />
-              No recent chats
+              <FolderOpen class="mx-auto mb-2 h-8 w-8 opacity-40" />
+              No folders yet
             </div>
           </UiSidebarGroupContent>
         </UiSidebarGroup>
-        </div>
       </UiSidebarContent>
+
+      <div class="border-t border-sidebar-border p-3">
+        <UiButton
+          variant="default"
+          data-testid="new-root-folder-button"
+          class="w-full gap-2 rounded-xl group-data-[collapsible=icon]:h-8 group-data-[collapsible=icon]:w-8 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
+          @click="openCreateFolder"
+        >
+          <FolderPlus class="h-4 w-4 shrink-0" />
+          <span class="group-data-[collapsible=icon]:hidden">Create Folder</span>
+        </UiButton>
+      </div>
 
       <UiSidebarFooter class="border-t border-sidebar-border p-3">
         <UiButton
@@ -568,8 +461,8 @@ async function executeDelete() {
       </UiSidebarFooter>
     </UiSidebar>
 
-    <UiSidebarInset id="main-content" data-testid="main-content">
-      <header class="flex items-center gap-2 border-b border-border px-4 py-2">
+    <UiSidebarInset id="main-content" data-testid="main-content" class="overflow-y-auto">
+      <header class="sticky top-0 z-20 flex items-center gap-2 border-b border-border bg-background/90 px-4 py-2 backdrop-blur supports-[backdrop-filter]:bg-background/80">
         <UiSidebarTrigger data-testid="sidebar-trigger" />
 
         <nav data-testid="breadcrumb-nav" class="flex-1">
@@ -637,7 +530,7 @@ async function executeDelete() {
         </nav>
       </header>
 
-      <div class="flex flex-1 flex-col overflow-hidden">
+      <div :class="['flex flex-1 flex-col', isDashboard ? '' : 'overflow-hidden']">
         <template v-if="isStandaloneRoute">
           <slot />
         </template>
@@ -727,26 +620,6 @@ async function executeDelete() {
         <UiAlertDialogAction
           class="bg-destructive text-destructive-foreground hover:bg-destructive/90"
           @click="executeDelete"
-        >
-          Delete
-        </UiAlertDialogAction>
-      </UiAlertDialogFooter>
-    </UiAlertDialogContent>
-  </UiAlertDialog>
-
-  <UiAlertDialog v-model:open="showDeleteConvoDialog">
-    <UiAlertDialogContent data-testid="delete-conversation-dialog">
-      <UiAlertDialogHeader>
-        <UiAlertDialogTitle>Delete conversation?</UiAlertDialogTitle>
-        <UiAlertDialogDescription>
-          "{{ convoToDelete?.title }}" and all of its messages will be permanently removed.
-        </UiAlertDialogDescription>
-      </UiAlertDialogHeader>
-      <UiAlertDialogFooter>
-        <UiAlertDialogCancel>Cancel</UiAlertDialogCancel>
-        <UiAlertDialogAction
-          class="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-          @click="executeDeleteConversation"
         >
           Delete
         </UiAlertDialogAction>
