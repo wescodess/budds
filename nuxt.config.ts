@@ -1,5 +1,68 @@
+import fs from 'node:fs'
+import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import tailwindcss from '@tailwindcss/vite'
+
+function parseWranglerVars() {
+  const wranglerPath = path.resolve(process.cwd(), 'wrangler.toml')
+  if (!fs.existsSync(wranglerPath)) return {}
+
+  const source = fs.readFileSync(wranglerPath, 'utf8')
+  const entries: Record<string, string> = {}
+  let currentSection = ''
+
+  for (const rawLine of source.split(/\r?\n/)) {
+    const line = rawLine.trim()
+    if (!line || line.startsWith('#')) continue
+
+    const sectionMatch = line.match(/^\[(.+)\]$/)
+    if (sectionMatch) {
+      currentSection = sectionMatch[1]?.trim() || ''
+      continue
+    }
+
+    if (currentSection !== 'vars') continue
+
+    const separatorIndex = line.indexOf('=')
+    if (separatorIndex < 1) continue
+
+    const key = line.slice(0, separatorIndex).trim()
+    let value = line.slice(separatorIndex + 1).trim()
+
+    if (
+      (value.startsWith('"') && value.endsWith('"'))
+      || (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1)
+    }
+
+    entries[key] = value
+  }
+
+  return entries
+}
+
+const wranglerVars = parseWranglerVars()
+
+function readConfiguredValue(...names: string[]) {
+  for (const name of names) {
+    const value = process.env[name] || wranglerVars[name]
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value.trim()
+    }
+  }
+
+  return ''
+}
+
+function toConvexSiteUrl(url: string) {
+  if (!url) return ''
+  return url.replace(/\.convex\.cloud(?=\/|$)/, '.convex.site')
+}
+
+const convexUrl = readConfiguredValue('NUXT_PUBLIC_CONVEX_URL', 'CONVEX_URL')
+const convexSiteUrl = readConfiguredValue('NUXT_CONVEX_SITE_URL', 'CONVEX_SITE_URL') || toConvexSiteUrl(convexUrl)
+const publicSiteUrl = readConfiguredValue('NUXT_PUBLIC_SITE_URL')
 
 export default defineNuxtConfig({
   css: ['~/assets/css/tailwind.css'],
@@ -14,6 +77,9 @@ export default defineNuxtConfig({
     },
   },
   modules: ['shadcn-nuxt', 'nuxt-convex', '@onmax/nuxt-better-auth', '@nuxtjs/mdc'],
+  convex: {
+    url: convexUrl,
+  },
   components: [
     { path: '~/components/global', global: true },
     '~/components',
@@ -49,7 +115,7 @@ export default defineNuxtConfig({
     port: 3002,
   },
   runtimeConfig: {
-    convexSiteUrl: process.env.NUXT_CONVEX_SITE_URL || process.env.CONVEX_SITE_URL || '',
+    convexSiteUrl,
     cloudflareAccountId: process.env.CF_ACCOUNT_ID,
     cloudflareAiGatewayId: process.env.CLOUDFLARE_AI_GATEWAY_ID,
     cloudflareAiGatewayApiKey: process.env.CLOUDFLARE_AI_GATEWAY_API_KEY,
@@ -61,7 +127,7 @@ export default defineNuxtConfig({
     r2SecretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
     r2BucketName: process.env.R2_BUCKET_NAME,
     public: {
-      siteUrl: process.env.NUXT_PUBLIC_SITE_URL || '',
+      siteUrl: publicSiteUrl,
     },
   },
   routeRules: {

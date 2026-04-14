@@ -1,8 +1,11 @@
+import { getConvexSiteUrl } from '../utils/convex-site-url'
+
 export default defineEventHandler(async (event) => {
   const cookie = getRequestHeader(event, 'cookie')
   if (!cookie) return
 
-  const { convexSiteUrl } = useRuntimeConfig(event)
+  const config = useRuntimeConfig(event)
+  const convexSiteUrl = getConvexSiteUrl(config)
   if (!convexSiteUrl) return
 
   try {

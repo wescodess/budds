@@ -11,6 +11,7 @@ const dotenvPaths = [
   path.join(projectRoot, '.env'),
   path.join(projectRoot, '.env.local'),
 ]
+const wranglerPath = path.join(projectRoot, 'wrangler.toml')
 
 function parseDotenvFile(filePath) {
   if (!fs.existsSync(filePath)) return {}
@@ -40,8 +41,47 @@ function parseDotenvFile(filePath) {
   return entries
 }
 
+function parseWranglerVars(filePath) {
+  if (!fs.existsSync(filePath)) return {}
+
+  const source = fs.readFileSync(filePath, 'utf8')
+  const entries = {}
+  let currentSection = ''
+
+  for (const rawLine of source.split(/\r?\n/)) {
+    const line = rawLine.trim()
+    if (!line || line.startsWith('#')) continue
+
+    const sectionMatch = line.match(/^\[(.+)\]$/)
+    if (sectionMatch) {
+      currentSection = sectionMatch[1]?.trim() || ''
+      continue
+    }
+
+    if (currentSection !== 'vars') continue
+
+    const separatorIndex = line.indexOf('=')
+    if (separatorIndex < 1) continue
+
+    const key = line.slice(0, separatorIndex).trim()
+    let value = line.slice(separatorIndex + 1).trim()
+
+    if (
+      (value.startsWith('"') && value.endsWith('"'))
+      || (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1)
+    }
+
+    entries[key] = value
+  }
+
+  return entries
+}
+
 const mergedEnv = {
   ...dotenvPaths.reduce((acc, filePath) => ({ ...acc, ...parseDotenvFile(filePath) }), {}),
+  ...parseWranglerVars(wranglerPath),
   ...process.env,
 }
 
