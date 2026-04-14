@@ -23,6 +23,7 @@ const {
   messages,
   loading,
   streaming,
+  thinking,
   error,
   hasIndexedDocuments,
   selectedModel,
@@ -31,6 +32,8 @@ const {
   loadConversation,
   startNewConversation,
 } = useChat(folderId, conversationIdRef)
+
+const referenceScope = useReferenceScope()
 
 const isDesktop = useMediaQuery('(min-width: 1024px)')
 
@@ -246,7 +249,15 @@ onUnmounted(() => {
 async function handleSendMessage(query: string) {
   expandedInlineCitation.value = null
   activeMessageIndex.value = null
-  await sendMessage(query)
+  await sendMessage(query, referenceScope.toPayload())
+}
+
+function handleViewAllReferences(messageIndex: number) {
+  activeMessageIndex.value = messageIndex
+  activeCitationIndex.value = null
+  if (isDesktop.value) {
+    sourcePanelOpen.value = true
+  }
 }
 
 async function handleDeleteRequest(docId: string) {
@@ -434,6 +445,12 @@ async function handleUpload(files: File[]) {
                     :streaming="streaming && i === messages.length - 1"
                     @citation-click="(citIndex: number) => handleCitationClick(i, citIndex)"
                   />
+                  <ChatReferenceChips
+                    v-if="msg.role === 'assistant' && (msg.sources?.length ?? 0) > 0"
+                    :sources="msg.sources ?? []"
+                    @view-all="handleViewAllReferences(i)"
+                    @chip-click="(citIndex: number) => handleCitationClick(i, citIndex)"
+                  />
                   <template v-if="!isDesktop && expandedInlineCitation?.messageIndex === i">
                     <div
                       v-for="src in [getSourceForInlineCitation(i, expandedInlineCitation.citationIndex)].filter(Boolean)"
@@ -450,12 +467,7 @@ async function handleUpload(files: File[]) {
                     </div>
                   </template>
                 </template>
-                <div v-if="loading && !streaming" class="mr-auto max-w-[85%] rounded-lg border px-4 py-3">
-                  <div class="flex items-center gap-2 text-sm text-muted-foreground">
-                    <div class="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                    Thinking...
-                  </div>
-                </div>
+                <ChatThinkingRow v-if="thinking" :model="selectedModel" />
                 <div v-if="error" class="text-center text-sm text-destructive">
                   {{ error }}
                 </div>
@@ -473,6 +485,8 @@ async function handleUpload(files: File[]) {
               ref="chatInputRef"
               :disabled="!hasIndexedDocuments || loading"
               :placeholder="folder ? `Ask about your ${folder.name} materials...` : 'Ask a question...'"
+              :folder-id="folderId"
+              :scope="referenceScope"
               @submit="handleSendMessage"
             />
           </div>

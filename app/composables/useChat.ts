@@ -58,6 +58,7 @@ export function useChat(
   const messages = ref<UIChatMessage[]>([])
   const loading = ref(false)
   const streaming = ref(false)
+  const thinking = ref(false)
   const error = ref<string | null>(null)
   const selectedModel = ref(DEFAULT_MODEL)
   const currentConversationId = ref<Id<'conversations'> | null>(conversationId?.value ?? null)
@@ -138,7 +139,10 @@ export function useChat(
     }
   }
 
-  async function sendStreaming(query: string): Promise<boolean> {
+  async function sendStreaming(
+    query: string,
+    scope?: { folderIds?: Id<'folders'>[]; fileIds?: Id<'documents'>[] },
+  ): Promise<boolean> {
     const response = await fetch('/api/rag/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -147,6 +151,7 @@ export function useChat(
         model: selectedModel.value,
         folderId: folderId.value,
         stream: true,
+        ...(scope ? { scope } : {}),
       }),
     })
 
@@ -222,6 +227,7 @@ export function useChat(
               const parsed = JSON.parse(data)
               const token = parsed.choices?.[0]?.delta?.content
               if (token) {
+                if (thinking.value) thinking.value = false
                 if (prefersReducedMotion.value) {
                   tokenBuffer += token
                   if (tokenBuffer.length >= 50 || /[.!?]\s*$/.test(tokenBuffer)) {
@@ -249,13 +255,17 @@ export function useChat(
     return true
   }
 
-  async function sendNonStreaming(query: string) {
+  async function sendNonStreaming(
+    query: string,
+    scope?: { folderIds?: Id<'folders'>[]; fileIds?: Id<'documents'>[] },
+  ) {
     const data = await $fetch<ChatResponse>('/api/rag/chat', {
       method: 'POST',
       body: {
         query,
         model: selectedModel.value,
         folderId: folderId.value,
+        ...(scope ? { scope } : {}),
       },
     })
 
@@ -272,7 +282,10 @@ export function useChat(
     })
   }
 
-  async function sendMessage(query: string) {
+  async function sendMessage(
+    query: string,
+    scope?: { folderIds?: Id<'folders'>[]; fileIds?: Id<'documents'>[] },
+  ) {
     if (loading.value) return
     error.value = null
 
@@ -286,6 +299,7 @@ export function useChat(
 
     messages.value.push({ role: 'user', content: query })
     loading.value = true
+    thinking.value = true
 
     if (convoId) {
       void persistMessage(convoId, 'user', query)
@@ -293,19 +307,20 @@ export function useChat(
 
     try {
       const streamingIdx = messages.value.length
-      const streamed = await sendStreaming(query).catch(() => false)
+      const streamed = await sendStreaming(query, scope).catch(() => false)
 
       if (!streamed) {
         if (messages.value[streamingIdx]?.role === 'assistant') {
           messages.value.splice(streamingIdx, 1)
         }
-        await sendNonStreaming(query)
+        await sendNonStreaming(query, scope)
       }
     } catch (e: any) {
       error.value = e.data?.message || e.message || 'Failed to get response'
     } finally {
       loading.value = false
       streaming.value = false
+      thinking.value = false
 
       const assistantMsg = messages.value[messages.value.length - 1]
       if (
@@ -355,6 +370,7 @@ export function useChat(
     messages,
     loading,
     streaming,
+    thinking,
     error,
     hasIndexedDocuments,
     selectedModel,
