@@ -1,6 +1,7 @@
 import { useMediaQuery } from '@vueuse/core'
 import { api } from '#convex/api'
 import type { Id } from '../../convex/_generated/dataModel'
+import { normalizeAssistantCitations } from '~/utils/normalize-assistant-citations'
 
 export interface Source {
   content: string
@@ -45,6 +46,10 @@ function mapSources(raw: RawSource[]): Source[] {
 function deriveTitle(query: string): string {
   const trimmed = query.replace(/\s+/g, ' ').trim().slice(0, 60)
   return trimmed || 'New conversation'
+}
+
+function normalizeAssistantMessageContent(content: string): string {
+  return normalizeAssistantCitations(content)
 }
 
 export function useChat(
@@ -277,7 +282,7 @@ export function useChat(
 
     messages.value.push({
       role: 'assistant',
-      content: data.answer ?? '',
+      content: normalizeAssistantMessageContent(data.answer ?? ''),
       sources: mapSources(data.sources ?? []),
     })
   }
@@ -329,7 +334,9 @@ export function useChat(
         && assistantMsg?.role === 'assistant'
         && assistantMsg.content
       ) {
-        void persistMessage(convoId, 'assistant', assistantMsg.content, {
+        const normalizedContent = normalizeAssistantMessageContent(assistantMsg.content)
+        assistantMsg.content = normalizedContent
+        void persistMessage(convoId, 'assistant', normalizedContent, {
           sources: assistantMsg.sources,
           model: selectedModel.value,
         })
@@ -349,7 +356,7 @@ export function useChat(
 
     messages.value = rows.map(r => ({
       role: r.role,
-      content: r.content,
+      content: r.role === 'assistant' ? normalizeAssistantMessageContent(r.content) : r.content,
       sources: r.sources,
     }))
     currentConversationId.value = conversationIdToLoad

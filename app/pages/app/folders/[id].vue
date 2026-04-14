@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { FolderPlus, FileText, MessageSquare, Plus, ClipboardList, Layers, PanelRight } from 'lucide-vue-next'
+import { FolderPlus, FileText, MessageSquare, Plus, ClipboardList, Layers, PanelRight, ArrowLeftRight } from 'lucide-vue-next'
 import { useMediaQuery } from '@vueuse/core'
 import { api } from '#convex/api'
 import type { Id } from '~~/convex/_generated/dataModel'
 import type { VoidType } from '~/components/voids/CreateVoidDialog.vue'
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
 
 definePageMeta({ layout: 'folder' })
 
@@ -117,11 +118,22 @@ function onTabChange(next: TabValue) {
   void router.replace({ query: { ...(route.query ?? {}), tab: next } })
 }
 const sourcePanelOpen = ref(false)
+const sourcePanelSide = ref<'left' | 'right'>('right')
 const activeCitationIndex = ref<number | null>(null)
 const activeMessageIndex = ref<number | null>(null)
 const expandedInlineCitation = ref<{ messageIndex: number; citationIndex: number } | null>(null)
 const chatInputRef = ref<{ focus: () => void } | null>(null)
 const chatScrollRef = ref<HTMLElement | null>(null)
+const SOURCE_PANEL_SIDE_KEY = 'g4.chat.source-panel.side'
+const PANEL_FLIP_DRAG_THRESHOLD = 4
+
+const isSourcePanelLeading = computed(() => sourcePanelSide.value === 'left')
+const flipPanelAriaLabel = computed(() =>
+  isSourcePanelLeading.value ? 'Move sources panel to the right' : 'Move sources panel to the left',
+)
+
+const panelFlipPointerStart = ref<{ x: number; y: number } | null>(null)
+const suppressNextPanelFlipClick = ref(false)
 
 const allSources = computed(() => {
   if (activeMessageIndex.value === null) return []
@@ -144,6 +156,39 @@ function handleCitationClick(messageIndex: number, citationIndex: number) {
 function getSourceForInlineCitation(messageIndex: number, citationIndex: number) {
   const msg = messages.value[messageIndex]
   return msg?.sources?.[citationIndex - 1]
+}
+
+function toggleSourcePanelSide() {
+  sourcePanelSide.value = sourcePanelSide.value === 'left' ? 'right' : 'left'
+}
+
+function handlePanelFlipPointerDown(event: PointerEvent) {
+  panelFlipPointerStart.value = { x: event.clientX, y: event.clientY }
+  suppressNextPanelFlipClick.value = false
+}
+
+function handlePanelFlipPointerMove(event: PointerEvent) {
+  const start = panelFlipPointerStart.value
+  if (!start) return
+
+  if (
+    Math.abs(event.clientX - start.x) > PANEL_FLIP_DRAG_THRESHOLD
+    || Math.abs(event.clientY - start.y) > PANEL_FLIP_DRAG_THRESHOLD
+  ) {
+    suppressNextPanelFlipClick.value = true
+  }
+}
+
+function handlePanelFlipPointerEnd() {
+  panelFlipPointerStart.value = null
+}
+
+function handlePanelFlipClick() {
+  if (suppressNextPanelFlipClick.value) {
+    suppressNextPanelFlipClick.value = false
+    return
+  }
+  toggleSourcePanelSide()
 }
 
 watch(() => messages.value.length, () => {
@@ -230,8 +275,17 @@ watch(conversationIdRef, async (next, prev) => {
 })
 
 onMounted(() => {
+  try {
+    const stored = localStorage.getItem(SOURCE_PANEL_SIDE_KEY)
+    if (stored === 'left' || stored === 'right') sourcePanelSide.value = stored
+  } catch {
+    // ignore storage failures
+  }
   document.addEventListener('keydown', handleSlashShortcut)
   document.addEventListener('keydown', handleNewChatShortcut)
+  document.addEventListener('pointermove', handlePanelFlipPointerMove)
+  document.addEventListener('pointerup', handlePanelFlipPointerEnd)
+  document.addEventListener('pointercancel', handlePanelFlipPointerEnd)
   void hydrateFromRoute()
   const promptParam = route.query?.prompt
   if (typeof promptParam === 'string' && promptParam.trim()) {
@@ -244,6 +298,17 @@ onMounted(() => {
 onUnmounted(() => {
   document.removeEventListener('keydown', handleSlashShortcut)
   document.removeEventListener('keydown', handleNewChatShortcut)
+  document.removeEventListener('pointermove', handlePanelFlipPointerMove)
+  document.removeEventListener('pointerup', handlePanelFlipPointerEnd)
+  document.removeEventListener('pointercancel', handlePanelFlipPointerEnd)
+})
+
+watch(sourcePanelSide, (value) => {
+  try {
+    localStorage.setItem(SOURCE_PANEL_SIDE_KEY, value)
+  } catch {
+    // ignore storage failures
+  }
 })
 
 async function handleSendMessage(query: string) {
@@ -425,7 +490,193 @@ async function handleUpload(files: File[]) {
 
       <UiTabsContent value="chat" class="flex flex-1 flex-col overflow-hidden">
         <div class="flex flex-1 overflow-hidden">
-          <div class="flex flex-1 flex-col overflow-hidden">
+          <template v-if="isDesktop && sourcePanelOpen">
+            <ResizablePanelGroup direction="horizontal" class="flex-1">
+              <template v-if="isSourcePanelLeading">
+                <ResizablePanel :default-size="28" :min-size="20" :max-size="45" class="min-w-[18rem]">
+                  <ChatSourcePanel
+                    :sources="allSources"
+                    :active-citation-index="activeCitationIndex"
+                    :open="sourcePanelOpen"
+                    side="left"
+                    @close="sourcePanelOpen = false"
+                  />
+                </ResizablePanel>
+                <ResizableHandle with-handle>
+                  <button
+                    type="button"
+                    data-testid="source-panel-flip"
+                    :aria-label="flipPanelAriaLabel"
+                    class="inline-flex h-6 w-6 items-center justify-center rounded border bg-background text-foreground shadow-sm transition-colors hover:bg-accent"
+                    @pointerdown="handlePanelFlipPointerDown"
+                    @click.stop="handlePanelFlipClick"
+                  >
+                    <ArrowLeftRight class="h-3.5 w-3.5" />
+                  </button>
+                </ResizableHandle>
+                <ResizablePanel :default-size="72" :min-size="40">
+                  <div class="flex h-full flex-1 flex-col overflow-hidden">
+                    <template v-if="!hasIndexedDocuments">
+                      <div class="flex flex-1 items-center justify-center text-muted-foreground">
+                        <div class="text-center">
+                          <FileText class="mx-auto mb-3 h-12 w-12 opacity-40" />
+                          <p class="text-lg font-medium">Upload documents to start chatting</p>
+                        </div>
+                      </div>
+                    </template>
+
+                    <template v-else>
+                      <div ref="chatScrollRef" role="log" aria-live="polite" aria-atomic="false" aria-relevant="additions" class="flex-1 space-y-4 overflow-y-auto p-4">
+                        <template v-for="(msg, i) in messages" :key="i">
+                          <ChatMessage
+                            :role="msg.role"
+                            :content="msg.content"
+                            :sources="msg.sources"
+                            :streaming="streaming && i === messages.length - 1"
+                            @citation-click="(citIndex: number) => handleCitationClick(i, citIndex)"
+                          />
+                          <ChatReferenceChips
+                            v-if="msg.role === 'assistant' && (msg.sources?.length ?? 0) > 0"
+                            :sources="msg.sources ?? []"
+                            @view-all="handleViewAllReferences(i)"
+                            @chip-click="(citIndex: number) => handleCitationClick(i, citIndex)"
+                          />
+                          <template v-if="!isDesktop && expandedInlineCitation?.messageIndex === i">
+                            <div
+                              v-for="src in [getSourceForInlineCitation(i, expandedInlineCitation.citationIndex)].filter(Boolean)"
+                              :key="expandedInlineCitation.citationIndex"
+                              class="mx-auto max-w-[85%] rounded-lg border bg-muted/50 p-3"
+                            >
+                              <ChatSourceCard
+                                :index="expandedInlineCitation.citationIndex"
+                                :filename="src!.filename"
+                                :content="src!.content"
+                                :score="src!.score"
+                                highlighted
+                              />
+                            </div>
+                          </template>
+                        </template>
+                        <ChatThinkingRow v-if="thinking" :model="selectedModel" />
+                        <div v-if="error" class="text-center text-sm text-destructive">
+                          {{ error }}
+                        </div>
+                      </div>
+                    </template>
+
+                    <div class="flex items-center px-4 pt-2">
+                      <ChatModelSelector
+                        :model-value="selectedModel"
+                        :disabled="loading"
+                        @update:model-value="selectModel"
+                      />
+                    </div>
+                    <ChatInput
+                      ref="chatInputRef"
+                      :disabled="!hasIndexedDocuments || loading"
+                      :placeholder="folder ? `Ask about your ${folder.name} materials...` : 'Ask a question...'"
+                      :folder-id="folderId"
+                      :scope="referenceScope"
+                      @submit="handleSendMessage"
+                    />
+                  </div>
+                </ResizablePanel>
+              </template>
+
+              <template v-else>
+                <ResizablePanel :default-size="72" :min-size="40">
+                  <div class="flex h-full flex-1 flex-col overflow-hidden">
+                    <template v-if="!hasIndexedDocuments">
+                      <div class="flex flex-1 items-center justify-center text-muted-foreground">
+                        <div class="text-center">
+                          <FileText class="mx-auto mb-3 h-12 w-12 opacity-40" />
+                          <p class="text-lg font-medium">Upload documents to start chatting</p>
+                        </div>
+                      </div>
+                    </template>
+
+                    <template v-else>
+                      <div ref="chatScrollRef" role="log" aria-live="polite" aria-atomic="false" aria-relevant="additions" class="flex-1 space-y-4 overflow-y-auto p-4">
+                        <template v-for="(msg, i) in messages" :key="i">
+                          <ChatMessage
+                            :role="msg.role"
+                            :content="msg.content"
+                            :sources="msg.sources"
+                            :streaming="streaming && i === messages.length - 1"
+                            @citation-click="(citIndex: number) => handleCitationClick(i, citIndex)"
+                          />
+                          <ChatReferenceChips
+                            v-if="msg.role === 'assistant' && (msg.sources?.length ?? 0) > 0"
+                            :sources="msg.sources ?? []"
+                            @view-all="handleViewAllReferences(i)"
+                            @chip-click="(citIndex: number) => handleCitationClick(i, citIndex)"
+                          />
+                          <template v-if="!isDesktop && expandedInlineCitation?.messageIndex === i">
+                            <div
+                              v-for="src in [getSourceForInlineCitation(i, expandedInlineCitation.citationIndex)].filter(Boolean)"
+                              :key="expandedInlineCitation.citationIndex"
+                              class="mx-auto max-w-[85%] rounded-lg border bg-muted/50 p-3"
+                            >
+                              <ChatSourceCard
+                                :index="expandedInlineCitation.citationIndex"
+                                :filename="src!.filename"
+                                :content="src!.content"
+                                :score="src!.score"
+                                highlighted
+                              />
+                            </div>
+                          </template>
+                        </template>
+                        <ChatThinkingRow v-if="thinking" :model="selectedModel" />
+                        <div v-if="error" class="text-center text-sm text-destructive">
+                          {{ error }}
+                        </div>
+                      </div>
+                    </template>
+
+                    <div class="flex items-center px-4 pt-2">
+                      <ChatModelSelector
+                        :model-value="selectedModel"
+                        :disabled="loading"
+                        @update:model-value="selectModel"
+                      />
+                    </div>
+                    <ChatInput
+                      ref="chatInputRef"
+                      :disabled="!hasIndexedDocuments || loading"
+                      :placeholder="folder ? `Ask about your ${folder.name} materials...` : 'Ask a question...'"
+                      :folder-id="folderId"
+                      :scope="referenceScope"
+                      @submit="handleSendMessage"
+                    />
+                  </div>
+                </ResizablePanel>
+                <ResizableHandle with-handle>
+                  <button
+                    type="button"
+                    data-testid="source-panel-flip"
+                    :aria-label="flipPanelAriaLabel"
+                    class="inline-flex h-6 w-6 items-center justify-center rounded border bg-background text-foreground shadow-sm transition-colors hover:bg-accent"
+                    @pointerdown="handlePanelFlipPointerDown"
+                    @click.stop="handlePanelFlipClick"
+                  >
+                    <ArrowLeftRight class="h-3.5 w-3.5" />
+                  </button>
+                </ResizableHandle>
+                <ResizablePanel :default-size="28" :min-size="20" :max-size="45" class="min-w-[18rem]">
+                  <ChatSourcePanel
+                    :sources="allSources"
+                    :active-citation-index="activeCitationIndex"
+                    :open="sourcePanelOpen"
+                    side="right"
+                    @close="sourcePanelOpen = false"
+                  />
+                </ResizablePanel>
+              </template>
+            </ResizablePanelGroup>
+          </template>
+
+          <div v-else class="flex flex-1 flex-col overflow-hidden">
             <template v-if="!hasIndexedDocuments">
               <div class="flex flex-1 items-center justify-center text-muted-foreground">
                 <div class="text-center">
@@ -490,14 +741,6 @@ async function handleUpload(files: File[]) {
               @submit="handleSendMessage"
             />
           </div>
-
-          <ChatSourcePanel
-            v-if="isDesktop"
-            :sources="allSources"
-            :active-citation-index="activeCitationIndex"
-            :open="sourcePanelOpen"
-            @close="sourcePanelOpen = false"
-          />
         </div>
       </UiTabsContent>
 

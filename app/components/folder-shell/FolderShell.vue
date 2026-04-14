@@ -95,6 +95,8 @@ const themeStyle = computed(() => {
     '--border': mix(slate, tint, 0.36 - luminance * 0.12),
   } as Record<string, string>
 })
+
+provide('folderShellThemeStyle', themeStyle)
 </script>
 
 <template>

@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { X } from 'lucide-vue-next'
+import { cn } from '@/lib/utils'
 import type { Source } from '~/composables/useChat'
 
 const props = defineProps<{
   sources: Source[]
   activeCitationIndex: number | null
   open: boolean
+  side?: 'left' | 'right'
 }>()
 
 const emit = defineEmits<{
@@ -27,7 +29,10 @@ watch(() => props.activeCitationIndex, (index) => {
   <aside
     v-if="props.open"
     data-testid="source-panel"
-    class="flex w-72 shrink-0 flex-col border-l"
+    :class="cn(
+      'flex h-full min-w-0 flex-col bg-card',
+      props.side === 'left' ? 'border-r' : 'border-l',
+    )"
   >
     <div class="flex items-center justify-between border-b px-4 py-3">
       <h3 class="text-sm font-semibold">Sources</h3>
