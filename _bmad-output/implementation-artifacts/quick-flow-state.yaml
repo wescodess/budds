@@ -1,0 +1,66 @@
+version: 1
+mode: running
+current_phase: spec
+spec_slug: g3-folder-three-pane-revamp
+input_type: goal
+goal_or_spec: |
+  G3: Folder page three-pane revamp — fixed (non-resizable) left rail with
+  Members, Knowledge, and voids list (Chats, Flashcards, Quiz); right-edge
+  toggle opens a drawer (~55% width overlay) containing the folder hierarchy;
+  main pane shows the active folder's files with per-file status chips and a
+  hamburger menu for file options (rename/move/delete/etc.). Must closely
+  resemble docs/screenshots/Screenshot 2026-04-13 at 10.25.19 PM.png
+is_ui: true
+review_rounds: 0
+branch: null
+pr_url: null
+paths:
+  project_root: /Users/wesleyukadike/Desktop/budds
+  artifacts_dir: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts
+  state_file: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts/quick-flow-state.yaml
+  steps_dir: /Users/wesleyukadike/Desktop/budds/_bmad/bmm/4-implementation/bmad-quick-dev
+  deferred_work: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts/deferred-work.md
+  design_cache: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts/design-screens
+design:
+  approved: true
+  stitch_project_id: "2926819289448574055"
+  reference_screenshot: docs/screenshots/Screenshot 2026-04-13 at 10.25.19 PM.png
+  screens:
+    - id: 898d1fe0f46e407ca96b88746eb8684d
+      label: drawer-closed-files-list
+      image: screen_898d1fe0f46e407ca96b88746eb8684d.png
+    - id: da40666b5c4c44ae959b614a8fa60cea
+      label: drawer-open-folders-and-files
+      image: screen_da40666b5c4c44ae959b614a8fa60cea.png
+      notes: "drawer anchored to left rail's right edge; folders tree on top, active folder's files below w/ status pills + open kebab menu; supersedes b5c6e55083ec4fbeac0d0de0eec65fd7"
+escalation:
+  pending: null
+  log:
+    - question: "Approve proposed G3 folder-page screens"
+      answer: approve
+      recommended_default: request_revision
+      followed_default: false
+      asked_at: 2026-04-13
+      answered_at: 2026-04-13
+      raised_from_state: design
+decisions_log: []
+run_log:
+  - ts: 2026-04-13
+    event: start
+    detail: "intake → design (is_ui=true)"
+config:
+  notifications:
+    telegram:
+      enabled: false
+    notify_on:
+      design_ready: true
+      phase_start: true
+      loopback: true
+      review_pass: true
+      pr_opened: true
+      merge_complete: true
+      escalation: true
+      blocked: true
+      run_complete: true
+  auto_merge_on_review_pass: true
+  max_deferred_per_spec: 8
