@@ -228,7 +228,7 @@ async function onFiles(e: Event) {
     try {
       await uploadFiles(files, props.folderId)
       const { toast } = await import('vue-sonner')
-      toast.success(files.length === 1 ? 'Document uploaded' : `${files.length} documents uploaded`)
+      toast.success(files.length === 1 ? 'Document indexed' : `${files.length} documents indexed`)
     }
     catch (err: any) {
       const { toast } = await import('vue-sonner')

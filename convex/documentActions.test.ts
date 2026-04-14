@@ -19,6 +19,9 @@ import schema from './schema'
 const mockPdfParse = vi.fn()
 vi.mock('pdf-parse', () => ({ default: mockPdfParse }))
 
+const mockExtractText = vi.fn()
+vi.mock('unpdf', () => ({ extractText: mockExtractText }))
+
 const modules = import.meta.glob('./**/*.ts')
 
 const TEST_IDENTITY = {
@@ -57,6 +60,7 @@ describe('documentActions.ingestDocument', () => {
     originalEnv = { ...process.env }
     Object.assign(process.env, CF_ENV)
     mockPdfParse.mockReset()
+    mockExtractText.mockReset()
     vi.stubGlobal('fetch', vi.fn())
   })
 
@@ -195,6 +199,40 @@ describe('documentActions.ingestDocument', () => {
     const docs = await asUser.query(api.documents.listDocumentsByFolder, { folderId })
     expect(docs[0].status).toBe('failed')
     expect(docs[0].failureReason).toContain('File not found in storage')
+  })
+
+  test('[P0] should delete the stored file and schedule failed-document removal when extraction yields no text', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const { folderId, storageId, docId } = await setupDocumentWithStorage(t, asUser)
+
+    mockExtractText.mockResolvedValue({ text: '   ' })
+
+    await t.action(internal.documentActions.ingestDocument, {
+      documentId: docId,
+      fileId: storageId,
+      userId: TEST_IDENTITY.tokenIdentifier,
+      folderId,
+      filename: 'scanned.pdf',
+    })
+
+    const docs = await asUser.query(api.documents.listDocumentsByFolder, { folderId })
+    expect(docs[0].status).toBe('failed')
+    expect(docs[0].failureReason).toBe(
+      'No extractable text detected — scanned or image-only PDF',
+    )
+
+    const blob = await t.run(async (ctx) => ctx.storage.get(storageId))
+    expect(blob).toBeNull()
+
+    const scheduledFunctions = await t.run(async (ctx) => {
+      const jobs = await ctx.db.system.query('_scheduled_functions').collect()
+      return jobs.filter((job: any) =>
+        job.name === 'documents:removeFailedDocument'
+        || job.name === 'documents.removeFailedDocument',
+      )
+    })
+    expect(scheduledFunctions.length).toBeGreaterThan(0)
   })
 
   skip('[P1] should include authorization header in AI Search request', async () => {

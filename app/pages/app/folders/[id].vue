@@ -389,7 +389,7 @@ async function handleUpload(files: File[]) {
   try {
     await uploadFiles(files, folderId.value)
     const { toast } = await import('vue-sonner')
-    toast.success(files.length === 1 ? 'Document uploaded' : `${files.length} documents uploaded`)
+    toast.success(files.length === 1 ? 'Document indexed' : `${files.length} documents indexed`)
   } catch (e: any) {
     const { toast } = await import('vue-sonner')
     toast.error(e.message || 'Upload failed')
@@ -400,7 +400,7 @@ async function handleImportLink(url: string) {
   try {
     const result = await importDocumentFromUrl(url, folderId.value)
     const { toast } = await import('vue-sonner')
-    toast.success(`Imported ${result?.filename ?? 'document'}`)
+    toast.success(`Imported and indexed ${result?.filename ?? 'document'}`)
   } catch (e: any) {
     const { toast } = await import('vue-sonner')
     toast.error(e.message || 'Import failed')
