@@ -13,6 +13,11 @@ const emit = defineEmits<{
   'open-in-knowledge': [index: number]
 }>()
 
+const folderThemeStyle = inject(
+  'folderShellThemeStyle',
+  computed<Record<string, string>>(() => ({})),
+)
+
 const hasHoverDetails = computed(() => Boolean(props.filename))
 const scorePct = computed(() =>
   typeof props.score === 'number' ? `${Math.round(props.score * 100)}%` : null,
@@ -39,6 +44,7 @@ const excerpt = computed(() => {
     <UiHoverCardContent
       side="top"
       align="start"
+      :style="folderThemeStyle"
       class="w-80 space-y-2 rounded-xl border bg-card p-4 text-foreground"
     >
       <div class="flex items-center gap-2">

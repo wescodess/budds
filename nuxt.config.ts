@@ -27,6 +27,9 @@ export default defineNuxtConfig({
     },
     components: {
       prose: true,
+      map: {
+        citation: 'Citation',
+      },
     },
   },
   shadcn: {
