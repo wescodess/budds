@@ -8,6 +8,7 @@ export default defineNuxtConfig({
     plugins: [tailwindcss()],
   },
   nitro: {
+    preset: 'cloudflare_pages',
     externals: {
       inline: [fileURLToPath(new URL('./convex/_generated/', import.meta.url))],
     },
