@@ -2,6 +2,7 @@
 import { useMagicKeys, whenever } from '@vueuse/core'
 import type { Id } from '~~/convex/_generated/dataModel'
 import type { Doc } from '~~/convex/_generated/dataModel'
+import { getColor, DEFAULT_COLOR_KEY } from '~~/convex/folderPalette'
 
 defineOptions({ name: 'FolderShell' })
 
@@ -55,10 +56,31 @@ function openDrawerSection(section: 'knowledge' | 'members') {
 function onTabChange(tab: 'chat' | 'flashcards' | 'quiz' | 'documents') {
   emit('update:activeTab', tab)
 }
+
+function hexToRgb(hex: string) {
+  const m = hex.replace('#', '')
+  const n = m.length === 3 ? m.split('').map(c => c + c).join('') : m
+  const int = parseInt(n, 16)
+  return { r: (int >> 16) & 255, g: (int >> 8) & 255, b: int & 255 }
+}
+
+const themeStyle = computed(() => {
+  const hex = getColor(props.folder?.color || DEFAULT_COLOR_KEY).hex
+  const { r, g, b } = hexToRgb(hex)
+  const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
+  const fg = luminance > 0.55 ? '#0b0b0b' : '#ffffff'
+  return {
+    '--color-primary': hex,
+    '--color-primary-foreground': fg,
+    '--color-ring': hex,
+    '--color-sidebar-primary': hex,
+    '--color-sidebar-ring': hex,
+  } as Record<string, string>
+})
 </script>
 
 <template>
-  <div class="relative flex h-screen overflow-hidden">
+  <div class="relative flex h-screen overflow-hidden transition-colors duration-300" :style="themeStyle">
     <FolderShellRail
       :folder="folder"
       :folder-id="folderId"
