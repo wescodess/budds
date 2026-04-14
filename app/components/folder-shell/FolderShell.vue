@@ -64,10 +64,17 @@ function hexToRgb(hex: string) {
   return { r: (int >> 16) & 255, g: (int >> 8) & 255, b: int & 255 }
 }
 
+function mix(a: { r: number, g: number, b: number }, b: { r: number, g: number, b: number }, t: number) {
+  const ch = (x: number, y: number) => Math.round(x * (1 - t) + y * t)
+  return `rgb(${ch(a.r, b.r)} ${ch(a.g, b.g)} ${ch(a.b, b.b)})`
+}
+
 const themeStyle = computed(() => {
   const hex = getColor(props.folder?.color || DEFAULT_COLOR_KEY).hex
-  const { r, g, b } = hexToRgb(hex)
-  const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
+  const tint = hexToRgb(hex)
+  const ink = { r: 12, g: 12, b: 14 }
+  const slate = { r: 28, g: 25, b: 23 }
+  const luminance = (0.2126 * tint.r + 0.7152 * tint.g + 0.0722 * tint.b) / 255
   const fg = luminance > 0.55 ? '#0b0b0b' : '#ffffff'
   return {
     '--primary': hex,
@@ -76,12 +83,20 @@ const themeStyle = computed(() => {
     '--sidebar-primary': hex,
     '--sidebar-primary-foreground': fg,
     '--sidebar-ring': hex,
+    '--background': mix(ink, tint, 0.14),
+    '--card': mix(slate, tint, 0.16),
+    '--popover': mix(slate, tint, 0.16),
+    '--muted': mix(slate, tint, 0.2),
+    '--accent': mix(slate, tint, 0.25),
+    '--sidebar': mix(ink, tint, 0.16),
+    '--sidebar-accent': mix(slate, tint, 0.25),
+    '--border': mix(slate, tint, 0.3),
   } as Record<string, string>
 })
 </script>
 
 <template>
-  <div class="relative flex h-screen overflow-hidden transition-colors duration-300" :style="themeStyle">
+  <div class="relative flex h-screen overflow-hidden bg-background text-foreground transition-colors duration-300" :style="themeStyle">
     <FolderShellRail
       :folder="folder"
       :folder-id="folderId"
