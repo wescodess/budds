@@ -175,8 +175,8 @@ async function onFiles(e: Event) {
       />
     </Transition>
     <Transition
-      enter-active-class="transition-transform duration-[260ms] ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform"
-      leave-active-class="transition-transform duration-[220ms] ease-[cubic-bezier(0.4,0,0.2,1)] will-change-transform"
+      enter-active-class="transition-transform duration-[240ms] ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform"
+      leave-active-class="transition-transform duration-[240ms] ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform"
       enter-from-class="-translate-x-6"
       leave-to-class="-translate-x-6"
       appear
