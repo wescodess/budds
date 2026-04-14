@@ -1,0 +1,30 @@
+{
+  "projectId": "2926819289448574055",
+  "projectName": "projects/2926819289448574055",
+  "title": "Budds — Learning Compiler",
+  "approvedScreens": {
+    "landing": "8e27e78bc8bf4d4981e1c65a9399ce86",
+    "auth": "03c1181b43de47f2b60e5e758905bf22",
+    "chat-void": "6a1a5b78cc46434eb8a021f822f4e7a7",
+    "knowledge-drawer": "cf69583898d54d28ac43e17921baeb83",
+    "flash-cards-void": "85521d3e8e5d4374afb271aac41ccb2a",
+    "quiz-void": "9702ac3d2d674f139d351dde8782e776",
+    "dashboard": "99ce0074f0d941f8a00c9c4c28668db0",
+    "dashboard-atlas": "389a652f8e07495a826028af9f01b567",
+    "create-void-modal": "184ea1190d144db7bc079fab439f4958",
+    "g3-folder-3pane-default": "4bc72d3bd5ae451e80e3450fbb5499c7",
+    "g3-folder-3pane-helper-open": "3a5e62149a4b495f87baedc1368586e2",
+    "g3-folder-3pane-flipped": "e29135ced58046dcb6762fe11201f5ef",
+    "g3-folder-3pane-tablet": "30a7ec0137c14820a4a5ae6aaa8a5ee6",
+    "g3-folder-3pane-mobile": "e197f4e451684e1d8975b90295d24fc7",
+    "g4-chat-void-markdown-and-thinking": "e1f5dd4cfe7d437c92844f85178defb2",
+    "g4-chat-bubble-citations-and-hovercard": "a0194c5dde06409abb14834eb0fd7c03",
+    "g4-helper-panel-all-references": "dc26d3464bbf41339b8a816a9f5adcf6",
+    "g4-directory-picker-tree-component": "c28492deec024512946b955d518ec06f",
+    "g4-directory-picker-in-chat-input": "6a7ec821b9f04aad80079092dfcb8f7a",
+    "g4-knowledge-tree-sections": "c1412121785a40699f471fcc93a18346"
+  },
+  "designSystemId": "assets/11175050301981891392",
+  "foundationComplete": true,
+  "completedAt": "2026-04-09"
+}

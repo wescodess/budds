@@ -1,0 +1,61 @@
+diff --git a/dist/runtime/composables/useConvexQuery.js b/dist/runtime/composables/useConvexQuery.js
+index 6900025..7f21d8a 100644
+--- a/dist/runtime/composables/useConvexQuery.js
++++ b/dist/runtime/composables/useConvexQuery.js
+@@ -1,7 +1,8 @@
+ import { useAsyncData, useNuxtApp, useRuntimeConfig } from "#imports";
+ import { CONVEX_INJECTION_KEY } from "@convex-vue/core";
++import { getFunctionName } from "convex/server";
+ import { inject, onScopeDispose, ref, toValue, watch } from "vue";
+-export async function useConvexQuery(query, args, options = {}) {
++export function useConvexQuery(query, args, options = {}) {
+   const nuxtApp = useNuxtApp();
+   const config = useRuntimeConfig();
+   const convexUrl = config.public.convex?.url;
+@@ -17,25 +18,38 @@ export async function useConvexQuery(query, args, options = {}) {
+   }
+   return useConvexQueryClient(query, args, client);
+ }
+-async function useConvexQuerySSR(query, args, options, convexUrl, client) {
+-  const queryName = query._name ?? "unknown";
++function useConvexQuerySSR(query, args, options, convexUrl, client) {
++  const queryName = getFunctionName(query) ?? "unknown";
+   const sortedArgs = sortObjectKeys(toValue(args));
+   const key = `convex:${queryName}:${JSON.stringify(sortedArgs)}`;
+-  const asyncData = await useAsyncData(
++  const asyncData = useAsyncData(
+     key,
+     async () => {
+       const { fetchQuery } = await import("convex/nextjs");
+-      return fetchQuery(query, toValue(args), { url: convexUrl });
++      const nuxtApp = useNuxtApp();
++      const token = import.meta.server ? nuxtApp.ssrContext?.event?.context?.convexToken : undefined;
++      return fetchQuery(query, toValue(args), { url: convexUrl, token });
+     },
+     { ...options, server: options.ssr ?? true }
+   );
+   if (import.meta.client) {
++    const writableData = ref(asyncData.data.value);
++    const writableError = ref(asyncData.error.value);
++    const writablePending = ref(asyncData.pending.value);
++    const writableStatus = ref(asyncData.status.value);
+     setupClientSubscription(query, args, {
+-      data: asyncData.data,
+-      error: asyncData.error,
+-      pending: asyncData.pending,
+-      status: asyncData.status
++      data: writableData,
++      error: writableError,
++      pending: writablePending,
++      status: writableStatus
+     }, client);
++    return {
++      ...asyncData,
++      data: writableData,
++      error: writableError,
++      pending: writablePending,
++      status: writableStatus
++    };
+   }
+   return asyncData;
+ }
