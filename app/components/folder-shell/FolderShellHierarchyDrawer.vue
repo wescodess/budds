@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { X, FolderPlus, Search, Plus, Link as LinkIcon, Upload } from 'lucide-vue-next'
-import { onClickOutside, onKeyStroke } from '@vueuse/core'
+import { onKeyStroke } from '@vueuse/core'
 import type { Doc, Id } from '~~/convex/_generated/dataModel'
 
 defineOptions({ name: 'FolderShellHierarchyDrawer' })
@@ -20,11 +20,6 @@ const { allFolders } = useFolders()
 const { documents, uploadFiles, deleteDocument, moveDocument } = useDocuments(computed(() => props.folderId))
 
 const panelRef = ref<HTMLElement | null>(null)
-onClickOutside(panelRef, (e) => {
-  const el = e.target as HTMLElement | null
-  if (el?.closest('[data-testid="folder-rail"],[role="menu"],[role="dialog"],[role="alertdialog"],[data-reka-popper-content-wrapper],[data-reka-menu-content],[data-reka-menubar-content],[data-dismissable-layer]')) return
-  emit('close')
-})
 onKeyStroke('Escape', () => emit('close'))
 
 const search = ref('')
