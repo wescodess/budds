@@ -5,9 +5,14 @@ export default defineEventHandler(async (event) => {
 
   const config = useRuntimeConfig(event)
   const convexSiteUrl = getConvexSiteUrl(config)
-  if (!convexSiteUrl) return
+  console.log('[auth-proxy] intercepting:', event.path, 'convexSiteUrl:', convexSiteUrl)
+  if (!convexSiteUrl) {
+    console.log('[auth-proxy] aborting because convexSiteUrl is empty')
+    return
+  }
 
   const target = new URL(event.path, convexSiteUrl)
+  console.log('[auth-proxy] target URL:', target.toString())
 
   const headers = new Headers()
   for (const [key, value] of Object.entries(getRequestHeaders(event))) {

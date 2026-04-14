@@ -1,1 +1,0 @@
-import{_ as o}from"./DlAUqK2U.js";import{o as r,c as t,j as s}from"./C2sOQJ1J.js";const n={},c={class:"min-h-screen text-foreground antialiased"};function a(e,d){return r(),t("div",c,[s(e.$slots,"default")])}const _=o(n,[["render",a]]);export{_ as default};
