@@ -161,15 +161,30 @@ async function onFiles(e: Event) {
     class="pointer-events-none fixed inset-0 z-40"
     data-testid="folder-drawer-root"
   >
-    <div
-      class="pointer-events-auto absolute inset-0 bg-black/45 backdrop-blur-[3px]"
-      :style="!fullWidth ? { left: railWidth + 'px' } : undefined"
-      @click="emit('close')"
-    />
+    <Transition
+      enter-active-class="transition-opacity duration-200 ease-out"
+      leave-active-class="transition-opacity duration-150 ease-in"
+      enter-from-class="opacity-0"
+      leave-to-class="opacity-0"
+      appear
+    >
+      <div
+        class="pointer-events-auto absolute inset-0 bg-black/45 backdrop-blur-[3px]"
+        :style="!fullWidth ? { left: railWidth + 'px' } : undefined"
+        @click="emit('close')"
+      />
+    </Transition>
+    <Transition
+      enter-active-class="transition-transform duration-300 ease-out"
+      leave-active-class="transition-transform duration-200 ease-in"
+      enter-from-class="-translate-x-4 opacity-0"
+      leave-to-class="-translate-x-4 opacity-0"
+      appear
+    >
     <aside
       ref="panelRef"
       data-testid="folder-drawer"
-      class="pointer-events-auto absolute top-0 flex h-full flex-col border-r border-border/60 bg-card shadow-2xl"
+      class="pointer-events-auto absolute top-0 flex h-full flex-col border-r border-border/60 bg-card shadow-2xl transition-opacity"
       :style="fullWidth
         ? { left: '0px', width: '100vw' }
         : { left: railWidth + 'px', width: 'min(55vw, 720px)' }"
@@ -287,6 +302,7 @@ async function onFiles(e: Event) {
         </UiButton>
       </footer>
     </aside>
+    </Transition>
 
     <FoldersFolderFormModal
       v-model:open="showFolderModal"
