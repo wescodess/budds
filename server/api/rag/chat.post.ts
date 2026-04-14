@@ -1,3 +1,6 @@
+import { ConvexHttpClient } from 'convex/browser'
+import { api } from '../../../convex/_generated/api'
+import type { Id } from '../../../convex/_generated/dataModel'
 import type { ChatMessage } from '../../utils/ai-gateway'
 
 const SYSTEM_PROMPT = `You are a helpful assistant that answers questions based on the provided context.
@@ -18,6 +21,10 @@ export default defineEventHandler(async (event) => {
     temperature?: number
     max_tokens?: number
     stream?: boolean
+    scope?: {
+      folderIds?: string[]
+      fileIds?: string[]
+    }
   }>(event)
 
   if (!body.query?.trim()) {
@@ -39,6 +46,28 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, message: 'folderId is required' })
   }
 
+  let scopedDocumentIds: Set<string> | null = null
+  const hasScope = Boolean(
+    (body.scope?.folderIds?.length ?? 0) > 0 || (body.scope?.fileIds?.length ?? 0) > 0,
+  )
+  if (hasScope) {
+    const token = event.context.convexToken as string | undefined
+    const convexUrl = process.env.CONVEX_URL || process.env.NUXT_PUBLIC_CONVEX_URL
+    if (!token || !convexUrl) {
+      throw createError({ statusCode: 500, message: 'Convex client not configured' })
+    }
+    const client = new ConvexHttpClient(convexUrl)
+    client.setAuth(token)
+    const resolved = await client.query(api.folders.resolveScope, {
+      folderIds: body.scope?.folderIds as Id<'folders'>[] | undefined,
+      fileIds: body.scope?.fileIds as Id<'documents'>[] | undefined,
+    })
+    scopedDocumentIds = new Set(resolved.documentIds)
+    if (scopedDocumentIds.size === 0) {
+      scopedDocumentIds = null
+    }
+  }
+
   const searchResults = await searchDocuments({
     query: body.query,
     userId,
@@ -47,14 +76,23 @@ export default defineEventHandler(async (event) => {
     score_threshold: body.score_threshold ?? 0.1,
   })
 
-  const chunks = searchResults.data ?? []
+  const allChunks = searchResults.data ?? []
+  const chunks = scopedDocumentIds
+    ? allChunks.filter((c) => {
+        const docId = c.attributes?.documentId
+        return typeof docId === 'string' && scopedDocumentIds!.has(docId)
+      })
+    : allChunks
 
   const summarizationIntent = /\b(summari[sz]e|summary|overview|outline|tl;?dr|main points|key points|what(?:'s| is| are) (?:in|this|these|the)\b|tell me about)\b/i.test(body.query)
   const needsFallback = chunks.length < 3 || summarizationIntent
 
   let context: string
   if (needsFallback) {
-    const folderDocs = await fetchFolderDocs({ userId, folderId: body.folderId, maxChars: 80_000 })
+    const rawFolderDocs = await fetchFolderDocs({ userId, folderId: body.folderId, maxChars: 80_000 })
+    const folderDocs = scopedDocumentIds
+      ? rawFolderDocs.filter((d) => scopedDocumentIds!.has(d.documentId))
+      : rawFolderDocs
     if (folderDocs.length > 0) {
       context = folderDocs
         .map((doc, i) => `[Source ${i + 1}: ${doc.filename ?? doc.documentId}]\n${doc.content}`)

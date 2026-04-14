@@ -17,6 +17,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1029.0",
     "@convex-dev/better-auth": "^0.11.4",
+    "@nuxtjs/mdc": "^0.21.1",
     "@onmax/nuxt-better-auth": "0.0.2-alpha.31",
     "@opentelemetry/api": "^1.9.1",
     "@tanstack/vue-table": "^8.21.3",

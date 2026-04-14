@@ -311,6 +311,116 @@ export const deleteFolder = mutation({
   },
 })
 
+export const listSubtree = query({
+  args: { folderId: v.id('folders') },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) return { subfolders: [], files: [] }
+
+    const userId = identity.tokenIdentifier
+    const root = await ctx.db.get(args.folderId)
+    if (!root || root.userId !== userId) return { subfolders: [], files: [] }
+
+    const children = await ctx.db
+      .query('folders')
+      .withIndex('by_userId_and_parentId', (q) =>
+        q.eq('userId', userId).eq('parentId', args.folderId),
+      )
+      .take(200)
+
+    const subfolders = []
+    for (const child of children) {
+      const directDocs = await ctx.db
+        .query('documents')
+        .withIndex('by_userId_and_folderId', (q) =>
+          q.eq('userId', userId).eq('folderId', child._id),
+        )
+        .collect()
+      const descendants = await collectDescendants(ctx, userId, child._id)
+      let descendantFileCount = directDocs.length
+      for (const d of descendants) {
+        const docs = await ctx.db
+          .query('documents')
+          .withIndex('by_userId_and_folderId', (q) =>
+            q.eq('userId', userId).eq('folderId', d._id),
+          )
+          .collect()
+        descendantFileCount += docs.length
+      }
+      subfolders.push({
+        id: child._id,
+        name: child.name,
+        color: child.color,
+        icon: child.icon,
+        fileCount: directDocs.length,
+        descendantFileCount,
+        hasChildren: descendants.length > 0,
+      })
+    }
+
+    const docs = await ctx.db
+      .query('documents')
+      .withIndex('by_userId_and_folderId', (q) =>
+        q.eq('userId', userId).eq('folderId', args.folderId),
+      )
+      .take(500)
+
+    const files = docs
+      .filter((d) => d.status === 'success')
+      .map((d) => ({
+        id: d._id,
+        filename: d.filename,
+        fileSize: d.fileSize,
+      }))
+
+    return { subfolders, files }
+  },
+})
+
+export const resolveScope = query({
+  args: {
+    folderIds: v.optional(v.array(v.id('folders'))),
+    fileIds: v.optional(v.array(v.id('documents'))),
+  },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) return { documentIds: [], ownedFolderIds: [] }
+
+    const userId = identity.tokenIdentifier
+    const documentIds = new Set<string>()
+    const ownedFolderIds: Id<'folders'>[] = []
+
+    for (const folderId of args.folderIds ?? []) {
+      const folder = await ctx.db.get(folderId)
+      if (!folder || folder.userId !== userId) continue
+      ownedFolderIds.push(folderId)
+      const descendantIds: Id<'folders'>[] = [folderId]
+      const descendants = await collectDescendants(ctx, userId, folderId)
+      for (const d of descendants) descendantIds.push(d._id)
+      for (const fid of descendantIds) {
+        const docs = await ctx.db
+          .query('documents')
+          .withIndex('by_userId_and_folderId', (q) =>
+            q.eq('userId', userId).eq('folderId', fid),
+          )
+          .collect()
+        for (const doc of docs) {
+          if (doc.status === 'success') documentIds.add(doc._id as unknown as string)
+        }
+      }
+    }
+
+    for (const fileId of args.fileIds ?? []) {
+      const doc = await ctx.db.get(fileId)
+      if (!doc || doc.userId !== userId) continue
+      if (doc.status !== 'success') continue
+      documentIds.add(doc._id as unknown as string)
+    }
+
+    return { documentIds: [...documentIds], ownedFolderIds }
+  },
+})
+
 export const getFolderDescendantCounts = query({
   args: { id: v.id('folders') },
   handler: async (ctx, args) => {

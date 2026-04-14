@@ -11,7 +11,12 @@
     "quiz-void": "9702ac3d2d674f139d351dde8782e776",
     "dashboard": "99ce0074f0d941f8a00c9c4c28668db0",
     "dashboard-atlas": "389a652f8e07495a826028af9f01b567",
-    "create-void-modal": "184ea1190d144db7bc079fab439f4958"
+    "create-void-modal": "184ea1190d144db7bc079fab439f4958",
+    "g4-chat-void-markdown-and-thinking": "e1f5dd4cfe7d437c92844f85178defb2",
+    "g4-chat-bubble-citations-and-hovercard": "a0194c5dde06409abb14834eb0fd7c03",
+    "g4-helper-panel-all-references": "dc26d3464bbf41339b8a816a9f5adcf6",
+    "g4-directory-picker-tree-component": "c28492deec024512946b955d518ec06f",
+    "g4-directory-picker-in-chat-input": "6a7ec821b9f04aad80079092dfcb8f7a"
   },
   "designSystemId": "assets/11175050301981891392",
   "foundationComplete": true,
