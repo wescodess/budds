@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { X, FolderPlus, Search, Plus, Link as LinkIcon, Upload, Pencil } from 'lucide-vue-next'
-import { onKeyStroke, usePointerSwipe } from '@vueuse/core'
+import { onKeyStroke } from '@vueuse/core'
 import { api } from '#convex/api'
 import type { Doc, Id } from '~~/convex/_generated/dataModel'
+import { useHorizontalSwipeGesture } from '~/composables/useHorizontalSwipeGesture'
 import { PANEL_DISMISS_THRESHOLD_PX, useGestureGuards } from '~/composables/useGestureGuards'
 
 defineOptions({ name: 'FolderShellHierarchyDrawer' })
@@ -59,24 +60,18 @@ const totalCountByFolder = computed(() => {
 const panelRef = ref<HTMLElement | null>(null)
 onKeyStroke('Escape', () => emit('close'))
 const { shouldStartHorizontalGesture } = useGestureGuards()
-const allowDismissSwipe = ref(false)
 const SIDEBAR_SWIPE_EDGE_GUARD_PX = 12
 
-let panelSwipe: ReturnType<typeof usePointerSwipe>
-panelSwipe = usePointerSwipe(panelRef, {
+useHorizontalSwipeGesture({
+  target: panelRef,
   threshold: 24,
-  pointerTypes: ['touch', 'pen'],
-  onSwipeStart(event) {
-    allowDismissSwipe.value = props.fullWidth && shouldStartHorizontalGesture(event, {
+  shouldStart(event) {
+    return props.fullWidth && shouldStartHorizontalGesture(event, {
       edgeGuardPx: SIDEBAR_SWIPE_EDGE_GUARD_PX,
     })
   },
-  onSwipeEnd() {
-    if (allowDismissSwipe.value && props.fullWidth) {
-      const deltaX = panelSwipe.posEnd.x - panelSwipe.posStart.x
-      if (deltaX <= -PANEL_DISMISS_THRESHOLD_PX) emit('close')
-    }
-    allowDismissSwipe.value = false
+  onSwipeEnd({ deltaX }) {
+    if (props.fullWidth && deltaX <= -PANEL_DISMISS_THRESHOLD_PX) emit('close')
   },
 })
 

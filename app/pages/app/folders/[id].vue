@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { FileText, MessageSquare, ClipboardList, Layers, PanelRight, ArrowLeftRight } from 'lucide-vue-next'
-import { useMediaQuery, usePointerSwipe } from '@vueuse/core'
+import { useMediaQuery } from '@vueuse/core'
 import { api } from '#convex/api'
 import type { Id } from '~~/convex/_generated/dataModel'
 import type { VoidType } from '~/components/voids/CreateVoidDialog.vue'
 import FolderHelperPane from '~/components/folders/FolderHelperPane.vue'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+import { useHorizontalSwipeGesture } from '~/composables/useHorizontalSwipeGesture'
 import { TAB_SWITCH_THRESHOLD_PX, useGestureGuards } from '~/composables/useGestureGuards'
 
 definePageMeta({ layout: 'folder' })
@@ -177,7 +178,6 @@ const flipPanelAriaLabel = computed(() =>
 
 const panelFlipPointerStart = ref<{ x: number; y: number } | null>(null)
 const suppressNextPanelFlipClick = ref(false)
-const allowWorkspaceSwipe = ref(false)
 
 function clearSelectedDocuments() {
   selectedDocumentIds.value = []
@@ -233,46 +233,26 @@ function hasBlockingOverlay() {
   ))
 }
 
-function commitWorkspaceSwipe() {
-  if (!allowWorkspaceSwipe.value) return
-  const deltaX = workspaceSwipe.posEnd.x - workspaceSwipe.posStart.x
-  if (Math.abs(deltaX) >= TAB_SWITCH_THRESHOLD_PX) {
-    const handledSidebarSwipe = handleWorkspaceSidebarSwipe(deltaX)
-    if (!handledSidebarSwipe) {
-      const currentIndex = getCurrentTabIndex()
-      const nextIndex = deltaX < 0 ? currentIndex + 1 : currentIndex - 1
-      const nextTab = allowedTabs[nextIndex]
-      if (nextTab) void onTabChange(nextTab)
-    }
-  }
-  allowWorkspaceSwipe.value = false
-}
-
-let workspaceSwipe: ReturnType<typeof usePointerSwipe>
-workspaceSwipe = usePointerSwipe(workspaceRef, {
+useHorizontalSwipeGesture({
+  target: workspaceRef,
   threshold: 24,
-  pointerTypes: ['touch', 'pen'],
-  onSwipeStart(event) {
-    allowWorkspaceSwipe.value = !isDesktop.value
+  shouldStart(event) {
+    return !isDesktop.value
       && !hasBlockingOverlay()
       && shouldStartHorizontalGesture(event, { edgeGuardPx: SIDEBAR_SWIPE_EDGE_GUARD_PX })
   },
-  onSwipeEnd() {
-    commitWorkspaceSwipe()
+  onSwipeEnd({ deltaX }) {
+    if (Math.abs(deltaX) >= TAB_SWITCH_THRESHOLD_PX) {
+      const handledSidebarSwipe = handleWorkspaceSidebarSwipe(deltaX)
+      if (!handledSidebarSwipe) {
+        const currentIndex = getCurrentTabIndex()
+        const nextIndex = deltaX < 0 ? currentIndex + 1 : currentIndex - 1
+        const nextTab = allowedTabs[nextIndex]
+        if (nextTab) void onTabChange(nextTab)
+      }
+    }
   },
 })
-
-// VueUse's usePointerSwipe does not listen for pointercancel.
-// On mobile, when the browser takes over a touch for native vertical scrolling,
-// it fires pointercancel. When this happens, we must ABORT the gesture.
-if (import.meta.client) {
-  watch(workspaceRef, (el, _prev, onCleanup) => {
-    if (!el) return
-    const handler = () => { allowWorkspaceSwipe.value = false }
-    el.addEventListener('pointercancel', handler, { passive: true })
-    onCleanup(() => el.removeEventListener('pointercancel', handler))
-  }, { immediate: true })
-}
 
 const allSources = computed(() => {
   if (activeMessageIndex.value === null) return []
