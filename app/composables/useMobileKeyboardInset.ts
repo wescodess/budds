@@ -16,6 +16,7 @@ export const useMobileKeyboardInset = createSharedComposable(() => {
     if (!import.meta.client) return
 
     const root = document.documentElement
+    if (!root?.style) return
     const viewport = window.visualViewport
     const viewportHeight = viewport?.height ?? window.innerHeight
     const offsetTop = viewport?.offsetTop ?? 0

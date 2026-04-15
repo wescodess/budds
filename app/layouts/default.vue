@@ -163,8 +163,6 @@ async function onSignOut() {
   } catch {
     // Better Auth may already have invalidated the session.
   }
-
-  await navigateTo('/login', { replace: true })
 }
 
 function parseFilenameFromDisposition(header: string | null): string | null {

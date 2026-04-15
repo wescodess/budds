@@ -60,6 +60,7 @@ export function useHorizontalSwipeGesture(options: HorizontalSwipeGestureOptions
   function lockSelection() {
     if (!import.meta.client || selectionLocked) return
     const root = document.documentElement
+    if (!root?.style) return
     previousUserSelect = root.style.userSelect
     previousWebkitUserSelect = root.style.getPropertyValue('-webkit-user-select')
     previousWebkitTouchCallout = root.style.getPropertyValue('-webkit-touch-callout')
@@ -72,6 +73,7 @@ export function useHorizontalSwipeGesture(options: HorizontalSwipeGestureOptions
   function unlockSelection() {
     if (!import.meta.client || !selectionLocked) return
     const root = document.documentElement
+    if (!root?.style) return
     root.style.userSelect = previousUserSelect
     root.style.setProperty('-webkit-user-select', previousWebkitUserSelect)
     root.style.setProperty('-webkit-touch-callout', previousWebkitTouchCallout)

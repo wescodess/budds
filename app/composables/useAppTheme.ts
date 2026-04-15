@@ -10,6 +10,7 @@ function resolveThemeMode(stored: string | null | undefined, prefersDark: boolea
 function applyThemeMode(mode: AppThemeMode) {
   if (!import.meta.client) return
   const root = document.documentElement
+  if (!root?.style) return
   root.classList.toggle('dark', mode === 'dark')
   root.classList.toggle('light', mode === 'light')
   root.style.colorScheme = mode
@@ -28,6 +29,7 @@ export function getAppThemeBootstrapScript() {
 
     const mode = getResolvedMode();
     const root = document.documentElement;
+    if (!root || !root.style) return;
     root.classList.toggle('dark', mode === 'dark');
     root.classList.toggle('light', mode === 'light');
     root.style.colorScheme = mode;
@@ -37,7 +39,8 @@ export function getAppThemeBootstrapScript() {
 export function useAppTheme() {
   const mode = useState<AppThemeMode>('app-theme-mode', () => {
     if (import.meta.client) {
-      return document.documentElement.classList.contains('dark') ? 'dark' : 'light'
+      const root = document.documentElement
+      return root?.classList.contains('dark') ? 'dark' : 'light'
     }
     return 'light'
   })
