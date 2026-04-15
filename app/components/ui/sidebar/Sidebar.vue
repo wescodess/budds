@@ -59,7 +59,6 @@ useHorizontalSwipeGesture({
 
   <Sheet v-else-if="isMobile" :open="openMobile" v-bind="$attrs" @update:open="setOpenMobile">
     <SheetContent
-      ref="mobileSheetContentRef"
       data-sidebar="sidebar"
       data-slot="sidebar"
       data-mobile="true"
@@ -73,7 +72,7 @@ useHorizontalSwipeGesture({
         <SheetTitle>Sidebar</SheetTitle>
         <SheetDescription>Displays the mobile sidebar.</SheetDescription>
       </SheetHeader>
-      <div class="flex h-full w-full flex-col">
+      <div ref="mobileSheetContentRef" class="flex h-full w-full flex-col">
         <slot />
       </div>
     </SheetContent>
