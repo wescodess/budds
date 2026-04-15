@@ -22,7 +22,7 @@ const emit = defineEmits<{
 
 const drawerOpen = ref(false)
 const drawerSection = ref<'knowledge' | 'members'>('knowledge')
-const isDesktop = ref(true)
+const isDesktop = ref(import.meta.client ? window.matchMedia('(min-width: 1024px)').matches : false)
 const railCollapsed = ref(false)
 const mobileRailHidden = ref(false)
 const mobileRailExpanded = ref(false)
