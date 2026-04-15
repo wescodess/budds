@@ -58,7 +58,7 @@ Rules:
 - Every multiple-choice question MUST have exactly 4 entries in "options", with one correct. "correctAnswer" must exactly match one of the options.
 - Free-response items omit "options" and put the canonical short answer in "correctAnswer".
 - "sourceIndex" is a 0-based index into the source passages array the user will send. Reference only the supplied passages. Never invent filenames or quote text that is not in a passage.
-- If fewer than 2 source passages are supplied, return {"title": "Quiz", "questions": []} and nothing else.
+- If no source passages are supplied, return {"title": "Quiz", "questions": []} and nothing else.
 - "order" starts at 0 and increments by 1 for each question in output order.`
 
   const sourceBlock = chunks.length === 0

@@ -96,7 +96,7 @@ function handleSubmit() {
           :disabled="!selectedFolderId || pending"
           @click="handleSubmit"
         >
-          {{ pending ? 'Moving…' : 'Move here' }}
+          {{ pending ? 'Moving...' : 'Move here' }}
         </UiButton>
       </UiDialogFooter>
     </UiDialogContent>

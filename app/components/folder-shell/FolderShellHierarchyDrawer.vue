@@ -3,6 +3,7 @@ import { X, FolderPlus, Search, Plus, Link as LinkIcon, Upload, Pencil } from 'l
 import { onKeyStroke } from '@vueuse/core'
 import { api } from '#convex/api'
 import type { Doc, Id } from '~~/convex/_generated/dataModel'
+import MoveToFolderDialog from '~/components/documents/MoveToFolderDialog.vue'
 import { useHorizontalSwipeGesture } from '~/composables/useHorizontalSwipeGesture'
 import { PANEL_DISMISS_THRESHOLD_PX, useGestureGuards } from '~/composables/useGestureGuards'
 
@@ -590,24 +591,13 @@ async function onFiles(e: Event) {
       </UiAlertDialogContent>
     </UiAlertDialog>
 
-    <UiDialog v-model:open="showMoveDialog">
-      <UiDialogContent>
-        <UiDialogHeader>
-          <UiDialogTitle>Move to folder</UiDialogTitle>
-          <UiDialogDescription>Choose a destination folder.</UiDialogDescription>
-        </UiDialogHeader>
-        <div class="max-h-64 space-y-1 overflow-y-auto py-2">
-          <button
-            v-for="f in allFolders ?? []"
-            :key="f._id"
-            :disabled="f._id === folderId || movePending"
-            class="flex w-full items-center rounded-md px-3 py-2 text-sm hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-            @click="confirmMove(f._id)"
-          >
-            {{ f.name }}
-          </button>
-        </div>
-      </UiDialogContent>
-    </UiDialog>
+    <MoveToFolderDialog
+      v-model:open="showMoveDialog"
+      :folders="allFolders"
+      :current-folder-id="folderId"
+      :pending="movePending"
+      :item-count="moveTargetIds.length"
+      @submit="confirmMove"
+    />
   </div>
 </template>
