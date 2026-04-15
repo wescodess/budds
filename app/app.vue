@@ -5,6 +5,10 @@ import { useMobileKeyboardInset } from '~/composables/useMobileKeyboardInset'
 
 useHead({
   meta: [
+    {
+      name: 'viewport',
+      content: 'width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content',
+    },
     { name: 'color-scheme', content: 'dark light' },
   ],
   script: [
