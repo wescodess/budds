@@ -79,19 +79,19 @@ function submit() {
   <UiDialog :open="props.open" @update:open="(val) => emit('update:open', val)">
     <UiDialogContent
       data-testid="create-void-dialog"
-      class="max-w-140 gap-0 p-6 sm:max-w-140"
+      class="max-w-[min(42rem,calc(100%-1rem))] gap-0 p-4 sm:max-w-[42rem] sm:p-6"
     >
-      <UiDialogHeader class="space-y-2 pr-8">
-        <UiDialogTitle class="font-dm-sans text-[22px] font-bold leading-tight">
+      <UiDialogHeader class="space-y-2 pr-10 sm:pr-8">
+        <UiDialogTitle class="font-dm-sans text-xl font-bold leading-tight sm:text-[22px]">
           Create a void in {{ props.folderName }}
         </UiDialogTitle>
-        <UiDialogDescription class="font-inter text-sm leading-relaxed text-muted-foreground">
+        <UiDialogDescription class="max-w-[34rem] font-inter text-sm leading-6 text-muted-foreground">
           Voids are dedicated spaces for chat, flashcards, or quizzes. They inherit
           access to this folder's members and knowledge.
         </UiDialogDescription>
       </UiDialogHeader>
 
-      <div class="mt-6 grid grid-cols-3 gap-3">
+      <div class="mt-5 grid grid-cols-1 gap-3 sm:mt-6 sm:grid-cols-3">
         <button
           v-for="option in options"
           :key="option.type"
@@ -99,7 +99,7 @@ function submit() {
           :data-testid="`void-type-${option.type}`"
           :aria-pressed="selected === option.type"
           :class="[
-            'group relative flex h-30 flex-col items-start justify-between rounded-xl bg-card p-4 text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+            'group relative flex min-h-24 flex-col items-start justify-between rounded-xl bg-card p-4 text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:h-30',
             selected === option.type
               ? 'border-[1.5px] border-primary'
               : 'border border-border hover:border-primary/40 hover:bg-card/80',
@@ -115,22 +115,23 @@ function submit() {
           <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
             <component :is="option.icon" class="h-4.5 w-4.5" />
           </span>
-          <div class="w-full">
-            <p class="font-dm-sans text-sm font-semibold text-foreground">
+          <div class="w-full min-w-0">
+            <p class="font-dm-sans text-sm font-semibold text-foreground sm:text-[15px]">
               {{ option.title }}
             </p>
-            <p class="mt-0.5 font-inter text-xs text-muted-foreground">
+            <p class="mt-1 font-inter text-[13px] leading-5 text-muted-foreground sm:mt-0.5 sm:text-xs sm:leading-relaxed">
               {{ option.subtitle }}
             </p>
           </div>
         </button>
       </div>
 
-      <UiDialogFooter class="mt-6 flex flex-row items-center justify-between gap-2 border-t border-border pt-6 sm:justify-between">
-        <UiButton type="button" variant="ghost" @click="close">Cancel</UiButton>
+      <UiDialogFooter class="mt-5 flex flex-col-reverse items-stretch gap-2 border-t border-border pt-4 sm:mt-6 sm:flex-row sm:items-center sm:justify-between sm:pt-6">
+        <UiButton type="button" variant="ghost" class="w-full sm:w-auto" @click="close">Cancel</UiButton>
         <UiButton
           type="button"
           data-testid="create-void-submit"
+          class="w-full sm:w-auto"
           :disabled="!selected || props.submitting"
           @click="submit"
         >

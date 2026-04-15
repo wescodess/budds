@@ -458,10 +458,16 @@ export const resolveScope = query({
   },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return { documentIds: [], ownedFolderIds: [] }
+    if (!identity) return { documentIds: [], documents: [], ownedFolderIds: [] }
 
     const userId = identity.tokenIdentifier
     const documentIds = new Set<string>()
+    const documents = new Map<string, {
+      id: Id<'documents'>
+      folderId: Id<'folders'>
+      filename: string
+      r2Key?: string
+    }>()
     const ownedFolderIds: Id<'folders'>[] = []
 
     for (const folderId of args.folderIds ?? []) {
@@ -479,7 +485,15 @@ export const resolveScope = query({
           )
           .collect()
         for (const doc of docs) {
-          if (doc.status === 'success') documentIds.add(doc._id as unknown as string)
+          if (doc.status !== 'success') continue
+          const key = doc._id as unknown as string
+          documentIds.add(key)
+          documents.set(key, {
+            id: doc._id,
+            folderId: doc.folderId,
+            filename: doc.filename,
+            r2Key: doc.r2Key,
+          })
         }
       }
     }
@@ -488,10 +502,17 @@ export const resolveScope = query({
       const doc = await ctx.db.get(fileId)
       if (!doc || doc.userId !== userId) continue
       if (doc.status !== 'success') continue
-      documentIds.add(doc._id as unknown as string)
+      const key = doc._id as unknown as string
+      documentIds.add(key)
+      documents.set(key, {
+        id: doc._id,
+        folderId: doc.folderId,
+        filename: doc.filename,
+        r2Key: doc.r2Key,
+      })
     }
 
-    return { documentIds: [...documentIds], ownedFolderIds }
+    return { documentIds: [...documentIds], documents: [...documents.values()], ownedFolderIds }
   },
 })
 

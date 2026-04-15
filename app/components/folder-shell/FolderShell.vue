@@ -24,6 +24,7 @@ const drawerSection = ref<'knowledge' | 'members'>('knowledge')
 const isDesktop = ref(true)
 const railCollapsed = ref(false)
 const mobileRailHidden = ref(false)
+const mobileRailExpanded = ref(false)
 const RAIL_COLLAPSED_KEY = 'g4.folder-shell.rail-collapsed'
 const MOBILE_RAIL_HIDDEN_KEY = 'g4.folder-shell.mobile-rail-hidden'
 const cachedFolderColor = ref<string | null>(null)
@@ -75,7 +76,10 @@ onMounted(() => {
   } catch { /* ignore */ }
   const mq = window.matchMedia('(min-width: 1024px)')
   isDesktop.value = mq.matches
-  const onChange = (e: MediaQueryListEvent) => { isDesktop.value = e.matches }
+  const onChange = (e: MediaQueryListEvent) => {
+    isDesktop.value = e.matches
+    if (e.matches) mobileRailExpanded.value = false
+  }
   mq.addEventListener('change', onChange)
   onBeforeUnmount(() => mq.removeEventListener('change', onChange))
 })
@@ -122,13 +126,32 @@ function toggleRail() {
     railCollapsed.value = !railCollapsed.value
     return
   }
+  mobileRailExpanded.value = false
   mobileRailHidden.value = !mobileRailHidden.value
 }
 
 const railHidden = computed(() => !isDesktop.value && mobileRailHidden.value)
-const railCompact = computed(() => !isDesktop.value || railCollapsed.value)
+const railCompact = computed(() => isDesktop.value ? railCollapsed.value : !mobileRailExpanded.value)
 const railWidth = computed(() => railHidden.value ? 0 : railCompact.value ? 64 : 240)
 const resolvedThemeColor = computed(() => props.folder?.color || cachedFolderColor.value || null)
+
+function toggleMobileRailExpanded() {
+  if (isDesktop.value || railHidden.value) return
+  mobileRailExpanded.value = !mobileRailExpanded.value
+}
+
+function collapseMobileRailToCompact() {
+  if (isDesktop.value || railHidden.value) return
+  mobileRailExpanded.value = false
+}
+
+watch(railHidden, (hidden) => {
+  if (hidden) mobileRailExpanded.value = false
+})
+
+watch(isDesktop, (desktop) => {
+  if (desktop) mobileRailExpanded.value = false
+})
 
 function onTabChange(tab: 'chat' | 'flashcards' | 'quiz' | 'documents') {
   emit('update:activeTab', tab)
@@ -289,14 +312,17 @@ provide('folderShellThemeStyle', themeStyle)
       :active-conversation-id="activeConversationId"
       :compact="railCompact"
       :hidden="railHidden"
+      :mobile-expanded="mobileRailExpanded"
       :drawer-section="drawerOpen ? drawerSection : null"
       @update:active-tab="onTabChange"
       @open-drawer="openDrawerSection"
       @new-void="emit('new-void')"
       @select-void="(payload) => emit('select-void', payload)"
+      @toggle-mobile-expanded="toggleMobileRailExpanded"
+      @collapse-mobile-expanded="collapseMobileRailToCompact"
     />
 
-    <div class="relative flex flex-1 flex-col overflow-hidden">
+    <div class="relative flex min-w-0 flex-1 flex-col overflow-hidden">
       <slot
         name="top-bar"
         :drawer-open="drawerOpen"
@@ -305,7 +331,7 @@ provide('folderShellThemeStyle', themeStyle)
         :rail-hidden="railHidden"
         :toggle-rail="toggleRail"
       />
-      <div class="flex-1 overflow-hidden">
+      <div class="min-w-0 flex-1 overflow-hidden">
         <slot />
       </div>
     </div>
