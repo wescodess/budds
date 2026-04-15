@@ -610,7 +610,7 @@ defineExpose({ focus })
         >
           <div
             v-if="!composerHasContent && !mentionPlaceholderId"
-            class="pointer-events-none absolute inset-x-2.5 top-1.5 text-sm text-muted-foreground sm:inset-x-3 sm:top-2"
+            class="pointer-events-none absolute inset-x-2.5 top-1.5 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-sm text-muted-foreground sm:inset-x-3 sm:top-2"
           >
             {{ placeholder ?? 'Ask a question...' }}
           </div>

@@ -9,7 +9,10 @@ import {
   Settings,
   HelpCircle,
   LogOut,
+  ChevronsLeft,
+  ChevronsRight,
 } from 'lucide-vue-next'
+import { onClickOutside } from '@vueuse/core'
 import { api } from '#convex/api'
 import type { Id, Doc } from '~~/convex/_generated/dataModel'
 
@@ -26,6 +29,7 @@ const props = defineProps<{
   activeConversationId?: string | null
   compact?: boolean
   hidden?: boolean
+  mobileExpanded?: boolean
   drawerSection?: 'knowledge' | 'members' | null
 }>()
 
@@ -34,6 +38,8 @@ const emit = defineEmits<{
   'open-drawer': [section: 'knowledge' | 'members']
   'new-void': []
   'select-void': [value: { type: VoidKind; id: string }]
+  'toggle-mobile-expanded': []
+  'collapse-mobile-expanded': []
 }>()
 
 const { signOut } = useUserSession()
@@ -130,22 +136,29 @@ const knowledgeCount = computed(() => {
 })
 
 const knowledgeActive = computed(() => props.activeTab === 'documents')
+const railRef = ref<HTMLElement | null>(null)
 
 async function onLogout() {
   try { await signOut() } catch { /* ignore */ }
   await navigateTo('/')
 }
+
+onClickOutside(railRef, () => {
+  if (!props.mobileExpanded || props.hidden) return
+  emit('collapse-mobile-expanded')
+})
 </script>
 
 <template>
   <aside
+    ref="railRef"
     data-testid="folder-rail"
     :class="[
       'relative z-30 flex shrink-0 flex-col overflow-hidden bg-card/80 backdrop-blur-sm transition-[width] duration-[280ms] ease-[cubic-bezier(0.22,1,0.36,1)]',
       hidden ? 'pointer-events-none border-r-0' : 'border-r border-border/60',
     ]"
     :aria-hidden="hidden ? 'true' : 'false'"
-    :style="{ width: hidden ? '0rem' : compact ? '4rem' : '15rem' }"
+    :style="{ width: hidden ? '0rem' : mobileExpanded ? '90vw' : compact ? '4rem' : '15rem', maxWidth: mobileExpanded ? '90vw' : undefined }"
   >
     <NuxtLink
       to="/"
@@ -267,6 +280,26 @@ async function onLogout() {
           New Void
         </span>
       </UiButton>
+      <button
+        type="button"
+        :class="[
+          hasVoids ? 'mt-3' : '',
+          'flex h-9 w-full items-center rounded-lg border border-border/60 px-2 text-sm text-muted-foreground transition hover:bg-muted/60 hover:text-foreground lg:hidden',
+          compact ? 'justify-center' : 'justify-between',
+        ]"
+        :aria-label="mobileExpanded ? 'Collapse folder sidebar details' : 'Expand folder sidebar details'"
+        @click="emit('toggle-mobile-expanded')"
+      >
+        <span
+          :class="[
+            'overflow-hidden whitespace-nowrap transition-[max-width,opacity,transform] duration-200 ease-out',
+            compact ? 'max-w-0 translate-x-1 opacity-0' : 'max-w-36 translate-x-0 opacity-100',
+          ]"
+        >
+          {{ mobileExpanded ? 'Collapse details' : 'Expand details' }}
+        </span>
+        <component :is="mobileExpanded ? ChevronsLeft : ChevronsRight" class="h-4 w-4 shrink-0" />
+      </button>
       <div :class="[hasVoids && 'mt-3', 'flex items-center gap-1', compact ? 'flex-col' : 'justify-between px-1']">
         <button class="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="Settings">
           <Settings class="h-4 w-4" />

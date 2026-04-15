@@ -162,7 +162,7 @@ function handleIcon(value: string) {
 
 <template>
   <UiDialog :open="props.open" @update:open="(val) => emit('update:open', val)">
-    <UiDialogContent data-testid="folder-form-modal" class="sm:max-w-md">
+    <UiDialogContent data-testid="folder-form-modal" class="max-w-[calc(100%-1rem)] p-4 sm:max-w-md sm:p-6">
       <UiDialogHeader>
         <UiDialogTitle>
           {{ props.mode === 'create' ? 'New folder' : 'Edit folder' }}
@@ -218,7 +218,7 @@ function handleIcon(value: string) {
           </p>
         </div>
 
-        <div class="grid grid-cols-2 gap-3">
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div class="grid gap-1.5">
             <UiLabel>Color</UiLabel>
             <FoldersColorSelect
@@ -236,11 +236,12 @@ function handleIcon(value: string) {
           </div>
         </div>
 
-        <UiDialogFooter class="gap-2 sm:gap-2">
-          <UiButton type="button" variant="ghost" @click="closeModal">Cancel</UiButton>
+        <UiDialogFooter class="flex flex-col-reverse gap-2 sm:flex-row sm:gap-2">
+          <UiButton type="button" variant="ghost" class="w-full sm:w-auto" @click="closeModal">Cancel</UiButton>
           <UiButton
             type="submit"
             data-testid="folder-form-submit"
+            class="w-full sm:w-auto"
             :disabled="isSubmitting"
           >
             {{ props.mode === 'create' ? 'Create folder' : 'Save changes' }}

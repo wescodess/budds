@@ -39,15 +39,15 @@ const rowStyle = computed(() => ({
       type="button"
       :aria-label="props.expanded ? 'Collapse' : 'Expand'"
       :aria-expanded="props.expanded"
-      class="flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      class="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:h-7 sm:w-7"
       @click="emit('toggle-expand')"
     >
       <ChevronRight
-        class="h-3.5 w-3.5 transition-transform motion-reduce:transition-none"
+        class="h-4 w-4 transition-transform motion-reduce:transition-none sm:h-3.5 sm:w-3.5"
         :class="props.expanded ? 'rotate-90' : ''"
       />
     </button>
-    <span v-else class="w-6 shrink-0" />
+    <span v-else class="w-9 shrink-0 sm:w-7" />
 
     <UiCheckbox
       :model-value="props.state === 'on' ? true : props.state === 'indeterminate' ? 'indeterminate' : false"
