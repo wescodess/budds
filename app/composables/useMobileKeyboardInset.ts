@@ -17,14 +17,15 @@ export const useMobileKeyboardInset = createSharedComposable(() => {
 
     const root = document.documentElement
     const viewport = window.visualViewport
-    const baseHeight = viewport?.height ?? window.innerHeight
+    const viewportHeight = viewport?.height ?? window.innerHeight
     const offsetTop = viewport?.offsetTop ?? 0
+    const visibleHeight = viewportHeight + offsetTop
     const keyboardHeight = isTouchLike.value
-      ? Math.max(0, Math.round(window.innerHeight - baseHeight - offsetTop))
+      ? Math.max(0, Math.round(window.innerHeight - viewportHeight - offsetTop))
       : 0
 
     keyboardOpen.value = keyboardHeight > 0
-    root.style.setProperty('--mobile-vh', `${Math.round(baseHeight)}px`)
+    root.style.setProperty('--mobile-vh', `${Math.round(visibleHeight)}px`)
     root.style.setProperty('--vk-height', `${keyboardHeight}px`)
     root.style.setProperty('--vk-safe-bottom', 'env(safe-area-inset-bottom, 0px)')
     root.dataset.keyboardOpen = keyboardOpen.value ? 'true' : 'false'
