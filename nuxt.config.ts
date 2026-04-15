@@ -39,51 +39,11 @@ function parseDotenvFiles() {
   return entries
 }
 
-function parseWranglerVars() {
-  const wranglerPath = path.resolve(process.cwd(), 'wrangler.toml')
-  if (!fs.existsSync(wranglerPath)) return {}
-
-  const source = fs.readFileSync(wranglerPath, 'utf8')
-  const entries: Record<string, string> = {}
-  let currentSection = ''
-
-  for (const rawLine of source.split(/\r?\n/)) {
-    const line = rawLine.trim()
-    if (!line || line.startsWith('#')) continue
-
-    const sectionMatch = line.match(/^\[(.+)\]$/)
-    if (sectionMatch) {
-      currentSection = sectionMatch[1]?.trim() || ''
-      continue
-    }
-
-    if (currentSection !== 'vars') continue
-
-    const separatorIndex = line.indexOf('=')
-    if (separatorIndex < 1) continue
-
-    const key = line.slice(0, separatorIndex).trim()
-    let value = line.slice(separatorIndex + 1).trim()
-
-    if (
-      (value.startsWith('"') && value.endsWith('"'))
-      || (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1)
-    }
-
-    entries[key] = value
-  }
-
-  return entries
-}
-
 const dotenvVars = parseDotenvFiles()
-const wranglerVars = parseWranglerVars()
 
 function readConfiguredValue(...names: string[]) {
   for (const name of names) {
-    const value = process.env[name] || dotenvVars[name] || wranglerVars[name]
+    const value = process.env[name] || dotenvVars[name]
     if (typeof value === 'string' && value.trim().length > 0) {
       return value.trim()
     }
@@ -152,9 +112,7 @@ export default defineNuxtConfig({
     port: 3002,
   },
   runtimeConfig: {
-    // Use process.env fallbacks for local dev (.env), but Nuxt auto-resolves
-    // NUXT_-prefixed env vars at runtime on Cloudflare Pages Workers.
-    // e.g. runtimeConfig key "cloudflareAccountId" ← env "NUXT_CLOUDFLARE_ACCOUNT_ID"
+    // Read from process.env in Cloudflare Pages and from .env/.env.local locally.
     convexSiteUrl,
     cloudflareAccountId: readConfiguredValue('NUXT_CLOUDFLARE_ACCOUNT_ID', 'CF_ACCOUNT_ID'),
     cloudflareAiGatewayId: readConfiguredValue('NUXT_CLOUDFLARE_AI_GATEWAY_ID', 'CLOUDFLARE_AI_GATEWAY_ID'),
