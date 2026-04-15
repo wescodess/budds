@@ -170,7 +170,7 @@ const railInlineStyle = computed(() => {
 
 async function onLogout() {
   try { await signOut() } catch { /* ignore */ }
-  await navigateTo('/')
+  await navigateTo('/login', { replace: true })
 }
 
 onClickOutside(railRef, () => {
