@@ -39,6 +39,7 @@ const tileStyle = computed(() => ({
   width: `${dims.value.tile}px`,
   height: `${dims.value.tile}px`,
   backgroundColor: `${colorEntry.value.hex}26`,
+  isolation: 'isolate' as const,
 }))
 
 const iconStyle = computed(() => ({
