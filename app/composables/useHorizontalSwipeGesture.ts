@@ -48,10 +48,15 @@ function findTouchById(touches: TouchList, touchId: number | null) {
   return null
 }
 
+function isSwipeElement(value: unknown): value is HTMLElement | SVGElement {
+  if (!value || typeof value !== 'object') return false
+  return 'style' in value && 'addEventListener' in value
+}
+
 export function useHorizontalSwipeGesture(options: HorizontalSwipeGestureOptions) {
   const target = computed<HTMLElement | SVGElement | null>(() => {
     const resolved = unrefElement(toValue(options.target) as SwipeTarget)
-    if (resolved instanceof HTMLElement || resolved instanceof SVGElement) return resolved
+    if (isSwipeElement(resolved)) return resolved
     return null
   })
   const threshold = computed(() => options.threshold ?? 24)
