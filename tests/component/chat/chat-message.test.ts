@@ -55,6 +55,8 @@ describe('ChatMessage — AC #1, #2', () => {
     expect(badges.length).toBeGreaterThanOrEqual(2)
     expect(wrapper.text()).toContain('1')
     expect(wrapper.text()).toContain('2')
+    expect(wrapper.text()).not.toContain(':citation[')
+    expect(wrapper.html()).not.toContain('<citation')
   })
 
   it('[P1] should wrap message list in role="log" with aria-label', async () => {

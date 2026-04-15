@@ -4,5 +4,5 @@ const CITATION_RE = /\[(\d+)\]/g
 
 export function expandCitations(text: string): string {
   return normalizeAssistantCitations(text)
-    .replace(CITATION_RE, (_match, index) => `:citation[${index}]{index="${index}"}`)
+    .replace(CITATION_RE, (_match, index) => `<citation index="${index}">${index}</citation>`)
 }
