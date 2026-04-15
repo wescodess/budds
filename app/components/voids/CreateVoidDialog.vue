@@ -112,8 +112,9 @@ function submit() {
             class="absolute right-2 top-2 h-2 w-2 rounded-full bg-primary"
             aria-hidden="true"
           />
-          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
-            <component :is="option.icon" class="h-4.5 w-4.5" />
+          <span class="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-primary overflow-hidden">
+            <span class="absolute inset-0 bg-primary opacity-10" />
+            <component :is="option.icon" class="relative z-10 h-4.5 w-4.5" />
           </span>
           <div class="w-full min-w-0">
             <p class="font-dm-sans text-sm font-semibold text-foreground sm:text-[15px]">
