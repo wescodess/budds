@@ -13,29 +13,3 @@ database_id = "ddb803e4-7d9d-471d-8a4b-4ccd69100bcf"
 [[r2_buckets]]
 binding = "R2"
 bucket_name = "budds"
-
-# ── Non-secret environment variables ─────────────────────────
-# Nuxt resolves runtimeConfig keys from NUXT_-prefixed env vars at runtime.
-# e.g. runtimeConfig.cloudflareAccountId ← NUXT_CLOUDFLARE_ACCOUNT_ID
-#
-# Convex deployment split:
-# - Do not declare CONVEX_URL or NUXT_PUBLIC_CONVEX_URL here.
-# - Local dev reads CONVEX_URL from .env/.env.local.
-# - Cloudflare Pages preview must set CONVEX_URL and NUXT_PUBLIC_CONVEX_URL
-#   to https://cautious-elephant-39.convex.cloud.
-# - Cloudflare Pages production must set CONVEX_URL and NUXT_PUBLIC_CONVEX_URL
-#   to https://trustworthy-mink-186.convex.cloud.
-# - Do not set NUXT_CONVEX_SITE_URL separately; the app derives the .convex.site URL
-#   from CONVEX_URL for auth, uploads, and AI data access.
-#
-# SECRETS must be set in Cloudflare Pages dashboard (Settings > Variables and Secrets):
-#   NUXT_CLOUDFLARE_AI_GATEWAY_API_KEY, NUXT_CLOUDFLARE_AI_SEARCH_TOKEN,
-#   NUXT_OPENROUTER_API_KEY, NUXT_R2_ACCESS_KEY_ID, NUXT_R2_SECRET_ACCESS_KEY,
-#   BETTER_AUTH_SECRET, GOOGLE_CLIENT_SECRET
-[vars]
-NUXT_PUBLIC_SITE_URL = "https://budds.pages.dev"
-NUXT_CLOUDFLARE_ACCOUNT_ID = "fdd9729454b03f3d452feb302988b9c4"
-NUXT_CLOUDFLARE_AI_GATEWAY_ID = "budds"
-NUXT_CLOUDFLARE_AI_SEARCH_INSTANCE = "budd-aisearch"
-NUXT_R2_BUCKET_NAME = "budds"
-NUXT_R2_ENDPOINT = "https://fdd9729454b03f3d452feb302988b9c4.r2.cloudflarestorage.com"

@@ -11,7 +11,6 @@ const dotenvPaths = [
   path.join(projectRoot, '.env'),
   path.join(projectRoot, '.env.local'),
 ]
-const wranglerPath = path.join(projectRoot, 'wrangler.toml')
 
 function parseDotenvFile(filePath) {
   if (!fs.existsSync(filePath)) return {}
@@ -41,47 +40,8 @@ function parseDotenvFile(filePath) {
   return entries
 }
 
-function parseWranglerVars(filePath) {
-  if (!fs.existsSync(filePath)) return {}
-
-  const source = fs.readFileSync(filePath, 'utf8')
-  const entries = {}
-  let currentSection = ''
-
-  for (const rawLine of source.split(/\r?\n/)) {
-    const line = rawLine.trim()
-    if (!line || line.startsWith('#')) continue
-
-    const sectionMatch = line.match(/^\[(.+)\]$/)
-    if (sectionMatch) {
-      currentSection = sectionMatch[1]?.trim() || ''
-      continue
-    }
-
-    if (currentSection !== 'vars') continue
-
-    const separatorIndex = line.indexOf('=')
-    if (separatorIndex < 1) continue
-
-    const key = line.slice(0, separatorIndex).trim()
-    let value = line.slice(separatorIndex + 1).trim()
-
-    if (
-      (value.startsWith('"') && value.endsWith('"'))
-      || (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1)
-    }
-
-    entries[key] = value
-  }
-
-  return entries
-}
-
 const mergedEnv = {
   ...dotenvPaths.reduce((acc, filePath) => ({ ...acc, ...parseDotenvFile(filePath) }), {}),
-  ...parseWranglerVars(wranglerPath),
   ...process.env,
 }
 
@@ -171,11 +131,11 @@ if (missingAdvisory.length > 0) {
 
 lines.push('')
 lines.push('Recommended split for Cloudflare Pages (Settings > Variables and Secrets):')
-lines.push('- Secrets: BETTER_AUTH_SECRET, GOOGLE_CLIENT_SECRET, NUXT_CLOUDFLARE_AI_GATEWAY_API_KEY, NUXT_CLOUDFLARE_AI_SEARCH_TOKEN, NUXT_OPENROUTER_API_KEY, NUXT_R2_ACCESS_KEY_ID, NUXT_R2_SECRET_ACCESS_KEY')
-lines.push('- Variables in wrangler.toml [vars]: GOOGLE_CLIENT_ID, NUXT_CLOUDFLARE_ACCOUNT_ID, NUXT_CLOUDFLARE_AI_GATEWAY_ID, NUXT_CLOUDFLARE_AI_SEARCH_INSTANCE, NUXT_R2_BUCKET_NAME, NUXT_R2_ENDPOINT')
-lines.push('- Local dev: set CONVEX_URL in .env.local (NUXT_PUBLIC_CONVEX_URL is optional because the app falls back to CONVEX_URL)')
-lines.push('- Cloudflare Pages preview: set CONVEX_URL and NUXT_PUBLIC_CONVEX_URL to https://cautious-elephant-39.convex.cloud')
-lines.push('- Cloudflare Pages production: set CONVEX_URL and NUXT_PUBLIC_CONVEX_URL to https://trustworthy-mink-186.convex.cloud')
+lines.push('- Local dev (.env.local): CONVEX_URL, GOOGLE_CLIENT_ID, NUXT_PUBLIC_SITE_URL, NUXT_CLOUDFLARE_ACCOUNT_ID, NUXT_CLOUDFLARE_AI_GATEWAY_ID, NUXT_CLOUDFLARE_AI_SEARCH_INSTANCE, NUXT_R2_BUCKET_NAME, NUXT_R2_ENDPOINT')
+lines.push('- Cloudflare Pages Variables: CONVEX_URL, NUXT_PUBLIC_CONVEX_URL, GOOGLE_CLIENT_ID, NUXT_PUBLIC_SITE_URL, NUXT_CLOUDFLARE_ACCOUNT_ID, NUXT_CLOUDFLARE_AI_GATEWAY_ID, NUXT_CLOUDFLARE_AI_SEARCH_INSTANCE, NUXT_R2_BUCKET_NAME, NUXT_R2_ENDPOINT')
+lines.push('- Cloudflare Pages Secrets: BETTER_AUTH_SECRET, GOOGLE_CLIENT_SECRET, NUXT_CLOUDFLARE_AI_GATEWAY_API_KEY, NUXT_CLOUDFLARE_AI_SEARCH_TOKEN, NUXT_OPENROUTER_API_KEY, NUXT_R2_ACCESS_KEY_ID, NUXT_R2_SECRET_ACCESS_KEY')
+lines.push('- Cloudflare Pages preview Convex URL: https://cautious-elephant-39.convex.cloud')
+lines.push('- Cloudflare Pages production Convex URL: https://trustworthy-mink-186.convex.cloud')
 lines.push('- Do not set NUXT_CONVEX_SITE_URL separately; the app derives it from CONVEX_URL')
 lines.push('')
 
