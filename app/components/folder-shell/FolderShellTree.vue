@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { ChevronRight, Folder, MoreHorizontal, Pencil, FolderInput, Trash2 } from 'lucide-vue-next'
 import type { Id, Doc } from '~~/convex/_generated/dataModel'
 
 defineOptions({ name: 'FolderShellTree' })

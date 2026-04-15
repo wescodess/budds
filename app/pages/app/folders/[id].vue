@@ -4,6 +4,7 @@ import { useMediaQuery } from '@vueuse/core'
 import { api } from '#convex/api'
 import type { Id } from '~~/convex/_generated/dataModel'
 import type { VoidType } from '~/components/voids/CreateVoidDialog.vue'
+import MoveToFolderDialog from '~/components/documents/MoveToFolderDialog.vue'
 import FolderHelperPane from '~/components/folders/FolderHelperPane.vue'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
@@ -358,10 +359,6 @@ const latestSourcedMessageIndex = computed(() => {
 })
 const canOpenSourcePanelFromSwipe = computed(() =>
   activeTab.value === 'chat' && latestSourcedMessageIndex.value !== null,
-)
-
-const moveDestinationFolders = computed(() =>
-  Array.isArray(allFolders.value) ? allFolders.value : [],
 )
 
 function getMobileRailState() {
@@ -1104,24 +1101,13 @@ async function handleImportLink(url: string) {
       </UiAlertDialogContent>
     </UiAlertDialog>
 
-    <UiDialog v-model:open="showMoveDialog">
-        <UiDialogContent>
-          <UiDialogHeader>
-            <UiDialogTitle>Move to folder</UiDialogTitle>
-            <UiDialogDescription>Choose a destination folder.</UiDialogDescription>
-          </UiDialogHeader>
-          <div class="max-h-64 space-y-1 overflow-y-auto py-2">
-            <button
-              v-for="f in moveDestinationFolders"
-              :key="f._id"
-              :disabled="f._id === folderId || movePending"
-              class="flex w-full items-center rounded-md px-3 py-2 text-sm hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-              @click="confirmMove(f._id)"
-            >
-            {{ f.name }}
-          </button>
-        </div>
-      </UiDialogContent>
-    </UiDialog>
+    <MoveToFolderDialog
+      v-model:open="showMoveDialog"
+      :folders="allFolders"
+      :current-folder-id="folderId"
+      :pending="movePending"
+      :item-count="moveTargetIds.length"
+      @submit="confirmMove"
+    />
   </FolderShell>
 </template>

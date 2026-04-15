@@ -126,6 +126,7 @@ onLongPress(
       <button
         type="button"
         class="flex min-w-0 flex-1 items-center gap-1.5 py-1 text-left"
+        :data-testid="`tree-node-select-${folder._id}`"
         :disabled="isDisabled"
         @click="handleSelect"
       >
