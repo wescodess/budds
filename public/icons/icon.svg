@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="budds-bg" x1="96" y1="48" x2="416" y2="464" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3f2b13" />
+      <stop offset="1" stop-color="#1c1917" />
+    </linearGradient>
+    <linearGradient id="budds-accent" x1="156" y1="120" x2="356" y2="380" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fcd34d" />
+      <stop offset="1" stop-color="#f59e0b" />
+    </linearGradient>
+  </defs>
+
+  <rect x="32" y="32" width="448" height="448" rx="120" fill="url(#budds-bg)" />
+  <circle cx="256" cy="184" r="88" fill="url(#budds-accent)" />
+  <path
+    d="M170 272C170 243.281 193.281 220 222 220H280C335.228 220 380 264.772 380 320C380 375.228 335.228 420 280 420H222C193.281 420 170 396.719 170 368V272Z"
+    fill="#201A14"
+  />
+  <path
+    d="M214 264H279.5C309.599 264 334 288.401 334 318.5C334 348.599 309.599 373 279.5 373H214C201.85 373 192 363.15 192 351V286C192 273.85 201.85 264 214 264Z"
+    fill="url(#budds-accent)"
+  />
+  <circle cx="242" cy="318" r="18" fill="#201A14" fill-opacity=".9" />
+</svg>

@@ -10,6 +10,16 @@ useHead({
       content: 'width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content',
     },
     { name: 'color-scheme', content: 'dark light' },
+    { name: 'theme-color', content: '#1c1917' },
+    { name: 'mobile-web-app-capable', content: 'yes' },
+    { name: 'apple-mobile-web-app-capable', content: 'yes' },
+    { name: 'apple-mobile-web-app-title', content: 'Budds' },
+    { name: 'apple-mobile-web-app-status-bar-style', content: 'black-translucent' },
+  ],
+  link: [
+    { rel: 'manifest', href: '/manifest.webmanifest' },
+    { rel: 'icon', type: 'image/svg+xml', href: '/icons/icon.svg' },
+    { rel: 'apple-touch-icon', href: '/icons/apple-touch-icon.png' },
   ],
   script: [
     {
@@ -26,5 +36,6 @@ useMobileKeyboardInset()
   <NuxtLayout>
     <NuxtPage />
   </NuxtLayout>
+  <InstallAppPrompt />
   <Sonner rich-colors position="top-right" />
 </template>
