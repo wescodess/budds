@@ -721,14 +721,17 @@ async function handleImportLink(url: string) {
           <button
             type="button"
             data-testid="drawer-toggle"
-            :class="[
-              'flex h-9 w-9 items-center justify-center rounded-lg border border-border/60 bg-card text-primary transition hover:bg-primary/10',
-              (!isDesktop && !railHidden) || (isDesktop && !railCollapsed) ? 'bg-primary/10' : '',
-            ]"
+            class="group relative flex h-9 w-9 items-center justify-center rounded-lg border border-border/60 bg-card text-primary overflow-hidden transition"
             :aria-label="isDesktop ? (railCollapsed ? 'Expand sidebar' : 'Collapse sidebar') : (railHidden ? 'Show folder sidebar' : 'Hide folder sidebar')"
             @click="toggleRail()"
           >
-            <PanelRight class="h-4 w-4" />
+            <span 
+              :class="[
+                'absolute inset-0 bg-primary transition-opacity',
+                (!isDesktop && !railHidden) || (isDesktop && !railCollapsed) ? 'opacity-10' : 'opacity-0 group-hover:opacity-10'
+              ]" 
+            />
+            <PanelRight class="relative z-10 h-4 w-4" />
           </button>
           <div class="min-w-0">
             <UiSkeleton v-if="!folder" class="h-6 w-40 rounded-md" />

@@ -68,10 +68,10 @@ const longPressStop = onLongPress(
       <button
         type="button"
         :class="[
-          'group relative flex w-full items-center rounded-md py-1.5 text-sm transition-[background-color,color,padding,gap] duration-200 ease-out',
+          'group relative flex w-full overflow-hidden items-center rounded-md py-1.5 text-sm transition-[color,padding,gap] duration-200 ease-out',
           active
-            ? 'bg-primary/10 text-primary'
-            : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
+            ? 'text-primary'
+            : 'text-muted-foreground hover:text-foreground',
           compact ? 'justify-center gap-0 px-0' : 'gap-2.5 px-2',
         ]"
         :data-active="active ? 'true' : 'false'"
@@ -80,13 +80,19 @@ const longPressStop = onLongPress(
         v-bind="attrs"
       >
         <span
-          v-if="active"
-          class="absolute left-0 top-1.5 h-[calc(100%-0.75rem)] w-0.5 rounded-r bg-primary"
+          :class="[
+            'absolute inset-0 transition-opacity duration-200 ease-out',
+            active ? 'bg-primary opacity-10' : 'bg-muted opacity-0 group-hover:opacity-[0.6]',
+          ]"
         />
-        <component :is="icon" class="h-4 w-4 shrink-0" />
+        <span
+          v-if="active"
+          class="absolute left-0 top-1.5 h-[calc(100%-0.75rem)] w-0.5 rounded-r bg-primary z-10"
+        />
+        <component :is="icon" class="relative z-10 h-4 w-4 shrink-0" />
         <span
           :class="[
-            'min-w-0 overflow-hidden whitespace-nowrap text-left transition-[max-width,opacity,transform] duration-200 ease-out',
+            'relative z-10 min-w-0 overflow-hidden whitespace-nowrap text-left transition-[max-width,opacity,transform] duration-200 ease-out',
             compact ? 'max-w-0 flex-none translate-x-1 opacity-0' : 'max-w-[11rem] flex-1 translate-x-0 opacity-100',
           ]"
         >
@@ -95,7 +101,7 @@ const longPressStop = onLongPress(
         <span
           v-if="count !== undefined && count !== null"
           :class="[
-            'shrink-0 overflow-hidden rounded-full bg-muted text-[10px] font-medium text-muted-foreground transition-[max-width,opacity,transform,padding] duration-200 ease-out',
+            'relative z-10 shrink-0 overflow-hidden rounded-full bg-muted text-[10px] font-medium text-muted-foreground transition-[max-width,opacity,transform,padding] duration-200 ease-out',
             compact ? 'max-w-0 translate-x-1 px-0 py-0 opacity-0' : 'max-w-12 translate-x-0 px-1.5 py-px opacity-100',
           ]"
         >
@@ -114,10 +120,10 @@ const longPressStop = onLongPress(
         ref="buttonRef"
         type="button"
         :class="[
-          'group relative flex w-full items-center rounded-md py-1.5 text-sm transition-[background-color,color,padding,gap] duration-200 ease-out',
+          'group relative flex w-full overflow-hidden items-center rounded-md py-1.5 text-sm transition-[color,padding,gap] duration-200 ease-out',
           active
-            ? 'bg-primary/10 text-primary'
-            : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
+            ? 'text-primary'
+            : 'text-muted-foreground hover:text-foreground',
           compact ? 'justify-center gap-0 px-0' : 'gap-2.5 px-2',
         ]"
         :data-active="active ? 'true' : 'false'"
@@ -128,13 +134,19 @@ const longPressStop = onLongPress(
         @click="handleMobileClick"
       >
         <span
-          v-if="active"
-          class="absolute left-0 top-1.5 h-[calc(100%-0.75rem)] w-0.5 rounded-r bg-primary"
+          :class="[
+            'absolute inset-0 transition-opacity duration-200 ease-out',
+            active ? 'bg-primary opacity-10' : 'bg-muted opacity-0 group-hover:opacity-[0.6]',
+          ]"
         />
-        <component :is="icon" class="h-4 w-4 shrink-0" />
+        <span
+          v-if="active"
+          class="absolute left-0 top-1.5 h-[calc(100%-0.75rem)] w-0.5 rounded-r bg-primary z-10"
+        />
+        <component :is="icon" class="relative z-10 h-4 w-4 shrink-0" />
         <span
           :class="[
-            'min-w-0 overflow-hidden whitespace-nowrap text-left transition-[max-width,opacity,transform] duration-200 ease-out',
+            'relative z-10 min-w-0 overflow-hidden whitespace-nowrap text-left transition-[max-width,opacity,transform] duration-200 ease-out',
             compact ? 'max-w-0 flex-none translate-x-1 opacity-0' : 'max-w-[11rem] flex-1 translate-x-0 opacity-100',
           ]"
         >
@@ -143,7 +155,7 @@ const longPressStop = onLongPress(
         <span
           v-if="count !== undefined && count !== null"
           :class="[
-            'shrink-0 overflow-hidden rounded-full bg-muted text-[10px] font-medium text-muted-foreground transition-[max-width,opacity,transform,padding] duration-200 ease-out',
+            'relative z-10 shrink-0 overflow-hidden rounded-full bg-muted text-[10px] font-medium text-muted-foreground transition-[max-width,opacity,transform,padding] duration-200 ease-out',
             compact ? 'max-w-0 translate-x-1 px-0 py-0 opacity-0' : 'max-w-12 translate-x-0 px-1.5 py-px opacity-100',
           ]"
         >
@@ -176,10 +188,10 @@ const longPressStop = onLongPress(
     v-else
     type="button"
     :class="[
-      'group relative flex w-full items-center rounded-md py-1.5 text-sm transition-[background-color,color,padding,gap] duration-200 ease-out',
+      'group relative flex w-full overflow-hidden items-center rounded-md py-1.5 text-sm transition-[color,padding,gap] duration-200 ease-out',
       active
-        ? 'bg-primary/10 text-primary'
-        : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
+        ? 'text-primary'
+        : 'text-muted-foreground hover:text-foreground',
       compact ? 'justify-center gap-0 px-0' : 'gap-2.5 px-2',
     ]"
     :data-active="active ? 'true' : 'false'"
@@ -188,13 +200,19 @@ const longPressStop = onLongPress(
     v-bind="attrs"
   >
     <span
-      v-if="active"
-      class="absolute left-0 top-1.5 h-[calc(100%-0.75rem)] w-0.5 rounded-r bg-primary"
+      :class="[
+        'absolute inset-0 transition-opacity duration-200 ease-out',
+        active ? 'bg-primary opacity-10' : 'bg-muted opacity-0 group-hover:opacity-[0.6]',
+      ]"
     />
-    <component :is="icon" class="h-4 w-4 shrink-0" />
+    <span
+      v-if="active"
+      class="absolute left-0 top-1.5 h-[calc(100%-0.75rem)] w-0.5 rounded-r bg-primary z-10"
+    />
+    <component :is="icon" class="relative z-10 h-4 w-4 shrink-0" />
     <span
       :class="[
-        'min-w-0 overflow-hidden whitespace-nowrap text-left transition-[max-width,opacity,transform] duration-200 ease-out',
+        'relative z-10 min-w-0 overflow-hidden whitespace-nowrap text-left transition-[max-width,opacity,transform] duration-200 ease-out',
         compact ? 'max-w-0 flex-none translate-x-1 opacity-0' : 'max-w-[11rem] flex-1 translate-x-0 opacity-100',
       ]"
     >
@@ -203,7 +221,7 @@ const longPressStop = onLongPress(
     <span
       v-if="count !== undefined && count !== null"
       :class="[
-        'shrink-0 overflow-hidden rounded-full bg-muted text-[10px] font-medium text-muted-foreground transition-[max-width,opacity,transform,padding] duration-200 ease-out',
+        'relative z-10 shrink-0 overflow-hidden rounded-full bg-muted text-[10px] font-medium text-muted-foreground transition-[max-width,opacity,transform,padding] duration-200 ease-out',
         compact ? 'max-w-0 translate-x-1 px-0 py-0 opacity-0' : 'max-w-12 translate-x-0 px-1.5 py-px opacity-100',
       ]"
     >
