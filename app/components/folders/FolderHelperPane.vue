@@ -19,6 +19,7 @@ const expanded = ref<Record<number, boolean>>({})
 const paneRef = ref<HTMLElement | null>(null)
 const { shouldStartHorizontalGesture } = useGestureGuards()
 const allowDismissSwipe = ref(false)
+const SIDEBAR_SWIPE_EDGE_GUARD_PX = 12
 
 watch(() => props.activeCitationIndex, (index) => {
   if (index !== null && cardRefs.value[index]) {
@@ -37,7 +38,10 @@ paneSwipe = usePointerSwipe(paneRef, {
   threshold: 24,
   pointerTypes: ['touch', 'pen'],
   onSwipeStart(event) {
-    allowDismissSwipe.value = shouldStartHorizontalGesture(event, { allowGestureOwners: true })
+    allowDismissSwipe.value = shouldStartHorizontalGesture(event, {
+      allowGestureOwners: true,
+      edgeGuardPx: SIDEBAR_SWIPE_EDGE_GUARD_PX,
+    })
   },
   onSwipeEnd() {
     if (allowDismissSwipe.value) {

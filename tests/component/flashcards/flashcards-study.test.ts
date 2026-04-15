@@ -19,6 +19,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { flushPromises } from '@vue/test-utils'
+import { mockMatchMedia } from '../../support/match-media'
 
 const mockSetData = ref<any>(null)
 
@@ -66,8 +67,16 @@ function sampleSet() {
   }
 }
 
+function dispatchPointer(target: Element, type: string, init: Record<string, unknown>) {
+  const event = typeof PointerEvent === 'function'
+    ? new PointerEvent(type, { bubbles: true, ...init })
+    : Object.assign(new Event(type, { bubbles: true }), init)
+  target.dispatchEvent(event)
+}
+
 describe('FlashcardsStudy — Story 7.2 AC #11 full component coverage', () => {
   beforeEach(() => {
+    mockMatchMedia()
     mockSetData.value = sampleSet()
   })
 
@@ -117,6 +126,47 @@ describe('FlashcardsStudy — Story 7.2 AC #11 full component coverage', () => {
 
     expect(wrapper.find('[data-testid="flashcard-viewer"]').attributes('aria-pressed')).toBe('true')
     expect(wrapper.text()).toContain('Au')
+  })
+
+  it('[P1] keeps gesture ownership on the viewer itself and still advances on swipe', async () => {
+    mockMatchMedia({ touch: true, mobile: true })
+
+    const Study = await import(studyPath)
+    const wrapper = await mountSuspended(Study.default, {
+      props: { setId: 'set_1' },
+    })
+    await flushPromises()
+
+    const root = wrapper.get('[data-testid="flashcard-study-root"]')
+    const viewer = wrapper.get('[data-testid="flashcard-viewer"]')
+
+    expect(root.attributes('data-gesture-owner')).toBeUndefined()
+    expect(viewer.attributes('data-gesture-owner')).toBe('flashcard-study')
+
+    dispatchPointer(viewer.element, 'pointerdown', {
+      pointerId: 1,
+      pointerType: 'touch',
+      clientX: 120,
+      clientY: 48,
+      buttons: 1,
+    })
+    dispatchPointer(viewer.element, 'pointermove', {
+      pointerId: 1,
+      pointerType: 'touch',
+      clientX: 24,
+      clientY: 48,
+      buttons: 1,
+    })
+    dispatchPointer(viewer.element, 'pointerup', {
+      pointerId: 1,
+      pointerType: 'touch',
+      clientX: 24,
+      clientY: 48,
+      buttons: 0,
+    })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="flashcard-progress"]').text()).toContain('2 / 2')
   })
 
   it('[P0] (c) Next advances progress and resets to front', async () => {

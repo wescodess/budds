@@ -187,7 +187,7 @@ function handleBack() {
 </script>
 
 <template>
-  <div data-testid="flashcards-editor" data-gesture-owner="flashcards-editor">
+  <div data-testid="flashcards-editor">
     <div v-if="state === 'loading'" class="space-y-3" data-testid="flashcards-editor-loading">
       <UiSkeleton v-for="i in 3" :key="i" class="h-32 w-full rounded-md animate-pulse" />
     </div>

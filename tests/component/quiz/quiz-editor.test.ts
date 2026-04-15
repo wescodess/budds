@@ -170,4 +170,14 @@ describe('QuizEditor', () => {
     await flushPromises()
     expect(wrapper.findAll('[data-testid="quiz-editor-question-save"]')).toHaveLength(1)
   })
+
+  it('[P1] does not mark the full editor surface as a gesture owner', async () => {
+    const Editor = await import(editorPath)
+    mockQuizData.value = sampleQuiz()
+    const wrapper = await mountSuspended(Editor.default, {
+      props: { quizId: 'quiz_1' },
+    })
+
+    expect(wrapper.get('[data-testid="quiz-editor"]').attributes('data-gesture-owner')).toBeUndefined()
+  })
 })

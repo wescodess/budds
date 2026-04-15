@@ -60,13 +60,16 @@ const panelRef = ref<HTMLElement | null>(null)
 onKeyStroke('Escape', () => emit('close'))
 const { shouldStartHorizontalGesture } = useGestureGuards()
 const allowDismissSwipe = ref(false)
+const SIDEBAR_SWIPE_EDGE_GUARD_PX = 12
 
 let panelSwipe: ReturnType<typeof usePointerSwipe>
 panelSwipe = usePointerSwipe(panelRef, {
   threshold: 24,
   pointerTypes: ['touch', 'pen'],
   onSwipeStart(event) {
-    allowDismissSwipe.value = props.fullWidth && shouldStartHorizontalGesture(event)
+    allowDismissSwipe.value = props.fullWidth && shouldStartHorizontalGesture(event, {
+      edgeGuardPx: SIDEBAR_SWIPE_EDGE_GUARD_PX,
+    })
   },
   onSwipeEnd() {
     if (allowDismissSwipe.value && props.fullWidth) {

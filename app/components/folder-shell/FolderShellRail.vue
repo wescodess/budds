@@ -142,6 +142,7 @@ const knowledgeActive = computed(() => props.activeTab === 'documents')
 const railRef = ref<HTMLElement | null>(null)
 const { shouldStartHorizontalGesture } = useGestureGuards()
 const allowRailSwipe = ref(false)
+const SIDEBAR_SWIPE_EDGE_GUARD_PX = 12
 const railInlineStyle = computed(() => {
   if (props.hidden) {
     return {
@@ -174,27 +175,45 @@ onClickOutside(railRef, () => {
   emit('collapse-mobile-expanded')
 })
 
+function commitRailSwipe() {
+  if (!allowRailSwipe.value || props.hidden) {
+    allowRailSwipe.value = false
+    return
+  }
+  const deltaX = railSwipe.posEnd.x - railSwipe.posStart.x
+
+  if (props.mobileExpanded) {
+    if (deltaX <= -PANEL_DISMISS_THRESHOLD_PX) emit('collapse-mobile-expanded')
+  } else if (props.compact) {
+    if (deltaX >= PANEL_DISMISS_THRESHOLD_PX) emit('toggle-mobile-expanded')
+    else if (deltaX <= -PANEL_DISMISS_THRESHOLD_PX) emit('hide-mobile')
+  }
+  allowRailSwipe.value = false
+}
+
 let railSwipe: ReturnType<typeof usePointerSwipe>
 railSwipe = usePointerSwipe(railRef, {
   threshold: 24,
   pointerTypes: ['touch', 'pen'],
   onSwipeStart(event) {
-    allowRailSwipe.value = !props.hidden && shouldStartHorizontalGesture(event, { allowGestureOwners: true })
+    allowRailSwipe.value = !props.hidden && shouldStartHorizontalGesture(event, {
+      allowGestureOwners: true,
+      edgeGuardPx: SIDEBAR_SWIPE_EDGE_GUARD_PX,
+    })
   },
   onSwipeEnd() {
-    if (allowRailSwipe.value && !props.hidden) {
-      const deltaX = railSwipe.posEnd.x - railSwipe.posStart.x
-
-      if (props.mobileExpanded) {
-        if (deltaX <= -PANEL_DISMISS_THRESHOLD_PX) emit('collapse-mobile-expanded')
-      } else if (props.compact) {
-        if (deltaX >= PANEL_DISMISS_THRESHOLD_PX) emit('toggle-mobile-expanded')
-        else if (deltaX <= -PANEL_DISMISS_THRESHOLD_PX) emit('hide-mobile')
-      }
-    }
-    allowRailSwipe.value = false
+    commitRailSwipe()
   },
 })
+
+if (import.meta.client) {
+  watch(railRef, (el, _prev, onCleanup) => {
+    if (!el) return
+    const handler = () => { allowRailSwipe.value = false }
+    el.addEventListener('pointercancel', handler, { passive: true })
+    onCleanup(() => el.removeEventListener('pointercancel', handler))
+  }, { immediate: true })
+}
 </script>
 
 <template>
@@ -207,7 +226,7 @@ railSwipe = usePointerSwipe(railRef, {
       hidden ? 'pointer-events-none border-r-0' : 'border-r border-border/60',
     ]"
     :aria-hidden="hidden ? 'true' : 'false'"
-    :style="railInlineStyle"
+    :style="[railInlineStyle, { touchAction: 'pan-y' }]"
   >
     <UiTooltipProvider :delay-duration="0">
       <NuxtLink
