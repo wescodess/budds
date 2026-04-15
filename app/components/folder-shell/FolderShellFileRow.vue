@@ -152,7 +152,7 @@ onLongPress(
         @click.stop
         @update:model-value="toggleSelection"
       />
-      <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+      <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary isolate">
         <component :is="icon" class="h-4 w-4" />
       </div>
       <button
@@ -247,7 +247,7 @@ onLongPress(
           @click.stop
           @update:model-value="toggleSelection"
         />
-        <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+        <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary isolate">
           <component :is="icon" class="h-4 w-4" />
         </div>
         <button
