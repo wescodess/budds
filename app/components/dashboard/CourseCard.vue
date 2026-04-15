@@ -21,13 +21,18 @@ const lastActivity = useTimeAgo(() => props.folder.updatedAt ?? props.folder._cr
   <NuxtLink :to="`/app/folders/${folder._id}`" class="group" data-testid="course-card">
     <UiCard class="h-[140px] border border-border bg-card p-4 transition-colors hover:border-foreground/20">
       <div class="flex h-full flex-col justify-between">
-        <div class="flex items-start gap-2">
-          <FoldersFolderBadge :color="folder.color" :icon="folder.icon" size="md" />
-          <div class="min-w-0 flex-1">
-            <p class="truncate font-dm-sans text-sm font-medium text-foreground">{{ folder.name }}</p>
-            <UiBadge variant="secondary" class="mt-2" data-testid="folder-doc-count">
+        <div class="grid grid-cols-[3.5rem,1fr] items-start gap-3">
+          <div class="flex min-w-0 flex-col items-start gap-2">
+            <FoldersFolderBadge :color="folder.color" :icon="folder.icon" size="md" />
+            <span
+              class="font-inter text-[11px] leading-tight text-muted-foreground"
+              data-testid="folder-doc-count"
+            >
               {{ folder.documentCount }} {{ folder.documentCount === 1 ? 'doc' : 'docs' }}
-            </UiBadge>
+            </span>
+          </div>
+          <div class="min-w-0 pt-0.5">
+            <p class="line-clamp-2 font-dm-sans text-sm font-medium text-foreground">{{ folder.name }}</p>
           </div>
         </div>
         <div class="flex items-center justify-between">
