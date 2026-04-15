@@ -37,7 +37,10 @@ const emit = defineEmits<{
 const selectedIdSet = computed(() => new Set(props.selectedIds ?? []))
 const selectedCount = computed(() => props.selectedIds?.length ?? 0)
 const hasDocuments = computed(() => (props.documents?.length ?? 0) > 0)
-const selectableDocuments = computed(() => (props.documents ?? []).filter(doc => doc.status !== 'pending'))
+const selectableDocuments = computed(() =>
+  (props.documents ?? []).filter(doc => doc.status !== 'pending' && doc.status !== 'failed'),
+)
+const swipeOpenId = ref<string | null>(null)
 const allVisibleSelected = computed(() => {
   if (!selectableDocuments.value.length) return false
   return selectableDocuments.value.every(doc => selectedIdSet.value.has(String(doc._id)))
@@ -69,6 +72,23 @@ const groups = computed(() => {
     { label: 'Earlier', items: older },
   ].filter(g => g.items.length > 0)
 })
+
+watch(
+  () => props.bulkMode,
+  (bulkMode) => {
+    if (bulkMode) swipeOpenId.value = null
+  },
+)
+
+function handleLongPressSelect(id: string) {
+  swipeOpenId.value = null
+  if (!props.bulkMode) emit('toggleBulkMode', true)
+  if (!selectedIdSet.value.has(id)) emit('toggleSelect', id)
+}
+
+function handleSwipeClose(id: string) {
+  if (swipeOpenId.value === id) swipeOpenId.value = null
+}
 </script>
 
 <template>
@@ -157,6 +177,7 @@ const groups = computed(() => {
         :failure-reason="doc.failureReason"
         :selectable="bulkMode"
         :selected="selectedIdSet.has(String(doc._id))"
+        :swipe-open="swipeOpenId === String(doc._id)"
         @open="emit('open', $event)"
         @rename="emit('rename', $event)"
         @move="emit('move', $event)"
@@ -164,6 +185,9 @@ const groups = computed(() => {
         @delete="emit('delete', $event)"
         @dismiss="emit('dismiss', $event)"
         @toggle-select="emit('toggleSelect', $event)"
+        @swipe-open="swipeOpenId = $event"
+        @swipe-close="handleSwipeClose"
+        @long-press-select="handleLongPressSelect"
       />
     </div>
   </div>

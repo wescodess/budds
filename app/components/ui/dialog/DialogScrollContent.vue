@@ -27,12 +27,12 @@ const forwarded = useForwardPropsEmits(delegatedProps, emits)
 <template>
   <DialogPortal>
     <DialogOverlay
-      class="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/80  data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
+      class="fixed inset-0 z-50 overflow-y-auto bg-black/80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
     >
       <DialogContent
         :class="
           cn(
-            'relative z-50 grid w-full max-w-lg my-8 gap-6 border border-border bg-background p-6 shadow-lg duration-200 sm:rounded-2xl md:w-full',
+            'keyboard-scroll-area relative z-50 mx-auto my-2 grid w-[calc(100%-1rem)] max-w-lg max-h-[calc(var(--mobile-vh,100dvh)-1rem)] gap-6 overflow-y-auto rounded-2xl border border-border bg-background p-4 pb-[calc(var(--vk-safe-bottom,env(safe-area-inset-bottom,0px))+1rem)] shadow-lg duration-200 sm:my-8 sm:p-6 md:w-full',
             props.class,
           )
         "

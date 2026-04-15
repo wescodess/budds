@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ArrowLeft, ChevronLeft, ChevronRight, RotateCcw } from 'lucide-vue-next'
-import { useSwipe } from '@vueuse/core'
+import { usePointerSwipe } from '@vueuse/core'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 
@@ -128,8 +128,9 @@ function handleGlobalKeydown(e: KeyboardEvent) {
 
 const cardBodyRef = ref<HTMLElement | null>(null)
 
-useSwipe(cardBodyRef, {
+usePointerSwipe(cardBodyRef, {
   threshold: 40,
+  pointerTypes: ['touch', 'pen'],
   onSwipeEnd(_e, direction) {
     if (isComplete.value) return
     if (direction === 'left') next()
@@ -228,6 +229,7 @@ const progressLabel = computed(() => {
         <div
           ref="cardBodyRef"
           data-testid="flashcard-viewer"
+          data-gesture-owner="flashcard-study"
           role="button"
           tabindex="0"
           :aria-pressed="isFlipped"

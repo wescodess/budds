@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import { onLongPress } from '@vueuse/core'
 import { ChevronRight, Folder, MoreHorizontal, Pencil, FolderPlus, Trash2 } from 'lucide-vue-next'
 import type { Id, Doc } from '~~/convex/_generated/dataModel'
+import { LONG_PRESS_MOVE_PX, LONG_PRESS_MS, useGestureGuards } from '~/composables/useGestureGuards'
 
 defineOptions({ name: 'FolderShellTreeNode' })
 
@@ -40,11 +42,40 @@ const countLabel = computed(() => {
   }
   return String(directCount.value)
 })
+const rowRef = ref<HTMLElement | null>(null)
+const menuOpen = ref(false)
+const suppressNextSelect = ref(false)
+const { isTouchLike } = useGestureGuards()
+
+function handleSelect() {
+  if (suppressNextSelect.value) {
+    suppressNextSelect.value = false
+    return
+  }
+
+  emit('select', props.folder._id)
+}
+
+onLongPress(
+  rowRef,
+  () => {
+    if (!isTouchLike.value) return
+    menuOpen.value = true
+  },
+  {
+    delay: LONG_PRESS_MS,
+    distanceThreshold: LONG_PRESS_MOVE_PX,
+    onMouseUp(_duration, _distance, isLongPress) {
+      suppressNextSelect.value = isLongPress
+    },
+  },
+)
 </script>
 
 <template>
   <div>
     <div
+      ref="rowRef"
       :class="[
         'group relative flex items-center gap-1 rounded-md pr-1 text-sm transition',
         isActive
@@ -71,7 +102,7 @@ const countLabel = computed(() => {
       <button
         type="button"
         class="flex min-w-0 flex-1 items-center gap-1.5 py-1 text-left"
-        @click="emit('select', folder._id)"
+        @click="handleSelect"
       >
         <Folder :class="['h-3.5 w-3.5 shrink-0', isActive ? 'text-primary' : 'text-muted-foreground']" />
         <span class="truncate">{{ folder.name }}</span>
@@ -82,7 +113,7 @@ const countLabel = computed(() => {
           {{ countLabel }}
         </span>
       </button>
-      <UiDropdownMenu>
+      <UiDropdownMenu v-model:open="menuOpen">
         <UiDropdownMenuTrigger as-child>
           <button
             type="button"

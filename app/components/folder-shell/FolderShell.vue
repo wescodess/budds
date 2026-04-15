@@ -11,6 +11,7 @@ const props = defineProps<{
   folder: Doc<'folders'> | null
   activeTab: 'chat' | 'flashcards' | 'quiz' | 'documents'
   activeConversationId?: string | null
+  activeVoidId?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -27,6 +28,7 @@ const mobileRailHidden = ref(false)
 const mobileRailExpanded = ref(false)
 const RAIL_COLLAPSED_KEY = 'g4.folder-shell.rail-collapsed'
 const MOBILE_RAIL_HIDDEN_KEY = 'g4.folder-shell.mobile-rail-hidden'
+const MOBILE_RAIL_COMPACT_WIDTH = '4rem'
 const cachedFolderColor = ref<string | null>(null)
 const FOLDER_THEME_CACHE_PREFIX = 'g4.folder-shell.theme.'
 const folderThemeCacheKey = computed(() => `${FOLDER_THEME_CACHE_PREFIX}${props.folderId as string}`)
@@ -133,11 +135,32 @@ function toggleRail() {
 const railHidden = computed(() => !isDesktop.value && mobileRailHidden.value)
 const railCompact = computed(() => isDesktop.value ? railCollapsed.value : !mobileRailExpanded.value)
 const railWidth = computed(() => railHidden.value ? 0 : railCompact.value ? 64 : 240)
+const shouldPushMainPane = computed(() => !isDesktop.value && mobileRailExpanded.value && !railHidden.value)
+const mainPaneStyle = computed<Record<string, string>>(() => (
+  shouldPushMainPane.value
+    ? {
+        flex: `0 0 calc(100% - ${MOBILE_RAIL_COMPACT_WIDTH})`,
+        minWidth: `calc(100% - ${MOBILE_RAIL_COMPACT_WIDTH})`,
+      }
+    : {}
+))
 const resolvedThemeColor = computed(() => props.folder?.color || cachedFolderColor.value || null)
 
 function toggleMobileRailExpanded() {
   if (isDesktop.value || railHidden.value) return
   mobileRailExpanded.value = !mobileRailExpanded.value
+}
+
+function showMobileRailCompact() {
+  if (isDesktop.value) return
+  mobileRailHidden.value = false
+  mobileRailExpanded.value = false
+}
+
+function expandMobileRail() {
+  if (isDesktop.value) return
+  mobileRailHidden.value = false
+  mobileRailExpanded.value = true
 }
 
 function collapseMobileRailToCompact() {
@@ -151,8 +174,18 @@ function hideMobileRail() {
   mobileRailHidden.value = true
 }
 
+function getMobileRailState() {
+  if (isDesktop.value) return railCollapsed.value ? 'compact' : 'expanded'
+  if (mobileRailHidden.value) return 'hidden'
+  return mobileRailExpanded.value ? 'expanded' : 'compact'
+}
+
 defineExpose({
+  showMobileRailCompact,
+  expandMobileRail,
+  collapseMobileRailToCompact,
   hideMobileRail,
+  getMobileRailState,
 })
 
 watch(railHidden, (hidden) => {
@@ -259,8 +292,8 @@ const themeStyle = computed(() => {
       }
   const luminance = (0.2126 * tint.r + 0.7152 * tint.g + 0.0722 * tint.b) / 255
   const fg = luminance > 0.55 ? '#0b0b0b' : '#ffffff'
-  const text = isDarkMode ? 'oklch(0.985 0.001 106.4)' : 'oklch(0.168 0.008 49.0)'
-  const mutedText = isDarkMode ? 'oklch(0.706 0.011 73.6)' : 'oklch(0.553 0.013 58.1)'
+  const text = isDarkMode ? '#fbfbf8' : '#221f1b'
+  const mutedText = isDarkMode ? '#aca294' : '#746b60'
   return {
     '--foreground': text,
     '--primary': hex,
@@ -314,12 +347,13 @@ provide('folderShellThemeStyle', themeStyle)
 </script>
 
 <template>
-  <div class="relative flex h-svh min-h-svh overflow-hidden bg-background text-foreground transition-colors duration-300" :style="themeStyle">
+  <div class="app-viewport-frame relative flex overflow-hidden bg-background text-foreground transition-colors duration-300" :style="themeStyle">
     <FolderShellRail
       :folder="folder"
       :folder-id="folderId"
       :active-tab="activeTab"
       :active-conversation-id="activeConversationId"
+      :active-void-id="activeVoidId"
       :compact="railCompact"
       :hidden="railHidden"
       :mobile-expanded="mobileRailExpanded"
@@ -330,9 +364,14 @@ provide('folderShellThemeStyle', themeStyle)
       @select-void="(payload) => emit('select-void', payload)"
       @toggle-mobile-expanded="toggleMobileRailExpanded"
       @collapse-mobile-expanded="collapseMobileRailToCompact"
+      @hide-mobile="hideMobileRail"
     />
 
-    <div class="relative flex min-w-0 flex-1 flex-col overflow-hidden">
+    <div
+      data-testid="folder-main-pane"
+      class="relative flex min-w-0 flex-1 flex-col overflow-hidden transition-[flex,min-width] duration-[280ms] ease-[cubic-bezier(0.22,1,0.36,1)]"
+      :style="mainPaneStyle"
+    >
       <slot
         name="top-bar"
         :drawer-open="drawerOpen"
@@ -341,7 +380,7 @@ provide('folderShellThemeStyle', themeStyle)
         :rail-hidden="railHidden"
         :toggle-rail="toggleRail"
       />
-      <div class="min-w-0 flex-1 overflow-hidden">
+      <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <slot />
       </div>
     </div>

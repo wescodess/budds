@@ -65,9 +65,15 @@ function onFilesChosen(e: Event) {
       <Search class="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
       <input
         v-model="search"
-        type="text"
+        type="search"
         placeholder="Search this folder…"
         data-testid="folder-knowledge-tree-search"
+        inputmode="search"
+        enterkeyhint="search"
+        autocapitalize="none"
+        autocorrect="off"
+        spellcheck="false"
+        autocomplete="off"
         class="h-8 w-full rounded-md border bg-background pl-8 pr-2 text-xs outline-none focus:ring-2 focus:ring-ring"
       >
     </div>
