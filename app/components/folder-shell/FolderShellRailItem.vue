@@ -17,9 +17,11 @@ const props = defineProps<{
 }>()
 
 const attrs = useAttrs()
+const slots = useSlots()
 const isTouchDevice = useMediaQuery('(hover: none), (pointer: coarse)')
 const popoverOpen = ref(false)
 const usesCompactHint = computed(() => Boolean(props.compact))
+const hasCompactTouchContent = computed(() => Boolean(slots['compact-touch-content']))
 const buttonRef = ref<HTMLElement | null>(null)
 
 const suppressNextClick = ref(false)
@@ -32,6 +34,10 @@ function handleMobileClick(event: MouseEvent) {
     return
   }
 
+  popoverOpen.value = false
+}
+
+function closeCompactTouchContent() {
   popoverOpen.value = false
 }
 
@@ -148,9 +154,21 @@ const longPressStop = onLongPress(
     <UiPopoverContent
       side="right"
       align="center"
-      class="w-auto max-w-[min(14rem,calc(100vw-2rem))] rounded-xl px-3 py-2 text-sm font-medium"
+      :class="[
+        'rounded-xl',
+        hasCompactTouchContent
+          ? 'w-[min(14rem,calc(100vw-2rem))] p-1.5'
+          : 'w-auto max-w-[min(14rem,calc(100vw-2rem))] px-3 py-2 text-sm font-medium',
+      ]"
     >
-      {{ label }}
+      <slot
+        v-if="hasCompactTouchContent"
+        name="compact-touch-content"
+        :close="closeCompactTouchContent"
+      />
+      <template v-else>
+        {{ label }}
+      </template>
     </UiPopoverContent>
   </UiPopover>
 

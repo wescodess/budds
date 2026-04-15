@@ -11,6 +11,8 @@ import {
   LogOut,
   ChevronsLeft,
   ChevronsRight,
+  Eye,
+  Trash2,
 } from 'lucide-vue-next'
 import { onClickOutside } from '@vueuse/core'
 import { api } from '#convex/api'
@@ -41,6 +43,7 @@ const emit = defineEmits<{
   'open-drawer': [section: 'knowledge' | 'members']
   'new-void': []
   'select-void': [value: { type: VoidKind; id: string }]
+  'request-delete-void': [value: { type: VoidKind; id: string; title: string }]
   'toggle-mobile-expanded': []
   'collapse-mobile-expanded': []
   'hide-mobile': []
@@ -276,7 +279,34 @@ useHorizontalSwipeGesture({
             :icon="voidIcon[v.type]"
             :data-testid="`rail-void-${v.type}-${v.id}`"
             @click="emit('select-void', { type: v.type, id: v.id })"
-          />
+          >
+            <template #compact-touch-content="{ close }">
+              <div class="overflow-hidden rounded-lg border border-border/60 bg-popover text-popover-foreground shadow-sm">
+                <div class="border-b border-border/60 px-3 py-2">
+                  <p class="truncate text-sm font-medium text-foreground">{{ v.title }}</p>
+                  <p class="mt-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">
+                    {{ v.type === 'chat' ? 'Chat' : v.type === 'flashcards' ? 'Flash cards' : 'Quiz' }}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition hover:bg-muted/60"
+                  @click="close(); emit('select-void', { type: v.type, id: v.id })"
+                >
+                  <Eye class="h-4 w-4 shrink-0" />
+                  Open
+                </button>
+                <button
+                  type="button"
+                  class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-destructive transition hover:bg-destructive/10"
+                  @click="close(); emit('request-delete-void', { type: v.type, id: v.id, title: v.title })"
+                >
+                  <Trash2 class="h-4 w-4 shrink-0" />
+                  Delete
+                </button>
+              </div>
+            </template>
+          </FolderShellRailItem>
         </template>
         <div
           v-else-if="!compact"
