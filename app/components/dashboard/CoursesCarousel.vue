@@ -43,6 +43,7 @@ watch(() => props.count, () => nextTick(updateScrollState))
   <div class="relative" data-testid="dashboard-courses-carousel">
     <div
       ref="trackRef"
+      data-gesture-owner="courses-carousel"
       class="flex snap-x snap-mandatory gap-4 overflow-x-auto scroll-smooth px-1 pb-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
     >
       <slot />

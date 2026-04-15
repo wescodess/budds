@@ -38,7 +38,7 @@ const isChatRoute = computed(() => route.path === '/chat')
 const isStandaloneRoute = computed(() => isDashboard.value || isChatRoute.value)
 const mainContentRef = ref<HTMLElement | null>(null)
 const mobileSidebarOpen = ref(false)
-const { isTouchLike, isMobileViewport, isInteractiveTarget, isWithinEdgeGuard } = useGestureGuards()
+const { shouldStartHorizontalGesture } = useGestureGuards()
 const DASHBOARD_SWIPE_EDGE_GUARD_PX = 28
 
 const { allFolders, allFoldersLoading, deleteFolder } = useFolders()
@@ -273,17 +273,14 @@ function hasBlockingOverlay() {
 
 useHorizontalSwipeGesture({
   target: mainContentRef,
-  threshold: PANEL_DISMISS_THRESHOLD_PX,
+  threshold: 24,
   shouldStart(event) {
     if (!isDashboard.value || mobileSidebarOpen.value) return false
-    if (!isTouchLike.value || !isMobileViewport.value) return false
-    if (!isWithinEdgeGuard(event, DASHBOARD_SWIPE_EDGE_GUARD_PX)) return false
-    if (isInteractiveTarget(event)) return false
     if (hasBlockingOverlay()) return false
-    return true
+    return shouldStartHorizontalGesture(event, { edgeGuardPx: 12 })
   },
   onSwipeEnd({ deltaX }) {
-    if (deltaX >= PANEL_DISMISS_THRESHOLD_PX) {
+    if (deltaX >= 64) {
       mobileSidebarOpen.value = true
     }
   },
