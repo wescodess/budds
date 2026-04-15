@@ -12,6 +12,7 @@ definePageMeta({ layout: 'folder' })
 
 const route = useRoute()
 const router = useRouter()
+const folderShellRef = ref<{ hideMobileRail: () => void } | null>(null)
 const folderId = computed(() => route.params.id as Id<'folders'>)
 const conversationIdRef = computed<Id<'conversations'> | null>(() => {
   const q = route.query?.conversationId
@@ -61,6 +62,10 @@ function unwrapConvexError(err: any): string {
   return raw.replace(/^\[CONVEX [^\]]+\]\s*/, '').replace(/^ConvexError:\s*/, '').trim()
 }
 
+function hideSidebarOnMobile() {
+  folderShellRef.value?.hideMobileRail()
+}
+
 async function onCreateVoid(type: VoidType) {
   if (creatingVoid.value) return
   creatingVoid.value = true
@@ -71,12 +76,13 @@ async function onCreateVoid(type: VoidType) {
         title: 'New chat',
       })) as Id<'conversations'>
       activeTab.value = 'chat'
-      void router.replace({ query: { ...(route.query ?? {}), tab: 'chat', conversationId: newId } })
+      await router.replace({ query: { ...(route.query ?? {}), tab: 'chat', conversationId: newId } })
     } else {
       activeTab.value = type
-      void router.replace({ query: { ...(route.query ?? {}), tab: type } })
+      await router.replace({ query: { ...(route.query ?? {}), tab: type } })
     }
     newVoidOpen.value = false
+    hideSidebarOnMobile()
   } catch (e: any) {
     const { toast } = await import('vue-sonner')
     toast.error(unwrapConvexError(e) || 'Failed to create void')
@@ -85,15 +91,16 @@ async function onCreateVoid(type: VoidType) {
   }
 }
 
-function onSelectVoid({ type, id }: { type: 'chat' | 'flashcards' | 'quiz'; id: string }) {
+async function onSelectVoid({ type, id }: { type: 'chat' | 'flashcards' | 'quiz'; id: string }) {
   activeTab.value = type
   const base = { ...(route.query ?? {}) }
   if (type === 'chat') {
-    void router.replace({ query: { ...base, tab: 'chat', conversationId: id } })
+    await router.replace({ query: { ...base, tab: 'chat', conversationId: id } })
   } else {
     const { conversationId: _dropped, ...rest } = base
-    void router.replace({ query: { ...rest, tab: type } })
+    await router.replace({ query: { ...rest, tab: type } })
   }
+  hideSidebarOnMobile()
 }
 
 const deleteTarget = ref<{ id: string; filename: string } | null>(null)
@@ -119,9 +126,10 @@ watch(() => route.query?.tab, () => {
   activeTab.value = initialTab.value
 })
 
-function onTabChange(next: TabValue) {
+async function onTabChange(next: TabValue) {
   activeTab.value = next
-  void router.replace({ query: { ...(route.query ?? {}), tab: next } })
+  await router.replace({ query: { ...(route.query ?? {}), tab: next } })
+  hideSidebarOnMobile()
 }
 const sourcePanelOpen = ref(false)
 const sourcePanelSide = ref<'left' | 'right'>('right')
@@ -407,6 +415,7 @@ async function handleImportLink(url: string) {
 
 <template>
   <FolderShell
+    ref="folderShellRef"
     :folder-id="folderId"
     :folder="seededFolder"
     :active-tab="activeTab"
@@ -508,6 +517,7 @@ async function handleImportLink(url: string) {
                             :sources="msg.sources"
                             :streaming="streaming && i === messages.length - 1"
                             @citation-click="(citIndex: number) => handleCitationClick(i, citIndex)"
+                            @citation-long-press="(citIndex: number) => handleCitationClick(i, citIndex)"
                           />
                           <ChatReferenceChips
                             v-if="msg.role === 'assistant' && (msg.sources?.length ?? 0) > 0"
@@ -567,6 +577,7 @@ async function handleImportLink(url: string) {
                             :sources="msg.sources"
                             :streaming="streaming && i === messages.length - 1"
                             @citation-click="(citIndex: number) => handleCitationClick(i, citIndex)"
+                            @citation-long-press="(citIndex: number) => handleCitationClick(i, citIndex)"
                           />
                           <ChatReferenceChips
                             v-if="msg.role === 'assistant' && (msg.sources?.length ?? 0) > 0"
@@ -647,6 +658,7 @@ async function handleImportLink(url: string) {
                     :sources="msg.sources"
                     :streaming="streaming && i === messages.length - 1"
                     @citation-click="(citIndex: number) => handleCitationClick(i, citIndex)"
+                    @citation-long-press="(citIndex: number) => handleCitationClick(i, citIndex)"
                   />
                   <ChatReferenceChips
                     v-if="msg.role === 'assistant' && (msg.sources?.length ?? 0) > 0"
