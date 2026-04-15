@@ -385,6 +385,52 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
     return result
   }
 
+  async function deleteDocuments(docIds: Id<'documents'>[]) {
+    const failedIds: Id<'documents'>[] = []
+    const failureMessages: string[] = []
+    let deletedCount = 0
+
+    for (const docId of docIds) {
+      try {
+        await deleteDocument(docId)
+        deletedCount += 1
+      }
+      catch (error: any) {
+        failedIds.push(docId)
+        failureMessages.push(error?.message || 'Failed to delete document')
+      }
+    }
+
+    return {
+      deletedCount,
+      failedIds,
+      failureMessages,
+    }
+  }
+
+  async function moveDocuments(docIds: Id<'documents'>[], destinationFolderId: Id<'folders'>) {
+    const failedIds: Id<'documents'>[] = []
+    const failureMessages: string[] = []
+    let movedCount = 0
+
+    for (const docId of docIds) {
+      try {
+        await moveDocument(docId, destinationFolderId)
+        movedCount += 1
+      }
+      catch (error: any) {
+        failedIds.push(docId)
+        failureMessages.push(error?.message || 'Failed to move document')
+      }
+    }
+
+    return {
+      movedCount,
+      failedIds,
+      failureMessages,
+    }
+  }
+
   return {
     documents: documentsData as Ref<Doc<'documents'>[] | null>,
     attachmentStatus,
@@ -395,5 +441,7 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
     importDocumentFromUrl,
     deleteDocument,
     moveDocument,
+    deleteDocuments,
+    moveDocuments,
   }
 }

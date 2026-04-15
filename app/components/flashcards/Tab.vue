@@ -98,7 +98,7 @@ async function handleDeleteConfirm(setId: string) {
 </script>
 
 <template>
-  <div data-testid="flashcards-tab-content">
+  <div class="flex h-full flex-col overflow-y-auto p-6" data-testid="flashcards-tab-content">
     <span class="sr-only" aria-live="polite" data-testid="flashcards-tab-live">{{ liveMessage }}</span>
 
     <template v-if="editingSetId">
