@@ -4,7 +4,9 @@ import { useMediaQuery } from '@vueuse/core'
 import { api } from '#convex/api'
 import type { Id } from '~~/convex/_generated/dataModel'
 import type { VoidType } from '~/components/voids/CreateVoidDialog.vue'
+import FolderHelperPane from '~/components/folders/FolderHelperPane.vue'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 
 definePageMeta({ layout: 'folder' })
 
@@ -125,7 +127,6 @@ const sourcePanelOpen = ref(false)
 const sourcePanelSide = ref<'left' | 'right'>('right')
 const activeCitationIndex = ref<number | null>(null)
 const activeMessageIndex = ref<number | null>(null)
-const expandedInlineCitation = ref<{ messageIndex: number; citationIndex: number } | null>(null)
 const chatInputRef = ref<{ focus: () => void } | null>(null)
 const chatScrollRef = ref<HTMLElement | null>(null)
 const SOURCE_PANEL_SIDE_KEY = 'g4.chat.source-panel.side'
@@ -145,21 +146,19 @@ const allSources = computed(() => {
   return msg?.sources ?? []
 })
 
+const moveDestinationFolders = computed(() =>
+  Array.isArray(allFolders.value) ? allFolders.value : [],
+)
+
 function handleCitationClick(messageIndex: number, citationIndex: number) {
+  activeMessageIndex.value = messageIndex
+  activeCitationIndex.value = citationIndex - 1
+
   if (isDesktop.value) {
-    activeMessageIndex.value = messageIndex
-    activeCitationIndex.value = citationIndex - 1
     sourcePanelOpen.value = true
   } else {
-    const same = expandedInlineCitation.value?.messageIndex === messageIndex
-      && expandedInlineCitation.value?.citationIndex === citationIndex
-    expandedInlineCitation.value = same ? null : { messageIndex, citationIndex }
+    sourcePanelOpen.value = true
   }
-}
-
-function getSourceForInlineCitation(messageIndex: number, citationIndex: number) {
-  const msg = messages.value[messageIndex]
-  return msg?.sources?.[citationIndex - 1]
 }
 
 function toggleSourcePanelSide() {
@@ -316,17 +315,15 @@ watch(sourcePanelSide, (value) => {
 })
 
 async function handleSendMessage(query: string) {
-  expandedInlineCitation.value = null
   activeMessageIndex.value = null
+  activeCitationIndex.value = null
   await sendMessage(query, referenceScope.toPayload())
 }
 
 function handleViewAllReferences(messageIndex: number) {
   activeMessageIndex.value = messageIndex
   activeCitationIndex.value = null
-  if (isDesktop.value) {
-    sourcePanelOpen.value = true
-  }
+  sourcePanelOpen.value = true
 }
 
 async function handleDeleteRequest(docId: string) {
@@ -389,7 +386,7 @@ async function handleUpload(files: File[]) {
   try {
     await uploadFiles(files, folderId.value)
     const { toast } = await import('vue-sonner')
-    toast.success(files.length === 1 ? 'Document uploaded' : `${files.length} documents uploaded`)
+    toast.success(files.length === 1 ? 'Document indexed' : `${files.length} documents indexed`)
   } catch (e: any) {
     const { toast } = await import('vue-sonner')
     toast.error(e.message || 'Upload failed')
@@ -400,7 +397,7 @@ async function handleImportLink(url: string) {
   try {
     const result = await importDocumentFromUrl(url, folderId.value)
     const { toast } = await import('vue-sonner')
-    toast.success(`Imported ${result?.filename ?? 'document'}`)
+    toast.success(`Imported and indexed ${result?.filename ?? 'document'}`)
   } catch (e: any) {
     const { toast } = await import('vue-sonner')
     toast.error(e.message || 'Import failed')
@@ -418,7 +415,7 @@ async function handleImportLink(url: string) {
     @new-void="newVoidOpen = true"
     @select-void="onSelectVoid"
   >
-    <template #top-bar="{ railCollapsed, toggleRail, drawerOpen, toggleDrawer }">
+    <template #top-bar="{ railCollapsed, railHidden, toggleRail }">
       <div class="sticky top-0 z-20 flex items-center justify-between gap-3 border-b border-border/60 bg-background/90 px-6 py-4 backdrop-blur supports-[backdrop-filter]:bg-background/80">
         <div class="flex min-w-0 items-center gap-3">
           <button
@@ -426,10 +423,10 @@ async function handleImportLink(url: string) {
             data-testid="drawer-toggle"
             :class="[
               'flex h-9 w-9 items-center justify-center rounded-lg border border-border/60 bg-card text-primary transition hover:bg-primary/10',
-              (!isDesktop && drawerOpen) || (isDesktop && !railCollapsed) ? 'bg-primary/10' : '',
+              (!isDesktop && !railHidden) || (isDesktop && !railCollapsed) ? 'bg-primary/10' : '',
             ]"
-            :aria-label="isDesktop ? (railCollapsed ? 'Expand sidebar' : 'Collapse sidebar') : (drawerOpen ? 'Close folder tree' : 'Open folder tree')"
-            @click="isDesktop ? toggleRail() : toggleDrawer()"
+            :aria-label="isDesktop ? (railCollapsed ? 'Expand sidebar' : 'Collapse sidebar') : (railHidden ? 'Show folder sidebar' : 'Hide folder sidebar')"
+            @click="toggleRail()"
           >
             <PanelRight class="h-4 w-4" />
           </button>
@@ -518,21 +515,6 @@ async function handleImportLink(url: string) {
                             @view-all="handleViewAllReferences(i)"
                             @chip-click="(citIndex: number) => handleCitationClick(i, citIndex)"
                           />
-                          <template v-if="!isDesktop && expandedInlineCitation?.messageIndex === i">
-                            <div
-                              v-for="src in [getSourceForInlineCitation(i, expandedInlineCitation.citationIndex)].filter(Boolean)"
-                              :key="expandedInlineCitation.citationIndex"
-                              class="mx-auto max-w-[85%] rounded-lg border bg-muted/50 p-3"
-                            >
-                              <ChatSourceCard
-                                :index="expandedInlineCitation.citationIndex"
-                                :filename="src!.filename"
-                                :content="src!.content"
-                                :score="src!.score"
-                                highlighted
-                              />
-                            </div>
-                          </template>
                         </template>
                         <ChatThinkingRow v-if="thinking" :model="selectedModel" />
                         <div v-if="error" class="text-center text-sm text-destructive">
@@ -592,21 +574,6 @@ async function handleImportLink(url: string) {
                             @view-all="handleViewAllReferences(i)"
                             @chip-click="(citIndex: number) => handleCitationClick(i, citIndex)"
                           />
-                          <template v-if="!isDesktop && expandedInlineCitation?.messageIndex === i">
-                            <div
-                              v-for="src in [getSourceForInlineCitation(i, expandedInlineCitation.citationIndex)].filter(Boolean)"
-                              :key="expandedInlineCitation.citationIndex"
-                              class="mx-auto max-w-[85%] rounded-lg border bg-muted/50 p-3"
-                            >
-                              <ChatSourceCard
-                                :index="expandedInlineCitation.citationIndex"
-                                :filename="src!.filename"
-                                :content="src!.content"
-                                :score="src!.score"
-                                highlighted
-                              />
-                            </div>
-                          </template>
                         </template>
                         <ChatThinkingRow v-if="thinking" :model="selectedModel" />
                         <div v-if="error" class="text-center text-sm text-destructive">
@@ -687,21 +654,6 @@ async function handleImportLink(url: string) {
                     @view-all="handleViewAllReferences(i)"
                     @chip-click="(citIndex: number) => handleCitationClick(i, citIndex)"
                   />
-                  <template v-if="!isDesktop && expandedInlineCitation?.messageIndex === i">
-                    <div
-                      v-for="src in [getSourceForInlineCitation(i, expandedInlineCitation.citationIndex)].filter(Boolean)"
-                      :key="expandedInlineCitation.citationIndex"
-                      class="mx-auto max-w-[85%] rounded-lg border bg-muted/50 p-3"
-                    >
-                      <ChatSourceCard
-                        :index="expandedInlineCitation.citationIndex"
-                        :filename="src!.filename"
-                        :content="src!.content"
-                        :score="src!.score"
-                        highlighted
-                      />
-                    </div>
-                  </template>
                 </template>
                 <ChatThinkingRow v-if="thinking" :model="selectedModel" />
                 <div v-if="error" class="text-center text-sm text-destructive">
@@ -731,6 +683,22 @@ async function handleImportLink(url: string) {
             />
           </div>
         </div>
+        <Sheet v-if="!isDesktop" :open="sourcePanelOpen" @update:open="sourcePanelOpen = $event">
+          <SheetContent
+            side="right"
+            class="w-[min(26rem,92vw)] gap-0 p-0 sm:max-w-none [&>button]:hidden"
+          >
+            <SheetHeader class="sr-only">
+              <SheetTitle>Sources</SheetTitle>
+              <SheetDescription>View the cited document excerpts for this chat.</SheetDescription>
+            </SheetHeader>
+            <FolderHelperPane
+              :sources="allSources"
+              :active-citation-index="activeCitationIndex"
+              @close="sourcePanelOpen = false"
+            />
+          </SheetContent>
+        </Sheet>
       </UiTabsContent>
 
       <UiTabsContent value="flashcards" class="flex-1">
@@ -774,19 +742,19 @@ async function handleImportLink(url: string) {
     </UiAlertDialog>
 
     <UiDialog v-model:open="showMoveDialog">
-      <UiDialogContent>
-        <UiDialogHeader>
-          <UiDialogTitle>Move to folder</UiDialogTitle>
-          <UiDialogDescription>Choose a destination folder.</UiDialogDescription>
-        </UiDialogHeader>
-        <div class="max-h-64 space-y-1 overflow-y-auto py-2">
-          <button
-            v-for="f in allFolders"
-            :key="f._id"
-            :disabled="f._id === folderId || movePending"
-            class="flex w-full items-center rounded-md px-3 py-2 text-sm hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-            @click="confirmMove(f._id)"
-          >
+        <UiDialogContent>
+          <UiDialogHeader>
+            <UiDialogTitle>Move to folder</UiDialogTitle>
+            <UiDialogDescription>Choose a destination folder.</UiDialogDescription>
+          </UiDialogHeader>
+          <div class="max-h-64 space-y-1 overflow-y-auto py-2">
+            <button
+              v-for="f in moveDestinationFolders"
+              :key="f._id"
+              :disabled="f._id === folderId || movePending"
+              class="flex w-full items-center rounded-md px-3 py-2 text-sm hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+              @click="confirmMove(f._id)"
+            >
             {{ f.name }}
           </button>
         </div>

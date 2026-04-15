@@ -3,6 +3,7 @@ import { api } from '../../../convex/_generated/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 import type { ChatMessage } from '../../utils/ai-gateway'
 import type { AISearchChunk } from '../../utils/ai-search'
+import { readConfiguredRuntimeValue } from '../../utils/runtime-config'
 
 const SYSTEM_PROMPT = `You are a helpful assistant that answers questions based on the provided context.
 Use the context below to answer the user's question accurately.
@@ -83,7 +84,12 @@ export default defineEventHandler(async (event) => {
   )
   if (hasScope) {
     const token = event.context.convexToken as string | undefined
-    const convexUrl = process.env.CONVEX_URL || process.env.NUXT_PUBLIC_CONVEX_URL
+    const runtimeConfig = useRuntimeConfig(event)
+    const convexUrl = readConfiguredRuntimeValue(
+      runtimeConfig.public?.convex?.url,
+      'NUXT_PUBLIC_CONVEX_URL',
+      'CONVEX_URL',
+    )
     if (!token || !convexUrl) {
       throw createError({ statusCode: 500, message: 'Convex client not configured' })
     }
@@ -121,7 +127,12 @@ export default defineEventHandler(async (event) => {
   let context: string
   let citationChunks = chunks
   if (needsFallback) {
-    const rawFolderDocs = await fetchFolderDocs({ userId, folderId: body.folderId, maxChars: 80_000 })
+    let rawFolderDocs: Awaited<ReturnType<typeof fetchFolderDocs>> = []
+    try {
+      rawFolderDocs = await fetchFolderDocs({ userId, folderId: body.folderId, maxChars: 80_000 })
+    } catch (error) {
+      console.error('[rag/chat] Failed to fetch folder docs fallback:', error)
+    }
     const folderDocs = scopedDocumentIds
       ? rawFolderDocs.filter((d) => scopedDocumentIds!.has(d.documentId))
       : rawFolderDocs

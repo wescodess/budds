@@ -1,5 +1,5 @@
 import { v } from 'convex/values'
-import { mutation, query, internalMutation } from './_generated/server'
+import { mutation, query, internalMutation, internalQuery } from './_generated/server'
 import { internal } from './_generated/api'
 import { enqueueDocumentCleanup } from './accountDeletion'
 
@@ -123,6 +123,68 @@ export const updateDocumentStatus = internalMutation({
     if (args.indexJobId !== undefined) patch.indexJobId = args.indexJobId
     if (args.r2Key !== undefined) patch.r2Key = args.r2Key
     await ctx.db.patch(args.id, patch)
+  },
+})
+
+export const getDocument = internalQuery({
+  args: { id: v.id('documents') },
+  handler: async (ctx, args) => {
+    return await ctx.db.get(args.id)
+  },
+})
+
+export const enqueueFailedDocumentCleanup = internalMutation({
+  args: {
+    userId: v.string(),
+    documentId: v.string(),
+    retryAiSearch: v.boolean(),
+    retryR2: v.boolean(),
+    r2Key: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    let r2Enqueued = false
+    let aiSearchEnqueued = false
+
+    if (args.retryR2 && args.r2Key) {
+      await ctx.db.insert('pendingCleanup', {
+        userId: args.userId,
+        documentId: args.documentId,
+        r2Key: args.r2Key,
+        kind: 'r2',
+        attempts: 0,
+      })
+      r2Enqueued = true
+    }
+
+    if (args.retryAiSearch) {
+      await ctx.db.insert('pendingCleanup', {
+        userId: args.userId,
+        documentId: args.documentId,
+        kind: 'ai-search',
+        attempts: 0,
+      })
+      aiSearchEnqueued = true
+    }
+
+    return { r2Enqueued, aiSearchEnqueued }
+  },
+})
+
+export const removeFailedDocument = internalMutation({
+  args: { id: v.id('documents') },
+  handler: async (ctx, args) => {
+    const doc = await ctx.db.get(args.id)
+    if (!doc || doc.status !== 'failed') return
+
+    const folder = await ctx.db.get(doc.folderId)
+    if (folder) {
+      await ctx.db.patch(doc.folderId, {
+        documentCount: Math.max(0, folder.documentCount - 1),
+        updatedAt: Date.now(),
+      })
+    }
+
+    await ctx.db.delete(args.id)
   },
 })
 

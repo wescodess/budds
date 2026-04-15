@@ -23,7 +23,9 @@ const drawerOpen = ref(false)
 const drawerSection = ref<'knowledge' | 'members'>('knowledge')
 const isDesktop = ref(true)
 const railCollapsed = ref(false)
+const mobileRailHidden = ref(false)
 const RAIL_COLLAPSED_KEY = 'g4.folder-shell.rail-collapsed'
+const MOBILE_RAIL_HIDDEN_KEY = 'g4.folder-shell.mobile-rail-hidden'
 const cachedFolderColor = ref<string | null>(null)
 const FOLDER_THEME_CACHE_PREFIX = 'g4.folder-shell.theme.'
 const folderThemeCacheKey = computed(() => `${FOLDER_THEME_CACHE_PREFIX}${props.folderId as string}`)
@@ -66,6 +68,8 @@ onMounted(() => {
     if (sec === 'knowledge' || sec === 'members') drawerSection.value = sec
     const rail = localStorage.getItem(RAIL_COLLAPSED_KEY)
     if (rail !== null) railCollapsed.value = rail === 'true'
+    const mobileRail = localStorage.getItem(MOBILE_RAIL_HIDDEN_KEY)
+    if (mobileRail !== null) mobileRailHidden.value = mobileRail === 'true'
     const cachedColor = localStorage.getItem(folderThemeCacheKey.value)
     if (cachedColor) cachedFolderColor.value = cachedColor
   } catch { /* ignore */ }
@@ -79,6 +83,7 @@ onMounted(() => {
 watch(drawerOpen, (v) => { try { localStorage.setItem('g3.drawer.open', String(v)) } catch { /* ignore */ } })
 watch(drawerSection, (v) => { try { localStorage.setItem('g3.drawer.section', v) } catch { /* ignore */ } })
 watch(railCollapsed, (v) => { try { localStorage.setItem(RAIL_COLLAPSED_KEY, String(v)) } catch { /* ignore */ } })
+watch(mobileRailHidden, (v) => { try { localStorage.setItem(MOBILE_RAIL_HIDDEN_KEY, String(v)) } catch { /* ignore */ } })
 watch(folderThemeCacheKey, (key) => {
   if (!import.meta.client) return
   try {
@@ -113,12 +118,16 @@ function openDrawerSection(section: 'knowledge' | 'members') {
 }
 
 function toggleRail() {
-  if (!isDesktop.value) return
-  railCollapsed.value = !railCollapsed.value
+  if (isDesktop.value) {
+    railCollapsed.value = !railCollapsed.value
+    return
+  }
+  mobileRailHidden.value = !mobileRailHidden.value
 }
 
+const railHidden = computed(() => !isDesktop.value && mobileRailHidden.value)
 const railCompact = computed(() => !isDesktop.value || railCollapsed.value)
-const railWidth = computed(() => railCompact.value ? 64 : 240)
+const railWidth = computed(() => railHidden.value ? 0 : railCompact.value ? 64 : 240)
 const resolvedThemeColor = computed(() => props.folder?.color || cachedFolderColor.value || null)
 
 function onTabChange(tab: 'chat' | 'flashcards' | 'quiz' | 'documents') {
@@ -279,6 +288,7 @@ provide('folderShellThemeStyle', themeStyle)
       :active-tab="activeTab"
       :active-conversation-id="activeConversationId"
       :compact="railCompact"
+      :hidden="railHidden"
       :drawer-section="drawerOpen ? drawerSection : null"
       @update:active-tab="onTabChange"
       @open-drawer="openDrawerSection"
@@ -292,6 +302,7 @@ provide('folderShellThemeStyle', themeStyle)
         :drawer-open="drawerOpen"
         :toggle-drawer="toggleDrawer"
         :rail-collapsed="railCollapsed"
+        :rail-hidden="railHidden"
         :toggle-rail="toggleRail"
       />
       <div class="flex-1 overflow-hidden">

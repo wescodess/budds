@@ -1,5 +1,66 @@
+import fs from 'node:fs'
+import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import tailwindcss from '@tailwindcss/vite'
+
+function parseDotenvFiles() {
+  const dotenvPaths = [
+    path.resolve(process.cwd(), '.env'),
+    path.resolve(process.cwd(), '.env.local'),
+  ]
+  const entries: Record<string, string> = {}
+
+  for (const dotenvPath of dotenvPaths) {
+    if (!fs.existsSync(dotenvPath)) continue
+
+    const source = fs.readFileSync(dotenvPath, 'utf8')
+
+    for (const rawLine of source.split(/\r?\n/)) {
+      const line = rawLine.trim()
+      if (!line || line.startsWith('#')) continue
+
+      const separatorIndex = line.indexOf('=')
+      if (separatorIndex < 1) continue
+
+      const key = line.slice(0, separatorIndex).trim()
+      let value = line.slice(separatorIndex + 1).trim()
+
+      if (
+        (value.startsWith('"') && value.endsWith('"'))
+        || (value.startsWith("'") && value.endsWith("'"))
+      ) {
+        value = value.slice(1, -1)
+      }
+
+      entries[key] = value
+    }
+  }
+
+  return entries
+}
+
+const dotenvVars = parseDotenvFiles()
+
+function readConfiguredValue(...names: string[]) {
+  for (const name of names) {
+    const value = process.env[name] || dotenvVars[name]
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value.trim()
+    }
+  }
+
+  return ''
+}
+
+function toConvexSiteUrl(url: string) {
+  if (!url) return ''
+  return url.replace(/\.convex\.cloud(?=\/|$)/, '.convex.site')
+}
+
+const convexUrl = readConfiguredValue('NUXT_PUBLIC_CONVEX_URL', 'CONVEX_URL')
+const siteUrl = readConfiguredValue('SITE_URL', 'NUXT_PUBLIC_SITE_URL')
+const publicSiteUrl = siteUrl || readConfiguredValue('NUXT_PUBLIC_SITE_URL')
+const authProxyTargetUrl = readConfiguredValue('AUTH_PROXY_TARGET_URL', 'NUXT_AUTH_PROXY_TARGET_URL') || toConvexSiteUrl(convexUrl)
 
 export default defineNuxtConfig({
   css: ['~/assets/css/tailwind.css'],
@@ -14,6 +75,9 @@ export default defineNuxtConfig({
     },
   },
   modules: ['shadcn-nuxt', 'nuxt-convex', '@onmax/nuxt-better-auth', '@nuxtjs/mdc'],
+  convex: {
+    url: convexUrl,
+  },
   components: [
     { path: '~/components/global', global: true },
     '~/components',
@@ -49,18 +113,24 @@ export default defineNuxtConfig({
     port: 3002,
   },
   runtimeConfig: {
-    cloudflareAccountId: process.env.CF_ACCOUNT_ID,
-    cloudflareAiGatewayId: process.env.CLOUDFLARE_AI_GATEWAY_ID,
-    cloudflareAiGatewayApiKey: process.env.CLOUDFLARE_AI_GATEWAY_API_KEY,
-    cloudflareAiSearchInstance: process.env.CLOUDFLARE_AI_SEARCH_INSTANCE,
-    cloudflareAiSearchToken: process.env.CLOUDFLARE_AI_SEARCH_TOKEN,
-    openrouterApiKey: process.env.OPENROUTER_API_KEY,
-    r2Endpoint: process.env.R2_ENDPOINT,
-    r2AccessKeyId: process.env.R2_ACCESS_KEY_ID,
-    r2SecretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
-    r2BucketName: process.env.R2_BUCKET_NAME,
+    // Read from process.env in Cloudflare Pages and from .env/.env.local locally.
+    authProxyTargetUrl,
+    siteUrl,
+    cloudflareAccountId: readConfiguredValue('NUXT_CLOUDFLARE_ACCOUNT_ID', 'CF_ACCOUNT_ID'),
+    cloudflareAiGatewayId: readConfiguredValue('NUXT_CLOUDFLARE_AI_GATEWAY_ID', 'CLOUDFLARE_AI_GATEWAY_ID'),
+    cloudflareAiGatewayApiKey: readConfiguredValue('NUXT_CLOUDFLARE_AI_GATEWAY_API_KEY', 'CLOUDFLARE_AI_GATEWAY_API_KEY'),
+    cloudflareAiSearchInstance: readConfiguredValue('NUXT_CLOUDFLARE_AI_SEARCH_INSTANCE', 'CLOUDFLARE_AI_SEARCH_INSTANCE'),
+    cloudflareAiSearchToken: readConfiguredValue('NUXT_CLOUDFLARE_AI_SEARCH_TOKEN', 'CLOUDFLARE_AI_SEARCH_TOKEN'),
+    openrouterApiKey: readConfiguredValue('NUXT_OPENROUTER_API_KEY', 'OPENROUTER_API_KEY'),
+    r2Endpoint: readConfiguredValue('NUXT_R2_ENDPOINT', 'R2_ENDPOINT'),
+    r2AccessKeyId: readConfiguredValue('NUXT_R2_ACCESS_KEY_ID', 'R2_ACCESS_KEY_ID'),
+    r2SecretAccessKey: readConfiguredValue('NUXT_R2_SECRET_ACCESS_KEY', 'R2_SECRET_ACCESS_KEY'),
+    r2BucketName: readConfiguredValue('NUXT_R2_BUCKET_NAME', 'R2_BUCKET_NAME'),
     public: {
-      siteUrl: process.env.NUXT_PUBLIC_SITE_URL || 'http://localhost:3002',
+      siteUrl: publicSiteUrl,
+      convex: {
+        url: convexUrl,
+      },
     },
   },
   routeRules: {

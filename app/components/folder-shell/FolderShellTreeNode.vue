@@ -31,6 +31,9 @@ const hasKids = computed(() => kids.value.length > 0)
 const folderKey = computed(() => props.folder._id as unknown as string)
 const directCount = computed(() => props.directCounts?.get(folderKey.value) ?? 0)
 const totalCount = computed(() => props.totalCounts?.get(folderKey.value) ?? directCount.value)
+const childConnectorStyle = computed(() => ({
+  left: `${13 + (props.depth + 1) * 16}px`,
+}))
 const countLabel = computed(() => {
   if (hasKids.value && totalCount.value !== directCount.value) {
     return `${directCount.value} / ${totalCount.value}`
@@ -104,7 +107,11 @@ const countLabel = computed(() => {
         </UiDropdownMenuContent>
       </UiDropdownMenu>
     </div>
-    <div v-if="isOpen && hasKids" class="mt-0.5 space-y-0.5">
+    <div v-if="isOpen && hasKids" class="relative mt-0.5 space-y-0.5">
+      <span
+        class="pointer-events-none absolute inset-y-0 w-px rounded-full bg-border/80"
+        :style="childConnectorStyle"
+      />
       <FolderShellTreeNode
         v-for="child in kids"
         :key="child._id"
