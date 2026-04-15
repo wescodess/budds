@@ -12,12 +12,14 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'citation-click': [index: number]
+  'citation-long-press': [index: number]
   'open-in-knowledge': [index: number]
 }>()
 
 const sourcesRef = computed<Source[]>(() => props.sources ?? [])
 provide('chatCitationSources', sourcesRef)
 provide('chatCitationClick', (i: number) => emit('citation-click', i))
+provide('chatCitationLongPress', (i: number) => emit('citation-long-press', i))
 provide('chatCitationOpenInKnowledge', (i: number) => emit('open-in-knowledge', i))
 
 const processedContent = computed(() => {
@@ -29,6 +31,7 @@ const isAssistant = computed(() => props.role === 'assistant')
 const isMarkdownRendering = ref(false)
 const hasPaintedMarkdown = ref(false)
 let markdownRenderFrame: number | null = null
+let markdownFallbackTimer: ReturnType<typeof setTimeout> | null = null
 
 const showMarkdownSkeleton = computed(() =>
   isAssistant.value && isMarkdownRendering.value && processedContent.value.trim().length > 0,
@@ -40,8 +43,22 @@ function clearMarkdownRenderFrame() {
   markdownRenderFrame = null
 }
 
+function clearMarkdownFallbackTimer() {
+  if (markdownFallbackTimer === null) return
+  clearTimeout(markdownFallbackTimer)
+  markdownFallbackTimer = null
+}
+
+function markMarkdownReady() {
+  clearMarkdownRenderFrame()
+  clearMarkdownFallbackTimer()
+  isMarkdownRendering.value = false
+  hasPaintedMarkdown.value = true
+}
+
 function scheduleMarkdownReady() {
   clearMarkdownRenderFrame()
+  clearMarkdownFallbackTimer()
 
   if (!isAssistant.value || processedContent.value.trim().length === 0) {
     isMarkdownRendering.value = false
@@ -54,16 +71,19 @@ function scheduleMarkdownReady() {
 
   nextTick(() => {
     if (!import.meta.client) {
-      isMarkdownRendering.value = false
-      hasPaintedMarkdown.value = true
+      markMarkdownReady()
       return
     }
 
+    // WebKit has longstanding bugs around opacity changes right after mount.
+    // Keep the markdown visible and only use the skeleton as a temporary overlay.
+    markdownFallbackTimer = setTimeout(() => {
+      markMarkdownReady()
+    }, 180)
+
     markdownRenderFrame = requestAnimationFrame(() => {
       markdownRenderFrame = requestAnimationFrame(() => {
-        isMarkdownRendering.value = false
-        hasPaintedMarkdown.value = true
-        markdownRenderFrame = null
+        markMarkdownReady()
       })
     })
   })
@@ -73,6 +93,7 @@ watch([processedContent, isAssistant, () => props.streaming], scheduleMarkdownRe
 
 onBeforeUnmount(() => {
   clearMarkdownRenderFrame()
+  clearMarkdownFallbackTimer()
 })
 </script>
 
@@ -98,8 +119,7 @@ onBeforeUnmount(() => {
         :value="processedContent"
         tag="div"
         :class="cn(
-          'prose-chat space-y-3 transition-opacity [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:text-base [&_h2]:font-semibold [&_h3]:text-sm [&_h3]:font-semibold [&_p]:leading-relaxed [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-1 [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.85em] [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:bg-[#0f0d0c] [&_pre]:p-4 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_blockquote]:border-l-2 [&_blockquote]:border-primary [&_blockquote]:pl-3 [&_blockquote]:italic [&_blockquote]:text-muted-foreground [&_table]:w-full [&_table]:border-collapse [&_th]:border [&_th]:border-border [&_th]:bg-muted [&_th]:p-2 [&_th]:text-left [&_td]:border [&_td]:border-border [&_td]:p-2 [&_a]:text-primary [&_a]:underline [&_a]:underline-offset-2 [&_strong]:font-semibold [&_em]:italic',
-          showMarkdownSkeleton ? 'opacity-0' : 'opacity-100',
+          'prose-chat space-y-3 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:text-base [&_h2]:font-semibold [&_h3]:text-sm [&_h3]:font-semibold [&_p]:leading-relaxed [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-1 [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.85em] [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:bg-[#0f0d0c] [&_pre]:p-4 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_blockquote]:border-l-2 [&_blockquote]:border-primary [&_blockquote]:pl-3 [&_blockquote]:italic [&_blockquote]:text-muted-foreground [&_table]:w-full [&_table]:border-collapse [&_th]:border [&_th]:border-border [&_th]:bg-muted [&_th]:p-2 [&_th]:text-left [&_td]:border [&_td]:border-border [&_td]:p-2 [&_a]:text-primary [&_a]:underline [&_a]:underline-offset-2 [&_strong]:font-semibold [&_em]:italic',
         )"
       />
       <span
