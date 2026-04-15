@@ -6,6 +6,7 @@ import { useGestureGuards } from '~/composables/useGestureGuards'
 
 const props = defineProps<{
   folderId: Id<'folders'>
+  selectedSetId?: string | null
 }>()
 
 const {
@@ -55,6 +56,21 @@ function handleStudyBack() {
 function handleEditorBack() {
   editingSetId.value = null
 }
+
+watch(
+  () => props.selectedSetId,
+  (next) => {
+    if (!next) {
+      activeSetId.value = null
+      editingSetId.value = null
+      return
+    }
+
+    activeSetId.value = next as Id<'flashcardSets'>
+    editingSetId.value = null
+  },
+  { immediate: true },
+)
 
 function toggleMenu(setId: string) {
   openMenuSetId.value = openMenuSetId.value === setId ? null : setId

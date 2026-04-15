@@ -69,6 +69,24 @@ const createConversationMutation = import.meta.client
         '' as unknown as Id<'conversations'>,
     }
 
+const deleteConversationMutation = import.meta.client
+  ? useConvexMutation(api.conversations.deleteConversation)
+  : {
+      mutate: async (_args: { id: Id<'conversations'> }) => null,
+    }
+
+const deleteFlashcardSetMutation = import.meta.client
+  ? useConvexMutation(api.flashcards.deleteSet)
+  : {
+      mutate: async (_args: { setId: Id<'flashcardSets'> }) => null,
+    }
+
+const deleteQuizMutation = import.meta.client
+  ? useConvexMutation(api.quizzes.deleteQuiz)
+  : {
+      mutate: async (_args: { quizId: Id<'quizzes'> }) => null,
+    }
+
 function unwrapConvexError(err: any): string {
   if (err?.data?.message && typeof err.data.message === 'string') return err.data.message
   const raw = typeof err?.message === 'string' ? err.message : ''
@@ -115,6 +133,79 @@ async function onSelectVoid({ type, id }: { type: 'chat' | 'flashcards' | 'quiz'
     await router.replace({ query: { ...rest, tab: type, voidId: id } })
   }
   hideSidebarOnMobile()
+}
+
+const voidDeleteTarget = ref<{ type: 'chat' | 'flashcards' | 'quiz'; id: string; title: string } | null>(null)
+const deletingVoid = ref(false)
+
+function handleDeleteVoidRequest(target: { type: 'chat' | 'flashcards' | 'quiz'; id: string; title: string }) {
+  voidDeleteTarget.value = target
+}
+
+const showDeleteVoidDialog = computed({
+  get: () => voidDeleteTarget.value !== null,
+  set: (value: boolean) => {
+    if (!value) voidDeleteTarget.value = null
+  },
+})
+
+const deleteVoidDescription = computed(() => {
+  if (!voidDeleteTarget.value) return ''
+  const label = voidDeleteTarget.value.title || 'this void'
+  const kind = voidDeleteTarget.value.type === 'flashcards'
+    ? 'flash card set'
+    : voidDeleteTarget.value.type === 'quiz'
+      ? 'quiz'
+      : 'chat'
+  return `Delete "${label}"? This will permanently remove the ${kind}.`
+})
+
+async function clearRouteSelectionForDeletedVoid(target: { type: 'chat' | 'flashcards' | 'quiz'; id: string }) {
+  const base = { ...(route.query ?? {}) }
+
+  if (target.type === 'chat') {
+    if (activeConversationId.value !== target.id) return
+    const { conversationId: _drop, ...rest } = base
+    await router.replace({ query: rest })
+    return
+  }
+
+  if (activeTab.value === target.type && activeVoidId.value === target.id) {
+    const { voidId: _drop, ...rest } = base
+    await router.replace({ query: rest })
+  }
+}
+
+async function confirmDeleteVoid() {
+  const target = voidDeleteTarget.value
+  if (!target || deletingVoid.value) return
+
+  deletingVoid.value = true
+  try {
+    if (target.type === 'chat') {
+      await deleteConversationMutation.mutate({ id: target.id as Id<'conversations'> })
+    } else if (target.type === 'flashcards') {
+      await deleteFlashcardSetMutation.mutate({ setId: target.id as Id<'flashcardSets'> })
+    } else {
+      await deleteQuizMutation.mutate({ quizId: target.id as Id<'quizzes'> })
+    }
+
+    await clearRouteSelectionForDeletedVoid(target)
+    voidDeleteTarget.value = null
+
+    const { toast } = await import('vue-sonner')
+    const kind = target.type === 'flashcards'
+      ? 'Flash card set'
+      : target.type === 'quiz'
+        ? 'Quiz'
+        : 'Chat'
+    toast.success(`${kind} deleted`)
+  } catch (e: any) {
+    const { toast } = await import('vue-sonner')
+    toast.error(unwrapConvexError(e) || 'Failed to delete void')
+  } finally {
+    deletingVoid.value = false
+  }
 }
 
 const deleteTargetIds = ref<string[]>([])
@@ -622,6 +713,7 @@ async function handleImportLink(url: string) {
     @update:active-tab="onTabChange"
     @new-void="newVoidOpen = true"
     @select-void="onSelectVoid"
+    @request-delete-void="handleDeleteVoidRequest"
   >
     <template #top-bar="{ railCollapsed, railHidden, toggleRail }">
       <div class="sticky top-0 z-20 flex items-center justify-between gap-3 border-b border-border/60 bg-background/90 px-6 py-4 backdrop-blur supports-[backdrop-filter]:bg-background/80">
@@ -920,11 +1012,11 @@ async function handleImportLink(url: string) {
       </UiTabsContent>
 
       <UiTabsContent value="flashcards" class="min-w-0 flex-1">
-        <FlashcardsTab :folder-id="folderId" />
+        <FlashcardsTab :folder-id="folderId" :selected-set-id="activeTab === 'flashcards' ? activeVoidId : null" />
       </UiTabsContent>
 
       <UiTabsContent value="quiz" class="min-w-0 flex-1">
-        <QuizTab :folder-id="folderId" />
+        <QuizTab :folder-id="folderId" :selected-quiz-id="activeTab === 'quiz' ? activeVoidId : null" />
       </UiTabsContent>
 
         <UiTabsContent value="documents" class="keyboard-scroll-area flex min-w-0 flex-1 flex-col gap-6 overflow-y-auto p-6">
@@ -982,6 +1074,29 @@ async function handleImportLink(url: string) {
         <UiAlertDialogFooter>
           <UiAlertDialogCancel>Cancel</UiAlertDialogCancel>
           <UiButton variant="destructive" :disabled="documentsDeletePending" @click="confirmDelete">Delete</UiButton>
+        </UiAlertDialogFooter>
+      </UiAlertDialogContent>
+    </UiAlertDialog>
+
+    <UiAlertDialog v-model:open="showDeleteVoidDialog">
+      <UiAlertDialogContent>
+        <UiAlertDialogHeader>
+          <UiAlertDialogTitle>Delete void</UiAlertDialogTitle>
+          <UiAlertDialogDescription>
+            {{ deleteVoidDescription }}
+          </UiAlertDialogDescription>
+        </UiAlertDialogHeader>
+        <UiAlertDialogFooter>
+          <UiAlertDialogCancel :disabled="deletingVoid">
+            Cancel
+          </UiAlertDialogCancel>
+          <UiAlertDialogAction
+            class="bg-destructive text-destructive-foreground hover:bg-destructive/90 disabled:pointer-events-none disabled:opacity-50"
+            :disabled="deletingVoid"
+            @click="confirmDeleteVoid"
+          >
+            {{ deletingVoid ? 'Deleting…' : 'Delete' }}
+          </UiAlertDialogAction>
         </UiAlertDialogFooter>
       </UiAlertDialogContent>
     </UiAlertDialog>
