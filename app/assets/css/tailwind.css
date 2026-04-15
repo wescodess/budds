@@ -49,6 +49,9 @@
 }
 
 :root {
+  --mobile-vh: 100dvh;
+  --vk-height: 0px;
+  --vk-safe-bottom: env(safe-area-inset-bottom, 0px);
   --radius: 0.75rem;
   --background: #f7f4ef;
   --background: oklch(0.97 0.003 73.6);
@@ -243,11 +246,27 @@
   * {
     @apply border-border outline-ring/50;
   }
+  svg.lucide {
+    color: inherit;
+    stroke: currentColor;
+  }
   body {
     @apply bg-background text-foreground;
     font-family: 'DM Sans', sans-serif;
     font-size: 14px;
     line-height: 1.6;
+    min-height: var(--mobile-vh, 100dvh);
+  }
+}
+
+@layer utilities {
+  .app-viewport-frame {
+    height: var(--mobile-vh, 100dvh);
+    min-height: var(--mobile-vh, 100dvh);
+  }
+
+  .keyboard-scroll-area {
+    scroll-padding-bottom: calc(var(--vk-safe-bottom, env(safe-area-inset-bottom, 0px)) + 16px);
   }
 }
 

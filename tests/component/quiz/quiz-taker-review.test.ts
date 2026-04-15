@@ -129,4 +129,17 @@ describe('QuizTaker — review mode (Story 6.3 AC #8)', () => {
     expect(wrapper.find('[data-testid="quiz-submit-button"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="quiz-taker-retake"]').exists()).toBe(false)
   })
+
+  it('[P1] does not mark the full taker surface as a gesture owner', async () => {
+    const Taker = await import(takerPath)
+    mockQuizData.value = sampleQuiz()
+    mockAttemptsData.value = sampleAttempt()
+
+    const wrapper = await mountSuspended(Taker.default, {
+      props: { quizId: 'quiz_1' },
+    })
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="quiz-taker"]').attributes('data-gesture-owner')).toBeUndefined()
+  })
 })

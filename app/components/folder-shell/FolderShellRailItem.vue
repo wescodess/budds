@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { useMediaQuery } from '@vueuse/core'
+import { onLongPress, useMediaQuery } from '@vueuse/core'
 import type { FunctionalComponent } from 'vue'
+import { LONG_PRESS_MOVE_PX, LONG_PRESS_MS } from '~/composables/useGestureGuards'
 
 defineOptions({
   name: 'FolderShellRailItem',
@@ -18,32 +19,10 @@ const props = defineProps<{
 const attrs = useAttrs()
 const isTouchDevice = useMediaQuery('(hover: none), (pointer: coarse)')
 const popoverOpen = ref(false)
-const LONG_PRESS_MS = 450
 const usesCompactHint = computed(() => Boolean(props.compact))
+const buttonRef = ref<HTMLElement | null>(null)
 
-let longPressTimer: ReturnType<typeof setTimeout> | null = null
 const suppressNextClick = ref(false)
-
-function clearLongPressTimer() {
-  if (!longPressTimer) return
-  clearTimeout(longPressTimer)
-  longPressTimer = null
-}
-
-function startLongPress(event: PointerEvent) {
-  if (!usesCompactHint.value || !isTouchDevice.value || event.pointerType === 'mouse') return
-
-  clearLongPressTimer()
-  longPressTimer = setTimeout(() => {
-    suppressNextClick.value = true
-    popoverOpen.value = true
-    clearLongPressTimer()
-  }, LONG_PRESS_MS)
-}
-
-function cancelLongPress() {
-  clearLongPressTimer()
-}
 
 function handleMobileClick(event: MouseEvent) {
   if (suppressNextClick.value) {
@@ -57,8 +36,24 @@ function handleMobileClick(event: MouseEvent) {
 }
 
 onBeforeUnmount(() => {
-  clearLongPressTimer()
+  longPressStop()
 })
+
+const longPressStop = onLongPress(
+  buttonRef,
+  (event) => {
+    if (!usesCompactHint.value || !isTouchDevice.value || event.pointerType === 'mouse') return
+    suppressNextClick.value = true
+    popoverOpen.value = true
+  },
+  {
+    delay: LONG_PRESS_MS,
+    distanceThreshold: LONG_PRESS_MOVE_PX,
+    onMouseUp(_duration, _distance, isLongPress) {
+      suppressNextClick.value = isLongPress
+    },
+  },
+)
 </script>
 
 <template>
@@ -110,6 +105,7 @@ onBeforeUnmount(() => {
   <UiPopover v-else-if="usesCompactHint" v-model:open="popoverOpen">
     <UiPopoverTrigger as-child>
       <button
+        ref="buttonRef"
         type="button"
         :class="[
           'group relative flex w-full items-center rounded-md py-1.5 text-sm transition-[background-color,color,padding,gap] duration-200 ease-out',
@@ -122,10 +118,6 @@ onBeforeUnmount(() => {
         :data-testid="`rail-item-${label.toLowerCase()}`"
         :aria-label="label"
         v-bind="attrs"
-        @pointerdown="startLongPress"
-        @pointerup="cancelLongPress"
-        @pointercancel="cancelLongPress"
-        @pointerleave="cancelLongPress"
         @contextmenu.prevent
         @click="handleMobileClick"
       >

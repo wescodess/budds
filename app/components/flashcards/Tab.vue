@@ -2,6 +2,7 @@
 import { Layers, MoreHorizontal, Pencil, Plus, Trash2 } from 'lucide-vue-next'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
+import { useGestureGuards } from '~/composables/useGestureGuards'
 
 const props = defineProps<{
   folderId: Id<'folders'>
@@ -21,6 +22,8 @@ const openMenuSetId = ref<string | null>(null)
 const confirmingDeleteSetId = ref<string | null>(null)
 const deleting = ref(false)
 const liveMessage = ref('')
+const swipeOpenSetId = ref<string | null>(null)
+const { isTouchLike } = useGestureGuards()
 
 const deleteSetMutation = import.meta.client
   ? useConvexMutation(api.flashcards.deleteSet)
@@ -63,15 +66,21 @@ function toggleMenu(setId: string) {
 function handleEditSet(setId: string) {
   openMenuSetId.value = null
   confirmingDeleteSetId.value = null
+  swipeOpenSetId.value = null
   editingSetId.value = setId as Id<'flashcardSets'>
 }
 
 function handleDeleteClick(setId: string) {
+  swipeOpenSetId.value = null
   confirmingDeleteSetId.value = setId
 }
 
 function handleDeleteCancel() {
   confirmingDeleteSetId.value = null
+}
+
+function handleSwipeSetOpen(setId: string, next: boolean) {
+  swipeOpenSetId.value = next ? setId : (swipeOpenSetId.value === setId ? null : swipeOpenSetId.value)
 }
 
 async function handleDeleteConfirm(setId: string) {
@@ -152,84 +161,118 @@ async function handleDeleteConfirm(setId: string) {
         <div
           v-for="set in sets"
           :key="set._id"
-          class="rounded-md border"
-          data-testid="flashcards-set-card"
         >
-          <div
-            role="button"
-            tabindex="0"
-            class="flex cursor-pointer items-center justify-between p-4 hover:bg-accent/50"
-            @click="handleSetSelect(set._id)"
-            @keydown.enter="handleSetSelect(set._id)"
-            @keydown.space.prevent="handleSetSelect(set._id)"
+          <MobileSwipeRevealItem
+            :open="swipeOpenSetId === set._id"
+            :disabled="!isTouchLike"
+            :action-width="96"
+            class="rounded-md"
+            content-class="rounded-md"
+            @update:open="(next) => handleSwipeSetOpen(set._id, next)"
           >
-            <div class="flex flex-col gap-1">
-              <p class="font-medium">{{ set.title }}</p>
-              <p class="text-xs text-muted-foreground">
-                {{ new Date(set._creationTime).toLocaleDateString() }}
-                &middot;
-                {{ set.cardCount }} cards
-              </p>
-            </div>
-            <button
-              type="button"
-              class="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-              data-testid="flashcards-set-menu"
-              aria-label="Flash card set actions"
-              @click.stop="toggleMenu(set._id)"
-            >
-              <MoreHorizontal class="h-4 w-4" />
-            </button>
-          </div>
+            <template #actions>
+              <button
+                type="button"
+                data-swipe-reveal-action
+                :aria-label="`Edit ${set.title}`"
+                class="flex h-full w-1/2 items-center justify-center bg-muted text-foreground"
+                @click="handleEditSet(set._id)"
+              >
+                <Pencil class="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                data-swipe-reveal-action
+                :aria-label="`Delete ${set.title}`"
+                class="flex h-full w-1/2 items-center justify-center bg-destructive text-destructive-foreground"
+                @click="handleDeleteClick(set._id)"
+              >
+                <Trash2 class="h-4 w-4" />
+              </button>
+            </template>
 
-          <div
-            v-if="openMenuSetId === set._id"
-            class="flex items-center gap-2 border-t px-4 py-2"
-            data-testid="flashcards-set-actions"
-          >
-            <template v-if="confirmingDeleteSetId === set._id">
-              <UiButton
-                variant="destructive"
-                size="sm"
-                :disabled="deleting"
-                data-testid="flashcards-set-delete-confirm"
-                @click.stop="handleDeleteConfirm(set._id)"
+            <div
+              class="rounded-md border"
+              data-testid="flashcards-set-card"
+            >
+              <div
+                role="button"
+                tabindex="0"
+                class="flex cursor-pointer items-center justify-between p-4 hover:bg-accent/50"
+                @click="handleSetSelect(set._id)"
+                @keydown.enter="handleSetSelect(set._id)"
+                @keydown.space.prevent="handleSetSelect(set._id)"
               >
-                <Trash2 class="mr-1.5 h-3 w-3" />
-                Confirm delete
-              </UiButton>
-              <UiButton
-                variant="ghost"
-                size="sm"
-                :disabled="deleting"
-                data-testid="flashcards-set-delete-cancel"
-                @click.stop="handleDeleteCancel"
+                <div class="flex flex-col gap-1">
+                  <p class="font-medium">{{ set.title }}</p>
+                  <p class="text-xs text-muted-foreground">
+                    {{ new Date(set._creationTime).toLocaleDateString() }}
+                    &middot;
+                    {{ set.cardCount }} cards
+                  </p>
+                </div>
+                <button
+                  v-if="!isTouchLike"
+                  type="button"
+                  class="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                  data-testid="flashcards-set-menu"
+                  aria-label="Flash card set actions"
+                  @click.stop="toggleMenu(set._id)"
+                >
+                  <MoreHorizontal class="h-4 w-4" />
+                </button>
+              </div>
+
+              <div
+                v-if="openMenuSetId === set._id"
+                class="flex items-center gap-2 border-t px-4 py-2"
+                data-testid="flashcards-set-actions"
               >
-                Cancel
-              </UiButton>
-            </template>
-            <template v-else>
-              <UiButton
-                variant="outline"
-                size="sm"
-                data-testid="flashcards-set-edit"
-                @click.stop="handleEditSet(set._id)"
-              >
-                <Pencil class="mr-1.5 h-3 w-3" />
-                Edit
-              </UiButton>
-              <UiButton
-                variant="ghost"
-                size="sm"
-                class="text-destructive hover:text-destructive"
-                data-testid="flashcards-set-delete"
-                @click.stop="handleDeleteClick(set._id)"
-              >
-                <Trash2 class="mr-1.5 h-3 w-3" />
-                Delete
-              </UiButton>
-            </template>
-          </div>
+                <template v-if="confirmingDeleteSetId === set._id">
+                  <UiButton
+                    variant="destructive"
+                    size="sm"
+                    :disabled="deleting"
+                    data-testid="flashcards-set-delete-confirm"
+                    @click.stop="handleDeleteConfirm(set._id)"
+                  >
+                    <Trash2 class="mr-1.5 h-3 w-3" />
+                    Confirm delete
+                  </UiButton>
+                  <UiButton
+                    variant="ghost"
+                    size="sm"
+                    :disabled="deleting"
+                    data-testid="flashcards-set-delete-cancel"
+                    @click.stop="handleDeleteCancel"
+                  >
+                    Cancel
+                  </UiButton>
+                </template>
+                <template v-else>
+                  <UiButton
+                    variant="outline"
+                    size="sm"
+                    data-testid="flashcards-set-edit"
+                    @click.stop="handleEditSet(set._id)"
+                  >
+                    <Pencil class="mr-1.5 h-3 w-3" />
+                    Edit
+                  </UiButton>
+                  <UiButton
+                    variant="ghost"
+                    size="sm"
+                    class="text-destructive hover:text-destructive"
+                    data-testid="flashcards-set-delete"
+                    @click.stop="handleDeleteClick(set._id)"
+                  >
+                    <Trash2 class="mr-1.5 h-3 w-3" />
+                    Delete
+                  </UiButton>
+                </template>
+              </div>
+            </div>
+          </MobileSwipeRevealItem>
         </div>
       </div>
     </template>
