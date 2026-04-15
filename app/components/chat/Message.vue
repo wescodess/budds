@@ -2,6 +2,7 @@
 import { parseMarkdown } from '@nuxtjs/mdc/runtime'
 import { cn } from '@/lib/utils'
 import { expandCitations } from '~/utils/expand-citations'
+import { normalizeAssistantCitations } from '~/utils/normalize-assistant-citations'
 import type { Source } from '~/composables/useChat'
 
 const props = defineProps<{
@@ -38,6 +39,32 @@ let markdownParseGeneration = 0
 
 const markdownBody = computed(() => parsedMarkdown.value?.body ?? null)
 const markdownData = computed(() => parsedMarkdown.value?.data ?? {})
+const fallbackContent = computed(() => {
+  if (!isAssistant.value) return props.content
+  return normalizeAssistantCitations(props.content)
+})
+const fallbackSegments = computed(() => {
+  const content = fallbackContent.value
+  const parts = content.split(/(\[\d+\])/g)
+  const segments: Array<
+    { type: 'text'; value: string }
+    | { type: 'citation'; index: number }
+  > = []
+
+  for (const part of parts) {
+    if (!part) continue
+
+    const match = /^\[(\d+)\]$/.exec(part)
+    if (match) {
+      segments.push({ type: 'citation', index: Number(match[1]) })
+      continue
+    }
+
+    segments.push({ type: 'text', value: part })
+  }
+
+  return segments
+})
 const showMarkdownSkeleton = computed(() =>
   isAssistant.value
   && isMarkdownParsing.value
@@ -141,7 +168,10 @@ watch([processedContent, isAssistant], () => {
           markdownParseError && 'text-foreground',
         )"
       >
-        {{ processedContent }}
+        <template v-for="(segment, index) in fallbackSegments" :key="index">
+          <template v-if="segment.type === 'text'">{{ segment.value }}</template>
+          <Citation v-else :index="segment.index" />
+        </template>
       </div>
       <span
         v-if="props.streaming && !showMarkdownSkeleton"

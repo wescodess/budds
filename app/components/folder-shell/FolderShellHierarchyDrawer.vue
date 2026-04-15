@@ -76,7 +76,7 @@ useHorizontalSwipeGesture({
 })
 
 const drawerShellStyle = computed<Record<string, string>>(() => ({
-  '--drawer-target-width': props.fullWidth ? '90vw' : 'min(55vw, 90vw, 720px)',
+  '--drawer-target-width': props.fullWidth ? '85vw' : 'min(85vw, 720px)',
   left: props.fullWidth ? '0px' : `${props.railWidth}px`,
   width: props.open ? 'var(--drawer-target-width)' : '0px',
 }))
