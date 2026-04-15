@@ -1,7 +1,11 @@
 name = "budds"
-pages_build_output_dir = "dist"
 compatibility_date = "2025-04-14"
 compatibility_flags = ["nodejs_compat"]
+
+# Local development only:
+# - Do not add `pages_build_output_dir` here unless you want wrangler.toml to become
+#   the source of truth for the Pages project's production/preview configuration.
+# - Manage Pages Variables/Secrets and production bindings in the Cloudflare dashboard.
 
 # ── D1 Auth Database ─────────────────────────────────────────
 [[d1_databases]]
