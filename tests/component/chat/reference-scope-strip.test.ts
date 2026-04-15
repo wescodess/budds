@@ -26,7 +26,7 @@ function buildScope(options: { folderIds?: string[]; fileIds?: string[] } = {}) 
     folderIds, fileIds, folderMeta, fileMeta, hasSelection, chips, totalFolderCount, totalFileCount,
     isFolderSelected: (id: any) => folderIds.value.has(id),
     isFileSelected: (id: any) => fileIds.value.has(id),
-    folderState: () => 'off' as const,
+    selectionStateForFolder: () => 'off' as const,
     toggleFolder: () => {},
     toggleFile: () => {},
     removeChip: (c: any) => {

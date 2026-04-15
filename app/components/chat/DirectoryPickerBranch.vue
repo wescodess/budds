@@ -8,6 +8,7 @@ const props = defineProps<{
   depth: number
   scope: ReturnType<typeof useReferenceScope>
   expanded: Set<string>
+  inheritedSelected?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -24,10 +25,9 @@ const isEmpty = computed(() =>
   !pending.value && subfolders.value.length === 0 && files.value.length === 0,
 )
 const rowStickyTop = computed(() => props.depth * 40)
-
-function folderState(id: Id<'folders'>) {
-  return props.scope.isFolderSelected(id) ? 'on' : 'off'
-}
+const branchConnectorStyle = computed(() => ({
+  left: `${13 + props.depth * 16}px`,
+}))
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -36,18 +36,21 @@ function formatSize(bytes: number): string {
 }
 
 function pickFolder(folder: typeof subfolders.value[number]) {
-  props.scope.selectFolder(folder)
   emit('pick-folder', folder)
 }
 
 function pickFile(file: typeof files.value[number]) {
-  props.scope.selectFile(file)
   emit('pick-file', file)
 }
 </script>
 
 <template>
-  <div>
+  <div class="relative">
+    <span
+      v-if="props.depth > 0"
+      class="pointer-events-none absolute inset-y-0 w-px rounded-full bg-border/80"
+      :style="branchConnectorStyle"
+    />
     <ChatDirectoryPickerRow
       v-for="file in files"
       :key="file.id"
@@ -68,7 +71,7 @@ function pickFile(file: typeof files.value[number]) {
         kind="folder"
         :label="sub.name"
         :badge="`${sub.descendantFileCount} file${sub.descendantFileCount === 1 ? '' : 's'}`"
-        :state="folderState(sub.id)"
+        :state="props.scope.selectionStateForFolder(sub)"
         :depth="props.depth"
         :expandable="sub.hasChildren || sub.fileCount > 0"
         :expanded="props.expanded.has(sub.id as unknown as string)"
@@ -87,6 +90,7 @@ function pickFile(file: typeof files.value[number]) {
           :depth="props.depth + 1"
           :scope="props.scope"
           :expanded="props.expanded"
+          :inherited-selected="false"
           @toggle-expand="(id) => emit('toggle-expand', id)"
           @pick-folder="(folder) => emit('pick-folder', folder)"
           @pick-file="(file) => emit('pick-file', file)"

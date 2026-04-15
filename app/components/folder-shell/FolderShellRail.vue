@@ -25,6 +25,7 @@ const props = defineProps<{
   activeTab: TabValue
   activeConversationId?: string | null
   compact?: boolean
+  hidden?: boolean
   drawerSection?: 'knowledge' | 'members' | null
 }>()
 
@@ -140,9 +141,11 @@ async function onLogout() {
   <aside
     data-testid="folder-rail"
     :class="[
-      'relative z-30 flex shrink-0 flex-col overflow-hidden border-r border-border/60 bg-card/80 backdrop-blur-sm transition-[width] duration-[280ms] ease-[cubic-bezier(0.22,1,0.36,1)]',
+      'relative z-30 flex shrink-0 flex-col overflow-hidden bg-card/80 backdrop-blur-sm transition-[width] duration-[280ms] ease-[cubic-bezier(0.22,1,0.36,1)]',
+      hidden ? 'pointer-events-none border-r-0' : 'border-r border-border/60',
     ]"
-    :style="{ width: compact ? '4rem' : '15rem' }"
+    :aria-hidden="hidden ? 'true' : 'false'"
+    :style="{ width: hidden ? '0rem' : compact ? '4rem' : '15rem' }"
   >
     <NuxtLink
       to="/"
