@@ -9,18 +9,24 @@ import { provideSidebarContext, SIDEBAR_COOKIE_MAX_AGE, SIDEBAR_COOKIE_NAME, SID
 const props = withDefaults(defineProps<{
   defaultOpen?: boolean
   open?: boolean
+  openMobile?: boolean
   class?: HTMLAttributes["class"]
 }>(), {
   defaultOpen: !defaultDocument?.cookie.includes(`${SIDEBAR_COOKIE_NAME}=false`),
   open: undefined,
+  openMobile: undefined,
 })
 
 const emits = defineEmits<{
   "update:open": [open: boolean]
+  "update:openMobile": [open: boolean]
 }>()
 
 const isMobile = useMediaQuery("(max-width: 768px)")
-const openMobile = ref(false)
+const openMobile = useVModel(props, "openMobile", emits, {
+  defaultValue: false,
+  passive: (props.openMobile === undefined) as false,
+}) as Ref<boolean>
 
 const open = useVModel(props, "open", emits, {
   defaultValue: props.defaultOpen ?? false,
