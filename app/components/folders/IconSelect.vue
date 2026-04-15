@@ -70,19 +70,19 @@ function selectIcon(key: string) {
         data-testid="folder-icon-select"
         class="flex h-10 w-full items-center justify-between gap-2 rounded-xl border bg-transparent px-3 py-2 text-sm shadow-xs outline-none transition-colors focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30 dark:hover:bg-input/50"
       >
-        <span class="flex items-center gap-2">
+        <span class="flex min-w-0 items-center gap-2 overflow-hidden">
           <span
-            class="inline-flex h-7 w-7 items-center justify-center rounded-[10px]"
+            class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[10px]"
             :style="triggerStyle"
           >
             <component :is="SelectedIcon" :style="iconTintStyle" class="h-4 w-4" />
           </span>
-          <span class="capitalize">{{ selectedIconKey.replace(/-/g, ' ') }}</span>
+          <span class="truncate capitalize">{{ selectedIconKey.replace(/-/g, ' ') }}</span>
         </span>
-        <ChevronDown class="h-4 w-4 opacity-50" />
+        <ChevronDown class="h-4 w-4 shrink-0 opacity-50" />
       </button>
     </UiPopoverTrigger>
-    <UiPopoverContent class="w-80 p-0" align="start">
+    <UiPopoverContent class="w-[min(20rem,calc(100vw-1.5rem))] p-0" align="start">
       <div class="flex items-center gap-2 border-b px-3 py-2">
         <Search class="h-4 w-4 text-muted-foreground" />
         <input
@@ -105,7 +105,7 @@ function selectIcon(key: string) {
           <div class="mb-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
             {{ group.label }}
           </div>
-          <div class="grid grid-cols-6 gap-1.5">
+          <div class="grid grid-cols-5 gap-1.5 sm:grid-cols-6">
             <button
               v-for="iconKey in group.icons"
               :key="iconKey"

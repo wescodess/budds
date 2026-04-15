@@ -61,12 +61,12 @@ const countLabel = computed(() => {
       />
       <button
         type="button"
-        class="flex h-7 w-5 shrink-0 items-center justify-center rounded"
+        class="relative -mx-1 -my-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-md sm:mx-0 sm:my-0 sm:h-7 sm:w-6"
         :class="!hasKids && 'invisible'"
         :aria-label="isOpen ? 'Collapse' : 'Expand'"
         @click.stop="emit('toggle', folder._id as unknown as string)"
       >
-        <ChevronRight :class="['h-3.5 w-3.5 transition', isOpen && 'rotate-90']" />
+        <ChevronRight :class="['h-4 w-4 transition sm:h-3.5 sm:w-3.5', isOpen && 'rotate-90']" />
       </button>
       <button
         type="button"

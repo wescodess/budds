@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { FileText, FileImage, Link as LinkIcon } from 'lucide-vue-next'
+import { FileText, FileImage, Link as LinkIcon, X } from 'lucide-vue-next'
 import type { Id } from '~~/convex/_generated/dataModel'
 
 defineOptions({ name: 'FolderShellFileRow' })
@@ -24,6 +24,7 @@ const emit = defineEmits<{
   move: [id: string]
   download: [id: string]
   delete: [id: string]
+  dismiss: [id: string]
   toggleSelect: [id: string]
 }>()
 
@@ -59,6 +60,8 @@ const dateLabel = computed(() => {
 
 const id = computed(() => props.documentId as unknown as string)
 const isList = computed(() => props.variant === 'list')
+const canAct = computed(() => props.status !== 'pending' && props.status !== 'failed')
+const canDismiss = computed(() => props.status === 'failed')
 
 function toggleSelection() {
   emit('toggleSelect', id.value)
@@ -75,7 +78,7 @@ function toggleSelection() {
     :data-testid="`file-row-${id}`"
   >
     <UiCheckbox
-      v-if="selectable"
+      v-if="selectable && canAct"
       :model-value="selected"
       :aria-label="`Select ${filename}`"
       class="mt-0.5"
@@ -87,7 +90,7 @@ function toggleSelection() {
       <component :is="icon" class="h-4 w-4" />
     </div>
     <button
-      v-if="selectable"
+      v-if="selectable && canAct"
       type="button"
       class="min-w-0 flex-1 text-left"
       @click="toggleSelection"
@@ -100,8 +103,17 @@ function toggleSelection() {
       <p class="truncate text-[11px] text-muted-foreground">{{ subtitle }}</p>
     </div>
     <FolderShellFileStatusPill :status="status" :failure-reason="failureReason" />
+    <button
+      v-if="canDismiss"
+      type="button"
+      class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground"
+      :aria-label="`Clear ${filename}`"
+      @click="emit('dismiss', id)"
+    >
+      <X class="h-4 w-4" />
+    </button>
     <FolderShellFileKebabMenu
-      v-if="!selectable"
+      v-if="!selectable && canAct"
       :document-id="id"
       @open="emit('open', $event)"
       @rename="emit('rename', $event)"
@@ -121,7 +133,7 @@ function toggleSelection() {
   >
     <div class="flex min-w-0 items-center gap-3">
       <UiCheckbox
-        v-if="selectable"
+        v-if="selectable && canAct"
         :model-value="selected"
         :aria-label="`Select ${filename}`"
         :data-testid="`file-row-select-${id}`"
@@ -132,7 +144,7 @@ function toggleSelection() {
         <component :is="icon" class="h-4 w-4" />
       </div>
       <button
-        v-if="selectable"
+        v-if="selectable && canAct"
         type="button"
         class="min-w-0 flex-1 text-left"
         @click="toggleSelection"
@@ -153,8 +165,17 @@ function toggleSelection() {
       {{ fileSize >= 1_048_576 ? (fileSize / 1_048_576).toFixed(1) + ' MB' : Math.max(1, Math.round(fileSize / 1024)) + ' KB' }}
     </div>
     <div class="flex justify-end">
+      <button
+        v-if="canDismiss"
+        type="button"
+        class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground"
+        :aria-label="`Clear ${filename}`"
+        @click="emit('dismiss', id)"
+      >
+        <X class="h-4 w-4" />
+      </button>
       <FolderShellFileKebabMenu
-        v-if="!selectable"
+        v-if="!selectable && canAct"
         :document-id="id"
         @open="emit('open', $event)"
         @rename="emit('rename', $event)"

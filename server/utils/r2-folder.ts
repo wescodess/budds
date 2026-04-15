@@ -5,13 +5,20 @@ import { readConfiguredRuntimeValue } from './runtime-config'
 export interface FolderDoc {
   key: string
   documentId: string
+  folderId?: string
   filename?: string
   content: string
 }
 
 export interface FetchFolderDocsParams {
   userId: string
-  folderId: string
+  folderId?: string
+  documents?: Array<{
+    documentId: string
+    folderId: string
+    filename?: string
+    r2Key?: string
+  }>
   maxChars?: number
 }
 
@@ -42,6 +49,46 @@ export async function fetchFolderDocs(params: FetchFolderDocsParams): Promise<Fo
   if (!r2BucketName) return []
   const client = getR2Client()
   if (!client) return []
+  const budget = params.maxChars ?? 80_000
+
+  const docs: FolderDoc[] = []
+  let spent = 0
+
+  if (params.documents?.length) {
+    for (const doc of params.documents) {
+      if (spent >= budget) break
+
+      const key = doc.r2Key
+        ?? `${sanitizeUserSegment(params.userId)}/${doc.folderId}/${doc.documentId}.txt`
+
+      try {
+        const object = await client.send(new GetObjectCommand({
+          Bucket: r2BucketName,
+          Key: key,
+        }))
+        const fullContent = await object.Body?.transformToString()
+        if (!fullContent) continue
+
+        const remaining = budget - spent
+        const content = fullContent.length > remaining ? fullContent.slice(0, remaining) : fullContent
+        spent += content.length
+
+        docs.push({
+          key,
+          documentId: doc.documentId,
+          folderId: doc.folderId,
+          filename: object.Metadata?.filename ?? doc.filename,
+          content,
+        })
+      } catch (error) {
+        console.error(`[r2-folder] Failed to read scoped doc ${doc.documentId}:`, error)
+      }
+    }
+
+    return docs
+  }
+
+  if (!params.folderId) return []
 
   const prefix = `${sanitizeUserSegment(params.userId)}/${params.folderId}/`
   const list = await client.send(new ListObjectsV2Command({
@@ -51,10 +98,6 @@ export async function fetchFolderDocs(params: FetchFolderDocsParams): Promise<Fo
   }))
 
   const objects = (list.Contents ?? []).filter(o => o.Key?.endsWith('.txt'))
-  const budget = params.maxChars ?? 80_000
-
-  const docs: FolderDoc[] = []
-  let spent = 0
 
   for (const obj of objects) {
     if (!obj.Key || spent >= budget) break
@@ -70,7 +113,7 @@ export async function fetchFolderDocs(params: FetchFolderDocsParams): Promise<Fo
     const documentId = (parts[parts.length - 1] ?? '').replace(/\.txt$/, '')
     const filename = head.Metadata?.filename
 
-    docs.push({ key: obj.Key, documentId, filename, content })
+    docs.push({ key: obj.Key, documentId, folderId: params.folderId, filename, content })
   }
 
   return docs

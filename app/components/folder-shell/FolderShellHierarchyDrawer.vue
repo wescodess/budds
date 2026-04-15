@@ -22,7 +22,7 @@ const emit = defineEmits<{ close: [] }>()
 
 const router = useRouter()
 const { allFolders } = useFolders()
-const { documents, uploadFiles, moveDocument, deleteDocuments, moveDocuments } = useDocuments(computed(() => props.folderId))
+const { documentsForDisplay, dismissDisplayDocument, uploadFiles, moveDocument, deleteDocuments, moveDocuments } = useDocuments(computed(() => props.folderId))
 const { data: folderCounts } = useConvexQuery(api.documents.countsByFolder, computed(() => ({})))
 
 const directCountByFolder = computed(() => {
@@ -110,11 +110,13 @@ const filteredFolders = computed(() => {
 })
 
 const filteredDocs = computed(() => {
-  const docs = documents.value ?? []
+  const docs = documentsForDisplay.value ?? []
   const q = search.value.trim().toLowerCase()
   if (!q) return docs
   return docs.filter(d => d.filename.toLowerCase().includes(q))
 })
+
+const displayedFileCount = computed(() => documentsForDisplay.value.length)
 
 const bulkMode = ref(false)
 const selectedDocIds = ref<string[]>([])
@@ -474,7 +476,7 @@ async function onFiles(e: Event) {
         <div class="flex min-w-0 items-center gap-1 text-muted-foreground">
           <span class="shrink-0">Files</span>
           <span class="ml-1.5 shrink-0 rounded-full bg-muted/60 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-            {{ directCountByFolder.get(folderId as unknown as string) ?? 0 }}
+            {{ displayedFileCount }}
           </span>
         </div>
         <UiDropdownMenu>
@@ -503,6 +505,7 @@ async function onFiles(e: Event) {
           :selected-ids="selectedDocIds"
           :pending="bulkActionPending || movePending"
           @delete="onDeleteDoc"
+          @dismiss="dismissDisplayDocument"
           @move="onMoveDoc"
           @open="() => undefined"
           @rename="() => undefined"

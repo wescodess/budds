@@ -15,8 +15,7 @@ Do not include a trailing "References" or "Sources" section in the answer.
 Do not repeat source filenames in the answer body unless the user explicitly asks for them.`
 
 function folderDocToChunk(
-  doc: { key: string; documentId: string; filename?: string; content: string },
-  folderId: string,
+  doc: { key: string; documentId: string; folderId?: string; filename?: string; content: string },
   userId: string,
 ): AISearchChunk {
   return {
@@ -25,7 +24,7 @@ function folderDocToChunk(
     score: 1,
     attributes: {
       filename: doc.filename,
-      folderId,
+      folderId: doc.folderId,
       documentId: doc.documentId,
       userId,
     },
@@ -78,10 +77,16 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, message: 'folderId is required' })
   }
 
-  let scopedDocumentIds: Set<string> | null = null
   const hasScope = Boolean(
     (body.scope?.folderIds?.length ?? 0) > 0 || (body.scope?.fileIds?.length ?? 0) > 0,
   )
+  let scopedDocumentIds: Set<string> | null = hasScope ? new Set() : null
+  let scopedDocuments: Array<{
+    documentId: string
+    folderId: string
+    filename?: string
+    r2Key?: string
+  }> = []
   if (hasScope) {
     const token = event.context.convexToken as string | undefined
     const runtimeConfig = useRuntimeConfig(event)
@@ -99,16 +104,20 @@ export default defineEventHandler(async (event) => {
       folderIds: body.scope?.folderIds as Id<'folders'>[] | undefined,
       fileIds: body.scope?.fileIds as Id<'documents'>[] | undefined,
     })
-    scopedDocumentIds = new Set(resolved.documentIds)
-    if (scopedDocumentIds.size === 0) {
-      scopedDocumentIds = null
-    }
+
+    scopedDocumentIds = new Set((resolved.documentIds ?? []) as string[])
+    scopedDocuments = (resolved.documents ?? []).map(doc => ({
+      documentId: String(doc.id),
+      folderId: String(doc.folderId),
+      filename: doc.filename,
+      r2Key: doc.r2Key,
+    }))
   }
 
   const searchResults = await searchDocuments({
     query: body.query,
     userId,
-    folderId: body.folderId,
+    ...(hasScope ? {} : { folderId: body.folderId }),
     max_num_results: body.max_num_results ?? 10,
     score_threshold: body.score_threshold ?? 0.1,
   })
@@ -126,7 +135,46 @@ export default defineEventHandler(async (event) => {
 
   let context: string
   let citationChunks = chunks
-  if (needsFallback) {
+  if (hasScope) {
+    if (!needsFallback) {
+      citationChunks = chunks
+      context = chunks
+        .map((chunk, i) => {
+          const label = chunk.attributes?.filename || chunk.attributes?.url || 'unknown'
+          return `[Source ${i + 1}: ${label}]\n${chunk.content}`
+        })
+        .join('\n\n---\n\n')
+    }
+    else {
+      let scopedFolderDocs: Awaited<ReturnType<typeof fetchFolderDocs>> = []
+      if (scopedDocuments.length > 0) {
+        try {
+          scopedFolderDocs = await fetchFolderDocs({
+            userId,
+            documents: scopedDocuments,
+            maxChars: 80_000,
+          })
+        } catch (error) {
+          console.error('[rag/chat] Failed to fetch scoped docs fallback:', error)
+        }
+      }
+
+      if (scopedFolderDocs.length > 0) {
+        citationChunks = scopedFolderDocs.map((doc) => folderDocToChunk(doc, userId))
+        context = scopedFolderDocs
+          .map((doc, i) => `[Source ${i + 1}: ${doc.filename ?? doc.documentId}]\n${doc.content}`)
+          .join('\n\n---\n\n')
+      } else {
+        citationChunks = chunks
+        context = chunks
+          .map((chunk, i) => {
+            const label = chunk.attributes?.filename || chunk.attributes?.url || 'unknown'
+            return `[Source ${i + 1}: ${label}]\n${chunk.content}`
+          })
+          .join('\n\n---\n\n')
+      }
+    }
+  } else if (needsFallback) {
     let rawFolderDocs: Awaited<ReturnType<typeof fetchFolderDocs>> = []
     try {
       rawFolderDocs = await fetchFolderDocs({ userId, folderId: body.folderId, maxChars: 80_000 })
@@ -137,7 +185,7 @@ export default defineEventHandler(async (event) => {
       ? rawFolderDocs.filter((d) => scopedDocumentIds!.has(d.documentId))
       : rawFolderDocs
     if (folderDocs.length > 0) {
-      citationChunks = folderDocs.map((doc) => folderDocToChunk(doc, body.folderId, userId))
+      citationChunks = folderDocs.map((doc) => folderDocToChunk(doc, userId))
       context = folderDocs
         .map((doc, i) => `[Source ${i + 1}: ${doc.filename ?? doc.documentId}]\n${doc.content}`)
         .join('\n\n---\n\n')

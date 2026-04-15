@@ -21,7 +21,7 @@ const conversationIdRef = computed<Id<'conversations'> | null>(() => {
 
 const { folder } = useFolderDetail(folderId)
 const { allFolders } = useFolders()
-const { documents, attachmentStatus, uploading, importingLink, uploadFiles, importDocumentFromUrl, deleteDocument, moveDocument } = useDocuments(folderId)
+const { documents, documentsForDisplay, dismissDisplayDocument, attachmentStatus, uploading, importingLink, uploadFiles, importDocumentFromUrl, deleteDocument, moveDocument } = useDocuments(folderId)
 const {
   messages,
   loading,
@@ -454,7 +454,7 @@ async function handleImportLink(url: string) {
       @create="onCreateVoid"
     />
 
-    <UiTabs v-model="activeTab" class="flex h-full flex-1 flex-col">
+    <UiTabs v-model="activeTab" class="flex h-full min-w-0 flex-1 flex-col">
       <UiTabsList class="sr-only">
         <UiTabsTrigger value="chat">Chat</UiTabsTrigger>
         <UiTabsTrigger value="flashcards">Flash Cards</UiTabsTrigger>
@@ -462,10 +462,10 @@ async function handleImportLink(url: string) {
         <UiTabsTrigger value="documents">Documents</UiTabsTrigger>
       </UiTabsList>
 
-      <UiTabsContent value="chat" class="flex flex-1 flex-col overflow-hidden">
-        <div class="flex flex-1 overflow-hidden">
+      <UiTabsContent value="chat" class="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <div class="flex min-w-0 flex-1 overflow-hidden">
           <template v-if="isDesktop && sourcePanelOpen">
-            <ResizablePanelGroup direction="horizontal" class="flex-1">
+            <ResizablePanelGroup direction="horizontal" class="min-w-0 flex-1">
               <template v-if="isSourcePanelLeading">
                 <ResizablePanel :default-size="28" :min-size="20" :max-size="45" class="min-w-[18rem]">
                   <ChatSourcePanel
@@ -488,8 +488,8 @@ async function handleImportLink(url: string) {
                     <ArrowLeftRight class="h-3.5 w-3.5" />
                   </button>
                 </ResizableHandle>
-                <ResizablePanel :default-size="72" :min-size="40">
-                  <div class="flex h-full flex-1 flex-col overflow-hidden">
+                <ResizablePanel :default-size="72" :min-size="40" class="min-w-0">
+                  <div class="flex h-full min-w-0 flex-1 flex-col overflow-hidden">
                     <template v-if="!hasIndexedDocuments">
                       <div class="flex flex-1 items-center justify-center text-muted-foreground">
                         <div class="text-center">
@@ -547,8 +547,8 @@ async function handleImportLink(url: string) {
               </template>
 
               <template v-else>
-                <ResizablePanel :default-size="72" :min-size="40">
-                  <div class="flex h-full flex-1 flex-col overflow-hidden">
+                <ResizablePanel :default-size="72" :min-size="40" class="min-w-0">
+                  <div class="flex h-full min-w-0 flex-1 flex-col overflow-hidden">
                     <template v-if="!hasIndexedDocuments">
                       <div class="flex flex-1 items-center justify-center text-muted-foreground">
                         <div class="text-center">
@@ -628,7 +628,7 @@ async function handleImportLink(url: string) {
             </ResizablePanelGroup>
           </template>
 
-          <div v-else class="flex flex-1 flex-col overflow-hidden">
+          <div v-else class="flex min-w-0 flex-1 flex-col overflow-hidden">
             <template v-if="!hasIndexedDocuments">
               <div class="flex flex-1 items-center justify-center text-muted-foreground">
                 <div class="text-center">
@@ -701,23 +701,24 @@ async function handleImportLink(url: string) {
         </Sheet>
       </UiTabsContent>
 
-      <UiTabsContent value="flashcards" class="flex-1">
+      <UiTabsContent value="flashcards" class="min-w-0 flex-1">
         <FlashcardsTab :folder-id="folderId" />
       </UiTabsContent>
 
-      <UiTabsContent value="quiz" class="flex-1">
+      <UiTabsContent value="quiz" class="min-w-0 flex-1">
         <QuizTab :folder-id="folderId" />
       </UiTabsContent>
 
-      <UiTabsContent value="documents" class="flex flex-1 flex-col gap-6 overflow-y-auto p-6">
+      <UiTabsContent value="documents" class="flex min-w-0 flex-1 flex-col gap-6 overflow-y-auto p-6">
         <DocumentsFileUploadZone
           :folder-id="folderId"
           :disabled="uploading"
           @upload="handleUpload"
         />
         <FolderShellFilesList
-          :documents="documents"
+          :documents="documentsForDisplay"
           @delete="handleDeleteRequest"
+          @dismiss="dismissDisplayDocument"
           @move="handleMoveRequest"
           @open="() => undefined"
           @rename="() => undefined"

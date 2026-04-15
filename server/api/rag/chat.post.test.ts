@@ -1,5 +1,16 @@
 import { vi, describe, test, expect, beforeEach } from 'vitest'
 
+const mockConvexQuery = vi.fn()
+
+vi.mock('convex/browser', () => ({
+  ConvexHttpClient: class {
+    setAuth(_token: string) {}
+    query(...args: unknown[]) {
+      return mockConvexQuery(...args)
+    }
+  },
+}))
+
 vi.stubGlobal('useRuntimeConfig', vi.fn())
 vi.stubGlobal('createError', (opts: { statusCode: number; message: string }) =>
   Object.assign(new Error(opts.message), { statusCode: opts.statusCode }),
@@ -21,11 +32,15 @@ const mockEvent = {} as any
 
 describe('POST /api/rag/chat — folderId enforcement (AC #1)', () => {
   beforeEach(() => {
+    vi.mocked(globalThis.useRuntimeConfig as any).mockReturnValue({
+      public: { convex: { url: 'https://convex.example' } },
+    })
     vi.mocked(globalThis.readBody as any).mockReset()
     vi.mocked(globalThis.searchDocuments as any).mockReset()
     vi.mocked(globalThis.fetchFolderDocs as any).mockReset()
     vi.mocked(globalThis.fetchFolderDocs as any).mockResolvedValue([])
     vi.mocked(globalThis.generateCompletion as any).mockReset()
+    mockConvexQuery.mockReset()
   })
 
   test('[P0] should return 400 when folderId is missing from request body', async () => {
@@ -203,6 +218,114 @@ describe('POST /api/rag/chat — folderId enforcement (AC #1)', () => {
     expect(result.answer).toBe('Summary [1]')
     expect(result.sources).toHaveLength(1)
     expect(result.sources[0].content).toBe('Indexed chunk content')
+  })
+
+  test('[P0] should keep scoped chats search-first and only load selected docs when scoped search is poor', async () => {
+    const scopedEvent = {
+      context: { convexToken: 'convex-test-token' },
+    } as any
+
+    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+      query: 'Summarize the selected docs',
+      model: 'openai/gpt-4o-mini',
+      folderId: 'folder_root',
+      scope: {
+        folderIds: ['folder_child'],
+        fileIds: ['doc_child'],
+      },
+    })
+    mockConvexQuery.mockResolvedValue({
+      documentIds: ['doc_child'],
+      documents: [
+        {
+          id: 'doc_child',
+          folderId: 'folder_child',
+          filename: 'child.pdf',
+          r2Key: 'user/folder_child/doc_child.txt',
+        },
+      ],
+      ownedFolderIds: ['folder_child'],
+    })
+    vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({
+      data: [],
+    })
+    vi.mocked(globalThis.fetchFolderDocs as any).mockResolvedValue([
+      {
+        key: 'user/folder_child/doc_child.txt',
+        documentId: 'doc_child',
+        folderId: 'folder_child',
+        filename: 'child.pdf',
+        content: 'Selected doc fallback content',
+      },
+    ])
+    vi.mocked(globalThis.generateCompletion as any).mockResolvedValue({
+      choices: [{ message: { content: 'Scoped answer [1]' } }],
+      model: 'openai/gpt-4o-mini',
+      usage: {},
+    })
+
+    const result = await handler(scopedEvent)
+
+    expect(globalThis.searchDocuments).toHaveBeenCalledWith(
+      expect.not.objectContaining({ folderId: 'folder_root' }),
+    )
+    expect(globalThis.fetchFolderDocs).toHaveBeenCalledWith(
+      expect.objectContaining({
+        documents: [
+          expect.objectContaining({
+            documentId: 'doc_child',
+            folderId: 'folder_child',
+          }),
+        ],
+      }),
+    )
+    expect(result.sources[0].attributes.documentId).toBe('doc_child')
+    expect(result.sources[0].content).toBe('Selected doc fallback content')
+  })
+
+  test('[P0] should not load selected docs when scoped search results are strong enough', async () => {
+    const scopedEvent = {
+      context: { convexToken: 'convex-test-token' },
+    } as any
+
+    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+      query: 'What does the selected doc say about mitosis?',
+      model: 'openai/gpt-4o-mini',
+      folderId: 'folder_root',
+      scope: {
+        fileIds: ['doc_child'],
+      },
+    })
+    mockConvexQuery.mockResolvedValue({
+      documentIds: ['doc_child'],
+      documents: [
+        {
+          id: 'doc_child',
+          folderId: 'folder_child',
+          filename: 'child.pdf',
+          r2Key: 'user/folder_child/doc_child.txt',
+        },
+      ],
+      ownedFolderIds: [],
+    })
+    vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({
+      data: [
+        { id: '1', content: 'Chunk A', score: 0.91, attributes: { filename: 'child.pdf', documentId: 'doc_child' } },
+        { id: '2', content: 'Chunk B', score: 0.88, attributes: { filename: 'child.pdf', documentId: 'doc_child' } },
+        { id: '3', content: 'Chunk C', score: 0.84, attributes: { filename: 'child.pdf', documentId: 'doc_child' } },
+      ],
+    })
+    vi.mocked(globalThis.generateCompletion as any).mockResolvedValue({
+      choices: [{ message: { content: 'Scoped chunk answer [1]' } }],
+      model: 'openai/gpt-4o-mini',
+      usage: {},
+    })
+
+    const result = await handler(scopedEvent)
+
+    expect(globalThis.fetchFolderDocs).not.toHaveBeenCalled()
+    expect(result.sources).toHaveLength(3)
+    expect(result.sources[0].content).toBe('Chunk A')
   })
 })
 
