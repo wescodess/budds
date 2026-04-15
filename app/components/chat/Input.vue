@@ -517,10 +517,10 @@ defineExpose({ focus })
 </script>
 
 <template>
-  <div class="border-t p-4">
+  <div class="border-t px-3 py-3 sm:p-4">
     <ChatReferenceScopeStrip v-if="props.scope" :scope="props.scope" />
 
-    <div class="relative flex items-end gap-2">
+    <div class="relative flex items-end gap-1.5 sm:gap-2">
       <UiDropdownMenu v-if="props.folderId">
         <UiDropdownMenuTrigger as-child>
           <button
@@ -529,7 +529,7 @@ defineExpose({ focus })
             :title="resolvedAttachmentStatus.label"
             :disabled="attachmentBusy"
             :class="[attachmentIndicatorClass, attachmentPulseClass]"
-            class="relative inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+            class="relative inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 sm:h-9 sm:w-9"
           >
             <component
               :is="attachmentIconForState(resolvedAttachmentStatus.state)"
@@ -585,7 +585,7 @@ defineExpose({ focus })
             type="button"
             :aria-label="hasScopeSelection ? 'Update directory references' : 'Open directory references'"
             :data-active="hasScopeSelection || undefined"
-            class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-border text-muted-foreground transition-colors hover:bg-accent/10 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-active:border-primary data-active:text-primary"
+            class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-border text-muted-foreground transition-colors hover:bg-accent/10 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-active:border-primary data-active:text-primary sm:h-9 sm:w-9"
             @click="openPickerFromButton"
           >
             <Crosshair class="h-4 w-4 shrink-0" />
@@ -604,13 +604,13 @@ defineExpose({ focus })
         </UiPopoverContent>
       </UiPopover>
 
-      <div ref="editorWrapperRef" class="relative flex-1">
+      <div ref="editorWrapperRef" class="relative min-w-0 flex-1">
         <div
-          class="relative min-h-9 w-full rounded-xl border bg-background ring-offset-background transition-colors focus-within:ring-2 focus-within:ring-ring"
+          class="relative min-h-8 w-full rounded-xl border bg-background ring-offset-background transition-colors focus-within:ring-2 focus-within:ring-ring sm:min-h-9"
         >
           <div
             v-if="!composerHasContent && !mentionPlaceholderId"
-            class="pointer-events-none absolute inset-x-3 top-2 text-sm text-muted-foreground"
+            class="pointer-events-none absolute inset-x-2.5 top-1.5 text-sm text-muted-foreground sm:inset-x-3 sm:top-2"
           >
             {{ placeholder ?? 'Ask a question...' }}
           </div>
@@ -623,7 +623,7 @@ defineExpose({ focus })
             :aria-disabled="disabled ? 'true' : 'false'"
             :contenteditable="disabled ? 'false' : 'true'"
             :class="disabled ? 'pointer-events-none opacity-50' : ''"
-            class="max-h-24 min-h-9 w-full overflow-y-auto whitespace-pre-wrap break-words px-3 py-2 text-sm text-foreground outline-none"
+            class="max-h-24 min-h-8 w-full overflow-y-auto whitespace-pre-wrap break-words px-2.5 py-1.5 text-sm text-foreground outline-none sm:min-h-9 sm:px-3 sm:py-2"
             @input="handleEditorInput"
             @keydown="handleEditorKeydown"
             @paste="handleEditorPaste"
@@ -635,7 +635,7 @@ defineExpose({ focus })
       <button
         data-testid="chat-send-button"
         :disabled="!canSubmit"
-        class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground hover:bg-primary/90 disabled:pointer-events-none disabled:opacity-50"
+        class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground hover:bg-primary/90 disabled:pointer-events-none disabled:opacity-50 sm:h-9 sm:w-9"
         @click="handleSubmit"
       >
         <Send class="h-4 w-4" />

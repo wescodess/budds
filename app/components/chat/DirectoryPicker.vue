@@ -19,6 +19,7 @@ const emit = defineEmits<{
   ]
 }>()
 
+const convex = useConvex()
 const expanded = ref<Set<string>>(new Set())
 const search = ref('')
 const searchInputRef = ref<HTMLInputElement | null>(null)
@@ -65,14 +66,25 @@ function focusSearch() {
   nextTick(() => searchInputRef.value?.focus())
 }
 
-function handleFolderPick(folder: ScopeFolderSummary) {
-  props.scope.selectFolder(folder)
-  emit('select', { kind: 'folder', id: folder.id, label: folder.name })
+async function resolveFolderSelection(folder: ScopeFolderSummary) {
+  const existing = props.scope.folderMeta.value.get(folder.id as unknown as string)
+  if (existing?.descendantFileIds?.length) return existing
+
+  const result = await convex.query(api.folders.resolveScope, { folderIds: [folder.id] })
+  return {
+    ...folder,
+    descendantFileIds: (result.documentIds ?? []) as Id<'documents'>[],
+  } satisfies ScopeFolderSummary
+}
+
+async function handleFolderPick(folder: ScopeFolderSummary) {
+  const selected = props.scope.toggleFolder(await resolveFolderSelection(folder))
+  if (selected) emit('select', { kind: 'folder', id: folder.id, label: folder.name })
 }
 
 function handleFilePick(file: ScopeFileSummary) {
-  props.scope.selectFile(file)
-  emit('select', { kind: 'file', id: file.id, label: file.filename })
+  const selected = props.scope.toggleFile(file)
+  if (selected) emit('select', { kind: 'file', id: file.id, label: file.filename })
 }
 
 watch(
@@ -144,7 +156,7 @@ defineExpose({ focusSearch })
           kind="folder"
           :label="folder.name"
           :badge="`${folder.descendantFileCount} file${folder.descendantFileCount === 1 ? '' : 's'}`"
-          :state="props.scope.isFolderSelected(folder.id) ? 'on' : 'off'"
+          :state="props.scope.selectionStateForFolder(folder)"
           @toggle="handleFolderPick(folder)"
         />
 
@@ -174,6 +186,7 @@ defineExpose({ focusSearch })
         :depth="0"
         :scope="props.scope"
         :expanded="expanded"
+        :inherited-selected="false"
         @toggle-expand="toggleExpand"
         @pick-folder="handleFolderPick"
         @pick-file="handleFilePick"

@@ -10,6 +10,7 @@ export interface ScopeFolderSummary {
   fileCount: number
   descendantFileCount: number
   hasChildren: boolean
+  descendantFileIds?: Id<'documents'>[]
 }
 
 export interface ScopeFileSummary {
@@ -32,6 +33,19 @@ export function useReferenceScope() {
 
   const hasSelection = computed(() => folderIds.value.size > 0 || fileIds.value.size > 0)
   const totalFolderCount = computed(() => folderIds.value.size)
+  const coveredFileIds = computed(() => {
+    const covered = new Set<string>()
+    for (const id of folderIds.value) {
+      const meta = folderMeta.value.get(id as unknown as string)
+      for (const fileId of meta?.descendantFileIds ?? []) {
+        covered.add(fileId as unknown as string)
+      }
+    }
+    for (const id of fileIds.value) {
+      covered.add(id as unknown as string)
+    }
+    return covered
+  })
 
   const totalFileCount = computed(() => {
     let count = 0
@@ -57,7 +71,13 @@ export function useReferenceScope() {
   })
 
   function rememberFolder(folder: ScopeFolderSummary) {
-    folderMeta.value.set(folder.id as unknown as string, folder)
+    const key = folder.id as unknown as string
+    const current = folderMeta.value.get(key)
+    folderMeta.value.set(key, {
+      ...current,
+      ...folder,
+      descendantFileIds: folder.descendantFileIds ?? current?.descendantFileIds,
+    })
   }
 
   function rememberFile(file: ScopeFileSummary) {
@@ -69,47 +89,76 @@ export function useReferenceScope() {
   }
 
   function isFileSelected(id: Id<'documents'>): boolean {
-    return fileIds.value.has(id)
+    return coveredFileIds.value.has(id as unknown as string)
   }
 
-  function folderState(
-    id: Id<'folders'>,
-    children: { subfolders: Id<'folders'>[]; files: Id<'documents'>[] },
-  ): TriState {
-    if (folderIds.value.has(id)) return 'on'
-    const total = children.subfolders.length + children.files.length
-    if (total === 0) return 'off'
-    let selected = 0
-    let partial = 0
-    for (const sid of children.subfolders) {
-      if (folderIds.value.has(sid)) selected++
+  function selectionStateForFolder(folder: ScopeFolderSummary): TriState {
+    const remembered = folderMeta.value.get(folder.id as unknown as string)
+    const descendantIds = (folder.descendantFileIds ?? remembered?.descendantFileIds ?? [])
+      .map(id => id as unknown as string)
+
+    if (descendantIds.length === 0) {
+      return folderIds.value.has(folder.id) ? 'on' : 'off'
     }
-    for (const fid of children.files) {
-      if (fileIds.value.has(fid)) selected++
+
+    let selectedCount = 0
+    for (const fileId of descendantIds) {
+      if (coveredFileIds.value.has(fileId)) selectedCount++
     }
-    if (selected === 0 && partial === 0) return 'off'
-    if (selected === total) return 'indeterminate'
+
+    if (selectedCount === 0) return 'off'
+    if (selectedCount === descendantIds.length) return 'on'
     return 'indeterminate'
+  }
+
+  function normalizeCoverage(coverage: Set<string>) {
+    const nextFolderIds = new Set<Id<'folders'>>()
+    const remainingFileIds = new Set<string>(coverage)
+    const folders = [...folderMeta.value.values()]
+      .filter(folder => (folder.descendantFileIds?.length ?? 0) > 0)
+      .sort((a, b) => (b.descendantFileIds?.length ?? 0) - (a.descendantFileIds?.length ?? 0))
+
+    for (const folder of folders) {
+      const descendantIds = (folder.descendantFileIds ?? []).map(id => id as unknown as string)
+      if (descendantIds.length === 0) continue
+      if (!descendantIds.every(id => remainingFileIds.has(id))) continue
+
+      nextFolderIds.add(folder.id)
+      for (const fileId of descendantIds) {
+        remainingFileIds.delete(fileId)
+      }
+    }
+
+    folderIds.value = nextFolderIds
+    fileIds.value = new Set([...remainingFileIds].map(id => id as unknown as Id<'documents'>))
   }
 
   function toggleFolder(folder: ScopeFolderSummary) {
     rememberFolder(folder)
-    if (folderIds.value.has(folder.id)) {
-      folderIds.value.delete(folder.id)
-    } else {
-      folderIds.value.add(folder.id)
+    const descendantIds = (folder.descendantFileIds ?? []).map(id => id as unknown as string)
+    if (descendantIds.length === 0) return false
+
+    const nextCoverage = new Set(coveredFileIds.value)
+    const isFullySelected = descendantIds.every(id => nextCoverage.has(id))
+
+    for (const fileId of descendantIds) {
+      if (isFullySelected) nextCoverage.delete(fileId)
+      else nextCoverage.add(fileId)
     }
-    folderIds.value = new Set(folderIds.value)
+
+    normalizeCoverage(nextCoverage)
+    return !isFullySelected
   }
 
   function toggleFile(file: ScopeFileSummary) {
     rememberFile(file)
-    if (fileIds.value.has(file.id)) {
-      fileIds.value.delete(file.id)
-    } else {
-      fileIds.value.add(file.id)
-    }
-    fileIds.value = new Set(fileIds.value)
+    const fileKey = file.id as unknown as string
+    const nextCoverage = new Set(coveredFileIds.value)
+    const isSelected = nextCoverage.has(fileKey)
+    if (isSelected) nextCoverage.delete(fileKey)
+    else nextCoverage.add(fileKey)
+    normalizeCoverage(nextCoverage)
+    return !isSelected
   }
 
   function selectFolder(folder: ScopeFolderSummary) {
@@ -130,11 +179,16 @@ export function useReferenceScope() {
 
   function removeChip(chip: ScopeChip) {
     if (chip.kind === 'folder') {
-      folderIds.value.delete(chip.id as unknown as Id<'folders'>)
-      folderIds.value = new Set(folderIds.value)
+      const folder = folderMeta.value.get(chip.id)
+      const nextCoverage = new Set(coveredFileIds.value)
+      for (const fileId of folder?.descendantFileIds ?? []) {
+        nextCoverage.delete(fileId as unknown as string)
+      }
+      normalizeCoverage(nextCoverage)
     } else {
-      fileIds.value.delete(chip.id as unknown as Id<'documents'>)
-      fileIds.value = new Set(fileIds.value)
+      const nextCoverage = new Set(coveredFileIds.value)
+      nextCoverage.delete(chip.id)
+      normalizeCoverage(nextCoverage)
     }
   }
 
@@ -162,7 +216,7 @@ export function useReferenceScope() {
     chips,
     isFolderSelected,
     isFileSelected,
-    folderState,
+    selectionStateForFolder,
     toggleFolder,
     toggleFile,
     selectFolder,

@@ -59,7 +59,7 @@ const panelRef = ref<HTMLElement | null>(null)
 onKeyStroke('Escape', () => emit('close'))
 
 const drawerShellStyle = computed<Record<string, string>>(() => ({
-  '--drawer-target-width': props.fullWidth ? '100vw' : 'min(55vw, 720px)',
+  '--drawer-target-width': props.fullWidth ? '90vw' : 'min(55vw, 90vw, 720px)',
   left: props.fullWidth ? '0px' : `${props.railWidth}px`,
   width: props.open ? 'var(--drawer-target-width)' : '0px',
 }))
@@ -362,8 +362,29 @@ async function onFiles(e: Event) {
           <p class="text-[10px] uppercase tracking-widest text-muted-foreground">
             {{ section === 'members' ? 'Collaboration' : 'Folder hierarchy' }}
           </p>
-          <h2 class="truncate text-lg font-semibold text-foreground">
-            {{ section === 'members' ? 'Members' : (folder?.name ?? 'My folder') }}
+          <div
+            v-if="section === 'knowledge'"
+            class="mt-1 flex min-w-0 items-center truncate text-xs text-muted-foreground"
+          >
+            <template v-for="(f, i) in breadcrumb" :key="f._id">
+              <span v-if="i > 0" class="mx-1 shrink-0">›</span>
+              <button
+                type="button"
+                :disabled="f._id === folderId"
+                :class="[
+                  'truncate rounded px-1 transition',
+                  f._id === folderId
+                    ? 'cursor-default text-lg font-semibold text-foreground'
+                    : 'hover:bg-muted hover:text-foreground',
+                ]"
+                @click="selectFolder(f._id)"
+              >
+                {{ f.name }}
+              </button>
+            </template>
+          </div>
+          <h2 v-if="section === 'members'" class="truncate text-lg font-semibold text-foreground">
+            Members
           </h2>
         </div>
         <div class="flex items-center gap-2">
@@ -451,25 +472,7 @@ async function onFiles(e: Event) {
 
       <section class="flex items-center justify-between gap-2 px-5 pb-2 text-xs">
         <div class="flex min-w-0 items-center gap-1 text-muted-foreground">
-          <span class="shrink-0">Files in</span>
-          <div class="flex min-w-0 items-center truncate">
-            <template v-for="(f, i) in breadcrumb" :key="f._id">
-              <span v-if="i > 0" class="mx-1 shrink-0">›</span>
-              <button
-                type="button"
-                :disabled="f._id === folderId"
-                :class="[
-                  'truncate rounded px-1 transition',
-                  f._id === folderId
-                    ? 'font-medium text-primary cursor-default'
-                    : 'hover:bg-muted hover:text-foreground',
-                ]"
-                @click="selectFolder(f._id)"
-              >
-                {{ f.name }}
-              </button>
-            </template>
-          </div>
+          <span class="shrink-0">Files</span>
           <span class="ml-1.5 shrink-0 rounded-full bg-muted/60 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
             {{ directCountByFolder.get(folderId as unknown as string) ?? 0 }}
           </span>

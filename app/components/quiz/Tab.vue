@@ -103,7 +103,7 @@ async function handleDeleteConfirm(quizId: string) {
 </script>
 
 <template>
-  <div data-testid="quiz-tab-content">
+  <div class="flex h-full flex-col overflow-y-auto p-6" data-testid="quiz-tab-content">
     <span class="sr-only" aria-live="polite" data-testid="quiz-tab-live">{{ liveMessage }}</span>
 
     <template v-if="editingQuizId">
