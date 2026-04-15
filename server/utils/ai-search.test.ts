@@ -75,6 +75,71 @@ describe('searchDocuments', () => {
     })
   })
 
+  test('maps chunks when AI Search returns top-level camelCase attributes from ingestion flow', async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockCfResponse([
+      {
+        id: 'chunk-attrs-1',
+        score: 0.92,
+        text: 'Indexed passage from ingestion.',
+        attributes: {
+          userId: 'https://cautious-elephant-39.convex.site|user123',
+          folderId: 'folderABC',
+          documentId: 'docXYZ',
+          filename: 'lecture.pdf',
+        },
+      },
+    ]))
+
+    const result = await searchDocuments({
+      query: 'test',
+      userId: 'https://cautious-elephant-39.convex.site|user123',
+      folderId: 'folderABC',
+    })
+
+    expect(result.data).toHaveLength(1)
+    expect(result.data[0]).toMatchObject({
+      id: 'chunk-attrs-1',
+      content: 'Indexed passage from ingestion.',
+      attributes: {
+        filename: 'lecture.pdf',
+        folderId: 'folderABC',
+        documentId: 'docXYZ',
+        userId: 'https://cautious-elephant-39.convex.site|user123',
+      },
+    })
+  })
+
+  test('maps chunks when metadata keys are camelCase instead of lowercase', async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockCfResponse([
+      {
+        id: 'chunk-meta-camel',
+        score: 0.88,
+        text: 'Camel metadata passage.',
+        item: {
+          metadata: {
+            userId: 'user_123',
+            folderId: 'f1',
+            documentId: 'd1',
+            filename: 'camel.pdf',
+          },
+        },
+      },
+    ]))
+
+    const result = await searchDocuments({ query: 'test', userId: 'user_123', folderId: 'f1' })
+
+    expect(result.data).toHaveLength(1)
+    expect(result.data[0]).toMatchObject({
+      id: 'chunk-meta-camel',
+      attributes: {
+        filename: 'camel.pdf',
+        folderId: 'f1',
+        documentId: 'd1',
+        userId: 'user_123',
+      },
+    })
+  })
+
   test('filters out chunks that do not belong to the requesting user', async () => {
     vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockCfResponse([
       { id: 'a', score: 0.9, text: 'mine', item: { metadata: { userid: 'user_123', folderid: 'f1', documentid: 'd1', filename: 'a.txt' } } },

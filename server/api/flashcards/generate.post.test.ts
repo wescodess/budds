@@ -60,6 +60,13 @@ describe('POST /api/flashcards/generate', () => {
     vi.mocked(globalThis.searchDocuments as any).mockReset()
     vi.mocked(globalThis.generateCompletion as any).mockReset()
     vi.mocked(globalThis.getConvexTokenIdentifier as any).mockReturnValue('https://auth.example.com|user_test_123')
+    vi.mocked(globalThis.useRuntimeConfig as any).mockReturnValue({
+      public: {
+        convex: {
+          url: 'https://test.convex.site',
+        },
+      },
+    })
     mockMutation.mockReset()
   })
 
