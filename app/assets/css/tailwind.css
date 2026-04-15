@@ -250,6 +250,12 @@
     color: inherit;
     stroke: currentColor;
   }
+  svg.lucide.fill-current {
+    fill: currentColor;
+  }
+  svg.lucide[class*='fill-'] > * {
+    fill: inherit;
+  }
   body {
     @apply bg-background text-foreground;
     font-family: 'DM Sans', sans-serif;

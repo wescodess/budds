@@ -904,7 +904,7 @@ async function handleImportLink(url: string) {
         <Sheet v-if="!isDesktop" :open="sourcePanelOpen" @update:open="sourcePanelOpen = $event">
           <SheetContent
             side="right"
-            class="w-[min(26rem,92vw)] gap-0 p-0 sm:max-w-none [&>button]:hidden"
+            class="w-[85vw] max-w-[85vw] gap-0 p-0 [&>button]:hidden"
           >
             <SheetHeader class="sr-only">
               <SheetTitle>Sources</SheetTitle>

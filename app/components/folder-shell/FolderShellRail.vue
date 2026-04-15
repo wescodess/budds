@@ -155,8 +155,8 @@ const railInlineStyle = computed(() => {
   if (props.mobileExpanded) {
     return {
       width: 'fit-content',
-      minWidth: 'min(15rem, 90vw)',
-      maxWidth: '90vw',
+      minWidth: 'min(15rem, 85vw)',
+      maxWidth: '15rem',
     }
   }
 
