@@ -9,6 +9,7 @@ const props = defineProps<{
   folderId: Id<'folders'>
   scope: ReturnType<typeof useReferenceScope>
   autoFocusSearch?: boolean
+  presentation?: 'popover' | 'drawer'
 }>()
 
 const emit = defineEmits<{
@@ -53,6 +54,7 @@ const matchingFiles = computed(() => {
 })
 const isSearching = computed(() => search.value.trim().length > 0)
 const hasSearchResults = computed(() => matchingFolders.value.length > 0 || matchingFiles.value.length > 0)
+const isDrawer = computed(() => props.presentation === 'drawer')
 
 function toggleExpand(id: Id<'folders'>) {
   const key = id as unknown as string
@@ -101,7 +103,12 @@ defineExpose({ focusSearch })
 <template>
   <div
     data-testid="directory-picker"
-    class="flex w-[360px] flex-col overflow-hidden rounded-xl border bg-card text-sm shadow-lg"
+    :class="[
+      'flex flex-col overflow-hidden bg-card text-sm',
+      isDrawer
+        ? 'w-full rounded-none border-0 shadow-none'
+        : 'w-[360px] rounded-xl border shadow-lg',
+    ]"
   >
     <div class="flex items-center justify-between border-b px-4 py-3">
       <div class="flex flex-col">
@@ -140,12 +147,18 @@ defineExpose({ focusSearch })
           v-model="search"
           type="search"
           placeholder="Search this directory"
+          inputmode="search"
+          enterkeyhint="search"
+          autocapitalize="none"
+          autocorrect="off"
+          spellcheck="false"
+          autocomplete="off"
           class="w-full bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
         />
       </label>
     </div>
 
-    <div class="max-h-80 flex-1 overflow-y-auto py-1">
+    <div :class="[isDrawer ? 'max-h-[calc(var(--mobile-vh,100dvh)-14rem)]' : 'max-h-80', 'keyboard-scroll-area flex-1 overflow-y-auto py-1']">
       <template v-if="isSearching">
         <div v-if="matchingFolders.length > 0" class="px-2 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
           Folders

@@ -187,7 +187,7 @@ function handleBack() {
 </script>
 
 <template>
-  <div data-testid="flashcards-editor">
+  <div data-testid="flashcards-editor" data-gesture-owner="flashcards-editor">
     <div v-if="state === 'loading'" class="space-y-3" data-testid="flashcards-editor-loading">
       <UiSkeleton v-for="i in 3" :key="i" class="h-32 w-full rounded-md animate-pulse" />
     </div>
@@ -260,6 +260,10 @@ function handleBack() {
               <textarea
                 :value="drafts[card._id]!.front"
                 rows="2"
+                autocapitalize="sentences"
+                autocorrect="on"
+                spellcheck="true"
+                enterkeyhint="next"
                 class="mt-1 flex min-h-[60px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 data-testid="flashcards-editor-card-front"
                 @input="setDraftField(card._id, { front: ($event.target as HTMLTextAreaElement).value })"
@@ -270,6 +274,10 @@ function handleBack() {
               <textarea
                 :value="drafts[card._id]!.back"
                 rows="3"
+                autocapitalize="sentences"
+                autocorrect="on"
+                spellcheck="true"
+                enterkeyhint="done"
                 class="mt-1 flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 data-testid="flashcards-editor-card-back"
                 @input="setDraftField(card._id, { back: ($event.target as HTMLTextAreaElement).value })"

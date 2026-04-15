@@ -8,6 +8,7 @@ import { toast } from 'vue-sonner'
 import { DEFAULT_COLOR_KEY, FOLDER_COLOR_KEYS, getColor } from '~~/convex/folderPalette'
 import { DEFAULT_ICON_KEY, FOLDER_ICON_KEYS } from '~~/convex/folderIcons'
 import type { Doc, Id } from '~~/convex/_generated/dataModel'
+import { useGestureGuards } from '~/composables/useGestureGuards'
 
 type Mode = 'create' | 'edit'
 
@@ -62,6 +63,7 @@ defineExpose({ getFormValues: () => ({ ...values }) })
 const showDeleteConfirm = ref(false)
 const isDeleting = ref(false)
 const nameInputRef = ref<HTMLInputElement | null>(null)
+const { isTouchLike } = useGestureGuards()
 
 const selectedColorHex = computed(() => getColor(values.color || DEFAULT_COLOR_KEY).hex)
 
@@ -70,9 +72,11 @@ watch(
   (isOpen, wasOpen) => {
     if (isOpen && !wasOpen) {
       resetForm({ values: computeInitialValues() })
-      nextTick(() => {
-        nameInputRef.value?.focus()
-      })
+      if (!isTouchLike.value) {
+        nextTick(() => {
+          nameInputRef.value?.focus()
+        })
+      }
     }
   },
 )
@@ -185,6 +189,8 @@ function handleIcon(value: string) {
             data-slot="input"
             data-testid="folder-name-input"
             placeholder="Quantum Physics"
+            autocapitalize="words"
+            enterkeyhint="next"
             :aria-invalid="!!errors.name"
             :class="[
               'file:text-foreground placeholder:text-muted-foreground selection:bg-primary selection:text-primary-foreground dark:bg-input/30 border-input h-9 w-full min-w-0 rounded-xl border bg-transparent px-3 py-1 text-base shadow-xs transition-[color,box-shadow] outline-none file:inline-flex file:h-7 file:border-0 file:bg-transparent file:text-sm file:font-medium disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 md:text-sm',
@@ -206,6 +212,10 @@ function handleIcon(value: string) {
             data-testid="folder-description-input"
             placeholder="What's inside?"
             rows="2"
+            autocapitalize="sentences"
+            autocorrect="on"
+            spellcheck="true"
+            enterkeyhint="done"
             :aria-invalid="!!errors.description"
             :class="[
               'placeholder:text-muted-foreground border-input field-sizing-content min-h-16 w-full rounded-xl border bg-transparent px-3 py-2 text-base shadow-xs outline-none transition-[color,box-shadow] disabled:cursor-not-allowed disabled:opacity-50 md:text-sm dark:bg-input/30',

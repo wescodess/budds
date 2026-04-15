@@ -221,7 +221,7 @@ function handleBack() {
 </script>
 
 <template>
-  <div data-testid="quiz-editor">
+  <div data-testid="quiz-editor" data-gesture-owner="quiz-editor">
     <div v-if="state === 'loading'" class="space-y-3" data-testid="quiz-editor-loading">
       <UiSkeleton v-for="i in 3" :key="i" class="h-32 w-full rounded-md animate-pulse" />
     </div>
@@ -274,6 +274,10 @@ function handleBack() {
               <textarea
                 :value="drafts[q._id]!.question"
                 rows="2"
+                autocapitalize="sentences"
+                autocorrect="on"
+                spellcheck="true"
+                :enterkeyhint="q.type === 'multiple-choice' ? 'next' : 'done'"
                 class="mt-1 flex min-h-[60px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 data-testid="quiz-editor-question-text"
                 @input="setDraftField(q._id, { question: ($event.target as HTMLTextAreaElement).value })"
@@ -298,6 +302,10 @@ function handleBack() {
                   <input
                     type="text"
                     :value="opt"
+                    autocapitalize="sentences"
+                    autocorrect="on"
+                    spellcheck="true"
+                    enterkeyhint="next"
                     class="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                     data-testid="quiz-editor-question-option"
                     @input="setOptionText(q._id, idx, ($event.target as HTMLInputElement).value)"
@@ -329,6 +337,10 @@ function handleBack() {
               <textarea
                 :value="drafts[q._id]!.correctAnswer"
                 rows="2"
+                autocapitalize="sentences"
+                autocorrect="on"
+                spellcheck="true"
+                enterkeyhint="done"
                 class="mt-1 flex min-h-[60px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 data-testid="quiz-editor-question-correct-free"
                 @input="setCorrectAnswerFree(q._id, ($event.target as HTMLTextAreaElement).value)"

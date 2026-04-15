@@ -3,6 +3,7 @@ import { AlertCircle, Check, Crosshair, LoaderCircle, Plus, Send, Link as LinkIc
 import type { Id } from '../../../convex/_generated/dataModel'
 import type { AttachmentStatus } from '~/composables/useDocuments'
 import type { ScopeChip, useReferenceScope } from '~/composables/useReferenceScope'
+import { useGestureGuards } from '~/composables/useGestureGuards'
 
 type PickerSelection =
   | { kind: 'folder'; id: Id<'folders'>; label: string }
@@ -40,6 +41,7 @@ const mentionPlaceholderId = ref<string | null>(null)
 const composerSubmitText = ref('')
 const composerHasContent = ref(false)
 const mentionCounts = ref(new Map<string, number>())
+const { isTouchLike } = useGestureGuards()
 
 let mentionPlaceholderSerial = 0
 
@@ -70,6 +72,8 @@ const mentionAnchorStyle = computed(() =>
       }
     : undefined,
 )
+const pickerPresentation = computed<'popover' | 'drawer'>(() => isTouchLike.value ? 'drawer' : 'popover')
+const shouldAutoFocusScopeSearch = computed(() => !isTouchLike.value || pickerMode.value === 'mention')
 const attachmentIndicatorClass = computed(() => {
   if (resolvedAttachmentStatus.value.state === 'indexed') {
     return 'border-emerald-500/40 text-emerald-600 hover:bg-emerald-500/10 hover:text-emerald-700'
@@ -520,7 +524,7 @@ defineExpose({ focus })
   <div class="border-t px-3 py-3 sm:p-4">
     <ChatReferenceScopeStrip v-if="props.scope" :scope="props.scope" />
 
-    <div class="relative flex items-end gap-1.5 sm:gap-2">
+    <div class="relative flex items-end gap-1.5 sm:gap-2" data-gesture-owner="chat-input">
       <UiDropdownMenu v-if="props.folderId">
         <UiDropdownMenuTrigger as-child>
           <button
@@ -572,37 +576,68 @@ defineExpose({ focus })
         @change="handleFilesSelected"
       >
 
-      <UiPopover v-if="showScopePicker" v-model:open="pickerOpen">
-        <UiPopoverAnchor v-if="pickerMode === 'mention' && mentionAnchorStyle" as-child>
-          <span
-            class="pointer-events-none absolute z-10 block h-px w-px"
-            :style="mentionAnchorStyle"
-          />
-        </UiPopoverAnchor>
+      <template v-if="showScopePicker && pickerPresentation === 'popover'">
+        <UiPopover v-model:open="pickerOpen">
+          <UiPopoverAnchor v-if="pickerMode === 'mention' && mentionAnchorStyle" as-child>
+            <span
+              class="pointer-events-none absolute z-10 block h-px w-px"
+              :style="mentionAnchorStyle"
+            />
+          </UiPopoverAnchor>
 
-        <UiPopoverTrigger as-child>
-          <button
-            type="button"
-            :aria-label="hasScopeSelection ? 'Update directory references' : 'Open directory references'"
-            :data-active="hasScopeSelection || undefined"
-            class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-border text-muted-foreground transition-colors hover:bg-accent/10 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-active:border-primary data-active:text-primary sm:h-9 sm:w-9"
-            @click="openPickerFromButton"
-          >
-            <Crosshair class="h-4 w-4 shrink-0" />
-          </button>
-        </UiPopoverTrigger>
+          <UiPopoverTrigger as-child>
+            <button
+              type="button"
+              :aria-label="hasScopeSelection ? 'Update directory references' : 'Open directory references'"
+              :data-active="hasScopeSelection || undefined"
+              class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-border text-muted-foreground transition-colors hover:bg-accent/10 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-active:border-primary data-active:text-primary sm:h-9 sm:w-9"
+              @click="openPickerFromButton"
+            >
+              <Crosshair class="h-4 w-4 shrink-0" />
+            </button>
+          </UiPopoverTrigger>
 
-        <UiPopoverContent side="top" align="start" :side-offset="10" class="w-auto border-none bg-transparent p-0 shadow-none">
-          <ChatDirectoryPicker
-            ref="directoryPickerRef"
-            :folder-id="resolvedFolderId"
-            :scope="resolvedScope"
-            auto-focus-search
-            @select="handlePickerSelect"
-            @close="pickerOpen = false"
-          />
-        </UiPopoverContent>
-      </UiPopover>
+          <UiPopoverContent side="top" align="start" :side-offset="10" class="w-auto border-none bg-transparent p-0 shadow-none">
+            <ChatDirectoryPicker
+              ref="directoryPickerRef"
+              :folder-id="resolvedFolderId"
+              :scope="resolvedScope"
+              :presentation="pickerPresentation"
+              :auto-focus-search="shouldAutoFocusScopeSearch"
+              @select="handlePickerSelect"
+              @close="pickerOpen = false"
+            />
+          </UiPopoverContent>
+        </UiPopover>
+      </template>
+
+      <template v-else-if="showScopePicker">
+        <UiDrawer v-model:open="pickerOpen">
+          <UiDrawerTrigger as-child>
+            <button
+              type="button"
+              :aria-label="hasScopeSelection ? 'Update directory references' : 'Open directory references'"
+              :data-active="hasScopeSelection || undefined"
+              class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-border text-muted-foreground transition-colors hover:bg-accent/10 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-active:border-primary data-active:text-primary sm:h-9 sm:w-9"
+              @click="openPickerFromButton"
+            >
+              <Crosshair class="h-4 w-4 shrink-0" />
+            </button>
+          </UiDrawerTrigger>
+
+          <UiDrawerContent data-testid="directory-picker-drawer" class="gap-0 p-0">
+            <ChatDirectoryPicker
+              ref="directoryPickerRef"
+              :folder-id="resolvedFolderId"
+              :scope="resolvedScope"
+              :presentation="pickerPresentation"
+              :auto-focus-search="shouldAutoFocusScopeSearch"
+              @select="handlePickerSelect"
+              @close="pickerOpen = false"
+            />
+          </UiDrawerContent>
+        </UiDrawer>
+      </template>
 
       <div ref="editorWrapperRef" class="relative min-w-0 flex-1">
         <div
@@ -623,6 +658,11 @@ defineExpose({ focus })
             :aria-disabled="disabled ? 'true' : 'false'"
             :contenteditable="disabled ? 'false' : 'true'"
             :class="disabled ? 'pointer-events-none opacity-50' : ''"
+            inputmode="text"
+            enterkeyhint="send"
+            autocapitalize="sentences"
+            autocorrect="on"
+            spellcheck="true"
             class="max-h-24 min-h-8 w-full overflow-y-auto whitespace-pre-wrap break-words px-2.5 py-1.5 text-sm text-foreground outline-none sm:min-h-9 sm:px-3 sm:py-2"
             @input="handleEditorInput"
             @keydown="handleEditorKeydown"
@@ -656,6 +696,12 @@ defineExpose({ focus })
             v-model="linkUrl"
             type="url"
             placeholder="https://example.com/lecture-notes.pdf"
+            inputmode="url"
+            enterkeyhint="done"
+            autocapitalize="none"
+            autocorrect="off"
+            spellcheck="false"
+            autocomplete="url"
             class="w-full rounded-xl border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             @keydown.enter.prevent="handleImportLink"
           >

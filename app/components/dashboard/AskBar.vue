@@ -37,6 +37,11 @@ function onKeydown(e: KeyboardEvent) {
         type="text"
         aria-label="Ask Budds anything"
         placeholder="Ask Budds anything…"
+        inputmode="text"
+        enterkeyhint="send"
+        autocapitalize="sentences"
+        autocorrect="on"
+        spellcheck="true"
         class="h-8 flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
         @keydown="onKeydown"
       />

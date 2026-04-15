@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { X, FolderPlus, Search, Plus, Link as LinkIcon, Upload, Pencil } from 'lucide-vue-next'
-import { onKeyStroke } from '@vueuse/core'
+import { onKeyStroke, usePointerSwipe } from '@vueuse/core'
 import { api } from '#convex/api'
 import type { Doc, Id } from '~~/convex/_generated/dataModel'
+import { PANEL_DISMISS_THRESHOLD_PX, useGestureGuards } from '~/composables/useGestureGuards'
 
 defineOptions({ name: 'FolderShellHierarchyDrawer' })
 
@@ -57,6 +58,24 @@ const totalCountByFolder = computed(() => {
 
 const panelRef = ref<HTMLElement | null>(null)
 onKeyStroke('Escape', () => emit('close'))
+const { shouldStartHorizontalGesture } = useGestureGuards()
+const allowDismissSwipe = ref(false)
+
+let panelSwipe: ReturnType<typeof usePointerSwipe>
+panelSwipe = usePointerSwipe(panelRef, {
+  threshold: 24,
+  pointerTypes: ['touch', 'pen'],
+  onSwipeStart(event) {
+    allowDismissSwipe.value = props.fullWidth && shouldStartHorizontalGesture(event)
+  },
+  onSwipeEnd() {
+    if (allowDismissSwipe.value && props.fullWidth) {
+      const deltaX = panelSwipe.posEnd.x - panelSwipe.posStart.x
+      if (deltaX <= -PANEL_DISMISS_THRESHOLD_PX) emit('close')
+    }
+    allowDismissSwipe.value = false
+  },
+})
 
 const drawerShellStyle = computed<Record<string, string>>(() => ({
   '--drawer-target-width': props.fullWidth ? '90vw' : 'min(55vw, 90vw, 720px)',
@@ -149,7 +168,9 @@ function toggleDocSelection(id: string) {
 }
 
 function selectAllVisibleDocs() {
-  selectedDocIds.value = filteredDocs.value.map(doc => String(doc._id))
+  selectedDocIds.value = filteredDocs.value
+    .filter(doc => doc.status !== 'pending' && doc.status !== 'failed')
+    .map(doc => String(doc._id))
 }
 
 watch(
@@ -428,8 +449,14 @@ async function onFiles(e: Event) {
           <Search class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <input
             v-model="search"
-            type="text"
+            type="search"
             placeholder="Search folders & files…"
+            inputmode="search"
+            enterkeyhint="search"
+            autocapitalize="none"
+            autocorrect="off"
+            spellcheck="false"
+            autocomplete="off"
             class="h-10 w-full rounded-lg border border-border/60 bg-background/50 pl-9 pr-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary/60 focus:outline-none focus:ring-1 focus:ring-primary/40"
           />
         </div>
