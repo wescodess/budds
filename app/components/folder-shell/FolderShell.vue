@@ -145,6 +145,16 @@ function collapseMobileRailToCompact() {
   mobileRailExpanded.value = false
 }
 
+function hideMobileRail() {
+  if (isDesktop.value) return
+  mobileRailExpanded.value = false
+  mobileRailHidden.value = true
+}
+
+defineExpose({
+  hideMobileRail,
+})
+
 watch(railHidden, (hidden) => {
   if (hidden) mobileRailExpanded.value = false
 })
@@ -304,7 +314,7 @@ provide('folderShellThemeStyle', themeStyle)
 </script>
 
 <template>
-  <div class="relative flex h-screen overflow-hidden bg-background text-foreground transition-colors duration-300" :style="themeStyle">
+  <div class="relative flex h-svh min-h-svh overflow-hidden bg-background text-foreground transition-colors duration-300" :style="themeStyle">
     <FolderShellRail
       :folder="folder"
       :folder-id="folderId"
