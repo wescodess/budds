@@ -14,6 +14,8 @@ const props = defineProps<{
   createdAt: number
   failureReason?: string
   variant?: 'panel' | 'list'
+  selectable?: boolean
+  selected?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -22,6 +24,7 @@ const emit = defineEmits<{
   move: [id: string]
   download: [id: string]
   delete: [id: string]
+  toggleSelect: [id: string]
 }>()
 
 const ext = computed(() => {
@@ -56,23 +59,49 @@ const dateLabel = computed(() => {
 
 const id = computed(() => props.documentId as unknown as string)
 const isList = computed(() => props.variant === 'list')
+
+function toggleSelection() {
+  emit('toggleSelect', id.value)
+}
 </script>
 
 <template>
   <div
     v-if="!isList"
-    class="group flex items-center gap-3 rounded-lg px-2 py-2 transition hover:bg-muted/50"
+    :class="[
+      'group flex items-center gap-3 rounded-lg px-2 py-2 transition',
+      selected ? 'bg-primary/10 ring-1 ring-primary/20' : 'hover:bg-muted/50',
+    ]"
     :data-testid="`file-row-${id}`"
   >
+    <UiCheckbox
+      v-if="selectable"
+      :model-value="selected"
+      :aria-label="`Select ${filename}`"
+      class="mt-0.5"
+      :data-testid="`file-row-select-${id}`"
+      @click.stop
+      @update:model-value="toggleSelection"
+    />
     <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
       <component :is="icon" class="h-4 w-4" />
     </div>
-    <div class="min-w-0 flex-1">
+    <button
+      v-if="selectable"
+      type="button"
+      class="min-w-0 flex-1 text-left"
+      @click="toggleSelection"
+    >
+      <p class="truncate text-sm font-medium text-foreground">{{ filename }}</p>
+      <p class="truncate text-[11px] text-muted-foreground">{{ subtitle }}</p>
+    </button>
+    <div v-else class="min-w-0 flex-1">
       <p class="truncate text-sm font-medium text-foreground">{{ filename }}</p>
       <p class="truncate text-[11px] text-muted-foreground">{{ subtitle }}</p>
     </div>
     <FolderShellFileStatusPill :status="status" :failure-reason="failureReason" />
     <FolderShellFileKebabMenu
+      v-if="!selectable"
       :document-id="id"
       @open="emit('open', $event)"
       @rename="emit('rename', $event)"
@@ -84,14 +113,34 @@ const isList = computed(() => props.variant === 'list')
 
   <div
     v-else
-    class="group grid grid-cols-[minmax(0,1fr)_140px_140px_100px_32px] items-center gap-3 border-t border-border/40 px-4 py-3 text-sm transition hover:bg-muted/40"
+    :class="[
+      'group grid grid-cols-[minmax(0,1fr)_140px_140px_100px_32px] items-center gap-3 border-t border-border/40 px-4 py-3 text-sm transition',
+      selected ? 'bg-primary/10 ring-1 ring-inset ring-primary/20' : 'hover:bg-muted/40',
+    ]"
     :data-testid="`file-row-${id}`"
   >
     <div class="flex min-w-0 items-center gap-3">
+      <UiCheckbox
+        v-if="selectable"
+        :model-value="selected"
+        :aria-label="`Select ${filename}`"
+        :data-testid="`file-row-select-${id}`"
+        @click.stop
+        @update:model-value="toggleSelection"
+      />
       <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
         <component :is="icon" class="h-4 w-4" />
       </div>
-      <div class="min-w-0">
+      <button
+        v-if="selectable"
+        type="button"
+        class="min-w-0 flex-1 text-left"
+        @click="toggleSelection"
+      >
+        <p class="truncate font-medium text-foreground">{{ filename }}</p>
+        <p class="truncate text-[11px] text-muted-foreground">{{ subtitle }}</p>
+      </button>
+      <div v-else class="min-w-0">
         <p class="truncate font-medium text-foreground">{{ filename }}</p>
         <p class="truncate text-[11px] text-muted-foreground">{{ subtitle }}</p>
       </div>
@@ -105,6 +154,7 @@ const isList = computed(() => props.variant === 'list')
     </div>
     <div class="flex justify-end">
       <FolderShellFileKebabMenu
+        v-if="!selectable"
         :document-id="id"
         @open="emit('open', $event)"
         @rename="emit('rename', $event)"

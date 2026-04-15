@@ -1,0 +1,18 @@
+name = "budds"
+compatibility_date = "2025-04-14"
+compatibility_flags = ["nodejs_compat"]
+
+# Local development only.
+# Copy this file to `wrangler.local.toml` and pass `--config wrangler.local.toml`
+# to Wrangler commands if you need local D1/R2 bindings.
+# Do not commit a `wrangler.toml` for this project if you want Cloudflare Pages
+# dashboard Variables/Secrets to remain editable.
+
+[[d1_databases]]
+binding = "DB"
+database_name = "budds-auth-db"
+database_id = "ddb803e4-7d9d-471d-8a4b-4ccd69100bcf"
+
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "budds"

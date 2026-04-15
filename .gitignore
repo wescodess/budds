@@ -5,3 +5,6 @@ node_modules
 data/
 .output/
 .wrangler/
+.dist/*
+dist*
+wrangler.local.toml

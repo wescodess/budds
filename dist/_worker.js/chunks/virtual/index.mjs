@@ -1,2 +1,0 @@
-import{r as e}from"../_/r2-folder.mjs";function _mergeNamespaces(e,r){for(var t=0;t<r.length;t++){const o=r[t];if("string"!=typeof o&&!Array.isArray(o))for(const r in o)if("default"!==r&&!(r in e)){const t=Object.getOwnPropertyDescriptor(o,r);t&&Object.defineProperty(e,r,t.get?t:{enumerable:!0,get:function(){return o[r]}})}}return Object.freeze(Object.defineProperty(e,Symbol.toStringTag,{value:"Module"}))}const r=_mergeNamespaces({__proto__:null},[e()]);export{r as i};
-//# sourceMappingURL=index.mjs.map

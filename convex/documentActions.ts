@@ -1,9 +1,16 @@
 "use node";
 import { v } from 'convex/values'
-import { internalAction } from './_generated/server'
+import { internalAction, type ActionCtx } from './_generated/server'
 import { internal } from './_generated/api'
+import type { Id } from './_generated/dataModel'
 import { extractText } from 'unpdf'
 import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3'
+
+const FAILED_DOCUMENT_RETENTION_MS = 10_000
+
+type CleanupAttemptResult =
+  | { ok: true }
+  | { ok: false; error: string }
 
 function getR2Client() {
   return new S3Client({
@@ -28,6 +35,140 @@ function getAiSearchConfig() {
   return { accountId, instance, token }
 }
 
+async function performCleanupAttemptInternal(args: {
+  kind: 'ai-search' | 'r2'
+  userId: string
+  documentId: string
+  r2Key?: string
+}): Promise<CleanupAttemptResult> {
+  try {
+    if (args.kind === 'r2') {
+      if (!args.r2Key) return { ok: true }
+      const bucket = process.env.R2_BUCKET_NAME
+      if (!bucket) return { ok: true }
+      try {
+        const r2 = getR2Client()
+        await r2.send(new DeleteObjectCommand({ Bucket: bucket, Key: args.r2Key }))
+        return { ok: true }
+      } catch (error: unknown) {
+        if (isAwsNotFound(error)) return { ok: true }
+        const msg = error instanceof Error ? error.message : String(error)
+        return { ok: false, error: `R2 delete failed: ${msg}` }
+      }
+    }
+
+    const config = getAiSearchConfig()
+    if (!config) return { ok: true }
+
+    if (args.documentId === '__user_bulk__') {
+      const listUrl = `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/ai-search/instances/${config.instance}/documents?filter=${encodeURIComponent(`userId:${args.userId}`)}`
+      const listRes = await fetch(listUrl, {
+        headers: { 'Authorization': `Bearer ${config.token}` },
+      })
+      if (listRes.status === 404) return { ok: true }
+      if (!listRes.ok) {
+        const text = (await listRes.text()).slice(0, 500)
+        return { ok: false, error: `AI Search list failed (${listRes.status}): ${text}` }
+      }
+      const data = (await listRes.json()) as { result?: Array<{ id?: string }> }
+      const ids = (data.result ?? []).map((r) => r.id).filter((id): id is string => typeof id === 'string')
+      if (ids.length === 0) return { ok: true }
+
+      for (const id of ids) {
+        const res = await fetch(
+          `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/ai-search/instances/${config.instance}/documents/${encodeURIComponent(id)}`,
+          { method: 'DELETE', headers: { 'Authorization': `Bearer ${config.token}` } },
+        )
+        if (!res.ok && res.status !== 404) {
+          const text = (await res.text()).slice(0, 500)
+          return { ok: false, error: `AI Search delete ${id} failed (${res.status}): ${text}` }
+        }
+      }
+      return { ok: true }
+    }
+
+    const res = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/ai-search/instances/${config.instance}/documents/${encodeURIComponent(args.documentId)}`,
+      { method: 'DELETE', headers: { 'Authorization': `Bearer ${config.token}` } },
+    )
+    if (res.ok || res.status === 404) return { ok: true }
+    const text = (await res.text()).slice(0, 500)
+    return { ok: false, error: `AI Search delete failed (${res.status}): ${text}` }
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : String(error)
+    return { ok: false, error: msg }
+  }
+}
+
+async function failDocumentIngestion(
+  ctx: ActionCtx,
+  args: {
+    documentId: Id<'documents'>
+    fileId: Id<'_storage'>
+    failureReason: string
+    r2Key?: string
+    cleanupAiSearch?: boolean
+  },
+) {
+  const doc = await ctx.runQuery(internal.documents.getDocument, { id: args.documentId })
+  if (!doc || doc.status === 'failed' || doc.status === 'success') return
+
+  const userId = doc.userId
+  const r2Key = args.r2Key ?? doc.r2Key
+
+  await ctx.runMutation(internal.documents.updateDocumentStatus, {
+    id: args.documentId,
+    status: 'failed',
+    failureReason: args.failureReason,
+    r2Key,
+  })
+
+  try {
+    await ctx.storage.delete(args.fileId)
+  } catch {
+    // best-effort; storage may already be gone
+  }
+
+  const r2Cleanup = r2Key
+    ? await performCleanupAttemptInternal({
+        kind: 'r2',
+        userId,
+        documentId: String(args.documentId),
+        r2Key,
+      })
+    : { ok: true } satisfies CleanupAttemptResult
+
+  const aiSearchCleanup = args.cleanupAiSearch
+    ? await performCleanupAttemptInternal({
+        kind: 'ai-search',
+        userId,
+        documentId: String(args.documentId),
+        r2Key,
+      })
+    : { ok: true } satisfies CleanupAttemptResult
+
+  const { r2Enqueued, aiSearchEnqueued } = await ctx.runMutation(
+    internal.documents.enqueueFailedDocumentCleanup,
+    {
+      userId,
+      documentId: String(args.documentId),
+      retryAiSearch: !aiSearchCleanup.ok,
+      retryR2: !r2Cleanup.ok,
+      r2Key,
+    },
+  )
+
+  if (r2Enqueued || aiSearchEnqueued) {
+    await ctx.scheduler.runAfter(0, internal.accountDeletion.drainPendingCleanup, {
+      userId,
+    })
+  }
+
+  await ctx.scheduler.runAfter(FAILED_DOCUMENT_RETENTION_MS, internal.documents.removeFailedDocument, {
+    id: args.documentId,
+  })
+}
+
 export const ingestDocument = internalAction({
   args: {
     documentId: v.id('documents'),
@@ -37,12 +178,15 @@ export const ingestDocument = internalAction({
     filename: v.string(),
   },
   handler: async (ctx, args) => {
+    let r2Key: string | undefined
+    let cleanupAiSearch = false
+
     try {
       const blob = await ctx.storage.get(args.fileId)
       if (!blob) {
-        await ctx.runMutation(internal.documents.updateDocumentStatus, {
-          id: args.documentId,
-          status: 'failed',
+        await failDocumentIngestion(ctx, {
+          documentId: args.documentId,
+          fileId: args.fileId,
           failureReason: 'File not found in storage',
         })
         return
@@ -52,9 +196,9 @@ export const ingestDocument = internalAction({
       const result = await extractText(new Uint8Array(arrayBuffer), { mergePages: true })
 
       if (!result.text || !(result.text as string).trim()) {
-        await ctx.runMutation(internal.documents.updateDocumentStatus, {
-          id: args.documentId,
-          status: 'failed',
+        await failDocumentIngestion(ctx, {
+          documentId: args.documentId,
+          fileId: args.fileId,
           failureReason: 'No extractable text detected — scanned or image-only PDF',
         })
         return
@@ -62,15 +206,15 @@ export const ingestDocument = internalAction({
 
       const bucket = process.env.R2_BUCKET_NAME
       if (!bucket) {
-        await ctx.runMutation(internal.documents.updateDocumentStatus, {
-          id: args.documentId,
-          status: 'failed',
+        await failDocumentIngestion(ctx, {
+          documentId: args.documentId,
+          fileId: args.fileId,
           failureReason: 'Missing R2 configuration',
         })
         return
       }
 
-      const r2Key = `${sanitizeUserSegment(args.userId)}/${args.folderId}/${args.documentId}.txt`
+      r2Key = `${sanitizeUserSegment(args.userId)}/${args.folderId}/${args.documentId}.txt`
       const r2 = getR2Client()
 
       await r2.send(new PutObjectCommand({
@@ -88,9 +232,9 @@ export const ingestDocument = internalAction({
 
       const config = getAiSearchConfig()
       if (!config) {
-        await ctx.runMutation(internal.documents.updateDocumentStatus, {
-          id: args.documentId,
-          status: 'failed',
+        await failDocumentIngestion(ctx, {
+          documentId: args.documentId,
+          fileId: args.fileId,
           failureReason: 'Missing Cloudflare AI Search configuration',
           r2Key,
         })
@@ -119,14 +263,16 @@ export const ingestDocument = internalAction({
         }
       } else {
         const errorText = (await syncResponse.text()).slice(0, 500)
-        await ctx.runMutation(internal.documents.updateDocumentStatus, {
-          id: args.documentId,
-          status: 'failed',
+        await failDocumentIngestion(ctx, {
+          documentId: args.documentId,
+          fileId: args.fileId,
           failureReason: `Failed to trigger indexing (${syncResponse.status}): ${errorText}`,
           r2Key,
         })
         return
       }
+
+      cleanupAiSearch = true
 
       await ctx.runMutation(internal.documents.updateDocumentStatus, {
         id: args.documentId,
@@ -143,10 +289,12 @@ export const ingestDocument = internalAction({
       }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error)
-      await ctx.runMutation(internal.documents.updateDocumentStatus, {
-        id: args.documentId,
-        status: 'failed',
+      await failDocumentIngestion(ctx, {
+        documentId: args.documentId,
+        fileId: args.fileId,
         failureReason: message,
+        r2Key,
+        cleanupAiSearch,
       })
     }
   },
@@ -158,8 +306,19 @@ export const pollIndexingStatus = internalAction({
     jobId: v.string(),
   },
   handler: async (ctx, args) => {
+    const doc = await ctx.runQuery(internal.documents.getDocument, { id: args.documentId })
+    if (!doc || doc.status === 'failed') return
+
     const config = getAiSearchConfig()
-    if (!config) return
+    if (!config) {
+      await failDocumentIngestion(ctx, {
+        documentId: args.documentId,
+        fileId: doc.fileId,
+        failureReason: 'Missing Cloudflare AI Search configuration',
+        r2Key: doc.r2Key,
+      })
+      return
+    }
 
     const url = `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/ai-search/instances/${config.instance}/jobs/${args.jobId}`
     const response = await fetch(url, {
@@ -167,10 +326,12 @@ export const pollIndexingStatus = internalAction({
     })
 
     if (!response.ok) {
-      await ctx.runMutation(internal.documents.updateDocumentStatus, {
-        id: args.documentId,
-        status: 'failed',
+      await failDocumentIngestion(ctx, {
+        documentId: args.documentId,
+        fileId: doc.fileId,
         failureReason: `Failed to check indexing status (${response.status})`,
+        r2Key: doc.r2Key,
+        cleanupAiSearch: true,
       })
       return
     }
@@ -180,10 +341,12 @@ export const pollIndexingStatus = internalAction({
 
     if (job?.ended_at) {
       if (job.end_reason) {
-        await ctx.runMutation(internal.documents.updateDocumentStatus, {
-          id: args.documentId,
-          status: 'failed',
+        await failDocumentIngestion(ctx, {
+          documentId: args.documentId,
+          fileId: doc.fileId,
           failureReason: `Indexing failed: ${job.end_reason}`,
+          r2Key: doc.r2Key,
+          cleanupAiSearch: true,
         })
       } else {
         await ctx.runMutation(internal.documents.updateDocumentStatus, {
@@ -308,63 +471,7 @@ export const performCleanupAttempt = internalAction({
     documentId: v.string(),
     r2Key: v.optional(v.string()),
   },
-  handler: async (_ctx, args): Promise<{ ok: true } | { ok: false; error: string }> => {
-    try {
-      if (args.kind === 'r2') {
-        if (!args.r2Key) return { ok: true }
-        const bucket = process.env.R2_BUCKET_NAME
-        if (!bucket) return { ok: true }
-        try {
-          const r2 = getR2Client()
-          await r2.send(new DeleteObjectCommand({ Bucket: bucket, Key: args.r2Key }))
-          return { ok: true }
-        } catch (error: unknown) {
-          if (isAwsNotFound(error)) return { ok: true }
-          const msg = error instanceof Error ? error.message : String(error)
-          return { ok: false, error: `R2 delete failed: ${msg}` }
-        }
-      }
-
-      const config = getAiSearchConfig()
-      if (!config) return { ok: true }
-
-      if (args.documentId === '__user_bulk__') {
-        const listUrl = `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/ai-search/instances/${config.instance}/documents?filter=${encodeURIComponent(`userId:${args.userId}`)}`
-        const listRes = await fetch(listUrl, {
-          headers: { 'Authorization': `Bearer ${config.token}` },
-        })
-        if (listRes.status === 404) return { ok: true }
-        if (!listRes.ok) {
-          const text = (await listRes.text()).slice(0, 500)
-          return { ok: false, error: `AI Search list failed (${listRes.status}): ${text}` }
-        }
-        const data = (await listRes.json()) as { result?: Array<{ id?: string }> }
-        const ids = (data.result ?? []).map((r) => r.id).filter((id): id is string => typeof id === 'string')
-        if (ids.length === 0) return { ok: true }
-
-        for (const id of ids) {
-          const res = await fetch(
-            `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/ai-search/instances/${config.instance}/documents/${encodeURIComponent(id)}`,
-            { method: 'DELETE', headers: { 'Authorization': `Bearer ${config.token}` } },
-          )
-          if (!res.ok && res.status !== 404) {
-            const text = (await res.text()).slice(0, 500)
-            return { ok: false, error: `AI Search delete ${id} failed (${res.status}): ${text}` }
-          }
-        }
-        return { ok: true }
-      }
-
-      const res = await fetch(
-        `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/ai-search/instances/${config.instance}/documents/${encodeURIComponent(args.documentId)}`,
-        { method: 'DELETE', headers: { 'Authorization': `Bearer ${config.token}` } },
-      )
-      if (res.ok || res.status === 404) return { ok: true }
-      const text = (await res.text()).slice(0, 500)
-      return { ok: false, error: `AI Search delete failed (${res.status}): ${text}` }
-    } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : String(error)
-      return { ok: false, error: msg }
-    }
+  handler: async (_ctx, args): Promise<CleanupAttemptResult> => {
+    return await performCleanupAttemptInternal(args)
   },
 })

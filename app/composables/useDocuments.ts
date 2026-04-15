@@ -3,6 +3,7 @@ import { api } from '#convex/api'
 import type { Doc, Id } from '../../convex/_generated/dataModel'
 
 const MAX_FILE_SIZE = 52_428_800
+const DOCUMENT_TERMINAL_TIMEOUT_MS = 180_000
 
 export type AttachmentStatus = {
   state: 'idle' | 'uploading' | 'importing' | 'processing' | 'indexing' | 'indexed' | 'error'
@@ -101,6 +102,68 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
 
   function pluralize(count: number, singular: string, plural = `${singular}s`) {
     return `${count} ${count === 1 ? singular : plural}`
+  }
+
+  function getProcessingFailureMessage(filename: string, failureReason?: string) {
+    return failureReason
+      ? `${filename}: ${failureReason}`
+      : `${filename}: Processing failed`
+  }
+
+  async function waitForDocumentToSettle(documentId: Id<'documents'>, filename: string) {
+    if (!import.meta.client) return
+
+    await new Promise<void>((resolve, reject) => {
+      let seenDocument = false
+      let settled = false
+      let stop = () => {}
+      let timeoutId = 0
+
+      const finish = (callback: () => void) => {
+        if (settled) return
+        settled = true
+        stop()
+        clearTimeout(timeoutId)
+        callback()
+      }
+
+      stop = watch(
+        () => {
+          const docs = documentsData.value
+          if (!docs) return undefined
+          const doc = docs.find(candidate => candidate._id === documentId)
+          if (!doc) return null
+          return {
+            status: doc.status,
+            failureReason: doc.failureReason,
+            filename: doc.filename,
+          }
+        },
+        (snapshot) => {
+          if (snapshot === undefined) return
+          if (snapshot) seenDocument = true
+
+          if (snapshot?.status === 'success') {
+            finish(resolve)
+            return
+          }
+
+          if (snapshot?.status === 'failed') {
+            finish(() => reject(new Error(getProcessingFailureMessage(snapshot.filename || filename, snapshot.failureReason))))
+            return
+          }
+
+          if (snapshot === null && seenDocument) {
+            finish(() => reject(new Error(getProcessingFailureMessage(filename))))
+          }
+        },
+        { immediate: true },
+      )
+
+      timeoutId = window.setTimeout(() => {
+        finish(() => reject(new Error(`${filename}: Processing timed out`)))
+      }, DOCUMENT_TERMINAL_TIMEOUT_MS)
+    })
   }
 
   const trackedDocuments = computed(() => {
@@ -215,6 +278,8 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
       uploadProgress.value.set(`${file.name}-${file.size}-${file.lastModified}`, 'pending')
     }
 
+    const createdDocuments = [] as Array<{ documentId: Id<'documents'>; filename: string }>
+
     const results = await Promise.allSettled(
       files.map(async (file) => {
         const fileKey = `${file.name}-${file.size}-${file.lastModified}`
@@ -259,6 +324,7 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
         }
 
         rememberRecentDocument(documentId)
+        createdDocuments.push({ documentId, filename: file.name })
         uploadProgress.value.set(fileKey, 'done')
       }),
     )
@@ -274,6 +340,8 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
     if (errors.length > 0) {
       throw new Error(errors.join('\n'))
     }
+
+    await Promise.all(createdDocuments.map(({ documentId, filename }) => waitForDocumentToSettle(documentId, filename)))
   }
 
   async function importDocumentFromUrl(url: string, targetFolderId: Id<'folders'>) {
@@ -291,6 +359,9 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
     }
 
     rememberRecentDocument(result?.documentId)
+    if (result?.documentId) {
+      await waitForDocumentToSettle(result.documentId, result.filename)
+    }
     return result
   }
 
@@ -314,6 +385,52 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
     return result
   }
 
+  async function deleteDocuments(docIds: Id<'documents'>[]) {
+    const failedIds: Id<'documents'>[] = []
+    const failureMessages: string[] = []
+    let deletedCount = 0
+
+    for (const docId of docIds) {
+      try {
+        await deleteDocument(docId)
+        deletedCount += 1
+      }
+      catch (error: any) {
+        failedIds.push(docId)
+        failureMessages.push(error?.message || 'Failed to delete document')
+      }
+    }
+
+    return {
+      deletedCount,
+      failedIds,
+      failureMessages,
+    }
+  }
+
+  async function moveDocuments(docIds: Id<'documents'>[], destinationFolderId: Id<'folders'>) {
+    const failedIds: Id<'documents'>[] = []
+    const failureMessages: string[] = []
+    let movedCount = 0
+
+    for (const docId of docIds) {
+      try {
+        await moveDocument(docId, destinationFolderId)
+        movedCount += 1
+      }
+      catch (error: any) {
+        failedIds.push(docId)
+        failureMessages.push(error?.message || 'Failed to move document')
+      }
+    }
+
+    return {
+      movedCount,
+      failedIds,
+      failureMessages,
+    }
+  }
+
   return {
     documents: documentsData as Ref<Doc<'documents'>[] | null>,
     attachmentStatus,
@@ -324,5 +441,7 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
     importDocumentFromUrl,
     deleteDocument,
     moveDocument,
+    deleteDocuments,
+    moveDocuments,
   }
 }

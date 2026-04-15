@@ -1,3 +1,5 @@
+import { readConfiguredRuntimeValue } from './runtime-config'
+
 export interface AISearchChunk {
   id: string
   content: string
@@ -49,14 +51,31 @@ interface RawChunk {
 
 export async function searchDocuments(params: AISearchParams): Promise<AISearchResponse> {
   const config = useRuntimeConfig()
-  const { cloudflareAccountId, cloudflareAiSearchInstance, cloudflareAiSearchToken } = config
+  const cloudflareAccountId = readConfiguredRuntimeValue(
+    config.cloudflareAccountId,
+    'NUXT_CLOUDFLARE_ACCOUNT_ID',
+    'CF_ACCOUNT_ID',
+  )
+  const cloudflareAiSearchInstance = readConfiguredRuntimeValue(
+    config.cloudflareAiSearchInstance,
+    'NUXT_CLOUDFLARE_AI_SEARCH_INSTANCE',
+    'CLOUDFLARE_AI_SEARCH_INSTANCE',
+  )
+  const cloudflareAiSearchToken = readConfiguredRuntimeValue(
+    config.cloudflareAiSearchToken,
+    'NUXT_CLOUDFLARE_AI_SEARCH_TOKEN',
+    'CLOUDFLARE_AI_SEARCH_TOKEN',
+  )
 
   if (!params.userId) {
     throw createError({ statusCode: 500, message: 'userId is required for AI Search queries' })
   }
 
   if (!cloudflareAccountId || !cloudflareAiSearchInstance || !cloudflareAiSearchToken) {
-    throw createError({ statusCode: 500, message: 'Missing Cloudflare AI Search configuration. Check CF_ACCOUNT_ID, CLOUDFLARE_AI_SEARCH_INSTANCE, and CLOUDFLARE_AI_SEARCH_TOKEN env vars.' })
+    throw createError({
+      statusCode: 500,
+      message: 'Missing Cloudflare AI Search configuration. Check NUXT_CLOUDFLARE_ACCOUNT_ID/CF_ACCOUNT_ID, NUXT_CLOUDFLARE_AI_SEARCH_INSTANCE/CLOUDFLARE_AI_SEARCH_INSTANCE, and NUXT_CLOUDFLARE_AI_SEARCH_TOKEN/CLOUDFLARE_AI_SEARCH_TOKEN.',
+    })
   }
 
   const url = `https://api.cloudflare.com/client/v4/accounts/${cloudflareAccountId}/ai-search/instances/${cloudflareAiSearchInstance}/search`
