@@ -49,6 +49,20 @@ interface RawChunk {
   attributes?: Record<string, unknown>
 }
 
+function readChunkString(
+  sources: Array<Record<string, unknown> | undefined>,
+  ...keys: string[]
+): string | undefined {
+  for (const source of sources) {
+    if (!source) continue
+    for (const key of keys) {
+      const value = source[key]
+      if (typeof value === 'string' && value.length > 0) return value
+    }
+  }
+  return undefined
+}
+
 export async function searchDocuments(params: AISearchParams): Promise<AISearchResponse> {
   const config = useRuntimeConfig()
   const cloudflareAccountId = readConfiguredRuntimeValue(
@@ -115,15 +129,17 @@ export async function searchDocuments(params: AISearchParams): Promise<AISearchR
 
   const mapped: AISearchChunk[] = raw.map((c): AISearchChunk => {
     const meta = c.item?.metadata ?? {}
+    const attrs = c.attributes ?? {}
+    const sources = [attrs, meta]
     return {
       id: c.id,
       content: c.text ?? c.content ?? '',
       score: c.score,
       attributes: {
-        filename: meta.filename,
-        folderId: meta.folderid,
-        documentId: meta.documentid,
-        userId: meta.userid,
+        filename: readChunkString(sources, 'filename'),
+        folderId: readChunkString(sources, 'folderId', 'folderid'),
+        documentId: readChunkString(sources, 'documentId', 'documentid'),
+        userId: readChunkString(sources, 'userId', 'userid'),
         folder: c.item?.key,
       },
     }
