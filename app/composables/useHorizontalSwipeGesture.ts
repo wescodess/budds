@@ -1,9 +1,11 @@
-import { tryOnMounted, tryOnScopeDispose, useEventListener } from '@vueuse/core'
+import { tryOnMounted, tryOnScopeDispose, useEventListener, unrefElement } from '@vueuse/core'
 import { computed, reactive, toValue } from 'vue'
-import type { MaybeRefOrGetter } from 'vue'
+import type { ComponentPublicInstance, MaybeRefOrGetter } from 'vue'
+
+type SwipeTarget = HTMLElement | SVGElement | ComponentPublicInstance | null | undefined
 
 interface HorizontalSwipeGestureOptions {
-  target: MaybeRefOrGetter<HTMLElement | null | undefined>
+  target: MaybeRefOrGetter<SwipeTarget>
   threshold?: number
   directionLockThreshold?: number
   shouldStart?: (event: TouchEvent | PointerEvent) => boolean
@@ -47,7 +49,11 @@ function findTouchById(touches: TouchList, touchId: number | null) {
 }
 
 export function useHorizontalSwipeGesture(options: HorizontalSwipeGestureOptions) {
-  const target = computed(() => toValue(options.target))
+  const target = computed<HTMLElement | SVGElement | null>(() => {
+    const resolved = unrefElement(toValue(options.target) as SwipeTarget)
+    if (resolved instanceof HTMLElement || resolved instanceof SVGElement) return resolved
+    return null
+  })
   const threshold = computed(() => options.threshold ?? 24)
   const directionLockThreshold = computed(() => options.directionLockThreshold ?? 10)
   const state = reactive(createSwipeState())
@@ -150,7 +156,7 @@ export function useHorizontalSwipeGesture(options: HorizontalSwipeGestureOptions
   }
 
   tryOnMounted(() => {
-    target.value?.style.setProperty('touch-action', 'pan-y')
+    target.value?.style?.setProperty('touch-action', 'pan-y')
   })
 
   const stops = [
