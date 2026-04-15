@@ -22,7 +22,7 @@ const emit = defineEmits<{ close: [] }>()
 
 const router = useRouter()
 const { allFolders } = useFolders()
-const { documents, uploadFiles, deleteDocument, moveDocument } = useDocuments(computed(() => props.folderId))
+const { documents, uploadFiles, moveDocument, deleteDocuments, moveDocuments } = useDocuments(computed(() => props.folderId))
 const { data: folderCounts } = useConvexQuery(api.documents.countsByFolder, computed(() => ({})))
 
 const directCountByFolder = computed(() => {
@@ -116,6 +116,56 @@ const filteredDocs = computed(() => {
   return docs.filter(d => d.filename.toLowerCase().includes(q))
 })
 
+const bulkMode = ref(false)
+const selectedDocIds = ref<string[]>([])
+const bulkActionPending = ref(false)
+
+function clearSelectedDocs() {
+  selectedDocIds.value = []
+}
+
+function exitBulkMode() {
+  bulkMode.value = false
+  clearSelectedDocs()
+}
+
+function toggleBulkMode(next: boolean) {
+  if (!next) {
+    exitBulkMode()
+    return
+  }
+  if ((filteredDocs.value?.length ?? 0) === 0) return
+  bulkMode.value = true
+}
+
+function toggleDocSelection(id: string) {
+  if (!bulkMode.value) bulkMode.value = true
+  const next = new Set(selectedDocIds.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  selectedDocIds.value = [...next]
+}
+
+function selectAllVisibleDocs() {
+  selectedDocIds.value = filteredDocs.value.map(doc => String(doc._id))
+}
+
+watch(
+  () => filteredDocs.value.map(doc => String(doc._id)),
+  (visibleIds) => {
+    const visible = new Set(visibleIds)
+    const pruned = selectedDocIds.value.filter(id => visible.has(id))
+    if (pruned.length !== selectedDocIds.value.length) selectedDocIds.value = pruned
+    if (visibleIds.length === 0 && bulkMode.value) exitBulkMode()
+  },
+  { immediate: true },
+)
+
+watch(
+  () => [props.folderId, props.section, props.open] as const,
+  () => exitBulkMode(),
+)
+
 function selectFolder(id: Id<'folders'>) {
   if (id === props.folderId) return
   void router.push(`/app/folders/${id}`)
@@ -178,44 +228,80 @@ async function confirmDeleteFolder() {
   }
 }
 
-const showDeleteDoc = ref(false)
-const docToDelete = ref<string | null>(null)
-function onDeleteDoc(id: string) { docToDelete.value = id; showDeleteDoc.value = true }
-async function confirmDeleteDoc() {
-  const id = docToDelete.value
+const deleteTargetIds = ref<string[]>([])
+const showDeleteDoc = computed({
+  get: () => deleteTargetIds.value.length > 0,
+  set: (v: boolean) => { if (!v) deleteTargetIds.value = [] },
+})
+function onDeleteDoc(id: string) { deleteTargetIds.value = [id] }
+function onDeleteSelectedDocs() {
+  if (selectedDocIds.value.length === 0 || bulkActionPending.value) return
+  deleteTargetIds.value = [...selectedDocIds.value]
+}
+async function confirmDeleteDocs() {
+  const ids = [...deleteTargetIds.value]
   showDeleteDoc.value = false
-  docToDelete.value = null
-  if (!id) return
+  deleteTargetIds.value = []
+  if (ids.length === 0 || bulkActionPending.value) return
+  bulkActionPending.value = true
   try {
-    await deleteDocument(id as Id<'documents'>)
+    const { deletedCount, failedIds, failureMessages } = await deleteDocuments(ids as Id<'documents'>[])
     const { toast } = await import('vue-sonner')
-    toast.success('Document deleted')
-  } catch (e: any) {
-    const { toast } = await import('vue-sonner')
-    toast.error(e?.message || 'Failed to delete document')
+
+    if (deletedCount > 0) {
+      toast.success(deletedCount === 1 ? 'Document deleted' : `${deletedCount} documents deleted`)
+    }
+    if (failureMessages.length > 0) {
+      toast.error(failureMessages[0] || 'Failed to delete selected documents')
+    }
+
+    selectedDocIds.value = failedIds.map(id => String(id))
+    if (failedIds.length === 0 && bulkMode.value) exitBulkMode()
+  } finally {
+    bulkActionPending.value = false
   }
 }
 
-const moveTargetId = ref<string | null>(null)
+const moveTargetIds = ref<string[]>([])
 const movePending = ref(false)
 const showMoveDialog = computed({
-  get: () => moveTargetId.value !== null,
-  set: (v: boolean) => { if (!v) moveTargetId.value = null },
+  get: () => moveTargetIds.value.length > 0,
+  set: (v: boolean) => { if (!v) moveTargetIds.value = [] },
 })
-function onMoveDoc(id: string) { moveTargetId.value = id }
+function onMoveDoc(id: string) { moveTargetIds.value = [id] }
+function onMoveSelectedDocs() {
+  if (selectedDocIds.value.length === 0 || movePending.value) return
+  moveTargetIds.value = [...selectedDocIds.value]
+}
 async function confirmMove(destId: Id<'folders'>) {
-  if (!moveTargetId.value || movePending.value) return
+  if (moveTargetIds.value.length === 0 || movePending.value) return
   movePending.value = true
   try {
-    await moveDocument(moveTargetId.value as Id<'documents'>, destId)
+    const ids = [...moveTargetIds.value]
+    const isBulk = ids.length > 1
     const { toast } = await import('vue-sonner')
-    toast.success('Moved')
+
+    if (isBulk) {
+      const { movedCount, failedIds, failureMessages } = await moveDocuments(ids as Id<'documents'>[], destId)
+      if (movedCount > 0) {
+        toast.success(movedCount === 1 ? 'Moved' : `${movedCount} documents moved`)
+      }
+      if (failureMessages.length > 0) {
+        toast.error(failureMessages[0] || 'Failed to move selected documents')
+      }
+      selectedDocIds.value = failedIds.map(id => String(id))
+      if (failedIds.length === 0 && bulkMode.value) exitBulkMode()
+    } else {
+      await moveDocument(ids[0] as Id<'documents'>, destId)
+      toast.success('Moved')
+      if (bulkMode.value) exitBulkMode()
+    }
   } catch (e: any) {
     const { toast } = await import('vue-sonner')
     toast.error(e?.message || 'Failed to move')
   } finally {
     movePending.value = false
-    moveTargetId.value = null
+    moveTargetIds.value = []
   }
 }
 
@@ -281,13 +367,25 @@ async function onFiles(e: Event) {
           </h2>
         </div>
         <div class="flex items-center gap-2">
-          <UiButton v-if="section === 'knowledge' && folder" variant="ghost" size="sm" class="gap-1.5 text-primary hover:text-primary" @click="onRenameFolder(folder)">
+          <UiButton
+            v-if="section === 'knowledge' && folder"
+            variant="ghost"
+            size="icon"
+            class="text-primary hover:text-primary"
+            aria-label="Edit folder"
+            @click="onRenameFolder(folder)"
+          >
             <Pencil class="h-4 w-4" />
-            Edit folder
           </UiButton>
-          <UiButton v-if="section === 'knowledge'" variant="ghost" size="sm" class="gap-1.5 text-primary hover:text-primary" @click="openNewFolder(folderId)">
+          <UiButton
+            v-if="section === 'knowledge'"
+            variant="ghost"
+            size="icon"
+            class="text-primary hover:text-primary"
+            aria-label="New subfolder"
+            @click="openNewFolder(folderId)"
+          >
             <FolderPlus class="h-4 w-4" />
-            New subfolder
           </UiButton>
           <UiKbd class="hidden md:inline-flex">⌘B</UiKbd>
           <button
@@ -398,11 +496,20 @@ async function onFiles(e: Event) {
       <div class="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
         <FolderShellFilesPanel
           :documents="filteredDocs"
+          :bulk-mode="bulkMode"
+          :selected-ids="selectedDocIds"
+          :pending="bulkActionPending || movePending"
           @delete="onDeleteDoc"
           @move="onMoveDoc"
           @open="() => undefined"
           @rename="() => undefined"
           @download="() => undefined"
+          @toggle-bulk-mode="toggleBulkMode"
+          @select-all="selectAllVisibleDocs"
+          @clear-selection="clearSelectedDocs"
+          @bulk-move="onMoveSelectedDocs"
+          @bulk-delete="onDeleteSelectedDocs"
+          @toggle-select="toggleDocSelection"
         />
       </div>
 
@@ -440,14 +547,14 @@ async function onFiles(e: Event) {
     <UiAlertDialog v-model:open="showDeleteDoc">
       <UiAlertDialogContent>
         <UiAlertDialogHeader>
-          <UiAlertDialogTitle>Delete document</UiAlertDialogTitle>
+          <UiAlertDialogTitle>{{ deleteTargetIds.length > 1 ? 'Delete documents' : 'Delete document' }}</UiAlertDialogTitle>
           <UiAlertDialogDescription>
-            This will remove the document and its indexed content.
+            This will remove {{ deleteTargetIds.length > 1 ? `${deleteTargetIds.length} documents` : 'the document' }} and its indexed content.
           </UiAlertDialogDescription>
         </UiAlertDialogHeader>
         <UiAlertDialogFooter>
           <UiAlertDialogCancel>Cancel</UiAlertDialogCancel>
-          <UiButton variant="destructive" @click="confirmDeleteDoc">Delete</UiButton>
+          <UiButton variant="destructive" :disabled="bulkActionPending" @click="confirmDeleteDocs">Delete</UiButton>
         </UiAlertDialogFooter>
       </UiAlertDialogContent>
     </UiAlertDialog>
