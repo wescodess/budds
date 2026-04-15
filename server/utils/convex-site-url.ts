@@ -8,6 +8,7 @@ export function toConvexSiteUrl(url: string) {
 }
 
 export function getConvexSiteUrl(config: {
+  authProxyTargetUrl?: unknown
   convexSiteUrl?: unknown
   public?: {
     convex?: {
@@ -15,6 +16,9 @@ export function getConvexSiteUrl(config: {
     }
   }
 }) {
+  const proxyTargetUrl = normalizeString(config.authProxyTargetUrl)
+  if (proxyTargetUrl) return proxyTargetUrl
+
   const explicitSiteUrl = normalizeString(config.convexSiteUrl)
   if (explicitSiteUrl) return explicitSiteUrl
 
