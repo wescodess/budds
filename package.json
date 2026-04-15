@@ -5,7 +5,7 @@
   "packageManager": "pnpm@9.12.3",
   "scripts": {
     "build": "node scripts/validate-env.mjs build --strict && nuxt build",
-    "deploy": "nuxt build && npx wrangler pages deploy dist",
+    "deploy": "node scripts/validate-env.mjs build --strict && nuxt build && npx wrangler pages deploy dist",
     "dev": "nuxt dev",
     "generate": "nuxt generate",
     "preview": "nuxt preview",

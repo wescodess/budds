@@ -87,12 +87,12 @@ const mergedEnv = {
 
 const blockingRequirements = [
   { kind: 'secret', label: 'Better Auth secret', names: ['NUXT_BETTER_AUTH_SECRET', 'BETTER_AUTH_SECRET'] },
+  { kind: 'var', label: 'Convex deployment URL', names: ['CONVEX_URL', 'NUXT_PUBLIC_CONVEX_URL'] },
 ]
 
 const advisoryRequirements = [
   { kind: 'var', label: 'Google OAuth client id', names: ['GOOGLE_CLIENT_ID'] },
   { kind: 'secret', label: 'Google OAuth client secret', names: ['GOOGLE_CLIENT_SECRET'] },
-  { kind: 'var', label: 'Convex deployment URL', names: ['CONVEX_URL', 'NUXT_PUBLIC_CONVEX_URL'] },
   { kind: 'var', label: 'Cloudflare account id', names: ['CF_ACCOUNT_ID', 'NUXT_CLOUDFLARE_ACCOUNT_ID'] },
   { kind: 'var', label: 'Cloudflare AI Gateway id', names: ['CLOUDFLARE_AI_GATEWAY_ID', 'NUXT_CLOUDFLARE_AI_GATEWAY_ID'] },
   { kind: 'secret', label: 'Cloudflare AI Gateway API key', names: ['CLOUDFLARE_AI_GATEWAY_API_KEY', 'NUXT_CLOUDFLARE_AI_GATEWAY_API_KEY'] },
