@@ -649,6 +649,9 @@ async function executeDelete() {
           data-testid="delete-account-confirm-input"
           :disabled="isDeletingAccount"
           autocomplete="off"
+          autocapitalize="off"
+          autocorrect="off"
+          enterkeyhint="done"
           spellcheck="false"
         />
       </div>

@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import { usePointerSwipe } from '@vueuse/core'
 import { ChevronDown, ChevronUp, X } from 'lucide-vue-next'
 import { nextTick, ref, watch } from 'vue'
 import type { Source } from '~/composables/useChat'
+import { PANEL_DISMISS_THRESHOLD_PX, useGestureGuards } from '~/composables/useGestureGuards'
 
 const props = defineProps<{
   sources: Source[]
@@ -14,6 +16,9 @@ const emit = defineEmits<{
 
 const cardRefs = ref<HTMLElement[]>([])
 const expanded = ref<Record<number, boolean>>({})
+const paneRef = ref<HTMLElement | null>(null)
+const { shouldStartHorizontalGesture } = useGestureGuards()
+const allowDismissSwipe = ref(false)
 
 watch(() => props.activeCitationIndex, (index) => {
   if (index !== null && cardRefs.value[index]) {
@@ -26,11 +31,29 @@ watch(() => props.activeCitationIndex, (index) => {
 function toggle(i: number) {
   expanded.value[i] = !expanded.value[i]
 }
+
+let paneSwipe: ReturnType<typeof usePointerSwipe>
+paneSwipe = usePointerSwipe(paneRef, {
+  threshold: 24,
+  pointerTypes: ['touch', 'pen'],
+  onSwipeStart(event) {
+    allowDismissSwipe.value = shouldStartHorizontalGesture(event, { allowGestureOwners: true })
+  },
+  onSwipeEnd() {
+    if (allowDismissSwipe.value) {
+      const deltaX = paneSwipe.posEnd.x - paneSwipe.posStart.x
+      if (deltaX >= PANEL_DISMISS_THRESHOLD_PX) emit('close')
+    }
+    allowDismissSwipe.value = false
+  },
+})
 </script>
 
 <template>
   <aside
+    ref="paneRef"
     data-testid="folder-helper-pane"
+    data-gesture-owner="source-panel"
     class="flex h-full flex-col bg-background"
   >
     <div class="flex items-center justify-between border-b px-4 py-3">

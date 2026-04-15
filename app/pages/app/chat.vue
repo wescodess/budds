@@ -112,6 +112,11 @@ function toggleSources(index: number) {
           v-model="query"
           type="text"
           placeholder="Ask a question..."
+          inputmode="text"
+          enterkeyhint="send"
+          autocapitalize="sentences"
+          autocorrect="on"
+          spellcheck="true"
           class="flex-1 rounded-md border border-input bg-card px-4 py-2.5 text-sm text-foreground placeholder-muted-foreground outline-none focus:ring-2 focus:ring-ring"
           :disabled="loading"
         />

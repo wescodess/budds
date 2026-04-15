@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { parseMarkdown } from '@nuxtjs/mdc/runtime'
 import { cn } from '@/lib/utils'
 import { expandCitations } from '~/utils/expand-citations'
 import type { Source } from '~/composables/useChat'
@@ -28,73 +29,66 @@ const processedContent = computed(() => {
 })
 
 const isAssistant = computed(() => props.role === 'assistant')
-const isMarkdownRendering = ref(false)
-const hasPaintedMarkdown = ref(false)
-let markdownRenderFrame: number | null = null
-let markdownFallbackTimer: ReturnType<typeof setTimeout> | null = null
+type ParsedMarkdown = Awaited<ReturnType<typeof parseMarkdown>>
 
+const parsedMarkdown = shallowRef<ParsedMarkdown | null>(null)
+const markdownParseError = shallowRef<unknown | null>(null)
+const isMarkdownParsing = ref(false)
+let markdownParseGeneration = 0
+
+const markdownBody = computed(() => parsedMarkdown.value?.body ?? null)
+const markdownData = computed(() => parsedMarkdown.value?.data ?? {})
 const showMarkdownSkeleton = computed(() =>
-  isAssistant.value && isMarkdownRendering.value && processedContent.value.trim().length > 0,
+  isAssistant.value
+  && isMarkdownParsing.value
+  && !markdownBody.value
+  && !markdownParseError.value
+  && processedContent.value.trim().length > 0,
+)
+const showMarkdownFallback = computed(() =>
+  isAssistant.value
+  && processedContent.value.trim().length > 0
+  && !markdownBody.value
+  && !showMarkdownSkeleton.value,
 )
 
-function clearMarkdownRenderFrame() {
-  if (!import.meta.client || markdownRenderFrame === null) return
-  cancelAnimationFrame(markdownRenderFrame)
-  markdownRenderFrame = null
-}
+async function parseAssistantMarkdown() {
+  const parseGeneration = ++markdownParseGeneration
+  const content = processedContent.value.trim()
 
-function clearMarkdownFallbackTimer() {
-  if (markdownFallbackTimer === null) return
-  clearTimeout(markdownFallbackTimer)
-  markdownFallbackTimer = null
-}
-
-function markMarkdownReady() {
-  clearMarkdownRenderFrame()
-  clearMarkdownFallbackTimer()
-  isMarkdownRendering.value = false
-  hasPaintedMarkdown.value = true
-}
-
-function scheduleMarkdownReady() {
-  clearMarkdownRenderFrame()
-  clearMarkdownFallbackTimer()
-
-  if (!isAssistant.value || processedContent.value.trim().length === 0) {
-    isMarkdownRendering.value = false
-    hasPaintedMarkdown.value = false
+  if (!isAssistant.value || content.length === 0) {
+    parsedMarkdown.value = null
+    markdownParseError.value = null
+    isMarkdownParsing.value = false
     return
   }
 
-  const shouldShowSkeleton = !props.streaming || !hasPaintedMarkdown.value
-  isMarkdownRendering.value = shouldShowSkeleton
+  isMarkdownParsing.value = true
+  markdownParseError.value = null
 
-  nextTick(() => {
-    if (!import.meta.client) {
-      markMarkdownReady()
-      return
-    }
-
-    // WebKit has longstanding bugs around opacity changes right after mount.
-    // Keep the markdown visible and only use the skeleton as a temporary overlay.
-    markdownFallbackTimer = setTimeout(() => {
-      markMarkdownReady()
-    }, 180)
-
-    markdownRenderFrame = requestAnimationFrame(() => {
-      markdownRenderFrame = requestAnimationFrame(() => {
-        markMarkdownReady()
-      })
+  try {
+    const parsed = await parseMarkdown(processedContent.value, {
+      toc: false,
+      contentHeading: false,
     })
-  })
+
+    if (parseGeneration !== markdownParseGeneration) return
+    parsedMarkdown.value = parsed
+  } catch (error) {
+    if (parseGeneration !== markdownParseGeneration) return
+    parsedMarkdown.value = null
+    markdownParseError.value = error
+    console.error('[chat] Failed to parse assistant markdown', error)
+  } finally {
+    if (parseGeneration === markdownParseGeneration) {
+      isMarkdownParsing.value = false
+    }
+  }
 }
 
-watch([processedContent, isAssistant, () => props.streaming], scheduleMarkdownReady, { immediate: true })
-
-onBeforeUnmount(() => {
-  clearMarkdownRenderFrame()
-  clearMarkdownFallbackTimer()
-})
+watch([processedContent, isAssistant], () => {
+  void parseAssistantMarkdown()
+}, { immediate: true })
 </script>
 
 <template>
@@ -115,13 +109,24 @@ onBeforeUnmount(() => {
         <UiSkeleton class="h-4 w-10/12 rounded-md" />
         <UiSkeleton class="h-4 w-8/12 rounded-md" />
       </div>
-      <MDC
-        :value="processedContent"
+      <MDCRenderer
+        v-if="markdownBody"
+        :body="markdownBody"
+        :data="markdownData"
         tag="div"
         :class="cn(
           'prose-chat space-y-3 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:text-base [&_h2]:font-semibold [&_h3]:text-sm [&_h3]:font-semibold [&_p]:leading-relaxed [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-1 [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.85em] [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:bg-[#0f0d0c] [&_pre]:p-4 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_blockquote]:border-l-2 [&_blockquote]:border-primary [&_blockquote]:pl-3 [&_blockquote]:italic [&_blockquote]:text-muted-foreground [&_table]:w-full [&_table]:border-collapse [&_th]:border [&_th]:border-border [&_th]:bg-muted [&_th]:p-2 [&_th]:text-left [&_td]:border [&_td]:border-border [&_td]:p-2 [&_a]:text-primary [&_a]:underline [&_a]:underline-offset-2 [&_strong]:font-semibold [&_em]:italic',
         )"
       />
+      <div
+        v-else-if="showMarkdownFallback"
+        :class="cn(
+          'prose-chat whitespace-pre-wrap break-words',
+          markdownParseError && 'text-foreground',
+        )"
+      >
+        {{ processedContent }}
+      </div>
       <span
         v-if="props.streaming && !showMarkdownSkeleton"
         data-testid="streaming-cursor"

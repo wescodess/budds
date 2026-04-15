@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Sonner } from '@/components/ui/sonner'
 import { getAppThemeBootstrapScript } from '~/composables/useAppTheme'
+import { useMobileKeyboardInset } from '~/composables/useMobileKeyboardInset'
 
 useHead({
   meta: [
@@ -13,6 +14,8 @@ useHead({
     },
   ],
 })
+
+useMobileKeyboardInset()
 </script>
 
 <template>

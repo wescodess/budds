@@ -1,5 +1,5 @@
 <template>
-  <div class="min-h-screen text-foreground antialiased">
+  <div class="app-viewport-frame overflow-hidden text-foreground antialiased">
     <slot />
   </div>
 </template>

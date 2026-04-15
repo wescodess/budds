@@ -115,6 +115,10 @@ function truncate(text: string, max = 120): string {
         :disabled="isReadOnly"
         rows="3"
         placeholder="Type your answer"
+        autocapitalize="sentences"
+        autocorrect="on"
+        spellcheck="true"
+        enterkeyhint="done"
         class="flex min-h-[60px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-70"
         :class="{
           'border-l-4 border-l-green-500': result?.isCorrect,

@@ -2,6 +2,7 @@
 import { ClipboardList, MoreHorizontal, Pencil, Plus, Trash2, ChevronDown } from 'lucide-vue-next'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
+import { useGestureGuards } from '~/composables/useGestureGuards'
 
 const props = defineProps<{
   folderId: Id<'folders'>
@@ -22,6 +23,8 @@ const openMenuQuizId = ref<string | null>(null)
 const confirmingDeleteQuizId = ref<string | null>(null)
 const deleting = ref(false)
 const liveMessage = ref('')
+const swipeOpenQuizId = ref<string | null>(null)
+const { isTouchLike } = useGestureGuards()
 
 const deleteQuizMutation = import.meta.client
   ? useConvexMutation(api.quizzes.deleteQuiz)
@@ -68,15 +71,21 @@ function toggleMenu(quizId: string) {
 function handleEditQuiz(quizId: string) {
   openMenuQuizId.value = null
   confirmingDeleteQuizId.value = null
+  swipeOpenQuizId.value = null
   editingQuizId.value = quizId as Id<'quizzes'>
 }
 
 function handleDeleteClick(quizId: string) {
+  swipeOpenQuizId.value = null
   confirmingDeleteQuizId.value = quizId
 }
 
 function handleDeleteCancel() {
   confirmingDeleteQuizId.value = null
+}
+
+function handleSwipeQuizOpen(quizId: string, next: boolean) {
+  swipeOpenQuizId.value = next ? quizId : (swipeOpenQuizId.value === quizId ? null : swipeOpenQuizId.value)
 }
 
 async function handleDeleteConfirm(quizId: string) {
@@ -157,110 +166,141 @@ async function handleDeleteConfirm(quizId: string) {
         <div
           v-for="quiz in quizzes"
           :key="quiz._id"
-          class="rounded-md border"
-          data-testid="quiz-card"
         >
-          <div
-            role="button"
-            tabindex="0"
-            class="flex cursor-pointer items-center justify-between p-4 hover:bg-accent/50"
-            @click="handleCardSelect(quiz._id)"
-            @keydown.enter="handleCardSelect(quiz._id)"
-            @keydown.space.prevent="handleCardSelect(quiz._id)"
+          <MobileSwipeRevealItem
+            :open="swipeOpenQuizId === quiz._id"
+            :disabled="!isTouchLike"
+            :action-width="96"
+            class="rounded-md"
+            content-class="rounded-md"
+            @update:open="(next) => handleSwipeQuizOpen(quiz._id, next)"
           >
-            <div class="flex flex-col gap-1">
-              <p class="font-medium">{{ quiz.title }}</p>
-              <p class="text-xs text-muted-foreground">
-                {{ new Date(quiz._creationTime).toLocaleDateString() }}
-                &middot;
-                {{ quiz.questionCount }} questions
-              </p>
-            </div>
-            <div class="flex items-center gap-3">
-              <span
-                v-if="quiz.score !== undefined"
-                class="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
-                data-testid="quiz-score-badge"
-              >
-                {{ quiz.score }}%
-              </span>
+            <template #actions>
               <button
                 type="button"
-                class="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-                data-testid="quiz-preview-toggle"
-                @click.stop="togglePreview(quiz._id)"
+                data-swipe-reveal-action
+                :aria-label="`Edit ${quiz.title}`"
+                class="flex h-full w-1/2 items-center justify-center bg-muted text-foreground"
+                @click="handleEditQuiz(quiz._id)"
               >
-                Preview questions
-                <ChevronDown
-                  class="h-3 w-3 transition-transform"
-                  :class="{ 'rotate-180': expandedQuizPreview === quiz._id }"
-                />
+                <Pencil class="h-4 w-4" />
               </button>
               <button
                 type="button"
-                class="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-                data-testid="quiz-card-menu"
-                aria-label="Quiz actions"
-                @click.stop="toggleMenu(quiz._id)"
+                data-swipe-reveal-action
+                :aria-label="`Delete ${quiz.title}`"
+                class="flex h-full w-1/2 items-center justify-center bg-destructive text-destructive-foreground"
+                @click="handleDeleteClick(quiz._id)"
               >
-                <MoreHorizontal class="h-4 w-4" />
+                <Trash2 class="h-4 w-4" />
               </button>
+            </template>
+
+            <div class="rounded-md border" data-testid="quiz-card">
+              <div
+                role="button"
+                tabindex="0"
+                class="flex cursor-pointer items-center justify-between p-4 hover:bg-accent/50"
+                @click="handleCardSelect(quiz._id)"
+                @keydown.enter="handleCardSelect(quiz._id)"
+                @keydown.space.prevent="handleCardSelect(quiz._id)"
+              >
+                <div class="flex flex-col gap-1">
+                  <p class="font-medium">{{ quiz.title }}</p>
+                  <p class="text-xs text-muted-foreground">
+                    {{ new Date(quiz._creationTime).toLocaleDateString() }}
+                    &middot;
+                    {{ quiz.questionCount }} questions
+                  </p>
+                </div>
+                <div class="flex items-center gap-3">
+                  <span
+                    v-if="quiz.score !== undefined"
+                    class="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
+                    data-testid="quiz-score-badge"
+                  >
+                    {{ quiz.score }}%
+                  </span>
+                  <button
+                    type="button"
+                    class="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                    data-testid="quiz-preview-toggle"
+                    @click.stop="togglePreview(quiz._id)"
+                  >
+                    Preview questions
+                    <ChevronDown
+                      class="h-3 w-3 transition-transform"
+                      :class="{ 'rotate-180': expandedQuizPreview === quiz._id }"
+                    />
+                  </button>
+                  <button
+                    v-if="!isTouchLike"
+                    type="button"
+                    class="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                    data-testid="quiz-card-menu"
+                    aria-label="Quiz actions"
+                    @click.stop="toggleMenu(quiz._id)"
+                  >
+                    <MoreHorizontal class="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+
+              <div
+                v-if="openMenuQuizId === quiz._id"
+                class="flex items-center gap-2 border-t px-4 py-2"
+                data-testid="quiz-card-actions"
+              >
+                <template v-if="confirmingDeleteQuizId === quiz._id">
+                  <UiButton
+                    variant="destructive"
+                    size="sm"
+                    :disabled="deleting"
+                    data-testid="quiz-card-delete-confirm"
+                    @click.stop="handleDeleteConfirm(quiz._id)"
+                  >
+                    <Trash2 class="mr-1.5 h-3 w-3" />
+                    Confirm delete
+                  </UiButton>
+                  <UiButton
+                    variant="ghost"
+                    size="sm"
+                    :disabled="deleting"
+                    data-testid="quiz-card-delete-cancel"
+                    @click.stop="handleDeleteCancel"
+                  >
+                    Cancel
+                  </UiButton>
+                </template>
+                <template v-else>
+                  <UiButton
+                    variant="outline"
+                    size="sm"
+                    data-testid="quiz-card-edit"
+                    @click.stop="handleEditQuiz(quiz._id)"
+                  >
+                    <Pencil class="mr-1.5 h-3 w-3" />
+                    Edit
+                  </UiButton>
+                  <UiButton
+                    variant="ghost"
+                    size="sm"
+                    class="text-destructive hover:text-destructive"
+                    data-testid="quiz-card-delete"
+                    @click.stop="handleDeleteClick(quiz._id)"
+                  >
+                    <Trash2 class="mr-1.5 h-3 w-3" />
+                    Delete
+                  </UiButton>
+                </template>
+              </div>
+
+              <QuizCardPreview
+                v-if="expandedQuizPreview === quiz._id"
+                :quiz-id="quiz._id"
+              />
             </div>
-          </div>
-
-          <div
-            v-if="openMenuQuizId === quiz._id"
-            class="flex items-center gap-2 border-t px-4 py-2"
-            data-testid="quiz-card-actions"
-          >
-            <template v-if="confirmingDeleteQuizId === quiz._id">
-              <UiButton
-                variant="destructive"
-                size="sm"
-                :disabled="deleting"
-                data-testid="quiz-card-delete-confirm"
-                @click.stop="handleDeleteConfirm(quiz._id)"
-              >
-                <Trash2 class="mr-1.5 h-3 w-3" />
-                Confirm delete
-              </UiButton>
-              <UiButton
-                variant="ghost"
-                size="sm"
-                :disabled="deleting"
-                data-testid="quiz-card-delete-cancel"
-                @click.stop="handleDeleteCancel"
-              >
-                Cancel
-              </UiButton>
-            </template>
-            <template v-else>
-              <UiButton
-                variant="outline"
-                size="sm"
-                data-testid="quiz-card-edit"
-                @click.stop="handleEditQuiz(quiz._id)"
-              >
-                <Pencil class="mr-1.5 h-3 w-3" />
-                Edit
-              </UiButton>
-              <UiButton
-                variant="ghost"
-                size="sm"
-                class="text-destructive hover:text-destructive"
-                data-testid="quiz-card-delete"
-                @click.stop="handleDeleteClick(quiz._id)"
-              >
-                <Trash2 class="mr-1.5 h-3 w-3" />
-                Delete
-              </UiButton>
-            </template>
-          </div>
-
-          <QuizCardPreview
-            v-if="expandedQuizPreview === quiz._id"
-            :quiz-id="quiz._id"
-          />
+          </MobileSwipeRevealItem>
         </div>
       </div>
     </template>

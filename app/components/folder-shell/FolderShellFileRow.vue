@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { FileText, FileImage, Link as LinkIcon, X } from 'lucide-vue-next'
+import { onLongPress } from '@vueuse/core'
+import { ArrowLeftRight, FileText, FileImage, Link as LinkIcon, Trash2, X } from 'lucide-vue-next'
 import type { Id } from '~~/convex/_generated/dataModel'
+import { LONG_PRESS_MOVE_PX, LONG_PRESS_MS, ROW_ACTION_WIDTH_PX, useGestureGuards } from '~/composables/useGestureGuards'
 
 defineOptions({ name: 'FolderShellFileRow' })
 
@@ -16,6 +18,7 @@ const props = defineProps<{
   variant?: 'panel' | 'list'
   selectable?: boolean
   selected?: boolean
+  swipeOpen?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -26,6 +29,9 @@ const emit = defineEmits<{
   delete: [id: string]
   dismiss: [id: string]
   toggleSelect: [id: string]
+  'swipe-open': [id: string]
+  'swipe-close': [id: string]
+  'long-press-select': [id: string]
 }>()
 
 const ext = computed(() => {
@@ -62,85 +68,91 @@ const id = computed(() => props.documentId as unknown as string)
 const isList = computed(() => props.variant === 'list')
 const canAct = computed(() => props.status !== 'pending' && props.status !== 'failed')
 const canDismiss = computed(() => props.status === 'failed')
+const { isTouchLike } = useGestureGuards()
+const rowRef = ref<HTMLElement | null>(null)
+const showSwipeReveal = computed(() => isTouchLike.value && !props.selectable && (canAct.value || canDismiss.value))
+const actionWidth = computed(() => canDismiss.value ? 64 : Math.min(ROW_ACTION_WIDTH_PX, 104))
+const showInlineDismiss = computed(() => canDismiss.value && !showSwipeReveal.value)
+const showKebabMenu = computed(() => !props.selectable && canAct.value && !showSwipeReveal.value)
 
 function toggleSelection() {
   emit('toggleSelect', id.value)
 }
+
+onLongPress(
+  rowRef,
+  () => {
+    if (!isTouchLike.value || props.selectable || !canAct.value) return
+    emit('long-press-select', id.value)
+  },
+  {
+    delay: LONG_PRESS_MS,
+    distanceThreshold: LONG_PRESS_MOVE_PX,
+  },
+)
 </script>
 
 <template>
-  <div
+  <MobileSwipeRevealItem
     v-if="!isList"
-    :class="[
-      'group flex items-center gap-3 rounded-lg px-2 py-2 transition',
-      selected ? 'bg-primary/10 ring-1 ring-primary/20' : 'hover:bg-muted/50',
-    ]"
-    :data-testid="`file-row-${id}`"
+    :open="props.swipeOpen"
+    :disabled="!showSwipeReveal"
+    :action-width="actionWidth"
+    class="rounded-lg"
+    content-class="rounded-lg"
+    @update:open="(next) => emit(next ? 'swipe-open' : 'swipe-close', id)"
   >
-    <UiCheckbox
-      v-if="selectable && canAct"
-      :model-value="selected"
-      :aria-label="`Select ${filename}`"
-      class="mt-0.5"
-      :data-testid="`file-row-select-${id}`"
-      @click.stop
-      @update:model-value="toggleSelection"
-    />
-    <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
-      <component :is="icon" class="h-4 w-4" />
-    </div>
-    <button
-      v-if="selectable && canAct"
-      type="button"
-      class="min-w-0 flex-1 text-left"
-      @click="toggleSelection"
-    >
-      <p class="truncate text-sm font-medium text-foreground">{{ filename }}</p>
-      <p class="truncate text-[11px] text-muted-foreground">{{ subtitle }}</p>
-    </button>
-    <div v-else class="min-w-0 flex-1">
-      <p class="truncate text-sm font-medium text-foreground">{{ filename }}</p>
-      <p class="truncate text-[11px] text-muted-foreground">{{ subtitle }}</p>
-    </div>
-    <FolderShellFileStatusPill :status="status" :failure-reason="failureReason" />
-    <button
-      v-if="canDismiss"
-      type="button"
-      class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground"
-      :aria-label="`Clear ${filename}`"
-      @click="emit('dismiss', id)"
-    >
-      <X class="h-4 w-4" />
-    </button>
-    <FolderShellFileKebabMenu
-      v-if="!selectable && canAct"
-      :document-id="id"
-      @open="emit('open', $event)"
-      @rename="emit('rename', $event)"
-      @move="emit('move', $event)"
-      @download="emit('download', $event)"
-      @delete="emit('delete', $event)"
-    />
-  </div>
+    <template #actions>
+      <button
+        v-if="canDismiss"
+        type="button"
+        data-swipe-reveal-action
+        :aria-label="`Dismiss ${filename}`"
+        class="flex h-full w-full items-center justify-center bg-muted text-foreground"
+        @click="emit('dismiss', id)"
+      >
+        <X class="h-4 w-4" />
+      </button>
+      <template v-else>
+        <button
+          type="button"
+          data-swipe-reveal-action
+          :aria-label="`Move ${filename}`"
+          class="flex h-full w-1/2 items-center justify-center bg-muted text-foreground"
+          @click="emit('move', id)"
+        >
+          <ArrowLeftRight class="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          data-swipe-reveal-action
+          :aria-label="`Delete ${filename}`"
+          class="flex h-full w-1/2 items-center justify-center bg-destructive text-destructive-foreground"
+          @click="emit('delete', id)"
+        >
+          <Trash2 class="h-4 w-4" />
+        </button>
+      </template>
+    </template>
 
-  <div
-    v-else
-    :class="[
-      'group grid grid-cols-[minmax(0,1fr)_140px_140px_100px_32px] items-center gap-3 border-t border-border/40 px-4 py-3 text-sm transition',
-      selected ? 'bg-primary/10 ring-1 ring-inset ring-primary/20' : 'hover:bg-muted/40',
-    ]"
-    :data-testid="`file-row-${id}`"
-  >
-    <div class="flex min-w-0 items-center gap-3">
+    <div
+      ref="rowRef"
+      :class="[
+        'group flex items-center gap-3 rounded-lg px-2 py-2 transition',
+        selected ? 'bg-primary/10 ring-1 ring-primary/20' : 'hover:bg-muted/50',
+      ]"
+      :data-testid="`file-row-${id}`"
+    >
       <UiCheckbox
         v-if="selectable && canAct"
         :model-value="selected"
         :aria-label="`Select ${filename}`"
+        class="mt-0.5"
         :data-testid="`file-row-select-${id}`"
         @click.stop
         @update:model-value="toggleSelection"
       />
-      <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+      <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
         <component :is="icon" class="h-4 w-4" />
       </div>
       <button
@@ -149,24 +161,16 @@ function toggleSelection() {
         class="min-w-0 flex-1 text-left"
         @click="toggleSelection"
       >
-        <p class="truncate font-medium text-foreground">{{ filename }}</p>
+        <p class="truncate text-sm font-medium text-foreground">{{ filename }}</p>
         <p class="truncate text-[11px] text-muted-foreground">{{ subtitle }}</p>
       </button>
-      <div v-else class="min-w-0">
-        <p class="truncate font-medium text-foreground">{{ filename }}</p>
+      <div v-else class="min-w-0 flex-1">
+        <p class="truncate text-sm font-medium text-foreground">{{ filename }}</p>
         <p class="truncate text-[11px] text-muted-foreground">{{ subtitle }}</p>
       </div>
-    </div>
-    <div class="flex justify-start">
       <FolderShellFileStatusPill :status="status" :failure-reason="failureReason" />
-    </div>
-    <div class="text-xs text-muted-foreground">{{ dateLabel }}</div>
-    <div class="text-xs tabular-nums text-muted-foreground">
-      {{ fileSize >= 1_048_576 ? (fileSize / 1_048_576).toFixed(1) + ' MB' : Math.max(1, Math.round(fileSize / 1024)) + ' KB' }}
-    </div>
-    <div class="flex justify-end">
       <button
-        v-if="canDismiss"
+        v-if="showInlineDismiss"
         type="button"
         class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground"
         :aria-label="`Clear ${filename}`"
@@ -175,7 +179,7 @@ function toggleSelection() {
         <X class="h-4 w-4" />
       </button>
       <FolderShellFileKebabMenu
-        v-if="!selectable && canAct"
+        v-if="showKebabMenu"
         :document-id="id"
         @open="emit('open', $event)"
         @rename="emit('rename', $event)"
@@ -184,5 +188,109 @@ function toggleSelection() {
         @delete="emit('delete', $event)"
       />
     </div>
-  </div>
+  </MobileSwipeRevealItem>
+
+  <MobileSwipeRevealItem
+    v-else
+    :open="props.swipeOpen"
+    :disabled="!showSwipeReveal"
+    :action-width="actionWidth"
+    @update:open="(next) => emit(next ? 'swipe-open' : 'swipe-close', id)"
+  >
+    <template #actions>
+      <button
+        v-if="canDismiss"
+        type="button"
+        data-swipe-reveal-action
+        :aria-label="`Dismiss ${filename}`"
+        class="flex h-full w-full items-center justify-center bg-muted text-foreground"
+        @click="emit('dismiss', id)"
+      >
+        <X class="h-4 w-4" />
+      </button>
+      <template v-else>
+        <button
+          type="button"
+          data-swipe-reveal-action
+          :aria-label="`Move ${filename}`"
+          class="flex h-full w-1/2 items-center justify-center bg-muted text-foreground"
+          @click="emit('move', id)"
+        >
+          <ArrowLeftRight class="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          data-swipe-reveal-action
+          :aria-label="`Delete ${filename}`"
+          class="flex h-full w-1/2 items-center justify-center bg-destructive text-destructive-foreground"
+          @click="emit('delete', id)"
+        >
+          <Trash2 class="h-4 w-4" />
+        </button>
+      </template>
+    </template>
+
+    <div
+      ref="rowRef"
+      :class="[
+        'group grid grid-cols-[minmax(0,1fr)_140px_140px_100px_32px] items-center gap-3 border-t border-border/40 px-4 py-3 text-sm transition',
+        selected ? 'bg-primary/10 ring-1 ring-inset ring-primary/20' : 'hover:bg-muted/40',
+      ]"
+      :data-testid="`file-row-${id}`"
+    >
+      <div class="flex min-w-0 items-center gap-3">
+        <UiCheckbox
+          v-if="selectable && canAct"
+          :model-value="selected"
+          :aria-label="`Select ${filename}`"
+          :data-testid="`file-row-select-${id}`"
+          @click.stop
+          @update:model-value="toggleSelection"
+        />
+        <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+          <component :is="icon" class="h-4 w-4" />
+        </div>
+        <button
+          v-if="selectable && canAct"
+          type="button"
+          class="min-w-0 flex-1 text-left"
+          @click="toggleSelection"
+        >
+          <p class="truncate font-medium text-foreground">{{ filename }}</p>
+          <p class="truncate text-[11px] text-muted-foreground">{{ subtitle }}</p>
+        </button>
+        <div v-else class="min-w-0">
+          <p class="truncate font-medium text-foreground">{{ filename }}</p>
+          <p class="truncate text-[11px] text-muted-foreground">{{ subtitle }}</p>
+        </div>
+      </div>
+      <div class="flex justify-start">
+        <FolderShellFileStatusPill :status="status" :failure-reason="failureReason" />
+      </div>
+      <div class="text-xs text-muted-foreground">{{ dateLabel }}</div>
+      <div class="text-xs tabular-nums text-muted-foreground">
+        {{ fileSize >= 1_048_576 ? (fileSize / 1_048_576).toFixed(1) + ' MB' : Math.max(1, Math.round(fileSize / 1024)) + ' KB' }}
+      </div>
+      <div class="flex justify-end">
+        <button
+          v-if="showInlineDismiss"
+          type="button"
+          class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground"
+          :aria-label="`Clear ${filename}`"
+          @click="emit('dismiss', id)"
+        >
+          <X class="h-4 w-4" />
+        </button>
+        <FolderShellFileKebabMenu
+          v-if="showKebabMenu"
+          :document-id="id"
+          @open="emit('open', $event)"
+          @rename="emit('rename', $event)"
+          @move="emit('move', $event)"
+          @download="emit('download', $event)"
+          @delete="emit('delete', $event)"
+        />
+      </div>
+    </div>
+  </MobileSwipeRevealItem>
 </template>

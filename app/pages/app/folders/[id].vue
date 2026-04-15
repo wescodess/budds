@@ -1,18 +1,27 @@
 <script setup lang="ts">
 import { FileText, MessageSquare, ClipboardList, Layers, PanelRight, ArrowLeftRight } from 'lucide-vue-next'
-import { useMediaQuery } from '@vueuse/core'
+import { useMediaQuery, usePointerSwipe } from '@vueuse/core'
 import { api } from '#convex/api'
 import type { Id } from '~~/convex/_generated/dataModel'
 import type { VoidType } from '~/components/voids/CreateVoidDialog.vue'
 import FolderHelperPane from '~/components/folders/FolderHelperPane.vue'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+import { TAB_SWITCH_THRESHOLD_PX, useGestureGuards } from '~/composables/useGestureGuards'
 
 definePageMeta({ layout: 'folder' })
 
 const route = useRoute()
 const router = useRouter()
-const folderShellRef = ref<{ hideMobileRail: () => void } | null>(null)
+type FolderShellHandle = {
+  showMobileRailCompact: () => void
+  expandMobileRail: () => void
+  collapseMobileRailToCompact: () => void
+  hideMobileRail: () => void
+  getMobileRailState: () => 'hidden' | 'compact' | 'expanded'
+}
+
+const folderShellRef = ref<FolderShellHandle | null>(null)
 const folderId = computed(() => route.params.id as Id<'folders'>)
 const conversationIdRef = computed<Id<'conversations'> | null>(() => {
   const q = route.query?.conversationId
@@ -22,7 +31,7 @@ const conversationIdRef = computed<Id<'conversations'> | null>(() => {
 
 const { folder } = useFolderDetail(folderId)
 const { allFolders } = useFolders()
-const { documents, documentsForDisplay, dismissDisplayDocument, attachmentStatus, uploading, importingLink, uploadFiles, importDocumentFromUrl, deleteDocument, moveDocument } = useDocuments(folderId)
+const { documents, documentsForDisplay, dismissDisplayDocument, attachmentStatus, uploading, importingLink, uploadFiles, importDocumentFromUrl, deleteDocument, deleteDocuments, moveDocument, moveDocuments } = useDocuments(folderId)
 const {
   messages,
   loading,
@@ -38,6 +47,7 @@ const {
 } = useChat(folderId, conversationIdRef)
 
 const referenceScope = useReferenceScope()
+const workspaceRef = ref<HTMLElement | null>(null)
 const seededFolder = computed(() =>
   folder.value
   ?? allFolders.value?.find(candidate => candidate._id === folderId.value)
@@ -45,6 +55,7 @@ const seededFolder = computed(() =>
 )
 
 const isDesktop = useMediaQuery('(min-width: 1024px)')
+const { shouldStartHorizontalGesture } = useGestureGuards()
 
 const newVoidOpen = ref(false)
 const creatingVoid = ref(false)
@@ -95,23 +106,31 @@ async function onSelectVoid({ type, id }: { type: 'chat' | 'flashcards' | 'quiz'
   activeTab.value = type
   const base = { ...(route.query ?? {}) }
   if (type === 'chat') {
+    delete base.voidId
     await router.replace({ query: { ...base, tab: 'chat', conversationId: id } })
   } else {
     const { conversationId: _dropped, ...rest } = base
-    await router.replace({ query: { ...rest, tab: type } })
+    await router.replace({ query: { ...rest, tab: type, voidId: id } })
   }
   hideSidebarOnMobile()
 }
 
-const deleteTarget = ref<{ id: string; filename: string } | null>(null)
-const pendingDeleteTarget = ref<{ id: string; filename: string } | null>(null)
-const showDeleteDialog = ref(false)
+const deleteTargetIds = ref<string[]>([])
+const deleteTargetDocs = computed(() =>
+  (documents.value ?? []).filter(doc => deleteTargetIds.value.includes(String(doc._id))),
+)
+const showDeleteDialog = computed({
+  get: () => deleteTargetIds.value.length > 0,
+  set: (value: boolean) => {
+    if (!value) deleteTargetIds.value = []
+  },
+})
 
-const moveTarget = ref<{ id: string } | null>(null)
+const moveTargetIds = ref<string[]>([])
 const movePending = ref(false)
 const showMoveDialog = computed({
-  get: () => moveTarget.value !== null,
-  set: (val: boolean) => { if (!val) moveTarget.value = null },
+  get: () => moveTargetIds.value.length > 0,
+  set: (val: boolean) => { if (!val) moveTargetIds.value = [] },
 })
 
 const allowedTabs = ['chat', 'flashcards', 'quiz', 'documents'] as const
@@ -121,6 +140,11 @@ const initialTab = computed<TabValue>(() => {
   return typeof t === 'string' && (allowedTabs as readonly string[]).includes(t) ? (t as TabValue) : 'chat'
 })
 const activeTab = ref<TabValue>(initialTab.value)
+const activeConversationId = computed(() => conversationIdRef.value ? String(conversationIdRef.value) : null)
+const activeVoidId = computed(() => {
+  const q = route.query?.voidId
+  return typeof q === 'string' && (activeTab.value === 'flashcards' || activeTab.value === 'quiz') ? q : null
+})
 
 watch(() => route.query?.tab, () => {
   activeTab.value = initialTab.value
@@ -128,9 +152,14 @@ watch(() => route.query?.tab, () => {
 
 async function onTabChange(next: TabValue) {
   activeTab.value = next
-  await router.replace({ query: { ...(route.query ?? {}), tab: next } })
+  const base = { ...(route.query ?? {}) }
+  if (next !== 'flashcards' && next !== 'quiz') delete base.voidId
+  await router.replace({ query: { ...base, tab: next } })
   hideSidebarOnMobile()
 }
+const documentsBulkMode = ref(false)
+const selectedDocumentIds = ref<string[]>([])
+const documentsDeletePending = ref(false)
 const sourcePanelOpen = ref(false)
 const sourcePanelSide = ref<'left' | 'right'>('right')
 const activeCitationIndex = ref<number | null>(null)
@@ -147,16 +176,152 @@ const flipPanelAriaLabel = computed(() =>
 
 const panelFlipPointerStart = ref<{ x: number; y: number } | null>(null)
 const suppressNextPanelFlipClick = ref(false)
+const allowWorkspaceSwipe = ref(false)
+
+function clearSelectedDocuments() {
+  selectedDocumentIds.value = []
+}
+
+function exitDocumentsBulkMode() {
+  documentsBulkMode.value = false
+  clearSelectedDocuments()
+}
+
+function toggleDocumentsBulkMode(next: boolean) {
+  if (!next) {
+    exitDocumentsBulkMode()
+    return
+  }
+  if ((documentsForDisplay.value?.length ?? 0) === 0) return
+  documentsBulkMode.value = true
+}
+
+function toggleDocumentSelection(id: string) {
+  if (!documentsBulkMode.value) documentsBulkMode.value = true
+  const next = new Set(selectedDocumentIds.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  selectedDocumentIds.value = [...next]
+}
+
+function selectAllVisibleDocuments() {
+  selectedDocumentIds.value = (documentsForDisplay.value ?? [])
+    .filter(doc => doc.status !== 'pending' && doc.status !== 'failed')
+    .map(doc => String(doc._id))
+}
+
+watch(
+  () => (documentsForDisplay.value ?? []).map(doc => String(doc._id)),
+  (visibleIds) => {
+    const visible = new Set(visibleIds)
+    const next = selectedDocumentIds.value.filter(id => visible.has(id))
+    if (next.length !== selectedDocumentIds.value.length) selectedDocumentIds.value = next
+    if (visibleIds.length === 0 && documentsBulkMode.value) exitDocumentsBulkMode()
+  },
+  { immediate: true },
+)
+
+function getCurrentTabIndex() {
+  return allowedTabs.indexOf(activeTab.value)
+}
+
+function hasBlockingOverlay() {
+  if (!import.meta.client) return false
+  return Boolean(document.querySelector(
+    '[data-slot="dialog-content"], [data-slot="sheet-content"], [data-slot="drawer-content"], [data-slot="alert-dialog-content"]',
+  ))
+}
+
+let workspaceSwipe: ReturnType<typeof usePointerSwipe>
+workspaceSwipe = usePointerSwipe(workspaceRef, {
+  threshold: 24,
+  pointerTypes: ['touch', 'pen'],
+  onSwipeStart(event) {
+    allowWorkspaceSwipe.value = !isDesktop.value
+      && !sourcePanelOpen.value
+      && !hasBlockingOverlay()
+      && shouldStartHorizontalGesture(event)
+  },
+  onSwipeEnd() {
+    if (allowWorkspaceSwipe.value) {
+      const deltaX = workspaceSwipe.posEnd.x - workspaceSwipe.posStart.x
+      if (Math.abs(deltaX) >= TAB_SWITCH_THRESHOLD_PX) {
+        const handledSidebarSwipe = handleWorkspaceSidebarSwipe(deltaX)
+        if (!handledSidebarSwipe) {
+          const currentIndex = getCurrentTabIndex()
+          const nextIndex = deltaX < 0 ? currentIndex + 1 : currentIndex - 1
+          const nextTab = allowedTabs[nextIndex]
+          if (nextTab) void onTabChange(nextTab)
+        }
+      }
+    }
+    allowWorkspaceSwipe.value = false
+  },
+})
 
 const allSources = computed(() => {
   if (activeMessageIndex.value === null) return []
   const msg = messages.value[activeMessageIndex.value]
   return msg?.sources ?? []
 })
+const latestSourcedMessageIndex = computed(() => {
+  for (let i = messages.value.length - 1; i >= 0; i -= 1) {
+    if ((messages.value[i]?.sources?.length ?? 0) > 0) return i
+  }
+  return null
+})
+const canOpenSourcePanelFromSwipe = computed(() =>
+  activeTab.value === 'chat' && latestSourcedMessageIndex.value !== null,
+)
 
 const moveDestinationFolders = computed(() =>
   Array.isArray(allFolders.value) ? allFolders.value : [],
 )
+
+function getMobileRailState() {
+  return folderShellRef.value?.getMobileRailState() ?? 'hidden'
+}
+
+function handleRightSidebarSwipeOpen() {
+  if (!canOpenSourcePanelFromSwipe.value) return false
+  const messageIndex = latestSourcedMessageIndex.value
+  if (messageIndex === null) return false
+  activeMessageIndex.value = messageIndex
+  activeCitationIndex.value = null
+  sourcePanelOpen.value = true
+  return true
+}
+
+function handleWorkspaceSidebarSwipe(deltaX: number) {
+  const railState = getMobileRailState()
+
+  if (deltaX > 0) {
+    if (sourcePanelOpen.value) {
+      sourcePanelOpen.value = false
+      return true
+    }
+    if (railState === 'hidden') {
+      folderShellRef.value?.showMobileRailCompact()
+      return true
+    }
+    if (railState === 'compact') {
+      folderShellRef.value?.expandMobileRail()
+      return true
+    }
+    return false
+  }
+
+  if (railState === 'expanded') {
+    folderShellRef.value?.collapseMobileRailToCompact()
+    return true
+  }
+  if (railState === 'compact') {
+    folderShellRef.value?.hideMobileRail()
+    return true
+  }
+  if (handleRightSidebarSwipeOpen()) return true
+  return false
+}
 
 function handleCitationClick(messageIndex: number, citationIndex: number) {
   activeMessageIndex.value = messageIndex
@@ -348,45 +513,83 @@ async function handleDeleteRequest(docId: string) {
     return
   }
 
-  deleteTarget.value = { id: docId, filename: doc.filename }
-  pendingDeleteTarget.value = { id: docId, filename: doc.filename }
-  showDeleteDialog.value = true
+  deleteTargetIds.value = [docId]
+}
+
+function handleDeleteSelectedDocuments() {
+  if (selectedDocumentIds.value.length === 0 || documentsDeletePending.value) return
+  deleteTargetIds.value = [...selectedDocumentIds.value]
 }
 
 async function confirmDelete() {
-  const target = pendingDeleteTarget.value
+  const ids = [...deleteTargetIds.value]
   showDeleteDialog.value = false
-  deleteTarget.value = null
-  pendingDeleteTarget.value = null
-  if (!target) return
+  if (ids.length === 0 || documentsDeletePending.value) return
+
+  documentsDeletePending.value = true
   try {
-    await deleteDocument(target.id as Id<'documents'>)
     const { toast } = await import('vue-sonner')
-    toast.success('Document deleted')
+
+    if (ids.length === 1) {
+      await deleteDocument(ids[0] as Id<'documents'>)
+      toast.success('Document deleted')
+    } else {
+      const { deletedCount, failedIds, failureMessages } = await deleteDocuments(ids as Id<'documents'>[])
+      if (deletedCount > 0) {
+        toast.success(deletedCount === 1 ? 'Document deleted' : `${deletedCount} documents deleted`)
+      }
+      if (failureMessages.length > 0) {
+        toast.error(failureMessages[0] || 'Failed to delete selected documents')
+      }
+      selectedDocumentIds.value = failedIds.map(id => String(id))
+      if (failedIds.length === 0 && documentsBulkMode.value) exitDocumentsBulkMode()
+    }
   } catch (e: any) {
     const { toast } = await import('vue-sonner')
     toast.error(e.message || 'Failed to delete document')
+  } finally {
+    documentsDeletePending.value = false
   }
 }
 
 function handleMoveRequest(docId: string) {
-  moveTarget.value = { id: docId }
+  moveTargetIds.value = [docId]
+}
+
+function handleMoveSelectedDocuments() {
+  if (selectedDocumentIds.value.length === 0 || movePending.value) return
+  moveTargetIds.value = [...selectedDocumentIds.value]
 }
 
 async function confirmMove(destFolderId: Id<'folders'>) {
-  if (!moveTarget.value || movePending.value) return
+  if (moveTargetIds.value.length === 0 || movePending.value) return
   movePending.value = true
   try {
-    await moveDocument(moveTarget.value.id as Id<'documents'>, destFolderId)
-    const destFolder = allFolders.value?.find((f) => f._id === destFolderId)
     const { toast } = await import('vue-sonner')
-    toast.success(`Moved to ${destFolder?.name ?? 'folder'}`)
+    const destFolder = allFolders.value?.find((f) => f._id === destFolderId)
+    const ids = [...moveTargetIds.value]
+
+    if (ids.length > 1) {
+      const { movedCount, failedIds, failureMessages } = await moveDocuments(ids as Id<'documents'>[], destFolderId)
+      if (movedCount > 0) {
+        toast.success(movedCount === 1 ? `Moved to ${destFolder?.name ?? 'folder'}` : `${movedCount} documents moved`)
+      }
+      if (failureMessages.length > 0) {
+        toast.error(failureMessages[0] || 'Failed to move selected documents')
+      }
+      selectedDocumentIds.value = failedIds.map(id => String(id))
+      if (failedIds.length === 0 && documentsBulkMode.value) exitDocumentsBulkMode()
+    } else {
+      await moveDocument(ids[0] as Id<'documents'>, destFolderId)
+      toast.success(`Moved to ${destFolder?.name ?? 'folder'}`)
+      if (documentsBulkMode.value) exitDocumentsBulkMode()
+    }
   } catch (e: any) {
     const { toast } = await import('vue-sonner')
     toast.error(e.message || 'Failed to move document')
   } finally {
     movePending.value = false
-    moveTarget.value = null
+    moveTargetIds.value = []
   }
 }
 
@@ -419,7 +622,8 @@ async function handleImportLink(url: string) {
     :folder-id="folderId"
     :folder="seededFolder"
     :active-tab="activeTab"
-    :active-conversation-id="conversationIdRef ? (conversationIdRef as unknown as string) : null"
+    :active-conversation-id="activeConversationId"
+    :active-void-id="activeVoidId"
     @update:active-tab="onTabChange"
     @new-void="newVoidOpen = true"
     @select-void="onSelectVoid"
@@ -463,16 +667,17 @@ async function handleImportLink(url: string) {
       @create="onCreateVoid"
     />
 
-    <UiTabs v-model="activeTab" class="flex h-full min-w-0 flex-1 flex-col">
-      <UiTabsList class="sr-only">
-        <UiTabsTrigger value="chat">Chat</UiTabsTrigger>
-        <UiTabsTrigger value="flashcards">Flash Cards</UiTabsTrigger>
-        <UiTabsTrigger value="quiz">Quiz</UiTabsTrigger>
-        <UiTabsTrigger value="documents">Documents</UiTabsTrigger>
-      </UiTabsList>
+    <div ref="workspaceRef" class="flex min-h-0 min-w-0 flex-1 flex-col">
+      <UiTabs v-model="activeTab" class="flex h-full min-h-0 min-w-0 flex-1 flex-col">
+        <UiTabsList class="sr-only">
+          <UiTabsTrigger value="chat">Chat</UiTabsTrigger>
+          <UiTabsTrigger value="flashcards">Flash Cards</UiTabsTrigger>
+          <UiTabsTrigger value="quiz">Quiz</UiTabsTrigger>
+          <UiTabsTrigger value="documents">Documents</UiTabsTrigger>
+        </UiTabsList>
 
-      <UiTabsContent value="chat" class="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <div class="flex min-w-0 flex-1 overflow-hidden">
+      <UiTabsContent value="chat" class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <div class="flex min-h-0 min-w-0 flex-1 overflow-hidden">
           <template v-if="isDesktop && sourcePanelOpen">
             <ResizablePanelGroup direction="horizontal" class="min-w-0 flex-1">
               <template v-if="isSourcePanelLeading">
@@ -497,8 +702,8 @@ async function handleImportLink(url: string) {
                     <ArrowLeftRight class="h-3.5 w-3.5" />
                   </button>
                 </ResizableHandle>
-                <ResizablePanel :default-size="72" :min-size="40" class="min-w-0">
-                  <div class="flex h-full min-w-0 flex-1 flex-col overflow-hidden">
+                <ResizablePanel :default-size="72" :min-size="40" class="min-h-0 min-w-0">
+                  <div class="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
                     <template v-if="!hasIndexedDocuments">
                       <div class="flex flex-1 items-center justify-center text-muted-foreground">
                         <div class="text-center">
@@ -509,7 +714,7 @@ async function handleImportLink(url: string) {
                     </template>
 
                     <template v-else>
-                      <div ref="chatScrollRef" role="log" aria-live="polite" aria-atomic="false" aria-relevant="additions" class="flex-1 space-y-4 overflow-y-auto p-4">
+                      <div ref="chatScrollRef" data-testid="chat-scroll-area" role="log" aria-live="polite" aria-atomic="false" aria-relevant="additions" class="keyboard-scroll-area min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
                         <template v-for="(msg, i) in messages" :key="i">
                           <ChatMessage
                             :role="msg.role"
@@ -533,32 +738,34 @@ async function handleImportLink(url: string) {
                       </div>
                     </template>
 
-                    <div class="flex items-center px-4 pt-2">
-                      <ChatModelSelector
-                        :model-value="selectedModel"
-                        :disabled="loading"
-                        @update:model-value="selectModel"
+                    <div data-testid="chat-composer-footer" class="sticky bottom-0 z-10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+                      <div class="flex items-center px-4 pt-2">
+                        <ChatModelSelector
+                          :model-value="selectedModel"
+                          :disabled="loading"
+                          @update:model-value="selectModel"
+                        />
+                      </div>
+                      <ChatInput
+                        ref="chatInputRef"
+                        :disabled="!hasIndexedDocuments || loading"
+                        :attachment-status="attachmentStatus"
+                        :busy="uploading || importingLink"
+                        :placeholder="folder ? `Ask about your ${folder.name} materials...` : 'Ask a question...'"
+                        :folder-id="folderId"
+                        :scope="referenceScope"
+                        @upload-files="handleUpload"
+                        @import-link="handleImportLink"
+                        @submit="handleSendMessage"
                       />
                     </div>
-                    <ChatInput
-                      ref="chatInputRef"
-                      :disabled="!hasIndexedDocuments || loading"
-                      :attachment-status="attachmentStatus"
-                      :busy="uploading || importingLink"
-                      :placeholder="folder ? `Ask about your ${folder.name} materials...` : 'Ask a question...'"
-                      :folder-id="folderId"
-                      :scope="referenceScope"
-                      @upload-files="handleUpload"
-                      @import-link="handleImportLink"
-                      @submit="handleSendMessage"
-                    />
                   </div>
                 </ResizablePanel>
               </template>
 
               <template v-else>
-                <ResizablePanel :default-size="72" :min-size="40" class="min-w-0">
-                  <div class="flex h-full min-w-0 flex-1 flex-col overflow-hidden">
+                <ResizablePanel :default-size="72" :min-size="40" class="min-h-0 min-w-0">
+                  <div class="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
                     <template v-if="!hasIndexedDocuments">
                       <div class="flex flex-1 items-center justify-center text-muted-foreground">
                         <div class="text-center">
@@ -569,7 +776,7 @@ async function handleImportLink(url: string) {
                     </template>
 
                     <template v-else>
-                      <div ref="chatScrollRef" role="log" aria-live="polite" aria-atomic="false" aria-relevant="additions" class="flex-1 space-y-4 overflow-y-auto p-4">
+                      <div ref="chatScrollRef" data-testid="chat-scroll-area" role="log" aria-live="polite" aria-atomic="false" aria-relevant="additions" class="keyboard-scroll-area min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
                         <template v-for="(msg, i) in messages" :key="i">
                           <ChatMessage
                             :role="msg.role"
@@ -593,25 +800,27 @@ async function handleImportLink(url: string) {
                       </div>
                     </template>
 
-                    <div class="flex items-center px-4 pt-2">
-                      <ChatModelSelector
-                        :model-value="selectedModel"
-                        :disabled="loading"
-                        @update:model-value="selectModel"
+                    <div data-testid="chat-composer-footer" class="sticky bottom-0 z-10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+                      <div class="flex items-center px-4 pt-2">
+                        <ChatModelSelector
+                          :model-value="selectedModel"
+                          :disabled="loading"
+                          @update:model-value="selectModel"
+                        />
+                      </div>
+                      <ChatInput
+                        ref="chatInputRef"
+                        :disabled="!hasIndexedDocuments || loading"
+                        :attachment-status="attachmentStatus"
+                        :busy="uploading || importingLink"
+                        :placeholder="folder ? `Ask about your ${folder.name} materials...` : 'Ask a question...'"
+                        :folder-id="folderId"
+                        :scope="referenceScope"
+                        @upload-files="handleUpload"
+                        @import-link="handleImportLink"
+                        @submit="handleSendMessage"
                       />
                     </div>
-                    <ChatInput
-                      ref="chatInputRef"
-                      :disabled="!hasIndexedDocuments || loading"
-                      :attachment-status="attachmentStatus"
-                      :busy="uploading || importingLink"
-                      :placeholder="folder ? `Ask about your ${folder.name} materials...` : 'Ask a question...'"
-                      :folder-id="folderId"
-                      :scope="referenceScope"
-                      @upload-files="handleUpload"
-                      @import-link="handleImportLink"
-                      @submit="handleSendMessage"
-                    />
                   </div>
                 </ResizablePanel>
                 <ResizableHandle with-handle>
@@ -639,7 +848,7 @@ async function handleImportLink(url: string) {
             </ResizablePanelGroup>
           </template>
 
-          <div v-else class="flex min-w-0 flex-1 flex-col overflow-hidden">
+          <div v-else class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
             <template v-if="!hasIndexedDocuments">
               <div class="flex flex-1 items-center justify-center text-muted-foreground">
                 <div class="text-center">
@@ -650,7 +859,7 @@ async function handleImportLink(url: string) {
             </template>
 
             <template v-else>
-              <div ref="chatScrollRef" role="log" aria-live="polite" aria-atomic="false" aria-relevant="additions" class="flex-1 space-y-4 overflow-y-auto p-4">
+              <div ref="chatScrollRef" data-testid="chat-scroll-area" role="log" aria-live="polite" aria-atomic="false" aria-relevant="additions" class="keyboard-scroll-area min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
                 <template v-for="(msg, i) in messages" :key="i">
                   <ChatMessage
                     :role="msg.role"
@@ -674,25 +883,27 @@ async function handleImportLink(url: string) {
               </div>
             </template>
 
-            <div class="flex items-center px-4 pt-2">
-              <ChatModelSelector
-                :model-value="selectedModel"
-                :disabled="loading"
-                @update:model-value="selectModel"
+            <div data-testid="chat-composer-footer" class="sticky bottom-0 z-10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+              <div class="flex items-center px-4 pt-2">
+                <ChatModelSelector
+                  :model-value="selectedModel"
+                  :disabled="loading"
+                  @update:model-value="selectModel"
+                />
+              </div>
+              <ChatInput
+                ref="chatInputRef"
+                :disabled="!hasIndexedDocuments || loading"
+                :attachment-status="attachmentStatus"
+                :busy="uploading || importingLink"
+                :placeholder="folder ? `Ask about your ${folder.name} materials...` : 'Ask a question...'"
+                :folder-id="folderId"
+                :scope="referenceScope"
+                @upload-files="handleUpload"
+                @import-link="handleImportLink"
+                @submit="handleSendMessage"
               />
             </div>
-            <ChatInput
-              ref="chatInputRef"
-              :disabled="!hasIndexedDocuments || loading"
-              :attachment-status="attachmentStatus"
-              :busy="uploading || importingLink"
-              :placeholder="folder ? `Ask about your ${folder.name} materials...` : 'Ask a question...'"
-              :folder-id="folderId"
-              :scope="referenceScope"
-              @upload-files="handleUpload"
-              @import-link="handleImportLink"
-              @submit="handleSendMessage"
-            />
           </div>
         </div>
         <Sheet v-if="!isDesktop" :open="sourcePanelOpen" @update:open="sourcePanelOpen = $event">
@@ -721,35 +932,61 @@ async function handleImportLink(url: string) {
         <QuizTab :folder-id="folderId" />
       </UiTabsContent>
 
-      <UiTabsContent value="documents" class="flex min-w-0 flex-1 flex-col gap-6 overflow-y-auto p-6">
-        <DocumentsFileUploadZone
-          :folder-id="folderId"
-          :disabled="uploading"
-          @upload="handleUpload"
-        />
-        <FolderShellFilesList
-          :documents="documentsForDisplay"
-          @delete="handleDeleteRequest"
-          @dismiss="dismissDisplayDocument"
-          @move="handleMoveRequest"
-          @open="() => undefined"
-          @rename="() => undefined"
-          @download="() => undefined"
-        />
-      </UiTabsContent>
-    </UiTabs>
+        <UiTabsContent value="documents" class="keyboard-scroll-area flex min-w-0 flex-1 flex-col gap-6 overflow-y-auto p-6">
+          <DocumentsFileUploadZone
+            :folder-id="folderId"
+            :disabled="uploading"
+            @upload="handleUpload"
+          />
+          <FolderShellFilesPanel
+            v-if="!isDesktop"
+            :documents="documentsForDisplay"
+            :bulk-mode="documentsBulkMode"
+            :selected-ids="selectedDocumentIds"
+            :pending="documentsDeletePending || movePending"
+            @delete="handleDeleteRequest"
+            @dismiss="dismissDisplayDocument"
+            @move="handleMoveRequest"
+            @open="() => undefined"
+            @rename="() => undefined"
+            @download="() => undefined"
+            @toggle-bulk-mode="toggleDocumentsBulkMode"
+            @select-all="selectAllVisibleDocuments"
+            @clear-selection="clearSelectedDocuments"
+            @bulk-move="handleMoveSelectedDocuments"
+            @bulk-delete="handleDeleteSelectedDocuments"
+            @toggle-select="toggleDocumentSelection"
+          />
+          <FolderShellFilesList
+            v-else
+            :documents="documentsForDisplay"
+            @delete="handleDeleteRequest"
+            @dismiss="dismissDisplayDocument"
+            @move="handleMoveRequest"
+            @open="() => undefined"
+            @rename="() => undefined"
+            @download="() => undefined"
+          />
+        </UiTabsContent>
+      </UiTabs>
+    </div>
 
     <UiAlertDialog v-model:open="showDeleteDialog">
       <UiAlertDialogContent>
         <UiAlertDialogHeader>
-          <UiAlertDialogTitle>Delete document</UiAlertDialogTitle>
+          <UiAlertDialogTitle>{{ deleteTargetIds.length > 1 ? 'Delete documents' : 'Delete document' }}</UiAlertDialogTitle>
           <UiAlertDialogDescription>
-            Are you sure you want to delete {{ deleteTarget?.filename }}? This will remove the document and its indexed content.
+            <template v-if="deleteTargetIds.length > 1">
+              This will remove {{ deleteTargetIds.length }} documents and their indexed content.
+            </template>
+            <template v-else>
+              Are you sure you want to delete {{ deleteTargetDocs[0]?.filename }}? This will remove the document and its indexed content.
+            </template>
           </UiAlertDialogDescription>
         </UiAlertDialogHeader>
         <UiAlertDialogFooter>
           <UiAlertDialogCancel>Cancel</UiAlertDialogCancel>
-          <UiButton variant="destructive" @click="confirmDelete">Delete</UiButton>
+          <UiButton variant="destructive" :disabled="documentsDeletePending" @click="confirmDelete">Delete</UiButton>
         </UiAlertDialogFooter>
       </UiAlertDialogContent>
     </UiAlertDialog>
