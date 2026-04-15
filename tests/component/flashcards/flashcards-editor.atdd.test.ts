@@ -211,4 +211,16 @@ describe('FlashcardsEditor — Story 7.3 ATDD (red-first)', () => {
     await wrapper.find('[data-testid="flashcards-editor-back"]').trigger('click')
     expect(wrapper.emitted('back')).toBeTruthy()
   })
+
+  it('[P1] does not reserve the entire editor surface as a gesture owner', async () => {
+    const Editor = await import(editorPath)
+    mockSetData.value = sampleSet()
+
+    const wrapper = await mountSuspended(Editor.default, {
+      props: { setId: 'set_1' },
+    })
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="flashcards-editor"]').attributes('data-gesture-owner')).toBeUndefined()
+  })
 })

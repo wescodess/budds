@@ -157,7 +157,7 @@ const progressLabel = computed(() => {
 </script>
 
 <template>
-  <div class="flex flex-1 flex-col" data-testid="flashcard-study-root" data-gesture-owner="flashcard-study">
+  <div class="flex flex-1 flex-col" data-testid="flashcard-study-root">
     <div class="mb-4 flex items-center justify-between gap-3">
       <UiButton
         variant="ghost"
@@ -229,6 +229,7 @@ const progressLabel = computed(() => {
         <div
           ref="cardBodyRef"
           data-testid="flashcard-viewer"
+          data-gesture-owner="flashcard-study"
           role="button"
           tabindex="0"
           :aria-pressed="isFlipped"

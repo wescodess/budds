@@ -163,7 +163,7 @@ function handleBack() {
 </script>
 
 <template>
-  <div data-testid="quiz-taker" data-gesture-owner="quiz-taker">
+  <div data-testid="quiz-taker">
     <div v-if="state === 'loading'" class="space-y-3" data-testid="quiz-taker-loading">
       <UiSkeleton v-for="i in 3" :key="i" class="h-32 w-full rounded-md animate-pulse" />
     </div>

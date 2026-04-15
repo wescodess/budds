@@ -56,6 +56,7 @@ const seededFolder = computed(() =>
 
 const isDesktop = useMediaQuery('(min-width: 1024px)')
 const { shouldStartHorizontalGesture } = useGestureGuards()
+const SIDEBAR_SWIPE_EDGE_GUARD_PX = 12
 
 const newVoidOpen = ref(false)
 const creatingVoid = ref(false)
@@ -232,32 +233,46 @@ function hasBlockingOverlay() {
   ))
 }
 
+function commitWorkspaceSwipe() {
+  if (!allowWorkspaceSwipe.value) return
+  const deltaX = workspaceSwipe.posEnd.x - workspaceSwipe.posStart.x
+  if (Math.abs(deltaX) >= TAB_SWITCH_THRESHOLD_PX) {
+    const handledSidebarSwipe = handleWorkspaceSidebarSwipe(deltaX)
+    if (!handledSidebarSwipe) {
+      const currentIndex = getCurrentTabIndex()
+      const nextIndex = deltaX < 0 ? currentIndex + 1 : currentIndex - 1
+      const nextTab = allowedTabs[nextIndex]
+      if (nextTab) void onTabChange(nextTab)
+    }
+  }
+  allowWorkspaceSwipe.value = false
+}
+
 let workspaceSwipe: ReturnType<typeof usePointerSwipe>
 workspaceSwipe = usePointerSwipe(workspaceRef, {
   threshold: 24,
   pointerTypes: ['touch', 'pen'],
   onSwipeStart(event) {
     allowWorkspaceSwipe.value = !isDesktop.value
-      && !sourcePanelOpen.value
       && !hasBlockingOverlay()
-      && shouldStartHorizontalGesture(event)
+      && shouldStartHorizontalGesture(event, { edgeGuardPx: SIDEBAR_SWIPE_EDGE_GUARD_PX })
   },
   onSwipeEnd() {
-    if (allowWorkspaceSwipe.value) {
-      const deltaX = workspaceSwipe.posEnd.x - workspaceSwipe.posStart.x
-      if (Math.abs(deltaX) >= TAB_SWITCH_THRESHOLD_PX) {
-        const handledSidebarSwipe = handleWorkspaceSidebarSwipe(deltaX)
-        if (!handledSidebarSwipe) {
-          const currentIndex = getCurrentTabIndex()
-          const nextIndex = deltaX < 0 ? currentIndex + 1 : currentIndex - 1
-          const nextTab = allowedTabs[nextIndex]
-          if (nextTab) void onTabChange(nextTab)
-        }
-      }
-    }
-    allowWorkspaceSwipe.value = false
+    commitWorkspaceSwipe()
   },
 })
+
+// VueUse's usePointerSwipe does not listen for pointercancel.
+// On mobile, when the browser takes over a touch for native vertical scrolling,
+// it fires pointercancel. When this happens, we must ABORT the gesture.
+if (import.meta.client) {
+  watch(workspaceRef, (el, _prev, onCleanup) => {
+    if (!el) return
+    const handler = () => { allowWorkspaceSwipe.value = false }
+    el.addEventListener('pointercancel', handler, { passive: true })
+    onCleanup(() => el.removeEventListener('pointercancel', handler))
+  }, { immediate: true })
+}
 
 const allSources = computed(() => {
   if (activeMessageIndex.value === null) return []
@@ -667,7 +682,7 @@ async function handleImportLink(url: string) {
       @create="onCreateVoid"
     />
 
-    <div ref="workspaceRef" class="flex min-h-0 min-w-0 flex-1 flex-col">
+    <div ref="workspaceRef" class="flex min-h-0 min-w-0 flex-1 flex-col" style="touch-action: pan-y">
       <UiTabs v-model="activeTab" class="flex h-full min-h-0 min-w-0 flex-1 flex-col">
         <UiTabsList class="sr-only">
           <UiTabsTrigger value="chat">Chat</UiTabsTrigger>
