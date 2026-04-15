@@ -21,7 +21,7 @@ const props = withDefaults(defineProps<SidebarProps>(), {
 })
 
 const { isMobile, state, openMobile, setOpenMobile } = useSidebar()
-const mobileSheetContentRef = ref<InstanceType<typeof SheetContent> | null>(null)
+const mobileSheetContentRef = ref<HTMLElement | null>(null)
 const { shouldStartHorizontalGesture } = useGestureGuards()
 
 useHorizontalSwipeGesture({
