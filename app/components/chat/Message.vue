@@ -52,11 +52,20 @@ const showMarkdownFallback = computed(() =>
   && !showMarkdownSkeleton.value,
 )
 
+async function parseChatMarkdown(content: string, options: { highlight?: false } = {}) {
+  return parseMarkdown(content, {
+    toc: false,
+    contentHeading: false,
+    ...options,
+  })
+}
+
 async function parseAssistantMarkdown() {
   const parseGeneration = ++markdownParseGeneration
-  const content = processedContent.value.trim()
+  const content = processedContent.value
+  const trimmedContent = content.trim()
 
-  if (!isAssistant.value || content.length === 0) {
+  if (!isAssistant.value || trimmedContent.length === 0) {
     parsedMarkdown.value = null
     markdownParseError.value = null
     isMarkdownParsing.value = false
@@ -67,18 +76,25 @@ async function parseAssistantMarkdown() {
   markdownParseError.value = null
 
   try {
-    const parsed = await parseMarkdown(processedContent.value, {
-      toc: false,
-      contentHeading: false,
-    })
+    const parsed = await parseChatMarkdown(content)
 
     if (parseGeneration !== markdownParseGeneration) return
     parsedMarkdown.value = parsed
   } catch (error) {
     if (parseGeneration !== markdownParseGeneration) return
-    parsedMarkdown.value = null
-    markdownParseError.value = error
-    console.error('[chat] Failed to parse assistant markdown', error)
+    console.warn('[chat] Failed to parse assistant markdown with highlighting, retrying without highlight', error)
+
+    try {
+      const parsed = await parseChatMarkdown(content, { highlight: false })
+
+      if (parseGeneration !== markdownParseGeneration) return
+      parsedMarkdown.value = parsed
+    } catch (retryError) {
+      if (parseGeneration !== markdownParseGeneration) return
+      parsedMarkdown.value = null
+      markdownParseError.value = retryError
+      console.error('[chat] Failed to parse assistant markdown', retryError)
+    }
   } finally {
     if (parseGeneration === markdownParseGeneration) {
       isMarkdownParsing.value = false

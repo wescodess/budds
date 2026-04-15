@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
+import { flushPromises } from '@vue/test-utils'
 import { createAssistantMessage, createUserMessage, createSources } from '../../support/factories/chat.factory'
 
 const chatMessagePath = ['~', 'components', 'chat', 'Message.vue'].join('/')
@@ -129,5 +130,61 @@ describe('ChatMessage — streaming (AC #1, #3)', () => {
 
     const cursor = wrapper.find('[data-testid="streaming-cursor"]')
     expect(cursor.exists()).toBe(false)
+  })
+})
+
+describe('ChatMessage — markdown degradation', () => {
+  afterEach(() => {
+    vi.doUnmock('@nuxtjs/mdc/runtime')
+    vi.resetModules()
+    vi.restoreAllMocks()
+  })
+
+  it('[P0] should retry assistant markdown parsing without highlighting before raw-text fallback', async () => {
+    vi.resetModules()
+
+    vi.doMock('@nuxtjs/mdc/runtime', async () => {
+      const actual = await vi.importActual<typeof import('@nuxtjs/mdc/runtime')>('@nuxtjs/mdc/runtime')
+      const parseMarkdown = vi.fn(actual.parseMarkdown)
+
+      parseMarkdown.mockRejectedValueOnce(new Error('highlight failed'))
+
+      return {
+        ...actual,
+        parseMarkdown,
+      }
+    })
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const ChatMessage = await import(chatMessagePath)
+
+    const wrapper = await mountSuspended(ChatMessage.default, {
+      props: {
+        role: 'assistant',
+        content: 'Key points:\n\n- First item\n- Second item',
+      },
+    })
+
+    await flushPromises()
+
+    const { parseMarkdown } = await import('@nuxtjs/mdc/runtime')
+    const parseMarkdownMock = vi.mocked(parseMarkdown)
+
+    expect(parseMarkdownMock).toHaveBeenCalledTimes(2)
+    expect(parseMarkdownMock.mock.calls[0]?.[1]).toEqual({
+      toc: false,
+      contentHeading: false,
+    })
+    expect(parseMarkdownMock.mock.calls[1]?.[1]).toEqual({
+      toc: false,
+      contentHeading: false,
+      highlight: false,
+    })
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+    expect(errorSpy).not.toHaveBeenCalled()
+    expect(wrapper.findAll('li')).toHaveLength(2)
+    expect(wrapper.text()).toContain('First item')
+    expect(wrapper.text()).toContain('Second item')
   })
 })
