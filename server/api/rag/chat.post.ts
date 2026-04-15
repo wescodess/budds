@@ -31,6 +31,26 @@ function folderDocToChunk(
   }
 }
 
+function chunkLabel(chunk: AISearchChunk) {
+  return chunk.attributes?.filename || chunk.attributes?.url || 'unknown'
+}
+
+function buildChunkContext(chunks: AISearchChunk[]) {
+  return chunks
+    .map((chunk, i) => `[Source ${i + 1}: ${chunkLabel(chunk)}]\n${chunk.content}`)
+    .join('\n\n---\n\n')
+}
+
+function buildFolderDocContext(folderDocs: Array<{
+  documentId: string
+  filename?: string
+  content: string
+}>) {
+  return folderDocs
+    .map((doc, i) => `[Source ${i + 1}: ${doc.filename ?? doc.documentId}]\n${doc.content}`)
+    .join('\n\n---\n\n')
+}
+
 function chunkToSource(chunk: AISearchChunk) {
   return {
     content: chunk.content,
@@ -129,6 +149,12 @@ export default defineEventHandler(async (event) => {
         return typeof docId === 'string' && scopedDocumentIds!.has(docId)
       })
     : allChunks
+  const explicitScopedFileIds = new Set((body.scope?.fileIds ?? []).map(String))
+  const chunkDocumentIds = new Set(
+    chunks
+      .map(chunk => chunk.attributes?.documentId)
+      .filter((documentId): documentId is string => typeof documentId === 'string'),
+  )
 
   const summarizationIntent = /\b(summari[sz]e|summary|overview|outline|tl;?dr|main points|key points|what(?:'s| is| are) (?:in|this|these|the)\b|tell me about)\b/i.test(body.query)
   const needsFallback = chunks.length < 3 || summarizationIntent
@@ -138,12 +164,32 @@ export default defineEventHandler(async (event) => {
   if (hasScope) {
     if (!needsFallback) {
       citationChunks = chunks
-      context = chunks
-        .map((chunk, i) => {
-          const label = chunk.attributes?.filename || chunk.attributes?.url || 'unknown'
-          return `[Source ${i + 1}: ${label}]\n${chunk.content}`
-        })
-        .join('\n\n---\n\n')
+
+      const missingExplicitDocuments = explicitScopedFileIds.size > 0
+        ? scopedDocuments.filter(doc =>
+            explicitScopedFileIds.has(doc.documentId) && !chunkDocumentIds.has(doc.documentId),
+          )
+        : []
+
+      if (missingExplicitDocuments.length > 0) {
+        try {
+          const explicitFolderDocs = await fetchFolderDocs({
+            userId,
+            documents: missingExplicitDocuments,
+            maxChars: 80_000,
+          })
+          if (explicitFolderDocs.length > 0) {
+            citationChunks = [
+              ...chunks,
+              ...explicitFolderDocs.map((doc) => folderDocToChunk(doc, userId)),
+            ]
+          }
+        } catch (error) {
+          console.error('[rag/chat] Failed to fetch explicit scoped docs:', error)
+        }
+      }
+
+      context = buildChunkContext(citationChunks)
     }
     else {
       let scopedFolderDocs: Awaited<ReturnType<typeof fetchFolderDocs>> = []
@@ -161,17 +207,10 @@ export default defineEventHandler(async (event) => {
 
       if (scopedFolderDocs.length > 0) {
         citationChunks = scopedFolderDocs.map((doc) => folderDocToChunk(doc, userId))
-        context = scopedFolderDocs
-          .map((doc, i) => `[Source ${i + 1}: ${doc.filename ?? doc.documentId}]\n${doc.content}`)
-          .join('\n\n---\n\n')
+        context = buildFolderDocContext(scopedFolderDocs)
       } else {
         citationChunks = chunks
-        context = chunks
-          .map((chunk, i) => {
-            const label = chunk.attributes?.filename || chunk.attributes?.url || 'unknown'
-            return `[Source ${i + 1}: ${label}]\n${chunk.content}`
-          })
-          .join('\n\n---\n\n')
+        context = buildChunkContext(chunks)
       }
     }
   } else if (needsFallback) {
@@ -186,28 +225,16 @@ export default defineEventHandler(async (event) => {
       : rawFolderDocs
     if (folderDocs.length > 0) {
       citationChunks = folderDocs.map((doc) => folderDocToChunk(doc, userId))
-      context = folderDocs
-        .map((doc, i) => `[Source ${i + 1}: ${doc.filename ?? doc.documentId}]\n${doc.content}`)
-        .join('\n\n---\n\n')
+      context = buildFolderDocContext(folderDocs)
     }
     else {
       citationChunks = chunks
-      context = chunks
-        .map((chunk, i) => {
-          const label = chunk.attributes?.filename || chunk.attributes?.url || 'unknown'
-          return `[Source ${i + 1}: ${label}]\n${chunk.content}`
-        })
-        .join('\n\n---\n\n')
+      context = buildChunkContext(chunks)
     }
   }
   else {
     citationChunks = chunks
-    context = chunks
-      .map((chunk, i) => {
-        const label = chunk.attributes?.filename || chunk.attributes?.url || 'unknown'
-        return `[Source ${i + 1}: ${label}]\n${chunk.content}`
-      })
-      .join('\n\n---\n\n')
+    context = buildChunkContext(chunks)
   }
 
   const responseSources = citationChunks.map(chunkToSource)
