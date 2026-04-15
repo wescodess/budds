@@ -58,8 +58,9 @@ function toConvexSiteUrl(url: string) {
 }
 
 const convexUrl = readConfiguredValue('NUXT_PUBLIC_CONVEX_URL', 'CONVEX_URL')
-const convexSiteUrl = toConvexSiteUrl(convexUrl)
-const publicSiteUrl = readConfiguredValue('NUXT_PUBLIC_SITE_URL')
+const siteUrl = readConfiguredValue('SITE_URL', 'NUXT_PUBLIC_SITE_URL')
+const publicSiteUrl = siteUrl || readConfiguredValue('NUXT_PUBLIC_SITE_URL')
+const authProxyTargetUrl = readConfiguredValue('AUTH_PROXY_TARGET_URL', 'NUXT_AUTH_PROXY_TARGET_URL') || toConvexSiteUrl(convexUrl)
 
 export default defineNuxtConfig({
   css: ['~/assets/css/tailwind.css'],
@@ -113,7 +114,8 @@ export default defineNuxtConfig({
   },
   runtimeConfig: {
     // Read from process.env in Cloudflare Pages and from .env/.env.local locally.
-    convexSiteUrl,
+    authProxyTargetUrl,
+    siteUrl,
     cloudflareAccountId: readConfiguredValue('NUXT_CLOUDFLARE_ACCOUNT_ID', 'CF_ACCOUNT_ID'),
     cloudflareAiGatewayId: readConfiguredValue('NUXT_CLOUDFLARE_AI_GATEWAY_ID', 'CLOUDFLARE_AI_GATEWAY_ID'),
     cloudflareAiGatewayApiKey: readConfiguredValue('NUXT_CLOUDFLARE_AI_GATEWAY_API_KEY', 'CLOUDFLARE_AI_GATEWAY_API_KEY'),
