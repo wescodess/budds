@@ -77,11 +77,11 @@ function onFilesChosen(e: Event) {
         <header class="mb-1 flex items-center justify-between">
           <button
             type="button"
-            class="inline-flex items-center gap-1 rounded-md px-1 py-0.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
+            class="inline-flex min-h-9 items-center gap-1.5 rounded-md px-2 py-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground sm:min-h-7 sm:gap-1 sm:px-1 sm:py-0.5"
             :aria-expanded="subfoldersOpen"
             @click="subfoldersOpen = !subfoldersOpen"
           >
-            <component :is="subfoldersOpen ? ChevronDown : ChevronRight" class="h-3 w-3" />
+            <component :is="subfoldersOpen ? ChevronDown : ChevronRight" class="h-4 w-4 sm:h-3 sm:w-3" />
             Subfolders
             <span class="ml-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
               {{ filteredSubfolders.length }}

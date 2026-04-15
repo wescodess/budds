@@ -5,9 +5,9 @@ import type { Id } from '~~/convex/_generated/dataModel'
 defineOptions({ name: 'FolderShellFilesList' })
 
 type Doc = {
-  _id: Id<'documents'>
+  _id: Id<'documents'> | string
   filename: string
-  status: 'processing' | 'indexing' | 'success' | 'failed'
+  status: 'pending' | 'processing' | 'indexing' | 'success' | 'failed'
   fileSize: number
   _creationTime: number
   failureReason?: string
@@ -24,6 +24,7 @@ const emit = defineEmits<{
   move: [id: string]
   download: [id: string]
   delete: [id: string]
+  dismiss: [id: string]
   upload: []
 }>()
 </script>
@@ -54,6 +55,7 @@ const emit = defineEmits<{
         @move="emit('move', $event)"
         @download="emit('download', $event)"
         @delete="emit('delete', $event)"
+        @dismiss="emit('dismiss', $event)"
       />
     </template>
 

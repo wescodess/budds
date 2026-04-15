@@ -11,6 +11,25 @@ export type AttachmentStatus = {
   count?: number
 }
 
+export type DisplayDocument = {
+  _id: Id<'documents'> | string
+  filename: string
+  status: 'pending' | 'processing' | 'indexing' | 'success' | 'failed'
+  fileSize: number
+  _creationTime: number
+  failureReason?: string
+}
+
+type PendingUpload = {
+  clientId: string
+  filename: string
+  fileSize: number
+  createdAt: number
+  status: 'pending' | 'failed'
+  failureReason?: string
+  documentId?: Id<'documents'>
+}
+
 export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
   const id = isRef(folderId) ? folderId : ref(folderId)
 
@@ -52,8 +71,11 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
   const uploading = ref(false)
   const uploadProgress = ref(new Map<string, 'pending' | 'uploading' | 'done' | 'error'>())
   const recentDocumentIds = ref<Set<Id<'documents'>>>(new Set())
+  const pendingUploads = ref<PendingUpload[]>([])
+  const dismissedDisplayIds = ref<Set<string>>(new Set())
   let clearUploadProgressTimer: number | null = null
   let clearRecentDocumentsTimer: number | null = null
+  const displayDismissTimers = new Map<string, number>()
 
   function cancelClearUploadProgressTimer() {
     if (!clearUploadProgressTimer) return
@@ -90,6 +112,73 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
     cancelClearRecentDocumentsTimer()
     uploadProgress.value = new Map()
     recentDocumentIds.value = new Set()
+    pendingUploads.value = []
+  }
+
+  function clearDisplayDismissTimer(id: string) {
+    const timer = displayDismissTimers.get(id)
+    if (!timer || !import.meta.client) return
+    clearTimeout(timer)
+    displayDismissTimers.delete(id)
+  }
+
+  function dismissDisplayDocument(id: string) {
+    clearDisplayDismissTimer(id)
+    pendingUploads.value = pendingUploads.value.filter(
+      upload => upload.clientId !== id && String(upload.documentId ?? '') !== id,
+    )
+    const next = new Set(dismissedDisplayIds.value)
+    next.add(id)
+    dismissedDisplayIds.value = next
+  }
+
+  function scheduleDisplayDismiss(id: string, delay = 10_000) {
+    if (!import.meta.client || displayDismissTimers.has(id) || dismissedDisplayIds.value.has(id)) return
+    const timer = window.setTimeout(() => {
+      dismissDisplayDocument(id)
+    }, delay)
+    displayDismissTimers.set(id, timer)
+  }
+
+  function addPendingUpload(fileKey: string, file: File) {
+    const clientId = `pending:${fileKey}`
+    const nextDismissed = new Set(dismissedDisplayIds.value)
+    nextDismissed.delete(clientId)
+    dismissedDisplayIds.value = nextDismissed
+
+    pendingUploads.value = [
+      ...pendingUploads.value,
+      {
+        clientId,
+        filename: file.name,
+        fileSize: file.size,
+        createdAt: Date.now(),
+        status: 'pending',
+      },
+    ]
+  }
+
+  function linkPendingUpload(fileKey: string, documentId: Id<'documents'>) {
+    const clientId = `pending:${fileKey}`
+    pendingUploads.value = pendingUploads.value.map(upload =>
+      upload.clientId === clientId ? { ...upload, documentId } : upload,
+    )
+  }
+
+  function markPendingUploadFailed(fileKey: string, failureReason: string) {
+    const clientId = `pending:${fileKey}`
+    pendingUploads.value = pendingUploads.value.map(upload =>
+      upload.clientId === clientId
+        ? { ...upload, status: 'failed', failureReason }
+        : upload,
+    )
+    scheduleDisplayDismiss(clientId)
+  }
+
+  function removePendingUpload(fileKey: string) {
+    const clientId = `pending:${fileKey}`
+    clearDisplayDismissTimer(clientId)
+    pendingUploads.value = pendingUploads.value.filter(upload => upload.clientId !== clientId)
   }
 
   function rememberRecentDocument(documentId: Id<'documents'> | undefined) {
@@ -172,6 +261,29 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
     return [...recentDocumentIds.value]
       .map(docId => byId.get(docId))
       .filter((doc): doc is Doc<'documents'> => Boolean(doc))
+  })
+
+  const documentsForDisplay = computed<DisplayDocument[]>(() => {
+    const persistedDocuments = (documentsData.value ?? []) as Doc<'documents'>[]
+    const visibleDocumentIds = new Set(persistedDocuments.map(doc => String(doc._id)))
+    const optimisticRows: DisplayDocument[] = pendingUploads.value
+      .filter(upload => !upload.documentId || !visibleDocumentIds.has(String(upload.documentId)))
+      .filter(upload => !dismissedDisplayIds.value.has(upload.clientId))
+      .map(upload => ({
+        _id: upload.clientId,
+        filename: upload.filename,
+        status: upload.status,
+        fileSize: upload.fileSize,
+        _creationTime: upload.createdAt,
+        failureReason: upload.failureReason,
+      }))
+
+    const persistedRows = persistedDocuments.filter((doc) => {
+      if (doc.status !== 'failed') return true
+      return !dismissedDisplayIds.value.has(String(doc._id))
+    })
+
+    return [...optimisticRows, ...persistedRows]
   })
 
   const attachmentStatus = computed<AttachmentStatus>(() => {
@@ -259,11 +371,25 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
       }
 
       if (state === 'error' && recentDocumentIds.value.size > 0) {
-        scheduleRecentDocumentsClear(6000)
+        scheduleRecentDocumentsClear(10_000)
         return
       }
 
       cancelClearRecentDocumentsTimer()
+    },
+    { immediate: true },
+  )
+
+  watch(
+    () => trackedDocuments.value.map(doc => ({ id: String(doc._id), status: doc.status })),
+    (tracked) => {
+      for (const doc of tracked) {
+        if (doc.status === 'failed') {
+          scheduleDisplayDismiss(doc.id)
+        } else {
+          clearDisplayDismissTimer(doc.id)
+        }
+      }
     },
     { immediate: true },
   )
@@ -275,7 +401,9 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
     resetTrackedAttachmentState()
 
     for (const file of files) {
-      uploadProgress.value.set(`${file.name}-${file.size}-${file.lastModified}`, 'pending')
+      const fileKey = `${file.name}-${file.size}-${file.lastModified}`
+      uploadProgress.value.set(fileKey, 'pending')
+      addPendingUpload(fileKey, file)
     }
 
     const createdDocuments = [] as Array<{ documentId: Id<'documents'>; filename: string }>
@@ -285,18 +413,24 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
         const fileKey = `${file.name}-${file.size}-${file.lastModified}`
         if (file.type !== 'application/pdf') {
           uploadProgress.value.set(fileKey, 'error')
-          throw new Error(`${file.name}: Only PDF files are supported`)
+          const message = `${file.name}: Only PDF files are supported`
+          markPendingUploadFailed(fileKey, message)
+          throw new Error(message)
         }
         if (file.size > MAX_FILE_SIZE) {
           uploadProgress.value.set(fileKey, 'error')
-          throw new Error(`${file.name}: File exceeds 50MB limit`)
+          const message = `${file.name}: File exceeds 50MB limit`
+          markPendingUploadFailed(fileKey, message)
+          throw new Error(message)
         }
         uploadProgress.value.set(fileKey, 'uploading')
 
         const uploadUrl = (await generateUploadUrlMutation.mutate({})) as string
         if ((generateUploadUrlMutation as any).error?.value) {
           uploadProgress.value.set(fileKey, 'error')
-          throw (generateUploadUrlMutation as any).error.value
+          const err = (generateUploadUrlMutation as any).error.value
+          markPendingUploadFailed(fileKey, err?.message || `${file.name}: Upload failed`)
+          throw err
         }
 
         const response = await fetch(uploadUrl, {
@@ -307,7 +441,9 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
 
         if (!response.ok) {
           uploadProgress.value.set(fileKey, 'error')
-          throw new Error(`${file.name}: Upload failed`)
+          const message = `${file.name}: Upload failed`
+          markPendingUploadFailed(fileKey, message)
+          throw new Error(message)
         }
 
         const { storageId } = await response.json()
@@ -320,9 +456,12 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
         }) as Id<'documents'>
         if ((createDocumentMutation as any).error?.value) {
           uploadProgress.value.set(fileKey, 'error')
-          throw (createDocumentMutation as any).error.value
+          const err = (createDocumentMutation as any).error.value
+          markPendingUploadFailed(fileKey, err?.message || `${file.name}: Upload failed`)
+          throw err
         }
 
+        linkPendingUpload(fileKey, documentId)
         rememberRecentDocument(documentId)
         createdDocuments.push({ documentId, filename: file.name })
         uploadProgress.value.set(fileKey, 'done')
@@ -335,13 +474,16 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
       .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
       .map((r) => r.reason?.message || 'Upload failed')
 
-    scheduleUploadProgressClear(errors.length > 0 ? 6000 : 3500)
+    scheduleUploadProgressClear(errors.length > 0 ? 10_000 : 3500)
 
     if (errors.length > 0) {
       throw new Error(errors.join('\n'))
     }
 
-    await Promise.all(createdDocuments.map(({ documentId, filename }) => waitForDocumentToSettle(documentId, filename)))
+    await Promise.all(createdDocuments.map(async ({ documentId, filename }) => {
+      await waitForDocumentToSettle(documentId, filename)
+      pendingUploads.value = pendingUploads.value.filter(upload => upload.documentId !== documentId)
+    }))
   }
 
   async function importDocumentFromUrl(url: string, targetFolderId: Id<'folders'>) {
@@ -431,8 +573,18 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
     }
   }
 
+  onBeforeUnmount(() => {
+    cancelClearUploadProgressTimer()
+    cancelClearRecentDocumentsTimer()
+    for (const id of displayDismissTimers.keys()) {
+      clearDisplayDismissTimer(id)
+    }
+  })
+
   return {
     documents: documentsData as Ref<Doc<'documents'>[] | null>,
+    documentsForDisplay,
+    dismissDisplayDocument,
     attachmentStatus,
     uploading,
     importingLink: importDocumentFromUrlAction.isLoading,
