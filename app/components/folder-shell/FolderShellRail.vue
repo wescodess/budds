@@ -12,9 +12,10 @@ import {
   ChevronsLeft,
   ChevronsRight,
 } from 'lucide-vue-next'
-import { onClickOutside, usePointerSwipe } from '@vueuse/core'
+import { onClickOutside } from '@vueuse/core'
 import { api } from '#convex/api'
 import type { Id, Doc } from '~~/convex/_generated/dataModel'
+import { useHorizontalSwipeGesture } from '~/composables/useHorizontalSwipeGesture'
 import { PANEL_DISMISS_THRESHOLD_PX, useGestureGuards } from '~/composables/useGestureGuards'
 
 defineOptions({ name: 'FolderShellRail' })
@@ -141,7 +142,6 @@ const knowledgeCount = computed(() => {
 const knowledgeActive = computed(() => props.activeTab === 'documents')
 const railRef = ref<HTMLElement | null>(null)
 const { shouldStartHorizontalGesture } = useGestureGuards()
-const allowRailSwipe = ref(false)
 const SIDEBAR_SWIPE_EDGE_GUARD_PX = 12
 const railInlineStyle = computed(() => {
   if (props.hidden) {
@@ -175,45 +175,25 @@ onClickOutside(railRef, () => {
   emit('collapse-mobile-expanded')
 })
 
-function commitRailSwipe() {
-  if (!allowRailSwipe.value || props.hidden) {
-    allowRailSwipe.value = false
-    return
-  }
-  const deltaX = railSwipe.posEnd.x - railSwipe.posStart.x
-
-  if (props.mobileExpanded) {
-    if (deltaX <= -PANEL_DISMISS_THRESHOLD_PX) emit('collapse-mobile-expanded')
-  } else if (props.compact) {
-    if (deltaX >= PANEL_DISMISS_THRESHOLD_PX) emit('toggle-mobile-expanded')
-    else if (deltaX <= -PANEL_DISMISS_THRESHOLD_PX) emit('hide-mobile')
-  }
-  allowRailSwipe.value = false
-}
-
-let railSwipe: ReturnType<typeof usePointerSwipe>
-railSwipe = usePointerSwipe(railRef, {
+useHorizontalSwipeGesture({
+  target: railRef,
   threshold: 24,
-  pointerTypes: ['touch', 'pen'],
-  onSwipeStart(event) {
-    allowRailSwipe.value = !props.hidden && shouldStartHorizontalGesture(event, {
+  shouldStart(event) {
+    return !props.hidden && shouldStartHorizontalGesture(event, {
       allowGestureOwners: true,
       edgeGuardPx: SIDEBAR_SWIPE_EDGE_GUARD_PX,
     })
   },
-  onSwipeEnd() {
-    commitRailSwipe()
+  onSwipeEnd({ deltaX }) {
+    if (props.hidden) return
+    if (props.mobileExpanded) {
+      if (deltaX <= -PANEL_DISMISS_THRESHOLD_PX) emit('collapse-mobile-expanded')
+    } else if (props.compact) {
+      if (deltaX >= PANEL_DISMISS_THRESHOLD_PX) emit('toggle-mobile-expanded')
+      else if (deltaX <= -PANEL_DISMISS_THRESHOLD_PX) emit('hide-mobile')
+    }
   },
 })
-
-if (import.meta.client) {
-  watch(railRef, (el, _prev, onCleanup) => {
-    if (!el) return
-    const handler = () => { allowRailSwipe.value = false }
-    el.addEventListener('pointercancel', handler, { passive: true })
-    onCleanup(() => el.removeEventListener('pointercancel', handler))
-  }, { immediate: true })
-}
 </script>
 
 <template>

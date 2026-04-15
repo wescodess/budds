@@ -40,16 +40,30 @@ function resolveTargetElement(input: Event | Element | null | undefined) {
   return input.target instanceof Element ? input.target : null
 }
 
+function hasClientX(input: unknown): input is Pick<PointerEvent, 'clientX'> {
+  return typeof input === 'object' && input !== null && typeof (input as { clientX?: unknown }).clientX === 'number'
+}
+
+function resolveGesturePoint(input: Event | Touch | Pick<PointerEvent, 'clientX'> | null | undefined) {
+  if (!input) return null
+  if (hasClientX(input)) return input
+
+  const touchEvent = input as Partial<TouchEvent>
+  return touchEvent.changedTouches?.[0] ?? touchEvent.touches?.[0] ?? touchEvent.targetTouches?.[0] ?? null
+}
+
 export const useGestureGuards = createSharedComposable(() => {
   const isTouchLike = useMediaQuery('(hover: none), (pointer: coarse)')
   const isMobileViewport = useMediaQuery('(max-width: 1023px)')
 
   function isWithinEdgeGuard(
-    input: Pick<PointerEvent, 'clientX'> | MouseEvent | Touch | null | undefined,
+    input: Event | Touch | Pick<PointerEvent, 'clientX'> | null | undefined,
     edgeGuardPx = EDGE_GUARD_PX,
   ) {
-    if (!import.meta.client || !input) return false
-    return input.clientX <= edgeGuardPx || input.clientX >= window.innerWidth - edgeGuardPx
+    if (!import.meta.client) return false
+    const point = resolveGesturePoint(input)
+    if (!point) return false
+    return point.clientX <= edgeGuardPx || point.clientX >= window.innerWidth - edgeGuardPx
   }
 
   function isInteractiveTarget(
@@ -70,7 +84,7 @@ export const useGestureGuards = createSharedComposable(() => {
     return Boolean(target.closest(GESTURE_OWNER_SELECTOR))
   }
 
-  function shouldStartHorizontalGesture(event: PointerEvent, options: GestureGuardOptions = {}) {
+  function shouldStartHorizontalGesture(event: PointerEvent | TouchEvent, options: GestureGuardOptions = {}) {
     if (!isTouchLike.value || !isMobileViewport.value) return false
     if (isWithinEdgeGuard(event, options.edgeGuardPx)) return false
     if (!options.allowInteractiveTargets && isInteractiveTarget(event, options.extraInteractiveSelectors)) {
@@ -89,4 +103,3 @@ export const useGestureGuards = createSharedComposable(() => {
     shouldStartHorizontalGesture,
   }
 })
-
