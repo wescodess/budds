@@ -143,6 +143,11 @@ const output = `${lines.join('\n')}\n`
 
 if (strict && (missingBlocking.length > 0 || invalidBlocking.length > 0)) {
   process.stderr.write(output)
+  const blockers = [
+    ...missingBlocking.map((entry) => formatNames(entry.names)),
+    ...invalidBlocking.map((entry) => formatNames(entry.names)),
+  ]
+  process.stderr.write(`[budds env] Build blocked by: ${blockers.join(', ')}\n`)
   process.exit(1)
 }
 
