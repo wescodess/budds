@@ -53,8 +53,8 @@ const { signOut } = useUserSession()
 
 const { data: convosData } = useConvexQuery(api.conversations.listRecentForUser, {})
 
-const { data: flashSetsData } = useConvexQuery(
-  api.flashcards.listByFolder,
+const { data: flashRoomsData } = useConvexQuery(
+  api.flashcardRooms.listRoomsByFolder,
   computed(() => ({ folderId: props.folderId })),
 )
 
@@ -73,11 +73,11 @@ const voids = computed<VoidItem[]>(() => {
       title: c.title?.trim() || 'Untitled chat',
       updatedAt: (c._creationTime as number) ?? 0,
     }))
-  const flashes = ((flashSetsData.value as Array<any> | undefined) ?? []).map<VoidItem>(f => ({
+  const flashes = ((flashRoomsData.value as Array<any> | undefined) ?? []).map<VoidItem>(f => ({
     id: f._id as string,
     type: 'flashcards',
-    title: f.title?.trim() || 'Flash card set',
-    updatedAt: (f._creationTime as number) ?? 0,
+    title: f.title?.trim() || 'Flash cards',
+    updatedAt: (f.updatedAt as number) ?? (f.legacyCreatedAt as number) ?? (f._creationTime as number) ?? 0,
   }))
   const quizs = ((quizzesData.value as Array<any> | undefined) ?? []).map<VoidItem>(q => ({
     id: q._id as string,
