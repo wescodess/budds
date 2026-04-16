@@ -1,15 +1,5 @@
 import { vi, describe, test, expect, beforeEach } from 'vitest'
 
-const mockMutation = vi.fn()
-const mockSetAuth = vi.fn()
-vi.mock('convex/browser', () => ({
-  ConvexHttpClient: class {
-    setAuth = mockSetAuth
-    mutation = mockMutation
-  },
-}))
-
-vi.stubGlobal('useRuntimeConfig', vi.fn())
 vi.stubGlobal('createError', (opts: { statusCode: number; message: string }) =>
   Object.assign(new Error(opts.message), { statusCode: opts.statusCode }),
 )
@@ -23,8 +13,6 @@ vi.stubGlobal('buildFlashcardPrompt', (await import('../../utils/flashcard-promp
 vi.stubGlobal('parseFlashcardResponse', (await import('../../utils/flashcard-prompt')).parseFlashcardResponse)
 vi.stubGlobal('isAllowedModel', (await import('../../utils/models')).isAllowedModel)
 vi.stubGlobal('SERVER_DEFAULT_MODEL', (await import('../../utils/models')).SERVER_DEFAULT_MODEL)
-
-process.env.CONVEX_URL = 'https://test.convex.site'
 
 const handler = (await import('./generate.post')).default as Function
 
@@ -60,14 +48,6 @@ describe('POST /api/flashcards/generate', () => {
     vi.mocked(globalThis.searchDocuments as any).mockReset()
     vi.mocked(globalThis.generateCompletion as any).mockReset()
     vi.mocked(globalThis.getConvexTokenIdentifier as any).mockReturnValue('https://auth.example.com|user_test_123')
-    vi.mocked(globalThis.useRuntimeConfig as any).mockReturnValue({
-      public: {
-        convex: {
-          url: 'https://test.convex.site',
-        },
-      },
-    })
-    mockMutation.mockReset()
   })
 
   test('[P0] 401 when Convex token is missing', async () => {
@@ -98,7 +78,7 @@ describe('POST /api/flashcards/generate', () => {
     expect(globalThis.generateCompletion).not.toHaveBeenCalled()
   })
 
-  test('[P0] 200 happy path: returns setId + title + cardCount and persists via mutation', async () => {
+  test('[P0] 200 happy path: returns generated cards payload for client persistence', async () => {
     vi.mocked(globalThis.readBody as any).mockResolvedValue({ folderId: 'folder_abc' })
     vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({
       data: [
@@ -107,24 +87,32 @@ describe('POST /api/flashcards/generate', () => {
       ],
     })
     vi.mocked(globalThis.generateCompletion as any).mockResolvedValue(goodLlmResponse())
-    mockMutation.mockResolvedValue({ setId: 'set_abc' })
 
     const result = await handler(makeEvent())
 
     expect(result).toEqual({
-      setId: 'set_abc',
       title: 'Cellular Biology Flash Cards',
+      model: 'openai/gpt-4o-mini',
+      cards: [
+        {
+          order: 0,
+          front: 'What produces ATP?',
+          back: 'Mitochondria',
+          sourceDocumentId: 'doc_2',
+          sourceChunkContent: 'Mitochondria content',
+          sourceFilename: 'bio2.pdf',
+        },
+        {
+          order: 1,
+          front: 'Define photosynthesis',
+          back: 'Converting light to chemical energy',
+          sourceDocumentId: 'doc_1',
+          sourceChunkContent: 'Photosynthesis content',
+          sourceFilename: 'bio1.pdf',
+        },
+      ],
       cardCount: 2,
     })
-    expect(mockMutation).toHaveBeenCalledTimes(1)
-    const [, mutationArgs] = mockMutation.mock.calls[0]
-    expect(mutationArgs.folderId).toBe('folder_abc')
-    expect(mutationArgs.title).toBe('Cellular Biology Flash Cards')
-    expect(mutationArgs.cards).toHaveLength(2)
-    expect(mutationArgs.cards[0].sourceFilename).toBe('bio2.pdf')
-    expect(mutationArgs.cards[0].sourceChunkContent).toBe('Mitochondria content')
-    expect(mutationArgs.cards[0].sourceDocumentId).toBe('doc_2')
-    expect(mutationArgs.cards[1].sourceFilename).toBe('bio1.pdf')
   })
 
   test('[P0] 502 when parseFlashcardResponse yields no valid cards', async () => {
@@ -143,7 +131,6 @@ describe('POST /api/flashcards/generate', () => {
 
     const err = await (handler(makeEvent()) as Promise<any>).catch((e: any) => e)
     expect(err.statusCode).toBe(502)
-    expect(mockMutation).not.toHaveBeenCalled()
   })
 
   test('[P1] disallowed model falls back to SERVER_DEFAULT_MODEL', async () => {
@@ -158,18 +145,15 @@ describe('POST /api/flashcards/generate', () => {
       ],
     })
     vi.mocked(globalThis.generateCompletion as any).mockResolvedValue(goodLlmResponse())
-    mockMutation.mockResolvedValue({ setId: 'set_xyz' })
 
     await handler(makeEvent())
 
     expect(globalThis.generateCompletion).toHaveBeenCalledWith(
       expect.objectContaining({ model: 'openai/gpt-4o-mini' }),
     )
-    const [, mutationArgs] = mockMutation.mock.calls[0]
-    expect(mutationArgs.model).toBe('openai/gpt-4o-mini')
   })
 
-  test('[P1] integration: mutation receives cards that round-trip through zod', async () => {
+  test('[P1] integration: response cards round-trip through zod', async () => {
     vi.mocked(globalThis.readBody as any).mockResolvedValue({ folderId: 'folder_abc' })
     vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({
       data: [
@@ -178,12 +162,10 @@ describe('POST /api/flashcards/generate', () => {
       ],
     })
     vi.mocked(globalThis.generateCompletion as any).mockResolvedValue(goodLlmResponse())
-    mockMutation.mockResolvedValue({ setId: 'set_round' })
 
-    await handler(makeEvent())
+    const result = await handler(makeEvent())
 
-    const [, mutationArgs] = mockMutation.mock.calls[0]
-    for (const c of mutationArgs.cards) {
+    for (const c of result.cards) {
       expect(typeof c.order).toBe('number')
       expect(typeof c.front).toBe('string')
       expect(c.front.length).toBeGreaterThan(0)

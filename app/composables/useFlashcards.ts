@@ -25,6 +25,13 @@ export function useFlashcards(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
 
   const sets = computed<FlashcardSetSummary[]>(() => (setsData.value as FlashcardSetSummary[] | undefined) ?? [])
 
+  const createSetMutation = import.meta.client
+    ? useConvexMutation(api.flashcards.createSetWithCards)
+    : {
+        mutate: async (_args: unknown): Promise<any> => null,
+        isLoading: ref(false),
+      }
+
   const generating = ref(false)
   const lastError = ref<string | null>(null)
 
@@ -33,12 +40,31 @@ export function useFlashcards(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
     generating.value = true
     lastError.value = null
     try {
-      await $fetch<{ setId: string; title: string; cardCount: number }>('/api/flashcards/generate', {
+      const generated = await $fetch<{
+        title: string
+        model: string
+        cardCount: number
+        cards: Array<{
+          order: number
+          front: string
+          back: string
+          sourceDocumentId?: string
+          sourceChunkContent: string
+          sourceFilename: string
+        }>
+      }>('/api/flashcards/generate', {
         method: 'POST',
         body: {
           folderId: id.value,
           ...options,
         },
+      })
+
+      await createSetMutation.mutate({
+        folderId: id.value,
+        title: generated.title,
+        model: generated.model,
+        cards: generated.cards,
       })
     }
     catch (e: any) {
