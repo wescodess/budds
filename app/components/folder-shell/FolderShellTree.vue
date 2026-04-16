@@ -1,19 +1,32 @@
 <script setup lang="ts">
-import { ChevronRight, Folder, MoreHorizontal, Pencil, FolderInput, Trash2 } from 'lucide-vue-next'
 import type { Id, Doc } from '~~/convex/_generated/dataModel'
 
 defineOptions({ name: 'FolderShellTree' })
 
 type F = Doc<'folders'>
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   folders: F[]
-  activeId: Id<'folders'>
+  activeId?: Id<'folders'> | null
+  selectedId?: Id<'folders'> | null
   initiallyExpandPath?: boolean
   rootParentId?: Id<'folders'> | null
   directCounts?: Map<string, number>
   totalCounts?: Map<string, number>
-}>()
+  disabledIds?: string[]
+  showActions?: boolean
+  countMode?: 'documents' | 'subfolders' | 'none'
+  expandRootsInitially?: boolean
+}>(), {
+  activeId: null,
+  selectedId: null,
+  initiallyExpandPath: true,
+  rootParentId: null,
+  disabledIds: () => [],
+  showActions: true,
+  countMode: 'documents',
+  expandRootsInitially: false,
+})
 
 const emit = defineEmits<{
   'select': [id: Id<'folders'>]
@@ -40,6 +53,7 @@ const roots = computed(() => {
 
 const ancestorIds = computed(() => {
   const ids = new Set<string>()
+  if (!props.activeId) return ids
   const byId = new Map(props.folders.map(f => [f._id as string, f]))
   let cur = byId.get(props.activeId as unknown as string)
   while (cur?.parentId) {
@@ -50,9 +64,36 @@ const ancestorIds = computed(() => {
 })
 
 const expanded = ref(new Set<string>())
+const seededRootIds = ref(new Set<string>())
+
 watchEffect(() => {
-  for (const id of ancestorIds.value) expanded.value.add(id)
+  if (!props.initiallyExpandPath) return
+  const next = new Set(expanded.value)
+  let changed = false
+  for (const id of ancestorIds.value) {
+    if (next.has(id)) continue
+    next.add(id)
+    changed = true
+  }
+  if (changed) expanded.value = next
 })
+
+watch(roots, (items) => {
+  if (!props.expandRootsInitially) return
+  const next = new Set(expanded.value)
+  let changed = false
+
+  for (const folder of items) {
+    const id = folder._id as unknown as string
+    if (seededRootIds.value.has(id)) continue
+    seededRootIds.value.add(id)
+    if ((byParent.value.get(id)?.length ?? 0) === 0) continue
+    next.add(id)
+    changed = true
+  }
+
+  if (changed) expanded.value = next
+}, { immediate: true })
 
 function toggle(id: string) {
   if (expanded.value.has(id)) expanded.value.delete(id)
@@ -72,11 +113,15 @@ function childrenOf(id: string): F[] {
       :key="f._id"
       :folder="f"
       :children-of="childrenOf"
-      :active-id="activeId"
+      :active-id="activeId ?? null"
+      :selected-id="selectedId ?? null"
       :expanded="expanded"
       :depth="0"
       :direct-counts="directCounts"
       :total-counts="totalCounts"
+      :disabled-ids="disabledIds"
+      :show-actions="showActions"
+      :count-mode="countMode"
       @toggle="toggle"
       @select="(id) => emit('select', id)"
       @rename="(folder) => emit('rename', folder)"

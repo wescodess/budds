@@ -6,6 +6,7 @@ import { useGestureGuards } from '~/composables/useGestureGuards'
 
 const props = defineProps<{
   folderId: Id<'folders'>
+  selectedQuizId?: string | null
 }>()
 
 const {
@@ -60,6 +61,21 @@ function handleTakerBack() {
 function handleEditorBack() {
   editingQuizId.value = null
 }
+
+watch(
+  () => props.selectedQuizId,
+  (next) => {
+    if (!next) {
+      activeQuizId.value = null
+      editingQuizId.value = null
+      return
+    }
+
+    activeQuizId.value = next as Id<'quizzes'>
+    editingQuizId.value = null
+  },
+  { immediate: true },
+)
 
 function toggleMenu(quizId: string) {
   openMenuQuizId.value = openMenuQuizId.value === quizId ? null : quizId

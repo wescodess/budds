@@ -131,20 +131,20 @@ async function failDocumentIngestion(
 
   const r2Cleanup = r2Key
     ? await performCleanupAttemptInternal({
-        kind: 'r2',
-        userId,
-        documentId: String(args.documentId),
-        r2Key,
-      })
+      kind: 'r2',
+      userId,
+      documentId: String(args.documentId),
+      r2Key,
+    })
     : { ok: true } satisfies CleanupAttemptResult
 
   const aiSearchCleanup = args.cleanupAiSearch
     ? await performCleanupAttemptInternal({
-        kind: 'ai-search',
-        userId,
-        documentId: String(args.documentId),
-        r2Key,
-      })
+      kind: 'ai-search',
+      userId,
+      documentId: String(args.documentId),
+      r2Key,
+    })
     : { ok: true } satisfies CleanupAttemptResult
 
   const { r2Enqueued, aiSearchEnqueued } = await ctx.runMutation(
@@ -352,6 +352,13 @@ export const pollIndexingStatus = internalAction({
         await ctx.runMutation(internal.documents.updateDocumentStatus, {
           id: args.documentId,
           status: 'success',
+        })
+        await ctx.scheduler.runAfter(0, internal.documentActions.updateDocumentAiSearchMetadata, {
+          documentId: String(args.documentId),
+          userId: doc.userId,
+          folderId: String(doc.folderId),
+          filename: doc.filename,
+          r2Key: doc.r2Key,
         })
       }
     } else {

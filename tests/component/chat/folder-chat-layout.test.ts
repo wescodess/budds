@@ -163,35 +163,31 @@ const UiTabsContentStub = defineComponent({
   },
 })
 
-function dispatchPointer(target: Element, type: string, init: Record<string, unknown>) {
-  const event = typeof PointerEvent === 'function'
-    ? new PointerEvent(type, { bubbles: true, ...init })
-    : Object.assign(new Event(type, { bubbles: true }), init)
+function dispatchTouch(target: Element, type: string, x: number, y: number, identifier = 1) {
+  const touch = {
+    identifier,
+    clientX: x,
+    clientY: y,
+    target,
+  }
+
+  const isTouchEnd = type === 'touchend' || type === 'touchcancel'
+  const event = Object.assign(new Event(type, {
+    bubbles: true,
+    cancelable: true,
+  }), {
+    touches: isTouchEnd ? [] : [touch],
+    targetTouches: isTouchEnd ? [] : [touch],
+    changedTouches: [touch],
+  })
+
   target.dispatchEvent(event)
 }
 
-async function swipeHorizontal(target: Element, startX: number, endX: number, pointerId = 1) {
-  dispatchPointer(target, 'pointerdown', {
-    pointerId,
-    pointerType: 'touch',
-    clientX: startX,
-    clientY: 48,
-    buttons: 1,
-  })
-  dispatchPointer(target, 'pointermove', {
-    pointerId,
-    pointerType: 'touch',
-    clientX: endX,
-    clientY: 48,
-    buttons: 1,
-  })
-  dispatchPointer(target, 'pointerup', {
-    pointerId,
-    pointerType: 'touch',
-    clientX: endX,
-    clientY: 48,
-    buttons: 0,
-  })
+async function swipeHorizontal(target: Element, startX: number, endX: number, touchId = 1) {
+  dispatchTouch(target, 'touchstart', startX, 48, touchId)
+  dispatchTouch(target, 'touchmove', endX, 48, touchId)
+  dispatchTouch(target, 'touchend', endX, 48, touchId)
   await flushPromises()
 }
 

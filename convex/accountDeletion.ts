@@ -48,69 +48,81 @@ export async function enqueueDocumentCleanup(
   return { r2Enqueued, aiSearchEnqueued }
 }
 
-export const deleteAccountCascade = internalMutation({
+export const deleteCurrentUser = internalMutation({
   args: {},
   handler: async (ctx) => {
     const identity = await ctx.auth.getUserIdentity()
     if (!identity) throw new Error('Unauthenticated')
-
-    const userId = identity.tokenIdentifier
-
-    const documents = await ctx.db
-      .query('documents')
-      .withIndex('by_userId', (q) => q.eq('userId', userId))
-      .collect()
-
-    let enqueuedAiSearchPerDoc = 0
-
-    for (const doc of documents) {
-      const { aiSearchEnqueued } = await enqueueDocumentCleanup(ctx, {
-        userId,
-        documentId: String(doc._id),
-        status: doc.status,
-        r2Key: doc.r2Key,
-      })
-      if (aiSearchEnqueued) enqueuedAiSearchPerDoc++
-      try {
-        await ctx.storage.delete(doc.fileId)
-      } catch {
-        // best-effort; storage may already be gone
-      }
-    }
-
-    await ctx.db.insert('pendingCleanup', {
-      userId,
-      documentId: '__user_bulk__',
-      kind: 'ai-search',
-      attempts: 0,
-    })
-
-    await deleteAllMessagesForUser(ctx, userId)
-    await deleteAllConversationsForUser(ctx, userId)
-    await deleteAllQuizAttemptsForUser(ctx, userId)
-    await deleteAllQuizQuestionsForUser(ctx, userId)
-    await deleteAllQuizzesForUser(ctx, userId)
-    await deleteAllFlashcardsForUser(ctx, userId)
-    await deleteAllFlashcardSetsForUser(ctx, userId)
-    await deleteAllDocumentsForUser(ctx, userId)
-    await deleteAllFoldersForUser(ctx, userId)
-
-    const userRow = await ctx.db
-      .query('users')
-      .withIndex('by_tokenIdentifier', (q) => q.eq('tokenIdentifier', userId))
-      .unique()
-    if (userRow) {
-      await ctx.db.delete(userRow._id)
-    }
-
-    await ctx.scheduler.runAfter(0, internal.accountDeletion.drainPendingCleanup, { userId })
-
-    return {
-      documentsRemoved: documents.length,
-      aiSearchRowsEnqueued: enqueuedAiSearchPerDoc + 1,
-    }
+    return await deleteAccountCascadeImpl(ctx, identity.tokenIdentifier)
   },
 })
+
+export const deleteAccountCascade = internalMutation({
+  args: { userId: v.string() },
+  handler: async (ctx, args) => {
+    return await deleteAccountCascadeImpl(ctx, args.userId)
+  },
+})
+
+async function deleteAccountCascadeImpl(ctx: MutationCtx, userId: string) {
+  const documents = await ctx.db
+    .query('documents')
+    .withIndex('by_userId', (q) => q.eq('userId', userId))
+    .collect()
+
+  let enqueuedAiSearchPerDoc = 0
+
+  for (const doc of documents) {
+    const { aiSearchEnqueued } = await enqueueDocumentCleanup(ctx, {
+      userId,
+      documentId: String(doc._id),
+      status: doc.status,
+      r2Key: doc.r2Key,
+    })
+    if (aiSearchEnqueued) enqueuedAiSearchPerDoc++
+    try {
+      await ctx.storage.delete(doc.fileId)
+    } catch {
+      // best-effort
+    }
+  }
+
+  await ctx.db.insert('pendingCleanup', {
+    userId,
+    documentId: '__user_bulk__',
+    kind: 'ai-search',
+    attempts: 0,
+  })
+
+  await deleteAllMessagesForUser(ctx, userId)
+  await deleteAllConversationsForUser(ctx, userId)
+  await deleteAllQuizAttemptsForUser(ctx, userId)
+  await deleteAllQuizQuestionsForUser(ctx, userId)
+  await deleteAllQuizzesForUser(ctx, userId)
+  await deleteAllFlashcardsForUser(ctx, userId)
+  await deleteAllFlashcardSetsForUser(ctx, userId)
+  await deleteAllFlashcardRoomCardsForUser(ctx, userId)
+  await deleteAllFlashcardVersionCardsForUser(ctx, userId)
+  await deleteAllFlashcardRoomVersionsForUser(ctx, userId)
+  await deleteAllFlashcardRoomsForUser(ctx, userId)
+  await deleteAllDocumentsForUser(ctx, userId)
+  await deleteAllFoldersForUser(ctx, userId)
+
+  const userRow = await ctx.db
+    .query('users')
+    .withIndex('by_tokenIdentifier', (q) => q.eq('tokenIdentifier', userId))
+    .unique()
+  if (userRow) {
+    await ctx.db.delete(userRow._id)
+  }
+
+  await ctx.scheduler.runAfter(0, internal.accountDeletion.drainPendingCleanup, { userId })
+
+  return {
+    documentsRemoved: documents.length,
+    aiSearchRowsEnqueued: enqueuedAiSearchPerDoc + 1,
+  }
+}
 
 async function deleteAllMessagesForUser(ctx: MutationCtx, userId: string) {
   while (true) {
@@ -200,6 +212,54 @@ async function deleteAllFlashcardSetsForUser(ctx: MutationCtx, userId: string) {
   while (true) {
     const batch = await ctx.db
       .query('flashcardSets')
+      .withIndex('by_userId', (q) => q.eq('userId', userId))
+      .take(500)
+    if (batch.length === 0) break
+    for (const row of batch) await ctx.db.delete(row._id)
+    if (batch.length < 500) break
+  }
+}
+
+async function deleteAllFlashcardRoomCardsForUser(ctx: MutationCtx, userId: string) {
+  while (true) {
+    const batch = await ctx.db
+      .query('flashcardRoomCards')
+      .withIndex('by_userId', (q) => q.eq('userId', userId))
+      .take(500)
+    if (batch.length === 0) break
+    for (const row of batch) await ctx.db.delete(row._id)
+    if (batch.length < 500) break
+  }
+}
+
+async function deleteAllFlashcardVersionCardsForUser(ctx: MutationCtx, userId: string) {
+  while (true) {
+    const batch = await ctx.db
+      .query('flashcardVersionCards')
+      .withIndex('by_userId', (q) => q.eq('userId', userId))
+      .take(500)
+    if (batch.length === 0) break
+    for (const row of batch) await ctx.db.delete(row._id)
+    if (batch.length < 500) break
+  }
+}
+
+async function deleteAllFlashcardRoomVersionsForUser(ctx: MutationCtx, userId: string) {
+  while (true) {
+    const batch = await ctx.db
+      .query('flashcardRoomVersions')
+      .withIndex('by_userId', (q) => q.eq('userId', userId))
+      .take(500)
+    if (batch.length === 0) break
+    for (const row of batch) await ctx.db.delete(row._id)
+    if (batch.length < 500) break
+  }
+}
+
+async function deleteAllFlashcardRoomsForUser(ctx: MutationCtx, userId: string) {
+  while (true) {
+    const batch = await ctx.db
+      .query('flashcardRooms')
       .withIndex('by_userId', (q) => q.eq('userId', userId))
       .take(500)
     if (batch.length === 0) break

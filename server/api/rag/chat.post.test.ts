@@ -327,6 +327,76 @@ describe('POST /api/rag/chat — folderId enforcement (AC #1)', () => {
     expect(result.sources).toHaveLength(3)
     expect(result.sources[0].content).toBe('Chunk A')
   })
+
+  test('[P0] should append raw context for selected files that search has not surfaced yet', async () => {
+    const scopedEvent = {
+      context: { convexToken: 'convex-test-token' },
+    } as any
+
+    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+      query: 'Compare the selected files',
+      model: 'openai/gpt-4o-mini',
+      folderId: 'folder_root',
+      scope: {
+        fileIds: ['doc_existing', 'doc_new'],
+      },
+    })
+    mockConvexQuery.mockResolvedValue({
+      documentIds: ['doc_existing', 'doc_new'],
+      documents: [
+        {
+          id: 'doc_existing',
+          folderId: 'folder_root',
+          filename: 'existing.pdf',
+          r2Key: 'user/folder_root/doc_existing.txt',
+        },
+        {
+          id: 'doc_new',
+          folderId: 'folder_root',
+          filename: 'new-upload.pdf',
+          r2Key: 'user/folder_root/doc_new.txt',
+        },
+      ],
+      ownedFolderIds: [],
+    })
+    vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({
+      data: [
+        { id: '1', content: 'Existing chunk A', score: 0.91, attributes: { filename: 'existing.pdf', documentId: 'doc_existing' } },
+        { id: '2', content: 'Existing chunk B', score: 0.88, attributes: { filename: 'existing.pdf', documentId: 'doc_existing' } },
+        { id: '3', content: 'Existing chunk C', score: 0.84, attributes: { filename: 'existing.pdf', documentId: 'doc_existing' } },
+      ],
+    })
+    vi.mocked(globalThis.fetchFolderDocs as any).mockResolvedValue([
+      {
+        key: 'user/folder_root/doc_new.txt',
+        documentId: 'doc_new',
+        folderId: 'folder_root',
+        filename: 'new-upload.pdf',
+        content: 'Fresh upload fallback content',
+      },
+    ])
+    vi.mocked(globalThis.generateCompletion as any).mockResolvedValue({
+      choices: [{ message: { content: 'Comparison [1] [4]' } }],
+      model: 'openai/gpt-4o-mini',
+      usage: {},
+    })
+
+    const result = await handler(scopedEvent)
+
+    expect(globalThis.fetchFolderDocs).toHaveBeenCalledWith(
+      expect.objectContaining({
+        documents: [
+          expect.objectContaining({
+            documentId: 'doc_new',
+            folderId: 'folder_root',
+          }),
+        ],
+      }),
+    )
+    expect(result.sources).toHaveLength(4)
+    expect(result.sources[3].attributes.documentId).toBe('doc_new')
+    expect(result.sources[3].content).toBe('Fresh upload fallback content')
+  })
 })
 
 describe('POST /api/rag/chat — streaming (AC #1, #2)', () => {

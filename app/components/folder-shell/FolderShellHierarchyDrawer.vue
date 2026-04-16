@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { X, FolderPlus, Search, Plus, Link as LinkIcon, Upload, Pencil } from 'lucide-vue-next'
-import { onKeyStroke, usePointerSwipe } from '@vueuse/core'
+import { onKeyStroke } from '@vueuse/core'
 import { api } from '#convex/api'
 import type { Doc, Id } from '~~/convex/_generated/dataModel'
+import MoveToFolderDialog from '~/components/documents/MoveToFolderDialog.vue'
+import { useHorizontalSwipeGesture } from '~/composables/useHorizontalSwipeGesture'
 import { PANEL_DISMISS_THRESHOLD_PX, useGestureGuards } from '~/composables/useGestureGuards'
 
 defineOptions({ name: 'FolderShellHierarchyDrawer' })
@@ -59,29 +61,23 @@ const totalCountByFolder = computed(() => {
 const panelRef = ref<HTMLElement | null>(null)
 onKeyStroke('Escape', () => emit('close'))
 const { shouldStartHorizontalGesture } = useGestureGuards()
-const allowDismissSwipe = ref(false)
 const SIDEBAR_SWIPE_EDGE_GUARD_PX = 12
 
-let panelSwipe: ReturnType<typeof usePointerSwipe>
-panelSwipe = usePointerSwipe(panelRef, {
+useHorizontalSwipeGesture({
+  target: panelRef,
   threshold: 24,
-  pointerTypes: ['touch', 'pen'],
-  onSwipeStart(event) {
-    allowDismissSwipe.value = props.fullWidth && shouldStartHorizontalGesture(event, {
+  shouldStart(event) {
+    return props.fullWidth && shouldStartHorizontalGesture(event, {
       edgeGuardPx: SIDEBAR_SWIPE_EDGE_GUARD_PX,
     })
   },
-  onSwipeEnd() {
-    if (allowDismissSwipe.value && props.fullWidth) {
-      const deltaX = panelSwipe.posEnd.x - panelSwipe.posStart.x
-      if (deltaX <= -PANEL_DISMISS_THRESHOLD_PX) emit('close')
-    }
-    allowDismissSwipe.value = false
+  onSwipeEnd({ deltaX }) {
+    if (props.fullWidth && deltaX <= -PANEL_DISMISS_THRESHOLD_PX) emit('close')
   },
 })
 
 const drawerShellStyle = computed<Record<string, string>>(() => ({
-  '--drawer-target-width': props.fullWidth ? '90vw' : 'min(55vw, 90vw, 720px)',
+  '--drawer-target-width': props.fullWidth ? '85vw' : 'min(85vw, 720px)',
   left: props.fullWidth ? '0px' : `${props.railWidth}px`,
   width: props.open ? 'var(--drawer-target-width)' : '0px',
 }))
@@ -595,24 +591,13 @@ async function onFiles(e: Event) {
       </UiAlertDialogContent>
     </UiAlertDialog>
 
-    <UiDialog v-model:open="showMoveDialog">
-      <UiDialogContent>
-        <UiDialogHeader>
-          <UiDialogTitle>Move to folder</UiDialogTitle>
-          <UiDialogDescription>Choose a destination folder.</UiDialogDescription>
-        </UiDialogHeader>
-        <div class="max-h-64 space-y-1 overflow-y-auto py-2">
-          <button
-            v-for="f in allFolders ?? []"
-            :key="f._id"
-            :disabled="f._id === folderId || movePending"
-            class="flex w-full items-center rounded-md px-3 py-2 text-sm hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-            @click="confirmMove(f._id)"
-          >
-            {{ f.name }}
-          </button>
-        </div>
-      </UiDialogContent>
-    </UiDialog>
+    <MoveToFolderDialog
+      v-model:open="showMoveDialog"
+      :folders="allFolders"
+      :current-folder-id="folderId"
+      :pending="movePending"
+      :item-count="moveTargetIds.length"
+      @submit="confirmMove"
+    />
   </div>
 </template>

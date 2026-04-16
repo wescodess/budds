@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { usePointerSwipe } from '@vueuse/core'
 import { ChevronDown, ChevronUp, X } from 'lucide-vue-next'
 import { nextTick, ref, watch } from 'vue'
 import type { Source } from '~/composables/useChat'
+import { useHorizontalSwipeGesture } from '~/composables/useHorizontalSwipeGesture'
 import { PANEL_DISMISS_THRESHOLD_PX, useGestureGuards } from '~/composables/useGestureGuards'
 
 const props = defineProps<{
@@ -18,7 +18,6 @@ const cardRefs = ref<HTMLElement[]>([])
 const expanded = ref<Record<number, boolean>>({})
 const paneRef = ref<HTMLElement | null>(null)
 const { shouldStartHorizontalGesture } = useGestureGuards()
-const allowDismissSwipe = ref(false)
 const SIDEBAR_SWIPE_EDGE_GUARD_PX = 12
 
 watch(() => props.activeCitationIndex, (index) => {
@@ -33,22 +32,17 @@ function toggle(i: number) {
   expanded.value[i] = !expanded.value[i]
 }
 
-let paneSwipe: ReturnType<typeof usePointerSwipe>
-paneSwipe = usePointerSwipe(paneRef, {
+useHorizontalSwipeGesture({
+  target: paneRef,
   threshold: 24,
-  pointerTypes: ['touch', 'pen'],
-  onSwipeStart(event) {
-    allowDismissSwipe.value = shouldStartHorizontalGesture(event, {
+  shouldStart(event) {
+    return shouldStartHorizontalGesture(event, {
       allowGestureOwners: true,
       edgeGuardPx: SIDEBAR_SWIPE_EDGE_GUARD_PX,
     })
   },
-  onSwipeEnd() {
-    if (allowDismissSwipe.value) {
-      const deltaX = paneSwipe.posEnd.x - paneSwipe.posStart.x
-      if (deltaX >= PANEL_DISMISS_THRESHOLD_PX) emit('close')
-    }
-    allowDismissSwipe.value = false
+  onSwipeEnd({ deltaX }) {
+    if (deltaX >= PANEL_DISMISS_THRESHOLD_PX) emit('close')
   },
 })
 </script>

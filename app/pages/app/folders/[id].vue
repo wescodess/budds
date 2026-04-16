@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { FileText, MessageSquare, ClipboardList, Layers, PanelRight, ArrowLeftRight } from 'lucide-vue-next'
-import { useMediaQuery, usePointerSwipe } from '@vueuse/core'
+import { useMediaQuery } from '@vueuse/core'
 import { api } from '#convex/api'
 import type { Id } from '~~/convex/_generated/dataModel'
 import type { VoidType } from '~/components/voids/CreateVoidDialog.vue'
+import MoveToFolderDialog from '~/components/documents/MoveToFolderDialog.vue'
 import FolderHelperPane from '~/components/folders/FolderHelperPane.vue'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+import { useHorizontalSwipeGesture } from '~/composables/useHorizontalSwipeGesture'
 import { TAB_SWITCH_THRESHOLD_PX, useGestureGuards } from '~/composables/useGestureGuards'
 
 definePageMeta({ layout: 'folder' })
@@ -68,6 +70,32 @@ const createConversationMutation = import.meta.client
         '' as unknown as Id<'conversations'>,
     }
 
+const deleteConversationMutation = import.meta.client
+  ? useConvexMutation(api.conversations.deleteConversation)
+  : {
+      mutate: async (_args: { id: Id<'conversations'> }) => null,
+    }
+
+const deleteFlashcardRoomMutation = import.meta.client
+  ? useConvexMutation(api.flashcardRooms.deleteRoom)
+  : {
+      mutate: async (_args: { roomId: Id<'flashcardRooms'> }) => null,
+    }
+
+const createFlashcardRoomMutation = import.meta.client
+  ? useConvexMutation(api.flashcardRooms.createRoom)
+  : {
+      mutate: async (_args: { folderId: Id<'folders'>; title?: string }) => ({
+        roomId: '' as unknown as Id<'flashcardRooms'>,
+      }),
+    }
+
+const deleteQuizMutation = import.meta.client
+  ? useConvexMutation(api.quizzes.deleteQuiz)
+  : {
+      mutate: async (_args: { quizId: Id<'quizzes'> }) => null,
+    }
+
 function unwrapConvexError(err: any): string {
   if (err?.data?.message && typeof err.data.message === 'string') return err.data.message
   const raw = typeof err?.message === 'string' ? err.message : ''
@@ -78,17 +106,27 @@ function hideSidebarOnMobile() {
   folderShellRef.value?.hideMobileRail()
 }
 
-async function onCreateVoid(type: VoidType) {
+async function onCreateVoid(payload: { type: VoidType; name?: string }) {
   if (creatingVoid.value) return
   creatingVoid.value = true
   try {
+    const { type, name } = payload
+    const trimmedName = name?.trim()
     if (type === 'chat') {
       const newId = (await createConversationMutation.mutate({
         folderId: folderId.value,
-        title: 'New chat',
+        title: trimmedName || 'New chat',
       })) as Id<'conversations'>
       activeTab.value = 'chat'
       await router.replace({ query: { ...(route.query ?? {}), tab: 'chat', conversationId: newId } })
+    } else if (type === 'flashcards') {
+      const result = (await createFlashcardRoomMutation.mutate({
+        folderId: folderId.value,
+        title: trimmedName,
+      })) as { roomId: Id<'flashcardRooms'> }
+      activeTab.value = 'flashcards'
+      const { conversationId: _dropC, ...rest } = route.query ?? {}
+      await router.replace({ query: { ...rest, tab: 'flashcards', voidId: result.roomId } })
     } else {
       activeTab.value = type
       await router.replace({ query: { ...(route.query ?? {}), tab: type } })
@@ -114,6 +152,79 @@ async function onSelectVoid({ type, id }: { type: 'chat' | 'flashcards' | 'quiz'
     await router.replace({ query: { ...rest, tab: type, voidId: id } })
   }
   hideSidebarOnMobile()
+}
+
+const voidDeleteTarget = ref<{ type: 'chat' | 'flashcards' | 'quiz'; id: string; title: string } | null>(null)
+const deletingVoid = ref(false)
+
+function handleDeleteVoidRequest(target: { type: 'chat' | 'flashcards' | 'quiz'; id: string; title: string }) {
+  voidDeleteTarget.value = target
+}
+
+const showDeleteVoidDialog = computed({
+  get: () => voidDeleteTarget.value !== null,
+  set: (value: boolean) => {
+    if (!value) voidDeleteTarget.value = null
+  },
+})
+
+const deleteVoidDescription = computed(() => {
+  if (!voidDeleteTarget.value) return ''
+  const label = voidDeleteTarget.value.title || 'this void'
+  const kind = voidDeleteTarget.value.type === 'flashcards'
+    ? 'flash card set'
+    : voidDeleteTarget.value.type === 'quiz'
+      ? 'quiz'
+      : 'chat'
+  return `Delete "${label}"? This will permanently remove the ${kind}.`
+})
+
+async function clearRouteSelectionForDeletedVoid(target: { type: 'chat' | 'flashcards' | 'quiz'; id: string }) {
+  const base = { ...(route.query ?? {}) }
+
+  if (target.type === 'chat') {
+    if (activeConversationId.value !== target.id) return
+    const { conversationId: _drop, ...rest } = base
+    await router.replace({ query: rest })
+    return
+  }
+
+  if (activeTab.value === target.type && activeVoidId.value === target.id) {
+    const { voidId: _drop, ...rest } = base
+    await router.replace({ query: rest })
+  }
+}
+
+async function confirmDeleteVoid() {
+  const target = voidDeleteTarget.value
+  if (!target || deletingVoid.value) return
+
+  deletingVoid.value = true
+  try {
+    if (target.type === 'chat') {
+      await deleteConversationMutation.mutate({ id: target.id as Id<'conversations'> })
+    } else if (target.type === 'flashcards') {
+      await deleteFlashcardRoomMutation.mutate({ roomId: target.id as Id<'flashcardRooms'> })
+    } else {
+      await deleteQuizMutation.mutate({ quizId: target.id as Id<'quizzes'> })
+    }
+
+    await clearRouteSelectionForDeletedVoid(target)
+    voidDeleteTarget.value = null
+
+    const { toast } = await import('vue-sonner')
+    const kind = target.type === 'flashcards'
+      ? 'Flash card set'
+      : target.type === 'quiz'
+        ? 'Quiz'
+        : 'Chat'
+    toast.success(`${kind} deleted`)
+  } catch (e: any) {
+    const { toast } = await import('vue-sonner')
+    toast.error(unwrapConvexError(e) || 'Failed to delete void')
+  } finally {
+    deletingVoid.value = false
+  }
 }
 
 const deleteTargetIds = ref<string[]>([])
@@ -177,7 +288,6 @@ const flipPanelAriaLabel = computed(() =>
 
 const panelFlipPointerStart = ref<{ x: number; y: number } | null>(null)
 const suppressNextPanelFlipClick = ref(false)
-const allowWorkspaceSwipe = ref(false)
 
 function clearSelectedDocuments() {
   selectedDocumentIds.value = []
@@ -233,46 +343,26 @@ function hasBlockingOverlay() {
   ))
 }
 
-function commitWorkspaceSwipe() {
-  if (!allowWorkspaceSwipe.value) return
-  const deltaX = workspaceSwipe.posEnd.x - workspaceSwipe.posStart.x
-  if (Math.abs(deltaX) >= TAB_SWITCH_THRESHOLD_PX) {
-    const handledSidebarSwipe = handleWorkspaceSidebarSwipe(deltaX)
-    if (!handledSidebarSwipe) {
-      const currentIndex = getCurrentTabIndex()
-      const nextIndex = deltaX < 0 ? currentIndex + 1 : currentIndex - 1
-      const nextTab = allowedTabs[nextIndex]
-      if (nextTab) void onTabChange(nextTab)
-    }
-  }
-  allowWorkspaceSwipe.value = false
-}
-
-let workspaceSwipe: ReturnType<typeof usePointerSwipe>
-workspaceSwipe = usePointerSwipe(workspaceRef, {
+useHorizontalSwipeGesture({
+  target: workspaceRef,
   threshold: 24,
-  pointerTypes: ['touch', 'pen'],
-  onSwipeStart(event) {
-    allowWorkspaceSwipe.value = !isDesktop.value
+  shouldStart(event) {
+    return !isDesktop.value
       && !hasBlockingOverlay()
       && shouldStartHorizontalGesture(event, { edgeGuardPx: SIDEBAR_SWIPE_EDGE_GUARD_PX })
   },
-  onSwipeEnd() {
-    commitWorkspaceSwipe()
+  onSwipeEnd({ deltaX }) {
+    if (Math.abs(deltaX) >= TAB_SWITCH_THRESHOLD_PX) {
+      const handledSidebarSwipe = handleWorkspaceSidebarSwipe(deltaX)
+      if (!handledSidebarSwipe) {
+        const currentIndex = getCurrentTabIndex()
+        const nextIndex = deltaX < 0 ? currentIndex + 1 : currentIndex - 1
+        const nextTab = allowedTabs[nextIndex]
+        if (nextTab) void onTabChange(nextTab)
+      }
+    }
   },
 })
-
-// VueUse's usePointerSwipe does not listen for pointercancel.
-// On mobile, when the browser takes over a touch for native vertical scrolling,
-// it fires pointercancel. When this happens, we must ABORT the gesture.
-if (import.meta.client) {
-  watch(workspaceRef, (el, _prev, onCleanup) => {
-    if (!el) return
-    const handler = () => { allowWorkspaceSwipe.value = false }
-    el.addEventListener('pointercancel', handler, { passive: true })
-    onCleanup(() => el.removeEventListener('pointercancel', handler))
-  }, { immediate: true })
-}
 
 const allSources = computed(() => {
   if (activeMessageIndex.value === null) return []
@@ -287,10 +377,6 @@ const latestSourcedMessageIndex = computed(() => {
 })
 const canOpenSourcePanelFromSwipe = computed(() =>
   activeTab.value === 'chat' && latestSourcedMessageIndex.value !== null,
-)
-
-const moveDestinationFolders = computed(() =>
-  Array.isArray(allFolders.value) ? allFolders.value : [],
 )
 
 function getMobileRailState() {
@@ -642,6 +728,7 @@ async function handleImportLink(url: string) {
     @update:active-tab="onTabChange"
     @new-void="newVoidOpen = true"
     @select-void="onSelectVoid"
+    @request-delete-void="handleDeleteVoidRequest"
   >
     <template #top-bar="{ railCollapsed, railHidden, toggleRail }">
       <div class="sticky top-0 z-20 flex items-center justify-between gap-3 border-b border-border/60 bg-background/90 px-6 py-4 backdrop-blur supports-[backdrop-filter]:bg-background/80">
@@ -649,14 +736,17 @@ async function handleImportLink(url: string) {
           <button
             type="button"
             data-testid="drawer-toggle"
-            :class="[
-              'flex h-9 w-9 items-center justify-center rounded-lg border border-border/60 bg-card text-primary transition hover:bg-primary/10',
-              (!isDesktop && !railHidden) || (isDesktop && !railCollapsed) ? 'bg-primary/10' : '',
-            ]"
+            class="group relative flex h-9 w-9 items-center justify-center rounded-lg border border-border/60 bg-card text-primary overflow-hidden transition"
             :aria-label="isDesktop ? (railCollapsed ? 'Expand sidebar' : 'Collapse sidebar') : (railHidden ? 'Show folder sidebar' : 'Hide folder sidebar')"
             @click="toggleRail()"
           >
-            <PanelRight class="h-4 w-4" />
+            <span 
+              :class="[
+                'absolute inset-0 bg-primary transition-opacity',
+                (!isDesktop && !railHidden) || (isDesktop && !railCollapsed) ? 'opacity-10' : 'opacity-0 group-hover:opacity-10'
+              ]" 
+            />
+            <PanelRight class="relative z-10 h-4 w-4" />
           </button>
           <div class="min-w-0">
             <UiSkeleton v-if="!folder" class="h-6 w-40 rounded-md" />
@@ -924,7 +1014,7 @@ async function handleImportLink(url: string) {
         <Sheet v-if="!isDesktop" :open="sourcePanelOpen" @update:open="sourcePanelOpen = $event">
           <SheetContent
             side="right"
-            class="w-[min(26rem,92vw)] gap-0 p-0 sm:max-w-none [&>button]:hidden"
+            class="w-[85vw] max-w-[85vw] gap-0 p-0 [&>button]:hidden"
           >
             <SheetHeader class="sr-only">
               <SheetTitle>Sources</SheetTitle>
@@ -940,11 +1030,24 @@ async function handleImportLink(url: string) {
       </UiTabsContent>
 
       <UiTabsContent value="flashcards" class="min-w-0 flex-1">
-        <FlashcardsTab :folder-id="folderId" />
+        <FlashcardsTab
+          :folder-id="folderId"
+          :selected-room-id="activeTab === 'flashcards' ? activeVoidId : null"
+          @select-room="(roomId) => {
+            const base = { ...(route.query ?? {}) }
+            const { conversationId: _dropC, ...rest } = base
+            if (roomId) {
+              router.replace({ query: { ...rest, tab: 'flashcards', voidId: roomId } })
+            } else {
+              const { voidId: _dropV, ...restNoVoid } = rest
+              router.replace({ query: { ...restNoVoid, tab: 'flashcards' } })
+            }
+          }"
+        />
       </UiTabsContent>
 
       <UiTabsContent value="quiz" class="min-w-0 flex-1">
-        <QuizTab :folder-id="folderId" />
+        <QuizTab :folder-id="folderId" :selected-quiz-id="activeTab === 'quiz' ? activeVoidId : null" />
       </UiTabsContent>
 
         <UiTabsContent value="documents" class="keyboard-scroll-area flex min-w-0 flex-1 flex-col gap-6 overflow-y-auto p-6">
@@ -1006,24 +1109,36 @@ async function handleImportLink(url: string) {
       </UiAlertDialogContent>
     </UiAlertDialog>
 
-    <UiDialog v-model:open="showMoveDialog">
-        <UiDialogContent>
-          <UiDialogHeader>
-            <UiDialogTitle>Move to folder</UiDialogTitle>
-            <UiDialogDescription>Choose a destination folder.</UiDialogDescription>
-          </UiDialogHeader>
-          <div class="max-h-64 space-y-1 overflow-y-auto py-2">
-            <button
-              v-for="f in moveDestinationFolders"
-              :key="f._id"
-              :disabled="f._id === folderId || movePending"
-              class="flex w-full items-center rounded-md px-3 py-2 text-sm hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-              @click="confirmMove(f._id)"
-            >
-            {{ f.name }}
-          </button>
-        </div>
-      </UiDialogContent>
-    </UiDialog>
+    <UiAlertDialog v-model:open="showDeleteVoidDialog">
+      <UiAlertDialogContent>
+        <UiAlertDialogHeader>
+          <UiAlertDialogTitle>Delete void</UiAlertDialogTitle>
+          <UiAlertDialogDescription>
+            {{ deleteVoidDescription }}
+          </UiAlertDialogDescription>
+        </UiAlertDialogHeader>
+        <UiAlertDialogFooter>
+          <UiAlertDialogCancel :disabled="deletingVoid">
+            Cancel
+          </UiAlertDialogCancel>
+          <UiAlertDialogAction
+            class="bg-destructive text-destructive-foreground hover:bg-destructive/90 disabled:pointer-events-none disabled:opacity-50"
+            :disabled="deletingVoid"
+            @click="confirmDeleteVoid"
+          >
+            {{ deletingVoid ? 'Deleting…' : 'Delete' }}
+          </UiAlertDialogAction>
+        </UiAlertDialogFooter>
+      </UiAlertDialogContent>
+    </UiAlertDialog>
+
+    <MoveToFolderDialog
+      v-model:open="showMoveDialog"
+      :folders="allFolders"
+      :current-folder-id="folderId"
+      :pending="movePending"
+      :item-count="moveTargetIds.length"
+      @submit="confirmMove"
+    />
   </FolderShell>
 </template>

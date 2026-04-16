@@ -59,6 +59,26 @@ export const collectUserData = query({
       .withIndex('by_userId', (q) => q.eq('userId', userId))
       .collect()
 
+    const flashcardRooms = await ctx.db
+      .query('flashcardRooms')
+      .withIndex('by_userId', (q) => q.eq('userId', userId))
+      .collect()
+
+    const flashcardRoomCards = await ctx.db
+      .query('flashcardRoomCards')
+      .withIndex('by_userId', (q) => q.eq('userId', userId))
+      .collect()
+
+    const flashcardRoomVersions = await ctx.db
+      .query('flashcardRoomVersions')
+      .withIndex('by_userId', (q) => q.eq('userId', userId))
+      .collect()
+
+    const flashcardVersionCards = await ctx.db
+      .query('flashcardVersionCards')
+      .withIndex('by_userId', (q) => q.eq('userId', userId))
+      .collect()
+
     return {
       userId,
       user: userRow
@@ -80,6 +100,10 @@ export const collectUserData = query({
       quizAttempts,
       flashcardSets,
       flashcards,
+      flashcardRooms,
+      flashcardRoomCards,
+      flashcardRoomVersions,
+      flashcardVersionCards,
     }
   },
 })

@@ -95,6 +95,10 @@ describe('dataExport.collectUserData', () => {
     expect(result.quizAttempts).toEqual([])
     expect(result.flashcardSets).toEqual([])
     expect(result.flashcards).toEqual([])
+    expect(result.flashcardRooms).toEqual([])
+    expect(result.flashcardRoomCards).toEqual([])
+    expect(result.flashcardRoomVersions).toEqual([])
+    expect(result.flashcardVersionCards).toEqual([])
   })
 
   test('returns flashcardSets + flashcards scoped to the caller (Story 7.1)', async () => {
@@ -218,6 +222,40 @@ describe('dataExport.collectUserData', () => {
 
     expect(result.quizAttempts).toHaveLength(1)
     expect(result.quizAttempts.every((a: any) => a.userId === USER_A.tokenIdentifier)).toBe(true)
+  })
+
+  test('returns flashcardRooms + roomCards + versions + versionCards scoped to the caller', async () => {
+    const t = convexTest(schema, modules)
+    const a = await seedUser(t, USER_A)
+    const b = await seedUser(t, USER_B)
+
+    const { roomId } = await a.asUser.mutation(api.flashcardRooms.createRoom, {
+      folderId: a.folderId,
+      title: 'Alice Room',
+    })
+    await a.asUser.mutation(api.flashcardRooms.generateRoomCards, {
+      roomId,
+      origin: 'ai',
+      title: 'Gen',
+      cards: [
+        { term: 'T1', definition: 'D1', metadata: { source: { filename: 'f.pdf', chunkContent: 'c' } } },
+      ],
+    })
+
+    const { roomId: bRoom } = await b.asUser.mutation(api.flashcardRooms.createRoom, {
+      folderId: b.folderId,
+      title: 'Bob Room',
+    })
+    await b.asUser.mutation(api.flashcardRooms.createCard, {
+      roomId: bRoom, term: 'BT', definition: 'BD',
+    })
+
+    const result = await a.asUser.query(api.dataExport.collectUserData, {})
+    expect(result.flashcardRooms).toHaveLength(1)
+    expect(result.flashcardRoomCards).toHaveLength(1)
+    expect(result.flashcardRoomVersions).toHaveLength(1)
+    expect(result.flashcardVersionCards).toHaveLength(1)
+    expect(result.flashcardRooms[0]!.title).toBe('Alice Room')
   })
 
   test('returned rows contain expected fields', async () => {

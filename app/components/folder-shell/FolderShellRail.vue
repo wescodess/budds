@@ -11,10 +11,13 @@ import {
   LogOut,
   ChevronsLeft,
   ChevronsRight,
+  Eye,
+  Trash2,
 } from 'lucide-vue-next'
-import { onClickOutside, usePointerSwipe } from '@vueuse/core'
+import { onClickOutside } from '@vueuse/core'
 import { api } from '#convex/api'
 import type { Id, Doc } from '~~/convex/_generated/dataModel'
+import { useHorizontalSwipeGesture } from '~/composables/useHorizontalSwipeGesture'
 import { PANEL_DISMISS_THRESHOLD_PX, useGestureGuards } from '~/composables/useGestureGuards'
 
 defineOptions({ name: 'FolderShellRail' })
@@ -40,6 +43,7 @@ const emit = defineEmits<{
   'open-drawer': [section: 'knowledge' | 'members']
   'new-void': []
   'select-void': [value: { type: VoidKind; id: string }]
+  'request-delete-void': [value: { type: VoidKind; id: string; title: string }]
   'toggle-mobile-expanded': []
   'collapse-mobile-expanded': []
   'hide-mobile': []
@@ -49,8 +53,8 @@ const { signOut } = useUserSession()
 
 const { data: convosData } = useConvexQuery(api.conversations.listRecentForUser, {})
 
-const { data: flashSetsData } = useConvexQuery(
-  api.flashcards.listByFolder,
+const { data: flashRoomsData } = useConvexQuery(
+  api.flashcardRooms.listRoomsByFolder,
   computed(() => ({ folderId: props.folderId })),
 )
 
@@ -69,11 +73,11 @@ const voids = computed<VoidItem[]>(() => {
       title: c.title?.trim() || 'Untitled chat',
       updatedAt: (c._creationTime as number) ?? 0,
     }))
-  const flashes = ((flashSetsData.value as Array<any> | undefined) ?? []).map<VoidItem>(f => ({
+  const flashes = ((flashRoomsData.value as Array<any> | undefined) ?? []).map<VoidItem>(f => ({
     id: f._id as string,
     type: 'flashcards',
-    title: f.title?.trim() || 'Flash card set',
-    updatedAt: (f._creationTime as number) ?? 0,
+    title: f.title?.trim() || 'Flash cards',
+    updatedAt: (f.updatedAt as number) ?? (f.legacyCreatedAt as number) ?? (f._creationTime as number) ?? 0,
   }))
   const quizs = ((quizzesData.value as Array<any> | undefined) ?? []).map<VoidItem>(q => ({
     id: q._id as string,
@@ -141,7 +145,6 @@ const knowledgeCount = computed(() => {
 const knowledgeActive = computed(() => props.activeTab === 'documents')
 const railRef = ref<HTMLElement | null>(null)
 const { shouldStartHorizontalGesture } = useGestureGuards()
-const allowRailSwipe = ref(false)
 const SIDEBAR_SWIPE_EDGE_GUARD_PX = 12
 const railInlineStyle = computed(() => {
   if (props.hidden) {
@@ -155,8 +158,8 @@ const railInlineStyle = computed(() => {
   if (props.mobileExpanded) {
     return {
       width: 'fit-content',
-      minWidth: 'min(15rem, 90vw)',
-      maxWidth: '90vw',
+      minWidth: 'min(15rem, 85vw)',
+      maxWidth: '15rem',
     }
   }
 
@@ -167,7 +170,6 @@ const railInlineStyle = computed(() => {
 
 async function onLogout() {
   try { await signOut() } catch { /* ignore */ }
-  await navigateTo('/')
 }
 
 onClickOutside(railRef, () => {
@@ -175,45 +177,25 @@ onClickOutside(railRef, () => {
   emit('collapse-mobile-expanded')
 })
 
-function commitRailSwipe() {
-  if (!allowRailSwipe.value || props.hidden) {
-    allowRailSwipe.value = false
-    return
-  }
-  const deltaX = railSwipe.posEnd.x - railSwipe.posStart.x
-
-  if (props.mobileExpanded) {
-    if (deltaX <= -PANEL_DISMISS_THRESHOLD_PX) emit('collapse-mobile-expanded')
-  } else if (props.compact) {
-    if (deltaX >= PANEL_DISMISS_THRESHOLD_PX) emit('toggle-mobile-expanded')
-    else if (deltaX <= -PANEL_DISMISS_THRESHOLD_PX) emit('hide-mobile')
-  }
-  allowRailSwipe.value = false
-}
-
-let railSwipe: ReturnType<typeof usePointerSwipe>
-railSwipe = usePointerSwipe(railRef, {
+useHorizontalSwipeGesture({
+  target: railRef,
   threshold: 24,
-  pointerTypes: ['touch', 'pen'],
-  onSwipeStart(event) {
-    allowRailSwipe.value = !props.hidden && shouldStartHorizontalGesture(event, {
+  shouldStart(event) {
+    return !props.hidden && shouldStartHorizontalGesture(event, {
       allowGestureOwners: true,
       edgeGuardPx: SIDEBAR_SWIPE_EDGE_GUARD_PX,
     })
   },
-  onSwipeEnd() {
-    commitRailSwipe()
+  onSwipeEnd({ deltaX }) {
+    if (props.hidden) return
+    if (props.mobileExpanded) {
+      if (deltaX <= -PANEL_DISMISS_THRESHOLD_PX) emit('collapse-mobile-expanded')
+    } else if (props.compact) {
+      if (deltaX >= PANEL_DISMISS_THRESHOLD_PX) emit('toggle-mobile-expanded')
+      else if (deltaX <= -PANEL_DISMISS_THRESHOLD_PX) emit('hide-mobile')
+    }
   },
 })
-
-if (import.meta.client) {
-  watch(railRef, (el, _prev, onCleanup) => {
-    if (!el) return
-    const handler = () => { allowRailSwipe.value = false }
-    el.addEventListener('pointercancel', handler, { passive: true })
-    onCleanup(() => el.removeEventListener('pointercancel', handler))
-  }, { immediate: true })
-}
 </script>
 
 <template>
@@ -296,7 +278,34 @@ if (import.meta.client) {
             :icon="voidIcon[v.type]"
             :data-testid="`rail-void-${v.type}-${v.id}`"
             @click="emit('select-void', { type: v.type, id: v.id })"
-          />
+          >
+            <template #compact-touch-content="{ close }">
+              <div class="overflow-hidden rounded-lg border border-border/60 bg-popover text-popover-foreground shadow-sm">
+                <div class="border-b border-border/60 px-3 py-2">
+                  <p class="truncate text-sm font-medium text-foreground">{{ v.title }}</p>
+                  <p class="mt-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">
+                    {{ v.type === 'chat' ? 'Chat' : v.type === 'flashcards' ? 'Flash cards' : 'Quiz' }}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition hover:bg-muted/60"
+                  @click="close(); emit('select-void', { type: v.type, id: v.id })"
+                >
+                  <Eye class="h-4 w-4 shrink-0" />
+                  Open
+                </button>
+                <button
+                  type="button"
+                  class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-destructive transition hover:bg-destructive/10"
+                  @click="close(); emit('request-delete-void', { type: v.type, id: v.id, title: v.title })"
+                >
+                  <Trash2 class="h-4 w-4 shrink-0" />
+                  Delete
+                </button>
+              </div>
+            </template>
+          </FolderShellRailItem>
         </template>
         <div
           v-else-if="!compact"

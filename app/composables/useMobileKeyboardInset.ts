@@ -10,27 +10,25 @@ function isEditableElement(target: EventTarget | null) {
 export const useMobileKeyboardInset = createSharedComposable(() => {
   const isTouchLike = useMediaQuery('(hover: none), (pointer: coarse)')
   const keyboardOpen = ref(false)
+  const FOCUS_SCROLL_MARGIN_PX = 16
 
   function applyViewportVars() {
     if (!import.meta.client) return
 
     const root = document.documentElement
+    if (!root?.style) return
     const viewport = window.visualViewport
-    const baseHeight = viewport?.height ?? window.innerHeight
+    const viewportHeight = viewport?.height ?? window.innerHeight
     const offsetTop = viewport?.offsetTop ?? 0
+    const visibleHeight = viewportHeight + offsetTop
     const keyboardHeight = isTouchLike.value
-      ? Math.max(0, Math.round(window.innerHeight - baseHeight - offsetTop))
+      ? Math.max(0, Math.round(window.innerHeight - viewportHeight - offsetTop))
       : 0
 
     keyboardOpen.value = keyboardHeight > 0
-    root.style.setProperty('--mobile-vh', `${Math.round(baseHeight)}px`)
+    root.style.setProperty('--mobile-vh', `${Math.round(visibleHeight)}px`)
     root.style.setProperty('--vk-height', `${keyboardHeight}px`)
-    root.style.setProperty(
-      '--vk-safe-bottom',
-      keyboardHeight > 0
-        ? `calc(${keyboardHeight}px + env(safe-area-inset-bottom, 0px))`
-        : 'env(safe-area-inset-bottom, 0px)',
-    )
+    root.style.setProperty('--vk-safe-bottom', 'env(safe-area-inset-bottom, 0px)')
     root.dataset.keyboardOpen = keyboardOpen.value ? 'true' : 'false'
   }
 
@@ -40,18 +38,28 @@ export const useMobileKeyboardInset = createSharedComposable(() => {
     if (!isEditableElement(target)) return
     window.setTimeout(() => {
       if (!isEditableElement(document.activeElement)) return
-      ;(document.activeElement as HTMLElement).scrollIntoView({
-        block: 'center',
+      const activeField = document.activeElement as HTMLElement
+      const viewportHeight = window.visualViewport?.height ?? window.innerHeight
+      const rect = activeField.getBoundingClientRect()
+      const fieldIsVisible =
+        rect.top >= FOCUS_SCROLL_MARGIN_PX
+        && rect.bottom <= viewportHeight - FOCUS_SCROLL_MARGIN_PX
+
+      if (fieldIsVisible) return
+
+      activeField.scrollIntoView({
+        block: 'nearest',
         inline: 'nearest',
-        behavior: 'smooth',
+        behavior: 'auto',
       })
-    }, 220)
+    }, 180)
   }
 
   if (import.meta.client) {
     const updateViewport = () => {
+      const wasKeyboardOpen = keyboardOpen.value
       applyViewportVars()
-      if (keyboardOpen.value) scrollActiveFieldIntoView()
+      if (!wasKeyboardOpen && keyboardOpen.value) scrollActiveFieldIntoView()
     }
 
     applyViewportVars()
@@ -74,4 +82,3 @@ export const useMobileKeyboardInset = createSharedComposable(() => {
     applyViewportVars,
   }
 })
-
