@@ -27,6 +27,13 @@ export function useQuizzes(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
 
   const quizzes = computed<QuizSummary[]>(() => (quizzesData.value as QuizSummary[] | undefined) ?? [])
 
+  const createQuizMutation = import.meta.client
+    ? useConvexMutation(api.quizzes.createWithQuestions)
+    : {
+        mutate: async (_args: unknown): Promise<any> => null,
+        isLoading: ref(false),
+      }
+
   const generating = ref(false)
   const lastError = ref<string | null>(null)
 
@@ -35,12 +42,33 @@ export function useQuizzes(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
     generating.value = true
     lastError.value = null
     try {
-      await $fetch<{ quizId: string; title: string; questionCount: number }>('/api/quiz/generate', {
+      const generated = await $fetch<{
+        title: string
+        model: string
+        questionCount: number
+        questions: Array<{
+          order: number
+          question: string
+          type: 'multiple-choice' | 'free-response'
+          options?: string[]
+          correctAnswer: string
+          sourceDocumentId?: string
+          sourceChunkContent: string
+          sourceFilename: string
+        }>
+      }>('/api/quiz/generate', {
         method: 'POST',
         body: {
           folderId: id.value,
           ...options,
         },
+      })
+
+      await createQuizMutation.mutate({
+        folderId: id.value,
+        title: generated.title,
+        model: generated.model,
+        questions: generated.questions,
       })
     }
     catch (e: any) {

@@ -1,15 +1,5 @@
 import { vi, describe, test, expect, beforeEach } from 'vitest'
 
-const mockMutation = vi.fn()
-const mockSetAuth = vi.fn()
-vi.mock('convex/browser', () => ({
-  ConvexHttpClient: class {
-    setAuth = mockSetAuth
-    mutation = mockMutation
-  },
-}))
-
-vi.stubGlobal('useRuntimeConfig', vi.fn())
 vi.stubGlobal('createError', (opts: { statusCode: number; message: string }) =>
   Object.assign(new Error(opts.message), { statusCode: opts.statusCode }),
 )
@@ -23,8 +13,6 @@ vi.stubGlobal('buildQuizPrompt', (await import('../../utils/quiz-prompt')).build
 vi.stubGlobal('parseQuizResponse', (await import('../../utils/quiz-prompt')).parseQuizResponse)
 vi.stubGlobal('isAllowedModel', (await import('../../utils/models')).isAllowedModel)
 vi.stubGlobal('SERVER_DEFAULT_MODEL', (await import('../../utils/models')).SERVER_DEFAULT_MODEL)
-
-process.env.CONVEX_URL = 'https://test.convex.site'
 
 const handler = (await import('./generate.post')).default as Function
 
@@ -73,14 +61,6 @@ describe('POST /api/quiz/generate', () => {
     vi.mocked(globalThis.searchDocuments as any).mockReset()
     vi.mocked(globalThis.generateCompletion as any).mockReset()
     vi.mocked(globalThis.getConvexTokenIdentifier as any).mockReturnValue('https://auth.example.com|user_test_123')
-    vi.mocked(globalThis.useRuntimeConfig as any).mockReturnValue({
-      public: {
-        convex: {
-          url: 'https://test.convex.site',
-        },
-      },
-    })
-    mockMutation.mockReset()
   })
 
   test('[P0] 401 when Convex token is missing', async () => {
@@ -111,7 +91,7 @@ describe('POST /api/quiz/generate', () => {
     expect(globalThis.generateCompletion).not.toHaveBeenCalled()
   })
 
-  test('[P0] 200 happy path: returns quizId + title + questionCount and persists via mutation', async () => {
+  test('[P0] 200 happy path: returns generated quiz payload for client persistence', async () => {
     vi.mocked(globalThis.readBody as any).mockResolvedValue({ folderId: 'folder_abc' })
     vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({
       data: [
@@ -120,24 +100,35 @@ describe('POST /api/quiz/generate', () => {
       ],
     })
     vi.mocked(globalThis.generateCompletion as any).mockResolvedValue(goodLlmResponse())
-    mockMutation.mockResolvedValue({ quizId: 'quiz_abc' })
 
     const result = await handler(makeEvent())
 
     expect(result).toEqual({
-      quizId: 'quiz_abc',
       title: 'Cellular Biology Quiz',
+      model: 'openai/gpt-4o-mini',
+      questions: [
+        {
+          order: 0,
+          question: 'What do mitochondria produce?',
+          type: 'multiple-choice',
+          options: ['ATP', 'DNA', 'RNA', 'Glucose'],
+          correctAnswer: 'ATP',
+          sourceDocumentId: 'doc_2',
+          sourceChunkContent: 'Mitochondria content',
+          sourceFilename: 'bio2.pdf',
+        },
+        {
+          order: 1,
+          question: 'What is photosynthesis?',
+          type: 'free-response',
+          correctAnswer: 'Converting light to chemical energy.',
+          sourceDocumentId: 'doc_1',
+          sourceChunkContent: 'Photosynthesis content',
+          sourceFilename: 'bio1.pdf',
+        },
+      ],
       questionCount: 2,
     })
-    expect(mockMutation).toHaveBeenCalledTimes(1)
-    const [, mutationArgs] = mockMutation.mock.calls[0]
-    expect(mutationArgs.folderId).toBe('folder_abc')
-    expect(mutationArgs.title).toBe('Cellular Biology Quiz')
-    expect(mutationArgs.questions).toHaveLength(2)
-    expect(mutationArgs.questions[0].sourceFilename).toBe('bio2.pdf')
-    expect(mutationArgs.questions[0].sourceChunkContent).toBe('Mitochondria content')
-    expect(mutationArgs.questions[0].sourceDocumentId).toBe('doc_2')
-    expect(mutationArgs.questions[1].sourceFilename).toBe('bio1.pdf')
   })
 
   test('[P0] 502 when parseQuizResponse yields no valid questions', async () => {
@@ -156,7 +147,6 @@ describe('POST /api/quiz/generate', () => {
 
     const err = await (handler(makeEvent()) as Promise<any>).catch((e: any) => e)
     expect(err.statusCode).toBe(502)
-    expect(mockMutation).not.toHaveBeenCalled()
   })
 
   test('[P1] disallowed model falls back to SERVER_DEFAULT_MODEL', async () => {
@@ -171,18 +161,15 @@ describe('POST /api/quiz/generate', () => {
       ],
     })
     vi.mocked(globalThis.generateCompletion as any).mockResolvedValue(goodLlmResponse())
-    mockMutation.mockResolvedValue({ quizId: 'quiz_xyz' })
 
     await handler(makeEvent())
 
     expect(globalThis.generateCompletion).toHaveBeenCalledWith(
       expect.objectContaining({ model: 'openai/gpt-4o-mini' }),
     )
-    const [, mutationArgs] = mockMutation.mock.calls[0]
-    expect(mutationArgs.model).toBe('openai/gpt-4o-mini')
   })
 
-  test('[P1] integration: mutation receives questions that round-trip through zod', async () => {
+  test('[P1] integration: response questions round-trip through zod', async () => {
     vi.mocked(globalThis.readBody as any).mockResolvedValue({ folderId: 'folder_abc' })
     vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({
       data: [
@@ -191,12 +178,10 @@ describe('POST /api/quiz/generate', () => {
       ],
     })
     vi.mocked(globalThis.generateCompletion as any).mockResolvedValue(goodLlmResponse())
-    mockMutation.mockResolvedValue({ quizId: 'quiz_round' })
 
-    await handler(makeEvent())
+    const result = await handler(makeEvent())
 
-    const [, mutationArgs] = mockMutation.mock.calls[0]
-    for (const q of mutationArgs.questions) {
+    for (const q of result.questions) {
       expect(typeof q.order).toBe('number')
       expect(typeof q.question).toBe('string')
       expect(['multiple-choice', 'free-response']).toContain(q.type)
