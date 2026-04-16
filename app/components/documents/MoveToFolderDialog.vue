@@ -62,10 +62,7 @@ function handleSubmit() {
 
       <div class="space-y-3">
         <div class="rounded-lg border border-border/60 bg-muted/20 p-2.5">
-          <div class="mb-2 flex items-center justify-between gap-2 px-1">
-            <p class="text-sm font-medium text-foreground">Folder tree</p>
-            <p class="text-xs text-muted-foreground">Root folders start expanded. Counts show direct subfolders.</p>
-          </div>
+
           <div class="max-h-[22rem] overflow-y-auto pr-1">
             <FolderShellTree
               :folders="folders ?? []"

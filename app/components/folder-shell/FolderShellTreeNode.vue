@@ -41,7 +41,7 @@ const directCount = computed(() => props.directCounts?.get(folderKey.value) ?? 0
 const totalCount = computed(() => props.totalCounts?.get(folderKey.value) ?? directCount.value)
 const subfolderCount = computed(() => kids.value.length)
 const childConnectorStyle = computed(() => ({
-  left: `${13 + (props.depth + 1) * 16}px`,
+  left: `${20 + props.depth * 24}px`,
 }))
 const countLabel = computed(() => {
   if (props.countMode === 'none') return ''
@@ -104,7 +104,7 @@ onLongPress(
           ? 'bg-primary/10 text-primary'
           : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
       ]"
-      :style="{ paddingLeft: `${4 + depth * 16}px` }"
+      :style="{ paddingLeft: `${8 + depth * 24}px` }"
       :data-active="isActive ? 'true' : 'false'"
       :data-selected="isSelected ? 'true' : 'false'"
       :data-disabled="isDisabled ? 'true' : 'false'"
