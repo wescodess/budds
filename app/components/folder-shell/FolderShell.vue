@@ -18,11 +18,12 @@ const emit = defineEmits<{
   'update:activeTab': [value: 'chat' | 'flashcards' | 'quiz' | 'documents']
   'new-void': []
   'select-void': [value: { type: 'chat' | 'flashcards' | 'quiz'; id: string }]
+  'request-delete-void': [value: { type: 'chat' | 'flashcards' | 'quiz'; id: string; title: string }]
 }>()
 
 const drawerOpen = ref(false)
 const drawerSection = ref<'knowledge' | 'members'>('knowledge')
-const isDesktop = ref(true)
+const isDesktop = ref(import.meta.client ? window.matchMedia('(min-width: 1024px)').matches : false)
 const railCollapsed = ref(false)
 const mobileRailHidden = ref(false)
 const mobileRailExpanded = ref(false)
@@ -362,6 +363,7 @@ provide('folderShellThemeStyle', themeStyle)
       @open-drawer="openDrawerSection"
       @new-void="emit('new-void')"
       @select-void="(payload) => emit('select-void', payload)"
+      @request-delete-void="(payload) => emit('request-delete-void', payload)"
       @toggle-mobile-expanded="toggleMobileRailExpanded"
       @collapse-mobile-expanded="collapseMobileRailToCompact"
       @hide-mobile="hideMobileRail"

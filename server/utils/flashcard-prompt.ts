@@ -54,7 +54,7 @@ Rules:
 - "front" is a prompt, question, or term (one line preferred). "back" is a concise definition or answer.
 - Do NOT produce multiple-choice questions or options arrays. Just front/back.
 - "sourceIndex" is a 0-based index into the source passages array the user will send. Reference only the supplied passages. Never invent filenames or quote text that is not in a passage.
-- If fewer than 2 source passages are supplied, return {"title": "Flash Cards", "cards": []} and nothing else.
+- If no source passages are supplied, return {"title": "Flash Cards", "cards": []} and nothing else.
 - "order" starts at 0 and increments by 1 for each card in output order.`
 
   const sourceBlock = chunks.length === 0

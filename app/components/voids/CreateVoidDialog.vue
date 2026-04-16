@@ -20,7 +20,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:open': [value: boolean]
-  create: [type: VoidType]
+  create: [value: { type: VoidType; name?: string }]
 }>()
 
 const options: VoidOption[] = [
@@ -48,6 +48,7 @@ const options: VoidOption[] = [
 ]
 
 const selected = ref<VoidType | null>(null)
+const name = ref('')
 
 const activeCta = computed(() =>
   selected.value
@@ -60,6 +61,7 @@ watch(
   (isOpen, wasOpen) => {
     if (isOpen && !wasOpen) {
       selected.value = null
+      name.value = ''
     }
   },
 )
@@ -71,7 +73,8 @@ function close() {
 
 function submit() {
   if (!selected.value || props.submitting) return
-  emit('create', selected.value)
+  const trimmed = name.value.trim()
+  emit('create', { type: selected.value, name: trimmed.length > 0 ? trimmed : undefined })
 }
 </script>
 
@@ -112,8 +115,9 @@ function submit() {
             class="absolute right-2 top-2 h-2 w-2 rounded-full bg-primary"
             aria-hidden="true"
           />
-          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
-            <component :is="option.icon" class="h-4.5 w-4.5" />
+          <span class="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-primary overflow-hidden">
+            <span class="absolute inset-0 bg-primary opacity-10" />
+            <component :is="option.icon" class="relative z-10 h-4.5 w-4.5" />
           </span>
           <div class="w-full min-w-0">
             <p class="font-dm-sans text-sm font-semibold text-foreground sm:text-[15px]">
@@ -124,6 +128,21 @@ function submit() {
             </p>
           </div>
         </button>
+      </div>
+
+      <div class="mt-5 space-y-1.5">
+        <UiLabel for="create-void-name" class="text-xs font-medium text-muted-foreground">
+          Name (optional)
+        </UiLabel>
+        <input
+          id="create-void-name"
+          v-model="name"
+          type="text"
+          maxlength="120"
+          placeholder="Give this void a name"
+          data-testid="create-void-name"
+          class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        />
       </div>
 
       <UiDialogFooter class="mt-5 flex flex-col-reverse items-stretch gap-2 border-t border-border pt-4 sm:mt-6 sm:flex-row sm:items-center sm:justify-between sm:pt-6">

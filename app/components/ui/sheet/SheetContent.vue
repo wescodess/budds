@@ -39,9 +39,9 @@ const forwarded = useForwardPropsEmits(delegatedProps, emits)
       :class="cn(
         'bg-background keyboard-scroll-area data-[state=open]:animate-in data-[state=closed]:animate-out fixed z-50 flex max-h-[var(--mobile-vh,100dvh)] flex-col gap-6 overflow-y-auto shadow-lg transition ease-in-out data-[state=closed]:duration-300 data-[state=open]:duration-500 pb-[var(--vk-safe-bottom,env(safe-area-inset-bottom,0px))]',
         side === 'right'
-          && 'data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right inset-y-0 right-0 h-[var(--mobile-vh,100dvh)] w-3/4 border-l sm:max-w-sm',
+          && 'data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right inset-y-0 right-0 h-[var(--mobile-vh,100dvh)] w-[85vw] max-w-[85vw] border-l',
         side === 'left'
-          && 'data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left inset-y-0 left-0 h-[var(--mobile-vh,100dvh)] w-3/4 border-r sm:max-w-sm',
+          && 'data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left inset-y-0 left-0 h-[var(--mobile-vh,100dvh)] w-[85vw] max-w-[85vw] border-r',
         side === 'top'
           && 'data-[state=closed]:slide-out-to-top data-[state=open]:slide-in-from-top inset-x-0 top-0 h-auto max-h-[calc(var(--mobile-vh,100dvh)-1rem)] border-b',
         side === 'bottom'

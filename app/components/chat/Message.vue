@@ -2,6 +2,7 @@
 import { parseMarkdown } from '@nuxtjs/mdc/runtime'
 import { cn } from '@/lib/utils'
 import { expandCitations } from '~/utils/expand-citations'
+import { normalizeAssistantCitations } from '~/utils/normalize-assistant-citations'
 import type { Source } from '~/composables/useChat'
 
 const props = defineProps<{
@@ -38,6 +39,32 @@ let markdownParseGeneration = 0
 
 const markdownBody = computed(() => parsedMarkdown.value?.body ?? null)
 const markdownData = computed(() => parsedMarkdown.value?.data ?? {})
+const fallbackContent = computed(() => {
+  if (!isAssistant.value) return props.content
+  return normalizeAssistantCitations(props.content)
+})
+const fallbackSegments = computed(() => {
+  const content = fallbackContent.value
+  const parts = content.split(/(\[\d+\])/g)
+  const segments: Array<
+    { type: 'text'; value: string }
+    | { type: 'citation'; index: number }
+  > = []
+
+  for (const part of parts) {
+    if (!part) continue
+
+    const match = /^\[(\d+)\]$/.exec(part)
+    if (match) {
+      segments.push({ type: 'citation', index: Number(match[1]) })
+      continue
+    }
+
+    segments.push({ type: 'text', value: part })
+  }
+
+  return segments
+})
 const showMarkdownSkeleton = computed(() =>
   isAssistant.value
   && isMarkdownParsing.value
@@ -52,11 +79,20 @@ const showMarkdownFallback = computed(() =>
   && !showMarkdownSkeleton.value,
 )
 
+async function parseChatMarkdown(content: string, options: { highlight?: false } = {}) {
+  return parseMarkdown(content, {
+    toc: false,
+    contentHeading: false,
+    ...options,
+  })
+}
+
 async function parseAssistantMarkdown() {
   const parseGeneration = ++markdownParseGeneration
-  const content = processedContent.value.trim()
+  const content = processedContent.value
+  const trimmedContent = content.trim()
 
-  if (!isAssistant.value || content.length === 0) {
+  if (!isAssistant.value || trimmedContent.length === 0) {
     parsedMarkdown.value = null
     markdownParseError.value = null
     isMarkdownParsing.value = false
@@ -67,18 +103,25 @@ async function parseAssistantMarkdown() {
   markdownParseError.value = null
 
   try {
-    const parsed = await parseMarkdown(processedContent.value, {
-      toc: false,
-      contentHeading: false,
-    })
+    const parsed = await parseChatMarkdown(content)
 
     if (parseGeneration !== markdownParseGeneration) return
     parsedMarkdown.value = parsed
   } catch (error) {
     if (parseGeneration !== markdownParseGeneration) return
-    parsedMarkdown.value = null
-    markdownParseError.value = error
-    console.error('[chat] Failed to parse assistant markdown', error)
+    console.warn('[chat] Failed to parse assistant markdown with highlighting, retrying without highlight', error)
+
+    try {
+      const parsed = await parseChatMarkdown(content, { highlight: false })
+
+      if (parseGeneration !== markdownParseGeneration) return
+      parsedMarkdown.value = parsed
+    } catch (retryError) {
+      if (parseGeneration !== markdownParseGeneration) return
+      parsedMarkdown.value = null
+      markdownParseError.value = retryError
+      console.error('[chat] Failed to parse assistant markdown', retryError)
+    }
   } finally {
     if (parseGeneration === markdownParseGeneration) {
       isMarkdownParsing.value = false
@@ -125,7 +168,10 @@ watch([processedContent, isAssistant], () => {
           markdownParseError && 'text-foreground',
         )"
       >
-        {{ processedContent }}
+        <template v-for="(segment, index) in fallbackSegments" :key="index">
+          <template v-if="segment.type === 'text'">{{ segment.value }}</template>
+          <Citation v-else :index="segment.index" />
+        </template>
       </div>
       <span
         v-if="props.streaming && !showMarkdownSkeleton"

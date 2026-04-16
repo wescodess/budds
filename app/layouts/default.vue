@@ -17,6 +17,8 @@ import {
   Download,
 } from 'lucide-vue-next'
 import type { Doc, Id } from '~~/convex/_generated/dataModel'
+import { useHorizontalSwipeGesture } from '~/composables/useHorizontalSwipeGesture'
+import { PANEL_DISMISS_THRESHOLD_PX, useGestureGuards } from '~/composables/useGestureGuards'
 
 useHead({
   link: [
@@ -34,6 +36,10 @@ const route = useRoute()
 const isDashboard = computed(() => route.path === '/')
 const isChatRoute = computed(() => route.path === '/chat')
 const isStandaloneRoute = computed(() => isDashboard.value || isChatRoute.value)
+const mainContentRef = ref<HTMLElement | null>(null)
+const mobileSidebarOpen = ref(false)
+const { shouldStartHorizontalGesture } = useGestureGuards()
+const DASHBOARD_SWIPE_EDGE_GUARD_PX = 28
 
 const { allFolders, allFoldersLoading, deleteFolder } = useFolders()
 
@@ -151,6 +157,14 @@ const deleteAccountConfirmInput = ref('')
 const isDeletingAccount = ref(false)
 const isExportingData = ref(false)
 
+async function onSignOut() {
+  try {
+    await signOut()
+  } catch {
+    // Better Auth may already have invalidated the session.
+  }
+}
+
 function parseFilenameFromDisposition(header: string | null): string | null {
   if (!header) return null
   const match = header.match(/filename="?([^";]+)"?/i)
@@ -216,12 +230,7 @@ async function executeDeleteAccount() {
     })
     const { toast } = await import('vue-sonner')
     toast.success('Your account and all data have been deleted.')
-    try {
-      await signOut()
-    } catch {
-      // session may already be invalidated by Better Auth; ignore
-    }
-    await navigateTo('/')
+    await onSignOut()
   } catch (e: any) {
     console.error('Account deletion failed', e)
     const { toast } = await import('vue-sonner')
@@ -254,6 +263,28 @@ async function executeDelete() {
     isDeleting.value = false
   }
 }
+
+function hasBlockingOverlay() {
+  if (!import.meta.client) return false
+  return Boolean(document.querySelector(
+    '[data-slot="dialog-content"], [data-slot="sheet-content"], [data-slot="drawer-content"], [data-slot="alert-dialog-content"], [data-slot="popover-content"], [data-slot="dropdown-menu-content"]',
+  ))
+}
+
+useHorizontalSwipeGesture({
+  target: mainContentRef,
+  threshold: 24,
+  shouldStart(event) {
+    if (!isDashboard.value || mobileSidebarOpen.value) return false
+    if (hasBlockingOverlay()) return false
+    return shouldStartHorizontalGesture(event, { edgeGuardPx: 12 })
+  },
+  onSwipeEnd({ deltaX }) {
+    if (deltaX >= 64) {
+      mobileSidebarOpen.value = true
+    }
+  },
+})
 </script>
 
 <template>
@@ -265,7 +296,7 @@ async function executeDelete() {
     Skip to content
   </a>
 
-  <UiSidebarProvider>
+  <UiSidebarProvider v-model:open-mobile="mobileSidebarOpen">
     <UiSidebar
       data-testid="app-sidebar"
       collapsible="icon"
@@ -433,7 +464,7 @@ async function executeDelete() {
             <UiDropdownMenuContent align="end" class="w-48">
               <UiDropdownMenuItem
                 data-testid="sidebar-menu-sign-out"
-                @click="signOut()"
+                @click="onSignOut"
               >
                 <LogOut class="mr-2 h-4 w-4" />
                 Sign out
@@ -462,6 +493,7 @@ async function executeDelete() {
     </UiSidebar>
 
     <UiSidebarInset
+      ref="mainContentRef"
       id="main-content"
       data-testid="main-content"
       :class="['min-h-0', isStandaloneRoute ? 'overflow-hidden' : 'overflow-y-auto']"

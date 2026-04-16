@@ -38,7 +38,6 @@ const dims = computed(() => {
 const tileStyle = computed(() => ({
   width: `${dims.value.tile}px`,
   height: `${dims.value.tile}px`,
-  backgroundColor: `${colorEntry.value.hex}26`,
 }))
 
 const iconStyle = computed(() => ({
@@ -50,11 +49,12 @@ const iconStyle = computed(() => ({
 
 <template>
   <div
-    class="inline-flex shrink-0 items-center justify-center rounded-[10px]"
+    class="relative inline-flex shrink-0 items-center justify-center rounded-[10px] overflow-hidden"
     :style="tileStyle"
     :data-folder-color="colorEntry.key"
     :data-folder-icon="icon || DEFAULT_ICON_KEY"
   >
-    <component :is="IconComponent" :style="iconStyle" aria-hidden="true" />
+    <div class="absolute inset-0 opacity-[0.15]" :style="{ backgroundColor: colorEntry.hex }" />
+    <component :is="IconComponent" :style="iconStyle" class="relative z-10" aria-hidden="true" />
   </div>
 </template>

@@ -152,8 +152,9 @@ onLongPress(
         @click.stop
         @update:model-value="toggleSelection"
       />
-      <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
-        <component :is="icon" class="h-4 w-4" />
+      <div class="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-primary overflow-hidden">
+        <div class="absolute inset-0 bg-primary opacity-10" />
+        <component :is="icon" class="relative z-10 h-4 w-4" />
       </div>
       <button
         v-if="selectable && canAct"
@@ -247,8 +248,9 @@ onLongPress(
           @click.stop
           @update:model-value="toggleSelection"
         />
-        <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
-          <component :is="icon" class="h-4 w-4" />
+        <div class="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-primary overflow-hidden">
+          <div class="absolute inset-0 bg-primary opacity-10" />
+          <component :is="icon" class="relative z-10 h-4 w-4" />
         </div>
         <button
           v-if="selectable && canAct"

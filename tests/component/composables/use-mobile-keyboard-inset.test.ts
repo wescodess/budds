@@ -55,8 +55,24 @@ describe('useMobileKeyboardInset', () => {
 
     expect(document.documentElement.style.getPropertyValue('--mobile-vh')).toBe('520px')
     expect(document.documentElement.style.getPropertyValue('--vk-height')).toBe('280px')
-    expect(document.documentElement.style.getPropertyValue('--vk-safe-bottom')).toContain('280px')
+    expect(document.documentElement.style.getPropertyValue('--vk-safe-bottom')).toBe('env(safe-area-inset-bottom, 0px)')
     expect(document.documentElement.dataset.keyboardOpen).toBe('true')
     expect(state.keyboardOpen.value).toBe(true)
+  })
+
+  it('[P1] preserves the visible viewport bottom when iOS shifts the visual viewport downward', async () => {
+    const { useMobileKeyboardInset } = await import('~/composables/useMobileKeyboardInset')
+    const viewport = window.visualViewport as unknown as MockVisualViewport
+
+    useMobileKeyboardInset()
+
+    viewport.height = 520
+    viewport.offsetTop = 56
+    viewport.dispatchEvent(new Event('resize'))
+    await nextTick()
+
+    expect(document.documentElement.style.getPropertyValue('--mobile-vh')).toBe('576px')
+    expect(document.documentElement.style.getPropertyValue('--vk-height')).toBe('224px')
+    expect(document.documentElement.dataset.keyboardOpen).toBe('true')
   })
 })

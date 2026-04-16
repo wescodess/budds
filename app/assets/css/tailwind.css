@@ -250,12 +250,29 @@
     color: inherit;
     stroke: currentColor;
   }
+  svg.lucide.fill-current {
+    fill: currentColor;
+  }
+  svg.lucide[class*='fill-'] > * {
+    fill: inherit;
+  }
   body {
     @apply bg-background text-foreground;
     font-family: 'DM Sans', sans-serif;
     font-size: 14px;
     line-height: 1.6;
     min-height: var(--mobile-vh, 100dvh);
+  }
+
+  @supports (-webkit-touch-callout: none) {
+    @media (hover: none) and (pointer: coarse) {
+      input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']):not([type='button']):not([type='submit']):not([type='reset']),
+      textarea,
+      select,
+      [contenteditable='true'] {
+        font-size: 16px !important;
+      }
+    }
   }
 }
 

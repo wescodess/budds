@@ -33,8 +33,9 @@ const timeGreeting = computed(() => {
       data-testid="dashboard-continue-chip"
       class="group inline-flex min-h-9 w-full items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-sm transition-colors hover:border-primary/40 hover:bg-card/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:h-9 sm:w-auto sm:shrink-0 sm:py-0"
     >
-      <span class="flex h-5 w-5 items-center justify-center rounded-full bg-primary/10 text-primary">
-        <Play class="h-3 w-3 fill-current" />
+      <span class="relative flex h-5 w-5 items-center justify-center rounded-full text-primary overflow-hidden">
+        <span class="absolute inset-0 bg-primary opacity-10" />
+        <Play class="relative z-10 h-3 w-3 fill-current" />
       </span>
       <span class="text-muted-foreground">Continue:</span>
       <span class="min-w-0 flex-1 truncate font-medium text-foreground sm:max-w-[220px] sm:flex-none">{{ continueLabel }}</span>

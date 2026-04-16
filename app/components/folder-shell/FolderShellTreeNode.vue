@@ -11,11 +11,15 @@ type F = Doc<'folders'>
 const props = defineProps<{
   folder: F
   childrenOf: (id: string) => F[]
-  activeId: Id<'folders'>
+  activeId?: Id<'folders'> | null
+  selectedId?: Id<'folders'> | null
   expanded: Set<string>
   depth: number
   directCounts?: Map<string, number>
   totalCounts?: Map<string, number>
+  disabledIds?: string[]
+  showActions?: boolean
+  countMode?: 'documents' | 'subfolders' | 'none'
 }>()
 
 const emit = defineEmits<{
@@ -29,18 +33,31 @@ const emit = defineEmits<{
 const kids = computed(() => props.childrenOf(props.folder._id as unknown as string))
 const isOpen = computed(() => props.expanded.has(props.folder._id as unknown as string))
 const isActive = computed(() => props.folder._id === props.activeId)
+const isSelected = computed(() => props.folder._id === props.selectedId)
+const isDisabled = computed(() => (props.disabledIds ?? []).includes(props.folder._id as unknown as string))
 const hasKids = computed(() => kids.value.length > 0)
 const folderKey = computed(() => props.folder._id as unknown as string)
 const directCount = computed(() => props.directCounts?.get(folderKey.value) ?? 0)
 const totalCount = computed(() => props.totalCounts?.get(folderKey.value) ?? directCount.value)
+const subfolderCount = computed(() => kids.value.length)
 const childConnectorStyle = computed(() => ({
-  left: `${13 + (props.depth + 1) * 16}px`,
+  left: `${20 + props.depth * 24}px`,
 }))
 const countLabel = computed(() => {
+  if (props.countMode === 'none') return ''
+  if (props.countMode === 'subfolders') return String(subfolderCount.value)
   if (hasKids.value && totalCount.value !== directCount.value) {
     return `${directCount.value} / ${totalCount.value}`
   }
   return String(directCount.value)
+})
+const countTitle = computed(() => {
+  if (props.countMode === 'none') return undefined
+  if (props.countMode === 'subfolders') {
+    return subfolderCount.value === 1 ? '1 subfolder' : `${subfolderCount.value} subfolders`
+  }
+  if (hasKids.value) return `${directCount.value} here, ${totalCount.value} with subfolders`
+  return `${directCount.value} files`
 })
 const rowRef = ref<HTMLElement | null>(null)
 const menuOpen = ref(false)
@@ -48,6 +65,7 @@ const suppressNextSelect = ref(false)
 const { isTouchLike } = useGestureGuards()
 
 function handleSelect() {
+  if (isDisabled.value) return
   if (suppressNextSelect.value) {
     suppressNextSelect.value = false
     return
@@ -78,12 +96,18 @@ onLongPress(
       ref="rowRef"
       :class="[
         'group relative flex items-center gap-1 rounded-md pr-1 text-sm transition',
-        isActive
+        isDisabled
+          ? 'cursor-not-allowed opacity-50'
+          : isSelected
+            ? 'bg-primary/15 text-foreground ring-1 ring-primary/20'
+            : isActive
           ? 'bg-primary/10 text-primary'
           : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
       ]"
-      :style="{ paddingLeft: `${4 + depth * 16}px` }"
+      :style="{ paddingLeft: `${8 + depth * 24}px` }"
       :data-active="isActive ? 'true' : 'false'"
+      :data-selected="isSelected ? 'true' : 'false'"
+      :data-disabled="isDisabled ? 'true' : 'false'"
       :data-testid="`tree-node-${folder._id}`"
     >
       <span
@@ -102,18 +126,21 @@ onLongPress(
       <button
         type="button"
         class="flex min-w-0 flex-1 items-center gap-1.5 py-1 text-left"
+        :data-testid="`tree-node-select-${folder._id}`"
+        :disabled="isDisabled"
         @click="handleSelect"
       >
-        <Folder :class="['h-3.5 w-3.5 shrink-0', isActive ? 'text-primary' : 'text-muted-foreground']" />
+        <Folder :class="['h-3.5 w-3.5 shrink-0', isActive || isSelected ? 'text-primary' : 'text-muted-foreground']" />
         <span class="truncate">{{ folder.name }}</span>
         <span
-          :title="hasKids ? `${directCount} here, ${totalCount} with subfolders` : `${directCount} files`"
+          v-if="props.countMode !== 'none'"
+          :title="countTitle"
           class="ml-auto shrink-0 rounded-full bg-muted/60 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
         >
           {{ countLabel }}
         </span>
       </button>
-      <UiDropdownMenu v-model:open="menuOpen">
+      <UiDropdownMenu v-if="showActions" v-model:open="menuOpen">
         <UiDropdownMenuTrigger as-child>
           <button
             type="button"
@@ -149,10 +176,14 @@ onLongPress(
         :folder="child"
         :children-of="childrenOf"
         :active-id="activeId"
+        :selected-id="selectedId"
         :expanded="expanded"
         :depth="depth + 1"
         :direct-counts="directCounts"
         :total-counts="totalCounts"
+        :disabled-ids="disabledIds"
+        :show-actions="showActions"
+        :count-mode="countMode"
         @toggle="(id) => emit('toggle', id)"
         @select="(id) => emit('select', id)"
         @rename="(f) => emit('rename', f)"

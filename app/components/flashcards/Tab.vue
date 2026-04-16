@@ -6,244 +6,212 @@ import { useGestureGuards } from '~/composables/useGestureGuards'
 
 const props = defineProps<{
   folderId: Id<'folders'>
+  selectedRoomId?: string | null
 }>()
 
-const {
-  sets,
-  hasIndexedDocuments,
-  generating,
-  lastError,
-  generate,
-} = useFlashcards(toRef(props, 'folderId'))
+const emit = defineEmits<{
+  'select-room': [roomId: string | null]
+}>()
 
-const activeSetId = ref<Id<'flashcardSets'> | null>(null)
-const editingSetId = ref<Id<'flashcardSets'> | null>(null)
-const openMenuSetId = ref<string | null>(null)
-const confirmingDeleteSetId = ref<string | null>(null)
+const { rooms, hasIndexedDocuments } = useFlashcardRooms(toRef(props, 'folderId'))
+
+const deleteRoomMutation = import.meta.client
+  ? useConvexMutation(api.flashcardRooms.deleteRoom)
+  : { mutate: async (_a: unknown) => null, isLoading: ref(false) }
+
+const createRoomMutation = import.meta.client
+  ? useConvexMutation(api.flashcardRooms.createRoom)
+  : { mutate: async (_a: unknown) => ({ roomId: '' }), isLoading: ref(false) }
+
+const activeRoomId = ref<Id<'flashcardRooms'> | null>(null)
+const openMenuId = ref<string | null>(null)
+const confirmingDeleteId = ref<string | null>(null)
 const deleting = ref(false)
-const liveMessage = ref('')
-const swipeOpenSetId = ref<string | null>(null)
+const creating = ref(false)
 const { isTouchLike } = useGestureGuards()
 
-const deleteSetMutation = import.meta.client
-  ? useConvexMutation(api.flashcards.deleteSet)
-  : {
-      mutate: async (_args: unknown): Promise<any> => null,
-      isLoading: ref(false),
-    }
+watch(
+  () => props.selectedRoomId,
+  (next) => {
+    activeRoomId.value = (next as Id<'flashcardRooms'> | null | undefined) ?? null
+  },
+  { immediate: true },
+)
 
-async function handleGenerate() {
-  try {
-    await generate()
-    const { toast } = await import('vue-sonner')
-    toast.success('Flash cards generated')
-  }
-  catch (e: any) {
-    const { toast } = await import('vue-sonner')
-    toast.error(lastError.value || e?.message || 'Failed to generate flash cards')
-  }
+function toggleMenu(id: string) {
+  openMenuId.value = openMenuId.value === id ? null : id
+  if (openMenuId.value !== id) confirmingDeleteId.value = null
 }
 
-function handleSetSelect(setId: string) {
-  activeSetId.value = setId as Id<'flashcardSets'>
+function handleOpen(id: string) {
+  activeRoomId.value = id as Id<'flashcardRooms'>
+  emit('select-room', id)
 }
 
-function handleStudyBack() {
-  activeSetId.value = null
+function handleBack() {
+  activeRoomId.value = null
+  emit('select-room', null)
 }
 
-function handleEditorBack() {
-  editingSetId.value = null
-}
-
-function toggleMenu(setId: string) {
-  openMenuSetId.value = openMenuSetId.value === setId ? null : setId
-  if (openMenuSetId.value !== setId) {
-    confirmingDeleteSetId.value = null
-  }
-}
-
-function handleEditSet(setId: string) {
-  openMenuSetId.value = null
-  confirmingDeleteSetId.value = null
-  swipeOpenSetId.value = null
-  editingSetId.value = setId as Id<'flashcardSets'>
-}
-
-function handleDeleteClick(setId: string) {
-  swipeOpenSetId.value = null
-  confirmingDeleteSetId.value = setId
+function handleDeleteClick(id: string) {
+  confirmingDeleteId.value = id
 }
 
 function handleDeleteCancel() {
-  confirmingDeleteSetId.value = null
+  confirmingDeleteId.value = null
 }
 
-function handleSwipeSetOpen(setId: string, next: boolean) {
-  swipeOpenSetId.value = next ? setId : (swipeOpenSetId.value === setId ? null : swipeOpenSetId.value)
-}
-
-async function handleDeleteConfirm(setId: string) {
+async function handleDeleteConfirm(id: string) {
   deleting.value = true
   try {
-    await deleteSetMutation.mutate({ setId } as any)
-    confirmingDeleteSetId.value = null
-    openMenuSetId.value = null
-    liveMessage.value = 'Flash card set deleted'
-    setTimeout(() => {
-      if (liveMessage.value === 'Flash card set deleted') liveMessage.value = ''
-    }, 3000)
+    await deleteRoomMutation.mutate({ roomId: id } as any)
+    confirmingDeleteId.value = null
+    openMenuId.value = null
+    if (activeRoomId.value === id) handleBack()
     const { toast } = await import('vue-sonner')
-    toast.success('Flash card set deleted')
+    toast.success('Room deleted')
   }
   catch (e: any) {
     const { toast } = await import('vue-sonner')
-    toast.error(e?.message || 'Failed to delete flash card set')
+    toast.error(e?.message || 'Failed to delete room')
   }
   finally {
     deleting.value = false
   }
 }
+
+async function handleCreate() {
+  if (creating.value) return
+  creating.value = true
+  try {
+    const result = (await createRoomMutation.mutate({
+      folderId: props.folderId,
+    } as any)) as { roomId: Id<'flashcardRooms'> }
+    if (result?.roomId) {
+      activeRoomId.value = result.roomId
+      emit('select-room', result.roomId as unknown as string)
+    }
+  }
+  catch (e: any) {
+    const { toast } = await import('vue-sonner')
+    toast.error(e?.message || 'Failed to create room')
+  }
+  finally {
+    creating.value = false
+  }
+}
 </script>
 
 <template>
-  <div class="flex h-full flex-col overflow-y-auto p-6" data-testid="flashcards-tab-content">
-    <span class="sr-only" aria-live="polite" data-testid="flashcards-tab-live">{{ liveMessage }}</span>
-
-    <template v-if="editingSetId">
-      <FlashcardsEditor :set-id="editingSetId" @back="handleEditorBack" />
-    </template>
-
-    <template v-else-if="activeSetId">
-      <FlashcardsStudy :set-id="activeSetId" @back="handleStudyBack" />
-    </template>
-
-    <template v-else-if="!hasIndexedDocuments">
-      <div
-        data-testid="flashcards-empty-no-docs"
-        class="flex flex-1 items-center justify-center py-12 text-muted-foreground"
-      >
-        <div class="text-center">
-          <Layers class="mx-auto mb-3 h-12 w-12 opacity-40" />
-          <p class="text-lg font-medium">Upload and index documents to generate flash cards</p>
-        </div>
-      </div>
-    </template>
-
-    <template v-else-if="generating">
-      <div data-testid="flashcards-shimmer" class="space-y-3">
-        <UiSkeleton v-for="i in 3" :key="i" class="h-30 w-full rounded-md" />
-      </div>
-    </template>
-
-    <template v-else-if="sets.length === 0">
-      <div
-        data-testid="flashcards-empty-ready"
-        class="flex flex-1 flex-col items-center justify-center gap-4 py-12 text-muted-foreground"
-      >
-        <Layers class="h-12 w-12 opacity-40" />
-        <p class="text-lg font-medium">No flash card sets yet</p>
-        <UiButton data-testid="flashcards-generate-button" @click="handleGenerate">
-          <Plus class="mr-1.5 h-4 w-4" />
-          Generate Flash Cards
-        </UiButton>
-      </div>
-    </template>
+  <div class="flex h-full flex-col" data-testid="flashcards-tab-content">
+    <FlashcardsRoomShell
+      v-if="activeRoomId"
+      :room-id="activeRoomId"
+      :folder-id="folderId"
+      @back="handleBack"
+      @room-deleted="handleBack"
+    />
 
     <template v-else>
-      <div class="space-y-3">
-        <div class="flex items-center justify-end">
-          <UiButton data-testid="flashcards-generate-button" size="sm" @click="handleGenerate">
-            <Plus class="mr-1.5 h-4 w-4" />
-            Generate Flash Cards
-          </UiButton>
-        </div>
-        <div
-          v-for="set in sets"
-          :key="set._id"
-        >
-          <MobileSwipeRevealItem
-            :open="swipeOpenSetId === set._id"
-            :disabled="!isTouchLike"
-            :action-width="96"
-            class="rounded-md"
-            content-class="rounded-md"
-            @update:open="(next) => handleSwipeSetOpen(set._id, next)"
+      <div class="flex flex-col gap-4 overflow-y-auto p-6">
+        <template v-if="!hasIndexedDocuments && rooms.length === 0">
+          <div
+            data-testid="flashcards-empty-no-docs"
+            class="flex flex-1 items-center justify-center py-12 text-muted-foreground"
           >
-            <template #actions>
-              <button
-                type="button"
-                data-swipe-reveal-action
-                :aria-label="`Edit ${set.title}`"
-                class="flex h-full w-1/2 items-center justify-center bg-muted text-foreground"
-                @click="handleEditSet(set._id)"
-              >
-                <Pencil class="h-4 w-4" />
-              </button>
-              <button
-                type="button"
-                data-swipe-reveal-action
-                :aria-label="`Delete ${set.title}`"
-                class="flex h-full w-1/2 items-center justify-center bg-destructive text-destructive-foreground"
-                @click="handleDeleteClick(set._id)"
-              >
-                <Trash2 class="h-4 w-4" />
-              </button>
-            </template>
+            <div class="text-center">
+              <Layers class="mx-auto mb-3 h-12 w-12 opacity-40" />
+              <p class="text-lg font-medium">Upload and index documents to generate flash cards</p>
+            </div>
+          </div>
+        </template>
 
-            <div
-              class="rounded-md border"
-              data-testid="flashcards-set-card"
+        <template v-else-if="rooms.length === 0">
+          <div
+            data-testid="flashcards-empty-ready"
+            class="flex flex-1 flex-col items-center justify-center gap-4 py-12 text-muted-foreground"
+          >
+            <Layers class="h-12 w-12 opacity-40" />
+            <p class="text-lg font-medium">No flash card rooms yet</p>
+            <UiButton
+              data-testid="flashcards-create-room-button"
+              :disabled="creating"
+              @click="handleCreate"
             >
-              <div
-                role="button"
-                tabindex="0"
-                class="flex cursor-pointer items-center justify-between p-4 hover:bg-accent/50"
-                @click="handleSetSelect(set._id)"
-                @keydown.enter="handleSetSelect(set._id)"
-                @keydown.space.prevent="handleSetSelect(set._id)"
+              <Plus class="mr-1.5 h-4 w-4" />
+              Create flash card room
+            </UiButton>
+          </div>
+        </template>
+
+        <template v-else>
+          <div class="flex items-center justify-between">
+            <h2 class="font-dm-sans text-lg font-semibold">Rooms</h2>
+            <UiButton
+              size="sm"
+              data-testid="flashcards-create-room-button"
+              :disabled="creating"
+              @click="handleCreate"
+            >
+              <Plus class="mr-1.5 h-4 w-4" />
+              New room
+            </UiButton>
+          </div>
+
+          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <div
+              v-for="room in rooms"
+              :key="room._id"
+              data-testid="flashcards-room-card"
+              class="group relative flex flex-col gap-2 rounded-xl border border-border/60 bg-card p-4 transition hover:border-primary/50"
+            >
+              <button
+                type="button"
+                class="flex flex-col items-start gap-1 text-left"
+                :data-testid="`flashcards-room-open-${room._id}`"
+                @click="handleOpen(String(room._id))"
               >
-                <div class="flex flex-col gap-1">
-                  <p class="font-medium">{{ set.title }}</p>
-                  <p class="text-xs text-muted-foreground">
-                    {{ new Date(set._creationTime).toLocaleDateString() }}
-                    &middot;
-                    {{ set.cardCount }} cards
-                  </p>
+                <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                  <Layers class="h-4 w-4" />
                 </div>
-                <button
-                  v-if="!isTouchLike"
-                  type="button"
-                  class="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-                  data-testid="flashcards-set-menu"
-                  aria-label="Flash card set actions"
-                  @click.stop="toggleMenu(set._id)"
-                >
-                  <MoreHorizontal class="h-4 w-4" />
-                </button>
-              </div>
+                <p class="mt-2 font-dm-sans text-sm font-semibold text-foreground">{{ room.title }}</p>
+                <p class="text-xs text-muted-foreground">
+                  {{ room.cardCount }} card{{ room.cardCount === 1 ? '' : 's' }}
+                </p>
+              </button>
+
+              <button
+                v-if="!isTouchLike"
+                type="button"
+                class="absolute right-2 top-2 rounded-md p-1 text-muted-foreground opacity-0 transition hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+                data-testid="flashcards-room-menu"
+                aria-label="Room actions"
+                @click.stop="toggleMenu(String(room._id))"
+              >
+                <MoreHorizontal class="h-4 w-4" />
+              </button>
 
               <div
-                v-if="openMenuSetId === set._id"
-                class="flex items-center gap-2 border-t px-4 py-2"
-                data-testid="flashcards-set-actions"
+                v-if="openMenuId === room._id"
+                data-testid="flashcards-room-actions"
+                class="mt-1 flex items-center gap-2 border-t border-border/60 pt-2"
               >
-                <template v-if="confirmingDeleteSetId === set._id">
+                <template v-if="confirmingDeleteId === room._id">
                   <UiButton
                     variant="destructive"
                     size="sm"
                     :disabled="deleting"
-                    data-testid="flashcards-set-delete-confirm"
-                    @click.stop="handleDeleteConfirm(set._id)"
+                    data-testid="flashcards-room-delete-confirm"
+                    @click.stop="handleDeleteConfirm(String(room._id))"
                   >
                     <Trash2 class="mr-1.5 h-3 w-3" />
-                    Confirm delete
+                    Confirm
                   </UiButton>
                   <UiButton
                     variant="ghost"
                     size="sm"
                     :disabled="deleting"
-                    data-testid="flashcards-set-delete-cancel"
+                    data-testid="flashcards-room-delete-cancel"
                     @click.stop="handleDeleteCancel"
                   >
                     Cancel
@@ -251,20 +219,11 @@ async function handleDeleteConfirm(setId: string) {
                 </template>
                 <template v-else>
                   <UiButton
-                    variant="outline"
-                    size="sm"
-                    data-testid="flashcards-set-edit"
-                    @click.stop="handleEditSet(set._id)"
-                  >
-                    <Pencil class="mr-1.5 h-3 w-3" />
-                    Edit
-                  </UiButton>
-                  <UiButton
                     variant="ghost"
                     size="sm"
                     class="text-destructive hover:text-destructive"
-                    data-testid="flashcards-set-delete"
-                    @click.stop="handleDeleteClick(set._id)"
+                    data-testid="flashcards-room-delete"
+                    @click.stop="handleDeleteClick(String(room._id))"
                   >
                     <Trash2 class="mr-1.5 h-3 w-3" />
                     Delete
@@ -272,8 +231,8 @@ async function handleDeleteConfirm(setId: string) {
                 </template>
               </div>
             </div>
-          </MobileSwipeRevealItem>
-        </div>
+          </div>
+        </template>
       </div>
     </template>
   </div>
