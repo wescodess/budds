@@ -76,10 +76,18 @@ const deleteConversationMutation = import.meta.client
       mutate: async (_args: { id: Id<'conversations'> }) => null,
     }
 
-const deleteFlashcardSetMutation = import.meta.client
-  ? useConvexMutation(api.flashcards.deleteSet)
+const deleteFlashcardRoomMutation = import.meta.client
+  ? useConvexMutation(api.flashcardRooms.deleteRoom)
   : {
-      mutate: async (_args: { setId: Id<'flashcardSets'> }) => null,
+      mutate: async (_args: { roomId: Id<'flashcardRooms'> }) => null,
+    }
+
+const createFlashcardRoomMutation = import.meta.client
+  ? useConvexMutation(api.flashcardRooms.createRoom)
+  : {
+      mutate: async (_args: { folderId: Id<'folders'>; title?: string }) => ({
+        roomId: '' as unknown as Id<'flashcardRooms'>,
+      }),
     }
 
 const deleteQuizMutation = import.meta.client
@@ -98,17 +106,27 @@ function hideSidebarOnMobile() {
   folderShellRef.value?.hideMobileRail()
 }
 
-async function onCreateVoid(type: VoidType) {
+async function onCreateVoid(payload: { type: VoidType; name?: string }) {
   if (creatingVoid.value) return
   creatingVoid.value = true
   try {
+    const { type, name } = payload
+    const trimmedName = name?.trim()
     if (type === 'chat') {
       const newId = (await createConversationMutation.mutate({
         folderId: folderId.value,
-        title: 'New chat',
+        title: trimmedName || 'New chat',
       })) as Id<'conversations'>
       activeTab.value = 'chat'
       await router.replace({ query: { ...(route.query ?? {}), tab: 'chat', conversationId: newId } })
+    } else if (type === 'flashcards') {
+      const result = (await createFlashcardRoomMutation.mutate({
+        folderId: folderId.value,
+        title: trimmedName,
+      })) as { roomId: Id<'flashcardRooms'> }
+      activeTab.value = 'flashcards'
+      const { conversationId: _dropC, ...rest } = route.query ?? {}
+      await router.replace({ query: { ...rest, tab: 'flashcards', voidId: result.roomId } })
     } else {
       activeTab.value = type
       await router.replace({ query: { ...(route.query ?? {}), tab: type } })
@@ -186,7 +204,7 @@ async function confirmDeleteVoid() {
     if (target.type === 'chat') {
       await deleteConversationMutation.mutate({ id: target.id as Id<'conversations'> })
     } else if (target.type === 'flashcards') {
-      await deleteFlashcardSetMutation.mutate({ setId: target.id as Id<'flashcardSets'> })
+      await deleteFlashcardRoomMutation.mutate({ roomId: target.id as Id<'flashcardRooms'> })
     } else {
       await deleteQuizMutation.mutate({ quizId: target.id as Id<'quizzes'> })
     }
@@ -1012,7 +1030,20 @@ async function handleImportLink(url: string) {
       </UiTabsContent>
 
       <UiTabsContent value="flashcards" class="min-w-0 flex-1">
-        <FlashcardsTab :folder-id="folderId" :selected-set-id="activeTab === 'flashcards' ? activeVoidId : null" />
+        <FlashcardsTab
+          :folder-id="folderId"
+          :selected-room-id="activeTab === 'flashcards' ? activeVoidId : null"
+          @select-room="(roomId) => {
+            const base = { ...(route.query ?? {}) }
+            const { conversationId: _dropC, ...rest } = base
+            if (roomId) {
+              router.replace({ query: { ...rest, tab: 'flashcards', voidId: roomId } })
+            } else {
+              const { voidId: _dropV, ...restNoVoid } = rest
+              router.replace({ query: { ...restNoVoid, tab: 'flashcards' } })
+            }
+          }"
+        />
       </UiTabsContent>
 
       <UiTabsContent value="quiz" class="min-w-0 flex-1">

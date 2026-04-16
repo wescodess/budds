@@ -120,6 +120,78 @@ export default defineSchema({
     .index('by_setId', ['setId'])
     .index('by_userId', ['userId']),
 
+  flashcardRooms: defineTable({
+    userId: v.string(),
+    folderId: v.id('folders'),
+    title: v.string(),
+    updatedAt: v.number(),
+    cardCount: v.number(),
+    activeVersionId: v.optional(v.id('flashcardRoomVersions')),
+    migratedFromSetId: v.optional(v.id('flashcardSets')),
+    legacyCreatedAt: v.optional(v.number()),
+  })
+    .index('by_userId', ['userId'])
+    .index('by_userId_and_folderId', ['userId', 'folderId'])
+    .index('by_migratedFromSetId', ['migratedFromSetId']),
+
+  flashcardRoomCards: defineTable({
+    roomId: v.id('flashcardRooms'),
+    userId: v.string(),
+    displayOrder: v.number(),
+    term: v.string(),
+    definition: v.string(),
+    metadata: v.optional(
+      v.object({
+        source: v.optional(
+          v.object({
+            documentId: v.optional(v.id('documents')),
+            filename: v.string(),
+            chunkContent: v.string(),
+          }),
+        ),
+      }),
+    ),
+  })
+    .index('by_roomId', ['roomId'])
+    .index('by_roomId_and_displayOrder', ['roomId', 'displayOrder'])
+    .index('by_userId', ['userId']),
+
+  flashcardRoomVersions: defineTable({
+    roomId: v.id('flashcardRooms'),
+    userId: v.string(),
+    title: v.string(),
+    origin: v.union(v.literal('ai'), v.literal('manual')),
+    prompt: v.optional(v.string()),
+    requestedCardCount: v.optional(v.number()),
+    cardCount: v.number(),
+    model: v.optional(v.string()),
+  })
+    .index('by_roomId', ['roomId'])
+    .index('by_userId', ['userId']),
+
+  flashcardVersionCards: defineTable({
+    versionId: v.id('flashcardRoomVersions'),
+    roomId: v.id('flashcardRooms'),
+    userId: v.string(),
+    displayOrder: v.number(),
+    term: v.string(),
+    definition: v.string(),
+    metadata: v.optional(
+      v.object({
+        source: v.optional(
+          v.object({
+            documentId: v.optional(v.id('documents')),
+            filename: v.string(),
+            chunkContent: v.string(),
+          }),
+        ),
+      }),
+    ),
+  })
+    .index('by_versionId', ['versionId'])
+    .index('by_roomId', ['roomId'])
+    .index('by_userId', ['userId']),
+
   quizAttempts: defineTable({
     userId: v.string(),
     quizId: v.id('quizzes'),
