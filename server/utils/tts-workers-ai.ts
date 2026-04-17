@@ -1,9 +1,15 @@
 import { readConfiguredRuntimeValue } from './runtime-config'
 
-export interface SynthesizeMeloTTSParams {
+export type AuraVoice =
+  | 'asteria' | 'luna' | 'stella' | 'athena' | 'hera'
+  | 'orion' | 'arcas' | 'perseus' | 'angus' | 'orpheus' | 'helios' | 'zeus'
+
+export const FEMALE_VOICES: readonly AuraVoice[] = ['asteria', 'luna', 'stella', 'athena', 'hera']
+export const MALE_VOICES: readonly AuraVoice[] = ['orion', 'arcas', 'perseus', 'angus', 'orpheus', 'helios', 'zeus']
+
+export interface SynthesizeVoiceParams {
   text: string
-  lang?: string
-  pitch?: number
+  speaker: AuraVoice
 }
 
 function getWorkersAiConfig() {
@@ -36,11 +42,11 @@ function getWorkersAiConfig() {
   if (!accountId || !gatewayId || !workersAiToken) {
     throw createError({
       statusCode: 500,
-      message: 'Missing Workers AI configuration. Check NUXT_CLOUDFLARE_ACCOUNT_ID, NUXT_CLOUDFLARE_AI_GATEWAY_ID, and NUXT_CLOUDFLARE_WORKERS_AI_TOKEN (or a CLOUDFLARE_AI_SEARCH_TOKEN that also carries Workers AI Read permission).',
+      message: 'Missing Workers AI configuration. Check NUXT_CLOUDFLARE_ACCOUNT_ID, NUXT_CLOUDFLARE_AI_GATEWAY_ID, and NUXT_CLOUDFLARE_WORKERS_AI_TOKEN (or a CLOUDFLARE_AI_SEARCH_TOKEN carrying Workers AI Read permission).',
     })
   }
 
-  const baseUrl = `https://gateway.ai.cloudflare.com/v1/${accountId}/${gatewayId}/workers-ai/@cf/myshell-ai/melotts`
+  const baseUrl = `https://gateway.ai.cloudflare.com/v1/${accountId}/${gatewayId}/workers-ai/@cf/deepgram/aura-1`
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -51,22 +57,22 @@ function getWorkersAiConfig() {
   return { url: baseUrl, headers }
 }
 
-export async function synthesizeMeloTTS(params: SynthesizeMeloTTSParams): Promise<Uint8Array> {
+export async function synthesizeVoice(params: SynthesizeVoiceParams): Promise<Uint8Array> {
   const { url, headers } = getWorkersAiConfig()
-  const body: Record<string, unknown> = {
-    prompt: params.text,
-    lang: params.lang ?? 'en',
-  }
 
   const response = await fetch(url, {
     method: 'POST',
     headers,
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      text: params.text,
+      speaker: params.speaker,
+      encoding: 'mp3',
+    }),
   })
 
   if (!response.ok) {
     const text = await response.text().catch(() => '')
-    throw createError({ statusCode: response.status, message: `Workers AI MeloTTS error: ${text || response.statusText}` })
+    throw createError({ statusCode: response.status, message: `Aura-1 TTS error: ${text || response.statusText}` })
   }
 
   const contentType = response.headers.get('content-type') ?? ''
@@ -74,11 +80,11 @@ export async function synthesizeMeloTTS(params: SynthesizeMeloTTSParams): Promis
     const json = await response.json() as { result?: { audio?: string }; success?: boolean; errors?: Array<{ message: string }> }
     if (json.success === false) {
       const msg = json.errors?.map(e => e.message).join('; ') ?? 'Workers AI returned success=false'
-      throw createError({ statusCode: 502, message: `MeloTTS: ${msg}` })
+      throw createError({ statusCode: 502, message: `Aura-1: ${msg}` })
     }
     const audioBase64 = json.result?.audio
     if (!audioBase64) {
-      throw createError({ statusCode: 502, message: 'MeloTTS response missing audio payload' })
+      throw createError({ statusCode: 502, message: 'Aura-1 response missing audio payload' })
     }
     return base64ToBytes(audioBase64)
   }
@@ -96,13 +102,13 @@ function base64ToBytes(b64: string): Uint8Array {
   return bytes
 }
 
-export async function synthesizeWithRetry(params: SynthesizeMeloTTSParams): Promise<Uint8Array> {
+export async function synthesizeVoiceWithRetry(params: SynthesizeVoiceParams): Promise<Uint8Array> {
   const backoffsMs = [500, 1000, 2000]
   let lastError: unknown
 
   for (let attempt = 0; attempt < backoffsMs.length + 1; attempt++) {
     try {
-      return await synthesizeMeloTTS(params)
+      return await synthesizeVoice(params)
     }
     catch (err: any) {
       lastError = err
