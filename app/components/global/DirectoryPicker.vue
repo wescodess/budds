@@ -191,7 +191,7 @@ defineExpose({ focusSearch })
       </label>
     </div>
 
-    <div :class="[isDrawer ? 'max-h-[calc(var(--mobile-vh,100dvh)-14rem)]' : 'max-h-80', 'keyboard-scroll-area flex-1 overflow-y-auto py-1']">
+    <div :class="[isDrawer ? 'max-h-60' : 'max-h-80', 'keyboard-scroll-area flex-1 overflow-y-auto overflow-x-hidden py-1']">
       <template v-if="isSearching">
         <div v-if="matchingFolders.length > 0" class="px-2 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
           Folders
