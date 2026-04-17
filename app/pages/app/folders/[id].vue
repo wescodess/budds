@@ -1088,6 +1088,7 @@ async function handleImportLink(url: string) {
               router.replace({ query: { ...restNoVoid, tab: 'flashcards' } })
             }
           }"
+          @generation-started="() => { if (isDesktop) helperMode = 'tasks' }"
         />
       </UiTabsContent>
 
