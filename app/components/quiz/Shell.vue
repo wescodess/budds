@@ -7,7 +7,7 @@ const props = defineProps<{
   selectedQuizId?: string | null
 }>()
 
-const { quizzes, hasIndexedDocuments, generating } = useQuizzes(toRef(props, 'folderId'))
+const { quizzes, hasIndexedDocuments } = useQuizzes(toRef(props, 'folderId'))
 
 const activeQuizId = ref<Id<'quizzes'> | null>(null)
 const wizardOpen = ref(false)
@@ -43,12 +43,6 @@ function handleBack() {
           <ClipboardList class="mx-auto mb-3 h-12 w-12 opacity-40" />
           <p class="text-lg font-medium">Upload and index documents to generate quizzes</p>
         </div>
-      </div>
-    </template>
-
-    <template v-else-if="generating">
-      <div class="space-y-3 p-6">
-        <UiSkeleton v-for="i in 3" :key="i" class="h-30 w-full rounded-md" />
       </div>
     </template>
 

@@ -1,9 +1,12 @@
+import { api } from '#convex/api'
 import type { Id } from '../../convex/_generated/dataModel'
 
 export type WizardStep = 1 | 2 | 3
 
 export function useQuizGeneration(folderId: Ref<Id<'folders'>>) {
-  const { generate } = useQuizzes(folderId)
+  const createTaskMutation = import.meta.client
+    ? useConvexMutation(api.tasks.create)
+    : { mutate: async () => ({ taskId: '' }), isLoading: ref(false) }
 
   const wizardOpen = ref(false)
   const wizardStep = ref<WizardStep>(1)
@@ -16,7 +19,7 @@ export function useQuizGeneration(folderId: Ref<Id<'folders'>>) {
   const questionCount = ref(10)
   const questionTypes = ref<string[]>(['multiple-choice', 'true_false'])
   const difficulty = ref<string>('medium')
-  const generating = ref(false)
+  const submitting = ref(false)
 
   function openWizard() {
     wizardStep.value = 1
@@ -99,18 +102,35 @@ export function useQuizGeneration(folderId: Ref<Id<'folders'>>) {
   const allTopics = computed(() => [...selectedTopics.value, ...customTopics.value])
 
   async function generateQuiz() {
-    generating.value = true
+    if (submitting.value) return
+    submitting.value = true
     try {
-      await generate({
-        questionCount: questionCount.value,
-        topics: allTopics.value.length > 0 ? allTopics.value : undefined,
-        questionTypes: questionTypes.value,
-        difficulty: difficulty.value,
-      })
+      const result = (await createTaskMutation.mutate({
+        folderId: folderId.value,
+        type: 'quiz-generation',
+        title: `Generating ${questionCount.value} questions…`,
+        metadata: {
+          questionCount: questionCount.value,
+          difficulty: difficulty.value,
+        },
+      } as any)) as { taskId: Id<'tasks'> }
+
       closeWizard()
+
+      $fetch('/api/quiz/generate', {
+        method: 'POST',
+        body: {
+          folderId: folderId.value,
+          taskId: result.taskId,
+          questionCount: questionCount.value,
+          topics: allTopics.value.length > 0 ? allTopics.value : undefined,
+          questionTypes: questionTypes.value,
+          difficulty: difficulty.value,
+        },
+      }).catch(() => {})
     }
     finally {
-      generating.value = false
+      submitting.value = false
     }
   }
 
@@ -126,7 +146,7 @@ export function useQuizGeneration(folderId: Ref<Id<'folders'>>) {
     questionCount,
     questionTypes,
     difficulty,
-    generating,
+    submitting,
     selectedCount,
     allTopics,
     openWizard,

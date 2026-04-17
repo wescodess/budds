@@ -27,13 +27,12 @@ async function handleGenerate() {
   try {
     await gen.generateQuiz()
     emit('generated')
-    emit('update:open', false)
     const { toast } = await import('vue-sonner')
-    toast.success('Quiz generated')
+    toast.success('Generation started')
   }
   catch (e: any) {
     const { toast } = await import('vue-sonner')
-    toast.error(e?.message || 'Failed to generate quiz')
+    toast.error(e?.message || 'Failed to start generation')
   }
 }
 
@@ -105,12 +104,12 @@ const stepIndicator = computed(() =>
         <UiButton v-else-if="gen.wizardStep.value === 2" @click="gen.nextStep()">Next</UiButton>
         <UiButton
           v-else
-          :disabled="gen.generating.value || gen.questionTypes.value.length === 0"
+          :disabled="gen.submitting.value || gen.questionTypes.value.length === 0"
           @click="handleGenerate"
         >
-          <Loader2 v-if="gen.generating.value" class="mr-1.5 h-3.5 w-3.5 animate-spin" />
+          <Loader2 v-if="gen.submitting.value" class="mr-1.5 h-3.5 w-3.5 animate-spin" />
           <Sparkles v-else class="mr-1.5 h-3.5 w-3.5" />
-          {{ gen.generating.value ? 'Generating...' : 'Generate' }}
+          {{ gen.submitting.value ? 'Starting...' : 'Generate' }}
         </UiButton>
       </UiDialogFooter>
     </UiDialogContent>
