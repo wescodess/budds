@@ -44,12 +44,19 @@ mockNuxtImport('useFlashcardRooms', () => {
   return () => ({
     rooms: ref([]),
     hasIndexedDocuments: ref(true),
-    generating: ref(false),
-    lastError: ref(null),
     createRoom: vi.fn(),
     deleteRoom: vi.fn(),
     renameRoom: vi.fn(),
-    generate: vi.fn(),
+  })
+})
+
+mockNuxtImport('useTasks', () => {
+  return () => ({
+    tasks: ref([]),
+    activeCount: ref(0),
+    cancel: vi.fn(),
+    dismiss: vi.fn(),
+    retry: vi.fn(),
   })
 })
 
