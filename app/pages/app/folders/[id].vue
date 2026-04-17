@@ -25,6 +25,7 @@ type FolderShellHandle = {
 }
 
 const folderShellRef = ref<FolderShellHandle | null>(null)
+const audioOverviewShellRef = ref<{ startGeneration: () => Promise<void> } | null>(null)
 const folderId = computed(() => route.params.id as Id<'folders'>)
 const conversationIdRef = computed<Id<'conversations'> | null>(() => {
   const q = route.query?.conversationId
@@ -132,6 +133,10 @@ async function onCreateVoid(payload: { type: VoidType; name?: string }) {
       activeTab.value = 'audio-overview'
       const { conversationId: _dropC, voidId: _dropV, ...rest } = route.query ?? {}
       await router.replace({ query: { ...rest, tab: 'audio-overview' } })
+      await nextTick()
+      try {
+        await audioOverviewShellRef.value?.startGeneration?.()
+      } catch { /* shell surfaces its own error toast */ }
     } else {
       activeTab.value = type
       await router.replace({ query: { ...(route.query ?? {}), tab: type } })
@@ -1109,6 +1114,7 @@ async function handleImportLink(url: string) {
 
       <UiTabsContent value="audio-overview" class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <AudioOverviewShell
+          ref="audioOverviewShellRef"
           :folder-id="folderId"
           @generation-started="() => { if (isDesktop) helperMode = 'tasks' }"
         />

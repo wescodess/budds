@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Pause, Play, Rewind, FastForward, Download, Share2 } from 'lucide-vue-next'
+import { Pause, Play, Rewind, FastForward, Download, Share2, RefreshCw } from 'lucide-vue-next'
 import { api } from '#convex/api'
 import type { Id, Doc } from '../../../convex/_generated/dataModel'
 import { useAudioOverviewPlayer, type OverviewTurn } from '~/composables/useAudioOverviewPlayer'
@@ -7,6 +7,11 @@ import { useAudioOverviewPlayer, type OverviewTurn } from '~/composables/useAudi
 const props = defineProps<{
   overviewId: Id<'audioOverviews'>
   folderId: Id<'folders'>
+  regenerating?: boolean
+}>()
+
+const emit = defineEmits<{
+  'request-regenerate': []
 }>()
 
 const { data: overviewData } = useConvexQuery(
@@ -106,16 +111,28 @@ const hasMissingTurnUrl = computed(() => {
 
 <template>
   <div data-testid="audio-overview-player" class="flex h-full min-h-0 flex-1 flex-col gap-6 overflow-y-auto p-6">
-    <header class="mx-auto w-full max-w-4xl">
-      <p class="font-inter text-xs text-muted-foreground">
-        {{ overview?.title ? 'Audio Overview' : '' }}
-      </p>
-      <h2 data-testid="audio-overview-title" class="mt-1 font-dm-sans text-2xl font-bold text-foreground">
-        {{ overview?.title ?? 'Audio overview' }}
-      </h2>
-      <p class="mt-1 font-inter text-xs text-muted-foreground">
-        {{ totalLabel }} total · {{ turns.length }} turns
-      </p>
+    <header class="mx-auto flex w-full max-w-4xl items-start justify-between gap-4">
+      <div class="min-w-0">
+        <p class="font-inter text-xs text-muted-foreground">
+          {{ overview?.title ? 'Audio Overview' : '' }}
+        </p>
+        <h2 data-testid="audio-overview-title" class="mt-1 font-dm-sans text-2xl font-bold text-foreground">
+          {{ overview?.title ?? 'Audio overview' }}
+        </h2>
+        <p class="mt-1 font-inter text-xs text-muted-foreground">
+          {{ totalLabel }} total · {{ turns.length }} turns
+        </p>
+      </div>
+      <button
+        type="button"
+        data-testid="audio-overview-regenerate-btn"
+        class="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border/60 bg-card px-3 py-1.5 font-inter text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+        :disabled="props.regenerating"
+        @click="emit('request-regenerate')"
+      >
+        <RefreshCw class="h-3.5 w-3.5" :class="props.regenerating ? 'animate-spin' : ''" />
+        {{ props.regenerating ? 'Starting…' : 'Generate new' }}
+      </button>
     </header>
 
     <section class="mx-auto flex w-full max-w-3xl flex-col items-center gap-8">
