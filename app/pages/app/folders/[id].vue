@@ -1088,11 +1088,16 @@ async function handleImportLink(url: string) {
               router.replace({ query: { ...restNoVoid, tab: 'flashcards' } })
             }
           }"
+          @generation-started="() => { if (isDesktop) helperMode = 'tasks' }"
         />
       </UiTabsContent>
 
       <UiTabsContent value="quiz" class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <QuizTab :folder-id="folderId" :selected-quiz-id="activeTab === 'quiz' ? activeVoidId : null" />
+        <QuizTab
+          :folder-id="folderId"
+          :selected-quiz-id="activeTab === 'quiz' ? activeVoidId : null"
+          @generation-started="() => { if (isDesktop) helperMode = 'tasks' }"
+        />
       </UiTabsContent>
 
         <UiTabsContent value="documents" class="keyboard-scroll-area flex min-w-0 flex-1 flex-col gap-6 overflow-y-auto p-6">
