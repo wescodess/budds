@@ -130,6 +130,54 @@ export const createDocumentFromSource = mutation({
   },
 })
 
+export const createDocumentFromText = mutation({
+  args: {
+    folderId: v.id('folders'),
+    filename: v.string(),
+    text: v.string(),
+    sourceUrl: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) throw new Error('Unauthenticated')
+
+    const userId = identity.tokenIdentifier
+
+    const folder = await ctx.db.get(args.folderId)
+    if (!folder || folder.userId !== userId) {
+      throw new Error('Folder not found')
+    }
+
+    if (!args.text.trim()) throw new Error('Text content cannot be empty')
+
+    const docId = await ctx.db.insert('documents', {
+      userId,
+      folderId: args.folderId,
+      filename: args.filename,
+      status: 'processing',
+      fileSize: new TextEncoder().encode(args.text).length,
+      sourceType: 'file',
+      sourceUrl: args.sourceUrl,
+      mimeType: 'text/markdown',
+    })
+
+    await ctx.db.patch(args.folderId, {
+      documentCount: folder.documentCount + 1,
+      updatedAt: Date.now(),
+    })
+
+    await ctx.scheduler.runAfter(0, internal.documentActions.ingestText, {
+      documentId: docId,
+      userId,
+      folderId: args.folderId,
+      filename: args.filename,
+      text: args.text,
+    })
+
+    return docId
+  },
+})
+
 export const listDocumentsByFolder = query({
   args: { folderId: v.id('folders') },
   handler: async (ctx, args) => {

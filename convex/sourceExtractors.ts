@@ -98,13 +98,33 @@ function extractCaptionTracksFromHtml(html: string): CaptionTrack[] | null {
   return null
 }
 
+function extractCookies(headers: Headers): string {
+  const cookies: string[] = []
+  headers.forEach((val, key) => {
+    if (key.toLowerCase() === 'set-cookie') {
+      cookies.push(val.split(';')[0])
+    }
+  })
+  return cookies.join('; ')
+}
+
 async function getCaptionTracks(videoId: string): Promise<CaptionTrack[]> {
+  const homeRes = await fetch('https://www.youtube.com/', {
+    headers: { 'User-Agent': YT_USER_AGENT },
+    redirect: 'follow',
+  })
+  let cookies = extractCookies(homeRes.headers)
+  await homeRes.text()
+
   const pageRes = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
     headers: {
       'User-Agent': YT_USER_AGENT,
       'Accept-Language': 'en-US,en;q=0.9',
+      ...(cookies ? { 'Cookie': cookies } : {}),
     },
   })
+  const pageCookies = extractCookies(pageRes.headers)
+  if (pageCookies) cookies = cookies ? `${cookies}; ${pageCookies}` : pageCookies
   const html = await pageRes.text()
 
   if (html.includes('class="g-recaptcha"')) {
@@ -117,20 +137,39 @@ async function getCaptionTracks(videoId: string): Promise<CaptionTrack[]> {
   const htmlTracks = extractCaptionTracksFromHtml(html)
   if (htmlTracks) return htmlTracks
 
-  try {
-    const res = await fetch(YT_INNERTUBE_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'User-Agent': YT_USER_AGENT },
-      body: JSON.stringify({ context: YT_WEB_CLIENT, videoId }),
-    })
-    if (res.ok) {
-      const data = await res.json() as any
-      const tracks = data?.captions?.playerCaptionsTracklistRenderer?.captionTracks
-      if (Array.isArray(tracks) && tracks.length > 0) return tracks
-    }
-  } catch { /* InnerTube fallback failed */ }
+  const apiKeyMatch = html.match(/"INNERTUBE_API_KEY"\s*:\s*"([^"]+)"/)
+  const clientVerMatch = html.match(/"INNERTUBE_CLIENT_VERSION"\s*:\s*"([^"]+)"/)
+  const apiKey = apiKeyMatch?.[1]
+  const clientVer = clientVerMatch?.[1] ?? '2.20241126.01.00'
 
-  throw new Error('No transcript available for this video')
+  if (apiKey) {
+    try {
+      const url = `${YT_INNERTUBE_URL}${YT_INNERTUBE_URL.includes('?') ? '&' : '?'}key=${apiKey}&prettyPrint=false`
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': YT_USER_AGENT,
+          'Origin': 'https://www.youtube.com',
+          ...(cookies ? { 'Cookie': cookies } : {}),
+        },
+        body: JSON.stringify({
+          context: { client: { clientName: 'WEB', clientVersion: clientVer, hl: 'en' } },
+          videoId,
+        }),
+      })
+      if (res.ok) {
+        const data = await res.json() as any
+        const tracks = data?.captions?.playerCaptionsTracklistRenderer?.captionTracks
+        if (Array.isArray(tracks) && tracks.length > 0) return tracks
+      }
+    } catch { /* InnerTube failed */ }
+  }
+
+  throw new Error(
+    'Transcript not available — YouTube blocks server-side access for some videos. '
+    + 'Try pasting the transcript text manually instead.'
+  )
 }
 
 export function isYouTubeUrl(url: string): boolean {
