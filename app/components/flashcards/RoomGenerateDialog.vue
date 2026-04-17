@@ -30,19 +30,19 @@ const { data: scopeInventory } = useConvexQuery(api.folders.searchScopeItems, co
 })))
 
 const pickerFolders = computed<PickerFolder[]>(() =>
-  (scopeInventory.value?.folders ?? []).map((f) => ({
-    id: f.id as unknown as string,
+  (scopeInventory.value?.folders ?? []).map((f: any) => ({
+    id: f.id as string,
     name: f.name,
-    parentId: undefined,
-    fileCount: f.descendantFileCount,
+    parentId: f.parentId as string | undefined,
+    fileCount: f.descendantFileCount ?? f.fileCount ?? 0,
   })),
 )
 
 const pickerFiles = computed<PickerFile[]>(() =>
-  (scopeInventory.value?.files ?? []).map((f) => ({
-    id: f.id as unknown as string,
+  (scopeInventory.value?.files ?? []).map((f: any) => ({
+    id: f.id as string,
     name: f.filename,
-    folderId: props.folderId as unknown as string,
+    folderId: (f.folderId ?? props.folderId) as string,
   })),
 )
 
@@ -154,7 +154,7 @@ async function handleSubmit() {
         <div>
           <UiLabel class="text-xs font-medium">Scope (optional)</UiLabel>
           <div class="mt-1 overflow-hidden rounded-lg border border-border/60">
-            <GlobalDirectoryPicker
+            <DirectoryPicker
               :folders="pickerFolders"
               :files="pickerFiles"
               :is-file-selected="isFileSelected"
