@@ -100,7 +100,7 @@ function handleViewAttempt(attemptId: Id<'quizAttempts'>) {
   viewState.value = 'results'
 }
 
-function handleAbandon() {
+function handleQuit() {
   viewState.value = 'overview'
 }
 
@@ -125,7 +125,7 @@ function handleBackToOverview() {
       :initial-index="takingInitialIndex"
       :answered-ids="takingAnsweredIds"
       @complete="handleComplete"
-      @abandon="handleAbandon"
+      @quit="handleQuit"
     />
 
     <QuizResultsView
