@@ -393,6 +393,37 @@ export const ingestDocument = internalAction({
   },
 })
 
+export const ingestText = internalAction({
+  args: {
+    documentId: v.id('documents'),
+    userId: v.string(),
+    folderId: v.id('folders'),
+    filename: v.string(),
+    text: v.string(),
+  },
+  handler: async (ctx, args) => {
+    try {
+      const r2Key = `${sanitizeUserSegment(args.userId)}/${args.folderId}/${args.documentId}.md`
+
+      await uploadToR2AndSync(ctx, {
+        documentId: args.documentId,
+        userId: args.userId,
+        folderId: args.folderId,
+        filename: args.filename,
+        r2Key,
+        body: args.text,
+        contentType: 'text/markdown',
+      })
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error)
+      await failDocumentIngestion(ctx, {
+        documentId: args.documentId,
+        failureReason: message,
+      })
+    }
+  },
+})
+
 export const pollIndexingStatus = internalAction({
   args: {
     documentId: v.id('documents'),
