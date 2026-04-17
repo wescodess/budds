@@ -17,7 +17,6 @@ import type * as documentActions from "../documentActions.js";
 import type * as documentImports from "../documentImports.js";
 import type * as documents from "../documents.js";
 import type * as flashcardRooms from "../flashcardRooms.js";
-import type * as flashcards from "../flashcards.js";
 import type * as folderIcons from "../folderIcons.js";
 import type * as folderPalette from "../folderPalette.js";
 import type * as folders from "../folders.js";
@@ -43,7 +42,6 @@ declare const fullApi: ApiFromModules<{
   documentImports: typeof documentImports;
   documents: typeof documents;
   flashcardRooms: typeof flashcardRooms;
-  flashcards: typeof flashcards;
   folderIcons: typeof folderIcons;
   folderPalette: typeof folderPalette;
   folders: typeof folders;

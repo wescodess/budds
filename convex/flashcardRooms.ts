@@ -107,7 +107,7 @@ async function deleteAllRoomCards(
 async function resolveArchiveOpts(
   ctx: MutationCtx,
   room: RoomDoc,
-): Promise<{ title: string; origin: 'ai' | 'manual'; prompt?: string; requestedCardCount?: number; model?: string }> {
+): Promise<{ title: string; origin: string; prompt?: string; requestedCardCount?: number; model?: string }> {
   if (room.activeVersionId) {
     const version = await ctx.db.get(room.activeVersionId)
     if (version) {
@@ -126,7 +126,7 @@ async function resolveArchiveOpts(
 async function archiveCurrentCards(
   ctx: MutationCtx,
   room: RoomDoc,
-  opts: { title: string; origin: 'ai' | 'manual'; prompt?: string; requestedCardCount?: number; model?: string },
+  opts: { title: string; origin: string; prompt?: string; requestedCardCount?: number; model?: string },
 ): Promise<Id<'flashcardRoomVersions'> | null> {
   const currentCards = await ctx.db
     .query('flashcardRoomCards')
