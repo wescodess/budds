@@ -2,6 +2,7 @@
 import { RotateCcw } from 'lucide-vue-next'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
+import type { AttemptHistoryItem } from '~/composables/useQuizHistory'
 
 const props = defineProps<{
   quizId: Id<'quizzes'>
@@ -11,6 +12,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   retake: []
   back: []
+  viewAttempt: [attemptId: Id<'quizAttempts'>]
 }>()
 
 const { data: resultsData } = useConvexQuery(
@@ -18,7 +20,15 @@ const { data: resultsData } = useConvexQuery(
   computed(() => ({ attemptId: props.attemptId })),
 )
 
+const { data: historyData } = useConvexQuery(
+  api.quizzes.getQuizHistory,
+  computed(() => ({ quizId: props.quizId })),
+)
+
 const results = computed(() => resultsData.value)
+const attempts = computed<AttemptHistoryItem[]>(() =>
+  (historyData.value as AttemptHistoryItem[] | undefined) ?? [],
+)
 
 function scoreColor(pct: number) {
   if (pct >= 80) return 'text-green-500'
@@ -40,7 +50,10 @@ function formatDateTime(ts?: number) {
   })
 }
 
-const history = useQuizHistory(computed(() => props.quizId))
+function handleSelectAttempt(attemptId: Id<'quizAttempts'>) {
+  if (attemptId === props.attemptId) return
+  emit('viewAttempt', attemptId)
+}
 </script>
 
 <template>
@@ -57,7 +70,7 @@ const history = useQuizHistory(computed(() => props.quizId))
           <template v-if="results.completedAt"> &mdash; {{ formatDateTime(results.completedAt) }}</template>
         </p>
       </div>
-      <QuizHistoryDropdown :attempts="history.attempts.value" @select="(id) => emit('back')" />
+      <QuizHistoryDropdown :attempts="attempts" @select="handleSelectAttempt" />
     </div>
 
     <div class="grid grid-cols-2 gap-4">

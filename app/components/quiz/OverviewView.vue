@@ -10,6 +10,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   takeQuiz: []
   generateMore: []
+  viewAttempt: [attemptId: Id<'quizAttempts'>]
 }>()
 
 const { data: quizData } = useConvexQuery(
@@ -105,7 +106,7 @@ function typeBadge(type: string) {
         </button>
         <QuizHistoryDropdown
           :attempts="attempts"
-          @select="() => emit('takeQuiz')"
+          @select="(id) => emit('viewAttempt', id)"
         />
       </div>
 

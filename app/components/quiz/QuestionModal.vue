@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { Plus, X } from 'lucide-vue-next'
+import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 
 const props = defineProps<{
@@ -27,8 +28,6 @@ const addMutation = import.meta.client
 const updateMutation = import.meta.client
   ? useConvexMutation(api.quizzes.updateQuestion)
   : { mutate: async (_args: unknown): Promise<any> => null, isLoading: ref(false) }
-
-import { api } from '#convex/api'
 
 const questionType = ref<string>('multiple-choice')
 const questionText = ref('')
