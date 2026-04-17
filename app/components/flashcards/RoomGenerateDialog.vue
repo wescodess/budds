@@ -151,9 +151,9 @@ async function handleSubmit() {
       </div>
 
       <div class="mt-5 space-y-4">
-        <div v-if="pickerFolders.length > 0 || pickerFiles.length > 0">
+        <div>
           <UiLabel class="text-xs font-medium">Scope (optional)</UiLabel>
-          <div class="mt-1">
+          <div class="mt-1 overflow-hidden rounded-lg border border-border/60">
             <GlobalDirectoryPicker
               :folders="pickerFolders"
               :files="pickerFiles"
