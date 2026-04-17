@@ -334,7 +334,7 @@ describe('accountDeletion.deleteAccountCascade', () => {
     expect(bAttempts).toHaveLength(1)
   })
 
-  test('[P0] should remove caller\'s flashcardSets + flashcards, leaving another user\'s untouched (Story 7.1)', async () => {
+  test('[P0] should remove caller\'s flashcardRooms + cards, leaving another user\'s untouched', async () => {
     const t = convexTest(schema, modules)
     const asUserA = t.withIdentity(TEST_IDENTITY)
     const asUserB = t.withIdentity(OTHER_IDENTITY)
@@ -342,48 +342,40 @@ describe('accountDeletion.deleteAccountCascade', () => {
     const folderA = await asUserA.mutation(api.folders.createFolder, { name: 'A folder' })
     const folderB = await asUserB.mutation(api.folders.createFolder, { name: 'B folder' })
 
-    const cards = [
-      { order: 0, front: 'F1', back: 'B1', sourceChunkContent: 'src', sourceFilename: 'f.pdf' },
-      { order: 1, front: 'F2', back: 'B2', sourceChunkContent: 'src', sourceFilename: 'f.pdf' },
-    ]
+    const { roomId: aRoom } = await asUserA.mutation(api.flashcardRooms.createRoom, { folderId: folderA, title: 'A Room' })
+    await asUserA.mutation(api.flashcardRooms.createCard, { roomId: aRoom, term: 'F1', definition: 'B1' })
+    await asUserA.mutation(api.flashcardRooms.createCard, { roomId: aRoom, term: 'F2', definition: 'B2' })
 
-    const aResult = await asUserA.mutation(api.flashcards.createSetWithCards, {
-      folderId: folderA,
-      title: 'A Set',
-      cards,
-    })
-    const bResult = await asUserB.mutation(api.flashcards.createSetWithCards, {
-      folderId: folderB,
-      title: 'B Set',
-      cards,
-    })
+    const { roomId: bRoom } = await asUserB.mutation(api.flashcardRooms.createRoom, { folderId: folderB, title: 'B Room' })
+    await asUserB.mutation(api.flashcardRooms.createCard, { roomId: bRoom, term: 'F1', definition: 'B1' })
+    await asUserB.mutation(api.flashcardRooms.createCard, { roomId: bRoom, term: 'F2', definition: 'B2' })
 
     await asUserA.mutation(internal.accountDeletion.deleteCurrentUser, {})
 
-    const aSets = await t.run(async (ctx) => {
-      return (await ctx.db.query('flashcardSets').collect()).filter(
+    const aRooms = await t.run(async (ctx) => {
+      return (await ctx.db.query('flashcardRooms').collect()).filter(
         (r) => r.userId === TEST_IDENTITY.tokenIdentifier,
       )
     })
     const aCards = await t.run(async (ctx) => {
-      return (await ctx.db.query('flashcards').collect()).filter(
+      return (await ctx.db.query('flashcardRoomCards').collect()).filter(
         (r) => r.userId === TEST_IDENTITY.tokenIdentifier,
       )
     })
-    expect(aSets).toHaveLength(0)
+    expect(aRooms).toHaveLength(0)
     expect(aCards).toHaveLength(0)
 
-    const bSets = await t.run(async (ctx) => {
-      return (await ctx.db.query('flashcardSets').collect()).filter(
+    const bRooms = await t.run(async (ctx) => {
+      return (await ctx.db.query('flashcardRooms').collect()).filter(
         (r) => r.userId === OTHER_IDENTITY.tokenIdentifier,
       )
     })
     const bCards = await t.run(async (ctx) => {
-      return (await ctx.db.query('flashcards').collect()).filter(
+      return (await ctx.db.query('flashcardRoomCards').collect()).filter(
         (r) => r.userId === OTHER_IDENTITY.tokenIdentifier,
       )
     })
-    expect(bSets.map((r) => r._id)).toContain(bResult.setId)
+    expect(bRooms.map((r) => r._id)).toContain(bRoom)
     expect(bCards).toHaveLength(2)
   })
 

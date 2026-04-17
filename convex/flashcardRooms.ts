@@ -561,6 +561,14 @@ export const restoreRoomVersion = mutation({
     if (!version || version.userId !== userId) throw new Error('Version not found')
     if (version.roomId !== room._id) throw new Error('Version not found')
 
+    if (room.activeVersionId === args.versionId) {
+      const currentCards = await ctx.db
+        .query('flashcardRoomCards')
+        .withIndex('by_roomId', (q) => q.eq('roomId', room._id))
+        .collect()
+      return { roomId: room._id, versionId: args.versionId, cardCount: currentCards.length }
+    }
+
     const restoreArchiveOpts = await resolveArchiveOpts(ctx, room)
     await archiveCurrentCards(ctx, room, restoreArchiveOpts)
 

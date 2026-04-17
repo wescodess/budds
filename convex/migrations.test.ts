@@ -12,6 +12,40 @@ const USER_A = {
   email: 'alice@example.com',
 }
 
+async function seedLegacySet(
+  t: ReturnType<typeof convexTest>,
+  userId: string,
+  folderId: any,
+  title: string,
+  cards: Array<{ order: number; front: string; back: string; sourceChunkContent: string; sourceFilename: string }>,
+) {
+  const setId = await t.run(async (ctx) => {
+    return await ctx.db.insert('flashcardSets', {
+      userId,
+      folderId,
+      title,
+      status: 'ready',
+      cardCount: cards.length,
+    })
+  })
+
+  for (const c of cards) {
+    await t.run(async (ctx) => {
+      await ctx.db.insert('flashcards', {
+        setId,
+        userId,
+        order: c.order,
+        front: c.front,
+        back: c.back,
+        sourceChunkContent: c.sourceChunkContent,
+        sourceFilename: c.sourceFilename,
+      })
+    })
+  }
+
+  return { setId }
+}
+
 function legacyCards() {
   return [
     {
@@ -37,11 +71,7 @@ describe('migrations.migrateLegacyFlashcards', () => {
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
 
-    const { setId } = await asUser.mutation(api.flashcards.createSetWithCards, {
-      folderId,
-      title: 'Cell Biology',
-      cards: legacyCards(),
-    })
+    const { setId } = await seedLegacySet(t, USER_A.tokenIdentifier, folderId, 'Cell Biology', legacyCards())
 
     const result = await t.mutation(internal.migrations.migrateLegacyFlashcards, {})
     expect(result.migratedRooms).toBe(1)
@@ -78,11 +108,7 @@ describe('migrations.migrateLegacyFlashcards', () => {
     const t = convexTest(schema, modules)
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
-    await asUser.mutation(api.flashcards.createSetWithCards, {
-      folderId,
-      title: 'Cell Biology',
-      cards: legacyCards(),
-    })
+    await seedLegacySet(t, USER_A.tokenIdentifier, folderId, 'Cell Biology', legacyCards())
 
     const r1 = await t.mutation(internal.migrations.migrateLegacyFlashcards, {})
     expect(r1.migratedRooms).toBe(1)
@@ -100,11 +126,7 @@ describe('migrations.migrateLegacyFlashcards', () => {
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
 
-    const { setId } = await asUser.mutation(api.flashcards.createSetWithCards, {
-      folderId,
-      title: 'Mixed',
-      cards: legacyCards(),
-    })
+    const { setId } = await seedLegacySet(t, USER_A.tokenIdentifier, folderId, 'Mixed', legacyCards())
 
     const allCards = await t.run((ctx) =>
       ctx.db.query('flashcards').withIndex('by_setId', (q) => q.eq('setId', setId)).collect(),
@@ -125,20 +147,14 @@ describe('migrations.migrateLegacyFlashcards', () => {
     const t = convexTest(schema, modules)
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
-    const { setId } = await asUser.mutation(api.flashcards.createSetWithCards, {
-      folderId,
-      title: 'Set',
-      cards: legacyCards(),
-    })
+    const { setId } = await seedLegacySet(t, USER_A.tokenIdentifier, folderId, 'Set', legacyCards())
 
-    // Corrupt ownership: patch folder to a different userId
     await t.run((ctx) => ctx.db.patch(folderId, { userId: 'other-user' }))
 
     const result = await t.mutation(internal.migrations.migrateLegacyFlashcards, {})
     expect(result.migratedRooms).toBe(0)
     expect(result.skippedOrphans).toBe(1)
 
-    // no room was created
     const rooms = await t.run((ctx) =>
       ctx.db.query('flashcardRooms').withIndex('by_migratedFromSetId', (q) => q.eq('migratedFromSetId', setId)).collect(),
     )

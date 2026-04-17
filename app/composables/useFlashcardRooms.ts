@@ -39,33 +39,26 @@ export function useFlashcardRooms(folderId: Ref<Id<'folders'>> | Id<'folders'>) 
     () => (roomsData.value as FlashcardRoomSummary[] | undefined) ?? [],
   )
 
+  const ssrStub = {
+    mutate: async () => { throw new Error('Flashcard room mutations are client-only') },
+    isLoading: ref(false),
+  } as { mutate: (_args: unknown) => Promise<any>; isLoading: Ref<boolean> }
+
   const createRoomMutation = import.meta.client
     ? useConvexMutation(api.flashcardRooms.createRoom)
-    : {
-        mutate: async (_args: unknown): Promise<any> => ({ roomId: '' }),
-        isLoading: ref(false),
-      }
+    : ssrStub
 
   const deleteRoomMutation = import.meta.client
     ? useConvexMutation(api.flashcardRooms.deleteRoom)
-    : {
-        mutate: async (_args: unknown): Promise<any> => null,
-        isLoading: ref(false),
-      }
+    : ssrStub
 
   const renameRoomMutation = import.meta.client
     ? useConvexMutation(api.flashcardRooms.renameRoom)
-    : {
-        mutate: async (_args: unknown): Promise<any> => null,
-        isLoading: ref(false),
-      }
+    : ssrStub
 
   const generateMutation = import.meta.client
     ? useConvexMutation(api.flashcardRooms.generateRoomCards)
-    : {
-        mutate: async (_args: unknown): Promise<any> => null,
-        isLoading: ref(false),
-      }
+    : ssrStub
 
   const generating = useState<boolean>(`flashcardRooms:generating:${id.value}`, () => false)
   const lastError = useState<string | null>(`flashcardRooms:lastError:${id.value}`, () => null)

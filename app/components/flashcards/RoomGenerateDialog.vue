@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { AlertTriangle, Sparkles, X } from 'lucide-vue-next'
+import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
+import type { PickerFolder, PickerFile } from '~/components/global/DirectoryPicker.vue'
 
 const props = defineProps<{
   open: boolean
@@ -19,6 +21,60 @@ const { generate, generating, lastError } = useFlashcardRooms(toRef(props, 'fold
 const prompt = ref('')
 const cardCount = ref<number>(12)
 const formError = ref<string | null>(null)
+const selectedFileIds = ref<Set<string>>(new Set())
+const selectedFolderIds = ref<Set<string>>(new Set())
+
+const { data: scopeInventory } = useConvexQuery(api.folders.searchScopeItems, computed(() => ({
+  rootFolderId: props.folderId,
+  search: '',
+})))
+
+const pickerFolders = computed<PickerFolder[]>(() =>
+  (scopeInventory.value?.folders ?? []).map((f) => ({
+    id: f.id as unknown as string,
+    name: f.name,
+    parentId: undefined,
+    fileCount: f.descendantFileCount,
+  })),
+)
+
+const pickerFiles = computed<PickerFile[]>(() =>
+  (scopeInventory.value?.files ?? []).map((f) => ({
+    id: f.id as unknown as string,
+    name: f.filename,
+    folderId: props.folderId as unknown as string,
+  })),
+)
+
+const selectedCount = computed(() => selectedFileIds.value.size + selectedFolderIds.value.size)
+
+function isFileSelected(fileId: string): boolean {
+  return selectedFileIds.value.has(fileId)
+}
+
+function isFolderSelected(folderId: string): 'all' | 'some' | 'none' {
+  if (selectedFolderIds.value.has(folderId)) return 'all'
+  return 'none'
+}
+
+function handleToggleFile(fileId: string) {
+  const next = new Set(selectedFileIds.value)
+  if (next.has(fileId)) next.delete(fileId)
+  else next.add(fileId)
+  selectedFileIds.value = next
+}
+
+function handleToggleFolder(folderId: string) {
+  const next = new Set(selectedFolderIds.value)
+  if (next.has(folderId)) next.delete(folderId)
+  else next.add(folderId)
+  selectedFolderIds.value = next
+}
+
+function handleClear() {
+  selectedFileIds.value = new Set()
+  selectedFolderIds.value = new Set()
+}
 
 watch(
   () => props.open,
@@ -27,6 +83,8 @@ watch(
       prompt.value = ''
       cardCount.value = 12
       formError.value = null
+      selectedFileIds.value = new Set()
+      selectedFolderIds.value = new Set()
     }
   },
 )
@@ -93,6 +151,25 @@ async function handleSubmit() {
       </div>
 
       <div class="mt-5 space-y-4">
+        <div v-if="pickerFolders.length > 0 || pickerFiles.length > 0">
+          <UiLabel class="text-xs font-medium">Scope (optional)</UiLabel>
+          <div class="mt-1">
+            <GlobalDirectoryPicker
+              :folders="pickerFolders"
+              :files="pickerFiles"
+              :is-file-selected="isFileSelected"
+              :is-folder-selected="isFolderSelected"
+              :on-toggle-file="handleToggleFile"
+              :on-toggle-folder="handleToggleFolder"
+              :on-clear="handleClear"
+              :selected-count="selectedCount"
+              search-placeholder="Search folder documents"
+              presentation="drawer"
+              @close="() => {}"
+            />
+          </div>
+        </div>
+
         <div>
           <UiLabel class="text-xs font-medium">Prompt (optional)</UiLabel>
           <textarea
