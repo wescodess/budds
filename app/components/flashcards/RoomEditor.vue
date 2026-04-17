@@ -259,7 +259,7 @@ async function submitAdd() {
         :key="card._id"
         :data-testid="`flashcard-room-card-row`"
         :class="[
-          'group rounded-lg border bg-card p-4 transition-colors',
+          'group min-w-0 overflow-hidden rounded-lg border bg-card p-4 transition-colors',
           dropTargetId === card._id ? 'border-primary/70' : 'border-border/60',
           dragId === card._id ? 'opacity-50' : '',
         ]"
@@ -270,16 +270,16 @@ async function submitAdd() {
         @drop="(e) => onDrop(card._id, e)"
         @dragend="onDragEnd"
       >
-        <div v-if="editingId !== card._id" class="flex items-start gap-3">
+        <div v-if="editingId !== card._id" class="flex min-w-0 items-start gap-3">
           <button
             type="button"
-            class="cursor-grab rounded-md p-1 text-muted-foreground opacity-60 transition group-hover:opacity-100"
+            class="shrink-0 cursor-grab rounded-md p-1 text-muted-foreground opacity-60 transition group-hover:opacity-100"
             :data-testid="`flashcard-room-card-handle`"
             :aria-label="`Drag card ${i + 1}`"
           >
             <GripVertical class="h-4 w-4" />
           </button>
-          <div class="flex-1 space-y-1">
+          <div class="min-w-0 flex-1 space-y-1">
             <p class="font-dm-sans text-[15px] font-medium text-foreground">
               <span class="pr-1 text-muted-foreground">{{ i + 1 }}.</span>
               {{ card.term }}
@@ -287,10 +287,10 @@ async function submitAdd() {
             <p class="font-inter text-sm text-muted-foreground">{{ card.definition }}</p>
             <div
               v-if="card.metadata?.source?.filename"
-              class="mt-2 flex items-start gap-2 text-xs text-muted-foreground"
+              class="mt-2 flex min-w-0 items-start gap-2 text-xs text-muted-foreground"
             >
               <ChatCitationBadge :index="i + 1" :filename="card.metadata.source.filename" />
-              <span class="flex-1 truncate">{{ card.metadata.source.chunkContent }}</span>
+              <span class="min-w-0 flex-1 wrap-break-word">{{ card.metadata.source.chunkContent }}</span>
             </div>
           </div>
           <div class="flex shrink-0 items-center gap-2">
