@@ -35,7 +35,7 @@ function handleStart() {
             <p class="text-sm font-medium">Shuffle questions</p>
             <p class="text-xs text-muted-foreground">Randomize question order</p>
           </div>
-          <UiSwitch :checked="shuffle" @update:checked="shuffle = $event" />
+          <UiSwitch v-model="shuffle" />
         </div>
 
         <div class="flex items-center justify-between">
@@ -43,7 +43,7 @@ function handleStart() {
             <p class="text-sm font-medium">Show all questions</p>
             <p class="text-xs text-muted-foreground">Display all questions on one page</p>
           </div>
-          <UiSwitch :checked="showAll" @update:checked="showAll = $event" />
+          <UiSwitch v-model="showAll" />
         </div>
 
         <div class="flex items-center justify-between">
@@ -51,7 +51,7 @@ function handleStart() {
             <p class="text-sm font-medium">Immediate feedback</p>
             <p class="text-xs text-muted-foreground">Show answers after each question</p>
           </div>
-          <UiSwitch :checked="immediateFeedback" @update:checked="immediateFeedback = $event" />
+          <UiSwitch v-model="immediateFeedback" />
         </div>
       </div>
 
