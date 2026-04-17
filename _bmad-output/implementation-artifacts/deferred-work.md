@@ -171,3 +171,25 @@ All 6 failures shared a single root cause: `chatInputPath` pointed at `~/compone
 - **SSR stub `roomId: ''` landmine.** `useFlashcardRooms` server-branch stub returns empty-string IDs; if SSR ever eagerly calls `createRoom`, router navigates to `?voidId=`. Swap to `<ClientOnly>` wrappers or throw on SSR call.
 - **RoomShell mock mutation not keyed on api.** `tests/component/flashcards/room-shell.test.ts` injects a single `mockMutate` for rename/delete/etc — a wiring swap would still pass. Mirror the `apiRef`-discriminated pattern already used for `useConvexQuery` in the same file.
 - **No component-level test for reorder rollback + toast.** RoomEditor.vue implements the rollback on reject; flashcardRooms.test covers the Convex rejection. Add a component test that fails the mutation and asserts localCards reverted + toast message shown.
+
+## Deferred from: audio-overview-mvp spec (2026-04-17)
+
+- **Customize-Audio-Overview dialog (Phase 2).** Pre-generation preferences for `lengthMinutes` (5/10/20), `complexity` (beginner/expert), `voiceProfile` (host A/B voice picker). Wire to `preferences` column in `audioOverviews` or a new `audioOverviewPresets` row keyed to user. MVP uses fixed defaults: `lengthMinutes: 10`, `complexity: beginner`.
+- **Sticky mini-player (Phase 2).** Render single `<audio>` element in `layouts/default.vue` so playback survives route navigation. Requires a Pinia store plus the PRD §3.4 collapsed control bar. MVP: audio stops on navigate.
+- **Client-side concat + Download (Phase 2).** Fetch all turn MP3s, decode via Web Audio API, re-encode with dynamic-imported `lamejs`, `<a download>` trigger. Server-side ffmpeg on Cloudflare Pages is not available.
+- **Share link (Phase 3).** Public `/audio/[id]` page with signed-URL TTL; add `shareToken` + optional `publishedAt` to `audioOverviews`. Rate-limit the public route.
+- **Audio visualizer (Phase 2).** Two pulsing orbs driven by `AnalyserNode` FFT on the `<audio>` element. MVP renders static circular orbs; active-turn gets amber ring + faint glow via reactive classes, not real audio-reactive.
+- **Interjection flow (Phase 4).** `audioOverviewInterjections` table, mini-script generator endpoint, mic via browser `SpeechRecognition`, playlist splice-and-resume.
+- **Per-user daily quota (Phase 3).** Soft cap — MVP skips; Workers AI TTS free tier covers realistic usage. Revisit if OpenRouter spend becomes visible.
+- **Precise `durationMs` via ffprobe** or audio-decode sniff. MVP uses text-length heuristic (`chars/14 × 1000ms`); the real `<audio>` element provides accurate playback, so the only error is in the scrubber-before-load position — invisible to users in practice.
+- **Voice variety beyond MeloTTS defaults.** If Workers AI exposes multiple speaker IDs per model, plumb a `speakerId` param through `synthesizeMeloTTS`. If not, consider Aura-1 for host_b as a second voice. MVP uses lang-only + slight pitch nudge.
+- **Orphan blob cleanup on cancelled generation.** MVP accepts orphan `_storage` blobs when the user cancels. Add a `pendingCleanup` entry or a cron sweep that deletes unreferenced overview-related storage IDs older than 24h.
+- **Token-budget / prompt-length enforcement.** Audio script prompt can grow with folder size; add a per-call token ceiling in `buildAudioScriptPrompt` with graceful trim of lower-score chunks.
+- **Integration/component tests for the new components.** Unit tests are in-scope for the script prompt + Convex functions; full Vue component + page-level tests require the integration-test harness already deferred from G3.
+
+## Additional deferrals from audio-overview-mvp round-1 review (2026-04-17)
+
+- **Convex storage URL expiry on long pauses.** `getTurnUrls` returns URLs with ~30-min default TTL. If the user pauses for an hour, the player now surfaces an inline banner ("An audio segment couldn't be loaded. Try reloading the page.") but does not auto-refresh URLs. Phase 2: re-fetch via a refresh mutation or adopt shorter cadence; best fix is a signed-URL proxy endpoint that re-signs on demand.
+- **AbortSignal for mid-turn TTS cancellation.** `synthesizeWithRetry` can consume up to ~10–30s of user-perceived cancel-wait time (3 attempts × up to 2s backoff + per-request latency) before the outer loop's `isTaskCancelled` check runs again. Phase 2: plumb a shared `AbortSignal` into `synthesizeMeloTTS`'s `fetch` and abort on cancel detection.
+- **Scrubber floating-point boundary edge case.** Dragging the scrubber to exactly 100% can land `targetIndex` one past the end on zero-duration turns (defensive clamp catches it). User-unreachable given the 10ms clamp in `seek()`. Noted for completeness.
+- **Mid-word truncation in `splitOversizedTurns` final-buffer path.** When a single sentence exceeds `MAX_TURN_CHARS`, the code slices mid-word without an ellipsis. MVP acceptable — MeloTTS handles partial-word input cleanly. Phase 2: break at word boundary + append "…" for synthesizer tone.

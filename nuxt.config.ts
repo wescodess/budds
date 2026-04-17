@@ -122,6 +122,7 @@ export default defineNuxtConfig({
     cloudflareAiSearchInstance: readConfiguredValue('NUXT_CLOUDFLARE_AI_SEARCH_INSTANCE', 'CLOUDFLARE_AI_SEARCH_INSTANCE'),
     cloudflareAiSearchToken: readConfiguredValue('NUXT_CLOUDFLARE_AI_SEARCH_TOKEN', 'CLOUDFLARE_AI_SEARCH_TOKEN'),
     openrouterApiKey: readConfiguredValue('NUXT_OPENROUTER_API_KEY', 'OPENROUTER_API_KEY'),
+    cloudflareWorkersAiToken: readConfiguredValue('NUXT_CLOUDFLARE_WORKERS_AI_TOKEN', 'CLOUDFLARE_WORKERS_AI_TOKEN'),
     r2Endpoint: readConfiguredValue('NUXT_R2_ENDPOINT', 'R2_ENDPOINT'),
     r2AccessKeyId: readConfiguredValue('NUXT_R2_ACCESS_KEY_ID', 'R2_ACCESS_KEY_ID'),
     r2SecretAccessKey: readConfiguredValue('NUXT_R2_SECRET_ACCESS_KEY', 'R2_SECRET_ACCESS_KEY'),

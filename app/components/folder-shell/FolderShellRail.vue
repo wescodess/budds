@@ -22,7 +22,7 @@ import { PANEL_DISMISS_THRESHOLD_PX, useGestureGuards } from '~/composables/useG
 
 defineOptions({ name: 'FolderShellRail' })
 
-type TabValue = 'chat' | 'flashcards' | 'quiz' | 'documents'
+type TabValue = 'chat' | 'flashcards' | 'quiz' | 'audio-overview' | 'documents'
 type VoidKind = 'chat' | 'flashcards' | 'quiz'
 type VoidItem = { id: string; type: VoidKind; title: string; updatedAt: number }
 
