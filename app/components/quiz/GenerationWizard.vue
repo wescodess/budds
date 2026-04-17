@@ -26,6 +26,7 @@ async function handleNextFromStep1() {
 async function handleGenerate() {
   try {
     await gen.generateQuiz()
+    emit('update:open', false)
     emit('generationStarted')
     const { toast } = await import('vue-sonner')
     toast.success('Generation started')
