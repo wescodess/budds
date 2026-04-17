@@ -31,19 +31,24 @@ export default defineEventHandler(async (event) => {
   let chunks: AISearchChunk[] = searchResults.data ?? []
 
   if (chunks.length < 2) {
-    const folderDocs = await fetchFolderDocs({ userId, folderId: body.folderId, maxChars: 80_000 })
-    if (folderDocs.length > 0) {
-      chunks = folderDocs.map((doc): AISearchChunk => ({
-        id: doc.key,
-        content: doc.content,
-        score: 1,
-        attributes: {
-          filename: doc.filename,
-          folderId: body.folderId,
-          documentId: doc.documentId,
-          userId,
-        },
-      }))
+    try {
+      const folderDocs = await fetchFolderDocs({ userId, folderId: body.folderId, maxChars: 80_000 })
+      if (folderDocs.length > 0) {
+        chunks = folderDocs.map((doc): AISearchChunk => ({
+          id: doc.key,
+          content: doc.content,
+          score: 1,
+          attributes: {
+            filename: doc.filename,
+            folderId: body.folderId,
+            documentId: doc.documentId,
+            userId,
+          },
+        }))
+      }
+    }
+    catch (error) {
+      console.error('[flashcards/generate] Failed to fetch folder docs fallback:', error)
     }
   }
 
