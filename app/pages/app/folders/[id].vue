@@ -1029,7 +1029,7 @@ async function handleImportLink(url: string) {
         </Sheet>
       </UiTabsContent>
 
-      <UiTabsContent value="flashcards" class="min-w-0 flex-1">
+      <UiTabsContent value="flashcards" class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <FlashcardsTab
           :folder-id="folderId"
           :selected-room-id="activeTab === 'flashcards' ? activeVoidId : null"
@@ -1046,7 +1046,7 @@ async function handleImportLink(url: string) {
         />
       </UiTabsContent>
 
-      <UiTabsContent value="quiz" class="min-w-0 flex-1">
+      <UiTabsContent value="quiz" class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <QuizTab :folder-id="folderId" :selected-quiz-id="activeTab === 'quiz' ? activeVoidId : null" />
       </UiTabsContent>
 
