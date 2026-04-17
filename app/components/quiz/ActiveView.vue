@@ -63,20 +63,22 @@ function handleTakeQuiz() {
   }
 }
 
+function applyAttemptResult(result: any) {
+  takingQuestions.value = result.questions
+  takingSettings.value = result.settings
+  takingAttemptId.value = result.attemptId
+  takingInitialIndex.value = result.currentQuestionIndex
+  takingAnsweredIds.value = new Set(result.answeredQuestionIds)
+  viewState.value = 'taking'
+}
+
 async function handleStartAttempt(settings: AttemptSettings) {
   const result = await startAttemptMutation.mutate({
     quizId: props.quizId,
     settings,
     restart: true,
   }) as any
-  if (result) {
-    takingQuestions.value = result.questions
-    takingSettings.value = result.settings
-    takingAttemptId.value = result.attemptId
-    takingInitialIndex.value = result.currentQuestionIndex
-    takingAnsweredIds.value = new Set(result.answeredQuestionIds)
-    viewState.value = 'taking'
-  }
+  if (result) applyAttemptResult(result)
 }
 
 async function handleResume() {
@@ -85,17 +87,15 @@ async function handleResume() {
     settings: { shuffleQuestions: false, showAllQuestions: false, immediateFeedback: true },
     restart: false,
   }) as any
-  if (result) {
-    takingQuestions.value = result.questions
-    takingSettings.value = result.settings
-    takingAttemptId.value = result.attemptId
-    takingInitialIndex.value = result.currentQuestionIndex
-    takingAnsweredIds.value = new Set(result.answeredQuestionIds)
-    viewState.value = 'taking'
-  }
+  if (result) applyAttemptResult(result)
 }
 
 function handleComplete(attemptId: Id<'quizAttempts'>) {
+  resultsAttemptId.value = attemptId
+  viewState.value = 'results'
+}
+
+function handleViewAttempt(attemptId: Id<'quizAttempts'>) {
   resultsAttemptId.value = attemptId
   viewState.value = 'results'
 }
@@ -134,6 +134,7 @@ function handleBackToOverview() {
       :attempt-id="resultsAttemptId"
       @retake="handleRetake"
       @back="handleBackToOverview"
+      @view-attempt="handleViewAttempt"
     />
 
     <QuizOverviewView
@@ -141,6 +142,7 @@ function handleBackToOverview() {
       :quiz-id="quizId"
       @take-quiz="handleTakeQuiz"
       @generate-more="emit('openWizard')"
+      @view-attempt="handleViewAttempt"
     />
 
     <QuizSettingsModal
