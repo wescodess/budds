@@ -267,6 +267,7 @@ function onFilesChosen(e: Event) {
     <input
       ref="fileInputRef"
       type="file"
+      accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx,text/plain,.txt,text/markdown,.md,text/csv,.csv,text/html,.html,image/png,.png,image/jpeg,.jpg,.jpeg,image/webp,.webp,image/gif,.gif"
       multiple
       class="hidden"
       data-testid="folder-knowledge-tree-file-input"

@@ -48,7 +48,7 @@ describe('documentImports.importDocumentFromUrl', () => {
     expect(docs[0]!.status).toBe('processing')
   })
 
-  it('[P0] rejects non-PDF links before storing a document', async () => {
+  it('[P0] imports HTML URLs as website source type', async () => {
     const t = convexTest(schema, modules)
     const asUser = t.withIdentity(TEST_IDENTITY)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Imports' })
@@ -59,14 +59,16 @@ describe('documentImports.importDocumentFromUrl', () => {
       arrayBuffer: async () => new TextEncoder().encode('<html></html>').buffer,
     } as Response)
 
-    await expect(
-      asUser.action(api.documentImports.importDocumentFromUrl, {
-        folderId,
-        url: 'https://example.com/index.html',
-      }),
-    ).rejects.toThrow('Only direct PDF links are supported')
+    const result = await asUser.action(api.documentImports.importDocumentFromUrl, {
+      folderId,
+      url: 'https://example.com/index.html',
+    })
+
+    expect(result?.documentId).toBeDefined()
 
     const docs = await asUser.query(api.documents.listDocumentsByFolder, { folderId })
-    expect(docs).toEqual([])
+    expect(docs).toHaveLength(1)
+    expect(docs[0]!.sourceType).toBe('website')
+    expect(docs[0]!.status).toBe('processing')
   })
 })

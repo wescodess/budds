@@ -570,7 +570,7 @@ defineExpose({ focus })
         v-if="props.folderId"
         ref="fileInputRef"
         type="file"
-        accept="application/pdf"
+        accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx,text/plain,.txt,text/markdown,.md,text/csv,.csv,text/html,.html,image/png,.png,image/jpeg,.jpg,.jpeg,image/webp,.webp,image/gif,.gif"
         multiple
         class="hidden"
         @change="handleFilesSelected"
@@ -685,9 +685,9 @@ defineExpose({ focus })
     <UiDialog v-model:open="linkDialogOpen">
       <UiDialogContent>
         <UiDialogHeader>
-          <UiDialogTitle>Add PDF from link</UiDialogTitle>
+          <UiDialogTitle>Add from link</UiDialogTitle>
           <UiDialogDescription>
-            Paste a direct link to a PDF file and it will be imported into this folder.
+            Paste a URL to import — websites, YouTube videos, and direct file links are all supported.
           </UiDialogDescription>
         </UiDialogHeader>
 
@@ -695,7 +695,7 @@ defineExpose({ focus })
           <input
             v-model="linkUrl"
             type="url"
-            placeholder="https://example.com/lecture-notes.pdf"
+            placeholder="https://example.com/article or YouTube link"
             inputmode="url"
             enterkeyhint="done"
             autocapitalize="none"

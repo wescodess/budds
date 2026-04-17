@@ -321,10 +321,12 @@ export const deleteFolder = mutation({
         })
         if (r2Enqueued || aiSearchEnqueued) anyCleanupEnqueued = true
 
-        try {
-          await ctx.storage.delete(doc.fileId)
-        } catch {
-          // best-effort; blob may already be gone
+        if (doc.fileId) {
+          try {
+            await ctx.storage.delete(doc.fileId)
+          } catch {
+            // best-effort; blob may already be gone
+          }
         }
         await ctx.db.delete(doc._id)
         deletedDocuments++

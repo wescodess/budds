@@ -294,7 +294,7 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
     if (importDocumentFromUrlAction.isLoading.value) {
       return {
         state: 'importing',
-        label: 'Importing PDF from link',
+        label: 'Importing from link',
       }
     }
 
@@ -411,9 +411,18 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
     const results = await Promise.allSettled(
       files.map(async (file) => {
         const fileKey = `${file.name}-${file.size}-${file.lastModified}`
-        if (file.type !== 'application/pdf') {
+        const allowedMimes = new Set([
+          'application/pdf',
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          'text/plain', 'text/markdown', 'text/csv', 'text/html',
+          'image/png', 'image/jpeg', 'image/webp', 'image/gif',
+        ])
+        const allowedExts = new Set(['pdf', 'docx', 'xlsx', 'txt', 'md', 'csv', 'html', 'png', 'jpg', 'jpeg', 'webp', 'gif'])
+        const ext = file.name.split('.').pop()?.toLowerCase()
+        if (!allowedMimes.has(file.type) && !(ext && allowedExts.has(ext))) {
           uploadProgress.value.set(fileKey, 'error')
-          const message = `${file.name}: Only PDF files are supported`
+          const message = `${file.name}: Unsupported file type`
           markPendingUploadFailed(fileKey, message)
           throw new Error(message)
         }

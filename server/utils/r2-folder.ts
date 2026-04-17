@@ -117,8 +117,14 @@ export async function fetchFolderDocs(params: FetchFolderDocsParams): Promise<Fo
 
   if (!params.folderId) return []
 
+  const TEXT_READABLE_EXTS = new Set(['.txt', '.md', '.csv', '.html', '.json', '.yaml', '.toml'])
+
   const prefix = `${sanitizeUserSegment(params.userId)}/${params.folderId}/`
-  const objects = (await listObjects(r2, prefix)).filter(o => o.key.endsWith('.txt'))
+  const objects = (await listObjects(r2, prefix)).filter((o) => {
+    const dotIdx = o.key.lastIndexOf('.')
+    if (dotIdx === -1) return false
+    return TEXT_READABLE_EXTS.has(o.key.slice(dotIdx))
+  })
 
   for (const obj of objects) {
     if (spent >= budget) break
@@ -132,7 +138,9 @@ export async function fetchFolderDocs(params: FetchFolderDocsParams): Promise<Fo
       spent += content.length
 
       const parts = obj.key.split('/')
-      const documentId = (parts[parts.length - 1] ?? '').replace(/\.txt$/, '')
+      const lastPart = parts[parts.length - 1] ?? ''
+      const dotIdx = lastPart.lastIndexOf('.')
+      const documentId = dotIdx !== -1 ? lastPart.slice(0, dotIdx) : lastPart
 
       docs.push({ key: obj.key, documentId, folderId: params.folderId, filename: result.filename, content })
     }

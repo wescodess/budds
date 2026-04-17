@@ -5,6 +5,28 @@ import type { Id } from '~~/convex/_generated/dataModel'
 defineOptions({ name: 'FileUploadZone' })
 
 const MAX_FILE_SIZE = 52_428_800
+const ALLOWED_MIME_TYPES = new Set([
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'text/plain',
+  'text/markdown',
+  'text/csv',
+  'text/html',
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/gif',
+])
+const ALLOWED_EXTENSIONS = new Set([
+  'pdf', 'docx', 'xlsx', 'txt', 'md', 'csv', 'html', 'png', 'jpg', 'jpeg', 'webp', 'gif',
+])
+
+function isAllowedFile(file: File): boolean {
+  if (ALLOWED_MIME_TYPES.has(file.type)) return true
+  const ext = file.name.split('.').pop()?.toLowerCase()
+  return ext ? ALLOWED_EXTENSIONS.has(ext) : false
+}
 
 const props = defineProps<{
   folderId: Id<'folders'>
@@ -37,8 +59,8 @@ function validateAndEmit(fileList: FileList | null) {
   const rejected: string[] = []
 
   for (const file of Array.from(fileList)) {
-    if (file.type !== 'application/pdf') {
-      rejected.push(`${file.name}: Only PDF files are supported`)
+    if (!isAllowedFile(file)) {
+      rejected.push(`${file.name}: Unsupported file type`)
     } else if (file.size > MAX_FILE_SIZE) {
       rejected.push(`${file.name}: File exceeds 50MB limit`)
     } else {
@@ -89,17 +111,17 @@ function handleDragLeave() {
       variant="outline"
       :disabled="disabled"
       class="w-full sm:hidden"
-      aria-label="Upload PDF files"
+      aria-label="Upload files"
       @click="openFilePicker"
     >
       <Upload class="mr-2 h-4 w-4" />
-      Upload PDFs
+      Upload files
     </UiButton>
 
     <div
       role="button"
       tabindex="0"
-      aria-label="Upload PDF files"
+      aria-label="Upload files"
       :aria-disabled="disabled ? 'true' : undefined"
       :class="[
         'hidden cursor-pointer flex-col items-center justify-center rounded-lg border-2 p-6 transition-colors sm:flex',
@@ -114,14 +136,14 @@ function handleDragLeave() {
     >
       <Upload class="mb-2 h-8 w-8 text-muted-foreground" />
       <p class="text-sm text-muted-foreground">
-        Drag PDFs here or <span class="font-medium text-primary underline">browse</span>
+        Drag files here or <span class="font-medium text-primary underline">browse</span>
       </p>
     </div>
 
     <input
       ref="fileInputRef"
       type="file"
-      accept="application/pdf"
+      accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx,text/plain,.txt,text/markdown,.md,text/csv,.csv,text/html,.html,image/png,.png,image/jpeg,.jpg,.jpeg,image/webp,.webp,image/gif,.gif"
       multiple
       class="hidden"
       @change="handleFileChange"
