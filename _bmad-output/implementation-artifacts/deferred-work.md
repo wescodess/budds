@@ -162,3 +162,12 @@ Skipped cases:
 ## ~~Deferred from: Story 6-1 — tests/component/chat/chat-input.test.ts baseline (2026-04-12)~~ — Resolved in Story 7.1 (2026-04-12)
 
 All 6 failures shared a single root cause: `chatInputPath` pointed at `~/components/chat/ChatInput.vue`, but the production file lives at `~/components/chat/Input.vue` (Nuxt auto-component convention). One-line fix in `tests/component/chat/chat-input.test.ts`. All 6 tests now pass. Task 9 of Story 7.1 under the 30-min prep-P0-#1 triage budget.
+
+## Deferred from: flashcard-room-refactor-phase-1 (2026-04-16)
+
+- **Directory picker extraction not done.** The chat `ChatDirectoryPicker` is tightly coupled to `useReferenceScope`. Folder-level scoping via the existing server endpoint is sufficient for Phase 1. If Phase 2 needs fine-grained picker inside `RoomGenerateDialog`, extract the picker primitive to `app/components/global/` first.
+- **`createSetWithCards` kept in legacy `convex/flashcards.ts`.** Existing `accountDeletion.test.ts` + `dataExport.test.ts` seed legacy rows through it. Remove when those tests are rewritten to seed rooms directly (Phase 2 cleanup).
+- **Restore-no-op creates duplicate version row.** Clicking Restore on the currently-active version produces another archive + restore cycle. Low-severity UX (wastes one history slot). Fix by short-circuiting when target version equals current cards byte-for-byte.
+- **SSR stub `roomId: ''` landmine.** `useFlashcardRooms` server-branch stub returns empty-string IDs; if SSR ever eagerly calls `createRoom`, router navigates to `?voidId=`. Swap to `<ClientOnly>` wrappers or throw on SSR call.
+- **RoomShell mock mutation not keyed on api.** `tests/component/flashcards/room-shell.test.ts` injects a single `mockMutate` for rename/delete/etc — a wiring swap would still pass. Mirror the `apiRef`-discriminated pattern already used for `useConvexQuery` in the same file.
+- **No component-level test for reorder rollback + toast.** RoomEditor.vue implements the rollback on reject; flashcardRooms.test covers the Convex rejection. Add a component test that fails the mutation and asserts localCards reverted + toast message shown.

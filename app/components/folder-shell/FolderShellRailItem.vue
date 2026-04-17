@@ -82,7 +82,7 @@ const longPressStop = onLongPress(
         <span
           :class="[
             'absolute inset-0 transition-opacity duration-200 ease-out',
-            active ? 'bg-primary opacity-10' : 'bg-muted opacity-0 group-hover:opacity-[0.6]',
+            active ? 'bg-primary/8' : 'bg-muted opacity-0 group-hover:opacity-[0.6]',
           ]"
         />
         <span
@@ -136,7 +136,7 @@ const longPressStop = onLongPress(
         <span
           :class="[
             'absolute inset-0 transition-opacity duration-200 ease-out',
-            active ? 'bg-primary opacity-10' : 'bg-muted opacity-0 group-hover:opacity-[0.6]',
+            active ? 'bg-primary/8' : 'bg-muted opacity-0 group-hover:opacity-[0.6]',
           ]"
         />
         <span
@@ -202,7 +202,7 @@ const longPressStop = onLongPress(
     <span
       :class="[
         'absolute inset-0 transition-opacity duration-200 ease-out',
-        active ? 'bg-primary opacity-10' : 'bg-muted opacity-0 group-hover:opacity-[0.6]',
+        active ? 'bg-primary/8' : 'bg-muted opacity-0 group-hover:opacity-[0.6]',
       ]"
     />
     <span

@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { FileText, MessageSquare, ClipboardList, Layers, PanelRight, ArrowLeftRight } from 'lucide-vue-next'
+import { FileText, MessageSquare, ClipboardList, Layers, PanelRight, ArrowLeftRight, Pencil, FolderPlus, ListTodo } from 'lucide-vue-next'
 import { useMediaQuery } from '@vueuse/core'
 import { api } from '#convex/api'
 import type { Id } from '~~/convex/_generated/dataModel'
 import type { VoidType } from '~/components/voids/CreateVoidDialog.vue'
 import MoveToFolderDialog from '~/components/documents/MoveToFolderDialog.vue'
 import FolderHelperPane from '~/components/folders/FolderHelperPane.vue'
+import FolderTasksPane from '~/components/folders/FolderTasksPane.vue'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { useHorizontalSwipeGesture } from '~/composables/useHorizontalSwipeGesture'
@@ -76,10 +77,18 @@ const deleteConversationMutation = import.meta.client
       mutate: async (_args: { id: Id<'conversations'> }) => null,
     }
 
-const deleteFlashcardSetMutation = import.meta.client
-  ? useConvexMutation(api.flashcards.deleteSet)
+const deleteFlashcardRoomMutation = import.meta.client
+  ? useConvexMutation(api.flashcardRooms.deleteRoom)
   : {
-      mutate: async (_args: { setId: Id<'flashcardSets'> }) => null,
+      mutate: async (_args: { roomId: Id<'flashcardRooms'> }) => null,
+    }
+
+const createFlashcardRoomMutation = import.meta.client
+  ? useConvexMutation(api.flashcardRooms.createRoom)
+  : {
+      mutate: async (_args: { folderId: Id<'folders'>; title?: string }) => ({
+        roomId: '' as unknown as Id<'flashcardRooms'>,
+      }),
     }
 
 const deleteQuizMutation = import.meta.client
@@ -98,17 +107,27 @@ function hideSidebarOnMobile() {
   folderShellRef.value?.hideMobileRail()
 }
 
-async function onCreateVoid(type: VoidType) {
+async function onCreateVoid(payload: { type: VoidType; name?: string }) {
   if (creatingVoid.value) return
   creatingVoid.value = true
   try {
+    const { type, name } = payload
+    const trimmedName = name?.trim()
     if (type === 'chat') {
       const newId = (await createConversationMutation.mutate({
         folderId: folderId.value,
-        title: 'New chat',
+        title: trimmedName || 'New chat',
       })) as Id<'conversations'>
       activeTab.value = 'chat'
       await router.replace({ query: { ...(route.query ?? {}), tab: 'chat', conversationId: newId } })
+    } else if (type === 'flashcards') {
+      const result = (await createFlashcardRoomMutation.mutate({
+        folderId: folderId.value,
+        title: trimmedName,
+      })) as { roomId: Id<'flashcardRooms'> }
+      activeTab.value = 'flashcards'
+      const { conversationId: _dropC, ...rest } = route.query ?? {}
+      await router.replace({ query: { ...rest, tab: 'flashcards', voidId: result.roomId } })
     } else {
       activeTab.value = type
       await router.replace({ query: { ...(route.query ?? {}), tab: type } })
@@ -186,7 +205,7 @@ async function confirmDeleteVoid() {
     if (target.type === 'chat') {
       await deleteConversationMutation.mutate({ id: target.id as Id<'conversations'> })
     } else if (target.type === 'flashcards') {
-      await deleteFlashcardSetMutation.mutate({ setId: target.id as Id<'flashcardSets'> })
+      await deleteFlashcardRoomMutation.mutate({ roomId: target.id as Id<'flashcardRooms'> })
     } else {
       await deleteQuizMutation.mutate({ quizId: target.id as Id<'quizzes'> })
     }
@@ -254,8 +273,16 @@ async function onTabChange(next: TabValue) {
 const documentsBulkMode = ref(false)
 const selectedDocumentIds = ref<string[]>([])
 const documentsDeletePending = ref(false)
-const sourcePanelOpen = ref(false)
+type HelperMode = 'sources' | 'tasks' | null
+const helperMode = ref<HelperMode>(null)
+const sourcePanelOpen = computed({
+  get: () => helperMode.value === 'sources',
+  set: (v: boolean) => { helperMode.value = v ? 'sources' : null },
+})
 const sourcePanelSide = ref<'left' | 'right'>('right')
+const { activeCount: tasksActiveCount } = useTasks(folderId)
+const folderEditOpen = ref(false)
+const subfolderCreateOpen = ref(false)
 const activeCitationIndex = ref<number | null>(null)
 const activeMessageIndex = ref<number | null>(null)
 const chatInputRef = ref<{ focus: () => void } | null>(null)
@@ -744,6 +771,42 @@ async function handleImportLink(url: string) {
             </p>
           </div>
         </div>
+        <div class="flex items-center gap-1">
+          <button
+            type="button"
+            data-testid="folder-header-edit"
+            aria-label="Edit folder"
+            class="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            @click="folderEditOpen = true"
+          >
+            <Pencil class="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            data-testid="folder-header-add-subfolder"
+            aria-label="Add subfolder"
+            class="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            @click="subfolderCreateOpen = true"
+          >
+            <FolderPlus class="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            data-testid="folder-header-tasks"
+            aria-label="Toggle tasks"
+            class="relative inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            @click="helperMode = helperMode === 'tasks' ? null : 'tasks'"
+          >
+            <ListTodo class="h-4 w-4" />
+            <span
+              v-if="tasksActiveCount > 0"
+              data-testid="folder-header-tasks-badge"
+              class="absolute -right-0.5 -top-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-medium leading-none text-white"
+            >
+              {{ tasksActiveCount }}
+            </span>
+          </button>
+        </div>
       </div>
     </template>
 
@@ -754,7 +817,7 @@ async function handleImportLink(url: string) {
       @create="onCreateVoid"
     />
 
-    <div ref="workspaceRef" class="flex min-h-0 min-w-0 flex-1 flex-col" style="touch-action: pan-y">
+    <div ref="workspaceRef" class="flex min-h-0 min-w-0 flex-1" style="touch-action: pan-y">
       <UiTabs v-model="activeTab" class="flex h-full min-h-0 min-w-0 flex-1 flex-col">
         <UiTabsList class="sr-only">
           <UiTabsTrigger value="chat">Chat</UiTabsTrigger>
@@ -1011,11 +1074,24 @@ async function handleImportLink(url: string) {
         </Sheet>
       </UiTabsContent>
 
-      <UiTabsContent value="flashcards" class="min-w-0 flex-1">
-        <FlashcardsTab :folder-id="folderId" :selected-set-id="activeTab === 'flashcards' ? activeVoidId : null" />
+      <UiTabsContent value="flashcards" class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <FlashcardsTab
+          :folder-id="folderId"
+          :selected-room-id="activeTab === 'flashcards' ? activeVoidId : null"
+          @select-room="(roomId) => {
+            const base = { ...(route.query ?? {}) }
+            const { conversationId: _dropC, ...rest } = base
+            if (roomId) {
+              router.replace({ query: { ...rest, tab: 'flashcards', voidId: roomId } })
+            } else {
+              const { voidId: _dropV, ...restNoVoid } = rest
+              router.replace({ query: { ...restNoVoid, tab: 'flashcards' } })
+            }
+          }"
+        />
       </UiTabsContent>
 
-      <UiTabsContent value="quiz" class="min-w-0 flex-1">
+      <UiTabsContent value="quiz" class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <QuizTab :folder-id="folderId" :selected-quiz-id="activeTab === 'quiz' ? activeVoidId : null" />
       </UiTabsContent>
 
@@ -1056,7 +1132,45 @@ async function handleImportLink(url: string) {
           />
         </UiTabsContent>
       </UiTabs>
+
+      <div
+        v-if="isDesktop && helperMode === 'tasks'"
+        class="h-full w-80 shrink-0 border-l border-border/60"
+      >
+        <FolderTasksPane
+          :folder-id="folderId"
+          @close="helperMode = null"
+          @view-room="(roomId) => {
+            helperMode = null
+            activeTab = 'flashcards'
+            const { conversationId: _dropC, ...rest } = route.query ?? {}
+            router.replace({ query: { ...rest, tab: 'flashcards', voidId: roomId } })
+          }"
+        />
+      </div>
     </div>
+
+    <Sheet v-if="!isDesktop" :open="helperMode === 'tasks'" @update:open="(v) => { if (!v) helperMode = null }">
+      <SheetContent
+        side="right"
+        class="w-[85vw] max-w-[85vw] gap-0 p-0 [&>button]:hidden"
+      >
+        <SheetHeader class="sr-only">
+          <SheetTitle>Tasks</SheetTitle>
+          <SheetDescription>View active tasks for this folder.</SheetDescription>
+        </SheetHeader>
+        <FolderTasksPane
+          :folder-id="folderId"
+          @close="helperMode = null"
+          @view-room="(roomId) => {
+            helperMode = null
+            activeTab = 'flashcards'
+            const { conversationId: _dropC, ...rest } = route.query ?? {}
+            router.replace({ query: { ...rest, tab: 'flashcards', voidId: roomId } })
+          }"
+        />
+      </SheetContent>
+    </Sheet>
 
     <UiAlertDialog v-model:open="showDeleteDialog">
       <UiAlertDialogContent>

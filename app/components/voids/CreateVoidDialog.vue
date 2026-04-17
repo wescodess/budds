@@ -20,7 +20,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:open': [value: boolean]
-  create: [type: VoidType]
+  create: [value: { type: VoidType; name?: string }]
 }>()
 
 const options: VoidOption[] = [
@@ -48,6 +48,7 @@ const options: VoidOption[] = [
 ]
 
 const selected = ref<VoidType | null>(null)
+const name = ref('')
 
 const activeCta = computed(() =>
   selected.value
@@ -60,6 +61,7 @@ watch(
   (isOpen, wasOpen) => {
     if (isOpen && !wasOpen) {
       selected.value = null
+      name.value = ''
     }
   },
 )
@@ -71,7 +73,8 @@ function close() {
 
 function submit() {
   if (!selected.value || props.submitting) return
-  emit('create', selected.value)
+  const trimmed = name.value.trim()
+  emit('create', { type: selected.value, name: trimmed.length > 0 ? trimmed : undefined })
 }
 </script>
 
@@ -125,6 +128,21 @@ function submit() {
             </p>
           </div>
         </button>
+      </div>
+
+      <div class="mt-5 space-y-1.5">
+        <UiLabel for="create-void-name" class="text-xs font-medium text-muted-foreground">
+          Name (optional)
+        </UiLabel>
+        <input
+          id="create-void-name"
+          v-model="name"
+          type="text"
+          maxlength="120"
+          placeholder="Give this void a name"
+          data-testid="create-void-name"
+          class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        />
       </div>
 
       <UiDialogFooter class="mt-5 flex flex-col-reverse items-stretch gap-2 border-t border-border pt-4 sm:mt-6 sm:flex-row sm:items-center sm:justify-between sm:pt-6">

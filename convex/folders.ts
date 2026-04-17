@@ -410,12 +410,23 @@ export const searchScopeItems = query({
     const descendants = await collectDescendants(ctx, userId, args.rootFolderId)
     const descendantIds: Id<'folders'>[] = [args.rootFolderId, ...descendants.map(folder => folder._id)]
 
-    const folders = []
+    const rootStats = await getFolderDocumentStats(ctx, userId, args.rootFolderId)
+    const folders = [{
+      id: args.rootFolderId,
+      name: root.name,
+      parentId: undefined as string | undefined,
+      color: root.color,
+      icon: root.icon,
+      fileCount: rootStats.fileCount,
+      descendantFileCount: rootStats.descendantFileCount,
+      hasChildren: rootStats.hasChildren || descendants.length > 0,
+    }]
     for (const folder of descendants) {
       const stats = await getFolderDocumentStats(ctx, userId, folder._id)
       folders.push({
         id: folder._id,
         name: folder.name,
+        parentId: (folder.parentId ?? args.rootFolderId) as string | undefined,
         color: folder.color,
         icon: folder.icon,
         fileCount: stats.fileCount,
@@ -426,11 +437,11 @@ export const searchScopeItems = query({
     }
 
     const files = []
-    for (const folderId of descendantIds) {
+    for (const fId of descendantIds) {
       const docs = await ctx.db
         .query('documents')
         .withIndex('by_userId_and_folderId', (q) =>
-          q.eq('userId', userId).eq('folderId', folderId),
+          q.eq('userId', userId).eq('folderId', fId),
         )
         .take(200)
 
@@ -438,13 +449,14 @@ export const searchScopeItems = query({
         if (doc.status !== 'success') continue
         files.push({
           id: doc._id,
+          folderId: fId as string,
           filename: doc.filename,
           fileSize: doc.fileSize,
         })
-        if (files.length >= 30) break
+        if (files.length >= 50) break
       }
 
-      if (files.length >= 30) break
+      if (files.length >= 50) break
     }
 
     return { folders, files }
