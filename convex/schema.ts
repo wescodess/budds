@@ -35,6 +35,7 @@ export default defineSchema({
     sourceType: v.optional(v.union(v.literal('file'), v.literal('website'), v.literal('youtube'))),
     sourceUrl: v.optional(v.string()),
     mimeType: v.optional(v.string()),
+    taskId: v.optional(v.id('tasks')),
   })
     .index('by_userId', ['userId'])
     .index('by_folderId', ['folderId'])

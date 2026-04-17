@@ -110,10 +110,16 @@ async function failDocumentIngestion(
     failureReason: string
     r2Key?: string
     cleanupAiSearch?: boolean
+    taskId?: Id<'tasks'>
   },
 ) {
   const doc = await ctx.runQuery(internal.documents.getDocument, { id: args.documentId })
   if (!doc || doc.status === 'failed' || doc.status === 'success') return
+
+  const taskId = args.taskId ?? doc.taskId
+  if (taskId) {
+    await ctx.runMutation(internal.tasks.fail, { taskId, error: args.failureReason })
+  }
 
   const userId = doc.userId
   const r2Key = args.r2Key ?? doc.r2Key
@@ -206,6 +212,7 @@ async function uploadToR2AndSync(
     r2Key: string
     body: string | Uint8Array
     contentType: string
+    taskId?: Id<'tasks'>
   },
 ) {
   const bucket = process.env.R2_BUCKET_NAME
@@ -214,8 +221,13 @@ async function uploadToR2AndSync(
       documentId: args.documentId,
       fileId: args.fileId,
       failureReason: 'Missing R2 configuration',
+      taskId: args.taskId,
     })
     return
+  }
+
+  if (args.taskId) {
+    await ctx.runMutation(internal.tasks.updateProgress, { taskId: args.taskId, progress: 'Uploading to storage…' })
   }
 
   const r2 = getR2Client()
@@ -232,6 +244,10 @@ async function uploadToR2AndSync(
     },
   }))
 
+  if (args.taskId) {
+    await ctx.runMutation(internal.tasks.updateProgress, { taskId: args.taskId, progress: 'Triggering indexing…' })
+  }
+
   const config = getAiSearchConfig()
   if (!config) {
     await failDocumentIngestion(ctx, {
@@ -239,6 +255,7 @@ async function uploadToR2AndSync(
       fileId: args.fileId,
       failureReason: 'Missing Cloudflare AI Search configuration',
       r2Key: args.r2Key,
+      taskId: args.taskId,
     })
     return
   }
@@ -270,6 +287,7 @@ async function uploadToR2AndSync(
       fileId: args.fileId,
       failureReason: `Failed to trigger indexing (${syncResponse.status}): ${errorText}`,
       r2Key: args.r2Key,
+      taskId: args.taskId,
     })
     return
   }
@@ -280,6 +298,10 @@ async function uploadToR2AndSync(
     r2Key: args.r2Key,
     indexJobId: jobId,
   })
+
+  if (args.taskId) {
+    await ctx.runMutation(internal.tasks.updateProgress, { taskId: args.taskId, progress: 'Indexing for search…' })
+  }
 
   if (jobId) {
     await ctx.scheduler.runAfter(10_000, internal.documentActions.pollIndexingStatus, {
@@ -299,6 +321,7 @@ export const ingestDocument = internalAction({
     sourceType: v.optional(v.union(v.literal('file'), v.literal('website'), v.literal('youtube'))),
     sourceUrl: v.optional(v.string()),
     mimeType: v.optional(v.string()),
+    taskId: v.optional(v.id('tasks')),
   },
   handler: async (ctx, args) => {
     const sourceType = args.sourceType ?? 'file'
@@ -306,20 +329,17 @@ export const ingestDocument = internalAction({
     try {
       if (sourceType === 'file') {
         if (!args.fileId) {
-          await failDocumentIngestion(ctx, {
-            documentId: args.documentId,
-            failureReason: 'File ID is required for file source type',
-          })
+          await failDocumentIngestion(ctx, { documentId: args.documentId, failureReason: 'File ID is required for file source type', taskId: args.taskId })
           return
+        }
+
+        if (args.taskId) {
+          await ctx.runMutation(internal.tasks.updateProgress, { taskId: args.taskId, progress: 'Processing file…' })
         }
 
         const blob = await ctx.storage.get(args.fileId)
         if (!blob) {
-          await failDocumentIngestion(ctx, {
-            documentId: args.documentId,
-            fileId: args.fileId,
-            failureReason: 'File not found in storage',
-          })
+          await failDocumentIngestion(ctx, { documentId: args.documentId, fileId: args.fileId, failureReason: 'File not found in storage', taskId: args.taskId })
           return
         }
 
@@ -336,50 +356,65 @@ export const ingestDocument = internalAction({
           r2Key,
           body: new Uint8Array(arrayBuffer),
           contentType: args.mimeType ?? blob.type ?? 'application/octet-stream',
+          taskId: args.taskId,
         })
       } else if (sourceType === 'youtube') {
         if (!args.sourceUrl) {
-          await failDocumentIngestion(ctx, {
-            documentId: args.documentId,
-            failureReason: 'Source URL is required for YouTube ingestion',
-          })
+          await failDocumentIngestion(ctx, { documentId: args.documentId, failureReason: 'Source URL is required for YouTube ingestion', taskId: args.taskId })
           return
+        }
+
+        if (args.taskId) {
+          await ctx.runMutation(internal.tasks.updateProgress, { taskId: args.taskId, progress: 'Fetching transcript…' })
         }
 
         const { extractYouTubeTranscript } = await loadExtractors()
-        const { content } = await extractYouTubeTranscript(args.sourceUrl)
+        const { title, content } = await extractYouTubeTranscript(args.sourceUrl)
         const r2Key = `${sanitizeUserSegment(args.userId)}/${args.folderId}/${args.documentId}.md`
+
+        const resolvedFilename = title || args.filename
+        await ctx.runMutation(internal.documents.updateDocumentFilename, { id: args.documentId, filename: resolvedFilename })
+
+        if (args.taskId) {
+          await ctx.runMutation(internal.tasks.updateProgress, { taskId: args.taskId, progress: `Uploading "${resolvedFilename}"…` })
+        }
 
         await uploadToR2AndSync(ctx, {
           documentId: args.documentId,
           userId: args.userId,
           folderId: args.folderId,
-          filename: args.filename,
+          filename: resolvedFilename,
           r2Key,
           body: content,
           contentType: 'text/markdown',
+          taskId: args.taskId,
         })
       } else if (sourceType === 'website') {
         if (!args.sourceUrl) {
-          await failDocumentIngestion(ctx, {
-            documentId: args.documentId,
-            failureReason: 'Source URL is required for website ingestion',
-          })
+          await failDocumentIngestion(ctx, { documentId: args.documentId, failureReason: 'Source URL is required for website ingestion', taskId: args.taskId })
           return
         }
 
+        if (args.taskId) {
+          await ctx.runMutation(internal.tasks.updateProgress, { taskId: args.taskId, progress: 'Extracting content…' })
+        }
+
         const { extractWebsiteContent } = await loadExtractors()
-        const { content } = await extractWebsiteContent(args.sourceUrl)
+        const { title, content } = await extractWebsiteContent(args.sourceUrl)
         const r2Key = `${sanitizeUserSegment(args.userId)}/${args.folderId}/${args.documentId}.md`
+
+        const resolvedFilename = title || args.filename
+        await ctx.runMutation(internal.documents.updateDocumentFilename, { id: args.documentId, filename: resolvedFilename })
 
         await uploadToR2AndSync(ctx, {
           documentId: args.documentId,
           userId: args.userId,
           folderId: args.folderId,
-          filename: args.filename,
+          filename: resolvedFilename,
           r2Key,
           body: content,
           contentType: 'text/markdown',
+          taskId: args.taskId,
         })
       }
     } catch (error: unknown) {
@@ -388,6 +423,7 @@ export const ingestDocument = internalAction({
         documentId: args.documentId,
         fileId: args.fileId,
         failureReason: message,
+        taskId: args.taskId,
       })
     }
   },
@@ -400,6 +436,7 @@ export const ingestText = internalAction({
     folderId: v.id('folders'),
     filename: v.string(),
     text: v.string(),
+    taskId: v.optional(v.id('tasks')),
   },
   handler: async (ctx, args) => {
     try {
@@ -413,12 +450,14 @@ export const ingestText = internalAction({
         r2Key,
         body: args.text,
         contentType: 'text/markdown',
+        taskId: args.taskId,
       })
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error)
       await failDocumentIngestion(ctx, {
         documentId: args.documentId,
         failureReason: message,
+        taskId: args.taskId,
       })
     }
   },
@@ -433,6 +472,8 @@ export const pollIndexingStatus = internalAction({
     const doc = await ctx.runQuery(internal.documents.getDocument, { id: args.documentId })
     if (!doc || doc.status === 'failed') return
 
+    const taskId = doc.taskId
+
     const config = getAiSearchConfig()
     if (!config) {
       await failDocumentIngestion(ctx, {
@@ -440,6 +481,7 @@ export const pollIndexingStatus = internalAction({
         fileId: doc.fileId ?? undefined,
         failureReason: 'Missing Cloudflare AI Search configuration',
         r2Key: doc.r2Key,
+        taskId,
       })
       return
     }
@@ -456,6 +498,7 @@ export const pollIndexingStatus = internalAction({
         failureReason: `Failed to check indexing status (${response.status})`,
         r2Key: doc.r2Key,
         cleanupAiSearch: true,
+        taskId,
       })
       return
     }
@@ -471,12 +514,16 @@ export const pollIndexingStatus = internalAction({
           failureReason: `Indexing failed: ${job.end_reason}`,
           r2Key: doc.r2Key,
           cleanupAiSearch: true,
+          taskId,
         })
       } else {
         await ctx.runMutation(internal.documents.updateDocumentStatus, {
           id: args.documentId,
           status: 'success',
         })
+        if (taskId) {
+          await ctx.runMutation(internal.tasks.complete, { taskId, result: { documentId: String(args.documentId) } })
+        }
         await ctx.scheduler.runAfter(0, internal.documentActions.updateDocumentAiSearchMetadata, {
           documentId: String(args.documentId),
           userId: doc.userId,

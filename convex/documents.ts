@@ -54,6 +54,18 @@ export const createDocument = mutation({
       throw new Error('File exceeds 50MB limit')
     }
 
+    const now = Date.now()
+    const taskId = await ctx.db.insert('tasks', {
+      userId,
+      folderId: args.folderId,
+      type: 'document-ingestion',
+      status: 'pending',
+      title: `Ingesting ${args.filename}`,
+      progress: 'Uploading to storage…',
+      createdAt: now,
+      updatedAt: now,
+    })
+
     const docId = await ctx.db.insert('documents', {
       userId,
       folderId: args.folderId,
@@ -63,6 +75,7 @@ export const createDocument = mutation({
       fileSize: metadata.size,
       sourceType: 'file',
       mimeType: metadata.contentType ?? undefined,
+      taskId,
     })
 
     await ctx.db.patch(args.folderId, {
@@ -78,6 +91,7 @@ export const createDocument = mutation({
       filename: args.filename,
       sourceType: 'file',
       mimeType: metadata.contentType ?? undefined,
+      taskId,
     })
 
     return docId
@@ -102,6 +116,20 @@ export const createDocumentFromSource = mutation({
       throw new Error('Folder not found')
     }
 
+    const label = args.sourceType === 'youtube' ? 'YouTube video' : 'website'
+    const now = Date.now()
+    const taskId = await ctx.db.insert('tasks', {
+      userId,
+      folderId: args.folderId,
+      type: 'document-ingestion',
+      status: 'pending',
+      title: `Importing ${label}`,
+      progress: args.sourceType === 'youtube' ? 'Fetching transcript…' : 'Extracting content…',
+      metadata: { sourceUrl: args.sourceUrl, sourceType: args.sourceType },
+      createdAt: now,
+      updatedAt: now,
+    })
+
     const docId = await ctx.db.insert('documents', {
       userId,
       folderId: args.folderId,
@@ -110,6 +138,7 @@ export const createDocumentFromSource = mutation({
       fileSize: 0,
       sourceType: args.sourceType,
       sourceUrl: args.sourceUrl,
+      taskId,
     })
 
     await ctx.db.patch(args.folderId, {
@@ -124,6 +153,7 @@ export const createDocumentFromSource = mutation({
       filename: args.filename,
       sourceType: args.sourceType,
       sourceUrl: args.sourceUrl,
+      taskId,
     })
 
     return docId
@@ -150,6 +180,18 @@ export const createDocumentFromText = mutation({
 
     if (!args.text.trim()) throw new Error('Text content cannot be empty')
 
+    const now = Date.now()
+    const taskId = await ctx.db.insert('tasks', {
+      userId,
+      folderId: args.folderId,
+      type: 'document-ingestion',
+      status: 'pending',
+      title: `Ingesting ${args.filename}`,
+      progress: 'Preparing…',
+      createdAt: now,
+      updatedAt: now,
+    })
+
     const docId = await ctx.db.insert('documents', {
       userId,
       folderId: args.folderId,
@@ -159,6 +201,7 @@ export const createDocumentFromText = mutation({
       sourceType: 'file',
       sourceUrl: args.sourceUrl,
       mimeType: 'text/markdown',
+      taskId,
     })
 
     await ctx.db.patch(args.folderId, {
@@ -172,6 +215,7 @@ export const createDocumentFromText = mutation({
       folderId: args.folderId,
       filename: args.filename,
       text: args.text,
+      taskId,
     })
 
     return docId
@@ -193,6 +237,16 @@ export const listDocumentsByFolder = query({
       )
       .order('desc')
       .take(200)
+  },
+})
+
+export const updateDocumentFilename = internalMutation({
+  args: {
+    id: v.id('documents'),
+    filename: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.id, { filename: args.filename })
   },
 })
 
