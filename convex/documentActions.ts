@@ -3,8 +3,10 @@ import { v } from 'convex/values'
 import { internalAction, type ActionCtx } from './_generated/server'
 import { internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
-import { extractText } from 'unpdf'
-import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3'
+import { S3Client, PutObjectCommand, DeleteObjectCommand, CopyObjectCommand } from '@aws-sdk/client-s3'
+async function loadExtractors() {
+  return await import('./sourceExtractors')
+}
 
 const FAILED_DOCUMENT_RETENTION_MS = 10_000
 
@@ -104,14 +106,20 @@ async function failDocumentIngestion(
   ctx: ActionCtx,
   args: {
     documentId: Id<'documents'>
-    fileId: Id<'_storage'>
+    fileId?: Id<'_storage'>
     failureReason: string
     r2Key?: string
     cleanupAiSearch?: boolean
+    taskId?: Id<'tasks'>
   },
 ) {
   const doc = await ctx.runQuery(internal.documents.getDocument, { id: args.documentId })
   if (!doc || doc.status === 'failed' || doc.status === 'success') return
+
+  const taskId = args.taskId ?? doc.taskId
+  if (taskId) {
+    await ctx.runMutation(internal.tasks.fail, { taskId, error: args.failureReason })
+  }
 
   const userId = doc.userId
   const r2Key = args.r2Key ?? doc.r2Key
@@ -123,10 +131,12 @@ async function failDocumentIngestion(
     r2Key,
   })
 
-  try {
-    await ctx.storage.delete(args.fileId)
-  } catch {
-    // best-effort; storage may already be gone
+  if (args.fileId) {
+    try {
+      await ctx.storage.delete(args.fileId)
+    } catch {
+      // best-effort; storage may already be gone
+    }
   }
 
   const r2Cleanup = r2Key
@@ -169,122 +179,242 @@ async function failDocumentIngestion(
   })
 }
 
+function getR2Extension(filename: string, mimeType?: string): string {
+  const extFromName = filename.lastIndexOf('.') !== -1
+    ? filename.slice(filename.lastIndexOf('.'))
+    : null
+  if (extFromName) return extFromName
+
+  const mimeMap: Record<string, string> = {
+    'application/pdf': '.pdf',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+    'text/plain': '.txt',
+    'text/markdown': '.md',
+    'text/csv': '.csv',
+    'text/html': '.html',
+    'image/png': '.png',
+    'image/jpeg': '.jpg',
+    'image/webp': '.webp',
+    'image/gif': '.gif',
+  }
+  return (mimeType && mimeMap[mimeType]) || '.bin'
+}
+
+async function uploadToR2AndSync(
+  ctx: ActionCtx,
+  args: {
+    documentId: Id<'documents'>
+    fileId?: Id<'_storage'>
+    userId: string
+    folderId: Id<'folders'>
+    filename: string
+    r2Key: string
+    body: string | Uint8Array
+    contentType: string
+    taskId?: Id<'tasks'>
+  },
+) {
+  const bucket = process.env.R2_BUCKET_NAME
+  if (!bucket) {
+    await failDocumentIngestion(ctx, {
+      documentId: args.documentId,
+      fileId: args.fileId,
+      failureReason: 'Missing R2 configuration',
+      taskId: args.taskId,
+    })
+    return
+  }
+
+  if (args.taskId) {
+    await ctx.runMutation(internal.tasks.updateProgress, { taskId: args.taskId, progress: 'Uploading to storage…' })
+  }
+
+  const r2 = getR2Client()
+  await r2.send(new PutObjectCommand({
+    Bucket: bucket,
+    Key: args.r2Key,
+    Body: args.body,
+    ContentType: args.contentType,
+    Metadata: {
+      userId: args.userId,
+      documentId: args.documentId,
+      folderId: String(args.folderId),
+      filename: args.filename.replace(/[^\x20-\x7E]/g, ''),
+    },
+  }))
+
+  if (args.taskId) {
+    await ctx.runMutation(internal.tasks.updateProgress, { taskId: args.taskId, progress: 'Triggering indexing…' })
+  }
+
+  const config = getAiSearchConfig()
+  if (!config) {
+    await failDocumentIngestion(ctx, {
+      documentId: args.documentId,
+      fileId: args.fileId,
+      failureReason: 'Missing Cloudflare AI Search configuration',
+      r2Key: args.r2Key,
+      taskId: args.taskId,
+    })
+    return
+  }
+
+  const jobsUrl = `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/ai-search/instances/${config.instance}/jobs`
+  const syncResponse = await fetch(jobsUrl, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${config.token}` },
+  })
+
+  let jobId: string | undefined
+
+  if (syncResponse.ok) {
+    const syncData = await syncResponse.json() as { result?: { id?: string } }
+    jobId = syncData.result?.id
+  } else if (syncResponse.status === 429) {
+    const listResponse = await fetch(jobsUrl, {
+      headers: { 'Authorization': `Bearer ${config.token}` },
+    })
+    if (listResponse.ok) {
+      const listData = await listResponse.json() as { result?: Array<{ id: string, ended_at?: string | null }> }
+      const running = listData.result?.find(j => !j.ended_at)
+      jobId = running?.id ?? listData.result?.[0]?.id
+    }
+  } else {
+    const errorText = (await syncResponse.text()).slice(0, 500)
+    await failDocumentIngestion(ctx, {
+      documentId: args.documentId,
+      fileId: args.fileId,
+      failureReason: `Failed to trigger indexing (${syncResponse.status}): ${errorText}`,
+      r2Key: args.r2Key,
+      taskId: args.taskId,
+    })
+    return
+  }
+
+  await ctx.runMutation(internal.documents.updateDocumentStatus, {
+    id: args.documentId,
+    status: 'indexing',
+    r2Key: args.r2Key,
+    indexJobId: jobId,
+  })
+
+  if (args.taskId) {
+    await ctx.runMutation(internal.tasks.updateProgress, { taskId: args.taskId, progress: 'Indexing for search…' })
+  }
+
+  if (jobId) {
+    await ctx.scheduler.runAfter(10_000, internal.documentActions.pollIndexingStatus, {
+      documentId: args.documentId,
+      jobId,
+    })
+  }
+}
+
 export const ingestDocument = internalAction({
   args: {
     documentId: v.id('documents'),
-    fileId: v.id('_storage'),
+    fileId: v.optional(v.id('_storage')),
     userId: v.string(),
     folderId: v.id('folders'),
     filename: v.string(),
+    sourceType: v.optional(v.union(v.literal('file'), v.literal('website'), v.literal('youtube'))),
+    sourceUrl: v.optional(v.string()),
+    mimeType: v.optional(v.string()),
+    taskId: v.optional(v.id('tasks')),
   },
   handler: async (ctx, args) => {
-    let r2Key: string | undefined
-    let cleanupAiSearch = false
+    const sourceType = args.sourceType ?? 'file'
 
     try {
-      const blob = await ctx.storage.get(args.fileId)
-      if (!blob) {
-        await failDocumentIngestion(ctx, {
-          documentId: args.documentId,
-          fileId: args.fileId,
-          failureReason: 'File not found in storage',
-        })
-        return
-      }
-
-      const arrayBuffer = await blob.arrayBuffer()
-      const result = await extractText(new Uint8Array(arrayBuffer), { mergePages: true })
-
-      if (!result.text || !(result.text as string).trim()) {
-        await failDocumentIngestion(ctx, {
-          documentId: args.documentId,
-          fileId: args.fileId,
-          failureReason: 'No extractable text detected — scanned or image-only PDF',
-        })
-        return
-      }
-
-      const bucket = process.env.R2_BUCKET_NAME
-      if (!bucket) {
-        await failDocumentIngestion(ctx, {
-          documentId: args.documentId,
-          fileId: args.fileId,
-          failureReason: 'Missing R2 configuration',
-        })
-        return
-      }
-
-      r2Key = `${sanitizeUserSegment(args.userId)}/${args.folderId}/${args.documentId}.txt`
-      const r2 = getR2Client()
-
-      await r2.send(new PutObjectCommand({
-        Bucket: bucket,
-        Key: r2Key,
-        Body: result.text as string,
-        ContentType: 'text/plain',
-        Metadata: {
-          userId: args.userId,
-          documentId: args.documentId,
-          folderId: String(args.folderId),
-          filename: args.filename,
-        },
-      }))
-
-      const config = getAiSearchConfig()
-      if (!config) {
-        await failDocumentIngestion(ctx, {
-          documentId: args.documentId,
-          fileId: args.fileId,
-          failureReason: 'Missing Cloudflare AI Search configuration',
-          r2Key,
-        })
-        return
-      }
-
-      const jobsUrl = `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/ai-search/instances/${config.instance}/jobs`
-      const syncResponse = await fetch(jobsUrl, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${config.token}` },
-      })
-
-      let jobId: string | undefined
-
-      if (syncResponse.ok) {
-        const syncData = await syncResponse.json() as { result?: { id?: string } }
-        jobId = syncData.result?.id
-      } else if (syncResponse.status === 429) {
-        const listResponse = await fetch(jobsUrl, {
-          headers: { 'Authorization': `Bearer ${config.token}` },
-        })
-        if (listResponse.ok) {
-          const listData = await listResponse.json() as { result?: Array<{ id: string, ended_at?: string | null }> }
-          const running = listData.result?.find(j => !j.ended_at)
-          jobId = running?.id ?? listData.result?.[0]?.id
+      if (sourceType === 'file') {
+        if (!args.fileId) {
+          await failDocumentIngestion(ctx, { documentId: args.documentId, failureReason: 'File ID is required for file source type', taskId: args.taskId })
+          return
         }
-      } else {
-        const errorText = (await syncResponse.text()).slice(0, 500)
-        await failDocumentIngestion(ctx, {
+
+        if (args.taskId) {
+          await ctx.runMutation(internal.tasks.updateProgress, { taskId: args.taskId, progress: 'Processing file…' })
+        }
+
+        const blob = await ctx.storage.get(args.fileId)
+        if (!blob) {
+          await failDocumentIngestion(ctx, { documentId: args.documentId, fileId: args.fileId, failureReason: 'File not found in storage', taskId: args.taskId })
+          return
+        }
+
+        const ext = getR2Extension(args.filename, args.mimeType)
+        const r2Key = `${sanitizeUserSegment(args.userId)}/${args.folderId}/${args.documentId}${ext}`
+        const arrayBuffer = await blob.arrayBuffer()
+
+        await uploadToR2AndSync(ctx, {
           documentId: args.documentId,
           fileId: args.fileId,
-          failureReason: `Failed to trigger indexing (${syncResponse.status}): ${errorText}`,
+          userId: args.userId,
+          folderId: args.folderId,
+          filename: args.filename,
           r2Key,
+          body: new Uint8Array(arrayBuffer),
+          contentType: args.mimeType ?? blob.type ?? 'application/octet-stream',
+          taskId: args.taskId,
         })
-        return
-      }
+      } else if (sourceType === 'youtube') {
+        if (!args.sourceUrl) {
+          await failDocumentIngestion(ctx, { documentId: args.documentId, failureReason: 'Source URL is required for YouTube ingestion', taskId: args.taskId })
+          return
+        }
 
-      cleanupAiSearch = true
+        if (args.taskId) {
+          await ctx.runMutation(internal.tasks.updateProgress, { taskId: args.taskId, progress: 'Fetching transcript…' })
+        }
 
-      await ctx.runMutation(internal.documents.updateDocumentStatus, {
-        id: args.documentId,
-        status: 'indexing',
-        r2Key,
-        indexJobId: jobId,
-      })
+        const { extractYouTubeTranscript } = await loadExtractors()
+        const { title, content } = await extractYouTubeTranscript(args.sourceUrl)
+        const r2Key = `${sanitizeUserSegment(args.userId)}/${args.folderId}/${args.documentId}.md`
 
-      if (jobId) {
-        await ctx.scheduler.runAfter(10_000, internal.documentActions.pollIndexingStatus, {
+        const resolvedFilename = title || args.filename
+        await ctx.runMutation(internal.documents.updateDocumentFilename, { id: args.documentId, filename: resolvedFilename })
+
+        if (args.taskId) {
+          await ctx.runMutation(internal.tasks.updateProgress, { taskId: args.taskId, progress: `Uploading "${resolvedFilename}"…` })
+        }
+
+        await uploadToR2AndSync(ctx, {
           documentId: args.documentId,
-          jobId,
+          userId: args.userId,
+          folderId: args.folderId,
+          filename: resolvedFilename,
+          r2Key,
+          body: content,
+          contentType: 'text/markdown',
+          taskId: args.taskId,
+        })
+      } else if (sourceType === 'website') {
+        if (!args.sourceUrl) {
+          await failDocumentIngestion(ctx, { documentId: args.documentId, failureReason: 'Source URL is required for website ingestion', taskId: args.taskId })
+          return
+        }
+
+        if (args.taskId) {
+          await ctx.runMutation(internal.tasks.updateProgress, { taskId: args.taskId, progress: 'Extracting content…' })
+        }
+
+        const { extractWebsiteContent } = await loadExtractors()
+        const { title, content } = await extractWebsiteContent(args.sourceUrl)
+        const r2Key = `${sanitizeUserSegment(args.userId)}/${args.folderId}/${args.documentId}.md`
+
+        const resolvedFilename = title || args.filename
+        await ctx.runMutation(internal.documents.updateDocumentFilename, { id: args.documentId, filename: resolvedFilename })
+
+        await uploadToR2AndSync(ctx, {
+          documentId: args.documentId,
+          userId: args.userId,
+          folderId: args.folderId,
+          filename: resolvedFilename,
+          r2Key,
+          body: content,
+          contentType: 'text/markdown',
+          taskId: args.taskId,
         })
       }
     } catch (error: unknown) {
@@ -293,8 +423,41 @@ export const ingestDocument = internalAction({
         documentId: args.documentId,
         fileId: args.fileId,
         failureReason: message,
+        taskId: args.taskId,
+      })
+    }
+  },
+})
+
+export const ingestText = internalAction({
+  args: {
+    documentId: v.id('documents'),
+    userId: v.string(),
+    folderId: v.id('folders'),
+    filename: v.string(),
+    text: v.string(),
+    taskId: v.optional(v.id('tasks')),
+  },
+  handler: async (ctx, args) => {
+    try {
+      const r2Key = `${sanitizeUserSegment(args.userId)}/${args.folderId}/${args.documentId}.md`
+
+      await uploadToR2AndSync(ctx, {
+        documentId: args.documentId,
+        userId: args.userId,
+        folderId: args.folderId,
+        filename: args.filename,
         r2Key,
-        cleanupAiSearch,
+        body: args.text,
+        contentType: 'text/markdown',
+        taskId: args.taskId,
+      })
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error)
+      await failDocumentIngestion(ctx, {
+        documentId: args.documentId,
+        failureReason: message,
+        taskId: args.taskId,
       })
     }
   },
@@ -309,13 +472,16 @@ export const pollIndexingStatus = internalAction({
     const doc = await ctx.runQuery(internal.documents.getDocument, { id: args.documentId })
     if (!doc || doc.status === 'failed') return
 
+    const taskId = doc.taskId
+
     const config = getAiSearchConfig()
     if (!config) {
       await failDocumentIngestion(ctx, {
         documentId: args.documentId,
-        fileId: doc.fileId,
+        fileId: doc.fileId ?? undefined,
         failureReason: 'Missing Cloudflare AI Search configuration',
         r2Key: doc.r2Key,
+        taskId,
       })
       return
     }
@@ -328,10 +494,11 @@ export const pollIndexingStatus = internalAction({
     if (!response.ok) {
       await failDocumentIngestion(ctx, {
         documentId: args.documentId,
-        fileId: doc.fileId,
+        fileId: doc.fileId ?? undefined,
         failureReason: `Failed to check indexing status (${response.status})`,
         r2Key: doc.r2Key,
         cleanupAiSearch: true,
+        taskId,
       })
       return
     }
@@ -343,16 +510,20 @@ export const pollIndexingStatus = internalAction({
       if (job.end_reason) {
         await failDocumentIngestion(ctx, {
           documentId: args.documentId,
-          fileId: doc.fileId,
+          fileId: doc.fileId ?? undefined,
           failureReason: `Indexing failed: ${job.end_reason}`,
           r2Key: doc.r2Key,
           cleanupAiSearch: true,
+          taskId,
         })
       } else {
         await ctx.runMutation(internal.documents.updateDocumentStatus, {
           id: args.documentId,
           status: 'success',
         })
+        if (taskId) {
+          await ctx.runMutation(internal.tasks.complete, { taskId, result: { documentId: String(args.documentId) } })
+        }
         await ctx.scheduler.runAfter(0, internal.documentActions.updateDocumentAiSearchMetadata, {
           documentId: String(args.documentId),
           userId: doc.userId,
@@ -379,53 +550,41 @@ export const updateDocumentAiSearchMetadata = internalAction({
     r2Key: v.optional(v.string()),
   },
   handler: async (_ctx, args) => {
-    const config = getAiSearchConfig()
-    if (!config) return
-
     const bucket = process.env.R2_BUCKET_NAME
-    let content: string | undefined
-
-    if (bucket && args.r2Key) {
-      try {
-        const r2 = getR2Client()
-        const obj = await r2.send(new GetObjectCommand({ Bucket: bucket, Key: args.r2Key }))
-        content = await obj.Body?.transformToString()
-      } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error)
-        console.error(`R2 read for metadata update failed: ${message}`)
-      }
-    }
-
-    const url = `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/ai-search/instances/${config.instance}/documents/upsert`
+    if (!bucket || !args.r2Key) return
 
     try {
-      const document: Record<string, unknown> = {
-        id: args.documentId,
-        attributes: {
+      const r2 = getR2Client()
+      await r2.send(new CopyObjectCommand({
+        Bucket: bucket,
+        CopySource: `${bucket}/${args.r2Key}`,
+        Key: args.r2Key,
+        MetadataDirective: 'REPLACE',
+        Metadata: {
           userId: args.userId,
           documentId: args.documentId,
           folderId: args.folderId,
-          filename: args.filename,
+          filename: args.filename.replace(/[^\x20-\x7E]/g, ''),
         },
-      }
-      if (content) document.content = content
-
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${config.token}`,
-        },
-        body: JSON.stringify({ documents: [document] }),
-      })
-
-      if (!response.ok) {
-        const errorText = (await response.text()).slice(0, 500)
-        console.error(`AI Search metadata update failed (${response.status}): ${errorText}`)
-      }
+      }))
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error)
-      console.error(`AI Search metadata update error: ${message}`)
+      console.error(`R2 metadata update failed: ${message}`)
+      return
+    }
+
+    const config = getAiSearchConfig()
+    if (!config) return
+
+    try {
+      const jobsUrl = `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/ai-search/instances/${config.instance}/jobs`
+      await fetch(jobsUrl, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${config.token}` },
+      })
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.error(`AI Search sync trigger after metadata update failed: ${message}`)
     }
   },
 })

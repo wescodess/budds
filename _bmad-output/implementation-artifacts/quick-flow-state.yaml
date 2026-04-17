@@ -1,17 +1,18 @@
 version: 1
 mode: idle
 current_phase: complete
-spec_slug: quiz-feature-revamp
+spec_slug: ingestion-pipeline-revamp
 input_type: goal
 goal_or_spec: |
-  Quiz feature revamp — full implementation per quiz_feature_spec.md.resolved
-  and TASKSPLAN.md. 8 phases: schema+backend, AI generation upgrade, composable
-  layer, core UI (shell/overview/modals), taking UI (sequential+show-all),
-  results UI, AI wizard, polish.
-is_ui: true
+  Ingestion pipeline revamp — support all file types (PDF, DOCX, TXT, MD, CSV, XLSX, images),
+  website URLs, and YouTube links. Upload original files directly to R2 for native AI Search
+  indexing (drop unpdf). Extract website content with readability, YouTube transcripts with
+  youtube-transcript package. Zero budget, Cloudflare free tier.
+  Plan at .claude/plans/starry-leaping-church.md
+is_ui: false
 review_rounds: 0
-branch: feat/quiz-feature-revamp
-pr_url: https://github.com/wescodess/budds/pull/45
+branch: feat/ingestion-pipeline-revamp
+pr_url: https://github.com/wescodess/budds/pull/47
 paths:
   project_root: /Users/wesleyukadike/Desktop/budds
   artifacts_dir: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts
@@ -20,41 +21,11 @@ paths:
   deferred_work: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts/deferred-work.md
   design_cache: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts/design-screens
 design:
-  approved: true
-  approved_at: 2026-04-17
-  stitch_project_id: "526950061036357227"
+  approved: false
+  approved_at: null
+  stitch_project_id: null
   reference_screenshot: null
-  screens:
-    - id: e58d0c25805b43e09859991e7e05da1b
-      label: quiz-overview
-      notes: "Quiz overview with editable title, question list with type badges, history dropdown, control center dock"
-    - id: 23dbd90c656a44dc9740430dbd0dec91
-      label: settings-modal
-      notes: "Pre-attempt settings modal with shuffle, show-all, immediate feedback toggles"
-    - id: 9c7c9edde7464770b5fc2c0267a4f5f3
-      label: resume-dialog
-      notes: "Resume in-progress attempt dialog with progress info and resume/restart options"
-    - id: 42cdfc39bafa4e9a923a6ba5bd4da150
-      label: sequential-question
-      notes: "Sequential mode single question view with MC options and progress bar"
-    - id: 96a67df38e0e44adb3173525857037d9
-      label: sequential-feedback-correct
-      notes: "Correct answer feedback with green banner, explain-why expandable"
-    - id: f72cc859e68e4359a3003403aa7ad14d
-      label: sequential-feedback-incorrect
-      notes: "Incorrect answer feedback with red banner, explanation panel, correct answer highlight"
-    - id: 87ead295aa5344c996a2c5d87601e2aa
-      label: show-all-mode
-      notes: "Show-all mode with multiple question types visible, sticky bottom progress bar"
-    - id: 5c5a218c8a7b477796789fb10fc3855a
-      label: results-score
-      notes: "Results overview with score percentage, circular indicator, correct count, retake/history"
-    - id: b7ba8e46a3de4800922a893193d42ab8
-      label: results-question-review
-      notes: "Tabbed per-question review with left sidebar tabs and right detail panel"
-    - id: 1db0e0e771b1416fb0aa3509aa1d7582
-      label: ai-wizard-topics
-      notes: "AI generation wizard step 2 with suggested/custom topic pills"
+  screens: []
 escalation:
   pending: null
   log: []
@@ -62,25 +33,13 @@ decisions_log: []
 run_log:
   - ts: 2026-04-17
     event: start
-    detail: "Quiz feature revamp kicked off from TASKSPLAN.md + quiz_feature_spec.md.resolved; is_ui=true (multiple new UI surfaces) → entering design"
+    detail: "Ingestion pipeline revamp kicked off from goal + plan at .claude/plans/starry-leaping-church.md; is_ui=false → skip design, enter clarify"
   - ts: 2026-04-17
     event: intake_complete
-    detail: "slug=quiz-feature-revamp, input_type=goal, is_ui=true. Scope: schema extensions (4 question types, attemptAnswers table, attempt lifecycle), 12+ new backend endpoints, 4 composables, ~28 new Vue components (shell, overview, taking sequential+show-all, results with tabbed review, AI wizard 3-step, question modal, settings modal, resume dialog), generation upgrade (topics API, difficulty, types)."
+    detail: "slug=ingestion-pipeline-revamp, input_type=goal, is_ui=false. Scope: schema widening (sourceType, sourceUrl, mimeType, optional fileId), drop unpdf for direct R2 upload, add website extraction (readability+linkedom), add YouTube transcript extraction, update client upload to accept all file types, update URL import to classify youtube/website/file."
   - ts: 2026-04-17
     event: phase_transition
-    detail: "intake → design"
-  - ts: 2026-04-17
-    event: design_screens_generated
-    detail: "10 Stitch screens generated (project 526950061036357227): quiz-overview, settings-modal, resume-dialog, sequential-question, sequential-feedback-correct, sequential-feedback-incorrect, show-all-mode, results-score, results-question-review, ai-wizard-topics"
-  - ts: 2026-04-17
-    event: escalation_raised
-    detail: "Design approval escalation — 10 screens pending user review"
-  - ts: 2026-04-17
-    event: escalation_resolved
-    detail: "Design approved (12 screens: 9 core + 3 wizard modals). Wizard changed from full-page to modal overlay per user feedback."
-  - ts: 2026-04-17
-    event: phase_transition
-    detail: "design → clarify"
+    detail: "intake → clarify"
 config:
   notifications:
     telegram:

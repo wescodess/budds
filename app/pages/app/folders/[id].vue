@@ -704,10 +704,9 @@ async function confirmMove(destFolderId: Id<'folders'>) {
 }
 
 async function handleUpload(files: File[]) {
+  if (isDesktop.value) helperMode.value = 'tasks'
   try {
     await uploadFiles(files, folderId.value)
-    const { toast } = await import('vue-sonner')
-    toast.success(files.length === 1 ? 'Document indexed' : `${files.length} documents indexed`)
   } catch (e: any) {
     const { toast } = await import('vue-sonner')
     toast.error(e.message || 'Upload failed')
@@ -715,10 +714,9 @@ async function handleUpload(files: File[]) {
 }
 
 async function handleImportLink(url: string) {
+  if (isDesktop.value) helperMode.value = 'tasks'
   try {
-    const result = await importDocumentFromUrl(url, folderId.value)
-    const { toast } = await import('vue-sonner')
-    toast.success(`Imported and indexed ${result?.filename ?? 'document'}`)
+    await importDocumentFromUrl(url, folderId.value)
   } catch (e: any) {
     const { toast } = await import('vue-sonner')
     toast.error(e.message || 'Import failed')
@@ -1227,6 +1225,19 @@ async function handleImportLink(url: string) {
       :pending="movePending"
       :item-count="moveTargetIds.length"
       @submit="confirmMove"
+    />
+
+    <FoldersFolderFormModal
+      v-model:open="folderEditOpen"
+      mode="edit"
+      :folder="folder"
+      @deleted="router.replace('/')"
+    />
+
+    <FoldersFolderFormModal
+      v-model:open="subfolderCreateOpen"
+      mode="create"
+      :parent-id="folderId"
     />
   </FolderShell>
 </template>

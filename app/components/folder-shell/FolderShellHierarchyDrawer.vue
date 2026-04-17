@@ -25,7 +25,7 @@ const emit = defineEmits<{ close: [] }>()
 
 const router = useRouter()
 const { allFolders } = useFolders()
-const { documentsForDisplay, dismissDisplayDocument, uploadFiles, moveDocument, deleteDocuments, moveDocuments } = useDocuments(computed(() => props.folderId))
+const { documentsForDisplay, dismissDisplayDocument, uploadFiles, importDocumentFromUrl, moveDocument, deleteDocuments, moveDocuments } = useDocuments(computed(() => props.folderId))
 const { data: folderCounts } = useConvexQuery(api.documents.countsByFolder, computed(() => ({})))
 
 const directCountByFolder = computed(() => {
@@ -327,6 +327,28 @@ async function confirmMove(destId: Id<'folders'>) {
   }
 }
 
+const linkDialogOpen = ref(false)
+const linkUrl = ref('')
+const linkImporting = ref(false)
+
+async function handleImportLink() {
+  const url = linkUrl.value.trim()
+  if (!url) return
+  linkImporting.value = true
+  try {
+    const result = await importDocumentFromUrl(url, props.folderId)
+    const { toast } = await import('vue-sonner')
+    toast.success(`Imported ${result?.filename ?? 'document'}`)
+    linkUrl.value = ''
+    linkDialogOpen.value = false
+  } catch (err: any) {
+    const { toast } = await import('vue-sonner')
+    toast.error(err?.message || 'Import failed')
+  } finally {
+    linkImporting.value = false
+  }
+}
+
 const fileInput = ref<HTMLInputElement | null>(null)
 function triggerUpload() { fileInput.value?.click() }
 async function onFiles(e: Event) {
@@ -513,7 +535,7 @@ async function onFiles(e: Event) {
             </UiButton>
           </UiDropdownMenuTrigger>
           <UiDropdownMenuContent align="end" class="w-44">
-            <UiDropdownMenuItem disabled>
+            <UiDropdownMenuItem @click="linkDialogOpen = true">
               <LinkIcon class="mr-2 h-4 w-4" /> From link
             </UiDropdownMenuItem>
             <UiDropdownMenuItem @click="triggerUpload">
@@ -521,7 +543,14 @@ async function onFiles(e: Event) {
             </UiDropdownMenuItem>
           </UiDropdownMenuContent>
         </UiDropdownMenu>
-        <input ref="fileInput" type="file" multiple class="hidden" @change="onFiles">
+        <input
+          ref="fileInput"
+          type="file"
+          accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx,text/plain,.txt,text/markdown,.md,text/csv,.csv,text/html,.html,image/png,.png,image/jpeg,.jpg,.jpeg,image/webp,.webp,image/gif,.gif"
+          multiple
+          class="hidden"
+          @change="onFiles"
+        >
       </section>
 
       <div class="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
@@ -599,5 +628,32 @@ async function onFiles(e: Event) {
       :item-count="moveTargetIds.length"
       @submit="confirmMove"
     />
+
+    <UiDialog v-model:open="linkDialogOpen">
+      <UiDialogContent>
+        <UiDialogHeader>
+          <UiDialogTitle>Add from link</UiDialogTitle>
+          <UiDialogDescription>
+            Paste a URL to import — websites, YouTube videos, and direct file links are all supported.
+          </UiDialogDescription>
+        </UiDialogHeader>
+        <div class="space-y-3">
+          <input
+            v-model="linkUrl"
+            type="url"
+            placeholder="https://example.com/article or YouTube link"
+            inputmode="url"
+            class="w-full rounded-md border bg-background px-3 py-2 text-sm"
+            @keydown.enter="handleImportLink"
+          >
+          <div class="flex justify-end gap-2">
+            <UiButton variant="outline" size="sm" @click="linkDialogOpen = false">Cancel</UiButton>
+            <UiButton size="sm" :disabled="!linkUrl.trim() || linkImporting" @click="handleImportLink">
+              {{ linkImporting ? 'Importing…' : 'Import' }}
+            </UiButton>
+          </div>
+        </div>
+      </UiDialogContent>
+    </UiDialog>
   </div>
 </template>

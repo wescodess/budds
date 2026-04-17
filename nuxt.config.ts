@@ -91,7 +91,7 @@ export default defineNuxtConfig({
       langs: ['ts', 'js', 'jsx', 'tsx', 'vue', 'bash', 'shell', 'json', 'md', 'python', 'sql', 'html', 'css', 'diff', 'yaml'],
     },
     components: {
-      prose: true,
+      prose: false,
       map: {
         citation: 'Citation',
       },
