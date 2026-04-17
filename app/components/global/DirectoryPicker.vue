@@ -97,6 +97,35 @@ function hasExpandableChildren(folderId: string): boolean {
   return childFolders(folderId).length > 0 || filesForFolder(folderId).length > 0
 }
 
+interface TreeRow {
+  type: 'folder' | 'file'
+  id: string
+  name: string
+  depth: number
+  folder?: PickerFolder
+  file?: PickerFile
+}
+
+const visibleTree = computed<TreeRow[]>(() => {
+  const rows: TreeRow[] = []
+  function walk(parentId: string | undefined, depth: number) {
+    const folders = parentId === undefined
+      ? rootFolders.value
+      : childFolders(parentId)
+    for (const folder of folders) {
+      rows.push({ type: 'folder', id: folder.id, name: folder.name, depth, folder })
+      if (expanded.value.has(folder.id)) {
+        for (const file of filesForFolder(folder.id)) {
+          rows.push({ type: 'file', id: file.id, name: file.name, depth: depth + 1, file })
+        }
+        walk(folder.id, depth + 1)
+      }
+    }
+  }
+  walk(undefined, 0)
+  return rows
+})
+
 function focusSearch() {
   nextTick(() => searchInputRef.value?.focus())
 }
@@ -218,77 +247,54 @@ defineExpose({ focusSearch })
       </template>
 
       <template v-else>
-        <template v-for="folder in rootFolders" :key="folder.id">
-          <div class="group flex items-center gap-2 rounded-xl px-2 py-1.5 text-sm hover:bg-accent/10" style="padding-left: 8px">
+        <div
+          v-for="row in visibleTree"
+          :key="`${row.type}-${row.id}`"
+          class="group flex items-center gap-2 rounded-xl px-2 py-1.5 text-sm hover:bg-accent/10"
+          :style="{ paddingLeft: `${8 + row.depth * 16}px` }"
+        >
+          <template v-if="row.type === 'folder'">
             <button
-              v-if="hasExpandableChildren(folder.id)"
+              v-if="hasExpandableChildren(row.id)"
               type="button"
-              :aria-label="expanded.has(folder.id) ? 'Collapse' : 'Expand'"
-              :aria-expanded="expanded.has(folder.id)"
+              :aria-label="expanded.has(row.id) ? 'Collapse' : 'Expand'"
+              :aria-expanded="expanded.has(row.id)"
               class="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              @click="toggleExpand(folder.id)"
+              @click="toggleExpand(row.id)"
             >
               <ChevronRight
                 class="h-3.5 w-3.5 transition-transform motion-reduce:transition-none"
-                :class="expanded.has(folder.id) ? 'rotate-90' : ''"
+                :class="expanded.has(row.id) ? 'rotate-90' : ''"
               />
             </button>
             <span v-else class="w-7 shrink-0" />
             <UiCheckbox
-              :model-value="isFolderSelected(folder.id) === 'all' ? true : isFolderSelected(folder.id) === 'some' ? 'indeterminate' : false"
-              :aria-label="`Select ${folder.name}`"
-              @update:model-value="onToggleFolder(folder.id)"
+              :model-value="isFolderSelected(row.id) === 'all' ? true : isFolderSelected(row.id) === 'some' ? 'indeterminate' : false"
+              :aria-label="`Select ${row.name}`"
+              @update:model-value="onToggleFolder(row.id)"
             />
             <Folder class="h-4 w-4 shrink-0 text-muted-foreground" />
-            <button type="button" class="flex min-w-0 flex-1 items-center gap-2 text-left" @click="onToggleFolder(folder.id)">
-              <span class="truncate text-foreground">{{ folder.name }}</span>
+            <button type="button" class="flex min-w-0 flex-1 items-center gap-2 text-left" @click="onToggleFolder(row.id)">
+              <span class="truncate text-foreground">{{ row.name }}</span>
             </button>
-            <span v-if="folder.fileCount" class="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-              {{ folder.fileCount }} file{{ folder.fileCount === 1 ? '' : 's' }}
+            <span v-if="row.folder?.fileCount" class="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+              {{ row.folder.fileCount }} file{{ row.folder.fileCount === 1 ? '' : 's' }}
             </span>
-          </div>
-
-          <template v-if="expanded.has(folder.id)">
-            <div
-              v-for="file in filesForFolder(folder.id)"
-              :key="file.id"
-              class="group flex items-center gap-2 rounded-xl px-2 py-1.5 text-sm hover:bg-accent/10"
-              :style="{ paddingLeft: '24px' }"
-            >
-              <span class="w-7 shrink-0" />
-              <UiCheckbox
-                :model-value="isFileSelected(file.id)"
-                :aria-label="`Select ${file.name}`"
-                @update:model-value="onToggleFile(file.id)"
-              />
-              <FileText class="h-4 w-4 shrink-0 text-muted-foreground" />
-              <button type="button" class="flex min-w-0 flex-1 items-center gap-2 text-left" @click="onToggleFile(file.id)">
-                <span class="truncate text-foreground">{{ file.name }}</span>
-              </button>
-            </div>
-
-            <template v-for="sub in childFolders(folder.id)" :key="sub.id">
-              <div
-                class="group flex items-center gap-2 rounded-xl px-2 py-1.5 text-sm hover:bg-accent/10"
-                :style="{ paddingLeft: '24px' }"
-              >
-                <span class="w-7 shrink-0" />
-                <UiCheckbox
-                  :model-value="isFolderSelected(sub.id) === 'all' ? true : isFolderSelected(sub.id) === 'some' ? 'indeterminate' : false"
-                  :aria-label="`Select ${sub.name}`"
-                  @update:model-value="onToggleFolder(sub.id)"
-                />
-                <Folder class="h-4 w-4 shrink-0 text-muted-foreground" />
-                <button type="button" class="flex min-w-0 flex-1 items-center gap-2 text-left" @click="onToggleFolder(sub.id)">
-                  <span class="truncate text-foreground">{{ sub.name }}</span>
-                </button>
-                <span v-if="sub.fileCount" class="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-                  {{ sub.fileCount }} file{{ sub.fileCount === 1 ? '' : 's' }}
-                </span>
-              </div>
-            </template>
           </template>
-        </template>
+
+          <template v-else>
+            <span class="w-7 shrink-0" />
+            <UiCheckbox
+              :model-value="isFileSelected(row.id)"
+              :aria-label="`Select ${row.name}`"
+              @update:model-value="onToggleFile(row.id)"
+            />
+            <FileText class="h-4 w-4 shrink-0 text-muted-foreground" />
+            <button type="button" class="flex min-w-0 flex-1 items-center gap-2 text-left" @click="onToggleFile(row.id)">
+              <span class="truncate text-foreground">{{ row.name }}</span>
+            </button>
+          </template>
+        </div>
       </template>
     </div>
 
