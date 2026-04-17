@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
-import { MessageSquare, Layers, ListChecks, X } from 'lucide-vue-next'
+import { MessageSquare, Layers, ListChecks, Headphones, X } from 'lucide-vue-next'
 
-export type VoidType = 'chat' | 'flashcards' | 'quiz'
+export type VoidType = 'chat' | 'flashcards' | 'quiz' | 'audio-overview'
 
 type VoidOption = {
   type: VoidType
@@ -10,12 +10,14 @@ type VoidOption = {
   subtitle: string
   icon: typeof MessageSquare
   ctaLabel: string
+  requiresIndexedDocs?: boolean
 }
 
 const props = defineProps<{
   open: boolean
   folderName: string
   submitting?: boolean
+  indexedCount?: number
 }>()
 
 const emit = defineEmits<{
@@ -45,7 +47,25 @@ const options: VoidOption[] = [
     icon: ListChecks,
     ctaLabel: 'Create quiz void',
   },
+  {
+    type: 'audio-overview',
+    title: 'Audio Overview',
+    subtitle: 'Two AI hosts discuss this folder',
+    icon: Headphones,
+    ctaLabel: 'Create audio overview void',
+    requiresIndexedDocs: true,
+  },
 ]
+
+function isOptionDisabled(opt: VoidOption): boolean {
+  if (opt.requiresIndexedDocs && (props.indexedCount ?? 0) === 0) return true
+  return false
+}
+
+function optionTooltip(opt: VoidOption): string | undefined {
+  if (isOptionDisabled(opt)) return 'Index at least one document in this folder first'
+  return undefined
+}
 
 const selected = ref<VoidType | null>(null)
 const name = ref('')
@@ -94,21 +114,25 @@ function submit() {
         </UiDialogDescription>
       </UiDialogHeader>
 
-      <div class="mt-5 grid grid-cols-1 gap-3 sm:mt-6 sm:grid-cols-3">
+      <div class="mt-5 grid grid-cols-1 gap-3 sm:mt-6 sm:grid-cols-2 lg:grid-cols-4">
         <button
           v-for="option in options"
           :key="option.type"
           type="button"
           :data-testid="`void-type-${option.type}`"
           :aria-pressed="selected === option.type"
+          :aria-disabled="isOptionDisabled(option) || undefined"
+          :disabled="isOptionDisabled(option)"
+          :title="optionTooltip(option)"
           :class="[
             'group relative flex min-h-24 flex-col items-start justify-between rounded-xl bg-card p-4 text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:h-30',
             selected === option.type
               ? 'border-[1.5px] border-primary'
               : 'border border-border hover:border-primary/40 hover:bg-card/80',
             selected !== null && selected !== option.type ? 'opacity-60' : '',
+            isOptionDisabled(option) ? 'cursor-not-allowed opacity-50 hover:border-border hover:bg-card' : '',
           ]"
-          @click="selected = option.type"
+          @click="!isOptionDisabled(option) && (selected = option.type)"
         >
           <span
             v-if="selected === option.type"

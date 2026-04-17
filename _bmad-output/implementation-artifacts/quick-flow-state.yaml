@@ -1,18 +1,22 @@
 version: 1
-mode: idle
-current_phase: complete
-spec_slug: ingestion-pipeline-revamp
+mode: running
+current_phase: review
+spec_slug: audio-overview-mvp
 input_type: goal
 goal_or_spec: |
-  Ingestion pipeline revamp — support all file types (PDF, DOCX, TXT, MD, CSV, XLSX, images),
-  website URLs, and YouTube links. Upload original files directly to R2 for native AI Search
-  indexing (drop unpdf). Extract website content with readability, YouTube transcripts with
-  youtube-transcript package. Zero budget, Cloudflare free tier.
-  Plan at .claude/plans/starry-leaping-church.md
-is_ui: false
-review_rounds: 0
-branch: feat/ingestion-pipeline-revamp
-pr_url: https://github.com/wescodess/budds/pull/47
+  NotebookLM-style Audio Overview — Phase 1 MVP only (per plan notebooklm_audio_overview_plan.md).
+  Scope: schema (audioOverviews table), internalAction runAudioOverview (chunk retrieval → dialogue
+  script via OpenRouter → per-turn MeloTTS synthesis → _storage blobs → overview row + task mark
+  complete), audio-script-prompt, tts-melotts wrapper, POST /api/audio-overview/generate route,
+  generation/ready surfaces in folder, basic player (play/pause/scrub ±15s/speed, per-turn swap).
+  Deferred to future specs: visualizer, sticky mini-player, download, customize dialog,
+  share/public page, interjection.
+  Plan path: notebooklm_audio_overview_plan.md
+  Resolved PRD: notebooklm_audio_overview_prd.md.resolved
+is_ui: true
+review_rounds: 1
+branch: podcasts
+pr_url: null
 paths:
   project_root: /Users/wesleyukadike/Desktop/budds
   artifacts_dir: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts
@@ -21,25 +25,122 @@ paths:
   deferred_work: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts/deferred-work.md
   design_cache: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts/design-screens
 design:
-  approved: false
-  approved_at: null
-  stitch_project_id: null
+  approved: true
+  approved_at: "2026-04-17T18:42:00Z"
+  stitch_project_id: "2926819289448574055"
   reference_screenshot: null
-  screens: []
+  screens:
+    - surface: AudioOverviewCard
+      screen_id: "63d91b784f2e4aae8716f8c99f5a839d"
+      title: "Budds - Audio Overview Generation States"
+      local_path: "_bmad-output/implementation-artifacts/design-screens/audio-overview-mvp/audio-overview-card.png"
+      notes: "Ready + Generating states in one frame. Matches warm-focus system. Stitch sidebar is canvas preview only — real implementation nests in FolderShell Void area."
+    - surface: AudioOverviewPlayer
+      screen_id: "8e5e5e8349044f5cb2ba821f263b890e"
+      title: "Audio Overview Player Void"
+      local_path: "_bmad-output/implementation-artifacts/design-screens/audio-overview-mvp/audio-overview-player.png"
+      notes: "Two-host cards (active/inactive), quote block, scrubber + central amber play button, source pills. Known gaps: (1) Stitch rendered host avatars as stock headshots — real implementation will use abstract amber/gold orbs per prompt. (2) Download/Share disabled-state (Phase 2) treatment not visually explicit — will code with muted ghost + 'Soon' chips."
+  surfaces_requested:
+    - AudioOverviewCard
+    - AudioOverviewPlayer
+  design_system_id: "assets/11175050301981891392"
 escalation:
   pending: null
-  log: []
-decisions_log: []
+  log:
+    - id: "design-approval-audio-overview-mvp-01"
+      question: "Approve Audio Overview Phase 1 MVP design screens (AudioOverviewCard + AudioOverviewPlayer) to proceed to CLARIFY/SPEC?"
+      answer: "approve"
+      followed_default: null
+      asked_at: "2026-04-17T18:38:00Z"
+      answered_at: "2026-04-17T18:42:00Z"
+      auto_resolved: false
+      raised_from_state: design
+decisions_log:
+  - ts: 2026-04-17
+    decision: "Scope limited to Phase 1 MVP; phases 2-4 deferred"
+    rationale: "Plan explicitly defines Phase 1 as first shippable slice; one spec at a time (Barry rule)"
+  - ts: 2026-04-17
+    decision: "is_ui=true with 2 design surfaces (AudioOverviewCard, AudioOverviewPlayer)"
+    rationale: "Customize dialog and StickyMiniPlayer belong to Phase 2; excluded from MVP design set"
+  - ts: 2026-04-17
+    decision: "input_type=goal (plan is context, not BMAD spec frontmatter)"
+    rationale: "Need CLARIFY + SPEC to produce a scoped spec-<slug>.md for Phase 1 only"
+  - ts: 2026-04-17
+    decision: "Audio Overview modeled as new Void type + generation entry via CreateVoidDialog"
+    rationale: "DESIGN.md void paradigm; AudioOverviewPlayer = a Void surface, not a side panel"
+  - ts: 2026-04-17
+    decision: "Architecture: Nuxt server route owns full pipeline (NOT a Convex internalAction)"
+    rationale: "Matches quiz-generation pattern; env (OpenRouter, AI Gateway) already in Nuxt runtimeConfig; avoids duplicating config into Convex env"
+  - ts: 2026-04-17
+    decision: "Accept spec over 1600-token threshold (~2740 tokens)"
+    rationale: "Cohesive cross-layer (DB+BE+UI) per template 'stay in ONE file' rule; further split produces unshippable slices; already scoped Phase 1 MVP from plan's Phase 1-4"
+  - ts: 2026-04-17
+    decision: "Use existing branch `podcasts` as feature branch (not conventional feat/ prefix)"
+    rationale: "Branch already carved with doc commit for this work; renaming risks PR metadata; single letter of convention drift acceptable for a pre-existing branch"
 run_log:
   - ts: 2026-04-17
     event: start
-    detail: "Ingestion pipeline revamp kicked off from goal + plan at .claude/plans/starry-leaping-church.md; is_ui=false → skip design, enter clarify"
+    detail: "Audio Overview Phase 1 MVP kicked off from notebooklm_audio_overview_plan.md; is_ui=true, surfaces=[AudioOverviewCard, AudioOverviewPlayer]"
   - ts: 2026-04-17
     event: intake_complete
-    detail: "slug=ingestion-pipeline-revamp, input_type=goal, is_ui=false. Scope: schema widening (sourceType, sourceUrl, mimeType, optional fileId), drop unpdf for direct R2 upload, add website extraction (readability+linkedom), add YouTube transcript extraction, update client upload to accept all file types, update URL import to classify youtube/website/file."
+    detail: "slug=audio-overview-mvp, input_type=goal, is_ui=true. Scope: Phase 1 MVP only per plan §7."
   - ts: 2026-04-17
     event: phase_transition
-    detail: "intake → clarify"
+    detail: "intake → design"
+  - ts: 2026-04-17
+    event: design_ready
+    detail: "Stitch generated 2 screens for audio-overview-mvp: card=63d91b784f2e4aae8716f8c99f5a839d, player=8e5e5e8349044f5cb2ba821f263b890e. Downloaded to design-screens/audio-overview-mvp/. Known gaps noted in state.design.screens."
+  - ts: 2026-04-17
+    event: escalation_raised
+    detail: "Design approval for AudioOverviewCard + AudioOverviewPlayer. No auto-resolve (UI approval per feedback_design_first.md)."
+  - ts: 2026-04-17
+    event: escalation_resolved
+    detail: "User approved both design screens. Avatars-as-orbs + Soon-chip disabled states deferred to implementation."
+  - ts: 2026-04-17
+    event: phase_transition
+    detail: "design → clarify"
+  - ts: 2026-04-17
+    event: clarify_complete
+    detail: "Intent clear from plan + PRD. Git tree clean (only expected artifacts). Branch=podcasts (already carved for this work; doc commit present). Architecture auto-decided: follow quiz pattern (Nuxt server route owns pipeline, not Convex action) for env-config co-location."
+  - ts: 2026-04-17
+    event: phase_transition
+    detail: "clarify → spec"
+  - ts: 2026-04-17
+    event: spec_written
+    detail: "spec-audio-overview-mvp.md written, status=ready-for-dev, ~2740 tokens (over 1600 threshold). Tier-1 auto-decision: accept. Rationale: cross-layer spec (DB+BE+UI) per template guidance stays in one file; further split would produce unshippable slices. Deferred-work appended with 12 items for phases 2-4."
+  - ts: 2026-04-17
+    event: phase_transition
+    detail: "spec → implement"
+  - ts: 2026-04-17
+    event: implement_complete
+    detail: "Schema + audioOverviews.ts + tests (14 new tests), server utils (prompt + tts-melotts) + tests (12 new tests), server route /api/audio-overview/generate.post.ts, UI components (Card, Generating, Player, Shell), composable useAudioOverviewPlayer, CreateVoidDialog +4th tile, folder page wiring. Added NUXT_CLOUDFLARE_WORKERS_AI_TOKEN env with fallback to CLOUDFLARE_AI_SEARCH_TOKEN (tier-1 auto-decision: existing arch permits env additions)."
+  - ts: 2026-04-17
+    event: checks_complete
+    detail: "pnpm test: 369 passed / 9 skipped (up from 343 → added 26 new assertions across 2 test files). pnpm test:component: same 30 pre-existing failures as clean branch (verified via git stash; known issue from G2/G3 deferred-work). No new regressions."
+  - ts: 2026-04-17
+    event: phase_transition
+    detail: "implement → review"
+  - ts: 2026-04-17
+    event: review_round_1
+    detail: "edge-case-hunter FAIL (3C), blind-hunter FAIL (3C), acceptance-auditor PASS. Consolidated 5 unique criticals after dedup. Loopback triggered."
+  - ts: 2026-04-17
+    event: loopback_amended
+    detail: "Spec Change Log populated with R1 entry. 6 [R1 amend] tasks added to Execution list. 4 new deferrals logged (URL expiry, AbortSignal, scrubber FP edge, mid-word truncation)."
+  - ts: 2026-04-17
+    event: phase_transition
+    detail: "review → implement (R1 loopback)"
+  - ts: 2026-04-17
+    event: r1_fixes_complete
+    detail: "Applied all 6 R1 amendments: CreateVoidDialog ?? 0 default, outer catch always fails, MAX_TURNS=50 + MIN_TURNS=3, orphan blob cleanup via deleteOrphanTurnBlob mutation (+3 new tests), Shell newest task by _creationTime, player final-turn display + filename pills + stale-URL banner. pnpm test: 372 passed / 9 skipped (+3 from R1)."
+  - ts: 2026-04-17
+    event: phase_transition
+    detail: "implement → review (round 2)"
+  - ts: 2026-04-17
+    event: review_round_2
+    detail: "Focused review of the 6 R1 amendments: PASS. All fixes land at stated file:line with correct semantics, no new critical defects, meta-concerns benign or theoretical."
+  - ts: 2026-04-17
+    event: phase_transition
+    detail: "review → commit"
 config:
   notifications:
     telegram:

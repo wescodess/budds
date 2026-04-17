@@ -279,6 +279,40 @@ export default defineSchema({
     .index('by_userId_and_folderId', ['userId', 'folderId'])
     .index('by_status', ['status']),
 
+  audioOverviews: defineTable({
+    userId: v.string(),
+    folderId: v.id('folders'),
+    taskId: v.optional(v.id('tasks')),
+    title: v.string(),
+    status: v.union(v.literal('generating'), v.literal('ready'), v.literal('failed')),
+    failureReason: v.optional(v.string()),
+    model: v.optional(v.string()),
+    turns: v.array(
+      v.object({
+        speaker: v.union(v.literal('host_a'), v.literal('host_b')),
+        text: v.string(),
+        audioFileId: v.id('_storage'),
+        durationMs: v.number(),
+        sourceIndex: v.optional(v.number()),
+      }),
+    ),
+    voiceProfile: v.object({
+      hostA: v.string(),
+      hostB: v.string(),
+    }),
+    preferences: v.optional(
+      v.object({
+        lengthMinutes: v.number(),
+        complexity: v.union(v.literal('beginner'), v.literal('expert')),
+      }),
+    ),
+    totalDurationMs: v.number(),
+    sourceDocumentIds: v.optional(v.array(v.id('documents'))),
+  })
+    .index('by_userId', ['userId'])
+    .index('by_folderId', ['folderId'])
+    .index('by_userId_and_folderId', ['userId', 'folderId']),
+
   pendingCleanup: defineTable({
     userId: v.string(),
     documentId: v.string(),
