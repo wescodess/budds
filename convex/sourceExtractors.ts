@@ -5,10 +5,9 @@ import { Readability } from '@mozilla/readability'
 const MAX_CONTENT_BYTES = 4 * 1024 * 1024
 
 const YT_VIDEO_ID_RE = /(?:youtube\.com\/(?:[^/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?/\s]{11})/i
-const YT_USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.83 Safari/537.36,gzip(gfe)'
+const YT_USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 const YT_INNERTUBE_URL = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false'
-const YT_ANDROID_UA = 'com.google.android.youtube/20.10.38 (Linux; U; Android 14)'
-const YT_ANDROID_CONTEXT = { client: { clientName: 'ANDROID', clientVersion: '20.10.38' } }
+const YT_WEB_CLIENT = { client: { clientName: 'WEB', clientVersion: '2.20241126.01.00', hl: 'en' } }
 
 function resolveVideoId(input: string): string {
   if (input.length === 11 && !input.includes('/')) return input
@@ -59,22 +58,52 @@ function parseTranscriptXml(xml: string): string[] {
 
 interface CaptionTrack { baseUrl: string; languageCode: string }
 
-async function getCaptionTracks(videoId: string): Promise<CaptionTrack[]> {
-  try {
-    const res = await fetch(YT_INNERTUBE_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'User-Agent': YT_ANDROID_UA },
-      body: JSON.stringify({ context: YT_ANDROID_CONTEXT, videoId }),
-    })
-    if (res.ok) {
-      const data = await res.json() as any
-      const tracks = data?.captions?.playerCaptionsTracklistRenderer?.captionTracks
-      if (Array.isArray(tracks) && tracks.length > 0) return tracks
+function extractJsonObject(text: string, startIdx: number): any | null {
+  let depth = 0
+  for (let i = startIdx; i < text.length; i++) {
+    if (text[i] === '{') depth++
+    else if (text[i] === '}') {
+      depth--
+      if (depth === 0) {
+        try { return JSON.parse(text.slice(startIdx, i + 1)) } catch { return null }
+      }
     }
-  } catch { /* fall through to web scrape */ }
+  }
+  return null
+}
 
+function extractCaptionTracksFromHtml(html: string): CaptionTrack[] | null {
+  const markers = [
+    'var ytInitialPlayerResponse = ',
+    'ytInitialPlayerResponse = ',
+    'window["ytInitialPlayerResponse"] = ',
+  ]
+  for (const marker of markers) {
+    const idx = html.indexOf(marker)
+    if (idx === -1) continue
+    const obj = extractJsonObject(html, idx + marker.length)
+    const tracks = obj?.captions?.playerCaptionsTracklistRenderer?.captionTracks
+    if (Array.isArray(tracks) && tracks.length > 0) return tracks
+  }
+
+  const captionsRegex = /"captionTracks"\s*:\s*(\[[\s\S]*?\])\s*,\s*"/
+  const match = html.match(captionsRegex)
+  if (match?.[1]) {
+    try {
+      const tracks = JSON.parse(match[1]) as CaptionTrack[]
+      if (tracks.length > 0) return tracks
+    } catch { /* regex match wasn't valid JSON */ }
+  }
+
+  return null
+}
+
+async function getCaptionTracks(videoId: string): Promise<CaptionTrack[]> {
   const pageRes = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
-    headers: { 'User-Agent': YT_USER_AGENT },
+    headers: {
+      'User-Agent': YT_USER_AGENT,
+      'Accept-Language': 'en-US,en;q=0.9',
+    },
   })
   const html = await pageRes.text()
 
@@ -85,26 +114,21 @@ async function getCaptionTracks(videoId: string): Promise<CaptionTrack[]> {
     throw new Error('Video is unavailable')
   }
 
-  const varPrefix = 'var ytInitialPlayerResponse = '
-  const idx = html.indexOf(varPrefix)
-  if (idx === -1) throw new Error('Transcript is disabled on this video')
+  const htmlTracks = extractCaptionTracksFromHtml(html)
+  if (htmlTracks) return htmlTracks
 
-  const start = idx + varPrefix.length
-  let depth = 0
-  for (let i = start; i < html.length; i++) {
-    if (html[i] === '{') depth++
-    else if (html[i] === '}') {
-      depth--
-      if (depth === 0) {
-        try {
-          const obj = JSON.parse(html.slice(start, i + 1)) as any
-          const tracks = obj?.captions?.playerCaptionsTracklistRenderer?.captionTracks
-          if (Array.isArray(tracks) && tracks.length > 0) return tracks
-        } catch { /* parse failed */ }
-        break
-      }
+  try {
+    const res = await fetch(YT_INNERTUBE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'User-Agent': YT_USER_AGENT },
+      body: JSON.stringify({ context: YT_WEB_CLIENT, videoId }),
+    })
+    if (res.ok) {
+      const data = await res.json() as any
+      const tracks = data?.captions?.playerCaptionsTracklistRenderer?.captionTracks
+      if (Array.isArray(tracks) && tracks.length > 0) return tracks
     }
-  }
+  } catch { /* InnerTube fallback failed */ }
 
   throw new Error('No transcript available for this video')
 }
