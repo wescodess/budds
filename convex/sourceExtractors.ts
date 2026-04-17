@@ -1,7 +1,10 @@
 "use node";
-import { YoutubeTranscript } from 'youtube-transcript'
+import { createRequire } from 'module'
 import { parseHTML } from 'linkedom'
 import { Readability } from '@mozilla/readability'
+
+const require = createRequire(import.meta.url)
+const { YoutubeTranscript } = require('youtube-transcript') as typeof import('youtube-transcript')
 
 const MAX_CONTENT_BYTES = 4 * 1024 * 1024
 
