@@ -13,10 +13,13 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:open': [value: boolean]
-  generated: [result: { versionId: Id<'flashcardRoomVersions'>; cardCount: number }]
 }>()
 
-const { generate, generating, lastError } = useFlashcardRooms(toRef(props, 'folderId'))
+const submitting = ref(false)
+
+const createTaskMutation = import.meta.client
+  ? useConvexMutation(api.tasks.create)
+  : { mutate: async () => ({ taskId: '' }), isLoading: ref(false) }
 
 const prompt = ref('')
 const cardCount = ref<number>(12)
@@ -97,28 +100,43 @@ const clampedCount = computed(() => {
 
 async function handleSubmit() {
   formError.value = null
+  if (submitting.value) return
   if (cardCount.value < 6 || cardCount.value > 16) {
     formError.value = 'Card count must be between 6 and 16'
     return
   }
+  submitting.value = true
   try {
-    const result = await generate(props.roomId, {
-      prompt: prompt.value.trim() || undefined,
-      cardCount: clampedCount.value,
-    })
+    const result = (await createTaskMutation.mutate({
+      folderId: props.folderId,
+      type: 'flashcard-generation',
+      title: `Generating ${clampedCount.value} cards…`,
+      metadata: {
+        roomId: props.roomId,
+        prompt: prompt.value.trim() || undefined,
+        cardCount: clampedCount.value,
+      },
+    } as any)) as { taskId: Id<'tasks'> }
+
     const { toast } = await import('vue-sonner')
-    toast.success(`Generated ${result.cardCount} cards`)
-    emit('generated', result)
+    toast.success('Generation started')
     emit('update:open', false)
+
+    $fetch('/api/flashcards/generate', {
+      method: 'POST',
+      body: {
+        folderId: props.folderId,
+        taskId: result.taskId,
+        roomId: props.roomId,
+        cardCount: clampedCount.value,
+      },
+    }).catch(() => {})
   }
   catch (e: any) {
-    const msg = e?.message || 'Generation failed'
-    if (msg === 'Generation already in progress') {
-      const { toast } = await import('vue-sonner')
-      toast.warning(msg)
-      return
-    }
-    formError.value = lastError.value || msg
+    formError.value = e?.message || 'Failed to start generation'
+  }
+  finally {
+    submitting.value = false
   }
 }
 </script>
@@ -191,7 +209,7 @@ async function handleSubmit() {
             data-testid="flashcard-room-generate-count"
             class="mt-1 w-32 rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           />
-          <p class="mt-1 text-xs text-muted-foreground">6–16 cards.</p>
+          <p class="mt-1 text-xs text-muted-foreground">6-16 cards.</p>
         </div>
 
         <div
@@ -208,7 +226,7 @@ async function handleSubmit() {
           type="button"
           variant="ghost"
           class="w-full sm:w-auto"
-          :disabled="generating"
+          :disabled="submitting"
           @click="emit('update:open', false)"
         >
           Cancel
@@ -217,11 +235,11 @@ async function handleSubmit() {
           type="button"
           data-testid="flashcard-room-generate-submit"
           class="w-full sm:w-auto"
-          :disabled="generating"
+          :disabled="submitting"
           @click="handleSubmit"
         >
           <Sparkles class="mr-1.5 h-4 w-4" />
-          {{ generating ? 'Generating…' : 'Generate deck' }}
+          {{ submitting ? 'Starting…' : 'Generate deck' }}
         </UiButton>
       </UiDialogFooter>
 
