@@ -90,6 +90,10 @@ async function handleCancel(taskId: Id<'tasks'>) {
     cancelling.value = false
   }
 }
+
+defineExpose({
+  startGeneration: handleGenerate,
+})
 </script>
 
 <template>
@@ -105,6 +109,8 @@ async function handleCancel(taskId: Id<'tasks'>) {
       v-else-if="readyOverview"
       :overview-id="readyOverview._id"
       :folder-id="props.folderId"
+      :regenerating="submitting"
+      @request-regenerate="handleGenerate"
     />
     <AudioOverviewCard
       v-else
