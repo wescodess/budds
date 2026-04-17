@@ -7,7 +7,8 @@ export function useQuizGeneration(folderId: Ref<Id<'folders'>>) {
 
   const wizardOpen = ref(false)
   const wizardStep = ref<WizardStep>(1)
-  const selectedResourceIds = ref<string[]>([])
+  const selectedFileIds = ref<Set<string>>(new Set())
+  const selectedFolderIds = ref<Set<string>>(new Set())
   const suggestedTopics = ref<string[]>([])
   const selectedTopics = ref<string[]>([])
   const customTopics = ref<string[]>([])
@@ -19,7 +20,8 @@ export function useQuizGeneration(folderId: Ref<Id<'folders'>>) {
 
   function openWizard() {
     wizardStep.value = 1
-    selectedResourceIds.value = []
+    selectedFileIds.value = new Set()
+    selectedFolderIds.value = new Set()
     suggestedTopics.value = []
     selectedTopics.value = []
     customTopics.value = []
@@ -48,7 +50,7 @@ export function useQuizGeneration(folderId: Ref<Id<'folders'>>) {
         method: 'POST',
         body: {
           folderId: folderId.value,
-          resourceIds: selectedResourceIds.value,
+          resourceIds: [...selectedFileIds.value, ...selectedFolderIds.value],
         },
       })
       suggestedTopics.value = result.topics
@@ -93,6 +95,7 @@ export function useQuizGeneration(folderId: Ref<Id<'folders'>>) {
     }
   }
 
+  const selectedCount = computed(() => selectedFileIds.value.size + selectedFolderIds.value.size)
   const allTopics = computed(() => [...selectedTopics.value, ...customTopics.value])
 
   async function generateQuiz() {
@@ -114,7 +117,8 @@ export function useQuizGeneration(folderId: Ref<Id<'folders'>>) {
   return {
     wizardOpen,
     wizardStep,
-    selectedResourceIds,
+    selectedFileIds,
+    selectedFolderIds,
     suggestedTopics,
     selectedTopics,
     customTopics,
@@ -123,6 +127,7 @@ export function useQuizGeneration(folderId: Ref<Id<'folders'>>) {
     questionTypes,
     difficulty,
     generating,
+    selectedCount,
     allTopics,
     openWizard,
     closeWizard,
