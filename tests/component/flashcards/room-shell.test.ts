@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { flushPromises } from '@vue/test-utils'
+import { getFunctionName } from 'convex/server'
 
 const mockRoomData = ref<any>({
   room: {
@@ -19,7 +20,8 @@ const mockRoomData = ref<any>({
 })
 
 const mockVersionsData = ref<any[]>([])
-const mockMutate = vi.fn()
+const mockRenameMutate = vi.fn()
+const mockDeleteMutate = vi.fn()
 
 mockNuxtImport('useConvexQuery', () => {
   return (apiRef: any, _args: unknown) => {
@@ -30,7 +32,12 @@ mockNuxtImport('useConvexQuery', () => {
 })
 
 mockNuxtImport('useConvexMutation', () => {
-  return (_apiRef: unknown) => ({ mutate: mockMutate, isLoading: ref(false) })
+  return (apiRef: any) => {
+    const name = getFunctionName(apiRef) ?? ''
+    if (name.includes('renameRoom')) return { mutate: mockRenameMutate, isLoading: ref(false) }
+    if (name.includes('deleteRoom')) return { mutate: mockDeleteMutate, isLoading: ref(false) }
+    return { mutate: vi.fn(), isLoading: ref(false) }
+  }
 })
 
 mockNuxtImport('useFlashcardRooms', () => {
@@ -50,7 +57,8 @@ const shellPath = ['~', 'components', 'flashcards', 'RoomShell.vue'].join('/')
 
 describe('RoomShell', () => {
   beforeEach(() => {
-    mockMutate.mockReset()
+    mockRenameMutate.mockReset()
+    mockDeleteMutate.mockReset()
   })
 
   it('[P0] renders header with room title', async () => {
@@ -78,7 +86,7 @@ describe('RoomShell', () => {
   })
 
   it('[P0] rename triggers renameRoom mutation with trimmed title', async () => {
-    mockMutate.mockResolvedValue(undefined)
+    mockRenameMutate.mockResolvedValue(undefined)
     const RoomShell = await import(shellPath)
     const wrapper = await mountSuspended(RoomShell.default, {
       props: { roomId: 'room_1', folderId: 'folder_abc' },
@@ -92,8 +100,8 @@ describe('RoomShell', () => {
     await input.trigger('keydown', { key: 'Enter' })
     await flushPromises()
 
-    expect(mockMutate).toHaveBeenCalled()
-    const arg = mockMutate.mock.calls[0]![0]
+    expect(mockRenameMutate).toHaveBeenCalled()
+    const arg = mockRenameMutate.mock.calls[0]![0]
     expect(arg.title).toBe('Renamed')
   })
 })
