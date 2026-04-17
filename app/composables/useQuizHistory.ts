@@ -9,6 +9,7 @@ export interface AttemptHistoryItem {
   status: string
   startedAt: number
   completedAt?: number
+  currentQuestionIndex?: number
 }
 
 export function useQuizHistory(_quizId: Ref<Id<'quizzes'> | null>) {

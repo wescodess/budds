@@ -15,7 +15,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   complete: [attemptId: Id<'quizAttempts'>]
-  abandon: []
+  quit: []
 }>()
 
 const submitAnswerMutation = import.meta.client
@@ -28,10 +28,6 @@ const submitAllMutation = import.meta.client
 
 const completeAttemptMutation = import.meta.client
   ? useConvexMutation(api.quizzes.completeAttempt)
-  : { mutate: async (_args: unknown): Promise<any> => null, isLoading: ref(false) }
-
-const abandonAttemptMutation = import.meta.client
-  ? useConvexMutation(api.quizzes.abandonAttempt)
   : { mutate: async (_args: unknown): Promise<any> => null, isLoading: ref(false) }
 
 const sequentialRef = ref<InstanceType<typeof QuizSequentialMode> | null>(null)
@@ -98,18 +94,17 @@ async function handleSubmitAll(answers: Array<{ questionId: string; userAnswer: 
   }
 }
 
-async function handleAbandon() {
-  await abandonAttemptMutation.mutate({ attemptId: props.attemptId })
-  emit('abandon')
+function handleQuit() {
+  emit('quit')
 }
 </script>
 
 <template>
   <div class="flex h-full flex-col">
     <div class="flex items-center gap-2 border-b p-3">
-      <UiButton variant="ghost" size="sm" @click="handleAbandon">
+      <UiButton variant="ghost" size="sm" @click="handleQuit">
         <ArrowLeft class="mr-1 h-3.5 w-3.5" />
-        Quit
+        Save & quit
       </UiButton>
     </div>
 

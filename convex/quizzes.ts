@@ -764,6 +764,7 @@ export const getQuizHistory = query({
       percentage: a.total > 0 ? Math.round((a.score / a.total) * 100) : 0,
       status: a.status ?? 'completed',
       startedAt: a.startedAt ?? a._creationTime,
+      currentQuestionIndex: a.currentQuestionIndex ?? 0,
       completedAt: a.completedAt,
     }))
   },

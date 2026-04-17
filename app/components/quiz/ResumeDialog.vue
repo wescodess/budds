@@ -32,13 +32,13 @@ function formatTime(ts: number) {
       <div v-if="attempt" class="space-y-4 py-4">
         <div class="flex items-center justify-between text-sm">
           <span class="text-muted-foreground">Progress</span>
-          <span>{{ attempt.score }} of {{ attempt.total }} answered</span>
+          <span>{{ attempt.currentQuestionIndex ?? 0 }} of {{ attempt.total }} answered</span>
         </div>
 
         <div class="h-2 w-full overflow-hidden rounded-full bg-muted">
           <div
             class="h-full rounded-full bg-primary transition-all"
-            :style="{ width: `${attempt.total > 0 ? (attempt.score / attempt.total) * 100 : 0}%` }"
+            :style="{ width: `${attempt.total > 0 ? ((attempt.currentQuestionIndex ?? 0) / attempt.total) * 100 : 0}%` }"
           />
         </div>
 
