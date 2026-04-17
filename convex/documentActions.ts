@@ -228,7 +228,7 @@ async function uploadToR2AndSync(
       userId: args.userId,
       documentId: args.documentId,
       folderId: String(args.folderId),
-      filename: args.filename,
+      filename: args.filename.replace(/[^\x20-\x7E]/g, ''),
     },
   }))
 
@@ -517,7 +517,7 @@ export const updateDocumentAiSearchMetadata = internalAction({
           userId: args.userId,
           documentId: args.documentId,
           folderId: args.folderId,
-          filename: args.filename,
+          filename: args.filename.replace(/[^\x20-\x7E]/g, ''),
         },
       }))
     } catch (error: unknown) {

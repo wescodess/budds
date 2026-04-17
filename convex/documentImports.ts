@@ -86,7 +86,7 @@ export const importDocumentFromUrl = action({
       const videoId = sourceUrl.searchParams.get('v')
         ?? sourceUrl.pathname.slice(1).split('/')[0]
         ?? 'video'
-      const filename = `YouTube — ${videoId}`
+      const filename = `YouTube - ${videoId}`
       const documentId: Id<'documents'> | undefined = await ctx.runMutation(api.documents.createDocumentFromSource, {
         folderId: args.folderId,
         filename,
