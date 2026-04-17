@@ -1,9 +1,8 @@
 <script setup lang="ts">
-import { refDebounced } from '@vueuse/core'
-import { Search, X } from 'lucide-vue-next'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 import type { ScopeFileSummary, ScopeFolderSummary, useReferenceScope } from '~/composables/useReferenceScope'
+import type { PickerFolder, PickerFile } from '~/components/global/DirectoryPicker.vue'
 
 const props = defineProps<{
   folderId: Id<'folders'>
@@ -21,51 +20,49 @@ const emit = defineEmits<{
 }>()
 
 const convex = useConvex()
-const expanded = ref<Set<string>>(new Set())
-const search = ref('')
-const searchInputRef = ref<HTMLInputElement | null>(null)
-
-const debouncedSearch = refDebounced(search, 140)
-const normalizedSearch = computed(() => debouncedSearch.value.trim().toLowerCase())
-const displaySearchTerm = computed(() => search.value.trim())
-const folderCountLabel = computed(() =>
-  `${props.scope.totalFolderCount.value} folder${props.scope.totalFolderCount.value === 1 ? '' : 's'}`,
-)
-const fileCountLabel = computed(() =>
-  `${props.scope.totalFileCount.value} file${props.scope.totalFileCount.value === 1 ? '' : 's'}`,
-)
+const pickerRef = ref<{ focusSearch: () => void } | null>(null)
 
 const { data: scopeInventory } = useConvexQuery(api.folders.searchScopeItems, computed(() => ({
   rootFolderId: props.folderId,
   search: '',
 })))
 
-const matchingFolders = computed(() => {
-  if (!normalizedSearch.value) return []
-  return (scopeInventory.value?.folders ?? [])
-    .filter(folder => folder.name.toLowerCase().includes(normalizedSearch.value))
-    .slice(0, 20)
-})
-const matchingFiles = computed(() => {
-  if (!normalizedSearch.value) return []
-  return (scopeInventory.value?.files ?? [])
-    .filter(file => file.filename.toLowerCase().includes(normalizedSearch.value))
-    .slice(0, 30)
-})
-const isSearching = computed(() => search.value.trim().length > 0)
-const hasSearchResults = computed(() => matchingFolders.value.length > 0 || matchingFiles.value.length > 0)
-const isDrawer = computed(() => props.presentation === 'drawer')
+const genericFolders = computed<PickerFolder[]>(() =>
+  (scopeInventory.value?.folders ?? []).map((f) => ({
+    id: f.id as unknown as string,
+    name: f.name,
+    parentId: undefined,
+    fileCount: f.descendantFileCount,
+  })),
+)
 
-function toggleExpand(id: Id<'folders'>) {
-  const key = id as unknown as string
-  const next = new Set(expanded.value)
-  if (next.has(key)) next.delete(key)
-  else next.add(key)
-  expanded.value = next
+const genericFiles = computed<PickerFile[]>(() =>
+  (scopeInventory.value?.files ?? []).map((f) => ({
+    id: f.id as unknown as string,
+    name: f.filename,
+    folderId: props.folderId as unknown as string,
+  })),
+)
+
+const selectedCount = computed(() => {
+  const folderCount = props.scope.totalFolderCount.value
+  const fileCount = props.scope.totalFileCount.value
+  return folderCount + fileCount
+})
+
+function isFileSelected(fileId: string): boolean {
+  return props.scope.isFileSelected(fileId as unknown as Id<'documents'>)
 }
 
-function focusSearch() {
-  nextTick(() => searchInputRef.value?.focus())
+function isFolderSelected(folderId: string): 'all' | 'some' | 'none' {
+  const folder = (scopeInventory.value?.folders ?? []).find(
+    (f) => (f.id as unknown as string) === folderId,
+  )
+  if (!folder) return 'none'
+  const state = props.scope.selectionStateForFolder(folder)
+  if (state === 'on') return 'all'
+  if (state === 'indeterminate') return 'some'
+  return 'none'
 }
 
 async function resolveFolderSelection(folder: ScopeFolderSummary) {
@@ -79,131 +76,56 @@ async function resolveFolderSelection(folder: ScopeFolderSummary) {
   } satisfies ScopeFolderSummary
 }
 
-async function handleFolderPick(folder: ScopeFolderSummary) {
+async function handleToggleFolder(folderId: string) {
+  const folder = (scopeInventory.value?.folders ?? []).find(
+    (f) => (f.id as unknown as string) === folderId,
+  )
+  if (!folder) return
   const selected = props.scope.toggleFolder(await resolveFolderSelection(folder))
   if (selected) emit('select', { kind: 'folder', id: folder.id, label: folder.name })
 }
 
-function handleFilePick(file: ScopeFileSummary) {
+function handleToggleFile(fileId: string) {
+  const file = (scopeInventory.value?.files ?? []).find(
+    (f) => (f.id as unknown as string) === fileId,
+  )
+  if (!file) return
   const selected = props.scope.toggleFile(file)
   if (selected) emit('select', { kind: 'file', id: file.id, label: file.filename })
+}
+
+function handleClear() {
+  props.scope.clear()
 }
 
 watch(
   () => props.autoFocusSearch,
   (next) => {
-    if (next) focusSearch()
+    if (next) pickerRef.value?.focusSearch()
   },
   { immediate: true },
 )
 
-defineExpose({ focusSearch })
+defineExpose({
+  focusSearch() {
+    pickerRef.value?.focusSearch()
+  },
+})
 </script>
 
 <template>
-  <div
-    data-testid="directory-picker"
-    :class="[
-      'flex flex-col overflow-hidden bg-card text-sm',
-      isDrawer
-        ? 'w-full rounded-none border-0 shadow-none'
-        : 'w-[360px] rounded-xl border shadow-lg',
-    ]"
-  >
-    <div class="flex items-center justify-between border-b px-4 py-3">
-      <div class="flex flex-col">
-        <span class="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          Directory
-        </span>
-        <span class="text-sm font-semibold">
-          {{ folderCountLabel }} • {{ fileCountLabel }}
-        </span>
-      </div>
-      <div class="flex items-center gap-2">
-        <button
-          v-if="props.scope.hasSelection.value"
-          type="button"
-          class="text-xs font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded px-1"
-          @click="props.scope.clear()"
-        >
-          Clear
-        </button>
-        <button
-          type="button"
-          aria-label="Close directory picker"
-          class="flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent/10 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          @click="emit('close')"
-        >
-          <X class="h-4 w-4" />
-        </button>
-      </div>
-    </div>
-
-    <div class="border-b px-3 py-2">
-      <label class="flex items-center gap-2 rounded-lg border bg-background px-3 py-1.5 focus-within:border-primary">
-        <Search class="h-4 w-4 text-muted-foreground" />
-        <input
-          ref="searchInputRef"
-          v-model="search"
-          type="search"
-          placeholder="Search this directory"
-          inputmode="search"
-          enterkeyhint="search"
-          autocapitalize="none"
-          autocorrect="off"
-          spellcheck="false"
-          autocomplete="off"
-          class="w-full bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
-        />
-      </label>
-    </div>
-
-    <div :class="[isDrawer ? 'max-h-[calc(var(--mobile-vh,100dvh)-14rem)]' : 'max-h-80', 'keyboard-scroll-area flex-1 overflow-y-auto py-1']">
-      <template v-if="isSearching">
-        <div v-if="matchingFolders.length > 0" class="px-2 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-          Folders
-        </div>
-        <ChatDirectoryPickerRow
-          v-for="folder in matchingFolders"
-          :key="`search-folder-${folder.id}`"
-          kind="folder"
-          :label="folder.name"
-          :badge="`${folder.descendantFileCount} file${folder.descendantFileCount === 1 ? '' : 's'}`"
-          :state="props.scope.selectionStateForFolder(folder)"
-          @toggle="handleFolderPick(folder)"
-        />
-
-        <div v-if="matchingFiles.length > 0" class="px-2 pb-1 pt-3 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-          Files
-        </div>
-        <ChatDirectoryPickerRow
-          v-for="file in matchingFiles"
-          :key="`search-file-${file.id}`"
-          kind="file"
-          :label="file.filename"
-          :state="props.scope.isFileSelected(file.id) ? 'on' : 'off'"
-          @toggle="handleFilePick(file)"
-        />
-
-        <div
-          v-if="!hasSearchResults"
-          class="px-4 py-6 text-center text-xs text-muted-foreground"
-        >
-          No files or folders matched "{{ displaySearchTerm }}".
-        </div>
-      </template>
-
-      <ChatDirectoryPickerBranch
-        v-else
-        :folder-id="props.folderId"
-        :depth="0"
-        :scope="props.scope"
-        :expanded="expanded"
-        :inherited-selected="false"
-        @toggle-expand="toggleExpand"
-        @pick-folder="handleFolderPick"
-        @pick-file="handleFilePick"
-      />
-    </div>
-  </div>
+  <GlobalDirectoryPicker
+    ref="pickerRef"
+    :folders="genericFolders"
+    :files="genericFiles"
+    :is-file-selected="isFileSelected"
+    :is-folder-selected="isFolderSelected"
+    :on-toggle-file="handleToggleFile"
+    :on-toggle-folder="handleToggleFolder"
+    :on-clear="handleClear"
+    :selected-count="selectedCount"
+    :search-placeholder="'Search this directory'"
+    :presentation="props.presentation"
+    @close="emit('close')"
+  />
 </template>
