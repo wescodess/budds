@@ -9,6 +9,10 @@ export default defineEventHandler(async (event) => {
     folderId: string
     model?: string
     questionCount?: number
+    topics?: string[]
+    questionTypes?: string[]
+    difficulty?: string
+    resourceIds?: string[]
   }>(event)
 
   if (!body?.folderId?.trim()) {
@@ -18,13 +22,17 @@ export default defineEventHandler(async (event) => {
   const requestedModel = body.model?.trim() || SERVER_DEFAULT_MODEL
   const model = isAllowedModel(requestedModel) ? requestedModel : SERVER_DEFAULT_MODEL
 
-  const questionCount = Math.min(Math.max(body.questionCount ?? 8, 3), 8)
+  const questionCount = Math.min(Math.max(body.questionCount ?? 8, 3), 50)
+
+  const searchQuery = body.topics && body.topics.length > 0
+    ? body.topics.join(', ')
+    : SEED_QUERY
 
   const searchResults = await searchDocuments({
-    query: SEED_QUERY,
+    query: searchQuery,
     userId,
     folderId: body.folderId,
-    max_num_results: 12,
+    max_num_results: Math.min(questionCount * 2, 20),
     score_threshold: 0.1,
   })
 
@@ -59,13 +67,18 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  const messages = buildQuizPrompt(chunks, { questionCount })
+  const messages = buildQuizPrompt(chunks, {
+    questionCount,
+    topics: body.topics,
+    questionTypes: body.questionTypes,
+    difficulty: body.difficulty,
+  })
 
   const completion = await generateCompletion({
     model,
     messages,
     temperature: 0.3,
-    max_tokens: 3000,
+    max_tokens: Math.max(3000, questionCount * 400),
   })
 
   const raw = completion.choices[0]?.message?.content ?? ''
@@ -87,6 +100,7 @@ export default defineEventHandler(async (event) => {
       type: q.type,
       options: q.options,
       correctAnswer: q.correctAnswer,
+      explanation: q.explanation,
       sourceDocumentId: attrs.documentId,
       sourceChunkContent: chunk.content,
       sourceFilename: attrs.filename ?? 'Unknown source',

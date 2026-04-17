@@ -306,7 +306,7 @@ describe('quizzes.submitAttempt', () => {
       ctx.db.query('quizAttempts').withIndex('by_quizId', (q) => q.eq('quizId', quizId)).collect(),
     )
     expect(attempts).toHaveLength(1)
-    expect(attempts[0]!.answers.every((a) => a.isCorrect)).toBe(true)
+    expect(attempts[0]!.answers!.every((a) => a.isCorrect)).toBe(true)
   })
 
   test('[P0] updates parent quizzes.score as rounded percentage + completedAt', async () => {
