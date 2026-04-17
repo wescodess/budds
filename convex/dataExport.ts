@@ -118,7 +118,7 @@ export const getDocumentDownloadUrl = query({
     const doc = await ctx.db.get(args.documentId)
     if (!doc || doc.userId !== userId) return null
 
-    const url = await ctx.storage.getUrl(doc.fileId)
+    const url = doc.fileId ? await ctx.storage.getUrl(doc.fileId) : null
     return { url, filename: doc.filename }
   },
 })
