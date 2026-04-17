@@ -9,6 +9,8 @@ export interface QuizSummary {
   score?: number
   completedAt?: number
   questionCount: number
+  latestAttemptStatus?: 'in_progress' | 'completed' | 'abandoned'
+  difficulty?: string
 }
 
 export function useQuizzes(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
@@ -29,15 +31,26 @@ export function useQuizzes(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
 
   const createQuizMutation = import.meta.client
     ? useConvexMutation(api.quizzes.createWithQuestions)
-    : {
-        mutate: async (_args: unknown): Promise<any> => null,
-        isLoading: ref(false),
-      }
+    : { mutate: async (_args: unknown): Promise<any> => null, isLoading: ref(false) }
+
+  const updateQuizMutation = import.meta.client
+    ? useConvexMutation(api.quizzes.updateQuiz)
+    : { mutate: async (_args: unknown): Promise<any> => null, isLoading: ref(false) }
+
+  const deleteQuizMutation = import.meta.client
+    ? useConvexMutation(api.quizzes.deleteQuiz)
+    : { mutate: async (_args: unknown): Promise<any> => null, isLoading: ref(false) }
 
   const generating = ref(false)
   const lastError = ref<string | null>(null)
 
-  async function generate(options: { model?: string; questionCount?: number } = {}) {
+  async function generate(options: {
+    model?: string
+    questionCount?: number
+    topics?: string[]
+    questionTypes?: string[]
+    difficulty?: string
+  } = {}) {
     if (generating.value) return
     generating.value = true
     lastError.value = null
@@ -49,25 +62,25 @@ export function useQuizzes(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
         questions: Array<{
           order: number
           question: string
-          type: 'multiple-choice' | 'free-response'
+          type: 'multiple-choice' | 'free-response' | 'true_false' | 'fill_in_the_blank'
           options?: string[]
           correctAnswer: string
+          explanation?: string
           sourceDocumentId?: string
-          sourceChunkContent: string
-          sourceFilename: string
+          sourceChunkContent?: string
+          sourceFilename?: string
         }>
       }>('/api/quiz/generate', {
         method: 'POST',
-        body: {
-          folderId: id.value,
-          ...options,
-        },
+        body: { folderId: id.value, ...options },
       })
 
       await createQuizMutation.mutate({
         folderId: id.value,
         title: generated.title,
         model: generated.model,
+        creationMethod: 'auto_generated' as const,
+        difficulty: options.difficulty,
         questions: generated.questions,
       })
     }
@@ -81,11 +94,21 @@ export function useQuizzes(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
     }
   }
 
+  async function updateQuiz(quizId: Id<'quizzes'>, patch: { title?: string; description?: string; difficulty?: string }) {
+    await updateQuizMutation.mutate({ quizId, ...patch })
+  }
+
+  async function deleteQuiz(quizId: Id<'quizzes'>) {
+    await deleteQuizMutation.mutate({ quizId })
+  }
+
   return {
     quizzes,
     hasIndexedDocuments,
     generating,
     lastError,
     generate,
+    updateQuiz,
+    deleteQuiz,
   }
 }
