@@ -128,6 +128,10 @@ async function onCreateVoid(payload: { type: VoidType; name?: string }) {
       activeTab.value = 'flashcards'
       const { conversationId: _dropC, ...rest } = route.query ?? {}
       await router.replace({ query: { ...rest, tab: 'flashcards', voidId: result.roomId } })
+    } else if (type === 'audio-overview') {
+      activeTab.value = 'audio-overview'
+      const { conversationId: _dropC, voidId: _dropV, ...rest } = route.query ?? {}
+      await router.replace({ query: { ...rest, tab: 'audio-overview' } })
     } else {
       activeTab.value = type
       await router.replace({ query: { ...(route.query ?? {}), tab: type } })
@@ -246,7 +250,7 @@ const showMoveDialog = computed({
   set: (val: boolean) => { if (!val) moveTargetIds.value = [] },
 })
 
-const allowedTabs = ['chat', 'flashcards', 'quiz', 'documents'] as const
+const allowedTabs = ['chat', 'flashcards', 'quiz', 'audio-overview', 'documents'] as const
 type TabValue = typeof allowedTabs[number]
 const initialTab = computed<TabValue>(() => {
   const t = route.query?.tab
@@ -281,6 +285,9 @@ const sourcePanelOpen = computed({
 })
 const sourcePanelSide = ref<'left' | 'right'>('right')
 const { activeCount: tasksActiveCount } = useTasks(folderId)
+const indexedDocumentCount = computed(() =>
+  (documents.value ?? []).filter(doc => doc.status === 'success').length,
+)
 const folderEditOpen = ref(false)
 const subfolderCreateOpen = ref(false)
 const activeCitationIndex = ref<number | null>(null)
@@ -812,6 +819,7 @@ async function handleImportLink(url: string) {
       v-model:open="newVoidOpen"
       :folder-name="folder?.name ?? ''"
       :submitting="creatingVoid"
+      :indexed-count="indexedDocumentCount"
       @create="onCreateVoid"
     />
 
@@ -821,6 +829,7 @@ async function handleImportLink(url: string) {
           <UiTabsTrigger value="chat">Chat</UiTabsTrigger>
           <UiTabsTrigger value="flashcards">Flash Cards</UiTabsTrigger>
           <UiTabsTrigger value="quiz">Quiz</UiTabsTrigger>
+          <UiTabsTrigger value="audio-overview">Audio Overview</UiTabsTrigger>
           <UiTabsTrigger value="documents">Documents</UiTabsTrigger>
         </UiTabsList>
 
@@ -1094,6 +1103,13 @@ async function handleImportLink(url: string) {
         <QuizTab
           :folder-id="folderId"
           :selected-quiz-id="activeTab === 'quiz' ? activeVoidId : null"
+          @generation-started="() => { if (isDesktop) helperMode = 'tasks' }"
+        />
+      </UiTabsContent>
+
+      <UiTabsContent value="audio-overview" class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <AudioOverviewShell
+          :folder-id="folderId"
           @generation-started="() => { if (isDesktop) helperMode = 'tasks' }"
         />
       </UiTabsContent>
