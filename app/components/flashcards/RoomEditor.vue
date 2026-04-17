@@ -290,7 +290,7 @@ async function submitAdd() {
               class="mt-2 flex min-w-0 items-start gap-2 text-xs text-muted-foreground"
             >
               <ChatCitationBadge :index="i + 1" :filename="card.metadata.source.filename" />
-              <span class="min-w-0 flex-1 wrap-break-word">{{ card.metadata.source.chunkContent }}</span>
+              <span class="min-w-0 flex-1 wrap-break-word line-clamp-4">{{ card.metadata.source.chunkContent }}</span>
             </div>
           </div>
           <div class="flex shrink-0 items-center gap-2">
