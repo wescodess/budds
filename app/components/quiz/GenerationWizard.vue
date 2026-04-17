@@ -9,7 +9,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:open': [value: boolean]
-  generated: []
+  generationStarted: []
 }>()
 
 const gen = useQuizGeneration(computed(() => props.folderId))
@@ -26,7 +26,7 @@ async function handleNextFromStep1() {
 async function handleGenerate() {
   try {
     await gen.generateQuiz()
-    emit('generated')
+    emit('generationStarted')
     const { toast } = await import('vue-sonner')
     toast.success('Generation started')
   }

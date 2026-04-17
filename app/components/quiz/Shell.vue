@@ -7,6 +7,10 @@ const props = defineProps<{
   selectedQuizId?: string | null
 }>()
 
+const emit = defineEmits<{
+  generationStarted: []
+}>()
+
 const { quizzes, hasIndexedDocuments } = useQuizzes(toRef(props, 'folderId'))
 
 const activeQuizId = ref<Id<'quizzes'> | null>(null)
@@ -97,7 +101,7 @@ function handleBack() {
       :open="wizardOpen"
       :folder-id="folderId"
       @update:open="wizardOpen = $event"
-      @generated="() => {}"
+      @generation-started="emit('generationStarted')"
     />
   </div>
 </template>
