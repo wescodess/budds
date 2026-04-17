@@ -56,45 +56,26 @@ describe('documentActions.updateDocumentAiSearchMetadata — AC: prerequisite', 
     vi.unstubAllGlobals()
   })
 
-  test('[P0] should call Cloudflare AI Search upsert endpoint with updated folderId', async () => {
+  test('[P0] should not throw when R2 copy fails (best-effort metadata update)', async () => {
     const t = convexTest(schema, modules)
     const asUser = t.withIdentity(TEST_IDENTITY)
     const { folderId, docId } = await setupSuccessDocument(t, asUser)
 
-    const fetchSpy = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ success: true }),
-    })
-    vi.stubGlobal('fetch', fetchSpy)
-
-    const newFolderId = await asUser.mutation(api.folders.createFolder, { name: 'Chemistry 202' })
-
-    await t.action(internal.documentActions.updateDocumentAiSearchMetadata, {
-      documentId: String(docId),
-      userId: TEST_IDENTITY.tokenIdentifier,
-      folderId: String(newFolderId),
-      filename: 'lecture.pdf',
-    })
-
-    expect(fetchSpy).toHaveBeenCalledOnce()
-    const [url, options] = fetchSpy.mock.calls[0]
-    expect(url).toContain('/ai-search/instances/')
-    expect(url).toContain('/documents/upsert')
-
-    const body = JSON.parse(options.body)
-    expect(body.documents[0].attributes.folderId).toBe(String(newFolderId))
+    await expect(
+      t.action(internal.documentActions.updateDocumentAiSearchMetadata, {
+        documentId: String(docId),
+        userId: TEST_IDENTITY.tokenIdentifier,
+        folderId: String(folderId),
+        filename: 'lecture.pdf',
+        r2Key: `${TEST_IDENTITY.tokenIdentifier}/${docId}.txt`,
+      }),
+    ).resolves.not.toThrow()
   })
 
-  test('[P0] should not throw when AI Search API returns an error', async () => {
+  test('[P0] should not throw when r2Key is missing', async () => {
     const t = convexTest(schema, modules)
     const asUser = t.withIdentity(TEST_IDENTITY)
     const { folderId, docId } = await setupSuccessDocument(t, asUser)
-
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: false,
-      status: 503,
-      text: () => Promise.resolve('Service Unavailable'),
-    }))
 
     await expect(
       t.action(internal.documentActions.updateDocumentAiSearchMetadata, {

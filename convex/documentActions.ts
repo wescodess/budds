@@ -3,7 +3,7 @@ import { v } from 'convex/values'
 import { internalAction, type ActionCtx } from './_generated/server'
 import { internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
-import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3'
+import { S3Client, PutObjectCommand, DeleteObjectCommand, CopyObjectCommand } from '@aws-sdk/client-s3'
 async function loadExtractors() {
   return await import('./sourceExtractors')
 }
@@ -472,53 +472,41 @@ export const updateDocumentAiSearchMetadata = internalAction({
     r2Key: v.optional(v.string()),
   },
   handler: async (_ctx, args) => {
-    const config = getAiSearchConfig()
-    if (!config) return
-
     const bucket = process.env.R2_BUCKET_NAME
-    let content: string | undefined
-
-    if (bucket && args.r2Key) {
-      try {
-        const r2 = getR2Client()
-        const obj = await r2.send(new GetObjectCommand({ Bucket: bucket, Key: args.r2Key }))
-        content = await obj.Body?.transformToString()
-      } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error)
-        console.error(`R2 read for metadata update failed: ${message}`)
-      }
-    }
-
-    const url = `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/ai-search/instances/${config.instance}/documents/upsert`
+    if (!bucket || !args.r2Key) return
 
     try {
-      const document: Record<string, unknown> = {
-        id: args.documentId,
-        attributes: {
+      const r2 = getR2Client()
+      await r2.send(new CopyObjectCommand({
+        Bucket: bucket,
+        CopySource: `${bucket}/${args.r2Key}`,
+        Key: args.r2Key,
+        MetadataDirective: 'REPLACE',
+        Metadata: {
           userId: args.userId,
           documentId: args.documentId,
           folderId: args.folderId,
           filename: args.filename,
         },
-      }
-      if (content) document.content = content
-
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${config.token}`,
-        },
-        body: JSON.stringify({ documents: [document] }),
-      })
-
-      if (!response.ok) {
-        const errorText = (await response.text()).slice(0, 500)
-        console.error(`AI Search metadata update failed (${response.status}): ${errorText}`)
-      }
+      }))
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error)
-      console.error(`AI Search metadata update error: ${message}`)
+      console.error(`R2 metadata update failed: ${message}`)
+      return
+    }
+
+    const config = getAiSearchConfig()
+    if (!config) return
+
+    try {
+      const jobsUrl = `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/ai-search/instances/${config.instance}/jobs`
+      await fetch(jobsUrl, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${config.token}` },
+      })
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.error(`AI Search sync trigger after metadata update failed: ${message}`)
     }
   },
 })
