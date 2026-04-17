@@ -150,10 +150,10 @@ async function handleSubmit() {
         </p>
       </div>
 
-      <div class="mt-5 space-y-4">
-        <div>
+      <div class="mt-5 min-w-0 space-y-4 overflow-hidden">
+        <div class="min-w-0">
           <UiLabel class="text-xs font-medium">Scope (optional)</UiLabel>
-          <div class="mt-1 overflow-hidden rounded-lg border border-border/60">
+          <div class="mt-1 min-w-0 overflow-hidden rounded-lg border border-border/60">
             <DirectoryPicker
               :folders="pickerFolders"
               :files="pickerFiles"
