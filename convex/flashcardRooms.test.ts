@@ -728,6 +728,32 @@ describe('flashcardRooms.restoreRoomVersion', () => {
     ).rejects.toThrow(/Version not found/)
   })
 
+  test('[P0] no-op when restoring currently active version — version count unchanged', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'A' })
+    const { roomId } = await asUser.mutation(api.flashcardRooms.createRoom, { folderId })
+
+    const { versionId } = await asUser.mutation(api.flashcardRooms.generateRoomCards, {
+      roomId,
+      origin: 'ai',
+      title: 'Gen 1',
+      cards: sampleCards(),
+    })
+
+    const versionsBefore = await asUser.query(api.flashcardRooms.listRoomVersions, { roomId })
+
+    const res = await asUser.mutation(api.flashcardRooms.restoreRoomVersion, {
+      roomId,
+      versionId,
+    })
+    expect(res.versionId).toBe(versionId)
+    expect(res.cardCount).toBe(2)
+
+    const versionsAfter = await asUser.query(api.flashcardRooms.listRoomVersions, { roomId })
+    expect(versionsAfter.length).toBe(versionsBefore.length)
+  })
+
   test('[P0] cross-user rejected', async () => {
     const t = convexTest(schema, modules)
     const asA = t.withIdentity(USER_A)

@@ -1,35 +1,20 @@
 version: 1
 mode: running
-current_phase: commit
-spec_slug: flashcard-room-refactor-phase-1
+current_phase: implement
+spec_slug: flashcard-room-p1-deferred-cleanup
 input_type: goal
 goal_or_spec: |
-  Refactor Budds flashcards from "folder-scoped generated set list" into a
-  persistent flashcard ROOM model fitting the void-native workspace.
-  Source: /Users/wesleyukadike/Desktop/budds/FLASHCARDSPLAN.md (committed at HEAD a4f7e77).
-
-  Phase 1 scope:
-  - Data: flashcardRooms, flashcardRoomCards, flashcardRoomVersions, flashcardVersionCards
-  - Migration: each legacy flashcardSet → flashcardRoom + initial history version
-  - Convex API: listRoomsByFolder, getRoom, createRoom, renameRoom, createCard,
-    updateCard, deleteCard, reorderCards, generateRoomCards, listRoomVersions,
-    restoreRoomVersion, deleteRoom
-  - UI: flashcard voidId routes to rooms, FolderShellRail lists rooms,
-    CreateVoidDialog creates empty room + routes, Tab becomes room shell with
-    editor/practice mode switch + inline rename + sticky dock + history
-    entrypoint + AI generation modal.
-  - Editor mode: editable vertical list, add/delete/drag-reorder with
-    optimistic UI + rollback, auto-create empty card on first entry.
-  - Practice mode: flip, prev/next, shuffle, reset-flip on navigation.
-  - History: secondary surface inside room; restore replaces current cards
-    after confirm; entries immutable.
-
-  Deferred: SM-2/SRS dashboard, standalone practice route, study-guide flashcards.
-is_ui: true
+  Flashcard room Phase 1 deferred cleanup:
+  (1) Extract ChatDirectoryPicker into app/components/global/ so RoomGenerateDialog can reuse it.
+  (2) Remove legacy createSetWithCards from convex/flashcards.ts — rewrite accountDeletion.test.ts + dataExport.test.ts to seed rooms directly.
+  (3) Short-circuit restoreRoomVersion when target version === active version (no-op restore creates duplicate).
+  (4) Fix SSR stub roomId:'' landmine in useFlashcardRooms — throw on SSR calls or wrap with ClientOnly.
+  (5) Key RoomShell test mockMutate on apiRef to discriminate rename/delete/restore.
+  (6) Add component test for RoomEditor reorder rollback + toast on mutation failure.
+is_ui: false
 review_rounds: 0
-branch: feat/flashcard-room-refactor-phase-1
+branch: null
 pr_url: null
-baseline_commit: a4f7e7743bde8900b7408db254a3c7aaf2dea0c1
 paths:
   project_root: /Users/wesleyukadike/Desktop/budds
   artifacts_dir: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts
@@ -38,119 +23,34 @@ paths:
   deferred_work: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts/deferred-work.md
   design_cache: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts/design-screens
 design:
-  approved: true
-  approved_at: 2026-04-16
-  stitch_project_id: "2926819289448574055"
+  approved: false
+  approved_at: null
+  stitch_project_id: null
   reference_screenshot: null
-  screens:
-    - id: d759bc3b6641432ea326274f0a7fc2c0
-      label: flashcard-room-empty
-      stitch_title: "Budds Flashcard Room - Empty State"
-      a11y_score: 100
-      notes: "full-screen void, inline-editable title, Editor|Practice pill (Editor selected), empty illustration + dual CTA (Add first card / Generate with AI), sticky dock with disabled Add card + primary Generate. warm-focus palette."
-    - id: 346d5b2607574395813a4b38f7c0f6ab
-      label: flashcard-room-editor
-      stitch_title: "Organic Chem Cards Editor"
-      a11y_score: 100
-      notes: "populated editor: 5 rows with drag handles, term/definition, citation chip, row menu. Shows drag-in-progress ghost + amber drop indicator + unsaved amber dot on one row. Sticky dock: + Add card / count / Generate."
-    - id: 7a2e9fa6d4274b42b22d3af8e7a10a49
-      label: flashcard-room-practice
-      stitch_title: "Organic Chem Cards - Practice Mode"
-      a11y_score: 100
-      notes: "hero centered flashcard showing term, tap-to-flip hint + space keycap chip, progress bar + 4/12 counter, prev/next arrows, shuffle + reset icon buttons. Dock collapsed to exit-practice strip."
-    - id: 45f1754485504d30bf939e9fb46ba407
-      label: flashcard-room-ai-modal
-      stitch_title: "Generate Flashcards Modal"
-      a11y_score: 85
-      notes: "modal w/ source picker (G4 directory-picker pattern reused — checkboxes, count pills, indeterminate), prompt textarea, card count input+slider, amber-tinted warning banner about archiving current cards. Generic form-label warning tracked as impl AC."
-    - id: ebce5f61aae14b688503a7f779525c8b
-      label: flashcard-room-history
-      stitch_title: "Flashcard History Panel"
-      a11y_score: 100
-      notes: "right-side slide-over over dimmed room. Entries: Current (amber left border + Current chip, disabled Restore), expanded version with inline Term|Definition preview table + primary Restore, plus older AI generation collapsed. Dimmed editor behind panel."
-    - id: 57dc79c94c8a4cd3b014702a490a28e3
-      label: folder-shell-rail-flashcard-rooms
-      stitch_title: "Budds - Folder Sidebar Rail Excerpt"
-      a11y_score: 95
-      notes: "rail showing active folder expanded + Voids section with mixed types: 4 flashcard rooms, 1 chat, 1 quiz. Active flashcard room has amber 2px left border + 8% amber bg tint + type badge 'Flash Cards'. +New void ghost button. No-H1 warning expected for rail-only excerpt."
-    - id: c7da07dbc1d7463aa93a336f43bcaa3c
-      label: create-void-dialog-flashcards
-      stitch_title: "Create Void Modal - Flashcards"
-      a11y_score: 85
-      notes: "type picker 4-tile row (Chat|Flashcards SELECTED|Quiz|Study guide) w/ amber 2px border on selection, name input with visible amber focus, helper text explaining 'persistent study space', primary 'Create room' button. Generic form-label warning tracked as impl AC."
+  screens: []
 escalation:
   pending: null
-  log:
-    - question: "Spec exceeds 1600-token soft cap (~3,200-3,500 tokens). Keep as one spec, or split?"
-      answer: keep
-      recommended_default: keep
-      followed_default: true
-      asked_at: 2026-04-16
-      answered_at: 2026-04-16
-      raised_from_state: spec
-    - question: "Approve the 7 proposed screens for flashcard-room-refactor-phase-1"
-      answer: approve
-      recommended_default: request_revision
-      followed_default: false
-      asked_at: 2026-04-16
-      answered_at: 2026-04-16
-      raised_from_state: design
+  log: []
 decisions_log: []
 run_log:
   - ts: 2026-04-16
     event: start
-    detail: "Flashcard room refactor (Phase 1) kicked off from FLASHCARDSPLAN.md; is_ui=true → entering design"
+    detail: "Deferred cleanup from flashcard-room-refactor-phase-1; is_ui=false → skipping design"
   - ts: 2026-04-16
     event: intake_complete
-    detail: "slug=flashcard-room-refactor-phase-1, input_type=goal (plan doc provides intent but lacks spec frontmatter), is_ui=true. Scope: data model + migration + 12 Convex endpoints + 3 UI surfaces (rail/dialog/room-shell) + editor/practice/history modes."
+    detail: "slug=flashcard-room-p1-deferred-cleanup, input_type=goal, is_ui=false. 6 tasks: directory-picker extraction, legacy removal, restore no-op guard, SSR stub fix, test mock keying, reorder rollback test."
   - ts: 2026-04-16
     event: phase_transition
-    detail: "intake → design"
-  - ts: 2026-04-16
-    event: design_screens_generated
-    detail: "7 screens batched via batch_generate_screens on project 2926819289448574055. A11y: 5×100, 1×95 (rail — no H1 expected for excerpt), 2×85 (form-label warning — impl AC per G4 precedent). No drift to 'Nocturne' or other off-brand terms; all screens branded Budds Warm Focus."
-  - ts: 2026-04-16
-    event: escalation_raised
-    detail: "DESIGN approval (no auto-resolve per feedback_design_first.md). State=escalated."
-  - ts: 2026-04-16
-    event: mode_transition
-    detail: "running → escalated"
-  - ts: 2026-04-16
-    event: design_approved
-    detail: "User approved all 7 screens. Advancing to clarify."
+    detail: "intake → clarify"
   - ts: 2026-04-16
     event: clarify_complete
-    detail: "All ambiguities auto-resolved tier-1 from plan + project patterns. Field names: term/definition/displayOrder/metadata. Migration: additive (no legacy drop in P1), via @convex-dev/migrations. activeVersionId tracks current-matches-version state (clear on manual mutation, set on generate/restore). restoreRoomVersion archives-then-restores. generateRoomCards on empty room skips archive. reorderCards takes order array. Empty-card: client-side empty state, no ghost DB rows. Legacy tables tombstoned (no drop), exports marked deprecated. Route=plan-code-review. Spec slug: flashcard-room-refactor-phase-1."
-  - ts: 2026-04-16
-    event: phase_transition
-    detail: "clarify → spec"
+    detail: "All 6 tasks clearly defined from deferred-work.md. No ambiguity. Tree clean."
   - ts: 2026-04-16
     event: spec_written
-    detail: "spec-flashcard-room-refactor-phase-1.md drafted (status: ready-for-dev). 12 Convex endpoints + 4 new tables + migration + 8+ UI components. 20 I/O matrix rows, 8 ACs. Exceeds 1600-token soft cap (~3.2-3.5k tokens est) due to cross-layer refactor scope."
-  - ts: 2026-04-16
-    event: escalation_raised
-    detail: "Token-count split decision (step-02). Recommended default: keep. Auto-resolve in 120s."
-  - ts: 2026-04-16
-    event: mode_transition
-    detail: "running → escalated"
-  - ts: 2026-04-16
-    event: spec_keep_decided
-    detail: "User chose keep. Single spec proceeding."
+    detail: "spec-flashcard-room-p1-deferred-cleanup.md (~1100 tokens). Under cap."
   - ts: 2026-04-16
     event: phase_transition
-    detail: "spec → implement"
-  - ts: 2026-04-16
-    event: branch_created
-    detail: "feat/flashcard-room-refactor-phase-1 branched from a4f7e774"
-  - ts: 2026-04-16
-    event: implement_complete
-    detail: "Subagent delivered: 16 created (Room*.vue x6, useFlashcardRooms, flashcardRooms.ts+test, migrations.ts+test, 5 room-* tests, RoomGenerateDialog), 10 modified (schema, Tab, Rail, CreateVoidDialog, folders/[id], accountDeletion, flashcards.ts, _generated/api.d.ts, 2 test files), 7 deleted (Editor.vue, Study.vue, useFlashcards.ts, flashcards.test.ts, 3 old test files) + .output/ build artifacts untracked. Tier-1 deferrals logged in deferred-work.md: (1) directory-picker NOT extracted into RoomGenerateDialog — folder-level scope used instead; (2) createSetWithCards kept in legacy flashcards.ts to satisfy accountDeletion + dataExport tests."
-  - ts: 2026-04-16
-    event: checks_complete
-    detail: "pnpm test: 310 pass / 1 pre-existing failure (users.test.ts nuxt.config). pnpm test:component: 187 pass / 19 pre-existing failures / 0 new regressions. All new flashcardRooms + migrations + room-* test suites green (33 convex + 32 component). Baseline confirmed via stash-pop on 2 representative failing test files — both fail identically on baseline."
-  - ts: 2026-04-16
-    event: phase_transition
-    detail: "implement → checks → review"
+    detail: "clarify → spec → implement"
 config:
   notifications:
     telegram:
