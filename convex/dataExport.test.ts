@@ -95,36 +95,36 @@ describe('dataExport.collectUserData', () => {
     expect(result.quizAttempts).toEqual([])
     expect(result.flashcardSets).toEqual([])
     expect(result.flashcards).toEqual([])
+    expect(result.flashcardRooms).toEqual([])
+    expect(result.flashcardRoomCards).toEqual([])
+    expect(result.flashcardRoomVersions).toEqual([])
+    expect(result.flashcardVersionCards).toEqual([])
   })
 
-  test('returns flashcardSets + flashcards scoped to the caller (Story 7.1)', async () => {
+  test('returns flashcardRooms + roomCards scoped to the caller', async () => {
     const t = convexTest(schema, modules)
     const a = await seedUser(t, USER_A)
     const b = await seedUser(t, USER_B)
 
-    const cards = [
-      { order: 0, front: 'F1', back: 'B1', sourceChunkContent: 'c1', sourceFilename: 'f.pdf' },
-      { order: 1, front: 'F2', back: 'B2', sourceChunkContent: 'c2', sourceFilename: 'f.pdf' },
-    ]
-
-    await a.asUser.mutation(api.flashcards.createSetWithCards, {
+    const { roomId: aRoom } = await a.asUser.mutation(api.flashcardRooms.createRoom, {
       folderId: a.folderId,
-      title: 'Alice Set',
-      cards,
+      title: 'Alice Room',
     })
-    await b.asUser.mutation(api.flashcards.createSetWithCards, {
+    await a.asUser.mutation(api.flashcardRooms.createCard, { roomId: aRoom, term: 'F1', definition: 'B1' })
+    await a.asUser.mutation(api.flashcardRooms.createCard, { roomId: aRoom, term: 'F2', definition: 'B2' })
+
+    const { roomId: bRoom } = await b.asUser.mutation(api.flashcardRooms.createRoom, {
       folderId: b.folderId,
-      title: 'Bob Set',
-      cards,
+      title: 'Bob Room',
     })
+    await b.asUser.mutation(api.flashcardRooms.createCard, { roomId: bRoom, term: 'F1', definition: 'B1' })
 
     const result = await a.asUser.query(api.dataExport.collectUserData, {})
 
-    expect(result.flashcardSets).toHaveLength(1)
-    expect(result.flashcardSets[0]!.title).toBe('Alice Set')
-    expect(result.flashcardSets.every((s: any) => s.userId === USER_A.tokenIdentifier)).toBe(true)
-    expect(result.flashcards).toHaveLength(2)
-    expect(result.flashcards.every((c: any) => c.userId === USER_A.tokenIdentifier)).toBe(true)
+    expect(result.flashcardRooms).toHaveLength(1)
+    expect(result.flashcardRooms[0]!.title).toBe('Alice Room')
+    expect(result.flashcardRoomCards).toHaveLength(2)
+    expect(result.flashcardRoomCards.every((c: any) => c.userId === USER_A.tokenIdentifier)).toBe(true)
   })
 
   test('returns quizzes + quizQuestions scoped to the caller', async () => {
@@ -218,6 +218,40 @@ describe('dataExport.collectUserData', () => {
 
     expect(result.quizAttempts).toHaveLength(1)
     expect(result.quizAttempts.every((a: any) => a.userId === USER_A.tokenIdentifier)).toBe(true)
+  })
+
+  test('returns flashcardRooms + roomCards + versions + versionCards scoped to the caller', async () => {
+    const t = convexTest(schema, modules)
+    const a = await seedUser(t, USER_A)
+    const b = await seedUser(t, USER_B)
+
+    const { roomId } = await a.asUser.mutation(api.flashcardRooms.createRoom, {
+      folderId: a.folderId,
+      title: 'Alice Room',
+    })
+    await a.asUser.mutation(api.flashcardRooms.generateRoomCards, {
+      roomId,
+      origin: 'ai',
+      title: 'Gen',
+      cards: [
+        { term: 'T1', definition: 'D1', metadata: { source: { filename: 'f.pdf', chunkContent: 'c' } } },
+      ],
+    })
+
+    const { roomId: bRoom } = await b.asUser.mutation(api.flashcardRooms.createRoom, {
+      folderId: b.folderId,
+      title: 'Bob Room',
+    })
+    await b.asUser.mutation(api.flashcardRooms.createCard, {
+      roomId: bRoom, term: 'BT', definition: 'BD',
+    })
+
+    const result = await a.asUser.query(api.dataExport.collectUserData, {})
+    expect(result.flashcardRooms).toHaveLength(1)
+    expect(result.flashcardRoomCards).toHaveLength(1)
+    expect(result.flashcardRoomVersions).toHaveLength(1)
+    expect(result.flashcardVersionCards).toHaveLength(1)
+    expect(result.flashcardRooms[0]!.title).toBe('Alice Room')
   })
 
   test('returned rows contain expected fields', async () => {

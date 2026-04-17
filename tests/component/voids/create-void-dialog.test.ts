@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import CreateVoidDialog from '~/components/voids/CreateVoidDialog.vue'
 
@@ -7,6 +7,10 @@ describe('CreateVoidDialog', () => {
     open: true,
     folderName: 'Operating Systems',
   }
+
+  beforeEach(() => {
+    document.body.innerHTML = ''
+  })
 
   it('renders title with folder name and all three void types', async () => {
     const w = await mountSuspended(CreateVoidDialog, { props: baseProps, attachTo: document.body })
@@ -31,15 +35,34 @@ describe('CreateVoidDialog', () => {
     w.unmount()
   })
 
-  it('emits create with selected type', async () => {
+  it('emits create with { type, name? } payload', async () => {
     const w = await mountSuspended(CreateVoidDialog, { props: baseProps, attachTo: document.body })
     document.body.querySelector<HTMLButtonElement>('[data-testid="void-type-quiz"]')?.click()
     await w.vm.$nextTick()
+
+    const nameInput = document.body.querySelector<HTMLInputElement>('[data-testid="create-void-name"]')
+    expect(nameInput).not.toBeNull()
+    nameInput!.value = '  My Quiz  '
+    nameInput!.dispatchEvent(new Event('input', { bubbles: true }))
+    await w.vm.$nextTick()
+
     document.body.querySelector<HTMLButtonElement>('[data-testid="create-void-submit"]')?.click()
     await w.vm.$nextTick()
 
     expect(w.emitted('create')).toBeTruthy()
-    expect(w.emitted('create')?.[0]).toEqual(['quiz'])
+    expect(w.emitted('create')?.[0]).toEqual([{ type: 'quiz', name: 'My Quiz' }])
+    w.unmount()
+  })
+
+  it('emits create with undefined name when input is blank', async () => {
+    const w = await mountSuspended(CreateVoidDialog, { props: baseProps, attachTo: document.body })
+    document.body.querySelector<HTMLButtonElement>('[data-testid="void-type-flashcards"]')?.click()
+    await w.vm.$nextTick()
+
+    document.body.querySelector<HTMLButtonElement>('[data-testid="create-void-submit"]')?.click()
+    await w.vm.$nextTick()
+
+    expect(w.emitted('create')?.[0]).toEqual([{ type: 'flashcards', name: undefined }])
     w.unmount()
   })
 

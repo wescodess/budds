@@ -1046,10 +1046,11 @@ describe('folders.searchScopeItems', () => {
       search: '',
     })
 
-    expect(result.folders).toHaveLength(1)
-    expect(result.folders[0]!.name).toBe('Week 1')
-    expect(result.folders[0]!.descendantFileCount).toBe(1)
-    expect(result.files.map(file => file.filename)).toEqual(['overview.pdf', 'lecture-1.pdf'])
+    expect(result.folders).toHaveLength(2)
+    expect(result.folders[0]!.name).toBe('Root')
+    expect(result.folders[1]!.name).toBe('Week 1')
+    expect(result.folders[1]!.descendantFileCount).toBe(1)
+    expect(result.files.map((file: any) => file.filename)).toEqual(['overview.pdf', 'lecture-1.pdf'])
   })
 })
 

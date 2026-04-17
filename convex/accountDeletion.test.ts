@@ -114,7 +114,7 @@ describe('accountDeletion.deleteAccountCascade', () => {
 
     await seedUserData(t, asUser, TEST_IDENTITY)
 
-    await asUser.mutation(internal.accountDeletion.deleteAccountCascade, {})
+    await asUser.mutation(internal.accountDeletion.deleteCurrentUser, {})
 
     const counts = await t.run(async (ctx) => ({
       folders: (await ctx.db.query('folders').collect()).filter((r) => r.userId === TEST_IDENTITY.tokenIdentifier).length,
@@ -135,7 +135,7 @@ describe('accountDeletion.deleteAccountCascade', () => {
     await seedUserData(t, asUserA, TEST_IDENTITY)
     await seedUserData(t, asUserB, OTHER_IDENTITY)
 
-    await asUserA.mutation(internal.accountDeletion.deleteAccountCascade, {})
+    await asUserA.mutation(internal.accountDeletion.deleteCurrentUser, {})
 
     const bFolders = await asUserB.query(api.folders.listAllFolders, {})
     expect(bFolders.length).toBeGreaterThan(0)
@@ -155,7 +155,7 @@ describe('accountDeletion.deleteAccountCascade', () => {
 
     await seedUserData(t, asUser, TEST_IDENTITY)
 
-    await asUser.mutation(internal.accountDeletion.deleteAccountCascade, {})
+    await asUser.mutation(internal.accountDeletion.deleteCurrentUser, {})
 
     const rows = await t.run(async (ctx) => {
       return await ctx.db
@@ -177,7 +177,7 @@ describe('accountDeletion.deleteAccountCascade', () => {
   test('[P0] should reject unauthenticated caller', async () => {
     const t = convexTest(schema, modules)
     await expect(
-      t.mutation(internal.accountDeletion.deleteAccountCascade, {}),
+      t.mutation(internal.accountDeletion.deleteCurrentUser, {}),
     ).rejects.toThrow()
   })
 
@@ -193,7 +193,7 @@ describe('accountDeletion.deleteAccountCascade', () => {
       return [a?.fileId, b?.fileId]
     })
 
-    await asUser.mutation(internal.accountDeletion.deleteAccountCascade, {})
+    await asUser.mutation(internal.accountDeletion.deleteCurrentUser, {})
 
     const afterExists = await t.run(async (ctx) => {
       return await Promise.all(
@@ -242,7 +242,7 @@ describe('accountDeletion.deleteAccountCascade', () => {
       questions: sharedQuestions,
     })
 
-    await asUserA.mutation(internal.accountDeletion.deleteAccountCascade, {})
+    await asUserA.mutation(internal.accountDeletion.deleteCurrentUser, {})
 
     const aQuizzes = await t.run(async (ctx) => {
       return (await ctx.db.query('quizzes').collect()).filter(
@@ -317,7 +317,7 @@ describe('accountDeletion.deleteAccountCascade', () => {
       answers: [{ questionId: bQuestions[0]!._id, response: 'A' }],
     })
 
-    await asUserA.mutation(internal.accountDeletion.deleteAccountCascade, {})
+    await asUserA.mutation(internal.accountDeletion.deleteCurrentUser, {})
 
     const aAttempts = await t.run(async (ctx) => {
       return (await ctx.db.query('quizAttempts').collect()).filter(
@@ -334,7 +334,7 @@ describe('accountDeletion.deleteAccountCascade', () => {
     expect(bAttempts).toHaveLength(1)
   })
 
-  test('[P0] should remove caller\'s flashcardSets + flashcards, leaving another user\'s untouched (Story 7.1)', async () => {
+  test('[P0] should remove caller\'s flashcardRooms + cards, leaving another user\'s untouched', async () => {
     const t = convexTest(schema, modules)
     const asUserA = t.withIdentity(TEST_IDENTITY)
     const asUserB = t.withIdentity(OTHER_IDENTITY)
@@ -342,49 +342,84 @@ describe('accountDeletion.deleteAccountCascade', () => {
     const folderA = await asUserA.mutation(api.folders.createFolder, { name: 'A folder' })
     const folderB = await asUserB.mutation(api.folders.createFolder, { name: 'B folder' })
 
-    const cards = [
-      { order: 0, front: 'F1', back: 'B1', sourceChunkContent: 'src', sourceFilename: 'f.pdf' },
-      { order: 1, front: 'F2', back: 'B2', sourceChunkContent: 'src', sourceFilename: 'f.pdf' },
-    ]
+    const { roomId: aRoom } = await asUserA.mutation(api.flashcardRooms.createRoom, { folderId: folderA, title: 'A Room' })
+    await asUserA.mutation(api.flashcardRooms.createCard, { roomId: aRoom, term: 'F1', definition: 'B1' })
+    await asUserA.mutation(api.flashcardRooms.createCard, { roomId: aRoom, term: 'F2', definition: 'B2' })
 
-    const aResult = await asUserA.mutation(api.flashcards.createSetWithCards, {
-      folderId: folderA,
-      title: 'A Set',
-      cards,
-    })
-    const bResult = await asUserB.mutation(api.flashcards.createSetWithCards, {
-      folderId: folderB,
-      title: 'B Set',
-      cards,
-    })
+    const { roomId: bRoom } = await asUserB.mutation(api.flashcardRooms.createRoom, { folderId: folderB, title: 'B Room' })
+    await asUserB.mutation(api.flashcardRooms.createCard, { roomId: bRoom, term: 'F1', definition: 'B1' })
+    await asUserB.mutation(api.flashcardRooms.createCard, { roomId: bRoom, term: 'F2', definition: 'B2' })
 
-    await asUserA.mutation(internal.accountDeletion.deleteAccountCascade, {})
+    await asUserA.mutation(internal.accountDeletion.deleteCurrentUser, {})
 
-    const aSets = await t.run(async (ctx) => {
-      return (await ctx.db.query('flashcardSets').collect()).filter(
+    const aRooms = await t.run(async (ctx) => {
+      return (await ctx.db.query('flashcardRooms').collect()).filter(
         (r) => r.userId === TEST_IDENTITY.tokenIdentifier,
       )
     })
     const aCards = await t.run(async (ctx) => {
-      return (await ctx.db.query('flashcards').collect()).filter(
+      return (await ctx.db.query('flashcardRoomCards').collect()).filter(
         (r) => r.userId === TEST_IDENTITY.tokenIdentifier,
       )
     })
-    expect(aSets).toHaveLength(0)
+    expect(aRooms).toHaveLength(0)
     expect(aCards).toHaveLength(0)
 
-    const bSets = await t.run(async (ctx) => {
-      return (await ctx.db.query('flashcardSets').collect()).filter(
+    const bRooms = await t.run(async (ctx) => {
+      return (await ctx.db.query('flashcardRooms').collect()).filter(
         (r) => r.userId === OTHER_IDENTITY.tokenIdentifier,
       )
     })
     const bCards = await t.run(async (ctx) => {
-      return (await ctx.db.query('flashcards').collect()).filter(
+      return (await ctx.db.query('flashcardRoomCards').collect()).filter(
         (r) => r.userId === OTHER_IDENTITY.tokenIdentifier,
       )
     })
-    expect(bSets.map((r) => r._id)).toContain(bResult.setId)
+    expect(bRooms.map((r) => r._id)).toContain(bRoom)
     expect(bCards).toHaveLength(2)
+  })
+
+  test('[P0] cascade deletes rows from all four flashcardRoom* tables', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'FC' })
+    const { roomId } = await asUser.mutation(api.flashcardRooms.createRoom, { folderId })
+    await asUser.mutation(api.flashcardRooms.generateRoomCards, {
+      roomId,
+      origin: 'ai',
+      title: 'Gen',
+      cards: [
+        { term: 'T', definition: 'D', metadata: { source: { filename: 'f.pdf', chunkContent: 'c' } } },
+      ],
+    })
+
+    await asUser.mutation(internal.accountDeletion.deleteCurrentUser, {})
+
+    const counts = await t.run(async (ctx) => ({
+      rooms: (await ctx.db.query('flashcardRooms').collect()).filter((r) => r.userId === TEST_IDENTITY.tokenIdentifier).length,
+      roomCards: (await ctx.db.query('flashcardRoomCards').collect()).filter((r) => r.userId === TEST_IDENTITY.tokenIdentifier).length,
+      versions: (await ctx.db.query('flashcardRoomVersions').collect()).filter((r) => r.userId === TEST_IDENTITY.tokenIdentifier).length,
+      versionCards: (await ctx.db.query('flashcardVersionCards').collect()).filter((r) => r.userId === TEST_IDENTITY.tokenIdentifier).length,
+    }))
+    expect(counts).toEqual({ rooms: 0, roomCards: 0, versions: 0, versionCards: 0 })
+  })
+
+  test('[P0] internal deleteAccountCascade accepts userId arg directly', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'FC' })
+    await asUser.mutation(api.flashcardRooms.createRoom, { folderId })
+
+    await t.mutation(internal.accountDeletion.deleteAccountCascade, {
+      userId: TEST_IDENTITY.tokenIdentifier,
+    })
+
+    const rooms = await t.run(async (ctx) =>
+      (await ctx.db.query('flashcardRooms').collect()).filter(
+        (r) => r.userId === TEST_IDENTITY.tokenIdentifier,
+      ),
+    )
+    expect(rooms).toHaveLength(0)
   })
 
   test('[P1] post-cascade queries return empty for the caller', async () => {
@@ -393,7 +428,7 @@ describe('accountDeletion.deleteAccountCascade', () => {
 
     const { folderId, convoId } = await seedUserData(t, asUser, TEST_IDENTITY)
 
-    await asUser.mutation(internal.accountDeletion.deleteAccountCascade, {})
+    await asUser.mutation(internal.accountDeletion.deleteCurrentUser, {})
 
     expect(await asUser.query(api.folders.listAllFolders, {})).toEqual([])
     expect(await asUser.query(api.conversations.listRecentForUser, {})).toEqual([])
