@@ -42,7 +42,7 @@ export const createAuth = (ctx: GenericCtx<DataModel>) => {
         enabled: true,
         beforeDelete: async () => {
           if ('runMutation' in ctx && typeof ctx.runMutation === 'function') {
-            await ctx.runMutation(internal.accountDeletion.deleteAccountCascade, {})
+            await ctx.runMutation(internal.accountDeletion.deleteCurrentUser, {})
           }
         },
       },

@@ -125,9 +125,11 @@ export default defineSchema({
     folderId: v.id('folders'),
     title: v.string(),
     updatedAt: v.number(),
-    cardCount: v.number(),
+    cardCount: v.optional(v.number()),
+    currentCardCount: v.optional(v.number()),
     activeVersionId: v.optional(v.id('flashcardRoomVersions')),
     migratedFromSetId: v.optional(v.id('flashcardSets')),
+    legacySetId: v.optional(v.id('flashcardSets')),
     legacyCreatedAt: v.optional(v.number()),
   })
     .index('by_userId', ['userId'])
@@ -149,8 +151,14 @@ export default defineSchema({
             chunkContent: v.string(),
           }),
         ),
+        model: v.optional(v.string()),
+        origin: v.optional(v.string()),
       }),
     ),
+    sourceDocumentId: v.optional(v.id('documents')),
+    sourceChunkContent: v.optional(v.string()),
+    sourceFilename: v.optional(v.string()),
+    updatedAt: v.optional(v.number()),
   })
     .index('by_roomId', ['roomId'])
     .index('by_roomId_and_displayOrder', ['roomId', 'displayOrder'])
@@ -160,11 +168,12 @@ export default defineSchema({
     roomId: v.id('flashcardRooms'),
     userId: v.string(),
     title: v.string(),
-    origin: v.union(v.literal('ai'), v.literal('manual')),
+    origin: v.string(),
     prompt: v.optional(v.string()),
     requestedCardCount: v.optional(v.number()),
-    cardCount: v.number(),
+    cardCount: v.optional(v.number()),
     model: v.optional(v.string()),
+    createdAt: v.optional(v.number()),
   })
     .index('by_roomId', ['roomId'])
     .index('by_userId', ['userId']),
@@ -185,8 +194,14 @@ export default defineSchema({
             chunkContent: v.string(),
           }),
         ),
+        model: v.optional(v.string()),
+        origin: v.optional(v.string()),
       }),
     ),
+    sourceDocumentId: v.optional(v.id('documents')),
+    sourceChunkContent: v.optional(v.string()),
+    sourceFilename: v.optional(v.string()),
+    updatedAt: v.optional(v.number()),
   })
     .index('by_versionId', ['versionId'])
     .index('by_roomId', ['roomId'])
