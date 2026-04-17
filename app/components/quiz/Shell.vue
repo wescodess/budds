@@ -12,8 +12,10 @@ const { quizzes, hasIndexedDocuments } = useQuizzes(toRef(props, 'folderId'))
 const activeQuizId = ref<Id<'quizzes'> | null>(null)
 const wizardOpen = ref(false)
 
-watch(() => props.selectedQuizId, (next) => {
-  if (next) activeQuizId.value = next as Id<'quizzes'>
+watch([() => props.selectedQuizId, quizzes], ([next, list]) => {
+  if (!next) return
+  const isQuiz = list.some(q => (q._id as string) === next)
+  if (isQuiz) activeQuizId.value = next as Id<'quizzes'>
 }, { immediate: true })
 
 watch(quizzes, (list) => {
