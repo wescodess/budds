@@ -80,10 +80,12 @@ async function deleteAccountCascadeImpl(ctx: MutationCtx, userId: string) {
       r2Key: doc.r2Key,
     })
     if (aiSearchEnqueued) enqueuedAiSearchPerDoc++
-    try {
-      await ctx.storage.delete(doc.fileId)
-    } catch {
-      // best-effort
+    if (doc.fileId) {
+      try {
+        await ctx.storage.delete(doc.fileId)
+      } catch {
+        // best-effort
+      }
     }
   }
 

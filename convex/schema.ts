@@ -26,12 +26,15 @@ export default defineSchema({
     userId: v.string(),
     folderId: v.id('folders'),
     filename: v.string(),
-    fileId: v.id('_storage'),
+    fileId: v.optional(v.id('_storage')),
     status: v.union(v.literal('processing'), v.literal('indexing'), v.literal('success'), v.literal('failed')),
     fileSize: v.number(),
     failureReason: v.optional(v.string()),
     indexJobId: v.optional(v.string()),
     r2Key: v.optional(v.string()),
+    sourceType: v.optional(v.union(v.literal('file'), v.literal('website'), v.literal('youtube'))),
+    sourceUrl: v.optional(v.string()),
+    mimeType: v.optional(v.string()),
   })
     .index('by_userId', ['userId'])
     .index('by_folderId', ['folderId'])
