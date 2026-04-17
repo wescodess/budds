@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import { ClipboardList, Plus, Sparkles } from 'lucide-vue-next'
+import { ClipboardList, Sparkles } from 'lucide-vue-next'
 import type { Id } from '../../../convex/_generated/dataModel'
-import type { AttemptSettings, AttemptQuestion } from '~/composables/useQuizAttempt'
 
 const props = defineProps<{
   folderId: Id<'folders'>
@@ -11,19 +10,7 @@ const props = defineProps<{
 const { quizzes, hasIndexedDocuments, generating } = useQuizzes(toRef(props, 'folderId'))
 
 const activeQuizId = ref<Id<'quizzes'> | null>(null)
-const flow = useQuizFlow(activeQuizId)
-const attempt = useQuizAttempt(activeQuizId)
-const history = useQuizHistory(activeQuizId)
-
-const settingsOpen = ref(false)
-const resumeDialogOpen = ref(false)
 const wizardOpen = ref(false)
-
-const takingQuestions = ref<AttemptQuestion[]>([])
-const takingSettings = ref<AttemptSettings | null>(null)
-const takingAttemptId = ref<Id<'quizAttempts'> | null>(null)
-const takingInitialIndex = ref(0)
-const takingAnsweredIds = ref<Set<string>>(new Set())
 
 watch(() => props.selectedQuizId, (next) => {
   if (next) activeQuizId.value = next as Id<'quizzes'>
@@ -37,69 +24,14 @@ watch(quizzes, (list) => {
 
 function handleSelectQuiz(quizId: Id<'quizzes'>) {
   activeQuizId.value = quizId
-  flow.goToOverview()
-}
-
-function handleTakeQuiz() {
-  if (history.hasInProgressAttempt.value) {
-    resumeDialogOpen.value = true
-  }
-  else {
-    settingsOpen.value = true
-  }
-}
-
-async function handleStartAttempt(settings: AttemptSettings) {
-  const result = await attempt.startAttempt(settings, true)
-  if (result) {
-    takingQuestions.value = result.questions
-    takingSettings.value = result.settings
-    takingAttemptId.value = result.attemptId
-    takingInitialIndex.value = result.currentQuestionIndex
-    takingAnsweredIds.value = new Set(result.answeredQuestionIds)
-    flow.goToTaking(result.attemptId)
-  }
-}
-
-async function handleResume() {
-  const result = await attempt.startAttempt({
-    shuffleQuestions: false,
-    showAllQuestions: false,
-    immediateFeedback: true,
-  }, false)
-  if (result) {
-    takingQuestions.value = result.questions
-    takingSettings.value = result.settings
-    takingAttemptId.value = result.attemptId
-    takingInitialIndex.value = result.currentQuestionIndex
-    takingAnsweredIds.value = new Set(result.answeredQuestionIds)
-    flow.goToTaking(result.attemptId)
-  }
-}
-
-function handleStartNew() {
-  settingsOpen.value = true
-}
-
-function handleComplete(attemptId: Id<'quizAttempts'>) {
-  flow.goToResults(attemptId)
-}
-
-function handleAbandon() {
-  attempt.abandonAttempt()
-  flow.goToOverview()
-}
-
-function handleRetake() {
-  settingsOpen.value = true
-}
-
-function handleBackToOverview() {
-  flow.goToOverview()
 }
 
 function handleOpenWizard() {
   wizardOpen.value = true
+}
+
+function handleBack() {
+  activeQuizId.value = null
 }
 </script>
 
@@ -124,42 +56,20 @@ function handleOpenWizard() {
       <div class="flex flex-1 flex-col items-center justify-center gap-4 py-12 text-muted-foreground">
         <ClipboardList class="h-12 w-12 opacity-40" />
         <p class="text-lg font-medium">No quizzes yet</p>
-        <div class="flex gap-2">
-          <UiButton variant="outline" @click="handleOpenWizard">
-            <Sparkles class="mr-1.5 h-4 w-4" />
-            Generate Quiz
-          </UiButton>
-        </div>
+        <UiButton variant="outline" @click="handleOpenWizard">
+          <Sparkles class="mr-1.5 h-4 w-4" />
+          Generate Quiz
+        </UiButton>
       </div>
     </template>
 
-    <template v-else-if="flow.state.value === 'taking' && takingAttemptId && takingSettings">
-      <QuizTakingView
-        :quiz-id="activeQuizId!"
-        :attempt-id="takingAttemptId"
-        :settings="takingSettings"
-        :questions="takingQuestions"
-        :initial-index="takingInitialIndex"
-        :answered-ids="takingAnsweredIds"
-        @complete="handleComplete"
-        @abandon="handleAbandon"
-      />
-    </template>
-
-    <template v-else-if="flow.state.value === 'results' && flow.activeAttemptId.value">
-      <QuizResultsView
-        :quiz-id="activeQuizId!"
-        :attempt-id="flow.activeAttemptId.value"
-        @retake="handleRetake"
-        @back="handleBackToOverview"
-      />
-    </template>
-
-    <template v-else-if="activeQuizId && flow.state.value === 'overview'">
-      <QuizOverviewView
+    <template v-else-if="activeQuizId">
+      <QuizActiveView
+        :key="activeQuizId"
         :quiz-id="activeQuizId"
-        @take-quiz="handleTakeQuiz"
-        @generate-more="handleOpenWizard"
+        :folder-id="folderId"
+        @back="handleBack"
+        @open-wizard="handleOpenWizard"
       />
     </template>
 
@@ -186,21 +96,6 @@ function handleOpenWizard() {
         </div>
       </div>
     </template>
-
-    <QuizSettingsModal
-      :open="settingsOpen"
-      @update:open="settingsOpen = $event"
-      @start="handleStartAttempt"
-    />
-
-    <QuizResumeDialog
-      :open="resumeDialogOpen"
-      :quiz-title="flow.quiz.value?.title ?? ''"
-      :attempt="history.inProgressAttempt.value"
-      @update:open="resumeDialogOpen = $event"
-      @resume="handleResume"
-      @start-new="handleStartNew"
-    />
 
     <QuizGenerationWizard
       :open="wizardOpen"

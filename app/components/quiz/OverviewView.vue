@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { Pencil, Trash2, Plus, Sparkles, Check, X } from 'lucide-vue-next'
+import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 
 const props = defineProps<{
@@ -11,8 +12,19 @@ const emit = defineEmits<{
   generateMore: []
 }>()
 
-const flow = useQuizFlow(computed(() => props.quizId))
-const history = useQuizHistory(computed(() => props.quizId))
+const { data: quizData } = useConvexQuery(
+  api.quizzes.getWithQuestions,
+  computed(() => ({ id: props.quizId })),
+)
+
+const { data: historyData } = useConvexQuery(
+  api.quizzes.getQuizHistory,
+  computed(() => ({ quizId: props.quizId })),
+)
+
+const quiz = computed(() => quizData.value?.quiz ?? null)
+const questions = computed(() => quizData.value?.questions ?? [])
+const attempts = computed(() => (historyData.value as any[] | undefined) ?? [])
 
 const editingTitle = ref(false)
 const titleDraft = ref('')
@@ -20,22 +32,22 @@ const questionModalOpen = ref(false)
 const editingQuestion = ref<any>(null)
 const confirmDeleteId = ref<string | null>(null)
 
-const { updateQuiz } = useQuizzes(computed(() => flow.quiz.value?.folderId) as Ref<Id<'folders'>>)
+const updateQuizMutation = import.meta.client
+  ? useConvexMutation(api.quizzes.updateQuiz)
+  : { mutate: async (_args: unknown): Promise<any> => null, isLoading: ref(false) }
 
 const deleteQuestionMutation = import.meta.client
   ? useConvexMutation(api.quizzes.deleteQuestion)
   : { mutate: async (_args: unknown): Promise<any> => null, isLoading: ref(false) }
 
-import { api } from '#convex/api'
-
 function startEditTitle() {
-  titleDraft.value = flow.quiz.value?.title ?? ''
+  titleDraft.value = quiz.value?.title ?? ''
   editingTitle.value = true
 }
 
 async function saveTitle() {
-  if (titleDraft.value.trim() && flow.quiz.value) {
-    await updateQuiz(props.quizId, { title: titleDraft.value.trim() })
+  if (titleDraft.value.trim()) {
+    await updateQuizMutation.mutate({ quizId: props.quizId, title: titleDraft.value.trim() })
   }
   editingTitle.value = false
 }
@@ -67,7 +79,7 @@ function typeBadge(type: string) {
 </script>
 
 <template>
-  <div v-if="!flow.quiz.value" class="space-y-3 p-6">
+  <div v-if="!quiz" class="space-y-3 p-6">
     <UiSkeleton v-for="i in 3" :key="i" class="h-24 w-full rounded-lg" />
   </div>
 
@@ -88,18 +100,18 @@ function typeBadge(type: string) {
           class="group flex items-center gap-2 text-lg font-semibold"
           @click="startEditTitle"
         >
-          {{ flow.quiz.value.title }}
+          {{ quiz.title }}
           <Pencil class="h-3.5 w-3.5 text-muted-foreground opacity-0 group-hover:opacity-100" />
         </button>
         <QuizHistoryDropdown
-          :attempts="history.attempts.value"
-          @select="(id) => emit('takeQuiz')"
+          :attempts="attempts"
+          @select="() => emit('takeQuiz')"
         />
       </div>
 
       <div class="space-y-3">
         <div
-          v-for="(q, i) in flow.questions.value"
+          v-for="(q, i) in questions"
           :key="q._id"
           class="rounded-lg border p-4"
         >
@@ -178,7 +190,7 @@ function typeBadge(type: string) {
           <Sparkles class="mr-1.5 h-3.5 w-3.5" />
           Generate questions
         </UiButton>
-        <UiButton :disabled="flow.questions.value.length === 0" @click="emit('takeQuiz')">
+        <UiButton :disabled="questions.length === 0" @click="emit('takeQuiz')">
           Take quiz
         </UiButton>
       </div>

@@ -1,4 +1,3 @@
-import { api } from '#convex/api'
 import type { Id } from '../../convex/_generated/dataModel'
 
 export interface AttemptHistoryItem {
@@ -12,15 +11,8 @@ export interface AttemptHistoryItem {
   completedAt?: number
 }
 
-export function useQuizHistory(quizId: Ref<Id<'quizzes'> | null>) {
-  const { data: historyData } = useConvexQuery(
-    api.quizzes.getQuizHistory,
-    computed(() => quizId.value ? { quizId: quizId.value } : 'skip'),
-  )
-
-  const attempts = computed<AttemptHistoryItem[]>(() =>
-    (historyData.value as AttemptHistoryItem[] | undefined) ?? [],
-  )
+export function useQuizHistory(_quizId: Ref<Id<'quizzes'> | null>) {
+  const attempts = ref<AttemptHistoryItem[]>([])
 
   const hasInProgressAttempt = computed(() =>
     attempts.value.some(a => a.status === 'in_progress'),
@@ -34,10 +26,15 @@ export function useQuizHistory(quizId: Ref<Id<'quizzes'> | null>) {
     attempts.value.find(a => a.status === 'completed') ?? null,
   )
 
+  function setAttempts(data: AttemptHistoryItem[]) {
+    attempts.value = data
+  }
+
   return {
-    attempts,
+    attempts: readonly(attempts),
     hasInProgressAttempt,
     inProgressAttempt,
     latestCompletedAttempt,
+    setAttempts,
   }
 }

@@ -7,28 +7,36 @@ export function useQuizFlow(quizId: Ref<Id<'quizzes'> | null>) {
   const state = ref<QuizFlowState>('initial')
   const activeAttemptId = ref<Id<'quizAttempts'> | null>(null)
 
-  const { data: quizData } = useConvexQuery(
-    api.quizzes.getWithQuestions,
-    computed(() => quizId.value ? { id: quizId.value } : 'skip'),
-  )
+  const quiz = ref<any>(null)
+  const questions = ref<any[]>([])
 
-  const quiz = computed(() => quizData.value?.quiz ?? null)
-  const questions = computed(() => quizData.value?.questions ?? [])
+  if (import.meta.client) {
+    watch(quizId, (id) => {
+      if (!id) {
+        quiz.value = null
+        questions.value = []
+        state.value = 'initial'
+      }
+    })
+  }
+
   const hasQuestions = computed(() => questions.value.length > 0)
 
-  watch(quizData, (val) => {
-    if (state.value === 'taking' || state.value === 'results') return
-    if (!val || !val.quiz) {
-      state.value = 'initial'
+  function setQuizData(data: { quiz: any; questions: any[] } | null) {
+    if (!data || !data.quiz) {
+      quiz.value = null
+      questions.value = []
+      if (state.value !== 'taking' && state.value !== 'results') {
+        state.value = 'initial'
+      }
       return
     }
-    if (val.questions.length > 0) {
-      state.value = 'overview'
+    quiz.value = data.quiz
+    questions.value = data.questions
+    if (state.value !== 'taking' && state.value !== 'results') {
+      state.value = data.questions.length > 0 ? 'overview' : 'initial'
     }
-    else {
-      state.value = 'initial'
-    }
-  }, { immediate: true })
+  }
 
   function goToOverview() {
     state.value = 'overview'
@@ -53,9 +61,10 @@ export function useQuizFlow(quizId: Ref<Id<'quizzes'> | null>) {
   return {
     state: readonly(state),
     activeAttemptId: readonly(activeAttemptId),
-    quiz,
-    questions,
+    quiz: readonly(quiz),
+    questions: readonly(questions),
     hasQuestions,
+    setQuizData,
     goToOverview,
     goToTaking,
     goToResults,
