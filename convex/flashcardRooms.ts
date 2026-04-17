@@ -529,8 +529,10 @@ export const listRoomVersions = query({
 })
 
 export const getRoomVersion = query({
-  args: { versionId: v.id('flashcardRoomVersions') },
+  args: { versionId: v.optional(v.id('flashcardRoomVersions')) },
   handler: async (ctx, args) => {
+    if (!args.versionId) return null
+
     const identity = await ctx.auth.getUserIdentity()
     if (!identity) return null
 
