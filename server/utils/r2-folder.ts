@@ -1,4 +1,4 @@
-import { S3Client, ListObjectsV2Command, GetObjectCommand } from '@aws-sdk/client-s3'
+import { AwsClient } from 'aws4fetch'
 import { sanitizeUserSegment } from './ai-search'
 import { readConfiguredRuntimeValue } from './runtime-config'
 
@@ -22,7 +22,7 @@ export interface FetchFolderDocsParams {
   maxChars?: number
 }
 
-function getR2Client() {
+function getR2Config() {
   const config = useRuntimeConfig()
   const r2Endpoint = readConfiguredRuntimeValue(config.r2Endpoint, 'NUXT_R2_ENDPOINT', 'R2_ENDPOINT')
   const r2AccessKeyId = readConfiguredRuntimeValue(
@@ -35,20 +35,50 @@ function getR2Client() {
     'NUXT_R2_SECRET_ACCESS_KEY',
     'R2_SECRET_ACCESS_KEY',
   )
-  if (!r2Endpoint || !r2AccessKeyId || !r2SecretAccessKey) return null
-  return new S3Client({
+  const r2BucketName = readConfiguredRuntimeValue(config.r2BucketName, 'NUXT_R2_BUCKET_NAME', 'R2_BUCKET_NAME')
+
+  if (!r2Endpoint || !r2AccessKeyId || !r2SecretAccessKey || !r2BucketName) return null
+
+  const client = new AwsClient({
+    accessKeyId: r2AccessKeyId,
+    secretAccessKey: r2SecretAccessKey,
+    service: 's3',
     region: 'auto',
-    endpoint: r2Endpoint,
-    credentials: { accessKeyId: r2AccessKeyId, secretAccessKey: r2SecretAccessKey },
   })
+
+  return { client, endpoint: r2Endpoint, bucket: r2BucketName }
+}
+
+async function getObject(r2: NonNullable<ReturnType<typeof getR2Config>>, key: string) {
+  const url = `${r2.endpoint}/${r2.bucket}/${encodeURIComponent(key).replace(/%2F/g, '/')}`
+  const response = await r2.client.fetch(url)
+  if (!response.ok) return null
+
+  const content = await response.text()
+  const filename = response.headers.get('x-amz-meta-filename') ?? undefined
+  return { content, filename }
+}
+
+interface ListEntry { key: string }
+
+async function listObjects(r2: NonNullable<ReturnType<typeof getR2Config>>, prefix: string): Promise<ListEntry[]> {
+  const url = `${r2.endpoint}/${r2.bucket}?list-type=2&prefix=${encodeURIComponent(prefix)}&max-keys=50`
+  const response = await r2.client.fetch(url)
+  if (!response.ok) return []
+
+  const xml = await response.text()
+  const entries: ListEntry[] = []
+  const keyRegex = /<Key>([^<]+)<\/Key>/g
+  let match: RegExpExecArray | null
+  while ((match = keyRegex.exec(xml)) !== null) {
+    entries.push({ key: match[1]! })
+  }
+  return entries
 }
 
 export async function fetchFolderDocs(params: FetchFolderDocsParams): Promise<FolderDoc[]> {
-  const config = useRuntimeConfig()
-  const r2BucketName = readConfiguredRuntimeValue(config.r2BucketName, 'NUXT_R2_BUCKET_NAME', 'R2_BUCKET_NAME')
-  if (!r2BucketName) return []
-  const client = getR2Client()
-  if (!client) return []
+  const r2 = getR2Config()
+  if (!r2) return []
   const budget = params.maxChars ?? 80_000
 
   const docs: FolderDoc[] = []
@@ -62,25 +92,22 @@ export async function fetchFolderDocs(params: FetchFolderDocsParams): Promise<Fo
         ?? `${sanitizeUserSegment(params.userId)}/${doc.folderId}/${doc.documentId}.txt`
 
       try {
-        const object = await client.send(new GetObjectCommand({
-          Bucket: r2BucketName,
-          Key: key,
-        }))
-        const fullContent = await object.Body?.transformToString()
-        if (!fullContent) continue
+        const result = await getObject(r2, key)
+        if (!result?.content) continue
 
         const remaining = budget - spent
-        const content = fullContent.length > remaining ? fullContent.slice(0, remaining) : fullContent
+        const content = result.content.length > remaining ? result.content.slice(0, remaining) : result.content
         spent += content.length
 
         docs.push({
           key,
           documentId: doc.documentId,
           folderId: doc.folderId,
-          filename: object.Metadata?.filename ?? doc.filename,
+          filename: result.filename ?? doc.filename,
           content,
         })
-      } catch (error) {
+      }
+      catch (error) {
         console.error(`[r2-folder] Failed to read scoped doc ${doc.documentId}:`, error)
       }
     }
@@ -91,29 +118,27 @@ export async function fetchFolderDocs(params: FetchFolderDocsParams): Promise<Fo
   if (!params.folderId) return []
 
   const prefix = `${sanitizeUserSegment(params.userId)}/${params.folderId}/`
-  const list = await client.send(new ListObjectsV2Command({
-    Bucket: r2BucketName,
-    Prefix: prefix,
-    MaxKeys: 50,
-  }))
-
-  const objects = (list.Contents ?? []).filter(o => o.Key?.endsWith('.txt'))
+  const objects = (await listObjects(r2, prefix)).filter(o => o.key.endsWith('.txt'))
 
   for (const obj of objects) {
-    if (!obj.Key || spent >= budget) break
-    const head = await client.send(new GetObjectCommand({ Bucket: r2BucketName, Key: obj.Key }))
-    const fullContent = await head.Body?.transformToString()
-    if (!fullContent) continue
+    if (spent >= budget) break
 
-    const remaining = budget - spent
-    const content = fullContent.length > remaining ? fullContent.slice(0, remaining) : fullContent
-    spent += content.length
+    try {
+      const result = await getObject(r2, obj.key)
+      if (!result?.content) continue
 
-    const parts = obj.Key.split('/')
-    const documentId = (parts[parts.length - 1] ?? '').replace(/\.txt$/, '')
-    const filename = head.Metadata?.filename
+      const remaining = budget - spent
+      const content = result.content.length > remaining ? result.content.slice(0, remaining) : result.content
+      spent += content.length
 
-    docs.push({ key: obj.Key, documentId, folderId: params.folderId, filename, content })
+      const parts = obj.key.split('/')
+      const documentId = (parts[parts.length - 1] ?? '').replace(/\.txt$/, '')
+
+      docs.push({ key: obj.key, documentId, folderId: params.folderId, filename: result.filename, content })
+    }
+    catch (error) {
+      console.error(`[r2-folder] Failed to read object ${obj.key}:`, error)
+    }
   }
 
   return docs
