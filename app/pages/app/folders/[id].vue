@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { FileText, MessageSquare, ClipboardList, Layers, PanelRight, ArrowLeftRight } from 'lucide-vue-next'
+import { FileText, MessageSquare, ClipboardList, Layers, PanelRight, ArrowLeftRight, Pencil, FolderPlus, ListTodo } from 'lucide-vue-next'
 import { useMediaQuery } from '@vueuse/core'
 import { api } from '#convex/api'
 import type { Id } from '~~/convex/_generated/dataModel'
 import type { VoidType } from '~/components/voids/CreateVoidDialog.vue'
 import MoveToFolderDialog from '~/components/documents/MoveToFolderDialog.vue'
 import FolderHelperPane from '~/components/folders/FolderHelperPane.vue'
+import FolderTasksPane from '~/components/folders/FolderTasksPane.vue'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { useHorizontalSwipeGesture } from '~/composables/useHorizontalSwipeGesture'
@@ -272,8 +273,16 @@ async function onTabChange(next: TabValue) {
 const documentsBulkMode = ref(false)
 const selectedDocumentIds = ref<string[]>([])
 const documentsDeletePending = ref(false)
-const sourcePanelOpen = ref(false)
+type HelperMode = 'sources' | 'tasks' | null
+const helperMode = ref<HelperMode>(null)
+const sourcePanelOpen = computed({
+  get: () => helperMode.value === 'sources',
+  set: (v: boolean) => { helperMode.value = v ? 'sources' : null },
+})
 const sourcePanelSide = ref<'left' | 'right'>('right')
+const { activeCount: tasksActiveCount } = useTasks(folderId)
+const folderEditOpen = ref(false)
+const subfolderCreateOpen = ref(false)
 const activeCitationIndex = ref<number | null>(null)
 const activeMessageIndex = ref<number | null>(null)
 const chatInputRef = ref<{ focus: () => void } | null>(null)
@@ -762,6 +771,42 @@ async function handleImportLink(url: string) {
             </p>
           </div>
         </div>
+        <div class="flex items-center gap-1">
+          <button
+            type="button"
+            data-testid="folder-header-edit"
+            aria-label="Edit folder"
+            class="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            @click="folderEditOpen = true"
+          >
+            <Pencil class="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            data-testid="folder-header-add-subfolder"
+            aria-label="Add subfolder"
+            class="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            @click="subfolderCreateOpen = true"
+          >
+            <FolderPlus class="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            data-testid="folder-header-tasks"
+            aria-label="Toggle tasks"
+            class="relative inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            @click="helperMode = helperMode === 'tasks' ? null : 'tasks'"
+          >
+            <ListTodo class="h-4 w-4" />
+            <span
+              v-if="tasksActiveCount > 0"
+              data-testid="folder-header-tasks-badge"
+              class="absolute -right-0.5 -top-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-medium leading-none text-white"
+            >
+              {{ tasksActiveCount }}
+            </span>
+          </button>
+        </div>
       </div>
     </template>
 
@@ -772,7 +817,7 @@ async function handleImportLink(url: string) {
       @create="onCreateVoid"
     />
 
-    <div ref="workspaceRef" class="flex min-h-0 min-w-0 flex-1 flex-col" style="touch-action: pan-y">
+    <div ref="workspaceRef" class="flex min-h-0 min-w-0 flex-1" style="touch-action: pan-y">
       <UiTabs v-model="activeTab" class="flex h-full min-h-0 min-w-0 flex-1 flex-col">
         <UiTabsList class="sr-only">
           <UiTabsTrigger value="chat">Chat</UiTabsTrigger>
@@ -1087,7 +1132,45 @@ async function handleImportLink(url: string) {
           />
         </UiTabsContent>
       </UiTabs>
+
+      <div
+        v-if="isDesktop && helperMode === 'tasks'"
+        class="h-full w-80 shrink-0 border-l border-border/60"
+      >
+        <FolderTasksPane
+          :folder-id="folderId"
+          @close="helperMode = null"
+          @view-room="(roomId) => {
+            helperMode = null
+            activeTab = 'flashcards'
+            const { conversationId: _dropC, ...rest } = route.query ?? {}
+            router.replace({ query: { ...rest, tab: 'flashcards', voidId: roomId } })
+          }"
+        />
+      </div>
     </div>
+
+    <Sheet v-if="!isDesktop" :open="helperMode === 'tasks'" @update:open="(v) => { if (!v) helperMode = null }">
+      <SheetContent
+        side="right"
+        class="w-[85vw] max-w-[85vw] gap-0 p-0 [&>button]:hidden"
+      >
+        <SheetHeader class="sr-only">
+          <SheetTitle>Tasks</SheetTitle>
+          <SheetDescription>View active tasks for this folder.</SheetDescription>
+        </SheetHeader>
+        <FolderTasksPane
+          :folder-id="folderId"
+          @close="helperMode = null"
+          @view-room="(roomId) => {
+            helperMode = null
+            activeTab = 'flashcards'
+            const { conversationId: _dropC, ...rest } = route.query ?? {}
+            router.replace({ query: { ...rest, tab: 'flashcards', voidId: roomId } })
+          }"
+        />
+      </SheetContent>
+    </Sheet>
 
     <UiAlertDialog v-model:open="showDeleteDialog">
       <UiAlertDialogContent>

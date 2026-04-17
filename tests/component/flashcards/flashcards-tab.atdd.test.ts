@@ -4,24 +4,18 @@ import { flushPromises } from '@vue/test-utils'
 
 const mockHasIndexedDocuments = ref(false)
 const mockRooms = ref<any[]>([])
-const mockGenerating = ref(false)
-const mockLastError = ref<string | null>(null)
 const mockCreateRoom = vi.fn()
 const mockDeleteRoom = vi.fn()
 const mockRenameRoom = vi.fn()
-const mockGenerate = vi.fn()
 const mockMutate = vi.fn()
 
 mockNuxtImport('useFlashcardRooms', () => {
   return () => ({
     rooms: mockRooms,
     hasIndexedDocuments: mockHasIndexedDocuments,
-    generating: mockGenerating,
-    lastError: mockLastError,
     createRoom: mockCreateRoom,
     deleteRoom: mockDeleteRoom,
     renameRoom: mockRenameRoom,
-    generate: mockGenerate,
   })
 })
 
@@ -35,12 +29,9 @@ describe('FlashcardsTab — rooms-first landing', () => {
   beforeEach(() => {
     mockHasIndexedDocuments.value = false
     mockRooms.value = []
-    mockGenerating.value = false
-    mockLastError.value = null
     mockCreateRoom.mockReset()
     mockDeleteRoom.mockReset()
     mockRenameRoom.mockReset()
-    mockGenerate.mockReset()
     mockMutate.mockReset()
   })
 

@@ -225,6 +225,23 @@ export default defineSchema({
     .index('by_quizId', ['quizId'])
     .index('by_userId_and_quizId', ['userId', 'quizId']),
 
+  tasks: defineTable({
+    userId: v.string(),
+    folderId: v.id('folders'),
+    type: v.string(),
+    status: v.string(),
+    title: v.string(),
+    progress: v.optional(v.string()),
+    metadata: v.optional(v.any()),
+    result: v.optional(v.any()),
+    error: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    completedAt: v.optional(v.number()),
+  })
+    .index('by_userId_and_folderId', ['userId', 'folderId'])
+    .index('by_status', ['status']),
+
   pendingCleanup: defineTable({
     userId: v.string(),
     documentId: v.string(),
