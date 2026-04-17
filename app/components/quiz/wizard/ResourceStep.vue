@@ -1,37 +1,69 @@
 <script setup lang="ts">
-import { FileText, Check } from 'lucide-vue-next'
+import { api } from '#convex/api'
 import type { Id } from '../../../../convex/_generated/dataModel'
+import type { PickerFolder, PickerFile } from '~/components/global/DirectoryPicker.vue'
 
 const props = defineProps<{
   folderId: Id<'folders'>
-  selectedIds: string[]
+  selectedFileIds: Set<string>
+  selectedFolderIds: Set<string>
 }>()
 
 const emit = defineEmits<{
-  'update:selectedIds': [ids: string[]]
-  next: []
+  'update:selectedFileIds': [ids: Set<string>]
+  'update:selectedFolderIds': [ids: Set<string>]
 }>()
 
-const { documents } = useDocuments(computed(() => props.folderId))
+const { data: scopeInventory } = useConvexQuery(api.folders.searchScopeItems, computed(() => ({
+  rootFolderId: props.folderId,
+  search: '',
+})))
 
-const indexedDocs = computed(() =>
-  (documents.value ?? []).filter(d => d.status === 'success'),
+const pickerFolders = computed<PickerFolder[]>(() =>
+  (scopeInventory.value?.folders ?? []).map((f: any) => ({
+    id: f.id as string,
+    name: f.name,
+    parentId: f.parentId as string | undefined,
+    fileCount: f.descendantFileCount ?? f.fileCount ?? 0,
+  })),
 )
 
-function toggle(docId: string) {
-  const current = props.selectedIds
-  if (current.includes(docId)) {
-    emit('update:selectedIds', current.filter(id => id !== docId))
-  }
-  else {
-    emit('update:selectedIds', [...current, docId])
-  }
+const pickerFiles = computed<PickerFile[]>(() =>
+  (scopeInventory.value?.files ?? []).map((f: any) => ({
+    id: f.id as string,
+    name: f.filename,
+    folderId: (f.folderId ?? props.folderId) as string,
+  })),
+)
+
+const selectedCount = computed(() => props.selectedFileIds.size + props.selectedFolderIds.size)
+
+function isFileSelected(fileId: string): boolean {
+  return props.selectedFileIds.has(fileId)
 }
 
-function formatSize(bytes: number) {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+function isFolderSelected(folderId: string): 'all' | 'some' | 'none' {
+  if (props.selectedFolderIds.has(folderId)) return 'all'
+  return 'none'
+}
+
+function handleToggleFile(fileId: string) {
+  const next = new Set(props.selectedFileIds)
+  if (next.has(fileId)) next.delete(fileId)
+  else next.add(fileId)
+  emit('update:selectedFileIds', next)
+}
+
+function handleToggleFolder(folderId: string) {
+  const next = new Set(props.selectedFolderIds)
+  if (next.has(folderId)) next.delete(folderId)
+  else next.add(folderId)
+  emit('update:selectedFolderIds', next)
+}
+
+function handleClear() {
+  emit('update:selectedFileIds', new Set())
+  emit('update:selectedFolderIds', new Set())
 }
 </script>
 
@@ -42,29 +74,20 @@ function formatSize(bytes: number) {
       <p class="text-sm text-muted-foreground">Choose documents to generate questions from</p>
     </div>
 
-    <div class="max-h-64 space-y-1 overflow-y-auto">
-      <button
-        v-for="doc in indexedDocs"
-        :key="doc._id"
-        type="button"
-        class="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition-colors hover:bg-accent/50"
-        :class="selectedIds.includes(doc._id as string) ? 'bg-primary/10' : ''"
-        @click="toggle(doc._id as string)"
-      >
-        <div
-          class="flex h-5 w-5 shrink-0 items-center justify-center rounded border"
-          :class="selectedIds.includes(doc._id as string) ? 'border-primary bg-primary' : 'border-input'"
-        >
-          <Check v-if="selectedIds.includes(doc._id as string)" class="h-3 w-3 text-primary-foreground" />
-        </div>
-        <FileText class="h-4 w-4 shrink-0 text-muted-foreground" />
-        <span class="flex-1 truncate">{{ doc.filename }}</span>
-        <span class="text-xs text-muted-foreground">{{ formatSize(doc.fileSize) }}</span>
-      </button>
+    <div class="min-w-0 overflow-hidden rounded-lg border border-border/60">
+      <DirectoryPicker
+        :folders="pickerFolders"
+        :files="pickerFiles"
+        :is-file-selected="isFileSelected"
+        :is-folder-selected="isFolderSelected"
+        :on-toggle-file="handleToggleFile"
+        :on-toggle-folder="handleToggleFolder"
+        :on-clear="handleClear"
+        :selected-count="selectedCount"
+        search-placeholder="Search folder documents"
+        presentation="drawer"
+        @close="() => {}"
+      />
     </div>
-
-    <p v-if="selectedIds.length > 0" class="text-sm text-primary">
-      {{ selectedIds.length }} resource{{ selectedIds.length !== 1 ? 's' : '' }} selected
-    </p>
   </div>
 </template>

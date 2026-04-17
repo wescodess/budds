@@ -64,8 +64,10 @@ const stepIndicator = computed(() =>
       <QuizWizardResourceStep
         v-if="gen.wizardStep.value === 1"
         :folder-id="folderId"
-        :selected-ids="gen.selectedResourceIds.value"
-        @update:selected-ids="gen.selectedResourceIds.value = $event"
+        :selected-file-ids="gen.selectedFileIds.value"
+        :selected-folder-ids="gen.selectedFolderIds.value"
+        @update:selected-file-ids="gen.selectedFileIds.value = $event"
+        @update:selected-folder-ids="gen.selectedFolderIds.value = $event"
       />
 
       <QuizWizardTopicStep
@@ -95,7 +97,7 @@ const stepIndicator = computed(() =>
 
         <UiButton
           v-if="gen.wizardStep.value === 1"
-          :disabled="gen.selectedResourceIds.value.length === 0"
+          :disabled="gen.selectedCount.value === 0"
           @click="handleNextFromStep1"
         >
           Next
