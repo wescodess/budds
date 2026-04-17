@@ -25,7 +25,7 @@ const restoring = ref(false)
 
 const { data: versionDetail } = useConvexQuery(
   api.flashcardRooms.getRoomVersion,
-  computed(() => (expandedVersionId.value ? { versionId: expandedVersionId.value } : undefined)),
+  computed(() => expandedVersionId.value ? { versionId: expandedVersionId.value } : 'skip'),
 )
 
 const restoreMutation = import.meta.client
