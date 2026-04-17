@@ -187,7 +187,22 @@ describe('documentActions.ingestDocument', () => {
   test('[P1] should fail when file is not found in storage', async () => {
     const t = convexTest(schema, modules)
     const asUser = t.withIdentity(TEST_IDENTITY)
-    const { folderId, storageId, docId } = await setupDocumentWithStorage(t, asUser)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Test Folder' })
+    const storageId = await t.run(async (ctx) => {
+      return await ctx.storage.store(new Blob(['fake pdf bytes'], { type: 'application/pdf' }))
+    })
+
+    const docId = await t.run(async (ctx) => {
+      return await ctx.db.insert('documents', {
+        userId: TEST_IDENTITY.tokenIdentifier,
+        folderId,
+        filename: 'missing.pdf',
+        fileId: storageId,
+        status: 'processing' as const,
+        fileSize: 2048,
+        sourceType: 'file' as const,
+      })
+    })
 
     await t.run(async (ctx) => {
       await ctx.storage.delete(storageId)
