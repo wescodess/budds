@@ -6,16 +6,20 @@ import {
   buildAudioScriptPrompt,
   estimateTurnDurationMs,
   parseAudioScriptResponse,
+  sanitizeTurnForSpeech,
   splitOversizedTurns,
 } from '../../utils/audio-script-prompt'
-import { synthesizeWithRetry } from '../../utils/tts-melotts'
+import { synthesizeVoiceWithRetry, type AuraVoice } from '../../utils/tts-workers-ai'
 import { readConfiguredRuntimeValue } from '../../utils/runtime-config'
 
 const SEED_QUERY = 'key concepts, definitions, discussions, and themes'
 const SCRIPT_MODEL = 'google/gemini-2.5-flash'
 const DEFAULT_LENGTH_MINUTES = 10
 const DEFAULT_COMPLEXITY = 'beginner' as const
-const DEFAULT_VOICE_PROFILE = { hostA: 'en', hostB: 'en' }
+const DEFAULT_VOICE_PROFILE: { hostA: AuraVoice; hostB: AuraVoice } = {
+  hostA: 'asteria',
+  hostB: 'orion',
+}
 const MAX_SEARCH_RESULTS = 20
 const MAX_TURNS = 50
 const MIN_TURNS = 3
@@ -187,12 +191,12 @@ export default defineEventHandler(async (event) => {
       const turn = normalizedTurns[i]!
       await setTaskProgress(`Synthesizing turn ${i + 1}/${normalizedTurns.length}…`)
 
-      const voiceLang = turn.speaker === 'host_a' ? voiceProfile.hostA : voiceProfile.hostB
-      const pitch = turn.speaker === 'host_b' ? -0.05 : 0
+      const speaker = turn.speaker === 'host_a' ? voiceProfile.hostA : voiceProfile.hostB
+      const spokenText = sanitizeTurnForSpeech(turn.text)
 
       let audioBytes: Uint8Array
       try {
-        audioBytes = await synthesizeWithRetry({ text: turn.text, lang: voiceLang, pitch })
+        audioBytes = await synthesizeVoiceWithRetry({ text: spokenText, speaker })
       }
       catch (err: any) {
         const msg = `Audio synthesis failed on turn ${i + 1}: ${err?.message ?? 'unknown error'}`

@@ -4,6 +4,7 @@ import {
   buildAudioScriptPrompt,
   estimateTurnDurationMs,
   parseAudioScriptResponse,
+  sanitizeTurnForSpeech,
   splitOversizedTurns,
 } from './audio-script-prompt'
 import type { AISearchChunk } from './ai-search'
@@ -129,6 +130,56 @@ describe('splitOversizedTurns', () => {
       expect(t.sourceIndex).toBe(2)
       expect(t.text.length).toBeLessThanOrEqual(1800)
     }
+  })
+})
+
+describe('sanitizeTurnForSpeech', () => {
+  test('strips bracketed stage directions', () => {
+    expect(sanitizeTurnForSpeech('So [laughs] that makes sense.')).toBe('So that makes sense.')
+    expect(sanitizeTurnForSpeech('[pauses] Let me think.')).toBe('Let me think.')
+    expect(sanitizeTurnForSpeech('[sighs] [pauses] yeah.')).toBe('yeah.')
+  })
+
+  test('strips markdown emphasis but keeps the word', () => {
+    expect(sanitizeTurnForSpeech('That is *really* cool.')).toBe('That is really cool.')
+    expect(sanitizeTurnForSpeech('This is _important_ stuff.')).toBe('This is important stuff.')
+    expect(sanitizeTurnForSpeech('Use `useEffect` here.')).toBe('Use useEffect here.')
+  })
+
+  test('collapses whitespace left by removals', () => {
+    expect(sanitizeTurnForSpeech('Well,   [laughs]   right.')).toBe('Well, right.')
+  })
+
+  test('preserves natural punctuation and fillers', () => {
+    const input = 'Hmm, well — you know, it\'s... kind of tricky. Haha!'
+    expect(sanitizeTurnForSpeech(input)).toBe(input)
+  })
+
+  test('leaves parentheses alone (not stripped)', () => {
+    // Parentheses are a natural aside marker for the LLM; the prompt forbids them
+    // but we don't strip aggressively — brackets are the agreed literal-read hazard.
+    expect(sanitizeTurnForSpeech('The answer (roughly) is 42.')).toBe('The answer (roughly) is 42.')
+  })
+})
+
+describe('buildAudioScriptPrompt — voice and disfluency guidance', () => {
+  test('names the male/female voice roles', () => {
+    const messages = buildAudioScriptPrompt([{ id: 'c0', content: 'x', score: 1, attributes: {} }])
+    expect(messages[0]!.content).toMatch(/female voice/i)
+    expect(messages[0]!.content).toMatch(/male voice/i)
+  })
+
+  test('forbids bracketed stage directions explicitly', () => {
+    const messages = buildAudioScriptPrompt([{ id: 'c0', content: 'x', score: 1, attributes: {} }])
+    expect(messages[0]!.content).toMatch(/\[laughs\]/)
+    expect(messages[0]!.content).toMatch(/literally/i)
+  })
+
+  test('lists fillers and onomatopoeia hints', () => {
+    const messages = buildAudioScriptPrompt([{ id: 'c0', content: 'x', score: 1, attributes: {} }])
+    expect(messages[0]!.content).toMatch(/haha/)
+    expect(messages[0]!.content).toMatch(/hmm/)
+    expect(messages[0]!.content).toMatch(/mm-hmm/)
   })
 })
 
