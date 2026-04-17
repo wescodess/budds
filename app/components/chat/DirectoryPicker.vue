@@ -2,6 +2,7 @@
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 import type { ScopeFileSummary, ScopeFolderSummary, useReferenceScope } from '~/composables/useReferenceScope'
+import GlobalDirectoryPicker from '~/components/global/DirectoryPicker.vue'
 import type { PickerFolder, PickerFile } from '~/components/global/DirectoryPicker.vue'
 
 const props = defineProps<{
