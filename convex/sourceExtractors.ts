@@ -181,8 +181,41 @@ export function isYouTubeUrl(url: string): boolean {
   }
 }
 
-export async function extractYouTubeTranscript(url: string): Promise<{ title: string; content: string }> {
-  const videoId = resolveVideoId(url)
+async function fetchViaExternalApi(videoId: string, url: string): Promise<{ title: string; content: string } | null> {
+  try {
+    const apiUrl = `https://getyoutubetext.com/api/transcript?url=https://www.youtube.com/watch?v=${videoId}`
+    const res = await fetch(apiUrl, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Budds/1.0)' },
+      signal: AbortSignal.timeout(20_000),
+    })
+    if (!res.ok) return null
+
+    const data = await res.json() as {
+      transcript?: Array<{ text: string; offset: number; duration: number }>
+      title?: string
+    }
+    if (!data.transcript?.length) return null
+
+    const text = data.transcript
+      .map(s => decodeHtmlEntities(s.text))
+      .join(' ')
+
+    const title = data.title ? decodeHtmlEntities(data.title) : `YouTube: ${videoId}`
+    let content = `# ${title}\n\nSource: ${url}\nVideo ID: ${videoId}\n\n${text}`
+
+    if (new TextEncoder().encode(content).length > MAX_CONTENT_BYTES) {
+      content = new TextDecoder().decode(
+        new TextEncoder().encode(content).slice(0, MAX_CONTENT_BYTES),
+      )
+    }
+
+    return { title, content }
+  } catch {
+    return null
+  }
+}
+
+async function fetchViaDirectScrape(videoId: string, url: string): Promise<{ title: string; content: string }> {
   const tracks = await getCaptionTracks(videoId)
 
   const track = tracks.find(t => t.languageCode === 'en') ?? tracks[0]
@@ -203,12 +236,21 @@ export async function extractYouTubeTranscript(url: string): Promise<{ title: st
   let content = `# YouTube Transcript\n\nSource: ${url}\nVideo ID: ${videoId}\n\n${segments.join(' ')}`
 
   if (new TextEncoder().encode(content).length > MAX_CONTENT_BYTES) {
-    const encoder = new TextEncoder()
-    const decoder = new TextDecoder()
-    content = decoder.decode(encoder.encode(content).slice(0, MAX_CONTENT_BYTES))
+    content = new TextDecoder().decode(
+      new TextEncoder().encode(content).slice(0, MAX_CONTENT_BYTES),
+    )
   }
 
   return { title: `YouTube: ${videoId}`, content }
+}
+
+export async function extractYouTubeTranscript(url: string): Promise<{ title: string; content: string }> {
+  const videoId = resolveVideoId(url)
+
+  const external = await fetchViaExternalApi(videoId, url)
+  if (external) return external
+
+  return fetchViaDirectScrape(videoId, url)
 }
 
 export async function extractWebsiteContent(url: string): Promise<{ title: string; content: string }> {
