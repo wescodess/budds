@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { History, Pencil, Play, Sparkles } from 'lucide-vue-next'
+import { History, Pencil, Play, Sparkles, Loader2, X as XIcon } from 'lucide-vue-next'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 
@@ -31,6 +31,17 @@ const deleteMutation = import.meta.client
 const room = computed(() => (roomData.value as any)?.room ?? null)
 const cards = computed(() => (roomData.value as any)?.cards ?? [])
 const cardCount = computed(() => cards.value.length)
+
+const { tasks, cancel: cancelTask } = useTasks(toRef(props, 'folderId'))
+
+const runningTaskForRoom = computed(() =>
+  tasks.value.find(
+    (t) =>
+      (t.status === 'pending' || t.status === 'running') &&
+      t.type === 'flashcard-generation' &&
+      (t.metadata as any)?.roomId === props.roomId,
+  ) ?? null,
+)
 
 const mode = ref<Mode>('editor')
 const historyOpen = ref(false)
@@ -132,6 +143,23 @@ async function handleConfirmDelete() {
           Generate
         </UiButton>
       </div>
+    </div>
+
+    <div
+      v-if="runningTaskForRoom"
+      data-testid="flashcard-room-generating-banner"
+      class="flex items-center gap-2 border-b border-amber-500/30 bg-amber-500/5 px-5 py-2 text-sm"
+    >
+      <Loader2 class="h-3.5 w-3.5 animate-spin text-amber-500" />
+      <span class="text-foreground/80">{{ runningTaskForRoom.progress || 'Generating cards…' }}</span>
+      <button
+        type="button"
+        data-testid="flashcard-room-generating-cancel"
+        class="ml-auto text-xs text-muted-foreground hover:text-foreground"
+        @click="cancelTask(runningTaskForRoom!._id)"
+      >
+        Cancel
+      </button>
     </div>
 
     <div class="min-h-0 flex-1 overflow-y-auto">

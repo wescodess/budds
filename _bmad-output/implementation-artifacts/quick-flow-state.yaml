@@ -1,17 +1,13 @@
 version: 1
 mode: running
 current_phase: implement
-spec_slug: flashcard-room-p1-deferred-cleanup
+spec_slug: folder-activity-task-tracking-phase-1
 input_type: goal
 goal_or_spec: |
-  Flashcard room Phase 1 deferred cleanup:
-  (1) Extract ChatDirectoryPicker into app/components/global/ so RoomGenerateDialog can reuse it.
-  (2) Remove legacy createSetWithCards from convex/flashcards.ts — rewrite accountDeletion.test.ts + dataExport.test.ts to seed rooms directly.
-  (3) Short-circuit restoreRoomVersion when target version === active version (no-op restore creates duplicate).
-  (4) Fix SSR stub roomId:'' landmine in useFlashcardRooms — throw on SSR calls or wrap with ClientOnly.
-  (5) Key RoomShell test mockMutate on apiRef to discriminate rename/delete/restore.
-  (6) Add component test for RoomEditor reorder rollback + toast on mutation failure.
-is_ui: false
+  Folder activity & task tracking — Phase 1 (flashcard generation):
+  Add tasks table, fire-and-forget generation flow, folder-level activity
+  strip UI, cancellation. Source: TASKSPLAN.md
+is_ui: true
 review_rounds: 0
 branch: null
 pr_url: null
@@ -23,34 +19,52 @@ paths:
   deferred_work: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts/deferred-work.md
   design_cache: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts/design-screens
 design:
-  approved: false
-  approved_at: null
-  stitch_project_id: null
+  approved: true
+  approved_at: 2026-04-16
+  stitch_project_id: "2926819289448574055"
   reference_screenshot: null
-  screens: []
+  screens:
+    - id: 7ff8fe3492fd473e9d814fcce4b416e3
+      label: folder-header-with-icons
+      a11y_score: 100
+      notes: "folder header bar with 3 right-aligned icon buttons: Pencil (edit), FolderPlus (add subfolder), ListTodo (toggle tasks) with amber '2' badge. Clean toolbar feel."
+    - id: d42c44d1d7db43eb8b58056f90753e30
+      label: tasks-panel-active
+      a11y_score: 85
+      notes: "right-side slide-over panel (380px) showing 2 running tasks (flashcard gen + quiz gen with spinners, progress bars, cancel) + 1 completed task. ListTodo icon amber active state. Generic form-label warning — impl AC."
+    - id: 2611206db4434995a624908e15b33fb1
+      label: tasks-panel-failed
+      a11y_score: 85
+      notes: "tasks panel with 1 failed task (rose border, error message, retry+dismiss) + 1 completed task. '1 failed' rose pill in header. Generic form-label warning — impl AC."
+    - id: a414f9dfed17477abe56edf5833fc750
+      label: tasks-panel-empty
+      a11y_score: 85
+      notes: "tasks panel open but empty — centered CheckCircle muted icon + 'No active tasks' + helper text. Calm empty state. Generic form-label warning — impl AC."
+    - id: af1a35b81e1e48eb941acca06355daa7
+      label: folder-header-no-tasks
+      a11y_score: 90
+      notes: "folder header with 3 icons, no badge on ListTodo — clean resting state. Minor: lang attr + viewport meta (Stitch artifact, not runtime)."
 escalation:
   pending: null
-  log: []
+  log:
+    - question: "Approve the 5 proposed screens for folder-activity-task-tracking-phase-1 (v2 — header icons + right panel)"
+      answer: "approve — tasks panel renders inside existing helper sidebar (citations/references pane), not standalone slide-over"
+      recommended_default: request_revision
+      followed_default: false
+      asked_at: 2026-04-16
+      answered_at: 2026-04-16
+      raised_from_state: design
 decisions_log: []
 run_log:
   - ts: 2026-04-16
     event: start
-    detail: "Deferred cleanup from flashcard-room-refactor-phase-1; is_ui=false → skipping design"
+    detail: "Task tracking Phase 1 kicked off from TASKSPLAN.md; is_ui=true (activity strip is a new UI surface) → entering design"
   - ts: 2026-04-16
     event: intake_complete
-    detail: "slug=flashcard-room-p1-deferred-cleanup, input_type=goal, is_ui=false. 6 tasks: directory-picker extraction, legacy removal, restore no-op guard, SSR stub fix, test mock keying, reorder rollback test."
+    detail: "slug=folder-activity-task-tracking-phase-1, input_type=goal, is_ui=true. Scope: tasks table + 8 Convex endpoints + activity strip UI + fire-and-forget flashcard generation + cancellation."
   - ts: 2026-04-16
     event: phase_transition
-    detail: "intake → clarify"
-  - ts: 2026-04-16
-    event: clarify_complete
-    detail: "All 6 tasks clearly defined from deferred-work.md. No ambiguity. Tree clean."
-  - ts: 2026-04-16
-    event: spec_written
-    detail: "spec-flashcard-room-p1-deferred-cleanup.md (~1100 tokens). Under cap."
-  - ts: 2026-04-16
-    event: phase_transition
-    detail: "clarify → spec → implement"
+    detail: "intake → design"
 config:
   notifications:
     telegram:

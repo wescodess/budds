@@ -11,6 +11,7 @@
 import type * as accountDeletion from "../accountDeletion.js";
 import type * as auth from "../auth.js";
 import type * as conversations from "../conversations.js";
+import type * as crons from "../crons.js";
 import type * as dataExport from "../dataExport.js";
 import type * as debugQuery from "../debugQuery.js";
 import type * as documentActions from "../documentActions.js";
@@ -24,6 +25,7 @@ import type * as http from "../http.js";
 import type * as messages from "../messages.js";
 import type * as migrations from "../migrations.js";
 import type * as quizzes from "../quizzes.js";
+import type * as tasks from "../tasks.js";
 import type * as users from "../users.js";
 
 import type {
@@ -36,6 +38,7 @@ declare const fullApi: ApiFromModules<{
   accountDeletion: typeof accountDeletion;
   auth: typeof auth;
   conversations: typeof conversations;
+  crons: typeof crons;
   dataExport: typeof dataExport;
   debugQuery: typeof debugQuery;
   documentActions: typeof documentActions;
@@ -49,6 +52,7 @@ declare const fullApi: ApiFromModules<{
   messages: typeof messages;
   migrations: typeof migrations;
   quizzes: typeof quizzes;
+  tasks: typeof tasks;
   users: typeof users;
 }>;
 

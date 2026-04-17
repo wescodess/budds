@@ -2,30 +2,35 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { flushPromises } from '@vue/test-utils'
 
-const mockGenerating = ref(false)
-const mockLastError = ref<string | null>(null)
-const mockGenerate = vi.fn()
+const mockCreateTask = vi.fn()
 
 mockNuxtImport('useFlashcardRooms', () => {
   return () => ({
     rooms: ref([]),
     hasIndexedDocuments: ref(true),
-    generating: mockGenerating,
-    lastError: mockLastError,
     createRoom: vi.fn(),
     deleteRoom: vi.fn(),
     renameRoom: vi.fn(),
-    generate: mockGenerate,
   })
+})
+
+mockNuxtImport('useConvexMutation', () => {
+  return () => ({
+    mutate: mockCreateTask,
+    isLoading: ref(false),
+  })
+})
+
+mockNuxtImport('useConvexQuery', () => {
+  return () => ({ data: ref(null) })
 })
 
 const dialogPath = ['~', 'components', 'flashcards', 'RoomGenerateDialog.vue'].join('/')
 
 describe('RoomGenerateDialog', () => {
   beforeEach(() => {
-    mockGenerating.value = false
-    mockLastError.value = null
-    mockGenerate.mockReset()
+    mockCreateTask.mockReset()
+    mockCreateTask.mockResolvedValue({ taskId: 'task_1' })
     document.body.innerHTML = ''
   })
 
@@ -61,8 +66,7 @@ describe('RoomGenerateDialog', () => {
     expect(warning).toBeNull()
   })
 
-  it('[P0] submit invokes generate()', async () => {
-    mockGenerate.mockResolvedValue({ versionId: 'version_1', cardCount: 12 })
+  it('[P0] submit creates a task', async () => {
     const Dialog = await import(dialogPath)
     await mountSuspended(Dialog.default, {
       props: {
@@ -79,6 +83,6 @@ describe('RoomGenerateDialog', () => {
     submit!.click()
     await flushPromises()
 
-    expect(mockGenerate).toHaveBeenCalled()
+    expect(mockCreateTask).toHaveBeenCalled()
   })
 })
