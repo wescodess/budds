@@ -74,6 +74,12 @@ export default defineSchema({
     model: v.optional(v.string()),
     score: v.optional(v.number()),
     completedAt: v.optional(v.number()),
+    description: v.optional(v.string()),
+    creationMethod: v.optional(v.union(v.literal('manual'), v.literal('auto_generated'))),
+    difficulty: v.optional(v.string()),
+    language: v.optional(v.string()),
+    questionCount: v.optional(v.number()),
+    latestAttemptStatus: v.optional(v.union(v.literal('in_progress'), v.literal('completed'), v.literal('abandoned'))),
   })
     .index('by_userId', ['userId'])
     .index('by_folderId', ['folderId'])
@@ -84,12 +90,18 @@ export default defineSchema({
     userId: v.string(),
     order: v.number(),
     question: v.string(),
-    type: v.union(v.literal('multiple-choice'), v.literal('free-response')),
+    type: v.union(
+      v.literal('multiple-choice'),
+      v.literal('free-response'),
+      v.literal('true_false'),
+      v.literal('fill_in_the_blank'),
+    ),
     options: v.optional(v.array(v.string())),
     correctAnswer: v.string(),
+    explanation: v.optional(v.string()),
     sourceDocumentId: v.optional(v.id('documents')),
-    sourceChunkContent: v.string(),
-    sourceFilename: v.string(),
+    sourceChunkContent: v.optional(v.string()),
+    sourceFilename: v.optional(v.string()),
   })
     .index('by_quizId', ['quizId'])
     .index('by_userId', ['userId']),
@@ -210,20 +222,41 @@ export default defineSchema({
   quizAttempts: defineTable({
     userId: v.string(),
     quizId: v.id('quizzes'),
-    answers: v.array(
+    answers: v.optional(v.array(
       v.object({
         questionId: v.id('quizQuestions'),
         response: v.string(),
         isCorrect: v.boolean(),
       }),
-    ),
+    )),
     score: v.number(),
     total: v.number(),
-    completedAt: v.number(),
+    completedAt: v.optional(v.number()),
+    status: v.optional(v.union(v.literal('in_progress'), v.literal('completed'), v.literal('abandoned'))),
+    settingsSnapshot: v.optional(v.object({
+      shuffleQuestions: v.boolean(),
+      showAllQuestions: v.boolean(),
+      immediateFeedback: v.boolean(),
+    })),
+    currentQuestionIndex: v.optional(v.number()),
+    startedAt: v.optional(v.number()),
+    questionOrder: v.optional(v.array(v.id('quizQuestions'))),
   })
     .index('by_userId', ['userId'])
     .index('by_quizId', ['quizId'])
-    .index('by_userId_and_quizId', ['userId', 'quizId']),
+    .index('by_userId_and_quizId', ['userId', 'quizId'])
+    .index('by_quizId_and_status', ['quizId', 'status']),
+
+  attemptAnswers: defineTable({
+    attemptId: v.id('quizAttempts'),
+    questionId: v.id('quizQuestions'),
+    userAnswer: v.string(),
+    isCorrect: v.boolean(),
+    feedback: v.optional(v.string()),
+    answeredAt: v.number(),
+  })
+    .index('by_attemptId', ['attemptId'])
+    .index('by_attemptId_and_questionId', ['attemptId', 'questionId']),
 
   tasks: defineTable({
     userId: v.string(),

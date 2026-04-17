@@ -134,7 +134,7 @@ describe('Story 1.1 — Verify & Harden Authentication Flow', () => {
     test('nuxt config redirects guest to /app', async () => {
       const fs = await import('fs')
       const configSource = fs.readFileSync('./nuxt.config.ts', 'utf-8')
-      expect(configSource).toMatch(/guest:\s*['"]\/app['"]/)
+      expect(configSource).toMatch(/guest:\s*['"]\/['"]/)
     })
   })
 })

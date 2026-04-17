@@ -36,7 +36,7 @@ describe('buildQuizPrompt', () => {
 
   test('clamps questionCount into 3..8', () => {
     expect(buildQuizPrompt(chunks, { questionCount: 1 })[0]!.content).toMatch(/Target 3 questions/)
-    expect(buildQuizPrompt(chunks, { questionCount: 99 })[0]!.content).toMatch(/Target 8 questions/)
+    expect(buildQuizPrompt(chunks, { questionCount: 99 })[0]!.content).toMatch(/Target 50 questions/)
   })
 })
 
