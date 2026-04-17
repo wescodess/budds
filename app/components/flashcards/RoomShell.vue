@@ -13,6 +13,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   back: []
   'room-deleted': [roomId: Id<'flashcardRooms'>]
+  generationStarted: []
 }>()
 
 const { data: roomData } = useConvexQuery(
@@ -186,6 +187,7 @@ async function handleConfirmDelete() {
       :folder-id="folderId"
       :has-existing-cards="cardCount > 0"
       @update:open="(v) => (generateOpen = v)"
+      @generation-started="emit('generationStarted')"
     />
 
     <UiAlertDialog v-model:open="confirmDeleteOpen">

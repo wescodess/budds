@@ -13,6 +13,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:open': [value: boolean]
+  generationStarted: []
 }>()
 
 const submitting = ref(false)
@@ -121,6 +122,7 @@ async function handleSubmit() {
     const { toast } = await import('vue-sonner')
     toast.success('Generation started')
     emit('update:open', false)
+    emit('generationStarted')
 
     $fetch('/api/flashcards/generate', {
       method: 'POST',
