@@ -199,7 +199,7 @@ defineExpose({ focusSearch })
         <div
           v-for="folder in matchingFolders"
           :key="`search-folder-${folder.id}`"
-          class="group flex items-center gap-2 rounded-xl px-2 py-1.5 text-sm hover:bg-accent/10"
+          class="group flex min-w-0 items-center gap-2 rounded-xl px-2 py-1.5 text-sm hover:bg-accent/10"
           style="padding-left: 8px"
         >
           <span class="w-7 shrink-0" />
@@ -223,7 +223,7 @@ defineExpose({ focusSearch })
         <div
           v-for="file in matchingFiles"
           :key="`search-file-${file.id}`"
-          class="group flex items-center gap-2 rounded-xl px-2 py-1.5 text-sm hover:bg-accent/10"
+          class="group flex min-w-0 items-center gap-2 rounded-xl px-2 py-1.5 text-sm hover:bg-accent/10"
           style="padding-left: 8px"
         >
           <span class="w-7 shrink-0" />
@@ -250,7 +250,7 @@ defineExpose({ focusSearch })
         <div
           v-for="row in visibleTree"
           :key="`${row.type}-${row.id}`"
-          class="group flex items-center gap-2 rounded-xl px-2 py-1.5 text-sm hover:bg-accent/10"
+          class="group flex min-w-0 items-center gap-2 rounded-xl px-2 py-1.5 text-sm hover:bg-accent/10"
           :style="{ paddingLeft: `${8 + row.depth * 16}px` }"
         >
           <template v-if="row.type === 'folder'">
