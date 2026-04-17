@@ -542,7 +542,7 @@ export const getRoomVersion = query({
 
     const cards = await ctx.db
       .query('flashcardVersionCards')
-      .withIndex('by_versionId', (q) => q.eq('versionId', args.versionId))
+      .withIndex('by_versionId', (q) => q.eq('versionId', args.versionId!))
       .collect()
 
     cards.sort((a, b) => a.displayOrder - b.displayOrder)
