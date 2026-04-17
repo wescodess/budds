@@ -11,6 +11,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'select-room': [roomId: string | null]
+  generationStarted: []
 }>()
 
 const { rooms, hasIndexedDocuments } = useFlashcardRooms(toRef(props, 'folderId'))
@@ -110,6 +111,7 @@ async function handleCreate() {
       :folder-id="folderId"
       @back="handleBack"
       @room-deleted="handleBack"
+      @generation-started="emit('generationStarted')"
     />
 
     <template v-else>

@@ -1,16 +1,17 @@
 version: 1
-mode: running
-current_phase: implement
-spec_slug: folder-activity-task-tracking-phase-1
+mode: idle
+current_phase: complete
+spec_slug: quiz-feature-revamp
 input_type: goal
 goal_or_spec: |
-  Folder activity & task tracking — Phase 1 (flashcard generation):
-  Add tasks table, fire-and-forget generation flow, folder-level activity
-  strip UI, cancellation. Source: TASKSPLAN.md
+  Quiz feature revamp — full implementation per quiz_feature_spec.md.resolved
+  and TASKSPLAN.md. 8 phases: schema+backend, AI generation upgrade, composable
+  layer, core UI (shell/overview/modals), taking UI (sequential+show-all),
+  results UI, AI wizard, polish.
 is_ui: true
 review_rounds: 0
-branch: null
-pr_url: null
+branch: feat/quiz-feature-revamp
+pr_url: https://github.com/wescodess/budds/pull/45
 paths:
   project_root: /Users/wesleyukadike/Desktop/budds
   artifacts_dir: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts
@@ -20,51 +21,66 @@ paths:
   design_cache: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts/design-screens
 design:
   approved: true
-  approved_at: 2026-04-16
-  stitch_project_id: "2926819289448574055"
+  approved_at: 2026-04-17
+  stitch_project_id: "526950061036357227"
   reference_screenshot: null
   screens:
-    - id: 7ff8fe3492fd473e9d814fcce4b416e3
-      label: folder-header-with-icons
-      a11y_score: 100
-      notes: "folder header bar with 3 right-aligned icon buttons: Pencil (edit), FolderPlus (add subfolder), ListTodo (toggle tasks) with amber '2' badge. Clean toolbar feel."
-    - id: d42c44d1d7db43eb8b58056f90753e30
-      label: tasks-panel-active
-      a11y_score: 85
-      notes: "right-side slide-over panel (380px) showing 2 running tasks (flashcard gen + quiz gen with spinners, progress bars, cancel) + 1 completed task. ListTodo icon amber active state. Generic form-label warning — impl AC."
-    - id: 2611206db4434995a624908e15b33fb1
-      label: tasks-panel-failed
-      a11y_score: 85
-      notes: "tasks panel with 1 failed task (rose border, error message, retry+dismiss) + 1 completed task. '1 failed' rose pill in header. Generic form-label warning — impl AC."
-    - id: a414f9dfed17477abe56edf5833fc750
-      label: tasks-panel-empty
-      a11y_score: 85
-      notes: "tasks panel open but empty — centered CheckCircle muted icon + 'No active tasks' + helper text. Calm empty state. Generic form-label warning — impl AC."
-    - id: af1a35b81e1e48eb941acca06355daa7
-      label: folder-header-no-tasks
-      a11y_score: 90
-      notes: "folder header with 3 icons, no badge on ListTodo — clean resting state. Minor: lang attr + viewport meta (Stitch artifact, not runtime)."
+    - id: e58d0c25805b43e09859991e7e05da1b
+      label: quiz-overview
+      notes: "Quiz overview with editable title, question list with type badges, history dropdown, control center dock"
+    - id: 23dbd90c656a44dc9740430dbd0dec91
+      label: settings-modal
+      notes: "Pre-attempt settings modal with shuffle, show-all, immediate feedback toggles"
+    - id: 9c7c9edde7464770b5fc2c0267a4f5f3
+      label: resume-dialog
+      notes: "Resume in-progress attempt dialog with progress info and resume/restart options"
+    - id: 42cdfc39bafa4e9a923a6ba5bd4da150
+      label: sequential-question
+      notes: "Sequential mode single question view with MC options and progress bar"
+    - id: 96a67df38e0e44adb3173525857037d9
+      label: sequential-feedback-correct
+      notes: "Correct answer feedback with green banner, explain-why expandable"
+    - id: f72cc859e68e4359a3003403aa7ad14d
+      label: sequential-feedback-incorrect
+      notes: "Incorrect answer feedback with red banner, explanation panel, correct answer highlight"
+    - id: 87ead295aa5344c996a2c5d87601e2aa
+      label: show-all-mode
+      notes: "Show-all mode with multiple question types visible, sticky bottom progress bar"
+    - id: 5c5a218c8a7b477796789fb10fc3855a
+      label: results-score
+      notes: "Results overview with score percentage, circular indicator, correct count, retake/history"
+    - id: b7ba8e46a3de4800922a893193d42ab8
+      label: results-question-review
+      notes: "Tabbed per-question review with left sidebar tabs and right detail panel"
+    - id: 1db0e0e771b1416fb0aa3509aa1d7582
+      label: ai-wizard-topics
+      notes: "AI generation wizard step 2 with suggested/custom topic pills"
 escalation:
   pending: null
-  log:
-    - question: "Approve the 5 proposed screens for folder-activity-task-tracking-phase-1 (v2 — header icons + right panel)"
-      answer: "approve — tasks panel renders inside existing helper sidebar (citations/references pane), not standalone slide-over"
-      recommended_default: request_revision
-      followed_default: false
-      asked_at: 2026-04-16
-      answered_at: 2026-04-16
-      raised_from_state: design
+  log: []
 decisions_log: []
 run_log:
-  - ts: 2026-04-16
+  - ts: 2026-04-17
     event: start
-    detail: "Task tracking Phase 1 kicked off from TASKSPLAN.md; is_ui=true (activity strip is a new UI surface) → entering design"
-  - ts: 2026-04-16
+    detail: "Quiz feature revamp kicked off from TASKSPLAN.md + quiz_feature_spec.md.resolved; is_ui=true (multiple new UI surfaces) → entering design"
+  - ts: 2026-04-17
     event: intake_complete
-    detail: "slug=folder-activity-task-tracking-phase-1, input_type=goal, is_ui=true. Scope: tasks table + 8 Convex endpoints + activity strip UI + fire-and-forget flashcard generation + cancellation."
-  - ts: 2026-04-16
+    detail: "slug=quiz-feature-revamp, input_type=goal, is_ui=true. Scope: schema extensions (4 question types, attemptAnswers table, attempt lifecycle), 12+ new backend endpoints, 4 composables, ~28 new Vue components (shell, overview, taking sequential+show-all, results with tabbed review, AI wizard 3-step, question modal, settings modal, resume dialog), generation upgrade (topics API, difficulty, types)."
+  - ts: 2026-04-17
     event: phase_transition
     detail: "intake → design"
+  - ts: 2026-04-17
+    event: design_screens_generated
+    detail: "10 Stitch screens generated (project 526950061036357227): quiz-overview, settings-modal, resume-dialog, sequential-question, sequential-feedback-correct, sequential-feedback-incorrect, show-all-mode, results-score, results-question-review, ai-wizard-topics"
+  - ts: 2026-04-17
+    event: escalation_raised
+    detail: "Design approval escalation — 10 screens pending user review"
+  - ts: 2026-04-17
+    event: escalation_resolved
+    detail: "Design approved (12 screens: 9 core + 3 wizard modals). Wizard changed from full-page to modal overlay per user feedback."
+  - ts: 2026-04-17
+    event: phase_transition
+    detail: "design → clarify"
 config:
   notifications:
     telegram:
