@@ -108,20 +108,6 @@ const floatingStyle = computed(() => {
   }
 })
 
-onMounted(() => { loadPosition() })
-
-watch(visible, (v) => {
-  if (v && posX.value === null) loadPosition()
-})
-
-watch(expanded, () => {
-  if (posX.value !== null && posY.value !== null) {
-    const clamped = clampPosition(posX.value, posY.value)
-    posX.value = clamped.x
-    posY.value = clamped.y
-  }
-})
-
 const onActiveFolderRoute = computed(() => {
   const fid = folderId.value
   if (!fid) return false
@@ -145,6 +131,20 @@ const visible = computed(() =>
   && !onPublicAudioRoute.value
   && !onPodcastExpandRoute.value,
 )
+
+onMounted(() => { loadPosition() })
+
+watch(visible, (v) => {
+  if (v && posX.value === null) loadPosition()
+})
+
+watch(expanded, () => {
+  if (posX.value !== null && posY.value !== null) {
+    const clamped = clampPosition(posX.value, posY.value)
+    posX.value = clamped.x
+    posY.value = clamped.y
+  }
+})
 
 const speakerSwatchClass = computed(() =>
   activeTurn.value?.speaker === 'host_b' ? 'bg-accent' : 'bg-primary',
