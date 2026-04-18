@@ -1,9 +1,17 @@
 <script setup lang="ts">
+import { ref, computed } from 'vue'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 import AudioOverviewCard from './AudioOverviewCard.vue'
 import AudioOverviewGenerating from './AudioOverviewGenerating.vue'
 import AudioOverviewPlayer from './AudioOverviewPlayer.vue'
+import AudioOverviewCustomize from './AudioOverviewCustomize.vue'
+import type {
+  CustomizeSubmit,
+  LengthMinutes,
+  Complexity,
+  HostVoice,
+} from './customize-types'
 
 const props = defineProps<{
   folderId: Id<'folders'>
@@ -72,15 +80,34 @@ const deleteOverviewMutation = import.meta.client
 const submitting = ref(false)
 const cancelling = ref(false)
 
-async function handleGenerate() {
+const customizeOpen = ref(false)
+const customizeDefaults = ref<{
+  lengthMinutes: LengthMinutes
+  complexity: Complexity
+  voiceA: HostVoice
+  voiceB: HostVoice
+}>({ lengthMinutes: 10, complexity: 'beginner', voiceA: 'asteria', voiceB: 'orion' })
+
+function openCustomize() {
+  customizeOpen.value = true
+}
+
+async function handleCustomizeSubmit(value: CustomizeSubmit) {
   if (submitting.value) return
   submitting.value = true
+  customizeOpen.value = false
+  customizeDefaults.value = {
+    lengthMinutes: value.lengthMinutes,
+    complexity: value.complexity,
+    voiceA: value.voiceProfile.hostA,
+    voiceB: value.voiceProfile.hostB,
+  }
   try {
     const result = (await createTaskMutation.mutate({
       folderId: props.folderId,
       type: 'audio-overview-generation',
       title: 'Generating audio overview…',
-      metadata: { lengthMinutes: 10, complexity: 'beginner' },
+      metadata: { lengthMinutes: value.lengthMinutes, complexity: value.complexity },
     } as any)) as { taskId: Id<'tasks'> }
 
     emit('generation-started')
@@ -90,7 +117,8 @@ async function handleGenerate() {
       body: {
         folderId: props.folderId,
         taskId: result.taskId,
-        preferences: { lengthMinutes: 10, complexity: 'beginner' as const },
+        preferences: { lengthMinutes: value.lengthMinutes, complexity: value.complexity },
+        voiceProfile: { hostA: value.voiceProfile.hostA, hostB: value.voiceProfile.hostB },
       },
     }).catch(() => { /* task will surface failure state */ })
   }
@@ -136,7 +164,7 @@ async function handleDeleteOverview(id: Id<'audioOverviews'>) {
 }
 
 defineExpose({
-  startGeneration: handleGenerate,
+  startGeneration: openCustomize,
 })
 </script>
 
@@ -156,7 +184,8 @@ defineExpose({
       :folder-id="props.folderId"
       :overviews="readyOverviews"
       :regenerating="submitting"
-      @request-regenerate="handleGenerate"
+      @request-regenerate="openCustomize"
+      @request-customize="openCustomize"
       @select-overview="handleSelectOverview"
       @delete-overview="handleDeleteOverview"
     />
@@ -164,7 +193,19 @@ defineExpose({
       v-else
       :indexed-count="indexedCount"
       :generating="submitting"
-      @generate="handleGenerate"
+      @generate="openCustomize"
+      @customize="openCustomize"
+    />
+
+    <AudioOverviewCustomize
+      v-model:open="customizeOpen"
+      :initial-length-minutes="customizeDefaults.lengthMinutes"
+      :initial-complexity="customizeDefaults.complexity"
+      :initial-voice-a="customizeDefaults.voiceA"
+      :initial-voice-b="customizeDefaults.voiceB"
+      :submitting="submitting"
+      :submit-label="activeOverview ? 'Generate new' : 'Generate'"
+      @submit="handleCustomizeSubmit"
     />
   </div>
 </template>

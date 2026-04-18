@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { Pause, Play, Rewind, FastForward, Download, Share2, RefreshCw, History, Check, Trash2 } from 'lucide-vue-next'
+import { ref, computed, watch } from 'vue'
+import { Pause, Play, Rewind, FastForward, Download, Share2, RefreshCw, History, Check, Trash2, Settings2 } from 'lucide-vue-next'
 import { api } from '#convex/api'
 import type { Id, Doc } from '../../../convex/_generated/dataModel'
-import { useAudioOverviewPlayer, type OverviewTurn } from '~/composables/useAudioOverviewPlayer'
+import type { AudioOverviewTurn } from '~/composables/useAudioOverviewStore'
 
 type OverviewSummary = {
   _id: Id<'audioOverviews'>
@@ -13,15 +14,18 @@ type OverviewSummary = {
   totalDurationMs: number
 }
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   overviewId: Id<'audioOverviews'>
   folderId: Id<'folders'>
-  overviews: OverviewSummary[]
+  overviews?: OverviewSummary[]
   regenerating?: boolean
-}>()
+}>(), {
+  overviews: () => [],
+})
 
 const emit = defineEmits<{
   'request-regenerate': []
+  'request-customize': []
   'select-overview': [id: Id<'audioOverviews'>]
   'delete-overview': [id: Id<'audioOverviews'>]
 }>()
@@ -36,27 +40,40 @@ const { data: turnUrlData } = useConvexQuery(
 )
 
 const overview = computed<Doc<'audioOverviews'> | null>(() => (overviewData.value as Doc<'audioOverviews'> | null | undefined) ?? null)
-const turns = computed<OverviewTurn[]>(() => (overview.value?.turns ?? []) as OverviewTurn[])
+const turns = computed<AudioOverviewTurn[]>(() => (overview.value?.turns ?? []) as AudioOverviewTurn[])
 const turnUrls = computed<(string | null)[]>(() => (turnUrlData.value as (string | null)[] | null | undefined) ?? [])
 
 const folderRef = computed(() => props.folderId)
 const { documents } = useDocuments(folderRef)
 
+const store = useAudioOverviewStore()
+const {
+  currentTurnIndex, isPlaying, playbackRate, currentTimeMs, totalDurationMs, activeTurn,
+  magnitude: visualizerMagnitude,
+  play, pause, togglePlay, skip, seek, setSpeed, loadOverview,
+} = store
+
+watch(
+  [() => turns.value, () => turnUrls.value],
+  ([nextTurns, nextUrls]) => {
+    if (!import.meta.client) return
+    if (!overview.value) return
+    if (nextTurns.length === 0) return
+    if (nextTurns.length !== nextUrls.length) return
+    loadOverview({
+      overviewId: props.overviewId,
+      folderId: props.folderId,
+      title: overview.value.title,
+      turns: nextTurns,
+      turnUrls: nextUrls,
+    })
+  },
+  { immediate: true, deep: true },
+)
+
 const speedOptions = [1, 1.2, 1.5, 2] as const
 type SpeedOption = typeof speedOptions[number]
 const speedMenuOpen = ref(false)
-
-const {
-  attach, currentTurnIndex, isPlaying, playbackRate, currentTimeMs, totalDurationMs, activeTurn,
-  play, pause, skip, seek, setSpeed,
-} = useAudioOverviewPlayer({ turns, turnUrls })
-
-const audioEl = ref<HTMLAudioElement | null>(null)
-const preloadEl = ref<HTMLAudioElement | null>(null)
-
-onMounted(() => {
-  attach(audioEl.value, preloadEl.value)
-})
 
 function formatMs(ms: number): string {
   const total = Math.max(0, Math.round(ms / 1000))
@@ -84,11 +101,6 @@ function toggleSpeedMenu() { speedMenuOpen.value = !speedMenuOpen.value }
 function pickSpeed(speed: SpeedOption) {
   setSpeed(speed)
   speedMenuOpen.value = false
-}
-
-function togglePlay() {
-  if (isPlaying.value) pause()
-  else void play()
 }
 
 const activeSpeakerLabel = computed(() => {
@@ -123,6 +135,7 @@ const hasMissingTurnUrl = computed(() => {
 const historyOpen = ref(false)
 const deleteTargetId = ref<Id<'audioOverviews'> | null>(null)
 const deleteTargetTitle = ref<string>('')
+const downloading = ref(false)
 
 function formatRelativeTime(ts: number): string {
   const diff = Date.now() - ts
@@ -160,6 +173,51 @@ function cancelDelete() {
   deleteTargetId.value = null
   deleteTargetTitle.value = ''
 }
+
+async function handleDownload() {
+  if (downloading.value) return
+  downloading.value = true
+  try {
+    const { downloadOverview } = useAudioOverviewDownload()
+    const result = await downloadOverview({
+      title: overview.value?.title ?? 'audio-overview',
+      turnUrls: turnUrls.value,
+    })
+    const { toast } = await import('vue-sonner')
+    const issues = result.failed.length + result.skipped
+    if (issues > 0) {
+      const failedLabel = result.failed.length > 0
+        ? ` (failed: ${result.failed.map(f => `#${f.index + 1}`).join(', ')})`
+        : ''
+      toast.warning(`Downloaded ${result.fetched} of ${result.total} segments — ${result.filename}${failedLabel}`)
+    } else {
+      toast.success(`Downloaded ${result.filename}`)
+    }
+  } catch (err: any) {
+    const { toast } = await import('vue-sonner')
+    toast.error(err?.message ?? 'Download failed')
+  } finally {
+    downloading.value = false
+  }
+}
+
+function handleCustomize() {
+  emit('request-customize')
+}
+
+const activeHostGlowStyle = computed(() => ({
+  transform: `scale(${1 + visualizerMagnitude.value * 0.08})`,
+}))
+
+const ringOuterStyle = computed(() => ({
+  transform: `scale(${1.3 + visualizerMagnitude.value * 0.15})`,
+  opacity: `${0.15 + visualizerMagnitude.value * 0.2}`,
+}))
+
+const ringMiddleStyle = computed(() => ({
+  transform: `scale(${1.15 + visualizerMagnitude.value * 0.12})`,
+  opacity: `${0.35 + visualizerMagnitude.value * 0.3}`,
+}))
 </script>
 
 <template>
@@ -236,6 +294,16 @@ function cancelDelete() {
         </div>
         <button
           type="button"
+          data-testid="audio-overview-customize-btn"
+          class="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border/60 bg-card px-3 py-1.5 font-inter text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          :disabled="props.regenerating"
+          @click="handleCustomize"
+        >
+          <Settings2 class="h-3.5 w-3.5" />
+          Customize
+        </button>
+        <button
+          type="button"
           data-testid="audio-overview-regenerate-btn"
           class="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border/60 bg-card px-3 py-1.5 font-inter text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
           :disabled="props.regenerating"
@@ -271,15 +339,30 @@ function cancelDelete() {
     <section class="mx-auto flex w-full max-w-3xl flex-col items-center gap-8">
       <div class="grid w-full grid-cols-2 gap-4">
         <div
-          class="flex flex-col items-center gap-3 rounded-xl border p-6 transition-colors"
+          class="relative flex flex-col items-center gap-3 rounded-xl border p-6 transition-colors"
           :class="activeTurn?.speaker === 'host_a' ? 'border-primary/70 bg-card' : 'border-border/60 bg-card/60 opacity-80'"
           data-testid="audio-overview-host-a"
         >
-          <span
-            class="h-16 w-16 rounded-full bg-primary transition-shadow"
-            :class="activeTurn?.speaker === 'host_a' ? 'shadow-[0_0_24px_rgba(245,158,11,0.35)]' : ''"
-            aria-hidden="true"
-          />
+          <div class="relative flex h-24 w-24 items-center justify-center">
+            <span
+              v-if="activeTurn?.speaker === 'host_a'"
+              class="pointer-events-none absolute h-24 w-24 rounded-full border border-primary/60 transition-[transform,opacity]"
+              :style="ringOuterStyle"
+              aria-hidden="true"
+            />
+            <span
+              v-if="activeTurn?.speaker === 'host_a'"
+              class="pointer-events-none absolute h-24 w-24 rounded-full border border-primary/80 transition-[transform,opacity]"
+              :style="ringMiddleStyle"
+              aria-hidden="true"
+            />
+            <span
+              class="h-24 w-24 rounded-full bg-primary transition-[transform,box-shadow]"
+              :class="activeTurn?.speaker === 'host_a' ? 'shadow-[0_0_40px_rgba(245,158,11,0.55)]' : ''"
+              :style="activeTurn?.speaker === 'host_a' ? activeHostGlowStyle : undefined"
+              aria-hidden="true"
+            />
+          </div>
           <div class="text-center">
             <p class="font-dm-sans text-sm font-medium text-foreground">
               Host A · Expert
@@ -293,15 +376,30 @@ function cancelDelete() {
           </div>
         </div>
         <div
-          class="flex flex-col items-center gap-3 rounded-xl border p-6 transition-colors"
+          class="relative flex flex-col items-center gap-3 rounded-xl border p-6 transition-colors"
           :class="activeTurn?.speaker === 'host_b' ? 'border-primary/70 bg-card' : 'border-border/60 bg-card/60 opacity-80'"
           data-testid="audio-overview-host-b"
         >
-          <span
-            class="h-16 w-16 rounded-full bg-accent transition-shadow"
-            :class="activeTurn?.speaker === 'host_b' ? 'shadow-[0_0_24px_rgba(252,211,77,0.35)]' : ''"
-            aria-hidden="true"
-          />
+          <div class="relative flex h-24 w-24 items-center justify-center">
+            <span
+              v-if="activeTurn?.speaker === 'host_b'"
+              class="pointer-events-none absolute h-24 w-24 rounded-full border border-accent/60 transition-[transform,opacity]"
+              :style="ringOuterStyle"
+              aria-hidden="true"
+            />
+            <span
+              v-if="activeTurn?.speaker === 'host_b'"
+              class="pointer-events-none absolute h-24 w-24 rounded-full border border-accent/80 transition-[transform,opacity]"
+              :style="ringMiddleStyle"
+              aria-hidden="true"
+            />
+            <span
+              class="h-24 w-24 rounded-full bg-accent transition-[transform,box-shadow]"
+              :class="activeTurn?.speaker === 'host_b' ? 'shadow-[0_0_40px_rgba(252,211,77,0.55)]' : ''"
+              :style="activeTurn?.speaker === 'host_b' ? activeHostGlowStyle : undefined"
+              aria-hidden="true"
+            />
+          </div>
           <div class="text-center">
             <p class="font-dm-sans text-sm font-medium text-foreground">
               Host B · Learner
@@ -420,12 +518,13 @@ function cancelDelete() {
           <button
             type="button"
             data-testid="audio-overview-download-btn"
-            aria-label="Download (coming soon)"
-            class="inline-flex h-8 items-center gap-1.5 rounded-md px-2 font-inter text-xs text-muted-foreground opacity-60"
-            disabled
+            aria-label="Download audio overview"
+            :disabled="downloading || turnUrls.length === 0"
+            class="inline-flex h-8 items-center gap-1.5 rounded-md border border-transparent px-2 font-inter text-xs text-foreground transition-colors hover:border-primary/40 hover:bg-accent/10 disabled:cursor-not-allowed disabled:opacity-50"
+            @click="handleDownload"
           >
-            <Download class="h-3.5 w-3.5" />
-            <span class="rounded-sm border border-border/60 px-1 text-[10px] uppercase tracking-wide">Soon</span>
+            <Download class="h-3.5 w-3.5" :class="downloading ? 'animate-pulse' : ''" />
+            {{ downloading ? 'Downloading…' : 'Download' }}
           </button>
           <button
             type="button"
@@ -455,8 +554,5 @@ function cancelDelete() {
         </span>
       </div>
     </section>
-
-    <audio ref="audioEl" preload="metadata" class="hidden" />
-    <audio ref="preloadEl" preload="auto" class="hidden" />
   </div>
 </template>
