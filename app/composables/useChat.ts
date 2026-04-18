@@ -388,8 +388,9 @@ export function useChat(
       })
 
       const store = useAudioOverviewStore()
+      const spliceAt = store.currentTurnIndex.value
       store.spliceTurns({
-        afterIndex: result.insertedAfterTurnIndex,
+        afterIndex: spliceAt,
         turns: result.turns.map(t => ({
           speaker: t.speaker,
           text: t.text,
