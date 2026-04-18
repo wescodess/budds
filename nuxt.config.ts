@@ -140,5 +140,6 @@ export default defineNuxtConfig({
     '/app': { auth: 'user' as const },
     '/app/**': { auth: 'user' as const },
     '/login': { auth: 'guest' as const },
+    '/audio/**': { swr: 300 },
   },
 })
