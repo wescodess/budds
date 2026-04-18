@@ -13,12 +13,14 @@ type OverviewSummary = {
   totalDurationMs: number
 }
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   overviewId: Id<'audioOverviews'>
   folderId: Id<'folders'>
-  overviews: OverviewSummary[]
+  overviews?: OverviewSummary[]
   regenerating?: boolean
-}>()
+}>(), {
+  overviews: () => [],
+})
 
 const emit = defineEmits<{
   'request-regenerate': []
