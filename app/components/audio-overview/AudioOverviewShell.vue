@@ -21,11 +21,24 @@ const indexedCount = computed(() =>
   (documents.value ?? []).filter(doc => doc.status === 'success').length,
 )
 
+type OverviewSummary = {
+  _id: Id<'audioOverviews'>
+  _creationTime: number
+  title: string
+  status: string
+  turnCount: number
+  totalDurationMs: number
+  taskId?: Id<'tasks'>
+}
+
 const { data: overviewsData } = useConvexQuery(
   api.audioOverviews.listByFolder,
   computed(() => ({ folderId: props.folderId })),
 )
-const overviews = computed(() => (overviewsData.value as Array<{ _id: Id<'audioOverviews'>; status: string; title: string; _creationTime: number }> | null | undefined) ?? [])
+const overviews = computed<OverviewSummary[]>(
+  () => (overviewsData.value as OverviewSummary[] | null | undefined) ?? [],
+)
+const readyOverviews = computed(() => overviews.value.filter(o => o.status === 'ready'))
 
 const activeTask = computed(() => {
   const candidates = tasks.value.filter(t =>
@@ -36,11 +49,25 @@ const activeTask = computed(() => {
   return [...candidates].sort((a, b) => b._creationTime - a._creationTime)[0] ?? null
 })
 
-const readyOverview = computed(() => overviews.value.find(o => o.status === 'ready') ?? null)
+const selectedOverviewId = ref<Id<'audioOverviews'> | null>(null)
+
+const activeOverview = computed<OverviewSummary | null>(() => {
+  const list = readyOverviews.value
+  if (list.length === 0) return null
+  if (selectedOverviewId.value) {
+    const match = list.find(o => o._id === selectedOverviewId.value)
+    if (match) return match
+  }
+  return list[0] ?? null
+})
 
 const createTaskMutation = import.meta.client
   ? useConvexMutation(api.tasks.create)
   : { mutate: async () => ({ taskId: '' }), isLoading: ref(false) } as any
+
+const deleteOverviewMutation = import.meta.client
+  ? useConvexMutation(api.audioOverviews.deleteOverview)
+  : { mutate: async (_args: { id: Id<'audioOverviews'> }) => ({ deletedTurns: 0 }) } as any
 
 const submitting = ref(false)
 const cancelling = ref(false)
@@ -91,6 +118,23 @@ async function handleCancel(taskId: Id<'tasks'>) {
   }
 }
 
+function handleSelectOverview(id: Id<'audioOverviews'>) {
+  selectedOverviewId.value = id
+}
+
+async function handleDeleteOverview(id: Id<'audioOverviews'>) {
+  try {
+    await deleteOverviewMutation.mutate({ id } as any)
+    if (selectedOverviewId.value === id) selectedOverviewId.value = null
+    const { toast } = await import('vue-sonner')
+    toast.success('Audio overview deleted')
+  }
+  catch (err: any) {
+    const { toast } = await import('vue-sonner')
+    toast.error(err?.message ?? 'Failed to delete audio overview')
+  }
+}
+
 defineExpose({
   startGeneration: handleGenerate,
 })
@@ -106,11 +150,14 @@ defineExpose({
       @cancel="handleCancel"
     />
     <AudioOverviewPlayer
-      v-else-if="readyOverview"
-      :overview-id="readyOverview._id"
+      v-else-if="activeOverview"
+      :overview-id="activeOverview._id"
       :folder-id="props.folderId"
+      :overviews="readyOverviews"
       :regenerating="submitting"
       @request-regenerate="handleGenerate"
+      @select-overview="handleSelectOverview"
+      @delete-overview="handleDeleteOverview"
     />
     <AudioOverviewCard
       v-else

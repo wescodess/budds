@@ -1,17 +1,29 @@
 <script setup lang="ts">
-import { Pause, Play, Rewind, FastForward, Download, Share2, RefreshCw } from 'lucide-vue-next'
+import { Pause, Play, Rewind, FastForward, Download, Share2, RefreshCw, History, Check, Trash2 } from 'lucide-vue-next'
 import { api } from '#convex/api'
 import type { Id, Doc } from '../../../convex/_generated/dataModel'
 import { useAudioOverviewPlayer, type OverviewTurn } from '~/composables/useAudioOverviewPlayer'
 
+type OverviewSummary = {
+  _id: Id<'audioOverviews'>
+  _creationTime: number
+  title: string
+  status: string
+  turnCount: number
+  totalDurationMs: number
+}
+
 const props = defineProps<{
   overviewId: Id<'audioOverviews'>
   folderId: Id<'folders'>
+  overviews: OverviewSummary[]
   regenerating?: boolean
 }>()
 
 const emit = defineEmits<{
   'request-regenerate': []
+  'select-overview': [id: Id<'audioOverviews'>]
+  'delete-overview': [id: Id<'audioOverviews'>]
 }>()
 
 const { data: overviewData } = useConvexQuery(
@@ -107,6 +119,47 @@ const hasMissingTurnUrl = computed(() => {
   if (turns.value.length === 0) return false
   return turnUrls.value.some(url => url === null)
 })
+
+const historyOpen = ref(false)
+const deleteTargetId = ref<Id<'audioOverviews'> | null>(null)
+const deleteTargetTitle = ref<string>('')
+
+function formatRelativeTime(ts: number): string {
+  const diff = Date.now() - ts
+  const s = Math.floor(diff / 1000)
+  if (s < 60) return `${s}s ago`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m ago`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h ago`
+  const d = Math.floor(h / 24)
+  return `${d}d ago`
+}
+
+function handlePickOverview(id: Id<'audioOverviews'>) {
+  historyOpen.value = false
+  if (id !== props.overviewId) emit('select-overview', id)
+}
+
+function openDeleteConfirm(item: OverviewSummary, event: Event) {
+  event.stopPropagation()
+  deleteTargetId.value = item._id
+  deleteTargetTitle.value = item.title
+}
+
+function confirmDelete() {
+  const id = deleteTargetId.value
+  if (!id) return
+  emit('delete-overview', id)
+  deleteTargetId.value = null
+  deleteTargetTitle.value = ''
+  historyOpen.value = false
+}
+
+function cancelDelete() {
+  deleteTargetId.value = null
+  deleteTargetTitle.value = ''
+}
 </script>
 
 <template>
@@ -123,17 +176,97 @@ const hasMissingTurnUrl = computed(() => {
           {{ totalLabel }} total · {{ turns.length }} turns
         </p>
       </div>
-      <button
-        type="button"
-        data-testid="audio-overview-regenerate-btn"
-        class="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border/60 bg-card px-3 py-1.5 font-inter text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-        :disabled="props.regenerating"
-        @click="emit('request-regenerate')"
-      >
-        <RefreshCw class="h-3.5 w-3.5" :class="props.regenerating ? 'animate-spin' : ''" />
-        {{ props.regenerating ? 'Starting…' : 'Generate new' }}
-      </button>
+      <div class="flex shrink-0 items-center gap-2">
+        <div v-if="props.overviews.length > 1" class="relative">
+          <button
+            type="button"
+            data-testid="audio-overview-history-btn"
+            :aria-expanded="historyOpen"
+            class="inline-flex items-center gap-1.5 rounded-md border border-border/60 bg-card px-3 py-1.5 font-inter text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+            @click="historyOpen = !historyOpen"
+          >
+            <History class="h-3.5 w-3.5" />
+            History
+            <span class="rounded-full bg-primary/15 px-1.5 text-[10px] font-semibold text-primary">
+              {{ props.overviews.length }}
+            </span>
+          </button>
+          <div
+            v-if="historyOpen"
+            data-testid="audio-overview-history-menu"
+            class="absolute right-0 top-full z-20 mt-2 max-h-[60vh] w-[min(22rem,calc(100vw-2rem))] overflow-y-auto rounded-lg border border-border/60 bg-card p-1 shadow-lg"
+          >
+            <button
+              v-for="item in props.overviews"
+              :key="item._id"
+              type="button"
+              :data-testid="`audio-overview-history-item-${item._id}`"
+              class="group flex w-full items-start justify-between gap-2 rounded-md px-3 py-2 text-left transition-colors hover:bg-accent/20"
+              :class="item._id === props.overviewId ? 'bg-accent/10' : ''"
+              @click="handlePickOverview(item._id)"
+            >
+              <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-1.5">
+                  <Check
+                    v-if="item._id === props.overviewId"
+                    class="h-3 w-3 shrink-0 text-primary"
+                  />
+                  <p class="truncate font-dm-sans text-sm font-medium text-foreground">
+                    {{ item.title }}
+                  </p>
+                </div>
+                <p class="mt-0.5 font-inter text-[11px] text-muted-foreground">
+                  {{ formatMs(item.totalDurationMs) }} · {{ item.turnCount }} turns · {{ formatRelativeTime(item._creationTime) }}
+                </p>
+              </div>
+              <span
+                role="button"
+                tabindex="0"
+                :data-testid="`audio-overview-history-delete-${item._id}`"
+                aria-label="Delete audio overview"
+                class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-all hover:bg-destructive/10 hover:text-destructive focus:opacity-100 group-hover:opacity-100"
+                @click="openDeleteConfirm(item, $event)"
+                @keydown.enter.stop="openDeleteConfirm(item, $event)"
+                @keydown.space.stop.prevent="openDeleteConfirm(item, $event)"
+              >
+                <Trash2 class="h-3.5 w-3.5" />
+              </span>
+            </button>
+          </div>
+        </div>
+        <button
+          type="button"
+          data-testid="audio-overview-regenerate-btn"
+          class="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border/60 bg-card px-3 py-1.5 font-inter text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          :disabled="props.regenerating"
+          @click="emit('request-regenerate')"
+        >
+          <RefreshCw class="h-3.5 w-3.5" :class="props.regenerating ? 'animate-spin' : ''" />
+          {{ props.regenerating ? 'Starting…' : 'Generate new' }}
+        </button>
+      </div>
     </header>
+
+    <UiAlertDialog :open="deleteTargetId !== null" @update:open="(v) => { if (!v) cancelDelete() }">
+      <UiAlertDialogContent>
+        <UiAlertDialogHeader>
+          <UiAlertDialogTitle>Delete audio overview?</UiAlertDialogTitle>
+          <UiAlertDialogDescription>
+            Delete "{{ deleteTargetTitle || 'this audio overview' }}"? This permanently removes the recording and its audio files.
+          </UiAlertDialogDescription>
+        </UiAlertDialogHeader>
+        <UiAlertDialogFooter>
+          <UiAlertDialogCancel @click="cancelDelete">Cancel</UiAlertDialogCancel>
+          <UiAlertDialogAction
+            data-testid="audio-overview-delete-confirm"
+            class="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            @click="confirmDelete"
+          >
+            Delete
+          </UiAlertDialogAction>
+        </UiAlertDialogFooter>
+      </UiAlertDialogContent>
+    </UiAlertDialog>
 
     <section class="mx-auto flex w-full max-w-3xl flex-col items-center gap-8">
       <div class="grid w-full grid-cols-2 gap-4">
