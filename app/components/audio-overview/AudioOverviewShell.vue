@@ -151,6 +151,7 @@ defineExpose({
     />
     <AudioOverviewPlayer
       v-else-if="activeOverview"
+      :key="activeOverview._id"
       :overview-id="activeOverview._id"
       :folder-id="props.folderId"
       :overviews="readyOverviews"
