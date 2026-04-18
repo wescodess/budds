@@ -58,7 +58,10 @@ const seededFolder = computed(() =>
   ?? null,
 )
 
-const isDesktop = useMediaQuery('(min-width: 1024px)')
+const desktopMq = useMediaQuery('(min-width: 1024px)')
+const isDesktopMounted = ref(false)
+onMounted(() => { isDesktopMounted.value = true })
+const isDesktop = computed(() => isDesktopMounted.value && desktopMq.value)
 const { shouldStartHorizontalGesture } = useGestureGuards()
 const SIDEBAR_SWIPE_EDGE_GUARD_PX = 12
 
