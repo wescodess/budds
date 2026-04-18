@@ -49,6 +49,8 @@ const currentIndex = ref(0)
 const isFlipped = ref(false)
 const isComplete = ref(false)
 const sourceExpanded = ref(false)
+const dealDirection = ref<'next' | 'prev' | null>(null)
+const cardKey = ref(0)
 
 function resetToSource() {
   order.value = [...props.cards]
@@ -98,7 +100,9 @@ function next() {
     isFlipped.value = false
     return
   }
+  dealDirection.value = 'next'
   currentIndex.value += 1
+  cardKey.value++
   isFlipped.value = false
   sourceExpanded.value = false
 }
@@ -106,10 +110,22 @@ function next() {
 function prev() {
   if (isComplete.value) return
   if (currentIndex.value <= 0) return
+  dealDirection.value = 'prev'
   currentIndex.value -= 1
+  cardKey.value++
   isFlipped.value = false
   sourceExpanded.value = false
 }
+
+const { springBouncy } = useMotionPresets()
+const dealInitial = computed(() => {
+  if (!dealDirection.value) return { opacity: 0, x: 0, scale: 0.96 }
+  return {
+    opacity: 0,
+    x: dealDirection.value === 'next' ? 60 : -60,
+    scale: 0.96,
+  }
+})
 
 function handleCardKeydown(e: KeyboardEvent) {
   if (e.key === ' ' || e.key === 'Enter') {
@@ -232,9 +248,15 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <div
-        ref="cardBodyRef"
-        data-testid="flashcard-room-practice-viewer"
+      <Motion
+        :key="cardKey"
+        :initial="dealInitial"
+        :animate="{ opacity: 1, x: 0, scale: 1 }"
+        :transition="springBouncy"
+      >
+        <div
+          ref="cardBodyRef"
+          data-testid="flashcard-room-practice-viewer"
         data-gesture-owner="flashcard-room-practice"
         role="button"
         tabindex="0"
@@ -290,6 +312,7 @@ onUnmounted(() => {
           </div>
         </div>
       </div>
+      </Motion>
 
       <div class="flex items-center justify-between gap-2">
         <UiButton
@@ -332,7 +355,7 @@ onUnmounted(() => {
   position: relative;
   width: 100%;
   min-height: 260px;
-  transition: transform 400ms cubic-bezier(0.4, 0.0, 0.2, 1);
+  transition: transform 500ms cubic-bezier(0.34, 1.56, 0.64, 1);
   transform-style: preserve-3d;
 }
 

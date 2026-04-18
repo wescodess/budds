@@ -10,7 +10,14 @@ const props = defineProps<{
   content: string
   sources?: Source[]
   streaming?: boolean
+  animate?: boolean
 }>()
+
+const { springSnappy } = useMotionPresets()
+const motionInitial = computed(() => {
+  if (props.animate === false) return false
+  return { opacity: 0, x: props.role === 'user' ? 12 : -12, y: 4 }
+})
 
 const emit = defineEmits<{
   'citation-click': [index: number]
@@ -135,7 +142,10 @@ watch([processedContent, isAssistant], () => {
 </script>
 
 <template>
-  <div
+  <Motion
+    :initial="motionInitial"
+    :animate="{ opacity: 1, x: 0, y: 0 }"
+    :transition="springSnappy"
     data-testid="chat-message"
     :aria-label="`${props.role} message`"
     :class="cn(
@@ -180,5 +190,5 @@ watch([processedContent, isAssistant], () => {
         aria-hidden="true"
       />
     </div>
-  </div>
+  </Motion>
 </template>

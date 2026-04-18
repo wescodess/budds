@@ -87,7 +87,7 @@ const longPressStop = onLongPress(
         />
         <span
           v-if="active"
-          class="absolute left-0 top-1.5 h-[calc(100%-0.75rem)] w-0.5 rounded-r bg-primary z-10"
+          class="absolute left-0 top-1.5 h-[calc(100%-0.75rem)] w-0.5 rounded-r bg-primary z-10 animate-in fade-in-0 slide-in-from-left-1 duration-200"
         />
         <component :is="icon" class="relative z-10 h-4 w-4 shrink-0" />
         <span
@@ -141,7 +141,7 @@ const longPressStop = onLongPress(
         />
         <span
           v-if="active"
-          class="absolute left-0 top-1.5 h-[calc(100%-0.75rem)] w-0.5 rounded-r bg-primary z-10"
+          class="absolute left-0 top-1.5 h-[calc(100%-0.75rem)] w-0.5 rounded-r bg-primary z-10 animate-in fade-in-0 slide-in-from-left-1 duration-200"
         />
         <component :is="icon" class="relative z-10 h-4 w-4 shrink-0" />
         <span
@@ -207,7 +207,7 @@ const longPressStop = onLongPress(
     />
     <span
       v-if="active"
-      class="absolute left-0 top-1.5 h-[calc(100%-0.75rem)] w-0.5 rounded-r bg-primary z-10"
+      class="absolute left-0 top-1.5 h-[calc(100%-0.75rem)] w-0.5 rounded-r bg-primary z-10 animate-in fade-in-0 slide-in-from-left-1 duration-200"
     />
     <component :is="icon" class="relative z-10 h-4 w-4 shrink-0" />
     <span

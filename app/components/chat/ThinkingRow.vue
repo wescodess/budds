@@ -6,10 +6,15 @@ const props = defineProps<{
 }>()
 
 const label = computed(() => (props.model ? getModelLabel(props.model) : null))
+
+const { springGentle } = useMotionPresets()
 </script>
 
 <template>
-  <div
+  <Motion
+    :initial="{ opacity: 0, x: -8 }"
+    :animate="{ opacity: 1, x: 0 }"
+    :transition="springGentle"
     data-testid="chat-thinking-row"
     role="status"
     aria-live="polite"
@@ -20,9 +25,14 @@ const label = computed(() => (props.model ? getModelLabel(props.model) : null))
       aria-hidden="true"
       class="inline-flex items-center gap-1 motion-reduce:hidden"
     >
-      <span class="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-muted-foreground [animation-delay:-0.3s]" />
-      <span class="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-muted-foreground [animation-delay:-0.15s]" />
-      <span class="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-muted-foreground" />
+      <Motion
+        v-for="i in 3"
+        :key="i"
+        as="span"
+        :animate="{ scale: [1, 1.4, 1] }"
+        :transition="{ duration: 0.6, repeat: Infinity, delay: (i - 1) * 0.15 }"
+        class="inline-block h-1.5 w-1.5 rounded-full bg-muted-foreground"
+      />
     </span>
     <span
       aria-hidden="true"
@@ -35,5 +45,5 @@ const label = computed(() => (props.model ? getModelLabel(props.model) : null))
     >
       · {{ label }} · reasoning
     </span>
-  </div>
+  </Motion>
 </template>
