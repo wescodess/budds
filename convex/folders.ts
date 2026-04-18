@@ -595,7 +595,12 @@ export const getFolderDescendantCounts = query({
 
     const descendants = await collectDescendants(ctx, userId, args.id)
 
-    return { subfolderCount: descendants.length, documentCount: 0 }
+    let documentCount = folder.documentCount ?? 0
+    for (const d of descendants) {
+      documentCount += d.documentCount ?? 0
+    }
+
+    return { subfolderCount: descendants.length, documentCount }
   },
 })
 

@@ -16,6 +16,7 @@ import {
 } from '../../utils/audio-script-prompt'
 import { synthesizeVoiceWithRetry, isAuraVoice, type AuraVoice } from '../../utils/tts-workers-ai'
 import { readConfiguredRuntimeValue } from '../../utils/runtime-config'
+import { requireRateLimit } from '../../utils/rate-limit'
 
 const SCRIPT_MODEL = 'google/gemini-2.5-flash'
 const MAX_SEARCH_RESULTS = 10
@@ -36,6 +37,7 @@ function makeConvexClient(event: any): ConvexHttpClient | null {
 }
 
 export default defineEventHandler(async (event) => {
+  requireRateLimit(event, 10)
   const userId = getConvexTokenIdentifier(event)
 
   const body = await readBody<{

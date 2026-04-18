@@ -41,6 +41,8 @@ function buildComplexityRule(complexity?: 'beginner' | 'expert'): string {
   return '- Complexity: BEGINNER. Define jargon on first use. Favor everyday analogies. Host B is a curious learner; Host A explains without condescension.'
 }
 
+const MAX_SOURCE_CHARS = 80_000
+
 export function buildAudioScriptPrompt(
   chunks: AISearchChunk[],
   options: BuildAudioScriptPromptOptions = {},
@@ -50,6 +52,20 @@ export function buildAudioScriptPrompt(
   const minTurns = Math.max(18, Math.round(wordBudget / 60))
   const maxTurns = Math.max(minTurns + 6, Math.round(wordBudget / 35))
   const complexityRule = buildComplexityRule(options.complexity)
+
+  let totalChars = 0
+  const cappedChunks: AISearchChunk[] = []
+  for (const chunk of chunks) {
+    if (totalChars + chunk.content.length > MAX_SOURCE_CHARS) {
+      if (cappedChunks.length === 0) {
+        cappedChunks.push({ ...chunk, content: chunk.content.slice(0, MAX_SOURCE_CHARS) })
+      }
+      break
+    }
+    cappedChunks.push(chunk)
+    totalChars += chunk.content.length
+  }
+  chunks = cappedChunks
 
   const system = `You are a podcast scriptwriter for a two-host AI conversation grounded strictly in the provided source passages. This script will be rendered by a text-to-speech engine, so every character you write will be spoken aloud.
 

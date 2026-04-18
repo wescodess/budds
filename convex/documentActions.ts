@@ -15,13 +15,16 @@ type CleanupAttemptResult =
   | { ok: false; error: string }
 
 function getR2Client() {
+  const endpoint = process.env.R2_ENDPOINT
+  const accessKeyId = process.env.R2_ACCESS_KEY_ID
+  const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY
+  if (!endpoint || !accessKeyId || !secretAccessKey) {
+    throw new Error('Missing R2 credentials: R2_ENDPOINT, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY must all be set')
+  }
   return new S3Client({
     region: 'auto',
-    endpoint: process.env.R2_ENDPOINT!,
-    credentials: {
-      accessKeyId: process.env.R2_ACCESS_KEY_ID!,
-      secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
-    },
+    endpoint,
+    credentials: { accessKeyId, secretAccessKey },
   })
 }
 
@@ -589,37 +592,8 @@ export const updateDocumentAiSearchMetadata = internalAction({
   },
 })
 
-export const deleteDocumentFromR2 = internalAction({
-  args: {
-    documentId: v.string(),
-    r2Key: v.optional(v.string()),
-  },
-  handler: async (_ctx, args) => {
-    const bucket = process.env.R2_BUCKET_NAME
-    if (!bucket || !args.r2Key) return
-
-    try {
-      const r2 = getR2Client()
-      await r2.send(new DeleteObjectCommand({
-        Bucket: bucket,
-        Key: args.r2Key,
-      }))
-
-      const config = getAiSearchConfig()
-      if (config) {
-        const syncUrl = `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/ai-search/instances/${config.instance}/jobs`
-        await fetch(syncUrl, {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${config.token}` },
-        })
-      }
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error)
-      const isNotFound = message.includes('NoSuchKey') || message.includes('404')
-      if (!isNotFound) console.error(`R2 delete error: ${message}`)
-    }
-  },
-})
+// deleteDocumentFromR2 removed — dead code since Story 5.2 rerouted deletions
+// through the pendingCleanup queue. See deferred-work.md §story-5.2.
 
 function isAwsNotFound(error: unknown): boolean {
   if (!error) return false
