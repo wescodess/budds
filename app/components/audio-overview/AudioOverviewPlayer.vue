@@ -26,6 +26,7 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   'request-regenerate': []
   'request-customize': []
+  'request-share': []
   'select-overview': [id: Id<'audioOverviews'>]
   'delete-overview': [id: Id<'audioOverviews'>]
 }>()
@@ -529,12 +530,12 @@ const ringMiddleStyle = computed(() => ({
           <button
             type="button"
             data-testid="audio-overview-share-btn"
-            aria-label="Share (coming soon)"
-            class="inline-flex h-8 items-center gap-1.5 rounded-md px-2 font-inter text-xs text-muted-foreground opacity-60"
-            disabled
+            :aria-label="overview?.shareToken ? 'Share link' : 'Share audio overview'"
+            class="inline-flex h-8 items-center gap-1.5 rounded-md border border-transparent px-2 font-inter text-xs text-foreground transition-colors hover:border-primary/40 hover:bg-accent/10"
+            @click="emit('request-share')"
           >
             <Share2 class="h-3.5 w-3.5" />
-            <span class="rounded-sm border border-border/60 px-1 text-[10px] uppercase tracking-wide">Soon</span>
+            {{ overview?.shareToken ? 'Shared' : 'Share' }}
           </button>
         </div>
       </div>

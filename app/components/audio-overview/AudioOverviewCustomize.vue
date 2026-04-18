@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { X, Sparkles, ChevronDown } from 'lucide-vue-next'
+import { X, Sparkles, ChevronDown, Clock } from 'lucide-vue-next'
 import {
   ALL_VOICES,
   type HostVoice,
@@ -17,6 +17,7 @@ const props = withDefaults(defineProps<{
   initialVoiceB?: HostVoice
   submitting?: boolean
   submitLabel?: string
+  quotaState?: { used: number, cap: number } | null
 }>(), {
   initialLengthMinutes: 10,
   initialComplexity: 'beginner',
@@ -24,6 +25,7 @@ const props = withDefaults(defineProps<{
   initialVoiceB: 'orion',
   submitting: false,
   submitLabel: 'Generate',
+  quotaState: null,
 })
 
 const emit = defineEmits<{
@@ -80,6 +82,11 @@ function pickVoiceB(v: HostVoice) { voiceB.value = v; voiceBOpen.value = false }
 const complexityLabel = computed(() =>
   complexity.value === 'beginner' ? 'Beginner' : 'Expert',
 )
+
+const quotaExceeded = computed(() => {
+  const q = props.quotaState
+  return q ? q.used >= q.cap : false
+})
 </script>
 
 <template>
@@ -92,12 +99,33 @@ const complexityLabel = computed(() =>
         <UiDialogTitle class="font-dm-sans text-xl font-bold">
           Customize Audio Overview
         </UiDialogTitle>
-        <UiDialogDescription class="font-inter text-[13px] text-muted-foreground">
+        <UiDialogDescription
+          v-if="quotaExceeded"
+          data-testid="audio-overview-quota-exceeded-subtitle"
+          class="font-inter text-[13px] text-rose-300"
+        >
+          You've hit the daily limit of {{ quotaState!.cap }} audio overviews.
+        </UiDialogDescription>
+        <UiDialogDescription
+          v-else
+          class="font-inter text-[13px] text-muted-foreground"
+        >
           Two AI hosts will discuss this folder. Pick the vibe.
         </UiDialogDescription>
       </UiDialogHeader>
 
-      <div class="mt-5 space-y-4">
+      <div
+        v-if="quotaExceeded"
+        data-testid="audio-overview-quota-banner"
+        class="mt-4 flex items-start gap-2 rounded-lg border border-rose-400/40 bg-rose-950/25 p-3"
+      >
+        <Clock class="mt-0.5 h-4 w-4 shrink-0 text-rose-400" />
+        <p class="font-inter text-[13px] text-foreground">
+          Your quota resets at midnight local time. Come back tomorrow, or delete an existing overview to free up a slot.
+        </p>
+      </div>
+
+      <div class="mt-5 space-y-4" :class="quotaExceeded ? 'opacity-40 pointer-events-none' : ''">
         <div data-testid="audio-overview-length">
           <p class="font-inter text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
             Length
@@ -239,11 +267,11 @@ const complexityLabel = computed(() =>
           type="button"
           data-testid="audio-overview-customize-submit"
           class="w-full sm:w-auto"
-          :disabled="props.submitting"
+          :disabled="props.submitting || quotaExceeded"
           @click="handleSubmit"
         >
-          <Sparkles class="mr-2 h-4 w-4" />
-          {{ props.submitLabel }}
+          <Sparkles v-if="!quotaExceeded" class="mr-2 h-4 w-4" />
+          {{ quotaExceeded ? 'Generate (quota reached)' : props.submitLabel }}
         </UiButton>
       </UiDialogFooter>
 
