@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { AlertCircle, Check, Crosshair, LoaderCircle, Plus, Send, Link as LinkIcon, Upload } from 'lucide-vue-next'
+import { AlertCircle, Check, Crosshair, FolderTree, LoaderCircle, Plus, Send, Link as LinkIcon, Upload } from 'lucide-vue-next'
 import type { Id } from '../../../convex/_generated/dataModel'
 import type { AttachmentStatus } from '~/composables/useDocuments'
 import type { ScopeChip, useReferenceScope } from '~/composables/useReferenceScope'
@@ -523,6 +523,16 @@ defineExpose({ focus })
 <template>
   <div class="border-t px-3 py-3 sm:p-4">
     <ChatReferenceScopeStrip v-if="props.scope" :scope="props.scope" />
+    <div
+      v-if="props.scope && !hasScopeSelection"
+      data-testid="chat-scope-default-chip"
+      class="pb-2"
+    >
+      <span class="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-card/70 px-2.5 py-1 font-inter text-[11px] text-muted-foreground">
+        <FolderTree class="h-3 w-3" />
+        All docs · folder + subfolders
+      </span>
+    </div>
 
     <div class="relative flex items-end gap-1.5 sm:gap-2" data-gesture-owner="chat-input">
       <UiDropdownMenu v-if="props.folderId">

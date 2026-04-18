@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { X, Sparkles, ChevronDown, Clock, FolderTree } from 'lucide-vue-next'
+import type { Id } from '../../../convex/_generated/dataModel'
+import type { useReferenceScope } from '~/composables/useReferenceScope'
 import {
   ALL_VOICES,
   type HostVoice,
@@ -20,6 +22,8 @@ const props = withDefaults(defineProps<{
   quotaState?: { used: number, cap: number } | null
   folderScopeDocCount?: number
   folderScopeIsNarrowed?: boolean
+  folderId?: Id<'folders'>
+  scope?: ReturnType<typeof useReferenceScope>
 }>(), {
   initialLengthMinutes: 10,
   initialComplexity: 'beginner',
@@ -91,6 +95,15 @@ const quotaExceeded = computed(() => {
   const q = props.quotaState
   return q ? q.used >= q.cap : false
 })
+
+const scopePickerExpanded = ref(false)
+
+watch(
+  () => props.open,
+  (isOpen, wasOpen) => {
+    if (isOpen && !wasOpen) scopePickerExpanded.value = false
+  },
+)
 </script>
 
 <template>
@@ -130,19 +143,37 @@ const quotaExceeded = computed(() => {
       </div>
 
       <div class="mt-5 space-y-4" :class="quotaExceeded ? 'opacity-40 pointer-events-none' : ''">
-        <div
-          v-if="props.folderScopeDocCount > 0"
-          data-testid="audio-overview-customize-scope-row"
-          class="flex items-center gap-2 rounded-lg border border-border/60 bg-background/40 px-3 py-2"
-        >
-          <FolderTree class="h-3.5 w-3.5 shrink-0 text-primary" />
-          <p class="min-w-0 flex-1 truncate font-inter text-[12px] text-foreground">
-            <span class="font-medium">Scope:</span>
-            {{ props.folderScopeIsNarrowed ? `${props.folderScopeDocCount} selected` : `all ${props.folderScopeDocCount} docs in this folder` }}
-          </p>
-          <span class="shrink-0 font-inter text-[11px] text-muted-foreground">
-            Edit in chat input
-          </span>
+        <div v-if="props.folderScopeDocCount > 0 || props.scope" data-testid="audio-overview-customize-scope-section">
+          <div
+            data-testid="audio-overview-customize-scope-row"
+            class="flex items-center gap-2 rounded-lg border border-border/60 bg-background/40 px-3 py-2"
+          >
+            <FolderTree class="h-3.5 w-3.5 shrink-0 text-primary" />
+            <p class="min-w-0 flex-1 truncate font-inter text-[12px] text-foreground">
+              <span class="font-medium">Scope:</span>
+              {{ props.folderScopeIsNarrowed ? `${props.folderScopeDocCount} selected` : `all ${props.folderScopeDocCount} docs in this folder` }}
+            </p>
+            <button
+              v-if="props.scope && props.folderId"
+              type="button"
+              data-testid="audio-overview-customize-scope-toggle"
+              class="shrink-0 font-inter text-[11px] font-medium text-primary hover:underline"
+              @click="scopePickerExpanded = !scopePickerExpanded"
+            >
+              {{ scopePickerExpanded ? 'Close' : 'Edit scope' }}
+            </button>
+            <span v-else class="shrink-0 font-inter text-[11px] text-muted-foreground">
+              Edit in chat input
+            </span>
+          </div>
+          <div v-if="scopePickerExpanded && props.scope && props.folderId" class="mt-2 max-h-64 overflow-y-auto rounded-lg border border-border/60 bg-background/40">
+            <ChatDirectoryPicker
+              :folder-id="props.folderId"
+              :scope="props.scope"
+              presentation="popover"
+              @close="scopePickerExpanded = false"
+            />
+          </div>
         </div>
 
         <div data-testid="audio-overview-length">
