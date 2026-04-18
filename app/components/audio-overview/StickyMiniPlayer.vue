@@ -198,17 +198,16 @@ async function handleExpand() {
 </script>
 
 <template>
-  <Transition
-    :enter-from-class="isMobile ? 'translate-y-full' : 'translate-y-4 opacity-0 scale-95'"
-    :enter-active-class="isMobile ? 'transition-transform duration-200' : 'transition-all duration-200'"
-    :enter-to-class="isMobile ? 'translate-y-0' : 'translate-y-0 opacity-100 scale-100'"
-    :leave-from-class="isMobile ? 'translate-y-0' : 'translate-y-0 opacity-100 scale-100'"
-    :leave-active-class="isMobile ? 'transition-transform duration-200' : 'transition-all duration-150'"
-    :leave-to-class="isMobile ? 'translate-y-full' : 'translate-y-4 opacity-0 scale-95'"
-  >
-    <!-- MOBILE: full-width bottom bar (unchanged) -->
-    <div
+  <AnimatePresence mode="wait">
+    <!-- MOBILE: full-width bottom bar -->
+    <Motion
       v-if="visible && isMobile"
+      key="mini-player-mobile"
+      :initial="{ y: '100%' }"
+      :animate="{ y: 0 }"
+      :exit="{ y: '100%' }"
+      :transition="{ type: 'spring', stiffness: 350, damping: 30 }"
+      as="div"
       data-testid="audio-overview-sticky-mini-player"
       class="fixed bottom-0 left-0 right-0 z-40 flex h-16 items-center gap-3 border-t border-border bg-card px-4"
     >
@@ -228,11 +227,17 @@ async function handleExpand() {
       <button type="button" aria-label="Close" class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-destructive/10 hover:text-destructive" @click="dismiss">
         <X class="h-4 w-4" />
       </button>
-    </div>
+    </Motion>
 
     <!-- DESKTOP: floating pill / expandable card — draggable -->
-    <div
+    <Motion
       v-else-if="visible"
+      key="mini-player-desktop"
+      :initial="{ opacity: 0, scale: 0.9, y: 20 }"
+      :animate="{ opacity: 1, scale: 1, y: 0 }"
+      :exit="{ opacity: 0, scale: 0.9, y: 20 }"
+      :transition="{ type: 'spring', stiffness: 350, damping: 28 }"
+      as="div"
       ref="floatingRef"
       data-testid="audio-overview-sticky-mini-player"
       :class="[
@@ -337,6 +342,6 @@ async function handleExpand() {
           </button>
         </div>
       </div>
-    </div>
-  </Transition>
+    </Motion>
+  </AnimatePresence>
 </template>
