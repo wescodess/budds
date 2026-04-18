@@ -6,6 +6,11 @@ export type AuraVoice =
 
 export const FEMALE_VOICES: readonly AuraVoice[] = ['asteria', 'luna', 'stella', 'athena', 'hera']
 export const MALE_VOICES: readonly AuraVoice[] = ['orion', 'arcas', 'perseus', 'angus', 'orpheus', 'helios', 'zeus']
+export const ALL_AURA_VOICES: readonly AuraVoice[] = [...FEMALE_VOICES, ...MALE_VOICES]
+
+export function isAuraVoice(v: unknown): v is AuraVoice {
+  return typeof v === 'string' && (ALL_AURA_VOICES as readonly string[]).includes(v)
+}
 
 export interface SynthesizeVoiceParams {
   text: string

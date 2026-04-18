@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Headphones, Play } from 'lucide-vue-next'
+import { Headphones, Play, Settings2 } from 'lucide-vue-next'
 
 const props = defineProps<{
   indexedCount: number
@@ -8,6 +8,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   generate: []
+  customize: []
 }>()
 
 const canGenerate = computed(() => props.indexedCount > 0 && !props.generating)
@@ -58,16 +59,29 @@ const helperCopy = computed(() =>
         </span>
       </div>
 
-      <UiButton
-        type="button"
-        data-testid="audio-overview-generate-btn"
-        class="mt-8 w-full"
-        :disabled="!canGenerate"
-        @click="emit('generate')"
-      >
-        <Play class="mr-2 h-4 w-4" />
-        Generate audio overview
-      </UiButton>
+      <div class="mt-8 flex flex-col gap-2 sm:flex-row">
+        <UiButton
+          type="button"
+          data-testid="audio-overview-generate-btn"
+          class="flex-1"
+          :disabled="!canGenerate"
+          @click="emit('generate')"
+        >
+          <Play class="mr-2 h-4 w-4" />
+          Generate audio overview
+        </UiButton>
+        <UiButton
+          type="button"
+          variant="ghost"
+          data-testid="audio-overview-card-customize-btn"
+          class="border border-border/60 sm:w-auto"
+          :disabled="!canGenerate"
+          @click="emit('customize')"
+        >
+          <Settings2 class="mr-2 h-4 w-4" />
+          Customize
+        </UiButton>
+      </div>
 
       <p
         class="mt-3 text-center font-inter text-[11px] font-medium leading-relaxed text-muted-foreground"
