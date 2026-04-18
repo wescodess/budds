@@ -17,7 +17,9 @@ const expanded = ref(false)
 const onActiveFolderRoute = computed(() => {
   const fid = folderId.value
   if (!fid) return false
-  return route.path === `/app/folders/${fid}`
+  if (route.path !== `/app/folders/${fid}`) return false
+  const tab = route.query?.tab
+  return !tab || tab === 'chat' || tab === 'audio-overview'
 })
 
 const onPublicAudioRoute = computed(() =>
