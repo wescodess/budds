@@ -2,6 +2,8 @@
 import { computed } from 'vue'
 import { Pause, Play, Maximize2, X } from 'lucide-vue-next'
 
+import { useMediaQuery } from '@vueuse/core'
+
 const {
   overviewId, folderId, title, activeTurn,
   isPlaying, totalDurationMs, currentTimeMs,
@@ -10,6 +12,7 @@ const {
 
 const route = useRoute()
 const { allFolders } = useFolders()
+const isMobile = useMediaQuery('(max-width: 767px)')
 
 const onActiveFolderRoute = computed(() => {
   const fid = folderId.value
@@ -23,11 +26,16 @@ const onPublicAudioRoute = computed(() =>
   typeof route.path === 'string' && route.path.startsWith('/audio/'),
 )
 
+const onPodcastExpandRoute = computed(() =>
+  typeof route.path === 'string' && /^\/app\/folders\/[^/]+\/podcast$/.test(route.path),
+)
+
 const visible = computed(() =>
   import.meta.client
   && overviewId.value !== null
   && !onActiveFolderRoute.value
-  && !onPublicAudioRoute.value,
+  && !onPublicAudioRoute.value
+  && !onPodcastExpandRoute.value,
 )
 
 const speakerLabel = computed(() => {
@@ -69,7 +77,10 @@ async function handleExpand() {
     void navigateTo('/')
     return
   }
-  void navigateTo(`/app/folders/${fid}`)
+  const target = isMobile.value
+    ? `/app/folders/${fid}/podcast`
+    : `/app/folders/${fid}?tab=audio-overview`
+  void navigateTo(target)
 }
 </script>
 

@@ -95,6 +95,12 @@ const createFlashcardRoomMutation = import.meta.client
       }),
     }
 
+const setPreferredMainPaneMutation = import.meta.client
+  ? useConvexMutation(api.folders.setPreferredMainPane)
+  : {
+      mutate: async (_args: { folderId: Id<'folders'>; pane: 'chat' | 'podcast' }) => ({ pane: 'chat' as const }),
+    }
+
 const deleteQuizMutation = import.meta.client
   ? useConvexMutation(api.quizzes.deleteQuiz)
   : {
@@ -118,6 +124,9 @@ async function onCreateVoid(payload: { type: VoidType; name?: string }) {
     const { type, name } = payload
     const trimmedName = name?.trim()
     if (type === 'chat') {
+      try {
+        await setPreferredMainPaneMutation.mutate({ folderId: folderId.value, pane: 'chat' } as any)
+      } catch { /* best-effort; pane preference falls back to default */ }
       const newId = (await createConversationMutation.mutate({
         folderId: folderId.value,
         title: trimmedName || 'New chat',
@@ -133,6 +142,9 @@ async function onCreateVoid(payload: { type: VoidType; name?: string }) {
       const { conversationId: _dropC, ...rest } = route.query ?? {}
       await router.replace({ query: { ...rest, tab: 'flashcards', voidId: result.roomId } })
     } else if (type === 'audio-overview') {
+      try {
+        await setPreferredMainPaneMutation.mutate({ folderId: folderId.value, pane: 'podcast' } as any)
+      } catch { /* best-effort */ }
       activeTab.value = 'audio-overview'
       const { conversationId: _dropC, voidId: _dropV, ...rest } = route.query ?? {}
       await router.replace({ query: { ...rest, tab: 'audio-overview' } })
