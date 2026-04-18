@@ -2,7 +2,7 @@
 title: 'Audio Overview (Phase 2 Polish) — Customize dialog, visualizer, sticky mini-player, download'
 type: 'feature'
 created: '2026-04-17'
-status: 'ready-for-dev'
+status: 'complete'
 context:
   - 'notebooklm_audio_overview_plan.md'
   - 'DESIGN.md'
