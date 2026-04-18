@@ -49,6 +49,7 @@ export function createAudioOverviewPlayback() {
   const visualizerSupported = ref(true)
   let listenersAttached = false
   let rafId: number | null = null
+  let spliceApplied = false
 
   function prefixDurationMs(index: number): number {
     let acc = 0
@@ -210,6 +211,7 @@ export function createAudioOverviewPlayback() {
       state.currentTurnIndex = 0
       state.currentAudioTimeSec = 0
       state.isPlaying = false
+      spliceApplied = false
       const el = audioElRef.value
       if (el) {
         el.pause()
@@ -220,6 +222,7 @@ export function createAudioOverviewPlayback() {
     }
     else {
       state.title = args.title
+      if (spliceApplied) return
     }
     state.turns = args.turns
     state.turnUrls = args.turnUrls
@@ -298,6 +301,25 @@ export function createAudioOverviewPlayback() {
     seek(currentTimeMs.value + deltaMs)
   }
 
+  function spliceTurns(args: {
+    afterIndex: number
+    turns: AudioOverviewTurn[]
+    turnUrls: (string | null)[]
+  }) {
+    if (!import.meta.client) return
+    if (args.turns.length === 0) return
+    if (args.turns.length !== args.turnUrls.length) return
+    const maxIndex = state.turns.length
+    const clamped = Math.max(-1, Math.min(args.afterIndex, maxIndex - 1))
+    const insertAt = clamped + 1
+    state.turns.splice(insertAt, 0, ...args.turns)
+    state.turnUrls.splice(insertAt, 0, ...args.turnUrls)
+    if (state.currentTurnIndex >= insertAt) {
+      state.currentTurnIndex += args.turns.length
+    }
+    spliceApplied = true
+  }
+
   function dismiss() {
     pause()
     stopVisualizer()
@@ -314,6 +336,7 @@ export function createAudioOverviewPlayback() {
     state.currentTurnIndex = 0
     state.currentAudioTimeSec = 0
     state.isPlaying = false
+    spliceApplied = false
   }
 
   return {
@@ -333,6 +356,7 @@ export function createAudioOverviewPlayback() {
     seek,
     skip,
     setSpeed,
+    spliceTurns,
     dismiss,
   }
 }

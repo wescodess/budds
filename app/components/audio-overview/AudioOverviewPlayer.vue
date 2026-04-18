@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { Pause, Play, Rewind, FastForward, Download, Share2, RefreshCw, History, Check, Trash2, Settings2 } from 'lucide-vue-next'
+import { Pause, Play, Rewind, FastForward, Download, Share2, RefreshCw, History, Check, Trash2, Settings2, Mic, Loader2 } from 'lucide-vue-next'
 import { api } from '#convex/api'
 import type { Id, Doc } from '../../../convex/_generated/dataModel'
 import type { AudioOverviewTurn } from '~/composables/useAudioOverviewStore'
@@ -19,14 +19,19 @@ const props = withDefaults(defineProps<{
   folderId: Id<'folders'>
   overviews?: OverviewSummary[]
   regenerating?: boolean
+  interjectionInFlight?: boolean
+  interjectionQuestion?: string | null
 }>(), {
   overviews: () => [],
+  interjectionInFlight: false,
+  interjectionQuestion: null,
 })
 
 const emit = defineEmits<{
   'request-regenerate': []
   'request-customize': []
   'request-share': []
+  'request-ask': []
   'select-overview': [id: Id<'audioOverviews'>]
   'delete-overview': [id: Id<'audioOverviews'>]
 }>()
@@ -295,6 +300,17 @@ const ringMiddleStyle = computed(() => ({
         </div>
         <button
           type="button"
+          data-testid="audio-overview-ask-btn"
+          aria-label="Ask the hosts a follow-up"
+          class="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border/60 bg-card px-3 py-1.5 font-inter text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          :disabled="props.interjectionInFlight || props.regenerating"
+          @click="emit('request-ask')"
+        >
+          <Mic class="h-3.5 w-3.5" />
+          Ask
+        </button>
+        <button
+          type="button"
           data-testid="audio-overview-customize-btn"
           class="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border/60 bg-card px-3 py-1.5 font-inter text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
           :disabled="props.regenerating"
@@ -315,6 +331,18 @@ const ringMiddleStyle = computed(() => ({
         </button>
       </div>
     </header>
+
+    <div
+      v-if="props.interjectionInFlight"
+      data-testid="audio-overview-interjection-banner"
+      class="mx-auto flex w-full max-w-4xl items-center gap-3 rounded-lg border border-primary/40 bg-primary/10 px-4 py-2"
+    >
+      <Mic class="h-3.5 w-3.5 shrink-0 text-primary" />
+      <p class="flex-1 truncate font-dm-sans text-[13px] font-medium text-foreground">
+        Hosts are answering{{ props.interjectionQuestion ? ` "${props.interjectionQuestion}"` : '…' }}
+      </p>
+      <Loader2 class="h-4 w-4 shrink-0 animate-spin text-primary" />
+    </div>
 
     <UiAlertDialog :open="deleteTargetId !== null" @update:open="(v) => { if (!v) cancelDelete() }">
       <UiAlertDialogContent>
