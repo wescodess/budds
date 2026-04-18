@@ -1,6 +1,6 @@
 version: 1
-mode: running
-current_phase: review
+mode: idle
+current_phase: complete
 spec_slug: audio-overview-phase-4-interjection
 input_type: goal
 goal_or_spec: |
@@ -14,7 +14,7 @@ goal_or_spec: |
 is_ui: true
 review_rounds: 1
 branch: feat/audio-overview-phase-4-interjection
-pr_url: null
+pr_url: https://github.com/wescodess/budds/pull/56
 paths:
   project_root: /Users/wesleyukadike/Desktop/budds
   artifacts_dir: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts
@@ -112,6 +112,27 @@ run_log:
   - ts: 2026-04-17
     event: phase_transition
     detail: "review → implement (R1 loopback)"
+  - ts: 2026-04-17
+    event: r1_fixes_complete
+    detail: "All 7 R1 amendments applied. Tests: 429/429 main, 15/15 audio-overview component (+5 splice tests)."
+  - ts: 2026-04-17
+    event: review_round_2
+    detail: "Focused review: PASS. All 7 fixes landed. One non-blocking note (aborted may emit twice on user cancel — Shell handler idempotent, no observable defect)."
+  - ts: 2026-04-17
+    event: phase_transition
+    detail: "review → commit"
+  - ts: 2026-04-17
+    event: commit
+    detail: "feat(audio-overview): Phase 4 interjection. 17 files, +1811/-79. Commit 4b41744."
+  - ts: 2026-04-17
+    event: pr_opened
+    detail: "PR #56 against dev."
+  - ts: 2026-04-17
+    event: merge_complete
+    detail: "PR #56 merged. Merge commit f3550cee070816e9f520968cea00302ffb7dbd49. Branch deleted."
+  - ts: 2026-04-17
+    event: run_complete
+    detail: "Audio Overview Phase 4 Interjection shipped. Rounds: 2 (1 FAIL loopback + 7 R1 amends, 1 PASS). The Audio Overview feature series is now complete end-to-end (Phase 1 MVP #49 → Phase 2 Polish #54 → Phase 3 Share+Ops #55 → Phase 4 Interjection #56)."
 config:
   notifications:
     telegram:
