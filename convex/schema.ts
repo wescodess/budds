@@ -74,6 +74,14 @@ export default defineSchema({
       ),
     ),
     model: v.optional(v.string()),
+    interjectionContext: v.optional(v.object({
+      overviewId: v.id('audioOverviews'),
+      turnIndex: v.number(),
+      timeMs: v.number(),
+      quotedText: v.string(),
+      sourceFilename: v.optional(v.string()),
+      interjectionId: v.optional(v.id('audioOverviewInterjections')),
+    })),
   })
     .index('by_conversationId', ['conversationId'])
     .index('by_userId', ['userId']),
