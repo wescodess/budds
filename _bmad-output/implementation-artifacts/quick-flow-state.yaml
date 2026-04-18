@@ -1,17 +1,21 @@
 version: 1
-mode: idle
-current_phase: complete
-spec_slug: quiz-feature-revamp
+mode: running
+current_phase: implement
+spec_slug: audio-overview-phase-5a3-unified-pane
 input_type: goal
 goal_or_spec: |
-  Quiz feature revamp — full implementation per quiz_feature_spec.md.resolved
-  and TASKSPLAN.md. 8 phases: schema+backend, AI generation upgrade, composable
-  layer, core UI (shell/overview/modals), taking UI (sequential+show-all),
-  results UI, AI wizard, polish.
+  Phase 5A.3 — deliver the unified 2-pane folder surface promised by the
+  approved 5A designs. Collapse Chat + Audio Overview tabs into a single
+  Conversation tab hosting UnifiedConversationPane. Helper pane gets
+  Podcast | Sources tab toggle. preferredMainPane drives orientation
+  (chat-main default; podcast-main when user created Podcast void).
+  Flip persists via existing G3 mechanism; audio never pauses.
+  Legacy ?tab=audio-overview redirects to ?tab=chat + sets
+  preferredMainPane=podcast.
 is_ui: true
 review_rounds: 0
-branch: feat/quiz-feature-revamp
-pr_url: https://github.com/wescodess/budds/pull/45
+branch: feat/audio-overview-phase-5a3-unified-pane
+pr_url: null
 paths:
   project_root: /Users/wesleyukadike/Desktop/budds
   artifacts_dir: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts
@@ -21,66 +25,29 @@ paths:
   design_cache: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts/design-screens
 design:
   approved: true
-  approved_at: 2026-04-17
-  stitch_project_id: "526950061036357227"
-  reference_screenshot: null
-  screens:
-    - id: e58d0c25805b43e09859991e7e05da1b
-      label: quiz-overview
-      notes: "Quiz overview with editable title, question list with type badges, history dropdown, control center dock"
-    - id: 23dbd90c656a44dc9740430dbd0dec91
-      label: settings-modal
-      notes: "Pre-attempt settings modal with shuffle, show-all, immediate feedback toggles"
-    - id: 9c7c9edde7464770b5fc2c0267a4f5f3
-      label: resume-dialog
-      notes: "Resume in-progress attempt dialog with progress info and resume/restart options"
-    - id: 42cdfc39bafa4e9a923a6ba5bd4da150
-      label: sequential-question
-      notes: "Sequential mode single question view with MC options and progress bar"
-    - id: 96a67df38e0e44adb3173525857037d9
-      label: sequential-feedback-correct
-      notes: "Correct answer feedback with green banner, explain-why expandable"
-    - id: f72cc859e68e4359a3003403aa7ad14d
-      label: sequential-feedback-incorrect
-      notes: "Incorrect answer feedback with red banner, explanation panel, correct answer highlight"
-    - id: 87ead295aa5344c996a2c5d87601e2aa
-      label: show-all-mode
-      notes: "Show-all mode with multiple question types visible, sticky bottom progress bar"
-    - id: 5c5a218c8a7b477796789fb10fc3855a
-      label: results-score
-      notes: "Results overview with score percentage, circular indicator, correct count, retake/history"
-    - id: b7ba8e46a3de4800922a893193d42ab8
-      label: results-question-review
-      notes: "Tabbed per-question review with left sidebar tabs and right detail panel"
-    - id: 1db0e0e771b1416fb0aa3509aa1d7582
-      label: ai-wizard-topics
-      notes: "AI generation wizard step 2 with suggested/custom topic pills"
+  approved_at: "2026-04-18T00:30:00Z"
+  stitch_project_id: "2926819289448574055"
+  reference_screenshot: "_bmad-output/implementation-artifacts/design-screens/audio-overview-phase-5a-foundation/unified-two-pane-folder.png"
+  approval_scope: "Designs approved in Phase 5A escalation log cover 5A/5A.2/5A.3. Same 5 screens."
+  screens: []
+  design_system_id: "assets/11175050301981891392"
 escalation:
   pending: null
   log: []
-decisions_log: []
+decisions_log:
+  - ts: 2026-04-18
+    decision: "5A.3 delivers the unified 2-pane surface (finally) — the architectural headline of Phase 5"
+    rationale: "Phase 5A foundation + 5A.2 scope wiring shipped. 5A.3 is the promised UI refactor."
+  - ts: 2026-04-18
+    decision: "Ship core 2-pane + tab collapse + orientation first; defer chat-chip visual redesign + Customize override picker + DirectoryPicker empty-state to 5A.4 polish pass"
+    rationale: "Architectural refactor of the 1268-line folder page is the heart of the value. Polish items are additive and can ride in a follow-up."
 run_log:
-  - ts: 2026-04-17
+  - ts: 2026-04-18
     event: start
-    detail: "Quiz feature revamp kicked off from TASKSPLAN.md + quiz_feature_spec.md.resolved; is_ui=true (multiple new UI surfaces) → entering design"
-  - ts: 2026-04-17
-    event: intake_complete
-    detail: "slug=quiz-feature-revamp, input_type=goal, is_ui=true. Scope: schema extensions (4 question types, attemptAnswers table, attempt lifecycle), 12+ new backend endpoints, 4 composables, ~28 new Vue components (shell, overview, taking sequential+show-all, results with tabbed review, AI wizard 3-step, question modal, settings modal, resume dialog), generation upgrade (topics API, difficulty, types)."
-  - ts: 2026-04-17
-    event: phase_transition
-    detail: "intake → design"
-  - ts: 2026-04-17
-    event: design_screens_generated
-    detail: "10 Stitch screens generated (project 526950061036357227): quiz-overview, settings-modal, resume-dialog, sequential-question, sequential-feedback-correct, sequential-feedback-incorrect, show-all-mode, results-score, results-question-review, ai-wizard-topics"
-  - ts: 2026-04-17
-    event: escalation_raised
-    detail: "Design approval escalation — 10 screens pending user review"
-  - ts: 2026-04-17
-    event: escalation_resolved
-    detail: "Design approved (12 screens: 9 core + 3 wizard modals). Wizard changed from full-page to modal overlay per user feedback."
-  - ts: 2026-04-17
-    event: phase_transition
-    detail: "design → clarify"
+    detail: "Phase 5A.3 unified pane kicked off. 5A + 5A.2 merged (PRs #59, #60)."
+  - ts: 2026-04-18
+    event: branch_carved
+    detail: "feat/audio-overview-phase-5a3-unified-pane off dev at a63d6ed."
 config:
   notifications:
     telegram:

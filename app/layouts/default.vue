@@ -285,6 +285,7 @@ useHorizontalSwipeGesture({
     }
   },
 })
+
 </script>
 
 <template>

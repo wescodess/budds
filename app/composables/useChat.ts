@@ -9,10 +9,19 @@ export interface Source {
   filename: string
 }
 
+export interface InterjectionContext {
+  overviewId: Id<'audioOverviews'>
+  turnIndex: number
+  timeMs: number
+  quotedText: string
+  sourceFilename?: string
+}
+
 export interface UIChatMessage {
   role: 'user' | 'assistant'
   content: string
   sources?: Source[]
+  interjectionContext?: InterjectionContext
 }
 
 interface ChatResponse {
@@ -66,6 +75,7 @@ export function useChat(
   const thinking = ref(false)
   const error = ref<string | null>(null)
   const selectedModel = ref(DEFAULT_MODEL)
+  const interjectionInFlight = ref(false)
   const currentConversationId = ref<Id<'conversations'> | null>(conversationId?.value ?? null)
 
   if (conversationId) {
@@ -128,7 +138,7 @@ export function useChat(
     conversationIdValue: Id<'conversations'>,
     role: 'user' | 'assistant',
     content: string,
-    extras: { sources?: Source[]; model?: string } = {},
+    extras: { sources?: Source[]; model?: string; interjectionContext?: InterjectionContext } = {},
   ) {
     if (!import.meta.client) return
     await appendMessageMutation.mutate({
@@ -290,6 +300,7 @@ export function useChat(
   async function sendMessage(
     query: string,
     scope?: { folderIds?: Id<'folders'>[]; fileIds?: Id<'documents'>[] },
+    interjectionContext?: InterjectionContext,
   ) {
     if (loading.value) return
     error.value = null
@@ -302,12 +313,16 @@ export function useChat(
       return
     }
 
-    messages.value.push({ role: 'user', content: query })
+    messages.value.push({
+      role: 'user',
+      content: query,
+      ...(interjectionContext ? { interjectionContext } : {}),
+    })
     loading.value = true
     thinking.value = true
 
     if (convoId) {
-      void persistMessage(convoId, 'user', query)
+      void persistMessage(convoId, 'user', query, interjectionContext ? { interjectionContext } : {})
     }
 
     try {
@@ -341,6 +356,56 @@ export function useChat(
           model: selectedModel.value,
         })
       }
+
+      if (interjectionContext && error.value === null && import.meta.client) {
+        void fireBackgroundInterjection(interjectionContext, query)
+      }
+    }
+  }
+
+  async function fireBackgroundInterjection(ctx: InterjectionContext, question: string) {
+    interjectionInFlight.value = true
+    try {
+      const result = await $fetch<{
+        interjectionId: Id<'audioOverviewInterjections'>
+        insertedAfterTurnIndex: number
+        turns: Array<{
+          speaker: 'host_a' | 'host_b'
+          text: string
+          audioFileId: Id<'_storage'>
+          durationMs: number
+          sourceIndex?: number
+          audioUrl: string | null
+        }>
+        totalDurationMs: number
+      }>('/api/audio-overview/interject', {
+        method: 'POST',
+        body: {
+          overviewId: ctx.overviewId,
+          insertedAfterTurnIndex: ctx.turnIndex,
+          question,
+        },
+      })
+
+      const store = useAudioOverviewStore()
+      const spliceAt = store.currentTurnIndex.value
+      store.spliceTurns({
+        afterIndex: spliceAt,
+        turns: result.turns.map(t => ({
+          speaker: t.speaker,
+          text: t.text,
+          audioFileId: t.audioFileId,
+          durationMs: t.durationMs,
+          sourceIndex: t.sourceIndex,
+        })) as any,
+        turnUrls: result.turns.map(t => t.audioUrl),
+      })
+    }
+    catch (err) {
+      console.warn('[useChat] Background interjection failed:', err)
+    }
+    finally {
+      interjectionInFlight.value = false
     }
   }
 
@@ -352,12 +417,14 @@ export function useChat(
       role: 'user' | 'assistant'
       content: string
       sources?: Source[]
+      interjectionContext?: InterjectionContext
     }>
 
     messages.value = rows.map(r => ({
       role: r.role,
       content: r.role === 'assistant' ? normalizeAssistantMessageContent(r.content) : r.content,
       sources: r.sources,
+      ...(r.interjectionContext ? { interjectionContext: r.interjectionContext } : {}),
     }))
     currentConversationId.value = conversationIdToLoad
     error.value = null
@@ -382,6 +449,7 @@ export function useChat(
     hasIndexedDocuments,
     selectedModel,
     currentConversationId,
+    interjectionInFlight,
     sendMessage,
     selectModel,
     clearMessages,

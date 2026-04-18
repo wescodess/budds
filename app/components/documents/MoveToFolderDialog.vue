@@ -5,11 +5,12 @@ defineOptions({ name: 'MoveToFolderDialog' })
 
 const props = withDefaults(defineProps<{
   open: boolean
-  folders: Doc<'folders'>[] | null
+  folders?: Doc<'folders'>[] | null
   currentFolderId: Id<'folders'>
   pending?: boolean
   itemCount?: number
 }>(), {
+  folders: null,
   pending: false,
   itemCount: 1,
 })

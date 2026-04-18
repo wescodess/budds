@@ -11,6 +11,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/componen
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { useHorizontalSwipeGesture } from '~/composables/useHorizontalSwipeGesture'
 import { TAB_SWITCH_THRESHOLD_PX, useGestureGuards } from '~/composables/useGestureGuards'
+import { useFolderDetail } from '~/composables/useFolders'
 
 definePageMeta({ layout: 'folder' })
 
@@ -25,6 +26,7 @@ type FolderShellHandle = {
 }
 
 const folderShellRef = ref<FolderShellHandle | null>(null)
+const audioOverviewShellRef = ref<{ startGeneration: () => Promise<void> } | null>(null)
 const folderId = computed(() => route.params.id as Id<'folders'>)
 const conversationIdRef = computed<Id<'conversations'> | null>(() => {
   const q = route.query?.conversationId
@@ -43,21 +45,32 @@ const {
   error,
   hasIndexedDocuments,
   selectedModel,
+  interjectionInFlight,
   sendMessage,
   selectModel,
   loadConversation,
   startNewConversation,
 } = useChat(folderId, conversationIdRef)
 
-const referenceScope = useReferenceScope()
+import type { InterjectionContext } from '~/composables/useChat'
+const pendingInterjectionContext = ref<InterjectionContext | null>(null)
+
+const referenceScope = useFolderReferenceScope({ folderId })
 const workspaceRef = ref<HTMLElement | null>(null)
+
+const isPodcastMain = computed(() =>
+  (folder.value as any)?.preferredMainPane === 'podcast',
+)
 const seededFolder = computed(() =>
   folder.value
   ?? allFolders.value?.find(candidate => candidate._id === folderId.value)
   ?? null,
 )
 
-const isDesktop = useMediaQuery('(min-width: 1024px)')
+const desktopMq = useMediaQuery('(min-width: 1024px)')
+const isDesktopMounted = ref(false)
+onMounted(() => { isDesktopMounted.value = true })
+const isDesktop = computed(() => isDesktopMounted.value && desktopMq.value)
 const { shouldStartHorizontalGesture } = useGestureGuards()
 const SIDEBAR_SWIPE_EDGE_GUARD_PX = 12
 
@@ -91,6 +104,12 @@ const createFlashcardRoomMutation = import.meta.client
       }),
     }
 
+const setPreferredMainPaneMutation = import.meta.client
+  ? useConvexMutation(api.folders.setPreferredMainPane)
+  : {
+      mutate: async (_args: { folderId: Id<'folders'>; pane: 'chat' | 'podcast' }) => ({ pane: 'chat' as const }),
+    }
+
 const deleteQuizMutation = import.meta.client
   ? useConvexMutation(api.quizzes.deleteQuiz)
   : {
@@ -114,6 +133,9 @@ async function onCreateVoid(payload: { type: VoidType; name?: string }) {
     const { type, name } = payload
     const trimmedName = name?.trim()
     if (type === 'chat') {
+      try {
+        await setPreferredMainPaneMutation.mutate({ folderId: folderId.value, pane: 'chat' } as any)
+      } catch { /* best-effort; pane preference falls back to default */ }
       const newId = (await createConversationMutation.mutate({
         folderId: folderId.value,
         title: trimmedName || 'New chat',
@@ -128,6 +150,17 @@ async function onCreateVoid(payload: { type: VoidType; name?: string }) {
       activeTab.value = 'flashcards'
       const { conversationId: _dropC, ...rest } = route.query ?? {}
       await router.replace({ query: { ...rest, tab: 'flashcards', voidId: result.roomId } })
+    } else if (type === 'audio-overview') {
+      try {
+        await setPreferredMainPaneMutation.mutate({ folderId: folderId.value, pane: 'podcast' } as any)
+      } catch { /* best-effort */ }
+      activeTab.value = 'audio-overview'
+      const { conversationId: _dropC, voidId: _dropV, ...rest } = route.query ?? {}
+      await router.replace({ query: { ...rest, tab: 'audio-overview' } })
+      await nextTick()
+      try {
+        await audioOverviewShellRef.value?.startGeneration?.()
+      } catch { /* shell surfaces its own error toast */ }
     } else {
       activeTab.value = type
       await router.replace({ query: { ...(route.query ?? {}), tab: type } })
@@ -246,7 +279,7 @@ const showMoveDialog = computed({
   set: (val: boolean) => { if (!val) moveTargetIds.value = [] },
 })
 
-const allowedTabs = ['chat', 'flashcards', 'quiz', 'documents'] as const
+const allowedTabs = ['chat', 'flashcards', 'quiz', 'audio-overview', 'documents'] as const
 type TabValue = typeof allowedTabs[number]
 const initialTab = computed<TabValue>(() => {
   const t = route.query?.tab
@@ -259,9 +292,29 @@ const activeVoidId = computed(() => {
   return typeof q === 'string' && (activeTab.value === 'flashcards' || activeTab.value === 'quiz') ? q : null
 })
 
-watch(() => route.query?.tab, () => {
+type HelperMode = 'sources' | 'tasks' | 'podcast' | null
+const helperMode = ref<HelperMode>(null)
+
+watch(() => route.query?.tab, async () => {
+  const raw = route.query?.tab
+  if (typeof raw === 'string' && raw === 'audio-overview') {
+    const { conversationId: _dropC, voidId: _dropV, ...rest } = route.query ?? {}
+    try {
+      await setPreferredMainPaneMutation.mutate({ folderId: folderId.value, pane: 'podcast' } as any)
+    } catch { /* best-effort */ }
+    await router.replace({ query: { ...rest, tab: 'chat' } })
+    activeTab.value = 'chat'
+    helperMode.value = 'podcast'
+    return
+  }
   activeTab.value = initialTab.value
 })
+
+watch(activeTab, (tab) => {
+  if (tab === 'chat' && helperMode.value === null && isDesktopMounted.value) {
+    helperMode.value = 'podcast'
+  }
+}, { immediate: true })
 
 async function onTabChange(next: TabValue) {
   activeTab.value = next
@@ -273,14 +326,22 @@ async function onTabChange(next: TabValue) {
 const documentsBulkMode = ref(false)
 const selectedDocumentIds = ref<string[]>([])
 const documentsDeletePending = ref(false)
-type HelperMode = 'sources' | 'tasks' | null
-const helperMode = ref<HelperMode>(null)
 const sourcePanelOpen = computed({
   get: () => helperMode.value === 'sources',
   set: (v: boolean) => { helperMode.value = v ? 'sources' : null },
 })
+const chatHelperOpen = computed(() =>
+  helperMode.value === 'sources' || helperMode.value === 'podcast',
+)
+type ChatHelperTab = 'podcast' | 'sources'
+function setChatHelperTab(next: ChatHelperTab) {
+  helperMode.value = next
+}
 const sourcePanelSide = ref<'left' | 'right'>('right')
 const { activeCount: tasksActiveCount } = useTasks(folderId)
+const indexedDocumentCount = computed(() =>
+  (documents.value ?? []).filter(doc => doc.status === 'success').length,
+)
 const folderEditOpen = ref(false)
 const subfolderCreateOpen = ref(false)
 const activeCitationIndex = ref<number | null>(null)
@@ -600,7 +661,27 @@ watch(sourcePanelSide, (value) => {
 async function handleSendMessage(query: string) {
   activeMessageIndex.value = null
   activeCitationIndex.value = null
-  await sendMessage(query, referenceScope.toPayload())
+  const ctx = pendingInterjectionContext.value ?? undefined
+  pendingInterjectionContext.value = null
+  await sendMessage(query, referenceScope.toPayload(), ctx)
+}
+
+function handlePodcastAsk(context: InterjectionContext) {
+  pendingInterjectionContext.value = context
+  if (chatInputRef.value?.focus) chatInputRef.value.focus()
+}
+
+function formatInterjectionBadgeTime(ms: number): string {
+  const total = Math.max(0, Math.round(ms / 1000))
+  const minutes = Math.floor(total / 60)
+  const seconds = total % 60
+  return `${minutes}:${seconds.toString().padStart(2, '0')}`
+}
+
+function handleInterjectionBadgeClick(ctx: InterjectionContext) {
+  const store = useAudioOverviewStore()
+  store.seek(ctx.timeMs)
+  helperMode.value = 'podcast'
 }
 
 function handleViewAllReferences(messageIndex: number) {
@@ -704,10 +785,9 @@ async function confirmMove(destFolderId: Id<'folders'>) {
 }
 
 async function handleUpload(files: File[]) {
+  if (isDesktop.value) helperMode.value = 'tasks'
   try {
     await uploadFiles(files, folderId.value)
-    const { toast } = await import('vue-sonner')
-    toast.success(files.length === 1 ? 'Document indexed' : `${files.length} documents indexed`)
   } catch (e: any) {
     const { toast } = await import('vue-sonner')
     toast.error(e.message || 'Upload failed')
@@ -715,10 +795,9 @@ async function handleUpload(files: File[]) {
 }
 
 async function handleImportLink(url: string) {
+  if (isDesktop.value) helperMode.value = 'tasks'
   try {
-    const result = await importDocumentFromUrl(url, folderId.value)
-    const { toast } = await import('vue-sonner')
-    toast.success(`Imported and indexed ${result?.filename ?? 'document'}`)
+    await importDocumentFromUrl(url, folderId.value)
   } catch (e: any) {
     const { toast } = await import('vue-sonner')
     toast.error(e.message || 'Import failed')
@@ -814,6 +893,7 @@ async function handleImportLink(url: string) {
       v-model:open="newVoidOpen"
       :folder-name="folder?.name ?? ''"
       :submitting="creatingVoid"
+      :indexed-count="indexedDocumentCount"
       @create="onCreateVoid"
     />
 
@@ -827,18 +907,122 @@ async function handleImportLink(url: string) {
         </UiTabsList>
 
       <UiTabsContent value="chat" class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <div class="flex min-h-0 min-w-0 flex-1 overflow-hidden">
-          <template v-if="isDesktop && sourcePanelOpen">
+        <div v-if="isPodcastMain && isDesktop" class="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+          <ResizablePanelGroup direction="horizontal" class="min-w-0 flex-1">
+            <ResizablePanel :default-size="72" :min-size="40" class="min-h-0 min-w-0">
+              <AudioOverviewShell
+                ref="audioOverviewShellRef"
+                :folder-id="folderId"
+                :scope="referenceScope"
+                :interjection-in-flight="interjectionInFlight"
+                @generation-started="() => { if (isDesktop) helperMode = 'podcast' }"
+                @podcast-ask="handlePodcastAsk"
+              />
+            </ResizablePanel>
+            <ResizableHandle with-handle>
+              <button
+                type="button"
+                data-testid="source-panel-flip"
+                :aria-label="flipPanelAriaLabel"
+                class="inline-flex h-6 w-6 items-center justify-center rounded border bg-background text-foreground shadow-sm transition-colors hover:bg-accent"
+                @pointerdown="handlePanelFlipPointerDown"
+                @click.stop="handlePanelFlipClick"
+              >
+                <ArrowLeftRight class="h-3.5 w-3.5" />
+              </button>
+            </ResizableHandle>
+            <ResizablePanel :default-size="28" :min-size="20" :max-size="45" class="min-w-[18rem]">
+              <div class="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+                <template v-if="!hasIndexedDocuments">
+                  <div class="flex flex-1 items-center justify-center text-muted-foreground">
+                    <div class="text-center">
+                      <FileText class="mx-auto mb-3 h-12 w-12 opacity-40" />
+                      <p class="text-lg font-medium">Upload documents to start chatting</p>
+                    </div>
+                  </div>
+                </template>
+                <template v-else>
+                  <div ref="chatScrollRef" data-testid="chat-scroll-area" role="log" aria-live="polite" aria-atomic="false" aria-relevant="additions" class="keyboard-scroll-area min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
+                    <template v-for="(msg, i) in messages" :key="i">
+                      <button
+                        v-if="msg.interjectionContext && msg.role === 'user'"
+                        type="button"
+                        data-testid="chat-interjection-badge"
+                        class="inline-flex items-center gap-1.5 rounded-full border border-primary/40 bg-primary/10 px-2.5 py-1 font-inter text-[11px] text-primary transition-colors hover:bg-primary/20"
+                        @click="handleInterjectionBadgeClick(msg.interjectionContext!)"
+                      >
+                        🎙 Asked while listening @ {{ formatInterjectionBadgeTime(msg.interjectionContext.timeMs) }} · "{{ msg.interjectionContext.quotedText.slice(0, 40) }}{{ msg.interjectionContext.quotedText.length > 40 ? '…' : '' }}"
+                      </button>
+                      <ChatMessage
+                        :role="msg.role"
+                        :content="msg.content"
+                        :sources="msg.sources"
+                        :streaming="streaming && i === messages.length - 1"
+                        @citation-click="(citIndex: number) => handleCitationClick(i, citIndex)"
+                        @citation-long-press="(citIndex: number) => handleCitationClick(i, citIndex)"
+                      />
+                      <ChatReferenceChips
+                        v-if="msg.role === 'assistant' && (msg.sources?.length ?? 0) > 0"
+                        :sources="msg.sources ?? []"
+                        @view-all="handleViewAllReferences(i)"
+                        @chip-click="(citIndex: number) => handleCitationClick(i, citIndex)"
+                      />
+                    </template>
+                    <ChatThinkingRow v-if="thinking" :model="selectedModel" />
+                    <div v-if="error" class="text-center text-sm text-destructive">
+                      {{ error }}
+                    </div>
+                  </div>
+                </template>
+                <div data-testid="chat-composer-footer" class="sticky bottom-0 z-10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+                  <div class="flex items-center px-4 pt-2">
+                    <ChatModelSelector
+                      :model-value="selectedModel"
+                      :disabled="loading"
+                      @update:model-value="selectModel"
+                    />
+                  </div>
+                  <ChatInput
+                    ref="chatInputRef"
+                    :disabled="!hasIndexedDocuments || loading"
+                    :attachment-status="attachmentStatus"
+                    :busy="uploading || importingLink"
+                    :placeholder="folder ? `Ask about your ${folder.name} materials...` : 'Ask a question...'"
+                    :folder-id="folderId"
+                    :scope="referenceScope"
+                    @upload-files="handleUpload"
+                    @import-link="handleImportLink"
+                    :interjection-context="pendingInterjectionContext"
+                    @submit="handleSendMessage"
+                  />
+                </div>
+              </div>
+            </ResizablePanel>
+          </ResizablePanelGroup>
+        </div>
+        <div v-else class="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+          <template v-if="isDesktop && chatHelperOpen">
             <ResizablePanelGroup direction="horizontal" class="min-w-0 flex-1">
               <template v-if="isSourcePanelLeading">
                 <ResizablePanel :default-size="28" :min-size="20" :max-size="45" class="min-w-[18rem]">
-                  <ChatSourcePanel
-                    :sources="allSources"
-                    :active-citation-index="activeCitationIndex"
-                    :open="sourcePanelOpen"
-                    side="left"
-                    @close="sourcePanelOpen = false"
-                  />
+                  <div class="flex h-full min-h-0 flex-col overflow-hidden">
+                    <FolderShellUnifiedHelperPaneTabs
+                      :model-value="helperMode === 'sources' ? 'sources' : 'podcast'"
+                      @update:model-value="setChatHelperTab"
+                    />
+                    <div v-if="helperMode === 'podcast'" class="min-h-0 flex-1 overflow-hidden">
+                      <AudioOverviewShell :folder-id="folderId" :scope="referenceScope" :interjection-in-flight="interjectionInFlight" @podcast-ask="handlePodcastAsk" />
+                    </div>
+                    <ChatSourcePanel
+                      v-else
+                      :sources="allSources"
+                      :active-citation-index="activeCitationIndex"
+                      :open="sourcePanelOpen"
+                      side="left"
+                      class="min-h-0 flex-1"
+                      @close="helperMode = null"
+                    />
+                  </div>
                 </ResizablePanel>
                 <ResizableHandle with-handle>
                   <button
@@ -986,13 +1170,24 @@ async function handleImportLink(url: string) {
                   </button>
                 </ResizableHandle>
                 <ResizablePanel :default-size="28" :min-size="20" :max-size="45" class="min-w-[18rem]">
-                  <ChatSourcePanel
-                    :sources="allSources"
-                    :active-citation-index="activeCitationIndex"
-                    :open="sourcePanelOpen"
-                    side="right"
-                    @close="sourcePanelOpen = false"
-                  />
+                  <div class="flex h-full min-h-0 flex-col overflow-hidden">
+                    <FolderShellUnifiedHelperPaneTabs
+                      :model-value="helperMode === 'sources' ? 'sources' : 'podcast'"
+                      @update:model-value="setChatHelperTab"
+                    />
+                    <div v-if="helperMode === 'podcast'" class="min-h-0 flex-1 overflow-hidden">
+                      <AudioOverviewShell :folder-id="folderId" :scope="referenceScope" :interjection-in-flight="interjectionInFlight" @podcast-ask="handlePodcastAsk" />
+                    </div>
+                    <ChatSourcePanel
+                      v-else
+                      :sources="allSources"
+                      :active-citation-index="activeCitationIndex"
+                      :open="sourcePanelOpen"
+                      side="right"
+                      class="min-h-0 flex-1"
+                      @close="helperMode = null"
+                    />
+                  </div>
                 </ResizablePanel>
               </template>
             </ResizablePanelGroup>
@@ -1097,6 +1292,17 @@ async function handleImportLink(url: string) {
           :folder-id="folderId"
           :selected-quiz-id="activeTab === 'quiz' ? activeVoidId : null"
           @generation-started="() => { if (isDesktop) helperMode = 'tasks' }"
+        />
+      </UiTabsContent>
+
+      <UiTabsContent value="audio-overview" class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <AudioOverviewShell
+          ref="audioOverviewShellRef"
+          :folder-id="folderId"
+          :scope="referenceScope"
+          :interjection-in-flight="interjectionInFlight"
+          @generation-started="() => { if (isDesktop) helperMode = 'tasks' }"
+          @podcast-ask="handlePodcastAsk"
         />
       </UiTabsContent>
 
@@ -1227,6 +1433,19 @@ async function handleImportLink(url: string) {
       :pending="movePending"
       :item-count="moveTargetIds.length"
       @submit="confirmMove"
+    />
+
+    <FoldersFolderFormModal
+      v-model:open="folderEditOpen"
+      mode="edit"
+      :folder="folder"
+      @deleted="router.replace('/')"
+    />
+
+    <FoldersFolderFormModal
+      v-model:open="subfolderCreateOpen"
+      mode="create"
+      :parent-id="folderId"
     />
   </FolderShell>
 </template>

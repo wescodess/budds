@@ -1,5 +1,12 @@
 <script setup lang="ts">
-import { AlertCircle, Check, Crosshair, LoaderCircle, Plus, Send, Link as LinkIcon, Upload } from 'lucide-vue-next'
+import { AlertCircle, Check, Crosshair, FolderTree, Headphones, LoaderCircle, Plus, Send, Link as LinkIcon, Upload } from 'lucide-vue-next'
+
+function formatInterjectionTime(ms: number): string {
+  const total = Math.max(0, Math.round(ms / 1000))
+  const minutes = Math.floor(total / 60)
+  const seconds = total % 60
+  return `${minutes}:${seconds.toString().padStart(2, '0')}`
+}
 import type { Id } from '../../../convex/_generated/dataModel'
 import type { AttachmentStatus } from '~/composables/useDocuments'
 import type { ScopeChip, useReferenceScope } from '~/composables/useReferenceScope'
@@ -13,6 +20,8 @@ type ComposerMention = PickerSelection & {
   key: string
 }
 
+import type { InterjectionContext } from '~/composables/useChat'
+
 const props = defineProps<{
   disabled?: boolean
   busy?: boolean
@@ -20,6 +29,7 @@ const props = defineProps<{
   placeholder?: string
   folderId?: Id<'folders'>
   scope?: ReturnType<typeof useReferenceScope>
+  interjectionContext?: InterjectionContext | null
 }>()
 
 const emit = defineEmits<{
@@ -522,7 +532,27 @@ defineExpose({ focus })
 
 <template>
   <div class="border-t px-3 py-3 sm:p-4">
+    <div
+      v-if="props.interjectionContext"
+      data-testid="chat-interjection-chip"
+      class="pb-2"
+    >
+      <span class="inline-flex items-center gap-1.5 rounded-full border border-primary/40 bg-primary/10 px-2.5 py-1 font-inter text-[11px] text-primary">
+        <Headphones class="h-3 w-3" />
+        Re: {{ formatInterjectionTime(props.interjectionContext.timeMs) }} · "{{ props.interjectionContext.quotedText.slice(0, 60) }}{{ props.interjectionContext.quotedText.length > 60 ? '…' : '' }}"
+      </span>
+    </div>
     <ChatReferenceScopeStrip v-if="props.scope" :scope="props.scope" />
+    <div
+      v-if="props.scope && !hasScopeSelection"
+      data-testid="chat-scope-default-chip"
+      class="pb-2"
+    >
+      <span class="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-card/70 px-2.5 py-1 font-inter text-[11px] text-muted-foreground">
+        <FolderTree class="h-3 w-3" />
+        All docs · folder + subfolders
+      </span>
+    </div>
 
     <div class="relative flex items-end gap-1.5 sm:gap-2" data-gesture-owner="chat-input">
       <UiDropdownMenu v-if="props.folderId">
@@ -570,7 +600,7 @@ defineExpose({ focus })
         v-if="props.folderId"
         ref="fileInputRef"
         type="file"
-        accept="application/pdf"
+        accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx,text/plain,.txt,text/markdown,.md,text/csv,.csv,text/html,.html,image/png,.png,image/jpeg,.jpg,.jpeg,image/webp,.webp,image/gif,.gif"
         multiple
         class="hidden"
         @change="handleFilesSelected"
@@ -685,9 +715,9 @@ defineExpose({ focus })
     <UiDialog v-model:open="linkDialogOpen">
       <UiDialogContent>
         <UiDialogHeader>
-          <UiDialogTitle>Add PDF from link</UiDialogTitle>
+          <UiDialogTitle>Add from link</UiDialogTitle>
           <UiDialogDescription>
-            Paste a direct link to a PDF file and it will be imported into this folder.
+            Paste a URL to import — websites, YouTube videos, and direct file links are all supported.
           </UiDialogDescription>
         </UiDialogHeader>
 
@@ -695,7 +725,7 @@ defineExpose({ focus })
           <input
             v-model="linkUrl"
             type="url"
-            placeholder="https://example.com/lecture-notes.pdf"
+            placeholder="https://example.com/article or YouTube link"
             inputmode="url"
             enterkeyhint="done"
             autocapitalize="none"
