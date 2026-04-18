@@ -37,6 +37,14 @@ export const appendMessage = mutation({
     content: v.string(),
     sources: v.optional(sourcesValidator),
     model: v.optional(v.string()),
+    interjectionContext: v.optional(v.object({
+      overviewId: v.id('audioOverviews'),
+      turnIndex: v.number(),
+      timeMs: v.number(),
+      quotedText: v.string(),
+      sourceFilename: v.optional(v.string()),
+      interjectionId: v.optional(v.id('audioOverviewInterjections')),
+    })),
   },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity()
@@ -56,6 +64,7 @@ export const appendMessage = mutation({
       content: args.content,
       sources: args.sources,
       model: args.model,
+      interjectionContext: args.interjectionContext,
     })
   },
 })
