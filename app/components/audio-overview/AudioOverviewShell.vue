@@ -45,7 +45,7 @@ const indexedCount = computed(() =>
 
 const { data: folderData } = useConvexQuery(
   api.folders.getFolder,
-  computed(() => ({ folderId: props.folderId })),
+  computed(() => ({ id: props.folderId })),
 )
 const folderScope = computed(() => {
   const row = folderData.value as any
@@ -57,15 +57,17 @@ const hasFolderScope = computed(() => {
   return (s.folderIds?.length ?? 0) > 0 || (s.fileIds?.length ?? 0) > 0
 })
 
+const resolveScopeArgs = computed(() => {
+  const s = folderScope.value
+  if (!s) return null
+  return { folderIds: s.folderIds, fileIds: s.fileIds }
+})
 const { data: resolvedScopeData } = useConvexQuery(
   api.folders.resolveScope,
-  computed(() => {
-    const s = folderScope.value
-    if (!s) return 'skip' as any
-    return { folderIds: s.folderIds, fileIds: s.fileIds }
-  }) as any,
+  computed(() => resolveScopeArgs.value ?? { folderIds: [], fileIds: [] }),
 )
 const folderScopeDocIds = computed<string[]>(() => {
+  if (!resolveScopeArgs.value) return []
   const row = resolvedScopeData.value as { documentIds?: string[] } | null | undefined
   return row?.documentIds ?? []
 })
