@@ -7,6 +7,8 @@ defineProps<{
   continueLabel?: string | null
 }>()
 
+const { springGentle } = useMotionPresets()
+
 const hour = new Date().getHours()
 const timeGreeting = computed(() => {
   if (hour < 5) return 'Studying late'
@@ -17,7 +19,12 @@ const timeGreeting = computed(() => {
 </script>
 
 <template>
-  <div class="flex flex-col items-start gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+  <Motion
+    :initial="{ opacity: 0, y: 10 }"
+    :animate="{ opacity: 1, y: 0 }"
+    :transition="springGentle"
+    class="flex flex-col items-start gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4"
+  >
     <div class="min-w-0 flex-1">
       <h1 class="font-dm-sans text-2xl font-bold tracking-tight text-foreground">
         {{ timeGreeting }}<span v-if="name">, {{ name }}</span>.
@@ -40,5 +47,5 @@ const timeGreeting = computed(() => {
       <span class="text-muted-foreground">Continue:</span>
       <span class="min-w-0 flex-1 truncate font-medium text-foreground sm:max-w-[220px] sm:flex-none">{{ continueLabel }}</span>
     </NuxtLink>
-  </div>
+  </Motion>
 </template>
