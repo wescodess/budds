@@ -9,6 +9,7 @@
  */
 
 import type * as accountDeletion from "../accountDeletion.js";
+import type * as audioOverviewInterjections from "../audioOverviewInterjections.js";
 import type * as audioOverviews from "../audioOverviews.js";
 import type * as auth from "../auth.js";
 import type * as conversations from "../conversations.js";
@@ -38,6 +39,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   accountDeletion: typeof accountDeletion;
+  audioOverviewInterjections: typeof audioOverviewInterjections;
   audioOverviews: typeof audioOverviews;
   auth: typeof auth;
   conversations: typeof conversations;
