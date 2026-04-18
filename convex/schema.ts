@@ -320,6 +320,25 @@ export default defineSchema({
     .index('by_userId_and_folderId', ['userId', 'folderId'])
     .index('by_shareToken', ['shareToken']),
 
+  audioOverviewInterjections: defineTable({
+    audioOverviewId: v.id('audioOverviews'),
+    userId: v.string(),
+    insertedAfterTurnIndex: v.number(),
+    question: v.string(),
+    model: v.optional(v.string()),
+    answerTurns: v.array(
+      v.object({
+        speaker: v.union(v.literal('host_a'), v.literal('host_b')),
+        text: v.string(),
+        audioFileId: v.id('_storage'),
+        durationMs: v.number(),
+        sourceIndex: v.optional(v.number()),
+      }),
+    ),
+  })
+    .index('by_audioOverview', ['audioOverviewId'])
+    .index('by_userId', ['userId']),
+
   pendingCleanup: defineTable({
     userId: v.string(),
     documentId: v.string(),

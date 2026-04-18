@@ -1,22 +1,20 @@
 version: 1
-mode: idle
-current_phase: complete
-spec_slug: audio-overview-phase-3-share-ops
+mode: running
+current_phase: review
+spec_slug: audio-overview-phase-4-interjection
 input_type: goal
 goal_or_spec: |
-  Audio Overview — Phase 3 Share + Ops (per notebooklm_audio_overview_plan.md §7).
-  Scope: (1) Public playback page at /audio/[token] with opaque token (not raw id),
-  read-only Player variant. (2) Share modal from Player Share button (replaces Soon chip);
-  Copy-link, Unshare, Create-link. (3) Schema: audioOverviews.shareToken? + publishedAt?
-  + index; mutations publishOverview / unpublishOverview; public queries
-  getByShareToken + getTurnUrlsByShareToken. (4) Per-user daily quota soft cap
-  (users.audioOverviewQuota, getDailyQuota, 10/day default) surfaced at
-  Customize-submit time. (5) Nitro cache rule on /audio/[token] to limit R2 egress.
-  Out of scope: Phase 4 interjection, signed-URL TTL proxy, ffprobe durations.
+  Audio Overview — Phase 4 Interjection (per notebooklm_audio_overview_plan.md §5.5 + §7).
+  Owner pauses mid-playback, asks a follow-up (text or voice via SpeechRecognition),
+  hosts answer inline (2-4 turns) then playback resumes. Scope: schema
+  audioOverviewInterjections; POST /api/audio-overview/interject; Convex mutations
+  create/listByOverview/deleteInterjection; store spliceTurns; InterjectModal;
+  Player Ask button (auth-only, not public); tests for auth + splice + prompt.
+  Out of scope: mobile Safari voice quirks, multi-language transcription.
 is_ui: true
 review_rounds: 1
-branch: feat/audio-overview-phase-3-share-ops
-pr_url: https://github.com/wescodess/budds/pull/55
+branch: feat/audio-overview-phase-4-interjection
+pr_url: null
 paths:
   project_root: /Users/wesleyukadike/Desktop/budds
   artifacts_dir: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts
@@ -26,121 +24,94 @@ paths:
   design_cache: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts/design-screens
 design:
   approved: true
-  approved_at: "2026-04-17T21:13:00Z"
+  approved_at: "2026-04-17T22:02:00Z"
   stitch_project_id: "2926819289448574055"
   reference_screenshot: "_bmad-output/implementation-artifacts/design-screens/audio-overview-phase-2-polish/audio-overview-player-visualizer.png"
   screens:
-    - surface: ShareDialog
-      screen_id: "6eb1a6f1758b49e1a44bc6af2f647fba"
-      title: "Share Audio Overview"
-      local_path: "_bmad-output/implementation-artifacts/design-screens/audio-overview-phase-3-share-ops/share-dialog.png"
-      notes: "Shared-state view. URL input with inline Copy button, plays-count caption, rose-tinted info banner about access scope, Unshare + Done footer. No avatars. Implementation will also render the UNshared state (primary 'Create share link' button replaces URL row)."
-    - surface: PublicPlaybackPage
-      screen_id: "2933de558d214eb6ab5b2ffc91920687"
-      title: "Public Audio Overview Playback"
-      local_path: "_bmad-output/implementation-artifacts/design-screens/audio-overview-phase-3-share-ops/public-playback-page.png"
-      notes: "Minimal header (Budds wordmark + Open in Budds); centered title + caption; host orbs (A active w/ pulse, B inactive); blockquote; player bar with scrubber/speed/skip/play/Download — no Share/regenerate/customize/history. Sources pills + footer CTA. Orbs pure amber/gold circles."
-    - surface: QuotaBanner
-      screen_id: "06a957800172418eb924da738b74818b"
-      title: "Quota States Reference (Toast + Customize-at-Cap)"
-      local_path: "_bmad-output/implementation-artifacts/design-screens/audio-overview-phase-3-share-ops/quota-states.png"
-      notes: "Two states stacked: (1) soft warning toast at 80% usage (amber AlertTriangle + text), (2) Customize dialog at quota cap (rose banner, disabled controls, disabled Generate button)."
+    - surface: InterjectModal
+      screen_id: "e3d1a0fc549a432ab9051018f123cf52"
+      title: "Ask the hosts — 3 states (Idle/Voice/Submitting)"
+      local_path: "_bmad-output/implementation-artifacts/design-screens/audio-overview-phase-4-interjection/interject-modal.png"
+      notes: "Three states stacked: Idle-text (Type/Speak toggle, textarea, hint, Cancel+Ask), Voice-listening (pure amber orb with ring pulse, live transcript, Stop button), Submitting (quoted question, 3-dot progress Understanding→Writing reply→Synthesizing, spinner). No avatars."
+    - surface: PlayerWithAskButton
+      screen_id: "a602a320a7384cda9246b2176618fb88"
+      title: "Player with Ask button + in-flight interjection banner"
+      local_path: "_bmad-output/implementation-artifacts/design-screens/audio-overview-phase-4-interjection/player-with-ask.png"
+      notes: "Top: Player with new Ask ghost pill (Mic icon) in the header row alongside History/Customize/Generate new. Bottom: in-flight state with amber-tinted banner at the top ('Hosts are answering \"…\"'), disabled Ask button, paused play button. Host orbs pure amber/gold. Minor Stitch chrome (nav sidebar) won't ship."
   surfaces_requested:
-    - ShareDialog
-    - PublicPlaybackPage
-    - QuotaBanner
+    - InterjectModal
+    - PlayerWithAskButton
   design_system_id: "assets/11175050301981891392"
 escalation:
   pending: null
   log:
-    - id: "design-approval-audio-overview-phase-3-share-ops-01"
-      question: "Approve Phase 3 design screens (ShareDialog + PublicPlaybackPage + QuotaBanner)?"
+    - id: "design-approval-audio-overview-phase-4-interjection-01"
+      question: "Approve Phase 4 design screens (InterjectModal + PlayerWithAskButton)?"
       answer: "approve"
       followed_default: null
-      asked_at: "2026-04-17T21:10:00Z"
-      answered_at: "2026-04-17T21:13:00Z"
+      asked_at: "2026-04-17T21:59:00Z"
+      answered_at: "2026-04-17T22:02:00Z"
       auto_resolved: false
       raised_from_state: design
 decisions_log:
   - ts: 2026-04-17
-    decision: "Use opaque share token in URL path, not raw Convex id"
-    rationale: "Raw ids enumerable; tokens are capability bearers — short-circuit the enumeration vector. 32-char hex via crypto.getRandomValues."
+    decision: "Synchronous server route (no task integration) for interjection generation"
+    rationale: "Fixed overhead ~5-10s for 3 turns is acceptable blocking latency; avoids task-row bookkeeping for a short flow; UI shows a spinner with 8s safety net. Can be moved to tasks if latency becomes a complaint."
   - ts: 2026-04-17
-    decision: "Public queries bypass auth but strip sensitive fields"
-    rationale: "Share tokens are the authorization; returning userId/folderId/taskId would leak organization graph info. Whitelist only title+turns+sourceDocumentIds+voiceProfile."
+    decision: "Reuse overview.voiceProfile for interjection TTS (no new voice picker)"
+    rationale: "Consistency — the answer hosts should sound like the podcast hosts. Customizing voices per interjection adds UX friction without clear value."
   - ts: 2026-04-17
-    decision: "Quota is a CLIENT-surfaced soft cap, not a server hard gate"
-    rationale: "Matches plan §7 Phase 3 (soft cap) — protects against runaway LLM cost via UX but doesn't complicate the server auth/generation path. Hard gate can be added Phase 4+."
+    decision: "Ask button on authenticated Player only; hidden on PublicAudioShell"
+    rationale: "Public listeners are capability bearers, not authors — can't mutate the overview. Phase 3 established the auth-gated vs. read-only surface split."
 run_log:
   - ts: 2026-04-17
     event: start
-    detail: "Audio Overview Phase 3 Share + Ops kicked off. is_ui=true, surfaces=[ShareDialog, PublicPlaybackPage, QuotaBanner]. Previous spec (Phase 2) merged via PR #54 commit 0af82f8."
+    detail: "Audio Overview Phase 4 Interjection kicked off. is_ui=true, surfaces=[InterjectModal, Player+Ask]. Previous spec Phase 3 merged via PR #55 commit 2b84d75."
   - ts: 2026-04-17
     event: intake_complete
-    detail: "slug=audio-overview-phase-3-share-ops, input_type=goal, is_ui=true."
+    detail: "slug=audio-overview-phase-4-interjection, input_type=goal, is_ui=true."
   - ts: 2026-04-17
     event: phase_transition
     detail: "intake → design"
   - ts: 2026-04-17
     event: design_ready
-    detail: "Stitch generated 3 screens: ShareDialog=6eb1a6f1758b49e1a44bc6af2f647fba, PublicPlayback=2933de558d214eb6ab5b2ffc91920687, QuotaStates=06a957800172418eb924da738b74818b. PNGs saved to design-screens/audio-overview-phase-3-share-ops/."
+    detail: "Stitch generated 2 screens: InterjectModal=e3d1a0fc549a432ab9051018f123cf52 (3 states: idle/voice/submitting), Player+Ask=a602a320a7384cda9246b2176618fb88 (idle + in-flight banner). PNGs in design-screens/audio-overview-phase-4-interjection/."
   - ts: 2026-04-17
     event: escalation_raised
-    detail: "Design approval for 3 Phase 3 surfaces. No auto-resolve."
+    detail: "Design approval for 2 Phase 4 surfaces. No auto-resolve."
   - ts: 2026-04-17
     event: escalation_resolved
-    detail: "User approved all 3. Unshared-state of ShareDialog + current-year footer + quota banner-as-component noted as implementation intent."
+    detail: "User approved. Stitch side-nav chrome + phase-by-phase progress dots noted as Stitch artifacts — real implementation uses indeterminate spinner + 8s safety net."
   - ts: 2026-04-17
     event: phase_transition
     detail: "design → clarify → spec (clarify auto-resolved: explicit goal, clean tree, non-zero blast radius → plan-code-review)"
   - ts: 2026-04-17
     event: spec_written
-    detail: "spec-audio-overview-phase-3-share-ops.md written, status=ready-for-dev, ~2400 tokens (over 1600). Auto-decision [K] accept — cohesive cross-layer (schema+mutations+public queries+UI) and Phase 3 is one sprint per plan."
+    detail: "spec-audio-overview-phase-4-interjection.md written, status=ready-for-dev, ~2100 tokens. Auto-decision [K]: cohesive cross-layer, one-sprint Phase 4 per plan §7."
   - ts: 2026-04-17
     event: phase_transition
     detail: "spec → implement"
   - ts: 2026-04-17
     event: branch_carved
-    detail: "feat/audio-overview-phase-3-share-ops off dev at 42a082b."
+    detail: "feat/audio-overview-phase-4-interjection off dev at 8d50d35."
   - ts: 2026-04-17
     event: implement_complete
-    detail: "13 files changed/new: schema.ts (shareToken+publishedAt+by_shareToken+users.audioOverviewQuota), audioOverviews.ts (publishOverview/unpublishOverview/getByShareToken/getTurnUrlsByShareToken/getPublicSourceFilenames/token util), users.ts (getDailyQuota+incrementDailyQuota), audioOverviews.test.ts (+16 assertions), users.test.ts (+6 quota tests), AudioOverviewShareDialog.vue (new), PublicAudioShell.vue (new), pages/audio/[token].vue (new), AudioOverviewPlayer.vue (Share wire-up), AudioOverviewShell.vue (quota pre-check + share dialog host), AudioOverviewCustomize.vue (quotaState rose banner), nuxt.config.ts (routeRule)."
+    detail: "12 files: schema (audioOverviewInterjections + 2 indexes), convex/audioOverviewInterjections.ts (create/listByOverview/getTurnUrls/deleteInterjection), convex/audioOverviewInterjections.test.ts (+13), server/utils/interjection-prompt.ts + .test.ts (+15), server/api/audio-overview/interject.post.ts, app/composables/useAudioOverviewStore.ts (spliceTurns), app/components/audio-overview/InterjectModal.vue (text/voice/submitting), AudioOverviewPlayer.vue (Ask button + banner), AudioOverviewShell.vue (host modal + splice+resume), tests/component/audio-overview/store-splice.test.ts (+5)."
   - ts: 2026-04-17
     event: checks_complete
-    detail: "pnpm test: 399 passed / 9 skipped (+19 Phase 3 assertions). pnpm test:component: 192 passed / 30 failed / 74 skipped — 30 preexisting failures unchanged (G2/G3 deferred-work baseline)."
+    detail: "pnpm test 429/429 (+28 Phase 4 assertions). pnpm test:component 197/30 baseline unchanged (+5 from store-splice tests)."
   - ts: 2026-04-17
     event: phase_transition
     detail: "implement → review"
   - ts: 2026-04-17
     event: review_round_1
-    detail: "blind-hunter FAIL (1C+2M+3Min), edge-case-hunter FAIL (1C+2M+2Min), acceptance-auditor PASS (5/5). 8 unique defects consolidated. Loopback triggered."
+    detail: "blind-hunter FAIL (1C+3M+2Min), edge-case-hunter FAIL (4M+2Min), acceptance-auditor PASS (5/5). 7 unique defects consolidated after dedup. Loopback triggered."
   - ts: 2026-04-17
     event: loopback_amended
-    detail: "Spec Change Log R1 populated with 8 fixes: drop skip sentinel / extend listByFolder, playback factory for public page, sticky guard on /audio/**, strict token regex, publish status=ready gate, copy-timer cleanup, quota console.warn, fold filenames into getByShareToken."
+    detail: "Spec Change Log R1 populated with 7 fixes: spliceApplied flag, submit-start event, tautology cleanup, afterIndex snapshot, AbortController cancel wiring, SR handler detach, 20s timeout."
   - ts: 2026-04-17
     event: phase_transition
     detail: "review → implement (R1 loopback)"
-  - ts: 2026-04-17
-    event: r1_fixes_complete
-    detail: "All 8 R1 amendments applied. Tests: 401/401 main (+2 new), component baseline unchanged."
-  - ts: 2026-04-17
-    event: review_round_2
-    detail: "Focused review of the 8 R1 amendments: PASS. All fixes land at claimed file:line. No new defects introduced."
-  - ts: 2026-04-17
-    event: phase_transition
-    detail: "review → commit"
-  - ts: 2026-04-17
-    event: commit
-    detail: "feat(audio-overview): Phase 3 share + ops. 19 files, +1558/-258. Commit 4564ec9."
-  - ts: 2026-04-17
-    event: pr_opened
-    detail: "PR #55 opened against dev."
-  - ts: 2026-04-17
-    event: merge_complete
-    detail: "PR #55 merged to dev. Merge commit 2b84d7588bb0f5200bbde2122c2b3c36cd811fa6. Branch feat/audio-overview-phase-3-share-ops deleted."
-  - ts: 2026-04-17
-    event: run_complete
-    detail: "Audio Overview Phase 3 Share + Ops shipped. Rounds: 2 (1 FAIL loopback with 8 R1 amends, 1 PASS). 401/401 main + component baseline unchanged."
 config:
   notifications:
     telegram:

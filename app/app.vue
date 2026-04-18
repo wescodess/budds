@@ -35,9 +35,13 @@ useMobileKeyboardInset()
 const globalAudioEl = ref<HTMLAudioElement | null>(null)
 const globalPreloadEl = ref<HTMLAudioElement | null>(null)
 const audioOverviewStore = useAudioOverviewStore()
-onMounted(() => {
-  audioOverviewStore.attachAudio(globalAudioEl.value, globalPreloadEl.value)
-})
+watch(
+  [globalAudioEl, globalPreloadEl],
+  ([el, preloadEl]) => {
+    if (el) audioOverviewStore.attachAudio(el, preloadEl)
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
