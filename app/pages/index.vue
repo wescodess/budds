@@ -78,18 +78,21 @@ function handleFolderPicked(folderId: string) {
             :icon="BookOpen"
             title="Study guide"
             subtitle="Prepare for a test"
+            :stagger-index="0"
             @select="openPicker('study-guide')"
           />
           <DashboardActionCard
             :icon="ClipboardList"
             title="Quiz"
             subtitle="Test your knowledge"
+            :stagger-index="1"
             @select="openPicker('quiz')"
           />
           <DashboardActionCard
             :icon="Layers"
             title="Flashcards"
             subtitle="Bite-sized studying"
+            :stagger-index="2"
             @select="openPicker('flashcards')"
           />
         </DashboardActionSection>
@@ -100,12 +103,14 @@ function handleFolderPicked(folderId: string) {
               :icon="Calculator"
               title="Solve"
               subtitle="Get answers and explanations"
+              :stagger-index="3"
               @select="openPicker('solve')"
             />
             <DashboardActionCard
               :icon="PenLine"
               title="Write"
               subtitle="Draft paragraphs or papers"
+              :stagger-index="4"
               @select="openPicker('write')"
             />
           </DashboardActionSection>
@@ -115,12 +120,14 @@ function handleFolderPicked(folderId: string) {
               :icon="Mic"
               title="Recording"
               subtitle="Automatic lecture notes"
+              :stagger-index="5"
               @select="openPicker('recording')"
             />
             <DashboardActionCard
               :icon="FileText"
               title="Notes"
               subtitle="Detailed notes for any resource"
+              :stagger-index="6"
               @select="openPicker('notes')"
             />
           </DashboardActionSection>
@@ -153,11 +160,11 @@ function handleFolderPicked(folderId: string) {
 
           <DashboardCoursesCarousel v-else :count="folders.length + 1">
             <div
-              v-for="folder in folders"
+              v-for="(folder, idx) in folders"
               :key="folder._id"
               class="w-[200px] shrink-0 snap-start"
             >
-              <DashboardCourseCard :folder="{ ...folder, documentCount: (folder as any).documentCount ?? 0 }" />
+              <DashboardCourseCard :folder="{ ...folder, documentCount: (folder as any).documentCount ?? 0 }" :stagger-index="idx" />
             </div>
             <div class="w-[200px] shrink-0 snap-start">
               <DashboardAddCourseCard />
