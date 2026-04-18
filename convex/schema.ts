@@ -55,6 +55,7 @@ export default defineSchema({
     userId: v.string(),
     folderId: v.id('folders'),
     title: v.string(),
+    archivedAt: v.optional(v.number()),
   })
     .index('by_userId', ['userId'])
     .index('by_userId_and_folderId', ['userId', 'folderId']),
@@ -340,6 +341,7 @@ export default defineSchema({
     insertedAfterTurnIndex: v.number(),
     question: v.string(),
     model: v.optional(v.string()),
+    chatMessageId: v.optional(v.id('messages')),
     answerTurns: v.array(
       v.object({
         speaker: v.union(v.literal('host_a'), v.literal('host_b')),
