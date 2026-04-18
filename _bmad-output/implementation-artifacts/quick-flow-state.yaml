@@ -1,21 +1,32 @@
 version: 1
 mode: running
-current_phase: review
-spec_slug: audio-overview-mvp
+current_phase: commit
+spec_slug: audio-overview-phase-2-polish
 input_type: goal
 goal_or_spec: |
-  NotebookLM-style Audio Overview — Phase 1 MVP only (per plan notebooklm_audio_overview_plan.md).
-  Scope: schema (audioOverviews table), internalAction runAudioOverview (chunk retrieval → dialogue
-  script via OpenRouter → per-turn MeloTTS synthesis → _storage blobs → overview row + task mark
-  complete), audio-script-prompt, tts-melotts wrapper, POST /api/audio-overview/generate route,
-  generation/ready surfaces in folder, basic player (play/pause/scrub ±15s/speed, per-turn swap).
-  Deferred to future specs: visualizer, sticky mini-player, download, customize dialog,
-  share/public page, interjection.
-  Plan path: notebooklm_audio_overview_plan.md
-  Resolved PRD: notebooklm_audio_overview_prd.md.resolved
+  Audio Overview — Phase 2 Polish (per notebooklm_audio_overview_plan.md §7).
+  Scope: (1) AudioOverviewCustomize dialog — pre-generation picker for lengthMinutes
+  (5/10/20), complexity (beginner/expert), voiceProfile (host A/B). Wired to
+  POST /api/audio-overview/generate body. (2) HostVisualizer — two pulsing orbs
+  driven by Web Audio API AnalyserNode on the live <audio> element; active-speaker
+  orb reacts to FFT magnitude, idle orb at low amplitude. Orbs are abstract amber/gold,
+  not avatar headshots. (3) StickyMiniPlayer — single <audio> element in
+  layouts/default.vue so playback survives folder navigation; Pinia store holds
+  {overviewId, currentTurnIndex, currentTimeMs, isPlaying, speed}; collapsed bar shows
+  play/pause + title + speaker chip + progress. Clicking expands back to full player.
+  (4) Download — fetch all turn MP3s via getTurnUrls, decode via Web Audio API,
+  re-encode to single MP3 via dynamic-imported lamejs, trigger <a download>.
+  (5) Disabled-state cleanup: remove 'Soon' chips on Download + Customize entry,
+  wire both to real actions.
+  Out of scope (stays deferred): Phase 3 share link, Phase 4 interjection, quota,
+  ffprobe durations, orphan blob cron, URL expiry proxy, AbortSignal.
+  is_ui=true; design surfaces: AudioOverviewCustomize, HostVisualizer-on-Player,
+  StickyMiniPlayer. Plan: notebooklm_audio_overview_plan.md §7 Phase 2.
+  Preceding spec: _bmad-output/implementation-artifacts/spec-audio-overview-mvp.md.
+  Target: new feature branch off dev.
 is_ui: true
 review_rounds: 1
-branch: podcasts
+branch: feat/audio-overview-phase-2-polish
 pr_url: null
 paths:
   project_root: /Users/wesleyukadike/Desktop/budds
@@ -26,118 +37,124 @@ paths:
   design_cache: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts/design-screens
 design:
   approved: true
-  approved_at: "2026-04-17T18:42:00Z"
+  approved_at: "2026-04-17T20:32:00Z"
   stitch_project_id: "2926819289448574055"
-  reference_screenshot: null
+  reference_screenshot: "_bmad-output/implementation-artifacts/design-screens/audio-overview-mvp/audio-overview-player.png"
   screens:
-    - surface: AudioOverviewCard
-      screen_id: "63d91b784f2e4aae8716f8c99f5a839d"
-      title: "Budds - Audio Overview Generation States"
-      local_path: "_bmad-output/implementation-artifacts/design-screens/audio-overview-mvp/audio-overview-card.png"
-      notes: "Ready + Generating states in one frame. Matches warm-focus system. Stitch sidebar is canvas preview only — real implementation nests in FolderShell Void area."
-    - surface: AudioOverviewPlayer
-      screen_id: "8e5e5e8349044f5cb2ba821f263b890e"
-      title: "Audio Overview Player Void"
-      local_path: "_bmad-output/implementation-artifacts/design-screens/audio-overview-mvp/audio-overview-player.png"
-      notes: "Two-host cards (active/inactive), quote block, scrubber + central amber play button, source pills. Known gaps: (1) Stitch rendered host avatars as stock headshots — real implementation will use abstract amber/gold orbs per prompt. (2) Download/Share disabled-state (Phase 2) treatment not visually explicit — will code with muted ghost + 'Soon' chips."
+    - surface: AudioOverviewCustomize
+      screen_id: "712fa6b0794a4510bf4130ec17ebdd5f"
+      title: "Customize Audio Overview Modal"
+      local_path: "_bmad-output/implementation-artifacts/design-screens/audio-overview-phase-2-polish/audio-overview-customize.png"
+      notes: "Matches spec — centered modal, Length segmented (5/10/20, 10 active), Complexity (Beginner active), 2 voice rows with pure amber/gold orbs, voice dropdown pills, Cancel + Generate footer. No human imagery."
+    - surface: AudioOverviewPlayerWithVisualizer
+      screen_id: "ba43afcc3abd4732bb51013d8c558bd2"
+      title: "Photosynthesis Audio Overview Player"
+      local_path: "_bmad-output/implementation-artifacts/design-screens/audio-overview-phase-2-polish/audio-overview-player-visualizer.png"
+      notes: "Host A active (amber glow), Host B inactive (dim). Orbs are pure circles — no headshots. Deviations from spec: (1) Stitch rendered Download as icon-only instead of icon+label — implementation WILL use icon+label per spec. (2) Concentric ring-pulse animation not visible in static render — will be implemented via CSS @keyframes / Tailwind animate-ping layered rings. (3) Stitch added a fake brand 'The Scholarly Atelier' — this is Stitch chrome and will NOT appear in the real app (player nests in FolderShell's Void area)."
+    - surface: StickyMiniPlayer
+      screen_id: "b5cdd286f7344d2391e5735e547ecfb1"
+      title: "Persistent Mini-Player Bar"
+      local_path: "_bmad-output/implementation-artifacts/design-screens/audio-overview-phase-2-polish/audio-overview-sticky-mini-player.png"
+      notes: "64px flush-bottom bar over dimmed page. Amber orb, title, speaker+time caption on left; amber pause button center; progress track + expand + close on right. Stitch added a fake brand 'The Quiet Scholar' — will NOT appear in real app (mini-player lives in layouts/default.vue)."
   surfaces_requested:
-    - AudioOverviewCard
-    - AudioOverviewPlayer
+    - AudioOverviewCustomize
+    - AudioOverviewPlayerWithVisualizer
+    - StickyMiniPlayer
   design_system_id: "assets/11175050301981891392"
 escalation:
   pending: null
   log:
-    - id: "design-approval-audio-overview-mvp-01"
-      question: "Approve Audio Overview Phase 1 MVP design screens (AudioOverviewCard + AudioOverviewPlayer) to proceed to CLARIFY/SPEC?"
+    - id: "design-approval-audio-overview-phase-2-polish-01"
+      question: "Approve Audio Overview Phase 2 Polish design screens (AudioOverviewCustomize + AudioOverviewPlayerWithVisualizer + StickyMiniPlayer) to proceed to CLARIFY/SPEC?"
       answer: "approve"
       followed_default: null
-      asked_at: "2026-04-17T18:38:00Z"
-      answered_at: "2026-04-17T18:42:00Z"
+      asked_at: "2026-04-17T20:28:00Z"
+      answered_at: "2026-04-17T20:32:00Z"
       auto_resolved: false
       raised_from_state: design
 decisions_log:
   - ts: 2026-04-17
-    decision: "Scope limited to Phase 1 MVP; phases 2-4 deferred"
-    rationale: "Plan explicitly defines Phase 1 as first shippable slice; one spec at a time (Barry rule)"
+    decision: "Scope limited to Phase 2 Polish (plan §7); phases 3-4 deferred"
+    rationale: "Plan defines Phase 2 as Polish (customize/visualizer/sticky/download); one spec at a time"
   - ts: 2026-04-17
-    decision: "is_ui=true with 2 design surfaces (AudioOverviewCard, AudioOverviewPlayer)"
-    rationale: "Customize dialog and StickyMiniPlayer belong to Phase 2; excluded from MVP design set"
+    decision: "is_ui=true with 3 design surfaces (Customize, Player-with-Visualizer, StickyMiniPlayer)"
+    rationale: "Visualizer enhances the existing Player surface; sticky mini-player is a new global layout element; customize is a new dialog"
   - ts: 2026-04-17
-    decision: "input_type=goal (plan is context, not BMAD spec frontmatter)"
-    rationale: "Need CLARIFY + SPEC to produce a scoped spec-<slug>.md for Phase 1 only"
+    decision: "Committed preceding SSR hydration fixes to dev before branching"
+    rationale: "Avoid bundling unrelated changes (AudioOverviewPlayer optional props, FolderShell/folder[id].vue SSR guards) into Phase 2 spec"
   - ts: 2026-04-17
-    decision: "Audio Overview modeled as new Void type + generation entry via CreateVoidDialog"
-    rationale: "DESIGN.md void paradigm; AudioOverviewPlayer = a Void surface, not a side panel"
+    decision: "No Pinia / no lamejs — use module-singleton reactive store + naive MP3 byte-concat"
+    rationale: "Pinia/lamejs not in package.json; adding either requires tier-3 dep approval for marginal benefit. Module-level reactive() + SSR-safe composable is Nuxt-idiomatic and matches existing useAudioOverviewPlayer pattern. Naive byte-concat works for same-codec Aura-1 MP3s (24kHz identical frame format); player-duration-metadata edge is deferred to Phase 3 if users complain."
   - ts: 2026-04-17
-    decision: "Architecture: Nuxt server route owns full pipeline (NOT a Convex internalAction)"
-    rationale: "Matches quiz-generation pattern; env (OpenRouter, AI Gateway) already in Nuxt runtimeConfig; avoids duplicating config into Convex env"
+    decision: "Accept spec over 1600-token threshold (~2400 tokens, 1906 words)"
+    rationale: "Same logic as MVP: cross-layer cohesion (store singleton is the backbone that Customize/Visualizer/Sticky/Download all depend on); splitting produces 4 unshippable micro-specs; Phase 2 is explicitly one sprint per plan §7."
   - ts: 2026-04-17
-    decision: "Accept spec over 1600-token threshold (~2740 tokens)"
-    rationale: "Cohesive cross-layer (DB+BE+UI) per template 'stay in ONE file' rule; further split produces unshippable slices; already scoped Phase 1 MVP from plan's Phase 1-4"
-  - ts: 2026-04-17
-    decision: "Use existing branch `podcasts` as feature branch (not conventional feat/ prefix)"
-    rationale: "Branch already carved with doc commit for this work; renaming risks PR metadata; single letter of convention drift acceptable for a pre-existing branch"
+    decision: "Carved feat/audio-overview-phase-2-polish before IMPLEMENT (not at COMMIT as workflow default)"
+    rationale: "User explicitly asked for a new branch at kickoff; keeps dev clean during implementation."
 run_log:
   - ts: 2026-04-17
     event: start
-    detail: "Audio Overview Phase 1 MVP kicked off from notebooklm_audio_overview_plan.md; is_ui=true, surfaces=[AudioOverviewCard, AudioOverviewPlayer]"
+    detail: "Audio Overview Phase 2 Polish kicked off. is_ui=true, surfaces=[Customize, Player-with-Visualizer, StickyMiniPlayer]"
   - ts: 2026-04-17
     event: intake_complete
-    detail: "slug=audio-overview-mvp, input_type=goal, is_ui=true. Scope: Phase 1 MVP only per plan §7."
+    detail: "slug=audio-overview-phase-2-polish, input_type=goal, is_ui=true"
   - ts: 2026-04-17
     event: phase_transition
     detail: "intake → design"
   - ts: 2026-04-17
     event: design_ready
-    detail: "Stitch generated 2 screens for audio-overview-mvp: card=63d91b784f2e4aae8716f8c99f5a839d, player=8e5e5e8349044f5cb2ba821f263b890e. Downloaded to design-screens/audio-overview-mvp/. Known gaps noted in state.design.screens."
+    detail: "Stitch generated 3 screens: Customize=712fa6b0794a4510bf4130ec17ebdd5f, Player=ba43afcc3abd4732bb51013d8c558bd2, MiniPlayer=b5cdd286f7344d2391e5735e547ecfb1. PNGs saved to design-screens/audio-overview-phase-2-polish/. No human avatars — all orbs are pure amber/gold circles. Minor Stitch chrome artifacts (fake brand names in header/footer) will not appear in real implementation."
   - ts: 2026-04-17
     event: escalation_raised
-    detail: "Design approval for AudioOverviewCard + AudioOverviewPlayer. No auto-resolve (UI approval per feedback_design_first.md)."
+    detail: "Design approval for 3 Phase 2 surfaces. No auto-resolve (UI approval per feedback_design_first.md)."
   - ts: 2026-04-17
     event: escalation_resolved
-    detail: "User approved both design screens. Avatars-as-orbs + Soon-chip disabled states deferred to implementation."
+    detail: "User approved all 3 design screens. Stitch chrome artifacts (fake brands) + ring-pulse animation + Download icon+label deviations folded into implementation intent."
   - ts: 2026-04-17
     event: phase_transition
     detail: "design → clarify"
   - ts: 2026-04-17
     event: clarify_complete
-    detail: "Intent clear from plan + PRD. Git tree clean (only expected artifacts). Branch=podcasts (already carved for this work; doc commit present). Architecture auto-decided: follow quiz pattern (Nuxt server route owns pipeline, not Convex action) for env-config co-location."
+    detail: "Intent clear from goal + approved designs + plan §7. Tree clean on dev. Multi-goal check passed: 4 sub-features (Customize/Visualizer/StickyMini/Download) are tightly coupled to the same Audio Overview Phase 2 slice — plan explicitly scopes them as one sprint. Route=plan-code-review (non-zero blast radius: schema payload, global layout mount, Pinia store, dynamic import). Slug=audio-overview-phase-2-polish."
   - ts: 2026-04-17
     event: phase_transition
     detail: "clarify → spec"
   - ts: 2026-04-17
     event: spec_written
-    detail: "spec-audio-overview-mvp.md written, status=ready-for-dev, ~2740 tokens (over 1600 threshold). Tier-1 auto-decision: accept. Rationale: cross-layer spec (DB+BE+UI) per template guidance stays in one file; further split would produce unshippable slices. Deferred-work appended with 12 items for phases 2-4."
+    detail: "spec-audio-overview-phase-2-polish.md written, status=ready-for-dev, ~2400 tokens (over 1600 threshold). Auto-decision [K] accept — cross-layer cohesion via store singleton; splitting produces unshippable slices. 12 execution tasks."
   - ts: 2026-04-17
     event: phase_transition
     detail: "spec → implement"
   - ts: 2026-04-17
+    event: branch_carved
+    detail: "feat/audio-overview-phase-2-polish branched off dev at b569ec2 (SSR-fixes commit)."
+  - ts: 2026-04-17
     event: implement_complete
-    detail: "Schema + audioOverviews.ts + tests (14 new tests), server utils (prompt + tts-melotts) + tests (12 new tests), server route /api/audio-overview/generate.post.ts, UI components (Card, Generating, Player, Shell), composable useAudioOverviewPlayer, CreateVoidDialog +4th tile, folder page wiring. Added NUXT_CLOUDFLARE_WORKERS_AI_TOKEN env with fallback to CLOUDFLARE_AI_SEARCH_TOKEN (tier-1 auto-decision: existing arch permits env additions)."
+    detail: "14 files: created useAudioOverviewStore, useAudioOverviewVisualizer, useAudioOverviewDownload (+ tests), AudioOverviewCustomize, StickyMiniPlayer, customize-types.ts. Modified: tts-workers-ai (export AURA_VOICES + isAuraVoice), generate.post.ts (validate voiceProfile), AudioOverviewPlayer (store + ring pulse + download), AudioOverviewCard (Customize button), AudioOverviewShell (host dialog), layouts/default.vue (global audio + mini-player). Deleted: useAudioOverviewPlayer.ts."
   - ts: 2026-04-17
     event: checks_complete
-    detail: "pnpm test: 369 passed / 9 skipped (up from 343 → added 26 new assertions across 2 test files). pnpm test:component: same 30 pre-existing failures as clean branch (verified via git stash; known issue from G2/G3 deferred-work). No new regressions."
+    detail: "pnpm test: 380 passed / 9 skipped (Convex + server). pnpm test:component: 190 passed / 30 failed / 74 skipped — 30 failures are the same pre-existing baseline (G2/G3 deferred-work). +8 passing tests from new download.test.ts. No new regressions."
   - ts: 2026-04-17
     event: phase_transition
     detail: "implement → review"
   - ts: 2026-04-17
     event: review_round_1
-    detail: "edge-case-hunter FAIL (3C), blind-hunter FAIL (3C), acceptance-auditor PASS. Consolidated 5 unique criticals after dedup. Loopback triggered."
+    detail: "edge-case-hunter FAIL (2C+4M+1Min), blind-hunter FAIL (3C+3M), acceptance-auditor PASS (5/5 AC). 8 unique critical/major defects consolidated after dedup. Loopback triggered."
   - ts: 2026-04-17
     event: loopback_amended
-    detail: "Spec Change Log populated with R1 entry. 6 [R1 amend] tasks added to Execution list. 4 new deferrals logged (URL expiry, AbortSignal, scrubber FP edge, mid-word truncation)."
+    detail: "Spec Change Log R1 populated. 8 [R1 amend] tasks added for: app.vue mount move, SSR gate, visualizer folded into store, null-URL seek bail, watcher length-match guard, download parallelism + error index, 0-byte skip, deleted-folder expand. 3 findings deferred with KEEP rationale."
   - ts: 2026-04-17
     event: phase_transition
     detail: "review → implement (R1 loopback)"
   - ts: 2026-04-17
     event: r1_fixes_complete
-    detail: "Applied all 6 R1 amendments: CreateVoidDialog ?? 0 default, outer catch always fails, MAX_TURNS=50 + MIN_TURNS=3, orphan blob cleanup via deleteOrphanTurnBlob mutation (+3 new tests), Shell newest task by _creationTime, player final-turn display + filename pills + stale-URL banner. pnpm test: 372 passed / 9 skipped (+3 from R1)."
+    detail: "Applied all 8 R1 amendments: global audio + mini-player moved to app.vue, layout cleanup, store SSR gate in loadOverview, visualizer folded into store via WeakMap<HTMLAudioElement, VisualizerGraph>, seek null-URL bail, Player length-match guard, download Promise.allSettled + 0-byte skip + indexed errors, sticky deleted-folder guard with loading-aware bail. Deleted useAudioOverviewVisualizer.ts. Tests: 380/380 main, 10/10 download, full component baseline unchanged (30 pre-existing)."
   - ts: 2026-04-17
     event: phase_transition
     detail: "implement → review (round 2)"
   - ts: 2026-04-17
     event: review_round_2
-    detail: "Focused review of the 6 R1 amendments: PASS. All fixes land at stated file:line with correct semantics, no new critical defects, meta-concerns benign or theoretical."
+    detail: "Focused review of the 8 R1 amendments: PASS. All fixes land at stated file:line with correct semantics. One minor flake noted (sticky Expand during folders-loading false-negative) fixed inline with Array.isArray guard."
   - ts: 2026-04-17
     event: phase_transition
     detail: "review → commit"

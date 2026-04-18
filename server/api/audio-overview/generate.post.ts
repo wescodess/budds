@@ -9,7 +9,7 @@ import {
   sanitizeTurnForSpeech,
   splitOversizedTurns,
 } from '../../utils/audio-script-prompt'
-import { synthesizeVoiceWithRetry, type AuraVoice } from '../../utils/tts-workers-ai'
+import { synthesizeVoiceWithRetry, isAuraVoice, type AuraVoice } from '../../utils/tts-workers-ai'
 import { readConfiguredRuntimeValue } from '../../utils/runtime-config'
 
 const SEED_QUERY = 'key concepts, definitions, discussions, and themes'
@@ -49,6 +49,10 @@ export default defineEventHandler(async (event) => {
       lengthMinutes?: number
       complexity?: 'beginner' | 'expert'
     }
+    voiceProfile?: {
+      hostA?: string
+      hostB?: string
+    }
   }>(event)
 
   if (!body?.folderId?.trim()) {
@@ -63,7 +67,17 @@ export default defineEventHandler(async (event) => {
 
   const lengthMinutes = body.preferences?.lengthMinutes ?? DEFAULT_LENGTH_MINUTES
   const complexity = body.preferences?.complexity ?? DEFAULT_COMPLEXITY
-  const voiceProfile = { ...DEFAULT_VOICE_PROFILE }
+  const requestedHostA = body.voiceProfile?.hostA
+  const requestedHostB = body.voiceProfile?.hostB
+  const resolvedHostA: AuraVoice = isAuraVoice(requestedHostA) ? requestedHostA : DEFAULT_VOICE_PROFILE.hostA
+  const resolvedHostB: AuraVoice = isAuraVoice(requestedHostB) ? requestedHostB : DEFAULT_VOICE_PROFILE.hostB
+  if (requestedHostA !== undefined && !isAuraVoice(requestedHostA)) {
+    console.warn(`[audio-overview/generate] Unknown hostA voice "${requestedHostA}", falling back to ${DEFAULT_VOICE_PROFILE.hostA}`)
+  }
+  if (requestedHostB !== undefined && !isAuraVoice(requestedHostB)) {
+    console.warn(`[audio-overview/generate] Unknown hostB voice "${requestedHostB}", falling back to ${DEFAULT_VOICE_PROFILE.hostB}`)
+  }
+  const voiceProfile = { hostA: resolvedHostA, hostB: resolvedHostB }
 
   async function setTaskProgress(progress: string) {
     if (!taskId || !convexClient) return
