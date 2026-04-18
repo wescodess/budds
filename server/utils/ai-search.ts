@@ -25,6 +25,7 @@ export interface AISearchParams {
   max_num_results?: number
   score_threshold?: number
   reranking?: boolean
+  filterDocIds?: string[]
 }
 
 export function sanitizeUserSegment(userId: string): string {
@@ -145,9 +146,17 @@ export async function searchDocuments(params: AISearchParams): Promise<AISearchR
     }
   })
 
+  const docIdAllowlist = params.filterDocIds && params.filterDocIds.length > 0
+    ? new Set(params.filterDocIds)
+    : null
+
   const chunks = mapped.filter((c) => {
     if (c.attributes.userId !== params.userId) return false
     if (params.folderId && c.attributes.folderId !== params.folderId) return false
+    if (docIdAllowlist) {
+      const docId = c.attributes.documentId
+      if (!docId || !docIdAllowlist.has(docId)) return false
+    }
     return true
   })
 

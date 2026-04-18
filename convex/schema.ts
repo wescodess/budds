@@ -22,6 +22,11 @@ export default defineSchema({
     description: v.optional(v.string()),
     color: v.optional(v.string()),
     icon: v.optional(v.string()),
+    preferredMainPane: v.optional(v.union(v.literal('chat'), v.literal('podcast'))),
+    referenceScope: v.optional(v.object({
+      folderIds: v.optional(v.array(v.id('folders'))),
+      fileIds: v.optional(v.array(v.id('documents'))),
+    })),
   })
     .index('by_userId', ['userId'])
     .index('by_userId_and_parentId', ['userId', 'parentId']),
@@ -314,6 +319,7 @@ export default defineSchema({
     sourceDocumentIds: v.optional(v.array(v.id('documents'))),
     shareToken: v.optional(v.string()),
     publishedAt: v.optional(v.number()),
+    scopeDocIds: v.optional(v.array(v.id('documents'))),
   })
     .index('by_userId', ['userId'])
     .index('by_folderId', ['folderId'])
