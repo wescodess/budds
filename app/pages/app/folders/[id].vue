@@ -52,6 +52,10 @@ const {
 
 const referenceScope = useFolderReferenceScope({ folderId })
 const workspaceRef = ref<HTMLElement | null>(null)
+
+const isPodcastMain = computed(() =>
+  (folder.value as any)?.preferredMainPane === 'podcast',
+)
 const seededFolder = computed(() =>
   folder.value
   ?? allFolders.value?.find(candidate => candidate._id === folderId.value)
@@ -283,6 +287,9 @@ const activeVoidId = computed(() => {
   return typeof q === 'string' && (activeTab.value === 'flashcards' || activeTab.value === 'quiz') ? q : null
 })
 
+type HelperMode = 'sources' | 'tasks' | 'podcast' | null
+const helperMode = ref<HelperMode>(null)
+
 watch(() => route.query?.tab, async () => {
   const raw = route.query?.tab
   if (typeof raw === 'string' && raw === 'audio-overview') {
@@ -314,8 +321,6 @@ async function onTabChange(next: TabValue) {
 const documentsBulkMode = ref(false)
 const selectedDocumentIds = ref<string[]>([])
 const documentsDeletePending = ref(false)
-type HelperMode = 'sources' | 'tasks' | 'podcast' | null
-const helperMode = ref<HelperMode>(null)
 const sourcePanelOpen = computed({
   get: () => helperMode.value === 'sources',
   set: (v: boolean) => { helperMode.value = v ? 'sources' : null },
@@ -873,12 +878,92 @@ async function handleImportLink(url: string) {
           <UiTabsTrigger value="chat">Chat</UiTabsTrigger>
           <UiTabsTrigger value="flashcards">Flash Cards</UiTabsTrigger>
           <UiTabsTrigger value="quiz">Quiz</UiTabsTrigger>
-          <UiTabsTrigger value="audio-overview">Audio Overview</UiTabsTrigger>
           <UiTabsTrigger value="documents">Documents</UiTabsTrigger>
         </UiTabsList>
 
       <UiTabsContent value="chat" class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <div class="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+        <div v-if="isPodcastMain && isDesktop" class="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+          <ResizablePanelGroup direction="horizontal" class="min-w-0 flex-1">
+            <ResizablePanel :default-size="72" :min-size="40" class="min-h-0 min-w-0">
+              <AudioOverviewShell
+                ref="audioOverviewShellRef"
+                :folder-id="folderId"
+                :scope="referenceScope"
+                @generation-started="() => { if (isDesktop) helperMode = 'podcast' }"
+              />
+            </ResizablePanel>
+            <ResizableHandle with-handle>
+              <button
+                type="button"
+                data-testid="source-panel-flip"
+                :aria-label="flipPanelAriaLabel"
+                class="inline-flex h-6 w-6 items-center justify-center rounded border bg-background text-foreground shadow-sm transition-colors hover:bg-accent"
+                @pointerdown="handlePanelFlipPointerDown"
+                @click.stop="handlePanelFlipClick"
+              >
+                <ArrowLeftRight class="h-3.5 w-3.5" />
+              </button>
+            </ResizableHandle>
+            <ResizablePanel :default-size="28" :min-size="20" :max-size="45" class="min-w-[18rem]">
+              <div class="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+                <template v-if="!hasIndexedDocuments">
+                  <div class="flex flex-1 items-center justify-center text-muted-foreground">
+                    <div class="text-center">
+                      <FileText class="mx-auto mb-3 h-12 w-12 opacity-40" />
+                      <p class="text-lg font-medium">Upload documents to start chatting</p>
+                    </div>
+                  </div>
+                </template>
+                <template v-else>
+                  <div ref="chatScrollRef" data-testid="chat-scroll-area" role="log" aria-live="polite" aria-atomic="false" aria-relevant="additions" class="keyboard-scroll-area min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
+                    <template v-for="(msg, i) in messages" :key="i">
+                      <ChatMessage
+                        :role="msg.role"
+                        :content="msg.content"
+                        :sources="msg.sources"
+                        :streaming="streaming && i === messages.length - 1"
+                        @citation-click="(citIndex: number) => handleCitationClick(i, citIndex)"
+                        @citation-long-press="(citIndex: number) => handleCitationClick(i, citIndex)"
+                      />
+                      <ChatReferenceChips
+                        v-if="msg.role === 'assistant' && (msg.sources?.length ?? 0) > 0"
+                        :sources="msg.sources ?? []"
+                        @view-all="handleViewAllReferences(i)"
+                        @chip-click="(citIndex: number) => handleCitationClick(i, citIndex)"
+                      />
+                    </template>
+                    <ChatThinkingRow v-if="thinking" :model="selectedModel" />
+                    <div v-if="error" class="text-center text-sm text-destructive">
+                      {{ error }}
+                    </div>
+                  </div>
+                </template>
+                <div data-testid="chat-composer-footer" class="sticky bottom-0 z-10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+                  <div class="flex items-center px-4 pt-2">
+                    <ChatModelSelector
+                      :model-value="selectedModel"
+                      :disabled="loading"
+                      @update:model-value="selectModel"
+                    />
+                  </div>
+                  <ChatInput
+                    ref="chatInputRef"
+                    :disabled="!hasIndexedDocuments || loading"
+                    :attachment-status="attachmentStatus"
+                    :busy="uploading || importingLink"
+                    :placeholder="folder ? `Ask about your ${folder.name} materials...` : 'Ask a question...'"
+                    :folder-id="folderId"
+                    :scope="referenceScope"
+                    @upload-files="handleUpload"
+                    @import-link="handleImportLink"
+                    @submit="handleSendMessage"
+                  />
+                </div>
+              </div>
+            </ResizablePanel>
+          </ResizablePanelGroup>
+        </div>
+        <div v-else class="flex min-h-0 min-w-0 flex-1 overflow-hidden">
           <template v-if="isDesktop && chatHelperOpen">
             <ResizablePanelGroup direction="horizontal" class="min-w-0 flex-1">
               <template v-if="isSourcePanelLeading">
@@ -889,7 +974,7 @@ async function handleImportLink(url: string) {
                       @update:model-value="setChatHelperTab"
                     />
                     <div v-if="helperMode === 'podcast'" class="min-h-0 flex-1 overflow-hidden">
-                      <AudioOverviewShell :folder-id="folderId" />
+                      <AudioOverviewShell :folder-id="folderId" :scope="referenceScope" />
                     </div>
                     <ChatSourcePanel
                       v-else
@@ -1054,7 +1139,7 @@ async function handleImportLink(url: string) {
                       @update:model-value="setChatHelperTab"
                     />
                     <div v-if="helperMode === 'podcast'" class="min-h-0 flex-1 overflow-hidden">
-                      <AudioOverviewShell :folder-id="folderId" />
+                      <AudioOverviewShell :folder-id="folderId" :scope="referenceScope" />
                     </div>
                     <ChatSourcePanel
                       v-else
@@ -1177,6 +1262,7 @@ async function handleImportLink(url: string) {
         <AudioOverviewShell
           ref="audioOverviewShellRef"
           :folder-id="folderId"
+          :scope="referenceScope"
           @generation-started="() => { if (isDesktop) helperMode = 'tasks' }"
         />
       </UiTabsContent>
