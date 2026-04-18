@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { Pause, Play, Maximize2, X, Rewind, FastForward, ChevronUp, ChevronDown } from 'lucide-vue-next'
 import { useMediaQuery } from '@vueuse/core'
 
@@ -13,6 +13,109 @@ const route = useRoute()
 const { allFolders } = useFolders()
 const isMobile = useMediaQuery('(max-width: 767px)')
 const expanded = ref(false)
+
+const POSITION_KEY = 'budds.mini-player.position'
+const floatingRef = ref<HTMLElement | null>(null)
+const dragHandleRef = ref<HTMLElement | null>(null)
+const posX = ref<number | null>(null)
+const posY = ref<number | null>(null)
+const isDragging = ref(false)
+let dragStartX = 0
+let dragStartY = 0
+let dragStartPosX = 0
+let dragStartPosY = 0
+
+function getDefaultPosition() {
+  if (!import.meta.client) return { x: 0, y: 0 }
+  return {
+    x: window.innerWidth - (expanded.value ? 340 : 300),
+    y: window.innerHeight - (expanded.value ? 240 : 60),
+  }
+}
+
+function clampPosition(x: number, y: number) {
+  if (!import.meta.client) return { x, y }
+  const w = expanded.value ? 320 : 288
+  const h = expanded.value ? 220 : 44
+  return {
+    x: Math.max(8, Math.min(x, window.innerWidth - w - 8)),
+    y: Math.max(8, Math.min(y, window.innerHeight - h - 8)),
+  }
+}
+
+function loadPosition() {
+  if (!import.meta.client) return
+  try {
+    const raw = localStorage.getItem(POSITION_KEY)
+    if (raw) {
+      const { x, y } = JSON.parse(raw)
+      const clamped = clampPosition(x, y)
+      posX.value = clamped.x
+      posY.value = clamped.y
+      return
+    }
+  } catch { /* ignore */ }
+  const def = getDefaultPosition()
+  posX.value = def.x
+  posY.value = def.y
+}
+
+function savePosition() {
+  if (!import.meta.client || posX.value === null || posY.value === null) return
+  try {
+    localStorage.setItem(POSITION_KEY, JSON.stringify({ x: posX.value, y: posY.value }))
+  } catch { /* ignore */ }
+}
+
+function onDragStart(e: PointerEvent) {
+  if ((e.target as HTMLElement)?.closest('button, input')) return
+  isDragging.value = true
+  dragStartX = e.clientX
+  dragStartY = e.clientY
+  dragStartPosX = posX.value ?? getDefaultPosition().x
+  dragStartPosY = posY.value ?? getDefaultPosition().y
+  document.addEventListener('pointermove', onDragMove)
+  document.addEventListener('pointerup', onDragEnd)
+  e.preventDefault()
+}
+
+function onDragMove(e: PointerEvent) {
+  if (!isDragging.value) return
+  const dx = e.clientX - dragStartX
+  const dy = e.clientY - dragStartY
+  const clamped = clampPosition(dragStartPosX + dx, dragStartPosY + dy)
+  posX.value = clamped.x
+  posY.value = clamped.y
+}
+
+function onDragEnd() {
+  isDragging.value = false
+  document.removeEventListener('pointermove', onDragMove)
+  document.removeEventListener('pointerup', onDragEnd)
+  savePosition()
+}
+
+const floatingStyle = computed(() => {
+  if (posX.value === null || posY.value === null) return {}
+  return {
+    left: `${posX.value}px`,
+    top: `${posY.value}px`,
+  }
+})
+
+onMounted(() => { loadPosition() })
+
+watch(visible, (v) => {
+  if (v && posX.value === null) loadPosition()
+})
+
+watch(expanded, () => {
+  if (posX.value !== null && posY.value !== null) {
+    const clamped = clampPosition(posX.value, posY.value)
+    posX.value = clamped.x
+    posY.value = clamped.y
+  }
+})
 
 const onActiveFolderRoute = computed(() => {
   const fid = folderId.value
@@ -122,21 +225,26 @@ async function handleExpand() {
       </button>
     </div>
 
-    <!-- DESKTOP: floating pill / expandable card -->
+    <!-- DESKTOP: floating pill / expandable card — draggable -->
     <div
       v-else-if="visible"
+      ref="floatingRef"
       data-testid="audio-overview-sticky-mini-player"
       :class="[
-        'fixed z-40 transition-all duration-200',
+        'fixed z-40',
         expanded
-          ? 'bottom-4 right-4 w-80 rounded-2xl border border-border/60 bg-card shadow-lg'
-          : 'bottom-4 right-4 w-72 rounded-full border border-border/60 bg-card shadow-lg',
+          ? 'w-80 rounded-2xl border border-border/60 bg-card shadow-lg'
+          : 'w-72 rounded-full border border-border/60 bg-card shadow-lg',
+        isDragging ? '' : 'transition-shadow duration-200',
       ]"
+      :style="floatingStyle"
     >
-      <!-- Collapsed pill -->
+      <!-- Collapsed pill — drag handle is the non-button area -->
       <div
-        class="flex items-center gap-2 px-3 py-2"
+        ref="dragHandleRef"
+        class="flex cursor-grab items-center gap-2 px-3 py-2 select-none active:cursor-grabbing"
         :class="expanded ? 'border-b border-border/40' : ''"
+        @pointerdown="onDragStart"
       >
         <span :class="['h-5 w-5 shrink-0 rounded-full shadow-[0_0_12px_rgba(245,158,11,0.3)]', speakerSwatchClass]" aria-hidden="true" />
         <div class="min-w-0 flex-1">
