@@ -124,6 +124,8 @@ export const listByFolder = query({
       turnCount: row.turns.length,
       totalDurationMs: row.totalDurationMs,
       taskId: row.taskId,
+      shareToken: row.shareToken,
+      publishedAt: row.publishedAt,
     }))
   },
 })
@@ -192,5 +194,108 @@ export const deleteOrphanTurnBlob = mutation({
       // tolerate already-deleted
     }
     return null
+  },
+})
+
+const SHARE_TOKEN_PATTERN = /^[0-9a-f]{32}$/
+
+function generateShareToken(): string {
+  const bytes = new Uint8Array(16)
+  globalThis.crypto.getRandomValues(bytes)
+  let out = ''
+  for (const b of bytes) out += b.toString(16).padStart(2, '0')
+  return out
+}
+
+export const publishOverview = mutation({
+  args: { id: v.id('audioOverviews') },
+  handler: async (ctx, args) => {
+    const userId = await requireAuth(ctx)
+    const overview = await ctx.db.get(args.id)
+    if (!overview || overview.userId !== userId) throw new Error('Audio overview not found')
+    if (overview.status !== 'ready') throw new Error('Audio overview is not ready to share')
+
+    if (overview.shareToken) {
+      return { token: overview.shareToken, publishedAt: overview.publishedAt ?? Date.now() }
+    }
+
+    let token = ''
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const candidate = generateShareToken()
+      const collision = await ctx.db
+        .query('audioOverviews')
+        .withIndex('by_shareToken', (q) => q.eq('shareToken', candidate))
+        .unique()
+      if (!collision) { token = candidate; break }
+    }
+    if (!token) throw new Error('Failed to mint unique share token')
+
+    const publishedAt = Date.now()
+    await ctx.db.patch(args.id, { shareToken: token, publishedAt })
+    return { token, publishedAt }
+  },
+})
+
+export const unpublishOverview = mutation({
+  args: { id: v.id('audioOverviews') },
+  handler: async (ctx, args) => {
+    const userId = await requireAuth(ctx)
+    const overview = await ctx.db.get(args.id)
+    if (!overview || overview.userId !== userId) throw new Error('Audio overview not found')
+    await ctx.db.patch(args.id, { shareToken: undefined, publishedAt: undefined })
+    return null
+  },
+})
+
+export const getByShareToken = query({
+  args: { token: v.string() },
+  handler: async (ctx, args) => {
+    if (!SHARE_TOKEN_PATTERN.test(args.token)) return null
+    const overview = await ctx.db
+      .query('audioOverviews')
+      .withIndex('by_shareToken', (q) => q.eq('shareToken', args.token))
+      .unique()
+    if (!overview || overview.status !== 'ready') return null
+
+    const ids = overview.sourceDocumentIds ?? []
+    const sourceFilenames: string[] = []
+    for (const id of ids) {
+      const doc = await ctx.db.get(id)
+      sourceFilenames.push(doc?.filename ?? 'Source')
+    }
+
+    return {
+      title: overview.title,
+      turns: overview.turns.map(t => ({
+        speaker: t.speaker,
+        text: t.text,
+        audioFileId: t.audioFileId,
+        durationMs: t.durationMs,
+        sourceIndex: t.sourceIndex,
+      })),
+      voiceProfile: overview.voiceProfile,
+      totalDurationMs: overview.totalDurationMs,
+      sourceDocumentIds: overview.sourceDocumentIds ?? [],
+      sourceFilenames,
+      publishedAt: overview.publishedAt ?? null,
+    }
+  },
+})
+
+export const getTurnUrlsByShareToken = query({
+  args: { token: v.string() },
+  handler: async (ctx, args) => {
+    if (!SHARE_TOKEN_PATTERN.test(args.token)) return null
+    const overview = await ctx.db
+      .query('audioOverviews')
+      .withIndex('by_shareToken', (q) => q.eq('shareToken', args.token))
+      .unique()
+    if (!overview || overview.status !== 'ready') return null
+
+    const urls: (string | null)[] = []
+    for (const turn of overview.turns) {
+      urls.push(await ctx.storage.getUrl(turn.audioFileId))
+    }
+    return urls
   },
 })

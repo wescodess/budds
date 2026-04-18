@@ -21,23 +21,6 @@ interface State {
   playbackRate: number
 }
 
-const state = reactive<State>({
-  overviewId: null,
-  folderId: null,
-  title: '',
-  turns: [],
-  turnUrls: [],
-  currentTurnIndex: 0,
-  currentAudioTimeSec: 0,
-  isPlaying: false,
-  playbackRate: 1,
-})
-
-const audioElRef = shallowRef<HTMLAudioElement | null>(null)
-const preloadElRef = shallowRef<HTMLAudioElement | null>(null)
-const magnitude = ref(0)
-const visualizerSupported = ref(true)
-
 interface VisualizerGraph {
   context: AudioContext
   source: MediaElementAudioSourceNode
@@ -45,145 +28,162 @@ interface VisualizerGraph {
   buffer: Uint8Array
 }
 
-const graphByElement = new WeakMap<HTMLAudioElement, VisualizerGraph>()
-let listenersAttached = false
-let rafId: number | null = null
+const sharedGraphByElement = new WeakMap<HTMLAudioElement, VisualizerGraph>()
 
-function prefixDurationMs(index: number): number {
-  let acc = 0
-  for (let i = 0; i < index && i < state.turns.length; i++) {
-    acc += state.turns[i]!.durationMs
-  }
-  return acc
-}
+export function createAudioOverviewPlayback() {
+  const state = reactive<State>({
+    overviewId: null,
+    folderId: null,
+    title: '',
+    turns: [],
+    turnUrls: [],
+    currentTurnIndex: 0,
+    currentAudioTimeSec: 0,
+    isPlaying: false,
+    playbackRate: 1,
+  })
 
-const totalDurationMs = computed(() =>
-  state.turns.reduce((s, t) => s + t.durationMs, 0),
-)
+  const audioElRef = shallowRef<HTMLAudioElement | null>(null)
+  const preloadElRef = shallowRef<HTMLAudioElement | null>(null)
+  const magnitude = ref(0)
+  const visualizerSupported = ref(true)
+  let listenersAttached = false
+  let rafId: number | null = null
 
-const currentTimeMs = computed(() =>
-  prefixDurationMs(state.currentTurnIndex) + Math.round(state.currentAudioTimeSec * 1000),
-)
-
-const activeTurn = computed(() => state.turns[state.currentTurnIndex] ?? null)
-
-function schedulePreload() {
-  const el = preloadElRef.value
-  if (!el) return
-  const next = state.currentTurnIndex + 1
-  const url = state.turnUrls[next]
-  if (!url) return
-  if (el.src !== url) el.src = url
-}
-
-async function loadAndPlayCurrent() {
-  const el = audioElRef.value
-  if (!el) return
-  const url = state.turnUrls[state.currentTurnIndex]
-  if (!url) return
-  if (el.src !== url) {
-    el.src = url
-    el.playbackRate = state.playbackRate
-  }
-  state.currentAudioTimeSec = 0
-  try { await el.play() }
-  catch { /* user gesture may be required */ }
-  schedulePreload()
-}
-
-function ensureVisualizerGraph(el: HTMLAudioElement): VisualizerGraph | null {
-  if (!import.meta.client) return null
-  const cached = graphByElement.get(el)
-  if (cached) return cached
-  const ctxCtor = (window as unknown as { AudioContext?: typeof AudioContext, webkitAudioContext?: typeof AudioContext }).AudioContext
-    ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
-  if (!ctxCtor) {
-    visualizerSupported.value = false
-    return null
-  }
-  try {
-    const context = new ctxCtor()
-    const source = context.createMediaElementSource(el)
-    const analyser = context.createAnalyser()
-    analyser.fftSize = 256
-    analyser.smoothingTimeConstant = 0.8
-    source.connect(analyser)
-    analyser.connect(context.destination)
-    const graph: VisualizerGraph = {
-      context,
-      source,
-      analyser,
-      buffer: new Uint8Array(analyser.frequencyBinCount),
+  function prefixDurationMs(index: number): number {
+    let acc = 0
+    for (let i = 0; i < index && i < state.turns.length; i++) {
+      acc += state.turns[i]!.durationMs
     }
-    graphByElement.set(el, graph)
-    return graph
+    return acc
   }
-  catch {
-    visualizerSupported.value = false
-    return null
-  }
-}
 
-function visualizerTick() {
-  const el = audioElRef.value
-  if (!el) { rafId = null; return }
-  const graph = graphByElement.get(el)
-  if (!graph) { rafId = null; return }
-  graph.analyser.getByteFrequencyData(graph.buffer)
-  const bins = Math.min(32, graph.buffer.length)
-  let sum = 0
-  for (let i = 0; i < bins; i++) sum += graph.buffer[i]!
-  magnitude.value = Math.max(0, Math.min(1, sum / bins / 255))
-  rafId = requestAnimationFrame(visualizerTick)
-}
+  const totalDurationMs = computed(() =>
+    state.turns.reduce((s, t) => s + t.durationMs, 0),
+  )
 
-function startVisualizer() {
-  if (!import.meta.client) return
-  if (rafId !== null) return
-  const el = audioElRef.value
-  if (!el) return
-  const graph = ensureVisualizerGraph(el)
-  if (!graph) return
-  if (graph.context.state === 'suspended') void graph.context.resume()
-  rafId = requestAnimationFrame(visualizerTick)
-}
+  const currentTimeMs = computed(() =>
+    prefixDurationMs(state.currentTurnIndex) + Math.round(state.currentAudioTimeSec * 1000),
+  )
 
-function stopVisualizer() {
-  if (rafId !== null) {
-    cancelAnimationFrame(rafId)
-    rafId = null
-  }
-  magnitude.value = 0
-}
+  const activeTurn = computed(() => state.turns[state.currentTurnIndex] ?? null)
 
-function setupListeners(el: HTMLAudioElement) {
-  el.addEventListener('timeupdate', () => {
-    state.currentAudioTimeSec = el.currentTime
-  })
-  el.addEventListener('play', () => {
-    state.isPlaying = true
-    startVisualizer()
-  })
-  el.addEventListener('pause', () => {
-    state.isPlaying = false
-    stopVisualizer()
-  })
-  el.addEventListener('ended', () => {
+  function schedulePreload() {
+    const el = preloadElRef.value
+    if (!el) return
     const next = state.currentTurnIndex + 1
-    if (next < state.turns.length) {
-      state.currentTurnIndex = next
-      void loadAndPlayCurrent()
+    const url = state.turnUrls[next]
+    if (!url) return
+    if (el.src !== url) el.src = url
+  }
+
+  async function loadAndPlayCurrent() {
+    const el = audioElRef.value
+    if (!el) return
+    const url = state.turnUrls[state.currentTurnIndex]
+    if (!url) return
+    if (el.src !== url) {
+      el.src = url
+      el.playbackRate = state.playbackRate
     }
-    else {
+    state.currentAudioTimeSec = 0
+    try { await el.play() }
+    catch { /* user gesture may be required */ }
+    schedulePreload()
+  }
+
+  function ensureVisualizerGraph(el: HTMLAudioElement): VisualizerGraph | null {
+    if (!import.meta.client) return null
+    const cached = sharedGraphByElement.get(el)
+    if (cached) return cached
+    const ctxCtor = (window as unknown as { AudioContext?: typeof AudioContext, webkitAudioContext?: typeof AudioContext }).AudioContext
+      ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+    if (!ctxCtor) {
+      visualizerSupported.value = false
+      return null
+    }
+    try {
+      const context = new ctxCtor()
+      const source = context.createMediaElementSource(el)
+      const analyser = context.createAnalyser()
+      analyser.fftSize = 256
+      analyser.smoothingTimeConstant = 0.8
+      source.connect(analyser)
+      analyser.connect(context.destination)
+      const graph: VisualizerGraph = {
+        context,
+        source,
+        analyser,
+        buffer: new Uint8Array(analyser.frequencyBinCount),
+      }
+      sharedGraphByElement.set(el, graph)
+      return graph
+    }
+    catch {
+      visualizerSupported.value = false
+      return null
+    }
+  }
+
+  function visualizerTick() {
+    const el = audioElRef.value
+    if (!el) { rafId = null; return }
+    const graph = sharedGraphByElement.get(el)
+    if (!graph) { rafId = null; return }
+    graph.analyser.getByteFrequencyData(graph.buffer)
+    const bins = Math.min(32, graph.buffer.length)
+    let sum = 0
+    for (let i = 0; i < bins; i++) sum += graph.buffer[i]!
+    magnitude.value = Math.max(0, Math.min(1, sum / bins / 255))
+    rafId = requestAnimationFrame(visualizerTick)
+  }
+
+  function startVisualizer() {
+    if (!import.meta.client) return
+    if (rafId !== null) return
+    const el = audioElRef.value
+    if (!el) return
+    const graph = ensureVisualizerGraph(el)
+    if (!graph) return
+    if (graph.context.state === 'suspended') void graph.context.resume()
+    rafId = requestAnimationFrame(visualizerTick)
+  }
+
+  function stopVisualizer() {
+    if (rafId !== null) {
+      cancelAnimationFrame(rafId)
+      rafId = null
+    }
+    magnitude.value = 0
+  }
+
+  function setupListeners(el: HTMLAudioElement) {
+    el.addEventListener('timeupdate', () => {
+      state.currentAudioTimeSec = el.currentTime
+    })
+    el.addEventListener('play', () => {
+      state.isPlaying = true
+      startVisualizer()
+    })
+    el.addEventListener('pause', () => {
       state.isPlaying = false
       stopVisualizer()
-      const finalTurn = state.turns[state.currentTurnIndex]
-      state.currentAudioTimeSec = finalTurn ? finalTurn.durationMs / 1000 : 0
-    }
-  })
-}
+    })
+    el.addEventListener('ended', () => {
+      const next = state.currentTurnIndex + 1
+      if (next < state.turns.length) {
+        state.currentTurnIndex = next
+        void loadAndPlayCurrent()
+      }
+      else {
+        state.isPlaying = false
+        stopVisualizer()
+        const finalTurn = state.turns[state.currentTurnIndex]
+        state.currentAudioTimeSec = finalTurn ? finalTurn.durationMs / 1000 : 0
+      }
+    })
+  }
 
-export function useAudioOverviewStore() {
   function attachAudio(el: HTMLAudioElement | null, preloadEl: HTMLAudioElement | null) {
     if (!import.meta.client) return
     audioElRef.value = el
@@ -196,7 +196,7 @@ export function useAudioOverviewStore() {
 
   function loadOverview(args: {
     overviewId: Id<'audioOverviews'>
-    folderId: Id<'folders'>
+    folderId: Id<'folders'> | null
     title: string
     turns: AudioOverviewTurn[]
     turnUrls: (string | null)[]
@@ -272,7 +272,6 @@ export function useAudioOverviewStore() {
     const targetUrl = state.turnUrls[targetIndex]
     if (targetIndex !== state.currentTurnIndex) {
       if (!targetUrl) {
-        // URL not yet available (race with Convex query) — keep current turn, mark time but skip src swap
         state.currentAudioTimeSec = Math.max(0, offset / 1000)
         return
       }
@@ -336,4 +335,10 @@ export function useAudioOverviewStore() {
     setSpeed,
     dismiss,
   }
+}
+
+const singletonInstance = createAudioOverviewPlayback()
+
+export function useAudioOverviewStore() {
+  return singletonInstance
 }

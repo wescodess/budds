@@ -17,8 +17,15 @@ const onActiveFolderRoute = computed(() => {
   return route.path === `/app/folders/${fid}`
 })
 
+const onPublicAudioRoute = computed(() =>
+  typeof route.path === 'string' && route.path.startsWith('/audio/'),
+)
+
 const visible = computed(() =>
-  import.meta.client && overviewId.value !== null && !onActiveFolderRoute.value,
+  import.meta.client
+  && overviewId.value !== null
+  && !onActiveFolderRoute.value
+  && !onPublicAudioRoute.value,
 )
 
 const speakerLabel = computed(() => {

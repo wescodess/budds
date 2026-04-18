@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 import AudioOverviewCard from './AudioOverviewCard.vue'
 import AudioOverviewGenerating from './AudioOverviewGenerating.vue'
 import AudioOverviewPlayer from './AudioOverviewPlayer.vue'
 import AudioOverviewCustomize from './AudioOverviewCustomize.vue'
+import AudioOverviewShareDialog from './AudioOverviewShareDialog.vue'
 import type {
   CustomizeSubmit,
   LengthMinutes,
@@ -37,6 +38,8 @@ type OverviewSummary = {
   turnCount: number
   totalDurationMs: number
   taskId?: Id<'tasks'>
+  shareToken?: string
+  publishedAt?: number
 }
 
 const { data: overviewsData } = useConvexQuery(
@@ -77,6 +80,33 @@ const deleteOverviewMutation = import.meta.client
   ? useConvexMutation(api.audioOverviews.deleteOverview)
   : { mutate: async (_args: { id: Id<'audioOverviews'> }) => ({ deletedTurns: 0 }) } as any
 
+const incrementQuotaMutation = import.meta.client
+  ? useConvexMutation(api.users.incrementDailyQuota)
+  : { mutate: async () => ({ used: 0, cap: 10, date: '' }) } as any
+
+const { data: quotaData } = useConvexQuery(api.users.getDailyQuota, computed(() => ({})))
+const quota = computed<{ used: number, cap: number, date: string } | null>(
+  () => (quotaData.value as { used: number, cap: number, date: string } | null | undefined) ?? null,
+)
+const quotaState = computed(() => {
+  const q = quota.value
+  if (!q) return null
+  return { used: q.used, cap: q.cap }
+})
+const quotaExceeded = computed(() => {
+  const q = quota.value
+  return q ? q.used >= q.cap : false
+})
+
+const shareOpen = ref(false)
+const shareTargetOverviewId = ref<Id<'audioOverviews'> | null>(null)
+
+const shareTarget = computed(() => {
+  const id = shareTargetOverviewId.value
+  if (!id) return null
+  return readyOverviews.value.find(o => o._id === id) ?? null
+})
+
 const submitting = ref(false)
 const cancelling = ref(false)
 
@@ -94,6 +124,11 @@ function openCustomize() {
 
 async function handleCustomizeSubmit(value: CustomizeSubmit) {
   if (submitting.value) return
+  if (quotaExceeded.value) {
+    const { toast } = await import('vue-sonner')
+    toast.error('Daily quota reached. Come back tomorrow.')
+    return
+  }
   submitting.value = true
   customizeOpen.value = false
   customizeDefaults.value = {
@@ -109,6 +144,26 @@ async function handleCustomizeSubmit(value: CustomizeSubmit) {
       title: 'Generating audio overview…',
       metadata: { lengthMinutes: value.lengthMinutes, complexity: value.complexity },
     } as any)) as { taskId: Id<'tasks'> }
+
+    let updatedQuota: { used: number, cap: number, date: string } | null = null
+    try {
+      updatedQuota = (await incrementQuotaMutation.mutate({} as any)) as { used: number, cap: number, date: string }
+    }
+    catch (err) {
+      console.warn('[audio-overview] failed to increment daily quota', err)
+    }
+
+    if (updatedQuota && import.meta.client) {
+      const thresholdKey = `audio-overview-quota-warning-${updatedQuota.date}`
+      const ratio = updatedQuota.used / updatedQuota.cap
+      if (ratio >= 0.8 && updatedQuota.used < updatedQuota.cap && !sessionStorage.getItem(thresholdKey)) {
+        sessionStorage.setItem(thresholdKey, '1')
+        const { toast } = await import('vue-sonner')
+        toast.warning(`Heads up — ${updatedQuota.used} of ${updatedQuota.cap} audio overviews used today`, {
+          description: 'Quota resets at midnight local time.',
+        })
+      }
+    }
 
     emit('generation-started')
 
@@ -129,6 +184,12 @@ async function handleCustomizeSubmit(value: CustomizeSubmit) {
   finally {
     submitting.value = false
   }
+}
+
+function handleRequestShare() {
+  if (!activeOverview.value) return
+  shareTargetOverviewId.value = activeOverview.value._id
+  shareOpen.value = true
 }
 
 async function handleCancel(taskId: Id<'tasks'>) {
@@ -186,6 +247,7 @@ defineExpose({
       :regenerating="submitting"
       @request-regenerate="openCustomize"
       @request-customize="openCustomize"
+      @request-share="handleRequestShare"
       @select-overview="handleSelectOverview"
       @delete-overview="handleDeleteOverview"
     />
@@ -204,8 +266,17 @@ defineExpose({
       :initial-voice-a="customizeDefaults.voiceA"
       :initial-voice-b="customizeDefaults.voiceB"
       :submitting="submitting"
+      :quota-state="quotaState"
       :submit-label="activeOverview ? 'Generate new' : 'Generate'"
       @submit="handleCustomizeSubmit"
+    />
+
+    <AudioOverviewShareDialog
+      v-if="shareTargetOverviewId"
+      v-model:open="shareOpen"
+      :overview-id="shareTargetOverviewId"
+      :share-token="shareTarget?.shareToken ?? null"
+      :published-at="shareTarget?.publishedAt ?? null"
     />
   </div>
 </template>
