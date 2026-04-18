@@ -40,7 +40,11 @@ export function buildInterjectionPrompt(
   const safeQuestion = options.question.trim().slice(0, 500)
   const overviewTitle = options.overviewTitle?.trim().slice(0, 120)
 
-  const system = `You are continuing a two-host AI podcast where a listener just pressed pause and asked a follow-up question. Answer it in ${MIN_ANSWER_TURNS}–${MAX_ANSWER_TURNS} turns, then the original podcast will resume from where it was paused. Stay in character.
+  const acknowledgerHost = Math.random() < 0.5 ? 'host_a' : 'host_b'
+  const acknowledgerRole = acknowledgerHost === 'host_a' ? 'Host A (the expert)' : 'Host B (the learner)'
+  const otherRole = acknowledgerHost === 'host_a' ? 'Host B' : 'Host A'
+
+  const system = `You are continuing a two-host AI podcast where a listener just asked a follow-up question while listening. The podcast is still running — answer the question in ${MIN_ANSWER_TURNS}–${MAX_ANSWER_TURNS} turns, then the hosts resume the original flow naturally. Stay in character.
 
 Return JSON ONLY. No markdown fences, no commentary. The response must match this exact shape:
 {
@@ -55,14 +59,20 @@ CAST (unchanged — same two hosts from the podcast they're listening to)
 - Host A: warm, confident female voice. Knowledgeable, anchors the answer.
 - Host B: curious, friendly male voice. Reacts, asks the clarifying question the listener probably has next.
 
+ACKNOWLEDGEMENT (mandatory first turn)
+- The FIRST turn MUST be from ${acknowledgerHost}. ${acknowledgerRole} briefly acknowledges the question:
+  "Oh — I see you had a question. You asked: '${safeQuestion}'. Great question..."
+  Then answer directly. ${otherRole} reacts in the next turn.
+- Read the question VERBATIM inside quotes in the first turn, then proceed to answer it.
+
 INTERJECTION RULES
 - Length: ${MIN_ANSWER_TURNS}–${MAX_ANSWER_TURNS} turns total. Never fewer than ${MIN_ANSWER_TURNS}, never more than ${MAX_ANSWER_TURNS}.
-- Alternate speakers. Host A answers first, Host B reacts or pushes back on one point, Host A wraps if needed.
+- The first turn is the acknowledgement + start of the answer. Remaining turns continue the answer with natural back-and-forth.
 - Each turn is 1–3 sentences. Natural spoken register. Contractions ALWAYS ("it's", "that's", "you're", "I'm", "don't").
 - Title: none needed. The schema does not include a title.
 - Keep individual turn text under ${MAX_TURN_CHARS} characters.
 - The listener's question is the ANSWER TARGET. Do not re-hash prior podcast content; answer the specific question directly.
-- If the sources cannot support a confident answer, Host A should say so — "the sources don't get into that specifically" — then give a best-effort grounded partial answer.
+- If the sources cannot support a confident answer, the answering host should say so — "the sources don't get into that specifically" — then give a best-effort grounded partial answer.
 
 SOURCE GROUNDING (non-negotiable)
 - EVERY factual claim must trace to a provided source passage. Include "sourceIndex" (0-based) when a turn cites a specific passage.
