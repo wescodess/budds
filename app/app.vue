@@ -2,6 +2,7 @@
 import { Sonner } from '@/components/ui/sonner'
 import { getAppThemeBootstrapScript } from '~/composables/useAppTheme'
 import { useMobileKeyboardInset } from '~/composables/useMobileKeyboardInset'
+import StickyMiniPlayer from '~/components/audio-overview/StickyMiniPlayer.vue'
 
 useHead({
   meta: [
@@ -30,6 +31,17 @@ useHead({
 })
 
 useMobileKeyboardInset()
+
+const globalAudioEl = ref<HTMLAudioElement | null>(null)
+const globalPreloadEl = ref<HTMLAudioElement | null>(null)
+const audioOverviewStore = useAudioOverviewStore()
+watch(
+  [globalAudioEl, globalPreloadEl],
+  ([el, preloadEl]) => {
+    if (el) audioOverviewStore.attachAudio(el, preloadEl)
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
@@ -38,4 +50,9 @@ useMobileKeyboardInset()
   </NuxtLayout>
   <InstallAppPrompt />
   <Sonner rich-colors position="top-right" />
+  <ClientOnly>
+    <audio ref="globalAudioEl" preload="metadata" class="hidden" />
+    <audio ref="globalPreloadEl" preload="auto" class="hidden" />
+    <StickyMiniPlayer />
+  </ClientOnly>
 </template>

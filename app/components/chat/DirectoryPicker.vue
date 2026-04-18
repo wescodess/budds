@@ -2,6 +2,7 @@
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 import type { ScopeFileSummary, ScopeFolderSummary, useReferenceScope } from '~/composables/useReferenceScope'
+import GlobalDirectoryPicker from '~/components/global/DirectoryPicker.vue'
 import type { PickerFolder, PickerFile } from '~/components/global/DirectoryPicker.vue'
 
 const props = defineProps<{
@@ -114,7 +115,25 @@ defineExpose({
 </script>
 
 <template>
+  <div
+    v-if="genericFolders.length === 0 && genericFiles.length === 0 && scopeInventory !== undefined"
+    data-testid="directory-picker-empty-state"
+    class="flex flex-col items-center gap-3 p-6 text-center"
+  >
+    <div class="flex h-10 w-10 items-center justify-center rounded-full bg-muted">
+      <svg class="h-5 w-5 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" />
+      </svg>
+    </div>
+    <div>
+      <p class="font-dm-sans text-sm font-semibold text-foreground">No documents yet</p>
+      <p class="mt-1 font-inter text-xs text-muted-foreground">
+        Upload or import files to ground your chat and audio overviews in real sources.
+      </p>
+    </div>
+  </div>
   <GlobalDirectoryPicker
+    v-else
     ref="pickerRef"
     :folders="genericFolders"
     :files="genericFiles"

@@ -7,6 +7,10 @@ export default defineSchema({
     name: v.string(),
     email: v.optional(v.string()),
     avatarUrl: v.optional(v.string()),
+    audioOverviewQuota: v.optional(v.object({
+      date: v.string(),
+      count: v.number(),
+    })),
   }).index('by_tokenIdentifier', ['tokenIdentifier']),
 
   folders: defineTable({
@@ -18,6 +22,11 @@ export default defineSchema({
     description: v.optional(v.string()),
     color: v.optional(v.string()),
     icon: v.optional(v.string()),
+    preferredMainPane: v.optional(v.union(v.literal('chat'), v.literal('podcast'))),
+    referenceScope: v.optional(v.object({
+      folderIds: v.optional(v.array(v.id('folders'))),
+      fileIds: v.optional(v.array(v.id('documents'))),
+    })),
   })
     .index('by_userId', ['userId'])
     .index('by_userId_and_parentId', ['userId', 'parentId']),
@@ -26,12 +35,16 @@ export default defineSchema({
     userId: v.string(),
     folderId: v.id('folders'),
     filename: v.string(),
-    fileId: v.id('_storage'),
+    fileId: v.optional(v.id('_storage')),
     status: v.union(v.literal('processing'), v.literal('indexing'), v.literal('success'), v.literal('failed')),
     fileSize: v.number(),
     failureReason: v.optional(v.string()),
     indexJobId: v.optional(v.string()),
     r2Key: v.optional(v.string()),
+    sourceType: v.optional(v.union(v.literal('file'), v.literal('website'), v.literal('youtube'))),
+    sourceUrl: v.optional(v.string()),
+    mimeType: v.optional(v.string()),
+    taskId: v.optional(v.id('tasks')),
   })
     .index('by_userId', ['userId'])
     .index('by_folderId', ['folderId'])
@@ -42,6 +55,7 @@ export default defineSchema({
     userId: v.string(),
     folderId: v.id('folders'),
     title: v.string(),
+    archivedAt: v.optional(v.number()),
   })
     .index('by_userId', ['userId'])
     .index('by_userId_and_folderId', ['userId', 'folderId']),
@@ -61,6 +75,14 @@ export default defineSchema({
       ),
     ),
     model: v.optional(v.string()),
+    interjectionContext: v.optional(v.object({
+      overviewId: v.id('audioOverviews'),
+      turnIndex: v.number(),
+      timeMs: v.number(),
+      quotedText: v.string(),
+      sourceFilename: v.optional(v.string()),
+      interjectionId: v.optional(v.id('audioOverviewInterjections')),
+    })),
   })
     .index('by_conversationId', ['conversationId'])
     .index('by_userId', ['userId']),
@@ -274,6 +296,64 @@ export default defineSchema({
   })
     .index('by_userId_and_folderId', ['userId', 'folderId'])
     .index('by_status', ['status']),
+
+  audioOverviews: defineTable({
+    userId: v.string(),
+    folderId: v.id('folders'),
+    taskId: v.optional(v.id('tasks')),
+    title: v.string(),
+    status: v.union(v.literal('generating'), v.literal('ready'), v.literal('failed')),
+    failureReason: v.optional(v.string()),
+    model: v.optional(v.string()),
+    turns: v.array(
+      v.object({
+        speaker: v.union(v.literal('host_a'), v.literal('host_b')),
+        text: v.string(),
+        audioFileId: v.id('_storage'),
+        durationMs: v.number(),
+        sourceIndex: v.optional(v.number()),
+      }),
+    ),
+    voiceProfile: v.object({
+      hostA: v.string(),
+      hostB: v.string(),
+    }),
+    preferences: v.optional(
+      v.object({
+        lengthMinutes: v.number(),
+        complexity: v.union(v.literal('beginner'), v.literal('expert')),
+      }),
+    ),
+    totalDurationMs: v.number(),
+    sourceDocumentIds: v.optional(v.array(v.id('documents'))),
+    shareToken: v.optional(v.string()),
+    publishedAt: v.optional(v.number()),
+    scopeDocIds: v.optional(v.array(v.id('documents'))),
+  })
+    .index('by_userId', ['userId'])
+    .index('by_folderId', ['folderId'])
+    .index('by_userId_and_folderId', ['userId', 'folderId'])
+    .index('by_shareToken', ['shareToken']),
+
+  audioOverviewInterjections: defineTable({
+    audioOverviewId: v.id('audioOverviews'),
+    userId: v.string(),
+    insertedAfterTurnIndex: v.number(),
+    question: v.string(),
+    model: v.optional(v.string()),
+    chatMessageId: v.optional(v.id('messages')),
+    answerTurns: v.array(
+      v.object({
+        speaker: v.union(v.literal('host_a'), v.literal('host_b')),
+        text: v.string(),
+        audioFileId: v.id('_storage'),
+        durationMs: v.number(),
+        sourceIndex: v.optional(v.number()),
+      }),
+    ),
+  })
+    .index('by_audioOverview', ['audioOverviewId'])
+    .index('by_userId', ['userId']),
 
   pendingCleanup: defineTable({
     userId: v.string(),

@@ -1,0 +1,51 @@
+# Product Requirements Document: NotebookLM "Audio Overview" Feature Replica
+
+## 1. Executive Summary
+This PRD outlines the requirements for replicating the core functionality, user flow, and design logic of Google's NotebookLM "Audio Overview" feature. The "Audio Overview" acts as an interactive, AI-generated podcast discussion based on provided source materials. It brings static documents to life via a conversational format featuring two AI hosts.
+
+## 2. User Flow & Mechanics
+### 2.1 Component Trigger & Generation State
+- **Entry Point**: A prominent "Audio Overview" button located within a "Studio" or action panel.
+- **Generation State**: Upon clicking, the system transitions to a non-blocking "Generating Audio Overview..." state. A spinner or loading indicator assures the user the background task is running.
+- **Wait Time handling**: Given audio generation can take several minutes, the interface relies on asynchronous polling or websockets to automatically update the UI when the audio is ready.
+
+## 3. Detailed UI & Animation Style
+### 3.1 Player Component
+- **Placement**: Once generated, the Audio Overview surfaces a dedicated audio player widget replacing the generation loading state in the Studio panel.
+- **Core Controls**: 
+  - Play/Pause toggle.
+  - Interactive scrubbing timeline/progress bar.
+  - Skip forward/backward (10 to 15 seconds) standard podcast controls.
+  - Speed adjustment (1x, 1.2x, 1.5x, etc.).
+- **Actions**:
+  - **Download**: Prominently features a download button allowing users to export the generated `.wav` or `.mp3` file for offline listening.
+  - **Share**: Allow sharing the specific audio overview with others.
+
+### 3.2 Visualizer & Animations
+- **Aesthetic**: Clean and minimalist. The background styling should match the application's clean layout (e.g., light gray/white aesthetic).
+- **Audio Visualizer**: 
+  - As the audio plays, there should be subtle visual feedback to indicate which "host" is currently speaking. 
+  - A subtle waveform or pulsing geometric elements (like glowing orbs) linked to vocal frequencies. 
+  - This avoids a static UI and provides a sense of conversation flow.
+
+### 3.3 Interactive Mode / Interruptions
+- **"Join" / "Discuss" Functionality**: During playback, users can tap a button to "interrupt" the host conversation and provide text/voice input (e.g., "Wait, explain that last point in simpler terms").
+- This transitions the batch-generated audio stream to a dynamic state, leveraging real-time inference or quickly re-generating a segment to answer the user's specific query.
+
+### 3.4 Multi-tasking UX
+- The audio continues playing seamlessly when the user navigates to other documents or chats within the application.
+- A minimized "sticky" audio player persists at the bottom or top of the screen when leaving the main Studio tab.
+
+## 4. Technical Architecture Requirements
+- **LLM Pipeline**: 
+  - Extracts concepts from user sources.
+  - Re-writes them into a multi-turn conversational script featuring two personas (e.g., one expert, one curious learner).
+- **Text-To-Speech (TTS) Engine**: Requires high-fidelity, highly expressive text-to-speech models (like Google Cloud TTS Journey voices or ElevenLabs) with the ability to inject conversational fillers, breaths, and emotional prosody.
+- **Asynchronous Processing**: Due to multi-minute generation times, the architecture must rely on long-polling or websockets. The frontend component should implement optimistic loading states (spinners) and notifications when the job is done.
+
+## 5. Required Enhancements (Lessons from Current Feedback)
+- **Customization Pre-Generation**: In the `Customize Audio Overview` state, allow users to set preferences before hitting generate: 
+  - Desired length (5 min vs 20 min).
+  - Target audience/complexity (Beginner vs. Expert).
+  - Choice of voice actors.
+- **Source Grounding**: Ensure the audio generation strictly cites and stays within the bounds of the provided sources, rejecting hallucinatory context from the base model weights unless explicitly requested by the user.

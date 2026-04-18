@@ -22,7 +22,7 @@ import { PANEL_DISMISS_THRESHOLD_PX, useGestureGuards } from '~/composables/useG
 
 defineOptions({ name: 'FolderShellRail' })
 
-type TabValue = 'chat' | 'flashcards' | 'quiz' | 'documents'
+type TabValue = 'chat' | 'flashcards' | 'quiz' | 'audio-overview' | 'documents'
 type VoidKind = 'chat' | 'flashcards' | 'quiz'
 type VoidItem = { id: string; type: VoidKind; title: string; updatedAt: number }
 
@@ -144,6 +144,9 @@ const knowledgeCount = computed(() => {
 
 const knowledgeActive = computed(() => props.activeTab === 'documents')
 const railRef = ref<HTMLElement | null>(null)
+const mounted = ref(false)
+onMounted(() => { mounted.value = true })
+const resolvedCompact = computed(() => mounted.value ? props.compact : false)
 const { shouldStartHorizontalGesture } = useGestureGuards()
 const SIDEBAR_SWIPE_EDGE_GUARD_PX = 12
 const railInlineStyle = computed(() => {
@@ -215,20 +218,20 @@ useHorizontalSwipeGesture({
         to="/"
         :class="[
           'flex w-full items-center px-4 pt-5 pb-3 transition-[gap] duration-200 ease-out',
-          compact ? 'justify-center gap-0' : 'gap-2',
+          resolvedCompact ? 'justify-center gap-0' : 'gap-2.5',
         ]"
       >
-        <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/15 text-primary">
+        <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground">
           <BookOpen class="h-4 w-4" />
         </div>
         <div
           :class="[
             'min-w-0 overflow-hidden whitespace-nowrap transition-[max-width,opacity,transform] duration-200 ease-out',
-            compact ? 'max-w-0 translate-x-1 opacity-0' : 'max-w-40 translate-x-0 opacity-100',
+            resolvedCompact ? 'max-w-0 translate-x-1 opacity-0' : 'max-w-40 translate-x-0 opacity-100',
           ]"
         >
-          <p class="text-sm font-semibold leading-tight tracking-tight text-foreground">Budds</p>
-          <p class="text-[10px] uppercase tracking-widest text-muted-foreground">Learning Compiler</p>
+          <p class="text-sm font-semibold leading-tight tracking-tight text-sidebar-foreground">Budds</p>
+          <p class="text-[10px] uppercase tracking-widest text-sidebar-foreground/50">Learning Compiler</p>
         </div>
       </NuxtLink>
 
@@ -236,7 +239,7 @@ useHorizontalSwipeGesture({
         <div
           :class="[
             'overflow-hidden px-2 text-[10px] uppercase tracking-widest text-muted-foreground transition-[max-height,opacity,padding] duration-200 ease-out',
-            compact ? 'max-h-0 pb-0 opacity-0' : 'max-h-6 pb-1 opacity-100',
+            resolvedCompact ? 'max-h-0 pb-0 opacity-0' : 'max-h-6 pb-1 opacity-100',
           ]"
         >
           Workspace
@@ -262,7 +265,7 @@ useHorizontalSwipeGesture({
         <div
           :class="[
             'overflow-hidden px-2 text-[10px] uppercase tracking-widest text-muted-foreground transition-[max-height,opacity,padding] duration-200 ease-out',
-            compact ? 'max-h-0 pb-0 opacity-0' : 'max-h-6 pb-1 opacity-100',
+            resolvedCompact ? 'max-h-0 pb-0 opacity-0' : 'max-h-6 pb-1 opacity-100',
           ]"
         >
           Voids
@@ -308,7 +311,7 @@ useHorizontalSwipeGesture({
           </FolderShellRailItem>
         </template>
         <div
-          v-else-if="!compact"
+          v-else-if="!resolvedCompact"
           class="mt-2 rounded-md border border-dashed border-border/60 bg-card/40 p-3"
           data-testid="rail-voids-empty"
         >
@@ -344,7 +347,7 @@ useHorizontalSwipeGesture({
           data-testid="rail-new-void"
           :class="[
             'w-full rounded-full transition-[gap,padding] duration-200 ease-out',
-            compact ? 'gap-0 px-0' : 'gap-1.5',
+            resolvedCompact ? 'gap-0 px-0' : 'gap-1.5',
           ]"
           @click="emit('new-void')"
         >
@@ -352,7 +355,7 @@ useHorizontalSwipeGesture({
           <span
             :class="[
               'overflow-hidden whitespace-nowrap transition-[max-width,opacity,transform] duration-200 ease-out',
-              compact ? 'max-w-0 translate-x-1 opacity-0' : 'max-w-24 translate-x-0 opacity-100',
+              resolvedCompact ? 'max-w-0 translate-x-1 opacity-0' : 'max-w-24 translate-x-0 opacity-100',
             ]"
           >
             New Void
@@ -369,7 +372,7 @@ useHorizontalSwipeGesture({
         >
           <component :is="mobileExpanded ? ChevronsLeft : ChevronsRight" class="h-4 w-4 shrink-0" />
         </button>
-        <div :class="[hasVoids && 'mt-3', 'flex items-center gap-1', compact ? 'flex-col' : 'justify-between px-1']">
+        <div :class="[hasVoids && 'mt-3', 'flex items-center gap-1', resolvedCompact ? 'flex-col' : 'justify-between px-1']">
           <button class="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="Settings">
             <Settings class="h-4 w-4" />
           </button>

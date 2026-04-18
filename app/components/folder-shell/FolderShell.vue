@@ -9,13 +9,13 @@ defineOptions({ name: 'FolderShell' })
 const props = defineProps<{
   folderId: Id<'folders'>
   folder: Doc<'folders'> | null
-  activeTab: 'chat' | 'flashcards' | 'quiz' | 'documents'
+  activeTab: 'chat' | 'flashcards' | 'quiz' | 'audio-overview' | 'documents'
   activeConversationId?: string | null
   activeVoidId?: string | null
 }>()
 
 const emit = defineEmits<{
-  'update:activeTab': [value: 'chat' | 'flashcards' | 'quiz' | 'documents']
+  'update:activeTab': [value: 'chat' | 'flashcards' | 'quiz' | 'audio-overview' | 'documents']
   'new-void': []
   'select-void': [value: { type: 'chat' | 'flashcards' | 'quiz'; id: string }]
   'request-delete-void': [value: { type: 'chat' | 'flashcards' | 'quiz'; id: string; title: string }]
@@ -23,7 +23,7 @@ const emit = defineEmits<{
 
 const drawerOpen = ref(false)
 const drawerSection = ref<'knowledge' | 'members'>('knowledge')
-const isDesktop = ref(import.meta.client ? window.matchMedia('(min-width: 1024px)').matches : false)
+const isDesktop = ref(false)
 const railCollapsed = ref(false)
 const mobileRailHidden = ref(false)
 const mobileRailExpanded = ref(false)
@@ -197,7 +197,7 @@ watch(isDesktop, (desktop) => {
   if (desktop) mobileRailExpanded.value = false
 })
 
-function onTabChange(tab: 'chat' | 'flashcards' | 'quiz' | 'documents') {
+function onTabChange(tab: 'chat' | 'flashcards' | 'quiz' | 'audio-overview' | 'documents') {
   emit('update:activeTab', tab)
 }
 

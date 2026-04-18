@@ -13,6 +13,20 @@ export const generateUploadUrl = mutation({
   },
 })
 
+const ALLOWED_MIME_TYPES = new Set([
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'text/plain',
+  'text/markdown',
+  'text/csv',
+  'text/html',
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/gif',
+])
+
 export const createDocument = mutation({
   args: {
     folderId: v.id('folders'),
@@ -33,12 +47,24 @@ export const createDocument = mutation({
 
     const metadata = await ctx.db.system.get(args.fileId)
     if (!metadata) throw new Error('File not found in storage')
-    if (metadata.contentType && metadata.contentType !== 'application/pdf') {
-      throw new Error('Only PDF files are supported')
+    if (metadata.contentType && !ALLOWED_MIME_TYPES.has(metadata.contentType)) {
+      throw new Error('Unsupported file type')
     }
     if (metadata.size > 52_428_800) {
       throw new Error('File exceeds 50MB limit')
     }
+
+    const now = Date.now()
+    const taskId = await ctx.db.insert('tasks', {
+      userId,
+      folderId: args.folderId,
+      type: 'document-ingestion',
+      status: 'pending',
+      title: `Ingesting ${args.filename}`,
+      progress: 'Uploading to storage…',
+      createdAt: now,
+      updatedAt: now,
+    })
 
     const docId = await ctx.db.insert('documents', {
       userId,
@@ -47,6 +73,9 @@ export const createDocument = mutation({
       fileId: args.fileId,
       status: 'processing',
       fileSize: metadata.size,
+      sourceType: 'file',
+      mimeType: metadata.contentType ?? undefined,
+      taskId,
     })
 
     await ctx.db.patch(args.folderId, {
@@ -60,6 +89,133 @@ export const createDocument = mutation({
       userId,
       folderId: args.folderId,
       filename: args.filename,
+      sourceType: 'file',
+      mimeType: metadata.contentType ?? undefined,
+      taskId,
+    })
+
+    return docId
+  },
+})
+
+export const createDocumentFromSource = mutation({
+  args: {
+    folderId: v.id('folders'),
+    filename: v.string(),
+    sourceType: v.union(v.literal('website'), v.literal('youtube')),
+    sourceUrl: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) throw new Error('Unauthenticated')
+
+    const userId = identity.tokenIdentifier
+
+    const folder = await ctx.db.get(args.folderId)
+    if (!folder || folder.userId !== userId) {
+      throw new Error('Folder not found')
+    }
+
+    const label = args.sourceType === 'youtube' ? 'YouTube video' : 'website'
+    const now = Date.now()
+    const taskId = await ctx.db.insert('tasks', {
+      userId,
+      folderId: args.folderId,
+      type: 'document-ingestion',
+      status: 'pending',
+      title: `Importing ${label}`,
+      progress: args.sourceType === 'youtube' ? 'Fetching transcript…' : 'Extracting content…',
+      metadata: { sourceUrl: args.sourceUrl, sourceType: args.sourceType },
+      createdAt: now,
+      updatedAt: now,
+    })
+
+    const docId = await ctx.db.insert('documents', {
+      userId,
+      folderId: args.folderId,
+      filename: args.filename,
+      status: 'processing',
+      fileSize: 0,
+      sourceType: args.sourceType,
+      sourceUrl: args.sourceUrl,
+      taskId,
+    })
+
+    await ctx.db.patch(args.folderId, {
+      documentCount: folder.documentCount + 1,
+      updatedAt: Date.now(),
+    })
+
+    await ctx.scheduler.runAfter(0, internal.documentActions.ingestDocument, {
+      documentId: docId,
+      userId,
+      folderId: args.folderId,
+      filename: args.filename,
+      sourceType: args.sourceType,
+      sourceUrl: args.sourceUrl,
+      taskId,
+    })
+
+    return docId
+  },
+})
+
+export const createDocumentFromText = mutation({
+  args: {
+    folderId: v.id('folders'),
+    filename: v.string(),
+    text: v.string(),
+    sourceUrl: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) throw new Error('Unauthenticated')
+
+    const userId = identity.tokenIdentifier
+
+    const folder = await ctx.db.get(args.folderId)
+    if (!folder || folder.userId !== userId) {
+      throw new Error('Folder not found')
+    }
+
+    if (!args.text.trim()) throw new Error('Text content cannot be empty')
+
+    const now = Date.now()
+    const taskId = await ctx.db.insert('tasks', {
+      userId,
+      folderId: args.folderId,
+      type: 'document-ingestion',
+      status: 'pending',
+      title: `Ingesting ${args.filename}`,
+      progress: 'Preparing…',
+      createdAt: now,
+      updatedAt: now,
+    })
+
+    const docId = await ctx.db.insert('documents', {
+      userId,
+      folderId: args.folderId,
+      filename: args.filename,
+      status: 'processing',
+      fileSize: new TextEncoder().encode(args.text).length,
+      sourceType: 'file',
+      sourceUrl: args.sourceUrl,
+      mimeType: 'text/markdown',
+      taskId,
+    })
+
+    await ctx.db.patch(args.folderId, {
+      documentCount: folder.documentCount + 1,
+      updatedAt: Date.now(),
+    })
+
+    await ctx.scheduler.runAfter(0, internal.documentActions.ingestText, {
+      documentId: docId,
+      userId,
+      folderId: args.folderId,
+      filename: args.filename,
+      text: args.text,
+      taskId,
     })
 
     return docId
@@ -81,6 +237,16 @@ export const listDocumentsByFolder = query({
       )
       .order('desc')
       .take(200)
+  },
+})
+
+export const updateDocumentFilename = internalMutation({
+  args: {
+    id: v.id('documents'),
+    filename: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.id, { filename: args.filename })
   },
 })
 
@@ -215,10 +381,12 @@ export const deleteDocument = mutation({
       })
     }
 
-    try {
-      await ctx.storage.delete(doc.fileId)
-    } catch {
-      // best-effort; blob may already be gone
+    if (doc.fileId) {
+      try {
+        await ctx.storage.delete(doc.fileId)
+      } catch {
+        // best-effort; blob may already be gone
+      }
     }
     await ctx.db.delete(args.id)
 
