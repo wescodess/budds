@@ -23,7 +23,7 @@ export function useFolderReferenceScope(options: UseFolderReferenceScopeOptions)
 
   const folderArgs = computed(() => {
     const fid = options.folderId.value
-    return fid ? { folderId: fid } : undefined
+    return fid ? { id: fid } : undefined
   })
 
   const { data: folderData } = useConvexQuery(api.folders.getFolder, folderArgs as any)
