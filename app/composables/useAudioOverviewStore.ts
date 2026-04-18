@@ -21,15 +21,6 @@ interface State {
   playbackRate: number
 }
 
-interface VisualizerGraph {
-  context: AudioContext
-  source: MediaElementAudioSourceNode
-  analyser: AnalyserNode
-  buffer: Uint8Array
-}
-
-const sharedGraphByElement = new WeakMap<HTMLAudioElement, VisualizerGraph>()
-
 export function createAudioOverviewPlayback() {
   const state = reactive<State>({
     overviewId: null,
@@ -93,60 +84,25 @@ export function createAudioOverviewPlayback() {
     schedulePreload()
   }
 
-  function ensureVisualizerGraph(el: HTMLAudioElement): VisualizerGraph | null {
-    if (!import.meta.client) return null
-    const cached = sharedGraphByElement.get(el)
-    if (cached) return cached
-    const ctxCtor = (window as unknown as { AudioContext?: typeof AudioContext, webkitAudioContext?: typeof AudioContext }).AudioContext
-      ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
-    if (!ctxCtor) {
-      visualizerSupported.value = false
-      return null
-    }
-    try {
-      const context = new ctxCtor()
-      const source = context.createMediaElementSource(el)
-      const analyser = context.createAnalyser()
-      analyser.fftSize = 256
-      analyser.smoothingTimeConstant = 0.8
-      source.connect(analyser)
-      analyser.connect(context.destination)
-      const graph: VisualizerGraph = {
-        context,
-        source,
-        analyser,
-        buffer: new Uint8Array(analyser.frequencyBinCount),
-      }
-      sharedGraphByElement.set(el, graph)
-      return graph
-    }
-    catch {
-      visualizerSupported.value = false
-      return null
-    }
-  }
+  let visualizerStart = 0
 
-  function visualizerTick() {
-    const el = audioElRef.value
-    if (!el) { rafId = null; return }
-    const graph = sharedGraphByElement.get(el)
-    if (!graph) { rafId = null; return }
-    graph.analyser.getByteFrequencyData(graph.buffer)
-    const bins = Math.min(32, graph.buffer.length)
-    let sum = 0
-    for (let i = 0; i < bins; i++) sum += graph.buffer[i]!
-    magnitude.value = Math.max(0, Math.min(1, sum / bins / 255))
+  function visualizerTick(now: number) {
+    if (!state.isPlaying) {
+      rafId = null
+      magnitude.value = 0
+      return
+    }
+    const elapsed = (now - visualizerStart) / 1000
+    const base = 0.55 + 0.25 * Math.sin(elapsed * 2.1)
+    const jitter = 0.15 * Math.sin(elapsed * 5.3 + 1.2)
+    magnitude.value = Math.max(0, Math.min(1, base + jitter))
     rafId = requestAnimationFrame(visualizerTick)
   }
 
   function startVisualizer() {
     if (!import.meta.client) return
     if (rafId !== null) return
-    const el = audioElRef.value
-    if (!el) return
-    const graph = ensureVisualizerGraph(el)
-    if (!graph) return
-    if (graph.context.state === 'suspended') void graph.context.resume()
+    visualizerStart = typeof performance !== 'undefined' ? performance.now() : Date.now()
     rafId = requestAnimationFrame(visualizerTick)
   }
 
