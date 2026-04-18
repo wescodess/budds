@@ -50,7 +50,7 @@ const {
   startNewConversation,
 } = useChat(folderId, conversationIdRef)
 
-const referenceScope = useReferenceScope()
+const referenceScope = useFolderReferenceScope({ folderId })
 const workspaceRef = ref<HTMLElement | null>(null)
 const seededFolder = computed(() =>
   folder.value
