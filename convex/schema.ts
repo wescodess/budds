@@ -7,6 +7,10 @@ export default defineSchema({
     name: v.string(),
     email: v.optional(v.string()),
     avatarUrl: v.optional(v.string()),
+    audioOverviewQuota: v.optional(v.object({
+      date: v.string(),
+      count: v.number(),
+    })),
   }).index('by_tokenIdentifier', ['tokenIdentifier']),
 
   folders: defineTable({
@@ -308,10 +312,13 @@ export default defineSchema({
     ),
     totalDurationMs: v.number(),
     sourceDocumentIds: v.optional(v.array(v.id('documents'))),
+    shareToken: v.optional(v.string()),
+    publishedAt: v.optional(v.number()),
   })
     .index('by_userId', ['userId'])
     .index('by_folderId', ['folderId'])
-    .index('by_userId_and_folderId', ['userId', 'folderId']),
+    .index('by_userId_and_folderId', ['userId', 'folderId'])
+    .index('by_shareToken', ['shareToken']),
 
   pendingCleanup: defineTable({
     userId: v.string(),

@@ -137,4 +137,76 @@ describe('Story 1.1 — Verify & Harden Authentication Flow', () => {
       expect(configSource).toMatch(/guest:\s*['"]\/['"]/)
     })
   })
+
+  describe('Phase 3: audio overview daily quota', () => {
+    test('[P0] getDailyQuota returns null for unauthenticated callers', async () => {
+      const t = convexTest(schema, modules)
+      const result = await t.query(api.users.getDailyQuota, {})
+      expect(result).toBeNull()
+    })
+
+    test('[P0] getDailyQuota reports zero used for a fresh user', async () => {
+      const t = convexTest(schema, modules)
+      const asUser = t.withIdentity({ tokenIdentifier: 'https://auth.example.com|u1', name: 'U' })
+      await asUser.mutation(api.users.upsertUser, {})
+      const result = await asUser.query(api.users.getDailyQuota, {})
+      expect(result).not.toBeNull()
+      expect(result!.used).toBe(0)
+      expect(result!.cap).toBe(10)
+      expect(result!.date).toBe(new Date().toISOString().slice(0, 10))
+    })
+
+    test('[P0] incrementDailyQuota increments count and persists today date', async () => {
+      const t = convexTest(schema, modules)
+      const asUser = t.withIdentity({ tokenIdentifier: 'https://auth.example.com|u1', name: 'U' })
+      await asUser.mutation(api.users.upsertUser, {})
+
+      const after1 = await asUser.mutation(api.users.incrementDailyQuota, {})
+      expect(after1.used).toBe(1)
+      const after2 = await asUser.mutation(api.users.incrementDailyQuota, {})
+      expect(after2.used).toBe(2)
+
+      const quota = await asUser.query(api.users.getDailyQuota, {})
+      expect(quota!.used).toBe(2)
+    })
+
+    test('[P0] getDailyQuota resets used to 0 when stored date is stale', async () => {
+      const t = convexTest(schema, modules)
+      const asUser = t.withIdentity({ tokenIdentifier: 'https://auth.example.com|u1', name: 'U' })
+      await asUser.mutation(api.users.upsertUser, {})
+      await asUser.mutation(api.users.incrementDailyQuota, {})
+
+      await t.run(async (ctx) => {
+        const user = await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', 'https://auth.example.com|u1')).unique()
+        await ctx.db.patch(user!._id, {
+          audioOverviewQuota: { date: '2000-01-01', count: 42 },
+        })
+      })
+
+      const result = await asUser.query(api.users.getDailyQuota, {})
+      expect(result!.used).toBe(0)
+      expect(result!.cap).toBe(10)
+    })
+
+    test('[P0] incrementDailyQuota resets count when stored date is stale', async () => {
+      const t = convexTest(schema, modules)
+      const asUser = t.withIdentity({ tokenIdentifier: 'https://auth.example.com|u1', name: 'U' })
+      await asUser.mutation(api.users.upsertUser, {})
+
+      await t.run(async (ctx) => {
+        const user = await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', 'https://auth.example.com|u1')).unique()
+        await ctx.db.patch(user!._id, {
+          audioOverviewQuota: { date: '2000-01-01', count: 99 },
+        })
+      })
+
+      const result = await asUser.mutation(api.users.incrementDailyQuota, {})
+      expect(result.used).toBe(1)
+    })
+
+    test('[P0] incrementDailyQuota rejects unauthenticated callers', async () => {
+      const t = convexTest(schema, modules)
+      await expect(t.mutation(api.users.incrementDailyQuota, {})).rejects.toThrow(/Unauthenticated/)
+    })
+  })
 })
