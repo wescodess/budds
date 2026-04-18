@@ -13,7 +13,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:component": "vitest run --config vitest.config.component.ts",
-    "test:component:watch": "vitest --config vitest.config.component.ts"
+    "test:component:watch": "vitest --config vitest.config.component.ts",
+    "typecheck": "vue-tsc --noEmit",
+    "lint": "eslint ."
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1029.0",

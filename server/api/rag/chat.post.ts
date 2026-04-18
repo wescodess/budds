@@ -4,6 +4,7 @@ import type { Id } from '../../../convex/_generated/dataModel'
 import type { ChatMessage } from '../../utils/ai-gateway'
 import type { AISearchChunk } from '../../utils/ai-search'
 import { readConfiguredRuntimeValue } from '../../utils/runtime-config'
+import { requireRateLimit } from '../../utils/rate-limit'
 
 const SYSTEM_PROMPT = `You are a helpful assistant that answers questions based on the provided context.
 Use the context below to answer the user's question accurately.
@@ -60,6 +61,7 @@ function chunkToSource(chunk: AISearchChunk) {
 }
 
 export default defineEventHandler(async (event) => {
+  requireRateLimit(event, 20)
   const userId = getConvexTokenIdentifier(event)
 
   const body = await readBody<{
