@@ -32,6 +32,11 @@ useHead({
 
 useMobileKeyboardInset()
 
+const pageTransition = {
+  name: 'page-fade',
+  mode: 'out-in' as const,
+}
+
 const globalAudioEl = ref<HTMLAudioElement | null>(null)
 const globalPreloadEl = ref<HTMLAudioElement | null>(null)
 const audioOverviewStore = useAudioOverviewStore()
@@ -45,9 +50,10 @@ watch(
 </script>
 
 <template>
-  <NuxtLayout>
-    <NuxtPage />
-  </NuxtLayout>
+  <MotionConfig reduced-motion="user">
+    <NuxtLayout>
+      <NuxtPage :transition="pageTransition" />
+    </NuxtLayout>
   <InstallAppPrompt />
   <Sonner rich-colors position="top-right" />
   <ClientOnly>
@@ -55,4 +61,5 @@ watch(
     <audio ref="globalPreloadEl" preload="auto" class="hidden" />
     <StickyMiniPlayer />
   </ClientOnly>
+  </MotionConfig>
 </template>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { FileText, MessageSquare, ClipboardList, Layers, PanelRight, ArrowLeftRight, Pencil, FolderPlus, ListTodo } from 'lucide-vue-next'
+import { FileText, MessageSquare, ClipboardList, Layers, PanelRight, ArrowLeftRight, Pencil, FolderPlus, ListTodo, Mic } from 'lucide-vue-next'
 import { useMediaQuery } from '@vueuse/core'
 import { api } from '#convex/api'
 import type { Id } from '~~/convex/_generated/dataModel'
@@ -154,13 +154,17 @@ async function onCreateVoid(payload: { type: VoidType; name?: string }) {
       try {
         await setPreferredMainPaneMutation.mutate({ folderId: folderId.value, pane: 'podcast' } as any)
       } catch { /* best-effort */ }
-      activeTab.value = 'audio-overview'
-      const { conversationId: _dropC, voidId: _dropV, ...rest } = route.query ?? {}
-      await router.replace({ query: { ...rest, tab: 'audio-overview' } })
-      await nextTick()
-      try {
-        await audioOverviewShellRef.value?.startGeneration?.()
-      } catch { /* shell surfaces its own error toast */ }
+      if (!isDesktop.value) {
+        void navigateTo(`/app/folders/${folderId.value}/podcast`)
+      } else {
+        activeTab.value = 'audio-overview'
+        const { conversationId: _dropC, voidId: _dropV, ...rest } = route.query ?? {}
+        await router.replace({ query: { ...rest, tab: 'audio-overview' } })
+        await nextTick()
+        try {
+          await audioOverviewShellRef.value?.startGeneration?.()
+        } catch { /* shell surfaces its own error toast */ }
+      }
     } else {
       activeTab.value = type
       await router.replace({ query: { ...(route.query ?? {}), tab: type } })
@@ -302,6 +306,12 @@ watch(() => route.query?.tab, async () => {
     try {
       await setPreferredMainPaneMutation.mutate({ folderId: folderId.value, pane: 'podcast' } as any)
     } catch { /* best-effort */ }
+    if (!isDesktop.value) {
+      await router.replace({ query: { ...rest, tab: 'chat' } })
+      activeTab.value = 'chat'
+      void navigateTo(`/app/folders/${folderId.value}/podcast`)
+      return
+    }
     await router.replace({ query: { ...rest, tab: 'chat' } })
     activeTab.value = 'chat'
     helperMode.value = 'podcast'
@@ -868,6 +878,16 @@ async function handleImportLink(url: string) {
             @click="subfolderCreateOpen = true"
           >
             <FolderPlus class="h-4 w-4" />
+          </button>
+          <button
+            v-if="hasIndexedDocuments"
+            type="button"
+            data-testid="folder-header-podcast"
+            aria-label="Podcast"
+            class="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground lg:hidden"
+            @click="navigateTo(`/app/folders/${folderId}/podcast`)"
+          >
+            <Mic class="h-4 w-4" />
           </button>
           <button
             type="button"
