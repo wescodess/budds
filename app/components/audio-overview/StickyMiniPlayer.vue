@@ -96,7 +96,12 @@ function onDragEnd() {
 }
 
 const floatingStyle = computed(() => {
-  if (posX.value === null || posY.value === null) return {}
+  if (posX.value === null || posY.value === null) {
+    return {
+      right: '16px',
+      bottom: '16px',
+    }
+  }
   return {
     left: `${posX.value}px`,
     top: `${posY.value}px`,
@@ -231,7 +236,7 @@ async function handleExpand() {
       ref="floatingRef"
       data-testid="audio-overview-sticky-mini-player"
       :class="[
-        'fixed z-40',
+        'fixed z-[9999]',
         expanded
           ? 'w-80 rounded-2xl border border-border/60 bg-card shadow-lg'
           : 'w-72 rounded-full border border-border/60 bg-card shadow-lg',
