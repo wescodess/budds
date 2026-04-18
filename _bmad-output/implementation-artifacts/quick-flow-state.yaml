@@ -1,18 +1,20 @@
 version: 1
 mode: running
-current_phase: implement
-spec_slug: audio-overview-phase-5a-foundation
+current_phase: spec
+spec_slug: audio-overview-phase-5a2-unified-pane-ui
 input_type: goal
 goal_or_spec: |
-  Audio Overview Phase 5A Foundation — unified Chat + Podcast folder surface,
-  folders.preferredMainPane + folders.referenceScope schema, shared scope picker,
-  mobile expand route. First of three phases per
-  _bmad-output/implementation-artifacts/roadmap-chat-podcast-unification.md.
-  Out of scope: Ask→chat routing (5B), multi-chat migration (5C), regen scope
-  intersection (5C), sidebar counter simplification (5C).
+  Audio Overview Phase 5A.2 — UI refactor landing the designs approved in Phase 5A.
+  Scope: (1) UnifiedConversationPane component + tabs-collapse in folder page
+  (Chat + Audio Overview merge into a single resizable 2-pane surface),
+  (2) UnifiedHelperPaneTabs (Podcast | Sources toggle),
+  (3) Customize dialog Scope section (collapsed default + Override expanded picker),
+  (4) Chat input scope chip visual integration with useFolderReferenceScope,
+  (5) Empty-scope "No documents yet" picker card.
+  Designs approved in 5A escalation log — reuses same screens.
 is_ui: true
 review_rounds: 0
-branch: feat/audio-overview-phase-5a-foundation
+branch: null
 pr_url: null
 paths:
   project_root: /Users/wesleyukadike/Desktop/budds
@@ -25,33 +27,9 @@ design:
   approved: true
   approved_at: "2026-04-18T00:30:00Z"
   stitch_project_id: "2926819289448574055"
-  reference_screenshot: "_bmad-output/implementation-artifacts/design-screens/audio-overview-phase-2-polish/audio-overview-player-visualizer.png"
-  screens:
-    - surface: UnifiedTwoPaneFolder
-      screen_id: "0961875b17f44899bd25441552a9c7fa"
-      title: "Unified 2-pane folder (Chat + Podcast)"
-      local_path: "_bmad-output/implementation-artifacts/design-screens/audio-overview-phase-5a-foundation/unified-two-pane-folder.png"
-      notes: "Chat pane (left ~58%) with model selector, messages + inline amber citations, scope chip + input. Podcast pane (right ~42%) condensed Player. Pure amber/gold orbs. Stitch added a fake 'Budds' sidebar with Home/Voids/Knowledge/Members — won't ship (real app uses existing sidebar)."
-    - surface: MobileChatWithMiniPlayer
-      screen_id: "cad8bbee2a974fb5bba40abb2f67f69a"
-      title: "Mobile: chat full-screen + sticky mini-player"
-      local_path: "_bmad-output/implementation-artifacts/design-screens/audio-overview-phase-5a-foundation/mobile-chat-with-miniplayer.png"
-      notes: "Full-screen chat on 375px, sticky mini-player at bottom. Scope chip collapses to icon-only on mobile. Clean, reuses Phase-2 sticky bar."
-    - surface: ScopePickerChipInChatInput
-      screen_id: "94799411b8ea4668b2967e0566f50988"
-      title: "Scope chip — 3 states (default / narrowed / menu open)"
-      local_path: "_bmad-output/implementation-artifacts/design-screens/audio-overview-phase-5a-foundation/scope-picker-chip.png"
-      notes: "Default: muted pill 'All docs · folder + subfolders'. Narrowed: amber-tinted '3 of 8 docs' with X-to-clear. Menu open: dropdown with folder-tree checkbox picker + Select all/Clear/Apply footer."
-    - surface: ScopePickerInCustomizeDialog
-      screen_id: "1d29196649e34766bd36e0a2bad85751"
-      title: "Customize dialog — scope section (collapsed + expanded)"
-      local_path: "_bmad-output/implementation-artifacts/design-screens/audio-overview-phase-5a-foundation/scope-picker-customize-dialog.png"
-      notes: "Collapsed: 'Using folder default · 8 docs' + Override ghost button. Expanded: inline folder-tree picker with per-doc checkboxes + Cancel override link. Sits above Length/Complexity/Voices."
-    - surface: ScopePickerEmptyState
-      screen_id: "348d9732b9fd46f69fedf2f9df03dd71"
-      title: "Scope picker — empty state (no indexed docs)"
-      local_path: "_bmad-output/implementation-artifacts/design-screens/audio-overview-phase-5a-foundation/scope-picker-empty-state.png"
-      notes: "Composer shows 'No scope · add docs first' disabled chip. Empty-state card with Upload icon + 'No documents yet' + primary 'Go to Documents tab' + 'Learn about sources →' link."
+  reference_screenshot: "_bmad-output/implementation-artifacts/design-screens/audio-overview-phase-5a-foundation/unified-two-pane-folder.png"
+  approval_scope: "Designs approved in Phase 5A escalation #1 (see spec-audio-overview-phase-5a-foundation.md escalation.log) cover both 5A foundation and 5A.2 UI. No re-approval needed — same 5 screens."
+  screens: []
   surfaces_requested:
     - UnifiedTwoPaneFolder
     - MobileChatWithMiniPlayer
@@ -61,47 +39,27 @@ design:
   design_system_id: "assets/11175050301981891392"
 escalation:
   pending: null
-  log:
-    - id: "design-approval-audio-overview-phase-5a-foundation-01"
-      question: "Approve Phase 5A design screens?"
-      answer: "approve"
-      followed_default: null
-      asked_at: "2026-04-18T00:00:00Z"
-      answered_at: "2026-04-18T00:30:00Z"
-      auto_resolved: false
-      raised_from_state: design
+  log: []
 decisions_log:
   - ts: 2026-04-18
-    decision: "Phase 5 split into 5A (foundation) / 5B (chat-interject) / 5C (polish). 5A is this spec."
-    rationale: "Roadmap doc approved. Three-PR sequence gives each phase a shippable increment; 5A standalone delivers unified layout + scope picker."
+    decision: "Skip DESIGN phase for 5A.2 — approvals from 5A escalation cover the same 5 surfaces"
+    rationale: "Spec change log in 5A explicitly names 5A.2 as the UI-refactor continuation; designs unchanged."
   - ts: 2026-04-18
-    decision: "Voids of type chat/podcast collapse to folders.preferredMainPane preference; both Create-Void tiles stay as layout shortcuts."
-    rationale: "User answer #1. Preserves the two entry points but removes the multiple-voids-per-type data model complexity."
+    decision: "Chat + Audio Overview tabs collapse into a single Conversation tab (URL ?tab=chat kept for backward compat; ?tab=audio-overview redirects and sets preferredMainPane=podcast)"
+    rationale: "Consolidates the two surfaces per spec. Flashcards/Quiz/Documents remain sibling tabs. Backward-compat URL redirect preserves existing bookmarks."
   - ts: 2026-04-18
-    decision: "folders.referenceScope persisted in Convex DB (not localStorage)"
-    rationale: "User answer #9. Cross-device consistency."
-  - ts: 2026-04-18
-    decision: "Recursive subfolder inclusion by default for scope"
-    rationale: "User answer #4. Deep recursion walks folders tree."
-  - ts: 2026-04-18
-    decision: "Phase-4 InterjectModal stays in 5A; removed in 5B"
-    rationale: "Roadmap phasing. 5A ships unified layout without touching the ask flow — lower blast radius."
+    decision: "Helper pane content switcher — Podcast | Sources tabs at top of helper; default Podcast; citation click auto-switches to Sources"
+    rationale: "Preserves existing ChatSourcePanel affordance while introducing podcast-in-helper. User toggles freely."
 run_log:
   - ts: 2026-04-18
     event: start
-    detail: "Phase 5A Foundation kicked off. Previous Phase 4 shipped via PR #56 + hotfixes #57/#58. Roadmap committed on dev at 5b4ec94."
+    detail: "Phase 5A.2 UI refactor kicked off. Phase 5A foundation shipped via PR #59 at 5fd62e3. Designs pre-approved from 5A."
   - ts: 2026-04-18
     event: intake_complete
-    detail: "slug=audio-overview-phase-5a-foundation, is_ui=true, 5 design surfaces."
+    detail: "slug=audio-overview-phase-5a2-unified-pane-ui, is_ui=true, DESIGN skipped (pre-approved)."
   - ts: 2026-04-18
     event: phase_transition
-    detail: "intake → design"
-  - ts: 2026-04-18
-    event: design_ready
-    detail: "Stitch generated 5 screens (one retry for ScopePickerChipInChatInput after initial ETIMEDOUT). PNGs saved to design-screens/audio-overview-phase-5a-foundation/. No avatars — all orbs pure amber/gold. Stitch added imaginary Budds sidebar chrome on UnifiedTwoPaneFolder which won't ship (real app uses existing sidebar)."
-  - ts: 2026-04-18
-    event: escalation_raised
-    detail: "Design approval for 5 Phase 5A surfaces. No auto-resolve."
+    detail: "intake → spec (design skipped)"
 config:
   notifications:
     telegram:

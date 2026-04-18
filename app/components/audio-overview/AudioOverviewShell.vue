@@ -31,6 +31,37 @@ const indexedCount = computed(() =>
   (documents.value ?? []).filter(doc => doc.status === 'success').length,
 )
 
+const { data: folderData } = useConvexQuery(
+  api.folders.getFolder,
+  computed(() => ({ folderId: props.folderId })),
+)
+const folderScope = computed(() => {
+  const row = folderData.value as any
+  return row?.referenceScope ?? null
+})
+const hasFolderScope = computed(() => {
+  const s = folderScope.value
+  if (!s) return false
+  return (s.folderIds?.length ?? 0) > 0 || (s.fileIds?.length ?? 0) > 0
+})
+
+const { data: resolvedScopeData } = useConvexQuery(
+  api.folders.resolveScope,
+  computed(() => {
+    const s = folderScope.value
+    if (!s) return 'skip' as any
+    return { folderIds: s.folderIds, fileIds: s.fileIds }
+  }) as any,
+)
+const folderScopeDocIds = computed<string[]>(() => {
+  const row = resolvedScopeData.value as { documentIds?: string[] } | null | undefined
+  return row?.documentIds ?? []
+})
+const folderScopeDocCount = computed(() => {
+  if (hasFolderScope.value) return folderScopeDocIds.value.length
+  return indexedCount.value
+})
+
 type OverviewSummary = {
   _id: Id<'audioOverviews'>
   _creationTime: number
@@ -174,6 +205,10 @@ async function handleCustomizeSubmit(value: CustomizeSubmit) {
 
     emit('generation-started')
 
+    const scopeDocIds = hasFolderScope.value && folderScopeDocIds.value.length > 0
+      ? folderScopeDocIds.value
+      : undefined
+
     $fetch('/api/audio-overview/generate', {
       method: 'POST',
       body: {
@@ -181,6 +216,7 @@ async function handleCustomizeSubmit(value: CustomizeSubmit) {
         taskId: result.taskId,
         preferences: { lengthMinutes: value.lengthMinutes, complexity: value.complexity },
         voiceProfile: { hostA: value.voiceProfile.hostA, hostB: value.voiceProfile.hostB },
+        scopeDocIds,
       },
     }).catch(() => { /* task will surface failure state */ })
   }
@@ -311,6 +347,8 @@ defineExpose({
       :initial-voice-b="customizeDefaults.voiceB"
       :submitting="submitting"
       :quota-state="quotaState"
+      :folder-scope-doc-count="folderScopeDocCount"
+      :folder-scope-is-narrowed="hasFolderScope"
       :submit-label="activeOverview ? 'Generate new' : 'Generate'"
       @submit="handleCustomizeSubmit"
     />
