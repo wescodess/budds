@@ -15,8 +15,11 @@ import type {
   HostVoice,
 } from './customize-types'
 
+import type { useReferenceScope } from '~/composables/useReferenceScope'
+
 const props = defineProps<{
   folderId: Id<'folders'>
+  scope?: ReturnType<typeof useReferenceScope>
 }>()
 
 const emit = defineEmits<{
@@ -349,6 +352,8 @@ defineExpose({
       :quota-state="quotaState"
       :folder-scope-doc-count="folderScopeDocCount"
       :folder-scope-is-narrowed="hasFolderScope"
+      :folder-id="props.folderId"
+      :scope="props.scope"
       :submit-label="activeOverview ? 'Generate new' : 'Generate'"
       @submit="handleCustomizeSubmit"
     />
