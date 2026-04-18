@@ -1,20 +1,20 @@
 version: 1
 mode: running
-current_phase: spec
-spec_slug: audio-overview-phase-5a2-unified-pane-ui
+current_phase: implement
+spec_slug: audio-overview-phase-5a3-unified-pane
 input_type: goal
 goal_or_spec: |
-  Audio Overview Phase 5A.2 — UI refactor landing the designs approved in Phase 5A.
-  Scope: (1) UnifiedConversationPane component + tabs-collapse in folder page
-  (Chat + Audio Overview merge into a single resizable 2-pane surface),
-  (2) UnifiedHelperPaneTabs (Podcast | Sources toggle),
-  (3) Customize dialog Scope section (collapsed default + Override expanded picker),
-  (4) Chat input scope chip visual integration with useFolderReferenceScope,
-  (5) Empty-scope "No documents yet" picker card.
-  Designs approved in 5A escalation log — reuses same screens.
+  Phase 5A.3 — deliver the unified 2-pane folder surface promised by the
+  approved 5A designs. Collapse Chat + Audio Overview tabs into a single
+  Conversation tab hosting UnifiedConversationPane. Helper pane gets
+  Podcast | Sources tab toggle. preferredMainPane drives orientation
+  (chat-main default; podcast-main when user created Podcast void).
+  Flip persists via existing G3 mechanism; audio never pauses.
+  Legacy ?tab=audio-overview redirects to ?tab=chat + sets
+  preferredMainPane=podcast.
 is_ui: true
 review_rounds: 0
-branch: null
+branch: feat/audio-overview-phase-5a3-unified-pane
 pr_url: null
 paths:
   project_root: /Users/wesleyukadike/Desktop/budds
@@ -28,38 +28,26 @@ design:
   approved_at: "2026-04-18T00:30:00Z"
   stitch_project_id: "2926819289448574055"
   reference_screenshot: "_bmad-output/implementation-artifacts/design-screens/audio-overview-phase-5a-foundation/unified-two-pane-folder.png"
-  approval_scope: "Designs approved in Phase 5A escalation #1 (see spec-audio-overview-phase-5a-foundation.md escalation.log) cover both 5A foundation and 5A.2 UI. No re-approval needed — same 5 screens."
+  approval_scope: "Designs approved in Phase 5A escalation log cover 5A/5A.2/5A.3. Same 5 screens."
   screens: []
-  surfaces_requested:
-    - UnifiedTwoPaneFolder
-    - MobileChatWithMiniPlayer
-    - ScopePickerChipInChatInput
-    - ScopePickerInCustomizeDialog
-    - ScopePickerEmptyState
   design_system_id: "assets/11175050301981891392"
 escalation:
   pending: null
   log: []
 decisions_log:
   - ts: 2026-04-18
-    decision: "Skip DESIGN phase for 5A.2 — approvals from 5A escalation cover the same 5 surfaces"
-    rationale: "Spec change log in 5A explicitly names 5A.2 as the UI-refactor continuation; designs unchanged."
+    decision: "5A.3 delivers the unified 2-pane surface (finally) — the architectural headline of Phase 5"
+    rationale: "Phase 5A foundation + 5A.2 scope wiring shipped. 5A.3 is the promised UI refactor."
   - ts: 2026-04-18
-    decision: "Chat + Audio Overview tabs collapse into a single Conversation tab (URL ?tab=chat kept for backward compat; ?tab=audio-overview redirects and sets preferredMainPane=podcast)"
-    rationale: "Consolidates the two surfaces per spec. Flashcards/Quiz/Documents remain sibling tabs. Backward-compat URL redirect preserves existing bookmarks."
-  - ts: 2026-04-18
-    decision: "Helper pane content switcher — Podcast | Sources tabs at top of helper; default Podcast; citation click auto-switches to Sources"
-    rationale: "Preserves existing ChatSourcePanel affordance while introducing podcast-in-helper. User toggles freely."
+    decision: "Ship core 2-pane + tab collapse + orientation first; defer chat-chip visual redesign + Customize override picker + DirectoryPicker empty-state to 5A.4 polish pass"
+    rationale: "Architectural refactor of the 1268-line folder page is the heart of the value. Polish items are additive and can ride in a follow-up."
 run_log:
   - ts: 2026-04-18
     event: start
-    detail: "Phase 5A.2 UI refactor kicked off. Phase 5A foundation shipped via PR #59 at 5fd62e3. Designs pre-approved from 5A."
+    detail: "Phase 5A.3 unified pane kicked off. 5A + 5A.2 merged (PRs #59, #60)."
   - ts: 2026-04-18
-    event: intake_complete
-    detail: "slug=audio-overview-phase-5a2-unified-pane-ui, is_ui=true, DESIGN skipped (pre-approved)."
-  - ts: 2026-04-18
-    event: phase_transition
-    detail: "intake → spec (design skipped)"
+    event: branch_carved
+    detail: "feat/audio-overview-phase-5a3-unified-pane off dev at a63d6ed."
 config:
   notifications:
     telegram:

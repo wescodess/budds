@@ -283,9 +283,26 @@ const activeVoidId = computed(() => {
   return typeof q === 'string' && (activeTab.value === 'flashcards' || activeTab.value === 'quiz') ? q : null
 })
 
-watch(() => route.query?.tab, () => {
+watch(() => route.query?.tab, async () => {
+  const raw = route.query?.tab
+  if (typeof raw === 'string' && raw === 'audio-overview') {
+    const { conversationId: _dropC, voidId: _dropV, ...rest } = route.query ?? {}
+    try {
+      await setPreferredMainPaneMutation.mutate({ folderId: folderId.value, pane: 'podcast' } as any)
+    } catch { /* best-effort */ }
+    await router.replace({ query: { ...rest, tab: 'chat' } })
+    activeTab.value = 'chat'
+    helperMode.value = 'podcast'
+    return
+  }
   activeTab.value = initialTab.value
 })
+
+watch(activeTab, (tab) => {
+  if (tab === 'chat' && helperMode.value === null && isDesktopMounted.value) {
+    helperMode.value = 'podcast'
+  }
+}, { immediate: true })
 
 async function onTabChange(next: TabValue) {
   activeTab.value = next
@@ -297,12 +314,19 @@ async function onTabChange(next: TabValue) {
 const documentsBulkMode = ref(false)
 const selectedDocumentIds = ref<string[]>([])
 const documentsDeletePending = ref(false)
-type HelperMode = 'sources' | 'tasks' | null
+type HelperMode = 'sources' | 'tasks' | 'podcast' | null
 const helperMode = ref<HelperMode>(null)
 const sourcePanelOpen = computed({
   get: () => helperMode.value === 'sources',
   set: (v: boolean) => { helperMode.value = v ? 'sources' : null },
 })
+const chatHelperOpen = computed(() =>
+  helperMode.value === 'sources' || helperMode.value === 'podcast',
+)
+type ChatHelperTab = 'podcast' | 'sources'
+function setChatHelperTab(next: ChatHelperTab) {
+  helperMode.value = next
+}
 const sourcePanelSide = ref<'left' | 'right'>('right')
 const { activeCount: tasksActiveCount } = useTasks(folderId)
 const indexedDocumentCount = computed(() =>
@@ -855,17 +879,28 @@ async function handleImportLink(url: string) {
 
       <UiTabsContent value="chat" class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <div class="flex min-h-0 min-w-0 flex-1 overflow-hidden">
-          <template v-if="isDesktop && sourcePanelOpen">
+          <template v-if="isDesktop && chatHelperOpen">
             <ResizablePanelGroup direction="horizontal" class="min-w-0 flex-1">
               <template v-if="isSourcePanelLeading">
                 <ResizablePanel :default-size="28" :min-size="20" :max-size="45" class="min-w-[18rem]">
-                  <ChatSourcePanel
-                    :sources="allSources"
-                    :active-citation-index="activeCitationIndex"
-                    :open="sourcePanelOpen"
-                    side="left"
-                    @close="sourcePanelOpen = false"
-                  />
+                  <div class="flex h-full min-h-0 flex-col overflow-hidden">
+                    <FolderShellUnifiedHelperPaneTabs
+                      :model-value="helperMode === 'sources' ? 'sources' : 'podcast'"
+                      @update:model-value="setChatHelperTab"
+                    />
+                    <div v-if="helperMode === 'podcast'" class="min-h-0 flex-1 overflow-hidden">
+                      <AudioOverviewShell :folder-id="folderId" />
+                    </div>
+                    <ChatSourcePanel
+                      v-else
+                      :sources="allSources"
+                      :active-citation-index="activeCitationIndex"
+                      :open="sourcePanelOpen"
+                      side="left"
+                      class="min-h-0 flex-1"
+                      @close="helperMode = null"
+                    />
+                  </div>
                 </ResizablePanel>
                 <ResizableHandle with-handle>
                   <button
@@ -1013,13 +1048,24 @@ async function handleImportLink(url: string) {
                   </button>
                 </ResizableHandle>
                 <ResizablePanel :default-size="28" :min-size="20" :max-size="45" class="min-w-[18rem]">
-                  <ChatSourcePanel
-                    :sources="allSources"
-                    :active-citation-index="activeCitationIndex"
-                    :open="sourcePanelOpen"
-                    side="right"
-                    @close="sourcePanelOpen = false"
-                  />
+                  <div class="flex h-full min-h-0 flex-col overflow-hidden">
+                    <FolderShellUnifiedHelperPaneTabs
+                      :model-value="helperMode === 'sources' ? 'sources' : 'podcast'"
+                      @update:model-value="setChatHelperTab"
+                    />
+                    <div v-if="helperMode === 'podcast'" class="min-h-0 flex-1 overflow-hidden">
+                      <AudioOverviewShell :folder-id="folderId" />
+                    </div>
+                    <ChatSourcePanel
+                      v-else
+                      :sources="allSources"
+                      :active-citation-index="activeCitationIndex"
+                      :open="sourcePanelOpen"
+                      side="right"
+                      class="min-h-0 flex-1"
+                      @close="helperMode = null"
+                    />
+                  </div>
                 </ResizablePanel>
               </template>
             </ResizablePanelGroup>
