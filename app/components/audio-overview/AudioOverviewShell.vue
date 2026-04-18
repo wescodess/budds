@@ -16,10 +16,13 @@ import type {
 
 import type { useReferenceScope } from '~/composables/useReferenceScope'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   folderId: Id<'folders'>
   scope?: ReturnType<typeof useReferenceScope>
-}>()
+  interjectionInFlight?: boolean
+}>(), {
+  interjectionInFlight: false,
+})
 
 const emit = defineEmits<{
   'generation-started': []
@@ -307,6 +310,7 @@ defineExpose({
       :folder-id="props.folderId"
       :overviews="readyOverviews"
       :regenerating="submitting"
+      :interjection-in-flight="props.interjectionInFlight"
       @request-regenerate="openCustomize"
       @request-customize="openCustomize"
       @request-share="handleRequestShare"
