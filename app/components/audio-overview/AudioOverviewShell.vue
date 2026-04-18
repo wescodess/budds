@@ -7,6 +7,7 @@ import AudioOverviewGenerating from './AudioOverviewGenerating.vue'
 import AudioOverviewPlayer from './AudioOverviewPlayer.vue'
 import AudioOverviewCustomize from './AudioOverviewCustomize.vue'
 import AudioOverviewShareDialog from './AudioOverviewShareDialog.vue'
+import InterjectModal from './InterjectModal.vue'
 import type {
   CustomizeSubmit,
   LengthMinutes,
@@ -107,6 +108,12 @@ const shareTarget = computed(() => {
   return readyOverviews.value.find(o => o._id === id) ?? null
 })
 
+const interjectOpen = ref(false)
+const interjectionInFlight = ref(false)
+const interjectionQuestion = ref<string | null>(null)
+const pendingAskAfterIndex = ref(0)
+const store = useAudioOverviewStore()
+
 const submitting = ref(false)
 const cancelling = ref(false)
 
@@ -192,6 +199,40 @@ function handleRequestShare() {
   shareOpen.value = true
 }
 
+function handleRequestAsk() {
+  if (!activeOverview.value) return
+  if (interjectionInFlight.value) return
+  pendingAskAfterIndex.value = store.currentTurnIndex.value
+  store.pause()
+  interjectOpen.value = true
+}
+
+function handleInterjectionSubmitStart(value: { question: string }) {
+  interjectionInFlight.value = true
+  interjectionQuestion.value = value.question
+}
+
+async function handleInterjectionSubmitted(payload: {
+  interjectionId: Id<'audioOverviewInterjections'>
+  insertedAfterTurnIndex: number
+  turns: Array<{ speaker: 'host_a' | 'host_b', text: string, audioFileId: any, durationMs: number, sourceIndex?: number }>
+  turnUrls: (string | null)[]
+}) {
+  store.spliceTurns({
+    afterIndex: payload.insertedAfterTurnIndex,
+    turns: payload.turns as any,
+    turnUrls: payload.turnUrls,
+  })
+  await store.play()
+  interjectionInFlight.value = false
+  interjectionQuestion.value = null
+}
+
+function handleInterjectionAborted() {
+  interjectionInFlight.value = false
+  interjectionQuestion.value = null
+}
+
 async function handleCancel(taskId: Id<'tasks'>) {
   if (cancelling.value) return
   cancelling.value = true
@@ -245,9 +286,12 @@ defineExpose({
       :folder-id="props.folderId"
       :overviews="readyOverviews"
       :regenerating="submitting"
+      :interjection-in-flight="interjectionInFlight"
+      :interjection-question="interjectionQuestion"
       @request-regenerate="openCustomize"
       @request-customize="openCustomize"
       @request-share="handleRequestShare"
+      @request-ask="handleRequestAsk"
       @select-overview="handleSelectOverview"
       @delete-overview="handleDeleteOverview"
     />
@@ -277,6 +321,16 @@ defineExpose({
       :overview-id="shareTargetOverviewId"
       :share-token="shareTarget?.shareToken ?? null"
       :published-at="shareTarget?.publishedAt ?? null"
+    />
+
+    <InterjectModal
+      v-if="activeOverview"
+      v-model:open="interjectOpen"
+      :overview-id="activeOverview._id"
+      :after-index="pendingAskAfterIndex"
+      @submit-start="handleInterjectionSubmitStart"
+      @submitted="handleInterjectionSubmitted"
+      @aborted="handleInterjectionAborted"
     />
   </div>
 </template>
