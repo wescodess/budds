@@ -138,7 +138,7 @@ export function useChat(
     conversationIdValue: Id<'conversations'>,
     role: 'user' | 'assistant',
     content: string,
-    extras: { sources?: Source[]; model?: string } = {},
+    extras: { sources?: Source[]; model?: string; interjectionContext?: InterjectionContext } = {},
   ) {
     if (!import.meta.client) return
     await appendMessageMutation.mutate({
@@ -322,7 +322,7 @@ export function useChat(
     thinking.value = true
 
     if (convoId) {
-      void persistMessage(convoId, 'user', query)
+      void persistMessage(convoId, 'user', query, interjectionContext ? { interjectionContext } : {})
     }
 
     try {
@@ -416,12 +416,14 @@ export function useChat(
       role: 'user' | 'assistant'
       content: string
       sources?: Source[]
+      interjectionContext?: InterjectionContext
     }>
 
     messages.value = rows.map(r => ({
       role: r.role,
       content: r.role === 'assistant' ? normalizeAssistantMessageContent(r.content) : r.content,
       sources: r.sources,
+      ...(r.interjectionContext ? { interjectionContext: r.interjectionContext } : {}),
     }))
     currentConversationId.value = conversationIdToLoad
     error.value = null

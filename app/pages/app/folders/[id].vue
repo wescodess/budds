@@ -11,6 +11,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/componen
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { useHorizontalSwipeGesture } from '~/composables/useHorizontalSwipeGesture'
 import { TAB_SWITCH_THRESHOLD_PX, useGestureGuards } from '~/composables/useGestureGuards'
+import { useFolderDetail } from '~/composables/useFolders'
 
 definePageMeta({ layout: 'folder' })
 
@@ -670,6 +671,19 @@ function handlePodcastAsk(context: InterjectionContext) {
   if (chatInputRef.value?.focus) chatInputRef.value.focus()
 }
 
+function formatInterjectionBadgeTime(ms: number): string {
+  const total = Math.max(0, Math.round(ms / 1000))
+  const minutes = Math.floor(total / 60)
+  const seconds = total % 60
+  return `${minutes}:${seconds.toString().padStart(2, '0')}`
+}
+
+function handleInterjectionBadgeClick(ctx: InterjectionContext) {
+  const store = useAudioOverviewStore()
+  store.seek(ctx.timeMs)
+  helperMode.value = 'podcast'
+}
+
 function handleViewAllReferences(messageIndex: number) {
   activeMessageIndex.value = messageIndex
   activeCitationIndex.value = null
@@ -900,6 +914,7 @@ async function handleImportLink(url: string) {
                 ref="audioOverviewShellRef"
                 :folder-id="folderId"
                 :scope="referenceScope"
+                :interjection-in-flight="interjectionInFlight"
                 @generation-started="() => { if (isDesktop) helperMode = 'podcast' }"
                 @podcast-ask="handlePodcastAsk"
               />
@@ -929,6 +944,15 @@ async function handleImportLink(url: string) {
                 <template v-else>
                   <div ref="chatScrollRef" data-testid="chat-scroll-area" role="log" aria-live="polite" aria-atomic="false" aria-relevant="additions" class="keyboard-scroll-area min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
                     <template v-for="(msg, i) in messages" :key="i">
+                      <button
+                        v-if="msg.interjectionContext && msg.role === 'user'"
+                        type="button"
+                        data-testid="chat-interjection-badge"
+                        class="inline-flex items-center gap-1.5 rounded-full border border-primary/40 bg-primary/10 px-2.5 py-1 font-inter text-[11px] text-primary transition-colors hover:bg-primary/20"
+                        @click="handleInterjectionBadgeClick(msg.interjectionContext!)"
+                      >
+                        🎙 Asked while listening @ {{ formatInterjectionBadgeTime(msg.interjectionContext.timeMs) }} · "{{ msg.interjectionContext.quotedText.slice(0, 40) }}{{ msg.interjectionContext.quotedText.length > 40 ? '…' : '' }}"
+                      </button>
                       <ChatMessage
                         :role="msg.role"
                         :content="msg.content"
@@ -987,7 +1011,7 @@ async function handleImportLink(url: string) {
                       @update:model-value="setChatHelperTab"
                     />
                     <div v-if="helperMode === 'podcast'" class="min-h-0 flex-1 overflow-hidden">
-                      <AudioOverviewShell :folder-id="folderId" :scope="referenceScope" @podcast-ask="handlePodcastAsk" />
+                      <AudioOverviewShell :folder-id="folderId" :scope="referenceScope" :interjection-in-flight="interjectionInFlight" @podcast-ask="handlePodcastAsk" />
                     </div>
                     <ChatSourcePanel
                       v-else
@@ -1152,7 +1176,7 @@ async function handleImportLink(url: string) {
                       @update:model-value="setChatHelperTab"
                     />
                     <div v-if="helperMode === 'podcast'" class="min-h-0 flex-1 overflow-hidden">
-                      <AudioOverviewShell :folder-id="folderId" :scope="referenceScope" @podcast-ask="handlePodcastAsk" />
+                      <AudioOverviewShell :folder-id="folderId" :scope="referenceScope" :interjection-in-flight="interjectionInFlight" @podcast-ask="handlePodcastAsk" />
                     </div>
                     <ChatSourcePanel
                       v-else
@@ -1276,6 +1300,7 @@ async function handleImportLink(url: string) {
           ref="audioOverviewShellRef"
           :folder-id="folderId"
           :scope="referenceScope"
+          :interjection-in-flight="interjectionInFlight"
           @generation-started="() => { if (isDesktop) helperMode = 'tasks' }"
           @podcast-ask="handlePodcastAsk"
         />
