@@ -53,6 +53,7 @@ export default defineEventHandler(async (event) => {
       hostA?: string
       hostB?: string
     }
+    scopeDocIds?: string[]
   }>(event)
 
   if (!body?.folderId?.trim()) {
@@ -116,12 +117,17 @@ export default defineEventHandler(async (event) => {
   try {
     if (taskId) await setTaskProgress('Retrieving sources…')
 
+    const scopeDocIds = Array.isArray(body.scopeDocIds) && body.scopeDocIds.length > 0
+      ? body.scopeDocIds
+      : undefined
+
     const searchResults = await searchDocuments({
       query: SEED_QUERY,
       userId,
-      folderId: body.folderId,
+      folderId: scopeDocIds ? undefined : body.folderId,
       max_num_results: MAX_SEARCH_RESULTS,
       score_threshold: 0.05,
+      filterDocIds: scopeDocIds,
     })
 
     let chunks: AISearchChunk[] = searchResults.data ?? []
@@ -271,6 +277,7 @@ export default defineEventHandler(async (event) => {
       voiceProfile,
       preferences: { lengthMinutes, complexity },
       sourceDocumentIds: Array.from(sourceDocumentIds),
+      scopeDocIds: scopeDocIds,
     })
 
     uploadedStorageIds.length = 0

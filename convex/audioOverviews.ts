@@ -57,6 +57,7 @@ export const createWithTurns = mutation({
     voiceProfile: voiceProfileValidator,
     preferences: v.optional(preferencesValidator),
     sourceDocumentIds: v.optional(v.array(v.string())),
+    scopeDocIds: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx)
@@ -79,6 +80,16 @@ export const createWithTurns = mutation({
       }
     }
 
+    const resolvedScopeIds: Id<'documents'>[] = []
+    if (args.scopeDocIds) {
+      for (const raw of args.scopeDocIds) {
+        const normalized = ctx.db.normalizeId('documents', raw)
+        if (!normalized) continue
+        const doc = await ctx.db.get(normalized)
+        if (doc && doc.userId === userId) resolvedScopeIds.push(normalized)
+      }
+    }
+
     const overviewId = await ctx.db.insert('audioOverviews', {
       userId,
       folderId: args.folderId,
@@ -91,6 +102,7 @@ export const createWithTurns = mutation({
       preferences: args.preferences,
       totalDurationMs,
       sourceDocumentIds: resolvedDocIds.length > 0 ? resolvedDocIds : undefined,
+      scopeDocIds: resolvedScopeIds.length > 0 ? resolvedScopeIds : undefined,
     })
 
     return { overviewId }

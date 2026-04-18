@@ -288,6 +288,59 @@ export const updateFolder = mutation({
   },
 })
 
+export const setPreferredMainPane = mutation({
+  args: {
+    folderId: v.id('folders'),
+    pane: v.union(v.literal('chat'), v.literal('podcast')),
+  },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) throw new Error('Unauthenticated')
+    const userId = identity.tokenIdentifier
+    const folder = await ctx.db.get(args.folderId)
+    if (!folder || folder.userId !== userId) throw new Error('Folder not found')
+    await ctx.db.patch(args.folderId, { preferredMainPane: args.pane, updatedAt: Date.now() })
+    return { pane: args.pane }
+  },
+})
+
+export const setReferenceScope = mutation({
+  args: {
+    folderId: v.id('folders'),
+    scope: v.optional(v.object({
+      folderIds: v.optional(v.array(v.id('folders'))),
+      fileIds: v.optional(v.array(v.id('documents'))),
+    })),
+  },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) throw new Error('Unauthenticated')
+    const userId = identity.tokenIdentifier
+    const folder = await ctx.db.get(args.folderId)
+    if (!folder || folder.userId !== userId) throw new Error('Folder not found')
+
+    if (args.scope) {
+      for (const fid of args.scope.folderIds ?? []) {
+        const f = await ctx.db.get(fid)
+        if (!f || f.userId !== userId) throw new Error('Scope folder not owned')
+      }
+      for (const did of args.scope.fileIds ?? []) {
+        const d = await ctx.db.get(did)
+        if (!d || d.userId !== userId) throw new Error('Scope doc not owned')
+      }
+    }
+
+    const nothingSelected = !args.scope
+      || ((args.scope.folderIds?.length ?? 0) === 0 && (args.scope.fileIds?.length ?? 0) === 0)
+
+    await ctx.db.patch(args.folderId, {
+      referenceScope: nothingSelected ? undefined : args.scope,
+      updatedAt: Date.now(),
+    })
+    return { cleared: nothingSelected }
+  },
+})
+
 export const deleteFolder = mutation({
   args: { id: v.id('folders') },
   handler: async (ctx, args) => {

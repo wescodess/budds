@@ -1,20 +1,19 @@
 version: 1
-mode: idle
-current_phase: complete
-spec_slug: audio-overview-phase-4-interjection
+mode: running
+current_phase: implement
+spec_slug: audio-overview-phase-5a-foundation
 input_type: goal
 goal_or_spec: |
-  Audio Overview — Phase 4 Interjection (per notebooklm_audio_overview_plan.md §5.5 + §7).
-  Owner pauses mid-playback, asks a follow-up (text or voice via SpeechRecognition),
-  hosts answer inline (2-4 turns) then playback resumes. Scope: schema
-  audioOverviewInterjections; POST /api/audio-overview/interject; Convex mutations
-  create/listByOverview/deleteInterjection; store spliceTurns; InterjectModal;
-  Player Ask button (auth-only, not public); tests for auth + splice + prompt.
-  Out of scope: mobile Safari voice quirks, multi-language transcription.
+  Audio Overview Phase 5A Foundation — unified Chat + Podcast folder surface,
+  folders.preferredMainPane + folders.referenceScope schema, shared scope picker,
+  mobile expand route. First of three phases per
+  _bmad-output/implementation-artifacts/roadmap-chat-podcast-unification.md.
+  Out of scope: Ask→chat routing (5B), multi-chat migration (5C), regen scope
+  intersection (5C), sidebar counter simplification (5C).
 is_ui: true
-review_rounds: 1
-branch: feat/audio-overview-phase-4-interjection
-pr_url: https://github.com/wescodess/budds/pull/56
+review_rounds: 0
+branch: feat/audio-overview-phase-5a-foundation
+pr_url: null
 paths:
   project_root: /Users/wesleyukadike/Desktop/budds
   artifacts_dir: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts
@@ -24,115 +23,85 @@ paths:
   design_cache: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts/design-screens
 design:
   approved: true
-  approved_at: "2026-04-17T22:02:00Z"
+  approved_at: "2026-04-18T00:30:00Z"
   stitch_project_id: "2926819289448574055"
   reference_screenshot: "_bmad-output/implementation-artifacts/design-screens/audio-overview-phase-2-polish/audio-overview-player-visualizer.png"
   screens:
-    - surface: InterjectModal
-      screen_id: "e3d1a0fc549a432ab9051018f123cf52"
-      title: "Ask the hosts — 3 states (Idle/Voice/Submitting)"
-      local_path: "_bmad-output/implementation-artifacts/design-screens/audio-overview-phase-4-interjection/interject-modal.png"
-      notes: "Three states stacked: Idle-text (Type/Speak toggle, textarea, hint, Cancel+Ask), Voice-listening (pure amber orb with ring pulse, live transcript, Stop button), Submitting (quoted question, 3-dot progress Understanding→Writing reply→Synthesizing, spinner). No avatars."
-    - surface: PlayerWithAskButton
-      screen_id: "a602a320a7384cda9246b2176618fb88"
-      title: "Player with Ask button + in-flight interjection banner"
-      local_path: "_bmad-output/implementation-artifacts/design-screens/audio-overview-phase-4-interjection/player-with-ask.png"
-      notes: "Top: Player with new Ask ghost pill (Mic icon) in the header row alongside History/Customize/Generate new. Bottom: in-flight state with amber-tinted banner at the top ('Hosts are answering \"…\"'), disabled Ask button, paused play button. Host orbs pure amber/gold. Minor Stitch chrome (nav sidebar) won't ship."
+    - surface: UnifiedTwoPaneFolder
+      screen_id: "0961875b17f44899bd25441552a9c7fa"
+      title: "Unified 2-pane folder (Chat + Podcast)"
+      local_path: "_bmad-output/implementation-artifacts/design-screens/audio-overview-phase-5a-foundation/unified-two-pane-folder.png"
+      notes: "Chat pane (left ~58%) with model selector, messages + inline amber citations, scope chip + input. Podcast pane (right ~42%) condensed Player. Pure amber/gold orbs. Stitch added a fake 'Budds' sidebar with Home/Voids/Knowledge/Members — won't ship (real app uses existing sidebar)."
+    - surface: MobileChatWithMiniPlayer
+      screen_id: "cad8bbee2a974fb5bba40abb2f67f69a"
+      title: "Mobile: chat full-screen + sticky mini-player"
+      local_path: "_bmad-output/implementation-artifacts/design-screens/audio-overview-phase-5a-foundation/mobile-chat-with-miniplayer.png"
+      notes: "Full-screen chat on 375px, sticky mini-player at bottom. Scope chip collapses to icon-only on mobile. Clean, reuses Phase-2 sticky bar."
+    - surface: ScopePickerChipInChatInput
+      screen_id: "94799411b8ea4668b2967e0566f50988"
+      title: "Scope chip — 3 states (default / narrowed / menu open)"
+      local_path: "_bmad-output/implementation-artifacts/design-screens/audio-overview-phase-5a-foundation/scope-picker-chip.png"
+      notes: "Default: muted pill 'All docs · folder + subfolders'. Narrowed: amber-tinted '3 of 8 docs' with X-to-clear. Menu open: dropdown with folder-tree checkbox picker + Select all/Clear/Apply footer."
+    - surface: ScopePickerInCustomizeDialog
+      screen_id: "1d29196649e34766bd36e0a2bad85751"
+      title: "Customize dialog — scope section (collapsed + expanded)"
+      local_path: "_bmad-output/implementation-artifacts/design-screens/audio-overview-phase-5a-foundation/scope-picker-customize-dialog.png"
+      notes: "Collapsed: 'Using folder default · 8 docs' + Override ghost button. Expanded: inline folder-tree picker with per-doc checkboxes + Cancel override link. Sits above Length/Complexity/Voices."
+    - surface: ScopePickerEmptyState
+      screen_id: "348d9732b9fd46f69fedf2f9df03dd71"
+      title: "Scope picker — empty state (no indexed docs)"
+      local_path: "_bmad-output/implementation-artifacts/design-screens/audio-overview-phase-5a-foundation/scope-picker-empty-state.png"
+      notes: "Composer shows 'No scope · add docs first' disabled chip. Empty-state card with Upload icon + 'No documents yet' + primary 'Go to Documents tab' + 'Learn about sources →' link."
   surfaces_requested:
-    - InterjectModal
-    - PlayerWithAskButton
+    - UnifiedTwoPaneFolder
+    - MobileChatWithMiniPlayer
+    - ScopePickerChipInChatInput
+    - ScopePickerInCustomizeDialog
+    - ScopePickerEmptyState
   design_system_id: "assets/11175050301981891392"
 escalation:
   pending: null
   log:
-    - id: "design-approval-audio-overview-phase-4-interjection-01"
-      question: "Approve Phase 4 design screens (InterjectModal + PlayerWithAskButton)?"
+    - id: "design-approval-audio-overview-phase-5a-foundation-01"
+      question: "Approve Phase 5A design screens?"
       answer: "approve"
       followed_default: null
-      asked_at: "2026-04-17T21:59:00Z"
-      answered_at: "2026-04-17T22:02:00Z"
+      asked_at: "2026-04-18T00:00:00Z"
+      answered_at: "2026-04-18T00:30:00Z"
       auto_resolved: false
       raised_from_state: design
 decisions_log:
-  - ts: 2026-04-17
-    decision: "Synchronous server route (no task integration) for interjection generation"
-    rationale: "Fixed overhead ~5-10s for 3 turns is acceptable blocking latency; avoids task-row bookkeeping for a short flow; UI shows a spinner with 8s safety net. Can be moved to tasks if latency becomes a complaint."
-  - ts: 2026-04-17
-    decision: "Reuse overview.voiceProfile for interjection TTS (no new voice picker)"
-    rationale: "Consistency — the answer hosts should sound like the podcast hosts. Customizing voices per interjection adds UX friction without clear value."
-  - ts: 2026-04-17
-    decision: "Ask button on authenticated Player only; hidden on PublicAudioShell"
-    rationale: "Public listeners are capability bearers, not authors — can't mutate the overview. Phase 3 established the auth-gated vs. read-only surface split."
+  - ts: 2026-04-18
+    decision: "Phase 5 split into 5A (foundation) / 5B (chat-interject) / 5C (polish). 5A is this spec."
+    rationale: "Roadmap doc approved. Three-PR sequence gives each phase a shippable increment; 5A standalone delivers unified layout + scope picker."
+  - ts: 2026-04-18
+    decision: "Voids of type chat/podcast collapse to folders.preferredMainPane preference; both Create-Void tiles stay as layout shortcuts."
+    rationale: "User answer #1. Preserves the two entry points but removes the multiple-voids-per-type data model complexity."
+  - ts: 2026-04-18
+    decision: "folders.referenceScope persisted in Convex DB (not localStorage)"
+    rationale: "User answer #9. Cross-device consistency."
+  - ts: 2026-04-18
+    decision: "Recursive subfolder inclusion by default for scope"
+    rationale: "User answer #4. Deep recursion walks folders tree."
+  - ts: 2026-04-18
+    decision: "Phase-4 InterjectModal stays in 5A; removed in 5B"
+    rationale: "Roadmap phasing. 5A ships unified layout without touching the ask flow — lower blast radius."
 run_log:
-  - ts: 2026-04-17
+  - ts: 2026-04-18
     event: start
-    detail: "Audio Overview Phase 4 Interjection kicked off. is_ui=true, surfaces=[InterjectModal, Player+Ask]. Previous spec Phase 3 merged via PR #55 commit 2b84d75."
-  - ts: 2026-04-17
+    detail: "Phase 5A Foundation kicked off. Previous Phase 4 shipped via PR #56 + hotfixes #57/#58. Roadmap committed on dev at 5b4ec94."
+  - ts: 2026-04-18
     event: intake_complete
-    detail: "slug=audio-overview-phase-4-interjection, input_type=goal, is_ui=true."
-  - ts: 2026-04-17
+    detail: "slug=audio-overview-phase-5a-foundation, is_ui=true, 5 design surfaces."
+  - ts: 2026-04-18
     event: phase_transition
     detail: "intake → design"
-  - ts: 2026-04-17
+  - ts: 2026-04-18
     event: design_ready
-    detail: "Stitch generated 2 screens: InterjectModal=e3d1a0fc549a432ab9051018f123cf52 (3 states: idle/voice/submitting), Player+Ask=a602a320a7384cda9246b2176618fb88 (idle + in-flight banner). PNGs in design-screens/audio-overview-phase-4-interjection/."
-  - ts: 2026-04-17
+    detail: "Stitch generated 5 screens (one retry for ScopePickerChipInChatInput after initial ETIMEDOUT). PNGs saved to design-screens/audio-overview-phase-5a-foundation/. No avatars — all orbs pure amber/gold. Stitch added imaginary Budds sidebar chrome on UnifiedTwoPaneFolder which won't ship (real app uses existing sidebar)."
+  - ts: 2026-04-18
     event: escalation_raised
-    detail: "Design approval for 2 Phase 4 surfaces. No auto-resolve."
-  - ts: 2026-04-17
-    event: escalation_resolved
-    detail: "User approved. Stitch side-nav chrome + phase-by-phase progress dots noted as Stitch artifacts — real implementation uses indeterminate spinner + 8s safety net."
-  - ts: 2026-04-17
-    event: phase_transition
-    detail: "design → clarify → spec (clarify auto-resolved: explicit goal, clean tree, non-zero blast radius → plan-code-review)"
-  - ts: 2026-04-17
-    event: spec_written
-    detail: "spec-audio-overview-phase-4-interjection.md written, status=ready-for-dev, ~2100 tokens. Auto-decision [K]: cohesive cross-layer, one-sprint Phase 4 per plan §7."
-  - ts: 2026-04-17
-    event: phase_transition
-    detail: "spec → implement"
-  - ts: 2026-04-17
-    event: branch_carved
-    detail: "feat/audio-overview-phase-4-interjection off dev at 8d50d35."
-  - ts: 2026-04-17
-    event: implement_complete
-    detail: "12 files: schema (audioOverviewInterjections + 2 indexes), convex/audioOverviewInterjections.ts (create/listByOverview/getTurnUrls/deleteInterjection), convex/audioOverviewInterjections.test.ts (+13), server/utils/interjection-prompt.ts + .test.ts (+15), server/api/audio-overview/interject.post.ts, app/composables/useAudioOverviewStore.ts (spliceTurns), app/components/audio-overview/InterjectModal.vue (text/voice/submitting), AudioOverviewPlayer.vue (Ask button + banner), AudioOverviewShell.vue (host modal + splice+resume), tests/component/audio-overview/store-splice.test.ts (+5)."
-  - ts: 2026-04-17
-    event: checks_complete
-    detail: "pnpm test 429/429 (+28 Phase 4 assertions). pnpm test:component 197/30 baseline unchanged (+5 from store-splice tests)."
-  - ts: 2026-04-17
-    event: phase_transition
-    detail: "implement → review"
-  - ts: 2026-04-17
-    event: review_round_1
-    detail: "blind-hunter FAIL (1C+3M+2Min), edge-case-hunter FAIL (4M+2Min), acceptance-auditor PASS (5/5). 7 unique defects consolidated after dedup. Loopback triggered."
-  - ts: 2026-04-17
-    event: loopback_amended
-    detail: "Spec Change Log R1 populated with 7 fixes: spliceApplied flag, submit-start event, tautology cleanup, afterIndex snapshot, AbortController cancel wiring, SR handler detach, 20s timeout."
-  - ts: 2026-04-17
-    event: phase_transition
-    detail: "review → implement (R1 loopback)"
-  - ts: 2026-04-17
-    event: r1_fixes_complete
-    detail: "All 7 R1 amendments applied. Tests: 429/429 main, 15/15 audio-overview component (+5 splice tests)."
-  - ts: 2026-04-17
-    event: review_round_2
-    detail: "Focused review: PASS. All 7 fixes landed. One non-blocking note (aborted may emit twice on user cancel — Shell handler idempotent, no observable defect)."
-  - ts: 2026-04-17
-    event: phase_transition
-    detail: "review → commit"
-  - ts: 2026-04-17
-    event: commit
-    detail: "feat(audio-overview): Phase 4 interjection. 17 files, +1811/-79. Commit 4b41744."
-  - ts: 2026-04-17
-    event: pr_opened
-    detail: "PR #56 against dev."
-  - ts: 2026-04-17
-    event: merge_complete
-    detail: "PR #56 merged. Merge commit f3550cee070816e9f520968cea00302ffb7dbd49. Branch deleted."
-  - ts: 2026-04-17
-    event: run_complete
-    detail: "Audio Overview Phase 4 Interjection shipped. Rounds: 2 (1 FAIL loopback + 7 R1 amends, 1 PASS). The Audio Overview feature series is now complete end-to-end (Phase 1 MVP #49 → Phase 2 Polish #54 → Phase 3 Share+Ops #55 → Phase 4 Interjection #56)."
+    detail: "Design approval for 5 Phase 5A surfaces. No auto-resolve."
 config:
   notifications:
     telegram:

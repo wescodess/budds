@@ -1144,3 +1144,128 @@ describe('folders.resolveScope', () => {
     expect(result.ownedFolderIds).toEqual([rootId])
   })
 })
+
+describe('folders.setPreferredMainPane (Phase 5A)', () => {
+  it('[P0] rejects unauthenticated callers', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'F' })
+    await expect(
+      t.mutation(api.folders.setPreferredMainPane, { folderId, pane: 'chat' }),
+    ).rejects.toThrow(/Unauthenticated/)
+  })
+
+  it('[P0] rejects non-owners', async () => {
+    const t = convexTest(schema, modules)
+    const asA = t.withIdentity(TEST_IDENTITY)
+    const asB = t.withIdentity(OTHER_IDENTITY)
+    const folderId = await asA.mutation(api.folders.createFolder, { name: 'F' })
+    await expect(
+      asB.mutation(api.folders.setPreferredMainPane, { folderId, pane: 'podcast' }),
+    ).rejects.toThrow(/not found/)
+  })
+
+  it('[P0] persists chat and podcast values for owner', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'F' })
+
+    await asUser.mutation(api.folders.setPreferredMainPane, { folderId, pane: 'podcast' })
+    let row = await t.run(async (ctx) => ctx.db.get(folderId))
+    expect(row?.preferredMainPane).toBe('podcast')
+
+    await asUser.mutation(api.folders.setPreferredMainPane, { folderId, pane: 'chat' })
+    row = await t.run(async (ctx) => ctx.db.get(folderId))
+    expect(row?.preferredMainPane).toBe('chat')
+  })
+})
+
+describe('folders.setReferenceScope (Phase 5A)', () => {
+  it('[P0] rejects unauthenticated', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'F' })
+    await expect(
+      t.mutation(api.folders.setReferenceScope, { folderId, scope: undefined }),
+    ).rejects.toThrow(/Unauthenticated/)
+  })
+
+  it('[P0] rejects non-owners', async () => {
+    const t = convexTest(schema, modules)
+    const asA = t.withIdentity(TEST_IDENTITY)
+    const asB = t.withIdentity(OTHER_IDENTITY)
+    const folderId = await asA.mutation(api.folders.createFolder, { name: 'F' })
+    await expect(
+      asB.mutation(api.folders.setReferenceScope, { folderId, scope: undefined }),
+    ).rejects.toThrow(/not found/)
+  })
+
+  it('[P0] rejects scope containing folders the caller does not own', async () => {
+    const t = convexTest(schema, modules)
+    const asA = t.withIdentity(TEST_IDENTITY)
+    const asB = t.withIdentity(OTHER_IDENTITY)
+    const myFolder = await asA.mutation(api.folders.createFolder, { name: 'Mine' })
+    const theirFolder = await asB.mutation(api.folders.createFolder, { name: 'Theirs' })
+    await expect(
+      asA.mutation(api.folders.setReferenceScope, {
+        folderId: myFolder,
+        scope: { folderIds: [theirFolder], fileIds: [] },
+      }),
+    ).rejects.toThrow(/not owned/)
+  })
+
+  it('[P0] persists owned-folder + owned-file scope', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Parent' })
+    const sub = await asUser.mutation(api.folders.createSubfolder, { parentId: folderId, name: 'Sub' })
+
+    const fileId = await t.run(async (ctx) => {
+      return ctx.storage.store(new Blob([new Uint8Array([1, 2, 3])], { type: 'application/pdf' }))
+    })
+    const docId = await t.run(async (ctx) => ctx.db.insert('documents', {
+      userId: TEST_IDENTITY.tokenIdentifier,
+      folderId: sub,
+      filename: 'a.pdf',
+      fileId: fileId as any,
+      status: 'success',
+      fileSize: 3,
+    }))
+
+    await asUser.mutation(api.folders.setReferenceScope, {
+      folderId,
+      scope: { folderIds: [sub], fileIds: [docId] },
+    })
+    const row = await t.run(async (ctx) => ctx.db.get(folderId))
+    expect(row?.referenceScope?.folderIds).toContain(sub)
+    expect(row?.referenceScope?.fileIds).toContain(docId)
+  })
+
+  it('[P0] clears scope when passed empty / undefined', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'F' })
+    const sub = await asUser.mutation(api.folders.createSubfolder, { parentId: folderId, name: 'S' })
+
+    await asUser.mutation(api.folders.setReferenceScope, {
+      folderId, scope: { folderIds: [sub], fileIds: [] },
+    })
+    let row = await t.run(async (ctx) => ctx.db.get(folderId))
+    expect(row?.referenceScope?.folderIds).toContain(sub)
+
+    const r1 = await asUser.mutation(api.folders.setReferenceScope, { folderId, scope: undefined })
+    expect(r1.cleared).toBe(true)
+    row = await t.run(async (ctx) => ctx.db.get(folderId))
+    expect(row?.referenceScope).toBeUndefined()
+
+    await asUser.mutation(api.folders.setReferenceScope, {
+      folderId, scope: { folderIds: [sub], fileIds: [] },
+    })
+    const r2 = await asUser.mutation(api.folders.setReferenceScope, {
+      folderId, scope: { folderIds: [], fileIds: [] },
+    })
+    expect(r2.cleared).toBe(true)
+    row = await t.run(async (ctx) => ctx.db.get(folderId))
+    expect(row?.referenceScope).toBeUndefined()
+  })
+})
