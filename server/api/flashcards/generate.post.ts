@@ -3,6 +3,7 @@ import { api } from '../../../convex/_generated/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 import type { AISearchChunk } from '../../utils/ai-search'
 import { readConfiguredRuntimeValue } from '../../utils/runtime-config'
+import { requireRateLimit } from '../../utils/rate-limit'
 
 const SEED_QUERY = 'key terms, definitions, facts to memorize'
 
@@ -21,6 +22,7 @@ function makeConvexClient(event: any): ConvexHttpClient | null {
 }
 
 export default defineEventHandler(async (event) => {
+  requireRateLimit(event, 5)
   const userId = getConvexTokenIdentifier(event)
 
   const body = await readBody<{
