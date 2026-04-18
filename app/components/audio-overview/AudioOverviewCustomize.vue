@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { X, Sparkles, ChevronDown, Clock } from 'lucide-vue-next'
+import { X, Sparkles, ChevronDown, Clock, FolderTree } from 'lucide-vue-next'
 import {
   ALL_VOICES,
   type HostVoice,
@@ -18,6 +18,8 @@ const props = withDefaults(defineProps<{
   submitting?: boolean
   submitLabel?: string
   quotaState?: { used: number, cap: number } | null
+  folderScopeDocCount?: number
+  folderScopeIsNarrowed?: boolean
 }>(), {
   initialLengthMinutes: 10,
   initialComplexity: 'beginner',
@@ -26,6 +28,8 @@ const props = withDefaults(defineProps<{
   submitting: false,
   submitLabel: 'Generate',
   quotaState: null,
+  folderScopeDocCount: 0,
+  folderScopeIsNarrowed: false,
 })
 
 const emit = defineEmits<{
@@ -126,6 +130,21 @@ const quotaExceeded = computed(() => {
       </div>
 
       <div class="mt-5 space-y-4" :class="quotaExceeded ? 'opacity-40 pointer-events-none' : ''">
+        <div
+          v-if="props.folderScopeDocCount > 0"
+          data-testid="audio-overview-customize-scope-row"
+          class="flex items-center gap-2 rounded-lg border border-border/60 bg-background/40 px-3 py-2"
+        >
+          <FolderTree class="h-3.5 w-3.5 shrink-0 text-primary" />
+          <p class="min-w-0 flex-1 truncate font-inter text-[12px] text-foreground">
+            <span class="font-medium">Scope:</span>
+            {{ props.folderScopeIsNarrowed ? `${props.folderScopeDocCount} selected` : `all ${props.folderScopeDocCount} docs in this folder` }}
+          </p>
+          <span class="shrink-0 font-inter text-[11px] text-muted-foreground">
+            Edit in chat input
+          </span>
+        </div>
+
         <div data-testid="audio-overview-length">
           <p class="font-inter text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
             Length
