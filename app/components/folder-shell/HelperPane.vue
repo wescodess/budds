@@ -4,12 +4,22 @@ import { Sheet, SheetContent } from '@/components/ui/sheet'
 
 const props = defineProps<{
   mobile?: boolean
+  excludeTabs?: string[]
 }>()
 
 const { isOpen, tabs, activeTabId, toggle, close } = useHelperPane()
 
+const visibleTabs = computed(() =>
+  props.excludeTabs?.length
+    ? tabs.value.filter(t => !props.excludeTabs!.includes(t.id))
+    : tabs.value,
+)
+
 const sheetOpen = computed({
-  get: () => props.mobile && isOpen.value,
+  get: () => {
+    if (!props.mobile || !isOpen.value) return false
+    return visibleTabs.value.some(t => t.id === activeTabId.value)
+  },
   set: (v: boolean) => { if (!v) close() },
 })
 </script>
@@ -17,9 +27,9 @@ const sheetOpen = computed({
 <template>
   <template v-if="!props.mobile">
     <div v-if="isOpen" class="flex h-full min-h-0 flex-col overflow-hidden">
-      <div v-if="tabs.length > 1" class="flex shrink-0 items-center gap-1 border-b border-border/60 bg-card/50 px-2 py-1.5">
+      <div v-if="visibleTabs.length > 1" class="flex shrink-0 items-center gap-1 border-b border-border/60 bg-card/50 px-2 py-1.5">
         <button
-          v-for="tab in tabs"
+          v-for="tab in visibleTabs"
           :key="tab.id"
           type="button"
           role="tab"
@@ -54,7 +64,7 @@ const sheetOpen = computed({
           <div class="flex shrink-0 items-center justify-between border-b border-border/60 bg-card/50 px-2 py-1.5">
             <div class="flex items-center gap-1">
               <button
-                v-for="tab in tabs"
+                v-for="tab in visibleTabs"
                 :key="tab.id"
                 type="button"
                 role="tab"
