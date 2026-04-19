@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
+import { Send } from 'lucide-vue-next'
+import { useMediaQuery } from '@vueuse/core'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import AudioOverviewCard from './AudioOverviewCard.vue'
 import AudioOverviewGenerating from './AudioOverviewGenerating.vue'
 import AudioOverviewPlayer from './AudioOverviewPlayer.vue'
@@ -32,6 +35,16 @@ const emit = defineEmits<{
     timeMs: number
     quotedText: string
     sourceFilename?: string
+  }]
+  'podcast-ask-submit': [payload: {
+    question: string
+    context: {
+      overviewId: Id<'audioOverviews'>
+      turnIndex: number
+      timeMs: number
+      quotedText: string
+      sourceFilename?: string
+    }
   }]
 }>()
 
@@ -245,17 +258,52 @@ function handleRequestShare() {
   shareOpen.value = true
 }
 
+const isMobile = useMediaQuery('(max-width: 767px)')
+const askSheetOpen = ref(false)
+const askSheetQuestion = ref('')
+const askSheetContext = ref<{
+  overviewId: Id<'audioOverviews'>
+  turnIndex: number
+  timeMs: number
+  quotedText: string
+  sourceFilename?: string
+} | null>(null)
+const askInputRef = ref<HTMLTextAreaElement | null>(null)
+
+function formatAskTime(ms: number) {
+  const total = Math.max(0, Math.round(ms / 1000))
+  const m = Math.floor(total / 60)
+  const s = total % 60
+  return `${m}:${s.toString().padStart(2, '0')}`
+}
+
 function handleRequestAsk() {
   if (!activeOverview.value) return
   const turn = store.activeTurn.value
-  const overviewTitle = activeOverview.value.title
-  emit('podcast-ask', {
+  const context = {
     overviewId: activeOverview.value._id,
     turnIndex: store.currentTurnIndex.value,
     timeMs: store.currentTimeMs.value,
     quotedText: turn?.text?.slice(0, 120) ?? '',
     sourceFilename: undefined,
-  })
+  }
+  if (isMobile.value) {
+    askSheetContext.value = context
+    askSheetQuestion.value = ''
+    askSheetOpen.value = true
+    nextTick(() => askInputRef.value?.focus())
+  } else {
+    emit('podcast-ask', context)
+  }
+}
+
+function submitAskSheet() {
+  const q = askSheetQuestion.value.trim()
+  if (!q || !askSheetContext.value) return
+  emit('podcast-ask-submit', { question: q, context: askSheetContext.value })
+  askSheetOpen.value = false
+  askSheetQuestion.value = ''
+  askSheetContext.value = null
 }
 
 
@@ -351,6 +399,37 @@ defineExpose({
       :share-token="shareTarget?.shareToken ?? null"
       :published-at="shareTarget?.publishedAt ?? null"
     />
+
+    <Sheet v-model:open="askSheetOpen">
+      <SheetContent side="bottom" class="rounded-t-2xl px-4 pb-6 pt-4">
+        <SheetHeader class="pb-3">
+          <SheetTitle class="text-base">Ask the hosts</SheetTitle>
+        </SheetHeader>
+        <div v-if="askSheetContext" class="mb-3 flex items-center gap-2 rounded-lg bg-primary/10 px-3 py-2">
+          <span class="shrink-0 text-xs text-primary">🎙</span>
+          <p class="min-w-0 truncate font-inter text-xs text-foreground">
+            @ {{ formatAskTime(askSheetContext.timeMs) }} · "{{ askSheetContext.quotedText }}"
+          </p>
+        </div>
+        <form class="flex items-end gap-2" @submit.prevent="submitAskSheet">
+          <textarea
+            ref="askInputRef"
+            v-model="askSheetQuestion"
+            rows="2"
+            placeholder="What do you want to ask?"
+            class="min-h-10 flex-1 resize-none rounded-lg border border-border/60 bg-background px-3 py-2 font-inter text-sm text-foreground placeholder:text-muted-foreground focus:border-primary/60 focus:outline-none"
+            @keydown.enter.exact.prevent="submitAskSheet"
+          />
+          <button
+            type="submit"
+            :disabled="!askSheetQuestion.trim()"
+            class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground transition-opacity disabled:opacity-40"
+          >
+            <Send class="h-4 w-4" />
+          </button>
+        </form>
+      </SheetContent>
+    </Sheet>
 
   </div>
 </template>

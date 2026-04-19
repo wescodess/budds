@@ -681,6 +681,10 @@ function handlePodcastAsk(context: InterjectionContext) {
   if (chatInputRef.value?.focus) chatInputRef.value.focus()
 }
 
+async function handlePodcastAskSubmit(payload: { question: string; context: InterjectionContext }) {
+  await sendMessage(payload.question, referenceScope.toPayload(), payload.context)
+}
+
 function formatInterjectionBadgeTime(ms: number): string {
   const total = Math.max(0, Math.round(ms / 1000))
   const minutes = Math.floor(total / 60)
@@ -934,6 +938,7 @@ async function handleImportLink(url: string) {
             :scope="referenceScope"
             :interjection-in-flight="interjectionInFlight"
             @podcast-ask="handlePodcastAsk"
+            @podcast-ask-submit="handlePodcastAskSubmit"
           />
         </div>
         <div v-else-if="isPodcastMain && isDesktop" class="flex min-h-0 min-w-0 flex-1 overflow-hidden">
@@ -946,6 +951,7 @@ async function handleImportLink(url: string) {
                 :interjection-in-flight="interjectionInFlight"
                 @generation-started="() => { if (isDesktop) helperMode = 'podcast' }"
                 @podcast-ask="handlePodcastAsk"
+            @podcast-ask-submit="handlePodcastAskSubmit"
               />
             </ResizablePanel>
             <ResizableHandle with-handle>
@@ -1040,7 +1046,7 @@ async function handleImportLink(url: string) {
                       @update:model-value="setChatHelperTab"
                     />
                     <div v-if="helperMode === 'podcast'" class="min-h-0 flex-1 overflow-hidden">
-                      <AudioOverviewShell :folder-id="folderId" :scope="referenceScope" :interjection-in-flight="interjectionInFlight" @podcast-ask="handlePodcastAsk" />
+                      <AudioOverviewShell :folder-id="folderId" :scope="referenceScope" :interjection-in-flight="interjectionInFlight" @podcast-ask="handlePodcastAsk" @podcast-ask-submit="handlePodcastAskSubmit" />
                     </div>
                     <ChatSourcePanel
                       v-else
@@ -1205,7 +1211,7 @@ async function handleImportLink(url: string) {
                       @update:model-value="setChatHelperTab"
                     />
                     <div v-if="helperMode === 'podcast'" class="min-h-0 flex-1 overflow-hidden">
-                      <AudioOverviewShell :folder-id="folderId" :scope="referenceScope" :interjection-in-flight="interjectionInFlight" @podcast-ask="handlePodcastAsk" />
+                      <AudioOverviewShell :folder-id="folderId" :scope="referenceScope" :interjection-in-flight="interjectionInFlight" @podcast-ask="handlePodcastAsk" @podcast-ask-submit="handlePodcastAskSubmit" />
                     </div>
                     <ChatSourcePanel
                       v-else
@@ -1332,6 +1338,7 @@ async function handleImportLink(url: string) {
           :interjection-in-flight="interjectionInFlight"
           @generation-started="() => { if (isDesktop) helperMode = 'tasks' }"
           @podcast-ask="handlePodcastAsk"
+            @podcast-ask-submit="handlePodcastAskSubmit"
         />
       </UiTabsContent>
 
