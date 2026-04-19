@@ -61,6 +61,16 @@ const workspaceRef = ref<HTMLElement | null>(null)
 const isPodcastMain = computed(() =>
   (folder.value as any)?.preferredMainPane === 'podcast',
 )
+async function togglePodcastMain() {
+  const next = isPodcastMain.value ? 'chat' : 'podcast'
+  try {
+    await setPreferredMainPaneMutation.mutate({ folderId: folderId.value, pane: next } as any)
+  } catch { /* best-effort */ }
+  if (activeTab.value !== 'chat') {
+    activeTab.value = 'chat'
+    await router.replace({ query: { ...(route.query ?? {}), tab: 'chat' } })
+  }
+}
 const seededFolder = computed(() =>
   folder.value
   ?? allFolders.value?.find(candidate => candidate._id === folderId.value)
@@ -154,17 +164,13 @@ async function onCreateVoid(payload: { type: VoidType; name?: string }) {
       try {
         await setPreferredMainPaneMutation.mutate({ folderId: folderId.value, pane: 'podcast' } as any)
       } catch { /* best-effort */ }
-      if (!isDesktop.value) {
-        void navigateTo(`/app/folders/${folderId.value}/podcast`)
-      } else {
-        activeTab.value = 'audio-overview'
-        const { conversationId: _dropC, voidId: _dropV, ...rest } = route.query ?? {}
-        await router.replace({ query: { ...rest, tab: 'audio-overview' } })
-        await nextTick()
-        try {
-          await audioOverviewShellRef.value?.startGeneration?.()
-        } catch { /* shell surfaces its own error toast */ }
-      }
+      activeTab.value = 'chat'
+      const { conversationId: _dropC, voidId: _dropV, ...rest } = route.query ?? {}
+      await router.replace({ query: { ...rest, tab: 'chat' } })
+      await nextTick()
+      try {
+        await audioOverviewShellRef.value?.startGeneration?.()
+      } catch { /* shell surfaces its own error toast */ }
     } else {
       activeTab.value = type
       await router.replace({ query: { ...(route.query ?? {}), tab: type } })
@@ -306,15 +312,9 @@ watch(() => route.query?.tab, async () => {
     try {
       await setPreferredMainPaneMutation.mutate({ folderId: folderId.value, pane: 'podcast' } as any)
     } catch { /* best-effort */ }
-    if (!isDesktop.value) {
-      await router.replace({ query: { ...rest, tab: 'chat' } })
-      activeTab.value = 'chat'
-      void navigateTo(`/app/folders/${folderId.value}/podcast`)
-      return
-    }
     await router.replace({ query: { ...rest, tab: 'chat' } })
     activeTab.value = 'chat'
-    helperMode.value = 'podcast'
+    if (isDesktop.value) helperMode.value = 'podcast'
     return
   }
   activeTab.value = initialTab.value
@@ -885,7 +885,7 @@ async function handleImportLink(url: string) {
             data-testid="folder-header-podcast"
             aria-label="Podcast"
             class="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground lg:hidden"
-            @click="navigateTo(`/app/folders/${folderId}/podcast`)"
+            @click="togglePodcastMain()"
           >
             <Mic class="h-4 w-4" />
           </button>
@@ -927,7 +927,16 @@ async function handleImportLink(url: string) {
         </UiTabsList>
 
       <UiTabsContent value="chat" class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <div v-if="isPodcastMain && isDesktop" class="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+        <div v-if="isPodcastMain && !isDesktop" class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          <AudioOverviewShell
+            ref="audioOverviewShellRef"
+            :folder-id="folderId"
+            :scope="referenceScope"
+            :interjection-in-flight="interjectionInFlight"
+            @podcast-ask="handlePodcastAsk"
+          />
+        </div>
+        <div v-else-if="isPodcastMain && isDesktop" class="flex min-h-0 min-w-0 flex-1 overflow-hidden">
           <ResizablePanelGroup direction="horizontal" class="min-w-0 flex-1">
             <ResizablePanel :default-size="72" :min-size="40" class="min-h-0 min-w-0">
               <AudioOverviewShell

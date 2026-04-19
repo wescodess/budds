@@ -120,16 +120,11 @@ const onPublicAudioRoute = computed(() =>
   typeof route.path === 'string' && route.path.startsWith('/audio/'),
 )
 
-const onPodcastExpandRoute = computed(() =>
-  typeof route.path === 'string' && /^\/app\/folders\/[^/]+\/podcast$/.test(route.path),
-)
-
 const visible = computed(() =>
   import.meta.client
   && overviewId.value !== null
   && !onActiveFolderRoute.value
-  && !onPublicAudioRoute.value
-  && !onPodcastExpandRoute.value,
+  && !onPublicAudioRoute.value,
 )
 
 onMounted(() => { loadPosition() })
@@ -190,10 +185,7 @@ async function handleExpand() {
     void navigateTo('/')
     return
   }
-  const target = isMobile.value
-    ? `/app/folders/${fid}/podcast`
-    : `/app/folders/${fid}`
-  void navigateTo(target)
+  void navigateTo(`/app/folders/${fid}`)
 }
 </script>
 
