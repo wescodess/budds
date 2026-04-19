@@ -16,8 +16,11 @@ export const createAuth = (ctx: GenericCtx<DataModel>) => {
     || normalizeUrl(process.env.NUXT_PUBLIC_SITE_URL)
     || 'http://localhost:3002'
 
+  const convexSiteUrl = normalizeUrl(process.env.CONVEX_SITE_URL)
+
   const trustedOrigins = Array.from(new Set([
     siteUrl,
+    ...(convexSiteUrl ? [convexSiteUrl] : []),
     'https://budds.pages.dev',
     'http://localhost:3002',
     'http://127.0.0.1:3002',
