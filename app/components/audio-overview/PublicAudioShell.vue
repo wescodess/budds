@@ -44,9 +44,9 @@ const {
 const audioEl = ref<HTMLAudioElement | null>(null)
 const preloadEl = ref<HTMLAudioElement | null>(null)
 
-onMounted(() => {
-  attachAudio(audioEl.value, preloadEl.value)
-})
+watch([audioEl, preloadEl], ([el, pre]) => {
+  if (el) attachAudio(el, pre)
+}, { immediate: true })
 
 const loading = computed(() => overviewData.value === undefined)
 const notFound = computed(() => overviewData.value === null)
