@@ -38,7 +38,7 @@ function getWorkersAiConfig() {
     (config as { cloudflareWorkersAiToken?: string }).cloudflareWorkersAiToken,
     'NUXT_CLOUDFLARE_WORKERS_AI_TOKEN',
     'CLOUDFLARE_WORKERS_AI_TOKEN',
-  ) ?? readConfiguredRuntimeValue(
+  ) || readConfiguredRuntimeValue(
     config.cloudflareAiSearchToken,
     'NUXT_CLOUDFLARE_AI_SEARCH_TOKEN',
     'CLOUDFLARE_AI_SEARCH_TOKEN',
