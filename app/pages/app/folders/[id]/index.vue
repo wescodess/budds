@@ -959,7 +959,7 @@ async function handleImportLink(url: string) {
                 type="button"
                 data-testid="source-panel-flip"
                 :aria-label="flipPanelAriaLabel"
-                class="inline-flex h-6 w-6 items-center justify-center rounded border bg-background text-foreground shadow-sm transition-colors hover:bg-accent"
+                class="inline-flex h-6 w-6 items-center justify-center rounded border bg-background text-foreground shadow-sm transition-all hover:bg-accent hover:shadow-[0_0_8px_rgba(215,165,51,0.3)]"
                 @pointerdown="handlePanelFlipPointerDown"
                 @click.stop="handlePanelFlipClick"
               >
@@ -971,7 +971,7 @@ async function handleImportLink(url: string) {
                 <template v-if="!hasIndexedDocuments">
                   <div class="flex flex-1 items-center justify-center text-muted-foreground">
                     <div class="text-center">
-                      <FileText class="mx-auto mb-3 h-12 w-12 opacity-40" />
+                      <FileText class="mx-auto mb-3 h-12 w-12 opacity-40 animate-float-idle" />
                       <p class="text-lg font-medium">Upload documents to start chatting</p>
                     </div>
                   </div>
@@ -1064,7 +1064,7 @@ async function handleImportLink(url: string) {
                     type="button"
                     data-testid="source-panel-flip"
                     :aria-label="flipPanelAriaLabel"
-                    class="inline-flex h-6 w-6 items-center justify-center rounded border bg-background text-foreground shadow-sm transition-colors hover:bg-accent"
+                    class="inline-flex h-6 w-6 items-center justify-center rounded border bg-background text-foreground shadow-sm transition-all hover:bg-accent hover:shadow-[0_0_8px_rgba(215,165,51,0.3)]"
                     @pointerdown="handlePanelFlipPointerDown"
                     @click.stop="handlePanelFlipClick"
                   >
@@ -1076,7 +1076,7 @@ async function handleImportLink(url: string) {
                     <template v-if="!hasIndexedDocuments">
                       <div class="flex flex-1 items-center justify-center text-muted-foreground">
                         <div class="text-center">
-                          <FileText class="mx-auto mb-3 h-12 w-12 opacity-40" />
+                          <FileText class="mx-auto mb-3 h-12 w-12 opacity-40 animate-float-idle" />
                           <p class="text-lg font-medium">Upload documents to start chatting</p>
                         </div>
                       </div>
@@ -1138,7 +1138,7 @@ async function handleImportLink(url: string) {
                     <template v-if="!hasIndexedDocuments">
                       <div class="flex flex-1 items-center justify-center text-muted-foreground">
                         <div class="text-center">
-                          <FileText class="mx-auto mb-3 h-12 w-12 opacity-40" />
+                          <FileText class="mx-auto mb-3 h-12 w-12 opacity-40 animate-float-idle" />
                           <p class="text-lg font-medium">Upload documents to start chatting</p>
                         </div>
                       </div>
@@ -1197,7 +1197,7 @@ async function handleImportLink(url: string) {
                     type="button"
                     data-testid="source-panel-flip"
                     :aria-label="flipPanelAriaLabel"
-                    class="inline-flex h-6 w-6 items-center justify-center rounded border bg-background text-foreground shadow-sm transition-colors hover:bg-accent"
+                    class="inline-flex h-6 w-6 items-center justify-center rounded border bg-background text-foreground shadow-sm transition-all hover:bg-accent hover:shadow-[0_0_8px_rgba(215,165,51,0.3)]"
                     @pointerdown="handlePanelFlipPointerDown"
                     @click.stop="handlePanelFlipClick"
                   >
@@ -1232,7 +1232,7 @@ async function handleImportLink(url: string) {
             <template v-if="!hasIndexedDocuments">
               <div class="flex flex-1 items-center justify-center text-muted-foreground">
                 <div class="text-center">
-                  <FileText class="mx-auto mb-3 h-12 w-12 opacity-40" />
+                  <FileText class="mx-auto mb-3 h-12 w-12 opacity-40 animate-float-idle" />
                   <p class="text-lg font-medium">Upload documents to start chatting</p>
                 </div>
               </div>
