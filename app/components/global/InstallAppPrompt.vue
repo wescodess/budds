@@ -189,8 +189,11 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div
+  <Motion
     v-if="shouldShowPrompt"
+    :initial="{ opacity: 0, y: 40 }"
+    :animate="{ opacity: 1, y: 0 }"
+    :transition="{ type: 'spring', stiffness: 300, damping: 26 }"
     data-testid="pwa-install-prompt"
     class="pointer-events-none fixed inset-x-0 bottom-0 z-50 px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-4 sm:inset-x-auto sm:bottom-4 sm:right-4 sm:w-full sm:max-w-md sm:px-0 sm:pb-0"
   >
@@ -269,7 +272,7 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </section>
-  </div>
+  </Motion>
 
   <UiDrawer
     v-if="isTouchLike"
