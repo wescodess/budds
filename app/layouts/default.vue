@@ -325,8 +325,18 @@ useHorizontalSwipeGesture({
             class="h-7 w-7 text-muted-foreground hover:text-foreground group-data-[collapsible=icon]:hidden"
             @click="toggleTheme"
           >
-            <Sun v-if="mode === 'dark'" class="h-4 w-4" />
-            <Moon v-else class="h-4 w-4" />
+            <Transition
+              enter-active-class="transition-transform duration-300"
+              enter-from-class="rotate-[-90deg] scale-0"
+              enter-to-class="rotate-0 scale-100"
+              leave-active-class="transition-transform duration-200"
+              leave-from-class="rotate-0 scale-100"
+              leave-to-class="rotate-90 scale-0"
+              mode="out-in"
+            >
+              <Sun v-if="mode === 'dark'" key="sun" class="h-4 w-4" />
+              <Moon v-else key="moon" class="h-4 w-4" />
+            </Transition>
             <span class="sr-only">Toggle theme</span>
           </UiButton>
         </div>
@@ -402,7 +412,7 @@ useHorizontalSwipeGesture({
               data-testid="sidebar-folders-empty"
               class="px-3 py-6 text-center text-sm text-muted-foreground"
             >
-              <FolderOpen class="mx-auto mb-2 h-8 w-8 opacity-40" />
+              <FolderOpen class="mx-auto mb-2 h-8 w-8 opacity-40 animate-float-idle" />
               No folders yet
             </div>
           </UiSidebarGroupContent>
@@ -429,8 +439,18 @@ useHorizontalSwipeGesture({
           class="mb-2 hidden h-8 w-8 self-center text-muted-foreground hover:text-foreground group-data-[collapsible=icon]:inline-flex"
           @click="toggleTheme"
         >
-          <Sun v-if="mode === 'dark'" class="h-4 w-4" />
-          <Moon v-else class="h-4 w-4" />
+          <Transition
+            enter-active-class="transition-transform duration-300"
+            enter-from-class="rotate-[-90deg] scale-0"
+            enter-to-class="rotate-0 scale-100"
+            leave-active-class="transition-transform duration-200"
+            leave-from-class="rotate-0 scale-100"
+            leave-to-class="rotate-90 scale-0"
+            mode="out-in"
+          >
+            <Sun v-if="mode === 'dark'" key="sun" class="h-4 w-4" />
+            <Moon v-else key="moon" class="h-4 w-4" />
+          </Transition>
           <span class="sr-only">Toggle theme</span>
         </UiButton>
         <div class="flex items-center gap-3 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0">
@@ -613,7 +633,7 @@ useHorizontalSwipeGesture({
           <UiTabsContent value="flash-cards" class="mt-0 flex-1">
             <div class="flex h-full items-center justify-center text-muted-foreground">
               <div class="text-center">
-                <BookOpen class="mx-auto mb-3 h-12 w-12 opacity-40" />
+                <BookOpen class="mx-auto mb-3 h-12 w-12 opacity-40 animate-float-idle" />
                 <p class="text-lg font-medium">Flash Cards</p>
                 <p class="mt-1 text-sm">Coming soon</p>
               </div>
@@ -623,7 +643,7 @@ useHorizontalSwipeGesture({
           <UiTabsContent value="quiz" class="mt-0 flex-1">
             <div class="flex h-full items-center justify-center text-muted-foreground">
               <div class="text-center">
-                <HelpCircle class="mx-auto mb-3 h-12 w-12 opacity-40" />
+                <HelpCircle class="mx-auto mb-3 h-12 w-12 opacity-40 animate-float-idle" />
                 <p class="text-lg font-medium">Quiz</p>
                 <p class="mt-1 text-sm">Coming soon</p>
               </div>
@@ -633,7 +653,7 @@ useHorizontalSwipeGesture({
           <UiTabsContent value="documents" class="mt-0 flex-1">
             <div class="flex h-full items-center justify-center text-muted-foreground">
               <div class="text-center">
-                <FileText class="mx-auto mb-3 h-12 w-12 opacity-40" />
+                <FileText class="mx-auto mb-3 h-12 w-12 opacity-40 animate-float-idle" />
                 <p class="text-lg font-medium">Documents</p>
                 <p class="mt-1 text-sm">Coming soon</p>
               </div>
