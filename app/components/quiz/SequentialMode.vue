@@ -21,6 +21,23 @@ const feedbackMap = ref<Record<string, AnswerFeedback>>({})
 const showExplanation = ref(false)
 const awaitingFeedback = ref(false)
 
+const { springSnappy } = useMotionPresets()
+const slideDirection = ref<'next' | 'prev'>('next')
+const questionKey = ref(0)
+let prevIndex = props.currentIndex
+
+watch(() => props.currentIndex, (newIdx) => {
+  slideDirection.value = newIdx > prevIndex ? 'next' : 'prev'
+  questionKey.value++
+  prevIndex = newIdx
+})
+
+const slideInitial = computed(() => ({
+  opacity: 0,
+  x: slideDirection.value === 'next' ? 40 : -40,
+}))
+
+
 const currentQuestion = computed(() => props.questions[props.currentIndex] ?? null)
 const isLast = computed(() => props.currentIndex >= props.questions.length - 1)
 const currentAnswer = computed(() => localAnswers.value[currentQuestion.value?._id as string] ?? '')
@@ -63,7 +80,13 @@ defineExpose({ receiveFeedback })
 
 <template>
   <div v-if="currentQuestion" class="flex h-full flex-col">
-    <div class="flex-1 space-y-6 p-6">
+    <Motion
+      :key="questionKey"
+      :initial="slideInitial"
+      :animate="{ opacity: 1, x: 0 }"
+      :transition="springSnappy"
+      class="flex-1 space-y-6 p-6"
+    >
       <div v-if="currentFeedback && immediateFeedback" class="rounded-lg p-3">
         <div
           v-if="currentFeedback.isCorrect"
@@ -139,7 +162,7 @@ defineExpose({ receiveFeedback })
       <div v-if="showExplanation && currentQuestion.explanation" class="rounded-lg bg-muted/50 p-4 text-sm text-muted-foreground">
         {{ currentQuestion.explanation }}
       </div>
-    </div>
+    </Motion>
 
     <div class="sticky bottom-0 border-t bg-background p-4">
       <div class="flex items-center justify-between">
