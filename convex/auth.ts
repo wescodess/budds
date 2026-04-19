@@ -18,6 +18,7 @@ export const createAuth = (ctx: GenericCtx<DataModel>) => {
 
   const trustedOrigins = Array.from(new Set([
     siteUrl,
+    'https://budds.pages.dev',
     'http://localhost:3002',
     'http://127.0.0.1:3002',
     'http://localhost:3000',
