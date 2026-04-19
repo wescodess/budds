@@ -7,6 +7,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{ select: [value: string] }>()
 
+const { springSnappy } = useMotionPresets()
+
 function btnClass(value: string) {
   if (!props.feedback) {
     return value === props.selected
@@ -21,16 +23,20 @@ function btnClass(value: string) {
 
 <template>
   <div class="flex gap-3">
-    <button
-      v-for="value in ['True', 'False']"
+    <Motion
+      v-for="(value, idx) in ['True', 'False']"
       :key="value"
+      :initial="{ opacity: 0, scale: 0.95 }"
+      :animate="{ opacity: 1, scale: 1 }"
+      :transition="{ ...springSnappy, delay: idx * 0.05 }"
+      as="button"
       type="button"
       :disabled="disabled || !!feedback"
-      class="flex-1 rounded-lg border py-4 text-center text-sm font-medium transition-colors"
+      class="flex-1 rounded-lg border py-4 text-center text-sm font-medium transition-all duration-150"
       :class="btnClass(value)"
       @click="emit('select', value)"
     >
       {{ value }}
-    </button>
+    </Motion>
   </div>
 </template>

@@ -8,14 +8,24 @@ const props = defineProps<{
   score: number
   highlighted?: boolean
 }>()
+
+const glowPulse = ref(false)
+
+watch(() => props.highlighted, (isHighlighted) => {
+  if (isHighlighted) {
+    glowPulse.value = true
+    setTimeout(() => { glowPulse.value = false }, 600)
+  }
+})
 </script>
 
 <template>
   <div
     :aria-label="`Source passage from ${props.filename}`"
     :class="cn(
-      'rounded-lg border p-3 transition-all',
+      'rounded-lg border p-3 transition-all duration-200',
       props.highlighted && 'ring-2 ring-primary',
+      glowPulse && 'shadow-[0_0_12px_rgba(215,165,51,0.3)]',
     )"
   >
     <div class="mb-2 flex items-center gap-2">
