@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { FileText, MessageSquare, ClipboardList, Layers, PanelRight, ArrowLeftRight, Pencil, FolderPlus, ListTodo, Mic } from 'lucide-vue-next'
+import { FileText, MessageSquare, ClipboardList, Layers, PanelRight, ArrowLeftRight, Pencil, FolderPlus, ListTodo, Mic, Headphones, ListChecks } from 'lucide-vue-next'
 import { useMediaQuery } from '@vueuse/core'
 import { api } from '#convex/api'
 import type { Id } from '~~/convex/_generated/dataModel'
@@ -302,8 +302,10 @@ const activeVoidId = computed(() => {
   return typeof q === 'string' && (activeTab.value === 'flashcards' || activeTab.value === 'quiz') ? q : null
 })
 
-type HelperMode = 'sources' | 'tasks' | 'podcast' | null
-const helperMode = ref<HelperMode>(null)
+const helperPane = useHelperPane()
+helperPane.register({ id: 'podcast', label: 'Podcast', icon: Headphones })
+helperPane.register({ id: 'sources', label: 'Sources', icon: FileText })
+helperPane.register({ id: 'tasks', label: 'Tasks', icon: ListChecks })
 
 watch(() => route.query?.tab, async () => {
   const raw = route.query?.tab
@@ -314,15 +316,15 @@ watch(() => route.query?.tab, async () => {
     } catch { /* best-effort */ }
     await router.replace({ query: { ...rest, tab: 'chat' } })
     activeTab.value = 'chat'
-    if (isDesktop.value) helperMode.value = 'podcast'
+    if (isDesktop.value) helperPane.open('podcast')
     return
   }
   activeTab.value = initialTab.value
 })
 
-watch(activeTab, (tab) => {
-  if (tab === 'chat' && helperMode.value === null && isDesktopMounted.value) {
-    helperMode.value = 'podcast'
+watch([activeTab, isDesktopMounted], ([tab, mounted]) => {
+  if (tab === 'chat' && !helperPane.isOpen.value && mounted) {
+    helperPane.open('podcast')
   }
 }, { immediate: true })
 
@@ -337,16 +339,9 @@ const documentsBulkMode = ref(false)
 const selectedDocumentIds = ref<string[]>([])
 const documentsDeletePending = ref(false)
 const sourcePanelOpen = computed({
-  get: () => helperMode.value === 'sources',
-  set: (v: boolean) => { helperMode.value = v ? 'sources' : null },
+  get: () => helperPane.activeTabId.value === 'sources',
+  set: (v: boolean) => { v ? helperPane.open('sources') : helperPane.close() },
 })
-const chatHelperOpen = computed(() =>
-  helperMode.value === 'sources' || helperMode.value === 'podcast',
-)
-type ChatHelperTab = 'podcast' | 'sources'
-function setChatHelperTab(next: ChatHelperTab) {
-  helperMode.value = next
-}
 const sourcePanelSide = ref<'left' | 'right'>('right')
 const { activeCount: tasksActiveCount } = useTasks(folderId)
 const indexedDocumentCount = computed(() =>
@@ -685,6 +680,13 @@ async function handlePodcastAskSubmit(payload: { question: string; context: Inte
   await sendMessage(payload.question, referenceScope.toPayload(), payload.context)
 }
 
+function handleTaskViewRoom(roomId: string) {
+  helperPane.close()
+  activeTab.value = 'flashcards'
+  const { conversationId: _dropC, ...rest } = route.query ?? {}
+  router.replace({ query: { ...rest, tab: 'flashcards', voidId: roomId } })
+}
+
 function formatInterjectionBadgeTime(ms: number): string {
   const total = Math.max(0, Math.round(ms / 1000))
   const minutes = Math.floor(total / 60)
@@ -695,7 +697,7 @@ function formatInterjectionBadgeTime(ms: number): string {
 function handleInterjectionBadgeClick(ctx: InterjectionContext) {
   const store = useAudioOverviewStore()
   store.seek(ctx.timeMs)
-  helperMode.value = 'podcast'
+  helperPane.open('podcast')
 }
 
 function handleViewAllReferences(messageIndex: number) {
@@ -799,7 +801,7 @@ async function confirmMove(destFolderId: Id<'folders'>) {
 }
 
 async function handleUpload(files: File[]) {
-  if (isDesktop.value) helperMode.value = 'tasks'
+  helperPane.open('tasks')
   try {
     await uploadFiles(files, folderId.value)
   } catch (e: any) {
@@ -809,7 +811,7 @@ async function handleUpload(files: File[]) {
 }
 
 async function handleImportLink(url: string) {
-  if (isDesktop.value) helperMode.value = 'tasks'
+  helperPane.open('tasks')
   try {
     await importDocumentFromUrl(url, folderId.value)
   } catch (e: any) {
@@ -898,7 +900,7 @@ async function handleImportLink(url: string) {
             data-testid="folder-header-tasks"
             aria-label="Toggle tasks"
             class="relative inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            @click="helperMode = helperMode === 'tasks' ? null : 'tasks'"
+            @click="helperPane.toggle('tasks')"
           >
             <ListTodo class="h-4 w-4" />
             <span
@@ -949,7 +951,7 @@ async function handleImportLink(url: string) {
                 :folder-id="folderId"
                 :scope="referenceScope"
                 :interjection-in-flight="interjectionInFlight"
-                @generation-started="() => { if (isDesktop) helperMode = 'podcast' }"
+                @generation-started="() => { if (isDesktop) helperPane.open('podcast') }"
                 @podcast-ask="handlePodcastAsk"
             @podcast-ask-submit="handlePodcastAskSubmit"
               />
@@ -1036,28 +1038,17 @@ async function handleImportLink(url: string) {
           </ResizablePanelGroup>
         </div>
         <div v-else class="flex min-h-0 min-w-0 flex-1 overflow-hidden">
-          <template v-if="isDesktop && chatHelperOpen">
+          <template v-if="isDesktop && helperPane.isOpen.value">
             <ResizablePanelGroup direction="horizontal" class="min-w-0 flex-1">
               <template v-if="isSourcePanelLeading">
                 <ResizablePanel :default-size="28" :min-size="20" :max-size="45" class="min-w-[18rem]">
-                  <div class="flex h-full min-h-0 flex-col overflow-hidden">
-                    <FolderShellUnifiedHelperPaneTabs
-                      :model-value="helperMode === 'sources' ? 'sources' : 'podcast'"
-                      @update:model-value="setChatHelperTab"
-                    />
-                    <div v-if="helperMode === 'podcast'" class="min-h-0 flex-1 overflow-hidden">
-                      <AudioOverviewShell :folder-id="folderId" :scope="referenceScope" :interjection-in-flight="interjectionInFlight" @podcast-ask="handlePodcastAsk" @podcast-ask-submit="handlePodcastAskSubmit" />
-                    </div>
-                    <ChatSourcePanel
-                      v-else
-                      :sources="allSources"
-                      :active-citation-index="activeCitationIndex"
-                      :open="sourcePanelOpen"
-                      side="left"
-                      class="min-h-0 flex-1"
-                      @close="helperMode = null"
-                    />
-                  </div>
+                  <FolderShellHelperPane>
+                    <template #default="{ activeTabId: tid }">
+                      <AudioOverviewShell v-if="tid === 'podcast'" :folder-id="folderId" :scope="referenceScope" :interjection-in-flight="interjectionInFlight" @podcast-ask="handlePodcastAsk" @podcast-ask-submit="handlePodcastAskSubmit" />
+                      <ChatSourcePanel v-else-if="tid === 'sources'" :sources="allSources" :active-citation-index="activeCitationIndex" :open="true" side="left" class="min-h-0 flex-1" @close="helperPane.close()" />
+                      <FolderTasksPane v-else-if="tid === 'tasks'" :folder-id="folderId" @close="helperPane.close()" @view-room="handleTaskViewRoom" />
+                    </template>
+                  </FolderShellHelperPane>
                 </ResizablePanel>
                 <ResizableHandle with-handle>
                   <button
@@ -1205,24 +1196,13 @@ async function handleImportLink(url: string) {
                   </button>
                 </ResizableHandle>
                 <ResizablePanel :default-size="28" :min-size="20" :max-size="45" class="min-w-[18rem]">
-                  <div class="flex h-full min-h-0 flex-col overflow-hidden">
-                    <FolderShellUnifiedHelperPaneTabs
-                      :model-value="helperMode === 'sources' ? 'sources' : 'podcast'"
-                      @update:model-value="setChatHelperTab"
-                    />
-                    <div v-if="helperMode === 'podcast'" class="min-h-0 flex-1 overflow-hidden">
-                      <AudioOverviewShell :folder-id="folderId" :scope="referenceScope" :interjection-in-flight="interjectionInFlight" @podcast-ask="handlePodcastAsk" @podcast-ask-submit="handlePodcastAskSubmit" />
-                    </div>
-                    <ChatSourcePanel
-                      v-else
-                      :sources="allSources"
-                      :active-citation-index="activeCitationIndex"
-                      :open="sourcePanelOpen"
-                      side="right"
-                      class="min-h-0 flex-1"
-                      @close="helperMode = null"
-                    />
-                  </div>
+                  <FolderShellHelperPane>
+                    <template #default="{ activeTabId: tid }">
+                      <AudioOverviewShell v-if="tid === 'podcast'" :folder-id="folderId" :scope="referenceScope" :interjection-in-flight="interjectionInFlight" @podcast-ask="handlePodcastAsk" @podcast-ask-submit="handlePodcastAskSubmit" />
+                      <ChatSourcePanel v-else-if="tid === 'sources'" :sources="allSources" :active-citation-index="activeCitationIndex" :open="true" side="right" class="min-h-0 flex-1" @close="helperPane.close()" />
+                      <FolderTasksPane v-else-if="tid === 'tasks'" :folder-id="folderId" @close="helperPane.close()" @view-room="handleTaskViewRoom" />
+                    </template>
+                  </FolderShellHelperPane>
                 </ResizablePanel>
               </template>
             </ResizablePanelGroup>
@@ -1286,22 +1266,6 @@ async function handleImportLink(url: string) {
             </div>
           </div>
         </div>
-        <Sheet v-if="!isDesktop" :open="sourcePanelOpen" @update:open="sourcePanelOpen = $event">
-          <SheetContent
-            side="right"
-            class="w-[85vw] max-w-[85vw] gap-0 p-0 [&>button]:hidden"
-          >
-            <SheetHeader class="sr-only">
-              <SheetTitle>Sources</SheetTitle>
-              <SheetDescription>View the cited document excerpts for this chat.</SheetDescription>
-            </SheetHeader>
-            <FolderHelperPane
-              :sources="allSources"
-              :active-citation-index="activeCitationIndex"
-              @close="sourcePanelOpen = false"
-            />
-          </SheetContent>
-        </Sheet>
       </UiTabsContent>
 
       <UiTabsContent value="flashcards" class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
@@ -1318,7 +1282,7 @@ async function handleImportLink(url: string) {
               router.replace({ query: { ...restNoVoid, tab: 'flashcards' } })
             }
           }"
-          @generation-started="() => { if (isDesktop) helperMode = 'tasks' }"
+          @generation-started="() => helperPane.open('tasks')"
         />
       </UiTabsContent>
 
@@ -1326,7 +1290,7 @@ async function handleImportLink(url: string) {
         <QuizTab
           :folder-id="folderId"
           :selected-quiz-id="activeTab === 'quiz' ? activeVoidId : null"
-          @generation-started="() => { if (isDesktop) helperMode = 'tasks' }"
+          @generation-started="() => helperPane.open('tasks')"
         />
       </UiTabsContent>
 
@@ -1336,7 +1300,7 @@ async function handleImportLink(url: string) {
           :folder-id="folderId"
           :scope="referenceScope"
           :interjection-in-flight="interjectionInFlight"
-          @generation-started="() => { if (isDesktop) helperMode = 'tasks' }"
+          @generation-started="() => helperPane.open('tasks')"
           @podcast-ask="handlePodcastAsk"
             @podcast-ask-submit="handlePodcastAskSubmit"
         />
@@ -1380,44 +1344,15 @@ async function handleImportLink(url: string) {
         </UiTabsContent>
       </UiTabs>
 
-      <div
-        v-if="isDesktop && helperMode === 'tasks'"
-        class="h-full w-80 shrink-0 border-l border-border/60"
-      >
-        <FolderTasksPane
-          :folder-id="folderId"
-          @close="helperMode = null"
-          @view-room="(roomId) => {
-            helperMode = null
-            activeTab = 'flashcards'
-            const { conversationId: _dropC, ...rest } = route.query ?? {}
-            router.replace({ query: { ...rest, tab: 'flashcards', voidId: roomId } })
-          }"
-        />
-      </div>
     </div>
 
-    <Sheet v-if="!isDesktop" :open="helperMode === 'tasks'" @update:open="(v) => { if (!v) helperMode = null }">
-      <SheetContent
-        side="right"
-        class="w-[85vw] max-w-[85vw] gap-0 p-0 [&>button]:hidden"
-      >
-        <SheetHeader class="sr-only">
-          <SheetTitle>Tasks</SheetTitle>
-          <SheetDescription>View active tasks for this folder.</SheetDescription>
-        </SheetHeader>
-        <FolderTasksPane
-          :folder-id="folderId"
-          @close="helperMode = null"
-          @view-room="(roomId) => {
-            helperMode = null
-            activeTab = 'flashcards'
-            const { conversationId: _dropC, ...rest } = route.query ?? {}
-            router.replace({ query: { ...rest, tab: 'flashcards', voidId: roomId } })
-          }"
-        />
-      </SheetContent>
-    </Sheet>
+    <FolderShellHelperPane v-if="!isDesktop" mobile>
+      <template #default="{ activeTabId: tid }">
+        <AudioOverviewShell v-if="tid === 'podcast'" :folder-id="folderId" :scope="referenceScope" :interjection-in-flight="interjectionInFlight" @podcast-ask="handlePodcastAsk" @podcast-ask-submit="handlePodcastAskSubmit" />
+        <FolderHelperPane v-else-if="tid === 'sources'" :sources="allSources" :active-citation-index="activeCitationIndex" @close="helperPane.close()" />
+        <FolderTasksPane v-else-if="tid === 'tasks'" :folder-id="folderId" @close="helperPane.close()" @view-room="handleTaskViewRoom" />
+      </template>
+    </FolderShellHelperPane>
 
     <UiAlertDialog v-model:open="showDeleteDialog">
       <UiAlertDialogContent>
