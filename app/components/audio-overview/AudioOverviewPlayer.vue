@@ -227,20 +227,20 @@ const ringMiddleStyle = computed(() => ({
 </script>
 
 <template>
-  <div data-testid="audio-overview-player" class="flex h-full min-h-0 flex-1 flex-col gap-6 overflow-y-auto p-6">
-    <header class="mx-auto flex w-full max-w-4xl items-start justify-between gap-4">
+  <div data-testid="audio-overview-player" class="flex h-full min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 sm:gap-6 sm:p-6">
+    <header class="mx-auto flex w-full max-w-4xl flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
       <div class="min-w-0">
         <p class="font-inter text-xs text-muted-foreground">
           {{ overview?.title ? 'Audio Overview' : '' }}
         </p>
-        <h2 data-testid="audio-overview-title" class="mt-1 font-dm-sans text-2xl font-bold text-foreground">
+        <h2 data-testid="audio-overview-title" class="mt-1 font-dm-sans text-xl font-bold text-foreground sm:text-2xl">
           {{ overview?.title ?? 'Audio overview' }}
         </h2>
         <p class="mt-1 font-inter text-xs text-muted-foreground">
           {{ totalLabel }} total · {{ turns.length }} turns
         </p>
       </div>
-      <div class="flex shrink-0 items-center gap-2">
+      <div class="flex flex-wrap items-center gap-2">
         <div v-if="props.overviews.length > 1" class="relative">
           <button
             type="button"
@@ -365,28 +365,28 @@ const ringMiddleStyle = computed(() => ({
       </UiAlertDialogContent>
     </UiAlertDialog>
 
-    <section class="mx-auto flex w-full max-w-3xl flex-col items-center gap-8">
-      <div class="grid w-full grid-cols-2 gap-4">
+    <section class="mx-auto flex w-full max-w-3xl flex-col items-center gap-5 sm:gap-8">
+      <div class="grid w-full grid-cols-2 gap-3 sm:gap-4">
         <div
-          class="relative flex flex-col items-center gap-3 rounded-xl border p-6 transition-colors"
+          class="relative flex flex-col items-center gap-2 rounded-xl border p-4 transition-colors sm:gap-3 sm:p-6"
           :class="activeTurn?.speaker === 'host_a' ? 'border-primary/70 bg-card' : 'border-border/60 bg-card/60 opacity-80'"
           data-testid="audio-overview-host-a"
         >
-          <div class="relative flex h-24 w-24 items-center justify-center">
+          <div class="relative flex h-16 w-16 items-center justify-center sm:h-24 sm:w-24">
             <span
               v-if="activeTurn?.speaker === 'host_a'"
-              class="pointer-events-none absolute h-24 w-24 rounded-full border border-primary/60 transition-[transform,opacity]"
+              class="pointer-events-none absolute h-16 w-16 rounded-full border border-primary/60 transition-[transform,opacity] sm:h-24 sm:w-24"
               :style="ringOuterStyle"
               aria-hidden="true"
             />
             <span
               v-if="activeTurn?.speaker === 'host_a'"
-              class="pointer-events-none absolute h-24 w-24 rounded-full border border-primary/80 transition-[transform,opacity]"
+              class="pointer-events-none absolute h-16 w-16 rounded-full border border-primary/80 transition-[transform,opacity] sm:h-24 sm:w-24"
               :style="ringMiddleStyle"
               aria-hidden="true"
             />
             <span
-              class="h-24 w-24 rounded-full bg-primary transition-[transform,box-shadow]"
+              class="h-16 w-16 rounded-full bg-primary transition-[transform,box-shadow] sm:h-24 sm:w-24"
               :class="activeTurn?.speaker === 'host_a' ? 'shadow-[0_0_40px_rgba(245,158,11,0.55)]' : ''"
               :style="activeTurn?.speaker === 'host_a' ? activeHostGlowStyle : undefined"
               aria-hidden="true"
@@ -405,25 +405,25 @@ const ringMiddleStyle = computed(() => ({
           </div>
         </div>
         <div
-          class="relative flex flex-col items-center gap-3 rounded-xl border p-6 transition-colors"
+          class="relative flex flex-col items-center gap-2 rounded-xl border p-4 transition-colors sm:gap-3 sm:p-6"
           :class="activeTurn?.speaker === 'host_b' ? 'border-primary/70 bg-card' : 'border-border/60 bg-card/60 opacity-80'"
           data-testid="audio-overview-host-b"
         >
-          <div class="relative flex h-24 w-24 items-center justify-center">
+          <div class="relative flex h-16 w-16 items-center justify-center sm:h-24 sm:w-24">
             <span
               v-if="activeTurn?.speaker === 'host_b'"
-              class="pointer-events-none absolute h-24 w-24 rounded-full border border-accent/60 transition-[transform,opacity]"
+              class="pointer-events-none absolute h-16 w-16 rounded-full border border-accent/60 transition-[transform,opacity] sm:h-24 sm:w-24"
               :style="ringOuterStyle"
               aria-hidden="true"
             />
             <span
               v-if="activeTurn?.speaker === 'host_b'"
-              class="pointer-events-none absolute h-24 w-24 rounded-full border border-accent/80 transition-[transform,opacity]"
+              class="pointer-events-none absolute h-16 w-16 rounded-full border border-accent/80 transition-[transform,opacity] sm:h-24 sm:w-24"
               :style="ringMiddleStyle"
               aria-hidden="true"
             />
             <span
-              class="h-24 w-24 rounded-full bg-accent transition-[transform,box-shadow]"
+              class="h-16 w-16 rounded-full bg-accent transition-[transform,box-shadow] sm:h-24 sm:w-24"
               :class="activeTurn?.speaker === 'host_b' ? 'shadow-[0_0_40px_rgba(252,211,77,0.55)]' : ''"
               :style="activeTurn?.speaker === 'host_b' ? activeHostGlowStyle : undefined"
               aria-hidden="true"
@@ -445,7 +445,7 @@ const ringMiddleStyle = computed(() => ({
 
       <blockquote
         data-testid="audio-overview-active-quote"
-        class="max-w-2xl text-center font-dm-sans text-lg leading-relaxed text-foreground"
+        class="max-w-2xl text-center font-dm-sans text-base leading-relaxed text-foreground sm:text-lg"
       >
         <span class="mr-1 text-primary">“</span>{{ activeQuote }}<span class="ml-1 text-primary">”</span>
         <p class="mt-2 font-inter text-xs text-muted-foreground">
@@ -480,7 +480,7 @@ const ringMiddleStyle = computed(() => ({
         <span class="w-12 text-right font-inter text-xs tabular-nums text-muted-foreground">{{ totalLabel }}</span>
       </div>
 
-      <div class="mt-4 flex items-center justify-between">
+      <div class="mt-3 flex flex-wrap items-center justify-between gap-2 sm:mt-4">
         <div class="flex items-center">
           <div class="relative">
             <button
@@ -526,7 +526,7 @@ const ringMiddleStyle = computed(() => ({
             type="button"
             data-testid="audio-overview-play-btn"
             :aria-label="isPlaying ? 'Pause' : 'Play'"
-            class="inline-flex h-14 w-14 items-center justify-center rounded-full bg-primary text-primary-foreground transition-transform hover:scale-[1.03]"
+            class="inline-flex h-12 w-12 items-center justify-center rounded-full bg-primary text-primary-foreground transition-transform hover:scale-[1.03] sm:h-14 sm:w-14"
             @click="togglePlay"
           >
             <Pause v-if="isPlaying" class="h-5 w-5" />
