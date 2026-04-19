@@ -15,6 +15,7 @@ const emit = defineEmits<{
 }>()
 
 const cardRefs = ref<HTMLElement[]>([])
+const { springSnappy } = useMotionPresets()
 
 watch(() => props.activeCitationIndex, (index) => {
   if (index !== null && cardRefs.value[index]) {
@@ -48,10 +49,13 @@ watch(() => props.activeCitationIndex, (index) => {
     </div>
     <div class="flex-1 overflow-y-auto p-4">
       <div class="space-y-3">
-        <div
+        <Motion
           v-for="(source, i) in props.sources"
           :key="i"
-          :ref="(el) => { if (el) cardRefs[i] = (el as HTMLElement) }"
+          :ref="(el) => { if (el) cardRefs[i] = (el as any)?.$el ?? (el as HTMLElement) }"
+          :initial="{ opacity: 0, y: 10 }"
+          :animate="{ opacity: 1, y: 0 }"
+          :transition="{ ...springSnappy, delay: i * 0.03 }"
         >
           <ChatSourceCard
             :index="i + 1"
@@ -60,7 +64,7 @@ watch(() => props.activeCitationIndex, (index) => {
             :score="source.score"
             :highlighted="props.activeCitationIndex === i"
           />
-        </div>
+        </Motion>
       </div>
     </div>
   </aside>
