@@ -1046,7 +1046,7 @@ async function handleImportLink(url: string) {
                     <template #default="{ activeTabId: tid }">
                       <AudioOverviewShell v-if="tid === 'podcast'" :folder-id="folderId" :scope="referenceScope" :interjection-in-flight="interjectionInFlight" @podcast-ask="handlePodcastAsk" @podcast-ask-submit="handlePodcastAskSubmit" />
                       <ChatSourcePanel v-else-if="tid === 'sources'" :sources="allSources" :active-citation-index="activeCitationIndex" :open="true" side="left" class="min-h-0 flex-1" @close="helperPane.close()" />
-                      <FolderTasksPane v-else-if="tid === 'tasks'" :folder-id="folderId" @close="helperPane.close()" @view-room="handleTaskViewRoom" />
+                      <FolderTasksPane v-else-if="tid === 'tasks'" :folder-id="folderId" embedded @close="helperPane.close()" @view-room="handleTaskViewRoom" />
                     </template>
                   </FolderShellHelperPane>
                 </ResizablePanel>
@@ -1200,7 +1200,7 @@ async function handleImportLink(url: string) {
                     <template #default="{ activeTabId: tid }">
                       <AudioOverviewShell v-if="tid === 'podcast'" :folder-id="folderId" :scope="referenceScope" :interjection-in-flight="interjectionInFlight" @podcast-ask="handlePodcastAsk" @podcast-ask-submit="handlePodcastAskSubmit" />
                       <ChatSourcePanel v-else-if="tid === 'sources'" :sources="allSources" :active-citation-index="activeCitationIndex" :open="true" side="right" class="min-h-0 flex-1" @close="helperPane.close()" />
-                      <FolderTasksPane v-else-if="tid === 'tasks'" :folder-id="folderId" @close="helperPane.close()" @view-room="handleTaskViewRoom" />
+                      <FolderTasksPane v-else-if="tid === 'tasks'" :folder-id="folderId" embedded @close="helperPane.close()" @view-room="handleTaskViewRoom" />
                     </template>
                   </FolderShellHelperPane>
                 </ResizablePanel>
@@ -1346,11 +1346,11 @@ async function handleImportLink(url: string) {
 
     </div>
 
-    <FolderShellHelperPane v-if="!isDesktop" mobile>
+    <FolderShellHelperPane v-if="!isDesktop" mobile :exclude-tabs="['podcast']">
       <template #default="{ activeTabId: tid }">
         <AudioOverviewShell v-if="tid === 'podcast'" :folder-id="folderId" :scope="referenceScope" :interjection-in-flight="interjectionInFlight" @podcast-ask="handlePodcastAsk" @podcast-ask-submit="handlePodcastAskSubmit" />
-        <FolderHelperPane v-else-if="tid === 'sources'" :sources="allSources" :active-citation-index="activeCitationIndex" @close="helperPane.close()" />
-        <FolderTasksPane v-else-if="tid === 'tasks'" :folder-id="folderId" @close="helperPane.close()" @view-room="handleTaskViewRoom" />
+        <FolderHelperPane v-else-if="tid === 'sources'" :sources="allSources" :active-citation-index="activeCitationIndex" embedded @close="helperPane.close()" />
+        <FolderTasksPane v-else-if="tid === 'tasks'" :folder-id="folderId" embedded @close="helperPane.close()" @view-room="handleTaskViewRoom" />
       </template>
     </FolderShellHelperPane>
 

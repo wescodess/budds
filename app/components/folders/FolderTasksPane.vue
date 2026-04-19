@@ -15,9 +15,10 @@ import type { TaskDoc } from '~/composables/useTasks'
 import { useHorizontalSwipeGesture } from '~/composables/useHorizontalSwipeGesture'
 import { PANEL_DISMISS_THRESHOLD_PX, useGestureGuards } from '~/composables/useGestureGuards'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   folderId: Id<'folders'>
-}>()
+  embedded?: boolean
+}>(), { embedded: false })
 
 const emit = defineEmits<{
   close: []
@@ -137,7 +138,7 @@ useHorizontalSwipeGesture({
     data-gesture-owner="tasks-panel"
     class="flex h-full flex-col bg-background"
   >
-    <div class="flex items-center justify-between border-b px-4 py-3">
+    <div v-if="!props.embedded" class="flex items-center justify-between border-b px-4 py-3">
       <div class="flex items-center gap-2">
         <h3 class="font-semibold tracking-tight">Tasks</h3>
         <span

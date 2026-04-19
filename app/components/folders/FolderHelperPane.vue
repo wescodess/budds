@@ -5,10 +5,11 @@ import type { Source } from '~/composables/useChat'
 import { useHorizontalSwipeGesture } from '~/composables/useHorizontalSwipeGesture'
 import { PANEL_DISMISS_THRESHOLD_PX, useGestureGuards } from '~/composables/useGestureGuards'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   sources: Source[]
   activeCitationIndex: number | null
-}>()
+  embedded?: boolean
+}>(), { embedded: false })
 
 const emit = defineEmits<{
   close: []
@@ -54,7 +55,7 @@ useHorizontalSwipeGesture({
     data-gesture-owner="source-panel"
     class="flex h-full flex-col bg-background"
   >
-    <div class="flex items-center justify-between border-b px-4 py-3">
+    <div v-if="!props.embedded" class="flex items-center justify-between border-b px-4 py-3">
       <h3 class="font-semibold tracking-tight">Sources</h3>
       <button
         type="button"
