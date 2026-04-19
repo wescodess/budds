@@ -54,7 +54,7 @@ function handleSelect(id: string) {
         </template>
 
         <div v-else class="flex flex-col items-center gap-2 px-3 py-8 text-center text-sm text-muted-foreground">
-          <FolderPlus class="h-8 w-8 opacity-40" />
+          <FolderPlus class="h-8 w-8 opacity-40 animate-float-idle" />
           <p>Create a course folder to use this tool.</p>
         </div>
       </div>

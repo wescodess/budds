@@ -147,8 +147,11 @@ function handleFolderPicked(folderId: string) {
             <UiSkeleton v-for="i in 4" :key="i" class="h-[140px] w-[200px] shrink-0 rounded-xl" />
           </div>
 
-          <div
+          <Motion
             v-else-if="!folders?.length"
+            :initial="{ opacity: 0, y: 10, scale: 0.98 }"
+            :animate="{ opacity: 1, y: 0, scale: 1 }"
+            :transition="{ type: 'spring', stiffness: 200, damping: 24 }"
             data-testid="dashboard-empty-state"
             class="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-10"
           >
@@ -156,7 +159,7 @@ function handleFolderPicked(folderId: string) {
               Start by creating a course folder
             </p>
             <DashboardAddCourseCard inline />
-          </div>
+          </Motion>
 
           <DashboardCoursesCarousel v-else :count="folders.length + 1">
             <div
