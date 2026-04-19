@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { Pause, Play, Rewind, FastForward, Download, Share2, RefreshCw, History, Check, Trash2, Settings2, Mic, Loader2 } from 'lucide-vue-next'
 import { api } from '#convex/api'
 import type { Id, Doc } from '../../../convex/_generated/dataModel'
@@ -211,18 +211,31 @@ function handleCustomize() {
   emit('request-customize')
 }
 
+const smoothMag = ref(0)
+let rafId: number | null = null
+
+function smoothLoop() {
+  const target = visualizerMagnitude.value
+  smoothMag.value += (target - smoothMag.value) * 0.18
+  if (Math.abs(smoothMag.value - target) < 0.001) smoothMag.value = target
+  rafId = requestAnimationFrame(smoothLoop)
+}
+
+onMounted(() => { rafId = requestAnimationFrame(smoothLoop) })
+onUnmounted(() => { if (rafId !== null) cancelAnimationFrame(rafId) })
+
 const activeHostGlowStyle = computed(() => ({
-  transform: `scale(${1 + visualizerMagnitude.value * 0.08})`,
+  transform: `scale(${1 + smoothMag.value * 0.08})`,
 }))
 
 const ringOuterStyle = computed(() => ({
-  transform: `scale(${1.3 + visualizerMagnitude.value * 0.15})`,
-  opacity: `${0.15 + visualizerMagnitude.value * 0.2}`,
+  transform: `scale(${1.3 + smoothMag.value * 0.15})`,
+  opacity: `${0.15 + smoothMag.value * 0.2}`,
 }))
 
 const ringMiddleStyle = computed(() => ({
-  transform: `scale(${1.15 + visualizerMagnitude.value * 0.12})`,
-  opacity: `${0.35 + visualizerMagnitude.value * 0.3}`,
+  transform: `scale(${1.15 + smoothMag.value * 0.12})`,
+  opacity: `${0.35 + smoothMag.value * 0.3}`,
 }))
 </script>
 

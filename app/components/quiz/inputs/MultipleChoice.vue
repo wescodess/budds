@@ -8,6 +8,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{ select: [value: string] }>()
 
+const { springSnappy } = useMotionPresets()
+
 function optionClass(option: string) {
   if (!props.feedback) {
     return option === props.selected
@@ -22,18 +24,22 @@ function optionClass(option: string) {
 
 <template>
   <div class="space-y-2">
-    <button
-      v-for="option in options"
+    <Motion
+      v-for="(option, idx) in options"
       :key="option"
+      :initial="{ opacity: 0, y: 8 }"
+      :animate="{ opacity: 1, y: 0 }"
+      :transition="{ ...springSnappy, delay: idx * 0.03 }"
+      as="button"
       type="button"
       :disabled="disabled || !!feedback"
-      class="flex w-full items-center gap-3 rounded-lg border p-4 text-left text-sm transition-colors"
+      class="flex w-full items-center gap-3 rounded-lg border p-4 text-left text-sm transition-all duration-150"
       :class="optionClass(option)"
       @click="emit('select', option)"
     >
       <span class="flex-1">{{ option }}</span>
       <span v-if="feedback && option === feedback.correctAnswer" class="text-green-500">&#10003;</span>
       <span v-else-if="feedback && option === selected && !feedback.isCorrect" class="text-destructive">&#10007;</span>
-    </button>
+    </Motion>
   </div>
 </template>

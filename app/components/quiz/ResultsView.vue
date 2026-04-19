@@ -54,6 +54,39 @@ function handleSelectAttempt(attemptId: Id<'quizAttempts'>) {
   if (attemptId === props.attemptId) return
   emit('viewAttempt', attemptId)
 }
+
+const animatedPct = ref(0)
+const displayPct = computed(() => Math.round(animatedPct.value))
+let scoreRafId: number | null = null
+
+function cancelScoreAnimation() {
+  if (scoreRafId !== null) {
+    cancelAnimationFrame(scoreRafId)
+    scoreRafId = null
+  }
+}
+
+watch(results, (r) => {
+  cancelScoreAnimation()
+  if (!r) return
+  animatedPct.value = 0
+  const target = r.percentage
+  const duration = 800
+  const start = performance.now()
+  function tick(now: number) {
+    const elapsed = now - start
+    const progress = Math.min(elapsed / duration, 1)
+    const eased = 1 - (1 - progress) ** 3
+    animatedPct.value = eased * target
+    if (progress < 1) { scoreRafId = requestAnimationFrame(tick) }
+    else { scoreRafId = null }
+  }
+  scoreRafId = requestAnimationFrame(tick)
+}, { immediate: true })
+
+onUnmounted(cancelScoreAnimation)
+
+const { springGentle } = useMotionPresets()
 </script>
 
 <template>
@@ -61,7 +94,13 @@ function handleSelectAttempt(attemptId: Id<'quizAttempts'>) {
     <UiSkeleton v-for="i in 3" :key="i" class="h-24 w-full rounded-lg" />
   </div>
 
-  <div v-else class="space-y-6 p-6">
+  <Motion
+    v-else
+    :initial="{ opacity: 0, y: 12 }"
+    :animate="{ opacity: 1, y: 0 }"
+    :transition="springGentle"
+    class="space-y-6 p-6"
+  >
     <div class="flex items-start justify-between">
       <div>
         <h2 class="text-xl font-bold">Quiz results</h2>
@@ -81,12 +120,13 @@ function handleSelectAttempt(attemptId: Id<'quizAttempts'>) {
             <circle cx="18" cy="18" r="15.5" fill="none" stroke="currentColor" stroke-width="2" class="text-muted/50" />
             <circle
               cx="18" cy="18" r="15.5" fill="none" stroke-width="2.5" stroke-linecap="round"
+              pathLength="100"
               :class="ringColor(results.percentage)"
-              :stroke-dasharray="`${results.percentage} ${100 - results.percentage}`"
+              :stroke-dasharray="`${animatedPct} ${100 - animatedPct}`"
             />
           </svg>
           <span class="absolute inset-0 flex items-center justify-center text-xl font-bold" :class="scoreColor(results.percentage)">
-            {{ results.percentage }}%
+            {{ displayPct }}%
           </span>
         </div>
       </div>
@@ -108,5 +148,5 @@ function handleSelectAttempt(attemptId: Id<'quizAttempts'>) {
       <h3 class="mb-3 text-sm font-semibold">Question Review</h3>
       <QuizReviewPanel :results="results.results" />
     </div>
-  </div>
+  </Motion>
 </template>
