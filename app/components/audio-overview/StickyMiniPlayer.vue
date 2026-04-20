@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
 import { Pause, Play, Maximize2, X, Rewind, FastForward, ChevronUp, ChevronDown } from 'lucide-vue-next'
-import { useMediaQuery } from '@vueuse/core'
 
 const {
   overviewId, folderId, title, activeTurn,
@@ -11,7 +10,6 @@ const {
 
 const route = useRoute()
 const { allFolders } = useFolders()
-const isMobile = useMediaQuery('(max-width: 767px)')
 const expanded = ref(false)
 
 const POSITION_KEY = 'budds.mini-player.position'
@@ -25,11 +23,18 @@ let dragStartY = 0
 let dragStartPosX = 0
 let dragStartPosY = 0
 
+function getSafeAreaBottom(): number {
+  if (!import.meta.client) return 0
+  const raw = getComputedStyle(document.documentElement).getPropertyValue('--vk-safe-bottom')
+  return raw ? parseFloat(raw) || 0 : 0
+}
+
 function getDefaultPosition() {
   if (!import.meta.client) return { x: 0, y: 0 }
+  const safeBottom = Math.max(getSafeAreaBottom(), 8)
   return {
     x: window.innerWidth - (expanded.value ? 340 : 300),
-    y: window.innerHeight - (expanded.value ? 240 : 60),
+    y: window.innerHeight - (expanded.value ? 240 : 60) - safeBottom,
   }
 }
 
@@ -37,9 +42,10 @@ function clampPosition(x: number, y: number) {
   if (!import.meta.client) return { x, y }
   const w = expanded.value ? 320 : 288
   const h = expanded.value ? 220 : 44
+  const safeBottom = Math.max(getSafeAreaBottom(), 8)
   return {
     x: Math.max(8, Math.min(x, window.innerWidth - w - 8)),
-    y: Math.max(8, Math.min(y, window.innerHeight - h - 8)),
+    y: Math.max(8, Math.min(y, window.innerHeight - h - safeBottom)),
   }
 }
 
@@ -191,40 +197,9 @@ async function handleExpand() {
 
 <template>
   <AnimatePresence mode="wait">
-    <!-- MOBILE: full-width bottom bar -->
     <Motion
-      v-if="visible && isMobile"
-      key="mini-player-mobile"
-      :initial="{ y: '100%' }"
-      :animate="{ y: 0 }"
-      :exit="{ y: '100%' }"
-      :transition="{ type: 'spring', stiffness: 350, damping: 30 }"
-      as="div"
-      data-testid="audio-overview-sticky-mini-player"
-      class="fixed bottom-0 left-0 right-0 z-40 flex h-16 items-center gap-3 border-t border-border bg-card px-4"
-    >
-      <div class="flex min-w-0 flex-1 items-center gap-3">
-        <span :class="['h-6 w-6 shrink-0 rounded-full shadow-[0_0_16px_rgba(245,158,11,0.35)]', speakerSwatchClass]" aria-hidden="true" />
-        <div class="min-w-0 flex-1">
-          <p class="truncate font-dm-sans text-sm font-medium text-foreground">{{ title || 'Audio overview' }}</p>
-          <p class="truncate font-inter text-[11px] text-muted-foreground">{{ captionLine }}</p>
-        </div>
-      </div>
-      <button type="button" :aria-label="isPlaying ? 'Pause' : 'Play'" class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground" @click="togglePlay">
-        <Pause v-if="isPlaying" class="h-4 w-4" /><Play v-else class="h-4 w-4" />
-      </button>
-      <button type="button" aria-label="Expand player" class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-accent/20" @click="handleExpand">
-        <Maximize2 class="h-4 w-4" />
-      </button>
-      <button type="button" aria-label="Close" class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-destructive/10 hover:text-destructive" @click="dismiss">
-        <X class="h-4 w-4" />
-      </button>
-    </Motion>
-
-    <!-- DESKTOP: floating pill / expandable card — draggable -->
-    <Motion
-      v-else-if="visible"
-      key="mini-player-desktop"
+      v-if="visible"
+      key="mini-player"
       :initial="{ opacity: 0, scale: 0.9, y: 20 }"
       :animate="{ opacity: 1, scale: 1, y: 0 }"
       :exit="{ opacity: 0, scale: 0.9, y: 20 }"

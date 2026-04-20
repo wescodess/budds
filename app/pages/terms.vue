@@ -17,7 +17,7 @@ const lastUpdated = '2026-04-12'
 
 <template>
   <div class="min-h-screen bg-background text-foreground">
-    <div class="mx-auto max-w-2xl px-6 py-16">
+    <div class="mx-auto max-w-2xl px-4 py-10 sm:px-6 sm:py-16">
       <nav class="mb-10 flex items-center justify-between text-sm text-muted-foreground">
         <NuxtLink to="/" class="hover:text-foreground">&larr; Budds</NuxtLink>
         <NuxtLink to="/privacy" class="hover:text-foreground">Privacy Policy</NuxtLink>

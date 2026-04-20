@@ -199,7 +199,7 @@ const ringMiddleStyle = computed(() => ({
   <div
     v-else-if="overview"
     data-testid="public-audio-shell"
-    class="flex min-h-screen flex-col gap-6 p-6"
+    class="flex min-h-[var(--mobile-vh,100dvh)] flex-col gap-6 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:p-6"
   >
     <header class="mx-auto flex w-full max-w-4xl items-center justify-between">
       <NuxtLink
@@ -228,7 +228,7 @@ const ringMiddleStyle = computed(() => ({
         <p class="font-inter text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
           Shared audio overview
         </p>
-        <h1 data-testid="public-audio-title" class="mt-1 font-dm-sans text-3xl font-bold text-foreground">
+        <h1 data-testid="public-audio-title" class="mt-1 font-dm-sans text-2xl font-bold text-foreground sm:text-3xl">
           {{ overview.title }}
         </h1>
         <p class="mt-1 font-inter text-xs text-muted-foreground">
@@ -236,26 +236,26 @@ const ringMiddleStyle = computed(() => ({
         </p>
       </div>
 
-      <section class="grid grid-cols-2 gap-4">
+      <section class="grid grid-cols-2 gap-3 sm:gap-4">
         <div
-          class="relative flex flex-col items-center gap-3 rounded-xl border p-6 transition-colors"
+          class="relative flex flex-col items-center gap-2 rounded-xl border p-4 transition-colors sm:gap-3 sm:p-6"
           :class="activeTurn?.speaker === 'host_a' ? 'border-primary/70 bg-card' : 'border-border/60 bg-card/60 opacity-80'"
         >
-          <div class="relative flex h-24 w-24 items-center justify-center">
+          <div class="relative flex h-16 w-16 items-center justify-center sm:h-24 sm:w-24">
             <span
               v-if="activeTurn?.speaker === 'host_a'"
-              class="pointer-events-none absolute h-24 w-24 rounded-full border border-primary/60 transition-[transform,opacity]"
+              class="pointer-events-none absolute h-16 w-16 rounded-full border border-primary/60 transition-[transform,opacity] sm:h-24 sm:w-24"
               :style="ringOuterStyle"
               aria-hidden="true"
             />
             <span
               v-if="activeTurn?.speaker === 'host_a'"
-              class="pointer-events-none absolute h-24 w-24 rounded-full border border-primary/80 transition-[transform,opacity]"
+              class="pointer-events-none absolute h-16 w-16 rounded-full border border-primary/80 transition-[transform,opacity] sm:h-24 sm:w-24"
               :style="ringMiddleStyle"
               aria-hidden="true"
             />
             <span
-              class="h-24 w-24 rounded-full bg-primary transition-[transform,box-shadow]"
+              class="h-16 w-16 rounded-full bg-primary transition-[transform,box-shadow] sm:h-24 sm:w-24"
               :class="activeTurn?.speaker === 'host_a' ? 'shadow-[0_0_40px_rgba(245,158,11,0.55)]' : ''"
               :style="activeTurn?.speaker === 'host_a' ? activeHostGlowStyle : undefined"
               aria-hidden="true"
@@ -272,24 +272,24 @@ const ringMiddleStyle = computed(() => ({
           </div>
         </div>
         <div
-          class="relative flex flex-col items-center gap-3 rounded-xl border p-6 transition-colors"
+          class="relative flex flex-col items-center gap-2 rounded-xl border p-4 transition-colors sm:gap-3 sm:p-6"
           :class="activeTurn?.speaker === 'host_b' ? 'border-primary/70 bg-card' : 'border-border/60 bg-card/60 opacity-80'"
         >
-          <div class="relative flex h-24 w-24 items-center justify-center">
+          <div class="relative flex h-16 w-16 items-center justify-center sm:h-24 sm:w-24">
             <span
               v-if="activeTurn?.speaker === 'host_b'"
-              class="pointer-events-none absolute h-24 w-24 rounded-full border border-accent/60 transition-[transform,opacity]"
+              class="pointer-events-none absolute h-16 w-16 rounded-full border border-accent/60 transition-[transform,opacity] sm:h-24 sm:w-24"
               :style="ringOuterStyle"
               aria-hidden="true"
             />
             <span
               v-if="activeTurn?.speaker === 'host_b'"
-              class="pointer-events-none absolute h-24 w-24 rounded-full border border-accent/80 transition-[transform,opacity]"
+              class="pointer-events-none absolute h-16 w-16 rounded-full border border-accent/80 transition-[transform,opacity] sm:h-24 sm:w-24"
               :style="ringMiddleStyle"
               aria-hidden="true"
             />
             <span
-              class="h-24 w-24 rounded-full bg-accent transition-[transform,box-shadow]"
+              class="h-16 w-16 rounded-full bg-accent transition-[transform,box-shadow] sm:h-24 sm:w-24"
               :class="activeTurn?.speaker === 'host_b' ? 'shadow-[0_0_40px_rgba(252,211,77,0.55)]' : ''"
               :style="activeTurn?.speaker === 'host_b' ? activeHostGlowStyle : undefined"
               aria-hidden="true"
@@ -309,7 +309,7 @@ const ringMiddleStyle = computed(() => ({
 
       <blockquote
         data-testid="public-audio-active-quote"
-        class="max-w-2xl self-center text-center font-dm-sans text-lg leading-relaxed text-foreground"
+        class="max-w-2xl self-center text-center font-dm-sans text-base leading-relaxed text-foreground sm:text-lg"
       >
         <span class="mr-1 text-primary">“</span>{{ activeQuote }}<span class="ml-1 text-primary">”</span>
         <p class="mt-2 font-inter text-xs text-muted-foreground">
