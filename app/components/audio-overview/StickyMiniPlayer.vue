@@ -313,13 +313,13 @@ async function handleExpand() {
             </div>
           </div>
           <div class="flex items-center gap-1">
-            <button type="button" aria-label="Skip back 15s" class="inline-flex h-7 w-7 items-center justify-center rounded-full text-foreground hover:bg-accent/20" @click="skip(-15000)">
+            <button type="button" aria-label="Skip back 10s" class="inline-flex h-7 w-7 items-center justify-center rounded-full text-foreground hover:bg-accent/20" @click="skip(-10000)">
               <Rewind class="h-3 w-3" />
             </button>
             <button type="button" :aria-label="isPlaying ? 'Pause' : 'Play'" class="inline-flex h-9 w-9 items-center justify-center rounded-full bg-primary text-primary-foreground transition-transform hover:scale-105" @click="togglePlay">
               <Pause v-if="isPlaying" class="h-4 w-4" /><Play v-else class="h-4 w-4" />
             </button>
-            <button type="button" aria-label="Skip forward 15s" class="inline-flex h-7 w-7 items-center justify-center rounded-full text-foreground hover:bg-accent/20" @click="skip(15000)">
+            <button type="button" aria-label="Skip forward 10s" class="inline-flex h-7 w-7 items-center justify-center rounded-full text-foreground hover:bg-accent/20" @click="skip(10000)">
               <FastForward class="h-3 w-3" />
             </button>
           </div>
