@@ -102,19 +102,19 @@ function submit() {
   <UiDialog :open="props.open" @update:open="(val) => emit('update:open', val)">
     <UiDialogContent
       data-testid="create-void-dialog"
-      class="max-w-[min(42rem,calc(100%-1rem))] gap-0 p-4 sm:max-w-[42rem] sm:p-6"
+      class="max-w-[calc(100%-1rem)] gap-0 p-4 sm:max-w-lg sm:p-6"
     >
       <UiDialogHeader class="space-y-2 pr-10 sm:pr-8">
         <UiDialogTitle class="font-dm-sans text-xl font-bold leading-tight sm:text-[22px]">
           Create a void in {{ props.folderName }}
         </UiDialogTitle>
-        <UiDialogDescription class="max-w-[34rem] font-inter text-sm leading-6 text-muted-foreground">
+        <UiDialogDescription class="font-inter text-sm leading-6 text-muted-foreground">
           Voids are dedicated spaces for chat, flashcards, or quizzes. They inherit
           access to this folder's members and knowledge.
         </UiDialogDescription>
       </UiDialogHeader>
 
-      <div class="mt-5 grid grid-cols-1 gap-3 sm:mt-6 sm:grid-cols-2 lg:grid-cols-4">
+      <div class="mt-4 grid grid-cols-1 gap-3 sm:mt-6 sm:grid-cols-2">
         <button
           v-for="option in options"
           :key="option.type"

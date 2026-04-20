@@ -110,7 +110,7 @@ watch(
   <UiDialog :open="props.open" @update:open="(val) => emit('update:open', val)">
     <UiDialogContent
       data-testid="audio-overview-customize-dialog"
-      class="max-w-[min(32rem,calc(100%-1rem))] gap-0 p-6 sm:max-w-[32rem]"
+      class="max-w-[min(32rem,calc(100%-1rem))] gap-0 p-4 sm:max-w-[32rem] sm:p-6"
     >
       <UiDialogHeader class="space-y-1.5 pr-10">
         <UiDialogTitle class="font-dm-sans text-xl font-bold">
