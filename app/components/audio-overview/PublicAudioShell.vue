@@ -339,43 +339,15 @@ const ringMiddleStyle = computed(() => ({
           <span class="w-12 text-right font-inter text-xs tabular-nums text-muted-foreground">{{ totalLabel }}</span>
         </div>
 
-        <div class="mt-4 flex items-center justify-between">
-          <div class="flex items-center">
-            <div class="relative">
-              <button
-                type="button"
-                data-testid="public-audio-speed-btn"
-                class="inline-flex h-8 items-center gap-1 rounded-full border border-border/60 bg-background px-3 font-inter text-xs font-medium text-foreground transition-colors hover:bg-accent/20"
-                @click="toggleSpeedMenu"
-              >
-                {{ playbackRate }}x
-                <span aria-hidden="true" class="text-muted-foreground">▾</span>
-              </button>
-              <div
-                v-if="speedMenuOpen"
-                class="absolute bottom-full left-0 z-10 mb-2 min-w-24 rounded-lg border border-border/60 bg-card p-1 shadow-md"
-              >
-                <button
-                  v-for="opt in speedOptions"
-                  :key="opt"
-                  type="button"
-                  class="block w-full rounded-md px-3 py-1.5 text-left font-inter text-xs hover:bg-accent/20"
-                  :class="opt === playbackRate ? 'text-primary' : 'text-foreground'"
-                  @click="pickSpeed(opt)"
-                >
-                  {{ opt }}x
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div class="flex items-center gap-3">
+        <div class="mt-4 grid grid-cols-3 items-center gap-2">
+          <div />
+          <div class="flex items-center justify-center gap-3">
             <button
               type="button"
               data-testid="public-audio-skip-back"
-              aria-label="Skip back 15 seconds"
+              aria-label="Skip back 10 seconds"
               class="inline-flex h-10 w-10 items-center justify-center rounded-full text-foreground transition-colors hover:bg-accent/20"
-              @click="skip(-15000)"
+              @click="skip(-10000)"
             >
               <Rewind class="h-4 w-4" />
             </button>
@@ -392,27 +364,53 @@ const ringMiddleStyle = computed(() => ({
             <button
               type="button"
               data-testid="public-audio-skip-forward"
-              aria-label="Skip forward 15 seconds"
+              aria-label="Skip forward 10 seconds"
               class="inline-flex h-10 w-10 items-center justify-center rounded-full text-foreground transition-colors hover:bg-accent/20"
-              @click="skip(15000)"
+              @click="skip(10000)"
             >
               <FastForward class="h-4 w-4" />
             </button>
           </div>
+          <div />
+        </div>
 
-          <div class="flex items-center">
+        <div class="mt-2 flex items-center justify-center gap-2">
+          <div class="relative">
             <button
               type="button"
-              data-testid="public-audio-download-btn"
-              aria-label="Download audio overview"
-              :disabled="downloading || turnUrls.length === 0"
-              class="inline-flex h-8 items-center gap-1.5 rounded-md border border-transparent px-2 font-inter text-xs text-foreground transition-colors hover:border-primary/40 hover:bg-accent/10 disabled:cursor-not-allowed disabled:opacity-50"
-              @click="handleDownload"
+              data-testid="public-audio-speed-btn"
+              class="inline-flex h-8 items-center gap-1 rounded-full border border-border/60 bg-background px-3 font-inter text-xs font-medium text-foreground transition-colors hover:bg-accent/20"
+              @click="toggleSpeedMenu"
             >
-              <Download class="h-3.5 w-3.5" :class="downloading ? 'animate-pulse' : ''" />
-              {{ downloading ? 'Downloading…' : 'Download' }}
+              {{ playbackRate }}x
+              <span aria-hidden="true" class="text-muted-foreground">▾</span>
             </button>
+            <div
+              v-if="speedMenuOpen"
+              class="absolute bottom-full left-0 z-10 mb-2 min-w-24 rounded-lg border border-border/60 bg-card p-1 shadow-md"
+            >
+              <button
+                v-for="opt in speedOptions"
+                :key="opt"
+                type="button"
+                class="block w-full rounded-md px-3 py-1.5 text-left font-inter text-xs hover:bg-accent/20"
+                :class="opt === playbackRate ? 'text-primary' : 'text-foreground'"
+                @click="pickSpeed(opt)"
+              >
+                {{ opt }}x
+              </button>
+            </div>
           </div>
+          <button
+            type="button"
+            data-testid="public-audio-download-btn"
+            aria-label="Download audio overview"
+            :disabled="downloading || turnUrls.length === 0"
+            class="inline-flex h-8 w-8 items-center justify-center rounded-full border border-border/60 bg-background text-foreground transition-colors hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-50"
+            @click="handleDownload"
+          >
+            <Download class="h-3.5 w-3.5" :class="downloading ? 'animate-pulse' : ''" />
+          </button>
         </div>
       </section>
 
