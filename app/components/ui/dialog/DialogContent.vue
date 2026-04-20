@@ -34,7 +34,7 @@ const forwarded = useForwardPropsEmits(delegatedProps, emits)
       v-bind="{ ...$attrs, ...forwarded }"
       :class="
         cn(
-          'bg-background keyboard-scroll-area data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 fixed left-[50%] top-[50%] z-50 grid w-full max-w-[calc(100%-1rem)] max-h-[calc(var(--mobile-vh,100dvh)-1rem)] translate-x-[-50%] translate-y-[-50%] gap-6 overflow-y-auto rounded-2xl border px-4 py-5 shadow-lg duration-200 pb-[calc(var(--vk-safe-bottom,env(safe-area-inset-bottom,0px))+1rem)] sm:max-h-[calc(var(--mobile-vh,100dvh)-2rem)] sm:max-w-lg sm:p-6',
+          'bg-background keyboard-scroll-area data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 fixed left-[50%] top-[50%] z-50 grid w-full max-w-[calc(100%-1rem)] max-h-[calc(var(--mobile-vh,100dvh)-1rem)] translate-x-[-50%] translate-y-[-50%] gap-4 overflow-x-hidden overflow-y-auto rounded-2xl border px-4 py-5 shadow-lg duration-200 pb-[calc(var(--vk-safe-bottom,env(safe-area-inset-bottom,0px))+1rem)] sm:max-h-[calc(var(--mobile-vh,100dvh)-2rem)] sm:max-w-lg sm:gap-6 sm:p-6',
           props.class,
         )"
     >

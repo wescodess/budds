@@ -20,50 +20,47 @@ const helperCopy = computed(() =>
 </script>
 
 <template>
-  <div class="flex h-full min-h-0 flex-1 flex-col items-center justify-center p-6">
+  <div class="flex h-full min-h-0 flex-1 flex-col items-center justify-center p-4">
     <div
       data-testid="audio-overview-card"
-      class="w-full max-w-xl rounded-xl border border-border/60 bg-card p-8 sm:p-10"
+      class="w-full max-w-xl rounded-xl border border-border/60 bg-card p-5 @container sm:p-8"
     >
-      <div class="flex items-center gap-3">
-        <div class="relative flex h-12 w-12 items-center justify-center rounded-xl overflow-hidden">
+      <div class="flex items-start gap-3">
+        <div class="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-lg overflow-hidden sm:h-12 sm:w-12 sm:rounded-xl">
           <span class="absolute inset-0 bg-primary opacity-10" />
-          <Headphones class="relative z-10 h-5 w-5 text-primary" />
+          <Headphones class="relative z-10 h-4 w-4 text-primary sm:h-5 sm:w-5" />
         </div>
         <div class="flex min-w-0 flex-col">
-          <h2 class="font-dm-sans text-2xl font-bold leading-tight text-foreground">
+          <h2 class="font-dm-sans text-lg font-bold leading-tight text-foreground sm:text-2xl">
             Audio Overview
           </h2>
-          <p class="font-inter text-xs text-muted-foreground">
+          <p class="mt-0.5 font-inter text-[11px] text-muted-foreground sm:text-xs">
             A conversational podcast grounded in your folder's sources. Two AI hosts, ~10 minutes.
           </p>
         </div>
       </div>
 
-      <div class="mt-6 flex items-center gap-3">
+      <div class="mt-4 flex flex-wrap items-center gap-2 sm:mt-6 sm:gap-3">
         <span
-          class="inline-flex items-center rounded-full border border-border/60 bg-background/40 px-3 py-1 font-inter text-[11px] font-medium text-muted-foreground"
+          class="inline-flex items-center rounded-full border border-border/60 bg-background/40 px-2.5 py-0.5 font-inter text-[11px] font-medium text-muted-foreground sm:px-3 sm:py-1"
           data-testid="audio-overview-sources-chip"
         >
-          {{ props.indexedCount }} {{ props.indexedCount === 1 ? 'document' : 'documents' }} indexed
+          {{ props.indexedCount }} {{ props.indexedCount === 1 ? 'doc' : 'docs' }} indexed
         </span>
-      </div>
-
-      <div class="mt-5 flex items-center gap-3">
-        <span class="flex items-center gap-2 font-inter text-[13px] text-muted-foreground">
-          <span class="flex -space-x-2">
-            <span class="h-6 w-6 rounded-full bg-primary/80 ring-2 ring-card" aria-hidden="true" />
-            <span class="h-6 w-6 rounded-full bg-accent/80 ring-2 ring-card" aria-hidden="true" />
+        <span class="flex items-center gap-1.5 font-inter text-[11px] text-muted-foreground sm:text-[13px] sm:gap-2">
+          <span class="flex -space-x-1.5 sm:-space-x-2">
+            <span class="h-5 w-5 rounded-full bg-primary/80 ring-2 ring-card sm:h-6 sm:w-6" aria-hidden="true" />
+            <span class="h-5 w-5 rounded-full bg-accent/80 ring-2 ring-card sm:h-6 sm:w-6" aria-hidden="true" />
           </span>
-          Hosts: Expert + Learner
+          Expert + Learner
         </span>
       </div>
 
-      <div class="mt-8 flex flex-col gap-2 sm:flex-row">
+      <div class="mt-5 flex flex-col gap-2 sm:mt-8">
         <UiButton
           type="button"
           data-testid="audio-overview-generate-btn"
-          class="flex-1"
+          class="w-full"
           :disabled="!canGenerate"
           @click="emit('generate')"
         >
@@ -74,7 +71,7 @@ const helperCopy = computed(() =>
           type="button"
           variant="ghost"
           data-testid="audio-overview-card-customize-btn"
-          class="border border-border/60 sm:w-auto"
+          class="w-full border border-border/60"
           :disabled="!canGenerate"
           @click="emit('customize')"
         >
