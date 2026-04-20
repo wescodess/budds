@@ -55,7 +55,7 @@ function handleSubmit() {
 
 <template>
   <UiDialog :open="open" @update:open="(value: boolean) => emit('update:open', value)">
-    <UiDialogContent class="sm:max-w-2xl">
+    <UiDialogContent class="sm:max-w-md">
       <UiDialogHeader>
         <UiDialogTitle>Move to folder</UiDialogTitle>
         <UiDialogDescription>{{ dialogDescription }}</UiDialogDescription>

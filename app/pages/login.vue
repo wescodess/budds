@@ -10,8 +10,8 @@ async function loginWithGoogle() {
 </script>
 
 <template>
-  <div class="flex min-h-screen items-center justify-center">
-    <div class="w-full max-w-sm space-y-6 p-8">
+  <div class="flex min-h-[var(--mobile-vh,100dvh)] items-center justify-center px-4 pb-[env(safe-area-inset-bottom)]">
+    <div class="w-full max-w-sm space-y-6 p-4 sm:p-8">
       <Motion
         :initial="{ opacity: 0, y: 12 }"
         :animate="{ opacity: 1, y: 0 }"
@@ -26,7 +26,7 @@ async function loginWithGoogle() {
         :animate="{ opacity: 1, y: 0 }"
         :transition="{ ...springGentle, delay: 0.08 }"
         as="button"
-        class="flex w-full items-center justify-center gap-2 rounded-lg border border-gray-300 px-4 py-3 font-medium transition-colors hover:bg-gray-50"
+        class="flex w-full items-center justify-center gap-2 rounded-lg border border-border px-4 py-3 font-medium transition-colors hover:bg-accent/10"
         @click="loginWithGoogle"
       >
         Continue with Google
