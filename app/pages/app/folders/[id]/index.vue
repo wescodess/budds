@@ -835,7 +835,7 @@ async function handleImportLink(url: string) {
     @request-delete-void="handleDeleteVoidRequest"
   >
     <template #top-bar="{ railCollapsed, railHidden, toggleRail }">
-      <div class="sticky top-0 z-20 flex items-center justify-between gap-3 border-b border-border/60 bg-background/90 px-6 py-4 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+      <div class="sticky top-0 z-20 flex items-center justify-between gap-2 border-b border-border/60 bg-background/90 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:gap-3 sm:px-6 sm:py-4">
         <div class="flex min-w-0 items-center gap-3">
           <button
             type="button"
@@ -857,7 +857,7 @@ async function handleImportLink(url: string) {
             <h1 v-else data-testid="folder-heading" class="truncate text-xl font-semibold tracking-tight text-foreground">
               {{ folder.name }}
             </h1>
-            <p class="text-xs text-muted-foreground">
+            <p class="truncate text-xs text-muted-foreground">
               <NuxtLink to="/" class="transition-colors hover:text-foreground">
                 Home
               </NuxtLink>

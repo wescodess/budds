@@ -22,7 +22,7 @@ useHead({
 </script>
 
 <template>
-  <div class="min-h-screen bg-background text-foreground">
+  <div class="min-h-[var(--mobile-vh,100dvh)] bg-background text-foreground">
     <PublicAudioShell :token="token" />
   </div>
 </template>
