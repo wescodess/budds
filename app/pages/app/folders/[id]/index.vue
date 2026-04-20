@@ -1306,7 +1306,8 @@ async function handleImportLink(url: string) {
         />
       </UiTabsContent>
 
-        <UiTabsContent value="documents" class="keyboard-scroll-area flex min-w-0 flex-1 flex-col gap-6 overflow-y-auto p-6">
+        <UiTabsContent value="documents" class="keyboard-scroll-area flex min-w-0 flex-1 flex-col gap-6 overflow-y-auto p-4 sm:p-6">
+          <div class="mx-auto flex w-full max-w-5xl flex-col gap-6">
           <DocumentsFileUploadZone
             :folder-id="folderId"
             :disabled="uploading"
@@ -1341,6 +1342,7 @@ async function handleImportLink(url: string) {
             @rename="() => undefined"
             @download="() => undefined"
           />
+          </div>
         </UiTabsContent>
       </UiTabs>
 
