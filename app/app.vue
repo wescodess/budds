@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { Sonner } from '@/components/ui/sonner'
+import { useMediaQuery } from '@vueuse/core'
 import { getAppThemeBootstrapScript } from '~/composables/useAppTheme'
 import { useMobileKeyboardInset } from '~/composables/useMobileKeyboardInset'
 import StickyMiniPlayer from '~/components/audio-overview/StickyMiniPlayer.vue'
@@ -32,6 +33,9 @@ useHead({
 
 useMobileKeyboardInset()
 
+const isMobile = useMediaQuery('(max-width: 767px)')
+const toastPosition = computed(() => isMobile.value ? 'bottom-center' as const : 'top-right' as const)
+
 const pageTransition = {
   name: 'page-fade',
   mode: 'out-in' as const,
@@ -55,7 +59,7 @@ watch(
       <NuxtPage :transition="pageTransition" />
     </NuxtLayout>
   <InstallAppPrompt />
-  <Sonner rich-colors position="top-right" />
+  <Sonner rich-colors :position="toastPosition" />
   <ClientOnly>
     <audio ref="globalAudioEl" preload="metadata" class="hidden" />
     <audio ref="globalPreloadEl" preload="auto" class="hidden" />
