@@ -10,6 +10,35 @@ async function loadExtractors() {
 
 const FAILED_DOCUMENT_RETENTION_MS = 10_000
 const AI_SEARCH_MAX_FILE_BYTES = 4 * 1024 * 1024
+const BINARY_MIME_TYPES = new Set([
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+])
+
+async function extractMarkdownFromBinary(
+  arrayBuffer: ArrayBuffer,
+  filename: string,
+  mimeType: string,
+): Promise<string | null> {
+  const accountId = process.env.CF_ACCOUNT_ID
+  const token = process.env.CLOUDFLARE_AI_SEARCH_TOKEN || process.env.NUXT_CLOUDFLARE_WORKERS_AI_TOKEN
+  if (!accountId || !token) return null
+
+  const formData = new FormData()
+  formData.append('file', new Blob([arrayBuffer], { type: mimeType }), filename)
+
+  const res = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/tomarkdown`,
+    { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: formData },
+  )
+  if (!res.ok) return null
+
+  const json = await res.json() as { success?: boolean; result?: Array<{ data?: string }> }
+  if (!json.success || !json.result?.length) return null
+
+  return json.result.map(r => r.data ?? '').join('\n\n').trim() || null
+}
 
 type CleanupAttemptResult =
   | { ok: true }
@@ -351,8 +380,10 @@ export const ingestDocument = internalAction({
         }
 
         const arrayBuffer = await blob.arrayBuffer()
+        const resolvedMime = args.mimeType ?? blob.type ?? 'application/octet-stream'
+        const isBinary = BINARY_MIME_TYPES.has(resolvedMime)
 
-        if (arrayBuffer.byteLength > AI_SEARCH_MAX_FILE_BYTES) {
+        if (!isBinary && arrayBuffer.byteLength > AI_SEARCH_MAX_FILE_BYTES) {
           const sizeMB = (arrayBuffer.byteLength / (1024 * 1024)).toFixed(1)
           await failDocumentIngestion(ctx, {
             documentId: args.documentId,
@@ -363,20 +394,42 @@ export const ingestDocument = internalAction({
           return
         }
 
-        const ext = getR2Extension(args.filename, args.mimeType)
-        const r2Key = `${sanitizeUserSegment(args.userId)}/${args.folderId}/${args.documentId}${ext}`
+        if (isBinary) {
+          if (args.taskId) {
+            await ctx.runMutation(internal.tasks.updateProgress, { taskId: args.taskId, progress: 'Extracting text…' })
+          }
+          const markdown = await extractMarkdownFromBinary(arrayBuffer, args.filename, resolvedMime)
 
-        await uploadToR2AndSync(ctx, {
-          documentId: args.documentId,
-          fileId: args.fileId,
-          userId: args.userId,
-          folderId: args.folderId,
-          filename: args.filename,
-          r2Key,
-          body: new Uint8Array(arrayBuffer),
-          contentType: args.mimeType ?? blob.type ?? 'application/octet-stream',
-          taskId: args.taskId,
-        })
+          const r2Key = markdown
+            ? `${sanitizeUserSegment(args.userId)}/${args.folderId}/${args.documentId}.md`
+            : `${sanitizeUserSegment(args.userId)}/${args.folderId}/${args.documentId}${getR2Extension(args.filename, args.mimeType)}`
+
+          await uploadToR2AndSync(ctx, {
+            documentId: args.documentId,
+            fileId: args.fileId,
+            userId: args.userId,
+            folderId: args.folderId,
+            filename: args.filename,
+            r2Key,
+            body: markdown ?? new Uint8Array(arrayBuffer),
+            contentType: markdown ? 'text/markdown' : resolvedMime,
+            taskId: args.taskId,
+          })
+        } else {
+          const ext = getR2Extension(args.filename, args.mimeType)
+          const r2Key = `${sanitizeUserSegment(args.userId)}/${args.folderId}/${args.documentId}${ext}`
+          await uploadToR2AndSync(ctx, {
+            documentId: args.documentId,
+            fileId: args.fileId,
+            userId: args.userId,
+            folderId: args.folderId,
+            filename: args.filename,
+            r2Key,
+            body: new Uint8Array(arrayBuffer),
+            contentType: resolvedMime,
+            taskId: args.taskId,
+          })
+        }
       } else if (sourceType === 'youtube') {
         if (!args.sourceUrl) {
           await failDocumentIngestion(ctx, { documentId: args.documentId, failureReason: 'Source URL is required for YouTube ingestion', taskId: args.taskId })

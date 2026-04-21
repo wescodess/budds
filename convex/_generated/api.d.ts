@@ -9,6 +9,7 @@
  */
 
 import type * as accountDeletion from "../accountDeletion.js";
+import type * as archiveMultiChat from "../archiveMultiChat.js";
 import type * as audioOverviewInterjections from "../audioOverviewInterjections.js";
 import type * as audioOverviews from "../audioOverviews.js";
 import type * as auth from "../auth.js";
@@ -39,6 +40,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   accountDeletion: typeof accountDeletion;
+  archiveMultiChat: typeof archiveMultiChat;
   audioOverviewInterjections: typeof audioOverviewInterjections;
   audioOverviews: typeof audioOverviews;
   auth: typeof auth;

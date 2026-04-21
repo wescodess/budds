@@ -140,8 +140,8 @@ export default defineEventHandler(async (event) => {
     query: body.query,
     userId,
     ...(hasScope ? {} : { folderId: body.folderId }),
-    max_num_results: body.max_num_results ?? 10,
-    score_threshold: body.score_threshold ?? 0.1,
+    max_num_results: body.max_num_results ?? 50,
+    score_threshold: body.score_threshold ?? 0.05,
   })
 
   const allChunks = (searchResults.data ?? []) as AISearchChunk[]

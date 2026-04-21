@@ -72,8 +72,8 @@ export default defineEventHandler(async (event) => {
       query: searchQuery,
       userId,
       folderId: body.folderId,
-      max_num_results: Math.min(questionCount * 2, 20),
-      score_threshold: 0.1,
+      max_num_results: 50,
+      score_threshold: 0.05,
     })
 
     let chunks: AISearchChunk[] = searchResults.data ?? []
