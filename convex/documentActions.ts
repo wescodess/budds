@@ -10,42 +10,6 @@ async function loadExtractors() {
 
 const FAILED_DOCUMENT_RETENTION_MS = 10_000
 const AI_SEARCH_MAX_FILE_BYTES = 4 * 1024 * 1024
-const BINARY_MIME_TYPES = new Set([
-  'application/pdf',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-])
-
-async function extractTextFromBinary(
-  arrayBuffer: ArrayBuffer,
-  filename: string,
-  mimeType: string,
-): Promise<string | null> {
-  try {
-    if (mimeType === 'application/pdf') {
-      const pdfParse = (await import('pdf-parse')).default
-      const result = await pdfParse(Buffer.from(arrayBuffer))
-      const text = result.text?.trim()
-      if (!text) return null
-      console.log(`[extract] PDF ${filename}: ${text.length} chars`)
-      return `# ${filename}\n\n${text}`
-    }
-
-    if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
-      const mammoth = await import('mammoth')
-      const result = await mammoth.extractRawText({ buffer: Buffer.from(arrayBuffer) })
-      const text = result.value?.trim()
-      if (!text) return null
-      console.log(`[extract] DOCX ${filename}: ${text.length} chars`)
-      return `# ${filename}\n\n${text}`
-    }
-
-    return null
-  } catch (err) {
-    console.error(`[extract] Failed for ${filename}:`, err)
-    return null
-  }
-}
 
 type CleanupAttemptResult =
   | { ok: true }
@@ -387,11 +351,8 @@ export const ingestDocument = internalAction({
         }
 
         const arrayBuffer = await blob.arrayBuffer()
-        const resolvedMime = args.mimeType ?? blob.type ?? 'application/octet-stream'
-        const isBinary = BINARY_MIME_TYPES.has(resolvedMime)
-        console.log(`[ingest] file=${args.filename} argsMime=${args.mimeType} blobType=${blob.type} resolved=${resolvedMime} isBinary=${isBinary} size=${arrayBuffer.byteLength}`)
 
-        if (!isBinary && arrayBuffer.byteLength > AI_SEARCH_MAX_FILE_BYTES) {
+        if (arrayBuffer.byteLength > AI_SEARCH_MAX_FILE_BYTES) {
           const sizeMB = (arrayBuffer.byteLength / (1024 * 1024)).toFixed(1)
           await failDocumentIngestion(ctx, {
             documentId: args.documentId,
@@ -402,42 +363,20 @@ export const ingestDocument = internalAction({
           return
         }
 
-        if (isBinary) {
-          if (args.taskId) {
-            await ctx.runMutation(internal.tasks.updateProgress, { taskId: args.taskId, progress: 'Extracting text…' })
-          }
-          const markdown = await extractTextFromBinary(arrayBuffer, args.filename, resolvedMime)
+        const ext = getR2Extension(args.filename, args.mimeType)
+        const r2Key = `${sanitizeUserSegment(args.userId)}/${args.folderId}/${args.documentId}${ext}`
 
-          const r2Key = markdown
-            ? `${sanitizeUserSegment(args.userId)}/${args.folderId}/${args.documentId}.md`
-            : `${sanitizeUserSegment(args.userId)}/${args.folderId}/${args.documentId}${getR2Extension(args.filename, args.mimeType)}`
-
-          await uploadToR2AndSync(ctx, {
-            documentId: args.documentId,
-            fileId: args.fileId,
-            userId: args.userId,
-            folderId: args.folderId,
-            filename: args.filename,
-            r2Key,
-            body: markdown ?? new Uint8Array(arrayBuffer),
-            contentType: markdown ? 'text/markdown' : resolvedMime,
-            taskId: args.taskId,
-          })
-        } else {
-          const ext = getR2Extension(args.filename, args.mimeType)
-          const r2Key = `${sanitizeUserSegment(args.userId)}/${args.folderId}/${args.documentId}${ext}`
-          await uploadToR2AndSync(ctx, {
-            documentId: args.documentId,
-            fileId: args.fileId,
-            userId: args.userId,
-            folderId: args.folderId,
-            filename: args.filename,
-            r2Key,
-            body: new Uint8Array(arrayBuffer),
-            contentType: resolvedMime,
-            taskId: args.taskId,
-          })
-        }
+        await uploadToR2AndSync(ctx, {
+          documentId: args.documentId,
+          fileId: args.fileId,
+          userId: args.userId,
+          folderId: args.folderId,
+          filename: args.filename,
+          r2Key,
+          body: new Uint8Array(arrayBuffer),
+          contentType: args.mimeType ?? blob.type ?? 'application/octet-stream',
+          taskId: args.taskId,
+        })
       } else if (sourceType === 'youtube') {
         if (!args.sourceUrl) {
           await failDocumentIngestion(ctx, { documentId: args.documentId, failureReason: 'Source URL is required for YouTube ingestion', taskId: args.taskId })
