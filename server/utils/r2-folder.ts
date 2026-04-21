@@ -76,6 +76,14 @@ async function listObjects(r2: NonNullable<ReturnType<typeof getR2Config>>, pref
   return entries
 }
 
+const TEXT_READABLE_EXTS = new Set(['.txt', '.md', '.csv', '.html', '.json', '.yaml', '.toml'])
+
+function isTextReadableKey(key: string): boolean {
+  const dotIdx = key.lastIndexOf('.')
+  if (dotIdx === -1) return false
+  return TEXT_READABLE_EXTS.has(key.slice(dotIdx))
+}
+
 export async function fetchFolderDocs(params: FetchFolderDocsParams): Promise<FolderDoc[]> {
   const r2 = getR2Config()
   if (!r2) return []
@@ -90,6 +98,8 @@ export async function fetchFolderDocs(params: FetchFolderDocsParams): Promise<Fo
 
       const key = doc.r2Key
         ?? `${sanitizeUserSegment(params.userId)}/${doc.folderId}/${doc.documentId}.txt`
+
+      if (!isTextReadableKey(key)) continue
 
       try {
         const result = await getObject(r2, key)
@@ -117,14 +127,8 @@ export async function fetchFolderDocs(params: FetchFolderDocsParams): Promise<Fo
 
   if (!params.folderId) return []
 
-  const TEXT_READABLE_EXTS = new Set(['.txt', '.md', '.csv', '.html', '.json', '.yaml', '.toml'])
-
   const prefix = `${sanitizeUserSegment(params.userId)}/${params.folderId}/`
-  const objects = (await listObjects(r2, prefix)).filter((o) => {
-    const dotIdx = o.key.lastIndexOf('.')
-    if (dotIdx === -1) return false
-    return TEXT_READABLE_EXTS.has(o.key.slice(dotIdx))
-  })
+  const objects = (await listObjects(r2, prefix)).filter(o => isTextReadableKey(o.key))
 
   for (const obj of objects) {
     if (spent >= budget) break

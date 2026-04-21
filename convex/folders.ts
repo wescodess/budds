@@ -319,22 +319,26 @@ export const setReferenceScope = mutation({
     const folder = await ctx.db.get(args.folderId)
     if (!folder || folder.userId !== userId) throw new Error('Folder not found')
 
+    let ownedFolderIds: Id<'folders'>[] = []
+    let ownedFileIds: Id<'documents'>[] = []
+
     if (args.scope) {
       for (const fid of args.scope.folderIds ?? []) {
         const f = await ctx.db.get(fid)
-        if (!f || f.userId !== userId) throw new Error('Scope folder not owned')
+        if (f && f.userId === userId) ownedFolderIds.push(fid)
       }
       for (const did of args.scope.fileIds ?? []) {
         const d = await ctx.db.get(did)
-        if (!d || d.userId !== userId) throw new Error('Scope doc not owned')
+        if (d && d.userId === userId) ownedFileIds.push(did)
       }
     }
 
-    const nothingSelected = !args.scope
-      || ((args.scope.folderIds?.length ?? 0) === 0 && (args.scope.fileIds?.length ?? 0) === 0)
+    const nothingSelected = ownedFolderIds.length === 0 && ownedFileIds.length === 0
 
     await ctx.db.patch(args.folderId, {
-      referenceScope: nothingSelected ? undefined : args.scope,
+      referenceScope: nothingSelected
+        ? undefined
+        : { folderIds: ownedFolderIds, fileIds: ownedFileIds },
       updatedAt: Date.now(),
     })
     return { cleared: nothingSelected }
