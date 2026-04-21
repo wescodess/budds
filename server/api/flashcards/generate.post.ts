@@ -66,8 +66,8 @@ export default defineEventHandler(async (event) => {
       query: SEED_QUERY,
       userId,
       folderId: body.folderId,
-      max_num_results: 16,
-      score_threshold: 0.1,
+      max_num_results: 50,
+      score_threshold: 0.05,
     })
 
     let chunks: AISearchChunk[] = searchResults.data ?? []
