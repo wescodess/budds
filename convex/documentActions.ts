@@ -28,16 +28,30 @@ async function extractMarkdownFromBinary(
   const formData = new FormData()
   formData.append('file', new Blob([arrayBuffer], { type: mimeType }), filename)
 
-  const res = await fetch(
-    `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/tomarkdown`,
-    { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: formData },
-  )
-  if (!res.ok) return null
+  try {
+    const res = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/tomarkdown`,
+      { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: formData },
+    )
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '')
+      console.error(`[tomarkdown] API error ${res.status}: ${errText.slice(0, 300)}`)
+      return null
+    }
 
-  const json = await res.json() as { success?: boolean; result?: Array<{ data?: string }> }
-  if (!json.success || !json.result?.length) return null
+    const json = await res.json() as { success?: boolean; result?: Array<{ data?: string }> }
+    if (!json.success || !json.result?.length) {
+      console.error(`[tomarkdown] Empty result for ${filename}: success=${json.success} resultLen=${json.result?.length ?? 0}`)
+      return null
+    }
 
-  return json.result.map(r => r.data ?? '').join('\n\n').trim() || null
+    const md = json.result.map(r => r.data ?? '').join('\n\n').trim()
+    console.log(`[tomarkdown] Extracted ${md.length} chars from ${filename}`)
+    return md || null
+  } catch (err) {
+    console.error(`[tomarkdown] Exception for ${filename}:`, err)
+    return null
+  }
 }
 
 type CleanupAttemptResult =
