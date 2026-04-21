@@ -210,6 +210,18 @@ export default defineEventHandler(async (event) => {
       if (scopedFolderDocs.length > 0) {
         citationChunks = scopedFolderDocs.map((doc) => folderDocToChunk(doc, userId))
         context = buildFolderDocContext(scopedFolderDocs)
+      } else if (chunks.length < 8 && summarizationIntent) {
+        const deepSearch = await searchDocuments({
+          query: body.query,
+          userId,
+          ...(hasScope ? {} : { folderId: body.folderId }),
+          max_num_results: 40,
+          score_threshold: 0.05,
+          filterDocIds: scopedDocumentIds ? [...scopedDocumentIds] : undefined,
+        })
+        const deepChunks = (deepSearch.data ?? []) as AISearchChunk[]
+        citationChunks = deepChunks.length > chunks.length ? deepChunks : chunks
+        context = buildChunkContext(citationChunks)
       } else {
         citationChunks = chunks
         context = buildChunkContext(chunks)
@@ -228,6 +240,18 @@ export default defineEventHandler(async (event) => {
     if (folderDocs.length > 0) {
       citationChunks = folderDocs.map((doc) => folderDocToChunk(doc, userId))
       context = buildFolderDocContext(folderDocs)
+    }
+    else if (chunks.length < 8 && summarizationIntent) {
+      const deepSearch = await searchDocuments({
+        query: body.query,
+        userId,
+        folderId: body.folderId,
+        max_num_results: 40,
+        score_threshold: 0.05,
+      })
+      const deepChunks = (deepSearch.data ?? []) as AISearchChunk[]
+      citationChunks = deepChunks.length > chunks.length ? deepChunks : chunks
+      context = buildChunkContext(citationChunks)
     }
     else {
       citationChunks = chunks

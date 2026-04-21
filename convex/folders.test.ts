@@ -1200,18 +1200,17 @@ describe('folders.setReferenceScope (Phase 5A)', () => {
     ).rejects.toThrow(/not found/)
   })
 
-  it('[P0] rejects scope containing folders the caller does not own', async () => {
+  it('[P0] silently drops non-owned folders from scope', async () => {
     const t = convexTest(schema, modules)
     const asA = t.withIdentity(TEST_IDENTITY)
     const asB = t.withIdentity(OTHER_IDENTITY)
     const myFolder = await asA.mutation(api.folders.createFolder, { name: 'Mine' })
     const theirFolder = await asB.mutation(api.folders.createFolder, { name: 'Theirs' })
-    await expect(
-      asA.mutation(api.folders.setReferenceScope, {
-        folderId: myFolder,
-        scope: { folderIds: [theirFolder], fileIds: [] },
-      }),
-    ).rejects.toThrow(/not owned/)
+    const result = await asA.mutation(api.folders.setReferenceScope, {
+      folderId: myFolder,
+      scope: { folderIds: [theirFolder], fileIds: [] },
+    })
+    expect(result.cleared).toBe(true)
   })
 
   it('[P0] persists owned-folder + owned-file scope', async () => {

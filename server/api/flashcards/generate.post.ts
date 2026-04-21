@@ -94,6 +94,19 @@ export default defineEventHandler(async (event) => {
       }
     }
 
+    if (chunks.length < 2) {
+      const deepSearch = await searchDocuments({
+        query: SEED_QUERY,
+        userId,
+        folderId: body.folderId,
+        max_num_results: 40,
+        score_threshold: 0.05,
+      })
+      if ((deepSearch.data?.length ?? 0) > chunks.length) {
+        chunks = deepSearch.data
+      }
+    }
+
     if (chunks.length === 0) {
       const msg = 'Not enough indexed content to generate flash cards'
       await failTask(msg)

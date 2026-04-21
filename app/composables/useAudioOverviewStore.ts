@@ -295,6 +295,8 @@ export function createAudioOverviewPlayback() {
     spliceApplied = false
   }
 
+  const shellVisible = ref(false)
+
   return {
     ...toRefs(state),
     audioElRef,
@@ -304,6 +306,7 @@ export function createAudioOverviewPlayback() {
     activeTurn,
     magnitude,
     visualizerSupported,
+    shellVisible,
     attachAudio,
     loadOverview,
     play,
