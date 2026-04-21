@@ -21,7 +21,7 @@ const DEFAULT_VOICE_PROFILE: { hostA: AuraVoice; hostB: AuraVoice } = {
   hostA: 'asteria',
   hostB: 'orion',
 }
-const MAX_SEARCH_RESULTS = 20
+const MAX_SEARCH_RESULTS = 50
 const MAX_TURNS = 50
 const MIN_TURNS = 3
 
