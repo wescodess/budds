@@ -99,7 +99,7 @@ const { springGentle } = useMotionPresets()
     :initial="{ opacity: 0, y: 12 }"
     :animate="{ opacity: 1, y: 0 }"
     :transition="springGentle"
-    class="space-y-6 p-6"
+    class="space-y-5 p-4 sm:space-y-6 sm:p-6"
   >
     <div class="flex items-start justify-between">
       <div>
@@ -112,8 +112,8 @@ const { springGentle } = useMotionPresets()
       <QuizHistoryDropdown :attempts="attempts" @select="handleSelectAttempt" />
     </div>
 
-    <div class="grid grid-cols-2 gap-4">
-      <div class="rounded-lg border p-5 text-center">
+    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4">
+      <div class="rounded-lg border p-4 text-center sm:p-5">
         <p class="text-xs font-medium text-muted-foreground">Your Score</p>
         <div class="relative mx-auto my-3 h-20 w-20">
           <svg class="h-full w-full -rotate-90" viewBox="0 0 36 36">
@@ -130,18 +130,18 @@ const { springGentle } = useMotionPresets()
           </span>
         </div>
       </div>
-      <div class="rounded-lg border p-5 text-center">
+      <div class="rounded-lg border p-4 text-center sm:p-5">
         <p class="text-xs font-medium text-muted-foreground">Correct Answers</p>
         <p class="mt-5 text-3xl font-bold">{{ results.score }} <span class="text-lg text-muted-foreground">of {{ results.total }}</span></p>
       </div>
     </div>
 
-    <div class="flex gap-2">
-      <UiButton @click="emit('retake')">
+    <div class="flex flex-wrap gap-2">
+      <UiButton class="flex-1 sm:flex-none" @click="emit('retake')">
         <RotateCcw class="mr-1.5 h-3.5 w-3.5" />
         Retake Quiz
       </UiButton>
-      <UiButton variant="outline" @click="emit('back')">Back to overview</UiButton>
+      <UiButton variant="outline" class="flex-1 sm:flex-none" @click="emit('back')">Back to overview</UiButton>
     </div>
 
     <div v-if="results.results.length > 0">
