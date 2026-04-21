@@ -396,6 +396,7 @@ export const ingestDocument = internalAction({
         const arrayBuffer = await blob.arrayBuffer()
         const resolvedMime = args.mimeType ?? blob.type ?? 'application/octet-stream'
         const isBinary = BINARY_MIME_TYPES.has(resolvedMime)
+        console.log(`[ingest] file=${args.filename} argsMime=${args.mimeType} blobType=${blob.type} resolved=${resolvedMime} isBinary=${isBinary} size=${arrayBuffer.byteLength}`)
 
         if (!isBinary && arrayBuffer.byteLength > AI_SEARCH_MAX_FILE_BYTES) {
           const sizeMB = (arrayBuffer.byteLength / (1024 * 1024)).toFixed(1)
