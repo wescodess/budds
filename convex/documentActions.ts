@@ -16,40 +16,33 @@ const BINARY_MIME_TYPES = new Set([
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 ])
 
-async function extractMarkdownFromBinary(
+async function extractTextFromBinary(
   arrayBuffer: ArrayBuffer,
   filename: string,
   mimeType: string,
 ): Promise<string | null> {
-  const accountId = process.env.CF_ACCOUNT_ID
-  const token = process.env.CLOUDFLARE_AI_SEARCH_TOKEN || process.env.NUXT_CLOUDFLARE_WORKERS_AI_TOKEN
-  if (!accountId || !token) return null
-
-  const formData = new FormData()
-  formData.append('file', new Blob([arrayBuffer], { type: mimeType }), filename)
-
   try {
-    const res = await fetch(
-      `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/tomarkdown`,
-      { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: formData },
-    )
-    if (!res.ok) {
-      const errText = await res.text().catch(() => '')
-      console.error(`[tomarkdown] API error ${res.status}: ${errText.slice(0, 300)}`)
-      return null
+    if (mimeType === 'application/pdf') {
+      const pdfParse = (await import('pdf-parse')).default
+      const result = await pdfParse(Buffer.from(arrayBuffer))
+      const text = result.text?.trim()
+      if (!text) return null
+      console.log(`[extract] PDF ${filename}: ${text.length} chars`)
+      return `# ${filename}\n\n${text}`
     }
 
-    const json = await res.json() as { success?: boolean; result?: Array<{ data?: string }> }
-    if (!json.success || !json.result?.length) {
-      console.error(`[tomarkdown] Empty result for ${filename}: success=${json.success} resultLen=${json.result?.length ?? 0}`)
-      return null
+    if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+      const mammoth = await import('mammoth')
+      const result = await mammoth.extractRawText({ buffer: Buffer.from(arrayBuffer) })
+      const text = result.value?.trim()
+      if (!text) return null
+      console.log(`[extract] DOCX ${filename}: ${text.length} chars`)
+      return `# ${filename}\n\n${text}`
     }
 
-    const md = json.result.map(r => r.data ?? '').join('\n\n').trim()
-    console.log(`[tomarkdown] Extracted ${md.length} chars from ${filename}`)
-    return md || null
+    return null
   } catch (err) {
-    console.error(`[tomarkdown] Exception for ${filename}:`, err)
+    console.error(`[extract] Failed for ${filename}:`, err)
     return null
   }
 }
@@ -413,7 +406,7 @@ export const ingestDocument = internalAction({
           if (args.taskId) {
             await ctx.runMutation(internal.tasks.updateProgress, { taskId: args.taskId, progress: 'Extracting text…' })
           }
-          const markdown = await extractMarkdownFromBinary(arrayBuffer, args.filename, resolvedMime)
+          const markdown = await extractTextFromBinary(arrayBuffer, args.filename, resolvedMime)
 
           const r2Key = markdown
             ? `${sanitizeUserSegment(args.userId)}/${args.folderId}/${args.documentId}.md`
