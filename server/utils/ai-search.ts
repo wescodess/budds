@@ -132,27 +132,42 @@ export async function searchDocuments(params: AISearchParams): Promise<AISearchR
     const meta = c.item?.metadata ?? {}
     const attrs = c.attributes ?? {}
     const sources = [attrs, meta]
+    const key = c.item?.key
+    const keyParts = key?.split('/') ?? []
+
     return {
       id: c.id,
       content: c.text ?? c.content ?? '',
       score: c.score,
       attributes: {
         filename: readChunkString(sources, 'filename'),
-        folderId: readChunkString(sources, 'folderId', 'folderid'),
-        documentId: readChunkString(sources, 'documentId', 'documentid'),
-        userId: readChunkString(sources, 'userId', 'userid'),
-        folder: c.item?.key,
+        folderId: readChunkString(sources, 'folderId', 'folderid') ?? keyParts[1],
+        documentId: readChunkString(sources, 'documentId', 'documentid')
+          ?? (keyParts[2] ? keyParts[2].replace(/\.[^.]+$/, '') : undefined),
+        userId: readChunkString(sources, 'userId', 'userid') ?? keyParts[0],
+        folder: key,
       },
     }
   })
+
+  const sanitizedUserId = sanitizeUserSegment(params.userId)
 
   const docIdAllowlist = params.filterDocIds && params.filterDocIds.length > 0
     ? new Set(params.filterDocIds)
     : null
 
   const chunks = mapped.filter((c) => {
-    if (c.attributes.userId !== params.userId) return false
-    if (params.folderId && c.attributes.folderId !== params.folderId) return false
+    const metaUserId = c.attributes.userId
+    const keyPrefix = c.attributes.folder?.split('/')[0]
+    const ownerMatch = metaUserId === params.userId
+      || metaUserId === sanitizedUserId
+      || keyPrefix === sanitizedUserId
+    if (!ownerMatch) return false
+
+    const metaFolderId = c.attributes.folderId
+    const keyFolderId = c.attributes.folder?.split('/')[1]
+    if (params.folderId && metaFolderId !== params.folderId && keyFolderId !== params.folderId) return false
+
     if (docIdAllowlist) {
       const docId = c.attributes.documentId
       if (!docId || !docIdAllowlist.has(docId)) return false

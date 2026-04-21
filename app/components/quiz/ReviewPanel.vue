@@ -25,8 +25,23 @@ function truncate(text: string, max = 60) {
 </script>
 
 <template>
-  <div class="flex h-full min-h-[400px] rounded-lg border">
-    <div class="w-64 shrink-0 overflow-y-auto border-r">
+  <div class="flex flex-col rounded-lg border sm:min-h-[400px] sm:flex-row">
+    <div class="flex gap-1.5 overflow-x-auto border-b p-2 sm:hidden">
+      <button
+        v-for="(r, i) in results"
+        :key="r.questionId"
+        type="button"
+        class="inline-flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors"
+        :class="activeIndex === i ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:bg-accent/30'"
+        @click="activeIndex = i"
+      >
+        <Check v-if="r.isCorrect" class="h-3 w-3 text-green-500" />
+        <X v-else class="h-3 w-3 text-destructive" />
+        Q{{ i + 1 }}
+      </button>
+    </div>
+
+    <div class="hidden w-64 shrink-0 overflow-y-auto border-r sm:block">
       <button
         v-for="(r, i) in results"
         :key="r.questionId"
@@ -46,23 +61,23 @@ function truncate(text: string, max = 60) {
       </button>
     </div>
 
-    <div v-if="activeResult" class="flex-1 overflow-y-auto p-6">
-      <p class="text-lg font-medium">{{ activeResult.questionText }}</p>
+    <div v-if="activeResult" class="flex-1 overflow-y-auto p-4 sm:p-6">
+      <p class="text-base font-medium sm:text-lg">{{ activeResult.questionText }}</p>
 
-      <div class="mt-6 space-y-4">
+      <div class="mt-4 space-y-3 sm:mt-6 sm:space-y-4">
         <div v-if="activeResult.questionType === 'multiple-choice' && activeResult.options" class="space-y-2">
           <div
             v-for="opt in activeResult.options"
             :key="opt"
-            class="flex items-center gap-2 rounded-lg border px-4 py-3 text-sm"
+            class="flex items-center gap-2 rounded-lg border px-3 py-2.5 text-sm sm:px-4 sm:py-3"
             :class="{
               'border-green-500 bg-green-500/10': opt === activeResult.correctAnswer,
               'border-destructive bg-destructive/5': opt === activeResult.userAnswer && !activeResult.isCorrect && opt !== activeResult.correctAnswer,
             }"
           >
-            <span class="flex-1">{{ opt }}</span>
-            <Check v-if="opt === activeResult.correctAnswer" class="h-3.5 w-3.5 text-green-500" />
-            <X v-else-if="opt === activeResult.userAnswer && !activeResult.isCorrect" class="h-3.5 w-3.5 text-destructive" />
+            <span class="min-w-0 flex-1">{{ opt }}</span>
+            <Check v-if="opt === activeResult.correctAnswer" class="h-3.5 w-3.5 shrink-0 text-green-500" />
+            <X v-else-if="opt === activeResult.userAnswer && !activeResult.isCorrect" class="h-3.5 w-3.5 shrink-0 text-destructive" />
           </div>
         </div>
 
@@ -81,7 +96,7 @@ function truncate(text: string, max = 60) {
           </div>
         </div>
 
-        <div v-if="activeResult.explanation" class="rounded-lg bg-muted/50 p-4">
+        <div v-if="activeResult.explanation" class="rounded-lg bg-muted/50 p-3 sm:p-4">
           <p class="mb-1 text-xs font-medium text-muted-foreground">Explanation</p>
           <p class="text-sm">{{ activeResult.explanation }}</p>
         </div>
