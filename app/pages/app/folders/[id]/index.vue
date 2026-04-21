@@ -1346,6 +1346,16 @@ async function handleImportLink(url: string) {
         </UiTabsContent>
       </UiTabs>
 
+      <div
+        v-if="isDesktop && helperPane.isOpen.value && activeTab !== 'chat'"
+        class="flex h-full min-w-[18rem] max-w-[22rem] shrink-0 border-l border-border/60"
+      >
+        <FolderShellHelperPane :exclude-tabs="['podcast', 'sources']">
+          <template #default="{ activeTabId: tid }">
+            <FolderTasksPane v-if="tid === 'tasks'" :folder-id="folderId" embedded @close="helperPane.close()" @view-room="handleTaskViewRoom" />
+          </template>
+        </FolderShellHelperPane>
+      </div>
     </div>
 
     <FolderShellHelperPane v-if="!isDesktop" mobile :exclude-tabs="['podcast']">
