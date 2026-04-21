@@ -1,16 +1,18 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { Pause, Play, Maximize2, X, Rewind, FastForward, ChevronUp, ChevronDown } from 'lucide-vue-next'
 
 const {
   overviewId, folderId, title, activeTurn,
   isPlaying, totalDurationMs, currentTimeMs, playbackRate,
+  shellVisible,
   togglePlay, skip, seek, setSpeed, dismiss,
 } = useAudioOverviewStore()
 
 const route = useRoute()
 const { allFolders } = useFolders()
 const expanded = ref(false)
+const isTransitioning = ref(false)
 
 const POSITION_KEY = 'budds.mini-player.position'
 const floatingRef = ref<HTMLElement | null>(null)
@@ -114,14 +116,6 @@ const floatingStyle = computed(() => {
   }
 })
 
-const onActiveFolderRoute = computed(() => {
-  const fid = folderId.value
-  if (!fid) return false
-  if (route.path !== `/app/folders/${fid}`) return false
-  const tab = route.query?.tab
-  return !tab || tab === 'chat' || tab === 'audio-overview'
-})
-
 const onPublicAudioRoute = computed(() =>
   typeof route.path === 'string' && route.path.startsWith('/audio/'),
 )
@@ -129,7 +123,7 @@ const onPublicAudioRoute = computed(() =>
 const visible = computed(() =>
   import.meta.client
   && overviewId.value !== null
-  && !onActiveFolderRoute.value
+  && !shellVisible.value
   && !onPublicAudioRoute.value,
 )
 
@@ -191,14 +185,39 @@ async function handleExpand() {
     void navigateTo('/')
     return
   }
-  void navigateTo(`/app/folders/${fid}`)
+
+  isTransitioning.value = true
+  await nextTick()
+  setTimeout(() => {
+    navigateTo(`/app/folders/${fid}`)
+  }, 420)
 }
+
+watch(shellVisible, (v) => {
+  if (v) isTransitioning.value = false
+})
 </script>
 
 <template>
+  <Teleport to="body">
+    <Transition
+      enter-active-class="transition-opacity duration-300 ease-out"
+      enter-from-class="opacity-0"
+      enter-to-class="opacity-100"
+      leave-active-class="transition-opacity duration-200 ease-in"
+      leave-from-class="opacity-100"
+      leave-to-class="opacity-0"
+    >
+      <div
+        v-if="isTransitioning"
+        class="fixed inset-0 z-[9998] bg-background/80 backdrop-blur-sm"
+      />
+    </Transition>
+  </Teleport>
+
   <AnimatePresence mode="wait">
     <Motion
-      v-if="visible"
+      v-if="visible || isTransitioning"
       key="mini-player"
       :initial="{ opacity: 0, scale: 0.9, y: 20 }"
       :animate="{ opacity: 1, scale: 1, y: 0 }"
@@ -209,28 +228,40 @@ async function handleExpand() {
       data-testid="audio-overview-sticky-mini-player"
       :class="[
         'fixed z-[9999]',
-        expanded
-          ? 'w-80 rounded-2xl border border-border/60 bg-card shadow-lg'
-          : 'w-72 rounded-full border border-border/60 bg-card shadow-lg',
+        isTransitioning
+          ? 'mini-player-expand rounded-2xl border border-border/60 bg-card shadow-2xl'
+          : expanded
+            ? 'w-80 rounded-2xl border border-border/60 bg-card shadow-lg'
+            : 'w-72 rounded-full border border-border/60 bg-card shadow-lg',
         isDragging ? '' : 'transition-shadow duration-200',
       ]"
-      :style="floatingStyle"
+      :style="isTransitioning ? undefined : floatingStyle"
     >
-      <!-- Collapsed pill — drag handle is the non-button area -->
       <div
         ref="dragHandleRef"
         class="flex cursor-grab items-center gap-2 px-3 py-2 select-none active:cursor-grabbing"
-        :class="expanded ? 'border-b border-border/40' : ''"
-        @pointerdown="onDragStart"
+        :class="[
+          expanded || isTransitioning ? 'border-b border-border/40' : '',
+          isTransitioning ? 'py-4 px-5' : '',
+        ]"
+        @pointerdown="isTransitioning ? undefined : onDragStart($event)"
       >
-        <span :class="['h-5 w-5 shrink-0 rounded-full shadow-[0_0_12px_rgba(245,158,11,0.3)]', speakerSwatchClass]" aria-hidden="true" />
+        <span :class="['shrink-0 rounded-full', speakerSwatchClass, isTransitioning ? 'h-8 w-8 shadow-[0_0_20px_rgba(245,158,11,0.4)]' : 'h-5 w-5 shadow-[0_0_12px_rgba(245,158,11,0.3)]']" aria-hidden="true" />
         <div class="min-w-0 flex-1">
-          <p data-testid="audio-overview-sticky-title" class="truncate font-dm-sans text-xs font-medium text-foreground">{{ title || 'Audio overview' }}</p>
+          <p data-testid="audio-overview-sticky-title" :class="['truncate font-dm-sans font-medium text-foreground', isTransitioning ? 'text-base' : 'text-xs']">{{ title || 'Audio overview' }}</p>
+          <p v-if="isTransitioning" class="truncate font-inter text-xs text-muted-foreground mt-0.5">{{ captionLine }}</p>
         </div>
-        <button type="button" :aria-label="isPlaying ? 'Pause' : 'Play'" class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground transition-transform hover:scale-105" @click="togglePlay">
+        <button
+          v-if="!isTransitioning"
+          type="button"
+          :aria-label="isPlaying ? 'Pause' : 'Play'"
+          class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground transition-transform hover:scale-105"
+          @click="togglePlay"
+        >
           <Pause v-if="isPlaying" class="h-3.5 w-3.5" /><Play v-else class="h-3.5 w-3.5" />
         </button>
         <button
+          v-if="!isTransitioning"
           type="button"
           :aria-label="expanded ? 'Collapse' : 'Expand controls'"
           class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-accent/20 hover:text-foreground"
@@ -239,34 +270,42 @@ async function handleExpand() {
           <ChevronDown v-if="expanded" class="h-3.5 w-3.5" />
           <ChevronUp v-else class="h-3.5 w-3.5" />
         </button>
-        <button type="button" aria-label="Close" class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-destructive/10 hover:text-destructive" @click="dismiss">
+        <button
+          v-if="!isTransitioning"
+          type="button"
+          aria-label="Close"
+          class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+          @click="dismiss"
+        >
           <X class="h-3.5 w-3.5" />
         </button>
       </div>
 
-      <!-- Expanded controls -->
-      <div v-if="expanded" class="space-y-2 px-3 pb-3 pt-2">
-        <p class="truncate font-inter text-[10px] text-muted-foreground">{{ captionLine }}</p>
+      <div v-if="expanded || isTransitioning" :class="['space-y-2 px-3 pb-3 pt-2', isTransitioning ? 'px-5 pb-5 pt-4 space-y-4' : '']">
+        <p v-if="!isTransitioning" class="truncate font-inter text-[10px] text-muted-foreground">{{ captionLine }}</p>
 
         <div class="flex items-center gap-2">
-          <span class="w-8 font-inter text-[10px] tabular-nums text-muted-foreground">{{ formatMs(currentTimeMs) }}</span>
+          <span :class="['font-inter tabular-nums text-muted-foreground', isTransitioning ? 'w-10 text-xs' : 'w-8 text-[10px]']">{{ formatMs(currentTimeMs) }}</span>
           <input
             type="range"
             min="0"
             max="1000"
             :value="Math.round(progressPercent * 10)"
             data-testid="audio-overview-sticky-scrubber"
-            class="h-1 flex-1 cursor-pointer appearance-none rounded-full bg-border/40 accent-primary"
+            :class="['flex-1 cursor-pointer appearance-none rounded-full bg-border/40 accent-primary', isTransitioning ? 'h-1.5' : 'h-1']"
             @input="handleScrubInput"
           />
-          <span class="w-8 text-right font-inter text-[10px] tabular-nums text-muted-foreground">{{ formatMs(totalDurationMs) }}</span>
+          <span :class="['text-right font-inter tabular-nums text-muted-foreground', isTransitioning ? 'w-10 text-xs' : 'w-8 text-[10px]']">{{ formatMs(totalDurationMs) }}</span>
         </div>
 
         <div class="flex items-center justify-between">
           <div class="relative">
             <button
               type="button"
-              class="inline-flex h-6 items-center gap-0.5 rounded-full border border-border/60 bg-background px-2 font-inter text-[10px] font-medium text-foreground hover:bg-accent/20"
+              :class="[
+                'inline-flex items-center gap-0.5 rounded-full border border-border/60 bg-background font-inter font-medium text-foreground hover:bg-accent/20',
+                isTransitioning ? 'h-8 px-3 text-xs' : 'h-6 px-2 text-[10px]',
+              ]"
               @click="speedMenuOpen = !speedMenuOpen"
             >
               {{ playbackRate }}x
@@ -288,17 +327,34 @@ async function handleExpand() {
             </div>
           </div>
           <div class="flex items-center gap-1">
-            <button type="button" aria-label="Skip back 10s" class="inline-flex h-7 w-7 items-center justify-center rounded-full text-foreground hover:bg-accent/20" @click="skip(-10000)">
-              <Rewind class="h-3 w-3" />
+            <button
+              type="button"
+              aria-label="Skip back 10s"
+              :class="['inline-flex items-center justify-center rounded-full text-foreground hover:bg-accent/20', isTransitioning ? 'h-10 w-10' : 'h-7 w-7']"
+              @click="skip(-10000)"
+            >
+              <Rewind :class="isTransitioning ? 'h-4 w-4' : 'h-3 w-3'" />
             </button>
-            <button type="button" :aria-label="isPlaying ? 'Pause' : 'Play'" class="inline-flex h-9 w-9 items-center justify-center rounded-full bg-primary text-primary-foreground transition-transform hover:scale-105" @click="togglePlay">
-              <Pause v-if="isPlaying" class="h-4 w-4" /><Play v-else class="h-4 w-4" />
+            <button
+              type="button"
+              :aria-label="isPlaying ? 'Pause' : 'Play'"
+              :class="['inline-flex items-center justify-center rounded-full bg-primary text-primary-foreground transition-transform hover:scale-105', isTransitioning ? 'h-12 w-12' : 'h-9 w-9']"
+              @click="togglePlay"
+            >
+              <Pause v-if="isPlaying" :class="isTransitioning ? 'h-5 w-5' : 'h-4 w-4'" />
+              <Play v-else :class="isTransitioning ? 'h-5 w-5' : 'h-4 w-4'" />
             </button>
-            <button type="button" aria-label="Skip forward 10s" class="inline-flex h-7 w-7 items-center justify-center rounded-full text-foreground hover:bg-accent/20" @click="skip(10000)">
-              <FastForward class="h-3 w-3" />
+            <button
+              type="button"
+              aria-label="Skip forward 10s"
+              :class="['inline-flex items-center justify-center rounded-full text-foreground hover:bg-accent/20', isTransitioning ? 'h-10 w-10' : 'h-7 w-7']"
+              @click="skip(10000)"
+            >
+              <FastForward :class="isTransitioning ? 'h-4 w-4' : 'h-3 w-3'" />
             </button>
           </div>
           <button
+            v-if="!isTransitioning"
             type="button"
             data-testid="audio-overview-sticky-expand"
             aria-label="Open full player"
@@ -307,8 +363,28 @@ async function handleExpand() {
           >
             <Maximize2 class="h-3.5 w-3.5" />
           </button>
+          <div v-else class="w-6" />
         </div>
       </div>
     </Motion>
   </AnimatePresence>
 </template>
+
+<style scoped>
+.mini-player-expand {
+  inset: 12px;
+  width: auto;
+  animation: mini-player-morph 420ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes mini-player-morph {
+  0% {
+    border-radius: 1rem;
+    box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1);
+  }
+  100% {
+    border-radius: 1.25rem;
+    box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.25);
+  }
+}
+</style>

@@ -9,6 +9,7 @@ async function loadExtractors() {
 }
 
 const FAILED_DOCUMENT_RETENTION_MS = 10_000
+const AI_SEARCH_MAX_FILE_BYTES = 4 * 1024 * 1024
 
 type CleanupAttemptResult =
   | { ok: true }
@@ -270,11 +271,13 @@ async function uploadToR2AndSync(
   })
 
   let jobId: string | undefined
+  let piggybackedOnExistingJob = false
 
   if (syncResponse.ok) {
     const syncData = await syncResponse.json() as { result?: { id?: string } }
     jobId = syncData.result?.id
   } else if (syncResponse.status === 429) {
+    piggybackedOnExistingJob = true
     const listResponse = await fetch(jobsUrl, {
       headers: { 'Authorization': `Bearer ${config.token}` },
     })
@@ -310,6 +313,7 @@ async function uploadToR2AndSync(
     await ctx.scheduler.runAfter(10_000, internal.documentActions.pollIndexingStatus, {
       documentId: args.documentId,
       jobId,
+      needsResync: piggybackedOnExistingJob,
     })
   }
 }
@@ -346,9 +350,21 @@ export const ingestDocument = internalAction({
           return
         }
 
+        const arrayBuffer = await blob.arrayBuffer()
+
+        if (arrayBuffer.byteLength > AI_SEARCH_MAX_FILE_BYTES) {
+          const sizeMB = (arrayBuffer.byteLength / (1024 * 1024)).toFixed(1)
+          await failDocumentIngestion(ctx, {
+            documentId: args.documentId,
+            fileId: args.fileId,
+            failureReason: `File is ${sizeMB} MB — exceeds the 4 MB indexing limit. Try splitting it into smaller files.`,
+            taskId: args.taskId,
+          })
+          return
+        }
+
         const ext = getR2Extension(args.filename, args.mimeType)
         const r2Key = `${sanitizeUserSegment(args.userId)}/${args.folderId}/${args.documentId}${ext}`
-        const arrayBuffer = await blob.arrayBuffer()
 
         await uploadToR2AndSync(ctx, {
           documentId: args.documentId,
@@ -470,6 +486,7 @@ export const pollIndexingStatus = internalAction({
   args: {
     documentId: v.id('documents'),
     jobId: v.string(),
+    needsResync: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const doc = await ctx.runQuery(internal.documents.getDocument, { id: args.documentId })
@@ -519,6 +536,35 @@ export const pollIndexingStatus = internalAction({
           cleanupAiSearch: true,
           taskId,
         })
+      } else if (args.needsResync) {
+        const jobsUrl = `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/ai-search/instances/${config.instance}/jobs`
+        const resyncResponse = await fetch(jobsUrl, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${config.token}` },
+        })
+        if (resyncResponse.ok) {
+          const resyncData = await resyncResponse.json() as { result?: { id?: string } }
+          const newJobId = resyncData.result?.id
+          if (newJobId) {
+            await ctx.runMutation(internal.documents.updateDocumentStatus, {
+              id: args.documentId,
+              status: 'indexing',
+              indexJobId: newJobId,
+            })
+            await ctx.scheduler.runAfter(10_000, internal.documentActions.pollIndexingStatus, {
+              documentId: args.documentId,
+              jobId: newJobId,
+            })
+            return
+          }
+        }
+        await ctx.runMutation(internal.documents.updateDocumentStatus, {
+          id: args.documentId,
+          status: 'success',
+        })
+        if (taskId) {
+          await ctx.runMutation(internal.tasks.complete, { taskId, result: { documentId: String(args.documentId) } })
+        }
       } else {
         await ctx.runMutation(internal.documents.updateDocumentStatus, {
           id: args.documentId,
@@ -539,6 +585,7 @@ export const pollIndexingStatus = internalAction({
       await ctx.scheduler.runAfter(10_000, internal.documentActions.pollIndexingStatus, {
         documentId: args.documentId,
         jobId: args.jobId,
+        needsResync: args.needsResync,
       })
     }
   },
