@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { Send } from 'lucide-vue-next'
 import { useMediaQuery } from '@vueuse/core'
 import { api } from '#convex/api'
@@ -167,6 +167,8 @@ const shareTarget = computed(() => {
 })
 
 const store = useAudioOverviewStore()
+onMounted(() => { store.shellVisible.value = true })
+onBeforeUnmount(() => { store.shellVisible.value = false })
 
 const submitting = ref(false)
 const cancelling = ref(false)
