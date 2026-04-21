@@ -39,7 +39,7 @@ function summarizeChunks(chunks: AISearchChunk[]): string {
 function buildTypeDistribution(types: string[], count: number): string {
   if (types.length === 0) return '- Mix roughly 60% multiple-choice / 40% free-response.'
 
-  const parts = types.map(t => {
+  const allowed = types.map(t => {
     switch (t) {
       case 'multiple-choice': return 'multiple-choice'
       case 'true_false': return 'true_false'
@@ -48,7 +48,13 @@ function buildTypeDistribution(types: string[], count: number): string {
       default: return t
     }
   })
-  return `- Use these question types, distributed roughly equally: ${parts.join(', ')}.`
+  const allTypes = ['multiple-choice', 'free-response', 'true_false', 'fill_in_the_blank']
+  const forbidden = allTypes.filter(t => !allowed.includes(t))
+  let instruction = `- ONLY use these question types: ${allowed.join(', ')}. Distribute them roughly equally across all ${count} questions.`
+  if (forbidden.length > 0) {
+    instruction += ` Do NOT generate any ${forbidden.join(' or ')} questions.`
+  }
+  return instruction
 }
 
 function buildDifficultyInstruction(difficulty?: string): string {
