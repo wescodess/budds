@@ -115,10 +115,38 @@ const activeSpeakerLabel = computed(() => {
   return turn.speaker === 'host_a' ? 'Host A · Expert' : 'Host B · Learner'
 })
 
+interface DialogueLine {
+  speaker: 'host_a' | 'host_b'
+  text: string
+  alignClass: string
+  bubbleClass: string
+  speakerLabel: string
+}
+
+const dialogueLines = computed<DialogueLine[]>(() => {
+  const raw = activeTurn.value?.text ?? ''
+  if (!raw.startsWith('Host A:') && !raw.startsWith('Host B:')) return []
+  return raw.split('\n').filter(Boolean).map((line) => {
+    const match = line.match(/^(Host [AB]):\s*(.*)/)
+    if (!match) return null
+    const isA = match[1] === 'Host A'
+    return {
+      speaker: isA ? 'host_a' as const : 'host_b' as const,
+      text: match[2]!,
+      alignClass: isA ? 'justify-start' : 'justify-end',
+      bubbleClass: isA ? 'rounded-tl-sm bg-primary/10 text-foreground' : 'rounded-tr-sm bg-secondary text-foreground',
+      speakerLabel: isA ? 'Host A \u00b7 Expert' : 'Host B \u00b7 Learner',
+    }
+  }).filter((l): l is DialogueLine => l !== null)
+})
+
+const isDialogueFormat = computed(() => dialogueLines.value.length > 0)
+
 const activeQuote = computed(() => activeTurn.value?.text ?? '')
 const activeAttribution = computed(() => {
   const turn = activeTurn.value
   if (!turn) return ''
+  if (isDialogueFormat.value) return ''
   const speaker = turn.speaker === 'host_a' ? 'Host A' : 'Host B'
   return `— ${speaker} · ${currentLabel.value}`
 })
@@ -456,11 +484,35 @@ const ringMiddleStyle = computed(() => ({
         </div>
       </div>
 
+      <div
+        v-if="isDialogueFormat"
+        data-testid="audio-overview-active-quote"
+        class="max-w-2xl space-y-3 overflow-y-auto px-4"
+        style="max-height: 280px"
+      >
+        <div
+          v-for="(line, idx) in dialogueLines"
+          :key="idx"
+          class="flex gap-3"
+          :class="line.alignClass"
+        >
+          <div
+            class="max-w-[85%] rounded-2xl px-4 py-2.5 font-dm-sans text-sm leading-relaxed sm:text-base"
+            :class="line.bubbleClass"
+          >
+            <p class="mb-1 font-inter text-[11px] font-medium tracking-wide text-muted-foreground">
+              {{ line.speakerLabel }}
+            </p>
+            {{ line.text }}
+          </div>
+        </div>
+      </div>
       <blockquote
+        v-else
         data-testid="audio-overview-active-quote"
         class="max-w-2xl text-center font-dm-sans text-base leading-relaxed text-foreground sm:text-lg"
       >
-        <span class="mr-1 text-primary">“</span>{{ activeQuote }}<span class="ml-1 text-primary">”</span>
+        <span class="mr-1 text-primary">"</span>{{ activeQuote }}<span class="ml-1 text-primary">"</span>
         <p class="mt-2 font-inter text-xs text-muted-foreground">
           {{ activeAttribution }}
         </p>
