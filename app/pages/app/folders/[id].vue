@@ -358,9 +358,9 @@ watch([isChatRoute, isDesktop], ([chat, desktop]) => {
         </UiAlertDialogHeader>
         <UiAlertDialogFooter>
           <UiAlertDialogCancel :disabled="deletingVoid">Cancel</UiAlertDialogCancel>
-          <UiAlertDialogAction class="bg-destructive text-destructive-foreground hover:bg-destructive/90 disabled:pointer-events-none disabled:opacity-50" :disabled="deletingVoid" @click="confirmDeleteVoid">
+          <UiButton variant="destructive" :disabled="deletingVoid" @click="confirmDeleteVoid">
             {{ deletingVoid ? 'Deleting…' : 'Delete' }}
-          </UiAlertDialogAction>
+          </UiButton>
         </UiAlertDialogFooter>
       </UiAlertDialogContent>
     </UiAlertDialog>
