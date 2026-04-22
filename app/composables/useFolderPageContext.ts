@@ -1,4 +1,5 @@
 import type { InjectionKey, ComputedRef, Ref } from 'vue'
+import { useMediaQuery } from '@vueuse/core'
 import { FileText, Headphones, ListChecks } from 'lucide-vue-next'
 import { api } from '#convex/api'
 import type { Doc, Id } from '~~/convex/_generated/dataModel'
