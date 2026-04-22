@@ -1,0 +1,6 @@
+torch
+torchaudio
+dia-tts
+fastapi
+uvicorn[standard]
+pydub

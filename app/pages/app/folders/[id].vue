@@ -237,7 +237,7 @@ useHorizontalSwipeGesture({
 
 watch([isChatRoute, isDesktop], ([chat, desktop]) => {
   if (chat && !helperPane.isOpen.value && desktop) {
-    helperPane.open('podcast')
+    helperPane.close()
   }
 }, { immediate: true })
 </script>
@@ -317,10 +317,10 @@ watch([isChatRoute, isDesktop], ([chat, desktop]) => {
       <NuxtPage />
 
       <div
-        v-if="isDesktop && helperPane.isOpen.value && !isChatRoute"
+        v-if="isDesktop && helperPane.isOpen.value"
         class="flex h-full min-w-[18rem] max-w-[22rem] shrink-0 border-l border-border/60"
       >
-        <FolderShellHelperPane :exclude-tabs="['podcast', 'sources']">
+        <FolderShellHelperPane :exclude-tabs="isChatRoute ? ['podcast', 'sources', 'chat'] : ['podcast', 'sources']">
           <template #default="{ activeTabId: tid }">
             <FolderTasksPane v-if="tid === 'tasks'" :folder-id="folderId" embedded @close="helperPane.close()" @view-room="handleTaskViewRoom" />
           </template>

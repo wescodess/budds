@@ -24,6 +24,23 @@
     "g4-directory-picker-in-chat-input": "6a7ec821b9f04aad80079092dfcb8f7a",
     "g4-knowledge-tree-sections": "c1412121785a40699f471fcc93a18346"
   },
+  "learnModuleScreens": {
+    "projectId": "15806072973690193332",
+    "projectName": "projects/15806072973690193332",
+    "desktop": {
+      "learn-home-empty": "48e3fa910aca4d76b340c2028d8f83ba",
+      "learn-home-active": "76e7a8edebd3494c8297d453fdea2ae0",
+      "course-creator-outline": "4ae524badfdb4d559f1a8bd63ee683c4",
+      "course-view": "755d2f99f0804a3daae67a18a5c28182",
+      "section-void": "7d7f9d23ae6a4912985d238acf7d6715",
+      "daily-review": "045a055ce69c4256983b82ef225fec2b"
+    },
+    "mobile": {
+      "learn-home": "70ac0c7b048c4b4fbf8641c77146cdc1",
+      "section-void": "1418f3d1fe33485693497c32cb62e004",
+      "daily-review": "d13b18c8fc50474cb69b8a0566808b00"
+    }
+  },
   "designSystemId": "assets/11175050301981891392",
   "foundationComplete": true,
   "completedAt": "2026-04-09"
