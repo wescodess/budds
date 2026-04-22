@@ -314,7 +314,7 @@ watch([isChatRoute, isDesktop], ([chat, desktop]) => {
     />
 
     <div ref="workspaceRef" class="flex min-h-0 min-w-0 flex-1" style="touch-action: pan-y">
-      <NuxtPage />
+      <NuxtPage :page-key="route.fullPath" />
 
       <div
         v-if="isDesktop && helperPane.isOpen.value && !isChatRoute"
