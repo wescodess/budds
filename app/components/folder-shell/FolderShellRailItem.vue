@@ -130,7 +130,6 @@ const longPressStop = onLongPress(
         :data-testid="`rail-item-${label.toLowerCase()}`"
         :aria-label="label"
         v-bind="attrs"
-        @contextmenu.prevent
         @click="handleMobileClick"
       >
         <span
