@@ -40,6 +40,11 @@ export interface FolderPageContext {
   deleteConversation: (id: Id<'conversations'>) => Promise<void>
   deleteFlashcardRoom: (roomId: Id<'flashcardRooms'>) => Promise<void>
   deleteQuiz: (quizId: Id<'quizzes'>) => Promise<void>
+
+  requestDeleteDocuments: (ids: string[]) => void
+  requestMoveDocuments: (ids: string[]) => void
+  handleUpload: (files: File[]) => Promise<void>
+  handleImportLink: (url: string) => Promise<void>
 }
 
 const FOLDER_CONTEXT_KEY: InjectionKey<FolderPageContext> = Symbol('folderPageContext')
@@ -143,6 +148,37 @@ export function provideFolderPageContext(): FolderPageContext {
     await deleteQuizMutation.mutate({ quizId })
   }
 
+  const _deleteTargetIds = ref<string[]>([])
+  const _moveTargetIds = ref<string[]>([])
+
+  function requestDeleteDocuments(ids: string[]) {
+    _deleteTargetIds.value = ids
+  }
+
+  function requestMoveDocuments(ids: string[]) {
+    _moveTargetIds.value = ids
+  }
+
+  async function handleUpload(files: File[]) {
+    helperPane.open('tasks')
+    try {
+      await uploadFiles(files, folderId.value)
+    } catch (e: any) {
+      const { toast } = await import('vue-sonner')
+      toast.error(e.message || 'Upload failed')
+    }
+  }
+
+  async function handleImportLink(url: string) {
+    helperPane.open('tasks')
+    try {
+      await importDocumentFromUrl(url, folderId.value)
+    } catch (e: any) {
+      const { toast } = await import('vue-sonner')
+      toast.error(e.message || 'Import failed')
+    }
+  }
+
   const ctx: FolderPageContext = {
     folderId,
     folder,
@@ -173,6 +209,10 @@ export function provideFolderPageContext(): FolderPageContext {
     deleteConversation: deleteConversationFn,
     deleteFlashcardRoom: deleteFlashcardRoomFn,
     deleteQuiz: deleteQuizFn,
+    requestDeleteDocuments,
+    requestMoveDocuments,
+    handleUpload,
+    handleImportLink,
   }
 
   provide(FOLDER_CONTEXT_KEY, ctx)
