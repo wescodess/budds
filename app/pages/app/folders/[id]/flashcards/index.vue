@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { injectFolderContext } from '~/composables/useFolderPageContext'
 
-const route = useRoute()
 const ctx = injectFolderContext()
 const { folderId, helperPane } = ctx
 
-const quizId = computed(() => (route.params.quizId as string) ?? null)
+function onSelectRoom(roomId: string | null) {
+  if (roomId) navigateTo(`/app/folders/${folderId.value}/flashcards/${roomId}`)
+}
 
 function onGenerationStarted() {
   helperPane.open('tasks')
@@ -13,9 +14,10 @@ function onGenerationStarted() {
 </script>
 
 <template>
-  <QuizTab
+  <FlashcardsTab
     :folder-id="folderId"
-    :selected-quiz-id="quizId"
+    :selected-room-id="null"
+    @select-room="onSelectRoom"
     @generation-started="onGenerationStarted"
   />
 </template>
