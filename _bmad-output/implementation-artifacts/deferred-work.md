@@ -1,5 +1,11 @@
 # Deferred Work
 
+## Deferred from: code review of 3-5-audio-primer-generation-user-note-references (2026-04-23)
+
+- **`getCourseScopedOverview` resolves storage URLs and document filenames on every subscription tick.** The query calls `ctx.storage.getUrl()` for every turn and `ctx.db.get()` for every source document on each Convex subscription evaluation. Low severity for primers (max ~12 turns). Consider splitting into separate data and URL queries (matching the existing `getWithTurns` + `getTurnUrls` pattern) if subscription churn becomes noticeable.
+- **`AudioBlock.vue` conditional `useConvexQuery` call.** The composable is conditionally assigned based on `props.entityId` at setup time. If `entityId` changes from undefined to a value after mount, the query won't be created. Low severity since `entityId` is set at section generation time and doesn't change after mount.
+- **Audio primer prompt does not include `ttsEngine` hint.** The `buildAudioPrimerPrompt` does not pass a `ttsEngine` parameter to configure Dia-specific parenthetical expressions vs. Aura-safe text. Minor since primers are short (6-12 turns) and the default hard don'ts are safe for both engines.
+
 ## Deferred from: code review of 3-4-section-completion-and-adaptive-pacing (2026-04-24)
 
 - **Multiple quiz blocks: only last quiz tracked.** If a section has multiple quiz blocks, `handleQuizCompleted` overwrites `quizResults` with the latest quiz's data. Low severity since current section generation produces at most one quiz block per section.
