@@ -1,5 +1,11 @@
 # Deferred Work
 
+## Deferred from: code review of prep-4-3-textblock-numbered-list-support (2026-04-23)
+
+- **Magic number flush loop in text-block tests.** `mountTextBlock` helper calls `flushPromises()` 5 times in a loop. Works but the count is arbitrary. If MDC's async pipeline adds more stages, this could become insufficient. Consider using `vi.waitFor()` or a polling helper that checks for rendered content.
+- **`beforeAll` warm-up tightly coupled to MDC internals.** The test file pre-loads MDC's parser and highlighter with warm-up calls. If MDC changes its lazy-loading behavior, these become dead code or insufficient. Test-infrastructure only, no runtime impact.
+- **No explicit XSS sanitization test.** AC #4 requires XSS safety. MDC's AST-based rendering (not v-html) provides this by design, but no test injects `<script>alert('xss')</script>` to document the guarantee. Add when a test-infrastructure story revisits TextBlock.
+
 ## Deferred from: code review of 3-5-audio-primer-generation-user-note-references (2026-04-23)
 
 - **`getCourseScopedOverview` resolves storage URLs and document filenames on every subscription tick.** The query calls `ctx.storage.getUrl()` for every turn and `ctx.db.get()` for every source document on each Convex subscription evaluation. Low severity for primers (max ~12 turns). Consider splitting into separate data and URL queries (matching the existing `getWithTurns` + `getTurnUrls` pattern) if subscription churn becomes noticeable.
