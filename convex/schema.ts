@@ -504,6 +504,18 @@ export default defineSchema({
     .index('by_userId', ['userId'])
     .index('by_userId_and_date', ['userId', 'date']),
 
+  calendarConnections: defineTable({
+    userId: v.string(),
+    provider: v.literal('google'),
+    accessToken: v.string(),
+    refreshToken: v.string(),
+    expiresAt: v.number(),
+    timezone: v.string(),
+    status: v.union(v.literal('connected'), v.literal('disconnected')),
+    connectedAt: v.number(),
+  })
+    .index('by_userId', ['userId']),
+
   pendingCleanup: defineTable({
     userId: v.string(),
     documentId: v.string(),
