@@ -756,6 +756,209 @@ describe('reviewItems.submitReview', () => {
   })
 })
 
+describe('reviewItems.getReviewBacklogCount', () => {
+  test('returns due count and daily cap', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId, sectionId } = await seedSectionWithFlashcards(t)
+
+    const today = new Date().toISOString().slice(0, 10)
+
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 5; i++) {
+        await ctx.db.insert('reviewItems', {
+          userId: USER_A.tokenIdentifier,
+          courseId,
+          sectionId,
+          prompt: `Backlog item ${i}`,
+          answer: `Answer ${i}`,
+          easeFactor: 2.5,
+          interval: 1,
+          repetitions: 0,
+          nextReviewDate: today,
+          flagged: false,
+          createdAt: Date.now(),
+        })
+      }
+    })
+
+    const result = await asUser.query(api.reviewItems.getReviewBacklogCount, {})
+    expect(result.dueCount).toBe(5)
+    expect(result.dailyCap).toBe(50)
+  })
+
+  test('excludes flagged items from count', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId, sectionId } = await seedSectionWithFlashcards(t)
+
+    const today = new Date().toISOString().slice(0, 10)
+
+    await t.run(async (ctx) => {
+      await ctx.db.insert('reviewItems', {
+        userId: USER_A.tokenIdentifier,
+        courseId,
+        sectionId,
+        prompt: 'Normal',
+        answer: 'A',
+        easeFactor: 2.5,
+        interval: 1,
+        repetitions: 0,
+        nextReviewDate: today,
+        flagged: false,
+        createdAt: Date.now(),
+      })
+      await ctx.db.insert('reviewItems', {
+        userId: USER_A.tokenIdentifier,
+        courseId,
+        sectionId,
+        prompt: 'Flagged',
+        answer: 'B',
+        easeFactor: 2.5,
+        interval: 1,
+        repetitions: 0,
+        nextReviewDate: today,
+        flagged: true,
+        createdAt: Date.now(),
+      })
+    })
+
+    const result = await asUser.query(api.reviewItems.getReviewBacklogCount, {})
+    expect(result.dueCount).toBe(1)
+  })
+
+  test('returns custom daily cap from profile', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId, sectionId } = await seedSectionWithFlashcards(t)
+
+    const today = new Date().toISOString().slice(0, 10)
+
+    await t.run(async (ctx) => {
+      await ctx.db.insert('reviewItems', {
+        userId: USER_A.tokenIdentifier,
+        courseId,
+        sectionId,
+        prompt: 'Item',
+        answer: 'A',
+        easeFactor: 2.5,
+        interval: 1,
+        repetitions: 0,
+        nextReviewDate: today,
+        flagged: false,
+        createdAt: Date.now(),
+      })
+    })
+
+    await asUser.mutation(api.learnProfile.updateDailyReviewCap, { cap: 25 })
+
+    const result = await asUser.query(api.reviewItems.getReviewBacklogCount, {})
+    expect(result.dailyCap).toBe(25)
+  })
+
+  test('rejects unauthenticated user', async () => {
+    const t = convexTest(schema, modules)
+    await expect(t.query(api.reviewItems.getReviewBacklogCount, {})).rejects.toThrow('Unauthenticated')
+  })
+})
+
+describe('reviewItems.listDueWithContext quick mode', () => {
+  test('quick mode limits to 10 items', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId, sectionId } = await seedSectionWithFlashcards(t)
+
+    const today = new Date().toISOString().slice(0, 10)
+
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 15; i++) {
+        await ctx.db.insert('reviewItems', {
+          userId: USER_A.tokenIdentifier,
+          courseId,
+          sectionId,
+          prompt: `Quick item ${i}`,
+          answer: `Answer ${i}`,
+          easeFactor: 2.5,
+          interval: 1,
+          repetitions: 0,
+          nextReviewDate: today,
+          flagged: false,
+          createdAt: Date.now(),
+        })
+      }
+    })
+
+    const quickItems = await asUser.query(api.reviewItems.listDueWithContext, { mode: 'quick' })
+    expect(quickItems.length).toBeLessThanOrEqual(10)
+
+    const fullItems = await asUser.query(api.reviewItems.listDueWithContext, { mode: 'full' })
+    expect(fullItems.length).toBe(15)
+  })
+
+  test('quick mode caps at dailyReviewCap when cap < 10', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId, sectionId } = await seedSectionWithFlashcards(t)
+
+    const today = new Date().toISOString().slice(0, 10)
+
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 15; i++) {
+        await ctx.db.insert('reviewItems', {
+          userId: USER_A.tokenIdentifier,
+          courseId,
+          sectionId,
+          prompt: `Cap item ${i}`,
+          answer: `Answer ${i}`,
+          easeFactor: 2.5,
+          interval: 1,
+          repetitions: 0,
+          nextReviewDate: today,
+          flagged: false,
+          createdAt: Date.now(),
+        })
+      }
+    })
+
+    await asUser.mutation(api.learnProfile.updateDailyReviewCap, { cap: 7 })
+
+    const quickItems = await asUser.query(api.reviewItems.listDueWithContext, { mode: 'quick' })
+    expect(quickItems.length).toBe(7)
+  })
+})
+
+describe('learnProfile.updateDailyReviewCap', () => {
+  test('updates daily review cap', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+
+    await asUser.mutation(api.learnProfile.updateDailyReviewCap, { cap: 30 })
+
+    const profile = await asUser.query(api.learnProfile.getProfile, {})
+    expect(profile!.dailyReviewCap).toBe(30)
+  })
+
+  test('rejects cap below 5', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+
+    await expect(
+      asUser.mutation(api.learnProfile.updateDailyReviewCap, { cap: 3 }),
+    ).rejects.toThrow('Daily review cap must be between 5 and 200')
+  })
+
+  test('rejects cap above 200', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+
+    await expect(
+      asUser.mutation(api.learnProfile.updateDailyReviewCap, { cap: 300 }),
+    ).rejects.toThrow('Daily review cap must be between 5 and 200')
+  })
+
+  test('rejects unauthenticated user', async () => {
+    const t = convexTest(schema, modules)
+    await expect(
+      t.mutation(api.learnProfile.updateDailyReviewCap, { cap: 30 }),
+    ).rejects.toThrow()
+  })
+})
+
 describe('flag sync between flashcards and review items', () => {
   test('flagging a flashcard flags the corresponding review item', async () => {
     const t = convexTest(schema, modules)

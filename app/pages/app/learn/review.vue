@@ -1,9 +1,12 @@
 <script setup lang="ts">
-import { Flag, ArrowLeft, CheckCircle } from 'lucide-vue-next'
+import { Flag, ArrowLeft, CheckCircle, Zap } from 'lucide-vue-next'
 import { api } from '#convex/api'
 import type { Id } from '../../../../convex/_generated/dataModel'
 
 const router = useRouter()
+const route = useRoute()
+
+type ReviewMode = 'full' | 'quick'
 
 type ReviewItem = {
   _id: string
@@ -19,12 +22,31 @@ type ReviewItem = {
   correctedAnswer?: string
 }
 
+const reviewMode = computed<ReviewMode>(() => {
+  const q = route.query.mode
+  if (q === 'quick') return 'quick'
+  return 'full'
+})
+
+const queryArgs = computed(() => ({
+  mode: reviewMode.value,
+}))
+
 const submitReviewMutation = import.meta.client
   ? useConvexMutation(api.reviewItems.submitReview)
   : { mutate: async () => ({}) }
 
+const profileQuery = import.meta.client
+  ? useConvexQuery(api.learnProfile.getProfile, {})
+  : { data: ref(null) }
+
+const dailyReviewCap = computed(() => {
+  const p = profileQuery.data?.value as { dailyReviewCap?: number } | null | undefined
+  return p?.dailyReviewCap ?? 50
+})
+
 const dueQuery = import.meta.client
-  ? useConvexQuery(api.reviewItems.listDueWithContext, {})
+  ? useConvexQuery(api.reviewItems.listDueWithContext, queryArgs)
   : { data: ref([]) }
 
 const sessionItems = ref<ReviewItem[]>([])
@@ -55,6 +77,18 @@ const totalItems = computed(() => items.value.length)
 const reviewedCount = computed(() => currentIndex.value)
 const isLoading = computed(() => !sessionStarted.value && (dueQuery.data?.value as any[] | undefined)?.length === undefined)
 const isEmpty = computed(() => sessionStarted.value && items.value.length === 0)
+
+const hasRated = computed(() => ratings.value.length > 0)
+
+function switchMode(mode: ReviewMode) {
+  if (hasRated.value) return
+  sessionStarted.value = false
+  sessionItems.value = []
+  currentIndex.value = 0
+  revealed.value = false
+  sessionComplete.value = false
+  router.replace({ query: { ...route.query, mode } })
+}
 
 function revealAnswer() {
   if (revealed.value || !currentItem.value) return
@@ -179,9 +213,37 @@ function navigateBack() {
           <ArrowLeft class="h-4 w-4" />
           Learn
         </button>
-        <span v-if="!isEmpty && !sessionComplete" class="text-xs text-stone-500">
-          {{ totalItems }} items
-        </span>
+        <div class="flex items-center gap-3">
+          <div
+            v-if="!isEmpty && !sessionComplete && sessionStarted && !hasRated"
+            class="flex items-center gap-1 rounded-full border border-stone-700 p-0.5"
+            data-testid="mode-toggle"
+          >
+            <button
+              type="button"
+              class="rounded-full px-2.5 py-1 text-xs transition-colors"
+              :class="reviewMode === 'full' ? 'bg-stone-700 text-stone-100' : 'text-stone-500 hover:text-stone-300'"
+              data-testid="mode-full"
+              @click="switchMode('full')"
+            >
+              Full
+            </button>
+            <button
+              type="button"
+              class="flex items-center gap-1 rounded-full px-2.5 py-1 text-xs transition-colors"
+              :class="reviewMode === 'quick' ? 'bg-amber-500/20 text-amber-400' : 'text-stone-500 hover:text-stone-300'"
+              data-testid="mode-quick"
+              @click="switchMode('quick')"
+            >
+              <Zap class="h-3 w-3" />
+              Quick
+            </button>
+          </div>
+          <span v-if="!isEmpty && !sessionComplete" class="text-xs text-stone-500">
+            {{ totalItems }} items
+          </span>
+          <LearnReviewCapSetting :current-cap="dailyReviewCap" />
+        </div>
       </div>
     </header>
 
@@ -230,6 +292,10 @@ function navigateBack() {
 
     <template v-else>
       <div class="mx-auto w-full max-w-xl px-4 pt-4">
+        <div v-if="reviewMode === 'quick'" class="mb-2 flex items-center gap-1.5 text-xs text-amber-400" data-testid="quick-mode-badge">
+          <Zap class="h-3 w-3" />
+          Quick review — top priority items only
+        </div>
         <LearnReviewSessionProgress
           :current="reviewedCount"
           :total="totalItems"
