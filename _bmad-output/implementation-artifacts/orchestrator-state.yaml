@@ -1,42 +1,40 @@
 mode: running
 current_phase: epic-story
-current_story: 1-7-course-creator-ui-full-flow
-current_epic: 1
+current_story: 2-1-learn-home-page-empty-and-active-states
+current_epic: 2
 retry_count: 0
-last_epic_complete_fired: null
+last_epic_complete_fired: 1
 
 last_verdict:
   subagent: bmad-story-runner
-  story: 1-6-pace-selector-and-course-start
+  story: 1-7-course-creator-ui-full-flow
   epic: 1
   status: PASS
-  pr_url: 'https://github.com/wescodess/budds/pull/93'
-  branch: 'feat/1-6-pace-selector-and-course-start'
-  commit_sha: '7d3f8dd9a8e5445b155905ea4c215295a510e55a'
-  files_changed: 8
-  tasks_completed: 14
-  tasks_total: 14
-  findings_deferred: 2
+  pr_url: 'https://github.com/wescodess/budds/pull/94'
+  branch: 'feat/1-7-course-creator-ui-full-flow'
+  commit_sha: '4ffd629'
+  files_changed: 9
+  tasks_completed: 6
+  tasks_total: 6
+  findings_deferred: 0
   lint_pass: null
   typecheck_pass: true
   unit_tests_pass: true
   e2e_tests_pass: null
   review_pass: true
   summary: >
-    Story 1-6 complete. Added courses.updatePace mutation (auth + ownership guard,
-    patches pace + updatedAt) and courses.startCourse mutation (validates ready status,
-    first section locked, creates section-generate task via internal.tasks.createInternal,
-    transitions first section to generating, double-start guard). Created PaceSelector.vue
-    (native select with 3 presets: Intensive/Steady/Relaxed with descriptions) and
-    StartLearningButton.vue (amber CTA with loading state, calls startCourse then
-    navigates to /app/learn/[courseId]). 506 Convex/server tests pass (0 regressions,
-    +8 new), 22 learn component tests pass (+7 new: 4 pace-selector + 3 start-learning).
-    Code review PASS: 1 blocker fixed (double-start guard on startCourse), 2 deferred
-    (error handling toasts, optimistic pace update). PR #93 merged to dev.
+    Story 1-7 complete. Created SourceSelector.vue (topic input, folder checkboxes,
+    web supplement toggle, generate button), CourseCreator.vue (step state machine:
+    source-selection → generating → outline-editor | error), /app/learn/create page
+    with folderId query param support, /app/learn/[courseId] placeholder page. Added
+    error handling toasts to OutlineEditor, PaceSelector, StartLearningButton (clearing
+    deferred items from 1-5/1-6). Optimistic pace update with rollback in PaceSelector.
+    11 new component tests (8 source-selector + 3 course-creator). PR #94 merged to dev.
+    Epic 1 complete — all 7 stories done.
   block_reason: null
   block_context: null
-  at: '2026-04-23T03:35:00Z'
-last_retro: null
+  at: '2026-04-23T04:07:01Z'
+last_retro: 'epic-1-retro-2026-04-23.md'
 
 config:
   max_retries_per_story: 3
@@ -60,12 +58,17 @@ paths:
   ux_spec: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/ux-design-learn-module.md
 
 counters:
-  stories_completed_this_run: 1
-  stories_completed_total: 6
+  stories_completed_this_run: 0
+  stories_completed_total: 7
 
 escalation:
   pending: null
   log:
+    - ts: '2026-04-23'
+      question: "Epic 1 closed without retro (marked optional). Proceed to Epic 2, or run retrospective first?"
+      answer: run_retro_first
+      answered_at: '2026-04-23'
+      resolution: "User chose run_retro_first. Running bmad-bmm-workflows-retrospective for Epic 1."
     - ts: '2026-04-22'
       question: |
         Workspace dirty on refactor/remove-folder-tabs. commit_all_then_start, stash_then_start, or commit_tracked_stash_untracked?
@@ -75,6 +78,17 @@ escalation:
         User answered "1" → commit_all_then_start. Committing all changes on refactor/remove-folder-tabs, then branching feat/1-1 from dev.
 
 decisions_log:
+  - ts: '2026-04-23'
+    decision: |
+      Epic 1 retrospective complete. 5 action items, 3 team agreements (error handling from day 1,
+      accessibility baseline, post-epic E2E gate via Chrome MCP). Prep sprint: extract requireAuth,
+      aria-labels, source doc cap, E2E pass, code review checklist. No architectural changes needed
+      for Epic 2. Retro saved: epic-1-retro-2026-04-23.md. Mode → idle, ready for Epic 2.
+  - ts: '2026-04-22'
+    decision: |
+      story-runner PASS for 1-7 (0 deferred). 6/6 tasks, 8 ACs, 9 files. SourceSelector.vue, CourseCreator.vue,
+      /learn/create page, /learn/[courseId] placeholder. Error toasts added to 1-5/1-6 components (clearing deferred).
+      11 new component tests. PR #94 merged to dev. Epic 1 COMPLETE (7/7 stories). Counters 2 this-run, 7 total.
   - ts: '2026-04-22'
     decision: |
       story-runner PASS for 1-6 (2 deferred: error handling toasts, optimistic pace update). 14/14 tasks, 7 ACs, 8 files.
@@ -91,6 +105,17 @@ decisions_log:
       DETERMINE_NEXT: epic-1 backlog → 1-1-convex-schema-course-tables. Story file created, runner spawned.
 
 run_log:
+  - ts: '2026-04-23'
+    mode: resume
+    note: |
+      Resume invoked (idle → start). Epic 1 done + retro done. DETERMINE_NEXT: epic-2 backlog →
+      2-1-learn-home-page-empty-and-active-states. Epic 2 marked in-progress. Story file created
+      at ready-for-dev. Spawning bmad-story-runner for 2-1.
+  - ts: '2026-04-22'
+    mode: resume
+    note: |
+      1-7 PASS (PR #94). Epic 1 complete — all 7 stories done. epic-1-retrospective: optional.
+      Epic boundary detected. Escalating for retro decision before advancing to Epic 2.
   - ts: '2026-04-22'
     mode: resume
     note: |
