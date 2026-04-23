@@ -513,6 +513,12 @@ export default defineSchema({
     timezone: v.string(),
     status: v.union(v.literal('connected'), v.literal('disconnected')),
     connectedAt: v.number(),
+    preferences: v.optional(v.object({
+      morningStart: v.string(),
+      eveningEnd: v.string(),
+      sessionMinutes: v.number(),
+      preferredDays: v.array(v.string()),
+    })),
   })
     .index('by_userId', ['userId']),
 

@@ -160,6 +160,111 @@ describe('calendarConnections', () => {
     expect(tokens!.expiresAt).toBe(expiresAt)
   })
 
+  test('updatePreferences stores preferences on connected calendar', async () => {
+    const t = convexTest(schema, modules)
+    const asAlice = t.withIdentity(USER_A)
+
+    await asAlice.mutation(api.calendarConnections.upsertConnection, {
+      provider: 'google',
+      accessToken: 'dG9rZW4=',
+      refreshToken: 'cmVmcmVzaA==',
+      expiresAt: Date.now() + 3600000,
+      timezone: 'America/New_York',
+    })
+
+    await asAlice.mutation(api.calendarConnections.updatePreferences, {
+      morningStart: '09:00',
+      eveningEnd: '20:00',
+      sessionMinutes: 15,
+      preferredDays: ['mon', 'tue', 'wed', 'thu', 'fri'],
+    })
+
+    const connection = await asAlice.query(api.calendarConnections.getByUser, {})
+    expect(connection!.preferences).toEqual({
+      morningStart: '09:00',
+      eveningEnd: '20:00',
+      sessionMinutes: 15,
+      preferredDays: ['mon', 'tue', 'wed', 'thu', 'fri'],
+    })
+  })
+
+  test('updatePreferences overwrites existing preferences', async () => {
+    const t = convexTest(schema, modules)
+    const asAlice = t.withIdentity(USER_A)
+
+    await asAlice.mutation(api.calendarConnections.upsertConnection, {
+      provider: 'google',
+      accessToken: 'dG9rZW4=',
+      refreshToken: 'cmVmcmVzaA==',
+      expiresAt: Date.now() + 3600000,
+      timezone: 'America/New_York',
+    })
+
+    await asAlice.mutation(api.calendarConnections.updatePreferences, {
+      morningStart: '09:00',
+      eveningEnd: '20:00',
+      sessionMinutes: 15,
+      preferredDays: ['mon', 'tue', 'wed'],
+    })
+
+    await asAlice.mutation(api.calendarConnections.updatePreferences, {
+      morningStart: '07:00',
+      eveningEnd: '22:00',
+      sessionMinutes: 25,
+      preferredDays: ['sat', 'sun'],
+    })
+
+    const connection = await asAlice.query(api.calendarConnections.getByUser, {})
+    expect(connection!.preferences).toEqual({
+      morningStart: '07:00',
+      eveningEnd: '22:00',
+      sessionMinutes: 25,
+      preferredDays: ['sat', 'sun'],
+    })
+  })
+
+  test('updatePreferences throws when no connection exists', async () => {
+    const t = convexTest(schema, modules)
+    const asAlice = t.withIdentity(USER_A)
+
+    await expect(
+      asAlice.mutation(api.calendarConnections.updatePreferences, {
+        morningStart: '09:00',
+        eveningEnd: '20:00',
+        sessionMinutes: 15,
+        preferredDays: ['mon'],
+      }),
+    ).rejects.toThrow('No calendar connection found')
+  })
+
+  test('updatePreferences requires authentication', async () => {
+    const t = convexTest(schema, modules)
+    await expect(
+      t.mutation(api.calendarConnections.updatePreferences, {
+        morningStart: '09:00',
+        eveningEnd: '20:00',
+        sessionMinutes: 15,
+        preferredDays: ['mon'],
+      }),
+    ).rejects.toThrow('Unauthenticated')
+  })
+
+  test('getByUser returns null preferences when none set', async () => {
+    const t = convexTest(schema, modules)
+    const asAlice = t.withIdentity(USER_A)
+
+    await asAlice.mutation(api.calendarConnections.upsertConnection, {
+      provider: 'google',
+      accessToken: 'dG9rZW4=',
+      refreshToken: 'cmVmcmVzaA==',
+      expiresAt: Date.now() + 3600000,
+      timezone: 'America/New_York',
+    })
+
+    const connection = await asAlice.query(api.calendarConnections.getByUser, {})
+    expect(connection!.preferences).toBeNull()
+  })
+
   test('updateTokens refreshes access token (internal)', async () => {
     const t = convexTest(schema, modules)
     const asAlice = t.withIdentity(USER_A)
