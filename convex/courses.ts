@@ -2,13 +2,7 @@ import { v } from 'convex/values'
 import { mutation, query } from './_generated/server'
 import { internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
-import type { MutationCtx, QueryCtx } from './_generated/server'
-
-async function requireAuth(ctx: QueryCtx | MutationCtx) {
-  const identity = await ctx.auth.getUserIdentity()
-  if (!identity) throw new Error('Unauthenticated')
-  return identity.tokenIdentifier
-}
+import { requireAuth } from './lib/auth'
 
 export const create = mutation({
   args: {
