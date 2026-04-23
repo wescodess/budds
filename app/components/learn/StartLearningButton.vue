@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { Id } from '../../../convex/_generated/dataModel'
 import { api } from '#convex/api'
+import { toast } from 'vue-sonner'
 
 const props = defineProps<{
   courseId: Id<'courses'>
@@ -25,6 +26,8 @@ async function handleStart() {
     if (courseId) {
       await navigateTo(`/app/learn/${courseId}`)
     }
+  } catch (e: any) {
+    toast.error(e?.message ?? 'Failed to start course')
   } finally {
     loading.value = false
   }

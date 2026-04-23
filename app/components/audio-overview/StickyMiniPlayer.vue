@@ -189,7 +189,7 @@ async function handleExpand() {
   isTransitioning.value = true
   await nextTick()
   setTimeout(() => {
-    navigateTo(`/app/folders/${fid}`)
+    navigateTo(`/app/folders/${fid}/chat`)
   }, 420)
 }
 

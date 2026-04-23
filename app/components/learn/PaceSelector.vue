@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { Id } from '../../../convex/_generated/dataModel'
 import { api } from '#convex/api'
+import { toast } from 'vue-sonner'
 
 type Pace = 'intensive' | 'steady' | 'relaxed'
 
@@ -30,8 +31,14 @@ watch(() => props.currentPace, (v) => { selectedPace.value = v })
 
 async function onPaceChange(e: Event) {
   const value = (e.target as HTMLSelectElement).value as Pace
+  const prev = selectedPace.value
   selectedPace.value = value
-  await updatePaceMutation.mutate({ courseId: props.courseId, pace: value } as any)
+  try {
+    await updatePaceMutation.mutate({ courseId: props.courseId, pace: value } as any)
+  } catch (e: any) {
+    selectedPace.value = prev
+    toast.error(e?.message ?? 'Failed to update pace')
+  }
 }
 </script>
 
