@@ -1,6 +1,6 @@
 # Story 1.3: Course Creation API — Web-Only (Cold Start)
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -40,19 +40,19 @@ So that I can start learning immediately without uploading anything.
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1: Extend `courses.create` mutation for web-only** (AC: #1, #2, #3, #4)
-  - [ ] Add `v.literal('web-only')` to the `sourceType` validator union
-  - [ ] Add web-only branch: skip document fetching/verification, skip courseSourceDocs creation
-  - [ ] Set `webSearchEnabled: true` and `sourceConfidence: { docCount: 0, webPercent: 100 }` for web-only
-  - [ ] Allow optional `folderId` for web-only (verify ownership if provided)
-  - [ ] Task creation and learnProfile upsert remain the same as folder/cross-folder
+- [x] **Task 1: Extend `courses.create` mutation for web-only** (AC: #1, #2, #3, #4)
+  - [x] Add `v.literal('web-only')` to the `sourceType` validator union
+  - [x] Add web-only branch: skip document fetching/verification, skip courseSourceDocs creation
+  - [x] Set `webSearchEnabled: true` and `sourceConfidence: { docCount: 0, webPercent: 100 }` for web-only
+  - [x] Allow optional `folderId` for web-only (verify ownership if provided)
+  - [x] Task creation and learnProfile upsert remain the same as folder/cross-folder
 
-- [ ] **Task 2: Write Convex tests** (AC: #5)
-  - [ ] Test web-only creation: course created, no courseSourceDocs, task linked, learnProfile upserted
-  - [ ] Test web-only with folderId: course scoped to folder
-  - [ ] Test web-only sourceConfidence: docCount 0, webPercent 100
-  - [ ] Test auth rejection for web-only
-  - [ ] Verify existing folder/cross-folder tests still pass
+- [x] **Task 2: Write Convex tests** (AC: #5)
+  - [x] Test web-only creation: course created, no courseSourceDocs, task linked, learnProfile upserted
+  - [x] Test web-only with folderId: course scoped to folder
+  - [x] Test web-only sourceConfidence: docCount 0, webPercent 100
+  - [x] Test auth rejection for web-only
+  - [x] Verify existing folder/cross-folder tests still pass
 
 ## Dev Notes
 

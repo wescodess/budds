@@ -1,5 +1,10 @@
 # Deferred Work
 
+## Deferred from: code review of 1-3-course-creation-api-web-only (2026-04-22)
+
+- **`webSearchEnabled` arg silently overridden for web-only.** The mutation accepts `webSearchEnabled` as optional, but for `sourceType: 'web-only'` it's hardcoded to `true`. If a caller passes `webSearchEnabled: false` with web-only, the value is silently ignored. Correct per AC but could be made explicit via validator or documentation.
+- **Pre-existing `.collect()` on folder documents query still unbounded.** The folder branch (line 52) uses `.collect()` when no documentIds are specified. Already deferred from story 1-2 review. No change introduced in 1-3.
+
 ## Deferred from: code review of 1-2-course-creation-api-folder-cross-folder (2026-04-22)
 
 - **`create` mutation transaction size with large folders.** When sourceType='folder' and no documentIds specified, the mutation reads all docs in the folder and creates one courseSourceDoc per doc. For folders with 200+ documents this could approach Convex transaction limits. Consider batched creation or a limit on source doc count for MVP.
