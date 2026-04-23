@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { Id } from '../../../convex/_generated/dataModel'
+import { CONVEX_INJECTION_KEY } from '@convex-vue/core'
 import { api } from '#convex/api'
 import { toast } from 'vue-sonner'
 
@@ -24,11 +25,35 @@ const createMutation = import.meta.client
 
 const submitting = ref(false)
 
-const courseQueryRef = ref<any>(null)
-const sectionsQueryRef = ref<any>(null)
+const course = ref<any>(null)
+const sections = ref<any[]>([])
 
-const course = computed(() => courseQueryRef.value?.data?.value ?? null)
-const sections = computed(() => sectionsQueryRef.value?.data?.value ?? [])
+let unsubCourse: (() => void) | null = null
+let unsubSections: (() => void) | null = null
+
+if (import.meta.client) {
+  const client = inject(CONVEX_INJECTION_KEY)
+
+  watch(courseId, (id) => {
+    unsubCourse?.()
+    unsubSections?.()
+    unsubCourse = null
+    unsubSections = null
+    if (!id || !client) return
+
+    unsubCourse = client.onUpdate(api.courses.get, { id }, (result) => {
+      if (result !== undefined) course.value = result
+    })
+    unsubSections = client.onUpdate(api.courseSections.listByCourse, { courseId: id }, (result) => {
+      if (result !== undefined) sections.value = result
+    })
+  })
+
+  onScopeDispose(() => {
+    unsubCourse?.()
+    unsubSections?.()
+  })
+}
 
 watch(course, (c) => {
   if (!c || step.value !== 'generating') return
@@ -59,14 +84,12 @@ async function onSourceSubmit(payload: {
       courseId.value = (result as any).courseId
       step.value = 'generating'
 
-      if (import.meta.client) {
-        courseQueryRef.value = useConvexQuery(api.courses.get, computed(() =>
-          courseId.value ? { id: courseId.value } : 'skip',
-        ))
-        sectionsQueryRef.value = useConvexQuery(api.courseSections.listByCourse, computed(() =>
-          courseId.value ? { courseId: courseId.value } : 'skip',
-        ))
-      }
+      $fetch('/api/course/generate-outline', {
+        method: 'POST',
+        body: { courseId: (result as any).courseId, taskId: (result as any).taskId },
+      }).catch(() => {
+        step.value = 'error'
+      })
     }
   } catch (e: any) {
     toast.error(e?.message ?? 'Failed to create course')
@@ -79,8 +102,8 @@ async function onSourceSubmit(payload: {
 function handleTryAgain() {
   step.value = 'source-selection'
   courseId.value = null
-  courseQueryRef.value = null
-  sectionsQueryRef.value = null
+  course.value = null
+  sections.value = []
 }
 </script>
 

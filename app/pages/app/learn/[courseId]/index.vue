@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ArrowLeft, Lock, Loader2, AlertCircle, CheckCircle2, ChevronRight } from 'lucide-vue-next'
-import type { Id } from '../../../../convex/_generated/dataModel'
+import type { Id } from '../../../../../convex/_generated/dataModel'
 import { api } from '#convex/api'
 
 const route = useRoute()
@@ -22,6 +22,12 @@ const progress = computed(() => {
   if (!course.value?.totalSectionCount) return 0
   return Math.round(((course.value.completedSectionCount ?? 0) / course.value.totalSectionCount) * 100)
 })
+
+const needsStart = computed(() =>
+  course.value?.status === 'ready'
+  && sections.value.length > 0
+  && sections.value.every((s: any) => s.status === 'locked'),
+)
 
 const statusConfig = {
   completed: { icon: CheckCircle2, class: 'text-green-400', label: 'Completed' },
@@ -82,46 +88,43 @@ function handleDeleted() {
           </div>
         </div>
 
+        <div v-if="needsStart" class="mb-6 flex justify-center">
+          <LearnStartLearningButton :course-id="courseId" />
+        </div>
+
         <div class="space-y-2" role="list" aria-label="Course sections">
-          <component
-            :is="canNavigate(section.status) ? 'NuxtLink' : 'div'"
-            v-for="section in sections"
-            :key="section._id"
-            :to="canNavigate(section.status) ? `/app/learn/${courseId}/${section._id}` : undefined"
-            class="flex items-center gap-4 rounded-xl border p-4 transition-colors"
-            :class="[
-              canNavigate(section.status)
-                ? 'cursor-pointer border-stone-800 bg-stone-900 hover:border-stone-700'
-                : 'border-stone-800/50 bg-stone-900/50',
-              section.status === 'ready' ? 'border-l-2 border-l-amber-500' : '',
-            ]"
-            role="listitem"
-          >
-            <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-stone-800">
-              <component
-                :is="getSectionStatus(section.status).icon"
-                class="h-4 w-4"
-                :class="getSectionStatus(section.status).class"
-              />
-            </div>
-
-            <div class="min-w-0 flex-1">
-              <p
-                class="truncate text-sm font-medium"
-                :class="section.status === 'locked' ? 'text-stone-500' : 'text-stone-100'"
-              >
-                {{ section.title }}
-              </p>
-              <p class="text-xs text-stone-500">
-                {{ getSectionStatus(section.status).label }}
-              </p>
-            </div>
-
-            <ChevronRight
+          <template v-for="section in sections" :key="section._id">
+            <NuxtLink
               v-if="canNavigate(section.status)"
-              class="h-4 w-4 shrink-0 text-stone-600"
-            />
-          </component>
+              :to="`/app/learn/${courseId}/${section._id}`"
+              class="flex items-center gap-4 rounded-xl border p-4 transition-colors cursor-pointer border-stone-800 bg-stone-900 hover:border-stone-700"
+              :class="section.status === 'ready' ? 'border-l-2 border-l-amber-500' : ''"
+              role="listitem"
+            >
+              <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-stone-800">
+                <component :is="getSectionStatus(section.status).icon" class="h-4 w-4" :class="getSectionStatus(section.status).class" />
+              </div>
+              <div class="min-w-0 flex-1">
+                <p class="truncate text-sm font-medium text-stone-100">{{ section.title }}</p>
+                <p class="text-xs text-stone-500">{{ getSectionStatus(section.status).label }}</p>
+              </div>
+              <ChevronRight class="h-4 w-4 shrink-0 text-stone-600" />
+            </NuxtLink>
+
+            <div
+              v-else
+              class="flex items-center gap-4 rounded-xl border p-4 border-stone-800/50 bg-stone-900/50"
+              role="listitem"
+            >
+              <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-stone-800">
+                <component :is="getSectionStatus(section.status).icon" class="h-4 w-4" :class="getSectionStatus(section.status).class" />
+              </div>
+              <div class="min-w-0 flex-1">
+                <p class="truncate text-sm font-medium text-stone-500">{{ section.title }}</p>
+                <p class="text-xs text-stone-500">{{ getSectionStatus(section.status).label }}</p>
+              </div>
+            </div>
+          </template>
         </div>
 
         <div class="mt-8 flex items-center justify-center gap-4 border-t border-stone-800 pt-6">

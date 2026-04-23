@@ -74,7 +74,14 @@ development_status:
   3-3-section-void-ui-content-block-rendering: done
   3-4-section-completion-and-adaptive-pacing: done
   3-5-audio-primer-generation-user-note-references: done
-  epic-3-retrospective: optional
+  epic-3-retrospective: done
+
+  # === Prep Sprint — Epic 4 (from Epic 3 retro) ===
+  prep-sprint-epic-4: in-progress
+  prep-4-1-quizblock-aria-live-feedback: done
+  prep-4-2-checkprefetchstatus-projection: backlog
+  prep-4-3-textblock-numbered-list-support: backlog
+  prep-sprint-epic-4-retrospective: optional
 
   # === Epic 4: Progress Tracking, Mastery & Content Quality (MVP) ===
   epic-4: backlog
