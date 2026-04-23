@@ -18,7 +18,7 @@ const progress = computed(() => {
 
 <template>
   <header
-    class="sticky top-0 z-10 border-b border-stone-800 bg-stone-900"
+    class="sticky top-[41px] z-10 border-b border-stone-800 bg-stone-900"
     role="banner"
   >
     <div class="mx-auto flex max-w-3xl items-center gap-3 px-4 py-3">

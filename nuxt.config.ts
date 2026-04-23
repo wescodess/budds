@@ -94,6 +94,7 @@ export default defineNuxtConfig({
       prose: false,
       map: {
         citation: 'Citation',
+        pre: 'ProsePre',
       },
     },
   },
