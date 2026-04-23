@@ -103,7 +103,7 @@ async function handleCompleteSection() {
     showCompletionCard.value = true
     completionData.value = {
       practiceScore: score,
-      masteryLevel: score >= 90 ? 'mastered' : score >= 70 ? 'reviewing' : score >= 60 ? 'learning' : 'new',
+      masteryLevel: 'learning',
       conceptsForReview: 0,
       feedbackText: '',
     }
