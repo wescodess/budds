@@ -38,9 +38,11 @@ export interface FolderPageContext {
 
   createConversation: (title: string) => Promise<Id<'conversations'>>
   createFlashcardRoom: (title?: string) => Promise<{ roomId: Id<'flashcardRooms'> }>
+  createCourse: (title?: string, webSearch?: boolean) => Promise<{ courseId: Id<'courses'>; taskId: Id<'tasks'> }>
   deleteConversation: (id: Id<'conversations'>) => Promise<void>
   deleteFlashcardRoom: (roomId: Id<'flashcardRooms'>) => Promise<void>
   deleteQuiz: (quizId: Id<'quizzes'>) => Promise<void>
+  deleteCourse: (courseId: Id<'courses'>) => Promise<void>
 
   requestDeleteDocuments: (ids: string[]) => void
   requestMoveDocuments: (ids: string[]) => void
@@ -119,6 +121,14 @@ export function provideFolderPageContext(): FolderPageContext {
     ? useConvexMutation(api.flashcardRooms.deleteRoom)
     : { mutate: async (_args: { roomId: Id<'flashcardRooms'> }) => null }
 
+  const createCourseMutation = import.meta.client
+    ? useConvexMutation(api.courses.create)
+    : { mutate: async (_args: { title: string; sourceType: 'folder' | 'web-only'; folderId: Id<'folders'>; webSearchEnabled?: boolean }) => ({ courseId: '' as unknown as Id<'courses'>, taskId: '' as unknown as Id<'tasks'> }) }
+
+  const deleteCourseMutation = import.meta.client
+    ? useConvexMutation(api.courses.deleteCourse)
+    : { mutate: async (_args: { id: Id<'courses'> }) => null }
+
   const deleteQuizMutation = import.meta.client
     ? useConvexMutation(api.quizzes.deleteQuiz)
     : { mutate: async (_args: { quizId: Id<'quizzes'> }) => null }
@@ -135,6 +145,20 @@ export function provideFolderPageContext(): FolderPageContext {
       folderId: folderId.value,
       title,
     })) as { roomId: Id<'flashcardRooms'> }
+  }
+
+  async function createCourse(title?: string, webSearch?: boolean) {
+    const hasIndexed = indexedDocumentCount.value > 0
+    return (await createCourseMutation.mutate({
+      title: title || 'Untitled Course',
+      sourceType: hasIndexed ? 'folder' : 'web-only',
+      folderId: folderId.value,
+      webSearchEnabled: webSearch,
+    })) as { courseId: Id<'courses'>; taskId: Id<'tasks'> }
+  }
+
+  async function deleteCourseFn(courseId: Id<'courses'>) {
+    await deleteCourseMutation.mutate({ id: courseId })
   }
 
   async function deleteConversationFn(id: Id<'conversations'>) {
@@ -207,9 +231,11 @@ export function provideFolderPageContext(): FolderPageContext {
     tasksActiveCount,
     createConversation,
     createFlashcardRoom,
+    createCourse,
     deleteConversation: deleteConversationFn,
     deleteFlashcardRoom: deleteFlashcardRoomFn,
     deleteQuiz: deleteQuizFn,
+    deleteCourse: deleteCourseFn,
     requestDeleteDocuments,
     requestMoveDocuments,
     handleUpload,

@@ -2,19 +2,20 @@
 import { Loader2, AlertTriangle } from 'lucide-vue-next'
 import type { Id } from '../../../convex/_generated/dataModel'
 import { api } from '#convex/api'
+import type { PickerFolder, PickerFile } from '~/components/global/DirectoryPicker.vue'
 
-type SourceType = 'folder' | 'cross-folder' | 'web-only'
+type SourceType = 'folder' | 'web-only'
 
 interface SubmitPayload {
   title: string
   sourceType: SourceType
-  folderIds: Id<'folders'>[]
+  folderId: Id<'folders'>
   documentIds: Id<'documents'>[]
   webSearchEnabled: boolean
 }
 
 const props = defineProps<{
-  initialFolderId?: string
+  folderId: Id<'folders'>
   loading?: boolean
 }>()
 
@@ -24,27 +25,19 @@ const emit = defineEmits<{
 
 const topic = ref('')
 const webSearchEnabled = ref(false)
+const selectedFileIds = ref<Set<string>>(new Set())
 const selectedFolderIds = ref<Set<string>>(new Set())
-
-const foldersQuery = import.meta.client
-  ? useConvexQuery(api.folders.listAllFolders, {})
-  : { data: ref([]) }
-
-const docCountsQuery = import.meta.client
-  ? useConvexQuery(api.documents.countsByFolder, {})
-  : { data: ref([]) }
 
 const backlogQuery = import.meta.client
   ? useConvexQuery(api.reviewItems.getReviewBacklogCount, {})
   : { data: ref(null) }
 
-const folders = computed(() => foldersQuery.data?.value ?? [])
-const docCounts = computed(() => {
-  const counts = docCountsQuery.data?.value ?? []
-  const map = new Map<string, number>()
-  for (const c of counts) map.set(c.folderId, c.count)
-  return map
-})
+const scopeQuery = import.meta.client
+  ? useConvexQuery(api.folders.searchScopeItems, computed(() => ({
+    rootFolderId: props.folderId,
+    search: '',
+  })))
+  : { data: ref(null) }
 
 const showBacklogWarning = computed(() => {
   const data = backlogQuery.data?.value as { dueCount: number; dailyCap: number } | null | undefined
@@ -57,42 +50,76 @@ const backlogCount = computed(() => {
   return data?.dueCount ?? 0
 })
 
-if (props.initialFolderId) {
-  selectedFolderIds.value.add(props.initialFolderId)
-}
+const pickerFolders = computed<PickerFolder[]>(() =>
+  (scopeQuery.data?.value?.folders ?? []).map((f: any) => ({
+    id: f.id as string,
+    name: f.name,
+    parentId: f.parentId as string | undefined,
+    fileCount: f.descendantFileCount ?? f.fileCount ?? 0,
+  })),
+)
 
-function toggleFolder(folderId: string) {
-  const set = new Set(selectedFolderIds.value)
-  if (set.has(folderId)) set.delete(folderId)
-  else set.add(folderId)
-  selectedFolderIds.value = set
-}
+const pickerFiles = computed<PickerFile[]>(() =>
+  (scopeQuery.data?.value?.files ?? []).map((f: any) => ({
+    id: f.id as string,
+    name: f.filename,
+    folderId: (f.folderId ?? props.folderId) as string,
+  })),
+)
 
-const hasSources = computed(() => selectedFolderIds.value.size > 0)
+const totalFileCount = computed(() => pickerFiles.value.length)
+const hasFiles = computed(() => totalFileCount.value > 0)
+const selectedCount = computed(() => selectedFileIds.value.size + selectedFolderIds.value.size)
+const hasSelection = computed(() => selectedCount.value > 0)
+
 const canSubmit = computed(() => {
-  return (topic.value.trim().length > 0 || hasSources.value) && !props.loading
+  return topic.value.trim().length > 0 && !props.loading
 })
 
+function isFileSelected(fileId: string): boolean {
+  return selectedFileIds.value.has(fileId)
+}
+
+function isFolderSelected(folderId: string): 'all' | 'some' | 'none' {
+  if (selectedFolderIds.value.has(folderId)) return 'all'
+  return 'none'
+}
+
+function handleToggleFile(fileId: string) {
+  const next = new Set(selectedFileIds.value)
+  if (next.has(fileId)) next.delete(fileId)
+  else next.add(fileId)
+  selectedFileIds.value = next
+}
+
+function handleToggleFolder(folderId: string) {
+  const next = new Set(selectedFolderIds.value)
+  if (next.has(folderId)) next.delete(folderId)
+  else next.add(folderId)
+  selectedFolderIds.value = next
+}
+
+function handleClear() {
+  selectedFileIds.value = new Set()
+  selectedFolderIds.value = new Set()
+}
+
 function resolveSourceType(): SourceType {
-  if (!hasSources.value) return 'web-only'
+  if (!hasFiles.value && !hasSelection.value) return 'web-only'
   return 'folder'
 }
 
 function handleSubmit() {
   if (!canSubmit.value) return
   const sourceType = resolveSourceType()
-  const folderIds = [...selectedFolderIds.value] as Id<'folders'>[]
 
-  const title = topic.value.trim() || folderIds.map((fid) => {
-    const f = folders.value.find((fo: any) => fo._id === fid)
-    return f ? (f as any).name : ''
-  }).filter(Boolean).join(', ')
+  const documentIds = [...selectedFileIds.value] as Id<'documents'>[]
 
   emit('submit', {
-    title,
+    title: topic.value.trim(),
     sourceType,
-    folderIds,
-    documentIds: [],
+    folderId: props.folderId,
+    documentIds,
     webSearchEnabled: sourceType === 'web-only' ? true : webSearchEnabled.value,
   })
 }
@@ -100,7 +127,7 @@ function handleSubmit() {
 
 <template>
   <div class="mx-auto w-full max-w-2xl px-4 py-6" data-testid="source-selector">
-    <h2 class="mb-6 text-2xl font-bold text-stone-100">Create a Course</h2>
+    <h2 class="mb-6 text-2xl font-bold text-foreground">Create a Course</h2>
 
     <div
       v-if="showBacklogWarning"
@@ -124,7 +151,7 @@ function handleSubmit() {
     </div>
 
     <div class="mb-6">
-      <label class="mb-1.5 block text-sm font-medium text-stone-400" for="topic-input">
+      <label class="mb-1.5 block text-sm font-medium text-muted-foreground" for="topic-input">
         What do you want to learn?
       </label>
       <input
@@ -132,63 +159,64 @@ function handleSubmit() {
         v-model="topic"
         type="text"
         placeholder="e.g. React hooks, Organic Chemistry..."
-        class="w-full rounded-lg border border-stone-700 bg-stone-800 px-4 py-3 text-sm text-stone-100 placeholder-stone-500 outline-none focus:border-amber-500"
+        class="w-full rounded-lg border border-input bg-background px-4 py-3 text-sm text-foreground placeholder-muted-foreground outline-none focus:border-primary"
         data-testid="topic-input"
       />
     </div>
 
-    <div class="mb-6">
-      <p class="mb-3 text-sm text-stone-500">&mdash; or select from your knowledge base &mdash;</p>
-
-      <div
-        v-if="folders.length === 0"
-        class="rounded-lg border border-dashed border-stone-700 px-4 py-6 text-center text-sm text-stone-500"
-      >
-        No folders yet. Enter a topic above to create a web-sourced course.
+    <div v-if="hasFiles" class="mb-6 space-y-3">
+      <div class="flex items-center justify-between">
+        <div>
+          <h3 class="text-sm font-medium text-foreground">Select source material</h3>
+          <p class="text-xs text-muted-foreground">
+            <template v-if="hasSelection">
+              {{ selectedCount }} selected
+            </template>
+            <template v-else>
+              All {{ totalFileCount }} documents will be used
+            </template>
+          </p>
+        </div>
       </div>
 
-      <div v-else class="max-h-64 space-y-1 overflow-y-auto rounded-lg border border-stone-700 bg-stone-900 p-3">
-        <label
-          v-for="folder in folders"
-          :key="(folder as any)._id"
-          class="flex cursor-pointer items-center gap-3 rounded px-2 py-2 transition-colors hover:bg-stone-800"
-          :data-testid="`folder-row-${(folder as any)._id}`"
-        >
-          <input
-            type="checkbox"
-            :checked="selectedFolderIds.has((folder as any)._id)"
-            class="h-4 w-4 rounded border-stone-600 bg-stone-800 text-amber-500 accent-amber-500"
-            data-testid="folder-checkbox"
-            @change="toggleFolder((folder as any)._id)"
-          />
-          <span class="flex-1 text-sm text-stone-200">{{ (folder as any).name }}</span>
-          <span class="text-xs text-stone-500">
-            {{ docCounts.get((folder as any)._id) ?? 0 }} docs
-          </span>
-        </label>
+      <div class="min-w-0 overflow-hidden rounded-lg border border-border/60" data-testid="directory-picker">
+        <DirectoryPicker
+          :folders="pickerFolders"
+          :files="pickerFiles"
+          :is-file-selected="isFileSelected"
+          :is-folder-selected="isFolderSelected"
+          :on-toggle-file="handleToggleFile"
+          :on-toggle-folder="handleToggleFolder"
+          :on-clear="handleClear"
+          :selected-count="selectedCount"
+          search-placeholder="Search documents"
+          presentation="drawer"
+        />
       </div>
     </div>
 
-    <div class="mb-8">
+    <div v-else class="mb-6 rounded-lg border border-dashed border-border px-4 py-3">
+      <p class="text-sm text-muted-foreground">
+        No documents in this folder. The course will be generated from web sources.
+      </p>
+    </div>
+
+    <div v-if="hasFiles" class="mb-8">
       <label class="flex cursor-pointer items-center gap-3" data-testid="web-search-toggle">
         <input
           v-model="webSearchEnabled"
           type="checkbox"
-          class="h-4 w-4 rounded border-stone-600 bg-stone-800 text-amber-500 accent-amber-500"
-          :disabled="!hasSources"
+          class="h-4 w-4 rounded border-input bg-background text-primary accent-primary"
           data-testid="web-search-checkbox"
         />
-        <span class="text-sm text-stone-300" :class="{ 'text-stone-500': !hasSources }">
+        <span class="text-sm text-foreground">
           Supplement from web
         </span>
       </label>
-      <p v-if="!hasSources && topic.trim()" class="mt-1 pl-7 text-xs text-stone-500">
-        Web sources will be used automatically for topic-only courses
-      </p>
     </div>
 
     <button
-      class="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-6 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-50"
+      class="inline-flex items-center gap-2 rounded-lg bg-primary px-6 py-2.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
       :disabled="!canSubmit"
       data-testid="generate-outline-button"
       @click="handleSubmit"

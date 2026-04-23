@@ -1,9 +1,12 @@
 <script setup lang="ts">
-import type { Id } from '../../../../../convex/_generated/dataModel'
+import type { Id } from '~~/convex/_generated/dataModel'
 import { api } from '#convex/api'
+import { injectFolderContext } from '~/composables/useFolderPageContext'
 
 const route = useRoute()
 const router = useRouter()
+const ctx = injectFolderContext()
+const { folderId, helperPane } = ctx
 
 const courseId = computed(() => route.params.courseId as Id<'courses'>)
 const sectionId = computed(() => route.params.sectionId as Id<'courseSections'>)
@@ -126,33 +129,37 @@ watch(() => section.value?.status, (status) => {
 
 function navigateToNextSection() {
   if (nextSection.value) {
-    router.push(`/app/learn/${courseId.value}/${nextSection.value._id}`)
+    router.push(`/app/folders/${folderId.value}/learn/${courseId.value}/${nextSection.value._id}`)
   }
 }
 
 function navigateBack() {
-  router.push(`/app/learn/${courseId.value}`)
+  router.push(`/app/folders/${folderId.value}/learn/${courseId.value}`)
+}
+
+function onGenerationStarted() {
+  helperPane.open('tasks')
 }
 </script>
 
 <template>
-  <div class="flex min-h-screen flex-col bg-stone-950">
+  <div class="flex min-h-0 flex-1 flex-col overflow-y-auto bg-background">
     <div v-if="!section || !course" class="flex flex-1 items-center justify-center">
       <div class="space-y-3 text-center">
-        <div class="mx-auto h-6 w-6 animate-spin rounded-full border-2 border-amber-500 border-t-transparent" />
-        <p class="text-sm text-stone-400">Loading section...</p>
+        <div class="mx-auto h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+        <p class="text-sm text-muted-foreground">Loading section...</p>
       </div>
     </div>
 
     <template v-else-if="section.status !== 'ready' && section.status !== 'completed'">
       <div class="flex flex-1 flex-col items-center justify-center gap-4 px-4">
-        <div class="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-amber-500 border-t-transparent" />
-        <p class="text-sm text-stone-400">
+        <div class="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+        <p class="text-sm text-muted-foreground">
           {{ section.status === 'generating' ? 'Generating section content...' : 'Section not available' }}
         </p>
         <button
           type="button"
-          class="text-sm text-amber-500 hover:text-amber-400"
+          class="text-sm text-primary hover:text-primary/80"
           @click="navigateBack"
         >
           Back to course
@@ -170,7 +177,7 @@ function navigateBack() {
       />
 
       <div v-if="section.failureNotice" class="mx-auto w-full max-w-3xl px-4 pt-4">
-        <div class="rounded-lg bg-amber-500/10 px-4 py-3 text-sm text-amber-400">
+        <div class="rounded-lg bg-primary/10 px-4 py-3 text-sm text-primary">
           {{ section.failureNotice }}
         </div>
       </div>
@@ -202,7 +209,7 @@ function navigateBack() {
           <div class="mt-8 flex justify-center pb-8">
             <button
               type="button"
-              class="rounded-lg bg-amber-500 px-6 py-3 text-sm font-medium text-stone-950 transition-colors hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
+              class="rounded-lg bg-primary px-6 py-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
               :disabled="isCompleting"
               data-testid="complete-section-button"
               @click="handleCompleteSection"

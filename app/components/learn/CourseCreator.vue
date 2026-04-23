@@ -7,11 +7,12 @@ import { toast } from 'vue-sonner'
 type Step = 'source-selection' | 'generating' | 'outline-editor' | 'error'
 
 const props = defineProps<{
-  initialFolderId?: string
+  folderId: Id<'folders'>
+  existingCourseId?: Id<'courses'>
 }>()
 
-const step = ref<Step>('source-selection')
-const courseId = ref<Id<'courses'> | null>(null)
+const step = ref<Step>(props.existingCourseId ? 'generating' : 'source-selection')
+const courseId = ref<Id<'courses'> | null>(props.existingCourseId ?? null)
 const skeletonWidths = [85, 72, 90, 65, 78, 95, 70, 88]
 
 const ssrStub = {
@@ -47,7 +48,7 @@ if (import.meta.client) {
     unsubSections = client.onUpdate(api.courseSections.listByCourse, { courseId: id }, (result) => {
       if (result !== undefined) sections.value = result
     })
-  })
+  }, { immediate: true })
 
   onScopeDispose(() => {
     unsubCourse?.()
@@ -56,26 +57,27 @@ if (import.meta.client) {
 }
 
 watch(course, (c) => {
-  if (!c || step.value !== 'generating') return
-  if (c.status === 'ready') step.value = 'outline-editor'
-  else if (c.status === 'failed') step.value = 'error'
+  if (!c) return
+  if (c.status === 'ready' && (step.value === 'generating' || step.value === 'source-selection')) {
+    step.value = 'outline-editor'
+  } else if (c.status === 'failed') {
+    step.value = 'error'
+  }
 })
 
 async function onSourceSubmit(payload: {
   title: string
-  sourceType: 'folder' | 'cross-folder' | 'web-only'
-  folderIds: Id<'folders'>[]
+  sourceType: 'folder' | 'web-only'
+  folderId: Id<'folders'>
   documentIds: Id<'documents'>[]
   webSearchEnabled: boolean
 }) {
   submitting.value = true
   try {
-    const folderId = payload.folderIds.length > 0 ? payload.folderIds[0] : undefined
-
     const result = await createMutation.mutate({
       title: payload.title,
       sourceType: payload.sourceType,
-      folderId,
+      folderId: payload.folderId,
       documentIds: payload.documentIds.length > 0 ? payload.documentIds : undefined,
       webSearchEnabled: payload.webSearchEnabled,
     } as any)
@@ -111,7 +113,7 @@ function handleTryAgain() {
   <div data-testid="course-creator">
     <LearnSourceSelector
       v-if="step === 'source-selection'"
-      :initial-folder-id="initialFolderId"
+      :folder-id="folderId"
       :loading="submitting"
       @submit="onSourceSubmit"
     />
@@ -121,12 +123,12 @@ function handleTryAgain() {
       class="mx-auto w-full max-w-2xl px-4 py-6"
       data-testid="generating-skeleton"
     >
-      <p class="mb-6 text-sm text-stone-400">Analyzing your materials...</p>
+      <p class="mb-6 text-sm text-muted-foreground">Analyzing your materials...</p>
       <div class="space-y-3">
         <div
           v-for="(w, i) in skeletonWidths"
           :key="i"
-          class="h-10 animate-pulse rounded-lg bg-stone-800"
+          class="h-10 animate-pulse rounded-lg bg-muted"
           :style="{ width: `${w}%` }"
         />
       </div>
@@ -137,9 +139,9 @@ function handleTryAgain() {
       class="mx-auto w-full max-w-2xl px-4 py-6 text-center"
       data-testid="error-state"
     >
-      <p class="mb-4 text-stone-300">We couldn't generate an outline. Please try again.</p>
+      <p class="mb-4 text-muted-foreground">We couldn't generate an outline. Please try again.</p>
       <button
-        class="inline-flex items-center gap-2 rounded-lg border border-stone-600 px-5 py-2 text-sm font-medium text-stone-200 transition-colors hover:border-stone-500 hover:bg-stone-800"
+        class="inline-flex items-center gap-2 rounded-lg border border-border px-5 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent"
         data-testid="try-again-button"
         @click="handleTryAgain"
       >
@@ -160,7 +162,7 @@ function handleTryAgain() {
           :course-id="courseId"
           :current-pace="course.pace ?? 'steady'"
         />
-        <LearnStartLearningButton :course-id="courseId" />
+        <LearnStartLearningButton :course-id="courseId" :folder-id="folderId" />
       </div>
     </template>
   </div>

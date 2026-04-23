@@ -21,8 +21,8 @@ const {
   isPodcastMain, togglePodcastMain, audioOverviewShellRef,
   indexedDocumentCount, tasksActiveCount,
   deleteDocument, deleteDocuments, moveDocument, moveDocuments,
-  createConversation, createFlashcardRoom,
-  deleteConversation, deleteFlashcardRoom, deleteQuiz,
+  createConversation, createFlashcardRoom, createCourse,
+  deleteConversation, deleteFlashcardRoom, deleteQuiz, deleteCourse,
 } = ctx
 
 type FolderShellHandle = {
@@ -101,7 +101,7 @@ async function onCreateVoid(payload: { type: VoidType; name?: string }) {
     } else if (type === 'quiz') {
       await navigateTo(`/app/folders/${folderId.value}/quiz`)
     } else if (type === 'course') {
-      await navigateTo(`/app/learn/create?folderId=${folderId.value}`)
+      await navigateTo(`/app/folders/${folderId.value}/learn/create`)
     }
     newVoidOpen.value = false
     hideSidebarOnMobile()
@@ -145,15 +145,9 @@ async function confirmDeleteVoid() {
   if (!target || deletingVoid.value) return
   deletingVoid.value = true
   try {
-    if (target.type === 'course') {
-      const { toast } = await import('vue-sonner')
-      toast.info('Course deletion will be available in a future update')
-      voidDeleteTarget.value = null
-      return
-    }
-
     if (target.type === 'chat') await deleteConversation(target.id as Id<'conversations'>)
     else if (target.type === 'flashcards') await deleteFlashcardRoom(target.id as Id<'flashcardRooms'>)
+    else if (target.type === 'course') await deleteCourse(target.id as Id<'courses'>)
     else await deleteQuiz(target.id as Id<'quizzes'>)
 
     const currentPath = route.path
@@ -162,7 +156,7 @@ async function confirmDeleteVoid() {
     }
     voidDeleteTarget.value = null
     const { toast } = await import('vue-sonner')
-    const kindLabels: Record<string, string> = { flashcards: 'Flash card set', quiz: 'Quiz', chat: 'Chat' }
+    const kindLabels: Record<string, string> = { flashcards: 'Flash card set', quiz: 'Quiz', chat: 'Chat', course: 'Course' }
     const kind = kindLabels[target.type] ?? 'Void'
     toast.success(`${kind} deleted`)
   } catch (e: any) {

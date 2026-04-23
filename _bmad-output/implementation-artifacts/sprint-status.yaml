@@ -99,16 +99,16 @@ development_status:
   prep-sprint-epic-5-retrospective: optional
 
   # === Epic 5: Spaced Repetition (Fast-Follow) ===
-  epic-5: in-progress
+  epic-5: done
   5-1-review-item-extraction-and-sm2-data-model: done
   5-2-daily-review-session-ui: done
   5-3-sm2-scheduling-engine: done
   5-4-cross-course-review-budgeting: done
-  5-5-review-session-completion-and-daily-review-cta: backlog
+  5-5-review-session-completion-and-daily-review-cta: done
   epic-5-retrospective: optional
 
   # === Epic 6: Calendar Integration (Fast-Follow) ===
-  epic-6: backlog
+  epic-6: in-progress
   6-1-google-calendar-oauth-connection: backlog
   6-2-learning-session-preferences: backlog
   6-3-calendar-event-creation-and-adaptive-composition: backlog

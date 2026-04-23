@@ -6,10 +6,11 @@ const props = defineProps<{
   course: any
   sections: any[]
   courseId: Id<'courses'>
+  folderId?: Id<'folders'>
   backUrl: string
   backLabel: string
   sectionUrlPrefix: string
-  editOutlineUrl: string
+  editOutlineUrl?: string
   needsStart: boolean
 }>()
 
@@ -91,7 +92,7 @@ const showPaceSelector = ref(false)
       </div>
 
       <div v-if="needsStart" class="mb-6 flex justify-center">
-        <LearnStartLearningButton :course-id="courseId" />
+        <LearnStartLearningButton :course-id="courseId" :folder-id="folderId" />
       </div>
 
       <div class="space-y-2" role="list" aria-label="Course sections">
@@ -151,6 +152,7 @@ const showPaceSelector = ref(false)
       <div class="mt-8 border-t border-stone-800 pt-6">
         <div class="hidden items-center justify-center gap-4 sm:flex" data-testid="actions-desktop">
           <NuxtLink
+            v-if="editOutlineUrl"
             :to="editOutlineUrl"
             class="inline-flex items-center gap-2 rounded-md border border-stone-700 px-3 py-2 text-sm font-medium text-stone-300 transition-colors hover:border-stone-600 hover:text-stone-100"
             data-testid="edit-outline-btn"
@@ -191,7 +193,7 @@ const showPaceSelector = ref(false)
               </button>
             </UiDropdownMenuTrigger>
             <UiDropdownMenuContent align="center" class="w-48">
-              <UiDropdownMenuItem as-child>
+              <UiDropdownMenuItem v-if="editOutlineUrl" as-child>
                 <NuxtLink
                   :to="editOutlineUrl"
                   class="flex w-full items-center gap-2"

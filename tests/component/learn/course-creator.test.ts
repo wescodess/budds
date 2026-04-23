@@ -5,18 +5,13 @@ import { getFunctionName } from 'convex/server'
 const mockCreate = vi.fn()
 const mockCourseData = ref<any>(null)
 const mockSectionsData = ref<any[]>([])
-const mockFolders = ref([
-  { _id: 'folder_1', name: 'Organic Chemistry', userId: 'u1' },
-])
-const mockDocCounts = ref([{ folderId: 'folder_1', count: 18 }])
 
 mockNuxtImport('useConvexQuery', () => {
   return (apiRef: any, _args?: any) => {
     const name = getFunctionName(apiRef) ?? ''
     if (name.includes('courses:get') || name.includes('courses.get')) return { data: mockCourseData }
     if (name.includes('listByCourse')) return { data: mockSectionsData }
-    if (name.includes('listAllFolders')) return { data: mockFolders }
-    if (name.includes('countsByFolder')) return { data: mockDocCounts }
+    if (name.includes('searchScopeItems')) return { data: ref({ folders: [], files: [{ id: 'doc_1', folderId: 'folder_1', filename: 'test.pdf', fileSize: 1024 }] }) }
     return { data: ref(null) }
   }
 })
@@ -41,7 +36,9 @@ describe('CourseCreator', () => {
 
   it('renders source selection step initially', async () => {
     const Comp = await import(componentPath)
-    const wrapper = await mountSuspended(Comp.default)
+    const wrapper = await mountSuspended(Comp.default, {
+      props: { folderId: 'folder_1' as any },
+    })
     expect(wrapper.find('[data-testid="course-creator"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="source-selector"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="generating-skeleton"]').exists()).toBe(false)
@@ -49,7 +46,9 @@ describe('CourseCreator', () => {
 
   it('shows error state with try again button', async () => {
     const Comp = await import(componentPath)
-    const wrapper = await mountSuspended(Comp.default)
+    const wrapper = await mountSuspended(Comp.default, {
+      props: { folderId: 'folder_1' as any },
+    })
 
     mockCreate.mockRejectedValue(new Error('Generation failed'))
     const input = wrapper.find('[data-testid="topic-input"]')
@@ -65,7 +64,9 @@ describe('CourseCreator', () => {
 
   it('try again returns to source selection', async () => {
     const Comp = await import(componentPath)
-    const wrapper = await mountSuspended(Comp.default)
+    const wrapper = await mountSuspended(Comp.default, {
+      props: { folderId: 'folder_1' as any },
+    })
 
     mockCreate.mockRejectedValue(new Error('fail'))
     await wrapper.find('[data-testid="topic-input"]').setValue('React hooks')

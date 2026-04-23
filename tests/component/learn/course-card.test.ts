@@ -5,6 +5,7 @@ const componentPath = ['~', 'components', 'learn', 'CourseCard.vue'].join('/')
 
 const baseCourse = {
   _id: 'course_123',
+  folderId: 'folder_456',
   title: 'Organic Chemistry',
   completedSectionCount: 5,
   totalSectionCount: 12,
@@ -71,7 +72,7 @@ describe('CourseCard', () => {
     const Comp = await import(componentPath)
     const wrapper = await mountSuspended(Comp.default, { props: { course: baseCourse } })
     const link = wrapper.find('a')
-    expect(link.attributes('href')).toContain('/app/learn/course_123')
+    expect(link.attributes('href')).toContain('/app/folders/folder_456/learn/course_123')
   })
 
   it('shows no status badge for ready courses', async () => {
