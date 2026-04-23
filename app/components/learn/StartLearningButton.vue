@@ -22,8 +22,24 @@ async function handleStart() {
   if (loading.value) return
   loading.value = true
   try {
-    const courseId = await startCourseMutation.mutate({ courseId: props.courseId } as any)
+    const result = await startCourseMutation.mutate({ courseId: props.courseId } as any)
+    const res = result as unknown as { courseId: string; sectionId: string; taskId: string } | string
+    const courseId = typeof res === 'string' ? res : res?.courseId
+
     if (courseId) {
+      if (typeof res === 'object' && res.sectionId && res.taskId) {
+        $fetch('/api/course/generate-section', {
+          method: 'POST',
+          body: {
+            courseId: props.courseId,
+            sectionId: res.sectionId,
+            taskId: res.taskId,
+          },
+        }).catch((err: any) => {
+          console.error('[StartLearningButton] Section generation failed:', err?.message)
+        })
+      }
+
       await navigateTo(`/app/learn/${courseId}`)
     }
   } catch (e: any) {

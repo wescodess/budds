@@ -413,9 +413,15 @@ export default defineSchema({
         v.literal('audio'),
       ),
       entityId: v.optional(v.string()),
+      entityType: v.optional(v.union(
+        v.literal('quiz'),
+        v.literal('flashcard'),
+        v.literal('audio'),
+      )),
       content: v.optional(v.string()),
       order: v.number(),
     })),
+    failureNotice: v.optional(v.string()),
     practiceScore: v.optional(v.number()),
     masteryLevel: v.union(
       v.literal('new'),

@@ -715,7 +715,9 @@ describe('courses.startCourse', () => {
     const { asUser, courseId } = await seedReadyCourseWithSections(t, USER_A)
 
     const result = await asUser.mutation(api.courses.startCourse, { courseId })
-    expect(result).toBe(courseId)
+    expect(result.courseId).toBe(courseId)
+    expect(result.sectionId).toBeDefined()
+    expect(result.taskId).toBeDefined()
 
     const sections = await t.run(async (ctx) =>
       ctx.db

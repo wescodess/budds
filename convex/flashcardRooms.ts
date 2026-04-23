@@ -1,5 +1,5 @@
 import { v } from 'convex/values'
-import { mutation, query } from './_generated/server'
+import { mutation, query, internalMutation } from './_generated/server'
 import type { Id, Doc } from './_generated/dataModel'
 import type { MutationCtx, QueryCtx } from './_generated/server'
 
@@ -161,6 +161,75 @@ async function archiveCurrentCards(
 
   return versionId
 }
+
+export const createCourseScopedRoom = internalMutation({
+  args: {
+    userId: v.string(),
+    folderId: v.id('folders'),
+    title: v.string(),
+    cards: v.array(v.object({
+      term: v.string(),
+      definition: v.string(),
+      sourceFilename: v.optional(v.string()),
+      sourceChunkContent: v.optional(v.string()),
+    })),
+  },
+  handler: async (ctx, args) => {
+    const title = normalizeTitle(args.title, 'Section Flashcards')
+    const now = Date.now()
+
+    const roomId = await ctx.db.insert('flashcardRooms', {
+      userId: args.userId,
+      folderId: args.folderId,
+      title,
+      updatedAt: now,
+      cardCount: args.cards.length,
+      courseScoped: true,
+    })
+
+    const versionId = await ctx.db.insert('flashcardRoomVersions', {
+      roomId,
+      userId: args.userId,
+      title,
+      origin: 'ai',
+      cardCount: args.cards.length,
+    })
+
+    for (let i = 0; i < args.cards.length; i++) {
+      const c = args.cards[i]!
+      const term = c.term.trim()
+      const definition = c.definition.trim()
+      if (!term || !definition) continue
+
+      const metadata = c.sourceFilename
+        ? { source: { filename: c.sourceFilename, chunkContent: c.sourceChunkContent || '' } }
+        : undefined
+
+      await ctx.db.insert('flashcardRoomCards', {
+        roomId,
+        userId: args.userId,
+        displayOrder: i,
+        term,
+        definition,
+        metadata: metadata as any,
+      })
+
+      await ctx.db.insert('flashcardVersionCards', {
+        versionId,
+        roomId,
+        userId: args.userId,
+        displayOrder: i,
+        term,
+        definition,
+        metadata: metadata as any,
+      })
+    }
+
+    await ctx.db.patch(roomId, { activeVersionId: versionId, currentCardCount: args.cards.length })
+
+    return { roomId }
+  },
+})
 
 export const createRoom = mutation({
   args: {
