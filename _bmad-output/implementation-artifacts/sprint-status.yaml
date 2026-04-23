@@ -94,7 +94,7 @@ development_status:
   # === Prep Sprint — Epic 5 (from Epic 4 retro) ===
   prep-sprint-epic-5: in-progress
   prep-5-1-timezone-ui-for-streak: done
-  prep-5-2-reviewing-mastery-color-fix: backlog
+  prep-5-2-reviewing-mastery-color-fix: done
   prep-5-3-flag-editor-aria-labels: backlog
   prep-sprint-epic-5-retrospective: optional
 
