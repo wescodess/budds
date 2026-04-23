@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import type { ChatMessage } from './ai-gateway'
 import type { AISearchChunk } from './ai-search'
+import type { TtsEngineHint } from './audio-script-prompt'
 
 export const interjectionTurnSchema = z.object({
   speaker: z.enum(['host_a', 'host_b']),
@@ -19,6 +20,7 @@ export interface BuildInterjectionPromptOptions {
   question: string
   overviewTitle?: string
   chunks: AISearchChunk[]
+  ttsEngine?: TtsEngineHint
 }
 
 export const MIN_ANSWER_TURNS = 2
@@ -81,8 +83,11 @@ SOURCE GROUNDING (non-negotiable)
 NATURAL SPEECH
 - Punctuation-driven prosody: "..." (pause), "—" (mid-thought shift), "?" (rising), "," (breath).
 - Fillers: "hmm,", "well,", "so,", "right,", "yeah,", "oh totally,", "wait —", "exactly,".
-- No bracketed stage directions like [laughs]; the TTS reads them literally. Use "haha" or "hmm" instead.
-- No markdown. No ALL CAPS. No parentheticals.
+${options.ttsEngine === 'dia'
+? `- You may use parenthetical expressions like (laughs) or (sighs) — the TTS renders these as actual sounds. Use at most one per interjection.
+- No bracketed stage directions like [laughs]. No markdown. No ALL CAPS.`
+: `- No bracketed stage directions like [laughs]; the TTS reads them literally. Use "haha" or "hmm" instead.
+- No markdown. No ALL CAPS. No parentheticals.`}
 
 LISTENER CONTEXT
 ${overviewTitle ? `- Podcast title: "${overviewTitle}"` : '- (No podcast title supplied.)'}
