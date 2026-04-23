@@ -8,7 +8,7 @@ interface Course {
   status: string
 }
 
-const props = defineProps<{ course: Course }>()
+const props = defineProps<{ course: Course; folderId?: string }>()
 
 const progress = computed(() => {
   if (!props.course.totalSectionCount) return 0
@@ -22,11 +22,17 @@ const paceConfig = {
 } as const
 
 const paceDisplay = computed(() => paceConfig[props.course.pace] ?? paceConfig.steady)
+
+const courseUrl = computed(() =>
+  props.folderId
+    ? `/app/folders/${props.folderId}/learn/${props.course._id}`
+    : `/app/learn/${props.course._id}`,
+)
 </script>
 
 <template>
   <NuxtLink
-    :to="`/app/learn/${course._id}`"
+    :to="courseUrl"
     class="group block rounded-xl border border-stone-800 bg-stone-900 p-5 transition-colors hover:border-stone-700"
     :data-testid="`course-card-${course._id}`"
   >
