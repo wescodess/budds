@@ -284,7 +284,7 @@ export default defineSchema({
 
   tasks: defineTable({
     userId: v.string(),
-    folderId: v.id('folders'),
+    folderId: v.optional(v.id('folders')),
     type: v.string(),
     status: v.string(),
     title: v.string(),
@@ -297,6 +297,7 @@ export default defineSchema({
     completedAt: v.optional(v.number()),
   })
     .index('by_userId_and_folderId', ['userId', 'folderId'])
+    .index('by_userId', ['userId'])
     .index('by_status', ['status']),
 
   audioOverviews: defineTable({

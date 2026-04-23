@@ -1,5 +1,11 @@
 # Deferred Work
 
+## Deferred from: code review of 1-2-course-creation-api-folder-cross-folder (2026-04-22)
+
+- **`create` mutation transaction size with large folders.** When sourceType='folder' and no documentIds specified, the mutation reads all docs in the folder and creates one courseSourceDoc per doc. For folders with 200+ documents this could approach Convex transaction limits. Consider batched creation or a limit on source doc count for MVP.
+- **Duplicate `requireAuth` helper.** courses.ts and courseSourceDocs.ts each define their own requireAuth. Same pattern exists in quizzes.ts, flashcards.ts, tasks.ts. Should extract to a shared `convex/lib/auth.ts` utility when the duplication exceeds 5 files.
+- **`listByUser` returns full course documents including outlineSections array.** For list views, a lean projection (omitting outlineSections, sourceConfidence details) would reduce bandwidth. Not critical until outline generation populates large arrays.
+
 ## Deferred from: code review of 1-1-convex-schema-course-tables (2026-04-22)
 
 - **`courseSourceDocs` table lacks a `by_userId` index.** Deletion and export iterate via `courses.by_userId` then `courseSourceDocs.by_courseId` per course. Functional but O(courses) queries. Adding `by_userId` index with a `userId` field would allow direct query like other tables. Matches current architecture spec (only `by_courseId` specified). Add the index when the table sees high-volume queries.

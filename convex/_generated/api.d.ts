@@ -14,6 +14,8 @@ import type * as audioOverviewInterjections from "../audioOverviewInterjections.
 import type * as audioOverviews from "../audioOverviews.js";
 import type * as auth from "../auth.js";
 import type * as conversations from "../conversations.js";
+import type * as courseSourceDocs from "../courseSourceDocs.js";
+import type * as courses from "../courses.js";
 import type * as crons from "../crons.js";
 import type * as dataExport from "../dataExport.js";
 import type * as debugQuery from "../debugQuery.js";
@@ -45,6 +47,8 @@ declare const fullApi: ApiFromModules<{
   audioOverviews: typeof audioOverviews;
   auth: typeof auth;
   conversations: typeof conversations;
+  courseSourceDocs: typeof courseSourceDocs;
+  courses: typeof courses;
   crons: typeof crons;
   dataExport: typeof dataExport;
   debugQuery: typeof debugQuery;

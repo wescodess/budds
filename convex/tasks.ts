@@ -40,6 +40,31 @@ export const create = mutation({
   },
 })
 
+export const createInternal = internalMutation({
+  args: {
+    userId: v.string(),
+    folderId: v.optional(v.id('folders')),
+    type: v.string(),
+    title: v.string(),
+    metadata: v.optional(v.any()),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now()
+    const taskId = await ctx.db.insert('tasks', {
+      userId: args.userId,
+      folderId: args.folderId,
+      type: args.type,
+      status: 'pending',
+      title: args.title,
+      progress: 'Preparing...',
+      metadata: args.metadata,
+      createdAt: now,
+      updatedAt: now,
+    })
+    return taskId
+  },
+})
+
 export const updateProgress = internalMutation({
   args: {
     taskId: v.id('tasks'),
