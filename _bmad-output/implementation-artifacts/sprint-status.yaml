@@ -60,7 +60,7 @@ development_status:
   # === Prep Sprint — Epic 3 (mandatory before Epic 3) ===
   prep-sprint-epic-3: in-progress
   prep-3-1-extract-require-auth-shared-util: done
-  prep-3-2-aria-labels-outline-editor: backlog
+  prep-3-2-aria-labels-outline-editor: done
   prep-3-3-source-doc-count-cap: backlog
   prep-3-4-e2e-course-creation-learn-home: backlog
   prep-3-5-fix-baseline-test-failures: backlog
