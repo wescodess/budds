@@ -212,6 +212,30 @@ export const finalizeOutline = mutation({
   },
 })
 
+export const updateOutline = mutation({
+  args: {
+    courseId: v.id('courses'),
+    outlineSections: v.array(v.object({
+      title: v.string(),
+      description: v.string(),
+      knowledgeType: v.string(),
+      order: v.number(),
+    })),
+    totalSectionCount: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireAuth(ctx)
+    const course = await ctx.db.get(args.courseId)
+    if (!course || course.userId !== userId) throw new Error('Course not found')
+
+    await ctx.db.patch(args.courseId, {
+      outlineSections: args.outlineSections,
+      totalSectionCount: args.totalSectionCount,
+      updatedAt: Date.now(),
+    })
+  },
+})
+
 export const markFailed = mutation({
   args: {
     courseId: v.id('courses'),

@@ -1,6 +1,6 @@
 # Story 1.4: Outline Generation Pipeline
 
-Status: review
+Status: done
 
 ## Story
 
