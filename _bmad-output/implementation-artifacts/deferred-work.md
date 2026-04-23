@@ -1,5 +1,10 @@
 # Deferred Work
 
+## Deferred from: code review of 2-1-learn-home-page-empty-and-active-states (2026-04-23)
+
+- **CourseCard shows generating/failed courses without status indicator.** `listByUser` returns all courses regardless of status. A course in `generating` or `failed` status appears in the grid with 0% progress and no visual differentiation. Add a status badge or skeleton state for non-ready courses.
+- **StreakDisplay freeze detection uses client-side Date.** `isFreezeRecent` computes against `new Date()` which uses the client's clock. If the client clock is wrong, the frost/flame icon may show incorrectly. Low risk -- cosmetic only.
+
 ## Deferred from: code review of 1-7-course-creator-ui-full-flow (2026-04-23)
 
 - **SourceSelector only supports single-folder selection as sourceType 'folder'.** Multi-folder (cross-folder) selection requires document-level granularity to satisfy the `courses.create` cross-folder validator which needs `documentIds`. The UI selects folders, not individual documents. Add document-level selection in a future story when cross-folder courses are needed.
