@@ -1,6 +1,6 @@
 # Story prep-3-2: Add aria-labels to OutlineEditor interactive elements
 
-## Status: ready-for-dev
+## Status: done
 
 ## Epic
 Prep Sprint — Epic 3 (mandatory before Epic 3)
@@ -65,11 +65,17 @@ Then no interactive element (button, input) lacks an accessible name
 ## Dev Agent Record
 
 ### Decisions
-(none yet)
+- Skipped TEA ATDD step: story is purely about adding aria-label attributes to existing elements. The ACs test attribute presence, not behavioral logic. Component tests in Task 5 cover this directly.
+- Section title button already has text content (the section title itself) and is accessible to screen readers. No aria-label added per WCAG -- text content serves as the accessible name.
+- Add Section button already has text content ("Add Section"). No change needed.
 
 ## File List
 - `app/components/learn/OutlineEditor.vue`
 - `tests/component/learn/outline-editor.test.ts`
 
 ## Change Log
-(none yet)
+- Added `aria-hidden="true"` to GripVertical drag handle icon
+- Added `aria-label="Section title"` to inline title edit input
+- Added `:aria-label` with dynamic text to knowledge type badge button
+- Added `:aria-label` with dynamic text to remove button (X icon)
+- Added 4 component tests verifying ARIA attributes on all interactive elements

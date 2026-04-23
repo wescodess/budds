@@ -1,38 +1,38 @@
 mode: running
 current_phase: prep-story
-current_story: prep-3-1-extract-require-auth-shared-util
+current_story: prep-3-2-aria-labels-outline-editor
 current_epic: prep-3
 retry_count: 0
 last_epic_complete_fired: 2
 
 last_verdict:
   subagent: bmad-story-runner
-  story: prep-3-1-extract-require-auth-shared-util
+  story: prep-3-2-aria-labels-outline-editor
   epic: prep-3
   status: PASS
-  pr_url: 'https://github.com/wescodess/budds/pull/98'
-  branch: 'prep/3-1-extract-require-auth'
-  commit_sha: 'a8475a4'
-  files_changed: 8
-  tasks_completed: 5
-  tasks_total: 5
+  pr_url: 'https://github.com/wescodess/budds/pull/99'
+  branch: 'prep/3-2-aria-labels-outline-editor'
+  commit_sha: 'fe94d12'
+  files_changed: 3
+  tasks_completed: 6
+  tasks_total: 6
   findings_deferred: 0
   lint_pass: null
   typecheck_pass: null
   unit_tests_pass: true
   e2e_tests_pass: null
-  review_pass: null
+  review_pass: true
   summary: >
-    Prep story prep-3-1 complete. Extracted duplicate requireAuth function from 6 Convex
-    files (courses, courseSections, courseSourceDocs, quizzes, audioOverviews,
-    audioOverviewInterjections) into a single shared utility at convex/lib/auth.ts.
-    Accepts QueryCtx | MutationCtx to cover all callers. Cleaned up unused type imports
-    in courses.ts, courseSections.ts, courseSourceDocs.ts. All 113 targeted Convex tests
-    pass (507 total, 0 new failures). PR #98 merged to dev. Prep sprint epic-3 now
-    in-progress (1/6 stories done).
+    Prep story prep-3-2 complete. Added aria-labels to 4 interactive elements in
+    OutlineEditor.vue: remove button (dynamic label with section title), title edit
+    input (static "Section title"), knowledge type badge (dynamic label with current
+    type), and drag handle (aria-hidden="true"). Added 4 component tests verifying all
+    ARIA attributes. All 19 OutlineEditor tests pass. 507 server/Convex tests pass (1
+    pre-existing failure unrelated). PR #99 merged to dev. Prep sprint epic-3: 2/6
+    stories done.
   block_reason: null
   block_context: null
-  at: '2026-04-24T04:12:00Z'
+  at: '2026-04-24T04:30:00Z'
 last_retro: 'epic-2-retro-2026-04-23.md'
 
 config:
@@ -57,8 +57,8 @@ paths:
   ux_spec: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/ux-design-learn-module.md
 
 counters:
-  stories_completed_this_run: 0
-  stories_completed_total: 10
+  stories_completed_this_run: 1
+  stories_completed_total: 11
 
 escalation:
   pending: null
@@ -82,6 +82,11 @@ escalation:
         User answered "1" → commit_all_then_start. Committing all changes on refactor/remove-folder-tabs, then branching feat/1-1 from dev.
 
 decisions_log:
+  - ts: '2026-04-24'
+    decision: |
+      story-runner PASS for prep-3-1 (0 deferred). 5/5 tasks, 8 files. Extracted requireAuth from
+      6 Convex files into convex/lib/auth.ts. 507 total tests pass (0 new failures). PR #98 merged
+      to dev. Counters 1 this-run, 11 total. Advancing to prep-3-2.
   - ts: '2026-04-23'
     decision: |
       Epic 2 retrospective complete. 3 new action items, 4 carried from Epic 1 (user chose to
@@ -137,6 +142,11 @@ decisions_log:
       DETERMINE_NEXT: epic-1 backlog → 1-1-convex-schema-course-tables. Story file created, runner spawned.
 
 run_log:
+  - ts: '2026-04-24'
+    mode: running
+    note: |
+      prep-3-1 PASS (PR #98). DETERMINE_NEXT: prep-3-2-aria-labels-outline-editor (backlog).
+      Spawning bmad-story-runner for prep-3-2.
   - ts: '2026-04-23'
     mode: resume
     note: |
