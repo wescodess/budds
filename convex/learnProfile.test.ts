@@ -298,6 +298,190 @@ describe('streak integration with completeSection', () => {
   })
 })
 
+describe('setTimezone mutation', () => {
+  test('sets valid IANA timezone', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'TZ Folder' })
+    await t.run(async (ctx) => {
+      await ctx.db.insert('documents', {
+        userId: USER_A.tokenIdentifier,
+        folderId,
+        filename: 'test.pdf',
+        status: 'success',
+        fileSize: 1024,
+      })
+    })
+    await asUser.mutation(api.courses.create, {
+      title: 'TZ Course',
+      sourceType: 'folder',
+      folderId,
+    })
+
+    await asUser.mutation(api.learnProfile.setTimezone, { timezone: 'America/New_York' })
+    const profile = await asUser.query(api.learnProfile.getProfile)
+    expect(profile!.timezone).toBe('America/New_York')
+  })
+
+  test('rejects invalid timezone string', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+
+    await t.run(async (ctx) => {
+      await ctx.db.insert('learnProfile', {
+        userId: USER_A.tokenIdentifier,
+        streakCurrent: 0,
+        streakFreezeAvailable: true,
+        dailyReviewCap: 50,
+      })
+    })
+
+    await expect(
+      asUser.mutation(api.learnProfile.setTimezone, { timezone: 'Invalid/Zone' }),
+    ).rejects.toThrow('Invalid timezone')
+  })
+
+  test('rejects empty timezone string', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+
+    await t.run(async (ctx) => {
+      await ctx.db.insert('learnProfile', {
+        userId: USER_A.tokenIdentifier,
+        streakCurrent: 0,
+        streakFreezeAvailable: true,
+        dailyReviewCap: 50,
+      })
+    })
+
+    await expect(
+      asUser.mutation(api.learnProfile.setTimezone, { timezone: '  ' }),
+    ).rejects.toThrow('Timezone must not be empty')
+  })
+
+  test('requires authentication', async () => {
+    const t = convexTest(schema, modules)
+    await expect(
+      t.mutation(api.learnProfile.setTimezone, { timezone: 'America/New_York' }),
+    ).rejects.toThrow()
+  })
+
+  test('creates profile if none exists', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+
+    await asUser.mutation(api.learnProfile.setTimezone, { timezone: 'Europe/London' })
+    const profile = await asUser.query(api.learnProfile.getProfile)
+    expect(profile).not.toBeNull()
+    expect(profile!.timezone).toBe('Europe/London')
+    expect(profile!.streakCurrent).toBe(0)
+  })
+})
+
+describe('timezone-aware streak evaluation', () => {
+  test('streak uses stored timezone for day computation', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'TZ Folder' })
+
+    await t.run(async (ctx) => {
+      await ctx.db.insert('documents', {
+        userId: USER_A.tokenIdentifier,
+        folderId,
+        filename: 'test.pdf',
+        status: 'success',
+        fileSize: 1024,
+      })
+    })
+
+    const { courseId } = await asUser.mutation(api.courses.create, {
+      title: 'TZ Course',
+      sourceType: 'folder',
+      folderId,
+    })
+
+    await asUser.mutation(api.courses.finalizeOutline, {
+      courseId,
+      outlineSections: [
+        { title: 'Section A', description: 'Desc', knowledgeType: 'factual', order: 0 },
+      ],
+      sourceConfidence: { docCount: 1, webPercent: 0 },
+      totalSectionCount: 1,
+    })
+
+    const sections = await asUser.query(api.courseSections.listByCourse, { courseId })
+    await t.run(async (ctx) => {
+      await ctx.db.patch(sections[0]._id, { status: 'ready' })
+    })
+
+    await asUser.mutation(api.learnProfile.setTimezone, { timezone: 'America/New_York' })
+
+    await asUser.mutation(api.courseSections.completeSection, {
+      sectionId: sections[0]._id,
+      practiceScore: 80,
+      quizCorrect: 4,
+      quizTotal: 5,
+    })
+
+    const profile = await asUser.query(api.learnProfile.getProfile)
+    expect(profile!.timezone).toBe('America/New_York')
+    expect(profile!.streakCurrent).toBeGreaterThanOrEqual(1)
+    expect(profile!.streakLastDate).toBeTruthy()
+  })
+
+  test('streak falls back to UTC when no timezone is set', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'No TZ Folder' })
+
+    await t.run(async (ctx) => {
+      await ctx.db.insert('documents', {
+        userId: USER_A.tokenIdentifier,
+        folderId,
+        filename: 'test.pdf',
+        status: 'success',
+        fileSize: 1024,
+      })
+    })
+
+    const { courseId } = await asUser.mutation(api.courses.create, {
+      title: 'No TZ Course',
+      sourceType: 'folder',
+      folderId,
+    })
+
+    await asUser.mutation(api.courses.finalizeOutline, {
+      courseId,
+      outlineSections: [
+        { title: 'Section A', description: 'Desc', knowledgeType: 'factual', order: 0 },
+      ],
+      sourceConfidence: { docCount: 1, webPercent: 0 },
+      totalSectionCount: 1,
+    })
+
+    const sections = await asUser.query(api.courseSections.listByCourse, { courseId })
+    await t.run(async (ctx) => {
+      await ctx.db.patch(sections[0]._id, { status: 'ready' })
+    })
+
+    const profileBefore = await asUser.query(api.learnProfile.getProfile)
+    expect(profileBefore!.timezone).toBeUndefined()
+
+    await asUser.mutation(api.courseSections.completeSection, {
+      sectionId: sections[0]._id,
+      practiceScore: 80,
+      quizCorrect: 4,
+      quizTotal: 5,
+    })
+
+    const profile = await asUser.query(api.learnProfile.getProfile)
+    expect(profile!.streakCurrent).toBeGreaterThanOrEqual(1)
+    const utcToday = new Date().toISOString().slice(0, 10)
+    expect(profile!.streakLastDate).toBe(utcToday)
+  })
+})
+
 describe('getProfile query', () => {
   test('returns null for unauthenticated user', async () => {
     const t = convexTest(schema, modules)
