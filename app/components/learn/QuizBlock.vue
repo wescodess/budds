@@ -27,9 +27,24 @@ const quizData = computed(() => quizQuery.data?.value as {
 
 const questions = computed(() => quizData.value?.questions ?? [])
 
+const emit = defineEmits<{
+  quizCompleted: [data: { correct: number; total: number }]
+}>()
+
 const answers = ref<Record<string, string>>({})
 const submitted = ref<Record<string, boolean>>({})
 const correctCount = ref(0)
+
+const allAnswered = computed(() => {
+  if (questions.value.length === 0) return false
+  return questions.value.every((q) => submitted.value[q._id])
+})
+
+watch(allAnswered, (done) => {
+  if (done) {
+    emit('quizCompleted', { correct: correctCount.value, total: questions.value.length })
+  }
+})
 
 function selectAnswer(questionId: string, value: string) {
   if (submitted.value[questionId]) return
