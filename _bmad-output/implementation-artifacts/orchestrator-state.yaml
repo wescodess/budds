@@ -1,37 +1,40 @@
 mode: running
-current_phase: prep-story
-current_story: prep-5-3-flag-editor-aria-labels
-current_epic: prep-5
+current_phase: epic-story
+current_story: 5-1-review-item-extraction-and-sm2-data-model
+current_epic: 5
 retry_count: 0
-last_epic_complete_fired: 4
+last_epic_complete_fired: prep-5
 
 last_verdict:
   subagent: bmad-story-runner
-  story: prep-5-3-flag-editor-aria-labels
-  epic: prep-5
+  story: 5-1-review-item-extraction-and-sm2-data-model
+  epic: 5
   status: PASS
-  pr_url: 'https://github.com/wescodess/budds/pull/117'
-  branch: 'prep/5-3-flag-aria-labels'
-  commit_sha: '7733719'
-  files_changed: 4
-  tasks_completed: 5
-  tasks_total: 5
-  findings_deferred: 0
+  pr_url: 'https://github.com/wescodess/budds/pull/118'
+  branch: 'feat/5-1-review-item-extraction'
+  commit_sha: '8cdf8df'
+  files_changed: 8
+  tasks_completed: 6
+  tasks_total: 6
+  findings_deferred: 4
   lint_pass: null
   typecheck_pass: null
   unit_tests_pass: true
   e2e_tests_pass: null
-  review_pass: null
+  review_pass: true
   summary: >
-    Story prep-5-3 complete. Added explicit aria-label attributes to flag editor correction
-    inputs in QuizBlock.vue (corrected answer + corrected explanation) and FlashcardBlock.vue
-    (corrected definition textarea) for WCAG compliance. Added 2 new component tests verifying
-    aria-labels are present. No code review needed (trivial accessibility attribute additions).
-    617 Convex + 382 component tests pass. PR #117 merged to dev. PREP SPRINT EPIC 5 COMPLETE
-    (3/3 stories). prep-sprint-epic-5-retrospective: optional. Epic boundary detected.
+    Story 5-1 complete. Added reviewItems table to Convex schema with SM-2 spaced repetition
+    fields. Created convex/reviewItems.ts with extractFromSection (internal mutation called from
+    completeSection), listDueForUser (query filtering by nextReviewDate and flagged status),
+    listBySection (query). Wired extraction into completeSection so flashcard cards become review
+    items on section completion with initial SM-2 params (easeFactor 2.5, interval 1, repetitions
+    0, nextReviewDate tomorrow). Added flag sync to contentFlags.flagFlashcard/unflagFlashcard
+    propagating to corresponding review items. 12 new Convex tests. Code review PASS: 4 deferred
+    (UTC dates, post-filter flagged, missing type field, no cascade delete). 629 Convex + 382
+    component tests pass. PR #118 merged to dev.
   block_reason: null
   block_context: null
-  at: '2026-04-23T21:15:00Z'
+  at: '2026-04-23T22:00:00Z'
 last_retro: 'epic-4-retro-2026-04-24.md'
 
 config:
@@ -56,8 +59,8 @@ paths:
   ux_spec: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/ux-design-learn-module.md
 
 counters:
-  stories_completed_this_run: 2
-  stories_completed_total: 30
+  stories_completed_this_run: 3
+  stories_completed_total: 31
 
 escalation:
   pending: null
