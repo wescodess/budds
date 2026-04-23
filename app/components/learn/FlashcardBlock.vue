@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ChevronLeft, ChevronRight, Layers } from 'lucide-vue-next'
+import { ChevronLeft, ChevronRight, Layers, Flag } from 'lucide-vue-next'
 import { usePointerSwipe } from '@vueuse/core'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
@@ -20,6 +20,8 @@ const roomData = computed(() => roomQuery.data?.value as {
     term: string
     definition: string
     displayOrder: number
+    flagged?: boolean
+    correctedDefinition?: string
   }>
 } | null)
 
@@ -29,15 +31,30 @@ const currentIndex = ref(0)
 const isFlipped = ref(false)
 const cardKey = ref(0)
 
+const flaggingOpen = ref(false)
+const flagCorrectedDef = ref('')
+const flagSaving = ref(false)
+const flagError = ref('')
+
+const flagMutation = import.meta.client
+  ? useConvexMutation(api.contentFlags.flagFlashcard)
+  : { mutate: async () => ({ success: true }) }
+
 const currentCard = computed(() => cards.value[currentIndex.value] ?? null)
 const progressLabel = computed(() =>
   cards.value.length === 0 ? '0/0' : `${currentIndex.value + 1}/${cards.value.length}`,
 )
 
+function effectiveDefinition(card: { definition: string; flagged?: boolean; correctedDefinition?: string } | null) {
+  if (!card) return ''
+  return (card.flagged && card.correctedDefinition) ? card.correctedDefinition : card.definition
+}
+
 function next() {
   if (currentIndex.value >= cards.value.length - 1) return
   currentIndex.value++
   isFlipped.value = false
+  flaggingOpen.value = false
   cardKey.value++
 }
 
@@ -45,6 +62,7 @@ function prev() {
   if (currentIndex.value <= 0) return
   currentIndex.value--
   isFlipped.value = false
+  flaggingOpen.value = false
   cardKey.value++
 }
 
@@ -66,6 +84,36 @@ function handleCardKeydown(e: KeyboardEvent) {
   } else if (e.key === 'ArrowLeft') {
     e.preventDefault()
     prev()
+  }
+}
+
+function openFlagEditor() {
+  if (!currentCard.value) return
+  flagCorrectedDef.value = effectiveDefinition(currentCard.value)
+  flaggingOpen.value = true
+}
+
+function closeFlagEditor() {
+  flaggingOpen.value = false
+}
+
+async function saveFlag() {
+  if (!currentCard.value) return
+  const trimmed = flagCorrectedDef.value.trim()
+  if (!trimmed) return
+
+  flagSaving.value = true
+  flagError.value = ''
+  try {
+    await flagMutation.mutate({
+      cardId: currentCard.value._id as Id<'flashcardRoomCards'>,
+      correctedDefinition: trimmed,
+    })
+    closeFlagEditor()
+  } catch {
+    flagError.value = 'Failed to save correction. Please try again.'
+  } finally {
+    flagSaving.value = false
   }
 }
 
@@ -115,7 +163,7 @@ if (import.meta.client) {
         tabindex="0"
         :aria-pressed="isFlipped"
         :aria-label="isFlipped
-          ? `Showing definition: ${currentCard?.definition ?? ''}`
+          ? `Showing definition: ${effectiveDefinition(currentCard)}`
           : `Card ${currentIndex + 1} of ${cards.length} — press Space to flip`"
         class="fc-flip-outer select-none"
         @click="toggleFlip"
@@ -124,7 +172,16 @@ if (import.meta.client) {
         <div class="fc-flip-inner" :class="{ 'is-flipped': isFlipped }">
           <div class="fc-flip-face fc-flip-front">
             <div class="flex min-h-[180px] flex-col items-center justify-center gap-3 rounded-lg border border-stone-800 bg-stone-950 p-6 text-center">
-              <span class="text-xs uppercase tracking-wide text-stone-500">Term</span>
+              <div class="flex w-full items-center justify-between">
+                <span class="text-xs uppercase tracking-wide text-stone-500">Term</span>
+                <span
+                  v-if="currentCard?.flagged"
+                  class="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-xs text-amber-400"
+                  data-testid="flag-badge"
+                >
+                  <Flag class="h-3 w-3" /> Corrected
+                </span>
+              </div>
               <p class="text-lg font-medium text-stone-100">{{ currentCard?.term }}</p>
               <p class="text-xs text-stone-600">Tap to flip</p>
             </div>
@@ -132,7 +189,13 @@ if (import.meta.client) {
           <div class="fc-flip-face fc-flip-back">
             <div class="flex min-h-[180px] flex-col items-center justify-center gap-3 rounded-lg border border-stone-800 bg-stone-950 p-6 text-center">
               <span class="text-xs uppercase tracking-wide text-stone-500">Definition</span>
-              <p class="text-base text-stone-200">{{ currentCard?.definition }}</p>
+              <p class="text-base text-stone-200">{{ effectiveDefinition(currentCard) }}</p>
+              <p
+                v-if="currentCard?.flagged && currentCard?.correctedDefinition"
+                class="text-xs text-stone-500 line-through"
+              >
+                {{ currentCard.definition }}
+              </p>
             </div>
           </div>
         </div>
@@ -149,6 +212,17 @@ if (import.meta.client) {
           <ChevronLeft class="h-4 w-4" />
           Prev
         </button>
+
+        <button
+          type="button"
+          class="inline-flex items-center gap-1 text-xs text-stone-500 transition-colors hover:text-amber-400"
+          data-testid="flag-button"
+          @click.stop="openFlagEditor"
+        >
+          <Flag class="h-3 w-3" />
+          {{ currentCard?.flagged ? 'Edit correction' : 'Flag' }}
+        </button>
+
         <button
           type="button"
           class="flex items-center gap-1 rounded-lg border border-stone-800 px-3 py-2 text-xs text-stone-400 transition-colors hover:border-stone-700 hover:text-stone-200 disabled:opacity-40"
@@ -159,6 +233,39 @@ if (import.meta.client) {
           Next
           <ChevronRight class="h-4 w-4" />
         </button>
+      </div>
+
+      <div v-if="flaggingOpen" class="mt-3 space-y-2 rounded-lg border border-stone-700 bg-stone-900 p-3" data-testid="flag-editor">
+        <label class="block text-xs text-stone-400">
+          Corrected definition
+          <textarea
+            class="mt-1 w-full rounded border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100 focus:border-amber-500 focus:outline-none"
+            rows="2"
+            :value="flagCorrectedDef"
+            @input="flagCorrectedDef = ($event.target as HTMLTextAreaElement).value"
+          />
+        </label>
+        <p v-if="flagError" class="text-xs text-red-400" data-testid="flag-error">
+          {{ flagError }}
+        </p>
+        <div class="flex gap-2">
+          <button
+            type="button"
+            class="rounded bg-amber-500 px-3 py-1.5 text-xs font-medium text-stone-950 transition-colors hover:bg-amber-400 disabled:opacity-50"
+            :disabled="flagSaving"
+            data-testid="flag-save"
+            @click="saveFlag"
+          >
+            {{ flagSaving ? 'Saving...' : 'Save' }}
+          </button>
+          <button
+            type="button"
+            class="rounded border border-stone-700 px-3 py-1.5 text-xs text-stone-400 transition-colors hover:text-stone-200"
+            @click="closeFlagEditor"
+          >
+            Cancel
+          </button>
+        </div>
       </div>
     </div>
   </div>
