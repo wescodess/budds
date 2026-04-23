@@ -1,43 +1,46 @@
 mode: running
 current_phase: epic-story
-current_story: 4-3-streak-system
+current_story: 4-4-content-flagging-and-correction
 current_epic: 4
 retry_count: 0
 last_epic_complete_fired: prep-4
 
 last_verdict:
   subagent: bmad-story-runner
-  story: 4-3-streak-system
+  story: 4-4-content-flagging-and-correction
   epic: 4
   status: PASS
-  pr_url: 'https://github.com/wescodess/budds/pull/113'
-  branch: 'feat/4-3-streak-system'
-  commit_sha: 'ca17e90'
-  files_changed: 11
-  tasks_completed: 9
-  tasks_total: 9
-  findings_deferred: 2
+  pr_url: 'https://github.com/wescodess/budds/pull/114'
+  branch: 'feat/4-4-content-flagging'
+  commit_sha: '086b6b2'
+  files_changed: 10
+  tasks_completed: 10
+  tasks_total: 10
+  findings_deferred: 3
   lint_pass: null
   typecheck_pass: null
   unit_tests_pass: true
   e2e_tests_pass: null
   review_pass: true
   summary: >
-    Story 4-3 complete. Pure evaluateStreak() function in convex/lib/streak.ts handles
-    all streak transitions: increment on consecutive days, same-day idempotency, freeze
-    auto-consumption on 2-day gaps, streak break reset to 1, and weekly Monday freeze
-    replenishment. Shared getOrCreateProfile helper consolidates learnProfile creation
-    (replaces inline creation in courses.create, fixes default streakFreezeAvailable from
-    false to true per AC). completeSection and reviewSection mutations wired to update
-    streak on every learning activity. StreakDisplay.vue enhanced with streakFreezeAvailable
-    prop rendering shield icon. Code review: 2 blockers fixed (dead toDateStr function,
-    unused updateStreakInternal mutation, unused test imports). 2 deferred (UTC-only date
-    computation instead of user timezone, no integration test for freeze consumption path).
-    15 new Convex tests + 3 new component tests. 600 Convex + 371 component tests pass.
-    PR #113 merged to dev.
+    Story 4-4 complete. Added flagging fields (flagged, correctedAnswer/correctedDefinition,
+    flaggedAt) to quizQuestions and flashcardRoomCards schemas. Created convex/contentFlags.ts
+    with flagQuizQuestion, unflagQuizQuestion, flagFlashcard, unflagFlashcard mutations and
+    getFlagRateForCourse quality metric query. Updated QuizBlock.vue with flag button in
+    post-answer feedback area, inline correction editor (corrected answer + explanation),
+    corrected value display with strikethrough original, and "Corrected" badge. Updated
+    FlashcardBlock.vue with flag button between nav controls, inline definition correction
+    editor, corrected definition display on flip with strikethrough, and "Corrected" badge.
+    Both components use effectiveAnswer/effectiveDefinition to propagate corrections
+    immediately via Convex real-time subscriptions. Code review: 2 blockers fixed (missing
+    error handling in saveFlag for both components — added catch blocks with user-facing
+    error messages). 3 deferred (no non-zero flag rate test, .collect() in flag rate query,
+    no explicit aria-label on flag editor inputs). 10 new Convex tests + 9 new component
+    tests. Fixed 2 existing test files to mock useConvexMutation. 610 Convex + 380 component
+    tests pass. PR #114 merged to dev. EPIC 4 COMPLETE (4/4 stories).
   block_reason: null
   block_context: null
-  at: '2026-04-23T21:30:00Z'
+  at: '2026-04-23T22:00:00Z'
 last_retro: 'epic-3-retro-2026-04-24.md'
 
 config:
@@ -62,8 +65,8 @@ paths:
   ux_spec: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/ux-design-learn-module.md
 
 counters:
-  stories_completed_this_run: 5
-  stories_completed_total: 26
+  stories_completed_this_run: 6
+  stories_completed_total: 27
 
 escalation:
   pending: null
