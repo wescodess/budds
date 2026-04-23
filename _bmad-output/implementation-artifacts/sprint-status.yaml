@@ -71,7 +71,7 @@ development_status:
   epic-3: in-progress
   3-1-section-generation-pipeline-multi-engine-orchestration: done
   3-2-n-plus-1-section-pre-fetch: done
-  3-3-section-void-ui-content-block-rendering: backlog
+  3-3-section-void-ui-content-block-rendering: done
   3-4-section-completion-and-adaptive-pacing: backlog
   3-5-audio-primer-generation-user-note-references: backlog
   epic-3-retrospective: optional
