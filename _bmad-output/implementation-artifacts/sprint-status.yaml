@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: 2026-04-24
+# last_updated: 2026-04-23
 # project: Budds Learn Module
 # project_key: LEARN
 # tracking_system: file-system
@@ -103,7 +103,7 @@ development_status:
   5-1-review-item-extraction-and-sm2-data-model: done
   5-2-daily-review-session-ui: done
   5-3-sm2-scheduling-engine: done
-  5-4-cross-course-review-budgeting: backlog
+  5-4-cross-course-review-budgeting: done
   5-5-review-session-completion-and-daily-review-cta: backlog
   epic-5-retrospective: optional
 
