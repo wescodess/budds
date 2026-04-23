@@ -1,5 +1,11 @@
 # Deferred Work
 
+## Deferred from: code review of 1-5-outline-editor-ui (2026-04-22)
+
+- **No error handling on mutation failures in OutlineEditor component.** `app/components/learn/OutlineEditor.vue` mutation calls (updateTitle, cycleKnowledgeType, removeSection, addSection) have no try/catch. Network errors or ownership guard failures surface as unhandled promise rejections with no user feedback. Add toast notifications on error in the full-flow integration (Story 1.7).
+- **`courses.updateOutline` lacks status guard.** `convex/courses.ts` updateOutline mutation does not check `course.status === 'ready'`. Could theoretically be called on a generating/failed course. Low risk since UI only shows editor for ready courses.
+- **No aria-label on interactive icon buttons.** OutlineEditor remove button (X) and drag handle have no `aria-label`. Screen readers announce them as unlabeled buttons. Address in accessibility pass.
+
 ## Deferred from: code review of 1-4-outline-generation-pipeline (2026-04-22)
 
 - **`courses.get` 404 vs 403 distinction leaks course existence.** Endpoint returns 404 for both "course doesn't exist" and "course exists but not owned by you". Pre-existing pattern across all server endpoints (quiz, flashcard generators). A security-conscious review may want distinct error codes, but changing would break consistency with the rest of the codebase.
