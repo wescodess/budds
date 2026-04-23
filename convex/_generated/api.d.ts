@@ -28,6 +28,7 @@ import type * as folderIcons from "../folderIcons.js";
 import type * as folderPalette from "../folderPalette.js";
 import type * as folders from "../folders.js";
 import type * as http from "../http.js";
+import type * as learnProfile from "../learnProfile.js";
 import type * as messages from "../messages.js";
 import type * as migrations from "../migrations.js";
 import type * as quizzes from "../quizzes.js";
@@ -62,6 +63,7 @@ declare const fullApi: ApiFromModules<{
   folderPalette: typeof folderPalette;
   folders: typeof folders;
   http: typeof http;
+  learnProfile: typeof learnProfile;
   messages: typeof messages;
   migrations: typeof migrations;
   quizzes: typeof quizzes;
