@@ -1,42 +1,43 @@
 mode: running
 current_phase: epic-story
-current_story: 5-2-daily-review-session-ui
+current_story: 5-3-sm2-scheduling-engine
 current_epic: 5
 retry_count: 0
 last_epic_complete_fired: prep-5
 
 last_verdict:
   subagent: bmad-story-runner
-  story: 5-2-daily-review-session-ui
+  story: 5-3-sm2-scheduling-engine
   epic: 5
   status: PASS
-  pr_url: 'https://github.com/wescodess/budds/pull/119'
-  branch: 'feat/5-2-daily-review-session-ui'
-  commit_sha: '88893bd'
-  files_changed: 11
-  tasks_completed: 7
-  tasks_total: 7
-  findings_deferred: 4
+  pr_url: 'https://github.com/wescodess/budds/pull/120'
+  branch: 'feat/5-3-sm2-scheduling-engine'
+  commit_sha: 'bc35b69'
+  files_changed: 8
+  tasks_completed: 6
+  tasks_total: 6
+  findings_deferred: 3
   lint_pass: null
   typecheck_pass: null
   unit_tests_pass: true
   e2e_tests_pass: null
   review_pass: true
   summary: >
-    Story 5-2 complete. Created daily review session UI at /app/learn/review with ReviewCard.vue
-    (prompt display, tap-to-reveal, source attribution), ReviewRatingButtons.vue (4 color-coded
-    buttons: Again=red, Hard=amber, Good=green, Easy=teal), ReviewSessionProgress.vue (progress
-    bar + counter). Added listDueWithContext query enriching review items with course/section
-    context, capped by dailyReviewCap from learnProfile. Keyboard shortcuts (Space=reveal,
-    1-4=rate, f=flag). Inline flagging via existing contentFlags.flagFlashcard. Items snapshotted
-    at session start to prevent reactive Convex subscription from corrupting index during flagging.
-    Session completion card with reviewed/correct counts. Code review: 2 blockers fixed (f key
-    without reveal guard, reactive list corruption on flag), 4 deferred (N+1 query pattern, no
-    duration estimate, no session persistence, document listener pattern). 632 Convex + 402
-    component tests pass (+3 Convex, +20 component). PR #119 merged to dev.
+    Story 5-3 complete. Created convex/lib/sm2.ts with pure computeSM2 function implementing
+    SM-2 spaced repetition: Again(0) resets interval to 1 and reps to 0, Hard(3) multiplies
+    interval by 1.2, Good(4) by easeFactor, Easy(5) by easeFactor*1.3. EaseFactor adjusts per
+    formula with floor at 1.3. nextReviewDate computed as today+interval with timezone-aware
+    date via learnProfile.timezone. Added submitReview public mutation with auth, ownership
+    guard, quality validation ([0,3,4,5]), SM-2 param update, and streak trigger. Wired review
+    session UI rating buttons to call submitReview mutation with submitting guard to prevent
+    double-rating race condition. Code review: 2 blockers fixed (double-rating via async gap,
+    rating buttons clickable during mutation flight), 3 deferred (getTodayInTimezone duplication,
+    no flagged-item guard on submitReview, arch spec location mismatch). 670 Convex tests pass
+    (+36 new: 28 SM-2 pure function + 8 submitReview integration). 402 component tests pass.
+    PR #120 merged to dev.
   block_reason: null
   block_context: null
-  at: '2026-04-23T23:00:00Z'
+  at: '2026-04-23T23:30:00Z'
 last_retro: 'epic-4-retro-2026-04-24.md'
 
 config:
@@ -61,8 +62,8 @@ paths:
   ux_spec: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/ux-design-learn-module.md
 
 counters:
-  stories_completed_this_run: 4
-  stories_completed_total: 32
+  stories_completed_this_run: 5
+  stories_completed_total: 33
 
 escalation:
   pending: null
