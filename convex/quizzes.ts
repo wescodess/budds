@@ -2,6 +2,7 @@ import { v } from 'convex/values'
 import { mutation, query } from './_generated/server'
 import type { Id, Doc } from './_generated/dataModel'
 import type { MutationCtx, QueryCtx } from './_generated/server'
+import { requireAuth } from './lib/auth'
 
 const questionTypeValidator = v.union(
   v.literal('multiple-choice'),
@@ -27,12 +28,6 @@ const settingsValidator = v.object({
   showAllQuestions: v.boolean(),
   immediateFeedback: v.boolean(),
 })
-
-async function requireAuth(ctx: QueryCtx | MutationCtx) {
-  const identity = await ctx.auth.getUserIdentity()
-  if (!identity) throw new Error('Unauthenticated')
-  return identity.tokenIdentifier
-}
 
 async function requireQuiz(ctx: QueryCtx | MutationCtx, quizId: Id<'quizzes'>, userId: string) {
   const quiz = await ctx.db.get(quizId)
