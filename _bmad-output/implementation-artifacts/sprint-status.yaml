@@ -109,7 +109,7 @@ development_status:
 
   # === Epic 6: Calendar Integration (Fast-Follow) ===
   epic-6: in-progress
-  6-1-google-calendar-oauth-connection: backlog
+  6-1-google-calendar-oauth-connection: done
   6-2-learning-session-preferences: backlog
   6-3-calendar-event-creation-and-adaptive-composition: backlog
   6-4-missed-session-rescheduling: backlog
