@@ -1,6 +1,6 @@
 # Story 2-3: Course Deletion
 
-## Status: ready-for-dev
+## Status: review
 
 ## Epic
 Epic 2: Learn Navigation & Course Management
@@ -111,3 +111,33 @@ Course-scoped entities are identified by BOTH `courseId === args.id` AND `course
 - Review items deletion (spaced repetition not built yet — Epic 5)
 - Calendar event removal (calendar not integrated yet — Epic 6)
 - These will be added to the delete cascade when those features land
+
+## Dev Agent Record
+
+### Tasks Completed
+- [x] Task 1: Create deleteCourse mutation in convex/courses.ts
+- [x] Task 2: Add delete button to both course view pages
+- [x] Task 3: Build confirmation dialog (DeleteCourseDialog.vue)
+- [x] Task 4: Wire deletion and navigation with toast feedback
+- [x] Task 5: Write Convex tests for deleteCourse (3 tests)
+- [x] Task 6: Write component tests (3 ATDD tests)
+
+### Decisions
+- Course-scoped entities (quizzes, flashcardRooms, audioOverviews) lack a `courseId` field in the schema; they only have `courseScoped: boolean`. Entity IDs are found via `courseSections.contentBlocks[].entityId` and resolved by `ctx.db.get()` with `courseScoped === true` guard.
+- Used try/catch around entity ID resolution because `entityId` could reference any table type (quiz, flashcardRoom, or audioOverview). Each `ctx.db.get()` is attempted and gracefully skipped if the ID doesn't belong to that table.
+- ATDD component tests query `document.querySelector()` for dialog content because Reka UI AlertDialog portals content to document body.
+
+### File List
+- `convex/courses.ts` — added `deleteCourse` mutation
+- `app/components/learn/DeleteCourseDialog.vue` — new component
+- `app/pages/app/learn/[courseId].vue` — added delete button + navigation
+- `app/pages/app/folders/[id]/learn/[courseId].vue` — added delete button + navigation
+- `convex/courses.test.ts` — added 3 deleteCourse tests
+- `tests/component/learn/course-delete.atdd.test.ts` — new ATDD test file (3 tests)
+
+### Change Log
+- Added `deleteCourse` mutation with cascade: sections, sourceDocs, course-scoped quizzes (with child questions/attempts/answers), flashcardRooms (with roomCards/versions/versionCards), audioOverviews (with storage cleanup)
+- Created `DeleteCourseDialog.vue` component with UiAlertDialog, destructive styling, loading state, toast feedback, and `deleted` event emission
+- Updated both course view pages to include delete button and post-delete navigation (Learn Home or folder learn page based on route context)
+- Added 3 Convex integration tests: cascade deletion, course-scoped-only deletion, ownership guard
+- Added 3 ATDD component tests: trigger render, dialog content, cancel behavior

@@ -1,5 +1,10 @@
 # Deferred Work
 
+## Deferred from: code review of 2-3-course-deletion (2026-04-23)
+
+- **Entity ID resolution uses 3 try/catch db.get() calls per entity.** Each `entityId` in content blocks triggers attempts against quizzes, flashcardRooms, and audioOverviews tables sequentially. Wasteful but correct since Convex IDs are globally unique. When section generation lands (Epic 3), consider storing entity type alongside entityId in contentBlocks to enable direct lookup.
+- **No test coverage for flashcardRoom or audioOverview cascade deletion.** These entity types won't exist until section generation is implemented (Epic 3). Tests should be added when those paths become exercisable.
+
 ## Deferred from: code review of 2-2-folder-scoped-learn-tab (2026-04-23)
 
 - **Course void icon collision with Knowledge sidebar entry.** `BookOpen` is used for both the Knowledge workspace item and the course void icon in the sidebar void list. When a course and the Knowledge entry appear close together, they use the same icon. Low severity since GraduationCap is used for the Learn workspace entry, and BookOpen matches the CreateVoidDialog icon choice. Consider using GraduationCap for course voids as well.
