@@ -1,9 +1,16 @@
 <script setup lang="ts">
+const props = defineProps<{ folderId?: string }>()
+
+const createUrl = computed(() =>
+  props.folderId
+    ? `/app/learn/create?folderId=${props.folderId}`
+    : '/app/learn/create',
+)
 </script>
 
 <template>
   <NuxtLink
-    to="/app/learn/create"
+    :to="createUrl"
     class="flex min-h-[140px] items-center justify-center rounded-xl border-2 border-dashed border-stone-700 bg-stone-900/50 p-5 transition-colors hover:border-stone-600 hover:bg-stone-900"
     data-testid="create-course-card"
   >

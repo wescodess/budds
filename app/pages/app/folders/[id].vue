@@ -49,6 +49,8 @@ const activeVoidId = computed(() => {
   if (typeof roomId === 'string') return roomId
   const quizId = route.params.quizId
   if (typeof quizId === 'string') return quizId
+  const courseId = route.params.courseId
+  if (typeof courseId === 'string') return courseId
   return null
 })
 
@@ -57,6 +59,7 @@ const activeTab = computed(() => {
   if (path.includes('/chat')) return 'chat' as const
   if (path.includes('/flashcards')) return 'flashcards' as const
   if (path.includes('/quiz')) return 'quiz' as const
+  if (path.includes('/learn')) return 'learn' as const
   return 'documents' as const
 })
 
@@ -97,6 +100,8 @@ async function onCreateVoid(payload: { type: VoidType; name?: string }) {
       } catch { /* shell surfaces its own error toast */ }
     } else if (type === 'quiz') {
       await navigateTo(`/app/folders/${folderId.value}/quiz`)
+    } else if (type === 'course') {
+      await navigateTo(`/app/learn/create?folderId=${folderId.value}`)
     }
     newVoidOpen.value = false
     hideSidebarOnMobile()
@@ -108,18 +113,20 @@ async function onCreateVoid(payload: { type: VoidType; name?: string }) {
   }
 }
 
-async function onSelectVoid({ type, id }: { type: 'chat' | 'flashcards' | 'quiz'; id: string }) {
+async function onSelectVoid({ type, id }: { type: 'chat' | 'flashcards' | 'quiz' | 'course'; id: string }) {
   if (type === 'chat') {
     await navigateTo(`/app/folders/${folderId.value}/chat/${id}`)
   } else if (type === 'flashcards') {
     await navigateTo(`/app/folders/${folderId.value}/flashcards/${id}`)
   } else if (type === 'quiz') {
     await navigateTo(`/app/folders/${folderId.value}/quiz/${id}`)
+  } else if (type === 'course') {
+    await navigateTo(`/app/folders/${folderId.value}/learn/${id}`)
   }
   hideSidebarOnMobile()
 }
 
-const voidDeleteTarget = ref<{ type: 'chat' | 'flashcards' | 'quiz'; id: string; title: string } | null>(null)
+const voidDeleteTarget = ref<{ type: 'chat' | 'flashcards' | 'quiz' | 'course'; id: string; title: string } | null>(null)
 const deletingVoid = ref(false)
 const showDeleteVoidDialog = computed({
   get: () => voidDeleteTarget.value !== null,
@@ -128,8 +135,8 @@ const showDeleteVoidDialog = computed({
 const deleteVoidDescription = computed(() => {
   if (!voidDeleteTarget.value) return ''
   const label = voidDeleteTarget.value.title || 'this void'
-  const kind = voidDeleteTarget.value.type === 'flashcards' ? 'flash card set'
-    : voidDeleteTarget.value.type === 'quiz' ? 'quiz' : 'chat'
+  const kindMap: Record<string, string> = { flashcards: 'flash card set', quiz: 'quiz', chat: 'chat', course: 'course' }
+  const kind = kindMap[voidDeleteTarget.value.type] ?? 'void'
   return `Delete "${label}"? This will permanently remove the ${kind}.`
 })
 
@@ -138,6 +145,13 @@ async function confirmDeleteVoid() {
   if (!target || deletingVoid.value) return
   deletingVoid.value = true
   try {
+    if (target.type === 'course') {
+      const { toast } = await import('vue-sonner')
+      toast.info('Course deletion will be available in a future update')
+      voidDeleteTarget.value = null
+      return
+    }
+
     if (target.type === 'chat') await deleteConversation(target.id as Id<'conversations'>)
     else if (target.type === 'flashcards') await deleteFlashcardRoom(target.id as Id<'flashcardRooms'>)
     else await deleteQuiz(target.id as Id<'quizzes'>)
@@ -148,7 +162,8 @@ async function confirmDeleteVoid() {
     }
     voidDeleteTarget.value = null
     const { toast } = await import('vue-sonner')
-    const kind = target.type === 'flashcards' ? 'Flash card set' : target.type === 'quiz' ? 'Quiz' : 'Chat'
+    const kindLabels: Record<string, string> = { flashcards: 'Flash card set', quiz: 'Quiz', chat: 'Chat' }
+    const kind = kindLabels[target.type] ?? 'Void'
     toast.success(`${kind} deleted`)
   } catch (e: any) {
     const { toast } = await import('vue-sonner')
@@ -296,6 +311,7 @@ watch(() => route.path, (next, prev) => {
     @new-void="newVoidOpen = true"
     @select-void="onSelectVoid"
     @request-delete-void="(t) => voidDeleteTarget = t"
+    @navigate-learn="navigateTo(`/app/folders/${folderId}/learn/`)"
   >
     <template #top-bar="{ railCollapsed, railHidden, toggleRail }">
       <div class="sticky top-0 z-20 flex items-center justify-between gap-2 border-b border-border/60 bg-background/90 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:gap-3 sm:px-6 sm:py-4">

@@ -2,6 +2,7 @@
 import {
   Users,
   BookOpen,
+  GraduationCap,
   MessageSquare,
   Layers,
   ClipboardList,
@@ -22,8 +23,8 @@ import { PANEL_DISMISS_THRESHOLD_PX, useGestureGuards } from '~/composables/useG
 
 defineOptions({ name: 'FolderShellRail' })
 
-type TabValue = 'chat' | 'flashcards' | 'quiz' | 'audio-overview' | 'documents'
-type VoidKind = 'chat' | 'flashcards' | 'quiz'
+type TabValue = 'chat' | 'flashcards' | 'quiz' | 'audio-overview' | 'documents' | 'learn'
+type VoidKind = 'chat' | 'flashcards' | 'quiz' | 'course'
 type VoidItem = { id: string; type: VoidKind; title: string; updatedAt: number }
 
 const props = defineProps<{
@@ -44,6 +45,7 @@ const emit = defineEmits<{
   'new-void': []
   'select-void': [value: { type: VoidKind; id: string }]
   'request-delete-void': [value: { type: VoidKind; id: string; title: string }]
+  'navigate-learn': []
   'toggle-mobile-expanded': []
   'collapse-mobile-expanded': []
   'hide-mobile': []
@@ -60,6 +62,11 @@ const { data: flashRoomsData } = useConvexQuery(
 
 const { data: quizzesData } = useConvexQuery(
   api.quizzes.listByFolder,
+  computed(() => ({ folderId: props.folderId })),
+)
+
+const { data: coursesData } = useConvexQuery(
+  api.courses.listByFolder,
   computed(() => ({ folderId: props.folderId })),
 )
 
@@ -85,7 +92,13 @@ const voids = computed<VoidItem[]>(() => {
     title: q.title?.trim() || 'Quiz',
     updatedAt: (q._creationTime as number) ?? 0,
   }))
-  return [...chats, ...flashes, ...quizs].sort((a, b) => b.updatedAt - a.updatedAt)
+  const courseItems = ((coursesData.value as Array<any> | undefined) ?? []).map<VoidItem>(c => ({
+    id: c._id as string,
+    type: 'course',
+    title: c.title?.trim() || 'Course',
+    updatedAt: (c.updatedAt as number) ?? (c.createdAt as number) ?? (c._creationTime as number) ?? 0,
+  }))
+  return [...chats, ...flashes, ...quizs, ...courseItems].sort((a, b) => b.updatedAt - a.updatedAt)
 })
 
 const hasVoids = computed(() => voids.value.length > 0)
@@ -94,9 +107,11 @@ const voidIcon: Record<VoidKind, typeof MessageSquare> = {
   chat: MessageSquare,
   flashcards: Layers,
   quiz: ClipboardList,
+  course: BookOpen,
 }
 
 function isVoidActive(v: VoidItem): boolean {
+  if (v.type === 'course') return props.activeTab === 'learn' && props.activeVoidId === v.id
   if (v.type !== props.activeTab) return false
   if (v.type === 'chat') return props.activeConversationId === v.id
   return props.activeVoidId === v.id
@@ -142,6 +157,8 @@ const knowledgeCount = computed(() => {
   return total
 })
 
+const courseCount = computed(() => ((coursesData.value as Array<any> | undefined) ?? []).length)
+const learnActive = computed(() => props.activeTab === 'learn' && !props.activeVoidId)
 const knowledgeActive = computed(() => props.activeTab === 'documents')
 const railRef = ref<HTMLElement | null>(null)
 const mounted = ref(false)
@@ -260,6 +277,15 @@ useHorizontalSwipeGesture({
           :icon="BookOpen"
           @click="emit('open-drawer', 'knowledge')"
         />
+        <FolderShellRailItem
+          label="Learn"
+          :compact="compact"
+          :count="courseCount"
+          :active="learnActive"
+          :icon="GraduationCap"
+          data-testid="rail-item-learn"
+          @click="emit('navigate-learn')"
+        />
 
         <div class="my-3 h-px bg-border/60" />
         <div
@@ -287,7 +313,7 @@ useHorizontalSwipeGesture({
                     <div class="border-b border-border/60 px-3 py-2">
                       <p class="truncate text-sm font-medium text-foreground">{{ v.title }}</p>
                       <p class="mt-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">
-                        {{ v.type === 'chat' ? 'Chat' : v.type === 'flashcards' ? 'Flash cards' : 'Quiz' }}
+                        {{ v.type === 'chat' ? 'Chat' : v.type === 'flashcards' ? 'Flash cards' : v.type === 'course' ? 'Course' : 'Quiz' }}
                       </p>
                     </div>
                     <button
