@@ -3,6 +3,7 @@ import { convexTest } from 'convex-test'
 import { describe, expect, test } from 'vitest'
 import { api } from './_generated/api'
 import schema from './schema'
+import { MAX_SOURCE_DOCS } from './courses'
 
 const modules = import.meta.glob('./**/*.ts')
 
@@ -127,6 +128,60 @@ describe('courses.create — folder source', () => {
     )
     expect(sourceDocs).toHaveLength(1)
     expect(sourceDocs[0]!.documentId).toBe(docId1)
+  })
+})
+
+describe('courses.create — source doc count cap', () => {
+  test(`caps folder docs at MAX_SOURCE_DOCS (${MAX_SOURCE_DOCS}) when no documentIds specified`, async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, folderId } = await seedFolder(t, USER_A)
+
+    const totalDocs = MAX_SOURCE_DOCS + 20
+    for (let i = 0; i < totalDocs; i++) {
+      await seedDocument(t, USER_A, folderId, `doc-${i}.pdf`)
+    }
+
+    const result = await asUser.mutation(api.courses.create, {
+      title: 'Large Folder Course',
+      sourceType: 'folder',
+      folderId,
+    })
+
+    const sourceDocs = await t.run(async (ctx) =>
+      ctx.db
+        .query('courseSourceDocs')
+        .withIndex('by_courseId', (q) => q.eq('courseId', result.courseId))
+        .collect(),
+    )
+    expect(sourceDocs).toHaveLength(MAX_SOURCE_DOCS)
+
+    const course = await t.run(async (ctx) => ctx.db.get(result.courseId))
+    expect(course!.sourceConfidence.docCount).toBe(MAX_SOURCE_DOCS)
+  })
+
+  test('does not cap when specific documentIds are provided', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, folderId } = await seedFolder(t, USER_A)
+
+    const docIds = []
+    for (let i = 0; i < 5; i++) {
+      docIds.push(await seedDocument(t, USER_A, folderId, `doc-${i}.pdf`))
+    }
+
+    const result = await asUser.mutation(api.courses.create, {
+      title: 'Specific Docs Course',
+      sourceType: 'folder',
+      folderId,
+      documentIds: docIds,
+    })
+
+    const sourceDocs = await t.run(async (ctx) =>
+      ctx.db
+        .query('courseSourceDocs')
+        .withIndex('by_courseId', (q) => q.eq('courseId', result.courseId))
+        .collect(),
+    )
+    expect(sourceDocs).toHaveLength(5)
   })
 })
 
