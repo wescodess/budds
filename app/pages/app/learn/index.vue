@@ -10,9 +10,16 @@ const profileQuery = import.meta.client
   ? useConvexQuery(api.learnProfile.getProfile, {})
   : { data: ref(null) }
 
+const backlogQuery = import.meta.client
+  ? useConvexQuery(api.reviewItems.getReviewBacklogCount, {})
+  : { data: ref(null) }
+
 const courses = computed(() => coursesQuery.data?.value ?? [])
 const profile = computed(() => profileQuery.data?.value ?? null)
 const hasCourses = computed(() => courses.value.length > 0)
+
+const backlog = computed(() => backlogQuery.data?.value as { dueCount: number; dailyCap: number } | null)
+const showReviewCTA = computed(() => backlog.value && backlog.value.dueCount > 0)
 
 useTimezoneSync(profile)
 
@@ -66,6 +73,12 @@ function handleTopicSubmit() {
       </div>
 
       <div v-else data-testid="active-state">
+        <LearnDailyReviewCTA
+          v-if="showReviewCTA"
+          :due-count="backlog!.dueCount"
+          :daily-cap="backlog!.dailyCap"
+          class="mb-6"
+        />
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <LearnCourseCard
             v-for="course in courses"

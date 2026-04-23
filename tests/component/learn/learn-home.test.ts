@@ -4,12 +4,14 @@ import { getFunctionName } from 'convex/server'
 
 const mockCourses = ref<any[]>([])
 const mockProfile = ref<any>(null)
+const mockBacklog = ref<any>(null)
 
 mockNuxtImport('useConvexQuery', () => {
   return (apiRef: any, _args?: any) => {
     const name = getFunctionName(apiRef) ?? ''
     if (name.includes('listByUser')) return { data: mockCourses }
     if (name.includes('getProfile')) return { data: mockProfile }
+    if (name.includes('getReviewBacklogCount')) return { data: mockBacklog }
     return { data: ref(null) }
   }
 })
@@ -24,6 +26,7 @@ describe('Learn Home Page', () => {
   beforeEach(() => {
     mockCourses.value = []
     mockProfile.value = null
+    mockBacklog.value = null
   })
 
   it('renders empty state when no courses', async () => {
@@ -110,5 +113,58 @@ describe('Learn Home Page', () => {
     const Comp = await import(pagePath)
     const wrapper = await mountSuspended(Comp.default)
     expect(wrapper.find('[data-testid="streak-display"]').exists()).toBe(false)
+  })
+
+  it('renders daily review CTA when items are due', async () => {
+    mockCourses.value = [
+      {
+        _id: 'course_1',
+        title: 'Test',
+        completedSectionCount: 1,
+        totalSectionCount: 5,
+        pace: 'steady',
+        status: 'ready',
+      },
+    ]
+    mockBacklog.value = { dueCount: 12, dailyCap: 50 }
+
+    const Comp = await import(pagePath)
+    const wrapper = await mountSuspended(Comp.default)
+    expect(wrapper.find('[data-testid="daily-review-cta"]').exists()).toBe(true)
+  })
+
+  it('hides daily review CTA when no items due', async () => {
+    mockCourses.value = [
+      {
+        _id: 'course_1',
+        title: 'Test',
+        completedSectionCount: 1,
+        totalSectionCount: 5,
+        pace: 'steady',
+        status: 'ready',
+      },
+    ]
+    mockBacklog.value = { dueCount: 0, dailyCap: 50 }
+
+    const Comp = await import(pagePath)
+    const wrapper = await mountSuspended(Comp.default)
+    expect(wrapper.find('[data-testid="daily-review-cta"]').exists()).toBe(false)
+  })
+
+  it('hides daily review CTA when backlog is not loaded', async () => {
+    mockCourses.value = [
+      {
+        _id: 'course_1',
+        title: 'Test',
+        completedSectionCount: 1,
+        totalSectionCount: 5,
+        pace: 'steady',
+        status: 'ready',
+      },
+    ]
+
+    const Comp = await import(pagePath)
+    const wrapper = await mountSuspended(Comp.default)
+    expect(wrapper.find('[data-testid="daily-review-cta"]').exists()).toBe(false)
   })
 })

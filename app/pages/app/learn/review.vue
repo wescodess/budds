@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Flag, ArrowLeft, CheckCircle, Zap } from 'lucide-vue-next'
+import { Flag, ArrowLeft, CheckCircle, Zap, Flame } from 'lucide-vue-next'
 import { api } from '#convex/api'
 import type { Id } from '../../../../convex/_generated/dataModel'
 
@@ -36,6 +36,10 @@ const submitReviewMutation = import.meta.client
   ? useConvexMutation(api.reviewItems.submitReview)
   : { mutate: async () => ({}) }
 
+const completeSessionMutation = import.meta.client
+  ? useConvexMutation(api.reviewItems.completeReviewSession)
+  : { mutate: async () => ({ streakCurrent: 0, streakLastDate: null }) }
+
 const profileQuery = import.meta.client
   ? useConvexQuery(api.learnProfile.getProfile, {})
   : { data: ref(null) }
@@ -51,6 +55,7 @@ const dueQuery = import.meta.client
 
 const sessionItems = ref<ReviewItem[]>([])
 const sessionStarted = ref(false)
+const sessionStartTime = ref(0)
 
 watch(
   () => dueQuery.data?.value,
@@ -60,6 +65,7 @@ watch(
     const arr = raw as ReviewItem[]
     sessionItems.value = [...arr]
     sessionStarted.value = true
+    sessionStartTime.value = Date.now()
   },
   { immediate: true },
 )
@@ -71,6 +77,7 @@ const revealed = ref(false)
 const sessionComplete = ref(false)
 const ratings = ref<Array<{ itemId: string; quality: number }>>([])
 const submitting = ref(false)
+const completionStreak = ref<number | null>(null)
 
 const currentItem = computed(() => items.value[currentIndex.value] ?? null)
 const totalItems = computed(() => items.value.length)
@@ -87,12 +94,30 @@ function switchMode(mode: ReviewMode) {
   currentIndex.value = 0
   revealed.value = false
   sessionComplete.value = false
+  completionStreak.value = null
   router.replace({ query: { ...route.query, mode } })
 }
 
 function revealAnswer() {
   if (revealed.value || !currentItem.value) return
   revealed.value = true
+}
+
+async function finishSession() {
+  const durationMs = Date.now() - sessionStartTime.value
+  const correct = ratings.value.filter((r) => r.quality >= 3).length
+
+  try {
+    const result = await completeSessionMutation.mutate({
+      itemsReviewed: ratings.value.length,
+      itemsCorrect: correct,
+      durationMs,
+      mode: reviewMode.value,
+    })
+    completionStreak.value = (result as { streakCurrent: number }).streakCurrent
+  } catch {
+    // Session record failed; completion still shown locally
+  }
 }
 
 async function rateItem(quality: number) {
@@ -114,6 +139,7 @@ async function rateItem(quality: number) {
 
   if (currentIndex.value >= totalItems.value - 1) {
     sessionComplete.value = true
+    await finishSession()
   } else {
     currentIndex.value++
     revealed.value = false
@@ -124,6 +150,10 @@ async function rateItem(quality: number) {
 
 const correctCount = computed(() =>
   ratings.value.filter((r) => r.quality >= 3).length,
+)
+
+const needsPracticeCount = computed(() =>
+  ratings.value.filter((r) => r.quality < 3).length,
 )
 
 const flaggingOpen = ref(false)
@@ -276,7 +306,18 @@ function navigateBack() {
           <h2 class="mb-4 text-xl font-semibold text-stone-100">Review Complete</h2>
           <div class="space-y-1 text-sm text-stone-300">
             <p>{{ ratings.length }} items reviewed</p>
-            <p>{{ correctCount }} correct</p>
+            <p>{{ correctCount }} correct · {{ needsPracticeCount }} need more practice</p>
+          </div>
+          <div
+            v-if="completionStreak !== null && completionStreak > 0"
+            class="mt-4 flex items-center justify-center gap-1.5"
+            :aria-label="`Learning streak: ${completionStreak} days`"
+            aria-live="polite"
+            data-testid="completion-streak"
+          >
+            <Flame class="h-4 w-4 text-amber-500" />
+            <span class="text-sm font-medium text-stone-300">{{ completionStreak }}</span>
+            <span class="text-xs text-stone-500">{{ completionStreak === 1 ? 'day' : 'days' }}</span>
           </div>
           <button
             type="button"

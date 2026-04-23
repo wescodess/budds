@@ -99,7 +99,9 @@ export const listDueForUser = query({
 export const getReviewBacklogCount = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await requireAuth(ctx)
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) return null
+    const userId = identity.tokenIdentifier
     const today = getTodayDate()
 
     const items = await ctx.db
@@ -191,6 +193,42 @@ export const listBySection = query({
       .query('reviewItems')
       .withIndex('by_sectionId', (q) => q.eq('sectionId', args.sectionId))
       .take(200)
+  },
+})
+
+export const completeReviewSession = mutation({
+  args: {
+    itemsReviewed: v.number(),
+    itemsCorrect: v.number(),
+    durationMs: v.number(),
+    mode: v.optional(v.union(v.literal('full'), v.literal('quick'))),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireAuth(ctx)
+
+    const profile = await ctx.db
+      .query('learnProfile')
+      .withIndex('by_userId', (q) => q.eq('userId', userId))
+      .unique()
+
+    const todayStr = getTodayInTimezone(profile?.timezone)
+
+    await ctx.db.insert('reviewSessions', {
+      userId,
+      date: todayStr,
+      itemsReviewed: args.itemsReviewed,
+      itemsCorrect: args.itemsCorrect,
+      durationMs: args.durationMs,
+      mode: args.mode,
+      completedAt: Date.now(),
+    })
+
+    const streakResult = await updateStreakForActivity(ctx, userId)
+
+    return {
+      streakCurrent: streakResult.streakCurrent,
+      streakLastDate: streakResult.streakLastDate,
+    }
   },
 })
 
