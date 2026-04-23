@@ -31,6 +31,7 @@ function handleTopicSubmit() {
         <LearnStreakDisplay
           v-if="profile"
           :streak-current="profile.streakCurrent"
+          :streak-freeze-available="profile.streakFreezeAvailable"
           :streak-freeze-used-at="profile.streakFreezeUsedAt"
         />
       </div>

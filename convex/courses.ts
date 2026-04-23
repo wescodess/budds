@@ -3,6 +3,7 @@ import { mutation, query } from './_generated/server'
 import { internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import { requireAuth } from './lib/auth'
+import { getOrCreateProfile } from './learnProfile'
 
 export const MAX_SOURCE_DOCS = 100
 
@@ -101,19 +102,7 @@ export const create = mutation({
 
     await ctx.db.patch(courseId, { taskId })
 
-    const existing = await ctx.db
-      .query('learnProfile')
-      .withIndex('by_userId', (q) => q.eq('userId', userId))
-      .unique()
-
-    if (!existing) {
-      await ctx.db.insert('learnProfile', {
-        userId,
-        streakCurrent: 0,
-        streakFreezeAvailable: false,
-        dailyReviewCap: 50,
-      })
-    }
+    await getOrCreateProfile(ctx, userId)
 
     return { courseId, taskId }
   },
