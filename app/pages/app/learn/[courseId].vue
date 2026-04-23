@@ -3,6 +3,7 @@ import type { Id } from '../../../../convex/_generated/dataModel'
 import { api } from '#convex/api'
 
 const route = useRoute()
+const router = useRouter()
 const courseId = computed(() => route.params.courseId as Id<'courses'>)
 
 const courseQuery = import.meta.client
@@ -10,6 +11,10 @@ const courseQuery = import.meta.client
   : { data: ref(null) }
 
 const course = computed(() => courseQuery.data?.value ?? null)
+
+function handleDeleted() {
+  router.push('/app/learn/')
+}
 </script>
 
 <template>
@@ -19,12 +24,20 @@ const course = computed(() => courseQuery.data?.value ?? null)
         {{ course?.title ?? 'Loading...' }}
       </h1>
       <p class="mb-6 text-sm text-stone-400">Course view coming soon</p>
-      <NuxtLink
-        to="/app/learn/create"
-        class="text-sm text-amber-500 hover:text-amber-400"
-      >
-        &larr; Create another course
-      </NuxtLink>
+      <div class="flex items-center justify-center gap-4">
+        <NuxtLink
+          to="/app/learn/"
+          class="text-sm text-amber-500 hover:text-amber-400"
+        >
+          &larr; Back to Learn
+        </NuxtLink>
+        <LearnDeleteCourseDialog
+          v-if="course"
+          :course-id="courseId"
+          :course-title="course.title"
+          @deleted="handleDeleted"
+        />
+      </div>
     </div>
   </div>
 </template>
