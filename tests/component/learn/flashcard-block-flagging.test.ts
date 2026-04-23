@@ -86,6 +86,21 @@ describe('FlashcardBlock flagging', () => {
     expect(wrapper.find('[data-testid="flag-badge"]').text()).toContain('Corrected')
   })
 
+  it('flag editor textarea has aria-label', async () => {
+    mockRoomData.value = unflaggedRoom
+    const Comp = await import(componentPath)
+    const wrapper = await mountSuspended(Comp.default, {
+      props: { roomId: 'room_123' },
+    })
+
+    const flagBtn = wrapper.find('[data-testid="flag-button"]')
+    await flagBtn.trigger('click')
+
+    const editor = wrapper.find('[data-testid="flag-editor"]')
+    const textarea = editor.find('textarea[aria-label="Corrected definition"]')
+    expect(textarea.exists()).toBe(true)
+  })
+
   it('shows corrected definition instead of original when flagged', async () => {
     mockRoomData.value = flaggedRoom
     const Comp = await import(componentPath)
