@@ -165,6 +165,100 @@ describe('courses.create — cross-folder source', () => {
   })
 })
 
+describe('courses.create — web-only source', () => {
+  test('creates web-only course with no docs and no folder', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+
+    const result = await asUser.mutation(api.courses.create, {
+      title: 'React Hooks',
+      sourceType: 'web-only',
+    })
+
+    expect(result.courseId).toBeDefined()
+    expect(result.taskId).toBeDefined()
+
+    const course = await t.run(async (ctx) => ctx.db.get(result.courseId))
+    expect(course).not.toBeNull()
+    expect(course!.status).toBe('generating')
+    expect(course!.sourceType).toBe('web-only')
+    expect(course!.folderId).toBeUndefined()
+    expect(course!.webSearchEnabled).toBe(true)
+    expect(course!.sourceConfidence).toEqual({ docCount: 0, webPercent: 100 })
+    expect(course!.taskId).toBe(result.taskId)
+
+    const sourceDocs = await t.run(async (ctx) =>
+      ctx.db
+        .query('courseSourceDocs')
+        .withIndex('by_courseId', (q) => q.eq('courseId', result.courseId))
+        .collect(),
+    )
+    expect(sourceDocs).toHaveLength(0)
+
+    const task = await t.run(async (ctx) => ctx.db.get(result.taskId))
+    expect(task).not.toBeNull()
+    expect(task!.type).toBe('course-outline')
+
+    const profile = await t.run(async (ctx) =>
+      ctx.db
+        .query('learnProfile')
+        .withIndex('by_userId', (q) => q.eq('userId', USER_A.tokenIdentifier))
+        .unique(),
+    )
+    expect(profile).not.toBeNull()
+  })
+
+  test('creates web-only course with optional folderId', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, folderId } = await seedFolder(t, USER_A)
+
+    const result = await asUser.mutation(api.courses.create, {
+      title: 'Web Course in Folder',
+      sourceType: 'web-only',
+      folderId,
+    })
+
+    const course = await t.run(async (ctx) => ctx.db.get(result.courseId))
+    expect(course).not.toBeNull()
+    expect(course!.sourceType).toBe('web-only')
+    expect(course!.folderId).toBe(folderId)
+    expect(course!.webSearchEnabled).toBe(true)
+    expect(course!.sourceConfidence).toEqual({ docCount: 0, webPercent: 100 })
+
+    const sourceDocs = await t.run(async (ctx) =>
+      ctx.db
+        .query('courseSourceDocs')
+        .withIndex('by_courseId', (q) => q.eq('courseId', result.courseId))
+        .collect(),
+    )
+    expect(sourceDocs).toHaveLength(0)
+  })
+
+  test('rejects web-only with foreign folder', async () => {
+    const t = convexTest(schema, modules)
+    const { folderId: folderB } = await seedFolder(t, USER_B)
+    const asUserA = t.withIdentity(USER_A)
+
+    await expect(
+      asUserA.mutation(api.courses.create, {
+        title: 'Steal Folder',
+        sourceType: 'web-only',
+        folderId: folderB,
+      }),
+    ).rejects.toThrow('Folder not found')
+  })
+
+  test('rejects unauthenticated web-only creation', async () => {
+    const t = convexTest(schema, modules)
+    await expect(
+      t.mutation(api.courses.create, {
+        title: 'Anon Course',
+        sourceType: 'web-only',
+      }),
+    ).rejects.toThrow('Unauthenticated')
+  })
+})
+
 describe('courses.create — auth and ownership guards', () => {
   test('rejects unauthenticated user', async () => {
     const t = convexTest(schema, modules)
