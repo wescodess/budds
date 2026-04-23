@@ -412,6 +412,274 @@ describe('courseSections.finalizeSectionGeneration', () => {
   })
 })
 
+describe('courseSections.getNextSection', () => {
+  test('returns the next section by order', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId, sections } = await seedCourseWithSections(t)
+
+    const next = await asUser.query(api.courseSections.getNextSection, {
+      courseId,
+      currentOrder: 0,
+    })
+
+    expect(next).not.toBeNull()
+    expect(next!.title).toBe('Section B')
+    expect(next!.order).toBe(1)
+  })
+
+  test('returns null for the last section', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId } = await seedCourseWithSections(t)
+
+    const next = await asUser.query(api.courseSections.getNextSection, {
+      courseId,
+      currentOrder: 2,
+    })
+
+    expect(next).toBeNull()
+  })
+
+  test('returns null for non-owner', async () => {
+    const t = convexTest(schema, modules)
+    const { courseId } = await seedCourseWithSections(t)
+    const asOther = t.withIdentity(USER_B)
+
+    const next = await asOther.query(api.courseSections.getNextSection, {
+      courseId,
+      currentOrder: 0,
+    })
+
+    expect(next).toBeNull()
+  })
+})
+
+describe('courseSections.checkPreFetchStatus', () => {
+  test('returns needsPreFetch true for locked section', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId } = await seedCourseWithSections(t)
+
+    const result = await asUser.query(api.courseSections.checkPreFetchStatus, {
+      courseId,
+      currentOrder: 0,
+    })
+
+    expect(result).not.toBeNull()
+    expect(result!.needsPreFetch).toBe(true)
+    expect(result!.nextSection.status).toBe('locked')
+  })
+
+  test('returns needsPreFetch false for ready section', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId, sections } = await seedCourseWithSections(t)
+
+    await t.run(async (ctx) => {
+      await ctx.db.patch(sections[1]._id, { status: 'ready' })
+    })
+
+    const result = await asUser.query(api.courseSections.checkPreFetchStatus, {
+      courseId,
+      currentOrder: 0,
+    })
+
+    expect(result).not.toBeNull()
+    expect(result!.needsPreFetch).toBe(false)
+  })
+
+  test('returns needsPreFetch false for generating section', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId, sections } = await seedCourseWithSections(t)
+
+    await t.run(async (ctx) => {
+      await ctx.db.patch(sections[1]._id, { status: 'generating' })
+    })
+
+    const result = await asUser.query(api.courseSections.checkPreFetchStatus, {
+      courseId,
+      currentOrder: 0,
+    })
+
+    expect(result).not.toBeNull()
+    expect(result!.needsPreFetch).toBe(false)
+  })
+
+  test('returns needsPreFetch true for failed section', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId, sections } = await seedCourseWithSections(t)
+
+    await t.run(async (ctx) => {
+      await ctx.db.patch(sections[1]._id, { status: 'failed' })
+    })
+
+    const result = await asUser.query(api.courseSections.checkPreFetchStatus, {
+      courseId,
+      currentOrder: 0,
+    })
+
+    expect(result).not.toBeNull()
+    expect(result!.needsPreFetch).toBe(true)
+  })
+
+  test('returns null when no next section exists', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId } = await seedCourseWithSections(t)
+
+    const result = await asUser.query(api.courseSections.checkPreFetchStatus, {
+      courseId,
+      currentOrder: 2,
+    })
+
+    expect(result).toBeNull()
+  })
+})
+
+describe('courseSections.triggerPreFetch', () => {
+  test('transitions locked section to generating and creates task', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId, sections } = await seedCourseWithSections(t)
+
+    const result = await asUser.mutation(api.courseSections.triggerPreFetch, {
+      courseId,
+      currentOrder: 0,
+    })
+
+    expect(result).not.toBeNull()
+    expect(result!.sectionId).toBe(sections[1]._id)
+    expect(result!.taskId).toBeTruthy()
+
+    const section = await t.run(async (ctx) => ctx.db.get(sections[1]._id))
+    expect(section!.status).toBe('generating')
+    expect(section!.taskId).toBe(result!.taskId)
+  })
+
+  test('returns null when next section is already ready', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId, sections } = await seedCourseWithSections(t)
+
+    await t.run(async (ctx) => {
+      await ctx.db.patch(sections[1]._id, { status: 'ready' })
+    })
+
+    const result = await asUser.mutation(api.courseSections.triggerPreFetch, {
+      courseId,
+      currentOrder: 0,
+    })
+
+    expect(result).toBeNull()
+  })
+
+  test('returns null when next section is already generating', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId, sections } = await seedCourseWithSections(t)
+
+    await t.run(async (ctx) => {
+      await ctx.db.patch(sections[1]._id, { status: 'generating' })
+    })
+
+    const result = await asUser.mutation(api.courseSections.triggerPreFetch, {
+      courseId,
+      currentOrder: 0,
+    })
+
+    expect(result).toBeNull()
+  })
+
+  test('returns null when no next section exists', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId } = await seedCourseWithSections(t)
+
+    const result = await asUser.mutation(api.courseSections.triggerPreFetch, {
+      courseId,
+      currentOrder: 2,
+    })
+
+    expect(result).toBeNull()
+  })
+
+  test('retries a failed section once', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId, folderId, sections } = await seedCourseWithSections(t)
+
+    const failedTaskId = await t.run(async (ctx) => {
+      return await ctx.db.insert('tasks', {
+        userId: USER_A.tokenIdentifier,
+        folderId,
+        type: 'section-generate',
+        status: 'failed',
+        title: 'Failed generation',
+        progress: 'Failed',
+        metadata: { courseId, sectionId: sections[1]._id },
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        completedAt: Date.now(),
+        error: 'Test failure',
+      })
+    })
+
+    await t.run(async (ctx) => {
+      await ctx.db.patch(sections[1]._id, { status: 'failed', taskId: failedTaskId })
+    })
+
+    const result = await asUser.mutation(api.courseSections.triggerPreFetch, {
+      courseId,
+      currentOrder: 0,
+    })
+
+    expect(result).not.toBeNull()
+    expect(result!.sectionId).toBe(sections[1]._id)
+
+    const section = await t.run(async (ctx) => ctx.db.get(sections[1]._id))
+    expect(section!.status).toBe('generating')
+  })
+
+  test('does not retry a failed section more than once', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId, folderId, sections } = await seedCourseWithSections(t)
+
+    const retryTaskId = await t.run(async (ctx) => {
+      return await ctx.db.insert('tasks', {
+        userId: USER_A.tokenIdentifier,
+        folderId,
+        type: 'section-generate',
+        status: 'failed',
+        title: 'Retry failed',
+        progress: 'Failed',
+        metadata: { courseId, sectionId: sections[1]._id, retryOf: 'some-task-id' },
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        completedAt: Date.now(),
+        error: 'Retry also failed',
+      })
+    })
+
+    await t.run(async (ctx) => {
+      await ctx.db.patch(sections[1]._id, { status: 'failed', taskId: retryTaskId })
+    })
+
+    const result = await asUser.mutation(api.courseSections.triggerPreFetch, {
+      courseId,
+      currentOrder: 0,
+    })
+
+    expect(result).toBeNull()
+
+    const section = await t.run(async (ctx) => ctx.db.get(sections[1]._id))
+    expect(section!.status).toBe('failed')
+  })
+
+  test('rejects trigger from non-owner', async () => {
+    const t = convexTest(schema, modules)
+    const { courseId } = await seedCourseWithSections(t)
+    const asOther = t.withIdentity(USER_B)
+
+    await expect(
+      asOther.mutation(api.courseSections.triggerPreFetch, {
+        courseId,
+        currentOrder: 0,
+      }),
+    ).rejects.toThrow()
+  })
+})
+
 describe('courseSections internal mutations', () => {
   test('markReady sets status and contentBlocks', async () => {
     const t = convexTest(schema, modules)
