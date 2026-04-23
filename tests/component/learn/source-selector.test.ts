@@ -12,11 +12,14 @@ const mockDocCounts = ref([
   { folderId: 'folder_2', count: 12 },
 ])
 
+const mockBacklog = ref<{ dueCount: number; dailyCap: number } | null>(null)
+
 mockNuxtImport('useConvexQuery', () => {
   return (apiRef: any, _args?: any) => {
     const name = getFunctionName(apiRef) ?? ''
     if (name.includes('listAllFolders')) return { data: mockFolders }
     if (name.includes('countsByFolder')) return { data: mockDocCounts }
+    if (name.includes('getReviewBacklogCount')) return { data: mockBacklog }
     return { data: ref(null) }
   }
 })
@@ -37,6 +40,7 @@ describe('SourceSelector', () => {
       { folderId: 'folder_1', count: 18 },
       { folderId: 'folder_2', count: 12 },
     ]
+    mockBacklog.value = null
   })
 
   it('renders topic input and folder list', async () => {
@@ -114,5 +118,28 @@ describe('SourceSelector', () => {
     const Comp = await import(componentPath)
     const wrapper = await mountSuspended(Comp.default)
     expect(wrapper.text()).toContain('No folders yet')
+  })
+
+  it('shows backlog warning when due count exceeds 2x daily cap', async () => {
+    mockBacklog.value = { dueCount: 120, dailyCap: 50 }
+    const Comp = await import(componentPath)
+    const wrapper = await mountSuspended(Comp.default)
+    expect(wrapper.find('[data-testid="backlog-warning"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('120 items due for review')
+    expect(wrapper.text()).toContain('Consider completing reviews')
+  })
+
+  it('does not show backlog warning when due count is within threshold', async () => {
+    mockBacklog.value = { dueCount: 80, dailyCap: 50 }
+    const Comp = await import(componentPath)
+    const wrapper = await mountSuspended(Comp.default)
+    expect(wrapper.find('[data-testid="backlog-warning"]').exists()).toBe(false)
+  })
+
+  it('does not show backlog warning when no backlog data', async () => {
+    mockBacklog.value = null
+    const Comp = await import(componentPath)
+    const wrapper = await mountSuspended(Comp.default)
+    expect(wrapper.find('[data-testid="backlog-warning"]').exists()).toBe(false)
   })
 })

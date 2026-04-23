@@ -1,5 +1,11 @@
 # Deferred Work
 
+## Deferred from: code review of 5-4-cross-course-review-budgeting (2026-04-23)
+
+- **`isLoading` computed in review.vue is unused dead code.** Defined on line 78 but never referenced in the template. Pre-existing from 5-2. Remove when the review page is next touched.
+- **`getReviewBacklogCount` post-filters flagged items after fetching 500.** Same pattern as `listDueForUser` (already deferred in 5-1). If many items are flagged, the 500-item fetch limit is consumed by flagged items and `dueCount` could undercount unflagged due items. Acceptable for realistic usage. Consider a separate unflagged-only index if backlog accuracy becomes critical.
+- **ReviewCapSetting dropdown does not close on Escape key.** Only mousedown-outside and explicit Cancel/Save close the panel. Add `@keydown.escape="open = false"` for keyboard accessibility if the panel needs to support keyboard users who don't use the Cancel button.
+
 ## Deferred from: code review of 5-3-sm2-scheduling-engine (2026-04-23)
 
 - **`getTodayInTimezone` duplicated across `reviewItems.ts` and `learnProfile.ts`.** Identical function exists in both files. Should be extracted to a shared utility in `convex/lib/` (e.g., `convex/lib/dates.ts`) to eliminate duplication.

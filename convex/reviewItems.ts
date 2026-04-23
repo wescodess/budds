@@ -96,9 +96,36 @@ export const listDueForUser = query({
   },
 })
 
-export const listDueWithContext = query({
+export const getReviewBacklogCount = query({
   args: {},
   handler: async (ctx) => {
+    const userId = await requireAuth(ctx)
+    const today = getTodayDate()
+
+    const items = await ctx.db
+      .query('reviewItems')
+      .withIndex('by_userId_and_nextReviewDate', (q) =>
+        q.eq('userId', userId).lte('nextReviewDate', today),
+      )
+      .take(500)
+
+    const dueCount = items.filter((item) => !item.flagged).length
+
+    const profile = await ctx.db
+      .query('learnProfile')
+      .withIndex('by_userId', (q) => q.eq('userId', userId))
+      .unique()
+    const dailyCap = profile?.dailyReviewCap ?? 50
+
+    return { dueCount, dailyCap }
+  },
+})
+
+export const listDueWithContext = query({
+  args: {
+    mode: v.optional(v.union(v.literal('full'), v.literal('quick'))),
+  },
+  handler: async (ctx, args) => {
     const userId = await requireAuth(ctx)
     const today = getTodayDate()
 
@@ -106,7 +133,8 @@ export const listDueWithContext = query({
       .query('learnProfile')
       .withIndex('by_userId', (q) => q.eq('userId', userId))
       .unique()
-    const cap = profile?.dailyReviewCap ?? 50
+    const dailyCap = profile?.dailyReviewCap ?? 50
+    const cap = args.mode === 'quick' ? Math.min(10, dailyCap) : dailyCap
 
     const items = await ctx.db
       .query('reviewItems')
