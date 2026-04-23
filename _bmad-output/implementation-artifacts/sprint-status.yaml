@@ -43,7 +43,7 @@ development_status:
   epic-1: in-progress
   1-1-convex-schema-course-tables: done
   1-2-course-creation-api-folder-cross-folder: done
-  1-3-course-creation-api-web-only: backlog
+  1-3-course-creation-api-web-only: ready-for-dev
   1-4-outline-generation-pipeline: backlog
   1-5-outline-editor-ui: backlog
   1-6-pace-selector-and-course-start: backlog
