@@ -7,33 +7,35 @@ last_epic_complete_fired: null
 
 last_verdict:
   subagent: bmad-story-runner
-  story: 1-2-course-creation-api-folder-cross-folder
+  story: 1-4-outline-generation-pipeline
   epic: 1
   status: PASS
-  pr_url: 'https://github.com/wescodess/budds/pull/89'
-  branch: 'feat/1-2-course-creation-api-folder-cross-folder'
-  commit_sha: 'b1af34c72a2053471a555f8bd34cec91174d3bf1'
-  files_changed: 8
-  tasks_completed: 5
-  tasks_total: 5
-  findings_deferred: 3
+  pr_url: 'https://github.com/wescodess/budds/pull/91'
+  branch: 'feat/1-4-outline-generation-pipeline'
+  commit_sha: '2c67bd35e39b7c8356a4b3e215d5aa1a09d02c08'
+  files_changed: 7
+  tasks_completed: 17
+  tasks_total: 17
+  findings_deferred: 2
   lint_pass: null
   typecheck_pass: true
   unit_tests_pass: true
   e2e_tests_pass: null
   review_pass: true
   summary: >
-    Story 1-2 complete. Added courses.create mutation with folder and cross-folder support,
-    auth/ownership guards, task linkage via new tasks.createInternal, and learnProfile upsert.
-    Added courses.listByUser, courses.listByFolder, courses.get queries (bounded with .take()).
-    Added courseSourceDocs.listByCourse query. Made tasks.folderId optional in schema
-    (backwards-compatible) and added by_userId index on tasks. 12 new Convex integration tests
-    (459 total pass, 0 regressions). Code review PASS: 2 blockers fixed (unbounded .collect()
-    replaced with .take()), 3 findings deferred (transaction size, duplicate requireAuth,
-    full-document list projections). PR #89 merged to dev.
+    Story 1-4 complete. Added outline generation pipeline: POST /api/course/generate-outline
+    endpoint retrieves source documents via AI Search (folder/cross-folder) or generates
+    from topic knowledge (web-only), calls generateCompletion to produce 5-15 structured
+    sections with knowledgeType classification, persists via courses.finalizeOutline which
+    creates courseSections records. Includes tolerant JSON parser with fence stripping and
+    trailing comma patching, zod validation, 80k char content budget, task progress tracking
+    at 3 stages. finalizeOutline and markFailed implemented as public mutations with auth
+    guards (ConvexHttpClient cannot call internalMutation). 485 total tests pass (0
+    regressions, +22 new). Code review PASS: 2 blockers fixed inline (dynamic import
+    replaced with static, content budget added), 2 deferred. PR #91 merged to dev.
   block_reason: null
   block_context: null
-  at: '2026-04-22T20:30:00Z'
+  at: '2026-04-22T21:55:00Z'
 last_retro: null
 
 config:

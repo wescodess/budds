@@ -22,8 +22,10 @@
     "g4-helper-panel-all-references": "dc26d3464bbf41339b8a816a9f5adcf6",
     "g4-directory-picker-tree-component": "c28492deec024512946b955d518ec06f",
     "g4-directory-picker-in-chat-input": "6a7ec821b9f04aad80079092dfcb8f7a",
-    "g4-knowledge-tree-sections": "c1412121785a40699f471fcc93a18346"
+    "g4-knowledge-tree-sections": "c1412121785a40699f471fcc93a18346",
+    "learn-outline-editor": "66be23d5db5c4db1b9101633357e0c70"
   },
+  "learnModuleProjectId": "15806072973690193332",
   "designSystemId": "assets/11175050301981891392",
   "foundationComplete": true,
   "completedAt": "2026-04-09"
