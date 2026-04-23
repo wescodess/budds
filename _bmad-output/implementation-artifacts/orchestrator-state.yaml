@@ -1,42 +1,37 @@
 mode: running
 current_phase: prep-story
-current_story: prep-5-1-timezone-ui-for-streak
+current_story: prep-5-2-reviewing-mastery-color-fix
 current_epic: prep-5
 retry_count: 0
 last_epic_complete_fired: 4
 
 last_verdict:
   subagent: bmad-story-runner
-  story: prep-5-1-timezone-ui-for-streak
+  story: prep-5-2-reviewing-mastery-color-fix
   epic: prep-5
   status: PASS
-  pr_url: 'https://github.com/wescodess/budds/pull/115'
-  branch: 'prep/5-1-timezone-ui-for-streak'
-  commit_sha: '5dea342'
-  files_changed: 7
-  tasks_completed: 6
-  tasks_total: 6
-  findings_deferred: 3
+  pr_url: 'https://github.com/wescodess/budds/pull/116'
+  branch: 'prep/5-2-reviewing-color-fix'
+  commit_sha: '5721836'
+  files_changed: 2
+  tasks_completed: 4
+  tasks_total: 4
+  findings_deferred: 0
   lint_pass: null
   typecheck_pass: null
   unit_tests_pass: true
   e2e_tests_pass: null
-  review_pass: true
+  review_pass: null
   summary: >
-    Story prep-5-1 complete. Added setTimezone mutation to convex/learnProfile.ts with IANA
-    timezone validation via toLocaleDateString try/catch. Modified updateStreakForActivity to
-    read profile.timezone and compute today's date in the user's timezone, falling back to UTC
-    when no timezone is set. Created useTimezoneSync composable that accepts profile ref,
-    watches for profile load, auto-detects browser timezone via Intl.DateTimeFormat, and calls
-    setTimezone if no timezone is configured. Wired composable in learn home page. Code review:
-    2 blockers fixed (duplicate Convex subscription removed by accepting profile ref parameter,
-    race condition in synced flag fixed to reset on mutation failure). 3 deferred (no composable
-    test, private getTodayInTimezone, learn-home-only wiring). 7 new Convex tests (5 setTimezone
-    + 2 timezone-aware streak). Fixed learn-home component test by adding useConvexMutation mock.
-    617 Convex + 380 component tests pass. PR #115 merged to dev.
+    Story prep-5-2 complete. One-line design fix: changed reviewing mastery badge color from
+    bg-yellow-500 (cool lemon) to bg-amber-400 (warm gold) in MasteryBadge.vue config map,
+    matching the amber design system specified in UX spec. Updated component test assertion
+    to expect bg-amber-400. No code review needed (trivial CSS class change). 617 Convex +
+    380 component tests pass. PR #116 merged to dev. Resolves deferred item from 4-1 code
+    review ("Reviewing mastery color uses yellow-500 instead of gold").
   block_reason: null
   block_context: null
-  at: '2026-04-24T15:35:00Z'
+  at: '2026-04-23T19:42:19Z'
 last_retro: 'epic-4-retro-2026-04-24.md'
 
 config:
@@ -61,8 +56,8 @@ paths:
   ux_spec: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/ux-design-learn-module.md
 
 counters:
-  stories_completed_this_run: 0
-  stories_completed_total: 28
+  stories_completed_this_run: 1
+  stories_completed_total: 29
 
 escalation:
   pending: null
