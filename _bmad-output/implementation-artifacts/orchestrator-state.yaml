@@ -1,44 +1,44 @@
 mode: running
 current_phase: epic-story
-current_story: 3-3-section-void-ui-content-block-rendering
+current_story: 3-4-section-completion-and-adaptive-pacing
 current_epic: 3
 retry_count: 0
 last_epic_complete_fired: prep-3
 
 last_verdict:
   subagent: bmad-story-runner
-  story: 3-3-section-void-ui-content-block-rendering
+  story: 3-4-section-completion-and-adaptive-pacing
   epic: 3
   status: PASS
-  pr_url: 'https://github.com/wescodess/budds/pull/105'
-  branch: 'feat/3-3-section-void-ui'
-  commit_sha: '49cdd72'
-  files_changed: 14
+  pr_url: 'https://github.com/wescodess/budds/pull/106'
+  branch: 'feat/3-4-section-completion'
+  commit_sha: '2e86c2b'
+  files_changed: 9
   tasks_completed: 9
   tasks_total: 9
-  findings_deferred: 5
+  findings_deferred: 4
   lint_pass: null
   typecheck_pass: null
   unit_tests_pass: true
   e2e_tests_pass: null
   review_pass: true
   summary: >
-    Story 3-3 complete. Section void UI with content block rendering. Section void page
-    at /app/learn/[courseId]/[sectionId] with SectionVoidTopBar (back arrow, course title,
-    section title, block progress, amber progress bar). SectionBlockRenderer dispatches
-    contentBlocks by type: TextBlock (sanitized markdown with XSS protection), QuizBlock
-    (inline per-question feedback via getWithQuestions query), FlashcardBlock (flip + swipe
-    via getRoom query), AudioBlock (placeholder stub for Story 3-5). Course view upgraded
-    from placeholder to section list with status icons (completed/ready/generating/failed/locked)
-    and navigation links to section voids. Added courseSections.get query. N+1 pre-fetch
-    wired via usePreFetchSection composable. 20 new component tests across 3 files. Code
-    review: 2 blockers fixed (XSS in v-html markdown renderer, unused nextSectionReady
-    binding), 5 deferred (over-fetch for next section, no aria-live on quiz feedback,
-    dynamic component :is pattern, flashcard timer leak, markdown numbered list support).
-    544 Convex + 309 component tests pass. PR #105 merged to dev.
+    Story 3-4 complete. Section completion with adaptive pacing feedback. Added completeSection
+    mutation to convex/courseSections.ts: validates ownership, guards against completing non-ready
+    sections, computes masteryLevel from practiceScore (mastered >=90, reviewing >=70, learning
+    >=60, new <60), increments course completedSectionCount, returns adaptive feedback hints
+    (increase-practice for <60%, reduce-practice for >=90%). SectionCompletionCard.vue with SVG
+    accuracy ring, color-coded mastery badge, adaptive feedback text, Continue/Back navigation
+    buttons. Section void page wired: QuizBlock emits quizCompleted with correct/total counts,
+    SectionBlockRenderer forwards event, page tracks results and calls mutation on user click.
+    Idempotent for already-completed sections. 10 new Convex tests, 16 new component tests. Code
+    review: 2 blockers fixed (threshold mismatch at score=90 between computeMasteryLevel/
+    getAdaptiveFeedback, missing ready-status guard on completeSection), 4 deferred (multi-quiz
+    accumulation, no error toast, complete-before-view gate, FR16 format override UI). 554 Convex
+    + 325 component tests pass. PR #106 merged to dev.
   block_reason: null
   block_context: null
-  at: '2026-04-24T08:00:00Z'
+  at: '2026-04-24T09:00:00Z'
 last_retro: 'epic-2-retro-2026-04-23.md'
 
 config:
@@ -63,8 +63,8 @@ paths:
   ux_spec: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/ux-design-learn-module.md
 
 counters:
-  stories_completed_this_run: 1
-  stories_completed_total: 18
+  stories_completed_this_run: 2
+  stories_completed_total: 19
 
 escalation:
   pending: null
@@ -94,6 +94,14 @@ escalation:
         User answered "1" → commit_all_then_start. Committing all changes on refactor/remove-folder-tabs, then branching feat/1-1 from dev.
 
 decisions_log:
+  - ts: '2026-04-24'
+    decision: |
+      story-runner PASS for 3-3 (5 deferred: over-fetch for next section, no aria-live on quiz feedback,
+      dynamic component :is pattern, flashcard timer leak, markdown numbered list support). 9/9 tasks,
+      14 files. Section void page, SectionVoidTopBar, SectionBlockRenderer, TextBlock (XSS-safe),
+      QuizBlock (inline feedback), FlashcardBlock (flip+swipe), AudioBlock (stub). Course view upgraded
+      to section list. 20 new component tests. Code review: 2 blockers fixed (XSS v-html, unused binding).
+      544 Convex + 309 component tests pass. PR #105 merged to dev. Counters 2 this-run, 19 total.
   - ts: '2026-04-24'
     decision: |
       story-runner PASS for 3-2 (5 deferred: over-fetching in query, no hasNextSection state,
