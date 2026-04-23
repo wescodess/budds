@@ -1,39 +1,41 @@
 mode: running
 current_phase: prep-story
-current_story: prep-4-2-checkprefetchstatus-projection
+current_story: prep-4-3-textblock-numbered-list-support
 current_epic: prep-4
 retry_count: 0
 last_epic_complete_fired: 3
 
 last_verdict:
   subagent: bmad-story-runner
-  story: prep-4-2-checkprefetchstatus-projection
+  story: prep-4-3-textblock-numbered-list-support
   epic: prep-4
   status: PASS
-  pr_url: 'https://github.com/wescodess/budds/pull/109'
-  branch: 'prep/4-2-prefetch-projection'
-  commit_sha: '231a149'
-  files_changed: 4
-  tasks_completed: 5
-  tasks_total: 5
-  findings_deferred: 0
+  pr_url: 'https://github.com/wescodess/budds/pull/110'
+  branch: 'prep/4-3-textblock-numbered-lists'
+  commit_sha: '0d1a92f'
+  files_changed: 3
+  tasks_completed: 6
+  tasks_total: 6
+  findings_deferred: 3
   lint_pass: null
   typecheck_pass: null
   unit_tests_pass: true
   e2e_tests_pass: null
   review_pass: true
   summary: >
-    Story prep-4-2 complete. checkPreFetchStatus query now returns a projection
-    { _id, status } for the next section instead of the full document. Eliminates
-    subscription churn when contentBlocks (a large array) is populated or modified.
-    Updated composable type annotations in usePreFetchSection.ts. Added test verifying
-    contentBlocks, title, and knowledgeType are excluded from the response. 48
-    courseSections tests pass (including new projection exclusion test). PR #109
-    merged to dev. Also cleaned up prep-4-1 branch (committed, PR #108 merged)
-    which had been left uncommitted by the previous story runner.
+    Story prep-4-3 complete. TextBlock already renders numbered lists and fenced
+    code blocks correctly via MDC parser (refactored in 3-3 from custom regex).
+    No component changes needed. Fixed 4 pre-existing test failures caused by
+    missing async handling for parseMarkdown (added flushPromises + beforeAll
+    warm-up for MDC lazy module loading). Added 4 new tests: numbered lists (ol),
+    fenced code blocks (pre/code), language-hinted code blocks, inline+fenced combo.
+    346 component tests pass, 566 Convex tests pass. Code review PASS with 3
+    deferred (magic flush count, MDC warm-up coupling, no explicit XSS test).
+    PR #110 merged to dev. PREP SPRINT EPIC 4 COMPLETE (3/3 stories).
+    prep-sprint-epic-4-retrospective: optional. Epic boundary detected.
   block_reason: null
   block_context: null
-  at: '2026-04-23T15:00:00Z'
+  at: '2026-04-23T18:30:00Z'
 last_retro: 'epic-3-retro-2026-04-24.md'
 
 config:
@@ -58,8 +60,8 @@ paths:
   ux_spec: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/ux-design-learn-module.md
 
 counters:
-  stories_completed_this_run: 1
-  stories_completed_total: 22
+  stories_completed_this_run: 3
+  stories_completed_total: 24
 
 escalation:
   pending: null
@@ -95,6 +97,13 @@ escalation:
         User answered "1" → commit_all_then_start. Committing all changes on refactor/remove-folder-tabs, then branching feat/1-1 from dev.
 
 decisions_log:
+  - ts: '2026-04-23'
+    decision: |
+      story-runner PASS for prep-4-3 (3 deferred: magic flush count, MDC warm-up coupling, no XSS test).
+      6/6 tasks, 3 files. TextBlock.vue unchanged — MDC already handles numbered lists and code blocks.
+      Fixed 4 pre-existing test failures (async parseMarkdown not awaited). Added 4 new tests. 346
+      component + 566 Convex tests pass. PR #110 merged to dev. Counters 3 this-run, 24 total.
+      PREP SPRINT EPIC 4 COMPLETE (3/3). prep-sprint-epic-4-retrospective: optional. Epic boundary detected.
   - ts: '2026-04-23'
     decision: |
       story-runner PASS for 3-5 (3 deferred: URL resolution per subscription tick, conditional composable,
