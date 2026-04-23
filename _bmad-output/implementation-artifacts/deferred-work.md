@@ -1,5 +1,13 @@
 # Deferred Work
 
+## Deferred from: code review of 3-2-n-plus-1-section-pre-fetch (2026-04-24)
+
+- **`checkPreFetchStatus` returns full section document.** The query returns the entire `nextSection` doc to the client. The composable only needs `status` and `_id`. Changes to contentBlocks (large array) trigger unnecessary subscription re-evaluations. Consider returning a projection `{ _id, status, taskId }` when Story 3-3 integrates the composable.
+- **Composable exposes no "no next section" state.** `nextSectionReady` is false both when the next section is loading and when there is no next section (last section). Story 3-3 completion card needs to distinguish these. Add a `hasNextSection` computed when integrating.
+- **No test for concurrent `triggerPreFetch` idempotency.** Two simultaneous calls should be safe (Convex serialization), but there is no explicit test verifying the second call returns null when the first already set status to `generating`.
+- **`getNextSection` query is currently unused.** No client code consumes it. The composable uses `checkPreFetchStatus` instead. Keep for Story 3-3 but note it is dead code until then.
+- **`retryOf` sentinel value `'initial-failure'` is a code smell.** When a section failed without a taskId, the retry metadata uses a synthetic string. Functionally correct but semantically misleading in task metadata inspection.
+
 ## Deferred from: prep-3-5-fix-baseline-test-failures (2026-04-24)
 
 - **Rewrite folder-view, folder-documents, and folder-chat-layout tests as isolated component tests.** These tests mount the full `[id].vue` page which now uses `provideFolderPageContext()` — a composable that internally creates Convex WebSocket connections and composes 15+ dependencies (useFolderReferenceScope, useHelperPane, useTasks, 5x useConvexMutation, useConvexQuery, full Nuxt route objects). The mock surface required via `mockNuxtImport` exceeds what's tractable. Rewrite to test the DocumentsPanel, FolderShellFilesPanel, and ChatArea components in isolation. Files: `tests/component/folders/folder-view.test.ts` (3 tests), `tests/component/documents/folder-documents.test.ts` (3 tests), `tests/component/chat/folder-chat-layout.test.ts` (3 tests).
