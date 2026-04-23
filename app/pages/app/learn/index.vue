@@ -14,6 +14,8 @@ const courses = computed(() => coursesQuery.data?.value ?? [])
 const profile = computed(() => profileQuery.data?.value ?? null)
 const hasCourses = computed(() => courses.value.length > 0)
 
+useTimezoneSync(profile)
+
 const topicInput = ref('')
 
 function handleTopicSubmit() {

@@ -14,6 +14,10 @@ mockNuxtImport('useConvexQuery', () => {
   }
 })
 
+mockNuxtImport('useConvexMutation', () => {
+  return () => vi.fn().mockResolvedValue(undefined)
+})
+
 const pagePath = ['~', 'pages', 'app', 'learn', 'index.vue'].join('/')
 
 describe('Learn Home Page', () => {
