@@ -1,5 +1,12 @@
 # Deferred Work
 
+## Deferred from: code review of 5-1-review-item-extraction-and-sm2-data-model (2026-04-23)
+
+- **`getTomorrowDate`/`getTodayDate` use UTC, not user timezone.** Review item `nextReviewDate` and `listDueForUser` compute dates in UTC. For users far from UTC, items may appear due at unexpected times. Consistent with existing streak behavior. Add timezone-aware computation when Story 5-3 builds the SM-2 scheduling engine.
+- **`listDueForUser` post-filters flagged items after fetch.** Fetches up to 200 items then filters out flagged ones in-memory. If many items are flagged, returned count could be lower than expected. Acceptable for daily cap of 50.
+- **No `type` field on `reviewItems`.** Architecture spec defines `type: 'flashcard' | 'cloze' | 'quiz-question'` but the implementation only extracts from flashcards (correct for 5-1 scope). Add the field when quiz-based review items are introduced in a future story.
+- **No cascade delete of review items on course deletion.** `courses.deleteCourse` does not clean up `reviewItems` rows. Will leave orphan review items. Wire into deletion cascade when spaced repetition is fully active.
+
 ## Deferred from: code review of prep-5-1-timezone-ui-for-streak (2026-04-24)
 
 - **No component test for `useTimezoneSync` composable.** The composable has conditional logic (SSR guard, profile watch, already-set check, error retry) that is untested at the component level. The underlying mutation is tested via Convex integration tests. Add a composable test when test infrastructure for composables matures.

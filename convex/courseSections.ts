@@ -696,12 +696,21 @@ export const completeSection = mutation({
 
     await updateStreakForActivity(ctx, userId)
 
+    const conceptsForReview: number = await ctx.runMutation(
+      internal.reviewItems.extractFromSection,
+      {
+        userId,
+        courseId: section.courseId,
+        sectionId: args.sectionId,
+      },
+    )
+
     return {
       practiceScore: score,
       masteryLevel: newState.level,
       feedbackText,
       adaptiveHint,
-      conceptsForReview: 0,
+      conceptsForReview,
     }
   },
 })

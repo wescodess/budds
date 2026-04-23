@@ -36,6 +36,7 @@ import type * as lib_streak from "../lib/streak.js";
 import type * as messages from "../messages.js";
 import type * as migrations from "../migrations.js";
 import type * as quizzes from "../quizzes.js";
+import type * as reviewItems from "../reviewItems.js";
 import type * as sourceExtractors from "../sourceExtractors.js";
 import type * as tasks from "../tasks.js";
 import type * as users from "../users.js";
@@ -75,6 +76,7 @@ declare const fullApi: ApiFromModules<{
   messages: typeof messages;
   migrations: typeof migrations;
   quizzes: typeof quizzes;
+  reviewItems: typeof reviewItems;
   sourceExtractors: typeof sourceExtractors;
   tasks: typeof tasks;
   users: typeof users;
