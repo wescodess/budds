@@ -66,5 +66,10 @@ async function handleDisconnect() {
         Connect
       </button>
     </div>
+
+    <SessionPreferencesForm
+      v-if="isConnected"
+      :preferences="connection.data.value?.preferences ?? null"
+    />
   </div>
 </template>
