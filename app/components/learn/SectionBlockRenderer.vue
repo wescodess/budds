@@ -14,7 +14,10 @@ const props = defineProps<{
   courseId: Id<'courses'>
 }>()
 
-const emit = defineEmits<{ blockViewed: [index: number] }>()
+const emit = defineEmits<{
+  blockViewed: [index: number]
+  quizCompleted: [data: { correct: number; total: number }]
+}>()
 
 const blockRefs = ref<HTMLElement[]>([])
 
@@ -65,6 +68,7 @@ onMounted(() => {
       <LearnQuizBlock
         v-else-if="block.type === 'quiz' && block.entityId"
         :quiz-id="block.entityId"
+        @quiz-completed="emit('quizCompleted', $event)"
       />
 
       <LearnFlashcardBlock

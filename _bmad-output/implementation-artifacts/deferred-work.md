@@ -1,5 +1,12 @@
 # Deferred Work
 
+## Deferred from: code review of 3-4-section-completion-and-adaptive-pacing (2026-04-24)
+
+- **Multiple quiz blocks: only last quiz tracked.** If a section has multiple quiz blocks, `handleQuizCompleted` overwrites `quizResults` with the latest quiz's data. Low severity since current section generation produces at most one quiz block per section.
+- **No error toast on completeSection mutation failure.** The catch block silently falls back to local computation with no user feedback. Consistent with deferred pattern from 1-5/1-6.
+- **Complete Section button appears before all blocks viewed.** The button shows regardless of scroll progress. A user can complete a section without viewing all content blocks. The `currentBlockIndex` tracking drives the progress bar only.
+- **FR16 format override not implemented on completion card.** AC #6 format override for the next section has no UI. Adaptive hints flow through pre-fetch task metadata but no user-facing dropdown exists. Documented in story Decisions as intentional scope deferral.
+
 ## Deferred from: code review of 3-3-section-void-ui-content-block-rendering (2026-04-24)
 
 - **Section void page fetches all sections to find next.** `listByCourse` returns all sections; only the N+1 section is needed. Could use `getNextSection` from story 3-2. Low severity since sections are capped at 15.

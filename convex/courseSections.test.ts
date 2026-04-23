@@ -680,6 +680,213 @@ describe('courseSections.triggerPreFetch', () => {
   })
 })
 
+describe('courseSections.completeSection', () => {
+  test('completes section and computes mastery level from score', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId, sections } = await seedCourseWithSections(t)
+
+    await t.run(async (ctx) => {
+      await ctx.db.patch(sections[0]._id, { status: 'ready' })
+    })
+
+    const result = await asUser.mutation(api.courseSections.completeSection, {
+      sectionId: sections[0]._id,
+      practiceScore: 85,
+      quizCorrect: 5,
+      quizTotal: 6,
+    })
+
+    expect(result.practiceScore).toBe(85)
+    expect(result.masteryLevel).toBe('reviewing')
+    expect(result.adaptiveHint).toBe('standard')
+    expect(result.feedbackText).toBe('')
+    expect(result.conceptsForReview).toBe(0)
+
+    const section = await t.run(async (ctx) => ctx.db.get(sections[0]._id))
+    expect(section!.status).toBe('completed')
+    expect(section!.practiceScore).toBe(85)
+    expect(section!.masteryLevel).toBe('reviewing')
+    expect(section!.completedAt).toBeDefined()
+  })
+
+  test('increments course completedSectionCount', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId, sections } = await seedCourseWithSections(t)
+
+    await t.run(async (ctx) => {
+      await ctx.db.patch(sections[0]._id, { status: 'ready' })
+    })
+
+    const courseBefore = await t.run(async (ctx) => ctx.db.get(courseId))
+    expect(courseBefore!.completedSectionCount).toBe(0)
+
+    await asUser.mutation(api.courseSections.completeSection, {
+      sectionId: sections[0]._id,
+      practiceScore: 75,
+      quizCorrect: 3,
+      quizTotal: 4,
+    })
+
+    const courseAfter = await t.run(async (ctx) => ctx.db.get(courseId))
+    expect(courseAfter!.completedSectionCount).toBe(1)
+  })
+
+  test('returns mastered for score >= 90', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, sections } = await seedCourseWithSections(t)
+
+    await t.run(async (ctx) => {
+      await ctx.db.patch(sections[0]._id, { status: 'ready' })
+    })
+
+    const result = await asUser.mutation(api.courseSections.completeSection, {
+      sectionId: sections[0]._id,
+      practiceScore: 95,
+      quizCorrect: 9,
+      quizTotal: 10,
+    })
+
+    expect(result.masteryLevel).toBe('mastered')
+    expect(result.adaptiveHint).toBe('reduce-practice')
+    expect(result.feedbackText).toContain('Excellent')
+  })
+
+  test('returns adaptive feedback for score < 60', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, sections } = await seedCourseWithSections(t)
+
+    await t.run(async (ctx) => {
+      await ctx.db.patch(sections[0]._id, { status: 'ready' })
+    })
+
+    const result = await asUser.mutation(api.courseSections.completeSection, {
+      sectionId: sections[0]._id,
+      practiceScore: 40,
+      quizCorrect: 2,
+      quizTotal: 5,
+    })
+
+    expect(result.masteryLevel).toBe('new')
+    expect(result.adaptiveHint).toBe('increase-practice')
+    expect(result.feedbackText).toContain('foundational practice')
+  })
+
+  test('clamps score to 0-100 range', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, sections } = await seedCourseWithSections(t)
+
+    await t.run(async (ctx) => {
+      await ctx.db.patch(sections[0]._id, { status: 'ready' })
+    })
+
+    const result = await asUser.mutation(api.courseSections.completeSection, {
+      sectionId: sections[0]._id,
+      practiceScore: 150,
+      quizCorrect: 10,
+      quizTotal: 10,
+    })
+
+    expect(result.practiceScore).toBe(100)
+    expect(result.masteryLevel).toBe('mastered')
+  })
+
+  test('is idempotent for already-completed sections', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId, sections } = await seedCourseWithSections(t)
+
+    await t.run(async (ctx) => {
+      await ctx.db.patch(sections[0]._id, { status: 'ready' })
+    })
+
+    await asUser.mutation(api.courseSections.completeSection, {
+      sectionId: sections[0]._id,
+      practiceScore: 80,
+      quizCorrect: 4,
+      quizTotal: 5,
+    })
+
+    const result = await asUser.mutation(api.courseSections.completeSection, {
+      sectionId: sections[0]._id,
+      practiceScore: 50,
+      quizCorrect: 1,
+      quizTotal: 2,
+    })
+
+    expect(result.practiceScore).toBe(80)
+    expect(result.masteryLevel).toBe('reviewing')
+
+    const course = await t.run(async (ctx) => ctx.db.get(courseId))
+    expect(course!.completedSectionCount).toBe(1)
+  })
+
+  test('rejects completion from non-owner', async () => {
+    const t = convexTest(schema, modules)
+    const { sections } = await seedCourseWithSections(t)
+    const asOther = t.withIdentity(USER_B)
+
+    await expect(
+      asOther.mutation(api.courseSections.completeSection, {
+        sectionId: sections[0]._id,
+        practiceScore: 80,
+        quizCorrect: 4,
+        quizTotal: 5,
+      }),
+    ).rejects.toThrow()
+  })
+
+  test('mastery level learning for score 60-69', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, sections } = await seedCourseWithSections(t)
+
+    await t.run(async (ctx) => {
+      await ctx.db.patch(sections[0]._id, { status: 'ready' })
+    })
+
+    const result = await asUser.mutation(api.courseSections.completeSection, {
+      sectionId: sections[0]._id,
+      practiceScore: 65,
+      quizCorrect: 3,
+      quizTotal: 5,
+    })
+
+    expect(result.masteryLevel).toBe('learning')
+    expect(result.adaptiveHint).toBe('standard')
+  })
+
+  test('score of exactly 90 gets reduce-practice hint', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, sections } = await seedCourseWithSections(t)
+
+    await t.run(async (ctx) => {
+      await ctx.db.patch(sections[0]._id, { status: 'ready' })
+    })
+
+    const result = await asUser.mutation(api.courseSections.completeSection, {
+      sectionId: sections[0]._id,
+      practiceScore: 90,
+      quizCorrect: 9,
+      quizTotal: 10,
+    })
+
+    expect(result.masteryLevel).toBe('mastered')
+    expect(result.adaptiveHint).toBe('reduce-practice')
+  })
+
+  test('rejects completion of non-ready section', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, sections } = await seedCourseWithSections(t)
+
+    await expect(
+      asUser.mutation(api.courseSections.completeSection, {
+        sectionId: sections[0]._id,
+        practiceScore: 80,
+        quizCorrect: 4,
+        quizTotal: 5,
+      }),
+    ).rejects.toThrow('Section is not ready for completion')
+  })
+})
+
 describe('courseSections internal mutations', () => {
   test('markReady sets status and contentBlocks', async () => {
     const t = convexTest(schema, modules)
