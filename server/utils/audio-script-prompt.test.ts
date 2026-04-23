@@ -155,10 +155,18 @@ describe('sanitizeTurnForSpeech', () => {
     expect(sanitizeTurnForSpeech(input)).toBe(input)
   })
 
-  test('leaves parentheses alone (not stripped)', () => {
-    // Parentheses are a natural aside marker for the LLM; the prompt forbids them
-    // but we don't strip aggressively — brackets are the agreed literal-read hazard.
-    expect(sanitizeTurnForSpeech('The answer (roughly) is 42.')).toBe('The answer (roughly) is 42.')
+  test('strips parenthesized asides in default mode', () => {
+    expect(sanitizeTurnForSpeech('The answer (roughly) is 42.')).toBe('The answer is 42.')
+  })
+
+  test('preserves Dia expressions when preserveExpressions is true', () => {
+    expect(sanitizeTurnForSpeech('Well (laughs) that was fun.', { preserveExpressions: true }))
+      .toBe('Well (laughs) that was fun.')
+  })
+
+  test('strips non-Dia parenthesized asides even with preserveExpressions', () => {
+    expect(sanitizeTurnForSpeech('The answer (roughly) is 42.', { preserveExpressions: true }))
+      .toBe('The answer is 42.')
   })
 })
 

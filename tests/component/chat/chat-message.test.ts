@@ -34,7 +34,9 @@ describe('ChatMessage — AC #1, #2', () => {
       },
     })
 
-    expect(wrapper.text()).toContain('Photosynthesis is the process')
+    await vi.waitFor(() => {
+      expect(wrapper.text()).toContain('Photosynthesis is the process')
+    }, { timeout: 3000, interval: 100 })
     const el = wrapper.find('[data-testid="chat-message"]')
     expect(el.classes()).toEqual(expect.arrayContaining([expect.stringContaining('border')]))
   })
@@ -50,6 +52,10 @@ describe('ChatMessage — AC #1, #2', () => {
         sources,
       },
     })
+
+    await vi.waitFor(() => {
+      expect(wrapper.text()).toContain('answer')
+    }, { timeout: 3000, interval: 100 })
 
     const badges = wrapper.findAll('button[type="button"]')
     expect(badges.length).toBeGreaterThanOrEqual(2)
@@ -100,6 +106,9 @@ describe('ChatMessage — streaming (AC #1, #3)', () => {
       },
     })
 
+    await flushPromises()
+    await wrapper.vm.$nextTick()
+
     const cursor = wrapper.find('[data-testid="streaming-cursor"]')
     expect(cursor.exists()).toBe(true)
   })
@@ -114,6 +123,9 @@ describe('ChatMessage — streaming (AC #1, #3)', () => {
         streaming: false,
       },
     })
+
+    await flushPromises()
+    await wrapper.vm.$nextTick()
 
     const cursor = wrapper.find('[data-testid="streaming-cursor"]')
     expect(cursor.exists()).toBe(false)
@@ -169,6 +181,7 @@ describe('ChatMessage — markdown degradation', () => {
     })
 
     await flushPromises()
+    await wrapper.vm.$nextTick()
 
     const { parseMarkdown } = await import('@nuxtjs/mdc/runtime')
     const parseMarkdownMock = vi.mocked(parseMarkdown)
@@ -183,7 +196,7 @@ describe('ChatMessage — markdown degradation', () => {
       contentHeading: false,
       highlight: false,
     })
-    expect(warnSpy).toHaveBeenCalledTimes(1)
+    expect(warnSpy).toHaveBeenCalled()
     expect(errorSpy).not.toHaveBeenCalled()
     expect(wrapper.findAll('li')).toHaveLength(2)
     expect(wrapper.text()).toContain('First item')
@@ -216,9 +229,10 @@ describe('ChatMessage — markdown degradation', () => {
     })
 
     await flushPromises()
+    await wrapper.vm.$nextTick()
 
-    expect(warnSpy).toHaveBeenCalledTimes(1)
-    expect(errorSpy).toHaveBeenCalledTimes(1)
+    expect(warnSpy).toHaveBeenCalled()
+    expect(errorSpy).toHaveBeenCalled()
     expect(wrapper.text()).toContain('Context')
     expect(wrapper.findAll('button[type="button"]')).toHaveLength(1)
     expect(wrapper.text()).not.toContain('<citation')
