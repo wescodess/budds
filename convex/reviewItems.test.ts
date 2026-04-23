@@ -853,9 +853,10 @@ describe('reviewItems.getReviewBacklogCount', () => {
     expect(result.dailyCap).toBe(25)
   })
 
-  test('rejects unauthenticated user', async () => {
+  test('returns null for unauthenticated user', async () => {
     const t = convexTest(schema, modules)
-    await expect(t.query(api.reviewItems.getReviewBacklogCount, {})).rejects.toThrow('Unauthenticated')
+    const result = await t.query(api.reviewItems.getReviewBacklogCount, {})
+    expect(result).toBeNull()
   })
 })
 
@@ -956,6 +957,121 @@ describe('learnProfile.updateDailyReviewCap', () => {
     await expect(
       t.mutation(api.learnProfile.updateDailyReviewCap, { cap: 30 }),
     ).rejects.toThrow()
+  })
+})
+
+describe('reviewItems.completeReviewSession', () => {
+  test('creates a reviewSessions record', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+
+    const result = await asUser.mutation(api.reviewItems.completeReviewSession, {
+      itemsReviewed: 8,
+      itemsCorrect: 6,
+      durationMs: 120000,
+      mode: 'full',
+    })
+
+    expect(result.streakCurrent).toBeGreaterThanOrEqual(1)
+
+    const sessions = await t.run(async (ctx) => {
+      return await ctx.db
+        .query('reviewSessions')
+        .withIndex('by_userId', (q) => q.eq('userId', USER_A.tokenIdentifier))
+        .take(10)
+    })
+
+    expect(sessions).toHaveLength(1)
+    expect(sessions[0]!.itemsReviewed).toBe(8)
+    expect(sessions[0]!.itemsCorrect).toBe(6)
+    expect(sessions[0]!.durationMs).toBe(120000)
+    expect(sessions[0]!.mode).toBe('full')
+    expect(sessions[0]!.date).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    expect(sessions[0]!.completedAt).toBeTypeOf('number')
+  })
+
+  test('updates streak on session completion', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+
+    const result = await asUser.mutation(api.reviewItems.completeReviewSession, {
+      itemsReviewed: 5,
+      itemsCorrect: 3,
+      durationMs: 60000,
+    })
+
+    expect(result.streakCurrent).toBe(1)
+
+    const profile = await t.run(async (ctx) => {
+      return await ctx.db
+        .query('learnProfile')
+        .withIndex('by_userId', (q) => q.eq('userId', USER_A.tokenIdentifier))
+        .unique()
+    })
+
+    expect(profile).not.toBeNull()
+    expect(profile!.streakCurrent).toBe(1)
+    expect(profile!.streakLastDate).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+  })
+
+  test('allows multiple sessions per day', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+
+    await asUser.mutation(api.reviewItems.completeReviewSession, {
+      itemsReviewed: 5,
+      itemsCorrect: 3,
+      durationMs: 60000,
+      mode: 'quick',
+    })
+
+    await asUser.mutation(api.reviewItems.completeReviewSession, {
+      itemsReviewed: 10,
+      itemsCorrect: 8,
+      durationMs: 180000,
+      mode: 'full',
+    })
+
+    const sessions = await t.run(async (ctx) => {
+      return await ctx.db
+        .query('reviewSessions')
+        .withIndex('by_userId', (q) => q.eq('userId', USER_A.tokenIdentifier))
+        .take(10)
+    })
+
+    expect(sessions).toHaveLength(2)
+  })
+
+  test('rejects unauthenticated user', async () => {
+    const t = convexTest(schema, modules)
+    await expect(
+      t.mutation(api.reviewItems.completeReviewSession, {
+        itemsReviewed: 5,
+        itemsCorrect: 3,
+        durationMs: 60000,
+      }),
+    ).rejects.toThrow()
+  })
+
+  test('mode is optional', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+
+    await asUser.mutation(api.reviewItems.completeReviewSession, {
+      itemsReviewed: 3,
+      itemsCorrect: 2,
+      durationMs: 45000,
+    })
+
+    const sessions = await t.run(async (ctx) => {
+      return await ctx.db
+        .query('reviewSessions')
+        .withIndex('by_userId', (q) => q.eq('userId', USER_A.tokenIdentifier))
+        .take(10)
+    })
+
+    expect(sessions).toHaveLength(1)
+    expect(sessions[0]!.mode).toBeUndefined()
   })
 })
 

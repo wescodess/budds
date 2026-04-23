@@ -492,6 +492,18 @@ export default defineSchema({
   })
     .index('by_userId', ['userId']),
 
+  reviewSessions: defineTable({
+    userId: v.string(),
+    date: v.string(),
+    itemsReviewed: v.number(),
+    itemsCorrect: v.number(),
+    durationMs: v.number(),
+    mode: v.optional(v.union(v.literal('full'), v.literal('quick'))),
+    completedAt: v.number(),
+  })
+    .index('by_userId', ['userId'])
+    .index('by_userId_and_date', ['userId', 'date']),
+
   pendingCleanup: defineTable({
     userId: v.string(),
     documentId: v.string(),
