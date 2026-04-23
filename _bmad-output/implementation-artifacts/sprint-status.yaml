@@ -58,13 +58,13 @@ development_status:
   epic-2-retrospective: done
 
   # === Prep Sprint — Epic 3 (mandatory before Epic 3) ===
-  prep-sprint-epic-3: in-progress
+  prep-sprint-epic-3: done
   prep-3-1-extract-require-auth-shared-util: done
   prep-3-2-aria-labels-outline-editor: done
   prep-3-3-source-doc-count-cap: done
   prep-3-4-e2e-course-creation-learn-home: done
   prep-3-5-fix-baseline-test-failures: done
-  prep-3-6-course-status-badge: backlog
+  prep-3-6-course-status-badge: done
   prep-sprint-epic-3-retrospective: optional
 
   # === Epic 3: Section Learning Experience (MVP) ===
