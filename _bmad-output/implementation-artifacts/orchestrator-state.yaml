@@ -1,21 +1,21 @@
 mode: running
-current_phase: prep-story
-current_story: prep-4-3-textblock-numbered-list-support
-current_epic: prep-4
+current_phase: epic-story
+current_story: 4-1-course-view-with-progress-and-mastery-dashboard
+current_epic: 4
 retry_count: 0
-last_epic_complete_fired: 3
+last_epic_complete_fired: prep-4
 
 last_verdict:
   subagent: bmad-story-runner
-  story: prep-4-3-textblock-numbered-list-support
-  epic: prep-4
+  story: 4-1-course-view-with-progress-and-mastery-dashboard
+  epic: 4
   status: PASS
-  pr_url: 'https://github.com/wescodess/budds/pull/110'
-  branch: 'prep/4-3-textblock-numbered-lists'
-  commit_sha: '0d1a92f'
-  files_changed: 3
-  tasks_completed: 6
-  tasks_total: 6
+  pr_url: 'https://github.com/wescodess/budds/pull/111'
+  branch: 'feat/4-1-course-view-progress'
+  commit_sha: '0bfb490'
+  files_changed: 8
+  tasks_completed: 10
+  tasks_total: 10
   findings_deferred: 3
   lint_pass: null
   typecheck_pass: null
@@ -23,19 +23,20 @@ last_verdict:
   e2e_tests_pass: null
   review_pass: true
   summary: >
-    Story prep-4-3 complete. TextBlock already renders numbered lists and fenced
-    code blocks correctly via MDC parser (refactored in 3-3 from custom regex).
-    No component changes needed. Fixed 4 pre-existing test failures caused by
-    missing async handling for parseMarkdown (added flushPromises + beforeAll
-    warm-up for MDC lazy module loading). Added 4 new tests: numbered lists (ol),
-    fenced code blocks (pre/code), language-hinted code blocks, inline+fenced combo.
-    346 component tests pass, 566 Convex tests pass. Code review PASS with 3
-    deferred (magic flush count, MDC warm-up coupling, no explicit XSS test).
-    PR #110 merged to dev. PREP SPRINT EPIC 4 COMPLETE (3/3 stories).
-    prep-sprint-epic-4-retrospective: optional. Epic boundary detected.
+    Story 4-1 complete. Created MasteryBadge component with color-coded mastery
+    indicators (gray=new, amber=learning, yellow=reviewing, green checkmark=mastered).
+    Extracted shared CourseViewBody component eliminating duplication between top-level
+    and folder-scoped course views. Enhanced section list with current section amber
+    left border, completed sections with mastery badges, locked sections muted. Action
+    buttons: Edit Outline (ghost), Change Pace (toggle PaceSelector), Delete Course
+    (destructive). Mobile responsive with compact dot-only badges and three-dot dropdown
+    menu. Code review: 2 blockers fixed (CourseViewBody extraction to eliminate DRY
+    violation, folder-scoped Edit Outline URL missing folderId). 3 deferred (counter-based
+    test mock, no folder-view tests, reviewing color mismatch). 22 new component tests.
+    368 component + 566 Convex tests pass. PR #111 merged to dev.
   block_reason: null
   block_context: null
-  at: '2026-04-23T18:30:00Z'
+  at: '2026-04-23T20:00:00Z'
 last_retro: 'epic-3-retro-2026-04-24.md'
 
 config:
