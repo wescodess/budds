@@ -1,5 +1,14 @@
 # Deferred Work
 
+## Deferred from: code review of 1-7-course-creator-ui-full-flow (2026-04-23)
+
+- **SourceSelector only supports single-folder selection as sourceType 'folder'.** Multi-folder (cross-folder) selection requires document-level granularity to satisfy the `courses.create` cross-folder validator which needs `documentIds`. The UI selects folders, not individual documents. Add document-level selection in a future story when cross-folder courses are needed.
+
+## Resolved from 1-6 / 1-5 deferrals in 1-7:
+
+- **Error handling toasts added** to StartLearningButton, PaceSelector, OutlineEditor, and CourseCreator (all mutation calls now have try/catch + vue-sonner toast).
+- **PaceSelector now uses optimistic update** with rollback on error.
+
 ## Deferred from: code review of 1-6-pace-selector-and-course-start (2026-04-22)
 
 - **No error handling on mutation failures in StartLearningButton and PaceSelector.** `app/components/learn/StartLearningButton.vue` and `PaceSelector.vue` mutation calls have no try/catch with user-facing toast. If `startCourse` or `updatePace` throws, the error is swallowed or surfaces as an unhandled rejection. Add toast notifications in the full-flow integration (Story 1.7).
