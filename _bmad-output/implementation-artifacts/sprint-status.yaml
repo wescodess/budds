@@ -99,8 +99,8 @@ development_status:
   prep-sprint-epic-5-retrospective: optional
 
   # === Epic 5: Spaced Repetition (Fast-Follow) ===
-  epic-5: backlog
-  5-1-review-item-extraction-and-sm2-data-model: backlog
+  epic-5: in-progress
+  5-1-review-item-extraction-and-sm2-data-model: done
   5-2-daily-review-session-ui: backlog
   5-3-sm2-scheduling-engine: backlog
   5-4-cross-course-review-budgeting: backlog
