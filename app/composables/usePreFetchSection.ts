@@ -40,8 +40,9 @@ export function usePreFetchSection(
 
   const nextSectionReady = computed(() => {
     const status = preFetchStatus.value as {
-      nextSection: { status: string }
+      nextSection: { _id: string; status: string }
       needsPreFetch: boolean
+      taskStatus: string | null
     } | null
     if (!status?.nextSection) return false
     return status.nextSection.status === 'ready' || status.nextSection.status === 'completed'
@@ -78,8 +79,9 @@ export function usePreFetchSection(
       if (!courseId.value || currentSectionOrder.value === null) return
 
       const data = status as {
-        needsPreFetch: boolean
         nextSection: { _id: string; status: string }
+        needsPreFetch: boolean
+        taskStatus: string | null
       } | null
 
       if (!data?.needsPreFetch) return
