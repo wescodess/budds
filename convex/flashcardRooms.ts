@@ -216,12 +216,14 @@ export const listRoomsByFolder = query({
     const folder = await ctx.db.get(args.folderId)
     if (!folder || folder.userId !== userId) return []
 
-    const rooms = await ctx.db
+    const allRooms = await ctx.db
       .query('flashcardRooms')
       .withIndex('by_userId_and_folderId', (q) =>
         q.eq('userId', userId).eq('folderId', args.folderId),
       )
       .take(200)
+
+    const rooms = allRooms.filter((r) => r.courseScoped !== true)
 
     const summaries = rooms.map((room) => ({
       _id: room._id,
