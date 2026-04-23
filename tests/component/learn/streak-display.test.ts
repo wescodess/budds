@@ -39,4 +39,29 @@ describe('StreakDisplay', () => {
     const el = wrapper.find('[data-testid="streak-display"]')
     expect(el.attributes('aria-label')).toBe('Learning streak: 5 days')
   })
+
+  it('shows freeze available indicator', async () => {
+    const Comp = await import(componentPath)
+    const wrapper = await mountSuspended(Comp.default, {
+      props: { streakCurrent: 3, streakFreezeAvailable: true },
+    })
+    expect(wrapper.find('[data-testid="streak-freeze-available"]').exists()).toBe(true)
+  })
+
+  it('hides freeze indicator when not available', async () => {
+    const Comp = await import(componentPath)
+    const wrapper = await mountSuspended(Comp.default, {
+      props: { streakCurrent: 3, streakFreezeAvailable: false },
+    })
+    expect(wrapper.find('[data-testid="streak-freeze-available"]').exists()).toBe(false)
+  })
+
+  it('includes freeze in aria label when available', async () => {
+    const Comp = await import(componentPath)
+    const wrapper = await mountSuspended(Comp.default, {
+      props: { streakCurrent: 5, streakFreezeAvailable: true },
+    })
+    const el = wrapper.find('[data-testid="streak-display"]')
+    expect(el.attributes('aria-label')).toBe('Learning streak: 5 days, freeze available')
+  })
 })
