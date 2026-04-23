@@ -52,7 +52,7 @@ development_status:
 
   # === Epic 2: Learn Navigation & Course Management (MVP) ===
   epic-2: in-progress
-  2-1-learn-home-page-empty-and-active-states: backlog
+  2-1-learn-home-page-empty-and-active-states: done
   2-2-folder-scoped-learn-tab: backlog
   2-3-course-deletion: backlog
   epic-2-retrospective: optional
