@@ -285,7 +285,7 @@ export const startCourse = mutation({
       taskId,
     })
 
-    return args.courseId
+    return { courseId: args.courseId, sectionId: firstSection._id, taskId }
   },
 })
 
