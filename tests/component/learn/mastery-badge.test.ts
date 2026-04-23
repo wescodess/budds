@@ -25,7 +25,7 @@ describe('MasteryBadge', () => {
     const wrapper = await mountSuspended(Comp.default, { props: { level: 'reviewing' } })
     const dot = wrapper.find('[data-testid="mastery-dot"]')
     expect(dot.exists()).toBe(true)
-    expect(dot.classes()).toEqual(expect.arrayContaining(['bg-yellow-500']))
+    expect(dot.classes()).toEqual(expect.arrayContaining(['bg-amber-400']))
   })
 
   it('renders green checkmark for mastered', async () => {
