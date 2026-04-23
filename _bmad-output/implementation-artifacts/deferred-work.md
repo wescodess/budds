@@ -1,5 +1,11 @@
 # Deferred Work
 
+## Deferred from: code review of 4-1-course-view-with-progress-and-mastery-dashboard (2026-04-23)
+
+- **Counter-based query mock in course-view.test.ts.** The test identifies course vs sections queries by call order (`queryCallCount % 2`), not by function name. If the component adds a third query, the mock silently returns wrong data. Replace with `getFunctionName`-based routing when the test surface expands.
+- **No test coverage for folder-scoped course view page.** Both pages use the shared `CourseViewBody.vue` component, so the component is tested via the top-level page tests. Add folder-specific routing tests when folder-scoped features diverge.
+- **Reviewing mastery color uses yellow-500 instead of gold.** UX spec says reviewing = `--primary` (gold/amber). Implementation uses `bg-yellow-500` which is a cool lemon tone. Should be `bg-amber-400` or similar warm gold to match the design system.
+
 ## Deferred from: code review of prep-4-3-textblock-numbered-list-support (2026-04-23)
 
 - **Magic number flush loop in text-block tests.** `mountTextBlock` helper calls `flushPromises()` 5 times in a loop. Works but the count is arbitrary. If MDC's async pipeline adds more stages, this could become insufficient. Consider using `vi.waitFor()` or a polling helper that checks for rendered content.

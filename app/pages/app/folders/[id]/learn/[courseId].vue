@@ -11,7 +11,22 @@ const courseQuery = import.meta.client
   ? useConvexQuery(api.courses.get, computed(() => ({ id: courseId.value })))
   : { data: ref(null) }
 
+const sectionsQuery = import.meta.client
+  ? useConvexQuery(api.courseSections.listByCourse, computed(() => ({ courseId: courseId.value })))
+  : { data: ref(null) }
+
 const course = computed(() => courseQuery.data?.value ?? null)
+const sections = computed(() => (sectionsQuery.data?.value as any[]) ?? [])
+
+const needsStart = computed(() =>
+  course.value?.status === 'ready'
+  && sections.value.length > 0
+  && sections.value.every((s: any) => s.status === 'locked'),
+)
+
+const backUrl = computed(() => `/app/folders/${folderId.value}/learn/`)
+const sectionUrlPrefix = computed(() => `/app/folders/${folderId.value}/learn/${courseId.value}`)
+const editOutlineUrl = computed(() => `/app/learn/create?courseId=${courseId.value}&folderId=${folderId.value}`)
 
 function handleDeleted() {
   router.push(`/app/folders/${folderId.value}/learn/`)
@@ -19,26 +34,17 @@ function handleDeleted() {
 </script>
 
 <template>
-  <div class="flex min-h-full flex-col items-center justify-center bg-background px-4">
-    <div class="w-full max-w-lg text-center">
-      <h1 class="mb-2 text-2xl font-bold text-foreground">
-        {{ course?.title ?? 'Loading...' }}
-      </h1>
-      <p class="mb-6 text-sm text-muted-foreground">Course view coming soon</p>
-      <div class="flex items-center justify-center gap-4">
-        <NuxtLink
-          :to="`/app/folders/${folderId}/learn/`"
-          class="text-sm text-primary hover:text-primary/80"
-        >
-          &larr; Back to folder courses
-        </NuxtLink>
-        <LearnDeleteCourseDialog
-          v-if="course"
-          :course-id="courseId"
-          :course-title="course.title"
-          @deleted="handleDeleted"
-        />
-      </div>
-    </div>
+  <div class="min-h-screen bg-stone-950">
+    <LearnCourseViewBody
+      :course="course"
+      :sections="sections"
+      :course-id="courseId"
+      :back-url="backUrl"
+      back-label="Back to folder courses"
+      :section-url-prefix="sectionUrlPrefix"
+      :edit-outline-url="editOutlineUrl"
+      :needs-start="needsStart"
+      @deleted="handleDeleted"
+    />
   </div>
 </template>
