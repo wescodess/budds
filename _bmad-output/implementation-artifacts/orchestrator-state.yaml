@@ -1,43 +1,39 @@
 mode: running
-current_phase: epic-story
-current_story: 2-3-course-deletion
-current_epic: 2
+current_phase: prep-story
+current_story: prep-3-1-extract-require-auth-shared-util
+current_epic: prep-3
 retry_count: 0
-last_epic_complete_fired: 1
+last_epic_complete_fired: 2
 
 last_verdict:
   subagent: bmad-story-runner
-  story: 2-3-course-deletion
-  epic: 2
+  story: prep-3-1-extract-require-auth-shared-util
+  epic: prep-3
   status: PASS
-  pr_url: 'https://github.com/wescodess/budds/pull/97'
-  branch: 'feat/2-3-course-deletion'
-  commit_sha: '5e12e78'
+  pr_url: 'https://github.com/wescodess/budds/pull/98'
+  branch: 'prep/3-1-extract-require-auth'
+  commit_sha: 'a8475a4'
   files_changed: 8
-  tasks_completed: 6
-  tasks_total: 6
-  findings_deferred: 2
+  tasks_completed: 5
+  tasks_total: 5
+  findings_deferred: 0
   lint_pass: null
-  typecheck_pass: true
+  typecheck_pass: null
   unit_tests_pass: true
   e2e_tests_pass: null
-  review_pass: true
+  review_pass: null
   summary: >
-    Story 2-3 complete. Course deletion with full cascade: deleteCourse mutation cascades
-    through courseSections, courseSourceDocs, and course-scoped entities (quizzes with
-    children, flashcardRooms with cards/versions, audioOverviews with interjections and
-    storage files). DeleteCourseDialog.vue with UiAlertDialog confirmation, loading state,
-    destructive styling, toast feedback. Both course view pages updated with delete button
-    and context-aware navigation (Learn Home vs folder learn page). 3 new Convex tests
-    (cascade, course-scoped-only, ownership guard) + 3 ATDD component tests (trigger,
-    dialog content, cancel). Code review PASS: 1 blocker fixed (missing
-    audioOverviewInterjections cascade), 2 deferred (entity ID resolution inefficiency,
-    missing flashcard/audio cascade test coverage). PR #97 merged to dev. Epic 2 COMPLETE
-    (3/3 stories done).
+    Prep story prep-3-1 complete. Extracted duplicate requireAuth function from 6 Convex
+    files (courses, courseSections, courseSourceDocs, quizzes, audioOverviews,
+    audioOverviewInterjections) into a single shared utility at convex/lib/auth.ts.
+    Accepts QueryCtx | MutationCtx to cover all callers. Cleaned up unused type imports
+    in courses.ts, courseSections.ts, courseSourceDocs.ts. All 113 targeted Convex tests
+    pass (507 total, 0 new failures). PR #98 merged to dev. Prep sprint epic-3 now
+    in-progress (1/6 stories done).
   block_reason: null
   block_context: null
-  at: '2026-04-23T12:00:00Z'
-last_retro: 'epic-1-retro-2026-04-23.md'
+  at: '2026-04-24T04:12:00Z'
+last_retro: 'epic-2-retro-2026-04-23.md'
 
 config:
   max_retries_per_story: 3
@@ -61,12 +57,17 @@ paths:
   ux_spec: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/ux-design-learn-module.md
 
 counters:
-  stories_completed_this_run: 2
-  stories_completed_total: 9
+  stories_completed_this_run: 0
+  stories_completed_total: 10
 
 escalation:
   pending: null
   log:
+    - ts: '2026-04-23'
+      question: "Epic 2 closed without retro (marked optional). Proceed to Epic 3, or run retrospective first?"
+      answer: run_retro_first
+      answered_at: '2026-04-23'
+      resolution: "User chose run_retro_first. Running bmad-bmm-workflows-retrospective for Epic 2."
     - ts: '2026-04-23'
       question: "Epic 1 closed without retro (marked optional). Proceed to Epic 2, or run retrospective first?"
       answer: run_retro_first
@@ -81,6 +82,21 @@ escalation:
         User answered "1" → commit_all_then_start. Committing all changes on refactor/remove-folder-tabs, then branching feat/1-1 from dev.
 
 decisions_log:
+  - ts: '2026-04-23'
+    decision: |
+      Epic 2 retrospective complete. 3 new action items, 4 carried from Epic 1 (user chose to
+      prioritize all carried items as mandatory before Epic 3). Prep sprint: requireAuth extraction,
+      aria-labels, source doc cap, E2E pass, fix baseline test failures, course status badge.
+      No architectural changes needed for Epic 3. Retro saved: epic-2-retro-2026-04-23.md.
+      Mode → idle, ready for prep sprint then Epic 3.
+  - ts: '2026-04-23'
+    decision: |
+      story-runner PASS for 2-3 (2 deferred: entity ID resolution inefficiency, missing flashcard/audio
+      cascade test coverage). 6/6 tasks, 5 ACs, 8 files. deleteCourse mutation with full cascade
+      (sections, sourceDocs, course-scoped quizzes/flashcardRooms/audioOverviews with children),
+      DeleteCourseDialog.vue, both course view pages updated. 3 Convex tests + 3 ATDD tests.
+      Code review PASS: 1 blocker fixed (audioOverviewInterjections cascade). PR #97 merged to dev.
+      Counters 3 this-run, 10 total. Epic 2 COMPLETE (3/3 stories). Retro optional — escalating.
   - ts: '2026-04-23'
     decision: |
       story-runner PASS for 2-2 (2 deferred: icon collision, folder membership guard). 7/7 tasks, 5 ACs,
@@ -121,6 +137,23 @@ decisions_log:
       DETERMINE_NEXT: epic-1 backlog → 1-1-convex-schema-course-tables. Story file created, runner spawned.
 
 run_log:
+  - ts: '2026-04-23'
+    mode: resume
+    note: |
+      Resume invoked (idle → running). Epic 2 done + retro done. Prep sprint mandatory before Epic 3.
+      Added 6 prep items to sprint-status.yaml (requireAuth extraction, aria-labels, source doc cap,
+      E2E pass, baseline test fixes, course status badge). DETERMINE_NEXT: prep-3-1-extract-require-auth-shared-util.
+      Spawning bmad-story-runner.
+  - ts: '2026-04-23'
+    mode: running
+    note: |
+      2-3 PASS (PR #97). Epic 2 COMPLETE (3/3 stories). epic-2-retrospective: optional.
+      Epic boundary detected. Escalating for retro decision before advancing to Epic 3.
+  - ts: '2026-04-23'
+    mode: running
+    note: |
+      Epic 2 retro complete. User chose to prioritize all carried Epic 1 items before Epic 3.
+      Prep sprint mandatory. Mode → idle. Retro saved: epic-2-retro-2026-04-23.md.
   - ts: '2026-04-23'
     mode: running
     note: |
