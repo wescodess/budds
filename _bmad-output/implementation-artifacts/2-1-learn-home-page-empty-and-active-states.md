@@ -1,6 +1,6 @@
 # Story 2-1: Learn Home Page — Empty & Active States
 
-## Status: ready-for-dev
+## Status: done
 
 ## Epic
 Epic 2: Learn Navigation & Course Management
@@ -112,3 +112,38 @@ And the page remains usable with bottom navigation
 ### Dependencies
 - No new npm packages needed
 - Lucide icons for flame/snowflake (already available via nuxt-icon or lucide-vue-next)
+
+## Dev Agent Record
+
+### Tasks Completed
+- [x] Task 1: Created `convex/learnProfile.ts` with `getProfile` query
+- [x] Task 2: Created `/app/pages/app/learn/index.vue` with SSR guard and empty/active state rendering
+- [x] Task 3: Built `CourseCard.vue` with progress bar, section count, pace badge, and navigation
+- [x] Task 4: Built `CreateCourseCard.vue` with dashed border and navigation to `/app/learn/create`
+- [x] Task 5: Built `StreakDisplay.vue` with flame/frost icons and conditional rendering
+- [x] Task 6: Built empty state hero with topic input and "Create from your folders" link
+- [x] Task 7: Wrote 22 component tests across 4 test files
+
+### Decisions
+- ATDD step skipped: story is UI-only with no new server behavior. Component tests (Task 7) serve as the acceptance test layer.
+- Pre-existing test failure in `audio-script-prompt.test.ts` (sanitizeTurnForSpeech parentheses) confirmed on dev baseline. Not introduced by this story.
+- Pre-existing component test failures (folder-view, folder-documents, etc.) confirmed on dev baseline.
+
+### File List
+- `convex/learnProfile.ts` (new)
+- `app/pages/app/learn/index.vue` (new)
+- `app/components/learn/CourseCard.vue` (new)
+- `app/components/learn/CreateCourseCard.vue` (new)
+- `app/components/learn/StreakDisplay.vue` (new)
+- `tests/component/learn/course-card.test.ts` (new)
+- `tests/component/learn/create-course-card.test.ts` (new)
+- `tests/component/learn/streak-display.test.ts` (new)
+- `tests/component/learn/learn-home.test.ts` (new)
+
+### Change Log
+- Added `getProfile` Convex query for learnProfile data (streak, freeze status)
+- Created Learn Home page at `/app/learn/` with empty state (hero topic input) and active state (course grid)
+- Created CourseCard component with title, progress bar, section count, pace badge
+- Created CreateCourseCard component with dashed border CTA
+- Created StreakDisplay component with flame/frost icons
+- 22 component tests: 8 CourseCard, 3 CreateCourseCard, 4 StreakDisplay, 7 Learn Home page
