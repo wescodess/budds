@@ -1,21 +1,21 @@
 mode: running
 current_phase: epic-story
-current_story: 5-3-sm2-scheduling-engine
+current_story: 5-4-cross-course-review-budgeting
 current_epic: 5
 retry_count: 0
 last_epic_complete_fired: prep-5
 
 last_verdict:
   subagent: bmad-story-runner
-  story: 5-3-sm2-scheduling-engine
+  story: 5-4-cross-course-review-budgeting
   epic: 5
   status: PASS
-  pr_url: 'https://github.com/wescodess/budds/pull/120'
-  branch: 'feat/5-3-sm2-scheduling-engine'
-  commit_sha: 'bc35b69'
-  files_changed: 8
-  tasks_completed: 6
-  tasks_total: 6
+  pr_url: 'https://github.com/wescodess/budds/pull/121'
+  branch: 'feat/5-4-cross-course-review-budgeting'
+  commit_sha: '0542a4b'
+  files_changed: 10
+  tasks_completed: 7
+  tasks_total: 7
   findings_deferred: 3
   lint_pass: null
   typecheck_pass: null
@@ -23,21 +23,21 @@ last_verdict:
   e2e_tests_pass: null
   review_pass: true
   summary: >
-    Story 5-3 complete. Created convex/lib/sm2.ts with pure computeSM2 function implementing
-    SM-2 spaced repetition: Again(0) resets interval to 1 and reps to 0, Hard(3) multiplies
-    interval by 1.2, Good(4) by easeFactor, Easy(5) by easeFactor*1.3. EaseFactor adjusts per
-    formula with floor at 1.3. nextReviewDate computed as today+interval with timezone-aware
-    date via learnProfile.timezone. Added submitReview public mutation with auth, ownership
-    guard, quality validation ([0,3,4,5]), SM-2 param update, and streak trigger. Wired review
-    session UI rating buttons to call submitReview mutation with submitting guard to prevent
-    double-rating race condition. Code review: 2 blockers fixed (double-rating via async gap,
-    rating buttons clickable during mutation flight), 3 deferred (getTodayInTimezone duplication,
-    no flagged-item guard on submitReview, arch spec location mismatch). 670 Convex tests pass
-    (+36 new: 28 SM-2 pure function + 8 submitReview integration). 402 component tests pass.
-    PR #120 merged to dev.
+    Story 5-4 complete. AC #1 (priority queue) and #2 (daily cap) were already satisfied by
+    listDueWithContext from 5-2. Added AC #3 quick review mode via ?mode=quick query param on
+    /app/learn/review: mode toggle in header, listDueWithContext extended with optional mode arg
+    (quick limits to min(10, dailyCap)). Added AC #4 backlog warning to SourceSelector.vue when
+    dueCount > 2x dailyCap using new getReviewBacklogCount query. Added configurable daily cap
+    UI via ReviewCapSetting component (gear icon dropdown, 5-200 range) with updateDailyReviewCap
+    mutation on learnProfile. Code review: 2 blockers fixed (mode switch mid-session no-op fixed
+    by resetting session state and hiding toggle after first rating, click-outside-to-close added
+    to ReviewCapSetting dropdown), 3 deferred (unused isLoading computed, backlog post-filter on
+    flagged items, Escape key on dropdown). 680 Convex tests pass (+11 new: 4 getReviewBacklogCount,
+    3 quick mode, 4 updateDailyReviewCap). 409 component tests pass (+7 new: 3 backlog warning,
+    4 ReviewCapSetting). PR #121 merged to dev.
   block_reason: null
   block_context: null
-  at: '2026-04-23T23:30:00Z'
+  at: '2026-04-23T23:45:00Z'
 last_retro: 'epic-4-retro-2026-04-24.md'
 
 config:
@@ -62,8 +62,8 @@ paths:
   ux_spec: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/ux-design-learn-module.md
 
 counters:
-  stories_completed_this_run: 5
-  stories_completed_total: 33
+  stories_completed_this_run: 6
+  stories_completed_total: 34
 
 escalation:
   pending: null
