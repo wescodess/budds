@@ -587,3 +587,153 @@ describe('courses.markFailed', () => {
     expect(course!.status).toBe('generating')
   })
 })
+
+async function seedReadyCourseWithSections(
+  t: ReturnType<typeof convexTest>,
+  identity: typeof USER_A,
+) {
+  const { asUser, folderId } = await seedFolder(t, identity)
+  await seedDocument(t, identity, folderId, 'doc.pdf')
+
+  const { courseId } = await asUser.mutation(api.courses.create, {
+    title: 'Ready Course',
+    sourceType: 'folder',
+    folderId,
+  })
+
+  const outlineSections = [
+    { title: 'Section A', description: 'First', knowledgeType: 'factual', order: 0 },
+    { title: 'Section B', description: 'Second', knowledgeType: 'conceptual', order: 1 },
+  ]
+
+  await asUser.mutation(api.courses.finalizeOutline, {
+    courseId,
+    outlineSections,
+    sourceConfidence: { docCount: 1, webPercent: 0 },
+    totalSectionCount: 2,
+  })
+
+  return { asUser, folderId, courseId }
+}
+
+describe('courses.updatePace', () => {
+  test('updates pace on owned course', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId } = await seedReadyCourseWithSections(t, USER_A)
+
+    const before = await t.run(async (ctx) => ctx.db.get(courseId))
+    expect(before!.pace).toBe('steady')
+
+    await asUser.mutation(api.courses.updatePace, {
+      courseId,
+      pace: 'intensive',
+    })
+
+    const after = await t.run(async (ctx) => ctx.db.get(courseId))
+    expect(after!.pace).toBe('intensive')
+    expect(after!.updatedAt).toBeGreaterThanOrEqual(before!.updatedAt)
+  })
+
+  test('rejects foreign user', async () => {
+    const t = convexTest(schema, modules)
+    const { courseId } = await seedReadyCourseWithSections(t, USER_A)
+
+    const asB = t.withIdentity(USER_B)
+    await expect(
+      asB.mutation(api.courses.updatePace, { courseId, pace: 'relaxed' }),
+    ).rejects.toThrow('Course not found')
+  })
+
+  test('rejects unauthenticated user', async () => {
+    const t = convexTest(schema, modules)
+    const { courseId } = await seedReadyCourseWithSections(t, USER_A)
+
+    await expect(
+      t.mutation(api.courses.updatePace, { courseId, pace: 'relaxed' }),
+    ).rejects.toThrow('Unauthenticated')
+  })
+})
+
+describe('courses.startCourse', () => {
+  test('unlocks first section, creates task, returns courseId', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId } = await seedReadyCourseWithSections(t, USER_A)
+
+    const result = await asUser.mutation(api.courses.startCourse, { courseId })
+    expect(result).toBe(courseId)
+
+    const sections = await t.run(async (ctx) =>
+      ctx.db
+        .query('courseSections')
+        .withIndex('by_courseId_and_order', (q) =>
+          q.eq('courseId', courseId).eq('order', 0),
+        )
+        .take(1),
+    )
+    expect(sections).toHaveLength(1)
+    expect(sections[0]!.status).toBe('generating')
+    expect(sections[0]!.taskId).toBeDefined()
+
+    const task = await t.run(async (ctx) => ctx.db.get(sections[0]!.taskId!))
+    expect(task).not.toBeNull()
+    expect(task!.type).toBe('section-generate')
+    expect(task!.metadata).toMatchObject({ courseId, sectionId: sections[0]!._id })
+  })
+
+  test('rejects course not in ready status', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, folderId } = await seedFolder(t, USER_A)
+    await seedDocument(t, USER_A, folderId, 'doc.pdf')
+
+    const { courseId } = await asUser.mutation(api.courses.create, {
+      title: 'Generating Course',
+      sourceType: 'folder',
+      folderId,
+    })
+
+    await expect(
+      asUser.mutation(api.courses.startCourse, { courseId }),
+    ).rejects.toThrow('Course is not ready to start')
+  })
+
+  test('rejects course with no sections', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, folderId } = await seedFolder(t, USER_A)
+    await seedDocument(t, USER_A, folderId, 'doc.pdf')
+
+    const { courseId } = await asUser.mutation(api.courses.create, {
+      title: 'Empty Course',
+      sourceType: 'folder',
+      folderId,
+    })
+
+    await t.run(async (ctx) => {
+      await ctx.db.patch(courseId, { status: 'ready' })
+    })
+
+    await expect(
+      asUser.mutation(api.courses.startCourse, { courseId }),
+    ).rejects.toThrow('Course has no sections')
+  })
+
+  test('rejects double start', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId } = await seedReadyCourseWithSections(t, USER_A)
+
+    await asUser.mutation(api.courses.startCourse, { courseId })
+
+    await expect(
+      asUser.mutation(api.courses.startCourse, { courseId }),
+    ).rejects.toThrow('Course has already been started')
+  })
+
+  test('rejects foreign user', async () => {
+    const t = convexTest(schema, modules)
+    const { courseId } = await seedReadyCourseWithSections(t, USER_A)
+
+    const asB = t.withIdentity(USER_B)
+    await expect(
+      asB.mutation(api.courses.startCourse, { courseId }),
+    ).rejects.toThrow('Course not found')
+  })
+})

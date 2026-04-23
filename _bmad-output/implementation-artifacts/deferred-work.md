@@ -1,5 +1,10 @@
 # Deferred Work
 
+## Deferred from: code review of 1-6-pace-selector-and-course-start (2026-04-22)
+
+- **No error handling on mutation failures in StartLearningButton and PaceSelector.** `app/components/learn/StartLearningButton.vue` and `PaceSelector.vue` mutation calls have no try/catch with user-facing toast. If `startCourse` or `updatePace` throws, the error is swallowed or surfaces as an unhandled rejection. Add toast notifications in the full-flow integration (Story 1.7).
+- **PaceSelector does not optimistically update.** After changing pace, the `<select>` briefly reverts to the old value until the Convex real-time subscription delivers the updated course record. Acceptable for MVP; address with optimistic local state in Story 1.7 full flow.
+
 ## Deferred from: code review of 1-5-outline-editor-ui (2026-04-22)
 
 - **No error handling on mutation failures in OutlineEditor component.** `app/components/learn/OutlineEditor.vue` mutation calls (updateTitle, cycleKnowledgeType, removeSection, addSection) have no try/catch. Network errors or ownership guard failures surface as unhandled promise rejections with no user feedback. Add toast notifications on error in the full-flow integration (Story 1.7).
