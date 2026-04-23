@@ -524,8 +524,11 @@ export const checkPreFetchStatus = query({
       .unique()
 
     if (!nextSection) return null
+
+    const projected = { _id: nextSection._id, status: nextSection.status }
+
     if (nextSection.status === 'ready' || nextSection.status === 'completed' || nextSection.status === 'generating') {
-      return { nextSection, needsPreFetch: false, taskStatus: null }
+      return { nextSection: projected, needsPreFetch: false, taskStatus: null }
     }
 
     let taskStatus: string | null = null
@@ -535,7 +538,7 @@ export const checkPreFetchStatus = query({
     }
 
     return {
-      nextSection,
+      nextSection: projected,
       needsPreFetch: nextSection.status === 'locked' || nextSection.status === 'failed',
       taskStatus,
     }
