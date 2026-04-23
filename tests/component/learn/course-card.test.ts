@@ -73,4 +73,44 @@ describe('CourseCard', () => {
     const link = wrapper.find('a')
     expect(link.attributes('href')).toContain('/app/learn/course_123')
   })
+
+  it('shows no status badge for ready courses', async () => {
+    const Comp = await import(componentPath)
+    const wrapper = await mountSuspended(Comp.default, { props: { course: baseCourse } })
+    const badge = wrapper.find('[data-testid="status-badge"]')
+    expect(badge.exists()).toBe(false)
+  })
+
+  it('shows generating badge for generating courses', async () => {
+    const Comp = await import(componentPath)
+    const wrapper = await mountSuspended(Comp.default, {
+      props: { course: { ...baseCourse, status: 'generating' } },
+    })
+    const badge = wrapper.find('[data-testid="status-badge"]')
+    expect(badge.exists()).toBe(true)
+    expect(badge.text()).toBe('Generating...')
+    expect(badge.classes()).toEqual(expect.arrayContaining(['text-amber-400']))
+  })
+
+  it('shows failed badge for failed courses', async () => {
+    const Comp = await import(componentPath)
+    const wrapper = await mountSuspended(Comp.default, {
+      props: { course: { ...baseCourse, status: 'failed' } },
+    })
+    const badge = wrapper.find('[data-testid="status-badge"]')
+    expect(badge.exists()).toBe(true)
+    expect(badge.text()).toBe('Failed')
+    expect(badge.classes()).toEqual(expect.arrayContaining(['text-red-400']))
+  })
+
+  it('applies dimmed styling for failed courses', async () => {
+    const Comp = await import(componentPath)
+    const wrapper = await mountSuspended(Comp.default, {
+      props: { course: { ...baseCourse, status: 'failed' } },
+    })
+    const link = wrapper.find('a')
+    expect(link.classes()).toEqual(expect.arrayContaining(['opacity-75']))
+    const title = wrapper.find('h3')
+    expect(title.classes()).toEqual(expect.arrayContaining(['text-stone-400']))
+  })
 })
