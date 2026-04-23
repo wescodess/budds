@@ -1,5 +1,11 @@
 # Deferred Work
 
+## Deferred from: code review of prep-5-1-timezone-ui-for-streak (2026-04-24)
+
+- **No component test for `useTimezoneSync` composable.** The composable has conditional logic (SSR guard, profile watch, already-set check, error retry) that is untested at the component level. The underlying mutation is tested via Convex integration tests. Add a composable test when test infrastructure for composables matures.
+- **`getTodayInTimezone` is not exported or directly testable.** The timezone-aware date computation function is private to `learnProfile.ts`. It can only be tested indirectly through integration tests. Consider exporting for direct unit testing when timezone edge cases need more coverage.
+- **`useTimezoneSync` only runs on the learn home page.** If a user navigates directly to a course or section page (e.g., from a bookmark), their timezone is never auto-detected until they visit the learn home. The streak fallback to UTC is functional. A broader approach (plugin or layout-level) would be more robust.
+
 ## Deferred from: code review of 4-4-content-flagging-and-correction (2026-04-23)
 
 - **No test for non-zero flag rate computation.** `getFlagRateForCourse` is tested for unauthenticated (returns null) and zero flag rate, but no test verifies correct percentage when items are actually flagged. Add a test that flags items and asserts the computed rate.
