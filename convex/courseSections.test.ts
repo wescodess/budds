@@ -530,6 +530,35 @@ describe('courseSections.checkPreFetchStatus', () => {
 
     expect(result).toBeNull()
   })
+
+  test('returns projection without contentBlocks', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId, sections } = await seedCourseWithSections(t)
+
+    await t.run(async (ctx) => {
+      await ctx.db.patch(sections[1]._id, {
+        status: 'ready',
+        contentBlocks: [
+          { type: 'text', content: 'Large block', order: 0 },
+          { type: 'quiz', entityId: 'q1', entityType: 'quiz', order: 1 },
+        ],
+      })
+    })
+
+    const result = await asUser.query(api.courseSections.checkPreFetchStatus, {
+      courseId,
+      currentOrder: 0,
+    })
+
+    expect(result).not.toBeNull()
+    expect(result!.nextSection).toEqual({
+      _id: sections[1]._id,
+      status: 'ready',
+    })
+    expect((result!.nextSection as any).contentBlocks).toBeUndefined()
+    expect((result!.nextSection as any).title).toBeUndefined()
+    expect((result!.nextSection as any).knowledgeType).toBeUndefined()
+  })
 })
 
 describe('courseSections.triggerPreFetch', () => {
