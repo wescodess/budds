@@ -1,5 +1,10 @@
 # Deferred Work
 
+## Deferred from: code review of 4-3-streak-system (2026-04-23)
+
+- **Streak evaluation uses UTC, not user timezone.** `updateStreakForActivity` computes today via `new Date().toISOString().slice(0, 10)` which is UTC. AC says "calendar day (user's timezone)" but `learnProfile.timezone` is optional and no UI exists to set it. For users far from UTC, activities near midnight could misattribute the day. Add timezone-aware date computation when a timezone-setting UI is added.
+- **No integration test for streak freeze auto-consumption path.** The pure logic tests in `evaluateStreak` cover the freeze scenario, but no Convex integration test exercises the freeze path through `completeSection`/`reviewSection`. Would require time-manipulation which `convex-test` doesn't support well.
+
 ## Deferred from: code review of 4-1-course-view-with-progress-and-mastery-dashboard (2026-04-23)
 
 - **Counter-based query mock in course-view.test.ts.** The test identifies course vs sections queries by call order (`queryCallCount % 2`), not by function name. If the component adds a third query, the mock silently returns wrong data. Replace with `getFunctionName`-based routing when the test surface expands.

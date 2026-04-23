@@ -5,6 +5,7 @@ import { internal } from './_generated/api'
 import { requireAuth } from './lib/auth'
 import { transitionMastery } from './lib/masteryStateMachine'
 import type { MasteryLevel } from './lib/masteryStateMachine'
+import { updateStreakForActivity } from './learnProfile'
 
 export const get = query({
   args: { id: v.id('courseSections') },
@@ -693,6 +694,8 @@ export const completeSection = mutation({
       })
     }
 
+    await updateStreakForActivity(ctx, userId)
+
     return {
       practiceScore: score,
       masteryLevel: newState.level,
@@ -738,6 +741,8 @@ export const reviewSection = mutation({
       consecutiveReviewPasses: newState.consecutiveReviewPasses,
       reviewHistory: updatedHistory,
     })
+
+    await updateStreakForActivity(ctx, userId)
 
     return {
       practiceScore: score,
