@@ -19,6 +19,10 @@ type ReviewItem = {
   correctedAnswer?: string
 }
 
+const submitReviewMutation = import.meta.client
+  ? useConvexMutation(api.reviewItems.submitReview)
+  : { mutate: async () => ({}) }
+
 const dueQuery = import.meta.client
   ? useConvexQuery(api.reviewItems.listDueWithContext, {})
   : { data: ref([]) }
@@ -44,6 +48,7 @@ const currentIndex = ref(0)
 const revealed = ref(false)
 const sessionComplete = ref(false)
 const ratings = ref<Array<{ itemId: string; quality: number }>>([])
+const submitting = ref(false)
 
 const currentItem = computed(() => items.value[currentIndex.value] ?? null)
 const totalItems = computed(() => items.value.length)
@@ -56,18 +61,31 @@ function revealAnswer() {
   revealed.value = true
 }
 
-function rateItem(quality: number) {
-  if (!revealed.value || !currentItem.value) return
+async function rateItem(quality: number) {
+  if (!revealed.value || !currentItem.value || submitting.value) return
 
-  ratings.value.push({ itemId: currentItem.value._id, quality })
+  submitting.value = true
+  const itemId = currentItem.value._id
+
+  ratings.value.push({ itemId, quality })
+
+  try {
+    await submitReviewMutation.mutate({
+      reviewItemId: itemId as Id<'reviewItems'>,
+      quality,
+    })
+  } catch {
+    // SM-2 update failed silently; rating still tracked locally
+  }
 
   if (currentIndex.value >= totalItems.value - 1) {
     sessionComplete.value = true
-    return
+  } else {
+    currentIndex.value++
+    revealed.value = false
   }
 
-  currentIndex.value++
-  revealed.value = false
+  submitting.value = false
 }
 
 const correctCount = computed(() =>
