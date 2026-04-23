@@ -1,6 +1,7 @@
 <script setup lang="ts">
 interface Course {
   _id: string
+  folderId: string
   title: string
   completedSectionCount: number
   totalSectionCount: number
@@ -26,11 +27,10 @@ const paceConfig = {
 
 const paceDisplay = computed(() => paceConfig[props.course.pace] ?? paceConfig.steady)
 
-const courseUrl = computed(() =>
-  props.folderId
-    ? `/app/folders/${props.folderId}/learn/${props.course._id}`
-    : `/app/learn/${props.course._id}`,
-)
+const courseUrl = computed(() => {
+  const folder = props.folderId ?? props.course.folderId
+  return `/app/folders/${folder}/learn/${props.course._id}`
+})
 </script>
 
 <template>

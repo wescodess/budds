@@ -16,17 +16,11 @@ describe('CreateCourseCard', () => {
     expect(wrapper.text()).toContain('+')
   })
 
-  it('links to create page', async () => {
+  it('emits create event on click', async () => {
     const Comp = await import(componentPath)
     const wrapper = await mountSuspended(Comp.default)
-    const link = wrapper.find('[data-testid="create-course-card"]')
-    expect(link.attributes('href')).toContain('/app/learn/create')
-  })
-
-  it('links to create page with folderId when provided', async () => {
-    const Comp = await import(componentPath)
-    const wrapper = await mountSuspended(Comp.default, { props: { folderId: 'folder123' } })
-    const link = wrapper.find('[data-testid="create-course-card"]')
-    expect(link.attributes('href')).toContain('/app/learn/create?folderId=folder123')
+    const button = wrapper.find('[data-testid="create-course-card"]')
+    await button.trigger('click')
+    expect(wrapper.emitted('create')).toHaveLength(1)
   })
 })

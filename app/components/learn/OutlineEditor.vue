@@ -27,7 +27,7 @@ const props = defineProps<{
   courseId: Id<'courses'>
   outlineSections: OutlineSection[]
   sourceConfidence: SourceConfidence
-  sourceType: 'folder' | 'cross-folder' | 'web-only'
+  sourceType: 'folder' | 'web-only'
   sections: SectionRow[]
 }>()
 

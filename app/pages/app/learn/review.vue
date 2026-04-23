@@ -226,7 +226,7 @@ onUnmounted(() => {
 })
 
 function navigateBack() {
-  router.push('/app/learn')
+  router.push('/')
 }
 </script>
 

@@ -368,10 +368,10 @@ export default defineSchema({
 
   courses: defineTable({
     userId: v.string(),
-    folderId: v.optional(v.id('folders')),
+    folderId: v.id('folders'),
     title: v.string(),
     status: v.union(v.literal('generating'), v.literal('ready'), v.literal('failed')),
-    sourceType: v.union(v.literal('folder'), v.literal('cross-folder'), v.literal('web-only')),
+    sourceType: v.union(v.literal('folder'), v.literal('web-only')),
     sourceConfidence: v.object({
       docCount: v.number(),
       webPercent: v.number(),

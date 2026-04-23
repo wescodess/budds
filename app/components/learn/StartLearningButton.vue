@@ -5,6 +5,7 @@ import { toast } from 'vue-sonner'
 
 const props = defineProps<{
   courseId: Id<'courses'>
+  folderId?: Id<'folders'>
 }>()
 
 const ssrStub = {
@@ -40,7 +41,10 @@ async function handleStart() {
         })
       }
 
-      await navigateTo(`/app/learn/${courseId}`)
+      const target = props.folderId
+        ? `/app/folders/${props.folderId}/learn/${courseId}`
+        : `/app/learn/${courseId}`
+      await navigateTo(target)
     }
   } catch (e: any) {
     toast.error(e?.message ?? 'Failed to start course')

@@ -1,43 +1,47 @@
 mode: running
 current_phase: epic-story
-current_story: 5-4-cross-course-review-budgeting
-current_epic: 5
+current_story: 6-1-google-calendar-oauth-connection
+current_epic: 6
 retry_count: 0
-last_epic_complete_fired: prep-5
+last_epic_complete_fired: 5
 
 last_verdict:
   subagent: bmad-story-runner
-  story: 5-4-cross-course-review-budgeting
-  epic: 5
-  status: PASS
-  pr_url: 'https://github.com/wescodess/budds/pull/121'
-  branch: 'feat/5-4-cross-course-review-budgeting'
-  commit_sha: '0542a4b'
-  files_changed: 10
-  tasks_completed: 7
-  tasks_total: 7
-  findings_deferred: 3
+  story: 6-1-google-calendar-oauth-connection
+  epic: 6
+  status: BLOCKED
+  pr_url: null
+  branch: null
+  commit_sha: null
+  files_changed: 0
+  tasks_completed: 0
+  tasks_total: 10
+  findings_deferred: 0
   lint_pass: null
   typecheck_pass: null
-  unit_tests_pass: true
+  unit_tests_pass: null
   e2e_tests_pass: null
-  review_pass: true
+  review_pass: null
   summary: >
-    Story 5-4 complete. AC #1 (priority queue) and #2 (daily cap) were already satisfied by
-    listDueWithContext from 5-2. Added AC #3 quick review mode via ?mode=quick query param on
-    /app/learn/review: mode toggle in header, listDueWithContext extended with optional mode arg
-    (quick limits to min(10, dailyCap)). Added AC #4 backlog warning to SourceSelector.vue when
-    dueCount > 2x dailyCap using new getReviewBacklogCount query. Added configurable daily cap
-    UI via ReviewCapSetting component (gear icon dropdown, 5-200 range) with updateDailyReviewCap
-    mutation on learnProfile. Code review: 2 blockers fixed (mode switch mid-session no-op fixed
-    by resetting session state and hiding toggle after first rating, click-outside-to-close added
-    to ReviewCapSetting dropdown), 3 deferred (unused isLoading computed, backlog post-filter on
-    flagged items, Escape key on dropdown). 680 Convex tests pass (+11 new: 4 getReviewBacklogCount,
-    3 quick mode, 4 updateDailyReviewCap). 409 component tests pass (+7 new: 3 backlog warning,
-    4 ReviewCapSetting). PR #121 merged to dev.
-  block_reason: null
-  block_context: null
-  at: '2026-04-23T23:45:00Z'
+    Story 6-1 blocked at pre-flight. Working tree on dev has 27 uncommitted changes including
+    deleted pages (learn/index.vue, learn/create.vue, learn/[courseId]/index.vue,
+    learn/[courseId]/[sectionId].vue, folders/[id]/learn/[courseId].vue), modified schema,
+    modified components (CourseCard, CourseCreator, CourseViewBody, OutlineEditor, SourceSelector,
+    StartLearningButton, CreateCourseCard), modified composable (useFolderPageContext), modified
+    Convex files (courses.ts, courses.test.ts, schema.ts), deleted test file (learn-home.test.ts),
+    and 2 new untracked files. These appear to be from a refactoring effort (possibly consolidating
+    learn routes under folder-scoped paths). The orchestrator must commit or stash these changes
+    before the story runner can proceed.
+  block_reason: dirty_workspace
+  block_context: >
+    git status shows 25 modified/deleted tracked files and 2 untracked files on dev branch.
+    Key changes: deleted app/pages/app/learn/index.vue, app/pages/app/learn/create.vue,
+    app/pages/app/learn/[courseId]/index.vue, app/pages/app/learn/[courseId]/[sectionId].vue,
+    app/pages/app/folders/[id]/learn/[courseId].vue; new app/pages/app/folders/[id]/learn/[courseId]/
+    directory and app/pages/app/folders/[id]/learn/create.vue; modified convex/schema.ts,
+    convex/courses.ts, convex/courses.test.ts; modified 7 learn components and 7 test files.
+    These must be committed or stashed before branching for 6-1.
+  at: '2026-04-23T23:55:00Z'
 last_retro: 'epic-4-retro-2026-04-24.md'
 
 config:
@@ -62,8 +66,8 @@ paths:
   ux_spec: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/ux-design-learn-module.md
 
 counters:
-  stories_completed_this_run: 6
-  stories_completed_total: 34
+  stories_completed_this_run: 0
+  stories_completed_total: 36
 
 escalation:
   pending: null

@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import type { Id } from '~~/convex/_generated/dataModel'
 import { api } from '#convex/api'
+import { injectFolderContext } from '~/composables/useFolderPageContext'
 
 const route = useRoute()
 const router = useRouter()
+const ctx = injectFolderContext()
+const { folderId } = ctx
+
 const courseId = computed(() => route.params.courseId as Id<'courses'>)
-const folderId = computed(() => route.params.id as string)
 
 const courseQuery = import.meta.client
   ? useConvexQuery(api.courses.get, computed(() => ({ id: courseId.value })))
@@ -26,7 +29,6 @@ const needsStart = computed(() =>
 
 const backUrl = computed(() => `/app/folders/${folderId.value}/learn/`)
 const sectionUrlPrefix = computed(() => `/app/folders/${folderId.value}/learn/${courseId.value}`)
-const editOutlineUrl = computed(() => `/app/learn/create?courseId=${courseId.value}&folderId=${folderId.value}`)
 
 function handleDeleted() {
   router.push(`/app/folders/${folderId.value}/learn/`)
@@ -34,15 +36,15 @@ function handleDeleted() {
 </script>
 
 <template>
-  <div class="min-h-screen bg-stone-950">
+  <div class="min-h-0 flex-1 overflow-y-auto bg-background">
     <LearnCourseViewBody
       :course="course"
       :sections="sections"
       :course-id="courseId"
+      :folder-id="folderId"
       :back-url="backUrl"
       back-label="Back to folder courses"
       :section-url-prefix="sectionUrlPrefix"
-      :edit-outline-url="editOutlineUrl"
       :needs-start="needsStart"
       @deleted="handleDeleted"
     />

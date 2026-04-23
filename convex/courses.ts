@@ -10,8 +10,8 @@ export const MAX_SOURCE_DOCS = 100
 export const create = mutation({
   args: {
     title: v.string(),
-    sourceType: v.union(v.literal('folder'), v.literal('cross-folder'), v.literal('web-only')),
-    folderId: v.optional(v.id('folders')),
+    sourceType: v.union(v.literal('folder'), v.literal('web-only')),
+    folderId: v.id('folders'),
     documentIds: v.optional(v.array(v.id('documents'))),
     webSearchEnabled: v.optional(v.boolean()),
   },
@@ -19,21 +19,12 @@ export const create = mutation({
     const userId = await requireAuth(ctx)
     const now = Date.now()
 
+    const folder = await ctx.db.get(args.folderId)
+    if (!folder || folder.userId !== userId) throw new Error('Folder not found')
+
     let resolvedDocs: Array<{ documentId: Id<'documents'>; folderId: Id<'folders'> }> = []
-    let resolvedFolderId: Id<'folders'> | undefined
 
-    if (args.sourceType === 'web-only') {
-      if (args.folderId) {
-        const folder = await ctx.db.get(args.folderId)
-        if (!folder || folder.userId !== userId) throw new Error('Folder not found')
-        resolvedFolderId = args.folderId
-      }
-    } else if (args.sourceType === 'folder') {
-      if (!args.folderId) throw new Error('folderId required for folder source')
-      const folder = await ctx.db.get(args.folderId)
-      if (!folder || folder.userId !== userId) throw new Error('Folder not found')
-      resolvedFolderId = args.folderId
-
+    if (args.sourceType === 'folder') {
       if (args.documentIds && args.documentIds.length > 0) {
         for (const docId of args.documentIds) {
           const doc = await ctx.db.get(docId)
@@ -44,19 +35,10 @@ export const create = mutation({
         const docs = await ctx.db
           .query('documents')
           .withIndex('by_userId_and_folderId', (q) =>
-            q.eq('userId', userId).eq('folderId', args.folderId!),
+            q.eq('userId', userId).eq('folderId', args.folderId),
           )
           .take(MAX_SOURCE_DOCS)
-        resolvedDocs = docs.map((d) => ({ documentId: d._id, folderId: args.folderId! }))
-      }
-    } else {
-      if (!args.documentIds || args.documentIds.length === 0) {
-        throw new Error('documentIds required for cross-folder source')
-      }
-      for (const docId of args.documentIds) {
-        const doc = await ctx.db.get(docId)
-        if (!doc || doc.userId !== userId) throw new Error('Document not found')
-        resolvedDocs.push({ documentId: docId, folderId: doc.folderId })
+        resolvedDocs = docs.map((d) => ({ documentId: d._id, folderId: args.folderId }))
       }
     }
 
@@ -64,7 +46,7 @@ export const create = mutation({
 
     const courseId = await ctx.db.insert('courses', {
       userId,
-      folderId: resolvedFolderId,
+      folderId: args.folderId,
       title: args.title.trim().slice(0, 200) || 'Untitled Course',
       status: 'generating',
       sourceType: args.sourceType,
@@ -93,7 +75,7 @@ export const create = mutation({
       internal.tasks.createInternal,
       {
         userId,
-        folderId: resolvedFolderId,
+        folderId: args.folderId,
         type: 'course-outline',
         title: 'Generating outline...',
         metadata: { courseId },
