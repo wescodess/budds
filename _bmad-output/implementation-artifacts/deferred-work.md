@@ -1,5 +1,11 @@
 # Deferred Work
 
+## Deferred from: code review of 5-3-sm2-scheduling-engine (2026-04-23)
+
+- **`getTodayInTimezone` duplicated across `reviewItems.ts` and `learnProfile.ts`.** Identical function exists in both files. Should be extracted to a shared utility in `convex/lib/` (e.g., `convex/lib/dates.ts`) to eliminate duplication.
+- **No flagged-item guard on `submitReview` mutation.** A user could theoretically call `submitReview` on a flagged review item. The UI already filters flagged items from the session, so this is not user-reachable. Add a server-side guard if flagging logic grows more complex.
+- **Architecture spec says SM-2 pure functions belong in `server/utils/sr-scheduler.ts`.** Implementation places them in `convex/lib/sm2.ts` instead, which is better since the function is called directly from a Convex mutation (no network hop needed). The spec was written before the `convex/lib/` pattern was established in prep sprints.
+
 ## Deferred from: code review of 5-2-daily-review-session-ui (2026-04-23)
 
 - **`listDueWithContext` N+1 lookups for course/section data.** Each unique course/section triggers a `ctx.db.get()` call inside the query loop. In-memory Map caching mitigates repeated lookups, but for users with items from many different courses/sections, this adds read bandwidth. Acceptable for cap-50 items. Consider denormalizing course/section titles onto review items if the cap grows.
