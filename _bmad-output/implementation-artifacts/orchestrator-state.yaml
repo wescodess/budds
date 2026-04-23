@@ -1,38 +1,39 @@
 mode: running
 current_phase: epic-story
-current_story: 1-1-convex-schema-course-tables
+current_story: 1-2-course-creation-api-folder-cross-folder
 current_epic: 1
 retry_count: 0
 last_epic_complete_fired: null
 
 last_verdict:
   subagent: bmad-story-runner
-  story: 1-1-convex-schema-course-tables
+  story: 1-2-course-creation-api-folder-cross-folder
   epic: 1
   status: PASS
-  pr_url: 'https://github.com/wescodess/budds/pull/88'
-  branch: 'feat/learn-module-epic-1'
-  commit_sha: '9f15bc6e75bb5392b25ee20e9c29cc2b17aeeb13'
-  files_changed: 12
-  tasks_completed: 6
-  tasks_total: 6
-  findings_deferred: 1
+  pr_url: 'https://github.com/wescodess/budds/pull/89'
+  branch: 'feat/1-2-course-creation-api-folder-cross-folder'
+  commit_sha: 'b1af34c72a2053471a555f8bd34cec91174d3bf1'
+  files_changed: 8
+  tasks_completed: 5
+  tasks_total: 5
+  findings_deferred: 3
   lint_pass: null
   typecheck_pass: true
   unit_tests_pass: true
   e2e_tests_pass: null
   review_pass: true
   summary: >
-    Story 1-1 complete. Added 4 new Convex tables (courses, courseSections, courseSourceDocs,
-    learnProfile) with all fields, validators, and indexes. Added courseScoped optional boolean
-    to quizzes, flashcardRooms, audioOverviews with folder-tab query filters. Updated account
-    deletion cascade with child-before-parent Learn table cleanup. Bumped data export schema
-    version to 5. Added 11 new tests (447 total pass, 0 regressions). Code review passed with
-    2 findings fixed (type safety, manifest counts) and 1 deferred (courseSourceDocs by_userId index).
-    PR #88 merged to dev.
+    Story 1-2 complete. Added courses.create mutation with folder and cross-folder support,
+    auth/ownership guards, task linkage via new tasks.createInternal, and learnProfile upsert.
+    Added courses.listByUser, courses.listByFolder, courses.get queries (bounded with .take()).
+    Added courseSourceDocs.listByCourse query. Made tasks.folderId optional in schema
+    (backwards-compatible) and added by_userId index on tasks. 12 new Convex integration tests
+    (459 total pass, 0 regressions). Code review PASS: 2 blockers fixed (unbounded .collect()
+    replaced with .take()), 3 findings deferred (transaction size, duplicate requireAuth,
+    full-document list projections). PR #89 merged to dev.
   block_reason: null
   block_context: null
-  at: '2026-04-22T20:12:00Z'
+  at: '2026-04-22T20:30:00Z'
 last_retro: null
 
 config:
@@ -57,8 +58,8 @@ paths:
   ux_spec: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/ux-design-learn-module.md
 
 counters:
-  stories_completed_this_run: 1
-  stories_completed_total: 1
+  stories_completed_this_run: 2
+  stories_completed_total: 2
 
 escalation:
   pending: null
