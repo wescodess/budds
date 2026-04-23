@@ -7,13 +7,13 @@ last_epic_complete_fired: 1
 
 last_verdict:
   subagent: bmad-story-runner
-  story: 2-1-learn-home-page-empty-and-active-states
+  story: 2-2-folder-scoped-learn-tab
   epic: 2
   status: PASS
-  pr_url: 'https://github.com/wescodess/budds/pull/95'
-  branch: 'feat/2-1-learn-home-page-empty-and-active-states'
-  commit_sha: '632c407'
-  files_changed: 10
+  pr_url: 'https://github.com/wescodess/budds/pull/96'
+  branch: 'feat/2-2-folder-scoped-learn-tab'
+  commit_sha: '0184656'
+  files_changed: 13
   tasks_completed: 7
   tasks_total: 7
   findings_deferred: 2
@@ -23,16 +23,17 @@ last_verdict:
   e2e_tests_pass: null
   review_pass: true
   summary: >
-    Story 2-1 complete. Created Learn Home page at /app/learn/ with empty state (hero
-    topic input, create from folders link) and active state (course card grid with
-    progress bars, pace badges, streak display). New components: CourseCard.vue,
-    CreateCourseCard.vue, StreakDisplay.vue. New Convex query: learnProfile.getProfile.
-    22 new component tests (8 course-card, 3 create-course-card, 4 streak-display,
-    7 learn-home). Code review PASS: 0 blockers, 2 deferred (generating/failed course
-    visibility, client-side freeze detection timezone). PR #95 merged to dev.
+    Story 2-2 complete. Folder-scoped learn integration: added Course type to
+    CreateVoidDialog, courses appear as void entries in FolderShellRail sidebar,
+    Learn workspace entry with GraduationCap icon and course count, new pages at
+    /app/folders/[id]/learn/ (course grid) and /app/folders/[id]/learn/[courseId]
+    (placeholder course view). CourseCard and CreateCourseCard updated with folderId-aware
+    URLs. 7 new component tests (4 folder-learn, 2 create-void-course, 1 create-course-card).
+    Code review PASS: 1 blocker fixed (course void delete guard), 2 deferred (icon collision,
+    folder membership guard). PR #96 merged to dev.
   block_reason: null
   block_context: null
-  at: '2026-04-23T06:40:17Z'
+  at: '2026-04-23T10:10:00Z'
 last_retro: 'epic-1-retro-2026-04-23.md'
 
 config:
