@@ -197,4 +197,39 @@ describe('OutlineEditor', () => {
     expect(wrapper.find('[data-testid="title-input"]').exists()).toBe(false)
     expect(mockUpdateTitle).not.toHaveBeenCalled()
   })
+
+  it('remove buttons have aria-label with section title', async () => {
+    const Editor = await import(editorPath)
+    const wrapper = await mountSuspended(Editor.default, { props: baseProps() })
+    const removeButtons = wrapper.findAll('[data-testid="remove-button"]')
+    expect(removeButtons[0].attributes('aria-label')).toBe('Remove section Functional Groups')
+    expect(removeButtons[1].attributes('aria-label')).toBe('Remove section Reaction Mechanisms')
+    expect(removeButtons[2].attributes('aria-label')).toBe('Remove section Stereochemistry')
+  })
+
+  it('title edit input has aria-label', async () => {
+    const Editor = await import(editorPath)
+    const wrapper = await mountSuspended(Editor.default, { props: baseProps() })
+    await wrapper.find('[data-testid="section-title"]').trigger('click')
+    const input = wrapper.find('[data-testid="title-input"]')
+    expect(input.attributes('aria-label')).toBe('Section title')
+  })
+
+  it('knowledge type badges have aria-label with current type', async () => {
+    const Editor = await import(editorPath)
+    const wrapper = await mountSuspended(Editor.default, { props: baseProps() })
+    const badges = wrapper.findAll('[data-testid="knowledge-type-badge"]')
+    expect(badges[0].attributes('aria-label')).toBe('Cycle knowledge type, currently factual')
+    expect(badges[1].attributes('aria-label')).toBe('Cycle knowledge type, currently conceptual')
+    expect(badges[2].attributes('aria-label')).toBe('Cycle knowledge type, currently procedural')
+  })
+
+  it('drag handle icons are aria-hidden', async () => {
+    const Editor = await import(editorPath)
+    const wrapper = await mountSuspended(Editor.default, { props: baseProps() })
+    const handles = wrapper.findAll('[data-testid="drag-handle"]')
+    for (const handle of handles) {
+      expect(handle.attributes('aria-hidden')).toBe('true')
+    }
+  })
 })
