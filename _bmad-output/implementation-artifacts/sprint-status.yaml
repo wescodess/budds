@@ -77,10 +77,10 @@ development_status:
   epic-3-retrospective: done
 
   # === Prep Sprint — Epic 4 (from Epic 3 retro) ===
-  prep-sprint-epic-4: in-progress
+  prep-sprint-epic-4: done
   prep-4-1-quizblock-aria-live-feedback: done
   prep-4-2-checkprefetchstatus-projection: done
-  prep-4-3-textblock-numbered-list-support: backlog
+  prep-4-3-textblock-numbered-list-support: done
   prep-sprint-epic-4-retrospective: optional
 
   # === Epic 4: Progress Tracking, Mastery & Content Quality (MVP) ===
