@@ -102,6 +102,7 @@ export default defineSchema({
     language: v.optional(v.string()),
     questionCount: v.optional(v.number()),
     latestAttemptStatus: v.optional(v.union(v.literal('in_progress'), v.literal('completed'), v.literal('abandoned'))),
+    courseScoped: v.optional(v.boolean()),
   })
     .index('by_userId', ['userId'])
     .index('by_folderId', ['folderId'])
@@ -165,6 +166,7 @@ export default defineSchema({
     migratedFromSetId: v.optional(v.id('flashcardSets')),
     legacySetId: v.optional(v.id('flashcardSets')),
     legacyCreatedAt: v.optional(v.number()),
+    courseScoped: v.optional(v.boolean()),
   })
     .index('by_userId', ['userId'])
     .index('by_userId_and_folderId', ['userId', 'folderId'])
@@ -329,6 +331,7 @@ export default defineSchema({
     shareToken: v.optional(v.string()),
     publishedAt: v.optional(v.number()),
     scopeDocIds: v.optional(v.array(v.id('documents'))),
+    courseScoped: v.optional(v.boolean()),
   })
     .index('by_userId', ['userId'])
     .index('by_folderId', ['folderId'])
@@ -353,6 +356,96 @@ export default defineSchema({
     ),
   })
     .index('by_audioOverview', ['audioOverviewId'])
+    .index('by_userId', ['userId']),
+
+  courses: defineTable({
+    userId: v.string(),
+    folderId: v.optional(v.id('folders')),
+    title: v.string(),
+    status: v.union(v.literal('generating'), v.literal('ready'), v.literal('failed')),
+    sourceType: v.union(v.literal('folder'), v.literal('cross-folder'), v.literal('web-only')),
+    sourceConfidence: v.object({
+      docCount: v.number(),
+      webPercent: v.number(),
+    }),
+    pace: v.union(v.literal('intensive'), v.literal('steady'), v.literal('relaxed')),
+    outlineSections: v.array(v.object({
+      title: v.string(),
+      description: v.string(),
+      knowledgeType: v.string(),
+      order: v.number(),
+    })),
+    completedSectionCount: v.number(),
+    totalSectionCount: v.number(),
+    taskId: v.optional(v.id('tasks')),
+    webSearchEnabled: v.boolean(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index('by_userId', ['userId'])
+    .index('by_userId_and_folderId', ['userId', 'folderId'])
+    .index('by_folderId', ['folderId']),
+
+  courseSections: defineTable({
+    courseId: v.id('courses'),
+    userId: v.string(),
+    order: v.number(),
+    title: v.string(),
+    knowledgeType: v.union(
+      v.literal('factual'),
+      v.literal('conceptual'),
+      v.literal('procedural'),
+      v.literal('mixed'),
+    ),
+    status: v.union(
+      v.literal('locked'),
+      v.literal('generating'),
+      v.literal('ready'),
+      v.literal('completed'),
+      v.literal('failed'),
+    ),
+    contentBlocks: v.array(v.object({
+      type: v.union(
+        v.literal('text'),
+        v.literal('quiz'),
+        v.literal('flashcard'),
+        v.literal('audio'),
+      ),
+      entityId: v.optional(v.string()),
+      content: v.optional(v.string()),
+      order: v.number(),
+    })),
+    practiceScore: v.optional(v.number()),
+    masteryLevel: v.union(
+      v.literal('new'),
+      v.literal('learning'),
+      v.literal('reviewing'),
+      v.literal('mastered'),
+    ),
+    completedAt: v.optional(v.number()),
+    taskId: v.optional(v.id('tasks')),
+  })
+    .index('by_courseId', ['courseId'])
+    .index('by_courseId_and_order', ['courseId', 'order'])
+    .index('by_userId', ['userId']),
+
+  courseSourceDocs: defineTable({
+    courseId: v.id('courses'),
+    documentId: v.optional(v.id('documents')),
+    folderId: v.optional(v.id('folders')),
+    userId: v.string(),
+  })
+    .index('by_courseId', ['courseId']),
+
+  learnProfile: defineTable({
+    userId: v.string(),
+    streakCurrent: v.number(),
+    streakLastDate: v.optional(v.string()),
+    streakFreezeAvailable: v.boolean(),
+    streakFreezeUsedAt: v.optional(v.string()),
+    dailyReviewCap: v.number(),
+    timezone: v.optional(v.string()),
+  })
     .index('by_userId', ['userId']),
 
   pendingCleanup: defineTable({

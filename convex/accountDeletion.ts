@@ -103,6 +103,10 @@ async function deleteAccountCascadeImpl(ctx: MutationCtx, userId: string) {
   await deleteAllQuizzesForUser(ctx, userId)
   await deleteAllFlashcardsForUser(ctx, userId)
   await deleteAllFlashcardSetsForUser(ctx, userId)
+  await deleteAllLearnProfilesForUser(ctx, userId)
+  await deleteAllCourseSourceDocsForUser(ctx, userId)
+  await deleteAllCourseSectionsForUser(ctx, userId)
+  await deleteAllCoursesForUser(ctx, userId)
   await deleteAllFlashcardRoomCardsForUser(ctx, userId)
   await deleteAllFlashcardVersionCardsForUser(ctx, userId)
   await deleteAllFlashcardRoomVersionsForUser(ctx, userId)
@@ -262,6 +266,60 @@ async function deleteAllFlashcardRoomsForUser(ctx: MutationCtx, userId: string) 
   while (true) {
     const batch = await ctx.db
       .query('flashcardRooms')
+      .withIndex('by_userId', (q) => q.eq('userId', userId))
+      .take(500)
+    if (batch.length === 0) break
+    for (const row of batch) await ctx.db.delete(row._id)
+    if (batch.length < 500) break
+  }
+}
+
+async function deleteAllLearnProfilesForUser(ctx: MutationCtx, userId: string) {
+  while (true) {
+    const batch = await ctx.db
+      .query('learnProfile')
+      .withIndex('by_userId', (q) => q.eq('userId', userId))
+      .take(500)
+    if (batch.length === 0) break
+    for (const row of batch) await ctx.db.delete(row._id)
+    if (batch.length < 500) break
+  }
+}
+
+async function deleteAllCourseSourceDocsForUser(ctx: MutationCtx, userId: string) {
+  const courses = await ctx.db
+    .query('courses')
+    .withIndex('by_userId', (q) => q.eq('userId', userId))
+    .collect()
+  for (const course of courses) {
+    while (true) {
+      const batch = await ctx.db
+        .query('courseSourceDocs')
+        .withIndex('by_courseId', (q) => q.eq('courseId', course._id))
+        .take(500)
+      if (batch.length === 0) break
+      for (const row of batch) await ctx.db.delete(row._id)
+      if (batch.length < 500) break
+    }
+  }
+}
+
+async function deleteAllCourseSectionsForUser(ctx: MutationCtx, userId: string) {
+  while (true) {
+    const batch = await ctx.db
+      .query('courseSections')
+      .withIndex('by_userId', (q) => q.eq('userId', userId))
+      .take(500)
+    if (batch.length === 0) break
+    for (const row of batch) await ctx.db.delete(row._id)
+    if (batch.length < 500) break
+  }
+}
+
+async function deleteAllCoursesForUser(ctx: MutationCtx, userId: string) {
+  while (true) {
+    const batch = await ctx.db
+      .query('courses')
       .withIndex('by_userId', (q) => q.eq('userId', userId))
       .take(500)
     if (batch.length === 0) break

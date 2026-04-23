@@ -1,5 +1,6 @@
 import { v } from 'convex/values'
 import { query } from './_generated/server'
+import type { Doc } from './_generated/dataModel'
 
 export const collectUserData = query({
   args: {},
@@ -79,6 +80,30 @@ export const collectUserData = query({
       .withIndex('by_userId', (q) => q.eq('userId', userId))
       .collect()
 
+    const courses = await ctx.db
+      .query('courses')
+      .withIndex('by_userId', (q) => q.eq('userId', userId))
+      .collect()
+
+    const courseSections = await ctx.db
+      .query('courseSections')
+      .withIndex('by_userId', (q) => q.eq('userId', userId))
+      .collect()
+
+    const courseSourceDocs: Doc<'courseSourceDocs'>[] = []
+    for (const course of courses) {
+      const docs = await ctx.db
+        .query('courseSourceDocs')
+        .withIndex('by_courseId', (q) => q.eq('courseId', course._id))
+        .collect()
+      courseSourceDocs.push(...docs)
+    }
+
+    const learnProfile = await ctx.db
+      .query('learnProfile')
+      .withIndex('by_userId', (q) => q.eq('userId', userId))
+      .collect()
+
     return {
       userId,
       user: userRow
@@ -104,6 +129,10 @@ export const collectUserData = query({
       flashcardRoomCards,
       flashcardRoomVersions,
       flashcardVersionCards,
+      courses,
+      courseSections,
+      courseSourceDocs,
+      learnProfile,
     }
   },
 })

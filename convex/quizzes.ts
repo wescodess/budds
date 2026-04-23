@@ -136,13 +136,15 @@ export const listByFolder = query({
     const folder = await ctx.db.get(args.folderId)
     if (!folder || folder.userId !== userId) return []
 
-    const rows = await ctx.db
+    const allRows = await ctx.db
       .query('quizzes')
       .withIndex('by_userId_and_folderId', (q) =>
         q.eq('userId', userId).eq('folderId', args.folderId),
       )
       .order('desc')
       .collect()
+
+    const rows = allRows.filter((r) => r.courseScoped !== true)
 
     return await Promise.all(
       rows.map(async (row) => {
