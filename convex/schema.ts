@@ -429,6 +429,13 @@ export default defineSchema({
       v.literal('reviewing'),
       v.literal('mastered'),
     ),
+    consecutiveReviewPasses: v.optional(v.number()),
+    reviewHistory: v.optional(v.array(v.object({
+      score: v.number(),
+      quizCorrect: v.number(),
+      quizTotal: v.number(),
+      at: v.number(),
+    }))),
     completedAt: v.optional(v.number()),
     taskId: v.optional(v.id('tasks')),
   })
