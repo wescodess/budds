@@ -302,6 +302,115 @@ describe('reviewItems.listDueForUser', () => {
   })
 })
 
+describe('reviewItems.listDueWithContext', () => {
+  test('returns enriched items with course and section context', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId, sectionId, cardIds } = await seedSectionWithFlashcards(t)
+
+    const today = new Date().toISOString().slice(0, 10)
+
+    await t.run(async (ctx) => {
+      await ctx.db.insert('reviewItems', {
+        userId: USER_A.tokenIdentifier,
+        courseId,
+        sectionId,
+        flashcardRoomCardId: cardIds[0]!,
+        prompt: 'Enriched item',
+        answer: 'Answer',
+        easeFactor: 2.5,
+        interval: 1,
+        repetitions: 0,
+        nextReviewDate: today,
+        flagged: false,
+        createdAt: Date.now(),
+      })
+    })
+
+    const items = await asUser.query(api.reviewItems.listDueWithContext, {})
+    expect(items).toHaveLength(1)
+    expect(items[0]!.courseTitle).toBe('RI Test Course')
+    expect(items[0]!.sectionTitle).toBe('Section 1')
+    expect(items[0]!.sectionOrder).toBe(0)
+    expect(items[0]!.prompt).toBe('Enriched item')
+  })
+
+  test('respects daily cap from learnProfile', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId, sectionId } = await seedSectionWithFlashcards(t)
+
+    const today = new Date().toISOString().slice(0, 10)
+
+    await t.run(async (ctx) => {
+      const existing = await ctx.db
+        .query('learnProfile')
+        .withIndex('by_userId', (q) => q.eq('userId', USER_A.tokenIdentifier))
+        .unique()
+      if (existing) {
+        await ctx.db.patch(existing._id, { dailyReviewCap: 2 })
+      }
+
+      for (let i = 0; i < 5; i++) {
+        await ctx.db.insert('reviewItems', {
+          userId: USER_A.tokenIdentifier,
+          courseId,
+          sectionId,
+          prompt: `Item ${i}`,
+          answer: `Answer ${i}`,
+          easeFactor: 2.5,
+          interval: 1,
+          repetitions: 0,
+          nextReviewDate: today,
+          flagged: false,
+          createdAt: Date.now(),
+        })
+      }
+    })
+
+    const items = await asUser.query(api.reviewItems.listDueWithContext, {})
+    expect(items).toHaveLength(2)
+  })
+
+  test('excludes flagged items', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId, sectionId } = await seedSectionWithFlashcards(t)
+
+    const today = new Date().toISOString().slice(0, 10)
+
+    await t.run(async (ctx) => {
+      await ctx.db.insert('reviewItems', {
+        userId: USER_A.tokenIdentifier,
+        courseId,
+        sectionId,
+        prompt: 'Not flagged',
+        answer: 'A',
+        easeFactor: 2.5,
+        interval: 1,
+        repetitions: 0,
+        nextReviewDate: today,
+        flagged: false,
+        createdAt: Date.now(),
+      })
+      await ctx.db.insert('reviewItems', {
+        userId: USER_A.tokenIdentifier,
+        courseId,
+        sectionId,
+        prompt: 'Flagged',
+        answer: 'B',
+        easeFactor: 2.5,
+        interval: 1,
+        repetitions: 0,
+        nextReviewDate: today,
+        flagged: true,
+        createdAt: Date.now(),
+      })
+    })
+
+    const items = await asUser.query(api.reviewItems.listDueWithContext, {})
+    expect(items).toHaveLength(1)
+    expect(items[0]!.prompt).toBe('Not flagged')
+  })
+})
+
 describe('reviewItems.listBySection', () => {
   test('returns items for a specific section', async () => {
     const t = convexTest(schema, modules)

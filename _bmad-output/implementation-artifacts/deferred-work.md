@@ -1,5 +1,12 @@
 # Deferred Work
 
+## Deferred from: code review of 5-2-daily-review-session-ui (2026-04-23)
+
+- **`listDueWithContext` N+1 lookups for course/section data.** Each unique course/section triggers a `ctx.db.get()` call inside the query loop. In-memory Map caching mitigates repeated lookups, but for users with items from many different courses/sections, this adds read bandwidth. Acceptable for cap-50 items. Consider denormalizing course/section titles onto review items if the cap grows.
+- **No estimated duration in review session header.** UX spec (UX-DR7) shows "8 items ~ 5 min" in the header. Current implementation shows item count only. Add duration estimate (items * ~30s) when session analytics are implemented in story 5-5.
+- **Session progress (ratings array) lost on navigation.** If a user accidentally navigates away mid-session, all progress is lost. By design for 5-2 (SM-2 updates wire in 5-3), but a future story should persist partial session state to localStorage.
+- **Document-level keydown listener pattern.** Uses `document.addEventListener('keydown', ...)` cleaned up on unmount. If Nuxt `<KeepAlive>` were used on this page, stale listeners could accumulate. Not a risk with current routing config but worth noting.
+
 ## Deferred from: code review of 5-1-review-item-extraction-and-sm2-data-model (2026-04-23)
 
 - **`getTomorrowDate`/`getTodayDate` use UTC, not user timezone.** Review item `nextReviewDate` and `listDueForUser` compute dates in UTC. For users far from UTC, items may appear due at unexpected times. Consistent with existing streak behavior. Add timezone-aware computation when Story 5-3 builds the SM-2 scheduling engine.
