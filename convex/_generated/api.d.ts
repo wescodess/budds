@@ -13,6 +13,7 @@ import type * as archiveMultiChat from "../archiveMultiChat.js";
 import type * as audioOverviewInterjections from "../audioOverviewInterjections.js";
 import type * as audioOverviews from "../audioOverviews.js";
 import type * as auth from "../auth.js";
+import type * as calendarConnections from "../calendarConnections.js";
 import type * as contentFlags from "../contentFlags.js";
 import type * as conversations from "../conversations.js";
 import type * as courseSections from "../courseSections.js";
@@ -54,6 +55,7 @@ declare const fullApi: ApiFromModules<{
   audioOverviewInterjections: typeof audioOverviewInterjections;
   audioOverviews: typeof audioOverviews;
   auth: typeof auth;
+  calendarConnections: typeof calendarConnections;
   contentFlags: typeof contentFlags;
   conversations: typeof conversations;
   courseSections: typeof courseSections;
