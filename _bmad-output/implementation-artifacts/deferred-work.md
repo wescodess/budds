@@ -163,8 +163,8 @@ Parent intent: folder UX overhaul (schema + sidebar + layout + drawer). Started 
 
 ## Deferred from: code review of 1-2-app-shell-layout-with-responsive-navigation (2026-04-10)
 
-- **`activeTab` ref decoupled from router** — Tabs don't sync with URL; page refresh always lands on "chat". By design for story 1.2 (placeholder tabs). Refactor when study modes get real routing.
-- **`<slot />` only in chat TabsContent** — All page content renders into the chat tab. Correct for now since only `/app/chat` exists. Will need refactoring when other study modes get real pages.
+- ~~**`activeTab` ref decoupled from router**~~ — **RESOLVED:** Folder tabs removed in favor of void-based sidebar with dedicated page routes (`/chat/:id`, `/flashcards/:roomId`, `/quiz/:quizId`). `activeTab` is now computed from the route path.
+- ~~**`<slot />` only in chat TabsContent**~~ — **RESOLVED:** Tab layout replaced with direct `<NuxtPage />` rendering. Each study mode has its own dedicated page route.
 - **Model identifier sent to backend without validation** — Pre-existing in chat.vue. Users can modify the `<select>` value via devtools to call arbitrary provider/model combinations. Add server-side model allowlist validation.
 - **`source.score * 100` assumes 0-1 range** — Pre-existing in chat.vue. Scores outside [0,1] render as nonsensical percentages. Add bounds check or handle different score formats.
 - **`useRag` doesn't validate response shape** — Pre-existing composable. A malformed API response (missing `answer` field) silently pushes `{ content: undefined }` into messages.

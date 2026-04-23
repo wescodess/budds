@@ -101,7 +101,7 @@ So that I can learn from my existing knowledge base materials.
 - Task creation: check `convex/tasks.ts` for the exact internal mutation signature — may need `internal.tasks.createInternal` or similar
 - The `outlineSections` array starts empty — it gets populated by the outline generation pipeline (Story 1.4)
 - `sourceConfidence` starts as `{ docCount: <num docs>, webPercent: 0 }` for folder/cross-folder sources
-- Cross-folder courses have `folderId: undefined` — they appear on Learn Home but not in any folder's Learn tab
+- Cross-folder courses have `folderId: undefined` — they appear on Learn Home but not in any folder's sidebar or learn page
 
 ## File List
 

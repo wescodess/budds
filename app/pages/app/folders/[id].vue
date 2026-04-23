@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { PanelRight, Pencil, FolderPlus, ListTodo, Mic } from 'lucide-vue-next'
+import { PanelRight, Pencil, FolderPlus, ListTodo, Mic, ArrowLeftRight } from 'lucide-vue-next'
 import type { Id } from '~~/convex/_generated/dataModel'
 import type { VoidType } from '~/components/voids/CreateVoidDialog.vue'
 import MoveToFolderDialog from '~/components/documents/MoveToFolderDialog.vue'
 import FolderTasksPane from '~/components/folders/FolderTasksPane.vue'
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
 import { provideFolderPageContext } from '~/composables/useFolderPageContext'
 import { useHorizontalSwipeGesture } from '~/composables/useHorizontalSwipeGesture'
 import { useGestureGuards } from '~/composables/useGestureGuards'
@@ -37,6 +38,27 @@ const workspaceRef = ref<HTMLElement | null>(null)
 
 const hasIndexedDocuments = computed(() => indexedDocumentCount.value > 0)
 const isChatRoute = computed(() => route.path.includes('/chat'))
+
+const activeConversationId = computed(() => {
+  const id = route.params.conversationId
+  return typeof id === 'string' ? id : null
+})
+
+const activeVoidId = computed(() => {
+  const roomId = route.params.roomId
+  if (typeof roomId === 'string') return roomId
+  const quizId = route.params.quizId
+  if (typeof quizId === 'string') return quizId
+  return null
+})
+
+const activeTab = computed(() => {
+  const path = route.path
+  if (path.includes('/chat')) return 'chat' as const
+  if (path.includes('/flashcards')) return 'flashcards' as const
+  if (path.includes('/quiz')) return 'quiz' as const
+  return 'documents' as const
+})
 
 const newVoidOpen = ref(false)
 const creatingVoid = ref(false)
@@ -235,11 +257,31 @@ useHorizontalSwipeGesture({
   },
 })
 
-watch([isChatRoute, isDesktop], ([chat, desktop]) => {
-  if (chat && !helperPane.isOpen.value && desktop) {
-    helperPane.close()
-  }
-}, { immediate: true })
+const HELPER_SIDE_KEY = 'g4.folder.helper-pane.side'
+const helperSide = ref<'left' | 'right'>('right')
+const isHelperLeading = computed(() => helperSide.value === 'left')
+
+function toggleHelperSide() {
+  helperSide.value = helperSide.value === 'left' ? 'right' : 'left'
+}
+
+onMounted(() => {
+  try {
+    const stored = localStorage.getItem(HELPER_SIDE_KEY)
+    if (stored === 'left' || stored === 'right') helperSide.value = stored
+  } catch {}
+})
+
+watch(helperSide, (v) => {
+  try { localStorage.setItem(HELPER_SIDE_KEY, v) } catch {}
+})
+
+watch(() => route.path, (next, prev) => {
+  const wasChatRoute = prev?.includes('/chat')
+  const isChatRoute_ = next?.includes('/chat')
+  if (wasChatRoute && isChatRoute_) return
+  helperPane.close()
+})
 </script>
 
 <template>
@@ -247,9 +289,9 @@ watch([isChatRoute, isDesktop], ([chat, desktop]) => {
     ref="folderShellRef"
     :folder-id="folderId"
     :folder="seededFolder"
-    :active-tab="isChatRoute ? 'chat' : 'documents'"
-    :active-conversation-id="null"
-    :active-void-id="null"
+    :active-tab="activeTab"
+    :active-conversation-id="activeConversationId"
+    :active-void-id="activeVoidId"
     @update:active-tab="() => {}"
     @new-void="newVoidOpen = true"
     @select-void="onSelectVoid"
@@ -314,21 +356,50 @@ watch([isChatRoute, isDesktop], ([chat, desktop]) => {
     />
 
     <div ref="workspaceRef" class="flex min-h-0 min-w-0 flex-1" style="touch-action: pan-y">
-      <NuxtPage />
-
-      <div
-        v-if="isDesktop && helperPane.isOpen.value"
-        class="flex h-full min-w-[18rem] max-w-[22rem] shrink-0 border-l border-border/60"
-      >
-        <FolderShellHelperPane :exclude-tabs="isChatRoute ? ['podcast', 'sources', 'chat'] : ['podcast', 'sources']">
-          <template #default="{ activeTabId: tid }">
-            <FolderTasksPane v-if="tid === 'tasks'" :folder-id="folderId" embedded @close="helperPane.close()" @view-room="handleTaskViewRoom" />
+      <template v-if="isChatRoute || !isDesktop || !helperPane.isOpen.value">
+        <NuxtPage />
+      </template>
+      <template v-else>
+        <ResizablePanelGroup direction="horizontal" class="h-full min-w-0 flex-1">
+          <template v-if="isHelperLeading">
+            <ResizablePanel :default-size="28" :min-size="20" :max-size="45" class="min-h-0 min-w-0">
+              <FolderShellHelperPane :exclude-tabs="['podcast']">
+                <template #default="{ activeTabId: tid }">
+                  <FolderTasksPane v-if="tid === 'tasks'" :folder-id="folderId" embedded @close="helperPane.close()" @view-room="handleTaskViewRoom" />
+                </template>
+              </FolderShellHelperPane>
+            </ResizablePanel>
+            <ResizableHandle with-handle>
+              <button type="button" aria-label="Flip panel side" class="absolute z-10 flex h-6 w-6 items-center justify-center rounded-full border border-border bg-background text-muted-foreground transition-colors hover:bg-accent hover:text-foreground" @click="toggleHelperSide()">
+                <ArrowLeftRight class="h-3 w-3" />
+              </button>
+            </ResizableHandle>
+            <ResizablePanel :default-size="72" :min-size="40" class="min-h-0 min-w-0">
+              <NuxtPage />
+            </ResizablePanel>
           </template>
-        </FolderShellHelperPane>
-      </div>
+          <template v-else>
+            <ResizablePanel :default-size="72" :min-size="40" class="min-h-0 min-w-0">
+              <NuxtPage />
+            </ResizablePanel>
+            <ResizableHandle with-handle>
+              <button type="button" aria-label="Flip panel side" class="absolute z-10 flex h-6 w-6 items-center justify-center rounded-full border border-border bg-background text-muted-foreground transition-colors hover:bg-accent hover:text-foreground" @click="toggleHelperSide()">
+                <ArrowLeftRight class="h-3 w-3" />
+              </button>
+            </ResizableHandle>
+            <ResizablePanel :default-size="28" :min-size="20" :max-size="45" class="min-h-0 min-w-0">
+              <FolderShellHelperPane :exclude-tabs="['podcast']">
+                <template #default="{ activeTabId: tid }">
+                  <FolderTasksPane v-if="tid === 'tasks'" :folder-id="folderId" embedded @close="helperPane.close()" @view-room="handleTaskViewRoom" />
+                </template>
+              </FolderShellHelperPane>
+            </ResizablePanel>
+          </template>
+        </ResizablePanelGroup>
+      </template>
     </div>
 
-    <FolderShellHelperPane v-if="!isDesktop" mobile :exclude-tabs="['podcast']">
+    <FolderShellHelperPane v-if="!isDesktop && !isChatRoute" mobile :exclude-tabs="['podcast']">
       <template #default="{ activeTabId: tid }">
         <FolderTasksPane v-if="tid === 'tasks'" :folder-id="folderId" embedded @close="helperPane.close()" @view-room="handleTaskViewRoom" />
       </template>

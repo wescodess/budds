@@ -44,7 +44,7 @@ So that all course features have a data foundation.
 
 8. **Given** existing folder-tab queries in `convex/quizzes.ts`, `convex/flashcardRooms.ts`, and `convex/audioOverviews.ts` that list entities by folder
    **When** they return results
-   **Then** they filter out entities where `courseScoped === true` so course-generated items do not appear in folder tabs
+   **Then** they filter out entities where `courseScoped === true` so course-generated items do not appear in the folder sidebar
 
 9. **Given** the data export at `server/api/export/me.get.ts`
    **When** the schema version is checked
@@ -76,7 +76,7 @@ So that all course features have a data foundation.
   - [x] Add `courseScoped: v.optional(v.boolean())` to `flashcardRooms` table
   - [x] Add `courseScoped: v.optional(v.boolean())` to `audioOverviews` table
 
-- [x] **Task 3: Filter `courseScoped` entities from folder-tab queries** (AC: #8)
+- [x] **Task 3: Filter `courseScoped` entities from folder sidebar queries** (AC: #8)
   - [x] Update `convex/quizzes.ts` folder-scoped list query to filter out `courseScoped === true`
   - [x] Update `convex/flashcardRooms.ts` folder-scoped list query to filter out `courseScoped === true`
   - [x] Update `convex/audioOverviews.ts` folder-scoped list query to filter out `courseScoped === true`
