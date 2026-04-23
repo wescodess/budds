@@ -458,6 +458,29 @@ export default defineSchema({
   })
     .index('by_courseId', ['courseId']),
 
+  reviewItems: defineTable({
+    userId: v.string(),
+    courseId: v.id('courses'),
+    sectionId: v.id('courseSections'),
+    flashcardRoomCardId: v.optional(v.id('flashcardRoomCards')),
+    prompt: v.string(),
+    answer: v.string(),
+    easeFactor: v.number(),
+    interval: v.number(),
+    repetitions: v.number(),
+    nextReviewDate: v.string(),
+    lastReviewQuality: v.optional(v.number()),
+    lastReviewedAt: v.optional(v.number()),
+    flagged: v.boolean(),
+    correctedAnswer: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index('by_userId', ['userId'])
+    .index('by_userId_and_nextReviewDate', ['userId', 'nextReviewDate'])
+    .index('by_courseId', ['courseId'])
+    .index('by_sectionId', ['sectionId'])
+    .index('by_flashcardRoomCardId', ['flashcardRoomCardId']),
+
   learnProfile: defineTable({
     userId: v.string(),
     streakCurrent: v.number(),
