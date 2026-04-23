@@ -616,3 +616,85 @@ export const triggerPreFetch = mutation({
     return { sectionId: nextSection._id, taskId }
   },
 })
+
+function computeMasteryLevel(practiceScore: number): 'new' | 'learning' | 'reviewing' | 'mastered' {
+  if (practiceScore >= 90) return 'mastered'
+  if (practiceScore >= 70) return 'reviewing'
+  if (practiceScore >= 60) return 'learning'
+  return 'new'
+}
+
+function getAdaptiveFeedback(practiceScore: number): {
+  feedbackText: string
+  adaptiveHint: 'increase-practice' | 'reduce-practice' | 'standard'
+} {
+  if (practiceScore < 60) {
+    return {
+      feedbackText: 'This section had some challenging concepts. The next section will include more foundational practice to help reinforce your understanding.',
+      adaptiveHint: 'increase-practice',
+    }
+  }
+  if (practiceScore >= 90) {
+    return {
+      feedbackText: 'Excellent work! You\'ve demonstrated strong understanding. The next section will focus more on new concepts with streamlined practice.',
+      adaptiveHint: 'reduce-practice',
+    }
+  }
+  return {
+    feedbackText: '',
+    adaptiveHint: 'standard',
+  }
+}
+
+export const completeSection = mutation({
+  args: {
+    sectionId: v.id('courseSections'),
+    practiceScore: v.number(),
+    quizCorrect: v.number(),
+    quizTotal: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireAuth(ctx)
+    const section = await ctx.db.get(args.sectionId)
+    if (!section || section.userId !== userId) throw new Error('Section not found')
+    if (section.status === 'completed') {
+      return {
+        practiceScore: section.practiceScore ?? args.practiceScore,
+        masteryLevel: section.masteryLevel,
+        feedbackText: '',
+        adaptiveHint: 'standard' as const,
+        conceptsForReview: 0,
+      }
+    }
+    if (section.status !== 'ready') {
+      throw new Error('Section is not ready for completion')
+    }
+
+    const score = Math.max(0, Math.min(100, Math.round(args.practiceScore)))
+    const masteryLevel = computeMasteryLevel(score)
+    const { feedbackText, adaptiveHint } = getAdaptiveFeedback(score)
+
+    await ctx.db.patch(args.sectionId, {
+      status: 'completed',
+      practiceScore: score,
+      masteryLevel,
+      completedAt: Date.now(),
+    })
+
+    const course = await ctx.db.get(section.courseId)
+    if (course && course.userId === userId) {
+      await ctx.db.patch(section.courseId, {
+        completedSectionCount: course.completedSectionCount + 1,
+        updatedAt: Date.now(),
+      })
+    }
+
+    return {
+      practiceScore: score,
+      masteryLevel,
+      feedbackText,
+      adaptiveHint,
+      conceptsForReview: 0,
+    }
+  },
+})
