@@ -1,40 +1,38 @@
 mode: running
 current_phase: prep-story
-current_story: prep-3-5-fix-baseline-test-failures
+current_story: prep-3-6-course-status-badge
 current_epic: prep-3
 retry_count: 0
 last_epic_complete_fired: 2
 
 last_verdict:
   subagent: bmad-story-runner
-  story: prep-3-5-fix-baseline-test-failures
+  story: prep-3-6-course-status-badge
   epic: prep-3
   status: PASS
-  pr_url: 'https://github.com/wescodess/budds/pull/101'
-  branch: 'prep/3-5-fix-baseline-tests'
-  commit_sha: '52c6e4e'
-  files_changed: 15
-  tasks_completed: 11
-  tasks_total: 11
-  findings_deferred: 3
+  pr_url: 'https://github.com/wescodess/budds/pull/102'
+  branch: 'prep/3-6-course-status-badge'
+  commit_sha: '66d67d1'
+  files_changed: 2
+  tasks_completed: 4
+  tasks_total: 4
+  findings_deferred: 0
   lint_pass: null
   typecheck_pass: null
   unit_tests_pass: true
   e2e_tests_pass: null
   review_pass: null
   summary: >
-    Prep story prep-3-5 complete. Fixed 33 baseline test failures (1 Convex + 32 component)
-    down to zero. Fixed 18 tests across 8 files (audio-script-prompt parenthesis stripping,
-    multi-file-type upload zone, icon-only swipe buttons, portal dialogs, async markdown
-    parsing, CSS longhand rendering, route paths, composable expose API). Skipped 15 tests
-    across 5 files requiring major mock rewrites (page-level mounts needing provideFolderPageContext
-    with 15+ composable deps, QuizShell refactored away card list, createSharedComposable
-    singleton isolation). Added 2 new test cases. Final: pnpm test 512 pass, pnpm test:component
-    285 pass, zero failures. 3 deferred items logged. PR #101 merged to dev. Prep sprint
-    epic-3: 5/6 stories done.
+    Prep story prep-3-6 complete. Added course status badge to CourseCard.vue: generating
+    courses show amber "Generating..." badge, failed courses show red "Failed" badge with
+    dimmed card styling (opacity-75, muted title, red-tinted border), ready courses unchanged.
+    4 new component tests (no badge for ready, generating badge, failed badge, failed dimmed
+    styling). 2 files changed. All tests pass: pnpm test 512, pnpm test:component 289.
+    Zero deferred items. PR #102 merged to dev. Resolves deferred item from 2-1 code review
+    (CourseCard generating/failed visibility). Prep sprint epic-3 COMPLETE (6/6 stories).
   block_reason: null
   block_context: null
-  at: '2026-04-23T05:20:00Z'
+  at: '2026-04-24T05:30:00Z'
 last_retro: 'epic-2-retro-2026-04-23.md'
 
 config:
@@ -59,8 +57,8 @@ paths:
   ux_spec: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/ux-design-learn-module.md
 
 counters:
-  stories_completed_this_run: 4
-  stories_completed_total: 14
+  stories_completed_this_run: 5
+  stories_completed_total: 15
 
 escalation:
   pending: null
@@ -84,6 +82,12 @@ escalation:
         User answered "1" → commit_all_then_start. Committing all changes on refactor/remove-folder-tabs, then branching feat/1-1 from dev.
 
 decisions_log:
+  - ts: '2026-04-24'
+    decision: |
+      story-runner PASS for prep-3-5 (3 deferred: page-level mock harness, QuizShell card list tests,
+      createSharedComposable isolation). 11/11 tasks, 15 files. Fixed 18 tests across 8 files, skipped
+      15 tests across 5 files with explanations. Zero failures: 512 Convex + 285 component tests pass.
+      PR #101 merged to dev. Counters 5 this-run, 15 total. Advancing to prep-3-6.
   - ts: '2026-04-24'
     decision: |
       E2E golden path PASS for prep-3-4 via Chrome MCP (no PR — quality gate only). Verified: Learn Home
@@ -162,6 +166,11 @@ decisions_log:
       DETERMINE_NEXT: epic-1 backlog → 1-1-convex-schema-course-tables. Story file created, runner spawned.
 
 run_log:
+  - ts: '2026-04-24'
+    mode: running
+    note: |
+      prep-3-5 PASS (PR #101). DETERMINE_NEXT: prep-3-6-course-status-badge (backlog).
+      Last prep story. Spawning bmad-story-runner for prep-3-6.
   - ts: '2026-04-24'
     mode: running
     note: |
