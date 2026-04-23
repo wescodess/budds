@@ -1,6 +1,7 @@
 import { v } from 'convex/values'
 import { mutation, query, internalMutation, internalQuery } from './_generated/server'
-import type { Doc } from './_generated/dataModel'
+import type { Doc, Id } from './_generated/dataModel'
+import { internal } from './_generated/api'
 import { requireAuth } from './lib/auth'
 
 export const listByCourse = query({
@@ -471,5 +472,137 @@ export const finalizeSectionGeneration = mutation({
     })
 
     return { status: 'ready' as const, blockCount: contentBlocks.length }
+  },
+})
+
+export const getNextSection = query({
+  args: {
+    courseId: v.id('courses'),
+    currentOrder: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireAuth(ctx)
+    const course = await ctx.db.get(args.courseId)
+    if (!course || course.userId !== userId) return null
+
+    const nextSection = await ctx.db
+      .query('courseSections')
+      .withIndex('by_courseId_and_order', (q) =>
+        q.eq('courseId', args.courseId).eq('order', args.currentOrder + 1),
+      )
+      .unique()
+
+    return nextSection
+  },
+})
+
+export const checkPreFetchStatus = query({
+  args: {
+    courseId: v.id('courses'),
+    currentOrder: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireAuth(ctx)
+    const course = await ctx.db.get(args.courseId)
+    if (!course || course.userId !== userId) return null
+
+    const nextSection = await ctx.db
+      .query('courseSections')
+      .withIndex('by_courseId_and_order', (q) =>
+        q.eq('courseId', args.courseId).eq('order', args.currentOrder + 1),
+      )
+      .unique()
+
+    if (!nextSection) return null
+    if (nextSection.status === 'ready' || nextSection.status === 'completed' || nextSection.status === 'generating') {
+      return { nextSection, needsPreFetch: false, taskStatus: null }
+    }
+
+    let taskStatus: string | null = null
+    if (nextSection.taskId) {
+      const task = await ctx.db.get(nextSection.taskId)
+      taskStatus = task?.status ?? null
+    }
+
+    return {
+      nextSection,
+      needsPreFetch: nextSection.status === 'locked' || nextSection.status === 'failed',
+      taskStatus,
+    }
+  },
+})
+
+export const triggerPreFetch = mutation({
+  args: {
+    courseId: v.id('courses'),
+    currentOrder: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireAuth(ctx)
+    const course = await ctx.db.get(args.courseId)
+    if (!course || course.userId !== userId) throw new Error('Course not found')
+
+    const nextSection = await ctx.db
+      .query('courseSections')
+      .withIndex('by_courseId_and_order', (q) =>
+        q.eq('courseId', args.courseId).eq('order', args.currentOrder + 1),
+      )
+      .unique()
+
+    if (!nextSection || nextSection.userId !== userId) return null
+    if (nextSection.status === 'ready' || nextSection.status === 'completed' || nextSection.status === 'generating') {
+      return null
+    }
+
+    if (nextSection.status === 'failed') {
+      if (nextSection.taskId) {
+        const previousTask = await ctx.db.get(nextSection.taskId)
+        if (previousTask && previousTask.status === 'failed') {
+          const metadata = previousTask.metadata as { retryOf?: string } | undefined
+          if (metadata?.retryOf) return null
+        }
+      }
+
+      const taskId: Id<'tasks'> = await ctx.runMutation(
+        internal.tasks.createInternal,
+        {
+          userId,
+          folderId: course.folderId,
+          type: 'section-generate',
+          title: `Pre-fetching: ${nextSection.title}`,
+          metadata: {
+            courseId: args.courseId,
+            sectionId: nextSection._id,
+            retryOf: nextSection.taskId ?? 'initial-failure',
+          },
+        },
+      )
+
+      await ctx.db.patch(nextSection._id, {
+        status: 'generating',
+        taskId,
+        failureNotice: undefined,
+      })
+
+      return { sectionId: nextSection._id, taskId }
+    }
+
+    const taskId: Id<'tasks'> = await ctx.runMutation(
+      internal.tasks.createInternal,
+      {
+        userId,
+        folderId: course.folderId,
+        type: 'section-generate',
+        title: `Pre-fetching: ${nextSection.title}`,
+        metadata: { courseId: args.courseId, sectionId: nextSection._id },
+      },
+    )
+
+    await ctx.db.patch(nextSection._id, {
+      status: 'generating',
+      taskId,
+    })
+
+    return { sectionId: nextSection._id, taskId }
   },
 })
