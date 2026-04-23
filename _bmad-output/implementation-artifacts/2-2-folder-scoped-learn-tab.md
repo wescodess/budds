@@ -1,6 +1,6 @@
 # Story 2-2: Folder-Scoped Learn Integration
 
-## Status: ready-for-dev
+## Status: in-progress
 
 ## Epic
 Epic 2: Learn Navigation & Course Management
@@ -81,6 +81,46 @@ Then the course view renders (placeholder OK — same as `/app/learn/[courseId]`
 - Test folder-scoped learn page renders course grid
 - Test navigation from void selection to correct route
 - Use `@nuxt/test-utils` with `mountSuspended`
+
+## Dev Agent Record
+
+### Decisions
+- Skipped ATDD: Story is UI navigation/wiring with no complex business logic. All ACs are verifiable via component tests and manual routing checks.
+- Used GraduationCap icon for sidebar Learn entry to differentiate from BookOpen (used for Knowledge and logo).
+- Course void items in sidebar support context menu with Open/Delete like other void types.
+- Added 'learn' as a valid tab value so course routes highlight correctly in the sidebar.
+
+### Tasks Completed
+- [x] Task 1: Add 'course' to VoidKind and CreateVoidDialog
+- [x] Task 2: Query courses in FolderShellRail
+- [x] Task 3: Handle course void selection in folder shell
+- [x] Task 4: Create folder-scoped Learn page
+- [x] Task 5: Create folder-scoped course view page
+- [x] Task 6: Add Learn entry to sidebar workspace section
+- [x] Task 7: Write component tests
+
+### File List
+- `app/components/voids/CreateVoidDialog.vue` — added 'course' type
+- `app/components/folder-shell/FolderShellRail.vue` — added course query, void items, Learn sidebar entry
+- `app/components/folder-shell/FolderShell.vue` — updated emit types for 'course' and 'learn'
+- `app/pages/app/folders/[id].vue` — course void handling, learn tab detection
+- `app/pages/app/folders/[id]/learn/index.vue` — new folder-scoped learn page
+- `app/pages/app/folders/[id]/learn/[courseId].vue` — new folder-scoped course view
+- `app/components/learn/CourseCard.vue` — added folderId prop for folder-scoped URLs
+- `app/components/learn/CreateCourseCard.vue` — added folderId prop
+- `tests/component/learn/folder-learn.test.ts` — 4 new tests
+- `tests/component/learn/create-void-course.test.ts` — 2 new tests
+- `tests/component/learn/create-course-card.test.ts` — 1 new test added
+
+### Change Log
+- Added "Course" option to CreateVoidDialog with BookOpen icon
+- Courses from folder now appear as void items in folder sidebar
+- Clicking course in sidebar navigates to `/app/folders/[id]/learn/[courseId]`
+- New folder-scoped Learn page at `/app/folders/[id]/learn/`
+- New folder-scoped course view at `/app/folders/[id]/learn/[courseId]`
+- "Learn" workspace entry in sidebar navigates to folder's learn page
+- CourseCard and CreateCourseCard support folder-scoped URLs via folderId prop
+- 7 new component tests
 
 ## Technical Notes
 
