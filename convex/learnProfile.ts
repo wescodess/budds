@@ -36,6 +36,19 @@ export const setTimezone = mutation({
   },
 })
 
+export const updateDailyReviewCap = mutation({
+  args: { cap: v.number() },
+  handler: async (ctx, args) => {
+    const userId = await requireAuth(ctx)
+    if (args.cap < 5 || args.cap > 200) {
+      throw new Error('Daily review cap must be between 5 and 200')
+    }
+    const cap = Math.round(args.cap)
+    const profile = await getOrCreateProfile(ctx, userId)
+    await ctx.db.patch(profile._id, { dailyReviewCap: cap })
+  },
+})
+
 export async function getOrCreateProfile(ctx: MutationCtx, userId: string) {
   const existing = await ctx.db
     .query('learnProfile')

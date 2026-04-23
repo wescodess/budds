@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Loader2 } from 'lucide-vue-next'
+import { Loader2, AlertTriangle } from 'lucide-vue-next'
 import type { Id } from '../../../convex/_generated/dataModel'
 import { api } from '#convex/api'
 
@@ -34,12 +34,27 @@ const docCountsQuery = import.meta.client
   ? useConvexQuery(api.documents.countsByFolder, {})
   : { data: ref([]) }
 
+const backlogQuery = import.meta.client
+  ? useConvexQuery(api.reviewItems.getReviewBacklogCount, {})
+  : { data: ref(null) }
+
 const folders = computed(() => foldersQuery.data?.value ?? [])
 const docCounts = computed(() => {
   const counts = docCountsQuery.data?.value ?? []
   const map = new Map<string, number>()
   for (const c of counts) map.set(c.folderId, c.count)
   return map
+})
+
+const showBacklogWarning = computed(() => {
+  const data = backlogQuery.data?.value as { dueCount: number; dailyCap: number } | null | undefined
+  if (!data) return false
+  return data.dueCount > data.dailyCap * 2
+})
+
+const backlogCount = computed(() => {
+  const data = backlogQuery.data?.value as { dueCount: number; dailyCap: number } | null | undefined
+  return data?.dueCount ?? 0
 })
 
 if (props.initialFolderId) {
@@ -86,6 +101,27 @@ function handleSubmit() {
 <template>
   <div class="mx-auto w-full max-w-2xl px-4 py-6" data-testid="source-selector">
     <h2 class="mb-6 text-2xl font-bold text-stone-100">Create a Course</h2>
+
+    <div
+      v-if="showBacklogWarning"
+      class="mb-6 flex items-start gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3"
+      data-testid="backlog-warning"
+      role="alert"
+    >
+      <AlertTriangle class="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+      <div>
+        <p class="text-sm text-amber-200">
+          You have {{ backlogCount }} items due for review.
+          Consider completing reviews before starting new courses.
+        </p>
+        <NuxtLink
+          to="/app/learn/review"
+          class="mt-1 inline-block text-xs text-amber-400 underline transition-colors hover:text-amber-300"
+        >
+          Go to review
+        </NuxtLink>
+      </div>
+    </div>
 
     <div class="mb-6">
       <label class="mb-1.5 block text-sm font-medium text-stone-400" for="topic-input">
