@@ -1,5 +1,10 @@
 # Deferred Work
 
+## Deferred from: code review of 1-4-outline-generation-pipeline (2026-04-22)
+
+- **`courses.get` 404 vs 403 distinction leaks course existence.** Endpoint returns 404 for both "course doesn't exist" and "course exists but not owned by you". Pre-existing pattern across all server endpoints (quiz, flashcard generators). A security-conscious review may want distinct error codes, but changing would break consistency with the rest of the codebase.
+- **`outlineResponseSchema` was dead code.** Defined and exported but never used by `parseOutlineResponse`. Removed during review. Noting in case downstream stories expected to import it.
+
 ## Deferred from: code review of 1-3-course-creation-api-web-only (2026-04-22)
 
 - **`webSearchEnabled` arg silently overridden for web-only.** The mutation accepts `webSearchEnabled` as optional, but for `sourceType: 'web-only'` it's hardcoded to `true`. If a caller passes `webSearchEnabled: false` with web-only, the value is silently ignored. Correct per AC but could be made explicit via validator or documentation.
