@@ -1,6 +1,5 @@
 import { v } from 'convex/values'
 import { mutation, query } from './_generated/server'
-import type { Id } from './_generated/dataModel'
 import { requireAuth } from './lib/auth'
 
 export const flagQuizQuestion = mutation({
@@ -70,6 +69,17 @@ export const flagFlashcard = mutation({
       flaggedAt: Date.now(),
     })
 
+    const reviewItems = await ctx.db
+      .query('reviewItems')
+      .withIndex('by_flashcardRoomCardId', (q) => q.eq('flashcardRoomCardId', args.cardId))
+      .take(1)
+    if (reviewItems.length > 0) {
+      await ctx.db.patch(reviewItems[0]!._id, {
+        flagged: true,
+        correctedAnswer: trimmedDef,
+      })
+    }
+
     return { success: true }
   },
 })
@@ -89,6 +99,17 @@ export const unflagFlashcard = mutation({
       correctedDefinition: undefined,
       flaggedAt: undefined,
     })
+
+    const reviewItems = await ctx.db
+      .query('reviewItems')
+      .withIndex('by_flashcardRoomCardId', (q) => q.eq('flashcardRoomCardId', args.cardId))
+      .take(1)
+    if (reviewItems.length > 0) {
+      await ctx.db.patch(reviewItems[0]!._id, {
+        flagged: false,
+        correctedAnswer: undefined,
+      })
+    }
 
     return { success: true }
   },
