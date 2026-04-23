@@ -7,15 +7,15 @@ last_epic_complete_fired: 1
 
 last_verdict:
   subagent: bmad-story-runner
-  story: 2-2-folder-scoped-learn-tab
+  story: 2-3-course-deletion
   epic: 2
   status: PASS
-  pr_url: 'https://github.com/wescodess/budds/pull/96'
-  branch: 'feat/2-2-folder-scoped-learn-tab'
-  commit_sha: '0184656'
-  files_changed: 13
-  tasks_completed: 7
-  tasks_total: 7
+  pr_url: 'https://github.com/wescodess/budds/pull/97'
+  branch: 'feat/2-3-course-deletion'
+  commit_sha: '5e12e78'
+  files_changed: 8
+  tasks_completed: 6
+  tasks_total: 6
   findings_deferred: 2
   lint_pass: null
   typecheck_pass: true
@@ -23,17 +23,20 @@ last_verdict:
   e2e_tests_pass: null
   review_pass: true
   summary: >
-    Story 2-2 complete. Folder-scoped learn integration: added Course type to
-    CreateVoidDialog, courses appear as void entries in FolderShellRail sidebar,
-    Learn workspace entry with GraduationCap icon and course count, new pages at
-    /app/folders/[id]/learn/ (course grid) and /app/folders/[id]/learn/[courseId]
-    (placeholder course view). CourseCard and CreateCourseCard updated with folderId-aware
-    URLs. 7 new component tests (4 folder-learn, 2 create-void-course, 1 create-course-card).
-    Code review PASS: 1 blocker fixed (course void delete guard), 2 deferred (icon collision,
-    folder membership guard). PR #96 merged to dev.
+    Story 2-3 complete. Course deletion with full cascade: deleteCourse mutation cascades
+    through courseSections, courseSourceDocs, and course-scoped entities (quizzes with
+    children, flashcardRooms with cards/versions, audioOverviews with interjections and
+    storage files). DeleteCourseDialog.vue with UiAlertDialog confirmation, loading state,
+    destructive styling, toast feedback. Both course view pages updated with delete button
+    and context-aware navigation (Learn Home vs folder learn page). 3 new Convex tests
+    (cascade, course-scoped-only, ownership guard) + 3 ATDD component tests (trigger,
+    dialog content, cancel). Code review PASS: 1 blocker fixed (missing
+    audioOverviewInterjections cascade), 2 deferred (entity ID resolution inefficiency,
+    missing flashcard/audio cascade test coverage). PR #97 merged to dev. Epic 2 COMPLETE
+    (3/3 stories done).
   block_reason: null
   block_context: null
-  at: '2026-04-23T10:10:00Z'
+  at: '2026-04-23T12:00:00Z'
 last_retro: 'epic-1-retro-2026-04-23.md'
 
 config:
