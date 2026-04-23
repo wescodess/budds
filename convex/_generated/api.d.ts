@@ -30,6 +30,7 @@ import type * as folders from "../folders.js";
 import type * as http from "../http.js";
 import type * as learnProfile from "../learnProfile.js";
 import type * as lib_auth from "../lib/auth.js";
+import type * as lib_masteryStateMachine from "../lib/masteryStateMachine.js";
 import type * as messages from "../messages.js";
 import type * as migrations from "../migrations.js";
 import type * as quizzes from "../quizzes.js";
@@ -66,6 +67,7 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   learnProfile: typeof learnProfile;
   "lib/auth": typeof lib_auth;
+  "lib/masteryStateMachine": typeof lib_masteryStateMachine;
   messages: typeof messages;
   migrations: typeof migrations;
   quizzes: typeof quizzes;

@@ -3,6 +3,7 @@ import { convexTest } from 'convex-test'
 import { describe, expect, test } from 'vitest'
 import { api, internal } from './_generated/api'
 import schema from './schema'
+import { transitionMastery } from './lib/masteryStateMachine'
 
 const modules = import.meta.glob('./**/*.ts')
 
@@ -710,7 +711,7 @@ describe('courseSections.triggerPreFetch', () => {
 })
 
 describe('courseSections.completeSection', () => {
-  test('completes section and computes mastery level from score', async () => {
+  test('first completion always transitions to learning via state machine', async () => {
     const t = convexTest(schema, modules)
     const { asUser, courseId, sections } = await seedCourseWithSections(t)
 
@@ -726,7 +727,7 @@ describe('courseSections.completeSection', () => {
     })
 
     expect(result.practiceScore).toBe(85)
-    expect(result.masteryLevel).toBe('reviewing')
+    expect(result.masteryLevel).toBe('learning')
     expect(result.adaptiveHint).toBe('standard')
     expect(result.feedbackText).toBe('')
     expect(result.conceptsForReview).toBe(0)
@@ -734,7 +735,8 @@ describe('courseSections.completeSection', () => {
     const section = await t.run(async (ctx) => ctx.db.get(sections[0]._id))
     expect(section!.status).toBe('completed')
     expect(section!.practiceScore).toBe(85)
-    expect(section!.masteryLevel).toBe('reviewing')
+    expect(section!.masteryLevel).toBe('learning')
+    expect(section!.consecutiveReviewPasses).toBe(0)
     expect(section!.completedAt).toBeDefined()
   })
 
@@ -760,7 +762,7 @@ describe('courseSections.completeSection', () => {
     expect(courseAfter!.completedSectionCount).toBe(1)
   })
 
-  test('returns mastered for score >= 90', async () => {
+  test('high score on first completion still yields learning (not mastered)', async () => {
     const t = convexTest(schema, modules)
     const { asUser, sections } = await seedCourseWithSections(t)
 
@@ -775,7 +777,7 @@ describe('courseSections.completeSection', () => {
       quizTotal: 10,
     })
 
-    expect(result.masteryLevel).toBe('mastered')
+    expect(result.masteryLevel).toBe('learning')
     expect(result.adaptiveHint).toBe('reduce-practice')
     expect(result.feedbackText).toContain('Excellent')
   })
@@ -795,7 +797,7 @@ describe('courseSections.completeSection', () => {
       quizTotal: 5,
     })
 
-    expect(result.masteryLevel).toBe('new')
+    expect(result.masteryLevel).toBe('learning')
     expect(result.adaptiveHint).toBe('increase-practice')
     expect(result.feedbackText).toContain('foundational practice')
   })
@@ -816,7 +818,7 @@ describe('courseSections.completeSection', () => {
     })
 
     expect(result.practiceScore).toBe(100)
-    expect(result.masteryLevel).toBe('mastered')
+    expect(result.masteryLevel).toBe('learning')
   })
 
   test('is idempotent for already-completed sections', async () => {
@@ -842,7 +844,7 @@ describe('courseSections.completeSection', () => {
     })
 
     expect(result.practiceScore).toBe(80)
-    expect(result.masteryLevel).toBe('reviewing')
+    expect(result.masteryLevel).toBe('learning')
 
     const course = await t.run(async (ctx) => ctx.db.get(courseId))
     expect(course!.completedSectionCount).toBe(1)
@@ -863,7 +865,7 @@ describe('courseSections.completeSection', () => {
     ).rejects.toThrow()
   })
 
-  test('mastery level learning for score 60-69', async () => {
+  test('mastery level learning for any first-completion score', async () => {
     const t = convexTest(schema, modules)
     const { asUser, sections } = await seedCourseWithSections(t)
 
@@ -882,7 +884,7 @@ describe('courseSections.completeSection', () => {
     expect(result.adaptiveHint).toBe('standard')
   })
 
-  test('score of exactly 90 gets reduce-practice hint', async () => {
+  test('score of exactly 90 gets reduce-practice hint but learning mastery on first completion', async () => {
     const t = convexTest(schema, modules)
     const { asUser, sections } = await seedCourseWithSections(t)
 
@@ -897,7 +899,7 @@ describe('courseSections.completeSection', () => {
       quizTotal: 10,
     })
 
-    expect(result.masteryLevel).toBe('mastered')
+    expect(result.masteryLevel).toBe('learning')
     expect(result.adaptiveHint).toBe('reduce-practice')
   })
 
@@ -913,6 +915,293 @@ describe('courseSections.completeSection', () => {
         quizTotal: 5,
       }),
     ).rejects.toThrow('Section is not ready for completion')
+  })
+})
+
+describe('courseSections.reviewSection', () => {
+  async function seedCompletedSection(t: ReturnType<typeof convexTest>) {
+    const { asUser, courseId, folderId, sections } = await seedCourseWithSections(t)
+    await t.run(async (ctx) => {
+      await ctx.db.patch(sections[0]._id, { status: 'ready' })
+    })
+    await asUser.mutation(api.courseSections.completeSection, {
+      sectionId: sections[0]._id,
+      practiceScore: 75,
+      quizCorrect: 3,
+      quizTotal: 4,
+    })
+    return { asUser, courseId, folderId, sections, sectionId: sections[0]._id }
+  }
+
+  test('learning -> reviewing when reviewed at >= 70%', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, sectionId } = await seedCompletedSection(t)
+
+    const result = await asUser.mutation(api.courseSections.reviewSection, {
+      sectionId,
+      practiceScore: 75,
+      quizCorrect: 3,
+      quizTotal: 4,
+    })
+
+    expect(result.masteryLevel).toBe('reviewing')
+    expect(result.previousMasteryLevel).toBe('learning')
+
+    const section = await t.run(async (ctx) => ctx.db.get(sectionId))
+    expect(section!.masteryLevel).toBe('reviewing')
+    expect(section!.consecutiveReviewPasses).toBe(0)
+    expect(section!.reviewHistory).toHaveLength(1)
+    expect(section!.reviewHistory![0].score).toBe(75)
+    expect(section!.reviewHistory![0].quizCorrect).toBe(3)
+    expect(section!.reviewHistory![0].quizTotal).toBe(4)
+  })
+
+  test('learning stays learning when reviewed at < 70%', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, sectionId } = await seedCompletedSection(t)
+
+    const result = await asUser.mutation(api.courseSections.reviewSection, {
+      sectionId,
+      practiceScore: 50,
+      quizCorrect: 2,
+      quizTotal: 4,
+    })
+
+    expect(result.masteryLevel).toBe('learning')
+  })
+
+  test('reviewing -> mastered after 3 consecutive reviews at >= 80%', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, sectionId } = await seedCompletedSection(t)
+
+    await asUser.mutation(api.courseSections.reviewSection, {
+      sectionId, practiceScore: 75, quizCorrect: 3, quizTotal: 4,
+    })
+
+    for (let i = 0; i < 3; i++) {
+      await asUser.mutation(api.courseSections.reviewSection, {
+        sectionId, practiceScore: 85, quizCorrect: 5, quizTotal: 6,
+      })
+    }
+
+    const section = await t.run(async (ctx) => ctx.db.get(sectionId))
+    expect(section!.masteryLevel).toBe('mastered')
+    expect(section!.consecutiveReviewPasses).toBe(3)
+  })
+
+  test('reviewing does not advance to mastered if < 80% interrupts streak', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, sectionId } = await seedCompletedSection(t)
+
+    await asUser.mutation(api.courseSections.reviewSection, {
+      sectionId, practiceScore: 75, quizCorrect: 3, quizTotal: 4,
+    })
+
+    await asUser.mutation(api.courseSections.reviewSection, {
+      sectionId, practiceScore: 85, quizCorrect: 5, quizTotal: 6,
+    })
+    await asUser.mutation(api.courseSections.reviewSection, {
+      sectionId, practiceScore: 85, quizCorrect: 5, quizTotal: 6,
+    })
+
+    await asUser.mutation(api.courseSections.reviewSection, {
+      sectionId, practiceScore: 60, quizCorrect: 3, quizTotal: 5,
+    })
+
+    const section = await t.run(async (ctx) => ctx.db.get(sectionId))
+    expect(section!.masteryLevel).toBe('learning')
+    expect(section!.consecutiveReviewPasses).toBe(0)
+  })
+
+  test('mastered -> learning when section retaken (reviewed)', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, sectionId } = await seedCompletedSection(t)
+
+    await t.run(async (ctx) => {
+      await ctx.db.patch(sectionId, {
+        masteryLevel: 'mastered',
+        consecutiveReviewPasses: 3,
+      })
+    })
+
+    const result = await asUser.mutation(api.courseSections.reviewSection, {
+      sectionId, practiceScore: 90, quizCorrect: 9, quizTotal: 10,
+    })
+
+    expect(result.masteryLevel).toBe('learning')
+    expect(result.previousMasteryLevel).toBe('mastered')
+  })
+
+  test('reviewHistory is capped at 10 entries', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, sectionId } = await seedCompletedSection(t)
+
+    for (let i = 0; i < 12; i++) {
+      await asUser.mutation(api.courseSections.reviewSection, {
+        sectionId, practiceScore: 50 + i, quizCorrect: 2, quizTotal: 4,
+      })
+    }
+
+    const section = await t.run(async (ctx) => ctx.db.get(sectionId))
+    expect(section!.reviewHistory).toHaveLength(10)
+    expect(section!.reviewHistory![0].score).toBe(52)
+  })
+
+  test('rejects review of non-completed section', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, sections } = await seedCourseWithSections(t)
+
+    await t.run(async (ctx) => {
+      await ctx.db.patch(sections[0]._id, { status: 'ready' })
+    })
+
+    await expect(
+      asUser.mutation(api.courseSections.reviewSection, {
+        sectionId: sections[0]._id,
+        practiceScore: 80,
+        quizCorrect: 4,
+        quizTotal: 5,
+      }),
+    ).rejects.toThrow('Section must be completed before reviewing')
+  })
+
+  test('rejects review from non-owner', async () => {
+    const t = convexTest(schema, modules)
+    const { sectionId } = await seedCompletedSection(t)
+    const asOther = t.withIdentity(USER_B)
+
+    await expect(
+      asOther.mutation(api.courseSections.reviewSection, {
+        sectionId,
+        practiceScore: 80,
+        quizCorrect: 4,
+        quizTotal: 5,
+      }),
+    ).rejects.toThrow()
+  })
+
+  test('does not change status from completed', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, sectionId } = await seedCompletedSection(t)
+
+    await asUser.mutation(api.courseSections.reviewSection, {
+      sectionId, practiceScore: 90, quizCorrect: 9, quizTotal: 10,
+    })
+
+    const section = await t.run(async (ctx) => ctx.db.get(sectionId))
+    expect(section!.status).toBe('completed')
+  })
+})
+
+describe('mastery state machine (pure function)', () => {
+  test('new -> learning on section_completed', () => {
+
+    const result = transitionMastery(
+      { level: 'new', consecutiveReviewPasses: 0 },
+      { type: 'section_completed', score: 80 },
+    )
+    expect(result.level).toBe('learning')
+    expect(result.consecutiveReviewPasses).toBe(0)
+  })
+
+  test('learning -> reviewing on section_reviewed >= 70%', () => {
+
+    const result = transitionMastery(
+      { level: 'learning', consecutiveReviewPasses: 0 },
+      { type: 'section_reviewed', score: 70 },
+    )
+    expect(result.level).toBe('reviewing')
+  })
+
+  test('learning stays learning on section_reviewed < 70%', () => {
+
+    const result = transitionMastery(
+      { level: 'learning', consecutiveReviewPasses: 0 },
+      { type: 'section_reviewed', score: 69 },
+    )
+    expect(result.level).toBe('learning')
+  })
+
+  test('reviewing -> mastered after 3 consecutive passes >= 80%', () => {
+
+    let state = { level: 'reviewing', consecutiveReviewPasses: 0 }
+    state = transitionMastery(state, { type: 'section_reviewed', score: 80 })
+    expect(state.level).toBe('reviewing')
+    expect(state.consecutiveReviewPasses).toBe(1)
+
+    state = transitionMastery(state, { type: 'section_reviewed', score: 90 })
+    expect(state.level).toBe('reviewing')
+    expect(state.consecutiveReviewPasses).toBe(2)
+
+    state = transitionMastery(state, { type: 'section_reviewed', score: 85 })
+    expect(state.level).toBe('mastered')
+    expect(state.consecutiveReviewPasses).toBe(3)
+  })
+
+  test('reviewing resets to learning on review < 80%', () => {
+
+    const result = transitionMastery(
+      { level: 'reviewing', consecutiveReviewPasses: 2 },
+      { type: 'section_reviewed', score: 75 },
+    )
+    expect(result.level).toBe('learning')
+    expect(result.consecutiveReviewPasses).toBe(0)
+  })
+
+  test('mastered -> reviewing on review_item_failed', () => {
+
+    const result = transitionMastery(
+      { level: 'mastered', consecutiveReviewPasses: 3 },
+      { type: 'review_item_failed' },
+    )
+    expect(result.level).toBe('reviewing')
+    expect(result.consecutiveReviewPasses).toBe(0)
+  })
+
+  test('mastered -> learning on section retake (section_reviewed)', () => {
+
+    const result = transitionMastery(
+      { level: 'mastered', consecutiveReviewPasses: 3 },
+      { type: 'section_reviewed', score: 95 },
+    )
+    expect(result.level).toBe('learning')
+    expect(result.consecutiveReviewPasses).toBe(0)
+  })
+
+  test('review_item_failed has no effect on non-mastered levels', () => {
+
+
+    const r1 = transitionMastery(
+      { level: 'new', consecutiveReviewPasses: 0 },
+      { type: 'review_item_failed' },
+    )
+    expect(r1.level).toBe('new')
+
+    const r2 = transitionMastery(
+      { level: 'learning', consecutiveReviewPasses: 0 },
+      { type: 'review_item_failed' },
+    )
+    expect(r2.level).toBe('learning')
+
+    const r3 = transitionMastery(
+      { level: 'reviewing', consecutiveReviewPasses: 1 },
+      { type: 'review_item_failed' },
+    )
+    expect(r3.level).toBe('reviewing')
+  })
+
+  test('any -> learning on section_completed (even from mastered)', () => {
+
+
+    const states = ['new', 'learning', 'reviewing', 'mastered'] as const
+    for (const level of states) {
+      const result = transitionMastery(
+        { level, consecutiveReviewPasses: 2 },
+        { type: 'section_completed', score: 50 },
+      )
+      expect(result.level).toBe('learning')
+      expect(result.consecutiveReviewPasses).toBe(0)
+    }
   })
 })
 

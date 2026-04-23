@@ -3,6 +3,8 @@ import { mutation, query, internalMutation, internalQuery } from './_generated/s
 import type { Doc, Id } from './_generated/dataModel'
 import { internal } from './_generated/api'
 import { requireAuth } from './lib/auth'
+import { transitionMastery } from './lib/masteryStateMachine'
+import type { MasteryLevel } from './lib/masteryStateMachine'
 
 export const get = query({
   args: { id: v.id('courseSections') },
@@ -620,13 +622,6 @@ export const triggerPreFetch = mutation({
   },
 })
 
-function computeMasteryLevel(practiceScore: number): 'new' | 'learning' | 'reviewing' | 'mastered' {
-  if (practiceScore >= 90) return 'mastered'
-  if (practiceScore >= 70) return 'reviewing'
-  if (practiceScore >= 60) return 'learning'
-  return 'new'
-}
-
 function getAdaptiveFeedback(practiceScore: number): {
   feedbackText: string
   adaptiveHint: 'increase-practice' | 'reduce-practice' | 'standard'
@@ -674,13 +669,19 @@ export const completeSection = mutation({
     }
 
     const score = Math.max(0, Math.min(100, Math.round(args.practiceScore)))
-    const masteryLevel = computeMasteryLevel(score)
+
+    const currentState = {
+      level: section.masteryLevel as MasteryLevel,
+      consecutiveReviewPasses: section.consecutiveReviewPasses ?? 0,
+    }
+    const newState = transitionMastery(currentState, { type: 'section_completed', score })
     const { feedbackText, adaptiveHint } = getAdaptiveFeedback(score)
 
     await ctx.db.patch(args.sectionId, {
       status: 'completed',
       practiceScore: score,
-      masteryLevel,
+      masteryLevel: newState.level,
+      consecutiveReviewPasses: newState.consecutiveReviewPasses,
       completedAt: Date.now(),
     })
 
@@ -694,7 +695,54 @@ export const completeSection = mutation({
 
     return {
       practiceScore: score,
-      masteryLevel,
+      masteryLevel: newState.level,
+      feedbackText,
+      adaptiveHint,
+      conceptsForReview: 0,
+    }
+  },
+})
+
+export const reviewSection = mutation({
+  args: {
+    sectionId: v.id('courseSections'),
+    practiceScore: v.number(),
+    quizCorrect: v.number(),
+    quizTotal: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireAuth(ctx)
+    const section = await ctx.db.get(args.sectionId)
+    if (!section || section.userId !== userId) throw new Error('Section not found')
+    if (section.status !== 'completed') {
+      throw new Error('Section must be completed before reviewing')
+    }
+
+    const score = Math.max(0, Math.min(100, Math.round(args.practiceScore)))
+
+    const currentState = {
+      level: section.masteryLevel as MasteryLevel,
+      consecutiveReviewPasses: section.consecutiveReviewPasses ?? 0,
+    }
+    const newState = transitionMastery(currentState, { type: 'section_reviewed', score })
+    const { feedbackText, adaptiveHint } = getAdaptiveFeedback(score)
+
+    const history = section.reviewHistory ?? []
+    const quizCorrect = Math.max(0, Math.round(args.quizCorrect))
+    const quizTotal = Math.max(0, Math.round(args.quizTotal))
+    const updatedHistory = [...history, { score, quizCorrect, quizTotal, at: Date.now() }].slice(-10)
+
+    await ctx.db.patch(args.sectionId, {
+      practiceScore: score,
+      masteryLevel: newState.level,
+      consecutiveReviewPasses: newState.consecutiveReviewPasses,
+      reviewHistory: updatedHistory,
+    })
+
+    return {
+      practiceScore: score,
+      masteryLevel: newState.level,
+      previousMasteryLevel: currentState.level,
       feedbackText,
       adaptiveHint,
       conceptsForReview: 0,
