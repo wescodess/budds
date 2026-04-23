@@ -13,7 +13,7 @@ async function requireAuth(ctx: QueryCtx | MutationCtx) {
 export const create = mutation({
   args: {
     title: v.string(),
-    sourceType: v.union(v.literal('folder'), v.literal('cross-folder')),
+    sourceType: v.union(v.literal('folder'), v.literal('cross-folder'), v.literal('web-only')),
     folderId: v.optional(v.id('folders')),
     documentIds: v.optional(v.array(v.id('documents'))),
     webSearchEnabled: v.optional(v.boolean()),
@@ -23,11 +23,19 @@ export const create = mutation({
     const now = Date.now()
 
     let resolvedDocs: Array<{ documentId: Id<'documents'>; folderId: Id<'folders'> }> = []
+    let resolvedFolderId: Id<'folders'> | undefined
 
-    if (args.sourceType === 'folder') {
+    if (args.sourceType === 'web-only') {
+      if (args.folderId) {
+        const folder = await ctx.db.get(args.folderId)
+        if (!folder || folder.userId !== userId) throw new Error('Folder not found')
+        resolvedFolderId = args.folderId
+      }
+    } else if (args.sourceType === 'folder') {
       if (!args.folderId) throw new Error('folderId required for folder source')
       const folder = await ctx.db.get(args.folderId)
       if (!folder || folder.userId !== userId) throw new Error('Folder not found')
+      resolvedFolderId = args.folderId
 
       if (args.documentIds && args.documentIds.length > 0) {
         for (const docId of args.documentIds) {
@@ -55,18 +63,22 @@ export const create = mutation({
       }
     }
 
+    const isWebOnly = args.sourceType === 'web-only'
+
     const courseId = await ctx.db.insert('courses', {
       userId,
-      folderId: args.sourceType === 'folder' ? args.folderId : undefined,
+      folderId: resolvedFolderId,
       title: args.title.trim().slice(0, 200) || 'Untitled Course',
       status: 'generating',
       sourceType: args.sourceType,
-      sourceConfidence: { docCount: resolvedDocs.length, webPercent: 0 },
+      sourceConfidence: isWebOnly
+        ? { docCount: 0, webPercent: 100 }
+        : { docCount: resolvedDocs.length, webPercent: 0 },
       pace: 'steady',
       outlineSections: [],
       completedSectionCount: 0,
       totalSectionCount: 0,
-      webSearchEnabled: args.webSearchEnabled ?? false,
+      webSearchEnabled: isWebOnly ? true : (args.webSearchEnabled ?? false),
       createdAt: now,
       updatedAt: now,
     })
@@ -84,7 +96,7 @@ export const create = mutation({
       internal.tasks.createInternal,
       {
         userId,
-        folderId: args.sourceType === 'folder' ? args.folderId : undefined,
+        folderId: resolvedFolderId,
         type: 'course-outline',
         title: 'Generating outline...',
         metadata: { courseId },
