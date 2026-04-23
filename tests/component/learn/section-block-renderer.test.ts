@@ -1,5 +1,17 @@
 import { describe, it, expect } from 'vitest'
-import { mountSuspended } from '@nuxt/test-utils/runtime'
+import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
+
+mockNuxtImport('useConvexQuery', () => {
+  return (_apiRef: any, _args?: any) => {
+    return { data: ref(null) }
+  }
+})
+
+mockNuxtImport('useConvexMutation', () => {
+  return (_apiRef: any) => {
+    return { mutate: vi.fn().mockResolvedValue({ success: true }) }
+  }
+})
 
 const componentPath = ['~', 'components', 'learn', 'SectionBlockRenderer.vue'].join('/')
 
