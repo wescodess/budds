@@ -1,0 +1,157 @@
+import { v } from 'convex/values'
+import { mutation, query } from './_generated/server'
+import { internal } from './_generated/api'
+import type { Id } from './_generated/dataModel'
+import type { MutationCtx, QueryCtx } from './_generated/server'
+
+async function requireAuth(ctx: QueryCtx | MutationCtx) {
+  const identity = await ctx.auth.getUserIdentity()
+  if (!identity) throw new Error('Unauthenticated')
+  return identity.tokenIdentifier
+}
+
+export const create = mutation({
+  args: {
+    title: v.string(),
+    sourceType: v.union(v.literal('folder'), v.literal('cross-folder')),
+    folderId: v.optional(v.id('folders')),
+    documentIds: v.optional(v.array(v.id('documents'))),
+    webSearchEnabled: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireAuth(ctx)
+    const now = Date.now()
+
+    let resolvedDocs: Array<{ documentId: Id<'documents'>; folderId: Id<'folders'> }> = []
+
+    if (args.sourceType === 'folder') {
+      if (!args.folderId) throw new Error('folderId required for folder source')
+      const folder = await ctx.db.get(args.folderId)
+      if (!folder || folder.userId !== userId) throw new Error('Folder not found')
+
+      if (args.documentIds && args.documentIds.length > 0) {
+        for (const docId of args.documentIds) {
+          const doc = await ctx.db.get(docId)
+          if (!doc || doc.userId !== userId) throw new Error('Document not found')
+          resolvedDocs.push({ documentId: docId, folderId: args.folderId })
+        }
+      } else {
+        const docs = await ctx.db
+          .query('documents')
+          .withIndex('by_userId_and_folderId', (q) =>
+            q.eq('userId', userId).eq('folderId', args.folderId!),
+          )
+          .collect()
+        resolvedDocs = docs.map((d) => ({ documentId: d._id, folderId: args.folderId! }))
+      }
+    } else {
+      if (!args.documentIds || args.documentIds.length === 0) {
+        throw new Error('documentIds required for cross-folder source')
+      }
+      for (const docId of args.documentIds) {
+        const doc = await ctx.db.get(docId)
+        if (!doc || doc.userId !== userId) throw new Error('Document not found')
+        resolvedDocs.push({ documentId: docId, folderId: doc.folderId })
+      }
+    }
+
+    const courseId = await ctx.db.insert('courses', {
+      userId,
+      folderId: args.sourceType === 'folder' ? args.folderId : undefined,
+      title: args.title.trim().slice(0, 200) || 'Untitled Course',
+      status: 'generating',
+      sourceType: args.sourceType,
+      sourceConfidence: { docCount: resolvedDocs.length, webPercent: 0 },
+      pace: 'steady',
+      outlineSections: [],
+      completedSectionCount: 0,
+      totalSectionCount: 0,
+      webSearchEnabled: args.webSearchEnabled ?? false,
+      createdAt: now,
+      updatedAt: now,
+    })
+
+    for (const rd of resolvedDocs) {
+      await ctx.db.insert('courseSourceDocs', {
+        courseId,
+        documentId: rd.documentId,
+        folderId: rd.folderId,
+        userId,
+      })
+    }
+
+    const taskId: Id<'tasks'> = await ctx.runMutation(
+      internal.tasks.createInternal,
+      {
+        userId,
+        folderId: args.sourceType === 'folder' ? args.folderId : undefined,
+        type: 'course-outline',
+        title: 'Generating outline...',
+        metadata: { courseId },
+      },
+    )
+
+    await ctx.db.patch(courseId, { taskId })
+
+    const existing = await ctx.db
+      .query('learnProfile')
+      .withIndex('by_userId', (q) => q.eq('userId', userId))
+      .unique()
+
+    if (!existing) {
+      await ctx.db.insert('learnProfile', {
+        userId,
+        streakCurrent: 0,
+        streakFreezeAvailable: false,
+        dailyReviewCap: 50,
+      })
+    }
+
+    return { courseId, taskId }
+  },
+})
+
+export const listByUser = query({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) return []
+    const userId = identity.tokenIdentifier
+
+    return await ctx.db
+      .query('courses')
+      .withIndex('by_userId', (q) => q.eq('userId', userId))
+      .order('desc')
+      .take(100)
+  },
+})
+
+export const listByFolder = query({
+  args: { folderId: v.id('folders') },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) return []
+    const userId = identity.tokenIdentifier
+
+    return await ctx.db
+      .query('courses')
+      .withIndex('by_userId_and_folderId', (q) =>
+        q.eq('userId', userId).eq('folderId', args.folderId),
+      )
+      .order('desc')
+      .take(50)
+  },
+})
+
+export const get = query({
+  args: { id: v.id('courses') },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) return null
+    const userId = identity.tokenIdentifier
+
+    const course = await ctx.db.get(args.id)
+    if (!course || course.userId !== userId) return null
+    return course
+  },
+})
