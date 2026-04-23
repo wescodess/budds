@@ -87,7 +87,7 @@ describe('FolderShell', () => {
     await wrapper.get('[data-testid="rail-toggle"]').trigger('click')
 
     const style = wrapper.get('[data-testid="folder-main-pane"]').attributes('style') ?? ''
-    expect(style).toContain('flex: 0 0 calc(100% - 4rem)')
+    expect(style).toContain('flex-basis: calc(100% - 4rem)')
     expect(style).toContain('min-width: calc(100% - 4rem)')
     expect(style).not.toContain('transform')
     expect(style).not.toContain('padding-left')
