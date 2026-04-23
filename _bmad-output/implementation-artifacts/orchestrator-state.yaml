@@ -1,9 +1,9 @@
 mode: running
-current_phase: prep-story
-current_story: prep-3-6-course-status-badge
-current_epic: prep-3
+current_phase: epic-story
+current_story: 3-1-section-generation-pipeline-multi-engine-orchestration
+current_epic: 3
 retry_count: 0
-last_epic_complete_fired: 2
+last_epic_complete_fired: prep-3
 
 last_verdict:
   subagent: bmad-story-runner
@@ -57,12 +57,18 @@ paths:
   ux_spec: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/ux-design-learn-module.md
 
 counters:
-  stories_completed_this_run: 5
-  stories_completed_total: 15
+  stories_completed_this_run: 6
+  stories_completed_total: 16
 
 escalation:
   pending: null
   log:
+    - ts: '2026-04-24'
+      question: "Prep sprint (Epic 3) complete. Retro optional. Proceed to Epic 3 or run retro first?"
+      answer: proceed
+      answered_at: '2026-04-24'
+      resolution: "Auto-resolved after 2m — proceed. Skipping prep sprint retro. Advancing to Epic 3."
+      auto_resolved: true
     - ts: '2026-04-23'
       question: "Epic 2 closed without retro (marked optional). Proceed to Epic 3, or run retrospective first?"
       answer: run_retro_first
@@ -82,6 +88,12 @@ escalation:
         User answered "1" → commit_all_then_start. Committing all changes on refactor/remove-folder-tabs, then branching feat/1-1 from dev.
 
 decisions_log:
+  - ts: '2026-04-24'
+    decision: |
+      story-runner PASS for prep-3-6 (0 deferred). 4/4 tasks, 2 files. Added status badge to CourseCard:
+      generating=amber "Generating...", failed=red "Failed" + dimmed styling, ready=no badge. 4 new
+      component tests. 512 Convex + 289 component tests pass. PR #102 merged to dev. Counters 6
+      this-run, 16 total. PREP SPRINT COMPLETE (6/6). Escalating for retro decision before Epic 3.
   - ts: '2026-04-24'
     decision: |
       story-runner PASS for prep-3-5 (3 deferred: page-level mock harness, QuizShell card list tests,
@@ -166,6 +178,17 @@ decisions_log:
       DETERMINE_NEXT: epic-1 backlog → 1-1-convex-schema-course-tables. Story file created, runner spawned.
 
 run_log:
+  - ts: '2026-04-24'
+    mode: running
+    note: |
+      Escalation auto-resolved → proceed. Prep sprint retro skipped. DETERMINE_NEXT: epic-3 backlog →
+      3-1-section-generation-pipeline-multi-engine-orchestration. Epic 3 marked in-progress. Spawning
+      bmad-story-runner for 3-1.
+  - ts: '2026-04-24'
+    mode: running
+    note: |
+      prep-3-6 PASS (PR #102). Prep sprint COMPLETE (6/6). prep-sprint-epic-3-retrospective: optional.
+      Epic boundary detected. Next: epic-3 (backlog). Escalating for retro decision.
   - ts: '2026-04-24'
     mode: running
     note: |

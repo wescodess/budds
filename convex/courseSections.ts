@@ -1,5 +1,5 @@
 import { v } from 'convex/values'
-import { mutation, query } from './_generated/server'
+import { mutation, query, internalMutation, internalQuery } from './_generated/server'
 import type { Doc } from './_generated/dataModel'
 import { requireAuth } from './lib/auth'
 
@@ -205,5 +205,271 @@ export const updateOrder = mutation({
       outlineSections: reorderedOutline,
       updatedAt: Date.now(),
     })
+  },
+})
+
+const contentBlockValidator = v.object({
+  type: v.union(
+    v.literal('text'),
+    v.literal('quiz'),
+    v.literal('flashcard'),
+    v.literal('audio'),
+  ),
+  entityId: v.optional(v.string()),
+  entityType: v.optional(v.union(
+    v.literal('quiz'),
+    v.literal('flashcard'),
+    v.literal('audio'),
+  )),
+  content: v.optional(v.string()),
+  order: v.number(),
+})
+
+export const getForGeneration = internalQuery({
+  args: { sectionId: v.id('courseSections') },
+  handler: async (ctx, args) => {
+    const section = await ctx.db.get(args.sectionId)
+    if (!section) return null
+
+    const course = await ctx.db.get(section.courseId)
+    if (!course) return null
+
+    const sourceDocs = await ctx.db
+      .query('courseSourceDocs')
+      .withIndex('by_courseId', (q) => q.eq('courseId', section.courseId))
+      .collect()
+
+    return { section, course, sourceDocs }
+  },
+})
+
+export const markReady = internalMutation({
+  args: {
+    sectionId: v.id('courseSections'),
+    contentBlocks: v.array(contentBlockValidator),
+    failureNotice: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const section = await ctx.db.get(args.sectionId)
+    if (!section) return
+
+    await ctx.db.patch(args.sectionId, {
+      status: 'ready',
+      contentBlocks: args.contentBlocks,
+      failureNotice: args.failureNotice,
+    })
+  },
+})
+
+export const markSectionFailed = internalMutation({
+  args: {
+    sectionId: v.id('courseSections'),
+    failureNotice: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const section = await ctx.db.get(args.sectionId)
+    if (!section) return
+
+    await ctx.db.patch(args.sectionId, {
+      status: 'failed',
+      failureNotice: args.failureNotice || 'Section generation failed',
+    })
+  },
+})
+
+export const finalizeSectionGeneration = mutation({
+  args: {
+    sectionId: v.id('courseSections'),
+    textContent: v.optional(v.string()),
+    quizData: v.optional(v.object({
+      title: v.string(),
+      model: v.optional(v.string()),
+      difficulty: v.optional(v.string()),
+      questions: v.array(v.object({
+        order: v.number(),
+        question: v.string(),
+        type: v.union(
+          v.literal('multiple-choice'),
+          v.literal('free-response'),
+          v.literal('true_false'),
+          v.literal('fill_in_the_blank'),
+        ),
+        options: v.optional(v.array(v.string())),
+        correctAnswer: v.string(),
+        explanation: v.optional(v.string()),
+        sourceDocumentId: v.optional(v.string()),
+        sourceChunkContent: v.optional(v.string()),
+        sourceFilename: v.optional(v.string()),
+      })),
+    })),
+    flashcardData: v.optional(v.object({
+      title: v.string(),
+      cards: v.array(v.object({
+        term: v.string(),
+        definition: v.string(),
+        sourceFilename: v.optional(v.string()),
+        sourceChunkContent: v.optional(v.string()),
+      })),
+    })),
+    audioEntityId: v.optional(v.string()),
+    failedEngines: v.optional(v.array(v.string())),
+    taskId: v.optional(v.id('tasks')),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireAuth(ctx)
+    const section = await ctx.db.get(args.sectionId)
+    if (!section || section.userId !== userId) throw new Error('Section not found')
+
+    const course = await ctx.db.get(section.courseId)
+    if (!course) throw new Error('Course not found')
+
+    const contentBlocks: Array<{
+      type: 'text' | 'quiz' | 'flashcard' | 'audio'
+      entityId?: string
+      entityType?: 'quiz' | 'flashcard' | 'audio'
+      content?: string
+      order: number
+    }> = []
+
+    let blockOrder = 0
+
+    if (args.audioEntityId) {
+      contentBlocks.push({
+        type: 'audio',
+        entityId: args.audioEntityId,
+        entityType: 'audio',
+        order: blockOrder++,
+      })
+    }
+
+    if (args.textContent) {
+      contentBlocks.push({
+        type: 'text',
+        content: args.textContent,
+        order: blockOrder++,
+      })
+    }
+
+    if (args.quizData && args.quizData.questions.length > 0 && course.folderId) {
+      const quizId = await ctx.db.insert('quizzes', {
+        userId,
+        folderId: course.folderId,
+        title: args.quizData.title,
+        status: 'ready',
+        model: args.quizData.model,
+        difficulty: args.quizData.difficulty,
+        creationMethod: 'auto_generated',
+        questionCount: args.quizData.questions.length,
+        courseScoped: true,
+      })
+
+      for (const q of args.quizData.questions) {
+        let resolvedDocId: string | undefined
+        if (q.sourceDocumentId) {
+          const normalized = ctx.db.normalizeId('documents', q.sourceDocumentId)
+          if (normalized) resolvedDocId = normalized
+        }
+
+        await ctx.db.insert('quizQuestions', {
+          quizId,
+          userId,
+          order: q.order,
+          question: q.question,
+          type: q.type,
+          options: q.options,
+          correctAnswer: q.correctAnswer,
+          explanation: q.explanation,
+          sourceDocumentId: resolvedDocId as any,
+          sourceChunkContent: q.sourceChunkContent,
+          sourceFilename: q.sourceFilename,
+        })
+      }
+
+      contentBlocks.push({
+        type: 'quiz',
+        entityId: quizId,
+        entityType: 'quiz',
+        order: blockOrder++,
+      })
+    }
+
+    if (args.flashcardData && args.flashcardData.cards.length > 0 && course.folderId) {
+      const roomId = await ctx.db.insert('flashcardRooms', {
+        userId,
+        folderId: course.folderId,
+        title: args.flashcardData.title,
+        updatedAt: Date.now(),
+        cardCount: args.flashcardData.cards.length,
+        courseScoped: true,
+      })
+
+      const versionId = await ctx.db.insert('flashcardRoomVersions', {
+        roomId,
+        userId,
+        title: args.flashcardData.title,
+        origin: 'ai',
+        cardCount: args.flashcardData.cards.length,
+      })
+
+      for (let i = 0; i < args.flashcardData.cards.length; i++) {
+        const c = args.flashcardData.cards[i]!
+        const term = c.term.trim()
+        const definition = c.definition.trim()
+        if (!term || !definition) continue
+
+        const metadata = c.sourceFilename
+          ? { source: { filename: c.sourceFilename, chunkContent: c.sourceChunkContent || '' } }
+          : undefined
+
+        await ctx.db.insert('flashcardRoomCards', {
+          roomId,
+          userId,
+          displayOrder: i,
+          term,
+          definition,
+          metadata: metadata as any,
+        })
+
+        await ctx.db.insert('flashcardVersionCards', {
+          versionId,
+          roomId,
+          userId,
+          displayOrder: i,
+          term,
+          definition,
+          metadata: metadata as any,
+        })
+      }
+
+      await ctx.db.patch(roomId, { activeVersionId: versionId, currentCardCount: args.flashcardData.cards.length })
+
+      contentBlocks.push({
+        type: 'flashcard',
+        entityId: roomId,
+        entityType: 'flashcard',
+        order: blockOrder++,
+      })
+    }
+
+    const failedEngines = args.failedEngines || []
+    const failureNotice = failedEngines.length > 0
+      ? `Some content could not be generated: ${failedEngines.join(', ')}`
+      : undefined
+
+    if (contentBlocks.length === 0) {
+      await ctx.db.patch(args.sectionId, {
+        status: 'failed',
+        failureNotice: 'All content engines failed',
+      })
+      return { status: 'failed' as const }
+    }
+
+    await ctx.db.patch(args.sectionId, {
+      status: 'ready',
+      contentBlocks,
+      failureNotice,
+    })
+
+    return { status: 'ready' as const, blockCount: contentBlocks.length }
   },
 })
