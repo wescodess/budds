@@ -229,6 +229,7 @@ function onDragEnd() {
         @dragend="onDragEnd"
       >
         <GripVertical
+          aria-hidden="true"
           class="h-4 w-4 shrink-0 cursor-grab text-stone-600 opacity-0 transition-opacity group-hover:opacity-100"
           data-testid="drag-handle"
         />
@@ -242,6 +243,7 @@ function onDragEnd() {
             v-if="editingId === section._id"
             ref="editInput"
             v-model="editingTitle"
+            aria-label="Section title"
             class="w-full rounded border border-stone-600 bg-stone-900 px-2 py-1 text-sm text-stone-100 outline-none focus:border-amber-500"
             data-testid="title-input"
             @blur="saveTitle(section)"
@@ -258,6 +260,7 @@ function onDragEnd() {
         </div>
 
         <button
+          :aria-label="`Cycle knowledge type, currently ${section.knowledgeType}`"
           class="shrink-0 rounded bg-stone-800 px-2 py-0.5 text-xs uppercase tracking-wide text-stone-400 transition-colors hover:text-amber-400"
           data-testid="knowledge-type-badge"
           @click="cycleKnowledgeType(section)"
@@ -266,6 +269,7 @@ function onDragEnd() {
         </button>
 
         <button
+          :aria-label="`Remove section ${section.title}`"
           class="shrink-0 text-stone-600 opacity-0 transition-opacity hover:text-red-400 group-hover:opacity-100"
           data-testid="remove-button"
           @click="removeSection(section)"
