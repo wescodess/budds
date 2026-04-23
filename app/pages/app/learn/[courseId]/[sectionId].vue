@@ -48,6 +48,82 @@ const nextSection = computed(() => {
   return sections.value.find((s: any) => s.order === section.value!.order + 1) ?? null
 })
 
+const isLastSection = computed(() => {
+  if (!section.value || !course.value) return false
+  return section.value.order === course.value.totalSectionCount - 1
+})
+
+const quizResults = ref<{ correct: number; total: number } | null>(null)
+
+function handleQuizCompleted(data: { correct: number; total: number }) {
+  quizResults.value = data
+}
+
+const showCompletionCard = ref(false)
+const completionData = ref<{
+  practiceScore: number
+  masteryLevel: 'new' | 'learning' | 'reviewing' | 'mastered'
+  conceptsForReview: number
+  feedbackText: string
+} | null>(null)
+
+const completeSectionMutation = import.meta.client
+  ? useConvexMutation(api.courseSections.completeSection)
+  : { mutate: async () => null }
+
+const isCompleting = ref(false)
+
+async function handleCompleteSection() {
+  if (isCompleting.value || showCompletionCard.value) return
+  isCompleting.value = true
+
+  const quiz = quizResults.value
+  const score = quiz && quiz.total > 0
+    ? Math.round((quiz.correct / quiz.total) * 100)
+    : 100
+
+  try {
+    const result = await completeSectionMutation.mutate({
+      sectionId: sectionId.value,
+      practiceScore: score,
+      quizCorrect: quiz?.correct ?? 0,
+      quizTotal: quiz?.total ?? 0,
+    })
+
+    if (result) {
+      completionData.value = {
+        practiceScore: result.practiceScore,
+        masteryLevel: result.masteryLevel,
+        conceptsForReview: result.conceptsForReview,
+        feedbackText: result.feedbackText,
+      }
+    }
+    showCompletionCard.value = true
+  } catch {
+    showCompletionCard.value = true
+    completionData.value = {
+      practiceScore: score,
+      masteryLevel: score >= 90 ? 'mastered' : score >= 70 ? 'reviewing' : score >= 60 ? 'learning' : 'new',
+      conceptsForReview: 0,
+      feedbackText: '',
+    }
+  } finally {
+    isCompleting.value = false
+  }
+}
+
+watch(() => section.value?.status, (status) => {
+  if (status === 'completed' && !showCompletionCard.value && completionData.value === null) {
+    completionData.value = {
+      practiceScore: section.value?.practiceScore ?? 0,
+      masteryLevel: section.value?.masteryLevel ?? 'new',
+      conceptsForReview: 0,
+      feedbackText: '',
+    }
+    showCompletionCard.value = true
+  }
+})
+
 function navigateToNextSection() {
   if (nextSection.value) {
     router.push(`/app/learn/${courseId.value}/${nextSection.value._id}`)
@@ -100,37 +176,41 @@ function navigateBack() {
       </div>
 
       <main class="mx-auto w-full max-w-3xl flex-1 px-4 py-8">
-        <LearnSectionBlockRenderer
-          :content-blocks="contentBlocks"
-          :course-id="courseId"
-          @block-viewed="handleBlockViewed"
-        />
+        <template v-if="showCompletionCard && completionData">
+          <LearnSectionCompletionCard
+            :practice-score="completionData.practiceScore"
+            :mastery-level="completionData.masteryLevel"
+            :concepts-for-review="completionData.conceptsForReview"
+            :feedback-text="completionData.feedbackText"
+            :has-next-section="!!nextSection"
+            :is-last-section="isLastSection"
+            :next-section-ready="!!nextSection && (nextSection.status === 'ready' || nextSection.status === 'completed')"
+            :next-section-generating="!!nextSection && nextSection.status === 'generating'"
+            @continue-to-next="navigateToNextSection"
+            @back-to-course="navigateBack"
+          />
+        </template>
 
-        <div class="mt-8 flex justify-center pb-8">
-          <button
-            v-if="nextSection && (nextSection.status === 'ready' || nextSection.status === 'completed')"
-            type="button"
-            class="rounded-lg bg-amber-500 px-6 py-3 text-sm font-medium text-stone-950 transition-colors hover:bg-amber-400"
-            @click="navigateToNextSection"
-          >
-            Next Section
-          </button>
-          <div
-            v-else-if="nextSection && nextSection.status === 'generating'"
-            class="flex items-center gap-2 rounded-lg bg-stone-900 px-6 py-3 text-sm text-stone-400"
-          >
-            <div class="h-4 w-4 animate-spin rounded-full border-2 border-amber-500 border-t-transparent" />
-            Preparing next section...
+        <template v-else>
+          <LearnSectionBlockRenderer
+            :content-blocks="contentBlocks"
+            :course-id="courseId"
+            @block-viewed="handleBlockViewed"
+            @quiz-completed="handleQuizCompleted"
+          />
+
+          <div class="mt-8 flex justify-center pb-8">
+            <button
+              type="button"
+              class="rounded-lg bg-amber-500 px-6 py-3 text-sm font-medium text-stone-950 transition-colors hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
+              :disabled="isCompleting"
+              data-testid="complete-section-button"
+              @click="handleCompleteSection"
+            >
+              {{ isCompleting ? 'Completing...' : 'Complete Section' }}
+            </button>
           </div>
-          <button
-            v-else-if="!nextSection"
-            type="button"
-            class="rounded-lg border border-stone-700 bg-stone-900 px-6 py-3 text-sm font-medium text-stone-200 transition-colors hover:border-stone-600"
-            @click="navigateBack"
-          >
-            Back to Course
-          </button>
-        </div>
+        </template>
       </main>
     </template>
   </div>
