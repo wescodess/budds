@@ -68,12 +68,12 @@ development_status:
   prep-sprint-epic-3-retrospective: optional
 
   # === Epic 3: Section Learning Experience (MVP) ===
-  epic-3: in-progress
+  epic-3: done
   3-1-section-generation-pipeline-multi-engine-orchestration: done
   3-2-n-plus-1-section-pre-fetch: done
   3-3-section-void-ui-content-block-rendering: done
   3-4-section-completion-and-adaptive-pacing: done
-  3-5-audio-primer-generation-user-note-references: in-progress
+  3-5-audio-primer-generation-user-note-references: done
   epic-3-retrospective: optional
 
   # === Epic 4: Progress Tracking, Mastery & Content Quality (MVP) ===
