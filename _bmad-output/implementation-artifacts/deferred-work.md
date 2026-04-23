@@ -1,5 +1,9 @@
 # Deferred Work
 
+## Deferred from: code review of 1-1-convex-schema-course-tables (2026-04-22)
+
+- **`courseSourceDocs` table lacks a `by_userId` index.** Deletion and export iterate via `courses.by_userId` then `courseSourceDocs.by_courseId` per course. Functional but O(courses) queries. Adding `by_userId` index with a `userId` field would allow direct query like other tables. Matches current architecture spec (only `by_courseId` specified). Add the index when the table sees high-volume queries.
+
 ## Deferred from: spec-g3 amendment (2026-04-14) — CreateVoidDialog wiring
 
 - **T15 (page-level integration test) deferred.** Testing that `rail-new-void` click opens `CreateVoidDialog` in `app/pages/app/folders/[id].vue` requires a mounted page test with Convex mocks for `useConvexQuery(api.conversations.listRecentForUser)`, `api.flashcards.listByFolder`, `api.quizzes.listByFolder`, `api.documents.countsByFolder`, plus `useFolders` and router setup. No harness exists yet. Covered today by: (a) `CreateVoidDialog` unit tests (5), (b) `FolderShell` → `FolderShellRail` `new-void` event propagation is structural/grep-verifiable, (c) manual smoke. Land the integration test alongside a general Convex-mock harness for page tests.
