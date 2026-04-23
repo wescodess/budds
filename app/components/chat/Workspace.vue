@@ -29,13 +29,17 @@ const emit = defineEmits<{
   taskViewRoom: [roomId: string]
 }>()
 
+const route = useRoute()
 const ctx = injectFolderContext()
 const {
   folderId, folder, referenceScope, helperPane, isDesktop,
-  isPodcastMain, audioOverviewShellRef,
+  isPodcastMain: isPodcastMainFolder, audioOverviewShellRef,
   attachmentStatus, uploading, importingLink,
   handleUpload, handleImportLink,
 } = ctx
+
+const isChatIndex = computed(() => !route.params.conversationId)
+const isPodcastMain = computed(() => isPodcastMainFolder.value && isChatIndex.value)
 
 const chatInputRef = ref<{ focus: () => void } | null>(null)
 const chatScrollRef = ref<HTMLElement | null>(null)
@@ -202,7 +206,15 @@ defineExpose({ focus: () => chatInputRef.value?.focus() })
           </button>
         </ResizableHandle>
         <ResizablePanel :default-size="28" :min-size="20" :max-size="45" class="min-w-[18rem]">
-          <div class="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          <template v-if="helperPane.isOpen.value">
+            <FolderShellHelperPane>
+              <template #default="{ activeTabId: tid }">
+                <ChatSourcePanel v-if="tid === 'sources'" :sources="allSources" :active-citation-index="activeCitationIndex" :open="true" side="right" class="min-h-0 flex-1" @close="helperPane.close()" />
+                <FolderTasksPane v-else-if="tid === 'tasks'" :folder-id="folderId" embedded @close="helperPane.close()" @view-room="handleTaskViewRoom" />
+              </template>
+            </FolderShellHelperPane>
+          </template>
+          <div v-else class="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
             <template v-if="!hasIndexedDocuments">
               <div class="flex flex-1 items-center justify-center text-muted-foreground">
                 <div class="text-center">
@@ -212,9 +224,54 @@ defineExpose({ focus: () => chatInputRef.value?.focus() })
               </div>
             </template>
             <template v-else>
-              <slot name="messages" />
+              <div ref="chatScrollRef" data-testid="chat-scroll-area" role="log" aria-live="polite" aria-atomic="false" aria-relevant="additions" class="keyboard-scroll-area min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
+                <template v-for="(msg, i) in messages" :key="i">
+                  <button
+                    v-if="msg.interjectionContext && msg.role === 'user'"
+                    type="button"
+                    data-testid="chat-interjection-badge"
+                    class="inline-flex items-center gap-1.5 rounded-full border border-primary/40 bg-primary/10 px-2.5 py-1 font-inter text-[11px] text-primary transition-colors hover:bg-primary/20"
+                    @click="handleInterjectionBadgeClick(msg.interjectionContext!)"
+                  >
+                    🎙 Asked while listening @ {{ formatInterjectionBadgeTime(msg.interjectionContext.timeMs) }} · "{{ msg.interjectionContext.quotedText.slice(0, 40) }}{{ msg.interjectionContext.quotedText.length > 40 ? '…' : '' }}"
+                  </button>
+                  <ChatMessage
+                    :role="msg.role"
+                    :content="msg.content"
+                    :sources="msg.sources"
+                    :streaming="streaming && i === messages.length - 1"
+                    @citation-click="(citIndex: number) => handleCitationClick(i, citIndex)"
+                    @citation-long-press="(citIndex: number) => handleCitationClick(i, citIndex)"
+                  />
+                  <ChatReferenceChips
+                    v-if="msg.role === 'assistant' && (msg.sources?.length ?? 0) > 0"
+                    :sources="msg.sources ?? []"
+                    @view-all="handleViewAllReferences(i)"
+                    @chip-click="(citIndex: number) => handleCitationClick(i, citIndex)"
+                  />
+                </template>
+                <ChatThinkingRow v-if="thinking" :model="selectedModel" />
+                <div v-if="error" class="text-center text-sm text-destructive">{{ error }}</div>
+              </div>
             </template>
-            <slot name="composer" />
+            <div data-testid="chat-composer-footer" class="sticky bottom-0 z-10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+              <div class="flex items-center px-4 pt-2">
+                <ChatModelSelector :model-value="selectedModel" :disabled="loading" @update:model-value="(m) => emit('selectModel', m)" />
+              </div>
+              <ChatInput
+                ref="chatInputRef"
+                :disabled="!hasIndexedDocuments || loading"
+                :attachment-status="attachmentStatus"
+                :busy="uploading || importingLink"
+                :placeholder="folder ? `Ask about your ${folder.name} materials...` : 'Ask a question...'"
+                :folder-id="folderId"
+                :scope="referenceScope"
+                :interjection-context="pendingInterjectionContext"
+                @upload-files="handleUpload"
+                @import-link="handleImportLink"
+                @submit="handleSendMessage"
+              />
+            </div>
           </div>
         </ResizablePanel>
       </ResizablePanelGroup>

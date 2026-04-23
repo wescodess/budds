@@ -32,7 +32,7 @@ This document provides the complete epic and story breakdown for the Budds Learn
 - FR7: User can set a learning pace for a course (intensive, steady, or relaxed)
 - FR8: User can change the learning pace at any time
 - FR9: User can view all their courses from the top-level Learn route
-- FR10: User can view folder-scoped courses from within a folder's Learn tab
+- FR10: User can view folder-scoped courses from within a folder's sidebar and dedicated learn page
 - FR11: User can delete a course and all associated course-scoped entities
 - FR12: System supplements course content from web search when user documents provide insufficient coverage
 - FR13: System pre-fetches the next section (N+1) while the user works on the current section
@@ -117,7 +117,7 @@ This document provides the complete epic and story breakdown for the Budds Learn
 - UX-DR12: Content flag flow — inline "Flag as incorrect" with correction editor
 - UX-DR13: Mobile responsive variants for Learn Home, Section Void, Daily Review
 - UX-DR14: Learn-specific keyboard shortcuts (Space=reveal, 1-4=rate, arrows=navigate, f=flag)
-- UX-DR15: Learn tab in folder shell tab bar alongside Chat, Flashcards, Quiz, Documents
+- UX-DR15: Courses appear as void entries in folder sidebar; "Course" option in New Void dialog; dedicated learn page at `/app/folders/[id]/learn/`
 
 ### FR Coverage Map
 
@@ -185,7 +185,7 @@ So that all course features have a data foundation.
 **When** the migration runs
 **Then** `courses`, `courseSections`, `courseSourceDocs`, and `learnProfile` tables are created with all fields, indexes, and validators as specified in the architecture document
 **And** the `courseScoped` optional boolean field is added to `quizzes`, `flashcardRooms`, and `audioOverviews` tables
-**And** existing folder-tab queries for quizzes, flashcards, and audio overviews filter out `courseScoped === true` entities
+**And** existing folder sidebar queries for quizzes, flashcards, and audio overviews filter out `courseScoped === true` entities
 
 ### Story 1.2: Course Creation API — Folder & Cross-Folder Sources
 
@@ -305,21 +305,22 @@ So that I can quickly access any course or start a new one.
 **And** if courses exist: a grid of course cards is displayed with title, progress bar, section count, and pace badge
 **And** a dashed "+ Create Course" card appears at the end of the grid
 **And** the streak display shows in the header area (if streak > 0)
-**And** on mobile: cards stack single-column with bottom tab navigation
+**And** on mobile: cards stack single-column with bottom navigation
 
-### Story 2.2: Folder-Scoped Learn Tab
+### Story 2.2: Folder-Scoped Learn Integration
 
 As a user,
-I want to access courses scoped to a folder from within that folder,
+I want to see my folder-scoped courses in the folder sidebar and access them from a dedicated learn page,
 So that my learning stays organized by subject.
 
 **Acceptance Criteria:**
 
 **Given** the user is in a folder view (e.g., `/app/folders/[id]/`)
-**When** the Learn tab is visible in the folder tab bar
-**Then** clicking Learn shows courses created from that folder's documents
-**And** the "+ Create Course" action pre-selects the current folder's documents
-**And** the Learn tab appears alongside Chat, Flashcards, Quiz, and Documents tabs
+**When** folder-scoped courses exist for that folder
+**Then** courses appear as void entries in the folder sidebar under the VOIDS section (alongside chats, flashcard sets, and quizzes)
+**And** clicking a course navigates to `/app/folders/[id]/learn/[courseId]`
+**And** the "New Void" dialog includes a "Course" type that opens the course creator with the current folder pre-selected
+**And** a "Learn" entry in the sidebar's workspace section links to `/app/folders/[id]/learn/` showing all folder-scoped courses in a grid
 
 ### Story 2.3: Course Deletion
 

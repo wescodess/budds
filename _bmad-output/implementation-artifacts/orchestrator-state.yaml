@@ -1,11 +1,41 @@
 mode: running
 current_phase: epic-story
-current_story: 1-1-convex-schema-course-tables
+current_story: 1-7-course-creator-ui-full-flow
 current_epic: 1
 retry_count: 0
 last_epic_complete_fired: null
 
-last_verdict: null
+last_verdict:
+  subagent: bmad-story-runner
+  story: 1-6-pace-selector-and-course-start
+  epic: 1
+  status: PASS
+  pr_url: 'https://github.com/wescodess/budds/pull/93'
+  branch: 'feat/1-6-pace-selector-and-course-start'
+  commit_sha: '7d3f8dd9a8e5445b155905ea4c215295a510e55a'
+  files_changed: 8
+  tasks_completed: 14
+  tasks_total: 14
+  findings_deferred: 2
+  lint_pass: null
+  typecheck_pass: true
+  unit_tests_pass: true
+  e2e_tests_pass: null
+  review_pass: true
+  summary: >
+    Story 1-6 complete. Added courses.updatePace mutation (auth + ownership guard,
+    patches pace + updatedAt) and courses.startCourse mutation (validates ready status,
+    first section locked, creates section-generate task via internal.tasks.createInternal,
+    transitions first section to generating, double-start guard). Created PaceSelector.vue
+    (native select with 3 presets: Intensive/Steady/Relaxed with descriptions) and
+    StartLearningButton.vue (amber CTA with loading state, calls startCourse then
+    navigates to /app/learn/[courseId]). 506 Convex/server tests pass (0 regressions,
+    +8 new), 22 learn component tests pass (+7 new: 4 pace-selector + 3 start-learning).
+    Code review PASS: 1 blocker fixed (double-start guard on startCourse), 2 deferred
+    (error handling toasts, optimistic pace update). PR #93 merged to dev.
+  block_reason: null
+  block_context: null
+  at: '2026-04-23T03:35:00Z'
 last_retro: null
 
 config:
@@ -30,8 +60,8 @@ paths:
   ux_spec: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/ux-design-learn-module.md
 
 counters:
-  stories_completed_this_run: 0
-  stories_completed_total: 0
+  stories_completed_this_run: 1
+  stories_completed_total: 6
 
 escalation:
   pending: null
@@ -47,14 +77,34 @@ escalation:
 decisions_log:
   - ts: '2026-04-22'
     decision: |
-      START invoked for Learn Module. Fresh state created. V1.2 archives preserved (sprint-status-v1.2-archive.yaml, orchestrator-state-v1.2-archive.yaml).
-      DETERMINE_NEXT: epic-1 backlog, stories 1-1 through 1-7 enumerated. First non-done story: 1-1-convex-schema-course-tables (backlog).
-      Story is in backlog state — no story file exists yet. Must create story file via bmad-bmm-workflows-create-story before spawning story-runner.
-      Updating epic-1 → in-progress, creating story 1-1.
+      story-runner PASS for 1-6 (2 deferred: error handling toasts, optimistic pace update). 14/14 tasks, 7 ACs, 8 files.
+      updatePace + startCourse mutations, PaceSelector.vue, StartLearningButton.vue. 506 Convex tests (+8), 22 learn component tests (+7).
+      Code review PASS: 1 blocker fixed (double-start guard), 2 deferred. PR #93 merged to dev. Counters 1 this-run, 6 total. Advancing to 1-7.
+  - ts: '2026-04-22'
+    decision: |
+      story-runner PASS for 1-1 (1 deferred: courseSourceDocs missing by_userId index, 0 blockers, 11/11 ACs, 12 files, +11 Convex tests net).
+      PR #88 merged to dev. 4 new tables (courses, courseSections, courseSourceDocs, learnProfile), courseScoped flag on 3 existing tables,
+      folder-tab query filters, cascade update, export schemaVersion 4→5. Counters 0→1 this-run. Telegram notified. Advancing to 1-2.
+  - ts: '2026-04-22'
+    decision: |
+      START invoked for Learn Module. Fresh state created. V1.2 archives preserved.
+      DETERMINE_NEXT: epic-1 backlog → 1-1-convex-schema-course-tables. Story file created, runner spawned.
 
 run_log:
   - ts: '2026-04-22'
+    mode: resume
+    note: |
+      1-6 PASS (PR #93). DETERMINE_NEXT: 1-7-course-creator-ui-full-flow (backlog).
+      Created story file from epics definition. Spawning bmad-story-runner for 1-7.
+  - ts: '2026-04-22'
+    mode: resume
+    note: |
+      Resume invoked. Last verdict: 1-5 PASS (PR #92). DETERMINE_NEXT: 1-6-pace-selector-and-course-start (backlog).
+      Story file exists at ready-for-dev. Spawning bmad-story-runner.
+  - ts: '2026-04-22'
     mode: start
     note: |
-      Paths resolved. Learn Module sprint: 7 epics, 30 stories (4 MVP epics / 22 stories, 3 fast-follow epics / 8 stories).
-      First non-done item: 1-1-convex-schema-course-tables (backlog). Creating story file, then spawning story-runner.
+      Spawned bmad-story-runner for 1-1. Runner PASS: PR #88 merged to dev, 12 files, 6/6 tasks, 11/11 ACs,
+      447 total tests pass (0 regressions), 1 deferred (courseSourceDocs by_userId index), 0 blockers.
+      Code review PASS with 2 findings fixed inline, 1 deferred. Counters 0→1 this-run.
+      User requested archiving of old V1.2 artifacts — pausing orchestrator loop to handle.

@@ -138,7 +138,7 @@ The zero-friction entry point is the most powerful onboarding moment: a user typ
 | User format override per section | Net-new | Low |
 | Top-level Learn route (`/app/learn/`) | Net-new | Low |
 | Folder-scoped Learn (`/app/folders/[id]/learn/`) | Net-new | Low |
-| Course-scoped entities (not visible in folder tabs) | Net-new | Medium |
+| Course-scoped entities (not visible in folder sidebar) | Net-new | Medium |
 | Web search supplementation for course content | Net-new | High |
 
 **Explicitly deferred from MVP:**
@@ -202,7 +202,7 @@ The zero-friction entry point is the most powerful onboarding moment: a user typ
 
 Priya is a second-year biology major with her Organic Chemistry midterm in 10 days. She has 18 lecture PDFs already uploaded to her Budds folder from earlier in the semester. She's been using Budds for chat and one-off quizzes, but her study sessions feel scattered — a quiz here, some flashcards there, no structure.
 
-She opens her Organic Chemistry folder and sees the new "Learn" option alongside Chat, Quiz, and Flashcards. She taps it and hits "Create Course." The system already knows her folder contents — 18 documents covering reaction mechanisms, stereochemistry, spectroscopy, and thermodynamics. She sees a source confidence indicator: "This course draws from 18 of your documents."
+She opens her Organic Chemistry folder and sees courses listed in the sidebar alongside her chats, quizzes, and flashcard sets. She taps "New Void" and selects "Course" to create one. The system already knows her folder contents — 18 documents covering reaction mechanisms, stereochemistry, spectroscopy, and thermodynamics. She sees a source confidence indicator: "This course draws from 18 of your documents."
 
 Within 15 seconds, an AI-generated outline appears: 12 sections, ordered by dependency (functional groups → reaction mechanisms → stereochemistry → spectroscopy → synthesis problems). Priya notices stereochemistry is listed after spectroscopy — she knows her professor tests them in the opposite order. She drags stereochemistry above spectroscopy. She also removes the intro section on functional groups — she's solid on that. 11 sections remain.
 
@@ -312,7 +312,7 @@ One user created 8 courses simultaneously and accumulated a review backlog of 20
 
 **Multi-engine orchestration from single RAG source:** A single semantic search index (Cloudflare AI Search) powers four distinct content generation engines (chat, quiz, flashcard, audio) through one pipeline. Learn orchestrates all four into a unified learning experience per section. This is architecturally distinct from combining separate tools — the integration is at the data layer, not the UI layer.
 
-**Course-scoped entity model:** Quizzes, flashcards, and audio generated within a course are course-scoped — they exist in the course graph, not in folder tabs. This is a novel data architecture that separates ad-hoc generation (user-initiated, folder-visible) from orchestrated generation (system-curated, course-scoped). Both use the same underlying engines but serve different user intents.
+**Course-scoped entity model:** Quizzes, flashcards, and audio generated within a course are course-scoped — they exist in the course graph, not in the folder sidebar void list. This is a novel data architecture that separates ad-hoc generation (user-initiated, folder-visible) from orchestrated generation (system-curated, course-scoped). Both use the same underlying engines but serve different user intents.
 
 ### Market Context & Competitive Landscape
 
@@ -374,7 +374,7 @@ The Learn module extends Budds' Nuxt 4 full-stack architecture. All Learn featur
 - FR7: User can set a learning pace for a course (intensive, steady, or relaxed)
 - FR8: User can change the learning pace at any time
 - FR9: User can view all their courses from the top-level Learn route
-- FR10: User can view folder-scoped courses from within a folder's Learn tab
+- FR10: User can view folder-scoped courses from within a folder's sidebar and dedicated learn page
 - FR11: User can delete a course and all associated course-scoped entities
 - FR12: System supplements course content from web search when user documents provide insufficient coverage
 - FR13: System pre-fetches the next section (N+1) while the user works on the current section

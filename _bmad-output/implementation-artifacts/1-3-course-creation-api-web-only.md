@@ -30,7 +30,7 @@ So that I can start learning immediately without uploading anything.
 
 4. **Given** a user can optionally attach a `folderId` to a web-only course
    **When** they pass a `folderId` with `sourceType: 'web-only'`
-   **Then** the course is scoped to that folder (appears in folder Learn tab) but has no document sources
+   **Then** the course is scoped to that folder (appears in folder sidebar and learn page) but has no document sources
    **And** folder ownership is verified
 
 5. **Given** the Convex tests
@@ -59,4 +59,4 @@ So that I can start learning immediately without uploading anything.
 - This is a small delta on top of Story 1-2's `courses.create` — just adding the web-only branch
 - The actual web search / AI Gateway call happens in Story 1.4 (outline generation pipeline) — this story only creates the course record and task
 - Architecture specifies AI Gateway for web supplementation rather than a dedicated search API
-- Web-only courses can optionally be folder-scoped (appears in folder Learn tab) even without document sources
+- Web-only courses can optionally be folder-scoped (appears in folder sidebar and learn page) even without document sources

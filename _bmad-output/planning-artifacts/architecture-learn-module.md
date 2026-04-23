@@ -69,7 +69,7 @@ Course Management and Section Learning carry the heaviest architectural load. Th
 
 **Critical Constraints:**
 1. **Existing API reuse is mandatory.** NFR20-22 require Learn sections to use existing `/api/quiz/generate`, `/api/flashcards/generate`, and `/api/audio-overview/generate` endpoints with orchestration wrappers. No parallel implementations.
-2. **Course-scoped entities must be invisible in folder tabs.** Quizzes, flashcards, and audio generated within a course exist only in the course graph. This requires a `courseId`/`sectionId` field on existing entity tables or new course-specific tables.
+2. **Course-scoped entities must be invisible in folder sidebar.** Quizzes, flashcards, and audio generated within a course exist only in the course graph and must not appear in the folder's void list. This requires a `courseId`/`sectionId` field on existing entity tables or new course-specific tables.
 3. **The tasks table is the async job backbone.** Course outline generation, section generation, and N+1 pre-fetch all run as async tasks using the existing tasks system.
 4. **Web search requires a new provider.** Cloudflare AI Search indexes user documents only. Course web supplementation needs a separate search API (architecture decision below).
 5. **No offline infrastructure exists.** Learn introduces offline as a new app-level capability. Service worker, IndexedDB caching, and background sync are all net-new.
@@ -223,7 +223,7 @@ calendarEvents (fast-follow)
 indexes: by_userId, by_courseId, by_status
 ```
 
-**Course-scoped entity strategy:** Rather than adding a `courseId` column to existing quiz/flashcard/audio tables (which would pollute the existing data model), course sections reference entities by ID in `contentBlocks[].entityId`. The entities are created through existing generation endpoints but with a `courseScoped: true` flag that prevents them from appearing in folder tab queries. Existing folder-tab queries filter on `courseScoped !== true`.
+**Course-scoped entity strategy:** Rather than adding a `courseId` column to existing quiz/flashcard/audio tables (which would pollute the existing data model), course sections reference entities by ID in `contentBlocks[].entityId`. The entities are created through existing generation endpoints but with a `courseScoped: true` flag that prevents them from appearing in folder void queries. Existing folder sidebar queries filter on `courseScoped !== true`.
 
 **Rationale:** This keeps the existing data model clean while enabling course orchestration. The `courseScoped` flag is a minimal schema change to existing tables. Convex's real-time subscriptions on `courseSections` drive the section UI.
 
@@ -366,7 +366,7 @@ Quality mapping from user input:
 
 ### Structure Patterns
 
-**Course-scoped entity flag:** All existing generation endpoints accept an optional `courseScoped: true` parameter. Existing folder-tab queries add `.filter(q => q.neq(q.field('courseScoped'), true))` to exclude course entities.
+**Course-scoped entity flag:** All existing generation endpoints accept an optional `courseScoped: true` parameter. Existing folder sidebar queries add `.filter(q => q.neq(q.field('courseScoped'), true))` to exclude course entities from the void list.
 
 **Section content blocks:** A section's `contentBlocks` array is ordered and typed. The section renderer dispatches to the appropriate component based on `type`:
 - `text` → `SectionTextBlock` (new component)

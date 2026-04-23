@@ -134,4 +134,4 @@ So that creating a course feels simple and inviting.
 - The `/app/learn/[courseId]` page is a placeholder — Epic 2 Story 4.1 builds the real course view
 - `courses.create` already handles all three sourceTypes and creates the outline generation task
 - The skeleton loading state should match the dark theme used by OutlineEditor
-- The `folderId` query param enables Story 2.2 (folder-scoped learn tab) to link directly to course creation with that folder pre-selected
+- The `folderId` query param enables Story 2.2 (folder-scoped learn integration) to link directly to course creation with that folder pre-selected

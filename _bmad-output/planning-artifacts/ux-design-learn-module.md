@@ -82,11 +82,11 @@ The Learn module introduces a new concept to Budds: **structured progression**. 
 
 ### 2. Folder-Scoped Learn (`/app/folders/[id]/learn/`)
 
-**Purpose:** Learn tab within a folder. Shows courses scoped to this folder's documents.
+**Purpose:** Dedicated learn page within a folder. Shows courses scoped to this folder's documents.
 
 **Layout:** Same grid as Learn Home, but filtered to folder-scoped courses. The "+ Create Course" action pre-selects the current folder's documents as source material. No daily review CTA here — that lives at the top-level Learn home only.
 
-**How it fits the existing folder shell:** Learn appears as a new tab alongside Chat, Flashcards, Quiz, and Documents in the folder tab bar. Same tab styling, same position logic.
+**How it fits the existing folder shell:** Courses appear as void entries in the folder sidebar (alongside chats, flashcard sets, and quizzes). Selecting a course navigates to `/app/folders/[id]/learn/[courseId]`. The "New Void" dialog includes a "Course" option that opens the course creator with the current folder pre-selected. The folder-scoped learn index (`/app/folders/[id]/learn/`) is accessible via a "Learn" entry in the sidebar's workspace section.
 
 ### 3. Course Creator
 
