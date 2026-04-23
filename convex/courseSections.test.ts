@@ -306,11 +306,11 @@ describe('courseSections.finalizeSectionGeneration', () => {
     expect(fcBlock!.entityId).toBeTruthy()
     expect(fcBlock!.entityType).toBe('flashcard')
 
-    const quiz = await t.run(async (ctx) => ctx.db.get(quizBlock!.entityId as any))
+    const quiz = await t.run(async (ctx) => ctx.db.get(quizBlock!.entityId as any)) as any
     expect(quiz).not.toBeNull()
     expect(quiz!.courseScoped).toBe(true)
 
-    const room = await t.run(async (ctx) => ctx.db.get(fcBlock!.entityId as any))
+    const room = await t.run(async (ctx) => ctx.db.get(fcBlock!.entityId as any)) as any
     expect(room).not.toBeNull()
     expect(room!.courseScoped).toBe(true)
   })

@@ -5,6 +5,8 @@ import type { AISearchChunk } from '../../utils/ai-search'
 import { readConfiguredRuntimeValue } from '../../utils/runtime-config'
 import { requireRateLimit } from '../../utils/rate-limit'
 import { buildSectionTextPrompt } from '../../utils/section-text-prompt'
+import { buildQuizPrompt, parseQuizResponse } from '../../utils/quiz-prompt'
+import { buildFlashcardPrompt, parseFlashcardResponse } from '../../utils/flashcard-prompt'
 import { buildAudioPrimerPrompt } from '../../utils/audio-primer-prompt'
 import {
   parseAudioScriptResponse,
