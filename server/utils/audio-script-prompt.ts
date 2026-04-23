@@ -16,13 +16,17 @@ export const audioScriptResponseSchema = z.object({
 export type AudioScriptTurn = z.infer<typeof audioTurnSchema>
 export type AudioScriptResponse = z.infer<typeof audioScriptResponseSchema>
 
+export type TtsEngineHint = 'dia' | 'aura-1'
+
 export interface BuildAudioScriptPromptOptions {
   lengthMinutes?: number
   complexity?: 'beginner' | 'expert'
   title?: string
+  ttsEngine?: TtsEngineHint
 }
 
-const WORDS_PER_MINUTE = 150
+const AURA_WORDS_PER_MINUTE = 150
+const DIA_WORDS_PER_MINUTE = 280
 const MAX_TURN_CHARS = 1800
 
 function summarizeChunks(chunks: AISearchChunk[]): string {
@@ -41,6 +45,42 @@ function buildComplexityRule(complexity?: 'beginner' | 'expert'): string {
   return '- Complexity: BEGINNER. Define jargon on first use. Favor everyday analogies. Host B is a curious learner; Host A explains without condescension.'
 }
 
+function buildEmotionalTextureBlock(engine?: TtsEngineHint): string {
+  const base = `Emotional texture:
+- Host A should sound warm and engaged, occasionally reflective ("you know, this is one of my favorite parts,").
+- Host B should sound genuinely curious, sometimes amused, sometimes puzzled ("wait — so you're telling me...?").
+- Interrupt occasionally with em dashes, mid-thought course-corrections, finishing-each-other's-sentences.
+- Small reactive sounds in the middle of responses are great: "...and then — haha — it turns out..."`
+
+  if (engine === 'dia') {
+    return `${base}
+- Use parenthetical expressions for genuine emotional moments — the TTS engine renders these as actual sounds:
+  (laughs), (sighs), (clears throat), (coughs)
+  Use sparingly (2–4 per overview) for maximum impact. Place them naturally mid-sentence or between sentences.
+  Example: "and then — (laughs) — it turns out the whole thing was a misunderstanding."`
+  }
+
+  return base
+}
+
+function buildHardDontsBlock(engine?: TtsEngineHint): string {
+  if (engine === 'dia') {
+    return `HARD DON'TS
+- NEVER use bracketed stage directions like [laughs], [pauses], [sighs], *laughs*. Use parenthetical form instead: (laughs), (sighs).
+- NEVER use markdown (asterisks, underscores, backticks) — those get read literally.
+- NEVER use ALL CAPS for emphasis — the TTS yells. Use "!", "—", or rephrasing.
+- NEVER write "um" alone; "umm," with the comma is fine, but "hmm," is cleaner.
+- NEVER overuse parenthetical expressions — they lose impact if every turn has one.`
+  }
+
+  return `HARD DON'TS
+- NEVER use bracketed stage directions like [laughs], [pauses], [sighs], (laughs), *laughs*. The TTS will read those LITERALLY as "left bracket laughs right bracket" — and ruin the illusion. Use punctuation and onomatopoeia instead ("haha", "hmm", "ohh").
+- NEVER use parenthetical asides like "(by the way, ...)" — same literal-read problem. Just say the aside as its own sentence.
+- NEVER use markdown (asterisks, underscores, backticks) — those get read too.
+- NEVER use ALL CAPS for emphasis — the TTS yells. Use "!", "—", or rephrasing.
+- NEVER write "um" alone; "umm," with the comma is fine, but "hmm," is cleaner.`
+}
+
 const MAX_SOURCE_CHARS = 80_000
 
 export function buildAudioScriptPrompt(
@@ -48,7 +88,8 @@ export function buildAudioScriptPrompt(
   options: BuildAudioScriptPromptOptions = {},
 ): ChatMessage[] {
   const lengthMinutes = Math.min(Math.max(options.lengthMinutes ?? 10, 3), 30)
-  const wordBudget = Math.round(lengthMinutes * WORDS_PER_MINUTE)
+  const wpm = options.ttsEngine === 'dia' ? DIA_WORDS_PER_MINUTE : AURA_WORDS_PER_MINUTE
+  const wordBudget = Math.round(lengthMinutes * wpm)
   const minTurns = Math.max(18, Math.round(wordBudget / 60))
   const maxTurns = Math.max(minTurns + 6, Math.round(wordBudget / 35))
   const complexityRule = buildComplexityRule(options.complexity)
@@ -115,18 +156,9 @@ Conversational fillers (scatter these in — don't overdo any one):
 - Soft laughter / amusement: "haha,", "ha —", "heh,"
 - Discovery moments: "oh — oh, that's interesting,", "wait, so..."
 
-Emotional texture:
-- Host A should sound warm and engaged, occasionally reflective ("you know, this is one of my favorite parts,").
-- Host B should sound genuinely curious, sometimes amused, sometimes puzzled ("wait — so you're telling me...?").
-- Interrupt occasionally with em dashes, mid-thought course-corrections, finishing-each-other's-sentences.
-- Small reactive sounds in the middle of responses are great: "...and then — haha — it turns out..."
+${buildEmotionalTextureBlock(options.ttsEngine)}
 
-HARD DON'TS
-- NEVER use bracketed stage directions like [laughs], [pauses], [sighs], (laughs), *laughs*. The TTS will read those LITERALLY as "left bracket laughs right bracket" — and ruin the illusion. Use punctuation and onomatopoeia instead ("haha", "hmm", "ohh").
-- NEVER use parenthetical asides like "(by the way, ...)" — same literal-read problem. Just say the aside as its own sentence.
-- NEVER use markdown (asterisks, underscores, backticks) — those get read too.
-- NEVER use ALL CAPS for emphasis — the TTS yells. Use "!", "—", or rephrasing.
-- NEVER write "um" alone; "umm," with the comma is fine, but "hmm," is cleaner.`
+${buildHardDontsBlock(options.ttsEngine)}`
 
   const sourceBlock = chunks.length === 0 ? '(no sources provided)' : summarizeChunks(chunks)
   const user = `Source passages:\n\n${sourceBlock}\n\nWrite the script now. Remember: every character is spoken aloud — no markup, no stage directions, only natural conversation.`
@@ -218,17 +250,24 @@ export function estimateTurnDurationMs(text: string): number {
   return Math.max(1000, Math.ceil(text.length / 14) * 1000)
 }
 
-/**
- * Strip markup that TTS would read literally. LLMs sometimes leak stage directions,
- * markdown emphasis, or parenthetical asides despite the prompt's instructions.
- * Whatever survives this function is what the voice will actually say out loud.
- */
-export function sanitizeTurnForSpeech(text: string): string {
+function isDiaExpression(token: string): boolean {
+  return /^\((laughs?|sighs?|coughs?|clears?\s+throat|chuckles?)\)$/i.test(token)
+}
+
+export function sanitizeTurnForSpeech(text: string, options?: { preserveExpressions?: boolean }): string {
   let out = text
   out = out.replace(/\[[^\]]+\]/g, '')
   out = out.replace(/\*+([^*]+)\*+/g, '$1')
   out = out.replace(/_+([^_]+)_+/g, '$1')
   out = out.replace(/`+([^`]+)`+/g, '$1')
+
+  if (!options?.preserveExpressions) {
+    out = out.replace(/\([^)]+\)/g, '')
+  }
+  else {
+    out = out.replace(/\([^)]+\)/g, match => isDiaExpression(match) ? match : '')
+  }
+
   out = out.replace(/\s+/g, ' ')
   return out.trim()
 }

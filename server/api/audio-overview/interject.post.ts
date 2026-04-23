@@ -14,7 +14,8 @@ import {
   splitOversizedTurns,
   type AudioScriptTurn,
 } from '../../utils/audio-script-prompt'
-import { synthesizeVoiceWithRetry, isAuraVoice, type AuraVoice } from '../../utils/tts-workers-ai'
+import { isAuraVoice, type AuraVoice } from '../../utils/tts-workers-ai'
+import { resolveTtsEngine, synthesizeTurn, type TtsEngine } from '../../utils/tts-provider'
 import { readConfiguredRuntimeValue } from '../../utils/runtime-config'
 import { requireRateLimit } from '../../utils/rate-limit'
 
@@ -73,10 +74,16 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 409, message: 'Audio overview is not ready' })
   }
 
+  const storedHostA = overview.voiceProfile?.hostA
+  const storedHostB = overview.voiceProfile?.hostB
+  const overviewUsesDia = storedHostA?.startsWith('dia-') || storedHostB?.startsWith('dia-')
+
   const voiceProfile = {
-    hostA: isAuraVoice(overview.voiceProfile?.hostA) ? overview.voiceProfile.hostA : DEFAULT_HOSTS.hostA,
-    hostB: isAuraVoice(overview.voiceProfile?.hostB) ? overview.voiceProfile.hostB : DEFAULT_HOSTS.hostB,
+    hostA: isAuraVoice(storedHostA) ? storedHostA : DEFAULT_HOSTS.hostA,
+    hostB: isAuraVoice(storedHostB) ? storedHostB : DEFAULT_HOSTS.hostB,
   }
+
+  const ttsEngine: TtsEngine = overviewUsesDia ? await resolveTtsEngine() : 'aura-1'
 
   const clampedAfterIndex = Math.max(0, Math.min(afterIndex, overview.turns.length))
 
@@ -125,6 +132,7 @@ export default defineEventHandler(async (event) => {
     question,
     overviewTitle: overview.title,
     chunks,
+    ttsEngine,
   })
 
   const completion = await generateCompletion({
@@ -170,12 +178,12 @@ export default defineEventHandler(async (event) => {
 
     for (let i = 0; i < normalizedTurns.length; i++) {
       const turn = normalizedTurns[i]!
-      const speaker = turn.speaker === 'host_a' ? voiceProfile.hostA : voiceProfile.hostB
-      const spokenText = sanitizeTurnForSpeech(turn.text)
+      const auraVoice = turn.speaker === 'host_a' ? voiceProfile.hostA : voiceProfile.hostB
+      const spokenText = sanitizeTurnForSpeech(turn.text, { preserveExpressions: ttsEngine === 'dia' })
 
       let audioBytes: Uint8Array
       try {
-        audioBytes = await synthesizeVoiceWithRetry({ text: spokenText, speaker })
+        audioBytes = await synthesizeTurn(spokenText, turn.speaker, ttsEngine, auraVoice)
       }
       catch (err: any) {
         throw createError({

@@ -158,6 +158,7 @@ function focus() {
 }
 
 function placeCaretAfter(node: Node) {
+  if (!node.parentNode) return
   const selection = window.getSelection()
   if (!selection) return
 
