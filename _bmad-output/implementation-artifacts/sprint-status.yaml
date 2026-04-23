@@ -102,7 +102,7 @@ development_status:
   epic-5: in-progress
   5-1-review-item-extraction-and-sm2-data-model: done
   5-2-daily-review-session-ui: done
-  5-3-sm2-scheduling-engine: backlog
+  5-3-sm2-scheduling-engine: done
   5-4-cross-course-review-budgeting: backlog
   5-5-review-session-completion-and-daily-review-cta: backlog
   epic-5-retrospective: optional
