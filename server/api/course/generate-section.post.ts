@@ -5,6 +5,14 @@ import type { AISearchChunk } from '../../utils/ai-search'
 import { readConfiguredRuntimeValue } from '../../utils/runtime-config'
 import { requireRateLimit } from '../../utils/rate-limit'
 import { buildSectionTextPrompt } from '../../utils/section-text-prompt'
+import { buildAudioPrimerPrompt } from '../../utils/audio-primer-prompt'
+import {
+  parseAudioScriptResponse,
+  splitOversizedTurns,
+  sanitizeTurnForSpeech,
+  estimateTurnDurationMs,
+} from '../../utils/audio-script-prompt'
+import { resolveTtsEngine, synthesizeTurn, synthesizeDialogue, engineVoiceProfile } from '../../utils/tts-provider'
 
 interface EngineConfig {
   includeAudio: boolean
@@ -39,6 +47,11 @@ function makeConvexClient(event: any): ConvexHttpClient | null {
   client.setAuth(token)
   return client
 }
+
+const AUDIO_SCRIPT_MODEL = 'google/gemini-2.5-flash'
+const DEFAULT_VOICE_PROFILE = { hostA: 'asteria' as const, hostB: 'orion' as const }
+const MAX_PRIMER_TURNS = 16
+const MIN_PRIMER_TURNS = 2
 
 export default defineEventHandler(async (event) => {
   requireRateLimit(event, 5)
@@ -258,10 +271,152 @@ export default defineEventHandler(async (event) => {
       }
     })()
 
-    const [textResult, quizResult, flashcardResult] = await Promise.all([
+    const audioPromise = (async (): Promise<string | null> => {
+      if (!engineConfig.includeAudio) return null
+      if (chunks.length === 0 && course.sourceType !== 'web-only') return null
+      if (!course.folderId) return null
+
+      const uploadedStorageIds: string[] = []
+
+      async function cleanupOrphanBlobs() {
+        for (const storageId of uploadedStorageIds) {
+          try {
+            await convexClient.mutation(api.audioOverviews.deleteOrphanTurnBlob, { storageId: storageId as Id<'_storage'> })
+          } catch { /* best-effort */ }
+        }
+      }
+
+      try {
+        await setTaskProgress('Generating audio primer...')
+
+        const primerMessages = buildAudioPrimerPrompt(chunks, {
+          sectionTitle: section.title,
+          courseTitle: course.title,
+          knowledgeType: section.knowledgeType,
+        })
+
+        const completion = await generateCompletion({
+          model: AUDIO_SCRIPT_MODEL,
+          messages: primerMessages,
+          temperature: 0.5,
+          max_tokens: 2000,
+        })
+
+        const raw = completion.choices[0]?.message?.content ?? ''
+        const parsedScript = parseAudioScriptResponse(raw)
+        let normalizedTurns = splitOversizedTurns(parsedScript.turns)
+
+        if (normalizedTurns.length > MAX_PRIMER_TURNS) {
+          normalizedTurns = normalizedTurns.slice(0, MAX_PRIMER_TURNS)
+        }
+
+        if (normalizedTurns.length < MIN_PRIMER_TURNS) {
+          console.warn(`[generate-section] Audio primer too short (${normalizedTurns.length} turns), skipping`)
+          failedEngines.push('audio primer')
+          return null
+        }
+
+        await setTaskProgress('Synthesizing audio primer...')
+        const ttsEngine = await resolveTtsEngine()
+
+        const sourceDocumentIds = new Set<string>()
+        for (const turn of normalizedTurns) {
+          const sourceChunk = turn.sourceIndex !== undefined ? chunks[turn.sourceIndex] : undefined
+          const docId = (sourceChunk?.attributes?.documentId as string | undefined) ?? undefined
+          if (docId) sourceDocumentIds.add(docId)
+        }
+
+        const persistedTurns: Array<{
+          speaker: 'host_a' | 'host_b'
+          text: string
+          audioFileId: Id<'_storage'>
+          durationMs: number
+          sourceIndex?: number
+        }> = []
+
+        if (ttsEngine === 'dia') {
+          const diaScript = normalizedTurns
+            .map(t => `[${t.speaker === 'host_a' ? 'S1' : 'S2'}] ${sanitizeTurnForSpeech(t.text, { preserveExpressions: true })}`)
+            .join(' ... ')
+
+          const result = await synthesizeDialogue(diaScript)
+
+          const uploadUrl = await convexClient.mutation(api.audioOverviews.generateTurnUploadUrl, {})
+          const uploadResponse = await fetch(uploadUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'audio/mpeg' },
+            body: result.audio,
+          })
+          if (!uploadResponse.ok) throw new Error('Failed to upload audio primer')
+
+          const uploadJson = await uploadResponse.json() as { storageId?: string }
+          if (!uploadJson.storageId) throw new Error('Upload returned no storageId')
+          uploadedStorageIds.push(uploadJson.storageId)
+
+          const combinedText = normalizedTurns.map(t => `${t.speaker === 'host_a' ? 'Host A' : 'Host B'}: ${t.text}`).join('\n')
+          persistedTurns.push({
+            speaker: 'host_a',
+            text: combinedText,
+            audioFileId: uploadJson.storageId as Id<'_storage'>,
+            durationMs: result.durationMs,
+          })
+        } else {
+          const voiceProfile = DEFAULT_VOICE_PROFILE
+          for (let i = 0; i < normalizedTurns.length; i++) {
+            const turn = normalizedTurns[i]!
+            const auraVoice = turn.speaker === 'host_a' ? voiceProfile.hostA : voiceProfile.hostB
+            const spokenText = sanitizeTurnForSpeech(turn.text)
+
+            const audioBytes = await synthesizeTurn(spokenText, turn.speaker, ttsEngine, auraVoice)
+
+            const uploadUrl = await convexClient.mutation(api.audioOverviews.generateTurnUploadUrl, {})
+            const uploadResponse = await fetch(uploadUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'audio/mpeg' },
+              body: audioBytes,
+            })
+            if (!uploadResponse.ok) throw new Error(`Failed to upload audio primer turn ${i + 1}`)
+
+            const uploadJson = await uploadResponse.json() as { storageId?: string }
+            if (!uploadJson.storageId) throw new Error(`Upload for primer turn ${i + 1} returned no storageId`)
+            uploadedStorageIds.push(uploadJson.storageId)
+
+            persistedTurns.push({
+              speaker: turn.speaker,
+              text: turn.text,
+              audioFileId: uploadJson.storageId as Id<'_storage'>,
+              durationMs: estimateTurnDurationMs(turn.text),
+              sourceIndex: turn.sourceIndex,
+            })
+          }
+        }
+
+        const voiceProfile = ttsEngine === 'dia' ? engineVoiceProfile('dia') : DEFAULT_VOICE_PROFILE
+
+        const { overviewId } = await convexClient.mutation(api.audioOverviews.createCourseScopedOverview, {
+          folderId: course.folderId,
+          title: parsedScript.title || `${section.title} Primer`,
+          model: AUDIO_SCRIPT_MODEL,
+          turns: persistedTurns,
+          voiceProfile,
+          preferences: { lengthMinutes: 2, complexity: 'beginner' },
+          sourceDocumentIds: Array.from(sourceDocumentIds),
+        })
+
+        return overviewId
+      } catch (err: any) {
+        await cleanupOrphanBlobs()
+        console.error('[generate-section] Audio primer generation failed:', err?.message)
+        failedEngines.push('audio primer')
+        return null
+      }
+    })()
+
+    const [textResult, quizResult, flashcardResult, audioEntityId] = await Promise.all([
       textPromise,
       quizPromise,
       flashcardPromise,
+      audioPromise,
     ])
 
     await setTaskProgress('Assembling section...')
@@ -271,6 +426,7 @@ export default defineEventHandler(async (event) => {
       textContent: textResult || undefined,
       quizData: quizResult || undefined,
       flashcardData: flashcardResult || undefined,
+      audioEntityId: audioEntityId || undefined,
       failedEngines: failedEngines.length > 0 ? failedEngines : undefined,
       taskId,
     })

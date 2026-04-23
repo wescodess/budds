@@ -40,6 +40,13 @@ vi.mock('../../utils/rate-limit', () => ({
   requireRateLimit: vi.fn(),
 }))
 
+vi.mock('../../utils/tts-provider', () => ({
+  resolveTtsEngine: vi.fn(async () => 'aura-1'),
+  synthesizeTurn: vi.fn(async () => new Uint8Array([0xff, 0xfb])),
+  synthesizeDialogue: vi.fn(async () => ({ audio: new Uint8Array([0xff, 0xfb]), durationMs: 5000 })),
+  engineVoiceProfile: vi.fn(() => ({ hostA: 'asteria', hostB: 'orion' })),
+}))
+
 const handler = (await import('./generate-section.post')).default as Function
 
 function makeEvent(): any {
@@ -187,6 +194,122 @@ describe('POST /api/course/generate-section', () => {
 
     const result = await handler(makeEvent())
     expect(result.failedEngines).toContain('text explanation')
+  })
+})
+
+describe('audio primer in section generation', () => {
+  test('conceptual knowledge type includes audio generation', async () => {
+    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+      courseId: 'course_123',
+      sectionId: 'section_123',
+    })
+
+    mockQuery.mockImplementation((_ref: any, args: any) => {
+      if (args?.id) return mockCourse()
+      if (args?.courseId === 'course_123' && !args?.id) {
+        return [mockSection({ knowledgeType: 'conceptual' })]
+      }
+      return []
+    })
+
+    vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({
+      data: [
+        { id: '1', content: 'Conceptual content about reactions', score: 0.9, attributes: { filename: 'lecture-7.pdf', documentId: 'doc_1' } },
+      ],
+    })
+
+    vi.mocked(globalThis.generateCompletion as any).mockResolvedValue(
+      textCompletionResponse('Generated text for conceptual section.'),
+    )
+
+    mockMutation.mockResolvedValue({ status: 'ready', blockCount: 1 })
+
+    await handler(makeEvent())
+
+    const finalizationCall = mockMutation.mock.calls.find(
+      (c: any[]) => c[1]?.sectionId === 'section_123' && c[1]?.textContent,
+    )
+    expect(finalizationCall).toBeTruthy()
+  })
+
+  test('procedural knowledge type does not include audio', async () => {
+    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+      courseId: 'course_123',
+      sectionId: 'section_123',
+    })
+
+    mockQuery.mockImplementation((_ref: any, args: any) => {
+      if (args?.id) return mockCourse()
+      if (args?.courseId) return [mockSection({ knowledgeType: 'procedural' })]
+      return []
+    })
+
+    vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({
+      data: [{ id: '1', content: 'Steps', score: 0.9, attributes: { filename: 'test.pdf' } }],
+    })
+
+    vi.mocked(globalThis.generateCompletion as any).mockResolvedValue(
+      textCompletionResponse('Procedural steps'),
+    )
+
+    mockMutation.mockResolvedValue({ status: 'ready', blockCount: 1 })
+
+    await handler(makeEvent())
+
+    const finalizationCall = mockMutation.mock.calls.find(
+      (c: any[]) => c[1]?.sectionId === 'section_123',
+    )
+    expect(finalizationCall).toBeTruthy()
+    expect(finalizationCall![1].audioEntityId).toBeUndefined()
+  })
+})
+
+describe('audio-primer-prompt', () => {
+  test('buildAudioPrimerPrompt returns correct message structure', async () => {
+    const { buildAudioPrimerPrompt } = await import('../../utils/audio-primer-prompt')
+    const messages = buildAudioPrimerPrompt(
+      [{ id: '1', content: 'SN1 reactions overview', score: 0.9, attributes: { filename: 'lecture-7.pdf' } }],
+      {
+        sectionTitle: 'Reaction Mechanisms',
+        courseTitle: 'Organic Chemistry',
+        knowledgeType: 'conceptual',
+      },
+    )
+
+    expect(messages).toHaveLength(2)
+    expect(messages[0].role).toBe('system')
+    expect(messages[1].role).toBe('user')
+    expect(messages[0].content).toContain('SHORT audio primer')
+    expect(messages[0].content).toContain('2-minute')
+    expect(messages[0].content).toContain('Reference the user')
+    expect(messages[1].content).toContain('Organic Chemistry')
+    expect(messages[1].content).toContain('Reaction Mechanisms')
+    expect(messages[1].content).toContain('lecture-7.pdf')
+  })
+
+  test('buildAudioPrimerPrompt targets 6-12 turns', async () => {
+    const { buildAudioPrimerPrompt } = await import('../../utils/audio-primer-prompt')
+    const messages = buildAudioPrimerPrompt(
+      [{ id: '1', content: 'Some content', score: 0.9, attributes: {} }],
+      {
+        sectionTitle: 'Test',
+        courseTitle: 'Course',
+        knowledgeType: 'factual',
+      },
+    )
+
+    expect(messages[0].content).toContain('6–12 turns')
+  })
+
+  test('buildAudioPrimerPrompt returns empty turns instruction when no chunks', async () => {
+    const { buildAudioPrimerPrompt } = await import('../../utils/audio-primer-prompt')
+    const messages = buildAudioPrimerPrompt([], {
+      sectionTitle: 'Test',
+      courseTitle: 'Course',
+      knowledgeType: 'mixed',
+    })
+
+    expect(messages[1].content).toContain('no sources provided')
   })
 })
 

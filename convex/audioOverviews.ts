@@ -104,6 +104,90 @@ export const createWithTurns = mutation({
   },
 })
 
+export const createCourseScopedOverview = mutation({
+  args: {
+    folderId: v.id('folders'),
+    title: v.string(),
+    model: v.optional(v.string()),
+    turns: v.array(turnInputValidator),
+    voiceProfile: voiceProfileValidator,
+    preferences: v.optional(preferencesValidator),
+    sourceDocumentIds: v.optional(v.array(v.string())),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireAuth(ctx)
+    await requireFolder(ctx, args.folderId, userId)
+
+    if (args.turns.length === 0) {
+      throw new Error('Audio overview requires at least one turn')
+    }
+
+    const trimmedTitle = args.title.trim().slice(0, 120) || 'Audio Primer'
+    const totalDurationMs = args.turns.reduce((sum, t) => sum + Math.max(0, t.durationMs), 0)
+
+    const resolvedDocIds: Id<'documents'>[] = []
+    if (args.sourceDocumentIds) {
+      for (const raw of args.sourceDocumentIds) {
+        const normalized = ctx.db.normalizeId('documents', raw)
+        if (!normalized) continue
+        const doc = await ctx.db.get(normalized)
+        if (doc && doc.userId === userId) resolvedDocIds.push(normalized)
+      }
+    }
+
+    const overviewId = await ctx.db.insert('audioOverviews', {
+      userId,
+      folderId: args.folderId,
+      title: trimmedTitle,
+      status: 'ready',
+      model: args.model,
+      turns: args.turns,
+      voiceProfile: args.voiceProfile,
+      preferences: args.preferences,
+      totalDurationMs,
+      sourceDocumentIds: resolvedDocIds.length > 0 ? resolvedDocIds : undefined,
+      courseScoped: true,
+    })
+
+    return { overviewId }
+  },
+})
+
+export const getCourseScopedOverview = query({
+  args: { id: v.id('audioOverviews') },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) return null
+
+    const userId = identity.tokenIdentifier
+    const overview = await ctx.db.get(args.id)
+    if (!overview || overview.userId !== userId) return null
+
+    const turnUrls: (string | null)[] = []
+    for (const turn of overview.turns) {
+      turnUrls.push(await ctx.storage.getUrl(turn.audioFileId))
+    }
+
+    const sourceFilenames: string[] = []
+    for (const docId of overview.sourceDocumentIds ?? []) {
+      const doc = await ctx.db.get(docId)
+      sourceFilenames.push(doc?.filename ?? 'Source')
+    }
+
+    return {
+      _id: overview._id,
+      title: overview.title,
+      status: overview.status,
+      turns: overview.turns,
+      turnUrls,
+      voiceProfile: overview.voiceProfile,
+      totalDurationMs: overview.totalDurationMs,
+      sourceDocumentIds: overview.sourceDocumentIds ?? [],
+      sourceFilenames,
+    }
+  },
+})
+
 export const listByFolder = query({
   args: { folderId: v.id('folders') },
   handler: async (ctx, args) => {
