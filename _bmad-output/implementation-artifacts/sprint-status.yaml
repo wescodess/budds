@@ -32,7 +32,7 @@
 # - Epics 1-4 are MVP. Epics 5-7 are fast-follow.
 
 generated: 2026-04-22
-last_updated: 2026-04-23
+last_updated: 2026-04-24
 project: Budds Learn Module
 project_key: LEARN
 tracking_system: file-system
@@ -55,7 +55,17 @@ development_status:
   2-1-learn-home-page-empty-and-active-states: done
   2-2-folder-scoped-learn-tab: done
   2-3-course-deletion: done
-  epic-2-retrospective: optional
+  epic-2-retrospective: done
+
+  # === Prep Sprint — Epic 3 (mandatory before Epic 3) ===
+  prep-sprint-epic-3: in-progress
+  prep-3-1-extract-require-auth-shared-util: done
+  prep-3-2-aria-labels-outline-editor: backlog
+  prep-3-3-source-doc-count-cap: backlog
+  prep-3-4-e2e-course-creation-learn-home: backlog
+  prep-3-5-fix-baseline-test-failures: backlog
+  prep-3-6-course-status-badge: backlog
+  prep-sprint-epic-3-retrospective: optional
 
   # === Epic 3: Section Learning Experience (MVP) ===
   epic-3: backlog
