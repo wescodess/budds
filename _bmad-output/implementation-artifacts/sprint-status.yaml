@@ -51,10 +51,10 @@ development_status:
   epic-1-retrospective: done
 
   # === Epic 2: Learn Navigation & Course Management (MVP) ===
-  epic-2: in-progress
+  epic-2: done
   2-1-learn-home-page-empty-and-active-states: done
   2-2-folder-scoped-learn-tab: done
-  2-3-course-deletion: backlog
+  2-3-course-deletion: done
   epic-2-retrospective: optional
 
   # === Epic 3: Section Learning Experience (MVP) ===
