@@ -4,6 +4,16 @@ import type { Doc, Id } from './_generated/dataModel'
 import { internal } from './_generated/api'
 import { requireAuth } from './lib/auth'
 
+export const get = query({
+  args: { id: v.id('courseSections') },
+  handler: async (ctx, args) => {
+    const userId = await requireAuth(ctx)
+    const section = await ctx.db.get(args.id)
+    if (!section || section.userId !== userId) return null
+    return section
+  },
+})
+
 export const listByCourse = query({
   args: { courseId: v.id('courses') },
   handler: async (ctx, args) => {

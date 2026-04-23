@@ -1,5 +1,13 @@
 # Deferred Work
 
+## Deferred from: code review of 3-3-section-void-ui-content-block-rendering (2026-04-24)
+
+- **Section void page fetches all sections to find next.** `listByCourse` returns all sections; only the N+1 section is needed. Could use `getNextSection` from story 3-2. Low severity since sections are capped at 15.
+- **No `aria-live` region for dynamic quiz feedback.** QuizBlock correct/incorrect feedback isn't announced to screen readers. Adding `aria-live="polite"` to the feedback container would improve accessibility beyond WCAG AA minimum.
+- **Course view `component :is` dynamic pattern.** Using `<component :is="NuxtLink | div">` with conditional `:to` is unconventional. Works correctly since `div` ignores unknown props. No runtime issue.
+- **FlashcardBlock timer leak on unmount.** The 300ms `suppressTimer` setTimeout isn't cleared on unmount. Same pattern as existing RoomPractice.vue (inherited). Very low severity.
+- **TextBlock markdown renderer doesn't handle numbered lists or code blocks.** Only unordered lists, headings, bold, italic, inline code, and links. Numbered lists and fenced code blocks render as plain text. Low severity for LLM-generated content.
+
 ## Deferred from: code review of 3-2-n-plus-1-section-pre-fetch (2026-04-24)
 
 - **`checkPreFetchStatus` returns full section document.** The query returns the entire `nextSection` doc to the client. The composable only needs `status` and `_id`. Changes to contentBlocks (large array) trigger unnecessary subscription re-evaluations. Consider returning a projection `{ _id, status, taskId }` when Story 3-3 integrates the composable.
