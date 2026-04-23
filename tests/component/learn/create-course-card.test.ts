@@ -22,4 +22,11 @@ describe('CreateCourseCard', () => {
     const link = wrapper.find('[data-testid="create-course-card"]')
     expect(link.attributes('href')).toContain('/app/learn/create')
   })
+
+  it('links to create page with folderId when provided', async () => {
+    const Comp = await import(componentPath)
+    const wrapper = await mountSuspended(Comp.default, { props: { folderId: 'folder123' } })
+    const link = wrapper.find('[data-testid="create-course-card"]')
+    expect(link.attributes('href')).toContain('/app/learn/create?folderId=folder123')
+  })
 })

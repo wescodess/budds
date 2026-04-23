@@ -1,5 +1,10 @@
 # Deferred Work
 
+## Deferred from: code review of 2-2-folder-scoped-learn-tab (2026-04-23)
+
+- **Course void icon collision with Knowledge sidebar entry.** `BookOpen` is used for both the Knowledge workspace item and the course void icon in the sidebar void list. When a course and the Knowledge entry appear close together, they use the same icon. Low severity since GraduationCap is used for the Learn workspace entry, and BookOpen matches the CreateVoidDialog icon choice. Consider using GraduationCap for course voids as well.
+- **No folder membership guard on folder-scoped course view.** `/app/folders/[id]/learn/[courseId].vue` loads any course by ID via `api.courses.get` without verifying the course belongs to the folder in the route. A user could visit `/app/folders/folderA/learn/courseFromFolderB` and see the course. The Convex query enforces user ownership but not folder membership. Cosmetic issue since the data is the user's own.
+
 ## Deferred from: code review of 2-1-learn-home-page-empty-and-active-states (2026-04-23)
 
 - **CourseCard shows generating/failed courses without status indicator.** `listByUser` returns all courses regardless of status. A course in `generating` or `failed` status appears in the grid with 0% progress and no visual differentiation. Add a status badge or skeleton state for non-ready courses.

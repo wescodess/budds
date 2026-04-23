@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
-import { MessageSquare, Layers, ListChecks, Headphones, X } from 'lucide-vue-next'
+import { MessageSquare, Layers, ListChecks, Headphones, BookOpen, X } from 'lucide-vue-next'
 
-export type VoidType = 'chat' | 'flashcards' | 'quiz' | 'audio-overview'
+export type VoidType = 'chat' | 'flashcards' | 'quiz' | 'audio-overview' | 'course'
 
 type VoidOption = {
   type: VoidType
@@ -54,6 +54,13 @@ const options: VoidOption[] = [
     icon: Headphones,
     ctaLabel: 'Create audio overview void',
     requiresIndexedDocs: true,
+  },
+  {
+    type: 'course',
+    title: 'Course',
+    subtitle: 'Structured learning from your knowledge',
+    icon: BookOpen,
+    ctaLabel: 'Create course void',
   },
 ]
 
