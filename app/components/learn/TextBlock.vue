@@ -1,7 +1,36 @@
 <script setup lang="ts">
+import { parseMarkdown } from '@nuxtjs/mdc/runtime'
 import { BookOpen } from 'lucide-vue-next'
 
-defineProps<{ content: string }>()
+const props = defineProps<{ content: string }>()
+
+type ParsedMarkdown = Awaited<ReturnType<typeof parseMarkdown>>
+const parsed = shallowRef<ParsedMarkdown | null>(null)
+const parseError = ref(false)
+
+const body = computed(() => parsed.value?.body ?? null)
+const data = computed(() => parsed.value?.data ?? {})
+
+async function parse() {
+  if (!props.content?.trim()) {
+    parsed.value = null
+    return
+  }
+  try {
+    parsed.value = await parseMarkdown(props.content, { toc: false, contentHeading: false })
+    parseError.value = false
+  } catch {
+    try {
+      parsed.value = await parseMarkdown(props.content, { toc: false, contentHeading: false, highlight: false })
+      parseError.value = false
+    } catch {
+      parsed.value = null
+      parseError.value = true
+    }
+  }
+}
+
+watch(() => props.content, () => parse(), { immediate: true })
 </script>
 
 <template>
@@ -11,66 +40,17 @@ defineProps<{ content: string }>()
       <span class="text-xs font-medium uppercase tracking-wide text-stone-400">Explanation</span>
     </div>
 
-    <div
-      class="prose prose-invert prose-sm max-w-none prose-headings:text-stone-100 prose-p:text-stone-300 prose-strong:text-stone-100 prose-a:text-amber-500 prose-code:text-amber-400"
-      v-html="renderMarkdown(content)"
+    <MDCRenderer
+      v-if="body"
+      :body="body"
+      :data="data"
+      tag="div"
+      class="prose prose-invert prose-sm max-w-none space-y-3 prose-headings:text-stone-100 prose-p:text-stone-300 prose-p:leading-relaxed prose-strong:text-stone-100 prose-a:text-amber-500 prose-a:underline prose-a:underline-offset-2 prose-code:rounded prose-code:bg-stone-800 prose-code:px-1 prose-code:py-0.5 prose-code:font-mono prose-code:text-amber-400 prose-code:text-[0.85em] [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:bg-[#0f0d0c] [&_pre]:p-4 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:text-stone-300 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-1 [&_li]:text-stone-300 [&_blockquote]:border-l-2 [&_blockquote]:border-amber-500 [&_blockquote]:pl-3 [&_blockquote]:italic [&_blockquote]:text-stone-400 [&_table]:w-full [&_table]:border-collapse [&_th]:border [&_th]:border-stone-700 [&_th]:bg-stone-800 [&_th]:p-2 [&_th]:text-left [&_th]:text-stone-200 [&_td]:border [&_td]:border-stone-700 [&_td]:p-2 [&_td]:text-stone-300 [&_hr]:border-stone-700"
     />
+
+    <div
+      v-else-if="parseError"
+      class="whitespace-pre-wrap text-sm leading-relaxed text-stone-300"
+    >{{ content }}</div>
   </div>
 </template>
-
-<script lang="ts">
-function escapeHtml(str: string): string {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
-}
-
-function renderMarkdown(text: string): string {
-  if (!text) return ''
-
-  const escaped = escapeHtml(text)
-
-  let html = escaped
-    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
-    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
-    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/`(.+?)`/g, '<code>$1</code>')
-    .replace(/\[(.+?)\]\((.+?)\)/g, (_match, linkText, url) => {
-      const safeUrl = url.startsWith('http://') || url.startsWith('https://') ? url : '#'
-      return `<a href="${safeUrl}" target="_blank" rel="noopener">${linkText}</a>`
-    })
-
-  const lines = html.split('\n')
-  const result: string[] = []
-  let inList = false
-
-  for (const line of lines) {
-    const trimmed = line.trim()
-    if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
-      if (!inList) {
-        result.push('<ul>')
-        inList = true
-      }
-      result.push(`<li>${trimmed.slice(2)}</li>`)
-    } else {
-      if (inList) {
-        result.push('</ul>')
-        inList = false
-      }
-      if (trimmed.length > 0 && !trimmed.startsWith('<h')) {
-        result.push(`<p>${trimmed}</p>`)
-      } else {
-        result.push(trimmed)
-      }
-    }
-  }
-  if (inList) result.push('</ul>')
-
-  return result.join('\n')
-}
-</script>

@@ -1,3 +1,4 @@
+import { CONVEX_INJECTION_KEY } from '@convex-vue/core'
 import { api } from '#convex/api'
 import type { Id } from '../../convex/_generated/dataModel'
 
@@ -8,16 +9,34 @@ export function usePreFetchSection(
   const isPreFetching = ref(false)
   const hasTriggered = ref(false)
   const preFetchKey = ref('')
+  const preFetchStatus = ref<any>(null)
 
-  const queryArgs = computed(() => {
-    if (!courseId.value || currentSectionOrder.value === null) return 'skip' as const
-    return { courseId: courseId.value, currentOrder: currentSectionOrder.value }
-  })
+  let unsubStatus: (() => void) | null = null
 
-  const { data: preFetchStatus } = useConvexQuery(
-    api.courseSections.checkPreFetchStatus,
-    queryArgs,
-  )
+  if (import.meta.client) {
+    const client = inject(CONVEX_INJECTION_KEY)
+
+    watch(
+      [courseId, currentSectionOrder],
+      ([cid, order]) => {
+        unsubStatus?.()
+        unsubStatus = null
+        preFetchStatus.value = null
+        if (!cid || order === null || !client) return
+
+        unsubStatus = client.onUpdate(
+          api.courseSections.checkPreFetchStatus,
+          { courseId: cid, currentOrder: order },
+          (result) => {
+            if (result !== undefined) preFetchStatus.value = result
+          },
+        )
+      },
+      { immediate: true },
+    )
+
+    onScopeDispose(() => unsubStatus?.())
+  }
 
   const nextSectionReady = computed(() => {
     const status = preFetchStatus.value as {

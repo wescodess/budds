@@ -159,26 +159,28 @@ function isCorrect(questionId: string, correctAnswer: string) {
           Check Answer
         </button>
 
-        <div v-if="submitted[q._id]" class="mt-3">
-          <div
-            v-if="isCorrect(q._id, q.correctAnswer)"
-            class="flex items-center gap-2 text-sm text-green-400"
-          >
-            <Check class="h-4 w-4" />
-            <span>Correct!</span>
-          </div>
-          <div v-else class="space-y-1">
-            <div class="flex items-center gap-2 text-sm text-red-400">
-              <X class="h-4 w-4" />
-              <span>Incorrect</span>
+        <div aria-live="polite" class="mt-3">
+          <template v-if="submitted[q._id]">
+            <div
+              v-if="isCorrect(q._id, q.correctAnswer)"
+              class="flex items-center gap-2 text-sm text-green-400"
+            >
+              <Check class="h-4 w-4" />
+              <span>Correct!</span>
             </div>
-            <p class="text-xs text-stone-400">
-              Correct answer: <span class="text-green-400">{{ q.correctAnswer }}</span>
+            <div v-else class="space-y-1">
+              <div class="flex items-center gap-2 text-sm text-red-400">
+                <X class="h-4 w-4" />
+                <span>Incorrect</span>
+              </div>
+              <p class="text-xs text-stone-400">
+                Correct answer: <span class="text-green-400">{{ q.correctAnswer }}</span>
+              </p>
+            </div>
+            <p v-if="q.explanation" class="mt-2 text-xs text-stone-400">
+              {{ q.explanation }}
             </p>
-          </div>
-          <p v-if="q.explanation" class="mt-2 text-xs text-stone-400">
-            {{ q.explanation }}
-          </p>
+          </template>
         </div>
       </div>
     </div>
