@@ -1,44 +1,45 @@
 mode: running
 current_phase: epic-story
-current_story: 3-4-section-completion-and-adaptive-pacing
+current_story: 3-5-audio-primer-generation-user-note-references
 current_epic: 3
 retry_count: 0
 last_epic_complete_fired: prep-3
 
 last_verdict:
   subagent: bmad-story-runner
-  story: 3-4-section-completion-and-adaptive-pacing
+  story: 3-5-audio-primer-generation-user-note-references
   epic: 3
   status: PASS
-  pr_url: 'https://github.com/wescodess/budds/pull/106'
-  branch: 'feat/3-4-section-completion'
-  commit_sha: '2e86c2b'
-  files_changed: 9
-  tasks_completed: 9
-  tasks_total: 9
-  findings_deferred: 4
+  pr_url: 'https://github.com/wescodess/budds/pull/107'
+  branch: 'feat/3-5-audio-primer-generation'
+  commit_sha: '2e96635'
+  files_changed: 10
+  tasks_completed: 7
+  tasks_total: 7
+  findings_deferred: 3
   lint_pass: null
   typecheck_pass: null
   unit_tests_pass: true
   e2e_tests_pass: null
   review_pass: true
   summary: >
-    Story 3-4 complete. Section completion with adaptive pacing feedback. Added completeSection
-    mutation to convex/courseSections.ts: validates ownership, guards against completing non-ready
-    sections, computes masteryLevel from practiceScore (mastered >=90, reviewing >=70, learning
-    >=60, new <60), increments course completedSectionCount, returns adaptive feedback hints
-    (increase-practice for <60%, reduce-practice for >=90%). SectionCompletionCard.vue with SVG
-    accuracy ring, color-coded mastery badge, adaptive feedback text, Continue/Back navigation
-    buttons. Section void page wired: QuizBlock emits quizCompleted with correct/total counts,
-    SectionBlockRenderer forwards event, page tracks results and calls mutation on user click.
-    Idempotent for already-completed sections. 10 new Convex tests, 16 new component tests. Code
-    review: 2 blockers fixed (threshold mismatch at score=90 between computeMasteryLevel/
-    getAdaptiveFeedback, missing ready-status guard on completeSection), 4 deferred (multi-quiz
-    accumulation, no error toast, complete-before-view gate, FR16 format override UI). 554 Convex
-    + 325 component tests pass. PR #106 merged to dev.
+    Story 3-5 complete. Audio primer generation with user note references. Created
+    buildAudioPrimerPrompt in server/utils/audio-primer-prompt.ts for short-form (2-3 min) primers
+    that reference user documents by filename. Wired audio generation into section pipeline
+    (generate-section.post.ts) for conceptual knowledge types — dispatches in parallel with text,
+    quiz, flashcard engines. Added createCourseScopedOverview mutation and getCourseScopedOverview
+    query to convex/audioOverviews.ts with courseScoped=true flag. Replaced AudioBlock.vue stub
+    with compact player: play/pause button, progress bar, collapsible transcript with speaker
+    labels, source attribution pills. Orphan blob cleanup on audio failure. 7 new Convex tests
+    (createCourseScopedOverview, getCourseScopedOverview, listByFolder exclusion), 5 new server
+    tests (audio primer prompt, conceptual/procedural paths), 11 new component tests (AudioBlock
+    player, transcript, sources). Code review: 2 blockers fixed (orphan blob cleanup on audio
+    primer failure, redundant watch double-play + added aria-expanded), 3 deferred (URL resolution
+    per subscription tick, conditional composable, no ttsEngine hint). 565 Convex + 336 component
+    tests pass. PR #107 merged to dev. Epic 3 COMPLETE (5/5 stories).
   block_reason: null
   block_context: null
-  at: '2026-04-24T09:00:00Z'
+  at: '2026-04-23T12:00:00Z'
 last_retro: 'epic-2-retro-2026-04-23.md'
 
 config:
@@ -63,8 +64,8 @@ paths:
   ux_spec: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/ux-design-learn-module.md
 
 counters:
-  stories_completed_this_run: 2
-  stories_completed_total: 19
+  stories_completed_this_run: 4
+  stories_completed_total: 21
 
 escalation:
   pending: null
@@ -94,6 +95,23 @@ escalation:
         User answered "1" → commit_all_then_start. Committing all changes on refactor/remove-folder-tabs, then branching feat/1-1 from dev.
 
 decisions_log:
+  - ts: '2026-04-23'
+    decision: |
+      story-runner PASS for 3-5 (3 deferred: URL resolution per subscription tick, conditional composable,
+      no ttsEngine hint). 7/7 tasks, 10 files. buildAudioPrimerPrompt for short-form primers referencing
+      user notes by filename. Audio generation wired into section pipeline for conceptual knowledge types.
+      createCourseScopedOverview mutation + getCourseScopedOverview query with courseScoped=true. AudioBlock
+      replaced with compact player: play/pause, progress bar, collapsible transcript, source pills. Code
+      review: 2 blockers fixed (orphan blob cleanup, watch double-play + aria-expanded), 3 deferred. 565
+      Convex + 336 component tests pass. PR #107 merged to dev. Counters 4 this-run, 21 total. EPIC 3
+      COMPLETE (5/5 stories). epic-3-retrospective: optional. Epic boundary detected.
+  - ts: '2026-04-24'
+    decision: |
+      story-runner PASS for 3-4 (4 deferred: multi-quiz accumulation, no error toast, complete-before-view
+      gate, FR16 format override UI). 9/9 tasks, 9 files. completeSection mutation with mastery computation,
+      SectionCompletionCard with SVG accuracy ring, adaptive feedback. Code review: 2 blockers fixed
+      (threshold mismatch at 90, missing ready-status guard). 554 Convex + 325 component tests pass.
+      PR #106 merged to dev. Counters 3 this-run, 20 total. Advancing to 3-5 (final Epic 3 story).
   - ts: '2026-04-24'
     decision: |
       story-runner PASS for 3-3 (5 deferred: over-fetch for next section, no aria-live on quiz feedback,
