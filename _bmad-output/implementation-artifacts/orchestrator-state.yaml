@@ -1,42 +1,43 @@
 mode: running
 current_phase: epic-story
-current_story: 4-1-course-view-with-progress-and-mastery-dashboard
+current_story: 4-3-streak-system
 current_epic: 4
 retry_count: 0
 last_epic_complete_fired: prep-4
 
 last_verdict:
   subagent: bmad-story-runner
-  story: 4-1-course-view-with-progress-and-mastery-dashboard
+  story: 4-3-streak-system
   epic: 4
   status: PASS
-  pr_url: 'https://github.com/wescodess/budds/pull/111'
-  branch: 'feat/4-1-course-view-progress'
-  commit_sha: '0bfb490'
-  files_changed: 8
-  tasks_completed: 10
-  tasks_total: 10
-  findings_deferred: 3
+  pr_url: 'https://github.com/wescodess/budds/pull/113'
+  branch: 'feat/4-3-streak-system'
+  commit_sha: 'ca17e90'
+  files_changed: 11
+  tasks_completed: 9
+  tasks_total: 9
+  findings_deferred: 2
   lint_pass: null
   typecheck_pass: null
   unit_tests_pass: true
   e2e_tests_pass: null
   review_pass: true
   summary: >
-    Story 4-1 complete. Created MasteryBadge component with color-coded mastery
-    indicators (gray=new, amber=learning, yellow=reviewing, green checkmark=mastered).
-    Extracted shared CourseViewBody component eliminating duplication between top-level
-    and folder-scoped course views. Enhanced section list with current section amber
-    left border, completed sections with mastery badges, locked sections muted. Action
-    buttons: Edit Outline (ghost), Change Pace (toggle PaceSelector), Delete Course
-    (destructive). Mobile responsive with compact dot-only badges and three-dot dropdown
-    menu. Code review: 2 blockers fixed (CourseViewBody extraction to eliminate DRY
-    violation, folder-scoped Edit Outline URL missing folderId). 3 deferred (counter-based
-    test mock, no folder-view tests, reviewing color mismatch). 22 new component tests.
-    368 component + 566 Convex tests pass. PR #111 merged to dev.
+    Story 4-3 complete. Pure evaluateStreak() function in convex/lib/streak.ts handles
+    all streak transitions: increment on consecutive days, same-day idempotency, freeze
+    auto-consumption on 2-day gaps, streak break reset to 1, and weekly Monday freeze
+    replenishment. Shared getOrCreateProfile helper consolidates learnProfile creation
+    (replaces inline creation in courses.create, fixes default streakFreezeAvailable from
+    false to true per AC). completeSection and reviewSection mutations wired to update
+    streak on every learning activity. StreakDisplay.vue enhanced with streakFreezeAvailable
+    prop rendering shield icon. Code review: 2 blockers fixed (dead toDateStr function,
+    unused updateStreakInternal mutation, unused test imports). 2 deferred (UTC-only date
+    computation instead of user timezone, no integration test for freeze consumption path).
+    15 new Convex tests + 3 new component tests. 600 Convex + 371 component tests pass.
+    PR #113 merged to dev.
   block_reason: null
   block_context: null
-  at: '2026-04-23T20:00:00Z'
+  at: '2026-04-23T21:30:00Z'
 last_retro: 'epic-3-retro-2026-04-24.md'
 
 config:
@@ -61,8 +62,8 @@ paths:
   ux_spec: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/ux-design-learn-module.md
 
 counters:
-  stories_completed_this_run: 3
-  stories_completed_total: 24
+  stories_completed_this_run: 5
+  stories_completed_total: 26
 
 escalation:
   pending: null
