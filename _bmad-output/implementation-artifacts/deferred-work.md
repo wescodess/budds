@@ -1,5 +1,10 @@
 # Deferred Work
 
+## Deferred from: code review of prep-3-3-source-doc-count-cap (2026-04-23)
+
+- **No user feedback when folder docs are truncated by MAX_SOURCE_DOCS cap.** When a folder has more than 100 documents and no specific documentIds are provided, the course silently uses the first 100. The `sourceConfidence.docCount` reflects the capped count (100), not the total available. Consider adding a `truncated: true` field or returning the total folder count alongside the capped count so the UI can inform the user.
+- **Explicit documentIds path has no cap.** The `folder` sourceType branch only caps the auto-resolve path (`.take(MAX_SOURCE_DOCS)`). If a caller explicitly passes 200+ documentIds, each is fetched individually via `ctx.db.get()` with no limit. This is by design (caller-controlled selection), but could still approach transaction limits with very large arrays. Consider adding a validator-level cap on `documentIds` array length.
+
 ## Deferred from: code review of 2-3-course-deletion (2026-04-23)
 
 - **Entity ID resolution uses 3 try/catch db.get() calls per entity.** Each `entityId` in content blocks triggers attempts against quizzes, flashcardRooms, and audioOverviews tables sequentially. Wasteful but correct since Convex IDs are globally unique. When section generation lands (Epic 3), consider storing entity type alongside entityId in contentBlocks to enable direct lookup.

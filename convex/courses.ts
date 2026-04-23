@@ -4,6 +4,8 @@ import { internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import { requireAuth } from './lib/auth'
 
+export const MAX_SOURCE_DOCS = 100
+
 export const create = mutation({
   args: {
     title: v.string(),
@@ -43,7 +45,7 @@ export const create = mutation({
           .withIndex('by_userId_and_folderId', (q) =>
             q.eq('userId', userId).eq('folderId', args.folderId!),
           )
-          .collect()
+          .take(MAX_SOURCE_DOCS)
         resolvedDocs = docs.map((d) => ({ documentId: d._id, folderId: args.folderId! }))
       }
     } else {
