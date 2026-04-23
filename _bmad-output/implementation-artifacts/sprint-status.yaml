@@ -84,8 +84,8 @@ development_status:
   prep-sprint-epic-4-retrospective: optional
 
   # === Epic 4: Progress Tracking, Mastery & Content Quality (MVP) ===
-  epic-4: backlog
-  4-1-course-view-with-progress-and-mastery-dashboard: backlog
+  epic-4: in-progress
+  4-1-course-view-with-progress-and-mastery-dashboard: done
   4-2-mastery-level-state-machine: backlog
   4-3-streak-system: backlog
   4-4-content-flagging-and-correction: backlog
