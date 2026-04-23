@@ -236,6 +236,63 @@ export const updateOutline = mutation({
   },
 })
 
+export const updatePace = mutation({
+  args: {
+    courseId: v.id('courses'),
+    pace: v.union(v.literal('intensive'), v.literal('steady'), v.literal('relaxed')),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireAuth(ctx)
+    const course = await ctx.db.get(args.courseId)
+    if (!course || course.userId !== userId) throw new Error('Course not found')
+
+    await ctx.db.patch(args.courseId, {
+      pace: args.pace,
+      updatedAt: Date.now(),
+    })
+  },
+})
+
+export const startCourse = mutation({
+  args: {
+    courseId: v.id('courses'),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireAuth(ctx)
+    const course = await ctx.db.get(args.courseId)
+    if (!course || course.userId !== userId) throw new Error('Course not found')
+    if (course.status !== 'ready') throw new Error('Course is not ready to start')
+
+    const firstSection = await ctx.db
+      .query('courseSections')
+      .withIndex('by_courseId_and_order', (q) =>
+        q.eq('courseId', args.courseId).eq('order', 0),
+      )
+      .unique()
+
+    if (!firstSection) throw new Error('Course has no sections')
+    if (firstSection.status !== 'locked') throw new Error('Course has already been started')
+
+    const taskId: Id<'tasks'> = await ctx.runMutation(
+      internal.tasks.createInternal,
+      {
+        userId,
+        folderId: course.folderId,
+        type: 'section-generate',
+        title: `Generating: ${firstSection.title}`,
+        metadata: { courseId: args.courseId, sectionId: firstSection._id },
+      },
+    )
+
+    await ctx.db.patch(firstSection._id, {
+      status: 'generating',
+      taskId,
+    })
+
+    return args.courseId
+  },
+})
+
 export const markFailed = mutation({
   args: {
     courseId: v.id('courses'),
