@@ -1,21 +1,21 @@
 mode: running
 current_phase: epic-story
-current_story: 3-2-n-plus-1-section-pre-fetch
+current_story: 3-3-section-void-ui-content-block-rendering
 current_epic: 3
 retry_count: 0
 last_epic_complete_fired: prep-3
 
 last_verdict:
   subagent: bmad-story-runner
-  story: 3-2-n-plus-1-section-pre-fetch
+  story: 3-3-section-void-ui-content-block-rendering
   epic: 3
   status: PASS
-  pr_url: 'https://github.com/wescodess/budds/pull/104'
-  branch: 'feat/3-2-n-plus-1-section-pre-fetch'
-  commit_sha: '1ef93da'
-  files_changed: 5
-  tasks_completed: 6
-  tasks_total: 6
+  pr_url: 'https://github.com/wescodess/budds/pull/105'
+  branch: 'feat/3-3-section-void-ui'
+  commit_sha: '49cdd72'
+  files_changed: 14
+  tasks_completed: 9
+  tasks_total: 9
   findings_deferred: 5
   lint_pass: null
   typecheck_pass: null
@@ -23,19 +23,22 @@ last_verdict:
   e2e_tests_pass: null
   review_pass: true
   summary: >
-    Story 3-2 complete. N+1 section pre-fetch: getNextSection query, checkPreFetchStatus
-    query, triggerPreFetch mutation added to courseSections.ts. Locked sections trigger
-    generation via task system. Failed sections retry once (tracked via task metadata
-    retryOf field). Only pre-fetches 1 ahead, never N+2. usePreFetchSection composable
-    watches next section status via reactive Convex subscription and fires generation
-    when eligible (client-initiated, matching StartLearningButton pattern). 15 new Convex
-    tests. Code review: 1 blocker fixed (userId guard on section in triggerPreFetch),
-    5 deferred (over-fetching in query, no hasNextSection state, idempotency test,
-    unused getNextSection, retryOf sentinel). 544 Convex + 289 component tests pass.
-    PR #104 merged to dev.
+    Story 3-3 complete. Section void UI with content block rendering. Section void page
+    at /app/learn/[courseId]/[sectionId] with SectionVoidTopBar (back arrow, course title,
+    section title, block progress, amber progress bar). SectionBlockRenderer dispatches
+    contentBlocks by type: TextBlock (sanitized markdown with XSS protection), QuizBlock
+    (inline per-question feedback via getWithQuestions query), FlashcardBlock (flip + swipe
+    via getRoom query), AudioBlock (placeholder stub for Story 3-5). Course view upgraded
+    from placeholder to section list with status icons (completed/ready/generating/failed/locked)
+    and navigation links to section voids. Added courseSections.get query. N+1 pre-fetch
+    wired via usePreFetchSection composable. 20 new component tests across 3 files. Code
+    review: 2 blockers fixed (XSS in v-html markdown renderer, unused nextSectionReady
+    binding), 5 deferred (over-fetch for next section, no aria-live on quiz feedback,
+    dynamic component :is pattern, flashcard timer leak, markdown numbered list support).
+    544 Convex + 309 component tests pass. PR #105 merged to dev.
   block_reason: null
   block_context: null
-  at: '2026-04-24T07:15:00Z'
+  at: '2026-04-24T08:00:00Z'
 last_retro: 'epic-2-retro-2026-04-23.md'
 
 config:
@@ -60,8 +63,8 @@ paths:
   ux_spec: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/ux-design-learn-module.md
 
 counters:
-  stories_completed_this_run: 6
-  stories_completed_total: 16
+  stories_completed_this_run: 1
+  stories_completed_total: 18
 
 escalation:
   pending: null
@@ -91,6 +94,13 @@ escalation:
         User answered "1" → commit_all_then_start. Committing all changes on refactor/remove-folder-tabs, then branching feat/1-1 from dev.
 
 decisions_log:
+  - ts: '2026-04-24'
+    decision: |
+      story-runner PASS for 3-2 (5 deferred: over-fetching in query, no hasNextSection state,
+      idempotency test, unused getNextSection, retryOf sentinel). 6/6 tasks, 5 files.
+      getNextSection query, checkPreFetchStatus query, triggerPreFetch mutation, usePreFetchSection
+      composable. 15 new Convex tests. Code review: 1 blocker fixed (userId guard). 544 Convex +
+      289 component tests pass. PR #104 merged to dev. Counters 1 this-run, 18 total. Advancing to 3-3.
   - ts: '2026-04-24'
     decision: |
       story-runner PASS for prep-3-6 (0 deferred). 4/4 tasks, 2 files. Added status badge to CourseCard:
@@ -181,6 +191,11 @@ decisions_log:
       DETERMINE_NEXT: epic-1 backlog → 1-1-convex-schema-course-tables. Story file created, runner spawned.
 
 run_log:
+  - ts: '2026-04-24'
+    mode: running
+    note: |
+      3-2 PASS (PR #104). DETERMINE_NEXT: 3-3-section-void-ui-content-block-rendering (backlog).
+      Spawning bmad-story-runner for 3-3.
   - ts: '2026-04-24'
     mode: running
     note: |
