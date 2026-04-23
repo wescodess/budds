@@ -261,6 +261,7 @@ async function saveFlag(questionId: string) {
                   Corrected answer
                   <input
                     type="text"
+                    aria-label="Corrected answer"
                     class="mt-1 w-full rounded border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100 focus:border-amber-500 focus:outline-none"
                     :value="flagCorrectedAnswer[q._id]"
                     @input="flagCorrectedAnswer[q._id] = ($event.target as HTMLInputElement).value"
@@ -270,6 +271,7 @@ async function saveFlag(questionId: string) {
                   Corrected explanation (optional)
                   <input
                     type="text"
+                    aria-label="Corrected explanation"
                     class="mt-1 w-full rounded border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100 focus:border-amber-500 focus:outline-none"
                     :value="flagCorrectedExplanation[q._id]"
                     @input="flagCorrectedExplanation[q._id] = ($event.target as HTMLInputElement).value"

@@ -239,6 +239,7 @@ if (import.meta.client) {
         <label class="block text-xs text-stone-400">
           Corrected definition
           <textarea
+            aria-label="Corrected definition"
             class="mt-1 w-full rounded border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100 focus:border-amber-500 focus:outline-none"
             rows="2"
             :value="flagCorrectedDef"

@@ -108,6 +108,30 @@ describe('QuizBlock flagging', () => {
     expect(wrapper.find('[data-testid="flag-badge"]').text()).toContain('Corrected')
   })
 
+  it('flag editor inputs have aria-labels', async () => {
+    mockQuizData.value = unflaggedQuiz
+    const Comp = await import(componentPath)
+    const wrapper = await mountSuspended(Comp.default, {
+      props: { quizId: 'quiz_123' },
+    })
+
+    const option4 = wrapper.findAll('button[aria-label^="Option:"]').find(
+      (b) => b.text().includes('4'),
+    )
+    await option4?.trigger('click')
+    const checkBtn = wrapper.findAll('button').find((b) => b.text() === 'Check Answer')
+    await checkBtn?.trigger('click')
+
+    const flagBtn = wrapper.find('[data-testid="flag-button"]')
+    await flagBtn.trigger('click')
+
+    const editor = wrapper.find('[data-testid="flag-editor"]')
+    const answerInput = editor.find('input[aria-label="Corrected answer"]')
+    const explanationInput = editor.find('input[aria-label="Corrected explanation"]')
+    expect(answerInput.exists()).toBe(true)
+    expect(explanationInput.exists()).toBe(true)
+  })
+
   it('shows corrected answer instead of original when flagged', async () => {
     mockQuizData.value = flaggedQuiz
     const Comp = await import(componentPath)
