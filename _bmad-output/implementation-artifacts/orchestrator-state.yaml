@@ -1,6 +1,6 @@
 mode: running
 current_phase: epic-story
-current_story: 2-2-folder-scoped-learn-tab
+current_story: 2-3-course-deletion
 current_epic: 2
 retry_count: 0
 last_epic_complete_fired: 1
@@ -58,8 +58,8 @@ paths:
   ux_spec: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/ux-design-learn-module.md
 
 counters:
-  stories_completed_this_run: 1
-  stories_completed_total: 8
+  stories_completed_this_run: 2
+  stories_completed_total: 9
 
 escalation:
   pending: null
@@ -78,6 +78,13 @@ escalation:
         User answered "1" → commit_all_then_start. Committing all changes on refactor/remove-folder-tabs, then branching feat/1-1 from dev.
 
 decisions_log:
+  - ts: '2026-04-23'
+    decision: |
+      story-runner PASS for 2-2 (2 deferred: icon collision, folder membership guard). 7/7 tasks, 5 ACs,
+      13 files. Course type in CreateVoidDialog, courses as void entries in FolderShellRail, Learn workspace
+      entry, folder-scoped learn page + course view. CourseCard/CreateCourseCard folderId-aware. 7 new
+      component tests. Code review PASS: 1 blocker fixed (delete guard), 2 deferred. PR #96 merged to dev.
+      Counters 2 this-run, 9 total. Advancing to 2-3.
   - ts: '2026-04-23'
     decision: |
       story-runner PASS for 2-1 (2 deferred: generating/failed course card visibility, client-side
@@ -111,6 +118,11 @@ decisions_log:
       DETERMINE_NEXT: epic-1 backlog → 1-1-convex-schema-course-tables. Story file created, runner spawned.
 
 run_log:
+  - ts: '2026-04-23'
+    mode: running
+    note: |
+      2-2 PASS (PR #96). DETERMINE_NEXT: 2-3-course-deletion (backlog).
+      Story file created at ready-for-dev. Spawning bmad-story-runner for 2-3.
   - ts: '2026-04-23'
     mode: running
     note: |
