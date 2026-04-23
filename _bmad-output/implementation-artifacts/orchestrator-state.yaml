@@ -7,39 +7,33 @@ last_epic_complete_fired: 3
 
 last_verdict:
   subagent: bmad-story-runner
-  story: 3-5-audio-primer-generation-user-note-references
-  epic: 3
+  story: prep-4-2-checkprefetchstatus-projection
+  epic: prep-4
   status: PASS
-  pr_url: 'https://github.com/wescodess/budds/pull/107'
-  branch: 'feat/3-5-audio-primer-generation'
-  commit_sha: '2e96635'
-  files_changed: 10
-  tasks_completed: 7
-  tasks_total: 7
-  findings_deferred: 3
+  pr_url: 'https://github.com/wescodess/budds/pull/109'
+  branch: 'prep/4-2-prefetch-projection'
+  commit_sha: '231a149'
+  files_changed: 4
+  tasks_completed: 5
+  tasks_total: 5
+  findings_deferred: 0
   lint_pass: null
   typecheck_pass: null
   unit_tests_pass: true
   e2e_tests_pass: null
   review_pass: true
   summary: >
-    Story 3-5 complete. Audio primer generation with user note references. Created
-    buildAudioPrimerPrompt in server/utils/audio-primer-prompt.ts for short-form (2-3 min) primers
-    that reference user documents by filename. Wired audio generation into section pipeline
-    (generate-section.post.ts) for conceptual knowledge types — dispatches in parallel with text,
-    quiz, flashcard engines. Added createCourseScopedOverview mutation and getCourseScopedOverview
-    query to convex/audioOverviews.ts with courseScoped=true flag. Replaced AudioBlock.vue stub
-    with compact player: play/pause button, progress bar, collapsible transcript with speaker
-    labels, source attribution pills. Orphan blob cleanup on audio failure. 7 new Convex tests
-    (createCourseScopedOverview, getCourseScopedOverview, listByFolder exclusion), 5 new server
-    tests (audio primer prompt, conceptual/procedural paths), 11 new component tests (AudioBlock
-    player, transcript, sources). Code review: 2 blockers fixed (orphan blob cleanup on audio
-    primer failure, redundant watch double-play + added aria-expanded), 3 deferred (URL resolution
-    per subscription tick, conditional composable, no ttsEngine hint). 565 Convex + 336 component
-    tests pass. PR #107 merged to dev. Epic 3 COMPLETE (5/5 stories).
+    Story prep-4-2 complete. checkPreFetchStatus query now returns a projection
+    { _id, status } for the next section instead of the full document. Eliminates
+    subscription churn when contentBlocks (a large array) is populated or modified.
+    Updated composable type annotations in usePreFetchSection.ts. Added test verifying
+    contentBlocks, title, and knowledgeType are excluded from the response. 48
+    courseSections tests pass (including new projection exclusion test). PR #109
+    merged to dev. Also cleaned up prep-4-1 branch (committed, PR #108 merged)
+    which had been left uncommitted by the previous story runner.
   block_reason: null
   block_context: null
-  at: '2026-04-23T12:00:00Z'
+  at: '2026-04-23T15:00:00Z'
 last_retro: 'epic-3-retro-2026-04-24.md'
 
 config:
