@@ -1,6 +1,8 @@
 import { v } from 'convex/values'
-import { query, internalMutation } from './_generated/server'
+import { query, mutation, internalMutation } from './_generated/server'
 import { requireAuth } from './lib/auth'
+import { computeSM2 } from './lib/sm2'
+import { updateStreakForActivity } from './learnProfile'
 
 function getTomorrowDate(): string {
   const d = new Date()
@@ -9,6 +11,17 @@ function getTomorrowDate(): string {
 }
 
 function getTodayDate(): string {
+  return new Date().toISOString().slice(0, 10)
+}
+
+function getTodayInTimezone(timezone?: string): string {
+  if (timezone) {
+    try {
+      return new Date().toLocaleDateString('en-CA', { timeZone: timezone })
+    } catch {
+      // fall through to UTC
+    }
+  }
   return new Date().toISOString().slice(0, 10)
 }
 
@@ -150,5 +163,54 @@ export const listBySection = query({
       .query('reviewItems')
       .withIndex('by_sectionId', (q) => q.eq('sectionId', args.sectionId))
       .take(200)
+  },
+})
+
+export const submitReview = mutation({
+  args: {
+    reviewItemId: v.id('reviewItems'),
+    quality: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireAuth(ctx)
+    const { reviewItemId, quality } = args
+
+    if (![0, 3, 4, 5].includes(quality)) {
+      throw new Error(`Invalid quality rating: ${quality}. Must be 0, 3, 4, or 5.`)
+    }
+
+    const item = await ctx.db.get(reviewItemId)
+    if (!item) throw new Error('Review item not found')
+    if (item.userId !== userId) throw new Error('Not authorized')
+
+    const profile = await ctx.db
+      .query('learnProfile')
+      .withIndex('by_userId', (q) => q.eq('userId', userId))
+      .unique()
+
+    const todayStr = getTodayInTimezone(profile?.timezone)
+
+    const result = computeSM2(
+      {
+        easeFactor: item.easeFactor,
+        interval: item.interval,
+        repetitions: item.repetitions,
+      },
+      quality,
+      todayStr,
+    )
+
+    await ctx.db.patch(reviewItemId, {
+      easeFactor: result.easeFactor,
+      interval: result.interval,
+      repetitions: result.repetitions,
+      nextReviewDate: result.nextReviewDate,
+      lastReviewQuality: quality,
+      lastReviewedAt: Date.now(),
+    })
+
+    await updateStreakForActivity(ctx, userId)
+
+    return result
   },
 })

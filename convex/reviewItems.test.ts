@@ -456,6 +456,306 @@ describe('completeSection creates review items', () => {
   })
 })
 
+describe('reviewItems.submitReview', () => {
+  test('Again (quality 0) resets interval and repetitions', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId, sectionId } = await seedSectionWithFlashcards(t)
+
+    const today = new Date().toISOString().slice(0, 10)
+
+    const itemId = await t.run(async (ctx) => {
+      return await ctx.db.insert('reviewItems', {
+        userId: USER_A.tokenIdentifier,
+        courseId,
+        sectionId,
+        prompt: 'Test prompt',
+        answer: 'Test answer',
+        easeFactor: 2.5,
+        interval: 10,
+        repetitions: 5,
+        nextReviewDate: today,
+        flagged: false,
+        createdAt: Date.now(),
+      })
+    })
+
+    const result = await asUser.mutation(api.reviewItems.submitReview, {
+      reviewItemId: itemId,
+      quality: 0,
+    })
+
+    expect(result.interval).toBe(1)
+    expect(result.repetitions).toBe(0)
+
+    const updated = await t.run(async (ctx) => {
+      return await ctx.db.get(itemId)
+    })
+
+    expect(updated!.interval).toBe(1)
+    expect(updated!.repetitions).toBe(0)
+    expect(updated!.lastReviewQuality).toBe(0)
+    expect(updated!.lastReviewedAt).toBeTypeOf('number')
+  })
+
+  test('Hard (quality 3) multiplies interval by 1.2', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId, sectionId } = await seedSectionWithFlashcards(t)
+
+    const today = new Date().toISOString().slice(0, 10)
+
+    const itemId = await t.run(async (ctx) => {
+      return await ctx.db.insert('reviewItems', {
+        userId: USER_A.tokenIdentifier,
+        courseId,
+        sectionId,
+        prompt: 'Hard prompt',
+        answer: 'Hard answer',
+        easeFactor: 2.5,
+        interval: 10,
+        repetitions: 3,
+        nextReviewDate: today,
+        flagged: false,
+        createdAt: Date.now(),
+      })
+    })
+
+    const result = await asUser.mutation(api.reviewItems.submitReview, {
+      reviewItemId: itemId,
+      quality: 3,
+    })
+
+    expect(result.interval).toBe(12)
+    expect(result.repetitions).toBe(4)
+  })
+
+  test('Good (quality 4) multiplies interval by easeFactor', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId, sectionId } = await seedSectionWithFlashcards(t)
+
+    const today = new Date().toISOString().slice(0, 10)
+
+    const itemId = await t.run(async (ctx) => {
+      return await ctx.db.insert('reviewItems', {
+        userId: USER_A.tokenIdentifier,
+        courseId,
+        sectionId,
+        prompt: 'Good prompt',
+        answer: 'Good answer',
+        easeFactor: 2.5,
+        interval: 4,
+        repetitions: 2,
+        nextReviewDate: today,
+        flagged: false,
+        createdAt: Date.now(),
+      })
+    })
+
+    const result = await asUser.mutation(api.reviewItems.submitReview, {
+      reviewItemId: itemId,
+      quality: 4,
+    })
+
+    expect(result.interval).toBe(10)
+    expect(result.repetitions).toBe(3)
+  })
+
+  test('Easy (quality 5) multiplies interval by easeFactor * 1.3', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId, sectionId } = await seedSectionWithFlashcards(t)
+
+    const today = new Date().toISOString().slice(0, 10)
+
+    const itemId = await t.run(async (ctx) => {
+      return await ctx.db.insert('reviewItems', {
+        userId: USER_A.tokenIdentifier,
+        courseId,
+        sectionId,
+        prompt: 'Easy prompt',
+        answer: 'Easy answer',
+        easeFactor: 2.5,
+        interval: 4,
+        repetitions: 2,
+        nextReviewDate: today,
+        flagged: false,
+        createdAt: Date.now(),
+      })
+    })
+
+    const result = await asUser.mutation(api.reviewItems.submitReview, {
+      reviewItemId: itemId,
+      quality: 5,
+    })
+
+    expect(result.interval).toBe(13)
+    expect(result.repetitions).toBe(3)
+  })
+
+  test('updates nextReviewDate on the review item', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId, sectionId } = await seedSectionWithFlashcards(t)
+
+    const today = new Date().toISOString().slice(0, 10)
+
+    const itemId = await t.run(async (ctx) => {
+      return await ctx.db.insert('reviewItems', {
+        userId: USER_A.tokenIdentifier,
+        courseId,
+        sectionId,
+        prompt: 'Date test',
+        answer: 'Answer',
+        easeFactor: 2.5,
+        interval: 1,
+        repetitions: 0,
+        nextReviewDate: today,
+        flagged: false,
+        createdAt: Date.now(),
+      })
+    })
+
+    await asUser.mutation(api.reviewItems.submitReview, {
+      reviewItemId: itemId,
+      quality: 4,
+    })
+
+    const updated = await t.run(async (ctx) => {
+      return await ctx.db.get(itemId)
+    })
+
+    expect(updated!.nextReviewDate).not.toBe(today)
+    expect(updated!.nextReviewDate).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+  })
+
+  test('rejects invalid quality ratings', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId, sectionId } = await seedSectionWithFlashcards(t)
+
+    const today = new Date().toISOString().slice(0, 10)
+
+    const itemId = await t.run(async (ctx) => {
+      return await ctx.db.insert('reviewItems', {
+        userId: USER_A.tokenIdentifier,
+        courseId,
+        sectionId,
+        prompt: 'Invalid test',
+        answer: 'Answer',
+        easeFactor: 2.5,
+        interval: 1,
+        repetitions: 0,
+        nextReviewDate: today,
+        flagged: false,
+        createdAt: Date.now(),
+      })
+    })
+
+    await expect(
+      asUser.mutation(api.reviewItems.submitReview, {
+        reviewItemId: itemId,
+        quality: 2,
+      }),
+    ).rejects.toThrow('Invalid quality rating')
+  })
+
+  test('rejects unauthenticated user', async () => {
+    const t = convexTest(schema, modules)
+    const { courseId, sectionId } = await seedSectionWithFlashcards(t)
+
+    const today = new Date().toISOString().slice(0, 10)
+
+    const itemId = await t.run(async (ctx) => {
+      return await ctx.db.insert('reviewItems', {
+        userId: USER_A.tokenIdentifier,
+        courseId,
+        sectionId,
+        prompt: 'Unauth test',
+        answer: 'Answer',
+        easeFactor: 2.5,
+        interval: 1,
+        repetitions: 0,
+        nextReviewDate: today,
+        flagged: false,
+        createdAt: Date.now(),
+      })
+    })
+
+    await expect(
+      t.mutation(api.reviewItems.submitReview, {
+        reviewItemId: itemId,
+        quality: 4,
+      }),
+    ).rejects.toThrow()
+  })
+
+  test('rejects review of another user\'s item', async () => {
+    const t = convexTest(schema, modules)
+    const { courseId, sectionId } = await seedSectionWithFlashcards(t)
+
+    const today = new Date().toISOString().slice(0, 10)
+
+    const itemId = await t.run(async (ctx) => {
+      return await ctx.db.insert('reviewItems', {
+        userId: USER_A.tokenIdentifier,
+        courseId,
+        sectionId,
+        prompt: 'Cross-user test',
+        answer: 'Answer',
+        easeFactor: 2.5,
+        interval: 1,
+        repetitions: 0,
+        nextReviewDate: today,
+        flagged: false,
+        createdAt: Date.now(),
+      })
+    })
+
+    const asOther = t.withIdentity(USER_B)
+
+    await expect(
+      asOther.mutation(api.reviewItems.submitReview, {
+        reviewItemId: itemId,
+        quality: 4,
+      }),
+    ).rejects.toThrow('Not authorized')
+  })
+
+  test('triggers streak update on review submission', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId, sectionId } = await seedSectionWithFlashcards(t)
+
+    const today = new Date().toISOString().slice(0, 10)
+
+    const itemId = await t.run(async (ctx) => {
+      return await ctx.db.insert('reviewItems', {
+        userId: USER_A.tokenIdentifier,
+        courseId,
+        sectionId,
+        prompt: 'Streak test',
+        answer: 'Answer',
+        easeFactor: 2.5,
+        interval: 1,
+        repetitions: 0,
+        nextReviewDate: today,
+        flagged: false,
+        createdAt: Date.now(),
+      })
+    })
+
+    await asUser.mutation(api.reviewItems.submitReview, {
+      reviewItemId: itemId,
+      quality: 4,
+    })
+
+    const profile = await t.run(async (ctx) => {
+      return await ctx.db
+        .query('learnProfile')
+        .withIndex('by_userId', (q) => q.eq('userId', USER_A.tokenIdentifier))
+        .unique()
+    })
+
+    expect(profile).not.toBeNull()
+    expect(profile!.streakCurrent).toBeGreaterThanOrEqual(1)
+  })
+})
+
 describe('flag sync between flashcards and review items', () => {
   test('flagging a flashcard flags the corresponding review item', async () => {
     const t = convexTest(schema, modules)
