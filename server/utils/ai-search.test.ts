@@ -14,11 +14,32 @@ const validConfig = {
   cloudflareAiSearchToken: 'test-token',
 }
 
-function mockCfResponse(chunks: unknown[]) {
+function mockLegacyResponse(data: unknown[]) {
   return {
     ok: true,
-    json: () => Promise.resolve({ success: true, result: { search_query: 'q', chunks } }),
+    json: () => Promise.resolve({ success: true, result: { search_query: 'q', data } }),
   } as any
+}
+
+function makeLegacyResult(overrides: Record<string, unknown> = {}) {
+  return {
+    file_id: 'chunk-1',
+    filename: 'cautious-elephant-39.convex.site_user123/folderABC/docXYZ.txt',
+    score: 0.87,
+    content: [{ id: 'chunk-1', type: 'text', text: 'Extracted passage.', score: 0.87 }],
+    attributes: {
+      timestamp: 1,
+      folder: 'cautious-elephant-39.convex.site_user123/folderABC/',
+      filename: '',
+      file: {
+        userid: 'https://cautious-elephant-39.convex.site|user123',
+        folderid: 'folderABC',
+        documentid: 'docXYZ',
+        filename: 'docXYZ.txt',
+      },
+    },
+    ...overrides,
+  }
 }
 
 describe('sanitizeUserSegment', () => {
@@ -40,25 +61,8 @@ describe('searchDocuments', () => {
     delete process.env.CLOUDFLARE_AI_SEARCH_TOKEN
   })
 
-  test('returns mapped chunks from CF response shape', async () => {
-    vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockCfResponse([
-      {
-        id: 'chunk-1',
-        type: 'text',
-        score: 0.87,
-        text: 'Extracted passage.',
-        item: {
-          key: 'cautious-elephant-39.convex.site_user123/folderABC/docXYZ.txt',
-          timestamp: 1,
-          metadata: {
-            userid: 'https://cautious-elephant-39.convex.site|user123',
-            folderid: 'folderABC',
-            documentid: 'docXYZ',
-            filename: 'docXYZ.txt',
-          },
-        },
-      },
-    ]))
+  test('returns mapped chunks from legacy response shape', async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockLegacyResponse([makeLegacyResult()]))
 
     const result = await searchDocuments({ query: 'test', userId: 'https://cautious-elephant-39.convex.site|user123', folderId: 'folderABC' })
 
@@ -75,111 +79,70 @@ describe('searchDocuments', () => {
     })
   })
 
-  test('maps chunks when AI Search returns top-level camelCase attributes from ingestion flow', async () => {
-    vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockCfResponse([
-      {
-        id: 'chunk-attrs-1',
-        score: 0.92,
-        text: 'Indexed passage from ingestion.',
-        attributes: {
-          userId: 'https://cautious-elephant-39.convex.site|user123',
-          folderId: 'folderABC',
-          documentId: 'docXYZ',
-          filename: 'lecture.pdf',
-        },
-      },
+  test('uses legacy /autorag/rags/ endpoint', async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockLegacyResponse([]))
+
+    await searchDocuments({ query: 'test', userId: 'user_123' })
+
+    const url = vi.mocked(globalThis.fetch).mock.calls[0][0] as string
+    expect(url).toContain('/autorag/rags/test-instance/search')
+  })
+
+  test('sends query as top-level field (not messages)', async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockLegacyResponse([]))
+
+    await searchDocuments({ query: 'how does auth work', userId: 'user_123' })
+
+    const body = JSON.parse(vi.mocked(globalThis.fetch).mock.calls[0][1]!.body as string)
+    expect(body.query).toBe('how does auth work')
+    expect(body.messages).toBeUndefined()
+  })
+
+  test('sends folderid filter when folderId provided', async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockLegacyResponse([]))
+
+    await searchDocuments({ query: 'test', userId: 'user_123', folderId: 'folder_abc' })
+
+    const body = JSON.parse(vi.mocked(globalThis.fetch).mock.calls[0][1]!.body as string)
+    expect(body.filters).toEqual({ type: 'eq', key: 'folderid', value: 'folder_abc' })
+  })
+
+  test('sends no filter when folderId is absent', async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockLegacyResponse([]))
+
+    await searchDocuments({ query: 'test', userId: 'user_123' })
+
+    const body = JSON.parse(vi.mocked(globalThis.fetch).mock.calls[0][1]!.body as string)
+    expect(body.filters).toBeUndefined()
+  })
+
+  test('sends max_num_results and score_threshold in body', async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockLegacyResponse([]))
+
+    await searchDocuments({ query: 'test', userId: 'user_123', max_num_results: 5, score_threshold: 0.8 })
+
+    const body = JSON.parse(vi.mocked(globalThis.fetch).mock.calls[0][1]!.body as string)
+    expect(body.max_num_results).toBe(5)
+    expect(body.score_threshold).toBe(0.8)
+  })
+
+  test('post-filters by docId allowlist when multiple filterDocIds', async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockLegacyResponse([
+      makeLegacyResult({ content: [{ id: 'a', text: 'yes', score: 0.9 }] }),
+      makeLegacyResult({
+        content: [{ id: 'b', text: 'no', score: 0.8 }],
+        attributes: { file: { userid: 'u', folderid: 'f', documentid: 'other', filename: 'b.txt' } },
+      }),
     ]))
 
     const result = await searchDocuments({
       query: 'test',
       userId: 'https://cautious-elephant-39.convex.site|user123',
-      folderId: 'folderABC',
+      filterDocIds: ['docXYZ', 'anotherDoc'],
     })
-
-    expect(result.data).toHaveLength(1)
-    expect(result.data[0]).toMatchObject({
-      id: 'chunk-attrs-1',
-      content: 'Indexed passage from ingestion.',
-      attributes: {
-        filename: 'lecture.pdf',
-        folderId: 'folderABC',
-        documentId: 'docXYZ',
-        userId: 'https://cautious-elephant-39.convex.site|user123',
-      },
-    })
-  })
-
-  test('maps chunks when metadata keys are camelCase instead of lowercase', async () => {
-    vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockCfResponse([
-      {
-        id: 'chunk-meta-camel',
-        score: 0.88,
-        text: 'Camel metadata passage.',
-        item: {
-          metadata: {
-            userId: 'user_123',
-            folderId: 'f1',
-            documentId: 'd1',
-            filename: 'camel.pdf',
-          },
-        },
-      },
-    ]))
-
-    const result = await searchDocuments({ query: 'test', userId: 'user_123', folderId: 'f1' })
-
-    expect(result.data).toHaveLength(1)
-    expect(result.data[0]).toMatchObject({
-      id: 'chunk-meta-camel',
-      attributes: {
-        filename: 'camel.pdf',
-        folderId: 'f1',
-        documentId: 'd1',
-        userId: 'user_123',
-      },
-    })
-  })
-
-  test('filters out chunks that do not belong to the requesting user', async () => {
-    vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockCfResponse([
-      { id: 'a', score: 0.9, text: 'mine', item: { metadata: { userid: 'user_123', folderid: 'f1', documentid: 'd1', filename: 'a.txt' } } },
-      { id: 'b', score: 0.8, text: 'someone else', item: { metadata: { userid: 'user_other', folderid: 'f1', documentid: 'd2', filename: 'b.txt' } } },
-    ]))
-
-    const result = await searchDocuments({ query: 'test', userId: 'user_123' })
 
     expect(result.data).toHaveLength(1)
     expect(result.data[0].id).toBe('a')
-  })
-
-  test('filters out chunks outside the requested folder when folderId provided', async () => {
-    vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockCfResponse([
-      { id: 'a', score: 0.9, text: 'in folder', item: { metadata: { userid: 'user_123', folderid: 'f1', documentid: 'd1', filename: 'a.txt' } } },
-      { id: 'b', score: 0.8, text: 'other folder', item: { metadata: { userid: 'user_123', folderid: 'f2', documentid: 'd2', filename: 'b.txt' } } },
-    ]))
-
-    const result = await searchDocuments({ query: 'test', userId: 'user_123', folderId: 'f1' })
-
-    expect(result.data).toHaveLength(1)
-    expect(result.data[0].id).toBe('a')
-  })
-
-  test('does not send retrieval filters in request body', async () => {
-    vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockCfResponse([]))
-
-    await searchDocuments({ query: 'test', userId: 'https://x.com|user_123', folderId: 'folder_abc' })
-
-    const body = JSON.parse(vi.mocked(globalThis.fetch).mock.calls[0][1]!.body as string)
-    expect(body.ai_search_options?.retrieval).toBeUndefined()
-  })
-
-  test('sends query as user message in request body', async () => {
-    vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockCfResponse([]))
-
-    await searchDocuments({ query: 'how does auth work', userId: 'user_123' })
-
-    const body = JSON.parse(vi.mocked(globalThis.fetch).mock.calls[0][1]!.body as string)
-    expect(body.messages).toEqual([{ role: 'user', content: 'how does auth work' }])
   })
 
   test('throws when config is missing', async () => {
@@ -195,38 +158,18 @@ describe('searchDocuments', () => {
     process.env.NUXT_CLOUDFLARE_ACCOUNT_ID = 'env-account'
     process.env.NUXT_CLOUDFLARE_AI_SEARCH_INSTANCE = 'env-instance'
     process.env.NUXT_CLOUDFLARE_AI_SEARCH_TOKEN = 'env-token'
-    vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockCfResponse([]))
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockLegacyResponse([]))
 
     await searchDocuments({ query: 'test', userId: 'user_123' })
 
     expect(globalThis.fetch).toHaveBeenCalledWith(
-      'https://api.cloudflare.com/client/v4/accounts/env-account/ai-search/instances/env-instance/search',
+      'https://api.cloudflare.com/client/v4/accounts/env-account/autorag/rags/env-instance/search',
       expect.objectContaining({
         headers: expect.objectContaining({
           Authorization: 'Bearer env-token',
         }),
       }),
     )
-  })
-
-  test('includes max_num_results, score_threshold, reranking when provided', async () => {
-    vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockCfResponse([]))
-
-    await searchDocuments({
-      query: 'test',
-      userId: 'user_123',
-      max_num_results: 5,
-      score_threshold: 0.8,
-      reranking: true,
-    })
-
-    const body = JSON.parse(vi.mocked(globalThis.fetch).mock.calls[0][1]!.body as string)
-    expect(body.ai_search_options).toMatchObject({
-      max_num_results: 5,
-      score_threshold: 0.8,
-      reranking: { enabled: true },
-    })
-    expect(body.ai_search_options.retrieval).toBeUndefined()
   })
 
   test('throws on API error response', async () => {

@@ -32,36 +32,45 @@ export function sanitizeUserSegment(userId: string): string {
   return userId.replace(/^https?:\/\//, '').replace(/[|:]/g, '_')
 }
 
-interface RawChunkMetadata {
-  userid?: string
-  folderid?: string
-  documentid?: string
-  filename?: string
-  [k: string]: unknown
-}
-
-interface RawChunk {
+interface LegacyChunkContent {
   id: string
   type?: string
-  score: number
   text: string
-  content?: string
-  item?: { key?: string; timestamp?: number; metadata?: RawChunkMetadata }
-  attributes?: Record<string, unknown>
+  score: number
 }
 
-function readChunkString(
-  sources: Array<Record<string, unknown> | undefined>,
-  ...keys: string[]
-): string | undefined {
-  for (const source of sources) {
-    if (!source) continue
-    for (const key of keys) {
-      const value = source[key]
-      if (typeof value === 'string' && value.length > 0) return value
+interface LegacyResult {
+  file_id: string
+  filename: string
+  score: number
+  content: LegacyChunkContent[]
+  attributes: {
+    timestamp?: number
+    folder?: string
+    filename?: string
+    file?: {
+      userid?: string
+      folderid?: string
+      documentid?: string
+      filename?: string
     }
   }
-  return undefined
+}
+
+function buildFilters(params: AISearchParams): Record<string, unknown> | undefined {
+  const filters: Record<string, unknown>[] = []
+
+  if (params.folderId) {
+    filters.push({ type: 'eq', key: 'folderid', value: params.folderId })
+  }
+
+  if (params.filterDocIds?.length === 1) {
+    filters.push({ type: 'eq', key: 'documentid', value: params.filterDocIds[0] })
+  }
+
+  if (filters.length === 0) return undefined
+  if (filters.length === 1) return filters[0]
+  return { type: 'and', filters }
 }
 
 export async function searchDocuments(params: AISearchParams): Promise<AISearchResponse> {
@@ -89,21 +98,20 @@ export async function searchDocuments(params: AISearchParams): Promise<AISearchR
   if (!cloudflareAccountId || !cloudflareAiSearchInstance || !cloudflareAiSearchToken) {
     throw createError({
       statusCode: 500,
-      message: 'Missing Cloudflare AI Search configuration. Check NUXT_CLOUDFLARE_ACCOUNT_ID/CF_ACCOUNT_ID, NUXT_CLOUDFLARE_AI_SEARCH_INSTANCE/CLOUDFLARE_AI_SEARCH_INSTANCE, and NUXT_CLOUDFLARE_AI_SEARCH_TOKEN/CLOUDFLARE_AI_SEARCH_TOKEN.',
+      message: 'Missing Cloudflare AI Search configuration.',
     })
   }
 
-  const url = `https://api.cloudflare.com/client/v4/accounts/${cloudflareAccountId}/ai-search/instances/${cloudflareAiSearchInstance}/search`
-
-  const searchOptions: Record<string, unknown> = {}
-  if (params.max_num_results !== undefined) searchOptions.max_num_results = params.max_num_results
-  if (params.score_threshold !== undefined) searchOptions.score_threshold = params.score_threshold
-  if (params.reranking !== undefined) searchOptions.reranking = { enabled: params.reranking }
+  const url = `https://api.cloudflare.com/client/v4/accounts/${cloudflareAccountId}/autorag/rags/${cloudflareAiSearchInstance}/search`
 
   const body: Record<string, unknown> = {
-    messages: [{ role: 'user', content: params.query }],
+    query: params.query,
+    max_num_results: params.max_num_results ?? 20,
+    score_threshold: params.score_threshold ?? 0.05,
   }
-  if (Object.keys(searchOptions).length > 0) body.ai_search_options = searchOptions
+
+  const filters = buildFilters(params)
+  if (filters) body.filters = filters
 
   const response = await fetch(url, {
     method: 'POST',
@@ -121,61 +129,47 @@ export async function searchDocuments(params: AISearchParams): Promise<AISearchR
 
   const json = await response.json() as {
     success?: boolean
-    result?: { search_query?: string; chunks?: RawChunk[] }
-    data?: RawChunk[]
+    result?: {
+      search_query?: string
+      data?: LegacyResult[]
+    }
   }
 
+  const results = json.result?.data ?? []
 
-  const raw = json.result?.chunks ?? json.data ?? []
+  const chunks: AISearchChunk[] = []
+  for (const r of results) {
+    const file = r.attributes?.file ?? {}
+    const userId = file.userid
+    const folderId = file.folderid
+    const documentId = file.documentid
+    const filename = file.filename ?? r.attributes?.filename
 
-  const mapped: AISearchChunk[] = raw.map((c): AISearchChunk => {
-    const meta = c.item?.metadata ?? {}
-    const attrs = c.attributes ?? {}
-    const sources = [attrs, meta]
-    const key = c.item?.key
-    const keyParts = key?.split('/') ?? []
-
-    return {
-      id: c.id,
-      content: c.text ?? c.content ?? '',
-      score: c.score,
-      attributes: {
-        filename: readChunkString(sources, 'filename'),
-        folderId: readChunkString(sources, 'folderId', 'folderid') ?? keyParts[1],
-        documentId: readChunkString(sources, 'documentId', 'documentid')
-          ?? (keyParts[2] ? keyParts[2].replace(/\.[^.]+$/, '') : undefined),
-        userId: readChunkString(sources, 'userId', 'userid') ?? keyParts[0],
-        folder: key,
-      },
+    for (const c of r.content ?? []) {
+      chunks.push({
+        id: c.id,
+        content: c.text ?? '',
+        score: c.score,
+        attributes: {
+          filename,
+          folderId,
+          documentId,
+          userId,
+          folder: r.filename,
+        },
+      })
     }
-  })
+  }
 
-  const sanitizedUserId = sanitizeUserSegment(params.userId)
-
-  const docIdAllowlist = params.filterDocIds && params.filterDocIds.length > 0
+  const docIdAllowlist = params.filterDocIds && params.filterDocIds.length > 1
     ? new Set(params.filterDocIds)
     : null
 
-  const chunks = mapped.filter((c) => {
-    const metaUserId = c.attributes.userId
-    const keyPrefix = c.attributes.folder?.split('/')[0]
-    const ownerMatch = metaUserId === params.userId
-      || metaUserId === sanitizedUserId
-      || keyPrefix === sanitizedUserId
-    if (!ownerMatch) return false
+  const filtered = docIdAllowlist
+    ? chunks.filter(c => c.attributes.documentId && docIdAllowlist.has(c.attributes.documentId))
+    : chunks
 
-    const metaFolderId = c.attributes.folderId
-    const keyFolderId = c.attributes.folder?.split('/')[1]
-    if (params.folderId && metaFolderId !== params.folderId && keyFolderId !== params.folderId) return false
+  console.log(`[ai-search] q=${JSON.stringify(params.query)} folder=${params.folderId ?? '-'} results=${results.length} chunks=${filtered.length}`)
 
-    if (docIdAllowlist) {
-      const docId = c.attributes.documentId
-      if (!docId || !docIdAllowlist.has(docId)) return false
-    }
-    return true
-  })
-
-  console.log(`[ai-search] q=${JSON.stringify(params.query)} folder=${params.folderId ?? '-'} raw=${mapped.length} kept=${chunks.length}`)
-
-  return { data: chunks, search_query: json.result?.search_query }
+  return { data: filtered, search_query: json.result?.search_query }
 }

@@ -2,6 +2,7 @@
 import { GripVertical, X, Plus } from 'lucide-vue-next'
 import type { Id } from '../../../convex/_generated/dataModel'
 import { api } from '#convex/api'
+import { toast } from 'vue-sonner'
 
 interface OutlineSection {
   title: string
@@ -91,7 +92,11 @@ async function saveTitle(section: SectionRow) {
   const newTitle = editingTitle.value.trim()
   editingId.value = null
   if (!newTitle || newTitle === section.title) return
-  await updateTitleMutation.mutate({ sectionId: section._id, title: newTitle } as any)
+  try {
+    await updateTitleMutation.mutate({ sectionId: section._id, title: newTitle } as any)
+  } catch (e: any) {
+    toast.error(e?.message ?? 'Failed to update title')
+  }
 }
 
 function cancelEdit() {
@@ -116,24 +121,36 @@ function nextKnowledgeType(current: KnowledgeType): KnowledgeType {
 
 async function cycleKnowledgeType(section: SectionRow) {
   const next = nextKnowledgeType(section.knowledgeType)
-  await updateKnowledgeTypeMutation.mutate({
-    sectionId: section._id,
-    knowledgeType: next,
-  } as any)
+  try {
+    await updateKnowledgeTypeMutation.mutate({
+      sectionId: section._id,
+      knowledgeType: next,
+    } as any)
+  } catch (e: any) {
+    toast.error(e?.message ?? 'Failed to update knowledge type')
+  }
 }
 
 async function removeSection(section: SectionRow) {
-  await removeMutation.mutate({ sectionId: section._id } as any)
-  emit('sectionRemoved')
+  try {
+    await removeMutation.mutate({ sectionId: section._id } as any)
+    emit('sectionRemoved')
+  } catch (e: any) {
+    toast.error(e?.message ?? 'Failed to remove section')
+  }
 }
 
 async function addSection() {
-  const newId = await createMutation.mutate({ courseId: props.courseId } as any)
-  emit('sectionAdded')
-  await nextTick()
-  if (newId) {
-    const newSection = props.sections.find((s) => s._id === newId)
-    if (newSection) startEdit(newSection)
+  try {
+    const newId = await createMutation.mutate({ courseId: props.courseId } as any)
+    emit('sectionAdded')
+    await nextTick()
+    if (newId) {
+      const newSection = props.sections.find((s) => s._id === newId)
+      if (newSection) startEdit(newSection)
+    }
+  } catch (e: any) {
+    toast.error(e?.message ?? 'Failed to add section')
   }
 }
 
@@ -159,7 +176,11 @@ async function onDrop(targetIndex: number) {
   const ids = props.sections.map((s) => s._id)
   const [moved] = ids.splice(fromIndex, 1)
   ids.splice(targetIndex, 0, moved!)
-  await updateOrderMutation.mutate({ courseId: props.courseId, sectionIds: ids } as any)
+  try {
+    await updateOrderMutation.mutate({ courseId: props.courseId, sectionIds: ids } as any)
+  } catch (e: any) {
+    toast.error(e?.message ?? 'Failed to reorder sections')
+  }
 }
 
 function onDragEnd() {

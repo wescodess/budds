@@ -9,7 +9,8 @@ import {
   sanitizeTurnForSpeech,
   splitOversizedTurns,
 } from '../../utils/audio-script-prompt'
-import { synthesizeVoiceWithRetry, isAuraVoice, type AuraVoice } from '../../utils/tts-workers-ai'
+import { isAuraVoice, type AuraVoice } from '../../utils/tts-workers-ai'
+import { resolveTtsEngine, synthesizeTurn, synthesizeDialogue, engineVoiceProfile, type TtsEngine } from '../../utils/tts-provider'
 import { readConfiguredRuntimeValue } from '../../utils/runtime-config'
 import { requireRateLimit } from '../../utils/rate-limit'
 
@@ -180,16 +181,19 @@ export default defineEventHandler(async (event) => {
       return { cancelled: true as const, taskId }
     }
 
+    await setTaskProgress('Preparing voice engine…')
+    const ttsEngine: TtsEngine = await resolveTtsEngine()
+
     await setTaskProgress('Writing dialogue…')
 
     const scriptModel = body.model?.trim() || SCRIPT_MODEL
-    const promptMessages = buildAudioScriptPrompt(chunks, { lengthMinutes, complexity })
+    const promptMessages = buildAudioScriptPrompt(chunks, { lengthMinutes, complexity, ttsEngine })
 
     const completion = await generateCompletion({
       model: scriptModel,
       messages: promptMessages,
       temperature: 0.5,
-      max_tokens: Math.max(4000, lengthMinutes * 400),
+      max_tokens: Math.max(4000, lengthMinutes * (ttsEngine === 'dia' ? 800 : 400)),
     })
 
     const raw = completion.choices[0]?.message?.content ?? ''
@@ -219,28 +223,32 @@ export default defineEventHandler(async (event) => {
     }> = []
     const sourceDocumentIds = new Set<string>()
 
-    for (let i = 0; i < normalizedTurns.length; i++) {
-      if (await isTaskCancelled()) {
-        return { cancelled: true as const, taskId }
-      }
+    for (const turn of normalizedTurns) {
+      const sourceChunk = turn.sourceIndex !== undefined ? chunks[turn.sourceIndex] : undefined
+      const docId = (sourceChunk?.attributes?.documentId as string | undefined) ?? undefined
+      if (docId) sourceDocumentIds.add(docId)
+    }
 
-      const turn = normalizedTurns[i]!
-      await setTaskProgress(`Synthesizing turn ${i + 1}/${normalizedTurns.length}…`)
+    if (!convexClient) {
+      throw createError({ statusCode: 500, message: 'Convex client unavailable — cannot upload audio' })
+    }
 
-      const speaker = turn.speaker === 'host_a' ? voiceProfile.hostA : voiceProfile.hostB
-      const spokenText = sanitizeTurnForSpeech(turn.text)
+    if (ttsEngine === 'dia') {
+      await setTaskProgress('Synthesizing audio…')
+
+      const diaScript = normalizedTurns
+        .map(t => `[${t.speaker === 'host_a' ? 'S1' : 'S2'}] ${sanitizeTurnForSpeech(t.text, { preserveExpressions: true })}`)
+        .join(' ... ')
 
       let audioBytes: Uint8Array
+      let durationMs: number
       try {
-        audioBytes = await synthesizeVoiceWithRetry({ text: spokenText, speaker })
+        const result = await synthesizeDialogue(diaScript)
+        audioBytes = result.audio
+        durationMs = result.durationMs
       }
       catch (err: any) {
-        const msg = `Audio synthesis failed on turn ${i + 1}: ${err?.message ?? 'unknown error'}`
-        throw createError({ statusCode: 502, message: msg })
-      }
-
-      if (!convexClient) {
-        throw createError({ statusCode: 500, message: 'Convex client unavailable — cannot upload audio' })
+        throw createError({ statusCode: 502, message: `Audio synthesis failed: ${err?.message ?? 'unknown error'}` })
       }
 
       const uploadUrl = await convexClient.mutation(api.audioOverviews.generateTurnUploadUrl, {})
@@ -251,29 +259,71 @@ export default defineEventHandler(async (event) => {
       })
       if (!uploadResponse.ok) {
         const text = await uploadResponse.text().catch(() => '')
-        const msg = `Failed to upload audio turn ${i + 1}: ${uploadResponse.status} ${text || uploadResponse.statusText}`
-        throw createError({ statusCode: 502, message: msg })
+        throw createError({ statusCode: 502, message: `Failed to upload audio: ${uploadResponse.status} ${text || uploadResponse.statusText}` })
       }
 
       const uploadJson = await uploadResponse.json() as { storageId?: string }
       const storageId = uploadJson.storageId
       if (!storageId) {
-        const msg = `Upload for turn ${i + 1} returned no storageId`
-        throw createError({ statusCode: 502, message: msg })
+        throw createError({ statusCode: 502, message: 'Upload returned no storageId' })
       }
       uploadedStorageIds.push(storageId as Id<'_storage'>)
 
-      const sourceChunk = turn.sourceIndex !== undefined ? chunks[turn.sourceIndex] : undefined
-      const docId = (sourceChunk?.attributes?.documentId as string | undefined) ?? undefined
-      if (docId) sourceDocumentIds.add(docId)
-
+      const combinedText = normalizedTurns.map(t => `${t.speaker === 'host_a' ? 'Host A' : 'Host B'}: ${t.text}`).join('\n')
       persistedTurns.push({
-        speaker: turn.speaker,
-        text: turn.text,
+        speaker: 'host_a',
+        text: combinedText,
         audioFileId: storageId as Id<'_storage'>,
-        durationMs: estimateTurnDurationMs(turn.text),
-        sourceIndex: turn.sourceIndex,
+        durationMs,
       })
+    }
+    else {
+      for (let i = 0; i < normalizedTurns.length; i++) {
+        if (await isTaskCancelled()) {
+          return { cancelled: true as const, taskId }
+        }
+
+        const turn = normalizedTurns[i]!
+        await setTaskProgress(`Synthesizing turn ${i + 1}/${normalizedTurns.length}…`)
+
+        const auraVoice = turn.speaker === 'host_a' ? voiceProfile.hostA : voiceProfile.hostB
+        const spokenText = sanitizeTurnForSpeech(turn.text)
+
+        let audioBytes: Uint8Array
+        try {
+          audioBytes = await synthesizeTurn(spokenText, turn.speaker, ttsEngine, auraVoice)
+        }
+        catch (err: any) {
+          const msg = `Audio synthesis failed on turn ${i + 1}: ${err?.message ?? 'unknown error'}`
+          throw createError({ statusCode: 502, message: msg })
+        }
+
+        const uploadUrl = await convexClient.mutation(api.audioOverviews.generateTurnUploadUrl, {})
+        const uploadResponse = await fetch(uploadUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'audio/mpeg' },
+          body: audioBytes,
+        })
+        if (!uploadResponse.ok) {
+          const text = await uploadResponse.text().catch(() => '')
+          throw createError({ statusCode: 502, message: `Failed to upload audio turn ${i + 1}: ${uploadResponse.status} ${text || uploadResponse.statusText}` })
+        }
+
+        const uploadJson = await uploadResponse.json() as { storageId?: string }
+        const storageId = uploadJson.storageId
+        if (!storageId) {
+          throw createError({ statusCode: 502, message: `Upload for turn ${i + 1} returned no storageId` })
+        }
+        uploadedStorageIds.push(storageId as Id<'_storage'>)
+
+        persistedTurns.push({
+          speaker: turn.speaker,
+          text: turn.text,
+          audioFileId: storageId as Id<'_storage'>,
+          durationMs: estimateTurnDurationMs(turn.text),
+          sourceIndex: turn.sourceIndex,
+        })
+      }
     }
 
     if (await isTaskCancelled()) {
@@ -290,7 +340,7 @@ export default defineEventHandler(async (event) => {
       title: parsedScript.title,
       model: scriptModel,
       turns: persistedTurns,
-      voiceProfile,
+      voiceProfile: ttsEngine === 'dia' ? engineVoiceProfile('dia') : voiceProfile,
       preferences: { lengthMinutes, complexity },
       sourceDocumentIds: Array.from(sourceDocumentIds),
       scopeDocIds: scopeDocIds,
