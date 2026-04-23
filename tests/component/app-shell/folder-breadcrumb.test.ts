@@ -28,7 +28,7 @@ describe('App Shell Layout — AC4: Folder Breadcrumb Navigation', () => {
     const wrapper = await mountSuspended(DefaultLayout.default)
 
     const breadcrumb = wrapper.find('[data-testid="breadcrumb-nav"]')
-    const homeLink = breadcrumb.find('a[href="/app"]')
+    const homeLink = breadcrumb.find('a[href="/"]')
     expect(homeLink.exists()).toBe(true)
     expect(homeLink.text()).toContain('Home')
   })

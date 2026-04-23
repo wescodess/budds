@@ -1,4 +1,4 @@
-import { defineComponent } from 'vue'
+import { defineComponent, toRaw } from 'vue'
 import { describe, expect, it } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import { useReferenceScope } from '~/composables/useReferenceScope'
@@ -26,10 +26,9 @@ const file2 = {
 
 async function mountScopeHarness() {
   const Harness = defineComponent({
-    setup(_, { expose }) {
+    setup() {
       const scope = useReferenceScope()
-      expose({ scope })
-      return {}
+      return { scope }
     },
     template: '<div />',
   })
@@ -40,7 +39,7 @@ async function mountScopeHarness() {
 describe('useReferenceScope folder coverage rules', () => {
   it('promotes a folder selection once all of its files are selected', async () => {
     const wrapper = await mountScopeHarness()
-    const scope = (wrapper.vm as { scope: ReturnType<typeof useReferenceScope> }).scope
+    const scope = (wrapper.vm as any).scope as ReturnType<typeof useReferenceScope>
 
     scope.folderMeta.value.set(folder.id, folder as any)
 
@@ -56,7 +55,7 @@ describe('useReferenceScope folder coverage rules', () => {
 
   it('demotes a selected folder when one file is unselected but keeps remaining files selected', async () => {
     const wrapper = await mountScopeHarness()
-    const scope = (wrapper.vm as { scope: ReturnType<typeof useReferenceScope> }).scope
+    const scope = (wrapper.vm as any).scope as ReturnType<typeof useReferenceScope>
 
     scope.toggleFolder(folder as any)
     expect(scope.folderIds.value.has(folder.id as any)).toBe(true)
