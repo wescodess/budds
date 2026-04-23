@@ -125,6 +125,10 @@ export default defineSchema({
     sourceDocumentId: v.optional(v.id('documents')),
     sourceChunkContent: v.optional(v.string()),
     sourceFilename: v.optional(v.string()),
+    flagged: v.optional(v.boolean()),
+    correctedAnswer: v.optional(v.string()),
+    correctedExplanation: v.optional(v.string()),
+    flaggedAt: v.optional(v.number()),
   })
     .index('by_quizId', ['quizId'])
     .index('by_userId', ['userId']),
@@ -195,6 +199,9 @@ export default defineSchema({
     sourceChunkContent: v.optional(v.string()),
     sourceFilename: v.optional(v.string()),
     updatedAt: v.optional(v.number()),
+    flagged: v.optional(v.boolean()),
+    correctedDefinition: v.optional(v.string()),
+    flaggedAt: v.optional(v.number()),
   })
     .index('by_roomId', ['roomId'])
     .index('by_roomId_and_displayOrder', ['roomId', 'displayOrder'])

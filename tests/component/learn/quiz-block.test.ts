@@ -9,6 +9,12 @@ mockNuxtImport('useConvexQuery', () => {
   }
 })
 
+mockNuxtImport('useConvexMutation', () => {
+  return (_apiRef: any) => {
+    return { mutate: vi.fn().mockResolvedValue({ success: true }) }
+  }
+})
+
 const componentPath = ['~', 'components', 'learn', 'QuizBlock.vue'].join('/')
 
 const sampleQuiz = {
