@@ -1,5 +1,11 @@
 # Deferred Work
 
+## Deferred from: code review of 6-1-google-calendar-oauth-connection (2026-04-23)
+
+- **`connect.get.ts` calls `getConvexTokenIdentifier` but discards the return value.** Line 7 authenticates the user (throws if unauthenticated) but doesn't use the identifier. The callback stores tokens for the convex-authenticated user regardless. Low severity since the OAuth flow itself authenticates with Google.
+- **`GOOGLE_TOKEN_URL` constant duplicated across `callback.get.ts` and `calendar-tokens.ts`.** Both files define the same Google token endpoint URL. Extract to a shared constant in `server/utils/` when calendar code grows.
+- **No UI feedback for OAuth error query params.** The callback redirects to `/app/learn?calendar_error=...` on failure, but neither CalendarConnectionCard nor the Learn page reads or displays these query params. Users won't know if OAuth failed unless they inspect the URL.
+
 ## Deferred from: code review of 5-4-cross-course-review-budgeting (2026-04-23)
 
 - **`isLoading` computed in review.vue is unused dead code.** Defined on line 78 but never referenced in the template. Pre-existing from 5-2. Remove when the review page is next touched.

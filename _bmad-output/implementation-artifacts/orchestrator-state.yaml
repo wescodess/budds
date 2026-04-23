@@ -9,39 +9,32 @@ last_verdict:
   subagent: bmad-story-runner
   story: 6-1-google-calendar-oauth-connection
   epic: 6
-  status: BLOCKED
-  pr_url: null
-  branch: null
-  commit_sha: null
-  files_changed: 0
-  tasks_completed: 0
+  status: PASS
+  pr_url: 'https://github.com/wescodess/budds/pull/123'
+  branch: feat/6-1-google-calendar-oauth
+  commit_sha: '7b7b951bf46e549a3c86a1a5f6e35a010d8c6338'
+  files_changed: 9
+  tasks_completed: 10
   tasks_total: 10
-  findings_deferred: 0
+  findings_deferred: 3
   lint_pass: null
-  typecheck_pass: null
-  unit_tests_pass: null
+  typecheck_pass: true
+  unit_tests_pass: true
   e2e_tests_pass: null
-  review_pass: null
+  review_pass: true
   summary: >
-    Story 6-1 blocked at pre-flight. Working tree on dev has 27 uncommitted changes including
-    deleted pages (learn/index.vue, learn/create.vue, learn/[courseId]/index.vue,
-    learn/[courseId]/[sectionId].vue, folders/[id]/learn/[courseId].vue), modified schema,
-    modified components (CourseCard, CourseCreator, CourseViewBody, OutlineEditor, SourceSelector,
-    StartLearningButton, CreateCourseCard), modified composable (useFolderPageContext), modified
-    Convex files (courses.ts, courses.test.ts, schema.ts), deleted test file (learn-home.test.ts),
-    and 2 new untracked files. These appear to be from a refactoring effort (possibly consolidating
-    learn routes under folder-scoped paths). The orchestrator must commit or stash these changes
-    before the story runner can proceed.
-  block_reason: dirty_workspace
-  block_context: >
-    git status shows 25 modified/deleted tracked files and 2 untracked files on dev branch.
-    Key changes: deleted app/pages/app/learn/index.vue, app/pages/app/learn/create.vue,
-    app/pages/app/learn/[courseId]/index.vue, app/pages/app/learn/[courseId]/[sectionId].vue,
-    app/pages/app/folders/[id]/learn/[courseId].vue; new app/pages/app/folders/[id]/learn/[courseId]/
-    directory and app/pages/app/folders/[id]/learn/create.vue; modified convex/schema.ts,
-    convex/courses.ts, convex/courses.test.ts; modified 7 learn components and 7 test files.
-    These must be committed or stashed before branching for 6-1.
-  at: '2026-04-23T23:55:00Z'
+    Story 6-1 PASS. calendarConnections table added to schema. OAuth flow: connect.get.ts initiates
+    with calendar.events scope + offline access, callback.get.ts exchanges code for tokens, detects
+    timezone from Google Calendar API settings, stores base64-encoded tokens in Convex.
+    CalendarConnectionCard shows Connected/Disconnect or Connect state. Token refresh helper in
+    server/utils/calendar-tokens.ts. Code review: 2 blockers fixed (getTokens and updateTokens
+    changed from public query/mutation to internalQuery/internalMutation per NFR9 server-only token
+    requirement), 3 deferred (unused return value in connect.get.ts, duplicated GOOGLE_TOKEN_URL
+    constant, no OAuth error display in UI). 692 Convex tests pass (+10 new), 409 component tests
+    pass (+5 new), 1 pre-existing failure in contentFlags.test.ts. PR #123 merged to dev.
+  block_reason: null
+  block_context: null
+  at: '2026-04-23T19:35:00Z'
 last_retro: 'epic-4-retro-2026-04-24.md'
 
 config:
