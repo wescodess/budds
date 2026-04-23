@@ -737,3 +737,115 @@ describe('courses.startCourse', () => {
     ).rejects.toThrow('Course not found')
   })
 })
+
+describe('courses.deleteCourse — AC3: cascade deletion', () => {
+  test('deletes course, sections, and sourceDocss', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, folderId } = await seedFolder(t, USER_A)
+    const docId = await seedDocument(t, USER_A, folderId, 'doc.pdf')
+
+    const result = await asUser.mutation(api.courses.create, {
+      title: 'To Delete',
+      sourceType: 'folder',
+      folderId,
+      documentIds: [docId],
+    })
+
+    await t.run(async (ctx) => {
+      await ctx.db.insert('courseSections', {
+        courseId: result.courseId,
+        userId: USER_A.tokenIdentifier,
+        order: 0,
+        title: 'Section 1',
+        knowledgeType: 'factual',
+        status: 'locked',
+        contentBlocks: [],
+        masteryLevel: 'new',
+      })
+    })
+
+    await asUser.mutation(api.courses.deleteCourse, { id: result.courseId })
+
+    const course = await t.run(async (ctx) => ctx.db.get(result.courseId))
+    expect(course).toBeNull()
+
+    const sections = await t.run(async (ctx) =>
+      ctx.db
+        .query('courseSections')
+        .withIndex('by_courseId', (q) => q.eq('courseId', result.courseId))
+        .collect(),
+    )
+    expect(sections).toHaveLength(0)
+
+    const sourceDocs = await t.run(async (ctx) =>
+      ctx.db
+        .query('courseSourceDocs')
+        .withIndex('by_courseId', (q) => q.eq('courseId', result.courseId))
+        .collect(),
+    )
+    expect(sourceDocs).toHaveLength(0)
+  })
+
+  test('deletes course-scoped quizzes but not non-course-scoped', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, folderId } = await seedFolder(t, USER_A)
+
+    const result = await asUser.mutation(api.courses.create, {
+      title: 'Course With Quizzes',
+      sourceType: 'web-only',
+    })
+
+    const { courseScopedQuizId, normalQuizId } = await t.run(async (ctx) => {
+      const csQuizId = await ctx.db.insert('quizzes', {
+        userId: USER_A.tokenIdentifier,
+        folderId,
+        title: 'Course Quiz',
+        status: 'ready',
+        courseScoped: true,
+      })
+
+      await ctx.db.insert('courseSections', {
+        courseId: result.courseId,
+        userId: USER_A.tokenIdentifier,
+        order: 0,
+        title: 'Section 1',
+        knowledgeType: 'factual',
+        status: 'ready',
+        contentBlocks: [{ type: 'quiz', entityId: csQuizId, order: 0 }],
+        masteryLevel: 'new',
+      })
+
+      const nQuizId = await ctx.db.insert('quizzes', {
+        userId: USER_A.tokenIdentifier,
+        folderId,
+        title: 'Normal Quiz',
+        status: 'ready',
+      })
+
+      return { courseScopedQuizId: csQuizId, normalQuizId: nQuizId }
+    })
+
+    await asUser.mutation(api.courses.deleteCourse, { id: result.courseId })
+
+    const csQuiz = await t.run(async (ctx) => ctx.db.get(courseScopedQuizId))
+    expect(csQuiz).toBeNull()
+
+    const normalQuiz = await t.run(async (ctx) => ctx.db.get(normalQuizId))
+    expect(normalQuiz).not.toBeNull()
+  })
+
+  test('rejects deletion by another user', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser: _asA } = await seedFolder(t, USER_A)
+
+    const result = await t.withIdentity(USER_A).mutation(api.courses.create, {
+      title: 'Owned by A',
+      sourceType: 'web-only',
+    })
+
+    const asB = t.withIdentity(USER_B)
+    await expect(
+      asB.mutation(api.courses.deleteCourse, { id: result.courseId }),
+    ).rejects.toThrow('Course not found')
+  })
+})
