@@ -1,38 +1,41 @@
 mode: running
 current_phase: epic-story
-current_story: 3-1-section-generation-pipeline-multi-engine-orchestration
+current_story: 3-2-n-plus-1-section-pre-fetch
 current_epic: 3
 retry_count: 0
 last_epic_complete_fired: prep-3
 
 last_verdict:
   subagent: bmad-story-runner
-  story: prep-3-6-course-status-badge
-  epic: prep-3
+  story: 3-2-n-plus-1-section-pre-fetch
+  epic: 3
   status: PASS
-  pr_url: 'https://github.com/wescodess/budds/pull/102'
-  branch: 'prep/3-6-course-status-badge'
-  commit_sha: '66d67d1'
-  files_changed: 2
-  tasks_completed: 4
-  tasks_total: 4
-  findings_deferred: 0
+  pr_url: 'https://github.com/wescodess/budds/pull/104'
+  branch: 'feat/3-2-n-plus-1-section-pre-fetch'
+  commit_sha: '1ef93da'
+  files_changed: 5
+  tasks_completed: 6
+  tasks_total: 6
+  findings_deferred: 5
   lint_pass: null
   typecheck_pass: null
   unit_tests_pass: true
   e2e_tests_pass: null
-  review_pass: null
+  review_pass: true
   summary: >
-    Prep story prep-3-6 complete. Added course status badge to CourseCard.vue: generating
-    courses show amber "Generating..." badge, failed courses show red "Failed" badge with
-    dimmed card styling (opacity-75, muted title, red-tinted border), ready courses unchanged.
-    4 new component tests (no badge for ready, generating badge, failed badge, failed dimmed
-    styling). 2 files changed. All tests pass: pnpm test 512, pnpm test:component 289.
-    Zero deferred items. PR #102 merged to dev. Resolves deferred item from 2-1 code review
-    (CourseCard generating/failed visibility). Prep sprint epic-3 COMPLETE (6/6 stories).
+    Story 3-2 complete. N+1 section pre-fetch: getNextSection query, checkPreFetchStatus
+    query, triggerPreFetch mutation added to courseSections.ts. Locked sections trigger
+    generation via task system. Failed sections retry once (tracked via task metadata
+    retryOf field). Only pre-fetches 1 ahead, never N+2. usePreFetchSection composable
+    watches next section status via reactive Convex subscription and fires generation
+    when eligible (client-initiated, matching StartLearningButton pattern). 15 new Convex
+    tests. Code review: 1 blocker fixed (userId guard on section in triggerPreFetch),
+    5 deferred (over-fetching in query, no hasNextSection state, idempotency test,
+    unused getNextSection, retryOf sentinel). 544 Convex + 289 component tests pass.
+    PR #104 merged to dev.
   block_reason: null
   block_context: null
-  at: '2026-04-24T05:30:00Z'
+  at: '2026-04-24T07:15:00Z'
 last_retro: 'epic-2-retro-2026-04-23.md'
 
 config:
