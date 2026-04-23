@@ -167,3 +167,63 @@ export const get = query({
     return course
   },
 })
+
+export const finalizeOutline = mutation({
+  args: {
+    courseId: v.id('courses'),
+    outlineSections: v.array(v.object({
+      title: v.string(),
+      description: v.string(),
+      knowledgeType: v.string(),
+      order: v.number(),
+    })),
+    sourceConfidence: v.object({
+      docCount: v.number(),
+      webPercent: v.number(),
+    }),
+    totalSectionCount: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireAuth(ctx)
+    const course = await ctx.db.get(args.courseId)
+    if (!course || course.userId !== userId) throw new Error('Course not found')
+    if (course.status !== 'generating') throw new Error('Course is not in generating state')
+
+    await ctx.db.patch(args.courseId, {
+      outlineSections: args.outlineSections,
+      totalSectionCount: args.totalSectionCount,
+      sourceConfidence: args.sourceConfidence,
+      status: 'ready',
+      updatedAt: Date.now(),
+    })
+
+    for (const section of args.outlineSections) {
+      await ctx.db.insert('courseSections', {
+        courseId: args.courseId,
+        userId: course.userId,
+        order: section.order,
+        title: section.title,
+        knowledgeType: section.knowledgeType as 'factual' | 'conceptual' | 'procedural' | 'mixed',
+        status: 'locked',
+        contentBlocks: [],
+        masteryLevel: 'new',
+      })
+    }
+  },
+})
+
+export const markFailed = mutation({
+  args: {
+    courseId: v.id('courses'),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireAuth(ctx)
+    const course = await ctx.db.get(args.courseId)
+    if (!course || course.userId !== userId) return
+
+    await ctx.db.patch(args.courseId, {
+      status: 'failed',
+      updatedAt: Date.now(),
+    })
+  },
+})
