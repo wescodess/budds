@@ -13,7 +13,7 @@ const props = withDefaults(defineProps<{
 const config = {
   new: { dotClass: 'bg-stone-500', label: 'New' },
   learning: { dotClass: 'bg-amber-500', label: 'Learning' },
-  reviewing: { dotClass: 'bg-yellow-500', label: 'Reviewing' },
+  reviewing: { dotClass: 'bg-amber-400', label: 'Reviewing' },
   mastered: { dotClass: 'bg-green-500', label: 'Mastered' },
 } as const
 
