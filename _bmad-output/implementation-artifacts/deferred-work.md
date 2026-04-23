@@ -1,5 +1,11 @@
 # Deferred Work
 
+## Deferred from: code review of 4-4-content-flagging-and-correction (2026-04-23)
+
+- **No test for non-zero flag rate computation.** `getFlagRateForCourse` is tested for unauthenticated (returns null) and zero flag rate, but no test verifies correct percentage when items are actually flagged. Add a test that flags items and asserts the computed rate.
+- **`getFlagRateForCourse` uses `.collect()` on quiz questions and flashcard cards.** Per Convex guidelines, `.collect()` should be avoided for unbounded queries. These queries are bounded by course sections (max 15 sections x 1 quiz/flashcard each), so practical risk is low. Consider using `.take(n)` if courses grow larger.
+- **No explicit `aria-label` on flag editor inputs.** The correction inputs in QuizBlock and FlashcardBlock use `<label>` wrapping (which provides implicit labeling) but lack explicit `aria-label` attributes. Add explicit labels when accessibility audit runs.
+
 ## Deferred from: code review of 4-3-streak-system (2026-04-23)
 
 - **Streak evaluation uses UTC, not user timezone.** `updateStreakForActivity` computes today via `new Date().toISOString().slice(0, 10)` which is UTC. AC says "calendar day (user's timezone)" but `learnProfile.timezone` is optional and no UI exists to set it. For users far from UTC, activities near midnight could misattribute the day. Add timezone-aware date computation when a timezone-setting UI is added.
