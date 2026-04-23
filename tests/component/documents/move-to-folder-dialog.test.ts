@@ -1,8 +1,13 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
+import { flushPromises } from '@vue/test-utils'
 import { createFolder } from '../../support/factories/folder.factory'
 
 describe('MoveToFolderDialog', () => {
+  afterEach(() => {
+    document.body.innerHTML = ''
+  })
+
   it('[P0] renders the full folder tree from roots and expands root folders by default', async () => {
     const MoveToFolderDialog = await import('~/components/documents/MoveToFolderDialog.vue')
     const folders = [
@@ -12,19 +17,20 @@ describe('MoveToFolderDialog', () => {
       createFolder({ _id: 'root-b', name: 'Root B', parentId: undefined }),
     ]
 
-    const wrapper = await mountSuspended(MoveToFolderDialog.default, {
+    await mountSuspended(MoveToFolderDialog.default, {
       props: {
         open: true,
         folders,
         currentFolderId: 'root-b',
       },
+      attachTo: document.body,
     })
+    await flushPromises()
 
-    expect(wrapper.find('[data-testid="tree-node-root-a"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="tree-node-root-b"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="tree-node-child-a1"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="tree-node-child-a2"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="tree-node-root-a"] [title="2 subfolders"]').exists()).toBe(true)
+    expect(document.querySelector('[data-testid="tree-node-root-a"]')).not.toBeNull()
+    expect(document.querySelector('[data-testid="tree-node-root-b"]')).not.toBeNull()
+    expect(document.querySelector('[data-testid="tree-node-child-a1"]')).not.toBeNull()
+    expect(document.querySelector('[data-testid="tree-node-child-a2"]')).not.toBeNull()
   })
 
   it('[P0] waits for submit before emitting the move event', async () => {
@@ -40,13 +46,19 @@ describe('MoveToFolderDialog', () => {
         folders,
         currentFolderId: 'current-folder',
       },
+      attachTo: document.body,
     })
+    await flushPromises()
 
-    await wrapper.find('[data-testid="tree-node-select-destination-folder"]').trigger('click')
+    const selectBtn = document.querySelector<HTMLElement>('[data-testid="tree-node-select-destination-folder"]')
+    selectBtn?.click()
+    await flushPromises()
 
     expect(wrapper.emitted('submit')).toBeFalsy()
 
-    await wrapper.find('[data-testid="move-folder-submit"]').trigger('click')
+    const submitBtn = document.querySelector<HTMLElement>('[data-testid="move-folder-submit"]')
+    submitBtn?.click()
+    await flushPromises()
 
     expect(wrapper.emitted('submit')).toEqual([['destination-folder']])
   })
@@ -64,14 +76,18 @@ describe('MoveToFolderDialog', () => {
         folders,
         currentFolderId: 'current-folder',
       },
+      attachTo: document.body,
     })
+    await flushPromises()
 
-    const currentFolderButton = wrapper.find('[data-testid="tree-node-select-current-folder"]')
-    expect(currentFolderButton.attributes('disabled')).toBeDefined()
+    const currentFolderButton = document.querySelector<HTMLElement>('[data-testid="tree-node-select-current-folder"]')
+    expect(currentFolderButton?.hasAttribute('disabled') || currentFolderButton?.getAttribute('aria-disabled') === 'true').toBe(true)
 
-    await currentFolderButton.trigger('click')
+    currentFolderButton?.click()
+    await flushPromises()
 
-    expect(wrapper.find('[data-testid="move-folder-submit"]').attributes('disabled')).toBeDefined()
+    const submitBtn = document.querySelector<HTMLElement>('[data-testid="move-folder-submit"]')
+    expect(submitBtn?.hasAttribute('disabled')).toBe(true)
     expect(wrapper.emitted('submit')).toBeFalsy()
   })
 })

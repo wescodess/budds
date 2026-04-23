@@ -11,7 +11,7 @@ describe('FileUploadZone — AC #1, #4, #5', () => {
       props: { folderId: 'folder_123' as any },
     })
 
-    expect(wrapper.text()).toContain('Drag PDFs here')
+    expect(wrapper.text()).toContain('Drag files here')
     expect(wrapper.text()).toContain('browse')
   })
 
@@ -25,10 +25,10 @@ describe('FileUploadZone — AC #1, #4, #5', () => {
     const dropZone = wrapper.find('[role="button"]')
     expect(dropZone.exists()).toBe(true)
     expect(dropZone.attributes('tabindex')).toBe('0')
-    expect(dropZone.attributes('aria-label')).toBe('Upload PDF files')
+    expect(dropZone.attributes('aria-label')).toBe('Upload files')
   })
 
-  it('[P0] should have file input that accepts PDF only', async () => {
+  it('[P0] should have file input that accepts multiple file types', async () => {
     const FileUploadZone = await import(uploadZonePath)
 
     const wrapper = await mountSuspended(FileUploadZone.default, {
@@ -37,7 +37,10 @@ describe('FileUploadZone — AC #1, #4, #5', () => {
 
     const fileInput = wrapper.find('input[type="file"]')
     expect(fileInput.exists()).toBe(true)
-    expect(fileInput.attributes('accept')).toBe('application/pdf')
+    const accept = fileInput.attributes('accept') ?? ''
+    expect(accept).toContain('application/pdf')
+    expect(accept).toContain('.docx')
+    expect(accept).toContain('text/plain')
   })
 
   it('[P0] should emit upload event with valid PDF files', async () => {
@@ -58,18 +61,18 @@ describe('FileUploadZone — AC #1, #4, #5', () => {
     expect(wrapper.emitted('upload')![0][0]).toHaveLength(1)
   })
 
-  it('[P0] should reject non-PDF files', async () => {
+  it('[P0] should reject unsupported file types', async () => {
     const FileUploadZone = await import(uploadZonePath)
 
     const wrapper = await mountSuspended(FileUploadZone.default, {
       props: { folderId: 'folder_123' as any },
     })
 
-    const txtFile = new File(['text content'], 'notes.txt', { type: 'text/plain' })
+    const exeFile = new File(['binary'], 'malware.exe', { type: 'application/x-msdownload' })
     const fileInput = wrapper.find('input[type="file"]')
     const inputEl = fileInput.element as HTMLInputElement
 
-    Object.defineProperty(inputEl, 'files', { value: [txtFile], writable: false })
+    Object.defineProperty(inputEl, 'files', { value: [exeFile], writable: false })
     await fileInput.trigger('change')
 
     const uploadEvents = wrapper.emitted('upload')

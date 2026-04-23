@@ -62,8 +62,8 @@ describe('FolderShellFileRow', () => {
     const actions = w.findAll('[data-swipe-reveal-action]')
 
     expect(actions).toHaveLength(2)
-    expect(actions[0]?.text()).toContain('Move')
-    expect(actions[1]?.text()).toContain('Delete')
+    expect(actions[0]?.attributes('aria-label')).toContain('Move')
+    expect(actions[1]?.attributes('aria-label')).toContain('Delete')
   })
 
   it('shows dismiss-only swipe action for failed documents on touch devices', async () => {
@@ -76,7 +76,7 @@ describe('FolderShellFileRow', () => {
     const actions = w.findAll('[data-swipe-reveal-action]')
 
     expect(actions).toHaveLength(1)
-    expect(actions[0]?.text()).toContain('Dismiss')
+    expect(actions[0]?.attributes('aria-label')).toContain('Dismiss')
   })
 
   it('emits long-press-select on touch long press', async () => {
