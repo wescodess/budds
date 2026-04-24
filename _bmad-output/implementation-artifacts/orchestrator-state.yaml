@@ -1,9 +1,9 @@
 mode: running
-current_phase: prep-story
-current_story: prep-7-1-fix-calendar-disconnect-test
-current_epic: prep-7
+current_phase: epic-story
+current_story: 7-1-service-worker-and-offline-detection
+current_epic: 7
 retry_count: 0
-last_epic_complete_fired: 6
+last_epic_complete_fired: prep-7
 
 last_verdict:
   subagent: bmad-story-runner
@@ -59,8 +59,8 @@ paths:
   ux_spec: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/ux-design-learn-module.md
 
 counters:
-  stories_completed_this_run: 0
-  stories_completed_total: 41
+  stories_completed_this_run: 1
+  stories_completed_total: 42
 
 escalation:
   pending: null

@@ -33,6 +33,7 @@ import type * as folders from "../folders.js";
 import type * as http from "../http.js";
 import type * as learnProfile from "../learnProfile.js";
 import type * as lib_auth from "../lib/auth.js";
+import type * as lib_dates from "../lib/dates.js";
 import type * as lib_masteryStateMachine from "../lib/masteryStateMachine.js";
 import type * as lib_sm2 from "../lib/sm2.js";
 import type * as lib_streak from "../lib/streak.js";
@@ -76,6 +77,7 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   learnProfile: typeof learnProfile;
   "lib/auth": typeof lib_auth;
+  "lib/dates": typeof lib_dates;
   "lib/masteryStateMachine": typeof lib_masteryStateMachine;
   "lib/sm2": typeof lib_sm2;
   "lib/streak": typeof lib_streak;
