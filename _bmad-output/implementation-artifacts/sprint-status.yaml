@@ -125,8 +125,8 @@ development_status:
   prep-sprint-epic-7-retrospective: optional
 
   # === Epic 7: Offline Access (Fast-Follow) ===
-  epic-7: in-progress
+  epic-7: done
   7-1-service-worker-and-offline-detection: done
   7-2-section-content-caching: done
-  7-3-offline-retakes-and-sync: backlog
+  7-3-offline-retakes-and-sync: done
   epic-7-retrospective: optional
