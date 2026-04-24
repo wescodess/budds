@@ -1,5 +1,12 @@
 # Deferred Work
 
+## Deferred from: code review of 6-3-calendar-event-creation-and-adaptive-composition (2026-04-23)
+
+- **`findNextPreferredSlot` always schedules at `morningStart` time.** All courses get events at the same configured morning start time on the same preferred day. A more sophisticated implementation would spread events across the user's available window (morning for new content, evening for review) and stagger multiple courses across different days. Acceptable for MVP.
+- **`dayMap` constant was duplicated in sync.post.ts.** Fixed by extracting to module-level `DAY_MAP` constant during blocker fix pass.
+- **No rate limiting on `/api/calendar/sync.post`.** The endpoint makes external Google Calendar API calls. A misbehaving client could spam this endpoint. Other generation endpoints use `requireRateLimit`. Add when calendar usage grows.
+- **`listByUser` and `listScheduled` queries expose `calendarEventId` (Google's event ID) to the client.** Not a security risk since the user owns these events, but leaking third-party internal IDs is unnecessary. Consider projecting out `calendarEventId` from public queries.
+
 ## Deferred from: code review of 6-1-google-calendar-oauth-connection (2026-04-23)
 
 - **`connect.get.ts` calls `getConvexTokenIdentifier` but discards the return value.** Line 7 authenticates the user (throws if unauthenticated) but doesn't use the identifier. The callback stores tokens for the convex-authenticated user regardless. Low severity since the OAuth flow itself authenticates with Google.

@@ -131,6 +131,23 @@ export const getTokens = internalQuery({
   },
 })
 
+export const getMyTokens = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await requireAuth(ctx)
+    const connection = await ctx.db
+      .query('calendarConnections')
+      .withIndex('by_userId', q => q.eq('userId', userId))
+      .first()
+    if (!connection || connection.status !== 'connected') return null
+    return {
+      accessToken: connection.accessToken,
+      refreshToken: connection.refreshToken,
+      expiresAt: connection.expiresAt,
+    }
+  },
+})
+
 export const updateTokens = internalMutation({
   args: {
     userId: v.string(),
@@ -141,6 +158,25 @@ export const updateTokens = internalMutation({
     const connection = await ctx.db
       .query('calendarConnections')
       .withIndex('by_userId', q => q.eq('userId', args.userId))
+      .first()
+    if (!connection) throw new Error('No calendar connection found')
+    await ctx.db.patch(connection._id, {
+      accessToken: args.accessToken,
+      expiresAt: args.expiresAt,
+    })
+  },
+})
+
+export const refreshMyTokens = mutation({
+  args: {
+    accessToken: v.string(),
+    expiresAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireAuth(ctx)
+    const connection = await ctx.db
+      .query('calendarConnections')
+      .withIndex('by_userId', q => q.eq('userId', userId))
       .first()
     if (!connection) throw new Error('No calendar connection found')
     await ctx.db.patch(connection._id, {
