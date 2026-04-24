@@ -220,7 +220,7 @@ const isNotReady = computed(() => {
 </script>
 
 <template>
-  <div class="flex min-h-0 flex-1 flex-col overflow-y-auto bg-background">
+  <div class="flex min-h-0 w-full flex-1 flex-col overflow-y-auto bg-background">
     <div v-if="isLoading" class="flex flex-1 items-center justify-center">
       <div class="space-y-3 text-center">
         <div class="mx-auto h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />

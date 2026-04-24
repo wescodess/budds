@@ -25,7 +25,7 @@ function goToCreate() {
 </script>
 
 <template>
-  <div class="min-h-full bg-background px-4 py-8 sm:px-6 lg:px-8">
+  <div class="min-h-full w-full bg-background px-4 py-8 sm:px-6 lg:px-8">
     <div class="mx-auto max-w-5xl">
       <div class="mb-8">
         <h1 class="text-2xl font-bold text-foreground">Learn</h1>

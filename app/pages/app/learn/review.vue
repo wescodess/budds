@@ -231,7 +231,7 @@ function navigateBack() {
 </script>
 
 <template>
-  <div class="flex min-h-screen flex-col bg-stone-950">
+  <div class="flex min-h-screen w-full flex-col bg-stone-950">
     <header class="border-b border-stone-800 px-4 py-3">
       <div class="mx-auto flex max-w-xl items-center justify-between">
         <button
