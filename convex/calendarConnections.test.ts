@@ -87,6 +87,56 @@ describe('calendarConnections', () => {
     expect(connection).toBeNull()
   })
 
+  test('disconnect also deletes all calendarEvents for the user', async () => {
+    const t = convexTest(schema, modules)
+    const asAlice = t.withIdentity(USER_A)
+
+    const connectionId = await asAlice.mutation(api.calendarConnections.upsertConnection, {
+      provider: 'google',
+      accessToken: 'dG9rZW4=',
+      refreshToken: 'cmVmcmVzaA==',
+      expiresAt: Date.now() + 3600000,
+      timezone: 'America/New_York',
+    })
+
+    const folderId = await asAlice.mutation(api.folders.createFolder, { name: 'Cal Folder' })
+    const { courseId } = await asAlice.mutation(api.courses.create, {
+      title: 'Cal Course',
+      folderId,
+      sourceType: 'web-only',
+      webSearchEnabled: true,
+    })
+
+    await t.mutation(internal.calendarEvents.create, {
+      userId: USER_A.tokenIdentifier,
+      calendarConnectionId: connectionId,
+      calendarEventId: 'evt_disc_1',
+      courseId,
+      scheduledAt: Date.now() + 86_400_000,
+      sessionType: 'new-content',
+    })
+
+    await t.mutation(internal.calendarEvents.create, {
+      userId: USER_A.tokenIdentifier,
+      calendarConnectionId: connectionId,
+      calendarEventId: 'evt_disc_2',
+      courseId,
+      scheduledAt: Date.now() + 172_800_000,
+      sessionType: 'review',
+    })
+
+    let events = await asAlice.query(api.calendarEvents.listByUser, {})
+    expect(events).toHaveLength(2)
+
+    await asAlice.mutation(api.calendarConnections.disconnect, {})
+
+    events = await asAlice.query(api.calendarEvents.listByUser, {})
+    expect(events).toHaveLength(0)
+
+    const connection = await asAlice.query(api.calendarConnections.getByUser, {})
+    expect(connection).toBeNull()
+  })
+
   test('disconnect throws when no connection exists', async () => {
     const t = convexTest(schema, modules)
     const asAlice = t.withIdentity(USER_A)

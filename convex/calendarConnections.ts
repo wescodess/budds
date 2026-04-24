@@ -72,6 +72,15 @@ export const disconnect = mutation({
       .withIndex('by_userId', q => q.eq('userId', userId))
       .first()
     if (!connection) throw new Error('No calendar connection found')
+
+    const events = await ctx.db
+      .query('calendarEvents')
+      .withIndex('by_userId', q => q.eq('userId', userId))
+      .take(500)
+    for (const event of events) {
+      await ctx.db.delete(event._id)
+    }
+
     await ctx.db.delete(connection._id)
   },
 })
