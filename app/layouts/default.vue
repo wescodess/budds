@@ -35,7 +35,8 @@ const isMobileView = useMediaQuery('(max-width: 767px)')
 const route = useRoute()
 const isDashboard = computed(() => route.path === '/')
 const isChatRoute = computed(() => route.path === '/chat')
-const isStandaloneRoute = computed(() => isDashboard.value || isChatRoute.value)
+const isLearnRoute = computed(() => route.path.includes('/learn'))
+const isStandaloneRoute = computed(() => isDashboard.value || isChatRoute.value || isLearnRoute.value)
 const mainContentRef = ref<HTMLElement | null>(null)
 const mobileSidebarOpen = ref(false)
 const { shouldStartHorizontalGesture } = useGestureGuards()
@@ -517,7 +518,7 @@ useHorizontalSwipeGesture({
       ref="mainContentRef"
       id="main-content"
       data-testid="main-content"
-      :class="['min-h-0', isStandaloneRoute ? 'overflow-hidden' : 'overflow-y-auto']"
+      :class="['min-h-0', (isStandaloneRoute && !isLearnRoute) ? 'overflow-hidden' : 'overflow-y-auto']"
     >
       <header class="sticky top-0 z-20 shrink-0 flex items-center gap-2 border-b border-border bg-background/90 px-4 py-2 backdrop-blur supports-[backdrop-filter]:bg-background/80">
         <UiSidebarTrigger data-testid="sidebar-trigger" />
@@ -587,7 +588,7 @@ useHorizontalSwipeGesture({
         </nav>
       </header>
 
-      <div :class="['flex min-h-0 flex-1 flex-col', isDashboard ? '' : 'overflow-hidden']">
+      <div :class="['flex min-h-0 flex-1 flex-col', (isDashboard || isLearnRoute) ? '' : 'overflow-hidden']">
         <template v-if="isStandaloneRoute">
           <slot />
         </template>

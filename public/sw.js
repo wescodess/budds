@@ -1,4 +1,6 @@
 const CACHE_VERSION = 'budds-shell-v1'
+const SECTION_CACHE = 'budds-learn-sections-v1'
+const AUDIO_CACHE = 'budds-learn-audio-v1'
 const APP_SHELL_ASSETS = [
   '/manifest.webmanifest',
   '/offline.html',
@@ -7,6 +9,9 @@ const APP_SHELL_ASSETS = [
   '/icons/icon-512.png',
   '/icons/icon.svg',
 ]
+
+const MAX_SECTION_CACHE_ENTRIES = 20
+const LEARN_SECTION_PATTERN = /^\/app\/(?:learn\/[^/]+\/[^/]+|folders\/[^/]+\/learn\/[^/]+\/[^/]+)/
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -18,7 +23,13 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     const keys = await caches.keys()
-    await Promise.all(keys.map(key => key === CACHE_VERSION ? undefined : caches.delete(key)))
+    await Promise.all(
+      keys.map(key =>
+        key === CACHE_VERSION || key === SECTION_CACHE || key === AUDIO_CACHE
+          ? undefined
+          : caches.delete(key),
+      ),
+    )
     await self.clients.claim()
   })())
 })
@@ -31,12 +42,33 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) return
 
   if (request.mode === 'navigate') {
+    const isLearnSection = LEARN_SECTION_PATTERN.test(url.pathname)
+
     event.respondWith((async () => {
       try {
-        return await fetch(request)
+        const response = await fetch(request)
+
+        if (isLearnSection && response.ok) {
+          const cache = await caches.open(SECTION_CACHE)
+          cache.put(request, response.clone())
+          const keys = await cache.keys()
+          if (keys.length > MAX_SECTION_CACHE_ENTRIES) {
+            const excess = keys.slice(0, keys.length - MAX_SECTION_CACHE_ENTRIES)
+            for (const key of excess) {
+              cache.delete(key)
+            }
+          }
+        }
+
+        return response
       } catch {
-        const cached = await caches.match('/offline.html')
-        return cached || Response.error()
+        if (isLearnSection) {
+          const cached = await caches.match(request, { cacheName: SECTION_CACHE })
+          if (cached) return cached
+        }
+
+        const offlinePage = await caches.match('/offline.html')
+        return offlinePage || Response.error()
       }
     })())
     return

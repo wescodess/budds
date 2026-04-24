@@ -23,7 +23,7 @@ watch([() => props.selectedQuizId, quizzes], ([next, list]) => {
 }, { immediate: true })
 
 watch(quizzes, (list) => {
-  if (!activeQuizId.value && list.length > 0) {
+  if (!activeQuizId.value && !props.selectedQuizId && list.length > 0) {
     activeQuizId.value = list[0]._id
   }
 }, { immediate: true })

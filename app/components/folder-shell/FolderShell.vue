@@ -9,16 +9,17 @@ defineOptions({ name: 'FolderShell' })
 const props = defineProps<{
   folderId: Id<'folders'>
   folder: Doc<'folders'> | null
-  activeTab: 'chat' | 'flashcards' | 'quiz' | 'audio-overview' | 'documents'
+  activeTab: 'chat' | 'flashcards' | 'quiz' | 'audio-overview' | 'documents' | 'learn'
   activeConversationId?: string | null
   activeVoidId?: string | null
 }>()
 
 const emit = defineEmits<{
-  'update:activeTab': [value: 'chat' | 'flashcards' | 'quiz' | 'audio-overview' | 'documents']
+  'update:activeTab': [value: 'chat' | 'flashcards' | 'quiz' | 'audio-overview' | 'documents' | 'learn']
   'new-void': []
-  'select-void': [value: { type: 'chat' | 'flashcards' | 'quiz'; id: string }]
-  'request-delete-void': [value: { type: 'chat' | 'flashcards' | 'quiz'; id: string; title: string }]
+  'select-void': [value: { type: 'chat' | 'flashcards' | 'quiz' | 'course'; id: string }]
+  'request-delete-void': [value: { type: 'chat' | 'flashcards' | 'quiz' | 'course'; id: string; title: string }]
+  'navigate-learn': []
 }>()
 
 const drawerOpen = ref(false)
@@ -197,7 +198,7 @@ watch(isDesktop, (desktop) => {
   if (desktop) mobileRailExpanded.value = false
 })
 
-function onTabChange(tab: 'chat' | 'flashcards' | 'quiz' | 'audio-overview' | 'documents') {
+function onTabChange(tab: 'chat' | 'flashcards' | 'quiz' | 'audio-overview' | 'documents' | 'learn') {
   emit('update:activeTab', tab)
 }
 
@@ -364,6 +365,7 @@ provide('folderShellThemeStyle', themeStyle)
       @new-void="emit('new-void')"
       @select-void="(payload) => emit('select-void', payload)"
       @request-delete-void="(payload) => emit('request-delete-void', payload)"
+      @navigate-learn="emit('navigate-learn')"
       @toggle-mobile-expanded="toggleMobileRailExpanded"
       @collapse-mobile-expanded="collapseMobileRailToCompact"
       @hide-mobile="hideMobileRail"

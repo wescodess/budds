@@ -94,6 +94,7 @@ export default defineNuxtConfig({
       prose: false,
       map: {
         citation: 'Citation',
+        pre: 'ProsePre',
       },
     },
   },
@@ -127,6 +128,9 @@ export default defineNuxtConfig({
     r2AccessKeyId: readConfiguredValue('NUXT_R2_ACCESS_KEY_ID', 'R2_ACCESS_KEY_ID'),
     r2SecretAccessKey: readConfiguredValue('NUXT_R2_SECRET_ACCESS_KEY', 'R2_SECRET_ACCESS_KEY'),
     r2BucketName: readConfiguredValue('NUXT_R2_BUCKET_NAME', 'R2_BUCKET_NAME'),
+    diaServerUrl: readConfiguredValue('NUXT_DIA_SERVER_URL', 'DIA_SERVER_URL'),
+    diaServerApiKey: readConfiguredValue('NUXT_DIA_SERVER_API_KEY', 'DIA_SERVER_API_KEY'),
+    diaStartFunctionUrl: readConfiguredValue('NUXT_DIA_START_FUNCTION_URL', 'DIA_START_FUNCTION_URL'),
     public: {
       siteUrl: publicSiteUrl,
       convex: {

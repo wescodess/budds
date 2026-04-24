@@ -2,6 +2,7 @@ import { v } from 'convex/values'
 import { mutation, query } from './_generated/server'
 import type { Id } from './_generated/dataModel'
 import type { MutationCtx, QueryCtx } from './_generated/server'
+import { requireAuth } from './lib/auth'
 
 const speakerValidator = v.union(v.literal('host_a'), v.literal('host_b'))
 
@@ -12,12 +13,6 @@ const answerTurnValidator = v.object({
   durationMs: v.number(),
   sourceIndex: v.optional(v.number()),
 })
-
-async function requireAuth(ctx: QueryCtx | MutationCtx) {
-  const identity = await ctx.auth.getUserIdentity()
-  if (!identity) throw new Error('Unauthenticated')
-  return identity.tokenIdentifier
-}
 
 async function requireOwnedOverview(
   ctx: QueryCtx | MutationCtx,

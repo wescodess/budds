@@ -110,11 +110,15 @@ describe('GET /api/export/me', () => {
     expect(Object.keys(entries).sort()).toEqual(
       [
         'conversations.json',
+        'courses.json',
+        'courseSourceDocs.json',
+        'courseSections.json',
         'documents.json',
         'documents/d1.pdf',
         'flashcardSets.json',
         'flashcards.json',
         'folders.json',
+        'learnProfile.json',
         'manifest.json',
         'messages.json',
         'quizAttempts.json',
@@ -124,7 +128,7 @@ describe('GET /api/export/me', () => {
     )
 
     const manifest = JSON.parse(strFromU8(entries['manifest.json']!))
-    expect(manifest.schemaVersion).toBe(4)
+    expect(manifest.schemaVersion).toBe(5)
     expect(manifest.userId).toBe('tok|user1')
     expect(manifest.counts.documents).toBe(1)
     expect(manifest.unresolvedDocuments).toEqual([])

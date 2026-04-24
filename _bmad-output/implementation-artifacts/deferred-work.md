@@ -1,5 +1,196 @@
 # Deferred Work
 
+## Deferred from: code review of 7-3-offline-retakes-and-sync (2026-04-23)
+
+- ~~**No retry backoff or limit for permanently failing offline sync attempts.**~~ Resolved in deferred-work-cleanup (2026-04-23). Added `syncAttempts` counter to `OfflineAttempt` interface and `incrementSyncAttempts` helper. `useOfflineSync` now skips attempts with `syncAttempts >= 5`.
+- **`clearSyncedAttempts` uses cursor-based deletion loop.** IndexedDB lacks a "delete all by index value" API, so the implementation iterates via `openCursor` + `cursor.delete()` + `cursor.continue()`. Standard pattern but verbose. Consider `objectStore.clear()` if the store only contains synced items at cleanup time, or batch via `getAll` + `delete`.
+- **Sync composable not wired into non-folder section pages.** `useOfflineSync` is only instantiated in `app/pages/app/folders/[id]/learn/[courseId]/[sectionId].vue`. Currently this is the only section page, but if a top-level (non-folder) section page is added, offline sync would not run there. Consider a layout-level plugin if more section page variants emerge.
+
+## Deferred from: code review of 7-2-section-content-caching (2026-04-23)
+
+- **Convex storage URLs in cached audio entries will expire.** `getOfflineCachePayload` resolves `ctx.storage.getUrl()` for audio turns (30-min TTL). The URLs are stored in IndexedDB `audioUrls` field but only the Cache API responses (fetched at cache time via `cacheAudioUrls`) are used for offline playback. The stale URL strings in IndexedDB are misleading but non-functional. No user impact since offline audio playback reads from Cache API, not the stored URLs.
+- ~~**No IndexedDB storage quota management.**~~ Resolved in deferred-work-cleanup (2026-04-23). Added `MAX_CACHED_SECTIONS = 20` with oldest-first eviction in `storeSection()`.
+- **`getOfflineCachePayload` exposes quiz correct answers in a public query.** Returns `correctAnswer` and `explanation` for offline quiz retakes (needed for 7-3). Data is user-scoped (own sections only) and already visible in the UI after answering. Acceptable but worth noting for security-conscious review.
+- ~~**Offline banner text uses hardcoded dark-mode color.**~~ Resolved in low-priority-cleanup (2026-04-23). Changed to `dark:text-amber-200 text-amber-700` to match OfflineBanner from 7-1.
+
+## Deferred from: code review of 7-1-service-worker-and-offline-detection (2026-04-23)
+
+- ~~**Service worker learn section cache has no eviction strategy.**~~ Resolved in deferred-work-cleanup (2026-04-23). Added `MAX_SECTION_CACHE_ENTRIES = 20` with oldest-first eviction after each cache put in `sw.js`.
+
+## Deferred from: code review of 6-5-calendar-disconnection-and-cleanup (2026-04-23)
+
+- ~~**No user-facing error toast on disconnect failure.**~~ Resolved in deferred-work-cleanup (2026-04-23). Added `toast.error()` in `confirmDisconnect` catch block.
+- ~~**`makeConvexClient` duplicated across 3 calendar endpoint files.**~~ Resolved in prep-7-4.
+- ~~**No rate limiting on `/api/calendar/disconnect`.**~~ Resolved in deferred-work-cleanup (2026-04-23). Added `requireRateLimit(event, 3)` to `disconnect.post.ts`.
+
+## Deferred from: code review of 6-4-missed-session-rescheduling (2026-04-23)
+
+- **Slot-finding logic duplicated in Convex action.** `checkMissedSessions` internal action in `convex/calendarEvents.ts` contains a full copy of the `findNextPreferredSlot` algorithm (day mapping, Intl.DateTimeFormat loop, timezone offset calculation). Architecturally forced: Convex functions cannot import from `server/utils/`. If more calendar features land, consider extracting slot logic to `convex/lib/calendar-slots.ts` as a pure function usable by both Convex and server code.
+- ~~**Multiple missed events for the same user all get rescheduled to the same time slot.**~~ Resolved in deferred-work-cleanup (2026-04-23). Added `bookedSlots` Set in `checkMissedSessions` to track and offset rescheduled events by `sessionMinutes`.
+
+## Deferred from: code review of 6-3-calendar-event-creation-and-adaptive-composition (2026-04-23)
+
+- **`findNextPreferredSlot` always schedules at `morningStart` time.** All courses get events at the same configured morning start time on the same preferred day. A more sophisticated implementation would spread events across the user's available window (morning for new content, evening for review) and stagger multiple courses across different days. Acceptable for MVP.
+- **`dayMap` constant was duplicated in sync.post.ts.** Fixed by extracting to module-level `DAY_MAP` constant during blocker fix pass.
+- ~~**No rate limiting on `/api/calendar/sync.post`.**~~ Resolved in deferred-work-cleanup (2026-04-23). Added `requireRateLimit(event, 3)` to `sync.post.ts`.
+- ~~**`listByUser` and `listScheduled` queries expose `calendarEventId` (Google's event ID) to the client.**~~ Resolved in low-priority-cleanup (2026-04-23). Both queries now project out `calendarEventId` from returned documents.
+
+## Deferred from: code review of 6-1-google-calendar-oauth-connection (2026-04-23)
+
+- ~~**`connect.get.ts` calls `getConvexTokenIdentifier` but discards the return value.**~~ Resolved in low-priority-cleanup (2026-04-23). Removed the unused `getConvexTokenIdentifier(event)` call from `connect.get.ts`.
+- ~~**`GOOGLE_TOKEN_URL` constant duplicated across `callback.get.ts` and `calendar-tokens.ts`.**~~ Resolved in low-priority-cleanup (2026-04-23). Extracted to `server/utils/google-constants.ts`, imported in both files.
+- ~~**No UI feedback for OAuth error query params.**~~ Resolved in deferred-work-cleanup (2026-04-23). `CalendarConnectionCard` now reads `route.query.calendar_error` on mount and shows a toast, then clears the param.
+
+## Deferred from: code review of 5-4-cross-course-review-budgeting (2026-04-23)
+
+- ~~**`isLoading` computed in review.vue is unused dead code.**~~ Resolved in deferred-work-cleanup (2026-04-23). Removed unused `isLoading` computed.
+- **`getReviewBacklogCount` post-filters flagged items after fetching 500.** Same pattern as `listDueForUser` (already deferred in 5-1). If many items are flagged, the 500-item fetch limit is consumed by flagged items and `dueCount` could undercount unflagged due items. Acceptable for realistic usage. Consider a separate unflagged-only index if backlog accuracy becomes critical.
+- ~~**ReviewCapSetting dropdown does not close on Escape key.**~~ Resolved in low-priority-cleanup (2026-04-23). Added `@keydown.escape="open = false"` to the dropdown panel element.
+
+## Deferred from: code review of 5-3-sm2-scheduling-engine (2026-04-23)
+
+- ~~**`getTodayInTimezone` duplicated across `reviewItems.ts` and `learnProfile.ts`.**~~ Resolved in prep-7-3.
+- ~~**No flagged-item guard on `submitReview` mutation.**~~ Resolved in low-priority-cleanup (2026-04-23). Added `if (item.flagged) throw new Error('Cannot review a flagged item')` guard.
+- **Architecture spec says SM-2 pure functions belong in `server/utils/sr-scheduler.ts`.** Implementation places them in `convex/lib/sm2.ts` instead, which is better since the function is called directly from a Convex mutation (no network hop needed). The spec was written before the `convex/lib/` pattern was established in prep sprints.
+
+## Deferred from: code review of 5-2-daily-review-session-ui (2026-04-23)
+
+- **`listDueWithContext` N+1 lookups for course/section data.** Each unique course/section triggers a `ctx.db.get()` call inside the query loop. In-memory Map caching mitigates repeated lookups, but for users with items from many different courses/sections, this adds read bandwidth. Acceptable for cap-50 items. Consider denormalizing course/section titles onto review items if the cap grows.
+- ~~**No estimated duration in review session header.**~~ Resolved in low-priority-cleanup (2026-04-23). Added `estimatedDuration` computed and displays "N items ~ M min" in the header.
+- **Session progress (ratings array) lost on navigation.** If a user accidentally navigates away mid-session, all progress is lost. By design for 5-2 (SM-2 updates wire in 5-3), but a future story should persist partial session state to localStorage.
+- **Document-level keydown listener pattern.** Uses `document.addEventListener('keydown', ...)` cleaned up on unmount. If Nuxt `<KeepAlive>` were used on this page, stale listeners could accumulate. Not a risk with current routing config but worth noting.
+
+## Deferred from: code review of 5-1-review-item-extraction-and-sm2-data-model (2026-04-23)
+
+- ~~**`getTomorrowDate`/`getTodayDate` use UTC, not user timezone.**~~ Resolved in prep-5-1.
+- **`listDueForUser` post-filters flagged items after fetch.** Fetches up to 200 items then filters out flagged ones in-memory. If many items are flagged, returned count could be lower than expected. Acceptable for daily cap of 50.
+- **No `type` field on `reviewItems`.** Architecture spec defines `type: 'flashcard' | 'cloze' | 'quiz-question'` but the implementation only extracts from flashcards (correct for 5-1 scope). Add the field when quiz-based review items are introduced in a future story.
+- ~~**No cascade delete of review items on course deletion.**~~ Resolved in deferred-work-cleanup (2026-04-23). Added `reviewItems` cascade deletion to `deleteCourse` mutation using `by_courseId` index.
+
+## Deferred from: code review of prep-5-1-timezone-ui-for-streak (2026-04-24)
+
+- **No component test for `useTimezoneSync` composable.** The composable has conditional logic (SSR guard, profile watch, already-set check, error retry) that is untested at the component level. The underlying mutation is tested via Convex integration tests. Add a composable test when test infrastructure for composables matures.
+- **`getTodayInTimezone` is not exported or directly testable.** The timezone-aware date computation function is private to `learnProfile.ts`. It can only be tested indirectly through integration tests. Consider exporting for direct unit testing when timezone edge cases need more coverage.
+- **`useTimezoneSync` only runs on the learn home page.** If a user navigates directly to a course or section page (e.g., from a bookmark), their timezone is never auto-detected until they visit the learn home. The streak fallback to UTC is functional. A broader approach (plugin or layout-level) would be more robust.
+
+## Deferred from: code review of 4-4-content-flagging-and-correction (2026-04-23)
+
+- ~~**No test for non-zero flag rate computation.**~~ Resolved in low-priority-cleanup (2026-04-23). Added test that flags items and asserts `getFlagRateForCourse` returns correct 25% rate.
+- ~~**`getFlagRateForCourse` uses `.collect()` on quiz questions and flashcard cards.**~~ Resolved in low-priority-cleanup (2026-04-23). Replaced both `.collect()` calls with `.take(200)`.
+- ~~**No explicit `aria-label` on flag editor inputs.**~~ Resolved in prep-5-3.
+
+## Deferred from: code review of 4-3-streak-system (2026-04-23)
+
+- ~~**Streak evaluation uses UTC, not user timezone.**~~ Resolved in prep-5-1.
+- **No integration test for streak freeze auto-consumption path.** The pure logic tests in `evaluateStreak` cover the freeze scenario, but no Convex integration test exercises the freeze path through `completeSection`/`reviewSection`. Would require time-manipulation which `convex-test` doesn't support well.
+
+## Deferred from: code review of 4-1-course-view-with-progress-and-mastery-dashboard (2026-04-23)
+
+- **Counter-based query mock in course-view.test.ts.** The test identifies course vs sections queries by call order (`queryCallCount % 2`), not by function name. If the component adds a third query, the mock silently returns wrong data. Replace with `getFunctionName`-based routing when the test surface expands.
+- **No test coverage for folder-scoped course view page.** Both pages use the shared `CourseViewBody.vue` component, so the component is tested via the top-level page tests. Add folder-specific routing tests when folder-scoped features diverge.
+- ~~**Reviewing mastery color uses yellow-500 instead of gold.**~~ Resolved in prep-5-2.
+
+## Deferred from: code review of prep-4-3-textblock-numbered-list-support (2026-04-23)
+
+- **Magic number flush loop in text-block tests.** `mountTextBlock` helper calls `flushPromises()` 5 times in a loop. Works but the count is arbitrary. If MDC's async pipeline adds more stages, this could become insufficient. Consider using `vi.waitFor()` or a polling helper that checks for rendered content.
+- **`beforeAll` warm-up tightly coupled to MDC internals.** The test file pre-loads MDC's parser and highlighter with warm-up calls. If MDC changes its lazy-loading behavior, these become dead code or insufficient. Test-infrastructure only, no runtime impact.
+- **No explicit XSS sanitization test.** AC #4 requires XSS safety. MDC's AST-based rendering (not v-html) provides this by design, but no test injects `<script>alert('xss')</script>` to document the guarantee. Add when a test-infrastructure story revisits TextBlock.
+
+## Deferred from: code review of 3-5-audio-primer-generation-user-note-references (2026-04-23)
+
+- **`getCourseScopedOverview` resolves storage URLs and document filenames on every subscription tick.** The query calls `ctx.storage.getUrl()` for every turn and `ctx.db.get()` for every source document on each Convex subscription evaluation. Low severity for primers (max ~12 turns). Consider splitting into separate data and URL queries (matching the existing `getWithTurns` + `getTurnUrls` pattern) if subscription churn becomes noticeable.
+- **`AudioBlock.vue` conditional `useConvexQuery` call.** The composable is conditionally assigned based on `props.entityId` at setup time. If `entityId` changes from undefined to a value after mount, the query won't be created. Low severity since `entityId` is set at section generation time and doesn't change after mount.
+- **Audio primer prompt does not include `ttsEngine` hint.** The `buildAudioPrimerPrompt` does not pass a `ttsEngine` parameter to configure Dia-specific parenthetical expressions vs. Aura-safe text. Minor since primers are short (6-12 turns) and the default hard don'ts are safe for both engines.
+
+## Deferred from: code review of 3-4-section-completion-and-adaptive-pacing (2026-04-24)
+
+- **Multiple quiz blocks: only last quiz tracked.** If a section has multiple quiz blocks, `handleQuizCompleted` overwrites `quizResults` with the latest quiz's data. Low severity since current section generation produces at most one quiz block per section.
+- ~~**No error toast on completeSection mutation failure.**~~ Resolved in deferred-work-cleanup (2026-04-23). Added `toast.error()` in catch block of `handleCompleteSection`.
+- **Complete Section button appears before all blocks viewed.** The button shows regardless of scroll progress. A user can complete a section without viewing all content blocks. The `currentBlockIndex` tracking drives the progress bar only.
+- **FR16 format override not implemented on completion card.** AC #6 format override for the next section has no UI. Adaptive hints flow through pre-fetch task metadata but no user-facing dropdown exists. Documented in story Decisions as intentional scope deferral.
+
+## Deferred from: code review of 3-3-section-void-ui-content-block-rendering (2026-04-24)
+
+- **Section void page fetches all sections to find next.** `listByCourse` returns all sections; only the N+1 section is needed. Could use `getNextSection` from story 3-2. Low severity since sections are capped at 15.
+- ~~**No `aria-live` region for dynamic quiz feedback.**~~ Resolved in prep-4-1.
+- **Course view `component :is` dynamic pattern.** Using `<component :is="NuxtLink | div">` with conditional `:to` is unconventional. Works correctly since `div` ignores unknown props. No runtime issue.
+- ~~**FlashcardBlock timer leak on unmount.**~~ Resolved in low-priority-cleanup (2026-04-23). Added `onUnmounted` handler to clear `suppressTimer`.
+- ~~**TextBlock markdown renderer doesn't handle numbered lists or code blocks.**~~ Resolved in prep-4-3.
+
+## Deferred from: code review of 3-2-n-plus-1-section-pre-fetch (2026-04-24)
+
+- ~~**`checkPreFetchStatus` returns full section document.**~~ Resolved in prep-4-2.
+- **Composable exposes no "no next section" state.** `nextSectionReady` is false both when the next section is loading and when there is no next section (last section). Story 3-3 completion card needs to distinguish these. Add a `hasNextSection` computed when integrating.
+- **No test for concurrent `triggerPreFetch` idempotency.** Two simultaneous calls should be safe (Convex serialization), but there is no explicit test verifying the second call returns null when the first already set status to `generating`.
+- **`getNextSection` query is currently unused.** No client code consumes it. The composable uses `checkPreFetchStatus` instead. Keep for Story 3-3 but note it is dead code until then.
+- **`retryOf` sentinel value `'initial-failure'` is a code smell.** When a section failed without a taskId, the retry metadata uses a synthetic string. Functionally correct but semantically misleading in task metadata inspection.
+
+## Deferred from: prep-3-5-fix-baseline-test-failures (2026-04-24)
+
+- **Rewrite folder-view, folder-documents, and folder-chat-layout tests as isolated component tests.** These tests mount the full `[id].vue` page which now uses `provideFolderPageContext()` — a composable that internally creates Convex WebSocket connections and composes 15+ dependencies (useFolderReferenceScope, useHelperPane, useTasks, 5x useConvexMutation, useConvexQuery, full Nuxt route objects). The mock surface required via `mockNuxtImport` exceeds what's tractable. Rewrite to test the DocumentsPanel, FolderShellFilesPanel, and ChatArea components in isolation. Files: `tests/component/folders/folder-view.test.ts` (3 tests), `tests/component/documents/folder-documents.test.ts` (3 tests), `tests/component/chat/folder-chat-layout.test.ts` (3 tests).
+- **Rewrite QuizTab card-menu, delete-flow, shimmer, and list tests.** QuizShell was refactored: it now auto-selects the first quiz on load (rendering QuizActiveView) instead of showing an inline card list with menu actions. The `data-testid` attributes these tests relied on (quiz-card, quiz-card-menu, quiz-card-actions, quiz-card-edit, quiz-card-delete, quiz-card-delete-confirm, quiz-shimmer, quiz-score-badge) no longer exist. 4 skipped tests in `tests/component/quiz/quiz-tab.test.ts`.
+- **Fix FolderFormModal touch-focus test isolation.** `createSharedComposable(useGestureGuards)` evaluates `useMediaQuery('(hover: none), (pointer: coarse)')` only once per module lifecycle. `vi.resetModules()` + dynamic re-import doesn't reliably reset the singleton's cached media query result in the Nuxt test environment. Need either (a) a dedicated mock for `useGestureGuards` that works with `vi.hoisted`, or (b) restructure the composable to accept injected media query refs. 1 skipped test in `tests/component/folders/folder-form-modal.test.ts`.
+
+## Deferred from: code review of prep-3-3-source-doc-count-cap (2026-04-23)
+
+- **No user feedback when folder docs are truncated by MAX_SOURCE_DOCS cap.** When a folder has more than 100 documents and no specific documentIds are provided, the course silently uses the first 100. The `sourceConfidence.docCount` reflects the capped count (100), not the total available. Consider adding a `truncated: true` field or returning the total folder count alongside the capped count so the UI can inform the user.
+- **Explicit documentIds path has no cap.** The `folder` sourceType branch only caps the auto-resolve path (`.take(MAX_SOURCE_DOCS)`). If a caller explicitly passes 200+ documentIds, each is fetched individually via `ctx.db.get()` with no limit. This is by design (caller-controlled selection), but could still approach transaction limits with very large arrays. Consider adding a validator-level cap on `documentIds` array length.
+
+## Deferred from: code review of 2-3-course-deletion (2026-04-23)
+
+- ~~**Entity ID resolution uses 3 try/catch db.get() calls per entity.**~~ Resolved in 3-1.
+- **No test coverage for flashcardRoom or audioOverview cascade deletion.** These entity types won't exist until section generation is implemented (Epic 3). Tests should be added when those paths become exercisable.
+
+## Deferred from: code review of 2-2-folder-scoped-learn-tab (2026-04-23)
+
+- **Course void icon collision with Knowledge sidebar entry.** `BookOpen` is used for both the Knowledge workspace item and the course void icon in the sidebar void list. When a course and the Knowledge entry appear close together, they use the same icon. Low severity since GraduationCap is used for the Learn workspace entry, and BookOpen matches the CreateVoidDialog icon choice. Consider using GraduationCap for course voids as well.
+- **No folder membership guard on folder-scoped course view.** `/app/folders/[id]/learn/[courseId].vue` loads any course by ID via `api.courses.get` without verifying the course belongs to the folder in the route. A user could visit `/app/folders/folderA/learn/courseFromFolderB` and see the course. The Convex query enforces user ownership but not folder membership. Cosmetic issue since the data is the user's own.
+
+## Deferred from: code review of 2-1-learn-home-page-empty-and-active-states (2026-04-23)
+
+- ~~**CourseCard shows generating/failed courses without status indicator.**~~ Resolved in prep-3-6.
+- **StreakDisplay freeze detection uses client-side Date.** `isFreezeRecent` computes against `new Date()` which uses the client's clock. If the client clock is wrong, the frost/flame icon may show incorrectly. Low risk -- cosmetic only.
+
+## Deferred from: code review of 1-7-course-creator-ui-full-flow (2026-04-23)
+
+- **SourceSelector only supports single-folder selection as sourceType 'folder'.** Multi-folder (cross-folder) selection requires document-level granularity to satisfy the `courses.create` cross-folder validator which needs `documentIds`. The UI selects folders, not individual documents. Add document-level selection in a future story when cross-folder courses are needed.
+
+## Resolved from 1-6 / 1-5 deferrals in 1-7:
+
+- **Error handling toasts added** to StartLearningButton, PaceSelector, OutlineEditor, and CourseCreator (all mutation calls now have try/catch + vue-sonner toast).
+- **PaceSelector now uses optimistic update** with rollback on error.
+
+## Deferred from: code review of 1-6-pace-selector-and-course-start (2026-04-22)
+
+- **No error handling on mutation failures in StartLearningButton and PaceSelector.** `app/components/learn/StartLearningButton.vue` and `PaceSelector.vue` mutation calls have no try/catch with user-facing toast. If `startCourse` or `updatePace` throws, the error is swallowed or surfaces as an unhandled rejection. Add toast notifications in the full-flow integration (Story 1.7).
+- **PaceSelector does not optimistically update.** After changing pace, the `<select>` briefly reverts to the old value until the Convex real-time subscription delivers the updated course record. Acceptable for MVP; address with optimistic local state in Story 1.7 full flow.
+
+## Deferred from: code review of 1-5-outline-editor-ui (2026-04-22)
+
+- **No error handling on mutation failures in OutlineEditor component.** `app/components/learn/OutlineEditor.vue` mutation calls (updateTitle, cycleKnowledgeType, removeSection, addSection) have no try/catch. Network errors or ownership guard failures surface as unhandled promise rejections with no user feedback. Add toast notifications on error in the full-flow integration (Story 1.7).
+- **`courses.updateOutline` lacks status guard.** `convex/courses.ts` updateOutline mutation does not check `course.status === 'ready'`. Could theoretically be called on a generating/failed course. Low risk since UI only shows editor for ready courses.
+- ~~**No aria-label on interactive icon buttons.**~~ Resolved in prep-3-2.
+
+## Deferred from: code review of 1-4-outline-generation-pipeline (2026-04-22)
+
+- **`courses.get` 404 vs 403 distinction leaks course existence.** Endpoint returns 404 for both "course doesn't exist" and "course exists but not owned by you". Pre-existing pattern across all server endpoints (quiz, flashcard generators). A security-conscious review may want distinct error codes, but changing would break consistency with the rest of the codebase.
+- **`outlineResponseSchema` was dead code.** Defined and exported but never used by `parseOutlineResponse`. Removed during review. Noting in case downstream stories expected to import it.
+
+## Deferred from: code review of 1-3-course-creation-api-web-only (2026-04-22)
+
+- **`webSearchEnabled` arg silently overridden for web-only.** The mutation accepts `webSearchEnabled` as optional, but for `sourceType: 'web-only'` it's hardcoded to `true`. If a caller passes `webSearchEnabled: false` with web-only, the value is silently ignored. Correct per AC but could be made explicit via validator or documentation.
+- ~~**Pre-existing `.collect()` on folder documents query still unbounded.**~~ Resolved in prep-3-3.
+
+## Deferred from: code review of 1-2-course-creation-api-folder-cross-folder (2026-04-22)
+
+- ~~**`create` mutation transaction size with large folders.**~~ Resolved in prep-3-3. Source doc count capped at `MAX_SOURCE_DOCS = 100`.
+- ~~**Duplicate `requireAuth` helper.**~~ Resolved in prep-3-1.
+- **`listByUser` returns full course documents including outlineSections array.** For list views, a lean projection (omitting outlineSections, sourceConfidence details) would reduce bandwidth. Not critical until outline generation populates large arrays.
+
+## Deferred from: code review of 1-1-convex-schema-course-tables (2026-04-22)
+
+- **`courseSourceDocs` table lacks a `by_userId` index.** Deletion and export iterate via `courses.by_userId` then `courseSourceDocs.by_courseId` per course. Functional but O(courses) queries. Adding `by_userId` index with a `userId` field would allow direct query like other tables. Matches current architecture spec (only `by_courseId` specified). Add the index when the table sees high-volume queries.
+
 ## Deferred from: spec-g3 amendment (2026-04-14) — CreateVoidDialog wiring
 
 - **T15 (page-level integration test) deferred.** Testing that `rail-new-void` click opens `CreateVoidDialog` in `app/pages/app/folders/[id].vue` requires a mounted page test with Convex mocks for `useConvexQuery(api.conversations.listRecentForUser)`, `api.flashcards.listByFolder`, `api.quizzes.listByFolder`, `api.documents.countsByFolder`, plus `useFolders` and router setup. No harness exists yet. Covered today by: (a) `CreateVoidDialog` unit tests (5), (b) `FolderShell` → `FolderShellRail` `new-void` event propagation is structural/grep-verifiable, (c) manual smoke. Land the integration test alongside a general Convex-mock harness for page tests.
@@ -17,7 +208,7 @@
 - **`CourseCard.vue` quick-action buttons ("Chat" / "Flash Cards") are announced to screen readers but have no handlers.** Pre-existing regression (unrelated to G1 badge change). Either wire them or remove the `sr-only` labels.
 - **`IconSelect.vue` `resolveIcon` is uncached.** Every keystroke re-resolves PascalCase lookups for every tile. Safe today; memoize via module-level `Map<string, Component>` once catalog grows.
 - **IconSelect tint uses string concatenation `${colorHex}26`.** Assumes `#RRGGBB`. Brittle if the palette ever emits shorthand or `rgb()`. Switch to an `rgba()` computation.
-- **`app/pages/index.vue` has dead defensive code:** `(folder as any).documentCount ?? 0` and `allFolders as any` in `FolderPickerDialog` binding. Schema guarantees shape; remove casts to restore type safety.
+- ~~**`app/pages/index.vue` has dead defensive code:**~~ Resolved in low-priority-cleanup (2026-04-23). Removed `(folder as any).documentCount ?? 0` cast and `allFolders as any` cast.
 
 ## Deferred from: review of spec-folder-metadata-and-create-modal (2026-04-13)
 
@@ -71,7 +262,7 @@ Parent intent: folder UX overhaul (schema + sidebar + layout + drawer). Started 
 
 ## Deferred from: code review of story-5.2 (2026-04-12)
 
-- **`deleteDocumentFromR2` internal action is now dead code** — `convex/documentActions.ts:259-289` is no longer referenced after Story 5.2 rerouted `documents.deleteDocument` through the `pendingCleanup` queue. Safe to delete in a follow-up commit (single file, no API surface change — it is an `internalAction`). Deferred to avoid widening the diff during the cleanup-path refactor.
+- ~~**`deleteDocumentFromR2` internal action is now dead code**~~ Resolved previously in deferred-work-cleanup (2026-04-23). The function was already removed from `documentActions.ts`.
 
 ## Deferred from: code review of story-5.1 (2026-04-12)
 
@@ -111,20 +302,20 @@ Parent intent: folder UX overhaul (schema + sidebar + layout + drawer). Started 
 
 ## Deferred from: code review of story-3.1 (2026-04-11)
 
-- **`updateDocumentStatus` doesn't clear `failureReason` on non-failure transitions** — When status moves from 'failed' to 'success'/'processing', old `failureReason` persists in DB. Not user-visible (FileStatusItem only renders it for 'failed') but stale data.
+- ~~**`updateDocumentStatus` doesn't clear `failureReason` on non-failure transitions**~~ Resolved in low-priority-cleanup (2026-04-23). `failureReason` is now set to `undefined` when status is not `'failed'`.
 - **`folderDepth` defaults to 1 while `allFolders` loads** — "New Subfolder" button briefly shows for deeply nested folders during initial load. Pre-existing from Epic 2.
 
 ## Deferred from: code review of 1-1-verify-and-harden-authentication-flow (2026-04-09)
 
 - **~~Unprotected `/api/rag/*` routes~~** — Resolved in Epic 2 retro prep (2026-04-11).
 - **SQLite single-process auth store** — `better-sqlite3` at `./data/auth.db` cannot handle multi-process or horizontally-scaled deployments. Acknowledged V1 constraint.
-- **Redundant `definePageMeta({ auth: 'guest' })` in login.vue** — Duplicates the `routeRules` entry for `/login`. Remove to centralize route protection.
+- ~~**Redundant `definePageMeta({ auth: 'guest' })` in login.vue**~~ Resolved in low-priority-cleanup (2026-04-23). Removed `auth: 'guest'` from `definePageMeta`, keeping only `layout: false`.
 - **Symbol introspection for ConvexClient access** — `app/plugins/convex-auth.client.ts` accesses ConvexClient via `Object.getOwnPropertySymbols` matching `'convex-client'`. This is fragile but the only working method — `nuxtApp.$convex` provides the Vue plugin wrapper, not the client, and `inject()` requires component context. Replace when `nuxt-convex` exposes a typed plugin API.
 
 ## Deferred from: code review of 1-2-app-shell-layout-with-responsive-navigation (2026-04-10)
 
-- **`activeTab` ref decoupled from router** — Tabs don't sync with URL; page refresh always lands on "chat". By design for story 1.2 (placeholder tabs). Refactor when study modes get real routing.
-- **`<slot />` only in chat TabsContent** — All page content renders into the chat tab. Correct for now since only `/app/chat` exists. Will need refactoring when other study modes get real pages.
+- ~~**`activeTab` ref decoupled from router**~~ — **RESOLVED:** Folder tabs removed in favor of void-based sidebar with dedicated page routes (`/chat/:id`, `/flashcards/:roomId`, `/quiz/:quizId`). `activeTab` is now computed from the route path.
+- ~~**`<slot />` only in chat TabsContent**~~ — **RESOLVED:** Tab layout replaced with direct `<NuxtPage />` rendering. Each study mode has its own dedicated page route.
 - **Model identifier sent to backend without validation** — Pre-existing in chat.vue. Users can modify the `<select>` value via devtools to call arbitrary provider/model combinations. Add server-side model allowlist validation.
 - **`source.score * 100` assumes 0-1 range** — Pre-existing in chat.vue. Scores outside [0,1] render as nonsensical percentages. Add bounds check or handle different score formats.
 - **`useRag` doesn't validate response shape** — Pre-existing composable. A malformed API response (missing `answer` field) silently pushes `{ content: undefined }` into messages.

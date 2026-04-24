@@ -3,6 +3,13 @@ export default defineNuxtPlugin(() => {
     return
   }
 
+  if (import.meta.dev) {
+    navigator.serviceWorker.getRegistrations().then(regs =>
+      regs.forEach(r => r.unregister()),
+    )
+    return
+  }
+
   const register = async () => {
     if (!window.isSecureContext && window.location.hostname !== 'localhost') {
       return

@@ -102,6 +102,7 @@ export default defineSchema({
     language: v.optional(v.string()),
     questionCount: v.optional(v.number()),
     latestAttemptStatus: v.optional(v.union(v.literal('in_progress'), v.literal('completed'), v.literal('abandoned'))),
+    courseScoped: v.optional(v.boolean()),
   })
     .index('by_userId', ['userId'])
     .index('by_folderId', ['folderId'])
@@ -124,6 +125,10 @@ export default defineSchema({
     sourceDocumentId: v.optional(v.id('documents')),
     sourceChunkContent: v.optional(v.string()),
     sourceFilename: v.optional(v.string()),
+    flagged: v.optional(v.boolean()),
+    correctedAnswer: v.optional(v.string()),
+    correctedExplanation: v.optional(v.string()),
+    flaggedAt: v.optional(v.number()),
   })
     .index('by_quizId', ['quizId'])
     .index('by_userId', ['userId']),
@@ -165,6 +170,7 @@ export default defineSchema({
     migratedFromSetId: v.optional(v.id('flashcardSets')),
     legacySetId: v.optional(v.id('flashcardSets')),
     legacyCreatedAt: v.optional(v.number()),
+    courseScoped: v.optional(v.boolean()),
   })
     .index('by_userId', ['userId'])
     .index('by_userId_and_folderId', ['userId', 'folderId'])
@@ -193,6 +199,9 @@ export default defineSchema({
     sourceChunkContent: v.optional(v.string()),
     sourceFilename: v.optional(v.string()),
     updatedAt: v.optional(v.number()),
+    flagged: v.optional(v.boolean()),
+    correctedDefinition: v.optional(v.string()),
+    flaggedAt: v.optional(v.number()),
   })
     .index('by_roomId', ['roomId'])
     .index('by_roomId_and_displayOrder', ['roomId', 'displayOrder'])
@@ -282,7 +291,7 @@ export default defineSchema({
 
   tasks: defineTable({
     userId: v.string(),
-    folderId: v.id('folders'),
+    folderId: v.optional(v.id('folders')),
     type: v.string(),
     status: v.string(),
     title: v.string(),
@@ -295,6 +304,7 @@ export default defineSchema({
     completedAt: v.optional(v.number()),
   })
     .index('by_userId_and_folderId', ['userId', 'folderId'])
+    .index('by_userId', ['userId'])
     .index('by_status', ['status']),
 
   audioOverviews: defineTable({
@@ -329,6 +339,7 @@ export default defineSchema({
     shareToken: v.optional(v.string()),
     publishedAt: v.optional(v.number()),
     scopeDocIds: v.optional(v.array(v.id('documents'))),
+    courseScoped: v.optional(v.boolean()),
   })
     .index('by_userId', ['userId'])
     .index('by_folderId', ['folderId'])
@@ -354,6 +365,177 @@ export default defineSchema({
   })
     .index('by_audioOverview', ['audioOverviewId'])
     .index('by_userId', ['userId']),
+
+  courses: defineTable({
+    userId: v.string(),
+    folderId: v.id('folders'),
+    title: v.string(),
+    status: v.union(v.literal('generating'), v.literal('ready'), v.literal('failed')),
+    sourceType: v.union(v.literal('folder'), v.literal('web-only')),
+    sourceConfidence: v.object({
+      docCount: v.number(),
+      webPercent: v.number(),
+    }),
+    pace: v.union(v.literal('intensive'), v.literal('steady'), v.literal('relaxed')),
+    outlineSections: v.array(v.object({
+      title: v.string(),
+      description: v.string(),
+      knowledgeType: v.string(),
+      order: v.number(),
+    })),
+    completedSectionCount: v.number(),
+    totalSectionCount: v.number(),
+    taskId: v.optional(v.id('tasks')),
+    webSearchEnabled: v.boolean(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index('by_userId', ['userId'])
+    .index('by_userId_and_folderId', ['userId', 'folderId'])
+    .index('by_folderId', ['folderId']),
+
+  courseSections: defineTable({
+    courseId: v.id('courses'),
+    userId: v.string(),
+    order: v.number(),
+    title: v.string(),
+    knowledgeType: v.union(
+      v.literal('factual'),
+      v.literal('conceptual'),
+      v.literal('procedural'),
+      v.literal('mixed'),
+    ),
+    status: v.union(
+      v.literal('locked'),
+      v.literal('generating'),
+      v.literal('ready'),
+      v.literal('completed'),
+      v.literal('failed'),
+    ),
+    contentBlocks: v.array(v.object({
+      type: v.union(
+        v.literal('text'),
+        v.literal('quiz'),
+        v.literal('flashcard'),
+        v.literal('audio'),
+      ),
+      entityId: v.optional(v.string()),
+      entityType: v.optional(v.union(
+        v.literal('quiz'),
+        v.literal('flashcard'),
+        v.literal('audio'),
+      )),
+      content: v.optional(v.string()),
+      order: v.number(),
+    })),
+    failureNotice: v.optional(v.string()),
+    practiceScore: v.optional(v.number()),
+    masteryLevel: v.union(
+      v.literal('new'),
+      v.literal('learning'),
+      v.literal('reviewing'),
+      v.literal('mastered'),
+    ),
+    consecutiveReviewPasses: v.optional(v.number()),
+    reviewHistory: v.optional(v.array(v.object({
+      score: v.number(),
+      quizCorrect: v.number(),
+      quizTotal: v.number(),
+      at: v.number(),
+    }))),
+    completedAt: v.optional(v.number()),
+    offlineAvailable: v.optional(v.boolean()),
+    taskId: v.optional(v.id('tasks')),
+  })
+    .index('by_courseId', ['courseId'])
+    .index('by_courseId_and_order', ['courseId', 'order'])
+    .index('by_userId', ['userId']),
+
+  courseSourceDocs: defineTable({
+    courseId: v.id('courses'),
+    documentId: v.optional(v.id('documents')),
+    folderId: v.optional(v.id('folders')),
+    userId: v.string(),
+  })
+    .index('by_courseId', ['courseId']),
+
+  reviewItems: defineTable({
+    userId: v.string(),
+    courseId: v.id('courses'),
+    sectionId: v.id('courseSections'),
+    flashcardRoomCardId: v.optional(v.id('flashcardRoomCards')),
+    prompt: v.string(),
+    answer: v.string(),
+    easeFactor: v.number(),
+    interval: v.number(),
+    repetitions: v.number(),
+    nextReviewDate: v.string(),
+    lastReviewQuality: v.optional(v.number()),
+    lastReviewedAt: v.optional(v.number()),
+    flagged: v.boolean(),
+    correctedAnswer: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index('by_userId', ['userId'])
+    .index('by_userId_and_nextReviewDate', ['userId', 'nextReviewDate'])
+    .index('by_courseId', ['courseId'])
+    .index('by_sectionId', ['sectionId'])
+    .index('by_flashcardRoomCardId', ['flashcardRoomCardId']),
+
+  learnProfile: defineTable({
+    userId: v.string(),
+    streakCurrent: v.number(),
+    streakLastDate: v.optional(v.string()),
+    streakFreezeAvailable: v.boolean(),
+    streakFreezeUsedAt: v.optional(v.string()),
+    dailyReviewCap: v.number(),
+    timezone: v.optional(v.string()),
+  })
+    .index('by_userId', ['userId']),
+
+  reviewSessions: defineTable({
+    userId: v.string(),
+    date: v.string(),
+    itemsReviewed: v.number(),
+    itemsCorrect: v.number(),
+    durationMs: v.number(),
+    mode: v.optional(v.union(v.literal('full'), v.literal('quick'))),
+    completedAt: v.number(),
+  })
+    .index('by_userId', ['userId'])
+    .index('by_userId_and_date', ['userId', 'date']),
+
+  calendarConnections: defineTable({
+    userId: v.string(),
+    provider: v.literal('google'),
+    accessToken: v.string(),
+    refreshToken: v.string(),
+    expiresAt: v.number(),
+    timezone: v.string(),
+    status: v.union(v.literal('connected'), v.literal('disconnected')),
+    connectedAt: v.number(),
+    preferences: v.optional(v.object({
+      morningStart: v.string(),
+      eveningEnd: v.string(),
+      sessionMinutes: v.number(),
+      preferredDays: v.array(v.string()),
+    })),
+  })
+    .index('by_userId', ['userId']),
+
+  calendarEvents: defineTable({
+    userId: v.string(),
+    calendarConnectionId: v.id('calendarConnections'),
+    calendarEventId: v.string(),
+    courseId: v.id('courses'),
+    scheduledAt: v.number(),
+    sessionType: v.union(v.literal('new-content'), v.literal('review'), v.literal('audio-only')),
+    status: v.union(v.literal('scheduled'), v.literal('completed'), v.literal('missed'), v.literal('rescheduled')),
+    description: v.optional(v.string()),
+  })
+    .index('by_userId', ['userId'])
+    .index('by_courseId', ['courseId'])
+    .index('by_userId_and_status', ['userId', 'status']),
 
   pendingCleanup: defineTable({
     userId: v.string(),

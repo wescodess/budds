@@ -1,0 +1,295 @@
+import { ref } from 'vue'
+
+const DB_NAME = 'budds-offline'
+const DB_VERSION = 2
+const SECTION_STORE = 'sections'
+const ATTEMPTS_STORE = 'offlineAttempts'
+const AUDIO_CACHE_NAME = 'budds-learn-audio-v1'
+const MAX_CACHED_SECTIONS = 20
+
+interface CachedSection {
+  sectionId: string
+  courseId: string
+  title: string
+  contentBlocks: Array<{
+    type: 'text' | 'quiz' | 'flashcard' | 'audio'
+    entityId?: string
+    content?: string
+    order: number
+    quizData?: {
+      questions: Array<{
+        question: string
+        type: string
+        options?: string[]
+        correctAnswer: string
+        explanation?: string
+        order: number
+      }>
+    }
+    flashcardData?: {
+      cards: Array<{
+        term: string
+        definition: string
+      }>
+    }
+    audioUrls?: string[]
+  }>
+  cachedAt: number
+}
+
+export interface OfflineAttempt {
+  id?: number
+  type: 'quiz-retake' | 'flashcard-practice' | 'section-review'
+  sectionId: string
+  courseId: string
+  timestamp: number
+  data: {
+    practiceScore?: number
+    quizCorrect?: number
+    quizTotal?: number
+    reviewItemId?: string
+    quality?: number
+  }
+  synced: boolean
+  syncAttempts?: number
+}
+
+function openDB(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION)
+    request.onupgradeneeded = () => {
+      const db = request.result
+      if (!db.objectStoreNames.contains(SECTION_STORE)) {
+        db.createObjectStore(SECTION_STORE, { keyPath: 'sectionId' })
+      }
+      if (!db.objectStoreNames.contains(ATTEMPTS_STORE)) {
+        const store = db.createObjectStore(ATTEMPTS_STORE, { keyPath: 'id', autoIncrement: true })
+        store.createIndex('by_synced', 'synced', { unique: false })
+        store.createIndex('by_sectionId', 'sectionId', { unique: false })
+      }
+    }
+    request.onsuccess = () => resolve(request.result)
+    request.onerror = () => reject(request.error)
+  })
+}
+
+async function storeSection(data: CachedSection): Promise<void> {
+  const db = await openDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(SECTION_STORE, 'readwrite')
+    const store = tx.objectStore(SECTION_STORE)
+    store.put(data)
+
+    const countReq = store.count()
+    countReq.onsuccess = () => {
+      if (countReq.result > MAX_CACHED_SECTIONS) {
+        const getAllReq = store.getAll()
+        getAllReq.onsuccess = () => {
+          const all = getAllReq.result as CachedSection[]
+          all.sort((a, b) => a.cachedAt - b.cachedAt)
+          const toDelete = all.slice(0, all.length - MAX_CACHED_SECTIONS)
+          for (const entry of toDelete) {
+            store.delete(entry.sectionId)
+          }
+        }
+      }
+    }
+
+    tx.oncomplete = () => { db.close(); resolve() }
+    tx.onerror = () => { db.close(); reject(tx.error) }
+  })
+}
+
+async function getSection(sectionId: string): Promise<CachedSection | null> {
+  const db = await openDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(SECTION_STORE, 'readonly')
+    const request = tx.objectStore(SECTION_STORE).get(sectionId)
+    request.onsuccess = () => { db.close(); resolve(request.result ?? null) }
+    request.onerror = () => { db.close(); reject(request.error) }
+  })
+}
+
+async function isSectionCached(sectionId: string): Promise<boolean> {
+  const db = await openDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(SECTION_STORE, 'readonly')
+    const request = tx.objectStore(SECTION_STORE).count(sectionId)
+    request.onsuccess = () => { db.close(); resolve(request.result > 0) }
+    request.onerror = () => { db.close(); reject(request.error) }
+  })
+}
+
+async function deleteSection(sectionId: string): Promise<void> {
+  const db = await openDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(SECTION_STORE, 'readwrite')
+    tx.objectStore(SECTION_STORE).delete(sectionId)
+    tx.oncomplete = () => { db.close(); resolve() }
+    tx.onerror = () => { db.close(); reject(tx.error) }
+  })
+}
+
+async function cacheAudioUrls(urls: string[]): Promise<void> {
+  if (urls.length === 0) return
+  try {
+    const cache = await caches.open(AUDIO_CACHE_NAME)
+    await Promise.all(urls.map(async (url) => {
+      const existing = await cache.match(url)
+      if (!existing) {
+        const response = await fetch(url)
+        if (response.ok) await cache.put(url, response)
+      }
+    }))
+  } catch {
+    // Cache API may not be available; non-critical
+  }
+}
+
+async function getAudioFromCache(url: string): Promise<Response | undefined> {
+  try {
+    const cache = await caches.open(AUDIO_CACHE_NAME)
+    return await cache.match(url) || undefined
+  } catch {
+    return undefined
+  }
+}
+
+export async function addOfflineAttempt(attempt: Omit<OfflineAttempt, 'id' | 'synced'>): Promise<number> {
+  const db = await openDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(ATTEMPTS_STORE, 'readwrite')
+    const request = tx.objectStore(ATTEMPTS_STORE).add({ ...attempt, synced: false })
+    request.onsuccess = () => { db.close(); resolve(request.result as number) }
+    request.onerror = () => { db.close(); reject(request.error) }
+  })
+}
+
+export async function getUnsyncedAttempts(): Promise<OfflineAttempt[]> {
+  const db = await openDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(ATTEMPTS_STORE, 'readonly')
+    const index = tx.objectStore(ATTEMPTS_STORE).index('by_synced')
+    const request = index.getAll(IDBKeyRange.only(false))
+    request.onsuccess = () => { db.close(); resolve(request.result) }
+    request.onerror = () => { db.close(); reject(request.error) }
+  })
+}
+
+export async function markAttemptSynced(id: number): Promise<void> {
+  const db = await openDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(ATTEMPTS_STORE, 'readwrite')
+    const store = tx.objectStore(ATTEMPTS_STORE)
+    const getReq = store.get(id)
+    getReq.onsuccess = () => {
+      if (getReq.result) {
+        store.put({ ...getReq.result, synced: true })
+      }
+      tx.oncomplete = () => { db.close(); resolve() }
+    }
+    getReq.onerror = () => { db.close(); reject(getReq.error) }
+  })
+}
+
+export async function incrementSyncAttempts(id: number): Promise<void> {
+  const db = await openDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(ATTEMPTS_STORE, 'readwrite')
+    const store = tx.objectStore(ATTEMPTS_STORE)
+    const getReq = store.get(id)
+    getReq.onsuccess = () => {
+      if (getReq.result) {
+        store.put({ ...getReq.result, syncAttempts: (getReq.result.syncAttempts ?? 0) + 1 })
+      }
+      tx.oncomplete = () => { db.close(); resolve() }
+    }
+    getReq.onerror = () => { db.close(); reject(getReq.error) }
+  })
+}
+
+export async function clearSyncedAttempts(): Promise<void> {
+  const db = await openDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(ATTEMPTS_STORE, 'readwrite')
+    const store = tx.objectStore(ATTEMPTS_STORE)
+    const index = store.index('by_synced')
+    const request = index.openCursor(IDBKeyRange.only(true))
+    request.onsuccess = () => {
+      const cursor = request.result
+      if (cursor) {
+        cursor.delete()
+        cursor.continue()
+      }
+    }
+    tx.oncomplete = () => { db.close(); resolve() }
+    tx.onerror = () => { db.close(); reject(tx.error) }
+  })
+}
+
+export function useOfflineCache() {
+  const cacheStatus = ref<Map<string, boolean>>(new Map())
+
+  async function cacheSectionContent(
+    sectionId: string,
+    courseId: string,
+    title: string,
+    contentBlocks: CachedSection['contentBlocks'],
+    audioUrls: string[],
+  ): Promise<void> {
+    await storeSection({
+      sectionId,
+      courseId,
+      title,
+      contentBlocks,
+      cachedAt: Date.now(),
+    })
+
+    if (audioUrls.length > 0) {
+      await cacheAudioUrls(audioUrls)
+    }
+
+    cacheStatus.value.set(sectionId, true)
+  }
+
+  async function getCachedSection(sectionId: string): Promise<CachedSection | null> {
+    return getSection(sectionId)
+  }
+
+  async function checkCacheStatus(sectionIds: string[]): Promise<Map<string, boolean>> {
+    const result = new Map<string, boolean>()
+    if (sectionIds.length === 0) {
+      cacheStatus.value = result
+      return result
+    }
+    const db = await openDB()
+    const tx = db.transaction(SECTION_STORE, 'readonly')
+    const store = tx.objectStore(SECTION_STORE)
+    await Promise.all(sectionIds.map((id) =>
+      new Promise<void>((resolve) => {
+        const req = store.count(id)
+        req.onsuccess = () => { result.set(id, req.result > 0); resolve() }
+        req.onerror = () => { result.set(id, false); resolve() }
+      }),
+    ))
+    db.close()
+    cacheStatus.value = result
+    return result
+  }
+
+  async function removeCachedSection(sectionId: string): Promise<void> {
+    await deleteSection(sectionId)
+    cacheStatus.value.set(sectionId, false)
+  }
+
+  return {
+    cacheStatus,
+    cacheSectionContent,
+    getCachedSection,
+    checkCacheStatus,
+    removeCachedSection,
+    getAudioFromCache,
+  }
+}
+
+export type { CachedSection }

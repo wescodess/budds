@@ -1,198 +1,45 @@
-mode: complete
-current_phase: complete
-current_story: null
+mode: running
+current_phase: epic-story
+current_story: 7-3-offline-retakes-and-sync
 current_epic: 7
 retry_count: 0
-last_epic_complete_fired: 7
+last_epic_complete_fired: prep-7
 
 last_verdict:
   subagent: bmad-story-runner
-  story: 7-3-edit-delete-and-manage-flash-card-sets
-  epic: 7
+  story: low-priority-cleanup-2
+  epic: null
   status: PASS
-  pr_url: https://github.com/wescodess/budds/pull/25
-  branch: feat/7-3-edit-delete-and-manage-flash-card-sets
-  commit_sha: '4c3fa00'
-  merge_commit: fcc7c7c
-  merged_at: '2026-04-12T14:00:00Z'
-  files_changed: 7
-  tasks_completed: 7
-  tasks_total: 7
+  pr_url: 'https://github.com/wescodess/budds/pull/133'
+  branch: chore/low-priority-cleanup
+  commit_sha: 'fb554897dc51619315b7d69ec49d4b3e1113e91b'
+  files_changed: 17
+  tasks_completed: 13
+  tasks_total: 15
   findings_deferred: 0
   lint_pass: null
   typecheck_pass: null
   unit_tests_pass: true
   e2e_tests_pass: null
-  review_pass: true
-  summary: |
-    Story 7-3 shipped — users can now edit card content, delete individual cards, and delete whole flash card sets.
-    New Convex mutations: flashcards.updateCard (identity+ownership gated, trim+non-empty server validation, patches only front/back), flashcards.deleteCard (atomic parent cardCount decrement floor-0 inside the same transaction), flashcards.deleteSet (batched child-before-parent cascade via by_setId index, 500/batch, returns { deletedCards }). All three enforce identity.tokenIdentifier + userId match, throwing "Card not found" / "Set not found" on cross-user access (no existence leak).
-    New app/components/flashcards/Editor.vue: loading/error/ready tri-state; per-card rows with read-only/edit/confirm-delete swap-in-place (inline v-if, no Reka-portaled primitives); client trim+non-empty validation mirrors server; source citation badge + chunk preview always visible but not editable.
-    Tab.vue: ellipsis icon per set row, v-if actions row with inline Confirm-delete/Cancel swap, editor-branch (v-if editingSetId) above study-branch; polite sr-only live-region for delete-success announcement; @click.stop on ellipsis to preserve set-row click-through.
-    Schema unchanged: convex/schema.ts, accountDeletion.ts, dataExport.ts all untouched; schemaVersion stays at 4.
-    Tests: 11 new [P0] Convex unit tests across the three mutations (unauth / cross-user / trim / source-field immutability / cascade count / sibling isolation / foreign-user isolation). 6 new Editor ATDD test cases (red-first before Editor.vue shipped). pnpm test 256 PASS / 8 skipped; pnpm test:component flashcards 31/31 PASS.
-    Code review PASS inline against 16/16 ACs — 0 blockers, 0 deferred items. Reka-portal discipline preserved (no UiDialog/UiAlertDialog/UiPopover/UiDropdownMenu/UiSelect introduced).
-    PR #25 merged into dev as fcc7c7c; branch deleted remote. sprint-status 7-3 → done; epic-7 application stories 3/3 done (retrospective optional).
+  review_pass: null
+  summary: >
+    Low-priority cleanup PASS (13/15 items, 17 files). Fixed: (1) offline banner dark-mode color,
+    (2) calendarEventId projection from listByUser/listScheduled, (3) removed unused getConvexTokenIdentifier
+    call in connect.get.ts, (4) extracted GOOGLE_TOKEN_URL to shared google-constants.ts, (5) ReviewCapSetting
+    escape key handler, (6) flagged-item guard on submitReview, (7) review session estimated duration display,
+    (8) FlashcardBlock suppressTimer leak on unmount, (9) skipped getNextSection removal (used in tests),
+    (10) skipped deleteDocumentFromR2 (already removed), (11) removed redundant auth:'guest' from login.vue
+    definePageMeta, (12) removed dead as-any casts in index.vue, (13) updateDocumentStatus clears
+    failureReason on non-failure transitions, (14) added non-zero flag rate test for getFlagRateForCourse,
+    (15) replaced .collect() with .take(200) in getFlagRateForCourse. Updated calendarEvents tests to not
+    reference projected-out calendarEventId. 747 Convex + 442 component tests pass (0 regressions).
+    PR #133 merged to dev.
   block_reason: null
   block_context: null
-  at: '2026-04-12T14:00:00Z'
-  commits:
-    - 4c3fa00 feat(flashcards): edit/delete cards and delete sets (story 7.3 WIP)
-    - 22ea967 chore(bmad): close story 7-3 — code review PASS, 0 deferred items
-  deferred_items: 0
-  blockers: 0
-  acs_covered: 16
-  acs_total: 16
-
-prior_last_verdict_v2:
-  subagent: bmad-story-runner
-  story: 7-2-study-flash-cards
-  epic: 7
-  status: PASS
-  pr_url: https://github.com/wescodess/budds/pull/24
-  branch: feat/7-2-study-flash-cards
-  commit_sha: '5800196'
-  merge_commit: 2245fa9
-  merged_at: '2026-04-12T13:30:00Z'
-  files_changed: 6
-  tasks_completed: 9
-  tasks_total: 9
-  findings_deferred: 0
-  lint_pass: null
-  typecheck_pass: null
-  unit_tests_pass: true
-  e2e_tests_pass: null
-  review_pass: true
-  summary: |
-    Story 7-2 shipped — card-by-card flash card study flow.
-    New app/components/flashcards/Study.vue: 3D CSS flip surface (rotateY 180deg + backface-visibility: hidden); progress indicator X / N; Next/Previous with disabled-at-0; inline completion summary ("You finished! You reviewed N cards" + Restart + Back to list); top-level Back button.
-    Keyboard: document-level keydown listener (Space flips, ArrowLeft/ArrowRight navigate, Escape emits back) with INPUT/TEXTAREA target guard, removed on unmount. Card viewer is tabindex=0 + role=button + aria-pressed toggles on flip + aria-label swaps to "Showing answer: ...".
-    Touch: @vueuse/core useSwipe (already a dep), 40px threshold. Swipe-left → Next, swipe-right → Previous. Button parity preserved.
-    Source citation: inline reveal using existing ChatCitationBadge + ChatSourceCard primitives — zero portaled components inside Study.vue subtree (Epic 5/6 retro standing rule preserved for V1.x).
-    prefers-reduced-motion: pure CSS @media (prefers-reduced-motion: reduce) { .flashcard-flip-inner { transition: none !important } } — no JS matchMedia detection, no reactivity needed, browser re-evaluates on OS-level change without re-render.
-    Tab.vue rewired from 7-1 placeholder: activeSetId ref branch renders <FlashcardsStudy> when a set card is clicked; emit back clears the ref and returns to list. handleSetSelect TODO removed.
-    No new persisted tables (SRS explicitly out of V1.2 per 7-1 Dev Notes open-product-decisions). convex/schema.ts, accountDeletion.ts, dataExport.ts untouched. schemaVersion stays at 4.
-    Tests: ATDD red-first authored pre-impl (tests/component/flashcards/flashcards-study.atdd.test.ts, 8 assertions covering front → flip → Next → completion → Restart → Back → source toggle). Full coverage suite (tests/component/flashcards/flashcards-study.test.ts, 12 assertions across AC #11 a–h plus unavailable + empty load states).
-    Test counters: pnpm test 245 passed / 8 skipped (unchanged, no unit-layer changes); pnpm test:component 129 passed / 78 skipped (was 109/78; +20 net new).
-    Inline code review PASS against 13/13 ACs — 0 blockers, 0 new deferred items.
-    PR #24 merged into dev as 2245fa9; branch deleted remote. sprint-status 7-2 → done; epic-7 remains in-progress (7-3 next).
-  block_reason: null
+  at: '2026-04-23T23:20:00Z'
   block_context: null
-  at: '2026-04-12T13:30:00Z'
-  commits:
-    - 5800196 feat(flashcards): study flash cards with flip, keyboard, swipe (story 7.2)
-    - c80560b chore(bmad): close story 7-2 — code review PASS, 0 deferred items
-  deferred_items: 0
-  blockers: 0
-  acs_covered: 13
-  acs_total: 13
-
-prior_last_verdict:
-  subagent: bmad-story-runner
-  story: 7-1-generate-flash-cards-from-folder-documents
-  epic: 7
-  status: PASS
-  pr_url: https://github.com/wescodess/budds/pull/23
-  branch: feat/7-1-generate-flash-cards-from-folder-documents
-  commit_sha: 34fa793
-  merge_commit: 801b603
-  merged_at: '2026-04-12T13:00:00Z'
-  files_changed: 18
-  tasks_completed: 10
-  tasks_total: 10
-  findings_deferred: 5
-  lint_pass: null
-  typecheck_pass: null
-  unit_tests_pass: true
-  e2e_tests_pass: null
-  review_pass: true
-  summary: |
-    Story 7-1 shipped — Epic 7 opened. Flash-card generation from indexed folder documents end-to-end.
-    Convex: new `flashcardSets` + `flashcards` tables (with `userId` mirror for cascade); `flashcards.createSetWithCards` (folder-ownership gate, trimmedTitle fallback, per-card `sourceDocumentId` normalize+own), `flashcards.listByFolder` (indexed by_userId_and_folderId), `flashcards.getSetWithCards` (null for non-owners, cards sorted by order). 7 convex-test cases + 1 new accountDeletion isolation test (child-before-parent verified: flashcards → flashcardSets → documents → folders).
-    Server: `server/utils/flashcard-prompt.ts` with zod-validated response schema and tolerant JSON parse (strips fences, patches trailing commas); 8 node-env unit tests. `server/api/flashcards/generate.post.ts` wires `getConvexTokenIdentifier` → `searchDocuments (folderId filter)` → `generateCompletion (temp 0.3)` → `parseFlashcardResponse` → `ConvexHttpClient.mutation(api.flashcards.createSetWithCards)`. 7 handler tests (401/400/422/502/happy + disallowed-model fallback + zod round-trip).
-    UI: `app/composables/useFlashcards.ts` exposes `{sets, hasIndexedDocuments, generating, lastError, generate}`; `app/components/flashcards/Tab.vue` with three states (no-docs / empty-ready / list) and shimmer during generation — zero Reka-portaled primitives (Epic 6 retro Team Agreement preserved). ATDD red-first authored before impl (5 component tests).
-    Folder page: Flash Cards tab inserted between Chat and Quiz — completes UX-DR1 tab order for V1.2.
-    Data export: schema migrated v3 → v4. New `flashcardSets.json` + `flashcards.json` entries; manifest counts extended. 2 export tests updated.
-    Prep folded in inline: P0 #1 — chat-input baseline (6 failures) resolved with one-line path fix (`ChatInput.vue` → `Input.vue`, matching Nuxt auto-component convention, cross-checked against `chat-message.test.ts` pattern). P0 #2 — cascade re-audit: `deleteAllFlashcardsForUser` + `deleteAllFlashcardSetsForUser` inserted before `deleteAllDocumentsForUser` in `deleteAccountCascade`; new isolation test seeds user-A+user-B, asserts A's rows purged while B's survive.
-    Test counters: pnpm test 245 passed / 8 skipped (was 221, +24 net); pnpm test:component 109 passed / 78 skipped / 0 failed. All 11 flashcards + 6 chat-input tests green.
-    Code review PASS inline against 13/13 ACs — 0 blockers, 5 deferred (all logged under `deferred-work.md` "code review of story-7.1" heading): (1) AC #6 cosmetic — generate button hidden during shimmer instead of labelled "Generating…" with spinner; (2) `sourceDocumentId` resolution accepts any same-user doc, not only folder-scoped; (3) out-of-range `sourceIndex` silently falls back without logging; (4) no rate limit on POST /api/flashcards/generate (parity with quiz/export); (5) trailing-comma cleaner regex is technically over-broad.
-    Decisions (tier-1 defaults): SRS out of scope for V1.2 (study flow lands in 7-2); cross-folder flash-card generation NOT supported in V1.2; no per-card rating schema in V1.2. All three documented in story Dev Agent Record.
-    PR #23 merged into dev as 801b603; branch deleted remote. sprint-status 7-1 → done; epic-7 remains in-progress.
-  block_reason: null
-  block_context: null
-  at: '2026-04-12T13:00:00Z'
-  commits:
-    - 34fa793 feat(flashcards): generate flash cards from folder documents (story 7.1)
-  deferred_items: 5
-  blockers: 0
-  acs_covered: 13
-  acs_total: 13
-
-last_retro:
-  epic: 7
-  file: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts/epic-7-retro-2026-04-12.md
-  pr_url: https://github.com/wescodess/budds/pull/26
-  merge_commit: c61086c
-  new_deferred_items: 5
-  cumulative_completion: '7/7 epics at 100%; V1.2 closes the pre-GA sprint plan (epics 1–7). 5 new deferred items all from Story 7-1; 7-2/7-3 shipped with 0.'
-  prep_items_identified:
-    - id: 1
-      owner: Elena (Junior Dev)
-      priority: P0 pre-launch
-      title: Add pnpm lint + pnpm typecheck scripts (3-epic drift — promoted to pre-launch checklist)
-    - id: 2
-      owner: palmwine (Project Lead)
-      priority: P0 pre-launch
-      title: Finalise governing-law jurisdiction in /terms
-    - id: 3
-      owner: Charlie (Senior Dev)
-      priority: P0 pre-launch
-      title: Unified per-user rate-limit across /api/export/me + /api/quiz/generate + /api/flashcards/generate (single PR)
-    - id: 4
-      owner: Charlie (Senior Dev)
-      priority: P2 pre-launch
-      title: Remove orphaned deleteDocumentFromR2 internal action (bundle with dead-code removals)
-    - id: 5
-      owner: Charlie (Senior Dev)
-      priority: P1 pre-launch
-      title: Security review pass on sourceDocumentId cross-folder tolerance + sourceIndex silent fallback (7-1 deferred #2 + #3)
-
-prior_last_retro_v2:
-  epic: 6
-  file: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts/epic-6-retro-2026-04-12.md
-  pr_url: https://github.com/wescodess/budds/pull/22
-  merge_commit: '7664f9b'
-  new_deferred_items: 0
-  cumulative_completion: '6/6 epics at 100%; first epic with 0 new deferred items'
-  prep_items_identified_v2:
-    - id: 1
-      owner: Dana (QA Engineer)
-      priority: P0
-      title: Decide on chat-input.test.ts 6-failure baseline (fix / delete / .skip)
-    - id: 2
-      owner: Charlie (Senior Dev)
-      priority: P0
-      title: Cascade re-audit checklist for flashcards + flashcardSets tables
-    - id: 3
-      owner: Elena (Junior Dev)
-      priority: P1
-      title: Add pnpm lint + pnpm typecheck scripts (rolled forward from Epic 5)
-    - id: 4
-      owner: palmwine (Project Lead)
-      priority: P0 (pre-GA)
-      title: Finalise governing-law jurisdiction in /terms (rolled forward)
-    - id: 5
-      owner: Charlie (Senior Dev)
-      priority: P1 (pre-GA)
-      title: Add per-user rate-limit on GET /api/export/me (rolled forward)
-    - id: 6
-      owner: Charlie (Senior Dev)
-      priority: P2
-      title: Remove orphaned deleteDocumentFromR2 internal action (rolled forward)
-    - id: 7
-      owner: Elena (Junior Dev)
-      priority: P2
-      title: Unify /app/chat onto useChat or deprecate (rolled forward)
+  at: '2026-04-23T22:45:00Z'
+last_retro: 'epic-6-retro-2026-04-24.md'
 
 config:
   max_retries_per_story: 3
@@ -210,241 +57,271 @@ paths:
   deferred_work: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts/deferred-work.md
   state_file: /Users/wesleyukadike/Desktop/budds/_bmad-output/implementation-artifacts/orchestrator-state.yaml
   tech_spec: null
-  epics_file: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/epics.md
-  architecture: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/architecture.md
-  prd: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/prd.md
-  ux_spec: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/ux-design-specification.md
+  epics_file: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/epics-learn-module.md
+  architecture: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/architecture-learn-module.md
+  prd: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/prd-learn-module.md
+  ux_spec: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/ux-design-learn-module.md
 
 counters:
-  stories_completed_this_run: 10
-  stories_completed_total: 10
+  stories_completed_this_run: 3
+  stories_completed_total: 44
 
 escalation:
   pending: null
   log:
-    - ts: '2026-04-12'
-      question: |
-        Epic 7 application stories 3/3 done. epic-7-retrospective optional + final planned epic.
-        run_retro_first or skip_retro_mark_complete?
+    - ts: '2026-04-24'
+      question: "Epic 3 complete (5/5). Retro optional. Proceed to Epic 4 or run retro first?"
+      answer: proceed
+      answered_at: '2026-04-24'
+      resolution: "Auto-resolved after 2m — proceed. Skipping Epic 3 retro. Advancing to Epic 4."
+      auto_resolved: true
+    - ts: '2026-04-24'
+      question: "Prep sprint (Epic 3) complete. Retro optional. Proceed to Epic 3 or run retro first?"
+      answer: proceed
+      answered_at: '2026-04-24'
+      resolution: "Auto-resolved after 2m — proceed. Skipping prep sprint retro. Advancing to Epic 3."
+      auto_resolved: true
+    - ts: '2026-04-23'
+      question: "Epic 2 closed without retro (marked optional). Proceed to Epic 3, or run retrospective first?"
       answer: run_retro_first
-      answered_at: '2026-04-12'
-      resolution: |
-        User: "run retro". Invoking bmad-bmm-workflows-retrospective for Epic 7.
-    - ts: '2026-04-12'
-      question: |
-        Story 7-3 in flight on dirty workspace (feat/7-3-edit-delete-and-manage-flash-card-sets):
-        Editor.vue + ATDD test + Convex deleteSet/updateCard/deleteCard + tests + Tab.vue editor wiring + story file.
-        Spawning bmad-story-runner now would halt with dirty_workspace. Recommend commit_current_work_then_resume.
-      answer: commit_current_work_then_resume
-      answered_at: '2026-04-12'
-      resolution: |
-        User answered "1" → commit_current_work_then_resume (matches 4-4 precedent).
-        Committed 7 files as 4c3fa00 (feat: edit/delete cards and delete sets — 7.3 WIP).
-        Spawning bmad-story-runner for 7-3 to take it through code-review → PR → merge.
-    - ts: '2026-04-12'
-      question: |
-        Epic 6→7 boundary. 7 prep items (2 P0 eng: chat-input baseline + cascade audit checklist).
-        proceed_to_7_1_with_prep_inside, create_prep_story_for_chat_input_baseline, or run_sprint_planning?
-      answer: proceed_to_7_1_with_prep_inside
-      answered_at: '2026-04-12'
-      resolution: |
-        User matched Epic 5/6 precedent. P0 #1 (chat-input baseline triage) and P0 #2 (cascade re-audit)
-        fold into 7-1. Story-runner instructed to triage chat-input.test.ts inside the 30-min budget
-        framing per Epic 5 retro pattern, and to insert flashcard tables child-before-parent in
-        accountDeletion before the documents step. BLOCKED escape preserved if scope explodes.
-        Spawning bmad-story-runner for 7-1.
-    - ts: '2026-04-12'
-      question: |
-        Epic 6 boundary — retro optional. run_retro_first or skip_retro_proceed_to_7_1?
+      answered_at: '2026-04-23'
+      resolution: "User chose run_retro_first. Running bmad-bmm-workflows-retrospective for Epic 2."
+    - ts: '2026-04-23'
+      question: "Epic 1 closed without retro (marked optional). Proceed to Epic 2, or run retrospective first?"
       answer: run_retro_first
-      answered_at: '2026-04-12'
-      resolution: |
-        Matches Epic 4 / Epic 5 precedent. Invoking bmad-bmm-workflows-retrospective for Epic 6.
-        Produced epic-6-retro-2026-04-12.md (PR #22, merged 7664f9b). 7 Epic 7 prep items.
-        Sprint-status: epic-6 → done, epic-6-retrospective → done. Raising Epic 7 prep escalation.
-    - ts: '2026-04-12'
+      answered_at: '2026-04-23'
+      resolution: "User chose run_retro_first. Running bmad-bmm-workflows-retrospective for Epic 1."
+    - ts: '2026-04-22'
       question: |
-        Epic 5→6 boundary. 8 prep items (3 P0 incl. Reka-portal mountSuspended flagged "Decision + PR").
-        proceed_to_6_1_with_prep_inside (Epic 5 precedent), create_prep_story_for_reka_portal, or run_sprint_planning?
-      answer: proceed_to_6_1_with_prep_inside
-      answered_at: '2026-04-12'
+        Workspace dirty on refactor/remove-folder-tabs. commit_all_then_start, stash_then_start, or commit_tracked_stash_untracked?
+      answer: commit_all_then_start
+      answered_at: '2026-04-22'
       resolution: |
-        User matched Epic 5 precedent. All 8 prep items fold into Epic 6 story ACs / deferred-work.md.
-        P0 #3 (Reka-portal mountSuspended) becomes a sub-task inside 6-1; if scope explodes during dev,
-        story-runner should raise BLOCKED rather than silently expand. Spawning bmad-story-runner for 6-1.
-    - ts: '2026-04-12'
-      question: |
-        Epic 5 application stories 3/3 done (5-1, 5-2, 5-3). `epic-5-retrospective: optional`.
-        Proceed to Epic 6, or run epic-5 retrospective first?
-      answer: run_retro_first
-      answered_at: '2026-04-12'
-      resolution: |
-        Invoking bmad-bmm-workflows-retrospective for Epic 5.
-    - ts: '2026-04-12'
-      question: |
-        Epic 5 prep representation — run sprint-planning, create prep stories, or proceed to 5-1 with prep inside?
-      answer: proceed_to_5_1_with_prep_inside
-      answered_at: '2026-04-12'
-      resolution: |
-        Matches repo precedent (epics 1–4 never used prep-sprint-epic-N entries; retro prep items were absorbed into next epic's stories + deferred-work.md). Story 5-1's ACs already encompass P0 prep items 1 (cascade-delete audit) and 2 (retry on partial failure, NFR13). Spawning bmad-story-runner for 5-1 directly.
-    - ts: '2026-04-12'
-      question: |
-        Story 4-4 in review with uncommitted dev work on dirty branch. Spawning story-runner would likely halt with dirty_workspace. How to proceed?
-      answer: commit_current_work_then_resume
-      answered_at: '2026-04-12'
-      resolution: |
-        Committed 14 files as 49ea136. Resumed, spawned bmad-story-runner which returned PASS with 5 deferred items. Orchestrator closed story: committed review artifacts (a95f66a), pushed branch, opened PR #13 against dev, merged (700faab). sprint-status 4-4 → done.
-    - ts: '2026-04-12'
-      question: |
-        Base-branch ambiguity — local main has different history than feat branch. PRs against main or dev?
-      answer: target_dev_main_is_prod
-      answered_at: '2026-04-12'
-      resolution: |
-        User clarified: main is production, dev is integration trunk. All future PRs target dev. Saved to memory (project_branching_convention.md).
-    - ts: '2026-04-12'
-      question: |
-        Epic 4 all stories done; epic-4-retrospective optional. Proceed to epic 5 or run retro first?
-      answer: run_epic_4_retrospective_first
-      answered_at: '2026-04-12'
-      resolution: |
-        Ran bmad-bmm-workflows-retrospective. Produced epic-4-retro-2026-04-12.md covering: 4/4 stories, review metrics, Epic 3 retro follow-through (3/3), 7 new deferred items, 5 Epic 5 prep items. Opened PR #14, merged (0892314). sprint-status epic-4 → done, epic-4-retrospective → done.
+        User answered "1" → commit_all_then_start. Committing all changes on refactor/remove-folder-tabs, then branching feat/1-1 from dev.
 
 decisions_log:
-  - ts: '2026-04-12'
+  - ts: '2026-04-23'
     decision: |
-      RUN COMPLETE. V1.2 shipped — 7/7 epics at 100%. Epic 7 retrospective produced and merged (PR #26, c61086c — epic-7-retro-2026-04-12.md).
-      sprint-status: epic-7 → done, epic-7-retrospective → done, retrospective_location bumped. last_retro updated to epic-7 (5 new deferred, all 7-1).
-      No Epic 8 in planned sprint. Project exits feature-development mode; next phase is pre-launch hardening.
-      Pre-launch checklist promoted from Epic 6/7 retro drift: P0 pnpm lint/typecheck (3-epic drift), P0 governing-law finalise, P0 unified rate-limit.
-      Orchestrator mode → complete. Run counters: 10 stories this run, 10 cumulative. Halting cleanly.
-  - ts: '2026-04-12'
-    decision: user answered "run retro" → run_retro_first. Invoked bmad-bmm-workflows-retrospective for Epic 7. Produced epic-7-retro-2026-04-12.md directly (templated against epic-6 retro shape). Branch chore/epic-7-retrospective; PR #26 opened against dev; squash-merged as c61086c; branch deleted remote. sprint-status: epic-7 → done, epic-7-retrospective → done.
-  - ts: '2026-04-12'
-    decision: epic-boundary 7 — Epic 7 application stories 3/3 done, retro optional + final planned epic. Raising tier-3 escalation (run_retro_first vs skip_retro_mark_complete); recommended run_retro_first (Epic 4/5/6 precedent). last_epic_complete_fired: 6→7. Halting.
-  - ts: '2026-04-12'
-    decision: story-runner PASS for 7-3 (0 deferred, 0 blockers, 16/16 ACs, 7 files, +11 Convex tests, +6 ATDD). PR #25 merged fcc7c7c. Convex updateCard/deleteCard (atomic cardCount-- floor-0)/deleteSet (batched cascade). Editor.vue + Tab.vue inline actions, no portaled primitives. Schema unchanged. Counters 9→10 this-run. Epic 7 stories 3/3 complete. Telegram notified.
-  - ts: '2026-04-12'
-    decision: dirty-workspace escalation answered "1" → commit_current_work_then_resume (4-4 precedent). Committed 7 files as 4c3fa00. Spawning bmad-story-runner for 7-3.
-  - ts: '2026-04-12'
-    decision: story-runner PASS for 7-2 (0 deferred, 0 blockers, 13/13 ACs, 6 files, +20 component tests net). PR #24 merged 2245fa9. New app/components/flashcards/Study.vue (3D CSS flip, keyboard Space/Arrows/Escape guarded, @vueuse useSwipe 40px, inline source toggle reusing ChatCitationBadge+ChatSourceCard, CSS-only prefers-reduced-motion). Tab.vue rewired from 7-1 placeholder (activeSetId ref branch). Zero schema/cascade/export changes — ephemeral session state per 7-1 V1.2 framing. Reka-portal discipline preserved. Counters 8→9 this-run. Advancing to 7-3.
-  - ts: '2026-04-12'
-    decision: story-runner PASS for 7-1 (5 deferred, 0 blockers, 13/13 ACs, 18 files, +24 unit tests net). PR #23 merged 801b603. Epic 6 retro P0 #1 (chat-input baseline 6 failures → resolved via path fix ChatInput.vue → Input.vue) and P0 #2 (cascade re-audit — deleteAllFlashcardsForUser + deleteAllFlashcardSetsForUser inserted child-before-parent before deleteAllDocumentsForUser) both folded inline. Data export schema v3→v4. Counters 7→8 this-run. Telegram notified. Advancing to 7-2.
-  - ts: '2026-04-12'
-    decision: epic-boundary 6→7 — user chose proceed_to_7_1_with_prep_inside (matches Epic 5/6 precedent). P0 #1 (chat-input baseline triage) and P0 #2 (cascade re-audit for flashcards) fold into 7-1 ACs. Story-runner instructed to honor 30-min triage budget for baseline + child-before-parent cascade insertion. BLOCKED escape if scope explodes. Checkpointing state; spawning bmad-story-runner for 7-1.
-  - ts: '2026-04-12'
-    decision: Epic 6 retrospective produced and merged (PR #22, 7664f9b — epic-6-retro-2026-04-12.md). epic-6 + epic-6-retrospective → done. 7 Epic 7 prep items identified (2 P0 eng, 1 P0 pre-GA non-eng, 2 P1, 2 P2). Raising Epic 7 prep escalation; recommended proceed_to_7_1_with_prep_inside (matches Epic 5/6 precedent).
-  - ts: '2026-04-12'
-    decision: story-runner PASS for 6-3 (0 deferred, 0 blockers, 13/13 ACs, updateQuestion+deleteQuiz mutations, review-mode taker, inline delete-confirm preserves Reka-portal discipline). PR #21 merged 4bea80e. Epic 6 application stories 3/3 done with 0 cumulative deferred items. Raising epic-6 boundary escalation (retro optional) — halting.
-  - ts: '2026-04-12'
-    decision: story-runner PASS for 6-2 (0 deferred, 0 blockers, 11/11 ACs, quizAttempts table + submit/score pipeline + cascade re-audit + export schema v3). PR #20 merged efd0693. Telegram notified. Advancing to 6-3.
-  - ts: '2026-04-12'
-    decision: story-runner PASS for 6-1 (0 deferred, 0 blockers, 4 retro prep items addressed — #2 #3 #5 #6). PR #19 merged 0edd8ef. Telegram notified. 5-story checkpoint reached (5/5 this run); continuing to 6-2 per auto-decision policy.
-  - ts: '2026-04-12'
-    decision: epic-boundary 5→6 — user chose proceed_to_6_1_with_prep_inside (matches Epic 5 precedent). 8 prep items fold into story ACs; P0 #3 (Reka-portal mountSuspended) as sub-task of 6-1 with BLOCKED escape if scope explodes. Checkpointing state; spawning bmad-story-runner for 6-1.
-  - ts: '2026-04-12'
-    decision: start invoked; classified next item as 4-4 in review state with dirty workspace; escalated rather than autospawn runner
-  - ts: '2026-04-12'
-    decision: user chose commit_current_work_then_resume; committed WIP as 49ea136; spawned bmad-story-runner for 4-4
-  - ts: '2026-04-12'
-    decision: story-runner returned PASS (5 deferred, 0 blockers); escalated base-branch ambiguity; user clarified dev-is-trunk; pushed branch, opened PR #13 against dev, merged via merge commit 700faab; sprint-status 4-4 → done
-  - ts: '2026-04-12'
-    decision: all epic-4 stories done; escalated epic-boundary; user chose run_epic_4_retrospective_first
-  - ts: '2026-04-12'
-    decision: epic 4 retrospective produced and merged (PR #14, 0892314); escalating sprint-planning decision for epic 5 prep
-  - ts: '2026-04-12'
-    decision: story-runner PASS for 5-3 (6 deferred, 0 blockers); PR #17 merged ff3ae38. All epic-5 application stories done. Epic-boundary escalation raised (retro optional) — halting for user.
+      story-runner PASS for prep-4-3 (3 deferred: magic flush count, MDC warm-up coupling, no XSS test).
+      6/6 tasks, 3 files. TextBlock.vue unchanged — MDC already handles numbered lists and code blocks.
+      Fixed 4 pre-existing test failures (async parseMarkdown not awaited). Added 4 new tests. 346
+      component + 566 Convex tests pass. PR #110 merged to dev. Counters 3 this-run, 24 total.
+      PREP SPRINT EPIC 4 COMPLETE (3/3). prep-sprint-epic-4-retrospective: optional. Epic boundary detected.
+  - ts: '2026-04-23'
+    decision: |
+      story-runner PASS for 3-5 (3 deferred: URL resolution per subscription tick, conditional composable,
+      no ttsEngine hint). 7/7 tasks, 10 files. buildAudioPrimerPrompt for short-form primers referencing
+      user notes by filename. Audio generation wired into section pipeline for conceptual knowledge types.
+      createCourseScopedOverview mutation + getCourseScopedOverview query with courseScoped=true. AudioBlock
+      replaced with compact player: play/pause, progress bar, collapsible transcript, source pills. Code
+      review: 2 blockers fixed (orphan blob cleanup, watch double-play + aria-expanded), 3 deferred. 565
+      Convex + 336 component tests pass. PR #107 merged to dev. Counters 4 this-run, 21 total. EPIC 3
+      COMPLETE (5/5 stories). epic-3-retrospective: optional. Epic boundary detected.
+  - ts: '2026-04-24'
+    decision: |
+      story-runner PASS for 3-4 (4 deferred: multi-quiz accumulation, no error toast, complete-before-view
+      gate, FR16 format override UI). 9/9 tasks, 9 files. completeSection mutation with mastery computation,
+      SectionCompletionCard with SVG accuracy ring, adaptive feedback. Code review: 2 blockers fixed
+      (threshold mismatch at 90, missing ready-status guard). 554 Convex + 325 component tests pass.
+      PR #106 merged to dev. Counters 3 this-run, 20 total. Advancing to 3-5 (final Epic 3 story).
+  - ts: '2026-04-24'
+    decision: |
+      story-runner PASS for 3-3 (5 deferred: over-fetch for next section, no aria-live on quiz feedback,
+      dynamic component :is pattern, flashcard timer leak, markdown numbered list support). 9/9 tasks,
+      14 files. Section void page, SectionVoidTopBar, SectionBlockRenderer, TextBlock (XSS-safe),
+      QuizBlock (inline feedback), FlashcardBlock (flip+swipe), AudioBlock (stub). Course view upgraded
+      to section list. 20 new component tests. Code review: 2 blockers fixed (XSS v-html, unused binding).
+      544 Convex + 309 component tests pass. PR #105 merged to dev. Counters 2 this-run, 19 total.
+  - ts: '2026-04-24'
+    decision: |
+      story-runner PASS for 3-2 (5 deferred: over-fetching in query, no hasNextSection state,
+      idempotency test, unused getNextSection, retryOf sentinel). 6/6 tasks, 5 files.
+      getNextSection query, checkPreFetchStatus query, triggerPreFetch mutation, usePreFetchSection
+      composable. 15 new Convex tests. Code review: 1 blocker fixed (userId guard). 544 Convex +
+      289 component tests pass. PR #104 merged to dev. Counters 1 this-run, 18 total. Advancing to 3-3.
+  - ts: '2026-04-24'
+    decision: |
+      story-runner PASS for prep-3-6 (0 deferred). 4/4 tasks, 2 files. Added status badge to CourseCard:
+      generating=amber "Generating...", failed=red "Failed" + dimmed styling, ready=no badge. 4 new
+      component tests. 512 Convex + 289 component tests pass. PR #102 merged to dev. Counters 6
+      this-run, 16 total. PREP SPRINT COMPLETE (6/6). Escalating for retro decision before Epic 3.
+  - ts: '2026-04-24'
+    decision: |
+      story-runner PASS for prep-3-5 (3 deferred: page-level mock harness, QuizShell card list tests,
+      createSharedComposable isolation). 11/11 tasks, 15 files. Fixed 18 tests across 8 files, skipped
+      15 tests across 5 files with explanations. Zero failures: 512 Convex + 285 component tests pass.
+      PR #101 merged to dev. Counters 5 this-run, 15 total. Advancing to prep-3-6.
+  - ts: '2026-04-24'
+    decision: |
+      E2E golden path PASS for prep-3-4 via Chrome MCP (no PR — quality gate only). Verified: Learn Home
+      active state, Create Course page, course creation trigger, real-time CourseCard appearance, course
+      view page, delete dialog. Outline generation timed out (AI endpoint latency, not a code regression).
+      Counters 4 this-run, 14 total. Advancing to prep-3-5.
+  - ts: '2026-04-24'
+    decision: |
+      story-runner PASS for prep-3-3 (2 deferred: no truncation feedback to user, no cap on explicit
+      documentIds path). 5/5 tasks, 3 files. Added MAX_SOURCE_DOCS=100 cap, replaced .collect() with
+      .take(MAX_SOURCE_DOCS). 2 new tests. 509 total tests pass. PR #100 merged to dev. Counters 3
+      this-run, 13 total. Advancing to prep-3-4.
+  - ts: '2026-04-24'
+    decision: |
+      story-runner PASS for prep-3-2 (0 deferred). 6/6 tasks, 3 files. Added aria-labels to 4
+      interactive elements in OutlineEditor.vue (remove button, title input, knowledge type badge,
+      drag handle). 4 new component tests. 19 OutlineEditor tests pass. PR #99 merged to dev.
+      Counters 2 this-run, 12 total. Advancing to prep-3-3.
+  - ts: '2026-04-24'
+    decision: |
+      story-runner PASS for prep-3-1 (0 deferred). 5/5 tasks, 8 files. Extracted requireAuth from
+      6 Convex files into convex/lib/auth.ts. 507 total tests pass (0 new failures). PR #98 merged
+      to dev. Counters 1 this-run, 11 total. Advancing to prep-3-2.
+  - ts: '2026-04-23'
+    decision: |
+      Epic 2 retrospective complete. 3 new action items, 4 carried from Epic 1 (user chose to
+      prioritize all carried items as mandatory before Epic 3). Prep sprint: requireAuth extraction,
+      aria-labels, source doc cap, E2E pass, fix baseline test failures, course status badge.
+      No architectural changes needed for Epic 3. Retro saved: epic-2-retro-2026-04-23.md.
+      Mode → idle, ready for prep sprint then Epic 3.
+  - ts: '2026-04-23'
+    decision: |
+      story-runner PASS for 2-3 (2 deferred: entity ID resolution inefficiency, missing flashcard/audio
+      cascade test coverage). 6/6 tasks, 5 ACs, 8 files. deleteCourse mutation with full cascade
+      (sections, sourceDocs, course-scoped quizzes/flashcardRooms/audioOverviews with children),
+      DeleteCourseDialog.vue, both course view pages updated. 3 Convex tests + 3 ATDD tests.
+      Code review PASS: 1 blocker fixed (audioOverviewInterjections cascade). PR #97 merged to dev.
+      Counters 3 this-run, 10 total. Epic 2 COMPLETE (3/3 stories). Retro optional — escalating.
+  - ts: '2026-04-23'
+    decision: |
+      story-runner PASS for 2-2 (2 deferred: icon collision, folder membership guard). 7/7 tasks, 5 ACs,
+      13 files. Course type in CreateVoidDialog, courses as void entries in FolderShellRail, Learn workspace
+      entry, folder-scoped learn page + course view. CourseCard/CreateCourseCard folderId-aware. 7 new
+      component tests. Code review PASS: 1 blocker fixed (delete guard), 2 deferred. PR #96 merged to dev.
+      Counters 2 this-run, 9 total. Advancing to 2-3.
+  - ts: '2026-04-23'
+    decision: |
+      story-runner PASS for 2-1 (2 deferred: generating/failed course card visibility, client-side
+      freeze detection timezone). 7/7 tasks, 5 ACs, 10 files. Learn Home page, CourseCard, CreateCourseCard,
+      StreakDisplay, learnProfile.getProfile query. 22 new component tests. Code review PASS: 0 blockers.
+      PR #95 merged to dev. Counters 1 this-run, 8 total. Advancing to 2-2.
+  - ts: '2026-04-23'
+    decision: |
+      Epic 1 retrospective complete. 5 action items, 3 team agreements (error handling from day 1,
+      accessibility baseline, post-epic E2E gate via Chrome MCP). Prep sprint: extract requireAuth,
+      aria-labels, source doc cap, E2E pass, code review checklist. No architectural changes needed
+      for Epic 2. Retro saved: epic-1-retro-2026-04-23.md. Mode → idle, ready for Epic 2.
+  - ts: '2026-04-22'
+    decision: |
+      story-runner PASS for 1-7 (0 deferred). 6/6 tasks, 8 ACs, 9 files. SourceSelector.vue, CourseCreator.vue,
+      /learn/create page, /learn/[courseId] placeholder. Error toasts added to 1-5/1-6 components (clearing deferred).
+      11 new component tests. PR #94 merged to dev. Epic 1 COMPLETE (7/7 stories). Counters 2 this-run, 7 total.
+  - ts: '2026-04-22'
+    decision: |
+      story-runner PASS for 1-6 (2 deferred: error handling toasts, optimistic pace update). 14/14 tasks, 7 ACs, 8 files.
+      updatePace + startCourse mutations, PaceSelector.vue, StartLearningButton.vue. 506 Convex tests (+8), 22 learn component tests (+7).
+      Code review PASS: 1 blocker fixed (double-start guard), 2 deferred. PR #93 merged to dev. Counters 1 this-run, 6 total. Advancing to 1-7.
+  - ts: '2026-04-22'
+    decision: |
+      story-runner PASS for 1-1 (1 deferred: courseSourceDocs missing by_userId index, 0 blockers, 11/11 ACs, 12 files, +11 Convex tests net).
+      PR #88 merged to dev. 4 new tables (courses, courseSections, courseSourceDocs, learnProfile), courseScoped flag on 3 existing tables,
+      folder-tab query filters, cascade update, export schemaVersion 4→5. Counters 0→1 this-run. Telegram notified. Advancing to 1-2.
+  - ts: '2026-04-22'
+    decision: |
+      START invoked for Learn Module. Fresh state created. V1.2 archives preserved.
+      DETERMINE_NEXT: epic-1 backlog → 1-1-convex-schema-course-tables. Story file created, runner spawned.
 
 run_log:
-  - ts: '2026-04-12'
+  - ts: '2026-04-24'
+    mode: running
+    note: |
+      3-2 PASS (PR #104). DETERMINE_NEXT: 3-3-section-void-ui-content-block-rendering (backlog).
+      Spawning bmad-story-runner for 3-3.
+  - ts: '2026-04-24'
+    mode: running
+    note: |
+      Escalation auto-resolved → proceed. Prep sprint retro skipped. DETERMINE_NEXT: epic-3 backlog →
+      3-1-section-generation-pipeline-multi-engine-orchestration. Epic 3 marked in-progress. Spawning
+      bmad-story-runner for 3-1.
+  - ts: '2026-04-24'
+    mode: running
+    note: |
+      prep-3-6 PASS (PR #102). Prep sprint COMPLETE (6/6). prep-sprint-epic-3-retrospective: optional.
+      Epic boundary detected. Next: epic-3 (backlog). Escalating for retro decision.
+  - ts: '2026-04-24'
+    mode: running
+    note: |
+      prep-3-5 PASS (PR #101). DETERMINE_NEXT: prep-3-6-course-status-badge (backlog).
+      Last prep story. Spawning bmad-story-runner for prep-3-6.
+  - ts: '2026-04-24'
+    mode: running
+    note: |
+      prep-3-4 E2E PASS (Chrome MCP, no PR). DETERMINE_NEXT: prep-3-5-fix-baseline-test-failures (backlog).
+      Spawning bmad-story-runner for prep-3-5.
+  - ts: '2026-04-24'
+    mode: running
+    note: |
+      prep-3-3 PASS (PR #100). DETERMINE_NEXT: prep-3-4-e2e-course-creation-learn-home (backlog).
+      Running E2E verification in main session (Chrome MCP not available to subagents).
+  - ts: '2026-04-24'
+    mode: running
+    note: |
+      prep-3-2 PASS (PR #99). DETERMINE_NEXT: prep-3-3-source-doc-count-cap (backlog).
+      Spawning bmad-story-runner for prep-3-3.
+  - ts: '2026-04-24'
+    mode: running
+    note: |
+      prep-3-1 PASS (PR #98). DETERMINE_NEXT: prep-3-2-aria-labels-outline-editor (backlog).
+      Spawning bmad-story-runner for prep-3-2.
+  - ts: '2026-04-23'
     mode: resume
     note: |
-      User answered "run retro". Invoked bmad-bmm-workflows-retrospective for Epic 7. Produced epic-7-retro-2026-04-12.md (seventh consecutive 100% epic; V1.2 closes the pre-GA sprint plan).
-      Branch chore/epic-7-retrospective; PR #26 opened against dev; squash-merged as c61086c; branch deleted remote.
-      sprint-status: epic-7 → done, epic-7-retrospective → done, retrospective_location bumped. last_retro field updated (5 new deferred items all from Story 7-1; 7-2/7-3 = 0).
-      No Epic 8 in planned sprint. Orchestrator mode → complete. Run counters: 10 stories this run, 10 cumulative. Project exits feature-development mode; next phase is pre-launch hardening.
-      Pre-launch checklist promoted: P0 pnpm lint/typecheck, P0 governing-law, P0 unified rate-limit. Telegram notified. Halting cleanly at COMPLETE.
-  - ts: '2026-04-12'
+      Resume invoked (idle → running). Epic 2 done + retro done. Prep sprint mandatory before Epic 3.
+      Added 6 prep items to sprint-status.yaml (requireAuth extraction, aria-labels, source doc cap,
+      E2E pass, baseline test fixes, course status badge). DETERMINE_NEXT: prep-3-1-extract-require-auth-shared-util.
+      Spawning bmad-story-runner.
+  - ts: '2026-04-23'
+    mode: running
+    note: |
+      2-3 PASS (PR #97). Epic 2 COMPLETE (3/3 stories). epic-2-retrospective: optional.
+      Epic boundary detected. Escalating for retro decision before advancing to Epic 3.
+  - ts: '2026-04-23'
+    mode: running
+    note: |
+      Epic 2 retro complete. User chose to prioritize all carried Epic 1 items before Epic 3.
+      Prep sprint mandatory. Mode → idle. Retro saved: epic-2-retro-2026-04-23.md.
+  - ts: '2026-04-23'
+    mode: running
+    note: |
+      2-2 PASS (PR #96). DETERMINE_NEXT: 2-3-course-deletion (backlog).
+      Story file created at ready-for-dev. Spawning bmad-story-runner for 2-3.
+  - ts: '2026-04-23'
+    mode: running
+    note: |
+      2-1 PASS (PR #95). DETERMINE_NEXT: 2-2-folder-scoped-learn-tab (backlog).
+      Story file created at ready-for-dev. Spawning bmad-story-runner for 2-2.
+  - ts: '2026-04-23'
     mode: resume
     note: |
-      User answered "1" → commit_current_work_then_resume. Committed 7 files (Editor.vue + ATDD test + story file + Convex deleteSet/updateCard/deleteCard + tests + Tab.vue editor wiring) as 4c3fa00.
-      Spawned bmad-story-runner for 7-3. Runner PASS: PR #25 merged fcc7c7c, 7 files, 7/7 tasks, 16/16 ACs, 0 deferred, 0 blockers.
-      Convex updateCard / deleteCard (atomic cardCount-- floor-0) / deleteSet (batched child-before-parent cascade via by_setId index, returns deletedCards). Identity+ownership gated, source-field immutability enforced server-side.
-      Editor.vue inline read/edit/confirm-delete swap, no portaled primitives. Tab.vue ellipsis menu + inline actions row + editor-branch above study-branch + polite live-region.
-      Schema unchanged (schemaVersion 4). Tests: 11 new [P0] Convex unit + 6 new Editor ATDD; pnpm test 256/8-skip; pnpm test:component flashcards 31/31. Reka-portal discipline preserved.
-      Counters 9→10 this-run. Epic 7 application stories 3/3 done with 0 cumulative deferred from 7-2/7-3. last_epic_complete_fired: 6→7. Telegram notified PASS.
-      Raising tier-3 epic-boundary escalation (epic-7-retrospective optional + final planned epic). Recommended run_retro_first (matches Epic 4/5/6 precedent). Halting.
-  - ts: '2026-04-12'
+      Resume invoked (idle → start). Epic 1 done + retro done. DETERMINE_NEXT: epic-2 backlog →
+      2-1-learn-home-page-empty-and-active-states. Epic 2 marked in-progress. Story file created
+      at ready-for-dev. Spawning bmad-story-runner for 2-1.
+  - ts: '2026-04-22'
     mode: resume
     note: |
-      Resume on 7-3. Sprint-status: 7-3 = ready-for-dev. Workspace dirty on feat branch with substantial in-progress impl
-      (Editor.vue + ATDD test + Convex deleteSet/updateCard/deleteCard mutations + tests + Tab.vue editor wiring + story file).
-      Spawning runner would halt dirty_workspace. Raising tier-3 escalation per 4-4 precedent;
-      recommended commit_current_work_then_resume. Telegram notified. Halting.
-  - ts: '2026-04-12'
+      1-7 PASS (PR #94). Epic 1 complete — all 7 stories done. epic-1-retrospective: optional.
+      Epic boundary detected. Escalating for retro decision before advancing to Epic 2.
+  - ts: '2026-04-22'
     mode: resume
     note: |
-      Spawned bmad-story-runner for 7-2. Runner PASS: PR #24 merged 2245fa9, 6 files, 9/9 tasks, 13/13 ACs, 0 deferred, 0 blockers.
-      New app/components/flashcards/Study.vue — card-by-card flip study surface. 3D CSS flip (rotateY + backface-visibility), progress X / N, Next/Previous disabled-at-0, inline completion summary with Restart + Back to list.
-      Keyboard: document-level keydown (Space/ArrowLeft/ArrowRight/Escape) with INPUT/TEXTAREA target guard. Touch: @vueuse/core useSwipe at 40px threshold. Button parity preserved.
-      Source citation: inline reveal using existing ChatCitationBadge + ChatSourceCard (no portaled primitives — Epic 5/6 retro standing rule preserved for V1.x).
-      prefers-reduced-motion: pure CSS @media query (no JS matchMedia). Tab.vue rewired — activeSetId ref branch renders Study; 7-1 placeholder removed.
-      Zero new persisted tables, zero cascade changes, zero schemaVersion bump (stays at 4) — ephemeral session state per 7-1 V1.2 Dev Notes framing.
-      ATDD red-first authored pre-impl (8 assertions). Full coverage (12 assertions) across AC #11 a–h + unavailable + empty.
-      Test counters: pnpm test 245/8-skip (unchanged); pnpm test:component 129/78-skip (was 109/78; +20 net new).
-      Counters 8→9 this-run. Advancing to 7-3.
-  - ts: '2026-04-12'
+      1-6 PASS (PR #93). DETERMINE_NEXT: 1-7-course-creator-ui-full-flow (backlog).
+      Created story file from epics definition. Spawning bmad-story-runner for 1-7.
+  - ts: '2026-04-22'
     mode: resume
     note: |
-      Spawned bmad-story-runner for 7-1. Runner PASS: PR #23 merged 801b603, 18 files, 10/10 tasks, 13/13 ACs, 245 unit + 109 component PASS (+24 net), 5 deferred, 0 blockers.
-      New flashcardSets + flashcards Convex tables (with userId mirror); flashcards.createSetWithCards (folder-ownership gated) + listByFolder + getSetWithCards. Server: flashcard-prompt.ts (zod-validated, tolerant JSON parse) + POST /api/flashcards/generate (search → completion → mutation pipeline). UI: useFlashcards composable + flashcards/Tab.vue (zero Reka-portaled primitives — Epic 6 retro Team Agreement preserved). Folder page Flash Cards tab inserted between Chat and Quiz.
-      Epic 6 retro prep folded inline: P0 #1 chat-input baseline RESOLVED via one-line path fix (ChatInput.vue → Input.vue); P0 #2 cascade re-audit RESOLVED — deleteAllFlashcardsForUser + deleteAllFlashcardSetsForUser inserted child-before-parent before documents in deleteAccountCascade with isolation test. Data export schema v3 → v4 with flashcardSets.json + flashcards.json.
-      Counters 7→8 this-run. Telegram notified. Advancing to 7-2.
-  - ts: '2026-04-12'
-    mode: resume
-    note: |
-      Epic 6 boundary user answer: run_retro_first. Invoked bmad-bmm-workflows-retrospective. Produced epic-6-retro-2026-04-12.md (cumulative 0 new deferred items — first epic with that property). Opened PR #22 against dev, merged via squash 7664f9b. Local rebase resolved one orchestrator-state conflict (mode/phase divergence at retro boundary), 1 prior boundary commit dropped as already-upstream. sprint-status: epic-6 → done, epic-6-retrospective → done, retrospective_location bumped. last_retro field updated to epic-6 with 7 prep items. Counters unchanged at 7/7. Raising Epic 7 prep escalation (Epic 5→6 boundary precedent: proceed_to_first_story_with_prep_inside).
-  - ts: '2026-04-12'
-    mode: resume
-    note: |
-      Spawned bmad-story-runner for 6-3. Runner PASS: PR #21 merged 4bea80e, 11 files, 8/8 tasks, 13/13 ACs, 221 unit + 34/34 quiz components, 0 deferred, 0 blockers.
-      updateQuestion + deleteQuiz mutations (child-before-parent cascade matches accountDeletion); review-mode hydration in Taker; inline delete-confirm preserves Reka-portal discipline (no portaled primitives); source citation immutability preserved on edit.
-      Epic 6 application stories 3/3 complete, cumulative 0 deferred items across 6-1/6-2/6-3 — unusually clean.
-      epic-6-retrospective: optional. Raising tier-3 epic-boundary escalation; recommended run_retro_first (matches Epic 5 precedent). Counters 6→7 this-run. Telegram will notify. Halting.
-  - ts: '2026-04-12'
-    mode: resume
-    note: |
-      Spawned bmad-story-runner for 6-2. Runner PASS: PR #20 merged efd0693, 17 files, 10/10 tasks, 11/11 ACs, unit+component PASS (212/8-skip; quiz suite 17/17), 0 deferred, 0 blockers.
-      New quizAttempts table + submitAttempt/listAttempts. Cascade re-audit child-before-parent preserved. Export schema v2→v3 with quizAttempts.json. Reka-portal safety maintained (RadioGroup over portal primitives). ATDD honored (6 failing tests first, then impl).
-      Runner self-committed status changes (201c348) and verdict (2ebef53). Counters 5→6 this-run. Telegram notified. Advancing to 6-3.
-  - ts: '2026-04-12'
-    mode: resume
-    note: |
-      Spawned bmad-story-runner for 6-1 (after user answer: proceed_to_6_1_with_prep_inside, state checkpointed c488b02).
-      Runner PASS: PR #19 merged 0edd8ef, 22 files, 13/13 tasks, lint+typecheck+unit+component PASS, 0 deferred, 0 blockers.
-      Retro prep items addressed inside story: #2 (prompt spike), #3 (Reka-portal — QuizTab extracted, Decision+PR), #5 (documentActions baseline triaged + skipped), #6 (cascade re-audit). Runner self-updated sprint-status 6-1 → done, epic-6 → in-progress.
-      Counters 4→5 this-run. 5-story checkpoint tripped. Telegram notified (PASS + checkpoint). Proceeding to 6-2.
-  - ts: '2026-04-12'
-    mode: resume
-    note: |
-      State on entry: mode=escalated, phase=epic-boundary, story=epic-5-retrospective (stale — retro merged earlier).
-      Re-classified next item: epic-6 backlog → 6-1-generate-quiz-from-folder-documents. Read epic-5-retro for Epic 6 prep plan (8 items). P0 #3 (Reka-portal mountSuspended) explicitly flagged in retro as needing its own PR — does not cleanly fit Epic 5 "prep-inside" precedent. Raising tier-3 epic-boundary escalation with 3 options; recommended proceed_to_6_1_with_prep_inside. Halting.
-  - ts: '2026-04-12'
+      Resume invoked. Last verdict: 1-5 PASS (PR #92). DETERMINE_NEXT: 1-6-pace-selector-and-course-start (backlog).
+      Story file exists at ready-for-dev. Spawning bmad-story-runner.
+  - ts: '2026-04-22'
     mode: start
     note: |
-      Paths resolved. First non-done/non-optional item: 4-4 (review). Workspace dirty. Escalating.
-  - ts: '2026-04-12'
-    mode: escalate
-    note: |
-      User: commit_current_work_then_resume. Committed 49ea136. Spawned bmad-story-runner for 4-4.
-  - ts: '2026-04-12'
-    mode: resume
-    note: |
-      Runner PASS for 4-4. Escalated base-branch; user: dev. Pushed, PR #13, merged 700faab. 4-4 → done.
-  - ts: '2026-04-12'
-    mode: resume
-    note: |
-      Escalated epic-boundary 4→5. User: run_epic_4_retrospective_first. Ran bmad-bmm-workflows-retrospective; produced epic-4-retro-2026-04-12.md. PR #14 merged 0892314. epic-4 + epic-4-retrospective → done. Next: escalate prep-sprint decision for epic 5.
-  - ts: '2026-04-12'
-    mode: resume
-    note: |
-      Workspace checkpoint ab5a506. Spawned bmad-story-runner for 5-3. Returned PASS (PR #17 merged ff3ae38, 6 deferred, 0 blockers, 10 new tests). sprint-status 5-3 → done. All epic-5 application stories complete. Raising epic-boundary escalation (epic-5-retrospective optional) per spec.
+      Spawned bmad-story-runner for 1-1. Runner PASS: PR #88 merged to dev, 12 files, 6/6 tasks, 11/11 ACs,
+      447 total tests pass (0 regressions), 1 deferred (courseSourceDocs by_userId index), 0 blockers.
+      Code review PASS with 2 findings fixed inline, 1 deferred. Counters 0→1 this-run.
+      User requested archiving of old V1.2 artifacts — pausing orchestrator loop to handle.

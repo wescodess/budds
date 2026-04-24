@@ -1,7 +1,8 @@
 import { v } from 'convex/values'
-import { mutation, query } from './_generated/server'
+import { mutation, query, internalMutation } from './_generated/server'
 import type { Id, Doc } from './_generated/dataModel'
 import type { MutationCtx, QueryCtx } from './_generated/server'
+import { requireAuth } from './lib/auth'
 
 const questionTypeValidator = v.union(
   v.literal('multiple-choice'),
@@ -27,12 +28,6 @@ const settingsValidator = v.object({
   showAllQuestions: v.boolean(),
   immediateFeedback: v.boolean(),
 })
-
-async function requireAuth(ctx: QueryCtx | MutationCtx) {
-  const identity = await ctx.auth.getUserIdentity()
-  if (!identity) throw new Error('Unauthenticated')
-  return identity.tokenIdentifier
-}
 
 async function requireQuiz(ctx: QueryCtx | MutationCtx, quizId: Id<'quizzes'>, userId: string) {
   const quiz = await ctx.db.get(quizId)
@@ -74,6 +69,7 @@ export const createWithQuestions = mutation({
     language: v.optional(v.string()),
     creationMethod: v.optional(v.union(v.literal('manual'), v.literal('auto_generated'))),
     questions: v.array(questionInput),
+    courseScoped: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx)
@@ -94,6 +90,7 @@ export const createWithQuestions = mutation({
       language: args.language,
       creationMethod: args.creationMethod ?? 'auto_generated',
       questionCount: args.questions.length,
+      courseScoped: args.courseScoped,
     })
 
     for (const q of args.questions) {
@@ -125,6 +122,54 @@ export const createWithQuestions = mutation({
   },
 })
 
+export const createCourseScopedQuiz = internalMutation({
+  args: {
+    userId: v.string(),
+    folderId: v.id('folders'),
+    title: v.string(),
+    model: v.optional(v.string()),
+    difficulty: v.optional(v.string()),
+    questions: v.array(questionInput),
+  },
+  handler: async (ctx, args) => {
+    const quizId = await ctx.db.insert('quizzes', {
+      userId: args.userId,
+      folderId: args.folderId,
+      title: args.title.trim().slice(0, 120) || 'Section Quiz',
+      status: 'ready',
+      model: args.model,
+      creationMethod: 'auto_generated',
+      difficulty: args.difficulty,
+      questionCount: args.questions.length,
+      courseScoped: true,
+    })
+
+    for (const q of args.questions) {
+      let resolvedDocId: Id<'documents'> | undefined
+      if (q.sourceDocumentId) {
+        const normalized = ctx.db.normalizeId('documents', q.sourceDocumentId)
+        if (normalized) resolvedDocId = normalized
+      }
+
+      await ctx.db.insert('quizQuestions', {
+        quizId,
+        userId: args.userId,
+        order: q.order,
+        question: q.question,
+        type: q.type,
+        options: q.options,
+        correctAnswer: q.correctAnswer,
+        explanation: q.explanation,
+        sourceDocumentId: resolvedDocId,
+        sourceChunkContent: q.sourceChunkContent,
+        sourceFilename: q.sourceFilename,
+      })
+    }
+
+    return { quizId }
+  },
+})
+
 export const listByFolder = query({
   args: { folderId: v.id('folders') },
   handler: async (ctx, args) => {
@@ -136,13 +181,15 @@ export const listByFolder = query({
     const folder = await ctx.db.get(args.folderId)
     if (!folder || folder.userId !== userId) return []
 
-    const rows = await ctx.db
+    const allRows = await ctx.db
       .query('quizzes')
       .withIndex('by_userId_and_folderId', (q) =>
         q.eq('userId', userId).eq('folderId', args.folderId),
       )
       .order('desc')
       .collect()
+
+    const rows = allRows.filter((r) => r.courseScoped !== true)
 
     return await Promise.all(
       rows.map(async (row) => {
