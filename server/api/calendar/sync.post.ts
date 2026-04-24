@@ -1,9 +1,8 @@
-import { ConvexHttpClient } from 'convex/browser'
 import { api } from '../../../convex/_generated/api'
 import type { Id } from '../../../convex/_generated/dataModel'
-import { readConfiguredRuntimeValue } from '../../utils/runtime-config'
 import { refreshGoogleAccessToken } from '../../utils/calendar-tokens'
 import { createGoogleCalendarEvent } from '../../utils/google-calendar'
+import { makeConvexClient } from '../../utils/convex-client'
 import {
   determineSessionType,
   buildEventTitle,
@@ -12,20 +11,6 @@ import {
   findNextPreferredSlot,
   preferredDayNumbersFromStrings,
 } from '../../utils/session-composition'
-
-function makeConvexClient(event: any): ConvexHttpClient | null {
-  const token = event.context.convexToken as string | undefined
-  const runtimeConfig = useRuntimeConfig(event)
-  const convexUrl = readConfiguredRuntimeValue(
-    runtimeConfig.public?.convex?.url,
-    'NUXT_PUBLIC_CONVEX_URL',
-    'CONVEX_URL',
-  )
-  if (!token || !convexUrl) return null
-  const client = new ConvexHttpClient(convexUrl)
-  client.setAuth(token)
-  return client
-}
 
 export default defineEventHandler(async (event) => {
   getConvexTokenIdentifier(event)

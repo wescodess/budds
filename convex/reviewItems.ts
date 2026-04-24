@@ -3,6 +3,7 @@ import { query, mutation, internalMutation } from './_generated/server'
 import { requireAuth } from './lib/auth'
 import { computeSM2 } from './lib/sm2'
 import { updateStreakForActivity } from './learnProfile'
+import { getTodayInTimezone } from './lib/dates'
 
 function getTomorrowDate(): string {
   const d = new Date()
@@ -11,17 +12,6 @@ function getTomorrowDate(): string {
 }
 
 function getTodayDate(): string {
-  return new Date().toISOString().slice(0, 10)
-}
-
-function getTodayInTimezone(timezone?: string): string {
-  if (timezone) {
-    try {
-      return new Date().toLocaleDateString('en-CA', { timeZone: timezone })
-    } catch {
-      // fall through to UTC
-    }
-  }
   return new Date().toISOString().slice(0, 10)
 }
 
