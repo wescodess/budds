@@ -1,41 +1,45 @@
 mode: running
 current_phase: epic-story
-current_story: 7-1-service-worker-and-offline-detection
+current_story: 7-2-section-content-caching
 current_epic: 7
 retry_count: 0
 last_epic_complete_fired: prep-7
 
 last_verdict:
   subagent: bmad-story-runner
-  story: 7-1-service-worker-and-offline-detection
+  story: 7-2-section-content-caching
   epic: 7
   status: PASS
-  pr_url: 'https://github.com/wescodess/budds/pull/129'
-  branch: feat/7-1-service-worker-offline-detection
-  commit_sha: 'db8d903f668d06b1a8a67cd45fd53c88e9bd8839'
-  files_changed: 8
-  tasks_completed: 6
-  tasks_total: 6
-  findings_deferred: 1
+  pr_url: 'https://github.com/wescodess/budds/pull/130'
+  branch: feat/7-2-section-content-caching
+  commit_sha: 'c7acfa6c0c9f0d7cf167302c234c24af1980af19'
+  files_changed: 12
+  tasks_completed: 8
+  tasks_total: 8
+  findings_deferred: 4
   lint_pass: null
   typecheck_pass: true
   unit_tests_pass: true
   e2e_tests_pass: null
   review_pass: true
   summary: >
-    Story 7-1 PASS (6/6 tasks, 4 ACs, 8 files). Leveraged existing SW infrastructure
-    (public/sw.js, pwa.client.ts plugin, manifest.webmanifest) rather than adding @vite-pwa/nuxt.
-    Created useOnlineStatus composable (navigator.onLine + online/offline events), OfflineBanner.vue
-    (warm amber bg-amber-500/10, WifiOff icon, slide/fade Transition, role=status + aria-live=polite),
-    wired into app.vue inside ClientOnly above NuxtLayout. Enhanced SW with network-first caching for
-    learn section routes via LEARN_SECTION_PATTERN regex (both /app/learn/ and /app/folders/ paths),
-    separate budds-learn-sections-v1 cache namespace. Code review: 2 blockers fixed (theme-aware text
-    color dark:text-amber-200 + text-amber-700, removed unused vi import), 1 deferred (unbounded SW
-    section cache eviction). 5 new component tests. 740 Convex + 423 component tests pass. No new
-    type errors. PR #129 merged to dev.
+    Story 7-2 PASS (8/8 tasks, 5 ACs, 12 files). Created useOfflineCache composable wrapping IndexedDB
+    (budds-offline DB, sections store) for section content caching and Cache API (budds-learn-audio-v1)
+    for audio files. Added getOfflineCachePayload Convex query that bundles text, quiz questions,
+    flashcard cards, and resolved audio storage URLs into a single cacheable payload. Server endpoint
+    /api/learn/section-cache-payload.get.ts fetches via ConvexHttpClient. Section void page caches
+    content fire-and-forget after completeSection succeeds, sets offlineAvailable=true via mutation.
+    When offline and Convex data unavailable, falls back to IndexedDB cached data with amber
+    "Viewing cached offline version" banner. CourseViewBody shows HardDriveDownload (filled) for
+    cached sections, Download (outlined) for completed-not-cached. SW activate handler preserves
+    budds-learn-audio-v1 cache namespace. Code review: 2 blockers fixed (dead onGenerationStarted
+    function + helperPane destructure removed, checkCacheStatus optimized to single IndexedDB
+    connection), 4 deferred (stale audio URLs in IDB, no IDB quota management, quiz answers in
+    public query, hardcoded dark-mode color). 5 new Convex integration tests + 6 new component
+    tests. 746 Convex + 429 component tests pass. PR #130 merged to dev.
   block_reason: null
   block_context: null
-  at: '2026-04-24T00:10:00Z'
+  at: '2026-04-24T02:25:00Z'
 last_retro: 'epic-6-retro-2026-04-24.md'
 
 config:
@@ -60,8 +64,8 @@ paths:
   ux_spec: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/ux-design-learn-module.md
 
 counters:
-  stories_completed_this_run: 1
-  stories_completed_total: 42
+  stories_completed_this_run: 2
+  stories_completed_total: 43
 
 escalation:
   pending: null
