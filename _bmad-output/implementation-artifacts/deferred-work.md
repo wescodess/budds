@@ -1,5 +1,10 @@
 # Deferred Work
 
+## Deferred from: code review of 6-4-missed-session-rescheduling (2026-04-23)
+
+- **Slot-finding logic duplicated in Convex action.** `checkMissedSessions` internal action in `convex/calendarEvents.ts` contains a full copy of the `findNextPreferredSlot` algorithm (day mapping, Intl.DateTimeFormat loop, timezone offset calculation). Architecturally forced: Convex functions cannot import from `server/utils/`. If more calendar features land, consider extracting slot logic to `convex/lib/calendar-slots.ts` as a pure function usable by both Convex and server code.
+- **Multiple missed events for the same user all get rescheduled to the same time slot.** If a user misses 3 events for 3 different courses, `findNextPreferredSlot` returns the same next-available slot for all three, creating overlapping Google Calendar events. The sync endpoint has the same limitation. Consider staggering slots by tracking already-booked times during the rescheduling loop.
+
 ## Deferred from: code review of 6-3-calendar-event-creation-and-adaptive-composition (2026-04-23)
 
 - **`findNextPreferredSlot` always schedules at `morningStart` time.** All courses get events at the same configured morning start time on the same preferred day. A more sophisticated implementation would spread events across the user's available window (morning for new content, evening for review) and stagger multiple courses across different days. Acceptable for MVP.

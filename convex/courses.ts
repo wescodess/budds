@@ -1,5 +1,5 @@
 import { v } from 'convex/values'
-import { mutation, query } from './_generated/server'
+import { internalQuery, mutation, query } from './_generated/server'
 import { internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import { requireAuth } from './lib/auth'
@@ -387,5 +387,12 @@ export const markFailed = mutation({
       status: 'failed',
       updatedAt: Date.now(),
     })
+  },
+})
+
+export const getById = internalQuery({
+  args: { courseId: v.id('courses') },
+  handler: async (ctx, args) => {
+    return await ctx.db.get(args.courseId)
   },
 })
