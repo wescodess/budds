@@ -284,7 +284,7 @@ export const updateDocumentStatus = internalMutation({
   handler: async (ctx, args) => {
     const patch: Record<string, unknown> = {
       status: args.status,
-      failureReason: args.failureReason,
+      failureReason: args.status !== 'failed' ? undefined : args.failureReason,
     }
     if (args.indexJobId !== undefined) patch.indexJobId = args.indexJobId
     if (args.r2Key !== undefined) patch.r2Key = args.r2Key

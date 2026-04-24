@@ -254,7 +254,7 @@ const isNotReady = computed(() => {
       />
 
       <div v-if="usingOfflineData" class="mx-auto w-full max-w-3xl px-4 pt-4">
-        <div class="rounded-lg bg-amber-500/10 px-4 py-3 text-sm text-amber-400">
+        <div class="rounded-lg bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-200">
           Viewing cached offline version
         </div>
       </div>

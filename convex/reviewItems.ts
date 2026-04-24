@@ -238,6 +238,7 @@ export const submitReview = mutation({
     const item = await ctx.db.get(reviewItemId)
     if (!item) throw new Error('Review item not found')
     if (item.userId !== userId) throw new Error('Not authorized')
+    if (item.flagged) throw new Error('Cannot review a flagged item')
 
     const profile = await ctx.db
       .query('learnProfile')

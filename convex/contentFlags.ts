@@ -141,7 +141,7 @@ export const getFlagRateForCourse = query({
           const questions = await ctx.db
             .query('quizQuestions')
             .withIndex('by_quizId', (q) => q.eq('quizId', quizId))
-            .collect()
+            .take(200)
           totalItems += questions.length
           flaggedItems += questions.filter((q) => q.flagged === true).length
         }
@@ -152,7 +152,7 @@ export const getFlagRateForCourse = query({
           const cards = await ctx.db
             .query('flashcardRoomCards')
             .withIndex('by_roomId', (q) => q.eq('roomId', roomId))
-            .collect()
+            .take(200)
           totalItems += cards.length
           flaggedItems += cards.filter((c) => c.flagged === true).length
         }

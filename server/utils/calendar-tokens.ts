@@ -1,4 +1,4 @@
-const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
+import { GOOGLE_TOKEN_URL } from './google-constants'
 
 export async function refreshGoogleAccessToken(refreshTokenBase64: string): Promise<{
   accessToken: string

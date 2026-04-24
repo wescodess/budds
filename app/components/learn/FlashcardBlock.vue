@@ -172,6 +172,10 @@ if (import.meta.client) {
       else if (direction === 'right') prev()
     },
   })
+
+  onUnmounted(() => {
+    if (suppressTimer) clearTimeout(suppressTimer)
+  })
 }
 </script>
 
