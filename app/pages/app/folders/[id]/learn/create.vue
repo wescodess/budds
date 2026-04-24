@@ -6,7 +6,7 @@ const { folderId } = ctx
 </script>
 
 <template>
-  <div class="min-h-0 flex-1 overflow-y-auto bg-background">
+  <div class="min-h-0 w-full flex-1 overflow-y-auto bg-background">
     <LearnCourseCreator :folder-id="folderId" />
   </div>
 </template>
