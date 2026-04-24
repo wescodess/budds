@@ -108,12 +108,12 @@ development_status:
   epic-5-retrospective: optional
 
   # === Epic 6: Calendar Integration (Fast-Follow) ===
-  epic-6: in-progress
+  epic-6: done
   6-1-google-calendar-oauth-connection: done
   6-2-learning-session-preferences: done
   6-3-calendar-event-creation-and-adaptive-composition: done
   6-4-missed-session-rescheduling: done
-  6-5-calendar-disconnection-and-cleanup: backlog
+  6-5-calendar-disconnection-and-cleanup: done
   epic-6-retrospective: optional
 
   # === Epic 7: Offline Access (Fast-Follow) ===
