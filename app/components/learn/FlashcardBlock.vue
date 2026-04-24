@@ -4,26 +4,54 @@ import { usePointerSwipe } from '@vueuse/core'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 
-const props = defineProps<{ roomId: string }>()
+interface OfflineFlashcardData {
+  cards: Array<{
+    term: string
+    definition: string
+  }>
+}
 
-const roomQuery = import.meta.client
+const props = defineProps<{
+  roomId: string
+  offlineData?: OfflineFlashcardData
+  isOffline?: boolean
+  sectionId?: string
+  courseId?: Id<'courses'>
+}>()
+
+const roomQuery = import.meta.client && !props.isOffline && props.roomId
   ? useConvexQuery(
       api.flashcardRooms.getRoom,
       computed(() => ({ roomId: props.roomId as Id<'flashcardRooms'> })),
     )
   : { data: ref(null) }
 
-const roomData = computed(() => roomQuery.data?.value as {
-  room: { title: string }
-  cards: Array<{
-    _id: string
-    term: string
-    definition: string
-    displayOrder: number
-    flagged?: boolean
-    correctedDefinition?: string
-  }>
-} | null)
+const roomData = computed(() => {
+  if (props.isOffline && props.offlineData) {
+    return {
+      room: { title: 'Flashcards' },
+      cards: props.offlineData.cards.map((c, i) => ({
+        _id: `offline-${i}`,
+        term: c.term,
+        definition: c.definition,
+        displayOrder: i,
+        flagged: false as boolean | undefined,
+        correctedDefinition: undefined as string | undefined,
+      })),
+    }
+  }
+  return roomQuery.data?.value as {
+    room: { title: string }
+    cards: Array<{
+      _id: string
+      term: string
+      definition: string
+      displayOrder: number
+      flagged?: boolean
+      correctedDefinition?: string
+    }>
+  } | null
+})
 
 const cards = computed(() => roomData.value?.cards ?? [])
 
@@ -36,7 +64,7 @@ const flagCorrectedDef = ref('')
 const flagSaving = ref(false)
 const flagError = ref('')
 
-const flagMutation = import.meta.client
+const flagMutation = import.meta.client && !props.isOffline
   ? useConvexMutation(api.contentFlags.flagFlashcard)
   : { mutate: async () => ({ success: true }) }
 
@@ -45,13 +73,22 @@ const progressLabel = computed(() =>
   cards.value.length === 0 ? '0/0' : `${currentIndex.value + 1}/${cards.value.length}`,
 )
 
+const practiceComplete = ref(false)
+const offlineAttempts = props.isOffline ? useOfflineAttempts() : null
+
 function effectiveDefinition(card: { definition: string; flagged?: boolean; correctedDefinition?: string } | null) {
   if (!card) return ''
   return (card.flagged && card.correctedDefinition) ? card.correctedDefinition : card.definition
 }
 
-function next() {
-  if (currentIndex.value >= cards.value.length - 1) return
+async function next() {
+  if (currentIndex.value >= cards.value.length - 1) {
+    if (!practiceComplete.value && offlineAttempts && props.sectionId && props.courseId) {
+      practiceComplete.value = true
+      await offlineAttempts.queueFlashcardPractice(props.sectionId, props.courseId)
+    }
+    return
+  }
   currentIndex.value++
   isFlipped.value = false
   flaggingOpen.value = false
@@ -144,6 +181,7 @@ if (import.meta.client) {
       <div class="flex items-center gap-2">
         <Layers class="h-4 w-4 text-amber-500" />
         <span class="text-xs font-medium uppercase tracking-wide text-stone-400">Key Concepts</span>
+        <span v-if="isOffline" class="text-xs text-amber-400">Offline</span>
       </div>
       <span class="text-xs text-stone-500">{{ progressLabel }}</span>
     </div>
@@ -214,6 +252,7 @@ if (import.meta.client) {
         </button>
 
         <button
+          v-if="!isOffline"
           type="button"
           class="inline-flex items-center gap-1 text-xs text-stone-500 transition-colors hover:text-amber-400"
           data-testid="flag-button"
@@ -235,7 +274,7 @@ if (import.meta.client) {
         </button>
       </div>
 
-      <div v-if="flaggingOpen" class="mt-3 space-y-2 rounded-lg border border-stone-700 bg-stone-900 p-3" data-testid="flag-editor">
+      <div v-if="flaggingOpen && !isOffline" class="mt-3 space-y-2 rounded-lg border border-stone-700 bg-stone-900 p-3" data-testid="flag-editor">
         <label class="block text-xs text-stone-400">
           Corrected definition
           <textarea

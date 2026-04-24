@@ -1,8 +1,9 @@
 import { ref } from 'vue'
 
 const DB_NAME = 'budds-offline'
-const DB_VERSION = 1
+const DB_VERSION = 2
 const SECTION_STORE = 'sections'
+const ATTEMPTS_STORE = 'offlineAttempts'
 const AUDIO_CACHE_NAME = 'budds-learn-audio-v1'
 
 interface CachedSection {
@@ -35,6 +36,22 @@ interface CachedSection {
   cachedAt: number
 }
 
+export interface OfflineAttempt {
+  id?: number
+  type: 'quiz-retake' | 'flashcard-practice' | 'section-review'
+  sectionId: string
+  courseId: string
+  timestamp: number
+  data: {
+    practiceScore?: number
+    quizCorrect?: number
+    quizTotal?: number
+    reviewItemId?: string
+    quality?: number
+  }
+  synced: boolean
+}
+
 function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION)
@@ -42,6 +59,11 @@ function openDB(): Promise<IDBDatabase> {
       const db = request.result
       if (!db.objectStoreNames.contains(SECTION_STORE)) {
         db.createObjectStore(SECTION_STORE, { keyPath: 'sectionId' })
+      }
+      if (!db.objectStoreNames.contains(ATTEMPTS_STORE)) {
+        const store = db.createObjectStore(ATTEMPTS_STORE, { keyPath: 'id', autoIncrement: true })
+        store.createIndex('by_synced', 'synced', { unique: false })
+        store.createIndex('by_sectionId', 'sectionId', { unique: false })
       }
     }
     request.onsuccess = () => resolve(request.result)
@@ -112,6 +134,62 @@ async function getAudioFromCache(url: string): Promise<Response | undefined> {
   } catch {
     return undefined
   }
+}
+
+export async function addOfflineAttempt(attempt: Omit<OfflineAttempt, 'id' | 'synced'>): Promise<number> {
+  const db = await openDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(ATTEMPTS_STORE, 'readwrite')
+    const request = tx.objectStore(ATTEMPTS_STORE).add({ ...attempt, synced: false })
+    request.onsuccess = () => { db.close(); resolve(request.result as number) }
+    request.onerror = () => { db.close(); reject(request.error) }
+  })
+}
+
+export async function getUnsyncedAttempts(): Promise<OfflineAttempt[]> {
+  const db = await openDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(ATTEMPTS_STORE, 'readonly')
+    const index = tx.objectStore(ATTEMPTS_STORE).index('by_synced')
+    const request = index.getAll(IDBKeyRange.only(false))
+    request.onsuccess = () => { db.close(); resolve(request.result) }
+    request.onerror = () => { db.close(); reject(request.error) }
+  })
+}
+
+export async function markAttemptSynced(id: number): Promise<void> {
+  const db = await openDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(ATTEMPTS_STORE, 'readwrite')
+    const store = tx.objectStore(ATTEMPTS_STORE)
+    const getReq = store.get(id)
+    getReq.onsuccess = () => {
+      if (getReq.result) {
+        store.put({ ...getReq.result, synced: true })
+      }
+      tx.oncomplete = () => { db.close(); resolve() }
+    }
+    getReq.onerror = () => { db.close(); reject(getReq.error) }
+  })
+}
+
+export async function clearSyncedAttempts(): Promise<void> {
+  const db = await openDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(ATTEMPTS_STORE, 'readwrite')
+    const store = tx.objectStore(ATTEMPTS_STORE)
+    const index = store.index('by_synced')
+    const request = index.openCursor(IDBKeyRange.only(true))
+    request.onsuccess = () => {
+      const cursor = request.result
+      if (cursor) {
+        cursor.delete()
+        cursor.continue()
+      }
+    }
+    tx.oncomplete = () => { db.close(); resolve() }
+    tx.onerror = () => { db.close(); reject(tx.error) }
+  })
 }
 
 export function useOfflineCache() {
