@@ -7,11 +7,29 @@ interface ContentBlock {
   entityType?: string
   content?: string
   order: number
+  quizData?: {
+    questions: Array<{
+      question: string
+      type: string
+      options?: string[]
+      correctAnswer: string
+      explanation?: string
+      order: number
+    }>
+  }
+  flashcardData?: {
+    cards: Array<{
+      term: string
+      definition: string
+    }>
+  }
 }
 
 const props = defineProps<{
   contentBlocks: ContentBlock[]
   courseId: Id<'courses'>
+  isOffline?: boolean
+  sectionId?: string
 }>()
 
 const emit = defineEmits<{
@@ -66,14 +84,22 @@ onMounted(() => {
       />
 
       <LearnQuizBlock
-        v-else-if="block.type === 'quiz' && block.entityId"
-        :quiz-id="block.entityId"
+        v-else-if="block.type === 'quiz' && (block.entityId || (isOffline && block.quizData))"
+        :quiz-id="block.entityId ?? ''"
+        :offline-data="isOffline ? block.quizData : undefined"
+        :is-offline="isOffline ?? false"
+        :section-id="sectionId"
+        :course-id="courseId"
         @quiz-completed="emit('quizCompleted', $event)"
       />
 
       <LearnFlashcardBlock
-        v-else-if="block.type === 'flashcard' && block.entityId"
-        :room-id="block.entityId"
+        v-else-if="block.type === 'flashcard' && (block.entityId || (isOffline && block.flashcardData))"
+        :room-id="block.entityId ?? ''"
+        :offline-data="isOffline ? block.flashcardData : undefined"
+        :is-offline="isOffline ?? false"
+        :section-id="sectionId"
+        :course-id="courseId"
       />
 
       <LearnAudioBlock

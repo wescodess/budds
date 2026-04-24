@@ -14,6 +14,7 @@ const sectionId = computed(() => route.params.sectionId as Id<'courseSections'>)
 
 const { isOnline } = useOnlineStatus()
 const { cacheSectionContent, getCachedSection } = useOfflineCache()
+const { isSyncing, pendingCount } = useOfflineSync()
 
 const offlineData = ref<CachedSection | null>(null)
 const usingOfflineData = ref(false)
@@ -256,6 +257,12 @@ const isNotReady = computed(() => {
         </div>
       </div>
 
+      <div v-if="isSyncing && pendingCount > 0" class="mx-auto w-full max-w-3xl px-4 pt-2">
+        <div class="rounded-lg bg-primary/10 px-4 py-2 text-xs text-primary">
+          Syncing {{ pendingCount }} offline attempt{{ pendingCount !== 1 ? 's' : '' }}...
+        </div>
+      </div>
+
       <div v-if="section?.failureNotice && !usingOfflineData" class="mx-auto w-full max-w-3xl px-4 pt-4">
         <div class="rounded-lg bg-primary/10 px-4 py-3 text-sm text-primary">
           {{ section.failureNotice }}
@@ -282,6 +289,8 @@ const isNotReady = computed(() => {
           <LearnSectionBlockRenderer
             :content-blocks="contentBlocks"
             :course-id="courseId"
+            :is-offline="usingOfflineData"
+            :section-id="sectionId"
             @block-viewed="handleBlockViewed"
             @quiz-completed="handleQuizCompleted"
           />
