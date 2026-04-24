@@ -1,6 +1,7 @@
 import { v } from 'convex/values'
 import { internalMutation, internalQuery, mutation, query } from './_generated/server'
 import { requireAuth } from './lib/auth'
+import type { Doc } from './_generated/dataModel'
 
 export const getByUser = query({
   args: {},
@@ -183,5 +184,28 @@ export const refreshMyTokens = mutation({
       accessToken: args.accessToken,
       expiresAt: args.expiresAt,
     })
+  },
+})
+
+export const getAllConnectedUserIds = internalQuery({
+  args: {},
+  handler: async (ctx): Promise<string[]> => {
+    const connections = await ctx.db
+      .query('calendarConnections')
+      .take(500)
+    const connected = connections.filter(c => c.status === 'connected')
+    return Array.from(new Set(connected.map(c => c.userId)))
+  },
+})
+
+export const getConnectionByUser = internalQuery({
+  args: { userId: v.string() },
+  handler: async (ctx, args): Promise<Doc<'calendarConnections'> | null> => {
+    const connection = await ctx.db
+      .query('calendarConnections')
+      .withIndex('by_userId', q => q.eq('userId', args.userId))
+      .first()
+    if (!connection || connection.status !== 'connected') return null
+    return connection
   },
 })
