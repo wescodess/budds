@@ -2,54 +2,54 @@
 
 ## Deferred from: code review of 7-3-offline-retakes-and-sync (2026-04-23)
 
-- **No retry backoff or limit for permanently failing offline sync attempts.** When `reviewSection` mutation fails during sync (e.g., section was deleted while offline), the attempt remains unsynced in IndexedDB and retries on every reconnect. No exponential backoff or max-retry cap. Low severity since Convex mutations are idempotent and the server error is descriptive. Add a `syncAttempts` counter per attempt and skip after N failures.
+- ~~**No retry backoff or limit for permanently failing offline sync attempts.**~~ Resolved in deferred-work-cleanup (2026-04-23). Added `syncAttempts` counter to `OfflineAttempt` interface and `incrementSyncAttempts` helper. `useOfflineSync` now skips attempts with `syncAttempts >= 5`.
 - **`clearSyncedAttempts` uses cursor-based deletion loop.** IndexedDB lacks a "delete all by index value" API, so the implementation iterates via `openCursor` + `cursor.delete()` + `cursor.continue()`. Standard pattern but verbose. Consider `objectStore.clear()` if the store only contains synced items at cleanup time, or batch via `getAll` + `delete`.
 - **Sync composable not wired into non-folder section pages.** `useOfflineSync` is only instantiated in `app/pages/app/folders/[id]/learn/[courseId]/[sectionId].vue`. Currently this is the only section page, but if a top-level (non-folder) section page is added, offline sync would not run there. Consider a layout-level plugin if more section page variants emerge.
 
 ## Deferred from: code review of 7-2-section-content-caching (2026-04-23)
 
 - **Convex storage URLs in cached audio entries will expire.** `getOfflineCachePayload` resolves `ctx.storage.getUrl()` for audio turns (30-min TTL). The URLs are stored in IndexedDB `audioUrls` field but only the Cache API responses (fetched at cache time via `cacheAudioUrls`) are used for offline playback. The stale URL strings in IndexedDB are misleading but non-functional. No user impact since offline audio playback reads from Cache API, not the stored URLs.
-- **No IndexedDB storage quota management.** `useOfflineCache` has no eviction strategy for cached sections in IndexedDB. If a user completes dozens of courses, IndexedDB storage grows unbounded. Add a max-entries cap or LRU eviction. Related to the deferred 7-1 SW cache eviction item.
+- ~~**No IndexedDB storage quota management.**~~ Resolved in deferred-work-cleanup (2026-04-23). Added `MAX_CACHED_SECTIONS = 20` with oldest-first eviction in `storeSection()`.
 - **`getOfflineCachePayload` exposes quiz correct answers in a public query.** Returns `correctAnswer` and `explanation` for offline quiz retakes (needed for 7-3). Data is user-scoped (own sections only) and already visible in the UI after answering. Acceptable but worth noting for security-conscious review.
 - **Offline banner text uses hardcoded dark-mode color.** "Viewing cached offline version" banner in section void uses `text-amber-400` without dark: prefix. Works because the project defaults to dark mode, but inconsistent with the theme-aware OfflineBanner from 7-1 which uses `dark:text-amber-200 text-amber-700`.
 
 ## Deferred from: code review of 7-1-service-worker-and-offline-detection (2026-04-23)
 
-- **Service worker learn section cache has no eviction strategy.** `budds-learn-sections-v1` cache stores every learn section navigation response visited online but never evicts old entries. Over time this could grow large. Add a max-entries cap (e.g., 20 most recent sections) or LRU eviction when Story 7-2 implements full content caching in IndexedDB.
+- ~~**Service worker learn section cache has no eviction strategy.**~~ Resolved in deferred-work-cleanup (2026-04-23). Added `MAX_SECTION_CACHE_ENTRIES = 20` with oldest-first eviction after each cache put in `sw.js`.
 
 ## Deferred from: code review of 6-5-calendar-disconnection-and-cleanup (2026-04-23)
 
-- **No user-facing error toast on disconnect failure.** `confirmDisconnect` in `CalendarConnectionCard.vue` catches errors and logs to console, but the user gets no visual feedback if the server endpoint fails. Consistent with the deferred toast pattern from earlier stories (1-5/1-6).
-- **`makeConvexClient` duplicated across 3 calendar endpoint files.** `disconnect.post.ts`, `sync.post.ts`, and `callback.get.ts` all define the same `makeConvexClient` helper. Extract to `server/utils/convex-client.ts` when calendar code grows.
-- **No rate limiting on `/api/calendar/disconnect`.** The endpoint makes N external Google Calendar API calls (one per event). Same pattern as `/api/calendar/sync.post` (already deferred in 6-3 review). Add when calendar usage grows.
+- ~~**No user-facing error toast on disconnect failure.**~~ Resolved in deferred-work-cleanup (2026-04-23). Added `toast.error()` in `confirmDisconnect` catch block.
+- ~~**`makeConvexClient` duplicated across 3 calendar endpoint files.**~~ Resolved in prep-7-4.
+- ~~**No rate limiting on `/api/calendar/disconnect`.**~~ Resolved in deferred-work-cleanup (2026-04-23). Added `requireRateLimit(event, 3)` to `disconnect.post.ts`.
 
 ## Deferred from: code review of 6-4-missed-session-rescheduling (2026-04-23)
 
 - **Slot-finding logic duplicated in Convex action.** `checkMissedSessions` internal action in `convex/calendarEvents.ts` contains a full copy of the `findNextPreferredSlot` algorithm (day mapping, Intl.DateTimeFormat loop, timezone offset calculation). Architecturally forced: Convex functions cannot import from `server/utils/`. If more calendar features land, consider extracting slot logic to `convex/lib/calendar-slots.ts` as a pure function usable by both Convex and server code.
-- **Multiple missed events for the same user all get rescheduled to the same time slot.** If a user misses 3 events for 3 different courses, `findNextPreferredSlot` returns the same next-available slot for all three, creating overlapping Google Calendar events. The sync endpoint has the same limitation. Consider staggering slots by tracking already-booked times during the rescheduling loop.
+- ~~**Multiple missed events for the same user all get rescheduled to the same time slot.**~~ Resolved in deferred-work-cleanup (2026-04-23). Added `bookedSlots` Set in `checkMissedSessions` to track and offset rescheduled events by `sessionMinutes`.
 
 ## Deferred from: code review of 6-3-calendar-event-creation-and-adaptive-composition (2026-04-23)
 
 - **`findNextPreferredSlot` always schedules at `morningStart` time.** All courses get events at the same configured morning start time on the same preferred day. A more sophisticated implementation would spread events across the user's available window (morning for new content, evening for review) and stagger multiple courses across different days. Acceptable for MVP.
 - **`dayMap` constant was duplicated in sync.post.ts.** Fixed by extracting to module-level `DAY_MAP` constant during blocker fix pass.
-- **No rate limiting on `/api/calendar/sync.post`.** The endpoint makes external Google Calendar API calls. A misbehaving client could spam this endpoint. Other generation endpoints use `requireRateLimit`. Add when calendar usage grows.
+- ~~**No rate limiting on `/api/calendar/sync.post`.**~~ Resolved in deferred-work-cleanup (2026-04-23). Added `requireRateLimit(event, 3)` to `sync.post.ts`.
 - **`listByUser` and `listScheduled` queries expose `calendarEventId` (Google's event ID) to the client.** Not a security risk since the user owns these events, but leaking third-party internal IDs is unnecessary. Consider projecting out `calendarEventId` from public queries.
 
 ## Deferred from: code review of 6-1-google-calendar-oauth-connection (2026-04-23)
 
 - **`connect.get.ts` calls `getConvexTokenIdentifier` but discards the return value.** Line 7 authenticates the user (throws if unauthenticated) but doesn't use the identifier. The callback stores tokens for the convex-authenticated user regardless. Low severity since the OAuth flow itself authenticates with Google.
 - **`GOOGLE_TOKEN_URL` constant duplicated across `callback.get.ts` and `calendar-tokens.ts`.** Both files define the same Google token endpoint URL. Extract to a shared constant in `server/utils/` when calendar code grows.
-- **No UI feedback for OAuth error query params.** The callback redirects to `/app/learn?calendar_error=...` on failure, but neither CalendarConnectionCard nor the Learn page reads or displays these query params. Users won't know if OAuth failed unless they inspect the URL.
+- ~~**No UI feedback for OAuth error query params.**~~ Resolved in deferred-work-cleanup (2026-04-23). `CalendarConnectionCard` now reads `route.query.calendar_error` on mount and shows a toast, then clears the param.
 
 ## Deferred from: code review of 5-4-cross-course-review-budgeting (2026-04-23)
 
-- **`isLoading` computed in review.vue is unused dead code.** Defined on line 78 but never referenced in the template. Pre-existing from 5-2. Remove when the review page is next touched.
+- ~~**`isLoading` computed in review.vue is unused dead code.**~~ Resolved in deferred-work-cleanup (2026-04-23). Removed unused `isLoading` computed.
 - **`getReviewBacklogCount` post-filters flagged items after fetching 500.** Same pattern as `listDueForUser` (already deferred in 5-1). If many items are flagged, the 500-item fetch limit is consumed by flagged items and `dueCount` could undercount unflagged due items. Acceptable for realistic usage. Consider a separate unflagged-only index if backlog accuracy becomes critical.
 - **ReviewCapSetting dropdown does not close on Escape key.** Only mousedown-outside and explicit Cancel/Save close the panel. Add `@keydown.escape="open = false"` for keyboard accessibility if the panel needs to support keyboard users who don't use the Cancel button.
 
 ## Deferred from: code review of 5-3-sm2-scheduling-engine (2026-04-23)
 
-- **`getTodayInTimezone` duplicated across `reviewItems.ts` and `learnProfile.ts`.** Identical function exists in both files. Should be extracted to a shared utility in `convex/lib/` (e.g., `convex/lib/dates.ts`) to eliminate duplication.
+- ~~**`getTodayInTimezone` duplicated across `reviewItems.ts` and `learnProfile.ts`.**~~ Resolved in prep-7-3.
 - **No flagged-item guard on `submitReview` mutation.** A user could theoretically call `submitReview` on a flagged review item. The UI already filters flagged items from the session, so this is not user-reachable. Add a server-side guard if flagging logic grows more complex.
 - **Architecture spec says SM-2 pure functions belong in `server/utils/sr-scheduler.ts`.** Implementation places them in `convex/lib/sm2.ts` instead, which is better since the function is called directly from a Convex mutation (no network hop needed). The spec was written before the `convex/lib/` pattern was established in prep sprints.
 
@@ -62,10 +62,10 @@
 
 ## Deferred from: code review of 5-1-review-item-extraction-and-sm2-data-model (2026-04-23)
 
-- **`getTomorrowDate`/`getTodayDate` use UTC, not user timezone.** Review item `nextReviewDate` and `listDueForUser` compute dates in UTC. For users far from UTC, items may appear due at unexpected times. Consistent with existing streak behavior. Add timezone-aware computation when Story 5-3 builds the SM-2 scheduling engine.
+- ~~**`getTomorrowDate`/`getTodayDate` use UTC, not user timezone.**~~ Resolved in prep-5-1.
 - **`listDueForUser` post-filters flagged items after fetch.** Fetches up to 200 items then filters out flagged ones in-memory. If many items are flagged, returned count could be lower than expected. Acceptable for daily cap of 50.
 - **No `type` field on `reviewItems`.** Architecture spec defines `type: 'flashcard' | 'cloze' | 'quiz-question'` but the implementation only extracts from flashcards (correct for 5-1 scope). Add the field when quiz-based review items are introduced in a future story.
-- **No cascade delete of review items on course deletion.** `courses.deleteCourse` does not clean up `reviewItems` rows. Will leave orphan review items. Wire into deletion cascade when spaced repetition is fully active.
+- ~~**No cascade delete of review items on course deletion.**~~ Resolved in deferred-work-cleanup (2026-04-23). Added `reviewItems` cascade deletion to `deleteCourse` mutation using `by_courseId` index.
 
 ## Deferred from: code review of prep-5-1-timezone-ui-for-streak (2026-04-24)
 
@@ -77,18 +77,18 @@
 
 - **No test for non-zero flag rate computation.** `getFlagRateForCourse` is tested for unauthenticated (returns null) and zero flag rate, but no test verifies correct percentage when items are actually flagged. Add a test that flags items and asserts the computed rate.
 - **`getFlagRateForCourse` uses `.collect()` on quiz questions and flashcard cards.** Per Convex guidelines, `.collect()` should be avoided for unbounded queries. These queries are bounded by course sections (max 15 sections x 1 quiz/flashcard each), so practical risk is low. Consider using `.take(n)` if courses grow larger.
-- **No explicit `aria-label` on flag editor inputs.** The correction inputs in QuizBlock and FlashcardBlock use `<label>` wrapping (which provides implicit labeling) but lack explicit `aria-label` attributes. Add explicit labels when accessibility audit runs.
+- ~~**No explicit `aria-label` on flag editor inputs.**~~ Resolved in prep-5-3.
 
 ## Deferred from: code review of 4-3-streak-system (2026-04-23)
 
-- **Streak evaluation uses UTC, not user timezone.** `updateStreakForActivity` computes today via `new Date().toISOString().slice(0, 10)` which is UTC. AC says "calendar day (user's timezone)" but `learnProfile.timezone` is optional and no UI exists to set it. For users far from UTC, activities near midnight could misattribute the day. Add timezone-aware date computation when a timezone-setting UI is added.
+- ~~**Streak evaluation uses UTC, not user timezone.**~~ Resolved in prep-5-1.
 - **No integration test for streak freeze auto-consumption path.** The pure logic tests in `evaluateStreak` cover the freeze scenario, but no Convex integration test exercises the freeze path through `completeSection`/`reviewSection`. Would require time-manipulation which `convex-test` doesn't support well.
 
 ## Deferred from: code review of 4-1-course-view-with-progress-and-mastery-dashboard (2026-04-23)
 
 - **Counter-based query mock in course-view.test.ts.** The test identifies course vs sections queries by call order (`queryCallCount % 2`), not by function name. If the component adds a third query, the mock silently returns wrong data. Replace with `getFunctionName`-based routing when the test surface expands.
 - **No test coverage for folder-scoped course view page.** Both pages use the shared `CourseViewBody.vue` component, so the component is tested via the top-level page tests. Add folder-specific routing tests when folder-scoped features diverge.
-- **Reviewing mastery color uses yellow-500 instead of gold.** UX spec says reviewing = `--primary` (gold/amber). Implementation uses `bg-yellow-500` which is a cool lemon tone. Should be `bg-amber-400` or similar warm gold to match the design system.
+- ~~**Reviewing mastery color uses yellow-500 instead of gold.**~~ Resolved in prep-5-2.
 
 ## Deferred from: code review of prep-4-3-textblock-numbered-list-support (2026-04-23)
 
@@ -105,21 +105,21 @@
 ## Deferred from: code review of 3-4-section-completion-and-adaptive-pacing (2026-04-24)
 
 - **Multiple quiz blocks: only last quiz tracked.** If a section has multiple quiz blocks, `handleQuizCompleted` overwrites `quizResults` with the latest quiz's data. Low severity since current section generation produces at most one quiz block per section.
-- **No error toast on completeSection mutation failure.** The catch block silently falls back to local computation with no user feedback. Consistent with deferred pattern from 1-5/1-6.
+- ~~**No error toast on completeSection mutation failure.**~~ Resolved in deferred-work-cleanup (2026-04-23). Added `toast.error()` in catch block of `handleCompleteSection`.
 - **Complete Section button appears before all blocks viewed.** The button shows regardless of scroll progress. A user can complete a section without viewing all content blocks. The `currentBlockIndex` tracking drives the progress bar only.
 - **FR16 format override not implemented on completion card.** AC #6 format override for the next section has no UI. Adaptive hints flow through pre-fetch task metadata but no user-facing dropdown exists. Documented in story Decisions as intentional scope deferral.
 
 ## Deferred from: code review of 3-3-section-void-ui-content-block-rendering (2026-04-24)
 
 - **Section void page fetches all sections to find next.** `listByCourse` returns all sections; only the N+1 section is needed. Could use `getNextSection` from story 3-2. Low severity since sections are capped at 15.
-- **No `aria-live` region for dynamic quiz feedback.** QuizBlock correct/incorrect feedback isn't announced to screen readers. Adding `aria-live="polite"` to the feedback container would improve accessibility beyond WCAG AA minimum.
+- ~~**No `aria-live` region for dynamic quiz feedback.**~~ Resolved in prep-4-1.
 - **Course view `component :is` dynamic pattern.** Using `<component :is="NuxtLink | div">` with conditional `:to` is unconventional. Works correctly since `div` ignores unknown props. No runtime issue.
 - **FlashcardBlock timer leak on unmount.** The 300ms `suppressTimer` setTimeout isn't cleared on unmount. Same pattern as existing RoomPractice.vue (inherited). Very low severity.
-- **TextBlock markdown renderer doesn't handle numbered lists or code blocks.** Only unordered lists, headings, bold, italic, inline code, and links. Numbered lists and fenced code blocks render as plain text. Low severity for LLM-generated content.
+- ~~**TextBlock markdown renderer doesn't handle numbered lists or code blocks.**~~ Resolved in prep-4-3.
 
 ## Deferred from: code review of 3-2-n-plus-1-section-pre-fetch (2026-04-24)
 
-- **`checkPreFetchStatus` returns full section document.** The query returns the entire `nextSection` doc to the client. The composable only needs `status` and `_id`. Changes to contentBlocks (large array) trigger unnecessary subscription re-evaluations. Consider returning a projection `{ _id, status, taskId }` when Story 3-3 integrates the composable.
+- ~~**`checkPreFetchStatus` returns full section document.**~~ Resolved in prep-4-2.
 - **Composable exposes no "no next section" state.** `nextSectionReady` is false both when the next section is loading and when there is no next section (last section). Story 3-3 completion card needs to distinguish these. Add a `hasNextSection` computed when integrating.
 - **No test for concurrent `triggerPreFetch` idempotency.** Two simultaneous calls should be safe (Convex serialization), but there is no explicit test verifying the second call returns null when the first already set status to `generating`.
 - **`getNextSection` query is currently unused.** No client code consumes it. The composable uses `checkPreFetchStatus` instead. Keep for Story 3-3 but note it is dead code until then.
@@ -138,7 +138,7 @@
 
 ## Deferred from: code review of 2-3-course-deletion (2026-04-23)
 
-- **Entity ID resolution uses 3 try/catch db.get() calls per entity.** Each `entityId` in content blocks triggers attempts against quizzes, flashcardRooms, and audioOverviews tables sequentially. Wasteful but correct since Convex IDs are globally unique. When section generation lands (Epic 3), consider storing entity type alongside entityId in contentBlocks to enable direct lookup.
+- ~~**Entity ID resolution uses 3 try/catch db.get() calls per entity.**~~ Resolved in 3-1.
 - **No test coverage for flashcardRoom or audioOverview cascade deletion.** These entity types won't exist until section generation is implemented (Epic 3). Tests should be added when those paths become exercisable.
 
 ## Deferred from: code review of 2-2-folder-scoped-learn-tab (2026-04-23)
@@ -148,7 +148,7 @@
 
 ## Deferred from: code review of 2-1-learn-home-page-empty-and-active-states (2026-04-23)
 
-- **CourseCard shows generating/failed courses without status indicator.** `listByUser` returns all courses regardless of status. A course in `generating` or `failed` status appears in the grid with 0% progress and no visual differentiation. Add a status badge or skeleton state for non-ready courses.
+- ~~**CourseCard shows generating/failed courses without status indicator.**~~ Resolved in prep-3-6.
 - **StreakDisplay freeze detection uses client-side Date.** `isFreezeRecent` computes against `new Date()` which uses the client's clock. If the client clock is wrong, the frost/flame icon may show incorrectly. Low risk -- cosmetic only.
 
 ## Deferred from: code review of 1-7-course-creator-ui-full-flow (2026-04-23)
@@ -169,7 +169,7 @@
 
 - **No error handling on mutation failures in OutlineEditor component.** `app/components/learn/OutlineEditor.vue` mutation calls (updateTitle, cycleKnowledgeType, removeSection, addSection) have no try/catch. Network errors or ownership guard failures surface as unhandled promise rejections with no user feedback. Add toast notifications on error in the full-flow integration (Story 1.7).
 - **`courses.updateOutline` lacks status guard.** `convex/courses.ts` updateOutline mutation does not check `course.status === 'ready'`. Could theoretically be called on a generating/failed course. Low risk since UI only shows editor for ready courses.
-- **No aria-label on interactive icon buttons.** OutlineEditor remove button (X) and drag handle have no `aria-label`. Screen readers announce them as unlabeled buttons. Address in accessibility pass.
+- ~~**No aria-label on interactive icon buttons.**~~ Resolved in prep-3-2.
 
 ## Deferred from: code review of 1-4-outline-generation-pipeline (2026-04-22)
 
@@ -179,12 +179,12 @@
 ## Deferred from: code review of 1-3-course-creation-api-web-only (2026-04-22)
 
 - **`webSearchEnabled` arg silently overridden for web-only.** The mutation accepts `webSearchEnabled` as optional, but for `sourceType: 'web-only'` it's hardcoded to `true`. If a caller passes `webSearchEnabled: false` with web-only, the value is silently ignored. Correct per AC but could be made explicit via validator or documentation.
-- **Pre-existing `.collect()` on folder documents query still unbounded.** The folder branch (line 52) uses `.collect()` when no documentIds are specified. Already deferred from story 1-2 review. No change introduced in 1-3.
+- ~~**Pre-existing `.collect()` on folder documents query still unbounded.**~~ Resolved in prep-3-3.
 
 ## Deferred from: code review of 1-2-course-creation-api-folder-cross-folder (2026-04-22)
 
-- **`create` mutation transaction size with large folders.** When sourceType='folder' and no documentIds specified, the mutation reads all docs in the folder and creates one courseSourceDoc per doc. For folders with 200+ documents this could approach Convex transaction limits. Consider batched creation or a limit on source doc count for MVP.
-- **Duplicate `requireAuth` helper.** courses.ts and courseSourceDocs.ts each define their own requireAuth. Same pattern exists in quizzes.ts, flashcards.ts, tasks.ts. Should extract to a shared `convex/lib/auth.ts` utility when the duplication exceeds 5 files.
+- ~~**`create` mutation transaction size with large folders.**~~ Resolved in prep-3-3. Source doc count capped at `MAX_SOURCE_DOCS = 100`.
+- ~~**Duplicate `requireAuth` helper.**~~ Resolved in prep-3-1.
 - **`listByUser` returns full course documents including outlineSections array.** For list views, a lean projection (omitting outlineSections, sourceConfidence details) would reduce bandwidth. Not critical until outline generation populates large arrays.
 
 ## Deferred from: code review of 1-1-convex-schema-course-tables (2026-04-22)

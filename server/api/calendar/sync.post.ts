@@ -3,6 +3,7 @@ import type { Id } from '../../../convex/_generated/dataModel'
 import { refreshGoogleAccessToken } from '../../utils/calendar-tokens'
 import { createGoogleCalendarEvent } from '../../utils/google-calendar'
 import { makeConvexClient } from '../../utils/convex-client'
+import { requireRateLimit } from '../../utils/rate-limit'
 import {
   determineSessionType,
   buildEventTitle,
@@ -13,6 +14,7 @@ import {
 } from '../../utils/session-composition'
 
 export default defineEventHandler(async (event) => {
+  requireRateLimit(event, 3)
   getConvexTokenIdentifier(event)
 
   const convexClient = makeConvexClient(event)

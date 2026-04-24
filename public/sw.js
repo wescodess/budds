@@ -10,6 +10,7 @@ const APP_SHELL_ASSETS = [
   '/icons/icon.svg',
 ]
 
+const MAX_SECTION_CACHE_ENTRIES = 20
 const LEARN_SECTION_PATTERN = /^\/app\/(?:learn\/[^/]+\/[^/]+|folders\/[^/]+\/learn\/[^/]+\/[^/]+)/
 
 self.addEventListener('install', (event) => {
@@ -50,6 +51,13 @@ self.addEventListener('fetch', (event) => {
         if (isLearnSection && response.ok) {
           const cache = await caches.open(SECTION_CACHE)
           cache.put(request, response.clone())
+          const keys = await cache.keys()
+          if (keys.length > MAX_SECTION_CACHE_ENTRIES) {
+            const excess = keys.slice(0, keys.length - MAX_SECTION_CACHE_ENTRIES)
+            for (const key of excess) {
+              cache.delete(key)
+            }
+          }
         }
 
         return response

@@ -2,8 +2,10 @@ import { api } from '../../../convex/_generated/api'
 import { refreshGoogleAccessToken } from '../../utils/calendar-tokens'
 import { deleteGoogleCalendarEvent } from '../../utils/google-calendar'
 import { makeConvexClient } from '../../utils/convex-client'
+import { requireRateLimit } from '../../utils/rate-limit'
 
 export default defineEventHandler(async (event) => {
+  requireRateLimit(event, 3)
   getConvexTokenIdentifier(event)
 
   const convexClient = makeConvexClient(event)
