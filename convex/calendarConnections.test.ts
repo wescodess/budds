@@ -290,4 +290,78 @@ describe('calendarConnections', () => {
     expect(tokens!.accessToken).toBe('bmV3')
     expect(tokens!.expiresAt).toBe(newExpiresAt)
   })
+
+  test('getAllConnectedUserIds returns user IDs for connected calendars', async () => {
+    const t = convexTest(schema, modules)
+    const asAlice = t.withIdentity(USER_A)
+    const asBob = t.withIdentity(USER_B)
+
+    await asAlice.mutation(api.calendarConnections.upsertConnection, {
+      provider: 'google',
+      accessToken: 'dG9rZW4=',
+      refreshToken: 'cmVmcmVzaA==',
+      expiresAt: Date.now() + 3600000,
+      timezone: 'America/New_York',
+    })
+
+    await asBob.mutation(api.calendarConnections.upsertConnection, {
+      provider: 'google',
+      accessToken: 'Ym9idG9rZW4=',
+      refreshToken: 'Ym9icmVmcmVzaA==',
+      expiresAt: Date.now() + 3600000,
+      timezone: 'Europe/London',
+    })
+
+    const userIds = await t.query(internal.calendarConnections.getAllConnectedUserIds, {})
+    expect(userIds).toHaveLength(2)
+    expect(userIds).toContain(USER_A.tokenIdentifier)
+    expect(userIds).toContain(USER_B.tokenIdentifier)
+  })
+
+  test('getAllConnectedUserIds excludes disconnected users', async () => {
+    const t = convexTest(schema, modules)
+    const asAlice = t.withIdentity(USER_A)
+
+    await asAlice.mutation(api.calendarConnections.upsertConnection, {
+      provider: 'google',
+      accessToken: 'dG9rZW4=',
+      refreshToken: 'cmVmcmVzaA==',
+      expiresAt: Date.now() + 3600000,
+      timezone: 'America/New_York',
+    })
+
+    await asAlice.mutation(api.calendarConnections.disconnect, {})
+
+    const userIds = await t.query(internal.calendarConnections.getAllConnectedUserIds, {})
+    expect(userIds).toHaveLength(0)
+  })
+
+  test('getConnectionByUser returns full connection for connected user', async () => {
+    const t = convexTest(schema, modules)
+    const asAlice = t.withIdentity(USER_A)
+
+    await asAlice.mutation(api.calendarConnections.upsertConnection, {
+      provider: 'google',
+      accessToken: 'dG9rZW4=',
+      refreshToken: 'cmVmcmVzaA==',
+      expiresAt: Date.now() + 3600000,
+      timezone: 'America/New_York',
+    })
+
+    const connection = await t.query(internal.calendarConnections.getConnectionByUser, {
+      userId: USER_A.tokenIdentifier,
+    })
+    expect(connection).not.toBeNull()
+    expect(connection!.accessToken).toBe('dG9rZW4=')
+    expect(connection!.timezone).toBe('America/New_York')
+  })
+
+  test('getConnectionByUser returns null for non-existent user', async () => {
+    const t = convexTest(schema, modules)
+
+    const connection = await t.query(internal.calendarConnections.getConnectionByUser, {
+      userId: 'nonexistent|user',
+    })
+    expect(connection).toBeNull()
+  })
 })

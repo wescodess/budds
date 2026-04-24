@@ -287,4 +287,157 @@ describe('calendarEvents', () => {
     events = await asAlice.query(api.calendarEvents.listByUser, {})
     expect(events).toHaveLength(0)
   })
+
+  test('checkAndMarkMissed marks past scheduled events as missed', async () => {
+    const t = convexTest(schema, modules)
+    const { courseId, connectionId } = await setupCalendarAndCourse(t)
+    const asAlice = t.withIdentity(USER_A)
+
+    const pastTime = Date.now() - 3_600_000
+    await t.mutation(internal.calendarEvents.create, {
+      userId: USER_A.tokenIdentifier,
+      calendarConnectionId: connectionId,
+      calendarEventId: 'evt_past_1',
+      courseId,
+      scheduledAt: pastTime,
+      sessionType: 'new-content',
+    })
+
+    const futureTime = Date.now() + 86_400_000
+    await t.mutation(internal.calendarEvents.create, {
+      userId: USER_A.tokenIdentifier,
+      calendarConnectionId: connectionId,
+      calendarEventId: 'evt_future_1',
+      courseId,
+      scheduledAt: futureTime,
+      sessionType: 'review',
+    })
+
+    const missed = await t.mutation(internal.calendarEvents.checkAndMarkMissed, {
+      userId: USER_A.tokenIdentifier,
+    })
+
+    expect(missed).toHaveLength(1)
+    expect(missed[0]!.courseId).toBe(courseId)
+
+    const events = await asAlice.query(api.calendarEvents.listByUser, {})
+    const pastEvent = events.find(e => e.calendarEventId === 'evt_past_1')
+    const futureEvent = events.find(e => e.calendarEventId === 'evt_future_1')
+    expect(pastEvent!.status).toBe('missed')
+    expect(futureEvent!.status).toBe('scheduled')
+  })
+
+  test('checkAndMarkMissed returns empty when no events are past due', async () => {
+    const t = convexTest(schema, modules)
+    const { courseId, connectionId } = await setupCalendarAndCourse(t)
+
+    await t.mutation(internal.calendarEvents.create, {
+      userId: USER_A.tokenIdentifier,
+      calendarConnectionId: connectionId,
+      calendarEventId: 'evt_future_only',
+      courseId,
+      scheduledAt: Date.now() + 86_400_000,
+      sessionType: 'new-content',
+    })
+
+    const missed = await t.mutation(internal.calendarEvents.checkAndMarkMissed, {
+      userId: USER_A.tokenIdentifier,
+    })
+
+    expect(missed).toHaveLength(0)
+  })
+
+  test('checkAndMarkMissed does not re-mark already missed events', async () => {
+    const t = convexTest(schema, modules)
+    const { courseId, connectionId } = await setupCalendarAndCourse(t)
+    const asAlice = t.withIdentity(USER_A)
+
+    const eventId = await t.mutation(internal.calendarEvents.create, {
+      userId: USER_A.tokenIdentifier,
+      calendarConnectionId: connectionId,
+      calendarEventId: 'evt_already_missed',
+      courseId,
+      scheduledAt: Date.now() - 7_200_000,
+      sessionType: 'new-content',
+    })
+
+    await asAlice.mutation(api.calendarEvents.updateStatus, {
+      eventId,
+      status: 'missed',
+    })
+
+    const missed = await t.mutation(internal.calendarEvents.checkAndMarkMissed, {
+      userId: USER_A.tokenIdentifier,
+    })
+
+    expect(missed).toHaveLength(0)
+  })
+
+  test('createRescheduled creates event with rescheduled status', async () => {
+    const t = convexTest(schema, modules)
+    const { courseId, connectionId } = await setupCalendarAndCourse(t)
+    const asAlice = t.withIdentity(USER_A)
+
+    const rescheduledAt = Date.now() + 172_800_000
+    const eventId = await t.mutation(internal.calendarEvents.createRescheduled, {
+      userId: USER_A.tokenIdentifier,
+      calendarConnectionId: connectionId,
+      calendarEventId: 'google_resched_1',
+      courseId,
+      scheduledAt: rescheduledAt,
+      sessionType: 'new-content',
+      description: 'Rescheduled session',
+    })
+
+    expect(eventId).toBeTruthy()
+
+    const events = await asAlice.query(api.calendarEvents.listByUser, {})
+    const rescheduled = events.find(e => e.calendarEventId === 'google_resched_1')
+    expect(rescheduled).toBeTruthy()
+    expect(rescheduled!.status).toBe('rescheduled')
+    expect(rescheduled!.scheduledAt).toBe(rescheduledAt)
+  })
+
+  test('missed detection and rescheduling flow end-to-end (data layer)', async () => {
+    const t = convexTest(schema, modules)
+    const { courseId, connectionId } = await setupCalendarAndCourse(t)
+    const asAlice = t.withIdentity(USER_A)
+
+    const pastTime = Date.now() - 3_600_000
+    await t.mutation(internal.calendarEvents.create, {
+      userId: USER_A.tokenIdentifier,
+      calendarConnectionId: connectionId,
+      calendarEventId: 'evt_e2e_missed',
+      courseId,
+      scheduledAt: pastTime,
+      sessionType: 'review',
+    })
+
+    const missed = await t.mutation(internal.calendarEvents.checkAndMarkMissed, {
+      userId: USER_A.tokenIdentifier,
+    })
+    expect(missed).toHaveLength(1)
+
+    const rescheduledAt = Date.now() + 86_400_000
+    await t.mutation(internal.calendarEvents.createRescheduled, {
+      userId: USER_A.tokenIdentifier,
+      calendarConnectionId: connectionId,
+      calendarEventId: 'google_resched_e2e',
+      courseId,
+      scheduledAt: rescheduledAt,
+      sessionType: 'review',
+      description: 'Rescheduled review session',
+    })
+
+    const events = await asAlice.query(api.calendarEvents.listByUser, {})
+    expect(events).toHaveLength(2)
+
+    const missedEvent = events.find(e => e.calendarEventId === 'evt_e2e_missed')
+    const rescheduledEvent = events.find(e => e.calendarEventId === 'google_resched_e2e')
+
+    expect(missedEvent!.status).toBe('missed')
+    expect(rescheduledEvent!.status).toBe('rescheduled')
+    expect(rescheduledEvent!.scheduledAt).toBe(rescheduledAt)
+    expect(rescheduledEvent!.sessionType).toBe('review')
+  })
 })

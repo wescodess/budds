@@ -4,6 +4,8 @@ import {
   buildEventTitle,
   buildEventDescription,
   getScheduledHourInTimezone,
+  findNextPreferredSlot,
+  preferredDayNumbersFromStrings,
 } from './session-composition'
 
 describe('determineSessionType', () => {
@@ -161,5 +163,40 @@ describe('getScheduledHourInTimezone', () => {
     const date = new Date('2026-04-23T14:30:00Z')
     const hour = getScheduledHourInTimezone(date.getTime(), 'Invalid/Timezone')
     expect(typeof hour).toBe('number')
+  })
+})
+
+describe('findNextPreferredSlot', () => {
+  test('returns a date in the future on a preferred day', () => {
+    const now = new Date('2026-04-23T10:00:00Z').getTime()
+    const preferredDays = preferredDayNumbersFromStrings(['mon', 'wed', 'fri'])
+    const slot = findNextPreferredSlot(now, 'UTC', '09:00', preferredDays)
+    expect(slot).not.toBeNull()
+    expect(slot!.getTime()).toBeGreaterThan(now)
+  })
+
+  test('returns null when no preferred days match within 14 days', () => {
+    const now = Date.now()
+    const emptyDays = new Set<number>()
+    const slot = findNextPreferredSlot(now, 'UTC', '09:00', emptyDays)
+    expect(slot).toBeNull()
+  })
+
+  test('skips non-preferred days', () => {
+    const now = new Date('2026-04-20T10:00:00Z').getTime()
+    const satOnly = preferredDayNumbersFromStrings(['sat'])
+    const slot = findNextPreferredSlot(now, 'UTC', '08:00', satOnly)
+    expect(slot).not.toBeNull()
+    expect(slot!.getUTCDay()).toBe(6)
+  })
+})
+
+describe('preferredDayNumbersFromStrings', () => {
+  test('converts day strings to numbers', () => {
+    const result = preferredDayNumbersFromStrings(['mon', 'fri', 'sun'])
+    expect(result.has(1)).toBe(true)
+    expect(result.has(5)).toBe(true)
+    expect(result.has(0)).toBe(true)
+    expect(result.has(3)).toBe(false)
   })
 })

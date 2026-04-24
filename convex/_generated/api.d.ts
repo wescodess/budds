@@ -14,6 +14,7 @@ import type * as audioOverviewInterjections from "../audioOverviewInterjections.
 import type * as audioOverviews from "../audioOverviews.js";
 import type * as auth from "../auth.js";
 import type * as calendarConnections from "../calendarConnections.js";
+import type * as calendarEvents from "../calendarEvents.js";
 import type * as contentFlags from "../contentFlags.js";
 import type * as conversations from "../conversations.js";
 import type * as courseSections from "../courseSections.js";
@@ -56,6 +57,7 @@ declare const fullApi: ApiFromModules<{
   audioOverviews: typeof audioOverviews;
   auth: typeof auth;
   calendarConnections: typeof calendarConnections;
+  calendarEvents: typeof calendarEvents;
   contentFlags: typeof contentFlags;
   conversations: typeof conversations;
   courseSections: typeof courseSections;
