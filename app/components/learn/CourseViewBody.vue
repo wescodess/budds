@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowLeft, Lock, Loader2, AlertCircle, CheckCircle2, ChevronRight, Pencil, MoreVertical } from 'lucide-vue-next'
+import { ArrowLeft, Lock, Loader2, AlertCircle, CheckCircle2, ChevronRight, Pencil, MoreVertical, Download, HardDriveDownload } from 'lucide-vue-next'
 import type { Id } from '~~/convex/_generated/dataModel'
 
 const props = defineProps<{
@@ -114,6 +114,18 @@ const showPaceSelector = ref(false)
               <p class="truncate text-sm font-medium text-stone-100">{{ section.title }}</p>
               <p class="text-xs text-stone-500">{{ getSectionStatus(section.status).label }}</p>
             </div>
+            <HardDriveDownload
+              v-if="section.offlineAvailable"
+              class="h-3.5 w-3.5 shrink-0 text-stone-400"
+              :aria-label="`${section.title} available offline`"
+              data-testid="offline-cached-icon"
+            />
+            <Download
+              v-else-if="section.status === 'completed'"
+              class="h-3.5 w-3.5 shrink-0 text-stone-600"
+              :aria-label="`${section.title} not cached offline`"
+              data-testid="offline-not-cached-icon"
+            />
             <LearnMasteryBadge
               v-if="section.status === 'completed'"
               :level="section.masteryLevel ?? 'new'"
