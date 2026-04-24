@@ -1,7 +1,6 @@
 import { api } from '../../../convex/_generated/api'
 import { makeConvexClient } from '../../utils/convex-client'
-
-const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
+import { GOOGLE_TOKEN_URL } from '../../utils/google-constants'
 const GOOGLE_CALENDAR_SETTINGS_URL = 'https://www.googleapis.com/calendar/v3/users/me/settings/timezone'
 
 export default defineEventHandler(async (event) => {

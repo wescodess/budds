@@ -167,7 +167,7 @@ function handleFolderPicked(folderId: string) {
               :key="folder._id"
               class="w-[200px] shrink-0 snap-start"
             >
-              <DashboardCourseCard :folder="{ ...folder, documentCount: (folder as any).documentCount ?? 0 }" :stagger-index="idx" />
+              <DashboardCourseCard :folder="folder" :stagger-index="idx" />
             </div>
             <div class="w-[200px] shrink-0 snap-start">
               <DashboardAddCourseCard />
@@ -183,7 +183,7 @@ function handleFolderPicked(folderId: string) {
       v-model:open="pickerOpen"
       :title="pickerTitle"
       description="Choose a course — we'll open that course's workspace."
-      :folders="allFolders as any"
+      :folders="allFolders"
       :loading="allFoldersLoading"
       @select="handleFolderPicked"
     />

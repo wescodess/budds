@@ -4,8 +4,6 @@ const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth'
 const SCOPES = ['https://www.googleapis.com/auth/calendar.events', 'openid']
 
 export default defineEventHandler(async (event) => {
-  getConvexTokenIdentifier(event)
-
   const config = useRuntimeConfig(event)
   const clientId = process.env.GOOGLE_CLIENT_ID
   const siteUrl = config.public.siteUrl || config.siteUrl

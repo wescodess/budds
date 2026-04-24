@@ -20,10 +20,11 @@ export const listByUser = query({
   args: {},
   handler: async (ctx) => {
     const userId = await requireAuth(ctx)
-    return await ctx.db
+    const events = await ctx.db
       .query('calendarEvents')
       .withIndex('by_userId', q => q.eq('userId', userId))
       .take(200)
+    return events.map(({ calendarEventId: _, ...rest }) => rest)
   },
 })
 
@@ -47,7 +48,7 @@ export const listScheduled = query({
       .query('calendarEvents')
       .withIndex('by_userId_and_status', q => q.eq('userId', userId).eq('status', 'scheduled'))
       .take(100)
-    return events
+    return events.map(({ calendarEventId: _, ...rest }) => rest)
   },
 })
 

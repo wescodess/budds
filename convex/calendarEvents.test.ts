@@ -71,9 +71,9 @@ describe('calendarEvents', () => {
     const asAlice = t.withIdentity(USER_A)
     const events = await asAlice.query(api.calendarEvents.listByUser, {})
     expect(events).toHaveLength(1)
-    expect(events[0]!.calendarEventId).toBe('google_evt_123')
     expect(events[0]!.sessionType).toBe('new-content')
     expect(events[0]!.status).toBe('scheduled')
+    expect(events[0]).not.toHaveProperty('calendarEventId')
   })
 
   test('listByCourse filters events by course', async () => {
@@ -92,7 +92,7 @@ describe('calendarEvents', () => {
     const asAlice = t.withIdentity(USER_A)
     const events = await asAlice.query(api.calendarEvents.listByCourse, { courseId })
     expect(events).toHaveLength(1)
-    expect(events[0]!.calendarEventId).toBe('evt_1')
+    expect(events[0]!.sessionType).toBe('new-content')
   })
 
   test('listScheduled returns only scheduled events', async () => {
@@ -321,8 +321,8 @@ describe('calendarEvents', () => {
     expect(missed[0]!.courseId).toBe(courseId)
 
     const events = await asAlice.query(api.calendarEvents.listByUser, {})
-    const pastEvent = events.find(e => e.calendarEventId === 'evt_past_1')
-    const futureEvent = events.find(e => e.calendarEventId === 'evt_future_1')
+    const pastEvent = events.find(e => e.scheduledAt === pastTime)
+    const futureEvent = events.find(e => e.scheduledAt === futureTime)
     expect(pastEvent!.status).toBe('missed')
     expect(futureEvent!.status).toBe('scheduled')
   })
@@ -392,7 +392,7 @@ describe('calendarEvents', () => {
     expect(eventId).toBeTruthy()
 
     const events = await asAlice.query(api.calendarEvents.listByUser, {})
-    const rescheduled = events.find(e => e.calendarEventId === 'google_resched_1')
+    const rescheduled = events.find(e => e.scheduledAt === rescheduledAt)
     expect(rescheduled).toBeTruthy()
     expect(rescheduled!.status).toBe('rescheduled')
     expect(rescheduled!.scheduledAt).toBe(rescheduledAt)
@@ -432,8 +432,8 @@ describe('calendarEvents', () => {
     const events = await asAlice.query(api.calendarEvents.listByUser, {})
     expect(events).toHaveLength(2)
 
-    const missedEvent = events.find(e => e.calendarEventId === 'evt_e2e_missed')
-    const rescheduledEvent = events.find(e => e.calendarEventId === 'google_resched_e2e')
+    const missedEvent = events.find(e => e.scheduledAt === pastTime)
+    const rescheduledEvent = events.find(e => e.scheduledAt === rescheduledAt)
 
     expect(missedEvent!.status).toBe('missed')
     expect(rescheduledEvent!.status).toBe('rescheduled')
