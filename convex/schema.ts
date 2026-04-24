@@ -522,6 +522,20 @@ export default defineSchema({
   })
     .index('by_userId', ['userId']),
 
+  calendarEvents: defineTable({
+    userId: v.string(),
+    calendarConnectionId: v.id('calendarConnections'),
+    calendarEventId: v.string(),
+    courseId: v.id('courses'),
+    scheduledAt: v.number(),
+    sessionType: v.union(v.literal('new-content'), v.literal('review'), v.literal('audio-only')),
+    status: v.union(v.literal('scheduled'), v.literal('completed'), v.literal('missed'), v.literal('rescheduled')),
+    description: v.optional(v.string()),
+  })
+    .index('by_userId', ['userId'])
+    .index('by_courseId', ['courseId'])
+    .index('by_userId_and_status', ['userId', 'status']),
+
   pendingCleanup: defineTable({
     userId: v.string(),
     documentId: v.string(),
