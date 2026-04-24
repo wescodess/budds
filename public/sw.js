@@ -1,5 +1,6 @@
 const CACHE_VERSION = 'budds-shell-v1'
 const SECTION_CACHE = 'budds-learn-sections-v1'
+const AUDIO_CACHE = 'budds-learn-audio-v1'
 const APP_SHELL_ASSETS = [
   '/manifest.webmanifest',
   '/offline.html',
@@ -23,7 +24,7 @@ self.addEventListener('activate', (event) => {
     const keys = await caches.keys()
     await Promise.all(
       keys.map(key =>
-        key === CACHE_VERSION || key === SECTION_CACHE
+        key === CACHE_VERSION || key === SECTION_CACHE || key === AUDIO_CACHE
           ? undefined
           : caches.delete(key),
       ),

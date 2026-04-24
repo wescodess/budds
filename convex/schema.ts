@@ -444,6 +444,7 @@ export default defineSchema({
       at: v.number(),
     }))),
     completedAt: v.optional(v.number()),
+    offlineAvailable: v.optional(v.boolean()),
     taskId: v.optional(v.id('tasks')),
   })
     .index('by_courseId', ['courseId'])

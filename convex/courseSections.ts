@@ -715,6 +715,123 @@ export const completeSection = mutation({
   },
 })
 
+export const getOfflineCachePayload = query({
+  args: { sectionId: v.id('courseSections') },
+  handler: async (ctx, args) => {
+    const userId = await requireAuth(ctx)
+    const section = await ctx.db.get(args.sectionId)
+    if (!section || section.userId !== userId) return null
+    if (section.status !== 'completed') return null
+
+    const blocks: Array<{
+      type: 'text' | 'quiz' | 'flashcard' | 'audio'
+      order: number
+      content?: string
+      entityId?: string
+      quizData?: {
+        questions: Array<{
+          question: string
+          type: string
+          options?: string[]
+          correctAnswer: string
+          explanation?: string
+          order: number
+        }>
+      }
+      flashcardData?: {
+        cards: Array<{ term: string; definition: string }>
+      }
+      audioUrls?: string[]
+    }> = []
+
+    for (const block of section.contentBlocks) {
+      const entry: (typeof blocks)[number] = {
+        type: block.type,
+        order: block.order,
+      }
+
+      if (block.type === 'text') {
+        entry.content = block.content
+      }
+
+      if (block.type === 'quiz' && block.entityId) {
+        entry.entityId = block.entityId
+        const quizId = ctx.db.normalizeId('quizzes', block.entityId)
+        if (quizId) {
+          const questions = await ctx.db
+            .query('quizQuestions')
+            .withIndex('by_quizId', (q) => q.eq('quizId', quizId))
+            .take(50)
+          entry.quizData = {
+            questions: questions.map((q) => ({
+              question: q.question,
+              type: q.type,
+              options: q.options,
+              correctAnswer: q.correctAnswer,
+              explanation: q.explanation,
+              order: q.order,
+            })),
+          }
+        }
+      }
+
+      if (block.type === 'flashcard' && block.entityId) {
+        entry.entityId = block.entityId
+        const roomId = ctx.db.normalizeId('flashcardRooms', block.entityId)
+        if (roomId) {
+          const cards = await ctx.db
+            .query('flashcardRoomCards')
+            .withIndex('by_roomId', (q) => q.eq('roomId', roomId))
+            .take(200)
+          entry.flashcardData = {
+            cards: cards.map((c) => ({ term: c.term, definition: c.definition })),
+          }
+        }
+      }
+
+      if (block.type === 'audio' && block.entityId) {
+        entry.entityId = block.entityId
+        const audioId = ctx.db.normalizeId('audioOverviews', block.entityId)
+        if (audioId) {
+          const overview = await ctx.db.get(audioId)
+          if (overview) {
+            const urls: string[] = []
+            for (const turn of overview.turns) {
+              if (turn.audioFileId) {
+                const url = await ctx.storage.getUrl(turn.audioFileId)
+                if (url) urls.push(url)
+              }
+            }
+            entry.audioUrls = urls
+          }
+        }
+      }
+
+      blocks.push(entry)
+    }
+
+    return {
+      sectionId: args.sectionId,
+      courseId: section.courseId,
+      title: section.title,
+      contentBlocks: blocks,
+    }
+  },
+})
+
+export const setOfflineAvailable = mutation({
+  args: {
+    sectionId: v.id('courseSections'),
+    offlineAvailable: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireAuth(ctx)
+    const section = await ctx.db.get(args.sectionId)
+    if (!section || section.userId !== userId) throw new Error('Section not found')
+    await ctx.db.patch(args.sectionId, { offlineAvailable: args.offlineAvailable })
+  },
+})
+
 export const reviewSection = mutation({
   args: {
     sectionId: v.id('courseSections'),
