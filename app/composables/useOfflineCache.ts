@@ -5,6 +5,7 @@ const DB_VERSION = 2
 const SECTION_STORE = 'sections'
 const ATTEMPTS_STORE = 'offlineAttempts'
 const AUDIO_CACHE_NAME = 'budds-learn-audio-v1'
+const MAX_CACHED_SECTIONS = 20
 
 interface CachedSection {
   sectionId: string
@@ -50,6 +51,7 @@ export interface OfflineAttempt {
     quality?: number
   }
   synced: boolean
+  syncAttempts?: number
 }
 
 function openDB(): Promise<IDBDatabase> {
@@ -75,7 +77,24 @@ async function storeSection(data: CachedSection): Promise<void> {
   const db = await openDB()
   return new Promise((resolve, reject) => {
     const tx = db.transaction(SECTION_STORE, 'readwrite')
-    tx.objectStore(SECTION_STORE).put(data)
+    const store = tx.objectStore(SECTION_STORE)
+    store.put(data)
+
+    const countReq = store.count()
+    countReq.onsuccess = () => {
+      if (countReq.result > MAX_CACHED_SECTIONS) {
+        const getAllReq = store.getAll()
+        getAllReq.onsuccess = () => {
+          const all = getAllReq.result as CachedSection[]
+          all.sort((a, b) => a.cachedAt - b.cachedAt)
+          const toDelete = all.slice(0, all.length - MAX_CACHED_SECTIONS)
+          for (const entry of toDelete) {
+            store.delete(entry.sectionId)
+          }
+        }
+      }
+    }
+
     tx.oncomplete = () => { db.close(); resolve() }
     tx.onerror = () => { db.close(); reject(tx.error) }
   })
@@ -166,6 +185,22 @@ export async function markAttemptSynced(id: number): Promise<void> {
     getReq.onsuccess = () => {
       if (getReq.result) {
         store.put({ ...getReq.result, synced: true })
+      }
+      tx.oncomplete = () => { db.close(); resolve() }
+    }
+    getReq.onerror = () => { db.close(); reject(getReq.error) }
+  })
+}
+
+export async function incrementSyncAttempts(id: number): Promise<void> {
+  const db = await openDB()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(ATTEMPTS_STORE, 'readwrite')
+    const store = tx.objectStore(ATTEMPTS_STORE)
+    const getReq = store.get(id)
+    getReq.onsuccess = () => {
+      if (getReq.result) {
+        store.put({ ...getReq.result, syncAttempts: (getReq.result.syncAttempts ?? 0) + 1 })
       }
       tx.oncomplete = () => { db.close(); resolve() }
     }

@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { Calendar, Unplug, Loader2 } from 'lucide-vue-next'
+import { toast } from 'vue-sonner'
 import { api } from '~~/convex/_generated/api'
+
+const route = useRoute()
+const router = useRouter()
 
 const connection = useConvexQuery(api.calendarConnections.getByUser, {})
 
@@ -9,6 +13,14 @@ const showConfirmDialog = ref(false)
 
 const isConnected = computed(() => {
   return connection.data.value?.status === 'connected'
+})
+
+onMounted(() => {
+  const calendarError = route.query.calendar_error
+  if (calendarError) {
+    toast.error(Array.isArray(calendarError) ? calendarError[0] : calendarError)
+    router.replace({ query: { ...route.query, calendar_error: undefined } })
+  }
 })
 
 async function handleConnect() {
@@ -31,8 +43,8 @@ async function confirmDisconnect() {
   isDisconnecting.value = true
   try {
     await $fetch('/api/calendar/disconnect', { method: 'POST' })
-  } catch (err) {
-    console.error('Failed to disconnect calendar:', err)
+  } catch (err: any) {
+    toast.error(err?.message ?? 'Failed to disconnect calendar')
   } finally {
     isDisconnecting.value = false
   }

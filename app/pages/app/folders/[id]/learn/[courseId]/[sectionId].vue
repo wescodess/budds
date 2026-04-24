@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { Id } from '~~/convex/_generated/dataModel'
 import { api } from '#convex/api'
+import { toast } from 'vue-sonner'
 import { injectFolderContext } from '~/composables/useFolderPageContext'
 import type { CachedSection } from '~/composables/useOfflineCache'
 
@@ -165,7 +166,8 @@ async function handleCompleteSection() {
     showCompletionCard.value = true
 
     cacheForOffline()
-  } catch {
+  } catch (e: any) {
+    toast.error(e?.message ?? 'Failed to complete section')
     showCompletionCard.value = true
     completionData.value = {
       practiceScore: score,
