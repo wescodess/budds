@@ -206,8 +206,14 @@ describe('contentFlags - flag rate query', () => {
   test('returns null for unauthenticated user', async () => {
     const t = convexTest(schema, modules)
     const courseId = await t.run(async (ctx: any) => {
+      const folderId = await ctx.db.insert('folders', {
+        userId: USER_A.tokenIdentifier,
+        name: 'Auth Test Folder',
+        documentCount: 0,
+      })
       return await ctx.db.insert('courses', {
         userId: USER_A.tokenIdentifier,
+        folderId,
         title: 'Test',
         status: 'ready',
         sourceType: 'web-only',

@@ -1,23 +1,8 @@
-import { ConvexHttpClient } from 'convex/browser'
 import { api } from '../../../convex/_generated/api'
-import { readConfiguredRuntimeValue } from '../../utils/runtime-config'
+import { makeConvexClient } from '../../utils/convex-client'
 
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
 const GOOGLE_CALENDAR_SETTINGS_URL = 'https://www.googleapis.com/calendar/v3/users/me/settings/timezone'
-
-function makeConvexClient(event: any): ConvexHttpClient | null {
-  const token = event.context.convexToken as string | undefined
-  const runtimeConfig = useRuntimeConfig(event)
-  const convexUrl = readConfiguredRuntimeValue(
-    runtimeConfig.public?.convex?.url,
-    'NUXT_PUBLIC_CONVEX_URL',
-    'CONVEX_URL',
-  )
-  if (!token || !convexUrl) return null
-  const client = new ConvexHttpClient(convexUrl)
-  client.setAuth(token)
-  return client
-}
 
 export default defineEventHandler(async (event) => {
   const config = useRuntimeConfig(event)

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 
-const mockMutate = vi.fn()
+const mockFetch = vi.fn()
 let mockQueryData = ref<any>(null)
 
 mockNuxtImport('useConvexQuery', () => {
@@ -9,15 +9,16 @@ mockNuxtImport('useConvexQuery', () => {
 })
 
 mockNuxtImport('useConvexMutation', () => {
-  return () => ({ mutate: mockMutate, isLoading: ref(false) })
+  return () => ({ mutate: vi.fn(), isLoading: ref(false) })
 })
 
 const componentPath = ['~', 'components', 'learn', 'CalendarConnectionCard.vue'].join('/')
 
 describe('CalendarConnectionCard', () => {
   beforeEach(() => {
-    mockMutate.mockReset()
+    mockFetch.mockReset()
     mockQueryData.value = null
+    vi.stubGlobal('$fetch', mockFetch)
   })
 
   it('renders the card', async () => {
@@ -50,7 +51,7 @@ describe('CalendarConnectionCard', () => {
     expect(wrapper.text()).toContain('America/New_York')
   })
 
-  it('calls disconnect mutation on disconnect click', async () => {
+  it('calls server disconnect endpoint on disconnect confirm', async () => {
     mockQueryData.value = {
       _id: 'conn1',
       provider: 'google',
@@ -58,11 +59,19 @@ describe('CalendarConnectionCard', () => {
       status: 'connected',
       connectedAt: Date.now(),
     }
-    mockMutate.mockResolvedValue(undefined)
+    mockFetch.mockResolvedValue({ disconnected: true })
     const Comp = await import(componentPath)
     const wrapper = await mountSuspended(Comp.default)
+
     await wrapper.find('[data-testid="calendar-disconnect-btn"]').trigger('click')
-    expect(mockMutate).toHaveBeenCalledWith({})
+    await nextTick()
+
+    const confirmBtn = document.querySelector('[data-testid="disconnect-confirm-btn"]') as HTMLButtonElement
+    expect(confirmBtn).toBeTruthy()
+    confirmBtn.click()
+    await nextTick()
+
+    expect(mockFetch).toHaveBeenCalledWith('/api/calendar/disconnect', { method: 'POST' })
   })
 
   it('shows Google Calendar label', async () => {
