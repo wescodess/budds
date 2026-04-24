@@ -232,6 +232,85 @@ describe('contentFlags - flag rate query', () => {
     expect(result).toBeNull()
   })
 
+  test('returns correct non-zero flag rate when items are flagged', async () => {
+    const t = convexTest(schema, modules)
+
+    const folderId = await t.run(async (ctx: any) => {
+      return await ctx.db.insert('folders', {
+        userId: USER_A.tokenIdentifier,
+        name: 'Folder',
+        documentCount: 0,
+      })
+    })
+
+    const courseId = await t.run(async (ctx: any) => {
+      return await ctx.db.insert('courses', {
+        userId: USER_A.tokenIdentifier,
+        folderId,
+        title: 'Flag Rate Test',
+        status: 'ready',
+        sourceType: 'folder',
+        sourceConfidence: { docCount: 3, webPercent: 0 },
+        pace: 'steady',
+        outlineSections: [],
+        completedSectionCount: 0,
+        totalSectionCount: 1,
+        webSearchEnabled: false,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      })
+    })
+
+    const asUser = t.withIdentity(USER_A)
+
+    const roomId = await t.run(async (ctx: any) => {
+      return await ctx.db.insert('flashcardRooms', {
+        userId: USER_A.tokenIdentifier,
+        folderId,
+        title: 'Test Room',
+        updatedAt: Date.now(),
+        courseScoped: true,
+      })
+    })
+
+    const cardIds = await t.run(async (ctx: any) => {
+      const ids = []
+      for (let i = 0; i < 4; i++) {
+        ids.push(await ctx.db.insert('flashcardRoomCards', {
+          roomId,
+          userId: USER_A.tokenIdentifier,
+          displayOrder: i,
+          term: `Term ${i}`,
+          definition: `Def ${i}`,
+        }))
+      }
+      return ids
+    })
+
+    await t.run(async (ctx: any) => {
+      await ctx.db.insert('courseSections', {
+        courseId,
+        userId: USER_A.tokenIdentifier,
+        order: 0,
+        title: 'Section 1',
+        knowledgeType: 'factual',
+        status: 'ready',
+        contentBlocks: [
+          { type: 'flashcard', entityId: roomId, order: 0 },
+        ],
+        masteryLevel: 'new',
+      })
+    })
+
+    await asUser.mutation(api.contentFlags.flagFlashcard, {
+      cardId: cardIds[0],
+      correctedDefinition: 'Corrected 0',
+    })
+
+    const result = await asUser.query(api.contentFlags.getFlagRateForCourse, { courseId })
+    expect(result).toEqual({ totalItems: 4, flaggedItems: 1, flagRate: 25 })
+  })
+
   test('returns zero flag rate for course with no flagged items', async () => {
     const t = convexTest(schema, modules)
 

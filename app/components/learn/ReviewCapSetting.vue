@@ -70,6 +70,7 @@ async function saveCap() {
       v-if="open"
       class="absolute right-0 top-8 z-10 w-56 rounded-lg border border-stone-700 bg-stone-900 p-3 shadow-lg"
       data-testid="review-cap-panel"
+      @keydown.escape="open = false"
     >
       <label class="block text-xs text-stone-400">
         Daily review cap
