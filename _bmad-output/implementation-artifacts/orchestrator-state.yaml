@@ -1,40 +1,44 @@
 mode: running
 current_phase: epic-story
-current_story: 6-1-google-calendar-oauth-connection
+current_story: 6-3-calendar-event-creation-and-adaptive-composition
 current_epic: 6
 retry_count: 0
 last_epic_complete_fired: 5
 
 last_verdict:
   subagent: bmad-story-runner
-  story: 6-1-google-calendar-oauth-connection
+  story: 6-3-calendar-event-creation-and-adaptive-composition
   epic: 6
   status: PASS
-  pr_url: 'https://github.com/wescodess/budds/pull/123'
-  branch: feat/6-1-google-calendar-oauth
-  commit_sha: '7b7b951bf46e549a3c86a1a5f6e35a010d8c6338'
-  files_changed: 9
-  tasks_completed: 10
-  tasks_total: 10
-  findings_deferred: 3
+  pr_url: 'https://github.com/wescodess/budds/pull/125'
+  branch: feat/6-3-calendar-event-creation
+  commit_sha: 'bdc1a7d055fb0a56806f761539c8b3e0c7e1a3d6'
+  files_changed: 10
+  tasks_completed: 8
+  tasks_total: 8
+  findings_deferred: 4
   lint_pass: null
   typecheck_pass: true
   unit_tests_pass: true
   e2e_tests_pass: null
   review_pass: true
   summary: >
-    Story 6-1 PASS. calendarConnections table added to schema. OAuth flow: connect.get.ts initiates
-    with calendar.events scope + offline access, callback.get.ts exchanges code for tokens, detects
-    timezone from Google Calendar API settings, stores base64-encoded tokens in Convex.
-    CalendarConnectionCard shows Connected/Disconnect or Connect state. Token refresh helper in
-    server/utils/calendar-tokens.ts. Code review: 2 blockers fixed (getTokens and updateTokens
-    changed from public query/mutation to internalQuery/internalMutation per NFR9 server-only token
-    requirement), 3 deferred (unused return value in connect.get.ts, duplicated GOOGLE_TOKEN_URL
-    constant, no OAuth error display in UI). 692 Convex tests pass (+10 new), 409 component tests
-    pass (+5 new), 1 pre-existing failure in contentFlags.test.ts. PR #123 merged to dev.
+    Story 6-3 PASS. calendarEvents table added to schema with userId, calendarConnectionId,
+    calendarEventId, courseId, scheduledAt, sessionType, status fields. CRUD layer in
+    convex/calendarEvents.ts with internal create/delete mutations and public query/update functions.
+    Added getMyTokens query and refreshMyTokens mutation to calendarConnections.ts for server-side
+    sync access (code review blocker: internal functions cannot be called via ConvexHttpClient).
+    Session composition pure functions: morning < 12:00 favors new content, evening >= 12:00 favors
+    review, slots <= 15 min get audio-only. Google Calendar API helper for event creation/deletion
+    with base64 token decoding. Sync endpoint creates events per active course with deep links.
+    Code review: 2 blockers fixed (hardcoded hasDueReviews replaced with actual review item query,
+    internal function calls via ConvexHttpClient replaced with public auth-gated equivalents),
+    4 deferred (slot scheduling always at morningStart, duplicate dayMap, no rate limiting, leaked
+    Google event IDs). 725 tests pass (+28 new), 1 pre-existing failure in contentFlags.test.ts,
+    8 pre-existing skips. PR #125 merged to dev.
   block_reason: null
   block_context: null
-  at: '2026-04-23T19:35:00Z'
+  at: '2026-04-23T20:20:00Z'
 last_retro: 'epic-4-retro-2026-04-24.md'
 
 config:
@@ -59,8 +63,8 @@ paths:
   ux_spec: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/ux-design-learn-module.md
 
 counters:
-  stories_completed_this_run: 0
-  stories_completed_total: 36
+  stories_completed_this_run: 2
+  stories_completed_total: 38
 
 escalation:
   pending: null
