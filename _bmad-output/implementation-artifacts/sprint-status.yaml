@@ -32,7 +32,7 @@
 # - Epics 1-4 are MVP. Epics 5-7 are fast-follow.
 
 generated: 2026-04-22
-last_updated: 2026-04-24
+last_updated: 2026-04-23
 project: Budds Learn Module
 project_key: LEARN
 tracking_system: file-system
@@ -114,7 +114,15 @@ development_status:
   6-3-calendar-event-creation-and-adaptive-composition: done
   6-4-missed-session-rescheduling: done
   6-5-calendar-disconnection-and-cleanup: done
-  epic-6-retrospective: optional
+  epic-6-retrospective: done
+
+  # === Prep Sprint — Epic 7 (from Epic 6 retro) ===
+  prep-sprint-epic-7: done
+  prep-7-1-fix-calendar-disconnect-test: done
+  prep-7-2-fix-contentflags-test-failure: done
+  prep-7-3-extract-gettodayintimezone: done
+  prep-7-4-extract-makeconvexclient: done
+  prep-sprint-epic-7-retrospective: optional
 
   # === Epic 7: Offline Access (Fast-Follow) ===
   epic-7: backlog
