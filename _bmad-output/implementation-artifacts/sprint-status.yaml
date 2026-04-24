@@ -127,6 +127,6 @@ development_status:
   # === Epic 7: Offline Access (Fast-Follow) ===
   epic-7: in-progress
   7-1-service-worker-and-offline-detection: done
-  7-2-section-content-caching: backlog
+  7-2-section-content-caching: in-progress
   7-3-offline-retakes-and-sync: backlog
   epic-7-retrospective: optional
