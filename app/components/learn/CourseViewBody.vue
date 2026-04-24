@@ -54,42 +54,48 @@ const showPaceSelector = ref(false)
 </script>
 
 <template>
-  <div class="mx-auto max-w-2xl px-4 py-8">
-    <NuxtLink
-      :to="backUrl"
-      class="mb-6 inline-flex items-center gap-1.5 text-sm text-stone-400 transition-colors hover:text-stone-200"
-    >
-      <ArrowLeft class="h-4 w-4" />
-      {{ backLabel }}
-    </NuxtLink>
+  <div class="relative">
+    <div class="sticky top-0 z-10 border-b border-stone-800 bg-background pb-3 pt-2">
+      <div class="mx-auto max-w-2xl px-4">
+        <NuxtLink
+          :to="backUrl"
+          class="mb-4 inline-flex items-center gap-1.5 text-sm text-stone-400 transition-colors hover:text-stone-200"
+        >
+          <ArrowLeft class="h-4 w-4" />
+          {{ backLabel }}
+        </NuxtLink>
 
-    <div v-if="!course" class="py-16 text-center">
-      <div class="mx-auto h-6 w-6 animate-spin rounded-full border-2 border-amber-500 border-t-transparent" />
-      <p class="mt-3 text-sm text-stone-400">Loading course...</p>
+        <div v-if="!course" class="py-8 text-center">
+          <div class="mx-auto h-6 w-6 animate-spin rounded-full border-2 border-amber-500 border-t-transparent" />
+          <p class="mt-3 text-sm text-stone-400">Loading course...</p>
+        </div>
+
+        <template v-else>
+          <h1 class="mb-2 text-2xl font-bold text-stone-100">{{ course.title }}</h1>
+          <div class="flex items-center gap-4">
+            <span class="text-sm text-stone-400">
+              {{ course.completedSectionCount ?? 0 }}/{{ course.totalSectionCount }} sections
+            </span>
+            <span class="text-sm text-stone-500">{{ progress }}% complete</span>
+          </div>
+          <div class="mt-3 h-2 overflow-hidden rounded-full bg-stone-800" data-testid="progress-bar-track">
+            <div
+              class="h-full rounded-full bg-amber-500 transition-all"
+              :style="{ width: `${progress}%` }"
+              role="progressbar"
+              :aria-valuenow="progress"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              :aria-label="`Course progress: ${progress}%`"
+              data-testid="progress-bar"
+            />
+          </div>
+        </template>
+      </div>
     </div>
 
-    <template v-else>
-      <div class="mb-8">
-        <h1 class="mb-2 text-2xl font-bold text-stone-100">{{ course.title }}</h1>
-        <div class="flex items-center gap-4">
-          <span class="text-sm text-stone-400">
-            {{ course.completedSectionCount ?? 0 }}/{{ course.totalSectionCount }} sections
-          </span>
-          <span class="text-sm text-stone-500">{{ progress }}% complete</span>
-        </div>
-        <div class="mt-3 h-2 overflow-hidden rounded-full bg-stone-800" data-testid="progress-bar-track">
-          <div
-            class="h-full rounded-full bg-amber-500 transition-all"
-            :style="{ width: `${progress}%` }"
-            role="progressbar"
-            :aria-valuenow="progress"
-            aria-valuemin="0"
-            aria-valuemax="100"
-            :aria-label="`Course progress: ${progress}%`"
-            data-testid="progress-bar"
-          />
-        </div>
-      </div>
+    <div class="mx-auto max-w-2xl px-4 py-6">
+    <template v-if="course">
 
       <div v-if="needsStart" class="mb-6 flex justify-center">
         <LearnStartLearningButton :course-id="courseId" :folder-id="folderId" />
@@ -234,5 +240,6 @@ const showPaceSelector = ref(false)
         </div>
       </div>
     </template>
+    </div>
   </div>
 </template>
