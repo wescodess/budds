@@ -1,5 +1,11 @@
 # Deferred Work
 
+## Deferred from: code review of 7-3-offline-retakes-and-sync (2026-04-23)
+
+- **No retry backoff or limit for permanently failing offline sync attempts.** When `reviewSection` mutation fails during sync (e.g., section was deleted while offline), the attempt remains unsynced in IndexedDB and retries on every reconnect. No exponential backoff or max-retry cap. Low severity since Convex mutations are idempotent and the server error is descriptive. Add a `syncAttempts` counter per attempt and skip after N failures.
+- **`clearSyncedAttempts` uses cursor-based deletion loop.** IndexedDB lacks a "delete all by index value" API, so the implementation iterates via `openCursor` + `cursor.delete()` + `cursor.continue()`. Standard pattern but verbose. Consider `objectStore.clear()` if the store only contains synced items at cleanup time, or batch via `getAll` + `delete`.
+- **Sync composable not wired into non-folder section pages.** `useOfflineSync` is only instantiated in `app/pages/app/folders/[id]/learn/[courseId]/[sectionId].vue`. Currently this is the only section page, but if a top-level (non-folder) section page is added, offline sync would not run there. Consider a layout-level plugin if more section page variants emerge.
+
 ## Deferred from: code review of 7-2-section-content-caching (2026-04-23)
 
 - **Convex storage URLs in cached audio entries will expire.** `getOfflineCachePayload` resolves `ctx.storage.getUrl()` for audio turns (30-min TTL). The URLs are stored in IndexedDB `audioUrls` field but only the Cache API responses (fetched at cache time via `cacheAudioUrls`) are used for offline playback. The stale URL strings in IndexedDB are misleading but non-functional. No user impact since offline audio playback reads from Cache API, not the stored URLs.

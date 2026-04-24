@@ -3,30 +3,61 @@ import { Check, X, HelpCircle, Flag } from 'lucide-vue-next'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 
-const props = defineProps<{ quizId: string }>()
-
-const quizQuery = import.meta.client
-  ? useConvexQuery(
-      api.quizzes.getWithQuestions,
-      computed(() => ({ id: props.quizId as Id<'quizzes'> })),
-    )
-  : { data: ref(null) }
-
-const quizData = computed(() => quizQuery.data?.value as {
-  quiz: { title: string }
+interface OfflineQuizData {
   questions: Array<{
-    _id: string
     question: string
     type: string
     options?: string[]
     correctAnswer: string
     explanation?: string
     order: number
-    flagged?: boolean
-    correctedAnswer?: string
-    correctedExplanation?: string
   }>
-} | null)
+}
+
+const props = defineProps<{
+  quizId: string
+  offlineData?: OfflineQuizData
+  isOffline?: boolean
+  sectionId?: string
+  courseId?: Id<'courses'>
+}>()
+
+const quizQuery = import.meta.client && !props.isOffline && props.quizId
+  ? useConvexQuery(
+      api.quizzes.getWithQuestions,
+      computed(() => ({ id: props.quizId as Id<'quizzes'> })),
+    )
+  : { data: ref(null) }
+
+const quizData = computed(() => {
+  if (props.isOffline && props.offlineData) {
+    return {
+      quiz: { title: 'Practice' },
+      questions: props.offlineData.questions.map((q, i) => ({
+        _id: `offline-${i}`,
+        ...q,
+        flagged: false as boolean | undefined,
+        correctedAnswer: undefined as string | undefined,
+        correctedExplanation: undefined as string | undefined,
+      })),
+    }
+  }
+  return quizQuery.data?.value as {
+    quiz: { title: string }
+    questions: Array<{
+      _id: string
+      question: string
+      type: string
+      options?: string[]
+      correctAnswer: string
+      explanation?: string
+      order: number
+      flagged?: boolean
+      correctedAnswer?: string
+      correctedExplanation?: string
+    }>
+  } | null
+})
 
 const questions = computed(() => quizData.value?.questions ?? [])
 
@@ -44,18 +75,29 @@ const flagCorrectedExplanation = ref<Record<string, string>>({})
 const flagSaving = ref<Record<string, boolean>>({})
 const flagError = ref<Record<string, string>>({})
 
-const flagMutation = import.meta.client
+const flagMutation = import.meta.client && !props.isOffline
   ? useConvexMutation(api.contentFlags.flagQuizQuestion)
   : { mutate: async () => ({ success: true }) }
+
+const offlineAttempts = props.isOffline ? useOfflineAttempts() : null
 
 const allAnswered = computed(() => {
   if (questions.value.length === 0) return false
   return questions.value.every((q) => submitted.value[q._id])
 })
 
-watch(allAnswered, (done) => {
+watch(allAnswered, async (done) => {
   if (done) {
     emit('quizCompleted', { correct: correctCount.value, total: questions.value.length })
+
+    if (offlineAttempts && props.sectionId && props.courseId) {
+      await offlineAttempts.queueQuizRetake(
+        props.sectionId,
+        props.courseId,
+        correctCount.value,
+        questions.value.length,
+      )
+    }
   }
 })
 
@@ -120,6 +162,7 @@ async function saveFlag(questionId: string) {
     <div class="mb-4 flex items-center gap-2">
       <HelpCircle class="h-4 w-4 text-amber-500" />
       <span class="text-xs font-medium uppercase tracking-wide text-stone-400">Practice</span>
+      <span v-if="isOffline" class="ml-auto text-xs text-amber-400">Offline</span>
     </div>
 
     <div v-if="!quizData" class="py-8 text-center text-sm text-stone-400">
@@ -244,7 +287,7 @@ async function saveFlag(questionId: string) {
               {{ effectiveExplanation(q) }}
             </p>
 
-            <div class="mt-3">
+            <div v-if="!isOffline" class="mt-3">
               <button
                 v-if="!flaggingOpen[q._id]"
                 type="button"
