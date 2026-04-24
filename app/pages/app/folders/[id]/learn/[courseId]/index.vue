@@ -36,7 +36,7 @@ function handleDeleted() {
 </script>
 
 <template>
-  <div class="min-h-0 flex-1 overflow-y-auto bg-background">
+  <div class="h-full overflow-y-auto bg-background">
     <LearnCourseViewBody
       :course="course"
       :sections="sections"
