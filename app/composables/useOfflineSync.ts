@@ -1,5 +1,5 @@
 import { ref, watch, onUnmounted } from 'vue'
-import { getUnsyncedAttempts, markAttemptSynced, clearSyncedAttempts } from './useOfflineCache'
+import { getUnsyncedAttempts, markAttemptSynced, clearSyncedAttempts, incrementSyncAttempts } from './useOfflineCache'
 import type { OfflineAttempt } from './useOfflineCache'
 import { api } from '#convex/api'
 import type { Id } from '~~/convex/_generated/dataModel'
@@ -32,7 +32,16 @@ export function useOfflineSync() {
         return
       }
 
-      const sorted = [...attempts].sort((a, b) => a.timestamp - b.timestamp)
+      const MAX_SYNC_ATTEMPTS = 5
+      const retriable = attempts.filter(a => (a.syncAttempts ?? 0) < MAX_SYNC_ATTEMPTS)
+      pendingCount.value = retriable.length
+
+      if (retriable.length === 0) {
+        isSyncing.value = false
+        return
+      }
+
+      const sorted = [...retriable].sort((a, b) => a.timestamp - b.timestamp)
       const grouped = new Map<string, OfflineAttempt[]>()
       for (const attempt of sorted) {
         const key = attempt.sectionId
@@ -53,6 +62,11 @@ export function useOfflineSync() {
               quizTotal: latest.data.quizTotal ?? 0,
             })
           } catch {
+            for (const attempt of sectionAttempts) {
+              if (attempt.id !== undefined) {
+                await incrementSyncAttempts(attempt.id)
+              }
+            }
             continue
           }
         }

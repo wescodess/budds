@@ -82,7 +82,6 @@ const completionStreak = ref<number | null>(null)
 const currentItem = computed(() => items.value[currentIndex.value] ?? null)
 const totalItems = computed(() => items.value.length)
 const reviewedCount = computed(() => currentIndex.value)
-const isLoading = computed(() => !sessionStarted.value && (dueQuery.data?.value as any[] | undefined)?.length === undefined)
 const isEmpty = computed(() => sessionStarted.value && items.value.length === 0)
 
 const hasRated = computed(() => ratings.value.length > 0)

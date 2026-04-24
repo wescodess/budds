@@ -268,6 +268,8 @@ export const checkMissedSessions = internalAction({
       const dayMap: Record<string, number> = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 }
       const preferredDays = new Set(prefs.preferredDays.map((d: string) => dayMap[d] ?? -1))
 
+      const bookedSlots = new Set<number>()
+
       for (const missedEvent of missed) {
         const [startHour, startMinute] = prefs.morningStart.split(':').map(Number)
         let nextSlot: Date | null = null
@@ -299,8 +301,12 @@ export const checkMissedSessions = internalAction({
             const offsetMs = new Date(tzStr).getTime() - new Date(utcStr).getTime()
             const slotDate = new Date(tzDate.getTime() - offsetMs)
 
-            if (slotDate.getTime() > now) {
-              nextSlot = slotDate
+            let candidate_ts = slotDate.getTime()
+            if (candidate_ts > now) {
+              while (bookedSlots.has(candidate_ts)) {
+                candidate_ts += prefs.sessionMinutes * 60_000
+              }
+              nextSlot = new Date(candidate_ts)
               break
             }
           } catch {
@@ -309,6 +315,7 @@ export const checkMissedSessions = internalAction({
         }
 
         if (!nextSlot) continue
+        bookedSlots.add(nextSlot.getTime())
 
         const endTime = new Date(nextSlot.getTime() + prefs.sessionMinutes * 60_000)
 

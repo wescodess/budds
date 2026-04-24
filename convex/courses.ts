@@ -370,6 +370,12 @@ export const deleteCourse = mutation({
       }
     }
 
+    const reviewItems = await ctx.db
+      .query('reviewItems')
+      .withIndex('by_courseId', (q) => q.eq('courseId', args.id))
+      .collect()
+    for (const ri of reviewItems) await ctx.db.delete(ri._id)
+
     await ctx.db.delete(args.id)
   },
 })

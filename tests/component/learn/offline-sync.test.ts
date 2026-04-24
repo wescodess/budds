@@ -5,6 +5,7 @@ const mockMutate = vi.fn().mockResolvedValue({})
 const mockGetUnsyncedAttempts = vi.fn().mockResolvedValue([])
 const mockMarkAttemptSynced = vi.fn().mockResolvedValue(undefined)
 const mockClearSyncedAttempts = vi.fn().mockResolvedValue(undefined)
+const mockIncrementSyncAttempts = vi.fn().mockResolvedValue(undefined)
 
 const isOnlineRef = ref(true)
 
@@ -23,6 +24,7 @@ vi.mock('~/composables/useOfflineCache', () => ({
   getUnsyncedAttempts: (...args: any[]) => mockGetUnsyncedAttempts(...args),
   markAttemptSynced: (...args: any[]) => mockMarkAttemptSynced(...args),
   clearSyncedAttempts: (...args: any[]) => mockClearSyncedAttempts(...args),
+  incrementSyncAttempts: (...args: any[]) => mockIncrementSyncAttempts(...args),
   addOfflineAttempt: vi.fn().mockResolvedValue(1),
   useOfflineCache: () => ({
     cacheStatus: { value: new Map() },
