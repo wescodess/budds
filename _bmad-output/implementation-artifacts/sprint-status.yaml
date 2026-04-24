@@ -112,7 +112,7 @@ development_status:
   6-1-google-calendar-oauth-connection: done
   6-2-learning-session-preferences: done
   6-3-calendar-event-creation-and-adaptive-composition: done
-  6-4-missed-session-rescheduling: backlog
+  6-4-missed-session-rescheduling: done
   6-5-calendar-disconnection-and-cleanup: backlog
   epic-6-retrospective: optional
 
