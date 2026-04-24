@@ -1,44 +1,46 @@
 mode: running
 current_phase: epic-story
-current_story: 6-3-calendar-event-creation-and-adaptive-composition
+current_story: 6-4-missed-session-rescheduling
 current_epic: 6
 retry_count: 0
 last_epic_complete_fired: 5
 
 last_verdict:
   subagent: bmad-story-runner
-  story: 6-3-calendar-event-creation-and-adaptive-composition
+  story: 6-4-missed-session-rescheduling
   epic: 6
   status: PASS
-  pr_url: 'https://github.com/wescodess/budds/pull/125'
-  branch: feat/6-3-calendar-event-creation
-  commit_sha: 'bdc1a7d055fb0a56806f761539c8b3e0c7e1a3d6'
-  files_changed: 10
-  tasks_completed: 8
-  tasks_total: 8
-  findings_deferred: 4
+  pr_url: 'https://github.com/wescodess/budds/pull/126'
+  branch: feat/6-4-missed-rescheduling
+  commit_sha: '424073a4c70d4fea8613c569e7d4fce40004ad81'
+  files_changed: 12
+  tasks_completed: 7
+  tasks_total: 7
+  findings_deferred: 2
   lint_pass: null
   typecheck_pass: true
   unit_tests_pass: true
   e2e_tests_pass: null
   review_pass: true
   summary: >
-    Story 6-3 PASS. calendarEvents table added to schema with userId, calendarConnectionId,
-    calendarEventId, courseId, scheduledAt, sessionType, status fields. CRUD layer in
-    convex/calendarEvents.ts with internal create/delete mutations and public query/update functions.
-    Added getMyTokens query and refreshMyTokens mutation to calendarConnections.ts for server-side
-    sync access (code review blocker: internal functions cannot be called via ConvexHttpClient).
-    Session composition pure functions: morning < 12:00 favors new content, evening >= 12:00 favors
-    review, slots <= 15 min get audio-only. Google Calendar API helper for event creation/deletion
-    with base64 token decoding. Sync endpoint creates events per active course with deep links.
-    Code review: 2 blockers fixed (hardcoded hasDueReviews replaced with actual review item query,
-    internal function calls via ConvexHttpClient replaced with public auth-gated equivalents),
-    4 deferred (slot scheduling always at morningStart, duplicate dayMap, no rate limiting, leaked
-    Google event IDs). 725 tests pass (+28 new), 1 pre-existing failure in contentFlags.test.ts,
-    8 pre-existing skips. PR #125 merged to dev.
+    Story 6-4 PASS. Missed session rescheduling implemented via hourly Convex cron.
+    checkAndMarkMissed internal mutation queries scheduled events where scheduledAt < now,
+    patches each to 'missed' status. createRescheduled internal mutation creates new events
+    with 'rescheduled' status. checkMissedSessions internal action orchestrates the full flow:
+    queries all connected users, marks missed events, refreshes Google OAuth tokens, finds next
+    available slot based on user preferences, creates Google Calendar events via API, stores
+    rescheduled events in Convex. Extracted findNextPreferredSlot and preferredDayNumbersFromStrings
+    from sync endpoint to session-composition.ts as shared utilities. Refactored sync.post.ts to
+    use shared functions. Added getAllConnectedUserIds and getConnectionByUser internal queries to
+    calendarConnections.ts. Added getById internal query to courses.ts. Registered hourly cron
+    'check missed calendar sessions' in crons.ts. Code review: 2 blockers fixed (token refresh
+    now skips user when env vars missing or refresh fails; deleted courses skip rescheduling),
+    2 deferred (slot-finding logic duplicated in Convex action due to runtime boundary, multiple
+    missed events get same rescheduled slot). 738 tests pass (+13 new), 1 pre-existing failure
+    in contentFlags.test.ts, 8 pre-existing skips. PR #126 merged to dev.
   block_reason: null
   block_context: null
-  at: '2026-04-23T20:20:00Z'
+  at: '2026-04-23T21:00:00Z'
 last_retro: 'epic-4-retro-2026-04-24.md'
 
 config:
@@ -63,8 +65,8 @@ paths:
   ux_spec: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/ux-design-learn-module.md
 
 counters:
-  stories_completed_this_run: 2
-  stories_completed_total: 38
+  stories_completed_this_run: 3
+  stories_completed_total: 39
 
 escalation:
   pending: null
