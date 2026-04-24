@@ -1,46 +1,45 @@
 mode: running
 current_phase: epic-story
-current_story: 6-4-missed-session-rescheduling
+current_story: 6-5-calendar-disconnection-and-cleanup
 current_epic: 6
 retry_count: 0
 last_epic_complete_fired: 5
 
 last_verdict:
   subagent: bmad-story-runner
-  story: 6-4-missed-session-rescheduling
+  story: 6-5-calendar-disconnection-and-cleanup
   epic: 6
   status: PASS
-  pr_url: 'https://github.com/wescodess/budds/pull/126'
-  branch: feat/6-4-missed-rescheduling
-  commit_sha: '424073a4c70d4fea8613c569e7d4fce40004ad81'
-  files_changed: 12
-  tasks_completed: 7
-  tasks_total: 7
-  findings_deferred: 2
+  pr_url: 'https://github.com/wescodess/budds/pull/127'
+  branch: feat/6-5-calendar-disconnect-cleanup
+  commit_sha: 'bc3f4b16b9fd664a89d52cdd5fda7590b986c2b0'
+  files_changed: 6
+  tasks_completed: 5
+  tasks_total: 5
+  findings_deferred: 3
   lint_pass: null
   typecheck_pass: true
   unit_tests_pass: true
   e2e_tests_pass: null
   review_pass: true
   summary: >
-    Story 6-4 PASS. Missed session rescheduling implemented via hourly Convex cron.
-    checkAndMarkMissed internal mutation queries scheduled events where scheduledAt < now,
-    patches each to 'missed' status. createRescheduled internal mutation creates new events
-    with 'rescheduled' status. checkMissedSessions internal action orchestrates the full flow:
-    queries all connected users, marks missed events, refreshes Google OAuth tokens, finds next
-    available slot based on user preferences, creates Google Calendar events via API, stores
-    rescheduled events in Convex. Extracted findNextPreferredSlot and preferredDayNumbersFromStrings
-    from sync endpoint to session-composition.ts as shared utilities. Refactored sync.post.ts to
-    use shared functions. Added getAllConnectedUserIds and getConnectionByUser internal queries to
-    calendarConnections.ts. Added getById internal query to courses.ts. Registered hourly cron
-    'check missed calendar sessions' in crons.ts. Code review: 2 blockers fixed (token refresh
-    now skips user when env vars missing or refresh fails; deleted courses skip rescheduling),
-    2 deferred (slot-finding logic duplicated in Convex action due to runtime boundary, multiple
-    missed events get same rescheduled slot). 738 tests pass (+13 new), 1 pre-existing failure
-    in contentFlags.test.ts, 8 pre-existing skips. PR #126 merged to dev.
+    Story 6-5 PASS. Calendar disconnection with full Google Calendar cleanup implemented.
+    Created server/api/calendar/disconnect.post.ts endpoint that authenticates user, refreshes
+    OAuth tokens if expired, fetches all calendarEvents, deletes each from Google Calendar
+    (best-effort, continues on individual failures), then calls disconnect mutation for Convex
+    cleanup. Updated disconnect mutation in calendarConnections.ts to cascade-delete all
+    calendarEvents for the user before deleting the connection record. Updated
+    CalendarConnectionCard.vue to call the server endpoint via $fetch instead of the Convex
+    mutation directly, added confirmation dialog (alertdialog role) with Escape key dismiss
+    and initial focus on Cancel button. Code review: 2 blockers fixed (unused internal import,
+    missing keyboard accessibility on confirmation dialog), 3 deferred (no error toast on
+    disconnect failure, makeConvexClient duplicated across 3 files, no rate limiting on
+    endpoint). 739 tests pass (+1 new), 1 pre-existing failure in contentFlags.test.ts,
+    8 pre-existing skips. PR #127 merged to dev. EPIC 6 COMPLETE (5/5 stories).
+    epic-6-retrospective: optional. Epic boundary detected.
   block_reason: null
   block_context: null
-  at: '2026-04-23T21:00:00Z'
+  at: '2026-04-23T21:30:00Z'
 last_retro: 'epic-4-retro-2026-04-24.md'
 
 config:
@@ -65,8 +64,8 @@ paths:
   ux_spec: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/ux-design-learn-module.md
 
 counters:
-  stories_completed_this_run: 3
-  stories_completed_total: 39
+  stories_completed_this_run: 4
+  stories_completed_total: 40
 
 escalation:
   pending: null
