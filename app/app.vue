@@ -4,6 +4,7 @@ import { useMediaQuery } from '@vueuse/core'
 import { getAppThemeBootstrapScript } from '~/composables/useAppTheme'
 import { useMobileKeyboardInset } from '~/composables/useMobileKeyboardInset'
 import StickyMiniPlayer from '~/components/audio-overview/StickyMiniPlayer.vue'
+import OfflineBanner from '~/components/learn/OfflineBanner.vue'
 
 useHead({
   meta: [
@@ -55,6 +56,9 @@ watch(
 
 <template>
   <MotionConfig reduced-motion="user">
+    <ClientOnly>
+      <OfflineBanner />
+    </ClientOnly>
     <NuxtLayout>
       <NuxtPage :transition="pageTransition" />
     </NuxtLayout>
