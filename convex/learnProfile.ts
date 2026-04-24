@@ -3,6 +3,7 @@ import { mutation, query } from './_generated/server'
 import type { MutationCtx } from './_generated/server'
 import { evaluateStreak } from './lib/streak'
 import { requireAuth } from './lib/auth'
+import { getTodayInTimezone } from './lib/dates'
 
 export const getProfile = query({
   args: {},
@@ -65,17 +66,6 @@ export async function getOrCreateProfile(ctx: MutationCtx, userId: string) {
   })
 
   return (await ctx.db.get(id))!
-}
-
-function getTodayInTimezone(timezone?: string): string {
-  if (timezone) {
-    try {
-      return new Date().toLocaleDateString('en-CA', { timeZone: timezone })
-    } catch {
-      // fall through to UTC
-    }
-  }
-  return new Date().toISOString().slice(0, 10)
 }
 
 export async function updateStreakForActivity(ctx: MutationCtx, userId: string) {
