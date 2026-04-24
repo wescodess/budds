@@ -1,45 +1,45 @@
 mode: running
 current_phase: epic-story
-current_story: 7-2-section-content-caching
+current_story: 7-3-offline-retakes-and-sync
 current_epic: 7
 retry_count: 0
 last_epic_complete_fired: prep-7
 
 last_verdict:
   subagent: bmad-story-runner
-  story: 7-2-section-content-caching
+  story: 7-3-offline-retakes-and-sync
   epic: 7
   status: PASS
-  pr_url: 'https://github.com/wescodess/budds/pull/130'
-  branch: feat/7-2-section-content-caching
-  commit_sha: 'c7acfa6c0c9f0d7cf167302c234c24af1980af19'
-  files_changed: 12
-  tasks_completed: 8
-  tasks_total: 8
-  findings_deferred: 4
+  pr_url: 'https://github.com/wescodess/budds/pull/131'
+  branch: feat/7-3-offline-retakes-sync
+  commit_sha: '534c3c7bf95b8cd050e6aa584031cc531ddebd85'
+  files_changed: 11
+  tasks_completed: 9
+  tasks_total: 9
+  findings_deferred: 3
   lint_pass: null
   typecheck_pass: true
   unit_tests_pass: true
   e2e_tests_pass: null
   review_pass: true
   summary: >
-    Story 7-2 PASS (8/8 tasks, 5 ACs, 12 files). Created useOfflineCache composable wrapping IndexedDB
-    (budds-offline DB, sections store) for section content caching and Cache API (budds-learn-audio-v1)
-    for audio files. Added getOfflineCachePayload Convex query that bundles text, quiz questions,
-    flashcard cards, and resolved audio storage URLs into a single cacheable payload. Server endpoint
-    /api/learn/section-cache-payload.get.ts fetches via ConvexHttpClient. Section void page caches
-    content fire-and-forget after completeSection succeeds, sets offlineAvailable=true via mutation.
-    When offline and Convex data unavailable, falls back to IndexedDB cached data with amber
-    "Viewing cached offline version" banner. CourseViewBody shows HardDriveDownload (filled) for
-    cached sections, Download (outlined) for completed-not-cached. SW activate handler preserves
-    budds-learn-audio-v1 cache namespace. Code review: 2 blockers fixed (dead onGenerationStarted
-    function + helperPane destructure removed, checkCacheStatus optimized to single IndexedDB
-    connection), 4 deferred (stale audio URLs in IDB, no IDB quota management, quiz answers in
-    public query, hardcoded dark-mode color). 5 new Convex integration tests + 6 new component
-    tests. 746 Convex + 429 component tests pass. PR #130 merged to dev.
+    Story 7-3 PASS (9/9 tasks, 6 ACs, 11 files). FINAL STORY OF THE LEARN MODULE. Added offlineAttempts
+    IndexedDB store (DB v2) with by_synced and by_sectionId indexes. Created useOfflineAttempts composable
+    for queuing quiz retake and flashcard practice results with original timestamps. Created useOfflineSync
+    composable that watches isOnline, groups attempts by sectionId, sends most recent per section to
+    reviewSection mutation on reconnect (timestamp-based conflict resolution), marks synced, clears queue.
+    Updated QuizBlock and FlashcardBlock to accept offline data from cached sections via props, queue
+    results to IndexedDB instead of calling Convex mutations when offline, hide flag UI in offline mode.
+    SectionBlockRenderer passes isOffline and sectionId down to child blocks. Section void page shows
+    sync status banner during active sync. Code review: 2 blockers fixed (unused event parameter in
+    openDB, composable instantiation moved to setup scope), 3 deferred (no retry backoff for permanently
+    failing sync, cursor-based deletion, sync not wired to non-existent top-level section page). 8 new
+    offline-attempts tests + 6 new offline-sync conflict resolution tests. 746 Convex + 442 component
+    tests pass. PR #131 merged to dev. EPIC 7 COMPLETE (3/3 stories). LEARN MODULE COMPLETE (7 epics,
+    45 stories).
   block_reason: null
   block_context: null
-  at: '2026-04-24T02:25:00Z'
+  at: '2026-04-23T22:45:00Z'
 last_retro: 'epic-6-retro-2026-04-24.md'
 
 config:
@@ -64,8 +64,8 @@ paths:
   ux_spec: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/ux-design-learn-module.md
 
 counters:
-  stories_completed_this_run: 2
-  stories_completed_total: 43
+  stories_completed_this_run: 3
+  stories_completed_total: 44
 
 escalation:
   pending: null
