@@ -7,37 +7,36 @@ last_epic_complete_fired: prep-7
 
 last_verdict:
   subagent: bmad-story-runner
-  story: 7-3-offline-retakes-and-sync
-  epic: 7
+  story: low-priority-cleanup-2
+  epic: null
   status: PASS
-  pr_url: 'https://github.com/wescodess/budds/pull/131'
-  branch: feat/7-3-offline-retakes-sync
-  commit_sha: '534c3c7bf95b8cd050e6aa584031cc531ddebd85'
-  files_changed: 11
-  tasks_completed: 9
-  tasks_total: 9
-  findings_deferred: 3
+  pr_url: 'https://github.com/wescodess/budds/pull/133'
+  branch: chore/low-priority-cleanup
+  commit_sha: 'fb554897dc51619315b7d69ec49d4b3e1113e91b'
+  files_changed: 17
+  tasks_completed: 13
+  tasks_total: 15
+  findings_deferred: 0
   lint_pass: null
-  typecheck_pass: true
+  typecheck_pass: null
   unit_tests_pass: true
   e2e_tests_pass: null
-  review_pass: true
+  review_pass: null
   summary: >
-    Story 7-3 PASS (9/9 tasks, 6 ACs, 11 files). FINAL STORY OF THE LEARN MODULE. Added offlineAttempts
-    IndexedDB store (DB v2) with by_synced and by_sectionId indexes. Created useOfflineAttempts composable
-    for queuing quiz retake and flashcard practice results with original timestamps. Created useOfflineSync
-    composable that watches isOnline, groups attempts by sectionId, sends most recent per section to
-    reviewSection mutation on reconnect (timestamp-based conflict resolution), marks synced, clears queue.
-    Updated QuizBlock and FlashcardBlock to accept offline data from cached sections via props, queue
-    results to IndexedDB instead of calling Convex mutations when offline, hide flag UI in offline mode.
-    SectionBlockRenderer passes isOffline and sectionId down to child blocks. Section void page shows
-    sync status banner during active sync. Code review: 2 blockers fixed (unused event parameter in
-    openDB, composable instantiation moved to setup scope), 3 deferred (no retry backoff for permanently
-    failing sync, cursor-based deletion, sync not wired to non-existent top-level section page). 8 new
-    offline-attempts tests + 6 new offline-sync conflict resolution tests. 746 Convex + 442 component
-    tests pass. PR #131 merged to dev. EPIC 7 COMPLETE (3/3 stories). LEARN MODULE COMPLETE (7 epics,
-    45 stories).
+    Low-priority cleanup PASS (13/15 items, 17 files). Fixed: (1) offline banner dark-mode color,
+    (2) calendarEventId projection from listByUser/listScheduled, (3) removed unused getConvexTokenIdentifier
+    call in connect.get.ts, (4) extracted GOOGLE_TOKEN_URL to shared google-constants.ts, (5) ReviewCapSetting
+    escape key handler, (6) flagged-item guard on submitReview, (7) review session estimated duration display,
+    (8) FlashcardBlock suppressTimer leak on unmount, (9) skipped getNextSection removal (used in tests),
+    (10) skipped deleteDocumentFromR2 (already removed), (11) removed redundant auth:'guest' from login.vue
+    definePageMeta, (12) removed dead as-any casts in index.vue, (13) updateDocumentStatus clears
+    failureReason on non-failure transitions, (14) added non-zero flag rate test for getFlagRateForCourse,
+    (15) replaced .collect() with .take(200) in getFlagRateForCourse. Updated calendarEvents tests to not
+    reference projected-out calendarEventId. 747 Convex + 442 component tests pass (0 regressions).
+    PR #133 merged to dev.
   block_reason: null
+  block_context: null
+  at: '2026-04-23T23:20:00Z'
   block_context: null
   at: '2026-04-23T22:45:00Z'
 last_retro: 'epic-6-retro-2026-04-24.md'
