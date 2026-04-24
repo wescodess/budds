@@ -1,46 +1,41 @@
 mode: running
-current_phase: epic-story
-current_story: 6-5-calendar-disconnection-and-cleanup
-current_epic: 6
+current_phase: prep-story
+current_story: prep-7-1-fix-calendar-disconnect-test
+current_epic: prep-7
 retry_count: 0
-last_epic_complete_fired: 5
+last_epic_complete_fired: 6
 
 last_verdict:
   subagent: bmad-story-runner
-  story: 6-5-calendar-disconnection-and-cleanup
-  epic: 6
+  story: prep-7-all-prep-items
+  epic: prep-7
   status: PASS
-  pr_url: 'https://github.com/wescodess/budds/pull/127'
-  branch: feat/6-5-calendar-disconnect-cleanup
-  commit_sha: 'bc3f4b16b9fd664a89d52cdd5fda7590b986c2b0'
-  files_changed: 6
-  tasks_completed: 5
-  tasks_total: 5
-  findings_deferred: 3
+  pr_url: 'https://github.com/wescodess/budds/pull/128'
+  branch: prep/7-all-prep-items
+  commit_sha: '612a73db2871a716147b923a0057168e7ca6dc54'
+  files_changed: 9
+  tasks_completed: 4
+  tasks_total: 4
+  findings_deferred: 0
   lint_pass: null
   typecheck_pass: true
   unit_tests_pass: true
   e2e_tests_pass: null
   review_pass: true
   summary: >
-    Story 6-5 PASS. Calendar disconnection with full Google Calendar cleanup implemented.
-    Created server/api/calendar/disconnect.post.ts endpoint that authenticates user, refreshes
-    OAuth tokens if expired, fetches all calendarEvents, deletes each from Google Calendar
-    (best-effort, continues on individual failures), then calls disconnect mutation for Convex
-    cleanup. Updated disconnect mutation in calendarConnections.ts to cascade-delete all
-    calendarEvents for the user before deleting the connection record. Updated
-    CalendarConnectionCard.vue to call the server endpoint via $fetch instead of the Convex
-    mutation directly, added confirmation dialog (alertdialog role) with Escape key dismiss
-    and initial focus on Cancel button. Code review: 2 blockers fixed (unused internal import,
-    missing keyboard accessibility on confirmation dialog), 3 deferred (no error toast on
-    disconnect failure, makeConvexClient duplicated across 3 files, no rate limiting on
-    endpoint). 739 tests pass (+1 new), 1 pre-existing failure in contentFlags.test.ts,
-    8 pre-existing skips. PR #127 merged to dev. EPIC 6 COMPLETE (5/5 stories).
-    epic-6-retrospective: optional. Epic boundary detected.
+    Prep sprint epic 7 PASS (4/4 items in one PR). prep-7-1: Fixed calendar disconnect test
+    to mock $fetch server endpoint instead of Convex mutation, using document.querySelector
+    for Teleported confirm dialog. prep-7-2: Fixed contentFlags test missing required folderId
+    in course seed data. prep-7-3: Extracted getTodayInTimezone to convex/lib/dates.ts,
+    removed duplicates from reviewItems.ts and learnProfile.ts. prep-7-4: Extracted
+    makeConvexClient to server/utils/convex-client.ts with proper H3Event typing, removed
+    duplicates from 3 calendar API files. 740 Convex tests pass (0 failures, 8 skips),
+    418 component tests pass (0 failures, 85 skips). No new type errors. PR #128 merged
+    to dev. PREP SPRINT EPIC 7 COMPLETE (4/4 items).
   block_reason: null
   block_context: null
-  at: '2026-04-23T21:30:00Z'
-last_retro: 'epic-4-retro-2026-04-24.md'
+  at: '2026-04-23T22:00:00Z'
+last_retro: 'epic-6-retro-2026-04-24.md'
 
 config:
   max_retries_per_story: 3
@@ -64,8 +59,8 @@ paths:
   ux_spec: /Users/wesleyukadike/Desktop/budds/_bmad-output/planning-artifacts/ux-design-learn-module.md
 
 counters:
-  stories_completed_this_run: 4
-  stories_completed_total: 40
+  stories_completed_this_run: 0
+  stories_completed_total: 41
 
 escalation:
   pending: null
