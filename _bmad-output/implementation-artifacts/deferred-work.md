@@ -1,5 +1,11 @@
 # Deferred Work
 
+## Deferred from: code review of 6-5-calendar-disconnection-and-cleanup (2026-04-23)
+
+- **No user-facing error toast on disconnect failure.** `confirmDisconnect` in `CalendarConnectionCard.vue` catches errors and logs to console, but the user gets no visual feedback if the server endpoint fails. Consistent with the deferred toast pattern from earlier stories (1-5/1-6).
+- **`makeConvexClient` duplicated across 3 calendar endpoint files.** `disconnect.post.ts`, `sync.post.ts`, and `callback.get.ts` all define the same `makeConvexClient` helper. Extract to `server/utils/convex-client.ts` when calendar code grows.
+- **No rate limiting on `/api/calendar/disconnect`.** The endpoint makes N external Google Calendar API calls (one per event). Same pattern as `/api/calendar/sync.post` (already deferred in 6-3 review). Add when calendar usage grows.
+
 ## Deferred from: code review of 6-4-missed-session-rescheduling (2026-04-23)
 
 - **Slot-finding logic duplicated in Convex action.** `checkMissedSessions` internal action in `convex/calendarEvents.ts` contains a full copy of the `findNextPreferredSlot` algorithm (day mapping, Intl.DateTimeFormat loop, timezone offset calculation). Architecturally forced: Convex functions cannot import from `server/utils/`. If more calendar features land, consider extracting slot logic to `convex/lib/calendar-slots.ts` as a pure function usable by both Convex and server code.
