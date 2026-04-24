@@ -2,14 +2,21 @@
 import type { Id } from '~~/convex/_generated/dataModel'
 import { api } from '#convex/api'
 import { injectFolderContext } from '~/composables/useFolderPageContext'
+import type { CachedSection } from '~/composables/useOfflineCache'
 
 const route = useRoute()
 const router = useRouter()
 const ctx = injectFolderContext()
-const { folderId, helperPane } = ctx
+const { folderId } = ctx
 
 const courseId = computed(() => route.params.courseId as Id<'courses'>)
 const sectionId = computed(() => route.params.sectionId as Id<'courseSections'>)
+
+const { isOnline } = useOnlineStatus()
+const { cacheSectionContent, getCachedSection } = useOfflineCache()
+
+const offlineData = ref<CachedSection | null>(null)
+const usingOfflineData = ref(false)
 
 const courseQuery = import.meta.client
   ? useConvexQuery(api.courses.get, computed(() => ({ id: courseId.value })))
@@ -22,7 +29,28 @@ const sectionQuery = import.meta.client
 const course = computed(() => courseQuery.data?.value ?? null)
 const section = computed(() => sectionQuery.data?.value ?? null)
 
+watch([() => isOnline.value, () => section.value], async ([online, sec]) => {
+  if (!online && !sec && import.meta.client) {
+    const cached = await getCachedSection(sectionId.value)
+    if (cached) {
+      offlineData.value = cached
+      usingOfflineData.value = true
+    }
+  }
+  if (online && sec) {
+    usingOfflineData.value = false
+  }
+}, { immediate: true })
+
+const displayTitle = computed(() => {
+  if (usingOfflineData.value && offlineData.value) return offlineData.value.title
+  return section.value?.title ?? ''
+})
+
 const contentBlocks = computed(() => {
+  if (usingOfflineData.value && offlineData.value) {
+    return [...offlineData.value.contentBlocks].sort((a, b) => a.order - b.order)
+  }
   if (!section.value?.contentBlocks) return []
   return [...section.value.contentBlocks].sort((a, b) => a.order - b.order)
 })
@@ -74,7 +102,39 @@ const completeSectionMutation = import.meta.client
   ? useConvexMutation(api.courseSections.completeSection)
   : { mutate: async () => null }
 
+const setOfflineMutation = import.meta.client
+  ? useConvexMutation(api.courseSections.setOfflineAvailable)
+  : { mutate: async () => null }
+
 const isCompleting = ref(false)
+
+async function cacheForOffline() {
+  if (!import.meta.client) return
+  try {
+    const payload = await $fetch<any>(`/api/learn/section-cache-payload?sectionId=${sectionId.value}`)
+    if (!payload) return
+
+    const audioUrls: string[] = []
+    for (const block of payload.contentBlocks) {
+      if (block.audioUrls) audioUrls.push(...block.audioUrls)
+    }
+
+    await cacheSectionContent(
+      payload.sectionId,
+      payload.courseId,
+      payload.title,
+      payload.contentBlocks,
+      audioUrls,
+    )
+
+    await setOfflineMutation.mutate({
+      sectionId: sectionId.value,
+      offlineAvailable: true,
+    })
+  } catch {
+    // Non-critical: offline caching failure should not block the user
+  }
+}
 
 async function handleCompleteSection() {
   if (isCompleting.value || showCompletionCard.value) return
@@ -102,6 +162,8 @@ async function handleCompleteSection() {
       }
     }
     showCompletionCard.value = true
+
+    cacheForOffline()
   } catch {
     showCompletionCard.value = true
     completionData.value = {
@@ -137,25 +199,37 @@ function navigateBack() {
   router.push(`/app/folders/${folderId.value}/learn/${courseId.value}`)
 }
 
-function onGenerationStarted() {
-  helperPane.open('tasks')
-}
+const isReady = computed(() => {
+  if (usingOfflineData.value) return true
+  return section.value && (section.value.status === 'ready' || section.value.status === 'completed')
+})
+
+const isLoading = computed(() => {
+  if (usingOfflineData.value) return false
+  return !section.value || !course.value
+})
+
+const isNotReady = computed(() => {
+  if (usingOfflineData.value) return false
+  if (!section.value) return false
+  return section.value.status !== 'ready' && section.value.status !== 'completed'
+})
 </script>
 
 <template>
   <div class="flex min-h-0 flex-1 flex-col overflow-y-auto bg-background">
-    <div v-if="!section || !course" class="flex flex-1 items-center justify-center">
+    <div v-if="isLoading" class="flex flex-1 items-center justify-center">
       <div class="space-y-3 text-center">
         <div class="mx-auto h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
         <p class="text-sm text-muted-foreground">Loading section...</p>
       </div>
     </div>
 
-    <template v-else-if="section.status !== 'ready' && section.status !== 'completed'">
+    <template v-else-if="isNotReady">
       <div class="flex flex-1 flex-col items-center justify-center gap-4 px-4">
         <div class="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
         <p class="text-sm text-muted-foreground">
-          {{ section.status === 'generating' ? 'Generating section content...' : 'Section not available' }}
+          {{ section?.status === 'generating' ? 'Generating section content...' : 'Section not available' }}
         </p>
         <button
           type="button"
@@ -167,16 +241,22 @@ function onGenerationStarted() {
       </div>
     </template>
 
-    <template v-else>
+    <template v-else-if="isReady">
       <LearnSectionVoidTopBar
-        :course-title="course.title"
-        :section-title="section.title"
+        :course-title="course?.title ?? ''"
+        :section-title="displayTitle"
         :current-block="currentBlockIndex"
         :total-blocks="totalBlocks"
         @back="navigateBack"
       />
 
-      <div v-if="section.failureNotice" class="mx-auto w-full max-w-3xl px-4 pt-4">
+      <div v-if="usingOfflineData" class="mx-auto w-full max-w-3xl px-4 pt-4">
+        <div class="rounded-lg bg-amber-500/10 px-4 py-3 text-sm text-amber-400">
+          Viewing cached offline version
+        </div>
+      </div>
+
+      <div v-if="section?.failureNotice && !usingOfflineData" class="mx-auto w-full max-w-3xl px-4 pt-4">
         <div class="rounded-lg bg-primary/10 px-4 py-3 text-sm text-primary">
           {{ section.failureNotice }}
         </div>
@@ -206,7 +286,7 @@ function onGenerationStarted() {
             @quiz-completed="handleQuizCompleted"
           />
 
-          <div class="mt-8 flex justify-center pb-8">
+          <div v-if="!usingOfflineData" class="mt-8 flex justify-center pb-8">
             <button
               type="button"
               class="rounded-lg bg-primary px-6 py-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"

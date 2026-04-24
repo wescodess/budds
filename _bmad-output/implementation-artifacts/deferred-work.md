@@ -1,5 +1,12 @@
 # Deferred Work
 
+## Deferred from: code review of 7-2-section-content-caching (2026-04-23)
+
+- **Convex storage URLs in cached audio entries will expire.** `getOfflineCachePayload` resolves `ctx.storage.getUrl()` for audio turns (30-min TTL). The URLs are stored in IndexedDB `audioUrls` field but only the Cache API responses (fetched at cache time via `cacheAudioUrls`) are used for offline playback. The stale URL strings in IndexedDB are misleading but non-functional. No user impact since offline audio playback reads from Cache API, not the stored URLs.
+- **No IndexedDB storage quota management.** `useOfflineCache` has no eviction strategy for cached sections in IndexedDB. If a user completes dozens of courses, IndexedDB storage grows unbounded. Add a max-entries cap or LRU eviction. Related to the deferred 7-1 SW cache eviction item.
+- **`getOfflineCachePayload` exposes quiz correct answers in a public query.** Returns `correctAnswer` and `explanation` for offline quiz retakes (needed for 7-3). Data is user-scoped (own sections only) and already visible in the UI after answering. Acceptable but worth noting for security-conscious review.
+- **Offline banner text uses hardcoded dark-mode color.** "Viewing cached offline version" banner in section void uses `text-amber-400` without dark: prefix. Works because the project defaults to dark mode, but inconsistent with the theme-aware OfflineBanner from 7-1 which uses `dark:text-amber-200 text-amber-700`.
+
 ## Deferred from: code review of 7-1-service-worker-and-offline-detection (2026-04-23)
 
 - **Service worker learn section cache has no eviction strategy.** `budds-learn-sections-v1` cache stores every learn section navigation response visited online but never evicts old entries. Over time this could grow large. Add a max-entries cap (e.g., 20 most recent sections) or LRU eviction when Story 7-2 implements full content caching in IndexedDB.

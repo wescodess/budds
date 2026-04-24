@@ -1205,6 +1205,107 @@ describe('mastery state machine (pure function)', () => {
   })
 })
 
+describe('courseSections.setOfflineAvailable', () => {
+  test('sets offlineAvailable to true', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, sections } = await seedCourseWithSections(t)
+
+    await asUser.mutation(api.courseSections.setOfflineAvailable, {
+      sectionId: sections[0]._id,
+      offlineAvailable: true,
+    })
+
+    const section = await t.run(async (ctx) => ctx.db.get(sections[0]._id))
+    expect(section!.offlineAvailable).toBe(true)
+  })
+
+  test('sets offlineAvailable to false', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, sections } = await seedCourseWithSections(t)
+
+    await asUser.mutation(api.courseSections.setOfflineAvailable, {
+      sectionId: sections[0]._id,
+      offlineAvailable: true,
+    })
+    await asUser.mutation(api.courseSections.setOfflineAvailable, {
+      sectionId: sections[0]._id,
+      offlineAvailable: false,
+    })
+
+    const section = await t.run(async (ctx) => ctx.db.get(sections[0]._id))
+    expect(section!.offlineAvailable).toBe(false)
+  })
+
+  test('rejects from non-owner', async () => {
+    const t = convexTest(schema, modules)
+    const { sections } = await seedCourseWithSections(t)
+    const asOther = t.withIdentity(USER_B)
+
+    await expect(
+      asOther.mutation(api.courseSections.setOfflineAvailable, {
+        sectionId: sections[0]._id,
+        offlineAvailable: true,
+      }),
+    ).rejects.toThrow()
+  })
+})
+
+describe('courseSections.getOfflineCachePayload', () => {
+  test('returns null for non-completed section', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, sections } = await seedCourseWithSections(t)
+
+    const payload = await asUser.query(api.courseSections.getOfflineCachePayload, {
+      sectionId: sections[0]._id,
+    })
+    expect(payload).toBeNull()
+  })
+
+  test('returns payload for completed section with text block', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, sections, courseId } = await seedCourseWithSections(t)
+
+    await t.run(async (ctx) => {
+      await ctx.db.patch(sections[0]._id, {
+        status: 'completed',
+        contentBlocks: [
+          { type: 'text' as const, content: 'Test content', order: 0 },
+        ],
+      })
+    })
+
+    const payload = await asUser.query(api.courseSections.getOfflineCachePayload, {
+      sectionId: sections[0]._id,
+    })
+
+    expect(payload).not.toBeNull()
+    expect(payload!.sectionId).toBe(sections[0]._id)
+    expect(payload!.courseId).toBe(courseId)
+    expect(payload!.title).toBe('Section A')
+    expect(payload!.contentBlocks).toHaveLength(1)
+    expect(payload!.contentBlocks[0].type).toBe('text')
+    expect(payload!.contentBlocks[0].content).toBe('Test content')
+  })
+
+  test('returns null for non-owner', async () => {
+    const t = convexTest(schema, modules)
+    const { sections } = await seedCourseWithSections(t)
+    const asOther = t.withIdentity(USER_B)
+
+    await t.run(async (ctx) => {
+      await ctx.db.patch(sections[0]._id, {
+        status: 'completed',
+        contentBlocks: [{ type: 'text' as const, content: 'Test', order: 0 }],
+      })
+    })
+
+    const payload = await asOther.query(api.courseSections.getOfflineCachePayload, {
+      sectionId: sections[0]._id,
+    })
+    expect(payload).toBeNull()
+  })
+})
+
 describe('courseSections internal mutations', () => {
   test('markReady sets status and contentBlocks', async () => {
     const t = convexTest(schema, modules)
