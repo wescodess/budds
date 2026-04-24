@@ -1,5 +1,5 @@
 <script setup lang="ts">
-definePageMeta({ layout: false, auth: 'guest' })
+definePageMeta({ layout: false })
 
 const { signIn } = useUserSession()
 const { springGentle } = useMotionPresets()

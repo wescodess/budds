@@ -83,6 +83,7 @@ const currentItem = computed(() => items.value[currentIndex.value] ?? null)
 const totalItems = computed(() => items.value.length)
 const reviewedCount = computed(() => currentIndex.value)
 const isEmpty = computed(() => sessionStarted.value && items.value.length === 0)
+const estimatedDuration = computed(() => Math.ceil(totalItems.value * 30 / 60))
 
 const hasRated = computed(() => ratings.value.length > 0)
 
@@ -269,7 +270,7 @@ function navigateBack() {
             </button>
           </div>
           <span v-if="!isEmpty && !sessionComplete" class="text-xs text-stone-500">
-            {{ totalItems }} items
+            {{ totalItems }} items ~ {{ estimatedDuration }} min
           </span>
           <LearnReviewCapSetting :current-cap="dailyReviewCap" />
         </div>
