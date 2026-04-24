@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: 2026-04-23
+# last_updated: 2026-04-24
 # project: Budds Learn Module
 # project_key: LEARN
 # tracking_system: file-system
@@ -32,7 +32,7 @@
 # - Epics 1-4 are MVP. Epics 5-7 are fast-follow.
 
 generated: 2026-04-22
-last_updated: 2026-04-23
+last_updated: 2026-04-24
 project: Budds Learn Module
 project_key: LEARN
 tracking_system: file-system
@@ -126,7 +126,7 @@ development_status:
 
   # === Epic 7: Offline Access (Fast-Follow) ===
   epic-7: in-progress
-  7-1-service-worker-and-offline-detection: in-progress
+  7-1-service-worker-and-offline-detection: done
   7-2-section-content-caching: backlog
   7-3-offline-retakes-and-sync: backlog
   epic-7-retrospective: optional
