@@ -1,5 +1,9 @@
 # Deferred Work
 
+## Deferred from: code review of 7-1-service-worker-and-offline-detection (2026-04-23)
+
+- **Service worker learn section cache has no eviction strategy.** `budds-learn-sections-v1` cache stores every learn section navigation response visited online but never evicts old entries. Over time this could grow large. Add a max-entries cap (e.g., 20 most recent sections) or LRU eviction when Story 7-2 implements full content caching in IndexedDB.
+
 ## Deferred from: code review of 6-5-calendar-disconnection-and-cleanup (2026-04-23)
 
 - **No user-facing error toast on disconnect failure.** `confirmDisconnect` in `CalendarConnectionCard.vue` catches errors and logs to console, but the user gets no visual feedback if the server endpoint fails. Consistent with the deferred toast pattern from earlier stories (1-5/1-6).
