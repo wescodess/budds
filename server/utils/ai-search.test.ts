@@ -6,7 +6,7 @@ vi.stubGlobal('createError', (opts: { statusCode: number; message: string }) =>
 )
 vi.stubGlobal('fetch', vi.fn())
 
-const { searchDocuments, sanitizeUserSegment } = await import('./ai-search')
+const { assertSearchIndexAvailable, searchDocuments, sanitizeUserSegment } = await import('./ai-search')
 
 const validConfig = {
   cloudflareAccountId: 'test-account',
@@ -19,6 +19,16 @@ function mockLegacyResponse(data: unknown[]) {
     ok: true,
     json: () => Promise.resolve({ success: true, result: { search_query: 'q', data } }),
   } as any
+}
+
+function mockStatsResponse(vectorsCount: number) {
+  return new Response(JSON.stringify({
+    success: true,
+    result: { engine: { vectorize: { vectorsCount, dimensions: 1024 } } },
+  }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  })
 }
 
 function makeLegacyResult(overrides: Record<string, unknown> = {}) {
@@ -122,6 +132,63 @@ describe('searchDocuments', () => {
     expect(body.filters).toEqual({ type: 'eq', key: 'userid', value: 'user_123' })
   })
 
+  test('[P0] bounds long tenant filters to Cloudflare\'s 64-byte prefix and still post-filters the full identity', async () => {
+    const longUserId = `https://cautious-elephant-39.convex.site|${'u'.repeat(40)}`
+    const filterablePrefix = new TextDecoder().decode(new TextEncoder().encode(longUserId).slice(0, 64))
+    const collidingUserId = `${filterablePrefix}different-tenant`
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockLegacyResponse([
+      makeLegacyResult({
+        attributes: {
+          file: {
+            userid: longUserId,
+            folderid: 'folderABC',
+            documentid: 'docXYZ',
+            filename: 'private.txt',
+          },
+        },
+      }),
+      makeLegacyResult({
+        content: [{ id: 'other-tenant-chunk', type: 'text', text: 'Must not leak.', score: 0.99 }],
+        attributes: {
+          file: {
+            userid: collidingUserId,
+            folderid: 'folderABC',
+            documentid: 'docOTHER',
+            filename: 'other-private.txt',
+          },
+        },
+      }),
+    ]))
+
+    const result = await searchDocuments({ query: 'test', userId: longUserId, folderId: 'folderABC' })
+
+    const body = JSON.parse(vi.mocked(globalThis.fetch).mock.calls[0][1]!.body as string)
+    expect(body.filters.filters[0]).toEqual({
+      type: 'eq',
+      key: 'userid',
+      value: filterablePrefix,
+    })
+    expect(result.data).toHaveLength(1)
+    expect(result.data[0]?.id).toBe('chunk-1')
+    expect(result.data[0]?.attributes.userId).toBe(longUserId)
+  })
+
+  test.each([
+    ['keeps a 2-byte character that exactly reaches the boundary', `${'a'.repeat(62)}é-tail`, `${'a'.repeat(62)}é`],
+    ['stops before a 2-byte character that crosses the boundary', `${'a'.repeat(63)}é-tail`, 'a'.repeat(63)],
+    ['keeps a 4-byte character that exactly reaches the boundary', `${'a'.repeat(60)}😀-tail`, `${'a'.repeat(60)}😀`],
+    ['stops before a 4-byte character that crosses the boundary', `${'a'.repeat(61)}😀-tail`, 'a'.repeat(61)],
+  ])('%s', async (_name, userId, expectedPrefix) => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockLegacyResponse([]))
+
+    await searchDocuments({ query: 'test', userId })
+
+    const body = JSON.parse(vi.mocked(globalThis.fetch).mock.calls[0][1]!.body as string)
+    expect(body.filters.value).toBe(expectedPrefix)
+    expect(new TextEncoder().encode(body.filters.value).byteLength).toBeLessThanOrEqual(64)
+    expect(body.filters.value).not.toContain('\uFFFD')
+  })
+
   test('sends max_num_results and score_threshold in body', async () => {
     vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockLegacyResponse([]))
 
@@ -208,12 +275,14 @@ describe('searchDocuments', () => {
     expect(result.data).toEqual([])
   })
 
-  test('throws when config is missing', async () => {
+  test('normalizes missing search configuration to an unavailable index', async () => {
     vi.mocked((globalThis as any).useRuntimeConfig).mockReturnValue({})
 
-    await expect(searchDocuments({ query: 'test', userId: 'user_123' })).rejects.toThrow(
-      'Missing Cloudflare AI Search configuration',
-    )
+    const error = await searchDocuments({ query: 'test', userId: 'user_123' })
+      .catch((reason: unknown) => reason as Error & { statusCode?: number })
+
+    expect(error.statusCode).toBe(503)
+    expect(error.message).toBe('Search index unavailable')
   })
 
   test('falls back to NUXT_ env vars when runtime config is empty', async () => {
@@ -243,7 +312,55 @@ describe('searchDocuments', () => {
     } as any)
 
     await expect(searchDocuments({ query: 'test', userId: 'user_123' })).rejects.toThrow(
-      'AI Search error: Internal Server Error',
+      'Search index unavailable',
     )
+  })
+
+  test.each([
+    ['a network rejection', () => Promise.reject(new Error('network down'))],
+    ['a success:false envelope', () => Promise.resolve(new Response(JSON.stringify({ success: false, result: null }), { status: 200 }))],
+    ['a missing result envelope', () => Promise.resolve(new Response(JSON.stringify({ success: true }), { status: 200 }))],
+    ['a malformed result payload', () => Promise.resolve(new Response(JSON.stringify({ success: true, result: { data: {} } }), { status: 200 }))],
+    ['a null result entry', () => Promise.resolve(new Response(JSON.stringify({ success: true, result: { data: [null] } }), { status: 200 }))],
+    ['a malformed content list', () => Promise.resolve(new Response(JSON.stringify({ success: true, result: { data: [{ content: {} }] } }), { status: 200 }))],
+  ])('[P0] normalizes search provider failure from %s', async (_name, responseFactory) => {
+    vi.mocked(globalThis.fetch).mockImplementationOnce(responseFactory)
+
+    const error = await searchDocuments({ query: 'test', userId: 'user_123' })
+      .catch((reason: unknown) => reason as Error & { statusCode?: number })
+
+    expect(error.statusCode).toBe(503)
+    expect(error.message).toBe('Search index unavailable')
+  })
+
+  test('[P0] reports an unavailable search index when the instance has zero vectors', async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockStatsResponse(0))
+
+    const error = await assertSearchIndexAvailable()
+      .catch((reason: unknown) => reason as Error & { statusCode?: number })
+
+    expect(error.statusCode).toBe(503)
+    expect(error.message).toBe('Search index unavailable')
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      'https://api.cloudflare.com/client/v4/accounts/test-account/ai-search/instances/test-instance/stats',
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer test-token' }),
+      }),
+    )
+  })
+
+  test.each([
+    ['a network rejection', () => Promise.reject(new Error('network down'))],
+    ['a non-2xx response', () => Promise.resolve(new Response('down', { status: 503 }))],
+    ['a success:false envelope', () => Promise.resolve(new Response(JSON.stringify({ success: false, result: null }), { status: 200 }))],
+    ['missing vector statistics', () => Promise.resolve(new Response(JSON.stringify({ success: true, result: {} }), { status: 200 }))],
+  ])('[P0] normalizes %s to Search index unavailable', async (_name, responseFactory) => {
+    vi.mocked(globalThis.fetch).mockImplementationOnce(responseFactory)
+
+    const error = await assertSearchIndexAvailable()
+      .catch((reason: unknown) => reason as Error & { statusCode?: number })
+
+    expect(error.statusCode).toBe(503)
+    expect(error.message).toBe('Search index unavailable')
   })
 })

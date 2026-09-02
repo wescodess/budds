@@ -12,6 +12,7 @@ vi.stubGlobal('getConvexTokenIdentifier', vi.fn(() => 'https://auth.example.com|
 vi.stubGlobal('readBody', vi.fn())
 vi.stubGlobal('searchDocuments', vi.fn())
 vi.stubGlobal('fetchFolderDocs', vi.fn(async () => []))
+vi.stubGlobal('assertSearchIndexAvailable', vi.fn(async () => undefined))
 vi.stubGlobal('generateCompletion', vi.fn())
 vi.stubGlobal('defineEventHandler', (handler: Function) => handler)
 vi.stubGlobal('useRuntimeConfig', vi.fn(() => ({
@@ -74,6 +75,8 @@ describe('POST /api/audio-overview/generate authority', () => {
     vi.mocked(globalThis.readBody as any).mockReset()
     vi.mocked(globalThis.searchDocuments as any).mockReset()
     vi.mocked(globalThis.fetchFolderDocs as any).mockReset()
+    vi.mocked(globalThis.assertSearchIndexAvailable as any).mockReset()
+    vi.mocked(globalThis.assertSearchIndexAvailable as any).mockResolvedValue(undefined)
     vi.mocked(globalThis.generateCompletion as any).mockReset()
   })
 
@@ -119,7 +122,9 @@ describe('POST /api/audio-overview/generate authority', () => {
       scopeDocIds: ['doc_attacker'],
     })
     mockMutation.mockResolvedValueOnce(claimedRequest()).mockResolvedValue(undefined)
-    vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({ data: [] })
+    vi.mocked(globalThis.searchDocuments as any).mockRejectedValue(
+      Object.assign(new Error('Search index unavailable'), { statusCode: 503 }),
+    )
     vi.mocked(globalThis.fetchFolderDocs as any).mockResolvedValue([{
       key: 'owner/folder_source/doc_owned.txt',
       documentId: 'doc_owned',
@@ -139,6 +144,24 @@ describe('POST /api/audio-overview/generate authority', () => {
     expect(globalThis.fetchFolderDocs).not.toHaveBeenCalledWith(
       expect.objectContaining({ folderId: expect.anything() }),
     )
+    expect(globalThis.assertSearchIndexAvailable).not.toHaveBeenCalled()
+  })
+
+  test('[P0] reports Search index unavailable before TTS when the frozen PDF scope has no vectors', async () => {
+    vi.mocked(globalThis.readBody as any).mockResolvedValue({ taskId: 'task_reserved' })
+    mockMutation.mockResolvedValueOnce(claimedRequest()).mockResolvedValue(undefined)
+    vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({ data: [] })
+    vi.mocked(globalThis.fetchFolderDocs as any).mockResolvedValue([])
+    vi.mocked(globalThis.assertSearchIndexAvailable as any).mockRejectedValue(
+      Object.assign(new Error('Search index unavailable'), { statusCode: 503 }),
+    )
+
+    const error = await (handler(makeEvent()) as Promise<any>).catch((reason: any) => reason)
+
+    expect(error.statusCode).toBe(503)
+    expect(error.message).toBe('Search index unavailable')
+    expect(mockResolveTtsEngine).not.toHaveBeenCalled()
+    expect(globalThis.generateCompletion).not.toHaveBeenCalled()
   })
 
   test('[P0] a terminal task produces no provider side effect after retrieval', async () => {

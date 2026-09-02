@@ -63,7 +63,7 @@ describe('documentActions.updateDocumentAiSearchMetadata — AC: prerequisite', 
 
     await expect(
       t.action(internal.documentActions.updateDocumentAiSearchMetadata, {
-        documentId: String(docId),
+        documentId: docId,
         userId: TEST_IDENTITY.tokenIdentifier,
         folderId: String(folderId),
         filename: 'lecture.pdf',
@@ -79,7 +79,7 @@ describe('documentActions.updateDocumentAiSearchMetadata — AC: prerequisite', 
 
     await expect(
       t.action(internal.documentActions.updateDocumentAiSearchMetadata, {
-        documentId: String(docId),
+        documentId: docId,
         userId: TEST_IDENTITY.tokenIdentifier,
         folderId: String(folderId),
         filename: 'lecture.pdf',
