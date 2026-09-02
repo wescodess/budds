@@ -12,7 +12,7 @@ import {
 import { isAuraVoice, type AuraVoice } from '../../utils/tts-workers-ai'
 import { resolveTtsEngine, synthesizeTurn, synthesizeDialogue, engineVoiceProfile, type TtsEngine } from '../../utils/tts-provider'
 import { readConfiguredRuntimeValue } from '../../utils/runtime-config'
-import { requireRateLimit } from '../../utils/rate-limit'
+import { uploadAudioOverviewBytes } from '../../utils/audio-overview-upload'
 
 const SEED_QUERY = 'key concepts, definitions, discussions, and themes'
 const SCRIPT_MODEL = 'google/gemini-2.5-flash'
@@ -26,7 +26,7 @@ const MAX_SEARCH_RESULTS = 50
 const MAX_TURNS = 50
 const MIN_TURNS = 3
 
-function makeConvexClient(event: any): ConvexHttpClient | null {
+function makeConvexClient(event: any): ConvexHttpClient {
   const token = event.context.convexToken as string | undefined
   const runtimeConfig = useRuntimeConfig(event)
   const convexUrl = readConfiguredRuntimeValue(
@@ -34,45 +34,59 @@ function makeConvexClient(event: any): ConvexHttpClient | null {
     'NUXT_PUBLIC_CONVEX_URL',
     'CONVEX_URL',
   )
-  if (!token || !convexUrl) return null
+  if (!token || !convexUrl) {
+    throw createError({ statusCode: 500, message: 'Convex client unavailable' })
+  }
   const client = new ConvexHttpClient(convexUrl)
   client.setAuth(token)
   return client
 }
 
+interface ClaimedAudioOverviewRequest {
+  folderId: Id<'folders'>
+  scope: { mode: 'folder' } | { mode: 'explicit', documentIds: Id<'documents'>[] }
+  documents: Array<{
+    documentId: Id<'documents'>
+    folderId: Id<'folders'>
+    filename: string
+    r2Key?: string
+  }>
+  preferences: { lengthMinutes: 5 | 10 | 20, complexity: 'beginner' | 'expert' }
+  voiceProfile: { hostA: string, hostB: string }
+  model?: string
+  quotaDate: string
+}
+
 export default defineEventHandler(async (event) => {
-  requireRateLimit(event, 5)
   const userId = getConvexTokenIdentifier(event)
 
   const body = await readBody<{
-    folderId: string
     taskId?: string
-    model?: string
-    preferences?: {
-      lengthMinutes?: number
-      complexity?: 'beginner' | 'expert'
-    }
-    voiceProfile?: {
-      hostA?: string
-      hostB?: string
-    }
-    scopeDocIds?: string[]
   }>(event)
 
-  if (!body?.folderId?.trim()) {
-    throw createError({ statusCode: 400, message: 'folderId is required' })
+  if (!body?.taskId?.trim()) {
+    throw createError({ statusCode: 400, message: 'taskId is required' })
   }
 
-  const taskId = body.taskId as Id<'tasks'> | undefined
+  const taskId = body.taskId as Id<'tasks'>
   const convexClient = makeConvexClient(event)
-  if (taskId && !convexClient) {
-    throw createError({ statusCode: 500, message: 'Convex client unavailable — cannot attach task' })
+
+  let request: ClaimedAudioOverviewRequest
+  try {
+    request = await convexClient.mutation(
+      api.tasks.claimAudioOverviewGeneration,
+      { taskId },
+    ) as ClaimedAudioOverviewRequest
+  }
+  catch {
+    throw createError({ statusCode: 409, message: 'Audio overview generation is not available' })
   }
 
-  const lengthMinutes = body.preferences?.lengthMinutes ?? DEFAULT_LENGTH_MINUTES
-  const complexity = body.preferences?.complexity ?? DEFAULT_COMPLEXITY
-  const requestedHostA = body.voiceProfile?.hostA
-  const requestedHostB = body.voiceProfile?.hostB
+  const folderId = request.folderId
+  const lengthMinutes = request.preferences?.lengthMinutes ?? DEFAULT_LENGTH_MINUTES
+  const complexity = request.preferences?.complexity ?? DEFAULT_COMPLEXITY
+  const requestedHostA = request.voiceProfile?.hostA
+  const requestedHostB = request.voiceProfile?.hostB
   const resolvedHostA: AuraVoice = isAuraVoice(requestedHostA) ? requestedHostA : DEFAULT_VOICE_PROFILE.hostA
   const resolvedHostB: AuraVoice = isAuraVoice(requestedHostB) ? requestedHostB : DEFAULT_VOICE_PROFILE.hostB
   if (requestedHostA !== undefined && !isAuraVoice(requestedHostA)) {
@@ -84,50 +98,57 @@ export default defineEventHandler(async (event) => {
   const voiceProfile = { hostA: resolvedHostA, hostB: resolvedHostB }
 
   async function setTaskProgress(progress: string) {
-    if (!taskId || !convexClient) return
     try { await convexClient.mutation(api.tasks.setProgress, { taskId, progress }) }
     catch { /* best-effort */ }
   }
 
   async function failTask(error: string) {
-    if (!taskId || !convexClient) return
-    try { await convexClient.mutation(api.tasks.markFailed, { taskId, error }) }
+    try { await convexClient.mutation(api.tasks.failAudioOverviewGeneration, { taskId, error }) }
     catch { /* best-effort */ }
   }
 
   async function isTaskCancelled(): Promise<boolean> {
-    if (!taskId || !convexClient) return false
     try {
       const task = await convexClient.query(api.tasks.get, { taskId })
-      return !!task && task.status === 'cancelled'
+      return !task || task.status !== 'running'
     }
-    catch { return false }
+    catch {
+      throw createError({ statusCode: 503, message: 'Unable to verify generation status' })
+    }
   }
 
-  const uploadedStorageIds: Array<Id<'_storage'>> = []
+  const uploadedClaimIds: Array<Id<'audioOverviewUploadClaims'>> = []
 
   async function cleanupOrphanBlobs() {
-    if (uploadedStorageIds.length === 0 || !convexClient) return
-    for (const storageId of uploadedStorageIds) {
-      try {
-        await convexClient.mutation(api.audioOverviews.deleteOrphanTurnBlob, { storageId })
-      }
-      catch { /* best-effort */ }
+    if (uploadedClaimIds.length === 0) return
+    const claimIds = [...uploadedClaimIds]
+    uploadedClaimIds.length = 0
+    try {
+      await convexClient.mutation(api.audioOverviewUploads.discard, { claimIds })
     }
-    uploadedStorageIds.length = 0
+    catch { /* best-effort */ }
+  }
+
+  async function cancelledResult() {
+    await cleanupOrphanBlobs()
+    return { cancelled: true as const, taskId }
   }
 
   try {
-    if (taskId) await setTaskProgress('Retrieving sources…')
+    await setTaskProgress('Retrieving sources…')
 
-    const scopeDocIds = Array.isArray(body.scopeDocIds) && body.scopeDocIds.length > 0
-      ? body.scopeDocIds
-      : undefined
+    if (request.documents.length === 0) {
+      const message = 'No ready sources were present when this audio overview was reserved'
+      await failTask(message)
+      throw createError({ statusCode: 422, message })
+    }
+
+    const scopeDocIds = request.documents.map(document => String(document.documentId))
 
     const searchResults = await searchDocuments({
       query: SEED_QUERY,
       userId,
-      folderId: scopeDocIds ? undefined : body.folderId,
+      folderId: undefined,
       max_num_results: MAX_SEARCH_RESULTS,
       score_threshold: 0.05,
       filterDocIds: scopeDocIds,
@@ -137,7 +158,16 @@ export default defineEventHandler(async (event) => {
 
     if (chunks.length < 2) {
       try {
-        const folderDocs = await fetchFolderDocs({ userId, folderId: body.folderId, maxChars: 80_000 })
+        const folderDocs = await fetchFolderDocs({
+          userId,
+          documents: request.documents.map(document => ({
+            documentId: String(document.documentId),
+            folderId: String(document.folderId),
+            filename: document.filename,
+            r2Key: document.r2Key,
+          })),
+          maxChars: 80_000,
+        })
         if (folderDocs.length > 0) {
           chunks = folderDocs.map((doc): AISearchChunk => ({
             id: doc.key,
@@ -145,7 +175,7 @@ export default defineEventHandler(async (event) => {
             score: 1,
             attributes: {
               filename: doc.filename,
-              folderId: body.folderId,
+              folderId: doc.folderId ?? String(folderId),
               documentId: doc.documentId,
               userId,
             },
@@ -161,7 +191,7 @@ export default defineEventHandler(async (event) => {
       const deepSearch = await searchDocuments({
         query: SEED_QUERY,
         userId,
-        folderId: scopeDocIds ? undefined : body.folderId,
+        folderId: undefined,
         max_num_results: 40,
         score_threshold: 0.02,
         filterDocIds: scopeDocIds,
@@ -178,15 +208,19 @@ export default defineEventHandler(async (event) => {
     }
 
     if (await isTaskCancelled()) {
-      return { cancelled: true as const, taskId }
+      return await cancelledResult()
     }
 
     await setTaskProgress('Preparing voice engine…')
     const ttsEngine: TtsEngine = await resolveTtsEngine()
 
+    if (await isTaskCancelled()) {
+      return await cancelledResult()
+    }
+
     await setTaskProgress('Writing dialogue…')
 
-    const scriptModel = body.model?.trim() || SCRIPT_MODEL
+    const scriptModel = request.model?.trim() || SCRIPT_MODEL
     const promptMessages = buildAudioScriptPrompt(chunks, { lengthMinutes, complexity, ttsEngine })
 
     const completion = await generateCompletion({
@@ -211,13 +245,14 @@ export default defineEventHandler(async (event) => {
     }
 
     if (await isTaskCancelled()) {
-      return { cancelled: true as const, taskId }
+      return await cancelledResult()
     }
 
     const persistedTurns: Array<{
       speaker: 'host_a' | 'host_b'
       text: string
       audioFileId: Id<'_storage'>
+      uploadClaimId: Id<'audioOverviewUploadClaims'>
       durationMs: number
       sourceIndex?: number
     }> = []
@@ -227,10 +262,6 @@ export default defineEventHandler(async (event) => {
       const sourceChunk = turn.sourceIndex !== undefined ? chunks[turn.sourceIndex] : undefined
       const docId = (sourceChunk?.attributes?.documentId as string | undefined) ?? undefined
       if (docId) sourceDocumentIds.add(docId)
-    }
-
-    if (!convexClient) {
-      throw createError({ statusCode: 500, message: 'Convex client unavailable — cannot upload audio' })
     }
 
     if (ttsEngine === 'dia') {
@@ -251,36 +282,21 @@ export default defineEventHandler(async (event) => {
         throw createError({ statusCode: 502, message: `Audio synthesis failed: ${err?.message ?? 'unknown error'}` })
       }
 
-      const uploadUrl = await convexClient.mutation(api.audioOverviews.generateTurnUploadUrl, {})
-      const uploadResponse = await fetch(uploadUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'audio/mpeg' },
-        body: audioBytes,
-      })
-      if (!uploadResponse.ok) {
-        const text = await uploadResponse.text().catch(() => '')
-        throw createError({ statusCode: 502, message: `Failed to upload audio: ${uploadResponse.status} ${text || uploadResponse.statusText}` })
-      }
-
-      const uploadJson = await uploadResponse.json() as { storageId?: string }
-      const storageId = uploadJson.storageId
-      if (!storageId) {
-        throw createError({ statusCode: 502, message: 'Upload returned no storageId' })
-      }
-      uploadedStorageIds.push(storageId as Id<'_storage'>)
+      if (await isTaskCancelled()) return await cancelledResult()
+      const upload = await uploadAudioOverviewBytes(convexClient, taskId, audioBytes, uploadedClaimIds)
 
       const combinedText = normalizedTurns.map(t => `${t.speaker === 'host_a' ? 'Host A' : 'Host B'}: ${t.text}`).join('\n')
       persistedTurns.push({
         speaker: 'host_a',
         text: combinedText,
-        audioFileId: storageId as Id<'_storage'>,
+        ...upload,
         durationMs,
       })
     }
     else {
       for (let i = 0; i < normalizedTurns.length; i++) {
         if (await isTaskCancelled()) {
-          return { cancelled: true as const, taskId }
+          return await cancelledResult()
         }
 
         const turn = normalizedTurns[i]!
@@ -298,44 +314,26 @@ export default defineEventHandler(async (event) => {
           throw createError({ statusCode: 502, message: msg })
         }
 
-        const uploadUrl = await convexClient.mutation(api.audioOverviews.generateTurnUploadUrl, {})
-        const uploadResponse = await fetch(uploadUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'audio/mpeg' },
-          body: audioBytes,
-        })
-        if (!uploadResponse.ok) {
-          const text = await uploadResponse.text().catch(() => '')
-          throw createError({ statusCode: 502, message: `Failed to upload audio turn ${i + 1}: ${uploadResponse.status} ${text || uploadResponse.statusText}` })
-        }
+        if (await isTaskCancelled()) return await cancelledResult()
+        const upload = await uploadAudioOverviewBytes(convexClient, taskId, audioBytes, uploadedClaimIds)
 
-        const uploadJson = await uploadResponse.json() as { storageId?: string }
-        const storageId = uploadJson.storageId
-        if (!storageId) {
-          throw createError({ statusCode: 502, message: `Upload for turn ${i + 1} returned no storageId` })
-        }
-        uploadedStorageIds.push(storageId as Id<'_storage'>)
 
         persistedTurns.push({
           speaker: turn.speaker,
           text: turn.text,
-          audioFileId: storageId as Id<'_storage'>,
           durationMs: estimateTurnDurationMs(turn.text),
+          ...upload,
           sourceIndex: turn.sourceIndex,
         })
       }
     }
 
     if (await isTaskCancelled()) {
-      return { cancelled: true as const, taskId }
-    }
-
-    if (!convexClient) {
-      throw createError({ statusCode: 500, message: 'Convex client unavailable — cannot persist overview' })
+      return await cancelledResult()
     }
 
     const { overviewId } = await convexClient.mutation(api.audioOverviews.createWithTurns, {
-      folderId: body.folderId as Id<'folders'>,
+      folderId,
       taskId,
       title: parsedScript.title,
       model: scriptModel,
@@ -343,17 +341,9 @@ export default defineEventHandler(async (event) => {
       voiceProfile: ttsEngine === 'dia' ? engineVoiceProfile('dia') : voiceProfile,
       preferences: { lengthMinutes, complexity },
       sourceDocumentIds: Array.from(sourceDocumentIds),
-      scopeDocIds: scopeDocIds,
     })
 
-    uploadedStorageIds.length = 0
-
-    if (taskId) {
-      await convexClient.mutation(api.tasks.markComplete, {
-        taskId,
-        result: { overviewId, turnCount: persistedTurns.length },
-      })
-    }
+    uploadedClaimIds.length = 0
 
     return {
       title: parsedScript.title,

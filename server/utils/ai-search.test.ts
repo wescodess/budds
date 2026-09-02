@@ -104,16 +104,22 @@ describe('searchDocuments', () => {
     await searchDocuments({ query: 'test', userId: 'user_123', folderId: 'folder_abc' })
 
     const body = JSON.parse(vi.mocked(globalThis.fetch).mock.calls[0][1]!.body as string)
-    expect(body.filters).toEqual({ type: 'eq', key: 'folderid', value: 'folder_abc' })
+    expect(body.filters).toEqual({
+      type: 'and',
+      filters: [
+        { type: 'eq', key: 'userid', value: 'user_123' },
+        { type: 'eq', key: 'folderid', value: 'folder_abc' },
+      ],
+    })
   })
 
-  test('sends no filter when folderId is absent', async () => {
+  test('always sends the authenticated tenant filter', async () => {
     vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockLegacyResponse([]))
 
     await searchDocuments({ query: 'test', userId: 'user_123' })
 
     const body = JSON.parse(vi.mocked(globalThis.fetch).mock.calls[0][1]!.body as string)
-    expect(body.filters).toBeUndefined()
+    expect(body.filters).toEqual({ type: 'eq', key: 'userid', value: 'user_123' })
   })
 
   test('sends max_num_results and score_threshold in body', async () => {
@@ -143,6 +149,63 @@ describe('searchDocuments', () => {
 
     expect(result.data).toHaveLength(1)
     expect(result.data[0].id).toBe('a')
+  })
+
+  test('drops provider results attributed to another tenant', async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockLegacyResponse([
+      makeLegacyResult({
+        attributes: {
+          file: {
+            userid: 'https://auth.example.com|other',
+            folderid: 'folderABC',
+            documentid: 'docXYZ',
+            filename: 'private.txt',
+          },
+        },
+      }),
+    ]))
+
+    const result = await searchDocuments({
+      query: 'test',
+      userId: 'https://cautious-elephant-39.convex.site|user123',
+      filterDocIds: ['docXYZ'],
+    })
+
+    expect(result.data).toEqual([])
+  })
+
+  test('[P0] an explicitly empty document allowlist fails closed without a provider request', async () => {
+    const result = await searchDocuments({
+      query: 'test',
+      userId: 'https://cautious-elephant-39.convex.site|user123',
+      filterDocIds: [],
+    })
+
+    expect(result).toEqual({ data: [] })
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+
+  test('drops provider results outside the requested folder', async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockLegacyResponse([
+      makeLegacyResult({
+        attributes: {
+          file: {
+            userid: 'https://cautious-elephant-39.convex.site|user123',
+            folderid: 'folderOTHER',
+            documentid: 'docXYZ',
+            filename: 'wrong-folder.txt',
+          },
+        },
+      }),
+    ]))
+
+    const result = await searchDocuments({
+      query: 'test',
+      userId: 'https://cautious-elephant-39.convex.site|user123',
+      folderId: 'folderABC',
+    })
+
+    expect(result.data).toEqual([])
   })
 
   test('throws when config is missing', async () => {

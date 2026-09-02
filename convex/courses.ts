@@ -4,6 +4,7 @@ import { internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import { requireAuth } from './lib/auth'
 import { getOrCreateProfile } from './learnProfile'
+import { scheduleAudioOverviewDeletion } from './audioOverviews'
 
 export const MAX_SOURCE_DOCS = 100
 
@@ -272,10 +273,11 @@ export const deleteCourse = mutation({
       .withIndex('by_courseId', (q) => q.eq('courseId', args.id))
       .collect()
 
-    const entityIds: string[] = []
+    const entityRefs: Array<{ id: string, type: 'quiz' | 'flashcard' | 'audio' }> = []
     for (const section of sections) {
       for (const block of section.contentBlocks) {
-        if (block.entityId) entityIds.push(block.entityId)
+        const type = block.entityType ?? (block.type === 'text' ? undefined : block.type)
+        if (block.entityId && type) entityRefs.push({ id: block.entityId, type })
       }
       await ctx.db.delete(section._id)
     }
@@ -290,9 +292,9 @@ export const deleteCourse = mutation({
       if (batch.length < 500) break
     }
 
-    for (const eid of entityIds) {
-      try {
-        const quiz = await ctx.db.get(eid as Id<'quizzes'>)
+    for (const entity of entityRefs) {
+      if (entity.type === 'quiz') {
+        const quiz = await ctx.db.get(entity.id as Id<'quizzes'>)
         if (quiz && quiz.courseScoped === true) {
           const questions = await ctx.db
             .query('quizQuestions')
@@ -315,12 +317,10 @@ export const deleteCourse = mutation({
 
           await ctx.db.delete(quiz._id)
         }
-      } catch {
-        // entityId may not be a quiz
       }
 
-      try {
-        const room = await ctx.db.get(eid as Id<'flashcardRooms'>)
+      if (entity.type === 'flashcard') {
+        const room = await ctx.db.get(entity.id as Id<'flashcardRooms'>)
         if (room && room.courseScoped === true) {
           const roomCards = await ctx.db
             .query('flashcardRoomCards')
@@ -342,31 +342,13 @@ export const deleteCourse = mutation({
           }
           await ctx.db.delete(room._id)
         }
-      } catch {
-        // entityId may not be a flashcardRoom
       }
 
-      try {
-        const audio = await ctx.db.get(eid as Id<'audioOverviews'>)
-        if (audio && audio.courseScoped === true) {
-          const interjections = await ctx.db
-            .query('audioOverviewInterjections')
-            .withIndex('by_audioOverview', (q) => q.eq('audioOverviewId', audio._id))
-            .collect()
-          for (const ij of interjections) {
-            for (const turn of ij.answerTurns) {
-              try { await ctx.storage.delete(turn.audioFileId) } catch {}
-            }
-            await ctx.db.delete(ij._id)
-          }
-
-          for (const turn of audio.turns) {
-            try { await ctx.storage.delete(turn.audioFileId) } catch {}
-          }
-          await ctx.db.delete(audio._id)
+      if (entity.type === 'audio') {
+        const audio = await ctx.db.get(entity.id as Id<'audioOverviews'>)
+        if (audio && audio.courseScoped === true && audio.userId === userId) {
+          await scheduleAudioOverviewDeletion(ctx, audio._id, userId)
         }
-      } catch {
-        // entityId may not be an audioOverview
       }
     }
 

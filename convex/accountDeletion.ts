@@ -111,6 +111,9 @@ async function deleteAccountCascadeImpl(ctx: MutationCtx, userId: string) {
   await deleteAllFlashcardVersionCardsForUser(ctx, userId)
   await deleteAllFlashcardRoomVersionsForUser(ctx, userId)
   await deleteAllFlashcardRoomsForUser(ctx, userId)
+  await ctx.scheduler.runAfter(0, internal.audioOverviews.deleteUserOverviews, { userId, cursor: null })
+  await ctx.scheduler.runAfter(0, internal.audioOverviewUploads.cleanupUserClaims, { userId })
+  await deleteAllTasksForUser(ctx, userId)
   await deleteAllDocumentsForUser(ctx, userId)
   await deleteAllFoldersForUser(ctx, userId)
 
@@ -147,6 +150,18 @@ async function deleteAllConversationsForUser(ctx: MutationCtx, userId: string) {
     const batch = await ctx.db
       .query('conversations')
       .withIndex('by_userId', (q) => q.eq('userId', userId))
+      .take(500)
+    if (batch.length === 0) break
+    for (const row of batch) await ctx.db.delete(row._id)
+    if (batch.length < 500) break
+  }
+}
+
+async function deleteAllTasksForUser(ctx: MutationCtx, userId: string) {
+  while (true) {
+    const batch = await ctx.db
+      .query('tasks')
+      .withIndex('by_userId', q => q.eq('userId', userId))
       .take(500)
     if (batch.length === 0) break
     for (const row of batch) await ctx.db.delete(row._id)

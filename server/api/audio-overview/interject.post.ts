@@ -17,13 +17,13 @@ import {
 import { isAuraVoice, type AuraVoice } from '../../utils/tts-workers-ai'
 import { resolveTtsEngine, synthesizeTurn, type TtsEngine } from '../../utils/tts-provider'
 import { readConfiguredRuntimeValue } from '../../utils/runtime-config'
-import { requireRateLimit } from '../../utils/rate-limit'
+import { uploadAudioOverviewBytes } from '../../utils/audio-overview-upload'
 
 const SCRIPT_MODEL = 'google/gemini-2.5-flash'
 const MAX_SEARCH_RESULTS = 10
 const DEFAULT_HOSTS: { hostA: AuraVoice, hostB: AuraVoice } = { hostA: 'asteria', hostB: 'orion' }
 
-function makeConvexClient(event: any): ConvexHttpClient | null {
+function makeConvexClient(event: any): ConvexHttpClient {
   const token = event.context.convexToken as string | undefined
   const runtimeConfig = useRuntimeConfig(event)
   const convexUrl = readConfiguredRuntimeValue(
@@ -31,21 +31,21 @@ function makeConvexClient(event: any): ConvexHttpClient | null {
     'NUXT_PUBLIC_CONVEX_URL',
     'CONVEX_URL',
   )
-  if (!token || !convexUrl) return null
+  if (!token || !convexUrl) {
+    throw createError({ statusCode: 500, message: 'Convex client unavailable' })
+  }
   const client = new ConvexHttpClient(convexUrl)
   client.setAuth(token)
   return client
 }
 
 export default defineEventHandler(async (event) => {
-  requireRateLimit(event, 10)
   const userId = getConvexTokenIdentifier(event)
 
   const body = await readBody<{
     overviewId: string
     insertedAfterTurnIndex: number
     question: string
-    model?: string
   }>(event)
 
   if (!body?.overviewId) {
@@ -60,9 +60,6 @@ export default defineEventHandler(async (event) => {
     : 0
 
   const convexClient = makeConvexClient(event)
-  if (!convexClient) {
-    throw createError({ statusCode: 500, message: 'Convex client unavailable' })
-  }
 
   const overview = await convexClient.query(api.audioOverviews.getWithTurns, {
     id: body.overviewId as Id<'audioOverviews'>,
@@ -82,28 +79,78 @@ export default defineEventHandler(async (event) => {
     hostA: isAuraVoice(storedHostA) ? storedHostA : DEFAULT_HOSTS.hostA,
     hostB: isAuraVoice(storedHostB) ? storedHostB : DEFAULT_HOSTS.hostB,
   }
+  const scopeDocIds = overview.scopeDocIds?.map(String)
+  let audioTaskId: Id<'tasks'>
+  try {
+    const reservation = await convexClient.mutation(api.tasks.requestAudioOverview, {
+      folderId: overview.folderId as Id<'folders'>,
+      scope: scopeDocIds?.length
+        ? { mode: 'explicit' as const, documentIds: scopeDocIds as Id<'documents'>[] }
+        : { mode: 'folder' as const },
+      preferences: { lengthMinutes: 5 as const, complexity: 'beginner' as const },
+      voiceProfile,
+    })
+    audioTaskId = reservation.taskId
+    await convexClient.mutation(api.tasks.claimAudioOverviewGeneration, { taskId: audioTaskId })
+  }
+  catch {
+    throw createError({ statusCode: 409, message: 'Audio interjection generation is not available' })
+  }
+
+  const uploadedClaimIds: Array<Id<'audioOverviewUploadClaims'>> = []
+
+  async function cleanupOrphanBlobs() {
+    if (uploadedClaimIds.length === 0) return
+    const claimIds = [...uploadedClaimIds]
+    uploadedClaimIds.length = 0
+    try {
+      await convexClient.mutation(api.audioOverviewUploads.discard, { claimIds })
+    }
+    catch { /* best-effort */ }
+  }
+
+  async function failAudioTask(error: string) {
+    try {
+      await convexClient.mutation(api.tasks.failAudioOverviewGeneration, { taskId: audioTaskId, error })
+    }
+    catch { /* best-effort */ }
+  }
+
+  async function requireRunningAudioTask() {
+    const task = await convexClient.query(api.tasks.get, { taskId: audioTaskId })
+    if (!task || task.status !== 'running') {
+      throw createError({ statusCode: 409, message: 'Audio interjection generation was cancelled' })
+    }
+  }
+
+  try {
 
   const ttsEngine: TtsEngine = overviewUsesDia ? await resolveTtsEngine() : 'aura-1'
+
+  await requireRunningAudioTask()
 
   const clampedAfterIndex = Math.max(0, Math.min(afterIndex, overview.turns.length))
 
   const searchResults = await searchDocuments({
     query: question,
     userId,
-    folderId: overview.folderId as unknown as string,
+    folderId: scopeDocIds?.length ? undefined : overview.folderId as unknown as string,
     max_num_results: MAX_SEARCH_RESULTS,
     score_threshold: 0.05,
+    filterDocIds: scopeDocIds,
   })
 
   let chunks: AISearchChunk[] = searchResults.data ?? []
 
   if (chunks.length === 0) {
     try {
-      const folderDocs = await fetchFolderDocs({
-        userId,
-        folderId: overview.folderId as unknown as string,
-        maxChars: 40_000,
-      })
+      const folderDocs = scopeDocIds?.length
+        ? []
+        : await fetchFolderDocs({
+            userId,
+            folderId: overview.folderId as unknown as string,
+            maxChars: 40_000,
+          })
       if (folderDocs.length > 0) {
         chunks = folderDocs.map((doc): AISearchChunk => ({
           id: doc.key,
@@ -127,7 +174,7 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 422, message: 'Not enough context to answer' })
   }
 
-  const model = body.model?.trim() || SCRIPT_MODEL
+  const model = SCRIPT_MODEL
   const promptMessages = buildInterjectionPrompt({
     question,
     overviewTitle: overview.title,
@@ -135,6 +182,7 @@ export default defineEventHandler(async (event) => {
     ttsEngine,
   })
 
+  await requireRunningAudioTask()
   const completion = await generateCompletion({
     model,
     messages: promptMessages,
@@ -154,29 +202,17 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  const uploadedStorageIds: Array<Id<'_storage'>> = []
-
-  async function cleanupOrphanBlobs() {
-    if (uploadedStorageIds.length === 0) return
-    for (const storageId of uploadedStorageIds) {
-      try {
-        await convexClient!.mutation(api.audioOverviews.deleteOrphanTurnBlob, { storageId })
-      }
-      catch { /* best-effort */ }
-    }
-    uploadedStorageIds.length = 0
-  }
-
-  try {
     const persistedTurns: Array<{
       speaker: 'host_a' | 'host_b'
       text: string
       audioFileId: Id<'_storage'>
+      uploadClaimId: Id<'audioOverviewUploadClaims'>
       durationMs: number
       sourceIndex?: number
     }> = []
 
     for (let i = 0; i < normalizedTurns.length; i++) {
+      await requireRunningAudioTask()
       const turn = normalizedTurns[i]!
       const auraVoice = turn.speaker === 'host_a' ? voiceProfile.hostA : voiceProfile.hostB
       const spokenText = sanitizeTurnForSpeech(turn.text, { preserveExpressions: ttsEngine === 'dia' })
@@ -192,47 +228,30 @@ export default defineEventHandler(async (event) => {
         })
       }
 
-      const uploadUrl = await convexClient.mutation(api.audioOverviews.generateTurnUploadUrl, {})
-      const uploadResponse = await fetch(uploadUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'audio/mpeg' },
-        body: audioBytes,
-      })
-      if (!uploadResponse.ok) {
-        const text = await uploadResponse.text().catch(() => '')
-        throw createError({
-          statusCode: 502,
-          message: `Failed to upload interjection turn ${i + 1}: ${uploadResponse.status} ${text || uploadResponse.statusText}`,
-        })
-      }
-      const uploadJson = await uploadResponse.json() as { storageId?: string }
-      const storageId = uploadJson.storageId
-      if (!storageId) {
-        throw createError({
-          statusCode: 502,
-          message: `Upload for interjection turn ${i + 1} returned no storageId`,
-        })
-      }
-      uploadedStorageIds.push(storageId as Id<'_storage'>)
+      await requireRunningAudioTask()
+      const upload = await uploadAudioOverviewBytes(convexClient, audioTaskId, audioBytes, uploadedClaimIds)
+
 
       persistedTurns.push({
         speaker: turn.speaker,
         text: turn.text,
-        audioFileId: storageId as Id<'_storage'>,
         durationMs: estimateTurnDurationMs(turn.text),
+        ...upload,
         sourceIndex: turn.sourceIndex,
       })
     }
 
+    await requireRunningAudioTask()
     const { interjectionId } = await convexClient.mutation(api.audioOverviewInterjections.create, {
       audioOverviewId: body.overviewId as Id<'audioOverviews'>,
+      taskId: audioTaskId,
       insertedAfterTurnIndex: clampedAfterIndex,
       question,
       model,
       answerTurns: persistedTurns,
     })
 
-    uploadedStorageIds.length = 0
+    uploadedClaimIds.length = 0
 
     const turnUrls = await convexClient.query(api.audioOverviewInterjections.getTurnUrls, {
       id: interjectionId,
@@ -258,6 +277,7 @@ export default defineEventHandler(async (event) => {
   }
   catch (err: any) {
     await cleanupOrphanBlobs()
+    await failAudioTask(err?.message || 'Audio interjection generation failed')
     throw err
   }
 })

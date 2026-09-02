@@ -3,6 +3,13 @@ import { vi, describe, test, expect, beforeEach } from 'vitest'
 const mockMutation = vi.fn()
 const mockQuery = vi.fn()
 const mockSetAuth = vi.fn()
+const { mockSynthesizeTurn, mockSynthesizeDialogue } = vi.hoisted(() => ({
+  mockSynthesizeTurn: vi.fn(async () => new Uint8Array([0xff, 0xfb])),
+  mockSynthesizeDialogue: vi.fn(async () => ({
+    audio: new Uint8Array([0xff, 0xfb]),
+    durationMs: 5000,
+  })),
+}))
 
 vi.stubGlobal('createError', (opts: { statusCode: number; message: string }) =>
   Object.assign(new Error(opts.message), { statusCode: opts.statusCode }),
@@ -42,8 +49,8 @@ vi.mock('../../utils/rate-limit', () => ({
 
 vi.mock('../../utils/tts-provider', () => ({
   resolveTtsEngine: vi.fn(async () => 'aura-1'),
-  synthesizeTurn: vi.fn(async () => new Uint8Array([0xff, 0xfb])),
-  synthesizeDialogue: vi.fn(async () => ({ audio: new Uint8Array([0xff, 0xfb]), durationMs: 5000 })),
+  synthesizeTurn: mockSynthesizeTurn,
+  synthesizeDialogue: mockSynthesizeDialogue,
   engineVoiceProfile: vi.fn(() => ({ hostA: 'asteria', hostB: 'orion' })),
 }))
 
@@ -103,6 +110,8 @@ describe('POST /api/course/generate-section', () => {
     vi.mocked(globalThis.parseFlashcardResponse as any).mockReturnValue({ title: 'Cards', cards: [] })
     mockMutation.mockReset()
     mockQuery.mockReset()
+    mockSynthesizeTurn.mockClear()
+    mockSynthesizeDialogue.mockClear()
   })
 
   test('rejects missing courseId', async () => {
@@ -194,6 +203,84 @@ describe('POST /api/course/generate-section', () => {
 
     const result = await handler(makeEvent())
     expect(result.failedEngines).toContain('text explanation')
+  })
+
+  test('[P0] course audio reserves quota before providers and stays inside course sources', async () => {
+    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+      courseId: 'course_123',
+      sectionId: 'section_123',
+    })
+    mockQuery
+      .mockResolvedValueOnce(mockCourse())
+      .mockResolvedValueOnce([mockSection({ knowledgeType: 'conceptual' })])
+      .mockResolvedValueOnce([{ folderId: 'folder_123', documentId: 'doc_1' }])
+      .mockResolvedValue({ _id: 'audio_task_1', status: 'running' })
+    vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({
+      data: [
+        { id: '1', content: 'A', score: 0.9, attributes: { documentId: 'doc_1' } },
+        { id: '2', content: 'B', score: 0.8, attributes: { documentId: 'doc_1' } },
+        { id: '3', content: 'C', score: 0.7, attributes: { documentId: 'doc_1' } },
+      ],
+    })
+    vi.mocked(globalThis.generateCompletion as any).mockResolvedValue(
+      textCompletionResponse('Generated content'),
+    )
+    mockMutation.mockImplementation((_ref: any, args: any) => {
+      if (args?.scope) throw new Error('Daily audio overview quota reached')
+      if (args?.sectionId) return { status: 'ready', blockCount: 1 }
+      return undefined
+    })
+
+    const result = await handler(makeEvent())
+
+    expect(result.failedEngines).toContain('audio primer')
+    expect(globalThis.searchDocuments).toHaveBeenCalledWith(expect.objectContaining({
+      folderId: 'folder_123',
+      filterDocIds: ['doc_1'],
+    }))
+    expect(mockMutation).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      folderId: 'folder_123',
+      scope: { mode: 'explicit', documentIds: ['doc_1'] },
+    }))
+    expect(mockSynthesizeTurn).not.toHaveBeenCalled()
+    expect(mockSynthesizeDialogue).not.toHaveBeenCalled()
+  })
+
+  test('[P1] a short audio primer fails its reserved task instead of stranding it', async () => {
+    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+      courseId: 'course_123',
+      sectionId: 'section_123',
+    })
+    mockQuery
+      .mockResolvedValueOnce(mockCourse())
+      .mockResolvedValueOnce([mockSection({ knowledgeType: 'conceptual' })])
+      .mockResolvedValueOnce([{ folderId: 'folder_123', documentId: 'doc_1' }])
+      .mockResolvedValue({ _id: 'audio_task_1', status: 'running' })
+    vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({
+      data: [
+        { id: '1', content: 'A', score: 0.9, attributes: { documentId: 'doc_1' } },
+        { id: '2', content: 'B', score: 0.8, attributes: { documentId: 'doc_1' } },
+        { id: '3', content: 'C', score: 0.7, attributes: { documentId: 'doc_1' } },
+      ],
+    })
+    vi.mocked(globalThis.generateCompletion as any).mockResolvedValue(
+      textCompletionResponse('Not a valid audio script'),
+    )
+    mockMutation.mockImplementation((_ref: any, args: any) => {
+      if (args?.scope) return { taskId: 'audio_task_1' }
+      if (args?.sectionId) return { status: 'ready', blockCount: 1 }
+      return undefined
+    })
+
+    const result = await handler(makeEvent())
+
+    expect(result.failedEngines).toContain('audio primer')
+    expect(mockMutation.mock.calls.some(([, args]) =>
+      args?.taskId === 'audio_task_1'
+      && args?.error === 'Audio primer script is too short',
+    )).toBe(true)
+    expect(mockSynthesizeTurn).not.toHaveBeenCalled()
+    expect(mockSynthesizeDialogue).not.toHaveBeenCalled()
   })
 })
 

@@ -49,6 +49,7 @@ export default defineSchema({
     .index('by_userId', ['userId'])
     .index('by_folderId', ['folderId'])
     .index('by_userId_and_folderId', ['userId', 'folderId'])
+    .index('by_userId_and_folderId_and_status', ['userId', 'folderId', 'status'])
     .index('by_status', ['status']),
 
   conversations: defineTable({
@@ -302,9 +303,45 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
     completedAt: v.optional(v.number()),
+    audioOverviewRequest: v.optional(v.object({
+      scope: v.union(
+        v.object({ mode: v.literal('folder') }),
+        v.object({
+          mode: v.literal('explicit'),
+          documentIds: v.array(v.id('documents')),
+        }),
+      ),
+      documents: v.array(v.object({
+        documentId: v.id('documents'),
+        folderId: v.id('folders'),
+        filename: v.string(),
+        r2Key: v.optional(v.string()),
+      })),
+      preferences: v.object({
+        lengthMinutes: v.union(v.literal(5), v.literal(10), v.literal(20)),
+        complexity: v.union(v.literal('beginner'), v.literal('expert')),
+      }),
+      voiceProfile: v.object({
+        hostA: v.union(
+          v.literal('asteria'), v.literal('luna'), v.literal('stella'),
+          v.literal('athena'), v.literal('hera'), v.literal('orion'),
+          v.literal('arcas'), v.literal('perseus'), v.literal('angus'),
+          v.literal('orpheus'), v.literal('helios'), v.literal('zeus'),
+        ),
+        hostB: v.union(
+          v.literal('asteria'), v.literal('luna'), v.literal('stella'),
+          v.literal('athena'), v.literal('hera'), v.literal('orion'),
+          v.literal('arcas'), v.literal('perseus'), v.literal('angus'),
+          v.literal('orpheus'), v.literal('helios'), v.literal('zeus'),
+        ),
+      }),
+      model: v.optional(v.string()),
+      quotaDate: v.string(),
+    })),
   })
     .index('by_userId_and_folderId', ['userId', 'folderId'])
     .index('by_userId', ['userId'])
+    .index('by_userId_and_type_and_status', ['userId', 'type', 'status'])
     .index('by_status', ['status']),
 
   audioOverviews: defineTable({
@@ -312,7 +349,12 @@ export default defineSchema({
     folderId: v.id('folders'),
     taskId: v.optional(v.id('tasks')),
     title: v.string(),
-    status: v.union(v.literal('generating'), v.literal('ready'), v.literal('failed')),
+    status: v.union(
+      v.literal('generating'),
+      v.literal('ready'),
+      v.literal('failed'),
+      v.literal('deleting'),
+    ),
     failureReason: v.optional(v.string()),
     model: v.optional(v.string()),
     turns: v.array(
@@ -345,6 +387,23 @@ export default defineSchema({
     .index('by_folderId', ['folderId'])
     .index('by_userId_and_folderId', ['userId', 'folderId'])
     .index('by_shareToken', ['shareToken']),
+
+  audioOverviewUploadClaims: defineTable({
+    userId: v.string(),
+    taskId: v.optional(v.id('tasks')),
+    nonce: v.string(),
+    expectedSha256: v.optional(v.string()),
+    expectedSize: v.optional(v.number()),
+    begunAt: v.optional(v.number()),
+    storageId: v.optional(v.id('_storage')),
+    abortingStorageId: v.optional(v.id('_storage')),
+    consumedAt: v.optional(v.number()),
+    expiresAt: v.number(),
+  })
+    .index('by_userId', ['userId'])
+    .index('by_taskId', ['taskId'])
+    .index('by_storageId', ['storageId'])
+    .index('by_expiresAt', ['expiresAt']),
 
   audioOverviewInterjections: defineTable({
     audioOverviewId: v.id('audioOverviews'),
