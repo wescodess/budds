@@ -58,7 +58,9 @@ interface LegacyResult {
 }
 
 function buildFilters(params: AISearchParams): Record<string, unknown> | undefined {
-  const filters: Record<string, unknown>[] = []
+  const filters: Record<string, unknown>[] = [
+    { type: 'eq', key: 'userid', value: params.userId },
+  ]
 
   if (params.folderId) {
     filters.push({ type: 'eq', key: 'folderid', value: params.folderId })
@@ -74,6 +76,8 @@ function buildFilters(params: AISearchParams): Record<string, unknown> | undefin
 }
 
 export async function searchDocuments(params: AISearchParams): Promise<AISearchResponse> {
+  if (params.filterDocIds && params.filterDocIds.length === 0) return { data: [] }
+
   const config = useRuntimeConfig()
   const cloudflareAccountId = readConfiguredRuntimeValue(
     config.cloudflareAccountId,
@@ -161,13 +165,16 @@ export async function searchDocuments(params: AISearchParams): Promise<AISearchR
     }
   }
 
-  const docIdAllowlist = params.filterDocIds && params.filterDocIds.length > 1
+  const docIdAllowlist = params.filterDocIds?.length
     ? new Set(params.filterDocIds)
     : null
 
-  const filtered = docIdAllowlist
-    ? chunks.filter(c => c.attributes.documentId && docIdAllowlist.has(c.attributes.documentId))
-    : chunks
+  const filtered = chunks.filter((chunk) => {
+    if (chunk.attributes.userId !== params.userId) return false
+    if (params.folderId && chunk.attributes.folderId !== params.folderId) return false
+    if (!docIdAllowlist) return true
+    return !!chunk.attributes.documentId && docIdAllowlist.has(chunk.attributes.documentId)
+  })
 
   console.log(`[ai-search] q=${JSON.stringify(params.query)} folder=${params.folderId ?? '-'} results=${results.length} chunks=${filtered.length}`)
 

@@ -1,10 +1,7 @@
 import { mutation, query } from './_generated/server'
+import { AUDIO_OVERVIEW_DAILY_CAP, todayUtcYmd } from './lib/audioOverviewPolicy'
 
-export const AUDIO_OVERVIEW_DAILY_CAP = 10
-
-function todayUtcYmd(): string {
-  return new Date().toISOString().slice(0, 10)
-}
+export { AUDIO_OVERVIEW_DAILY_CAP }
 
 export const upsertUser = mutation({
   args: {},
@@ -88,7 +85,11 @@ export const incrementDailyQuota = mutation({
 
     const today = todayUtcYmd()
     const current = user.audioOverviewQuota
-    const nextCount = current && current.date === today ? current.count + 1 : 1
+    const used = current && current.date === today ? current.count : 0
+    if (used >= AUDIO_OVERVIEW_DAILY_CAP) {
+      throw new Error('Daily audio overview quota reached')
+    }
+    const nextCount = used + 1
     await ctx.db.patch(user._id, {
       audioOverviewQuota: { date: today, count: nextCount },
     })

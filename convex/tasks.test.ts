@@ -68,6 +68,229 @@ describe('tasks.create', () => {
   })
 })
 
+describe('tasks.requestAudioOverview', () => {
+  const preferences = { lengthMinutes: 10, complexity: 'beginner' } as const
+  const voiceProfile = { hostA: 'asteria', hostB: 'orion' } as const
+
+  async function setupUser(t: ReturnType<typeof convexTest>, identity = USER_A) {
+    const asUser = t.withIdentity(identity)
+    await asUser.mutation(api.users.upsertUser, {})
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
+    const defaultDocumentId = await t.run(ctx => ctx.db.insert('documents', {
+      userId: identity.tokenIdentifier,
+      folderId,
+      filename: 'ready.txt',
+      status: 'success',
+      fileSize: 5,
+    }))
+    return { asUser, folderId, defaultDocumentId }
+  }
+
+  test('[P0] reserves finite quota and freezes an exact owned source selection atomically', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, folderId } = await setupUser(t)
+    const fileId = await t.run(ctx => ctx.storage.store(new Blob(['source'])))
+    const documentId = await t.run(ctx => ctx.db.insert('documents', {
+      userId: USER_A.tokenIdentifier,
+      folderId,
+      filename: 'cells.txt',
+      fileId,
+      r2Key: 'owned/cells.txt',
+      status: 'success',
+      fileSize: 6,
+    }))
+
+    const result = await asUser.mutation(api.tasks.requestAudioOverview, {
+      folderId,
+      scope: { mode: 'explicit', documentIds: [documentId] },
+      preferences,
+      voiceProfile,
+    })
+
+    expect(result.quota).toMatchObject({ used: 1, cap: 10 })
+    const task = await t.run(ctx => ctx.db.get(result.taskId))
+    expect(task?.status).toBe('pending')
+    expect(task?.audioOverviewRequest?.scope.mode).toBe('explicit')
+    expect(task?.audioOverviewRequest?.documents).toEqual([
+      expect.objectContaining({ documentId, folderId, filename: 'cells.txt', r2Key: 'owned/cells.txt' }),
+    ])
+  })
+
+  test('[P0] rejects an empty explicit selection without consuming quota or creating a task', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, folderId, defaultDocumentId } = await setupUser(t)
+
+    await expect(asUser.mutation(api.tasks.requestAudioOverview, {
+      folderId,
+      scope: { mode: 'explicit', documentIds: [] },
+      preferences,
+      voiceProfile,
+    })).rejects.toThrow(/at least one source/i)
+
+    expect((await asUser.query(api.users.getDailyQuota, {}))?.used).toBe(0)
+    expect(await asUser.query(api.tasks.listByFolder, { folderId })).toEqual([])
+  })
+
+  test('[P0] rejects unbounded duration and caller-selected model overrides', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, folderId } = await setupUser(t)
+
+    await expect(asUser.mutation(api.tasks.requestAudioOverview, {
+      folderId,
+      scope: { mode: 'folder' },
+      preferences: { lengthMinutes: 1_000, complexity: 'expert' },
+      voiceProfile,
+    } as any)).rejects.toThrow()
+
+    await expect(asUser.mutation(api.tasks.requestAudioOverview, {
+      folderId,
+      scope: { mode: 'folder' },
+      preferences,
+      voiceProfile,
+      model: 'premium/unbounded-model',
+    } as any)).rejects.toThrow()
+
+    expect((await asUser.query(api.users.getDailyQuota, {}))?.used).toBe(0)
+  })
+
+  test('[P0] rejects foreign and non-ready explicit sources before consuming quota', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser: asA, folderId: folderA } = await setupUser(t, USER_A)
+    const { folderId: folderB } = await setupUser(t, USER_B)
+    const foreignDocumentId = await t.run(ctx => ctx.db.insert('documents', {
+      userId: USER_B.tokenIdentifier,
+      folderId: folderB,
+      filename: 'private.txt',
+      status: 'success',
+      fileSize: 7,
+    }))
+
+    await expect(asA.mutation(api.tasks.requestAudioOverview, {
+      folderId: folderA,
+      scope: { mode: 'explicit', documentIds: [foreignDocumentId] },
+      preferences,
+      voiceProfile,
+    })).rejects.toThrow(/source not found/i)
+
+    expect((await asA.query(api.users.getDailyQuota, {}))?.used).toBe(0)
+  })
+
+  test('[P0] concurrent requests cannot oversubscribe the final daily allowance', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, folderId } = await setupUser(t)
+    await t.run(async (ctx) => {
+      const user = await ctx.db.query('users')
+        .withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', USER_A.tokenIdentifier))
+        .unique()
+      await ctx.db.patch(user!._id, {
+        audioOverviewQuota: { date: new Date().toISOString().slice(0, 10), count: 9 },
+      })
+    })
+
+    const attempts = await Promise.allSettled([
+      asUser.mutation(api.tasks.requestAudioOverview, {
+        folderId,
+        scope: { mode: 'folder' },
+        preferences,
+        voiceProfile,
+      }),
+      asUser.mutation(api.tasks.requestAudioOverview, {
+        folderId,
+        scope: { mode: 'folder' },
+        preferences,
+        voiceProfile,
+      }),
+    ])
+
+    expect(attempts.filter(result => result.status === 'fulfilled')).toHaveLength(1)
+    expect((await asUser.query(api.users.getDailyQuota, {}))?.used).toBe(10)
+    expect(await asUser.query(api.tasks.listByFolder, { folderId })).toHaveLength(1)
+  })
+
+  test('[P0] a reserved generation task can be claimed exactly once', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, folderId } = await setupUser(t)
+    const { taskId } = await asUser.mutation(api.tasks.requestAudioOverview, {
+      folderId,
+      scope: { mode: 'folder' },
+      preferences,
+      voiceProfile,
+    })
+
+    const claimed = await asUser.mutation(api.tasks.claimAudioOverviewGeneration, { taskId })
+    expect(claimed.folderId).toBe(folderId)
+    expect(claimed.scope.mode).toBe('folder')
+    await expect(
+      asUser.mutation(api.tasks.claimAudioOverviewGeneration, { taskId }),
+    ).rejects.toThrow(/not available/i)
+  })
+
+  test('[P1] freezes folder scope to the ready-document manifest at reservation time', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, folderId, defaultDocumentId } = await setupUser(t)
+    const originalId = await t.run(ctx => ctx.db.insert('documents', {
+      userId: USER_A.tokenIdentifier,
+      folderId,
+      filename: 'original.txt',
+      status: 'success',
+      fileSize: 8,
+    }))
+    const { taskId } = await asUser.mutation(api.tasks.requestAudioOverview, {
+      folderId,
+      scope: { mode: 'folder' },
+      preferences,
+      voiceProfile,
+    })
+    await t.run(ctx => ctx.db.insert('documents', {
+      userId: USER_A.tokenIdentifier,
+      folderId,
+      filename: 'late.txt',
+      status: 'success',
+      fileSize: 4,
+    }))
+
+    const claimed = await asUser.mutation(api.tasks.claimAudioOverviewGeneration, { taskId })
+    expect(claimed.documents.map(document => document.documentId)).toEqual([defaultDocumentId, originalId])
+  })
+
+  test('[P1] generic terminal and dismiss mutations cannot retire active audio work', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, folderId } = await setupUser(t)
+    const { taskId } = await asUser.mutation(api.tasks.requestAudioOverview, {
+      folderId,
+      scope: { mode: 'folder' },
+      preferences,
+      voiceProfile,
+    })
+
+    await expect(asUser.mutation(api.tasks.markComplete, { taskId })).rejects.toThrow(/generation-owned/i)
+    await expect(asUser.mutation(api.tasks.dismiss, { taskId })).rejects.toThrow(/active tasks/i)
+    expect((await t.run(ctx => ctx.db.get(taskId)))?.status).toBe('pending')
+  })
+
+  test('[P1] provider failures use the audio-specific failed terminal state', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, folderId } = await setupUser(t)
+    const { taskId } = await asUser.mutation(api.tasks.requestAudioOverview, {
+      folderId,
+      scope: { mode: 'folder' },
+      preferences,
+      voiceProfile,
+    })
+    await asUser.mutation(api.tasks.claimAudioOverviewGeneration, { taskId })
+
+    await asUser.mutation(api.tasks.failAudioOverviewGeneration, {
+      taskId,
+      error: 'Provider unavailable',
+    })
+
+    const task = await t.run(ctx => ctx.db.get(taskId))
+    expect(task?.status).toBe('failed')
+    expect(task?.error).toBe('Provider unavailable')
+    expect(task?.completedAt).toBeTypeOf('number')
+  })
+})
+
 describe('tasks.cancel', () => {
   test('[P0] rejects unauthenticated', async () => {
     const t = convexTest(schema, modules)
@@ -144,6 +367,10 @@ describe('tasks.dismiss', () => {
       title: 'Test',
     })
 
+    await t.run(async (ctx) => {
+      await ctx.db.patch(taskId, { status: 'completed', completedAt: Date.now() })
+    })
+
     await asUser.mutation(api.tasks.dismiss, { taskId })
 
     const task = await t.run((ctx) => ctx.db.get(taskId))
@@ -203,6 +430,33 @@ describe('tasks.retry', () => {
     })
 
     await expect(asUser.mutation(api.tasks.retry, { taskId })).rejects.toThrow(/Only failed tasks/)
+  })
+
+  test('[P0] cannot retry an audio generation without a new quota reservation', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    await asUser.mutation(api.users.upsertUser, {})
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
+    await t.run(ctx => ctx.db.insert('documents', {
+      userId: USER_A.tokenIdentifier,
+      folderId,
+      filename: 'ready.txt',
+      status: 'success',
+      fileSize: 5,
+    }))
+    const { taskId } = await asUser.mutation(api.tasks.requestAudioOverview, {
+      folderId,
+      scope: { mode: 'folder' },
+      preferences: { lengthMinutes: 10, complexity: 'beginner' },
+      voiceProfile: { hostA: 'asteria', hostB: 'orion' },
+    })
+    await asUser.mutation(api.tasks.cancel, { taskId })
+    await t.run(async (ctx) => {
+      await ctx.db.patch(taskId, { status: 'failed', error: 'stop' })
+    })
+
+    await expect(asUser.mutation(api.tasks.retry, { taskId })).rejects.toThrow(/new quota reservation/i)
+    expect((await asUser.query(api.users.getDailyQuota, {}))?.used).toBe(1)
   })
 })
 
@@ -298,6 +552,24 @@ describe('tasks.updateProgress (internal)', () => {
     expect(task!.progress).toBe('Generating cards…')
     expect(task!.status).toBe('running')
   })
+
+  test('[P0] cannot revive a cancelled task', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
+    const { taskId } = await asUser.mutation(api.tasks.create, {
+      folderId,
+      type: 'audio-overview-generation',
+      title: 'Test',
+    })
+
+    await asUser.mutation(api.tasks.cancel, { taskId })
+    await t.mutation(internal.tasks.updateProgress, { taskId, progress: 'Late progress' })
+
+    const task = await t.run((ctx) => ctx.db.get(taskId))
+    expect(task!.status).toBe('cancelled')
+    expect(task!.progress).toBe('Preparing…')
+  })
 })
 
 describe('tasks.complete (internal)', () => {
@@ -322,6 +594,24 @@ describe('tasks.complete (internal)', () => {
     expect((task!.result as any)?.cardCount).toBe(12)
     expect(task!.completedAt).toBeDefined()
   })
+
+  test('[P0] cannot complete a cancelled task', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
+    const { taskId } = await asUser.mutation(api.tasks.create, {
+      folderId,
+      type: 'audio-overview-generation',
+      title: 'Test',
+    })
+
+    await asUser.mutation(api.tasks.cancel, { taskId })
+    await t.mutation(internal.tasks.complete, { taskId, result: { overviewId: 'late' } })
+
+    const task = await t.run((ctx) => ctx.db.get(taskId))
+    expect(task!.status).toBe('cancelled')
+    expect(task!.result).toBeUndefined()
+  })
 })
 
 describe('tasks.fail (internal)', () => {
@@ -344,6 +634,24 @@ describe('tasks.fail (internal)', () => {
     expect(task!.status).toBe('failed')
     expect(task!.error).toBe('Not enough content')
     expect(task!.completedAt).toBeDefined()
+  })
+
+  test('[P0] cannot fail a cancelled task', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
+    const { taskId } = await asUser.mutation(api.tasks.create, {
+      folderId,
+      type: 'audio-overview-generation',
+      title: 'Test',
+    })
+
+    await asUser.mutation(api.tasks.cancel, { taskId })
+    await t.mutation(internal.tasks.fail, { taskId, error: 'Late failure' })
+
+    const task = await t.run((ctx) => ctx.db.get(taskId))
+    expect(task!.status).toBe('cancelled')
+    expect(task!.error).toBeUndefined()
   })
 })
 

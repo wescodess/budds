@@ -256,11 +256,16 @@ describe('courseScoped filter on folder queries', () => {
       return await ctx.storage.store(new Blob(['audio-bytes'], { type: 'audio/wav' }))
     })
 
-    await asUser.mutation(api.audioOverviews.createWithTurns, {
-      folderId,
-      title: 'Normal Overview',
-      turns: [{ speaker: 'host_a', text: 'Hello', audioFileId: storageId, durationMs: 1000 }],
-      voiceProfile: { hostA: 'voice_a', hostB: 'voice_b' },
+    await t.run(async (ctx) => {
+      await ctx.db.insert('audioOverviews', {
+        userId: USER_A.tokenIdentifier,
+        folderId,
+        title: 'Normal Overview',
+        status: 'ready',
+        turns: [{ speaker: 'host_a', text: 'Hello', audioFileId: storageId, durationMs: 1000 }],
+        voiceProfile: { hostA: 'voice_a', hostB: 'voice_b' },
+        totalDurationMs: 1000,
+      })
     })
 
     await t.run(async (ctx) => {

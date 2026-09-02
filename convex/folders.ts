@@ -4,6 +4,7 @@ import type { QueryCtx, MutationCtx } from './_generated/server'
 import { internalMutation, mutation, query } from './_generated/server'
 import { internal } from './_generated/api'
 import { enqueueDocumentCleanup } from './accountDeletion'
+import { cancelActiveAudioOverviewTasksForFolders } from './tasks'
 import { DEFAULT_COLOR_KEY, isValidColorKey } from './folderPalette'
 import { DEFAULT_ICON_KEY, isValidIconKey } from './folderIcons'
 
@@ -358,6 +359,12 @@ export const deleteFolder = mutation({
     const descendants = await collectDescendants(ctx, userId, args.id)
     const folderIds: Id<'folders'>[] = [...descendants.map((d) => d._id), args.id]
 
+    await cancelActiveAudioOverviewTasksForFolders(
+      ctx,
+      userId,
+      new Set(folderIds.map(String)),
+    )
+
     let deletedDocuments = 0
     let anyCleanupEnqueued = false
 
@@ -394,6 +401,14 @@ export const deleteFolder = mutation({
       await ctx.db.delete(descendants[i]!._id)
     }
     await ctx.db.delete(args.id)
+
+    for (const folderId of folderIds) {
+      await ctx.scheduler.runAfter(0, internal.audioOverviews.deleteFolderOverviews, {
+        folderId,
+        userId,
+        cursor: null,
+      })
+    }
 
     if (anyCleanupEnqueued) {
       await ctx.scheduler.runAfter(0, internal.accountDeletion.drainPendingCleanup, { userId })

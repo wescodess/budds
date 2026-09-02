@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { Send } from 'lucide-vue-next'
 import { useMediaQuery } from '@vueuse/core'
 import { api } from '#convex/api'
@@ -131,17 +131,13 @@ const activeOverview = computed<OverviewSummary | null>(() => {
   return list[0] ?? null
 })
 
-const createTaskMutation = import.meta.client
-  ? useConvexMutation(api.tasks.create)
+const requestAudioOverviewMutation = import.meta.client
+  ? useConvexMutation(api.tasks.requestAudioOverview)
   : { mutate: async () => ({ taskId: '' }), isLoading: ref(false) } as any
 
 const deleteOverviewMutation = import.meta.client
   ? useConvexMutation(api.audioOverviews.deleteOverview)
   : { mutate: async (_args: { id: Id<'audioOverviews'> }) => ({ deletedTurns: 0 }) } as any
-
-const incrementQuotaMutation = import.meta.client
-  ? useConvexMutation(api.users.incrementDailyQuota)
-  : { mutate: async () => ({ used: 0, cap: 10, date: '' }) } as any
 
 const { data: quotaData } = useConvexQuery(api.users.getDailyQuota, computed(() => ({})))
 const quota = computed<{ used: number, cap: number, date: string } | null>(
@@ -201,20 +197,19 @@ async function handleCustomizeSubmit(value: CustomizeSubmit) {
     voiceB: value.voiceProfile.hostB,
   }
   try {
-    const result = (await createTaskMutation.mutate({
+    const scope = hasFolderScope.value
+      ? { mode: 'explicit' as const, documentIds: folderScopeDocIds.value }
+      : { mode: 'folder' as const }
+    const result = (await requestAudioOverviewMutation.mutate({
       folderId: props.folderId,
-      type: 'audio-overview-generation',
-      title: 'Generating audio overview…',
-      metadata: { lengthMinutes: value.lengthMinutes, complexity: value.complexity },
-    } as any)) as { taskId: Id<'tasks'> }
-
-    let updatedQuota: { used: number, cap: number, date: string } | null = null
-    try {
-      updatedQuota = (await incrementQuotaMutation.mutate({} as any)) as { used: number, cap: number, date: string }
+      scope,
+      preferences: { lengthMinutes: value.lengthMinutes, complexity: value.complexity },
+      voiceProfile: { hostA: value.voiceProfile.hostA, hostB: value.voiceProfile.hostB },
+    } as any)) as {
+      taskId: Id<'tasks'>
+      quota: { used: number, cap: number, date: string }
     }
-    catch (err) {
-      console.warn('[audio-overview] failed to increment daily quota', err)
-    }
+    const updatedQuota = result.quota
 
     if (updatedQuota && import.meta.client) {
       const thresholdKey = `audio-overview-quota-warning-${updatedQuota.date}`
@@ -223,26 +218,16 @@ async function handleCustomizeSubmit(value: CustomizeSubmit) {
         sessionStorage.setItem(thresholdKey, '1')
         const { toast } = await import('vue-sonner')
         toast.warning(`Heads up — ${updatedQuota.used} of ${updatedQuota.cap} audio overviews used today`, {
-          description: 'Quota resets at midnight local time.',
+          description: 'Quota resets at midnight UTC.',
         })
       }
     }
 
     emit('generation-started')
 
-    const scopeDocIds = hasFolderScope.value && folderScopeDocIds.value.length > 0
-      ? folderScopeDocIds.value
-      : undefined
-
     $fetch('/api/audio-overview/generate', {
       method: 'POST',
-      body: {
-        folderId: props.folderId,
-        taskId: result.taskId,
-        preferences: { lengthMinutes: value.lengthMinutes, complexity: value.complexity },
-        voiceProfile: { hostA: value.voiceProfile.hostA, hostB: value.voiceProfile.hostB },
-        scopeDocIds,
-      },
+      body: { taskId: result.taskId },
     }).catch(() => { /* task will surface failure state */ })
   }
   catch (err: any) {

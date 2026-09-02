@@ -11,6 +11,8 @@
 import type * as accountDeletion from "../accountDeletion.js";
 import type * as archiveMultiChat from "../archiveMultiChat.js";
 import type * as audioOverviewInterjections from "../audioOverviewInterjections.js";
+import type * as audioOverviewUploadActions from "../audioOverviewUploadActions.js";
+import type * as audioOverviewUploads from "../audioOverviewUploads.js";
 import type * as audioOverviews from "../audioOverviews.js";
 import type * as auth from "../auth.js";
 import type * as calendarConnections from "../calendarConnections.js";
@@ -32,6 +34,7 @@ import type * as folderPalette from "../folderPalette.js";
 import type * as folders from "../folders.js";
 import type * as http from "../http.js";
 import type * as learnProfile from "../learnProfile.js";
+import type * as lib_audioOverviewPolicy from "../lib/audioOverviewPolicy.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_dates from "../lib/dates.js";
 import type * as lib_masteryStateMachine from "../lib/masteryStateMachine.js";
@@ -55,6 +58,8 @@ declare const fullApi: ApiFromModules<{
   accountDeletion: typeof accountDeletion;
   archiveMultiChat: typeof archiveMultiChat;
   audioOverviewInterjections: typeof audioOverviewInterjections;
+  audioOverviewUploadActions: typeof audioOverviewUploadActions;
+  audioOverviewUploads: typeof audioOverviewUploads;
   audioOverviews: typeof audioOverviews;
   auth: typeof auth;
   calendarConnections: typeof calendarConnections;
@@ -76,6 +81,7 @@ declare const fullApi: ApiFromModules<{
   folders: typeof folders;
   http: typeof http;
   learnProfile: typeof learnProfile;
+  "lib/audioOverviewPolicy": typeof lib_audioOverviewPolicy;
   "lib/auth": typeof lib_auth;
   "lib/dates": typeof lib_dates;
   "lib/masteryStateMachine": typeof lib_masteryStateMachine;
