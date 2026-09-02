@@ -292,6 +292,56 @@ export const updateDocumentStatus = internalMutation({
   },
 })
 
+export const assignDocumentIndexJob = internalMutation({
+  args: {
+    id: v.id('documents'),
+    expectedIndexJobId: v.optional(v.string()),
+    expectedFolderId: v.id('folders'),
+    expectedR2Key: v.optional(v.string()),
+    indexJobId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const doc = await ctx.db.get(args.id)
+    if (
+      !doc
+      || doc.status !== 'indexing'
+      || doc.indexJobId !== args.expectedIndexJobId
+      || doc.folderId !== args.expectedFolderId
+      || doc.r2Key !== args.expectedR2Key
+    ) return false
+
+    await ctx.db.patch(args.id, { indexJobId: args.indexJobId })
+    return true
+  },
+})
+
+export const finalizeDocumentIndexing = internalMutation({
+  args: {
+    id: v.id('documents'),
+    expectedIndexJobId: v.optional(v.string()),
+    expectedFolderId: v.id('folders'),
+    expectedR2Key: v.optional(v.string()),
+    status: v.union(v.literal('success'), v.literal('failed')),
+    failureReason: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const doc = await ctx.db.get(args.id)
+    if (
+      !doc
+      || doc.status !== 'indexing'
+      || doc.indexJobId !== args.expectedIndexJobId
+      || doc.folderId !== args.expectedFolderId
+      || doc.r2Key !== args.expectedR2Key
+    ) return false
+
+    await ctx.db.patch(args.id, {
+      status: args.status,
+      failureReason: args.status === 'failed' ? args.failureReason : undefined,
+    })
+    return true
+  },
+})
+
 export const getDocument = internalQuery({
   args: { id: v.id('documents') },
   handler: async (ctx, args) => {
@@ -422,11 +472,17 @@ export const moveDocument = mutation({
 
     const srcFolder = await ctx.db.get(doc.folderId)
 
-    await ctx.db.patch(args.id, { folderId: args.destinationFolderId })
+    const shouldReindex = doc.status === 'success' || doc.status === 'indexing'
+    await ctx.db.patch(args.id, {
+      folderId: args.destinationFolderId,
+      ...(shouldReindex
+        ? { status: 'indexing' as const, failureReason: undefined, indexJobId: undefined }
+        : {}),
+    })
 
-    if (doc.status === 'success') {
+    if (shouldReindex) {
       await ctx.scheduler.runAfter(0, internal.documentActions.updateDocumentAiSearchMetadata, {
-        documentId: String(args.id),
+        documentId: args.id,
         userId,
         folderId: String(args.destinationFolderId),
         filename: doc.filename,

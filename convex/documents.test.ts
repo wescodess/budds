@@ -490,6 +490,54 @@ describe('documents.moveDocument — AC #2', () => {
     expect(destDocs[0].folderId).toBe(destFolder)
   })
 
+  it('[P0] marks an indexed document unavailable for search until moved metadata is reindexed', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const { docId } = await createDocInFolder(t, asUser, 'Source')
+    const destFolder = await asUser.mutation(api.folders.createFolder, { name: 'Destination' })
+    await t.run(async (ctx) => {
+      await ctx.db.patch(docId, {
+        status: 'success',
+        r2Key: `tenant/source/${docId}.pdf`,
+      })
+    })
+
+    await asUser.mutation(api.documents.moveDocument, {
+      id: docId,
+      destinationFolderId: destFolder,
+    })
+
+    const moved = await asUser.query(api.documents.listDocumentsByFolder, { folderId: destFolder })
+    expect(moved[0]?.status).toBe('indexing')
+    const scheduled = await t.run(async (ctx) => await ctx.db.system.query('_scheduled_functions').collect())
+    expect(scheduled.some(job => job.name.includes('updateDocumentAiSearchMetadata'))).toBe(true)
+  })
+
+  it('[P0] invalidates an in-flight indexing job when the document moves', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const { docId } = await createDocInFolder(t, asUser, 'Source')
+    const destFolder = await asUser.mutation(api.folders.createFolder, { name: 'Destination' })
+    await t.run(async (ctx) => {
+      await ctx.db.patch(docId, {
+        status: 'indexing',
+        indexJobId: 'stale-source-folder-job',
+        r2Key: `tenant/source/${docId}.pdf`,
+      })
+    })
+
+    await asUser.mutation(api.documents.moveDocument, {
+      id: docId,
+      destinationFolderId: destFolder,
+    })
+
+    const moved = await asUser.query(api.documents.listDocumentsByFolder, { folderId: destFolder })
+    expect(moved[0]?.status).toBe('indexing')
+    expect(moved[0]?.indexJobId).toBeUndefined()
+    const scheduled = await t.run(async (ctx) => await ctx.db.system.query('_scheduled_functions').collect())
+    expect(scheduled.some(job => job.name.includes('updateDocumentAiSearchMetadata'))).toBe(true)
+  })
+
   it('[P0] should decrement source and increment destination documentCount', async () => {
     const t = convexTest(schema, modules)
     const asUser = t.withIdentity(TEST_IDENTITY)

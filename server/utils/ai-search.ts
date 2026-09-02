@@ -57,9 +57,27 @@ interface LegacyResult {
   }
 }
 
+const AI_SEARCH_FILTERABLE_STRING_BYTES = 64
+const SEARCH_INDEX_UNAVAILABLE = 'Search index unavailable'
+
+function filterableStringPrefix(value: string): string {
+  const encoder = new TextEncoder()
+  if (encoder.encode(value).byteLength <= AI_SEARCH_FILTERABLE_STRING_BYTES) return value
+
+  let prefix = ''
+  let byteLength = 0
+  for (const character of value) {
+    const characterBytes = encoder.encode(character).byteLength
+    if (byteLength + characterBytes > AI_SEARCH_FILTERABLE_STRING_BYTES) break
+    prefix += character
+    byteLength += characterBytes
+  }
+  return prefix
+}
+
 function buildFilters(params: AISearchParams): Record<string, unknown> | undefined {
   const filters: Record<string, unknown>[] = [
-    { type: 'eq', key: 'userid', value: params.userId },
+    { type: 'eq', key: 'userid', value: filterableStringPrefix(params.userId) },
   ]
 
   if (params.folderId) {
@@ -73,6 +91,51 @@ function buildFilters(params: AISearchParams): Record<string, unknown> | undefin
   if (filters.length === 0) return undefined
   if (filters.length === 1) return filters[0]
   return { type: 'and', filters }
+}
+
+export async function assertSearchIndexAvailable(): Promise<void> {
+  try {
+    const config = useRuntimeConfig()
+    const accountId = readConfiguredRuntimeValue(
+      config.cloudflareAccountId,
+      'NUXT_CLOUDFLARE_ACCOUNT_ID',
+      'CF_ACCOUNT_ID',
+    )
+    const instance = readConfiguredRuntimeValue(
+      config.cloudflareAiSearchInstance,
+      'NUXT_CLOUDFLARE_AI_SEARCH_INSTANCE',
+      'CLOUDFLARE_AI_SEARCH_INSTANCE',
+    )
+    const token = readConfiguredRuntimeValue(
+      config.cloudflareAiSearchToken,
+      'NUXT_CLOUDFLARE_AI_SEARCH_TOKEN',
+      'CLOUDFLARE_AI_SEARCH_TOKEN',
+    )
+    if (!accountId || !instance || !token) throw new Error('Missing AI Search configuration')
+
+    const response = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai-search/instances/${instance}/stats`,
+      { headers: { 'Authorization': `Bearer ${token}` } },
+    )
+    if (!response.ok) throw new Error(`AI Search stats returned ${response.status}`)
+
+    const json = await response.json() as {
+      success?: boolean
+      result?: { engine?: { vectorize?: { vectorsCount?: number } } }
+    }
+    const vectorsCount = json.result?.engine?.vectorize?.vectorsCount
+    if (
+      json.success !== true
+      || typeof vectorsCount !== 'number'
+      || !Number.isFinite(vectorsCount)
+      || vectorsCount <= 0
+    ) {
+      throw new Error('AI Search has no available vectors')
+    }
+  }
+  catch {
+    throw createError({ statusCode: 503, message: SEARCH_INDEX_UNAVAILABLE })
+  }
 }
 
 export async function searchDocuments(params: AISearchParams): Promise<AISearchResponse> {
@@ -101,8 +164,8 @@ export async function searchDocuments(params: AISearchParams): Promise<AISearchR
 
   if (!cloudflareAccountId || !cloudflareAiSearchInstance || !cloudflareAiSearchToken) {
     throw createError({
-      statusCode: 500,
-      message: 'Missing Cloudflare AI Search configuration.',
+      statusCode: 503,
+      message: SEARCH_INDEX_UNAVAILABLE,
     })
   }
 
@@ -117,29 +180,59 @@ export async function searchDocuments(params: AISearchParams): Promise<AISearchR
   const filters = buildFilters(params)
   if (filters) body.filters = filters
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${cloudflareAiSearchToken}`,
-    },
-    body: JSON.stringify(body),
-  })
-
-  if (!response.ok) {
-    const error = await response.text()
-    throw createError({ statusCode: response.status, message: `AI Search error: ${error}` })
+  let response: Response
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${cloudflareAiSearchToken}`,
+      },
+      body: JSON.stringify(body),
+    })
+  }
+  catch {
+    throw createError({ statusCode: 503, message: SEARCH_INDEX_UNAVAILABLE })
   }
 
-  const json = await response.json() as {
+  if (!response.ok) {
+    throw createError({ statusCode: 503, message: SEARCH_INDEX_UNAVAILABLE })
+  }
+
+  let json: {
     success?: boolean
     result?: {
       search_query?: string
-      data?: LegacyResult[]
+      data?: unknown
     }
   }
+  try {
+    json = await response.json() as typeof json
+  }
+  catch {
+    throw createError({ statusCode: 503, message: SEARCH_INDEX_UNAVAILABLE })
+  }
 
-  const results = json.result?.data ?? []
+  if (json.success !== true || !json.result || !Array.isArray(json.result.data)) {
+    throw createError({ statusCode: 503, message: SEARCH_INDEX_UNAVAILABLE })
+  }
+
+  const results = json.result.data as LegacyResult[]
+  const validResults = results.every(result =>
+    !!result
+    && typeof result === 'object'
+    && Array.isArray(result.content)
+    && result.content.every(chunk =>
+      !!chunk
+      && typeof chunk === 'object'
+      && typeof chunk.id === 'string'
+      && typeof chunk.text === 'string'
+      && typeof chunk.score === 'number',
+    ),
+  )
+  if (!validResults) {
+    throw createError({ statusCode: 503, message: SEARCH_INDEX_UNAVAILABLE })
+  }
 
   const chunks: AISearchChunk[] = []
   for (const r of results) {
@@ -178,5 +271,5 @@ export async function searchDocuments(params: AISearchParams): Promise<AISearchR
 
   console.log(`[ai-search] q=${JSON.stringify(params.query)} folder=${params.folderId ?? '-'} results=${results.length} chunks=${filtered.length}`)
 
-  return { data: filtered, search_query: json.result?.search_query }
+  return { data: filtered, search_query: json.result.search_query }
 }

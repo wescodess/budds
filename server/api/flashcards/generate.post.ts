@@ -62,7 +62,22 @@ export default defineEventHandler(async (event) => {
     const model = isAllowedModel(requestedModel) ? requestedModel : SERVER_DEFAULT_MODEL
     const cardCount = Math.min(Math.max(body.cardCount ?? 12, 6), 16)
 
-    const searchResults = await searchDocuments({
+    let searchUnavailable = false
+    const searchOrEmpty = async (params: Parameters<typeof searchDocuments>[0]) => {
+      try {
+        const result = await searchDocuments(params)
+        searchUnavailable = false
+        return result
+      }
+      catch (error: unknown) {
+        const candidate = error as { statusCode?: number, message?: string }
+        if (candidate.statusCode !== 503 || candidate.message !== 'Search index unavailable') throw error
+        searchUnavailable = true
+        return { data: [] }
+      }
+    }
+
+    const searchResults = await searchOrEmpty({
       query: SEED_QUERY,
       userId,
       folderId: body.folderId,
@@ -95,7 +110,7 @@ export default defineEventHandler(async (event) => {
     }
 
     if (chunks.length < 2) {
-      const deepSearch = await searchDocuments({
+      const deepSearch = await searchOrEmpty({
         query: SEED_QUERY,
         userId,
         folderId: body.folderId,
@@ -108,6 +123,12 @@ export default defineEventHandler(async (event) => {
     }
 
     if (chunks.length === 0) {
+      if (searchUnavailable) {
+        const msg = 'Search index unavailable'
+        await failTask(msg)
+        throw createError({ statusCode: 503, message: msg })
+      }
+      await assertSearchIndexAvailable()
       const msg = 'Not enough indexed content to generate flash cards'
       await failTask(msg)
       throw createError({ statusCode: 422, message: msg })
