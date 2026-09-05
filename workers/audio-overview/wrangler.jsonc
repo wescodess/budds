@@ -1,0 +1,45 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "budds-audio-overview-workflow",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-02",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "ai": { "binding": "AI" },
+  "r2_buckets": [
+    {
+      "binding": "AUDIO_ARTIFACTS",
+      "bucket_name": "budds-dev",
+      "remote": true
+    }
+  ],
+  "workflows": [
+    {
+      "name": "budds-audio-overview",
+      "binding": "AUDIO_OVERVIEW_WORKFLOW",
+      "class_name": "AudioOverviewWorkflow"
+    }
+  ],
+  "env": {
+    "production": {
+      "name": "budds-audio-overview-workflow-production",
+      "vars": {
+        "PAGES_BASE_URL": "https://budds.pages.dev"
+      },
+      "ai": { "binding": "AI" },
+      "r2_buckets": [
+        {
+          "binding": "AUDIO_ARTIFACTS",
+          "bucket_name": "budds"
+        }
+      ],
+      "workflows": [
+        {
+          "name": "budds-audio-overview-production",
+          "binding": "AUDIO_OVERVIEW_WORKFLOW",
+          "class_name": "AudioOverviewWorkflow"
+        }
+      ]
+    }
+  }
+}

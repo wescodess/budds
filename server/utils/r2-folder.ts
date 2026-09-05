@@ -8,6 +8,8 @@ export interface FolderDoc {
   folderId?: string
   filename?: string
   content: string
+  contentHash?: string
+  sourceRevision?: string
 }
 
 export interface FetchFolderDocsParams {
@@ -49,6 +51,22 @@ function getR2Config() {
   return { client, endpoint: r2Endpoint, bucket: r2BucketName }
 }
 
+export async function fetchPrivateR2Object(
+  key: string,
+  init?: { method?: 'GET' | 'HEAD', range?: string },
+): Promise<Response> {
+  const normalizedKey = key.trim()
+  if (!normalizedKey || normalizedKey.startsWith('/') || normalizedKey.split('/').includes('..')) {
+    throw createError({ statusCode: 400, message: 'Invalid private R2 object key' })
+  }
+  const r2 = getR2Config()
+  if (!r2) throw createError({ statusCode: 503, message: 'Audio storage unavailable' })
+  const url = `${r2.endpoint}/${r2.bucket}/${encodeURIComponent(normalizedKey).replace(/%2F/g, '/')}`
+  const headers = new Headers()
+  if (init?.range) headers.set('Range', init.range)
+  return await r2.client.fetch(url, { method: init?.method ?? 'GET', headers })
+}
+
 async function getObject(r2: NonNullable<ReturnType<typeof getR2Config>>, key: string) {
   const url = `${r2.endpoint}/${r2.bucket}/${encodeURIComponent(key).replace(/%2F/g, '/')}`
   const response = await r2.client.fetch(url)
@@ -56,10 +74,86 @@ async function getObject(r2: NonNullable<ReturnType<typeof getR2Config>>, key: s
 
   const content = await response.text()
   const filename = response.headers.get('x-amz-meta-filename') ?? undefined
-  return { content, filename }
+  const contentHash = (response.headers.get('x-amz-meta-contenthash')
+    ?? response.headers.get('x-amz-meta-content-hash')
+    ?? '').trim().toLowerCase() || undefined
+  const sourceRevision = (response.headers.get('x-amz-meta-sourcerevision')
+    ?? response.headers.get('x-amz-meta-source-revision')
+    ?? '').trim() || undefined
+  return { content, filename, contentHash, sourceRevision }
 }
 
 interface ListEntry { key: string }
+
+export interface R2ObjectIdentity {
+  key: string
+  contentHash: string
+  revision: string
+  byteLength: number
+  etag?: string
+}
+
+const SHA256_PATTERN = /^[a-f0-9]{64}$/
+const MAX_SOURCE_IDENTITY_BYTES = 8 * 1024 * 1024
+
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', Uint8Array.from(bytes))
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
+}
+
+/**
+ * Resolve an immutable identity for one already-authorized Source Manifest
+ * object. New uploads carry their byte hash in R2 metadata. Legacy objects are
+ * read once and hashed so an old PDF can enter the v2 pipeline without
+ * pretending its object key is a content hash.
+ */
+export async function getScopedR2ObjectIdentity(key: string): Promise<R2ObjectIdentity> {
+  const normalizedKey = key.trim()
+  if (!normalizedKey || normalizedKey.startsWith('/') || normalizedKey.split('/').includes('..')) {
+    throw createError({ statusCode: 400, message: 'Invalid source object key' })
+  }
+  const r2 = getR2Config()
+  if (!r2) throw createError({ statusCode: 503, message: 'Source storage unavailable' })
+  const url = `${r2.endpoint}/${r2.bucket}/${encodeURIComponent(normalizedKey).replace(/%2F/g, '/')}`
+  const head = await r2.client.fetch(url, { method: 'HEAD' }).catch(() => null)
+  if (!head?.ok) throw createError({ statusCode: 503, message: 'Source storage unavailable' })
+
+  const byteLength = Number(head.headers.get('content-length') ?? 0)
+  if (!Number.isSafeInteger(byteLength) || byteLength < 1 || byteLength > MAX_SOURCE_IDENTITY_BYTES) {
+    throw createError({ statusCode: 422, message: 'Source is too large or empty for an audio overview' })
+  }
+  const metadataHash = (head.headers.get('x-amz-meta-contenthash')
+    ?? head.headers.get('x-amz-meta-content-hash')
+    ?? '').trim().toLowerCase()
+  const metadataRevision = (head.headers.get('x-amz-meta-sourcerevision')
+    ?? head.headers.get('x-amz-meta-source-revision')
+    ?? '').trim()
+  const etag = head.headers.get('etag')?.replace(/^W\//, '').replace(/^"|"$/g, '') || undefined
+  if (SHA256_PATTERN.test(metadataHash)) {
+    return {
+      key: normalizedKey,
+      contentHash: metadataHash,
+      revision: metadataRevision || `sha256:${metadataHash}`,
+      byteLength,
+      etag,
+    }
+  }
+
+  const object = await r2.client.fetch(url)
+  if (!object.ok) throw createError({ statusCode: 503, message: 'Source storage unavailable' })
+  const bytes = new Uint8Array(await object.arrayBuffer())
+  if (bytes.byteLength !== byteLength || bytes.byteLength > MAX_SOURCE_IDENTITY_BYTES) {
+    throw createError({ statusCode: 409, message: 'Source changed while the audio overview was being prepared' })
+  }
+  const contentHash = await sha256Hex(bytes)
+  return {
+    key: normalizedKey,
+    contentHash,
+    revision: metadataRevision || `sha256:${contentHash}`,
+    byteLength,
+    etag,
+  }
+}
 
 async function listObjects(r2: NonNullable<ReturnType<typeof getR2Config>>, prefix: string): Promise<ListEntry[]> {
   const url = `${r2.endpoint}/${r2.bucket}?list-type=2&prefix=${encodeURIComponent(prefix)}&max-keys=50`
@@ -115,6 +209,8 @@ export async function fetchFolderDocs(params: FetchFolderDocsParams): Promise<Fo
           folderId: doc.folderId,
           filename: result.filename ?? doc.filename,
           content,
+          contentHash: result.contentHash,
+          sourceRevision: result.sourceRevision,
         })
       }
       catch (error) {
@@ -146,7 +242,15 @@ export async function fetchFolderDocs(params: FetchFolderDocsParams): Promise<Fo
       const dotIdx = lastPart.lastIndexOf('.')
       const documentId = dotIdx !== -1 ? lastPart.slice(0, dotIdx) : lastPart
 
-      docs.push({ key: obj.key, documentId, folderId: params.folderId, filename: result.filename, content })
+      docs.push({
+        key: obj.key,
+        documentId,
+        folderId: params.folderId,
+        filename: result.filename,
+        content,
+        contentHash: result.contentHash,
+        sourceRevision: result.sourceRevision,
+      })
     }
     catch (error) {
       console.error(`[r2-folder] Failed to read object ${obj.key}:`, error)

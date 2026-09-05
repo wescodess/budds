@@ -1,0 +1,16 @@
+{
+  "name": "budds-audio-overview-workflow",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --var PAGES_BASE_URL:http://localhost:3002",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "cf-typegen": "wrangler types worker-configuration.d.ts"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.4",
+    "wrangler": "^4.128.0"
+  }
+}

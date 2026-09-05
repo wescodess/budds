@@ -1,6 +1,7 @@
 export type AppThemeMode = 'dark' | 'light'
 
 export const APP_THEME_STORAGE_KEY = 'budds-color-mode'
+export const FOLDER_THEME_STORAGE_KEY = 'budds-folder-theme'
 
 function resolveThemeMode(stored: string | null | undefined, prefersDark: boolean): AppThemeMode {
   if (stored === 'dark' || stored === 'light') return stored
@@ -45,6 +46,8 @@ export function useAppTheme() {
     return 'light'
   })
 
+  const folderThemeEnabled = useState<boolean>('folder-theme-enabled', () => true)
+
   onMounted(() => {
     const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
     let stored: string | null = null
@@ -56,6 +59,11 @@ export function useAppTheme() {
     const resolved = resolveThemeMode(stored, prefersDark)
     applyThemeMode(resolved)
     mode.value = resolved
+
+    try {
+      const folderThemeStored = window.localStorage.getItem(FOLDER_THEME_STORAGE_KEY)
+      if (folderThemeStored !== null) folderThemeEnabled.value = folderThemeStored !== 'false'
+    } catch {}
   })
 
   function setTheme(next: AppThemeMode) {
@@ -64,9 +72,7 @@ export function useAppTheme() {
     if (import.meta.client) {
       try {
         window.localStorage.setItem(APP_THEME_STORAGE_KEY, next)
-      } catch {
-        // ignore storage failures
-      }
+      } catch {}
     }
   }
 
@@ -74,5 +80,14 @@ export function useAppTheme() {
     setTheme(mode.value === 'dark' ? 'light' : 'dark')
   }
 
-  return { mode, setTheme, toggleTheme }
+  function toggleFolderTheme() {
+    folderThemeEnabled.value = !folderThemeEnabled.value
+    if (import.meta.client) {
+      try {
+        window.localStorage.setItem(FOLDER_THEME_STORAGE_KEY, String(folderThemeEnabled.value))
+      } catch {}
+    }
+  }
+
+  return { mode, setTheme, toggleTheme, folderThemeEnabled, toggleFolderTheme }
 }

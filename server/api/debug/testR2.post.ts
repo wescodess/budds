@@ -1,12 +1,25 @@
 import { fetchFolderDocs } from '../../utils/r2-folder'
+import { getConvexTokenIdentifier } from '../../utils/convex-identity'
 import { readConfiguredRuntimeValue } from '../../utils/runtime-config'
 
 export default defineEventHandler(async (event) => {
-  const body = await readBody(event)
+  if (process.env.NODE_ENV === 'production' || process.env.ENABLE_R2_DEBUG_ROUTE !== 'true') {
+    throw createError({ statusCode: 404, message: 'Not found' })
+  }
 
-  let userId = body.userId ?? ''
-  if (!userId) {
-    try { userId = getConvexTokenIdentifier(event) } catch {}
+  const userId = getConvexTokenIdentifier(event)
+  const body = await readBody<{ folderId?: unknown }>(event)
+  const hasUnsafeFolderIdCharacter = typeof body?.folderId === 'string'
+    && Array.from(body.folderId).some(character => (
+      character === '/'
+      || character === '\\'
+      || character.charCodeAt(0) <= 0x1f
+    ))
+  if (typeof body?.folderId !== 'string'
+    || body.folderId.length === 0
+    || body.folderId.length > 128
+    || hasUnsafeFolderIdCharacter) {
+    throw createError({ statusCode: 400, message: 'A valid folderId is required' })
   }
 
   const config = useRuntimeConfig()
@@ -23,10 +36,6 @@ export default defineEventHandler(async (event) => {
     userId: userId.slice(0, 40) + '…',
   }
 
-  if (!userId || !body.folderId) {
-    return { configStatus, error: 'Missing userId or folderId' }
-  }
-
   try {
     const docs = await fetchFolderDocs({
       userId,
@@ -35,7 +44,7 @@ export default defineEventHandler(async (event) => {
     })
     return { configStatus, success: true, count: docs.length, docs: docs.map(d => d.key) }
   }
-  catch (error: any) {
-    return { configStatus, success: false, error: error.message }
+  catch {
+    throw createError({ statusCode: 502, message: 'R2 diagnostic failed' })
   }
 })

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { Send } from 'lucide-vue-next'
 import { useMediaQuery } from '@vueuse/core'
 import { api } from '#convex/api'
@@ -14,7 +14,6 @@ import type {
   CustomizeSubmit,
   LengthMinutes,
   Complexity,
-  HostVoice,
 } from './customize-types'
 
 import type { useReferenceScope } from '~/composables/useReferenceScope'
@@ -110,14 +109,43 @@ const overviews = computed<OverviewSummary[]>(
 )
 const readyOverviews = computed(() => overviews.value.filter(o => o.status === 'ready'))
 
-const activeTask = computed(() => {
-  const candidates = tasks.value.filter(t =>
-    t.type === 'audio-overview-generation'
-    && (t.status === 'pending' || t.status === 'running'),
-  )
-  if (candidates.length === 0) return null
-  return [...candidates].sort((a, b) => b._creationTime - a._creationTime)[0] ?? null
+type GenerationDisplayTask = {
+  _id: Id<'tasks'>
+  _creationTime: number
+  status: 'pending' | 'running' | 'failed'
+  progress?: string
+  error?: string
+}
+
+const acceptedTaskId = ref<Id<'tasks'> | null>(null)
+const acceptedAt = ref(0)
+const audioTasks = computed(() => tasks.value
+  .filter(task => task.type === 'audio-overview-generation')
+  .sort((left, right) => right._creationTime - left._creationTime))
+const acceptedTask = computed(() => acceptedTaskId.value
+  ? audioTasks.value.find(task => task._id === acceptedTaskId.value) ?? null
+  : null)
+
+const activeTask = computed<GenerationDisplayTask | null>(() => {
+  const active = audioTasks.value.find(task => task.status === 'pending' || task.status === 'running')
+  if (active) return active as GenerationDisplayTask
+  if (acceptedTaskId.value && !acceptedTask.value) {
+    return {
+      _id: acceptedTaskId.value,
+      _creationTime: acceptedAt.value,
+      status: 'pending',
+      progress: 'Preparing…',
+    }
+  }
+  return null
 })
+const failedTask = computed<GenerationDisplayTask | null>(() => {
+  const matching = acceptedTask.value
+  if (matching?.status === 'failed') return matching as GenerationDisplayTask
+  const latest = audioTasks.value[0]
+  return latest?.status === 'failed' ? latest as GenerationDisplayTask : null
+})
+const generationTask = computed(() => activeTask.value ?? failedTask.value)
 
 const selectedOverviewId = ref<Id<'audioOverviews'> | null>(null)
 
@@ -131,17 +159,9 @@ const activeOverview = computed<OverviewSummary | null>(() => {
   return list[0] ?? null
 })
 
-const createTaskMutation = import.meta.client
-  ? useConvexMutation(api.tasks.create)
-  : { mutate: async () => ({ taskId: '' }), isLoading: ref(false) } as any
-
 const deleteOverviewMutation = import.meta.client
   ? useConvexMutation(api.audioOverviews.deleteOverview)
   : { mutate: async (_args: { id: Id<'audioOverviews'> }) => ({ deletedTurns: 0 }) } as any
-
-const incrementQuotaMutation = import.meta.client
-  ? useConvexMutation(api.users.incrementDailyQuota)
-  : { mutate: async () => ({ used: 0, cap: 10, date: '' }) } as any
 
 const { data: quotaData } = useConvexQuery(api.users.getDailyQuota, computed(() => ({})))
 const quota = computed<{ used: number, cap: number, date: string } | null>(
@@ -167,19 +187,35 @@ const shareTarget = computed(() => {
 })
 
 const store = useAudioOverviewStore()
-onMounted(() => { store.shellVisible.value = true })
+onMounted(() => {
+  store.shellVisible.value = true
+  try {
+    pendingIdempotencyKey.value = localStorage.getItem(`audio-overview-pending-command:${props.folderId}`)
+  }
+  catch { /* Local storage is optional; the active Convex task remains authoritative. */ }
+})
 onBeforeUnmount(() => { store.shellVisible.value = false })
 
 const submitting = ref(false)
 const cancelling = ref(false)
+const pendingIdempotencyKey = ref<string | null>(null)
+
+function rememberPendingCommand(value: string | null) {
+  pendingIdempotencyKey.value = value
+  if (!import.meta.client) return
+  try {
+    const key = `audio-overview-pending-command:${props.folderId}`
+    if (value) localStorage.setItem(key, value)
+    else localStorage.removeItem(key)
+  }
+  catch { /* A storage denial must not block command submission. */ }
+}
 
 const customizeOpen = ref(false)
 const customizeDefaults = ref<{
   lengthMinutes: LengthMinutes
   complexity: Complexity
-  voiceA: HostVoice
-  voiceB: HostVoice
-}>({ lengthMinutes: 10, complexity: 'beginner', voiceA: 'asteria', voiceB: 'orion' })
+}>({ lengthMinutes: 10, complexity: 'beginner' })
 
 function openCustomize() {
   customizeOpen.value = true
@@ -197,61 +233,73 @@ async function handleCustomizeSubmit(value: CustomizeSubmit) {
   customizeDefaults.value = {
     lengthMinutes: value.lengthMinutes,
     complexity: value.complexity,
-    voiceA: value.voiceProfile.hostA,
-    voiceB: value.voiceProfile.hostB,
   }
   try {
-    const result = (await createTaskMutation.mutate({
-      folderId: props.folderId,
-      type: 'audio-overview-generation',
-      title: 'Generating audio overview…',
-      metadata: { lengthMinutes: value.lengthMinutes, complexity: value.complexity },
-    } as any)) as { taskId: Id<'tasks'> }
-
-    let updatedQuota: { used: number, cap: number, date: string } | null = null
-    try {
-      updatedQuota = (await incrementQuotaMutation.mutate({} as any)) as { used: number, cap: number, date: string }
-    }
-    catch (err) {
-      console.warn('[audio-overview] failed to increment daily quota', err)
-    }
-
-    if (updatedQuota && import.meta.client) {
-      const thresholdKey = `audio-overview-quota-warning-${updatedQuota.date}`
-      const ratio = updatedQuota.used / updatedQuota.cap
-      if (ratio >= 0.8 && updatedQuota.used < updatedQuota.cap && !sessionStorage.getItem(thresholdKey)) {
-        sessionStorage.setItem(thresholdKey, '1')
-        const { toast } = await import('vue-sonner')
-        toast.warning(`Heads up — ${updatedQuota.used} of ${updatedQuota.cap} audio overviews used today`, {
-          description: 'Quota resets at midnight local time.',
-        })
-      }
-    }
-
-    emit('generation-started')
-
-    const scopeDocIds = hasFolderScope.value && folderScopeDocIds.value.length > 0
-      ? folderScopeDocIds.value
-      : undefined
-
-    $fetch('/api/audio-overview/generate', {
+    const scope = hasFolderScope.value
+      ? { mode: 'explicit' as const, documentIds: folderScopeDocIds.value }
+      : { mode: 'folder' as const }
+    if (!pendingIdempotencyKey.value) rememberPendingCommand(crypto.randomUUID())
+    const result = await $fetch<{
+      accepted: boolean
+      status: 'accepted' | 'running' | 'completed' | 'failed' | 'cancelled'
+      taskId: Id<'tasks'>
+      quota: { used: number, cap: number, date: string }
+    }>('/api/audio-overview/generate', {
       method: 'POST',
       body: {
         folderId: props.folderId,
-        taskId: result.taskId,
+        scope,
         preferences: { lengthMinutes: value.lengthMinutes, complexity: value.complexity },
-        voiceProfile: { hostA: value.voiceProfile.hostA, hostB: value.voiceProfile.hostB },
-        scopeDocIds,
+        idempotencyKey: pendingIdempotencyKey.value,
       },
-    }).catch(() => { /* task will surface failure state */ })
+    })
+    if (!result.accepted) {
+      rememberPendingCommand(null)
+      const { toast } = await import('vue-sonner')
+      toast.error('The previous audio overview request is no longer active. Please try again.')
+      return
+    }
+    acceptedTaskId.value = result.taskId
+    acceptedAt.value = Date.now()
+    const updatedQuota = result.quota
+
+    emit('generation-started')
+    rememberPendingCommand(null)
+
+    if (updatedQuota && import.meta.client) {
+      try {
+        const thresholdKey = `audio-overview-quota-warning-${updatedQuota.date}`
+        const ratio = updatedQuota.used / updatedQuota.cap
+        if (ratio >= 0.8 && updatedQuota.used < updatedQuota.cap && !sessionStorage.getItem(thresholdKey)) {
+          sessionStorage.setItem(thresholdKey, '1')
+          const { toast } = await import('vue-sonner')
+          toast.warning(`Heads up — ${updatedQuota.used} of ${updatedQuota.cap} audio overviews used today`, {
+            description: 'Quota resets at midnight UTC.',
+          })
+        }
+      }
+      catch { /* Storage can be unavailable while the accepted job continues. */ }
+    }
   }
   catch (err: any) {
+    const status = Number(err?.statusCode ?? err?.status ?? err?.response?.status ?? 0)
+    // Keep the same command identity when delivery or launch acknowledgement is
+    // ambiguous. A deliberate 4xx means reservation was rejected and can reset.
+    if (status >= 400 && status < 500 && status !== 408 && status !== 429) {
+      rememberPendingCommand(null)
+    }
     const { toast } = await import('vue-sonner')
     toast.error(err?.message ?? 'Failed to start audio overview')
   }
   finally {
     submitting.value = false
   }
+}
+
+function handleGenerationRetry() {
+  acceptedTaskId.value = null
+  acceptedAt.value = 0
+  openCustomize()
 }
 
 function handleRequestShare() {
@@ -349,11 +397,14 @@ defineExpose({
 <template>
   <div class="flex h-full min-h-0 flex-1 flex-col" data-testid="audio-overview-shell">
     <AudioOverviewGenerating
-      v-if="activeTask"
-      :task-id="activeTask._id"
-      :progress="activeTask.progress ?? 'Preparing…'"
+      v-if="generationTask"
+      :task-id="generationTask._id"
+      :progress="generationTask.progress ?? 'Preparing…'"
+      :status="generationTask.status"
+      :error="generationTask.error"
       :cancelling="cancelling"
       @cancel="handleCancel"
+      @retry="handleGenerationRetry"
     />
     <AudioOverviewPlayer
       v-else-if="activeOverview"
@@ -382,8 +433,6 @@ defineExpose({
       v-model:open="customizeOpen"
       :initial-length-minutes="customizeDefaults.lengthMinutes"
       :initial-complexity="customizeDefaults.complexity"
-      :initial-voice-a="customizeDefaults.voiceA"
-      :initial-voice-b="customizeDefaults.voiceB"
       :submitting="submitting"
       :quota-state="quotaState"
       :folder-scope-doc-count="folderScopeDocCount"

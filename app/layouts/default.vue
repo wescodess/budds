@@ -15,8 +15,10 @@ import {
   Pencil,
   Trash2,
   Download,
+  Palette,
 } from 'lucide-vue-next'
 import type { Doc, Id } from '~~/convex/_generated/dataModel'
+import { clearOfflineData } from '~/composables/useOfflineCache'
 import { useHorizontalSwipeGesture } from '~/composables/useHorizontalSwipeGesture'
 import { PANEL_DISMISS_THRESHOLD_PX, useGestureGuards } from '~/composables/useGestureGuards'
 
@@ -28,7 +30,7 @@ useHead({
 })
 
 const { signOut, user } = useUserSession()
-const { mode, toggleTheme } = useAppTheme()
+const { mode, toggleTheme, folderThemeEnabled, toggleFolderTheme } = useAppTheme()
 
 const activeTab = ref('chat')
 const isMobileView = useMediaQuery('(max-width: 767px)')
@@ -160,6 +162,11 @@ const isExportingData = ref(false)
 
 async function onSignOut() {
   try {
+    await clearOfflineData()
+  } catch (error) {
+    console.error('Offline data cleanup failed during sign out', error)
+  }
+  try {
     await signOut()
   } catch {
     // Better Auth may already have invalidated the session.
@@ -225,6 +232,10 @@ async function executeDeleteAccount() {
   if (!canConfirmDeleteAccount.value || isDeletingAccount.value) return
   isDeletingAccount.value = true
   try {
+    // Account deletion is fail-closed while Google credentials still exist.
+    // This idempotent call removes provider events first and is a no-op when
+    // the user has no connected calendar.
+    await $fetch('/api/calendar/disconnect', { method: 'POST' })
     await $fetch('/api/auth/delete-user', {
       method: 'POST',
       body: {},
@@ -319,27 +330,39 @@ useHorizontalSwipeGesture({
               </p>
             </div>
           </NuxtLink>
-          <UiButton
-            variant="ghost"
-            size="icon"
-            data-testid="theme-toggle"
-            class="h-7 w-7 text-muted-foreground hover:text-foreground group-data-[collapsible=icon]:hidden"
-            @click="toggleTheme"
-          >
-            <Transition
-              enter-active-class="transition-transform duration-300"
-              enter-from-class="rotate-[-90deg] scale-0"
-              enter-to-class="rotate-0 scale-100"
-              leave-active-class="transition-transform duration-200"
-              leave-from-class="rotate-0 scale-100"
-              leave-to-class="rotate-90 scale-0"
-              mode="out-in"
+          <div class="flex items-center gap-0.5 group-data-[collapsible=icon]:hidden">
+            <UiButton
+              variant="ghost"
+              size="icon"
+              data-testid="folder-theme-toggle"
+              :class="['h-7 w-7 transition-colors', folderThemeEnabled ? 'text-primary hover:text-primary/80' : 'text-muted-foreground/40 hover:text-muted-foreground']"
+              @click="toggleFolderTheme"
             >
-              <Sun v-if="mode === 'dark'" key="sun" class="h-4 w-4" />
-              <Moon v-else key="moon" class="h-4 w-4" />
-            </Transition>
-            <span class="sr-only">Toggle theme</span>
-          </UiButton>
+              <Palette class="h-4 w-4" />
+              <span class="sr-only">Toggle folder theme</span>
+            </UiButton>
+            <UiButton
+              variant="ghost"
+              size="icon"
+              data-testid="theme-toggle"
+              class="h-7 w-7 text-muted-foreground hover:text-foreground"
+              @click="toggleTheme"
+            >
+              <Transition
+                enter-active-class="transition-transform duration-300"
+                enter-from-class="rotate-[-90deg] scale-0"
+                enter-to-class="rotate-0 scale-100"
+                leave-active-class="transition-transform duration-200"
+                leave-from-class="rotate-0 scale-100"
+                leave-to-class="rotate-90 scale-0"
+                mode="out-in"
+              >
+                <Sun v-if="mode === 'dark'" key="sun" class="h-4 w-4" />
+                <Moon v-else key="moon" class="h-4 w-4" />
+              </Transition>
+              <span class="sr-only">Toggle theme</span>
+            </UiButton>
+          </div>
         </div>
       </UiSidebarHeader>
 
@@ -433,27 +456,39 @@ useHorizontalSwipeGesture({
       </div>
 
       <UiSidebarFooter class="border-t border-sidebar-border p-3">
-        <UiButton
-          variant="ghost"
-          size="icon"
-          data-testid="theme-toggle-collapsed"
-          class="mb-2 hidden h-8 w-8 self-center text-muted-foreground hover:text-foreground group-data-[collapsible=icon]:inline-flex"
-          @click="toggleTheme"
-        >
-          <Transition
-            enter-active-class="transition-transform duration-300"
-            enter-from-class="rotate-[-90deg] scale-0"
-            enter-to-class="rotate-0 scale-100"
-            leave-active-class="transition-transform duration-200"
-            leave-from-class="rotate-0 scale-100"
-            leave-to-class="rotate-90 scale-0"
-            mode="out-in"
+        <div class="mb-2 hidden flex-col items-center gap-1 group-data-[collapsible=icon]:flex">
+          <UiButton
+            variant="ghost"
+            size="icon"
+            data-testid="folder-theme-toggle-collapsed"
+            :class="['h-8 w-8 transition-colors', folderThemeEnabled ? 'text-primary hover:text-primary/80' : 'text-muted-foreground/40 hover:text-muted-foreground']"
+            @click="toggleFolderTheme"
           >
-            <Sun v-if="mode === 'dark'" key="sun" class="h-4 w-4" />
-            <Moon v-else key="moon" class="h-4 w-4" />
-          </Transition>
-          <span class="sr-only">Toggle theme</span>
-        </UiButton>
+            <Palette class="h-4 w-4" />
+            <span class="sr-only">Toggle folder theme</span>
+          </UiButton>
+          <UiButton
+            variant="ghost"
+            size="icon"
+            data-testid="theme-toggle-collapsed"
+            class="h-8 w-8 text-muted-foreground hover:text-foreground"
+            @click="toggleTheme"
+          >
+            <Transition
+              enter-active-class="transition-transform duration-300"
+              enter-from-class="rotate-[-90deg] scale-0"
+              enter-to-class="rotate-0 scale-100"
+              leave-active-class="transition-transform duration-200"
+              leave-from-class="rotate-0 scale-100"
+              leave-to-class="rotate-90 scale-0"
+              mode="out-in"
+            >
+              <Sun v-if="mode === 'dark'" key="sun" class="h-4 w-4" />
+              <Moon v-else key="moon" class="h-4 w-4" />
+            </Transition>
+            <span class="sr-only">Toggle theme</span>
+          </UiButton>
+        </div>
         <div class="flex items-center gap-3 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0">
           <UiAvatar data-testid="sidebar-user-avatar" class="h-8 w-8">
             <UiAvatarImage
@@ -484,6 +519,15 @@ useHorizontalSwipeGesture({
               </UiButton>
             </UiDropdownMenuTrigger>
             <UiDropdownMenuContent align="end" class="w-48">
+              <UiDropdownMenuCheckboxItem
+                data-testid="sidebar-menu-folder-theme"
+                :checked="folderThemeEnabled"
+                @select.prevent="toggleFolderTheme"
+              >
+                <Palette class="mr-2 h-4 w-4" />
+                Use folder theme
+              </UiDropdownMenuCheckboxItem>
+              <UiDropdownMenuSeparator />
               <UiDropdownMenuItem
                 data-testid="sidebar-menu-sign-out"
                 @click="onSignOut"

@@ -86,6 +86,45 @@ describe('generateCompletion', () => {
     expect(body.max_tokens).toBe(512)
   })
 
+  test('can disable gateway-level retries for a durable provider attempt', async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) } as any)
+
+    await generateCompletion({ ...baseParams, maxAttempts: 1 })
+
+    const headers = vi.mocked(globalThis.fetch).mock.calls[0][1]!.headers as Record<string, string>
+    expect(headers['cf-aig-max-attempts']).toBe('1')
+  })
+
+  test('[P0] can require provider-backed JSON output for durable structured generation', async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) } as any)
+
+    await generateCompletion({ ...baseParams, jsonMode: true })
+
+    const body = JSON.parse(vi.mocked(globalThis.fetch).mock.calls[0][1]!.body as string)
+    expect(body.response_format).toEqual({ type: 'json_object' })
+    expect(body.provider).toEqual({ require_parameters: true })
+  })
+
+  test('[P0] prefers strict JSON Schema when a structured contract is supplied', async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) } as any)
+    const schema = {
+      name: 'test_contract',
+      strict: true,
+      schema: {
+        type: 'object',
+        properties: { ok: { type: 'boolean' } },
+        required: ['ok'],
+        additionalProperties: false,
+      },
+    }
+
+    await generateCompletion({ ...baseParams, jsonMode: true, jsonSchema: schema })
+
+    const body = JSON.parse(vi.mocked(globalThis.fetch).mock.calls[0][1]!.body as string)
+    expect(body.response_format).toEqual({ type: 'json_schema', json_schema: schema })
+    expect(body.provider).toEqual({ require_parameters: true })
+  })
+
   test('throws when config is missing', async () => {
     vi.mocked((globalThis as any).useRuntimeConfig).mockReturnValue({})
 

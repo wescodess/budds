@@ -1,6 +1,6 @@
 import { v } from 'convex/values'
 import { mutation, query } from './_generated/server'
-import { requireAuth } from './lib/auth'
+import { getOptionalAuthUserId, requireAuth } from './lib/auth'
 
 export const flagQuizQuestion = mutation({
   args: {
@@ -118,10 +118,8 @@ export const unflagFlashcard = mutation({
 export const getFlagRateForCourse = query({
   args: { courseId: v.id('courses') },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return null
-
-    const userId = identity.tokenIdentifier
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return null
     const course = await ctx.db.get(args.courseId)
     if (!course || course.userId !== userId) return null
 

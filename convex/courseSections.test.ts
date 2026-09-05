@@ -3,7 +3,7 @@ import { convexTest } from 'convex-test'
 import { describe, expect, test } from 'vitest'
 import { api, internal } from './_generated/api'
 import schema from './schema'
-import { transitionMastery } from './lib/masteryStateMachine'
+import { transitionMastery, type MasteryState } from './lib/masteryStateMachine'
 
 const modules = import.meta.glob('./**/*.ts')
 
@@ -1124,7 +1124,7 @@ describe('mastery state machine (pure function)', () => {
 
   test('reviewing -> mastered after 3 consecutive passes >= 80%', () => {
 
-    let state = { level: 'reviewing', consecutiveReviewPasses: 0 }
+    let state: MasteryState = { level: 'reviewing', consecutiveReviewPasses: 0 }
     state = transitionMastery(state, { type: 'section_reviewed', score: 80 })
     expect(state.level).toBe('reviewing')
     expect(state.consecutiveReviewPasses).toBe(1)

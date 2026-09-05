@@ -33,7 +33,7 @@ function truncate(text: string, max = 120): string {
         <p class="font-medium">{{ q.order + 1 }}. {{ q.question }}</p>
         <div class="flex items-center gap-2 text-xs text-muted-foreground">
           <ChatCitationBadge :index="q.order + 1" :filename="q.sourceFilename" />
-          <span class="truncate">{{ truncate(q.sourceChunkContent) }}</span>
+          <span class="truncate">{{ truncate(q.sourceChunkContent ?? '') }}</span>
         </div>
       </li>
     </ul>

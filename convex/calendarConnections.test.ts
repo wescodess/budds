@@ -82,12 +82,12 @@ describe('calendarConnections', () => {
       timezone: 'America/New_York',
     })
 
-    await asAlice.mutation(api.calendarConnections.disconnect, {})
+    await asAlice.mutation(internal.calendarConnections.disconnect, {})
     const connection = await asAlice.query(api.calendarConnections.getByUser, {})
     expect(connection).toBeNull()
   })
 
-  test('disconnect also deletes all calendarEvents for the user', async () => {
+  test('local disconnect cannot bypass provider-first event deletion', async () => {
     const t = convexTest(schema, modules)
     const asAlice = t.withIdentity(USER_A)
 
@@ -128,13 +128,14 @@ describe('calendarConnections', () => {
     let events = await asAlice.query(api.calendarEvents.listByUser, {})
     expect(events).toHaveLength(2)
 
-    await asAlice.mutation(api.calendarConnections.disconnect, {})
+    await expect(asAlice.mutation(internal.calendarConnections.disconnect, {}))
+      .rejects.toThrow('provider-first disconnect')
 
     events = await asAlice.query(api.calendarEvents.listByUser, {})
-    expect(events).toHaveLength(0)
+    expect(events).toHaveLength(2)
 
     const connection = await asAlice.query(api.calendarConnections.getByUser, {})
-    expect(connection).toBeNull()
+    expect(connection).not.toBeNull()
   })
 
   test('disconnect throws when no connection exists', async () => {
@@ -142,7 +143,7 @@ describe('calendarConnections', () => {
     const asAlice = t.withIdentity(USER_A)
 
     await expect(
-      asAlice.mutation(api.calendarConnections.disconnect, {}),
+      asAlice.mutation(internal.calendarConnections.disconnect, {}),
     ).rejects.toThrow('No calendar connection found')
   })
 
@@ -287,6 +288,31 @@ describe('calendarConnections', () => {
     ).rejects.toThrow('No calendar connection found')
   })
 
+  test('updatePreferences rejects invalid or unusable daily windows', async () => {
+    const t = convexTest(schema, modules)
+    const asAlice = t.withIdentity(USER_A)
+    await asAlice.mutation(api.calendarConnections.upsertConnection, {
+      provider: 'google',
+      accessToken: 'dG9rZW4=',
+      refreshToken: 'cmVmcmVzaA==',
+      expiresAt: Date.now() + 3600000,
+      timezone: 'UTC',
+    })
+
+    await expect(asAlice.mutation(api.calendarConnections.updatePreferences, {
+      morningStart: '99:99',
+      eveningEnd: '20:00',
+      sessionMinutes: 25,
+      preferredDays: ['mon'],
+    })).rejects.toThrow('HH:MM')
+    await expect(asAlice.mutation(api.calendarConnections.updatePreferences, {
+      morningStart: '20:00',
+      eveningEnd: '20:10',
+      sessionMinutes: 25,
+      preferredDays: ['mon'],
+    })).rejects.toThrow('fit at least one session')
+  })
+
   test('updatePreferences requires authentication', async () => {
     const t = convexTest(schema, modules)
     await expect(
@@ -319,7 +345,7 @@ describe('calendarConnections', () => {
     const t = convexTest(schema, modules)
     const asAlice = t.withIdentity(USER_A)
 
-    await asAlice.mutation(api.calendarConnections.upsertConnection, {
+    const calendarConnectionId = await asAlice.mutation(api.calendarConnections.upsertConnection, {
       provider: 'google',
       accessToken: 'b2xk',
       refreshToken: 'cmVmcmVzaA==',
@@ -330,6 +356,8 @@ describe('calendarConnections', () => {
     const newExpiresAt = Date.now() + 7200000
     await t.mutation(internal.calendarConnections.updateTokens, {
       userId: USER_A.tokenIdentifier,
+      calendarConnectionId,
+      expectedStatus: 'connected',
       accessToken: 'bmV3',
       expiresAt: newExpiresAt,
     })
@@ -341,7 +369,7 @@ describe('calendarConnections', () => {
     expect(tokens!.expiresAt).toBe(newExpiresAt)
   })
 
-  test('getAllConnectedUserIds returns user IDs for connected calendars', async () => {
+  test('getConnectedUserPage returns user IDs for connected calendars', async () => {
     const t = convexTest(schema, modules)
     const asAlice = t.withIdentity(USER_A)
     const asBob = t.withIdentity(USER_B)
@@ -362,13 +390,13 @@ describe('calendarConnections', () => {
       timezone: 'Europe/London',
     })
 
-    const userIds = await t.query(internal.calendarConnections.getAllConnectedUserIds, {})
-    expect(userIds).toHaveLength(2)
-    expect(userIds).toContain(USER_A.tokenIdentifier)
-    expect(userIds).toContain(USER_B.tokenIdentifier)
+    const page = await t.query(internal.calendarConnections.getConnectedUserPage, { cursor: null })
+    expect(page.userIds).toHaveLength(2)
+    expect(page.userIds).toContain(USER_A.tokenIdentifier)
+    expect(page.userIds).toContain(USER_B.tokenIdentifier)
   })
 
-  test('getAllConnectedUserIds excludes disconnected users', async () => {
+  test('getConnectedUserPage excludes disconnected users', async () => {
     const t = convexTest(schema, modules)
     const asAlice = t.withIdentity(USER_A)
 
@@ -380,10 +408,10 @@ describe('calendarConnections', () => {
       timezone: 'America/New_York',
     })
 
-    await asAlice.mutation(api.calendarConnections.disconnect, {})
+    await asAlice.mutation(internal.calendarConnections.disconnect, {})
 
-    const userIds = await t.query(internal.calendarConnections.getAllConnectedUserIds, {})
-    expect(userIds).toHaveLength(0)
+    const page = await t.query(internal.calendarConnections.getConnectedUserPage, { cursor: null })
+    expect(page.userIds).toHaveLength(0)
   })
 
   test('getConnectionByUser returns full connection for connected user', async () => {
@@ -413,5 +441,104 @@ describe('calendarConnections', () => {
       userId: 'nonexistent|user',
     })
     expect(connection).toBeNull()
+  })
+
+  test('[P1] OAuth upsert cannot reopen a connection after durable disconnect begins', async () => {
+    const t = convexTest(schema, modules)
+    const asAlice = t.withIdentity(USER_A)
+    const calendarConnectionId = await asAlice.mutation(api.calendarConnections.upsertConnection, {
+      provider: 'google',
+      accessToken: 'dG9rZW4=',
+      refreshToken: 'cmVmcmVzaA==',
+      expiresAt: Date.now() + 3600000,
+      timezone: 'America/New_York',
+    })
+    await t.mutation(internal.calendarConnections.beginDisconnectForUser, {
+      userId: USER_A.tokenIdentifier,
+      leaseToken: 'oauth-race-lease',
+      expectedCalendarConnectionId: calendarConnectionId,
+    })
+
+    await expect(asAlice.mutation(api.calendarConnections.upsertConnection, {
+      provider: 'google',
+      accessToken: 'bmV3',
+      refreshToken: 'bmV3LXJlZnJlc2g=',
+      expiresAt: Date.now() + 7200000,
+      timezone: 'UTC',
+    })).rejects.toThrow('Calendar disconnect is in progress')
+  })
+
+  test('[P1] stale refresh for disconnected connection A cannot overwrite reconnected B', async () => {
+    const t = convexTest(schema, modules)
+    const asAlice = t.withIdentity(USER_A)
+    const connectionA = await asAlice.mutation(api.calendarConnections.upsertConnection, {
+      provider: 'google',
+      accessToken: 'Y29ubmVjdGlvbi1h',
+      refreshToken: 'cmVmcmVzaC1h',
+      expiresAt: Date.now() + 3600000,
+      timezone: 'UTC',
+    })
+    await t.mutation(internal.calendarConnections.beginDisconnectForUser, {
+      userId: USER_A.tokenIdentifier,
+      leaseToken: 'complete-a',
+      expectedCalendarConnectionId: connectionA,
+    })
+    await t.mutation(internal.calendarConnections.recordDisconnectBatch, {
+      calendarConnectionId: connectionA,
+      leaseToken: 'complete-a',
+      deletedEventIds: [],
+      failures: 0,
+    })
+    const connectionB = await asAlice.mutation(api.calendarConnections.upsertConnection, {
+      provider: 'google',
+      accessToken: 'Y29ubmVjdGlvbi1i',
+      refreshToken: 'cmVmcmVzaC1i',
+      expiresAt: Date.now() + 7200000,
+      timezone: 'UTC',
+    })
+
+    await expect(t.mutation(internal.calendarConnections.updateTokens, {
+      userId: USER_A.tokenIdentifier,
+      calendarConnectionId: connectionA,
+      expectedStatus: 'connected',
+      accessToken: 'c3RhbGUtYQ==',
+      expiresAt: Date.now() + 10_800_000,
+    })).rejects.toThrow('Calendar connection changed')
+    expect(connectionB).not.toBe(connectionA)
+    expect(await t.query(internal.calendarConnections.getTokens, {
+      userId: USER_A.tokenIdentifier,
+    })).toMatchObject({ accessToken: 'Y29ubmVjdGlvbi1i', refreshToken: 'cmVmcmVzaC1i' })
+  })
+
+  test('[P1] connected-user pagination continues beyond the former 500-row ceiling', async () => {
+    const t = convexTest(schema, modules)
+    await t.run(async (ctx) => {
+      for (let index = 0; index < 501; index++) {
+        await ctx.db.insert('calendarConnections', {
+          userId: `calendar-scale-${index}`,
+          provider: 'google',
+          accessToken: 'token',
+          refreshToken: 'refresh',
+          expiresAt: Date.now() + 60_000,
+          timezone: 'UTC',
+          status: 'connected',
+          connectedAt: Date.now(),
+        })
+      }
+    })
+
+    let cursor: string | null = null
+    const userIds: string[] = []
+    do {
+      const page: { userIds: string[]; isDone: boolean; continueCursor: string } = await t.query(
+        internal.calendarConnections.getConnectedUserPage,
+        { cursor },
+      )
+      userIds.push(...page.userIds)
+      cursor = page.isDone ? null : page.continueCursor
+    } while (cursor !== null)
+
+    expect(userIds).toHaveLength(501)
+    expect(userIds).toContain('calendar-scale-500')
   })
 })

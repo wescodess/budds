@@ -75,6 +75,37 @@ describe('Offline Attempts — Queue Logic', () => {
     expect(call.courseId).toBe('course_abc')
     expect(typeof call.timestamp).toBe('number')
   })
+
+  it('queues review ratings with their server idempotency key', async () => {
+    const { useOfflineAttempts } = await import('~/composables/useOfflineAttempts')
+    const { queueReviewItemRating } = useOfflineAttempts()
+
+    await queueReviewItemRating('review_1', 4, 'rating-key-1')
+
+    expect(mockAddOfflineAttempt).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'review-item-rating',
+      idempotencyKey: 'rating-key-1',
+      data: { reviewItemId: 'review_1', quality: 4 },
+    }))
+  })
+
+  it('queues review session completion with its server idempotency key', async () => {
+    const { useOfflineAttempts } = await import('~/composables/useOfflineAttempts')
+    const { queueReviewSessionCompletion } = useOfflineAttempts()
+
+    await queueReviewSessionCompletion({
+      itemsReviewed: 5,
+      itemsCorrect: 4,
+      durationMs: 90_000,
+      mode: 'quick',
+      idempotencyKey: 'session-key-1',
+    })
+
+    expect(mockAddOfflineAttempt).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'review-session-completion',
+      idempotencyKey: 'session-key-1',
+    }))
+  })
 })
 
 describe('Offline Attempts — IndexedDB Operations', () => {

@@ -2,6 +2,7 @@
 import { Flag, ArrowLeft, CheckCircle, Zap, Flame } from 'lucide-vue-next'
 import { api } from '#convex/api'
 import type { Id } from '../../../../convex/_generated/dataModel'
+import { toast } from 'vue-sonner'
 
 const router = useRouter()
 const route = useRoute()
@@ -56,6 +57,17 @@ const dueQuery = import.meta.client
 const sessionItems = ref<ReviewItem[]>([])
 const sessionStarted = ref(false)
 const sessionStartTime = ref(0)
+const ratingIdempotencyKeys = new Map<string, string>()
+const sessionIdempotencyKey = ref('')
+const { queueReviewItemRating, queueReviewSessionCompletion } = useOfflineAttempts()
+const { pendingCount, isSyncing } = useOfflineSync()
+
+function createIdempotencyKey(prefix: string): string {
+  const id = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  return `${prefix}:${id}`
+}
 
 watch(
   () => dueQuery.data?.value,
@@ -66,6 +78,7 @@ watch(
     sessionItems.value = [...arr]
     sessionStarted.value = true
     sessionStartTime.value = Date.now()
+    sessionIdempotencyKey.value = createIdempotencyKey('review-session')
   },
   { immediate: true },
 )
@@ -95,6 +108,7 @@ function switchMode(mode: ReviewMode) {
   revealed.value = false
   sessionComplete.value = false
   completionStreak.value = null
+  sessionIdempotencyKey.value = createIdempotencyKey('review-session')
   router.replace({ query: { ...route.query, mode } })
 }
 
@@ -103,7 +117,7 @@ function revealAnswer() {
   revealed.value = true
 }
 
-async function finishSession() {
+async function finishSession(): Promise<boolean> {
   const durationMs = Date.now() - sessionStartTime.value
   const correct = ratings.value.filter((r) => r.quality >= 3).length
 
@@ -113,10 +127,26 @@ async function finishSession() {
       itemsCorrect: correct,
       durationMs,
       mode: reviewMode.value,
+      idempotencyKey: sessionIdempotencyKey.value,
     })
     completionStreak.value = (result as { streakCurrent: number }).streakCurrent
+    return true
   } catch {
-    // Session record failed; completion still shown locally
+    try {
+      await queueReviewSessionCompletion({
+        itemsReviewed: ratings.value.length,
+        itemsCorrect: correct,
+        durationMs,
+        mode: reviewMode.value,
+        idempotencyKey: sessionIdempotencyKey.value,
+      })
+      toast.info('Session saved on this device and will sync automatically.')
+      return true
+    }
+    catch {
+      toast.error('Could not save this session. Keep this page open and retry.')
+      return false
+    }
   }
 }
 
@@ -125,27 +155,40 @@ async function rateItem(quality: number) {
 
   submitting.value = true
   const itemId = currentItem.value._id
-
-  ratings.value.push({ itemId, quality })
+  const idempotencyKey = ratingIdempotencyKeys.get(itemId)
+    ?? createIdempotencyKey(`review-item:${itemId}`)
+  ratingIdempotencyKeys.set(itemId, idempotencyKey)
 
   try {
-    await submitReviewMutation.mutate({
-      reviewItemId: itemId as Id<'reviewItems'>,
-      quality,
-    })
-  } catch {
-    // SM-2 update failed silently; rating still tracked locally
-  }
+    try {
+      await submitReviewMutation.mutate({
+        reviewItemId: itemId as Id<'reviewItems'>,
+        quality,
+        idempotencyKey,
+      })
+    }
+    catch {
+      await queueReviewItemRating(itemId, quality, idempotencyKey)
+      toast.info('Rating saved on this device and will sync automatically.')
+    }
 
-  if (currentIndex.value >= totalItems.value - 1) {
-    sessionComplete.value = true
-    await finishSession()
-  } else {
-    currentIndex.value++
-    revealed.value = false
-  }
+    ratingIdempotencyKeys.delete(itemId)
+    ratings.value.push({ itemId, quality })
 
-  submitting.value = false
+    if (currentIndex.value >= totalItems.value - 1) {
+      sessionComplete.value = await finishSession()
+    }
+    else {
+      currentIndex.value++
+      revealed.value = false
+    }
+  }
+  catch {
+    toast.error('Could not save this rating. Please retry.')
+  }
+  finally {
+    submitting.value = false
+  }
 }
 
 const correctCount = computed(() =>
@@ -276,6 +319,15 @@ function navigateBack() {
         </div>
       </div>
     </header>
+
+    <div
+      v-if="pendingCount > 0"
+      class="border-b border-amber-900/60 bg-amber-950/40 px-4 py-2 text-center text-xs text-amber-300"
+      aria-live="polite"
+      data-testid="offline-review-pending"
+    >
+      {{ isSyncing ? 'Syncing saved review progress…' : `${pendingCount} review update${pendingCount === 1 ? '' : 's'} waiting to sync` }}
+    </div>
 
     <div v-if="!sessionStarted && !sessionComplete" class="flex flex-1 items-center justify-center px-4">
       <div class="space-y-3 text-center">

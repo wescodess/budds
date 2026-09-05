@@ -19,7 +19,7 @@ export function useTimezoneSync(profileData: Ref<any>) {
       if (!detected) return
 
       synced.value = true
-      setTimezone({ timezone: detected }).catch(() => {
+      setTimezone.mutate({ timezone: detected }).catch(() => {
         synced.value = false
       })
     },

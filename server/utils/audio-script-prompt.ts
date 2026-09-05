@@ -26,7 +26,7 @@ export interface BuildAudioScriptPromptOptions {
 }
 
 const AURA_WORDS_PER_MINUTE = 150
-const DIA_WORDS_PER_MINUTE = 280
+const DIA_WORDS_PER_MINUTE = 150
 const MAX_TURN_CHARS = 1800
 
 function summarizeChunks(chunks: AISearchChunk[]): string {

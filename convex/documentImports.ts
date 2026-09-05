@@ -2,6 +2,7 @@ import { v } from 'convex/values'
 import type { Id } from './_generated/dataModel'
 import { action } from './_generated/server'
 import { api } from './_generated/api'
+import { requireAuth } from './lib/auth'
 
 const MAX_FILE_SIZE = 52_428_800
 
@@ -76,8 +77,7 @@ export const importDocumentFromUrl = action({
     url: v.string(),
   },
   handler: async (ctx, args): Promise<{ documentId: Id<'documents'> | undefined; filename: string }> => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) throw new Error('Unauthenticated')
+    await requireAuth(ctx)
 
     const sourceUrl = resolveImportUrl(args.url)
     const urlString = sourceUrl.toString()

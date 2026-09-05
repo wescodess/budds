@@ -10,11 +10,14 @@ interface Preferences {
   preferredDays: string[]
 }
 
+type SessionLength = 5 | 10 | 15 | 25
+type PreferredDay = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun'
+
 const props = defineProps<{
   preferences: Preferences | null
 }>()
 
-const DAYS = [
+const DAYS: ReadonlyArray<{ value: PreferredDay; label: string }> = [
   { value: 'mon', label: 'Mon' },
   { value: 'tue', label: 'Tue' },
   { value: 'wed', label: 'Wed' },
@@ -24,7 +27,23 @@ const DAYS = [
   { value: 'sun', label: 'Sun' },
 ]
 
-const SESSION_LENGTHS = [5, 10, 15, 25]
+const SESSION_LENGTHS: readonly SessionLength[] = [5, 10, 15, 25]
+
+function isSessionLength(value: number): value is SessionLength {
+  return SESSION_LENGTHS.includes(value as SessionLength)
+}
+
+function isPreferredDay(value: string): value is PreferredDay {
+  return DAYS.some(day => day.value === value)
+}
+
+function normalizeSessionLength(value: number): SessionLength {
+  return isSessionLength(value) ? value : 15
+}
+
+function normalizePreferredDays(values: string[]): PreferredDay[] {
+  return values.filter(isPreferredDay)
+}
 
 const defaults: Preferences = {
   morningStart: '08:00',
@@ -35,8 +54,8 @@ const defaults: Preferences = {
 
 const morningStart = ref(props.preferences?.morningStart ?? defaults.morningStart)
 const eveningEnd = ref(props.preferences?.eveningEnd ?? defaults.eveningEnd)
-const sessionMinutes = ref(props.preferences?.sessionMinutes ?? defaults.sessionMinutes)
-const preferredDays = ref<string[]>([...(props.preferences?.preferredDays ?? defaults.preferredDays)])
+const sessionMinutes = ref<SessionLength>(normalizeSessionLength(props.preferences?.sessionMinutes ?? defaults.sessionMinutes))
+const preferredDays = ref<PreferredDay[]>(normalizePreferredDays(props.preferences?.preferredDays ?? defaults.preferredDays))
 const saving = ref(false)
 
 const updateMutation = import.meta.client
@@ -47,8 +66,8 @@ watch(() => props.preferences, (val) => {
   if (val) {
     morningStart.value = val.morningStart
     eveningEnd.value = val.eveningEnd
-    sessionMinutes.value = val.sessionMinutes
-    preferredDays.value = [...val.preferredDays]
+    sessionMinutes.value = normalizeSessionLength(val.sessionMinutes)
+    preferredDays.value = normalizePreferredDays(val.preferredDays)
   }
 })
 
@@ -60,7 +79,7 @@ const isDirty = computed(() => {
     || JSON.stringify([...preferredDays.value].sort()) !== JSON.stringify([...current.preferredDays].sort())
 })
 
-function toggleDay(day: string) {
+function toggleDay(day: PreferredDay) {
   const idx = preferredDays.value.indexOf(day)
   if (idx >= 0) {
     preferredDays.value.splice(idx, 1)

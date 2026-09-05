@@ -5,10 +5,21 @@ export type TaskDoc = Doc<'tasks'>
 
 export function useTasks(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
   const id = isRef(folderId) ? folderId : ref(folderId)
+  const nuxtApp = import.meta.client ? useNuxtApp() : null
+  const convexAuthReady = import.meta.client
+    ? ((nuxtApp!.$convexAuthReady as Ref<boolean> | undefined) ?? ref(false))
+    : ref(true)
+  const convexAuthenticated = import.meta.client
+    ? ((nuxtApp!.$convexAuthenticated as Ref<boolean> | undefined) ?? ref(false))
+    : ref(true)
+  const convexAuthUsable = computed(
+    () => convexAuthReady.value && convexAuthenticated.value,
+  )
 
   const { data: tasksData } = useConvexQuery(
     api.tasks.listByFolder,
     computed(() => ({ folderId: id.value })),
+    { enabled: convexAuthUsable },
   )
 
   const tasks = computed<TaskDoc[]>(

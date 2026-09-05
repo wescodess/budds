@@ -175,7 +175,7 @@ watch([processedContent, isAssistant], () => {
         v-else-if="showMarkdownFallback"
         :class="cn(
           'prose-chat whitespace-pre-wrap break-words',
-          markdownParseError && 'text-foreground',
+          Boolean(markdownParseError) && 'text-foreground',
         )"
       >
         <template v-for="(segment, index) in fallbackSegments" :key="index">
