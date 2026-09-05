@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 import { convexTest } from 'convex-test'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 import { api } from './_generated/api'
 import schema from './schema'
 
@@ -17,146 +17,103 @@ const USER_B = {
   email: 'bob@example.com',
 }
 
-async function storeAudioBlob(t: ReturnType<typeof convexTest>) {
+async function storeAudioBlob(t: ReturnType<typeof convexTest>, bytes = new Uint8Array([0xff, 0xfb, 0x90, 0x00])) {
   return await t.run(async (ctx) =>
-    ctx.storage.store(new Blob([new Uint8Array([0xff, 0xfb, 0x90, 0x00])], { type: 'audio/mpeg' })),
+    ctx.storage.store(new Blob([bytes], { type: 'audio/mpeg' })),
   )
 }
 
-async function sampleTurns(t: ReturnType<typeof convexTest>) {
-  const fileA = await storeAudioBlob(t)
-  const fileB = await storeAudioBlob(t)
-  const fileC = await storeAudioBlob(t)
+async function claimedAudioBlob(
+  t: ReturnType<typeof convexTest>,
+  identity = USER_A,
+) {
+  const bytes = new Uint8Array([0xff, 0xfb, 0x90, 0x00])
+  const audioFileId = await storeAudioBlob(t, bytes)
+  const uploadClaimId = await t.run(ctx => ctx.db.insert('audioOverviewUploadClaims', {
+    userId: identity.tokenIdentifier,
+    nonce: `historical-${crypto.randomUUID()}`,
+    expiresAt: Number.MAX_SAFE_INTEGER,
+    storageId: audioFileId,
+    consumedAt: Date.now(),
+  }))
+  return { audioFileId, uploadClaimId }
+}
+
+async function sampleTurns(t: ReturnType<typeof convexTest>, identity = USER_A) {
+  const fileA = await claimedAudioBlob(t, identity)
+  const fileB = await claimedAudioBlob(t, identity)
+  const fileC = await claimedAudioBlob(t, identity)
   return [
-    { speaker: 'host_a' as const, text: 'Welcome to the overview.', audioFileId: fileA, durationMs: 3200, sourceIndex: 0 },
-    { speaker: 'host_b' as const, text: 'Great to be here — what is this about?', audioFileId: fileB, durationMs: 2800, sourceIndex: 1 },
-    { speaker: 'host_a' as const, text: 'Cellular respiration, mostly.', audioFileId: fileC, durationMs: 2100, sourceIndex: 0 },
+    { speaker: 'host_a' as const, text: 'Welcome to the overview.', ...fileA, durationMs: 3200, sourceIndex: 0 },
+    { speaker: 'host_b' as const, text: 'Great to be here — what is this about?', ...fileB, durationMs: 2800, sourceIndex: 1 },
+    { speaker: 'host_a' as const, text: 'Cellular respiration, mostly.', ...fileC, durationMs: 2100, sourceIndex: 0 },
   ]
 }
 
-const VOICE = { hostA: 'en', hostB: 'en' }
-
-describe('audioOverviews.generateTurnUploadUrl', () => {
-  test('[P0] rejects unauthenticated callers', async () => {
-    const t = convexTest(schema, modules)
-    await expect(t.mutation(api.audioOverviews.generateTurnUploadUrl, {})).rejects.toThrow(/Unauthenticated/)
+async function bindClaimsToTask(
+  t: ReturnType<typeof convexTest>,
+  turns: Array<{ uploadClaimId: any }>,
+  taskId: any,
+) {
+  await t.run(async (ctx) => {
+    for (const turn of turns) {
+      await ctx.db.patch(turn.uploadClaimId, { taskId, consumedAt: undefined })
+    }
   })
+}
 
-  test('[P0] returns a storage upload URL for authenticated callers', async () => {
-    const t = convexTest(schema, modules)
-    const asUser = t.withIdentity(USER_A)
-    const url = await asUser.mutation(api.audioOverviews.generateTurnUploadUrl, {})
-    expect(typeof url).toBe('string')
-    expect(url.length).toBeGreaterThan(0)
-  })
-})
+const VOICE = { hostA: 'asteria' as const, hostB: 'orion' as const }
 
-describe('audioOverviews.createWithTurns', () => {
-  test('[P0] rejects unauthenticated callers', async () => {
-    const t = convexTest(schema, modules)
-    const asUser = t.withIdentity(USER_A)
-    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
-    const turns = await sampleTurns(t)
+async function createWithTurns(
+  t: ReturnType<typeof convexTest>,
+  asUser: ReturnType<ReturnType<typeof convexTest>['withIdentity']>,
+  args: Omit<Parameters<typeof asUser.mutation>[1], 'taskId'> & { folderId: any },
+) {
+  void asUser
+  const ownerId = (await t.run(ctx => ctx.db.get(args.folderId)))!.userId
+  const raw = args as any
+  const turns = raw.turns.map(({ uploadClaimId: _uploadClaimId, ...turn }: any) => turn)
+  const overviewId = await t.run(ctx => ctx.db.insert('audioOverviews', {
+    userId: ownerId,
+    folderId: args.folderId,
+    title: raw.title,
+    status: 'ready',
+    model: raw.model,
+    turns,
+    voiceProfile: raw.voiceProfile ?? VOICE,
+    preferences: raw.preferences,
+    totalDurationMs: turns.reduce((sum: number, turn: { durationMs: number }) => sum + turn.durationMs, 0),
+    sourceDocumentIds: raw.sourceDocumentIds,
+    scopeDocIds: raw.scopeDocIds,
+    courseScoped: raw.courseScoped,
+  }))
+  return { overviewId }
+}
 
-    await expect(
-      t.mutation(api.audioOverviews.createWithTurns, {
-        folderId,
-        title: 'Test',
-        turns,
-        voiceProfile: VOICE,
-      }),
-    ).rejects.toThrow(/Unauthenticated/)
-  })
-
-  test('[P0] rejects when folder is owned by another user', async () => {
-    const t = convexTest(schema, modules)
-    const asA = t.withIdentity(USER_A)
-    const asB = t.withIdentity(USER_B)
-    const folderId = await asA.mutation(api.folders.createFolder, { name: 'Alice private' })
-    const turns = await sampleTurns(t)
-
-    await expect(
-      asB.mutation(api.audioOverviews.createWithTurns, {
-        folderId,
-        title: 'Sneaky',
-        turns,
-        voiceProfile: VOICE,
-      }),
-    ).rejects.toThrow(/Folder not found/)
-  })
-
-  test('[P0] rejects empty turn arrays', async () => {
-    const t = convexTest(schema, modules)
-    const asUser = t.withIdentity(USER_A)
-    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
-
-    await expect(
-      asUser.mutation(api.audioOverviews.createWithTurns, {
-        folderId,
-        title: 'Empty',
-        turns: [],
-        voiceProfile: VOICE,
-      }),
-    ).rejects.toThrow(/at least one turn/)
-  })
-
-  test('[P0] persists overview with correct userId mirror and totals', async () => {
-    const t = convexTest(schema, modules)
-    const asUser = t.withIdentity(USER_A)
-    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
-    const turns = await sampleTurns(t)
-
-    const { overviewId } = await asUser.mutation(api.audioOverviews.createWithTurns, {
-      folderId,
-      title: 'Cellular respiration',
-      model: 'google/gemini-2.5-flash',
-      turns,
+async function reserveCourseAudio(
+  t: ReturnType<typeof convexTest>,
+  asUser: ReturnType<ReturnType<typeof convexTest>['withIdentity']>,
+  folderId: any,
+) {
+  void asUser
+  const ownerId = (await t.run(ctx => ctx.db.get(folderId)))!.userId
+  return await t.run(ctx => ctx.db.insert('tasks', {
+    userId: ownerId,
+    folderId,
+    type: 'audio-overview-generation',
+    status: 'running',
+    title: 'Historical fixture task',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    audioOverviewRequest: {
+      scope: { mode: 'folder' },
+      documents: [],
+      preferences: { lengthMinutes: 5, complexity: 'beginner' },
       voiceProfile: VOICE,
-      preferences: { lengthMinutes: 10, complexity: 'beginner' },
-    })
-
-    const row = await t.run(async (ctx) => ctx.db.get(overviewId))
-    expect(row?.userId).toBe(USER_A.tokenIdentifier)
-    expect(row?.status).toBe('ready')
-    expect(row?.turns).toHaveLength(3)
-    expect(row?.totalDurationMs).toBe(3200 + 2800 + 2100)
-    expect(row?.model).toBe('google/gemini-2.5-flash')
-    expect(row?.preferences?.lengthMinutes).toBe(10)
-  })
-
-  test('[P1] drops sourceDocumentIds not owned by caller', async () => {
-    const t = convexTest(schema, modules)
-    const asA = t.withIdentity(USER_A)
-    const asB = t.withIdentity(USER_B)
-
-    const folderB = await asB.mutation(api.folders.createFolder, { name: 'Bob Folder' })
-    const pdfId = await t.run(async (ctx) => ctx.storage.store(new Blob(['pdf'], { type: 'application/pdf' })))
-    const bobDocId = await t.run(async (ctx) =>
-      ctx.db.insert('documents', {
-        userId: USER_B.tokenIdentifier,
-        folderId: folderB,
-        filename: 'bob.pdf',
-        fileId: pdfId,
-        status: 'success',
-        fileSize: 100,
-      }),
-    )
-
-    const folderA = await asA.mutation(api.folders.createFolder, { name: 'Alice Folder' })
-    const turns = await sampleTurns(t)
-
-    const { overviewId } = await asA.mutation(api.audioOverviews.createWithTurns, {
-      folderId: folderA,
-      title: 'Mixed',
-      turns,
-      voiceProfile: VOICE,
-      sourceDocumentIds: [String(bobDocId)],
-    })
-
-    const row = await t.run(async (ctx) => ctx.db.get(overviewId))
-    expect(row?.sourceDocumentIds).toBeUndefined()
-  })
-})
+      quotaDate: '2026-09-03',
+    },
+  }))
+}
 
 describe('audioOverviews.listByFolder', () => {
   test('[P0] returns only caller overviews for that folder', async () => {
@@ -167,16 +124,16 @@ describe('audioOverviews.listByFolder', () => {
     const folderA = await asA.mutation(api.folders.createFolder, { name: 'Bio' })
     const folderB = await asB.mutation(api.folders.createFolder, { name: 'Bio' })
 
-    await asA.mutation(api.audioOverviews.createWithTurns, {
+    await createWithTurns(t, asA, {
       folderId: folderA,
       title: 'Alice',
       turns: await sampleTurns(t),
       voiceProfile: VOICE,
     })
-    await asB.mutation(api.audioOverviews.createWithTurns, {
+    await createWithTurns(t, asB, {
       folderId: folderB,
       title: 'Bob',
-      turns: await sampleTurns(t),
+      turns: await sampleTurns(t, USER_B),
       voiceProfile: VOICE,
     })
 
@@ -197,7 +154,7 @@ describe('audioOverviews.getWithTurns', () => {
     const asB = t.withIdentity(USER_B)
     const folderA = await asA.mutation(api.folders.createFolder, { name: 'Bio' })
 
-    const { overviewId } = await asA.mutation(api.audioOverviews.createWithTurns, {
+    const { overviewId } = await createWithTurns(t, asA, {
       folderId: folderA,
       title: 'Secret',
       turns: await sampleTurns(t),
@@ -212,7 +169,7 @@ describe('audioOverviews.getWithTurns', () => {
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
 
-    const { overviewId } = await asUser.mutation(api.audioOverviews.createWithTurns, {
+    const { overviewId } = await createWithTurns(t, asUser, {
       folderId,
       title: 'Deep',
       turns: await sampleTurns(t),
@@ -233,7 +190,7 @@ describe('audioOverviews.getTurnUrls', () => {
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
 
-    const { overviewId } = await asUser.mutation(api.audioOverviews.createWithTurns, {
+    const { overviewId } = await createWithTurns(t, asUser, {
       folderId,
       title: 'URLs',
       turns: await sampleTurns(t),
@@ -252,42 +209,13 @@ describe('audioOverviews.getTurnUrls', () => {
     const asB = t.withIdentity(USER_B)
     const folderA = await asA.mutation(api.folders.createFolder, { name: 'Bio' })
 
-    const { overviewId } = await asA.mutation(api.audioOverviews.createWithTurns, {
+    const { overviewId } = await createWithTurns(t, asA, {
       folderId: folderA,
       title: 'Scoped',
       turns: await sampleTurns(t),
       voiceProfile: VOICE,
     })
     expect(await asB.query(api.audioOverviews.getTurnUrls, { id: overviewId })).toBeNull()
-  })
-})
-
-describe('audioOverviews.deleteOrphanTurnBlob', () => {
-  test('[P0] rejects unauthenticated callers', async () => {
-    const t = convexTest(schema, modules)
-    const storageId = await storeAudioBlob(t)
-    await expect(
-      t.mutation(api.audioOverviews.deleteOrphanTurnBlob, { storageId }),
-    ).rejects.toThrow(/Unauthenticated/)
-  })
-
-  test('[P0] deletes a storage blob for authenticated caller', async () => {
-    const t = convexTest(schema, modules)
-    const asUser = t.withIdentity(USER_A)
-    const storageId = await storeAudioBlob(t)
-    await asUser.mutation(api.audioOverviews.deleteOrphanTurnBlob, { storageId })
-    const url = await t.run(async (ctx) => ctx.storage.getUrl(storageId))
-    expect(url).toBeNull()
-  })
-
-  test('[P1] tolerates already-deleted blobs', async () => {
-    const t = convexTest(schema, modules)
-    const asUser = t.withIdentity(USER_A)
-    const storageId = await storeAudioBlob(t)
-    await asUser.mutation(api.audioOverviews.deleteOrphanTurnBlob, { storageId })
-    await expect(
-      asUser.mutation(api.audioOverviews.deleteOrphanTurnBlob, { storageId }),
-    ).resolves.toBeNull()
   })
 })
 
@@ -298,7 +226,7 @@ describe('audioOverviews.deleteOverview', () => {
     const asB = t.withIdentity(USER_B)
     const folderA = await asA.mutation(api.folders.createFolder, { name: 'Bio' })
 
-    const { overviewId } = await asA.mutation(api.audioOverviews.createWithTurns, {
+    const { overviewId } = await createWithTurns(t, asA, {
       folderId: folderA,
       title: 'Mine',
       turns: await sampleTurns(t),
@@ -316,18 +244,35 @@ describe('audioOverviews.deleteOverview', () => {
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
     const turns = await sampleTurns(t)
 
-    const { overviewId } = await asUser.mutation(api.audioOverviews.createWithTurns, {
+    const { overviewId } = await createWithTurns(t, asUser, {
       folderId,
       title: 'Doomed',
       turns,
       voiceProfile: VOICE,
     })
+    const interjectionTurns = await sampleTurns(t)
+    const interjectionTaskId = await reserveCourseAudio(t, asUser, folderId)
+    await bindClaimsToTask(t, interjectionTurns, interjectionTaskId)
+    const { interjectionId } = await asUser.mutation(api.audioOverviewInterjections.create, {
+      audioOverviewId: overviewId,
+      taskId: interjectionTaskId,
+      insertedAfterTurnIndex: 1,
+      question: 'A private follow-up',
+      answerTurns: interjectionTurns,
+    })
 
+    vi.useFakeTimers()
     const result = await asUser.mutation(api.audioOverviews.deleteOverview, { id: overviewId })
-    expect(result.deletedTurns).toBe(3)
+    expect(result).toEqual({ scheduled: true })
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
+    vi.useRealTimers()
 
     const row = await t.run(async (ctx) => ctx.db.get(overviewId))
     expect(row).toBeNull()
+    expect(await t.run(ctx => ctx.db.get(interjectionId))).toBeNull()
+    for (const turn of [...turns, ...interjectionTurns]) {
+      expect(await t.run(ctx => ctx.storage.getUrl(turn.audioFileId))).toBeNull()
+    }
   })
 })
 
@@ -335,7 +280,7 @@ async function createReadyOverview(t: ReturnType<typeof convexTest>, user: typeo
   const asUser = t.withIdentity(user)
   const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
   const turns = await sampleTurns(t)
-  const { overviewId } = await asUser.mutation(api.audioOverviews.createWithTurns, {
+  const { overviewId } = await createWithTurns(t, asUser, {
     folderId,
     title: 'Photosynthesis — a conversation',
     turns,
@@ -450,6 +395,8 @@ describe('audioOverviews.getByShareToken', () => {
     expect(result).not.toHaveProperty('taskId')
     expect(result).not.toHaveProperty('model')
     expect(result).not.toHaveProperty('_id')
+    expect((result as { turns: Array<Record<string, unknown>> } | null)?.turns[0])
+      .not.toHaveProperty('audioFileId')
   })
 
   test('[P0] projection includes sourceFilenames derived from sourceDocumentIds', async () => {
@@ -473,100 +420,18 @@ describe('audioOverviews.getByShareToken', () => {
   })
 })
 
-describe('audioOverviews.createCourseScopedOverview', () => {
-  test('[P0] creates an overview with courseScoped=true', async () => {
-    const t = convexTest(schema, modules)
-    const asUser = t.withIdentity(USER_A)
-    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
-    const turns = await sampleTurns(t)
-
-    const { overviewId } = await asUser.mutation(api.audioOverviews.createCourseScopedOverview, {
-      folderId,
-      title: 'Section Primer',
-      model: 'google/gemini-2.5-flash',
-      turns,
-      voiceProfile: VOICE,
-      preferences: { lengthMinutes: 2, complexity: 'beginner' },
-    })
-
-    const row = await t.run(async (ctx) => ctx.db.get(overviewId))
-    expect(row?.userId).toBe(USER_A.tokenIdentifier)
-    expect(row?.status).toBe('ready')
-    expect(row?.courseScoped).toBe(true)
-    expect(row?.turns).toHaveLength(3)
-    expect(row?.totalDurationMs).toBe(3200 + 2800 + 2100)
-    expect(row?.title).toBe('Section Primer')
-  })
-
-  test('[P0] course-scoped overviews are excluded from listByFolder', async () => {
-    const t = convexTest(schema, modules)
-    const asUser = t.withIdentity(USER_A)
-    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
-    const turns = await sampleTurns(t)
-
-    await asUser.mutation(api.audioOverviews.createCourseScopedOverview, {
-      folderId,
-      title: 'Course Audio',
-      turns,
-      voiceProfile: VOICE,
-    })
-
-    await asUser.mutation(api.audioOverviews.createWithTurns, {
-      folderId,
-      title: 'Regular Audio',
-      turns: await sampleTurns(t),
-      voiceProfile: VOICE,
-    })
-
-    const list = await asUser.query(api.audioOverviews.listByFolder, { folderId })
-    expect(list).toHaveLength(1)
-    expect(list[0]!.title).toBe('Regular Audio')
-  })
-
-  test('[P0] rejects empty turn arrays', async () => {
-    const t = convexTest(schema, modules)
-    const asUser = t.withIdentity(USER_A)
-    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
-
-    await expect(
-      asUser.mutation(api.audioOverviews.createCourseScopedOverview, {
-        folderId,
-        title: 'Empty',
-        turns: [],
-        voiceProfile: VOICE,
-      }),
-    ).rejects.toThrow(/at least one turn/)
-  })
-
-  test('[P0] rejects unauthenticated callers', async () => {
-    const t = convexTest(schema, modules)
-    const asUser = t.withIdentity(USER_A)
-    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
-    const turns = await sampleTurns(t)
-
-    await expect(
-      t.mutation(api.audioOverviews.createCourseScopedOverview, {
-        folderId,
-        title: 'Test',
-        turns,
-        voiceProfile: VOICE,
-      }),
-    ).rejects.toThrow(/Unauthenticated/)
-  })
-})
-
 describe('audioOverviews.getCourseScopedOverview', () => {
   test('[P0] returns overview with turnUrls and sourceFilenames for owner', async () => {
     const t = convexTest(schema, modules)
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
     const turns = await sampleTurns(t)
-
-    const { overviewId } = await asUser.mutation(api.audioOverviews.createCourseScopedOverview, {
+    const { overviewId } = await createWithTurns(t, asUser, {
       folderId,
       title: 'Primer',
       turns,
       voiceProfile: VOICE,
+      courseScoped: true,
     })
 
     const result = await asUser.query(api.audioOverviews.getCourseScopedOverview, { id: overviewId })
@@ -584,12 +449,12 @@ describe('audioOverviews.getCourseScopedOverview', () => {
     const asB = t.withIdentity(USER_B)
     const folderId = await asA.mutation(api.folders.createFolder, { name: 'Bio' })
     const turns = await sampleTurns(t)
-
-    const { overviewId } = await asA.mutation(api.audioOverviews.createCourseScopedOverview, {
+    const { overviewId } = await createWithTurns(t, asA, {
       folderId,
       title: 'Private',
       turns,
       voiceProfile: VOICE,
+      courseScoped: true,
     })
 
     expect(await asB.query(api.audioOverviews.getCourseScopedOverview, { id: overviewId })).toBeNull()

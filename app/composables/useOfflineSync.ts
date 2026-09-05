@@ -14,6 +14,12 @@ export function useOfflineSync() {
   const reviewMutation = import.meta.client
     ? useConvexMutation(api.courseSections.reviewSection)
     : { mutate: async () => null }
+  const submitReviewMutation = import.meta.client
+    ? useConvexMutation(api.reviewItems.submitReview)
+    : { mutate: async () => null }
+  const completeReviewSessionMutation = import.meta.client
+    ? useConvexMutation(api.reviewItems.completeReviewSession)
+    : { mutate: async () => null }
 
   let syncTimeout: ReturnType<typeof setTimeout> | null = null
 
@@ -32,18 +38,53 @@ export function useOfflineSync() {
         return
       }
 
-      const MAX_SYNC_ATTEMPTS = 5
-      const retriable = attempts.filter(a => (a.syncAttempts ?? 0) < MAX_SYNC_ATTEMPTS)
-      pendingCount.value = retriable.length
+      const sorted = [...attempts].sort((a, b) => a.timestamp - b.timestamp)
 
-      if (retriable.length === 0) {
-        isSyncing.value = false
-        return
+      for (const attempt of sorted.filter(row =>
+        row.type === 'review-item-rating' || row.type === 'review-session-completion',
+      )) {
+        try {
+          if (attempt.type === 'review-item-rating') {
+            if (!attempt.data.reviewItemId || attempt.data.quality === undefined || !attempt.idempotencyKey) {
+              throw new Error('Queued review rating is incomplete')
+            }
+            await submitReviewMutation.mutate({
+              reviewItemId: attempt.data.reviewItemId as Id<'reviewItems'>,
+              quality: attempt.data.quality,
+              idempotencyKey: attempt.idempotencyKey,
+            })
+          }
+          else {
+            if (
+              attempt.data.itemsReviewed === undefined
+              || attempt.data.itemsCorrect === undefined
+              || attempt.data.durationMs === undefined
+              || !attempt.idempotencyKey
+            ) {
+              throw new Error('Queued review session is incomplete')
+            }
+            await completeReviewSessionMutation.mutate({
+              itemsReviewed: attempt.data.itemsReviewed,
+              itemsCorrect: attempt.data.itemsCorrect,
+              durationMs: attempt.data.durationMs,
+              mode: attempt.data.mode,
+              idempotencyKey: attempt.idempotencyKey,
+            })
+          }
+          if (attempt.id !== undefined) await markAttemptSynced(attempt.id)
+          pendingCount.value = Math.max(0, pendingCount.value - 1)
+        }
+        catch (error) {
+          lastSyncError.value = error instanceof Error ? error.message : 'Review sync failed'
+          if (attempt.id !== undefined) await incrementSyncAttempts(attempt.id)
+        }
       }
 
-      const sorted = [...retriable].sort((a, b) => a.timestamp - b.timestamp)
       const grouped = new Map<string, OfflineAttempt[]>()
-      for (const attempt of sorted) {
+      for (const attempt of sorted.filter(row =>
+        row.type !== 'review-item-rating' && row.type !== 'review-session-completion',
+      )) {
+        if (!attempt.sectionId) continue
         const key = attempt.sectionId
         const group = grouped.get(key) ?? []
         group.push(attempt)
@@ -62,6 +103,7 @@ export function useOfflineSync() {
               quizTotal: latest.data.quizTotal ?? 0,
             })
           } catch {
+            lastSyncError.value = 'Section review sync failed'
             for (const attempt of sectionAttempts) {
               if (attempt.id !== undefined) {
                 await incrementSyncAttempts(attempt.id)

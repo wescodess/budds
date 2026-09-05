@@ -29,7 +29,7 @@ const { data: scopeInventory } = useConvexQuery(api.folders.searchScopeItems, co
 })))
 
 const genericFolders = computed<PickerFolder[]>(() =>
-  (scopeInventory.value?.folders ?? []).map((f) => ({
+  (scopeInventory.value?.folders ?? []).map((f: ScopeFolderSummary) => ({
     id: f.id as unknown as string,
     name: f.name,
     parentId: undefined,
@@ -38,7 +38,7 @@ const genericFolders = computed<PickerFolder[]>(() =>
 )
 
 const genericFiles = computed<PickerFile[]>(() =>
-  (scopeInventory.value?.files ?? []).map((f) => ({
+  (scopeInventory.value?.files ?? []).map((f: ScopeFileSummary) => ({
     id: f.id as unknown as string,
     name: f.filename,
     folderId: props.folderId as unknown as string,
@@ -57,7 +57,7 @@ function isFileSelected(fileId: string): boolean {
 
 function isFolderSelected(folderId: string): 'all' | 'some' | 'none' {
   const folder = (scopeInventory.value?.folders ?? []).find(
-    (f) => (f.id as unknown as string) === folderId,
+    (f: ScopeFolderSummary) => (f.id as unknown as string) === folderId,
   )
   if (!folder) return 'none'
   const state = props.scope.selectionStateForFolder(folder)
@@ -79,7 +79,7 @@ async function resolveFolderSelection(folder: ScopeFolderSummary) {
 
 async function handleToggleFolder(folderId: string) {
   const folder = (scopeInventory.value?.folders ?? []).find(
-    (f) => (f.id as unknown as string) === folderId,
+    (f: ScopeFolderSummary) => (f.id as unknown as string) === folderId,
   )
   if (!folder) return
   const selected = props.scope.toggleFolder(await resolveFolderSelection(folder))
@@ -88,7 +88,7 @@ async function handleToggleFolder(folderId: string) {
 
 function handleToggleFile(fileId: string) {
   const file = (scopeInventory.value?.files ?? []).find(
-    (f) => (f.id as unknown as string) === fileId,
+    (f: ScopeFileSummary) => (f.id as unknown as string) === fileId,
   )
   if (!file) return
   const selected = props.scope.toggleFile(file)

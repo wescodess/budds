@@ -15,7 +15,7 @@ export const MODELS: ModelOption[] = [
   { label: 'Mistral Large', value: 'mistralai/mistral-large-latest' },
 ]
 
-export const DEFAULT_MODEL = MODELS.find(m => m.recommended)?.value ?? MODELS[0].value
+export const DEFAULT_MODEL = MODELS.find(m => m.recommended)?.value ?? MODELS[0]!.value
 
 export function getModelLabel(value: string): string {
   return MODELS.find(m => m.value === value)?.label ?? value

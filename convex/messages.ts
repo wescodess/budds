@@ -1,5 +1,6 @@
 import { v } from 'convex/values'
 import { mutation, query } from './_generated/server'
+import { requireAuth } from './lib/auth'
 
 const sourcesValidator = v.array(
   v.object({
@@ -12,10 +13,7 @@ const sourcesValidator = v.array(
 export const listByConversation = query({
   args: { conversationId: v.id('conversations') },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) throw new Error('Unauthenticated')
-
-    const userId = identity.tokenIdentifier
+    const userId = await requireAuth(ctx)
 
     const convo = await ctx.db.get(args.conversationId)
     if (!convo || convo.userId !== userId) {
@@ -47,10 +45,7 @@ export const appendMessage = mutation({
     })),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) throw new Error('Unauthenticated')
-
-    const userId = identity.tokenIdentifier
+    const userId = await requireAuth(ctx)
 
     const convo = await ctx.db.get(args.conversationId)
     if (!convo || convo.userId !== userId) {

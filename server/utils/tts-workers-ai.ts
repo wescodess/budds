@@ -15,6 +15,7 @@ export function isAuraVoice(v: unknown): v is AuraVoice {
 export interface SynthesizeVoiceParams {
   text: string
   speaker: AuraVoice
+  maxAttempts?: number
 }
 
 function getWorkersAiConfig() {
@@ -63,7 +64,9 @@ function getWorkersAiConfig() {
 }
 
 export async function synthesizeVoice(params: SynthesizeVoiceParams): Promise<Uint8Array> {
-  const { url, headers } = getWorkersAiConfig()
+  const { url, headers: baseHeaders } = getWorkersAiConfig()
+  const headers = { ...baseHeaders }
+  if (params.maxAttempts !== undefined) headers['cf-aig-max-attempts'] = String(params.maxAttempts)
 
   const response = await fetch(url, {
     method: 'POST',

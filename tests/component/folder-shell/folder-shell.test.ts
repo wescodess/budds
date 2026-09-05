@@ -4,12 +4,14 @@ import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { mockMatchMedia } from '../../support/match-media'
 
 const mode = ref<'light' | 'dark'>('light')
+const folderThemeEnabled = ref(true)
 const allFolders = ref<any[]>([])
 const queryData = ref<any[]>([])
 
 mockNuxtImport('useAppTheme', () => {
   return () => ({
     mode,
+    folderThemeEnabled,
   })
 })
 
@@ -71,6 +73,7 @@ async function mountFolderShell() {
 describe('FolderShell', () => {
   beforeEach(() => {
     mode.value = 'light'
+    folderThemeEnabled.value = true
     allFolders.value = []
     queryData.value = []
     localStorage.clear()

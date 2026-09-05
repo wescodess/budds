@@ -1,95 +1,76 @@
 # Budds Documentation Index
 
-**Type:** Monolith
+**Type:** Monolith Web Application
 **Primary Language:** TypeScript / Vue 3
-**Architecture:** Full-Stack Nuxt 4 with RAG Chat System
-**Last Updated:** 2026-04-08
+**Architecture:** Full-Stack Nuxt 4 + Convex Real-Time Backend + Cloudflare AI Services
+**Last Updated:** 2026-04-24
 
 ## Project Overview
 
-Budds is a full-stack web application that provides a Retrieval-Augmented Generation (RAG) chat interface. Users authenticate via Google OAuth, then interact with an AI-powered chat system that searches indexed documents using Cloudflare AI Search and generates responses through multiple LLM providers (Claude, GPT-4o, Gemini, Llama, DeepSeek, Mistral, Qwen) via Cloudflare AI Gateway and OpenRouter.
+Budds is an AI-powered learning and productivity platform. Users organize content into folders and documents, then leverage AI to generate flashcards, quizzes, audio overviews, and structured courses from their materials. The platform includes RAG-powered chat, spaced repetition review, calendar integration, and offline-capable course sections.
 
 ## Quick Reference
 
-- **Tech Stack:** Nuxt 4 + Vue 3 + Tailwind CSS 4 + shadcn-nuxt + Convex + Better Auth
+- **Tech Stack:** Nuxt 4 + Vue 3 + Tailwind CSS 4 + shadcn-vue + Convex + Better Auth + Cloudflare AI
 - **Entry Point:** `app/app.vue`
-- **Architecture Pattern:** Nuxt 4 layered (pages → composables → server API → external services)
-- **Database:** SQLite (auth) + Convex (application data, empty schema)
-- **Deployment:** Not yet configured (Cloudflare-oriented runtime config)
+- **Architecture Pattern:** Nuxt 4 SSR + Convex reactive backend + Nitro AI API routes
+- **Database:** Convex (25+ tables) + Better Auth session management
+- **Deployment:** Cloudflare Pages (frontend) + Convex Cloud (backend)
+- **Testing:** Vitest + convex-test + @nuxt/test-utils (647 test files)
 
 ## Generated Documentation
 
-### Core Documentation
+### Core
 
-- [Project Overview](./project-overview.md) - Executive summary and high-level architecture
-- [Source Tree Analysis](./source-tree-analysis.md) - Annotated directory structure
+- [Project Overview](./project-overview.md) — Executive summary, tech stack, key features
+- [Source Tree Analysis](./source-tree-analysis.md) — Annotated directory structure
+- [Architecture](./architecture.md) — System design, auth flow, data architecture, integrations
 
-### Technical Documentation
+### Technical Reference
 
-- [Architecture](./architecture.md) - Detailed technical architecture, data flow, and system design
-- [Component Inventory](./component-inventory.md) - Catalog of pages, composables, and UI elements
-- [Development Guide](./development-guide.md) - Local setup, commands, and development workflow
-- [API Contracts](./api-contracts.md) - API endpoints, request/response schemas, and auth flow
-- [Data Models](./data-models.md) - Database schema (SQLite auth + Convex)
+- [API Contracts](./api-contracts.md) — 15+ Nitro endpoints, 120+ Convex functions, auth routes
+- [Data Models](./data-models.md) — 25+ Convex tables with fields, indexes, relationships
+- [Component Inventory](./component-inventory.md) — 453 Vue components, 31 composables, 25 pages
+- [Development Guide](./development-guide.md) — Local setup, env vars, commands, testing
+- [Continuous Integration](./ci.md) — GitHub Actions gates, local parity, and configuration boundary
+
+### QA Handoff
+
+- [Auth Flows](./qa/auth-flows.md) — OAuth flow, session lifecycle, token provisioning, edge cases
+- [User Flows](./qa/user-flows.md) — Step-by-step user journeys for manual testing
+- [Test Plan](./qa/test-plan.md) — Test architecture, coverage report, gaps
+- [Known Limitations](./qa/known-limitations.md) — Error states, edge cases, deliberate omissions
+- [Deployment Guide](./qa/deployment-guide.md) — Environments, deploy process, verification
+- [Bug Reporting Guide](./qa/bug-reporting-guide.md) — Severity levels, required fields, templates
+
+### API Testing
+
+- [Postman Collection](./budds.postman_collection.json) — Importable collection for all API endpoints
 
 ## Existing Documentation
 
-- [CLAUDE.md](../CLAUDE.md) - AI assistant project instructions (Convex guidelines)
-- [AGENTS.md](../AGENTS.md) - AI agent instructions
+- [CLAUDE.md](../CLAUDE.md) — AI assistant project instructions
+- [AGENTS.md](../AGENTS.md) — AI agent instructions
 
 ## Getting Started
-
-### Prerequisites
-
-- Node.js v20+ (LTS)
-- pnpm package manager
-- Google OAuth credentials
-- Cloudflare account (AI Gateway + AI Search)
-- OpenRouter API key
-- Convex project
-
-### Setup
 
 ```bash
 git clone <repository-url>
 cd budds
 pnpm install
 npx nuxt prepare
+npx convex dev   # Start Convex backend
+pnpm dev         # Start Nuxt dev server at http://localhost:3002
 ```
 
-### Configure Environment
-
-Copy `.env.example` or create `.env` with required credentials (see [Development Guide](./development-guide.md) for full list).
-
-### Run Locally
-
-```bash
-pnpm dev
-```
-
-Dev server starts at `http://localhost:3002`.
-
-### Run Tests
-
-No test framework configured.
+See [Development Guide](./development-guide.md) for full env var list and setup steps.
 
 ## For AI-Assisted Development
 
-This documentation was generated specifically to enable AI agents to understand and extend this codebase.
-
-### When Planning New Features:
-
-**UI-only features:**
-→ Reference: `architecture.md`, `component-inventory.md`
-
-**API/Backend features:**
-→ Reference: `architecture.md`, `api-contracts.md`, `data-models.md`
-
-**Full-stack features:**
-→ Reference: All architecture docs
-
-**Deployment changes:**
-→ Review CI/CD configs in project (none currently configured)
+**UI features:** → `architecture.md`, `component-inventory.md`
+**API/Backend:** → `architecture.md`, `api-contracts.md`, `data-models.md`
+**Full-stack:** → All architecture docs
+**QA context:** → `qa/` directory
 
 ---
 

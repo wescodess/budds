@@ -26,3 +26,17 @@ Google OAuth redirect URI must point to `${CONVEX_SITE_URL}/api/auth/callback/go
 - `pnpm test:component` — Vue component tests (nuxt environment + happy-dom)
 - Component tests use `@nuxt/test-utils` with `mountSuspended`
 - Convex tests use `convex-test` with `convexTest(schema, modules)`
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs are tracked in GitHub Issues for `wescodess/budds`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The repository uses the default Matt Pocock triage-label vocabulary. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+The repository uses a single-context domain-doc layout. See `docs/agents/domain.md`.

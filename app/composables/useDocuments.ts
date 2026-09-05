@@ -32,6 +32,16 @@ type PendingUpload = {
 
 export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
   const id = isRef(folderId) ? folderId : ref(folderId)
+  const nuxtApp = import.meta.client ? useNuxtApp() : null
+  const convexAuthReady = import.meta.client
+    ? ((nuxtApp!.$convexAuthReady as Ref<boolean> | undefined) ?? ref(false))
+    : ref(true)
+  const convexAuthenticated = import.meta.client
+    ? ((nuxtApp!.$convexAuthenticated as Ref<boolean> | undefined) ?? ref(false))
+    : ref(true)
+  const convexAuthUsable = computed(
+    () => convexAuthReady.value && convexAuthenticated.value,
+  )
 
   const generateUploadUrlMutation = import.meta.client
     ? useConvexMutation(api.documents.generateUploadUrl)
@@ -62,11 +72,8 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
   const { data: documentsData } = useConvexQuery(
     api.documents.listDocumentsByFolder,
     computed(() => ({ folderId: id.value })),
+    { enabled: convexAuthUsable },
   )
-
-  const convexAuthReady = import.meta.client
-    ? (useNuxtApp().$convexAuthReady as Ref<boolean>)
-    : ref(true)
 
   const uploading = ref(false)
   const uploadProgress = ref(new Map<string, 'pending' | 'uploading' | 'done' | 'error'>())
@@ -220,7 +227,7 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
         () => {
           const docs = documentsData.value
           if (!docs) return undefined
-          const doc = docs.find(candidate => candidate._id === documentId)
+          const doc = docs.find((candidate: Doc<'documents'>) => candidate._id === documentId)
           if (!doc) return null
           return {
             status: doc.status,
@@ -395,7 +402,7 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
   )
 
   async function uploadFiles(files: File[], targetFolderId: Id<'folders'>) {
-    await until(convexAuthReady).toBe(true, { timeout: 5000 })
+    await until(convexAuthUsable).toBe(true, { timeout: 5000 })
 
     uploading.value = true
     resetTrackedAttachmentState()

@@ -7,14 +7,6 @@ import { requireRateLimit } from '../../utils/rate-limit'
 import { buildSectionTextPrompt } from '../../utils/section-text-prompt'
 import { buildQuizPrompt, parseQuizResponse } from '../../utils/quiz-prompt'
 import { buildFlashcardPrompt, parseFlashcardResponse } from '../../utils/flashcard-prompt'
-import { buildAudioPrimerPrompt } from '../../utils/audio-primer-prompt'
-import {
-  parseAudioScriptResponse,
-  splitOversizedTurns,
-  sanitizeTurnForSpeech,
-  estimateTurnDurationMs,
-} from '../../utils/audio-script-prompt'
-import { resolveTtsEngine, synthesizeTurn, synthesizeDialogue, engineVoiceProfile } from '../../utils/tts-provider'
 
 interface EngineConfig {
   includeAudio: boolean
@@ -36,7 +28,7 @@ function getEngineConfig(knowledgeType: string): EngineConfig {
   }
 }
 
-function makeConvexClient(event: any): ConvexHttpClient | null {
+function makeConvexClient(event: any): ConvexHttpClient {
   const token = event.context.convexToken as string | undefined
   const runtimeConfig = useRuntimeConfig(event)
   const convexUrl = readConfiguredRuntimeValue(
@@ -44,19 +36,16 @@ function makeConvexClient(event: any): ConvexHttpClient | null {
     'NUXT_PUBLIC_CONVEX_URL',
     'CONVEX_URL',
   )
-  if (!token || !convexUrl) return null
+  if (!token || !convexUrl) {
+    throw createError({ statusCode: 500, message: 'Failed to initialize Convex client' })
+  }
   const client = new ConvexHttpClient(convexUrl)
   client.setAuth(token)
   return client
 }
 
-const AUDIO_SCRIPT_MODEL = 'google/gemini-2.5-flash'
-const DEFAULT_VOICE_PROFILE = { hostA: 'asteria' as const, hostB: 'orion' as const }
-const MAX_PRIMER_TURNS = 16
-const MIN_PRIMER_TURNS = 2
-
 export default defineEventHandler(async (event) => {
-  requireRateLimit(event, 5)
+  await requireRateLimit(event, 5, 'course.generate-section')
   const userId = getConvexTokenIdentifier(event)
 
   const body = await readBody<{
@@ -73,10 +62,6 @@ export default defineEventHandler(async (event) => {
   const sectionId = body.sectionId as Id<'courseSections'>
   const taskId = body.taskId as Id<'tasks'> | undefined
   const convexClient = makeConvexClient(event)
-
-  if (!convexClient) {
-    throw createError({ statusCode: 500, message: 'Failed to initialize Convex client' })
-  }
 
   async function setTaskProgress(progress: string) {
     if (!taskId || !convexClient) return
@@ -109,11 +94,13 @@ export default defineEventHandler(async (event) => {
     const engineConfig = getEngineConfig(section.knowledgeType)
 
     let chunks: AISearchChunk[] = []
+    let courseDocumentIds: string[] = []
 
     if (course.sourceType !== 'web-only' && course.folderId) {
       const sourceDocs = await convexClient.query(api.courseSourceDocs.listByCourse, { courseId })
       const folderIds = [...new Set(sourceDocs.map((d: any) => d.folderId).filter(Boolean))] as string[]
       const docIds = sourceDocs.map((d: any) => d.documentId).filter(Boolean) as string[]
+      courseDocumentIds = [...new Set(docIds)]
 
       for (const folderId of folderIds) {
         if (chunks.length >= 30) break
@@ -143,6 +130,7 @@ export default defineEventHandler(async (event) => {
           userId,
           max_num_results: 30,
           score_threshold: 0.02,
+          filterDocIds: courseDocumentIds,
         })
         if (broadResults.data?.length > chunks.length) {
           chunks = broadResults.data
@@ -273,146 +261,18 @@ export default defineEventHandler(async (event) => {
       }
     })()
 
-    const audioPromise = (async (): Promise<string | null> => {
-      if (!engineConfig.includeAudio) return null
-      if (chunks.length === 0 && course.sourceType !== 'web-only') return null
-      if (!course.folderId) return null
-
-      const uploadedStorageIds: string[] = []
-
-      async function cleanupOrphanBlobs() {
-        for (const storageId of uploadedStorageIds) {
-          try {
-            await convexClient.mutation(api.audioOverviews.deleteOrphanTurnBlob, { storageId: storageId as Id<'_storage'> })
-          } catch { /* best-effort */ }
+    // Course primers previously bypassed the durable v2 Generation Job and
+    // published Dia/Aura media into the nested version-1 model. Keep section
+    // generation useful, but fail this optional engine closed until it can
+    // reserve and launch the same managed Audio Overview Workflow.
+    const audioPrimer = engineConfig.includeAudio
+      ? {
+          status: 'requires-audio-overview-v2' as const,
+          message: 'Course audio primers must be generated through the durable Audio Overview workflow.',
         }
-      }
-
-      try {
-        await setTaskProgress('Generating audio primer...')
-
-        const primerMessages = buildAudioPrimerPrompt(chunks, {
-          sectionTitle: section.title,
-          courseTitle: course.title,
-          knowledgeType: section.knowledgeType,
-        })
-
-        const completion = await generateCompletion({
-          model: AUDIO_SCRIPT_MODEL,
-          messages: primerMessages,
-          temperature: 0.5,
-          max_tokens: 2000,
-        })
-
-        const raw = completion.choices[0]?.message?.content ?? ''
-        const parsedScript = parseAudioScriptResponse(raw)
-        let normalizedTurns = splitOversizedTurns(parsedScript.turns)
-
-        if (normalizedTurns.length > MAX_PRIMER_TURNS) {
-          normalizedTurns = normalizedTurns.slice(0, MAX_PRIMER_TURNS)
-        }
-
-        if (normalizedTurns.length < MIN_PRIMER_TURNS) {
-          console.warn(`[generate-section] Audio primer too short (${normalizedTurns.length} turns), skipping`)
-          failedEngines.push('audio primer')
-          return null
-        }
-
-        await setTaskProgress('Synthesizing audio primer...')
-        const ttsEngine = await resolveTtsEngine()
-
-        const sourceDocumentIds = new Set<string>()
-        for (const turn of normalizedTurns) {
-          const sourceChunk = turn.sourceIndex !== undefined ? chunks[turn.sourceIndex] : undefined
-          const docId = (sourceChunk?.attributes?.documentId as string | undefined) ?? undefined
-          if (docId) sourceDocumentIds.add(docId)
-        }
-
-        const persistedTurns: Array<{
-          speaker: 'host_a' | 'host_b'
-          text: string
-          audioFileId: Id<'_storage'>
-          durationMs: number
-          sourceIndex?: number
-        }> = []
-
-        if (ttsEngine === 'dia') {
-          const diaScript = normalizedTurns
-            .map(t => `[${t.speaker === 'host_a' ? 'S1' : 'S2'}] ${sanitizeTurnForSpeech(t.text, { preserveExpressions: true })}`)
-            .join(' ... ')
-
-          const result = await synthesizeDialogue(diaScript)
-
-          const uploadUrl = await convexClient.mutation(api.audioOverviews.generateTurnUploadUrl, {})
-          const uploadResponse = await fetch(uploadUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'audio/mpeg' },
-            body: result.audio,
-          })
-          if (!uploadResponse.ok) throw new Error('Failed to upload audio primer')
-
-          const uploadJson = await uploadResponse.json() as { storageId?: string }
-          if (!uploadJson.storageId) throw new Error('Upload returned no storageId')
-          uploadedStorageIds.push(uploadJson.storageId)
-
-          const combinedText = normalizedTurns.map(t => `${t.speaker === 'host_a' ? 'Host A' : 'Host B'}: ${t.text}`).join('\n')
-          persistedTurns.push({
-            speaker: 'host_a',
-            text: combinedText,
-            audioFileId: uploadJson.storageId as Id<'_storage'>,
-            durationMs: result.durationMs,
-          })
-        } else {
-          const voiceProfile = DEFAULT_VOICE_PROFILE
-          for (let i = 0; i < normalizedTurns.length; i++) {
-            const turn = normalizedTurns[i]!
-            const auraVoice = turn.speaker === 'host_a' ? voiceProfile.hostA : voiceProfile.hostB
-            const spokenText = sanitizeTurnForSpeech(turn.text)
-
-            const audioBytes = await synthesizeTurn(spokenText, turn.speaker, ttsEngine, auraVoice)
-
-            const uploadUrl = await convexClient.mutation(api.audioOverviews.generateTurnUploadUrl, {})
-            const uploadResponse = await fetch(uploadUrl, {
-              method: 'POST',
-              headers: { 'Content-Type': 'audio/mpeg' },
-              body: audioBytes,
-            })
-            if (!uploadResponse.ok) throw new Error(`Failed to upload audio primer turn ${i + 1}`)
-
-            const uploadJson = await uploadResponse.json() as { storageId?: string }
-            if (!uploadJson.storageId) throw new Error(`Upload for primer turn ${i + 1} returned no storageId`)
-            uploadedStorageIds.push(uploadJson.storageId)
-
-            persistedTurns.push({
-              speaker: turn.speaker,
-              text: turn.text,
-              audioFileId: uploadJson.storageId as Id<'_storage'>,
-              durationMs: estimateTurnDurationMs(turn.text),
-              sourceIndex: turn.sourceIndex,
-            })
-          }
-        }
-
-        const voiceProfile = ttsEngine === 'dia' ? engineVoiceProfile('dia') : DEFAULT_VOICE_PROFILE
-
-        const { overviewId } = await convexClient.mutation(api.audioOverviews.createCourseScopedOverview, {
-          folderId: course.folderId,
-          title: parsedScript.title || `${section.title} Primer`,
-          model: AUDIO_SCRIPT_MODEL,
-          turns: persistedTurns,
-          voiceProfile,
-          preferences: { lengthMinutes: 2, complexity: 'beginner' },
-          sourceDocumentIds: Array.from(sourceDocumentIds),
-        })
-
-        return overviewId
-      } catch (err: any) {
-        await cleanupOrphanBlobs()
-        console.error('[generate-section] Audio primer generation failed:', err?.message)
-        failedEngines.push('audio primer')
-        return null
-      }
-    })()
+      : undefined
+    if (audioPrimer) failedEngines.push('audio primer')
+    const audioPromise = Promise.resolve<string | null>(null)
 
     const [textResult, quizResult, flashcardResult, audioEntityId] = await Promise.all([
       textPromise,
@@ -449,6 +309,7 @@ export default defineEventHandler(async (event) => {
       status: result.status,
       blockCount: result.status === 'ready' ? result.blockCount : 0,
       failedEngines,
+      audioPrimer,
     }
   } catch (err: any) {
     if (err?.statusCode !== 400 && err?.statusCode !== 404) {

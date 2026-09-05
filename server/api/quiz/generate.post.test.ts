@@ -7,6 +7,7 @@ vi.stubGlobal('getConvexTokenIdentifier', vi.fn(() => 'https://auth.example.com|
 vi.stubGlobal('readBody', vi.fn())
 vi.stubGlobal('searchDocuments', vi.fn())
 vi.stubGlobal('fetchFolderDocs', vi.fn(async () => []))
+vi.stubGlobal('assertSearchIndexAvailable', vi.fn(async () => undefined))
 vi.stubGlobal('generateCompletion', vi.fn())
 vi.stubGlobal('defineEventHandler', (handler: Function) => handler)
 vi.stubGlobal('buildQuizPrompt', (await import('../../utils/quiz-prompt')).buildQuizPrompt)
@@ -59,6 +60,8 @@ describe('POST /api/quiz/generate', () => {
   beforeEach(() => {
     vi.mocked(globalThis.readBody as any).mockReset()
     vi.mocked(globalThis.searchDocuments as any).mockReset()
+    vi.mocked(globalThis.assertSearchIndexAvailable as any).mockReset()
+    vi.mocked(globalThis.assertSearchIndexAvailable as any).mockResolvedValue(undefined)
     vi.mocked(globalThis.generateCompletion as any).mockReset()
     vi.mocked(globalThis.getConvexTokenIdentifier as any).mockReturnValue('https://auth.example.com|user_test_123')
   })
@@ -89,6 +92,37 @@ describe('POST /api/quiz/generate', () => {
     const err = await (handler(makeEvent()) as Promise<any>).catch((e: any) => e)
     expect(err.statusCode).toBe(422)
     expect(globalThis.generateCompletion).not.toHaveBeenCalled()
+  })
+
+  test('[P0] 503 Search index unavailable when empty retrieval follows a zero-vector index', async () => {
+    vi.mocked(globalThis.readBody as any).mockResolvedValue({ folderId: 'folder_abc' })
+    vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({ data: [] })
+    vi.mocked(globalThis.fetchFolderDocs as any).mockResolvedValue([])
+    vi.mocked(globalThis.assertSearchIndexAvailable as any).mockRejectedValue(
+      Object.assign(new Error('Search index unavailable'), { statusCode: 503 }),
+    )
+
+    const err = await (handler(makeEvent()) as Promise<any>).catch((e: any) => e)
+    expect(err.statusCode).toBe(503)
+    expect(err.message).toBe('Search index unavailable')
+    expect(globalThis.generateCompletion).not.toHaveBeenCalled()
+  })
+
+  test('[P0] uses raw text fallback when the search provider is unavailable', async () => {
+    vi.mocked(globalThis.readBody as any).mockResolvedValue({ folderId: 'folder_abc' })
+    vi.mocked(globalThis.searchDocuments as any).mockRejectedValue(
+      Object.assign(new Error('Search index unavailable'), { statusCode: 503 }),
+    )
+    vi.mocked(globalThis.fetchFolderDocs as any).mockResolvedValue([
+      { key: 'one.md', content: 'Photosynthesis content', filename: 'one.md', documentId: 'doc_1' },
+      { key: 'two.md', content: 'Mitochondria content', filename: 'two.md', documentId: 'doc_2' },
+    ])
+    vi.mocked(globalThis.generateCompletion as any).mockResolvedValue(goodLlmResponse())
+
+    const result = await handler(makeEvent())
+
+    expect(result.questionCount).toBe(2)
+    expect(globalThis.assertSearchIndexAvailable).not.toHaveBeenCalled()
   })
 
   test('[P0] 200 happy path: returns generated quiz payload for client persistence', async () => {

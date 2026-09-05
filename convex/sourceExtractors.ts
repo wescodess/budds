@@ -34,11 +34,11 @@ function parseTranscriptXml(xml: string): string[] {
   const pTagRe = /<p\s+t="\d+"\s+d="\d+"[^>]*>([\s\S]*?)<\/p>/g
   let pMatch: RegExpExecArray | null
   while ((pMatch = pTagRe.exec(xml)) !== null) {
-    const inner = pMatch[1]
+    const inner = pMatch[1] ?? ''
     let text = ''
     const sRe = /<s[^>]*>([^<]*)<\/s>/g
     let sMatch: RegExpExecArray | null
-    while ((sMatch = sRe.exec(inner)) !== null) text += sMatch[1]
+    while ((sMatch = sRe.exec(inner)) !== null) text += sMatch[1] ?? ''
     if (!text) text = inner.replace(/<[^>]+>/g, '')
     text = decodeHtmlEntities(text).trim()
     if (text) segments.push(text)
@@ -49,7 +49,7 @@ function parseTranscriptXml(xml: string): string[] {
   const textTagRe = /<text start="[^"]*" dur="[^"]*">([^<]*)<\/text>/g
   let tMatch: RegExpExecArray | null
   while ((tMatch = textTagRe.exec(xml)) !== null) {
-    const text = decodeHtmlEntities(tMatch[1]).trim()
+    const text = decodeHtmlEntities(tMatch[1] ?? '').trim()
     if (text) segments.push(text)
   }
 
@@ -102,7 +102,8 @@ function extractCookies(headers: Headers): string {
   const cookies: string[] = []
   headers.forEach((val, key) => {
     if (key.toLowerCase() === 'set-cookie') {
-      cookies.push(val.split(';')[0])
+      const cookie = val.split(';')[0]
+      if (cookie) cookies.push(cookie)
     }
   })
   return cookies.join('; ')

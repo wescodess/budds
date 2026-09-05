@@ -33,18 +33,23 @@ vi.stubGlobal('sendStream', async (_event: any, stream: ReadableStream) => {
 })
 vi.stubGlobal('defineEventHandler', (handler: Function) => handler)
 
-const collectUserDataMock = vi.fn()
+const getExportMetadataMock = vi.fn()
+const getUserDataPageMock = vi.fn()
+const getAttemptAnswersPageMock = vi.fn()
+const getCourseSourceDocsPageMock = vi.fn()
 const getDocumentDownloadUrlMock = vi.fn()
 
 vi.mock('convex/browser', () => ({
   ConvexHttpClient: class {
-    private calls = 0
     constructor(_url: string) {}
     setAuth(_token: string) {}
     query(_fnRef: unknown, args: unknown) {
-      this.calls++
-      if (this.calls === 1) return collectUserDataMock(args)
-      return getDocumentDownloadUrlMock(args)
+      const queryArgs = args as Record<string, unknown>
+      if ('collection' in queryArgs) return getUserDataPageMock(queryArgs)
+      if ('attemptId' in queryArgs) return getAttemptAnswersPageMock(queryArgs)
+      if ('courseId' in queryArgs) return getCourseSourceDocsPageMock(queryArgs)
+      if ('documentId' in queryArgs) return getDocumentDownloadUrlMock(queryArgs)
+      return getExportMetadataMock(queryArgs)
     }
   },
 }))
@@ -54,13 +59,35 @@ vi.stubGlobal('fetch', fetchMock)
 
 const handler = (await import('./me.get')).default as Function
 
+function mockExportData(data: Record<string, any>) {
+  getExportMetadataMock.mockResolvedValue({ userId: data.userId, user: data.user })
+  getUserDataPageMock.mockImplementation(({ collection }: { collection: string }) => ({
+    page: data[collection] ?? [],
+    isDone: true,
+    continueCursor: '',
+  }))
+  getAttemptAnswersPageMock.mockResolvedValue({
+    page: data.attemptAnswers ?? [],
+    isDone: true,
+    continueCursor: '',
+  })
+  getCourseSourceDocsPageMock.mockResolvedValue({
+    page: data.courseSourceDocs ?? [],
+    isDone: true,
+    continueCursor: '',
+  })
+}
+
 function makeEvent(token: string | undefined) {
   return { context: token ? { convexToken: token } : {} } as any
 }
 
 describe('GET /api/export/me', () => {
   beforeEach(() => {
-    collectUserDataMock.mockReset()
+    getExportMetadataMock.mockReset()
+    getUserDataPageMock.mockReset()
+    getAttemptAnswersPageMock.mockReset()
+    getCourseSourceDocsPageMock.mockReset()
     getDocumentDownloadUrlMock.mockReset()
     fetchMock.mockReset()
     for (const key of Object.keys(recordedHeaders)) delete recordedHeaders[key]
@@ -74,7 +101,7 @@ describe('GET /api/export/me', () => {
   })
 
   test('returns a streaming zip with expected entries for an authenticated user', async () => {
-    collectUserDataMock.mockResolvedValue({
+    mockExportData({
       userId: 'tok|user1',
       user: { name: 'Alice', email: 'alice@example.com' },
       folders: [{ _id: 'f1', name: 'Notes', userId: 'tok|user1' }],
@@ -109,13 +136,44 @@ describe('GET /api/export/me', () => {
     const entries = unzipSync(zipBytes)
     expect(Object.keys(entries).sort()).toEqual(
       [
+        'attemptAnswers.json',
+        'audioOverviewAlignmentSegments.json',
+        'audioOverviewAlignments.json',
+        'audioOverviewAudioArtifacts.json',
+        'audioOverviewClaimLedgers.json',
+        'audioOverviewClaimSources.json',
+        'audioOverviewClaims.json',
+        'audioOverviewEpisodes.json',
+        'audioOverviewInterjectionSources.json',
+        'audioOverviewInterjectionUtterances.json',
+        'audioOverviewInterjections.json',
+        'audioOverviewInterjectionsV2.json',
+        'audioOverviewJobs.json',
+        'audioOverviewJobTurns.json',
+        'audioOverviewLearningObjectives.json',
+        'audioOverviewOutlineSources.json',
+        'audioOverviewOutlines.json',
+        'audioOverviewSceneQualityGates.json',
+        'audioOverviewScenes.json',
+        'audioOverviewSourceManifestEntries.json',
+        'audioOverviewSourceManifests.json',
+        'audioOverviewUtteranceClaims.json',
+        'audioOverviewUtteranceSources.json',
+        'audioOverviewUtterances.json',
+        'audioOverviews.json',
+        'calendarConnections.json',
+        'calendarEvents.json',
         'conversations.json',
         'courses.json',
         'courseSourceDocs.json',
         'courseSections.json',
         'documents.json',
         'documents/d1.pdf',
+        'flashcardRoomCards.json',
+        'flashcardRoomVersions.json',
+        'flashcardRooms.json',
         'flashcardSets.json',
+        'flashcardVersionCards.json',
         'flashcards.json',
         'folders.json',
         'learnProfile.json',
@@ -124,21 +182,65 @@ describe('GET /api/export/me', () => {
         'quizAttempts.json',
         'quizQuestions.json',
         'quizzes.json',
+        'reviewItems.json',
+        'reviewSessions.json',
+        'tasks.json',
       ].sort(),
     )
 
     const manifest = JSON.parse(strFromU8(entries['manifest.json']!))
-    expect(manifest.schemaVersion).toBe(5)
+    expect(manifest.schemaVersion).toBe(8)
     expect(manifest.userId).toBe('tok|user1')
     expect(manifest.counts.documents).toBe(1)
     expect(manifest.unresolvedDocuments).toEqual([])
+    expect(manifest.nonFileBackedDocuments).toEqual([])
 
     const pdf = strFromU8(entries['documents/d1.pdf']!)
     expect(pdf).toContain('%PDF-1.4')
   })
 
+  test('follows Convex cursors and streams every page into one JSON entry', async () => {
+    mockExportData({
+      userId: 'tok|user1',
+      user: { name: 'Alice', email: 'alice@example.com' },
+      documents: [],
+    })
+    getUserDataPageMock.mockImplementation(({
+      collection,
+      paginationOpts,
+    }: {
+      collection: string
+      paginationOpts: { cursor: string | null }
+    }) => {
+      if (collection !== 'messages') {
+        return { page: [], isDone: true, continueCursor: '' }
+      }
+      if (paginationOpts.cursor === null) {
+        return {
+          page: [{ _id: 'm1', userId: 'tok|user1', content: 'first' }],
+          isDone: false,
+          continueCursor: 'messages-page-2',
+        }
+      }
+      return {
+        page: [{ _id: 'm2', userId: 'tok|user1', content: 'second' }],
+        isDone: true,
+        continueCursor: '',
+      }
+    })
+
+    const zipBytes = await handler(makeEvent('fake-jwt'))
+    const entries = unzipSync(zipBytes)
+    const messages = JSON.parse(strFromU8(entries['messages.json']!))
+    const manifest = JSON.parse(strFromU8(entries['manifest.json']!))
+
+    expect(messages.map((message: { _id: string }) => message._id)).toEqual(['m1', 'm2'])
+    expect(manifest.counts.messages).toBe(2)
+    expect(getUserDataPageMock.mock.calls.filter(([args]) => args.collection === 'messages')).toHaveLength(2)
+  })
+
   test('records unresolved documents when the blob URL is missing', async () => {
-    collectUserDataMock.mockResolvedValue({
+    mockExportData({
       userId: 'tok|user1',
       user: { name: 'Alice', email: 'alice@example.com' },
       folders: [],
@@ -156,5 +258,83 @@ describe('GET /api/export/me', () => {
 
     const manifest = JSON.parse(strFromU8(entries['manifest.json']!))
     expect(manifest.unresolvedDocuments).toEqual(['d1'])
+    expect(manifest.nonFileBackedDocuments).toEqual([])
+  })
+
+  test('uses safe original extensions and falls back to .bin', async () => {
+    mockExportData({
+      userId: 'tok|user1',
+      user: { name: 'Alice', email: 'alice@example.com' },
+      documents: [
+        { _id: 'd1', filename: 'notes.DOCX', userId: 'tok|user1', fileId: 's1', status: 'success' },
+        { _id: 'd2', filename: 'no-extension', userId: 'tok|user1', fileId: 's2', status: 'success' },
+      ],
+    })
+    getDocumentDownloadUrlMock
+      .mockResolvedValueOnce({ url: 'https://storage.example.com/d1', filename: 'notes.DOCX' })
+      .mockResolvedValueOnce({ url: 'https://storage.example.com/d2', filename: '../unsafe/name.' })
+    fetchMock.mockImplementation(() => Promise.resolve({
+      ok: true,
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('document bytes'))
+          controller.close()
+        },
+      }),
+    }))
+
+    const zipBytes = await handler(makeEvent('fake-jwt'))
+    const entries = unzipSync(zipBytes)
+
+    expect(entries['documents/d1.docx']).toBeDefined()
+    expect(entries['documents/d2.bin']).toBeDefined()
+    expect(entries['documents/d1.pdf']).toBeUndefined()
+    expect(entries['documents/d2.pdf']).toBeUndefined()
+  })
+
+  test('records website and YouTube sources as intentionally non-file-backed', async () => {
+    mockExportData({
+      userId: 'tok|user1',
+      user: { name: 'Alice', email: 'alice@example.com' },
+      documents: [
+        { _id: 'd1', filename: 'example.com', userId: 'tok|user1', sourceType: 'website', sourceUrl: 'https://example.com' },
+        { _id: 'd2', filename: 'Video', userId: 'tok|user1', sourceType: 'youtube', sourceUrl: 'https://youtu.be/example' },
+      ],
+    })
+
+    const zipBytes = await handler(makeEvent('fake-jwt'))
+    const entries = unzipSync(zipBytes)
+    const manifest = JSON.parse(strFromU8(entries['manifest.json']!))
+
+    expect(getDocumentDownloadUrlMock).not.toHaveBeenCalled()
+    expect(manifest.unresolvedDocuments).toEqual([])
+    expect(manifest.nonFileBackedDocuments).toEqual([
+      { documentId: 'd1', sourceType: 'website', sourceUrl: 'https://example.com' },
+      { documentId: 'd2', sourceType: 'youtube', sourceUrl: 'https://youtu.be/example' },
+    ])
+  })
+
+  test('aborts the response when a document stream fails after emitting bytes', async () => {
+    mockExportData({
+      userId: 'tok|user1',
+      user: { name: 'Alice', email: 'alice@example.com' },
+      documents: [
+        { _id: 'd1', filename: 'partial.pdf', userId: 'tok|user1', fileId: 's1', folderId: 'f1', status: 'success', fileSize: 10 },
+      ],
+    })
+    getDocumentDownloadUrlMock.mockResolvedValue({
+      url: 'https://storage.example.com/partial.pdf',
+      filename: 'partial.pdf',
+    })
+
+    const read = vi.fn()
+      .mockResolvedValueOnce({ done: false, value: new TextEncoder().encode('%PDF-partial') })
+      .mockRejectedValueOnce(new Error('upstream reset'))
+    fetchMock.mockResolvedValue({
+      ok: true,
+      body: { getReader: () => ({ read }) },
+    })
+
+    await expect(handler(makeEvent('fake-jwt'))).rejects.toThrow('upstream reset')
   })
 })

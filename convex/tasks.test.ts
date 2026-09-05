@@ -144,6 +144,10 @@ describe('tasks.dismiss', () => {
       title: 'Test',
     })
 
+    await t.run(async (ctx) => {
+      await ctx.db.patch(taskId, { status: 'completed', completedAt: Date.now() })
+    })
+
     await asUser.mutation(api.tasks.dismiss, { taskId })
 
     const task = await t.run((ctx) => ctx.db.get(taskId))
@@ -203,6 +207,26 @@ describe('tasks.retry', () => {
     })
 
     await expect(asUser.mutation(api.tasks.retry, { taskId })).rejects.toThrow(/Only failed tasks/)
+  })
+
+  test('[P0] cannot retry an audio generation without a new quota reservation', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    await asUser.mutation(api.users.upsertUser, {})
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
+    const taskId = await t.run(ctx => ctx.db.insert('tasks', {
+      userId: USER_A.tokenIdentifier,
+      folderId,
+      type: 'audio-overview-generation',
+      status: 'failed',
+      title: 'Historical failed audio generation',
+      error: 'stop',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }))
+
+    await expect(asUser.mutation(api.tasks.retry, { taskId })).rejects.toThrow(/new quota reservation/i)
+    expect((await asUser.query(api.users.getDailyQuota, {}))?.used).toBe(0)
   })
 })
 
@@ -298,6 +322,24 @@ describe('tasks.updateProgress (internal)', () => {
     expect(task!.progress).toBe('Generating cards…')
     expect(task!.status).toBe('running')
   })
+
+  test('[P0] cannot revive a cancelled task', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
+    const { taskId } = await asUser.mutation(api.tasks.create, {
+      folderId,
+      type: 'audio-overview-generation',
+      title: 'Test',
+    })
+
+    await asUser.mutation(api.tasks.cancel, { taskId })
+    await t.mutation(internal.tasks.updateProgress, { taskId, progress: 'Late progress' })
+
+    const task = await t.run((ctx) => ctx.db.get(taskId))
+    expect(task!.status).toBe('cancelled')
+    expect(task!.progress).toBe('Preparing…')
+  })
 })
 
 describe('tasks.complete (internal)', () => {
@@ -322,6 +364,24 @@ describe('tasks.complete (internal)', () => {
     expect((task!.result as any)?.cardCount).toBe(12)
     expect(task!.completedAt).toBeDefined()
   })
+
+  test('[P0] cannot complete a cancelled task', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
+    const { taskId } = await asUser.mutation(api.tasks.create, {
+      folderId,
+      type: 'audio-overview-generation',
+      title: 'Test',
+    })
+
+    await asUser.mutation(api.tasks.cancel, { taskId })
+    await t.mutation(internal.tasks.complete, { taskId, result: { overviewId: 'late' } })
+
+    const task = await t.run((ctx) => ctx.db.get(taskId))
+    expect(task!.status).toBe('cancelled')
+    expect(task!.result).toBeUndefined()
+  })
 })
 
 describe('tasks.fail (internal)', () => {
@@ -344,6 +404,24 @@ describe('tasks.fail (internal)', () => {
     expect(task!.status).toBe('failed')
     expect(task!.error).toBe('Not enough content')
     expect(task!.completedAt).toBeDefined()
+  })
+
+  test('[P0] cannot fail a cancelled task', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
+    const { taskId } = await asUser.mutation(api.tasks.create, {
+      folderId,
+      type: 'audio-overview-generation',
+      title: 'Test',
+    })
+
+    await asUser.mutation(api.tasks.cancel, { taskId })
+    await t.mutation(internal.tasks.fail, { taskId, error: 'Late failure' })
+
+    const task = await t.run((ctx) => ctx.db.get(taskId))
+    expect(task!.status).toBe('cancelled')
+    expect(task!.error).toBeUndefined()
   })
 })
 
@@ -387,5 +465,39 @@ describe('tasks.cleanupTerminalTasks', () => {
 
     const recent = await t.run((ctx) => ctx.db.get(recentTask))
     expect(recent).not.toBeNull()
+  })
+
+  test('[P1] retains a terminal task that is still referenced by a durable audio job', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Audio jobs' })
+    const old = Date.now() - 25 * 60 * 60 * 1000
+    const taskId = await t.run(ctx => ctx.db.insert('tasks', {
+      userId: USER_A.tokenIdentifier,
+      folderId,
+      type: 'audio-overview-generation',
+      status: 'failed',
+      title: 'Retained durable job',
+      createdAt: old,
+      updatedAt: old,
+      completedAt: old,
+    }))
+    await t.run(ctx => ctx.db.insert('audioOverviewJobs', {
+      userId: USER_A.tokenIdentifier,
+      taskId,
+      folderId,
+      idempotencyKey: 'retained_job_0001',
+      capabilityHash: '0'.repeat(64),
+      status: 'failed',
+      stage: 'failed',
+      completedTurns: 0,
+      createdAt: old,
+      updatedAt: old,
+      completedAt: old,
+    }))
+
+    await expect(t.mutation(internal.tasks.cleanupTerminalTasks, {}))
+      .resolves.toEqual({ deleted: 0 })
+    await expect(t.run(ctx => ctx.db.get(taskId))).resolves.not.toBeNull()
   })
 })

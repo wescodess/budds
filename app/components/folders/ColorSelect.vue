@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import type { AcceptableValue } from 'reka-ui'
 import { FOLDER_COLORS, getColor, DEFAULT_COLOR_KEY } from '~~/convex/folderPalette'
 
 const props = withDefaults(
@@ -16,8 +17,8 @@ const emit = defineEmits<{
 
 const selected = computed(() => getColor(props.modelValue || DEFAULT_COLOR_KEY))
 
-function handleUpdate(value: string) {
-  emit('update:modelValue', value)
+function handleUpdate(value: AcceptableValue) {
+  if (typeof value === 'string') emit('update:modelValue', value)
 }
 </script>
 

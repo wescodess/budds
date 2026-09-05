@@ -39,8 +39,38 @@ export function useOfflineAttempts() {
     })
   }
 
+  async function queueReviewItemRating(
+    reviewItemId: string,
+    quality: number,
+    idempotencyKey: string,
+  ): Promise<void> {
+    await addOfflineAttempt({
+      type: 'review-item-rating',
+      idempotencyKey,
+      timestamp: Date.now(),
+      data: { reviewItemId, quality },
+    })
+  }
+
+  async function queueReviewSessionCompletion(args: {
+    itemsReviewed: number
+    itemsCorrect: number
+    durationMs: number
+    mode: 'full' | 'quick'
+    idempotencyKey: string
+  }): Promise<void> {
+    await addOfflineAttempt({
+      type: 'review-session-completion',
+      idempotencyKey: args.idempotencyKey,
+      timestamp: Date.now(),
+      data: args,
+    })
+  }
+
   return {
     queueQuizRetake,
     queueFlashcardPractice,
+    queueReviewItemRating,
+    queueReviewSessionCompletion,
   }
 }

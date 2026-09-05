@@ -3,7 +3,7 @@ import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { Pause, Play, Rewind, FastForward, Download, Share2, RefreshCw, History, Check, Trash2, Settings2, Mic, Loader2 } from 'lucide-vue-next'
 import { api } from '#convex/api'
 import type { Id, Doc } from '../../../convex/_generated/dataModel'
-import type { AudioOverviewTurn } from '~/composables/useAudioOverviewStore'
+import { buildContinuousPlaybackTurns, type AudioOverviewTurn } from '~/composables/useAudioOverviewStore'
 
 type OverviewSummary = {
   _id: Id<'audioOverviews'>
@@ -44,34 +44,85 @@ const { data: turnUrlData } = useConvexQuery(
   api.audioOverviews.getTurnUrls,
   computed(() => ({ id: props.overviewId })),
 )
+const { data: v2PlaybackData } = useConvexQuery(
+  api.audioOverviewV2.getPlaybackForOwner,
+  computed(() => ({ overviewId: props.overviewId })),
+)
+
+type V2Playback = {
+  schemaVersion: 2
+  title: string
+  totalDurationMs: number
+  sourceManifest: { sources: Array<{ sourceId: string, displayReference: string }> }
+  scenes: Array<{ sceneId: string, order: number, durationMs: number }>
+  utterances: Array<{
+    utteranceId: string
+    sceneId: string
+    order: number
+    speaker: 'host_a' | 'host_b'
+    text: string
+    pauseAfterMs?: number
+    alignmentStartMs?: number
+    sourceIds?: string[]
+    wordTimings?: { word: string, start: number, end: number }[]
+  }>
+  finalArtifact: { artifactId: string }
+}
 
 const overview = computed<Doc<'audioOverviews'> | null>(() => (overviewData.value as Doc<'audioOverviews'> | null | undefined) ?? null)
-const turns = computed<AudioOverviewTurn[]>(() => (overview.value?.turns ?? []) as AudioOverviewTurn[])
-const turnUrls = computed<(string | null)[]>(() => (turnUrlData.value as (string | null)[] | null | undefined) ?? [])
+const v2Playback = computed<V2Playback | null>(() => (v2PlaybackData.value as V2Playback | null | undefined) ?? null)
+const isContinuousPlayback = computed(() => v2Playback.value?.schemaVersion === 2)
+const continuousMediaUrl = computed(() => v2Playback.value
+  ? `/api/audio-overview/media/${encodeURIComponent(v2Playback.value.finalArtifact.artifactId)}`
+  : null)
+const overviewTitle = computed(() => v2Playback.value?.title ?? overview.value?.title ?? 'Audio overview')
+const turns = computed<AudioOverviewTurn[]>(() => {
+  if (v2Playback.value) {
+    return buildContinuousPlaybackTurns(
+      v2Playback.value.scenes,
+      v2Playback.value.utterances,
+      v2Playback.value.totalDurationMs,
+    )
+  }
+  return (overview.value?.turns ?? []) as AudioOverviewTurn[]
+})
+const turnUrls = computed<(string | null)[]>(() => isContinuousPlayback.value
+  ? []
+  : (turnUrlData.value as (string | null)[] | null | undefined) ?? [])
 
 const folderRef = computed(() => props.folderId)
 const { documents } = useDocuments(folderRef)
 
 const store = useAudioOverviewStore()
 const {
-  currentTurnIndex, isPlaying, playbackRate, currentTimeMs, totalDurationMs, activeTurn,
+  currentTurnIndex, isPlaying, playbackRate, currentTimeMs, totalDurationMs,
+  currentAudioTimeSec,
+  isInterjectionActive, interjectionTurns, interjectionCurrentTurnIndex, interjectionCurrentAudioTimeSec,
   magnitude: visualizerMagnitude,
   play, pause, togglePlay, skip, seek, setSpeed, loadOverview,
 } = store
 
+const displayedTurns = computed(() => isInterjectionActive.value ? interjectionTurns.value : turns.value)
+const displayedTurnIndex = computed(() => isInterjectionActive.value ? interjectionCurrentTurnIndex.value : currentTurnIndex.value)
+const displayedTimeSec = computed(() => isInterjectionActive.value ? interjectionCurrentAudioTimeSec.value : currentAudioTimeSec.value)
+const displayedActiveTurn = computed(() => displayedTurns.value[displayedTurnIndex.value] ?? null)
+
 watch(
-  [() => turns.value, () => turnUrls.value],
-  ([nextTurns, nextUrls]) => {
+  [() => turns.value, () => turnUrls.value, () => continuousMediaUrl.value],
+  ([nextTurns, nextUrls, nextContinuousUrl]) => {
     if (!import.meta.client) return
     if (!overview.value) return
     if (nextTurns.length === 0) return
-    if (nextTurns.length !== nextUrls.length) return
+    if (isContinuousPlayback.value && !nextContinuousUrl) return
+    if (!isContinuousPlayback.value && nextTurns.length !== nextUrls.length) return
     loadOverview({
       overviewId: props.overviewId,
       folderId: props.folderId,
-      title: overview.value.title,
+      title: overviewTitle.value,
       turns: nextTurns,
       turnUrls: nextUrls,
+      playbackMode: isContinuousPlayback.value ? 'continuous' : 'segmented',
+      continuousMediaUrl: nextContinuousUrl,
     })
   },
   { immediate: true, deep: true },
@@ -109,49 +160,11 @@ function pickSpeed(speed: SpeedOption) {
   speedMenuOpen.value = false
 }
 
-const activeSpeakerLabel = computed(() => {
-  const turn = activeTurn.value
-  if (!turn) return ''
-  return turn.speaker === 'host_a' ? 'Host A · Expert' : 'Host B · Learner'
-})
-
-interface DialogueLine {
-  speaker: 'host_a' | 'host_b'
-  text: string
-  alignClass: string
-  bubbleClass: string
-  speakerLabel: string
-}
-
-const dialogueLines = computed<DialogueLine[]>(() => {
-  const raw = activeTurn.value?.text ?? ''
-  if (!raw.startsWith('Host A:') && !raw.startsWith('Host B:')) return []
-  return raw.split('\n').filter(Boolean).map((line) => {
-    const match = line.match(/^(Host [AB]):\s*(.*)/)
-    if (!match) return null
-    const isA = match[1] === 'Host A'
-    return {
-      speaker: isA ? 'host_a' as const : 'host_b' as const,
-      text: match[2]!,
-      alignClass: isA ? 'justify-start' : 'justify-end',
-      bubbleClass: isA ? 'rounded-tl-sm bg-primary/10 text-foreground' : 'rounded-tr-sm bg-secondary text-foreground',
-      speakerLabel: isA ? 'Host A \u00b7 Expert' : 'Host B \u00b7 Learner',
-    }
-  }).filter((l): l is DialogueLine => l !== null)
-})
-
-const isDialogueFormat = computed(() => dialogueLines.value.length > 0)
-
-const activeQuote = computed(() => activeTurn.value?.text ?? '')
-const activeAttribution = computed(() => {
-  const turn = activeTurn.value
-  if (!turn) return ''
-  if (isDialogueFormat.value) return ''
-  const speaker = turn.speaker === 'host_a' ? 'Host A' : 'Host B'
-  return `— ${speaker} · ${currentLabel.value}`
-})
 
 const sourceFilenames = computed<string[]>(() => {
+  if (v2Playback.value) {
+    return v2Playback.value.sourceManifest.sources.map(source => source.displayReference)
+  }
   const docIds = overview.value?.sourceDocumentIds ?? []
   if (docIds.length === 0) return []
   const byId = new Map<string, string>()
@@ -162,6 +175,7 @@ const sourceFilenames = computed<string[]>(() => {
 })
 
 const hasMissingTurnUrl = computed(() => {
+  if (isContinuousPlayback.value) return false
   if (turns.value.length === 0) return false
   return turnUrls.value.some(url => url === null)
 })
@@ -214,8 +228,9 @@ async function handleDownload() {
   try {
     const { downloadOverview } = useAudioOverviewDownload()
     const result = await downloadOverview({
-      title: overview.value?.title ?? 'audio-overview',
+      title: overviewTitle.value,
       turnUrls: turnUrls.value,
+      mediaUrl: continuousMediaUrl.value,
     })
     const { toast } = await import('vue-sonner')
     const issues = result.failed.length + result.skipped
@@ -272,10 +287,10 @@ const ringMiddleStyle = computed(() => ({
     <header class="mx-auto flex w-full max-w-4xl flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
       <div class="min-w-0">
         <p class="font-inter text-xs text-muted-foreground">
-          {{ overview?.title ? 'Audio Overview' : '' }}
+          {{ overviewTitle ? 'Audio Overview' : '' }}
         </p>
         <h2 data-testid="audio-overview-title" class="mt-1 font-dm-sans text-xl font-bold text-foreground sm:text-2xl">
-          {{ overview?.title ?? 'Audio overview' }}
+          {{ overviewTitle }}
         </h2>
         <p class="mt-1 font-inter text-xs text-muted-foreground">
           {{ totalLabel }} total · {{ turns.length }} turns
@@ -344,7 +359,7 @@ const ringMiddleStyle = computed(() => ({
           data-testid="audio-overview-ask-btn"
           aria-label="Ask the hosts a follow-up"
           class="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border/60 bg-card px-3 py-1.5 font-inter text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-          :disabled="props.interjectionInFlight || props.regenerating"
+          :disabled="props.interjectionInFlight || isInterjectionActive || props.regenerating"
           @click="emit('request-ask')"
         >
           <Mic class="h-3.5 w-3.5" />
@@ -410,26 +425,26 @@ const ringMiddleStyle = computed(() => ({
       <div class="grid w-full grid-cols-2 gap-3 sm:gap-4">
         <div
           class="relative flex flex-col items-center gap-2 rounded-xl border p-4 transition-colors sm:gap-3 sm:p-6"
-          :class="activeTurn?.speaker === 'host_a' ? 'border-primary/70 bg-card' : 'border-border/60 bg-card/60 opacity-80'"
+          :class="displayedActiveTurn?.speaker === 'host_a' ? 'border-primary/70 bg-card' : 'border-border/60 bg-card/60 opacity-80'"
           data-testid="audio-overview-host-a"
         >
           <div class="relative flex h-16 w-16 items-center justify-center sm:h-24 sm:w-24">
             <span
-              v-if="activeTurn?.speaker === 'host_a'"
+              v-if="displayedActiveTurn?.speaker === 'host_a'"
               class="pointer-events-none absolute h-16 w-16 rounded-full border border-primary/60 transition-[transform,opacity] sm:h-24 sm:w-24"
               :style="ringOuterStyle"
               aria-hidden="true"
             />
             <span
-              v-if="activeTurn?.speaker === 'host_a'"
+              v-if="displayedActiveTurn?.speaker === 'host_a'"
               class="pointer-events-none absolute h-16 w-16 rounded-full border border-primary/80 transition-[transform,opacity] sm:h-24 sm:w-24"
               :style="ringMiddleStyle"
               aria-hidden="true"
             />
             <span
               class="h-16 w-16 rounded-full bg-primary transition-[transform,box-shadow] sm:h-24 sm:w-24"
-              :class="activeTurn?.speaker === 'host_a' ? 'shadow-[0_0_40px_rgba(245,158,11,0.55)]' : ''"
-              :style="activeTurn?.speaker === 'host_a' ? activeHostGlowStyle : undefined"
+              :class="displayedActiveTurn?.speaker === 'host_a' ? 'shadow-[0_0_40px_rgba(245,158,11,0.55)]' : ''"
+              :style="displayedActiveTurn?.speaker === 'host_a' ? activeHostGlowStyle : undefined"
               aria-hidden="true"
             />
           </div>
@@ -439,34 +454,34 @@ const ringMiddleStyle = computed(() => ({
             </p>
             <p
               class="mt-0.5 font-inter text-xs"
-              :class="activeTurn?.speaker === 'host_a' ? 'text-primary' : 'text-muted-foreground'"
+              :class="displayedActiveTurn?.speaker === 'host_a' ? 'text-primary' : 'text-muted-foreground'"
             >
-              {{ activeTurn?.speaker === 'host_a' ? 'Speaking' : '—' }}
+              {{ displayedActiveTurn?.speaker === 'host_a' ? 'Speaking' : '—' }}
             </p>
           </div>
         </div>
         <div
           class="relative flex flex-col items-center gap-2 rounded-xl border p-4 transition-colors sm:gap-3 sm:p-6"
-          :class="activeTurn?.speaker === 'host_b' ? 'border-primary/70 bg-card' : 'border-border/60 bg-card/60 opacity-80'"
+          :class="displayedActiveTurn?.speaker === 'host_b' ? 'border-primary/70 bg-card' : 'border-border/60 bg-card/60 opacity-80'"
           data-testid="audio-overview-host-b"
         >
           <div class="relative flex h-16 w-16 items-center justify-center sm:h-24 sm:w-24">
             <span
-              v-if="activeTurn?.speaker === 'host_b'"
+              v-if="displayedActiveTurn?.speaker === 'host_b'"
               class="pointer-events-none absolute h-16 w-16 rounded-full border border-accent/60 transition-[transform,opacity] sm:h-24 sm:w-24"
               :style="ringOuterStyle"
               aria-hidden="true"
             />
             <span
-              v-if="activeTurn?.speaker === 'host_b'"
+              v-if="displayedActiveTurn?.speaker === 'host_b'"
               class="pointer-events-none absolute h-16 w-16 rounded-full border border-accent/80 transition-[transform,opacity] sm:h-24 sm:w-24"
               :style="ringMiddleStyle"
               aria-hidden="true"
             />
             <span
               class="h-16 w-16 rounded-full bg-accent transition-[transform,box-shadow] sm:h-24 sm:w-24"
-              :class="activeTurn?.speaker === 'host_b' ? 'shadow-[0_0_40px_rgba(252,211,77,0.55)]' : ''"
-              :style="activeTurn?.speaker === 'host_b' ? activeHostGlowStyle : undefined"
+              :class="displayedActiveTurn?.speaker === 'host_b' ? 'shadow-[0_0_40px_rgba(252,211,77,0.55)]' : ''"
+              :style="displayedActiveTurn?.speaker === 'host_b' ? activeHostGlowStyle : undefined"
               aria-hidden="true"
             />
           </div>
@@ -476,47 +491,24 @@ const ringMiddleStyle = computed(() => ({
             </p>
             <p
               class="mt-0.5 font-inter text-xs"
-              :class="activeTurn?.speaker === 'host_b' ? 'text-primary' : 'text-muted-foreground'"
+              :class="displayedActiveTurn?.speaker === 'host_b' ? 'text-primary' : 'text-muted-foreground'"
             >
-              {{ activeTurn?.speaker === 'host_b' ? 'Speaking' : '—' }}
+              {{ displayedActiveTurn?.speaker === 'host_b' ? 'Speaking' : '—' }}
             </p>
           </div>
         </div>
       </div>
 
-      <div
-        v-if="isDialogueFormat"
+      <AudioOverviewSyncedTranscript
         data-testid="audio-overview-active-quote"
-        class="max-w-2xl space-y-3 overflow-y-auto px-4"
-        style="max-height: 280px"
-      >
-        <div
-          v-for="(line, idx) in dialogueLines"
-          :key="idx"
-          class="flex gap-3"
-          :class="line.alignClass"
-        >
-          <div
-            class="max-w-[85%] rounded-2xl px-4 py-2.5 font-dm-sans text-sm leading-relaxed sm:text-base"
-            :class="line.bubbleClass"
-          >
-            <p class="mb-1 font-inter text-[11px] font-medium tracking-wide text-muted-foreground">
-              {{ line.speakerLabel }}
-            </p>
-            {{ line.text }}
-          </div>
-        </div>
-      </div>
-      <blockquote
-        v-else
-        data-testid="audio-overview-active-quote"
-        class="max-w-2xl text-center font-dm-sans text-base leading-relaxed text-foreground sm:text-lg"
-      >
-        <span class="mr-1 text-primary">"</span>{{ activeQuote }}<span class="ml-1 text-primary">"</span>
-        <p class="mt-2 font-inter text-xs text-muted-foreground">
-          {{ activeAttribution }}
-        </p>
-      </blockquote>
+        class="max-w-2xl px-4 font-dm-sans"
+        :turns="displayedTurns"
+        :current-turn-index="displayedTurnIndex"
+        :current-time-sec="displayedTimeSec"
+        :is-playing="isPlaying"
+        max-height="280px"
+        :on-seek="isInterjectionActive ? undefined : seek"
+      />
     </section>
 
     <div
@@ -539,6 +531,7 @@ const ringMiddleStyle = computed(() => ({
           max="1000"
           :value="Math.round(progressPercent * 10)"
           data-testid="audio-overview-scrubber"
+          :disabled="isInterjectionActive"
           class="h-1.5 flex-1 cursor-pointer appearance-none rounded-full bg-border/40 accent-primary"
           @input="handleScrubInput"
         />
@@ -552,6 +545,7 @@ const ringMiddleStyle = computed(() => ({
             type="button"
             data-testid="audio-overview-skip-back"
             aria-label="Skip back 10 seconds"
+            :disabled="isInterjectionActive"
             class="inline-flex h-10 w-10 items-center justify-center rounded-full text-foreground transition-colors hover:bg-accent/20"
             @click="skip(-10000)"
           >
@@ -571,6 +565,7 @@ const ringMiddleStyle = computed(() => ({
             type="button"
             data-testid="audio-overview-skip-forward"
             aria-label="Skip forward 10 seconds"
+            :disabled="isInterjectionActive"
             class="inline-flex h-10 w-10 items-center justify-center rounded-full text-foreground transition-colors hover:bg-accent/20"
             @click="skip(10000)"
           >
@@ -613,7 +608,7 @@ const ringMiddleStyle = computed(() => ({
           type="button"
           data-testid="audio-overview-download-btn"
           aria-label="Download audio overview"
-          :disabled="downloading || turnUrls.length === 0"
+          :disabled="downloading || (!continuousMediaUrl && turnUrls.length === 0)"
           class="inline-flex h-8 w-8 items-center justify-center rounded-full border border-border/60 bg-background text-foreground transition-colors hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-50"
           @click="handleDownload"
         >

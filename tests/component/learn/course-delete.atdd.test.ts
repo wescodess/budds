@@ -7,10 +7,19 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { flushPromises } from '@vue/test-utils'
+import type { Id } from '../../../convex/_generated/dataModel'
 
 const mockMutate = vi.fn()
+const { mockToast, mockToastError } = vi.hoisted(() => ({
+  mockToast: vi.fn(),
+  mockToastError: vi.fn(),
+}))
 
-mockNuxtImport('useConvexMutation', () => {
+vi.mock('vue-sonner', () => ({
+  toast: Object.assign(mockToast, { error: mockToastError }),
+}))
+
+mockNuxtImport('useConvexAction', () => {
   return (_api: unknown) => ({
     mutate: mockMutate,
     isLoading: ref(false),
@@ -22,6 +31,8 @@ const componentPath = ['~', 'components', 'learn', 'DeleteCourseDialog.vue'].joi
 describe('DeleteCourseDialog — AC1, AC2', () => {
   beforeEach(() => {
     mockMutate.mockReset()
+    mockToast.mockReset()
+    mockToastError.mockReset()
   })
 
   afterEach(() => {
@@ -31,7 +42,7 @@ describe('DeleteCourseDialog — AC1, AC2', () => {
   it('renders delete button with destructive styling', async () => {
     const Comp = await import(componentPath)
     const wrapper = await mountSuspended(Comp.default, {
-      props: { courseId: 'course_123' as any, courseTitle: 'Test Course' },
+      props: { courseId: 'course_123' as Id<'courses'>, courseTitle: 'Test Course' },
     })
     const trigger = wrapper.find('[data-testid="delete-course-trigger"]')
     expect(trigger.exists()).toBe(true)
@@ -41,7 +52,7 @@ describe('DeleteCourseDialog — AC1, AC2', () => {
   it('shows confirmation dialog with warning text on click', async () => {
     const Comp = await import(componentPath)
     const wrapper = await mountSuspended(Comp.default, {
-      props: { courseId: 'course_123' as any, courseTitle: 'Test Course' },
+      props: { courseId: 'course_123' as Id<'courses'>, courseTitle: 'Test Course' },
     })
     await wrapper.find('[data-testid="delete-course-trigger"]').trigger('click')
     await flushPromises()
@@ -57,7 +68,7 @@ describe('DeleteCourseDialog — AC1, AC2', () => {
   it('cancel closes dialog without calling mutation', async () => {
     const Comp = await import(componentPath)
     const wrapper = await mountSuspended(Comp.default, {
-      props: { courseId: 'course_123' as any, courseTitle: 'Test Course' },
+      props: { courseId: 'course_123' as Id<'courses'>, courseTitle: 'Test Course' },
     })
     await wrapper.find('[data-testid="delete-course-trigger"]').trigger('click')
     await flushPromises()
@@ -68,5 +79,24 @@ describe('DeleteCourseDialog — AC1, AC2', () => {
     cancel.click()
     await flushPromises()
     expect(mockMutate).not.toHaveBeenCalled()
+  })
+
+  it('reports durable pending deletion without claiming the course is already gone', async () => {
+    mockMutate.mockResolvedValue({ deleted: false, pending: true })
+    const Comp = await import(componentPath)
+    const wrapper = await mountSuspended(Comp.default, {
+      props: { courseId: 'course_123' as Id<'courses'>, courseTitle: 'Test Course' },
+    })
+    await wrapper.find('[data-testid="delete-course-trigger"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+
+    const confirm = document.querySelector('[data-testid="delete-course-confirm"]') as HTMLElement
+    expect(confirm).not.toBeNull()
+    confirm.click()
+    await flushPromises()
+
+    expect(mockToast).toHaveBeenCalledWith('Course deletion started')
+    expect(wrapper.emitted('deleted')).toHaveLength(1)
   })
 })
