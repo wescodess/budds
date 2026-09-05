@@ -2,6 +2,7 @@ node_modules
 .nuxt
 .env
 .env.*
+.dev.vars
 data/
 .output/
 .wrangler/

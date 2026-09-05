@@ -46,6 +46,8 @@ function makeLegacyResult(overrides: Record<string, unknown> = {}) {
         folderid: 'folderABC',
         documentid: 'docXYZ',
         filename: 'docXYZ.txt',
+        contenthash: 'a'.repeat(64),
+        sourcerevision: `sha256:${'a'.repeat(64)}`,
       },
     },
     ...overrides,
@@ -85,6 +87,8 @@ describe('searchDocuments', () => {
         filename: 'docXYZ.txt',
         folderId: 'folderABC',
         documentId: 'docXYZ',
+        contentHash: 'a'.repeat(64),
+        sourceRevision: `sha256:${'a'.repeat(64)}`,
       },
     })
   })
@@ -216,6 +220,25 @@ describe('searchDocuments', () => {
 
     expect(result.data).toHaveLength(1)
     expect(result.data[0].id).toBe('a')
+  })
+
+  test('[P0] filters multiple authorized documents with a legacy OR instead of the unfilterable tenant id', async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(mockLegacyResponse([]))
+
+    await searchDocuments({
+      query: 'test',
+      userId: `https://cautious-elephant-39.convex.site|${'u'.repeat(40)}`,
+      filterDocIds: ['docXYZ', 'anotherDoc', 'docXYZ'],
+    })
+
+    const body = JSON.parse(vi.mocked(globalThis.fetch).mock.calls[0][1]!.body as string)
+    expect(body.filters).toEqual({
+      type: 'or',
+      filters: [
+        { type: 'eq', key: 'documentid', value: 'docXYZ' },
+        { type: 'eq', key: 'documentid', value: 'anotherDoc' },
+      ],
+    })
   })
 
   test('drops provider results attributed to another tenant', async () => {

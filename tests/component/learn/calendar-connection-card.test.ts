@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
+import { flushPromises } from '@vue/test-utils'
 
 const mockFetch = vi.fn()
 let mockQueryData = ref<any>(null)
@@ -68,8 +69,8 @@ describe('CalendarConnectionCard', () => {
 
     const confirmBtn = document.querySelector('[data-testid="disconnect-confirm-btn"]') as HTMLButtonElement
     expect(confirmBtn).toBeTruthy()
-    confirmBtn.click()
-    await nextTick()
+    confirmBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await flushPromises()
 
     expect(mockFetch).toHaveBeenCalledWith('/api/calendar/disconnect', { method: 'POST' })
   })

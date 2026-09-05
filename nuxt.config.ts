@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import tailwindcss from '@tailwindcss/vite'
+import type { NuxtConfig } from 'nuxt/schema'
 
 function parseDotenvFiles() {
   const dotenvPaths = [
@@ -61,6 +62,15 @@ const convexUrl = readConfiguredValue('NUXT_PUBLIC_CONVEX_URL', 'CONVEX_URL')
 const siteUrl = readConfiguredValue('SITE_URL', 'NUXT_PUBLIC_SITE_URL')
 const publicSiteUrl = siteUrl || readConfiguredValue('NUXT_PUBLIC_SITE_URL')
 const authProxyTargetUrl = readConfiguredValue('AUTH_PROXY_TARGET_URL', 'NUXT_AUTH_PROXY_TARGET_URL') || toConvexSiteUrl(convexUrl)
+const serverAuthEnabled = process.env.NODE_ENV !== 'development'
+const routeRules = {
+  '/': { auth: serverAuthEnabled ? 'user' as const : undefined },
+  '/chat': { auth: serverAuthEnabled ? 'user' as const : undefined },
+  '/app': { auth: serverAuthEnabled ? 'user' as const : undefined },
+  '/app/**': { auth: serverAuthEnabled ? 'user' as const : undefined },
+  '/login': { auth: serverAuthEnabled ? 'guest' as const : undefined },
+  '/audio/**': { swr: 300 },
+} as unknown as NonNullable<NuxtConfig['routeRules']>
 
 export default defineNuxtConfig({
   css: ['~/assets/css/tailwind.css'],
@@ -70,6 +80,9 @@ export default defineNuxtConfig({
   },
   nitro: {
     preset: 'cloudflare_pages',
+    cloudflare: {
+      nodeCompat: true,
+    },
     externals: {
       inline: [fileURLToPath(new URL('./convex/_generated/', import.meta.url))],
     },
@@ -103,7 +116,10 @@ export default defineNuxtConfig({
     componentDir: '@/components/ui',
   },
   auth: {
-    clientOnly: false,
+    // The hosted Convex auth proxy can stall Better Auth's SSR bootstrap in
+    // local development. Existing client auth plugins establish the session
+    // after hydration; production keeps server-side auth and route guards.
+    clientOnly: !serverAuthEnabled,
     redirects: {
       login: '/login',
       guest: '/',
@@ -131,6 +147,10 @@ export default defineNuxtConfig({
     diaServerUrl: readConfiguredValue('NUXT_DIA_SERVER_URL', 'DIA_SERVER_URL'),
     diaServerApiKey: readConfiguredValue('NUXT_DIA_SERVER_API_KEY', 'DIA_SERVER_API_KEY'),
     diaStartFunctionUrl: readConfiguredValue('NUXT_DIA_START_FUNCTION_URL', 'DIA_START_FUNCTION_URL'),
+    audioOverviewJobSecret: readConfiguredValue('NUXT_AUDIO_OVERVIEW_JOB_SECRET', 'AUDIO_OVERVIEW_JOB_SECRET'),
+    audioOverviewWorkerUrl: readConfiguredValue('NUXT_AUDIO_OVERVIEW_WORKER_URL', 'AUDIO_OVERVIEW_WORKER_URL'),
+    audioOverviewWorkerToken: readConfiguredValue('NUXT_AUDIO_OVERVIEW_WORKER_TOKEN', 'AUDIO_OVERVIEW_WORKER_TOKEN'),
+    calendarTokenEncryptionKey: readConfiguredValue('NUXT_CALENDAR_TOKEN_ENCRYPTION_KEY', 'CALENDAR_TOKEN_ENCRYPTION_KEY'),
     public: {
       siteUrl: publicSiteUrl,
       convex: {
@@ -138,12 +158,5 @@ export default defineNuxtConfig({
       },
     },
   },
-  routeRules: {
-    '/': { auth: 'user' as const },
-    '/chat': { auth: 'user' as const },
-    '/app': { auth: 'user' as const },
-    '/app/**': { auth: 'user' as const },
-    '/login': { auth: 'guest' as const },
-    '/audio/**': { swr: 300 },
-  },
+  routeRules,
 })

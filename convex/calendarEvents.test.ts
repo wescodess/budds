@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 import { convexTest } from 'convex-test'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import schema from './schema'
 
@@ -95,7 +95,7 @@ describe('calendarEvents', () => {
     expect(events[0]!.sessionType).toBe('new-content')
   })
 
-  test('listScheduled returns only scheduled events', async () => {
+  test('listScheduled returns scheduled and rescheduled active events', async () => {
     const t = convexTest(schema, modules)
     const { courseId, connectionId } = await setupCalendarAndCourse(t)
     const asAlice = t.withIdentity(USER_A)
@@ -112,13 +112,25 @@ describe('calendarEvents', () => {
     let scheduled = await asAlice.query(api.calendarEvents.listScheduled, {})
     expect(scheduled).toHaveLength(1)
 
+    await t.mutation(internal.calendarEvents.createRescheduled, {
+      userId: USER_A.tokenIdentifier,
+      calendarConnectionId: connectionId,
+      calendarEventId: 'evt_rescheduled_active',
+      courseId,
+      scheduledAt: Date.now() + 172_800_000,
+      sessionType: 'review',
+    })
+    scheduled = await asAlice.query(api.calendarEvents.listScheduled, {})
+    expect(scheduled).toHaveLength(2)
+
     await asAlice.mutation(api.calendarEvents.updateStatus, {
       eventId,
       status: 'completed',
     })
 
     scheduled = await asAlice.query(api.calendarEvents.listScheduled, {})
-    expect(scheduled).toHaveLength(0)
+    expect(scheduled).toHaveLength(1)
+    expect(scheduled[0]!.status).toBe('rescheduled')
   })
 
   test('updateStatus changes event status', async () => {
@@ -223,37 +235,6 @@ describe('calendarEvents', () => {
     ).rejects.toThrow('Unauthenticated')
   })
 
-  test('getScheduledByUser returns scheduled events (internal)', async () => {
-    const t = convexTest(schema, modules)
-    const { courseId, connectionId } = await setupCalendarAndCourse(t)
-    const asAlice = t.withIdentity(USER_A)
-
-    const eventId = await t.mutation(internal.calendarEvents.create, {
-      userId: USER_A.tokenIdentifier,
-      calendarConnectionId: connectionId,
-      calendarEventId: 'evt_internal',
-      courseId,
-      scheduledAt: Date.now() + 86_400_000,
-      sessionType: 'new-content',
-    })
-
-    const scheduled = await t.query(internal.calendarEvents.getScheduledByUser, {
-      userId: USER_A.tokenIdentifier,
-    })
-    expect(scheduled).toHaveLength(1)
-    expect(scheduled[0]!._id).toBe(eventId)
-
-    await asAlice.mutation(api.calendarEvents.updateStatus, {
-      eventId,
-      status: 'completed',
-    })
-
-    const afterUpdate = await t.query(internal.calendarEvents.getScheduledByUser, {
-      userId: USER_A.tokenIdentifier,
-    })
-    expect(afterUpdate).toHaveLength(0)
-  })
-
   test('deleteByUser removes all events for a user (internal)', async () => {
     const t = convexTest(schema, modules)
     const { courseId, connectionId } = await setupCalendarAndCourse(t)
@@ -288,7 +269,7 @@ describe('calendarEvents', () => {
     expect(events).toHaveLength(0)
   })
 
-  test('checkAndMarkMissed marks past scheduled events as missed', async () => {
+  test('missed candidates remain scheduled until rescheduling commits', async () => {
     const t = convexTest(schema, modules)
     const { courseId, connectionId } = await setupCalendarAndCourse(t)
     const asAlice = t.withIdentity(USER_A)
@@ -313,8 +294,10 @@ describe('calendarEvents', () => {
       sessionType: 'review',
     })
 
-    const missed = await t.mutation(internal.calendarEvents.checkAndMarkMissed, {
+    const { missed } = await t.query(internal.calendarEvents.getMissedCandidatesPage, {
       userId: USER_A.tokenIdentifier,
+      status: 'scheduled',
+      cursor: null,
     })
 
     expect(missed).toHaveLength(1)
@@ -323,11 +306,24 @@ describe('calendarEvents', () => {
     const events = await asAlice.query(api.calendarEvents.listByUser, {})
     const pastEvent = events.find(e => e.scheduledAt === pastTime)
     const futureEvent = events.find(e => e.scheduledAt === futureTime)
-    expect(pastEvent!.status).toBe('missed')
+    expect(pastEvent!.status).toBe('scheduled')
     expect(futureEvent!.status).toBe('scheduled')
+
+    await t.mutation(internal.calendarEvents.commitReschedule, {
+      missedEventId: missed[0]!.eventId,
+      userId: USER_A.tokenIdentifier,
+      calendarConnectionId: connectionId,
+      calendarEventId: 'evt_rescheduled_1',
+      courseId,
+      scheduledAt: Date.now() + 172_800_000,
+      sessionType: 'new-content',
+    })
+
+    const committedEvents = await asAlice.query(api.calendarEvents.listByUser, {})
+    expect(committedEvents.find(e => e.scheduledAt === pastTime)!.status).toBe('missed')
   })
 
-  test('checkAndMarkMissed returns empty when no events are past due', async () => {
+  test('getMissedCandidates returns empty when no events are past due', async () => {
     const t = convexTest(schema, modules)
     const { courseId, connectionId } = await setupCalendarAndCourse(t)
 
@@ -340,14 +336,16 @@ describe('calendarEvents', () => {
       sessionType: 'new-content',
     })
 
-    const missed = await t.mutation(internal.calendarEvents.checkAndMarkMissed, {
+    const { missed } = await t.query(internal.calendarEvents.getMissedCandidatesPage, {
       userId: USER_A.tokenIdentifier,
+      status: 'scheduled',
+      cursor: null,
     })
 
     expect(missed).toHaveLength(0)
   })
 
-  test('checkAndMarkMissed does not re-mark already missed events', async () => {
+  test('getMissedCandidates excludes already missed events', async () => {
     const t = convexTest(schema, modules)
     const { courseId, connectionId } = await setupCalendarAndCourse(t)
     const asAlice = t.withIdentity(USER_A)
@@ -366,8 +364,10 @@ describe('calendarEvents', () => {
       status: 'missed',
     })
 
-    const missed = await t.mutation(internal.calendarEvents.checkAndMarkMissed, {
+    const { missed } = await t.query(internal.calendarEvents.getMissedCandidatesPage, {
       userId: USER_A.tokenIdentifier,
+      status: 'scheduled',
+      cursor: null,
     })
 
     expect(missed).toHaveLength(0)
@@ -404,7 +404,7 @@ describe('calendarEvents', () => {
     const asAlice = t.withIdentity(USER_A)
 
     const pastTime = Date.now() - 3_600_000
-    await t.mutation(internal.calendarEvents.create, {
+    const missedEventId = await t.mutation(internal.calendarEvents.create, {
       userId: USER_A.tokenIdentifier,
       calendarConnectionId: connectionId,
       calendarEventId: 'evt_e2e_missed',
@@ -413,13 +413,16 @@ describe('calendarEvents', () => {
       sessionType: 'review',
     })
 
-    const missed = await t.mutation(internal.calendarEvents.checkAndMarkMissed, {
+    const { missed } = await t.query(internal.calendarEvents.getMissedCandidatesPage, {
       userId: USER_A.tokenIdentifier,
+      status: 'scheduled',
+      cursor: null,
     })
     expect(missed).toHaveLength(1)
 
     const rescheduledAt = Date.now() + 86_400_000
-    await t.mutation(internal.calendarEvents.createRescheduled, {
+    await t.mutation(internal.calendarEvents.commitReschedule, {
+      missedEventId,
       userId: USER_A.tokenIdentifier,
       calendarConnectionId: connectionId,
       calendarEventId: 'google_resched_e2e',
@@ -439,5 +442,231 @@ describe('calendarEvents', () => {
     expect(rescheduledEvent!.status).toBe('rescheduled')
     expect(rescheduledEvent!.scheduledAt).toBe(rescheduledAt)
     expect(rescheduledEvent!.sessionType).toBe('review')
+  })
+
+  test('[P1] failed provider deletion keeps the local event and credentials for retry', async () => {
+    const t = convexTest(schema, modules)
+    const { courseId, connectionId } = await setupCalendarAndCourse(t)
+    const asAlice = t.withIdentity(USER_A)
+    await t.mutation(internal.calendarEvents.create, {
+      userId: USER_A.tokenIdentifier,
+      calendarConnectionId: connectionId,
+      calendarEventId: 'provider-retry-event',
+      courseId,
+      scheduledAt: Date.now() + 60_000,
+      sessionType: 'review',
+    })
+
+    const previousEncryptionKey = process.env.CALENDAR_TOKEN_ENCRYPTION_KEY
+    process.env.CALENDAR_TOKEN_ENCRYPTION_KEY = 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY='
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('unavailable', { status: 503 })))
+    try {
+      expect(await asAlice.action(api.calendarEvents.disconnectCalendar, {})).toEqual({
+        disconnected: false,
+        googleEventsDeleted: 0,
+        googleEventsFailed: 1,
+      })
+    }
+    finally {
+      if (previousEncryptionKey === undefined) delete process.env.CALENDAR_TOKEN_ENCRYPTION_KEY
+      else process.env.CALENDAR_TOKEN_ENCRYPTION_KEY = previousEncryptionKey
+      vi.unstubAllGlobals()
+    }
+
+    expect(await asAlice.query(api.calendarConnections.getByUser, {})).toMatchObject({ status: 'disconnecting' })
+    expect(await asAlice.query(api.calendarEvents.listByUser, {})).toHaveLength(1)
+    expect(await t.query(internal.calendarConnections.getConnectionByIdForCleanup, {
+      calendarConnectionId: connectionId,
+    })).toMatchObject({ accessToken: expect.any(String), refreshToken: expect.any(String) })
+  })
+
+  test('disconnectCalendar removes one bounded provider batch and finalizes when drained', async () => {
+    const t = convexTest(schema, modules)
+    const { courseId, connectionId } = await setupCalendarAndCourse(t)
+    const asAlice = t.withIdentity(USER_A)
+    await t.run(async (ctx) => {
+      for (let index = 0; index < 25; index++) {
+        await ctx.db.insert('calendarEvents', {
+          userId: USER_A.tokenIdentifier,
+          calendarConnectionId: connectionId,
+          calendarEventId: `google-batch-${index}`,
+          courseId,
+          scheduledAt: Date.now() + index * 60_000,
+          sessionType: 'review',
+          status: 'scheduled',
+        })
+      }
+    })
+
+    const previousEncryptionKey = process.env.CALENDAR_TOKEN_ENCRYPTION_KEY
+    process.env.CALENDAR_TOKEN_ENCRYPTION_KEY = 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY='
+    const deleteGoogleEvent = vi.fn().mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', deleteGoogleEvent)
+    try {
+      const result = await asAlice.action(api.calendarEvents.disconnectCalendar, {})
+      expect(result).toEqual({ disconnected: true, googleEventsDeleted: 25, googleEventsFailed: 0 })
+    }
+    finally {
+      if (previousEncryptionKey === undefined) delete process.env.CALENDAR_TOKEN_ENCRYPTION_KEY
+      else process.env.CALENDAR_TOKEN_ENCRYPTION_KEY = previousEncryptionKey
+      vi.unstubAllGlobals()
+    }
+
+    expect(deleteGoogleEvent).toHaveBeenCalledTimes(25)
+    expect(await asAlice.query(api.calendarConnections.getByUser, {})).toBeNull()
+    expect(await asAlice.query(api.calendarEvents.listByUser, {})).toEqual([])
+  })
+
+  test('[P1] missed-candidate pages include every rescheduled replacement beyond 200 rows', async () => {
+    const t = convexTest(schema, modules)
+    const { courseId, connectionId } = await setupCalendarAndCourse(t)
+    await t.run(async (ctx) => {
+      for (let index = 0; index < 205; index++) {
+        await ctx.db.insert('calendarEvents', {
+          userId: USER_A.tokenIdentifier,
+          calendarConnectionId: connectionId,
+          calendarEventId: `past-rescheduled-${index}`,
+          courseId,
+          scheduledAt: Date.now() - 60_000 - index,
+          sessionType: 'review',
+          status: 'rescheduled',
+        })
+      }
+    })
+
+    let cursor: string | null = null
+    const missedIds: string[] = []
+    do {
+      const page: {
+        missed: Array<{ eventId: string }>
+        isDone: boolean
+        continueCursor: string
+      } = await t.query(internal.calendarEvents.getMissedCandidatesPage, {
+        userId: USER_A.tokenIdentifier,
+        status: 'rescheduled',
+        cursor,
+      })
+      missedIds.push(...page.missed.map((event: { eventId: string }) => event.eventId))
+      cursor = page.isDone ? null : page.continueCursor
+    } while (cursor !== null)
+
+    expect(missedIds).toHaveLength(205)
+  })
+
+  test('[P1] missed-session continuation carries slot position across page boundaries', async () => {
+    const t = convexTest(schema, modules)
+    const { courseId, connectionId } = await setupCalendarAndCourse(t)
+    const asAlice = t.withIdentity(USER_A)
+    await asAlice.mutation(api.calendarConnections.updatePreferences, {
+      morningStart: '09:00',
+      eveningEnd: '10:00',
+      sessionMinutes: 25,
+      preferredDays: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'],
+    })
+    await t.run(async (ctx) => {
+      for (let index = 0; index < 11; index++) {
+        await ctx.db.insert('calendarEvents', {
+          userId: USER_A.tokenIdentifier,
+          calendarConnectionId: connectionId,
+          calendarEventId: `missed-page-${index}`,
+          courseId,
+          scheduledAt: Date.now() - 60_000 - index,
+          sessionType: 'review',
+          status: 'scheduled',
+        })
+      }
+    })
+
+    const previousEncryptionKey = process.env.CALENDAR_TOKEN_ENCRYPTION_KEY
+    process.env.CALENDAR_TOKEN_ENCRYPTION_KEY = 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY='
+    const starts: string[] = []
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as { start: { dateTime: string } }
+      starts.push(body.start.dateTime)
+      return new Response('{}', { status: 200 })
+    }))
+    try {
+      await t.action(internal.calendarEvents.checkMissedSessionsForUser, {
+        userId: USER_A.tokenIdentifier,
+        status: 'scheduled',
+        cursor: null,
+        nextSlotAfter: Date.now(),
+      })
+      vi.useFakeTimers()
+      await t.finishAllScheduledFunctions(vi.runAllTimers)
+    }
+    finally {
+      if (previousEncryptionKey === undefined) delete process.env.CALENDAR_TOKEN_ENCRYPTION_KEY
+      else process.env.CALENDAR_TOKEN_ENCRYPTION_KEY = previousEncryptionKey
+      vi.unstubAllGlobals()
+      vi.useRealTimers()
+    }
+
+    expect(starts).toHaveLength(11)
+    expect(new Set(starts).size).toBe(11)
+    for (const start of starts) {
+      const minute = Number(new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/New_York',
+        hour: '2-digit',
+        minute: '2-digit',
+        hourCycle: 'h23',
+      }).format(new Date(start)).split(':')[0]) * 60
+        + Number(new Intl.DateTimeFormat('en-CA', {
+          timeZone: 'America/New_York',
+          minute: '2-digit',
+        }).format(new Date(start)))
+      expect(minute + 25).toBeLessThanOrEqual(10 * 60)
+    }
+  })
+
+  test('[P2] separate missed-session runs allocate after existing future events', async () => {
+    const t = convexTest(schema, modules)
+    const { courseId, connectionId } = await setupCalendarAndCourse(t)
+    const asAlice = t.withIdentity(USER_A)
+    await asAlice.mutation(api.calendarConnections.updatePreferences, {
+      morningStart: '09:00',
+      eveningEnd: '17:00',
+      sessionMinutes: 25,
+      preferredDays: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'],
+    })
+    const insertMissed = async (calendarEventId: string) => await t.mutation(internal.calendarEvents.create, {
+      userId: USER_A.tokenIdentifier,
+      calendarConnectionId: connectionId,
+      calendarEventId,
+      courseId,
+      scheduledAt: Date.now() - 60_000,
+      sessionType: 'review',
+    })
+    await insertMissed('separate-run-one')
+
+    const previousEncryptionKey = process.env.CALENDAR_TOKEN_ENCRYPTION_KEY
+    process.env.CALENDAR_TOKEN_ENCRYPTION_KEY = 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY='
+    const starts: number[] = []
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as { start: { dateTime: string } }
+      starts.push(new Date(body.start.dateTime).getTime())
+      return new Response('{}', { status: 200 })
+    }))
+    try {
+      await t.action(internal.calendarEvents.checkMissedSessionsForUser, {
+        userId: USER_A.tokenIdentifier,
+        status: 'scheduled',
+        cursor: null,
+      })
+      await insertMissed('separate-run-two')
+      await t.action(internal.calendarEvents.checkMissedSessionsForUser, {
+        userId: USER_A.tokenIdentifier,
+        status: 'scheduled',
+        cursor: null,
+      })
+    }
+    finally {
+      if (previousEncryptionKey === undefined) delete process.env.CALENDAR_TOKEN_ENCRYPTION_KEY
+      else process.env.CALENDAR_TOKEN_ENCRYPTION_KEY = previousEncryptionKey
+      vi.unstubAllGlobals()
+    }
+
+    expect(starts).toHaveLength(2)
+    expect(starts[1]! - starts[0]!).toBeGreaterThanOrEqual(25 * 60_000)
   })
 })

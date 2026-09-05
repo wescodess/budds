@@ -22,7 +22,7 @@ function makeConvexClient(event: any): ConvexHttpClient | null {
 }
 
 export default defineEventHandler(async (event) => {
-  requireRateLimit(event, 5)
+  await requireRateLimit(event, 5, 'quiz.generate')
   const userId = getConvexTokenIdentifier(event)
 
   const body = await readBody<{

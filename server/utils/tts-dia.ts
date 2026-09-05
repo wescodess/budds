@@ -128,9 +128,17 @@ export async function synthesizeDiaVoiceWithRetry(params: DiaSynthesizeParams): 
 export interface DiaDialogueParams {
   script: string
   maxTokens?: number
+  requestId?: string
 }
 
-export async function synthesizeDiaDialogue(params: DiaDialogueParams): Promise<{ audio: Uint8Array; durationSec: number }> {
+export interface DiaDialogueResult {
+  audio: Uint8Array
+  durationSec: number
+  requestId: string
+  wordTimings: { word: string, start: number, end: number }[]
+}
+
+export async function synthesizeDiaDialogue(params: DiaDialogueParams): Promise<DiaDialogueResult> {
   const { serverUrl, apiKey } = getDiaConfig()
   if (!serverUrl) {
     throw createError({ statusCode: 500, message: 'Dia server URL not configured' })
@@ -139,14 +147,15 @@ export async function synthesizeDiaDialogue(params: DiaDialogueParams): Promise<
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (apiKey) headers['X-API-Key'] = apiKey
 
-  const body: Record<string, unknown> = { script: params.script }
+  const requestId = params.requestId || crypto.randomUUID()
+  const body: Record<string, unknown> = { script: params.script, request_id: requestId }
   if (params.maxTokens) body.max_tokens = params.maxTokens
 
   const response = await fetch(`${serverUrl}/dialogue`, {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(300_000),
+    signal: AbortSignal.timeout(600_000),
   })
 
   if (!response.ok) {
@@ -154,12 +163,44 @@ export async function synthesizeDiaDialogue(params: DiaDialogueParams): Promise<
     throw createError({ statusCode: response.status, message: `Dia dialogue error: ${text || response.statusText}` })
   }
 
-  const durationSec = parseFloat(response.headers.get('X-Audio-Duration') || '0')
-  const buf = await response.arrayBuffer()
-  return { audio: new Uint8Array(buf), durationSec }
+  const json = await response.json() as {
+    audio?: string
+    durationSec?: number
+    requestId?: string
+    wordTimings?: { word: string, start: number, end: number }[]
+  }
+
+  if (!json.audio) {
+    throw createError({ statusCode: 502, message: 'Dia dialogue response missing audio' })
+  }
+
+  const audioBytes = new Uint8Array(Buffer.from(json.audio, 'base64'))
+
+  return {
+    audio: new Uint8Array(audioBytes),
+    durationSec: json.durationSec ?? 0,
+    requestId: json.requestId ?? requestId,
+    wordTimings: json.wordTimings ?? [],
+  }
 }
 
-export async function synthesizeDiaDialogueWithRetry(params: DiaDialogueParams): Promise<{ audio: Uint8Array; durationSec: number }> {
+export async function cancelDiaRequest(requestId: string): Promise<void> {
+  const { serverUrl, apiKey } = getDiaConfig()
+  if (!serverUrl) return
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (apiKey) headers['X-API-Key'] = apiKey
+  try {
+    await fetch(`${serverUrl}/cancel`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ request_id: requestId }),
+      signal: AbortSignal.timeout(5000),
+    })
+  }
+  catch {}
+}
+
+export async function synthesizeDiaDialogueWithRetry(params: DiaDialogueParams): Promise<DiaDialogueResult> {
   const backoffsMs = [2000, 5000]
   let lastError: unknown
 

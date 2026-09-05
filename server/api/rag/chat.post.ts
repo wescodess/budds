@@ -61,7 +61,7 @@ function chunkToSource(chunk: AISearchChunk) {
 }
 
 export default defineEventHandler(async (event) => {
-  requireRateLimit(event, 20)
+  await requireRateLimit(event, 20, 'rag.chat')
   const userId = getConvexTokenIdentifier(event)
 
   const body = await readBody<{

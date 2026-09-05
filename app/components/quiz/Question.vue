@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { Check, X } from 'lucide-vue-next'
+import type { AcceptableValue } from 'reka-ui'
 
 export interface QuestionView {
   _id: string
-  type: 'multiple-choice' | 'free-response'
+  type: 'multiple-choice' | 'free-response' | 'true_false' | 'fill_in_the_blank'
   question: string
   options?: string[]
-  sourceFilename: string
-  sourceChunkContent: string
+  sourceFilename?: string
+  sourceChunkContent?: string
 }
 
 export interface QuestionResult {
@@ -33,8 +34,8 @@ const sourceExpanded = ref(false)
 
 const isReadOnly = computed(() => props.disabled || !!props.result)
 
-function onRadioChange(val: string) {
-  emit('update:response', val)
+function onRadioChange(val: AcceptableValue) {
+  if (typeof val === 'string') emit('update:response', val)
 }
 
 function onTextInput(e: Event) {
@@ -79,7 +80,7 @@ function truncate(text: string, max = 120): string {
       </span>
     </div>
 
-    <div v-if="question.type === 'multiple-choice'" class="space-y-2">
+    <div v-if="question.type === 'multiple-choice' || question.type === 'true_false'" class="space-y-2">
       <UiRadioGroup
         :model-value="response"
         :disabled="isReadOnly"
@@ -142,7 +143,7 @@ function truncate(text: string, max = 120): string {
     </div>
 
     <div class="mt-3 flex items-start gap-2 text-xs text-muted-foreground">
-      <ChatCitationBadge :index="index + 1" :filename="question.sourceFilename" />
+      <ChatCitationBadge :index="index + 1" :filename="question.sourceFilename ?? 'Source'" />
       <button
         v-if="result"
         type="button"
@@ -150,16 +151,16 @@ function truncate(text: string, max = 120): string {
         data-testid="quiz-source-toggle"
         @click="sourceExpanded = !sourceExpanded"
       >
-        <span class="truncate">{{ truncate(question.sourceChunkContent) }}</span>
+        <span class="truncate">{{ truncate(question.sourceChunkContent ?? '') }}</span>
       </button>
-      <span v-else class="flex-1 truncate">{{ truncate(question.sourceChunkContent) }}</span>
+      <span v-else class="flex-1 truncate">{{ truncate(question.sourceChunkContent ?? '') }}</span>
     </div>
 
     <div v-if="result && sourceExpanded" class="mt-2" data-testid="quiz-source-panel">
       <ChatSourceCard
         :index="index + 1"
-        :filename="question.sourceFilename"
-        :content="question.sourceChunkContent"
+        :filename="question.sourceFilename ?? 'Source'"
+        :content="question.sourceChunkContent ?? ''"
         :score="1"
       />
     </div>

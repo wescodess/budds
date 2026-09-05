@@ -2,15 +2,14 @@ import { v } from 'convex/values'
 import { mutation, query } from './_generated/server'
 import type { MutationCtx } from './_generated/server'
 import { evaluateStreak } from './lib/streak'
-import { requireAuth } from './lib/auth'
+import { getOptionalAuthUserId, requireAuth } from './lib/auth'
 import { getTodayInTimezone } from './lib/dates'
 
 export const getProfile = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return null
-    const userId = identity.tokenIdentifier
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return null
 
     return await ctx.db
       .query('learnProfile')

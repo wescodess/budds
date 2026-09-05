@@ -2,13 +2,12 @@ import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import { internalMutation, mutation, query } from './_generated/server'
 import type { Id } from './_generated/dataModel'
-import type { MutationCtx, QueryCtx } from './_generated/server'
-import { requireAuth } from './lib/auth'
-import {
-  consumeVerifiedUploadClaims,
-  releaseUploadOwnership,
-  requireVerifiedUploadClaims,
-} from './audioOverviewUploads'
+import type { MutationCtx } from './_generated/server'
+import { getOptionalAuthUserId, requireAuth } from './lib/auth'
+import { releaseUploadOwnership } from './audioOverviewUploads'
+import { stageV2OverviewDeletion } from './audioOverviewV2'
+import { rejectLegacyAudioOverviewWrite } from './lib/audioOverviewLegacyBoundary'
+import { hasAccountDeletionTombstone } from './lib/accountDeletionTombstone'
 
 const speakerValidator = v.union(v.literal('host_a'), v.literal('host_b'))
 
@@ -19,6 +18,13 @@ const turnInputValidator = v.object({
   uploadClaimId: v.id('audioOverviewUploadClaims'),
   durationMs: v.number(),
   sourceIndex: v.optional(v.number()),
+  wordTimings: v.optional(v.array(
+    v.object({
+      word: v.string(),
+      start: v.number(),
+      end: v.number(),
+    }),
+  )),
 })
 
 const voiceProfileValidator = v.object({
@@ -31,16 +37,6 @@ const preferencesValidator = v.object({
   complexity: v.union(v.literal('beginner'), v.literal('expert')),
 })
 
-async function requireFolder(
-  ctx: QueryCtx | MutationCtx,
-  folderId: Id<'folders'>,
-  userId: string,
-) {
-  const folder = await ctx.db.get(folderId)
-  if (!folder || folder.userId !== userId) throw new Error('Folder not found')
-  return folder
-}
-
 export const createWithTurns = mutation({
   args: {
     folderId: v.id('folders'),
@@ -52,75 +48,9 @@ export const createWithTurns = mutation({
     preferences: v.optional(preferencesValidator),
     sourceDocumentIds: v.optional(v.array(v.string())),
   },
-  handler: async (ctx, args) => {
-    const userId = await requireAuth(ctx)
-    await requireFolder(ctx, args.folderId, userId)
-
-    if (!args.taskId) throw new Error('Reserved audio overview task required')
-    const task = await ctx.db.get(args.taskId)
-    if (
-      !task
-      || task.userId !== userId
-      || task.folderId !== args.folderId
-      || task.type !== 'audio-overview-generation'
-      || task.status !== 'running'
-      || !task.audioOverviewRequest
-    ) {
-      throw new Error('Reserved audio overview task not found')
-    }
-
-    if (args.turns.length === 0) {
-      throw new Error('Audio overview requires at least one turn')
-    }
-    if (args.turns.length > 50) throw new Error('Audio overview exceeds the turn limit')
-
-    const claims = await requireVerifiedUploadClaims(ctx, userId, task._id, args.turns)
-    const persistedTurns = args.turns.map(({ uploadClaimId: _claimId, ...turn }) => turn)
-    const trimmedTitle = args.title.trim().slice(0, 120) || 'Audio Overview'
-    const totalDurationMs = persistedTurns.reduce((sum, t) => sum + Math.max(0, t.durationMs), 0)
-
-    const resolvedDocIds: Id<'documents'>[] = []
-    if (args.sourceDocumentIds) {
-      for (const raw of args.sourceDocumentIds) {
-        const normalized = ctx.db.normalizeId('documents', raw)
-        if (!normalized) throw new Error('Source not found')
-        const doc = await ctx.db.get(normalized)
-        if (!doc || doc.userId !== userId) throw new Error('Source not found')
-        if (!task.audioOverviewRequest.documents.some(source => source.documentId === normalized)) {
-          throw new Error('Source is outside the reserved scope')
-        }
-        resolvedDocIds.push(normalized)
-      }
-    }
-
-    const resolvedScopeIds = task.audioOverviewRequest.documents.map(source => source.documentId)
-
-    const overviewId = await ctx.db.insert('audioOverviews', {
-      userId,
-      folderId: args.folderId,
-      taskId: args.taskId,
-      title: trimmedTitle,
-      status: 'ready',
-      model: args.model,
-      turns: persistedTurns,
-      voiceProfile: args.voiceProfile,
-      preferences: args.preferences,
-      totalDurationMs,
-      sourceDocumentIds: resolvedDocIds.length > 0 ? resolvedDocIds : undefined,
-      scopeDocIds: resolvedScopeIds,
-    })
-
-    await consumeVerifiedUploadClaims(ctx, claims)
-    const now = Date.now()
-    await ctx.db.patch(task._id, {
-      status: 'completed',
-      result: { overviewId, turnCount: persistedTurns.length },
-      progress: 'Complete',
-      updatedAt: now,
-      completedAt: now,
-    })
-
-    return { overviewId }
+  handler: async (ctx) => {
+    await requireAuth(ctx)
+    rejectLegacyAudioOverviewWrite()
   },
 })
 
@@ -135,82 +65,17 @@ export const createCourseScopedOverview = mutation({
     preferences: v.optional(preferencesValidator),
     sourceDocumentIds: v.optional(v.array(v.string())),
   },
-  handler: async (ctx, args) => {
-    const userId = await requireAuth(ctx)
-    await requireFolder(ctx, args.folderId, userId)
-    const task = await ctx.db.get(args.taskId)
-    if (
-      !task
-      || task.userId !== userId
-      || task.folderId !== args.folderId
-      || task.type !== 'audio-overview-generation'
-      || task.status !== 'running'
-      || !task.audioOverviewRequest
-    ) {
-      throw new Error('Reserved audio overview task not found')
-    }
-
-    if (args.turns.length === 0) {
-      throw new Error('Audio overview requires at least one turn')
-    }
-    if (args.turns.length > 16) throw new Error('Audio primer exceeds the turn limit')
-
-    const claims = await requireVerifiedUploadClaims(ctx, userId, task._id, args.turns)
-    const persistedTurns = args.turns.map(({ uploadClaimId: _claimId, ...turn }) => turn)
-    const trimmedTitle = args.title.trim().slice(0, 120) || 'Audio Primer'
-    const totalDurationMs = persistedTurns.reduce((sum, t) => sum + Math.max(0, t.durationMs), 0)
-
-    const resolvedDocIds: Id<'documents'>[] = []
-    if (args.sourceDocumentIds) {
-      for (const raw of args.sourceDocumentIds) {
-        const normalized = ctx.db.normalizeId('documents', raw)
-        if (!normalized) throw new Error('Source not found')
-        const doc = await ctx.db.get(normalized)
-        if (!doc || doc.userId !== userId) throw new Error('Source not found')
-        if (!task.audioOverviewRequest.documents.some(source => source.documentId === normalized)) {
-          throw new Error('Source is outside the reserved scope')
-        }
-        resolvedDocIds.push(normalized)
-      }
-    }
-
-    const overviewId = await ctx.db.insert('audioOverviews', {
-      userId,
-      folderId: args.folderId,
-      taskId: args.taskId,
-      title: trimmedTitle,
-      status: 'ready',
-      model: args.model,
-      turns: persistedTurns,
-      voiceProfile: args.voiceProfile,
-      preferences: args.preferences,
-      totalDurationMs,
-      sourceDocumentIds: resolvedDocIds.length > 0 ? resolvedDocIds : undefined,
-      scopeDocIds: task.audioOverviewRequest.documents.map(source => source.documentId),
-      courseScoped: true,
-    })
-
-    await consumeVerifiedUploadClaims(ctx, claims)
-    const now = Date.now()
-    await ctx.db.patch(task._id, {
-      status: 'completed',
-      result: { overviewId, turnCount: persistedTurns.length },
-      progress: 'Complete',
-      updatedAt: now,
-      completedAt: now,
-    })
-
-    return { overviewId }
+  handler: async (ctx) => {
+    await requireAuth(ctx)
+    rejectLegacyAudioOverviewWrite()
   },
 })
 
 export const getCourseScopedOverview = query({
   args: { id: v.id('audioOverviews') },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return null
-
-    const userId = identity.tokenIdentifier
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return null
     const overview = await ctx.db.get(args.id)
     if (!overview || overview.userId !== userId) return null
 
@@ -242,10 +107,8 @@ export const getCourseScopedOverview = query({
 export const listByFolder = query({
   args: { folderId: v.id('folders') },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return []
-
-    const userId = identity.tokenIdentifier
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return []
 
     const folder = await ctx.db.get(args.folderId)
     if (!folder || folder.userId !== userId) return []
@@ -277,10 +140,8 @@ export const listByFolder = query({
 export const getWithTurns = query({
   args: { id: v.id('audioOverviews') },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return null
-
-    const userId = identity.tokenIdentifier
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return null
     const overview = await ctx.db.get(args.id)
     if (!overview || overview.userId !== userId) return null
 
@@ -291,10 +152,8 @@ export const getWithTurns = query({
 export const getTurnUrls = query({
   args: { id: v.id('audioOverviews') },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return null
-
-    const userId = identity.tokenIdentifier
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return null
     const overview = await ctx.db.get(args.id)
     if (!overview || overview.userId !== userId) return null
 
@@ -332,6 +191,7 @@ export async function scheduleAudioOverviewDeletion(
       publishedAt: undefined,
     })
   }
+  if (await stageV2OverviewDeletion(ctx, overview, userId)) return
   await ctx.scheduler.runAfter(0, internal.audioOverviews.deleteOverviewBatch, {
     overviewId: overview._id,
     userId,
@@ -501,6 +361,7 @@ export const getByShareToken = query({
       .withIndex('by_shareToken', (q) => q.eq('shareToken', args.token))
       .unique()
     if (!overview || overview.status !== 'ready') return null
+    if (await hasAccountDeletionTombstone(ctx, overview.userId)) return null
     const folder = await ctx.db.get(overview.folderId)
     if (!folder || folder.userId !== overview.userId) return null
 
@@ -537,6 +398,7 @@ export const getTurnUrlsByShareToken = query({
       .withIndex('by_shareToken', (q) => q.eq('shareToken', args.token))
       .unique()
     if (!overview || overview.status !== 'ready') return null
+    if (await hasAccountDeletionTombstone(ctx, overview.userId)) return null
     const folder = await ctx.db.get(overview.folderId)
     if (!folder || folder.userId !== overview.userId) return null
 

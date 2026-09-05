@@ -16,18 +16,18 @@ const open = ref(false)
 const deleting = ref(false)
 
 const deleteMutation = import.meta.client
-  ? useConvexMutation(api.courses.deleteCourse)
+  ? useConvexAction(api.courses.deleteCourse)
   : { mutate: async (_args: { id: Id<'courses'> }) => null }
 
 async function handleDelete() {
   deleting.value = true
   try {
-    await deleteMutation.mutate({ id: props.courseId })
+    const result = await deleteMutation.mutate({ id: props.courseId })
     open.value = false
     const { toast } = await import('vue-sonner')
-    toast('Course deleted')
+    toast(result?.pending ? 'Course deletion started' : 'Course deleted')
     emit('deleted')
-  } catch (err) {
+  } catch {
     const { toast } = await import('vue-sonner')
     toast.error('Failed to delete course')
   } finally {

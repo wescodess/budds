@@ -2,7 +2,7 @@ import { v } from 'convex/values'
 import { mutation, query, internalMutation } from './_generated/server'
 import type { Id, Doc } from './_generated/dataModel'
 import type { MutationCtx, QueryCtx } from './_generated/server'
-import { requireAuth } from './lib/auth'
+import { getOptionalAuthUserId, requireAuth } from './lib/auth'
 
 const questionTypeValidator = v.union(
   v.literal('multiple-choice'),
@@ -173,10 +173,8 @@ export const createCourseScopedQuiz = internalMutation({
 export const listByFolder = query({
   args: { folderId: v.id('folders') },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return []
-
-    const userId = identity.tokenIdentifier
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return []
 
     const folder = await ctx.db.get(args.folderId)
     if (!folder || folder.userId !== userId) return []
@@ -216,10 +214,8 @@ export const listByFolder = query({
 export const getWithQuestions = query({
   args: { id: v.id('quizzes') },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return null
-
-    const userId = identity.tokenIdentifier
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return null
 
     const quiz = await ctx.db.get(args.id)
     if (!quiz || quiz.userId !== userId) return null
@@ -684,10 +680,8 @@ export const abandonAttempt = mutation({
 export const getAttemptResults = query({
   args: { attemptId: v.id('quizAttempts') },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return null
-
-    const userId = identity.tokenIdentifier
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return null
 
     const attempt = await ctx.db.get(args.attemptId)
     if (!attempt || attempt.userId !== userId) return null
@@ -787,10 +781,8 @@ export const getQuizHistory = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return []
-
-    const userId = identity.tokenIdentifier
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return []
 
     const quiz = await ctx.db.get(args.quizId)
     if (!quiz || quiz.userId !== userId) return []
@@ -892,10 +884,8 @@ export const submitAttempt = mutation({
 export const listAttempts = query({
   args: { quizId: v.id('quizzes') },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return []
-
-    const userId = identity.tokenIdentifier
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return []
 
     const quiz = await ctx.db.get(args.quizId)
     if (!quiz || quiz.userId !== userId) return []

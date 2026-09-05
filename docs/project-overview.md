@@ -1,102 +1,81 @@
 # Budds - Project Overview
 
-**Date:** 2026-04-08
+**Date:** 2026-04-24
 **Type:** Web Application
-**Architecture:** Full-Stack Nuxt 4 with RAG Chat System
+**Architecture:** Full-Stack Nuxt 4 Monolith
 
 ## Executive Summary
 
-Budds is a full-stack web application built on Nuxt 4 (Vue 3) that provides a Retrieval-Augmented Generation (RAG) chat interface. Users authenticate via Google OAuth (managed by Better Auth with SQLite storage), then interact with an AI chat system that searches indexed documents using Cloudflare AI Search and generates responses through multiple LLM providers via Cloudflare AI Gateway and OpenRouter. Convex serves as the application's backend-as-a-service for future data needs.
+Budds is an AI-powered learning platform built on Nuxt 4 (Vue 3) with Convex as its real-time backend. Users organize knowledge into folders containing documents, then interact with that content through RAG-powered chat, AI-generated flashcards, quizzes, audio overviews, and structured learn courses. Authentication runs through Better Auth with Google OAuth, proxied through Convex HTTP actions. The application deploys to Cloudflare Pages with Nitro as the server runtime.
 
-## Project Classification
-
-- **Repository Type:** Monolith
-- **Project Type(s):** Web (Full-Stack)
-- **Primary Language(s):** TypeScript, Vue 3
-- **Architecture Pattern:** Nuxt 4 layered architecture (pages → composables → server API routes → external services)
-
-## Technology Stack Summary
+## Technology Stack
 
 | Category | Technology | Version | Purpose |
 |---|---|---|---|
 | Framework | Nuxt | 4.0+ | Full-stack Vue framework |
 | UI Framework | Vue | 3.5.13+ | Reactive component framework |
 | Language | TypeScript | 5.7.2+ | Type-safe development |
+| Backend | Convex | 1.34.1 | Real-time backend-as-a-service |
+| Auth | Better Auth | 1.5.6 | Authentication (Google OAuth) |
+| Auth Integration | @onmax/nuxt-better-auth | 0.0.2-alpha.31 | Nuxt SSR auth module |
+| Convex Integration | nuxt-convex | 0.0.6 (patched) | Nuxt module for Convex |
 | Styling | Tailwind CSS | 4.0+ | Utility-first CSS |
-| UI Components | shadcn-nuxt + Reka UI | 2.5.1 / 2.9.5 | Headless component library |
+| UI Components | shadcn-nuxt + Reka UI | 2.5.1 / 2.9.5 | Headless component library (60+ components) |
 | Icons | lucide-vue-next | 1.0+ | Icon library |
-| Auth | Better Auth | 1.6.0 | Authentication framework |
-| Auth Integration | @onmax/nuxt-better-auth | 0.0.2-alpha.31 | Nuxt module for Better Auth |
-| Auth DB | better-sqlite3 | 12.8.0 | SQLite for session/user storage |
-| Backend | Convex | 1.34.1 | Backend-as-a-service (BaaS) |
-| Convex Integration | nuxt-convex | 0.0.6 | Nuxt module for Convex |
+| Animation | motion-v | 2.2.1+ | Motion animation library |
 | AI Gateway | Cloudflare AI Gateway | - | LLM request routing and observability |
-| AI Search | Cloudflare AI Search | - | Semantic document retrieval |
+| AI Search | Cloudflare AI Search | - | Semantic document retrieval (RAG) |
+| AI Inference | Cloudflare Workers AI | - | Audio transcription and quality evidence |
 | LLM Router | OpenRouter | - | Multi-model LLM access |
+| Audio Renderer | Gemini 2.5 Flash Preview TTS | Preview | Native two-speaker scene rendering |
+| Durable Jobs | Cloudflare Workflows | - | Resumable Audio Overview orchestration |
+| Object Storage | Cloudflare R2 | - | Audio file storage |
+| Markdown | @nuxtjs/mdc | 0.21.1 | Markdown rendering with components |
+| Tables | @tanstack/vue-table | 8.21.3 | Headless table logic |
+| Forms | vee-validate + zod | 4.15.1 / 3.25.76 | Form validation |
 | Utilities | @vueuse/core | 14.2.1+ | Vue composition utilities |
-| Class Utils | clsx + tailwind-merge + CVA | 2.1.1 / 3.5.0 / 0.7.1 | Class name management |
-| Package Manager | pnpm | - | Fast, disk-efficient package manager |
-| Build Tool | Vite | 7.x (via Nuxt) | Fast dev server and bundler |
+| Carousel | embla-carousel-vue | 8.6.0 | Carousel component |
+| Diagrams | mermaid | 11.14.0 | Diagram rendering |
+| Deploy Target | Cloudflare Pages | - | Edge deployment |
+| Package Manager | pnpm | 9.12.3 | Disk-efficient package manager |
+| Testing | Vitest + convex-test | 4.1.4 / 0.0.47 | Unit, integration, and component tests |
+| Component Testing | @nuxt/test-utils + happy-dom | 4.0.2 / 20.8.9 | Vue component test environment |
 
 ## Key Features
 
-1. **RAG Chat System** - AI-powered chat that searches indexed documents and generates contextual answers with source attributions
-2. **Multi-Model LLM Support** - Users choose from 8 models: Claude Sonnet 4.5, Claude Haiku 3.5, GPT-4o, Gemini 2.5 Flash, Llama 3.1 70B, DeepSeek V3, Mistral Small 3.1, Qwen3 30B A3B
-3. **Document Search** - Standalone semantic search with relevance scoring via Cloudflare AI Search
-4. **Google OAuth Authentication** - Secure login with session management stored in SQLite
-5. **Protected Routes** - `/app/**` routes require authentication, `/login` is guest-only
+1. **Folders** - Organize content into themed folders with custom icons and color palettes
+2. **Documents** - Import and manage source documents within folders; web page extraction via Readability
+3. **RAG Chat** - AI-powered conversational interface that retrieves relevant document context and generates cited answers across multiple LLM models
+4. **General Chat** - Standalone AI chat without folder-scoped context
+5. **Flashcards** - AI-generated spaced-repetition flashcard rooms with SM-2 algorithm and mastery state machine
+6. **Quizzes** - AI-generated quizzes with offline attempt support and history tracking
+7. **Audio Overviews** - Grounded two-speaker dialogue rendered in bounded Gemini scenes, assembled as a private R2 WAV, with synchronized transcript and separate interjections
+8. **Learn Courses** - AI-generated structured courses from folder documents with section-by-section content
+9. **Calendar Sync** - Google Calendar integration for scheduling learning sessions with timezone sync
+10. **Content Flags** - Flag and manage content across the platform
+11. **Data Export** - Export user data
+12. **Offline Support** - Offline caching for quiz attempts with sync on reconnect
 
 ## Architecture Highlights
 
-- **Frontend Layer**: Nuxt 4 pages with Vue 3 composition API, Tailwind CSS dark theme, shadcn-nuxt components
-- **Composable Layer**: `useRag()` manages chat state, message history, and API communication
-- **Server API Layer**: Nitro server routes (`/api/rag/chat`, `/api/rag/search`) handle business logic
-- **External Services**: Cloudflare AI Gateway (LLM completion via OpenRouter), Cloudflare AI Search (document retrieval)
-- **Auth Layer**: Better Auth with SQLite backend, Google OAuth provider, route-level access control
-- **Data Layer**: Convex backend (schema defined but empty, ready for application data), SQLite for auth
-
-## Development Overview
-
-### Prerequisites
-
-- Node.js (LTS recommended)
-- pnpm package manager
-- Google OAuth credentials (client ID + secret)
-- Cloudflare account with AI Gateway and AI Search configured
-- OpenRouter API key
-- Convex account and project
-
-### Getting Started
-
-1. Clone the repository
-2. Copy `.env.example` to `.env` and fill in all required credentials
-3. Install dependencies with `pnpm install`
-4. Run `npx nuxt prepare` to generate TypeScript types
-5. Start the dev server with `pnpm dev`
-
-### Key Commands
-
-- **Install:** `pnpm install`
-- **Dev:** `pnpm dev` (runs on port 3002)
-- **Build:** `pnpm build`
-- **Preview:** `pnpm preview`
-- **Generate:** `pnpm generate`
+- **Frontend**: Nuxt 4 app directory with Vue 3 Composition API, 30+ composables, Tailwind CSS dark theme, 60+ shadcn-vue UI components
+- **Backend**: Convex handles all persistent data (folders, documents, conversations, flashcards, quizzes, courses, calendar events, users) with real-time subscriptions
+- **Auth**: Better Auth running on Convex HTTP actions; SSR session validation via auth proxy; Convex JWT tokens fetched server-side
+- **Server API**: Nitro routes handle AI-intensive operations (chat streaming, flashcard/quiz/course generation, audio overview creation, calendar sync, RAG search)
+- **AI Pipeline**: Cloudflare AI Gateway routes to OpenRouter; Cloudflare AI Search provides revision-bound semantic retrieval; Gemini renders joint two-speaker scenes; Workers AI supplies pre-publication transcription evidence
+- **Audio Orchestration**: A standalone Cloudflare Workflow reserves finite budget, freezes the source manifest, renders and evaluates scenes, assembles WAV media, publishes atomically, and aligns asynchronously
+- **Storage**: Cloudflare R2 stores uploaded documents and private Audio Overview artifacts
+- **Deploy**: Cloudflare Pages with `nitro.preset = 'cloudflare_pages'`
 
 ## Repository Structure
 
-Single monolith with Nuxt 4 conventions: `app/` for frontend (pages, composables, components), `server/` for API routes and utilities, `convex/` for backend-as-a-service schema and functions.
+Single monolith following Nuxt 4 conventions:
 
-## Documentation Map
-
-For detailed information, see:
-
-- [index.md](./index.md) - Master documentation index
-- [architecture.md](./architecture.md) - Detailed architecture
-- [source-tree-analysis.md](./source-tree-analysis.md) - Directory structure
-- [development-guide.md](./development-guide.md) - Development workflow
-- [api-contracts.md](./api-contracts.md) - API endpoints and schemas
-- [data-models.md](./data-models.md) - Database schema and models
-
----
-
-_Generated using BMAD Method `document-project` workflow_
+- `app/` - Frontend (pages, components, composables, layouts, plugins, constants)
+- `server/` - Nitro server (API routes, middleware, utilities)
+- `convex/` - Convex backend (schema, queries, mutations, actions, crons)
+- `workers/audio-overview/` - Production Audio Overview Workflow, Gemini adapter, quality gate, WAV assembly, and private R2 artifact handling
+- `infra/` - Legacy/evaluation infrastructure; it is not the production Audio Overview renderer
+- `tests/` - Component and integration tests
+- `scripts/` - Build and validation scripts
+- `docs/` - Project documentation

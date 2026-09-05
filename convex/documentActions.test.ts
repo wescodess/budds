@@ -65,6 +65,8 @@ async function setupIndexingDocument(
 ) {
   const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Index verification folder' })
   const r2Key = `auth.example.com_user_123/${folderId}/zero-vector.pdf`
+  const contentHash = 'a'.repeat(64)
+  const sourceRevision = `sha256:${contentHash}`
   const documentId = await t.run(async (ctx) => await ctx.db.insert('documents', {
     userId: TEST_IDENTITY.tokenIdentifier,
     folderId,
@@ -75,8 +77,10 @@ async function setupIndexingDocument(
     mimeType: 'application/pdf',
     indexJobId: 'job-zero-vector',
     r2Key,
+    contentHash,
+    sourceRevision,
   }))
-  return { folderId, r2Key, documentId }
+  return { folderId, r2Key, documentId, contentHash, sourceRevision }
 }
 
 function completedJobResponse() {
@@ -446,7 +450,7 @@ describe('documentActions.pollIndexingStatus', () => {
   test('[P0] verification retries read the item directly instead of re-fetching the completed job', async () => {
     const t = convexTest(schema, modules)
     const asUser = t.withIdentity(TEST_IDENTITY)
-    const { folderId, r2Key, documentId } = await setupIndexingDocument(t, asUser)
+    const { folderId, r2Key, documentId, contentHash, sourceRevision } = await setupIndexingDocument(t, asUser)
     vi.mocked(globalThis.fetch).mockResolvedValueOnce({
       ok: true,
       json: () => Promise.resolve({
@@ -460,6 +464,8 @@ describe('documentActions.pollIndexingStatus', () => {
             userid: TEST_IDENTITY.tokenIdentifier,
             folderid: String(folderId),
             documentid: String(documentId),
+            contenthash: contentHash,
+            sourcerevision: sourceRevision,
           },
         }],
       }),

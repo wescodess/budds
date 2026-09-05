@@ -2,6 +2,7 @@ import { v } from 'convex/values'
 import { mutation, query, internalMutation } from './_generated/server'
 import type { Id, Doc } from './_generated/dataModel'
 import type { MutationCtx, QueryCtx } from './_generated/server'
+import { getOptionalAuthUserId, requireAuth } from './lib/auth'
 
 const sourceInput = v.optional(
   v.object({
@@ -21,9 +22,7 @@ type RoomDoc = Doc<'flashcardRooms'>
 type RoomCardDoc = Doc<'flashcardRoomCards'>
 
 async function requireIdentity(ctx: QueryCtx | MutationCtx) {
-  const identity = await ctx.auth.getUserIdentity()
-  if (!identity) throw new Error('Unauthenticated')
-  return identity.tokenIdentifier
+  return await requireAuth(ctx)
 }
 
 async function requireOwnedRoom(
@@ -278,10 +277,8 @@ export const renameRoom = mutation({
 export const listRoomsByFolder = query({
   args: { folderId: v.id('folders') },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return []
-
-    const userId = identity.tokenIdentifier
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return []
     const folder = await ctx.db.get(args.folderId)
     if (!folder || folder.userId !== userId) return []
 
@@ -311,10 +308,8 @@ export const listRoomsByFolder = query({
 export const getRoom = query({
   args: { roomId: v.id('flashcardRooms') },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return null
-
-    const userId = identity.tokenIdentifier
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return null
     const room = await ctx.db.get(args.roomId)
     if (!room || room.userId !== userId) return null
 
@@ -573,10 +568,8 @@ export const generateRoomCards = mutation({
 export const listRoomVersions = query({
   args: { roomId: v.id('flashcardRooms') },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return []
-
-    const userId = identity.tokenIdentifier
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return []
     const room = await ctx.db.get(args.roomId)
     if (!room || room.userId !== userId) return []
 
@@ -604,10 +597,8 @@ export const getRoomVersion = query({
   handler: async (ctx, args) => {
     if (!args.versionId) return null
 
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return null
-
-    const userId = identity.tokenIdentifier
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return null
     const version = await ctx.db.get(args.versionId)
     if (!version || version.userId !== userId) return null
 

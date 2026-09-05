@@ -3,12 +3,14 @@ import { Plus, X } from 'lucide-vue-next'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 
+type QuestionType = 'multiple-choice' | 'free-response' | 'true_false' | 'fill_in_the_blank'
+
 const props = defineProps<{
   open: boolean
   quizId: Id<'quizzes'>
   editQuestion?: {
     _id: Id<'quizQuestions'>
-    type: string
+    type: QuestionType
     question: string
     options?: string[]
     correctAnswer: string
@@ -29,7 +31,7 @@ const updateMutation = import.meta.client
   ? useConvexMutation(api.quizzes.updateQuestion)
   : { mutate: async (_args: unknown): Promise<any> => null, isLoading: ref(false) }
 
-const questionType = ref<string>('multiple-choice')
+const questionType = ref<QuestionType>('multiple-choice')
 const questionText = ref('')
 const options = ref<string[]>(['', '', '', ''])
 const correctAnswer = ref('')

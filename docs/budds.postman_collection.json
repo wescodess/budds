@@ -1,0 +1,491 @@
+{
+  "info": {
+    "name": "Budds API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "API collection for the Budds study companion application. Covers Nitro server routes and Convex auth HTTP routes."
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:3002",
+      "type": "string"
+    },
+    {
+      "key": "convex_url",
+      "value": "",
+      "type": "string",
+      "description": "Convex deployment HTTP URL (CONVEX_SITE_URL)"
+    },
+    {
+      "key": "auth_token",
+      "value": "",
+      "type": "string",
+      "description": "Convex JWT token obtained from /api/auth/convex/token"
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{auth_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Auth token is passed via cookies (session-based).",
+          "// The convex-token middleware on the server extracts the JWT from the session cookie.",
+          "// For Postman, you can set the session cookie manually after authenticating via browser,",
+          "// or use the /api/auth/convex/token endpoint to retrieve a token."
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "description": "Better Auth routes proxied through Nitro to Convex HTTP actions.",
+      "item": [
+        {
+          "name": "Google OAuth - Sign In",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"provider\": \"google\",\n  \"callbackURL\": \"/app\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/sign-in/social",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "sign-in", "social"]
+            },
+            "description": "Initiates Google OAuth sign-in. Returns a redirect URL to Google's consent screen. The callbackURL determines where the user lands after successful auth."
+          }
+        },
+        {
+          "name": "Get Session",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/auth/get-session",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "get-session"]
+            },
+            "description": "Returns the current session and user data. Requires a valid session cookie."
+          }
+        },
+        {
+          "name": "Get Convex Token",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/auth/convex/token",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "convex", "token"]
+            },
+            "description": "Exchanges the session cookie for a short-lived Convex JWT. Used by the client-side Convex auth plugin and the SSR convex-token middleware."
+          }
+        },
+        {
+          "name": "Sign Out",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/auth/sign-out",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "sign-out"]
+            },
+            "description": "Ends the current session and clears the session cookie."
+          }
+        },
+        {
+          "name": "Delete User",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/auth/delete-user",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "delete-user"]
+            },
+            "description": "Permanently deletes the authenticated user's account and all associated data. Triggers the beforeDelete hook which calls accountDeletion.deleteCurrentUser."
+          }
+        }
+      ]
+    },
+    {
+      "name": "RAG",
+      "description": "Retrieval-Augmented Generation endpoints for document-based Q&A.",
+      "item": [
+        {
+          "name": "RAG Chat",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"What are the key takeaways?\",\n  \"model\": \"@cf/meta/llama-3.1-8b-instruct\",\n  \"folderId\": \"<folder_id>\",\n  \"history\": [],\n  \"max_num_results\": 50,\n  \"score_threshold\": 0.05,\n  \"temperature\": 0.7,\n  \"max_tokens\": 1024,\n  \"stream\": false,\n  \"scope\": {\n    \"folderIds\": [],\n    \"fileIds\": []\n  }\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/rag/chat",
+              "host": ["{{base_url}}"],
+              "path": ["api", "rag", "chat"]
+            },
+            "description": "Chat with documents using RAG. Searches indexed content, builds context, and generates an AI response. Supports streaming (SSE) and non-streaming modes. When stream=true, response is SSE with events: model-fallback, sources, and data chunks.\n\nNon-streaming response shape:\n{\n  \"answer\": \"string\",\n  \"model\": \"string\",\n  \"usage\": { ... },\n  \"sources\": [{ \"content\": \"...\", \"score\": 0.9, \"attributes\": { ... } }],\n  \"modelFallback\": { \"requested\": \"...\", \"actual\": \"...\" }\n}\n\nRate limit: 20 requests per window."
+          }
+        },
+        {
+          "name": "RAG Search",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"machine learning basics\",\n  \"folderId\": \"<folder_id>\",\n  \"max_num_results\": 10,\n  \"score_threshold\": 0.1\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/rag/search",
+              "host": ["{{base_url}}"],
+              "path": ["api", "rag", "search"]
+            },
+            "description": "Searches indexed documents and returns matching chunks with scores and metadata. Does not generate an AI completion."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Chat",
+      "description": "General-purpose AI chat (not document-scoped).",
+      "item": [
+        {
+          "name": "General Chat",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"Explain the concept of spaced repetition.\",\n  \"model\": \"@cf/meta/llama-3.1-8b-instruct\",\n  \"history\": [],\n  \"temperature\": 0.7,\n  \"max_tokens\": 1024\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/chat/general",
+              "host": ["{{base_url}}"],
+              "path": ["api", "chat", "general"]
+            },
+            "description": "General chat with the Budds study companion. No document context; uses LLM knowledge only.\n\nResponse:\n{\n  \"answer\": \"string\",\n  \"model\": \"string\",\n  \"usage\": { ... },\n  \"modelFallback\": { \"requested\": \"...\", \"actual\": \"...\" }\n}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Course",
+      "description": "AI course generation (outline and section content).",
+      "item": [
+        {
+          "name": "Generate Course Outline",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"courseId\": \"<course_id>\",\n  \"taskId\": \"<task_id>\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/course/generate-outline",
+              "host": ["{{base_url}}"],
+              "path": ["api", "course", "generate-outline"]
+            },
+            "description": "Generates a course outline from source documents or web content. Creates sections with titles, descriptions, knowledge types, and ordering. Persists results to Convex.\n\nResponse:\n{\n  \"courseId\": \"string\",\n  \"sectionCount\": 5,\n  \"sections\": [{ \"title\": \"...\", \"knowledgeType\": \"factual|conceptual|procedural\" }]\n}\n\nRate limit: 3 requests per window."
+          }
+        },
+        {
+          "name": "Generate Course Section",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"courseId\": \"<course_id>\",\n  \"sectionId\": \"<section_id>\",\n  \"taskId\": \"<task_id>\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/course/generate-section",
+              "host": ["{{base_url}}"],
+              "path": ["api", "course", "generate-section"]
+            },
+            "description": "Generates full section content: text explanation, quiz questions, flashcards, and optionally an audio primer. Runs all engines in parallel. Persists to Convex.\n\nResponse:\n{\n  \"sectionId\": \"string\",\n  \"status\": \"ready\",\n  \"blockCount\": 3,\n  \"failedEngines\": []\n}\n\nRate limit: 5 requests per window."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Flashcards",
+      "description": "AI flashcard generation from indexed documents.",
+      "item": [
+        {
+          "name": "Generate Flashcards",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"folderId\": \"<folder_id>\",\n  \"model\": \"@cf/meta/llama-3.1-8b-instruct\",\n  \"cardCount\": 12,\n  \"taskId\": \"<task_id>\",\n  \"roomId\": \"<flashcard_room_id>\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/flashcards/generate",
+              "host": ["{{base_url}}"],
+              "path": ["api", "flashcards", "generate"]
+            },
+            "description": "Generates flashcards from folder documents. cardCount is clamped to 6-16. When taskId and roomId are provided, persists cards to the flashcard room via Convex.\n\nResponse:\n{\n  \"title\": \"string\",\n  \"model\": \"string\",\n  \"cards\": [{ \"order\": 0, \"front\": \"...\", \"back\": \"...\", \"sourceDocumentId\": \"...\", \"sourceChunkContent\": \"...\", \"sourceFilename\": \"...\" }],\n  \"cardCount\": 12,\n  \"taskId\": \"string\",\n  \"roomId\": \"string\",\n  \"versionId\": \"string\"\n}\n\nRate limit: 5 requests per window."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Quiz",
+      "description": "AI quiz generation and topic extraction.",
+      "item": [
+        {
+          "name": "Generate Quiz",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"folderId\": \"<folder_id>\",\n  \"model\": \"@cf/meta/llama-3.1-8b-instruct\",\n  \"questionCount\": 8,\n  \"topics\": [\"neural networks\", \"backpropagation\"],\n  \"questionTypes\": [\"multiple-choice\", \"true_false\"],\n  \"difficulty\": \"medium\",\n  \"resourceIds\": [],\n  \"taskId\": \"<task_id>\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/quiz/generate",
+              "host": ["{{base_url}}"],
+              "path": ["api", "quiz", "generate"]
+            },
+            "description": "Generates a quiz from folder documents. questionCount clamped to 3-50. When taskId is provided, persists the quiz to Convex.\n\nResponse:\n{\n  \"title\": \"string\",\n  \"model\": \"string\",\n  \"questions\": [{ \"order\": 0, \"question\": \"...\", \"type\": \"multiple-choice\", \"options\": [...], \"correctAnswer\": \"...\", \"explanation\": \"...\", \"sourceDocumentId\": \"...\", \"sourceChunkContent\": \"...\", \"sourceFilename\": \"...\" }],\n  \"questionCount\": 8,\n  \"taskId\": \"string\",\n  \"quizId\": \"string\"\n}\n\nRate limit: 5 requests per window."
+          }
+        },
+        {
+          "name": "Extract Quiz Topics",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"folderId\": \"<folder_id>\",\n  \"resourceIds\": []\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/quiz/topics",
+              "host": ["{{base_url}}"],
+              "path": ["api", "quiz", "topics"]
+            },
+            "description": "Extracts 6-10 key topics from folder documents for quiz generation.\n\nResponse:\n{\n  \"topics\": [\"Machine Learning Basics\", \"Neural Network Architecture\", ...]\n}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Audio Overview",
+      "description": "AI-generated audio overviews (two-host dialogue) with TTS synthesis.",
+      "item": [
+        {
+          "name": "Generate Audio Overview",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"folderId\": \"<folder_id>\",\n  \"taskId\": \"<task_id>\",\n  \"model\": \"google/gemini-2.5-flash\",\n  \"preferences\": {\n    \"lengthMinutes\": 10,\n    \"complexity\": \"beginner\"\n  },\n  \"voiceProfile\": {\n    \"hostA\": \"asteria\",\n    \"hostB\": \"orion\"\n  },\n  \"scopeDocIds\": []\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/audio-overview/generate",
+              "host": ["{{base_url}}"],
+              "path": ["api", "audio-overview", "generate"]
+            },
+            "description": "Generates a two-host audio dialogue from document content. Writes an LLM script, synthesizes each turn via TTS (Aura or Dia engine), uploads audio blobs to Convex storage, and creates an audioOverview entity.\n\nResponse:\n{\n  \"title\": \"string\",\n  \"model\": \"string\",\n  \"turnCount\": 12,\n  \"totalDurationMs\": 120000,\n  \"taskId\": \"string\",\n  \"overviewId\": \"string\"\n}\n\nRate limit: 5 requests per window."
+          }
+        },
+        {
+          "name": "Interject into Audio Overview",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"overviewId\": \"<audio_overview_id>\",\n  \"insertedAfterTurnIndex\": 3,\n  \"question\": \"Can you explain that concept in simpler terms?\",\n  \"model\": \"google/gemini-2.5-flash\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/audio-overview/interject",
+              "host": ["{{base_url}}"],
+              "path": ["api", "audio-overview", "interject"]
+            },
+            "description": "Injects a user question into an existing audio overview. Generates additional dialogue turns that answer the question, synthesizes audio, and persists as an interjection entity.\n\nResponse:\n{\n  \"interjectionId\": \"string\",\n  \"insertedAfterTurnIndex\": 3,\n  \"answerTurnCount\": 4,\n  \"turns\": [{ \"speaker\": \"host_a\", \"text\": \"...\", \"durationMs\": 5000, \"audioUrl\": \"...\" }],\n  \"totalDurationMs\": 20000,\n  \"model\": \"string\"\n}\n\nRate limit: 10 requests per window."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Calendar",
+      "description": "Google Calendar integration for study session scheduling.",
+      "item": [
+        {
+          "name": "Connect Calendar",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/calendar/connect",
+              "host": ["{{base_url}}"],
+              "path": ["api", "calendar", "connect"]
+            },
+            "description": "Initiates Google Calendar OAuth. Sets a CSRF state cookie and redirects to Google's consent screen requesting calendar.events and openid scopes."
+          }
+        },
+        {
+          "name": "Calendar OAuth Callback",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/calendar/callback?code=<auth_code>&state=<csrf_state>",
+              "host": ["{{base_url}}"],
+              "path": ["api", "calendar", "callback"],
+              "query": [
+                { "key": "code", "value": "<auth_code>" },
+                { "key": "state", "value": "<csrf_state>" }
+              ]
+            },
+            "description": "Handles Google Calendar OAuth callback. Validates CSRF state, exchanges code for tokens, detects user timezone, stores encrypted tokens in Convex, and redirects to /app/learn?calendar_connected=true."
+          }
+        },
+        {
+          "name": "Disconnect Calendar",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/calendar/disconnect",
+              "host": ["{{base_url}}"],
+              "path": ["api", "calendar", "disconnect"]
+            },
+            "description": "Disconnects Google Calendar. Deletes all synced Google Calendar events, then removes the Convex connection record.\n\nResponse:\n{\n  \"disconnected\": true,\n  \"googleEventsDeleted\": 3,\n  \"googleEventsFailed\": 0\n}\n\nRate limit: 3 requests per window."
+          }
+        },
+        {
+          "name": "Sync Calendar",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/calendar/sync",
+              "host": ["{{base_url}}"],
+              "path": ["api", "calendar", "sync"]
+            },
+            "description": "Syncs study sessions to Google Calendar. Creates calendar events for active courses that don't already have scheduled events. Uses user preferences for scheduling (preferred days, morning start, session length).\n\nResponse:\n{\n  \"created\": 2,\n  \"events\": [{ \"courseId\": \"...\", \"eventId\": \"...\", \"sessionType\": \"new_content\" }]\n}\n\nRate limit: 3 requests per window."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Learn",
+      "description": "Learn module supporting endpoints.",
+      "item": [
+        {
+          "name": "Section Cache Payload",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/learn/section-cache-payload?sectionId=<section_id>",
+              "host": ["{{base_url}}"],
+              "path": ["api", "learn", "section-cache-payload"],
+              "query": [
+                { "key": "sectionId", "value": "<section_id>" }
+              ]
+            },
+            "description": "Returns the offline cache payload for a course section. Used for PWA offline support."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Export",
+      "description": "User data export.",
+      "item": [
+        {
+          "name": "Export My Data",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/export/me",
+              "host": ["{{base_url}}"],
+              "path": ["api", "export", "me"]
+            },
+            "description": "Exports all user data as a streaming ZIP file. Includes folders, documents (JSON + PDF files), conversations, messages, quizzes, flashcards, courses, and a manifest. Requires Convex auth token.\n\nResponse: application/zip stream with Content-Disposition header."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Debug",
+      "description": "Development/debug endpoints (not for production use).",
+      "item": [
+        {
+          "name": "Test R2 Connection",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"<user_id>\",\n  \"folderId\": \"<folder_id>\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/debug/testR2",
+              "host": ["{{base_url}}"],
+              "path": ["api", "debug", "testR2"]
+            },
+            "description": "Tests R2 storage connectivity by attempting to fetch folder documents. Returns R2 config status and document keys.\n\nResponse:\n{\n  \"configStatus\": { \"r2Endpoint\": true, ... },\n  \"success\": true,\n  \"count\": 5,\n  \"docs\": [\"key1\", \"key2\"]\n}"
+          }
+        }
+      ]
+    }
+  ]
+}

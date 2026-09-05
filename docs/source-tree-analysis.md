@@ -1,176 +1,233 @@
 # Budds - Source Tree Analysis
 
-**Date:** 2026-04-08
+**Date:** 2026-04-24
 
-## Overview
-
-Budds follows Nuxt 4 conventions with a clear separation between frontend (`app/`), server-side logic (`server/`), and backend-as-a-service (`convex/`). The project is a single monolith with no workspace or monorepo structure.
-
-## Complete Directory Structure
+## Directory Structure
 
 ```
 budds/
-├── app/                        # Frontend application (Nuxt 4 app directory)
-│   ├── app.vue                 # Root Vue component (renders NuxtPage)
-│   ├── auth.config.ts          # Client-side auth configuration
+├── app/                                # Nuxt 4 frontend application
+│   ├── app.vue                         # Root Vue component
 │   ├── assets/
 │   │   └── css/
-│   │       └── tailwind.css    # Global styles, CSS variables, dark/light theme tokens
+│   │       └── tailwind.css            # Global styles, theme tokens, CSS variables
+│   ├── components/
+│   │   ├── audio-overview/             # Audio overview player and generation UI
+│   │   ├── chat/                       # Chat message list, input, model selector
+│   │   ├── dashboard/                  # Dashboard widgets and layout
+│   │   ├── documents/                  # Document list, import, viewer
+│   │   ├── flashcards/                 # Flashcard room, card flip, mastery UI
+│   │   ├── folder-shell/               # Folder page shell and navigation
+│   │   ├── folders/                    # Folder grid, create/edit dialogs
+│   │   ├── global/                     # Globally registered components
+│   │   ├── learn/                      # Course viewer, section navigation
+│   │   ├── mobile/                     # Mobile-specific layout components
+│   │   ├── quiz/                       # Quiz flow, questions, results
+│   │   ├── sidebar/                    # App sidebar navigation
+│   │   ├── ui/                         # 60+ shadcn-vue primitives (button, dialog, card, etc.)
+│   │   └── voids/                      # Empty state / void section components
 │   ├── composables/
-│   │   └── useRag.ts           # RAG chat composable (messages, search, chat methods)
+│   │   ├── useAppTheme.ts              # Theme management
+│   │   ├── useAudioOverviewDownload.ts # Audio file download logic
+│   │   ├── useAudioOverviewStore.ts    # Audio overview state management
+│   │   ├── useChat.ts                  # Folder-scoped RAG chat
+│   │   ├── useDocuments.ts             # Document CRUD operations
+│   │   ├── useFlashcardRooms.ts        # Flashcard room management
+│   │   ├── useFolderLayout.ts          # Folder page layout state
+│   │   ├── useFolderPageContext.ts     # Current folder context provider
+│   │   ├── useFolderReferenceScope.ts  # Folder-scoped reference context
+│   │   ├── useFolders.ts              # Folder CRUD operations
+│   │   ├── useGeneralChat.ts           # General (non-folder) chat
+│   │   ├── useGestureGuards.ts         # Touch gesture conflict resolution
+│   │   ├── useHelperPane.ts            # Helper side pane state
+│   │   ├── useHorizontalSwipeGesture.ts # Swipe gesture handler
+│   │   ├── useMobileKeyboardInset.ts   # Mobile keyboard offset
+│   │   ├── useMotionPresets.ts         # Animation preset definitions
+│   │   ├── useOfflineAttempts.ts       # Offline quiz attempt storage
+│   │   ├── useOfflineCache.ts          # Offline data caching
+│   │   ├── useOfflineSync.ts           # Offline-to-online sync
+│   │   ├── useOnlineStatus.ts          # Network status detection
+│   │   ├── usePreFetchSection.ts       # Course section pre-fetching
+│   │   ├── useQuizAttempt.ts           # Active quiz attempt state
+│   │   ├── useQuizFlow.ts             # Quiz navigation flow
+│   │   ├── useQuizGeneration.ts        # Quiz AI generation
+│   │   ├── useQuizHistory.ts           # Quiz attempt history
+│   │   ├── useQuizzes.ts              # Quiz CRUD operations
+│   │   ├── useRag.ts                   # RAG search and retrieval
+│   │   ├── useReferenceScope.ts        # Reference scope management
+│   │   ├── useSwipeReveal.ts           # Swipe-to-reveal gesture
+│   │   ├── useTasks.ts                # Task management
+│   │   └── useTimezoneSync.ts          # Timezone synchronization
+│   ├── constants/
+│   │   └── models.ts                   # LLM model definitions
+│   ├── layouts/
+│   │   ├── default.vue                 # Default app layout
+│   │   └── folder.vue                  # Folder page layout with sidebar
 │   ├── lib/
-│   │   └── utils.ts            # Utility: cn() class name merger (clsx + twMerge)
-│   └── pages/
-│       ├── index.vue           # Home/welcome page
-│       ├── login.vue           # Google OAuth login page (guest-only)
-│       └── app/
-│           └── chat.vue        # RAG chat interface (authenticated)
-├── server/                     # Server-side (Nitro)
-│   ├── tsconfig.json           # Server TypeScript config
-│   ├── auth.config.ts          # Better Auth config (SQLite + Google OAuth)
+│   │   └── utils.ts                    # cn() class name merger (clsx + twMerge)
+│   ├── pages/
+│   │   ├── index.vue                   # Landing / home page
+│   │   ├── login.vue                   # Google OAuth login (guest-only)
+│   │   ├── chat.vue                    # General chat page
+│   │   ├── privacy.vue                 # Privacy policy
+│   │   ├── terms.vue                   # Terms of service
+│   │   ├── audio/
+│   │   │   └── [token].vue             # Public audio overview player
+│   │   └── app/
+│   │       ├── index.vue               # App dashboard
+│   │       ├── chat.vue                # General chat (authenticated)
+│   │       ├── folders/
+│   │       │   ├── [id].vue            # Folder detail page
+│   │       │   └── [id]/               # Nested folder routes
+│   │       └── learn/
+│   │           └── review.vue          # Learn course review page
+│   └── plugins/
+│       ├── auth-redirect.client.ts     # Auth redirect handler
+│       ├── convex-auth.client.ts       # Convex auth token sync
+│       ├── motion.client.ts            # Motion animation setup (client)
+│       ├── motion.server.ts            # Motion animation setup (server)
+│       └── pwa.client.ts              # PWA service worker registration
+├── server/                             # Nitro server
+│   ├── auth.config.ts                  # Better Auth server config
+│   ├── tsconfig.json                   # Server TypeScript config
 │   ├── api/
-│   │   └── rag/
-│   │       ├── chat.post.ts    # POST /api/rag/chat - RAG chat endpoint
-│   │       └── search.post.ts  # POST /api/rag/search - Document search endpoint
+│   │   ├── audio-overview/             # Audio generation and retrieval endpoints
+│   │   ├── calendar/                   # Google Calendar sync endpoints
+│   │   ├── chat/                       # Chat streaming endpoints
+│   │   ├── course/                     # Course generation endpoints
+│   │   ├── debug/                      # Debug/diagnostic endpoints
+│   │   ├── export/                     # Data export endpoints
+│   │   ├── flashcards/                 # Flashcard generation endpoints
+│   │   ├── learn/                      # Learn section generation endpoints
+│   │   ├── quiz/                       # Quiz generation endpoints
+│   │   └── rag/                        # RAG search endpoints
+│   ├── middleware/
+│   │   ├── auth-proxy.ts               # Auth request proxy to Convex
+│   │   └── convex-token.ts             # SSR Convex JWT token fetcher
 │   └── utils/
-│       ├── ai-gateway.ts       # Cloudflare AI Gateway wrapper (LLM completions)
-│       └── ai-search.ts        # Cloudflare AI Search wrapper (document retrieval)
-├── convex/                     # Convex backend-as-a-service
-│   ├── convex.config.ts        # Convex app configuration
-│   ├── schema.ts               # Database schema (currently empty)
-│   └── _generated/             # Auto-generated Convex types and client
-├── data/
-│   └── auth.db                 # SQLite database for auth sessions/users
-├── nuxt.config.ts              # Main Nuxt configuration
-├── package.json                # Dependencies and scripts
-├── pnpm-lock.yaml              # Lockfile
-├── tsconfig.json               # Root TypeScript config (extends .nuxt/tsconfig)
-├── components.json             # shadcn-vue component configuration
-├── .env                        # Environment variables (secrets, API keys)
-├── .env.local                  # Local Convex deployment overrides
-├── .gitignore                  # Git ignore rules
-├── .nuxtrc                     # Nuxt runtime configuration
-├── CLAUDE.md                   # AI assistant project instructions
-└── AGENTS.md                   # AI agent instructions
+│       ├── ai-gateway.ts               # Cloudflare AI Gateway wrapper
+│       ├── ai-search.ts                # Cloudflare AI Search wrapper
+│       ├── audio-primer-prompt.ts      # Audio overview primer prompt
+│       ├── audio-script-prompt.ts      # Audio dialogue script prompt
+│       ├── calendar-tokens.ts          # Calendar OAuth token management
+│       ├── convex-client.ts            # Server-side Convex client
+│       ├── convex-identity.ts          # Convex identity helpers
+│       ├── convex-site-url.ts          # Convex site URL resolver
+│       ├── flashcard-prompt.ts         # Flashcard generation prompt
+│       ├── google-calendar.ts          # Google Calendar API client
+│       ├── google-constants.ts         # Google API constants
+│       ├── interjection-prompt.ts      # Audio interjection prompt
+│       ├── models.ts                   # Server-side model config
+│       ├── normalize-assistant-citations.ts # Citation normalization
+│       ├── outline-prompt.ts           # Course outline prompt
+│       ├── quiz-prompt.ts             # Quiz generation prompt
+│       ├── r2-folder.ts               # R2 folder path helpers
+│       ├── rate-limit.ts              # Request rate limiting
+│       ├── runtime-config.ts           # Runtime config helpers
+│       ├── section-text-prompt.ts      # Course section text prompt
+│       ├── session-composition.ts      # Auth session composition
+│       ├── tts-dia.ts                 # Dia TTS integration
+│       ├── tts-provider.ts            # TTS provider abstraction
+│       └── tts-workers-ai.ts          # Workers AI TTS integration
+├── convex/                             # Convex backend
+│   ├── schema.ts                       # Database schema (all tables)
+│   ├── convex.config.ts                # Convex app config
+│   ├── auth.ts                         # Better Auth Convex integration
+│   ├── auth.config.ts                  # Auth provider config
+│   ├── http.ts                         # Convex HTTP action routes
+│   ├── crons.ts                        # Scheduled background jobs
+│   ├── migrations.ts                   # Data migration functions
+│   ├── folders.ts                      # Folder queries/mutations
+│   ├── documents.ts                    # Document queries/mutations
+│   ├── documentActions.ts              # Document import/processing actions
+│   ├── documentImports.ts              # Document import mutations
+│   ├── conversations.ts               # Chat conversation queries/mutations
+│   ├── messages.ts                     # Chat message queries/mutations
+│   ├── flashcardRooms.ts              # Flashcard room queries/mutations
+│   ├── quizzes.ts                     # Quiz queries/mutations
+│   ├── audioOverviews.ts              # Audio overview queries/mutations
+│   ├── audioOverviewInterjections.ts  # Audio interjection queries/mutations
+│   ├── courses.ts                     # Course queries/mutations
+│   ├── courseSections.ts             # Course section queries/mutations
+│   ├── courseSourceDocs.ts            # Course source document linking
+│   ├── calendarConnections.ts         # Calendar connection management
+│   ├── calendarEvents.ts             # Calendar event queries/mutations
+│   ├── contentFlags.ts               # Content flagging system
+│   ├── reviewItems.ts                # Spaced repetition review items
+│   ├── tasks.ts                      # Task management
+│   ├── users.ts                      # User queries/mutations
+│   ├── learnProfile.ts              # Learning profile data
+│   ├── sourceExtractors.ts          # URL content extraction
+│   ├── dataExport.ts                # Data export functions
+│   ├── accountDeletion.ts           # Account deletion logic
+│   ├── archiveMultiChat.ts          # Multi-chat archive
+│   ├── folderIcons.ts               # Folder icon definitions
+│   ├── folderPalette.ts             # Folder color palette definitions
+│   ├── debugQuery.ts                # Debug utilities
+│   ├── lib/
+│   │   ├── auth.ts                  # Auth helper utilities
+│   │   ├── dates.ts                 # Date utilities
+│   │   ├── masteryStateMachine.ts   # Flashcard mastery state machine
+│   │   ├── sm2.ts                   # SM-2 spaced repetition algorithm
+│   │   └── streak.ts               # Learning streak tracking
+│   └── _generated/                  # Auto-generated Convex types and client
+├── infra/                           # Infrastructure
+│   ├── cloud-functions/
+│   │   ├── start-dia/               # Cloud function to start Dia TTS server
+│   │   └── stop-dia-idle/           # Cloud function to stop idle Dia server
+│   └── dia-server/                  # Dia TTS server configuration
+├── tests/                           # Test suites
+│   ├── component/                   # Vue component tests
+│   │   ├── app-shell/
+│   │   ├── audio-overview/
+│   │   ├── chat/
+│   │   ├── composables/
+│   │   ├── dashboard/
+│   │   ├── documents/
+│   │   ├── flashcards/
+│   │   ├── folder-shell/
+│   │   ├── folders/
+│   │   ├── learn/
+│   │   ├── quiz/
+│   │   ├── sidebar/
+│   │   └── voids/
+│   └── support/
+│       └── factories/               # Test data factories
+├── scripts/
+│   └── validate-env.mjs             # Build-time environment validation
+├── public/
+│   ├── icons/                       # App icons
+│   ├── manifest.webmanifest         # PWA manifest
+│   ├── offline.html                 # Offline fallback page
+│   └── sw.js                        # Service worker
+├── docs/                            # Project documentation
+├── data/                            # Runtime data (gitignored)
+├── patches/
+│   └── nuxt-convex@0.0.6.patch     # Patched nuxt-convex module
+├── nuxt.config.ts                   # Main Nuxt configuration
+├── package.json                     # Dependencies and scripts
+├── tsconfig.json                    # Root TypeScript config
+├── components.json                  # shadcn-vue component config
+└── CLAUDE.md                        # AI assistant project instructions
 ```
-
-## Critical Directories
-
-### `app/`
-
-Nuxt 4 application directory containing all frontend code.
-
-**Purpose:** Houses Vue pages, composables, styling, and client-side utilities
-**Contains:** 3 pages, 1 composable, 1 utility library, global CSS
-**Entry Points:** `app.vue` (root component)
-
-### `app/pages/`
-
-File-based routing following Nuxt conventions.
-
-**Purpose:** Define application routes and their corresponding Vue components
-**Contains:** 3 page components (index, login, app/chat)
-**Entry Points:** Each file maps to a route automatically
-
-### `app/composables/`
-
-Vue 3 composition API composables auto-imported by Nuxt.
-
-**Purpose:** Encapsulate reusable reactive logic
-**Contains:** `useRag.ts` - core RAG chat state and API methods
-
-### `server/api/rag/`
-
-Nitro server API routes for RAG functionality.
-
-**Purpose:** Handle AI chat and document search requests
-**Contains:** 2 POST endpoints (chat, search)
-**Integration:** Calls Cloudflare AI Gateway and AI Search via server utilities
-
-### `server/utils/`
-
-Server-side utility modules auto-imported by Nitro.
-
-**Purpose:** Wrapper functions for external AI services
-**Contains:** `ai-gateway.ts` (LLM completions), `ai-search.ts` (document search)
-**Integration:** Cloudflare AI Gateway, OpenRouter, Cloudflare AI Search
-
-### `convex/`
-
-Convex backend-as-a-service directory.
-
-**Purpose:** Define database schema, server functions, and backend logic
-**Contains:** Empty schema (ready for application data), auto-generated types
 
 ## Entry Points
 
-- **Main Entry:** `app/app.vue` (root Vue component)
-- **Additional:**
-  - `server/auth.config.ts`: Auth system bootstrap (Better Auth + SQLite)
-  - `nuxt.config.ts`: Application configuration and module registration
-  - `convex/convex.config.ts`: Convex backend configuration
+| Entry Point | Path | Purpose |
+|---|---|---|
+| Root Component | `app/app.vue` | Vue application root |
+| Nuxt Config | `nuxt.config.ts` | Application configuration, modules, runtime config |
+| Convex Schema | `convex/schema.ts` | Database table definitions |
+| Convex HTTP | `convex/http.ts` | HTTP action routes (auth endpoints) |
+| Auth Config | `server/auth.config.ts` | Better Auth server setup |
+| Service Worker | `public/sw.js` | PWA offline support |
 
-## File Organization Patterns
+## Key Patterns
 
-Budds follows standard Nuxt 4 file-based conventions:
-- **Pages** in `app/pages/` map directly to routes (`app/chat.vue` → `/app/chat`)
-- **Composables** in `app/composables/` are auto-imported globally
-- **Server routes** in `server/api/` follow `[method].ts` naming (`chat.post.ts` → `POST /api/rag/chat`)
-- **Server utilities** in `server/utils/` are auto-imported in server context
-- **Shared utilities** in `app/lib/` require explicit imports
-
-## Key File Types
-
-### Vue Single-File Components (`.vue`)
-
-- **Pattern:** `app/pages/**/*.vue`
-- **Purpose:** UI pages with template, script, and style sections
-- **Examples:** `login.vue`, `app/chat.vue`
-
-### TypeScript Server Routes (`.ts`)
-
-- **Pattern:** `server/api/**/*.{get,post,put,delete}.ts`
-- **Purpose:** Nitro API endpoints with HTTP method suffix
-- **Examples:** `chat.post.ts`, `search.post.ts`
-
-### TypeScript Composables (`.ts`)
-
-- **Pattern:** `app/composables/use*.ts`
-- **Purpose:** Reusable reactive logic following Vue 3 composition API
-- **Examples:** `useRag.ts`
-
-### Configuration Files (`.ts`, `.json`)
-
-- **Pattern:** `*.config.ts`, `*.json`
-- **Purpose:** Framework and tool configuration
-- **Examples:** `nuxt.config.ts`, `components.json`, `convex.config.ts`
-
-## Asset Locations
-
-- **CSS**: `app/assets/css/` (1 file - Tailwind CSS theme)
-- **Database**: `data/auth.db` (SQLite auth database, gitignored)
-
-## Configuration Files
-
-- **`nuxt.config.ts`**: Main app config - modules, runtime config, route rules, dev server port
-- **`package.json`**: Dependencies, scripts, pnpm config
-- **`tsconfig.json`**: TypeScript config (extends Nuxt-generated config)
-- **`components.json`**: shadcn-vue component style and path configuration
-- **`.nuxtrc`**: Nuxt runtime configuration overrides
-- **`server/tsconfig.json`**: Server-specific TypeScript settings
-- **`convex/tsconfig.json`**: Convex-specific TypeScript settings
-- **`convex/convex.config.ts`**: Convex application definition
-- **`server/auth.config.ts`**: Better Auth configuration (database, providers)
-- **`app/auth.config.ts`**: Client-side auth configuration
-
-## Notes for Development
-
-- The `data/` directory is gitignored and contains the SQLite auth database - it will be created automatically on first run
-- The `.nuxt/` directory is auto-generated by Nuxt and should not be edited manually
-- Convex `_generated/` directory is auto-generated by `npx convex dev` and should not be edited
-- All server utilities in `server/utils/` are auto-imported - no explicit import statements needed in API routes
-- All composables in `app/composables/` are auto-imported globally in Vue components
-
----
-
-_Generated using BMAD Method `document-project` workflow_
+- Pages in `app/pages/` map to routes via file-based routing
+- Composables in `app/composables/` are auto-imported globally in Vue components
+- Server utilities in `server/utils/` are auto-imported in server routes
+- Components in `app/components/global/` are registered globally
+- UI components use the `Ui` prefix (configured in shadcn config)
+- Convex functions co-locate with their test files (`*.test.ts` alongside `*.ts`)
+- Server API routes are organized by feature domain (chat, quiz, flashcards, etc.)

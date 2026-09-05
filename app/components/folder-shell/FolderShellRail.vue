@@ -18,6 +18,7 @@ import {
 import { onClickOutside } from '@vueuse/core'
 import { api } from '#convex/api'
 import type { Id, Doc } from '~~/convex/_generated/dataModel'
+import { clearOfflineData } from '~/composables/useOfflineCache'
 import { useHorizontalSwipeGesture } from '~/composables/useHorizontalSwipeGesture'
 import { PANEL_DISMISS_THRESHOLD_PX, useGestureGuards } from '~/composables/useGestureGuards'
 
@@ -189,6 +190,7 @@ const railInlineStyle = computed(() => {
 })
 
 async function onLogout() {
+  try { await clearOfflineData() } catch { /* another open tab may temporarily block IndexedDB deletion */ }
   try { await signOut() } catch { /* ignore */ }
 }
 

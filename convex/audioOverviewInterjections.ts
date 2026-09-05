@@ -3,7 +3,7 @@ import { internal } from './_generated/api'
 import { internalMutation, mutation, query } from './_generated/server'
 import type { Id } from './_generated/dataModel'
 import type { MutationCtx, QueryCtx } from './_generated/server'
-import { requireAuth } from './lib/auth'
+import { getOptionalAuthUserId, requireAuth } from './lib/auth'
 import {
   consumeVerifiedUploadClaims,
   releaseUploadOwnership,
@@ -19,6 +19,13 @@ const answerTurnValidator = v.object({
   uploadClaimId: v.id('audioOverviewUploadClaims'),
   durationMs: v.number(),
   sourceIndex: v.optional(v.number()),
+  wordTimings: v.optional(v.array(
+    v.object({
+      word: v.string(),
+      start: v.number(),
+      end: v.number(),
+    }),
+  )),
 })
 
 async function requireOwnedOverview(
@@ -110,9 +117,8 @@ export const create = mutation({
 export const listByOverview = query({
   args: { audioOverviewId: v.id('audioOverviews') },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return []
-    const userId = identity.tokenIdentifier
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return []
     const overview = await ctx.db.get(args.audioOverviewId)
     if (!overview || overview.userId !== userId) return []
 
@@ -129,9 +135,8 @@ export const listByOverview = query({
 export const getTurnUrls = query({
   args: { id: v.id('audioOverviewInterjections') },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return null
-    const userId = identity.tokenIdentifier
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return null
     const row = await ctx.db.get(args.id)
     if (!row || row.userId !== userId) return null
     const urls: (string | null)[] = []

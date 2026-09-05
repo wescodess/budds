@@ -1,27 +1,261 @@
 import { ConvexHttpClient } from 'convex/browser'
 import { api } from '../../../convex/_generated/api'
 import type { Id } from '../../../convex/_generated/dataModel'
-import type { AISearchChunk } from '../../utils/ai-search'
-import {
-  buildInterjectionPrompt,
-  parseInterjectionResponse,
-  capInterjectionTurns,
-  MIN_ANSWER_TURNS,
-} from '../../utils/interjection-prompt'
-import {
-  estimateTurnDurationMs,
-  sanitizeTurnForSpeech,
-  splitOversizedTurns,
-  type AudioScriptTurn,
-} from '../../utils/audio-script-prompt'
-import { isAuraVoice, type AuraVoice } from '../../utils/tts-workers-ai'
-import { resolveTtsEngine, synthesizeTurn, type TtsEngine } from '../../utils/tts-provider'
+import { interjectionUtteranceVerificationId } from '../../../shared/audio-overview-grounding'
 import { readConfiguredRuntimeValue } from '../../utils/runtime-config'
-import { uploadAudioOverviewBytes } from '../../utils/audio-overview-upload'
+import { buildV2InterjectionPrompt, parseV2InterjectionScript } from '../../utils/audio-overview-interjection'
+import {
+  buildClaimEntailmentPrompt,
+  CLAIM_ENTAILMENT_VERSION,
+  parseClaimEntailmentResponse,
+} from '../../utils/audio-overview-grounding'
+import {
+  assertPrivateInterjectionArtifact,
+  getAudioOverviewWorkerToken,
+  requestInterjectionWorker,
+} from '../../utils/audio-overview-interjection-worker'
 
 const SCRIPT_MODEL = 'google/gemini-2.5-flash'
 const MAX_SEARCH_RESULTS = 10
-const DEFAULT_HOSTS: { hostA: AuraVoice, hostB: AuraVoice } = { hostA: 'asteria', hostB: 'orion' }
+
+type V2Reservation = {
+  interjectionId: Id<'audioOverviewInterjectionsV2'>
+  duplicate: boolean
+  status: string
+  jobId: Id<'audioOverviewJobs'>
+  sources: Array<{
+    sourceId: string
+    documentId: Id<'documents'>
+    revision: string
+    contentHash: string
+    displayReference: string
+  }>
+}
+
+async function sha256Base64Url(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))
+  let binary = ''
+  for (const byte of new Uint8Array(digest)) binary += String.fromCharCode(byte)
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
+}
+
+function v2Response(interjection: any) {
+  const artifactUrl = `/api/audio-overview/interjections/${interjection._id}/media`
+  const durationMs = interjection.artifact?.durationMs ?? 0
+  return {
+    schemaVersion: 2 as const,
+    interjectionId: interjection._id,
+    insertedAfterTurnIndex: interjection.insertedAfterTurnIndex,
+    utterances: interjection.utterances,
+    artifactId: interjection.artifact?.artifactId,
+    artifactUrl,
+    totalDurationMs: durationMs,
+    model: interjection.model,
+    // Temporary compatibility projection: one combined WAV is played once.
+    // The normalized Utterances remain available above for a continuous-mode player.
+    turns: [{
+      speaker: 'host_a' as const,
+      text: interjection.utterances.map((utterance: any) => utterance.text).join(' '),
+      durationMs,
+      audioUrl: artifactUrl,
+    }],
+  }
+}
+
+async function runV2Interjection(
+  event: any,
+  convexClient: ConvexHttpClient,
+  userId: string,
+  overview: any,
+  body: { overviewId: string, insertedAfterTurnIndex: number, question: string },
+) {
+  const orchestrationToken = getAudioOverviewWorkerToken(event)
+  const suppliedKey = getRequestHeader(event, 'idempotency-key')?.trim()
+  const idempotencyKey = suppliedKey && /^[A-Za-z0-9_-]{16,128}$/.test(suppliedKey)
+    ? suppliedKey
+    : `interjection_${await sha256Base64Url(`${userId}\n${body.overviewId}\n${body.insertedAfterTurnIndex}\n${body.question}`)}`
+  const reservation = await convexClient.mutation(api.audioOverviewInterjectionsV2.reserve, {
+    audioOverviewId: body.overviewId as Id<'audioOverviews'>,
+    idempotencyKey,
+    insertedAfterTurnIndex: body.insertedAfterTurnIndex,
+    question: body.question,
+  }) as V2Reservation
+  if (reservation.status === 'cancelled' || reservation.status === 'deleting' || reservation.status === 'failed') {
+    throw createError({ statusCode: 409, message: 'Audio interjection generation is not available' })
+  }
+  if (reservation.status === 'ready') {
+    const existing = await convexClient.query(api.audioOverviewInterjectionsV2.getForOwner, { interjectionId: reservation.interjectionId })
+    if (!existing) throw createError({ statusCode: 404, message: 'Interjection not found' })
+    return v2Response(existing)
+  }
+
+  let ownsScripting = false
+  let workerAttempted = false
+  let workerCleanupAttempted = false
+  try {
+    const claim = await convexClient.mutation(api.audioOverviewInterjectionsV2.claimScripting, {
+      interjectionId: reservation.interjectionId,
+      orchestrationToken,
+    })
+    ownsScripting = claim.claimed
+    if (!claim.claimed) {
+      const current = await convexClient.query(api.audioOverviewInterjectionsV2.getForOwner, {
+        interjectionId: reservation.interjectionId,
+      })
+      if (current?.status === 'ready') return v2Response(current)
+      throw createError({ statusCode: 409, message: 'Audio interjection generation is already in progress' })
+    }
+    const allowedDocuments = reservation.sources.map(source => String(source.documentId))
+    const allowedSourceByDocument = new Map(reservation.sources.map(source => [String(source.documentId), source]))
+    const result = await searchDocuments({
+      query: body.question,
+      userId,
+      max_num_results: MAX_SEARCH_RESULTS,
+      score_threshold: 0.05,
+      filterDocIds: allowedDocuments,
+    })
+    const indexedChunks = result.data ?? []
+    let rejectedFrozenIdentity = false
+    const evidence = indexedChunks
+      .map((chunk) => {
+        const source = allowedSourceByDocument.get(chunk.attributes.documentId ?? '')
+        if (!source
+          || chunk.attributes.contentHash?.trim().toLowerCase() !== source.contentHash.trim().toLowerCase()
+          || chunk.attributes.sourceRevision?.trim() !== source.revision.trim()) {
+          rejectedFrozenIdentity = true
+          return null
+        }
+        return source && chunk.content.trim()
+          ? { sourceId: source.sourceId, displayReference: source.displayReference, content: chunk.content.trim().slice(0, 8_000) }
+          : null
+      })
+      .filter((source): source is NonNullable<typeof source> => source !== null)
+      .slice(0, MAX_SEARCH_RESULTS)
+    if (evidence.length === 0) {
+      throw createError({
+        statusCode: rejectedFrozenIdentity ? 503 : 422,
+        message: rejectedFrozenIdentity ? 'Search index unavailable' : 'Not enough context to answer',
+      })
+    }
+
+    const completion = await generateCompletion({
+      model: SCRIPT_MODEL,
+      messages: buildV2InterjectionPrompt({ question: body.question, overviewTitle: overview.title, sources: evidence }),
+      temperature: 0.4,
+      max_tokens: 1_500,
+    })
+    const script = parseV2InterjectionScript(
+      completion.choices[0]?.message?.content ?? '',
+      evidence,
+    )
+    const entailmentInput = script.utterances.map((utterance, utteranceOrder) => ({
+      utteranceId: interjectionUtteranceVerificationId(String(reservation.interjectionId), utteranceOrder),
+      sceneId: `interjection:${reservation.interjectionId}`,
+      sceneOrder: 0,
+      utteranceOrder,
+      text: utterance.text,
+      claims: [{
+        claimId: utterance.claimId,
+        text: utterance.claimText,
+        evidenceQuotes: utterance.evidenceQuotes,
+      }],
+    }))
+    const verificationCompletion = await generateCompletion({
+      model: SCRIPT_MODEL,
+      messages: buildClaimEntailmentPrompt(entailmentInput),
+      temperature: 0,
+      max_tokens: Math.min(1_000, Math.max(500, entailmentInput.length * 100)),
+      maxAttempts: 1,
+    })
+    const verification = parseClaimEntailmentResponse(
+      verificationCompletion.choices[0]?.message?.content ?? '',
+      entailmentInput,
+    )
+    const verificationByUtterance = new Map(verification.decisions.map(decision => [decision.utteranceId, decision]))
+    await convexClient.mutation(api.audioOverviewInterjectionsV2.startRendering, {
+      interjectionId: reservation.interjectionId,
+      orchestrationToken,
+      utterances: script.utterances.map((utterance, utteranceOrder) => {
+        const utteranceId = interjectionUtteranceVerificationId(String(reservation.interjectionId), utteranceOrder)
+        const utteranceVerification = verificationByUtterance.get(utteranceId)
+        if (!utteranceVerification) throw new Error('Interjection Utterance has no semantic entailment verification')
+        return {
+          speaker: utterance.speaker,
+          text: utterance.text,
+          sourceIds: utterance.sourceIds,
+          claimId: utterance.claimId,
+          claimText: utterance.claimText,
+          evidenceQuotes: utterance.evidenceQuotes,
+          verification: {
+            version: CLAIM_ENTAILMENT_VERSION,
+            utteranceId,
+            model: SCRIPT_MODEL,
+            decision: 'entailed' as const,
+            reason: utteranceVerification.reason,
+          },
+        }
+      }),
+    })
+    const renderClaim = await convexClient.mutation(api.audioOverviewInterjectionsV2.claimRenderingAttempt, {
+      interjectionId: reservation.interjectionId,
+      orchestrationToken,
+    })
+    if (!renderClaim.claimed) {
+      throw createError({ statusCode: 409, message: 'Audio interjection rendering was already attempted' })
+    }
+    workerAttempted = true
+    const render = await requestInterjectionWorker(event, 'POST', {
+      jobId: String(reservation.jobId),
+      interjectionId: String(reservation.interjectionId),
+      idempotencyKey,
+      utterances: script.utterances,
+    })
+    const renderedArtifact = render.artifact
+    const current = await convexClient.query(api.audioOverviewInterjectionsV2.getForOwner, {
+      interjectionId: reservation.interjectionId,
+    })
+    if (!current || current.status !== 'rendering') {
+      workerCleanupAttempted = true
+      await requestInterjectionWorker(event, 'DELETE', {
+        jobId: String(reservation.jobId),
+        interjectionId: String(reservation.interjectionId),
+        idempotencyKey,
+      }).catch(() => {})
+      throw createError({ statusCode: 409, message: 'Audio interjection generation was cancelled' })
+    }
+    await assertPrivateInterjectionArtifact(renderedArtifact, {
+      interjectionId: String(reservation.interjectionId),
+      idempotencyKey,
+    })
+    await convexClient.mutation(api.audioOverviewInterjectionsV2.publish, {
+      interjectionId: reservation.interjectionId,
+      orchestrationToken,
+      artifact: renderedArtifact,
+    })
+    const published = await convexClient.query(api.audioOverviewInterjectionsV2.getForOwner, {
+      interjectionId: reservation.interjectionId,
+    })
+    if (!published || published.status !== 'ready') throw createError({ statusCode: 502, message: 'Interjection publication failed' })
+    return v2Response(published)
+  }
+  catch (error: any) {
+    if (workerAttempted && !workerCleanupAttempted) {
+      await requestInterjectionWorker(event, 'DELETE', {
+        jobId: String(reservation.jobId),
+        interjectionId: String(reservation.interjectionId),
+        idempotencyKey,
+      }).catch(() => {})
+    }
+    if (ownsScripting) {
+      await convexClient.mutation(api.audioOverviewInterjectionsV2.fail, {
+        interjectionId: reservation.interjectionId,
+        orchestrationToken,
+        error: error?.message || 'Audio interjection generation failed',
+      }).catch(() => {})
+    }
+    throw error
+  }
+}
 
 function makeConvexClient(event: any): ConvexHttpClient {
   const token = event.context.convexToken as string | undefined
@@ -71,213 +305,19 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 409, message: 'Audio overview is not ready' })
   }
 
-  const storedHostA = overview.voiceProfile?.hostA
-  const storedHostB = overview.voiceProfile?.hostB
-  const overviewUsesDia = storedHostA?.startsWith('dia-') || storedHostB?.startsWith('dia-')
-
-  const voiceProfile = {
-    hostA: isAuraVoice(storedHostA) ? storedHostA : DEFAULT_HOSTS.hostA,
-    hostB: isAuraVoice(storedHostB) ? storedHostB : DEFAULT_HOSTS.hostB,
-  }
-  const scopeDocIds = overview.scopeDocIds?.map(String)
-  let audioTaskId: Id<'tasks'>
-  try {
-    const reservation = await convexClient.mutation(api.tasks.requestAudioOverview, {
-      folderId: overview.folderId as Id<'folders'>,
-      scope: scopeDocIds?.length
-        ? { mode: 'explicit' as const, documentIds: scopeDocIds as Id<'documents'>[] }
-        : { mode: 'folder' as const },
-      preferences: { lengthMinutes: 5 as const, complexity: 'beginner' as const },
-      voiceProfile,
-    })
-    audioTaskId = reservation.taskId
-    await convexClient.mutation(api.tasks.claimAudioOverviewGeneration, { taskId: audioTaskId })
-  }
-  catch {
-    throw createError({ statusCode: 409, message: 'Audio interjection generation is not available' })
-  }
-
-  const uploadedClaimIds: Array<Id<'audioOverviewUploadClaims'>> = []
-
-  async function cleanupOrphanBlobs() {
-    if (uploadedClaimIds.length === 0) return
-    const claimIds = [...uploadedClaimIds]
-    uploadedClaimIds.length = 0
-    try {
-      await convexClient.mutation(api.audioOverviewUploads.discard, { claimIds })
-    }
-    catch { /* best-effort */ }
-  }
-
-  async function failAudioTask(error: string) {
-    try {
-      await convexClient.mutation(api.tasks.failAudioOverviewGeneration, { taskId: audioTaskId, error })
-    }
-    catch { /* best-effort */ }
-  }
-
-  async function requireRunningAudioTask() {
-    const task = await convexClient.query(api.tasks.get, { taskId: audioTaskId })
-    if (!task || task.status !== 'running') {
-      throw createError({ statusCode: 409, message: 'Audio interjection generation was cancelled' })
-    }
-  }
-
-  try {
-
-  const ttsEngine: TtsEngine = overviewUsesDia ? await resolveTtsEngine() : 'aura-1'
-
-  await requireRunningAudioTask()
-
-  const clampedAfterIndex = Math.max(0, Math.min(afterIndex, overview.turns.length))
-
-  const searchResults = await searchDocuments({
-    query: question,
-    userId,
-    folderId: scopeDocIds?.length ? undefined : overview.folderId as unknown as string,
-    max_num_results: MAX_SEARCH_RESULTS,
-    score_threshold: 0.05,
-    filterDocIds: scopeDocIds,
-  })
-
-  let chunks: AISearchChunk[] = searchResults.data ?? []
-
-  if (chunks.length === 0) {
-    try {
-      const folderDocs = scopeDocIds?.length
-        ? []
-        : await fetchFolderDocs({
-            userId,
-            folderId: overview.folderId as unknown as string,
-            maxChars: 40_000,
-          })
-      if (folderDocs.length > 0) {
-        chunks = folderDocs.map((doc): AISearchChunk => ({
-          id: doc.key,
-          content: doc.content,
-          score: 1,
-          attributes: {
-            filename: doc.filename,
-            folderId: overview.folderId as unknown as string,
-            documentId: doc.documentId,
-            userId,
-          },
-        }))
-      }
-    }
-    catch (error) {
-      console.error('[audio-overview/interject] folder-docs fallback failed:', error)
-    }
-  }
-
-  if (chunks.length === 0) {
-    throw createError({ statusCode: 422, message: 'Not enough context to answer' })
-  }
-
-  const model = SCRIPT_MODEL
-  const promptMessages = buildInterjectionPrompt({
-    question,
-    overviewTitle: overview.title,
-    chunks,
-    ttsEngine,
-  })
-
-  await requireRunningAudioTask()
-  const completion = await generateCompletion({
-    model,
-    messages: promptMessages,
-    temperature: 0.6,
-    max_tokens: 1500,
-  })
-
-  const raw = completion.choices[0]?.message?.content ?? ''
-  const parsed = parseInterjectionResponse(raw)
-  let normalizedTurns = splitOversizedTurns(parsed.turns as AudioScriptTurn[])
-  normalizedTurns = capInterjectionTurns(normalizedTurns)
-
-  if (normalizedTurns.length < MIN_ANSWER_TURNS) {
-    throw createError({
-      statusCode: 502,
-      message: `Interjection script too short (got ${normalizedTurns.length}, need at least ${MIN_ANSWER_TURNS})`,
-    })
-  }
-
-    const persistedTurns: Array<{
-      speaker: 'host_a' | 'host_b'
-      text: string
-      audioFileId: Id<'_storage'>
-      uploadClaimId: Id<'audioOverviewUploadClaims'>
-      durationMs: number
-      sourceIndex?: number
-    }> = []
-
-    for (let i = 0; i < normalizedTurns.length; i++) {
-      await requireRunningAudioTask()
-      const turn = normalizedTurns[i]!
-      const auraVoice = turn.speaker === 'host_a' ? voiceProfile.hostA : voiceProfile.hostB
-      const spokenText = sanitizeTurnForSpeech(turn.text, { preserveExpressions: ttsEngine === 'dia' })
-
-      let audioBytes: Uint8Array
-      try {
-        audioBytes = await synthesizeTurn(spokenText, turn.speaker, ttsEngine, auraVoice)
-      }
-      catch (err: any) {
-        throw createError({
-          statusCode: 502,
-          message: `Interjection synthesis failed on turn ${i + 1}: ${err?.message ?? 'unknown'}`,
-        })
-      }
-
-      await requireRunningAudioTask()
-      const upload = await uploadAudioOverviewBytes(convexClient, audioTaskId, audioBytes, uploadedClaimIds)
-
-
-      persistedTurns.push({
-        speaker: turn.speaker,
-        text: turn.text,
-        durationMs: estimateTurnDurationMs(turn.text),
-        ...upload,
-        sourceIndex: turn.sourceIndex,
-      })
-    }
-
-    await requireRunningAudioTask()
-    const { interjectionId } = await convexClient.mutation(api.audioOverviewInterjections.create, {
-      audioOverviewId: body.overviewId as Id<'audioOverviews'>,
-      taskId: audioTaskId,
-      insertedAfterTurnIndex: clampedAfterIndex,
+  if (overview.episodeId) {
+    return await runV2Interjection(event, convexClient, userId, overview, {
+      overviewId: body.overviewId,
+      insertedAfterTurnIndex: afterIndex,
       question,
-      model,
-      answerTurns: persistedTurns,
     })
-
-    uploadedClaimIds.length = 0
-
-    const turnUrls = await convexClient.query(api.audioOverviewInterjections.getTurnUrls, {
-      id: interjectionId,
-    })
-
-    const turnsWithUrls = persistedTurns.map((t, i) => ({
-      speaker: t.speaker,
-      text: t.text,
-      durationMs: t.durationMs,
-      sourceIndex: t.sourceIndex,
-      audioFileId: t.audioFileId,
-      audioUrl: (turnUrls ?? [])[i] ?? null,
-    }))
-
-    return {
-      interjectionId,
-      insertedAfterTurnIndex: clampedAfterIndex,
-      answerTurnCount: persistedTurns.length,
-      turns: turnsWithUrls,
-      totalDurationMs: persistedTurns.reduce((s, t) => s + t.durationMs, 0),
-      model,
-    }
   }
-  catch (err: any) {
-    await cleanupOrphanBlobs()
-    await failAudioTask(err?.message || 'Audio interjection generation failed')
-    throw err
-  }
+
+  // Version 1 remains readable and playable, but Ask must never create new
+  // Dia/Aura artifacts. Regeneration migrates the listener to the managed v2
+  // Audio Profile and frozen Source Manifest required by the production plan.
+  throw createError({
+    statusCode: 409,
+    message: 'Ask is unavailable for this legacy Audio Overview. Generate a new Audio Overview to use managed follow-up audio.',
+  })
 })

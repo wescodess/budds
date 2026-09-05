@@ -46,6 +46,10 @@ async function handleSendMessage(query: string) {
   await sendMessage(query, referenceScope.toPayload())
 }
 
+async function handlePodcastAskSubmit(payload: { question: string, context: InterjectionContext }) {
+  await sendMessage(payload.question, referenceScope.toPayload(), payload.context)
+}
+
 function handleInterjectionBadgeClick(intCtx: InterjectionContext) {
   const store = useAudioOverviewStore()
   store.seek(intCtx.timeMs)
@@ -89,6 +93,7 @@ function handleNewChatShortcut(e: KeyboardEvent) {
     @send="handleSendMessage"
     @select-model="selectModel"
     @interjection-badge-click="handleInterjectionBadgeClick"
+    @podcast-ask-submit="handlePodcastAskSubmit"
     @task-view-room="handleTaskViewRoom"
   />
 </template>

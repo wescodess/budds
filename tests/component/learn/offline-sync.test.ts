@@ -145,4 +145,42 @@ describe('Offline Sync — Conflict Resolution', () => {
     expect(mockMarkAttemptSynced).toHaveBeenCalledWith(2)
     expect(mockMarkAttemptSynced).not.toHaveBeenCalledWith(1)
   })
+
+  it('replays review ratings and session completion with stable idempotency keys', async () => {
+    mockGetUnsyncedAttempts.mockResolvedValue([
+      {
+        id: 1,
+        type: 'review-item-rating' as const,
+        idempotencyKey: 'rating-key-1',
+        timestamp: 1000,
+        data: { reviewItemId: 'review_1', quality: 4 },
+        synced: false,
+      },
+      {
+        id: 2,
+        type: 'review-session-completion' as const,
+        idempotencyKey: 'session-key-1',
+        timestamp: 2000,
+        data: { itemsReviewed: 1, itemsCorrect: 1, durationMs: 10_000, mode: 'quick' as const },
+        synced: false,
+      },
+    ])
+
+    const { useOfflineSync } = await import('~/composables/useOfflineSync')
+    const { syncAttempts } = useOfflineSync()
+    isOnlineRef.value = true
+    await syncAttempts()
+
+    expect(mockMutate).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      reviewItemId: 'review_1',
+      quality: 4,
+      idempotencyKey: 'rating-key-1',
+    }))
+    expect(mockMutate).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      itemsReviewed: 1,
+      idempotencyKey: 'session-key-1',
+    }))
+    expect(mockMarkAttemptSynced).toHaveBeenCalledWith(1)
+    expect(mockMarkAttemptSynced).toHaveBeenCalledWith(2)
+  })
 })

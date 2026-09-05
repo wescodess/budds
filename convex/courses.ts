@@ -1,10 +1,10 @@
 import { v } from 'convex/values'
-import { internalQuery, mutation, query } from './_generated/server'
+import { action, internalQuery, mutation, query } from './_generated/server'
 import { internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
-import { requireAuth } from './lib/auth'
+import { getOptionalAuthUserId, requireAuth } from './lib/auth'
 import { getOrCreateProfile } from './learnProfile'
-import { scheduleAudioOverviewDeletion } from './audioOverviews'
+import { runCourseDeletionSteps } from './courseDeletion'
 
 export const MAX_SOURCE_DOCS = 100
 
@@ -94,9 +94,8 @@ export const create = mutation({
 export const listByUser = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return []
-    const userId = identity.tokenIdentifier
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return []
 
     return await ctx.db
       .query('courses')
@@ -106,12 +105,24 @@ export const listByUser = query({
   },
 })
 
+/** Owner-scoped bounded reader for durable calendar sync continuations. */
+export const getCalendarSyncPage = internalQuery({
+  args: {
+    userId: v.string(),
+    cursor: v.union(v.string(), v.null()),
+  },
+  handler: async (ctx, args) => await ctx.db
+    .query('courses')
+    .withIndex('by_userId', q => q.eq('userId', args.userId))
+    .order('desc')
+    .paginate({ cursor: args.cursor, numItems: 25 }),
+})
+
 export const listByFolder = query({
   args: { folderId: v.id('folders') },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return []
-    const userId = identity.tokenIdentifier
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return []
 
     return await ctx.db
       .query('courses')
@@ -126,9 +137,8 @@ export const listByFolder = query({
 export const get = query({
   args: { id: v.id('courses') },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return null
-    const userId = identity.tokenIdentifier
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return null
 
     const course = await ctx.db.get(args.id)
     if (!course || course.userId !== userId) return null
@@ -261,104 +271,14 @@ export const startCourse = mutation({
   },
 })
 
-export const deleteCourse = mutation({
+export const deleteCourse = action({
   args: { id: v.id('courses') },
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx)
-    const course = await ctx.db.get(args.id)
-    if (!course || course.userId !== userId) throw new Error('Course not found')
-
-    const sections = await ctx.db
-      .query('courseSections')
-      .withIndex('by_courseId', (q) => q.eq('courseId', args.id))
-      .collect()
-
-    const entityRefs: Array<{ id: string, type: 'quiz' | 'flashcard' | 'audio' }> = []
-    for (const section of sections) {
-      for (const block of section.contentBlocks) {
-        const type = block.entityType ?? (block.type === 'text' ? undefined : block.type)
-        if (block.entityId && type) entityRefs.push({ id: block.entityId, type })
-      }
-      await ctx.db.delete(section._id)
-    }
-
-    while (true) {
-      const batch = await ctx.db
-        .query('courseSourceDocs')
-        .withIndex('by_courseId', (q) => q.eq('courseId', args.id))
-        .take(500)
-      if (batch.length === 0) break
-      for (const row of batch) await ctx.db.delete(row._id)
-      if (batch.length < 500) break
-    }
-
-    for (const entity of entityRefs) {
-      if (entity.type === 'quiz') {
-        const quiz = await ctx.db.get(entity.id as Id<'quizzes'>)
-        if (quiz && quiz.courseScoped === true) {
-          const questions = await ctx.db
-            .query('quizQuestions')
-            .withIndex('by_quizId', (q) => q.eq('quizId', quiz._id))
-            .collect()
-          for (const q of questions) await ctx.db.delete(q._id)
-
-          const attempts = await ctx.db
-            .query('quizAttempts')
-            .withIndex('by_quizId', (q) => q.eq('quizId', quiz._id))
-            .collect()
-          for (const a of attempts) {
-            const answers = await ctx.db
-              .query('attemptAnswers')
-              .withIndex('by_attemptId', (q) => q.eq('attemptId', a._id))
-              .collect()
-            for (const ans of answers) await ctx.db.delete(ans._id)
-            await ctx.db.delete(a._id)
-          }
-
-          await ctx.db.delete(quiz._id)
-        }
-      }
-
-      if (entity.type === 'flashcard') {
-        const room = await ctx.db.get(entity.id as Id<'flashcardRooms'>)
-        if (room && room.courseScoped === true) {
-          const roomCards = await ctx.db
-            .query('flashcardRoomCards')
-            .withIndex('by_roomId', (q) => q.eq('roomId', room._id))
-            .collect()
-          for (const c of roomCards) await ctx.db.delete(c._id)
-
-          const versions = await ctx.db
-            .query('flashcardRoomVersions')
-            .withIndex('by_roomId', (q) => q.eq('roomId', room._id))
-            .collect()
-          for (const ver of versions) {
-            const versionCards = await ctx.db
-              .query('flashcardVersionCards')
-              .withIndex('by_versionId', (q) => q.eq('versionId', ver._id))
-              .collect()
-            for (const c of versionCards) await ctx.db.delete(c._id)
-            await ctx.db.delete(ver._id)
-          }
-          await ctx.db.delete(room._id)
-        }
-      }
-
-      if (entity.type === 'audio') {
-        const audio = await ctx.db.get(entity.id as Id<'audioOverviews'>)
-        if (audio && audio.courseScoped === true && audio.userId === userId) {
-          await scheduleAudioOverviewDeletion(ctx, audio._id, userId)
-        }
-      }
-    }
-
-    const reviewItems = await ctx.db
-      .query('reviewItems')
-      .withIndex('by_courseId', (q) => q.eq('courseId', args.id))
-      .collect()
-    for (const ri of reviewItems) await ctx.db.delete(ri._id)
-
-    await ctx.db.delete(args.id)
+    const jobId = await ctx.runMutation(internal.courseDeletion.start, { courseId: args.id, userId })
+    const result = await runCourseDeletionSteps(ctx, jobId, 64)
+    if (result.error) throw new Error(result.error)
+    return result
   },
 })
 
@@ -370,6 +290,7 @@ export const markFailed = mutation({
     const userId = await requireAuth(ctx)
     const course = await ctx.db.get(args.courseId)
     if (!course || course.userId !== userId) return
+    if (course.status === 'deleting') return
 
     await ctx.db.patch(args.courseId, {
       status: 'failed',

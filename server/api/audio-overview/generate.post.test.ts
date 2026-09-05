@@ -1,208 +1,472 @@
-import { beforeEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { ConvexError } from "convex/values";
 
-const mockMutation = vi.fn()
-const mockQuery = vi.fn()
-const mockSetAuth = vi.fn()
-const mockResolveTtsEngine = vi.fn(async () => 'aura-1')
+const mockMutation = vi.fn();
+const mockQuery = vi.fn();
+const mockBindingFetch = vi.fn();
+const mockSetResponseStatus = vi.fn();
+const mockGetScopedR2ObjectIdentity = vi.fn();
+const WORKER_TOKEN = "launch-secret-at-least-32-characters-long";
 
-vi.stubGlobal('createError', (opts: { statusCode: number, message: string }) =>
+vi.stubGlobal("defineEventHandler", (handler: Function) => handler);
+vi.stubGlobal("readBody", vi.fn());
+vi.stubGlobal("setResponseStatus", mockSetResponseStatus);
+vi.stubGlobal("createError", (opts: { statusCode: number; message: string }) =>
   Object.assign(new Error(opts.message), { statusCode: opts.statusCode }),
-)
-vi.stubGlobal('getConvexTokenIdentifier', vi.fn(() => 'https://auth.example.com|audio_route'))
-vi.stubGlobal('readBody', vi.fn())
-vi.stubGlobal('searchDocuments', vi.fn())
-vi.stubGlobal('fetchFolderDocs', vi.fn(async () => []))
-vi.stubGlobal('assertSearchIndexAvailable', vi.fn(async () => undefined))
-vi.stubGlobal('generateCompletion', vi.fn())
-vi.stubGlobal('defineEventHandler', (handler: Function) => handler)
-vi.stubGlobal('useRuntimeConfig', vi.fn(() => ({
-  public: { convex: { url: 'https://test.convex.cloud' } },
-})))
+);
+vi.stubGlobal(
+  "useRuntimeConfig",
+  vi.fn(() => ({
+    audioOverviewJobSecret: "job-secret",
+    audioOverviewWorkerToken: WORKER_TOKEN,
+  })),
+);
 
-vi.mock('convex/browser', () => ({
-  ConvexHttpClient: class {
-    setAuth = mockSetAuth
-    mutation = mockMutation
-    query = mockQuery
-  },
-}))
+vi.mock("../../utils/convex-client", () => ({
+  makeConvexClient: vi.fn(() => ({ mutation: mockMutation, query: mockQuery })),
+}));
+vi.mock("../../utils/convex-identity", () => ({
+  getConvexTokenIdentifier: vi.fn(() => "user-id"),
+}));
+vi.mock("../../utils/r2-folder", () => ({
+  getScopedR2ObjectIdentity: mockGetScopedR2ObjectIdentity,
+}));
+vi.mock("../../utils/audio-overview-job-auth", () => ({
+  deriveAudioOverviewJobCapability: vi.fn(async () => "c".repeat(43)),
+  isAudioOverviewIdempotencyKey: vi.fn(
+    (value: unknown) => typeof value === "string" && value.length >= 16,
+  ),
+}));
+vi.mock("../../utils/runtime-config", () => ({
+  readConfiguredRuntimeValue: vi.fn((...values: unknown[]) =>
+    values.find(Boolean),
+  ),
+}));
 
-vi.mock('../../utils/runtime-config', () => ({
-  readConfiguredRuntimeValue: vi.fn((...values: any[]) => values.find(Boolean)),
-}))
-
-vi.mock('../../utils/tts-provider', () => ({
-  resolveTtsEngine: mockResolveTtsEngine,
-  synthesizeTurn: vi.fn(),
-  synthesizeDialogue: vi.fn(),
-  engineVoiceProfile: vi.fn(),
-}))
-
-vi.mock('../../utils/audio-overview-upload', () => ({
-  uploadAudioOverviewBytes: vi.fn(),
-}))
-
-const handler = (await import('./generate.post')).default as Function
-
+const handler = (await import("./generate.post")).default as Function;
+const validBody = {
+  folderId: "folder_owned",
+  scope: { mode: "folder" },
+  preferences: { lengthMinutes: 10, complexity: "beginner" },
+  idempotencyKey: "request_key_123456789",
+};
 function makeEvent() {
-  return { context: { convexToken: 'mock-jwt' } }
-}
-
-function claimedRequest() {
   return {
-    folderId: 'folder_owned',
-    scope: { mode: 'explicit', documentIds: ['doc_owned'] },
-    documents: [{
-      documentId: 'doc_owned',
-      folderId: 'folder_source',
-      filename: 'owned.txt',
-      r2Key: 'owner/folder_source/doc_owned.txt',
-    }],
-    preferences: { lengthMinutes: 5, complexity: 'expert' },
-    voiceProfile: { hostA: 'asteria', hostB: 'orion' },
-    model: 'google/gemini-2.5-flash',
-    quotaDate: '2026-09-02',
-  }
+    context: {
+      convexToken: "jwt-must-not-leave-pages",
+      cloudflare: {
+        env: { AUDIO_OVERVIEW_WORKFLOW: { fetch: mockBindingFetch } },
+      },
+    },
+  };
 }
 
-describe('POST /api/audio-overview/generate authority', () => {
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe("POST /api/audio-overview/generate", () => {
   beforeEach(() => {
-    mockMutation.mockReset()
-    mockQuery.mockReset()
-    mockQuery.mockResolvedValue({ status: 'running' })
-    mockResolveTtsEngine.mockReset()
-    mockResolveTtsEngine.mockResolvedValue('aura-1')
-    vi.mocked(globalThis.readBody as any).mockReset()
-    vi.mocked(globalThis.searchDocuments as any).mockReset()
-    vi.mocked(globalThis.fetchFolderDocs as any).mockReset()
-    vi.mocked(globalThis.assertSearchIndexAvailable as any).mockReset()
-    vi.mocked(globalThis.assertSearchIndexAvailable as any).mockResolvedValue(undefined)
-    vi.mocked(globalThis.generateCompletion as any).mockReset()
-  })
+    mockMutation.mockReset().mockResolvedValue({
+      jobId: "job_1",
+      taskId: "task_1",
+      duplicate: false,
+      quota: { used: 1, cap: 10, date: "2026-09-02" },
+      budget: { reservedMicrousd: 190_000 },
+    });
+    mockQuery.mockReset();
+    mockGetScopedR2ObjectIdentity.mockReset();
+    mockBindingFetch
+      .mockReset()
+      .mockResolvedValue(Response.json({ accepted: true }, { status: 202 }));
+    mockSetResponseStatus.mockReset();
+    vi.mocked(globalThis.readBody as any)
+      .mockReset()
+      .mockResolvedValue(validBody);
+  });
 
-  test('[P0] rejects a request without a reserved task before retrieval', async () => {
-    vi.mocked(globalThis.readBody as any).mockResolvedValue({ folderId: 'caller_folder' })
+  test("[P0] reserves, launches, and returns 202 without forwarding the user JWT", async () => {
+    const event = makeEvent();
+    const result = await handler(event);
+    expect(mockMutation).toHaveBeenCalledOnce();
+    expect(mockMutation.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        idempotencyKey: validBody.idempotencyKey,
+        capability: "c".repeat(43),
+      }),
+    );
+    const request = mockBindingFetch.mock.calls[0]?.[0] as Request;
+    expect(request.headers.get("Authorization")).toBe(`Bearer ${WORKER_TOKEN}`);
+    const serialized = await request.text();
+    expect(JSON.parse(serialized)).toEqual({
+      jobId: "job_1",
+      capability: "c".repeat(43),
+    });
+    expect(serialized).not.toContain("jwt-must-not-leave-pages");
+    expect(mockSetResponseStatus).toHaveBeenCalledWith(event, 202);
+    expect(result).toEqual(
+      expect.objectContaining({
+        accepted: true,
+        taskId: "task_1",
+        jobId: "job_1",
+        budget: { reservedMicrousd: 190_000 },
+      }),
+    );
+  });
 
-    const error = await (handler(makeEvent()) as Promise<any>).catch((reason: any) => reason)
-
-    expect(error.statusCode).toBe(400)
-    expect(error.message).toMatch(/taskId/i)
-    expect(globalThis.searchDocuments).not.toHaveBeenCalled()
-  })
-
-  test('[P0] a rejected task claim produces no retrieval or provider side effect', async () => {
-    vi.mocked(globalThis.readBody as any).mockResolvedValue({ taskId: 'task_unreserved' })
-    mockMutation.mockRejectedValueOnce(new Error('Audio overview generation is not available'))
-
-    const error = await (handler(makeEvent()) as Promise<any>).catch((reason: any) => reason)
-
-    expect(error.statusCode).toBe(409)
-    expect(globalThis.searchDocuments).not.toHaveBeenCalled()
-    expect(globalThis.generateCompletion).not.toHaveBeenCalled()
-  })
-
-  test('[P0] an empty frozen manifest fails before any cross-folder retrieval', async () => {
-    vi.mocked(globalThis.readBody as any).mockResolvedValue({ taskId: 'task_empty' })
-    mockMutation
-      .mockResolvedValueOnce({ ...claimedRequest(), scope: { mode: 'folder' }, documents: [] })
-      .mockResolvedValueOnce(undefined)
-
-    const error = await (handler(makeEvent()) as Promise<any>).catch((reason: any) => reason)
-
-    expect(error.statusCode).toBe(422)
-    expect(globalThis.searchDocuments).not.toHaveBeenCalled()
-    expect(globalThis.fetchFolderDocs).not.toHaveBeenCalled()
-    expect(globalThis.generateCompletion).not.toHaveBeenCalled()
-  })
-
-  test('[P0] explicit scope fallback receives only frozen document descriptors', async () => {
+  test("[P0] rejects a missing idempotency key before reserving quota", async () => {
     vi.mocked(globalThis.readBody as any).mockResolvedValue({
-      taskId: 'task_reserved',
-      folderId: 'caller_override',
-      scopeDocIds: ['doc_attacker'],
-    })
-    mockMutation.mockResolvedValueOnce(claimedRequest()).mockResolvedValue(undefined)
-    vi.mocked(globalThis.searchDocuments as any).mockRejectedValue(
-      Object.assign(new Error('Search index unavailable'), { statusCode: 503 }),
-    )
-    vi.mocked(globalThis.fetchFolderDocs as any).mockResolvedValue([{
-      key: 'owner/folder_source/doc_owned.txt',
-      documentId: 'doc_owned',
-      folderId: 'folder_source',
-      filename: 'owned.txt',
-      content: 'Only frozen content',
-    }])
-    vi.mocked(globalThis.generateCompletion as any).mockRejectedValue(new Error('stop after retrieval'))
+      ...validBody,
+      idempotencyKey: undefined,
+    });
+    const error = (await handler(makeEvent()).catch(
+      (reason: unknown) => reason,
+    )) as any;
+    expect(error.statusCode).toBe(400);
+    expect(mockMutation).not.toHaveBeenCalled();
+    expect(mockBindingFetch).not.toHaveBeenCalled();
+  });
 
-    await expect(handler(makeEvent())).rejects.toThrow('stop after retrieval')
+  test("[P0] repairs a legacy indexed source instead of returning an unactionable immutable-revision error", async () => {
+    const contentHash = "a".repeat(64);
+    mockMutation
+      .mockRejectedValueOnce(
+        new ConvexError(
+          "Source has no authoritative immutable revision; re-index it and try again",
+        ),
+      )
+      .mockResolvedValueOnce({ repairing: true });
+    mockQuery.mockResolvedValueOnce([
+      {
+        _id: "doc_legacy",
+        folderId: validBody.folderId,
+        filename: "legacy.pdf",
+        status: "success",
+        r2Key: "owner/folder/doc_legacy.pdf",
+      },
+    ]);
+    mockGetScopedR2ObjectIdentity.mockResolvedValueOnce({
+      key: "owner/folder/doc_legacy.pdf",
+      contentHash,
+      revision: `sha256:${contentHash}`,
+      byteLength: 2048,
+    });
 
-    expect(globalThis.fetchFolderDocs).toHaveBeenCalledWith({
-      userId: 'https://auth.example.com|audio_route',
-      documents: claimedRequest().documents,
-      maxChars: 80_000,
-    })
-    expect(globalThis.fetchFolderDocs).not.toHaveBeenCalledWith(
-      expect.objectContaining({ folderId: expect.anything() }),
-    )
-    expect(globalThis.assertSearchIndexAvailable).not.toHaveBeenCalled()
-  })
+    const error = (await handler(makeEvent()).catch(
+      (reason: unknown) => reason,
+    )) as any;
 
-  test('[P0] reports Search index unavailable before TTS when the frozen PDF scope has no vectors', async () => {
-    vi.mocked(globalThis.readBody as any).mockResolvedValue({ taskId: 'task_reserved' })
-    mockMutation.mockResolvedValueOnce(claimedRequest()).mockResolvedValue(undefined)
-    vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({ data: [] })
-    vi.mocked(globalThis.fetchFolderDocs as any).mockResolvedValue([])
-    vi.mocked(globalThis.assertSearchIndexAvailable as any).mockRejectedValue(
-      Object.assign(new Error('Search index unavailable'), { statusCode: 503 }),
-    )
+    expect(error.statusCode).toBe(409);
+    expect(error.message).toMatch(/re-indexing.*try again/i);
+    expect(mockQuery).toHaveBeenCalledOnce();
+    expect(mockGetScopedR2ObjectIdentity).toHaveBeenCalledWith(
+      "owner/folder/doc_legacy.pdf",
+    );
+    expect(mockMutation).toHaveBeenCalledTimes(2);
+    expect(mockMutation.mock.calls[1]?.[1]).toEqual({
+      documentId: "doc_legacy",
+      expectedR2Key: "owner/folder/doc_legacy.pdf",
+      contentHash,
+      sourceRevision: `sha256:${contentHash}`,
+      orchestrationToken: WORKER_TOKEN,
+    });
+    expect(mockBindingFetch).not.toHaveBeenCalled();
+  });
 
-    const error = await (handler(makeEvent()) as Promise<any>).catch((reason: any) => reason)
+  test("[P1] adopts a rolling-deployment legacy task without reserving quota twice", async () => {
+    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+      taskId: "legacy_task_123456",
+    });
 
-    expect(error.statusCode).toBe(503)
-    expect(error.message).toBe('Search index unavailable')
-    expect(mockResolveTtsEngine).not.toHaveBeenCalled()
-    expect(globalThis.generateCompletion).not.toHaveBeenCalled()
-  })
+    await expect(handler(makeEvent())).resolves.toEqual(
+      expect.objectContaining({ accepted: true }),
+    );
 
-  test('[P0] a terminal task produces no provider side effect after retrieval', async () => {
-    vi.mocked(globalThis.readBody as any).mockResolvedValue({ taskId: 'task_reserved' })
-    mockMutation.mockResolvedValueOnce(claimedRequest()).mockResolvedValue(undefined)
-    mockQuery.mockResolvedValueOnce({ status: 'failed' })
-    vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({
-      data: [
-        { id: 'one', content: 'First', score: 1, attributes: { documentId: 'doc_owned' } },
-        { id: 'two', content: 'Second', score: 1, attributes: { documentId: 'doc_owned' } },
-      ],
-    })
+    expect(mockMutation.mock.calls[0]?.[1]).toEqual({
+      taskId: "legacy_task_123456",
+      idempotencyKey: "legacy_legacy_task_123456",
+      capability: "c".repeat(43),
+    });
+    expect(mockBindingFetch).toHaveBeenCalledOnce();
+  });
 
-    await expect(handler(makeEvent())).resolves.toEqual({
-      cancelled: true,
-      taskId: 'task_reserved',
-    })
-    expect(globalThis.generateCompletion).not.toHaveBeenCalled()
-  })
+  test("[P1] an idempotent reservation can relaunch the deterministic Workflow", async () => {
+    mockMutation.mockResolvedValueOnce({
+      jobId: "job_1",
+      taskId: "task_1",
+      duplicate: true,
+      quota: { used: 1, cap: 10, date: "2026-09-02" },
+    });
+    await expect(handler(makeEvent())).resolves.toEqual(
+      expect.objectContaining({ duplicate: true }),
+    );
+    expect(mockBindingFetch).toHaveBeenCalledOnce();
+  });
 
-  test('[P1] cancellation while the voice engine wakes prevents the LLM call', async () => {
-    vi.mocked(globalThis.readBody as any).mockResolvedValue({ taskId: 'task_reserved' })
-    mockMutation.mockResolvedValueOnce(claimedRequest()).mockResolvedValue(undefined)
-    mockQuery.mockResolvedValue({ status: 'running' })
-    vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({
-      data: [
-        { id: 'one', content: 'First', score: 1, attributes: { documentId: 'doc_owned' } },
-        { id: 'two', content: 'Second', score: 1, attributes: { documentId: 'doc_owned' } },
-      ],
-    })
-    let finishWakeup!: (engine: 'aura-1') => void
-    mockResolveTtsEngine.mockImplementationOnce(() => new Promise((resolve) => {
-      finishWakeup = resolve
-    }))
+  test("[P0] retries an ambiguous timeout and accepts the active deterministic Workflow duplicate", async () => {
+    vi.useFakeTimers();
+    mockBindingFetch
+      .mockImplementationOnce(() => new Promise<Response>(() => {}))
+      .mockResolvedValueOnce(
+        Response.json(
+          { accepted: true, duplicate: true, id: "audio-job_1" },
+          { status: 202 },
+        ),
+      );
 
-    const request = handler(makeEvent()) as Promise<any>
-    await vi.waitFor(() => expect(mockResolveTtsEngine).toHaveBeenCalledOnce())
-    mockQuery.mockResolvedValue({ status: 'failed' })
-    finishWakeup('aura-1')
+    const pending = handler(makeEvent());
+    await vi.advanceTimersByTimeAsync(1_500);
 
-    await expect(request).resolves.toEqual({ cancelled: true, taskId: 'task_reserved' })
-    expect(globalThis.generateCompletion).not.toHaveBeenCalled()
-  })
-})
+    await expect(pending).resolves.toEqual(
+      expect.objectContaining({ accepted: true }),
+    );
+    expect(mockBindingFetch).toHaveBeenCalledTimes(2);
+    expect(mockMutation).toHaveBeenCalledTimes(1);
+    const payloads = await Promise.all(
+      mockBindingFetch.mock.calls.map(
+        async ([request]) => await (request as Request).json(),
+      ),
+    );
+    expect(payloads).toEqual([
+      { jobId: "job_1", capability: "c".repeat(43) },
+      { jobId: "job_1", capability: "c".repeat(43) },
+    ]);
+    vi.useRealTimers();
+  });
+
+  test("[P0] keeps a reservation retryable after bounded ambiguous launch failures", async () => {
+    mockBindingFetch.mockResolvedValue(
+      Response.json({ error: "temporarily unavailable" }, { status: 503 }),
+    );
+
+    const error = (await handler(makeEvent()).catch(
+      (reason: unknown) => reason,
+    )) as any;
+
+    expect(error.statusCode).toBe(503);
+    expect(error.message).toBe(
+      "Audio overview Workflow is temporarily unavailable",
+    );
+    expect(mockBindingFetch).toHaveBeenCalledTimes(3);
+    expect(mockMutation).toHaveBeenCalledOnce();
+
+    mockMutation.mockResolvedValueOnce({
+      jobId: "job_1",
+      taskId: "task_1",
+      duplicate: true,
+      status: "accepted",
+      quota: { used: 1, cap: 10, date: "2026-09-02" },
+      budget: { reservedMicrousd: 190_000 },
+    });
+    mockBindingFetch.mockResolvedValueOnce(
+      Response.json(
+        { accepted: true, duplicate: false, id: "audio-job_1" },
+        { status: 202 },
+      ),
+    );
+
+    await expect(handler(makeEvent())).resolves.toEqual(
+      expect.objectContaining({ accepted: true, duplicate: true }),
+    );
+    expect(mockMutation).toHaveBeenCalledTimes(2);
+  });
+
+  test("[P0] terminal-fails a reservation when the Worker reports an unconfigured generation plane", async () => {
+    mockBindingFetch.mockResolvedValueOnce(
+      Response.json(
+        { error: "Audio overview generation plane is not configured" },
+        { status: 503 },
+      ),
+    );
+
+    const error = (await handler(makeEvent()).catch(
+      (reason: unknown) => reason,
+    )) as any;
+
+    expect(error.statusCode).toBe(503);
+    expect(error.message).toBe(
+      "Audio overview generation plane is not configured",
+    );
+    expect(mockBindingFetch).toHaveBeenCalledOnce();
+    expect(mockMutation).toHaveBeenCalledTimes(2);
+    expect(mockMutation.mock.calls[1]?.[1]).toEqual({
+      jobId: "job_1",
+      capability: "c".repeat(43),
+      error: "Audio overview Workflow could not be started",
+    });
+  });
+
+  test("[P0] closes an active duplicate after a definitive generation-plane configuration rejection", async () => {
+    mockMutation.mockResolvedValueOnce({
+      jobId: "job_1",
+      taskId: "task_1",
+      duplicate: true,
+      status: "running",
+      quota: { used: 1, cap: 10, date: "2026-09-02" },
+    });
+    mockBindingFetch.mockResolvedValueOnce(
+      Response.json(
+        { error: "Audio overview generation plane is not configured" },
+        { status: 503 },
+      ),
+    );
+
+    const error = (await handler(makeEvent()).catch(
+      (reason: unknown) => reason,
+    )) as any;
+
+    expect(error.statusCode).toBe(503);
+    expect(error.message).toBe(
+      "Audio overview generation plane is not configured",
+    );
+    expect(mockMutation).toHaveBeenCalledTimes(2);
+    expect(mockMutation.mock.calls[1]?.[1]).toEqual(
+      expect.objectContaining({ jobId: "job_1" }),
+    );
+  });
+
+  test("[P1] terminal-fails a new reservation after a definitive Worker rejection", async () => {
+    mockBindingFetch.mockResolvedValueOnce(
+      Response.json({ error: "unauthorized" }, { status: 401 }),
+    );
+
+    const error = (await handler(makeEvent()).catch(
+      (reason: unknown) => reason,
+    )) as any;
+
+    expect(error.statusCode).toBe(503);
+    expect(mockMutation).toHaveBeenCalledTimes(2);
+    expect(mockMutation.mock.calls[1]?.[1]).toEqual({
+      jobId: "job_1",
+      capability: "c".repeat(43),
+      error: "Audio overview Workflow could not be started",
+    });
+  });
+
+  test("[P0] reconciles an active duplicate when its Workflow instance is terminal", async () => {
+    mockMutation.mockResolvedValueOnce({
+      jobId: "job_1",
+      taskId: "task_1",
+      duplicate: true,
+      status: "running",
+      quota: { used: 1, cap: 10, date: "2026-09-02" },
+    });
+    mockBindingFetch.mockResolvedValueOnce(
+      Response.json({ error: "terminal" }, { status: 409 }),
+    );
+
+    const error = (await handler(makeEvent()).catch(
+      (reason: unknown) => reason,
+    )) as any;
+
+    expect(error.statusCode).toBe(503);
+    expect(mockMutation).toHaveBeenCalledTimes(2);
+    expect(mockMutation.mock.calls[1]?.[1]).toEqual(
+      expect.objectContaining({ jobId: "job_1" }),
+    );
+  });
+
+  test("[P0] retries a transient launch rate limit without closing the reservation", async () => {
+    mockBindingFetch.mockResolvedValue(
+      Response.json({ error: "rate limited" }, { status: 429 }),
+    );
+
+    const error = (await handler(makeEvent()).catch(
+      (reason: unknown) => reason,
+    )) as any;
+
+    expect(error.statusCode).toBe(503);
+    expect(mockBindingFetch).toHaveBeenCalledTimes(3);
+    expect(mockMutation).toHaveBeenCalledOnce();
+  });
+
+  test("[P0] rejects an unknown scope mode instead of broadening it to the folder", async () => {
+    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+      ...validBody,
+      scope: { mode: "unexpected", documentIds: ["doc_1"] },
+    });
+
+    const error = (await handler(makeEvent()).catch(
+      (reason: unknown) => reason,
+    )) as any;
+
+    expect(error.statusCode).toBe(400);
+    expect(mockMutation).not.toHaveBeenCalled();
+    expect(mockBindingFetch).not.toHaveBeenCalled();
+  });
+
+  test("[P1] accepts the policy maximum of 50 explicit sources", async () => {
+    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+      ...validBody,
+      scope: {
+        mode: "explicit",
+        documentIds: Array.from({ length: 50 }, (_, index) => `doc_${index}`),
+      },
+    });
+
+    await expect(handler(makeEvent())).resolves.toEqual(
+      expect.objectContaining({ accepted: true }),
+    );
+    expect(mockMutation).toHaveBeenCalledOnce();
+  });
+
+  test("[P1] rejects explicit scope above the policy maximum", async () => {
+    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+      ...validBody,
+      scope: {
+        mode: "explicit",
+        documentIds: Array.from({ length: 51 }, (_, index) => `doc_${index}`),
+      },
+    });
+
+    const error = (await handler(makeEvent()).catch(
+      (reason: unknown) => reason,
+    )) as any;
+
+    expect(error.statusCode).toBe(400);
+    expect(mockMutation).not.toHaveBeenCalled();
+  });
+
+  test("[P2] rejects invalid preferences before calling Convex", async () => {
+    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+      ...validBody,
+      preferences: { lengthMinutes: 7, complexity: "beginner" },
+    });
+
+    const error = (await handler(makeEvent()).catch(
+      (reason: unknown) => reason,
+    )) as any;
+
+    expect(error.statusCode).toBe(400);
+    expect(mockMutation).not.toHaveBeenCalled();
+  });
+
+  test("[P2] maps an active-generation conflict to HTTP 409", async () => {
+    mockMutation.mockRejectedValueOnce(
+      new Error("An audio overview generation is already active"),
+    );
+
+    const error = (await handler(makeEvent()).catch(
+      (reason: unknown) => reason,
+    )) as any;
+
+    expect(error.statusCode).toBe(409);
+    expect(mockBindingFetch).not.toHaveBeenCalled();
+  });
+
+  test("[P1] rejects deprecated Aura voice overrides instead of accepting a no-op production control", async () => {
+    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+      ...validBody,
+      voiceProfile: { hostA: "luna", hostB: "orion" },
+    });
+
+    const error = (await handler(makeEvent()).catch(
+      (reason: unknown) => reason,
+    )) as any;
+
+    expect(error.statusCode).toBe(400);
+    expect(error.message).toMatch(/managed and cannot be overridden/i);
+    expect(mockMutation).not.toHaveBeenCalled();
+    expect(mockBindingFetch).not.toHaveBeenCalled();
+  });
+});

@@ -7,6 +7,7 @@ import { enqueueDocumentCleanup } from './accountDeletion'
 import { cancelActiveAudioOverviewTasksForFolders } from './tasks'
 import { DEFAULT_COLOR_KEY, isValidColorKey } from './folderPalette'
 import { DEFAULT_ICON_KEY, isValidIconKey } from './folderIcons'
+import { getOptionalAuthUserId, requireAuth } from './lib/auth'
 
 function normalizeName(name: string): string {
   const trimmed = name.trim()
@@ -43,10 +44,8 @@ function resolveIcon(icon: string | undefined): string {
 export const listAllFolders = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return []
-
-    const userId = identity.tokenIdentifier
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return []
 
     return await ctx.db
       .query('folders')
@@ -58,10 +57,8 @@ export const listAllFolders = query({
 export const listTopLevelFolders = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return []
-
-    const userId = identity.tokenIdentifier
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return []
 
     return await ctx.db
       .query('folders')
@@ -81,10 +78,7 @@ export const createFolder = mutation({
     icon: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) throw new Error('Unauthenticated')
-
-    const userId = identity.tokenIdentifier
+    const userId = await requireAuth(ctx)
     const name = normalizeName(args.name)
     const description = normalizeDescription(args.description)
     const color = resolveColor(args.color)
@@ -112,10 +106,7 @@ export const createSubfolder = mutation({
     icon: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) throw new Error('Unauthenticated')
-
-    const userId = identity.tokenIdentifier
+    const userId = await requireAuth(ctx)
     const name = normalizeName(args.name)
     const description = normalizeDescription(args.description)
     const color = resolveColor(args.color)
@@ -158,10 +149,8 @@ export const createSubfolder = mutation({
 export const listChildFolders = query({
   args: { parentId: v.id('folders') },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return []
-
-    const userId = identity.tokenIdentifier
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return []
 
     return await ctx.db
       .query('folders')
@@ -175,11 +164,11 @@ export const listChildFolders = query({
 export const getFolder = query({
   args: { id: v.id('folders') },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return null
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return null
 
     const folder = await ctx.db.get(args.id)
-    if (!folder || folder.userId !== identity.tokenIdentifier) return null
+    if (!folder || folder.userId !== userId) return null
 
     return folder
   },
@@ -239,10 +228,7 @@ async function getFolderDocumentStats(
 export const renameFolder = mutation({
   args: { id: v.id('folders'), name: v.string() },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) throw new Error('Unauthenticated')
-
-    const userId = identity.tokenIdentifier
+    const userId = await requireAuth(ctx)
     const folder = await ctx.db.get(args.id)
     if (!folder || folder.userId !== userId) throw new Error('Folder not found')
 
@@ -261,10 +247,7 @@ export const updateFolder = mutation({
     icon: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) throw new Error('Unauthenticated')
-
-    const userId = identity.tokenIdentifier
+    const userId = await requireAuth(ctx)
     const folder = await ctx.db.get(args.id)
     if (!folder || folder.userId !== userId) throw new Error('Folder not found')
 
@@ -295,9 +278,7 @@ export const setPreferredMainPane = mutation({
     pane: v.union(v.literal('chat'), v.literal('podcast')),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) throw new Error('Unauthenticated')
-    const userId = identity.tokenIdentifier
+    const userId = await requireAuth(ctx)
     const folder = await ctx.db.get(args.folderId)
     if (!folder || folder.userId !== userId) throw new Error('Folder not found')
     await ctx.db.patch(args.folderId, { preferredMainPane: args.pane, updatedAt: Date.now() })
@@ -314,9 +295,7 @@ export const setReferenceScope = mutation({
     })),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) throw new Error('Unauthenticated')
-    const userId = identity.tokenIdentifier
+    const userId = await requireAuth(ctx)
     const folder = await ctx.db.get(args.folderId)
     if (!folder || folder.userId !== userId) throw new Error('Folder not found')
 
@@ -349,10 +328,7 @@ export const setReferenceScope = mutation({
 export const deleteFolder = mutation({
   args: { id: v.id('folders') },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) throw new Error('Unauthenticated')
-
-    const userId = identity.tokenIdentifier
+    const userId = await requireAuth(ctx)
     const folder = await ctx.db.get(args.id)
     if (!folder || folder.userId !== userId) throw new Error('Folder not found')
 
@@ -421,10 +397,8 @@ export const deleteFolder = mutation({
 export const listSubtree = query({
   args: { folderId: v.id('folders') },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return { subfolders: [], files: [] }
-
-    const userId = identity.tokenIdentifier
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return { subfolders: [], files: [] }
     const root = await ctx.db.get(args.folderId)
     if (!root || root.userId !== userId) return { subfolders: [], files: [] }
 
@@ -474,10 +448,8 @@ export const searchScopeItems = query({
     search: v.string(),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return { folders: [], files: [] }
-
-    const userId = identity.tokenIdentifier
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return { folders: [], files: [] }
     const root = await ctx.db.get(args.rootFolderId)
     if (!root || root.userId !== userId) return { folders: [], files: [] }
 
@@ -543,10 +515,8 @@ export const resolveScope = query({
     fileIds: v.optional(v.array(v.id('documents'))),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return { documentIds: [], documents: [], ownedFolderIds: [] }
-
-    const userId = identity.tokenIdentifier
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return { documentIds: [], documents: [], ownedFolderIds: [] }
     const documentIds = new Set<string>()
     const documents = new Map<string, {
       id: Id<'documents'>
@@ -605,10 +575,7 @@ export const resolveScope = query({
 export const getFolderDescendantCounts = query({
   args: { id: v.id('folders') },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) throw new Error('Unauthenticated')
-
-    const userId = identity.tokenIdentifier
+    const userId = await requireAuth(ctx)
     const folder = await ctx.db.get(args.id)
     if (!folder || folder.userId !== userId) return null
 

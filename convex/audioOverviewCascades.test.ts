@@ -94,6 +94,18 @@ async function scheduledNames(t: ReturnType<typeof convexTest>) {
   })
 }
 
+async function advanceAccountDeletionToExternalCleanup(
+  t: ReturnType<typeof convexTest>,
+  userId: string,
+) {
+  for (let batch = 0; batch < 100; batch++) {
+    await t.mutation(internal.accountDeletion.runDeletionBatch, { userId })
+    const phase = (await t.query(internal.accountDeletion.getDeletionTombstone, { userId }))?.phase
+    if (phase === 'waitingExternal' || phase === 'complete') return
+  }
+  throw new Error('Account deletion did not finish its bounded database phases')
+}
+
 describe('audio overview ownership cascades', () => {
   test('[P1] deleting a course uses claim-aware audio cleanup', async () => {
     vi.useFakeTimers()
@@ -132,7 +144,7 @@ describe('audio overview ownership cascades', () => {
       masteryLevel: 'new',
     }))
 
-    await asUser.mutation(api.courses.deleteCourse, { id: courseId })
+    await asUser.action(api.courses.deleteCourse, { id: courseId })
 
     const deleting = await t.run(ctx => ctx.db.get(audio.overviewId))
     expect(deleting === null || deleting.status === 'deleting').toBe(true)
@@ -162,36 +174,48 @@ describe('audio overview ownership cascades', () => {
     expect(await t.run(ctx => ctx.storage.getUrl(audio.interjectionStorageId))).toBeNull()
   })
 
-  test('[P0] deleting a folder cancels active audio work before another upload can begin', async () => {
+  test('[P0] deleting a folder cancels active v2 audio work', async () => {
     vi.useFakeTimers()
     const t = convexTest(schema, modules)
     const asUser = t.withIdentity(USER)
     await asUser.mutation(api.users.upsertUser, {})
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Active audio' })
-    await t.run(ctx => ctx.db.insert('documents', {
+    const documentId = await t.run(ctx => ctx.db.insert('documents', {
       userId: USER.tokenIdentifier,
       folderId,
       filename: 'source.txt',
       status: 'success',
       fileSize: 10,
+      contentHash: 'a'.repeat(64),
+      sourceRevision: `sha256:${'a'.repeat(64)}`,
     }))
-    const { taskId } = await asUser.mutation(api.tasks.requestAudioOverview, {
+    const taskId = await t.run(ctx => ctx.db.insert('tasks', {
+      userId: USER.tokenIdentifier,
       folderId,
-      scope: { mode: 'folder' },
-      preferences: { lengthMinutes: 5, complexity: 'beginner' },
-      voiceProfile: { hostA: 'asteria', hostB: 'orion' },
-    })
-    await asUser.mutation(api.tasks.claimAudioOverviewGeneration, { taskId })
-    const { claimId } = await asUser.mutation(api.audioOverviewUploads.prepare, { taskId })
+      type: 'audio-overview-generation',
+      status: 'running',
+      title: 'Active v2 audio',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      audioOverviewRequest: {
+        scope: { mode: 'folder' },
+        documents: [{
+          documentId,
+          folderId,
+          filename: 'source.txt',
+          fileSize: 10,
+          contentHash: 'a'.repeat(64),
+          sourceRevision: `sha256:${'a'.repeat(64)}`,
+        }],
+        preferences: { lengthMinutes: 5, complexity: 'beginner' },
+        voiceProfile: { hostA: 'asteria', hostB: 'orion' },
+        quotaDate: '2026-09-03',
+      },
+    }))
 
     await asUser.mutation(api.folders.deleteFolder, { id: folderId })
 
     expect((await t.run(ctx => ctx.db.get(taskId)))?.status).toBe('cancelled')
-    await expect(asUser.mutation(api.audioOverviewUploads.begin, {
-      claimId,
-      expectedSha256: '00'.repeat(32),
-      expectedSize: 4,
-    })).rejects.toThrow(/running audio overview task required/i)
   })
 
   test('[P1] deleting a referenced source folder cancels a cross-folder explicit task', async () => {
@@ -206,24 +230,36 @@ describe('audio overview ownership cascades', () => {
       filename: 'referenced.txt',
       status: 'success',
       fileSize: 10,
+      contentHash: 'b'.repeat(64),
+      sourceRevision: `sha256:${'b'.repeat(64)}`,
     }))
-    const { taskId } = await asUser.mutation(api.tasks.requestAudioOverview, {
+    const taskId = await t.run(ctx => ctx.db.insert('tasks', {
+      userId: USER.tokenIdentifier,
       folderId: taskFolderId,
-      scope: { mode: 'explicit', documentIds: [sourceId] },
-      preferences: { lengthMinutes: 5, complexity: 'beginner' },
-      voiceProfile: { hostA: 'asteria', hostB: 'orion' },
-    })
-    await asUser.mutation(api.tasks.claimAudioOverviewGeneration, { taskId })
-    const { claimId } = await asUser.mutation(api.audioOverviewUploads.prepare, { taskId })
+      type: 'audio-overview-generation',
+      status: 'running',
+      title: 'Cross-folder v2 audio',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      audioOverviewRequest: {
+        scope: { mode: 'explicit', documentIds: [sourceId] },
+        documents: [{
+          documentId: sourceId,
+          folderId: sourceFolderId,
+          filename: 'referenced.txt',
+          fileSize: 10,
+          contentHash: 'b'.repeat(64),
+          sourceRevision: `sha256:${'b'.repeat(64)}`,
+        }],
+        preferences: { lengthMinutes: 5, complexity: 'beginner' },
+        voiceProfile: { hostA: 'asteria', hostB: 'orion' },
+        quotaDate: '2026-09-03',
+      },
+    }))
 
     await asUser.mutation(api.folders.deleteFolder, { id: sourceFolderId })
 
     expect((await t.run(ctx => ctx.db.get(taskId)))?.status).toBe('cancelled')
-    await expect(asUser.mutation(api.audioOverviewUploads.begin, {
-      claimId,
-      expectedSha256: '00'.repeat(32),
-      expectedSize: 4,
-    })).rejects.toThrow(/running audio overview task required/i)
   })
 
   test('[P1] deleting an account schedules audio rows and orphan claims for cleanup', async () => {
@@ -247,6 +283,28 @@ describe('audio overview ownership cascades', () => {
       createdAt: Date.now(),
       updatedAt: Date.now(),
     }))
+    const jobId = await t.run(ctx => ctx.db.insert('audioOverviewJobs', {
+      userId: USER.tokenIdentifier,
+      taskId,
+      folderId,
+      idempotencyKey: 'account_delete_job_0001',
+      capabilityHash: '0'.repeat(43),
+      status: 'running',
+      stage: 'synthesizing',
+      completedTurns: 0,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }))
+    const jobTurnId = await t.run(ctx => ctx.db.insert('audioOverviewJobTurns', {
+      jobId,
+      taskId,
+      userId: USER.tokenIdentifier,
+      order: 0,
+      speaker: 'host_a',
+      text: 'Delete this private transcript.',
+      status: 'pending',
+      updatedAt: Date.now(),
+    }))
 
     await asUser.mutation(internal.accountDeletion.deleteCurrentUser, {})
 
@@ -254,7 +312,6 @@ describe('audio overview ownership cascades', () => {
     const names = await scheduledNames(t)
     expect(names).toContain('audioOverviews:deleteUserOverviews')
     expect(names).toContain('audioOverviewUploads:cleanupUserClaims')
-    expect(await t.run(ctx => ctx.db.get(taskId))).toBeNull()
 
     await t.mutation(internal.audioOverviews.deleteUserOverviews, {
       userId: USER.tokenIdentifier,
@@ -262,6 +319,11 @@ describe('audio overview ownership cascades', () => {
     })
     await finishAudioDeletion(t, audio.overviewId)
     await t.mutation(internal.audioOverviewUploads.cleanupUserClaims, { userId: USER.tokenIdentifier })
+    await advanceAccountDeletionToExternalCleanup(t, USER.tokenIdentifier)
+
+    expect(await t.run(ctx => ctx.db.get(taskId))).toBeNull()
+    expect(await t.run(ctx => ctx.db.get(jobId))).toBeNull()
+    expect(await t.run(ctx => ctx.db.get(jobTurnId))).toBeNull()
     expect(await t.run(ctx => ctx.db.get(orphanClaimId))).toBeNull()
     expect(await t.run(ctx => ctx.db.get(audio.overviewId))).toBeNull()
   })

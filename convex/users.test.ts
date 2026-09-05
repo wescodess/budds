@@ -116,13 +116,15 @@ describe('Story 1.1 — Verify & Harden Authentication Flow', () => {
     test('nuxt config protects /app/** for authenticated users', async () => {
       const fs = await import('fs')
       const configSource = fs.readFileSync('./nuxt.config.ts', 'utf-8')
-      expect(configSource).toMatch(/['"]\/app\/\*\*['"]\s*:\s*\{\s*auth:\s*['"]user['"]/)
+      expect(configSource).toMatch(/const serverAuthEnabled\s*=\s*process\.env\.NODE_ENV\s*!==\s*['"]development['"]/)
+      expect(configSource).toMatch(/['"]\/app\/\*\*['"]\s*:\s*\{\s*auth:\s*serverAuthEnabled\s*\?\s*['"]user['"]/)
     })
 
     test('nuxt config sets /login as guest-only route', async () => {
       const fs = await import('fs')
       const configSource = fs.readFileSync('./nuxt.config.ts', 'utf-8')
-      expect(configSource).toMatch(/['"]\/login['"]\s*:\s*\{\s*auth:\s*['"]guest['"]/)
+      expect(configSource).toMatch(/const serverAuthEnabled\s*=\s*process\.env\.NODE_ENV\s*!==\s*['"]development['"]/)
+      expect(configSource).toMatch(/['"]\/login['"]\s*:\s*\{\s*auth:\s*serverAuthEnabled\s*\?\s*['"]guest['"]/)
     })
 
     test('nuxt config redirects logout to /login', async () => {
@@ -152,7 +154,7 @@ describe('Story 1.1 — Verify & Harden Authentication Flow', () => {
       const result = await asUser.query(api.users.getDailyQuota, {})
       expect(result).not.toBeNull()
       expect(result!.used).toBe(0)
-      expect(result!.cap).toBe(10)
+      expect(result!.cap).toBe(100)
       expect(result!.date).toBe(new Date().toISOString().slice(0, 10))
     })
 
@@ -185,7 +187,7 @@ describe('Story 1.1 — Verify & Harden Authentication Flow', () => {
 
       const result = await asUser.query(api.users.getDailyQuota, {})
       expect(result!.used).toBe(0)
-      expect(result!.cap).toBe(10)
+      expect(result!.cap).toBe(100)
     })
 
     test('[P0] incrementDailyQuota resets count when stored date is stale', async () => {
