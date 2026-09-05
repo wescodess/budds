@@ -150,6 +150,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Build Cloudflare Pages output
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
         run: pnpm build
       - name: Upload Pages build
         uses: actions/upload-artifact@v7
