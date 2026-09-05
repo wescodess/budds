@@ -123,4 +123,17 @@ describe('Cloudflare Pages environment validation', () => {
       stdio: 'pipe',
     })).not.toThrow()
   })
+
+  it('accepts Cloudflare Pages deployment URL as the preview origin', () => {
+    expect(() => execFileSync(process.execPath, [validator, 'build', '--strict'], {
+      cwd: process.cwd(),
+      env: {
+        ...completePagesEnv,
+        NUXT_PUBLIC_SITE_URL: '',
+        SITE_URL: '',
+        CF_PAGES_URL: 'https://feature-branch.budds.pages.dev',
+      },
+      stdio: 'pipe',
+    })).not.toThrow()
+  })
 })

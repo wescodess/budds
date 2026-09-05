@@ -59,8 +59,8 @@ function toConvexSiteUrl(url: string) {
 }
 
 const convexUrl = readConfiguredValue('NUXT_PUBLIC_CONVEX_URL', 'CONVEX_URL')
-const siteUrl = readConfiguredValue('SITE_URL', 'NUXT_PUBLIC_SITE_URL')
-const publicSiteUrl = siteUrl || readConfiguredValue('NUXT_PUBLIC_SITE_URL')
+const siteUrl = readConfiguredValue('SITE_URL', 'NUXT_PUBLIC_SITE_URL', 'CF_PAGES_URL')
+const publicSiteUrl = siteUrl || readConfiguredValue('NUXT_PUBLIC_SITE_URL', 'CF_PAGES_URL')
 const authProxyTargetUrl = readConfiguredValue('AUTH_PROXY_TARGET_URL', 'NUXT_AUTH_PROXY_TARGET_URL') || toConvexSiteUrl(convexUrl)
 const serverAuthEnabled = process.env.NODE_ENV !== 'development'
 const routeRules = {

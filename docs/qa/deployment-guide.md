@@ -115,6 +115,7 @@ pinned Wrangler version.
 |---|---|---|
 | `NUXT_PUBLIC_CONVEX_URL` | Yes | Convex deployment URL |
 | `SITE_URL` | Yes | App origin |
+| `CF_PAGES_URL` | Automatic | Cloudflare's deployment-specific preview origin; used when `SITE_URL`/`NUXT_PUBLIC_SITE_URL` are unset |
 | `AUTH_PROXY_TARGET_URL` | No | Override Convex site URL for auth proxy |
 | `NUXT_CLOUDFLARE_ACCOUNT_ID` | Yes | Cloudflare account ID |
 | `NUXT_CLOUDFLARE_AI_GATEWAY_ID` | Yes | AI Gateway identifier |
