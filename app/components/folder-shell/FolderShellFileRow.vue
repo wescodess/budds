@@ -79,6 +79,11 @@ function toggleSelection() {
   emit('toggleSelect', id.value)
 }
 
+function handleSwipeOpenChange(next: boolean) {
+  if (next) emit('swipe-open', id.value)
+  else emit('swipe-close', id.value)
+}
+
 onLongPress(
   rowRef,
   () => {
@@ -100,7 +105,7 @@ onLongPress(
     :action-width="actionWidth"
     class="rounded-lg"
     content-class="rounded-lg"
-    @update:open="(next) => emit(next ? 'swipe-open' : 'swipe-close', id)"
+    @update:open="handleSwipeOpenChange"
   >
     <template #actions>
       <button
@@ -196,7 +201,7 @@ onLongPress(
     :open="props.swipeOpen"
     :disabled="!showSwipeReveal"
     :action-width="actionWidth"
-    @update:open="(next) => emit(next ? 'swipe-open' : 'swipe-close', id)"
+    @update:open="handleSwipeOpenChange"
   >
     <template #actions>
       <button

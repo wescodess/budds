@@ -3,6 +3,7 @@ import { ArrowLeft } from 'lucide-vue-next'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 import type { AttemptSettings, AttemptQuestion, AnswerFeedback } from '~/composables/useQuizAttempt'
+import QuizSequentialMode from './SequentialMode.vue'
 
 const props = defineProps<{
   quizId: Id<'quizzes'>

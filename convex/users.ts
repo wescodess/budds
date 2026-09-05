@@ -1,5 +1,6 @@
 import { mutation, query } from './_generated/server'
 import { AUDIO_OVERVIEW_DAILY_CAP, todayUtcYmd } from './lib/audioOverviewPolicy'
+import { getOptionalAuthUserId, requireAuth } from './lib/auth'
 
 export { AUDIO_OVERVIEW_DAILY_CAP }
 
@@ -8,11 +9,12 @@ export const upsertUser = mutation({
   handler: async (ctx) => {
     const identity = await ctx.auth.getUserIdentity()
     if (!identity) throw new Error('Unauthenticated')
+    const userId = await requireAuth(ctx)
 
     const existing = await ctx.db
       .query('users')
       .withIndex('by_tokenIdentifier', (q) =>
-        q.eq('tokenIdentifier', identity.tokenIdentifier),
+        q.eq('tokenIdentifier', userId),
       )
       .unique()
 
@@ -37,13 +39,13 @@ export const upsertUser = mutation({
 export const getUser = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return null
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return null
 
     return await ctx.db
       .query('users')
       .withIndex('by_tokenIdentifier', (q) =>
-        q.eq('tokenIdentifier', identity.tokenIdentifier),
+        q.eq('tokenIdentifier', userId),
       )
       .unique()
   },
@@ -52,13 +54,13 @@ export const getUser = query({
 export const getDailyQuota = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return null
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return null
 
     const user = await ctx.db
       .query('users')
       .withIndex('by_tokenIdentifier', (q) =>
-        q.eq('tokenIdentifier', identity.tokenIdentifier),
+        q.eq('tokenIdentifier', userId),
       )
       .unique()
 
@@ -72,13 +74,12 @@ export const getDailyQuota = query({
 export const incrementDailyQuota = mutation({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) throw new Error('Unauthenticated')
+    const userId = await requireAuth(ctx)
 
     const user = await ctx.db
       .query('users')
       .withIndex('by_tokenIdentifier', (q) =>
-        q.eq('tokenIdentifier', identity.tokenIdentifier),
+        q.eq('tokenIdentifier', userId),
       )
       .unique()
     if (!user) throw new Error('User not found')

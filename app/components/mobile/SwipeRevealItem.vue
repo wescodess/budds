@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { HTMLAttributes } from 'vue'
+import type { CSSProperties, HTMLAttributes } from 'vue'
 import { cn } from '@/lib/utils'
 import { useSwipeReveal } from '~/composables/useSwipeReveal'
 
@@ -21,7 +21,7 @@ const emit = defineEmits<{
 const { rootRef, actionsStyle, contentStyle, isDragging } = useSwipeReveal({
   open: computed(() => Boolean(props.open)),
   disabled: computed(() => Boolean(props.disabled)),
-  actionWidth: computed(() => props.actionWidth),
+  actionWidth: computed(() => props.actionWidth ?? 120),
   onOpen() {
     emit('update:open', true)
     emit('open')
@@ -31,6 +31,12 @@ const { rootRef, actionsStyle, contentStyle, isDragging } = useSwipeReveal({
     emit('close')
   },
 })
+
+const actionsContainerStyle = computed<CSSProperties>(() => ({
+  width: `${props.actionWidth ?? 120}px`,
+  opacity: actionsStyle.value.opacity,
+  pointerEvents: actionsStyle.value.pointerEvents as CSSProperties['pointerEvents'],
+}))
 </script>
 
 <template>
@@ -44,10 +50,7 @@ const { rootRef, actionsStyle, contentStyle, isDragging } = useSwipeReveal({
       data-swipe-reveal-actions
       class="absolute inset-y-0 right-0 z-0 flex items-stretch justify-end transition-opacity duration-150 ease-out"
       :class="cn(props.actionsClass)"
-      :style="{
-        width: `${props.actionWidth ?? 120}px`,
-        ...actionsStyle,
-      }"
+      :style="actionsContainerStyle"
     >
       <slot name="actions" />
     </div>

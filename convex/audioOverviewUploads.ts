@@ -4,18 +4,10 @@ import { internalMutation, internalQuery, mutation } from './_generated/server'
 import type { Doc, Id } from './_generated/dataModel'
 import type { MutationCtx } from './_generated/server'
 import { requireAuth } from './lib/auth'
+import { rejectLegacyAudioOverviewWrite } from './lib/audioOverviewLegacyBoundary'
 
-const CLAIM_TTL_MS = 75 * 60 * 1000
 const ABORT_RECONCILIATION_MS = 24 * 60 * 60 * 1000
-const MAX_AUDIO_BYTES = 50 * 1024 * 1024
-const MAX_CLAIMS_PER_TASK = 50
-const MAX_AUDIO_BYTES_PER_TASK = 60 * 1024 * 1024
 const SHA256_PATTERN = /^[0-9a-f]{64}$/i
-
-function normalizeSha256(value: string): string {
-  if (!SHA256_PATTERN.test(value)) throw new Error('Invalid audio checksum')
-  return value.toLowerCase()
-}
 
 function storageSha256AsHex(value: string): string {
   if (SHA256_PATTERN.test(value)) return value.toLowerCase()
@@ -29,33 +21,9 @@ function storageSha256AsHex(value: string): string {
 
 export const prepare = mutation({
   args: { taskId: v.id('tasks') },
-  handler: async (ctx, args) => {
-    const userId = await requireAuth(ctx)
-    const task = await ctx.db.get(args.taskId)
-    if (
-      !task
-      || task.userId !== userId
-      || task.type !== 'audio-overview-generation'
-      || task.status !== 'running'
-      || !task.audioOverviewRequest
-    ) {
-      throw new Error('Running audio overview task required')
-    }
-    const existingClaims = await ctx.db
-      .query('audioOverviewUploadClaims')
-      .withIndex('by_taskId', q => q.eq('taskId', task._id))
-      .take(MAX_CLAIMS_PER_TASK)
-    if (existingClaims.length >= MAX_CLAIMS_PER_TASK) {
-      throw new Error('Audio upload claim limit reached')
-    }
-    const nonce = crypto.randomUUID()
-    const claimId = await ctx.db.insert('audioOverviewUploadClaims', {
-      userId,
-      taskId: task._id,
-      nonce,
-      expiresAt: Date.now() + CLAIM_TTL_MS,
-    })
-    return { claimId, nonce }
+  handler: async (ctx) => {
+    await requireAuth(ctx)
+    rejectLegacyAudioOverviewWrite()
   },
 })
 
@@ -65,46 +33,9 @@ export const begin = mutation({
     expectedSha256: v.string(),
     expectedSize: v.number(),
   },
-  handler: async (ctx, args) => {
-    const userId = await requireAuth(ctx)
-    const claim = await ctx.db.get(args.claimId)
-    if (!claim || claim.userId !== userId) throw new Error('Upload claim not found')
-    if (claim.begunAt || claim.storageId || claim.expiresAt < Date.now()) {
-      throw new Error('Upload claim is not available')
-    }
-    const task = claim.taskId ? await ctx.db.get(claim.taskId) : null
-    if (
-      !task
-      || task.userId !== userId
-      || task.type !== 'audio-overview-generation'
-      || task.status !== 'running'
-      || !task.audioOverviewRequest
-    ) {
-      throw new Error('Running audio overview task required')
-    }
-
-    const expectedSha256 = normalizeSha256(args.expectedSha256)
-    if (!Number.isInteger(args.expectedSize) || args.expectedSize <= 0 || args.expectedSize > MAX_AUDIO_BYTES) {
-      throw new Error('Invalid audio size')
-    }
-    const taskClaims = await ctx.db
-      .query('audioOverviewUploadClaims')
-      .withIndex('by_taskId', q => q.eq('taskId', task._id))
-      .take(MAX_CLAIMS_PER_TASK)
-    const allocatedBytes = taskClaims.reduce((total, item) => total + (item.expectedSize ?? 0), 0)
-    if (allocatedBytes + args.expectedSize > MAX_AUDIO_BYTES_PER_TASK) {
-      throw new Error('Audio upload byte limit reached')
-    }
-
-    const begunAt = Date.now()
-    await ctx.db.patch(claim._id, {
-      expectedSha256,
-      expectedSize: args.expectedSize,
-      begunAt,
-      expiresAt: begunAt + CLAIM_TTL_MS,
-    })
-    const uploadUrl = await ctx.storage.generateUploadUrl()
-    return { uploadUrl }
+  handler: async (ctx) => {
+    await requireAuth(ctx)
+    rejectLegacyAudioOverviewWrite()
   },
 })
 
@@ -343,35 +274,9 @@ export async function releaseUploadOwnership(
 
 export const discard = mutation({
   args: { claimIds: v.array(v.id('audioOverviewUploadClaims')) },
-  handler: async (ctx, args) => {
-    const userId = await requireAuth(ctx)
-    if (args.claimIds.length > MAX_CLAIMS_PER_TASK) throw new Error('Too many upload claims')
-    const claims: Doc<'audioOverviewUploadClaims'>[] = []
-    for (const claimId of new Set(args.claimIds)) {
-      const claim = await ctx.db.get(claimId)
-      if (!claim || claim.userId !== userId) throw new Error('Upload claim not found')
-      if (claim.consumedAt) throw new Error('Consumed upload claim cannot be discarded')
-      claims.push(claim)
-    }
-
-    let deletedBlobs = 0
-    for (const claim of claims) {
-      const storageId = claim.storageId ?? claim.abortingStorageId
-      if (storageId) {
-        try {
-          await ctx.storage.delete(storageId)
-          deletedBlobs += 1
-          await ctx.db.delete(claim._id)
-        }
-        catch {
-          await ctx.db.patch(claim._id, { expiresAt: Date.now() })
-        }
-      }
-      else {
-        await ctx.db.delete(claim._id)
-      }
-    }
-    return { deletedBlobs }
+  handler: async (ctx) => {
+    await requireAuth(ctx)
+    rejectLegacyAudioOverviewWrite()
   },
 })
 

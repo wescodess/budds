@@ -754,6 +754,33 @@ describe('reviewItems.submitReview', () => {
     expect(profile).not.toBeNull()
     expect(profile!.streakCurrent).toBeGreaterThanOrEqual(1)
   })
+
+  test('applies the same review idempotency key exactly once', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId, sectionId } = await seedSectionWithFlashcards(t)
+    const itemId = await t.run(ctx => ctx.db.insert('reviewItems', {
+      userId: USER_A.tokenIdentifier,
+      courseId,
+      sectionId,
+      prompt: 'Idempotent prompt',
+      answer: 'Answer',
+      easeFactor: 2.5,
+      interval: 1,
+      repetitions: 0,
+      nextReviewDate: new Date().toISOString().slice(0, 10),
+      flagged: false,
+      createdAt: Date.now(),
+    }))
+
+    const args = { reviewItemId: itemId, quality: 4, idempotencyKey: 'review-attempt-1' }
+    const first = await asUser.mutation(api.reviewItems.submitReview, args)
+    const second = await asUser.mutation(api.reviewItems.submitReview, args)
+    const item = await t.run(ctx => ctx.db.get(itemId))
+
+    expect(second).toEqual(first)
+    expect(item!.repetitions).toBe(1)
+    expect(item!.lastReviewIdempotencyKey).toBe('review-attempt-1')
+  })
 })
 
 describe('reviewItems.getReviewBacklogCount', () => {
@@ -782,8 +809,8 @@ describe('reviewItems.getReviewBacklogCount', () => {
     })
 
     const result = await asUser.query(api.reviewItems.getReviewBacklogCount, {})
-    expect(result.dueCount).toBe(5)
-    expect(result.dailyCap).toBe(50)
+    expect(result!.dueCount).toBe(5)
+    expect(result!.dailyCap).toBe(50)
   })
 
   test('excludes flagged items from count', async () => {
@@ -822,7 +849,7 @@ describe('reviewItems.getReviewBacklogCount', () => {
     })
 
     const result = await asUser.query(api.reviewItems.getReviewBacklogCount, {})
-    expect(result.dueCount).toBe(1)
+    expect(result!.dueCount).toBe(1)
   })
 
   test('returns custom daily cap from profile', async () => {
@@ -850,7 +877,7 @@ describe('reviewItems.getReviewBacklogCount', () => {
     await asUser.mutation(api.learnProfile.updateDailyReviewCap, { cap: 25 })
 
     const result = await asUser.query(api.reviewItems.getReviewBacklogCount, {})
-    expect(result.dailyCap).toBe(25)
+    expect(result!.dailyCap).toBe(25)
   })
 
   test('returns null for unauthenticated user', async () => {
@@ -1040,6 +1067,31 @@ describe('reviewItems.completeReviewSession', () => {
     })
 
     expect(sessions).toHaveLength(2)
+  })
+
+  test('records the same session idempotency key exactly once', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const args = {
+      itemsReviewed: 4,
+      itemsCorrect: 3,
+      durationMs: 50_000,
+      mode: 'quick' as const,
+      idempotencyKey: 'review-session-1',
+    }
+
+    const first = await asUser.mutation(api.reviewItems.completeReviewSession, args)
+    const second = await asUser.mutation(api.reviewItems.completeReviewSession, args)
+    const sessions = await t.run(ctx =>
+      ctx.db.query('reviewSessions')
+        .withIndex('by_userId_and_idempotencyKey', q =>
+          q.eq('userId', USER_A.tokenIdentifier).eq('idempotencyKey', args.idempotencyKey),
+        )
+        .collect(),
+    )
+
+    expect(second).toEqual(first)
+    expect(sessions).toHaveLength(1)
   })
 
   test('rejects unauthenticated user', async () => {

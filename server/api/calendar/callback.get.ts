@@ -1,6 +1,7 @@
 import { api } from '../../../convex/_generated/api'
 import { makeConvexClient } from '../../utils/convex-client'
 import { GOOGLE_TOKEN_URL } from '../../utils/google-constants'
+import { encryptCalendarToken } from '../../../shared/calendar-token-encryption'
 const GOOGLE_CALENDAR_SETTINGS_URL = 'https://www.googleapis.com/calendar/v3/users/me/settings/timezone'
 
 export default defineEventHandler(async (event) => {
@@ -72,15 +73,20 @@ export default defineEventHandler(async (event) => {
   }
 
   try {
-    const accessTokenEncoded = Buffer.from(tokenResponse.access_token).toString('base64')
-    const refreshTokenEncoded = tokenResponse.refresh_token
-      ? Buffer.from(tokenResponse.refresh_token).toString('base64')
+    const encryptionKey = typeof config.calendarTokenEncryptionKey === 'string'
+      ? config.calendarTokenEncryptionKey
       : ''
+    if (!encryptionKey) throw new Error('Calendar token encryption is not configured')
+
+    const accessTokenEncrypted = await encryptCalendarToken(tokenResponse.access_token, encryptionKey)
+    const refreshTokenEncrypted = tokenResponse.refresh_token
+      ? await encryptCalendarToken(tokenResponse.refresh_token, encryptionKey)
+      : undefined
 
     await convexClient.mutation(api.calendarConnections.upsertConnection, {
       provider: 'google',
-      accessToken: accessTokenEncoded,
-      refreshToken: refreshTokenEncoded,
+      accessToken: accessTokenEncrypted,
+      refreshToken: refreshTokenEncrypted,
       expiresAt: Date.now() + tokenResponse.expires_in * 1000,
       timezone,
     })

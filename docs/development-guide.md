@@ -1,19 +1,18 @@
 # Budds - Development Guide
 
-**Date:** 2026-04-08
+**Date:** 2026-09-03
 
 ## Prerequisites
 
-- **Node.js** - LTS version recommended (v20+)
-- **pnpm** - Package manager (project uses pnpm lockfile)
-- **Google Cloud Console** - OAuth 2.0 credentials for authentication
-- **Cloudflare Account** - With AI Gateway and AI Search instances configured
-- **OpenRouter Account** - API key for LLM access
-- **Convex Account** - Backend-as-a-service project
+- **Node.js** v20+ (LTS recommended)
+- **pnpm** 9.12.3+
+- **Convex CLI** (`npx convex`)
+- **Google Cloud Console** OAuth 2.0 credentials
+- **Google AI Studio** Gemini API key with paid API access for private Audio Overview rendering
+- **Cloudflare account** with AI Gateway, AI Search, Workers AI, and R2 configured
+- **OpenRouter account** with API key
 
-## Environment Setup
-
-### 1. Clone and Install
+## Installation
 
 ```bash
 git clone <repository-url>
@@ -21,155 +20,184 @@ cd budds
 pnpm install
 ```
 
-### 2. Configure Environment Variables
+The `postinstall` script runs `validate-env.mjs` and `nuxt prepare` automatically.
 
-Create a `.env` file at the project root with:
+## Environment Variables
+
+### Nuxt Server Runtime Config (`.env`)
+
+| Variable | Alt Name | Purpose |
+|---|---|---|
+| `NUXT_PUBLIC_CONVEX_URL` | `CONVEX_URL` | Convex deployment URL |
+| `SITE_URL` | `NUXT_PUBLIC_SITE_URL` | Application origin (e.g. `http://localhost:3002`) |
+| `AUTH_PROXY_TARGET_URL` | `NUXT_AUTH_PROXY_TARGET_URL` | Auth proxy target (defaults to Convex site URL) |
+| `NUXT_CLOUDFLARE_ACCOUNT_ID` | `CF_ACCOUNT_ID` | Cloudflare account ID |
+| `NUXT_CLOUDFLARE_AI_GATEWAY_ID` | `CLOUDFLARE_AI_GATEWAY_ID` | AI Gateway instance ID |
+| `NUXT_CLOUDFLARE_AI_GATEWAY_API_KEY` | `CLOUDFLARE_AI_GATEWAY_API_KEY` | AI Gateway API key |
+| `NUXT_CLOUDFLARE_AI_SEARCH_INSTANCE` | `CLOUDFLARE_AI_SEARCH_INSTANCE` | AI Search instance name |
+| `NUXT_CLOUDFLARE_AI_SEARCH_TOKEN` | `CLOUDFLARE_AI_SEARCH_TOKEN` | AI Search auth token |
+| `NUXT_OPENROUTER_API_KEY` | `OPENROUTER_API_KEY` | OpenRouter API key for LLM access |
+| `NUXT_CLOUDFLARE_WORKERS_AI_TOKEN` | `CLOUDFLARE_WORKERS_AI_TOKEN` | Workers AI auth token |
+| `NUXT_R2_ENDPOINT` | `R2_ENDPOINT` | R2 S3-compatible endpoint |
+| `NUXT_R2_ACCESS_KEY_ID` | `R2_ACCESS_KEY_ID` | R2 access key |
+| `NUXT_R2_SECRET_ACCESS_KEY` | `R2_SECRET_ACCESS_KEY` | R2 secret key |
+| `NUXT_R2_BUCKET_NAME` | `R2_BUCKET_NAME` | R2 bucket name |
+| `NUXT_AUDIO_OVERVIEW_JOB_SECRET` | `AUDIO_OVERVIEW_JOB_SECRET` | HMAC secret used to derive per-job capabilities |
+| `NUXT_AUDIO_OVERVIEW_WORKER_TOKEN` | `AUDIO_OVERVIEW_WORKER_TOKEN` | Shared 32+ character launch/orchestration credential for the Workflow Worker and Convex lifecycle mutations |
+| `NUXT_AUDIO_OVERVIEW_WORKER_URL` | `AUDIO_OVERVIEW_WORKER_URL` | Local Worker URL; production uses the service binding instead |
+| `NUXT_CALENDAR_TOKEN_ENCRYPTION_KEY` | `CALENDAR_TOKEN_ENCRYPTION_KEY` | Server-only Base64 AES key; use the `NUXT_` name in Pages and the unprefixed name in Convex |
+
+Dia variables are legacy evaluation settings. They do not configure the production Audio Renderer, and production generation must never fall back to Dia or Aura.
+
+### Audio Overview Workflow Worker
+
+| Secret, variable, or binding | Kind | Purpose |
+|---|---|---|
+| `AUDIO_OVERVIEW_WORKER_TOKEN` | Secret | Authenticates launch requests from Pages |
+| `GEMINI_API_KEY` | Secret | Server-side Gemini 2.5 Flash Preview TTS access; never expose it through Nuxt public config or Workflow parameters |
+| `PAGES_BASE_URL` | Variable | Origin used for the current capability-authenticated Pages callback |
+| `AUDIO_ARTIFACTS` | Private R2 binding | Stores deterministic Scene PCM and final WAV Audio Artifacts |
+
+The checked-in Worker config binds `AUDIO_ARTIFACTS` to the local/development bucket. Bind the same name to a separate private production bucket before deployment. Keep public development URLs, custom domains, and anonymous object access disabled for both buckets.
+
+### Convex Environment Variables (set via `npx convex env set`)
+
+| Variable | Purpose |
+|---|---|
+| `BETTER_AUTH_SECRET` | Better Auth session signing secret |
+| `SITE_URL` | Application origin |
+| `CONVEX_SITE_URL` | Convex HTTP URL |
+| `GOOGLE_CLIENT_ID` | Google OAuth client ID |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
+| `CALENDAR_TOKEN_ENCRYPTION_KEY` | Base64-encoded 32-byte AES key; set the same secret in Nuxt/Pages and Convex |
+| `AUDIO_OVERVIEW_JOB_SECRET` | Must exactly match the Pages/Nuxt Audio Overview job secret so Convex can verify server-derived capabilities |
+| `AUDIO_OVERVIEW_WORKER_TOKEN` | Must exactly match the 32+ character Pages/Nuxt and Worker token; seals Interjection scripting, rendering, failure, and publication mutations from browser callers |
+
+### Local Convex Overrides (`.env.local`)
 
 ```bash
-# Authentication
-BETTER_AUTH_SECRET=<random-secret-string>
-GOOGLE_CLIENT_ID=<your-google-oauth-client-id>
-GOOGLE_CLIENT_SECRET=<your-google-oauth-client-secret>
-
-# Convex
-CONVEX_URL=<your-convex-deployment-url>
-
-# Cloudflare AI Gateway
-CF_ACCOUNT_ID=<your-cloudflare-account-id>
-CLOUDFLARE_AI_GATEWAY_ID=<your-ai-gateway-name>
-CLOUDFLARE_AI_GATEWAY_API_KEY=<your-ai-gateway-key>
-
-# Cloudflare AI Search
-CLOUDFLARE_AI_SEARCH_INSTANCE=<your-ai-search-instance>
-CLOUDFLARE_AI_SEARCH_TOKEN=<your-ai-search-token>
-
-# OpenRouter
-OPENROUTER_API_KEY=<your-openrouter-api-key>
-```
-
-For local Convex development, create `.env.local`:
-
-```bash
-CONVEX_DEPLOYMENT=<local-convex-deployment-id>
+CONVEX_DEPLOYMENT=<local-deployment-id>
 CONVEX_URL=<local-convex-url>
-CONVEX_SITE_URL=<local-convex-site-url>
 ```
 
-### 3. Prepare Nuxt
+## Commands
 
-```bash
-npx nuxt prepare
-```
+| Command | Description |
+|---|---|
+| `pnpm dev` | Start dev server on port 3002 |
+| `pnpm dev:stack` | Start Nuxt, Convex dev, and the Audio Overview Workflow Worker together; stop all three with Ctrl-C |
+| `pnpm build` | Validate env vars and build for production |
+| `pnpm deploy` | Build and deploy to Cloudflare Pages via Wrangler |
+| `pnpm preview` | Preview production build locally |
+| `pnpm test` | Run Convex integration and server tests |
+| `pnpm test:watch` | Run tests in watch mode |
+| `pnpm test:component` | Run Vue component tests |
+| `pnpm test:component:watch` | Run component tests in watch mode |
+| `pnpm typecheck` | TypeScript type checking via vue-tsc |
+| `pnpm lint` | Lint with ESLint |
+| `pnpm audio:workflow:dev` | Start the local Audio Overview Workflow Worker on port 8787 |
+| `pnpm audio:workflow:test` | Run the standalone Workflow tests |
+| `pnpm audio:workflow:typecheck` | Type-check the standalone Workflow Worker |
+| `node scripts/validate-env.mjs audio-workflow --strict` | Validate Worker secrets, callback origin, and the private R2 binding |
+| `npx convex dev` | Start Convex dev server (syncs schema and functions) |
+| `npx convex deploy` | Deploy Convex to production |
 
-This generates TypeScript types in `.nuxt/`.
+## Local Development Workflow
 
-### 4. Start Convex (if using locally)
+### 1. Start Convex
 
 ```bash
 npx convex dev
 ```
 
-This starts the Convex development server and syncs schema/functions.
+This watches `convex/` for changes, syncs schema and functions, and regenerates `convex/_generated/` types.
 
-## Development Commands
+### 2. Start the Audio Overview Workflow
 
-| Command | Description |
-|---|---|
-| `pnpm dev` | Start dev server on port 3002 |
-| `pnpm build` | Production build |
-| `pnpm preview` | Preview production build locally |
-| `pnpm generate` | Static site generation |
-| `npx nuxt prepare` | Regenerate TypeScript types |
-| `npx convex dev` | Start Convex development server |
-| `npx convex deploy` | Deploy Convex to production |
+Use the same local launch token for Nuxt and the Worker. Add a server-side Gemini key to the ignored Worker secrets file, and keep both values out of source control.
 
-## Local Development
+```bash
+cp workers/audio-overview/.dev.vars.example workers/audio-overview/.dev.vars
+# Set AUDIO_OVERVIEW_WORKER_TOKEN and GEMINI_API_KEY in .dev.vars.
+# Set the same launch token as NUXT_AUDIO_OVERVIEW_WORKER_TOKEN in .env.local.
+# Mirror that exact launch token into the active Convex deployment:
+# pnpm exec convex env set AUDIO_OVERVIEW_WORKER_TOKEN '<same-32+-character-token>'
+# The Worker dev script binds PAGES_BASE_URL to http://localhost:3002.
+node scripts/validate-env.mjs audio-workflow --strict
+pnpm audio:workflow:dev
+```
+
+The development binding connects to the private remote `budds-dev` R2 bucket so
+the local Nuxt S3 proxy and the Workflow see the same artifacts. Do not point
+this binding at a production bucket. R2 remains private; browser playback goes
+through the owner/share-authorized media endpoints.
+
+For local Nuxt, also set `NUXT_AUDIO_OVERVIEW_WORKER_URL=http://localhost:8787`,
+`NUXT_AUDIO_OVERVIEW_WORKER_TOKEN`, and a strong
+`NUXT_AUDIO_OVERVIEW_JOB_SECRET` in `.env.local`. Set that exact job secret in
+the active Convex development deployment as `AUDIO_OVERVIEW_JOB_SECRET`, and
+set the exact worker token there as `AUDIO_OVERVIEW_WORKER_TOKEN`.
+
+### 3. Start Nuxt
 
 ```bash
 pnpm dev
 ```
 
-The dev server runs at `http://localhost:3002` (configured in `nuxt.config.ts`).
+The dev launcher automatically reads the ignored `.env.audio-workflow.local`
+file before starting Nuxt, while Nuxt continues to read the normal `.env`
+file. It prints an explicit warning when any Audio Overview job variable is
+missing. The dev server runs at `http://localhost:3002`.
 
-### Auto-Imports
+### 4. All Three Together
 
-Nuxt 4 auto-imports the following:
+Run `pnpm dev:stack` to start Convex, the Workflow Worker, and Nuxt under one
+supervised command, or use the three commands above in separate terminals.
+Convex owns realtime job state; the Worker continues generation after the
+browser request has returned. The stack can boot without `GEMINI_API_KEY` for
+non-audio development, but production audio rendering fails closed until that
+key is set in `workers/audio-overview/.dev.vars`.
 
-- **Composables** in `app/composables/` - Available globally in Vue components
-- **Utilities** in `server/utils/` - Available globally in server routes
-- **Vue APIs** - `ref`, `reactive`, `computed`, `watch`, etc.
-- **Nuxt APIs** - `useRuntimeConfig`, `useFetch`, `navigateTo`, etc.
+For production, the Wrangler `production` environment binds the existing
+private `budds` bucket, while local development uses only `budds-dev`. Set
+`GEMINI_API_KEY` and
+`AUDIO_OVERVIEW_WORKER_TOKEN` with `wrangler secret put`, set the Worker's
+`PAGES_BASE_URL` variable to the public Pages origin, validate the Worker, then
+deploy it with `pnpm --dir workers/audio-overview exec wrangler deploy --env production --keep-vars`. The checked-in production configuration pins `PAGES_BASE_URL` to `https://budds.pages.dev`; keep `--keep-vars` during release so an older checkout cannot remove remotely managed variables. Add a Cloudflare Pages service binding named
+`AUDIO_OVERVIEW_WORKFLOW` targeting that Worker. Set the job secret and launch
+token as Pages secrets, and set the same job secret in the production Convex
+deployment. Also set the exact worker token in production Convex as
+`AUDIO_OVERVIEW_WORKER_TOKEN`. Never place either credential or the Gemini key
+in Pages client-visible variables. Keep the Pages compatibility date at
+`2025-04-14` or later and enable the `nodejs_compat` compatibility flag in the
+Cloudflare dashboard. Nitro compiles with native Node compatibility enabled,
+but this repository intentionally has no root `wrangler.toml`, so the dashboard
+remains the deployment authority for that flag.
 
-### Adding UI Components
+## Convex Development
 
-shadcn-nuxt components are added on-demand:
+Schema is defined in `convex/schema.ts`. Queries, mutations, and actions are in individual files per domain (e.g. `convex/folders.ts`, `convex/documents.ts`).
 
-```bash
-npx shadcn-vue@latest add <component-name>
-```
+Before writing Convex code, read `convex/_generated/ai/guidelines.md` for API patterns and rules.
 
-Components are generated in `app/components/ui/` with the `Ui` prefix.
+Convex test files live alongside their source files (e.g. `convex/folders.test.ts`) and use the `convex-test` library.
 
-### Adding Server Routes
+## Auth Flow
 
-Create files in `server/api/` following Nitro conventions:
+1. Google OAuth redirects to `${CONVEX_SITE_URL}/api/auth/callback/google`
+2. Better Auth runs on Convex HTTP actions (`convex/auth.ts` + `convex/http.ts`)
+3. Nuxt server middleware (`server/middleware/auth-proxy.ts`) proxies auth requests to Convex
+4. SSR middleware (`server/middleware/convex-token.ts`) fetches Convex JWT tokens for server-side authenticated queries
+5. Client plugin (`app/plugins/convex-auth.client.ts`) syncs auth state
 
-```
-server/api/example.get.ts    → GET  /api/example
-server/api/example.post.ts   → POST /api/example
-server/api/example/[id].ts   → ALL  /api/example/:id
-```
+## Route Protection
 
-### Adding Pages
-
-Create files in `app/pages/` following Nuxt file-based routing:
-
-```
-app/pages/about.vue           → /about
-app/pages/app/settings.vue    → /app/settings (requires auth)
-app/pages/app/[id].vue        → /app/:id (dynamic route, requires auth)
-```
-
-### Adding Convex Functions
-
-1. Define tables in `convex/schema.ts`
-2. Create query/mutation/action files in `convex/`
-3. Run `npx convex dev` to sync and generate types
-
-## Build Process
-
-```bash
-pnpm build
-```
-
-Nuxt uses Vite to build the application. The output goes to `.output/` directory. The build includes:
-
-- Server bundle (Nitro)
-- Client bundle (Vue app)
-- Static assets
-
-## Project Conventions
-
-### File Naming
-
-- Vue pages: `kebab-case.vue`
-- Composables: `useCamelCase.ts`
-- Server routes: `route-name.method.ts`
-- Utilities: `kebab-case.ts`
-
-### Code Style
-
-- TypeScript throughout (strict mode via Nuxt)
-- Vue 3 Composition API with `<script setup>` syntax
-- Tailwind CSS for all styling (no scoped styles)
-- No test framework configured
-
-### Authentication
-
-Protected routes are configured in `nuxt.config.ts`:
+Protected routes are declared in `nuxt.config.ts`:
 
 ```typescript
 routeRules: {
+  '/': { auth: 'user' },
+  '/app': { auth: 'user' },
   '/app/**': { auth: 'user' },
   '/login': { auth: 'guest' },
 }
@@ -177,48 +205,76 @@ routeRules: {
 
 Any new page under `app/pages/app/` is automatically protected.
 
-### Environment Variables
+## Adding UI Components
 
-Server-only variables are accessed via `useRuntimeConfig()`:
-
-```typescript
-const config = useRuntimeConfig()
-config.cloudflareAccountId  // server-only
-config.public.siteUrl       // available on client
+```bash
+npx shadcn-vue@latest add <component-name>
 ```
+
+Components install to `app/components/ui/` with the `Ui` prefix.
+
+## Testing
+
+### Convex Integration Tests
+
+```bash
+pnpm test
+```
+
+Uses `convex-test` with `convexTest(schema, modules)`. Tests run in edge-runtime/node.
+
+### Vue Component Tests
+
+```bash
+pnpm test:component
+```
+
+Uses `@nuxt/test-utils` with `mountSuspended` in a happy-dom environment. Test files are in `tests/component/` organized by feature.
+
+## Build and Deploy
+
+```bash
+pnpm build
+```
+
+Runs `validate-env.mjs` in strict mode before building. Builds for `cloudflare_pages` preset. Output goes to `dist/`.
+
+```bash
+pnpm deploy
+```
+
+Builds and deploys to Cloudflare Pages via Wrangler.
 
 ## Troubleshooting
 
-### SQLite Build Issues
-
-better-sqlite3 requires native compilation. If `pnpm install` fails:
-
-```bash
-pnpm rebuild better-sqlite3
-```
-
-### Auth Database Reset
-
-Delete `data/auth.db` to reset all users and sessions. It will be recreated on next server start.
-
 ### Convex Type Errors
 
-If Convex types are stale:
+Regenerate types by restarting the Convex dev server:
 
 ```bash
-npx convex dev  # regenerates _generated/ types
+npx convex dev
 ```
 
-### Port Already in Use
+### Port Conflict
 
-Dev server defaults to port 3002. If occupied, change in `nuxt.config.ts`:
+Dev server defaults to port 3002. Change in `nuxt.config.ts` under `devServer.port`.
 
-```typescript
-devServer: {
-  port: 3003,  // or any available port
-}
+### Build Fails on Missing Env
+
+The `validate-env.mjs` script checks required variables before building. Ensure all variables in the table above are set.
+
+### Audio Overview Stops Before Rendering
+
+Run the Worker-specific validation from the repository root:
+
+```bash
+node scripts/validate-env.mjs audio-workflow --strict
 ```
 
----
+The command checks `workers/audio-overview/.dev.vars` without printing secret values. It fails when the launch token, Gemini key, callback origin, or `AUDIO_ARTIFACTS` binding is missing. A configured Dia or Aura value does not satisfy this check.
 
-_Generated using BMAD Method `document-project` workflow_
+### Audio Overview Interjection Cost Controls
+
+Version 2 interjections are server-reserved before any provider work. A user may reserve at most 10 per UTC day and an episode may contain at most 20. Each new reservation records a 40,000 micro-USD budget allowance; an idempotent retry returns the original reservation before evaluating or consuming quota.
+
+At publication, `estimatedCostMicrousd` is reconciled from the actual WAV duration using a planning estimate of 1,000 micro-USD for script generation plus 250 micro-USD per synthesized second. This value is an operating estimate, not a provider invoice or billing record.

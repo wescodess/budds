@@ -4,6 +4,7 @@ import { internalAction, type ActionCtx } from './_generated/server'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import { S3Client, PutObjectCommand, DeleteObjectCommand, CopyObjectCommand } from '@aws-sdk/client-s3'
+import { createSourceObjectMetadata, readSourceIdentityMetadata } from '../shared/source-identity'
 async function loadExtractors() {
   return await import('./sourceExtractors')
 }
@@ -17,7 +18,17 @@ const MAX_INDEX_JOB_POLL_ATTEMPTS = 180
 
 type CleanupAttemptResult =
   | { ok: true }
+  | { ok: true; done: false; nextPage: number }
   | { ok: false; error: string }
+
+const AI_SEARCH_CLEANUP_PAGE_SIZE = 50
+const AI_SEARCH_CLEANUP_PAGES_PER_ATTEMPT = 4
+const AI_SEARCH_CLEANUP_DELETE_BATCH_SIZE = 8
+const AI_SEARCH_CLEANUP_REQUEST_TIMEOUT_MS = 15_000
+
+function cleanupAttemptComplete(result: CleanupAttemptResult): boolean {
+  return result.ok && (!('done' in result) || result.done !== false)
+}
 
 function getR2Client() {
   const endpoint = process.env.R2_ENDPOINT
@@ -46,6 +57,7 @@ function getAiSearchConfig() {
 }
 
 interface AiSearchItem {
+  id?: string
   key: string
   source_id?: string | null
   status: 'queued' | 'running' | 'completed' | 'error' | 'skipped' | 'outdated'
@@ -63,7 +75,13 @@ type AiSearchItemVerification =
 async function verifyAiSearchItem(
   config: NonNullable<ReturnType<typeof getAiSearchConfig>>,
   key: string,
-  expected: { userId: string, folderId: string, documentId: string },
+  expected: {
+    userId: string
+    folderId: string
+    documentId: string
+    contentHash: string
+    sourceRevision: string
+  },
 ): Promise<AiSearchItemVerification> {
   const bucket = process.env.R2_BUCKET_NAME
   if (!bucket) return { kind: 'terminal' }
@@ -92,10 +110,14 @@ async function verifyAiSearchItem(
       const metadata = Object.fromEntries(
         Object.entries(item.metadata ?? {}).map(([name, value]) => [name.toLowerCase(), String(value)]),
       )
+      const sourceIdentity = readSourceIdentityMetadata(metadata)
       if (
         metadata.userid !== expected.userId
         || metadata.folderid !== expected.folderId
         || metadata.documentid !== expected.documentId
+        || !sourceIdentity
+        || sourceIdentity.contentHash !== expected.contentHash
+        || sourceIdentity.sourceRevision !== expected.sourceRevision
       ) {
         return { kind: 'metadata_mismatch' }
       }
@@ -158,6 +180,8 @@ async function verifyAndFinalizeDocumentIndex(
         userId: doc.userId,
         folderId: String(doc.folderId),
         documentId: String(doc._id),
+        contentHash: doc.contentHash ?? '',
+        sourceRevision: doc.sourceRevision ?? '',
       })
     : { kind: 'terminal' as const }
 
@@ -286,12 +310,13 @@ async function performCleanupAttemptInternal(args: {
   userId: string
   documentId: string
   r2Key?: string
+  scanPage?: number
 }): Promise<CleanupAttemptResult> {
   try {
     if (args.kind === 'r2') {
       if (!args.r2Key) return { ok: true }
       const bucket = process.env.R2_BUCKET_NAME
-      if (!bucket) return { ok: true }
+      if (!bucket) return { ok: false, error: 'R2 cleanup unavailable: R2_BUCKET_NAME is not configured' }
       try {
         const r2 = getR2Client()
         await r2.send(new DeleteObjectCommand({ Bucket: bucket, Key: args.r2Key }))
@@ -304,42 +329,98 @@ async function performCleanupAttemptInternal(args: {
     }
 
     const config = getAiSearchConfig()
-    if (!config) return { ok: true }
+    if (!config) {
+      return {
+        ok: false,
+        error: 'AI Search cleanup unavailable: CF_ACCOUNT_ID, CLOUDFLARE_AI_SEARCH_INSTANCE, and CLOUDFLARE_AI_SEARCH_TOKEN are required',
+      }
+    }
+    const bucket = process.env.R2_BUCKET_NAME
+    if (!bucket) return { ok: false, error: 'AI Search cleanup unavailable: R2_BUCKET_NAME is not configured' }
 
-    if (args.documentId === '__user_bulk__') {
-      const listUrl = `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/ai-search/instances/${config.instance}/documents?filter=${encodeURIComponent(`userId:${args.userId}`)}`
+    const sourceId = `r2:${bucket}`
+    const baseUrl = `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/ai-search/instances/${config.instance}/items`
+    const metadataFilter = args.documentId === '__user_bulk__'
+      ? { userid: args.userId }
+      : { userid: args.userId, documentid: args.documentId }
+    let page = Math.max(1, Math.floor(args.scanPage ?? 1))
+
+    for (let scanned = 0; scanned < AI_SEARCH_CLEANUP_PAGES_PER_ATTEMPT; scanned++) {
+      const listUrl = new URL(baseUrl)
+      listUrl.searchParams.set('source', sourceId)
+      listUrl.searchParams.set('metadata_filter', JSON.stringify(metadataFilter))
+      listUrl.searchParams.set('page', String(page))
+      listUrl.searchParams.set('per_page', String(AI_SEARCH_CLEANUP_PAGE_SIZE))
+      if (args.r2Key) listUrl.searchParams.set('key', args.r2Key)
+
       const listRes = await fetch(listUrl, {
         headers: { 'Authorization': `Bearer ${config.token}` },
+        signal: AbortSignal.timeout(AI_SEARCH_CLEANUP_REQUEST_TIMEOUT_MS),
       })
-      if (listRes.status === 404) return { ok: true }
       if (!listRes.ok) {
         const text = (await listRes.text()).slice(0, 500)
-        return { ok: false, error: `AI Search list failed (${listRes.status}): ${text}` }
+        return { ok: false, error: `AI Search item list failed (${listRes.status}): ${text}` }
       }
-      const data = (await listRes.json()) as { result?: Array<{ id?: string }> }
-      const ids = (data.result ?? []).map((r) => r.id).filter((id): id is string => typeof id === 'string')
-      if (ids.length === 0) return { ok: true }
+      const data = await listRes.json() as {
+        success?: boolean
+        result?: AiSearchItem[]
+        result_info?: { page?: number; per_page?: number; total_count?: number; count?: number }
+      }
+      if (data.success !== true || !Array.isArray(data.result)) {
+        return { ok: false, error: 'AI Search item list returned an invalid response' }
+      }
 
-      for (const id of ids) {
-        const res = await fetch(
-          `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/ai-search/instances/${config.instance}/documents/${encodeURIComponent(id)}`,
-          { method: 'DELETE', headers: { 'Authorization': `Bearer ${config.token}` } },
+      const matches = data.result.filter((item) => {
+        const metadata = Object.fromEntries(
+          Object.entries(item.metadata ?? {}).map(([name, value]) => [name.toLowerCase(), String(value)]),
         )
-        if (!res.ok && res.status !== 404) {
-          const text = (await res.text()).slice(0, 500)
-          return { ok: false, error: `AI Search delete ${id} failed (${res.status}): ${text}` }
+        return typeof item.id === 'string'
+          && item.source_id === sourceId
+          && metadata.userid === args.userId
+          && (args.documentId === '__user_bulk__' || metadata.documentid === args.documentId)
+          && (!args.r2Key || item.key === args.r2Key)
+      }).slice(0, AI_SEARCH_CLEANUP_DELETE_BATCH_SIZE)
+
+      if (matches.length > 0) {
+        for (const item of matches) {
+          const itemId = item.id
+          if (!itemId) continue
+          const itemUrl = `${baseUrl}/${encodeURIComponent(itemId)}`
+          const deleted = await fetch(itemUrl, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${config.token}` },
+            signal: AbortSignal.timeout(AI_SEARCH_CLEANUP_REQUEST_TIMEOUT_MS),
+          })
+          if (!deleted.ok && deleted.status !== 404) {
+            const text = (await deleted.text()).slice(0, 500)
+            return { ok: false, error: `AI Search item delete ${itemId} failed (${deleted.status}): ${text}` }
+          }
+
+          const verified = await fetch(itemUrl, {
+            headers: { 'Authorization': `Bearer ${config.token}` },
+            signal: AbortSignal.timeout(AI_SEARCH_CLEANUP_REQUEST_TIMEOUT_MS),
+          })
+          if (verified.status !== 404) {
+            const text = (await verified.text()).slice(0, 500)
+            return { ok: false, error: `AI Search item ${itemId} deletion was not verified (${verified.status}): ${text}` }
+          }
         }
+        // Deleting rows shifts page-number pagination. Restart at page one and
+        // rescan before considering the durable cleanup row complete.
+        return { ok: true, done: false, nextPage: 1 }
       }
-      return { ok: true }
+
+      const currentPage = data.result_info?.page ?? page
+      const perPage = data.result_info?.per_page ?? AI_SEARCH_CLEANUP_PAGE_SIZE
+      const totalCount = data.result_info?.total_count
+      const hasMore = typeof totalCount === 'number'
+        ? currentPage * perPage < totalCount
+        : data.result.length === AI_SEARCH_CLEANUP_PAGE_SIZE
+      if (!hasMore) return { ok: true }
+      page = currentPage + 1
     }
 
-    const res = await fetch(
-      `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/ai-search/instances/${config.instance}/documents/${encodeURIComponent(args.documentId)}`,
-      { method: 'DELETE', headers: { 'Authorization': `Bearer ${config.token}` } },
-    )
-    if (res.ok || res.status === 404) return { ok: true }
-    const text = (await res.text()).slice(0, 500)
-    return { ok: false, error: `AI Search delete failed (${res.status}): ${text}` }
+    return { ok: true, done: false, nextPage: page }
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : String(error)
     return { ok: false, error: msg }
@@ -351,6 +432,7 @@ async function failDocumentIngestion(
   args: {
     documentId: Id<'documents'>
     fileId?: Id<'_storage'>
+    userId?: string
     failureReason: string
     r2Key?: string
     cleanupAiSearch?: boolean
@@ -358,7 +440,27 @@ async function failDocumentIngestion(
   },
 ) {
   const doc = await ctx.runQuery(internal.documents.getDocument, { id: args.documentId })
-  if (!doc || doc.status === 'failed' || doc.status === 'success') return
+  if (!doc || doc.status === 'failed') {
+    if (args.userId && args.r2Key) {
+      const { r2Enqueued, aiSearchEnqueued } = await ctx.runMutation(
+        internal.documents.enqueueFailedDocumentCleanup,
+        {
+          userId: args.userId,
+          documentId: String(args.documentId),
+          retryAiSearch: args.cleanupAiSearch === true,
+          retryR2: true,
+          r2Key: args.r2Key,
+        },
+      )
+      if (r2Enqueued || aiSearchEnqueued) {
+        await ctx.scheduler.runAfter(0, internal.accountDeletion.drainPendingCleanup, {
+          userId: args.userId,
+        })
+      }
+    }
+    return
+  }
+  if (doc.status === 'success') return
 
   const taskId = args.taskId ?? doc.taskId
   if (taskId) {
@@ -406,8 +508,8 @@ async function failDocumentIngestion(
     {
       userId,
       documentId: String(args.documentId),
-      retryAiSearch: !aiSearchCleanup.ok,
-      retryR2: !r2Cleanup.ok,
+      retryAiSearch: !cleanupAttemptComplete(aiSearchCleanup),
+      retryR2: !cleanupAttemptComplete(r2Cleanup),
       r2Key,
     },
   )
@@ -474,18 +576,27 @@ async function uploadToR2AndSync(
     await ctx.runMutation(internal.tasks.updateProgress, { taskId: args.taskId, progress: 'Uploading to storage…' })
   }
 
+  const bodyBytes = typeof args.body === 'string'
+    ? new TextEncoder().encode(args.body)
+    : Uint8Array.from(args.body)
+  const digest = await crypto.subtle.digest('SHA-256', bodyBytes)
+  const contentHash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
+  const sourceRevision = `sha256:${contentHash}`
+
   const r2 = getR2Client()
   await r2.send(new PutObjectCommand({
     Bucket: bucket,
     Key: args.r2Key,
     Body: args.body,
     ContentType: args.contentType,
-    Metadata: {
+    Metadata: createSourceObjectMetadata({
       userId: args.userId,
-      documentId: args.documentId,
+      documentId: String(args.documentId),
       folderId: String(args.folderId),
-      filename: args.filename.replace(/[^\x20-\x7E]/g, ''),
-    },
+      filename: args.filename,
+      contentHash,
+      sourceRevision,
+    }),
   }))
 
   if (args.taskId) {
@@ -496,6 +607,8 @@ async function uploadToR2AndSync(
     id: args.documentId,
     status: 'indexing',
     r2Key: args.r2Key,
+    contentHash,
+    sourceRevision,
   })
 
   if (args.taskId) {
@@ -583,6 +696,7 @@ export const ingestDocument = internalAction({
   },
   handler: async (ctx, args) => {
     const sourceType = args.sourceType ?? 'file'
+    let r2KeyForCleanup: string | undefined
 
     try {
       if (sourceType === 'file') {
@@ -616,6 +730,7 @@ export const ingestDocument = internalAction({
 
         const ext = getR2Extension(args.filename, args.mimeType)
         const r2Key = `${sanitizeUserSegment(args.userId)}/${args.folderId}/${args.documentId}${ext}`
+        r2KeyForCleanup = r2Key
 
         await uploadToR2AndSync(ctx, {
           documentId: args.documentId,
@@ -641,6 +756,7 @@ export const ingestDocument = internalAction({
         const { extractYouTubeTranscript } = await loadExtractors()
         const { title, content } = await extractYouTubeTranscript(args.sourceUrl)
         const r2Key = `${sanitizeUserSegment(args.userId)}/${args.folderId}/${args.documentId}.md`
+        r2KeyForCleanup = r2Key
 
         const resolvedFilename = title || args.filename
         await ctx.runMutation(internal.documents.updateDocumentFilename, { id: args.documentId, filename: resolvedFilename })
@@ -672,6 +788,7 @@ export const ingestDocument = internalAction({
         const { extractWebsiteContent } = await loadExtractors()
         const { title, content } = await extractWebsiteContent(args.sourceUrl)
         const r2Key = `${sanitizeUserSegment(args.userId)}/${args.folderId}/${args.documentId}.md`
+        r2KeyForCleanup = r2Key
 
         const resolvedFilename = title || args.filename
         await ctx.runMutation(internal.documents.updateDocumentFilename, { id: args.documentId, filename: resolvedFilename })
@@ -692,7 +809,10 @@ export const ingestDocument = internalAction({
       await failDocumentIngestion(ctx, {
         documentId: args.documentId,
         fileId: args.fileId,
+        userId: args.userId,
         failureReason: message,
+        r2Key: r2KeyForCleanup,
+        cleanupAiSearch: r2KeyForCleanup !== undefined,
         taskId: args.taskId,
       })
     }
@@ -709,9 +829,8 @@ export const ingestText = internalAction({
     taskId: v.optional(v.id('tasks')),
   },
   handler: async (ctx, args) => {
+    const r2Key = `${sanitizeUserSegment(args.userId)}/${args.folderId}/${args.documentId}.md`
     try {
-      const r2Key = `${sanitizeUserSegment(args.userId)}/${args.folderId}/${args.documentId}.md`
-
       await uploadToR2AndSync(ctx, {
         documentId: args.documentId,
         userId: args.userId,
@@ -726,7 +845,10 @@ export const ingestText = internalAction({
       const message = error instanceof Error ? error.message : String(error)
       await failDocumentIngestion(ctx, {
         documentId: args.documentId,
+        userId: args.userId,
         failureReason: message,
+        r2Key,
+        cleanupAiSearch: true,
         taskId: args.taskId,
       })
     }
@@ -921,12 +1043,14 @@ export const updateDocumentAiSearchMetadata = internalAction({
         CopySource: `${bucket}/${args.r2Key}`,
         Key: args.r2Key,
         MetadataDirective: 'REPLACE',
-        Metadata: {
+        Metadata: createSourceObjectMetadata({
           userId: args.userId,
           documentId: String(args.documentId),
           folderId: args.folderId,
-          filename: args.filename.replace(/[^\x20-\x7E]/g, ''),
-        },
+          filename: args.filename,
+          contentHash: doc.contentHash ?? '',
+          sourceRevision: doc.sourceRevision ?? '',
+        }),
       }))
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error)
@@ -982,6 +1106,7 @@ export const performCleanupAttempt = internalAction({
     userId: v.string(),
     documentId: v.string(),
     r2Key: v.optional(v.string()),
+    scanPage: v.optional(v.number()),
   },
   handler: async (_ctx, args): Promise<CleanupAttemptResult> => {
     return await performCleanupAttemptInternal(args)

@@ -8,7 +8,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/componen
 import { injectFolderContext } from '~/composables/useFolderPageContext'
 
 const props = defineProps<{
-  messages: Array<{ role: string; content: string; sources?: any[]; interjectionContext?: InterjectionContext }>
+  messages: Array<{ role: 'user' | 'assistant'; content: string; sources?: any[]; interjectionContext?: InterjectionContext }>
   loading: boolean
   streaming: boolean
   thinking: boolean
@@ -111,7 +111,8 @@ async function handleSendMessage(query: string) {
   activeCitationIndex.value = null
   const ctx = pendingInterjectionContext.value ?? undefined
   pendingInterjectionContext.value = null
-  emit('send', query)
+  if (ctx) emit('podcastAskSubmit', { question: query, context: ctx })
+  else emit('send', query)
 }
 
 function handlePodcastAsk(context: InterjectionContext) {

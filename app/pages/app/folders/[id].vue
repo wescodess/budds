@@ -305,7 +305,7 @@ watch(() => route.path, (next, prev) => {
     @new-void="newVoidOpen = true"
     @select-void="onSelectVoid"
     @request-delete-void="(t) => voidDeleteTarget = t"
-    @navigate-learn="navigateTo(`/app/folders/${folderId}/learn/`)"
+    @navigate-learn="router.push(`/app/folders/${folderId}/learn/`)"
   >
     <template #top-bar="{ railCollapsed, railHidden, toggleRail }">
       <div class="sticky top-0 z-20 flex items-center justify-between gap-2 border-b border-border/60 bg-background/90 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:gap-3 sm:px-6 sm:py-4">

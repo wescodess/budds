@@ -3,12 +3,14 @@ import { vi, describe, test, expect, beforeEach } from 'vitest'
 const mockMutation = vi.fn()
 const mockQuery = vi.fn()
 const mockSetAuth = vi.fn()
-const { mockSynthesizeTurn, mockSynthesizeDialogue } = vi.hoisted(() => ({
+const { mockResolveTtsEngine, mockSynthesizeTurn, mockSynthesizeDialogue, mockUploadAudio } = vi.hoisted(() => ({
+  mockResolveTtsEngine: vi.fn(async () => 'aura-1'),
   mockSynthesizeTurn: vi.fn(async () => new Uint8Array([0xff, 0xfb])),
   mockSynthesizeDialogue: vi.fn(async () => ({
     audio: new Uint8Array([0xff, 0xfb]),
     durationMs: 5000,
   })),
+  mockUploadAudio: vi.fn(),
 }))
 
 vi.stubGlobal('createError', (opts: { statusCode: number; message: string }) =>
@@ -48,10 +50,14 @@ vi.mock('../../utils/rate-limit', () => ({
 }))
 
 vi.mock('../../utils/tts-provider', () => ({
-  resolveTtsEngine: vi.fn(async () => 'aura-1'),
+  resolveTtsEngine: mockResolveTtsEngine,
   synthesizeTurn: mockSynthesizeTurn,
   synthesizeDialogue: mockSynthesizeDialogue,
   engineVoiceProfile: vi.fn(() => ({ hostA: 'asteria', hostB: 'orion' })),
+}))
+
+vi.mock('../../utils/audio-overview-upload', () => ({
+  uploadAudioOverviewBytes: mockUploadAudio,
 }))
 
 const handler = (await import('./generate-section.post')).default as Function
@@ -112,6 +118,8 @@ describe('POST /api/course/generate-section', () => {
     mockQuery.mockReset()
     mockSynthesizeTurn.mockClear()
     mockSynthesizeDialogue.mockClear()
+    mockResolveTtsEngine.mockClear()
+    mockUploadAudio.mockClear()
   })
 
   test('rejects missing courseId', async () => {
@@ -205,7 +213,7 @@ describe('POST /api/course/generate-section', () => {
     expect(result.failedEngines).toContain('text explanation')
   })
 
-  test('[P0] course audio reserves quota before providers and stays inside course sources', async () => {
+  test('[P0] conceptual course primer fails closed with v2 guidance and no legacy audio side effect', async () => {
     vi.mocked(globalThis.readBody as any).mockResolvedValue({
       courseId: 'course_123',
       sectionId: 'section_123',
@@ -214,7 +222,6 @@ describe('POST /api/course/generate-section', () => {
       .mockResolvedValueOnce(mockCourse())
       .mockResolvedValueOnce([mockSection({ knowledgeType: 'conceptual' })])
       .mockResolvedValueOnce([{ folderId: 'folder_123', documentId: 'doc_1' }])
-      .mockResolvedValue({ _id: 'audio_task_1', status: 'running' })
     vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({
       data: [
         { id: '1', content: 'A', score: 0.9, attributes: { documentId: 'doc_1' } },
@@ -225,28 +232,28 @@ describe('POST /api/course/generate-section', () => {
     vi.mocked(globalThis.generateCompletion as any).mockResolvedValue(
       textCompletionResponse('Generated content'),
     )
-    mockMutation.mockImplementation((_ref: any, args: any) => {
-      if (args?.scope) throw new Error('Daily audio overview quota reached')
-      if (args?.sectionId) return { status: 'ready', blockCount: 1 }
-      return undefined
-    })
+    mockMutation.mockResolvedValue({ status: 'ready', blockCount: 1 })
 
     const result = await handler(makeEvent())
 
     expect(result.failedEngines).toContain('audio primer')
+    expect(result.audioPrimer).toEqual({
+      status: 'requires-audio-overview-v2',
+      message: 'Course audio primers must be generated through the durable Audio Overview workflow.',
+    })
     expect(globalThis.searchDocuments).toHaveBeenCalledWith(expect.objectContaining({
       folderId: 'folder_123',
       filterDocIds: ['doc_1'],
     }))
-    expect(mockMutation).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      folderId: 'folder_123',
-      scope: { mode: 'explicit', documentIds: ['doc_1'] },
-    }))
+    expect(globalThis.generateCompletion).toHaveBeenCalledTimes(3)
+    expect(mockMutation.mock.calls.some(([, args]) => args?.scope || args?.turns || args?.voiceProfile)).toBe(false)
+    expect(mockResolveTtsEngine).not.toHaveBeenCalled()
     expect(mockSynthesizeTurn).not.toHaveBeenCalled()
     expect(mockSynthesizeDialogue).not.toHaveBeenCalled()
+    expect(mockUploadAudio).not.toHaveBeenCalled()
   })
 
-  test('[P1] a short audio primer fails its reserved task instead of stranding it', async () => {
+  test('[P1] conceptual primer does not reserve or strand a legacy audio task', async () => {
     vi.mocked(globalThis.readBody as any).mockResolvedValue({
       courseId: 'course_123',
       sectionId: 'section_123',
@@ -274,18 +281,17 @@ describe('POST /api/course/generate-section', () => {
 
     const result = await handler(makeEvent())
 
-    expect(result.failedEngines).toContain('audio primer')
-    expect(mockMutation.mock.calls.some(([, args]) =>
-      args?.taskId === 'audio_task_1'
-      && args?.error === 'Audio primer script is too short',
-    )).toBe(true)
+    expect(result.audioPrimer?.status).toBe('requires-audio-overview-v2')
+    expect(mockMutation.mock.calls.some(([, args]) => args?.scope || args?.voiceProfile || args?.turns)).toBe(false)
+    expect(mockResolveTtsEngine).not.toHaveBeenCalled()
     expect(mockSynthesizeTurn).not.toHaveBeenCalled()
     expect(mockSynthesizeDialogue).not.toHaveBeenCalled()
+    expect(mockUploadAudio).not.toHaveBeenCalled()
   })
 })
 
 describe('audio primer in section generation', () => {
-  test('conceptual knowledge type includes audio generation', async () => {
+  test('conceptual knowledge type exposes the durable Audio Overview migration notice', async () => {
     vi.mocked(globalThis.readBody as any).mockResolvedValue({
       courseId: 'course_123',
       sectionId: 'section_123',
@@ -311,12 +317,14 @@ describe('audio primer in section generation', () => {
 
     mockMutation.mockResolvedValue({ status: 'ready', blockCount: 1 })
 
-    await handler(makeEvent())
+    const result = await handler(makeEvent())
 
     const finalizationCall = mockMutation.mock.calls.find(
       (c: any[]) => c[1]?.sectionId === 'section_123' && c[1]?.textContent,
     )
     expect(finalizationCall).toBeTruthy()
+    expect(finalizationCall![1].audioEntityId).toBeUndefined()
+    expect(result.audioPrimer?.message).toMatch(/durable Audio Overview workflow/i)
   })
 
   test('procedural knowledge type does not include audio', async () => {

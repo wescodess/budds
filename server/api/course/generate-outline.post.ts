@@ -22,7 +22,7 @@ function makeConvexClient(event: any): ConvexHttpClient | null {
 }
 
 export default defineEventHandler(async (event) => {
-  requireRateLimit(event, 3)
+  await requireRateLimit(event, 3, 'course.generate-outline')
   const userId = getConvexTokenIdentifier(event)
 
   const body = await readBody<{

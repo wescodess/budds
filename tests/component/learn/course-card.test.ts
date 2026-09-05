@@ -114,4 +114,15 @@ describe('CourseCard', () => {
     const title = wrapper.find('h3')
     expect(title.classes()).toEqual(expect.arrayContaining(['text-stone-400']))
   })
+
+  it('shows durable deletion progress and disables navigation', async () => {
+    const Comp = await import(componentPath)
+    const wrapper = await mountSuspended(Comp.default, {
+      props: { course: { ...baseCourse, status: 'deleting' } },
+    })
+    const link = wrapper.find('a')
+    expect(wrapper.find('[data-testid="status-badge"]').text()).toBe('Deleting...')
+    expect(link.attributes('aria-disabled')).toBe('true')
+    expect(link.classes()).toEqual(expect.arrayContaining(['pointer-events-none', 'opacity-75']))
+  })
 })

@@ -1,4 +1,5 @@
 import { readConfiguredRuntimeValue } from './runtime-config'
+import { readSourceIdentityMetadata } from '../../shared/source-identity'
 
 export interface AISearchChunk {
   id: string
@@ -10,6 +11,9 @@ export interface AISearchChunk {
     documentId?: string
     userId?: string
     folder?: string
+    url?: string
+    contentHash?: string
+    sourceRevision?: string
   }
 }
 
@@ -53,6 +57,10 @@ interface LegacyResult {
       folderid?: string
       documentid?: string
       filename?: string
+      contenthash?: string
+      contentHash?: string
+      sourcerevision?: string
+      sourceRevision?: string
     }
   }
 }
@@ -76,16 +84,27 @@ function filterableStringPrefix(value: string): string {
 }
 
 function buildFilters(params: AISearchParams): Record<string, unknown> | undefined {
+  const documentIds = [...new Set(params.filterDocIds ?? [])]
+  if (documentIds.length === 1) {
+    return { type: 'eq', key: 'documentid', value: filterableStringPrefix(documentIds[0]!) }
+  }
+  if (documentIds.length > 1) {
+    return {
+      type: 'or',
+      filters: documentIds.map(documentId => ({
+        type: 'eq',
+        key: 'documentid',
+        value: filterableStringPrefix(documentId),
+      })),
+    }
+  }
+
   const filters: Record<string, unknown>[] = [
     { type: 'eq', key: 'userid', value: filterableStringPrefix(params.userId) },
   ]
 
   if (params.folderId) {
     filters.push({ type: 'eq', key: 'folderid', value: params.folderId })
-  }
-
-  if (params.filterDocIds?.length === 1) {
-    filters.push({ type: 'eq', key: 'documentid', value: params.filterDocIds[0] })
   }
 
   if (filters.length === 0) return undefined
@@ -241,6 +260,7 @@ export async function searchDocuments(params: AISearchParams): Promise<AISearchR
     const folderId = file.folderid
     const documentId = file.documentid
     const filename = file.filename ?? r.attributes?.filename
+    const sourceIdentity = readSourceIdentityMetadata(file)
 
     for (const c of r.content ?? []) {
       chunks.push({
@@ -253,6 +273,8 @@ export async function searchDocuments(params: AISearchParams): Promise<AISearchR
           documentId,
           userId,
           folder: r.filename,
+          contentHash: sourceIdentity?.contentHash,
+          sourceRevision: sourceIdentity?.sourceRevision,
         },
       })
     }

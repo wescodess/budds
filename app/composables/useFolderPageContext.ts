@@ -3,27 +3,27 @@ import { useMediaQuery } from '@vueuse/core'
 import { FileText, Headphones, ListChecks } from 'lucide-vue-next'
 import { api } from '#convex/api'
 import type { Doc, Id } from '~~/convex/_generated/dataModel'
-import { useFolderDetail } from '~/composables/useFolders'
+import { useFolderDetail, useFolders } from '~/composables/useFolders'
 import type { AttachmentStatus, DisplayDocument } from '~/composables/useDocuments'
 
 export interface FolderPageContext {
   folderId: ComputedRef<Id<'folders'>>
   folder: Ref<Doc<'folders'> | null>
   seededFolder: ComputedRef<Doc<'folders'> | null>
-  allFolders: Ref<Doc<'folders'>[] | undefined>
+  allFolders: ReturnType<typeof useFolders>['allFolders']
 
-  documents: Ref<Doc<'documents'>[] | undefined>
+  documents: ReturnType<typeof useDocuments>['documents']
   documentsForDisplay: ComputedRef<DisplayDocument[] | undefined>
   dismissDisplayDocument: (id: string) => void
   attachmentStatus: ComputedRef<AttachmentStatus>
   uploading: Ref<boolean>
   importingLink: Ref<boolean>
   uploadFiles: (files: File[], folderId: Id<'folders'>) => Promise<void>
-  importDocumentFromUrl: (url: string, folderId: Id<'folders'>) => Promise<void>
-  deleteDocument: (id: Id<'documents'>) => Promise<void>
-  deleteDocuments: (ids: Id<'documents'>[]) => Promise<void>
-  moveDocument: (id: Id<'documents'>, destinationFolderId: Id<'folders'>) => Promise<void>
-  moveDocuments: (ids: Id<'documents'>[], destinationFolderId: Id<'folders'>) => Promise<void>
+  importDocumentFromUrl: ReturnType<typeof useDocuments>['importDocumentFromUrl']
+  deleteDocument: ReturnType<typeof useDocuments>['deleteDocument']
+  deleteDocuments: ReturnType<typeof useDocuments>['deleteDocuments']
+  moveDocument: ReturnType<typeof useDocuments>['moveDocument']
+  moveDocuments: ReturnType<typeof useDocuments>['moveDocuments']
 
   referenceScope: ReturnType<typeof useFolderReferenceScope>
   helperPane: ReturnType<typeof useHelperPane>
@@ -126,7 +126,7 @@ export function provideFolderPageContext(): FolderPageContext {
     : { mutate: async (_args: { title: string; sourceType: 'folder' | 'web-only'; folderId: Id<'folders'>; webSearchEnabled?: boolean }) => ({ courseId: '' as unknown as Id<'courses'>, taskId: '' as unknown as Id<'tasks'> }) }
 
   const deleteCourseMutation = import.meta.client
-    ? useConvexMutation(api.courses.deleteCourse)
+    ? useConvexAction(api.courses.deleteCourse)
     : { mutate: async (_args: { id: Id<'courses'> }) => null }
 
   const deleteQuizMutation = import.meta.client

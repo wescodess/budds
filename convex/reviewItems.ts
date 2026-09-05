@@ -1,6 +1,6 @@
 import { v } from 'convex/values'
 import { query, mutation, internalMutation } from './_generated/server'
-import { requireAuth } from './lib/auth'
+import { getOptionalAuthUserId, requireAuth } from './lib/auth'
 import { computeSM2 } from './lib/sm2'
 import { updateStreakForActivity } from './learnProfile'
 import { getTodayInTimezone } from './lib/dates'
@@ -89,9 +89,8 @@ export const listDueForUser = query({
 export const getReviewBacklogCount = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return null
-    const userId = identity.tokenIdentifier
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return null
     const today = getTodayDate()
 
     const items = await ctx.db
@@ -192,9 +191,28 @@ export const completeReviewSession = mutation({
     itemsCorrect: v.number(),
     durationMs: v.number(),
     mode: v.optional(v.union(v.literal('full'), v.literal('quick'))),
+    idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx)
+    if (args.idempotencyKey) {
+      const existing = await ctx.db
+        .query('reviewSessions')
+        .withIndex('by_userId_and_idempotencyKey', q =>
+          q.eq('userId', userId).eq('idempotencyKey', args.idempotencyKey),
+        )
+        .unique()
+      if (existing) {
+        const currentProfile = await ctx.db
+          .query('learnProfile')
+          .withIndex('by_userId', q => q.eq('userId', userId))
+          .unique()
+        return {
+          streakCurrent: currentProfile?.streakCurrent ?? 0,
+          streakLastDate: currentProfile?.streakLastDate,
+        }
+      }
+    }
 
     const profile = await ctx.db
       .query('learnProfile')
@@ -210,6 +228,7 @@ export const completeReviewSession = mutation({
       itemsCorrect: args.itemsCorrect,
       durationMs: args.durationMs,
       mode: args.mode,
+      idempotencyKey: args.idempotencyKey,
       completedAt: Date.now(),
     })
 
@@ -226,6 +245,7 @@ export const submitReview = mutation({
   args: {
     reviewItemId: v.id('reviewItems'),
     quality: v.number(),
+    idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx)
@@ -239,6 +259,14 @@ export const submitReview = mutation({
     if (!item) throw new Error('Review item not found')
     if (item.userId !== userId) throw new Error('Not authorized')
     if (item.flagged) throw new Error('Cannot review a flagged item')
+    if (args.idempotencyKey && item.lastReviewIdempotencyKey === args.idempotencyKey) {
+      return {
+        easeFactor: item.easeFactor,
+        interval: item.interval,
+        repetitions: item.repetitions,
+        nextReviewDate: item.nextReviewDate,
+      }
+    }
 
     const profile = await ctx.db
       .query('learnProfile')
@@ -264,6 +292,7 @@ export const submitReview = mutation({
       nextReviewDate: result.nextReviewDate,
       lastReviewQuality: quality,
       lastReviewedAt: Date.now(),
+      lastReviewIdempotencyKey: args.idempotencyKey,
     })
 
     await updateStreakForActivity(ctx, userId)

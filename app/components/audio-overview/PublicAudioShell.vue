@@ -2,7 +2,7 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { Pause, Play, Rewind, FastForward, Download } from 'lucide-vue-next'
 import { api } from '#convex/api'
-import { createAudioOverviewPlayback, type AudioOverviewTurn } from '~/composables/useAudioOverviewStore'
+import { buildContinuousPlaybackTurns, createAudioOverviewPlayback, type AudioOverviewTurn } from '~/composables/useAudioOverviewStore'
 
 const props = defineProps<{
   token: string
@@ -18,6 +18,10 @@ const { data: turnUrlData } = useConvexQuery(
   api.audioOverviews.getTurnUrlsByShareToken,
   computed(() => ({ token: tokenRef.value })),
 )
+const { data: v2PlaybackData } = useConvexQuery(
+  api.audioOverviewV2.getPlaybackByShareToken,
+  computed(() => ({ token: tokenRef.value })),
+)
 
 type PublicOverview = {
   title: string
@@ -29,14 +33,60 @@ type PublicOverview = {
   publishedAt: number | null
 }
 
-const overview = computed<PublicOverview | null>(() => (overviewData.value as PublicOverview | null | undefined) ?? null)
+type V2PublicPlayback = {
+  schemaVersion: 2
+  title: string
+  totalDurationMs: number
+  voiceProfile: { hostA: string, hostB: string }
+  publishedAt: number | null
+  sourceManifest: { sources: Array<{ sourceId: string, displayReference: string }> }
+  scenes: Array<{ sceneId: string, order: number, durationMs: number }>
+  utterances: Array<{
+    utteranceId: string
+    sceneId: string
+    order: number
+    speaker: 'host_a' | 'host_b'
+    text: string
+    pauseAfterMs?: number
+    alignmentStartMs?: number
+    sourceIds?: string[]
+    wordTimings?: { word: string, start: number, end: number }[]
+  }>
+}
+
+const v2Playback = computed<V2PublicPlayback | null>(() => (v2PlaybackData.value as V2PublicPlayback | null | undefined) ?? null)
+const overview = computed<PublicOverview | null>(() => {
+  if (v2Playback.value) {
+    return {
+      title: v2Playback.value.title,
+      turns: buildContinuousPlaybackTurns(
+        v2Playback.value.scenes,
+        v2Playback.value.utterances,
+        v2Playback.value.totalDurationMs,
+      ),
+      voiceProfile: v2Playback.value.voiceProfile,
+      totalDurationMs: v2Playback.value.totalDurationMs,
+      sourceDocumentIds: [],
+      sourceFilenames: v2Playback.value.sourceManifest.sources.map(source => source.displayReference),
+      publishedAt: v2Playback.value.publishedAt,
+    }
+  }
+  return (overviewData.value as PublicOverview | null | undefined) ?? null
+})
+const isContinuousPlayback = computed(() => v2Playback.value?.schemaVersion === 2)
+const continuousMediaUrl = computed(() => v2Playback.value
+  ? `/api/audio-overview/public/${encodeURIComponent(props.token)}/media`
+  : null)
 const turns = computed<AudioOverviewTurn[]>(() => overview.value?.turns ?? [])
-const turnUrls = computed<(string | null)[]>(() => (turnUrlData.value as (string | null)[] | null | undefined) ?? [])
+const turnUrls = computed<(string | null)[]>(() => isContinuousPlayback.value
+  ? []
+  : (turnUrlData.value as (string | null)[] | null | undefined) ?? [])
 const sourceFilenames = computed<string[]>(() => overview.value?.sourceFilenames ?? [])
 
 const playback = createAudioOverviewPlayback()
 const {
   currentTimeMs, totalDurationMs, activeTurn, isPlaying, playbackRate,
+  currentTurnIndex, currentAudioTimeSec,
   magnitude: visualizerMagnitude,
   togglePlay, skip, seek, setSpeed, loadOverview, attachAudio,
 } = playback
@@ -48,24 +98,27 @@ watch([audioEl, preloadEl], ([el, pre]) => {
   if (el) attachAudio(el, pre)
 }, { immediate: true })
 
-const loading = computed(() => overviewData.value === undefined)
-const notFound = computed(() => overviewData.value === null)
+const loading = computed(() => overviewData.value === undefined || v2PlaybackData.value === undefined)
+const notFound = computed(() => overviewData.value === null && v2PlaybackData.value === null)
 
 const PUBLIC_SENTINEL_ID = 'public-playback' as unknown as import('../../../convex/_generated/dataModel').Id<'audioOverviews'>
 
 watch(
-  [() => turns.value, () => turnUrls.value, () => overview.value],
-  ([nextTurns, nextUrls, ov]) => {
+  [() => turns.value, () => turnUrls.value, () => overview.value, () => continuousMediaUrl.value],
+  ([nextTurns, nextUrls, ov, nextContinuousUrl]) => {
     if (!import.meta.client) return
     if (!ov) return
     if (nextTurns.length === 0) return
-    if (nextTurns.length !== nextUrls.length) return
+    if (isContinuousPlayback.value && !nextContinuousUrl) return
+    if (!isContinuousPlayback.value && nextTurns.length !== nextUrls.length) return
     loadOverview({
       overviewId: PUBLIC_SENTINEL_ID,
       folderId: null,
       title: ov.title,
       turns: nextTurns,
       turnUrls: nextUrls,
+      playbackMode: isContinuousPlayback.value ? 'continuous' : 'segmented',
+      continuousMediaUrl: nextContinuousUrl,
     })
   },
   { immediate: true, deep: true },
@@ -103,42 +156,6 @@ function pickSpeed(speed: SpeedOption) {
   speedMenuOpen.value = false
 }
 
-interface DialogueLine {
-  speaker: 'host_a' | 'host_b'
-  text: string
-  alignClass: string
-  bubbleClass: string
-  speakerLabel: string
-}
-
-const dialogueLines = computed<DialogueLine[]>(() => {
-  const raw = activeTurn.value?.text ?? ''
-  if (!raw.startsWith('Host A:') && !raw.startsWith('Host B:')) return []
-  return raw.split('\n').filter(Boolean).map((line) => {
-    const match = line.match(/^(Host [AB]):\s*(.*)/)
-    if (!match) return null
-    const isA = match[1] === 'Host A'
-    return {
-      speaker: isA ? 'host_a' as const : 'host_b' as const,
-      text: match[2]!,
-      alignClass: isA ? 'justify-start' : 'justify-end',
-      bubbleClass: isA ? 'rounded-tl-sm bg-primary/10 text-foreground' : 'rounded-tr-sm bg-secondary text-foreground',
-      speakerLabel: isA ? 'Host A \u00b7 Expert' : 'Host B \u00b7 Learner',
-    }
-  }).filter((l): l is DialogueLine => l !== null)
-})
-
-const isDialogueFormat = computed(() => dialogueLines.value.length > 0)
-
-const activeQuote = computed(() => activeTurn.value?.text ?? '')
-const activeAttribution = computed(() => {
-  const turn = activeTurn.value
-  if (!turn) return ''
-  if (isDialogueFormat.value) return ''
-  const speaker = turn.speaker === 'host_a' ? 'Host A' : 'Host B'
-  return `— ${speaker} · ${currentLabel.value}`
-})
-
 const publishedLabel = computed(() => {
   if (!overview.value?.publishedAt) return ''
   const d = new Date(overview.value.publishedAt)
@@ -146,6 +163,7 @@ const publishedLabel = computed(() => {
 })
 
 const hasMissingTurnUrl = computed(() => {
+  if (isContinuousPlayback.value) return false
   if (turns.value.length === 0) return false
   return turnUrls.value.some(url => url === null)
 })
@@ -159,6 +177,7 @@ async function handleDownload() {
     const result = await downloadOverview({
       title: overview.value?.title ?? 'audio-overview',
       turnUrls: turnUrls.value,
+      mediaUrl: continuousMediaUrl.value,
     })
     const { toast } = await import('vue-sonner')
     const issues = result.failed.length + result.skipped
@@ -335,39 +354,16 @@ const ringMiddleStyle = computed(() => ({
         </div>
       </section>
 
-      <div
-        v-if="isDialogueFormat"
+      <AudioOverviewSyncedTranscript
         data-testid="public-audio-active-quote"
-        class="max-w-2xl space-y-3 self-center overflow-y-auto px-4"
-        style="max-height: 280px"
-      >
-        <div
-          v-for="(line, idx) in dialogueLines"
-          :key="idx"
-          class="flex gap-3"
-          :class="line.alignClass"
-        >
-          <div
-            class="max-w-[85%] rounded-2xl px-4 py-2.5 font-dm-sans text-sm leading-relaxed sm:text-base"
-            :class="line.bubbleClass"
-          >
-            <p class="mb-1 font-inter text-[11px] font-medium tracking-wide text-muted-foreground">
-              {{ line.speakerLabel }}
-            </p>
-            {{ line.text }}
-          </div>
-        </div>
-      </div>
-      <blockquote
-        v-else
-        data-testid="public-audio-active-quote"
-        class="max-w-2xl self-center text-center font-dm-sans text-base leading-relaxed text-foreground sm:text-lg"
-      >
-        <span class="mr-1 text-primary">"</span>{{ activeQuote }}<span class="ml-1 text-primary">"</span>
-        <p class="mt-2 font-inter text-xs text-muted-foreground">
-          {{ activeAttribution }}
-        </p>
-      </blockquote>
+        class="max-w-2xl self-center px-4 font-dm-sans"
+        :turns="turns"
+        :current-turn-index="currentTurnIndex"
+        :current-time-sec="currentAudioTimeSec"
+        :is-playing="isPlaying"
+        max-height="280px"
+        :on-seek="seek"
+      />
 
       <div
         v-if="hasMissingTurnUrl"
@@ -457,7 +453,7 @@ const ringMiddleStyle = computed(() => ({
             type="button"
             data-testid="public-audio-download-btn"
             aria-label="Download audio overview"
-            :disabled="downloading || turnUrls.length === 0"
+            :disabled="downloading || (!continuousMediaUrl && turnUrls.length === 0)"
             class="inline-flex h-8 w-8 items-center justify-center rounded-full border border-border/60 bg-background text-foreground transition-colors hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-50"
             @click="handleDownload"
           >

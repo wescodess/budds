@@ -1,147 +1,299 @@
-# Budds - Component Inventory
+# Component Inventory
 
-**Date:** 2026-04-08
+## Vue Components
 
-## Overview
+### audio-overview/ (8 components)
 
-Budds has a minimal component structure with 3 page components, 1 composable, and a shadcn-nuxt UI framework configured but with no custom UI components yet created.
-
-## Pages
-
-### `app/pages/index.vue`
-
-- **Route:** `/`
-- **Purpose:** Home/welcome landing page
-- **Auth:** Public
-- **Complexity:** Minimal - static welcome message
-- **Dependencies:** None
-
-### `app/pages/login.vue`
-
-- **Route:** `/login`
-- **Purpose:** Google OAuth login page
-- **Auth:** Guest-only (authenticated users redirected away)
-- **Complexity:** Simple - single OAuth button
-- **Dependencies:** `useUserSession()` from `@onmax/nuxt-better-auth`
-- **Key Behavior:**
-  - Checks if user is already authenticated via `useUserSession()`
-  - Redirects authenticated users to home
-  - Triggers Google OAuth via `signIn.social({ provider: 'google' })`
-
-### `app/pages/app/chat.vue`
-
-- **Route:** `/app/chat`
-- **Purpose:** Main RAG chat interface
-- **Auth:** Requires authentication (`/app/**` route rule)
-- **Complexity:** Most complex page in the application
-- **Dependencies:** `useRag()` composable
-- **Key Features:**
-  - Model selection dropdown with 8 LLM options
-  - Message input with send functionality
-  - Message history display with role-based styling (user vs assistant)
-  - Source document display panel with relevance scores
-  - Loading state indicators
-  - Dark theme UI (zinc color palette)
-- **State:** Uses `useRag()` for reactive messages, loading, and error state
-
-## Composables
-
-### `app/composables/useRag.ts`
-
-- **Purpose:** Core RAG functionality composable
-- **Auto-imported:** Yes (Nuxt convention)
-- **Exports:**
-  - `useRag()` function returning:
-    - `messages: Ref<RagMessage[]>` - Conversation message array
-    - `loading: Ref<boolean>` - Async loading state
-    - `error: Ref<string | null>` - Error message state
-    - `chat(query, options): Promise<void>` - Send chat query
-    - `search(query, options): Promise<AISearchResponse>` - Search documents
-    - `clearMessages(): void` - Reset conversation
-- **Interfaces Defined:**
-  - `RagSource` - Document search result (content, score, filename, metadata)
-  - `RagMessage` - Chat message (role, content, sources?)
-  - `ChatOptions` - Chat parameters (model, temperature, max_tokens, etc.)
-
-## UI Framework (shadcn-nuxt)
-
-### Configuration
-
-From `components.json`:
-
-| Setting | Value |
+| Component | Purpose |
 |---|---|
-| Style | maia |
-| Base Library | reka (Reka UI) |
-| Component Prefix | `Ui` |
-| Component Directory | `@/components/ui` |
-| Base Color | zinc |
-| CSS Variables | enabled |
-| Icon Library | remixicon |
-| Font | inter |
+| AudioOverviewCard | Card display for an audio overview entry |
+| AudioOverviewCustomize | Customization form for overview preferences |
+| AudioOverviewGenerating | Loading/progress state during generation |
+| AudioOverviewPlayer | Audio player with turn-by-turn playback |
+| AudioOverviewShareDialog | Dialog for sharing/publishing an overview |
+| AudioOverviewShell | Main shell layout for audio overview feature |
+| PublicAudioShell | Public-facing shell for shared audio overviews |
+| StickyMiniPlayer | Persistent mini audio player |
 
-### Available Component System
+### chat/ (13 components)
 
-shadcn-nuxt provides a CLI to add components on-demand:
+| Component | Purpose |
+|---|---|
+| CitationBadge | Inline citation reference badge |
+| DirectoryPicker | Folder/file picker for chat scope |
+| DirectoryPickerBranch | Tree branch node in directory picker |
+| DirectoryPickerRow | Single row in directory picker |
+| Input | Chat message input field |
+| Message | Chat message bubble |
+| ModelSelector | AI model selection dropdown |
+| ReferenceChips | Selected reference scope chips |
+| ReferenceScopeStrip | Horizontal strip of reference scope items |
+| SourceCard | Source document preview card |
+| SourcePanel | Panel listing cited sources |
+| ThinkingRow | AI thinking/loading indicator |
+| Workspace | Main chat workspace container |
 
-```bash
-npx shadcn-vue@latest add button
-npx shadcn-vue@latest add input
-npx shadcn-vue@latest add dialog
-```
+### dashboard/ (9 components)
 
-No custom shadcn components have been added yet. The `components/ui/` directory does not exist, indicating all UI in `chat.vue` is built with native HTML + Tailwind CSS classes.
+| Component | Purpose |
+|---|---|
+| ActionCard | Quick action card on dashboard |
+| ActionSection | Section grouping action cards |
+| AddCourseCard | Card to create a new course |
+| AskBar | Global question input bar |
+| ChatHero | Hero area for general chat |
+| CourseCard | Course summary card |
+| CoursesCarousel | Horizontal carousel of courses |
+| FolderPickerDialog | Dialog for selecting a folder |
+| Greeting | Personalized greeting display |
 
-## Utility Libraries
+### documents/ (3 components)
 
-### `app/lib/utils.ts`
+| Component | Purpose |
+|---|---|
+| FileStatusItem | Document processing status indicator |
+| FileUploadZone | Drag-and-drop file upload area |
+| MoveToFolderDialog | Dialog to move a document to another folder |
 
-- **Export:** `cn(...inputs: ClassValue[]): string`
-- **Purpose:** Merges Tailwind CSS class names intelligently
-- **Dependencies:** `clsx` (conditional classes), `tailwind-merge` (deduplication)
-- **Usage:** Standard shadcn-vue utility for composing component styles
+### flashcards/ (7 components)
 
-## Styling System
+| Component | Purpose |
+|---|---|
+| RoomEditor | Card editor for a flashcard room |
+| RoomGenerateDialog | AI generation dialog for flashcards |
+| RoomHeader | Room header with title and actions |
+| RoomHistoryPanel | Version history panel |
+| RoomPractice | Flashcard practice/study mode |
+| RoomShell | Main shell for flashcard room view |
+| Tab | Flashcard tab navigation item |
 
-### `app/assets/css/tailwind.css`
+### folder-shell/ (14 components)
 
-Global CSS theme configuration:
+| Component | Purpose |
+|---|---|
+| FileKebabMenu | Context menu for file actions |
+| FileStatusPill | Compact file status indicator |
+| FolderShell | Main folder layout shell |
+| FolderShellFileRow | Single file row in file list |
+| FolderShellFilesList | File list container |
+| FolderShellFilesPanel | Panel displaying folder files |
+| FolderShellHierarchyDrawer | Drawer showing folder hierarchy |
+| FolderShellMembersPanel | Panel for folder members |
+| FolderShellRail | Navigation rail for folder views |
+| FolderShellRailItem | Single item in navigation rail |
+| FolderShellTree | Folder tree view |
+| FolderShellTreeNode | Individual tree node |
+| HelperPane | Side helper pane container |
+| UnifiedHelperPaneTabs | Tab bar for helper pane sections |
 
-- **Fonts:** Inter (400, 500, 600, 700 weights) via Google Fonts
-- **Color System:** oklch color space with semantic tokens
-- **Themes:** Light and dark mode support via CSS variables
-- **Design Tokens:**
-  - `--background`, `--foreground` - Base colors
-  - `--primary`, `--secondary`, `--accent`, `--destructive` - Semantic colors
-  - `--muted`, `--card`, `--popover` - Surface colors
-  - `--border`, `--input`, `--ring` - Interactive element colors
-  - `--sidebar-*` - Sidebar-specific tokens
-  - `--chart-1` through `--chart-5` - Data visualization colors
-  - `--radius` - Border radius token
+### folders/ (8 components)
 
-## Component Dependencies Graph
+| Component | Purpose |
+|---|---|
+| ColorSelect | Folder color picker |
+| FolderBadge | Folder icon/color badge |
+| FolderContextPane | Contextual info pane for folder |
+| FolderFormModal | Create/edit folder modal |
+| FolderHelperPane | Folder-specific helper pane |
+| FolderKnowledgeTree | Knowledge base tree view |
+| FolderTasksPane | Task list pane for folder |
+| IconSelect | Folder icon picker |
 
-```
-app/chat.vue
-  └── useRag() composable
-        └── $fetch → /api/rag/chat
-        └── $fetch → /api/rag/search
+### global/ (5 components)
 
-login.vue
-  └── useUserSession() (from nuxt-better-auth)
-        └── /api/_better-auth/* endpoints
+| Component | Purpose |
+|---|---|
+| Citation | Rendered citation reference |
+| DirectoryPicker | Reusable directory picker |
+| InstallAppPrompt | PWA install prompt |
+| MermaidDiagram | Mermaid diagram renderer |
+| ProsePre | Styled code block for prose content |
 
-index.vue
-  └── (no dependencies)
-```
+### learn/ (27 components)
 
-## Notes
+| Component | Purpose |
+|---|---|
+| AudioBlock | Audio content block within a section |
+| CalendarConnectionCard | Google Calendar connection UI |
+| CourseCard | Course card for learn module |
+| CourseCreator | Multi-step course creation form |
+| CourseViewBody | Course detail view body |
+| CreateCourseCard | Card to initiate course creation |
+| DailyReviewCTA | Call-to-action for daily review sessions |
+| DeleteCourseDialog | Confirmation dialog for course deletion |
+| FlashcardBlock | Flashcard content block within a section |
+| MasteryBadge | Mastery level indicator badge |
+| OfflineBanner | Offline mode notification banner |
+| OutlineEditor | Course outline editing interface |
+| PaceSelector | Learning pace selection control |
+| QuizBlock | Quiz content block within a section |
+| ReviewCapSetting | Daily review cap configuration |
+| ReviewCard | Spaced repetition review card |
+| ReviewRatingButtons | Rating buttons for review sessions |
+| ReviewSessionProgress | Progress indicator for review sessions |
+| SectionBlockRenderer | Renders section content blocks by type |
+| SectionCompletionCard | Section completion summary |
+| SectionVoidTopBar | Top bar for section void state |
+| SessionPreferencesForm | Calendar session preferences form |
+| SourceSelector | Source document selector for course creation |
+| StartLearningButton | Button to begin learning a section |
+| StreakDisplay | Learning streak display |
+| TextBlock | Text content block within a section |
 
-- The project is in early stage with no custom reusable UI components
-- All UI is built directly in page components using Tailwind CSS utilities
-- shadcn-nuxt is configured and ready but no components have been scaffolded
-- As the project grows, common UI patterns from `chat.vue` (message bubbles, model selector, source cards) should be extracted into reusable components
+### mobile/ (1 component)
+
+| Component | Purpose |
+|---|---|
+| SwipeRevealItem | Swipe-to-reveal action item |
+
+### quiz/ (22 components)
+
+| Component | Purpose |
+|---|---|
+| ActiveView | Active quiz-taking view |
+| CardPreview | Question card preview |
+| Editor | Quiz question editor |
+| GenerationWizard | Multi-step AI quiz generation wizard |
+| HistoryDropdown | Quiz attempt history dropdown |
+| OverviewView | Quiz overview/summary view |
+| Question | Single question display |
+| QuestionModal | Question detail modal |
+| ResultsView | Quiz results/score view |
+| ResumeDialog | Resume interrupted attempt dialog |
+| ReviewPanel | Post-quiz review panel |
+| SequentialMode | One-question-at-a-time mode |
+| SettingsModal | Quiz settings modal |
+| Shell | Main quiz shell layout |
+| ShowAllMode | All-questions-visible mode |
+| Tab | Quiz tab navigation item |
+| Taker | Quiz-taking controller |
+| TakingView | Active quiz-taking wrapper |
+| inputs/FillInBlank | Fill-in-the-blank input |
+| inputs/MultipleChoice | Multiple choice input |
+| inputs/ShortResponse | Short response input |
+| inputs/TrueFalse | True/false input |
+
+**quiz/wizard/ (3 sub-components):**
+
+| Component | Purpose |
+|---|---|
+| ResourceStep | Resource selection step |
+| SettingsStep | Quiz settings step |
+| TopicStep | Topic selection step |
+
+### sidebar/ (2 components)
+
+| Component | Purpose |
+|---|---|
+| FolderTree | Sidebar folder tree navigation |
+| HomeRail | Home navigation rail |
+
+### voids/ (1 component)
+
+| Component | Purpose |
+|---|---|
+| CreateVoidDialog | Dialog to create a void |
+
+### ui/ (shadcn-vue primitives)
+
+Shared reusable UI primitives based on shadcn-vue / Reka UI. ~330 component files across 55 groups:
+
+accordion, alert, alert-dialog, aspect-ratio, avatar, badge, breadcrumb, button, button-group, calendar, card, carousel, chart, checkbox, collapsible, combobox, command, context-menu, dialog, drawer, dropdown-menu, empty, field, form, hover-card, input, input-group, input-otp, item, kbd, label, menubar, native-select, navigation-menu, number-field, pagination, pin-input, popover, progress, radio-group, range-calendar, resizable, scroll-area, select, separator, sheet, sidebar, skeleton, slider, sonner, spinner, stepper, switch, table, tabs, tags-input, textarea, toggle, toggle-group, tooltip.
 
 ---
 
-_Generated using BMAD Method `document-project` workflow_
+## Summary
+
+| Category | Count |
+|---|---|
+| audio-overview | 8 |
+| chat | 13 |
+| dashboard | 9 |
+| documents | 3 |
+| flashcards | 7 |
+| folder-shell | 14 |
+| folders | 8 |
+| global | 5 |
+| learn | 27 |
+| mobile | 1 |
+| quiz | 25 |
+| sidebar | 2 |
+| voids | 1 |
+| ui (shadcn-vue) | ~330 |
+| **Total** | **~453** |
+
+---
+
+## Composables (31)
+
+| Composable | Purpose |
+|---|---|
+| useAppTheme | Application theme management |
+| useAudioOverviewDownload | Audio overview file download |
+| useAudioOverviewStore | Audio overview state management |
+| useChat | RAG chat state and API calls |
+| useDocuments | Document CRUD operations |
+| useFlashcardRooms | Flashcard room state |
+| useFolderLayout | Folder view layout management |
+| useFolderPageContext | Folder page route context |
+| useFolderReferenceScope | Folder reference scope state |
+| useFolders | Folder CRUD and navigation |
+| useGeneralChat | General (non-RAG) chat state |
+| useGestureGuards | Gesture conflict resolution |
+| useHelperPane | Helper pane open/close state |
+| useHorizontalSwipeGesture | Horizontal swipe gesture handler |
+| useMobileKeyboardInset | Mobile keyboard safe area insets |
+| useMotionPresets | Animation motion presets |
+| useOfflineAttempts | Offline quiz attempt management |
+| useOfflineCache | Service worker offline caching |
+| useOfflineSync | Offline data synchronization |
+| useOnlineStatus | Network online/offline detection |
+| usePreFetchSection | Section content pre-fetching |
+| useQuizAttempt | Quiz attempt state tracking |
+| useQuizFlow | Quiz flow navigation |
+| useQuizGeneration | Quiz AI generation orchestration |
+| useQuizHistory | Quiz history retrieval |
+| useQuizzes | Quiz CRUD operations |
+| useRag | RAG search operations |
+| useReferenceScope | Reference scope management |
+| useSwipeReveal | Swipe-to-reveal gesture state |
+| useTasks | Task polling and management |
+| useTimezoneSync | Timezone detection and sync |
+
+---
+
+## Layouts (2)
+
+| Layout | Purpose |
+|---|---|
+| default | Default application layout |
+| folder | Folder-scoped layout with shell |
+
+---
+
+## Pages (25)
+
+| Path | Purpose |
+|---|---|
+| `/` | Landing page |
+| `/login` | Login page |
+| `/privacy` | Privacy policy |
+| `/terms` | Terms of service |
+| `/chat` | General chat (public) |
+| `/audio/[token]` | Public shared audio overview |
+| `/app/` | App dashboard |
+| `/app/chat` | General chat (authenticated) |
+| `/app/learn/review` | Spaced repetition review session |
+| `/app/folders/[id]` | Folder root |
+| `/app/folders/[id]/` | Folder index/overview |
+| `/app/folders/[id]/chat` | Folder chat index |
+| `/app/folders/[id]/chat/[conversationId]` | Specific conversation |
+| `/app/folders/[id]/documents` | Folder documents view |
+| `/app/folders/[id]/flashcards` | Flashcard rooms index |
+| `/app/folders/[id]/flashcards/[roomId]` | Specific flashcard room |
+| `/app/folders/[id]/quiz` | Quiz index |
+| `/app/folders/[id]/quiz/[quizId]` | Specific quiz |
+| `/app/folders/[id]/learn` | Learn module index |
+| `/app/folders/[id]/learn/create` | Create a new course |
+| `/app/folders/[id]/learn/[courseId]` | Course detail view |
+| `/app/folders/[id]/learn/[courseId]/[sectionId]` | Section content view |

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ArrowLeft } from 'lucide-vue-next'
 import { api } from '#convex/api'
-import type { Id } from '../../../convex/_generated/dataModel'
+import type { Doc, Id } from '../../../convex/_generated/dataModel'
 import type { QuestionResult } from './Question.vue'
 
 const props = defineProps<{
@@ -38,7 +38,7 @@ const scoreSummary = ref<{ correct: number; total: number } | null>(null)
 const hydratedFromAttempt = ref(false)
 
 const quiz = computed(() => quizData.value?.quiz ?? null)
-const questions = computed(() => quizData.value?.questions ?? [])
+const questions = computed<Doc<'quizQuestions'>[]>(() => quizData.value?.questions ?? [])
 
 function hydrateFromAttempt() {
   const quizLoaded = quizData.value
