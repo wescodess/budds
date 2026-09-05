@@ -50,7 +50,7 @@ const mergedEnv = {
 const pagesBlockingRequirements = [
   { kind: 'secret', label: 'Better Auth secret', names: ['NUXT_BETTER_AUTH_SECRET', 'BETTER_AUTH_SECRET'] },
   { kind: 'var', label: 'Convex deployment URL', names: ['CONVEX_URL', 'NUXT_PUBLIC_CONVEX_URL'] },
-  { kind: 'var', label: 'Public application origin', names: ['SITE_URL', 'NUXT_PUBLIC_SITE_URL'] },
+  { kind: 'var', label: 'Public application origin', names: ['SITE_URL', 'NUXT_PUBLIC_SITE_URL', 'CF_PAGES_URL'] },
   { kind: 'var', label: 'Google OAuth client id', names: ['GOOGLE_CLIENT_ID'] },
   { kind: 'secret', label: 'Google OAuth client secret', names: ['GOOGLE_CLIENT_SECRET'] },
   { kind: 'secret', label: 'Audio Overview job secret', names: ['AUDIO_OVERVIEW_JOB_SECRET', 'NUXT_AUDIO_OVERVIEW_JOB_SECRET'] },
