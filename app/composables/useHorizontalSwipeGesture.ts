@@ -164,46 +164,64 @@ export function useHorizontalSwipeGesture(options: HorizontalSwipeGestureOptions
     target.value?.style?.setProperty('touch-action', 'pan-y')
   })
 
+  function onTouchStart(rawEvent: Event) {
+    const event = rawEvent as TouchEvent
+    const touch = event.changedTouches[0]
+    if (!touch) return
+    if (options.shouldStart && !options.shouldStart(event)) return
+    beginGesture(touch.clientX, touch.clientY, { touchId: touch.identifier })
+  }
+
+  function onTouchMove(rawEvent: Event) {
+    const event = rawEvent as TouchEvent
+    const touch = findTouchById(event.touches, state.touchId)
+    if (!touch) return
+    updateGesture(touch.clientX, touch.clientY, event)
+  }
+
+  function onTouchEnd(rawEvent: Event) {
+    const event = rawEvent as TouchEvent
+    const touch = findTouchById(event.changedTouches, state.touchId)
+    if (touch) {
+      state.lastX = touch.clientX
+      state.lastY = touch.clientY
+    }
+    finishGesture(event)
+  }
+
+  function onPointerDown(rawEvent: Event) {
+    const event = rawEvent as PointerEvent
+    if (event.pointerType === 'touch') return
+    if (options.shouldStart && !options.shouldStart(event)) return
+    beginGesture(event.clientX, event.clientY, { pointerId: event.pointerId })
+  }
+
+  function onPointerMove(rawEvent: Event) {
+    const event = rawEvent as PointerEvent
+    if (event.pointerType === 'touch') return
+    if (!state.active || state.pointerId !== event.pointerId) return
+    updateGesture(event.clientX, event.clientY, event)
+  }
+
+  function onPointerUp(rawEvent: Event) {
+    const event = rawEvent as PointerEvent
+    if (event.pointerType === 'touch') return
+    if (state.pointerId !== event.pointerId) return
+    state.lastX = event.clientX
+    state.lastY = event.clientY
+    finishGesture(event)
+  }
+
   const stops = [
-    useEventListener(target, 'touchstart', (event) => {
-      const touch = event.changedTouches[0]
-      if (!touch) return
-      if (options.shouldStart && !options.shouldStart(event)) return
-      beginGesture(touch.clientX, touch.clientY, { touchId: touch.identifier })
-    }, { passive: true }),
-    useEventListener(target, 'touchmove', (event) => {
-      const touch = findTouchById(event.touches, state.touchId)
-      if (!touch) return
-      updateGesture(touch.clientX, touch.clientY, event)
-    }, { passive: false }),
-    useEventListener(target, 'touchend', (event) => {
-      const touch = findTouchById(event.changedTouches, state.touchId)
-      if (touch) {
-        state.lastX = touch.clientX
-        state.lastY = touch.clientY
-      }
-      finishGesture(event)
-    }, { passive: true }),
+    useEventListener(target, 'touchstart', onTouchStart, { passive: true }),
+    useEventListener(target, 'touchmove', onTouchMove, { passive: false }),
+    useEventListener(target, 'touchend', onTouchEnd, { passive: true }),
     useEventListener(target, 'touchcancel', () => {
       resetState()
     }, { passive: true }),
-    useEventListener(target, 'pointerdown', (event) => {
-      if (event.pointerType === 'touch') return
-      if (options.shouldStart && !options.shouldStart(event)) return
-      beginGesture(event.clientX, event.clientY, { pointerId: event.pointerId })
-    }),
-    useEventListener(target, 'pointermove', (event) => {
-      if (event.pointerType === 'touch') return
-      if (!state.active || state.pointerId !== event.pointerId) return
-      updateGesture(event.clientX, event.clientY, event)
-    }),
-    useEventListener(target, 'pointerup', (event) => {
-      if (event.pointerType === 'touch') return
-      if (state.pointerId !== event.pointerId) return
-      state.lastX = event.clientX
-      state.lastY = event.clientY
-      finishGesture(event)
-    }),
+    useEventListener(target, 'pointerdown', onPointerDown),
+    useEventListener(target, 'pointermove', onPointerMove),
+    useEventListener(target, 'pointerup', onPointerUp),
     useEventListener(target, 'pointercancel', () => {
       resetState()
     }),

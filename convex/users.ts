@@ -1,21 +1,20 @@
 import { mutation, query } from './_generated/server'
+import { AUDIO_OVERVIEW_DAILY_CAP, todayUtcYmd } from './lib/audioOverviewPolicy'
+import { getOptionalAuthUserId, requireAuth } from './lib/auth'
 
-export const AUDIO_OVERVIEW_DAILY_CAP = 10
-
-function todayUtcYmd(): string {
-  return new Date().toISOString().slice(0, 10)
-}
+export { AUDIO_OVERVIEW_DAILY_CAP }
 
 export const upsertUser = mutation({
   args: {},
   handler: async (ctx) => {
     const identity = await ctx.auth.getUserIdentity()
     if (!identity) throw new Error('Unauthenticated')
+    const userId = await requireAuth(ctx)
 
     const existing = await ctx.db
       .query('users')
       .withIndex('by_tokenIdentifier', (q) =>
-        q.eq('tokenIdentifier', identity.tokenIdentifier),
+        q.eq('tokenIdentifier', userId),
       )
       .unique()
 
@@ -40,13 +39,13 @@ export const upsertUser = mutation({
 export const getUser = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return null
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return null
 
     return await ctx.db
       .query('users')
       .withIndex('by_tokenIdentifier', (q) =>
-        q.eq('tokenIdentifier', identity.tokenIdentifier),
+        q.eq('tokenIdentifier', userId),
       )
       .unique()
   },
@@ -55,13 +54,13 @@ export const getUser = query({
 export const getDailyQuota = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return null
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return null
 
     const user = await ctx.db
       .query('users')
       .withIndex('by_tokenIdentifier', (q) =>
-        q.eq('tokenIdentifier', identity.tokenIdentifier),
+        q.eq('tokenIdentifier', userId),
       )
       .unique()
 
@@ -75,20 +74,23 @@ export const getDailyQuota = query({
 export const incrementDailyQuota = mutation({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) throw new Error('Unauthenticated')
+    const userId = await requireAuth(ctx)
 
     const user = await ctx.db
       .query('users')
       .withIndex('by_tokenIdentifier', (q) =>
-        q.eq('tokenIdentifier', identity.tokenIdentifier),
+        q.eq('tokenIdentifier', userId),
       )
       .unique()
     if (!user) throw new Error('User not found')
 
     const today = todayUtcYmd()
     const current = user.audioOverviewQuota
-    const nextCount = current && current.date === today ? current.count + 1 : 1
+    const used = current && current.date === today ? current.count : 0
+    if (used >= AUDIO_OVERVIEW_DAILY_CAP) {
+      throw new Error('Daily audio overview quota reached')
+    }
+    const nextCount = used + 1
     await ctx.db.patch(user._id, {
       audioOverviewQuota: { date: today, count: nextCount },
     })

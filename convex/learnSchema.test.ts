@@ -2,6 +2,7 @@
 import { convexTest } from 'convex-test'
 import { describe, expect, test } from 'vitest'
 import { api, internal } from './_generated/api'
+import type { Id } from './_generated/dataModel'
 import schema from './schema'
 
 const modules = import.meta.glob('./**/*.ts')
@@ -91,6 +92,68 @@ async function seedLearnProfile(
       dailyReviewCap: 50,
     })
   })
+}
+
+type TestClient = ReturnType<ReturnType<typeof convexTest>['withIdentity']>
+type LearnExportCollection = 'courses' | 'courseSections' | 'learnProfile'
+type ExportRow = Record<string, unknown>
+type ExportPage = {
+  page: ExportRow[]
+  isDone: boolean
+  continueCursor: string
+}
+
+async function readLearnExportPages(
+  asUser: TestClient,
+  collection: LearnExportCollection,
+): Promise<ExportRow[]> {
+  const rows: ExportRow[] = []
+  let cursor: string | null = null
+
+  while (true) {
+    const result: ExportPage = await asUser.query(api.dataExport.getUserDataPage, {
+      collection,
+      paginationOpts: { cursor, numItems: 1 },
+    })
+    rows.push(...result.page)
+    if (result.isDone) return rows
+    cursor = result.continueCursor
+  }
+}
+
+async function collectLearnDataForTest(asUser: TestClient) {
+  const courses = await readLearnExportPages(asUser, 'courses')
+  const courseSections = await readLearnExportPages(asUser, 'courseSections')
+  const learnProfile = await readLearnExportPages(asUser, 'learnProfile')
+  const courseSourceDocs: ExportRow[] = []
+
+  for (const course of courses) {
+    let cursor: string | null = null
+    while (true) {
+      const result: ExportPage | null = await asUser.query(api.dataExport.getCourseSourceDocsPage, {
+        courseId: course._id as Id<'courses'>,
+        paginationOpts: { cursor, numItems: 1 },
+      })
+      if (!result) break
+      courseSourceDocs.push(...result.page)
+      if (result.isDone) break
+      cursor = result.continueCursor
+    }
+  }
+
+  return { courses, courseSections, courseSourceDocs, learnProfile }
+}
+
+async function advanceAccountDeletionToExternalCleanup(
+  t: ReturnType<typeof convexTest>,
+  userId: string,
+) {
+  for (let batch = 0; batch < 100; batch++) {
+    await t.mutation(internal.accountDeletion.runDeletionBatch, { userId })
+    const phase = (await t.query(internal.accountDeletion.getDeletionTombstone, { userId }))?.phase
+    if (phase === 'waitingExternal' || phase === 'complete') return
+  }
+  throw new Error('Account deletion did not finish its bounded database phases')
 }
 
 describe('courses table CRUD with ownership isolation', () => {
@@ -256,11 +319,16 @@ describe('courseScoped filter on folder queries', () => {
       return await ctx.storage.store(new Blob(['audio-bytes'], { type: 'audio/wav' }))
     })
 
-    await asUser.mutation(api.audioOverviews.createWithTurns, {
-      folderId,
-      title: 'Normal Overview',
-      turns: [{ speaker: 'host_a', text: 'Hello', audioFileId: storageId, durationMs: 1000 }],
-      voiceProfile: { hostA: 'voice_a', hostB: 'voice_b' },
+    await t.run(async (ctx) => {
+      await ctx.db.insert('audioOverviews', {
+        userId: USER_A.tokenIdentifier,
+        folderId,
+        title: 'Normal Overview',
+        status: 'ready',
+        turns: [{ speaker: 'host_a', text: 'Hello', audioFileId: storageId, durationMs: 1000 }],
+        voiceProfile: { hostA: 'voice_a', hostB: 'voice_b' },
+        totalDurationMs: 1000,
+      })
     })
 
     await t.run(async (ctx) => {
@@ -295,6 +363,7 @@ describe('account deletion cascade for Learn tables', () => {
     await t.mutation(internal.accountDeletion.deleteAccountCascade, {
       userId: USER_A.tokenIdentifier,
     })
+    await advanceAccountDeletionToExternalCleanup(t, USER_A.tokenIdentifier)
 
     const coursesA = await t.run(async (ctx) => {
       return await ctx.db
@@ -348,14 +417,14 @@ describe('account deletion cascade for Learn tables', () => {
 })
 
 describe('dataExport includes Learn tables', () => {
-  test('collectUserData returns courses, courseSections, courseSourceDocs, learnProfile', async () => {
+  test('paginated export returns courses, courseSections, courseSourceDocs, learnProfile', async () => {
     const t = convexTest(schema, modules)
     const { asUser, folderId } = await seedFolder(t, USER_A)
     await seedFolder(t, USER_B)
     await seedCourseData(t, USER_A, folderId)
     await seedLearnProfile(t, USER_A)
 
-    const result = await asUser.query(api.dataExport.collectUserData, {})
+    const result = await collectLearnDataForTest(asUser)
 
     expect(result.courses).toHaveLength(1)
     expect(result.courses[0]!.title).toBe('Alice Course')
@@ -364,14 +433,14 @@ describe('dataExport includes Learn tables', () => {
     expect(result.learnProfile).toHaveLength(1)
   })
 
-  test('collectUserData does not leak user B Learn data to user A', async () => {
+  test('paginated export does not leak user B Learn data to user A', async () => {
     const t = convexTest(schema, modules)
     const { asUser: asUserA, folderId: folderA } = await seedFolder(t, USER_A)
     const { folderId: folderB } = await seedFolder(t, USER_B)
     await seedCourseData(t, USER_A, folderA)
     await seedCourseData(t, USER_B, folderB)
 
-    const result = await asUserA.query(api.dataExport.collectUserData, {})
+    const result = await collectLearnDataForTest(asUserA)
 
     expect(result.courses).toHaveLength(1)
     expect(result.courses[0]!.userId).toBe(USER_A.tokenIdentifier)

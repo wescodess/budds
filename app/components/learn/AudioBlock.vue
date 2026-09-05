@@ -93,33 +93,33 @@ onUnmounted(() => {
   }
 })
 
-interface TranscriptLine {
-  speaker: string
-  text: string
-  isHostA: boolean
+function seekTo(absMs: number) {
+  const el = audioEl.value
+  if (!el) return
+  let offset = Math.max(0, absMs)
+  let targetIndex = 0
+  for (let i = 0; i < turns.value.length; i++) {
+    const dur = turns.value[i]!.durationMs
+    if (offset <= dur) { targetIndex = i; break }
+    offset -= dur
+    targetIndex = i + 1
+  }
+  if (targetIndex >= turns.value.length) targetIndex = turns.value.length - 1
+  if (targetIndex < 0) targetIndex = 0
+  const wasPlaying = isPlaying.value
+  if (targetIndex !== currentTurnIndex.value) {
+    currentTurnIndex.value = targetIndex
+    const url = turnUrls.value[targetIndex]
+    if (!url) return
+    el.src = url
+    el.currentTime = Math.max(0, offset / 1000)
+    currentTime.value = Math.max(0, offset / 1000)
+    if (wasPlaying) el.play().catch(() => {})
+  } else {
+    el.currentTime = Math.max(0, offset / 1000)
+    currentTime.value = Math.max(0, offset / 1000)
+  }
 }
-
-const transcriptLines = computed<TranscriptLine[]>(() => {
-  return turns.value.map((turn: any) => {
-    const isDialogue = turn.text.startsWith('Host A:') || turn.text.startsWith('Host B:')
-    if (isDialogue) {
-      return turn.text.split('\n').filter(Boolean).map((line: string) => {
-        const match = line.match(/^(Host [AB]):\s*(.*)/)
-        if (!match) return null
-        return {
-          speaker: match[1],
-          text: match[2],
-          isHostA: match[1] === 'Host A',
-        }
-      }).filter(Boolean)
-    }
-    return [{
-      speaker: turn.speaker === 'host_a' ? 'Host A' : 'Host B',
-      text: turn.text,
-      isHostA: turn.speaker === 'host_a',
-    }]
-  }).flat()
-})
 
 const hasData = computed(() => !!overview.value && turns.value.length > 0)
 </script>
@@ -198,15 +198,17 @@ const hasData = computed(() => !!overview.value && turns.value.length > 0)
         <div
           v-if="transcriptExpanded"
           data-testid="audio-block-transcript"
-          class="mt-1 max-h-64 overflow-y-auto rounded-lg border border-stone-800 bg-stone-950/30 p-4"
+          class="mt-1 rounded-lg border border-stone-800 bg-stone-950/30 p-4"
         >
-          <div v-for="(line, idx) in transcriptLines" :key="idx" class="mb-3 last:mb-0">
-            <span
-              class="text-[10px] font-semibold uppercase tracking-wider"
-              :class="line.isHostA ? 'text-amber-500' : 'text-stone-500'"
-            >{{ line.speaker }}</span>
-            <p class="mt-0.5 text-sm leading-relaxed text-stone-300">{{ line.text }}</p>
-          </div>
+          <AudioOverviewSyncedTranscript
+            :turns="turns"
+            :current-turn-index="currentTurnIndex"
+            :current-time-sec="currentTime"
+            :is-playing="isPlaying"
+            compact
+            max-height="16rem"
+            :on-seek="seekTo"
+          />
         </div>
       </div>
 

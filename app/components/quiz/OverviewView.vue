@@ -64,7 +64,7 @@ function openEditQuestion(q: any) {
 }
 
 async function handleDeleteQuestion(questionId: string) {
-  await deleteQuestionMutation.mutate({ questionId })
+  await deleteQuestionMutation.mutate({ questionId: questionId as Id<'quizQuestions'> })
   confirmDeleteId.value = null
 }
 
@@ -145,10 +145,10 @@ function typeBadge(type: string) {
                 <Pencil class="h-3.5 w-3.5" />
               </button>
               <button
-                v-if="confirmDeleteId !== (q._id as string)"
+                v-if="confirmDeleteId !== q._id"
                 type="button"
                 class="rounded p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                @click="confirmDeleteId = q._id as string"
+                @click="confirmDeleteId = q._id"
               >
                 <Trash2 class="h-3.5 w-3.5" />
               </button>
@@ -156,7 +156,7 @@ function typeBadge(type: string) {
                 <button
                   type="button"
                   class="rounded bg-destructive p-1.5 text-destructive-foreground"
-                  @click="handleDeleteQuestion(q._id as string)"
+                  @click="handleDeleteQuestion(q._id)"
                 >
                   <Check class="h-3.5 w-3.5" />
                 </button>

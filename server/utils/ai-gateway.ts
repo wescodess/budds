@@ -11,6 +11,13 @@ export interface GenerateParams {
   temperature?: number
   max_tokens?: number
   stream?: boolean
+  maxAttempts?: number
+  jsonMode?: boolean
+  jsonSchema?: {
+    name: string
+    strict?: boolean
+    schema: Record<string, unknown>
+  }
 }
 
 export interface GenerateResponse {
@@ -19,12 +26,14 @@ export interface GenerateResponse {
     index: number
     message: ChatMessage
     finish_reason: string
+    native_finish_reason?: string
   }[]
   model: string
   usage: {
     prompt_tokens: number
     completion_tokens: number
     total_tokens: number
+    cost?: number
   }
 }
 
@@ -73,7 +82,9 @@ function getGatewayConfig() {
 }
 
 export async function generateCompletion(params: GenerateParams): Promise<GenerateResponse> {
-  const { baseUrl, headers } = getGatewayConfig()
+  const { baseUrl, headers: baseHeaders } = getGatewayConfig()
+  const headers = { ...baseHeaders }
+  if (params.maxAttempts !== undefined) headers['cf-aig-max-attempts'] = String(params.maxAttempts)
   const url = `${baseUrl}/openrouter/v1/chat/completions`
 
   const response = await fetch(url, {
@@ -85,6 +96,20 @@ export async function generateCompletion(params: GenerateParams): Promise<Genera
       temperature: params.temperature ?? 0.7,
       max_tokens: params.max_tokens ?? 2048,
       stream: false,
+      ...(params.jsonSchema
+        ? {
+            response_format: {
+              type: 'json_schema',
+              json_schema: params.jsonSchema,
+            },
+            provider: { require_parameters: true },
+          }
+        : params.jsonMode
+        ? {
+            response_format: { type: 'json_object' },
+            provider: { require_parameters: true },
+          }
+        : {}),
     }),
   })
 

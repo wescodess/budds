@@ -11,6 +11,10 @@ export default defineSchema({
       date: v.string(),
       count: v.number(),
     })),
+    audioOverviewInterjectionQuota: v.optional(v.object({
+      date: v.string(),
+      count: v.number(),
+    })),
   }).index('by_tokenIdentifier', ['tokenIdentifier']),
 
   folders: defineTable({
@@ -44,11 +48,14 @@ export default defineSchema({
     sourceType: v.optional(v.union(v.literal('file'), v.literal('website'), v.literal('youtube'))),
     sourceUrl: v.optional(v.string()),
     mimeType: v.optional(v.string()),
+    contentHash: v.optional(v.string()),
+    sourceRevision: v.optional(v.string()),
     taskId: v.optional(v.id('tasks')),
   })
     .index('by_userId', ['userId'])
     .index('by_folderId', ['folderId'])
     .index('by_userId_and_folderId', ['userId', 'folderId'])
+    .index('by_userId_and_folderId_and_status', ['userId', 'folderId', 'status'])
     .index('by_status', ['status']),
 
   conversations: defineTable({
@@ -302,17 +309,472 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
     completedAt: v.optional(v.number()),
+    audioOverviewRequest: v.optional(v.object({
+      scope: v.union(
+        v.object({ mode: v.literal('folder') }),
+        v.object({
+          mode: v.literal('explicit'),
+          documentIds: v.array(v.id('documents')),
+        }),
+      ),
+      documents: v.array(v.object({
+        documentId: v.id('documents'),
+        folderId: v.id('folders'),
+        filename: v.string(),
+        r2Key: v.optional(v.string()),
+        fileSize: v.optional(v.number()),
+        mimeType: v.optional(v.string()),
+        contentHash: v.optional(v.string()),
+        sourceRevision: v.optional(v.string()),
+      })),
+      preferences: v.object({
+        lengthMinutes: v.union(v.literal(5), v.literal(10), v.literal(20)),
+        complexity: v.union(v.literal('beginner'), v.literal('expert')),
+      }),
+      voiceProfile: v.object({
+        hostA: v.union(
+          v.literal('asteria'), v.literal('luna'), v.literal('stella'),
+          v.literal('athena'), v.literal('hera'), v.literal('orion'),
+          v.literal('arcas'), v.literal('perseus'), v.literal('angus'),
+          v.literal('orpheus'), v.literal('helios'), v.literal('zeus'),
+        ),
+        hostB: v.union(
+          v.literal('asteria'), v.literal('luna'), v.literal('stella'),
+          v.literal('athena'), v.literal('hera'), v.literal('orion'),
+          v.literal('arcas'), v.literal('perseus'), v.literal('angus'),
+          v.literal('orpheus'), v.literal('helios'), v.literal('zeus'),
+        ),
+      }),
+      model: v.optional(v.string()),
+      quotaDate: v.string(),
+    })),
   })
     .index('by_userId_and_folderId', ['userId', 'folderId'])
     .index('by_userId', ['userId'])
+    .index('by_userId_and_type_and_status', ['userId', 'type', 'status'])
     .index('by_status', ['status']),
+
+  audioOverviewJobs: defineTable({
+    userId: v.string(),
+    taskId: v.id('tasks'),
+    folderId: v.id('folders'),
+    idempotencyKey: v.string(),
+    capabilityHash: v.string(),
+    status: v.union(
+      v.literal('accepted'),
+      v.literal('running'),
+      v.literal('completed'),
+      v.literal('failed'),
+      v.literal('cancelled'),
+    ),
+    stage: v.union(
+      v.literal('accepted'),
+      v.literal('preparing'),
+      v.literal('synthesizing'),
+      v.literal('finalizing'),
+      v.literal('complete'),
+      v.literal('failed'),
+      v.literal('cancelled'),
+    ),
+    title: v.optional(v.string()),
+    model: v.optional(v.string()),
+    ttsEngine: v.optional(v.union(v.literal('aura-1'), v.literal('dia'))),
+    sourceDocumentIds: v.optional(v.array(v.id('documents'))),
+    scriptAttemptId: v.optional(v.string()),
+    scriptAttemptStartedAt: v.optional(v.number()),
+    scriptAttemptsStarted: v.optional(v.number()),
+    totalTurns: v.optional(v.number()),
+    completedTurns: v.number(),
+    budgetReservedMicrousd: v.optional(v.number()),
+    budgetDebitedMicrousd: v.optional(v.number()),
+    budgetDebitKeys: v.optional(v.array(v.string())),
+    estimatedCostMicrousd: v.optional(v.number()),
+    error: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    completedAt: v.optional(v.number()),
+  })
+    .index('by_taskId', ['taskId'])
+    .index('by_userId', ['userId'])
+    .index('by_userId_and_idempotencyKey', ['userId', 'idempotencyKey'])
+    .index('by_userId_and_status', ['userId', 'status'])
+    .index('by_status_and_updatedAt', ['status', 'updatedAt']),
+
+  audioOverviewSourceManifests: defineTable({
+    jobId: v.id('audioOverviewJobs'),
+    taskId: v.id('tasks'),
+    userId: v.string(),
+    folderId: v.id('folders'),
+    schemaVersion: v.literal(2),
+    revision: v.string(),
+    contentHash: v.string(),
+    planFingerprint: v.string(),
+    entryCount: v.number(),
+    frozenAt: v.number(),
+  })
+    .index('by_jobId', ['jobId'])
+    .index('by_taskId', ['taskId'])
+    .index('by_userId', ['userId']),
+
+  audioOverviewSourceManifestEntries: defineTable({
+    manifestId: v.id('audioOverviewSourceManifests'),
+    jobId: v.id('audioOverviewJobs'),
+    userId: v.string(),
+    order: v.number(),
+    sourceId: v.string(),
+    documentId: v.id('documents'),
+    revision: v.string(),
+    contentHash: v.string(),
+    displayReference: v.string(),
+    objectKey: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index('by_manifestId_and_order', ['manifestId', 'order'])
+    .index('by_jobId', ['jobId'])
+    .index('by_documentId', ['documentId'])
+    .index('by_userId', ['userId']),
+
+  audioOverviewOutlines: defineTable({
+    jobId: v.id('audioOverviewJobs'),
+    taskId: v.id('tasks'),
+    userId: v.string(),
+    narrativeArc: v.string(),
+    learningObjectiveCount: v.number(),
+    createdAt: v.number(),
+  })
+    .index('by_jobId', ['jobId'])
+    .index('by_taskId', ['taskId'])
+    .index('by_userId', ['userId']),
+
+  audioOverviewLearningObjectives: defineTable({
+    outlineId: v.id('audioOverviewOutlines'),
+    jobId: v.id('audioOverviewJobs'),
+    userId: v.string(),
+    order: v.number(),
+    text: v.string(),
+    createdAt: v.number(),
+  })
+    .index('by_outlineId_and_order', ['outlineId', 'order'])
+    .index('by_jobId', ['jobId'])
+    .index('by_userId', ['userId']),
+
+  audioOverviewOutlineSources: defineTable({
+    outlineId: v.id('audioOverviewOutlines'),
+    manifestEntryId: v.id('audioOverviewSourceManifestEntries'),
+    jobId: v.id('audioOverviewJobs'),
+    userId: v.string(),
+    order: v.number(),
+    createdAt: v.number(),
+  })
+    .index('by_outlineId_and_order', ['outlineId', 'order'])
+    .index('by_jobId', ['jobId'])
+    .index('by_userId', ['userId']),
+
+  audioOverviewClaimLedgers: defineTable({
+    jobId: v.id('audioOverviewJobs'),
+    taskId: v.id('tasks'),
+    userId: v.string(),
+    claimCount: v.number(),
+    supportedClaimCount: v.number(),
+    createdAt: v.number(),
+  })
+    .index('by_jobId', ['jobId'])
+    .index('by_taskId', ['taskId'])
+    .index('by_userId', ['userId']),
+
+  audioOverviewClaims: defineTable({
+    ledgerId: v.id('audioOverviewClaimLedgers'),
+    jobId: v.id('audioOverviewJobs'),
+    userId: v.string(),
+    order: v.number(),
+    claimId: v.string(),
+    text: v.string(),
+    status: v.union(v.literal('supported'), v.literal('unsupported')),
+    verificationVersion: v.optional(v.literal('claim-entailment.v1')),
+    verificationModel: v.optional(v.string()),
+    entailmentDecision: v.optional(v.literal('entailed')),
+    entailmentReason: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index('by_ledgerId_and_order', ['ledgerId', 'order'])
+    .index('by_jobId', ['jobId'])
+    .index('by_userId', ['userId']),
+
+  audioOverviewClaimSources: defineTable({
+    ledgerId: v.id('audioOverviewClaimLedgers'),
+    claimRecordId: v.id('audioOverviewClaims'),
+    manifestEntryId: v.id('audioOverviewSourceManifestEntries'),
+    jobId: v.id('audioOverviewJobs'),
+    userId: v.string(),
+    createdAt: v.number(),
+  })
+    .index('by_claimRecordId_and_manifestEntryId', ['claimRecordId', 'manifestEntryId'])
+    .index('by_ledgerId', ['ledgerId'])
+    .index('by_jobId', ['jobId'])
+    .index('by_userId', ['userId']),
+
+  audioOverviewEpisodes: defineTable({
+    jobId: v.id('audioOverviewJobs'),
+    taskId: v.id('tasks'),
+    userId: v.string(),
+    folderId: v.id('folders'),
+    sourceManifestId: v.id('audioOverviewSourceManifests'),
+    outlineId: v.id('audioOverviewOutlines'),
+    claimLedgerId: v.id('audioOverviewClaimLedgers'),
+    schemaVersion: v.literal(2),
+    title: v.string(),
+    model: v.string(),
+    audioProfileId: v.string(),
+    audioProfileVersion: v.string(),
+    renderer: v.string(),
+    hostAVoice: v.string(),
+    hostBVoice: v.string(),
+    requestedLengthMinutes: v.union(v.literal(5), v.literal(10), v.literal(20)),
+    complexity: v.union(v.literal('beginner'), v.literal('expert')),
+    status: v.union(
+      v.literal('planning'),
+      v.literal('rendering'),
+      v.literal('ready'),
+      v.literal('failed'),
+      v.literal('deleting'),
+    ),
+    sceneCount: v.number(),
+    utteranceCount: v.number(),
+    totalDurationMs: v.optional(v.number()),
+    finalArtifactId: v.optional(v.id('audioOverviewAudioArtifacts')),
+    alignmentId: v.optional(v.id('audioOverviewAlignments')),
+    compatibilityOverviewId: v.optional(v.id('audioOverviews')),
+    failureReason: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    publishedAt: v.optional(v.number()),
+  })
+    .index('by_jobId', ['jobId'])
+    .index('by_taskId', ['taskId'])
+    .index('by_userId', ['userId'])
+    .index('by_userId_and_status', ['userId', 'status'])
+    .index('by_userId_and_folderId', ['userId', 'folderId']),
+
+  audioOverviewScenes: defineTable({
+    episodeId: v.id('audioOverviewEpisodes'),
+    jobId: v.id('audioOverviewJobs'),
+    userId: v.string(),
+    order: v.number(),
+    title: v.string(),
+    narrativePurpose: v.string(),
+    targetDurationMs: v.number(),
+    status: v.union(
+      v.literal('pending'),
+      v.literal('rendering'),
+      v.literal('ready'),
+      v.literal('failed'),
+    ),
+    currentAttempt: v.number(),
+    durationMs: v.optional(v.number()),
+    audioArtifactId: v.optional(v.id('audioOverviewAudioArtifacts')),
+    updatedAt: v.number(),
+  })
+    .index('by_episodeId_and_order', ['episodeId', 'order'])
+    .index('by_jobId_and_order', ['jobId', 'order'])
+    .index('by_userId', ['userId']),
+
+  audioOverviewUtterances: defineTable({
+    episodeId: v.id('audioOverviewEpisodes'),
+    sceneId: v.id('audioOverviewScenes'),
+    jobId: v.id('audioOverviewJobs'),
+    userId: v.string(),
+    order: v.number(),
+    sceneOrder: v.number(),
+    speaker: v.union(v.literal('host_a'), v.literal('host_b')),
+    text: v.string(),
+    emotionalIntent: v.string(),
+    deliveryIntent: v.string(),
+    pauseAfterMs: v.optional(v.number()),
+    verificationUtteranceId: v.optional(v.string()),
+    verificationVersion: v.optional(v.literal('claim-entailment.v1')),
+    verificationModel: v.optional(v.string()),
+    entailmentDecision: v.optional(v.literal('entailed')),
+    entailmentReason: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index('by_episodeId_and_order', ['episodeId', 'order'])
+    .index('by_sceneId_and_sceneOrder', ['sceneId', 'sceneOrder'])
+    .index('by_jobId', ['jobId'])
+    .index('by_userId', ['userId']),
+
+  audioOverviewUtteranceSources: defineTable({
+    episodeId: v.id('audioOverviewEpisodes'),
+    utteranceId: v.id('audioOverviewUtterances'),
+    manifestEntryId: v.id('audioOverviewSourceManifestEntries'),
+    jobId: v.id('audioOverviewJobs'),
+    userId: v.string(),
+    createdAt: v.number(),
+  })
+    .index('by_utteranceId_and_manifestEntryId', ['utteranceId', 'manifestEntryId'])
+    .index('by_episodeId', ['episodeId'])
+    .index('by_jobId', ['jobId'])
+    .index('by_userId', ['userId']),
+
+  audioOverviewUtteranceClaims: defineTable({
+    episodeId: v.id('audioOverviewEpisodes'),
+    utteranceId: v.id('audioOverviewUtterances'),
+    claimRecordId: v.id('audioOverviewClaims'),
+    jobId: v.id('audioOverviewJobs'),
+    userId: v.string(),
+    createdAt: v.number(),
+  })
+    .index('by_utteranceId_and_claimRecordId', ['utteranceId', 'claimRecordId'])
+    .index('by_episodeId', ['episodeId'])
+    .index('by_jobId', ['jobId'])
+    .index('by_userId', ['userId']),
+
+  audioOverviewAudioArtifacts: defineTable({
+    episodeId: v.id('audioOverviewEpisodes'),
+    sceneId: v.optional(v.id('audioOverviewScenes')),
+    interjectionId: v.optional(v.id('audioOverviewInterjectionsV2')),
+    jobId: v.id('audioOverviewJobs'),
+    userId: v.string(),
+    kind: v.union(v.literal('scene'), v.literal('final'), v.literal('interjection')),
+    status: v.union(
+      v.literal('staged'),
+      v.literal('rejected'),
+      v.literal('published'),
+      v.literal('deleting'),
+      v.literal('deleted'),
+    ),
+    storageProvider: v.literal('r2'),
+    objectKey: v.string(),
+    etag: v.optional(v.string()),
+    checksumSha256: v.string(),
+    byteLength: v.number(),
+    contentType: v.string(),
+    container: v.union(v.literal('pcm'), v.literal('wav')),
+    sampleRateHz: v.literal(24000),
+    channelCount: v.literal(1),
+    bitsPerSample: v.literal(16),
+    durationMs: v.number(),
+    rendererRequestId: v.optional(v.string()),
+    createdAt: v.number(),
+    publishedAt: v.optional(v.number()),
+  })
+    .index('by_episodeId_and_kind', ['episodeId', 'kind'])
+    .index('by_sceneId', ['sceneId'])
+    .index('by_interjectionId', ['interjectionId'])
+    .index('by_jobId_and_objectKey', ['jobId', 'objectKey'])
+    .index('by_userId', ['userId']),
+
+  audioOverviewSceneQualityGates: defineTable({
+    episodeId: v.id('audioOverviewEpisodes'),
+    sceneId: v.id('audioOverviewScenes'),
+    artifactId: v.id('audioOverviewAudioArtifacts'),
+    jobId: v.id('audioOverviewJobs'),
+    userId: v.string(),
+    attempt: v.number(),
+    passed: v.boolean(),
+    claimsSupported: v.boolean(),
+    // These two booleans verify the immutable script/profile contract only.
+    // Mono PCM + text-only ASR cannot truthfully prove acoustic voice count or
+    // voice identity, so those release-level checks remain explicitly unmeasured.
+    scriptedSpeakerPairValid: v.boolean(),
+    audioProfileMatches: v.boolean(),
+    speakerCountEvidence: v.literal('not_measured'),
+    speakerConsistencyEvidence: v.literal('not_measured'),
+    durationWithinTolerance: v.boolean(),
+    silenceWithinTolerance: v.boolean(),
+    clippingWithinTolerance: v.boolean(),
+    truncationFree: v.boolean(),
+    tempoWithinTolerance: v.boolean(),
+    directionsNotSpoken: v.boolean(),
+    transcriptDivergence: v.optional(v.number()),
+    transcriptDivergenceThreshold: v.optional(v.number()),
+    failureCode: v.optional(v.string()),
+    failureMessage: v.optional(v.string()),
+    evaluatedAt: v.number(),
+  })
+    .index('by_sceneId_and_attempt', ['sceneId', 'attempt'])
+    .index('by_episodeId', ['episodeId'])
+    .index('by_jobId', ['jobId'])
+    .index('by_userId', ['userId']),
+
+  audioOverviewAlignments: defineTable({
+    episodeId: v.id('audioOverviewEpisodes'),
+    artifactId: v.id('audioOverviewAudioArtifacts'),
+    jobId: v.id('audioOverviewJobs'),
+    userId: v.string(),
+    status: v.union(v.literal('pending'), v.literal('ready'), v.literal('failed')),
+    aligner: v.optional(v.string()),
+    alignerVersion: v.optional(v.string()),
+    segmentCount: v.number(),
+    error: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    completedAt: v.optional(v.number()),
+  })
+    .index('by_episodeId', ['episodeId'])
+    .index('by_artifactId', ['artifactId'])
+    .index('by_jobId', ['jobId'])
+    .index('by_userId_and_status', ['userId', 'status']),
+
+  audioOverviewAlignmentSegments: defineTable({
+    alignmentId: v.id('audioOverviewAlignments'),
+    episodeId: v.id('audioOverviewEpisodes'),
+    utteranceId: v.id('audioOverviewUtterances'),
+    sceneId: v.id('audioOverviewScenes'),
+    jobId: v.id('audioOverviewJobs'),
+    userId: v.string(),
+    wordIndex: v.number(),
+    word: v.string(),
+    startMs: v.number(),
+    endMs: v.number(),
+    confidence: v.optional(v.number()),
+    createdAt: v.number(),
+  })
+    .index('by_alignmentId_and_utteranceId_and_wordIndex', ['alignmentId', 'utteranceId', 'wordIndex'])
+    .index('by_episodeId', ['episodeId'])
+    .index('by_jobId', ['jobId'])
+    .index('by_userId', ['userId']),
+
+  audioOverviewJobTurns: defineTable({
+    jobId: v.id('audioOverviewJobs'),
+    taskId: v.id('tasks'),
+    userId: v.string(),
+    order: v.number(),
+    speaker: v.union(v.literal('host_a'), v.literal('host_b')),
+    text: v.string(),
+    synthesisText: v.optional(v.string()),
+    synthesisAttemptId: v.optional(v.string()),
+    synthesisAttemptStartedAt: v.optional(v.number()),
+    status: v.union(v.literal('pending'), v.literal('ready')),
+    sourceIndex: v.optional(v.number()),
+    audioFileId: v.optional(v.id('_storage')),
+    uploadClaimId: v.optional(v.id('audioOverviewUploadClaims')),
+    durationMs: v.optional(v.number()),
+    wordTimings: v.optional(v.array(
+      v.object({
+        word: v.string(),
+        start: v.number(),
+        end: v.number(),
+      }),
+    )),
+    updatedAt: v.number(),
+  })
+    .index('by_jobId_and_order', ['jobId', 'order'])
+    .index('by_taskId', ['taskId'])
+    .index('by_userId', ['userId']),
 
   audioOverviews: defineTable({
     userId: v.string(),
     folderId: v.id('folders'),
     taskId: v.optional(v.id('tasks')),
+    episodeId: v.optional(v.id('audioOverviewEpisodes')),
+    finalArtifactId: v.optional(v.id('audioOverviewAudioArtifacts')),
     title: v.string(),
-    status: v.union(v.literal('generating'), v.literal('ready'), v.literal('failed')),
+    status: v.union(
+      v.literal('generating'),
+      v.literal('ready'),
+      v.literal('failed'),
+      v.literal('deleting'),
+    ),
     failureReason: v.optional(v.string()),
     model: v.optional(v.string()),
     turns: v.array(
@@ -322,6 +784,13 @@ export default defineSchema({
         audioFileId: v.id('_storage'),
         durationMs: v.number(),
         sourceIndex: v.optional(v.number()),
+        wordTimings: v.optional(v.array(
+          v.object({
+            word: v.string(),
+            start: v.number(),
+            end: v.number(),
+          }),
+        )),
       }),
     ),
     voiceProfile: v.object({
@@ -344,7 +813,29 @@ export default defineSchema({
     .index('by_userId', ['userId'])
     .index('by_folderId', ['folderId'])
     .index('by_userId_and_folderId', ['userId', 'folderId'])
+    .index('by_taskId', ['taskId'])
+    .index('by_episodeId', ['episodeId'])
     .index('by_shareToken', ['shareToken']),
+
+  audioOverviewUploadClaims: defineTable({
+    userId: v.string(),
+    taskId: v.optional(v.id('tasks')),
+    nonce: v.string(),
+    expectedSha256: v.optional(v.string()),
+    expectedSize: v.optional(v.number()),
+    begunAt: v.optional(v.number()),
+    uploadAttempts: v.optional(v.number()),
+    storageId: v.optional(v.id('_storage')),
+    abortingStorageId: v.optional(v.id('_storage')),
+    consumedAt: v.optional(v.number()),
+    jobTurnId: v.optional(v.id('audioOverviewJobTurns')),
+    expiresAt: v.number(),
+  })
+    .index('by_userId', ['userId'])
+    .index('by_taskId', ['taskId'])
+    .index('by_jobTurnId', ['jobTurnId'])
+    .index('by_storageId', ['storageId'])
+    .index('by_expiresAt', ['expiresAt']),
 
   audioOverviewInterjections: defineTable({
     audioOverviewId: v.id('audioOverviews'),
@@ -360,17 +851,100 @@ export default defineSchema({
         audioFileId: v.id('_storage'),
         durationMs: v.number(),
         sourceIndex: v.optional(v.number()),
+        wordTimings: v.optional(v.array(
+          v.object({
+            word: v.string(),
+            start: v.number(),
+            end: v.number(),
+          }),
+        )),
       }),
     ),
   })
     .index('by_audioOverview', ['audioOverviewId'])
     .index('by_userId', ['userId']),
 
+  audioOverviewInterjectionsV2: defineTable({
+    audioOverviewId: v.id('audioOverviews'),
+    episodeId: v.id('audioOverviewEpisodes'),
+    sourceManifestId: v.id('audioOverviewSourceManifests'),
+    jobId: v.id('audioOverviewJobs'),
+    userId: v.string(),
+    idempotencyKey: v.string(),
+    insertedAfterTurnIndex: v.number(),
+    question: v.string(),
+    model: v.string(),
+    audioProfileId: v.string(),
+    audioProfileVersion: v.string(),
+    renderer: v.string(),
+    hostAVoice: v.string(),
+    hostBVoice: v.string(),
+    status: v.union(
+      v.literal('reserved'),
+      v.literal('scripting'),
+      v.literal('rendering'),
+      v.literal('ready'),
+      v.literal('failed'),
+      v.literal('cancelled'),
+      v.literal('deleting'),
+    ),
+    utteranceCount: v.number(),
+    quotaDate: v.optional(v.string()),
+    budgetReservedMicrousd: v.optional(v.number()),
+    estimatedCostMicrousd: v.optional(v.number()),
+    scriptingClaimedAt: v.optional(v.number()),
+    renderAttemptedAt: v.optional(v.number()),
+    artifactId: v.optional(v.id('audioOverviewAudioArtifacts')),
+    error: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    completedAt: v.optional(v.number()),
+  })
+    .index('by_audioOverviewId_and_createdAt', ['audioOverviewId', 'createdAt'])
+    .index('by_episodeId', ['episodeId'])
+    .index('by_userId_and_audioOverviewId_and_idempotencyKey', ['userId', 'audioOverviewId', 'idempotencyKey'])
+    .index('by_userId_and_quotaDate', ['userId', 'quotaDate'])
+    .index('by_userId', ['userId']),
+
+  audioOverviewInterjectionUtterances: defineTable({
+    interjectionId: v.id('audioOverviewInterjectionsV2'),
+    episodeId: v.id('audioOverviewEpisodes'),
+    userId: v.string(),
+    order: v.number(),
+    speaker: v.union(v.literal('host_a'), v.literal('host_b')),
+    text: v.string(),
+    claimId: v.optional(v.string()),
+    claimText: v.optional(v.string()),
+    evidenceQuotes: v.optional(v.array(v.object({ sourceId: v.string(), quote: v.string() }))),
+    verificationUtteranceId: v.optional(v.string()),
+    verificationVersion: v.optional(v.literal('claim-entailment.v1')),
+    verificationModel: v.optional(v.string()),
+    entailmentDecision: v.optional(v.literal('entailed')),
+    entailmentReason: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index('by_interjectionId_and_order', ['interjectionId', 'order'])
+    .index('by_episodeId', ['episodeId'])
+    .index('by_userId', ['userId']),
+
+  audioOverviewInterjectionSources: defineTable({
+    interjectionId: v.id('audioOverviewInterjectionsV2'),
+    utteranceId: v.id('audioOverviewInterjectionUtterances'),
+    manifestEntryId: v.id('audioOverviewSourceManifestEntries'),
+    episodeId: v.id('audioOverviewEpisodes'),
+    userId: v.string(),
+    createdAt: v.number(),
+  })
+    .index('by_interjectionId', ['interjectionId'])
+    .index('by_utteranceId_and_manifestEntryId', ['utteranceId', 'manifestEntryId'])
+    .index('by_episodeId', ['episodeId'])
+    .index('by_userId', ['userId']),
+
   courses: defineTable({
     userId: v.string(),
     folderId: v.id('folders'),
     title: v.string(),
-    status: v.union(v.literal('generating'), v.literal('ready'), v.literal('failed')),
+    status: v.union(v.literal('generating'), v.literal('ready'), v.literal('failed'), v.literal('deleting')),
     sourceType: v.union(v.literal('folder'), v.literal('web-only')),
     sourceConfidence: v.object({
       docCount: v.number(),
@@ -457,7 +1031,8 @@ export default defineSchema({
     folderId: v.optional(v.id('folders')),
     userId: v.string(),
   })
-    .index('by_courseId', ['courseId']),
+    .index('by_courseId', ['courseId'])
+    .index('by_userId', ['userId']),
 
   reviewItems: defineTable({
     userId: v.string(),
@@ -472,6 +1047,7 @@ export default defineSchema({
     nextReviewDate: v.string(),
     lastReviewQuality: v.optional(v.number()),
     lastReviewedAt: v.optional(v.number()),
+    lastReviewIdempotencyKey: v.optional(v.string()),
     flagged: v.boolean(),
     correctedAnswer: v.optional(v.string()),
     createdAt: v.number(),
@@ -500,10 +1076,12 @@ export default defineSchema({
     itemsCorrect: v.number(),
     durationMs: v.number(),
     mode: v.optional(v.union(v.literal('full'), v.literal('quick'))),
+    idempotencyKey: v.optional(v.string()),
     completedAt: v.number(),
   })
     .index('by_userId', ['userId'])
-    .index('by_userId_and_date', ['userId', 'date']),
+    .index('by_userId_and_date', ['userId', 'date'])
+    .index('by_userId_and_idempotencyKey', ['userId', 'idempotencyKey']),
 
   calendarConnections: defineTable({
     userId: v.string(),
@@ -512,8 +1090,15 @@ export default defineSchema({
     refreshToken: v.string(),
     expiresAt: v.number(),
     timezone: v.string(),
-    status: v.union(v.literal('connected'), v.literal('disconnected')),
+    status: v.union(v.literal('connected'), v.literal('disconnecting'), v.literal('disconnected')),
     connectedAt: v.number(),
+    disconnectLeaseToken: v.optional(v.string()),
+    disconnectLeaseExpiresAt: v.optional(v.number()),
+    disconnectAttempts: v.optional(v.number()),
+    disconnectDeletedCount: v.optional(v.number()),
+    disconnectLastError: v.optional(v.string()),
+    disconnectUpdatedAt: v.optional(v.number()),
+    calendarSlotWatermark: v.optional(v.number()),
     preferences: v.optional(v.object({
       morningStart: v.string(),
       eveningEnd: v.string(),
@@ -535,17 +1120,149 @@ export default defineSchema({
   })
     .index('by_userId', ['userId'])
     .index('by_courseId', ['courseId'])
-    .index('by_userId_and_status', ['userId', 'status']),
+    .index('by_userId_and_status', ['userId', 'status'])
+    .index('by_userId_and_status_and_scheduledAt', ['userId', 'status', 'scheduledAt'])
+    .index('by_calendarConnectionId_and_calendarEventId', ['calendarConnectionId', 'calendarEventId']),
+
+  calendarEventCleanupJobs: defineTable({
+    userId: v.string(),
+    calendarConnectionId: v.id('calendarConnections'),
+    calendarEventId: v.string(),
+    courseId: v.id('courses'),
+    reason: v.union(v.literal('sync-create'), v.literal('missed-reschedule')),
+    operationKey: v.optional(v.string()),
+    status: v.union(
+      v.literal('pending'),
+      v.literal('deleting'),
+      v.literal('managed'),
+      v.literal('resolved'),
+      v.literal('dead_letter'),
+    ),
+    attempts: v.number(),
+    nextAttemptAt: v.number(),
+    leaseExpiresAt: v.optional(v.number()),
+    lastAttemptAt: v.optional(v.number()),
+    lastHttpStatus: v.optional(v.number()),
+    lastError: v.optional(v.string()),
+    resolution: v.optional(v.union(v.literal('deleted'), v.literal('already_absent'))),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    completedAt: v.optional(v.number()),
+  })
+    .index('by_userId', ['userId'])
+    .index('by_status_and_nextAttemptAt', ['status', 'nextAttemptAt'])
+    .index('by_status_and_leaseExpiresAt', ['status', 'leaseExpiresAt'])
+    .index('by_calendarConnectionId_and_status', ['calendarConnectionId', 'status'])
+    .index('by_calendarConnectionId_and_calendarEventId', ['calendarConnectionId', 'calendarEventId'])
+    .index('by_calendarConnectionId_and_operationKey', ['calendarConnectionId', 'operationKey'])
+    .index('by_calendarConnectionId_and_courseId_and_reason', ['calendarConnectionId', 'courseId', 'reason'])
+    .index('by_courseId_and_status', ['courseId', 'status'])
+    .index('by_status_and_completedAt', ['status', 'completedAt']),
+
+  courseDeletionJobs: defineTable({
+    userId: v.string(),
+    courseId: v.id('courses'),
+    status: v.literal('active'),
+    phase: v.union(
+      v.literal('settleCalendarCleanup'),
+      v.literal('providerEvents'),
+      v.literal('calendarCleanupJobs'),
+      v.literal('sections'),
+      v.literal('courseSourceDocs'),
+      v.literal('reviewItems'),
+      v.literal('finalize'),
+    ),
+    attempts: v.number(),
+    nextAttemptAt: v.number(),
+    leaseToken: v.optional(v.string()),
+    leaseExpiresAt: v.optional(v.number()),
+    lastError: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index('by_courseId', ['courseId'])
+    .index('by_userId', ['userId'])
+    .index('by_status_and_updatedAt', ['status', 'updatedAt']),
+
+  rateLimitBuckets: defineTable({
+    key: v.string(),
+    userId: v.string(),
+    route: v.string(),
+    count: v.number(),
+    windowStartedAt: v.number(),
+    expiresAt: v.number(),
+  })
+    .index('by_key', ['key'])
+    .index('by_userId', ['userId'])
+    .index('by_expiresAt', ['expiresAt']),
 
   pendingCleanup: defineTable({
     userId: v.string(),
     documentId: v.string(),
     r2Key: v.optional(v.string()),
-    kind: v.union(v.literal('ai-search'), v.literal('r2')),
+    audioArtifactId: v.optional(v.id('audioOverviewAudioArtifacts')),
+    fileId: v.optional(v.id('_storage')),
+    kind: v.union(v.literal('ai-search'), v.literal('r2'), v.literal('convex-storage')),
     attempts: v.number(),
     lastAttemptAt: v.optional(v.number()),
+    nextAttemptAt: v.optional(v.number()),
+    scanPage: v.optional(v.number()),
     lastError: v.optional(v.string()),
   })
     .index('by_userId', ['userId'])
-    .index('by_kind_and_attempts', ['kind', 'attempts']),
+    .index('by_userId_and_lastAttemptAt', ['userId', 'lastAttemptAt'])
+    .index('by_userId_and_attempts_and_nextAttemptAt', ['userId', 'attempts', 'nextAttemptAt'])
+    .index('by_audioArtifactId', ['audioArtifactId'])
+    .index('by_fileId', ['fileId'])
+    .index('by_r2Key', ['r2Key'])
+    .index('by_lastAttemptAt', ['lastAttemptAt'])
+    .index('by_kind_and_attempts', ['kind', 'attempts'])
+    .index('by_kind_and_attempts_and_nextAttemptAt', ['kind', 'attempts', 'nextAttemptAt']),
+
+  accountDeletionJobs: defineTable({
+    userId: v.string(),
+    status: v.union(v.literal('active'), v.literal('complete')),
+    phase: v.union(
+      v.literal('documents'),
+      v.literal('messages'),
+      v.literal('conversations'),
+      v.literal('attemptAnswers'),
+      v.literal('quizAttempts'),
+      v.literal('quizQuestions'),
+      v.literal('quizzes'),
+      v.literal('flashcards'),
+      v.literal('flashcardSets'),
+      v.literal('flashcardRoomCards'),
+      v.literal('flashcardVersionCards'),
+      v.literal('flashcardRoomVersions'),
+      v.literal('flashcardRooms'),
+      v.literal('learnProfile'),
+      v.literal('reviewItems'),
+      v.literal('reviewSessions'),
+      v.literal('calendarEvents'),
+      v.literal('calendarCleanupJobs'),
+      v.literal('calendarConnections'),
+      v.literal('courseSourceDocs'),
+      v.literal('courseSections'),
+      v.literal('courseDeletionJobs'),
+      v.literal('courses'),
+      v.literal('audioMetadata'),
+      v.literal('audioJobTurns'),
+      v.literal('audioJobs'),
+      v.literal('rateLimitBuckets'),
+      v.literal('tasks'),
+      v.literal('folders'),
+      v.literal('user'),
+      v.literal('waitingExternal'),
+      v.literal('complete'),
+    ),
+    activeParentId: v.optional(v.string()),
+    startedAt: v.number(),
+    updatedAt: v.number(),
+    completedAt: v.optional(v.number()),
+    lastError: v.optional(v.string()),
+  })
+    .index('by_userId', ['userId'])
+    .index('by_updatedAt', ['updatedAt'])
+    .index('by_status_and_updatedAt', ['status', 'updatedAt']),
 })

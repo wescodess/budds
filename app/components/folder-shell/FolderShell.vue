@@ -3,6 +3,7 @@ import { useMagicKeys, whenever } from '@vueuse/core'
 import type { Id } from '~~/convex/_generated/dataModel'
 import type { Doc } from '~~/convex/_generated/dataModel'
 import { getColor, DEFAULT_COLOR_KEY } from '~~/convex/folderPalette'
+import type { CSSProperties } from 'vue'
 
 defineOptions({ name: 'FolderShell' })
 
@@ -34,7 +35,7 @@ const MOBILE_RAIL_COMPACT_WIDTH = '4rem'
 const cachedFolderColor = ref<string | null>(null)
 const FOLDER_THEME_CACHE_PREFIX = 'g4.folder-shell.theme.'
 const folderThemeCacheKey = computed(() => `${FOLDER_THEME_CACHE_PREFIX}${props.folderId as string}`)
-const { mode } = useAppTheme()
+const { mode, folderThemeEnabled } = useAppTheme()
 const managedBodyThemeKeys = [
   '--foreground',
   '--primary',
@@ -138,7 +139,7 @@ const railHidden = computed(() => !isDesktop.value && mobileRailHidden.value)
 const railCompact = computed(() => isDesktop.value ? railCollapsed.value : !mobileRailExpanded.value)
 const railWidth = computed(() => railHidden.value ? 0 : railCompact.value ? 64 : 240)
 const shouldPushMainPane = computed(() => !isDesktop.value && mobileRailExpanded.value && !railHidden.value)
-const mainPaneStyle = computed<Record<string, string>>(() => (
+const mainPaneStyle = computed<CSSProperties>(() => (
   shouldPushMainPane.value
     ? {
         flex: `0 0 calc(100% - ${MOBILE_RAIL_COMPACT_WIDTH})`,
@@ -248,7 +249,7 @@ function syncBodyTheme(style: Record<string, string>) {
 }
 
 const themeStyle = computed(() => {
-  if (!resolvedThemeColor.value) return {} as Record<string, string>
+  if (!folderThemeEnabled.value || !resolvedThemeColor.value) return {} as Record<string, string>
 
   const hex = getColor(resolvedThemeColor.value || DEFAULT_COLOR_KEY).hex
   const tint = hexToRgb(hex)

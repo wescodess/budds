@@ -1,8 +1,6 @@
 <script setup lang="ts">
-import { toTypedSchema } from '@vee-validate/zod'
 import { useForm } from 'vee-validate'
 import { computed, ref, watch } from 'vue'
-import { z } from 'zod'
 import { Trash2 } from 'lucide-vue-next'
 import { toast } from 'vue-sonner'
 import { DEFAULT_COLOR_KEY, FOLDER_COLOR_KEYS, getColor } from '~~/convex/folderPalette'
@@ -11,6 +9,12 @@ import type { Doc, Id } from '~~/convex/_generated/dataModel'
 import { useGestureGuards } from '~/composables/useGestureGuards'
 
 type Mode = 'create' | 'edit'
+type FolderFormValues = {
+  name: string
+  description: string
+  color: string
+  icon: string
+}
 
 const props = defineProps<{
   open: boolean
@@ -28,18 +32,22 @@ const emit = defineEmits<{
 
 const { createFolder, createSubfolder, updateFolder, deleteFolder } = useFolders()
 
-const folderSchema = toTypedSchema(
-  z.object({
-    name: z.string().trim().min(1, 'Name is required').max(100, 'Max 100 characters'),
-    description: z.string().max(280, 'Max 280 characters').optional().default(''),
-    color: z
-      .string()
-      .refine((v) => FOLDER_COLOR_KEYS.includes(v), 'Invalid color'),
-    icon: z
-      .string()
-      .refine((v) => FOLDER_ICON_KEYS.includes(v), 'Invalid icon'),
-  }),
-)
+const folderSchema = {
+  name: (value: unknown) => {
+    const name = typeof value === 'string' ? value.trim() : ''
+    if (!name) return 'Name is required'
+    return name.length <= 100 || 'Max 100 characters'
+  },
+  description: (value: unknown) => (
+    typeof value !== 'string' || value.length <= 280 || 'Max 280 characters'
+  ),
+  color: (value: unknown) => (
+    typeof value === 'string' && FOLDER_COLOR_KEYS.includes(value) || 'Invalid color'
+  ),
+  icon: (value: unknown) => (
+    typeof value === 'string' && FOLDER_ICON_KEYS.includes(value) || 'Invalid icon'
+  ),
+}
 
 function computeInitialValues() {
   return {
@@ -50,7 +58,7 @@ function computeInitialValues() {
   }
 }
 
-const { handleSubmit, resetForm, values, setFieldValue, errors, isSubmitting, defineField } = useForm({
+const { handleSubmit, resetForm, values, setFieldValue, errors, isSubmitting, defineField } = useForm<FolderFormValues>({
   validationSchema: folderSchema,
   initialValues: computeInitialValues(),
 })
@@ -104,11 +112,12 @@ function closeModal() {
 }
 
 const onSubmit = handleSubmit(async (formValues) => {
+  const name = formValues.name.trim()
   try {
     if (props.mode === 'create') {
       if (props.parentId) {
         await createSubfolder({
-          name: formValues.name,
+          name,
           description: formValues.description,
           color: formValues.color,
           icon: formValues.icon,
@@ -116,7 +125,7 @@ const onSubmit = handleSubmit(async (formValues) => {
         })
       } else {
         await createFolder({
-          name: formValues.name,
+          name,
           description: formValues.description,
           color: formValues.color,
           icon: formValues.icon,
@@ -125,7 +134,7 @@ const onSubmit = handleSubmit(async (formValues) => {
       toast.success('Folder created')
     } else if (props.folder) {
       await updateFolder(props.folder._id, {
-        name: formValues.name,
+        name,
         description: formValues.description,
         color: formValues.color,
         icon: formValues.icon,

@@ -13,11 +13,12 @@ export default defineNuxtPlugin({
     )
     const { loggedIn, ready } = useUserSession()
     const convexAuthReady = ref(false)
+    const convexAuthenticated = ref(false)
 
     if (!convexClient) {
       console.warn('[convex-auth] Convex client injection is unavailable')
       convexAuthReady.value = true
-      return { provide: { convexAuthReady } }
+      return { provide: { convexAuthReady, convexAuthenticated } }
     }
 
     let upsertDone = false
@@ -35,7 +36,10 @@ export default defineNuxtPlugin({
       if (!isReady) return
 
       if (isLoggedIn) {
+        convexAuthReady.value = false
+        convexAuthenticated.value = false
         convexClient.client.setAuth(fetchToken, (isAuthenticated: boolean) => {
+          convexAuthenticated.value = isAuthenticated
           convexAuthReady.value = true
           if (isAuthenticated && !upsertDone) {
             convexClient.mutation(upsertUserRef, {})
@@ -45,11 +49,12 @@ export default defineNuxtPlugin({
         })
       } else {
         upsertDone = false
+        convexAuthenticated.value = false
         convexAuthReady.value = true
         convexClient.client.clearAuth()
       }
     }, { immediate: true })
 
-    return { provide: { convexAuthReady } }
+    return { provide: { convexAuthReady, convexAuthenticated } }
   },
 })

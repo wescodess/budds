@@ -2,6 +2,7 @@
 import { X } from 'lucide-vue-next'
 import { cn } from '@/lib/utils'
 import type { Source } from '~/composables/useChat'
+import type { ComponentPublicInstance } from 'vue'
 
 const props = defineProps<{
   sources: Source[]
@@ -16,6 +17,15 @@ const emit = defineEmits<{
 
 const cardRefs = ref<HTMLElement[]>([])
 const { springSnappy } = useMotionPresets()
+
+function setCardRef(index: number, element: Element | ComponentPublicInstance | null) {
+  const resolved = element && '$el' in element ? element.$el : element
+  if (resolved instanceof HTMLElement) cardRefs.value[index] = resolved
+}
+
+function setCardRefAt(index: number) {
+  return (element: Element | ComponentPublicInstance | null) => setCardRef(index, element)
+}
 
 watch(() => props.activeCitationIndex, (index) => {
   if (index !== null && cardRefs.value[index]) {
@@ -52,7 +62,7 @@ watch(() => props.activeCitationIndex, (index) => {
         <Motion
           v-for="(source, i) in props.sources"
           :key="i"
-          :ref="(el) => { if (el) cardRefs[i] = (el as any)?.$el ?? (el as HTMLElement) }"
+          :ref="setCardRefAt(i)"
           :initial="{ opacity: 0, y: 10 }"
           :animate="{ opacity: 1, y: 0 }"
           :transition="{ ...springSnappy, delay: i * 0.03 }"

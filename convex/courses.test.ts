@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 import { convexTest } from 'convex-test'
-import { describe, expect, test } from 'vitest'
-import { api } from './_generated/api'
+import { describe, expect, test, vi } from 'vitest'
+import { api, internal } from './_generated/api'
 import schema from './schema'
 import { MAX_SOURCE_DOCS } from './courses'
 
@@ -739,6 +739,181 @@ describe('courses.startCourse', () => {
 })
 
 describe('courses.deleteCourse — AC3: cascade deletion', () => {
+  test('[P1] deletes more than one provider batch of historical calendar events', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, folderId } = await seedFolder(t, USER_A)
+    const result = await asUser.mutation(api.courses.create, {
+      title: 'Long-running course',
+      sourceType: 'web-only',
+      folderId,
+    })
+    const connectionId = await asUser.mutation(api.calendarConnections.upsertConnection, {
+      provider: 'google',
+      accessToken: 'dG9rZW4=',
+      refreshToken: 'cmVmcmVzaA==',
+      expiresAt: Date.now() + 3_600_000,
+      timezone: 'UTC',
+    })
+    await t.run(async (ctx) => {
+      for (let index = 0; index < 101; index++) {
+        await ctx.db.insert('calendarEvents', {
+          userId: USER_A.tokenIdentifier,
+          calendarConnectionId: connectionId,
+          calendarEventId: `google-history-${index}`,
+          courseId: result.courseId,
+          scheduledAt: Date.now() - index * 86_400_000,
+          sessionType: 'review',
+          status: 'missed',
+        })
+      }
+    })
+
+    const previousEncryptionKey = process.env.CALENDAR_TOKEN_ENCRYPTION_KEY
+    process.env.CALENDAR_TOKEN_ENCRYPTION_KEY = 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY='
+    const deleteGoogleEvent = vi.fn().mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', deleteGoogleEvent)
+    try {
+      await asUser.action(api.courses.deleteCourse, { id: result.courseId })
+    }
+    finally {
+      if (previousEncryptionKey === undefined) delete process.env.CALENDAR_TOKEN_ENCRYPTION_KEY
+      else process.env.CALENDAR_TOKEN_ENCRYPTION_KEY = previousEncryptionKey
+      vi.unstubAllGlobals()
+    }
+
+    expect(deleteGoogleEvent).toHaveBeenCalledTimes(101)
+    expect(await t.run(ctx => ctx.db.get(result.courseId))).toBeNull()
+  })
+
+  test('[P1] resumes a large bounded local cascade after the initiating action yields', async () => {
+    vi.useFakeTimers()
+    try {
+      const t = convexTest(schema, modules)
+      const { asUser, folderId } = await seedFolder(t, USER_A)
+      const result = await asUser.mutation(api.courses.create, {
+        title: 'Large local cascade',
+        sourceType: 'web-only',
+        folderId,
+      })
+      await t.run(async (ctx) => {
+        for (let index = 0; index < 70; index++) {
+          await ctx.db.insert('courseSections', {
+            courseId: result.courseId,
+            userId: USER_A.tokenIdentifier,
+            order: index,
+            title: `Section ${index}`,
+            knowledgeType: 'factual',
+            status: 'locked',
+            contentBlocks: [],
+            masteryLevel: 'new',
+          })
+        }
+      })
+
+      const started = await asUser.action(api.courses.deleteCourse, { id: result.courseId })
+      expect(started).toEqual({ deleted: false, pending: true })
+      expect(await t.run(ctx => ctx.db.get(result.courseId))).toMatchObject({ status: 'deleting' })
+
+      await t.finishAllScheduledFunctions(vi.runAllTimers)
+
+      expect(await t.run(ctx => ctx.db.get(result.courseId))).toBeNull()
+      const remainingSections = await t.run(ctx => ctx.db
+        .query('courseSections')
+        .withIndex('by_courseId', q => q.eq('courseId', result.courseId))
+        .take(1))
+      expect(remainingSections).toEqual([])
+    }
+    finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
+
+  test('[P1] retries a durable provider failure and preserves provider-first ordering', async () => {
+    vi.useFakeTimers()
+    const previousEncryptionKey = process.env.CALENDAR_TOKEN_ENCRYPTION_KEY
+    process.env.CALENDAR_TOKEN_ENCRYPTION_KEY = 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY='
+    try {
+      const t = convexTest(schema, modules)
+      const { asUser, folderId } = await seedFolder(t, USER_A)
+      const result = await asUser.mutation(api.courses.create, {
+        title: 'Provider retry',
+        sourceType: 'web-only',
+        folderId,
+      })
+      const connectionId = await asUser.mutation(api.calendarConnections.upsertConnection, {
+        provider: 'google',
+        accessToken: 'dG9rZW4=',
+        refreshToken: 'cmVmcmVzaA==',
+        expiresAt: Date.now() + 3_600_000,
+        timezone: 'UTC',
+      })
+      const eventId = await t.run(ctx => ctx.db.insert('calendarEvents', {
+        userId: USER_A.tokenIdentifier,
+        calendarConnectionId: connectionId,
+        calendarEventId: 'google-durable-retry',
+        courseId: result.courseId,
+        scheduledAt: Date.now() + 86_400_000,
+        sessionType: 'review',
+        status: 'scheduled',
+      }))
+      const deleteGoogleEvent = vi.fn()
+        .mockResolvedValueOnce(new Response('provider unavailable', { status: 503 }))
+        .mockResolvedValue(new Response(null, { status: 204 }))
+      vi.stubGlobal('fetch', deleteGoogleEvent)
+
+      await expect(asUser.action(api.courses.deleteCourse, { id: result.courseId }))
+        .rejects.toThrow('Google Calendar cleanup failed with status 503')
+      expect(await t.run(ctx => ctx.db.get(eventId))).not.toBeNull()
+      expect(await t.run(ctx => ctx.db.get(result.courseId))).toMatchObject({ status: 'deleting' })
+      await asUser.mutation(api.courses.markFailed, { courseId: result.courseId })
+      expect(await t.run(ctx => ctx.db.get(result.courseId))).toMatchObject({ status: 'deleting' })
+      expect(await t.run(ctx => ctx.db
+        .query('courseDeletionJobs')
+        .withIndex('by_courseId', q => q.eq('courseId', result.courseId))
+        .unique())).toMatchObject({ phase: 'providerEvents', attempts: 1 })
+
+      await t.finishAllScheduledFunctions(vi.runAllTimers)
+
+      expect(deleteGoogleEvent).toHaveBeenCalledTimes(2)
+      expect(await t.run(ctx => ctx.db.get(eventId))).toBeNull()
+      expect(await t.run(ctx => ctx.db.get(result.courseId))).toBeNull()
+    }
+    finally {
+      if (previousEncryptionKey === undefined) delete process.env.CALENDAR_TOKEN_ENCRYPTION_KEY
+      else process.env.CALENDAR_TOKEN_ENCRYPTION_KEY = previousEncryptionKey
+      vi.unstubAllGlobals()
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
+
+  test('[P1] recovery cron reclaims an interrupted expired course-deletion lease', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, folderId } = await seedFolder(t, USER_A)
+    const { courseId } = await asUser.mutation(api.courses.create, {
+      title: 'Stale deletion',
+      sourceType: 'web-only',
+      folderId,
+    })
+    const jobId = await t.mutation(internal.courseDeletion.start, {
+      courseId,
+      userId: USER_A.tokenIdentifier,
+    })
+    await t.run(ctx => ctx.db.patch(jobId, {
+      phase: 'providerEvents',
+      leaseToken: 'abandoned-worker',
+      leaseExpiresAt: Date.now() - 1,
+      nextAttemptAt: 0,
+      updatedAt: Date.now() - 16 * 60_000,
+    }))
+
+    expect(await t.mutation(internal.courseDeletion.resumeStale, {})).toEqual({ resumed: 1 })
+    const resumed = await t.run(ctx => ctx.db.get(jobId))
+    expect(resumed?.leaseToken).toBeUndefined()
+    expect(resumed?.leaseExpiresAt).toBeUndefined()
+  })
+
   test('deletes course, sections, and sourceDocss', async () => {
     const t = convexTest(schema, modules)
     const { asUser, folderId } = await seedFolder(t, USER_A)
@@ -764,7 +939,41 @@ describe('courses.deleteCourse — AC3: cascade deletion', () => {
       })
     })
 
-    await asUser.mutation(api.courses.deleteCourse, { id: result.courseId })
+    const connectionId = await asUser.mutation(api.calendarConnections.upsertConnection, {
+      provider: 'google',
+      accessToken: 'dG9rZW4=',
+      refreshToken: 'cmVmcmVzaA==',
+      expiresAt: Date.now() + 3_600_000,
+      timezone: 'UTC',
+    })
+    await t.run(async (ctx) => {
+      await ctx.db.insert('calendarEvents', {
+        userId: USER_A.tokenIdentifier,
+        calendarConnectionId: connectionId,
+        calendarEventId: 'google-course-delete',
+        courseId: result.courseId,
+        scheduledAt: Date.now() + 86_400_000,
+        sessionType: 'new-content',
+        status: 'scheduled',
+      })
+    })
+
+    const previousEncryptionKey = process.env.CALENDAR_TOKEN_ENCRYPTION_KEY
+    process.env.CALENDAR_TOKEN_ENCRYPTION_KEY = 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY='
+    const deleteGoogleEvent = vi.fn().mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', deleteGoogleEvent)
+    try {
+      await asUser.action(api.courses.deleteCourse, { id: result.courseId })
+    }
+    finally {
+      if (previousEncryptionKey === undefined) delete process.env.CALENDAR_TOKEN_ENCRYPTION_KEY
+      else process.env.CALENDAR_TOKEN_ENCRYPTION_KEY = previousEncryptionKey
+      vi.unstubAllGlobals()
+    }
+    expect(deleteGoogleEvent).toHaveBeenCalledWith(
+      'https://www.googleapis.com/calendar/v3/calendars/primary/events/google-course-delete',
+      expect.objectContaining({ method: 'DELETE' }),
+    )
 
     const course = await t.run(async (ctx) => ctx.db.get(result.courseId))
     expect(course).toBeNull()
@@ -784,6 +993,54 @@ describe('courses.deleteCourse — AC3: cascade deletion', () => {
         .collect(),
     )
     expect(sourceDocs).toHaveLength(0)
+
+    const calendarEvents = await t.run(async (ctx) =>
+      ctx.db.query('calendarEvents').withIndex('by_courseId', q => q.eq('courseId', result.courseId)).collect(),
+    )
+    expect(calendarEvents).toHaveLength(0)
+  })
+
+  test('preserves the course and local event when Google Calendar deletion fails', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, folderId } = await seedFolder(t, USER_A)
+    const result = await asUser.mutation(api.courses.create, {
+      title: 'Retry Calendar Cleanup',
+      sourceType: 'web-only',
+      folderId,
+    })
+    const connectionId = await asUser.mutation(api.calendarConnections.upsertConnection, {
+      provider: 'google',
+      accessToken: 'dG9rZW4=',
+      refreshToken: 'cmVmcmVzaA==',
+      expiresAt: Date.now() + 3_600_000,
+      timezone: 'UTC',
+    })
+    const eventId = await t.run(ctx => ctx.db.insert('calendarEvents', {
+      userId: USER_A.tokenIdentifier,
+      calendarConnectionId: connectionId,
+      calendarEventId: 'google-course-delete-retry',
+      courseId: result.courseId,
+      scheduledAt: Date.now() + 86_400_000,
+      sessionType: 'new-content',
+      status: 'scheduled',
+    }))
+
+    const previousEncryptionKey = process.env.CALENDAR_TOKEN_ENCRYPTION_KEY
+    process.env.CALENDAR_TOKEN_ENCRYPTION_KEY = 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY='
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('provider unavailable', { status: 503 })))
+    try {
+      await expect(
+        asUser.action(api.courses.deleteCourse, { id: result.courseId }),
+      ).rejects.toThrow('Google Calendar cleanup failed with status 503')
+    }
+    finally {
+      if (previousEncryptionKey === undefined) delete process.env.CALENDAR_TOKEN_ENCRYPTION_KEY
+      else process.env.CALENDAR_TOKEN_ENCRYPTION_KEY = previousEncryptionKey
+      vi.unstubAllGlobals()
+    }
+
+    expect(await t.run(ctx => ctx.db.get(result.courseId))).not.toBeNull()
+    expect(await t.run(ctx => ctx.db.get(eventId))).not.toBeNull()
   })
 
   test('deletes course-scoped quizzes but not non-course-scoped', async () => {
@@ -826,13 +1083,46 @@ describe('courses.deleteCourse — AC3: cascade deletion', () => {
       return { courseScopedQuizId: csQuizId, normalQuizId: nQuizId }
     })
 
-    await asUser.mutation(api.courses.deleteCourse, { id: result.courseId })
+    await asUser.action(api.courses.deleteCourse, { id: result.courseId })
 
     const csQuiz = await t.run(async (ctx) => ctx.db.get(courseScopedQuizId))
     expect(csQuiz).toBeNull()
 
     const normalQuiz = await t.run(async (ctx) => ctx.db.get(normalQuizId))
     expect(normalQuiz).not.toBeNull()
+  })
+
+  test('[P0] never follows a corrupted section reference across owner boundaries', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, folderId } = await seedFolder(t, USER_A)
+    const { folderId: otherFolderId } = await seedFolder(t, USER_B)
+    const { courseId } = await asUser.mutation(api.courses.create, {
+      title: 'Owned course',
+      sourceType: 'web-only',
+      folderId,
+    })
+    const foreignQuizId = await t.run(ctx => ctx.db.insert('quizzes', {
+      userId: USER_B.tokenIdentifier,
+      folderId: otherFolderId,
+      title: 'Foreign course-scoped quiz',
+      status: 'ready',
+      courseScoped: true,
+    }))
+    await t.run(ctx => ctx.db.insert('courseSections', {
+      courseId,
+      userId: USER_A.tokenIdentifier,
+      order: 0,
+      title: 'Corrupted reference',
+      knowledgeType: 'factual',
+      status: 'ready',
+      contentBlocks: [{ type: 'quiz', entityId: foreignQuizId, order: 0 }],
+      masteryLevel: 'new',
+    }))
+
+    await asUser.action(api.courses.deleteCourse, { id: courseId })
+
+    expect(await t.run(ctx => ctx.db.get(courseId))).toBeNull()
+    expect(await t.run(ctx => ctx.db.get(foreignQuizId))).not.toBeNull()
   })
 
   test('rejects deletion by another user', async () => {
@@ -847,7 +1137,7 @@ describe('courses.deleteCourse — AC3: cascade deletion', () => {
 
     const asB = t.withIdentity(USER_B)
     await expect(
-      asB.mutation(api.courses.deleteCourse, { id: result.courseId }),
+      asB.action(api.courses.deleteCourse, { id: result.courseId }),
     ).rejects.toThrow('Course not found')
   })
 })

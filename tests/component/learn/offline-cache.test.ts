@@ -8,6 +8,13 @@ mockNuxtImport('useConvexMutation', () => {
   })
 })
 
+mockNuxtImport('useConvexAction', () => {
+  return (_api: unknown) => ({
+    mutate: vi.fn(),
+    isLoading: ref(false),
+  })
+})
+
 const courseViewPath = ['~', 'components', 'learn', 'CourseViewBody.vue'].join('/')
 
 const baseCourse = {

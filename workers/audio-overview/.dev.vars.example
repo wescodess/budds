@@ -1,0 +1,3 @@
+AUDIO_OVERVIEW_WORKER_TOKEN=replace-with-the-same-local-launch-token-used-by-nuxt
+GEMINI_API_KEY=replace-with-a-server-side-gemini-api-key
+PAGES_BASE_URL=http://localhost:3002

@@ -1,11 +1,18 @@
 <script setup lang="ts">
 definePageMeta({ layout: false })
 
-const { signIn } = useUserSession()
+const socialSignIn = useSignIn('social')
 const { springGentle } = useMotionPresets()
+const loginPending = computed(() => socialSignIn.status.value === 'pending')
+const loginError = computed(() => socialSignIn.error.value?.message ?? '')
+
+type GoogleSocialSignIn = (options: {
+  provider: 'google'
+  callbackURL: string
+}) => Promise<void>
 
 async function loginWithGoogle() {
-  await signIn.social({ provider: 'google', callbackURL: '/app' })
+  await (socialSignIn.execute as GoogleSocialSignIn)({ provider: 'google', callbackURL: '/app' })
 }
 </script>
 
@@ -27,10 +34,15 @@ async function loginWithGoogle() {
         :transition="{ ...springGentle, delay: 0.08 }"
         as="button"
         class="flex w-full items-center justify-center gap-2 rounded-lg border border-border px-4 py-3 font-medium transition-colors hover:bg-accent/10"
+        :disabled="loginPending"
+        :aria-busy="loginPending"
         @click="loginWithGoogle"
       >
-        Continue with Google
+        {{ loginPending ? 'Connecting…' : 'Continue with Google' }}
       </Motion>
+      <p v-if="loginError" role="alert" class="text-center text-sm text-destructive">
+        {{ loginError }}
+      </p>
       <Motion
         :initial="{ opacity: 0 }"
         :animate="{ opacity: 1 }"

@@ -1,13 +1,12 @@
 import { v } from 'convex/values'
 import { mutation, query } from './_generated/server'
+import { getOptionalAuthUserId, requireAuth } from './lib/auth'
 
 export const listRecentForUser = query({
   args: {},
   handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return []
-
-    const userId = identity.tokenIdentifier
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return []
 
     const conversations = await ctx.db
       .query('conversations')
@@ -30,10 +29,8 @@ export const listRecentForUser = query({
 export const getMostRecentForFolder = query({
   args: { folderId: v.id('folders') },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return null
-
-    const userId = identity.tokenIdentifier
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return null
 
     return await ctx.db
       .query('conversations')
@@ -48,11 +45,11 @@ export const getMostRecentForFolder = query({
 export const getConversation = query({
   args: { id: v.id('conversations') },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return null
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return null
 
     const convo = await ctx.db.get(args.id)
-    if (!convo || convo.userId !== identity.tokenIdentifier) return null
+    if (!convo || convo.userId !== userId) return null
 
     return convo
   },
@@ -64,10 +61,7 @@ export const createConversation = mutation({
     title: v.string(),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) throw new Error('Unauthenticated')
-
-    const userId = identity.tokenIdentifier
+    const userId = await requireAuth(ctx)
 
     const folder = await ctx.db.get(args.folderId)
     if (!folder || folder.userId !== userId) {
@@ -88,10 +82,7 @@ export const createConversation = mutation({
 export const deleteConversation = mutation({
   args: { id: v.id('conversations') },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity()
-    if (!identity) throw new Error('Unauthenticated')
-
-    const userId = identity.tokenIdentifier
+    const userId = await requireAuth(ctx)
 
     const convo = await ctx.db.get(args.id)
     if (!convo || convo.userId !== userId) {

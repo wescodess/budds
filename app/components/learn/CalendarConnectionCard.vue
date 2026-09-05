@@ -2,6 +2,7 @@
 import { Calendar, Unplug, Loader2 } from 'lucide-vue-next'
 import { toast } from 'vue-sonner'
 import { api } from '~~/convex/_generated/api'
+import SessionPreferencesForm from './SessionPreferencesForm.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -18,7 +19,8 @@ const isConnected = computed(() => {
 onMounted(() => {
   const calendarError = route.query.calendar_error
   if (calendarError) {
-    toast.error(Array.isArray(calendarError) ? calendarError[0] : calendarError)
+    const message = Array.isArray(calendarError) ? calendarError[0] : calendarError
+    if (message) toast.error(message)
     router.replace({ query: { ...route.query, calendar_error: undefined } })
   }
 })
@@ -42,7 +44,7 @@ async function confirmDisconnect() {
   showConfirmDialog.value = false
   isDisconnecting.value = true
   try {
-    await $fetch('/api/calendar/disconnect', { method: 'POST' })
+    await globalThis.$fetch('/api/calendar/disconnect', { method: 'POST' })
   } catch (err: any) {
     toast.error(err?.message ?? 'Failed to disconnect calendar')
   } finally {

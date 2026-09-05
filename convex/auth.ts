@@ -11,6 +11,21 @@ function normalizeUrl(value: string | undefined) {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : ''
 }
 
+/**
+ * Better Auth's Convex plugin uses the Convex site URL as the JWT issuer and
+ * the Better Auth user id as the subject. Keep this construction beside the
+ * plugin configuration so account deletion receives the same stable owner id
+ * stored by authenticated Convex mutations.
+ */
+export function tokenIdentifierForAuthUser(userId: string, convexSiteUrl: string | undefined) {
+  const issuer = normalizeUrl(convexSiteUrl)
+  const subject = userId.trim()
+  if (!issuer || !subject || subject.includes('|')) {
+    throw new Error('Unable to derive the Convex account owner identity')
+  }
+  return `${issuer}|${subject}`
+}
+
 export const createAuth = (ctx: GenericCtx<DataModel>) => {
   const siteUrl = normalizeUrl(process.env.SITE_URL)
     || normalizeUrl(process.env.NUXT_PUBLIC_SITE_URL)
@@ -18,14 +33,20 @@ export const createAuth = (ctx: GenericCtx<DataModel>) => {
 
   const convexSiteUrl = normalizeUrl(process.env.CONVEX_SITE_URL)
 
+  const developmentOrigins = process.env.NODE_ENV === 'production'
+    ? []
+    : [
+        'http://localhost:3002',
+        'http://127.0.0.1:3002',
+        'http://localhost:3000',
+        'http://127.0.0.1:3000',
+      ]
+
   const trustedOrigins = Array.from(new Set([
     siteUrl,
     ...(convexSiteUrl ? [convexSiteUrl] : []),
     'https://budds.pages.dev',
-    'http://localhost:3002',
-    'http://127.0.0.1:3002',
-    'http://localhost:3000',
-    'http://127.0.0.1:3000',
+    ...developmentOrigins,
   ]))
 
   return betterAuth({
@@ -44,10 +65,12 @@ export const createAuth = (ctx: GenericCtx<DataModel>) => {
     user: {
       deleteUser: {
         enabled: true,
-        beforeDelete: async () => {
-          if ('runMutation' in ctx && typeof ctx.runMutation === 'function') {
-            await ctx.runMutation(internal.accountDeletion.deleteCurrentUser, {})
+        beforeDelete: async (user) => {
+          if (!('runMutation' in ctx) || typeof ctx.runMutation !== 'function') {
+            throw new Error('Account deletion is unavailable in this runtime')
           }
+          const userId = tokenIdentifierForAuthUser(user.id, convexSiteUrl)
+          await ctx.runMutation(internal.accountDeletion.beginAccountDeletionForAuthUser, { userId })
         },
       },
     },

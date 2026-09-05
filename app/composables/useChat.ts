@@ -77,6 +77,7 @@ export function useChat(
   const selectedModel = ref(DEFAULT_MODEL)
   const interjectionInFlight = ref(false)
   const currentConversationId = ref<Id<'conversations'> | null>(conversationId?.value ?? null)
+  const audioOverviewStore = useAudioOverviewStore()
 
   if (conversationId) {
     watch(conversationId, (next) => {
@@ -325,6 +326,13 @@ export function useChat(
       void persistMessage(convoId, 'user', query, interjectionContext ? { interjectionContext } : {})
     }
 
+    if (interjectionContext && import.meta.client) {
+      const pausedContinuousOverview = audioOverviewStore.playbackMode.value === 'continuous'
+      const resumeAfter = audioOverviewStore.isPlaying.value
+      if (pausedContinuousOverview) audioOverviewStore.pause()
+      void fireBackgroundInterjection(interjectionContext, query, { pausedContinuousOverview, resumeAfter })
+    }
+
     try {
       const streamingIdx = messages.value.length
       const streamed = await sendStreaming(query, scope).catch(() => false)
@@ -357,22 +365,30 @@ export function useChat(
         })
       }
 
-      if (interjectionContext && error.value === null && import.meta.client) {
-        void fireBackgroundInterjection(interjectionContext, query)
-      }
     }
   }
 
-  async function fireBackgroundInterjection(ctx: InterjectionContext, question: string) {
+  async function fireBackgroundInterjection(
+    ctx: InterjectionContext,
+    question: string,
+    playback: { pausedContinuousOverview: boolean, resumeAfter: boolean },
+  ) {
     interjectionInFlight.value = true
     try {
       const result = await $fetch<{
-        interjectionId: Id<'audioOverviewInterjections'>
+        schemaVersion?: 2
+        interjectionId: Id<'audioOverviewInterjections'> | Id<'audioOverviewInterjectionsV2'>
         insertedAfterTurnIndex: number
+        artifactUrl?: string
+        utterances?: Array<{
+          speaker: 'host_a' | 'host_b'
+          text: string
+          sourceIds?: string[]
+        }>
         turns: Array<{
           speaker: 'host_a' | 'host_b'
           text: string
-          audioFileId: Id<'_storage'>
+          audioFileId?: Id<'_storage'>
           durationMs: number
           sourceIndex?: number
           audioUrl: string | null
@@ -380,6 +396,7 @@ export function useChat(
         totalDurationMs: number
       }>('/api/audio-overview/interject', {
         method: 'POST',
+        headers: { 'Idempotency-Key': `interjection_${crypto.randomUUID().replace(/-/g, '')}` },
         body: {
           overviewId: ctx.overviewId,
           insertedAfterTurnIndex: ctx.turnIndex,
@@ -387,22 +404,36 @@ export function useChat(
         },
       })
 
-      const store = useAudioOverviewStore()
-      const spliceAt = store.currentTurnIndex.value
-      store.spliceTurns({
-        afterIndex: spliceAt,
-        turns: result.turns.map(t => ({
-          speaker: t.speaker,
-          text: t.text,
-          audioFileId: t.audioFileId,
-          durationMs: t.durationMs,
-          sourceIndex: t.sourceIndex,
-        })) as any,
-        turnUrls: result.turns.map(t => t.audioUrl),
-      })
+      if (result.schemaVersion === 2 && result.artifactUrl && result.utterances?.length) {
+        await audioOverviewStore.playInterjection({
+          mediaUrl: result.artifactUrl,
+          utterances: result.utterances,
+          totalDurationMs: result.totalDurationMs,
+          resumeAtMs: ctx.timeMs,
+          resumeAfter: playback.resumeAfter,
+        })
+      }
+      else {
+        const spliceAt = audioOverviewStore.currentTurnIndex.value
+        audioOverviewStore.spliceTurns({
+          afterIndex: spliceAt,
+          turns: result.turns.map(t => ({
+            speaker: t.speaker,
+            text: t.text,
+            audioFileId: t.audioFileId,
+            durationMs: t.durationMs,
+            sourceIndex: t.sourceIndex,
+          })),
+          turnUrls: result.turns.map(t => t.audioUrl),
+        })
+      }
     }
     catch (err) {
       console.warn('[useChat] Background interjection failed:', err)
+      if (playback.pausedContinuousOverview && !audioOverviewStore.isInterjectionActive.value) {
+        audioOverviewStore.seek(ctx.timeMs)
+        if (playback.resumeAfter) void audioOverviewStore.play()
+      }
     }
     finally {
       interjectionInFlight.value = false
