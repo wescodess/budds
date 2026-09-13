@@ -25,7 +25,7 @@ env:
   NUXT_PUBLIC_SITE_URL: 'https://budds-ci.invalid'
   GOOGLE_CLIENT_ID: 'ci-only-google-client-id'
   GOOGLE_CLIENT_SECRET: 'ci-only-google-client-secret'
-  BETTER_AUTH_SECRET: 'ci-only-better-auth-secret-000000000000'
+  NUXT_BETTER_AUTH_SECRET: 'ci-only-better-auth-secret-000000000000'
   AUDIO_OVERVIEW_JOB_SECRET: 'ci-only-audio-job-secret-000000000000'
   AUDIO_OVERVIEW_WORKER_TOKEN: 'ci-only-worker-token-0000000000000000'
   CALENDAR_TOKEN_ENCRYPTION_KEY: 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY='
@@ -33,6 +33,21 @@ env:
   PAGES_BASE_URL: 'http://127.0.0.1:9'
 
 jobs:
+  security:
+    name: Secret history scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scan repository and history for secrets
+        uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   quality:
     name: Lint, typecheck, and dependency audit
     runs-on: ubuntu-latest
@@ -202,11 +217,12 @@ jobs:
     name: CI gate
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [quality, test, build, burn-in]
+    needs: [security, quality, test, build, burn-in]
     if: always()
     steps:
       - name: Publish summary and enforce gate
         env:
+          SECURITY_RESULT: ${{ needs.security.result }}
           QUALITY_RESULT: ${{ needs.quality.result }}
           TEST_RESULT: ${{ needs.test.result }}
           BUILD_RESULT: ${{ needs.build.result }}
@@ -215,12 +231,14 @@ jobs:
           {
             echo '## Budds CI'
             echo
+            echo "- Secret history scan: $SECURITY_RESULT"
             echo "- Quality: $QUALITY_RESULT"
             echo "- Tests: $TEST_RESULT"
             echo "- Production build: $BUILD_RESULT"
             echo "- Burn-in: $BURN_IN_RESULT"
           } >> "$GITHUB_STEP_SUMMARY"
 
+          test "$SECURITY_RESULT" = 'success'
           test "$QUALITY_RESULT" = 'success'
           test "$TEST_RESULT" = 'success'
           test "$BUILD_RESULT" = 'success'
