@@ -128,6 +128,25 @@ describe('accountDeletion.deleteAccountCascade', () => {
     vi.unstubAllGlobals()
   })
 
+  test('[P0] deletes the V2 lifecycle foundation child-before-parent in bounded batches', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(TEST_IDENTITY)
+    const ids = await t.run(async (ctx) => {
+      const folderId = await ctx.db.insert('folders', { userId: TEST_IDENTITY.tokenIdentifier, name: 'V2', documentCount: 0 })
+      const learningVoidId = await ctx.db.insert('learningVoids', { userId: TEST_IDENTITY.tokenIdentifier, folderId, title: 'V2', status: 'draft', revision: 1, createdAt: 1, updatedAt: 1 })
+      const blueprintId = await ctx.db.insert('learnBlueprints', { userId: TEST_IDENTITY.tokenIdentifier, learningVoidId, revision: 1, createdAt: 1 })
+      const revisionId = await ctx.db.insert('learnBlueprintRevisions', { userId: TEST_IDENTITY.tokenIdentifier, blueprintId, learningVoidId, revision: 1, recordRevision: 1, status: 'draft', createdAt: 1, updatedAt: 1 })
+      const receiptId = await ctx.db.insert('learnLifecycleReceipts', { userId: TEST_IDENTITY.tokenIdentifier, learningVoidId, idempotencyKey: 'v2-delete', command: 'create', requestFingerprint: 'v2-delete', revision: 1, createdAt: 1 })
+      return { learningVoidId, blueprintId, revisionId, receiptId }
+    })
+    await asUser.mutation(internal.accountDeletion.deleteCurrentUser, {})
+    await finishDatabaseDeletion(t, TEST_IDENTITY.tokenIdentifier)
+    expect(await t.run(ctx => ctx.db.get(ids.receiptId))).toBeNull()
+    expect(await t.run(ctx => ctx.db.get(ids.revisionId))).toBeNull()
+    expect(await t.run(ctx => ctx.db.get(ids.blueprintId))).toBeNull()
+    expect(await t.run(ctx => ctx.db.get(ids.learningVoidId))).toBeNull()
+  })
+
   test('[P1] account deletion absorbs an active durable course-deletion job', async () => {
     const t = convexTest(schema, modules)
     const asUser = t.withIdentity(TEST_IDENTITY)

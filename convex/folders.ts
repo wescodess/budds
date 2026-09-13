@@ -379,6 +379,13 @@ export const deleteFolder = mutation({
     await ctx.db.delete(args.id)
 
     for (const folderId of folderIds) {
+      // The folder is already gone, so V2's public commands reject the
+      // aggregate immediately. Its bounded foundational cleanup continues
+      // independently and never broadens the established V1 cascade.
+      await ctx.scheduler.runAfter(0, internal.learnV2Retention.deleteFolderFoundation, {
+        userId,
+        folderId,
+      })
       await ctx.scheduler.runAfter(0, internal.audioOverviews.deleteFolderOverviews, {
         folderId,
         userId,

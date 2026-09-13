@@ -79,6 +79,10 @@ in Nuxt runtime config, Cloudflare Pages variables, or any public/client-visible
 variable. Per-user cohort entitlement remains a separate server-authoritative
 check, so the global flag alone never grants access.
 
+Rollback disables `LEARN_V2_ENABLED` (or removes the entitlement), immediately
+blocking ordinary V2 lifecycle access without deleting additive records.
+Account deletion and redacted export remain available during rollback.
+
 ### Local Convex Overrides (`.env.local`)
 
 ```bash

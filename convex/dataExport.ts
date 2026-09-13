@@ -53,6 +53,7 @@ const exportCollectionValidator = v.union(
   v.literal('audioOverviewInterjectionsV2'),
   v.literal('audioOverviewInterjectionUtterances'),
   v.literal('audioOverviewInterjectionSources'),
+  v.literal('learningVoids'), v.literal('learnBlueprints'), v.literal('learnBlueprintRevisions'), v.literal('learnMilestones'), v.literal('learnObjectives'), v.literal('learnObjectivePrerequisites'), v.literal('learnSourceIdentities'), v.literal('learnSourceSnapshots'), v.literal('learnSourceExcerpts'), v.literal('learnObjectiveSources'), v.literal('learnClaimSupports'), v.literal('masteryAttempts'), v.literal('masteryRecords'), v.literal('studyPlans'), v.literal('studyPlanRevisions'), v.literal('studySessions'), v.literal('studySessionRetrievalObjectives'), v.literal('sessionContent'), v.literal('sessionContentBlocks'), v.literal('sessionContentClaims'), v.literal('calendarProjections'), v.literal('reminderPolicies'), v.literal('searchQuotaBuckets'), v.literal('searchReservations'), v.literal('learnJobs'), v.literal('learnLifecycleReceipts'),
 )
 
 function boundedPaginationOpts(paginationOpts: { numItems: number, cursor: string | null }) {
@@ -193,6 +194,34 @@ export const getUserDataPage = query({
         return await ctx.db.query('audioOverviewInterjectionUtterances').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
       case 'audioOverviewInterjectionSources':
         return await ctx.db.query('audioOverviewInterjectionSources').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+      // Retention-class redaction deliberately keeps protected evidence,
+      // provider identifiers, quota details, and job internals out of export.
+      case 'learningVoids': return await ctx.db.query('learningVoids').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+      case 'learnBlueprints': return await ctx.db.query('learnBlueprints').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+      case 'learnBlueprintRevisions': return await ctx.db.query('learnBlueprintRevisions').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+      case 'learnMilestones': return await ctx.db.query('learnMilestones').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+      case 'learnObjectives': return await ctx.db.query('learnObjectives').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+      case 'learnObjectivePrerequisites': return await ctx.db.query('learnObjectivePrerequisites').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+      case 'learnSourceIdentities': { const result = await ctx.db.query('learnSourceIdentities').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts); return { ...result, page: result.page.map(({ externalKey: _externalKey, folderDocumentId: _folderDocumentId, ...row }) => row) } }
+      case 'learnSourceSnapshots': return await ctx.db.query('learnSourceSnapshots').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+      case 'learnSourceExcerpts': { const result = await ctx.db.query('learnSourceExcerpts').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts); return { ...result, page: result.page.map(({ sourceSnapshotId: _sourceSnapshotId, locator: _locator, privateLocator: _privateLocator, excerpt: _excerpt, ...row }) => row) } }
+      case 'learnObjectiveSources': return await ctx.db.query('learnObjectiveSources').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+      case 'learnClaimSupports': { const result = await ctx.db.query('learnClaimSupports').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts); return { ...result, page: result.page.map(({ sessionContentClaimId: _claimId, sourceExcerptId: _excerptId, ...row }) => row) } }
+      case 'masteryAttempts': return await ctx.db.query('masteryAttempts').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+      case 'masteryRecords': return await ctx.db.query('masteryRecords').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+      case 'studyPlans': return await ctx.db.query('studyPlans').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+      case 'studyPlanRevisions': return await ctx.db.query('studyPlanRevisions').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+      case 'studySessions': return await ctx.db.query('studySessions').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+      case 'studySessionRetrievalObjectives': return await ctx.db.query('studySessionRetrievalObjectives').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+      case 'sessionContent': return await ctx.db.query('sessionContent').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+      case 'sessionContentBlocks': return await ctx.db.query('sessionContentBlocks').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+      case 'sessionContentClaims': return await ctx.db.query('sessionContentClaims').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+      case 'calendarProjections': { const result = await ctx.db.query('calendarProjections').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts); return { ...result, page: result.page.map(({ provider: _provider, externalEventId: _event, ...row }) => row) } }
+      case 'reminderPolicies': return await ctx.db.query('reminderPolicies').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+      case 'searchQuotaBuckets': { const result = await ctx.db.query('searchQuotaBuckets').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts); return { ...result, page: result.page.map(({ provider: _provider, scopeKey: _scopeKey, count: _count, ...row }) => row) } }
+      case 'searchReservations': { const result = await ctx.db.query('searchReservations').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts); return { ...result, page: result.page.map(({ provider: _provider, idempotencyKey: _idempotencyKey, ...row }) => row) } }
+      case 'learnJobs': { const result = await ctx.db.query('learnJobs').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts); return { ...result, page: result.page.map(({ idempotencyKey: _idempotencyKey, leaseExpiresAt: _leaseExpiresAt, checkpoint: _checkpoint, terminalReason: _terminalReason, ...row }) => row) } }
+      case 'learnLifecycleReceipts': { const result = await ctx.db.query('learnLifecycleReceipts').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts); return { ...result, page: result.page.map(({ idempotencyKey: _idempotencyKey, requestFingerprint: _requestFingerprint, ...row }) => row) } }
     }
   },
 })

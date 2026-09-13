@@ -62,6 +62,27 @@ Account deletion and data export deliberately do not use the normal V2 gate.
 They remain available during rollback. V1 routes and tables also do not import
 the V2 gate and keep their characterized behavior.
 
+## Retention boundary
+
+Every currently creatable V2 aggregate rechecks that its owner folder still
+exists before it is read or mutated. Folder deletion therefore makes a Void
+and its Blueprint revisions inaccessible in the deleting transaction, then
+schedules bounded, child-before-parent cleanup of lifecycle receipts, Blueprint
+revisions, Blueprints, and the Void. This continuation is owner-scoped and
+idempotent; it does not alter the established V1 folder cascade.
+
+`calendarProjections` is intentionally local-only and restricted to
+`pending_projection` with no provider/event identifier. LA2-15 must widen that
+schema and add provider-first cleanup atomically with its first producer. No
+Google cleanup exists for V2 projections today; account deletion can only remove
+their local pending rows.
+
+Future source writers must call `internal.learnV2Retention.purgeSourceEvidence`
+in the same workflow that deletes source access. The bounded seam removes
+protected excerpts and private locators, marks snapshots unavailable and claim
+supports `evidence_unavailable`, and deliberately preserves mastery attempts.
+It is a source-deletion seam, not a fetch, manifest, or source-acceptance API.
+
 ## Executable evidence
 
 ```bash
