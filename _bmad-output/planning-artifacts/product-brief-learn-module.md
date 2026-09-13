@@ -10,9 +10,9 @@ inputs:
   - prd.md
   - epics.md
   - ux-design-specification.md
-  - TASKSPLAN.md
-  - FLASHCARDSPLAN.md
-  - notebooklm_audio_overview_prd.md.resolved
+  - docs/archive/plans/quiz-feature-revamp-implementation-plan.md
+  - docs/archive/plans/flashcard-room-refactor-phase-1.md
+  - docs/archive/plans/audio-overview-v1-prd.md
   - convex/schema.ts
   - DESIGN.md
 ---

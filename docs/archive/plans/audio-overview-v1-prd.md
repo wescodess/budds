@@ -1,5 +1,7 @@
 # Product Requirements Document: NotebookLM "Audio Overview" Feature Replica
 
+> Historical v1 product brief retained for decision traceability. See the current implementation plan in [`docs/plans/podcast-audio-overview-implementation-plan.md`](../../plans/podcast-audio-overview-implementation-plan.md).
+
 ## 1. Executive Summary
 This PRD outlines the requirements for replicating the core functionality, user flow, and design logic of Google's NotebookLM "Audio Overview" feature. The "Audio Overview" acts as an interactive, AI-generated podcast discussion based on provided source materials. It brings static documents to life via a conversational format featuring two AI hosts.
 

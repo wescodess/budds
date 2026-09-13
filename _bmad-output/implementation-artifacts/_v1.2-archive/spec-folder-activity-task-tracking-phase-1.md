@@ -7,7 +7,7 @@ baseline_commit: 'cf16e5f'
 branch: 'feat/folder-activity-task-tracking-phase-1'
 context:
   - DESIGN.md
-  - TASKSPLAN.md
+  - docs/archive/plans/quiz-feature-revamp-implementation-plan.md
 ---
 
 <frozen-after-approval>

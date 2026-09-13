@@ -4,7 +4,7 @@ type: 'feature'
 created: '2026-04-17'
 status: 'ready-for-dev'
 context:
-  - 'notebooklm_audio_overview_plan.md'
+  - 'docs/archive/plans/audio-overview-v1-implementation-plan.md'
   - 'DESIGN.md'
   - 'convex/_generated/ai/guidelines.md'
 ---

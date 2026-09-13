@@ -1,5 +1,7 @@
 # Quiz Feature Specification
 
+> Historical feature specification retained for decision traceability. Current behavior is defined by the application, tests, and maintained product documentation.
+
 > Implementation-agnostic feature spec for replicating the full quiz system.
 
 ---
@@ -150,7 +152,7 @@ initial → overview → taking → results
 
 | State | Description |
 |---|---|
-| [initial](file:///Users/wesleyukadike/Desktop/budd%20extract/oldfrontend/components/flashcards/InteractiveFlashcard.vue#324-341) | No quiz exists yet — shows creation options |
+| `initial` | No quiz exists yet — shows creation options |
 | `overview` | Quiz exists with questions — shows question list, title editor, history, and control center |
 | `taking` | User is actively taking the quiz — sequential or show-all mode |
 | `results` | Attempt completed — shows score, per-question review, and history |

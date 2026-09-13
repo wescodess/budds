@@ -1,5 +1,7 @@
 # Quiz Feature Revamp — Implementation Plan
 
+> Historical implementation plan retained for decision traceability. The revamp is now implemented; current behavior is defined by the application, tests, and maintained product documentation.
+
 ## Gap Analysis
 
 The current quiz system is a simplified version. Here's what exists vs what the spec requires:

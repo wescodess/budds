@@ -4,7 +4,7 @@ type: 'feature'
 created: '2026-04-17'
 status: 'complete'
 context:
-  - 'notebooklm_audio_overview_plan.md'
+  - 'docs/archive/plans/audio-overview-v1-implementation-plan.md'
   - 'DESIGN.md'
   - '_bmad-output/implementation-artifacts/spec-audio-overview-phase-3-share-ops.md'
 ---

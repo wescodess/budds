@@ -2,7 +2,7 @@
 slug: quiz-feature-revamp
 status: ready-for-dev
 created: 2026-04-17
-source: quiz_feature_spec.md.resolved + TASKSPLAN.md
+source: docs/archive/plans/quiz-feature-spec.md + docs/archive/plans/quiz-feature-revamp-implementation-plan.md
 design_approved: true
 stitch_project: "526950061036357227"
 ---

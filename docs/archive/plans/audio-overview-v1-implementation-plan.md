@@ -1,8 +1,10 @@
 # Audio Overview — Implementation Plan
 
+> Historical v1 plan retained for decision traceability. Its MeloTTS and per-turn architecture is superseded by the current durable two-host design in [`docs/plans/podcast-audio-overview-implementation-plan.md`](../../plans/podcast-audio-overview-implementation-plan.md).
+
 Replicates NotebookLM's "Audio Overview" feature on top of the existing budds infrastructure. Targets a near-$0 unit economic (MeloTTS on Workers Paid) while reusing the quiz-generation pattern end-to-end.
 
-Source PRD: [notebooklm_audio_overview_prd.md.resolved](./notebooklm_audio_overview_prd.md.resolved)
+Source PRD: [audio-overview-v1-prd.md](./audio-overview-v1-prd.md)
 
 ---
 

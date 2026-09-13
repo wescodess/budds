@@ -7,7 +7,7 @@ baseline_commit: 'a4f7e7743bde8900b7408db254a3c7aaf2dea0c1'
 branch: 'feat/flashcard-room-refactor-phase-1'
 context:
   - DESIGN.md
-  - FLASHCARDSPLAN.md
+  - docs/archive/plans/flashcard-room-refactor-phase-1.md
   - _bmad-output/implementation-artifacts/quick-flow-state.yaml
 ---
 

@@ -1,5 +1,7 @@
 # Flashcard Room Refactor Plan
 
+> Historical implementation plan retained for decision traceability. The room model is now implemented; current behavior is defined by the application, tests, and maintained product documentation.
+
 ## Summary
 Refactor Budds flashcards from the current "folder-scoped generated set list" into a **persistent flashcard room** model that fits the existing **void-native workspace**. A flashcard void becomes a real room entity with editable current cards, in-room practice, and version history. We keep generation history, but move it behind the room instead of treating each generation as the primary object in the rail.
 
