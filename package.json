@@ -25,8 +25,8 @@
     "typecheck": "vue-tsc --noEmit",
     "typecheck:convex": "tsc --noEmit -p convex/tsconfig.json",
     "lint": "eslint .",
-    "lint:ci": "eslint . --max-warnings 1032",
-    "verify": "pnpm lint:ci && pnpm typecheck && pnpm typecheck:convex && pnpm test && pnpm test:component && pnpm test:component:audio && pnpm audio:workflow:typecheck && pnpm audio:workflow:test && pnpm audit"
+    "lint:ci": "eslint . --max-warnings 0",
+    "verify": "pnpm lint:ci && pnpm typecheck && pnpm typecheck:convex && pnpm test && pnpm test:component && pnpm test:component:audio && pnpm audio:workflow:typecheck && pnpm audio:workflow:test && pnpm audit && pnpm --dir workers/audio-overview audit"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1029.0",

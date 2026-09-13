@@ -39,7 +39,7 @@ The test scripts use `vitest run` (single pass). Coverage tooling (`@vitest/cove
 
 ## Test Categories
 
-### Convex Integration Tests (32 files, edge-runtime)
+### Convex Integration Tests (36 files, edge-runtime)
 
 Located in `convex/*.test.ts` and `convex/lib/*.test.ts`.
 
@@ -54,7 +54,7 @@ Covered modules:
 - `learnSchema`, `learnProfile`, `reviewItems`, `contentFlags`, `migrations`
 - `lib/sm2` (spaced-repetition algorithm, pure unit tests)
 
-### Server Route Tests (30 files, node)
+### Server Route Tests (33 files, node)
 
 Located in `server/api/**/*.test.ts` and `server/utils/*.test.ts`.
 
@@ -67,7 +67,7 @@ Covered routes/utils:
 - `export/me.get`, `course/generate-outline.post`, `course/generate-section.post`
 - Utils: `flashcard-prompt`, `quiz-prompt`, `interjection-prompt`, `audio-script-prompt`, `ai-gateway`, `ai-search`, `normalize-assistant-citations`, `session-composition`
 
-### Vue Component Tests (95 files, nuxt/happy-dom)
+### Vue Component Tests (84 files, nuxt/happy-dom)
 
 Located in `tests/component/**/*.test.ts`.
 
@@ -83,7 +83,7 @@ The suite covers the exact Gemini model and fixed Hosts, native two-speaker requ
 
 ## Coverage Summary
 
-As of 2026-09-05, the root suite passes 69 files with 1,008 tests passed and 8 skipped. The general mounted component suite passes 74 files (13 skipped) with 432 tests passed and 85 skipped. The focused mounted Audio Overview suite passes 10 files with 38 tests, and the Worker suite passes 7 files with 62 tests plus its standalone TypeScript check.
+As of 2026-09-13, the root suite passes 69 files with 1,008 tests. The general mounted component suite passes 74 files with 432 tests. The focused mounted Audio Overview suite passes 10 files with 38 tests, and the Worker suite passes 7 files with 62 tests plus its standalone TypeScript check. No committed test is skipped.
 
 Component tests are run separately and not included in the default `pnpm test` run.
 

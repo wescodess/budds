@@ -2,11 +2,7 @@
 
 ## 1. Known Bugs / TODOs
 
-| Location                                             | Description                                                                                                                                |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `app/components/ui/chart/ChartTooltipContent.vue:25` | Uses `createElement` and `render` as a workaround for chart tooltip rendering. Not a user-facing bug but indicates non-standard rendering. |
-
-The codebase is clean of TODO/FIXME/HACK comments in `convex/`, `server/`, and `app/` directories (with the single exception above).
+There are no known user-facing bugs or unresolved TODO/FIXME/HACK markers in runtime source.
 
 ---
 
