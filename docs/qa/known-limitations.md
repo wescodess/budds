@@ -21,7 +21,7 @@ There are no known user-facing bugs or unresolved TODO/FIXME/HACK markers in run
 - **Economy mode is not implemented:** Google's model page and pricing table list Batch support for Gemini 2.5 Flash Preview TTS. Budds currently exposes only standard rendering because its durable Batch submission, status, completion, and cancellation lifecycle has not yet been implemented and validated.
 - **Cost is conservatively estimated:** Budds reserves and debits bounded micro-USD estimates before provider work. Exact billed-token reconciliation remains a release gate.
 - **Acoustic Host identity is not automated yet:** Transcript fidelity, duration, silence, clipping, framing, and spoken-direction checks are automated. Speaker count and cross-scene identity remain `not_measured` until a reliable low-cost acoustic verifier is added, so the G11 listening bake-off remains mandatory.
-- **No feature flags or toggles** exist in the codebase; all features are always enabled.
+- **Learn Anything V2 is an internal beta:** its Convex-only `LEARN_V2_ENABLED` flag defaults off and requires a separate per-user entitlement. This does not change the availability of V1 or other shipped features.
 
 ### Course Generation
 
