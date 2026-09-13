@@ -4,7 +4,7 @@ The Budds history rewrite removes exposed credentials and generated repository n
 
 ## Status
 
-**Completed 2026-09-13:** Rewritten `main` and `dev` now share the verified production-baseline tip. Twenty-seven fully merged remote branches were removed, and the three unmerged branches were preserved in rewritten form. The owner reports that the exposed credentials were rotated; authentication with the old values was not independently exercised during repository cleanup.
+**Completed 2026-09-13:** Rewritten `main` and `dev` now share the verified production-baseline tip. Twenty-six fully merged remote branches were removed. Three additional branches that were hundreds of commits behind `main` and contained superseded flashcard, quiz, or pane work were reviewed and removed; their pre-rewrite tips remain only in the access-controlled recovery bundle. The owner reports that the exposed credentials were rotated; authentication with the old values was not independently exercised during repository cleanup.
 
 GitHub-hosted Actions remains unavailable because of the account billing or spending restriction, and private-repository branch protection is not available on the current plan. Those account constraints are recorded rather than represented as working controls; the release substitute is the complete local gate below.
 
