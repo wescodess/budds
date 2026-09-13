@@ -81,7 +81,7 @@ async function saveCap() {
           max="200"
           class="mt-1 w-full rounded border border-stone-700 bg-stone-950 px-2.5 py-1.5 text-sm text-stone-100 focus:border-amber-500 focus:outline-none"
           data-testid="review-cap-input"
-        />
+        >
       </label>
       <p class="mt-1 text-xs text-stone-600">5 - 200 items per session</p>
       <div class="mt-2 flex gap-2">

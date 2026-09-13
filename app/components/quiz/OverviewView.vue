@@ -93,7 +93,7 @@ function typeBadge(type: string) {
             class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-lg font-semibold focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             @keydown.enter="saveTitle"
             @blur="saveTitle"
-          />
+          >
         </div>
         <button
           v-else

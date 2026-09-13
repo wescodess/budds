@@ -3,6 +3,8 @@ import { api } from '#convex/api'
 import type { Id } from '../../convex/_generated/dataModel'
 import { normalizeAssistantCitations } from '~/utils/normalize-assistant-citations'
 
+import { DEFAULT_MODEL, isValidModel, getModelLabel } from '~/constants/models'
+
 export interface Source {
   content: string
   score: number
@@ -41,8 +43,6 @@ interface RawSource {
   score: number
   attributes: { filename?: string }
 }
-
-import { DEFAULT_MODEL, isValidModel, getModelLabel } from '~/constants/models'
 
 function mapSources(raw: RawSource[]): Source[] {
   return raw.map(s => ({

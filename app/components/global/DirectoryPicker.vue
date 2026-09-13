@@ -187,7 +187,7 @@ defineExpose({ focusSearch })
           spellcheck="false"
           autocomplete="off"
           class="w-full bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
-        />
+        >
       </label>
     </div>
 

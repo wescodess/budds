@@ -66,7 +66,7 @@ function handleAdd() {
           placeholder="Add a topic..."
           class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           @keydown.enter="handleAdd"
-        />
+        >
         <UiButton variant="outline" size="sm" @click="handleAdd">
           <Plus class="mr-1 h-3 w-3" />
           Add

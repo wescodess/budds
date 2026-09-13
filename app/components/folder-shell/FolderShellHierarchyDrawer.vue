@@ -479,7 +479,7 @@ async function onFiles(e: Event) {
             spellcheck="false"
             autocomplete="off"
             class="h-10 w-full rounded-lg border border-border/60 bg-background/50 pl-9 pr-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary/60 focus:outline-none focus:ring-1 focus:ring-primary/40"
-          />
+          >
         </div>
       </div>
 

@@ -1,5 +1,11 @@
 <script setup lang="ts">
 import { AlertCircle, Check, Crosshair, FolderTree, Headphones, LoaderCircle, Plus, Send, Link as LinkIcon, Upload } from '@lucide/vue'
+import type { Id } from '../../../convex/_generated/dataModel'
+import type { AttachmentStatus } from '~/composables/useDocuments'
+import type { ScopeChip, useReferenceScope } from '~/composables/useReferenceScope'
+import { useGestureGuards } from '~/composables/useGestureGuards'
+
+import type { InterjectionContext } from '~/composables/useChat'
 
 function formatInterjectionTime(ms: number): string {
   const total = Math.max(0, Math.round(ms / 1000))
@@ -7,10 +13,6 @@ function formatInterjectionTime(ms: number): string {
   const seconds = total % 60
   return `${minutes}:${seconds.toString().padStart(2, '0')}`
 }
-import type { Id } from '../../../convex/_generated/dataModel'
-import type { AttachmentStatus } from '~/composables/useDocuments'
-import type { ScopeChip, useReferenceScope } from '~/composables/useReferenceScope'
-import { useGestureGuards } from '~/composables/useGestureGuards'
 
 type PickerSelection =
   | { kind: 'folder'; id: Id<'folders'>; label: string }
@@ -19,8 +21,6 @@ type PickerSelection =
 type ComposerMention = PickerSelection & {
   key: string
 }
-
-import type { InterjectionContext } from '~/composables/useChat'
 
 const props = defineProps<{
   disabled?: boolean

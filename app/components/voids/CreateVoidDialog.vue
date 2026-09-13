@@ -173,7 +173,7 @@ function submit() {
           placeholder="Give this void a name"
           data-testid="create-void-name"
           class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        />
+        >
       </div>
 
       <UiDialogFooter class="mt-5 flex flex-col-reverse items-stretch gap-2 border-t border-border pt-4 sm:mt-6 sm:flex-row sm:items-center sm:justify-between sm:pt-6">

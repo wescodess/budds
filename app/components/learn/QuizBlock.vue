@@ -250,7 +250,7 @@ async function saveFlag(questionId: string) {
             :disabled="!!submitted[q._id]"
             :value="answers[q._id] ?? ''"
             @input="selectAnswer(q._id, ($event.target as HTMLInputElement).value)"
-          />
+          >
         </div>
 
         <button
@@ -308,7 +308,7 @@ async function saveFlag(questionId: string) {
                     class="mt-1 w-full rounded border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100 focus:border-amber-500 focus:outline-none"
                     :value="flagCorrectedAnswer[q._id]"
                     @input="flagCorrectedAnswer[q._id] = ($event.target as HTMLInputElement).value"
-                  />
+                  >
                 </label>
                 <label class="block text-xs text-stone-400">
                   Corrected explanation (optional)
@@ -318,7 +318,7 @@ async function saveFlag(questionId: string) {
                     class="mt-1 w-full rounded border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100 focus:border-amber-500 focus:outline-none"
                     :value="flagCorrectedExplanation[q._id]"
                     @input="flagCorrectedExplanation[q._id] = ($event.target as HTMLInputElement).value"
-                  />
+                  >
                 </label>
                 <p v-if="flagError[q._id]" class="text-xs text-red-400" data-testid="flag-error">
                   {{ flagError[q._id] }}

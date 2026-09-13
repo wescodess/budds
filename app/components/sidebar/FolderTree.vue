@@ -165,7 +165,7 @@ function requestEdit(item: FolderNode) {
                 @keydown.escape="cancelRename"
                 @blur="cancelRename"
                 @click.stop
-              />
+              >
               <span v-else class="flex-1 truncate">{{ item.value.name }}</span>
 
               <UiDropdownMenu>

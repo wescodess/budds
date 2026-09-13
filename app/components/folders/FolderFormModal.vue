@@ -206,7 +206,7 @@ function handleIcon(value: string) {
               'focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]',
               'aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive',
             ]"
-          />
+          >
           <p v-if="errors.name" class="text-xs text-destructive" data-testid="folder-name-error">
             {{ errors.name }}
           </p>

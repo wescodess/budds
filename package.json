@@ -25,7 +25,7 @@
     "typecheck": "vue-tsc --noEmit",
     "typecheck:convex": "tsc --noEmit -p convex/tsconfig.json",
     "lint": "eslint .",
-    "lint:ci": "eslint . --max-warnings 1089",
+    "lint:ci": "eslint . --max-warnings 1032",
     "verify": "pnpm lint:ci && pnpm typecheck && pnpm typecheck:convex && pnpm test && pnpm test:component && pnpm test:component:audio && pnpm audio:workflow:typecheck && pnpm audio:workflow:test && pnpm audit"
   },
   "dependencies": {

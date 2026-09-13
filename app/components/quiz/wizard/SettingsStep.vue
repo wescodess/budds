@@ -41,7 +41,7 @@ function clampCount(val: string) {
           max="50"
           class="w-24 rounded-lg border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           @input="clampCount(($event.target as HTMLInputElement).value)"
-        />
+        >
         <span class="text-xs text-muted-foreground">Range: 1-50</span>
       </div>
     </div>
@@ -59,7 +59,7 @@ function clampCount(val: string) {
             :checked="questionTypes.includes(opt.value)"
             class="accent-primary"
             @change="emit('toggleType', opt.value)"
-          />
+          >
           {{ opt.label }}
         </label>
       </div>

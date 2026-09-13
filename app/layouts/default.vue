@@ -559,8 +559,8 @@ useHorizontalSwipeGesture({
     </UiSidebar>
 
     <UiSidebarInset
-      ref="mainContentRef"
       id="main-content"
+      ref="mainContentRef"
       data-testid="main-content"
       :class="['min-h-0', (isStandaloneRoute && !isLearnRoute) ? 'overflow-hidden' : 'overflow-y-auto']"
     >

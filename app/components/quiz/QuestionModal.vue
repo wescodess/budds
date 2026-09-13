@@ -172,13 +172,13 @@ async function handleSave() {
               :checked="correctOptionIndex === idx"
               class="accent-primary"
               @change="correctOptionIndex = idx"
-            />
+            >
             <input
               v-model="options[idx]"
               type="text"
               placeholder="Option text..."
               class="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            />
+            >
             <button
               v-if="options.length > 2"
               type="button"
@@ -217,7 +217,7 @@ async function handleSave() {
             type="text"
             placeholder="The correct answer..."
             class="mt-1 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          />
+          >
         </div>
 
         <div>

@@ -1,6 +1,8 @@
 /// <reference types="vite/client" />
 import { convexTest } from 'convex-test'
 import { describe, expect, test as rawTest, vi, beforeEach, afterEach } from 'vitest'
+import { api, internal } from './_generated/api'
+import schema from './schema'
 
 // STORY 6-1 triage (AC #11, Task 9): the 8 tests marked `test.skip` below assumed
 // the legacy pdf-parse + fetch-based AI Search upsert ingestion flow. The production
@@ -13,8 +15,6 @@ import { describe, expect, test as rawTest, vi, beforeEach, afterEach } from 'vi
 // intent here. See epic-5-retro-2026-04-12.md "documentActions.test.ts baseline".
 const test = rawTest
 const skip = rawTest.skip
-import { api, internal } from './_generated/api'
-import schema from './schema'
 
 const mockPdfParse = vi.fn()
 vi.mock('pdf-parse', () => ({ default: mockPdfParse }))

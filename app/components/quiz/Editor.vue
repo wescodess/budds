@@ -298,7 +298,7 @@ function handleBack() {
                     :checked="drafts[q._id]!.correctOptionIndex === idx"
                     data-testid="quiz-editor-question-correct-radio"
                     @change="setCorrectOptionIndex(q._id, idx)"
-                  />
+                  >
                   <input
                     type="text"
                     :value="opt"
@@ -309,7 +309,7 @@ function handleBack() {
                     class="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                     data-testid="quiz-editor-question-option"
                     @input="setOptionText(q._id, idx, ($event.target as HTMLInputElement).value)"
-                  />
+                  >
                   <UiButton
                     variant="ghost"
                     size="icon"

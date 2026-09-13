@@ -107,7 +107,7 @@ function selectIcon(key: string) {
             autocomplete="off"
             placeholder="Search icons"
             class="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-          />
+          >
         </div>
         <div class="keyboard-scroll-area max-h-[calc(var(--mobile-vh,100dvh)-10rem)] overflow-y-auto p-4">
           <div v-if="filteredGroups.length === 0" class="py-6 text-center text-sm text-muted-foreground">
@@ -178,7 +178,7 @@ function selectIcon(key: string) {
           autocomplete="off"
           placeholder="Search icons"
           class="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-        />
+        >
       </div>
       <div class="max-h-72 overflow-y-auto p-3">
         <div v-if="filteredGroups.length === 0" class="py-6 text-center text-sm text-muted-foreground">

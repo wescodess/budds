@@ -3,7 +3,7 @@ import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { flushPromises } from '@vue/test-utils'
 
 const mockFetch = vi.fn()
-let mockQueryData = ref<any>(null)
+const mockQueryData = ref<any>(null)
 
 mockNuxtImport('useConvexQuery', () => {
   return () => ({ data: mockQueryData })

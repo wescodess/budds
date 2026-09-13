@@ -24,7 +24,7 @@ const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
         'border-l-4 border-l-destructive': feedback && !feedback.isCorrect,
       }"
       @input="emit('update:modelValue', ($event.target as HTMLInputElement).value)"
-    />
+    >
     <div v-if="feedback && !feedback.isCorrect" class="mt-2 rounded-md bg-muted/50 p-3 text-sm">
       <span class="text-xs font-medium text-muted-foreground">Correct answer:</span>
       <p class="mt-1 text-green-500">{{ feedback.correctAnswer }}</p>

@@ -125,7 +125,7 @@ async function savePreferences() {
           type="time"
           class="mt-1 w-full rounded border border-stone-700 bg-stone-950 px-2.5 py-1.5 text-sm text-stone-100 focus:border-amber-500 focus:outline-none"
           data-testid="pref-morning-start"
-        />
+        >
       </label>
       <label class="block text-xs text-stone-400">
         Evening end
@@ -134,7 +134,7 @@ async function savePreferences() {
           type="time"
           class="mt-1 w-full rounded border border-stone-700 bg-stone-950 px-2.5 py-1.5 text-sm text-stone-100 focus:border-amber-500 focus:outline-none"
           data-testid="pref-evening-end"
-        />
+        >
       </label>
     </div>
 

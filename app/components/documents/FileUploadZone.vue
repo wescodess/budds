@@ -147,6 +147,6 @@ function handleDragLeave() {
       multiple
       class="hidden"
       @change="handleFileChange"
-    />
+    >
   </div>
 </template>

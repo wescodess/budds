@@ -161,7 +161,7 @@ function handleSubmit() {
         placeholder="e.g. React hooks, Organic Chemistry..."
         class="w-full rounded-lg border border-input bg-background px-4 py-3 text-sm text-foreground placeholder-muted-foreground outline-none focus:border-primary"
         data-testid="topic-input"
-      />
+      >
     </div>
 
     <div v-if="hasFiles" class="mb-6 space-y-3">
@@ -208,7 +208,7 @@ function handleSubmit() {
           type="checkbox"
           class="h-4 w-4 rounded border-input bg-background text-primary accent-primary"
           data-testid="web-search-checkbox"
-        />
+        >
         <span class="text-sm text-foreground">
           Supplement from web
         </span>

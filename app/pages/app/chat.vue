@@ -1,8 +1,8 @@
 <script setup lang="ts">
+import { MODELS, DEFAULT_MODEL } from '~/constants/models'
 const { messages, loading, error, chat, clearMessages } = useRag()
 
 const query = ref('')
-import { MODELS, DEFAULT_MODEL } from '~/constants/models'
 
 const selectedModel = ref(DEFAULT_MODEL)
 const showSources = ref<number | null>(null)
@@ -119,7 +119,7 @@ function toggleSources(index: number) {
           spellcheck="true"
           class="flex-1 rounded-md border border-input bg-card px-4 py-2.5 text-sm text-foreground placeholder-muted-foreground outline-none focus:ring-2 focus:ring-ring"
           :disabled="loading"
-        />
+        >
         <button
           type="submit"
           class="rounded-md bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition hover:bg-primary/90 disabled:opacity-50"

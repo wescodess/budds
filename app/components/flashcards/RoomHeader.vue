@@ -128,7 +128,7 @@ const formattedTimestamp = computed(() => {
           class="min-w-0 rounded-md border border-primary/40 bg-background px-2 py-1 font-dm-sans text-lg font-semibold text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           @keydown="handleKey"
           @blur="commit"
-        />
+        >
         <p class="mt-0.5 font-inter text-xs text-muted-foreground">
           <span>Flash Cards</span>
           <template v-if="typeof cardCount === 'number'">

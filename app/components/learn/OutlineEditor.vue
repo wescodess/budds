@@ -248,7 +248,7 @@ function onDragEnd() {
             data-testid="title-input"
             @blur="saveTitle(section)"
             @keydown="handleTitleKeydown($event, section)"
-          />
+          >
           <button
             v-else
             class="w-full cursor-text text-left text-sm text-stone-100 hover:text-amber-400"

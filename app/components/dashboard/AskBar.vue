@@ -44,7 +44,7 @@ function onKeydown(e: KeyboardEvent) {
         spellcheck="true"
         class="h-8 flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
         @keydown="onKeydown"
-      />
+      >
       <button
         type="submit"
         :disabled="!query.trim()"
