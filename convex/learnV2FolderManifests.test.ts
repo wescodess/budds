@@ -123,6 +123,7 @@ describe("Learn V2 folder source manifests", () => {
       availableCount: 0,
       unavailableCount: 0,
       status: "frozen",
+      coverage: "gap",
     });
     const folders = await asOwner.query(
       api.learnV2FolderManifests.listManifestFolders,
@@ -135,6 +136,28 @@ describe("Learn V2 folder source manifests", () => {
     expect(folders.page[0]).not.toHaveProperty("stage");
     expect(folders.page[0]).not.toHaveProperty("childCursor");
     expect(folders.page[0]).not.toHaveProperty("documentCursor");
+  });
+
+  test("freezes a no-selection request as empty without retaining raw request identifiers", async () => {
+    const { t, asOwner, voidRow, blueprint } = await ready();
+    const manifest = await asOwner.mutation(
+      api.learnV2FolderManifests.freezeManifest,
+      {
+        learningVoidId: voidRow._id,
+        blueprintRevisionId: blueprint._id,
+        expectedBlueprintRecordRevision: 1,
+        expectedVoidRevision: 2,
+        folderIds: [],
+        documentIds: [],
+        idempotencyKey: "no-selection",
+      },
+    );
+    expect(manifest).toMatchObject({ status: "frozen", coverage: "empty" });
+    const stored = await t.run((ctx) => ctx.db.get(manifest!._id));
+    expect(stored).toMatchObject({
+      explicitDocumentIds: [],
+      requestFingerprint: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+    });
   });
 
   test("freezes root/child/grandchild sources with real folder identities and explicit availability gaps", async () => {
@@ -378,6 +401,47 @@ describe("Learn V2 folder source manifests", () => {
     expect(
       secondRows.page.find((row: any) => row.documentId === doc),
     ).toMatchObject({ folderId: after });
+  });
+
+  test("rejects folder revision drift between explicit document captures", async () => {
+    const { t, asOwner, root, voidRow, blueprint } = await ready();
+    const child = await asOwner.mutation(api.folders.createSubfolder, {
+      parentId: root,
+      name: "Explicit child",
+    });
+    const first = await document(t, root, "first-explicit.pdf");
+    const moved = await document(t, child, "moved-explicit.pdf");
+    const manifest = await asOwner.mutation(
+      api.learnV2FolderManifests.freezeManifest,
+      {
+        learningVoidId: voidRow._id,
+        blueprintRevisionId: blueprint._id,
+        expectedBlueprintRecordRevision: 1,
+        expectedVoidRevision: 2,
+        folderIds: [],
+        documentIds: [first, moved],
+        idempotencyKey: "explicit-folder-drift",
+      },
+    );
+    await t.mutation(internal.learnV2FolderManifests.continueCapture, {
+      manifestId: manifest!._id,
+    });
+    await asOwner.mutation(api.documents.moveDocument, {
+      id: moved,
+      destinationFolderId: root,
+    });
+    await t.run(async (ctx) => {
+      const folder = await ctx.db.get(root);
+      await ctx.db.patch(root, { updatedAt: (folder!.updatedAt ?? 0) + 1 });
+    });
+    await t.mutation(internal.learnV2FolderManifests.continueCapture, {
+      manifestId: manifest!._id,
+    });
+    expect(await t.run((ctx) => ctx.db.get(manifest!._id))).toMatchObject({
+      status: "failed",
+      explicitDocumentIds: [],
+      failureReason: expect.stringMatching(/changed during paged source capture/),
+    });
   });
   test("captures explicit documents without widening and completes more than one page", async () => {
     const { t, asOwner, root, voidRow, blueprint } = await ready();
@@ -838,6 +902,45 @@ describe("Learn V2 folder source manifests", () => {
     });
   });
 
+  test("prunes a deleted explicit source from a paused manifest header", async () => {
+    const { t, asOwner, root, voidRow, blueprint } = await ready();
+    const selected = await document(t, root, "paused-delete.pdf", {
+      status: "failed",
+      r2Key: undefined,
+    });
+    const manifest = await asOwner.mutation(
+      api.learnV2FolderManifests.freezeManifest,
+      {
+        learningVoidId: voidRow._id,
+        blueprintRevisionId: blueprint._id,
+        expectedBlueprintRecordRevision: 1,
+        expectedVoidRevision: 2,
+        folderIds: [],
+        documentIds: [selected],
+        idempotencyKey: "paused-delete",
+      },
+    );
+    await t.mutation(internal.learnV2Access.setCohortEntitlement, {
+      tokenIdentifier: owner.tokenIdentifier,
+      enabled: false,
+    });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(await t.run((ctx) => ctx.db.get(manifest!._id))).toMatchObject({
+      status: "capturing",
+      explicitDocumentIds: [selected],
+    });
+
+    await asOwner.mutation(api.documents.deleteDocument, { id: selected });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    const stored = await t.run((ctx) => ctx.db.get(manifest!._id));
+    expect(stored).toMatchObject({
+      status: "capturing",
+      explicitDocumentIds: [],
+      requestFingerprint: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+    });
+    expect(stored!.requestFingerprint).not.toContain(String(selected));
+  });
+
   test("refreshes a folder revision before traversal and fails on drift after traversal starts", async () => {
     const { t, asOwner, root, voidRow, blueprint } = await ready();
     const args = {
@@ -995,6 +1098,10 @@ describe("Learn V2 folder source manifests", () => {
     expect(persisted.snapshot!.objectKey).toBeUndefined();
     expect(persisted.snapshot!.folderId).toBeUndefined();
     expect(persisted.snapshot!.filename).toBeUndefined();
+    const header = await t.run((ctx) => ctx.db.get(manifest!._id));
+    expect(header!.explicitDocumentIds).toEqual([]);
+    expect(header!.requestFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(header!.requestFingerprint).not.toContain(String(selected));
   });
 
   test("tombstones captured descendant folder and source identifiers when that subtree is deleted", async () => {

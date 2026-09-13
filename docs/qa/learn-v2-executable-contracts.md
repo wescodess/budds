@@ -69,7 +69,10 @@ facts.
 The command stores a normalized manifest header and selected folder queue, then
 `continueCapture` pages child folders and documents in batches of 16. Queue
 cursors and monotonically allocated folder/document order values make retries
-exact-once. Input is capped at eight selected folders and 64 explicit documents;
+exact-once. Idempotency stores only a SHA-256 digest of the canonical request;
+raw explicit document checkpoints are consumed during capture, cleared at every
+terminal state, and pruned by bounded deletion cleanup while paused. Input is
+capped at eight selected folders and 64 explicit documents;
 the assembled manifest fails explicitly above 4,096 documents. Public list
 queries cap pages at 16 and omit internal traversal cursors. No new path calls
 the legacy `folders.resolveScope` query or an all-user retrieval fallback.
