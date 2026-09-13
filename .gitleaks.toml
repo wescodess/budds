@@ -1,0 +1,24 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Ignore generic-key false positives in generated BMAD reference material"
+targetRules = ["generic-api-key"]
+paths = [
+  '''(?:^|/)(?:\.agent|\.agents|\.cline|\.kiro|\.roo|_bmad)/(?:.*?/)?resources/knowledge/api-testing-patterns\.md$''',
+  '''(?:^|/)_bmad/_config/files-manifest\.csv$''',
+]
+
+[[allowlists]]
+description = "Ignore generic-key false positives in deterministic test and CI fixtures"
+targetRules = ["generic-api-key"]
+paths = [
+  '''(?:^|/)convex/[^/]+\.test\.ts$''',
+  '''(?:^|/)server/(?:api|utils)/.*\.test\.ts$''',
+  '''(?:^|/)\.github/workflows/test\.yml$''',
+]
+
+[[allowlists]]
+description = "Stitch identifiers are public design asset references, not credentials"
+targetRules = ["generic-api-key"]
+paths = ['''(?:^|/)stitch\.json$''']
