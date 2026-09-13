@@ -3,6 +3,9 @@ import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { getFunctionName } from 'convex/server'
 
 const mockStartCourse = vi.fn()
+const mockFetch = vi.fn(() => Promise.resolve())
+
+vi.stubGlobal('$fetch', mockFetch)
 
 mockNuxtImport('useConvexMutation', () => {
   return (apiRef: any) => {
@@ -24,6 +27,7 @@ describe('StartLearningButton', () => {
   beforeEach(() => {
     mockStartCourse.mockReset()
     mockStartCourse.mockResolvedValue('course_1')
+    mockFetch.mockClear()
   })
 
   it('renders the button with correct text', async () => {
@@ -43,6 +47,33 @@ describe('StartLearningButton', () => {
       expect(mockStartCourse).toHaveBeenCalledWith(
         expect.objectContaining({ courseId: 'course_1' }),
       )
+    })
+  })
+
+  it('starts exactly one V1 section-generation request from the returned task', async () => {
+    mockStartCourse.mockResolvedValue({
+      courseId: 'course_1',
+      sectionId: 'section_1',
+      taskId: 'task_1',
+    })
+
+    const Comp = await import(componentPath)
+    const wrapper = await mountSuspended(Comp.default, {
+      props: { ...baseProps(), folderId: 'folder_1' as any },
+    })
+
+    await wrapper.find('[data-testid="start-learning-button"]').trigger('click')
+
+    await vi.waitFor(() => {
+      expect(mockFetch).toHaveBeenCalledTimes(1)
+      expect(mockFetch).toHaveBeenCalledWith('/api/course/generate-section', {
+        method: 'POST',
+        body: {
+          courseId: 'course_1',
+          sectionId: 'section_1',
+          taskId: 'task_1',
+        },
+      })
     })
   })
 

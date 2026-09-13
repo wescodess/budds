@@ -129,6 +129,49 @@ describe('courses.create — folder source', () => {
     expect(sourceDocs).toHaveLength(1)
     expect(sourceDocs[0]!.documentId).toBe(docId1)
   })
+
+  test('characterizes V1 accepting an owned document outside the selected folder', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, folderId: selectedFolderId } = await seedFolder(
+      t,
+      USER_A,
+      'Selected Folder',
+    )
+    const { folderId: unrelatedFolderId } = await seedFolder(
+      t,
+      USER_A,
+      'Unrelated Folder',
+    )
+    const unrelatedDocumentId = await seedDocument(
+      t,
+      USER_A,
+      unrelatedFolderId,
+      'outside-selected-folder.pdf',
+    )
+
+    const result = await asUser.mutation(api.courses.create, {
+      title: 'V1 Source Identity Characterization',
+      sourceType: 'folder',
+      folderId: selectedFolderId,
+      documentIds: [unrelatedDocumentId],
+    })
+
+    const sourceDocs = await t.run(async (ctx) =>
+      ctx.db
+        .query('courseSourceDocs')
+        .withIndex('by_courseId', (q) => q.eq('courseId', result.courseId))
+        .take(2),
+    )
+
+    expect(sourceDocs).toHaveLength(1)
+    expect(sourceDocs[0]).toMatchObject({
+      documentId: unrelatedDocumentId,
+      // Frozen V1 defect: this is the selected course folder, not the
+      // document's real folder. V2 must not inherit this source identity.
+      folderId: selectedFolderId,
+    })
+    expect(sourceDocs[0]!.folderId).not.toBe(unrelatedFolderId)
+  })
 })
 
 describe('courses.create — source doc count cap', () => {

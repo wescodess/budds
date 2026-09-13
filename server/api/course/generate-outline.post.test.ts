@@ -132,7 +132,64 @@ describe('POST /api/course/generate-outline', () => {
     expect(progressCalls).toContain('Creating sections...')
   })
 
-  test('happy path: web-only outline generation', async () => {
+  test('characterizes V1 broadening an empty scoped retrieval to all user documents', async () => {
+    vi.mocked(globalThis.readBody).mockResolvedValue({
+      courseId: 'course_fallback',
+      taskId: 'task_fallback',
+    })
+
+    mockQuery
+      .mockResolvedValueOnce({
+        _id: 'course_fallback',
+        userId: 'https://auth.example.com|user_outline_123',
+        title: 'Fallback Retrieval',
+        sourceType: 'folder',
+        status: 'generating',
+        folderId: 'folder_selected',
+      })
+      .mockResolvedValueOnce([
+        {
+          courseId: 'course_fallback',
+          documentId: 'doc_selected',
+          folderId: 'folder_selected',
+          userId: 'https://auth.example.com|user_outline_123',
+        },
+      ])
+
+    vi.mocked(globalThis.searchDocuments)
+      .mockResolvedValueOnce({ data: [] })
+      .mockResolvedValueOnce({
+        data: [{
+          id: 'unrelated-chunk',
+          content: 'Content returned by the user-wide fallback',
+          score: 0.8,
+          attributes: { filename: 'outside-selected-scope.pdf' },
+        }],
+      })
+    vi.mocked(globalThis.generateCompletion).mockResolvedValue(goodOutlineResponse())
+    mockMutation.mockResolvedValue(undefined)
+
+    await handler(makeEvent())
+
+    expect(globalThis.searchDocuments).toHaveBeenNthCalledWith(1, {
+      query: 'Fallback Retrieval',
+      userId: 'https://auth.example.com|user_outline_123',
+      folderId: 'folder_selected',
+      max_num_results: 50,
+      score_threshold: 0.03,
+      filterDocIds: ['doc_selected'],
+    })
+    // Frozen V1 defect: the second call drops both scope constraints. V2 must
+    // fail closed on an evidence gap instead of copying this fallback.
+    expect(globalThis.searchDocuments).toHaveBeenNthCalledWith(2, {
+      query: 'Fallback Retrieval',
+      userId: 'https://auth.example.com|user_outline_123',
+      max_num_results: 40,
+      score_threshold: 0.02,
+    })
+  })
+
+  test('characterizes V1 web-only generation using model knowledge without retrieval', async () => {
     vi.mocked(globalThis.readBody).mockResolvedValue({
       courseId: 'course_web',
       taskId: 'task_789',
@@ -143,6 +200,7 @@ describe('POST /api/course/generate-outline', () => {
       userId: 'https://auth.example.com|user_outline_123',
       title: 'React Hooks',
       sourceType: 'web-only',
+      webSearchEnabled: true,
       status: 'generating',
     })
 
@@ -154,6 +212,15 @@ describe('POST /api/course/generate-outline', () => {
     expect(result.courseId).toBe('course_web')
     expect(result.sectionCount).toBe(5)
     expect(globalThis.searchDocuments).not.toHaveBeenCalled()
+    expect(globalThis.generateCompletion).toHaveBeenCalledWith(expect.objectContaining({
+      model: 'openai/gpt-4o',
+      messages: expect.arrayContaining([
+        expect.objectContaining({
+          role: 'user',
+          content: expect.stringContaining('using your knowledge'),
+        }),
+      ]),
+    }))
   })
 
   test('marks task and course as failed on LLM error', async () => {
