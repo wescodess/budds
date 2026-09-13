@@ -89,6 +89,39 @@ describe('SourceSelector', () => {
     })
   })
 
+  it('characterizes V1 counting a selected folder without submitting its documents', async () => {
+    mockScope.value = {
+      folders: [
+        { id: 'folder_child', name: 'Child Folder', fileCount: 2 },
+      ],
+      files: [
+        { id: 'doc_child_1', folderId: 'folder_child', filename: 'one.pdf', fileSize: 1024 },
+        { id: 'doc_child_2', folderId: 'folder_child', filename: 'two.pdf', fileSize: 2048 },
+      ],
+    }
+
+    const Comp = await import(componentPath)
+    const wrapper = await mountSuspended(Comp.default, {
+      props: { folderId: 'folder_root' as any },
+    })
+
+    await wrapper.find('[aria-label="Select Child Folder"]').trigger('click')
+    await wrapper.find('[data-testid="topic-input"]').setValue('Folder selection baseline')
+
+    expect(wrapper.text()).toContain('1 selected')
+
+    await wrapper.find('[data-testid="generate-outline-button"]').trigger('click')
+
+    expect(wrapper.emitted('submit')?.[0]?.[0]).toMatchObject({
+      title: 'Folder selection baseline',
+      sourceType: 'folder',
+      folderId: 'folder_root',
+      // Frozen V1 defect: selected folder IDs are UI-only and neither the
+      // folder nor its descendant document IDs are included in the payload.
+      documentIds: [],
+    })
+  })
+
   it('emits submit with web-only sourceType when no docs', async () => {
     mockScope.value = { folders: [], files: [] }
     const Comp = await import(componentPath)
