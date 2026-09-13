@@ -40,6 +40,7 @@ Budds is an AI-powered learning and productivity platform. Users organize conten
 - [User Flows](./qa/user-flows.md) — Step-by-step user journeys for manual testing
 - [Test Plan](./qa/test-plan.md) — Test architecture, coverage report, gaps
 - [Learn V1 Isolation Matrix](./qa/learn-v1-isolation-matrix.md) — Executable legacy baseline and additive V2 boundaries
+- [Learn V2 Executable Contracts](./qa/learn-v2-executable-contracts.md) — Versioned vocabulary, lifecycle, persistence, evidence, mastery, scheduling, quota, and threat contracts
 - [Known Limitations](./qa/known-limitations.md) — Error states, edge cases, deliberate omissions
 - [Deployment Guide](./qa/deployment-guide.md) — Environments, deploy process, verification
 - [Bug Reporting Guide](./qa/bug-reporting-guide.md) — Severity levels, required fields, templates
