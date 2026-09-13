@@ -176,6 +176,33 @@ export const purgeFolderDocumentSources = internalMutation({
   },
 })
 
+export const purgeFolderDocumentManifestHeaders = internalMutation({
+  args: {
+    userId: v.string(),
+    documentId: v.id('documents'),
+    cursor: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const page = await ctx.db.query('learnFolderSourceManifests')
+      .withIndex('by_userId', q => q.eq('userId', args.userId))
+      .paginate({ cursor: args.cursor ?? null, numItems: BATCH_SIZE })
+    for (const manifest of page.page) {
+      const explicitDocumentIds = manifest.explicitDocumentIds.filter(id => id !== args.documentId)
+      if (explicitDocumentIds.length !== manifest.explicitDocumentIds.length) {
+        await ctx.db.patch(manifest._id, { explicitDocumentIds })
+      }
+    }
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeFolderDocumentManifestHeaders, {
+        ...args,
+        cursor: page.continueCursor,
+      })
+      return { pending: true }
+    }
+    return { pending: false }
+  },
+})
+
 export const purgeFolderManifestFolder = internalMutation({
   args: { userId: v.string(), folderId: v.id('folders') },
   handler: async (ctx, args) => {
