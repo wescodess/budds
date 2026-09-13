@@ -3,7 +3,7 @@ import { ArrowLeft, Lock, Loader2, AlertCircle, CheckCircle2, ChevronRight, Penc
 import type { Doc, Id } from '~~/convex/_generated/dataModel'
 
 const props = defineProps<{
-  course: Doc<'courses'>
+  course: Doc<'courses'> | null
   sections: Doc<'courseSections'>[]
   courseId: Id<'courses'>
   folderId?: Id<'folders'>

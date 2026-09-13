@@ -173,7 +173,7 @@ const hasData = computed(() => !!overview.value && turns.value.length > 0)
 
           <div class="flex-1">
             <div class="flex items-center justify-between">
-              <p class="text-sm font-medium text-stone-200">{{ overview.title }}</p>
+              <p class="text-sm font-medium text-stone-200">{{ overview?.title }}</p>
               <span class="text-xs tabular-nums text-stone-500">{{ formatMs(currentTimeMs) }} / {{ formatMs(totalDurationMs) }}</span>
             </div>
             <div class="mt-2 h-1 w-full overflow-hidden rounded-full bg-stone-800">
