@@ -24,7 +24,11 @@ const workspaceRef = ref<{ focus: () => void } | null>(null)
 watch(conversationIdRef, async (next, prev) => {
   if (next === prev) return
   if (next) {
-    try { await loadConversation(next) } catch {}
+    try {
+      await loadConversation(next)
+    } catch {
+      // useChat exposes the load failure through its reactive error state.
+    }
   } else {
     startNewConversation()
   }

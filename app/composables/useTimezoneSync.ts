@@ -1,6 +1,10 @@
 import { api } from '#convex/api'
 
-export function useTimezoneSync(profileData: Ref<any>) {
+interface TimezoneProfile {
+  timezone?: string
+}
+
+export function useTimezoneSync(profileData: Ref<TimezoneProfile | null | undefined>) {
   if (!import.meta.client) return
 
   const setTimezone = useConvexMutation(api.learnProfile.setTimezone)

@@ -1,14 +1,13 @@
 <script setup lang="ts">
 import { FileText, ArrowLeftRight } from '@lucide/vue'
 import type { Id } from '~~/convex/_generated/dataModel'
-import type { InterjectionContext } from '~/composables/useChat'
-import FolderHelperPane from '~/components/folders/FolderHelperPane.vue'
+import type { InterjectionContext, Source } from '~/composables/useChat'
 import FolderTasksPane from '~/components/folders/FolderTasksPane.vue'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
 import { injectFolderContext } from '~/composables/useFolderPageContext'
 
 const props = defineProps<{
-  messages: Array<{ role: 'user' | 'assistant'; content: string; sources?: any[]; interjectionContext?: InterjectionContext }>
+  messages: Array<{ role: 'user' | 'assistant'; content: string; sources?: Source[]; interjectionContext?: InterjectionContext }>
   loading: boolean
   streaming: boolean
   thinking: boolean
@@ -48,7 +47,10 @@ const pendingInterjectionContext = ref<InterjectionContext | null>(null)
 
 const sourcePanelOpen = computed({
   get: () => helperPane.activeTabId.value === 'sources',
-  set: (v: boolean) => { v ? helperPane.open('sources') : helperPane.close() },
+  set: (v: boolean) => {
+    if (v) helperPane.open('sources')
+    else helperPane.close()
+  },
 })
 const sourcePanelSide = ref<'left' | 'right'>('right')
 const isSourcePanelLeading = computed(() => sourcePanelSide.value === 'left')
@@ -157,7 +159,9 @@ onMounted(() => {
   try {
     const stored = localStorage.getItem(SOURCE_PANEL_SIDE_KEY)
     if (stored === 'left' || stored === 'right') sourcePanelSide.value = stored
-  } catch {}
+  } catch {
+    // Storage can be unavailable in privacy-restricted browser contexts.
+  }
   document.addEventListener('pointermove', handlePanelFlipPointerMove)
   document.addEventListener('pointerup', handlePanelFlipPointerEnd)
   document.addEventListener('pointercancel', handlePanelFlipPointerEnd)
@@ -170,7 +174,11 @@ onUnmounted(() => {
 })
 
 watch(sourcePanelSide, (value) => {
-  try { localStorage.setItem(SOURCE_PANEL_SIDE_KEY, value) } catch {}
+  try {
+    localStorage.setItem(SOURCE_PANEL_SIDE_KEY, value)
+  } catch {
+    // Panel placement remains usable for the current session.
+  }
 })
 
 defineExpose({ focus: () => chatInputRef.value?.focus() })

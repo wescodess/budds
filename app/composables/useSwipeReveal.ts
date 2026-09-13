@@ -42,8 +42,7 @@ export function useSwipeReveal(options: UseSwipeRevealOptions) {
 
   watch([isOpen, actionWidth], syncOffset, { immediate: true })
 
-  let swipe: ReturnType<typeof usePointerSwipe>
-  swipe = usePointerSwipe(rootRef, {
+  const swipe = usePointerSwipe(rootRef, {
     threshold: 12,
     pointerTypes: ['touch', 'pen'],
     disableTextSelect: true,

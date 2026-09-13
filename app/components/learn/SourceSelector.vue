@@ -3,6 +3,7 @@ import { Loader2, AlertTriangle } from '@lucide/vue'
 import type { Id } from '../../../convex/_generated/dataModel'
 import { api } from '#convex/api'
 import type { PickerFolder, PickerFile } from '~/components/global/DirectoryPicker.vue'
+import type { ScopeInventoryFile, ScopeInventoryFolder } from '~/composables/useReferenceScope'
 
 type SourceType = 'folder' | 'web-only'
 
@@ -51,7 +52,7 @@ const backlogCount = computed(() => {
 })
 
 const pickerFolders = computed<PickerFolder[]>(() =>
-  (scopeQuery.data?.value?.folders ?? []).map((f: any) => ({
+  ((scopeQuery.data?.value?.folders ?? []) as ScopeInventoryFolder[]).map(f => ({
     id: f.id as string,
     name: f.name,
     parentId: f.parentId as string | undefined,
@@ -60,7 +61,7 @@ const pickerFolders = computed<PickerFolder[]>(() =>
 )
 
 const pickerFiles = computed<PickerFile[]>(() =>
-  (scopeQuery.data?.value?.files ?? []).map((f: any) => ({
+  ((scopeQuery.data?.value?.files ?? []) as ScopeInventoryFile[]).map(f => ({
     id: f.id as string,
     name: f.filename,
     folderId: (f.folderId ?? props.folderId) as string,

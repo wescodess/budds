@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { ArrowLeft, Lock, Loader2, AlertCircle, CheckCircle2, ChevronRight, Pencil, MoreVertical, Download, HardDriveDownload } from '@lucide/vue'
-import type { Id } from '~~/convex/_generated/dataModel'
+import type { Doc, Id } from '~~/convex/_generated/dataModel'
 
 const props = defineProps<{
-  course: any
-  sections: any[]
+  course: Doc<'courses'>
+  sections: Doc<'courseSections'>[]
   courseId: Id<'courses'>
   folderId?: Id<'folders'>
   backUrl: string
@@ -24,9 +24,9 @@ const progress = computed(() => {
 })
 
 const currentSectionIndex = computed(() => {
-  const readyIdx = props.sections.findIndex((s: any) => s.status === 'ready')
+  const readyIdx = props.sections.findIndex(s => s.status === 'ready')
   if (readyIdx !== -1) return readyIdx
-  const generatingIdx = props.sections.findIndex((s: any) => s.status === 'generating')
+  const generatingIdx = props.sections.findIndex(s => s.status === 'generating')
   return generatingIdx
 })
 

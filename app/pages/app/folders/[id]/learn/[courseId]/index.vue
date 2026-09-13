@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Id } from '~~/convex/_generated/dataModel'
+import type { Doc, Id } from '~~/convex/_generated/dataModel'
 import { api } from '#convex/api'
 import { injectFolderContext } from '~/composables/useFolderPageContext'
 
@@ -19,12 +19,12 @@ const sectionsQuery = import.meta.client
   : { data: ref(null) }
 
 const course = computed(() => courseQuery.data?.value ?? null)
-const sections = computed(() => (sectionsQuery.data?.value as any[]) ?? [])
+const sections = computed(() => (sectionsQuery.data?.value as Doc<'courseSections'>[] | null) ?? [])
 
 const needsStart = computed(() =>
   course.value?.status === 'ready'
   && sections.value.length > 0
-  && sections.value.every((s: any) => s.status === 'locked'),
+  && sections.value.every(s => s.status === 'locked'),
 )
 
 const backUrl = computed(() => `/app/folders/${folderId.value}/learn/`)

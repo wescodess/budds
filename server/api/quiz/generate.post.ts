@@ -1,4 +1,6 @@
+import { getErrorMessage, getErrorStatusCode } from '../../../shared/errors'
 import { ConvexHttpClient } from 'convex/browser'
+import type { H3Event } from 'h3'
 import { api } from '../../../convex/_generated/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 import type { AISearchChunk } from '../../utils/ai-search'
@@ -7,7 +9,7 @@ import { requireRateLimit } from '../../utils/rate-limit'
 
 const SEED_QUERY = 'key concepts, definitions, and facts'
 
-function makeConvexClient(event: any): ConvexHttpClient | null {
+function makeConvexClient(event: H3Event): ConvexHttpClient | null {
   const token = event.context.convexToken as string | undefined
   const runtimeConfig = useRuntimeConfig(event)
   const convexUrl = readConfiguredRuntimeValue(
@@ -215,9 +217,10 @@ export default defineEventHandler(async (event) => {
       questionCount: persistQuestions.length,
     }
   }
-  catch (err: any) {
-    if (taskId && err?.statusCode !== 422 && err?.statusCode !== 502) {
-      await failTask(err?.message || 'Generation failed')
+  catch (err) {
+    const statusCode = getErrorStatusCode(err)
+    if (taskId && statusCode !== 422 && statusCode !== 502) {
+      await failTask(getErrorMessage(err, 'Generation failed'))
     }
     throw err
   }

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { AttemptHistoryItem } from '~/composables/useQuizHistory'
 
-const props = defineProps<{
+defineProps<{
   open: boolean
   quizTitle: string
   attempt: AttemptHistoryItem | null

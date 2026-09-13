@@ -1,5 +1,6 @@
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
+import type { H3Event } from "h3";
 import { AUDIO_OVERVIEW_MAX_EXPLICIT_SOURCES } from "../../../convex/lib/audioOverviewPolicy";
 import { makeConvexClient } from "../../utils/convex-client";
 import { getConvexTokenIdentifier } from "../../utils/convex-identity";
@@ -110,7 +111,7 @@ function reservationError(error: unknown): never {
   throw error;
 }
 
-function getOrchestrationToken(event: any): string {
+function getOrchestrationToken(event: H3Event): string {
   const config = useRuntimeConfig(event);
   const token = readConfiguredRuntimeValue(
     config.audioOverviewWorkerToken,
@@ -127,7 +128,7 @@ function getOrchestrationToken(event: any): string {
 }
 
 async function repairLegacySourceIdentities(
-  event: any,
+  event: H3Event,
   convexClient: ReturnType<typeof makeConvexClient> & {},
   body: AudioOverviewRequestBody,
 ): Promise<number> {
@@ -180,7 +181,7 @@ async function repairLegacySourceIdentities(
 }
 
 async function startWorkflow(
-  event: any,
+  event: H3Event,
   payload: { jobId: string; capability: string },
 ) {
   const config = useRuntimeConfig(event);
@@ -267,7 +268,7 @@ async function withLaunchTimeout<T>(operation: Promise<T>): Promise<T> {
 }
 
 async function startDeterministicWorkflow(
-  event: any,
+  event: H3Event,
   payload: { jobId: string; capability: string },
 ) {
   let lastError: unknown;

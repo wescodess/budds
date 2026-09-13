@@ -1,8 +1,10 @@
 <script setup lang="ts">
+import { getErrorMessage } from '~~/shared/errors'
 import { GripVertical, X, Plus } from '@lucide/vue'
 import type { Id } from '../../../convex/_generated/dataModel'
 import { api } from '#convex/api'
 import { toast } from 'vue-sonner'
+import { createSsrMutationStub } from '~/utils/convexSsrMutation'
 
 interface OutlineSection {
   title: string
@@ -39,30 +41,25 @@ const emit = defineEmits<{
 const KNOWLEDGE_TYPES = ['factual', 'conceptual', 'procedural', 'mixed'] as const
 type KnowledgeType = typeof KNOWLEDGE_TYPES[number]
 
-const ssrStub = {
-  mutate: async () => { throw new Error('Mutations are client-only') },
-  isLoading: ref(false),
-} as { mutate: (_args: any) => Promise<any>; isLoading: Ref<boolean> }
-
 const updateTitleMutation = import.meta.client
   ? useConvexMutation(api.courseSections.updateTitle)
-  : ssrStub
+  : createSsrMutationStub<typeof api.courseSections.updateTitle>()
 
 const updateKnowledgeTypeMutation = import.meta.client
   ? useConvexMutation(api.courseSections.updateKnowledgeType)
-  : ssrStub
+  : createSsrMutationStub<typeof api.courseSections.updateKnowledgeType>()
 
 const removeMutation = import.meta.client
   ? useConvexMutation(api.courseSections.remove)
-  : ssrStub
+  : createSsrMutationStub<typeof api.courseSections.remove>()
 
 const createMutation = import.meta.client
   ? useConvexMutation(api.courseSections.create)
-  : ssrStub
+  : createSsrMutationStub<typeof api.courseSections.create>()
 
 const updateOrderMutation = import.meta.client
   ? useConvexMutation(api.courseSections.updateOrder)
-  : ssrStub
+  : createSsrMutationStub<typeof api.courseSections.updateOrder>()
 
 const editingId = ref<Id<'courseSections'> | null>(null)
 const editingTitle = ref('')
@@ -93,9 +90,9 @@ async function saveTitle(section: SectionRow) {
   editingId.value = null
   if (!newTitle || newTitle === section.title) return
   try {
-    await updateTitleMutation.mutate({ sectionId: section._id, title: newTitle } as any)
-  } catch (e: any) {
-    toast.error(e?.message ?? 'Failed to update title')
+    await updateTitleMutation.mutate({ sectionId: section._id, title: newTitle })
+  } catch (e) {
+    toast.error(getErrorMessage(e, 'Failed to update title'))
   }
 }
 
@@ -125,32 +122,32 @@ async function cycleKnowledgeType(section: SectionRow) {
     await updateKnowledgeTypeMutation.mutate({
       sectionId: section._id,
       knowledgeType: next,
-    } as any)
-  } catch (e: any) {
-    toast.error(e?.message ?? 'Failed to update knowledge type')
+    })
+  } catch (e) {
+    toast.error(getErrorMessage(e, 'Failed to update knowledge type'))
   }
 }
 
 async function removeSection(section: SectionRow) {
   try {
-    await removeMutation.mutate({ sectionId: section._id } as any)
+    await removeMutation.mutate({ sectionId: section._id })
     emit('sectionRemoved')
-  } catch (e: any) {
-    toast.error(e?.message ?? 'Failed to remove section')
+  } catch (e) {
+    toast.error(getErrorMessage(e, 'Failed to remove section'))
   }
 }
 
 async function addSection() {
   try {
-    const newId = await createMutation.mutate({ courseId: props.courseId } as any)
+    const newId = await createMutation.mutate({ courseId: props.courseId })
     emit('sectionAdded')
     await nextTick()
     if (newId) {
       const newSection = props.sections.find((s) => s._id === newId)
       if (newSection) startEdit(newSection)
     }
-  } catch (e: any) {
-    toast.error(e?.message ?? 'Failed to add section')
+  } catch (e) {
+    toast.error(getErrorMessage(e, 'Failed to add section'))
   }
 }
 
@@ -177,9 +174,9 @@ async function onDrop(targetIndex: number) {
   const [moved] = ids.splice(fromIndex, 1)
   ids.splice(targetIndex, 0, moved!)
   try {
-    await updateOrderMutation.mutate({ courseId: props.courseId, sectionIds: ids } as any)
-  } catch (e: any) {
-    toast.error(e?.message ?? 'Failed to reorder sections')
+    await updateOrderMutation.mutate({ courseId: props.courseId, sectionIds: ids })
+  } catch (e) {
+    toast.error(getErrorMessage(e, 'Failed to reorder sections'))
   }
 }
 

@@ -1,3 +1,4 @@
+import { getErrorMessage } from '~~/shared/errors'
 import { ref, watch, onUnmounted } from 'vue'
 import { getUnsyncedAttempts, markAttemptSynced, clearSyncedAttempts, incrementSyncAttempts } from './useOfflineCache'
 import type { OfflineAttempt } from './useOfflineCache'
@@ -122,8 +123,8 @@ export function useOfflineSync() {
       }
 
       await clearSyncedAttempts()
-    } catch (e: any) {
-      lastSyncError.value = e?.message ?? 'Sync failed'
+    } catch (e) {
+      lastSyncError.value = getErrorMessage(e, 'Sync failed')
     } finally {
       isSyncing.value = false
     }

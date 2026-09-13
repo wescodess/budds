@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { getErrorMessage } from '~~/shared/errors'
 import {
   X,
   Sparkles,
@@ -80,9 +81,9 @@ async function handleCancel(task: TaskDoc) {
   interactWithTask(String(task._id))
   try {
     await cancel(task._id)
-  } catch (e: any) {
+  } catch (e) {
     const { toast } = await import('vue-sonner')
-    toast.error(e?.message || 'Failed to cancel task')
+    toast.error(getErrorMessage(e, 'Failed to cancel task'))
   }
 }
 
@@ -90,9 +91,9 @@ async function handleDismiss(task: TaskDoc) {
   interactWithTask(String(task._id))
   try {
     await dismiss(task._id)
-  } catch (e: any) {
+  } catch (e) {
     const { toast } = await import('vue-sonner')
-    toast.error(e?.message || 'Failed to dismiss task')
+    toast.error(getErrorMessage(e, 'Failed to dismiss task'))
   }
 }
 
@@ -102,9 +103,9 @@ async function handleRetry(task: TaskDoc) {
     await retry(task._id)
     const { toast } = await import('vue-sonner')
     toast.success('Task restarted')
-  } catch (e: any) {
+  } catch (e) {
     const { toast } = await import('vue-sonner')
-    toast.error(e?.message || 'Failed to retry task')
+    toast.error(getErrorMessage(e, 'Failed to retry task'))
   }
 }
 

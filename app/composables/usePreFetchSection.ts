@@ -1,6 +1,14 @@
+import { getErrorMessage } from '~~/shared/errors'
 import { CONVEX_INJECTION_KEY } from '@convex-vue/core'
 import { api } from '#convex/api'
 import type { Id } from '../../convex/_generated/dataModel'
+import { createSsrMutationStub } from '~/utils/convexSsrMutation'
+
+type PreFetchStatus = {
+  nextSection: { _id: string; status: string }
+  needsPreFetch: boolean
+  taskStatus: string | null
+} | null
 
 export function usePreFetchSection(
   courseId: Ref<Id<'courses'> | null>,
@@ -9,7 +17,7 @@ export function usePreFetchSection(
   const isPreFetching = ref(false)
   const hasTriggered = ref(false)
   const preFetchKey = ref('')
-  const preFetchStatus = ref<any>(null)
+  const preFetchStatus = ref<PreFetchStatus>(null)
 
   let unsubStatus: (() => void) | null = null
 
@@ -48,14 +56,9 @@ export function usePreFetchSection(
     return status.nextSection.status === 'ready' || status.nextSection.status === 'completed'
   })
 
-  const ssrStub = {
-    mutate: async () => null,
-    isLoading: ref(false),
-  } as { mutate: (_args: unknown) => Promise<any>; isLoading: Ref<boolean> }
-
   const triggerMutation = import.meta.client
     ? useConvexMutation(api.courseSections.triggerPreFetch)
-    : ssrStub
+    : createSsrMutationStub<typeof api.courseSections.triggerPreFetch>()
 
   watch(
     () => {
@@ -93,7 +96,7 @@ export function usePreFetchSection(
         const result = await triggerMutation.mutate({
           courseId: courseId.value,
           currentOrder: currentSectionOrder.value,
-        } as any) as { sectionId: string; taskId: string } | null
+        })
 
         if (result?.sectionId && result?.taskId) {
           $fetch('/api/course/generate-section', {
@@ -103,12 +106,12 @@ export function usePreFetchSection(
               sectionId: result.sectionId,
               taskId: result.taskId,
             },
-          }).catch((err: any) => {
-            console.error('[usePreFetchSection] Generation failed:', err?.message)
+          }).catch((err: unknown) => {
+            console.error('[usePreFetchSection] Generation failed:', getErrorMessage(err, 'Unknown error'))
           })
         }
-      } catch (err: any) {
-        console.error('[usePreFetchSection] Pre-fetch trigger failed:', err?.message)
+      } catch (err) {
+        console.error('[usePreFetchSection] Pre-fetch trigger failed:', getErrorMessage(err, 'Unknown error'))
       } finally {
         isPreFetching.value = false
       }

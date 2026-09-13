@@ -19,6 +19,20 @@ export interface ScopeFileSummary {
   fileSize: number
 }
 
+export interface ScopeInventoryFolder {
+  id: Id<'folders'>
+  name: string
+  parentId?: string
+  fileCount: number
+  descendantFileCount: number
+}
+
+export interface ScopeInventoryFile {
+  id: Id<'documents'>
+  folderId: string
+  filename: string
+}
+
 export interface ScopeChip {
   kind: 'folder' | 'file'
   id: string

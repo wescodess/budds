@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import { getErrorMessage } from '~~/shared/errors'
 import { Plus, X } from '@lucide/vue'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
+import { createSsrMutationStub } from '~/utils/convexSsrMutation'
 
 type QuestionType = 'multiple-choice' | 'free-response' | 'true_false' | 'fill_in_the_blank'
 
@@ -25,11 +27,11 @@ const emit = defineEmits<{
 
 const addMutation = import.meta.client
   ? useConvexMutation(api.quizzes.addQuestion)
-  : { mutate: async (_args: unknown): Promise<any> => null, isLoading: ref(false) }
+  : createSsrMutationStub<typeof api.quizzes.addQuestion>()
 
 const updateMutation = import.meta.client
   ? useConvexMutation(api.quizzes.updateQuestion)
-  : { mutate: async (_args: unknown): Promise<any> => null, isLoading: ref(false) }
+  : createSsrMutationStub<typeof api.quizzes.updateQuestion>()
 
 const questionType = ref<QuestionType>('multiple-choice')
 const questionText = ref('')
@@ -123,8 +125,8 @@ async function handleSave() {
     emit('saved')
     emit('update:open', false)
   }
-  catch (e: any) {
-    error.value = e?.message ?? 'Failed to save'
+  catch (e) {
+    error.value = getErrorMessage(e, 'Failed to save')
   }
   finally {
     saving.value = false

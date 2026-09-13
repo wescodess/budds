@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { Layers, MoreHorizontal, Pencil, Plus, Trash2 } from '@lucide/vue'
+import { getErrorMessage } from '~~/shared/errors'
+import { Layers, MoreHorizontal, Plus, Trash2 } from '@lucide/vue'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 import { useGestureGuards } from '~/composables/useGestureGuards'
+import { createSsrMutationStub } from '~/utils/convexSsrMutation'
 
 const props = defineProps<{
   folderId: Id<'folders'>
@@ -18,11 +20,11 @@ const { rooms, hasIndexedDocuments } = useFlashcardRooms(toRef(props, 'folderId'
 
 const deleteRoomMutation = import.meta.client
   ? useConvexMutation(api.flashcardRooms.deleteRoom)
-  : { mutate: async (_a: unknown) => null, isLoading: ref(false) }
+  : createSsrMutationStub<typeof api.flashcardRooms.deleteRoom>()
 
 const createRoomMutation = import.meta.client
   ? useConvexMutation(api.flashcardRooms.createRoom)
-  : { mutate: async (_a: unknown) => ({ roomId: '' }), isLoading: ref(false) }
+  : createSsrMutationStub<typeof api.flashcardRooms.createRoom>()
 
 const activeRoomId = ref<Id<'flashcardRooms'> | null>(null)
 const openMenuId = ref<string | null>(null)
@@ -65,16 +67,16 @@ function handleDeleteCancel() {
 async function handleDeleteConfirm(id: string) {
   deleting.value = true
   try {
-    await deleteRoomMutation.mutate({ roomId: id } as any)
+    await deleteRoomMutation.mutate({ roomId: id as Id<'flashcardRooms'> })
     confirmingDeleteId.value = null
     openMenuId.value = null
     if (activeRoomId.value === id) handleBack()
     const { toast } = await import('vue-sonner')
     toast.success('Room deleted')
   }
-  catch (e: any) {
+  catch (e) {
     const { toast } = await import('vue-sonner')
-    toast.error(e?.message || 'Failed to delete room')
+    toast.error(getErrorMessage(e, 'Failed to delete room'))
   }
   finally {
     deleting.value = false
@@ -85,17 +87,17 @@ async function handleCreate() {
   if (creating.value) return
   creating.value = true
   try {
-    const result = (await createRoomMutation.mutate({
+    const result = await createRoomMutation.mutate({
       folderId: props.folderId,
-    } as any)) as { roomId: Id<'flashcardRooms'> }
+    })
     if (result?.roomId) {
       activeRoomId.value = result.roomId
       emit('select-room', result.roomId as unknown as string)
     }
   }
-  catch (e: any) {
+  catch (e) {
     const { toast } = await import('vue-sonner')
-    toast.error(e?.message || 'Failed to create room')
+    toast.error(getErrorMessage(e, 'Failed to create room'))
   }
   finally {
     creating.value = false

@@ -1,3 +1,4 @@
+import { getErrorStatusCode } from '../../shared/errors'
 import { readConfiguredRuntimeValue } from './runtime-config'
 
 export type AuraVoice =
@@ -118,9 +119,9 @@ export async function synthesizeVoiceWithRetry(params: SynthesizeVoiceParams): P
     try {
       return await synthesizeVoice(params)
     }
-    catch (err: any) {
+    catch (err) {
       lastError = err
-      const status = err?.statusCode ?? err?.status ?? 0
+      const status = getErrorStatusCode(err) ?? 0
       const retriable = status === 0 || (status >= 500 && status < 600) || status === 429
       if (!retriable || attempt >= backoffsMs.length) break
       await new Promise<void>((resolve) => setTimeout(resolve, backoffsMs[attempt]!))

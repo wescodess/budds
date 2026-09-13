@@ -1,5 +1,6 @@
 import { api } from '#convex/api'
 import type { Id, Doc } from '../../convex/_generated/dataModel'
+import { createSsrMutationStub } from '~/utils/convexSsrMutation'
 
 export type TaskDoc = Doc<'tasks'>
 
@@ -30,33 +31,29 @@ export function useTasks(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
     () => tasks.value.filter((t) => t.status === 'pending' || t.status === 'running').length,
   )
 
-  const ssrStub = {
-    mutate: async () => { throw new Error('Task mutations are client-only') },
-    isLoading: ref(false),
-  } as { mutate: (_args: unknown) => Promise<any>; isLoading: Ref<boolean> }
-
   const cancelMutation = import.meta.client
     ? useConvexMutation(api.tasks.cancel)
-    : ssrStub
+    : createSsrMutationStub<typeof api.tasks.cancel>()
 
   const dismissMutation = import.meta.client
     ? useConvexMutation(api.tasks.dismiss)
-    : ssrStub
+    : createSsrMutationStub<typeof api.tasks.dismiss>()
 
   const retryMutation = import.meta.client
     ? useConvexMutation(api.tasks.retry)
-    : ssrStub
+    : createSsrMutationStub<typeof api.tasks.retry>()
 
   async function cancel(taskId: Id<'tasks'>) {
-    await cancelMutation.mutate({ taskId } as any)
+    await cancelMutation.mutate({ taskId })
   }
 
   async function dismiss(taskId: Id<'tasks'>) {
-    await dismissMutation.mutate({ taskId } as any)
+    await dismissMutation.mutate({ taskId })
   }
 
   async function retry(taskId: Id<'tasks'>): Promise<Id<'tasks'>> {
-    const result = (await retryMutation.mutate({ taskId } as any)) as { taskId: Id<'tasks'> }
+    const result = await retryMutation.mutate({ taskId })
+    if (!result) throw new Error('Task retry returned no task')
     return result.taskId
   }
 

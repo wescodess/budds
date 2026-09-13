@@ -51,7 +51,7 @@ function extractFilenameFromDisposition(contentDisposition: string | null) {
     return decodeURIComponent(utf8Match[1]).trim()
   }
 
-  const plainMatch = contentDisposition.match(/filename\s*=\s*"?([^\";]+)"?/i)
+  const plainMatch = contentDisposition.match(/filename\s*=\s*"?([^";]+)"?/i)
   return plainMatch?.[1]?.trim() || null
 }
 

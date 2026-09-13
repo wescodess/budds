@@ -6,15 +6,21 @@ import type { Id } from '../../../convex/_generated/dataModel'
 
 const props = defineProps<{ entityId?: string }>()
 
-const overviewData = props.entityId
-  ? useConvexQuery(
-      api.audioOverviews.getCourseScopedOverview,
-      computed(() => ({ id: props.entityId as Id<'audioOverviews'> })),
-    )
-  : { data: ref(null) }
+interface AudioOverviewTurn {
+  durationMs: number
+  speaker: 'host_a' | 'host_b'
+  text: string
+}
 
-const overview = computed(() => (overviewData.data?.value as any) ?? null)
-const turns = computed(() => overview.value?.turns ?? [])
+const overviewId = computed(() => (props.entityId ?? '') as Id<'audioOverviews'>)
+const { data: overviewData } = useConvexQuery(
+  api.audioOverviews.getCourseScopedOverview,
+  computed(() => ({ id: overviewId.value })),
+  { enabled: computed(() => Boolean(props.entityId)) },
+)
+
+const overview = computed(() => overviewData.value ?? null)
+const turns = computed<AudioOverviewTurn[]>(() => overview.value?.turns ?? [])
 const turnUrls = computed<(string | null)[]>(() => overview.value?.turnUrls ?? [])
 const sourceFilenames = computed<string[]>(() => overview.value?.sourceFilenames ?? [])
 
@@ -24,7 +30,7 @@ const currentTurnIndex = ref(0)
 const currentTime = ref(0)
 const transcriptExpanded = ref(false)
 
-const totalDurationMs = computed(() => turns.value.reduce((s: number, t: any) => s + t.durationMs, 0))
+const totalDurationMs = computed(() => turns.value.reduce((sum, turn) => sum + turn.durationMs, 0))
 
 function formatMs(ms: number): string {
   const total = Math.max(0, Math.round(ms / 1000))

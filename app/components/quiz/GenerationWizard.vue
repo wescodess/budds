@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { getErrorMessage } from '~~/shared/errors'
 import { Sparkles, Loader2 } from '@lucide/vue'
 import type { Id } from '../../../convex/_generated/dataModel'
 
@@ -31,9 +32,9 @@ async function handleGenerate() {
     const { toast } = await import('vue-sonner')
     toast.success('Generation started')
   }
-  catch (e: any) {
+  catch (e) {
     const { toast } = await import('vue-sonner')
-    toast.error(e?.message || 'Failed to start generation')
+    toast.error(getErrorMessage(e, 'Failed to start generation'))
   }
 }
 

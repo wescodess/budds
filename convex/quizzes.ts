@@ -1,6 +1,6 @@
 import { v } from 'convex/values'
 import { mutation, query, internalMutation } from './_generated/server'
-import type { Id, Doc } from './_generated/dataModel'
+import type { Id } from './_generated/dataModel'
 import type { MutationCtx, QueryCtx } from './_generated/server'
 import { getOptionalAuthUserId, requireAuth } from './lib/auth'
 
@@ -405,7 +405,7 @@ export const startAttempt = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx)
-    const quiz = await requireQuiz(ctx, args.quizId, userId)
+    await requireQuiz(ctx, args.quizId, userId)
 
     const questions = await ctx.db
       .query('quizQuestions')
@@ -821,7 +821,7 @@ export const submitAttempt = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx)
-    const quiz = await requireQuiz(ctx, args.quizId, userId)
+    await requireQuiz(ctx, args.quizId, userId)
 
     const questions = await ctx.db
       .query('quizQuestions')

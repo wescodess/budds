@@ -149,7 +149,7 @@ async function saveFlag(questionId: string) {
       correctedExplanation: flagCorrectedExplanation.value[questionId]?.trim() || undefined,
     })
     closeFlagEditor(questionId)
-  } catch (e) {
+  } catch {
     flagError.value = { ...flagError.value, [questionId]: 'Failed to save correction. Please try again.' }
   } finally {
     flagSaving.value = { ...flagSaving.value, [questionId]: false }

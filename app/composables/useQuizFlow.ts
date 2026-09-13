@@ -1,5 +1,4 @@
-import { api } from '#convex/api'
-import type { Id } from '../../convex/_generated/dataModel'
+import type { Doc, Id } from '../../convex/_generated/dataModel'
 
 export type QuizFlowState = 'initial' | 'overview' | 'taking' | 'results'
 
@@ -7,8 +6,8 @@ export function useQuizFlow(quizId: Ref<Id<'quizzes'> | null>) {
   const state = ref<QuizFlowState>('initial')
   const activeAttemptId = ref<Id<'quizAttempts'> | null>(null)
 
-  const quiz = ref<any>(null)
-  const questions = ref<any[]>([])
+  const quiz = ref<Doc<'quizzes'> | null>(null)
+  const questions = ref<Doc<'quizQuestions'>[]>([])
 
   if (import.meta.client) {
     watch(quizId, (id) => {
@@ -22,7 +21,7 @@ export function useQuizFlow(quizId: Ref<Id<'quizzes'> | null>) {
 
   const hasQuestions = computed(() => questions.value.length > 0)
 
-  function setQuizData(data: { quiz: any; questions: any[] } | null) {
+  function setQuizData(data: { quiz: Doc<'quizzes'>; questions: Doc<'quizQuestions'>[] } | null) {
     if (!data || !data.quiz) {
       quiz.value = null
       questions.value = []

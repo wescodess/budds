@@ -1,5 +1,6 @@
 import { api } from '#convex/api'
 import type { Id } from '../../convex/_generated/dataModel'
+import { createSsrMutationStub } from '~/utils/convexSsrMutation'
 
 export interface FlashcardRoomSummary {
   _id: Id<'flashcardRooms'>
@@ -27,37 +28,32 @@ export function useFlashcardRooms(folderId: Ref<Id<'folders'>> | Id<'folders'>) 
     () => (roomsData.value as FlashcardRoomSummary[] | undefined) ?? [],
   )
 
-  const ssrStub = {
-    mutate: async () => { throw new Error('Flashcard room mutations are client-only') },
-    isLoading: ref(false),
-  } as { mutate: (_args: unknown) => Promise<any>; isLoading: Ref<boolean> }
-
   const createRoomMutation = import.meta.client
     ? useConvexMutation(api.flashcardRooms.createRoom)
-    : ssrStub
+    : createSsrMutationStub<typeof api.flashcardRooms.createRoom>()
 
   const deleteRoomMutation = import.meta.client
     ? useConvexMutation(api.flashcardRooms.deleteRoom)
-    : ssrStub
+    : createSsrMutationStub<typeof api.flashcardRooms.deleteRoom>()
 
   const renameRoomMutation = import.meta.client
     ? useConvexMutation(api.flashcardRooms.renameRoom)
-    : ssrStub
+    : createSsrMutationStub<typeof api.flashcardRooms.renameRoom>()
 
   async function createRoom(title?: string): Promise<Id<'flashcardRooms'>> {
     const result = await createRoomMutation.mutate({
       folderId: id.value,
       title,
-    } as any) as { roomId: Id<'flashcardRooms'> } | null
+    })
     return (result?.roomId ?? '') as Id<'flashcardRooms'>
   }
 
   async function deleteRoom(roomId: Id<'flashcardRooms'>) {
-    await deleteRoomMutation.mutate({ roomId } as any)
+    await deleteRoomMutation.mutate({ roomId })
   }
 
   async function renameRoom(roomId: Id<'flashcardRooms'>, title: string) {
-    await renameRoomMutation.mutate({ roomId, title } as any)
+    await renameRoomMutation.mutate({ roomId, title })
   }
 
   return {

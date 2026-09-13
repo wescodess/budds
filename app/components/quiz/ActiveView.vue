@@ -3,6 +3,15 @@ import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 import type { AttemptSettings, AttemptQuestion } from '~/composables/useQuizAttempt'
 import type { AttemptHistoryItem } from '~/composables/useQuizHistory'
+import { createSsrMutationStub } from '~/utils/convexSsrMutation'
+
+interface AttemptResult {
+  questions: AttemptQuestion[]
+  settings: AttemptSettings
+  attemptId: Id<'quizAttempts'>
+  currentQuestionIndex: number
+  answeredQuestionIds: string[]
+}
 
 const props = defineProps<{
   quizId: Id<'quizzes'>
@@ -26,14 +35,12 @@ const { data: historyData } = useConvexQuery(
 
 const startAttemptMutation = import.meta.client
   ? useConvexMutation(api.quizzes.startAttempt)
-  : { mutate: async (_args: unknown): Promise<any> => null, isLoading: ref(false) }
+  : createSsrMutationStub<typeof api.quizzes.startAttempt>()
 
 type ViewState = 'overview' | 'taking' | 'results'
 const viewState = ref<ViewState>('overview')
 
 const quiz = computed(() => quizData.value?.quiz ?? null)
-const questions = computed(() => quizData.value?.questions ?? [])
-
 const attempts = computed<AttemptHistoryItem[]>(() =>
   (historyData.value as AttemptHistoryItem[] | undefined) ?? [],
 )
@@ -63,7 +70,7 @@ function handleTakeQuiz() {
   }
 }
 
-function applyAttemptResult(result: any) {
+function applyAttemptResult(result: AttemptResult) {
   takingQuestions.value = result.questions
   takingSettings.value = result.settings
   takingAttemptId.value = result.attemptId
@@ -77,7 +84,7 @@ async function handleStartAttempt(settings: AttemptSettings) {
     quizId: props.quizId,
     settings,
     restart: true,
-  }) as any
+  })
   if (result) applyAttemptResult(result)
 }
 
@@ -86,7 +93,7 @@ async function handleResume() {
     quizId: props.quizId,
     settings: { shuffleQuestions: false, showAllQuestions: false, immediateFeedback: true },
     restart: false,
-  }) as any
+  })
   if (result) applyAttemptResult(result)
 }
 

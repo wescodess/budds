@@ -1,3 +1,4 @@
+import { getErrorStatusCode } from '../../shared/errors'
 import { readConfiguredRuntimeValue } from './runtime-config'
 
 export type DiaSpeaker = 'S1' | 'S2'
@@ -113,9 +114,9 @@ export async function synthesizeDiaVoiceWithRetry(params: DiaSynthesizeParams): 
     try {
       return await synthesizeDiaVoice(params)
     }
-    catch (err: any) {
+    catch (err) {
       lastError = err
-      const status = err?.statusCode ?? err?.status ?? 0
+      const status = getErrorStatusCode(err) ?? 0
       const retriable = status === 0 || (status >= 500 && status < 600) || status === 429
       if (!retriable || attempt >= backoffsMs.length) break
       await new Promise<void>(resolve => setTimeout(resolve, backoffsMs[attempt]!))
@@ -197,7 +198,9 @@ export async function cancelDiaRequest(requestId: string): Promise<void> {
       signal: AbortSignal.timeout(5000),
     })
   }
-  catch {}
+  catch {
+    // Cancellation is best effort; the original synthesis error is authoritative.
+  }
 }
 
 export async function synthesizeDiaDialogueWithRetry(params: DiaDialogueParams): Promise<DiaDialogueResult> {
@@ -208,9 +211,9 @@ export async function synthesizeDiaDialogueWithRetry(params: DiaDialogueParams):
     try {
       return await synthesizeDiaDialogue(params)
     }
-    catch (err: any) {
+    catch (err) {
       lastError = err
-      const status = err?.statusCode ?? err?.status ?? 0
+      const status = getErrorStatusCode(err) ?? 0
       const retriable = status === 0 || (status >= 500 && status < 600) || status === 429
       if (!retriable || attempt >= backoffsMs.length) break
       await new Promise<void>(resolve => setTimeout(resolve, backoffsMs[attempt]!))

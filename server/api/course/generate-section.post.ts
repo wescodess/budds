@@ -1,6 +1,8 @@
+import { getErrorMessage, getErrorStatusCode } from '../../../shared/errors'
 import { ConvexHttpClient } from 'convex/browser'
+import type { H3Event } from 'h3'
 import { api } from '../../../convex/_generated/api'
-import type { Id } from '../../../convex/_generated/dataModel'
+import type { Doc, Id } from '../../../convex/_generated/dataModel'
 import type { AISearchChunk } from '../../utils/ai-search'
 import { readConfiguredRuntimeValue } from '../../utils/runtime-config'
 import { requireRateLimit } from '../../utils/rate-limit'
@@ -28,7 +30,7 @@ function getEngineConfig(knowledgeType: string): EngineConfig {
   }
 }
 
-function makeConvexClient(event: any): ConvexHttpClient {
+function makeConvexClient(event: H3Event): ConvexHttpClient {
   const token = event.context.convexToken as string | undefined
   const runtimeConfig = useRuntimeConfig(event)
   const convexUrl = readConfiguredRuntimeValue(
@@ -84,7 +86,7 @@ export default defineEventHandler(async (event) => {
     }
 
     const sections = await convexClient.query(api.courseSections.listByCourse, { courseId })
-    const section = sections.find((s: any) => s._id === sectionId)
+    const section = sections.find((candidate: Doc<'courseSections'>) => candidate._id === sectionId)
     if (!section) {
       throw createError({ statusCode: 404, message: 'Section not found' })
     }
@@ -98,17 +100,17 @@ export default defineEventHandler(async (event) => {
 
     if (course.sourceType !== 'web-only' && course.folderId) {
       const sourceDocs = await convexClient.query(api.courseSourceDocs.listByCourse, { courseId })
-      const folderIds = [...new Set(sourceDocs.map((d: any) => d.folderId).filter(Boolean))] as string[]
-      const docIds = sourceDocs.map((d: any) => d.documentId).filter(Boolean) as string[]
+      const folderIds = [...new Set(sourceDocs.map((source: Doc<'courseSourceDocs'>) => source.folderId).filter((id): id is Id<'folders'> => Boolean(id)))]
+      const docIds = sourceDocs.map((source: Doc<'courseSourceDocs'>) => source.documentId).filter((id): id is Id<'documents'> => Boolean(id))
       courseDocumentIds = [...new Set(docIds)]
 
       for (const folderId of folderIds) {
         if (chunks.length >= 30) break
 
         const folderDocIds = sourceDocs
-          .filter((d: any) => d.folderId === folderId)
-          .map((d: any) => d.documentId)
-          .filter(Boolean) as string[]
+          .filter((source: Doc<'courseSourceDocs'>) => source.folderId === folderId)
+          .map((source: Doc<'courseSourceDocs'>) => source.documentId)
+          .filter((id): id is Id<'documents'> => Boolean(id))
 
         const results = await searchDocuments({
           query: `${section.title} ${course.title}`,
@@ -150,7 +152,7 @@ export default defineEventHandler(async (event) => {
           return `[${attrs.filename ?? 'document'}]\n${c.content}`
         }).join('\n\n---\n\n')
 
-        const outlineSection = course.outlineSections.find((s: any) => s.order === section.order)
+        const outlineSection = course.outlineSections.find(sectionOutline => sectionOutline.order === section.order)
         const description = outlineSection?.description ?? section.title
 
         const messages = buildSectionTextPrompt({
@@ -169,8 +171,8 @@ export default defineEventHandler(async (event) => {
         })
 
         return completion.choices[0]?.message?.content ?? null
-      } catch (err: any) {
-        console.error('[generate-section] Text generation failed:', err?.message)
+      } catch (err) {
+        console.error('[generate-section] Text generation failed:', getErrorMessage(err, 'Unknown error'))
         failedEngines.push('text explanation')
         return null
       }
@@ -215,8 +217,8 @@ export default defineEventHandler(async (event) => {
             }
           }),
         }
-      } catch (err: any) {
-        console.error('[generate-section] Quiz generation failed:', err?.message)
+      } catch (err) {
+        console.error('[generate-section] Quiz generation failed:', getErrorMessage(err, 'Unknown error'))
         failedEngines.push('quiz questions')
         return null
       }
@@ -254,8 +256,8 @@ export default defineEventHandler(async (event) => {
             }
           }),
         }
-      } catch (err: any) {
-        console.error('[generate-section] Flashcard generation failed:', err?.message)
+      } catch (err) {
+        console.error('[generate-section] Flashcard generation failed:', getErrorMessage(err, 'Unknown error'))
         failedEngines.push('flashcards')
         return null
       }
@@ -311,9 +313,10 @@ export default defineEventHandler(async (event) => {
       failedEngines,
       audioPrimer,
     }
-  } catch (err: any) {
-    if (err?.statusCode !== 400 && err?.statusCode !== 404) {
-      await failTask(err?.message || 'Section generation failed')
+  } catch (err) {
+    const statusCode = getErrorStatusCode(err)
+    if (statusCode !== 400 && statusCode !== 404) {
+      await failTask(getErrorMessage(err, 'Section generation failed'))
     }
     throw err
   }

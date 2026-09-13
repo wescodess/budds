@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import { getErrorMessage } from '~~/shared/errors'
 import { GripVertical, Plus, Trash2 } from '@lucide/vue'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
+import { createSsrMutationStub } from '~/utils/convexSsrMutation'
 
 interface RoomCard {
   _id: Id<'flashcardRoomCards'>
@@ -24,19 +26,19 @@ const props = defineProps<{
 
 const createCardMutation = import.meta.client
   ? useConvexMutation(api.flashcardRooms.createCard)
-  : { mutate: async (_a: unknown) => ({ cardId: '' }), isLoading: ref(false) }
+  : createSsrMutationStub<typeof api.flashcardRooms.createCard>()
 
 const updateCardMutation = import.meta.client
   ? useConvexMutation(api.flashcardRooms.updateCard)
-  : { mutate: async (_a: unknown) => null, isLoading: ref(false) }
+  : createSsrMutationStub<typeof api.flashcardRooms.updateCard>()
 
 const deleteCardMutation = import.meta.client
   ? useConvexMutation(api.flashcardRooms.deleteCard)
-  : { mutate: async (_a: unknown) => null, isLoading: ref(false) }
+  : createSsrMutationStub<typeof api.flashcardRooms.deleteCard>()
 
 const reorderMutation = import.meta.client
   ? useConvexMutation(api.flashcardRooms.reorderCards)
-  : { mutate: async (_a: unknown) => null, isLoading: ref(false) }
+  : createSsrMutationStub<typeof api.flashcardRooms.reorderCards>()
 
 const localCards = ref<RoomCard[]>([])
 const drafts = ref<Record<string, { term: string; definition: string; error: string | null }>>({})
@@ -101,10 +103,10 @@ async function onDrop(cardId: string, e: DragEvent) {
   const order = next.map((c, idx) => ({ cardId: c._id, displayOrder: idx }))
   isReorderPending.value = true
   try {
-    await reorderMutation.mutate({ roomId: props.roomId, order } as any)
+    await reorderMutation.mutate({ roomId: props.roomId, order })
     isReorderPending.value = false
   }
-  catch (e: any) {
+  catch {
     localCards.value = prev
     const { toast } = await import('vue-sonner')
     toast.error('Reorder failed — retry')
@@ -128,7 +130,7 @@ function startEdit(card: RoomCard) {
 
 function cancelEdit(cardId: string) {
   const next = { ...drafts.value }
-  delete next[cardId]
+  Reflect.deleteProperty(next, cardId)
   drafts.value = next
   editingId.value = null
 }
@@ -152,13 +154,13 @@ async function saveEdit(cardId: string) {
 
   savingId.value = cardId
   try {
-    await updateCardMutation.mutate({ cardId, term, definition } as any)
+    await updateCardMutation.mutate({ cardId: cardId as Id<'flashcardRoomCards'>, term, definition })
     cancelEdit(cardId)
     const { toast } = await import('vue-sonner')
     toast.success('Card saved')
   }
-  catch (e: any) {
-    setDraftField(cardId, { error: e?.message || 'Save failed' })
+  catch (e) {
+    setDraftField(cardId, { error: getErrorMessage(e, 'Save failed') })
   }
   finally {
     savingId.value = null
@@ -168,13 +170,13 @@ async function saveEdit(cardId: string) {
 async function handleDelete(cardId: string) {
   deletingId.value = cardId
   try {
-    await deleteCardMutation.mutate({ cardId } as any)
+    await deleteCardMutation.mutate({ cardId: cardId as Id<'flashcardRoomCards'> })
     const { toast } = await import('vue-sonner')
     toast.success('Card deleted')
   }
-  catch (e: any) {
+  catch (e) {
     const { toast } = await import('vue-sonner')
-    toast.error(e?.message || 'Delete failed')
+    toast.error(getErrorMessage(e, 'Delete failed'))
   }
   finally {
     deletingId.value = null
@@ -216,11 +218,11 @@ async function submitAdd() {
       roomId: props.roomId,
       term,
       definition,
-    } as any)
+    })
     cancelAdd()
   }
-  catch (e: any) {
-    newError.value = e?.message || 'Failed to add card'
+  catch (e) {
+    newError.value = getErrorMessage(e, 'Failed to add card')
   }
   finally {
     submittingNew.value = false

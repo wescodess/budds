@@ -1,6 +1,8 @@
+import { getErrorMessage } from '../../../shared/errors'
 import { ConvexHttpClient } from 'convex/browser'
+import type { H3Event } from 'h3'
 import { api } from '../../../convex/_generated/api'
-import type { Id } from '../../../convex/_generated/dataModel'
+import type { Doc, Id } from '../../../convex/_generated/dataModel'
 import { interjectionUtteranceVerificationId } from '../../../shared/audio-overview-grounding'
 import { readConfiguredRuntimeValue } from '../../utils/runtime-config'
 import { buildV2InterjectionPrompt, parseV2InterjectionScript } from '../../utils/audio-overview-interjection'
@@ -13,6 +15,7 @@ import {
   assertPrivateInterjectionArtifact,
   getAudioOverviewWorkerToken,
   requestInterjectionWorker,
+  type InterjectionArtifactEvidence,
 } from '../../utils/audio-overview-interjection-worker'
 
 const SCRIPT_MODEL = 'google/gemini-2.5-flash'
@@ -39,7 +42,17 @@ async function sha256Base64Url(value: string): Promise<string> {
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
 }
 
-function v2Response(interjection: any) {
+type V2Projection = Doc<'audioOverviewInterjectionsV2'> & {
+  utterances: Array<{ text: string }>
+  artifact: {
+    artifactId: Id<'audioOverviewAudioArtifacts'>
+    durationMs: number
+    byteLength: number
+    contentType: string
+  } | null
+}
+
+function v2Response(interjection: V2Projection) {
   const artifactUrl = `/api/audio-overview/interjections/${interjection._id}/media`
   const durationMs = interjection.artifact?.durationMs ?? 0
   return {
@@ -55,7 +68,7 @@ function v2Response(interjection: any) {
     // The normalized Utterances remain available above for a continuous-mode player.
     turns: [{
       speaker: 'host_a' as const,
-      text: interjection.utterances.map((utterance: any) => utterance.text).join(' '),
+      text: interjection.utterances.map(utterance => utterance.text).join(' '),
       durationMs,
       audioUrl: artifactUrl,
     }],
@@ -63,10 +76,10 @@ function v2Response(interjection: any) {
 }
 
 async function runV2Interjection(
-  event: any,
+  event: H3Event,
   convexClient: ConvexHttpClient,
   userId: string,
-  overview: any,
+  overview: Pick<Doc<'audioOverviews'>, 'title'>,
   body: { overviewId: string, insertedAfterTurnIndex: number, question: string },
 ) {
   const orchestrationToken = getAudioOverviewWorkerToken(event)
@@ -204,7 +217,7 @@ async function runV2Interjection(
       throw createError({ statusCode: 409, message: 'Audio interjection rendering was already attempted' })
     }
     workerAttempted = true
-    const render = await requestInterjectionWorker(event, 'POST', {
+    const render = await requestInterjectionWorker<{ artifact: InterjectionArtifactEvidence }>(event, 'POST', {
       jobId: String(reservation.jobId),
       interjectionId: String(reservation.interjectionId),
       idempotencyKey,
@@ -238,7 +251,7 @@ async function runV2Interjection(
     if (!published || published.status !== 'ready') throw createError({ statusCode: 502, message: 'Interjection publication failed' })
     return v2Response(published)
   }
-  catch (error: any) {
+  catch (error) {
     if (workerAttempted && !workerCleanupAttempted) {
       await requestInterjectionWorker(event, 'DELETE', {
         jobId: String(reservation.jobId),
@@ -250,14 +263,14 @@ async function runV2Interjection(
       await convexClient.mutation(api.audioOverviewInterjectionsV2.fail, {
         interjectionId: reservation.interjectionId,
         orchestrationToken,
-        error: error?.message || 'Audio interjection generation failed',
+        error: getErrorMessage(error, 'Audio interjection generation failed'),
       }).catch(() => {})
     }
     throw error
   }
 }
 
-function makeConvexClient(event: any): ConvexHttpClient {
+function makeConvexClient(event: H3Event): ConvexHttpClient {
   const token = event.context.convexToken as string | undefined
   const runtimeConfig = useRuntimeConfig(event)
   const convexUrl = readConfiguredRuntimeValue(

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { Id } from '../../../convex/_generated/dataModel'
 
-const props = defineProps<{
+defineProps<{
   folderId: Id<'folders'>
   selectedQuizId?: string | null
 }>()

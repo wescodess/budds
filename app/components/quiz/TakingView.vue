@@ -4,6 +4,7 @@ import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 import type { AttemptSettings, AttemptQuestion, AnswerFeedback } from '~/composables/useQuizAttempt'
 import QuizSequentialMode from './SequentialMode.vue'
+import { createSsrMutationStub } from '~/utils/convexSsrMutation'
 
 const props = defineProps<{
   quizId: Id<'quizzes'>
@@ -21,15 +22,15 @@ const emit = defineEmits<{
 
 const submitAnswerMutation = import.meta.client
   ? useConvexMutation(api.quizzes.submitAnswer)
-  : { mutate: async (_args: unknown): Promise<any> => null, isLoading: ref(false) }
+  : createSsrMutationStub<typeof api.quizzes.submitAnswer>()
 
 const submitAllMutation = import.meta.client
   ? useConvexMutation(api.quizzes.submitAllAnswers)
-  : { mutate: async (_args: unknown): Promise<any> => null, isLoading: ref(false) }
+  : createSsrMutationStub<typeof api.quizzes.submitAllAnswers>()
 
 const completeAttemptMutation = import.meta.client
   ? useConvexMutation(api.quizzes.completeAttempt)
-  : { mutate: async (_args: unknown): Promise<any> => null, isLoading: ref(false) }
+  : createSsrMutationStub<typeof api.quizzes.completeAttempt>()
 
 const sequentialRef = ref<InstanceType<typeof QuizSequentialMode> | null>(null)
 const currentIndex = ref(props.initialIndex)

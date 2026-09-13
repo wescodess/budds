@@ -150,7 +150,7 @@ if (audioOverviewWorkerToken && audioOverviewWorkerToken.length < 32) {
 }
 
 if (!audioWorkflowPhase && calendarTokenEncryptionKey) {
-  let keyBytes = 0
+  let keyBytes
   try {
     keyBytes = Buffer.from(calendarTokenEncryptionKey, 'base64').byteLength
   }

@@ -1,3 +1,4 @@
+import { getErrorMessage } from '~~/shared/errors'
 import type { InjectionKey, ComputedRef, Ref } from 'vue'
 import { useMediaQuery } from '@vueuse/core'
 import { FileText, Headphones, ListChecks } from '@lucide/vue'
@@ -5,6 +6,7 @@ import { api } from '#convex/api'
 import type { Doc, Id } from '~~/convex/_generated/dataModel'
 import { useFolderDetail, useFolders } from '~/composables/useFolders'
 import type { AttachmentStatus, DisplayDocument } from '~/composables/useDocuments'
+import { createSsrActionStub, createSsrMutationStub } from '~/utils/convexSsrMutation'
 
 export interface FolderPageContext {
   folderId: ComputedRef<Id<'folders'>>
@@ -87,16 +89,16 @@ export function provideFolderPageContext(): FolderPageContext {
 
   const setPreferredMainPaneMutation = import.meta.client
     ? useConvexMutation(api.folders.setPreferredMainPane)
-    : { mutate: async (_args: { folderId: Id<'folders'>; pane: 'chat' | 'podcast' }) => ({ pane: 'chat' as const }) }
+    : createSsrMutationStub<typeof api.folders.setPreferredMainPane>()
 
   const isPodcastMain = computed(() =>
-    (folder.value as any)?.preferredMainPane === 'podcast',
+    folder.value?.preferredMainPane === 'podcast',
   )
 
   async function togglePodcastMain() {
     const next = isPodcastMain.value ? 'chat' : 'podcast'
     try {
-      await setPreferredMainPaneMutation.mutate({ folderId: folderId.value, pane: next } as any)
+      await setPreferredMainPaneMutation.mutate({ folderId: folderId.value, pane: next })
     } catch { /* best-effort */ }
   }
 
@@ -109,47 +111,47 @@ export function provideFolderPageContext(): FolderPageContext {
 
   const createConversationMutation = import.meta.client
     ? useConvexMutation(api.conversations.createConversation)
-    : { mutate: async (_args: { folderId: Id<'folders'>; title: string }) => '' as unknown as Id<'conversations'> }
+    : createSsrMutationStub<typeof api.conversations.createConversation>()
 
   const createFlashcardRoomMutation = import.meta.client
     ? useConvexMutation(api.flashcardRooms.createRoom)
-    : { mutate: async (_args: { folderId: Id<'folders'>; title?: string }) => ({ roomId: '' as unknown as Id<'flashcardRooms'> }) }
+    : createSsrMutationStub<typeof api.flashcardRooms.createRoom>()
 
   const createAudioOverviewRoomMutation = import.meta.client
     ? useConvexMutation(api.audioOverviewRooms.create)
-    : { mutate: async (_args: { folderId: Id<'folders'>; title?: string }) => ({ roomId: '' as unknown as Id<'audioOverviewRooms'> }) }
+    : createSsrMutationStub<typeof api.audioOverviewRooms.create>()
 
   const ensureLegacyAudioRoomMutation = import.meta.client
     ? useConvexMutation(api.audioOverviewRooms.ensureLegacyImport)
-    : null
+    : createSsrMutationStub<typeof api.audioOverviewRooms.ensureLegacyImport>()
 
   onMounted(() => {
-    void ensureLegacyAudioRoomMutation?.mutate({ folderId: folderId.value } as any).catch(() => {})
+    void ensureLegacyAudioRoomMutation.mutate({ folderId: folderId.value }).catch(() => {})
   })
 
   const deleteConversationMutation = import.meta.client
     ? useConvexMutation(api.conversations.deleteConversation)
-    : { mutate: async (_args: { id: Id<'conversations'> }) => null }
+    : createSsrMutationStub<typeof api.conversations.deleteConversation>()
 
   const deleteFlashcardRoomMutation = import.meta.client
     ? useConvexMutation(api.flashcardRooms.deleteRoom)
-    : { mutate: async (_args: { roomId: Id<'flashcardRooms'> }) => null }
+    : createSsrMutationStub<typeof api.flashcardRooms.deleteRoom>()
 
   const deleteAudioOverviewRoomMutation = import.meta.client
     ? useConvexMutation(api.audioOverviewRooms.remove)
-    : { mutate: async (_args: { roomId: Id<'audioOverviewRooms'> }) => null }
+    : createSsrMutationStub<typeof api.audioOverviewRooms.remove>()
 
   const createCourseMutation = import.meta.client
     ? useConvexMutation(api.courses.create)
-    : { mutate: async (_args: { title: string; sourceType: 'folder' | 'web-only'; folderId: Id<'folders'>; webSearchEnabled?: boolean }) => ({ courseId: '' as unknown as Id<'courses'>, taskId: '' as unknown as Id<'tasks'> }) }
+    : createSsrMutationStub<typeof api.courses.create>()
 
   const deleteCourseMutation = import.meta.client
     ? useConvexAction(api.courses.deleteCourse)
-    : { mutate: async (_args: { id: Id<'courses'> }) => null }
+    : createSsrActionStub<typeof api.courses.deleteCourse>()
 
   const deleteQuizMutation = import.meta.client
     ? useConvexMutation(api.quizzes.deleteQuiz)
-    : { mutate: async (_args: { quizId: Id<'quizzes'> }) => null }
+    : createSsrMutationStub<typeof api.quizzes.deleteQuiz>()
 
   async function createConversation(title: string) {
     return (await createConversationMutation.mutate({
@@ -217,9 +219,9 @@ export function provideFolderPageContext(): FolderPageContext {
     helperPane.open('tasks')
     try {
       await uploadFiles(files, folderId.value)
-    } catch (e: any) {
+    } catch (e) {
       const { toast } = await import('vue-sonner')
-      toast.error(e.message || 'Upload failed')
+      toast.error(getErrorMessage(e, 'Upload failed'))
     }
   }
 
@@ -227,9 +229,9 @@ export function provideFolderPageContext(): FolderPageContext {
     helperPane.open('tasks')
     try {
       await importDocumentFromUrl(url, folderId.value)
-    } catch (e: any) {
+    } catch (e) {
       const { toast } = await import('vue-sonner')
-      toast.error(e.message || 'Import failed')
+      toast.error(getErrorMessage(e, 'Import failed'))
     }
   }
 

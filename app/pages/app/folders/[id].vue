@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { getErrorMessage } from '~~/shared/errors'
 import { PanelRight, Pencil, FolderPlus, ListTodo, Mic, ArrowLeftRight } from '@lucide/vue'
 import type { Id } from '~~/convex/_generated/dataModel'
 import type { VoidType } from '~/components/voids/CreateVoidDialog.vue'
@@ -75,10 +76,11 @@ function hideSidebarOnMobile() {
   folderShellRef.value?.hideMobileRail()
 }
 
-function unwrapConvexError(err: any): string {
-  if (err?.data?.message && typeof err.data.message === 'string') return err.data.message
-  const raw = typeof err?.message === 'string' ? err.message : ''
-  return raw.replace(/^\[CONVEX [^\]]+\]\s*/, '').replace(/^ConvexError:\s*/, '').trim()
+function unwrapConvexError(error: unknown): string {
+  return getErrorMessage(error, '')
+    .replace(/^\[CONVEX [^\]]+\]\s*/, '')
+    .replace(/^ConvexError:\s*/, '')
+    .trim()
 }
 
 async function onCreateVoid(payload: { type: VoidType; name?: string }) {
@@ -103,7 +105,7 @@ async function onCreateVoid(payload: { type: VoidType; name?: string }) {
     }
     newVoidOpen.value = false
     hideSidebarOnMobile()
-  } catch (e: any) {
+  } catch (e) {
     const { toast } = await import('vue-sonner')
     toast.error(unwrapConvexError(e) || 'Failed to create void')
   } finally {
@@ -160,7 +162,7 @@ async function confirmDeleteVoid() {
     const kindLabels: Record<string, string> = { flashcards: 'Flash card set', 'audio-overview': 'Audio Overview', quiz: 'Quiz', chat: 'Chat', course: 'Course' }
     const kind = kindLabels[target.type] ?? 'Void'
     toast.success(`${kind} deleted`)
-  } catch (e: any) {
+  } catch (e) {
     const { toast } = await import('vue-sonner')
     toast.error(unwrapConvexError(e) || 'Failed to delete void')
   } finally {
@@ -200,9 +202,9 @@ async function confirmDelete() {
       if (deletedCount > 0) toast.success(deletedCount === 1 ? 'Document deleted' : `${deletedCount} documents deleted`)
       if (failureMessages.length > 0) toast.error(failureMessages[0] || 'Failed to delete')
     }
-  } catch (e: any) {
+  } catch (e) {
     const { toast } = await import('vue-sonner')
-    toast.error(e.message || 'Failed to delete document')
+    toast.error(getErrorMessage(e, 'Failed to delete document'))
   } finally {
     documentsDeletePending.value = false
   }
@@ -223,9 +225,9 @@ async function confirmMove(destFolderId: Id<'folders'>) {
       await moveDocument(ids[0] as Id<'documents'>, destFolderId)
       toast.success(`Moved to ${destFolder?.name ?? 'folder'}`)
     }
-  } catch (e: any) {
+  } catch (e) {
     const { toast } = await import('vue-sonner')
-    toast.error(e.message || 'Failed to move document')
+    toast.error(getErrorMessage(e, 'Failed to move document'))
   } finally {
     movePending.value = false
     moveTargetIds.value = []
@@ -279,11 +281,17 @@ onMounted(() => {
   try {
     const stored = localStorage.getItem(HELPER_SIDE_KEY)
     if (stored === 'left' || stored === 'right') helperSide.value = stored
-  } catch {}
+  } catch {
+    // Storage can be unavailable in privacy-restricted browser contexts.
+  }
 })
 
 watch(helperSide, (v) => {
-  try { localStorage.setItem(HELPER_SIDE_KEY, v) } catch {}
+  try {
+    localStorage.setItem(HELPER_SIDE_KEY, v)
+  } catch {
+    // Helper placement remains usable for the current session.
+  }
 })
 
 watch(() => route.path, (next, prev) => {

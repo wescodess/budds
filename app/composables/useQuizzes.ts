@@ -1,5 +1,7 @@
+import { getErrorMessage } from '~~/shared/errors'
 import { api } from '#convex/api'
 import type { Id } from '../../convex/_generated/dataModel'
+import { createSsrMutationStub } from '~/utils/convexSsrMutation'
 
 export interface QuizSummary {
   _id: Id<'quizzes'>
@@ -31,15 +33,15 @@ export function useQuizzes(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
 
   const createQuizMutation = import.meta.client
     ? useConvexMutation(api.quizzes.createWithQuestions)
-    : { mutate: async (_args: unknown): Promise<any> => null, isLoading: ref(false) }
+    : createSsrMutationStub<typeof api.quizzes.createWithQuestions>()
 
   const updateQuizMutation = import.meta.client
     ? useConvexMutation(api.quizzes.updateQuiz)
-    : { mutate: async (_args: unknown): Promise<any> => null, isLoading: ref(false) }
+    : createSsrMutationStub<typeof api.quizzes.updateQuiz>()
 
   const deleteQuizMutation = import.meta.client
     ? useConvexMutation(api.quizzes.deleteQuiz)
-    : { mutate: async (_args: unknown): Promise<any> => null, isLoading: ref(false) }
+    : createSsrMutationStub<typeof api.quizzes.deleteQuiz>()
 
   const generating = ref(false)
   const lastError = ref<string | null>(null)
@@ -84,8 +86,8 @@ export function useQuizzes(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
         questions: generated.questions,
       })
     }
-    catch (e: any) {
-      const message = e?.data?.message || e?.statusMessage || e?.message || 'Quiz generation failed'
+    catch (e) {
+      const message = getErrorMessage(e, 'Quiz generation failed')
       lastError.value = message
       throw e
     }

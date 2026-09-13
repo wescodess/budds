@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { getErrorMessage } from '~~/shared/errors'
 import { Calendar, Unplug, Loader2 } from '@lucide/vue'
 import { toast } from 'vue-sonner'
 import { api } from '~~/convex/_generated/api'
@@ -45,8 +46,8 @@ async function confirmDisconnect() {
   isDisconnecting.value = true
   try {
     await globalThis.$fetch('/api/calendar/disconnect', { method: 'POST' })
-  } catch (err: any) {
-    toast.error(err?.message ?? 'Failed to disconnect calendar')
+  } catch (err) {
+    toast.error(getErrorMessage(err, 'Failed to disconnect calendar'))
   } finally {
     isDisconnecting.value = false
   }

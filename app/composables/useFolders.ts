@@ -19,23 +19,23 @@ export interface FolderUpdateInput {
 export function useFolders() {
   const createFolderMutation = import.meta.client
     ? useConvexMutation(api.folders.createFolder)
-    : { mutate: async (_args: FolderCreateInput) => {}, isLoading: ref(false), error: ref<any>(null) }
+    : { mutate: async (_args: FolderCreateInput) => {}, isLoading: ref(false), error: ref<Error | null>(null) }
 
   const createSubfolderMutation = import.meta.client
     ? useConvexMutation(api.folders.createSubfolder)
-    : { mutate: async (_args: FolderCreateInput & { parentId: Id<'folders'> }) => {}, isLoading: ref(false), error: ref<any>(null) }
+    : { mutate: async (_args: FolderCreateInput & { parentId: Id<'folders'> }) => {}, isLoading: ref(false), error: ref<Error | null>(null) }
 
   const renameFolderMutation = import.meta.client
     ? useConvexMutation(api.folders.renameFolder)
-    : { mutate: async (_args: { id: Id<'folders'>; name: string }) => {}, isLoading: ref(false), error: ref<any>(null) }
+    : { mutate: async (_args: { id: Id<'folders'>; name: string }) => {}, isLoading: ref(false), error: ref<Error | null>(null) }
 
   const updateFolderMutation = import.meta.client
     ? useConvexMutation(api.folders.updateFolder)
-    : { mutate: async (_args: { id: Id<'folders'> } & FolderUpdateInput) => {}, isLoading: ref(false), error: ref<any>(null) }
+    : { mutate: async (_args: { id: Id<'folders'> } & FolderUpdateInput) => {}, isLoading: ref(false), error: ref<Error | null>(null) }
 
   const deleteFolderMutation = import.meta.client
     ? useConvexMutation(api.folders.deleteFolder)
-    : { mutate: async (_args: { id: Id<'folders'> }) => {}, isLoading: ref(false), error: ref<any>(null) }
+    : { mutate: async (_args: { id: Id<'folders'> }) => {}, isLoading: ref(false), error: ref<Error | null>(null) }
 
   const { data: topLevelData, pending: isLoading } = useConvexQuery(api.folders.listTopLevelFolders, {})
   const { data: allFoldersData, pending: allFoldersLoading } = useConvexQuery(api.folders.listAllFolders, {})

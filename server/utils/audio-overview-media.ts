@@ -1,3 +1,4 @@
+import type { H3Event } from 'h3'
 import { fetchPrivateR2Object } from './r2-folder'
 
 export type PrivateAudioMedia = {
@@ -11,7 +12,7 @@ export type PrivateAudioMedia = {
 
 const SINGLE_BYTE_RANGE = /^bytes=(?:\d+-\d*|-\d+)$/
 
-export async function privateAudioResponse(event: any, media: PrivateAudioMedia): Promise<Response> {
+export async function privateAudioResponse(event: H3Event, media: PrivateAudioMedia): Promise<Response> {
   if (media.container !== 'wav' || media.contentType !== 'audio/wav' || media.byteLength < 44) {
     throw createError({ statusCode: 409, message: 'Published audio media is invalid' })
   }

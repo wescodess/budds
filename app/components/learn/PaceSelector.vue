@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import { getErrorMessage } from '~~/shared/errors'
 import type { Id } from '../../../convex/_generated/dataModel'
 import { api } from '#convex/api'
 import { toast } from 'vue-sonner'
+import { createSsrMutationStub } from '~/utils/convexSsrMutation'
 
 type Pace = 'intensive' | 'steady' | 'relaxed'
 
@@ -16,14 +18,9 @@ const PACE_OPTIONS: { value: Pace; label: string; description: string }[] = [
   { value: 'relaxed', label: 'Relaxed', description: 'Take it slow, fewer items per session' },
 ]
 
-const ssrStub = {
-  mutate: async () => { throw new Error('Mutations are client-only') },
-  isLoading: ref(false),
-} as { mutate: (_args: any) => Promise<any>; isLoading: Ref<boolean> }
-
 const updatePaceMutation = import.meta.client
   ? useConvexMutation(api.courses.updatePace)
-  : ssrStub
+  : createSsrMutationStub<typeof api.courses.updatePace>()
 
 const selectedPace = ref<Pace>(props.currentPace)
 
@@ -34,10 +31,10 @@ async function onPaceChange(e: Event) {
   const prev = selectedPace.value
   selectedPace.value = value
   try {
-    await updatePaceMutation.mutate({ courseId: props.courseId, pace: value } as any)
-  } catch (e: any) {
+    await updatePaceMutation.mutate({ courseId: props.courseId, pace: value })
+  } catch (e) {
     selectedPace.value = prev
-    toast.error(e?.message ?? 'Failed to update pace')
+    toast.error(getErrorMessage(e, 'Failed to update pace'))
   }
 }
 </script>

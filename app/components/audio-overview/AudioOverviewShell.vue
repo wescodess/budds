@@ -1,9 +1,11 @@
 <script setup lang="ts">
+import { getErrorMessage, getErrorStatusCode } from '~~/shared/errors'
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { Send } from '@lucide/vue'
 import { useMediaQuery } from '@vueuse/core'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
+import { createSsrMutationStub } from '~/utils/convexSsrMutation'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import AudioOverviewCard from './AudioOverviewCard.vue'
 import AudioOverviewGenerating from './AudioOverviewGenerating.vue'
@@ -67,7 +69,7 @@ const { data: folderData } = useConvexQuery(
   computed(() => ({ id: props.folderId })),
 )
 const folderScope = computed(() => {
-  const row = folderData.value as any
+  const row = folderData.value
   return row?.referenceScope ?? null
 })
 const hasFolderScope = computed(() => {
@@ -184,7 +186,7 @@ const activeOverview = computed<OverviewSummary | null>(() => {
 
 const deleteOverviewMutation = import.meta.client
   ? useConvexMutation(api.audioOverviews.deleteOverview)
-  : { mutate: async (_args: { id: Id<'audioOverviews'> }) => ({ deletedTurns: 0 }) } as any
+  : createSsrMutationStub<typeof api.audioOverviews.deleteOverview>()
 
 const { data: quotaData } = useConvexQuery(api.users.getDailyQuota, computed(() => ({})))
 const quota = computed<{ used: number, cap: number, date: string } | null>(
@@ -246,7 +248,7 @@ const customizeDefaults = ref<{
 
 const createRoomMutation = import.meta.client
   ? useConvexMutation(api.audioOverviewRooms.create)
-  : { mutate: async () => ({ roomId: '' as Id<'audioOverviewRooms'> }) } as any
+  : createSsrMutationStub<typeof api.audioOverviewRooms.create>()
 
 async function ensureRoom(): Promise<Id<'audioOverviewRooms'>> {
   if (resolvedRoomId.value) return resolvedRoomId.value
@@ -254,7 +256,8 @@ async function ensureRoom(): Promise<Id<'audioOverviewRooms'>> {
     folderId: props.folderId,
     ...(props.roomTitle ? { title: props.roomTitle } : {}),
     ...(props.conversationId ? { conversationId: props.conversationId } : {}),
-  } as any) as { roomId: Id<'audioOverviewRooms'> }
+  })
+  if (!result) throw new Error('Audio overview room creation returned no room')
   locallyCreatedRoomId.value = result.roomId
   return result.roomId
 }
@@ -327,15 +330,15 @@ async function handleCustomizeSubmit(value: CustomizeSubmit) {
       catch { /* Storage can be unavailable while the accepted job continues. */ }
     }
   }
-  catch (err: any) {
-    const status = Number(err?.statusCode ?? err?.status ?? err?.response?.status ?? 0)
+  catch (err) {
+    const status = getErrorStatusCode(err) ?? 0
     // Keep the same command identity when delivery or launch acknowledgement is
     // ambiguous. A deliberate 4xx means reservation was rejected and can reset.
     if (status >= 400 && status < 500 && status !== 408 && status !== 429) {
       rememberPendingCommand(null)
     }
     const { toast } = await import('vue-sonner')
-    toast.error(err?.message ?? 'Failed to start audio overview')
+    toast.error(getErrorMessage(err, 'Failed to start audio overview'))
   }
   finally {
     submitting.value = false
@@ -409,9 +412,9 @@ async function handleCancel(taskId: Id<'tasks'>) {
   try {
     await cancel(taskId)
   }
-  catch (err: any) {
+  catch (err) {
     const { toast } = await import('vue-sonner')
-    toast.error(err?.message ?? 'Failed to cancel task')
+    toast.error(getErrorMessage(err, 'Failed to cancel task'))
   }
   finally {
     cancelling.value = false
@@ -424,14 +427,14 @@ function handleSelectOverview(id: Id<'audioOverviews'>) {
 
 async function handleDeleteOverview(id: Id<'audioOverviews'>) {
   try {
-    await deleteOverviewMutation.mutate({ id } as any)
+    await deleteOverviewMutation.mutate({ id })
     if (selectedOverviewId.value === id) selectedOverviewId.value = null
     const { toast } = await import('vue-sonner')
     toast.success('Audio overview deleted')
   }
-  catch (err: any) {
+  catch (err) {
     const { toast } = await import('vue-sonner')
-    toast.error(err?.message ?? 'Failed to delete audio overview')
+    toast.error(getErrorMessage(err, 'Failed to delete audio overview'))
   }
 }
 

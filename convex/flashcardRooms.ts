@@ -210,7 +210,7 @@ export const createCourseScopedRoom = internalMutation({
         displayOrder: i,
         term,
         definition,
-        metadata: metadata as any,
+        metadata,
       })
 
       await ctx.db.insert('flashcardVersionCards', {
@@ -220,7 +220,7 @@ export const createCourseScopedRoom = internalMutation({
         displayOrder: i,
         term,
         definition,
-        metadata: metadata as any,
+        metadata,
       })
     }
 

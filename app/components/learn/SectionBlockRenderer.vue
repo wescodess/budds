@@ -25,7 +25,7 @@ interface ContentBlock {
   }
 }
 
-const props = defineProps<{
+defineProps<{
   contentBlocks: ContentBlock[]
   courseId: Id<'courses'>
   isOffline?: boolean

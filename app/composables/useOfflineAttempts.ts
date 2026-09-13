@@ -1,5 +1,4 @@
 import { addOfflineAttempt } from './useOfflineCache'
-import type { OfflineAttempt } from './useOfflineCache'
 
 export function useOfflineAttempts() {
   async function queueQuizRetake(

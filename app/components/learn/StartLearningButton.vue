@@ -1,21 +1,18 @@
 <script setup lang="ts">
+import { getErrorMessage } from '~~/shared/errors'
 import type { Id } from '../../../convex/_generated/dataModel'
 import { api } from '#convex/api'
 import { toast } from 'vue-sonner'
+import { createSsrMutationStub } from '~/utils/convexSsrMutation'
 
 const props = defineProps<{
   courseId: Id<'courses'>
   folderId?: Id<'folders'>
 }>()
 
-const ssrStub = {
-  mutate: async () => { throw new Error('Mutations are client-only') },
-  isLoading: ref(false),
-} as { mutate: (_args: any) => Promise<any>; isLoading: Ref<boolean> }
-
 const startCourseMutation = import.meta.client
   ? useConvexMutation(api.courses.startCourse)
-  : ssrStub
+  : createSsrMutationStub<typeof api.courses.startCourse>()
 
 const loading = ref(false)
 
@@ -23,7 +20,7 @@ async function handleStart() {
   if (loading.value) return
   loading.value = true
   try {
-    const result = await startCourseMutation.mutate({ courseId: props.courseId } as any)
+    const result = await startCourseMutation.mutate({ courseId: props.courseId })
     const res = result as unknown as { courseId: string; sectionId: string; taskId: string } | string
     const courseId = typeof res === 'string' ? res : res?.courseId
 
@@ -36,8 +33,8 @@ async function handleStart() {
             sectionId: res.sectionId,
             taskId: res.taskId,
           },
-        }).catch((err: any) => {
-          console.error('[StartLearningButton] Section generation failed:', err?.message)
+        }).catch((err: unknown) => {
+          console.error('[StartLearningButton] Section generation failed:', getErrorMessage(err, 'Unknown error'))
         })
       }
 
@@ -46,8 +43,8 @@ async function handleStart() {
         : `/app/learn/${courseId}`
       await navigateTo(target)
     }
-  } catch (e: any) {
-    toast.error(e?.message ?? 'Failed to start course')
+  } catch (e) {
+    toast.error(getErrorMessage(e, 'Failed to start course'))
   } finally {
     loading.value = false
   }

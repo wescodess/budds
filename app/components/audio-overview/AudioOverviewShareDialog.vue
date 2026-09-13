@@ -1,8 +1,10 @@
 <script setup lang="ts">
+import { getErrorMessage } from '~~/shared/errors'
 import { ref, computed } from 'vue'
 import { X, Link2, Copy, Check, ShieldAlert, Sparkles } from '@lucide/vue'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
+import { createSsrMutationStub } from '~/utils/convexSsrMutation'
 
 const props = defineProps<{
   open: boolean
@@ -17,11 +19,11 @@ const emit = defineEmits<{
 
 const publishMutation = import.meta.client
   ? useConvexMutation(api.audioOverviews.publishOverview)
-  : { mutate: async () => ({ token: '', publishedAt: 0 }) } as any
+  : createSsrMutationStub<typeof api.audioOverviews.publishOverview>()
 
 const unpublishMutation = import.meta.client
   ? useConvexMutation(api.audioOverviews.unpublishOverview)
-  : { mutate: async () => null } as any
+  : createSsrMutationStub<typeof api.audioOverviews.unpublishOverview>()
 
 const submitting = ref(false)
 const copied = ref(false)
@@ -61,11 +63,11 @@ async function handlePublish() {
   if (submitting.value) return
   submitting.value = true
   try {
-    await publishMutation.mutate({ id: props.overviewId } as any)
+    await publishMutation.mutate({ id: props.overviewId })
   }
-  catch (err: any) {
+  catch (err) {
     const { toast } = await import('vue-sonner')
-    toast.error(err?.message ?? 'Failed to create share link')
+    toast.error(getErrorMessage(err, 'Failed to create share link'))
   }
   finally {
     submitting.value = false
@@ -76,15 +78,15 @@ async function handleUnpublish() {
   if (submitting.value) return
   submitting.value = true
   try {
-    await unpublishMutation.mutate({ id: props.overviewId } as any)
+    await unpublishMutation.mutate({ id: props.overviewId })
     clearCopiedTimer()
     copied.value = false
     const { toast } = await import('vue-sonner')
     toast.success('Share link revoked')
   }
-  catch (err: any) {
+  catch (err) {
     const { toast } = await import('vue-sonner')
-    toast.error(err?.message ?? 'Failed to revoke share link')
+    toast.error(getErrorMessage(err, 'Failed to revoke share link'))
   }
   finally {
     submitting.value = false

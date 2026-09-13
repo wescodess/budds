@@ -1,8 +1,10 @@
 <script setup lang="ts">
+import { getErrorMessage } from '~~/shared/errors'
 import { ArrowLeft } from '@lucide/vue'
 import { api } from '#convex/api'
 import type { Doc, Id } from '../../../convex/_generated/dataModel'
 import type { QuestionResult } from './Question.vue'
+import { createSsrMutationStub } from '~/utils/convexSsrMutation'
 
 const props = defineProps<{
   quizId: Id<'quizzes'>
@@ -24,10 +26,7 @@ const { data: attemptsData } = useConvexQuery(
 
 const submitAttemptMutation = import.meta.client
   ? useConvexMutation(api.quizzes.submitAttempt)
-  : {
-      mutate: async (_args: unknown): Promise<any> => null,
-      isLoading: ref(false),
-    }
+  : createSsrMutationStub<typeof api.quizzes.submitAttempt>()
 
 type TakerState = 'loading' | 'answering' | 'submitting' | 'results' | 'error'
 const state = ref<TakerState>('loading')
@@ -136,9 +135,9 @@ async function handleSubmit() {
     scoreSummary.value = { correct: result.correctCount, total: result.total }
     state.value = 'results'
   }
-  catch (e: any) {
+  catch (e) {
     const { toast } = await import('vue-sonner')
-    toast.error(e?.message || 'Failed to submit quiz')
+    toast.error(getErrorMessage(e, 'Failed to submit quiz'))
     state.value = 'answering'
   }
 }

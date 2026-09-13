@@ -19,7 +19,7 @@ interface RoomCard {
 
 const props = defineProps<{
   cards: RoomCard[]
-  _seedForTests?: number
+  seedForTests?: number
 }>()
 
 function createPrng(seed: number) {
@@ -73,7 +73,7 @@ const progressLabel = computed(() =>
 )
 
 function shuffle() {
-  const rng = typeof props._seedForTests === 'number' ? createPrng(props._seedForTests) : Math.random
+  const rng = typeof props.seedForTests === 'number' ? createPrng(props.seedForTests) : Math.random
   order.value = shuffleFn(order.value, rng)
   currentIndex.value = 0
   isFlipped.value = false

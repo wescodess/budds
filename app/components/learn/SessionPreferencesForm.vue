@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { getErrorMessage } from '~~/shared/errors'
 import { Clock, Save, Loader2 } from '@lucide/vue'
 import { api } from '#convex/api'
 import { toast } from 'vue-sonner'
@@ -102,8 +103,8 @@ async function savePreferences() {
       preferredDays: preferredDays.value,
     })
     toast.success('Preferences saved')
-  } catch (e: any) {
-    toast.error(e?.message ?? 'Failed to save preferences')
+  } catch (e) {
+    toast.error(getErrorMessage(e, 'Failed to save preferences'))
   } finally {
     saving.value = false
   }

@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { X, ChevronDown, RotateCcw, Sparkles, History } from '@lucide/vue'
+import { getErrorMessage } from '~~/shared/errors'
+import { ChevronDown, RotateCcw, Sparkles, History } from '@lucide/vue'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
+import { createSsrMutationStub } from '~/utils/convexSsrMutation'
 
 const props = defineProps<{
   open: boolean
@@ -17,7 +19,7 @@ const { data: versionsData } = useConvexQuery(
   computed(() => ({ roomId: props.roomId })),
 )
 
-const versions = computed(() => (versionsData.value as any[] | undefined) ?? [])
+const versions = computed(() => versionsData.value ?? [])
 
 const expandedVersionId = ref<Id<'flashcardRoomVersions'> | null>(null)
 const restoreTargetId = ref<Id<'flashcardRoomVersions'> | null>(null)
@@ -30,7 +32,7 @@ const { data: versionDetail } = useConvexQuery(
 
 const restoreMutation = import.meta.client
   ? useConvexMutation(api.flashcardRooms.restoreRoomVersion)
-  : { mutate: async (_a: unknown) => null, isLoading: ref(false) }
+  : createSsrMutationStub<typeof api.flashcardRooms.restoreRoomVersion>()
 
 function toggleExpand(id: Id<'flashcardRoomVersions'>) {
   expandedVersionId.value = expandedVersionId.value === id ? null : id
@@ -44,15 +46,15 @@ async function confirmRestore() {
   if (!restoreTargetId.value) return
   restoring.value = true
   try {
-    await restoreMutation.mutate({ roomId: props.roomId, versionId: restoreTargetId.value } as any)
+    await restoreMutation.mutate({ roomId: props.roomId, versionId: restoreTargetId.value })
     const { toast } = await import('vue-sonner')
     toast.success('Version restored')
     restoreTargetId.value = null
     emit('update:open', false)
   }
-  catch (e: any) {
+  catch (e) {
     const { toast } = await import('vue-sonner')
-    toast.error(e?.message || 'Restore failed')
+    toast.error(getErrorMessage(e, 'Restore failed'))
   }
   finally {
     restoring.value = false

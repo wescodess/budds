@@ -1,8 +1,11 @@
 <script setup lang="ts">
+import { getErrorMessage } from '~~/shared/errors'
 import { AlertTriangle, Sparkles, X } from '@lucide/vue'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 import type { PickerFolder, PickerFile } from '~/components/global/DirectoryPicker.vue'
+import type { ScopeInventoryFile, ScopeInventoryFolder } from '~/composables/useReferenceScope'
+import { createSsrMutationStub } from '~/utils/convexSsrMutation'
 
 const props = defineProps<{
   open: boolean
@@ -20,7 +23,7 @@ const submitting = ref(false)
 
 const createTaskMutation = import.meta.client
   ? useConvexMutation(api.tasks.create)
-  : { mutate: async () => ({ taskId: '' }), isLoading: ref(false) }
+  : createSsrMutationStub<typeof api.tasks.create>()
 
 const prompt = ref('')
 const cardCount = ref<number>(12)
@@ -34,7 +37,7 @@ const { data: scopeInventory } = useConvexQuery(api.folders.searchScopeItems, co
 })))
 
 const pickerFolders = computed<PickerFolder[]>(() =>
-  (scopeInventory.value?.folders ?? []).map((f: any) => ({
+  ((scopeInventory.value?.folders ?? []) as ScopeInventoryFolder[]).map(f => ({
     id: f.id as string,
     name: f.name,
     parentId: f.parentId as string | undefined,
@@ -43,7 +46,7 @@ const pickerFolders = computed<PickerFolder[]>(() =>
 )
 
 const pickerFiles = computed<PickerFile[]>(() =>
-  (scopeInventory.value?.files ?? []).map((f: any) => ({
+  ((scopeInventory.value?.files ?? []) as ScopeInventoryFile[]).map(f => ({
     id: f.id as string,
     name: f.filename,
     folderId: (f.folderId ?? props.folderId) as string,
@@ -108,7 +111,7 @@ async function handleSubmit() {
   }
   submitting.value = true
   try {
-    const result = (await createTaskMutation.mutate({
+    const result = await createTaskMutation.mutate({
       folderId: props.folderId,
       type: 'flashcard-generation',
       title: `Generating ${clampedCount.value} cards…`,
@@ -117,7 +120,9 @@ async function handleSubmit() {
         prompt: prompt.value.trim() || undefined,
         cardCount: clampedCount.value,
       },
-    } as any)) as { taskId: Id<'tasks'> }
+    })
+
+    if (!result) throw new Error('Task creation returned no task')
 
     const { toast } = await import('vue-sonner')
     toast.success('Generation started')
@@ -134,8 +139,8 @@ async function handleSubmit() {
       },
     }).catch(() => {})
   }
-  catch (e: any) {
-    formError.value = e?.message || 'Failed to start generation'
+  catch (e) {
+    formError.value = getErrorMessage(e, 'Failed to start generation')
   }
   finally {
     submitting.value = false

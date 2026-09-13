@@ -50,12 +50,13 @@ export function useAppTheme() {
 
   onMounted(() => {
     const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
-    let stored: string | null = null
-    try {
-      stored = window.localStorage.getItem(APP_THEME_STORAGE_KEY)
-    } catch {
-      stored = null
-    }
+    const stored = (() => {
+      try {
+        return window.localStorage.getItem(APP_THEME_STORAGE_KEY)
+      } catch {
+        return null
+      }
+    })()
     const resolved = resolveThemeMode(stored, prefersDark)
     applyThemeMode(resolved)
     mode.value = resolved
@@ -63,7 +64,9 @@ export function useAppTheme() {
     try {
       const folderThemeStored = window.localStorage.getItem(FOLDER_THEME_STORAGE_KEY)
       if (folderThemeStored !== null) folderThemeEnabled.value = folderThemeStored !== 'false'
-    } catch {}
+    } catch {
+      // The default remains active when storage is unavailable.
+    }
   })
 
   function setTheme(next: AppThemeMode) {
@@ -72,7 +75,9 @@ export function useAppTheme() {
     if (import.meta.client) {
       try {
         window.localStorage.setItem(APP_THEME_STORAGE_KEY, next)
-      } catch {}
+      } catch {
+        // The selected theme still applies for the current session.
+      }
     }
   }
 
@@ -85,7 +90,9 @@ export function useAppTheme() {
     if (import.meta.client) {
       try {
         window.localStorage.setItem(FOLDER_THEME_STORAGE_KEY, String(folderThemeEnabled.value))
-      } catch {}
+      } catch {
+        // The folder preference still applies for the current session.
+      }
     }
   }
 

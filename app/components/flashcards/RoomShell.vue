@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { History, Pencil, Play, Sparkles, Loader2, X as XIcon } from '@lucide/vue'
+import { getErrorMessage } from '~~/shared/errors'
+import { History, Pencil, Play, Sparkles, Loader2 } from '@lucide/vue'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
+import { createSsrMutationStub } from '~/utils/convexSsrMutation'
 
 type Mode = 'editor' | 'practice'
 
@@ -23,15 +25,20 @@ const { data: roomData } = useConvexQuery(
 
 const renameMutation = import.meta.client
   ? useConvexMutation(api.flashcardRooms.renameRoom)
-  : { mutate: async (_a: unknown) => null, isLoading: ref(false) }
+  : createSsrMutationStub<typeof api.flashcardRooms.renameRoom>()
 
 const deleteMutation = import.meta.client
   ? useConvexMutation(api.flashcardRooms.deleteRoom)
-  : { mutate: async (_a: unknown) => null, isLoading: ref(false) }
+  : createSsrMutationStub<typeof api.flashcardRooms.deleteRoom>()
 
-const room = computed(() => (roomData.value as any)?.room ?? null)
-const cards = computed(() => (roomData.value as any)?.cards ?? [])
+const room = computed(() => roomData.value?.room ?? null)
+const cards = computed(() => roomData.value?.cards ?? [])
 const cardCount = computed(() => cards.value.length)
+
+function metadataRoomId(metadata: unknown): string | undefined {
+  if (!metadata || typeof metadata !== 'object' || !('roomId' in metadata)) return undefined
+  return typeof metadata.roomId === 'string' ? metadata.roomId : undefined
+}
 
 const { tasks, cancel: cancelTask } = useTasks(toRef(props, 'folderId'))
 
@@ -40,7 +47,7 @@ const runningTaskForRoom = computed(() =>
     (t) =>
       (t.status === 'pending' || t.status === 'running') &&
       t.type === 'flashcard-generation' &&
-      (t.metadata as any)?.roomId === props.roomId,
+      metadataRoomId(t.metadata) === props.roomId,
   ) ?? null,
 )
 
@@ -56,27 +63,27 @@ const lastUpdated = computed<number | null>(() => {
 
 async function handleRename(next: string) {
   try {
-    await renameMutation.mutate({ roomId: props.roomId, title: next } as any)
+    await renameMutation.mutate({ roomId: props.roomId, title: next })
     const { toast } = await import('vue-sonner')
     toast.success('Room renamed')
   }
-  catch (e: any) {
+  catch (e) {
     const { toast } = await import('vue-sonner')
-    toast.error(e?.message || 'Failed to rename room')
+    toast.error(getErrorMessage(e, 'Failed to rename room'))
   }
 }
 
 async function handleConfirmDelete() {
   try {
-    await deleteMutation.mutate({ roomId: props.roomId } as any)
+    await deleteMutation.mutate({ roomId: props.roomId })
     const { toast } = await import('vue-sonner')
     toast.success('Room deleted')
     confirmDeleteOpen.value = false
     emit('room-deleted', props.roomId)
   }
-  catch (e: any) {
+  catch (e) {
     const { toast } = await import('vue-sonner')
-    toast.error(e?.message || 'Failed to delete room')
+    toast.error(getErrorMessage(e, 'Failed to delete room'))
   }
 }
 </script>

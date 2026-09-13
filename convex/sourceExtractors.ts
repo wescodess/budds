@@ -7,8 +7,6 @@ const MAX_CONTENT_BYTES = 4 * 1024 * 1024
 const YT_VIDEO_ID_RE = /(?:youtube\.com\/(?:[^/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?/\s]{11})/i
 const YT_USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 const YT_INNERTUBE_URL = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false'
-const YT_WEB_CLIENT = { client: { clientName: 'WEB', clientVersion: '2.20241126.01.00', hl: 'en' } }
-
 function resolveVideoId(input: string): string {
   if (input.length === 11 && !input.includes('/')) return input
   const match = input.match(YT_VIDEO_ID_RE)
@@ -58,7 +56,7 @@ function parseTranscriptXml(xml: string): string[] {
 
 interface CaptionTrack { baseUrl: string; languageCode: string }
 
-function extractJsonObject(text: string, startIdx: number): any | null {
+function extractJsonObject(text: string, startIdx: number): unknown {
   let depth = 0
   for (let i = startIdx; i < text.length; i++) {
     if (text[i] === '{') depth++
@@ -72,6 +70,25 @@ function extractJsonObject(text: string, startIdx: number): any | null {
   return null
 }
 
+function captionTracksFrom(value: unknown): CaptionTrack[] | null {
+  if (!value || typeof value !== 'object' || !('captions' in value)) return null
+  const captions = value.captions
+  if (!captions || typeof captions !== 'object' || !('playerCaptionsTracklistRenderer' in captions)) return null
+  const renderer = captions.playerCaptionsTracklistRenderer
+  if (!renderer || typeof renderer !== 'object' || !('captionTracks' in renderer)) return null
+  const tracks = renderer.captionTracks
+  if (!Array.isArray(tracks)) return null
+  const valid = tracks.filter((track): track is CaptionTrack =>
+    Boolean(track)
+    && typeof track === 'object'
+    && 'baseUrl' in track
+    && typeof track.baseUrl === 'string'
+    && 'languageCode' in track
+    && typeof track.languageCode === 'string',
+  )
+  return valid.length > 0 ? valid : null
+}
+
 function extractCaptionTracksFromHtml(html: string): CaptionTrack[] | null {
   const markers = [
     'var ytInitialPlayerResponse = ',
@@ -82,8 +99,8 @@ function extractCaptionTracksFromHtml(html: string): CaptionTrack[] | null {
     const idx = html.indexOf(marker)
     if (idx === -1) continue
     const obj = extractJsonObject(html, idx + marker.length)
-    const tracks = obj?.captions?.playerCaptionsTracklistRenderer?.captionTracks
-    if (Array.isArray(tracks) && tracks.length > 0) return tracks
+    const tracks = captionTracksFrom(obj)
+    if (tracks) return tracks
   }
 
   const captionsRegex = /"captionTracks"\s*:\s*(\[[\s\S]*?\])\s*,\s*"/
@@ -160,9 +177,8 @@ async function getCaptionTracks(videoId: string): Promise<CaptionTrack[]> {
         }),
       })
       if (res.ok) {
-        const data = await res.json() as any
-        const tracks = data?.captions?.playerCaptionsTracklistRenderer?.captionTracks
-        if (Array.isArray(tracks) && tracks.length > 0) return tracks
+        const tracks = captionTracksFrom(await res.json())
+        if (tracks) return tracks
       }
     } catch { /* InnerTube failed */ }
   }

@@ -1,6 +1,8 @@
+import { getErrorMessage } from '~~/shared/errors'
 import { until } from '@vueuse/core'
 import { api } from '#convex/api'
 import type { Doc, Id } from '../../convex/_generated/dataModel'
+import { createSsrActionStub, createSsrMutationStub } from '~/utils/convexSsrMutation'
 
 const MAX_FILE_SIZE = 52_428_800
 const DOCUMENT_TERMINAL_TIMEOUT_MS = 180_000
@@ -45,29 +47,23 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
 
   const generateUploadUrlMutation = import.meta.client
     ? useConvexMutation(api.documents.generateUploadUrl)
-    : { mutate: async (_args: Record<string, never>) => '' as string, isLoading: ref(false) }
+    : createSsrMutationStub<typeof api.documents.generateUploadUrl>()
 
   const createDocumentMutation = import.meta.client
     ? useConvexMutation(api.documents.createDocument)
-    : {
-        mutate: async (_args: { folderId: Id<'folders'>; filename: string; fileId: Id<'_storage'>; fileSize: number }) => {},
-        isLoading: ref(false),
-      }
+    : createSsrMutationStub<typeof api.documents.createDocument>()
 
   const importDocumentFromUrlAction = import.meta.client
     ? useConvexAction(api.documentImports.importDocumentFromUrl)
-    : {
-        mutate: async (_args: { folderId: Id<'folders'>; url: string }) => undefined,
-        isLoading: ref(false),
-      }
+    : createSsrActionStub<typeof api.documentImports.importDocumentFromUrl>()
 
   const deleteDocumentMutation = import.meta.client
     ? useConvexMutation(api.documents.deleteDocument)
-    : { mutate: async (_args: { id: Id<'documents'> }) => {}, isLoading: ref(false) }
+    : createSsrMutationStub<typeof api.documents.deleteDocument>()
 
   const moveDocumentMutation = import.meta.client
     ? useConvexMutation(api.documents.moveDocument)
-    : { mutate: async (_args: { id: Id<'documents'>; destinationFolderId: Id<'folders'> }) => {}, isLoading: ref(false) }
+    : createSsrMutationStub<typeof api.documents.moveDocument>()
 
   const { data: documentsData } = useConvexQuery(
     api.documents.listDocumentsByFolder,
@@ -180,12 +176,6 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
         : upload,
     )
     scheduleDisplayDismiss(clientId)
-  }
-
-  function removePendingUpload(fileKey: string) {
-    const clientId = `pending:${fileKey}`
-    clearDisplayDismissTimer(clientId)
-    pendingUploads.value = pendingUploads.value.filter(upload => upload.clientId !== clientId)
   }
 
   function rememberRecentDocument(documentId: Id<'documents'> | undefined) {
@@ -442,10 +432,10 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
         uploadProgress.value.set(fileKey, 'uploading')
 
         const uploadUrl = (await generateUploadUrlMutation.mutate({})) as string
-        if ((generateUploadUrlMutation as any).error?.value) {
+        if (generateUploadUrlMutation.error.value) {
           uploadProgress.value.set(fileKey, 'error')
-          const err = (generateUploadUrlMutation as any).error.value
-          markPendingUploadFailed(fileKey, err?.message || `${file.name}: Upload failed`)
+          const err = generateUploadUrlMutation.error.value
+          markPendingUploadFailed(fileKey, getErrorMessage(err, `${file.name}: Upload failed`))
           throw err
         }
 
@@ -470,10 +460,10 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
           fileId: storageId,
           fileSize: file.size,
         }) as Id<'documents'>
-        if ((createDocumentMutation as any).error?.value) {
+        if (createDocumentMutation.error.value) {
           uploadProgress.value.set(fileKey, 'error')
-          const err = (createDocumentMutation as any).error.value
-          markPendingUploadFailed(fileKey, err?.message || `${file.name}: Upload failed`)
+          const err = createDocumentMutation.error.value
+          markPendingUploadFailed(fileKey, getErrorMessage(err, `${file.name}: Upload failed`))
           throw err
         }
 
@@ -488,7 +478,7 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
 
     const errors = results
       .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
-      .map((r) => r.reason?.message || 'Upload failed')
+      .map(r => getErrorMessage(r.reason, 'Upload failed'))
 
     scheduleUploadProgressClear(errors.length > 0 ? 10_000 : 3500)
 
@@ -510,9 +500,9 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
       url,
     })
 
-    if ((importDocumentFromUrlAction as any).error?.value) {
-      const err = (importDocumentFromUrlAction as any).error.value
-      ;(importDocumentFromUrlAction as any).error.value = undefined
+    if (importDocumentFromUrlAction.error.value) {
+      const err = importDocumentFromUrlAction.error.value
+      importDocumentFromUrlAction.error.value = null
       throw err
     }
 
@@ -525,9 +515,9 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
 
   async function deleteDocument(docId: Id<'documents'>) {
     const result = await deleteDocumentMutation.mutate({ id: docId })
-    if ((deleteDocumentMutation as any).error?.value) {
-      const err = (deleteDocumentMutation as any).error.value
-      ;(deleteDocumentMutation as any).error.value = undefined
+    if (deleteDocumentMutation.error.value) {
+      const err = deleteDocumentMutation.error.value
+      deleteDocumentMutation.error.value = null
       throw err
     }
     return result
@@ -535,9 +525,9 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
 
   async function moveDocument(docId: Id<'documents'>, destinationFolderId: Id<'folders'>) {
     const result = await moveDocumentMutation.mutate({ id: docId, destinationFolderId })
-    if ((moveDocumentMutation as any).error?.value) {
-      const err = (moveDocumentMutation as any).error.value
-      ;(moveDocumentMutation as any).error.value = undefined
+    if (moveDocumentMutation.error.value) {
+      const err = moveDocumentMutation.error.value
+      moveDocumentMutation.error.value = null
       throw err
     }
     return result
@@ -553,9 +543,9 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
         await deleteDocument(docId)
         deletedCount += 1
       }
-      catch (error: any) {
+      catch (error) {
         failedIds.push(docId)
-        failureMessages.push(error?.message || 'Failed to delete document')
+        failureMessages.push(getErrorMessage(error, 'Failed to delete document'))
       }
     }
 
@@ -576,9 +566,9 @@ export function useDocuments(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
         await moveDocument(docId, destinationFolderId)
         movedCount += 1
       }
-      catch (error: any) {
+      catch (error) {
         failedIds.push(docId)
-        failureMessages.push(error?.message || 'Failed to move document')
+        failureMessages.push(getErrorMessage(error, 'Failed to move document'))
       }
     }
 

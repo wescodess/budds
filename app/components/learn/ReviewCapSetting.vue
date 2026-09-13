@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { getErrorMessage } from '~~/shared/errors'
 import { Settings } from '@lucide/vue'
 import { api } from '#convex/api'
 import { toast } from 'vue-sonner'
@@ -47,8 +48,8 @@ async function saveCap() {
   try {
     await updateCapMutation.mutate({ cap: val })
     open.value = false
-  } catch (e: any) {
-    toast.error(e?.message ?? 'Failed to update review cap')
+  } catch (e) {
+    toast.error(getErrorMessage(e, 'Failed to update review cap'))
   } finally {
     saving.value = false
   }

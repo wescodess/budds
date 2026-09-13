@@ -79,7 +79,7 @@ const { data: coursesData } = useConvexQuery(
 
 const voids = computed<VoidItem[]>(() => {
   const folderIdStr = props.folderId as unknown as string
-  const chats = ((convosData.value as Array<any> | undefined) ?? [])
+  const chats = ((convosData.value as Doc<'conversations'>[] | undefined) ?? [])
     .filter(c => (c.folderId as unknown as string) === folderIdStr)
     .map<VoidItem>(c => ({
       id: c._id as string,
@@ -87,13 +87,13 @@ const voids = computed<VoidItem[]>(() => {
       title: c.title?.trim() || 'Untitled chat',
       updatedAt: (c._creationTime as number) ?? 0,
     }))
-  const flashes = ((flashRoomsData.value as Array<any> | undefined) ?? []).map<VoidItem>(f => ({
+  const flashes = ((flashRoomsData.value as Doc<'flashcardRooms'>[] | undefined) ?? []).map<VoidItem>(f => ({
     id: f._id as string,
     type: 'flashcards',
     title: f.title?.trim() || 'Flash cards',
     updatedAt: (f.updatedAt as number) ?? (f.legacyCreatedAt as number) ?? (f._creationTime as number) ?? 0,
   }))
-  const audioRooms = ((audioRoomsData.value as Array<any> | undefined) ?? [])
+  const audioRooms = ((audioRoomsData.value as Doc<'audioOverviewRooms'>[] | undefined) ?? [])
     .filter(room => !room.conversationId)
     .map<VoidItem>(room => ({
       id: room._id as string,
@@ -101,13 +101,13 @@ const voids = computed<VoidItem[]>(() => {
       title: room.title?.trim() || 'Audio Overview',
       updatedAt: (room.updatedAt as number) ?? (room._creationTime as number) ?? 0,
     }))
-  const quizs = ((quizzesData.value as Array<any> | undefined) ?? []).map<VoidItem>(q => ({
+  const quizs = ((quizzesData.value as Doc<'quizzes'>[] | undefined) ?? []).map<VoidItem>(q => ({
     id: q._id as string,
     type: 'quiz',
     title: q.title?.trim() || 'Quiz',
     updatedAt: (q._creationTime as number) ?? 0,
   }))
-  const courseItems = ((coursesData.value as Array<any> | undefined) ?? []).map<VoidItem>(c => ({
+  const courseItems = ((coursesData.value as Doc<'courses'>[] | undefined) ?? []).map<VoidItem>(c => ({
     id: c._id as string,
     type: 'course',
     title: c.title?.trim() || 'Course',
@@ -173,7 +173,7 @@ const knowledgeCount = computed(() => {
   return total
 })
 
-const courseCount = computed(() => ((coursesData.value as Array<any> | undefined) ?? []).length)
+const courseCount = computed(() => ((coursesData.value as Doc<'courses'>[] | undefined) ?? []).length)
 const learnActive = computed(() => props.activeTab === 'learn' && !props.activeVoidId)
 const knowledgeActive = computed(() => props.activeTab === 'documents')
 const railRef = ref<HTMLElement | null>(null)

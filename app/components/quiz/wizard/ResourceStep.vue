@@ -2,6 +2,7 @@
 import { api } from '#convex/api'
 import type { Id } from '../../../../convex/_generated/dataModel'
 import type { PickerFolder, PickerFile } from '~/components/global/DirectoryPicker.vue'
+import type { ScopeInventoryFile, ScopeInventoryFolder } from '~/composables/useReferenceScope'
 
 const props = defineProps<{
   folderId: Id<'folders'>
@@ -20,7 +21,7 @@ const { data: scopeInventory } = useConvexQuery(api.folders.searchScopeItems, co
 })))
 
 const pickerFolders = computed<PickerFolder[]>(() =>
-  (scopeInventory.value?.folders ?? []).map((f: any) => ({
+  ((scopeInventory.value?.folders ?? []) as ScopeInventoryFolder[]).map(f => ({
     id: f.id as string,
     name: f.name,
     parentId: f.parentId as string | undefined,
@@ -29,7 +30,7 @@ const pickerFolders = computed<PickerFolder[]>(() =>
 )
 
 const pickerFiles = computed<PickerFile[]>(() =>
-  (scopeInventory.value?.files ?? []).map((f: any) => ({
+  ((scopeInventory.value?.files ?? []) as ScopeInventoryFile[]).map(f => ({
     id: f.id as string,
     name: f.filename,
     folderId: (f.folderId ?? props.folderId) as string,

@@ -1,4 +1,6 @@
+import { getErrorMessage, getErrorStatusCode } from '../../../shared/errors'
 import { ConvexHttpClient } from 'convex/browser'
+import type { H3Event } from 'h3'
 import { api } from '../../../convex/_generated/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 import { readConfiguredRuntimeValue } from '../../utils/runtime-config'
@@ -7,7 +9,7 @@ import { buildOutlinePrompt, parseOutlineResponse } from '../../utils/outline-pr
 
 const MAX_CONTENT_CHARS = 80_000
 
-function makeConvexClient(event: any): ConvexHttpClient | null {
+function makeConvexClient(event: H3Event): ConvexHttpClient | null {
   const token = event.context.convexToken as string | undefined
   const runtimeConfig = useRuntimeConfig(event)
   const convexUrl = readConfiguredRuntimeValue(
@@ -171,9 +173,10 @@ export default defineEventHandler(async (event) => {
       sectionCount: sections.length,
       sections: sections.map(s => ({ title: s.title, knowledgeType: s.knowledgeType })),
     }
-  } catch (err: any) {
-    if (err?.statusCode !== 400 && err?.statusCode !== 404 && err?.statusCode !== 502) {
-      await failTask(err?.message || 'Outline generation failed')
+  } catch (err) {
+    const statusCode = getErrorStatusCode(err)
+    if (statusCode !== 400 && statusCode !== 404 && statusCode !== 502) {
+      await failTask(getErrorMessage(err, 'Outline generation failed'))
       try {
         await convexClient.mutation(api.courses.markFailed, { courseId })
       } catch { /* best-effort */ }

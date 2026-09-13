@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, reactive, watch, nextTick, onMounted } from 'vue'
+import { computed, ref, reactive, watch, nextTick, onMounted, type ComponentPublicInstance } from 'vue'
 import { useWordSync } from '~/composables/useWordSync'
 
 interface Turn {
@@ -39,9 +39,9 @@ const wordRefs = new Map<string, HTMLElement>()
 
 const pill = reactive({ x: 0, y: 0, w: 0, h: 0, visible: false })
 
-function setWordRef(turnIdx: number, wordIdx: number, el: any) {
+function setWordRef(turnIdx: number, wordIdx: number, el: Element | ComponentPublicInstance | null) {
   const key = `${turnIdx}-${wordIdx}`
-  if (el) wordRefs.set(key, el as HTMLElement)
+  if (el instanceof HTMLElement) wordRefs.set(key, el)
   else wordRefs.delete(key)
 }
 
@@ -166,7 +166,7 @@ function wordClass(turnIdx: number, wordIdx: number): string {
         <span
           v-for="(wt, wIdx) in turnData.words"
           :key="wIdx"
-          :ref="(el: any) => setWordRef(tIdx, wIdx, el)"
+          :ref="el => setWordRef(tIdx, wIdx, el)"
           :class="wordClass(tIdx, wIdx)"
           @click="handleWordClick(tIdx, wIdx)"
         >{{ wt.word }}{{ wIdx < turnData.words.length - 1 ? ' ' : '' }}</span>

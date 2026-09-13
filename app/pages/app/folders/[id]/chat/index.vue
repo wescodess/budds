@@ -28,7 +28,9 @@ async function hydrateFromMostRecent() {
       conversationIdRef.value = convo._id as Id<'conversations'>
       await loadConversation(convo._id as Id<'conversations'>)
     }
-  } catch {}
+  } catch {
+    // Keep the empty chat state when no recent conversation can be loaded.
+  }
 }
 
 onMounted(() => {

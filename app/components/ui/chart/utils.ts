@@ -7,15 +7,15 @@ import { h, render } from "vue"
 const cache = new Map<string, string>()
 
 // Convert object to a consistent string key
-function serializeKey(key: Record<string, any>): string {
+function serializeKey(key: Record<string, unknown>): string {
   return JSON.stringify(key, Object.keys(key).sort())
 }
 
-interface Constructor<P = any> {
+interface Constructor<P = Record<string, unknown>> {
   __isFragment?: never
   __isTeleport?: never
   __isSuspense?: never
-  new (...args: any[]): {
+  new (...args: never[]): {
     $props: P
   }
 }
@@ -28,14 +28,16 @@ export function componentToString<P>(config: ChartConfig, component: Constructor
   const id = useId()
 
   // https://unovis.dev/docs/auxiliary/Crosshair#component-props
-  return (_data: any, x: number | Date) => {
-    const data = "data" in _data ? _data.data : _data
-    const serializedKey = `${id}-${serializeKey(data)}`
+  return (_data: unknown, x: number | Date) => {
+    const data = _data && typeof _data === "object" && "data" in _data ? _data.data : _data
+    if (!data || typeof data !== "object") return ""
+    const record = data as Record<string, unknown>
+    const serializedKey = `${id}-${serializeKey(record)}`
     const cachedContent = cache.get(serializedKey)
     if (cachedContent)
       return cachedContent
 
-    const vnode = h<unknown>(component, { ...props, payload: data, config, x })
+    const vnode = h<unknown>(component, { ...props, payload: record, config, x })
     const div = document.createElement("div")
     render(vnode, div)
     cache.set(serializedKey, div.innerHTML)

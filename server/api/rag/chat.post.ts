@@ -162,7 +162,7 @@ export default defineEventHandler(async (event) => {
   const needsFallback = chunks.length < 3 || summarizationIntent
 
   let context: string
-  let citationChunks = chunks
+  let citationChunks: AISearchChunk[]
   if (hasScope) {
     if (!needsFallback) {
       citationChunks = chunks
@@ -299,7 +299,7 @@ export default defineEventHandler(async (event) => {
     let stream: ReadableStream
     try {
       stream = await generateCompletionStream({ model: body.model, ...completionParams, stream: true })
-    } catch (err: any) {
+    } catch (err) {
       if (body.model !== SERVER_DEFAULT_MODEL) {
         modelFallback = { requested: body.model, actual: SERVER_DEFAULT_MODEL }
         stream = await generateCompletionStream({ model: SERVER_DEFAULT_MODEL, ...completionParams, stream: true })
@@ -342,7 +342,7 @@ export default defineEventHandler(async (event) => {
   let completion: Awaited<ReturnType<typeof generateCompletion>>
   try {
     completion = await generateCompletion({ model: body.model, ...completionParams })
-  } catch (err: any) {
+  } catch (err) {
     if (body.model !== SERVER_DEFAULT_MODEL) {
       modelFallback = { requested: body.model, actual: SERVER_DEFAULT_MODEL }
       completion = await generateCompletion({ model: SERVER_DEFAULT_MODEL, ...completionParams })

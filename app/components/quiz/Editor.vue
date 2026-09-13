@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import { getErrorMessage } from '~~/shared/errors'
 import { ArrowLeft, Pencil, Plus, X } from '@lucide/vue'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
+import { createSsrMutationStub } from '~/utils/convexSsrMutation'
 
 type Question = {
   _id: string
@@ -40,10 +42,7 @@ const { data: quizData } = useConvexQuery(
 
 const updateQuestionMutation = import.meta.client
   ? useConvexMutation(api.quizzes.updateQuestion)
-  : {
-      mutate: async (_args: unknown): Promise<any> => null,
-      isLoading: ref(false),
-    }
+  : createSsrMutationStub<typeof api.quizzes.updateQuestion>()
 
 type EditorState = 'loading' | 'ready' | 'error'
 const state = ref<EditorState>('loading')
@@ -90,7 +89,7 @@ function startEdit(q: Question) {
 
 function cancelEdit(qid: string) {
   const next = { ...drafts.value }
-  delete next[qid]
+  Reflect.deleteProperty(next, qid)
   drafts.value = next
   if (editingQuestionId.value === qid) editingQuestionId.value = null
 }
@@ -159,7 +158,7 @@ async function saveEdit(qid: string) {
   }
 
   let payload: {
-    questionId: string
+    questionId: Id<'quizQuestions'>
     question: string
     correctAnswer: string
     options?: string[]
@@ -181,7 +180,7 @@ async function saveEdit(qid: string) {
       return
     }
     payload = {
-      questionId: qid,
+      questionId: qid as Id<'quizQuestions'>,
       question: trimmedQuestion,
       correctAnswer: correct,
       options: cleaned,
@@ -193,7 +192,7 @@ async function saveEdit(qid: string) {
       return
     }
     payload = {
-      questionId: qid,
+      questionId: qid as Id<'quizQuestions'>,
       question: trimmedQuestion,
       correctAnswer: correct,
     }
@@ -201,13 +200,13 @@ async function saveEdit(qid: string) {
 
   saving.value = true
   try {
-    await updateQuestionMutation.mutate(payload as any)
+    await updateQuestionMutation.mutate(payload)
     cancelEdit(qid)
     const { toast } = await import('vue-sonner')
     toast.success('Question updated')
   }
-  catch (e: any) {
-    const msg = e?.message || 'Failed to save question'
+  catch (e) {
+    const msg = getErrorMessage(e, 'Failed to save question')
     setDraftField(qid, { error: msg })
   }
   finally {

@@ -1,7 +1,9 @@
+import { getErrorMessage } from '~~/shared/errors'
 import { useMediaQuery } from '@vueuse/core'
 import { api } from '#convex/api'
 import type { Id } from '../../convex/_generated/dataModel'
 import { normalizeAssistantCitations } from '~/utils/normalize-assistant-citations'
+import { createSsrMutationStub } from '~/utils/convexSsrMutation'
 
 import { DEFAULT_MODEL, isValidModel, getModelLabel } from '~/constants/models'
 
@@ -87,24 +89,11 @@ export function useChat(
 
   const createConversationMutation = import.meta.client
     ? useConvexMutation(api.conversations.createConversation)
-    : {
-        mutate: async (_args: { folderId: Id<'folders'>; title: string }) =>
-          '' as unknown as Id<'conversations'>,
-        isLoading: ref(false),
-      }
+    : createSsrMutationStub<typeof api.conversations.createConversation>()
 
   const appendMessageMutation = import.meta.client
     ? useConvexMutation(api.messages.appendMessage)
-    : {
-        mutate: async (_args: {
-          conversationId: Id<'conversations'>
-          role: 'user' | 'assistant'
-          content: string
-          sources?: Source[]
-          model?: string
-        }) => '' as unknown as Id<'messages'>,
-        isLoading: ref(false),
-      }
+    : createSsrMutationStub<typeof api.messages.appendMessage>()
 
   function selectModel(modelValue: string) {
     if (isValidModel(modelValue)) {
@@ -125,9 +114,9 @@ export function useChat(
       title: deriveTitle(query),
     })) as Id<'conversations'>
 
-    if ((createConversationMutation as any).error?.value) {
-      const err = (createConversationMutation as any).error.value
-      ;(createConversationMutation as any).error.value = undefined
+    if (createConversationMutation.error.value) {
+      const err = createConversationMutation.error.value
+      createConversationMutation.error.value = null
       throw err
     }
 
@@ -148,9 +137,9 @@ export function useChat(
       content,
       ...extras,
     })
-    if ((appendMessageMutation as any).error?.value) {
-      const err = (appendMessageMutation as any).error.value
-      ;(appendMessageMutation as any).error.value = undefined
+    if (appendMessageMutation.error.value) {
+      const err = appendMessageMutation.error.value
+      appendMessageMutation.error.value = null
       if (import.meta.dev) console.warn('[useChat] Failed to persist message:', err)
     }
   }
@@ -306,11 +295,11 @@ export function useChat(
     if (loading.value) return
     error.value = null
 
-    let convoId: Id<'conversations'> | null = null
+    let convoId: Id<'conversations'> | null
     try {
       convoId = await ensureConversation(query)
-    } catch (e: any) {
-      error.value = e.data?.message || e.message || 'Failed to start conversation'
+    } catch (e) {
+      error.value = getErrorMessage(e, 'Failed to start conversation')
       return
     }
 
@@ -343,8 +332,8 @@ export function useChat(
         }
         await sendNonStreaming(query, scope)
       }
-    } catch (e: any) {
-      error.value = e.data?.message || e.message || 'Failed to get response'
+    } catch (e) {
+      error.value = getErrorMessage(e, 'Failed to get response')
     } finally {
       loading.value = false
       streaming.value = false

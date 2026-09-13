@@ -534,7 +534,7 @@ function canonicalFrozenEvidenceQuote(quote: string, sourceChunks: string[]): st
         const start = sourceIndex - words
         const first = source.tokens[start]!
         const last = source.tokens[sourceIndex - 1]!
-        const trailing = source.text.slice(last.end).match(/^[.,;:!?\u2019'\"\)\]\}]+/)?.[0] ?? ''
+        const trailing = source.text.slice(last.end).match(/^[.,;:!?\u2019'")\]}]+/)?.[0] ?? ''
         bestContiguous = {
           words,
           text: source.text.slice(first.start, last.end + trailing.length).trim(),
@@ -568,7 +568,7 @@ function canonicalFrozenEvidenceQuote(quote: string, sourceChunks: string[]): st
         const last = source.tokens[start + wordCount - 1]!
         // Preserve adjacent sentence punctuation when it belongs to the final
         // matched word. The resulting text remains an exact raw substring.
-        const trailing = source.text.slice(last.end).match(/^[.,;:!?\u2019'\"\)\]\}]+/)?.[0] ?? ''
+        const trailing = source.text.slice(last.end).match(/^[.,;:!?\u2019'")\]}]+/)?.[0] ?? ''
         const candidateText = source.text.slice(first.start, last.end + trailing.length).trim()
         if (candidateText.length > 500) continue
         best = { distance, text: candidateText }

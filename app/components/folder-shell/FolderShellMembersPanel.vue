@@ -10,11 +10,16 @@ defineProps<{
 
 const { user } = useUserSession()
 
+function identityField(value: unknown, field: 'name' | 'email'): string | undefined {
+  if (!value || typeof value !== 'object' || !(field in value)) return undefined
+  const candidate = (value as Record<string, unknown>)[field]
+  return typeof candidate === 'string' ? candidate : undefined
+}
+
 const ownerName = computed(() => {
-  const u = user.value as any
-  return u?.name || u?.email || 'You'
+  return identityField(user.value, 'name') || identityField(user.value, 'email') || 'You'
 })
-const ownerEmail = computed(() => (user.value as any)?.email ?? '')
+const ownerEmail = computed(() => identityField(user.value, 'email') ?? '')
 const ownerInitial = computed(() => ownerName.value.slice(0, 1).toUpperCase())
 </script>
 

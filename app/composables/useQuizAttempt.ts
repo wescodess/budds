@@ -1,5 +1,6 @@
 import { api } from '#convex/api'
 import type { Id } from '../../convex/_generated/dataModel'
+import { createSsrMutationStub } from '~/utils/convexSsrMutation'
 
 export interface AttemptSettings {
   shuffleQuestions: boolean
@@ -28,23 +29,23 @@ export interface AnswerFeedback {
 export function useQuizAttempt(quizId: Ref<Id<'quizzes'> | null>) {
   const startAttemptMutation = import.meta.client
     ? useConvexMutation(api.quizzes.startAttempt)
-    : { mutate: async (_args: unknown): Promise<any> => null, isLoading: ref(false) }
+    : createSsrMutationStub<typeof api.quizzes.startAttempt>()
 
   const submitAnswerMutation = import.meta.client
     ? useConvexMutation(api.quizzes.submitAnswer)
-    : { mutate: async (_args: unknown): Promise<any> => null, isLoading: ref(false) }
+    : createSsrMutationStub<typeof api.quizzes.submitAnswer>()
 
   const submitAllMutation = import.meta.client
     ? useConvexMutation(api.quizzes.submitAllAnswers)
-    : { mutate: async (_args: unknown): Promise<any> => null, isLoading: ref(false) }
+    : createSsrMutationStub<typeof api.quizzes.submitAllAnswers>()
 
   const completeAttemptMutation = import.meta.client
     ? useConvexMutation(api.quizzes.completeAttempt)
-    : { mutate: async (_args: unknown): Promise<any> => null, isLoading: ref(false) }
+    : createSsrMutationStub<typeof api.quizzes.completeAttempt>()
 
   const abandonAttemptMutation = import.meta.client
     ? useConvexMutation(api.quizzes.abandonAttempt)
-    : { mutate: async (_args: unknown): Promise<any> => null, isLoading: ref(false) }
+    : createSsrMutationStub<typeof api.quizzes.abandonAttempt>()
 
   const attemptId = ref<Id<'quizAttempts'> | null>(null)
   const settings = ref<AttemptSettings | null>(null)

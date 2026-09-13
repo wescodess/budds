@@ -1,12 +1,13 @@
 import { api } from '#convex/api'
 import type { Id } from '../../convex/_generated/dataModel'
+import { createSsrMutationStub } from '~/utils/convexSsrMutation'
 
 export type WizardStep = 1 | 2 | 3
 
 export function useQuizGeneration(folderId: Ref<Id<'folders'>>) {
   const createTaskMutation = import.meta.client
     ? useConvexMutation(api.tasks.create)
-    : { mutate: async () => ({ taskId: '' }), isLoading: ref(false) }
+    : createSsrMutationStub<typeof api.tasks.create>()
 
   const wizardOpen = ref(false)
   const wizardStep = ref<WizardStep>(1)
@@ -105,7 +106,7 @@ export function useQuizGeneration(folderId: Ref<Id<'folders'>>) {
     if (submitting.value) return
     submitting.value = true
     try {
-      const result = (await createTaskMutation.mutate({
+      const result = await createTaskMutation.mutate({
         folderId: folderId.value,
         type: 'quiz-generation',
         title: `Generating ${questionCount.value} questions…`,
@@ -113,7 +114,9 @@ export function useQuizGeneration(folderId: Ref<Id<'folders'>>) {
           questionCount: questionCount.value,
           difficulty: difficulty.value,
         },
-      } as any)) as { taskId: Id<'tasks'> }
+      })
+
+      if (!result) throw new Error('Task creation returned no task')
 
       closeWizard()
 

@@ -14,6 +14,7 @@ function loadMermaid() {
     mermaidPromise = import('mermaid').then((m) => {
       m.default.initialize({
         startOnLoad: false,
+        securityLevel: 'strict',
         theme: 'dark',
         themeVariables: {
           primaryColor: '#292524',
@@ -62,12 +63,14 @@ watch(() => props.code, () => render())
       <div v-if="loading" class="flex items-center justify-center py-8">
         <div class="h-5 w-5 animate-spin rounded-full border-2 border-amber-500 border-t-transparent" />
       </div>
+      <!-- eslint-disable vue/no-v-html -- Mermaid strict mode encodes HTML and disables interactive links. -->
       <div
         v-else-if="svg"
         ref="container"
         class="flex justify-center [&_svg]:max-w-full"
         v-html="svg"
       />
+      <!-- eslint-enable vue/no-v-html -->
       <div v-else-if="error" class="space-y-2">
         <p class="text-xs text-stone-500">Diagram could not be rendered</p>
         <pre class="overflow-x-auto text-xs text-stone-400"><code>{{ code }}</code></pre>

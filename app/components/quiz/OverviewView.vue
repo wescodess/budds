@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { Pencil, Trash2, Plus, Sparkles, Check, X } from '@lucide/vue'
 import { api } from '#convex/api'
-import type { Id } from '../../../convex/_generated/dataModel'
+import type { Doc, Id } from '../../../convex/_generated/dataModel'
+import { createSsrMutationStub } from '~/utils/convexSsrMutation'
 
 const props = defineProps<{
   quizId: Id<'quizzes'>
@@ -25,21 +26,21 @@ const { data: historyData } = useConvexQuery(
 
 const quiz = computed(() => quizData.value?.quiz ?? null)
 const questions = computed(() => quizData.value?.questions ?? [])
-const attempts = computed(() => (historyData.value as any[] | undefined) ?? [])
+const attempts = computed(() => historyData.value ?? [])
 
 const editingTitle = ref(false)
 const titleDraft = ref('')
 const questionModalOpen = ref(false)
-const editingQuestion = ref<any>(null)
+const editingQuestion = ref<Doc<'quizQuestions'> | null>(null)
 const confirmDeleteId = ref<string | null>(null)
 
 const updateQuizMutation = import.meta.client
   ? useConvexMutation(api.quizzes.updateQuiz)
-  : { mutate: async (_args: unknown): Promise<any> => null, isLoading: ref(false) }
+  : createSsrMutationStub<typeof api.quizzes.updateQuiz>()
 
 const deleteQuestionMutation = import.meta.client
   ? useConvexMutation(api.quizzes.deleteQuestion)
-  : { mutate: async (_args: unknown): Promise<any> => null, isLoading: ref(false) }
+  : createSsrMutationStub<typeof api.quizzes.deleteQuestion>()
 
 function startEditTitle() {
   titleDraft.value = quiz.value?.title ?? ''
@@ -58,7 +59,7 @@ function openAddQuestion() {
   questionModalOpen.value = true
 }
 
-function openEditQuestion(q: any) {
+function openEditQuestion(q: Doc<'quizQuestions'>) {
   editingQuestion.value = q
   questionModalOpen.value = true
 }

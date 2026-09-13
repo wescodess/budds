@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { getErrorMessage } from '~~/shared/errors'
 import { useMediaQuery } from '@vueuse/core'
 import {
   FolderOpen,
@@ -20,7 +21,7 @@ import {
 import type { Doc, Id } from '~~/convex/_generated/dataModel'
 import { clearOfflineData } from '~/composables/useOfflineCache'
 import { useHorizontalSwipeGesture } from '~/composables/useHorizontalSwipeGesture'
-import { PANEL_DISMISS_THRESHOLD_PX, useGestureGuards } from '~/composables/useGestureGuards'
+import { useGestureGuards } from '~/composables/useGestureGuards'
 
 useHead({
   link: [
@@ -42,8 +43,6 @@ const isStandaloneRoute = computed(() => isDashboard.value || isChatRoute.value 
 const mainContentRef = ref<HTMLElement | null>(null)
 const mobileSidebarOpen = ref(false)
 const { shouldStartHorizontalGesture } = useGestureGuards()
-const DASHBOARD_SWIPE_EDGE_GUARD_PX = 28
-
 const { allFolders, allFoldersLoading, deleteFolder } = useFolders()
 
 const isFolderRoute = computed(() => route.path.startsWith('/app/folders/'))
@@ -54,12 +53,12 @@ const currentFolderId = computed(() => {
 
 const currentFolderData = computed(() => {
   if (!isFolderRoute.value || !allFolders?.value || !currentFolderId.value) return null
-  return allFolders.value.find((f: any) => f._id === currentFolderId.value) ?? null
+  return allFolders.value.find(f => f._id === currentFolderId.value) ?? null
 })
 
 const folderAncestors = computed(() => {
   if (!currentFolderData.value || !allFolders?.value) return []
-  const folderMap = new Map(allFolders.value.map((f: any) => [f._id, f]))
+  const folderMap = new Map(allFolders.value.map(f => [f._id, f]))
   const ancestors: { _id: string; name: string }[] = []
   let parentId = currentFolderData.value.parentId
   const seen = new Set<string>()
@@ -204,10 +203,10 @@ async function executeExportData() {
 
     const { toast } = await import('vue-sonner')
     toast.success('Your data export is ready.')
-  } catch (e: any) {
+  } catch (e) {
     console.error('Data export failed', e)
     const { toast } = await import('vue-sonner')
-    toast.error(e?.message || 'We could not export your data. Please try again.')
+    toast.error(getErrorMessage(e, 'We could not export your data. Please try again.'))
   } finally {
     isExportingData.value = false
   }
@@ -243,10 +242,10 @@ async function executeDeleteAccount() {
     const { toast } = await import('vue-sonner')
     toast.success('Your account and all data have been deleted.')
     await onSignOut()
-  } catch (e: any) {
+  } catch (e) {
     console.error('Account deletion failed', e)
     const { toast } = await import('vue-sonner')
-    toast.error(e?.data?.message || e?.message || 'We could not delete your account. Please try again.')
+    toast.error(getErrorMessage(e, 'We could not delete your account. Please try again.'))
   } finally {
     isDeletingAccount.value = false
     showDeleteAccountDialog.value = false
@@ -266,9 +265,9 @@ async function executeDelete() {
     if (route.params.id && affectedIds.has(route.params.id as string)) {
       navigateTo('/')
     }
-  } catch (e: any) {
+  } catch (e) {
     const { toast } = await import('vue-sonner')
-    toast.error(e.message || 'Failed to delete folder')
+    toast.error(getErrorMessage(e, 'Failed to delete folder'))
   } finally {
     showDeleteDialog.value = false
     folderToDelete.value = null

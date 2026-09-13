@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import type { Id } from '~~/convex/_generated/dataModel'
+import { getErrorMessage } from '~~/shared/errors'
+import type { Doc, Id } from '~~/convex/_generated/dataModel'
 import { api } from '#convex/api'
 import { toast } from 'vue-sonner'
 import { injectFolderContext } from '~/composables/useFolderPageContext'
 import type { CachedSection } from '~/composables/useOfflineCache'
+import { createSsrMutationStub } from '~/utils/convexSsrMutation'
 
 const route = useRoute()
 const router = useRouter()
@@ -74,11 +76,11 @@ const sectionsQuery = import.meta.client
   ? useConvexQuery(api.courseSections.listByCourse, computed(() => ({ courseId: courseId.value })))
   : { data: ref(null) }
 
-const sections = computed(() => (sectionsQuery.data?.value as any[]) ?? [])
+const sections = computed(() => (sectionsQuery.data?.value as Doc<'courseSections'>[] | null) ?? [])
 
 const nextSection = computed(() => {
   if (!section.value) return null
-  return sections.value.find((s: any) => s.order === section.value!.order + 1) ?? null
+  return sections.value.find(s => s.order === section.value!.order + 1) ?? null
 })
 
 const isLastSection = computed(() => {
@@ -102,18 +104,18 @@ const completionData = ref<{
 
 const completeSectionMutation = import.meta.client
   ? useConvexMutation(api.courseSections.completeSection)
-  : { mutate: async () => null }
+  : createSsrMutationStub<typeof api.courseSections.completeSection>()
 
 const setOfflineMutation = import.meta.client
   ? useConvexMutation(api.courseSections.setOfflineAvailable)
-  : { mutate: async () => null }
+  : createSsrMutationStub<typeof api.courseSections.setOfflineAvailable>()
 
 const isCompleting = ref(false)
 
 async function cacheForOffline() {
   if (!import.meta.client) return
   try {
-    const payload = await $fetch<any>(`/api/learn/section-cache-payload?sectionId=${sectionId.value}`)
+    const payload = await $fetch<Omit<CachedSection, 'cachedAt'>>(`/api/learn/section-cache-payload?sectionId=${sectionId.value}`)
     if (!payload) return
 
     const audioUrls: string[] = []
@@ -166,8 +168,8 @@ async function handleCompleteSection() {
     showCompletionCard.value = true
 
     cacheForOffline()
-  } catch (e: any) {
-    toast.error(e?.message ?? 'Failed to complete section')
+  } catch (e) {
+    toast.error(getErrorMessage(e, 'Failed to complete section'))
     showCompletionCard.value = true
     completionData.value = {
       practiceScore: score,

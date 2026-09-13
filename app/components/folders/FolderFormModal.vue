@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { getErrorMessage } from '~~/shared/errors'
 import { useForm } from 'vee-validate'
 import { computed, ref, watch } from 'vue'
 import { Trash2 } from '@lucide/vue'
@@ -98,10 +99,8 @@ watch(
   },
 )
 
-function unwrapErrorMessage(err: any): string {
-  if (err?.data?.message && typeof err.data.message === 'string') return err.data.message
-  const raw = typeof err?.message === 'string' ? err.message : ''
-  return raw
+function unwrapErrorMessage(error: unknown): string {
+  return getErrorMessage(error, '')
     .replace(/^\[CONVEX [^\]]+\]\s*/, '')
     .replace(/^ConvexError:\s*/, '')
     .trim()
@@ -143,7 +142,7 @@ const onSubmit = handleSubmit(async (formValues) => {
       emit('updated', props.folder._id)
     }
     closeModal()
-  } catch (e: any) {
+  } catch (e) {
     toast.error(unwrapErrorMessage(e) || 'Something went wrong')
   }
 })
@@ -157,7 +156,7 @@ async function confirmDelete() {
     emit('deleted', props.folder._id)
     showDeleteConfirm.value = false
     closeModal()
-  } catch (e: any) {
+  } catch (e) {
     toast.error(unwrapErrorMessage(e) || 'Failed to delete folder')
   } finally {
     isDeleting.value = false

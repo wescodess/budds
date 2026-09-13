@@ -11,7 +11,7 @@ const props = withDefaults(defineProps<{
   nameKey?: string
   labelKey?: string
   labelFormatter?: (d: number | Date) => string
-  payload?: Record<string, any>
+  payload?: Record<string, string | number | undefined>
   config?: ChartConfig
   class?: HTMLAttributes["class"]
   color?: string
@@ -21,9 +21,6 @@ const props = withDefaults(defineProps<{
   config: () => ({}),
   indicator: "dot",
 })
-
-// TODO: currently we use `createElement` and `render` to render the
-// const chartContext = useChart(null)
 
 const payload = computed(() => {
   return Object.entries(props.payload).map(([key, value]) => {

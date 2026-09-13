@@ -1,9 +1,10 @@
+import type { H3Event } from 'h3'
 import { readConfiguredRuntimeValue } from './runtime-config'
 import { fetchPrivateR2Object } from './r2-folder'
 
 type InterjectionWorker = { fetch(request: Request): Promise<Response> }
 
-export function getAudioOverviewWorkerToken(event: any): string {
+export function getAudioOverviewWorkerToken(event: H3Event): string {
   const config = useRuntimeConfig(event)
   const token = readConfiguredRuntimeValue(
     config.audioOverviewWorkerToken,
@@ -16,7 +17,7 @@ export function getAudioOverviewWorkerToken(event: any): string {
   return token
 }
 
-type InterjectionArtifactEvidence = {
+export type InterjectionArtifactEvidence = {
   objectKey: string
   etag?: string
   checksumSha256: string
@@ -61,11 +62,11 @@ export async function assertPrivateInterjectionArtifact(
   }
 }
 
-export async function requestInterjectionWorker(
-  event: any,
+export async function requestInterjectionWorker<Result = unknown>(
+  event: H3Event,
   method: 'POST' | 'DELETE',
   payload: Record<string, unknown>,
-) {
+): Promise<Result> {
   const config = useRuntimeConfig(event)
   const token = getAudioOverviewWorkerToken(event)
   const request = new Request('https://audio-overview-worker.internal/interjections/render', {
@@ -95,5 +96,5 @@ export async function requestInterjectionWorker(
     const detail = (await response.text().catch(() => '')).slice(0, 300)
     throw createError({ statusCode: response.status >= 500 ? 502 : response.status, message: `Interjection Audio Renderer failed${detail ? `: ${detail}` : ''}` })
   }
-  return await response.json() as any
+  return await response.json() as Result
 }

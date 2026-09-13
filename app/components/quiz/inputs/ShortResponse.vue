@@ -1,5 +1,5 @@
 <script setup lang="ts">
-const props = defineProps<{
+defineProps<{
   modelValue: string
   disabled?: boolean
   feedback?: { isCorrect: boolean; correctAnswer: string } | null

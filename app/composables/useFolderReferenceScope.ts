@@ -6,6 +6,7 @@ import {
   type ScopeFolderSummary,
   type ScopeFileSummary,
 } from '~/composables/useReferenceScope'
+import { createSsrMutationStub } from '~/utils/convexSsrMutation'
 
 interface PersistedScope {
   folderIds?: Id<'folders'>[]
@@ -21,15 +22,13 @@ const WRITE_DEBOUNCE_MS = 400
 export function useFolderReferenceScope(options: UseFolderReferenceScopeOptions) {
   const scope = useReferenceScope()
 
-  const folderArgs = computed(() => {
-    const fid = options.folderId.value
-    return fid ? { id: fid } : undefined
-  })
+  const hasFolderId = computed(() => Boolean(options.folderId.value))
+  const folderArgs = computed(() => ({ id: options.folderId.value ?? '' as Id<'folders'> }))
 
-  const { data: folderData } = useConvexQuery(api.folders.getFolder, folderArgs as any)
+  const { data: folderData } = useConvexQuery(api.folders.getFolder, folderArgs, { enabled: hasFolderId })
 
   const persistedScope = computed<PersistedScope | null>(() => {
-    const row = folderData.value as any
+    const row = folderData.value
     if (!row?.referenceScope) return null
     return {
       folderIds: row.referenceScope.folderIds ?? undefined,
@@ -39,7 +38,7 @@ export function useFolderReferenceScope(options: UseFolderReferenceScopeOptions)
 
   const setMutation = import.meta.client
     ? useConvexMutation(api.folders.setReferenceScope)
-    : { mutate: async () => ({ cleared: true }) } as any
+    : createSsrMutationStub<typeof api.folders.setReferenceScope>()
 
   const hydrated = ref(false)
   let pendingWriteTimer: ReturnType<typeof setTimeout> | null = null
@@ -49,7 +48,7 @@ export function useFolderReferenceScope(options: UseFolderReferenceScopeOptions)
     folderData,
     (row) => {
       if (!row || hydrated.value) return
-      const persisted = (row as any).referenceScope as PersistedScope | undefined
+      const persisted = row.referenceScope as PersistedScope | undefined
       suppressWrite = true
       scope.clear()
       if (persisted?.folderIds?.length || persisted?.fileIds?.length) {
@@ -76,7 +75,7 @@ export function useFolderReferenceScope(options: UseFolderReferenceScopeOptions)
       const fid = options.folderId.value
       if (!fid) return
       const payload = scope.toPayload()
-      void setMutation.mutate({ folderId: fid, scope: payload } as any).catch(() => { /* best-effort */ })
+      void setMutation.mutate({ folderId: fid, scope: payload }).catch(() => { /* best-effort */ })
     }, WRITE_DEBOUNCE_MS)
   }
 

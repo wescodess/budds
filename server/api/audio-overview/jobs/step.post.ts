@@ -1,6 +1,8 @@
+import { getErrorMessage } from '../../../../shared/errors'
 import { ConvexHttpClient } from 'convex/browser'
+import type { H3Event } from 'h3'
 import { api } from '../../../../convex/_generated/api'
-import type { Id } from '../../../../convex/_generated/dataModel'
+import type { Doc, Id } from '../../../../convex/_generated/dataModel'
 import { mainUtteranceVerificationId } from '../../../../shared/audio-overview-grounding'
 import { AUDIO_OVERVIEW_PROFILE_CURRENT } from '../../../../shared/audio-overview-profile'
 import type { AISearchChunk } from '../../../utils/ai-search'
@@ -81,7 +83,9 @@ type StepBody = {
   error?: string
 }
 
-function makeJobClient(event: any) {
+type AudioOverviewRequest = NonNullable<Doc<'tasks'>['audioOverviewRequest']>
+
+function makeJobClient(event: H3Event) {
   const config = useRuntimeConfig(event)
   const convexUrl = readConfiguredRuntimeValue(config.public?.convex?.url, 'NUXT_PUBLIC_CONVEX_URL', 'CONVEX_URL')
   if (!convexUrl) throw createError({ statusCode: 503, message: 'Convex client unavailable' })
@@ -136,7 +140,7 @@ async function activeContext(client: ConvexHttpClient, jobId: Id<'audioOverviewJ
   return { active: !context.cancelled && !terminal, context }
 }
 
-function minimumGroundedCharacters(request: any): number {
+function minimumGroundedCharacters(request: AudioOverviewRequest): number {
   const lengthMinutes: unknown = request.preferences?.lengthMinutes
   const complexity: unknown = request.preferences?.complexity
   if ((lengthMinutes !== 5 && lengthMinutes !== 10 && lengthMinutes !== 20)
@@ -146,10 +150,10 @@ function minimumGroundedCharacters(request: any): number {
   return lengthMinutes * MIN_GROUNDED_CHARACTERS_PER_MINUTE[complexity]
 }
 
-async function retrieveGroundedChunks(request: any, userId: string): Promise<AISearchChunk[]> {
+async function retrieveGroundedChunks(request: AudioOverviewRequest, userId: string): Promise<AISearchChunk[]> {
   const minimumCharacters = minimumGroundedCharacters(request)
-  const scopeDocIds = request.documents.map((document: any) => String(document.documentId))
-  const frozenIdentityByDocument = new Map<string, { contentHash: string, sourceRevision: string }>(request.documents.map((document: any) => [
+  const scopeDocIds = request.documents.map(document => String(document.documentId))
+  const frozenIdentityByDocument = new Map<string, { contentHash: string, sourceRevision: string }>(request.documents.map(document => [
     String(document.documentId),
     {
       contentHash: String(document.contentHash ?? '').trim().toLowerCase(),
@@ -197,7 +201,7 @@ async function retrieveGroundedChunks(request: any, userId: string): Promise<AIS
   if (chunks.reduce((sum, chunk) => sum + chunk.content.trim().length, 0) < minimumCharacters) {
     const exactTextSources = await fetchFolderDocs({
       userId,
-      documents: request.documents.map((document: any) => ({
+      documents: request.documents.map(document => ({
         documentId: String(document.documentId),
         folderId: String(document.folderId),
         filename: document.filename,
@@ -205,14 +209,14 @@ async function retrieveGroundedChunks(request: any, userId: string): Promise<AIS
       })),
       maxChars: 80_000,
     })
-    const exactSources = exactTextSources.filter((document: any) => {
+    const exactSources = exactTextSources.filter(document => {
       const frozen = frozenIdentityByDocument.get(String(document.documentId))
       return frozen
         && document.contentHash?.trim().toLowerCase() === frozen.contentHash
         && document.sourceRevision?.trim() === frozen.sourceRevision
     })
     if (exactSources.length > 0) {
-      chunks = exactSources.map((document: any): AISearchChunk => ({
+      chunks = exactSources.map((document): AISearchChunk => ({
         id: document.key,
         content: document.content,
         score: 1,
@@ -235,7 +239,7 @@ async function retrieveGroundedChunks(request: any, userId: string): Promise<AIS
   return chunks
 }
 
-async function buildManifest(request: any) {
+async function buildManifest(request: AudioOverviewRequest) {
   const entries: Array<{
     sourceId: string
     documentId: Id<'documents'>
@@ -243,7 +247,7 @@ async function buildManifest(request: any) {
     contentHash: string
     displayReference: string
     objectKey?: string
-  }> = await Promise.all(request.documents.map(async (document: any) => {
+  }> = await Promise.all(request.documents.map(async document => {
     const frozenHash = typeof document.contentHash === 'string' && /^[a-f0-9]{64}$/i.test(document.contentHash)
       ? document.contentHash.toLowerCase()
       : null
@@ -802,7 +806,7 @@ async function commitScene(client: ConvexHttpClient, jobId: Id<'audioOverviewJob
       transcriptDivergenceThreshold: gate.metrics.transcriptDivergenceThreshold,
     },
     failureCode: passed ? undefined : firstFailure?.code ?? 'scene-contract',
-    failureMessage: passed ? undefined : firstFailure?.message ?? 'Scene failed its production contract',
+    failureMessage: passed ? undefined : getErrorMessage(firstFailure, 'Scene failed its production contract'),
   })
   const completed = context.scenes.filter(row => row.status === 'ready').length + (passed && scene.status !== 'ready' ? 1 : 0)
   await client.mutation(api.audioOverviewJobs.setProgress, {

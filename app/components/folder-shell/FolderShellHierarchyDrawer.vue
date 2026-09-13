@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { getErrorMessage } from '~~/shared/errors'
 import { X, FolderPlus, Search, Plus, Link as LinkIcon, Upload, Pencil } from '@lucide/vue'
 import { onKeyStroke } from '@vueuse/core'
 import { api } from '#convex/api'
@@ -244,9 +245,9 @@ async function confirmDeleteFolder() {
     await deleteFolder(f._id)
     const { toast } = await import('vue-sonner')
     toast.success('Folder deleted')
-  } catch (e: any) {
+  } catch (e) {
     const { toast } = await import('vue-sonner')
-    toast.error(e?.message || 'Failed to delete folder')
+    toast.error(getErrorMessage(e, 'Failed to delete folder'))
   }
 }
 
@@ -318,9 +319,9 @@ async function confirmMove(destId: Id<'folders'>) {
       toast.success('Moved')
       if (bulkMode.value) exitBulkMode()
     }
-  } catch (e: any) {
+  } catch (e) {
     const { toast } = await import('vue-sonner')
-    toast.error(e?.message || 'Failed to move')
+    toast.error(getErrorMessage(e, 'Failed to move'))
   } finally {
     movePending.value = false
     moveTargetIds.value = []
@@ -341,9 +342,9 @@ async function handleImportLink() {
     toast.success(`Imported ${result?.filename ?? 'document'}`)
     linkUrl.value = ''
     linkDialogOpen.value = false
-  } catch (err: any) {
+  } catch (err) {
     const { toast } = await import('vue-sonner')
-    toast.error(err?.message || 'Import failed')
+    toast.error(getErrorMessage(err, 'Import failed'))
   } finally {
     linkImporting.value = false
   }
@@ -360,9 +361,9 @@ async function onFiles(e: Event) {
       const { toast } = await import('vue-sonner')
       toast.success(files.length === 1 ? 'Document indexed' : `${files.length} documents indexed`)
     }
-    catch (err: any) {
+    catch (err) {
       const { toast } = await import('vue-sonner')
-      toast.error(err?.message || 'Upload failed')
+      toast.error(getErrorMessage(err, 'Upload failed'))
     }
   }
   t.value = ''

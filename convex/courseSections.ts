@@ -378,7 +378,7 @@ export const finalizeSectionGeneration = mutation({
       })
 
       for (const q of args.quizData.questions) {
-        let resolvedDocId: string | undefined
+        let resolvedDocId: Id<'documents'> | undefined
         if (q.sourceDocumentId) {
           const normalized = ctx.db.normalizeId('documents', q.sourceDocumentId)
           if (normalized) resolvedDocId = normalized
@@ -393,7 +393,7 @@ export const finalizeSectionGeneration = mutation({
           options: q.options,
           correctAnswer: q.correctAnswer,
           explanation: q.explanation,
-          sourceDocumentId: resolvedDocId as any,
+          sourceDocumentId: resolvedDocId,
           sourceChunkContent: q.sourceChunkContent,
           sourceFilename: q.sourceFilename,
         })
@@ -441,7 +441,7 @@ export const finalizeSectionGeneration = mutation({
           displayOrder: i,
           term,
           definition,
-          metadata: metadata as any,
+          metadata,
         })
 
         await ctx.db.insert('flashcardVersionCards', {
@@ -451,7 +451,7 @@ export const finalizeSectionGeneration = mutation({
           displayOrder: i,
           term,
           definition,
-          metadata: metadata as any,
+          metadata,
         })
       }
 
@@ -461,7 +461,7 @@ export const finalizeSectionGeneration = mutation({
         type: 'flashcard',
         entityId: roomId,
         entityType: 'flashcard',
-        order: blockOrder++,
+        order: blockOrder,
       })
     }
 

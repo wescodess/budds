@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import type { Id } from '../../../convex/_generated/dataModel'
+import { getErrorMessage } from '~~/shared/errors'
+import type { Doc, Id } from '../../../convex/_generated/dataModel'
 import { CONVEX_INJECTION_KEY } from '@convex-vue/core'
 import { api } from '#convex/api'
 import { toast } from 'vue-sonner'
+import { createSsrMutationStub } from '~/utils/convexSsrMutation'
 
 type Step = 'source-selection' | 'generating' | 'outline-editor' | 'error'
 
@@ -15,19 +17,14 @@ const step = ref<Step>(props.existingCourseId ? 'generating' : 'source-selection
 const courseId = ref<Id<'courses'> | null>(props.existingCourseId ?? null)
 const skeletonWidths = [85, 72, 90, 65, 78, 95, 70, 88]
 
-const ssrStub = {
-  mutate: async () => { throw new Error('Mutations are client-only') },
-  isLoading: ref(false),
-} as { mutate: (_args: any) => Promise<any>; isLoading: Ref<boolean> }
-
 const createMutation = import.meta.client
   ? useConvexMutation(api.courses.create)
-  : ssrStub
+  : createSsrMutationStub<typeof api.courses.create>()
 
 const submitting = ref(false)
 
-const course = ref<any>(null)
-const sections = ref<any[]>([])
+const course = ref<Doc<'courses'> | null>(null)
+const sections = ref<Doc<'courseSections'>[]>([])
 
 let unsubCourse: (() => void) | null = null
 let unsubSections: (() => void) | null = null
@@ -80,21 +77,21 @@ async function onSourceSubmit(payload: {
       folderId: payload.folderId,
       documentIds: payload.documentIds.length > 0 ? payload.documentIds : undefined,
       webSearchEnabled: payload.webSearchEnabled,
-    } as any)
+    })
 
-    if (result && (result as any).courseId) {
-      courseId.value = (result as any).courseId
+    if (result?.courseId) {
+      courseId.value = result.courseId
       step.value = 'generating'
 
       $fetch('/api/course/generate-outline', {
         method: 'POST',
-        body: { courseId: (result as any).courseId, taskId: (result as any).taskId },
+        body: { courseId: result.courseId, taskId: result.taskId },
       }).catch(() => {
         step.value = 'error'
       })
     }
-  } catch (e: any) {
-    toast.error(e?.message ?? 'Failed to create course')
+  } catch (e) {
+    toast.error(getErrorMessage(e, 'Failed to create course'))
     step.value = 'error'
   } finally {
     submitting.value = false
