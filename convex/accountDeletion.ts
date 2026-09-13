@@ -53,6 +53,7 @@ type DirectUserTable =
   | 'rateLimitBuckets'
   | 'tasks'
   | 'folders'
+  | 'learnV2'
 
 const DIRECT_PHASES = {
   messages: { table: 'messages', next: 'conversations' },
@@ -72,13 +73,18 @@ const DIRECT_PHASES = {
   courseSourceDocs: { table: 'courseSourceDocs', next: 'courseSections' },
   courseSections: { table: 'courseSections', next: 'courseDeletionJobs' },
   courseDeletionJobs: { table: 'courseDeletionJobs', next: 'courses' },
-  courses: { table: 'courses', next: 'audioMetadata' },
+  courses: { table: 'courses', next: 'learnV2' },
   audioJobs: { table: 'audioOverviewJobs', next: 'audioRooms' },
   audioRooms: { table: 'audioOverviewRooms', next: 'rateLimitBuckets' },
   rateLimitBuckets: { table: 'rateLimitBuckets', next: 'tasks' },
   tasks: { table: 'tasks', next: 'folders' },
   folders: { table: 'folders', next: 'user' },
 } as const satisfies Partial<Record<DeletionPhase, { table: DirectUserTable, next: DeletionPhase }>>
+
+// Child-before-parent order keeps each deletion transaction bounded and never
+// leaves V2 rows reachable while the account tombstone is active.
+const LEARN_V2_DELETE_ORDER = ['learnLifecycleReceipts', 'learnClaimSupports', 'sessionContentClaims', 'sessionContentBlocks', 'sessionContent', 'studySessionRetrievalObjectives', 'calendarProjections', 'studySessions', 'studyPlanRevisions', 'studyPlans', 'masteryAttempts', 'masteryRecords', 'learnObjectiveSources', 'learnSourceExcerpts', 'learnSourceSnapshots', 'learnObjectivePrerequisites', 'learnObjectives', 'learnMilestones', 'learnBlueprintRevisions', 'learnBlueprints', 'searchReservations', 'searchQuotaBuckets', 'learnJobs', 'reminderPolicies', 'learnSourceIdentities', 'learningVoids'] as const
+type LearnV2Table = typeof LEARN_V2_DELETE_ORDER[number]
 
 export function backoffMs(attempts: number): number {
   const capped = Math.min(attempts, 20)
@@ -334,6 +340,20 @@ async function deleteDirectUserBatch(ctx: MutationCtx, table: DirectUserTable, u
     case 'tasks': return await deleteRows(ctx, await ctx.db.query(table).withIndex('by_userId', q => q.eq('userId', userId)).take(DELETE_BATCH_SIZE))
     case 'folders': return await deleteRows(ctx, await ctx.db.query(table).withIndex('by_userId', q => q.eq('userId', userId)).take(DELETE_BATCH_SIZE))
   }
+}
+
+async function deleteLearnV2Table<TableName extends LearnV2Table>(ctx: MutationCtx, table: TableName, userId: string) {
+  // The schema guarantees this shared owner index for every listed V2 table;
+  // Convex's generic union cannot retain that common index at this call site.
+  const rows = await ctx.db.query(table).withIndex('by_userId', q => q.eq('userId', userId as never)).take(DELETE_BATCH_SIZE)
+  return await deleteRows(ctx, rows)
+}
+
+async function deleteLearnV2Batch(ctx: MutationCtx, job: AccountDeletionJob) {
+  for (const table of LEARN_V2_DELETE_ORDER) {
+    if (await deleteLearnV2Table(ctx, table, job.userId)) { await continuePhase(ctx, job); return }
+  }
+  await updatePhase(ctx, job, 'audioMetadata')
 }
 
 async function waitForCalendarCleanup(ctx: MutationCtx, job: AccountDeletionJob) {
@@ -632,6 +652,10 @@ export const runDeletionBatch = internalMutation({
     }
     if (job.phase === 'audioMetadata') {
       await deleteOrphanAudioMetadataBatch(ctx, job)
+      return { state: 'running' as const, phase: job.phase }
+    }
+    if (job.phase === 'learnV2') {
+      await deleteLearnV2Batch(ctx, job)
       return { state: 'running' as const, phase: job.phase }
     }
     if (job.phase === 'audioJobTurns') {

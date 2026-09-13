@@ -41,6 +41,8 @@ import type * as folders from "../folders.js";
 import type * as http from "../http.js";
 import type * as learnProfile from "../learnProfile.js";
 import type * as learnV2Access from "../learnV2Access.js";
+import type * as learnV2Lifecycle from "../learnV2Lifecycle.js";
+import type * as learnV2Retention from "../learnV2Retention.js";
 import type * as lib_accountDeletionTombstone from "../lib/accountDeletionTombstone.js";
 import type * as lib_audioOverviewLegacyBoundary from "../lib/audioOverviewLegacyBoundary.js";
 import type * as lib_audioOverviewOrchestrationAuth from "../lib/audioOverviewOrchestrationAuth.js";
@@ -101,6 +103,8 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   learnProfile: typeof learnProfile;
   learnV2Access: typeof learnV2Access;
+  learnV2Lifecycle: typeof learnV2Lifecycle;
+  learnV2Retention: typeof learnV2Retention;
   "lib/accountDeletionTombstone": typeof lib_accountDeletionTombstone;
   "lib/audioOverviewLegacyBoundary": typeof lib_audioOverviewLegacyBoundary;
   "lib/audioOverviewOrchestrationAuth": typeof lib_audioOverviewOrchestrationAuth;
