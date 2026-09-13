@@ -50,12 +50,12 @@ From `node_modules/@nuxtjs/mdc` source:
 
 The chat renderer is not using Nuxt Content files. It is using runtime MDC rendering:
 
-- [`app/components/chat/Message.vue`](/Users/wesleyukadike/Desktop/budds/app/components/chat/Message.vue:1)
+- [`app/components/chat/Message.vue`](../../app/components/chat/Message.vue)
   - Assistant messages go through `expandCitations()`.
   - The processed string is rendered with `<MDC :value="processedContent" />`.
-- [`app/utils/expand-citations.ts`](/Users/wesleyukadike/Desktop/budds/app/utils/expand-citations.ts:1)
+- [`app/utils/expand-citations.ts`](../../app/utils/expand-citations.ts)
   - Rewrites `[1]` into `:citation[1]{index="1"}`.
-- [`app/components/global/Citation.vue`](/Users/wesleyukadike/Desktop/budds/app/components/global/Citation.vue:1)
+- [`app/components/global/Citation.vue`](../../app/components/global/Citation.vue)
   - Wraps `ChatCitationBadge`.
   - Reads source data from `provide/inject`.
 - `nuxt.config.ts`

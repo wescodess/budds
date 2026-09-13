@@ -163,7 +163,6 @@ budds/
 │   ├── archiveMultiChat.ts          # Multi-chat archive
 │   ├── folderIcons.ts               # Folder icon definitions
 │   ├── folderPalette.ts             # Folder color palette definitions
-│   ├── debugQuery.ts                # Debug utilities
 │   ├── lib/
 │   │   ├── auth.ts                  # Auth helper utilities
 │   │   ├── dates.ts                 # Date utilities

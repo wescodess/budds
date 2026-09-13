@@ -15,30 +15,30 @@ Budds is an AI-powered learning platform built on Nuxt 4 (Vue 3) with Convex as 
 | Framework | Nuxt | 4.0+ | Full-stack Vue framework |
 | UI Framework | Vue | 3.5.13+ | Reactive component framework |
 | Language | TypeScript | 5.7.2+ | Type-safe development |
-| Backend | Convex | 1.34.1 | Real-time backend-as-a-service |
-| Auth | Better Auth | 1.5.6 | Authentication (Google OAuth) |
-| Auth Integration | @onmax/nuxt-better-auth | 0.0.2-alpha.31 | Nuxt SSR auth module |
+| Backend | Convex | 1.45.0 | Real-time backend-as-a-service |
+| Auth | Better Auth | 1.6.30 | Authentication (Google OAuth) |
+| Auth Integration | @onmax/nuxt-better-auth | 0.1.1 | Nuxt SSR auth module |
 | Convex Integration | nuxt-convex | 0.0.6 (patched) | Nuxt module for Convex |
 | Styling | Tailwind CSS | 4.0+ | Utility-first CSS |
 | UI Components | shadcn-nuxt + Reka UI | 2.5.1 / 2.9.5 | Headless component library (60+ components) |
-| Icons | lucide-vue-next | 1.0+ | Icon library |
+| Icons | @lucide/vue | 1.45+ | Icon library |
 | Animation | motion-v | 2.2.1+ | Motion animation library |
 | AI Gateway | Cloudflare AI Gateway | - | LLM request routing and observability |
 | AI Search | Cloudflare AI Search | - | Semantic document retrieval (RAG) |
 | AI Inference | Cloudflare Workers AI | - | Audio transcription and quality evidence |
 | LLM Router | OpenRouter | - | Multi-model LLM access |
-| Audio Renderer | Gemini 2.5 Flash Preview TTS | Preview | Native two-speaker scene rendering |
+| Audio Renderer | Gemini 3.1 Flash TTS Preview | Preview | Interactions API two-speaker scene rendering |
 | Durable Jobs | Cloudflare Workflows | - | Resumable Audio Overview orchestration |
 | Object Storage | Cloudflare R2 | - | Audio file storage |
 | Markdown | @nuxtjs/mdc | 0.21.1 | Markdown rendering with components |
 | Tables | @tanstack/vue-table | 8.21.3 | Headless table logic |
-| Forms | vee-validate + zod | 4.15.1 / 3.25.76 | Form validation |
+| Forms | vee-validate + zod | 4.15.1 / 4.5.4 | Form validation |
 | Utilities | @vueuse/core | 14.2.1+ | Vue composition utilities |
 | Carousel | embla-carousel-vue | 8.6.0 | Carousel component |
 | Diagrams | mermaid | 11.14.0 | Diagram rendering |
 | Deploy Target | Cloudflare Pages | - | Edge deployment |
 | Package Manager | pnpm | 9.12.3 | Disk-efficient package manager |
-| Testing | Vitest + convex-test | 4.1.4 / 0.0.47 | Unit, integration, and component tests |
+| Testing | Vitest + convex-test | 4.1.11 / 0.0.47 | Unit, integration, and component tests |
 | Component Testing | @nuxt/test-utils + happy-dom | 4.0.2 / 20.8.9 | Vue component test environment |
 
 ## Key Features

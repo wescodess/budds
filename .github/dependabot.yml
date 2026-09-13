@@ -1,0 +1,40 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '10:00'
+      timezone: America/Toronto
+    groups:
+      application-dependencies:
+        patterns:
+          - '*'
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: npm
+    directory: /workers/audio-overview
+    schedule:
+      interval: weekly
+      day: monday
+      time: '10:30'
+      timezone: America/Toronto
+    groups:
+      worker-dependencies:
+        patterns:
+          - '*'
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '11:00'
+      timezone: America/Toronto
+    groups:
+      workflow-actions:
+        patterns:
+          - '*'
+    open-pull-requests-limit: 5

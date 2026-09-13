@@ -45,7 +45,7 @@ Budds is a knowledge management and learning platform built on Nuxt 4 with Conve
 | AI/LLM | OpenRouter (via Cloudflare AI Gateway) |
 | Search/RAG | Cloudflare AI Search |
 | Storage | Cloudflare R2, Convex file storage |
-| Audio generation | Cloudflare Workflow + Gemini 2.5 Flash Preview TTS |
+| Audio generation | Cloudflare Workflow + Gemini 3.1 Flash TTS Preview through the Interactions API |
 | Deployment | Cloudflare Pages (frontend + Nitro), Convex Cloud (backend) |
 
 ---
@@ -311,7 +311,7 @@ Public (client-accessible):
 - `NUXT_PUBLIC_SITE_URL` - Application origin
 
 Convex env vars (set via `npx convex env set`):
-- `BETTER_AUTH_SECRET`, `SITE_URL`, `CONVEX_SITE_URL`
+- `NUXT_BETTER_AUTH_SECRET`, `SITE_URL`, `CONVEX_SITE_URL`
 - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`
 
 ### Dev Server

@@ -4,7 +4,7 @@
 
 ## Prerequisites
 
-- **Node.js** v20+ (LTS recommended)
+- **Node.js** 22.19+ or 24.11+ as declared in `package.json` (`.node-version` selects 24.11.0)
 - **pnpm** 9.12.3+
 - **Convex CLI** (`npx convex`)
 - **Google Cloud Console** OAuth 2.0 credentials
@@ -54,7 +54,7 @@ Dia variables are legacy evaluation settings. They do not configure the producti
 | Secret, variable, or binding | Kind | Purpose |
 |---|---|---|
 | `AUDIO_OVERVIEW_WORKER_TOKEN` | Secret | Authenticates launch requests from Pages |
-| `GEMINI_API_KEY` | Secret | Server-side Gemini 2.5 Flash Preview TTS access; never expose it through Nuxt public config or Workflow parameters |
+| `GEMINI_API_KEY` | Secret | Server-side Google AI Studio key for Gemini 3.1 Flash TTS through the Interactions API; never expose it through Nuxt public config or Workflow parameters |
 | `PAGES_BASE_URL` | Variable | Origin used for the current capability-authenticated Pages callback |
 | `AUDIO_ARTIFACTS` | Private R2 binding | Stores deterministic Scene PCM and final WAV Audio Artifacts |
 
@@ -64,7 +64,7 @@ The checked-in Worker config binds `AUDIO_ARTIFACTS` to the local/development bu
 
 | Variable | Purpose |
 |---|---|
-| `BETTER_AUTH_SECRET` | Better Auth session signing secret |
+| `NUXT_BETTER_AUTH_SECRET` | Better Auth session signing secret in deployed environments (`BETTER_AUTH_SECRET` remains a local-development fallback) |
 | `SITE_URL` | Application origin |
 | `CONVEX_SITE_URL` | Convex HTTP URL |
 | `GOOGLE_CLIENT_ID` | Google OAuth client ID |
@@ -118,7 +118,8 @@ Use the same local launch token for Nuxt and the Worker. Add a server-side Gemin
 
 ```bash
 cp workers/audio-overview/.dev.vars.example workers/audio-overview/.dev.vars
-# Set AUDIO_OVERVIEW_WORKER_TOKEN and GEMINI_API_KEY in .dev.vars.
+# Set AUDIO_OVERVIEW_WORKER_TOKEN and a Google AI Studio API key in .dev.vars.
+# Do not use an OAuth access token (for example, ya29.*) as GEMINI_API_KEY.
 # Set the same launch token as NUXT_AUDIO_OVERVIEW_WORKER_TOKEN in .env.local.
 # Mirror that exact launch token into the active Convex deployment:
 # pnpm exec convex env set AUDIO_OVERVIEW_WORKER_TOKEN '<same-32+-character-token>'

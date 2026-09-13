@@ -160,6 +160,6 @@ rescue cron resume interrupted deletions.
 
 ### TTS Service (Audio Synthesis)
 
-- **Role:** Gemini 2.5 Flash Preview TTS jointly renders the two fixed managed Hosts for each Audio Overview scene; a Cloudflare Workflow owns retries and publication.
+- **Role:** Gemini 3.1 Flash TTS Preview jointly renders the two managed Hosts through the Interactions API for each Audio Overview scene; a Cloudflare Workflow owns retries and publication.
 - **Impact if down:** New Audio Overview generation terminal-fails without falling back to Dia or Aura. Existing published WAV artifacts remain playable.
 - **Current release gate:** Production remains blocked until the owner-triggered real-provider run and blind listening bake-off pass. Acoustic speaker count/identity must not be claimed unless measured; configuration evidence alone is recorded separately.

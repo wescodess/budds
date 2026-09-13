@@ -469,18 +469,6 @@ Exports supported user-owned records as a streamed ZIP archive, including folder
 
 ---
 
-### Debug
-
-#### POST /api/debug/testR2
-
-Tests R2 storage connectivity in non-production environments only. The route is disabled unless `ENABLE_R2_DEBUG_ROUTE=true` and requires an authenticated Convex identity.
-
-**Request body:** `{ folderId: string }`
-
-**Response:** `{ configStatus: object; success?: boolean; count?: number; docs?: string[]; error?: string }`
-
----
-
 ## 2. Convex Functions
 
 ### folders

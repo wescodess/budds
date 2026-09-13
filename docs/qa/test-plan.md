@@ -83,7 +83,7 @@ The suite covers the exact Gemini model and fixed Hosts, native two-speaker requ
 
 ## Coverage Summary
 
-As of 2026-09-03, the root suite passes 62 files with 905 tests passed and 8 skipped. The focused mounted Audio Overview suite passes 8 files with 35 tests, and the Worker suite passes 7 files with 52 tests plus its standalone TypeScript check.
+As of 2026-09-05, the root suite passes 69 files with 1,008 tests passed and 8 skipped. The general mounted component suite passes 74 files (13 skipped) with 432 tests passed and 85 skipped. The focused mounted Audio Overview suite passes 10 files with 38 tests, and the Worker suite passes 7 files with 62 tests plus its standalone TypeScript check.
 
 Component tests are run separately and not included in the default `pnpm test` run.
 
@@ -111,7 +111,7 @@ Conceptual-course audio primers remain fail-closed until they launch and attach 
 
 ## Testing Gaps
 
-### Convex modules without tests (9 files)
+### Convex modules without tests (8 files)
 
 | File                         | Risk                                             |
 | ---------------------------- | ------------------------------------------------ |
@@ -123,9 +123,8 @@ Conceptual-course audio primers remain fail-closed until they launch and attach 
 | `convex/sourceExtractors.ts` | Document parsing helpers                         |
 | `convex/folderIcons.ts`      | Static data                                      |
 | `convex/folderPalette.ts`    | Static data                                      |
-| `convex/debugQuery.ts`       | Dev-only tooling                                 |
 
-### Server routes without tests (9 files)
+### Server routes without tests (8 files)
 
 | Route                             | Priority                   |
 | --------------------------------- | -------------------------- |
@@ -137,13 +136,12 @@ Conceptual-course audio primers remain fail-closed until they launch and attach 
 | `calendar/sync.post`              | Medium                     |
 | `calendar/disconnect.post`        | Low                        |
 | `learn/section-cache-payload.get` | Low                        |
-| `debug/testR2.post`               | Dev-only                   |
 
 ### Other gaps
 
 - Component coverage remains partial. Mobile and global components have minimal or no dedicated tests.
 - **No E2E tests** -- end-to-end flows (login, folder creation, chat, quiz taking) are not automated.
-- **No CI pipeline** -- no `.github/workflows` directory or CI config exists. Tests are run locally only.
+- **CI is configured**, but current GitHub run health must be checked before release.
 - **No coverage threshold enforcement.**
 
 ## Manual Testing Checklist

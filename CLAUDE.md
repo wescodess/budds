@@ -12,7 +12,7 @@ Auth uses Better Auth running on Convex HTTP actions (`convex/auth.ts` + `convex
 `@onmax/nuxt-better-auth` runs in SSR mode (`clientOnly: false`) — the Nuxt server validates sessions via the auth proxy (`server/api/auth/[...].ts`) which forwards to Convex. A server middleware (`server/middleware/convex-token.ts`) fetches Convex JWT tokens during SSR so authenticated queries can run server-side.
 
 Required Convex env vars (set via `npx convex env set`):
-- `BETTER_AUTH_SECRET`
+- `NUXT_BETTER_AUTH_SECRET` (`BETTER_AUTH_SECRET` is accepted for local development)
 - `SITE_URL` (Nuxt app origin, e.g. `http://localhost:3002`)
 - `CONVEX_SITE_URL` (Convex HTTP URL)
 - `GOOGLE_CLIENT_ID`

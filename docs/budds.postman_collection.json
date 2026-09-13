@@ -461,31 +461,6 @@
           }
         }
       ]
-    },
-    {
-      "name": "Debug",
-      "description": "Development/debug endpoints (not for production use).",
-      "item": [
-        {
-          "name": "Test R2 Connection",
-          "request": {
-            "method": "POST",
-            "header": [
-              { "key": "Content-Type", "value": "application/json" }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"userId\": \"<user_id>\",\n  \"folderId\": \"<folder_id>\"\n}"
-            },
-            "url": {
-              "raw": "{{base_url}}/api/debug/testR2",
-              "host": ["{{base_url}}"],
-              "path": ["api", "debug", "testR2"]
-            },
-            "description": "Tests R2 storage connectivity by attempting to fetch folder documents. Returns R2 config status and document keys.\n\nResponse:\n{\n  \"configStatus\": { \"r2Endpoint\": true, ... },\n  \"success\": true,\n  \"count\": 5,\n  \"docs\": [\"key1\", \"key2\"]\n}"
-          }
-        }
-      ]
     }
   ]
 }

@@ -78,7 +78,6 @@ All API endpoints that call `getConvexTokenIdentifier(event)` implicitly require
 Exceptions:
 - `/api/calendar/connect` does not require a Convex token (it starts OAuth)
 - `/api/calendar/callback` validates via CSRF state cookie, not Convex token
-- `/api/debug/testR2` optionally uses auth (falls back gracefully)
 
 ## 5. Logout Flow
 

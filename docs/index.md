@@ -3,7 +3,7 @@
 **Type:** Monolith Web Application
 **Primary Language:** TypeScript / Vue 3
 **Architecture:** Full-Stack Nuxt 4 + Convex Real-Time Backend + Cloudflare AI Services
-**Last Updated:** 2026-04-24
+**Last Updated:** 2026-09-13
 
 ## Project Overview
 
@@ -16,7 +16,7 @@ Budds is an AI-powered learning and productivity platform. Users organize conten
 - **Architecture Pattern:** Nuxt 4 SSR + Convex reactive backend + Nitro AI API routes
 - **Database:** Convex (25+ tables) + Better Auth session management
 - **Deployment:** Cloudflare Pages (frontend) + Convex Cloud (backend)
-- **Testing:** Vitest + convex-test + @nuxt/test-utils (647 test files)
+- **Testing:** Vitest + convex-test + @nuxt/test-utils, split across unit, component, Audio Overview, and Worker suites
 
 ## Generated Documentation
 
@@ -43,6 +43,11 @@ Budds is an AI-powered learning and productivity platform. Users organize conten
 - [Deployment Guide](./qa/deployment-guide.md) — Environments, deploy process, verification
 - [Bug Reporting Guide](./qa/bug-reporting-guide.md) — Severity levels, required fields, templates
 
+### Operations
+
+- [Production Release Checklist](./operations/release-checklist.md) — Promotion, deployment, verification, and release evidence
+- [Repository History Rewrite](./operations/history-rewrite.md) — Credential-removal scope, preconditions, verification, and recovery
+
 ### API Testing
 
 - [Postman Collection](./budds.postman_collection.json) — Importable collection for all API endpoints
@@ -51,6 +56,15 @@ Budds is an AI-powered learning and productivity platform. Users organize conten
 
 - [CLAUDE.md](../CLAUDE.md) — AI assistant project instructions
 - [AGENTS.md](../AGENTS.md) — AI agent instructions
+- [CONTEXT.md](../CONTEXT.md) — Canonical product and domain vocabulary
+- [DESIGN.md](../DESIGN.md) — Canonical visual design system
+- [README.md](../README.md) — Repository entry point and validation overview
+- [CONTRIBUTING.md](../CONTRIBUTING.md) — Branch, commit, testing, and pull-request rules
+- [SECURITY.md](../SECURITY.md) — Private reporting and credential-incident policy
+
+### Historical plans
+
+Completed and superseded feature plans are retained under [`docs/archive/plans`](./archive/plans/) for decision traceability. They are not current implementation contracts.
 
 ## Getting Started
 

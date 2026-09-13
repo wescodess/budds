@@ -102,7 +102,7 @@ pinned Wrangler version.
 
 | Variable | Required | Description |
 |---|---|---|
-| `BETTER_AUTH_SECRET` | Yes | Secret for Better Auth session signing |
+| `NUXT_BETTER_AUTH_SECRET` | Yes | Runtime secret for Better Auth session signing |
 | `SITE_URL` | Yes | Nuxt app origin (e.g., `https://budds.app`) |
 | `CONVEX_SITE_URL` | Yes | Convex HTTP actions URL |
 | `GOOGLE_CLIENT_ID` | Yes | Google OAuth client ID |

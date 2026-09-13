@@ -1,0 +1,24 @@
+name: Pull Request Title
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Conventional pull request title
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          pattern='^(feat|fix|docs|test|chore|refactor|perf|build|ci|style|revert)(\([a-z0-9][a-z0-9._/-]*\))?!?: .+'
+          if [[ ! "$PR_TITLE" =~ $pattern ]]; then
+            echo "Pull request titles must use Conventional Commits: type(optional-scope): imperative summary"
+            exit 1
+          fi
