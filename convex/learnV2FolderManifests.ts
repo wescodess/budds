@@ -124,7 +124,7 @@ async function inside(
   }
   return false;
 }
-function fingerprint(a: {
+async function fingerprint(a: {
   learningVoidId: Id<"learningVoids">;
   blueprintRevisionId: Id<"learnBlueprintRevisions">;
   expectedVoidRevision: number;
@@ -132,13 +132,13 @@ function fingerprint(a: {
   folderIds: Id<"folders">[];
   documentIds: Id<"documents">[];
 }) {
-  return JSON.stringify({
+  return await digest(JSON.stringify({
     ...a,
     learningVoidId: String(a.learningVoidId),
     blueprintRevisionId: String(a.blueprintRevisionId),
     folderIds: [...new Set(a.folderIds.map(String))].sort(),
     documentIds: [...new Set(a.documentIds.map(String))].sort(),
-  });
+  }));
 }
 async function addFolder(
   ctx: MutationCtx,
@@ -354,7 +354,7 @@ export const freezeManifest = mutation({
         "Folder source selection exceeds the bounded input limit",
       );
     const userId = await requireLearnV2MutationAccess(ctx),
-      key = fingerprint(args);
+      key = await fingerprint(args);
     const replay = await ctx.db
       .query("learnFolderSourceManifests")
       .withIndex("by_userId_and_idempotencyKey", (q) =>
@@ -496,9 +496,17 @@ export const continueCapture = internalMutation({
         if (!actualFolder || actualFolder.userId !== manifest.userId)
           throw new Error("Selected document folder is unavailable");
         const folder = await addFolder(ctx, manifest, actualFolder, 0, false);
-        await addDocument(ctx, manifest, folder, document);
+        const currentFolder = await refreshFolderForCapture(
+          ctx,
+          manifest,
+          folder,
+        );
+        await addDocument(ctx, manifest, currentFolder, document);
         await ctx.db.patch(manifest._id, {
-          explicitDocumentCursor: manifest.explicitDocumentCursor + 1,
+          explicitDocumentIds: manifest.explicitDocumentIds.slice(
+            manifest.explicitDocumentCursor + 1,
+          ),
+          explicitDocumentCursor: 0,
         });
       } else {
         const children = await ctx.db
@@ -610,6 +618,12 @@ export const continueCapture = internalMutation({
               );
             await ctx.db.patch(manifest._id, {
               status: "frozen",
+              coverage:
+                manifest.entryCount === 0 && manifest.nextFolderOrder > 0
+                  ? "gap"
+                  : manifest.coverage,
+              explicitDocumentIds: [],
+              explicitDocumentCursor: 0,
               recordRevision: manifest.recordRevision + 1,
               frozenAt: Date.now(),
             });
@@ -620,6 +634,8 @@ export const continueCapture = internalMutation({
     } catch (error) {
       await ctx.db.patch(manifest._id, {
         status: "failed",
+        explicitDocumentIds: [],
+        explicitDocumentCursor: 0,
         recordRevision: manifest.recordRevision + 1,
         failureReason: (error instanceof Error
           ? error.message

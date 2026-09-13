@@ -372,6 +372,10 @@ export const deleteFolder = mutation({
           userId,
           documentId: doc._id,
         })
+        await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeFolderDocumentManifestHeaders, {
+          userId,
+          documentId: doc._id,
+        })
         await ctx.db.delete(doc._id)
         deletedDocuments++
       }

@@ -489,6 +489,11 @@ export const removeFailedDocument = internalMutation({
       internal.learnV2Retention.purgeFolderDocumentSources,
       { userId: doc.userId, documentId: doc._id },
     );
+    await ctx.scheduler.runAfter(
+      0,
+      internal.learnV2Retention.purgeFolderDocumentManifestHeaders,
+      { userId: doc.userId, documentId: doc._id },
+    );
     await ctx.db.delete(args.id);
   },
 });
@@ -527,6 +532,11 @@ export const deleteDocument = mutation({
     await ctx.scheduler.runAfter(
       0,
       internal.learnV2Retention.purgeFolderDocumentSources,
+      { userId, documentId: doc._id },
+    );
+    await ctx.scheduler.runAfter(
+      0,
+      internal.learnV2Retention.purgeFolderDocumentManifestHeaders,
       { userId, documentId: doc._id },
     );
     await ctx.db.delete(args.id);
