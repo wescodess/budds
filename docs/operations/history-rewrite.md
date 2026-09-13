@@ -20,11 +20,17 @@ The 2026-09-13 isolated mirror rehearsal produced this evidence without changing
 
 ## Execution evidence
 
-- The final rewrite scanned 419 reachable commits with Gitleaks and reported zero findings.
+- The final rewrite scanned every branch/tag-reachable commit with Gitleaks and reported zero findings.
 - Both confirmed credential values had zero occurrences in rewritten patches.
-- Every targeted root, debug, lockfile, and generated-output path was absent from surviving history.
+- Every targeted root, debug, lockfile, and generated-output path was absent from surviving branch and tag history.
 - `git fsck --full --strict` completed without repository-integrity errors.
-- A fresh local checkout matched the tested production-baseline tree exactly.
+- A fresh clone resolved to the rewritten tip, did not contain the previous `main` object, and matched the tested production-baseline tree exactly.
+
+## GitHub-managed reference boundary
+
+GitHub-managed pull-request refs and cached views can continue to retain old commit objects after branches and tags are rewritten because those refs are read-only to repository owners. The exposed credentials are rotated, and the owner elected not to pursue further credential work during this cleanup, so no GitHub Support removal request was submitted. A complete server-side purge would require the process in GitHub's [sensitive-data removal guidance](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository).
+
+Do not merge from a pre-rewrite clone. Collaborators must re-clone or rebase clean work onto the rewritten history so an old merge cannot restore the removed objects to a writable branch.
 
 One local Codex checkpoint pointed directly to an old tree object and could not be rewritten as a commit. It was covered by the private recovery bundle and removed with the other local checkpoint and stash refs after the coordinated rewrite. It was never a remote branch or tag.
 
