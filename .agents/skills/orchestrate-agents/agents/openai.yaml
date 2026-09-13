@@ -1,0 +1,4 @@
+interface:
+  display_name: "Orchestrate Agents"
+  short_description: "Coordinate agents with clean Git integration"
+  default_prompt: "Use $orchestrate-agents to coordinate this repository task across agents and deliver a verified change."
