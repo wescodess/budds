@@ -189,7 +189,16 @@ export const purgeFolderDocumentManifestHeaders = internalMutation({
     for (const manifest of page.page) {
       const explicitDocumentIds = manifest.explicitDocumentIds.filter(id => id !== args.documentId)
       if (explicitDocumentIds.length !== manifest.explicitDocumentIds.length) {
-        await ctx.db.patch(manifest._id, { explicitDocumentIds })
+        await ctx.db.patch(manifest._id, manifest.status === 'capturing'
+          ? {
+              status: 'failed',
+              coverage: manifest.coverage === 'empty' ? 'gap' : manifest.coverage,
+              failureReason: 'Selected document was deleted during source capture',
+              explicitDocumentIds: [],
+              explicitDocumentCursor: 0,
+              recordRevision: manifest.recordRevision + 1,
+            }
+          : { explicitDocumentIds })
       }
     }
     if (!page.isDone) {

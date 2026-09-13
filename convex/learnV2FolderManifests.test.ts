@@ -934,11 +934,28 @@ describe("Learn V2 folder source manifests", () => {
     await t.finishAllScheduledFunctions(vi.runAllTimers);
     const stored = await t.run((ctx) => ctx.db.get(manifest!._id));
     expect(stored).toMatchObject({
-      status: "capturing",
+      status: "failed",
+      coverage: "gap",
+      failureReason: "Selected document was deleted during source capture",
       explicitDocumentIds: [],
       requestFingerprint: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
     });
     expect(stored!.requestFingerprint).not.toContain(String(selected));
+    await t.mutation(internal.learnV2Access.setCohortEntitlement, {
+      tokenIdentifier: owner.tokenIdentifier,
+      enabled: true,
+    });
+    expect(
+      await asOwner.mutation(api.learnV2FolderManifests.freezeManifest, {
+        learningVoidId: voidRow._id,
+        blueprintRevisionId: blueprint._id,
+        expectedBlueprintRecordRevision: 1,
+        expectedVoidRevision: 2,
+        folderIds: [],
+        documentIds: [selected],
+        idempotencyKey: "paused-delete",
+      }),
+    ).toMatchObject({ status: "failed", coverage: "gap" });
   });
 
   test("refreshes a folder revision before traversal and fails on drift after traversal starts", async () => {

@@ -71,7 +71,9 @@ The command stores a normalized manifest header and selected folder queue, then
 cursors and monotonically allocated folder/document order values make retries
 exact-once. Idempotency stores only a SHA-256 digest of the canonical request;
 raw explicit document checkpoints are consumed during capture, cleared at every
-terminal state, and pruned by bounded deletion cleanup while paused. Input is
+terminal state, and pruned by bounded deletion cleanup while paused. Deleting
+an uncaptured explicit selection fails the paused capture instead of silently
+narrowing it. Input is
 capped at eight selected folders and 64 explicit documents;
 the assembled manifest fails explicitly above 4,096 documents. Public list
 queries cap pages at 16 and omit internal traversal cursors. No new path calls
