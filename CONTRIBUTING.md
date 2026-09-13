@@ -63,6 +63,6 @@ Use squash merge after all required checks pass. When GitHub-hosted execution is
 
 Commit generated Convex types when their owning schema or function interface changes. Do not commit `.env*`, `.nuxt/`, `.output/`, `dist/`, provider responses containing user data, local screenshots, or scratch scripts.
 
-Keep active documentation current. Move completed or superseded plans to `docs/archive/` and label them historical. Treat `_bmad-output/` as project evidence, not as the current runtime contract.
+Keep active documentation current. Move completed or superseded plans to `docs/archive/` and label them historical.
 
-Keep `.agents/skills/` as the single checked-in agent-skill adapter. Tool-specific mirrors such as `.agent/`, `.cline/`, `.kiro/`, and `.roo/` are generated duplicates and must remain ignored.
+Keep only explicitly installed, project-relevant skills in `.agents/skills/`. Tool-specific mirrors such as `.agent/`, `.cline/`, `.kiro/`, and `.roo/` are generated duplicates and must remain ignored.

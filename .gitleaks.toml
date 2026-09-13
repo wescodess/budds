@@ -2,7 +2,7 @@
 useDefault = true
 
 [[allowlists]]
-description = "Ignore generic-key false positives in generated BMAD reference material"
+description = "Ignore generic-key false positives in removed workflow reference material retained in Git history"
 targetRules = ["generic-api-key"]
 paths = [
   '''(?:^|/)(?:\.agent|\.agents|\.cline|\.kiro|\.roo|_bmad)/(?:.*?/)?resources/knowledge/api-testing-patterns\.md$''',

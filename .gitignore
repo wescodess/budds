@@ -14,5 +14,8 @@ wrangler.local.toml
 /.cline/
 /.kiro/
 /.roo/
+/_bmad/
+/_bmad-output/
+/.agents/skills/bmad-*/
 /package-lock.json
 /screen_*.png
