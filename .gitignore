@@ -10,3 +10,5 @@ data/
 dist*
 wrangler.local.toml
 .claude/worktrees/
+/package-lock.json
+/screen_*.png
