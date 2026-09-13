@@ -1,13 +1,13 @@
 # Continuous integration
 
-Budds uses [`.github/workflows/test.yml`](../.github/workflows/test.yml) as its repository-owned merge gate for `main` and `dev`.
+Budds defines its repository-owned merge gate for `main` and `dev` in [`.github/workflows/test.yml`](../.github/workflows/test.yml). GitHub-hosted execution is currently blocked by the account billing or spending restriction, so the same gate must be run locally and recorded until hosted execution is restored.
 
 ## Required checks
 
 The workflow runs these stages:
 
 1. `security`: a full-history Gitleaks scan that blocks committed credentials.
-2. `quality`: the 1,032-warning ESLint ratchet, application and Convex-native
+2. `quality`: a zero-warning ESLint gate, application and Convex-native
    typechecks, and the root dependency audit.
 3. `test`: four parallel suites for Convex/Nitro unit tests, Nuxt mounted components, the dedicated Audio Overview component harness, and the Audio Workflow Worker. The Worker shard also runs its own typecheck, environment-contract validation, and dependency audit.
 4. `build`: strict configuration validation and a Cloudflare Pages production build.
@@ -33,7 +33,7 @@ pnpm verify
 ```
 
 `pnpm verify` runs lint, the application and `convex/tsconfig.json` typechecks,
-all test suites, and the root audit. Validate the Worker lockfile separately with:
+all test suites, and both dependency audits. To validate only the Worker lockfile, run:
 
 ```bash
 pnpm --dir workers/audio-overview audit
@@ -44,13 +44,15 @@ by `scripts/validate-env.mjs`, then strips secret-bearing environment variables
 before compilation so private values cannot become bundled runtime defaults.
 The generated artifact still requires its Cloudflare Pages secrets at runtime.
 
-## Branch protection
+## Current-plan merge controls
 
-After the workflow has completed successfully on GitHub, require the `CI gate` check on `main` and `dev`. Do not enable the required check before its first successful remote run, because the workflow has only been validated locally until then.
+The repository is private, and protected branches for private repositories are not available on its current GitHub plan. The owner has declined a paid upgrade. Squash merging is the only enabled pull-request merge method, and merged branches are deleted automatically.
+
+Until server-enforced protection is available, maintainers must use a pull request, avoid direct pushes to `main` and `dev`, run `pnpm verify` plus the strict production build from the exact proposed SHA, and record the results. This is an explicit procedural control, not equivalent to branch protection. If the repository later becomes public or its plan changes, require the `CI gate` check and pull-request review on `main` and `dev` after the first successful remote run.
 
 ## Troubleshooting
 
 - Install failure during `postinstall`: confirm the synthetic global workflow environment is present; CI mode makes validation strict.
-- Lint failure with no errors: the warning count exceeded the 1,032 baseline. Reduce the new warnings or deliberately lower the baseline after cleanup; do not raise it casually.
+- Lint failure: fix the reported error or warning. The baseline is zero and must not be raised to merge new debt.
 - Worker-only failure: reproduce with `node scripts/validate-env.mjs audio-workflow --strict`, `pnpm audio:workflow:typecheck`, and `pnpm audio:workflow:test` using non-production values.
 - Build succeeds locally but fails remotely: compare Node 24, pnpm 9.12.3, lockfile state, and the strict environment-validation output.

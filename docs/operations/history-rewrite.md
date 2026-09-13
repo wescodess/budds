@@ -4,7 +4,7 @@ The Budds history rewrite removes exposed credentials and generated repository n
 
 ## Status
 
-**Prepared, blocked:** The rewrite has passed an isolated local dry run. Do not force-push rewritten refs until the exposed R2 credentials are rotated and GitHub Actions can execute successfully. The latest scheduled workflow is blocked by the account billing or spending limit before any step starts.
+**Ready for coordinated execution:** The rewrite has passed an isolated local dry run, and the owner reports that the exposed credentials were rotated on 2026-09-13. Authentication with the old values was not independently exercised during repository cleanup. GitHub-hosted Actions remains unavailable because of the account billing or spending restriction, and private-repository branch protection is not available on the current plan. Those account constraints are recorded rather than represented as working controls; the release substitute is the complete local gate below.
 
 ## Dry-run evidence
 
@@ -41,14 +41,16 @@ Preserve authorship, author dates, commit dates, meaningful feature commits, mai
 
 ## Preconditions
 
-- [ ] Revoke or rotate every exposed credential.
-- [ ] Verify that old credentials can no longer authenticate.
-- [ ] Resolve the GitHub Actions billing or spending restriction.
-- [ ] Produce a green hosted `CI gate` from the intended baseline.
-- [ ] Close or coordinate every open pull request.
+- [x] Owner reports every exposed credential revoked or rotated.
+- [ ] Independently verify that old credentials can no longer authenticate (owner-managed follow-up; not a rewrite blocker after reported rotation).
+- [x] Record the unavailable GitHub-hosted gate and current-plan branch-protection limitation.
+- [ ] Produce a green local `pnpm verify`, strict production build, Gitleaks scan, and rewritten-ref verification from the intended baseline.
+- [x] Confirm that there are no open pull requests to coordinate.
 - [ ] Freeze branch updates for the maintenance window.
-- [ ] Create an access-controlled recovery bundle that will not be pushed.
-- [ ] Record all branches, tags, pull-request refs, stashes, worktrees, and local tool refs that retain affected commits.
+- [x] Create an access-controlled recovery bundle that will not be pushed.
+- [x] Record all branches, tags, pull-request refs, stashes, worktrees, and local tool refs that retain affected commits.
+
+The repository owner has declined a paid GitHub plan. Do not weaken the code gate to compensate and do not claim that local policy is server-enforced. Until hosted execution is restored or a self-hosted runner is deliberately operated, the maintainer must attach the local command results and exact commit SHA to the release record.
 
 ## Verification
 
