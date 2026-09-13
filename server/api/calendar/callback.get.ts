@@ -2,6 +2,7 @@ import { api } from '../../../convex/_generated/api'
 import { makeConvexClient } from '../../utils/convex-client'
 import { GOOGLE_TOKEN_URL } from '../../utils/google-constants'
 import { encryptCalendarToken } from '../../../shared/calendar-token-encryption'
+import { readConfiguredRuntimeValue } from '../../utils/runtime-config'
 const GOOGLE_CALENDAR_SETTINGS_URL = 'https://www.googleapis.com/calendar/v3/users/me/settings/timezone'
 
 export default defineEventHandler(async (event) => {
@@ -73,9 +74,11 @@ export default defineEventHandler(async (event) => {
   }
 
   try {
-    const encryptionKey = typeof config.calendarTokenEncryptionKey === 'string'
-      ? config.calendarTokenEncryptionKey
-      : ''
+    const encryptionKey = readConfiguredRuntimeValue(
+      config.calendarTokenEncryptionKey,
+      'NUXT_CALENDAR_TOKEN_ENCRYPTION_KEY',
+      'CALENDAR_TOKEN_ENCRYPTION_KEY',
+    )
     if (!encryptionKey) throw new Error('Calendar token encryption is not configured')
 
     const accessTokenEncrypted = await encryptCalendarToken(tokenResponse.access_token, encryptionKey)

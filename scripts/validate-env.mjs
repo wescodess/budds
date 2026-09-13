@@ -167,6 +167,14 @@ if (!audioWorkflowPhase && calendarTokenEncryptionKey) {
 }
 
 if (audioWorkflowPhase) {
+  const geminiApiKey = mergedEnv.GEMINI_API_KEY || ''
+  if (/^(?:ya29\.|Bearer\s+)/i.test(geminiApiKey.trim())) {
+    invalidBlocking.push({
+      kind: 'secret',
+      label: 'Gemini credential must be a Google AI Studio API key, not an OAuth access token',
+      names: ['GEMINI_API_KEY'],
+    })
+  }
   const workerConfigPath = path.join(projectRoot, 'workers/audio-overview/wrangler.jsonc')
   const workerConfig = fs.existsSync(workerConfigPath) ? fs.readFileSync(workerConfigPath, 'utf8') : ''
   const requiredBindings = [
@@ -247,7 +255,7 @@ else {
   lines.push('Recommended split for Cloudflare Pages (Settings > Variables and Secrets):')
   lines.push('- Local dev (.env.local): CONVEX_URL, GOOGLE_CLIENT_ID, NUXT_PUBLIC_SITE_URL, NUXT_CLOUDFLARE_AI_GATEWAY_ID, NUXT_CLOUDFLARE_AI_SEARCH_INSTANCE, NUXT_R2_BUCKET_NAME, NUXT_R2_ENDPOINT, NUXT_AUDIO_OVERVIEW_WORKER_URL')
   lines.push('- Cloudflare Pages Variables: CONVEX_URL, NUXT_PUBLIC_CONVEX_URL, GOOGLE_CLIENT_ID, NUXT_PUBLIC_SITE_URL, NUXT_CLOUDFLARE_ACCOUNT_ID, NUXT_CLOUDFLARE_AI_GATEWAY_ID, NUXT_CLOUDFLARE_AI_SEARCH_INSTANCE, NUXT_R2_BUCKET_NAME, NUXT_R2_ENDPOINT')
-  lines.push('- Cloudflare Pages Secrets: BETTER_AUTH_SECRET, GOOGLE_CLIENT_SECRET, CALENDAR_TOKEN_ENCRYPTION_KEY, NUXT_CLOUDFLARE_AI_GATEWAY_API_KEY, NUXT_CLOUDFLARE_AI_SEARCH_TOKEN, NUXT_OPENROUTER_API_KEY, NUXT_R2_ACCESS_KEY_ID, NUXT_R2_SECRET_ACCESS_KEY, NUXT_AUDIO_OVERVIEW_JOB_SECRET, NUXT_AUDIO_OVERVIEW_WORKER_TOKEN')
+  lines.push('- Cloudflare Pages Secrets: NUXT_BETTER_AUTH_SECRET, GOOGLE_CLIENT_SECRET, CALENDAR_TOKEN_ENCRYPTION_KEY, NUXT_CLOUDFLARE_AI_GATEWAY_API_KEY, NUXT_CLOUDFLARE_AI_SEARCH_TOKEN, NUXT_OPENROUTER_API_KEY, NUXT_R2_ACCESS_KEY_ID, NUXT_R2_SECRET_ACCESS_KEY, NUXT_AUDIO_OVERVIEW_JOB_SECRET, NUXT_AUDIO_OVERVIEW_WORKER_TOKEN')
   lines.push('- Convex deployment Secrets: CALENDAR_TOKEN_ENCRYPTION_KEY must match Pages; AUDIO_OVERVIEW_WORKER_TOKEN must match NUXT_AUDIO_OVERVIEW_WORKER_TOKEN')
   lines.push('- Cloudflare Pages preview Convex URL: https://cautious-elephant-39.convex.cloud')
   lines.push('- Cloudflare Pages production Convex URL: https://trustworthy-mink-186.convex.cloud')
