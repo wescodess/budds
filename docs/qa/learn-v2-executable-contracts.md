@@ -39,14 +39,14 @@ All lifecycle commands are server-authorized, idempotent, and checked against an
 
 ## Normalized persistence proposal
 
-LA2-03 translates this proposal into additive Convex validators and only the foundational Learning Void/Blueprint commands. The remaining tables are schema and retention foundations, not evidence, provider, quota, planning, scheduling, or mastery implementations.
+LA2-03 translates this proposal into additive Convex validators and the foundational Learning Void/Blueprint commands. LA2-04 adds the bounded folder-manifest tables and commands described below. The remaining tables stay schema and retention foundations, not provider, quota, planning, scheduling, or mastery implementations.
 
 | Aggregate | Proposed tables | Required bounded paths |
 | --- | --- | --- |
 | Learning Void | `learningVoids` | owner, owner + folder, owner + status |
 | Blueprint | `learnBlueprints`, `learnBlueprintRevisions` | owner + Void; owner + blueprint + revision; owner + Void + status |
 | Map | `learnMilestones`, `learnObjectives`, `learnObjectivePrerequisites` | owner + revision + order; owner + objective/prerequisite edges |
-| Evidence | `learnSourceIdentities`, `learnSourceSnapshots`, `learnSourceExcerpts`, `learnObjectiveSources`, `learnClaimSupports` | owner + Void, canonical identity, snapshot revision/status, objective coverage, content/support lookups |
+| Evidence | `learnSourceIdentities`, `learnSourceSnapshots`, `learnFolderSourceManifests`, `learnFolderSourceManifestFolders`, `learnFolderSourceManifestEntries`, `learnSourceExcerpts`, `learnObjectiveSources`, `learnClaimSupports` | owner + Void/Blueprint, canonical identity, manifest folder/document order and checkpoints, snapshot revision/status, objective coverage, content/support lookups |
 | Mastery | `masteryAttempts`, `masteryRecords` | owner + objective + attempt time, idempotency key, next-review time |
 | Planning | `studyPlans`, `studyPlanRevisions`, `studySessions`, `studySessionRetrievalObjectives` | owner + Void, plan revision/status, scheduled owner queue, ordered retrieval links |
 | Session content | `sessionContent`, `sessionContentBlocks`, `sessionContentClaims` | owner + session + revision/status, ordered blocks and claims |
@@ -55,6 +55,49 @@ LA2-03 translates this proposal into additive Convex validators and only the fou
 | Jobs | `learnJobs` | owner + idempotency, owner + status/lease expiry, owner + Void/type |
 
 Every new table includes `userId`, a bounded `by_userId` path, and an explicit retention class. Unbounded child arrays are represented as tables. Account deletion, export, folder deletion, folder move, and source deletion use the retention-class matrix in the machine-readable contract and must be implemented in the same slice as each table. A move preserves stable folder identity and immutable history, revalidates access, recomputes derived projections, and cancels or reconciles future jobs/projections if the new scope is unauthorized.
+
+## Authorized folder-source manifests
+
+`learnV2FolderManifests.freezeManifest` starts a server-owned capture for one
+editable Blueprint revision. The caller supplies only selected folder/document
+IDs, expected aggregate revisions, and an idempotency key. Convex proves the
+owner, live Learning Void root, Blueprint relationship and revisions, and that
+every selection remains inside the root subtree. The client cannot provide
+folder names, paths, object keys, hashes, source revisions, or authorization
+facts.
+
+The command stores a normalized manifest header and selected folder queue, then
+`continueCapture` pages child folders and documents in batches of 16. Queue
+cursors and monotonically allocated folder/document order values make retries
+exact-once. Input is capped at eight selected folders and 64 explicit documents;
+the assembled manifest fails explicitly above 4,096 documents. Public list
+queries cap pages at 16 and omit internal traversal cursors. No new path calls
+the legacy `folders.resolveScope` query or an all-user retrieval fallback.
+
+Each captured folder has a deterministic SHA-256 revision over its actual ID,
+parent, name, and source-affecting update time. Each document retains its actual
+folder ID and is available only when its indexed state is successful, its object
+key is nonblank, and `sourceRevision` equals `sha256:<normalized contentHash>`.
+Every other in-scope document remains visible as an unavailable entry with a
+specific reason. Zero documents produce `coverage: empty`; only unavailable
+documents produce `coverage: gap`; mixed availability is `partial`; a fully
+usable set is `complete`.
+
+An explicit document captures only that document and its real folder identity;
+it never widens to siblings. Selected folders expand only through their own
+descendants, so multiple branches under the Learning Void root are allowed but
+same-owner folders outside the root are rejected. Once frozen, later moves,
+renames, or re-indexing cannot rewrite the manifest. A later command creates a
+new manifest from current state. Blueprint or Learning Void revision drift while
+the continuation is running fails the capture instead of attaching evidence to
+a changed aggregate.
+
+The three manifest tables participate in bounded child-before-parent account
+and folder-root deletion. Owner export is paginated and removes private source
+paths, filenames, raw selection IDs, idempotency fingerprints, and traversal
+cursors. Source identities and snapshots remain candidates only; fetching,
+rights evaluation, source acceptance, excerpts, and web lifecycle transitions
+belong to LA2-05.
 
 ## Runtime ownership
 

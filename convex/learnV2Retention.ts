@@ -14,6 +14,24 @@ async function removeRows<TableName extends TableNames>(ctx: MutationCtx, rows: 
 }
 
 async function deleteVoidFoundation(ctx: MutationCtx, userId: string, learningVoidId: Id<'learningVoids'>) {
+  const manifests = await ctx.db.query('learnFolderSourceManifests')
+    .withIndex('by_userId_and_learningVoidId', q => q.eq('userId', userId).eq('learningVoidId', learningVoidId)).take(BATCH_SIZE)
+  for (const manifest of manifests) {
+    const entries = await ctx.db.query('learnFolderSourceManifestEntries')
+      .withIndex('by_userId_and_manifestId_and_order', q => q.eq('userId', userId).eq('manifestId', manifest._id)).take(BATCH_SIZE)
+    if (await removeRows(ctx, entries)) return true
+    const folders = await ctx.db.query('learnFolderSourceManifestFolders')
+      .withIndex('by_userId_and_manifestId_and_order', q => q.eq('userId', userId).eq('manifestId', manifest._id)).take(BATCH_SIZE)
+    if (await removeRows(ctx, folders)) return true
+    await ctx.db.delete(manifest._id)
+    return true
+  }
+  const snapshots = await ctx.db.query('learnSourceSnapshots')
+    .withIndex('by_userId_and_learningVoidId_and_status', q => q.eq('userId', userId).eq('learningVoidId', learningVoidId)).take(BATCH_SIZE)
+  if (await removeRows(ctx, snapshots)) return true
+  const identities = await ctx.db.query('learnSourceIdentities')
+    .withIndex('by_userId_and_learningVoidId', q => q.eq('userId', userId).eq('learningVoidId', learningVoidId)).take(BATCH_SIZE)
+  if (await removeRows(ctx, identities)) return true
   const receipts = await ctx.db.query('learnLifecycleReceipts')
     .withIndex('by_userId_and_learningVoidId', q => q.eq('userId', userId).eq('learningVoidId', learningVoidId)).take(BATCH_SIZE)
   if (await removeRows(ctx, receipts)) return true
