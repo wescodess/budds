@@ -38,7 +38,7 @@ describe('FolderFormModal — create mode', () => {
 
   it('[P0] renders with "New folder" title', async () => {
     const Modal = await import('~/components/folders/FolderFormModal.vue')
-    const wrapper = await mountSuspended(Modal.default, {
+    await mountSuspended(Modal.default, {
       props: { open: true, mode: 'create' },
       attachTo: document.body,
     })
@@ -51,7 +51,7 @@ describe('FolderFormModal — create mode', () => {
   it('[P0] blocks submission when name is empty', async () => {
     createFolderMock.mockClear()
     const Modal = await import('~/components/folders/FolderFormModal.vue')
-    const wrapper = await mountSuspended(Modal.default, {
+    await mountSuspended(Modal.default, {
       props: { open: true, mode: 'create' },
       attachTo: document.body,
     })
@@ -83,8 +83,6 @@ describe('FolderFormModal — create mode', () => {
     expect(descriptionInput?.getAttribute('enterkeyhint')).toBe('done')
   })
 
-  // SKIP: createSharedComposable(useGestureGuards) evaluates matchMedia only once per module load; vi.resetModules + re-import doesn't reliably reset the singleton in the test environment — see deferred-work.md "Deferred from: prep-3-5"
-  it.skip('[P1] does not auto-focus the name field on touch devices', () => {})
 })
 
 describe('FolderFormModal — edit mode', () => {

@@ -8,7 +8,7 @@ const mockSetResponseStatus = vi.fn();
 const mockGetScopedR2ObjectIdentity = vi.fn();
 const WORKER_TOKEN = "launch-secret-at-least-32-characters-long";
 
-vi.stubGlobal("defineEventHandler", (handler: Function) => handler);
+vi.stubGlobal("defineEventHandler", (handler: (...args: never[]) => unknown) => handler);
 vi.stubGlobal("readBody", vi.fn());
 vi.stubGlobal("setResponseStatus", mockSetResponseStatus);
 vi.stubGlobal("createError", (opts: { statusCode: number; message: string }) =>
@@ -43,7 +43,7 @@ vi.mock("../../utils/runtime-config", () => ({
   ),
 }));
 
-const handler = (await import("./generate.post")).default as Function;
+const handler = (await import("./generate.post")).default;
 const validBody = {
   folderId: "folder_owned",
   roomId: "audio_room_owned",

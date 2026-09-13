@@ -21,7 +21,7 @@ vi.stubGlobal('getRequestHeader', vi.fn(() => undefined))
 vi.stubGlobal('searchDocuments', vi.fn())
 vi.stubGlobal('fetchFolderDocs', vi.fn())
 vi.stubGlobal('generateCompletion', vi.fn())
-vi.stubGlobal('defineEventHandler', (handler: Function) => handler)
+vi.stubGlobal('defineEventHandler', (handler: (...args: never[]) => unknown) => handler)
 vi.stubGlobal('useRuntimeConfig', vi.fn(() => ({
   public: { convex: { url: 'https://test.convex.cloud' } },
   audioOverviewWorkerToken: ORCHESTRATION_TOKEN,
@@ -62,7 +62,7 @@ vi.mock('../../utils/audio-overview-grounding', () => ({
   parseClaimEntailmentResponse: mockParseClaimEntailmentResponse,
 }))
 
-const handler = (await import('./interject.post')).default as Function
+const handler = (await import('./interject.post')).default
 
 function makeEvent() {
   return { context: { convexToken: 'mock-jwt' } }

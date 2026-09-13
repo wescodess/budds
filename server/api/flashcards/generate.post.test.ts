@@ -9,13 +9,13 @@ vi.stubGlobal('searchDocuments', vi.fn())
 vi.stubGlobal('fetchFolderDocs', vi.fn(async () => []))
 vi.stubGlobal('assertSearchIndexAvailable', vi.fn(async () => undefined))
 vi.stubGlobal('generateCompletion', vi.fn())
-vi.stubGlobal('defineEventHandler', (handler: Function) => handler)
+vi.stubGlobal('defineEventHandler', (handler: (...args: never[]) => unknown) => handler)
 vi.stubGlobal('buildFlashcardPrompt', (await import('../../utils/flashcard-prompt')).buildFlashcardPrompt)
 vi.stubGlobal('parseFlashcardResponse', (await import('../../utils/flashcard-prompt')).parseFlashcardResponse)
 vi.stubGlobal('isAllowedModel', (await import('../../utils/models')).isAllowedModel)
 vi.stubGlobal('SERVER_DEFAULT_MODEL', (await import('../../utils/models')).SERVER_DEFAULT_MODEL)
 
-const handler = (await import('./generate.post')).default as Function
+const handler = (await import('./generate.post')).default
 
 function makeEvent(): any {
   return {

@@ -339,7 +339,7 @@ describe("documents.listDocumentsByFolder", () => {
     const folder1 = await asUser1.mutation(api.folders.createFolder, {
       name: "User1 Folder",
     });
-    const folder2 = await asUser2.mutation(api.folders.createFolder, {
+    await asUser2.mutation(api.folders.createFolder, {
       name: "User2 Folder",
     });
 

@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
-import { flushPromises } from '@vue/test-utils'
 
 const modelSelectorPath = ['~', 'components', 'chat', 'ModelSelector.vue'].join('/')
 

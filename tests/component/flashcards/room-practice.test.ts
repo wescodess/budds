@@ -117,7 +117,7 @@ describe('RoomPractice', () => {
 
     // Run 1
     const wrapper1 = await mountSuspended(RoomPractice.default, {
-      props: { cards: sampleCards(), _seedForTests: 42 },
+      props: { cards: sampleCards(), seedForTests: 42 },
     })
     await flushPromises()
     await wrapper1.find('[data-testid="flashcard-room-practice-shuffle"]').trigger('click')
@@ -126,7 +126,7 @@ describe('RoomPractice', () => {
 
     // Run 2
     const wrapper2 = await mountSuspended(RoomPractice.default, {
-      props: { cards: sampleCards(), _seedForTests: 42 },
+      props: { cards: sampleCards(), seedForTests: 42 },
     })
     await flushPromises()
     await wrapper2.find('[data-testid="flashcard-room-practice-shuffle"]').trigger('click')

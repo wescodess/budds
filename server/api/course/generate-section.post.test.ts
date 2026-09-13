@@ -20,7 +20,7 @@ vi.stubGlobal('getConvexTokenIdentifier', vi.fn(() => 'https://auth.example.com|
 vi.stubGlobal('readBody', vi.fn())
 vi.stubGlobal('searchDocuments', vi.fn())
 vi.stubGlobal('generateCompletion', vi.fn())
-vi.stubGlobal('defineEventHandler', (handler: Function) => handler)
+vi.stubGlobal('defineEventHandler', (handler: (...args: never[]) => unknown) => handler)
 vi.stubGlobal('useRuntimeConfig', vi.fn(() => ({
   public: { convex: { url: 'https://test.convex.cloud' } },
 })))
@@ -60,7 +60,7 @@ vi.mock('../../utils/audio-overview-upload', () => ({
   uploadAudioOverviewBytes: mockUploadAudio,
 }))
 
-const handler = (await import('./generate-section.post')).default as Function
+const handler = (await import('./generate-section.post')).default
 
 function makeEvent(): any {
   return {

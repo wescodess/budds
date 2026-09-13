@@ -2,7 +2,6 @@ import { vi, describe, test, expect, beforeEach } from 'vitest'
 import { unzipSync, strFromU8 } from 'fflate'
 
 const recordedHeaders: Record<string, string> = {}
-let recordedStatus: number | undefined
 
 vi.stubGlobal('createError', (opts: { statusCode: number; statusMessage?: string; message?: string }) =>
   Object.assign(new Error(opts.statusMessage || opts.message || 'error'), { statusCode: opts.statusCode }),
@@ -10,9 +9,7 @@ vi.stubGlobal('createError', (opts: { statusCode: number; statusMessage?: string
 vi.stubGlobal('setResponseHeader', (_event: any, key: string, value: string) => {
   recordedHeaders[key.toLowerCase()] = value
 })
-vi.stubGlobal('setResponseStatus', (_event: any, status: number) => {
-  recordedStatus = status
-})
+vi.stubGlobal('setResponseStatus', vi.fn())
 vi.stubGlobal('sendStream', async (_event: any, stream: ReadableStream) => {
   const reader = stream.getReader()
   const chunks: Uint8Array[] = []
@@ -31,7 +28,7 @@ vi.stubGlobal('sendStream', async (_event: any, stream: ReadableStream) => {
   }
   return out
 })
-vi.stubGlobal('defineEventHandler', (handler: Function) => handler)
+vi.stubGlobal('defineEventHandler', (handler: (...args: never[]) => unknown) => handler)
 
 const getExportMetadataMock = vi.fn()
 const getUserDataPageMock = vi.fn()
@@ -41,7 +38,6 @@ const getDocumentDownloadUrlMock = vi.fn()
 
 vi.mock('convex/browser', () => ({
   ConvexHttpClient: class {
-    constructor(_url: string) {}
     setAuth(_token: string) {}
     query(_fnRef: unknown, args: unknown) {
       const queryArgs = args as Record<string, unknown>
@@ -57,7 +53,7 @@ vi.mock('convex/browser', () => ({
 const fetchMock = vi.fn()
 vi.stubGlobal('fetch', fetchMock)
 
-const handler = (await import('./me.get')).default as Function
+const handler = (await import('./me.get')).default
 
 function mockExportData(data: Record<string, any>) {
   getExportMetadataMock.mockResolvedValue({ userId: data.userId, user: data.user })
@@ -90,8 +86,7 @@ describe('GET /api/export/me', () => {
     getCourseSourceDocsPageMock.mockReset()
     getDocumentDownloadUrlMock.mockReset()
     fetchMock.mockReset()
-    for (const key of Object.keys(recordedHeaders)) delete recordedHeaders[key]
-    recordedStatus = undefined
+    for (const key of Object.keys(recordedHeaders)) Reflect.deleteProperty(recordedHeaders, key)
     process.env.CONVEX_URL = 'https://test.convex.cloud'
   })
 

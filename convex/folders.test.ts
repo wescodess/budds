@@ -581,7 +581,7 @@ describe('folders.deleteFolder cascade (story 5.2)', () => {
       fileId: storageSuccessId,
       fileSize: 1024,
     })
-    const docProcessingId = await asUser.mutation(api.documents.createDocument, {
+    await asUser.mutation(api.documents.createDocument, {
       folderId,
       filename: 'processing.pdf',
       fileId: storageProcessingId,

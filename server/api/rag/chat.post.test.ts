@@ -23,11 +23,11 @@ vi.stubGlobal('generateCompletion', vi.fn())
 vi.stubGlobal('generateCompletionStream', vi.fn())
 vi.stubGlobal('setResponseHeader', vi.fn())
 vi.stubGlobal('sendStream', vi.fn())
-vi.stubGlobal('defineEventHandler', (handler: Function) => handler)
+vi.stubGlobal('defineEventHandler', (handler: (...args: never[]) => unknown) => handler)
 vi.stubGlobal('isAllowedModel', (await import('../../utils/models')).isAllowedModel)
 vi.stubGlobal('SERVER_DEFAULT_MODEL', (await import('../../utils/models')).SERVER_DEFAULT_MODEL)
 
-const handler = (await import('./chat.post')).default as Function
+const handler = (await import('./chat.post')).default
 const mockEvent = {} as any
 
 describe('POST /api/rag/chat — folderId enforcement (AC #1)', () => {

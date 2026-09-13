@@ -1,4 +1,4 @@
-import { defineComponent, toRaw } from 'vue'
+import { defineComponent } from 'vue'
 import { describe, expect, it } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import { useReferenceScope } from '~/composables/useReferenceScope'

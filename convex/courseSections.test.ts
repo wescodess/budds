@@ -60,7 +60,7 @@ async function seedCourseWithSections(t: ReturnType<typeof convexTest>) {
 describe('courseSections.listByCourse', () => {
   test('returns sections in order', async () => {
     const t = convexTest(schema, modules)
-    const { asUser, courseId, sections } = await seedCourseWithSections(t)
+    const { sections } = await seedCourseWithSections(t)
     expect(sections).toHaveLength(3)
     expect(sections[0].title).toBe('Section A')
     expect(sections[1].title).toBe('Section B')
@@ -261,7 +261,7 @@ describe('courses.updateOutline', () => {
 describe('courseSections.finalizeSectionGeneration', () => {
   test('creates quiz and flashcard entities and sets section to ready', async () => {
     const t = convexTest(schema, modules)
-    const { asUser, courseId, sections } = await seedCourseWithSections(t)
+    const { asUser, sections } = await seedCourseWithSections(t)
     const sectionId = sections[0]._id
 
     await asUser.mutation(api.courseSections.finalizeSectionGeneration, {
@@ -416,7 +416,7 @@ describe('courseSections.finalizeSectionGeneration', () => {
 describe('courseSections.getNextSection', () => {
   test('returns the next section by order', async () => {
     const t = convexTest(schema, modules)
-    const { asUser, courseId, sections } = await seedCourseWithSections(t)
+    const { asUser, courseId } = await seedCourseWithSections(t)
 
     const next = await asUser.query(api.courseSections.getNextSection, {
       courseId,
@@ -713,7 +713,7 @@ describe('courseSections.triggerPreFetch', () => {
 describe('courseSections.completeSection', () => {
   test('first completion always transitions to learning via state machine', async () => {
     const t = convexTest(schema, modules)
-    const { asUser, courseId, sections } = await seedCourseWithSections(t)
+    const { asUser, sections } = await seedCourseWithSections(t)
 
     await t.run(async (ctx) => {
       await ctx.db.patch(sections[0]._id, { status: 'ready' })

@@ -108,7 +108,7 @@ describe('documents.moveDocument — schedules metadata update (AC: prerequisite
   test('[P0] should schedule metadata update when moving a document with status success', async () => {
     const t = convexTest(schema, modules)
     const asUser = t.withIdentity(TEST_IDENTITY)
-    const { folderId, docId } = await setupSuccessDocument(t, asUser)
+    const { docId } = await setupSuccessDocument(t, asUser)
 
     const destFolderId = await asUser.mutation(api.folders.createFolder, { name: 'Physics 201' })
 

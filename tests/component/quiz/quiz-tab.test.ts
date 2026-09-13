@@ -81,11 +81,4 @@ describe('QuizTab — Story 6.1 AC #5, #6, #7', () => {
     await flushPromises()
   })
 
-  // SKIP: QuizShell auto-selects first quiz on load (no list view unless user clicks back) — see deferred-work.md "Deferred from: prep-3-5"
-  it.skip('[P0] renders one entry per quiz in the list state', () => {})
-
-  // SKIP: QuizShell was refactored (no inline card actions; uses QuizActiveView + QuizGenerationWizard) — see deferred-work.md "Deferred from: prep-3-5"
-  it.skip('[P0] quiz-card-menu toggles inline actions row with Edit and Delete (Story 6.3 AC #3)', () => {})
-  it.skip('[P0] delete flow: Delete -> Confirm delete invokes deleteQuiz mutation (Story 6.3 AC #4)', () => {})
-  it.skip('[P1] renders shimmer placeholders while generating', () => {})
 })
