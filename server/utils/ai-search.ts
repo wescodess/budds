@@ -291,7 +291,5 @@ export async function searchDocuments(params: AISearchParams): Promise<AISearchR
     return !!chunk.attributes.documentId && docIdAllowlist.has(chunk.attributes.documentId)
   })
 
-  console.log(`[ai-search] q=${JSON.stringify(params.query)} folder=${params.folderId ?? '-'} results=${results.length} chunks=${filtered.length}`)
-
   return { data: filtered, search_query: json.result.search_query }
 }
