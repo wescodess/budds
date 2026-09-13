@@ -10,6 +10,7 @@ import {
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
+  hasLearnV2Access,
   requireLearnV2MutationAccess,
   requireLearnV2QueryAccess,
 } from "./lib/learnV2Access";
@@ -187,6 +188,8 @@ async function addDocument(
   folder: Doc<"learnFolderSourceManifestFolders">,
   document: Document,
 ) {
+  if (!folder.folderId)
+    throw new Error("Document folder was deleted during source capture");
   const prior = await ctx.db
     .query("learnFolderSourceManifestEntries")
     .withIndex("by_userId_and_manifestId_and_documentId", (q) =>
@@ -283,6 +286,46 @@ async function addDocument(
   });
 }
 
+async function refreshFolderForCapture(
+  ctx: MutationCtx,
+  manifest: Manifest,
+  captured: Doc<"learnFolderSourceManifestFolders">,
+) {
+  if (!captured.folderId)
+    throw new Error("Selected folder was deleted during source capture");
+  const live = await ctx.db.get(captured.folderId);
+  if (
+    !live ||
+    live.userId !== manifest.userId ||
+    !(await inside(ctx, manifest.userId, manifest.rootFolderId, live._id))
+  )
+    throw new Error(
+      "Selected folder changed or left the Learning Void root subtree",
+    );
+  const revision = await folderRevision(live);
+  if (revision === captured.folderRevision)
+    return { ...captured, folderId: captured.folderId };
+  if (
+    captured.stage !== "children" ||
+    captured.childCursor !== undefined ||
+    captured.documentCursor !== undefined ||
+    captured.documentCount > 0
+  )
+    throw new Error("Selected folder changed during paged source capture");
+  await ctx.db.patch(captured._id, {
+    parentFolderId: live.parentId,
+    name: live.name,
+    folderRevision: revision,
+  });
+  return {
+    ...captured,
+    folderId: captured.folderId,
+    parentFolderId: live.parentId,
+    name: live.name,
+    folderRevision: revision,
+  };
+}
+
 export const freezeManifest = mutation({
   args: {
     learningVoidId: v.id("learningVoids"),
@@ -324,6 +367,12 @@ export const freezeManifest = mutation({
           "Idempotency key was already used for a different request",
         );
       await voidFor(ctx, userId, replay.learningVoidId);
+      if (replay.status === "capturing")
+        await ctx.scheduler.runAfter(
+          0,
+          internal.learnV2FolderManifests.continueCapture,
+          { manifestId: replay._id },
+        );
       return manifestView(replay);
     }
     const { learningVoid, root } = await voidFor(
@@ -421,6 +470,8 @@ export const continueCapture = internalMutation({
   handler: async (ctx, { manifestId }) => {
     const manifest = await ctx.db.get(manifestId);
     if (!manifest || manifest.status !== "capturing") return { done: true };
+    if (!(await hasLearnV2Access(ctx, manifest.userId)))
+      return { done: true, paused: true };
     try {
       if (
         manifest.explicitDocumentCursor < manifest.explicitDocumentIds.length
@@ -460,19 +511,35 @@ export const continueCapture = internalMutation({
           )
           .first();
         if (children) {
+          const currentFolder = await refreshFolderForCapture(
+            ctx,
+            manifest,
+            children,
+          );
           const page = await ctx.db
             .query("folders")
             .withIndex("by_userId_and_parentId", (q) =>
-              q.eq("userId", manifest.userId).eq("parentId", children.folderId),
+              q
+                .eq("userId", manifest.userId)
+                .eq("parentId", currentFolder.folderId),
             )
-            .paginate({ cursor: children.childCursor ?? null, numItems: PAGE });
+            .paginate({
+              cursor: currentFolder.childCursor ?? null,
+              numItems: PAGE,
+            });
           for (const child of page.page) {
-            if (children.depth + 1 > MAX_DEPTH)
+            if (currentFolder.depth + 1 > MAX_DEPTH)
               throw new Error("Folder source scope exceeds the maximum depth");
-            await addFolder(ctx, manifest, child, children.depth + 1, true);
+            await addFolder(
+              ctx,
+              manifest,
+              child,
+              currentFolder.depth + 1,
+              true,
+            );
           }
           await ctx.db.patch(
-            children._id,
+            currentFolder._id,
             page.isDone
               ? { stage: "documents", childCursor: undefined }
               : { childCursor: page.continueCursor },
@@ -488,28 +555,37 @@ export const continueCapture = internalMutation({
             )
             .first();
           if (folder) {
+            const currentFolder = await refreshFolderForCapture(
+              ctx,
+              manifest,
+              folder,
+            );
             const page = await ctx.db
               .query("documents")
               .withIndex("by_userId_and_folderId", (q) =>
-                q.eq("userId", manifest.userId).eq("folderId", folder.folderId),
+                q
+                  .eq("userId", manifest.userId)
+                  .eq("folderId", currentFolder.folderId),
               )
               .paginate({
-                cursor: folder.documentCursor ?? null,
+                cursor: currentFolder.documentCursor ?? null,
                 numItems: PAGE,
               });
             for (const document of page.page)
-              await addDocument(ctx, manifest, folder, document);
+              await addDocument(ctx, manifest, currentFolder, document);
             await ctx.db.patch(
-              folder._id,
+              currentFolder._id,
               page.isDone
                 ? {
                     stage: "complete",
                     documentCursor: undefined,
-                    documentCount: folder.documentCount + page.page.length,
+                    documentCount:
+                      currentFolder.documentCount + page.page.length,
                   }
                 : {
                     documentCursor: page.continueCursor,
-                    documentCount: folder.documentCount + page.page.length,
+                    documentCount:
+                      currentFolder.documentCount + page.page.length,
                   },
             );
           } else {
@@ -616,13 +692,21 @@ export const listManifestFolders = query({
       .paginate(cap(a.paginationOpts));
     return {
       ...result,
-      page: result.page.map(
-        ({
+      page: await Promise.all(
+        result.page.map(async ({
           childCursor: _childCursor,
           documentCursor: _documentCursor,
           stage: _stage,
           ...folder
-        }) => folder,
+        }) => {
+          if (!folder.folderId || await ctx.db.get(folder.folderId)) return folder;
+          return {
+            ...folder,
+            folderId: undefined,
+            parentFolderId: undefined,
+            name: undefined,
+          };
+        }),
       ),
     };
   },
@@ -635,11 +719,27 @@ export const listManifestEntries = query({
   handler: async (ctx, a) => {
     const m = await guarded(ctx, a.manifestId);
     if (!m) return { page: [], isDone: true, continueCursor: "" };
-    return await ctx.db
+    const result = await ctx.db
       .query("learnFolderSourceManifestEntries")
       .withIndex("by_userId_and_manifestId_and_order", (q) =>
         q.eq("userId", m.userId).eq("manifestId", m._id),
       )
       .paginate(cap(a.paginationOpts));
+    return {
+      ...result,
+      page: await Promise.all(
+        result.page.map(async (entry) => {
+          if (!entry.documentId || await ctx.db.get(entry.documentId))
+            return entry;
+          return {
+            ...entry,
+            documentId: undefined,
+            folderId: undefined,
+            availability: "unavailable" as const,
+            unavailableReason: "source_deleted" as const,
+          };
+        }),
+      ),
+    };
   },
 });

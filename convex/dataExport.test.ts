@@ -157,7 +157,7 @@ describe('dataExport paginated queries', () => {
         const planId = await ctx.db.insert('studyPlans', { userId: USER_A.tokenIdentifier, learningVoidId: voidId, revision: 1, createdAt: 1 })
         const planRevisionId = await ctx.db.insert('studyPlanRevisions', { userId: USER_A.tokenIdentifier, studyPlanId: planId, learningVoidId: voidId, revision: 1, status: 'draft', createdAt: 1 })
         const sessionId = await ctx.db.insert('studySessions', { userId: USER_A.tokenIdentifier, studyPlanRevisionId: planRevisionId, primaryObjectiveId: objectiveId, status: 'planned', revision: 1, scheduledStartAt: 1 })
-        const sourceIdentityId = await ctx.db.insert('learnSourceIdentities', { userId: USER_A.tokenIdentifier, learningVoidId: voidId, origin: 'user_url', externalKey: 'https://private.example/key', folderDocumentId: docId, title: 'Private source' })
+        const sourceIdentityId = await ctx.db.insert('learnSourceIdentities', { userId: USER_A.tokenIdentifier, learningVoidId: voidId, origin: 'folder_document', externalKey: `document:${docId}`, folderDocumentId: docId, title: 'private-source.txt' })
         const manifestId = await ctx.db.insert('learnFolderSourceManifests', { userId: USER_A.tokenIdentifier, learningVoidId: voidId, blueprintRevisionId: revisionId, rootFolderId: folderId, expectedVoidRevision: 1, expectedBlueprintRecordRevision: 1, recordRevision: 2, status: 'frozen', coverage: 'complete', idempotencyKey: 'private-manifest-key', requestFingerprint: 'private-manifest-fingerprint', explicitDocumentIds: [docId], explicitDocumentCursor: 1, nextFolderOrder: 1, nextEntryOrder: 1, entryCount: 1, availableCount: 1, unavailableCount: 0, createdAt: 1, frozenAt: 2 })
         const folderRevision = `sha256:${'a'.repeat(64)}`
         const snapshotId = await ctx.db.insert('learnSourceSnapshots', { userId: USER_A.tokenIdentifier, sourceIdentityId, learningVoidId: voidId, blueprintRevisionId: revisionId, folderManifestId: manifestId, revision: 1, status: 'candidate', contentHash: 'b'.repeat(64), sourceRevision: `sha256:${'b'.repeat(64)}`, objectKey: 'private/object/key', folderId, folderRevision, filename: 'private-source.txt', createdAt: 1 })
@@ -178,6 +178,7 @@ describe('dataExport paginated queries', () => {
       const sourceIdentity = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnSourceIdentities', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
       expect(sourceIdentity).not.toHaveProperty('externalKey')
       expect(sourceIdentity).not.toHaveProperty('folderDocumentId')
+      expect(sourceIdentity).not.toHaveProperty('title')
       const sourceSnapshot = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnSourceSnapshots', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
       expect(sourceSnapshot).not.toHaveProperty('sourceIdentityId')
       expect(sourceSnapshot).not.toHaveProperty('folderManifestId')
