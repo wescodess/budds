@@ -105,6 +105,9 @@ describe('GET /api/export/me', () => {
       ],
       conversations: [{ _id: 'c1', title: 'chat', userId: 'tok|user1', folderId: 'f1' }],
       messages: [{ _id: 'm1', role: 'user', content: 'hi', userId: 'tok|user1', conversationId: 'c1' }],
+      learnFolderSourceManifests: [{ _id: 'fm1', status: 'frozen', userId: 'tok|user1' }],
+      learnFolderSourceManifestFolders: [{ _id: 'ff1', manifestId: 'fm1', userId: 'tok|user1' }],
+      learnFolderSourceManifestEntries: [{ _id: 'fe1', manifestId: 'fm1', userId: 'tok|user1' }],
     })
     getDocumentDownloadUrlMock.mockResolvedValue({
       url: 'https://storage.example.com/d1.pdf',
@@ -175,6 +178,9 @@ describe('GET /api/export/me', () => {
         'learnBlueprintRevisions.json',
         'learnBlueprints.json',
         'learnClaimSupports.json',
+        'learnFolderSourceManifestEntries.json',
+        'learnFolderSourceManifestFolders.json',
+        'learnFolderSourceManifests.json',
         'learnJobs.json',
         'learnLifecycleReceipts.json',
         'learnMilestones.json',
@@ -213,6 +219,9 @@ describe('GET /api/export/me', () => {
     expect(manifest.schemaVersion).toBe(8)
     expect(manifest.userId).toBe('tok|user1')
     expect(manifest.counts.documents).toBe(1)
+    expect(manifest.counts.learnFolderSourceManifests).toBe(1)
+    expect(manifest.counts.learnFolderSourceManifestFolders).toBe(1)
+    expect(manifest.counts.learnFolderSourceManifestEntries).toBe(1)
     expect(manifest.unresolvedDocuments).toEqual([])
     expect(manifest.nonFileBackedDocuments).toEqual([])
 
@@ -220,7 +229,7 @@ describe('GET /api/export/me', () => {
     expect(pdf).toContain('%PDF-1.4')
   })
 
-  test('follows Convex cursors and streams every page into one JSON entry', async () => {
+  test('follows Convex cursors and streams message and folder-manifest pages into their JSON entries', async () => {
     mockExportData({
       userId: 'tok|user1',
       user: { name: 'Alice', email: 'alice@example.com' },
@@ -233,18 +242,22 @@ describe('GET /api/export/me', () => {
       collection: string
       paginationOpts: { cursor: string | null }
     }) => {
-      if (collection !== 'messages') {
+      if (collection !== 'messages' && collection !== 'learnFolderSourceManifestEntries') {
         return { page: [], isDone: true, continueCursor: '' }
       }
       if (paginationOpts.cursor === null) {
         return {
-          page: [{ _id: 'm1', userId: 'tok|user1', content: 'first' }],
+          page: collection === 'messages'
+            ? [{ _id: 'm1', userId: 'tok|user1', content: 'first' }]
+            : [{ _id: 'fe1', userId: 'tok|user1', manifestId: 'fm1', order: 0 }],
           isDone: false,
-          continueCursor: 'messages-page-2',
+          continueCursor: `${collection}-page-2`,
         }
       }
       return {
-        page: [{ _id: 'm2', userId: 'tok|user1', content: 'second' }],
+        page: collection === 'messages'
+          ? [{ _id: 'm2', userId: 'tok|user1', content: 'second' }]
+          : [{ _id: 'fe2', userId: 'tok|user1', manifestId: 'fm1', order: 1 }],
         isDone: true,
         continueCursor: '',
       }
@@ -253,11 +266,15 @@ describe('GET /api/export/me', () => {
     const zipBytes = await handler(makeEvent('fake-jwt'))
     const entries = unzipSync(zipBytes)
     const messages = JSON.parse(strFromU8(entries['messages.json']!))
+    const manifestEntries = JSON.parse(strFromU8(entries['learnFolderSourceManifestEntries.json']!))
     const manifest = JSON.parse(strFromU8(entries['manifest.json']!))
 
     expect(messages.map((message: { _id: string }) => message._id)).toEqual(['m1', 'm2'])
+    expect(manifestEntries.map((entry: { _id: string }) => entry._id)).toEqual(['fe1', 'fe2'])
     expect(manifest.counts.messages).toBe(2)
+    expect(manifest.counts.learnFolderSourceManifestEntries).toBe(2)
     expect(getUserDataPageMock.mock.calls.filter(([args]) => args.collection === 'messages')).toHaveLength(2)
+    expect(getUserDataPageMock.mock.calls.filter(([args]) => args.collection === 'learnFolderSourceManifestEntries')).toHaveLength(2)
   })
 
   test('records unresolved documents when the blob URL is missing', async () => {

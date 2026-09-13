@@ -368,6 +368,10 @@ export const deleteFolder = mutation({
             // best-effort; blob may already be gone
           }
         }
+        await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeFolderDocumentSources, {
+          userId,
+          documentId: doc._id,
+        })
         await ctx.db.delete(doc._id)
         deletedDocuments++
       }
@@ -383,6 +387,10 @@ export const deleteFolder = mutation({
       // aggregate immediately. Its bounded foundational cleanup continues
       // independently and never broadens the established V1 cascade.
       await ctx.scheduler.runAfter(0, internal.learnV2Retention.deleteFolderFoundation, {
+        userId,
+        folderId,
+      })
+      await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeFolderManifestFolder, {
         userId,
         folderId,
       })
