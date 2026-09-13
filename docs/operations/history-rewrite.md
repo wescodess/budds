@@ -4,7 +4,9 @@ The Budds history rewrite removes exposed credentials and generated repository n
 
 ## Status
 
-**Ready for coordinated execution:** The rewrite has passed an isolated local dry run, and the owner reports that the exposed credentials were rotated on 2026-09-13. Authentication with the old values was not independently exercised during repository cleanup. GitHub-hosted Actions remains unavailable because of the account billing or spending restriction, and private-repository branch protection is not available on the current plan. Those account constraints are recorded rather than represented as working controls; the release substitute is the complete local gate below.
+**Completed 2026-09-13:** Rewritten `main` and `dev` now share the verified production-baseline tip. Twenty-seven fully merged remote branches were removed, and the three unmerged branches were preserved in rewritten form. The owner reports that the exposed credentials were rotated; authentication with the old values was not independently exercised during repository cleanup.
+
+GitHub-hosted Actions remains unavailable because of the account billing or spending restriction, and private-repository branch protection is not available on the current plan. Those account constraints are recorded rather than represented as working controls; the release substitute is the complete local gate below.
 
 ## Dry-run evidence
 
@@ -16,7 +18,15 @@ The 2026-09-13 isolated mirror rehearsal produced this evidence without changing
 - Gitleaks reported zero findings across rewritten branches and tags with the repository's narrow fixture allowlist.
 - The rewritten production-baseline tree matched the verified source tree exactly.
 
-One local Codex checkpoint points directly to an old tree object and cannot be rewritten as a commit. It is covered by the private recovery bundle and must be removed with the other local checkpoint and stash refs after the coordinated rewrite. It is not a remote branch or tag.
+## Execution evidence
+
+- The final rewrite scanned 419 reachable commits with Gitleaks and reported zero findings.
+- Both confirmed credential values had zero occurrences in rewritten patches.
+- Every targeted root, debug, lockfile, and generated-output path was absent from surviving history.
+- `git fsck --full --strict` completed without repository-integrity errors.
+- A fresh local checkout matched the tested production-baseline tree exactly.
+
+One local Codex checkpoint pointed directly to an old tree object and could not be rewritten as a commit. It was covered by the private recovery bundle and removed with the other local checkpoint and stash refs after the coordinated rewrite. It was never a remote branch or tag.
 
 ## Rewrite scope
 
@@ -44,9 +54,9 @@ Preserve authorship, author dates, commit dates, meaningful feature commits, mai
 - [x] Owner reports every exposed credential revoked or rotated.
 - [ ] Independently verify that old credentials can no longer authenticate (owner-managed follow-up; not a rewrite blocker after reported rotation).
 - [x] Record the unavailable GitHub-hosted gate and current-plan branch-protection limitation.
-- [ ] Produce a green local `pnpm verify`, strict production build, Gitleaks scan, and rewritten-ref verification from the intended baseline.
+- [x] Produce a green local `pnpm verify`, strict production build, Gitleaks scan, and rewritten-ref verification from the intended baseline.
 - [x] Confirm that there are no open pull requests to coordinate.
-- [ ] Freeze branch updates for the maintenance window.
+- [x] Freeze branch updates for the maintenance window.
 - [x] Create an access-controlled recovery bundle that will not be pushed.
 - [x] Record all branches, tags, pull-request refs, stashes, worktrees, and local tool refs that retain affected commits.
 
