@@ -72,6 +72,12 @@ The checked-in Worker config binds `AUDIO_ARTIFACTS` to the local/development bu
 | `CALENDAR_TOKEN_ENCRYPTION_KEY` | Base64-encoded 32-byte AES key; set the same secret in Nuxt/Pages and Convex |
 | `AUDIO_OVERVIEW_JOB_SECRET` | Must exactly match the Pages/Nuxt Audio Overview job secret so Convex can verify server-derived capabilities |
 | `AUDIO_OVERVIEW_WORKER_TOKEN` | Must exactly match the 32+ character Pages/Nuxt and Worker token; seals Interjection scripting, rendering, failure, and publication mutations from browser callers |
+| `LEARN_V2_ENABLED` | Convex-only internal-beta gate; enabled only by the exact string `true` and otherwise defaults off |
+
+`LEARN_V2_ENABLED` belongs only to the Convex environment. Do not duplicate it
+in Nuxt runtime config, Cloudflare Pages variables, or any public/client-visible
+variable. Per-user cohort entitlement remains a separate server-authoritative
+check, so the global flag alone never grants access.
 
 ### Local Convex Overrides (`.env.local`)
 

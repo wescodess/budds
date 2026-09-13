@@ -110,6 +110,31 @@ describe('Story 1.1 — Verify & Harden Authentication Flow', () => {
       const otherUser = await asOther.query(api.users.getUser, {})
       expect(otherUser).toBeNull()
     })
+
+    test('getUser never exposes the private Learn V2 cohort entitlement', async () => {
+      const t = convexTest(schema, modules)
+      const asUser = t.withIdentity(TEST_IDENTITY)
+      await asUser.mutation(api.users.upsertUser, {})
+      await t.run(async (ctx) => {
+        const user = await ctx.db
+          .query('users')
+          .withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', TEST_IDENTITY.tokenIdentifier))
+          .unique()
+        await ctx.db.patch(user!._id, {
+          learnV2Entitlement: { enabled: true, updatedAt: 123 },
+        })
+      })
+
+      const user = await asUser.query(api.users.getUser, {})
+
+      expect(user).toEqual(expect.objectContaining({
+        tokenIdentifier: TEST_IDENTITY.tokenIdentifier,
+        name: TEST_IDENTITY.name,
+        email: TEST_IDENTITY.email,
+        avatarUrl: TEST_IDENTITY.pictureUrl,
+      }))
+      expect(user).not.toHaveProperty('learnV2Entitlement')
+    })
   })
 
   describe('AC5: Session persistence — config assertions', () => {

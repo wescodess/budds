@@ -42,12 +42,28 @@ export const getUser = query({
     const userId = await getOptionalAuthUserId(ctx)
     if (!userId) return null
 
-    return await ctx.db
+    const user = await ctx.db
       .query('users')
       .withIndex('by_tokenIdentifier', (q) =>
         q.eq('tokenIdentifier', userId),
       )
       .unique()
+    if (!user) return null
+
+    return {
+      _id: user._id,
+      _creationTime: user._creationTime,
+      tokenIdentifier: user.tokenIdentifier,
+      name: user.name,
+      ...(user.email === undefined ? {} : { email: user.email }),
+      ...(user.avatarUrl === undefined ? {} : { avatarUrl: user.avatarUrl }),
+      ...(user.audioOverviewQuota === undefined
+        ? {}
+        : { audioOverviewQuota: user.audioOverviewQuota }),
+      ...(user.audioOverviewInterjectionQuota === undefined
+        ? {}
+        : { audioOverviewInterjectionQuota: user.audioOverviewInterjectionQuota }),
+    }
   },
 })
 

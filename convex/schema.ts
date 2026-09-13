@@ -15,6 +15,10 @@ export default defineSchema({
       date: v.string(),
       count: v.number(),
     })),
+    learnV2Entitlement: v.optional(v.object({
+      enabled: v.boolean(),
+      updatedAt: v.number(),
+    })),
   }).index('by_tokenIdentifier', ['tokenIdentifier']),
 
   folders: defineTable({

@@ -313,6 +313,7 @@ Public (client-accessible):
 Convex env vars (set via `npx convex env set`):
 - `NUXT_BETTER_AUTH_SECRET`, `SITE_URL`, `CONVEX_SITE_URL`
 - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`
+- `LEARN_V2_ENABLED` - Convex-only internal-beta switch; only exact `true` enables it, and all other values fail closed
 
 ### Dev Server
 
