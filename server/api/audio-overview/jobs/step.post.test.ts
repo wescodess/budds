@@ -431,8 +431,8 @@ describe('POST /api/audio-overview/jobs/step v2', () => {
       title: 'Grounded overview',
       model: 'google/gemini-2.5-flash',
       audioProfile: expect.objectContaining({
-        id: 'budds-two-host-gemini-v1',
-        renderer: 'gemini-native-multi-speaker',
+        id: 'budds-two-host-gemini-v2',
+        renderer: 'gemini-interactions-multi-speaker',
         hostAVoice: 'Kore',
         hostBVoice: 'Puck',
       }),
@@ -513,7 +513,7 @@ describe('POST /api/audio-overview/jobs/step v2', () => {
     expect(mockMutation.mock.calls.some(([, args]) => args && 'planFingerprint' in args)).toBe(false)
   })
 
-  test('[P0] completes preparation with exact-evidence speech when all three model repairs remain unentailed', async () => {
+  test('[P0] completes preparation when the verifier falsely rejects exact frozen evidence for omitting broader claim detail', async () => {
     let scriptAttempt = 0
     const context = activeJobContext()
     context.request.documents.push({
@@ -602,7 +602,12 @@ describe('POST /api/audio-overview/jobs/step v2', () => {
         return {
           version: 'claim-entailment.v1',
           decisions: [
-            { utteranceId: 'scene:0:scene-1:utterance:0', claimIds: ['claim-1'], decision: 'entailed', reason: 'Exact frozen evidence.' },
+            {
+              utteranceId: 'scene:0:scene-1:utterance:0',
+              claimIds: ['claim-1'],
+              decision: 'not_entailed',
+              reason: 'The utterance states the evidence but omits the broader claim detail.',
+            },
             { utteranceId: 'scene:0:scene-1:utterance:1', claimIds: ['claim-1'], decision: 'entailed', reason: 'Supported.' },
           ],
         }
@@ -786,9 +791,9 @@ describe('POST /api/audio-overview/jobs/step v2', () => {
         sceneId: 'scene_db_1',
         sceneOrder: 0,
         attempt: 2,
-        model: 'gemini-2.5-flash-preview-tts',
-        audioProfileId: 'budds-two-host-gemini-v1',
-        audioProfileVersion: '1',
+        model: 'gemini-3.1-flash-tts-preview',
+        audioProfileId: 'budds-two-host-gemini-v2',
+        audioProfileVersion: '2',
         format: { encoding: 'pcm_s16le', sampleRateHz: 24_000, bitDepth: 16, channels: 1 },
       },
       qualityGate: {

@@ -6,6 +6,7 @@ import {
   MessageSquare,
   Layers,
   ClipboardList,
+  Headphones,
   Plus,
   Settings,
   HelpCircle,
@@ -25,7 +26,7 @@ import { PANEL_DISMISS_THRESHOLD_PX, useGestureGuards } from '~/composables/useG
 defineOptions({ name: 'FolderShellRail' })
 
 type TabValue = 'chat' | 'flashcards' | 'quiz' | 'audio-overview' | 'documents' | 'learn'
-type VoidKind = 'chat' | 'flashcards' | 'quiz' | 'course'
+type VoidKind = 'chat' | 'flashcards' | 'audio-overview' | 'quiz' | 'course'
 type VoidItem = { id: string; type: VoidKind; title: string; updatedAt: number }
 
 const props = defineProps<{
@@ -61,6 +62,11 @@ const { data: flashRoomsData } = useConvexQuery(
   computed(() => ({ folderId: props.folderId })),
 )
 
+const { data: audioRoomsData } = useConvexQuery(
+  api.audioOverviewRooms.listByFolder,
+  computed(() => ({ folderId: props.folderId })),
+)
+
 const { data: quizzesData } = useConvexQuery(
   api.quizzes.listByFolder,
   computed(() => ({ folderId: props.folderId })),
@@ -87,6 +93,14 @@ const voids = computed<VoidItem[]>(() => {
     title: f.title?.trim() || 'Flash cards',
     updatedAt: (f.updatedAt as number) ?? (f.legacyCreatedAt as number) ?? (f._creationTime as number) ?? 0,
   }))
+  const audioRooms = ((audioRoomsData.value as Array<any> | undefined) ?? [])
+    .filter(room => !room.conversationId)
+    .map<VoidItem>(room => ({
+      id: room._id as string,
+      type: 'audio-overview',
+      title: room.title?.trim() || 'Audio Overview',
+      updatedAt: (room.updatedAt as number) ?? (room._creationTime as number) ?? 0,
+    }))
   const quizs = ((quizzesData.value as Array<any> | undefined) ?? []).map<VoidItem>(q => ({
     id: q._id as string,
     type: 'quiz',
@@ -99,7 +113,7 @@ const voids = computed<VoidItem[]>(() => {
     title: c.title?.trim() || 'Course',
     updatedAt: (c.updatedAt as number) ?? (c.createdAt as number) ?? (c._creationTime as number) ?? 0,
   }))
-  return [...chats, ...flashes, ...quizs, ...courseItems].sort((a, b) => b.updatedAt - a.updatedAt)
+  return [...chats, ...flashes, ...audioRooms, ...quizs, ...courseItems].sort((a, b) => b.updatedAt - a.updatedAt)
 })
 
 const hasVoids = computed(() => voids.value.length > 0)
@@ -107,6 +121,7 @@ const hasVoids = computed(() => voids.value.length > 0)
 const voidIcon: Record<VoidKind, typeof MessageSquare> = {
   chat: MessageSquare,
   flashcards: Layers,
+  'audio-overview': Headphones,
   quiz: ClipboardList,
   course: BookOpen,
 }
@@ -315,7 +330,7 @@ useHorizontalSwipeGesture({
                     <div class="border-b border-border/60 px-3 py-2">
                       <p class="truncate text-sm font-medium text-foreground">{{ v.title }}</p>
                       <p class="mt-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">
-                        {{ v.type === 'chat' ? 'Chat' : v.type === 'flashcards' ? 'Flash cards' : v.type === 'course' ? 'Course' : 'Quiz' }}
+                        {{ v.type === 'chat' ? 'Chat' : v.type === 'flashcards' ? 'Flash cards' : v.type === 'audio-overview' ? 'Audio Overview' : v.type === 'course' ? 'Course' : 'Quiz' }}
                       </p>
                     </div>
                     <button

@@ -53,6 +53,7 @@ type V2Playback = {
   schemaVersion: 2
   title: string
   totalDurationMs: number
+  hostNames: { hostA: string, hostB: string }
   sourceManifest: { sources: Array<{ sourceId: string, displayReference: string }> }
   scenes: Array<{ sceneId: string, order: number, durationMs: number }>
   utterances: Array<{
@@ -76,6 +77,9 @@ const continuousMediaUrl = computed(() => v2Playback.value
   ? `/api/audio-overview/media/${encodeURIComponent(v2Playback.value.finalArtifact.artifactId)}`
   : null)
 const overviewTitle = computed(() => v2Playback.value?.title ?? overview.value?.title ?? 'Audio overview')
+const hostNames = computed(() => v2Playback.value?.hostNames
+  ?? overview.value?.hostNames
+  ?? { hostA: 'Host A', hostB: 'Host B' })
 const turns = computed<AudioOverviewTurn[]>(() => {
   if (v2Playback.value) {
     return buildContinuousPlaybackTurns(
@@ -99,7 +103,7 @@ const {
   currentAudioTimeSec,
   isInterjectionActive, interjectionTurns, interjectionCurrentTurnIndex, interjectionCurrentAudioTimeSec,
   magnitude: visualizerMagnitude,
-  play, pause, togglePlay, skip, seek, setSpeed, loadOverview,
+  togglePlay, skip, seek, setSpeed, loadOverview,
 } = store
 
 const displayedTurns = computed(() => isInterjectionActive.value ? interjectionTurns.value : turns.value)
@@ -119,6 +123,7 @@ watch(
       overviewId: props.overviewId,
       folderId: props.folderId,
       title: overviewTitle.value,
+      hostNames: hostNames.value,
       turns: nextTurns,
       turnUrls: nextUrls,
       playbackMode: isContinuousPlayback.value ? 'continuous' : 'segmented',
@@ -283,7 +288,11 @@ const ringMiddleStyle = computed(() => ({
 </script>
 
 <template>
-  <div data-testid="audio-overview-player" class="flex h-full min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 sm:gap-6 sm:p-6">
+  <div data-testid="audio-overview-player" class="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+    <div
+      data-testid="audio-overview-player-scroll-region"
+      class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 sm:gap-6 sm:p-6"
+    >
     <header class="mx-auto flex w-full max-w-4xl flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
       <div class="min-w-0">
         <p class="font-inter text-xs text-muted-foreground">
@@ -450,7 +459,7 @@ const ringMiddleStyle = computed(() => ({
           </div>
           <div class="text-center">
             <p class="font-dm-sans text-sm font-medium text-foreground">
-              Host A · Expert
+              {{ hostNames.hostA }} · Expert
             </p>
             <p
               class="mt-0.5 font-inter text-xs"
@@ -487,7 +496,7 @@ const ringMiddleStyle = computed(() => ({
           </div>
           <div class="text-center">
             <p class="font-dm-sans text-sm font-medium text-foreground">
-              Host B · Learner
+              {{ hostNames.hostB }} · Learner
             </p>
             <p
               class="mt-0.5 font-inter text-xs"
@@ -508,6 +517,7 @@ const ringMiddleStyle = computed(() => ({
         :is-playing="isPlaying"
         max-height="280px"
         :on-seek="isInterjectionActive ? undefined : seek"
+        :host-names="hostNames"
       />
     </section>
 
@@ -519,9 +529,25 @@ const ringMiddleStyle = computed(() => ({
       An audio segment couldn't be loaded. Try reloading the page.
     </div>
 
+    <section v-if="sourceFilenames.length > 0" class="mx-auto w-full max-w-3xl">
+      <p class="font-inter text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        Sources grounding this overview
+      </p>
+      <div class="mt-2 flex flex-wrap gap-2" data-testid="audio-overview-source-pills">
+        <span
+          v-for="(label, i) in sourceFilenames"
+          :key="i"
+          class="rounded-md border border-border/60 bg-card/70 px-2 py-1 font-inter text-xs text-muted-foreground"
+        >
+          {{ label }}
+        </span>
+      </div>
+    </section>
+    </div>
+
     <section
       data-testid="audio-overview-player-bar"
-      class="mx-auto w-full max-w-4xl rounded-xl border border-border/60 bg-card p-4 sm:p-5"
+      class="z-10 mx-auto w-full max-w-4xl shrink-0 rounded-t-xl border border-b-0 border-border/60 bg-card p-4 shadow-[0_-8px_24px_rgba(0,0,0,0.12)] sm:p-5"
     >
       <div class="flex items-center gap-3">
         <span class="w-12 font-inter text-xs tabular-nums text-muted-foreground">{{ currentLabel }}</span>
@@ -534,7 +560,7 @@ const ringMiddleStyle = computed(() => ({
           :disabled="isInterjectionActive"
           class="h-1.5 flex-1 cursor-pointer appearance-none rounded-full bg-border/40 accent-primary"
           @input="handleScrubInput"
-        />
+        >
         <span class="w-12 text-right font-inter text-xs tabular-nums text-muted-foreground">{{ totalLabel }}</span>
       </div>
 
@@ -626,19 +652,5 @@ const ringMiddleStyle = computed(() => ({
       </div>
     </section>
 
-    <section v-if="sourceFilenames.length > 0" class="mx-auto w-full max-w-3xl">
-      <p class="font-inter text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-        Sources grounding this overview
-      </p>
-      <div class="mt-2 flex flex-wrap gap-2" data-testid="audio-overview-source-pills">
-        <span
-          v-for="(label, i) in sourceFilenames"
-          :key="i"
-          class="rounded-md border border-border/60 bg-card/70 px-2 py-1 font-inter text-xs text-muted-foreground"
-        >
-          {{ label }}
-        </span>
-      </div>
-    </section>
   </div>
 </template>

@@ -1,6 +1,7 @@
 import { v } from 'convex/values'
 import { mutation, query } from './_generated/server'
 import { getOptionalAuthUserId, requireAuth } from './lib/auth'
+import { scheduleAudioOverviewDeletion } from './audioOverviews'
 
 export const listRecentForUser = query({
   args: {},
@@ -96,6 +97,21 @@ export const deleteConversation = mutation({
 
     for (const msg of messages) {
       await ctx.db.delete(msg._id)
+    }
+
+    const audioRoom = await ctx.db
+      .query('audioOverviewRooms')
+      .withIndex('by_userId_and_conversationId', q => q
+        .eq('userId', userId)
+        .eq('conversationId', convo._id))
+      .unique()
+    if (audioRoom) {
+      const overviews = await ctx.db
+        .query('audioOverviews')
+        .withIndex('by_userId_and_roomId', q => q.eq('userId', userId).eq('roomId', audioRoom._id))
+        .take(100)
+      for (const overview of overviews) await scheduleAudioOverviewDeletion(ctx, overview._id, userId)
+      await ctx.db.delete(audioRoom._id)
     }
 
     await ctx.db.delete(args.id)

@@ -535,6 +535,7 @@ export const createPlan = mutation({
       taskId: job.taskId,
       userId: job.userId,
       folderId: job.folderId,
+      roomId: task.audioOverviewRequest.roomId,
       sourceManifestId: manifestId,
       outlineId,
       claimLedgerId,
@@ -546,6 +547,8 @@ export const createPlan = mutation({
       renderer: args.audioProfile.renderer.trim(),
       hostAVoice: args.audioProfile.hostAVoice.trim(),
       hostBVoice: args.audioProfile.hostBVoice.trim(),
+      hostAName: task.audioOverviewRequest.hostNames?.hostA.trim() || 'Host A',
+      hostBName: task.audioOverviewRequest.hostNames?.hostB.trim() || 'Host B',
       requestedLengthMinutes: task.audioOverviewRequest.preferences.lengthMinutes,
       complexity: task.audioOverviewRequest.preferences.complexity,
       status: 'planning',
@@ -775,6 +778,10 @@ async function loadPlaybackProjection(ctx: QueryCtx, overview: Doc<'audioOvervie
     title: episode.title,
     model: episode.model,
     voiceProfile: { hostA: episode.hostAVoice, hostB: episode.hostBVoice },
+    hostNames: {
+      hostA: episode.hostAName ?? 'Host A',
+      hostB: episode.hostBName ?? 'Host B',
+    },
     preferences: {
       lengthMinutes: episode.requestedLengthMinutes,
       complexity: episode.complexity,
@@ -889,6 +896,7 @@ export const getPlaybackByShareToken = query({
       schemaVersion: projection.schemaVersion,
       title: projection.title,
       voiceProfile: projection.voiceProfile,
+      hostNames: projection.hostNames,
       totalDurationMs: projection.totalDurationMs,
       publishedAt: projection.publishedAt,
       sourceManifest: {
@@ -1145,6 +1153,7 @@ async function completePublication(
     overviewId = await ctx.db.insert('audioOverviews', {
       userId: job.userId,
       folderId: job.folderId,
+      roomId: task.audioOverviewRequest.roomId,
       taskId: task._id,
       episodeId: episode._id,
       finalArtifactId: artifact._id,
@@ -1153,6 +1162,10 @@ async function completePublication(
       model: episode.model,
       turns: [],
       voiceProfile: { hostA: episode.hostAVoice, hostB: episode.hostBVoice },
+      hostNames: {
+        hostA: episode.hostAName ?? 'Host A',
+        hostB: episode.hostBName ?? 'Host B',
+      },
       preferences: {
         lengthMinutes: episode.requestedLengthMinutes,
         complexity: episode.complexity,
@@ -1199,6 +1212,7 @@ async function completePublication(
     status: 'completed',
     progress: 'Complete',
     result: {
+      roomId: task.audioOverviewRequest.roomId,
       overviewId,
       episodeId: episode._id,
       finalArtifactId: artifact._id,

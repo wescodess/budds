@@ -79,6 +79,7 @@ describe('buildDialoguePlanPrompt', () => {
     const messages = buildDialoguePlanPrompt(chunks, {
       lengthMinutes: 5,
       complexity: 'beginner',
+      hostNames: { hostA: 'Maya', hostB: 'Leo' },
     })
 
     expect(messages).toHaveLength(2)
@@ -92,6 +93,9 @@ describe('buildDialoguePlanPrompt', () => {
     expect(messages[0]!.content).toContain('approximately 13-21 Utterances')
     expect(messages[0]!.content).toContain('evidence quotes to 8-30 words')
     expect(messages[0]!.content).toContain('Every Utterance must have at least one claimId and sourceId')
+    expect(messages[0]!.content).toContain('Host A is Maya')
+    expect(messages[0]!.content).toContain('Host B is Leo')
+    expect(messages[0]!.content).toContain('including both names within the opening Scene')
     expect(messages[0]!.content).not.toMatch(/\b(?:Dia|Aura)\b/)
     expect(messages[1]!.content).toContain('sourceId: doc-atp')
     expect(messages[1]!.content).not.toContain('evidenceId:')

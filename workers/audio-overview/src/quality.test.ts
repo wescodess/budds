@@ -53,9 +53,13 @@ describe('Audio Overview Quality Gate', () => {
   })
 
   test('rejects excessive silence', () => {
+    const samplesPerFrame = 480
     const result = evaluateAudioOverviewQuality({
-      pcm: pcm16(...Array.from({ length: 90 }, () => 0), ...Array.from({ length: 10 }, () => 4_000)),
-      expectedDurationMs: 100 / 24,
+      pcm: pcm16(
+        ...Array.from({ length: 90 * samplesPerFrame }, () => 0),
+        ...Array.from({ length: 10 * samplesPerFrame }, () => 4_000),
+      ),
+      expectedDurationMs: 2_000,
       dialogueScript: 'Host A: The point.',
       expectedTranscript: 'The point.',
       renderedTranscript: 'The point.',
@@ -63,6 +67,25 @@ describe('Audio Overview Quality Gate', () => {
 
     expect(result.metrics.silenceRatio).toBe(0.9)
     expect(outcome(result, 'silence-ratio')).toBe('rejected')
+  })
+
+  test('does not classify quiet voiced speech samples as silent time', () => {
+    const samplesPerFrame = 480
+    const samples = Array.from({ length: 100 * samplesPerFrame }, (_, index) => {
+      const frame = Math.floor(index / samplesPerFrame)
+      if (frame < 15) return 0
+      return Math.round(500 * Math.sin(2 * Math.PI * 220 * index / 24_000))
+    })
+    const result = evaluateAudioOverviewQuality({
+      pcm: pcm16(...samples),
+      expectedDurationMs: 2_000,
+      dialogueScript: 'Host A: A quiet but clearly voiced explanation.',
+      expectedTranscript: 'A quiet but clearly voiced explanation.',
+      renderedTranscript: 'A quiet but clearly voiced explanation.',
+    })
+
+    expect(result.metrics.silenceRatio).toBeCloseTo(0.15, 2)
+    expect(outcome(result, 'silence-ratio')).toBe('accepted')
   })
 
   test('rejects excessive clipping', () => {

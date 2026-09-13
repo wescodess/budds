@@ -299,8 +299,8 @@ export const setReferenceScope = mutation({
     const folder = await ctx.db.get(args.folderId)
     if (!folder || folder.userId !== userId) throw new Error('Folder not found')
 
-    let ownedFolderIds: Id<'folders'>[] = []
-    let ownedFileIds: Id<'documents'>[] = []
+    const ownedFolderIds: Id<'folders'>[] = []
+    const ownedFileIds: Id<'documents'>[] = []
 
     if (args.scope) {
       for (const fid of args.scope.folderIds ?? []) {
@@ -384,6 +384,11 @@ export const deleteFolder = mutation({
         userId,
         cursor: null,
       })
+      const audioRooms = await ctx.db
+        .query('audioOverviewRooms')
+        .withIndex('by_userId_and_folderId', q => q.eq('userId', userId).eq('folderId', folderId))
+        .take(100)
+      for (const room of audioRooms) await ctx.db.delete(room._id)
     }
 
     if (anyCleanupEnqueued) {

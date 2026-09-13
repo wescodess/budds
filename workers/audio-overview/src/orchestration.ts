@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { buildGeminiPerformanceNotes, GEMINI_AUDIO_PROFILE_V1, type GeminiSceneRenderInput, type GeminiSceneRenderResult } from './gemini-audio-renderer'
+import { buildGeminiPerformanceNotes, GEMINI_AUDIO_PROFILE, type GeminiSceneRenderInput, type GeminiSceneRenderResult } from './gemini-audio-renderer'
 import { createWavHeader, durationMsForPcmBytes, sha256Hex } from './media'
 import {
   analyzeAudioOverviewTranscript,
@@ -26,10 +26,10 @@ export type SceneArtifactMetadata = {
   sceneId: string
   sceneOrder: number
   attempt: number
-  model: typeof GEMINI_AUDIO_PROFILE_V1.model
-  audioProfileId: typeof GEMINI_AUDIO_PROFILE_V1.id
+  model: typeof GEMINI_AUDIO_PROFILE.model
+  audioProfileId: typeof GEMINI_AUDIO_PROFILE.id
   audioProfileVersion: string
-  format: typeof GEMINI_AUDIO_PROFILE_V1.format
+  format: typeof GEMINI_AUDIO_PROFILE.format
 }
 
 export type AudioArtifactMetadata = {
@@ -42,10 +42,10 @@ export type AudioArtifactMetadata = {
   sceneCount: number
   sha256: string
   manifestSha256: string
-  model: typeof GEMINI_AUDIO_PROFILE_V1.model
-  audioProfileId: typeof GEMINI_AUDIO_PROFILE_V1.id
+  model: typeof GEMINI_AUDIO_PROFILE.model
+  audioProfileId: typeof GEMINI_AUDIO_PROFILE.id
   audioProfileVersion: string
-  format: typeof GEMINI_AUDIO_PROFILE_V1.format
+  format: typeof GEMINI_AUDIO_PROFILE.format
 }
 
 export type PagesStageBody =
@@ -183,9 +183,9 @@ async function sceneFingerprint(scene: WorkflowScene, sceneOrder: number, attemp
     direction: scene.direction,
     expectedDurationMs: scene.expectedDurationMs,
     utterances: scene.utterances,
-    audioProfileId: GEMINI_AUDIO_PROFILE_V1.id,
-    audioProfileVersion: GEMINI_AUDIO_PROFILE_V1.version,
-    model: GEMINI_AUDIO_PROFILE_V1.model,
+    audioProfileId: GEMINI_AUDIO_PROFILE.id,
+    audioProfileVersion: GEMINI_AUDIO_PROFILE.version,
+    model: GEMINI_AUDIO_PROFILE.model,
   })))
 }
 
@@ -239,8 +239,8 @@ function matchingSceneHead(head: StoredArtifactHead | null, fingerprint: string,
     && metadata?.kind === 'audio-overview-scene.v2'
     && metadata.sceneFingerprint === fingerprint
     && metadata.attempt === String(attempt)
-    && metadata.audioProfileId === GEMINI_AUDIO_PROFILE_V1.id
-    && metadata.audioProfileVersion === String(GEMINI_AUDIO_PROFILE_V1.version)
+    && metadata.audioProfileId === GEMINI_AUDIO_PROFILE.id
+    && metadata.audioProfileVersion === String(GEMINI_AUDIO_PROFILE.version)
     && metadata.sampleRateHz === '24000'
     && metadata.bitsPerSample === '16'
     && metadata.channels === '1'
@@ -297,10 +297,10 @@ function sceneMetadata(
     sceneId: scene.sceneId,
     sceneOrder,
     attempt,
-    model: GEMINI_AUDIO_PROFILE_V1.model,
-    audioProfileId: GEMINI_AUDIO_PROFILE_V1.id,
-    audioProfileVersion: String(GEMINI_AUDIO_PROFILE_V1.version),
-    format: GEMINI_AUDIO_PROFILE_V1.format,
+    model: GEMINI_AUDIO_PROFILE.model,
+    audioProfileId: GEMINI_AUDIO_PROFILE.id,
+    audioProfileVersion: String(GEMINI_AUDIO_PROFILE.version),
+    format: GEMINI_AUDIO_PROFILE.format,
   }
 }
 
@@ -343,6 +343,7 @@ async function renderAndStoreScene(
   const rendered = await services.renderScene({
     sceneId: scene.sceneId,
     sceneDirection: scene.direction,
+    hostNames: scene.hostNames,
     utterances: scene.utterances,
   })
   const format = rendered.metadata
@@ -360,6 +361,7 @@ async function renderAndStoreScene(
     performanceNotes: buildGeminiPerformanceNotes({
       sceneId: scene.sceneId,
       sceneDirection: scene.direction,
+      hostNames: scene.hostNames,
       utterances: scene.utterances,
     }),
     expectedTranscript: spokenTranscript(scene),
@@ -381,9 +383,9 @@ async function renderAndStoreScene(
       qualityDecision: qualityGate.decision,
       transcriptDivergence: String(transcriptEvidence.transcriptDivergence),
       spokenDirections: JSON.stringify(transcriptEvidence.spokenDirections),
-      audioProfileId: GEMINI_AUDIO_PROFILE_V1.id,
-      audioProfileVersion: String(GEMINI_AUDIO_PROFILE_V1.version),
-      model: GEMINI_AUDIO_PROFILE_V1.model,
+      audioProfileId: GEMINI_AUDIO_PROFILE.id,
+      audioProfileVersion: String(GEMINI_AUDIO_PROFILE.version),
+      model: GEMINI_AUDIO_PROFILE.model,
       sampleRateHz: '24000',
       bitsPerSample: '16',
       channels: '1',
@@ -480,8 +482,8 @@ function matchingArtifactHead(head: StoredArtifactHead | null, manifestSha256: s
   return !!head && head.size === byteLength && head.httpMetadata?.contentType === 'audio/wav'
     && head.customMetadata?.kind === 'audio-overview-artifact.v2'
     && head.customMetadata.manifestSha256 === manifestSha256
-    && head.customMetadata.audioProfileId === GEMINI_AUDIO_PROFILE_V1.id
-    && head.customMetadata.audioProfileVersion === String(GEMINI_AUDIO_PROFILE_V1.version)
+    && head.customMetadata.audioProfileId === GEMINI_AUDIO_PROFILE.id
+    && head.customMetadata.audioProfileVersion === String(GEMINI_AUDIO_PROFILE.version)
     && /^[a-f0-9]{64}$/.test(head.customMetadata.sha256 ?? '')
 }
 
@@ -536,9 +538,9 @@ async function assembleAndStoreArtifact(
         sha256: checksum,
         manifestSha256,
         sceneCount: String(scenes.length),
-        audioProfileId: GEMINI_AUDIO_PROFILE_V1.id,
-        audioProfileVersion: String(GEMINI_AUDIO_PROFILE_V1.version),
-        model: GEMINI_AUDIO_PROFILE_V1.model,
+        audioProfileId: GEMINI_AUDIO_PROFILE.id,
+        audioProfileVersion: String(GEMINI_AUDIO_PROFILE.version),
+        model: GEMINI_AUDIO_PROFILE.model,
         sampleRateHz: '24000',
         bitsPerSample: '16',
         channels: '1',
@@ -561,10 +563,10 @@ async function assembleAndStoreArtifact(
     sceneCount: scenes.length,
     sha256: checksum,
     manifestSha256,
-    model: GEMINI_AUDIO_PROFILE_V1.model,
-    audioProfileId: GEMINI_AUDIO_PROFILE_V1.id,
-    audioProfileVersion: String(GEMINI_AUDIO_PROFILE_V1.version),
-    format: GEMINI_AUDIO_PROFILE_V1.format,
+    model: GEMINI_AUDIO_PROFILE.model,
+    audioProfileId: GEMINI_AUDIO_PROFILE.id,
+    audioProfileVersion: String(GEMINI_AUDIO_PROFILE.version),
+    format: GEMINI_AUDIO_PROFILE.format,
   }
 }
 

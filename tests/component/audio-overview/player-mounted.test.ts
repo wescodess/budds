@@ -81,6 +81,12 @@ describe('mounted Audio Overview v2 playback', () => {
     ])
     expect(wrapper.get('[data-testid="audio-overview-title"]').text()).toBe(baseV1.title)
     expect(wrapper.get('[data-testid="audio-overview-source-pills"]').text()).toContain('Legacy chapter.pdf')
+    const player = wrapper.get('[data-testid="audio-overview-player"]')
+    expect(player.classes()).toContain('overflow-hidden')
+    expect(wrapper.get('[data-testid="audio-overview-player-scroll-region"]').classes()).toContain('overflow-y-auto')
+    const playerBar = wrapper.get('[data-testid="audio-overview-player-bar"]')
+    expect(playerBar.classes()).toContain('shrink-0')
+    expect(playerBar.element.parentElement).toBe(player.element)
 
     const audio = new FakeAudio()
     playback.attachAudio(audio as unknown as HTMLAudioElement, null)

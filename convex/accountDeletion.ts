@@ -49,6 +49,7 @@ type DirectUserTable =
   | 'courseDeletionJobs'
   | 'courses'
   | 'audioOverviewJobs'
+  | 'audioOverviewRooms'
   | 'rateLimitBuckets'
   | 'tasks'
   | 'folders'
@@ -72,7 +73,8 @@ const DIRECT_PHASES = {
   courseSections: { table: 'courseSections', next: 'courseDeletionJobs' },
   courseDeletionJobs: { table: 'courseDeletionJobs', next: 'courses' },
   courses: { table: 'courses', next: 'audioMetadata' },
-  audioJobs: { table: 'audioOverviewJobs', next: 'rateLimitBuckets' },
+  audioJobs: { table: 'audioOverviewJobs', next: 'audioRooms' },
+  audioRooms: { table: 'audioOverviewRooms', next: 'rateLimitBuckets' },
   rateLimitBuckets: { table: 'rateLimitBuckets', next: 'tasks' },
   tasks: { table: 'tasks', next: 'folders' },
   folders: { table: 'folders', next: 'user' },
@@ -327,6 +329,7 @@ async function deleteDirectUserBatch(ctx: MutationCtx, table: DirectUserTable, u
     case 'courseDeletionJobs': return await deleteRows(ctx, await ctx.db.query(table).withIndex('by_userId', q => q.eq('userId', userId)).take(DELETE_BATCH_SIZE))
     case 'courses': return await deleteRows(ctx, await ctx.db.query(table).withIndex('by_userId', q => q.eq('userId', userId)).take(DELETE_BATCH_SIZE))
     case 'audioOverviewJobs': return await deleteRows(ctx, await ctx.db.query(table).withIndex('by_userId', q => q.eq('userId', userId)).take(DELETE_BATCH_SIZE))
+    case 'audioOverviewRooms': return await deleteRows(ctx, await ctx.db.query(table).withIndex('by_userId', q => q.eq('userId', userId)).take(DELETE_BATCH_SIZE))
     case 'rateLimitBuckets': return await deleteRows(ctx, await ctx.db.query(table).withIndex('by_userId', q => q.eq('userId', userId)).take(DELETE_BATCH_SIZE))
     case 'tasks': return await deleteRows(ctx, await ctx.db.query(table).withIndex('by_userId', q => q.eq('userId', userId)).take(DELETE_BATCH_SIZE))
     case 'folders': return await deleteRows(ctx, await ctx.db.query(table).withIndex('by_userId', q => q.eq('userId', userId)).take(DELETE_BATCH_SIZE))

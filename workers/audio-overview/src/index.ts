@@ -1,6 +1,9 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers'
 import { NonRetryableError } from 'cloudflare:workflows'
-import { renderGeminiScene } from './gemini-audio-renderer'
+import {
+  geminiApiKeyConfigurationError,
+  renderGeminiScene,
+} from './gemini-audio-renderer'
 import { cancelInterjection, renderInterjection } from './interjection-renderer'
 import {
   isWorkflowActiveStatus,
@@ -154,6 +157,8 @@ export default {
           const result = await cancelInterjection(body, { bucket: env.AUDIO_ARTIFACTS })
           return Response.json(result)
         }
+        const credentialError = geminiApiKeyConfigurationError(env.GEMINI_API_KEY)
+        if (credentialError) return Response.json({ error: credentialError }, { status: 503 })
         const result = await renderInterjection(body, {
           bucket: env.AUDIO_ARTIFACTS,
           apiKey: env.GEMINI_API_KEY,
@@ -177,6 +182,8 @@ export default {
     if (!env.GEMINI_API_KEY || !env.AI || !env.AUDIO_ARTIFACTS) {
       return Response.json({ error: 'Audio overview generation plane is not configured' }, { status: 503 })
     }
+    const credentialError = geminiApiKeyConfigurationError(env.GEMINI_API_KEY)
+    if (credentialError) return Response.json({ error: credentialError }, { status: 503 })
     const id = `audio-${body.jobId}`
     try {
       await env.AUDIO_OVERVIEW_WORKFLOW.create({ id, params: { jobId: body.jobId, capability: body.capability! } })

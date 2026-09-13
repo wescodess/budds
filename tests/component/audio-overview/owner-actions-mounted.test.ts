@@ -162,7 +162,7 @@ describe('mounted Audio Overview owner actions', () => {
     vi.stubGlobal('useDocuments', () => ({ documents: ref([{ _id: 'document-1', status: 'success' }]) }))
     vi.stubGlobal('useConvexQuery', (reference: unknown) => {
       const name = getFunctionName(reference as never)
-      if (name === 'audioOverviews:listByFolder') return { data: liveOverviews }
+      if (name === 'audioOverviews:listByRoom') return { data: liveOverviews }
       if (name === 'users:getDailyQuota') return { data: ref({ used: 0, cap: 10, date: '2026-09-03' }) }
       if (name === 'folders:resolveScope') return { data: ref({ documentIds: [] }) }
       return { data: ref(null) }
@@ -196,7 +196,7 @@ describe('mounted Audio Overview owner actions', () => {
     const CardStub = defineComponent({ template: '<div data-testid="owner-empty-card">Empty</div>' })
     const Component = (await import('~/components/audio-overview/AudioOverviewShell.vue')).default
     const wrapper = mount(Component, {
-      props: { folderId: 'folder-1' as never },
+      props: { folderId: 'folder-1' as never, roomId: 'audio-room-1' as never },
       global: {
         stubs: {
           AudioOverviewPlayer: PlayerStub,

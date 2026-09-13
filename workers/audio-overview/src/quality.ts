@@ -65,6 +65,7 @@ export type AudioOverviewQualityGateResult = {
 
 const SAMPLE_RATE_HZ = 24_000
 const BYTES_PER_SAMPLE = 2
+const SILENCE_FRAME_SAMPLES = SAMPLE_RATE_HZ / 50
 const DEFAULT_THRESHOLDS = {
   minimumDurationRatio: 0.8,
   maximumDurationRatio: 1.35,
@@ -227,10 +228,17 @@ export function evaluateAudioOverviewQuality(input: AudioOverviewQualityGateInpu
   let silentSamples = 0
   let clippedSamples = 0
   const view = new DataView(input.pcm.buffer, input.pcm.byteOffset, input.pcm.byteLength)
-  for (let offset = 0; offset + BYTES_PER_SAMPLE <= input.pcm.byteLength; offset += BYTES_PER_SAMPLE) {
-    const amplitude = Math.abs(view.getInt16(offset, true))
-    if (amplitude <= silenceAmplitude) silentSamples += 1
-    if (amplitude >= clippingAmplitude) clippedSamples += 1
+  for (let frameStart = 0; frameStart < sampleCount; frameStart += SILENCE_FRAME_SAMPLES) {
+    const frameEnd = Math.min(sampleCount, frameStart + SILENCE_FRAME_SAMPLES)
+    let squareSum = 0
+    for (let sampleIndex = frameStart; sampleIndex < frameEnd; sampleIndex++) {
+      const amplitude = Math.abs(view.getInt16(sampleIndex * BYTES_PER_SAMPLE, true))
+      squareSum += amplitude * amplitude
+      if (amplitude >= clippingAmplitude) clippedSamples += 1
+    }
+    const frameSamples = frameEnd - frameStart
+    const rmsAmplitude = Math.sqrt(squareSum / frameSamples)
+    if (rmsAmplitude <= silenceAmplitude) silentSamples += frameSamples
   }
   const silenceRatio = sampleCount === 0 ? 1 : silentSamples / sampleCount
   const clippingRatio = sampleCount === 0 ? 0 : clippedSamples / sampleCount

@@ -1,3 +1,4 @@
 AUDIO_OVERVIEW_WORKER_TOKEN=replace-with-the-same-local-launch-token-used-by-nuxt
+# Use a Google AI Studio API key. OAuth access tokens such as ya29.* are not accepted here.
 GEMINI_API_KEY=replace-with-a-server-side-gemini-api-key
 PAGES_BASE_URL=http://localhost:3002

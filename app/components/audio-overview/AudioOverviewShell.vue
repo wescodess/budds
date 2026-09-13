@@ -20,9 +20,16 @@ import type { useReferenceScope } from '~/composables/useReferenceScope'
 
 const props = withDefaults(defineProps<{
   folderId: Id<'folders'>
+  roomId?: Id<'audioOverviewRooms'>
+  conversationId?: Id<'conversations'>
+  roomTitle?: string
   scope?: ReturnType<typeof useReferenceScope>
   interjectionInFlight?: boolean
 }>(), {
+  roomId: undefined,
+  conversationId: undefined,
+  roomTitle: undefined,
+  scope: undefined,
   interjectionInFlight: false,
 })
 
@@ -98,11 +105,25 @@ type OverviewSummary = {
   taskId?: Id<'tasks'>
   shareToken?: string
   publishedAt?: number
+  hostNames?: { hostA: string, hostB: string }
 }
 
+const { data: conversationRoomData } = useConvexQuery(
+  api.audioOverviewRooms.getForConversation,
+  computed(() => ({ conversationId: props.conversationId! })),
+  { enabled: computed(() => !!props.conversationId && !props.roomId) },
+)
+const locallyCreatedRoomId = ref<Id<'audioOverviewRooms'> | null>(null)
+const resolvedRoomId = computed<Id<'audioOverviewRooms'> | null>(() =>
+  props.roomId
+  ?? locallyCreatedRoomId.value
+  ?? ((conversationRoomData.value as { _id?: Id<'audioOverviewRooms'> } | null | undefined)?._id ?? null),
+)
+
 const { data: overviewsData } = useConvexQuery(
-  api.audioOverviews.listByFolder,
-  computed(() => ({ folderId: props.folderId })),
+  api.audioOverviews.listByRoom,
+  computed(() => ({ roomId: resolvedRoomId.value! })),
+  { enabled: computed(() => !!resolvedRoomId.value) },
 )
 const overviews = computed<OverviewSummary[]>(
   () => (overviewsData.value as OverviewSummary[] | null | undefined) ?? [],
@@ -120,7 +141,9 @@ type GenerationDisplayTask = {
 const acceptedTaskId = ref<Id<'tasks'> | null>(null)
 const acceptedAt = ref(0)
 const audioTasks = computed(() => tasks.value
-  .filter(task => task.type === 'audio-overview-generation')
+  .filter(task => task.type === 'audio-overview-generation'
+    && String(task.audioOverviewRequest?.roomId ?? (task.metadata as { roomId?: string } | undefined)?.roomId ?? '')
+      === String(resolvedRoomId.value ?? ''))
   .sort((left, right) => right._creationTime - left._creationTime))
 const acceptedTask = computed(() => acceptedTaskId.value
   ? audioTasks.value.find(task => task._id === acceptedTaskId.value) ?? null
@@ -190,7 +213,7 @@ const store = useAudioOverviewStore()
 onMounted(() => {
   store.shellVisible.value = true
   try {
-    pendingIdempotencyKey.value = localStorage.getItem(`audio-overview-pending-command:${props.folderId}`)
+    pendingIdempotencyKey.value = localStorage.getItem(pendingCommandStorageKey.value)
   }
   catch { /* Local storage is optional; the active Convex task remains authoritative. */ }
 })
@@ -199,12 +222,15 @@ onBeforeUnmount(() => { store.shellVisible.value = false })
 const submitting = ref(false)
 const cancelling = ref(false)
 const pendingIdempotencyKey = ref<string | null>(null)
+const pendingCommandStorageKey = computed(() =>
+  `audio-overview-pending-command:${resolvedRoomId.value ?? props.conversationId ?? `new:${props.folderId}`}`,
+)
 
 function rememberPendingCommand(value: string | null) {
   pendingIdempotencyKey.value = value
   if (!import.meta.client) return
   try {
-    const key = `audio-overview-pending-command:${props.folderId}`
+    const key = pendingCommandStorageKey.value
     if (value) localStorage.setItem(key, value)
     else localStorage.removeItem(key)
   }
@@ -215,7 +241,23 @@ const customizeOpen = ref(false)
 const customizeDefaults = ref<{
   lengthMinutes: LengthMinutes
   complexity: Complexity
-}>({ lengthMinutes: 10, complexity: 'beginner' })
+  hostNames: { hostA: string, hostB: string }
+}>({ lengthMinutes: 10, complexity: 'beginner', hostNames: { hostA: 'Maya', hostB: 'Leo' } })
+
+const createRoomMutation = import.meta.client
+  ? useConvexMutation(api.audioOverviewRooms.create)
+  : { mutate: async () => ({ roomId: '' as Id<'audioOverviewRooms'> }) } as any
+
+async function ensureRoom(): Promise<Id<'audioOverviewRooms'>> {
+  if (resolvedRoomId.value) return resolvedRoomId.value
+  const result = await createRoomMutation.mutate({
+    folderId: props.folderId,
+    ...(props.roomTitle ? { title: props.roomTitle } : {}),
+    ...(props.conversationId ? { conversationId: props.conversationId } : {}),
+  } as any) as { roomId: Id<'audioOverviewRooms'> }
+  locallyCreatedRoomId.value = result.roomId
+  return result.roomId
+}
 
 function openCustomize() {
   customizeOpen.value = true
@@ -233,8 +275,10 @@ async function handleCustomizeSubmit(value: CustomizeSubmit) {
   customizeDefaults.value = {
     lengthMinutes: value.lengthMinutes,
     complexity: value.complexity,
+    hostNames: value.hostNames,
   }
   try {
+    const roomId = await ensureRoom()
     const scope = hasFolderScope.value
       ? { mode: 'explicit' as const, documentIds: folderScopeDocIds.value }
       : { mode: 'folder' as const }
@@ -248,8 +292,10 @@ async function handleCustomizeSubmit(value: CustomizeSubmit) {
       method: 'POST',
       body: {
         folderId: props.folderId,
+        roomId,
         scope,
         preferences: { lengthMinutes: value.lengthMinutes, complexity: value.complexity },
+        hostNames: value.hostNames,
         idempotencyKey: pendingIdempotencyKey.value,
       },
     })
@@ -433,6 +479,7 @@ defineExpose({
       v-model:open="customizeOpen"
       :initial-length-minutes="customizeDefaults.lengthMinutes"
       :initial-complexity="customizeDefaults.complexity"
+      :initial-host-names="customizeDefaults.hostNames"
       :submitting="submitting"
       :quota-state="quotaState"
       :folder-scope-doc-count="folderScopeDocCount"

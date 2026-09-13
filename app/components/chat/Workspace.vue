@@ -16,6 +16,7 @@ const props = defineProps<{
   hasIndexedDocuments: boolean
   selectedModel: string
   interjectionInFlight: boolean
+  conversationId?: Id<'conversations'> | null
 }>()
 
 const emit = defineEmits<{
@@ -181,6 +182,7 @@ defineExpose({ focus: () => chatInputRef.value?.focus() })
       <AudioOverviewShell
         ref="audioOverviewShellRef"
         :folder-id="folderId"
+        :conversation-id="props.conversationId ?? undefined"
         :scope="referenceScope"
         :interjection-in-flight="interjectionInFlight"
         @podcast-ask="handlePodcastAsk"
@@ -194,6 +196,7 @@ defineExpose({ focus: () => chatInputRef.value?.focus() })
           <AudioOverviewShell
             ref="audioOverviewShellRef"
             :folder-id="folderId"
+            :conversation-id="props.conversationId ?? undefined"
             :scope="referenceScope"
             :interjection-in-flight="interjectionInFlight"
             @generation-started="() => { if (isDesktop) helperPane.open('podcast') }"
@@ -285,7 +288,7 @@ defineExpose({ focus: () => chatInputRef.value?.focus() })
             <ResizablePanel :default-size="28" :min-size="20" :max-size="45" class="min-w-[18rem]">
               <FolderShellHelperPane>
                 <template #default="{ activeTabId: tid }">
-                  <AudioOverviewShell v-if="tid === 'podcast'" :folder-id="folderId" :scope="referenceScope" :interjection-in-flight="interjectionInFlight" @podcast-ask="handlePodcastAsk" @podcast-ask-submit="(p) => emit('podcastAskSubmit', p)" />
+                  <AudioOverviewShell v-if="tid === 'podcast'" :folder-id="folderId" :conversation-id="props.conversationId ?? undefined" :scope="referenceScope" :interjection-in-flight="interjectionInFlight" @podcast-ask="handlePodcastAsk" @podcast-ask-submit="(p) => emit('podcastAskSubmit', p)" />
                   <ChatSourcePanel v-else-if="tid === 'sources'" :sources="allSources" :active-citation-index="activeCitationIndex" :open="true" side="left" class="min-h-0 flex-1" @close="helperPane.close()" />
                   <FolderTasksPane v-else-if="tid === 'tasks'" :folder-id="folderId" embedded @close="helperPane.close()" @view-room="handleTaskViewRoom" />
                 </template>
@@ -369,7 +372,7 @@ defineExpose({ focus: () => chatInputRef.value?.focus() })
             <ResizablePanel :default-size="28" :min-size="20" :max-size="45" class="min-w-[18rem]">
               <FolderShellHelperPane>
                 <template #default="{ activeTabId: tid }">
-                  <AudioOverviewShell v-if="tid === 'podcast'" :folder-id="folderId" :scope="referenceScope" :interjection-in-flight="interjectionInFlight" @podcast-ask="handlePodcastAsk" @podcast-ask-submit="(p) => emit('podcastAskSubmit', p)" />
+                  <AudioOverviewShell v-if="tid === 'podcast'" :folder-id="folderId" :conversation-id="props.conversationId ?? undefined" :scope="referenceScope" :interjection-in-flight="interjectionInFlight" @podcast-ask="handlePodcastAsk" @podcast-ask-submit="(p) => emit('podcastAskSubmit', p)" />
                   <ChatSourcePanel v-else-if="tid === 'sources'" :sources="allSources" :active-citation-index="activeCitationIndex" :open="true" side="right" class="min-h-0 flex-1" @close="helperPane.close()" />
                   <FolderTasksPane v-else-if="tid === 'tasks'" :folder-id="folderId" embedded @close="helperPane.close()" @view-room="handleTaskViewRoom" />
                 </template>

@@ -14,6 +14,7 @@ import type * as audioOverviewInterjections from "../audioOverviewInterjections.
 import type * as audioOverviewInterjectionsV2 from "../audioOverviewInterjectionsV2.js";
 import type * as audioOverviewJobUploadActions from "../audioOverviewJobUploadActions.js";
 import type * as audioOverviewJobs from "../audioOverviewJobs.js";
+import type * as audioOverviewRooms from "../audioOverviewRooms.js";
 import type * as audioOverviewUploadActions from "../audioOverviewUploadActions.js";
 import type * as audioOverviewUploads from "../audioOverviewUploads.js";
 import type * as audioOverviewV2 from "../audioOverviewV2.js";
@@ -30,7 +31,6 @@ import type * as courseSourceDocs from "../courseSourceDocs.js";
 import type * as courses from "../courses.js";
 import type * as crons from "../crons.js";
 import type * as dataExport from "../dataExport.js";
-import type * as debugQuery from "../debugQuery.js";
 import type * as documentActions from "../documentActions.js";
 import type * as documentImports from "../documentImports.js";
 import type * as documents from "../documents.js";
@@ -72,6 +72,7 @@ declare const fullApi: ApiFromModules<{
   audioOverviewInterjectionsV2: typeof audioOverviewInterjectionsV2;
   audioOverviewJobUploadActions: typeof audioOverviewJobUploadActions;
   audioOverviewJobs: typeof audioOverviewJobs;
+  audioOverviewRooms: typeof audioOverviewRooms;
   audioOverviewUploadActions: typeof audioOverviewUploadActions;
   audioOverviewUploads: typeof audioOverviewUploads;
   audioOverviewV2: typeof audioOverviewV2;
@@ -88,7 +89,6 @@ declare const fullApi: ApiFromModules<{
   courses: typeof courses;
   crons: typeof crons;
   dataExport: typeof dataExport;
-  debugQuery: typeof debugQuery;
   documentActions: typeof documentActions;
   documentImports: typeof documentImports;
   documents: typeof documents;

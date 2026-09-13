@@ -26,12 +26,14 @@ class WorkflowLaunchError extends Error {
 type AudioOverviewRequestBody = {
   taskId?: string;
   folderId?: string;
+  roomId?: string;
   scope?: { mode: "folder" } | { mode: "explicit"; documentIds: string[] };
   preferences?: {
     lengthMinutes: 5 | 10 | 20;
     complexity: "beginner" | "expert";
   };
   voiceProfile?: unknown;
+  hostNames?: { hostA?: string; hostB?: string };
   idempotencyKey?: string;
 };
 
@@ -40,10 +42,13 @@ type AudioOverviewRequestBody = {
 const LEGACY_TASK_AUDIO_PROFILE = { hostA: "asteria", hostB: "orion" } as const;
 const WORKFLOW_LAUNCH_ATTEMPTS = 3;
 const WORKFLOW_LAUNCH_TIMEOUT_MS = 1_500;
+const HOST_NAME_PATTERN = /^[\p{L}\p{M}][\p{L}\p{M} .'-]{0,29}$/u;
 
 function validateCommand(body: AudioOverviewRequestBody | null | undefined) {
   if (!body?.folderId || typeof body.folderId !== "string")
     throw createError({ statusCode: 400, message: "folderId is required" });
+  if (!body.roomId || typeof body.roomId !== "string")
+    throw createError({ statusCode: 400, message: "roomId is required" });
   if (!body.scope)
     throw createError({ statusCode: 400, message: "scope is required" });
   if (body.scope.mode !== "folder" && body.scope.mode !== "explicit")
@@ -74,6 +79,14 @@ function validateCommand(body: AudioOverviewRequestBody | null | undefined) {
       message: "Audio Overview voices are managed and cannot be overridden",
     });
   }
+  const hostA = body.hostNames?.hostA?.trim() ?? "";
+  const hostB = body.hostNames?.hostB?.trim() ?? "";
+  if (
+    !HOST_NAME_PATTERN.test(hostA) || !HOST_NAME_PATTERN.test(hostB) ||
+    hostA.toLocaleLowerCase() === hostB.toLocaleLowerCase()
+  ) {
+    throw createError({ statusCode: 400, message: "distinct hostNames are required" });
+  }
   if (!isAudioOverviewIdempotencyKey(body.idempotencyKey))
     throw createError({
       statusCode: 400,
@@ -88,7 +101,7 @@ function reservationError(error: unknown): never {
   if (/daily audio overview quota/i.test(message))
     throw createError({ statusCode: 429, message });
   if (
-    /folder not found|source not found|not ready|requires at least|exceeds the source limit|has no ready sources|immutable revision|outside the requested folder|invalid job capability|idempotency/i.test(
+    /folder not found|room not found|host names|source not found|not ready|requires at least|exceeds the source limit|has no ready sources|immutable revision|outside the requested folder|invalid job capability|idempotency/i.test(
       message,
     )
   ) {
@@ -333,6 +346,7 @@ export default defineEventHandler(async (event) => {
     try {
       result = await convexClient.mutation(api.audioOverviewJobs.request, {
         folderId: body!.folderId as Id<"folders">,
+        roomId: body!.roomId as Id<"audioOverviewRooms">,
         scope:
           body!.scope!.mode === "explicit"
             ? {
@@ -342,6 +356,10 @@ export default defineEventHandler(async (event) => {
             : { mode: "folder" as const },
         preferences: body!.preferences!,
         voiceProfile: LEGACY_TASK_AUDIO_PROFILE,
+        hostNames: {
+          hostA: body!.hostNames!.hostA!.trim(),
+          hostB: body!.hostNames!.hostB!.trim(),
+        },
         idempotencyKey,
         capability,
       });

@@ -97,6 +97,7 @@ export const getCourseScopedOverview = query({
       turns: overview.turns,
       turnUrls,
       voiceProfile: overview.voiceProfile,
+      hostNames: overview.hostNames,
       totalDurationMs: overview.totalDurationMs,
       sourceDocumentIds: overview.sourceDocumentIds ?? [],
       sourceFilenames,
@@ -134,6 +135,37 @@ export const listByFolder = query({
       shareToken: row.shareToken,
       publishedAt: row.publishedAt,
     }))
+  },
+})
+
+export const listByRoom = query({
+  args: { roomId: v.id('audioOverviewRooms') },
+  handler: async (ctx, args) => {
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return []
+    const room = await ctx.db.get(args.roomId)
+    if (!room || room.userId !== userId) return []
+
+    const rows = await ctx.db
+      .query('audioOverviews')
+      .withIndex('by_userId_and_roomId', q => q.eq('userId', userId).eq('roomId', args.roomId))
+      .order('desc')
+      .take(100)
+
+    return rows
+      .filter(row => row.courseScoped !== true)
+      .map(row => ({
+        _id: row._id,
+        _creationTime: row._creationTime,
+        title: row.title,
+        status: row.status,
+        turnCount: row.turns.length,
+        totalDurationMs: row.totalDurationMs,
+        taskId: row.taskId,
+        shareToken: row.shareToken,
+        publishedAt: row.publishedAt,
+        hostNames: row.hostNames,
+      }))
   },
 })
 
@@ -385,6 +417,7 @@ export const getByShareToken = query({
       sourceDocumentIds: overview.sourceDocumentIds ?? [],
       sourceFilenames,
       publishedAt: overview.publishedAt ?? null,
+      hostNames: overview.hostNames,
     }
   },
 })

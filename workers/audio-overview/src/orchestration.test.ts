@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from 'vitest'
-import { GEMINI_AUDIO_PROFILE_V1, type GeminiSceneRenderResult } from './gemini-audio-renderer'
+import { GEMINI_AUDIO_PROFILE, type GeminiSceneRenderResult } from './gemini-audio-renderer'
 import { sha256Hex } from './media'
 import {
   isWorkflowActiveStatus,
@@ -44,9 +44,9 @@ function rendered(audio = pcmSecond()): GeminiSceneRenderResult {
       encoding: 'pcm_s16le', sampleRateHz: 24_000, bitDepth: 16, channels: 1,
       byteLength: audio.byteLength, durationMs: 1_000,
       providerMimeType: 'audio/L16;codec=pcm;rate=24000',
-      model: GEMINI_AUDIO_PROFILE_V1.model,
-      audioProfileId: GEMINI_AUDIO_PROFILE_V1.id,
-      audioProfileVersion: GEMINI_AUDIO_PROFILE_V1.version,
+      model: GEMINI_AUDIO_PROFILE.model,
+      audioProfileId: GEMINI_AUDIO_PROFILE.id,
+      audioProfileVersion: GEMINI_AUDIO_PROFILE.version,
     },
   }
 }
@@ -190,7 +190,7 @@ describe('audio overview orchestration', () => {
       r2Key: 'audio-overviews/jobs/job_1/scenes/0/attempts/1.pcm',
       attempt: 1,
       byteLength: 48_000,
-      audioProfileVersion: '1',
+      audioProfileVersion: String(GEMINI_AUDIO_PROFILE.version),
       format: {
         encoding: 'pcm_s16le',
         sampleRateHz: 24_000,

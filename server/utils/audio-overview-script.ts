@@ -120,6 +120,7 @@ export function isDialoguePlanDurationError(error: unknown): error is DialoguePl
 export interface BuildDialoguePlanPromptOptions {
   lengthMinutes: 5 | 10 | 20
   complexity: 'beginner' | 'expert'
+  hostNames?: { hostA: string, hostB: string }
 }
 
 export function buildDialoguePlanJsonSchema(_options: BuildDialoguePlanPromptOptions): Record<string, unknown> {
@@ -235,6 +236,8 @@ export function buildDialoguePlanPrompt(
   const complexity = options.complexity === 'expert'
     ? 'Use precise domain terminology and preserve important nuance.'
     : 'Define jargon naturally and build concepts with accessible examples.'
+  const hostAName = options.hostNames?.hostA.trim() || 'Host A'
+  const hostBName = options.hostNames?.hostB.trim() || 'Host B'
   const system = `You create a source-grounded Dialogue Script for a two-Host Audio Overview.
 
 Return JSON only with this exact structure:
@@ -273,7 +276,7 @@ Create the Outline and Claim Ledger before writing Scenes. Mark a claim supporte
 
 Keep this representation compact: use at most ${maximumClaims} non-duplicative claims, reuse claimIds across Utterances, use the single strongest source for a claim unless multiple sources are necessary, keep evidence quotes to 8-30 words, and keep each emotionalIntent and delivery value to 2-8 words.
 
-Target ${wordBudget} spoken words total across ${minimumScenes}-${maximumScenes} coherent Scenes and approximately ${minimumUtterances}-${maximumUtterances} Utterances. The complete spoken text has a hard acceptance range of ${minimumWords}-${maximumWords} words. Count only Utterance text, and revise it before responding if it is outside that range. Each 1-3 minute Scene must stay within roughly 150-450 spoken words. Both Hosts must speak in every Scene. Host A is a warm, confident guide; Host B is an intelligent, genuinely curious learner. Give the episode a whole-story emotional arc rather than repetitive excitement. ${complexity}
+Target ${wordBudget} spoken words total across ${minimumScenes}-${maximumScenes} coherent Scenes and approximately ${minimumUtterances}-${maximumUtterances} Utterances. The complete spoken text has a hard acceptance range of ${minimumWords}-${maximumWords} words. Count only Utterance text, and revise it before responding if it is outside that range. Each 1-3 minute Scene must stay within roughly 150-450 spoken words. Both Hosts must speak in every Scene. Host A is ${hostAName}, a warm, confident guide; Host B is ${hostBName}, an intelligent, genuinely curious learner. Use ${hostAName} and ${hostBName} naturally as spoken vocatives across the conversation so listeners can identify the speakers, including both names within the opening Scene. Do not turn host identity into an unsupported factual claim or prepend a name label to every Utterance. Give the episode a whole-story emotional arc rather than repetitive excitement. ${complexity}
 
 Write natural speech with contractions, varied sentence lengths, thoughtful pauses, and occasional authentic course corrections. Do not impose filler, laughter, agreement, interruption, or recap quotas. Keep performance direction in emotionalIntent, delivery, and pauseAfterMs fields; never insert direction markup into spoken text.`
 

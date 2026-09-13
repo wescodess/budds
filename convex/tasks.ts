@@ -50,15 +50,18 @@ const audioOverviewVoiceProfileValidator = v.object({
 
 export type AudioOverviewReservationArgs = {
   folderId: Id<'folders'>
+  roomId: Id<'audioOverviewRooms'>
   scope: { mode: 'folder' } | { mode: 'explicit', documentIds: Id<'documents'>[] }
   preferences: { lengthMinutes: 5 | 10 | 20, complexity: 'beginner' | 'expert' }
   voiceProfile: {
     hostA: 'asteria' | 'luna' | 'stella' | 'athena' | 'hera' | 'orion' | 'arcas' | 'perseus' | 'angus' | 'orpheus' | 'helios' | 'zeus'
     hostB: 'asteria' | 'luna' | 'stella' | 'athena' | 'hera' | 'orion' | 'arcas' | 'perseus' | 'angus' | 'orpheus' | 'helios' | 'zeus'
   }
+  hostNames: { hostA: string, hostB: string }
 }
 
 const SHA256 = /^[a-f0-9]{64}$/
+const HOST_NAME_PATTERN = /^[\p{L}\p{M}][\p{L}\p{M} .'-]{0,29}$/u
 
 function frozenSourceIdentity(document: {
   folderId: Id<'folders'>
@@ -80,6 +83,16 @@ export async function reserveAudioOverviewTask(
 ) {
   const folder = await ctx.db.get(args.folderId)
   if (!folder || folder.userId !== userId) throw new Error('Folder not found')
+  const room = await ctx.db.get(args.roomId)
+  if (!room || room.userId !== userId || room.folderId !== args.folderId) {
+    throw new Error('Audio Overview room not found')
+  }
+  const hostA = args.hostNames.hostA.trim().slice(0, 30)
+  const hostB = args.hostNames.hostB.trim().slice(0, 30)
+  if (!HOST_NAME_PATTERN.test(hostA) || !HOST_NAME_PATTERN.test(hostB)
+    || hostA.toLocaleLowerCase() === hostB.toLocaleLowerCase()) {
+    throw new Error('Host names must be distinct')
+  }
 
   const documents: Array<{
     documentId: Id<'documents'>
@@ -175,11 +188,14 @@ export async function reserveAudioOverviewTask(
     progress: 'Preparing…',
     createdAt: now,
     updatedAt: now,
+    metadata: { roomId: args.roomId },
     audioOverviewRequest: {
+      roomId: args.roomId,
       scope: args.scope,
       documents,
       preferences: args.preferences,
       voiceProfile: args.voiceProfile,
+      hostNames: { hostA, hostB },
       quotaDate,
     },
   })

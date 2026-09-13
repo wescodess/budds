@@ -16,6 +16,7 @@ const JOB_SECRET = 'local-test-audio-overview-job-secret'
 const IDEMPOTENCY_KEY = 'audio_job_request_0001'
 const PREFERENCES = { lengthMinutes: 5, complexity: 'beginner' } as const
 const VOICE_PROFILE = { hostA: 'asteria', hostB: 'orion' } as const
+const HOST_NAMES = { hostA: 'Maya', hostB: 'Leo' } as const
 
 afterEach(() => {
   delete process.env.AUDIO_OVERVIEW_JOB_SECRET
@@ -54,6 +55,10 @@ async function setup() {
   const asUser = t.withIdentity(USER)
   await asUser.mutation(api.users.upsertUser, {})
   const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Audio jobs' })
+  const roomId = (await asUser.mutation(api.audioOverviewRooms.create, {
+    folderId,
+    title: 'Test room',
+  })).roomId
   const documentId = await t.run(ctx => ctx.db.insert('documents', {
     userId: USER.tokenIdentifier,
     folderId,
@@ -67,13 +72,15 @@ async function setup() {
   const capability = await deriveCapability()
   const request = {
     folderId,
+    roomId,
     scope: { mode: 'explicit' as const, documentIds: [documentId] },
     preferences: PREFERENCES,
     voiceProfile: VOICE_PROFILE,
+    hostNames: HOST_NAMES,
     idempotencyKey: IDEMPOTENCY_KEY,
     capability,
   }
-  return { t, asUser, folderId, documentId, request, capability }
+  return { t, asUser, folderId, roomId, documentId, request, capability }
 }
 
 async function scheduledNames(t: ReturnType<typeof convexTest>) {

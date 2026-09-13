@@ -29,6 +29,7 @@ const AudioOverviewCustomizeStub = defineComponent({
       @click="$emit('submit', {
         lengthMinutes: 5,
         complexity: 'expert',
+        hostNames: { hostA: 'Maya', hostB: 'Leo' },
       })"
     >
       Submit
@@ -65,7 +66,7 @@ describe('AudioOverviewShell durable generation command', () => {
       const name = getFunctionName(apiRef as any) ?? ''
       if (name.includes('getDailyQuota')) return { data: ref({ used: 0, cap: 10, date: '2026-09-02' }) }
       if (name.includes('resolveScope')) return { data: ref({ documentIds: [] }) }
-      if (name.includes('listByFolder')) return { data: ref([]) }
+      if (name.includes('listByRoom')) return { data: ref([]) }
       return { data: ref(null) }
     })
     vi.stubGlobal('useConvexMutation', (apiRef: unknown) => {
@@ -88,7 +89,7 @@ describe('AudioOverviewShell durable generation command', () => {
 
   it('[P0] submits one idempotent accepted command without using the legacy task reservation flow', async () => {
     const wrapper = mount(AudioOverviewShell, {
-      props: { folderId: 'folder_1' as any },
+      props: { folderId: 'folder_1' as any, roomId: 'audio_room_1' as any },
       global: {
         stubs: {
           AudioOverviewCard: AudioOverviewCardStub,
@@ -112,8 +113,10 @@ describe('AudioOverviewShell durable generation command', () => {
       method: 'POST',
       body: {
         folderId: 'folder_1',
+        roomId: 'audio_room_1',
         scope: { mode: 'folder' },
         preferences: { lengthMinutes: 5, complexity: 'expert' },
+        hostNames: { hostA: 'Maya', hostB: 'Leo' },
         idempotencyKey: '12345678-1234-4123-8123-123456789abc',
       },
     })
@@ -125,7 +128,7 @@ describe('AudioOverviewShell durable generation command', () => {
 
   it('[P0] surfaces an accepted job that fails before progress can render', async () => {
     const wrapper = mount(AudioOverviewShell, {
-      props: { folderId: 'folder_1' as any },
+      props: { folderId: 'folder_1' as any, roomId: 'audio_room_1' as any },
       global: {
         stubs: {
           AudioOverviewCard: AudioOverviewCardStub,
@@ -152,6 +155,7 @@ describe('AudioOverviewShell durable generation command', () => {
       status: 'failed',
       progress: 'Retrieving sources…',
       error: 'Not enough indexed content for an audio overview',
+      audioOverviewRequest: { roomId: 'audio_room_1' },
     }]
 
     await vi.waitFor(() => {
@@ -170,7 +174,7 @@ describe('AudioOverviewShell durable generation command', () => {
         quota: { used: 1, cap: 10, date: '2026-09-02' },
       })
     const wrapper = mount(AudioOverviewShell, {
-      props: { folderId: 'folder_1' as any },
+      props: { folderId: 'folder_1' as any, roomId: 'audio_room_1' as any },
       global: {
         stubs: {
           AudioOverviewCard: AudioOverviewCardStub,
@@ -192,7 +196,7 @@ describe('AudioOverviewShell durable generation command', () => {
       await vi.waitFor(() => expect(mockCommandFetch).toHaveBeenCalledTimes(attempt + 1))
       await vi.waitFor(() => expect((wrapper.vm as any).submitting).toBe(false))
       if (attempt === 0) {
-        expect(localStorage.getItem('audio-overview-pending-command:folder_1'))
+        expect(localStorage.getItem('audio-overview-pending-command:audio_room_1'))
           .toBe('12345678-1234-4123-8123-123456789abc')
       }
     }
@@ -204,6 +208,6 @@ describe('AudioOverviewShell durable generation command', () => {
     ])
     expect(globalThis.crypto.randomUUID).toHaveBeenCalledOnce()
     expect(wrapper.emitted('generation-started')).toHaveLength(1)
-    expect(localStorage.getItem('audio-overview-pending-command:folder_1')).toBeNull()
+    expect(localStorage.getItem('audio-overview-pending-command:audio_room_1')).toBeNull()
   })
 })

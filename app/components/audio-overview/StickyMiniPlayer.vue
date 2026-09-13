@@ -3,7 +3,7 @@ import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { Pause, Play, Maximize2, X, Rewind, FastForward, ChevronUp, ChevronDown } from '@lucide/vue'
 
 const {
-  overviewId, folderId, title, activeTurn,
+  overviewId, folderId, title, hostNames, activeTurn,
   isPlaying, totalDurationMs, currentTimeMs, playbackRate,
   shellVisible,
   togglePlay, skip, seek, setSpeed, dismiss,
@@ -160,7 +160,7 @@ const progressPercent = computed(() => {
 
 const captionLine = computed(() => {
   if (!activeTurn.value) return ''
-  const speaker = activeTurn.value.speaker === 'host_a' ? 'Host A' : 'Host B'
+  const speaker = activeTurn.value.speaker === 'host_a' ? hostNames.value.hostA : hostNames.value.hostB
   return `${speaker} · ${formatMs(currentTimeMs.value)} / ${formatMs(totalDurationMs.value)}`
 })
 
@@ -219,12 +219,12 @@ watch(shellVisible, (v) => {
     <Motion
       v-if="visible || isTransitioning"
       key="mini-player"
+      ref="floatingRef"
       :initial="{ opacity: 0, scale: 0.9, y: 20 }"
       :animate="{ opacity: 1, scale: 1, y: 0 }"
       :exit="{ opacity: 0, scale: 0.9, y: 20 }"
       :transition="{ type: 'spring', stiffness: 350, damping: 28 }"
       as="div"
-      ref="floatingRef"
       data-testid="audio-overview-sticky-mini-player"
       :class="[
         'fixed z-[9999]',
@@ -294,7 +294,7 @@ watch(shellVisible, (v) => {
             data-testid="audio-overview-sticky-scrubber"
             :class="['flex-1 cursor-pointer appearance-none rounded-full bg-border/40 accent-primary', isTransitioning ? 'h-1.5' : 'h-1']"
             @input="handleScrubInput"
-          />
+          >
           <span :class="['text-right font-inter tabular-nums text-muted-foreground', isTransitioning ? 'w-10 text-xs' : 'w-8 text-[10px]']">{{ formatMs(totalDurationMs) }}</span>
         </div>
 

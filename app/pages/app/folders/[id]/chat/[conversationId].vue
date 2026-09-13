@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { api } from '#convex/api'
 import type { Id } from '~~/convex/_generated/dataModel'
 import type { InterjectionContext } from '~/composables/useChat'
 import { injectFolderContext } from '~/composables/useFolderPageContext'
@@ -99,6 +98,7 @@ onUnmounted(() => {
     :has-indexed-documents="hasIndexedDocuments"
     :selected-model="selectedModel"
     :interjection-in-flight="interjectionInFlight"
+    :conversation-id="conversationIdRef"
     @send="handleSendMessage"
     @select-model="selectModel"
     @interjection-badge-click="handleInterjectionBadgeClick"

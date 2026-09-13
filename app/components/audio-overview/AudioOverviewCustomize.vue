@@ -2,7 +2,7 @@
 import { ref, computed, watch } from 'vue'
 import { X, Sparkles, Clock, FolderTree } from '@lucide/vue'
 import type { Id } from '../../../convex/_generated/dataModel'
-import { AUDIO_OVERVIEW_PROFILE_V1 } from '~~/shared/audio-overview-profile'
+import { AUDIO_OVERVIEW_PROFILE_CURRENT } from '~~/shared/audio-overview-profile'
 import type { useReferenceScope } from '~/composables/useReferenceScope'
 import type { Complexity, LengthMinutes, CustomizeSubmit } from './customize-types'
 
@@ -10,6 +10,7 @@ const props = withDefaults(defineProps<{
   open: boolean
   initialLengthMinutes?: LengthMinutes
   initialComplexity?: Complexity
+  initialHostNames?: { hostA: string, hostB: string }
   submitting?: boolean
   submitLabel?: string
   quotaState?: { used: number, cap: number } | null
@@ -20,6 +21,7 @@ const props = withDefaults(defineProps<{
 }>(), {
   initialLengthMinutes: 10,
   initialComplexity: 'beginner',
+  initialHostNames: () => ({ hostA: 'Maya', hostB: 'Leo' }),
   submitting: false,
   submitLabel: 'Generate',
   quotaState: null,
@@ -34,6 +36,8 @@ const emit = defineEmits<{
 
 const length = ref<LengthMinutes>(props.initialLengthMinutes)
 const complexity = ref<Complexity>(props.initialComplexity)
+const hostAName = ref(props.initialHostNames.hostA)
+const hostBName = ref(props.initialHostNames.hostB)
 
 watch(
   () => props.open,
@@ -41,6 +45,8 @@ watch(
     if (isOpen && !wasOpen) {
       length.value = props.initialLengthMinutes
       complexity.value = props.initialComplexity
+      hostAName.value = props.initialHostNames.hostA
+      hostBName.value = props.initialHostNames.hostB
     }
   },
 )
@@ -54,12 +60,21 @@ function close() {
 }
 
 function handleSubmit() {
-  if (props.submitting) return
+  if (props.submitting || !hostNamesValid.value) return
   emit('submit', {
     lengthMinutes: length.value,
     complexity: complexity.value,
+    hostNames: { hostA: hostAName.value.trim(), hostB: hostBName.value.trim() },
   })
 }
+
+const hostNamesValid = computed(() => {
+  const hostA = hostAName.value.trim()
+  const hostB = hostBName.value.trim()
+  const validName = (value: string) => /^[\p{L}\p{M}][\p{L}\p{M} .'-]{0,29}$/u.test(value)
+  return validName(hostA) && validName(hostB)
+    && hostA.toLocaleLowerCase() !== hostB.toLocaleLowerCase()
+})
 
 const quotaExceeded = computed(() => {
   const q = props.quotaState
@@ -207,24 +222,43 @@ watch(
             <div class="flex items-center gap-3 rounded-lg px-3 py-2">
               <span class="h-8 w-8 shrink-0 rounded-full bg-primary" aria-hidden="true" />
               <div class="min-w-0 flex-1">
-                <p class="font-dm-sans text-sm font-medium text-foreground">Host A · Expert</p>
+                <label for="audio-overview-host-a-name" class="font-dm-sans text-sm font-medium text-foreground">Expert host</label>
                 <p class="font-inter text-[11px] text-muted-foreground">Speaks first</p>
               </div>
+              <UiInput
+                id="audio-overview-host-a-name"
+                v-model="hostAName"
+                data-testid="audio-overview-host-a-name"
+                maxlength="30"
+                class="h-9 w-28"
+                aria-label="Expert host name"
+              />
               <span class="rounded-lg border border-border/60 bg-background px-2.5 py-1.5 font-inter text-xs font-medium text-foreground">
-                {{ AUDIO_OVERVIEW_PROFILE_V1.hostA.voiceName }}
+                {{ AUDIO_OVERVIEW_PROFILE_CURRENT.hostA.voiceName }}
               </span>
             </div>
             <div class="flex items-center gap-3 rounded-lg px-3 py-2">
               <span class="h-8 w-8 shrink-0 rounded-full bg-accent" aria-hidden="true" />
               <div class="min-w-0 flex-1">
-                <p class="font-dm-sans text-sm font-medium text-foreground">Host B · Learner</p>
+                <label for="audio-overview-host-b-name" class="font-dm-sans text-sm font-medium text-foreground">Learner host</label>
                 <p class="font-inter text-[11px] text-muted-foreground">Clarifying questions</p>
               </div>
+              <UiInput
+                id="audio-overview-host-b-name"
+                v-model="hostBName"
+                data-testid="audio-overview-host-b-name"
+                maxlength="30"
+                class="h-9 w-28"
+                aria-label="Learner host name"
+              />
               <span class="rounded-lg border border-border/60 bg-background px-2.5 py-1.5 font-inter text-xs font-medium text-foreground">
-                {{ AUDIO_OVERVIEW_PROFILE_V1.hostB.voiceName }}
+                {{ AUDIO_OVERVIEW_PROFILE_CURRENT.hostB.voiceName }}
               </span>
             </div>
           </div>
+          <p v-if="!hostNamesValid" data-testid="audio-overview-host-names-error" class="mt-2 font-inter text-xs text-destructive">
+            Enter two distinct names using letters, spaces, apostrophes, periods, or hyphens.
+          </p>
         </div>
       </div>
 
@@ -236,7 +270,7 @@ watch(
           type="button"
           data-testid="audio-overview-customize-submit"
           class="w-full sm:w-auto"
-          :disabled="props.submitting || quotaExceeded"
+          :disabled="props.submitting || quotaExceeded || !hostNamesValid"
           @click="handleSubmit"
         >
           <Sparkles v-if="!quotaExceeded" class="mr-2 h-4 w-4" />

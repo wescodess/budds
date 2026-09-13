@@ -136,6 +136,7 @@ interface State {
   overviewId: Id<'audioOverviews'> | null
   folderId: Id<'folders'> | null
   title: string
+  hostNames: { hostA: string, hostB: string }
   turns: AudioOverviewTurn[]
   turnUrls: (string | null)[]
   playbackMode: 'segmented' | 'continuous'
@@ -155,6 +156,7 @@ export function createAudioOverviewPlayback() {
     overviewId: null,
     folderId: null,
     title: '',
+    hostNames: { hostA: 'Host A', hostB: 'Host B' },
     turns: [],
     turnUrls: [],
     playbackMode: 'segmented',
@@ -357,6 +359,7 @@ export function createAudioOverviewPlayback() {
     overviewId: Id<'audioOverviews'>
     folderId: Id<'folders'> | null
     title: string
+    hostNames?: { hostA: string, hostB: string }
     turns: AudioOverviewTurn[]
     turnUrls?: (string | null)[]
     playbackMode?: 'segmented' | 'continuous'
@@ -370,6 +373,7 @@ export function createAudioOverviewPlayback() {
     const mediaChanged = state.playbackMode !== nextMode || state.continuousMediaUrl !== nextContinuousUrl
     if (state.isInterjectionActive && isSameOverview && !mediaChanged) {
       state.title = args.title
+      state.hostNames = args.hostNames ?? state.hostNames
       state.turns = args.turns
       state.turnUrls = nextTurnUrls
       return
@@ -380,6 +384,7 @@ export function createAudioOverviewPlayback() {
       state.overviewId = args.overviewId
       state.folderId = args.folderId
       state.title = args.title
+      state.hostNames = args.hostNames ?? { hostA: 'Host A', hostB: 'Host B' }
       state.turns = args.turns
       state.turnUrls = nextTurnUrls
       state.playbackMode = nextMode
@@ -400,6 +405,7 @@ export function createAudioOverviewPlayback() {
       return
     }
     state.title = args.title
+    state.hostNames = args.hostNames ?? state.hostNames
     if (spliceApplied && state.playbackMode === 'segmented') return
     const absoluteTimeSec = audioElRef.value?.currentTime ?? currentTimeMs.value / 1000
     state.turns = args.turns
@@ -591,6 +597,7 @@ export function createAudioOverviewPlayback() {
     state.overviewId = null
     state.folderId = null
     state.title = ''
+    state.hostNames = { hostA: 'Host A', hostB: 'Host B' }
     state.turns = []
     state.turnUrls = []
     state.playbackMode = 'segmented'

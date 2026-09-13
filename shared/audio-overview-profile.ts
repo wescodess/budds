@@ -18,3 +18,13 @@ export const AUDIO_OVERVIEW_PROFILE_V1 = Object.freeze({
     'Speak only the transcript; never read speaker labels, section labels, or director notes aloud.',
   ].join(' '),
 })
+
+export const AUDIO_OVERVIEW_PROFILE_V2 = Object.freeze({
+  ...AUDIO_OVERVIEW_PROFILE_V1,
+  id: 'budds-two-host-gemini-v2',
+  version: 2,
+  renderer: 'gemini-interactions-multi-speaker',
+  model: 'gemini-3.1-flash-tts-preview',
+})
+
+export const AUDIO_OVERVIEW_PROFILE_CURRENT = AUDIO_OVERVIEW_PROFILE_V2

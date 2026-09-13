@@ -2,7 +2,7 @@ import { ConvexHttpClient } from 'convex/browser'
 import { api } from '../../../../convex/_generated/api'
 import type { Id } from '../../../../convex/_generated/dataModel'
 import { mainUtteranceVerificationId } from '../../../../shared/audio-overview-grounding'
-import { AUDIO_OVERVIEW_PROFILE_V1 } from '../../../../shared/audio-overview-profile'
+import { AUDIO_OVERVIEW_PROFILE_CURRENT } from '../../../../shared/audio-overview-profile'
 import type { AISearchChunk } from '../../../utils/ai-search'
 import { alignRecognizedWordsToScript } from '../../../utils/audio-overview-alignment'
 import {
@@ -328,6 +328,30 @@ function groundRejectedUtterancesInFrozenEvidence(
   return { ...plan, scenes }
 }
 
+function exactFrozenEvidenceUtteranceIds(plan: DialoguePlan): Set<string> {
+  const claimById = new Map(plan.claims.map(claim => [claim.claimId, claim] as const))
+  const exactIds = new Set<string>()
+  plan.scenes.forEach((scene, sceneOrder) => {
+    scene.utterances.forEach((utterance, utteranceOrder) => {
+      const claims = utterance.claimIds
+        .map(claimId => claimById.get(claimId))
+        .filter((claim): claim is DialoguePlan['claims'][number] => claim?.status === 'supported')
+      if (claims.length > 0) {
+        try {
+          if (utterance.text === exactEvidenceSpeech(claims)) {
+            exactIds.add(mainUtteranceVerificationId(scene.sceneId, sceneOrder, utteranceOrder))
+          }
+        }
+        catch {
+          // This utterance was not produced by the bounded exact-evidence
+          // fallback, so it remains subject to the provider decision.
+        }
+      }
+    })
+  })
+  return exactIds
+}
+
 function rejectedEntailmentMessage(rejected: Array<{ utteranceId: string, reason: string }>): string {
   const detail = rejected
     .slice(0, 3)
@@ -389,7 +413,10 @@ async function prepare(client: ConvexHttpClient, jobId: Id<'audioOverviewJobs'>,
   if (!beforePaid.active) return { cancelled: true, sceneCount: 0 }
   await client.mutation(api.audioOverviewJobs.setProgress, { jobId, capability, progress: 'Writing dialogue…', stage: 'preparing' })
   const allowedSourceIds = [...new Set(chunks.map(chunk => String(chunk.attributes.documentId ?? '')).filter(Boolean))]
-  let dialogueMessages = buildDialoguePlanPrompt(chunks, request.preferences)
+  let dialogueMessages = buildDialoguePlanPrompt(chunks, {
+    ...request.preferences,
+    hostNames: request.hostNames,
+  })
   let dialogueTemperature = 0.45
   let plan: DialoguePlan | undefined
   let acceptedScriptAttemptId: string | undefined
@@ -540,9 +567,18 @@ async function prepare(client: ConvexHttpClient, jobId: Id<'audioOverviewJobs'>,
       await client.mutation(api.audioOverviewJobs.releaseScriptGeneration, { jobId, capability, attemptId: acceptedScriptAttemptId! })
       throw error
     }
+    const exactEvidenceIds = exactEvidenceFallbackApplied
+      ? exactFrozenEvidenceUtteranceIds(plan)
+      : new Set<string>()
     const candidateVerification: ReturnType<typeof parseClaimEntailmentResponse> = {
       version: CLAIM_ENTAILMENT_VERSION,
-      decisions: verificationDecisions,
+      decisions: verificationDecisions.map(decision => exactEvidenceIds.has(decision.utteranceId)
+        ? {
+            ...decision,
+            decision: 'entailed' as const,
+            reason: 'Exact spoken text is copied from validated frozen evidence.',
+          }
+        : decision),
     }
     const rejected = candidateVerification.decisions
       .filter(decision => decision.decision === 'not_entailed')
@@ -613,7 +649,7 @@ async function prepare(client: ConvexHttpClient, jobId: Id<'audioOverviewJobs'>,
   const planFingerprint = await sha256Hex(JSON.stringify({
     manifest: manifest.contentHash,
     model: SCRIPT_MODEL,
-    audioProfile: AUDIO_OVERVIEW_PROFILE_V1,
+    audioProfile: AUDIO_OVERVIEW_PROFILE_CURRENT,
     plan,
     groundingVerification: verification,
   }))
@@ -627,11 +663,11 @@ async function prepare(client: ConvexHttpClient, jobId: Id<'audioOverviewJobs'>,
         title: plan.title,
         model: SCRIPT_MODEL,
         audioProfile: {
-          id: AUDIO_OVERVIEW_PROFILE_V1.id,
-          version: String(AUDIO_OVERVIEW_PROFILE_V1.version),
-          renderer: AUDIO_OVERVIEW_PROFILE_V1.renderer,
-          hostAVoice: AUDIO_OVERVIEW_PROFILE_V1.hostA.voiceName,
-          hostBVoice: AUDIO_OVERVIEW_PROFILE_V1.hostB.voiceName,
+          id: AUDIO_OVERVIEW_PROFILE_CURRENT.id,
+          version: String(AUDIO_OVERVIEW_PROFILE_CURRENT.version),
+          renderer: AUDIO_OVERVIEW_PROFILE_CURRENT.renderer,
+          hostAVoice: AUDIO_OVERVIEW_PROFILE_CURRENT.hostA.voiceName,
+          hostBVoice: AUDIO_OVERVIEW_PROFILE_CURRENT.hostB.voiceName,
         },
         manifest,
         outline: {
@@ -667,6 +703,9 @@ async function sceneContext(client: ConvexHttpClient, jobId: Id<'audioOverviewJo
       title: scene.title,
       direction: scene.narrativePurpose,
       expectedDurationMs: scene.targetDurationMs,
+      hostNames: context.episode?.hostAName && context.episode?.hostBName
+        ? { hostA: context.episode.hostAName, hostB: context.episode.hostBName }
+        : undefined,
       utterances,
     },
   }
@@ -703,13 +742,13 @@ async function commitScene(client: ConvexHttpClient, jobId: Id<'audioOverviewJob
   if (!Number.isInteger(artifact.attempt) || artifact.attempt < 1 || artifact.attempt > 3) {
     throw createError({ statusCode: 400, message: 'Scene artifact attempt is invalid' })
   }
-  const profileMatches = artifact.model === AUDIO_OVERVIEW_PROFILE_V1.model
-    && artifact.audioProfileId === AUDIO_OVERVIEW_PROFILE_V1.id
-    && artifact.audioProfileVersion === String(AUDIO_OVERVIEW_PROFILE_V1.version)
-    && artifact.format.encoding === AUDIO_OVERVIEW_PROFILE_V1.format.encoding
-    && artifact.format.sampleRateHz === AUDIO_OVERVIEW_PROFILE_V1.format.sampleRateHz
-    && artifact.format.bitDepth === AUDIO_OVERVIEW_PROFILE_V1.format.bitDepth
-    && artifact.format.channels === AUDIO_OVERVIEW_PROFILE_V1.format.channels
+  const profileMatches = artifact.model === AUDIO_OVERVIEW_PROFILE_CURRENT.model
+    && artifact.audioProfileId === AUDIO_OVERVIEW_PROFILE_CURRENT.id
+    && artifact.audioProfileVersion === String(AUDIO_OVERVIEW_PROFILE_CURRENT.version)
+    && artifact.format.encoding === AUDIO_OVERVIEW_PROFILE_CURRENT.format.encoding
+    && artifact.format.sampleRateHz === AUDIO_OVERVIEW_PROFILE_CURRENT.format.sampleRateHz
+    && artifact.format.bitDepth === AUDIO_OVERVIEW_PROFILE_CURRENT.format.bitDepth
+    && artifact.format.channels === AUDIO_OVERVIEW_PROFILE_CURRENT.format.channels
   if (!profileMatches) throw createError({ statusCode: 400, message: 'Scene artifact uses an unsupported Audio Profile' })
   const sceneUtterances = context.utterances.filter(row => row.sceneId === scene._id)
   const scriptedSpeakerPairValid = new Set(sceneUtterances.map(row => row.speaker)).size === 2

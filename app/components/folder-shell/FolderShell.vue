@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { useMagicKeys, whenever } from '@vueuse/core'
-import type { Id } from '~~/convex/_generated/dataModel'
-import type { Doc } from '~~/convex/_generated/dataModel'
+import type { Doc, Id } from '~~/convex/_generated/dataModel'
 import { getColor, DEFAULT_COLOR_KEY } from '~~/convex/folderPalette'
 import type { CSSProperties } from 'vue'
 
@@ -18,8 +17,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   'update:activeTab': [value: 'chat' | 'flashcards' | 'quiz' | 'audio-overview' | 'documents' | 'learn']
   'new-void': []
-  'select-void': [value: { type: 'chat' | 'flashcards' | 'quiz' | 'course'; id: string }]
-  'request-delete-void': [value: { type: 'chat' | 'flashcards' | 'quiz' | 'course'; id: string; title: string }]
+  'select-void': [value: { type: 'chat' | 'flashcards' | 'audio-overview' | 'quiz' | 'course'; id: string }]
+  'request-delete-void': [value: { type: 'chat' | 'flashcards' | 'audio-overview' | 'quiz' | 'course'; id: string; title: string }]
   'navigate-learn': []
 }>()
 

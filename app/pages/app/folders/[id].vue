@@ -18,11 +18,11 @@ const ctx = provideFolderPageContext()
 const {
   folderId, folder, seededFolder, allFolders,
   documents, helperPane, isDesktop,
-  isPodcastMain, togglePodcastMain, audioOverviewShellRef,
+  togglePodcastMain,
   indexedDocumentCount, tasksActiveCount,
   deleteDocument, deleteDocuments, moveDocument, moveDocuments,
-  createConversation, createFlashcardRoom, createCourse,
-  deleteConversation, deleteFlashcardRoom, deleteQuiz, deleteCourse,
+  createConversation, createFlashcardRoom, createAudioOverviewRoom,
+  deleteConversation, deleteFlashcardRoom, deleteAudioOverviewRoom, deleteQuiz, deleteCourse,
 } = ctx
 
 type FolderShellHandle = {
@@ -58,6 +58,7 @@ const activeTab = computed(() => {
   const path = route.path
   if (path.includes('/chat')) return 'chat' as const
   if (path.includes('/flashcards')) return 'flashcards' as const
+  if (path.includes('/audio-overview')) return 'audio-overview' as const
   if (path.includes('/quiz')) return 'quiz' as const
   if (path.includes('/learn')) return 'learn' as const
   return 'documents' as const
@@ -93,11 +94,8 @@ async function onCreateVoid(payload: { type: VoidType; name?: string }) {
       const result = await createFlashcardRoom(trimmedName)
       await navigateTo(`/app/folders/${folderId.value}/flashcards/${result.roomId}`)
     } else if (type === 'audio-overview') {
-      await togglePodcastMain()
-      await nextTick()
-      try {
-        await audioOverviewShellRef.value?.startGeneration?.()
-      } catch { /* shell surfaces its own error toast */ }
+      const result = await createAudioOverviewRoom(trimmedName)
+      await navigateTo(`/app/folders/${folderId.value}/audio-overview/${result.roomId}`)
     } else if (type === 'quiz') {
       await navigateTo(`/app/folders/${folderId.value}/quiz`)
     } else if (type === 'course') {
@@ -113,11 +111,13 @@ async function onCreateVoid(payload: { type: VoidType; name?: string }) {
   }
 }
 
-async function onSelectVoid({ type, id }: { type: 'chat' | 'flashcards' | 'quiz' | 'course'; id: string }) {
+async function onSelectVoid({ type, id }: { type: 'chat' | 'flashcards' | 'audio-overview' | 'quiz' | 'course'; id: string }) {
   if (type === 'chat') {
     await navigateTo(`/app/folders/${folderId.value}/chat/${id}`)
   } else if (type === 'flashcards') {
     await navigateTo(`/app/folders/${folderId.value}/flashcards/${id}`)
+  } else if (type === 'audio-overview') {
+    await navigateTo(`/app/folders/${folderId.value}/audio-overview/${id}`)
   } else if (type === 'quiz') {
     await navigateTo(`/app/folders/${folderId.value}/quiz/${id}`)
   } else if (type === 'course') {
@@ -126,7 +126,7 @@ async function onSelectVoid({ type, id }: { type: 'chat' | 'flashcards' | 'quiz'
   hideSidebarOnMobile()
 }
 
-const voidDeleteTarget = ref<{ type: 'chat' | 'flashcards' | 'quiz' | 'course'; id: string; title: string } | null>(null)
+const voidDeleteTarget = ref<{ type: 'chat' | 'flashcards' | 'audio-overview' | 'quiz' | 'course'; id: string; title: string } | null>(null)
 const deletingVoid = ref(false)
 const showDeleteVoidDialog = computed({
   get: () => voidDeleteTarget.value !== null,
@@ -135,7 +135,7 @@ const showDeleteVoidDialog = computed({
 const deleteVoidDescription = computed(() => {
   if (!voidDeleteTarget.value) return ''
   const label = voidDeleteTarget.value.title || 'this void'
-  const kindMap: Record<string, string> = { flashcards: 'flash card set', quiz: 'quiz', chat: 'chat', course: 'course' }
+  const kindMap: Record<string, string> = { flashcards: 'flash card set', 'audio-overview': 'audio overview', quiz: 'quiz', chat: 'chat', course: 'course' }
   const kind = kindMap[voidDeleteTarget.value.type] ?? 'void'
   return `Delete "${label}"? This will permanently remove the ${kind}.`
 })
@@ -147,6 +147,7 @@ async function confirmDeleteVoid() {
   try {
     if (target.type === 'chat') await deleteConversation(target.id as Id<'conversations'>)
     else if (target.type === 'flashcards') await deleteFlashcardRoom(target.id as Id<'flashcardRooms'>)
+    else if (target.type === 'audio-overview') await deleteAudioOverviewRoom(target.id as Id<'audioOverviewRooms'>)
     else if (target.type === 'course') await deleteCourse(target.id as Id<'courses'>)
     else await deleteQuiz(target.id as Id<'quizzes'>)
 
@@ -156,7 +157,7 @@ async function confirmDeleteVoid() {
     }
     voidDeleteTarget.value = null
     const { toast } = await import('vue-sonner')
-    const kindLabels: Record<string, string> = { flashcards: 'Flash card set', quiz: 'Quiz', chat: 'Chat', course: 'Course' }
+    const kindLabels: Record<string, string> = { flashcards: 'Flash card set', 'audio-overview': 'Audio Overview', quiz: 'Quiz', chat: 'Chat', course: 'Course' }
     const kind = kindLabels[target.type] ?? 'Void'
     toast.success(`${kind} deleted`)
   } catch (e: any) {

@@ -4,6 +4,7 @@ import { internalMutation, mutation, query } from './_generated/server'
 import type { Doc, Id } from './_generated/dataModel'
 import type { MutationCtx, QueryCtx } from './_generated/server'
 import { interjectionUtteranceVerificationId } from '../shared/audio-overview-grounding'
+import { AUDIO_OVERVIEW_PROFILE_CURRENT } from '../shared/audio-overview-profile'
 import { getOptionalAuthUserId, requireAuth } from './lib/auth'
 import { AUDIO_OVERVIEW_MAX_EXPLICIT_SOURCES, todayUtcYmd } from './lib/audioOverviewPolicy'
 import { requireAudioOverviewOrchestrationCredential } from './lib/audioOverviewOrchestrationAuth'
@@ -24,11 +25,11 @@ const RENDER_ATTEMPT_TTL_MS = 10 * 60_000
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9_-]{16,128}$/
 const SHA256 = /^[a-f0-9]{64}$/
 const CANONICAL_PROFILE = {
-  id: 'budds-two-host-gemini-v1',
-  version: '1',
-  renderer: 'gemini-native-multi-speaker',
-  hostAVoice: 'Kore',
-  hostBVoice: 'Puck',
+  id: AUDIO_OVERVIEW_PROFILE_CURRENT.id,
+  version: String(AUDIO_OVERVIEW_PROFILE_CURRENT.version),
+  renderer: AUDIO_OVERVIEW_PROFILE_CURRENT.renderer,
+  hostAVoice: AUDIO_OVERVIEW_PROFILE_CURRENT.hostA.voiceName,
+  hostBVoice: AUDIO_OVERVIEW_PROFILE_CURRENT.hostB.voiceName,
 } as const
 
 const utteranceInput = v.object({

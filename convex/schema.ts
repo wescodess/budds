@@ -67,6 +67,19 @@ export default defineSchema({
     .index('by_userId', ['userId'])
     .index('by_userId_and_folderId', ['userId', 'folderId']),
 
+  audioOverviewRooms: defineTable({
+    userId: v.string(),
+    folderId: v.id('folders'),
+    conversationId: v.optional(v.id('conversations')),
+    legacyImport: v.optional(v.boolean()),
+    title: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index('by_userId', ['userId'])
+    .index('by_userId_and_folderId', ['userId', 'folderId'])
+    .index('by_userId_and_conversationId', ['userId', 'conversationId']),
+
   messages: defineTable({
     conversationId: v.id('conversations'),
     userId: v.string(),
@@ -310,6 +323,7 @@ export default defineSchema({
     updatedAt: v.number(),
     completedAt: v.optional(v.number()),
     audioOverviewRequest: v.optional(v.object({
+      roomId: v.optional(v.id('audioOverviewRooms')),
       scope: v.union(
         v.object({ mode: v.literal('folder') }),
         v.object({
@@ -345,6 +359,10 @@ export default defineSchema({
           v.literal('orpheus'), v.literal('helios'), v.literal('zeus'),
         ),
       }),
+      hostNames: v.optional(v.object({
+        hostA: v.string(),
+        hostB: v.string(),
+      })),
       model: v.optional(v.string()),
       quotaDate: v.string(),
     })),
@@ -358,6 +376,7 @@ export default defineSchema({
     userId: v.string(),
     taskId: v.id('tasks'),
     folderId: v.id('folders'),
+    roomId: v.optional(v.id('audioOverviewRooms')),
     idempotencyKey: v.string(),
     capabilityHash: v.string(),
     status: v.union(
@@ -518,6 +537,7 @@ export default defineSchema({
     taskId: v.id('tasks'),
     userId: v.string(),
     folderId: v.id('folders'),
+    roomId: v.optional(v.id('audioOverviewRooms')),
     sourceManifestId: v.id('audioOverviewSourceManifests'),
     outlineId: v.id('audioOverviewOutlines'),
     claimLedgerId: v.id('audioOverviewClaimLedgers'),
@@ -529,6 +549,8 @@ export default defineSchema({
     renderer: v.string(),
     hostAVoice: v.string(),
     hostBVoice: v.string(),
+    hostAName: v.optional(v.string()),
+    hostBName: v.optional(v.string()),
     requestedLengthMinutes: v.union(v.literal(5), v.literal(10), v.literal(20)),
     complexity: v.union(v.literal('beginner'), v.literal('expert')),
     status: v.union(
@@ -553,7 +575,8 @@ export default defineSchema({
     .index('by_taskId', ['taskId'])
     .index('by_userId', ['userId'])
     .index('by_userId_and_status', ['userId', 'status'])
-    .index('by_userId_and_folderId', ['userId', 'folderId']),
+    .index('by_userId_and_folderId', ['userId', 'folderId'])
+    .index('by_userId_and_roomId', ['userId', 'roomId']),
 
   audioOverviewScenes: defineTable({
     episodeId: v.id('audioOverviewEpisodes'),
@@ -765,6 +788,7 @@ export default defineSchema({
   audioOverviews: defineTable({
     userId: v.string(),
     folderId: v.id('folders'),
+    roomId: v.optional(v.id('audioOverviewRooms')),
     taskId: v.optional(v.id('tasks')),
     episodeId: v.optional(v.id('audioOverviewEpisodes')),
     finalArtifactId: v.optional(v.id('audioOverviewAudioArtifacts')),
@@ -797,6 +821,10 @@ export default defineSchema({
       hostA: v.string(),
       hostB: v.string(),
     }),
+    hostNames: v.optional(v.object({
+      hostA: v.string(),
+      hostB: v.string(),
+    })),
     preferences: v.optional(
       v.object({
         lengthMinutes: v.number(),
@@ -813,6 +841,7 @@ export default defineSchema({
     .index('by_userId', ['userId'])
     .index('by_folderId', ['folderId'])
     .index('by_userId_and_folderId', ['userId', 'folderId'])
+    .index('by_userId_and_roomId', ['userId', 'roomId'])
     .index('by_taskId', ['taskId'])
     .index('by_episodeId', ['episodeId'])
     .index('by_shareToken', ['shareToken']),
@@ -1249,6 +1278,7 @@ export default defineSchema({
       v.literal('audioMetadata'),
       v.literal('audioJobTurns'),
       v.literal('audioJobs'),
+      v.literal('audioRooms'),
       v.literal('rateLimitBuckets'),
       v.literal('tasks'),
       v.literal('folders'),

@@ -1,11 +1,12 @@
-import { AUDIO_OVERVIEW_PROFILE_V1 } from '../../../shared/audio-overview-profile'
+import { AUDIO_OVERVIEW_PROFILE_CURRENT } from '../../../shared/audio-overview-profile'
 
 const GEMINI_API_BASE_URL = 'https://generativelanguage.googleapis.com'
 const MAX_PCM_BYTES = 16 * 1024 * 1024
 const MAX_DEFINITIVE_HTTP_ATTEMPTS = 3
 const MAX_PROVIDER_RETRY_DELAY_MS = 120_000
+const HOST_NAME_PATTERN = /^[\p{L}\p{M}][\p{L}\p{M} .'-]{0,29}$/u
 
-export const GEMINI_AUDIO_PROFILE_V1 = AUDIO_OVERVIEW_PROFILE_V1
+export const GEMINI_AUDIO_PROFILE = AUDIO_OVERVIEW_PROFILE_CURRENT
 
 export type GeminiSceneSpeaker = 'host_a' | 'host_b'
 
@@ -21,6 +22,7 @@ export interface GeminiSceneRenderInput {
   sceneId: string
   utterances: GeminiSceneUtterance[]
   sceneDirection?: string
+  hostNames?: { hostA: string, hostB: string }
 }
 
 export interface GeminiPcmMetadata {
@@ -31,9 +33,9 @@ export interface GeminiPcmMetadata {
   byteLength: number
   durationMs: number
   providerMimeType: string
-  model: typeof GEMINI_AUDIO_PROFILE_V1.model
-  audioProfileId: typeof GEMINI_AUDIO_PROFILE_V1.id
-  audioProfileVersion: typeof GEMINI_AUDIO_PROFILE_V1.version
+  model: typeof GEMINI_AUDIO_PROFILE.model
+  audioProfileId: typeof GEMINI_AUDIO_PROFILE.id
+  audioProfileVersion: typeof GEMINI_AUDIO_PROFILE.version
 }
 
 export interface GeminiSceneRenderResult {
@@ -52,13 +54,29 @@ export interface GeminiAudioRendererDependencies {
   config: GeminiAudioRendererConfig
 }
 
-type GeminiGenerateContentResponse = {
-  candidates?: Array<{
-    content?: {
-      parts?: Array<{
-        inlineData?: { data?: string, mimeType?: string }
-      }>
-    }
+export const GEMINI_API_KEY_TYPE_ERROR
+  = 'GEMINI_API_KEY must contain a Google AI Studio API key, not an OAuth access token'
+
+export function geminiApiKeyConfigurationError(value: string | undefined): string | null {
+  const credential = value?.trim() ?? ''
+  if (!credential) return 'Gemini Audio Renderer is not configured'
+  if (/^(?:ya29\.|Bearer\s+)/i.test(credential)) return GEMINI_API_KEY_TYPE_ERROR
+  return null
+}
+
+type GeminiInteractionAudio = {
+  type?: string
+  data?: string
+  mime_type?: string
+  sample_rate?: number
+  channels?: number
+}
+
+type GeminiInteractionResponse = {
+  output_audio?: GeminiInteractionAudio
+  steps?: Array<{
+    type?: string
+    content?: GeminiInteractionAudio[]
   }>
 }
 
@@ -89,25 +107,34 @@ function validateScene(input: GeminiSceneRenderInput): GeminiSceneRenderInput {
   }
   if (speakers.size !== 2) throw new Error('Gemini Audio Renderer scenes require both configured speakers')
   if (input.sceneDirection !== undefined) requireNonEmptyText(input.sceneDirection, 'scene direction', 1_000)
+  if (input.hostNames) {
+    const hostA = requireNonEmptyText(input.hostNames.hostA, 'host A name', 30)
+    const hostB = requireNonEmptyText(input.hostNames.hostB, 'host B name', 30)
+    if (!HOST_NAME_PATTERN.test(hostA) || !HOST_NAME_PATTERN.test(hostB)
+      || hostA.toLocaleLowerCase() === hostB.toLocaleLowerCase()) {
+      throw new Error('Gemini Audio Renderer requires distinct host names')
+    }
+  }
   return input
 }
 
-function speakerName(speaker: GeminiSceneSpeaker): string {
+function speakerName(input: GeminiSceneRenderInput, speaker: GeminiSceneSpeaker): string {
+  if (input.hostNames) return speaker === 'host_a' ? input.hostNames.hostA.trim() : input.hostNames.hostB.trim()
   return speaker === 'host_a'
-    ? GEMINI_AUDIO_PROFILE_V1.hostA.speakerName
-    : GEMINI_AUDIO_PROFILE_V1.hostB.speakerName
+    ? GEMINI_AUDIO_PROFILE.hostA.speakerName
+    : GEMINI_AUDIO_PROFILE.hostB.speakerName
 }
 
 export function buildGeminiScenePrompt(input: GeminiSceneRenderInput): string {
   validateScene(input)
   const performanceNotes = buildGeminiPerformanceNotes(input)
   const transcript = input.utterances
-    .map(utterance => `${speakerName(utterance.speaker)}: ${utterance.text.trim()}`)
+    .map(utterance => `${speakerName(input, utterance.speaker)}: ${utterance.text.trim()}`)
     .join('\n')
 
   return [
-    `Audio Profile: ${GEMINI_AUDIO_PROFILE_V1.id} version ${GEMINI_AUDIO_PROFILE_V1.version}.`,
-    `Director guidance: ${GEMINI_AUDIO_PROFILE_V1.directorGuidance}`,
+    `Audio Profile: ${GEMINI_AUDIO_PROFILE.id} version ${GEMINI_AUDIO_PROFILE.version}.`,
+    `Director guidance: ${GEMINI_AUDIO_PROFILE.directorGuidance}`,
     performanceNotes,
     `Transcript (speak only these lines; labels identify voices and are not spoken):\n${transcript}`,
   ].filter(Boolean).join('\n\n')
@@ -122,7 +149,7 @@ export function buildGeminiPerformanceNotes(input: GeminiSceneRenderInput): stri
       utterance.deliveryIntent ? `delivery: ${utterance.deliveryIntent.trim()}` : '',
       utterance.pauseAfterMs !== undefined ? `pause after: ${utterance.pauseAfterMs} ms` : '',
     ].filter(Boolean).join('; ')
-    return notes ? `${index + 1}. ${speakerName(utterance.speaker)} — ${notes}` : ''
+    return notes ? `${index + 1}. ${speakerName(input, utterance.speaker)} — ${notes}` : ''
   }).filter(Boolean)
   return [
     input.sceneDirection ? `Scene guidance: ${input.sceneDirection.trim()}` : '',
@@ -156,24 +183,28 @@ function decodeBase64(value: string): Uint8Array {
   }
 }
 
-function parsePcmMimeType(value: string | undefined): string {
+function parsePcmMimeType(value: string | undefined, sampleRate?: number, channels?: number): string {
   const mimeType = value?.trim() ?? ''
   const normalized = mimeType.toLowerCase().replace(/\s/g, '')
-  const isPcm = normalized.startsWith('audio/l16;') || normalized.startsWith('audio/pcm;')
-  if (!isPcm || !/(?:^|;)rate=24000(?:;|$)/.test(normalized)) {
+  const isPcm = normalized === 'audio/l16' || normalized.startsWith('audio/l16;')
+    || normalized === 'audio/pcm' || normalized.startsWith('audio/pcm;')
+  const rateMatches = sampleRate === 24_000 || /(?:^|;)rate=24000(?:;|$)/.test(normalized)
+  if (!isPcm || !rateMatches || (channels !== undefined && channels !== 1)) {
     throw new Error(`Gemini Audio Renderer returned unsupported audio format${mimeType ? `: ${mimeType}` : ''}`)
   }
   return mimeType
 }
 
-function findAudio(response: GeminiGenerateContentResponse): { data: string, mimeType: string } {
-  for (const candidate of response.candidates ?? []) {
-    for (const part of candidate.content?.parts ?? []) {
-      if (part.inlineData?.data) {
-        return {
-          data: part.inlineData.data,
-          mimeType: parsePcmMimeType(part.inlineData.mimeType),
-        }
+function findAudio(response: GeminiInteractionResponse): { data: string, mimeType: string } {
+  const candidates = [
+    response.output_audio,
+    ...(response.steps ?? []).flatMap(step => step.type === 'model_output' ? (step.content ?? []) : []),
+  ]
+  for (const audio of candidates) {
+    if (audio?.data && (!audio.type || audio.type === 'audio')) {
+      return {
+        data: audio.data,
+        mimeType: parsePcmMimeType(audio.mime_type, audio.sample_rate, audio.channels),
       }
     }
   }
@@ -196,6 +227,19 @@ function retryDelayMs(response: Response, detail: string, attempt: number): numb
   return Math.min(Math.max(...delays), MAX_PROVIDER_RETRY_DELAY_MS)
 }
 
+function isTransientInteractionsInvalidRequest(response: Response, detail: string): boolean {
+  if (response.status !== 400) return false
+  try {
+    const parsed = JSON.parse(detail) as { error?: { code?: unknown, message?: unknown, details?: unknown } }
+    return parsed.error?.code === 'invalid_request'
+      && parsed.error.message === 'Request contains an invalid argument.'
+      && parsed.error.details === undefined
+  }
+  catch {
+    return false
+  }
+}
+
 export async function renderGeminiScene(
   input: GeminiSceneRenderInput,
   dependencies: GeminiAudioRendererDependencies,
@@ -203,12 +247,13 @@ export async function renderGeminiScene(
   validateScene(input)
   const config = dependencies.config
   const apiKey = config.apiKey.trim()
-  if (!apiKey) throw new Error('Gemini Audio Renderer is not configured')
+  const configurationError = geminiApiKeyConfigurationError(apiKey)
+  if (configurationError) throw new Error(configurationError)
   const requestFetch = dependencies.fetch ?? globalThis.fetch
   if (!requestFetch) throw new Error('Gemini Audio Renderer fetch is unavailable')
 
   const baseUrl = (config.baseUrl?.trim() || GEMINI_API_BASE_URL).replace(/\/+$/, '')
-  const url = `${baseUrl}/v1beta/models/${GEMINI_AUDIO_PROFILE_V1.model}:generateContent`
+  const url = `${baseUrl}/v1beta/interactions`
   const request: RequestInit = {
     method: 'POST',
     headers: {
@@ -216,23 +261,14 @@ export async function renderGeminiScene(
       'x-goog-api-key': apiKey,
     },
     body: JSON.stringify({
-      contents: [{ role: 'user', parts: [{ text: buildGeminiScenePrompt(input) }] }],
-      generationConfig: {
-        responseModalities: ['AUDIO'],
-        speechConfig: {
-          multiSpeakerVoiceConfig: {
-            speakerVoiceConfigs: [
-              {
-                speaker: GEMINI_AUDIO_PROFILE_V1.hostA.speakerName,
-                voiceConfig: { prebuiltVoiceConfig: { voiceName: GEMINI_AUDIO_PROFILE_V1.hostA.voiceName } },
-              },
-              {
-                speaker: GEMINI_AUDIO_PROFILE_V1.hostB.speakerName,
-                voiceConfig: { prebuiltVoiceConfig: { voiceName: GEMINI_AUDIO_PROFILE_V1.hostB.voiceName } },
-              },
-            ],
-          },
-        },
+      model: GEMINI_AUDIO_PROFILE.model,
+      input: buildGeminiScenePrompt(input),
+      response_format: { type: 'audio' },
+      generation_config: {
+        speech_config: [
+          { speaker: speakerName(input, 'host_a'), voice: GEMINI_AUDIO_PROFILE.hostA.voiceName },
+          { speaker: speakerName(input, 'host_b'), voice: GEMINI_AUDIO_PROFILE.hostB.voiceName },
+        ],
       },
     }),
   }
@@ -240,11 +276,15 @@ export async function renderGeminiScene(
   let response: Response | undefined
   for (let attempt = 1; attempt <= MAX_DEFINITIVE_HTTP_ATTEMPTS; attempt++) {
     // A network exception has an ambiguous provider outcome and is deliberately
-    // never retried. Only a received 429/5xx response is safe to replay.
+    // never retried. Retry only definitive capacity failures and the preview
+    // Interactions API's detail-free invalid_request response, which is emitted
+    // transiently for payloads that succeed unchanged on replay.
     response = await requestFetch(url, request)
     if (response.ok) break
     const detail = (await response.text().catch(() => '')).trim().slice(0, 500)
-    const retryable = response.status === 429 || response.status >= 500
+    const retryable = response.status === 429
+      || response.status >= 500
+      || isTransientInteractionsInvalidRequest(response, detail)
     if (retryable && attempt < MAX_DEFINITIVE_HTTP_ATTEMPTS) {
       await sleep(retryDelayMs(response, detail, attempt))
       continue
@@ -252,12 +292,12 @@ export async function renderGeminiScene(
     throw new Error(`Gemini Audio Renderer request failed (${response.status})${detail ? `: ${detail}` : ''}`)
   }
   if (!response?.ok) throw new Error('Gemini Audio Renderer request failed without a definitive response')
-  const providerAudio = findAudio(await response.json() as GeminiGenerateContentResponse)
+  const providerAudio = findAudio(await response.json() as GeminiInteractionResponse)
   const audio = decodeBase64(providerAudio.data)
   if (!audio.byteLength || audio.byteLength % 2 !== 0 || audio.byteLength > MAX_PCM_BYTES) {
     throw new Error('Gemini Audio Renderer returned invalid PCM audio')
   }
-  const format = GEMINI_AUDIO_PROFILE_V1.format
+  const format = GEMINI_AUDIO_PROFILE.format
   return {
     audio,
     metadata: {
@@ -265,9 +305,9 @@ export async function renderGeminiScene(
       byteLength: audio.byteLength,
       durationMs: Math.round(audio.byteLength / (format.sampleRateHz * format.channels * (format.bitDepth / 8)) * 1_000),
       providerMimeType: providerAudio.mimeType,
-      model: GEMINI_AUDIO_PROFILE_V1.model,
-      audioProfileId: GEMINI_AUDIO_PROFILE_V1.id,
-      audioProfileVersion: GEMINI_AUDIO_PROFILE_V1.version,
+      model: GEMINI_AUDIO_PROFILE.model,
+      audioProfileId: GEMINI_AUDIO_PROFILE.id,
+      audioProfileVersion: GEMINI_AUDIO_PROFILE.version,
     },
   }
 }

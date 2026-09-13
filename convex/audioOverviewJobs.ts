@@ -26,6 +26,7 @@ const voiceValidator = v.union(
 
 const requestArgs = {
   folderId: v.id('folders'),
+  roomId: v.id('audioOverviewRooms'),
   scope: v.union(
     v.object({ mode: v.literal('folder') }),
     v.object({ mode: v.literal('explicit'), documentIds: v.array(v.id('documents')) }),
@@ -35,6 +36,7 @@ const requestArgs = {
     complexity: v.union(v.literal('beginner'), v.literal('expert')),
   }),
   voiceProfile: v.object({ hostA: voiceValidator, hostB: voiceValidator }),
+  hostNames: v.object({ hostA: v.string(), hostB: v.string() }),
   idempotencyKey: v.string(),
   capability: v.string(),
 }
@@ -184,6 +186,7 @@ export const request = mutation({
         : []
       if (
         String(existing.folderId) !== String(args.folderId)
+        || String(existing.roomId) !== String(args.roomId)
         || !frozen
         || frozen.scope.mode !== args.scope.mode
         || requestedIds.length !== frozenIds.length
@@ -192,6 +195,8 @@ export const request = mutation({
         || frozen.preferences.complexity !== args.preferences.complexity
         || frozen.voiceProfile.hostA !== args.voiceProfile.hostA
         || frozen.voiceProfile.hostB !== args.voiceProfile.hostB
+        || frozen.hostNames?.hostA !== args.hostNames.hostA.trim()
+        || frozen.hostNames?.hostB !== args.hostNames.hostB.trim()
       ) {
         throw new Error('Idempotency key was already used for a different audio overview request')
       }
@@ -265,6 +270,7 @@ export const request = mutation({
       userId,
       taskId: reservation.taskId,
       folderId: args.folderId,
+      roomId: args.roomId,
       idempotencyKey: args.idempotencyKey,
       capabilityHash: verifiedCapabilityHash,
       status: 'accepted',
@@ -340,6 +346,7 @@ export const adoptLegacyRequest = mutation({
       userId,
       taskId: task._id,
       folderId: task.folderId,
+      roomId: task.audioOverviewRequest.roomId,
       idempotencyKey: args.idempotencyKey,
       capabilityHash: verifiedCapabilityHash,
       status: 'accepted',

@@ -66,6 +66,22 @@ describe('Audio Overview Worker environment validation', () => {
     expect(result.stderr).toContain('AUDIO_OVERVIEW_WORKFLOW')
   })
 
+  it('rejects an OAuth access token supplied as the Gemini API key', () => {
+    const root = workspaceWithConfig(JSON.stringify({
+      ai: { binding: 'AI' },
+      r2_buckets: [{ binding: 'AUDIO_ARTIFACTS' }],
+      workflows: [{ binding: 'AUDIO_OVERVIEW_WORKFLOW' }],
+    }))
+    const result = spawnSync(process.execPath, [validator, 'audio-workflow', '--strict'], {
+      cwd: root,
+      env: { ...completeWorkerEnv, GEMINI_API_KEY: 'ya29.example-oauth-access-token' },
+      encoding: 'utf8',
+    })
+
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('Google AI Studio API key, not an OAuth access token')
+  })
+
   it('accepts the complete no-network generation plane contract', () => {
     const root = workspaceWithConfig(JSON.stringify({
       ai: { binding: 'AI' },

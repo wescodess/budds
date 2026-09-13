@@ -90,6 +90,7 @@ function handleNewChatShortcut(e: KeyboardEvent) {
     :has-indexed-documents="hasIndexedDocuments"
     :selected-model="selectedModel"
     :interjection-in-flight="interjectionInFlight"
+    :conversation-id="conversationIdRef"
     @send="handleSendMessage"
     @select-model="selectModel"
     @interjection-badge-click="handleInterjectionBadgeClick"

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { Pause, Play, Rewind, FastForward, Download } from '@lucide/vue'
 import { api } from '#convex/api'
 import { buildContinuousPlaybackTurns, createAudioOverviewPlayback, type AudioOverviewTurn } from '~/composables/useAudioOverviewStore'
@@ -27,6 +27,7 @@ type PublicOverview = {
   title: string
   turns: AudioOverviewTurn[]
   voiceProfile: { hostA: string, hostB: string }
+  hostNames?: { hostA: string, hostB: string }
   totalDurationMs: number
   sourceDocumentIds: string[]
   sourceFilenames: string[]
@@ -38,6 +39,7 @@ type V2PublicPlayback = {
   title: string
   totalDurationMs: number
   voiceProfile: { hostA: string, hostB: string }
+  hostNames: { hostA: string, hostB: string }
   publishedAt: number | null
   sourceManifest: { sources: Array<{ sourceId: string, displayReference: string }> }
   scenes: Array<{ sceneId: string, order: number, durationMs: number }>
@@ -65,6 +67,7 @@ const overview = computed<PublicOverview | null>(() => {
         v2Playback.value.totalDurationMs,
       ),
       voiceProfile: v2Playback.value.voiceProfile,
+      hostNames: v2Playback.value.hostNames,
       totalDurationMs: v2Playback.value.totalDurationMs,
       sourceDocumentIds: [],
       sourceFilenames: v2Playback.value.sourceManifest.sources.map(source => source.displayReference),
@@ -78,6 +81,7 @@ const continuousMediaUrl = computed(() => v2Playback.value
   ? `/api/audio-overview/public/${encodeURIComponent(props.token)}/media`
   : null)
 const turns = computed<AudioOverviewTurn[]>(() => overview.value?.turns ?? [])
+const hostNames = computed(() => overview.value?.hostNames ?? { hostA: 'Host A', hostB: 'Host B' })
 const turnUrls = computed<(string | null)[]>(() => isContinuousPlayback.value
   ? []
   : (turnUrlData.value as (string | null)[] | null | undefined) ?? [])
@@ -115,6 +119,7 @@ watch(
       overviewId: PUBLIC_SENTINEL_ID,
       folderId: null,
       title: ov.title,
+      hostNames: ov.hostNames,
       turns: nextTurns,
       turnUrls: nextUrls,
       playbackMode: isContinuousPlayback.value ? 'continuous' : 'segmented',
@@ -309,7 +314,7 @@ const ringMiddleStyle = computed(() => ({
             />
           </div>
           <div class="text-center">
-            <p class="font-dm-sans text-sm font-medium text-foreground">Host A · Expert</p>
+            <p class="font-dm-sans text-sm font-medium text-foreground">{{ hostNames.hostA }} · Expert</p>
             <p
               class="mt-0.5 font-inter text-xs"
               :class="activeTurn?.speaker === 'host_a' ? 'text-primary' : 'text-muted-foreground'"
@@ -343,7 +348,7 @@ const ringMiddleStyle = computed(() => ({
             />
           </div>
           <div class="text-center">
-            <p class="font-dm-sans text-sm font-medium text-foreground">Host B · Learner</p>
+            <p class="font-dm-sans text-sm font-medium text-foreground">{{ hostNames.hostB }} · Learner</p>
             <p
               class="mt-0.5 font-inter text-xs"
               :class="activeTurn?.speaker === 'host_b' ? 'text-primary' : 'text-muted-foreground'"
@@ -363,6 +368,7 @@ const ringMiddleStyle = computed(() => ({
         :is-playing="isPlaying"
         max-height="280px"
         :on-seek="seek"
+        :host-names="hostNames"
       />
 
       <div
@@ -383,7 +389,7 @@ const ringMiddleStyle = computed(() => ({
             data-testid="public-audio-scrubber"
             class="h-1.5 flex-1 cursor-pointer appearance-none rounded-full bg-border/40 accent-primary"
             @input="handleScrubInput"
-          />
+          >
           <span class="w-12 text-right font-inter text-xs tabular-nums text-muted-foreground">{{ totalLabel }}</span>
         </div>
 

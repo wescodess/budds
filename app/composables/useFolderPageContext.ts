@@ -38,9 +38,11 @@ export interface FolderPageContext {
 
   createConversation: (title: string) => Promise<Id<'conversations'>>
   createFlashcardRoom: (title?: string) => Promise<{ roomId: Id<'flashcardRooms'> }>
+  createAudioOverviewRoom: (title?: string) => Promise<{ roomId: Id<'audioOverviewRooms'> }>
   createCourse: (title?: string, webSearch?: boolean) => Promise<{ courseId: Id<'courses'>; taskId: Id<'tasks'> }>
   deleteConversation: (id: Id<'conversations'>) => Promise<void>
   deleteFlashcardRoom: (roomId: Id<'flashcardRooms'>) => Promise<void>
+  deleteAudioOverviewRoom: (roomId: Id<'audioOverviewRooms'>) => Promise<void>
   deleteQuiz: (quizId: Id<'quizzes'>) => Promise<void>
   deleteCourse: (courseId: Id<'courses'>) => Promise<void>
 
@@ -113,6 +115,18 @@ export function provideFolderPageContext(): FolderPageContext {
     ? useConvexMutation(api.flashcardRooms.createRoom)
     : { mutate: async (_args: { folderId: Id<'folders'>; title?: string }) => ({ roomId: '' as unknown as Id<'flashcardRooms'> }) }
 
+  const createAudioOverviewRoomMutation = import.meta.client
+    ? useConvexMutation(api.audioOverviewRooms.create)
+    : { mutate: async (_args: { folderId: Id<'folders'>; title?: string }) => ({ roomId: '' as unknown as Id<'audioOverviewRooms'> }) }
+
+  const ensureLegacyAudioRoomMutation = import.meta.client
+    ? useConvexMutation(api.audioOverviewRooms.ensureLegacyImport)
+    : null
+
+  onMounted(() => {
+    void ensureLegacyAudioRoomMutation?.mutate({ folderId: folderId.value } as any).catch(() => {})
+  })
+
   const deleteConversationMutation = import.meta.client
     ? useConvexMutation(api.conversations.deleteConversation)
     : { mutate: async (_args: { id: Id<'conversations'> }) => null }
@@ -120,6 +134,10 @@ export function provideFolderPageContext(): FolderPageContext {
   const deleteFlashcardRoomMutation = import.meta.client
     ? useConvexMutation(api.flashcardRooms.deleteRoom)
     : { mutate: async (_args: { roomId: Id<'flashcardRooms'> }) => null }
+
+  const deleteAudioOverviewRoomMutation = import.meta.client
+    ? useConvexMutation(api.audioOverviewRooms.remove)
+    : { mutate: async (_args: { roomId: Id<'audioOverviewRooms'> }) => null }
 
   const createCourseMutation = import.meta.client
     ? useConvexMutation(api.courses.create)
@@ -147,6 +165,13 @@ export function provideFolderPageContext(): FolderPageContext {
     })) as { roomId: Id<'flashcardRooms'> }
   }
 
+  async function createAudioOverviewRoom(title?: string) {
+    return (await createAudioOverviewRoomMutation.mutate({
+      folderId: folderId.value,
+      title,
+    })) as { roomId: Id<'audioOverviewRooms'> }
+  }
+
   async function createCourse(title?: string, webSearch?: boolean) {
     const hasIndexed = indexedDocumentCount.value > 0
     return (await createCourseMutation.mutate({
@@ -167,6 +192,10 @@ export function provideFolderPageContext(): FolderPageContext {
 
   async function deleteFlashcardRoomFn(roomId: Id<'flashcardRooms'>) {
     await deleteFlashcardRoomMutation.mutate({ roomId })
+  }
+
+  async function deleteAudioOverviewRoomFn(roomId: Id<'audioOverviewRooms'>) {
+    await deleteAudioOverviewRoomMutation.mutate({ roomId })
   }
 
   async function deleteQuizFn(quizId: Id<'quizzes'>) {
@@ -231,9 +260,11 @@ export function provideFolderPageContext(): FolderPageContext {
     tasksActiveCount,
     createConversation,
     createFlashcardRoom,
+    createAudioOverviewRoom,
     createCourse,
     deleteConversation: deleteConversationFn,
     deleteFlashcardRoom: deleteFlashcardRoomFn,
+    deleteAudioOverviewRoom: deleteAudioOverviewRoomFn,
     deleteQuiz: deleteQuizFn,
     deleteCourse: deleteCourseFn,
     requestDeleteDocuments,

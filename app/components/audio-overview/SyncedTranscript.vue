@@ -17,9 +17,11 @@ const props = withDefaults(defineProps<{
   compact?: boolean
   maxHeight?: string
   onSeek?: (absoluteMs: number) => void
+  hostNames?: { hostA: string, hostB: string }
 }>(), {
   compact: false,
   maxHeight: '20rem',
+  hostNames: () => ({ hostA: 'Host A', hostB: 'Host B' }),
 })
 
 const turnsRef = computed(() => props.turns)
@@ -156,7 +158,7 @@ function wordClass(turnIdx: number, wordIdx: number): string {
           ? (isActiveTurn(tIdx) ? 'text-primary' : 'text-primary/50')
           : (isActiveTurn(tIdx) ? 'text-muted-foreground' : 'text-muted-foreground/50')
         "
-      >{{ turnData.speakerLabel }}</span>
+      >{{ turnData.isHostA ? props.hostNames.hostA : props.hostNames.hostB }}</span>
       <p
         class="leading-relaxed wrap-break-word overflow-wrap-anywhere"
         :class="compact ? 'text-sm' : 'text-sm sm:text-base'"

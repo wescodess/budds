@@ -52,6 +52,17 @@ describe('audio overview Worker start boundary', () => {
     expect(create).not.toHaveBeenCalled()
   })
 
+  test('does not start generation with an OAuth access token in the Gemini API-key binding', async () => {
+    const { env, create } = environment({ GEMINI_API_KEY: 'ya29.example-oauth-access-token' })
+    const response = await worker.fetch(request(), env)
+
+    expect(response.status).toBe(503)
+    expect(await response.json()).toEqual({
+      error: 'GEMINI_API_KEY must contain a Google AI Studio API key, not an OAuth access token',
+    })
+    expect(create).not.toHaveBeenCalled()
+  })
+
   test('starts a Workflow only after callback, renderer, and artifact bindings are present', async () => {
     const { env, create } = environment()
     const response = await worker.fetch(request(), env)
@@ -68,7 +79,10 @@ describe('audio overview Worker start boundary', () => {
 function geminiAudioResponse(bytes = new Uint8Array([1, 0, 2, 0])) {
   const data = btoa(String.fromCharCode(...bytes))
   return new Response(JSON.stringify({
-    candidates: [{ content: { parts: [{ inlineData: { data, mimeType: 'audio/L16;codec=pcm;rate=24000' } }] } }],
+    steps: [{
+      type: 'model_output',
+      content: [{ type: 'audio', data, mime_type: 'audio/L16;codec=pcm;rate=24000', sample_rate: 24_000, channels: 1 }],
+    }],
   }), { status: 200, headers: { 'Content-Type': 'application/json' } })
 }
 
