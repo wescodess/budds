@@ -57,7 +57,7 @@ Pull-request titles must follow the same Conventional Commit format. A pull requ
 - Security, privacy, schema, configuration, and deployment effects.
 - A rollback path for changes that affect persistent state or production infrastructure.
 
-Use squash merge after all required checks pass. The pull-request title becomes the commit subject on `main`.
+Use squash merge after all required checks pass. When GitHub-hosted execution is unavailable, attach the complete local gate and exact tested SHA under the current-plan protocol in [`docs/ci.md`](./docs/ci.md); do not describe that evidence as a server-enforced check. The pull-request title becomes the commit subject on `main`.
 
 ## Generated and historical files
 
