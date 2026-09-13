@@ -139,6 +139,60 @@ async function collectUserDataForTest(asUser: TestClient): Promise<TestUserDataE
 }
 
 describe('dataExport paginated queries', () => {
+  test('enumerates every V2 collection while the rollout gate is off and redacts retention-sensitive fields', async () => {
+    const previous = process.env.LEARN_V2_ENABLED
+    delete process.env.LEARN_V2_ENABLED
+    try {
+      const t = convexTest(schema, modules)
+      const asUser = t.withIdentity(USER_A)
+      const collections = ['learningVoids', 'learnBlueprints', 'learnBlueprintRevisions', 'learnMilestones', 'learnObjectives', 'learnObjectivePrerequisites', 'learnSourceIdentities', 'learnSourceSnapshots', 'learnSourceExcerpts', 'learnObjectiveSources', 'learnClaimSupports', 'masteryAttempts', 'masteryRecords', 'studyPlans', 'studyPlanRevisions', 'studySessions', 'studySessionRetrievalObjectives', 'sessionContent', 'sessionContentBlocks', 'sessionContentClaims', 'calendarProjections', 'reminderPolicies', 'searchQuotaBuckets', 'searchReservations', 'learnJobs', 'learnLifecycleReceipts'] as const
+      const storageId = await t.run(async ctx => await ctx.storage.store(new Blob(['private source'], { type: 'text/plain' })))
+      const ids = await t.run(async (ctx) => {
+        const folderId = await ctx.db.insert('folders', { userId: USER_A.tokenIdentifier, name: 'Export', documentCount: 0 })
+        const docId = await ctx.db.insert('documents', { userId: USER_A.tokenIdentifier, folderId, filename: 'private-source.txt', fileId: storageId, status: 'success', fileSize: 14 })
+        const voidId = await ctx.db.insert('learningVoids', { userId: USER_A.tokenIdentifier, folderId, title: 'Export void', status: 'draft', revision: 1, createdAt: 1, updatedAt: 1 })
+        const blueprintId = await ctx.db.insert('learnBlueprints', { userId: USER_A.tokenIdentifier, learningVoidId: voidId, revision: 1, createdAt: 1 })
+        const revisionId = await ctx.db.insert('learnBlueprintRevisions', { userId: USER_A.tokenIdentifier, blueprintId, learningVoidId: voidId, revision: 1, recordRevision: 1, status: 'draft', createdAt: 1, updatedAt: 1 })
+        const objectiveId = await ctx.db.insert('learnObjectives', { userId: USER_A.tokenIdentifier, blueprintRevisionId: revisionId, order: 1, title: 'Objective' })
+        const planId = await ctx.db.insert('studyPlans', { userId: USER_A.tokenIdentifier, learningVoidId: voidId, revision: 1, createdAt: 1 })
+        const planRevisionId = await ctx.db.insert('studyPlanRevisions', { userId: USER_A.tokenIdentifier, studyPlanId: planId, learningVoidId: voidId, revision: 1, status: 'draft', createdAt: 1 })
+        const sessionId = await ctx.db.insert('studySessions', { userId: USER_A.tokenIdentifier, studyPlanRevisionId: planRevisionId, primaryObjectiveId: objectiveId, status: 'planned', revision: 1, scheduledStartAt: 1 })
+        const sourceIdentityId = await ctx.db.insert('learnSourceIdentities', { userId: USER_A.tokenIdentifier, learningVoidId: voidId, origin: 'user_url', externalKey: 'https://private.example/key', folderDocumentId: docId, title: 'Private source' })
+        const snapshotId = await ctx.db.insert('learnSourceSnapshots', { userId: USER_A.tokenIdentifier, sourceIdentityId, learningVoidId: voidId, revision: 1, status: 'candidate', createdAt: 1 })
+        return { voidId, revisionId, objectiveId, sessionId, snapshotId, sourceIdentityId }
+      })
+      await t.run(async ctx => {
+        const contentId = await ctx.db.insert('sessionContent', { userId: USER_A.tokenIdentifier, studySessionId: ids.sessionId, revision: 1, status: 'draft', createdAt: 1 })
+        const claimId = await ctx.db.insert('sessionContentClaims', { userId: USER_A.tokenIdentifier, sessionContentId: contentId, order: 1, claim: 'Claim' })
+        const excerptId = await ctx.db.insert('learnSourceExcerpts', { userId: USER_A.tokenIdentifier, sourceSnapshotId: ids.snapshotId, locator: 'public', privateLocator: 'https://private.example/locator', excerpt: 'protected', rightsStatus: 'permitted' })
+        await ctx.db.insert('learnClaimSupports', { userId: USER_A.tokenIdentifier, sessionContentClaimId: claimId, sourceExcerptId: excerptId, entailment: 'entailed', conflictStatus: 'clear' })
+        await ctx.db.insert('learnMilestones', { userId: USER_A.tokenIdentifier, blueprintRevisionId: ids.revisionId, order: 1, title: 'Milestone' }); await ctx.db.insert('learnObjectivePrerequisites', { userId: USER_A.tokenIdentifier, blueprintRevisionId: ids.revisionId, objectiveId: ids.objectiveId, prerequisiteObjectiveId: ids.objectiveId }); await ctx.db.insert('learnObjectiveSources', { userId: USER_A.tokenIdentifier, objectiveId: ids.objectiveId, sourceSnapshotId: ids.snapshotId, coverage: 'strong' }); await ctx.db.insert('masteryAttempts', { userId: USER_A.tokenIdentifier, objectiveId: ids.objectiveId, attemptedAt: 1, idempotencyKey: 'a' }); await ctx.db.insert('masteryRecords', { userId: USER_A.tokenIdentifier, objectiveId: ids.objectiveId, state: 'learning' }); await ctx.db.insert('studySessionRetrievalObjectives', { userId: USER_A.tokenIdentifier, studySessionId: ids.sessionId, objectiveId: ids.objectiveId, order: 1 }); await ctx.db.insert('sessionContentBlocks', { userId: USER_A.tokenIdentifier, sessionContentId: contentId, order: 1, kind: 'prompt' }); await ctx.db.insert('calendarProjections', { userId: USER_A.tokenIdentifier, studySessionId: ids.sessionId, status: 'pending_projection' }); await ctx.db.insert('reminderPolicies', { userId: USER_A.tokenIdentifier, learningVoidId: ids.voidId, timezone: 'UTC', channel: 'local' }); await ctx.db.insert('searchQuotaBuckets', { userId: USER_A.tokenIdentifier, provider: 'private', scopeKind: 'user', scopeKey: 'secret', periodKey: '2026-01', count: 9 }); await ctx.db.insert('searchReservations', { userId: USER_A.tokenIdentifier, provider: 'private', status: 'reserved', expiresAt: 1, idempotencyKey: 'r', learningVoidId: ids.voidId }); await ctx.db.insert('learnJobs', { userId: USER_A.tokenIdentifier, learningVoidId: ids.voidId, type: 'private', status: 'queued', revision: 1, idempotencyKey: 'j', leaseExpiresAt: 1, checkpoint: 'secret', terminalReason: 'secret' }); await ctx.db.insert('learnLifecycleReceipts', { userId: USER_A.tokenIdentifier, learningVoidId: ids.voidId, idempotencyKey: 'receipt', command: 'create', requestFingerprint: 'private', revision: 1, blueprintRevisionId: ids.revisionId, blueprintRevisionOrdinal: 1, blueprintRecordRevision: 1, createdAt: 1 })
+      })
+      for (const collection of collections) expect((await asUser.query(api.dataExport.getUserDataPage, { collection, paginationOpts: { cursor: null, numItems: 8 } })).page).toHaveLength(1)
+      expect((await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnSourceExcerpts', paginationOpts: { cursor: null, numItems: 8 } })).page[0]).not.toHaveProperty('excerpt')
+      expect((await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnSourceExcerpts', paginationOpts: { cursor: null, numItems: 8 } })).page[0]).not.toHaveProperty('privateLocator')
+      const sourceIdentity = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnSourceIdentities', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
+      expect(sourceIdentity).not.toHaveProperty('externalKey')
+      expect(sourceIdentity).not.toHaveProperty('folderDocumentId')
+      const claimSupport = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnClaimSupports', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
+      expect(claimSupport).not.toHaveProperty('sourceExcerptId')
+      expect(claimSupport).not.toHaveProperty('sessionContentClaimId')
+      expect((await asUser.query(api.dataExport.getUserDataPage, { collection: 'searchQuotaBuckets', paginationOpts: { cursor: null, numItems: 8 } })).page[0]).not.toHaveProperty('count')
+      expect((await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })).page[0]).not.toHaveProperty('checkpoint')
+      const reservation = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'searchReservations', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
+      expect(reservation).not.toHaveProperty('idempotencyKey')
+      expect(reservation).not.toHaveProperty('provider')
+      const job = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
+      expect(job).not.toHaveProperty('idempotencyKey')
+      expect(job).not.toHaveProperty('leaseExpiresAt')
+      expect(job).not.toHaveProperty('checkpoint')
+      expect(job).not.toHaveProperty('terminalReason')
+      const receipt = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnLifecycleReceipts', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
+      expect(receipt).not.toHaveProperty('idempotencyKey')
+      expect(receipt).not.toHaveProperty('requestFingerprint')
+      expect(receipt).not.toHaveProperty('entityId')
+    } finally { if (previous === undefined) delete process.env.LEARN_V2_ENABLED; else process.env.LEARN_V2_ENABLED = previous }
+  })
   test('caps each page at 8 rows and advances across multiple cursors', async () => {
     const t = convexTest(schema, modules)
     const asUser = t.withIdentity(USER_A)

@@ -2,6 +2,28 @@
 
 **Source of truth:** `convex/schema.ts`
 
+## Learn Anything V2 (additive; gated)
+
+Learn V2 uses the owner-scoped normalized tables in
+[`shared/learn-v2-contract.ts`](../shared/learn-v2-contract.ts): Learning
+Voids, blueprint/revision/map, source/evidence, mastery, plan/session/content,
+calendar projection, quota, and job records. Every table has `userId` and a
+bounded `by_userId` index. V1 courses and calendar events are neither read nor
+written. Protected excerpts and operational/provider/quota internals are
+redacted from export; account deletion removes V2 children before parents in
+bounded batches. `learnLifecycleReceipts` is the owner-scoped durable
+idempotency seam: it returns the same original, explicitly shaped lifecycle
+outcome (never a database document) even after later transitions, rejects a
+reused key with a different request fingerprint, and rechecks that its Void
+and folder are still live before replaying. Lifecycle titles are capped at 200
+characters, idempotency keys at 128 characters, and Void list pages at eight
+rows. Receipts are redacted in export and included in deletion. Blueprint revision ordinals are immutable
+history; `recordRevision` is the separate optimistic-concurrency value. An
+activation atomically pins the Void's active revision and supersedes the prior
+active revision. Public lifecycle commands only admit unguarded contract edges.
+Guarded source, session, job, and quota edges deliberately have no public
+transition command until a server-owned workflow can prove their guard.
+
 Budds uses Convex as its document database. All tables are defined in a single schema file. Authentication tables are managed separately by the `@convex-dev/better-auth` component.
 
 ---

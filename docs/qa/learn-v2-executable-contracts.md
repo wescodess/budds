@@ -6,11 +6,11 @@
 
 **Canonical specification:** [GitHub issue #180](https://github.com/wescodess/budds/issues/180)
 
-**Owning implementation ticket:** [LA2-01](https://github.com/wescodess/budds/issues/163)
+**Foundation implementation:** [LA2-03](https://github.com/wescodess/budds/issues/165), following [LA2-01](https://github.com/wescodess/budds/issues/163)
 
 This document is the human-readable index for the machine-readable contract in [`shared/learn-v2-contract.ts`](../../shared/learn-v2-contract.ts) and its executable acceptance examples in [`tests/fixtures/learn-v2-contract.ts`](../../tests/fixtures/learn-v2-contract.ts). The validator and focused test fail when a safety-critical invariant drifts.
 
-This contract does not enable V2. Access gates, tables, lifecycle commands, fetch behavior, quota transactions, and scheduling algorithms belong to LA2-02 and later work packages.
+This contract does not enable V2. LA2-03 implements the additive normalized schema, gated Learning Void/Blueprint lifecycle foundation, durable idempotency, bounded retention seams, and redacted export enumeration. Fetch behavior, source/provider writers, quota transactions, planning, scheduling, and mastery workflows remain later work packages.
 
 ## Accepted decisions
 
@@ -39,7 +39,7 @@ All lifecycle commands are server-authorized, idempotent, and checked against an
 
 ## Normalized persistence proposal
 
-LA2-03 will translate this proposal into Convex validators and commands. No table in this list exists merely because this contract is merged.
+LA2-03 translates this proposal into additive Convex validators and only the foundational Learning Void/Blueprint commands. The remaining tables are schema and retention foundations, not evidence, provider, quota, planning, scheduling, or mastery implementations.
 
 | Aggregate | Proposed tables | Required bounded paths |
 | --- | --- | --- |

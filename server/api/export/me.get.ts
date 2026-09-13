@@ -52,6 +52,15 @@ const EXPORT_COLLECTIONS = [
   'audioOverviewInterjectionsV2',
   'audioOverviewInterjectionUtterances',
   'audioOverviewInterjectionSources',
+  'learningVoids', 'learnBlueprints', 'learnBlueprintRevisions',
+  'learnMilestones', 'learnObjectives', 'learnObjectivePrerequisites',
+  'learnSourceIdentities', 'learnSourceSnapshots', 'learnSourceExcerpts',
+  'learnObjectiveSources', 'learnClaimSupports', 'masteryAttempts',
+  'masteryRecords', 'studyPlans', 'studyPlanRevisions', 'studySessions',
+  'studySessionRetrievalObjectives', 'sessionContent', 'sessionContentBlocks',
+  'sessionContentClaims', 'calendarProjections', 'reminderPolicies',
+  'searchQuotaBuckets', 'searchReservations', 'learnJobs',
+  'learnLifecycleReceipts',
 ] as const
 
 type ExportCollection = typeof EXPORT_COLLECTIONS[number]
