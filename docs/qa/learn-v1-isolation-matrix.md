@@ -1,12 +1,14 @@
 # Learn Anything V1 Baseline and V2 Isolation Matrix
 
-**Status:** LA2-00 executable baseline
+**Status:** LA2-00 executable baseline with LA2-02 rollback gates
 
 **Scope:** Legacy courses only
 
 **Canonical V2 specification:** [GitHub issue #180](https://github.com/wescodess/budds/issues/180)
 
 **Implementation ticket:** [LA2-00](https://github.com/wescodess/budds/issues/162)
+
+**V2 access-gate evidence:** [`learn-v2-access-gates.md`](./learn-v2-access-gates.md)
 
 This matrix freezes the Learn Anything V1 contract while V2 is built additively. A
 characterized defect is evidence of current V1 behavior, not permission to copy it
@@ -51,10 +53,15 @@ into V2. LA2-00 does not add V2 routes, tables, feature flags, jobs, or dual wri
 | Explicitly upgraded | Original V1 course remains unchanged and independently operable. | A new draft copies only the migration allowlist; no V1 completion, review, mastery, or calendar state is inferred. |
 | Rollback | All characterized V1 behavior remains available. | Entry and new job admission stop; existing records remain available only for export, deletion, and later resume. |
 
-The flagged, upgraded, and rollback rows become executable feature-gate fixtures
-in LA2-02, once those runtime surfaces exist. Until then, this matrix is the
-denial contract: later tickets must extend the suite without weakening any V1
-characterization above.
+The unflagged, flagged, and rollback access states are executable in
+[`learnV2Access.test.ts`](../../convex/learnV2Access.test.ts). The same suite
+proves that rollback leaves entitlement intact, re-enable resumes access, and
+export/account deletion bypass the normal V2 gate. The Nitro wrapper suite
+proves denial happens before route-handler side effects. LA2-03 and later
+tickets must call the authenticated gate inside each user-triggered read,
+write, and job-admission transaction. Internal continuations must derive the
+owner from their authoritative job row, not a caller-supplied identity, while
+extending this matrix without weakening V1 characterization.
 
 ## Verification
 

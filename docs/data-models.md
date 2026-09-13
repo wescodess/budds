@@ -19,6 +19,7 @@ Application user profile, created/updated on first login via the `upsertUser` mu
 | `email` | `string?` | Email address |
 | `avatarUrl` | `string?` | Profile image URL |
 | `audioOverviewQuota` | `object?` | Daily audio generation quota (`date: string`, `count: number`) |
+| `learnV2Entitlement` | `object?` | Internal Learn V2 beta entitlement (`enabled: boolean`, `updatedAt: number`); omitted from the public `users.getUser` projection |
 
 **Indexes:** `by_tokenIdentifier` (`tokenIdentifier`)
 
