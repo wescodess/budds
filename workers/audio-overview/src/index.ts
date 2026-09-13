@@ -4,7 +4,12 @@ import {
   geminiApiKeyConfigurationError,
   renderGeminiScene,
 } from './gemini-audio-renderer'
-import { cancelInterjection, renderInterjection } from './interjection-renderer'
+import {
+  cancelInterjection,
+  renderInterjection,
+  type InterjectionCancelCommand,
+  type InterjectionRenderCommand,
+} from './interjection-renderer'
 import {
   isWorkflowActiveStatus,
   orchestrateAudioOverview,
@@ -28,6 +33,50 @@ async function tokenMatches(provided: string, expected: string): Promise<boolean
   let mismatch = 0
   for (let index = 0; index < left.length; index++) mismatch |= left[index]! ^ right[index]!
   return mismatch === 0
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object'
+}
+
+function parseInterjectionIdentity(value: unknown): InterjectionCancelCommand {
+  if (!isRecord(value)
+    || typeof value.jobId !== 'string'
+    || typeof value.interjectionId !== 'string'
+    || typeof value.idempotencyKey !== 'string') {
+    throw new TypeError('Invalid Interjection render command')
+  }
+  return {
+    jobId: value.jobId,
+    interjectionId: value.interjectionId,
+    idempotencyKey: value.idempotencyKey,
+  }
+}
+
+function parseInterjectionRenderCommand(value: unknown): InterjectionRenderCommand {
+  const identity = parseInterjectionIdentity(value)
+  if (!isRecord(value) || !Array.isArray(value.utterances)) {
+    throw new TypeError('Invalid Interjection render command')
+  }
+  const utterances = value.utterances.map<InterjectionRenderCommand['utterances'][number]>((utterance) => {
+    const speaker = isRecord(utterance) ? utterance.speaker : undefined
+    if (!isRecord(utterance)
+      || (speaker !== 'host_a' && speaker !== 'host_b')
+      || typeof utterance.text !== 'string'
+      || (utterance.emotionalIntent !== undefined && typeof utterance.emotionalIntent !== 'string')
+      || (utterance.deliveryIntent !== undefined && typeof utterance.deliveryIntent !== 'string')
+      || (utterance.pauseAfterMs !== undefined && typeof utterance.pauseAfterMs !== 'number')) {
+      throw new TypeError('Invalid Interjection Utterance')
+    }
+    return {
+      speaker,
+      text: utterance.text,
+      emotionalIntent: utterance.emotionalIntent,
+      deliveryIntent: utterance.deliveryIntent,
+      pauseAfterMs: utterance.pauseAfterMs,
+    }
+  })
+  return { ...identity, utterances }
 }
 
 async function callPagesStage(env: Env, params: AudioOverviewWorkflowParams, body: Parameters<StageCaller>[0]): Promise<StepResult> {
@@ -151,15 +200,15 @@ export default {
       if (!env.AUDIO_ARTIFACTS || (isInterjectionRender && !env.GEMINI_API_KEY)) {
         return Response.json({ error: 'Audio overview generation plane is not configured' }, { status: 503 })
       }
-      const body = await request.json<any>().catch(() => null)
+      const body = await request.json().catch(() => null)
       try {
         if (isInterjectionCancel) {
-          const result = await cancelInterjection(body, { bucket: env.AUDIO_ARTIFACTS })
+          const result = await cancelInterjection(parseInterjectionIdentity(body), { bucket: env.AUDIO_ARTIFACTS })
           return Response.json(result)
         }
         const credentialError = geminiApiKeyConfigurationError(env.GEMINI_API_KEY)
         if (credentialError) return Response.json({ error: credentialError }, { status: 503 })
-        const result = await renderInterjection(body, {
+        const result = await renderInterjection(parseInterjectionRenderCommand(body), {
           bucket: env.AUDIO_ARTIFACTS,
           apiKey: env.GEMINI_API_KEY,
           fetch,
