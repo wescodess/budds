@@ -4,7 +4,19 @@ The Budds history rewrite removes exposed credentials and generated repository n
 
 ## Status
 
-**Blocked:** Do not force-push rewritten refs until the exposed R2 credentials are rotated and GitHub Actions can execute successfully. The latest scheduled workflow is blocked by the account billing or spending limit before any step starts.
+**Prepared, blocked:** The rewrite has passed an isolated local dry run. Do not force-push rewritten refs until the exposed R2 credentials are rotated and GitHub Actions can execute successfully. The latest scheduled workflow is blocked by the account billing or spending limit before any step starts.
+
+## Dry-run evidence
+
+The 2026-09-13 isolated mirror rehearsal produced this evidence without changing GitHub:
+
+- `git-filter-repo` rewrote 592 commits.
+- Every targeted path was absent from surviving branch and tag history.
+- Both confirmed credential values had zero occurrences in rewritten patches.
+- Gitleaks reported zero findings across rewritten branches and tags with the repository's narrow fixture allowlist.
+- The rewritten production-baseline tree matched the verified source tree exactly.
+
+One local Codex checkpoint points directly to an old tree object and cannot be rewritten as a commit. It is covered by the private recovery bundle and must be removed with the other local checkpoint and stash refs after the coordinated rewrite. It is not a remote branch or tag.
 
 ## Rewrite scope
 
