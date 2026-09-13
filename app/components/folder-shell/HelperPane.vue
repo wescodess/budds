@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { X } from 'lucide-vue-next'
+import { X } from '@lucide/vue'
 import { Sheet, SheetContent } from '@/components/ui/sheet'
 
 const props = defineProps<{

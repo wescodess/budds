@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { RotateCcw } from 'lucide-vue-next'
+import { RotateCcw } from '@lucide/vue'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 import type { AttemptHistoryItem } from '~/composables/useQuizHistory'

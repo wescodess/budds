@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Check } from 'lucide-vue-next'
+import { Check } from '@lucide/vue'
 
 type MasteryLevel = 'new' | 'learning' | 'reviewing' | 'mastered'
 

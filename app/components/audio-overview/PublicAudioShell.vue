@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
-import { Pause, Play, Rewind, FastForward, Download } from 'lucide-vue-next'
+import { Pause, Play, Rewind, FastForward, Download } from '@lucide/vue'
 import { api } from '#convex/api'
 import { buildContinuousPlaybackTurns, createAudioOverviewPlayback, type AudioOverviewTurn } from '~/composables/useAudioOverviewStore'
 

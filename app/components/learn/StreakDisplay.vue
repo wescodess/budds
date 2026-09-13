@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Flame, Snowflake, Shield } from 'lucide-vue-next'
+import { Flame, Snowflake, Shield } from '@lucide/vue'
 
 const props = defineProps<{
   streakCurrent: number

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ChevronDown, ChevronUp, X } from 'lucide-vue-next'
+import { ChevronDown, ChevronUp, X } from '@lucide/vue'
 import { nextTick, ref, watch } from 'vue'
 import type { Source } from '~/composables/useChat'
 import { useHorizontalSwipeGesture } from '~/composables/useHorizontalSwipeGesture'

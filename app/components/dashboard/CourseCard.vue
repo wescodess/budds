@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useTimeAgo } from '@vueuse/core'
-import { MessageSquare, BookOpen } from 'lucide-vue-next'
+import { MessageSquare, BookOpen } from '@lucide/vue'
 
 const props = defineProps<{
   folder: {

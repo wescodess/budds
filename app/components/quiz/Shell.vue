@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ClipboardList, Sparkles } from 'lucide-vue-next'
+import { ClipboardList, Sparkles } from '@lucide/vue'
 import type { Id } from '../../../convex/_generated/dataModel'
 
 const props = defineProps<{

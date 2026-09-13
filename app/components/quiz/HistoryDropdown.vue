@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { History } from 'lucide-vue-next'
+import { History } from '@lucide/vue'
 import type { Id } from '../../../convex/_generated/dataModel'
 import type { AttemptHistoryItem } from '~/composables/useQuizHistory'
 

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onLongPress } from '@vueuse/core'
-import { ChevronRight, Folder, MoreHorizontal, Pencil, FolderPlus, Trash2 } from 'lucide-vue-next'
+import { ChevronRight, Folder, MoreHorizontal, Pencil, FolderPlus, Trash2 } from '@lucide/vue'
 import type { Id, Doc } from '~~/convex/_generated/dataModel'
 import { LONG_PRESS_MOVE_PX, LONG_PRESS_MS, useGestureGuards } from '~/composables/useGestureGuards'
 

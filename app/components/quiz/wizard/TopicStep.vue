@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { X, Plus, Loader2 } from 'lucide-vue-next'
+import { X, Plus, Loader2 } from '@lucide/vue'
 
 defineProps<{
   suggestedTopics: string[]

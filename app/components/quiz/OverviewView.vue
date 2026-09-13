@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Pencil, Trash2, Plus, Sparkles, Check, X } from 'lucide-vue-next'
+import { Pencil, Trash2, Plus, Sparkles, Check, X } from '@lucide/vue'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 

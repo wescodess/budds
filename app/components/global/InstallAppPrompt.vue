@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useMediaQuery } from '@vueuse/core'
-import { Download, Share, Smartphone, X } from 'lucide-vue-next'
+import { Download, Share, Smartphone, X } from '@lucide/vue'
 
 interface BeforeInstallPromptEvent extends Event {
   platforms?: string[]

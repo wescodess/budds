@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onLongPress, useMediaQuery } from '@vueuse/core'
-import { FileText, ExternalLink } from 'lucide-vue-next'
+import { FileText, ExternalLink } from '@lucide/vue'
 import { LONG_PRESS_MOVE_PX, LONG_PRESS_MS } from '~/composables/useGestureGuards'
 
 const props = defineProps<{

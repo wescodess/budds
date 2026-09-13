@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { X, Sparkles, Clock, FolderTree } from 'lucide-vue-next'
+import { X, Sparkles, Clock, FolderTree } from '@lucide/vue'
 import type { Id } from '../../../convex/_generated/dataModel'
 import { AUDIO_OVERVIEW_PROFILE_V1 } from '~~/shared/audio-overview-profile'
 import type { useReferenceScope } from '~/composables/useReferenceScope'

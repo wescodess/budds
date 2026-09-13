@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { FolderPlus } from 'lucide-vue-next'
+import { FolderPlus } from '@lucide/vue'
 import type { Doc } from '~~/convex/_generated/dataModel'
 
 const props = defineProps<{

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onLongPress } from '@vueuse/core'
-import { ArrowLeftRight, FileText, FileImage, Link as LinkIcon, Trash2, X } from 'lucide-vue-next'
+import { ArrowLeftRight, FileText, FileImage, Link as LinkIcon, Trash2, X } from '@lucide/vue'
 import type { Id } from '~~/convex/_generated/dataModel'
 import { LONG_PRESS_MOVE_PX, LONG_PRESS_MS, ROW_ACTION_WIDTH_PX, useGestureGuards } from '~/composables/useGestureGuards'
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Send, Sparkles } from 'lucide-vue-next'
+import { Send, Sparkles } from '@lucide/vue'
 import { MODELS, DEFAULT_MODEL } from '~/constants/models'
 
 const route = useRoute()

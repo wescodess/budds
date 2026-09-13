@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ChevronLeft, ChevronRight, RotateCcw, Shuffle } from 'lucide-vue-next'
+import { ChevronLeft, ChevronRight, RotateCcw, Shuffle } from '@lucide/vue'
 import { usePointerSwipe } from '@vueuse/core'
 import type { Id } from '../../../convex/_generated/dataModel'
 

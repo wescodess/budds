@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { MessageSquare, ChevronRight } from 'lucide-vue-next'
+import { MessageSquare, ChevronRight } from '@lucide/vue'
 </script>
 
 <template>

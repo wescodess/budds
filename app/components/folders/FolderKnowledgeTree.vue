@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { ChevronDown, ChevronRight, Search, Plus, Upload, FileText, MoreHorizontal, FolderPlus, FolderInput, Trash2, Pencil } from 'lucide-vue-next'
+import { ChevronDown, ChevronRight, Search, Plus, Upload, FileText, MoreHorizontal, FolderPlus, FolderInput, Trash2, Pencil } from '@lucide/vue'
 import type { Doc, Id } from '~~/convex/_generated/dataModel'
 
 const props = defineProps<{

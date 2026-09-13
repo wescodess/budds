@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { AlertTriangle, Check, Loader2, RotateCcw } from 'lucide-vue-next'
+import { AlertTriangle, Check, Loader2, RotateCcw } from '@lucide/vue'
 import type { Id } from '../../../convex/_generated/dataModel'
 
 const props = withDefaults(defineProps<{

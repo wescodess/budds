@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { UserPlus, Crown } from 'lucide-vue-next'
+import { UserPlus, Crown } from '@lucide/vue'
 import type { Doc } from '~~/convex/_generated/dataModel'
 
 defineOptions({ name: 'FolderShellMembersPanel' })

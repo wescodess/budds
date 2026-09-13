@@ -14,7 +14,7 @@ import {
   ChevronsRight,
   Eye,
   Trash2,
-} from 'lucide-vue-next'
+} from '@lucide/vue'
 import { onClickOutside } from '@vueuse/core'
 import { api } from '#convex/api'
 import type { Id, Doc } from '~~/convex/_generated/dataModel'

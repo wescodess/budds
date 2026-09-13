@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { MoreHorizontal, Eye, Pencil, FolderInput, Download, Trash2 } from 'lucide-vue-next'
+import { MoreHorizontal, Eye, Pencil, FolderInput, Download, Trash2 } from '@lucide/vue'
 
 defineOptions({ name: 'FileKebabMenu' })
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ChevronRight, Folder, FileText } from 'lucide-vue-next'
+import { ChevronRight, Folder, FileText } from '@lucide/vue'
 import type { TriState } from '~/composables/useReferenceScope'
 
 const props = defineProps<{

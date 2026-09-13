@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onUnmounted } from 'vue'
-import { Headphones, Play, Pause, FileText, ChevronDown, ChevronUp } from 'lucide-vue-next'
+import { Headphones, Play, Pause, FileText, ChevronDown, ChevronUp } from '@lucide/vue'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 

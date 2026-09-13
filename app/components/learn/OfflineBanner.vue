@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { WifiOff } from 'lucide-vue-next'
+import { WifiOff } from '@lucide/vue'
 import { useOnlineStatus } from '~/composables/useOnlineStatus'
 
 const { isOnline } = useOnlineStatus()

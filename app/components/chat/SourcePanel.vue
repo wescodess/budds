@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { X } from 'lucide-vue-next'
+import { X } from '@lucide/vue'
 import { cn } from '@/lib/utils'
 import type { Source } from '~/composables/useChat'
 import type { ComponentPublicInstance } from 'vue'

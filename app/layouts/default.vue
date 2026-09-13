@@ -16,7 +16,7 @@ import {
   Trash2,
   Download,
   Palette,
-} from 'lucide-vue-next'
+} from '@lucide/vue'
 import type { Doc, Id } from '~~/convex/_generated/dataModel'
 import { clearOfflineData } from '~/composables/useOfflineCache'
 import { useHorizontalSwipeGesture } from '~/composables/useHorizontalSwipeGesture'

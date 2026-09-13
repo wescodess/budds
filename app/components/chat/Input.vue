@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { AlertCircle, Check, Crosshair, FolderTree, Headphones, LoaderCircle, Plus, Send, Link as LinkIcon, Upload } from 'lucide-vue-next'
+import { AlertCircle, Check, Crosshair, FolderTree, Headphones, LoaderCircle, Plus, Send, Link as LinkIcon, Upload } from '@lucide/vue'
 
 function formatInterjectionTime(ms: number): string {
   const total = Math.max(0, Math.round(ms / 1000))

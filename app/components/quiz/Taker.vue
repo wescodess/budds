@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowLeft } from 'lucide-vue-next'
+import { ArrowLeft } from '@lucide/vue'
 import { api } from '#convex/api'
 import type { Doc, Id } from '../../../convex/_generated/dataModel'
 import type { QuestionResult } from './Question.vue'

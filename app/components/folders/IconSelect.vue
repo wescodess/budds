@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import * as lucide from 'lucide-vue-next'
-import { ChevronDown, Search } from 'lucide-vue-next'
+import * as lucide from '@lucide/vue'
+import { ChevronDown, Search } from '@lucide/vue'
 import { computed, ref, watch } from 'vue'
 import { FOLDER_ICON_GROUPS, DEFAULT_ICON_KEY } from '~~/convex/folderIcons'
 import { useGestureGuards } from '~/composables/useGestureGuards'

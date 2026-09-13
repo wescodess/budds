@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, nextTick } from 'vue'
-import { Pause, Play, Maximize2, X, Rewind, FastForward, ChevronUp, ChevronDown } from 'lucide-vue-next'
+import { Pause, Play, Maximize2, X, Rewind, FastForward, ChevronUp, ChevronDown } from '@lucide/vue'
 
 const {
   overviewId, folderId, title, activeTurn,

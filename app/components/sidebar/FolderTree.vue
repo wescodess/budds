@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { TreeRoot, TreeItem } from 'reka-ui'
-import { ChevronRight, Plus, MoreHorizontal, Pencil, Settings2, Trash2 } from 'lucide-vue-next'
+import { ChevronRight, Plus, MoreHorizontal, Pencil, Settings2, Trash2 } from '@lucide/vue'
 import { toast } from 'vue-sonner'
 import type { Doc, Id } from '~~/convex/_generated/dataModel'
 

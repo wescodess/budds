@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { FileText, ArrowLeftRight } from 'lucide-vue-next'
+import { FileText, ArrowLeftRight } from '@lucide/vue'
 import type { Id } from '~~/convex/_generated/dataModel'
 import type { InterjectionContext } from '~/composables/useChat'
 import FolderHelperPane from '~/components/folders/FolderHelperPane.vue'

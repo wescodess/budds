@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowLeft, Lock, Loader2, AlertCircle, CheckCircle2, ChevronRight, Pencil, MoreVertical, Download, HardDriveDownload } from 'lucide-vue-next'
+import { ArrowLeft, Lock, Loader2, AlertCircle, CheckCircle2, ChevronRight, Pencil, MoreVertical, Download, HardDriveDownload } from '@lucide/vue'
 import type { Id } from '~~/convex/_generated/dataModel'
 
 const props = defineProps<{

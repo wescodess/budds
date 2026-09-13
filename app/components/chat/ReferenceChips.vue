@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { FileText, ArrowRight } from 'lucide-vue-next'
+import { FileText, ArrowRight } from '@lucide/vue'
 import type { Source } from '~/composables/useChat'
 
 const props = defineProps<{

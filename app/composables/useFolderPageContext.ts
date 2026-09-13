@@ -1,6 +1,6 @@
 import type { InjectionKey, ComputedRef, Ref } from 'vue'
 import { useMediaQuery } from '@vueuse/core'
-import { FileText, Headphones, ListChecks } from 'lucide-vue-next'
+import { FileText, Headphones, ListChecks } from '@lucide/vue'
 import { api } from '#convex/api'
 import type { Doc, Id } from '~~/convex/_generated/dataModel'
 import { useFolderDetail, useFolders } from '~/composables/useFolders'

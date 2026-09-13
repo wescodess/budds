@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Loader2, AlertTriangle } from 'lucide-vue-next'
+import { Loader2, AlertTriangle } from '@lucide/vue'
 import type { Id } from '../../../convex/_generated/dataModel'
 import { api } from '#convex/api'
 import type { PickerFolder, PickerFile } from '~/components/global/DirectoryPicker.vue'

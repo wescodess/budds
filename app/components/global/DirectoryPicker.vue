@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { refDebounced } from '@vueuse/core'
-import { Search, X, Folder, FileText, ChevronRight } from 'lucide-vue-next'
+import { Search, X, Folder, FileText, ChevronRight } from '@lucide/vue'
 
 export type TriState = 'all' | 'some' | 'none'
 

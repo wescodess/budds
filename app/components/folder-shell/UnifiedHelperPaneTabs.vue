@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Headphones, FileText } from 'lucide-vue-next'
+import { Headphones, FileText } from '@lucide/vue'
 
 type Tab = 'podcast' | 'sources'
 

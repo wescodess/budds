@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { X, FolderPlus, Search, Plus, Link as LinkIcon, Upload, Pencil } from 'lucide-vue-next'
+import { X, FolderPlus, Search, Plus, Link as LinkIcon, Upload, Pencil } from '@lucide/vue'
 import { onKeyStroke } from '@vueuse/core'
 import { api } from '#convex/api'
 import type { Doc, Id } from '~~/convex/_generated/dataModel'

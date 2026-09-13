@@ -9,7 +9,7 @@ import {
   Eye,
   Loader2,
   ListTodo,
-} from 'lucide-vue-next'
+} from '@lucide/vue'
 import type { Id } from '~~/convex/_generated/dataModel'
 import type { TaskDoc } from '~/composables/useTasks'
 import { useHorizontalSwipeGesture } from '~/composables/useHorizontalSwipeGesture'

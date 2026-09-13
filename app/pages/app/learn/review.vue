@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Flag, ArrowLeft, CheckCircle, Zap, Flame } from 'lucide-vue-next'
+import { Flag, ArrowLeft, CheckCircle, Zap, Flame } from '@lucide/vue'
 import { api } from '#convex/api'
 import type { Id } from '../../../../convex/_generated/dataModel'
 import { toast } from 'vue-sonner'

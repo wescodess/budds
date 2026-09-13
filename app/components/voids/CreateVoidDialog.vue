@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
-import { MessageSquare, Layers, ListChecks, Headphones, BookOpen, X } from 'lucide-vue-next'
+import { MessageSquare, Layers, ListChecks, Headphones, BookOpen, X } from '@lucide/vue'
 
 export type VoidType = 'chat' | 'flashcards' | 'quiz' | 'audio-overview' | 'course'
 

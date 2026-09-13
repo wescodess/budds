@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ChevronLeft, ChevronRight, Layers, Flag } from 'lucide-vue-next'
+import { ChevronLeft, ChevronRight, Layers, Flag } from '@lucide/vue'
 import { usePointerSwipe } from '@vueuse/core'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'

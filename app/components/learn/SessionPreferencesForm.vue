@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Clock, Save, Loader2 } from 'lucide-vue-next'
+import { Clock, Save, Loader2 } from '@lucide/vue'
 import { api } from '#convex/api'
 import { toast } from 'vue-sonner'
 

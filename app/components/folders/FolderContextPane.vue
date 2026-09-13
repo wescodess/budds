@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { MoreHorizontal, FolderPlus, Pencil, Trash2 } from 'lucide-vue-next'
+import { MoreHorizontal, FolderPlus, Pencil, Trash2 } from '@lucide/vue'
 import type { Doc } from '~~/convex/_generated/dataModel'
 
 defineProps<{

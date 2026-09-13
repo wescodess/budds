@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Trash2, Loader2 } from 'lucide-vue-next'
+import { Trash2, Loader2 } from '@lucide/vue'
 import type { Id } from '~~/convex/_generated/dataModel'
 import { api } from '#convex/api'
 

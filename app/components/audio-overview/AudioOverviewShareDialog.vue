@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { X, Link2, Copy, Check, ShieldAlert, Sparkles } from 'lucide-vue-next'
+import { X, Link2, Copy, Check, ShieldAlert, Sparkles } from '@lucide/vue'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 

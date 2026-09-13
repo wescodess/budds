@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { AlertTriangle, Sparkles, X } from 'lucide-vue-next'
+import { AlertTriangle, Sparkles, X } from '@lucide/vue'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 import type { PickerFolder, PickerFile } from '~/components/global/DirectoryPicker.vue'

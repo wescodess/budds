@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { GripVertical, X, Plus } from 'lucide-vue-next'
+import { GripVertical, X, Plus } from '@lucide/vue'
 import type { Id } from '../../../convex/_generated/dataModel'
 import { api } from '#convex/api'
 import { toast } from 'vue-sonner'

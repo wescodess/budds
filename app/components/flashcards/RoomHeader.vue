@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Layers, MoreHorizontal, Pencil, Trash2, ArrowLeft } from 'lucide-vue-next'
+import { Layers, MoreHorizontal, Pencil, Trash2, ArrowLeft } from '@lucide/vue'
 import { onClickOutside } from '@vueuse/core'
 
 const props = defineProps<{

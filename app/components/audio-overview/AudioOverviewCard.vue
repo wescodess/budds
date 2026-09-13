@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Headphones, Play, Settings2 } from 'lucide-vue-next'
+import { Headphones, Play, Settings2 } from '@lucide/vue'
 
 const props = defineProps<{
   indexedCount: number

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { BookOpen, ClipboardList, Layers, Calculator, PenLine, Mic, FileText } from 'lucide-vue-next'
+import { BookOpen, ClipboardList, Layers, Calculator, PenLine, Mic, FileText } from '@lucide/vue'
 import { api } from '#convex/api'
 
 const { user } = useUserSession()

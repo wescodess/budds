@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Check, X, ChevronDown } from 'lucide-vue-next'
+import { Check, X, ChevronDown } from '@lucide/vue'
 import type { AttemptQuestion, AnswerFeedback } from '~/composables/useQuizAttempt'
 
 const props = defineProps<{

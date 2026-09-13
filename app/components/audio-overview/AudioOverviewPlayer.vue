@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
-import { Pause, Play, Rewind, FastForward, Download, Share2, RefreshCw, History, Check, Trash2, Settings2, Mic, Loader2 } from 'lucide-vue-next'
+import { Pause, Play, Rewind, FastForward, Download, Share2, RefreshCw, History, Check, Trash2, Settings2, Mic, Loader2 } from '@lucide/vue'
 import { api } from '#convex/api'
 import type { Id, Doc } from '../../../convex/_generated/dataModel'
 import { buildContinuousPlaybackTurns, type AudioOverviewTurn } from '~/composables/useAudioOverviewStore'

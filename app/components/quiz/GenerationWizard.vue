@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Sparkles, Loader2 } from 'lucide-vue-next'
+import { Sparkles, Loader2 } from '@lucide/vue'
 import type { Id } from '../../../convex/_generated/dataModel'
 
 const props = defineProps<{

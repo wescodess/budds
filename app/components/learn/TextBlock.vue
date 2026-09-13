@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { parseMarkdown } from '@nuxtjs/mdc/runtime'
-import { BookOpen } from 'lucide-vue-next'
+import { BookOpen } from '@lucide/vue'
 
 const props = defineProps<{ content: string }>()
 

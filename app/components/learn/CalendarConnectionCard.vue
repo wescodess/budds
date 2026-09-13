@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Calendar, Unplug, Loader2 } from 'lucide-vue-next'
+import { Calendar, Unplug, Loader2 } from '@lucide/vue'
 import { toast } from 'vue-sonner'
 import { api } from '~~/convex/_generated/api'
 import SessionPreferencesForm from './SessionPreferencesForm.vue'

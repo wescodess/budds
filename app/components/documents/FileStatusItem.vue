@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Loader2, CheckCircle2, XCircle, MoreHorizontal, FolderInput, Trash2 } from 'lucide-vue-next'
+import { Loader2, CheckCircle2, XCircle, MoreHorizontal, FolderInput, Trash2 } from '@lucide/vue'
 import { onClickOutside } from '@vueuse/core'
 
 defineOptions({ name: 'FileStatusItem' })

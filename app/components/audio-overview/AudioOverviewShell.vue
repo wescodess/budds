@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
-import { Send } from 'lucide-vue-next'
+import { Send } from '@lucide/vue'
 import { useMediaQuery } from '@vueuse/core'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'

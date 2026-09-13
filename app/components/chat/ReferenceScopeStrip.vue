@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ChevronDown, Folder, FileText, X } from 'lucide-vue-next'
+import { ChevronDown, Folder, FileText, X } from '@lucide/vue'
 import type { useReferenceScope } from '~/composables/useReferenceScope'
 
 const props = defineProps<{

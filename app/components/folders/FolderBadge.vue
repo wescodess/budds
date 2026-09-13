@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import * as lucide from 'lucide-vue-next'
+import * as lucide from '@lucide/vue'
 import { computed } from 'vue'
 import { getColor, DEFAULT_COLOR_KEY } from '~~/convex/folderPalette'
 import { DEFAULT_ICON_KEY } from '~~/convex/folderIcons'

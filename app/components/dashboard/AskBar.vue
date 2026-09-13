@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Send, Sparkles } from 'lucide-vue-next'
+import { Send, Sparkles } from '@lucide/vue'
 
 const router = useRouter()
 const query = ref('')

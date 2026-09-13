@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Trophy, ArrowRight, ChevronLeft, Sparkles, BookOpen } from 'lucide-vue-next'
+import { Trophy, ArrowRight, ChevronLeft, Sparkles, BookOpen } from '@lucide/vue'
 
 type MasteryLevel = 'new' | 'learning' | 'reviewing' | 'mastered'
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Check } from 'lucide-vue-next'
+import { Check } from '@lucide/vue'
 import { MODELS, getModelLabel } from '~/constants/models'
 
 const props = defineProps<{

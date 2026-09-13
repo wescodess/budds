@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { PanelRight, Pencil, FolderPlus, ListTodo, Mic, ArrowLeftRight } from 'lucide-vue-next'
+import { PanelRight, Pencil, FolderPlus, ListTodo, Mic, ArrowLeftRight } from '@lucide/vue'
 import type { Id } from '~~/convex/_generated/dataModel'
 import type { VoidType } from '~/components/voids/CreateVoidDialog.vue'
 import MoveToFolderDialog from '~/components/documents/MoveToFolderDialog.vue'

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { AlertCircle, Loader2, CheckCircle2 } from 'lucide-vue-next'
+import { AlertCircle, Loader2, CheckCircle2 } from '@lucide/vue'
 
 defineOptions({ name: 'FileStatusPill' })
 

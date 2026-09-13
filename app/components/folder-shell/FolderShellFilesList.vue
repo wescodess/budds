@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Upload } from 'lucide-vue-next'
+import { Upload } from '@lucide/vue'
 import type { Id } from '~~/convex/_generated/dataModel'
 
 defineOptions({ name: 'FolderShellFilesList' })

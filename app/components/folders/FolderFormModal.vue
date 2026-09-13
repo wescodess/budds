@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useForm } from 'vee-validate'
 import { computed, ref, watch } from 'vue'
-import { Trash2 } from 'lucide-vue-next'
+import { Trash2 } from '@lucide/vue'
 import { toast } from 'vue-sonner'
 import { DEFAULT_COLOR_KEY, FOLDER_COLOR_KEYS, getColor } from '~~/convex/folderPalette'
 import { DEFAULT_ICON_KEY, FOLDER_ICON_KEYS } from '~~/convex/folderIcons'
