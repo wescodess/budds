@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { toast } from 'vue-sonner'
 import { getErrorMessage } from '~~/shared/errors'
 import { ChevronDown, RotateCcw, Sparkles, History } from '@lucide/vue'
 import { api } from '#convex/api'
@@ -47,13 +48,11 @@ async function confirmRestore() {
   restoring.value = true
   try {
     await restoreMutation.mutate({ roomId: props.roomId, versionId: restoreTargetId.value })
-    const { toast } = await import('vue-sonner')
     toast.success('Version restored')
     restoreTargetId.value = null
     emit('update:open', false)
   }
   catch (e) {
-    const { toast } = await import('vue-sonner')
     toast.error(getErrorMessage(e, 'Restore failed'))
   }
   finally {

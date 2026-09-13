@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { toast } from 'vue-sonner'
 import { Upload } from '@lucide/vue'
 import type { Id } from '~~/convex/_generated/dataModel'
 
@@ -69,9 +70,7 @@ function validateAndEmit(fileList: FileList | null) {
   }
 
   if (rejected.length > 0) {
-    import('vue-sonner').then(({ toast }) => {
-      rejected.forEach((msg) => toast.error(msg))
-    })
+    rejected.forEach((msg) => toast.error(msg))
   }
 
   if (valid.length > 0) {

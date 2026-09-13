@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { toast } from 'vue-sonner'
 import { getErrorMessage } from '~~/shared/errors'
 import type { Id } from '~~/convex/_generated/dataModel'
 import { injectFolderContext } from '~/composables/useFolderPageContext'
@@ -60,7 +61,6 @@ function handleDeleteRequest(docId: string) {
   if (!doc) return
   if (doc.status === 'failed') {
     ctx.deleteDocument(docId as Id<'documents'>).catch(async (e: unknown) => {
-      const { toast } = await import('vue-sonner')
       toast.error(getErrorMessage(e, 'Failed to remove document'))
     })
     return

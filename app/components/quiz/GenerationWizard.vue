@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { toast } from 'vue-sonner'
 import { getErrorMessage } from '~~/shared/errors'
 import { Sparkles, Loader2 } from '@lucide/vue'
 import type { Id } from '../../../convex/_generated/dataModel'
@@ -29,11 +30,9 @@ async function handleGenerate() {
     await gen.generateQuiz()
     emit('update:open', false)
     emit('generationStarted')
-    const { toast } = await import('vue-sonner')
     toast.success('Generation started')
   }
   catch (e) {
-    const { toast } = await import('vue-sonner')
     toast.error(getErrorMessage(e, 'Failed to start generation'))
   }
 }

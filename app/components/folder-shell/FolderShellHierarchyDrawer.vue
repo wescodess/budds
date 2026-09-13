@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { toast } from 'vue-sonner'
 import { getErrorMessage } from '~~/shared/errors'
 import { X, FolderPlus, Search, Plus, Link as LinkIcon, Upload, Pencil } from '@lucide/vue'
 import { onKeyStroke } from '@vueuse/core'
@@ -243,10 +244,8 @@ async function confirmDeleteFolder() {
   if (!f) return
   try {
     await deleteFolder(f._id)
-    const { toast } = await import('vue-sonner')
     toast.success('Folder deleted')
   } catch (e) {
-    const { toast } = await import('vue-sonner')
     toast.error(getErrorMessage(e, 'Failed to delete folder'))
   }
 }
@@ -269,7 +268,6 @@ async function confirmDeleteDocs() {
   bulkActionPending.value = true
   try {
     const { deletedCount, failedIds, failureMessages } = await deleteDocuments(ids as Id<'documents'>[])
-    const { toast } = await import('vue-sonner')
 
     if (deletedCount > 0) {
       toast.success(deletedCount === 1 ? 'Document deleted' : `${deletedCount} documents deleted`)
@@ -302,7 +300,6 @@ async function confirmMove(destId: Id<'folders'>) {
   try {
     const ids = [...moveTargetIds.value]
     const isBulk = ids.length > 1
-    const { toast } = await import('vue-sonner')
 
     if (isBulk) {
       const { movedCount, failedIds, failureMessages } = await moveDocuments(ids as Id<'documents'>[], destId)
@@ -320,7 +317,6 @@ async function confirmMove(destId: Id<'folders'>) {
       if (bulkMode.value) exitBulkMode()
     }
   } catch (e) {
-    const { toast } = await import('vue-sonner')
     toast.error(getErrorMessage(e, 'Failed to move'))
   } finally {
     movePending.value = false
@@ -338,12 +334,10 @@ async function handleImportLink() {
   linkImporting.value = true
   try {
     const result = await importDocumentFromUrl(url, props.folderId)
-    const { toast } = await import('vue-sonner')
     toast.success(`Imported ${result?.filename ?? 'document'}`)
     linkUrl.value = ''
     linkDialogOpen.value = false
   } catch (err) {
-    const { toast } = await import('vue-sonner')
     toast.error(getErrorMessage(err, 'Import failed'))
   } finally {
     linkImporting.value = false
@@ -358,11 +352,9 @@ async function onFiles(e: Event) {
   if (files.length > 0) {
     try {
       await uploadFiles(files, props.folderId)
-      const { toast } = await import('vue-sonner')
       toast.success(files.length === 1 ? 'Document indexed' : `${files.length} documents indexed`)
     }
     catch (err) {
-      const { toast } = await import('vue-sonner')
       toast.error(getErrorMessage(err, 'Upload failed'))
     }
   }

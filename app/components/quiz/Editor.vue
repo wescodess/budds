@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { toast } from 'vue-sonner'
 import { getErrorMessage } from '~~/shared/errors'
 import { ArrowLeft, Pencil, Plus, X } from '@lucide/vue'
 import { api } from '#convex/api'
@@ -202,7 +203,6 @@ async function saveEdit(qid: string) {
   try {
     await updateQuestionMutation.mutate(payload)
     cancelEdit(qid)
-    const { toast } = await import('vue-sonner')
     toast.success('Question updated')
   }
   catch (e) {

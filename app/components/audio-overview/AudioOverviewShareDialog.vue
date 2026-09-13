@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { toast } from 'vue-sonner'
 import { getErrorMessage } from '~~/shared/errors'
 import { ref, computed } from 'vue'
 import { X, Link2, Copy, Check, ShieldAlert, Sparkles } from '@lucide/vue'
@@ -66,7 +67,6 @@ async function handlePublish() {
     await publishMutation.mutate({ id: props.overviewId })
   }
   catch (err) {
-    const { toast } = await import('vue-sonner')
     toast.error(getErrorMessage(err, 'Failed to create share link'))
   }
   finally {
@@ -81,11 +81,9 @@ async function handleUnpublish() {
     await unpublishMutation.mutate({ id: props.overviewId })
     clearCopiedTimer()
     copied.value = false
-    const { toast } = await import('vue-sonner')
     toast.success('Share link revoked')
   }
   catch (err) {
-    const { toast } = await import('vue-sonner')
     toast.error(getErrorMessage(err, 'Failed to revoke share link'))
   }
   finally {
@@ -105,7 +103,6 @@ async function handleCopy() {
     }, 2000)
   }
   catch {
-    const { toast } = await import('vue-sonner')
     toast.error('Could not copy link — copy it manually')
   }
 }

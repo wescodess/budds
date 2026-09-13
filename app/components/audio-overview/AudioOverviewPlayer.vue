@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { toast } from 'vue-sonner'
 import { getErrorMessage } from '~~/shared/errors'
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { Pause, Play, Rewind, FastForward, Download, Share2, RefreshCw, History, Check, Trash2, Settings2, Mic, Loader2 } from '@lucide/vue'
@@ -238,7 +239,6 @@ async function handleDownload() {
       turnUrls: turnUrls.value,
       mediaUrl: continuousMediaUrl.value,
     })
-    const { toast } = await import('vue-sonner')
     const issues = result.failed.length + result.skipped
     if (issues > 0) {
       const failedLabel = result.failed.length > 0
@@ -249,7 +249,6 @@ async function handleDownload() {
       toast.success(`Downloaded ${result.filename}`)
     }
   } catch (err) {
-    const { toast } = await import('vue-sonner')
     toast.error(getErrorMessage(err, 'Download failed'))
   } finally {
     downloading.value = false

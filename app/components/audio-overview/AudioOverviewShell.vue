@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { toast } from 'vue-sonner'
 import { getErrorMessage, getErrorStatusCode } from '~~/shared/errors'
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { Send } from '@lucide/vue'
@@ -269,7 +270,6 @@ function openCustomize() {
 async function handleCustomizeSubmit(value: CustomizeSubmit) {
   if (submitting.value) return
   if (quotaExceeded.value) {
-    const { toast } = await import('vue-sonner')
     toast.error('Daily quota reached. Come back tomorrow.')
     return
   }
@@ -304,7 +304,6 @@ async function handleCustomizeSubmit(value: CustomizeSubmit) {
     })
     if (!result.accepted) {
       rememberPendingCommand(null)
-      const { toast } = await import('vue-sonner')
       toast.error('The previous audio overview request is no longer active. Please try again.')
       return
     }
@@ -321,7 +320,6 @@ async function handleCustomizeSubmit(value: CustomizeSubmit) {
         const ratio = updatedQuota.used / updatedQuota.cap
         if (ratio >= 0.8 && updatedQuota.used < updatedQuota.cap && !sessionStorage.getItem(thresholdKey)) {
           sessionStorage.setItem(thresholdKey, '1')
-          const { toast } = await import('vue-sonner')
           toast.warning(`Heads up — ${updatedQuota.used} of ${updatedQuota.cap} audio overviews used today`, {
             description: 'Quota resets at midnight UTC.',
           })
@@ -337,7 +335,6 @@ async function handleCustomizeSubmit(value: CustomizeSubmit) {
     if (status >= 400 && status < 500 && status !== 408 && status !== 429) {
       rememberPendingCommand(null)
     }
-    const { toast } = await import('vue-sonner')
     toast.error(getErrorMessage(err, 'Failed to start audio overview'))
   }
   finally {
@@ -413,7 +410,6 @@ async function handleCancel(taskId: Id<'tasks'>) {
     await cancel(taskId)
   }
   catch (err) {
-    const { toast } = await import('vue-sonner')
     toast.error(getErrorMessage(err, 'Failed to cancel task'))
   }
   finally {
@@ -429,11 +425,9 @@ async function handleDeleteOverview(id: Id<'audioOverviews'>) {
   try {
     await deleteOverviewMutation.mutate({ id })
     if (selectedOverviewId.value === id) selectedOverviewId.value = null
-    const { toast } = await import('vue-sonner')
     toast.success('Audio overview deleted')
   }
   catch (err) {
-    const { toast } = await import('vue-sonner')
     toast.error(getErrorMessage(err, 'Failed to delete audio overview'))
   }
 }

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { toast } from 'vue-sonner'
 import { getErrorMessage } from '~~/shared/errors'
 import { useMediaQuery } from '@vueuse/core'
 import {
@@ -201,11 +202,9 @@ async function executeExportData() {
     a.remove()
     URL.revokeObjectURL(url)
 
-    const { toast } = await import('vue-sonner')
     toast.success('Your data export is ready.')
   } catch (e) {
     console.error('Data export failed', e)
-    const { toast } = await import('vue-sonner')
     toast.error(getErrorMessage(e, 'We could not export your data. Please try again.'))
   } finally {
     isExportingData.value = false
@@ -239,12 +238,10 @@ async function executeDeleteAccount() {
       method: 'POST',
       body: {},
     })
-    const { toast } = await import('vue-sonner')
     toast.success('Your account and all data have been deleted.')
     await onSignOut()
   } catch (e) {
     console.error('Account deletion failed', e)
-    const { toast } = await import('vue-sonner')
     toast.error(getErrorMessage(e, 'We could not delete your account. Please try again.'))
   } finally {
     isDeletingAccount.value = false
@@ -260,13 +257,11 @@ async function executeDelete() {
   const affectedIds = collectDescendantIds(deletedId)
   try {
     await deleteFolder(deletedId)
-    const { toast } = await import('vue-sonner')
     toast.success('Folder deleted')
     if (route.params.id && affectedIds.has(route.params.id as string)) {
       navigateTo('/')
     }
   } catch (e) {
-    const { toast } = await import('vue-sonner')
     toast.error(getErrorMessage(e, 'Failed to delete folder'))
   } finally {
     showDeleteDialog.value = false

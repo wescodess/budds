@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { toast } from 'vue-sonner'
 import { getErrorMessage } from '~~/shared/errors'
 import { AlertTriangle, Sparkles, X } from '@lucide/vue'
 import { api } from '#convex/api'
@@ -124,7 +125,6 @@ async function handleSubmit() {
 
     if (!result) throw new Error('Task creation returned no task')
 
-    const { toast } = await import('vue-sonner')
     toast.success('Generation started')
     emit('update:open', false)
     emit('generationStarted')

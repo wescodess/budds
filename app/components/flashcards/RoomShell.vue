@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { toast } from 'vue-sonner'
 import { getErrorMessage } from '~~/shared/errors'
 import { History, Pencil, Play, Sparkles, Loader2 } from '@lucide/vue'
 import { api } from '#convex/api'
@@ -64,11 +65,9 @@ const lastUpdated = computed<number | null>(() => {
 async function handleRename(next: string) {
   try {
     await renameMutation.mutate({ roomId: props.roomId, title: next })
-    const { toast } = await import('vue-sonner')
     toast.success('Room renamed')
   }
   catch (e) {
-    const { toast } = await import('vue-sonner')
     toast.error(getErrorMessage(e, 'Failed to rename room'))
   }
 }
@@ -76,13 +75,11 @@ async function handleRename(next: string) {
 async function handleConfirmDelete() {
   try {
     await deleteMutation.mutate({ roomId: props.roomId })
-    const { toast } = await import('vue-sonner')
     toast.success('Room deleted')
     confirmDeleteOpen.value = false
     emit('room-deleted', props.roomId)
   }
   catch (e) {
-    const { toast } = await import('vue-sonner')
     toast.error(getErrorMessage(e, 'Failed to delete room'))
   }
 }

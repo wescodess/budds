@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { toast } from 'vue-sonner'
 import { Trash2, Loader2 } from '@lucide/vue'
 import type { Id } from '~~/convex/_generated/dataModel'
 import { api } from '#convex/api'
@@ -24,11 +25,9 @@ async function handleDelete() {
   try {
     const result = await deleteMutation.mutate({ id: props.courseId })
     open.value = false
-    const { toast } = await import('vue-sonner')
     toast(result?.pending ? 'Course deletion started' : 'Course deleted')
     emit('deleted')
   } catch {
-    const { toast } = await import('vue-sonner')
     toast.error('Failed to delete course')
   } finally {
     deleting.value = false

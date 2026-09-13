@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { toast } from 'vue-sonner'
 import { useMediaQuery } from '@vueuse/core'
 import { Download, Share, Smartphone, X } from '@lucide/vue'
 
@@ -128,7 +129,6 @@ async function handlePrimaryAction() {
       showGuide.value = false
       persistDismiss(Number.MAX_SAFE_INTEGER)
 
-      const { toast } = await import('vue-sonner')
       toast.success('Budds install started.')
       return
     }
@@ -136,7 +136,6 @@ async function handlePrimaryAction() {
     dismissPrompt(SHORT_DISMISS_MS)
   } catch (error) {
     console.error('PWA install prompt failed', error)
-    const { toast } = await import('vue-sonner')
     toast.error('We could not start the install flow.')
   } finally {
     isInstalling.value = false

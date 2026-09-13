@@ -1,3 +1,4 @@
+import { toast } from 'vue-sonner'
 import { getErrorMessage } from '~~/shared/errors'
 import { useMediaQuery } from '@vueuse/core'
 import { api } from '#convex/api'
@@ -207,9 +208,7 @@ export function useChat(
               try {
                 const fallback = JSON.parse(data) as { requested: string; actual: string }
                 selectedModel.value = isValidModel(fallback.actual) ? fallback.actual : DEFAULT_MODEL
-                import('vue-sonner').then(({ toast }) => {
-                  toast.info(`Selected model unavailable, using ${getModelLabel(selectedModel.value)}`)
-                }).catch(() => {})
+                toast.info(`Selected model unavailable, using ${getModelLabel(selectedModel.value)}`)
               } catch (e) {
                 if (import.meta.dev) console.warn('[useChat] Failed to parse model-fallback SSE data:', data, e)
               }
@@ -276,7 +275,6 @@ export function useChat(
 
     if (data.modelFallback) {
       selectedModel.value = isValidModel(data.modelFallback.actual) ? data.modelFallback.actual : DEFAULT_MODEL
-      const { toast } = await import('vue-sonner')
       toast.info(`Selected model unavailable, using ${getModelLabel(selectedModel.value)}`)
     }
 

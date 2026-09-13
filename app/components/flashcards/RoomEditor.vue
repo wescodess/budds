@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { toast } from 'vue-sonner'
 import { getErrorMessage } from '~~/shared/errors'
 import { GripVertical, Plus, Trash2 } from '@lucide/vue'
 import { api } from '#convex/api'
@@ -108,7 +109,6 @@ async function onDrop(cardId: string, e: DragEvent) {
   }
   catch {
     localCards.value = prev
-    const { toast } = await import('vue-sonner')
     toast.error('Reorder failed — retry')
     await nextTick()
     isReorderPending.value = false
@@ -156,7 +156,6 @@ async function saveEdit(cardId: string) {
   try {
     await updateCardMutation.mutate({ cardId: cardId as Id<'flashcardRoomCards'>, term, definition })
     cancelEdit(cardId)
-    const { toast } = await import('vue-sonner')
     toast.success('Card saved')
   }
   catch (e) {
@@ -171,11 +170,9 @@ async function handleDelete(cardId: string) {
   deletingId.value = cardId
   try {
     await deleteCardMutation.mutate({ cardId: cardId as Id<'flashcardRoomCards'> })
-    const { toast } = await import('vue-sonner')
     toast.success('Card deleted')
   }
   catch (e) {
-    const { toast } = await import('vue-sonner')
     toast.error(getErrorMessage(e, 'Delete failed'))
   }
   finally {

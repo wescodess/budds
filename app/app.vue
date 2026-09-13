@@ -62,7 +62,7 @@ watch(
     <NuxtLayout>
       <NuxtPage :transition="pageTransition" />
     </NuxtLayout>
-  <InstallAppPrompt />
+  <LazyInstallAppPrompt />
   <Sonner rich-colors :position="toastPosition" />
   <ClientOnly>
     <audio ref="globalAudioEl" preload="metadata" class="hidden" />

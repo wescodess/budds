@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { toast } from 'vue-sonner'
 import { getErrorMessage } from '~~/shared/errors'
 import { Layers, MoreHorizontal, Plus, Trash2 } from '@lucide/vue'
 import { api } from '#convex/api'
@@ -71,11 +72,9 @@ async function handleDeleteConfirm(id: string) {
     confirmingDeleteId.value = null
     openMenuId.value = null
     if (activeRoomId.value === id) handleBack()
-    const { toast } = await import('vue-sonner')
     toast.success('Room deleted')
   }
   catch (e) {
-    const { toast } = await import('vue-sonner')
     toast.error(getErrorMessage(e, 'Failed to delete room'))
   }
   finally {
@@ -96,7 +95,6 @@ async function handleCreate() {
     }
   }
   catch (e) {
-    const { toast } = await import('vue-sonner')
     toast.error(getErrorMessage(e, 'Failed to create room'))
   }
   finally {

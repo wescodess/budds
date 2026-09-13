@@ -1,3 +1,4 @@
+import { toast } from 'vue-sonner'
 import { getErrorMessage } from '~~/shared/errors'
 import type { InjectionKey, ComputedRef, Ref } from 'vue'
 import { useMediaQuery } from '@vueuse/core'
@@ -220,7 +221,6 @@ export function provideFolderPageContext(): FolderPageContext {
     try {
       await uploadFiles(files, folderId.value)
     } catch (e) {
-      const { toast } = await import('vue-sonner')
       toast.error(getErrorMessage(e, 'Upload failed'))
     }
   }
@@ -230,7 +230,6 @@ export function provideFolderPageContext(): FolderPageContext {
     try {
       await importDocumentFromUrl(url, folderId.value)
     } catch (e) {
-      const { toast } = await import('vue-sonner')
       toast.error(getErrorMessage(e, 'Import failed'))
     }
   }

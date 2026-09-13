@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { toast } from 'vue-sonner'
 import { getErrorMessage } from '~~/shared/errors'
 import { PanelRight, Pencil, FolderPlus, ListTodo, Mic, ArrowLeftRight } from '@lucide/vue'
 import type { Id } from '~~/convex/_generated/dataModel'
@@ -106,7 +107,6 @@ async function onCreateVoid(payload: { type: VoidType; name?: string }) {
     newVoidOpen.value = false
     hideSidebarOnMobile()
   } catch (e) {
-    const { toast } = await import('vue-sonner')
     toast.error(unwrapConvexError(e) || 'Failed to create void')
   } finally {
     creatingVoid.value = false
@@ -158,12 +158,10 @@ async function confirmDeleteVoid() {
       await navigateTo(`/app/folders/${folderId.value}/chat`)
     }
     voidDeleteTarget.value = null
-    const { toast } = await import('vue-sonner')
     const kindLabels: Record<string, string> = { flashcards: 'Flash card set', 'audio-overview': 'Audio Overview', quiz: 'Quiz', chat: 'Chat', course: 'Course' }
     const kind = kindLabels[target.type] ?? 'Void'
     toast.success(`${kind} deleted`)
   } catch (e) {
-    const { toast } = await import('vue-sonner')
     toast.error(unwrapConvexError(e) || 'Failed to delete void')
   } finally {
     deletingVoid.value = false
@@ -193,7 +191,6 @@ async function confirmDelete() {
   if (ids.length === 0 || documentsDeletePending.value) return
   documentsDeletePending.value = true
   try {
-    const { toast } = await import('vue-sonner')
     if (ids.length === 1) {
       await deleteDocument(ids[0] as Id<'documents'>)
       toast.success('Document deleted')
@@ -203,7 +200,6 @@ async function confirmDelete() {
       if (failureMessages.length > 0) toast.error(failureMessages[0] || 'Failed to delete')
     }
   } catch (e) {
-    const { toast } = await import('vue-sonner')
     toast.error(getErrorMessage(e, 'Failed to delete document'))
   } finally {
     documentsDeletePending.value = false
@@ -214,7 +210,6 @@ async function confirmMove(destFolderId: Id<'folders'>) {
   if (moveTargetIds.value.length === 0 || movePending.value) return
   movePending.value = true
   try {
-    const { toast } = await import('vue-sonner')
     const destFolder = allFolders.value?.find((f) => f._id === destFolderId)
     const ids = [...moveTargetIds.value]
     if (ids.length > 1) {
@@ -226,7 +221,6 @@ async function confirmMove(destFolderId: Id<'folders'>) {
       toast.success(`Moved to ${destFolder?.name ?? 'folder'}`)
     }
   } catch (e) {
-    const { toast } = await import('vue-sonner')
     toast.error(getErrorMessage(e, 'Failed to move document'))
   } finally {
     movePending.value = false

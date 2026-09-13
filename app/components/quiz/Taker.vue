@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { toast } from 'vue-sonner'
 import { getErrorMessage } from '~~/shared/errors'
 import { ArrowLeft } from '@lucide/vue'
 import { api } from '#convex/api'
@@ -136,7 +137,6 @@ async function handleSubmit() {
     state.value = 'results'
   }
   catch (e) {
-    const { toast } = await import('vue-sonner')
     toast.error(getErrorMessage(e, 'Failed to submit quiz'))
     state.value = 'answering'
   }

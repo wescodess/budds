@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { toast } from 'vue-sonner'
 import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { Pause, Play, Maximize2, X, Rewind, FastForward, ChevronUp, ChevronDown } from '@lucide/vue'
 
@@ -180,7 +181,6 @@ async function handleExpand() {
   const folders = allFolders?.value
   if (Array.isArray(folders) && !folders.some((f: { _id: string }) => f._id === fid)) {
     dismiss()
-    const { toast } = await import('vue-sonner')
     toast.error('This folder no longer exists.')
     void navigateTo('/')
     return
