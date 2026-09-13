@@ -73,15 +73,19 @@ exact-once. Input is capped at eight selected folders and 64 explicit documents;
 the assembled manifest fails explicitly above 4,096 documents. Public list
 queries cap pages at 16 and omit internal traversal cursors. No new path calls
 the legacy `folders.resolveScope` query or an all-user retrieval fallback.
+Every continuation re-checks the global gate, cohort entitlement, and account
+deletion tombstone before writing. A revoked capture remains resumable but idle;
+an identical authorized replay restarts its continuation.
 
 Each captured folder has a deterministic SHA-256 revision over its actual ID,
 parent, name, and source-affecting update time. Each document retains its actual
 folder ID and is available only when its indexed state is successful, its object
 key is nonblank, and `sourceRevision` equals `sha256:<normalized contentHash>`.
 Every other in-scope document remains visible as an unavailable entry with a
-specific reason. Zero documents produce `coverage: empty`; only unavailable
-documents produce `coverage: gap`; mixed availability is `partial`; a fully
-usable set is `complete`.
+specific reason. No selected sources produce `coverage: empty`; a selected
+scope with no usable documents or only unavailable documents produces
+`coverage: gap`; mixed availability is `partial`; a fully usable set is
+`complete`.
 
 An explicit document captures only that document and its real folder identity;
 it never widens to siblings. Selected folders expand only through their own
@@ -90,14 +94,22 @@ same-owner folders outside the root are rejected. Once frozen, later moves,
 renames, or re-indexing cannot rewrite the manifest. A later command creates a
 new manifest from current state. Blueprint or Learning Void revision drift while
 the continuation is running fails the capture instead of attaching evidence to
-a changed aggregate.
+a changed aggregate. Folder revisions are refreshed only before traversal
+starts; a revision change after child or document pagination begins fails the
+capture so no page can be stamped with a stale folder revision.
 
 The three manifest tables participate in bounded child-before-parent account
 and folder-root deletion. Owner export is paginated and removes private source
 paths, filenames, raw selection IDs, idempotency fingerprints, and traversal
-cursors. Source identities and snapshots remain candidates only; fetching,
-rights evaluation, source acceptance, excerpts, and web lifecycle transitions
-belong to LA2-05.
+cursors. The downloadable ZIP includes all three manifest collections. Deleting
+an individual captured document or a captured descendant folder preserves the
+historical manifest while asynchronously clearing document, folder, filename,
+and object-key identifiers; affected entries become `source_deleted`, their
+snapshots become unavailable, and current availability counts are revised. A
+Learning Void root deletion still removes the complete manifest foundation.
+Source identities and snapshots remain candidates only; fetching, rights
+evaluation, source acceptance, excerpts, and web lifecycle transitions belong
+to LA2-05.
 
 ## Runtime ownership
 

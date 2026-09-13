@@ -37,7 +37,7 @@ function denied(): LearnV2PublicStatus {
   }
 }
 
-async function hasLearnV2Access(
+export async function hasLearnV2Access(
   ctx: QueryCtx | MutationCtx,
   tokenIdentifier: string,
 ): Promise<boolean> {

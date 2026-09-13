@@ -85,7 +85,38 @@ export const purgeSourceEvidence = internalMutation({
   args: { userId: v.string(), sourceIdentityId: v.id('learnSourceIdentities') },
   handler: async (ctx, args) => {
     const identity = await ctx.db.get(args.sourceIdentityId)
-    if (!identity || identity.userId !== args.userId) throw new Error('Source cleanup ownership mismatch')
+    if (!identity) return { pending: false }
+    if (identity.userId !== args.userId) throw new Error('Source cleanup ownership mismatch')
+    const entries = await ctx.db.query('learnFolderSourceManifestEntries')
+      .withIndex('by_userId_and_sourceIdentityId_and_evidencePurgedAt', q => q
+        .eq('userId', args.userId).eq('sourceIdentityId', args.sourceIdentityId).eq('evidencePurgedAt', undefined))
+      .take(BATCH_SIZE)
+    for (const entry of entries) {
+      if (entry.availability === 'available') {
+        const manifest = await ctx.db.get(entry.manifestId)
+        if (manifest) {
+          const availableCount = Math.max(0, manifest.availableCount - 1)
+          const unavailableCount = manifest.unavailableCount + 1
+          await ctx.db.patch(manifest._id, {
+            availableCount,
+            unavailableCount,
+            coverage: availableCount === 0 ? 'gap' : 'partial',
+            recordRevision: manifest.recordRevision + 1,
+          })
+        }
+      }
+      await ctx.db.patch(entry._id, {
+        documentId: undefined,
+        folderId: undefined,
+        availability: 'unavailable',
+        unavailableReason: 'source_deleted',
+        evidencePurgedAt: Date.now(),
+      })
+    }
+    if (entries.length > 0) {
+      await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeSourceEvidence, args)
+      return { pending: true }
+    }
     const snapshots = await ctx.db.query('learnSourceSnapshots')
       .withIndex('by_userId_and_sourceIdentityId_and_evidencePurgedAt', q => q
         .eq('userId', args.userId).eq('sourceIdentityId', args.sourceIdentityId).eq('evidencePurgedAt', undefined))
@@ -105,10 +136,65 @@ export const purgeSourceEvidence = internalMutation({
         await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeSourceEvidence, args)
         return { pending: true }
       }
-      await ctx.db.patch(snapshot._id, { status: 'unavailable', evidencePurgedAt: Date.now() })
+      await ctx.db.patch(snapshot._id, {
+        status: 'unavailable',
+        objectKey: undefined,
+        folderId: undefined,
+        filename: undefined,
+        evidencePurgedAt: Date.now(),
+      })
       await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeSourceEvidence, args)
       return { pending: true }
     }
     return { pending: false }
+  },
+})
+
+export const purgeFolderDocumentSources = internalMutation({
+  args: { userId: v.string(), documentId: v.id('documents') },
+  handler: async (ctx, args) => {
+    const identities = await ctx.db.query('learnSourceIdentities')
+      .withIndex('by_userId_and_folderDocumentId', q => q
+        .eq('userId', args.userId).eq('folderDocumentId', args.documentId))
+      .take(BATCH_SIZE)
+    for (const identity of identities) {
+      await ctx.db.patch(identity._id, {
+        externalKey: `deleted:${identity._id}`,
+        folderDocumentId: undefined,
+        title: undefined,
+      })
+      await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeSourceEvidence, {
+        userId: args.userId,
+        sourceIdentityId: identity._id,
+      })
+    }
+    if (identities.length === BATCH_SIZE) {
+      await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeFolderDocumentSources, args)
+      return { pending: true }
+    }
+    return { pending: identities.length > 0 }
+  },
+})
+
+export const purgeFolderManifestFolder = internalMutation({
+  args: { userId: v.string(), folderId: v.id('folders') },
+  handler: async (ctx, args) => {
+    const folders = await ctx.db.query('learnFolderSourceManifestFolders')
+      .withIndex('by_userId_and_folderId_and_evidencePurgedAt', q => q
+        .eq('userId', args.userId).eq('folderId', args.folderId).eq('evidencePurgedAt', undefined))
+      .take(BATCH_SIZE)
+    for (const folder of folders) {
+      await ctx.db.patch(folder._id, {
+        folderId: undefined,
+        parentFolderId: undefined,
+        name: undefined,
+        evidencePurgedAt: Date.now(),
+      })
+    }
+    if (folders.length === BATCH_SIZE) {
+      await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeFolderManifestFolder, args)
+      return { pending: true }
+    }
+    return { pending: folders.length > 0 }
   },
 })

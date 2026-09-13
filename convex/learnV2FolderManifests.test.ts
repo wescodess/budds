@@ -14,6 +14,22 @@ const other = {
   name: "Manifest Other",
 };
 const hash = (char: string) => char.repeat(64);
+const expectedFolderRevision = async (folder: any) =>
+  `sha256:${[...new Uint8Array(
+    await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(
+        JSON.stringify({
+          id: String(folder._id),
+          parentId: folder.parentId ? String(folder.parentId) : null,
+          name: folder.name,
+          updatedAt: folder.updatedAt ?? folder._creationTime,
+        }),
+      ),
+    ),
+  )]
+    .map((value) => value.toString(16).padStart(2, "0"))
+    .join("")}`;
 
 async function ready() {
   process.env.LEARN_V2_ENABLED = "true";
@@ -204,6 +220,16 @@ describe("Learn V2 folder source manifests", () => {
       contentHash: hash("a"),
       sourceRevision: `sha256:${hash("a")}`,
     });
+    const exportedIdentity = (
+      await asOwner.query(api.dataExport.getUserDataPage, {
+        collection: "learnSourceIdentities",
+        paginationOpts: { cursor: null, numItems: 8 },
+      })
+    ).page.find((row: any) => row._id === availableEntry.sourceIdentityId);
+    expect(exportedIdentity).toBeDefined();
+    expect(exportedIdentity).not.toHaveProperty("externalKey");
+    expect(exportedIdentity).not.toHaveProperty("folderDocumentId");
+    expect(exportedIdentity).not.toHaveProperty("title");
   });
 
   test("rejects outside-root and other-owner selection, and replays only an identical request", async () => {
@@ -725,6 +751,31 @@ describe("Learn V2 folder source manifests", () => {
     expect(firstPage.isDone).toBe(false);
   });
 
+  test("fails explicitly before a continuation can exceed 4,096 entries", async () => {
+    const { t, asOwner, root, voidRow, blueprint } = await ready();
+    const selected = await document(t, root, "over-limit.pdf");
+    const manifest = await asOwner.mutation(
+      api.learnV2FolderManifests.freezeManifest,
+      {
+        learningVoidId: voidRow._id,
+        blueprintRevisionId: blueprint._id,
+        expectedBlueprintRecordRevision: 1,
+        expectedVoidRevision: 2,
+        folderIds: [],
+        documentIds: [selected],
+        idempotencyKey: "terminal-entry-limit",
+      },
+    );
+    await t.run((ctx) => ctx.db.patch(manifest!._id, { entryCount: 4_096 }));
+    await t.mutation(internal.learnV2FolderManifests.continueCapture, {
+      manifestId: manifest!._id,
+    });
+    expect(await t.run((ctx) => ctx.db.get(manifest!._id))).toMatchObject({
+      status: "failed",
+      failureReason: expect.stringMatching(/terminal entry limit/),
+    });
+  });
+
   test("denies manifest commands when the server-side V2 entitlement is removed", async () => {
     const { t, asOwner, root, voidRow, blueprint } = await ready();
     await t.mutation(internal.learnV2Access.setCohortEntitlement, {
@@ -742,6 +793,322 @@ describe("Learn V2 folder source manifests", () => {
         idempotencyKey: "gate-denied",
       }),
     ).rejects.toThrow(/access denied/);
+  });
+
+  test("pauses an admitted capture when access is revoked and resumes only through an authorized replay", async () => {
+    const { t, asOwner, root, voidRow, blueprint } = await ready();
+    const selected = await document(t, root, "paused.pdf");
+    const args = {
+      learningVoidId: voidRow._id,
+      blueprintRevisionId: blueprint._id,
+      expectedBlueprintRecordRevision: 1,
+      expectedVoidRevision: 2,
+      folderIds: [],
+      documentIds: [selected],
+      idempotencyKey: "paused-capture",
+    };
+    const manifest = await asOwner.mutation(
+      api.learnV2FolderManifests.freezeManifest,
+      args,
+    );
+    await t.mutation(internal.learnV2Access.setCohortEntitlement, {
+      tokenIdentifier: owner.tokenIdentifier,
+      enabled: false,
+    });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(await t.run((ctx) => ctx.db.get(manifest!._id))).toMatchObject({
+      status: "capturing",
+      entryCount: 0,
+    });
+
+    await t.mutation(internal.learnV2Access.setCohortEntitlement, {
+      tokenIdentifier: owner.tokenIdentifier,
+      enabled: true,
+    });
+    expect(
+      await asOwner.mutation(
+        api.learnV2FolderManifests.freezeManifest,
+        args,
+      ),
+    ).toMatchObject({ _id: manifest!._id, status: "capturing" });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(await t.run((ctx) => ctx.db.get(manifest!._id))).toMatchObject({
+      status: "frozen",
+      entryCount: 1,
+    });
+  });
+
+  test("refreshes a folder revision before traversal and fails on drift after traversal starts", async () => {
+    const { t, asOwner, root, voidRow, blueprint } = await ready();
+    const args = {
+      learningVoidId: voidRow._id,
+      blueprintRevisionId: blueprint._id,
+      expectedBlueprintRecordRevision: 1,
+      expectedVoidRevision: 2,
+      folderIds: [root],
+      documentIds: [],
+    };
+    const refreshed = await asOwner.mutation(
+      api.learnV2FolderManifests.freezeManifest,
+      { ...args, idempotencyKey: "refresh-folder" },
+    );
+    const added = await document(t, root, "added-after-admission.pdf");
+    await t.run(async (ctx) => {
+      const folder = await ctx.db.get(root);
+      await ctx.db.patch(root, { updatedAt: (folder!.updatedAt ?? 0) + 1 });
+    });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    const liveFolder = await t.run((ctx) => ctx.db.get(root));
+    const refreshedEntries = await asOwner.query(
+      api.learnV2FolderManifests.listManifestEntries,
+      {
+        manifestId: refreshed!._id,
+        paginationOpts: { cursor: null, numItems: 16 },
+      },
+    );
+    expect(refreshedEntries.page).toMatchObject([
+      {
+        documentId: added,
+        folderRevision: await expectedFolderRevision(liveFolder),
+      },
+    ]);
+
+    const drifted = await asOwner.mutation(
+      api.learnV2FolderManifests.freezeManifest,
+      { ...args, idempotencyKey: "drift-folder" },
+    );
+    await t.mutation(internal.learnV2FolderManifests.continueCapture, {
+      manifestId: drifted!._id,
+    });
+    await t.run(async (ctx) => {
+      const folder = await ctx.db.get(root);
+      await ctx.db.patch(root, { updatedAt: (folder!.updatedAt ?? 0) + 1 });
+    });
+    await t.mutation(internal.learnV2FolderManifests.continueCapture, {
+      manifestId: drifted!._id,
+    });
+    expect(await t.run((ctx) => ctx.db.get(drifted!._id))).toMatchObject({
+      status: "failed",
+      failureReason: expect.stringMatching(/changed during paged source capture/),
+    });
+  });
+
+  test("fails a capture when a selected descendant is deleted before traversal", async () => {
+    const { t, asOwner, root, voidRow, blueprint } = await ready();
+    const child = await asOwner.mutation(api.folders.createSubfolder, {
+      parentId: root,
+      name: "Removed during capture",
+    });
+    const manifest = await asOwner.mutation(
+      api.learnV2FolderManifests.freezeManifest,
+      {
+        learningVoidId: voidRow._id,
+        blueprintRevisionId: blueprint._id,
+        expectedBlueprintRecordRevision: 1,
+        expectedVoidRevision: 2,
+        folderIds: [child],
+        documentIds: [],
+        idempotencyKey: "deleted-during-capture",
+      },
+    );
+    await asOwner.mutation(api.folders.deleteFolder, { id: child });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(await t.run((ctx) => ctx.db.get(manifest!._id))).toMatchObject({
+      status: "failed",
+      failureReason: expect.stringMatching(
+        /deleted during source capture|changed or left the Learning Void root subtree/,
+      ),
+    });
+  });
+
+  test("tombstones a frozen source when its document is deleted but preserves the manifest", async () => {
+    const { t, asOwner, root, voidRow, blueprint } = await ready();
+    const selected = await document(t, root, "delete-document.pdf");
+    const manifest = await asOwner.mutation(
+      api.learnV2FolderManifests.freezeManifest,
+      {
+        learningVoidId: voidRow._id,
+        blueprintRevisionId: blueprint._id,
+        expectedBlueprintRecordRevision: 1,
+        expectedVoidRevision: 2,
+        folderIds: [],
+        documentIds: [selected],
+        idempotencyKey: "delete-document",
+      },
+    );
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    const before = await t.run((ctx) =>
+      ctx.db
+        .query("learnFolderSourceManifestEntries")
+        .withIndex("by_userId_and_manifestId_and_order", (q) =>
+          q.eq("userId", owner.tokenIdentifier).eq("manifestId", manifest!._id),
+        )
+        .unique(),
+    );
+    await t.run((ctx) =>
+      ctx.db.patch(selected, { status: "failed", r2Key: undefined }),
+    );
+    await asOwner.mutation(api.documents.deleteDocument, { id: selected });
+    const immediate = await asOwner.query(
+      api.learnV2FolderManifests.listManifestEntries,
+      {
+        manifestId: manifest!._id,
+        paginationOpts: { cursor: null, numItems: 16 },
+      },
+    );
+    expect(immediate.page[0]).toMatchObject({
+      availability: "unavailable",
+      unavailableReason: "source_deleted",
+    });
+    expect(immediate.page[0]!.documentId).toBeUndefined();
+    expect(immediate.page[0]!.folderId).toBeUndefined();
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    const entries = await asOwner.query(
+      api.learnV2FolderManifests.listManifestEntries,
+      {
+        manifestId: manifest!._id,
+        paginationOpts: { cursor: null, numItems: 16 },
+      },
+    );
+    expect(entries.page[0]).toMatchObject({
+      availability: "unavailable",
+      unavailableReason: "source_deleted",
+    });
+    expect(entries.page[0]!.documentId).toBeUndefined();
+    expect(entries.page[0]!.folderId).toBeUndefined();
+    expect(
+      await asOwner.query(api.learnV2FolderManifests.getManifest, {
+        manifestId: manifest!._id,
+      }),
+    ).toMatchObject({ availableCount: 0, unavailableCount: 1, coverage: "gap" });
+    const persisted = await t.run(async (ctx) => ({
+      identity: await ctx.db.get(before!.sourceIdentityId),
+      snapshot: await ctx.db.get(before!.sourceSnapshotId),
+    }));
+    expect(persisted.identity).toMatchObject({
+      externalKey: expect.stringMatching(/^deleted:/),
+    });
+    expect(persisted.identity!.folderDocumentId).toBeUndefined();
+    expect(persisted.identity!.title).toBeUndefined();
+    expect(persisted.snapshot).toMatchObject({ status: "unavailable" });
+    expect(persisted.snapshot!.objectKey).toBeUndefined();
+    expect(persisted.snapshot!.folderId).toBeUndefined();
+    expect(persisted.snapshot!.filename).toBeUndefined();
+  });
+
+  test("tombstones captured descendant folder and source identifiers when that subtree is deleted", async () => {
+    const { t, asOwner, root, voidRow, blueprint } = await ready();
+    const child = await asOwner.mutation(api.folders.createSubfolder, {
+      parentId: root,
+      name: "Deleted child",
+    });
+    const selected = await document(t, child, "delete-child.pdf");
+    const manifest = await asOwner.mutation(
+      api.learnV2FolderManifests.freezeManifest,
+      {
+        learningVoidId: voidRow._id,
+        blueprintRevisionId: blueprint._id,
+        expectedBlueprintRecordRevision: 1,
+        expectedVoidRevision: 2,
+        folderIds: [child],
+        documentIds: [],
+        idempotencyKey: "delete-child",
+      },
+    );
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    await t.run((ctx) =>
+      ctx.db.patch(selected, { status: "failed", r2Key: undefined }),
+    );
+    await asOwner.mutation(api.folders.deleteFolder, { id: child });
+    const immediateFolders = await asOwner.query(
+      api.learnV2FolderManifests.listManifestFolders,
+      {
+        manifestId: manifest!._id,
+        paginationOpts: { cursor: null, numItems: 16 },
+      },
+    );
+    expect(immediateFolders.page[0]!.folderId).toBeUndefined();
+    expect(immediateFolders.page[0]!.name).toBeUndefined();
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    expect(
+      await asOwner.query(api.learnV2FolderManifests.getManifest, {
+        manifestId: manifest!._id,
+      }),
+    ).toMatchObject({ status: "frozen", coverage: "gap" });
+    const folders = await asOwner.query(
+      api.learnV2FolderManifests.listManifestFolders,
+      {
+        manifestId: manifest!._id,
+        paginationOpts: { cursor: null, numItems: 16 },
+      },
+    );
+    expect(folders.page).toHaveLength(1);
+    expect(folders.page[0]!.folderId).toBeUndefined();
+    expect(folders.page[0]!.parentFolderId).toBeUndefined();
+    expect(folders.page[0]!.name).toBeUndefined();
+    const entries = await asOwner.query(
+      api.learnV2FolderManifests.listManifestEntries,
+      {
+        manifestId: manifest!._id,
+        paginationOpts: { cursor: null, numItems: 16 },
+      },
+    );
+    expect(entries.page).toMatchObject([
+      { availability: "unavailable", unavailableReason: "source_deleted" },
+    ]);
+    expect(entries.page[0]!.documentId).toBeUndefined();
+    expect(entries.page[0]!.folderId).toBeUndefined();
+  });
+
+  test("drains source tombstones across retention batches", async () => {
+    const { t, asOwner, root, voidRow, blueprint } = await ready();
+    const selected = await document(t, root, "batch-delete.pdf");
+    const manifestIds = [];
+    for (let index = 0; index < 9; index++) {
+      const manifest = await asOwner.mutation(
+        api.learnV2FolderManifests.freezeManifest,
+        {
+          learningVoidId: voidRow._id,
+          blueprintRevisionId: blueprint._id,
+          expectedBlueprintRecordRevision: 1,
+          expectedVoidRevision: 2,
+          folderIds: [],
+          documentIds: [selected],
+          idempotencyKey: `batch-delete-${index}`,
+        },
+      );
+      manifestIds.push(manifest!._id);
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+    }
+    await t.run((ctx) =>
+      ctx.db.patch(selected, { status: "failed", r2Key: undefined }),
+    );
+    await asOwner.mutation(api.documents.deleteDocument, { id: selected });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    const rows = await t.run((ctx) =>
+      ctx.db
+        .query("learnFolderSourceManifestEntries")
+        .withIndex("by_userId", (q) =>
+          q.eq("userId", owner.tokenIdentifier),
+        )
+        .collect(),
+    );
+    expect(rows).toHaveLength(9);
+    expect(rows.every((row) => row.availability === "unavailable")).toBe(true);
+    expect(rows.every((row) => row.unavailableReason === "source_deleted")).toBe(
+      true,
+    );
+    expect(rows.every((row) => row.documentId === undefined)).toBe(true);
+    for (const manifestId of manifestIds) {
+      expect(await t.run((ctx) => ctx.db.get(manifestId))).toMatchObject({
+        availableCount: 0,
+        unavailableCount: 1,
+        coverage: "gap",
+      });
+    }
   });
 
   test("makes a deleted root unreadable and removes its manifest foundation in bounded cleanup", async () => {
