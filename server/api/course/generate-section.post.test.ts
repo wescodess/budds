@@ -107,13 +107,13 @@ function textCompletionResponse(content: string) {
 
 describe('POST /api/course/generate-section', () => {
   beforeEach(() => {
-    vi.mocked(globalThis.readBody as any).mockReset()
-    vi.mocked(globalThis.searchDocuments as any).mockReset()
-    vi.mocked(globalThis.generateCompletion as any).mockReset()
-    vi.mocked(globalThis.buildQuizPrompt as any).mockReturnValue([{ role: 'system', content: '' }])
-    vi.mocked(globalThis.parseQuizResponse as any).mockReturnValue({ title: 'Quiz', questions: [] })
-    vi.mocked(globalThis.buildFlashcardPrompt as any).mockReturnValue([{ role: 'system', content: '' }])
-    vi.mocked(globalThis.parseFlashcardResponse as any).mockReturnValue({ title: 'Cards', cards: [] })
+    vi.mocked(globalThis.readBody).mockReset()
+    vi.mocked(globalThis.searchDocuments).mockReset()
+    vi.mocked(globalThis.generateCompletion).mockReset()
+    vi.mocked(globalThis.buildQuizPrompt).mockReturnValue([{ role: 'system', content: '' }])
+    vi.mocked(globalThis.parseQuizResponse).mockReturnValue({ title: 'Quiz', questions: [] })
+    vi.mocked(globalThis.buildFlashcardPrompt).mockReturnValue([{ role: 'system', content: '' }])
+    vi.mocked(globalThis.parseFlashcardResponse).mockReturnValue({ title: 'Cards', cards: [] })
     mockMutation.mockReset()
     mockQuery.mockReset()
     mockSynthesizeTurn.mockClear()
@@ -123,19 +123,19 @@ describe('POST /api/course/generate-section', () => {
   })
 
   test('rejects missing courseId', async () => {
-    vi.mocked(globalThis.readBody as any).mockResolvedValue({})
+    vi.mocked(globalThis.readBody).mockResolvedValue({})
     const err = await (handler(makeEvent()) as Promise<any>).catch((e: any) => e)
     expect(err.statusCode).toBe(400)
   })
 
   test('rejects missing sectionId', async () => {
-    vi.mocked(globalThis.readBody as any).mockResolvedValue({ courseId: 'course_123' })
+    vi.mocked(globalThis.readBody).mockResolvedValue({ courseId: 'course_123' })
     const err = await (handler(makeEvent()) as Promise<any>).catch((e: any) => e)
     expect(err.statusCode).toBe(400)
   })
 
   test('generates text content for section', async () => {
-    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+    vi.mocked(globalThis.readBody).mockResolvedValue({
       courseId: 'course_123',
       sectionId: 'section_123',
     })
@@ -146,11 +146,11 @@ describe('POST /api/course/generate-section', () => {
       return []
     })
 
-    vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({
+    vi.mocked(globalThis.searchDocuments).mockResolvedValue({
       data: [{ id: '1', content: 'Test content', score: 0.9, attributes: { filename: 'test.pdf' } }],
     })
 
-    vi.mocked(globalThis.generateCompletion as any).mockResolvedValue(
+    vi.mocked(globalThis.generateCompletion).mockResolvedValue(
       textCompletionResponse('Generated text explanation about factual content.'),
     )
 
@@ -162,7 +162,7 @@ describe('POST /api/course/generate-section', () => {
   })
 
   test('factual knowledge type skips audio', async () => {
-    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+    vi.mocked(globalThis.readBody).mockResolvedValue({
       courseId: 'course_123',
       sectionId: 'section_123',
     })
@@ -173,11 +173,11 @@ describe('POST /api/course/generate-section', () => {
       return []
     })
 
-    vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({
+    vi.mocked(globalThis.searchDocuments).mockResolvedValue({
       data: [{ id: '1', content: 'Facts', score: 0.9, attributes: { filename: 'test.pdf' } }],
     })
 
-    vi.mocked(globalThis.generateCompletion as any).mockResolvedValue(
+    vi.mocked(globalThis.generateCompletion).mockResolvedValue(
       textCompletionResponse('Factual content'),
     )
 
@@ -193,7 +193,7 @@ describe('POST /api/course/generate-section', () => {
   })
 
   test('handles all engine failures gracefully', async () => {
-    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+    vi.mocked(globalThis.readBody).mockResolvedValue({
       courseId: 'course_123',
       sectionId: 'section_123',
     })
@@ -204,8 +204,8 @@ describe('POST /api/course/generate-section', () => {
       return []
     })
 
-    vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({ data: [] })
-    vi.mocked(globalThis.generateCompletion as any).mockRejectedValue(new Error('LLM down'))
+    vi.mocked(globalThis.searchDocuments).mockResolvedValue({ data: [] })
+    vi.mocked(globalThis.generateCompletion).mockRejectedValue(new Error('LLM down'))
 
     mockMutation.mockResolvedValue({ status: 'failed' })
 
@@ -214,7 +214,7 @@ describe('POST /api/course/generate-section', () => {
   })
 
   test('[P0] conceptual course primer fails closed with v2 guidance and no legacy audio side effect', async () => {
-    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+    vi.mocked(globalThis.readBody).mockResolvedValue({
       courseId: 'course_123',
       sectionId: 'section_123',
     })
@@ -222,14 +222,14 @@ describe('POST /api/course/generate-section', () => {
       .mockResolvedValueOnce(mockCourse())
       .mockResolvedValueOnce([mockSection({ knowledgeType: 'conceptual' })])
       .mockResolvedValueOnce([{ folderId: 'folder_123', documentId: 'doc_1' }])
-    vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({
+    vi.mocked(globalThis.searchDocuments).mockResolvedValue({
       data: [
         { id: '1', content: 'A', score: 0.9, attributes: { documentId: 'doc_1' } },
         { id: '2', content: 'B', score: 0.8, attributes: { documentId: 'doc_1' } },
         { id: '3', content: 'C', score: 0.7, attributes: { documentId: 'doc_1' } },
       ],
     })
-    vi.mocked(globalThis.generateCompletion as any).mockResolvedValue(
+    vi.mocked(globalThis.generateCompletion).mockResolvedValue(
       textCompletionResponse('Generated content'),
     )
     mockMutation.mockResolvedValue({ status: 'ready', blockCount: 1 })
@@ -254,7 +254,7 @@ describe('POST /api/course/generate-section', () => {
   })
 
   test('[P1] conceptual primer does not reserve or strand a legacy audio task', async () => {
-    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+    vi.mocked(globalThis.readBody).mockResolvedValue({
       courseId: 'course_123',
       sectionId: 'section_123',
     })
@@ -263,14 +263,14 @@ describe('POST /api/course/generate-section', () => {
       .mockResolvedValueOnce([mockSection({ knowledgeType: 'conceptual' })])
       .mockResolvedValueOnce([{ folderId: 'folder_123', documentId: 'doc_1' }])
       .mockResolvedValue({ _id: 'audio_task_1', status: 'running' })
-    vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({
+    vi.mocked(globalThis.searchDocuments).mockResolvedValue({
       data: [
         { id: '1', content: 'A', score: 0.9, attributes: { documentId: 'doc_1' } },
         { id: '2', content: 'B', score: 0.8, attributes: { documentId: 'doc_1' } },
         { id: '3', content: 'C', score: 0.7, attributes: { documentId: 'doc_1' } },
       ],
     })
-    vi.mocked(globalThis.generateCompletion as any).mockResolvedValue(
+    vi.mocked(globalThis.generateCompletion).mockResolvedValue(
       textCompletionResponse('Not a valid audio script'),
     )
     mockMutation.mockImplementation((_ref: any, args: any) => {
@@ -292,7 +292,7 @@ describe('POST /api/course/generate-section', () => {
 
 describe('audio primer in section generation', () => {
   test('conceptual knowledge type exposes the durable Audio Overview migration notice', async () => {
-    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+    vi.mocked(globalThis.readBody).mockResolvedValue({
       courseId: 'course_123',
       sectionId: 'section_123',
     })
@@ -305,13 +305,13 @@ describe('audio primer in section generation', () => {
       return []
     })
 
-    vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({
+    vi.mocked(globalThis.searchDocuments).mockResolvedValue({
       data: [
         { id: '1', content: 'Conceptual content about reactions', score: 0.9, attributes: { filename: 'lecture-7.pdf', documentId: 'doc_1' } },
       ],
     })
 
-    vi.mocked(globalThis.generateCompletion as any).mockResolvedValue(
+    vi.mocked(globalThis.generateCompletion).mockResolvedValue(
       textCompletionResponse('Generated text for conceptual section.'),
     )
 
@@ -328,7 +328,7 @@ describe('audio primer in section generation', () => {
   })
 
   test('procedural knowledge type does not include audio', async () => {
-    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+    vi.mocked(globalThis.readBody).mockResolvedValue({
       courseId: 'course_123',
       sectionId: 'section_123',
     })
@@ -339,11 +339,11 @@ describe('audio primer in section generation', () => {
       return []
     })
 
-    vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({
+    vi.mocked(globalThis.searchDocuments).mockResolvedValue({
       data: [{ id: '1', content: 'Steps', score: 0.9, attributes: { filename: 'test.pdf' } }],
     })
 
-    vi.mocked(globalThis.generateCompletion as any).mockResolvedValue(
+    vi.mocked(globalThis.generateCompletion).mockResolvedValue(
       textCompletionResponse('Procedural steps'),
     )
 

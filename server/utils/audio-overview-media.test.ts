@@ -21,11 +21,11 @@ const media = {
 describe('private Audio Overview media proxy', () => {
   beforeEach(() => {
     mockFetch.mockReset()
-    vi.mocked(globalThis.getRequestHeader as any).mockReset()
+    vi.mocked(globalThis.getRequestHeader).mockReset()
   })
 
   test('proxies one authorized byte range with only safe media headers', async () => {
-    vi.mocked(globalThis.getRequestHeader as any).mockReturnValue('bytes=0-15')
+    vi.mocked(globalThis.getRequestHeader).mockReturnValue('bytes=0-15')
     mockFetch.mockResolvedValue(new Response(new Uint8Array(16), {
       status: 206,
       headers: {
@@ -45,7 +45,7 @@ describe('private Audio Overview media proxy', () => {
   })
 
   test('rejects multiple ranges before touching R2', async () => {
-    vi.mocked(globalThis.getRequestHeader as any).mockReturnValue('bytes=0-1,4-5')
+    vi.mocked(globalThis.getRequestHeader).mockReturnValue('bytes=0-1,4-5')
 
     await expect(privateAudioResponse({}, media)).rejects.toMatchObject({ statusCode: 416 })
     expect(mockFetch).not.toHaveBeenCalled()

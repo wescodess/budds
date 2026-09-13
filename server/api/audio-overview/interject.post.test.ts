@@ -88,11 +88,11 @@ describe('POST /api/audio-overview/interject authority', () => {
     mockResolveTtsEngine.mockResolvedValue('aura-1')
     mockSynthesizeTurn.mockClear()
     mockUpload.mockReset()
-    vi.mocked(globalThis.readBody as any).mockReset()
-    vi.mocked(globalThis.getRequestHeader as any).mockReset().mockReturnValue(INTERJECTION_KEY)
-    vi.mocked(globalThis.searchDocuments as any).mockReset()
-    vi.mocked(globalThis.fetchFolderDocs as any).mockReset()
-    vi.mocked(globalThis.generateCompletion as any).mockReset()
+    vi.mocked(globalThis.readBody).mockReset()
+    vi.mocked(globalThis.getRequestHeader).mockReset().mockReturnValue(INTERJECTION_KEY)
+    vi.mocked(globalThis.searchDocuments).mockReset()
+    vi.mocked(globalThis.fetchFolderDocs).mockReset()
+    vi.mocked(globalThis.generateCompletion).mockReset()
     mockBuildClaimEntailmentPrompt.mockReset().mockReturnValue([])
     mockParseClaimEntailmentResponse.mockReset().mockReturnValue({
       version: 'claim-entailment.v1',
@@ -116,7 +116,7 @@ describe('POST /api/audio-overview/interject authority', () => {
   })
 
   test('[P0] legacy Audio Overview Ask fails closed without creating Dia or Aura work', async () => {
-    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+    vi.mocked(globalThis.readBody).mockResolvedValue({
       overviewId: 'overview_1',
       insertedAfterTurnIndex: 0,
       question: 'What is ATP?',
@@ -135,7 +135,7 @@ describe('POST /api/audio-overview/interject authority', () => {
   })
 
   test('[P0] v2 uses only its frozen Source Manifest and the authenticated managed Worker renderer', async () => {
-    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+    vi.mocked(globalThis.readBody).mockResolvedValue({
       overviewId: 'overview_v2',
       insertedAfterTurnIndex: 1,
       question: 'Why does it orbit?',
@@ -186,12 +186,12 @@ describe('POST /api/audio-overview/interject authority', () => {
       .mockResolvedValueOnce({ duplicate: false, status: 'rendering' })
       .mockResolvedValueOnce({ claimed: true, status: 'rendering', claimedAt: 1 })
       .mockResolvedValueOnce({ duplicate: false, artifactId: 'artifact_v2' })
-    vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({ data: [
+    vi.mocked(globalThis.searchDocuments).mockResolvedValue({ data: [
       { id: 'chunk_1', content: 'Gravity bends a moving path.', score: 1, attributes: { documentId: 'doc_1', contentHash: 'a'.repeat(64), sourceRevision: `sha256:${'a'.repeat(64)}` } },
       { id: 'chunk_2', content: 'An orbit is continuous free fall.', score: 1, attributes: { documentId: 'doc_2', contentHash: 'b'.repeat(64), sourceRevision: `sha256:${'b'.repeat(64)}` } },
       { id: 'escaped', content: 'Must not be used.', score: 1, attributes: { documentId: 'doc_other' } },
     ] })
-    vi.mocked(globalThis.generateCompletion as any).mockResolvedValue({ choices: [{ message: { content: JSON.stringify({
+    vi.mocked(globalThis.generateCompletion).mockResolvedValue({ choices: [{ message: { content: JSON.stringify({
       utterances: [
         {
           speaker: 'host_a', text: 'Gravity bends the path.', claimId: 'gravity-claim', claimText: 'Gravity bends a moving path.',
@@ -212,7 +212,7 @@ describe('POST /api/audio-overview/interject authority', () => {
       userId: 'https://auth.example.com|interject_route',
       filterDocIds: ['doc_1', 'doc_2'],
     }))
-    expect(vi.mocked(globalThis.searchDocuments as any).mock.calls[0]![0]).not.toHaveProperty('folderId')
+    expect(vi.mocked(globalThis.searchDocuments).mock.calls[0]![0]).not.toHaveProperty('folderId')
     expect(globalThis.fetchFolderDocs).not.toHaveBeenCalled()
     expect(globalThis.generateCompletion).toHaveBeenCalledTimes(2)
     expect(globalThis.generateCompletion).toHaveBeenNthCalledWith(2, expect.objectContaining({
@@ -277,7 +277,7 @@ describe('POST /api/audio-overview/interject authority', () => {
       },
     })],
   ])('[P0] does not publish a %s private-R2 artifact', async (_case, headResponse) => {
-    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+    vi.mocked(globalThis.readBody).mockResolvedValue({
       overviewId: 'overview_v2',
       insertedAfterTurnIndex: 1,
       question: 'Why does it orbit?',
@@ -318,7 +318,7 @@ describe('POST /api/audio-overview/interject authority', () => {
       .mockResolvedValueOnce({ status: 'rendering' })
       .mockResolvedValueOnce({ claimed: true, status: 'rendering', claimedAt: 1 })
       .mockResolvedValueOnce({ status: 'failed' })
-    vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({ data: [{
+    vi.mocked(globalThis.searchDocuments).mockResolvedValue({ data: [{
       id: 'chunk_1',
       content: 'Gravity bends a moving path.',
       score: 1,
@@ -328,7 +328,7 @@ describe('POST /api/audio-overview/interject authority', () => {
         sourceRevision: `sha256:${'a'.repeat(64)}`,
       },
     }] })
-    vi.mocked(globalThis.generateCompletion as any).mockResolvedValue({ choices: [{ message: { content: JSON.stringify({
+    vi.mocked(globalThis.generateCompletion).mockResolvedValue({ choices: [{ message: { content: JSON.stringify({
       utterances: [
         {
           speaker: 'host_a', text: 'Gravity bends the path.', claimId: 'gravity-claim', claimText: 'Gravity bends a moving path.',
@@ -354,7 +354,7 @@ describe('POST /api/audio-overview/interject authority', () => {
   })
 
   test('[P0] rejects unsupported facts in exact Interjection text before rendering', async () => {
-    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+    vi.mocked(globalThis.readBody).mockResolvedValue({
       overviewId: 'overview_v2',
       insertedAfterTurnIndex: 1,
       question: 'How do cells store energy?',
@@ -382,7 +382,7 @@ describe('POST /api/audio-overview/interject authority', () => {
       })
       .mockResolvedValueOnce({ claimed: true, status: 'scripting' })
       .mockResolvedValueOnce({ status: 'failed' })
-    vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({ data: [{
+    vi.mocked(globalThis.searchDocuments).mockResolvedValue({ data: [{
       id: 'chunk_1',
       content: 'Cells store energy.',
       score: 1,
@@ -392,7 +392,7 @@ describe('POST /api/audio-overview/interject authority', () => {
         sourceRevision: `sha256:${'a'.repeat(64)}`,
       },
     }] })
-    vi.mocked(globalThis.generateCompletion as any).mockResolvedValue({ choices: [{ message: { content: JSON.stringify({
+    vi.mocked(globalThis.generateCompletion).mockResolvedValue({ choices: [{ message: { content: JSON.stringify({
       utterances: [
         {
           speaker: 'host_a', text: 'Cells store energy in useful forms.', claimId: 'cell-energy', claimText: 'Cells store energy.',
@@ -421,12 +421,12 @@ describe('POST /api/audio-overview/interject authority', () => {
   })
 
   test('[P0] v2 retry fails closed while rendering without a second paid Worker call', async () => {
-    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+    vi.mocked(globalThis.readBody).mockResolvedValue({
       overviewId: 'overview_v2',
       insertedAfterTurnIndex: 1,
       question: 'Why does it orbit?',
     })
-    vi.mocked(globalThis.getRequestHeader as any).mockReturnValueOnce('interjection-stable-retry-0001')
+    vi.mocked(globalThis.getRequestHeader).mockReturnValueOnce('interjection-stable-retry-0001')
     const workerFetch = vi.fn()
     const event = {
       context: {
@@ -456,7 +456,7 @@ describe('POST /api/audio-overview/interject authority', () => {
   })
 
   test('[P0] v2 rejects legacy AI Search chunks without frozen revision metadata', async () => {
-    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+    vi.mocked(globalThis.readBody).mockResolvedValue({
       overviewId: 'overview_v2',
       insertedAfterTurnIndex: 1,
       question: 'Why does it orbit?',
@@ -482,7 +482,7 @@ describe('POST /api/audio-overview/interject authority', () => {
       })
       .mockResolvedValueOnce({ claimed: true, status: 'scripting' })
       .mockResolvedValueOnce({ status: 'failed' })
-    vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({ data: [{
+    vi.mocked(globalThis.searchDocuments).mockResolvedValue({ data: [{
       id: 'legacy-chunk',
       content: 'Unversioned evidence must never reach scripting.',
       score: 1,
@@ -500,7 +500,7 @@ describe('POST /api/audio-overview/interject authority', () => {
   })
 
   test('[P0] ambiguous Worker transport failure is terminal and deletes the deterministic object key', async () => {
-    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+    vi.mocked(globalThis.readBody).mockResolvedValue({
       overviewId: 'overview_v2',
       insertedAfterTurnIndex: 1,
       question: 'Why does it orbit?',
@@ -528,10 +528,10 @@ describe('POST /api/audio-overview/interject authority', () => {
       .mockResolvedValueOnce({ duplicate: false, status: 'rendering' })
       .mockResolvedValueOnce({ claimed: true, status: 'rendering', claimedAt: 1 })
       .mockResolvedValueOnce({ duplicate: false, status: 'failed' })
-    vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({ data: [
+    vi.mocked(globalThis.searchDocuments).mockResolvedValue({ data: [
       { id: 'chunk_1', content: 'Gravity bends a moving path.', score: 1, attributes: { documentId: 'doc_1', contentHash: 'a'.repeat(64), sourceRevision: `sha256:${'a'.repeat(64)}` } },
     ] })
-    vi.mocked(globalThis.generateCompletion as any).mockResolvedValue({ choices: [{ message: { content: JSON.stringify({
+    vi.mocked(globalThis.generateCompletion).mockResolvedValue({ choices: [{ message: { content: JSON.stringify({
       utterances: [
         {
           speaker: 'host_a', text: 'Gravity bends the path.', claimId: 'gravity-claim', claimText: 'Gravity bends a moving path.',

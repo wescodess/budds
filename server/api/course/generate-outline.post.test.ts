@@ -67,29 +67,29 @@ function goodOutlineResponse() {
 
 describe('POST /api/course/generate-outline', () => {
   beforeEach(() => {
-    vi.mocked(globalThis.readBody as any).mockReset()
-    vi.mocked(globalThis.searchDocuments as any).mockReset()
-    vi.mocked(globalThis.generateCompletion as any).mockReset()
-    vi.mocked(globalThis.getConvexTokenIdentifier as any).mockReturnValue('https://auth.example.com|user_outline_123')
+    vi.mocked(globalThis.readBody).mockReset()
+    vi.mocked(globalThis.searchDocuments).mockReset()
+    vi.mocked(globalThis.generateCompletion).mockReset()
+    vi.mocked(globalThis.getConvexTokenIdentifier).mockReturnValue('https://auth.example.com|user_outline_123')
     mockMutation.mockReset()
     mockQuery.mockReset()
   })
 
   test('rejects missing courseId', async () => {
-    vi.mocked(globalThis.readBody as any).mockResolvedValue({})
+    vi.mocked(globalThis.readBody).mockResolvedValue({})
     const err = await (handler(makeEvent()) as Promise<any>).catch((e: any) => e)
     expect(err.statusCode).toBe(400)
   })
 
   test('rejects when course not found', async () => {
-    vi.mocked(globalThis.readBody as any).mockResolvedValue({ courseId: 'abc123' })
+    vi.mocked(globalThis.readBody).mockResolvedValue({ courseId: 'abc123' })
     mockQuery.mockResolvedValue(null)
     const err = await (handler(makeEvent()) as Promise<any>).catch((e: any) => e)
     expect(err.statusCode).toBe(404)
   })
 
   test('happy path: doc-based outline generation', async () => {
-    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+    vi.mocked(globalThis.readBody).mockResolvedValue({
       courseId: 'course_123',
       taskId: 'task_456',
     })
@@ -108,14 +108,14 @@ describe('POST /api/course/generate-outline', () => {
         { courseId: 'course_123', documentId: 'doc_2', folderId: 'folder_1', userId: 'user_1' },
       ])
 
-    vi.mocked(globalThis.searchDocuments as any).mockResolvedValue({
+    vi.mocked(globalThis.searchDocuments).mockResolvedValue({
       data: [
         { id: '1', content: 'Cell biology basics', score: 0.9, attributes: { filename: 'cells.pdf' } },
         { id: '2', content: 'DNA and RNA structures', score: 0.8, attributes: { filename: 'genetics.pdf' } },
       ],
     })
 
-    vi.mocked(globalThis.generateCompletion as any).mockResolvedValue(goodOutlineResponse())
+    vi.mocked(globalThis.generateCompletion).mockResolvedValue(goodOutlineResponse())
     mockMutation.mockResolvedValue(undefined)
 
     const result = await handler(makeEvent())
@@ -133,7 +133,7 @@ describe('POST /api/course/generate-outline', () => {
   })
 
   test('happy path: web-only outline generation', async () => {
-    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+    vi.mocked(globalThis.readBody).mockResolvedValue({
       courseId: 'course_web',
       taskId: 'task_789',
     })
@@ -146,7 +146,7 @@ describe('POST /api/course/generate-outline', () => {
       status: 'generating',
     })
 
-    vi.mocked(globalThis.generateCompletion as any).mockResolvedValue(goodOutlineResponse())
+    vi.mocked(globalThis.generateCompletion).mockResolvedValue(goodOutlineResponse())
     mockMutation.mockResolvedValue(undefined)
 
     const result = await handler(makeEvent())
@@ -157,7 +157,7 @@ describe('POST /api/course/generate-outline', () => {
   })
 
   test('marks task and course as failed on LLM error', async () => {
-    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+    vi.mocked(globalThis.readBody).mockResolvedValue({
       courseId: 'course_fail',
       taskId: 'task_fail',
     })
@@ -170,7 +170,7 @@ describe('POST /api/course/generate-outline', () => {
       status: 'generating',
     })
 
-    vi.mocked(globalThis.generateCompletion as any).mockRejectedValue(
+    vi.mocked(globalThis.generateCompletion).mockRejectedValue(
       Object.assign(new Error('AI Gateway error'), { statusCode: 500 }),
     )
     mockMutation.mockResolvedValue(undefined)
@@ -183,7 +183,7 @@ describe('POST /api/course/generate-outline', () => {
   })
 
   test('marks course failed when outline produces no sections', async () => {
-    vi.mocked(globalThis.readBody as any).mockResolvedValue({
+    vi.mocked(globalThis.readBody).mockResolvedValue({
       courseId: 'course_empty',
       taskId: 'task_empty',
     })
@@ -196,7 +196,7 @@ describe('POST /api/course/generate-outline', () => {
       status: 'generating',
     })
 
-    vi.mocked(globalThis.generateCompletion as any).mockResolvedValue({
+    vi.mocked(globalThis.generateCompletion).mockResolvedValue({
       choices: [{ message: { content: '{}' } }],
       model: 'test',
       usage: {},
@@ -208,10 +208,10 @@ describe('POST /api/course/generate-outline', () => {
   })
 
   test('rejects unauthenticated request', async () => {
-    vi.mocked(globalThis.getConvexTokenIdentifier as any).mockImplementation(() => {
+    vi.mocked(globalThis.getConvexTokenIdentifier).mockImplementation(() => {
       throw Object.assign(new Error('Convex authentication token not available'), { statusCode: 401 })
     })
-    vi.mocked(globalThis.readBody as any).mockResolvedValue({ courseId: 'abc' })
+    vi.mocked(globalThis.readBody).mockResolvedValue({ courseId: 'abc' })
 
     const err = await (handler(makeEvent()) as Promise<any>).catch((e: any) => e)
     expect(err.statusCode).toBe(401)

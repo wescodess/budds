@@ -29,6 +29,11 @@ export default createConfigForNuxt({
     'no-useless-assignment': 'warn',
     'no-useless-escape': 'warn',
     'prefer-const': 'warn',
-    'vue/no-multiple-template-root': 'warn',
+    // Vue 3 supports fragment templates. The Nuxt config still exposes the
+    // legacy Vue 2 rule, which reports valid multi-root components.
+    'vue/no-multiple-template-root': 'off',
+    // TypeScript optional props are the source of truth for absence. Adding
+    // runtime defaults solely to satisfy this rule would change public APIs.
+    'vue/require-default-prop': 'off',
   },
 })
