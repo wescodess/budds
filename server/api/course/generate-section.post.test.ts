@@ -161,6 +161,55 @@ describe('POST /api/course/generate-section', () => {
     expect(mockMutation).toHaveBeenCalled()
   })
 
+  test('characterizes V1 publishing model-generated text after empty document retrieval', async () => {
+    vi.mocked(globalThis.readBody).mockResolvedValue({
+      courseId: 'course_123',
+      sectionId: 'section_123',
+    })
+
+    mockQuery
+      .mockResolvedValueOnce(mockCourse())
+      .mockResolvedValueOnce([mockSection()])
+      .mockResolvedValueOnce([{
+        courseId: 'course_123',
+        documentId: 'doc_1',
+        folderId: 'folder_123',
+        userId: 'https://auth.example.com|user_section_123',
+      }])
+
+    vi.mocked(globalThis.searchDocuments).mockResolvedValue({ data: [] })
+    vi.mocked(globalThis.generateCompletion).mockResolvedValue(
+      textCompletionResponse('Ungrounded V1 fallback explanation.'),
+    )
+    mockMutation.mockResolvedValue({ status: 'ready', blockCount: 1 })
+
+    const result = await handler(makeEvent())
+
+    expect(globalThis.searchDocuments).toHaveBeenCalledTimes(2)
+    expect(globalThis.generateCompletion).toHaveBeenCalledTimes(1)
+    expect(globalThis.generateCompletion).toHaveBeenCalledWith(expect.objectContaining({
+      messages: expect.arrayContaining([
+        expect.objectContaining({
+          role: 'user',
+          content: expect.stringContaining(
+            'Topic: Section One. This is a document-based course about Test Course.',
+          ),
+        }),
+      ]),
+    }))
+
+    expect(mockMutation).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        sectionId: 'section_123',
+        textContent: 'Ungrounded V1 fallback explanation.',
+        quizData: undefined,
+        flashcardData: undefined,
+      }),
+    )
+    expect(result).toMatchObject({ status: 'ready', failedEngines: [] })
+  })
+
   test('factual knowledge type skips audio', async () => {
     vi.mocked(globalThis.readBody).mockResolvedValue({
       courseId: 'course_123',

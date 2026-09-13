@@ -782,6 +782,37 @@ describe('courseSections.completeSection', () => {
     expect(result.feedbackText).toContain('Excellent')
   })
 
+  test('characterizes V1 accepting a client-supplied perfect score with no quiz', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, sections } = await seedCourseWithSections(t)
+
+    await t.run(async (ctx) => {
+      await ctx.db.patch(sections[0]._id, { status: 'ready' })
+    })
+
+    const result = await asUser.mutation(api.courseSections.completeSection, {
+      sectionId: sections[0]._id,
+      // Frozen V1 defect: the section page submits 100 when no quiz was
+      // completed, and the server accepts the client score as authoritative.
+      practiceScore: 100,
+      quizCorrect: 0,
+      quizTotal: 0,
+    })
+
+    expect(result).toMatchObject({
+      practiceScore: 100,
+      masteryLevel: 'learning',
+      adaptiveHint: 'reduce-practice',
+    })
+
+    const section = await t.run(async (ctx) => ctx.db.get(sections[0]._id))
+    expect(section).toMatchObject({
+      status: 'completed',
+      practiceScore: 100,
+      masteryLevel: 'learning',
+    })
+  })
+
   test('returns adaptive feedback for score < 60', async () => {
     const t = convexTest(schema, modules)
     const { asUser, sections } = await seedCourseWithSections(t)
