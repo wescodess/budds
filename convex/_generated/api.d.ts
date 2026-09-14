@@ -44,6 +44,8 @@ import type * as learnV2Access from "../learnV2Access.js";
 import type * as learnV2FolderManifests from "../learnV2FolderManifests.js";
 import type * as learnV2Lifecycle from "../learnV2Lifecycle.js";
 import type * as learnV2Retention from "../learnV2Retention.js";
+import type * as learnV2Search from "../learnV2Search.js";
+import type * as learnV2SearchActions from "../learnV2SearchActions.js";
 import type * as learnV2SourceActions from "../learnV2SourceActions.js";
 import type * as learnV2Sources from "../learnV2Sources.js";
 import type * as lib_accountDeletionTombstone from "../lib/accountDeletionTombstone.js";
@@ -109,6 +111,8 @@ declare const fullApi: ApiFromModules<{
   learnV2FolderManifests: typeof learnV2FolderManifests;
   learnV2Lifecycle: typeof learnV2Lifecycle;
   learnV2Retention: typeof learnV2Retention;
+  learnV2Search: typeof learnV2Search;
+  learnV2SearchActions: typeof learnV2SearchActions;
   learnV2SourceActions: typeof learnV2SourceActions;
   learnV2Sources: typeof learnV2Sources;
   "lib/accountDeletionTombstone": typeof lib_accountDeletionTombstone;

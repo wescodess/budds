@@ -234,8 +234,51 @@ export const getUserDataPage = query({
       case 'sessionContentClaims': return await ctx.db.query('sessionContentClaims').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
       case 'calendarProjections': { const result = await ctx.db.query('calendarProjections').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts); return { ...result, page: result.page.map(({ provider: _provider, externalEventId: _event, ...row }) => row) } }
       case 'reminderPolicies': return await ctx.db.query('reminderPolicies').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
-      case 'searchQuotaBuckets': { const result = await ctx.db.query('searchQuotaBuckets').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts); return { ...result, page: result.page.map(({ provider: _provider, scopeKey: _scopeKey, count: _count, ...row }) => row) } }
-      case 'searchReservations': { const result = await ctx.db.query('searchReservations').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts); return { ...result, page: result.page.map(({ provider: _provider, idempotencyKey: _idempotencyKey, ...row }) => row) } }
+      case 'searchQuotaBuckets': {
+        const result = await ctx.db.query('searchQuotaBuckets').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+        return {
+          ...result,
+          page: result.page.map(row => ({
+            _id: row._id,
+            _creationTime: row._creationTime,
+            userId: row.userId,
+            learningVoidId: row.learningVoidId,
+            scopeKind: row.scopeKind,
+            periodKey: row.periodKey,
+            limit: row.limit,
+            reservedCredits: row.reservedCredits,
+            consumedCredits: row.consumedCredits,
+            reconciliationStatus: row.reconciliationStatus,
+            createdAt: row.createdAt,
+            updatedAt: row.updatedAt,
+            lastReconciledAt: row.lastReconciledAt,
+          })),
+        }
+      }
+      case 'searchReservations': {
+        const result = await ctx.db.query('searchReservations').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+        return {
+          ...result,
+          page: result.page.map(row => ({
+            _id: row._id,
+            _creationTime: row._creationTime,
+            userId: row.userId,
+            learningVoidId: row.learningVoidId,
+            blueprintRevisionId: row.blueprintRevisionId,
+            searchClass: row.searchClass,
+            status: row.status,
+            dispatchState: row.dispatchState,
+            reconciliationRequired: row.reconciliationRequired,
+            revision: row.revision,
+            createdAt: row.createdAt,
+            updatedAt: row.updatedAt,
+            expiresAt: row.expiresAt,
+            dispatchedAt: row.dispatchedAt,
+            settledAt: row.settledAt,
+            outcomeCode: row.outcomeCode,
+          })),
+        }
+      }
       case 'learnJobs': { const result = await ctx.db.query('learnJobs').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts); return { ...result, page: result.page.map(({ idempotencyKey: _idempotencyKey, leaseExpiresAt: _leaseExpiresAt, checkpoint: _checkpoint, terminalReason: _terminalReason, ...row }) => row) } }
       case 'learnLifecycleReceipts': { const result = await ctx.db.query('learnLifecycleReceipts').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts); return { ...result, page: result.page.map(({ idempotencyKey: _idempotencyKey, requestFingerprint: _requestFingerprint, ...row }) => row) } }
     }

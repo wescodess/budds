@@ -14,5 +14,6 @@ crons.interval('rescue pending external cleanup', { hours: 6 }, internal.account
 crons.interval('resume stale account deletion jobs', { minutes: 15 }, internal.accountDeletion.resumeStaleDeletionJobs, {})
 crons.interval('resume stale course deletion jobs', { minutes: 15 }, internal.courseDeletion.resumeStale, {})
 crons.interval('cleanup distributed rate limits', { hours: 1 }, internal.rateLimits.cleanupExpired, {})
+crons.interval('cleanup undispatched Learn V2 searches', { minutes: 5 }, internal.learnV2Search.cleanupExpiredUndispatched, {})
 
 export default crons

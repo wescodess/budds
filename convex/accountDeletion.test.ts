@@ -106,6 +106,197 @@ async function seedUserData(
 }
 
 describe('accountDeletion.deleteAccountCascade', () => {
+  test('deletes owner search metadata without resetting global product usage', async () => {
+    const t = convexTest(schema, modules)
+    const ids = await t.run(async (ctx) => {
+      const now = Date.now()
+      const folderId = await ctx.db.insert('folders', { userId: TEST_IDENTITY.tokenIdentifier, name: 'Search account deletion', documentCount: 0 })
+      const learningVoidId = await ctx.db.insert('learningVoids', { userId: TEST_IDENTITY.tokenIdentifier, folderId, title: 'Void', status: 'draft', revision: 1, createdAt: now, updatedAt: now })
+      const blueprintId = await ctx.db.insert('learnBlueprints', { userId: TEST_IDENTITY.tokenIdentifier, learningVoidId, revision: 1, createdAt: now })
+      const blueprintRevisionId = await ctx.db.insert('learnBlueprintRevisions', { userId: TEST_IDENTITY.tokenIdentifier, blueprintId, learningVoidId, revision: 1, recordRevision: 1, status: 'draft', createdAt: now, updatedAt: now })
+      const hash = async (value: string) => {
+        const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))
+        return `sha256:${[...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('')}`
+      }
+      const productMonthBucketId = await ctx.db.insert('searchQuotaBuckets', { userId: '__learn_v2_search_product__', provider: 'tavily_free', scopeKind: 'product_month', scopeKey: 'global', periodKey: '2026-09', limit: 800, reservedCredits: 1, consumedCredits: 17, revision: 1, reconciliationStatus: 'review_required', circuitReason: 'dispatch_uncertain', createdAt: now, updatedAt: now })
+      const productDayBucketId = await ctx.db.insert('searchQuotaBuckets', { userId: '__learn_v2_search_product__', provider: 'tavily_free', scopeKind: 'product_day', scopeKey: 'global', periodKey: '2026-09-13', limit: 25, reservedCredits: 1, consumedCredits: 17, revision: 1, reconciliationStatus: 'matched', createdAt: now, updatedAt: now })
+      const userDayBucketId = await ctx.db.insert('searchQuotaBuckets', { userId: TEST_IDENTITY.tokenIdentifier, provider: 'tavily_free', scopeKind: 'user_day', scopeKey: await hash(`owner:${TEST_IDENTITY.tokenIdentifier}`), periodKey: '2026-09-13', limit: 4, reservedCredits: 1, consumedCredits: 0, revision: 1, reconciliationStatus: 'matched', createdAt: now, updatedAt: now })
+      const voidScopeKey = await hash(`void:${String(learningVoidId)}`)
+      const voidBucketId = await ctx.db.insert('searchQuotaBuckets', { userId: TEST_IDENTITY.tokenIdentifier, learningVoidId, provider: 'tavily_free', scopeKind: 'learning_void_broad', scopeKey: voidScopeKey, periodKey: 'lifetime', limit: 2, reservedCredits: 1, consumedCredits: 0, revision: 1, reconciliationStatus: 'matched', createdAt: now, updatedAt: now })
+      const reservationId = await ctx.db.insert('searchReservations', { userId: TEST_IDENTITY.tokenIdentifier, learningVoidId, blueprintRevisionId, expectedVoidRevision: 1, expectedBlueprintRecordRevision: 1, voidScopeKey, provider: 'tavily_free', searchClass: 'broad', status: 'reserved', dispatchState: 'started', reconciliationRequired: true, productMonthBucketId, productDayBucketId, userDayBucketId, learningVoidBucketId: voidBucketId, productMonthPeriodKey: '2026-09', productDayPeriodKey: '2026-09-13', userDayPeriodKey: '2026-09-13', learningVoidPeriodKey: 'lifetime', expectedCredits: 1, idempotencyKeyHash: `sha256:${'b'.repeat(64)}`, requestFingerprint: `sha256:${'c'.repeat(64)}`, queryDigest: `sha256:${'d'.repeat(64)}`, executionTokenHash: await hash('deleted-owner-execution'), revision: 1, providerUsageBeforeDispatch: 17, createdAt: now, updatedAt: now, expiresAt: now + 60_000 })
+      await ctx.db.patch(productMonthBucketId, { circuitReservationId: reservationId, activeDispatchReservationId: reservationId, activeDispatchLeaseExpiresAt: now + 30_000 })
+      await ctx.db.insert('accountDeletionJobs', { userId: TEST_IDENTITY.tokenIdentifier, status: 'active', phase: 'learnV2', startedAt: now, updatedAt: now })
+      return { productMonthBucketId, productDayBucketId, userDayBucketId, voidBucketId, reservationId }
+    })
+    for (let batch = 0; batch < 8; batch++) {
+      await t.mutation(internal.accountDeletion.runDeletionBatch, { userId: TEST_IDENTITY.tokenIdentifier })
+    }
+    const rows = await t.run(async ctx => ({
+      productMonthBucket: await ctx.db.get(ids.productMonthBucketId),
+      productDayBucket: await ctx.db.get(ids.productDayBucketId),
+      userDayBucket: await ctx.db.get(ids.userDayBucketId),
+      voidBucket: await ctx.db.get(ids.voidBucketId),
+      reservation: await ctx.db.get(ids.reservationId),
+    }))
+    expect(rows.productMonthBucket).toMatchObject({ reservedCredits: 1, consumedCredits: 17, userId: '__learn_v2_search_product__' })
+    expect(rows.productDayBucket).toMatchObject({ reservedCredits: 1, consumedCredits: 17, userId: '__learn_v2_search_product__' })
+    expect(rows.userDayBucket).toMatchObject({ reservedCredits: 1, userId: '__learn_v2_search_deleted__' })
+    expect(rows.voidBucket).toMatchObject({ reservedCredits: 1, userId: '__learn_v2_search_deleted__' })
+    expect(rows.reservation).toMatchObject({ userId: '__learn_v2_search_deleted__', status: 'reserved', dispatchState: 'started', revision: 1 })
+    expect(rows.reservation?.learningVoidId).toBeUndefined()
+    expect(rows.reservation?.blueprintRevisionId).toBeUndefined()
+    expect(JSON.stringify(rows)).not.toContain(TEST_IDENTITY.tokenIdentifier)
+    await expect(t.mutation(internal.learnV2Search.consume, {
+      tokenIdentifier: TEST_IDENTITY.tokenIdentifier,
+      reservationId: ids.reservationId,
+      executionToken: 'deleted-owner-execution',
+      expectedRevision: 1,
+      providerRequestId: 'deleted-owner-settlement',
+    })).resolves.toMatchObject({ status: 'consumed' })
+    expect(await t.run(async ctx => ctx.db.get(ids.productMonthBucketId))).toMatchObject({ reservedCredits: 0, consumedCredits: 18, reconciliationStatus: 'matched' })
+  })
+
+  test('anonymizes a released circuit owner until drift reconciliation clears its circuit', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-14T12:00:00.000Z'))
+    const t = convexTest(schema, modules)
+    const ids = await t.run(async (ctx) => {
+      const now = Date.now()
+      const hash = async (value: string) => {
+        const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))
+        return `sha256:${[...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('')}`
+      }
+      const folderId = await ctx.db.insert('folders', { userId: TEST_IDENTITY.tokenIdentifier, name: 'Terminal search deletion', documentCount: 0 })
+      const learningVoidId = await ctx.db.insert('learningVoids', { userId: TEST_IDENTITY.tokenIdentifier, folderId, title: 'Void', status: 'draft', revision: 1, createdAt: now, updatedAt: now })
+      const blueprintId = await ctx.db.insert('learnBlueprints', { userId: TEST_IDENTITY.tokenIdentifier, learningVoidId, revision: 1, createdAt: now })
+      const blueprintRevisionId = await ctx.db.insert('learnBlueprintRevisions', { userId: TEST_IDENTITY.tokenIdentifier, blueprintId, learningVoidId, revision: 1, recordRevision: 1, status: 'draft', createdAt: now, updatedAt: now })
+      const productMonthBucketId = await ctx.db.insert('searchQuotaBuckets', { userId: '__learn_v2_search_product__', provider: 'tavily_free', scopeKind: 'product_month', scopeKey: 'global', periodKey: '2026-09', limit: 800, providerUsageBaseline: 0, reservedCredits: 0, consumedCredits: 3, revision: 1, reconciliationStatus: 'review_required', circuitReason: 'usage_drift', providerReportedUsage: 5, providerReportedUsageObservedAt: now, createdAt: now, updatedAt: now })
+      const productDayBucketId = await ctx.db.insert('searchQuotaBuckets', { userId: '__learn_v2_search_product__', provider: 'tavily_free', scopeKind: 'product_day', scopeKey: 'global', periodKey: '2026-09-14', limit: 25, reservedCredits: 0, consumedCredits: 3, revision: 1, reconciliationStatus: 'matched', createdAt: now, updatedAt: now })
+      const userDayBucketId = await ctx.db.insert('searchQuotaBuckets', { userId: TEST_IDENTITY.tokenIdentifier, provider: 'tavily_free', scopeKind: 'user_day', scopeKey: await hash(`owner:${TEST_IDENTITY.tokenIdentifier}`), periodKey: '2026-09-14', limit: 4, reservedCredits: 0, consumedCredits: 1, revision: 1, reconciliationStatus: 'matched', createdAt: now, updatedAt: now })
+      const voidScopeKey = await hash(`void:${String(learningVoidId)}`)
+      const learningVoidBucketId = await ctx.db.insert('searchQuotaBuckets', { userId: TEST_IDENTITY.tokenIdentifier, learningVoidId, provider: 'tavily_free', scopeKind: 'learning_void_broad', scopeKey: voidScopeKey, periodKey: 'lifetime', limit: 2, reservedCredits: 0, consumedCredits: 1, revision: 1, reconciliationStatus: 'matched', createdAt: now, updatedAt: now })
+      const reservationId = await ctx.db.insert('searchReservations', { userId: TEST_IDENTITY.tokenIdentifier, learningVoidId, blueprintRevisionId, expectedVoidRevision: 1, expectedBlueprintRecordRevision: 1, voidScopeKey, provider: 'tavily_free', searchClass: 'broad', status: 'released', dispatchState: 'not_started', reconciliationRequired: true, productMonthBucketId, productDayBucketId, userDayBucketId, learningVoidBucketId, productMonthPeriodKey: '2026-09', productDayPeriodKey: '2026-09-14', userDayPeriodKey: '2026-09-14', learningVoidPeriodKey: 'lifetime', expectedCredits: 1, idempotencyKeyHash: await hash('terminal-delete-key'), requestFingerprint: await hash('terminal-delete-request'), queryDigest: await hash('terminal-delete-query'), executionTokenHash: await hash('terminal-delete-execution'), revision: 1, createdAt: now, updatedAt: now, expiresAt: now, settledAt: now, outcomeCode: 'usage_drift' })
+      await ctx.db.patch(productMonthBucketId, { circuitReservationId: reservationId })
+      await ctx.db.insert('accountDeletionJobs', { userId: TEST_IDENTITY.tokenIdentifier, status: 'active', phase: 'learnV2', startedAt: now, updatedAt: now })
+      return { reservationId, productMonthBucketId, userDayBucketId, learningVoidBucketId }
+    })
+    for (let batch = 0; batch < 8; batch++) await t.mutation(internal.accountDeletion.runDeletionBatch, { userId: TEST_IDENTITY.tokenIdentifier })
+    const anonymized = await t.run(async ctx => ({
+      reservation: await ctx.db.get(ids.reservationId),
+      productMonth: await ctx.db.get(ids.productMonthBucketId),
+      userDay: await ctx.db.get(ids.userDayBucketId),
+      learningVoid: await ctx.db.get(ids.learningVoidBucketId),
+    }))
+    expect(anonymized.reservation).toMatchObject({ userId: '__learn_v2_search_deleted__', status: 'released', reconciliationRequired: true, revision: 1 })
+    expect(anonymized.productMonth).toMatchObject({ circuitReason: 'usage_drift', circuitReservationId: ids.reservationId })
+    expect(anonymized.userDay).toMatchObject({ userId: '__learn_v2_search_deleted__' })
+    expect(anonymized.learningVoid).toMatchObject({ userId: '__learn_v2_search_deleted__' })
+    expect(JSON.stringify(anonymized)).not.toContain(TEST_IDENTITY.tokenIdentifier)
+
+    vi.advanceTimersByTime(60_001)
+    await expect(t.mutation(internal.learnV2Search.reconcileFromUsageEvidence, {
+      reservationId: ids.reservationId, expectedRevision: 1, idempotencyKey: 'deleted-terminal-reconcile', providerKeyUsage: 5,
+    })).resolves.toMatchObject({ status: 'released', reconciliationRequired: false })
+    expect(await t.run(ctx => ctx.db.get(ids.reservationId))).toMatchObject({
+      userId: '__learn_v2_search_deleted__', status: 'released', reconciliationRequired: false, revision: 2,
+    })
+    await expect(t.mutation(internal.learnV2Search.reconcileFromUsageEvidence, {
+      reservationId: ids.reservationId, expectedRevision: 1, idempotencyKey: 'deleted-terminal-reconcile', providerKeyUsage: 5,
+    })).resolves.toMatchObject({ status: 'released', reconciliationRequired: false, revision: 2 })
+    expect(await t.run(ctx => ctx.db.get(ids.productMonthBucketId))).toMatchObject({
+      reconciliationStatus: 'matched', providerUsageBaseline: 2, providerReportedUsage: 5,
+    })
+  })
+
+  test('releases every undispatched search claim before deleting owner metadata', async () => {
+    const t = convexTest(schema, modules)
+    const ids = await t.run(async (ctx) => {
+      const now = Date.now()
+      const folderId = await ctx.db.insert('folders', { userId: TEST_IDENTITY.tokenIdentifier, name: 'Undispatched deletion', documentCount: 0 })
+      const learningVoidId = await ctx.db.insert('learningVoids', { userId: TEST_IDENTITY.tokenIdentifier, folderId, title: 'Void', status: 'draft', revision: 1, createdAt: now, updatedAt: now })
+      const blueprintId = await ctx.db.insert('learnBlueprints', { userId: TEST_IDENTITY.tokenIdentifier, learningVoidId, revision: 1, createdAt: now })
+      const blueprintRevisionId = await ctx.db.insert('learnBlueprintRevisions', { userId: TEST_IDENTITY.tokenIdentifier, blueprintId, learningVoidId, revision: 1, recordRevision: 1, status: 'draft', createdAt: now, updatedAt: now })
+      const hash = async (value: string) => {
+        const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))
+        return `sha256:${[...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('')}`
+      }
+      const productMonthBucketId = await ctx.db.insert('searchQuotaBuckets', { userId: '__learn_v2_search_product__', provider: 'tavily_free', scopeKind: 'product_month', scopeKey: 'global', periodKey: '2026-09', limit: 800, reservedCredits: 1, consumedCredits: 3, revision: 1, reconciliationStatus: 'matched', createdAt: now, updatedAt: now })
+      const productDayBucketId = await ctx.db.insert('searchQuotaBuckets', { userId: '__learn_v2_search_product__', provider: 'tavily_free', scopeKind: 'product_day', scopeKey: 'global', periodKey: '2026-09-14', limit: 25, reservedCredits: 1, consumedCredits: 1, revision: 1, reconciliationStatus: 'matched', createdAt: now, updatedAt: now })
+      const userDayBucketId = await ctx.db.insert('searchQuotaBuckets', { userId: TEST_IDENTITY.tokenIdentifier, provider: 'tavily_free', scopeKind: 'user_day', scopeKey: await hash(`owner:${TEST_IDENTITY.tokenIdentifier}`), periodKey: '2026-09-14', limit: 4, reservedCredits: 1, consumedCredits: 0, revision: 1, reconciliationStatus: 'matched', createdAt: now, updatedAt: now })
+      const voidScopeKey = await hash(`void:${String(learningVoidId)}`)
+      const voidBucketId = await ctx.db.insert('searchQuotaBuckets', { userId: TEST_IDENTITY.tokenIdentifier, learningVoidId, provider: 'tavily_free', scopeKind: 'learning_void_broad', scopeKey: voidScopeKey, periodKey: 'lifetime', limit: 2, reservedCredits: 1, consumedCredits: 0, revision: 1, reconciliationStatus: 'matched', createdAt: now, updatedAt: now })
+      const reservationId = await ctx.db.insert('searchReservations', { userId: TEST_IDENTITY.tokenIdentifier, learningVoidId, blueprintRevisionId, expectedVoidRevision: 1, expectedBlueprintRecordRevision: 1, voidScopeKey, provider: 'tavily_free', searchClass: 'broad', status: 'reserved', dispatchState: 'not_started', reconciliationRequired: false, productMonthBucketId, productDayBucketId, userDayBucketId, learningVoidBucketId: voidBucketId, productMonthPeriodKey: '2026-09', productDayPeriodKey: '2026-09-14', userDayPeriodKey: '2026-09-14', learningVoidPeriodKey: 'lifetime', expectedCredits: 1, idempotencyKeyHash: `sha256:${'1'.repeat(64)}`, requestFingerprint: `sha256:${'2'.repeat(64)}`, queryDigest: `sha256:${'3'.repeat(64)}`, executionTokenHash: `sha256:${'4'.repeat(64)}`, revision: 1, createdAt: now, updatedAt: now, expiresAt: now + 60_000 })
+      await ctx.db.insert('accountDeletionJobs', { userId: TEST_IDENTITY.tokenIdentifier, status: 'active', phase: 'learnV2', startedAt: now, updatedAt: now })
+      return { productMonthBucketId, productDayBucketId, reservationId }
+    })
+    for (let batch = 0; batch < 4; batch++) {
+      await t.mutation(internal.accountDeletion.runDeletionBatch, { userId: TEST_IDENTITY.tokenIdentifier })
+    }
+    const rows = await t.run(async ctx => ({
+      productMonth: await ctx.db.get(ids.productMonthBucketId),
+      productDay: await ctx.db.get(ids.productDayBucketId),
+      reservation: await ctx.db.get(ids.reservationId),
+    }))
+    expect(rows.reservation).toBeNull()
+    expect(rows.productMonth).toMatchObject({ reservedCredits: 0, consumedCredits: 3 })
+    expect(rows.productDay).toMatchObject({ reservedCredits: 0, consumedCredits: 1 })
+  })
+
+  test('releases multiple batches of undispatched claims before anonymizing a shared started claim', async () => {
+    const t = convexTest(schema, modules)
+    const ids = await t.run(async (ctx) => {
+      const now = Date.now()
+      const hash = async (value: string) => {
+        const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))
+        return `sha256:${[...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('')}`
+      }
+      const folderId = await ctx.db.insert('folders', { userId: TEST_IDENTITY.tokenIdentifier, name: 'Mixed search deletion', documentCount: 0 })
+      const productMonthBucketId = await ctx.db.insert('searchQuotaBuckets', { userId: '__learn_v2_search_product__', provider: 'tavily_free', scopeKind: 'product_month', scopeKey: 'global', periodKey: '2026-09', limit: 800, reservedCredits: 10, consumedCredits: 5, revision: 1, reconciliationStatus: 'review_required', circuitReason: 'dispatch_uncertain', createdAt: now, updatedAt: now })
+      let startedId
+      let startedProductDayBucketId
+      let startedUserDayBucketId
+      let startedVoidBucketId
+      for (let index = 0; index < 9; index++) {
+        const day = `2026-09-${String(index + 1).padStart(2, '0')}`
+        const learningVoidId = await ctx.db.insert('learningVoids', { userId: TEST_IDENTITY.tokenIdentifier, folderId, title: `Void ${index}`, status: 'draft', revision: 1, createdAt: now, updatedAt: now })
+        const blueprintId = await ctx.db.insert('learnBlueprints', { userId: TEST_IDENTITY.tokenIdentifier, learningVoidId, revision: 1, createdAt: now })
+        const blueprintRevisionId = await ctx.db.insert('learnBlueprintRevisions', { userId: TEST_IDENTITY.tokenIdentifier, blueprintId, learningVoidId, revision: 1, recordRevision: 1, status: 'draft', createdAt: now, updatedAt: now })
+        const sharedWithStarted = index === 8
+        const reservedCredits = sharedWithStarted ? 2 : 1
+        const productDayBucketId = await ctx.db.insert('searchQuotaBuckets', { userId: '__learn_v2_search_product__', provider: 'tavily_free', scopeKind: 'product_day', scopeKey: 'global', periodKey: day, limit: 25, reservedCredits, consumedCredits: 0, revision: 1, reconciliationStatus: 'matched', createdAt: now, updatedAt: now })
+        const userDayBucketId = await ctx.db.insert('searchQuotaBuckets', { userId: TEST_IDENTITY.tokenIdentifier, provider: 'tavily_free', scopeKind: 'user_day', scopeKey: await hash(`owner:${TEST_IDENTITY.tokenIdentifier}`), periodKey: day, limit: 4, reservedCredits, consumedCredits: 0, revision: 1, reconciliationStatus: 'matched', createdAt: now, updatedAt: now })
+        const voidScopeKey = await hash(`void:${String(learningVoidId)}`)
+        const learningVoidBucketId = await ctx.db.insert('searchQuotaBuckets', { userId: TEST_IDENTITY.tokenIdentifier, learningVoidId, provider: 'tavily_free', scopeKind: 'learning_void_broad', scopeKey: voidScopeKey, periodKey: 'lifetime', limit: 2, reservedCredits, consumedCredits: 0, revision: 1, reconciliationStatus: 'matched', createdAt: now, updatedAt: now })
+        const common = { userId: TEST_IDENTITY.tokenIdentifier, learningVoidId, blueprintRevisionId, expectedVoidRevision: 1, expectedBlueprintRecordRevision: 1, voidScopeKey, provider: 'tavily_free' as const, searchClass: 'broad' as const, status: 'reserved' as const, productMonthBucketId, productDayBucketId, userDayBucketId, learningVoidBucketId, productMonthPeriodKey: '2026-09', productDayPeriodKey: day, userDayPeriodKey: day, learningVoidPeriodKey: 'lifetime' as const, expectedCredits: 1 as const, executionTokenHash: await hash('mixed-delete-token'), revision: 1, createdAt: now, updatedAt: now, expiresAt: now + 60_000 }
+        await ctx.db.insert('searchReservations', { ...common, dispatchState: 'not_started', reconciliationRequired: false, idempotencyKeyHash: await hash(`undispatched-${index}`), requestFingerprint: await hash(`request-${index}`), queryDigest: await hash(`query-${index}`) })
+        if (sharedWithStarted) {
+          startedId = await ctx.db.insert('searchReservations', { ...common, dispatchState: 'started', reconciliationRequired: true, providerUsageBeforeDispatch: 5, idempotencyKeyHash: await hash('started'), requestFingerprint: await hash('started-request'), queryDigest: await hash('started-query') })
+          startedProductDayBucketId = productDayBucketId
+          startedUserDayBucketId = userDayBucketId
+          startedVoidBucketId = learningVoidBucketId
+        }
+      }
+      if (!startedId || !startedProductDayBucketId || !startedUserDayBucketId || !startedVoidBucketId) throw new Error('missing started fixture')
+      await ctx.db.patch(productMonthBucketId, { circuitReservationId: startedId })
+      await ctx.db.insert('accountDeletionJobs', { userId: TEST_IDENTITY.tokenIdentifier, status: 'active', phase: 'learnV2', startedAt: now, updatedAt: now })
+      return { startedId, productMonthBucketId, startedProductDayBucketId, startedUserDayBucketId, startedVoidBucketId }
+    })
+    for (let batch = 0; batch < 8; batch++) await t.mutation(internal.accountDeletion.runDeletionBatch, { userId: TEST_IDENTITY.tokenIdentifier })
+    const stored = await t.run(async ctx => ({
+      started: await ctx.db.get(ids.startedId),
+      buckets: await Promise.all([ids.productMonthBucketId, ids.startedProductDayBucketId, ids.startedUserDayBucketId, ids.startedVoidBucketId].map(id => ctx.db.get(id))),
+      ownerRows: await ctx.db.query('searchReservations').withIndex('by_userId', q => q.eq('userId', TEST_IDENTITY.tokenIdentifier)).take(20),
+    }))
+    expect(stored.ownerRows).toHaveLength(0)
+    expect(stored.started).toMatchObject({ userId: '__learn_v2_search_deleted__', status: 'reserved', dispatchState: 'started', reconciliationRequired: true, revision: 1 })
+    expect(stored.buckets.map(bucket => bucket?.reservedCredits)).toEqual([1, 1, 1, 1])
+    expect(stored.buckets[0]).toMatchObject({ userId: '__learn_v2_search_product__', consumedCredits: 5 })
+    expect(stored.buckets[1]).toMatchObject({ userId: '__learn_v2_search_product__', consumedCredits: 0 })
+    expect(stored.buckets[2]).toMatchObject({ userId: '__learn_v2_search_deleted__' })
+    expect(stored.buckets[3]).toMatchObject({ userId: '__learn_v2_search_deleted__' })
+    expect(JSON.stringify(stored)).not.toContain(TEST_IDENTITY.tokenIdentifier)
+  })
+
   let originalEnv: Record<string, string | undefined>
 
   beforeEach(() => {
