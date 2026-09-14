@@ -142,9 +142,12 @@ describe('accountDeletion.deleteAccountCascade', () => {
       const manifestId = await ctx.db.insert('learnFolderSourceManifests', { userId: TEST_IDENTITY.tokenIdentifier, learningVoidId, blueprintRevisionId: revisionId, rootFolderId: folderId, expectedVoidRevision: 1, expectedBlueprintRecordRevision: 1, recordRevision: 2, status: 'frozen', coverage: 'gap', idempotencyKey: 'delete-manifest', requestFingerprint: 'delete-manifest', explicitDocumentIds: [documentId], explicitDocumentCursor: 1, nextFolderOrder: 1, nextEntryOrder: 1, entryCount: 1, availableCount: 0, unavailableCount: 1, createdAt: 1, frozenAt: 2 })
       const folderRevision = `sha256:${'a'.repeat(64)}`
       const snapshotId = await ctx.db.insert('learnSourceSnapshots', { userId: TEST_IDENTITY.tokenIdentifier, learningVoidId, blueprintRevisionId: revisionId, folderManifestId: manifestId, sourceIdentityId: identityId, revision: 1, status: 'unavailable', folderId, folderRevision, filename: 'delete.pdf', createdAt: 1 })
+      const leaseId = await ctx.db.insert('learnSourceFetchLeases', { userId: TEST_IDENTITY.tokenIdentifier, learningVoidId, sourceSnapshotId: snapshotId, idempotencyKeyHash: 'sha256:active-fetch', requestFingerprint: 'fingerprint', leaseToken: 'secret-token', expiresAt: Date.now() + 60_000, createdAt: 1 })
+      const rateEventId = await ctx.db.insert('learnSourceFetchRateEvents', { userId: TEST_IDENTITY.tokenIdentifier, learningVoidId, sourceSnapshotId: snapshotId, createdAt: 1, expiresAt: Date.now() + 60_000 })
+      const sourceReceiptId = await ctx.db.insert('learnSourceCommandReceipts', { userId: TEST_IDENTITY.tokenIdentifier, learningVoidId, sourceSnapshotId: snapshotId, idempotencyKeyHash: 'sha256:source-receipt', command: 'fetch_source', requestFingerprint: 'fingerprint', response: '{}', createdAt: 1 })
       const manifestFolderId = await ctx.db.insert('learnFolderSourceManifestFolders', { userId: TEST_IDENTITY.tokenIdentifier, manifestId, folderId, name: 'V2', folderRevision, depth: 0, order: 0, stage: 'complete', documentCount: 1 })
       const manifestEntryId = await ctx.db.insert('learnFolderSourceManifestEntries', { userId: TEST_IDENTITY.tokenIdentifier, manifestId, order: 0, documentId, folderId, folderRevision, sourceIdentityId: identityId, sourceSnapshotId: snapshotId, availability: 'unavailable', unavailableReason: 'failed' })
-      return { learningVoidId, blueprintId, revisionId, receiptId, manifestId, manifestFolderId, manifestEntryId, snapshotId, identityId }
+      return { learningVoidId, blueprintId, revisionId, receiptId, manifestId, manifestFolderId, manifestEntryId, snapshotId, identityId, leaseId, rateEventId, sourceReceiptId }
     })
     await asUser.mutation(internal.accountDeletion.deleteCurrentUser, {})
     await finishDatabaseDeletion(t, TEST_IDENTITY.tokenIdentifier)
@@ -152,6 +155,9 @@ describe('accountDeletion.deleteAccountCascade', () => {
     expect(await t.run(ctx => ctx.db.get(ids.manifestEntryId))).toBeNull()
     expect(await t.run(ctx => ctx.db.get(ids.manifestFolderId))).toBeNull()
     expect(await t.run(ctx => ctx.db.get(ids.manifestId))).toBeNull()
+    expect(await t.run(ctx => ctx.db.get(ids.leaseId))).toBeNull()
+    expect(await t.run(ctx => ctx.db.get(ids.rateEventId))).toBeNull()
+    expect(await t.run(ctx => ctx.db.get(ids.sourceReceiptId))).toBeNull()
     expect(await t.run(ctx => ctx.db.get(ids.snapshotId))).toBeNull()
     expect(await t.run(ctx => ctx.db.get(ids.identityId))).toBeNull()
     expect(await t.run(ctx => ctx.db.get(ids.revisionId))).toBeNull()
