@@ -7,6 +7,7 @@ import {
   sanitizePublicSourceLocator,
   tombstonedSourceExternalKey,
 } from './lib/learnV2SourceSanitization'
+import { releaseSearchReservationClaims } from './learnV2Search'
 
 // This deliberately stays below the account-deletion batch. Folder deletion
 // only has live lifecycle producers today; later producers must add their
@@ -19,6 +20,47 @@ async function removeRows<TableName extends TableNames>(ctx: MutationCtx, rows: 
 }
 
 async function deleteVoidFoundation(ctx: MutationCtx, userId: string, learningVoidId: Id<'learningVoids'>) {
+  const reservations = await ctx.db.query('searchReservations')
+    .withIndex('by_userId_and_learningVoidId', q => q
+      .eq('userId', userId)
+      .eq('learningVoidId', learningVoidId))
+    .take(BATCH_SIZE)
+  for (const reservation of reservations) {
+    const now = Date.now()
+    if (reservation.status === 'reserved' && reservation.dispatchState === 'not_started') {
+      await releaseSearchReservationClaims(ctx, reservation, now)
+      await ctx.db.patch(reservation._id, {
+        learningVoidId: undefined,
+        status: 'released',
+        outcomeCode: 'void_deleted_before_dispatch',
+        settledAt: now,
+        updatedAt: now,
+        revision: reservation.revision + 1,
+      })
+    }
+    else {
+      await ctx.db.patch(reservation._id, {
+        learningVoidId: undefined,
+        updatedAt: now,
+      })
+    }
+  }
+  if (reservations.length > 0) return true
+
+  const voidBuckets = await ctx.db.query('searchQuotaBuckets')
+    .withIndex('by_userId_and_learningVoidId_and_periodKey', q => q
+      .eq('userId', userId)
+      .eq('learningVoidId', learningVoidId))
+    .take(BATCH_SIZE)
+  for (const bucket of voidBuckets) {
+    await ctx.db.patch(bucket._id, {
+      learningVoidId: undefined,
+      revision: bucket.revision + 1,
+      updatedAt: Date.now(),
+    })
+  }
+  if (voidBuckets.length > 0) return true
+
   const manifests = await ctx.db.query('learnFolderSourceManifests')
     .withIndex('by_userId_and_learningVoidId', q => q.eq('userId', userId).eq('learningVoidId', learningVoidId)).take(BATCH_SIZE)
   for (const manifest of manifests) {

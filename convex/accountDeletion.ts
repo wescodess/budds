@@ -11,6 +11,7 @@ import { internal } from './_generated/api'
 import type { Doc, Id, TableNames } from './_generated/dataModel'
 import { scheduleAudioOverviewDeletion } from './audioOverviews'
 import { isAccountDeletionActive } from './lib/accountDeletionTombstone'
+import { prepareSearchReservationForAccountDeletion } from './learnV2Search'
 
 export { isAccountDeletionActive } from './lib/accountDeletionTombstone'
 
@@ -345,6 +346,28 @@ async function deleteDirectUserBatch(ctx: MutationCtx, table: DirectUserTable, u
 async function deleteLearnV2Table<TableName extends LearnV2Table>(ctx: MutationCtx, table: TableName, userId: string) {
   // The schema guarantees this shared owner index for every listed V2 table;
   // Convex's generic union cannot retain that common index at this call site.
+  if (table === 'searchReservations') {
+    const undispatched = await ctx.db.query('searchReservations')
+      .withIndex('by_userId_and_status_and_dispatchState', q => q
+        .eq('userId', userId).eq('status', 'reserved').eq('dispatchState', 'not_started'))
+      .take(DELETE_BATCH_SIZE)
+    const consumed = undispatched.length > 0 ? [] : await ctx.db.query('searchReservations')
+      .withIndex('by_userId_and_status_and_dispatchState', q => q.eq('userId', userId).eq('status', 'consumed'))
+      .take(DELETE_BATCH_SIZE)
+    const released = undispatched.length > 0 || consumed.length > 0 ? [] : await ctx.db.query('searchReservations')
+      .withIndex('by_userId_and_status_and_dispatchState', q => q.eq('userId', userId).eq('status', 'released'))
+      .take(DELETE_BATCH_SIZE)
+    const started = undispatched.length > 0 || consumed.length > 0 || released.length > 0 ? [] : await ctx.db.query('searchReservations')
+      .withIndex('by_userId_and_status_and_dispatchState', q => q
+        .eq('userId', userId).eq('status', 'reserved').eq('dispatchState', 'started'))
+      .take(DELETE_BATCH_SIZE)
+    const rows = [...undispatched, ...consumed, ...released, ...started]
+    const now = Date.now()
+    for (const reservation of rows) {
+      await prepareSearchReservationForAccountDeletion(ctx, reservation, now)
+    }
+    return rows.length
+  }
   const rows = await ctx.db.query(table).withIndex('by_userId', q => q.eq('userId', userId as never)).take(DELETE_BATCH_SIZE)
   return await deleteRows(ctx, rows)
 }

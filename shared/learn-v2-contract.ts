@@ -397,8 +397,8 @@ export const LEARN_V2_CONTRACT: LearnV2Contract = {
       table('sessionContentClaims', 'Normalized factual claims requiring support records.', 'ordered_child', [index('userId', 'sessionContentId', 'order')], 'sessionContentId'),
       table('calendarProjections', 'Idempotent Study Session to provider-event projection ledger.', 'provider_projection', [index('userId', 'studySessionId'), index('userId', 'provider', 'externalEventId')], 'studySessionId'),
       table('reminderPolicies', 'Owner-scoped channel, offset, quiet-hour, and timezone policy.', 'stable_aggregate', [index('userId', 'learningVoidId')], 'learningVoidId'),
-      table('searchQuotaBuckets', 'UTC product, user, and Learning Void allowance counters and reconciliation status.', 'quota_ledger', [index('provider', 'scopeKind', 'scopeKey', 'periodKey'), index('userId', 'provider', 'periodKey'), index('userId', 'learningVoidId', 'periodKey')]),
-      table('searchReservations', 'Transactional provider-credit reservations and outcomes.', 'quota_ledger', [index('userId', 'idempotencyKey'), index('userId', 'provider', 'status', 'expiresAt')]),
+      table('searchQuotaBuckets', 'UTC product, user, and Learning Void allowance counters and reconciliation status.', 'quota_ledger', [index('provider', 'scopeKind', 'scopeKey', 'periodKey'), index('userId', 'provider', 'periodKey'), index('userId', 'learningVoidId', 'periodKey'), index('provider', 'reconciliationStatus', 'periodKey')]),
+      table('searchReservations', 'Transactional provider-credit reservations and outcomes.', 'quota_ledger', [index('userId', 'idempotencyKeyHash'), index('userId', 'learningVoidId'), index('provider', 'status', 'dispatchState', 'expiresAt'), index('provider', 'reconciliationRequired', 'updatedAt')]),
       table('learnJobs', 'Typed, leased, checkpointed, bounded V2 jobs.', 'operational_job', [index('userId', 'idempotencyKey'), index('userId', 'status', 'leaseExpiresAt'), index('userId', 'learningVoidId', 'type')], 'learningVoidId'),
     ],
   },
@@ -741,6 +741,7 @@ const REQUIRED_FORBIDDEN_QUERY_DATA: ForbiddenQueryDatum[] = [
   'person_name',
   'email_address',
   'account_identifier',
+  'unpublished_note',
   'secret',
   'token',
 ]

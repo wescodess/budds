@@ -3,11 +3,108 @@ import { convexTest } from 'convex-test'
 import { describe, expect, test } from 'vitest'
 import schema from './schema'
 import { internal } from './_generated/api'
+import type { Id } from './_generated/dataModel'
 
 const modules = import.meta.glob('./**/*.ts')
 const userId = 'https://auth.example.com|retention-owner'
 
 describe('Learn V2 source retention seam', () => {
+  test('detaches search history and releases only an undispatched reservation before Void deletion', async () => {
+    const t = convexTest(schema, modules)
+    const ids = await t.run(async (ctx) => {
+      const now = Date.now()
+      const folderId = await ctx.db.insert('folders', { userId, name: 'Search retention', documentCount: 0 })
+      const learningVoidId = await ctx.db.insert('learningVoids', { userId, folderId, title: 'Void', status: 'draft', revision: 1, createdAt: now, updatedAt: now })
+      const blueprintId = await ctx.db.insert('learnBlueprints', { userId, learningVoidId, revision: 1, createdAt: now })
+      const blueprintRevisionId = await ctx.db.insert('learnBlueprintRevisions', { userId, blueprintId, learningVoidId, revision: 1, recordRevision: 1, status: 'draft', createdAt: now, updatedAt: now })
+      const hash = async (value: string) => {
+        const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))
+        return `sha256:${[...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('')}`
+      }
+      const ownerScopeKey = await hash(`owner:${userId}`)
+      const voidScopeKey = await hash(`void:${String(learningVoidId)}`)
+      const definitions = [
+        { owner: '__learn_v2_search_product__', scopeKind: 'product_month' as const, scopeKey: 'global', periodKey: '2026-09', limit: 800 },
+        { owner: '__learn_v2_search_product__', scopeKind: 'product_day' as const, scopeKey: 'global', periodKey: '2026-09-13', limit: 25 },
+        { owner: userId, scopeKind: 'user_day' as const, scopeKey: ownerScopeKey, periodKey: '2026-09-13', limit: 4 },
+        { owner: userId, scopeKind: 'learning_void_broad' as const, scopeKey: voidScopeKey, periodKey: 'lifetime', limit: 2, learningVoidId },
+      ]
+      const bucketIds: Id<'searchQuotaBuckets'>[] = []
+      for (const definition of definitions) {
+        bucketIds.push(await ctx.db.insert('searchQuotaBuckets', {
+          userId: definition.owner,
+          learningVoidId: definition.learningVoidId,
+          provider: 'tavily_free',
+          scopeKind: definition.scopeKind,
+          scopeKey: definition.scopeKey,
+          periodKey: definition.periodKey,
+          limit: definition.limit,
+          reservedCredits: 2,
+          consumedCredits: 0,
+          revision: 1,
+          reconciliationStatus: 'matched',
+          createdAt: now,
+          updatedAt: now,
+        }))
+      }
+      const reservation = async (suffix: string, dispatchState: 'not_started' | 'started') => ({
+        userId,
+        learningVoidId,
+        blueprintRevisionId,
+        expectedVoidRevision: 1,
+        expectedBlueprintRecordRevision: 1,
+        voidScopeKey,
+        provider: 'tavily_free' as const,
+        searchClass: 'broad' as const,
+        status: 'reserved' as const,
+        dispatchState,
+        reconciliationRequired: dispatchState === 'started',
+        productMonthBucketId: bucketIds[0]!,
+        productDayBucketId: bucketIds[1]!,
+        userDayBucketId: bucketIds[2]!,
+        learningVoidBucketId: bucketIds[3]!,
+        productMonthPeriodKey: '2026-09',
+        productDayPeriodKey: '2026-09-13',
+        userDayPeriodKey: '2026-09-13',
+        learningVoidPeriodKey: 'lifetime' as const,
+        expectedCredits: 1 as const,
+        idempotencyKeyHash: `sha256:${suffix.repeat(64)}`,
+        requestFingerprint: `sha256:${'c'.repeat(64)}`,
+        queryDigest: `sha256:${'d'.repeat(64)}`,
+        executionTokenHash: await hash('retention-execution-token'),
+        providerUsageBeforeDispatch: dispatchState === 'started' ? 0 : undefined,
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+        expiresAt: now + 60_000,
+      })
+      const undispatchedId = await ctx.db.insert('searchReservations', await reservation('1', 'not_started'))
+      const dispatchedId = await ctx.db.insert('searchReservations', await reservation('2', 'started'))
+      return { folderId, learningVoidId, bucketIds, undispatchedId, dispatchedId }
+    })
+
+    await t.mutation(internal.learnV2Retention.deleteFolderFoundation, { userId, folderId: ids.folderId })
+    await t.mutation(internal.learnV2Retention.deleteFolderFoundation, { userId, folderId: ids.folderId })
+    const retained = await t.run(async ctx => ({
+      undispatched: await ctx.db.get(ids.undispatchedId),
+      dispatched: await ctx.db.get(ids.dispatchedId),
+      buckets: await Promise.all(ids.bucketIds.map(id => ctx.db.get(id))),
+    }))
+    expect(retained.undispatched).toMatchObject({ status: 'released', outcomeCode: 'void_deleted_before_dispatch' })
+    expect(retained.undispatched?.learningVoidId).toBeUndefined()
+    expect(retained.dispatched).toMatchObject({ status: 'reserved', dispatchState: 'started', reconciliationRequired: true, revision: 1 })
+    expect(retained.dispatched?.learningVoidId).toBeUndefined()
+    expect(retained.buckets.every(bucket => bucket?.reservedCredits === 1)).toBe(true)
+    expect(retained.buckets[3]?.learningVoidId).toBeUndefined()
+    await expect(t.mutation(internal.learnV2Search.consume, {
+      tokenIdentifier: userId,
+      reservationId: ids.dispatchedId,
+      executionToken: 'retention-execution-token',
+      expectedRevision: 1,
+      providerRequestId: 'retention-settlement',
+    })).resolves.toMatchObject({ status: 'consumed' })
+  })
+
   test('purges every support status in bounded batches while preserving attempts', async () => {
     const t = convexTest(schema, modules)
     const ids = await t.run(async (ctx) => {
