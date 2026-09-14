@@ -14,6 +14,7 @@ import {
   requireLearnV2MutationAccess,
   requireLearnV2QueryAccess,
 } from "./lib/learnV2Access";
+import { incrementRecordRevision } from "./lib/learnV2SourceSanitization";
 
 const MAX_FOLDERS = 8,
   MAX_DOCUMENTS = 64,
@@ -241,7 +242,10 @@ async function addDocument(
     folderManifestId: manifest._id,
     sourceIdentityId: identity._id,
     revision: (latest?.revision ?? 0) + 1,
+    recordRevision: 1,
     status:
+      availability.availability === "available" ? "candidate" : "unavailable",
+    effectiveStatus:
       availability.availability === "available" ? "candidate" : "unavailable",
     contentHash: sourceRevision?.contentHash,
     sourceRevision: sourceRevision?.sourceRevision,
@@ -250,6 +254,7 @@ async function addDocument(
     folderRevision: folder.folderRevision,
     filename: document.filename,
     createdAt: Date.now(),
+    updatedAt: Date.now(),
   });
   await ctx.db.insert("learnFolderSourceManifestEntries", {
     userId: manifest.userId,
@@ -624,7 +629,7 @@ export const continueCapture = internalMutation({
                   : manifest.coverage,
               explicitDocumentIds: [],
               explicitDocumentCursor: 0,
-              recordRevision: manifest.recordRevision + 1,
+              recordRevision: incrementRecordRevision(manifest.recordRevision),
               frozenAt: Date.now(),
             });
             return { done: true };
@@ -636,7 +641,7 @@ export const continueCapture = internalMutation({
         status: "failed",
         explicitDocumentIds: [],
         explicitDocumentCursor: 0,
-        recordRevision: manifest.recordRevision + 1,
+        recordRevision: incrementRecordRevision(manifest.recordRevision),
         failureReason: (error instanceof Error
           ? error.message
           : "Source capture failed"

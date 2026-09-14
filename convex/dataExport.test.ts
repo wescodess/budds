@@ -145,7 +145,7 @@ describe('dataExport paginated queries', () => {
     try {
       const t = convexTest(schema, modules)
       const asUser = t.withIdentity(USER_A)
-      const collections = ['learningVoids', 'learnBlueprints', 'learnBlueprintRevisions', 'learnMilestones', 'learnObjectives', 'learnObjectivePrerequisites', 'learnSourceIdentities', 'learnSourceSnapshots', 'learnFolderSourceManifests', 'learnFolderSourceManifestFolders', 'learnFolderSourceManifestEntries', 'learnSourceExcerpts', 'learnObjectiveSources', 'learnClaimSupports', 'masteryAttempts', 'masteryRecords', 'studyPlans', 'studyPlanRevisions', 'studySessions', 'studySessionRetrievalObjectives', 'sessionContent', 'sessionContentBlocks', 'sessionContentClaims', 'calendarProjections', 'reminderPolicies', 'searchQuotaBuckets', 'searchReservations', 'learnJobs', 'learnLifecycleReceipts'] as const
+      const collections = ['learningVoids', 'learnBlueprints', 'learnBlueprintRevisions', 'learnMilestones', 'learnObjectives', 'learnObjectivePrerequisites', 'learnSourceIdentities', 'learnSourceSnapshots', 'learnSourceFetchLeases', 'learnSourceFetchRateEvents', 'learnSourceCommandReceipts', 'learnFolderSourceManifests', 'learnFolderSourceManifestFolders', 'learnFolderSourceManifestEntries', 'learnSourceExcerpts', 'learnObjectiveSources', 'learnClaimSupports', 'masteryAttempts', 'masteryRecords', 'studyPlans', 'studyPlanRevisions', 'studySessions', 'studySessionRetrievalObjectives', 'sessionContent', 'sessionContentBlocks', 'sessionContentClaims', 'calendarProjections', 'reminderPolicies', 'searchQuotaBuckets', 'searchReservations', 'learnJobs', 'learnLifecycleReceipts'] as const
       const storageId = await t.run(async ctx => await ctx.storage.store(new Blob(['private source'], { type: 'text/plain' })))
       const ids = await t.run(async (ctx) => {
         const folderId = await ctx.db.insert('folders', { userId: USER_A.tokenIdentifier, name: 'Export', documentCount: 0 })
@@ -157,10 +157,10 @@ describe('dataExport paginated queries', () => {
         const planId = await ctx.db.insert('studyPlans', { userId: USER_A.tokenIdentifier, learningVoidId: voidId, revision: 1, createdAt: 1 })
         const planRevisionId = await ctx.db.insert('studyPlanRevisions', { userId: USER_A.tokenIdentifier, studyPlanId: planId, learningVoidId: voidId, revision: 1, status: 'draft', createdAt: 1 })
         const sessionId = await ctx.db.insert('studySessions', { userId: USER_A.tokenIdentifier, studyPlanRevisionId: planRevisionId, primaryObjectiveId: objectiveId, status: 'planned', revision: 1, scheduledStartAt: 1 })
-        const sourceIdentityId = await ctx.db.insert('learnSourceIdentities', { userId: USER_A.tokenIdentifier, learningVoidId: voidId, origin: 'folder_document', externalKey: `document:${docId}`, folderDocumentId: docId, title: 'private-source.txt' })
+        const sourceIdentityId = await ctx.db.insert('learnSourceIdentities', { userId: USER_A.tokenIdentifier, learningVoidId: voidId, origin: 'folder_document', externalKey: `document:${docId}?token=identity-secret`, canonicalUrl: 'https://user:password@example.com/capability/identity-secret?token=secret#fragment', publicLocator: 'https://example.com/capability/identity-secret?token=secret#fragment', privateLocator: 'https://example.com/capability/identity-secret?token=secret#fragment', folderDocumentId: docId, title: 'private-source.txt' })
         const manifestId = await ctx.db.insert('learnFolderSourceManifests', { userId: USER_A.tokenIdentifier, learningVoidId: voidId, blueprintRevisionId: revisionId, rootFolderId: folderId, expectedVoidRevision: 1, expectedBlueprintRecordRevision: 1, recordRevision: 2, status: 'frozen', coverage: 'complete', idempotencyKey: 'private-manifest-key', requestFingerprint: 'private-manifest-fingerprint', explicitDocumentIds: [docId], explicitDocumentCursor: 1, nextFolderOrder: 1, nextEntryOrder: 1, entryCount: 1, availableCount: 1, unavailableCount: 0, createdAt: 1, frozenAt: 2 })
         const folderRevision = `sha256:${'a'.repeat(64)}`
-        const snapshotId = await ctx.db.insert('learnSourceSnapshots', { userId: USER_A.tokenIdentifier, sourceIdentityId, learningVoidId: voidId, blueprintRevisionId: revisionId, folderManifestId: manifestId, revision: 1, status: 'candidate', contentHash: 'b'.repeat(64), sourceRevision: `sha256:${'b'.repeat(64)}`, objectKey: 'private/object/key', folderId, folderRevision, filename: 'private-source.txt', createdAt: 1 })
+        const snapshotId = await ctx.db.insert('learnSourceSnapshots', { userId: USER_A.tokenIdentifier, sourceIdentityId, learningVoidId: voidId, blueprintRevisionId: revisionId, folderManifestId: manifestId, revision: 1, status: 'candidate', contentHash: 'b'.repeat(64), sourceRevision: `sha256:${'b'.repeat(64)}`, objectKey: 'private/object/key', folderId, folderRevision, filename: 'private-source.txt', publicLocator: 'https://example.com/capability/snapshot-secret?token=secret#fragment', privateLocator: 'https://example.com/capability/snapshot-secret?token=secret#fragment', createdAt: 1 })
         const manifestFolderId = await ctx.db.insert('learnFolderSourceManifestFolders', { userId: USER_A.tokenIdentifier, manifestId, folderId, name: 'Private folder', folderRevision, depth: 0, order: 0, stage: 'complete', documentCount: 1 })
         const manifestEntryId = await ctx.db.insert('learnFolderSourceManifestEntries', { userId: USER_A.tokenIdentifier, manifestId, order: 0, documentId: docId, folderId, folderRevision, sourceIdentityId, sourceSnapshotId: snapshotId, contentHash: 'b'.repeat(64), documentRevision: `sha256:${'b'.repeat(64)}`, availability: 'available' })
         return { voidId, revisionId, objectiveId, sessionId, snapshotId, sourceIdentityId, manifestId, manifestFolderId, manifestEntryId }
@@ -169,6 +169,9 @@ describe('dataExport paginated queries', () => {
         const contentId = await ctx.db.insert('sessionContent', { userId: USER_A.tokenIdentifier, studySessionId: ids.sessionId, revision: 1, status: 'draft', createdAt: 1 })
         const claimId = await ctx.db.insert('sessionContentClaims', { userId: USER_A.tokenIdentifier, sessionContentId: contentId, order: 1, claim: 'Claim' })
         const excerptId = await ctx.db.insert('learnSourceExcerpts', { userId: USER_A.tokenIdentifier, sourceSnapshotId: ids.snapshotId, locator: 'public', privateLocator: 'https://private.example/locator', excerpt: 'protected', rightsStatus: 'permitted' })
+        await ctx.db.insert('learnSourceFetchLeases', { userId: USER_A.tokenIdentifier, learningVoidId: ids.voidId, sourceSnapshotId: ids.snapshotId, idempotencyKeyHash: 'sha256:private-fetch-key', requestFingerprint: 'private-fetch-fingerprint', leaseToken: 'private-lease-token', expiresAt: 2, createdAt: 1 })
+        await ctx.db.insert('learnSourceFetchRateEvents', { userId: USER_A.tokenIdentifier, learningVoidId: ids.voidId, sourceSnapshotId: ids.snapshotId, createdAt: 1, expiresAt: 2 })
+        await ctx.db.insert('learnSourceCommandReceipts', { userId: USER_A.tokenIdentifier, learningVoidId: ids.voidId, sourceSnapshotId: ids.snapshotId, idempotencyKeyHash: 'sha256:private-command-key', command: 'fetch_source', requestFingerprint: 'private-command-fingerprint', response: '{"private":"secret"}', createdAt: 1 })
         await ctx.db.insert('learnClaimSupports', { userId: USER_A.tokenIdentifier, sessionContentClaimId: claimId, sourceExcerptId: excerptId, entailment: 'entailed', conflictStatus: 'clear' })
         await ctx.db.insert('learnMilestones', { userId: USER_A.tokenIdentifier, blueprintRevisionId: ids.revisionId, order: 1, title: 'Milestone' }); await ctx.db.insert('learnObjectivePrerequisites', { userId: USER_A.tokenIdentifier, blueprintRevisionId: ids.revisionId, objectiveId: ids.objectiveId, prerequisiteObjectiveId: ids.objectiveId }); await ctx.db.insert('learnObjectiveSources', { userId: USER_A.tokenIdentifier, objectiveId: ids.objectiveId, sourceSnapshotId: ids.snapshotId, coverage: 'strong' }); await ctx.db.insert('masteryAttempts', { userId: USER_A.tokenIdentifier, objectiveId: ids.objectiveId, attemptedAt: 1, idempotencyKey: 'a' }); await ctx.db.insert('masteryRecords', { userId: USER_A.tokenIdentifier, objectiveId: ids.objectiveId, state: 'learning' }); await ctx.db.insert('studySessionRetrievalObjectives', { userId: USER_A.tokenIdentifier, studySessionId: ids.sessionId, objectiveId: ids.objectiveId, order: 1 }); await ctx.db.insert('sessionContentBlocks', { userId: USER_A.tokenIdentifier, sessionContentId: contentId, order: 1, kind: 'prompt' }); await ctx.db.insert('calendarProjections', { userId: USER_A.tokenIdentifier, studySessionId: ids.sessionId, status: 'pending_projection' }); await ctx.db.insert('reminderPolicies', { userId: USER_A.tokenIdentifier, learningVoidId: ids.voidId, timezone: 'UTC', channel: 'local' }); await ctx.db.insert('searchQuotaBuckets', { userId: USER_A.tokenIdentifier, provider: 'private', scopeKind: 'user', scopeKey: 'secret', periodKey: '2026-01', count: 9 }); await ctx.db.insert('searchReservations', { userId: USER_A.tokenIdentifier, provider: 'private', status: 'reserved', expiresAt: 1, idempotencyKey: 'r', learningVoidId: ids.voidId }); await ctx.db.insert('learnJobs', { userId: USER_A.tokenIdentifier, learningVoidId: ids.voidId, type: 'private', status: 'queued', revision: 1, idempotencyKey: 'j', leaseExpiresAt: 1, checkpoint: 'secret', terminalReason: 'secret' }); await ctx.db.insert('learnLifecycleReceipts', { userId: USER_A.tokenIdentifier, learningVoidId: ids.voidId, idempotencyKey: 'receipt', command: 'create', requestFingerprint: 'private', revision: 1, blueprintRevisionId: ids.revisionId, blueprintRevisionOrdinal: 1, blueprintRecordRevision: 1, createdAt: 1 })
       })
@@ -177,14 +180,33 @@ describe('dataExport paginated queries', () => {
       expect((await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnSourceExcerpts', paginationOpts: { cursor: null, numItems: 8 } })).page[0]).not.toHaveProperty('privateLocator')
       const sourceIdentity = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnSourceIdentities', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
       expect(sourceIdentity).not.toHaveProperty('externalKey')
+      expect(sourceIdentity).not.toHaveProperty('canonicalUrl')
+      expect(sourceIdentity).not.toHaveProperty('privateLocator')
       expect(sourceIdentity).not.toHaveProperty('folderDocumentId')
       expect(sourceIdentity).not.toHaveProperty('title')
+      expect(sourceIdentity).toMatchObject({ publicLocator: 'https://example.com/' })
+      expect(JSON.stringify(sourceIdentity)).not.toContain('identity-secret')
       const sourceSnapshot = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnSourceSnapshots', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
       expect(sourceSnapshot).not.toHaveProperty('sourceIdentityId')
       expect(sourceSnapshot).not.toHaveProperty('folderManifestId')
       expect(sourceSnapshot).not.toHaveProperty('objectKey')
       expect(sourceSnapshot).not.toHaveProperty('folderId')
       expect(sourceSnapshot).not.toHaveProperty('filename')
+      expect(sourceSnapshot).not.toHaveProperty('privateLocator')
+      expect(sourceSnapshot).toMatchObject({ publicLocator: 'https://example.com/' })
+      expect(JSON.stringify(sourceSnapshot)).not.toContain('snapshot-secret')
+      const lease = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnSourceFetchLeases', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
+      expect(lease).not.toHaveProperty('leaseToken')
+      expect(lease).not.toHaveProperty('requestFingerprint')
+      expect(lease).not.toHaveProperty('idempotencyKey')
+      expect(lease).not.toHaveProperty('idempotencyKeyHash')
+      expect(JSON.stringify(lease)).not.toContain('private-fetch-key')
+      const sourceReceipt = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnSourceCommandReceipts', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
+      expect(sourceReceipt).not.toHaveProperty('response')
+      expect(sourceReceipt).not.toHaveProperty('requestFingerprint')
+      expect(sourceReceipt).not.toHaveProperty('idempotencyKey')
+      expect(sourceReceipt).not.toHaveProperty('idempotencyKeyHash')
+      expect(JSON.stringify(sourceReceipt)).not.toContain('private-command-key')
       const manifest = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnFolderSourceManifests', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
       expect(manifest).not.toHaveProperty('idempotencyKey')
       expect(manifest).not.toHaveProperty('requestFingerprint')

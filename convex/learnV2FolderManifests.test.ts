@@ -1261,10 +1261,119 @@ describe("Learn V2 folder source manifests", () => {
           q.eq("userId", owner.tokenIdentifier).eq("manifestId", manifest!._id),
         )
         .first();
+      const objectiveId = await ctx.db.insert("learnObjectives", {
+        userId: owner.tokenIdentifier,
+        blueprintRevisionId: blueprint._id,
+        order: 0,
+        title: "Deleted source objective",
+      });
+      const objectiveSourceId = await ctx.db.insert("learnObjectiveSources", {
+        userId: owner.tokenIdentifier,
+        objectiveId,
+        sourceSnapshotId: entry!.sourceSnapshotId,
+        coverage: "strong",
+      });
+      const excerptId = await ctx.db.insert("learnSourceExcerpts", {
+        userId: owner.tokenIdentifier,
+        sourceSnapshotId: entry!.sourceSnapshotId,
+        locator: "folder:deleted-root.pdf",
+        excerpt: "protected excerpt",
+        rightsStatus: "permitted",
+      });
+      const studyPlanId = await ctx.db.insert("studyPlans", {
+        userId: owner.tokenIdentifier,
+        learningVoidId: voidRow._id,
+        revision: 1,
+        createdAt: 1,
+      });
+      const studyPlanRevisionId = await ctx.db.insert("studyPlanRevisions", {
+        userId: owner.tokenIdentifier,
+        studyPlanId,
+        learningVoidId: voidRow._id,
+        revision: 1,
+        status: "active",
+        createdAt: 1,
+      });
+      const sessionId = await ctx.db.insert("studySessions", {
+        userId: owner.tokenIdentifier,
+        studyPlanRevisionId,
+        primaryObjectiveId: objectiveId,
+        status: "completed",
+        revision: 1,
+        scheduledStartAt: 1,
+      });
+      const contentId = await ctx.db.insert("sessionContent", {
+        userId: owner.tokenIdentifier,
+        studySessionId: sessionId,
+        revision: 1,
+        status: "published",
+        createdAt: 1,
+      });
+      const claimId = await ctx.db.insert("sessionContentClaims", {
+        userId: owner.tokenIdentifier,
+        sessionContentId: contentId,
+        order: 0,
+        claim: "Supported claim",
+      });
+      const supportId = await ctx.db.insert("learnClaimSupports", {
+        userId: owner.tokenIdentifier,
+        sessionContentClaimId: claimId,
+        sourceExcerptId: excerptId,
+        entailment: "entailed",
+        conflictStatus: "clear",
+        evidenceStatus: "evidence_available",
+      });
+      const attemptId = await ctx.db.insert("masteryAttempts", {
+        userId: owner.tokenIdentifier,
+        objectiveId,
+        attemptedAt: 1,
+        idempotencyKey: "deleted-root-attempt",
+        result: "completed",
+      });
+      const receiptId = await ctx.db.insert("learnSourceCommandReceipts", {
+        userId: owner.tokenIdentifier,
+        learningVoidId: voidRow._id,
+        sourceSnapshotId: entry!.sourceSnapshotId,
+        idempotencyKeyHash: "sha256:deleted-root-receipt",
+        command: "fetch_source",
+        requestFingerprint: "sha256:deleted-root",
+        response: "{}",
+        createdAt: 1,
+      });
+      const leaseId = await ctx.db.insert("learnSourceFetchLeases", {
+        userId: owner.tokenIdentifier,
+        learningVoidId: voidRow._id,
+        sourceSnapshotId: entry!.sourceSnapshotId,
+        idempotencyKeyHash: "sha256:deleted-root-lease",
+        requestFingerprint: "sha256:deleted-root",
+        leaseToken: "lease-token",
+        expiresAt: Date.now() + 60_000,
+        createdAt: Date.now(),
+      });
+      const rateEventId = await ctx.db.insert("learnSourceFetchRateEvents", {
+        userId: owner.tokenIdentifier,
+        learningVoidId: voidRow._id,
+        sourceSnapshotId: entry!.sourceSnapshotId,
+        createdAt: Date.now(),
+        expiresAt: Date.now() + 60_000,
+      });
       return {
         entryId: entry!._id,
         snapshotId: entry!.sourceSnapshotId,
         identityId: entry!.sourceIdentityId,
+        objectiveId,
+        objectiveSourceId,
+        excerptId,
+        claimId,
+        supportId,
+        attemptId,
+        studyPlanId,
+        studyPlanRevisionId,
+        sessionId,
+        contentId,
+        receiptId,
+        leaseId,
+        rateEventId,
       };
     });
 
@@ -1279,5 +1388,22 @@ describe("Learn V2 folder source manifests", () => {
     expect(await t.run((ctx) => ctx.db.get(persisted.entryId))).toBeNull();
     expect(await t.run((ctx) => ctx.db.get(persisted.snapshotId))).toBeNull();
     expect(await t.run((ctx) => ctx.db.get(persisted.identityId))).toBeNull();
+    expect(await t.run((ctx) => ctx.db.get(persisted.receiptId))).toBeNull();
+    expect(await t.run((ctx) => ctx.db.get(persisted.leaseId))).toBeNull();
+    expect(await t.run((ctx) => ctx.db.get(persisted.rateEventId))).toMatchObject({
+      userId: owner.tokenIdentifier,
+      learningVoidId: voidRow._id,
+      sourceSnapshotId: persisted.snapshotId,
+    });
+    expect(await t.run((ctx) => ctx.db.get(persisted.objectiveSourceId))).toBeNull();
+    expect(await t.run((ctx) => ctx.db.get(persisted.excerptId))).toBeNull();
+    expect(await t.run((ctx) => ctx.db.get(persisted.supportId))).toBeNull();
+    expect(await t.run((ctx) => ctx.db.get(persisted.claimId))).toBeNull();
+    expect(await t.run((ctx) => ctx.db.get(persisted.attemptId))).toBeNull();
+    expect(await t.run((ctx) => ctx.db.get(persisted.contentId))).toBeNull();
+    expect(await t.run((ctx) => ctx.db.get(persisted.sessionId))).toBeNull();
+    expect(await t.run((ctx) => ctx.db.get(persisted.studyPlanRevisionId))).toBeNull();
+    expect(await t.run((ctx) => ctx.db.get(persisted.studyPlanId))).toBeNull();
+    expect(await t.run((ctx) => ctx.db.get(persisted.objectiveId))).toBeNull();
   });
 });
