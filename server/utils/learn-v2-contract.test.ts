@@ -230,6 +230,7 @@ describe('Learn Anything V2 executable contract', () => {
       'person_name',
       'email_address',
       'account_identifier',
+      'unpublished_note',
       'secret',
       'token',
     ]))
@@ -267,5 +268,15 @@ describe('Learn Anything V2 executable contract', () => {
       'runtime.humanWaitKeepsJobOpen must be false',
       'stateMachines.source must be defined',
     ]))
+  })
+
+  test('rejects omission of unpublished notes from the public-query threat boundary', () => {
+    const changed = structuredClone(LEARN_V2_CONTRACT)
+    changed.threats.externalQueryForbiddenData = changed.threats.externalQueryForbiddenData
+      .filter(item => item !== 'unpublished_note')
+
+    expect(validateLearnV2Contract(changed)).toContain(
+      'threats.externalQueryForbiddenData must include unpublished_note',
+    )
   })
 })

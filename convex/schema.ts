@@ -1280,8 +1280,76 @@ export default defineSchema({
   // Inert until LA2-15 adds its first provider writer and provider-first cleanup atomically.
   calendarProjections: defineTable({ userId: v.string(), studySessionId: v.id('studySessions'), status: v.literal('pending_projection'), provider: v.optional(v.string()), externalEventId: v.optional(v.string()) }).index('by_userId', ['userId']).index('by_userId_and_studySessionId', ['userId', 'studySessionId']).index('by_userId_and_provider_and_externalEventId', ['userId', 'provider', 'externalEventId']),
   reminderPolicies: defineTable({ userId: v.string(), learningVoidId: v.id('learningVoids'), timezone: v.string(), channel: v.string() }).index('by_userId', ['userId']).index('by_userId_and_learningVoidId', ['userId', 'learningVoidId']),
-  searchQuotaBuckets: defineTable({ userId: v.string(), learningVoidId: v.optional(v.id('learningVoids')), provider: v.string(), scopeKind: v.string(), scopeKey: v.string(), periodKey: v.string(), count: v.number() }).index('by_userId', ['userId']).index('by_provider_and_scopeKind_and_scopeKey_and_periodKey', ['provider', 'scopeKind', 'scopeKey', 'periodKey']).index('by_userId_and_provider_and_periodKey', ['userId', 'provider', 'periodKey']).index('by_userId_and_learningVoidId_and_periodKey', ['userId', 'learningVoidId', 'periodKey']),
-  searchReservations: defineTable({ userId: v.string(), provider: v.string(), status: v.union(v.literal('reserved'), v.literal('consumed'), v.literal('released')), expiresAt: v.number(), idempotencyKey: v.string(), learningVoidId: v.id('learningVoids') }).index('by_userId', ['userId']).index('by_userId_and_idempotencyKey', ['userId', 'idempotencyKey']).index('by_userId_and_provider_and_status_and_expiresAt', ['userId', 'provider', 'status', 'expiresAt']),
+  searchQuotaBuckets: defineTable({
+    userId: v.string(),
+    learningVoidId: v.optional(v.id('learningVoids')),
+    provider: v.literal('tavily_free'),
+    scopeKind: v.union(v.literal('product_month'), v.literal('product_day'), v.literal('user_day'), v.literal('learning_void_broad')),
+    scopeKey: v.string(),
+    periodKey: v.string(),
+    limit: v.number(),
+    providerUsageBaseline: v.optional(v.number()),
+    reservedCredits: v.number(),
+    consumedCredits: v.number(),
+    revision: v.number(),
+    reconciliationStatus: v.union(v.literal('matched'), v.literal('review_required')),
+    circuitReason: v.optional(v.union(v.literal('usage_policy'), v.literal('usage_drift'), v.literal('dispatch_uncertain'))),
+    circuitReservationId: v.optional(v.id('searchReservations')),
+    providerReportedUsage: v.optional(v.number()),
+    providerReportedUsageObservedAt: v.optional(v.number()),
+    lastReconciledAt: v.optional(v.number()),
+    activeDispatchReservationId: v.optional(v.id('searchReservations')),
+    activeDispatchLeaseExpiresAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index('by_userId', ['userId'])
+    .index('by_provider_and_scopeKind_and_scopeKey_and_periodKey', ['provider', 'scopeKind', 'scopeKey', 'periodKey'])
+    .index('by_userId_and_provider_and_periodKey', ['userId', 'provider', 'periodKey'])
+    .index('by_userId_and_learningVoidId_and_periodKey', ['userId', 'learningVoidId', 'periodKey'])
+    .index('by_provider_and_reconciliationStatus_and_periodKey', ['provider', 'reconciliationStatus', 'periodKey']),
+  searchReservations: defineTable({
+    userId: v.string(),
+    learningVoidId: v.optional(v.id('learningVoids')),
+    blueprintRevisionId: v.optional(v.id('learnBlueprintRevisions')),
+    expectedVoidRevision: v.number(),
+    expectedBlueprintRecordRevision: v.number(),
+    voidScopeKey: v.string(),
+    provider: v.literal('tavily_free'),
+    searchClass: v.literal('broad'),
+    status: v.union(v.literal('reserved'), v.literal('consumed'), v.literal('released')),
+    dispatchState: v.union(v.literal('not_started'), v.literal('started')),
+    reconciliationRequired: v.boolean(),
+    productMonthBucketId: v.id('searchQuotaBuckets'),
+    productDayBucketId: v.id('searchQuotaBuckets'),
+    userDayBucketId: v.id('searchQuotaBuckets'),
+    learningVoidBucketId: v.id('searchQuotaBuckets'),
+    productMonthPeriodKey: v.string(),
+    productDayPeriodKey: v.string(),
+    userDayPeriodKey: v.string(),
+    learningVoidPeriodKey: v.literal('lifetime'),
+    expectedCredits: v.literal(1),
+    idempotencyKeyHash: v.optional(v.string()),
+    requestFingerprint: v.optional(v.string()),
+    queryDigest: v.optional(v.string()),
+    executionTokenHash: v.string(),
+    revision: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    expiresAt: v.number(),
+    dispatchedAt: v.optional(v.number()),
+    settledAt: v.optional(v.number()),
+    outcomeCode: v.optional(v.string()),
+    providerRequestIdHash: v.optional(v.string()),
+    reconciliationKeyHash: v.optional(v.string()),
+    reconciliationRequestFingerprint: v.optional(v.string()),
+    providerUsageBeforeDispatch: v.optional(v.number()),
+    ownerDeletedAt: v.optional(v.number()),
+  }).index('by_userId', ['userId'])
+    .index('by_userId_and_idempotencyKeyHash', ['userId', 'idempotencyKeyHash'])
+    .index('by_userId_and_learningVoidId', ['userId', 'learningVoidId'])
+    .index('by_userId_and_status_and_dispatchState', ['userId', 'status', 'dispatchState'])
+    .index('by_provider_and_status_and_dispatchState_and_expiresAt', ['provider', 'status', 'dispatchState', 'expiresAt'])
+    .index('by_provider_and_reconciliationRequired_and_updatedAt', ['provider', 'reconciliationRequired', 'updatedAt']),
   learnJobs: defineTable({ userId: v.string(), learningVoidId: v.id('learningVoids'), type: v.string(), status: v.union(v.literal('queued'), v.literal('leased'), v.literal('running'), v.literal('awaiting_approval'), v.literal('blocked'), v.literal('succeeded'), v.literal('failed'), v.literal('cancelled')), revision: v.number(), idempotencyKey: v.string(), leaseExpiresAt: v.optional(v.number()), checkpoint: v.optional(v.string()), terminalReason: v.optional(v.string()) }).index('by_userId', ['userId']).index('by_userId_and_idempotencyKey', ['userId', 'idempotencyKey']).index('by_userId_and_status_and_leaseExpiresAt', ['userId', 'status', 'leaseExpiresAt']).index('by_userId_and_learningVoidId_and_type', ['userId', 'learningVoidId', 'type']),
   // Exact-once lifecycle responses survive later transitions; it is included
   // in redacted owner export and account deletion like every V2 table.
