@@ -53,13 +53,23 @@ const exportCollectionValidator = v.union(
   v.literal('audioOverviewInterjectionsV2'),
   v.literal('audioOverviewInterjectionUtterances'),
   v.literal('audioOverviewInterjectionSources'),
-  v.literal('learningVoids'), v.literal('learnBlueprints'), v.literal('learnBlueprintRevisions'), v.literal('learnMilestones'), v.literal('learnObjectives'), v.literal('learnObjectivePrerequisites'), v.literal('learnSourceIdentities'), v.literal('learnSourceSnapshots'), v.literal('learnFolderSourceManifests'), v.literal('learnFolderSourceManifestFolders'), v.literal('learnFolderSourceManifestEntries'), v.literal('learnSourceExcerpts'), v.literal('learnObjectiveSources'), v.literal('learnClaimSupports'), v.literal('masteryAttempts'), v.literal('masteryRecords'), v.literal('studyPlans'), v.literal('studyPlanRevisions'), v.literal('studySessions'), v.literal('studySessionRetrievalObjectives'), v.literal('sessionContent'), v.literal('sessionContentBlocks'), v.literal('sessionContentClaims'), v.literal('calendarProjections'), v.literal('reminderPolicies'), v.literal('searchQuotaBuckets'), v.literal('searchReservations'), v.literal('learnJobs'), v.literal('learnLifecycleReceipts'),
+  v.literal('learningVoids'), v.literal('learnBlueprints'), v.literal('learnBlueprintRevisions'), v.literal('learnMilestones'), v.literal('learnObjectives'), v.literal('learnObjectivePrerequisites'), v.literal('learnSourceIdentities'), v.literal('learnSourceSnapshots'), v.literal('learnSourceFetchLeases'), v.literal('learnSourceFetchRateEvents'), v.literal('learnSourceCommandReceipts'), v.literal('learnFolderSourceManifests'), v.literal('learnFolderSourceManifestFolders'), v.literal('learnFolderSourceManifestEntries'), v.literal('learnSourceExcerpts'), v.literal('learnObjectiveSources'), v.literal('learnClaimSupports'), v.literal('masteryAttempts'), v.literal('masteryRecords'), v.literal('studyPlans'), v.literal('studyPlanRevisions'), v.literal('studySessions'), v.literal('studySessionRetrievalObjectives'), v.literal('sessionContent'), v.literal('sessionContentBlocks'), v.literal('sessionContentClaims'), v.literal('calendarProjections'), v.literal('reminderPolicies'), v.literal('searchQuotaBuckets'), v.literal('searchReservations'), v.literal('learnJobs'), v.literal('learnLifecycleReceipts'),
 )
 
 function boundedPaginationOpts(paginationOpts: { numItems: number, cursor: string | null }) {
   return {
     cursor: paginationOpts.cursor,
     numItems: Math.min(MAX_EXPORT_PAGE_SIZE, Math.max(1, Math.floor(paginationOpts.numItems))),
+  }
+}
+
+function exportPublicLocator(value: string | undefined) {
+  if (!value) return undefined
+  try {
+    return `${new URL(value).origin}/`
+  }
+  catch {
+    return undefined
   }
 }
 
@@ -202,8 +212,11 @@ export const getUserDataPage = query({
       case 'learnMilestones': return await ctx.db.query('learnMilestones').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
       case 'learnObjectives': return await ctx.db.query('learnObjectives').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
       case 'learnObjectivePrerequisites': return await ctx.db.query('learnObjectivePrerequisites').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
-      case 'learnSourceIdentities': { const result = await ctx.db.query('learnSourceIdentities').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts); return { ...result, page: result.page.map(({ externalKey: _externalKey, folderDocumentId: _folderDocumentId, title, ...row }) => row.origin === 'folder_document' ? row : { ...row, title }) } }
-      case 'learnSourceSnapshots': { const result = await ctx.db.query('learnSourceSnapshots').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts); return { ...result, page: result.page.map(({ sourceIdentityId: _sourceIdentityId, folderManifestId: _folderManifestId, objectKey: _objectKey, folderId: _folderId, filename: _filename, ...row }) => row) } }
+      case 'learnSourceIdentities': { const result = await ctx.db.query('learnSourceIdentities').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts); return { ...result, page: result.page.map(({ externalKey: _externalKey, canonicalUrl: _canonicalUrl, privateLocator: _privateLocator, publicLocator, folderDocumentId: _folderDocumentId, title, ...row }) => ({ ...row, ...(row.origin === 'folder_document' ? {} : { title }), ...(exportPublicLocator(publicLocator) ? { publicLocator: exportPublicLocator(publicLocator) } : {}) })) } }
+      case 'learnSourceSnapshots': { const result = await ctx.db.query('learnSourceSnapshots').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts); return { ...result, page: result.page.map(({ sourceIdentityId: _sourceIdentityId, folderManifestId: _folderManifestId, objectKey: _objectKey, folderId: _folderId, filename: _filename, privateLocator: _privateLocator, publicLocator, ...row }) => ({ ...row, ...(exportPublicLocator(publicLocator) ? { publicLocator: exportPublicLocator(publicLocator) } : {}) })) } }
+      case 'learnSourceFetchLeases': { const result = await ctx.db.query('learnSourceFetchLeases').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts); return { ...result, page: result.page.map(({ leaseToken: _leaseToken, requestFingerprint: _fingerprint, idempotencyKeyHash: _keyHash, ...row }) => row) } }
+      case 'learnSourceFetchRateEvents': return await ctx.db.query('learnSourceFetchRateEvents').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+      case 'learnSourceCommandReceipts': { const result = await ctx.db.query('learnSourceCommandReceipts').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts); return { ...result, page: result.page.map(({ idempotencyKeyHash: _keyHash, requestFingerprint: _fingerprint, response: _response, ...row }) => row) } }
       case 'learnFolderSourceManifests': { const result = await ctx.db.query('learnFolderSourceManifests').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts); return { ...result, page: result.page.map(({ idempotencyKey: _idempotencyKey, requestFingerprint: _requestFingerprint, explicitDocumentIds: _explicitDocumentIds, rootFolderId: _rootFolderId, ...row }) => row) } }
       case 'learnFolderSourceManifestFolders': { const result = await ctx.db.query('learnFolderSourceManifestFolders').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts); return { ...result, page: result.page.map(({ folderId: _folderId, parentFolderId: _parentFolderId, name: _name, childCursor: _childCursor, documentCursor: _documentCursor, ...row }) => row) } }
       case 'learnFolderSourceManifestEntries': { const result = await ctx.db.query('learnFolderSourceManifestEntries').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts); return { ...result, page: result.page.map(({ documentId: _documentId, folderId: _folderId, sourceIdentityId: _sourceIdentityId, sourceSnapshotId: _sourceSnapshotId, ...row }) => row) } }

@@ -63,6 +63,9 @@ const EXPORT_COLLECTIONS = [
   'sessionContentClaims', 'calendarProjections', 'reminderPolicies',
   'searchQuotaBuckets', 'searchReservations', 'learnJobs',
   'learnLifecycleReceipts',
+  'learnSourceFetchLeases',
+  'learnSourceFetchRateEvents',
+  'learnSourceCommandReceipts',
 ] as const
 
 type ExportCollection = typeof EXPORT_COLLECTIONS[number]
