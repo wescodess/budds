@@ -21,6 +21,16 @@ const MAX_AVAILABILITY_WINDOWS = 28;
 const MAX_BLACKOUT_DATES = 90;
 const MAX_REVIEW_INTERVALS = 4;
 
+async function digest(value: unknown) {
+  const bytes = new Uint8Array(
+    await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(JSON.stringify(value)),
+    ),
+  );
+  return `sha256:${[...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
 const schedulingInputValidator = v.object({
   version: v.literal("learn-v2.schedule-input.v1"),
   timezone: v.string(),
@@ -665,11 +675,13 @@ export const acceptPlanPreview = mutation({
         .withIndex("by_userId_and_objectiveId_and_sourceSnapshotId", (q) =>
           q.eq("userId", userId).eq("objectiveId", session.primaryObjectiveId),
         )
-        .take(11);
+        .take(65);
       const supportIds = links
         .filter((link) => link.coverage !== "gap")
         .map((link) => link.sourceSnapshotId);
-      const inputDigest = JSON.stringify({
+      if (!supportIds.length || supportIds.length > 64)
+        throw new Error("Session content source scope is outside the bounded contract");
+      const inputDigest = await digest({
         planRevisionId: String(planRevision._id),
         sessionId: String(session._id),
         sessionRevision: session.revision,
@@ -1115,10 +1127,12 @@ export const reflowFutureIncomplete = mutation({
               .eq("userId", userId)
               .eq("objectiveId", session.primaryObjectiveId),
           )
-          .take(11);
+          .take(65);
         const sourceIds = links
           .filter((link) => link.coverage !== "gap")
           .map((link) => link.sourceSnapshotId);
+        if (!sourceIds.length || sourceIds.length > 64)
+          throw new Error("Session content source scope is outside the bounded contract");
         const jobId = await ctx.db.insert("learnJobs", {
           userId,
           learningVoidId: learningVoid._id,

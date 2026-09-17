@@ -24,6 +24,20 @@ import {
 const TYPE = "session_content_generation";
 const LEASE_MS = 5 * 60_000;
 const MAX_ATTEMPTS = 2;
+const digest = async (value: unknown) => {
+  const bytes = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(value))),
+  );
+  return `sha256:${[...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+};
+const canonicalJson = (value: unknown): string => {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+};
 type ProviderInput = {
   providerEnabled: boolean;
   model: string | null;
@@ -49,27 +63,44 @@ const providerCandidateSchema = {
   ],
   properties: {
     version: { const: "learn-v2.session-content.v1" },
-    generatorVersion: { type: "string" },
-    assessmentRubric: { type: "object" },
+    generatorVersion: { type: "string", minLength: 1, maxLength: 200 },
+    assessmentRubric: {
+      type: "object", additionalProperties: false,
+      required: ["version", "kind", "responseFormat", "instructions", "passingScorePercent", "criteria"],
+      properties: {
+        version: { const: "learn-v2.assessment.v1" }, kind: { enum: ["machine_checkable", "bounded_rubric"] },
+        responseFormat: { enum: ["short_text", "structured"] }, instructions: { type: "string", minLength: 1, maxLength: 1000 },
+        passingScorePercent: { const: 80 }, criteria: { type: "array", minItems: 1, maxItems: 8, items: {
+          type: "object", additionalProperties: false, required: ["key", "description", "weightPercent"],
+          properties: { key: { type: "string", minLength: 1, maxLength: 64 }, description: { type: "string", minLength: 1, maxLength: 300 }, weightPercent: { type: "integer", minimum: 1, maximum: 100 } },
+        } },
+      },
+    },
     blocks: {
       type: "array",
       minItems: 10,
       maxItems: 10,
-      items: { type: "object" },
+      items: { type: "object", additionalProperties: false, required: ["order", "kind", "content", "claimOrders"], properties: {
+        order: { type: "integer", minimum: 0, maximum: 9 }, kind: { enum: ["retrieval", "objective", "cold_attempt", "explanation", "worked_example", "faded_example", "independent_application", "confidence_teach_back", "misconception_feedback", "next_review"] }, content: { type: "string", minLength: 1, maxLength: 4000 }, claimOrders: { type: "array", minItems: 1, maxItems: 8, items: { type: "integer", minimum: 0, maximum: 31 } },
+      } },
     },
-    claims: { type: "array", maxItems: 32, items: { type: "object" } },
+    claims: { type: "array", minItems: 1, maxItems: 32, items: { type: "object", additionalProperties: false, required: ["order", "claim", "supportSourceSnapshotIds", "verifierVersion", "confidence"], properties: {
+      order: { type: "integer", minimum: 0, maximum: 31 }, claim: { type: "string", minLength: 1, maxLength: 1000 }, supportSourceSnapshotIds: { type: "array", minItems: 1, maxItems: 8, items: { type: "string", minLength: 1, maxLength: 200 } }, verifierVersion: { const: "learn-v2.entailment.v1" }, confidence: { type: "number", minimum: 0.8, maximum: 1 },
+    } } },
   },
 } as const;
 
 function sessionStartFingerprint(args: {
   studySessionId: Id<"studySessions">;
   expectedSessionRevision: number;
+  expectedContentRevision: number;
   idempotencyKey: string;
 }) {
   return JSON.stringify({
     command: "startStudySession",
     studySessionId: String(args.studySessionId),
     expectedSessionRevision: args.expectedSessionRevision,
+    expectedContentRevision: args.expectedContentRevision,
   });
 }
 
@@ -278,7 +309,10 @@ export const getSessionContentGenerationInput = internalQuery({
       sourceSnapshotId: Id<"learnSourceSnapshots">;
       excerpt: string;
     }>;
-    for (const sourceId of job.dispatchSupportingSourceSnapshotIds ?? []) {
+    const sourceIds = job.dispatchSupportingSourceSnapshotIds ?? [];
+    if (!sourceIds.length || sourceIds.length > 64 || new Set(sourceIds.map(String)).size !== sourceIds.length)
+      throw new Error("evidence_unavailable");
+    for (const sourceId of sourceIds) {
       const source = await ctx.db.get(sourceId);
       const linked = await ctx.db
         .query("learnObjectiveSources")
@@ -303,6 +337,7 @@ export const getSessionContentGenerationInput = internalQuery({
         !linked ||
         linked.coverage === "gap" ||
         source.status !== "user_accepted" ||
+        source.effectiveStatus !== "user_accepted" ||
         source.rightsStatus !== "permitted" ||
         source.conflictStatus !== "clear" ||
         source.evidencePurgedAt ||
@@ -345,7 +380,8 @@ export const markSessionContentDispatchStarted = internalMutation({
       job.type !== TYPE ||
       job.status !== "running" ||
       job.leaseToken !== args.leaseToken ||
-      job.revision !== args.expectedRevision
+      job.revision !== args.expectedRevision ||
+      (job.leaseExpiresAt ?? 0) <= Date.now()
     )
       throw new Error("Session-content lease unavailable");
     await ctx.db.patch(job._id, {
@@ -373,7 +409,8 @@ export const recordSessionContentProviderResponse = internalMutation({
       job.type !== TYPE ||
       job.status !== "running" ||
       job.leaseToken !== args.leaseToken ||
-      job.revision !== args.expectedRevision
+      job.revision !== args.expectedRevision ||
+      (job.leaseExpiresAt ?? 0) <= Date.now()
     )
       throw new Error("Session-content lease unavailable");
     if (!args.providerResponseId.trim() || !args.providerResponseModel.trim())
@@ -478,7 +515,18 @@ export const recoverExpiredSessionContentJobs = internalMutation({
         q.eq("type", TYPE).eq("status", "running").lte("leaseExpiresAt", now),
       )
       .take(16);
+    let requeued = 0;
     for (const job of running) {
+      if (job.checkpoint !== "provider_dispatch_started" && job.checkpoint !== "provider_response_received") {
+        if ((job.attempts ?? 0) >= MAX_ATTEMPTS) {
+          await ctx.db.patch(job._id, { status: "failed", terminalReason: "attempt_limit_exhausted", revision: job.revision + 1, leaseToken: undefined, leaseExpiresAt: undefined, checkpoint: undefined, updatedAt: now });
+        } else {
+          await ctx.db.patch(job._id, { status: "queued", revision: job.revision + 1, leaseToken: undefined, leaseExpiresAt: undefined, checkpoint: undefined, updatedAt: now });
+          await ctx.scheduler.runAfter(0, internal.learnV2SessionContent.executeSessionContentGeneration, { tokenIdentifier: job.userId, jobId: job._id, expectedRevision: job.revision + 1 });
+          requeued++;
+        }
+        continue;
+      }
       if (job.studySessionId) {
         const session = await ctx.db.get(job.studySessionId);
         if (session?.status === "planned")
@@ -498,7 +546,7 @@ export const recoverExpiredSessionContentJobs = internalMutation({
         updatedAt: now,
       });
     }
-    return { recovered: jobs.length, blocked: running.length };
+    return { recovered: jobs.length + requeued, blocked: running.length - requeued };
   },
 });
 
@@ -611,7 +659,7 @@ export const commitSessionContentCandidate = internalMutation({
       revision: 1,
       status: "published",
       inputDigest: job.inputDigest,
-      candidateDigest: JSON.stringify(candidate),
+      candidateDigest: await digest(candidate),
       providerModel: job.providerResponseModel,
       providerRequestId: job.providerResponseId,
       assessmentRubricSnapshot: JSON.stringify(candidate.assessmentRubric),
@@ -623,8 +671,8 @@ export const commitSessionContentCandidate = internalMutation({
     if (
       !objective ||
       objective.assessmentContract === undefined ||
-      JSON.stringify(candidate.assessmentRubric) !==
-        JSON.stringify(objective.assessmentContract)
+      canonicalJson(candidate.assessmentRubric) !==
+        canonicalJson(objective.assessmentContract)
     ) {
       await ctx.db.delete(contentId);
       await block(ctx, job, "rubric_revision_conflict");
@@ -836,6 +884,7 @@ export const startStudySession = mutation({
   args: {
     studySessionId: v.id("studySessions"),
     expectedSessionRevision: v.number(),
+    expectedContentRevision: v.number(),
     idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
@@ -848,6 +897,9 @@ export const startStudySession = mutation({
     const plan = await ctx.db.get(session.studyPlanRevisionId);
     if (!plan || plan.userId !== userId)
       throw new Error("Study session is not ready");
+    const stable = await ctx.db.get(plan.studyPlanId);
+    if (!stable || stable.activeRevisionId !== plan._id || plan.status !== "accepted")
+      throw new Error("Study session is not current");
     const fingerprint = sessionStartFingerprint(args);
     const prior = await ctx.db
       .query("learnPlanCommandReceipts")
@@ -877,11 +929,13 @@ export const startStudySession = mutation({
     const content = await ctx.db
       .query("sessionContent")
       .withIndex("by_userId_and_studySessionId_and_revision", (q) =>
-        q.eq("userId", userId).eq("studySessionId", session._id),
+        q
+          .eq("userId", userId)
+          .eq("studySessionId", session._id)
+          .eq("revision", args.expectedContentRevision),
       )
-      .order("desc")
-      .first();
-    if (!content || content.status !== "published")
+      .unique();
+    if (!content || content.status !== "published" || content.revision !== args.expectedContentRevision)
       throw new Error("Published session content is required");
     const response = {
       status: "in_progress" as const,
@@ -962,6 +1016,7 @@ export const getSessionContent = query({
         ...rows.map(({ sourceExcerptId: _private, ...row }) => row),
       );
     }
-    return { ...content, blocks, claims, supports };
+    const { providerRequestId: _providerRequestId, ...publicContent } = content;
+    return { ...publicContent, blocks, claims, supports };
   },
 });
