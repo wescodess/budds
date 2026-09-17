@@ -15,7 +15,11 @@ import {
   requireLearnV2MutationAccess,
   requireLearnV2QueryAccess,
 } from "./lib/learnV2Access";
-import { validateLearnV2SessionContentCandidate } from "../shared/learn-v2-session-content";
+import {
+  LEARN_V2_ENTAILMENT_VERIFIER_VERSION,
+  validateLearnV2EntailmentDecisions,
+  validateLearnV2SessionContentCandidate,
+} from "../shared/learn-v2-session-content";
 import {
   classifyAiGatewayFailure,
   generateCompletion,
@@ -45,6 +49,7 @@ type ProviderInput = {
   sources: Array<{
     alias: string;
     sourceSnapshotId: Id<"learnSourceSnapshots">;
+    sourceExcerptId: Id<"learnSourceExcerpts">;
     excerpt: string;
   }>;
 };
@@ -84,8 +89,17 @@ const providerCandidateSchema = {
         order: { type: "integer", minimum: 0, maximum: 9 }, kind: { enum: ["retrieval", "objective", "cold_attempt", "explanation", "worked_example", "faded_example", "independent_application", "confidence_teach_back", "misconception_feedback", "next_review"] }, content: { type: "string", minLength: 1, maxLength: 4000 }, claimOrders: { type: "array", minItems: 1, maxItems: 8, items: { type: "integer", minimum: 0, maximum: 31 } },
       } },
     },
-    claims: { type: "array", minItems: 1, maxItems: 32, items: { type: "object", additionalProperties: false, required: ["order", "claim", "supportSourceSnapshotIds", "verifierVersion", "confidence"], properties: {
-      order: { type: "integer", minimum: 0, maximum: 31 }, claim: { type: "string", minLength: 1, maxLength: 1000 }, supportSourceSnapshotIds: { type: "array", minItems: 1, maxItems: 8, items: { type: "string", minLength: 1, maxLength: 200 } }, verifierVersion: { const: "learn-v2.entailment.v1" }, confidence: { type: "number", minimum: 0.8, maximum: 1 },
+    claims: { type: "array", minItems: 1, maxItems: 32, items: { type: "object", additionalProperties: false, required: ["order", "claim", "supportSourceSnapshotIds"], properties: {
+      order: { type: "integer", minimum: 0, maximum: 31 }, claim: { type: "string", minLength: 1, maxLength: 1000 }, supportSourceSnapshotIds: { type: "array", minItems: 1, maxItems: 8, items: { type: "string", minLength: 1, maxLength: 200 } },
+    } } },
+  },
+} as const;
+
+const entailmentVerifierSchema = {
+  type: "object", additionalProperties: false, required: ["version", "decisions"], properties: {
+    version: { const: LEARN_V2_ENTAILMENT_VERIFIER_VERSION },
+    decisions: { type: "array", minItems: 1, maxItems: 256, items: { type: "object", additionalProperties: false, required: ["claimOrder", "sourceSnapshotId", "sourceExcerptId", "decision", "verifierVersion", "confidence"], properties: {
+      claimOrder: { type: "integer", minimum: 0, maximum: 31 }, sourceSnapshotId: { type: "string", minLength: 1, maxLength: 200 }, sourceExcerptId: { type: "string", minLength: 1, maxLength: 200 }, decision: { enum: ["entailed", "not_entailed"] }, verifierVersion: { const: LEARN_V2_ENTAILMENT_VERIFIER_VERSION }, confidence: { type: "number", minimum: 0, maximum: 1 },
     } } },
   },
 } as const;
@@ -307,6 +321,7 @@ export const getSessionContentGenerationInput = internalQuery({
     const sources = [] as Array<{
       alias: string;
       sourceSnapshotId: Id<"learnSourceSnapshots">;
+      sourceExcerptId: Id<"learnSourceExcerpts">;
       excerpt: string;
     }>;
     const sourceIds = job.dispatchSupportingSourceSnapshotIds ?? [];
@@ -348,6 +363,7 @@ export const getSessionContentGenerationInput = internalQuery({
       sources.push({
         alias: `source-${String(sources.length + 1).padStart(3, "0")}`,
         sourceSnapshotId: sourceId,
+        sourceExcerptId: excerpt._id,
         excerpt: excerpt.excerpt,
       });
     }
@@ -557,6 +573,7 @@ export const commitSessionContentCandidate = internalMutation({
     leaseToken: v.string(),
     expectedRevision: v.number(),
     candidateJson: v.string(),
+    verifierDecisionsJson: v.string(),
   },
   handler: async (ctx, args) => {
     const job = await ctx.db.get(args.jobId);
@@ -605,6 +622,7 @@ export const commitSessionContentCandidate = internalMutation({
       return { status: "blocked" as const };
     }
     const sourceToExcerpt = new Map<string, Id<"learnSourceExcerpts">>();
+    const sourceEvidence = new Map<string, { sourceExcerptId: string }>();
     for (const sourceId of job.dispatchSupportingSourceSnapshotIds ?? []) {
       const source = await ctx.db.get(sourceId);
       if (
@@ -638,6 +656,29 @@ export const commitSessionContentCandidate = internalMutation({
         return { status: "blocked" as const };
       }
       sourceToExcerpt.set(String(source._id), excerpt._id);
+      sourceEvidence.set(String(source._id), {
+        sourceExcerptId: String(excerpt._id),
+      });
+    }
+    let verifierDecisions: ReturnType<typeof validateLearnV2EntailmentDecisions>;
+    try {
+      verifierDecisions = validateLearnV2EntailmentDecisions(
+        JSON.parse(args.verifierDecisionsJson),
+        candidate,
+        sourceEvidence,
+      );
+    } catch {
+      const session = job.studySessionId ? await ctx.db.get(job.studySessionId) : null;
+      if (session?.status === "planned") await ctx.db.patch(session._id, {
+        status: "generation_failed", revision: session.revision + 1,
+        auditReasonCode: "entailment_verification_failed",
+      });
+      await ctx.db.patch(job._id, {
+        status: "failed", terminalReason: "entailment_verification_failed",
+        revision: job.revision + 1, leaseToken: undefined, leaseExpiresAt: undefined,
+        checkpoint: undefined, updatedAt: Date.now(),
+      });
+      return { status: "generation_failed" as const };
     }
     const existing = await ctx.db
       .query("sessionContent")
@@ -688,25 +729,31 @@ export const commitSessionContentCandidate = internalMutation({
         claimOrdersJson: JSON.stringify(item.claimOrders),
       });
     for (const item of candidate.claims) {
+      const decisions = verifierDecisions.filter((decision) => decision.claimOrder === item.order);
+      // The claim record is a conservative projection of independent decisions,
+      // never a generator-provided assertion.
+      const confidence = Math.min(...decisions.map((decision) => decision.confidence));
       const claimId = await ctx.db.insert("sessionContentClaims", {
         userId: args.tokenIdentifier,
         sessionContentId: contentId,
         order: item.order,
         claim: item.claim,
-        verifierVersion: item.verifierVersion,
-        confidence: item.confidence,
+        verifierVersion: LEARN_V2_ENTAILMENT_VERIFIER_VERSION,
+        confidence,
       });
       for (const sourceId of item.supportSourceSnapshotIds) {
         const excerptId = sourceToExcerpt.get(sourceId);
         if (!excerptId) throw new Error("Candidate support disappeared");
+        const decision = verifierDecisions.find((value) => value.claimOrder === item.order && value.sourceSnapshotId === sourceId);
+        if (!decision) throw new Error("Entailment verification disappeared");
         await ctx.db.insert("learnClaimSupports", {
           userId: args.tokenIdentifier,
           sessionContentClaimId: claimId,
           sourceExcerptId: excerptId,
           sourceSnapshotId: sourceId as Id<"learnSourceSnapshots">,
           entailment: "entailed",
-          verifierVersion: item.verifierVersion,
-          confidence: item.confidence,
+          verifierVersion: decision.verifierVersion,
+          confidence: decision.confidence,
           conflictStatus: "clear",
           evidenceStatus: "evidence_available",
         });
@@ -850,6 +897,46 @@ export const executeSessionContentGeneration = internalAction({
         claim.supportSourceSnapshotIds = (
           claim.supportSourceSnapshotIds ?? []
         ).map((alias) => aliases.get(alias) ?? alias);
+      // Validation here only builds the exact pair list for the independent
+      // pass. Publication repeats validation in the mutation and cannot be
+      // reached without verifier decisions.
+      const generated = validateLearnV2SessionContentCandidate(
+        raw,
+        input.sources.map((source) => String(source.sourceSnapshotId)),
+      );
+      const pairs = generated.claims.flatMap((claim) =>
+        claim.supportSourceSnapshotIds.map((sourceSnapshotId) => {
+          const source = input.sources.find(
+            (value) => String(value.sourceSnapshotId) === sourceSnapshotId,
+          );
+          if (!source) throw new Error("Candidate support source is unavailable");
+          return {
+            claimOrder: claim.order,
+            claim: claim.claim,
+            sourceSnapshotId,
+            sourceExcerptId: String(source.sourceExcerptId),
+            excerpt: source.excerpt,
+          };
+        }),
+      );
+      const verifier = await generateCompletion({
+        model: input.model,
+        temperature: 0,
+        maxAttempts: 1,
+        allowProviderFallbacks: false,
+        jsonSchema: {
+          name: "learn_v2_claim_entailment_verification",
+          strict: true,
+          schema: entailmentVerifierSchema,
+        },
+        messages: [
+          {
+            role: "system",
+            content: "Return only JSON. Independently assess whether each exact claim is entailed by its exact excerpt. Never infer missing facts. Return one decision for every supplied pair; uncertainty is not entailed.",
+          },
+          { role: "user", content: JSON.stringify({ pairs }) },
+        ],
+      });
       return await ctx.runMutation(
         internal.learnV2SessionContent.commitSessionContentCandidate,
         {
@@ -857,6 +944,7 @@ export const executeSessionContentGeneration = internalAction({
           leaseToken: lease.leaseToken,
           expectedRevision: begun.revision,
           candidateJson: JSON.stringify(raw),
+          verifierDecisionsJson: verifier.choices[0]!.message.content,
         },
       );
     } catch (error) {

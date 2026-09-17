@@ -1,7 +1,7 @@
 import type { LearnV2AssessmentContract } from './learn-v2-blueprint'
 
 export const LEARN_V2_SESSION_CONTENT_VERSION = 'learn-v2.session-content.v1' as const
-export const LEARN_V2_ENTAILMENT_VERIFIER_VERSION = 'learn-v2.entailment.v1' as const
+export const LEARN_V2_ENTAILMENT_VERIFIER_VERSION = 'learn-v2.entailment.v2' as const
 export const LEARN_V2_SESSION_CONTENT_MIN_CONFIDENCE = 0.8
 export const LEARN_V2_MASTERY_LOOP_BLOCKS = [
   'retrieval', 'objective', 'cold_attempt', 'explanation', 'worked_example',
@@ -17,7 +17,16 @@ export type LearnV2SessionContentCandidate = {
   generatorVersion: string
   assessmentRubric: LearnV2AssessmentContract
   blocks: Array<{ order: number, kind: BlockKind, content: string, claimOrders: number[] }>
-  claims: Array<{ order: number, claim: string, supportSourceSnapshotIds: string[], verifierVersion: typeof LEARN_V2_ENTAILMENT_VERIFIER_VERSION, confidence: number }>
+  claims: Array<{ order: number, claim: string, supportSourceSnapshotIds: string[] }>
+}
+
+export type LearnV2EntailmentDecision = {
+  claimOrder: number
+  sourceSnapshotId: string
+  sourceExcerptId: string
+  decision: 'entailed' | 'not_entailed'
+  verifierVersion: typeof LEARN_V2_ENTAILMENT_VERIFIER_VERSION
+  confidence: number
 }
 
 function object(value: unknown, label: string): RecordValue { if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} must be an object`); return value as RecordValue }
@@ -41,8 +50,44 @@ export function validateLearnV2SessionContentCandidate(input: unknown, acceptedS
   if (blocks.some((block, index) => block.order !== index || block.kind !== LEARN_V2_MASTERY_LOOP_BLOCKS[index])) throw new Error('Session content must contain the complete mastery loop in order')
   if (!Array.isArray(candidate.claims) || candidate.claims.length < 1 || candidate.claims.length > 32) throw new Error('Session content claims exceed the bounded contract')
   const accepted = new Set(acceptedSourceSnapshotIds)
-  const claims = candidate.claims.map((raw, index) => { const claim = object(raw, `Claim ${index}`); exact(claim, ['order', 'claim', 'supportSourceSnapshotIds', 'verifierVersion', 'confidence'], `Claim ${index}`); if (!Array.isArray(claim.supportSourceSnapshotIds) || !claim.supportSourceSnapshotIds.length || claim.supportSourceSnapshotIds.length > 8) throw new Error('Every factual claim requires accepted support'); const supportSourceSnapshotIds = claim.supportSourceSnapshotIds.map((id, supportIndex) => string(id, `Claim ${index} support ${supportIndex}`, 200)); if (new Set(supportSourceSnapshotIds).size !== supportSourceSnapshotIds.length || supportSourceSnapshotIds.some(id => !accepted.has(id))) throw new Error('Every factual claim requires an accepted source'); if (claim.verifierVersion !== LEARN_V2_ENTAILMENT_VERIFIER_VERSION) throw new Error('Claim verifier version is unsupported'); if (typeof claim.confidence !== 'number' || !Number.isFinite(claim.confidence) || claim.confidence < LEARN_V2_SESSION_CONTENT_MIN_CONFIDENCE || claim.confidence > 1) throw new Error('Claim confidence is below the publication threshold'); return { order: order(claim.order, `Claim ${index}`, 31), claim: string(claim.claim, `Claim ${index}`, 1_000), supportSourceSnapshotIds, verifierVersion: LEARN_V2_ENTAILMENT_VERIFIER_VERSION, confidence: claim.confidence } })
+  const claims = candidate.claims.map((raw, index) => { const claim = object(raw, `Claim ${index}`); exact(claim, ['order', 'claim', 'supportSourceSnapshotIds'], `Claim ${index}`); if (!Array.isArray(claim.supportSourceSnapshotIds) || !claim.supportSourceSnapshotIds.length || claim.supportSourceSnapshotIds.length > 8) throw new Error('Every factual claim requires accepted support'); const supportSourceSnapshotIds = claim.supportSourceSnapshotIds.map((id, supportIndex) => string(id, `Claim ${index} support ${supportIndex}`, 200)); if (new Set(supportSourceSnapshotIds).size !== supportSourceSnapshotIds.length || supportSourceSnapshotIds.some(id => !accepted.has(id))) throw new Error('Every factual claim requires an accepted source'); return { order: order(claim.order, `Claim ${index}`, 31), claim: string(claim.claim, `Claim ${index}`, 1_000), supportSourceSnapshotIds } })
   const referencedClaimOrders = new Set(blocks.flatMap(block => block.claimOrders))
   if (claims.some((claim, index) => claim.order !== index) || blocks.some(block => block.claimOrders.some(claimOrder => !claims[claimOrder])) || referencedClaimOrders.size !== claims.length) throw new Error('Every claim must be referenced by the mastery loop')
   return { version: LEARN_V2_SESSION_CONTENT_VERSION, generatorVersion: string(candidate.generatorVersion, 'Generator version', 200), assessmentRubric: assessment(candidate.assessmentRubric), blocks, claims }
+}
+
+/** Fail closed: each generated claim/source pair needs one exact-excerpt verifier decision. */
+export function validateLearnV2EntailmentDecisions(
+  input: unknown,
+  candidate: LearnV2SessionContentCandidate,
+  evidence: ReadonlyMap<string, { sourceExcerptId: string }>,
+): LearnV2EntailmentDecision[] {
+  const envelope = object(input, 'Entailment verification')
+  exact(envelope, ['version', 'decisions'], 'Entailment verification')
+  if (envelope.version !== LEARN_V2_ENTAILMENT_VERIFIER_VERSION || !Array.isArray(envelope.decisions)) throw new Error('Entailment verification has an invalid shape')
+  const expected = new Map<string, { sourceExcerptId: string }>()
+  for (const claim of candidate.claims) for (const sourceSnapshotId of claim.supportSourceSnapshotIds) {
+    const source = evidence.get(sourceSnapshotId)
+    if (!source) throw new Error('Entailment verification evidence is unavailable')
+    expected.set(`${claim.order}\u0000${sourceSnapshotId}`, source)
+  }
+  if (envelope.decisions.length !== expected.size) throw new Error('Entailment verification is incomplete')
+  const seen = new Set<string>()
+  const decisions = envelope.decisions.map((raw, index) => {
+    const value = object(raw, `Entailment decision ${index}`)
+    exact(value, ['claimOrder', 'sourceSnapshotId', 'sourceExcerptId', 'decision', 'verifierVersion', 'confidence'], `Entailment decision ${index}`)
+    const claimOrder = order(value.claimOrder, `Entailment decision ${index} claim order`, 31)
+    const sourceSnapshotId = string(value.sourceSnapshotId, `Entailment decision ${index} source snapshot`, 200)
+    const key = `${claimOrder}\u0000${sourceSnapshotId}`
+    const pair = expected.get(key)
+    if (!pair || seen.has(key)) throw new Error('Entailment verification has an unknown or duplicate claim/source pair')
+    seen.add(key)
+    const sourceExcerptId = string(value.sourceExcerptId, `Entailment decision ${index} source excerpt`, 200)
+    if (sourceExcerptId !== pair.sourceExcerptId) throw new Error('Entailment verification must match the exact source excerpt identity')
+    if (value.decision !== 'entailed') throw new Error('Entailment verification is not entailed')
+    if (value.verifierVersion !== LEARN_V2_ENTAILMENT_VERIFIER_VERSION) throw new Error('Entailment verifier version is unsupported')
+    if (typeof value.confidence !== 'number' || !Number.isFinite(value.confidence) || value.confidence < LEARN_V2_SESSION_CONTENT_MIN_CONFIDENCE || value.confidence > 1) throw new Error('Entailment verification confidence is below the publication threshold')
+    return { claimOrder, sourceSnapshotId, sourceExcerptId, decision: 'entailed' as const, verifierVersion: LEARN_V2_ENTAILMENT_VERIFIER_VERSION, confidence: value.confidence }
+  })
+  return decisions
 }

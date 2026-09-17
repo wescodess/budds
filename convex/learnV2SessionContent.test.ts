@@ -3,7 +3,7 @@ import { describe, expect, test } from 'vitest'
 import { api, internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import schema from './schema'
-import { LEARN_V2_MASTERY_LOOP_BLOCKS, validateLearnV2SessionContentCandidate } from '../shared/learn-v2-session-content'
+import { LEARN_V2_MASTERY_LOOP_BLOCKS, validateLearnV2EntailmentDecisions, validateLearnV2SessionContentCandidate } from '../shared/learn-v2-session-content'
 
 const sourceId = 'source-snapshot-1'
 const identity = { tokenIdentifier: 'https://auth.example.com|session-content-owner', name: 'Session Content Owner' }
@@ -17,8 +17,12 @@ const candidate = () => ({
     criteria: [{ key: 'accuracy', description: 'Is accurate.', weightPercent: 100 }],
   },
   blocks: LEARN_V2_MASTERY_LOOP_BLOCKS.map((kind, order) => ({ order, kind, content: `${kind} content`, claimOrders: [0] })),
-  claims: [{ order: 0, claim: 'The source supports this fact.', supportSourceSnapshotIds: [sourceId], verifierVersion: 'learn-v2.entailment.v1', confidence: 0.9 }],
+  claims: [{ order: 0, claim: 'The source supports this fact.', supportSourceSnapshotIds: [sourceId] }],
 })
+
+function verifierDecisionsJson(snapshotId: Id<'learnSourceSnapshots'>, excerptId: Id<'learnSourceExcerpts'>, input = candidate()) {
+  return JSON.stringify({ version: 'learn-v2.entailment.v2', decisions: input.claims.flatMap(claim => claim.supportSourceSnapshotIds.map(sourceSnapshotId => ({ claimOrder: claim.order, sourceSnapshotId: sourceSnapshotId === sourceId ? String(snapshotId) : sourceSnapshotId, sourceExcerptId: String(excerptId), decision: 'entailed', verifierVersion: 'learn-v2.entailment.v2', confidence: 0.9 }))) })
+}
 
 async function seedGenerationGraph() {
   process.env.LEARN_V2_ENABLED = 'true'
@@ -42,7 +46,7 @@ async function seedGenerationGraph() {
     await ctx.db.insert('learnSourceExcerpts', { userId: identity.tokenIdentifier, sourceSnapshotId: snapshotId, locator: 'page:1', excerpt: 'The source supports this fact.', rightsStatus: 'permitted' })
     await ctx.db.insert('learnObjectiveSources', { userId: identity.tokenIdentifier, objectiveId, sourceSnapshotId: snapshotId, coverage: 'strong' })
     const jobId = await ctx.db.insert('learnJobs', { userId: identity.tokenIdentifier, learningVoidId: voidId, blueprintRevisionId, studyPlanRevisionId: planRevisionId, studySessionId: sessionId, type: 'session_content_generation', status: 'queued', revision: 1, idempotencyKey: 'job', inputDigest: 'sha256:input', expectedVoidRevision: 2, expectedBlueprintRecordRevision: 1, expectedSessionRevision: 1, attempts: 0, dispatchSupportingSourceSnapshotIds: [snapshotId], createdAt: now, updatedAt: now })
-    return { planId, planRevisionId, sessionId, snapshotId, jobId }
+    return { planId, planRevisionId, sessionId, snapshotId, excerptId: (await ctx.db.query('learnSourceExcerpts').withIndex('by_userId_and_sourceSnapshotId_and_evidencePurgedAt', q => q.eq('userId', identity.tokenIdentifier).eq('sourceSnapshotId', snapshotId).eq('evidencePurgedAt', undefined)).unique())!._id, jobId }
   })
   return { t, owner, graph }
 }
@@ -63,7 +67,7 @@ describe('Learn V2 session-content publication contract', () => {
     })
   })
 
-  test('rejects ungrounded mastery blocks, unreferenced claims, and low-confidence evidence', () => {
+  test('rejects ungrounded mastery blocks and unreferenced claims', () => {
     const noBlockClaim = candidate()
     noBlockClaim.blocks[0]!.claimOrders = []
     expect(() => validateLearnV2SessionContentCandidate(noBlockClaim, [sourceId])).toThrow(/requires supported claims/)
@@ -72,9 +76,17 @@ describe('Learn V2 session-content publication contract', () => {
     unreferenced.claims.push({ ...unreferenced.claims[0]!, order: 1, claim: 'Unused claim.' })
     expect(() => validateLearnV2SessionContentCandidate(unreferenced, [sourceId])).toThrow(/Every claim must be referenced/)
 
-    const lowConfidence = candidate()
-    lowConfidence.claims[0]!.confidence = 0.79
-    expect(() => validateLearnV2SessionContentCandidate(lowConfidence, [sourceId])).toThrow(/publication threshold/)
+  })
+
+  test('fails closed for hallucinated, low-confidence, incomplete, and mismatched entailment decisions', () => {
+    const generated = validateLearnV2SessionContentCandidate(candidate(), [sourceId])
+    const evidence = new Map([[sourceId, { sourceExcerptId: 'excerpt-1', excerpt: 'The source supports this fact.' }]])
+    const valid = { claimOrder: 0, sourceSnapshotId: sourceId, sourceExcerptId: 'excerpt-1', decision: 'entailed', verifierVersion: 'learn-v2.entailment.v2', confidence: 0.9 }
+    expect(() => validateLearnV2EntailmentDecisions({ version: 'learn-v2.entailment.v2', decisions: [{ ...valid, claimOrder: 1 }] }, generated, evidence)).toThrow(/unknown or duplicate/)
+    expect(() => validateLearnV2EntailmentDecisions({ version: 'learn-v2.entailment.v2', decisions: [{ ...valid, decision: 'not_entailed' }] }, generated, evidence)).toThrow(/not entailed/)
+    expect(() => validateLearnV2EntailmentDecisions({ version: 'learn-v2.entailment.v2', decisions: [{ ...valid, confidence: 0.79 }] }, generated, evidence)).toThrow(/publication threshold/)
+    expect(() => validateLearnV2EntailmentDecisions({ version: 'learn-v2.entailment.v2', decisions: [] }, generated, evidence)).toThrow(/incomplete/)
+    expect(() => validateLearnV2EntailmentDecisions({ version: 'learn-v2.entailment.v2', decisions: [{ ...valid, sourceExcerptId: 'wrong-excerpt' }] }, generated, evidence)).toThrow(/exact source excerpt/)
   })
 
   test('rejects extra nested candidate fields before persistence', () => {
@@ -101,10 +113,10 @@ describe('Learn V2 session-content publication contract', () => {
       const sessionId = await ctx.db.insert('studySessions', { userId: identity.tokenIdentifier, studyPlanRevisionId: planRevisionId, primaryObjectiveId: objectiveId, status: 'planned', revision: 1, scheduledStartAt: now + 60_000 })
       const sourceIdentityId = await ctx.db.insert('learnSourceIdentities', { userId: identity.tokenIdentifier, learningVoidId: voidId, origin: 'user_url', externalKey: 'source-1' })
       const snapshotId = await ctx.db.insert('learnSourceSnapshots', { userId: identity.tokenIdentifier, sourceIdentityId, learningVoidId: voidId, blueprintRevisionId: blueprintIdRevision, revision: 1, status: 'user_accepted', effectiveStatus: 'user_accepted', rightsStatus: 'permitted', conflictStatus: 'clear', createdAt: now })
-      await ctx.db.insert('learnSourceExcerpts', { userId: identity.tokenIdentifier, sourceSnapshotId: snapshotId, locator: 'page:1', excerpt: 'The source supports this fact.', rightsStatus: 'permitted' })
+      const excerptId = await ctx.db.insert('learnSourceExcerpts', { userId: identity.tokenIdentifier, sourceSnapshotId: snapshotId, locator: 'page:1', excerpt: 'The source supports this fact.', rightsStatus: 'permitted' })
       await ctx.db.insert('learnObjectiveSources', { userId: identity.tokenIdentifier, objectiveId, sourceSnapshotId: snapshotId, coverage: 'strong' })
       const jobId = await ctx.db.insert('learnJobs', { userId: identity.tokenIdentifier, learningVoidId: voidId, blueprintRevisionId: blueprintIdRevision, studyPlanRevisionId: planRevisionId, studySessionId: sessionId, type: 'session_content_generation', status: 'queued', revision: 1, idempotencyKey: 'job', inputDigest: 'sha256:input', expectedVoidRevision: 2, expectedBlueprintRecordRevision: 1, expectedSessionRevision: 1, attempts: 0, dispatchSupportingSourceSnapshotIds: [snapshotId], createdAt: now, updatedAt: now })
-      return { voidId, sessionId, snapshotId, jobId }
+      return { voidId, sessionId, snapshotId, excerptId, jobId }
     })
     const lease = await t.mutation(internal.learnV2SessionContent.leaseSessionContentGeneration, { tokenIdentifier: identity.tokenIdentifier, jobId: graph.jobId, expectedRevision: 1 })
     if (lease.kind !== 'leased') {
@@ -112,7 +124,8 @@ describe('Learn V2 session-content publication contract', () => {
       throw new Error(`expected lease, got ${job?.terminalReason}`)
     }
     const begun = await t.mutation(internal.learnV2SessionContent.beginSessionContentGeneration, { tokenIdentifier: identity.tokenIdentifier, jobId: graph.jobId, leaseToken: lease.leaseToken, expectedRevision: lease.revision })
-    const result = await t.mutation(internal.learnV2SessionContent.commitSessionContentCandidate, { tokenIdentifier: identity.tokenIdentifier, jobId: graph.jobId, leaseToken: lease.leaseToken, expectedRevision: begun.revision, candidateJson: JSON.stringify(candidate()).replaceAll(sourceId, String(graph.snapshotId)) })
+    const generated = candidate()
+    const result = await t.mutation(internal.learnV2SessionContent.commitSessionContentCandidate, { tokenIdentifier: identity.tokenIdentifier, jobId: graph.jobId, leaseToken: lease.leaseToken, expectedRevision: begun.revision, candidateJson: JSON.stringify(generated).replaceAll(sourceId, String(graph.snapshotId)), verifierDecisionsJson: verifierDecisionsJson(graph.snapshotId, graph.excerptId, generated) })
     if (result.status !== 'ready') {
       const job = await t.run(ctx => ctx.db.get(graph.jobId))
       throw new Error(`expected ready, got ${job?.terminalReason}`)
@@ -135,10 +148,11 @@ describe('Learn V2 session-content publication contract', () => {
     const { t, graph } = await seedGenerationGraph()
     const { lease, begun } = await leaseAndBegin(t, graph.jobId)
     const invalid = candidate()
-    invalid.claims[0]!.confidence = 0.79
+    invalid.claims[0]!.supportSourceSnapshotIds = []
     const result = await t.mutation(internal.learnV2SessionContent.commitSessionContentCandidate, {
       tokenIdentifier: identity.tokenIdentifier, jobId: graph.jobId, leaseToken: lease.leaseToken,
       expectedRevision: begun.revision, candidateJson: JSON.stringify(invalid).replaceAll(sourceId, String(graph.snapshotId)),
+      verifierDecisionsJson: verifierDecisionsJson(graph.snapshotId, graph.excerptId, invalid),
     })
     expect(result).toEqual({ status: 'generation_failed' })
     const rows = await t.run(async ctx => ({
@@ -155,9 +169,32 @@ describe('Learn V2 session-content publication contract', () => {
     expect(rows.claims).toEqual([])
   })
 
+  test('keeps non-entailed, low-confidence, incomplete, and mismatched verifier decisions unpublished', async () => {
+    const invalidators = [
+      (decisions: Array<Record<string, unknown>>) => { decisions[0]!.decision = 'not_entailed' },
+      (decisions: Array<Record<string, unknown>>) => { decisions[0]!.confidence = 0.79 },
+      (decisions: Array<Record<string, unknown>>) => { decisions.pop() },
+      (decisions: Array<Record<string, unknown>>) => { decisions[0]!.excerpt = 'A different exact excerpt.' },
+    ]
+    for (const invalidate of invalidators) {
+      const { t, graph } = await seedGenerationGraph()
+      const { lease, begun } = await leaseAndBegin(t, graph.jobId)
+      const verifier = JSON.parse(verifierDecisionsJson(graph.snapshotId, graph.excerptId)) as { decisions: Array<Record<string, unknown>> }
+      invalidate(verifier.decisions)
+      expect(await t.mutation(internal.learnV2SessionContent.commitSessionContentCandidate, {
+        tokenIdentifier: identity.tokenIdentifier, jobId: graph.jobId, leaseToken: lease.leaseToken,
+        expectedRevision: begun.revision, candidateJson: JSON.stringify(candidate()).replaceAll(sourceId, String(graph.snapshotId)),
+        verifierDecisionsJson: JSON.stringify(verifier),
+      })).toEqual({ status: 'generation_failed' })
+      expect(await t.run(ctx => ctx.db.query('sessionContent').take(2))).toEqual([])
+      expect(await t.run(ctx => ctx.db.get(graph.jobId))).toMatchObject({ status: 'failed', terminalReason: 'entailment_verification_failed' })
+    }
+  })
+
   test('blocks publication when a dispatch source is purged or its plan is no longer current', async () => {
     const purged = await seedGenerationGraph()
     const purgedLease = await leaseAndBegin(purged.t, purged.graph.jobId)
+    const purgedDecisions = verifierDecisionsJson(purged.graph.snapshotId, purged.graph.excerptId)
     await purged.t.run(async ctx => {
       const excerpt = await ctx.db.query('learnSourceExcerpts').withIndex('by_userId_and_sourceSnapshotId_and_evidencePurgedAt', q => q.eq('userId', identity.tokenIdentifier).eq('sourceSnapshotId', purged.graph.snapshotId).eq('evidencePurgedAt', undefined)).unique()
       await ctx.db.patch(purged.graph.snapshotId, { evidencePurgedAt: Date.now() })
@@ -166,6 +203,7 @@ describe('Learn V2 session-content publication contract', () => {
     await expect(purged.t.mutation(internal.learnV2SessionContent.commitSessionContentCandidate, {
       tokenIdentifier: identity.tokenIdentifier, jobId: purged.graph.jobId, leaseToken: purgedLease.lease.leaseToken,
       expectedRevision: purgedLease.begun.revision, candidateJson: JSON.stringify(candidate()).replaceAll(sourceId, String(purged.graph.snapshotId)),
+      verifierDecisionsJson: purgedDecisions,
     })).resolves.toEqual({ status: 'blocked' })
     expect(await purged.t.run(ctx => ctx.db.get(purged.graph.jobId))).toMatchObject({ status: 'blocked', terminalReason: 'evidence_unavailable' })
     expect(await purged.t.run(ctx => ctx.db.query('sessionContent').take(2))).toEqual([])
@@ -205,6 +243,7 @@ describe('Learn V2 session-content publication contract', () => {
     const published = await t.mutation(internal.learnV2SessionContent.commitSessionContentCandidate, {
       tokenIdentifier: identity.tokenIdentifier, jobId: graph.jobId, leaseToken: lease.leaseToken,
       expectedRevision: begun.revision, candidateJson: JSON.stringify(candidate()).replaceAll(sourceId, String(graph.snapshotId)),
+      verifierDecisionsJson: verifierDecisionsJson(graph.snapshotId, graph.excerptId),
     })
     if (published.status !== 'ready') throw new Error('expected published session content')
     await expect(owner.mutation(api.learnV2SessionContent.startStudySession, {
