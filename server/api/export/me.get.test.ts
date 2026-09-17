@@ -187,6 +187,8 @@ describe('GET /api/export/me', () => {
         'learnObjectivePrerequisites.json',
         'learnObjectiveSources.json',
         'learnObjectives.json',
+        'learnPlanAuditEvents.json',
+        'learnPlanCommandReceipts.json',
         'learnProfile.json',
         'learnSourceCommandReceipts.json',
         'learnSourceExcerpts.json',
