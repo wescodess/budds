@@ -290,7 +290,7 @@ export const reflowFutureIncomplete = mutation({
       // Content belongs to the immutable old session identity. A successor
       // shell must regenerate rather than exposing `ready` without content.
       const successorSessionId = await ctx.db.insert('studySessions', { userId, studyPlanRevisionId: successorId, primaryObjectiveId: session.primaryObjectiveId, placementId: session.placementId, status: session.status === 'ready' ? 'planned' : session.status, revision: session.status === 'ready' ? 1 : session.revision, scheduledStartAt: session.scheduledStartAt, scheduledEndAt: session.scheduledEndAt, timezone: session.timezone, offsetMinutes: session.offsetMinutes, placementKind: session.placementKind, schedulingPriority: session.schedulingPriority, schedulerVersion: session.schedulerVersion, auditReasonCode: session.status === 'ready' ? 'ready_content_regeneration_required' : 'preserved_during_reflow' })
-      if (session.status === 'ready') generationCandidates.push({ id: successorSessionId, objectiveId: session.primaryObjectiveId, revision: 1, scheduledStartAt: session.scheduledStartAt })
+      if (session.status === 'ready' || session.status === 'planned') generationCandidates.push({ id: successorSessionId, objectiveId: session.primaryObjectiveId, revision: session.status === 'ready' ? 1 : session.revision, scheduledStartAt: session.scheduledStartAt })
     }
     if (plan.blueprintRevisionId) {
       for (const session of generationCandidates.sort((a, b) => a.scheduledStartAt - b.scheduledStartAt || String(a.id).localeCompare(String(b.id))).slice(0, 2)) {
