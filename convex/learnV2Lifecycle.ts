@@ -4,6 +4,7 @@ import { mutation, query, type MutationCtx, type QueryCtx } from './_generated/s
 import type { Doc, Id } from './_generated/dataModel'
 import { requireLearnV2MutationAccess, requireLearnV2QueryAccess } from './lib/learnV2Access'
 import { isLearnV2TransitionAllowed } from '../shared/learn-v2-contract'
+import { cloneBlueprintChildren } from './lib/learnV2BlueprintClone'
 
 const voidStatus = v.union(v.literal('draft'), v.literal('sourcing'), v.literal('source_review'), v.literal('map_review'), v.literal('calibration'), v.literal('plan_review'), v.literal('scheduled'), v.literal('active'), v.literal('completed'), v.literal('paused'), v.literal('needs_attention'), v.literal('failed'), v.literal('archived'))
 const blueprintStatus = v.union(v.literal('draft'), v.literal('source_review'), v.literal('map_review'), v.literal('accepted'), v.literal('active'), v.literal('superseded'))
@@ -182,10 +183,40 @@ export const forkBlueprintDraft = mutation({
       .withIndex('by_userId_and_blueprintId_and_revision', q => q.eq('userId', userId).eq('blueprintId', source.blueprintId))
       .order('desc').first()
     if (!latest) throw new Error('Blueprint revision not found')
+    if (latest._id !== source._id) throw new Error('Blueprint revision conflict')
+    if (!['draft', 'source_review', 'map_review', 'accepted', 'active'].includes(source.status)) throw new Error('Blueprint revision cannot be edited')
+    if (!['draft', 'source_review', 'map_review', 'calibration'].includes(learningVoid.status)) throw new Error('Learning Void is not ready for a Blueprint edit')
     const now = Date.now()
     const ordinal = latest.revision + 1
-    const id = await ctx.db.insert('learnBlueprintRevisions', { userId, blueprintId: source.blueprintId, learningVoidId: source.learningVoidId, revision: ordinal, recordRevision: 1, status: 'draft', createdAt: now, updatedAt: now })
-    await ctx.db.patch(learningVoid._id, { revision: learningVoid.revision + 1, updatedAt: now })
+    const id = await ctx.db.insert('learnBlueprintRevisions', {
+      userId,
+      blueprintId: source.blueprintId,
+      learningVoidId: source.learningVoidId,
+      revision: ordinal,
+      recordRevision: 1,
+      status: 'draft',
+      intentVersion: source.intentVersion,
+      desiredOutcome: source.desiredOutcome,
+      mode: source.mode,
+      desiredDepth: source.desiredDepth,
+      sourcePolicy: source.sourcePolicy,
+      generatorVersion: source.generatorVersion,
+      createdAt: now,
+      updatedAt: now,
+    })
+    const copyMap = ['map_review', 'accepted', 'active'].includes(source.status)
+    const clonedSourceIds = copyMap ? await cloneBlueprintChildren(ctx, userId, source, id) : new Map<string, Id<'learnSourceSnapshots'>>()
+    const generationSupportingSourceSnapshotIds = copyMap ? source.generationSupportingSourceSnapshotIds?.map(sourceId => {
+      const cloneId = clonedSourceIds.get(String(sourceId))
+      if (!cloneId) throw new Error('Blueprint supporting source scope mismatch')
+      return cloneId
+    }) : undefined
+    if (generationSupportingSourceSnapshotIds) await ctx.db.patch(id, { generationSupportingSourceSnapshotIds })
+    await ctx.db.patch(learningVoid._id, {
+      status: learningVoid.status === 'calibration' ? 'map_review' : learningVoid.status,
+      revision: learningVoid.revision + 1,
+      updatedAt: now,
+    })
     await persistReceipt(ctx, { userId, learningVoidId: learningVoid._id, idempotencyKey: args.idempotencyKey, command: 'forkBlueprintDraft', requestFingerprint, revision: 1, status: 'draft', blueprintRevisionId: id, blueprintRevisionOrdinal: ordinal, blueprintRecordRevision: 1 })
     return blueprintRevisionOutcome({ blueprintRevisionId: id, status: 'draft', blueprintRevisionOrdinal: ordinal, blueprintRecordRevision: 1 })
   },
