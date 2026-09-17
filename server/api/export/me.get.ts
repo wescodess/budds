@@ -63,6 +63,8 @@ const EXPORT_COLLECTIONS = [
   'sessionContentClaims', 'calendarProjections', 'reminderPolicies',
   'searchQuotaBuckets', 'searchReservations', 'learnJobs',
   'learnLifecycleReceipts',
+  'learnPlanCommandReceipts',
+  'learnPlanAuditEvents',
   'learnSourceFetchLeases',
   'learnSourceFetchRateEvents',
   'learnSourceCommandReceipts',

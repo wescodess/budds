@@ -114,6 +114,13 @@ async function deleteVoidFoundation(ctx: MutationCtx, userId: string, learningVo
     .take(BATCH_SIZE)
   if (await removeRows(ctx, jobs)) return true
 
+  const planAudits = await ctx.db.query('learnPlanAuditEvents')
+    .withIndex('by_userId_and_learningVoidId', q => q.eq('userId', userId).eq('learningVoidId', learningVoidId)).take(BATCH_SIZE)
+  if (await removeRows(ctx, planAudits)) return true
+  const planReceipts = await ctx.db.query('learnPlanCommandReceipts')
+    .withIndex('by_userId_and_learningVoidId', q => q.eq('userId', userId).eq('learningVoidId', learningVoidId)).take(BATCH_SIZE)
+  if (await removeRows(ctx, planReceipts)) return true
+
   const plans = await ctx.db.query('studyPlans')
     .withIndex('by_userId_and_learningVoidId', q => q.eq('userId', userId).eq('learningVoidId', learningVoidId)).take(BATCH_SIZE)
   for (const plan of plans) {
