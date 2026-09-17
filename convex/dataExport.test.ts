@@ -176,7 +176,7 @@ describe('dataExport paginated queries', () => {
         await ctx.db.insert('learnMilestones', { userId: USER_A.tokenIdentifier, blueprintRevisionId: ids.revisionId, order: 1, title: 'Milestone' })
         await ctx.db.insert('learnObjectivePrerequisites', { userId: USER_A.tokenIdentifier, blueprintRevisionId: ids.revisionId, objectiveId: ids.objectiveId, prerequisiteObjectiveId: ids.objectiveId })
         await ctx.db.insert('learnObjectiveSources', { userId: USER_A.tokenIdentifier, objectiveId: ids.objectiveId, sourceSnapshotId: ids.snapshotId, coverage: 'strong' })
-        await ctx.db.insert('masteryAttempts', { userId: USER_A.tokenIdentifier, objectiveId: ids.objectiveId, attemptedAt: 1, idempotencyKey: 'a' })
+        await ctx.db.insert('masteryAttempts', { userId: USER_A.tokenIdentifier, objectiveId: ids.objectiveId, attemptedAt: 1, idempotencyKey: 'private-attempt-key', requestFingerprint: 'private-attempt-fingerprint' })
         await ctx.db.insert('masteryRecords', { userId: USER_A.tokenIdentifier, objectiveId: ids.objectiveId, state: 'learning' })
         await ctx.db.insert('studySessionRetrievalObjectives', { userId: USER_A.tokenIdentifier, studySessionId: ids.sessionId, objectiveId: ids.objectiveId, order: 1 })
         await ctx.db.insert('sessionContentBlocks', { userId: USER_A.tokenIdentifier, sessionContentId: contentId, order: 1, kind: 'prompt' })
@@ -193,6 +193,9 @@ describe('dataExport paginated queries', () => {
       const blueprintRevision = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnBlueprintRevisions', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
       expect(blueprintRevision).not.toHaveProperty('generationInputDigest')
       expect(blueprintRevision).not.toHaveProperty('generationRequestId')
+      const masteryAttempt = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'masteryAttempts', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
+      expect(masteryAttempt).not.toHaveProperty('idempotencyKey')
+      expect(masteryAttempt).not.toHaveProperty('requestFingerprint')
       const sourceIdentity = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnSourceIdentities', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
       expect(sourceIdentity).not.toHaveProperty('externalKey')
       expect(sourceIdentity).not.toHaveProperty('canonicalUrl')
