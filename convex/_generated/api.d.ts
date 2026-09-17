@@ -41,6 +41,7 @@ import type * as folders from "../folders.js";
 import type * as http from "../http.js";
 import type * as learnProfile from "../learnProfile.js";
 import type * as learnV2Access from "../learnV2Access.js";
+import type * as learnV2Blueprints from "../learnV2Blueprints.js";
 import type * as learnV2FolderManifests from "../learnV2FolderManifests.js";
 import type * as learnV2Lifecycle from "../learnV2Lifecycle.js";
 import type * as learnV2Retention from "../learnV2Retention.js";
@@ -108,6 +109,7 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   learnProfile: typeof learnProfile;
   learnV2Access: typeof learnV2Access;
+  learnV2Blueprints: typeof learnV2Blueprints;
   learnV2FolderManifests: typeof learnV2FolderManifests;
   learnV2Lifecycle: typeof learnV2Lifecycle;
   learnV2Retention: typeof learnV2Retention;

@@ -20,6 +20,13 @@ const baseParams = {
   messages: [{ role: 'user' as const, content: 'Hello' }],
 }
 
+const minimalResponse = {
+  id: 'chatcmpl-test',
+  choices: [{ index: 0, message: { role: 'assistant', content: '{}' }, finish_reason: 'stop' }],
+  model: 'openai/gpt-4o',
+  usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+}
+
 describe('generateCompletion', () => {
   beforeEach(() => {
     vi.mocked(globalThis.fetch).mockReset()
@@ -58,7 +65,7 @@ describe('generateCompletion', () => {
   test('sends correct request body with defaults', async () => {
     vi.mocked(globalThis.fetch).mockResolvedValueOnce({
       ok: true,
-      json: () => Promise.resolve({}),
+      json: () => Promise.resolve(minimalResponse),
     } as any)
 
     await generateCompletion(baseParams)
@@ -76,7 +83,7 @@ describe('generateCompletion', () => {
   test('uses custom temperature and max_tokens when provided', async () => {
     vi.mocked(globalThis.fetch).mockResolvedValueOnce({
       ok: true,
-      json: () => Promise.resolve({}),
+      json: () => Promise.resolve(minimalResponse),
     } as any)
 
     await generateCompletion({ ...baseParams, temperature: 0.2, max_tokens: 512 })
@@ -87,16 +94,18 @@ describe('generateCompletion', () => {
   })
 
   test('can disable gateway-level retries for a durable provider attempt', async () => {
-    vi.mocked(globalThis.fetch).mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) } as any)
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(minimalResponse) } as any)
+    const controller = new AbortController()
 
-    await generateCompletion({ ...baseParams, maxAttempts: 1 })
+    await generateCompletion({ ...baseParams, maxAttempts: 1, signal: controller.signal })
 
     const headers = vi.mocked(globalThis.fetch).mock.calls[0][1]!.headers as Record<string, string>
     expect(headers['cf-aig-max-attempts']).toBe('1')
+    expect(vi.mocked(globalThis.fetch).mock.calls[0][1]!.signal).toBe(controller.signal)
   })
 
   test('[P0] can require provider-backed JSON output for durable structured generation', async () => {
-    vi.mocked(globalThis.fetch).mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) } as any)
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(minimalResponse) } as any)
 
     await generateCompletion({ ...baseParams, jsonMode: true })
 
@@ -106,7 +115,7 @@ describe('generateCompletion', () => {
   })
 
   test('[P0] prefers strict JSON Schema when a structured contract is supplied', async () => {
-    vi.mocked(globalThis.fetch).mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) } as any)
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(minimalResponse) } as any)
     const schema = {
       name: 'test_contract',
       strict: true,
@@ -140,7 +149,7 @@ describe('generateCompletion', () => {
     process.env.NUXT_OPENROUTER_API_KEY = 'env-openrouter'
     vi.mocked(globalThis.fetch).mockResolvedValueOnce({
       ok: true,
-      json: () => Promise.resolve({}),
+      json: () => Promise.resolve(minimalResponse),
     } as any)
 
     await generateCompletion(baseParams)
@@ -165,6 +174,40 @@ describe('generateCompletion', () => {
     await expect(generateCompletion(baseParams)).rejects.toThrow('AI Gateway error: Rate limited')
   })
 
+  test('keeps a gateway 5xx outcome ambiguous to prevent automatic duplicate dispatch', async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(new Response('Upstream timeout', { status: 504 }))
+    await expect(generateCompletion(baseParams)).rejects.toMatchObject({ aiGatewayFailureKind: 'outcome_unknown' })
+  })
+
+  test('rejects an oversized provider response before JSON parsing', async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(new Response(JSON.stringify({ payload: 'x'.repeat(128) }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }))
+
+    await expect(generateCompletion({ ...baseParams, maxResponseBytes: 32 })).rejects.toThrow('AI Gateway response exceeded the byte limit')
+  })
+
+  test('classifies a malformed successful completion envelope as an invalid response', async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(new Response('{}', { status: 200 }))
+    await expect(generateCompletion(baseParams)).rejects.toMatchObject({
+      message: 'AI Gateway returned an invalid completion envelope',
+      aiGatewayFailureKind: 'invalid_response',
+    })
+  })
+
+  test('rejects an oversized declared response without reading its body', async () => {
+    const text = vi.fn(() => Promise.resolve('{}'))
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce({
+      ok: true,
+      headers: new Headers({ 'content-length': '1024' }),
+      text,
+    } as any)
+
+    await expect(generateCompletion({ ...baseParams, maxResponseBytes: 32 })).rejects.toThrow('AI Gateway response exceeded the byte limit')
+    expect(text).not.toHaveBeenCalled()
+  })
+
   test('includes cf-aig-authorization header when gateway API key is set', async () => {
     vi.mocked((globalThis as any).useRuntimeConfig).mockReturnValue({
       ...validConfig,
@@ -172,7 +215,7 @@ describe('generateCompletion', () => {
     })
     vi.mocked(globalThis.fetch).mockResolvedValueOnce({
       ok: true,
-      json: () => Promise.resolve({}),
+      json: () => Promise.resolve(minimalResponse),
     } as any)
 
     await generateCompletion(baseParams)

@@ -9,6 +9,23 @@ const modules = import.meta.glob('./**/*.ts')
 const userId = 'https://auth.example.com|retention-owner'
 
 describe('Learn V2 source retention seam', () => {
+  test('removes scoped Blueprint jobs before deleting their Void parents', async () => {
+    const t = convexTest(schema, modules)
+    const ids = await t.run(async (ctx) => {
+      const folderId = await ctx.db.insert('folders', { userId, name: 'Job cleanup', documentCount: 0 })
+      const learningVoidId = await ctx.db.insert('learningVoids', { userId, folderId, title: 'Void', status: 'source_review', revision: 1, createdAt: 1, updatedAt: 1 })
+      const blueprintId = await ctx.db.insert('learnBlueprints', { userId, learningVoidId, revision: 1, createdAt: 1 })
+      const blueprintRevisionId = await ctx.db.insert('learnBlueprintRevisions', { userId, blueprintId, learningVoidId, revision: 1, recordRevision: 1, status: 'source_review', createdAt: 1, updatedAt: 1 })
+      const jobId = await ctx.db.insert('learnJobs', { userId, learningVoidId, blueprintRevisionId, type: 'blueprint_generation', status: 'running', revision: 2, idempotencyKey: 'folder-delete-job', leaseToken: 'secret', leaseExpiresAt: Date.now() + 60_000 })
+      return { folderId, learningVoidId, jobId }
+    })
+    for (let index = 0; index < 6; index++) {
+      await t.mutation(internal.learnV2Retention.deleteFolderFoundation, { userId, folderId: ids.folderId })
+    }
+    expect(await t.run(ctx => ctx.db.get(ids.jobId))).toBeNull()
+    expect(await t.run(ctx => ctx.db.get(ids.learningVoidId))).toBeNull()
+  })
+
   test('detaches search history and releases only an undispatched reservation before Void deletion', async () => {
     const t = convexTest(schema, modules)
     const ids = await t.run(async (ctx) => {

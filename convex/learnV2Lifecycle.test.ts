@@ -46,10 +46,10 @@ describe('Learn V2 foundational lifecycle', () => {
       const blueprintTransitionArgs = { blueprintRevisionId: blueprint!._id, status: 'source_review' as const, expectedRecordRevision: 1, idempotencyKey: 'receipt-blueprint-1' }
       const transitionedBlueprint = await owner.mutation(api.learnV2Lifecycle.transitionBlueprintRevision, blueprintTransitionArgs)
       expect(Object.keys(transitionedBlueprint!).sort()).toEqual(['_id', 'recordRevision', 'revision', 'status'])
-      await owner.mutation(api.learnV2Lifecycle.transitionBlueprintRevision, { blueprintRevisionId: blueprint!._id, status: 'map_review', expectedRecordRevision: 2, idempotencyKey: 'receipt-blueprint-2' })
+      await expect(owner.mutation(api.learnV2Lifecycle.transitionBlueprintRevision, { blueprintRevisionId: blueprint!._id, status: 'map_review', expectedRecordRevision: 2, idempotencyKey: 'receipt-blueprint-2' })).rejects.toThrow(/dedicated domain command/)
       expect(await owner.mutation(api.learnV2Lifecycle.transitionBlueprintRevision, blueprintTransitionArgs)).toEqual(transitionedBlueprint)
 
-      const forkArgs = { blueprintRevisionId: blueprint!._id, expectedRecordRevision: 3, expectedVoidRevision: 4, idempotencyKey: 'receipt-fork' }
+      const forkArgs = { blueprintRevisionId: blueprint!._id, expectedRecordRevision: 2, expectedVoidRevision: 4, idempotencyKey: 'receipt-fork' }
       const fork = await owner.mutation(api.learnV2Lifecycle.forkBlueprintDraft, forkArgs)
       expect(Object.keys(fork!).sort()).toEqual(['_id', 'recordRevision', 'revision', 'status'])
       await owner.mutation(api.learnV2Lifecycle.transitionBlueprintRevision, { blueprintRevisionId: fork!._id, status: 'source_review', expectedRecordRevision: 1, idempotencyKey: 'receipt-fork-1' })
@@ -97,7 +97,7 @@ describe('Learn V2 foundational lifecycle', () => {
     }
   })
 
-  test('forks and activates immutable blueprint revisions while pinning the active revision', async () => {
+  test('keeps later Blueprint phases behind their dedicated domain commands', async () => {
     const previous = process.env.LEARN_V2_ENABLED
     process.env.LEARN_V2_ENABLED = 'true'
     try {
@@ -119,21 +119,10 @@ describe('Learn V2 foundational lifecycle', () => {
       await expect(owner.mutation(api.learnV2Lifecycle.createBlueprintDraft, { learningVoidId: learningVoid!._id, expectedVoidRevision: 2, idempotencyKey: 'blueprint-1' })).rejects.toThrow(/different request/)
       await expect(owner.mutation(api.learnV2Lifecycle.createBlueprintDraft, { learningVoidId: learningVoid!._id, expectedVoidRevision: 2, idempotencyKey: 'second-blueprint' })).rejects.toThrow(/already has a stable Blueprint/)
       await owner.mutation(api.learnV2Lifecycle.transitionBlueprintRevision, { blueprintRevisionId: first!._id, status: 'source_review', expectedRecordRevision: 1, idempotencyKey: 'first-1' })
-      await owner.mutation(api.learnV2Lifecycle.transitionBlueprintRevision, { blueprintRevisionId: first!._id, status: 'map_review', expectedRecordRevision: 2, idempotencyKey: 'first-2' })
       const transitionReplay = await owner.mutation(api.learnV2Lifecycle.transitionBlueprintRevision, { blueprintRevisionId: first!._id, status: 'source_review', expectedRecordRevision: 1, idempotencyKey: 'first-1' })
       expect(transitionReplay).toMatchObject({ _id: first!._id, status: 'source_review', revision: 1, recordRevision: 2 })
-      await owner.mutation(api.learnV2Lifecycle.transitionBlueprintRevision, { blueprintRevisionId: first!._id, status: 'accepted', expectedRecordRevision: 3, idempotencyKey: 'first-3' })
-      await expect(owner.mutation(api.learnV2Lifecycle.transitionBlueprintRevision, { blueprintRevisionId: first!._id, status: 'map_review', expectedRecordRevision: 4, idempotencyKey: 'immutable' })).rejects.toThrow(/not allowed|guarded/)
-      const active = await owner.mutation(api.learnV2Lifecycle.transitionBlueprintRevision, { blueprintRevisionId: first!._id, status: 'active', expectedRecordRevision: 4, expectedVoidRevision: 2, idempotencyKey: 'first-4' })
-      const fork = await owner.mutation(api.learnV2Lifecycle.forkBlueprintDraft, { blueprintRevisionId: active!._id, expectedRecordRevision: 5, expectedVoidRevision: 3, idempotencyKey: 'fork' })
-      await owner.mutation(api.learnV2Lifecycle.transitionBlueprintRevision, { blueprintRevisionId: fork!._id, status: 'source_review', expectedRecordRevision: 1, idempotencyKey: 'fork-1' })
-      await owner.mutation(api.learnV2Lifecycle.transitionBlueprintRevision, { blueprintRevisionId: fork!._id, status: 'map_review', expectedRecordRevision: 2, idempotencyKey: 'fork-2' })
-      await owner.mutation(api.learnV2Lifecycle.transitionBlueprintRevision, { blueprintRevisionId: fork!._id, status: 'accepted', expectedRecordRevision: 3, idempotencyKey: 'fork-3' })
-      await expect(owner.mutation(api.learnV2Lifecycle.transitionBlueprintRevision, { blueprintRevisionId: fork!._id, status: 'active', expectedRecordRevision: 4, expectedVoidRevision: 2, idempotencyKey: 'fork-active-stale-void' })).rejects.toThrow(/Learning Void revision conflict/)
-      await owner.mutation(api.learnV2Lifecycle.transitionBlueprintRevision, { blueprintRevisionId: fork!._id, status: 'active', expectedRecordRevision: 4, expectedVoidRevision: 4, idempotencyKey: 'fork-4' })
-      expect(await owner.query(api.learnV2Lifecycle.getLearningVoid, { learningVoidId: learningVoid!._id })).toMatchObject({ activeBlueprintRevisionId: fork!._id })
-      expect(await owner.query(api.learnV2Lifecycle.getBlueprintRevision, { blueprintRevisionId: active!._id })).toMatchObject({ status: 'superseded' })
-      await expect(owner.mutation(api.learnV2Lifecycle.transitionBlueprintRevision, { blueprintRevisionId: active!._id, status: 'active', expectedRecordRevision: 6, expectedVoidRevision: 5, idempotencyKey: 'terminal' })).rejects.toThrow(/not allowed|guarded/)
+      await expect(owner.mutation(api.learnV2Lifecycle.transitionBlueprintRevision, { blueprintRevisionId: first!._id, status: 'map_review', expectedRecordRevision: 2, idempotencyKey: 'first-2' })).rejects.toThrow(/dedicated domain command/)
+      await expect(owner.mutation(api.learnV2Lifecycle.transitionLearningVoid, { learningVoidId: learningVoid!._id, status: 'map_review', expectedRevision: 2, idempotencyKey: 'void-map' })).rejects.toThrow(/dedicated domain command/)
     }
     finally {
       if (previous === undefined) delete process.env.LEARN_V2_ENABLED

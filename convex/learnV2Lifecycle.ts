@@ -130,6 +130,9 @@ export const transitionLearningVoid = mutation({
     if (replay) return learningVoidReceiptOutcome(replay)
     const row = await requireLiveOwnedVoid(ctx, userId, args.learningVoidId)
     if (row.revision !== args.expectedRevision) throw new Error('Learning Void revision conflict')
+    if (['map_review', 'calibration', 'plan_review', 'scheduled', 'active', 'completed'].includes(args.status)) {
+      throw new Error('Learning Void forward transition requires its dedicated domain command')
+    }
     assertUnguardedTransition('learningVoid', row.status, args.status)
     const revision = row.revision + 1
     await ctx.db.patch(row._id, { status: args.status, revision, lastIdempotencyKey: args.idempotencyKey, updatedAt: Date.now() })
@@ -201,6 +204,9 @@ export const transitionBlueprintRevision = mutation({
     const row = await ctx.db.get(args.blueprintRevisionId)
     if (!row || row.userId !== userId) throw new Error('Blueprint revision not found')
     if (row.recordRevision !== args.expectedRecordRevision) throw new Error('Blueprint revision conflict')
+    if (['map_review', 'accepted', 'active'].includes(args.status)) {
+      throw new Error('Blueprint forward transition requires its dedicated domain command')
+    }
     assertUnguardedTransition('blueprintRevision', row.status, args.status)
     const learningVoid = await requireLiveOwnedVoid(ctx, userId, row.learningVoidId)
     const now = Date.now()
