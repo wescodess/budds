@@ -1,6 +1,7 @@
 import { convexTest } from 'convex-test'
 import { describe, expect, test } from 'vitest'
 import { api, internal } from './_generated/api'
+import type { Id } from './_generated/dataModel'
 import schema from './schema'
 import { LEARN_V2_MASTERY_LOOP_BLOCKS, validateLearnV2SessionContentCandidate } from '../shared/learn-v2-session-content'
 
@@ -18,6 +19,41 @@ const candidate = () => ({
   blocks: LEARN_V2_MASTERY_LOOP_BLOCKS.map((kind, order) => ({ order, kind, content: `${kind} content`, claimOrders: [0] })),
   claims: [{ order: 0, claim: 'The source supports this fact.', supportSourceSnapshotIds: [sourceId], verifierVersion: 'learn-v2.entailment.v1', confidence: 0.9 }],
 })
+
+async function seedGenerationGraph() {
+  process.env.LEARN_V2_ENABLED = 'true'
+  const t = convexTest(schema, modules)
+  const owner = t.withIdentity(identity)
+  await owner.mutation(api.users.upsertUser, {})
+  await t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: identity.tokenIdentifier, enabled: true })
+  const graph = await t.run(async ctx => {
+    const now = Date.now()
+    const folderId = await ctx.db.insert('folders', { userId: identity.tokenIdentifier, name: 'Sources', documentCount: 0 })
+    const voidId = await ctx.db.insert('learningVoids', { userId: identity.tokenIdentifier, folderId, title: 'Learn', status: 'scheduled', revision: 2, createdAt: now, updatedAt: now })
+    const blueprintId = await ctx.db.insert('learnBlueprints', { userId: identity.tokenIdentifier, learningVoidId: voidId, revision: 1, createdAt: now })
+    const blueprintRevisionId = await ctx.db.insert('learnBlueprintRevisions', { userId: identity.tokenIdentifier, blueprintId, learningVoidId: voidId, revision: 1, recordRevision: 1, status: 'accepted', createdAt: now, updatedAt: now })
+    const objectiveId = await ctx.db.insert('learnObjectives', { userId: identity.tokenIdentifier, blueprintRevisionId, order: 0, title: 'Objective', assessmentContract: candidate().assessmentRubric })
+    const planId = await ctx.db.insert('studyPlans', { userId: identity.tokenIdentifier, learningVoidId: voidId, revision: 1, createdAt: now })
+    const planRevisionId = await ctx.db.insert('studyPlanRevisions', { userId: identity.tokenIdentifier, studyPlanId: planId, learningVoidId: voidId, revision: 1, recordRevision: 1, status: 'accepted', blueprintRevisionId, blueprintRecordRevision: 1, createdAt: now, updatedAt: now })
+    await ctx.db.patch(planId, { activeRevisionId: planRevisionId })
+    const sessionId = await ctx.db.insert('studySessions', { userId: identity.tokenIdentifier, studyPlanRevisionId: planRevisionId, primaryObjectiveId: objectiveId, status: 'planned', revision: 1, scheduledStartAt: now + 60_000 })
+    const sourceIdentityId = await ctx.db.insert('learnSourceIdentities', { userId: identity.tokenIdentifier, learningVoidId: voidId, origin: 'user_url', externalKey: 'source-1' })
+    const snapshotId = await ctx.db.insert('learnSourceSnapshots', { userId: identity.tokenIdentifier, sourceIdentityId, learningVoidId: voidId, blueprintRevisionId, revision: 1, status: 'user_accepted', effectiveStatus: 'user_accepted', rightsStatus: 'permitted', conflictStatus: 'clear', createdAt: now })
+    await ctx.db.insert('learnSourceExcerpts', { userId: identity.tokenIdentifier, sourceSnapshotId: snapshotId, locator: 'page:1', excerpt: 'The source supports this fact.', rightsStatus: 'permitted' })
+    await ctx.db.insert('learnObjectiveSources', { userId: identity.tokenIdentifier, objectiveId, sourceSnapshotId: snapshotId, coverage: 'strong' })
+    const jobId = await ctx.db.insert('learnJobs', { userId: identity.tokenIdentifier, learningVoidId: voidId, blueprintRevisionId, studyPlanRevisionId: planRevisionId, studySessionId: sessionId, type: 'session_content_generation', status: 'queued', revision: 1, idempotencyKey: 'job', inputDigest: 'sha256:input', expectedVoidRevision: 2, expectedBlueprintRecordRevision: 1, expectedSessionRevision: 1, attempts: 0, dispatchSupportingSourceSnapshotIds: [snapshotId], createdAt: now, updatedAt: now })
+    return { planId, planRevisionId, sessionId, snapshotId, jobId }
+  })
+  return { t, owner, graph }
+}
+
+async function leaseAndBegin(t: ReturnType<typeof convexTest>, jobId: Id<'learnJobs'>) {
+  const lease = await t.mutation(internal.learnV2SessionContent.leaseSessionContentGeneration, { tokenIdentifier: identity.tokenIdentifier, jobId, expectedRevision: 1 })
+  if (lease.kind !== 'leased') throw new Error('expected leased job')
+  const begun = await t.mutation(internal.learnV2SessionContent.beginSessionContentGeneration, { tokenIdentifier: identity.tokenIdentifier, jobId, leaseToken: lease.leaseToken, expectedRevision: lease.revision })
+  if (begun.status !== 'running') throw new Error('expected running job')
+  return { lease, begun }
+}
 
 describe('Learn V2 session-content publication contract', () => {
   test('accepts the complete evidence-bound mastery loop', () => {
@@ -93,5 +129,95 @@ describe('Learn V2 session-content publication contract', () => {
     expect(persisted.contents[0]!.candidateDigest).toMatch(/^sha256:[a-f0-9]{64}$/)
     expect(persisted.blocks).toHaveLength(10)
     expect(persisted.claims).toHaveLength(1)
+  })
+
+  test('keeps an invalid candidate wholly unpublished and records a terminal failure', async () => {
+    const { t, graph } = await seedGenerationGraph()
+    const { lease, begun } = await leaseAndBegin(t, graph.jobId)
+    const invalid = candidate()
+    invalid.claims[0]!.confidence = 0.79
+    const result = await t.mutation(internal.learnV2SessionContent.commitSessionContentCandidate, {
+      tokenIdentifier: identity.tokenIdentifier, jobId: graph.jobId, leaseToken: lease.leaseToken,
+      expectedRevision: begun.revision, candidateJson: JSON.stringify(invalid).replaceAll(sourceId, String(graph.snapshotId)),
+    })
+    expect(result).toEqual({ status: 'generation_failed' })
+    const rows = await t.run(async ctx => ({
+      job: await ctx.db.get(graph.jobId), session: await ctx.db.get(graph.sessionId),
+      content: await ctx.db.query('sessionContent').withIndex('by_userId_and_studySessionId_and_revision', q => q.eq('userId', identity.tokenIdentifier).eq('studySessionId', graph.sessionId)).take(2),
+      blocks: await ctx.db.query('sessionContentBlocks').take(12),
+      claims: await ctx.db.query('sessionContentClaims').take(2),
+    }))
+    expect(rows.job).toMatchObject({ status: 'failed', terminalReason: 'candidate_validation_failed' })
+    expect(rows.job).not.toHaveProperty('leaseToken')
+    expect(rows.session).toMatchObject({ status: 'generation_failed', auditReasonCode: 'candidate_validation_failed' })
+    expect(rows.content).toEqual([])
+    expect(rows.blocks).toEqual([])
+    expect(rows.claims).toEqual([])
+  })
+
+  test('blocks publication when a dispatch source is purged or its plan is no longer current', async () => {
+    const purged = await seedGenerationGraph()
+    const purgedLease = await leaseAndBegin(purged.t, purged.graph.jobId)
+    await purged.t.run(async ctx => {
+      const excerpt = await ctx.db.query('learnSourceExcerpts').withIndex('by_userId_and_sourceSnapshotId_and_evidencePurgedAt', q => q.eq('userId', identity.tokenIdentifier).eq('sourceSnapshotId', purged.graph.snapshotId).eq('evidencePurgedAt', undefined)).unique()
+      await ctx.db.patch(purged.graph.snapshotId, { evidencePurgedAt: Date.now() })
+      await ctx.db.patch(excerpt!._id, { evidencePurgedAt: Date.now() })
+    })
+    await expect(purged.t.mutation(internal.learnV2SessionContent.commitSessionContentCandidate, {
+      tokenIdentifier: identity.tokenIdentifier, jobId: purged.graph.jobId, leaseToken: purgedLease.lease.leaseToken,
+      expectedRevision: purgedLease.begun.revision, candidateJson: JSON.stringify(candidate()).replaceAll(sourceId, String(purged.graph.snapshotId)),
+    })).resolves.toEqual({ status: 'blocked' })
+    expect(await purged.t.run(ctx => ctx.db.get(purged.graph.jobId))).toMatchObject({ status: 'blocked', terminalReason: 'evidence_unavailable' })
+    expect(await purged.t.run(ctx => ctx.db.query('sessionContent').take(2))).toEqual([])
+
+    const stale = await seedGenerationGraph()
+    await stale.t.run(ctx => ctx.db.patch(stale.graph.planId, { activeRevisionId: undefined }))
+    expect(await stale.t.mutation(internal.learnV2SessionContent.leaseSessionContentGeneration, {
+      tokenIdentifier: identity.tokenIdentifier, jobId: stale.graph.jobId, expectedRevision: 1,
+    })).toEqual({ kind: 'blocked' })
+    expect(await stale.t.run(ctx => ctx.db.get(stale.graph.jobId))).toMatchObject({ status: 'blocked', terminalReason: 'input_revision_conflict' })
+  })
+
+  test('requeues an expired pre-dispatch lease but blocks an expired dispatched generation as uncertain', async () => {
+    const preDispatch = await seedGenerationGraph()
+    const preLease = await leaseAndBegin(preDispatch.t, preDispatch.graph.jobId)
+    await preDispatch.t.run(ctx => ctx.db.patch(preDispatch.graph.jobId, { leaseExpiresAt: Date.now() - 1 }))
+    expect(await preDispatch.t.mutation(internal.learnV2SessionContent.recoverExpiredSessionContentJobs, {})).toMatchObject({ recovered: 1, blocked: 0 })
+    const recoveredPreDispatch = await preDispatch.t.run(ctx => ctx.db.get(preDispatch.graph.jobId))
+    expect(recoveredPreDispatch).toMatchObject({ status: 'queued', revision: preLease.begun.revision + 1 })
+    expect(recoveredPreDispatch).not.toHaveProperty('checkpoint')
+    expect(recoveredPreDispatch).not.toHaveProperty('leaseToken')
+
+    const postDispatch = await seedGenerationGraph()
+    const postLease = await leaseAndBegin(postDispatch.t, postDispatch.graph.jobId)
+    await postDispatch.t.mutation(internal.learnV2SessionContent.markSessionContentDispatchStarted, { tokenIdentifier: identity.tokenIdentifier, jobId: postDispatch.graph.jobId, leaseToken: postLease.lease.leaseToken, expectedRevision: postLease.begun.revision })
+    await postDispatch.t.run(ctx => ctx.db.patch(postDispatch.graph.jobId, { leaseExpiresAt: Date.now() - 1 }))
+    expect(await postDispatch.t.mutation(internal.learnV2SessionContent.recoverExpiredSessionContentJobs, {})).toMatchObject({ recovered: 0, blocked: 1 })
+    const blockedPostDispatch = await postDispatch.t.run(ctx => ctx.db.get(postDispatch.graph.jobId))
+    expect(blockedPostDispatch).toMatchObject({ status: 'blocked', terminalReason: 'provider_outcome_unknown' })
+    expect(blockedPostDispatch).not.toHaveProperty('leaseToken')
+    expect(await postDispatch.t.run(ctx => ctx.db.get(postDispatch.graph.sessionId))).toMatchObject({ status: 'blocked', auditReasonCode: 'provider_outcome_unknown' })
+  })
+
+  test('starts only the exact published revision and returns the durable receipt only to its owner', async () => {
+    const { t, owner, graph } = await seedGenerationGraph()
+    const { lease, begun } = await leaseAndBegin(t, graph.jobId)
+    const published = await t.mutation(internal.learnV2SessionContent.commitSessionContentCandidate, {
+      tokenIdentifier: identity.tokenIdentifier, jobId: graph.jobId, leaseToken: lease.leaseToken,
+      expectedRevision: begun.revision, candidateJson: JSON.stringify(candidate()).replaceAll(sourceId, String(graph.snapshotId)),
+    })
+    if (published.status !== 'ready') throw new Error('expected published session content')
+    await expect(owner.mutation(api.learnV2SessionContent.startStudySession, {
+      studySessionId: graph.sessionId, expectedSessionRevision: 2, expectedContentRevision: 2, idempotencyKey: 'start-exact-revision',
+    })).rejects.toThrow(/Published session content is required/)
+    const args = { studySessionId: graph.sessionId, expectedSessionRevision: 2, expectedContentRevision: 1, idempotencyKey: 'start-exact-revision' }
+    const first = await owner.mutation(api.learnV2SessionContent.startStudySession, args)
+    expect(await owner.mutation(api.learnV2SessionContent.startStudySession, args)).toEqual(first)
+    expect(await t.run(ctx => ctx.db.query('learnPlanCommandReceipts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', identity.tokenIdentifier).eq('idempotencyKey', args.idempotencyKey)).take(2))).toHaveLength(1)
+    const otherIdentity = { tokenIdentifier: 'https://auth.example.com|other-session-owner', name: 'Other owner' }
+    const other = t.withIdentity(otherIdentity)
+    await other.mutation(api.users.upsertUser, {})
+    await t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: otherIdentity.tokenIdentifier, enabled: true })
+    await expect(other.mutation(api.learnV2SessionContent.startStudySession, args)).rejects.toThrow(/Study session is not ready/)
   })
 })
