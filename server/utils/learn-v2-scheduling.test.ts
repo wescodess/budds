@@ -1,7 +1,51 @@
 import { describe, expect, test } from 'vitest'
-import { reflowFutureIncomplete, scheduleStudyPlan } from '../../shared/learn-v2-scheduling'
+import { reflowFutureIncomplete, rescheduleStudySessions, scheduleStudyPlan } from '../../shared/learn-v2-scheduling'
 
 describe('Learn V2 pure feasibility and scheduling', () => {
+  test('moves outstanding work around preserved capacity without replaying completed work', () => {
+    const schedulingInput = {
+      version: 'learn-v2.schedule-input.v1' as const,
+      nowUtcMs: Date.parse('2026-09-14T08:00:00Z'), timezone: 'UTC', startLocalDate: '2026-09-14', targetLocalDate: '2026-09-14', sessionMinutes: 30, minRestMinutes: 0,
+      availability: [{ weekday: 1, start: '09:00', end: '13:00' }], blackoutDates: [], reviewIntervalsDays: [], objectives: [{ id: 'core', order: 0, estimatedMinutes: 60, prerequisiteIds: [], priority: 'new_learning' as const }], retainedReviews: [],
+    }
+    const result = rescheduleStudySessions({
+      version: 'learn-v2.session-reflow-input.v1', nowUtcMs: Date.parse('2026-09-14T08:00:00Z'), schedulingInput,
+      sessions: [
+        { id: 'done', placementId: 'learning:core:1', objectiveId: 'core', objectiveOrder: 0, kind: 'learning', priority: 'new_learning', status: 'completed', scheduledStartAt: Date.parse('2026-09-14T08:00:00Z'), scheduledEndAt: Date.parse('2026-09-14T08:30:00Z') },
+        { id: 'blocked', placementId: 'learning:other:1', objectiveId: 'other', objectiveOrder: 1, kind: 'learning', priority: 'new_learning', status: 'blocked', scheduledStartAt: Date.parse('2026-09-14T09:00:00Z'), scheduledEndAt: Date.parse('2026-09-14T10:00:00Z') },
+        { id: 'missed', placementId: 'learning:core:2', objectiveId: 'core', objectiveOrder: 0, kind: 'learning', priority: 'new_learning', status: 'missed', scheduledStartAt: Date.parse('2026-09-14T07:00:00Z'), scheduledEndAt: Date.parse('2026-09-14T07:30:00Z') },
+      ],
+    })
+    expect(result.replacedSessionIds).toEqual(['missed'])
+    expect(result.replacements).toMatchObject([{ id: 'learning:core:2', startUtcMs: Date.parse('2026-09-14T10:00:00Z') }])
+  })
+
+  test('keeps prerequisite learning and reviews ordered during priority reflow', () => {
+    const nowUtcMs = Date.parse('2026-09-14T08:00:00Z')
+    const result = rescheduleStudySessions({
+      version: 'learn-v2.session-reflow-input.v1',
+      nowUtcMs,
+      schedulingInput: {
+        version: 'learn-v2.schedule-input.v1', nowUtcMs, timezone: 'UTC', startLocalDate: '2026-09-14', targetLocalDate: '2026-09-15', sessionMinutes: 30, minRestMinutes: 0,
+        availability: [{ weekday: 1, start: '09:00', end: '13:00' }, { weekday: 2, start: '09:00', end: '13:00' }], blackoutDates: [], reviewIntervalsDays: [1],
+        objectives: [
+          { id: 'foundation', order: 0, estimatedMinutes: 30, prerequisiteIds: [], priority: 'optional_enrichment' },
+          { id: 'application', order: 1, estimatedMinutes: 30, prerequisiteIds: ['foundation'], priority: 'prerequisite_remediation' },
+        ],
+        retainedReviews: [],
+      },
+      sessions: [
+        { id: 'foundation', placementId: 'learning:foundation:1', objectiveId: 'foundation', objectiveOrder: 0, kind: 'learning', priority: 'optional_enrichment', status: 'missed', scheduledStartAt: Date.parse('2026-09-14T07:00:00Z'), scheduledEndAt: Date.parse('2026-09-14T07:30:00Z') },
+        { id: 'application', placementId: 'learning:application:1', objectiveId: 'application', objectiveOrder: 1, kind: 'learning', priority: 'prerequisite_remediation', status: 'planned', scheduledStartAt: Date.parse('2026-09-14T09:00:00Z'), scheduledEndAt: Date.parse('2026-09-14T09:30:00Z') },
+        { id: 'review', placementId: 'review:application:1', objectiveId: 'application', objectiveOrder: 1, kind: 'review', priority: 'due_review', status: 'planned', scheduledStartAt: Date.parse('2026-09-14T09:30:00Z'), scheduledEndAt: Date.parse('2026-09-14T10:00:00Z') },
+      ],
+    })
+
+    expect(result.replacements.map(row => row.id)).toEqual(['learning:foundation:1', 'learning:application:1', 'review:application:1'])
+    expect(result.replacements[0]!.endUtcMs).toBeLessThanOrEqual(result.replacements[1]!.startUtcMs)
+    expect(result.replacements[1]!.endUtcMs).toBeLessThanOrEqual(result.replacements[2]!.startUtcMs)
+    expect(result.replacements[2]!.localDate).toBe('2026-09-15')
+  })
   test('orders prerequisites and calendar-day reviews inside buffered availability', () => {
     const result = scheduleStudyPlan({
       version: 'learn-v2.schedule-input.v1',

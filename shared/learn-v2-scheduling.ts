@@ -95,6 +95,30 @@ export type ReflowResult = {
   preservedSessionIds: string[]
 }
 
+export type StudySessionReflowInput = {
+  version: 'learn-v2.session-reflow-input.v1'
+  nowUtcMs: number
+  schedulingInput: StudyPlanSchedulingInput
+  sessions: Array<{
+    id: string
+    placementId: string
+    objectiveId: string
+    objectiveOrder: number
+    kind: PlacementKind
+    priority: SchedulingPriority
+    status: ReflowInput['sessions'][number]['status']
+    scheduledStartAt: number
+    scheduledEndAt: number
+  }>
+}
+
+export type StudySessionReflowResult = {
+  version: 'learn-v2.session-reflow.v1'
+  replacements: StudyPlacement[]
+  replacedSessionIds: string[]
+  preservedSessionIds: string[]
+}
+
 type LocalResolution = { instantMs: number, offsetMinutes: number, adjustment?: ScheduleAdjustment }
 type Segment = {
   localDate: string
@@ -274,6 +298,119 @@ function placeTask(task: PendingTask, segments: Segment[], placements: StudyPlac
     return placement
   }
   return null
+}
+
+function localDateAt(instantMs: number, timezone: string) {
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(instantMs)
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find(row => row.type === type)?.value
+  return `${part('year')}-${part('month')}-${part('day')}`
+}
+
+export function rescheduleStudySessions(input: StudySessionReflowInput): StudySessionReflowResult {
+  if (input.version !== 'learn-v2.session-reflow-input.v1') throw new Error('Unsupported session reflow input version')
+  if (!Number.isSafeInteger(input.nowUtcMs)) throw new Error('nowUtcMs must be an explicit UTC millisecond instant')
+  assertTimezone(input.schedulingInput.timezone)
+  const startDate = parseDate(input.schedulingInput.startLocalDate, 'Start date')
+  const targetDate = input.schedulingInput.targetLocalDate ? parseDate(input.schedulingInput.targetLocalDate, 'Target date') : null
+  const horizonEnd = targetDate ?? startDate.add({ days: MAX_PLANNING_DAYS - 1 })
+  const schedulingInput = { ...input.schedulingInput, nowUtcMs: input.nowUtcMs }
+  const { segments } = planningSegments(schedulingInput, horizonEnd)
+  const identityKeys = input.sessions.map(row => `${row.id}:${row.placementId}`)
+  if (new Set(identityKeys).size !== input.sessions.length || input.sessions.some(row => !row.id.trim() || !row.placementId.trim())) throw new Error('Session reflow identities must be unique and non-empty')
+  const movable = new Set(['planned', 'ready', 'needs_reschedule'])
+  const replacementSessions = input.sessions.filter(row => row.status === 'missed' || (row.scheduledStartAt > input.nowUtcMs && movable.has(row.status)))
+  const replacementIds = new Set(replacementSessions.map(row => row.id))
+  const preserved = input.sessions.filter(row => !replacementIds.has(row.id))
+  const occupiedStatuses = new Set(['planned', 'ready', 'in_progress', 'blocked', 'generation_failed', 'needs_reschedule'])
+  const occupied: StudyPlacement[] = preserved.filter(row => row.scheduledEndAt > input.nowUtcMs && occupiedStatuses.has(row.status)).map(row => ({
+    id: `preserved:${row.id}`,
+    kind: row.kind,
+    objectiveId: row.objectiveId,
+    startUtcMs: row.scheduledStartAt,
+    endUtcMs: row.scheduledEndAt,
+    localDate: localDateAt(row.scheduledStartAt, schedulingInput.timezone),
+    offsetMinutes: offsetAt(row.scheduledStartAt, schedulingInput.timezone),
+    priority: row.priority,
+  }))
+  const priorityOrder = new Map<SchedulingPriority, number>([
+    ['overdue_retained_review', 0],
+    ['prerequisite_remediation', 1],
+    ['due_review', 2],
+    ['new_learning', 3],
+    ['optional_enrichment', 4],
+  ])
+  const byObjective = new Map(input.schedulingInput.objectives.map(objective => [objective.id, objective]))
+  const learningByObjective = new Map<string, StudySessionReflowInput['sessions']>()
+  const reviewsByObjective = new Map<string, StudySessionReflowInput['sessions']>()
+  for (const session of input.sessions) {
+    const target = session.kind === 'learning' ? learningByObjective : session.kind === 'review' ? reviewsByObjective : null
+    if (target) target.set(session.objectiveId, [...(target.get(session.objectiveId) ?? []), session])
+  }
+  const chronological = (rows: StudySessionReflowInput['sessions']) => [...rows].sort((a, b) => a.scheduledStartAt - b.scheduledStartAt || a.placementId.localeCompare(b.placementId))
+  const dependencies = new Map<string, string[]>()
+  const finalLearningByObjective = new Map<string, string>()
+  for (const [objectiveId, rows] of learningByObjective) {
+    const ordered = chronological(rows)
+    if (ordered.length > 0) finalLearningByObjective.set(objectiveId, ordered[ordered.length - 1]!.id)
+    for (const [index, session] of ordered.entries()) {
+      const prerequisiteFinalSessions = index === 0
+        ? (byObjective.get(objectiveId)?.prerequisiteIds ?? []).map(id => chronological(learningByObjective.get(id) ?? []).at(-1)?.id).filter((id): id is string => id !== undefined)
+        : []
+      dependencies.set(session.id, [...(index > 0 ? [ordered[index - 1]!.id] : []), ...prerequisiteFinalSessions])
+    }
+  }
+  for (const [objectiveId, rows] of reviewsByObjective) {
+    const ordered = chronological(rows)
+    const finalLearningId = finalLearningByObjective.get(objectiveId)
+    for (const [index, session] of ordered.entries()) dependencies.set(session.id, [
+      ...(index > 0 ? [ordered[index - 1]!.id] : finalLearningId ? [finalLearningId] : []),
+    ])
+  }
+  const completionBySessionId = new Map(preserved
+    .filter(row => row.status === 'completed' || row.status === 'in_progress')
+    .map(row => [row.id, row.scheduledEndAt]))
+  const replacements: StudyPlacement[] = []
+  const pending = new Map(replacementSessions.map(session => [session.id, session]))
+  while (pending.size > 0) {
+    const ready = [...pending.values()].filter(session => (dependencies.get(session.id) ?? []).every(id => completionBySessionId.has(id)))
+      .sort((a, b) => priorityOrder.get(a.priority)! - priorityOrder.get(b.priority)!
+        || a.scheduledStartAt - b.scheduledStartAt || a.objectiveOrder - b.objectiveOrder || a.placementId.localeCompare(b.placementId))
+    const session = ready[0]
+    if (!session) throw new Error('Session reflow cannot preserve prerequisite and review ordering')
+    const durationMinutes = (session.scheduledEndAt - session.scheduledStartAt) / MINUTE_MS
+    if (!Number.isSafeInteger(durationMinutes) || durationMinutes < MIN_SESSION_MINUTES || durationMinutes > MAX_SESSION_MINUTES) throw new Error('Session reflow duration is invalid')
+    const dependencyCompletion = Math.max(input.nowUtcMs, ...(dependencies.get(session.id) ?? []).map(id => completionBySessionId.get(id)!))
+    let earliestLocalDate = localDateAt(input.nowUtcMs, schedulingInput.timezone)
+    if (session.kind === 'review') {
+      const intervalMatch = /:(\d+)$/.exec(session.placementId)
+      const intervalDays = intervalMatch ? Number(intervalMatch[1]) : Number.NaN
+      const finalLearningId = finalLearningByObjective.get(session.objectiveId)
+      const finalLearningCompletion = finalLearningId ? completionBySessionId.get(finalLearningId) : undefined
+      if (!Number.isSafeInteger(intervalDays) || intervalDays < 1 || finalLearningCompletion === undefined) throw new Error('Review placement is missing its calendar-day scheduling pin')
+      earliestLocalDate = addDays(localDateAt(finalLearningCompletion, schedulingInput.timezone), intervalDays)
+    }
+    const placed = placeTask({
+      id: session.placementId,
+      kind: session.kind,
+      objectiveId: session.objectiveId,
+      objectiveOrder: session.objectiveOrder,
+      durationMinutes,
+      earliestLocalDate,
+      earliestUtcMs: Math.max(dependencyCompletion, session.status === 'missed' ? input.nowUtcMs : session.scheduledStartAt),
+      priority: session.priority,
+    }, segments, [...occupied, ...replacements], schedulingInput)
+    if (!placed) throw new Error(`No collision-free replacement exists for placement ${session.placementId}`)
+    replacements.push(placed)
+    completionBySessionId.set(session.id, placed.endUtcMs)
+    pending.delete(session.id)
+  }
+  replacements.sort((a, b) => a.startUtcMs - b.startUtcMs || a.id.localeCompare(b.id))
+  return {
+    version: 'learn-v2.session-reflow.v1',
+    replacements,
+    replacedSessionIds: replacementSessions.map(row => row.id).sort(),
+    preservedSessionIds: preserved.map(row => row.id).sort(),
+  }
 }
 
 function addMinutesToTime(value: string, minutes: number) {
