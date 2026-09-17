@@ -1,4 +1,5 @@
 import { v } from 'convex/values'
+import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import { mutation, query, type MutationCtx } from './_generated/server'
 import { requireLearnV2MutationAccess, requireLearnV2QueryAccess } from './lib/learnV2Access'
@@ -156,9 +157,17 @@ export const acceptPlanPreview = mutation({
     const now = Date.now()
     if (result.placements.some(placement => placement.startUtcMs <= now)) throw new Error('Plan preview contains a past placement')
     await ctx.db.patch(planRevision._id, { status: 'accepted', recordRevision: (planRevision.recordRevision ?? 0) + 1, acceptedAt: now, updatedAt: now })
+    await ctx.db.patch(planRevision.studyPlanId, { activeRevisionId: planRevision._id, updatedAt: now })
     await ctx.db.patch(learningVoid._id, { status: 'scheduled', revision: learningVoid.revision + 1, lastIdempotencyKey: args.idempotencyKey, updatedAt: now })
     await ctx.db.patch(planRevision.studyPlanId, { activeRevisionId: planRevision._id, updatedAt: now })
-    for (const placement of result.placements) await ctx.db.insert('studySessions', { userId, studyPlanRevisionId: planRevision._id, primaryObjectiveId: placement.objectiveId as Id<'learnObjectives'>, placementId: placement.id, status: 'planned', revision: 1, scheduledStartAt: placement.startUtcMs, scheduledEndAt: placement.endUtcMs, timezone: planRevision.timezone, offsetMinutes: placement.offsetMinutes, placementKind: placement.kind, schedulingPriority: placement.priority, schedulerVersion: planRevision.schedulerVersion })
+    const initialSessionIds: Id<'studySessions'>[] = []
+    for (const placement of result.placements) initialSessionIds.push(await ctx.db.insert('studySessions', { userId, studyPlanRevisionId: planRevision._id, primaryObjectiveId: placement.objectiveId as Id<'learnObjectives'>, placementId: placement.id, status: 'planned', revision: 1, scheduledStartAt: placement.startUtcMs, scheduledEndAt: placement.endUtcMs, timezone: planRevision.timezone, offsetMinutes: placement.offsetMinutes, placementKind: placement.kind, schedulingPriority: placement.priority, schedulerVersion: planRevision.schedulerVersion }))
+    const acceptedSources = await ctx.db.query('learnSourceSnapshots').withIndex('by_userId_and_blueprintRevisionId_and_effectiveStatus', q => q.eq('userId', userId).eq('blueprintRevisionId', blueprint._id).eq('effectiveStatus', 'user_accepted')).take(65)
+    const supportIds = acceptedSources.filter(source => source.status === 'user_accepted' && source.rightsStatus === 'permitted' && source.conflictStatus === 'clear' && source.evidencePurgedAt === undefined).map(source => source._id)
+    for (const [index, studySessionId] of initialSessionIds.slice(0, 2).entries()) {
+      const jobId = await ctx.db.insert('learnJobs', { userId, learningVoidId: learningVoid._id, blueprintRevisionId: blueprint._id, studyPlanRevisionId: planRevision._id, studySessionId, type: 'session_content_generation', status: 'queued', revision: 1, idempotencyKey: `session-content:${planRevision._id}:${index}`, expectedVoidRevision: learningVoid.revision + 1, expectedBlueprintRecordRevision: blueprint.recordRevision, expectedSessionRevision: 1, attempts: 0, dispatchSupportingSourceSnapshotIds: supportIds, providerEnabled: process.env.LEARN_V2_SESSION_CONTENT_PROVIDER_ENABLED === 'true', providerModel: process.env.LEARN_V2_SESSION_CONTENT_MODEL?.trim() || undefined, providerPolicyVersion: 'learn-v2.session-content-provider.v1', createdAt: now, updatedAt: now })
+      await ctx.scheduler.runAfter(0, internal.learnV2SessionContent.executeSessionContentGeneration, { tokenIdentifier: userId, jobId, expectedRevision: 1 })
+    }
     const response = { _id: planRevision._id, status: 'accepted' as const, voidStatus: 'scheduled' as const, sessionCount: result.placements.length, recordRevision: (planRevision.recordRevision ?? 0) + 1 }
     await audit(ctx, { userId, learningVoidId: learningVoid._id, studyPlanRevisionId: planRevision._id, reasonCode: 'preview_accepted', details: { blueprintRevisionId: planRevision.blueprintRevisionId, schedulerVersion: planRevision.schedulerVersion, timezone: planRevision.timezone }, nowUtcMs: now })
     await receipt(ctx, { userId, learningVoidId: learningVoid._id, idempotencyKey: args.idempotencyKey, command: 'acceptPlanPreview', requestFingerprint, response, nowUtcMs: now })
@@ -256,7 +265,9 @@ export const reflowFutureIncomplete = mutation({
     for (const sessionId of reflow.preservedSessionIds) {
       const session = sessions.find(row => String(row._id) === sessionId)
       if (!session || session.scheduledEndAt === undefined || session.scheduledEndAt <= now || !carriedStatuses.has(session.status)) continue
-      await ctx.db.insert('studySessions', { userId, studyPlanRevisionId: successorId, primaryObjectiveId: session.primaryObjectiveId, placementId: session.placementId, status: session.status, revision: session.revision, scheduledStartAt: session.scheduledStartAt, scheduledEndAt: session.scheduledEndAt, timezone: session.timezone, offsetMinutes: session.offsetMinutes, placementKind: session.placementKind, schedulingPriority: session.schedulingPriority, schedulerVersion: session.schedulerVersion, auditReasonCode: 'preserved_during_reflow' })
+      // Content belongs to the immutable old session identity. A successor
+      // shell must regenerate rather than exposing `ready` without content.
+      await ctx.db.insert('studySessions', { userId, studyPlanRevisionId: successorId, primaryObjectiveId: session.primaryObjectiveId, placementId: session.placementId, status: session.status === 'ready' ? 'planned' : session.status, revision: session.status === 'ready' ? 1 : session.revision, scheduledStartAt: session.scheduledStartAt, scheduledEndAt: session.scheduledEndAt, timezone: session.timezone, offsetMinutes: session.offsetMinutes, placementKind: session.placementKind, schedulingPriority: session.schedulingPriority, schedulerVersion: session.schedulerVersion, auditReasonCode: session.status === 'ready' ? 'ready_content_regeneration_required' : 'preserved_during_reflow' })
     }
     await ctx.db.patch(plan._id, { status: 'superseded', recordRevision: (plan.recordRevision ?? 0) + 1, updatedAt: now })
     await ctx.db.patch(planRoot._id, { activeRevisionId: successorId, updatedAt: now })
