@@ -1,0 +1,169 @@
+/// <reference types="vite/client" />
+import { convexTest } from 'convex-test'
+import { describe, expect, test } from 'vitest'
+import { api, internal } from './_generated/api'
+import type { Id } from './_generated/dataModel'
+import schema from './schema'
+
+const modules = import.meta.glob('./**/*.ts')
+const identity = { tokenIdentifier: 'https://auth.example.com|map-owner', name: 'Map Owner' }
+const assessment = {
+  version: 'learn-v2.assessment.v1' as const,
+  kind: 'machine_checkable' as const,
+  responseFormat: 'short_text' as const,
+  instructions: 'Give the supported answer.',
+  passingScorePercent: 80 as const,
+  criteria: [{ key: 'correct', description: 'The answer is correct.', weightPercent: 100 }],
+}
+
+async function setupMap() {
+  process.env.LEARN_V2_ENABLED = 'true'
+  const t = convexTest(schema, modules)
+  const owner = t.withIdentity(identity)
+  await owner.mutation(api.users.upsertUser, {})
+  await t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: identity.tokenIdentifier, enabled: true })
+  const folderId = await owner.mutation(api.folders.createFolder, { name: 'Map sources' })
+  const learningVoid = await owner.mutation(api.learnV2Lifecycle.createLearningVoid, { folderId, title: 'Editable map', idempotencyKey: 'map-void' })
+  const blueprint = await owner.mutation(api.learnV2Lifecycle.createBlueprintDraft, { learningVoidId: learningVoid!._id, expectedVoidRevision: 1, idempotencyKey: 'map-blueprint' })
+  const seeded = await t.run(async (ctx) => {
+    await ctx.db.patch(learningVoid!._id, { status: 'map_review' })
+    await ctx.db.patch(blueprint!._id, { status: 'map_review' })
+    const sourceIdentityId = await ctx.db.insert('learnSourceIdentities', { userId: identity.tokenIdentifier, learningVoidId: learningVoid!._id, origin: 'user_url', externalKey: 'https://example.com/source', canonicalUrl: 'https://example.com/source' })
+    const sourceSnapshotId = await ctx.db.insert('learnSourceSnapshots', { userId: identity.tokenIdentifier, sourceIdentityId, learningVoidId: learningVoid!._id, blueprintRevisionId: blueprint!._id, revision: 1, recordRevision: 1, status: 'user_accepted', effectiveStatus: 'user_accepted', rightsStatus: 'permitted', conflictStatus: 'clear', createdAt: Date.now() })
+    await ctx.db.insert('learnSourceExcerpts', { userId: identity.tokenIdentifier, sourceSnapshotId, locator: 'paragraph:1', excerpt: 'Supported evidence.', rightsStatus: 'permitted' })
+    const milestones = []
+    for (let index = 0; index < 3; index++) milestones.push(await ctx.db.insert('learnMilestones', { userId: identity.tokenIdentifier, blueprintRevisionId: blueprint!._id, order: index, title: `Milestone ${index + 1}` }))
+    const objectives = []
+    for (let index = 0; index < 6; index++) {
+      const objectiveId = await ctx.db.insert('learnObjectives', { userId: identity.tokenIdentifier, blueprintRevisionId: blueprint!._id, milestoneId: milestones[Math.floor(index / 2)], order: index, title: `Objective ${index + 1}`, capability: `Capability ${index + 1}`, estimatedMinutes: 20, coverage: 'strong', assessmentContract: assessment })
+      objectives.push(objectiveId)
+      await ctx.db.insert('learnObjectiveSources', { userId: identity.tokenIdentifier, objectiveId, sourceSnapshotId, coverage: 'strong' })
+    }
+    return { sourceSnapshotId, objectives }
+  })
+  return { t, owner, learningVoid: learningVoid!, blueprint: blueprint!, ...seeded }
+}
+
+function editedCandidate(sourceSnapshotId: Id<'learnSourceSnapshots'>) {
+  return {
+    version: 'learn-v2.blueprint-candidate.v1' as const,
+    generatorVersion: 'human-map-editor.v1',
+    milestones: Array.from({ length: 3 }, (_, index) => ({ key: `milestone-${index + 1}`, order: index, title: `Edited milestone ${index + 1}` })),
+    objectives: Array.from({ length: 6 }, (_, index) => ({
+      key: `objective-${index + 1}`,
+      milestoneKey: `milestone-${Math.floor(index / 2) + 1}`,
+      order: index,
+      title: `Edited objective ${index + 1}`,
+      capability: `Edited capability ${index + 1}`,
+      estimatedMinutes: 25,
+      coverage: 'strong' as const,
+      sourceSnapshotIds: [sourceSnapshotId],
+      gapSourceSnapshotIds: [],
+      prerequisiteObjectiveKeys: index === 0 ? [] : [`objective-${index}`],
+      assessmentContract: assessment,
+    })),
+  }
+}
+
+describe('Learn V2 revision-safe map editing and calibration', () => {
+  test('forks a complete private copy and rejects a concurrent stale fork without mutating the parent', async () => {
+    const previous = process.env.LEARN_V2_ENABLED
+    try {
+      const setup = await setupMap()
+      await setup.t.run(async (ctx) => {
+        const source = await ctx.db.get(setup.sourceSnapshotId)
+        for (let index = 0; index < 65; index++) {
+          await ctx.db.insert('learnSourceSnapshots', { userId: identity.tokenIdentifier, sourceIdentityId: source!.sourceIdentityId, learningVoidId: setup.learningVoid._id, blueprintRevisionId: setup.blueprint._id, revision: index + 2, status: 'rejected', rejectedAt: index + 1, createdAt: index + 1 })
+        }
+      })
+      const fork = await setup.owner.mutation(api.learnV2Lifecycle.forkBlueprintDraft, { blueprintRevisionId: setup.blueprint._id, expectedRecordRevision: 1, expectedVoidRevision: 2, idempotencyKey: 'fork-map' })
+      await expect(setup.owner.mutation(api.learnV2Lifecycle.forkBlueprintDraft, { blueprintRevisionId: setup.blueprint._id, expectedRecordRevision: 1, expectedVoidRevision: 2, idempotencyKey: 'fork-map-stale' })).rejects.toThrow(/revision conflict/)
+      expect(await setup.owner.mutation(api.learnV2Lifecycle.forkBlueprintDraft, { blueprintRevisionId: setup.blueprint._id, expectedRecordRevision: 1, expectedVoidRevision: 2, idempotencyKey: 'fork-map' })).toEqual(fork)
+      const parent = await setup.owner.query(api.learnV2Blueprints.getBlueprintMap, { blueprintRevisionId: setup.blueprint._id })
+      const child = await setup.owner.query(api.learnV2Blueprints.getBlueprintMap, { blueprintRevisionId: fork!._id })
+      expect(parent?.objectives).toHaveLength(6)
+      expect(child?.objectives).toHaveLength(6)
+      expect(child?.objectives[0]?.title).toBe(parent?.objectives[0]?.title)
+      expect(child?.objectives[0]?._id).not.toBe(parent?.objectives[0]?._id)
+      expect(child?.objectives[0]?.sourceLinks[0]?.sourceSnapshotId).not.toBe(parent?.objectives[0]?.sourceLinks[0]?.sourceSnapshotId)
+    }
+    finally {
+      if (previous === undefined) delete process.env.LEARN_V2_ENABLED
+      else process.env.LEARN_V2_ENABLED = previous
+    }
+  })
+
+  test('replaces only the forked draft, accepts it, and completes a bounded server-scored calibration', async () => {
+    const previous = process.env.LEARN_V2_ENABLED
+    try {
+      const setup = await setupMap()
+      const fork = await setup.owner.mutation(api.learnV2Lifecycle.forkBlueprintDraft, { blueprintRevisionId: setup.blueprint._id, expectedRecordRevision: 1, expectedVoidRevision: 2, idempotencyKey: 'edit-fork' })
+      const clonedSource = await setup.t.run(ctx => ctx.db.query('learnSourceSnapshots').withIndex('by_userId_and_blueprintRevisionId', q => q.eq('userId', identity.tokenIdentifier).eq('blueprintRevisionId', fork!._id)).first())
+      const editArgs = { blueprintRevisionId: fork!._id, expectedRecordRevision: 1, expectedVoidRevision: 3, idempotencyKey: 'replace-map', candidate: editedCandidate(clonedSource!._id) }
+      const edited = await setup.owner.mutation(api.learnV2MapCalibration.replaceDraftMap, editArgs)
+      expect(await setup.owner.mutation(api.learnV2MapCalibration.replaceDraftMap, editArgs)).toEqual(edited)
+      const parent = await setup.owner.query(api.learnV2Blueprints.getBlueprintMap, { blueprintRevisionId: setup.blueprint._id })
+      const child = await setup.owner.query(api.learnV2Blueprints.getBlueprintMap, { blueprintRevisionId: fork!._id })
+      expect(parent?.objectives[0]?.title).toBe('Objective 1')
+      expect(child?.objectives[0]?.title).toBe('Edited objective 1')
+      const accepted = await setup.owner.mutation(api.learnV2MapCalibration.acceptBlueprintMap, { blueprintRevisionId: fork!._id, expectedRecordRevision: 2, expectedVoidRevision: 4, idempotencyKey: 'accept-map' })
+      expect(accepted.status).toBe('accepted')
+      await expect(setup.owner.mutation(api.learnV2MapCalibration.replaceDraftMap, { ...editArgs, expectedRecordRevision: 3, expectedVoidRevision: 5, idempotencyKey: 'mutate-accepted' })).rejects.toThrow(/not ready|different request/)
+      const objectiveIds = child!.objectives.slice(0, 3).map(row => row._id)
+      const outcomes = []
+      for (let index = 0; index < objectiveIds.length; index++) {
+        outcomes.push(await setup.t.mutation(internal.learnV2MapCalibration.recordCalibrationAttempt, { tokenIdentifier: identity.tokenIdentifier, blueprintRevisionId: fork!._id, objectiveId: objectiveIds[index]!, expectedBlueprintRecordRevision: 3, expectedVoidRevision: 5, idempotencyKey: `calibration-${index}`, serverScorePercent: index === 0 ? 100 : 79, usedHint: index === 2, usedReveal: false, confidence: 5, rubricVersion: 'rubric.v1' }))
+      }
+      expect(outcomes.map(row => row.result)).toEqual(['provisionally_known', 'learning', 'learning'])
+      const records = await setup.t.run(ctx => ctx.db.query('masteryRecords').withIndex('by_userId_and_blueprintRevisionId', q => q.eq('userId', identity.tokenIdentifier).eq('blueprintRevisionId', fork!._id)).collect())
+      expect(records.map(row => row.state).sort()).toEqual(['learning', 'learning', 'provisionally_known'])
+      expect(records.every(row => !['independent', 'retained'].includes(row.state))).toBe(true)
+      const completed = await setup.owner.mutation(api.learnV2MapCalibration.completeCalibration, { blueprintRevisionId: fork!._id, expectedBlueprintRecordRevision: 3, expectedVoidRevision: 5, idempotencyKey: 'complete-calibration' })
+      expect(completed).toMatchObject({ status: 'plan_review', revision: 6 })
+    }
+    finally {
+      if (previous === undefined) delete process.env.LEARN_V2_ENABLED
+      else process.env.LEARN_V2_ENABLED = previous
+    }
+  })
+
+  test('rejects early completion, duplicate objectives, and changed idempotent calibration requests', async () => {
+    const previous = process.env.LEARN_V2_ENABLED
+    try {
+      const setup = await setupMap()
+      const accepted = await setup.owner.mutation(api.learnV2MapCalibration.acceptBlueprintMap, { blueprintRevisionId: setup.blueprint._id, expectedRecordRevision: 1, expectedVoidRevision: 2, idempotencyKey: 'direct-accept' })
+      const args = { tokenIdentifier: identity.tokenIdentifier, blueprintRevisionId: setup.blueprint._id, objectiveId: setup.objectives[0]!, expectedBlueprintRecordRevision: accepted.recordRevision, expectedVoidRevision: 3, idempotencyKey: 'single-attempt', serverScorePercent: 80, usedHint: false, usedReveal: false, confidence: 3, rubricVersion: 'rubric.v1' }
+      const attempt = await setup.t.mutation(internal.learnV2MapCalibration.recordCalibrationAttempt, args)
+      expect((await setup.t.mutation(internal.learnV2MapCalibration.recordCalibrationAttempt, args)).attemptId).toBe(attempt.attemptId)
+      await expect(setup.t.mutation(internal.learnV2MapCalibration.recordCalibrationAttempt, { ...args, serverScorePercent: 100 })).rejects.toThrow(/different request/)
+      await expect(setup.t.mutation(internal.learnV2MapCalibration.recordCalibrationAttempt, { ...args, idempotencyKey: 'duplicate-objective' })).rejects.toThrow(/already attempted/)
+      await setup.t.run(async (ctx) => {
+        for (const [index, objectiveId] of setup.objectives.slice(1, 3).entries()) {
+          await ctx.db.insert('masteryAttempts', { userId: identity.tokenIdentifier, blueprintRevisionId: setup.blueprint._id, objectiveId, attemptedAt: index + 1, idempotencyKey: `legacy-${index}`, result: 'passed' })
+        }
+      })
+      await expect(setup.owner.mutation(api.learnV2MapCalibration.completeCalibration, { blueprintRevisionId: setup.blueprint._id, expectedBlueprintRecordRevision: accepted.recordRevision, expectedVoidRevision: 3, idempotencyKey: 'too-early' })).rejects.toThrow(/between three and seven/)
+    }
+    finally {
+      if (previous === undefined) delete process.env.LEARN_V2_ENABLED
+      else process.env.LEARN_V2_ENABLED = previous
+    }
+  })
+
+  test('rejects a malformed persisted map whose prerequisite edge count exceeds the contract', async () => {
+    const previous = process.env.LEARN_V2_ENABLED
+    try {
+      const setup = await setupMap()
+      await setup.t.run(async (ctx) => {
+        for (let index = 0; index < 61; index++) {
+          await ctx.db.insert('learnObjectivePrerequisites', { userId: identity.tokenIdentifier, blueprintRevisionId: setup.blueprint._id, objectiveId: setup.objectives[1]!, prerequisiteObjectiveId: setup.objectives[0]! })
+        }
+      })
+      await expect(setup.owner.mutation(api.learnV2MapCalibration.acceptBlueprintMap, { blueprintRevisionId: setup.blueprint._id, expectedRecordRevision: 1, expectedVoidRevision: 2, idempotencyKey: 'reject-too-many-edges' })).rejects.toThrow(/prerequisite set exceeds/)
+    }
+    finally {
+      if (previous === undefined) delete process.env.LEARN_V2_ENABLED
+      else process.env.LEARN_V2_ENABLED = previous
+    }
+  })
+})

@@ -47,7 +47,7 @@ LA2-03 translates this proposal into additive Convex validators and the foundati
 | Blueprint | `learnBlueprints`, `learnBlueprintRevisions` | owner + Void; owner + blueprint + revision; owner + Void + status |
 | Map | `learnMilestones`, `learnObjectives`, `learnObjectivePrerequisites` | owner + revision + order; owner + objective/prerequisite edges |
 | Evidence | `learnSourceIdentities`, `learnSourceSnapshots`, `learnFolderSourceManifests`, `learnFolderSourceManifestFolders`, `learnFolderSourceManifestEntries`, `learnSourceExcerpts`, `learnObjectiveSources`, `learnClaimSupports` | owner + Void/Blueprint, canonical identity, manifest folder/document order and checkpoints, snapshot revision/status, objective coverage, content/support lookups |
-| Mastery | `masteryAttempts`, `masteryRecords` | owner + objective + attempt time, idempotency key, next-review time |
+| Mastery | `masteryAttempts`, `masteryRecords` | owner + Blueprint revision, objective + attempt time, idempotency key, next-review time |
 | Planning | `studyPlans`, `studyPlanRevisions`, `studySessions`, `studySessionRetrievalObjectives` | owner + Void, plan revision/status, scheduled owner queue, ordered retrieval links |
 | Session content | `sessionContent`, `sessionContentBlocks`, `sessionContentClaims` | owner + session + revision/status, ordered blocks and claims |
 | Calendar | existing shared `calendarConnections`; new `calendarProjections`, `reminderPolicies` | explicit V2 re-consent and existing provider-first disconnect; no V1 `calendarEvents` reuse; owner + session/event and owner + Void |
