@@ -116,6 +116,59 @@ Source identities and snapshots remain candidates only; fetching, rights
 evaluation, source acceptance, excerpts, and web lifecycle transitions belong
 to LA2-05.
 
+## Evidence-bound Blueprint review
+
+LA2-07 admits generation only for the newest `source_review` Blueprint revision
+after the owner configures a bounded outcome, mode, depth, and the canonical
+`folder_only | folder_plus_web | web_only` source policy. It requires a bounded
+set of at most 64 same-revision snapshots whose authoritative and effective
+state is `user_accepted`, whose conflict state is clear, and whose evidence has
+not been purged. The configured source policy filters both accepted evidence and
+reviewed gap attribution by origin. Admission pins both aggregate revisions and a digest of the
+intent plus all accepted and reviewed source revisions. A changed source set,
+intent edit, entitlement rollback, folder deletion, stale lease, or aggregate
+revision aborts commit.
+
+Accepted locator-only evidence can produce an honest all-gap map. A permitted
+retained web excerpt or transient folder excerpt retrieved from the exact
+owner, document, content-hash, and source-revision tuple can substantiate
+`strong` or `partial` coverage.
+`partial` objectives must disclose their remaining gap. Provider output is an unpublished candidate until the pure
+`learn-v2.blueprint-candidate.v1` validator accepts exactly 3–6 ordered
+milestones, 6–15 ordered capability objectives, required versioned assessment
+contracts, a bounded acyclic prerequisite graph, accepted objective-source
+links, and explicit gaps that may identify reviewed conflicting, locator-only,
+or unavailable sources. The provider sees only per-job aliases such as
+`source-001`, never Convex IDs. One Convex mutation then persists the
+normalized map and advances both the Blueprint and Learning Void to
+`map_review`; partial writes cannot escape a rejected transaction. Generic
+lifecycle mutations cannot bypass this command or advance into later LA2
+phases. The generation job ends at `awaiting_approval`, so human review keeps no
+lease open. The provider action is default-off, uses one bounded attempt and a
+strict JSON Schema response, and treats an ambiguous provider outcome as a
+manual-reconciliation block; known pre-dispatch and definitive response failures
+remain safely retryable. The requested model and provider-policy version are
+pinned at admission, provider fallback routing is disabled, and the server-owned
+generator version plus observed response model/request ID are retained for
+audit. Expired pre-dispatch leases can retry within the
+attempt cap; expired running leases cannot retry automatically because the
+provider may already have completed the request.
+
+Folder snapshots use an owner-authorized preparation command that proves the
+frozen manifest entry and current document revision before moving directly to
+reviewable `evaluated` state; the lower-level two-step handoff remains internal.
+Preparation stores only a hash locator when retention rights are unknown. At
+generation time the action retrieves a bounded excerpt from the pinned search
+index revision, rejects cross-owner or stale results, and sends the model only
+the transient text under a per-job alias. Private document text is neither
+stored in the source excerpt nor a job checkpoint; the pre-dispatch checkpoint
+stores only the supporting snapshot IDs needed for atomic validation and
+recovery. Source-review cards expose bounded public metadata, access and
+rights state, freshness/authority signals, and any linked objective coverage.
+The owner-visible card may show the folder document title/filename needed to
+identify their source, while omitting private paths, raw excerpts, and identity
+keys. Rejected sources are never included in the external generation payload.
+
 ## Runtime ownership
 
 Convex owns authentication, authorization, persisted state, revisions, transitions, idempotency, quota reservations, leases, checkpoints, and terminal reasons. External network or model work runs only in an approved Convex action, Nitro server route, or Cloudflare Worker boundary. External results are validated before a Convex command persists or advances them. Convex mutations do not make external calls.
