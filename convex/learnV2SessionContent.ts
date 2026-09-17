@@ -945,6 +945,7 @@ export const startStudySession = mutation({
     await ctx.db.patch(session._id, {
       status: "in_progress",
       revision: session.revision + 1,
+      startedSessionContentId: content._id,
       startedSessionContentRevision: content.revision,
     });
     await ctx.db.insert("learnPlanCommandReceipts", {
