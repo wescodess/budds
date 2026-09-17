@@ -174,7 +174,7 @@ describe('Learn V2 session-content publication contract', () => {
       (decisions: Array<Record<string, unknown>>) => { decisions[0]!.decision = 'not_entailed' },
       (decisions: Array<Record<string, unknown>>) => { decisions[0]!.confidence = 0.79 },
       (decisions: Array<Record<string, unknown>>) => { decisions.pop() },
-      (decisions: Array<Record<string, unknown>>) => { decisions[0]!.excerpt = 'A different exact excerpt.' },
+      (decisions: Array<Record<string, unknown>>) => { decisions[0]!.sourceExcerptId = 'a-different-excerpt' },
     ]
     for (const invalidate of invalidators) {
       const { t, graph } = await seedGenerationGraph()
