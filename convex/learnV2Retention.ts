@@ -105,6 +105,15 @@ async function deleteVoidFoundation(ctx: MutationCtx, userId: string, learningVo
     .withIndex('by_userId_and_learningVoidId', q => q.eq('userId', userId).eq('learningVoidId', learningVoidId)).take(BATCH_SIZE)
   if (await removeRows(ctx, identities)) return true
 
+  // Generation jobs are Void-owned operational children. Remove them before
+  // Blueprint/Void parents so a deleted folder cannot leave a queued worker or
+  // retain its revision and candidate digests indefinitely.
+  const jobs = await ctx.db.query('learnJobs')
+    .withIndex('by_userId_and_learningVoidId_and_type', q => q
+      .eq('userId', userId).eq('learningVoidId', learningVoidId))
+    .take(BATCH_SIZE)
+  if (await removeRows(ctx, jobs)) return true
+
   const plans = await ctx.db.query('studyPlans')
     .withIndex('by_userId_and_learningVoidId', q => q.eq('userId', userId).eq('learningVoidId', learningVoidId)).take(BATCH_SIZE)
   for (const plan of plans) {

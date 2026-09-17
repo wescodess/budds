@@ -1,6 +1,7 @@
 import { paginationOptsValidator } from 'convex/server'
 import { v } from 'convex/values'
 import { isLearnV2TransitionAllowed, type SourceState } from '../shared/learn-v2-contract'
+import { LEARN_V2_BLUEPRINT_LIMITS } from '../shared/learn-v2-blueprint'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import {
@@ -202,6 +203,25 @@ function sourceView(source: Doc<'learnSourceSnapshots'>) {
   }
 }
 
+function reviewTitle(value: string | undefined) {
+  if (!value) return null
+  const sanitized = value.replace(/[\p{Cc}\p{Cf}]/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, MAX_TITLE_LENGTH)
+  return sanitized || null
+}
+
+function reviewDomain(...values: Array<string | undefined>) {
+  for (const value of values) {
+    if (!value) continue
+    try {
+      return new URL(value).hostname.toLowerCase().slice(0, 253)
+    }
+    catch {
+      // Ignore malformed legacy locators and continue to the next public value.
+    }
+  }
+  return null
+}
+
 async function requireLiveVoid(ctx: MutationCtx | QueryCtx, userId: string, learningVoidId: Id<'learningVoids'>) {
   const learningVoid = await ctx.db.get(learningVoidId)
   if (!learningVoid || learningVoid.userId !== userId || learningVoid.status === 'archived') {
@@ -233,6 +253,16 @@ async function requireNewestBlueprintRevision(
     .order('desc')
     .first()
   if (!newest || newest._id !== blueprint._id) throw new Error('Blueprint revision is superseded')
+  return blueprint
+}
+
+async function requireOpenSourceReview(
+  ctx: MutationCtx | QueryCtx,
+  userId: string,
+  blueprintRevisionId: Id<'learnBlueprintRevisions'> | undefined,
+) {
+  const blueprint = await requireNewestBlueprintRevision(ctx, userId, blueprintRevisionId)
+  if (!['draft', 'source_review'].includes(blueprint.status)) throw new Error('Blueprint source review is closed')
   return blueprint
 }
 
@@ -412,6 +442,80 @@ export const listSources = query({
   },
 })
 
+// Owner-only projection for source-review cards. It deliberately omits
+// canonical/private URLs, object keys, filenames, excerpts, and identity keys.
+export const listSourceReview = query({
+  args: {
+    blueprintRevisionId: v.id('learnBlueprintRevisions'),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireLearnV2QueryAccess(ctx)
+    const blueprint = await requireNewestBlueprintRevision(ctx, userId, args.blueprintRevisionId)
+    await requireLiveVoid(ctx, userId, blueprint.learningVoidId)
+    const result = await ctx.db.query('learnSourceSnapshots')
+      .withIndex('by_userId_and_blueprintRevisionId', q => q
+        .eq('userId', userId).eq('blueprintRevisionId', blueprint._id))
+      .paginate({
+        cursor: args.paginationOpts.cursor,
+        numItems: Math.min(MAX_PAGE, Math.max(1, Math.floor(args.paginationOpts.numItems))),
+      })
+    const page = []
+    for (const source of result.page) {
+      const identity = await ctx.db.get(source.sourceIdentityId)
+      if (!identity || identity.userId !== userId || identity.learningVoidId !== blueprint.learningVoidId) {
+        throw new Error('Source review identity mismatch')
+      }
+      const excerpt = await ctx.db.query('learnSourceExcerpts')
+        .withIndex('by_userId_and_sourceSnapshotId', q => q.eq('userId', userId).eq('sourceSnapshotId', source._id))
+        .unique()
+      const hasContent = source.rightsStatus === 'permitted' && excerpt?.rightsStatus === 'permitted'
+        && excerpt.evidencePurgedAt === undefined && Boolean(excerpt.excerpt?.trim())
+      const hasLocator = Boolean(sanitizePublicSourceLocator(source.publicLocator)
+        ?? sanitizePublicSourceLocator(identity.publicLocator)
+        ?? sanitizePublicSourceLocator(excerpt?.locator))
+      const objectiveLinks = await ctx.db.query('learnObjectiveSources')
+        .withIndex('by_userId_and_sourceSnapshotId', q => q.eq('userId', userId).eq('sourceSnapshotId', source._id))
+        .take(LEARN_V2_BLUEPRINT_LIMITS.maximumObjectiveSourceLinks + 1)
+      if (objectiveLinks.length > LEARN_V2_BLUEPRINT_LIMITS.maximumObjectiveSourceLinks) throw new Error('Source review objective links exceed their bounded contract')
+      const reviewedObjectives = []
+      for (const link of objectiveLinks) {
+        const objective = await ctx.db.get(link.objectiveId)
+        if (!objective || objective.userId !== userId || objective.blueprintRevisionId !== blueprint._id) throw new Error('Source review objective scope mismatch')
+        reviewedObjectives.push({ objectiveId: objective._id, title: reviewTitle(objective.title), coverage: link.coverage })
+      }
+      page.push({
+        ...sourceView(source),
+        identity: {
+          origin: identity.origin,
+          title: reviewTitle(identity.title),
+          publisherDomain: reviewDomain(identity.publicLocator, source.publicLocator, identity.canonicalUrl),
+        },
+        retrieval: {
+          status: effectiveStatus(source),
+          fetchedAt: source.fetchedAt ?? null,
+          evaluatedAt: source.evaluatedAt ?? null,
+        },
+        rights: {
+          status: source.rightsStatus ?? 'unknown',
+          provenance: source.rightsProvenance ?? 'none',
+          policyVersion: source.rightsPolicyVersion ?? null,
+          access: effectiveStatus(source) === 'unavailable' || source.evidencePurgedAt !== undefined
+            ? 'evidence_unavailable'
+            : hasContent ? 'available' : hasLocator ? 'locator_only' : 'evidence_unavailable',
+        },
+        signals: {
+          authority: 'unknown',
+          freshness: source.fetchedAt === undefined ? 'unknown' : 'retrieved_at',
+          freshnessAt: source.fetchedAt ?? null,
+        },
+        reviewedObjectives,
+      })
+    }
+    return { ...result, page }
+  },
+})
+
 async function cleanAdmissionRows(ctx: MutationCtx, now: number) {
   const leases = await ctx.db.query('learnSourceFetchLeases')
     .withIndex('by_expiresAt', q => q.lte('expiresAt', now)).take(CLEANUP_BATCH)
@@ -437,7 +541,7 @@ export const replayOrAcquireFetch = internalMutation({
     const receipt = await findReceipt(ctx, userId, args.idempotencyKey)
     if (receipt) return { kind: 'replayed' as const, response: replayReceipt(receipt, 'fetch_source', requestFingerprint) }
     const source = await requireOwnedSource(ctx, userId, args.sourceSnapshotId)
-    await requireNewestBlueprintRevision(ctx, userId, source.blueprintRevisionId)
+    await requireOpenSourceReview(ctx, userId, source.blueprintRevisionId)
     if (currentRevision(source) !== args.expectedRevision) throw new Error('Source revision conflict')
     if (effectiveStatus(source) !== 'candidate') throw new Error('Invalid source transition')
     const identity = await ctx.db.get(source.sourceIdentityId)
@@ -546,7 +650,7 @@ export const commitFetchResult = internalMutation({
       throw new Error('Fetch lease expired')
     }
     const source = await requireOwnedSource(ctx, userId, args.sourceSnapshotId)
-    await requireNewestBlueprintRevision(ctx, userId, source.blueprintRevisionId)
+    await requireOpenSourceReview(ctx, userId, source.blueprintRevisionId)
     if (currentRevision(source) !== args.expectedRevision) throw new Error('Source revision conflict')
     if (effectiveStatus(source) !== 'candidate') throw new Error('Invalid source transition')
     const identity = await ctx.db.get(source.sourceIdentityId)
@@ -677,7 +781,7 @@ export const recordEvaluation = internalMutation({
     const prior = await findReceipt(ctx, args.tokenIdentifier, args.idempotencyKey)
     if (prior) return replayReceipt(prior, 'evaluate_source', requestFingerprint)
     const source = await requireOwnedSource(ctx, args.tokenIdentifier, args.sourceSnapshotId)
-    await requireNewestBlueprintRevision(ctx, args.tokenIdentifier, source.blueprintRevisionId)
+    await requireOpenSourceReview(ctx, args.tokenIdentifier, source.blueprintRevisionId)
     if (currentRevision(source) !== args.expectedRevision) throw new Error('Source revision conflict')
     requireSourceTransition(source.status, 'evaluated')
     if (effectiveStatus(source) !== 'fetched' || !source.rightsStatus) throw new Error('Invalid source transition')
@@ -687,6 +791,141 @@ export const recordEvaluation = internalMutation({
     const response = { sourceSnapshotId: source._id, status: 'evaluated', effectiveStatus: 'evaluated', recordRevision, conflictStatus: args.conflictStatus }
     return await saveReceipt(ctx, { userId: args.tokenIdentifier, learningVoidId: source.learningVoidId, sourceSnapshotId: source._id, idempotencyKey: args.idempotencyKey, command: 'evaluate_source', requestFingerprint, response })
   },
+})
+
+// Folder evidence is already fetched into Budds-owned storage. This command is
+// the authoritative handoff from a frozen, still-accessible manifest entry to
+// the common source evaluation lifecycle; it never accepts the source for the
+// learner and it never persists document text.
+async function prepareFolderSourceCommand(ctx: MutationCtx, args: {
+  tokenIdentifier: string
+  sourceSnapshotId: Id<'learnSourceSnapshots'>
+  expectedRevision: number
+  idempotencyKey: string
+  finalizeForReview: boolean
+}) {
+    validateKey(args.idempotencyKey)
+    validateRevision(args.expectedRevision)
+    if (!(await hasLearnV2Access(ctx, args.tokenIdentifier))) throw new Error('Learn V2 access denied')
+    const command = args.finalizeForReview ? 'prepare_folder_source_for_review' : 'prepare_folder_source'
+    const requestFingerprint = await digest({ sourceSnapshotId: String(args.sourceSnapshotId), expectedRevision: args.expectedRevision, finalizeForReview: args.finalizeForReview })
+    const prior = await findReceipt(ctx, args.tokenIdentifier, args.idempotencyKey)
+    if (prior) return replayReceipt(prior, command, requestFingerprint)
+    const source = await requireOwnedSource(ctx, args.tokenIdentifier, args.sourceSnapshotId)
+    await requireOpenSourceReview(ctx, args.tokenIdentifier, source.blueprintRevisionId)
+    if (currentRevision(source) !== args.expectedRevision) throw new Error('Source revision conflict')
+    if (source.status !== 'candidate' || effectiveStatus(source) !== 'candidate') throw new Error('Invalid source transition')
+    const identity = await ctx.db.get(source.sourceIdentityId)
+    if (!identity || identity.userId !== args.tokenIdentifier || identity.origin !== 'folder_document' || identity.tombstonedAt || !identity.folderDocumentId) {
+      throw new Error('Folder source identity unavailable')
+    }
+    if (!source.blueprintRevisionId || !source.folderManifestId || !source.contentHash || !source.sourceRevision || !source.objectKey) {
+      throw new Error('Folder source snapshot is incomplete')
+    }
+    const manifest = await ctx.db.get(source.folderManifestId)
+    if (!manifest || manifest.userId !== args.tokenIdentifier || manifest.learningVoidId !== source.learningVoidId
+      || manifest.blueprintRevisionId !== source.blueprintRevisionId || manifest.status !== 'frozen') {
+      throw new Error('Frozen folder source manifest unavailable')
+    }
+    const entry = await ctx.db.query('learnFolderSourceManifestEntries')
+      .withIndex('by_userId_and_manifestId_and_documentId', q => q
+        .eq('userId', args.tokenIdentifier)
+        .eq('manifestId', manifest._id)
+        .eq('documentId', identity.folderDocumentId))
+      .unique()
+    if (!entry || entry.sourceSnapshotId !== source._id || entry.sourceIdentityId !== identity._id
+      || entry.availability !== 'available' || entry.evidencePurgedAt !== undefined
+      || entry.contentHash !== source.contentHash || entry.documentRevision !== source.sourceRevision) {
+      throw new Error('Frozen folder source entry unavailable')
+    }
+    const document = await ctx.db.get(identity.folderDocumentId)
+    if (!document || document.userId !== args.tokenIdentifier || document.status !== 'success'
+      || document.r2Key?.trim() !== source.objectKey || document.contentHash?.trim().toLowerCase() !== source.contentHash
+      || document.sourceRevision?.trim() !== source.sourceRevision) {
+      throw new Error('Folder source revision is no longer accessible')
+    }
+    const now = Date.now()
+    const recordRevision = incrementRecordRevision(source.recordRevision)
+    await ctx.db.patch(source._id, {
+      status: 'fetched',
+      effectiveStatus: 'fetched',
+      recordRevision,
+      rightsStatus: 'unknown',
+      rightsProvenance: 'none',
+      rightsPolicyVersion: 'learn-v2.user-source-retention.v1',
+      trustClassification: 'untrusted_source_data',
+      fetchedAt: now,
+      updatedAt: now,
+    })
+    const existingExcerpt = await ctx.db.query('learnSourceExcerpts')
+      .withIndex('by_userId_and_sourceSnapshotId', q => q.eq('userId', args.tokenIdentifier).eq('sourceSnapshotId', source._id))
+      .unique()
+    const normalizedExcerpt = {
+      locator: `sha256:${source.contentHash.toLowerCase()}`,
+      privateLocator: undefined,
+      excerpt: undefined,
+      rightsStatus: 'unknown' as const,
+      trustClassification: 'untrusted_source_data' as const,
+      evidencePurgedAt: undefined,
+    }
+    if (!existingExcerpt) {
+      await ctx.db.insert('learnSourceExcerpts', {
+        userId: args.tokenIdentifier,
+        sourceSnapshotId: source._id,
+        ...normalizedExcerpt,
+      })
+    }
+    else await ctx.db.patch(existingExcerpt._id, normalizedExcerpt)
+    const finalRecordRevision = args.finalizeForReview ? incrementRecordRevision(recordRevision) : recordRevision
+    if (args.finalizeForReview) {
+      await ctx.db.patch(source._id, {
+        status: 'evaluated',
+        effectiveStatus: 'evaluated',
+        conflictStatus: 'clear',
+        evaluatedAt: now,
+        recordRevision: finalRecordRevision,
+        updatedAt: now,
+      })
+    }
+    const response = {
+      sourceSnapshotId: source._id,
+      status: args.finalizeForReview ? 'evaluated' : 'fetched',
+      effectiveStatus: args.finalizeForReview ? 'evaluated' : 'fetched',
+      recordRevision: finalRecordRevision,
+      ...(args.finalizeForReview ? { conflictStatus: 'clear' as const } : {}),
+    }
+    return await saveReceipt(ctx, {
+      userId: args.tokenIdentifier,
+      learningVoidId: source.learningVoidId,
+      sourceSnapshotId: source._id,
+      idempotencyKey: args.idempotencyKey,
+      command,
+      requestFingerprint,
+      response,
+    })
+}
+
+export const prepareFolderSource = internalMutation({
+  args: {
+    tokenIdentifier: v.string(),
+    sourceSnapshotId: v.id('learnSourceSnapshots'),
+    expectedRevision: v.number(),
+    idempotencyKey: v.string(),
+  },
+  handler: async (ctx, args) => await prepareFolderSourceCommand(ctx, { ...args, finalizeForReview: false }),
+})
+
+export const prepareFolderSourceForReview = mutation({
+  args: {
+    sourceSnapshotId: v.id('learnSourceSnapshots'),
+    expectedRevision: v.number(),
+    idempotencyKey: v.string(),
+  },
+  handler: async (ctx, args) => await prepareFolderSourceCommand(ctx, {
+    ...args,
+    tokenIdentifier: await requireLearnV2MutationAccess(ctx),
+    finalizeForReview: true,
+  }),
 })
 
 async function terminalCommand(ctx: MutationCtx, args: {
@@ -703,17 +942,33 @@ async function terminalCommand(ctx: MutationCtx, args: {
   const prior = await findReceipt(ctx, args.userId, args.idempotencyKey)
   if (prior) return replayReceipt(prior, args.command, requestFingerprint)
   const source = await requireOwnedSource(ctx, args.userId, args.sourceSnapshotId)
-  await requireNewestBlueprintRevision(ctx, args.userId, source.blueprintRevisionId)
+  const blueprint = await requireNewestBlueprintRevision(ctx, args.userId, source.blueprintRevisionId)
+  if (args.command !== 'mark_unavailable' && !['draft', 'source_review'].includes(blueprint.status)) {
+    throw new Error('Source membership is immutable after source review')
+  }
   if (currentRevision(source) !== args.expectedRevision) throw new Error('Source revision conflict')
   const now = Date.now()
   let recordRevision = currentRevision(source)
   let status: 'user_accepted' | 'rejected' | 'unavailable'
   let terminalReason: string | undefined
+  let acceptedSourceSetChanged = false
   if (args.command === 'accept_source') {
     requireSourceTransition(source.status, 'user_accepted')
     if (effectiveStatus(source) !== 'evaluated' || source.conflictStatus !== 'clear' || source.rightsStatus === 'prohibited') throw new Error('Source cannot be accepted')
+    if (!source.blueprintRevisionId) throw new Error('Blueprint revision not found')
+    const currentAccepted = await ctx.db.query('learnSourceSnapshots')
+      .withIndex('by_userId_and_blueprintRevisionId_and_effectiveStatus', q => q
+        .eq('userId', args.userId).eq('blueprintRevisionId', source.blueprintRevisionId).eq('effectiveStatus', 'user_accepted'))
+      .take(LEARN_V2_BLUEPRINT_LIMITS.maximumAcceptedSources)
+    const legacyAccepted = await ctx.db.query('learnSourceSnapshots')
+      .withIndex('by_userId_and_blueprintRevisionId_and_effectiveStatus_and_status', q => q
+        .eq('userId', args.userId).eq('blueprintRevisionId', source.blueprintRevisionId).eq('effectiveStatus', undefined).eq('status', 'user_accepted'))
+      .take(LEARN_V2_BLUEPRINT_LIMITS.maximumAcceptedSources)
+    const acceptedCount = new Set([...currentAccepted, ...legacyAccepted].map(row => String(row._id))).size
+    if (acceptedCount >= LEARN_V2_BLUEPRINT_LIMITS.maximumAcceptedSources) throw new Error('Blueprint already has the maximum accepted sources')
     recordRevision = incrementRecordRevision(source.recordRevision)
     status = 'user_accepted'
+    acceptedSourceSetChanged = true
     await ctx.db.patch(source._id, { status, effectiveStatus: status, acceptedAt: now, recordRevision, updatedAt: now })
   }
   else if (args.command === 'reject_source') {
@@ -757,6 +1012,7 @@ async function terminalCommand(ctx: MutationCtx, args: {
       requireSourceTransition(source.status, 'unavailable')
     }
     status = 'unavailable'
+    acceptedSourceSetChanged = effectiveStatus(source) === 'user_accepted'
     const unavailableReason = source.unavailableReason ?? (args.reason ?? 'source_deleted').slice(0, 96)
     terminalReason = unavailableReason
     const needsAuthoritativePatch = effectiveStatus(source) !== 'unavailable'
@@ -790,6 +1046,12 @@ async function terminalCommand(ctx: MutationCtx, args: {
       userId: args.userId,
       sourceIdentityId: source.sourceIdentityId,
       reason: unavailableReason,
+    })
+  }
+  if (acceptedSourceSetChanged && blueprint.status === 'source_review') {
+    await ctx.db.patch(blueprint._id, {
+      recordRevision: incrementRecordRevision(blueprint.recordRevision),
+      updatedAt: now,
     })
   }
   const response: Record<string, unknown> = {
