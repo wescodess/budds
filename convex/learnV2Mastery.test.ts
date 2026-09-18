@@ -135,6 +135,17 @@ describe('LA2-12 server-scored mastery attempts', () => {
     await expect(purged.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, purged.args('purged-evidence'))).rejects.toThrow(/evidence is unavailable/)
   })
 
+  test('keeps future sessions scheduled and requires the exact started-content id', async () => {
+    const future = await fixture()
+    const scheduledStartAt = Date.now() + 60_000
+    await future.t.run(ctx => ctx.db.patch(future.ids.sessionId, { status: 'ready', scheduledStartAt }))
+    await expect(future.owner.query(api.learnV2Today.getToday, {})).resolves.toMatchObject({ status: 'empty', nextScheduledAt: scheduledStartAt })
+
+    const mismatched = await fixture()
+    await mismatched.t.run(ctx => ctx.db.patch(mismatched.ids.sessionId, { startedSessionContentId: undefined }))
+    await expect(mismatched.owner.query(api.learnV2Today.getToday, {})).resolves.toMatchObject({ status: 'blocked', reason: 'started_content_unavailable' })
+  })
+
   test('uses 79/80 boundary, persists remediation, and appends exactly one replay-safe attempt', async () => {
     const { t, owner, ids, args } = await fixture()
     await expect(owner.query(api.learnV2Today.getToday, {})).resolves.toMatchObject({ status: 'ready', sessionId: ids.sessionId, sessionRevision: 7, timezone: 'America/Toronto', content: { revision: 11 }, plan: { recordRevision: 5, blueprintRecordRevision: 3 } })
