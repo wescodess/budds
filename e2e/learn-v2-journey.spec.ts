@@ -11,10 +11,7 @@ test('learner can advance the Learn V2 mastery journey through production UI', a
 
   await page.goto('/app/learn/today')
   await expect(page.getByRole('heading', { name: 'Today' })).toBeVisible()
-  // Integration point: the journey route branch must expose this create action.
-  const createMission = page.getByTestId('learn-v2-create-mission')
-  test.skip(await createMission.count() === 0, 'Pending route integration: [data-testid=learn-v2-create-mission]')
-  await createMission.click()
+  await page.getByTestId('learn-v2-create-mission').click()
   await page.getByTestId('learn-v2-outcome').fill('Explain orbital mechanics')
   await page.getByTestId('learn-v2-save-outcome').click()
   await page.getByTestId('learn-v2-accept-sources').click()
