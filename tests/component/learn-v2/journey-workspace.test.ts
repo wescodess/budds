@@ -57,4 +57,26 @@ describe('Learn V2 journey workspace seams', () => {
     await wrapper.get('[data-testid="learn-v2-workspace-nav-sources"]').trigger('click')
     expect(wrapper.emitted('navigate')?.[0]).toEqual(['sources'])
   })
+
+  it('keeps map edits explicit and emits a complete learner change', async () => {
+    const Comp = await import(`${path}/LearningTrail.vue`)
+    const wrapper = await mountSuspended(Comp.default, {
+      props: { objectives: [{ id: 'objective_1', title: 'Understand cancellation', capability: 'Explain cancellation boundaries', milestone: 'Foundation', effortMinutes: 25, mastery: 'unseen', coverage: 'strong' }] },
+    })
+
+    await wrapper.get('[data-testid="learn-v2-map-edit-objective"]').trigger('click')
+    await wrapper.get('[data-testid="learn-v2-objective-title"]').setValue('Explain cancellation safely')
+    await wrapper.get('[data-testid="learn-v2-save-objective"]').trigger('click')
+    expect(wrapper.emitted('saveObjective')?.[0]).toEqual([{ objectiveId: 'objective_1', title: 'Explain cancellation safely', capability: 'Explain cancellation boundaries' }])
+  })
+
+  it('makes feasibility-aware plan inputs editable before preview generation', async () => {
+    const Comp = await import(`${path}/StudyPlanEditor.vue`)
+    const wrapper = await mountSuspended(Comp.default, {
+      props: { input: { version: 'learn-v2.schedule-input.v1', timezone: 'America/Toronto', startLocalDate: '2030-09-01', targetLocalDate: '2030-10-01', sessionMinutes: 25, availability: [{ weekday: 1, start: '18:00', end: '20:00' }], blackoutDates: [], reviewIntervalsDays: [1, 3], minRestMinutes: 720 } },
+    })
+    await wrapper.get('[data-testid="learn-v2-schedule-minutes"]').setValue('45')
+    await wrapper.get('[data-testid="learn-v2-schedule-submit"]').trigger('submit')
+    expect(wrapper.emitted('submit')?.[0]?.[0]).toMatchObject({ timezone: 'America/Toronto', sessionMinutes: 45, availability: [{ weekday: 1, start: '18:00', end: '20:00' }] })
+  })
 })
