@@ -438,7 +438,7 @@ export const submitCalibrationAttempt = action({
     } catch (error) {
       const kind = classifyAiGatewayFailure(error)
       await ctx.runMutation(internal.learnV2MapCalibration.finishCalibrationScoringFailure, { tokenIdentifier: identity.tokenIdentifier, jobId: reservation.jobId, leaseToken: reservation.leaseToken, outcome: kind === 'outcome_unknown' ? 'ambiguous' : 'not_dispatched' })
-      throw new Error(kind === 'outcome_unknown' ? 'Calibration scoring outcome requires reconciliation' : 'Calibration scoring is unavailable')
+      throw new Error(kind === 'outcome_unknown' ? 'Calibration scoring outcome requires reconciliation' : 'Calibration scoring is unavailable', { cause: error })
     }
     let parsed: { criterionResults?: Array<{ key: string, awarded: boolean, rationale?: string }> }
     try { parsed = JSON.parse(completion.choices[0]?.message.content ?? '') as typeof parsed } catch {
