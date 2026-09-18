@@ -9,6 +9,12 @@ function requestPayload(params: GenerateParams) {
   try { return typeof message === 'string' ? JSON.parse(message) as Record<string, unknown> : {} } catch { return {} }
 }
 
+function criterionResults(payload: Record<string, unknown>) {
+  const rubric = (payload.rubric ?? (payload.objective as { assessmentContract?: unknown } | undefined)?.assessmentContract) as { criteria?: unknown } | undefined
+  const criteria = Array.isArray(rubric?.criteria) ? rubric.criteria : []
+  return criteria.map((criterion) => ({ key: typeof criterion === 'object' && criterion ? String((criterion as { key?: unknown }).key) : '', awarded: true, rationale: 'Supported by the deterministic accepted evidence.' })).filter(result => result.key)
+}
+
 export function deterministicLearnV2Completion(params: GenerateParams): GenerateResponse | null {
   if (!isE2eServerMode()) return null
   const schemaName = params.jsonSchema?.name
@@ -24,6 +30,13 @@ export function deterministicLearnV2Completion(params: GenerateParams): Generate
     const alias = aliases[0] ?? 'source-001'
     const kinds = ['retrieval', 'objective', 'cold_attempt', 'explanation', 'worked_example', 'faded_example', 'independent_application', 'confidence_teach_back', 'misconception_feedback', 'next_review']
     content = { version: 'learn-v2.session-content.v1', generatorVersion: 'budds-e2e-fixture.v1', assessmentRubric: assessment, blocks: kinds.map((kind, order) => ({ order, kind, content: `Deterministic ${kind} supported by accepted evidence.`, claimOrders: [0] })), claims: [{ order: 0, claim: 'The deterministic fixture only presents accepted evidence.', supportSourceSnapshotIds: [alias] }] }
+  } else if (schemaName === 'learn_v2_claim_entailment_verification') {
+    const pairs = Array.isArray(payload.pairs) ? payload.pairs : []
+    content = { version: 'learn-v2.entailment.v2', decisions: pairs.map((pair) => ({ claimOrder: Number((pair as { claimOrder?: unknown }).claimOrder), sourceSnapshotId: String((pair as { sourceSnapshotId?: unknown }).sourceSnapshotId), sourceExcerptId: String((pair as { sourceExcerptId?: unknown }).sourceExcerptId), decision: 'entailed', verifierVersion: 'learn-v2.entailment.v2', confidence: 1 })) }
+  } else if (schemaName === 'learn_v2_calibration_score') {
+    content = { criterionResults: criterionResults(payload) }
+  } else if (schemaName === 'learn_v2_mastery_score') {
+    content = { criterionResults: criterionResults(payload), misconceptionTags: [] }
   }
   if (!content) return null
   return { id: 'e2e-deterministic-response', model: 'budds-e2e-fixture.v1', choices: [{ index: 0, message: { role: 'assistant', content: JSON.stringify(content) }, finish_reason: 'stop' }], usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } }
