@@ -67,6 +67,7 @@ import type * as lib_calendarTokenRuntime from "../lib/calendarTokenRuntime.js";
 import type * as lib_dates from "../lib/dates.js";
 import type * as lib_learnV2Access from "../lib/learnV2Access.js";
 import type * as lib_learnV2BlueprintClone from "../lib/learnV2BlueprintClone.js";
+import type * as lib_learnV2E2e from "../lib/learnV2E2e.js";
 import type * as lib_learnV2SourceSanitization from "../lib/learnV2SourceSanitization.js";
 import type * as lib_masteryStateMachine from "../lib/masteryStateMachine.js";
 import type * as lib_sm2 from "../lib/sm2.js";
@@ -146,6 +147,7 @@ declare const fullApi: ApiFromModules<{
   "lib/dates": typeof lib_dates;
   "lib/learnV2Access": typeof lib_learnV2Access;
   "lib/learnV2BlueprintClone": typeof lib_learnV2BlueprintClone;
+  "lib/learnV2E2e": typeof lib_learnV2E2e;
   "lib/learnV2SourceSanitization": typeof lib_learnV2SourceSanitization;
   "lib/masteryStateMachine": typeof lib_masteryStateMachine;
   "lib/sm2": typeof lib_sm2;
