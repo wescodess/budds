@@ -185,9 +185,10 @@ export const listHub = query({
 })
 
 export const getMission = query({
-  args: { learningVoidId: v.id('learningVoids') },
+  args: { learningVoidId: v.union(v.id('learningVoids'), v.null()) },
   handler: async (ctx, args) => {
     const userId = await requireLearnV2QueryAccess(ctx)
+    if (args.learningVoidId === null) return null
     const owned = await ownedVoid(ctx, userId, args.learningVoidId)
     return owned ? await journey(ctx, userId, owned.row, owned.folder) : null
   },
