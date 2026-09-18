@@ -20,9 +20,16 @@ const statusQuery = import.meta.client
 const projectMutation = import.meta.client
   ? useConvexAction(api.learnV2Calendar.projectSession)
   : { mutate: async () => ({ kind: 'conflict' as const }) }
+const proposalsQuery = import.meta.client
+  ? useConvexQuery(api.learnV2CalendarReconciliation.listProposals, {})
+  : { data: ref<Array<{ _id: string, kind: 'moved' | 'deleted' | 'conflict', proposedStartAt?: number, proposedEndAt?: number }>>([]) }
+const rejectProposalMutation = import.meta.client
+  ? useConvexMutation(api.learnV2CalendarReconciliation.rejectProposal)
+  : { mutate: async () => ({ resolved: 'rejected' as const }) }
 
-const status = computed(() => statusQuery.data?.value as { enabled: boolean, connection: Connection, provider: 'google' | null } | null | undefined)
+const status = computed(() => statusQuery.data?.value as { enabled: boolean, connection: Connection, provider: 'google' | null, attention?: string | null } | null | undefined)
 const checkingStatus = computed(() => statusQuery.pending?.value ?? false)
+const proposals = computed(() => proposalsQuery.data?.value ?? [])
 const enabled = computed(() => status.value?.enabled === true)
 const connection = computed<Connection>(() => status.value?.connection ?? 'not_connected')
 const canProject = computed(() => enabled.value && connection.value === 'ready' && scheduledStartAt > Date.now())
@@ -32,6 +39,7 @@ const showDisconnectConfirm = ref(false)
 const message = ref('')
 const error = ref<string | null>(null)
 const cancelButton = ref<HTMLButtonElement | null>(null)
+const resolvingProposal = ref<string | null>(null)
 
 onMounted(() => {
   const feedback = getLearnV2CalendarCallbackFeedback(route.query)
@@ -45,6 +53,16 @@ onMounted(() => {
 
 function connect() {
   if (import.meta.client) window.location.assign('/api/learn-v2/calendar/connect')
+}
+
+async function rejectProposal(proposalId: string) {
+  resolvingProposal.value = proposalId
+  try {
+    await rejectProposalMutation.mutate({ proposalId: proposalId as never })
+    message.value = 'Calendar change dismissed. Your in-app study plan remains unchanged.'
+  } catch (cause) {
+    error.value = getErrorMessage(cause, 'Could not dismiss this calendar change. Try again.')
+  } finally { resolvingProposal.value = null }
 }
 
 async function project() {
@@ -104,6 +122,7 @@ async function disconnect() {
     <template v-else>
       <p v-if="error" data-testid="learn-v2-calendar-error" role="alert" class="mt-3 text-sm text-red-300">{{ error }}</p>
       <p v-if="message" data-testid="learn-v2-calendar-message" role="status" aria-live="polite" class="mt-3 text-sm text-green-300">{{ message }}</p>
+      <p v-if="status?.attention" data-testid="learn-v2-calendar-attention" role="alert" class="mt-3 text-sm text-amber-200">Google Calendar needs updated access. Your in-app study plan remains available.</p>
 
       <button v-if="connection !== 'ready'" type="button" data-testid="learn-v2-calendar-connect" class="mt-3 rounded border border-stone-700 px-3 py-2 text-sm font-medium text-stone-200 transition-colors hover:border-stone-500 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none" @click="connect">
         {{ connection === 'reconsent_required' ? 'Update Google Calendar access' : 'Connect Google Calendar' }}
@@ -116,6 +135,16 @@ async function disconnect() {
         <p v-else data-testid="learn-v2-calendar-not-future" class="mt-3 text-sm text-stone-400">Only a future scheduled session can be added to Google Calendar.</p>
         <button type="button" data-testid="learn-v2-calendar-disconnect" :disabled="disconnecting" class="mt-3 block text-sm text-stone-400 underline underline-offset-4 hover:text-stone-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50" @click="requestDisconnect">Disconnect Google Calendar</button>
       </template>
+      <section v-if="proposals.length" aria-label="Calendar change proposals" data-testid="learn-v2-calendar-proposals" class="mt-4 rounded border border-amber-800 p-3">
+        <p class="text-sm text-amber-100">Google Calendar changed a Budds-managed session. Review it in Budds; your plan was not changed.</p>
+        <div v-for="proposal in proposals" :key="proposal._id" class="mt-3 text-sm text-stone-300">
+          <p v-if="proposal.kind === 'moved'">The projected calendar event was moved. Review the proposed time before resolving it in Budds.</p>
+          <p v-else-if="proposal.kind === 'deleted'">The projected calendar event was deleted. Replacement or explicit resolution is required; your Budds plan remains unchanged.</p>
+          <p v-else>Google Calendar returned an unsupported or invalid event time. Explicit resolution is required; your Budds plan remains unchanged.</p>
+          <p v-if="proposal.kind === 'moved' && proposal.proposedStartAt">Proposed time: {{ new Date(proposal.proposedStartAt).toLocaleString() }}</p>
+          <button type="button" :disabled="resolvingProposal === proposal._id" class="mt-1 underline" @click="rejectProposal(proposal._id)">{{ resolvingProposal === proposal._id ? 'Dismissing…' : 'Keep my Budds plan' }}</button>
+        </div>
+      </section>
     </template>
 
     <div v-if="showDisconnectConfirm" data-testid="learn-v2-calendar-disconnect-confirm" class="mt-4 rounded border border-stone-700 p-4" role="alertdialog" aria-modal="true" aria-labelledby="learn-v2-calendar-disconnect-title" aria-describedby="learn-v2-calendar-disconnect-description" @keydown.escape="cancelDisconnect">

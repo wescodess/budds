@@ -489,6 +489,8 @@ describe('calendarConnections', () => {
       deletedEventIds: [],
       failures: 0,
     })
+    await t.mutation(internal.calendarConnections.beginOAuthRevoke, { calendarConnectionId: connectionA, leaseToken: 'complete-a' })
+    await t.mutation(internal.calendarConnections.finalizeOAuthRevocation, { calendarConnectionId: connectionA, leaseToken: 'complete-a' })
     const connectionB = await asAlice.mutation(api.calendarConnections.upsertConnection, {
       provider: 'google',
       accessToken: 'Y29ubmVjdGlvbi1i',
@@ -540,5 +542,13 @@ describe('calendarConnections', () => {
 
     expect(userIds).toHaveLength(501)
     expect(userIds).toContain('calendar-scale-500')
+  })
+
+  test('direct disconnect refuses a durable watch channel', async () => {
+    const t = convexTest(schema, modules)
+    const asAlice = t.withIdentity(USER_A)
+    const connectionId = await asAlice.mutation(api.calendarConnections.upsertConnection, { provider: 'google', accessToken: 'token', refreshToken: 'refresh', expiresAt: Date.now() + 60_000, timezone: 'UTC' })
+    await t.run(ctx => ctx.db.insert('calendarWatchChannels', { userId: USER_A.tokenIdentifier, calendarConnectionId: connectionId, channelId: 'channel', resourceId: 'resource', tokenHash: 'hash', expiresAt: Date.now() + 60_000, status: 'current', createdAt: Date.now(), updatedAt: Date.now() }))
+    await expect(asAlice.mutation(internal.calendarConnections.disconnect, {})).rejects.toThrow('Calendar reconciliation evidence')
   })
 })

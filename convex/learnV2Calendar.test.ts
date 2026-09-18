@@ -238,7 +238,7 @@ describe('Learn V2 Google projection', () => {
       leaseToken,
     })).resolves.toBe(true)
 
-    const provider = vi.fn(async (_url: string) => new Response(null, { status: 204 }))
+    const provider = vi.fn(async (url: string) => new Response(null, { status: url.includes('/revoke') ? 200 : 204 }))
     vi.stubGlobal('fetch', provider)
     await expect(setup.owner.action(api.calendarEvents.disconnectCalendar, {})).resolves.toEqual({
       disconnected: false,
@@ -255,9 +255,27 @@ describe('Learn V2 Google projection', () => {
     await expect(setup.t.action(internal.calendarEvents.continueDisconnect, {
       calendarConnectionId: setup.calendarConnectionId,
     })).resolves.toMatchObject({ disconnected: true, googleEventsDeleted: 1 })
-    expect(provider).toHaveBeenCalledOnce()
+    expect(provider).toHaveBeenCalledTimes(2)
     expect(String(provider.mock.calls[0]![0])).toContain(externalEventId)
     expect(await setup.t.run(ctx => ctx.db.get(reserved.projection!._id))).toBeNull()
     expect(await setup.t.run(ctx => ctx.db.get(setup.calendarConnectionId))).toBeNull()
+  })
+
+  test('records only a newer external move with different times as a redacted proposal', async () => {
+    const setup = await setupProjection()
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => url.endsWith('/freeBusy')
+      ? new Response(JSON.stringify({ calendars: { primary: { busy: [] } } }), { status: 200 })
+      : new Response('{}', { status: 200 })))
+    await setup.owner.action(api.learnV2Calendar.projectSession, { studySessionId: setup.studySessionId })
+    const projection = await setup.t.run(ctx => ctx.db.query('calendarProjections').withIndex('by_userId_and_studySessionId', q => q.eq('userId', OWNER.tokenIdentifier).eq('studySessionId', setup.studySessionId)).unique())
+    const session = await setup.t.run(ctx => ctx.db.get(setup.studySessionId))
+    const providerTime = Date.now() + 10_000
+    await setup.t.mutation(internal.learnV2CalendarReconciliation.recordExternalChange, { calendarConnectionId: setup.calendarConnectionId, externalEventId: projection!.externalEventId!, kind: 'moved', providerUpdatedAt: providerTime, proposedStartAt: session!.scheduledStartAt, proposedEndAt: session!.scheduledEndAt })
+    expect(await setup.t.run(ctx => ctx.db.query('calendarReconciliationProposals').first())).toBeNull()
+    const end = session!.scheduledEndAt ?? session!.scheduledStartAt + 30 * 60_000
+    await setup.t.mutation(internal.learnV2CalendarReconciliation.recordExternalChange, { calendarConnectionId: setup.calendarConnectionId, externalEventId: projection!.externalEventId!, kind: 'moved', providerUpdatedAt: providerTime + 1, proposedStartAt: session!.scheduledStartAt + 60_000, proposedEndAt: end + 60_000 })
+    expect(await setup.t.run(ctx => ctx.db.query('calendarReconciliationProposals').first())).toMatchObject({ kind: 'moved', proposedStartAt: session!.scheduledStartAt + 60_000 })
+    await setup.t.mutation(internal.learnV2CalendarReconciliation.recordExternalChange, { calendarConnectionId: setup.calendarConnectionId, externalEventId: projection!.externalEventId!, kind: 'deleted', providerUpdatedAt: providerTime + 2 })
+    expect(await setup.t.run(ctx => ctx.db.query('calendarReconciliationProposals').first())).toMatchObject({ kind: 'deleted' })
   })
 })

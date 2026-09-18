@@ -139,6 +139,23 @@ async function collectUserDataForTest(asUser: TestClient): Promise<TestUserDataE
 }
 
 describe('dataExport paginated queries', () => {
+  test('exports calendar operational ledgers with strict redaction', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const connectionId = await t.run(ctx => ctx.db.insert('calendarConnections', { userId: USER_A.tokenIdentifier, provider: 'google', accessToken: 'secret-access', refreshToken: 'secret-refresh', expiresAt: 1, timezone: 'UTC', status: 'connected', connectedAt: 1 }))
+    await t.run(async ctx => {
+      await ctx.db.insert('calendarWebhookReceipts', { userId: USER_A.tokenIdentifier, calendarConnectionId: connectionId, channelId: 'private-channel', messageNumber: '99999999999999999999', messageNumberOrder: '99999999999999999999', receivedAt: 2 })
+      await ctx.db.insert('calendarWatchChannels', { userId: USER_A.tokenIdentifier, calendarConnectionId: connectionId, channelId: 'private-channel', resourceId: 'private-resource', tokenHash: 'private-hash', expiresAt: 3, status: 'current', createdAt: 2, updatedAt: 2 })
+    })
+    const receipt = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'calendarWebhookReceipts', paginationOpts: { cursor: null, numItems: 10 } })).page[0]!
+    const watch = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'calendarWatchChannels', paginationOpts: { cursor: null, numItems: 10 } })).page[0]!
+    expect(receipt).toMatchObject({ userId: USER_A.tokenIdentifier, receivedAt: 2 })
+    expect(watch).toMatchObject({ userId: USER_A.tokenIdentifier, status: 'current', expiresAt: 3 })
+    expect(JSON.stringify({ receipt, watch })).not.toContain('private-channel')
+    expect(JSON.stringify({ receipt, watch })).not.toContain('private-resource')
+    expect(JSON.stringify({ receipt, watch })).not.toContain('private-hash')
+  })
+
   test('enumerates every V2 collection while the rollout gate is off and redacts retention-sensitive fields', async () => {
     const previous = process.env.LEARN_V2_ENABLED
     delete process.env.LEARN_V2_ENABLED

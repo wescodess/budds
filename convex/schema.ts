@@ -1131,11 +1131,25 @@ export default defineSchema({
     disconnectDeletedCount: v.optional(v.number()),
     disconnectLastError: v.optional(v.string()),
     disconnectUpdatedAt: v.optional(v.number()),
+    disconnectRevokeStartedAt: v.optional(v.number()),
     // V2 calendar projection has a deliberately separate consent contract.
     // V1 users retain their existing calendar.events grant unchanged.
     grantedScopes: v.optional(v.array(v.string())),
     learnV2ConsentVersion: v.optional(v.literal(1)),
     calendarSlotWatermark: v.optional(v.number()),
+    // V2 reconciliation state. Tokens and channel secrets stay server-only.
+    learnV2SyncToken: v.optional(v.string()),
+    learnV2SyncPageToken: v.optional(v.string()),
+    learnV2SyncFullResync: v.optional(v.boolean()),
+    learnV2SyncQueryVersion: v.optional(v.literal(1)),
+    learnV2WatchChannelId: v.optional(v.string()),
+    learnV2WatchResourceId: v.optional(v.string()),
+    learnV2WatchTokenHash: v.optional(v.string()),
+    learnV2WatchExpiresAt: v.optional(v.number()),
+    learnV2WatchLeaseToken: v.optional(v.string()),
+    learnV2WatchLeaseExpiresAt: v.optional(v.number()),
+    learnV2AttentionRequiredAt: v.optional(v.number()),
+    learnV2AttentionReason: v.optional(v.union(v.literal('token_expired'), v.literal('revoked'), v.literal('scope_lost'))),
     preferences: v.optional(v.object({
       morningStart: v.string(),
       eveningEnd: v.string(),
@@ -1143,7 +1157,10 @@ export default defineSchema({
       preferredDays: v.array(v.string()),
     })),
   })
-    .index('by_userId', ['userId']),
+    .index('by_userId', ['userId'])
+    .index('by_status', ['status'])
+    .index('by_learnV2WatchChannelId', ['learnV2WatchChannelId'])
+    .index('by_learnV2WatchExpiresAt', ['learnV2WatchExpiresAt']),
 
   calendarEvents: defineTable({
     userId: v.string(),
@@ -1306,9 +1323,26 @@ export default defineSchema({
     updatedAt: v.optional(v.number()),
     providerCreateLeaseToken: v.optional(v.string()),
     providerCreateLeaseExpiresAt: v.optional(v.number()),
+    providerCreateSettleAfter: v.optional(v.number()),
     projectedAt: v.optional(v.number()),
     lastProviderUpdatedAt: v.optional(v.number()),
-  }).index('by_userId', ['userId']).index('by_userId_and_studySessionId', ['userId', 'studySessionId']).index('by_userId_and_provider_and_externalEventId', ['userId', 'provider', 'externalEventId']).index('by_calendarConnectionId', ['calendarConnectionId']).index('by_calendarConnectionId_and_status', ['calendarConnectionId', 'status']).index('by_calendarConnectionId_and_status_and_providerCreateLeaseExpiresAt', ['calendarConnectionId', 'status', 'providerCreateLeaseExpiresAt']),
+  }).index('by_userId', ['userId']).index('by_userId_and_studySessionId', ['userId', 'studySessionId']).index('by_userId_and_provider_and_externalEventId', ['userId', 'provider', 'externalEventId']).index('by_calendarConnectionId', ['calendarConnectionId']).index('by_calendarConnectionId_and_status', ['calendarConnectionId', 'status']).index('by_calendarConnectionId_and_status_and_providerCreateLeaseExpiresAt', ['calendarConnectionId', 'status', 'providerCreateLeaseExpiresAt']).index('by_calendarConnectionId_and_status_and_providerCreateSettleAfter', ['calendarConnectionId', 'status', 'providerCreateSettleAfter']),
+  // A proposal is intentionally not a plan revision. Provider changes are a
+  // hint for the owner to resolve; Budds remains authoritative until then.
+  calendarReconciliationProposals: defineTable({
+    userId: v.string(), calendarConnectionId: v.id('calendarConnections'), projectionId: v.id('calendarProjections'),
+    kind: v.union(v.literal('moved'), v.literal('deleted'), v.literal('conflict')), status: v.union(v.literal('open'), v.literal('rejected'), v.literal('expired')),
+    expectedPlanRecordRevision: v.number(), expectedSessionRevision: v.number(), providerUpdatedAt: v.optional(v.number()),
+    proposedStartAt: v.optional(v.number()), proposedEndAt: v.optional(v.number()),
+    expiresAt: v.number(), resolvedAt: v.optional(v.number()), createdAt: v.number(), updatedAt: v.number(),
+  }).index('by_userId', ['userId']).index('by_userId_and_status', ['userId', 'status']).index('by_userId_and_status_and_expiresAt', ['userId', 'status', 'expiresAt']).index('by_calendarConnectionId', ['calendarConnectionId']).index('by_projectionId_and_status', ['projectionId', 'status']).index('by_status_and_expiresAt', ['status', 'expiresAt']),
+  calendarWebhookReceipts: defineTable({
+    userId: v.string(), calendarConnectionId: v.id('calendarConnections'), channelId: v.string(), messageNumber: v.string(), messageNumberOrder: v.string(), receivedAt: v.number(),
+  }).index('by_userId', ['userId']).index('by_calendarConnectionId', ['calendarConnectionId']).index('by_calendarConnectionId_and_channelId_and_messageNumber', ['calendarConnectionId', 'channelId', 'messageNumber']).index('by_calendarConnectionId_and_channelId_and_messageNumberOrder', ['calendarConnectionId', 'channelId', 'messageNumberOrder']).index('by_receivedAt', ['receivedAt']),
+  calendarWatchChannels: defineTable({
+    userId: v.string(), calendarConnectionId: v.id('calendarConnections'), channelId: v.string(), resourceId: v.string(), tokenHash: v.string(), expiresAt: v.number(),
+    status: v.union(v.literal('current'), v.literal('pending_stop'), v.literal('stopped')), createdAt: v.number(), updatedAt: v.number(),
+  }).index('by_userId', ['userId']).index('by_status', ['status']).index('by_calendarConnectionId', ['calendarConnectionId']).index('by_calendarConnectionId_and_status', ['calendarConnectionId', 'status']).index('by_calendarConnectionId_and_channelId', ['calendarConnectionId', 'channelId']),
   reminderPolicies: defineTable({ userId: v.string(), learningVoidId: v.id('learningVoids'), timezone: v.string(), channel: v.string() }).index('by_userId', ['userId']).index('by_userId_and_learningVoidId', ['userId', 'learningVoidId']),
   searchQuotaBuckets: defineTable({
     userId: v.string(),

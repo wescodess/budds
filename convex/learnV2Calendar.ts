@@ -14,6 +14,7 @@ const REQUIRED_SCOPES = new Set([
 ])
 const MAX_PROJECTIONS = 100
 const PROVIDER_CREATE_LEASE_MS = 60_000
+const PROVIDER_CREATE_SETTLE_GRACE_MS = 2 * 60_000
 
 export async function deterministicGoogleProjectionId(input: string): Promise<string> {
   // Google accepts lower-case base32hex identifiers. A cryptographic digest
@@ -44,8 +45,9 @@ export const getStatus = query({
     const connection = await ctx.db.query('calendarConnections').withIndex('by_userId', q => q.eq('userId', userId)).first()
     return {
       enabled: true,
-      connection: !connection ? 'not_connected' as const : hasRequiredConsent(connection) ? 'ready' as const : 'reconsent_required' as const,
+      connection: !connection ? 'not_connected' as const : connection.learnV2AttentionRequiredAt ? 'reconsent_required' as const : hasRequiredConsent(connection) ? 'ready' as const : 'reconsent_required' as const,
       provider: connection?.provider ?? null,
+      attention: connection?.learnV2AttentionReason ?? null,
     }
   },
 })
@@ -99,7 +101,7 @@ export const reserveProjection = internalMutation({
     if (existing?.status === 'projected') return { kind: 'already_projected' as const, projection: existing }
     if (existing?.status === 'reconciliation_needed') return { kind: 'conflict' as const, projection: existing }
     if ((existing?.status === 'reserving' && (existing.updatedAt ?? existing._creationTime) > Date.now() - 30_000)
-      || (existing?.status === 'creating' && (existing.providerCreateLeaseExpiresAt ?? 0) > Date.now())) {
+      || (existing?.status === 'creating' && ((existing.providerCreateLeaseExpiresAt ?? 0) > Date.now() || (existing.providerCreateSettleAfter ?? 0) > Date.now()))) {
       return { kind: 'busy' as const, projection: existing }
     }
     const now = Date.now()
@@ -122,6 +124,7 @@ export const reserveProjection = internalMutation({
         updatedAt: now,
         providerCreateLeaseToken: undefined,
         providerCreateLeaseExpiresAt: undefined,
+        providerCreateSettleAfter: undefined,
       })
       return { kind: 'reserved' as const, projection: await ctx.db.get(existing._id) }
     }
@@ -166,7 +169,8 @@ export const commitProjection = internalMutation({
     const row = await ctx.db.get(args.projectionId)
     if (!row || row.userId !== args.userId || row.status !== 'creating' || row.providerCreateLeaseToken !== args.leaseToken) return null
     const now = Date.now()
-    await ctx.db.patch(row._id, { status: 'projected', projectedAt: now, updatedAt: now, lastProviderUpdatedAt: now, providerCreateLeaseToken: undefined, providerCreateLeaseExpiresAt: undefined, ...(args.providerEtag ? { providerEtag: args.providerEtag } : {}), ...(args.providerVersion ? { providerVersion: args.providerVersion } : {}) })
+    const providerUpdatedAt = args.providerVersion ? Date.parse(args.providerVersion) : NaN
+    await ctx.db.patch(row._id, { status: 'projected', projectedAt: now, updatedAt: now, lastProviderUpdatedAt: Number.isFinite(providerUpdatedAt) ? providerUpdatedAt : now, providerCreateLeaseToken: undefined, providerCreateLeaseExpiresAt: undefined, providerCreateSettleAfter: undefined, ...(args.providerEtag ? { providerEtag: args.providerEtag } : {}), ...(args.providerVersion ? { providerVersion: args.providerVersion } : {}) })
     return row._id
   },
 })
@@ -182,6 +186,16 @@ export const markProjectionFailed = internalMutation({
       providerCreateLeaseExpiresAt: undefined,
       updatedAt: Date.now(),
     })
+    return row._id
+  },
+})
+
+export const markProviderCreateAmbiguous = internalMutation({
+  args: { projectionId: v.id('calendarProjections'), userId: v.string(), leaseToken: v.string() },
+  handler: async (ctx, args) => {
+    const row = await ctx.db.get(args.projectionId)
+    if (!row || row.userId !== args.userId || row.status !== 'creating' || row.providerCreateLeaseToken !== args.leaseToken) return null
+    await ctx.db.patch(row._id, { providerCreateLeaseToken: undefined, providerCreateLeaseExpiresAt: undefined, providerCreateSettleAfter: Date.now() + PROVIDER_CREATE_SETTLE_GRACE_MS, updatedAt: Date.now() })
     return row._id
   },
 })
@@ -211,17 +225,22 @@ export const projectSession = action({
     if ((input.existing?.status === 'reserving'
       && (input.existing.updatedAt ?? input.existing._creationTime) > Date.now() - 30_000)
       || (input.existing?.status === 'creating'
-        && (input.existing.providerCreateLeaseExpiresAt ?? 0) > Date.now())) {
+        && ((input.existing.providerCreateLeaseExpiresAt ?? 0) > Date.now() || (input.existing.providerCreateSettleAfter ?? 0) > Date.now()))) {
       return { kind: 'busy', studySessionId: args.studySessionId }
     }
-    const accessToken = await getCalendarAccessToken(ctx, userId, input.connection)
+    let accessToken: string
+    try { accessToken = await getCalendarAccessToken(ctx, userId, input.connection) }
+    catch (error) { await ctx.runMutation(internal.learnV2CalendarReconciliation.markAttention, { calendarConnectionId: input.connection._id, reason: 'token_expired' }); throw error }
     const start = input.session.scheduledStartAt
     const end = input.session.scheduledEndAt ?? start + 30 * 60_000
     const busy = await fetch(GOOGLE_FREE_BUSY, {
       method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ timeMin: new Date(start).toISOString(), timeMax: new Date(end).toISOString(), items: [{ id: 'primary' }] }), signal: AbortSignal.timeout(15_000),
     })
-    if (!busy.ok) throw new Error(`Google Calendar FreeBusy failed with status ${busy.status}`)
+    if (!busy.ok) {
+      if (busy.status === 401 || busy.status === 403) await ctx.runMutation(internal.learnV2CalendarReconciliation.markAttention, { calendarConnectionId: input.connection._id, reason: busy.status === 401 ? 'token_expired' : 'scope_lost' })
+      throw new Error(`Google Calendar FreeBusy failed with status ${busy.status}`)
+    }
     const busyBody = await busy.json() as { calendars?: { primary?: { busy?: unknown[], errors?: unknown[] } } }
     if ((busyBody.calendars?.primary?.errors?.length ?? 0) > 0) {
       throw new Error('Google Calendar FreeBusy returned a calendar error')
@@ -253,7 +272,7 @@ export const projectSession = action({
       })
     }
     catch (error) {
-      await ctx.runMutation(internal.learnV2Calendar.markProjectionFailed, { projectionId: projection._id, userId, leaseToken: createLeaseToken })
+      await ctx.runMutation(internal.learnV2Calendar.markProviderCreateAmbiguous, { projectionId: projection._id, userId, leaseToken: createLeaseToken })
       throw error
     }
     if (response.status === 409) {
@@ -262,6 +281,7 @@ export const projectSession = action({
     }
     if (!response.ok) {
       await ctx.runMutation(internal.learnV2Calendar.markProjectionFailed, { projectionId: projection._id, userId, leaseToken: createLeaseToken })
+      if (response.status === 401 || response.status === 403) await ctx.runMutation(internal.learnV2CalendarReconciliation.markAttention, { calendarConnectionId: input.connection._id, reason: response.status === 401 ? 'token_expired' : 'scope_lost' })
       throw new Error(`Google Calendar create failed with status ${response.status}`)
     }
     const created = await response.json() as { etag?: string, updated?: string }
