@@ -56,6 +56,9 @@ const feedback = ref<Feedback | null>(null)
 const scorePending = ref(false)
 const startKey = ref<string | null>(null)
 const submitKey = ref<string | null>(null)
+const reduceMotion = ref(false)
+const enhancedContrast = ref(false)
+const hideTimeGuidance = ref(false)
 
 function makeKey(prefix: string) {
   const id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -126,8 +129,16 @@ async function retryScore() { await submit() }
 </script>
 
 <template>
-  <section aria-labelledby="today-session-title" data-testid="learn-v2-session" class="mx-auto w-full max-w-3xl space-y-5 p-4 sm:p-6">
-    <header><p class="text-sm text-muted-foreground">Today · {{ candidate.estimatedMinutes }} minutes</p><h1 id="today-session-title" class="text-2xl font-semibold">{{ candidate.objectiveTitle }}</h1></header>
+  <section aria-labelledby="today-session-title" data-testid="learn-v2-session" class="learn-v2-session mx-auto w-full max-w-3xl space-y-5 p-4 sm:p-6" :class="{ 'learn-v2-reduced-motion': reduceMotion, 'learn-v2-enhanced-contrast': enhancedContrast }">
+    <header><p class="text-sm text-muted-foreground">Today<span v-if="!hideTimeGuidance"> · {{ candidate.estimatedMinutes }} minutes</span></p><h1 id="today-session-title" class="text-2xl font-semibold">{{ candidate.objectiveTitle }}</h1></header>
+    <details class="rounded-md border p-3 text-sm" data-testid="learn-v2-accessibility-preferences">
+      <summary class="cursor-pointer font-medium">Accessibility and session preferences</summary>
+      <div class="mt-3 grid gap-2">
+        <label><input v-model="reduceMotion" type="checkbox" data-testid="learn-v2-reduce-motion"> Reduce motion</label>
+        <label><input v-model="enhancedContrast" type="checkbox" data-testid="learn-v2-enhanced-contrast"> Increase contrast</label>
+        <label><input v-model="hideTimeGuidance" type="checkbox" data-testid="learn-v2-hide-time"> Hide time guidance</label>
+      </div>
+    </details>
     <p aria-live="polite" data-testid="learn-v2-live" class="sr-only">{{ notice }}</p>
     <p v-if="!isOnline" id="learn-v2-offline-notice" data-testid="learn-v2-offline-notice" role="status" class="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">Server-scored sessions require a connection. No offline attempt is queued.</p>
     <p v-if="error" role="alert" data-testid="learn-v2-error" class="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{{ error }}</p>
@@ -148,3 +159,31 @@ async function retryScore() { await submit() }
     </template>
   </section>
 </template>
+
+<style scoped>
+.learn-v2-reduced-motion,
+.learn-v2-reduced-motion * {
+  scroll-behavior: auto !important;
+  animation: none !important;
+  transition: none !important;
+}
+
+.learn-v2-enhanced-contrast {
+  filter: contrast(1.25);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .learn-v2-session,
+  .learn-v2-session * {
+    scroll-behavior: auto !important;
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .learn-v2-session :is(button, textarea, fieldset, article, details) {
+    border: 1px solid ButtonText;
+  }
+}
+</style>

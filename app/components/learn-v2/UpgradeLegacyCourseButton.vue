@@ -18,6 +18,7 @@ const checkingAccess = computed(() => access.pending?.value ?? false)
 const busy = ref(false)
 const error = ref<string | null>(null)
 const success = ref(false)
+const upgradedVoidId = ref<Id<'learningVoids'> | null>(null)
 const idempotencyKey = ref<string | null>(null)
 
 function makeKey() {
@@ -33,7 +34,8 @@ async function upgrade() {
   error.value = null
   idempotencyKey.value ??= makeKey()
   try {
-    await upgradeMutation.mutate({ legacyCourseId, idempotencyKey: idempotencyKey.value })
+    const result = await upgradeMutation.mutate({ legacyCourseId, idempotencyKey: idempotencyKey.value }) as { _id?: Id<'learningVoids'> }
+    upgradedVoidId.value = result._id ?? null
     success.value = true
   } catch (cause) {
     error.value = getErrorMessage(cause, 'Could not create your V2 draft. Try again.')
@@ -61,6 +63,7 @@ async function upgrade() {
       >
         {{ success ? 'V2 draft created' : busy ? 'Creating V2 draft…' : 'Create V2 draft' }}
       </button>
+      <LearnV2SearchCapacityNotice v-if="success && upgradedVoidId" :learning-void-id="upgradedVoidId" class="mt-3" />
     </template>
   </section>
 </template>

@@ -49,6 +49,17 @@ describe('LearnV2TodaySession', () => {
     expect(wrapper.findAll('button').filter((button: any) => button.text() === 'Start')).toHaveLength(1)
     expect(wrapper.find('[data-testid="learn-v2-phase-retrieval"]').exists()).toBe(false)
   })
+  it('applies motion, contrast, and untimed-session preferences to rendering', async () => {
+    const wrapper = await mount()
+    expect(wrapper.text()).toContain('12 minutes')
+    await wrapper.get('[data-testid="learn-v2-reduce-motion"]').setValue(true)
+    await wrapper.get('[data-testid="learn-v2-enhanced-contrast"]').setValue(true)
+    await wrapper.get('[data-testid="learn-v2-hide-time"]').setValue(true)
+    const session = wrapper.get('[data-testid="learn-v2-session"]')
+    expect(session.classes()).toContain('learn-v2-reduced-motion')
+    expect(session.classes()).toContain('learn-v2-enhanced-contrast')
+    expect(wrapper.text()).not.toContain('12 minutes')
+  })
   it('keeps server-scored sessions unavailable offline without queuing an attempt', async () => {
     isOnline.value = false
     const wrapper = await mount()

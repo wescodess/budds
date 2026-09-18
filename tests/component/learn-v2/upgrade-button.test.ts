@@ -4,9 +4,12 @@ import { getFunctionName } from 'convex/server'
 
 const access = ref<any>({ kind: 'allowed' })
 const pending = ref(false)
+const quota = ref<any[]>([])
 const upgrade = vi.fn()
 
-mockNuxtImport('useConvexQuery', () => () => ({ data: access, pending }))
+mockNuxtImport('useConvexQuery', () => (reference: any) => getFunctionName(reference)?.includes('quotaStatus')
+  ? { data: quota, pending: ref(false) }
+  : { data: access, pending })
 mockNuxtImport('useConvexMutation', () => (reference: any) => ({
   mutate: getFunctionName(reference)?.includes('upgradeLegacyCourse') ? upgrade : vi.fn(),
 }))
@@ -17,6 +20,7 @@ describe('LearnV2UpgradeLegacyCourseButton', () => {
   beforeEach(() => {
     access.value = { kind: 'allowed' }
     pending.value = false
+    quota.value = []
     upgrade.mockReset().mockResolvedValue({ _id: 'void_1', status: 'draft', revision: 1 })
   })
 
@@ -58,5 +62,17 @@ describe('LearnV2UpgradeLegacyCourseButton', () => {
     await wrapper.get('[data-testid="learn-v2-upgrade"]').trigger('click')
     await vi.waitFor(() => expect(upgrade).toHaveBeenCalledTimes(2))
     expect(upgrade.mock.calls[1]?.[0]?.idempotencyKey).toBe(firstKey)
+  })
+
+  it('discloses zero-paid-search exhaustion and remaining coverage', async () => {
+    quota.value = [{ scope: 'user_day', available: 0, resetAt: Date.UTC(2026, 8, 18) }]
+    const wrapper = await mount()
+    await wrapper.get('[data-testid="learn-v2-upgrade"]').trigger('click')
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-v2-search-exhausted"]').exists()).toBe(true))
+    const notice = wrapper.get('[data-testid="learn-v2-search-exhausted"]')
+    expect(notice.text()).toContain('Your folder and open research databases are still available')
+    expect(notice.text()).toContain('No paid search was used')
+    expect(notice.text()).toContain('Next UTC reset')
+    expect(notice.attributes('role')).toBe('status')
   })
 })
