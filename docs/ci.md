@@ -11,8 +11,11 @@ The workflow runs these stages:
    typechecks, and the root dependency audit.
 3. `test`: four parallel suites for Convex/Nitro unit tests, Nuxt mounted components, the dedicated Audio Overview component harness, and the Audio Workflow Worker. The Worker shard also runs its own typecheck, environment-contract validation, and dependency audit.
 4. `build`: strict configuration validation and a Cloudflare Pages production build.
-5. `burn-in`: ten repetitions of every test suite on the weekly schedule or manual dispatch.
-6. `report`: a single summary check that fails unless the required jobs pass.
+5. `learn-v2-beta`: the production-like synthetic Phase 0-4 admission contract.
+6. `learn-v2-calendar`: the independent synthetic Calendar admission contract
+   documented in [the Calendar gate](./qa/learn-v2-calendar-gate.md).
+7. `burn-in`: ten repetitions of every test suite on the weekly schedule or manual dispatch.
+8. `report`: a single summary check that fails unless the required jobs pass.
 
 The workflow uploads per-suite logs and retains the compiled Pages output for seven days. GitHub provides failed-check notifications; no Slack or email destination is configured.
 
@@ -33,7 +36,14 @@ pnpm verify
 ```
 
 `pnpm verify` runs lint, the application and `convex/tsconfig.json` typechecks,
-all test suites, and both dependency audits. To validate only the Worker lockfile, run:
+all test suites, and both dependency audits. To reproduce only the independent
+Calendar admission job, run:
+
+```bash
+pnpm verify:learn-v2-calendar
+```
+
+To validate only the Worker lockfile, run:
 
 ```bash
 pnpm --dir workers/audio-overview audit

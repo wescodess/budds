@@ -3,6 +3,9 @@
 This gate admits only the non-Calendar Learn V2 beta surface. Calendar remains
 outside the cohort until the Phase 5 tickets pass their own activation gate.
 
+Calendar admission is separately defined in
+[the Learn V2 Calendar admission gate](./learn-v2-calendar-gate.md).
+
 Run the production-like automated contract with:
 
 ```sh
