@@ -30,6 +30,7 @@ function localScheduleWindow() {
 
 test('learner can advance the Learn V2 mastery journey through production UI', async ({ page, request }) => {
   test.setTimeout(8 * 60_000)
+  page.setDefaultTimeout(30_000)
 
   const identity = { email: `learn-v2-${Date.now()}@e2e.budds.invalid`, password: 'disposable-e2e-password', name: 'Learn V2 Browser Test' }
   const bootstrap = await request.post('/api/e2e/session', { headers: { 'x-budds-e2e-token': token }, data: identity })
@@ -51,6 +52,8 @@ test('learner can advance the Learn V2 mastery journey through production UI', a
   await page.getByTestId('folder-form-submit').click()
   await expect(page.getByTestId('folder-form-modal')).toBeHidden()
 
+  await page.goto('/app/learn/create')
+  await expect(page.getByTestId('learn-v2-outcome-canvas')).toBeVisible()
   await page.getByTestId('learn-v2-create-folder').selectOption({ label: folderName })
   await page.getByTestId('learn-v2-outcome-input').fill('Explain orbital mechanics well enough to reason about a transfer orbit.')
   await page.getByLabel('Source policy').selectOption('web_only')
