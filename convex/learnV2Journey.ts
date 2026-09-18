@@ -9,6 +9,7 @@ const MAX_MILESTONES = 8
 const MAX_OBJECTIVES = 16
 const MAX_SESSIONS = 32
 const MAX_ATTEMPTS_PER_OBJECTIVE = 8
+const MAX_REVISIONS = 32
 
 type VoidRow = Doc<'learningVoids'>
 type BlueprintRow = Doc<'learnBlueprintRevisions'>
@@ -23,7 +24,8 @@ async function ownedVoid(ctx: Parameters<typeof requireLearnV2QueryAccess>[0], u
 async function currentBlueprint(ctx: Parameters<typeof requireLearnV2QueryAccess>[0], userId: string, voidRow: VoidRow) {
   const rows = await ctx.db.query('learnBlueprintRevisions')
     .withIndex('by_userId_and_learningVoidId', q => q.eq('userId', userId).eq('learningVoidId', voidRow._id))
-    .order('desc').take(32)
+    .order('desc').take(MAX_REVISIONS + 1)
+  if (rows.length > MAX_REVISIONS) throw new Error('Learn V2 blueprint revisions exceed their bounded contract')
   rows.sort((a, b) => b.revision - a.revision)
   return rows.length === 1 || rows[0]?.revision !== rows[1]?.revision ? rows[0] ?? null : null
 }
@@ -57,24 +59,46 @@ async function sourceProjection(ctx: Parameters<typeof requireLearnV2QueryAccess
     .withIndex('by_userId_and_blueprintRevisionId', q => q.eq('userId', userId).eq('blueprintRevisionId', blueprint._id))
     .take(MAX_SOURCES + 1)
   if (rows.length > MAX_SOURCES) throw new Error('Learn V2 source set exceeds its bounded contract')
+  const objectives = await ctx.db.query('learnObjectives').withIndex('by_userId_and_blueprintRevisionId_and_order', q => q.eq('userId', userId).eq('blueprintRevisionId', blueprint._id)).take(MAX_OBJECTIVES + 1)
+  if (objectives.length > MAX_OBJECTIVES) throw new Error('Learn V2 map exceeds its bounded contract')
+  const mappedBySource = new Map<string, Array<{ objectiveId: Id<'learnObjectives'>, title: string, coverage: 'strong' | 'partial' | 'gap' }>>()
+  for (const objective of objectives) {
+    const links = await ctx.db.query('learnObjectiveSources').withIndex('by_userId_and_objectiveId_and_sourceSnapshotId', q => q.eq('userId', userId).eq('objectiveId', objective._id)).take(MAX_SOURCES + 1)
+    if (links.length > MAX_SOURCES) throw new Error('Learn V2 objective evidence exceeds its bounded contract')
+    for (const link of links) {
+      const current = mappedBySource.get(String(link.sourceSnapshotId)) ?? []
+      current.push({ objectiveId: objective._id, title: objective.title, coverage: link.coverage })
+      mappedBySource.set(String(link.sourceSnapshotId), current)
+    }
+  }
   const counts = { total: rows.length, accepted: 0, evaluated: 0, rejected: 0, unavailable: 0, pending: 0 }
-  const items = rows.map(source => {
+  const items = []
+  for (const source of rows) {
     const status = source.effectiveStatus ?? source.status
     if (status === 'user_accepted') counts.accepted += 1
     else if (status === 'evaluated') counts.evaluated += 1
     else if (status === 'rejected') counts.rejected += 1
     else if (status === 'unavailable') counts.unavailable += 1
     else counts.pending += 1
-    return {
+    const identity = await ctx.db.get(source.sourceIdentityId)
+    const excerpt = status === 'user_accepted' && source.rightsStatus === 'permitted' && source.evidencePurgedAt === undefined
+      ? await ctx.db.query('learnSourceExcerpts').withIndex('by_userId_and_sourceSnapshotId_and_evidencePurgedAt', q => q.eq('userId', userId).eq('sourceSnapshotId', source._id).eq('evidencePurgedAt', undefined)).first()
+      : null
+    items.push({
       _id: source._id,
       status: source.status,
       effectiveStatus: status,
       recordRevision: source.recordRevision ?? 1,
       publicLocator: source.publicLocator ?? null,
+      origin: identity?.origin ?? null,
+      title: identity?.title ?? null,
+      retrievedAt: source.fetchedAt ?? null,
+      excerpt: excerpt?.rightsStatus === 'permitted' && excerpt.evidencePurgedAt === undefined && excerpt.excerpt?.trim() ? { locator: excerpt.locator, text: excerpt.excerpt } : null,
+      mappedObjectives: mappedBySource.get(String(source._id)) ?? [],
       rightsStatus: source.rightsStatus ?? null,
       conflictStatus: source.conflictStatus ?? null,
-    }
-  })
+    })
+  }
   return { items, counts }
 }
 
@@ -83,7 +107,8 @@ async function planProjection(ctx: Parameters<typeof requireLearnV2QueryAccess>[
   if (roots.length > 1) throw new Error('Learn V2 study plan identity is ambiguous')
   const root = roots[0]
   if (!root) return { root: null, preview: null, accepted: null, sessions: [] }
-  const revisions = await ctx.db.query('studyPlanRevisions').withIndex('by_userId_and_studyPlanId_and_revision', q => q.eq('userId', userId).eq('studyPlanId', root._id)).order('desc').take(2)
+  const revisions = await ctx.db.query('studyPlanRevisions').withIndex('by_userId_and_studyPlanId_and_revision', q => q.eq('userId', userId).eq('studyPlanId', root._id)).order('desc').take(MAX_REVISIONS + 1)
+  if (revisions.length > MAX_REVISIONS) throw new Error('Learn V2 plan revisions exceed their bounded contract')
   const preview = revisions.find(row => row.status === 'draft') ?? null
   const accepted = root.activeRevisionId ? await ctx.db.get(root.activeRevisionId) : revisions.find(row => row.status === 'accepted') ?? null
   const sessions = accepted ? await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q => q.eq('userId', userId).eq('studyPlanRevisionId', accepted._id)).take(MAX_SESSIONS + 1) : []
@@ -115,7 +140,11 @@ async function journey(ctx: Parameters<typeof requireLearnV2QueryAccess>[0], use
     const attempts = await ctx.db.query('masteryAttempts').withIndex('by_userId_and_objectiveId_and_attemptedAt', q => q.eq('userId', userId).eq('objectiveId', objective._id)).order('desc').take(MAX_ATTEMPTS_PER_OBJECTIVE)
     mastery.push({ objectiveId: objective._id, record, attempts })
   }
-  return { folder, learningVoid: voidRow, currentBlueprint: blueprint, nextAction: nextAction(voidRow, blueprint, sources, plan), sources, map, calibration: { attempts: calibrationAttempts, completed: voidRow.status !== 'calibration' && calibrationAttempts.length >= 3 }, plan, mastery }
+  const calibrationItems = (map?.objectives ?? []).map(objective => {
+    const rubric = objective.assessmentContract && typeof objective.assessmentContract === 'object' ? objective.assessmentContract : null
+    return { objectiveId: objective._id, title: objective.title, capability: objective.capability, prompt: rubric && 'instructions' in rubric && typeof rubric.instructions === 'string' ? rubric.instructions : null, rubric }
+  })
+  return { folder, learningVoid: voidRow, currentBlueprint: blueprint, nextAction: nextAction(voidRow, blueprint, sources, plan), sources, map, calibration: { attempts: calibrationAttempts, items: calibrationItems, completed: voidRow.status !== 'calibration' && calibrationAttempts.length >= 3 }, plan, mastery }
 }
 
 export const listHub = query({
@@ -150,7 +179,8 @@ export const getCurrentMission = query({
   args: {},
   handler: async (ctx) => {
     const userId = await requireLearnV2QueryAccess(ctx)
-    const rows = await ctx.db.query('learningVoids').withIndex('by_userId', q => q.eq('userId', userId)).order('desc').take(MAX_VOIDS)
+    const rows = await ctx.db.query('learningVoids').withIndex('by_userId', q => q.eq('userId', userId)).order('desc').take(MAX_VOIDS + 1)
+    if (rows.length > MAX_VOIDS) throw new Error('Learn V2 Learning Void list exceeds its bounded contract')
     const current = rows.find(row => !['completed', 'archived'].includes(row.status))
     if (!current) return null
     const owned = await ownedVoid(ctx, userId, current._id)
