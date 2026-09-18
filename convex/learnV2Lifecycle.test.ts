@@ -8,6 +8,37 @@ const modules = import.meta.glob('./**/*.ts')
 const identity = { tokenIdentifier: 'https://auth.example.com|learn-v2-owner', name: 'Learn V2 Owner' }
 
 describe('Learn V2 foundational lifecycle', () => {
+  test('persists an owner-scoped outcome draft and preserves its rhythm when setup resumes', async () => {
+    const previous = process.env.LEARN_V2_ENABLED
+    process.env.LEARN_V2_ENABLED = 'true'
+    try {
+      const t = convexTest(schema, modules)
+      const owner = t.withIdentity(identity)
+      await owner.mutation(api.users.upsertUser, {})
+      await t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: identity.tokenIdentifier, enabled: true })
+      const folderId = await owner.mutation(api.folders.createFolder, { name: 'Saved setup' })
+      const learningVoid = await owner.mutation(api.learnV2Lifecycle.createLearningVoid, { folderId, title: 'Explain event loops', idempotencyKey: 'draft-create' })
+      const blueprint = await owner.mutation(api.learnV2Lifecycle.createBlueprintDraft, { learningVoidId: learningVoid!._id, expectedVoidRevision: 1, idempotencyKey: 'draft-blueprint' })
+      const saved = await owner.mutation(api.learnV2Blueprints.configureBlueprintIntent, {
+        blueprintRevisionId: blueprint!._id, expectedBlueprintRecordRevision: 1,
+        desiredOutcome: 'Explain the event loop to a teammate', mode: 'understand', desiredDepth: 'working', sourcePolicy: 'folder_plus_web',
+        targetLocalDate: '2031-05-20', sessionMinutes: 45, idempotencyKey: 'draft-intent',
+      })
+      const renamed = await owner.mutation(api.learnV2Lifecycle.updateLearningVoidDraft, { learningVoidId: learningVoid!._id, title: 'Explain the event loop confidently', expectedRevision: 2, idempotencyKey: 'draft-rename' })
+      expect(renamed).toMatchObject({ status: 'draft', revision: 3 })
+      await expect(owner.mutation(api.learnV2Lifecycle.updateLearningVoidDraft, { learningVoidId: learningVoid!._id, title: 'Stale', expectedRevision: 2, idempotencyKey: 'draft-stale' })).rejects.toThrow(/no longer editable/)
+      const sourceVoid = await owner.mutation(api.learnV2Lifecycle.transitionLearningVoid, { learningVoidId: learningVoid!._id, status: 'sourcing', expectedRevision: 3, idempotencyKey: 'draft-sourcing' })
+      await owner.mutation(api.learnV2Lifecycle.transitionLearningVoid, { learningVoidId: learningVoid!._id, status: 'source_review', expectedRevision: sourceVoid!.revision, idempotencyKey: 'draft-source-review' })
+      await owner.mutation(api.learnV2Lifecycle.transitionBlueprintRevision, { blueprintRevisionId: blueprint!._id, status: 'source_review', expectedRecordRevision: saved.recordRevision, idempotencyKey: 'draft-blueprint-review' })
+      const row = await owner.query(api.learnV2Journey.getMission, { learningVoidId: learningVoid!._id })
+      expect(row).toMatchObject({ learningVoid: { title: 'Explain the event loop confidently', status: 'source_review' }, currentBlueprint: { desiredOutcome: 'Explain the event loop to a teammate', targetLocalDate: '2031-05-20', sessionMinutes: 45 } })
+    }
+    finally {
+      if (previous === undefined) delete process.env.LEARN_V2_ENABLED
+      else process.env.LEARN_V2_ENABLED = previous
+    }
+  })
+
   test('requires the rollout gate and applies an idempotent, revision-checked transition', async () => {
     const t = convexTest(schema, modules)
     const asUser = t.withIdentity(identity)

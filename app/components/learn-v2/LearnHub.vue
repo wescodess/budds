@@ -3,8 +3,8 @@ import { BookOpen, CalendarClock, ChevronRight, Plus, Sparkles } from '@lucide/v
 import type { LearnHubSnapshot, LearnMissionSnapshot } from '~/types/learn-v2-journey'
 
 const { snapshot } = defineProps<{ snapshot: LearnHubSnapshot }>()
-const emit = defineEmits<{ create: []; openMission: [missionId: string]; startSession: [missionId: string]; continueSetup: [missionId: string] }>()
-function primaryAction(mission: LearnMissionSnapshot) { if (mission.nextAction.kind === 'start_session' || mission.nextAction.kind === 'resume_session' || mission.nextAction.kind === 'review_now') emit('startSession', mission.id); else emit('continueSetup', mission.id) }
+const emit = defineEmits<{ create: []; openMission: [missionId: string]; startSession: [missionId: string]; continueSetup: [missionId: string]; resumeDraft: [missionId: string] }>()
+function primaryAction(mission: LearnMissionSnapshot) { if (mission.lifecycle === 'draft') emit('resumeDraft', mission.id); else if (mission.nextAction.kind === 'start_session' || mission.nextAction.kind === 'resume_session' || mission.nextAction.kind === 'review_now') emit('startSession', mission.id); else emit('continueSetup', mission.id) }
 </script>
 
 <template>

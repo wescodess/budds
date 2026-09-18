@@ -183,13 +183,15 @@ describe('Learn V2 evidence-bound Blueprint generation', () => {
       mode: 'understand' as const,
       desiredDepth: 'deep' as const,
       sourcePolicy: 'folder_only' as const,
+      targetLocalDate: '2030-10-15',
+      sessionMinutes: 45 as const,
       idempotencyKey: 'configure-intent',
     }
     const configured = await setupResult.owner.mutation(api.learnV2Blueprints.configureBlueprintIntent, args)
     expect(configured).toMatchObject({
       recordRevision: 2,
       replayed: false,
-      intent: { desiredOutcome: 'Understand the evidence well enough to explain it clearly.', sourcePolicy: 'folder_only' },
+      intent: { desiredOutcome: 'Understand the evidence well enough to explain it clearly.', sourcePolicy: 'folder_only', targetLocalDate: '2030-10-15', sessionMinutes: 45 },
     })
     await expect(setupResult.owner.mutation(api.learnV2Blueprints.configureBlueprintIntent, args)).resolves.toMatchObject({ replayed: true })
     await expect(setupResult.owner.mutation(api.learnV2Blueprints.startBlueprintGeneration, {
@@ -337,6 +339,8 @@ describe('Learn V2 evidence-bound Blueprint generation', () => {
       mode: 'understand',
       desiredDepth: 'overview',
       sourcePolicy: 'folder_only',
+      targetLocalDate: null,
+      sessionMinutes: 25,
       idempotencyKey: 'folder-only-intent',
     })
     process.env.LEARN_V2_BLUEPRINT_PROVIDER_ENABLED = 'true'
