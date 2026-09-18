@@ -82,6 +82,35 @@ describe('LA2-12 server-scored mastery attempts', () => {
     }
   })
 
+  test('admits only one concurrent provider dispatch and blocks ambiguous retries', async () => {
+    const concurrent = await fixture()
+    const { tokenIdentifier: _token, scorerVerdict: _verdict, ...publicArgs } = concurrent.args('concurrent', 80)
+    let release!: (response: Response) => void
+    const delayed = new Promise<Response>((resolve) => { release = resolve })
+    const provider = vi.fn(() => delayed)
+    vi.stubGlobal('fetch', provider)
+    process.env.OPENROUTER_API_KEY = 'test-key'; process.env.CF_ACCOUNT_ID = 'test-account'; process.env.CLOUDFLARE_AI_GATEWAY_ID = 'test-gateway'
+    try {
+      const first = concurrent.owner.action(api.learnV2Mastery.submitMasteryAttempt, publicArgs)
+      await vi.waitFor(() => expect(provider).toHaveBeenCalledTimes(1))
+      await expect(concurrent.owner.action(api.learnV2Mastery.submitMasteryAttempt, publicArgs)).resolves.toEqual({ status: 'in_progress', replayed: false })
+      release(new Response(JSON.stringify({ id: 'score-concurrent', model: 'test/mastery-model', choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({ criterionResults: verdict(80).criterionResults.map(row => ({ ...row, rationale: 'Supported.' })), misconceptionTags: [] }) } }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }), { status: 200 }))
+      await expect(first).resolves.toMatchObject({ status: 'completed', state: 'independent' })
+      expect(provider).toHaveBeenCalledTimes(1)
+
+      const ambiguous = await fixture()
+      const { tokenIdentifier: _token2, scorerVerdict: _verdict2, ...ambiguousArgs } = ambiguous.args('ambiguous', 80)
+      provider.mockImplementationOnce(async () => { throw new Error('connection ended after dispatch') })
+      await expect(ambiguous.owner.action(api.learnV2Mastery.submitMasteryAttempt, ambiguousArgs)).rejects.toThrow(/connection ended/)
+      await expect(ambiguous.owner.action(api.learnV2Mastery.submitMasteryAttempt, ambiguousArgs)).rejects.toThrow(/requires reconciliation/)
+      expect(provider).toHaveBeenCalledTimes(2)
+    }
+    finally {
+      delete process.env.OPENROUTER_API_KEY; delete process.env.CF_ACCOUNT_ID; delete process.env.CLOUDFLARE_AI_GATEWAY_ID
+      vi.unstubAllGlobals()
+    }
+  })
+
   test('enforces exact started content/session/active-plan pins and rejects purged evidence', async () => {
     const stale = await fixture()
     await stale.t.run(ctx => ctx.db.patch(stale.ids.planId, { activeRevisionId: undefined }))
