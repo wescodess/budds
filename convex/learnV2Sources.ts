@@ -443,7 +443,8 @@ export const listSources = query({
 })
 
 // Owner-only projection for source-review cards. It deliberately omits
-// canonical/private URLs, object keys, filenames, excerpts, and identity keys.
+// canonical/private URLs, object keys, filenames, and identity keys. A
+// rights-permitted text excerpt is returned only for learner review.
 export const listSourceReview = query({
   args: {
     blueprintRevisionId: v.union(v.id('learnBlueprintRevisions'), v.null()),
@@ -510,6 +511,9 @@ export const listSourceReview = query({
             ? 'evidence_unavailable'
             : hasContent ? 'available' : hasLocator ? 'locator_only' : 'evidence_unavailable',
         },
+        // Owner-scoped, text-only evidence. This is only present when the
+        // rights policy allowed retention; private locators stay private.
+        excerpt: hasContent ? excerpt!.excerpt!.trim() : null,
         signals: {
           authority: 'unknown',
           freshness: source.fetchedAt === undefined ? 'unknown' : 'retrieved_at',
