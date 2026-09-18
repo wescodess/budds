@@ -11,6 +11,12 @@ const MAX_MISCONCEPTIONS = 16
 const MAX_SOURCES = 64
 const SCORING_JOB_TYPE = 'mastery_scoring'
 const SCORING_LEASE_MS = 5 * 60_000
+export const LEARN_V2_MASTERY_SCORING_ADMISSION = {
+  windowMs: 60 * 60_000,
+  maxProviderDispatches: 12,
+} as const
+const SCORING_RECOVERY_BATCH = 32
+const RATE_EVENT_CLEANUP_BATCH = 128
 const FOLLOW_UP_JOB_TYPE = 'session_content_generation'
 const scorerVerdictValidator = v.object({
   scorerVersion: v.string(), criterionResults: v.array(v.object({ key: v.string(), awarded: v.boolean(), rationale: v.optional(v.string()) })),
@@ -182,7 +188,60 @@ export const markMasteryScoringDispatched = internalMutation({
   handler: async (ctx, args) => {
     const job = await ctx.db.get(args.jobId)
     if (!job || job.userId !== args.tokenIdentifier || job.type !== SCORING_JOB_TYPE || job.status !== 'leased' || job.leaseToken !== args.leaseToken || (job.leaseExpiresAt ?? 0) <= Date.now()) throw new Error('Mastery scoring lease unavailable')
-    await ctx.db.patch(job._id, { status: 'running', checkpoint: 'provider_dispatched', attempts: (job.attempts ?? 0) + 1, revision: job.revision + 1, updatedAt: Date.now() })
+    const now = Date.now()
+    const windowStart = now - LEARN_V2_MASTERY_SCORING_ADMISSION.windowMs
+    const recent = await ctx.db.query('learnMasteryScoringRateEvents')
+      .withIndex('by_userId_and_createdAt', q => q.eq('userId', args.tokenIdentifier).gt('createdAt', windowStart))
+      .take(LEARN_V2_MASTERY_SCORING_ADMISSION.maxProviderDispatches + 1)
+    if (recent.length >= LEARN_V2_MASTERY_SCORING_ADMISSION.maxProviderDispatches) {
+      const retryAfter = Math.max(1, recent[0]!.createdAt + LEARN_V2_MASTERY_SCORING_ADMISSION.windowMs - now)
+      throw new Error(`Mastery scoring quota reached; retry after ${Math.ceil(retryAfter / 1000)} seconds`)
+    }
+    await ctx.db.insert('learnMasteryScoringRateEvents', { userId: args.tokenIdentifier, jobId: job._id, createdAt: now, expiresAt: now + LEARN_V2_MASTERY_SCORING_ADMISSION.windowMs })
+    await ctx.db.patch(job._id, { status: 'running', checkpoint: 'provider_dispatched', attempts: (job.attempts ?? 0) + 1, revision: job.revision + 1, updatedAt: now })
+  },
+})
+
+/**
+ * A provider call is only safe to retry before dispatch. Once a job reached
+ * running, a provider may have accepted it even if this worker lost the reply.
+ */
+export const recoverExpiredMasteryScoringJobs = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now()
+    let recovered = 0
+    let blocked = 0
+    for (const status of ['leased', 'running'] as const) {
+      const jobs = await ctx.db.query('learnJobs')
+        .withIndex('by_type_and_status_and_leaseExpiresAt', q => q.eq('type', SCORING_JOB_TYPE).eq('status', status).lte('leaseExpiresAt', now))
+        .take(SCORING_RECOVERY_BATCH - recovered - blocked)
+      for (const job of jobs) {
+        if (status === 'running') {
+          blocked += 1
+          await ctx.db.patch(job._id, { status: 'blocked', leaseToken: undefined, leaseExpiresAt: undefined, checkpoint: undefined, terminalReason: 'provider_outcome_requires_reconciliation', revision: job.revision + 1, updatedAt: now })
+        }
+        else {
+          recovered += 1
+          await ctx.db.patch(job._id, { status: 'queued', leaseToken: undefined, leaseExpiresAt: undefined, checkpoint: undefined, terminalReason: 'provider_not_dispatched', revision: job.revision + 1, updatedAt: now })
+        }
+      }
+      if (recovered + blocked >= SCORING_RECOVERY_BATCH) break
+    }
+    if (recovered + blocked >= SCORING_RECOVERY_BATCH) await ctx.scheduler.runAfter(0, internal.learnV2Mastery.recoverExpiredMasteryScoringJobs, {})
+    return { recovered, blocked }
+  },
+})
+
+export const cleanupExpiredMasteryScoringRateEvents = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const rows = await ctx.db.query('learnMasteryScoringRateEvents')
+      .withIndex('by_expiresAt', q => q.lte('expiresAt', Date.now()))
+      .take(RATE_EVENT_CLEANUP_BATCH)
+    for (const row of rows) await ctx.db.delete(row._id)
+    if (rows.length >= RATE_EVENT_CLEANUP_BATCH) await ctx.scheduler.runAfter(0, internal.learnV2Mastery.cleanupExpiredMasteryScoringRateEvents, {})
+    return { deleted: rows.length }
   },
 })
 
@@ -245,7 +304,15 @@ export const submitMasteryAttempt = action({
       throw error
     }
     if (input.kind === 'replay') return { status: 'completed', attemptId: input.attemptId, scorePercent: input.scorePercent, state: input.state, nextReviewAt: input.nextReviewAt, feedback: input.feedback, replayed: true }
-    await ctx.runMutation(internal.learnV2Mastery.markMasteryScoringDispatched, { tokenIdentifier: identity.tokenIdentifier, jobId: reservation.jobId, leaseToken: reservation.leaseToken })
+    try {
+      await ctx.runMutation(internal.learnV2Mastery.markMasteryScoringDispatched, { tokenIdentifier: identity.tokenIdentifier, jobId: reservation.jobId, leaseToken: reservation.leaseToken })
+    }
+    catch (error) {
+      // Admission happens before the provider boundary. A quota refusal is
+      // definitive non-dispatch and must remain retryable when its window ends.
+      await ctx.runMutation(internal.learnV2Mastery.finishMasteryScoringFailure, { tokenIdentifier: identity.tokenIdentifier, jobId: reservation.jobId, leaseToken: reservation.leaseToken, outcome: 'not_dispatched' })
+      throw error
+    }
     try {
       const completion = await generateCompletion({
         model: input.model, temperature: 0, maxAttempts: 1, allowProviderFallbacks: false, maxResponseBytes: 32_000,

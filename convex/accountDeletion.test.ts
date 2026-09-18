@@ -355,9 +355,10 @@ describe('accountDeletion.deleteAccountCascade', () => {
         createdAt: 1,
         updatedAt: 1,
       })
+      const masteryRateEventId = await ctx.db.insert('learnMasteryScoringRateEvents', { userId: TEST_IDENTITY.tokenIdentifier, jobId: learnJobId, createdAt: 1, expiresAt: Date.now() + 60_000 })
       const manifestFolderId = await ctx.db.insert('learnFolderSourceManifestFolders', { userId: TEST_IDENTITY.tokenIdentifier, manifestId, folderId, name: 'V2', folderRevision, depth: 0, order: 0, stage: 'complete', documentCount: 1 })
       const manifestEntryId = await ctx.db.insert('learnFolderSourceManifestEntries', { userId: TEST_IDENTITY.tokenIdentifier, manifestId, order: 0, documentId, folderId, folderRevision, sourceIdentityId: identityId, sourceSnapshotId: snapshotId, availability: 'unavailable', unavailableReason: 'failed' })
-      return { learningVoidId, blueprintId, revisionId, receiptId, manifestId, manifestFolderId, manifestEntryId, snapshotId, identityId, leaseId, rateEventId, sourceReceiptId, learnJobId }
+      return { learningVoidId, blueprintId, revisionId, receiptId, manifestId, manifestFolderId, manifestEntryId, snapshotId, identityId, leaseId, rateEventId, masteryRateEventId, sourceReceiptId, learnJobId }
     })
     await asUser.mutation(internal.accountDeletion.deleteCurrentUser, {})
     await finishDatabaseDeletion(t, TEST_IDENTITY.tokenIdentifier)
@@ -367,6 +368,7 @@ describe('accountDeletion.deleteAccountCascade', () => {
     expect(await t.run(ctx => ctx.db.get(ids.manifestId))).toBeNull()
     expect(await t.run(ctx => ctx.db.get(ids.leaseId))).toBeNull()
     expect(await t.run(ctx => ctx.db.get(ids.rateEventId))).toBeNull()
+    expect(await t.run(ctx => ctx.db.get(ids.masteryRateEventId))).toBeNull()
     expect(await t.run(ctx => ctx.db.get(ids.sourceReceiptId))).toBeNull()
     expect(await t.run(ctx => ctx.db.get(ids.learnJobId))).toBeNull()
     expect(await t.run(ctx => ctx.db.get(ids.snapshotId))).toBeNull()

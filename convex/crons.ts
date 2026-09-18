@@ -15,5 +15,9 @@ crons.interval('resume stale account deletion jobs', { minutes: 15 }, internal.a
 crons.interval('resume stale course deletion jobs', { minutes: 15 }, internal.courseDeletion.resumeStale, {})
 crons.interval('cleanup distributed rate limits', { hours: 1 }, internal.rateLimits.cleanupExpired, {})
 crons.interval('cleanup undispatched Learn V2 searches', { minutes: 5 }, internal.learnV2Search.cleanupExpiredUndispatched, {})
+crons.interval('recover expired Learn V2 blueprint jobs', { minutes: 5 }, internal.learnV2Blueprints.recoverExpiredBlueprintJobs, {})
+crons.interval('recover expired Learn V2 session-content jobs', { minutes: 5 }, internal.learnV2SessionContent.recoverExpiredSessionContentJobs, {})
+crons.interval('recover expired Learn V2 mastery scoring jobs', { minutes: 5 }, internal.learnV2Mastery.recoverExpiredMasteryScoringJobs, {})
+crons.interval('cleanup Learn V2 mastery scoring rate events', { hours: 1 }, internal.learnV2Mastery.cleanupExpiredMasteryScoringRateEvents, {})
 
 export default crons

@@ -2,6 +2,7 @@
 import { convexTest } from 'convex-test'
 import { describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
+import { LEARN_V2_MASTERY_SCORING_ADMISSION } from './learnV2Mastery'
 import schema from './schema'
 
 const modules = import.meta.glob('./**/*.ts')
@@ -121,6 +122,79 @@ describe('LA2-12 server-scored mastery attempts', () => {
     await t.run(ctx => ctx.db.patch(reservation.jobId, { leaseExpiresAt: Date.now() - 1 }))
     await expect(t.mutation(internal.learnV2Mastery.beginMasteryScoring, request)).resolves.toEqual({ kind: 'pending', status: 'blocked' })
     await expect(t.run(ctx => ctx.db.get(reservation.jobId))).resolves.toMatchObject({ status: 'blocked', terminalReason: 'provider_outcome_requires_reconciliation' })
+  })
+
+  test('cron recovery requeues only expired pre-dispatch work and blocks ambiguous provider work', async () => {
+    const { t, args } = await fixture()
+    const { scorerVerdict: _scorerVerdict, ...preDispatchRequest } = args('recovery-pre-dispatch', 80)
+    const preDispatch = await t.mutation(internal.learnV2Mastery.beginMasteryScoring, preDispatchRequest)
+    if (preDispatch.kind !== 'acquired') throw new Error('Expected scoring lease')
+    await t.run(ctx => ctx.db.patch(preDispatch.jobId, { leaseExpiresAt: Date.now() - 1 }))
+
+    const { scorerVerdict: _scorerVerdict2, ...postDispatchRequest } = args('recovery-post-dispatch', 80)
+    const postDispatch = await t.mutation(internal.learnV2Mastery.beginMasteryScoring, postDispatchRequest)
+    if (postDispatch.kind !== 'acquired') throw new Error('Expected scoring lease')
+    await t.mutation(internal.learnV2Mastery.markMasteryScoringDispatched, { tokenIdentifier: OWNER.tokenIdentifier, jobId: postDispatch.jobId, leaseToken: postDispatch.leaseToken })
+    await t.run(ctx => ctx.db.patch(postDispatch.jobId, { leaseExpiresAt: Date.now() - 1 }))
+
+    await expect(t.mutation(internal.learnV2Mastery.recoverExpiredMasteryScoringJobs, {})).resolves.toEqual({ recovered: 1, blocked: 1 })
+    await expect(t.run(ctx => ctx.db.get(preDispatch.jobId))).resolves.toMatchObject({ status: 'queued', terminalReason: 'provider_not_dispatched' })
+    await expect(t.run(ctx => ctx.db.get(postDispatch.jobId))).resolves.toMatchObject({ status: 'blocked', terminalReason: 'provider_outcome_requires_reconciliation' })
+  })
+
+  test('enforces a rolling provider-dispatch budget without charging an idempotent lease twice', async () => {
+    const { t, args } = await fixture()
+    const { scorerVerdict: _scorerVerdict, ...request } = args('rate-budget', 80)
+    const reservation = await t.mutation(internal.learnV2Mastery.beginMasteryScoring, request)
+    if (reservation.kind !== 'acquired') throw new Error('Expected scoring lease')
+    const now = Date.now()
+    await t.run(async ctx => {
+      for (let index = 0; index < LEARN_V2_MASTERY_SCORING_ADMISSION.maxProviderDispatches; index += 1) {
+        await ctx.db.insert('learnMasteryScoringRateEvents', { userId: OWNER.tokenIdentifier, jobId: reservation.jobId, createdAt: now - 1, expiresAt: now + LEARN_V2_MASTERY_SCORING_ADMISSION.windowMs })
+      }
+    })
+    await expect(t.mutation(internal.learnV2Mastery.markMasteryScoringDispatched, { tokenIdentifier: OWNER.tokenIdentifier, jobId: reservation.jobId, leaseToken: reservation.leaseToken })).rejects.toThrow(/quota reached; retry after/)
+    expect(await t.run(ctx => ctx.db.query('learnMasteryScoringRateEvents').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(20))).toHaveLength(LEARN_V2_MASTERY_SCORING_ADMISSION.maxProviderDispatches)
+
+    await t.run(async ctx => {
+      const events = await ctx.db.query('learnMasteryScoringRateEvents').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(20)
+      for (const event of events) await ctx.db.patch(event._id, { createdAt: now - LEARN_V2_MASTERY_SCORING_ADMISSION.windowMs })
+    })
+    await expect(t.mutation(internal.learnV2Mastery.markMasteryScoringDispatched, { tokenIdentifier: OWNER.tokenIdentifier, jobId: reservation.jobId, leaseToken: reservation.leaseToken })).resolves.toBeNull()
+    expect(await t.run(ctx => ctx.db.query('learnMasteryScoringRateEvents').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(20))).toHaveLength(LEARN_V2_MASTERY_SCORING_ADMISSION.maxProviderDispatches + 1)
+  })
+
+  test('releases a quota-denied pre-dispatch job for retry once the window expires', async () => {
+    const { t, owner, args } = await fixture()
+    const { scorerVerdict: _scorerVerdict, ...seedRequest } = args('quota-seed', 80)
+    const seed = await t.mutation(internal.learnV2Mastery.beginMasteryScoring, seedRequest)
+    if (seed.kind !== 'acquired') throw new Error('Expected scoring lease')
+    const now = Date.now()
+    await t.run(async ctx => {
+      for (let index = 0; index < LEARN_V2_MASTERY_SCORING_ADMISSION.maxProviderDispatches; index += 1) {
+        await ctx.db.insert('learnMasteryScoringRateEvents', { userId: OWNER.tokenIdentifier, jobId: seed.jobId, createdAt: now - 1, expiresAt: now + LEARN_V2_MASTERY_SCORING_ADMISSION.windowMs })
+      }
+    })
+    const { tokenIdentifier: _tokenIdentifier, scorerVerdict: _verdict, ...publicArgs } = args('quota-retry', 80)
+    await expect(owner.action(api.learnV2Mastery.submitMasteryAttempt, publicArgs)).rejects.toThrow(/quota reached; retry after/)
+    const denied = await t.run(ctx => ctx.db.query('learnJobs').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', OWNER.tokenIdentifier).eq('idempotencyKey', 'quota-retry')).unique())
+    expect(denied).toMatchObject({ status: 'queued', terminalReason: 'provider_not_dispatched' })
+
+    await t.run(async ctx => {
+      const events = await ctx.db.query('learnMasteryScoringRateEvents').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(20)
+      for (const event of events) await ctx.db.patch(event._id, { createdAt: now - LEARN_V2_MASTERY_SCORING_ADMISSION.windowMs })
+    })
+    const provider = vi.fn(async () => new Response(JSON.stringify({ id: 'quota-retry', model: 'test/mastery-model', choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({ criterionResults: verdict(80).criterionResults.map(row => ({ ...row, rationale: 'Supported.' })), misconceptionTags: [] }) } }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }), { status: 200 }))
+    vi.stubGlobal('fetch', provider)
+    process.env.OPENROUTER_API_KEY = 'test-key'; process.env.CF_ACCOUNT_ID = 'test-account'; process.env.CLOUDFLARE_AI_GATEWAY_ID = 'test-gateway'
+    try {
+      await expect(owner.action(api.learnV2Mastery.submitMasteryAttempt, publicArgs)).resolves.toMatchObject({ status: 'completed', replayed: false })
+      expect(provider).toHaveBeenCalledTimes(1)
+    }
+    finally {
+      delete process.env.OPENROUTER_API_KEY; delete process.env.CF_ACCOUNT_ID; delete process.env.CLOUDFLARE_AI_GATEWAY_ID
+      vi.unstubAllGlobals()
+    }
   })
 
   test('enforces exact started content/session/active-plan pins and rejects purged evidence', async () => {
