@@ -1,4 +1,5 @@
 import { v } from 'convex/values'
+import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import { mutation, query, type MutationCtx } from './_generated/server'
 import { requireLearnV2MutationAccess, requireLearnV2QueryAccess } from './lib/learnV2Access'
@@ -10,6 +11,24 @@ const MAX_SESSIONS = 600
 const MAX_AVAILABILITY_WINDOWS = 28
 const MAX_BLACKOUT_DATES = 90
 const MAX_REVIEW_INTERVALS = 4
+
+async function digest(value: unknown) {
+  const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(value))))
+  return `sha256:${[...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('')}`
+}
+
+async function supportedSourceIds(ctx: MutationCtx, userId: string, objectiveId: Id<'learnObjectives'>) {
+  const links = await ctx.db.query('learnObjectiveSources').withIndex('by_userId_and_objectiveId_and_sourceSnapshotId', q => q.eq('userId', userId).eq('objectiveId', objectiveId)).take(65)
+  if (links.length > 64) throw new Error('Session content source scope is outside the bounded contract')
+  const sourceIds: Id<'learnSourceSnapshots'>[] = []
+  for (const link of links) {
+    if (link.coverage === 'gap') continue
+    const source = await ctx.db.get(link.sourceSnapshotId)
+    if (source?.userId === userId && source.status === 'user_accepted' && source.effectiveStatus === 'user_accepted' && source.rightsStatus === 'permitted' && source.conflictStatus === 'clear' && source.evidencePurgedAt === undefined) sourceIds.push(source._id)
+  }
+  const unique = [...new Map(sourceIds.map(id => [String(id), id])).values()].sort((a, b) => String(a).localeCompare(String(b)))
+  return unique
+}
 
 const schedulingInputValidator = v.object({
   version: v.literal('learn-v2.schedule-input.v1'), timezone: v.string(), startLocalDate: v.string(), targetLocalDate: v.union(v.string(), v.null()),
@@ -158,7 +177,17 @@ export const acceptPlanPreview = mutation({
     await ctx.db.patch(planRevision._id, { status: 'accepted', recordRevision: (planRevision.recordRevision ?? 0) + 1, acceptedAt: now, updatedAt: now })
     await ctx.db.patch(learningVoid._id, { status: 'scheduled', revision: learningVoid.revision + 1, lastIdempotencyKey: args.idempotencyKey, updatedAt: now })
     await ctx.db.patch(planRevision.studyPlanId, { activeRevisionId: planRevision._id, updatedAt: now })
-    for (const placement of result.placements) await ctx.db.insert('studySessions', { userId, studyPlanRevisionId: planRevision._id, primaryObjectiveId: placement.objectiveId as Id<'learnObjectives'>, placementId: placement.id, status: 'planned', revision: 1, scheduledStartAt: placement.startUtcMs, scheduledEndAt: placement.endUtcMs, timezone: planRevision.timezone, offsetMinutes: placement.offsetMinutes, placementKind: placement.kind, schedulingPriority: placement.priority, schedulerVersion: planRevision.schedulerVersion })
+    const initialSessionIds: Id<'studySessions'>[] = []
+    for (const placement of result.placements) initialSessionIds.push(await ctx.db.insert('studySessions', { userId, studyPlanRevisionId: planRevision._id, primaryObjectiveId: placement.objectiveId as Id<'learnObjectives'>, placementId: placement.id, status: 'planned', revision: 1, scheduledStartAt: placement.startUtcMs, scheduledEndAt: placement.endUtcMs, timezone: planRevision.timezone, offsetMinutes: placement.offsetMinutes, placementKind: placement.kind, schedulingPriority: placement.priority, schedulerVersion: planRevision.schedulerVersion }))
+    const firstTwo = initialSessionIds.map((id, index) => ({ id, at: result.placements[index]!.startUtcMs })).sort((a, b) => a.at - b.at || String(a.id).localeCompare(String(b.id))).slice(0, 2)
+    for (const [index, item] of firstTwo.entries()) {
+      const session = await ctx.db.get(item.id)
+      if (!session) throw new Error('Session shell disappeared')
+      const supportIds = await supportedSourceIds(ctx, userId, session.primaryObjectiveId)
+      const inputDigest = await digest({ planRevisionId: String(planRevision._id), sessionId: String(session._id), sessionRevision: session.revision, objectiveId: String(session.primaryObjectiveId), sourceIds: supportIds.map(String).sort() })
+      const jobId = await ctx.db.insert('learnJobs', { userId, learningVoidId: learningVoid._id, blueprintRevisionId: blueprint._id, studyPlanRevisionId: planRevision._id, studySessionId: session._id, type: 'session_content_generation', status: 'queued', revision: 1, idempotencyKey: `session-content:${planRevision._id}:${index}`, requestFingerprint: inputDigest, inputDigest, expectedVoidRevision: learningVoid.revision + 1, expectedBlueprintRecordRevision: blueprint.recordRevision, expectedSessionRevision: 1, attempts: 0, dispatchSupportingSourceSnapshotIds: supportIds, providerEnabled: process.env.LEARN_V2_SESSION_CONTENT_PROVIDER_ENABLED === 'true', providerModel: process.env.LEARN_V2_SESSION_CONTENT_MODEL?.trim() || undefined, providerPolicyVersion: 'learn-v2.session-content-provider.v1', createdAt: now, updatedAt: now })
+      await ctx.scheduler.runAfter(0, internal.learnV2SessionContent.executeSessionContentGeneration, { tokenIdentifier: userId, jobId, expectedRevision: 1 })
+    }
     const response = { _id: planRevision._id, status: 'accepted' as const, voidStatus: 'scheduled' as const, sessionCount: result.placements.length, recordRevision: (planRevision.recordRevision ?? 0) + 1 }
     await audit(ctx, { userId, learningVoidId: learningVoid._id, studyPlanRevisionId: planRevision._id, reasonCode: 'preview_accepted', details: { blueprintRevisionId: planRevision.blueprintRevisionId, schedulerVersion: planRevision.schedulerVersion, timezone: planRevision.timezone }, nowUtcMs: now })
     await receipt(ctx, { userId, learningVoidId: learningVoid._id, idempotencyKey: args.idempotencyKey, command: 'acceptPlanPreview', requestFingerprint, response, nowUtcMs: now })
@@ -245,18 +274,31 @@ export const reflowFutureIncomplete = mutation({
       await audit(ctx, { userId, learningVoidId: learningVoid._id, studyPlanRevisionId: plan._id, studySessionId: session._id, reasonCode: session.status === 'missed' ? 'missed_session_replacement' : 'future_incomplete_reflow', details: { priorStatus: session.status, scheduledStartAt: session.scheduledStartAt }, nowUtcMs: now })
     }
     const successorId = await ctx.db.insert('studyPlanRevisions', { userId, studyPlanId: plan.studyPlanId, learningVoidId: learningVoid._id, revision: plan.revision + 1, recordRevision: 1, status: 'accepted', parentRevisionId: plan._id, changeReason: 'future_incomplete_reflow', blueprintRevisionId: plan.blueprintRevisionId, blueprintRecordRevision: plan.blueprintRecordRevision, schedulerVersion: LEARN_V2_SCHEDULER_VERSION, timezone: storedInput.timezone, inputSnapshot: JSON.stringify({ ...storedInput, nowUtcMs: now }), resultSnapshot: JSON.stringify(reflow), feasibility: 'feasible', createdAt: now, acceptedAt: now, updatedAt: now })
+    const generationCandidates: Array<{ id: Id<'studySessions'>, objectiveId: Id<'learnObjectives'>, revision: number, scheduledStartAt: number }> = []
     for (const sessionId of reflow.replacedSessionIds) {
       const session = sessions.find(row => String(row._id) === sessionId)
       if (!session) throw new Error('Reflow session disappeared')
       const placement = reflow.replacements.find(row => row.id === session.placementId)
       if (!placement) throw new Error('Future incomplete session has no replacement placement')
-      await ctx.db.insert('studySessions', { userId, studyPlanRevisionId: successorId, primaryObjectiveId: session.primaryObjectiveId, placementId: placement.id, status: 'planned', revision: 1, scheduledStartAt: placement.startUtcMs, scheduledEndAt: placement.endUtcMs, timezone: storedInput.timezone, offsetMinutes: placement.offsetMinutes, placementKind: placement.kind, schedulingPriority: placement.priority, schedulerVersion: LEARN_V2_SCHEDULER_VERSION, auditReasonCode: 'future_incomplete_reflow' })
+      const successorSessionId = await ctx.db.insert('studySessions', { userId, studyPlanRevisionId: successorId, primaryObjectiveId: session.primaryObjectiveId, placementId: placement.id, status: 'planned', revision: 1, scheduledStartAt: placement.startUtcMs, scheduledEndAt: placement.endUtcMs, timezone: storedInput.timezone, offsetMinutes: placement.offsetMinutes, placementKind: placement.kind, schedulingPriority: placement.priority, schedulerVersion: LEARN_V2_SCHEDULER_VERSION, auditReasonCode: 'future_incomplete_reflow' })
+      generationCandidates.push({ id: successorSessionId, objectiveId: session.primaryObjectiveId, revision: 1, scheduledStartAt: placement.startUtcMs })
     }
     const carriedStatuses = new Set(['planned', 'ready', 'in_progress', 'blocked', 'generation_failed', 'needs_reschedule'])
     for (const sessionId of reflow.preservedSessionIds) {
       const session = sessions.find(row => String(row._id) === sessionId)
       if (!session || session.scheduledEndAt === undefined || session.scheduledEndAt <= now || !carriedStatuses.has(session.status)) continue
-      await ctx.db.insert('studySessions', { userId, studyPlanRevisionId: successorId, primaryObjectiveId: session.primaryObjectiveId, placementId: session.placementId, status: session.status, revision: session.revision, scheduledStartAt: session.scheduledStartAt, scheduledEndAt: session.scheduledEndAt, timezone: session.timezone, offsetMinutes: session.offsetMinutes, placementKind: session.placementKind, schedulingPriority: session.schedulingPriority, schedulerVersion: session.schedulerVersion, auditReasonCode: 'preserved_during_reflow' })
+      // Content belongs to the immutable old session identity. A successor
+      // shell must regenerate rather than exposing `ready` without content.
+      const successorSessionId = await ctx.db.insert('studySessions', { userId, studyPlanRevisionId: successorId, primaryObjectiveId: session.primaryObjectiveId, placementId: session.placementId, status: session.status === 'ready' ? 'planned' : session.status, revision: session.status === 'ready' ? 1 : session.revision, scheduledStartAt: session.scheduledStartAt, scheduledEndAt: session.scheduledEndAt, timezone: session.timezone, offsetMinutes: session.offsetMinutes, placementKind: session.placementKind, schedulingPriority: session.schedulingPriority, schedulerVersion: session.schedulerVersion, auditReasonCode: session.status === 'ready' ? 'ready_content_regeneration_required' : 'preserved_during_reflow' })
+      if (session.status === 'ready' || session.status === 'planned') generationCandidates.push({ id: successorSessionId, objectiveId: session.primaryObjectiveId, revision: session.status === 'ready' ? 1 : session.revision, scheduledStartAt: session.scheduledStartAt })
+    }
+    if (plan.blueprintRevisionId) {
+      for (const session of generationCandidates.sort((a, b) => a.scheduledStartAt - b.scheduledStartAt || String(a.id).localeCompare(String(b.id))).slice(0, 2)) {
+        const sourceIds = await supportedSourceIds(ctx, userId, session.objectiveId)
+        const inputDigest = await digest({ planRevisionId: String(successorId), sessionId: String(session.id), sessionRevision: session.revision, objectiveId: String(session.objectiveId), sourceIds: sourceIds.map(String).sort() })
+        const jobId = await ctx.db.insert('learnJobs', { userId, learningVoidId: learningVoid._id, blueprintRevisionId: plan.blueprintRevisionId, studyPlanRevisionId: successorId, studySessionId: session.id, type: 'session_content_generation', status: 'queued', revision: 1, idempotencyKey: `session-content:${successorId}:${session.id}`, requestFingerprint: inputDigest, inputDigest, expectedVoidRevision: learningVoid.revision, expectedBlueprintRecordRevision: plan.blueprintRecordRevision, expectedSessionRevision: session.revision, attempts: 0, dispatchSupportingSourceSnapshotIds: sourceIds, providerEnabled: process.env.LEARN_V2_SESSION_CONTENT_PROVIDER_ENABLED === 'true', providerModel: process.env.LEARN_V2_SESSION_CONTENT_MODEL?.trim() || undefined, providerPolicyVersion: 'learn-v2.session-content-provider.v1', createdAt: now, updatedAt: now })
+        await ctx.scheduler.runAfter(0, internal.learnV2SessionContent.executeSessionContentGeneration, { tokenIdentifier: userId, jobId, expectedRevision: 1 })
+      }
     }
     await ctx.db.patch(plan._id, { status: 'superseded', recordRevision: (plan.recordRevision ?? 0) + 1, updatedAt: now })
     await ctx.db.patch(planRoot._id, { activeRevisionId: successorId, updatedAt: now })
