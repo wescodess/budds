@@ -22,7 +22,7 @@ async function setupProjection() {
     const learningVoidId = await ctx.db.insert('learningVoids', {
       userId: OWNER.tokenIdentifier,
       folderId,
-      title: 'Private learning title',
+      title: 'Private learning title PRIVATE_FILENAME.pdf PRIVATE_EXCERPT https://private.example/source',
       status: 'scheduled',
       revision: 1,
       createdAt: now,
@@ -137,8 +137,13 @@ describe('Learn V2 Google projection', () => {
       expect(body.id).toMatch(/^b[0-9a-v]{51}$/)
       expect(body.summary).toBe('Budds study session')
       expect(body.description).toBe('https://budds.test/app/learn/today')
-      expect(JSON.stringify(body)).not.toContain('Private learning title')
-      expect(JSON.stringify(body)).not.toContain('Private objective title')
+      for (const privateValue of [
+        'Private learning title',
+        'Private objective title',
+        'PRIVATE_FILENAME.pdf',
+        'PRIVATE_EXCERPT',
+        'https://private.example/source',
+      ]) expect(JSON.stringify(body)).not.toContain(privateValue)
       expect(body.extendedProperties.private.buddsProjection).not.toContain(String(setup.studySessionId))
       return new Response(JSON.stringify({ etag: 'etag-1', updated: '2030-01-01T00:00:00Z' }), { status: 200 })
     })

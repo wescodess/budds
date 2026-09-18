@@ -105,6 +105,13 @@ export const markWatchStopped = internalMutation({ args: { calendarConnectionId:
   const row = await ctx.db.query('calendarWatchChannels').withIndex('by_calendarConnectionId_and_channelId', q => q.eq('calendarConnectionId', args.calendarConnectionId).eq('channelId', args.channelId)).unique()
   if (!row) return false
   await ctx.db.patch(row._id, { status: 'stopped', updatedAt: Date.now() })
+  const connection = await ctx.db.get(args.calendarConnectionId)
+  // The connection fields are a compatibility mirror for the current ledger
+  // channel. Clearing them once that channel stops prevents a later
+  // provider-first disconnect from treating the same channel as pre-ledger.
+  if (connection?.learnV2WatchChannelId === args.channelId) {
+    await ctx.db.patch(connection._id, { learnV2WatchChannelId: undefined, learnV2WatchResourceId: undefined, learnV2WatchTokenHash: undefined, learnV2WatchExpiresAt: undefined })
+  }
   return true
 } })
 
