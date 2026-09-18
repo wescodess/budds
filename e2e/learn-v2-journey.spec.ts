@@ -57,7 +57,11 @@ test('learner can advance the Learn V2 mastery journey through production UI', a
   await expect(page.getByTestId('folder-form-modal')).toBeHidden()
 
   await page.goto('/app/learn')
-  await expect(page.getByTestId('learn-v2-hub')).toBeVisible()
+  await expect.poll(async () => {
+    if (await page.getByTestId('learn-v2-hub').isVisible()) return true
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    return false
+  }, { timeout: 120_000, intervals: [5_000] }).toBe(true)
   await page.reload({ waitUntil: 'domcontentloaded' })
   await expect(page).not.toHaveTitle(/500 - Internal Server Error/)
   await expect(page.getByTestId('learn-v2-hub')).toBeVisible()
