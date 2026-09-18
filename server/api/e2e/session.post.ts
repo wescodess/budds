@@ -1,5 +1,5 @@
-import { getConvexSiteUrl } from '~/server/utils/convex-site-url'
-import { isAuthorizedE2eRequest } from '~/server/utils/e2e-mode'
+import { getConvexSiteUrl } from '../../utils/convex-site-url'
+import { isAuthorizedE2eRequest } from '../../utils/e2e-mode'
 
 type SessionBootstrap = { email?: unknown, password?: unknown, name?: unknown }
 
