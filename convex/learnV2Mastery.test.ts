@@ -140,6 +140,7 @@ describe('LA2-12 server-scored mastery attempts', () => {
     const scheduledStartAt = Date.now() + 60_000
     await future.t.run(ctx => ctx.db.patch(future.ids.sessionId, { status: 'ready', scheduledStartAt }))
     await expect(future.owner.query(api.learnV2Today.getToday, {})).resolves.toMatchObject({ status: 'empty', nextScheduledAt: scheduledStartAt })
+    await expect(future.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: future.ids.sessionId, expectedSessionRevision: 7, expectedContentRevision: 11, idempotencyKey: 'future-start' })).rejects.toThrow(/has not started/)
 
     const mismatched = await fixture()
     await mismatched.t.run(ctx => ctx.db.patch(mismatched.ids.sessionId, { startedSessionContentId: undefined }))

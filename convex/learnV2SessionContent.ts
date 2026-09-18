@@ -1014,6 +1014,8 @@ export const startStudySession = mutation({
       session.revision !== args.expectedSessionRevision
     )
       throw new Error("Study session is not ready");
+    if (session.scheduledStartAt > Date.now())
+      throw new Error("Study session has not started");
     if (session.scheduledEndAt !== undefined && session.scheduledEndAt < Date.now())
       throw new Error("Study session window has expired");
     const content = await ctx.db

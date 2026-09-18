@@ -246,6 +246,7 @@ describe('Learn V2 session-content publication contract', () => {
       verifierDecisionsJson: verifierDecisionsJson(graph.snapshotId, graph.excerptId),
     })
     if (published.status !== 'ready') throw new Error('expected published session content')
+    await t.run(ctx => ctx.db.patch(graph.sessionId, { scheduledStartAt: Date.now() - 1 }))
     await expect(owner.mutation(api.learnV2SessionContent.startStudySession, {
       studySessionId: graph.sessionId, expectedSessionRevision: 2, expectedContentRevision: 2, idempotencyKey: 'start-exact-revision',
     })).rejects.toThrow(/Published session content is required/)
