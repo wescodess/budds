@@ -31,6 +31,7 @@ const BLUEPRINT_PROVIDER_POLICY_VERSION = 'learn-v2.blueprint-provider.v1'
 const blueprintMode = v.union(v.literal('understand'), v.literal('prepare'), v.literal('apply'))
 const blueprintDepth = v.union(v.literal('overview'), v.literal('working'), v.literal('deep'))
 const blueprintSourcePolicy = v.union(v.literal('folder_only'), v.literal('folder_plus_web'), v.literal('web_only'))
+const sessionMinutes = v.union(v.literal(15), v.literal(20), v.literal(25), v.literal(30), v.literal(45), v.literal(60))
 
 type BlueprintIntent = {
   version: typeof BLUEPRINT_INTENT_VERSION
@@ -38,6 +39,8 @@ type BlueprintIntent = {
   mode: 'understand' | 'prepare' | 'apply'
   desiredDepth: 'overview' | 'working' | 'deep'
   sourcePolicy: 'folder_only' | 'folder_plus_web' | 'web_only'
+  targetLocalDate: string | null
+  sessionMinutes: 15 | 20 | 25 | 30 | 45 | 60
 }
 
 function sourcePolicyAllowsOrigin(intent: BlueprintIntent, origin: Doc<'learnSourceIdentities'>['origin']) {
@@ -177,17 +180,29 @@ function boundedIntentText(value: string) {
   return normalized
 }
 
+function targetLocalDate(value: string | null) {
+  if (value === null) return null
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new Error('Target date must be an ISO local date')
+  const [year, month, day] = value.split('-').map(Number)
+  const date = new Date(Date.UTC(year!, month! - 1, day!))
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month! - 1 || date.getUTCDate() !== day) throw new Error('Target date must be an ISO local date')
+  return value
+}
+
 function blueprintIntent(blueprint: Doc<'learnBlueprintRevisions'>): BlueprintIntent {
   if (blueprint.intentVersion !== BLUEPRINT_INTENT_VERSION || !blueprint.desiredOutcome
     || !blueprint.mode || !blueprint.desiredDepth || !blueprint.sourcePolicy) {
     throw new Error('Blueprint intent must be configured before generation')
   }
+  if (blueprint.sessionMinutes !== undefined && ![15, 20, 25, 30, 45, 60].includes(blueprint.sessionMinutes)) throw new Error('Blueprint intent has an invalid session length')
   return {
     version: BLUEPRINT_INTENT_VERSION,
     desiredOutcome: boundedIntentText(blueprint.desiredOutcome),
     mode: blueprint.mode,
     desiredDepth: blueprint.desiredDepth,
     sourcePolicy: blueprint.sourcePolicy,
+    targetLocalDate: blueprint.targetLocalDate ?? null,
+    sessionMinutes: (blueprint.sessionMinutes ?? 25) as BlueprintIntent['sessionMinutes'],
   }
 }
 
@@ -362,12 +377,15 @@ export const configureBlueprintIntent = mutation({
     mode: blueprintMode,
     desiredDepth: blueprintDepth,
     sourcePolicy: blueprintSourcePolicy,
+    targetLocalDate: v.union(v.string(), v.null()),
+    sessionMinutes,
     idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     assertPositiveRevision(args.expectedBlueprintRecordRevision, 'Expected Blueprint record revision')
     assertIdempotencyKey(args.idempotencyKey)
     const desiredOutcome = boundedIntentText(args.desiredOutcome)
+    const normalizedTargetLocalDate = targetLocalDate(args.targetLocalDate)
     const userId = await requireLearnV2MutationAccess(ctx)
     const requestFingerprint = await digest({ command: 'configureBlueprintIntent', ...args, desiredOutcome })
     const replay = await ctx.db.query('learnLifecycleReceipts')
@@ -378,11 +396,11 @@ export const configureBlueprintIntent = mutation({
         || replay.blueprintRevisionId !== args.blueprintRevisionId || replay.blueprintRecordRevision === undefined) {
         throw new Error('Idempotency key reuse')
       }
-      return { blueprintRevisionId: replay.blueprintRevisionId, recordRevision: replay.blueprintRecordRevision, intent: { version: BLUEPRINT_INTENT_VERSION, desiredOutcome, mode: args.mode, desiredDepth: args.desiredDepth, sourcePolicy: args.sourcePolicy }, replayed: true }
+      return { blueprintRevisionId: replay.blueprintRevisionId, recordRevision: replay.blueprintRecordRevision, intent: { version: BLUEPRINT_INTENT_VERSION, desiredOutcome, mode: args.mode, desiredDepth: args.desiredDepth, sourcePolicy: args.sourcePolicy, targetLocalDate: normalizedTargetLocalDate, sessionMinutes: args.sessionMinutes }, replayed: true }
     }
     const blueprint = await requireCurrentBlueprint(ctx, userId, args.blueprintRevisionId)
     const learningVoid = await requireLiveVoid(ctx, userId, blueprint.learningVoidId)
-    if (learningVoid.status !== 'source_review' || blueprint.status !== 'source_review') throw new Error('Blueprint intent is not editable')
+    if (!((learningVoid.status === 'draft' && blueprint.status === 'draft') || (learningVoid.status === 'source_review' && blueprint.status === 'source_review'))) throw new Error('Blueprint intent is not editable')
     if (blueprint.recordRevision !== args.expectedBlueprintRecordRevision) throw new Error('Blueprint revision conflict')
     if (await activeJob(ctx, userId, blueprint._id)) throw new Error('Blueprint generation is already in progress')
     const recordRevision = blueprint.recordRevision + 1
@@ -392,6 +410,8 @@ export const configureBlueprintIntent = mutation({
       mode: args.mode,
       desiredDepth: args.desiredDepth,
       sourcePolicy: args.sourcePolicy,
+      targetLocalDate: normalizedTargetLocalDate ?? undefined,
+      sessionMinutes: args.sessionMinutes,
       recordRevision,
       updatedAt: Date.now(),
     })
@@ -408,7 +428,7 @@ export const configureBlueprintIntent = mutation({
       blueprintRecordRevision: recordRevision,
       createdAt: Date.now(),
     })
-    return { blueprintRevisionId: blueprint._id, recordRevision, intent: blueprintIntent({ ...blueprint, intentVersion: BLUEPRINT_INTENT_VERSION, desiredOutcome, mode: args.mode, desiredDepth: args.desiredDepth, sourcePolicy: args.sourcePolicy }), replayed: false }
+    return { blueprintRevisionId: blueprint._id, recordRevision, intent: blueprintIntent({ ...blueprint, intentVersion: BLUEPRINT_INTENT_VERSION, desiredOutcome, mode: args.mode, desiredDepth: args.desiredDepth, sourcePolicy: args.sourcePolicy, targetLocalDate: normalizedTargetLocalDate ?? undefined, sessionMinutes: args.sessionMinutes }), replayed: false }
   },
 })
 
