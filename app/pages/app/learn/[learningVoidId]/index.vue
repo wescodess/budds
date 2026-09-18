@@ -1,5 +1,6 @@
 <script setup lang="ts">
 /* eslint-disable @typescript-eslint/no-explicit-any -- session rows are an adapter boundary from the authoritative projection. */
+import { useLearnV2Journey } from '~/composables/useLearnV2Journey'
 import type { LearnMapEdit, LearnScheduleInput, LearnWorkspaceSection } from '~/types/learn-v2-journey'
 
 const route = useRoute()

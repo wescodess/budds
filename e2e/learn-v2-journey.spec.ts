@@ -56,6 +56,12 @@ test('learner can advance the Learn V2 mastery journey through production UI', a
   await page.getByTestId('folder-form-submit').click()
   await expect(page.getByTestId('folder-form-modal')).toBeHidden()
 
+  await page.goto('/app/learn')
+  await expect(page.getByTestId('learn-v2-hub')).toBeVisible()
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await expect(page).not.toHaveTitle(/500 - Internal Server Error/)
+  await expect(page.getByTestId('learn-v2-hub')).toBeVisible()
+
   await page.goto('/app/learn/create')
   await expect.poll(async () => {
     if (await page.getByTestId('learn-v2-outcome-canvas').isVisible()) return true
@@ -67,6 +73,11 @@ test('learner can advance the Learn V2 mastery journey through production UI', a
   await page.getByLabel('Source policy').selectOption('web_only')
   await page.getByTestId('learn-v2-outcome-continue').click()
   await expect(page).toHaveURL(/\/app\/learn\/[^/]+\?section=sources/)
+  await expect(page.getByTestId('learn-v2-evidence-desk')).toBeVisible()
+  // A hard refresh exercises the SSR entry path. Client-side navigation alone
+  // does not catch missing server imports for newly added composables.
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await expect(page).not.toHaveTitle(/500 - Internal Server Error/)
   await expect(page.getByTestId('learn-v2-evidence-desk')).toBeVisible()
   await page.getByTestId('learn-v2-source-url').fill('https://e2e.budds.invalid/source')
   await page.getByTestId('learn-v2-source-add-url').click()
@@ -91,6 +102,9 @@ test('learner can advance the Learn V2 mastery journey through production UI', a
   await expect(calibrateAction).toContainText('Calibrate your starting point', { timeout: 30_000 })
   await calibrateAction.click()
   await expect(page).toHaveURL(/\/calibration$/)
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await expect(page).not.toHaveTitle(/500 - Internal Server Error/)
+  await expect(page.getByTestId('learn-v2-calibration')).toBeVisible()
   for (let attempt = 1; attempt <= 3; attempt++) {
     await expect(page.getByTestId('learn-v2-calibration-response')).toBeVisible()
     await page.getByTestId('learn-v2-calibration-response').fill(`Cold attempt ${attempt}: I would explain the transfer orbit from the accepted source.`)

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useLearnV2Journey } from '~/composables/useLearnV2Journey'
+
 const router = useRouter()
 const { allowed, checkingAccess, hub } = useLearnV2Journey()
 function openMission(id: string) { void router.push(`/app/learn/${id}`) }
