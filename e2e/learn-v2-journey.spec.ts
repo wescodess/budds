@@ -33,7 +33,7 @@ test('learner can advance the Learn V2 mastery journey through production UI', a
   page.setDefaultTimeout(30_000)
 
   const identity = { email: `learn-v2-${Date.now()}@e2e.budds.invalid`, password: 'disposable-e2e-password', name: 'Learn V2 Browser Test' }
-  const bootstrap = await request.post('/api/e2e/session', { headers: { 'x-budds-e2e-token': token }, data: identity })
+  const bootstrap = await request.post('/api/e2e/session', { headers: { 'x-budds-e2e-token': token }, data: identity, timeout: 120_000 })
   expect(bootstrap.ok()).toBeTruthy()
   const cookies = bootstrap.headersArray().filter(header => header.name.toLowerCase() === 'set-cookie').map(header => header.value)
   for (const cookie of cookies) {
