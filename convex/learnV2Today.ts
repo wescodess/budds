@@ -4,6 +4,7 @@ import { requireLearnV2QueryAccess } from './lib/learnV2Access'
 
 const MAX_SESSIONS = 128
 const MAX_CLAIMS = 32
+const ACTIVE_SESSION_STATUSES: Array<Doc<'studySessions'>['status']> = ['planned', 'ready', 'in_progress', 'blocked', 'generation_failed']
 
 function rank(session: { placementKind?: string, schedulingPriority?: string, scheduledStartAt: number }, record: { state: string, nextReviewAt?: number } | null, now = Date.now()) {
   if (session.placementKind === 'retained_review' && session.scheduledStartAt <= now) return 0
@@ -21,12 +22,14 @@ export const getToday = query({
   args: {},
   handler: async (ctx) => {
     const userId = await requireLearnV2QueryAccess(ctx)
-    const sessions = await ctx.db.query('studySessions').withIndex('by_userId', q => q.eq('userId', userId)).take(MAX_SESSIONS + 1)
+    const sessions = (await Promise.all(ACTIVE_SESSION_STATUSES.map(status => ctx.db
+      .query('studySessions')
+      .withIndex('by_userId_and_status_and_scheduledStartAt', q => q.eq('userId', userId).eq('status', status))
+      .take(MAX_SESSIONS + 1)))).flat()
     if (sessions.length > MAX_SESSIONS) return { status: 'blocked' as const, reason: 'today_candidate_limit' }
     const now = Date.now()
     const candidates: Candidate[] = []
     for (const session of sessions) {
-      if (session.status !== 'planned' && session.status !== 'ready' && session.status !== 'in_progress' && session.status !== 'blocked' && session.status !== 'generation_failed') continue
       const plan = await ctx.db.get(session.studyPlanRevisionId); const root = plan && await ctx.db.get(plan.studyPlanId)
       const blueprint = plan?.blueprintRevisionId && await ctx.db.get(plan.blueprintRevisionId); const objective = await ctx.db.get(session.primaryObjectiveId)
       const voidRow = plan && await ctx.db.get(plan.learningVoidId); const folder = voidRow && await ctx.db.get(voidRow.folderId)

@@ -155,6 +155,27 @@ describe('LA2-12 server-scored mastery attempts', () => {
     await expect(expired.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: expired.ids.sessionId, expectedSessionRevision: 7, expectedContentRevision: 11, idempotencyKey: 'expired-start' })).rejects.toThrow(/window has expired/)
   })
 
+  test('ignores bounded inactive history when selecting an active Today session', async () => {
+    const { t, owner, ids } = await fixture()
+    await t.run(async (ctx) => {
+      for (let index = 0; index < 129; index += 1) {
+        await ctx.db.insert('studySessions', {
+          userId: OWNER.tokenIdentifier,
+          studyPlanRevisionId: ids.planRevisionId,
+          primaryObjectiveId: ids.objectiveId,
+          status: index % 2 === 0 ? 'completed' : 'cancelled',
+          revision: 1,
+          scheduledStartAt: Date.now() - 1_000_000 - index,
+        })
+      }
+    })
+
+    await expect(owner.query(api.learnV2Today.getToday, {})).resolves.toMatchObject({
+      status: 'ready',
+      sessionId: ids.sessionId,
+    })
+  })
+
   test('uses 79/80 boundary, persists remediation, and appends exactly one replay-safe attempt', async () => {
     const { t, owner, ids, args } = await fixture()
     await expect(owner.query(api.learnV2Today.getToday, {})).resolves.toMatchObject({ status: 'ready', sessionId: ids.sessionId, sessionRevision: 7, timezone: 'America/Toronto', content: { revision: 11 }, plan: { recordRevision: 5, blueprintRecordRevision: 3 } })
