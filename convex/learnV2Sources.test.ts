@@ -87,6 +87,20 @@ async function collectSourcesByStatus(
 }
 
 describe('Learn V2 source lifecycle', () => {
+  test('rejects direct web candidates when the blueprint is folder only', async () => {
+    const previous = process.env.LEARN_V2_ENABLED
+    process.env.LEARN_V2_ENABLED = 'true'
+    try {
+      const setupResult = await setup()
+      await setupResult.t.run(async ctx => ctx.db.patch(setupResult.blueprintRevisionId, { sourcePolicy: 'folder_only' }))
+      await expect(register(setupResult, 'folder-only-web')).rejects.toThrow(/only allows folder sources/)
+    }
+    finally {
+      if (previous === undefined) delete process.env.LEARN_V2_ENABLED
+      else process.env.LEARN_V2_ENABLED = previous
+    }
+  })
+
   test('atomically acquires a lease, denies a sibling race, commits, and replays exactly', async () => {
     const previous = process.env.LEARN_V2_ENABLED
     process.env.LEARN_V2_ENABLED = 'true'
