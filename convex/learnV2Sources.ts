@@ -452,7 +452,12 @@ export const listSourceReview = query({
   handler: async (ctx, args) => {
     const userId = await requireLearnV2QueryAccess(ctx)
     if (args.blueprintRevisionId === null) return { page: [], isDone: true, continueCursor: '' }
-    const blueprint = await requireNewestBlueprintRevision(ctx, userId, args.blueprintRevisionId)
+    const blueprint = await ctx.db.get(args.blueprintRevisionId)
+    if (!blueprint || blueprint.userId !== userId) throw new Error('Blueprint revision not found')
+    const newest = await ctx.db.query('learnBlueprintRevisions')
+      .withIndex('by_userId_and_blueprintId_and_revision', q => q.eq('userId', userId).eq('blueprintId', blueprint.blueprintId))
+      .order('desc').first()
+    if (!newest || newest._id !== blueprint._id) return { page: [], isDone: true, continueCursor: '' }
     await requireLiveVoid(ctx, userId, blueprint.learningVoidId)
     const result = await ctx.db.query('learnSourceSnapshots')
       .withIndex('by_userId_and_blueprintRevisionId', q => q
