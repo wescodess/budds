@@ -446,11 +446,12 @@ export const listSources = query({
 // canonical/private URLs, object keys, filenames, excerpts, and identity keys.
 export const listSourceReview = query({
   args: {
-    blueprintRevisionId: v.id('learnBlueprintRevisions'),
+    blueprintRevisionId: v.union(v.id('learnBlueprintRevisions'), v.null()),
     paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
     const userId = await requireLearnV2QueryAccess(ctx)
+    if (args.blueprintRevisionId === null) return { page: [], isDone: true, continueCursor: '' }
     const blueprint = await requireNewestBlueprintRevision(ctx, userId, args.blueprintRevisionId)
     await requireLiveVoid(ctx, userId, blueprint.learningVoidId)
     const result = await ctx.db.query('learnSourceSnapshots')
