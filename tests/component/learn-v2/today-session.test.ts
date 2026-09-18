@@ -6,6 +6,9 @@ const start = vi.fn()
 const assist = vi.fn()
 const submit = vi.fn()
 const content = ref<any>(null)
+const isOnline = ref(true)
+
+mockNuxtImport('useOnlineStatus', () => () => ({ isOnline }))
 
 mockNuxtImport('useConvexMutation', () => (reference: any) => {
   const name = getFunctionName(reference) ?? ''
@@ -26,6 +29,7 @@ describe('LearnV2TodaySession', () => {
     assist.mockReset().mockResolvedValue({ revision: 3, assistance: { content: 'Server assistance' } })
     submit.mockReset().mockResolvedValue({ status: 'completed', scorePercent: 80, state: 'independent', nextReviewAt: Date.UTC(2026, 8, 24, 13), feedback: { criterionResults: [{ key: 'accuracy', awarded: true, rationale: 'Correctly applied the evidence.' }], misconceptionTags: [] } })
     content.value = { revision: 2, blocks }
+    isOnline.value = true
   })
   async function mount() { const Comp = await import(path); return await mountSuspended(Comp.default, { props: { candidate } }) }
   async function startSession(wrapper: any) { await wrapper.find('[data-testid="learn-v2-start"]').trigger('click'); await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(1)) }
@@ -44,6 +48,26 @@ describe('LearnV2TodaySession', () => {
     const wrapper = await mount()
     expect(wrapper.findAll('button').filter((button: any) => button.text() === 'Start')).toHaveLength(1)
     expect(wrapper.find('[data-testid="learn-v2-phase-retrieval"]').exists()).toBe(false)
+  })
+  it('applies motion, contrast, and untimed-session preferences to rendering', async () => {
+    const wrapper = await mount()
+    expect(wrapper.text()).toContain('12 minutes')
+    await wrapper.get('[data-testid="learn-v2-reduce-motion"]').setValue(true)
+    await wrapper.get('[data-testid="learn-v2-enhanced-contrast"]').setValue(true)
+    await wrapper.get('[data-testid="learn-v2-hide-time"]').setValue(true)
+    const session = wrapper.get('[data-testid="learn-v2-session"]')
+    expect(session.classes()).toContain('learn-v2-reduced-motion')
+    expect(session.classes()).toContain('learn-v2-enhanced-contrast')
+    expect(wrapper.text()).not.toContain('12 minutes')
+  })
+  it('keeps server-scored sessions unavailable offline without queuing an attempt', async () => {
+    isOnline.value = false
+    const wrapper = await mount()
+    const startButton = wrapper.find('[data-testid="learn-v2-start"]')
+    expect((startButton.element as HTMLButtonElement).disabled).toBe(true)
+    expect(wrapper.get('[data-testid="learn-v2-offline-notice"]').text()).toContain('Server-scored sessions require a connection')
+    await startButton.trigger('click')
+    expect(start).not.toHaveBeenCalled()
   })
   it('progressively discloses the canonical phase order after start', async () => {
     const wrapper = await mount(); await startSession(wrapper)
@@ -81,7 +105,11 @@ describe('LearnV2TodaySession', () => {
     submit.mockResolvedValueOnce({ status: 'in_progress', replayed: false }).mockResolvedValueOnce({ status: 'completed', scorePercent: 80, state: 'independent' })
     const wrapper = await mount(); await startSession(wrapper); await reachConfidence(wrapper)
     await wrapper.find('textarea[aria-label="Teach it back"]').setValue('teach'); await wrapper.find('input[value="4"]').setValue(); await wrapper.find('[data-testid="learn-v2-submit"]').trigger('click')
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-v2-score-pending"]').exists()).toBe(true)); const first = submit.mock.calls[0]![0].idempotencyKey; await wrapper.find('[data-testid="learn-v2-score-retry"]').trigger('click'); await vi.waitFor(() => expect(submit).toHaveBeenCalledTimes(2)); expect(submit.mock.calls[1]![0].idempotencyKey).toBe(first)
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-v2-score-pending"]').exists()).toBe(true)); const first = submit.mock.calls[0]![0].idempotencyKey
+    isOnline.value = false; await wrapper.vm.$nextTick()
+    expect((wrapper.find('[data-testid="learn-v2-score-retry"]').element as HTMLButtonElement).disabled).toBe(true)
+    isOnline.value = true; await wrapper.vm.$nextTick(); await wrapper.find('[data-testid="learn-v2-score-retry"]').trigger('click')
+    await vi.waitFor(() => expect(submit).toHaveBeenCalledTimes(2)); expect(submit.mock.calls[1]![0].idempotencyKey).toBe(first)
   })
   it('announces and displays server feedback and next review', async () => {
     const wrapper = await mount(); await startSession(wrapper); await reachConfidence(wrapper)
