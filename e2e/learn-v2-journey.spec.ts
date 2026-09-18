@@ -87,7 +87,9 @@ test('learner can advance the Learn V2 mastery journey through production UI', a
   await expect(page.getByTestId('learn-v2-accept-map')).toBeVisible({ timeout: 30_000 })
   await page.getByTestId('learn-v2-accept-map').click()
 
-  await page.getByTestId('learn-v2-workspace-next-action').click()
+  const calibrateAction = page.getByTestId('learn-v2-workspace-next-action')
+  await expect(calibrateAction).toContainText('Calibrate your starting point', { timeout: 30_000 })
+  await calibrateAction.click()
   await expect(page).toHaveURL(/\/calibration$/)
   for (let attempt = 1; attempt <= 3; attempt++) {
     await expect(page.getByTestId('learn-v2-calibration-response')).toBeVisible()
