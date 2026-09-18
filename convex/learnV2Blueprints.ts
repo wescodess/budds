@@ -445,7 +445,7 @@ export const startBlueprintGeneration = mutation({
     if (map.milestones.length > 0 || map.objectives.length > 0) throw new Error('Blueprint revision already has map content')
     if (await activeJob(ctx, userId, blueprint._id)) throw new Error('Blueprint generation is already in progress')
     const unresolvedProviderOutcome = await ctx.db.query('learnJobs')
-      .withIndex('by_userId_and_blueprintRevisionId_and_type_and_status_and_terminalReason', q => q
+      .withIndex('by_userId_and_blueprintId_and_type_and_status_and_terminalReason', q => q
         .eq('userId', userId)
         .eq('blueprintRevisionId', blueprint._id)
         .eq('type', BLUEPRINT_JOB_TYPE)

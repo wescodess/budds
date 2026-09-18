@@ -11,8 +11,7 @@ onMounted(() => { hydrated.value = true })
 const showCoursesLoading = computed(() => !hydrated.value || isLoading.value)
 
 const { data: recentChatsData } = useConvexQuery(api.conversations.listRecentForUser, {})
-const { data: learnV2Access } = useConvexQuery(api.learnV2Access.status, {})
-const hasLearnV2Access = computed(() => (learnV2Access.value as { kind?: string } | undefined)?.kind === 'allowed')
+const { allowed: hasLearnV2Access } = useLearnV2Access()
 const mostRecent = computed(() => recentChatsData.value?.[0] ?? null)
 const continueHref = computed(() => {
   const convo = mostRecent.value

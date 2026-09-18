@@ -1,25 +1,59 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { getFunctionName } from 'convex/server'
+import { useNuxtApp } from '#app'
 
 const access = ref<any>({ kind: 'denied' })
 const accessPending = ref(false)
 const today = ref<any>(null)
+const accessQueryEnabled = ref<any>(null)
 
-mockNuxtImport('useConvexQuery', () => (reference: any) => {
+mockNuxtImport('useConvexQuery', () => (reference: any, _args: any, options?: any) => {
   const name = getFunctionName(reference) ?? ''
-  return name.includes('learnV2Access:status')
-    ? { data: access, pending: accessPending }
-    : { data: today, pending: ref(false) }
+  if (name.includes('learnV2Access:status')) {
+    accessQueryEnabled.value = options?.enabled ?? null
+    return { data: access, pending: accessPending }
+  }
+  return { data: today, pending: ref(false) }
 })
 
 const path = ['~', 'pages', 'app', 'learn', 'today.vue'].join('/')
+
+function convexAuth() {
+  const nuxtApp = useNuxtApp()
+  return {
+    ready: nuxtApp.$convexAuthReady as Ref<boolean>,
+    authenticated: nuxtApp.$convexAuthenticated as Ref<boolean>,
+  }
+}
 
 describe('Learn V2 Today route states', () => {
   beforeEach(() => {
     access.value = { kind: 'denied' }
     accessPending.value = false
     today.value = null
+    convexAuth().ready.value = true
+    convexAuth().authenticated.value = true
+    accessQueryEnabled.value = null
+  })
+
+  it('waits for Convex authentication before checking account access', async () => {
+    const auth = convexAuth()
+    auth.ready.value = false
+    auth.authenticated.value = false
+    const Page = await import(path)
+    const wrapper = await mountSuspended(Page.default)
+
+    expect(accessQueryEnabled.value?.value).toBe(false)
+    expect(wrapper.find('[data-testid="learn-v2-today-access-pending"]').exists()).toBe(true)
+
+    auth.ready.value = true
+    await wrapper.vm.$nextTick()
+    expect(accessQueryEnabled.value?.value).toBe(false)
+
+    auth.authenticated.value = true
+    await wrapper.vm.$nextTick()
+    expect(accessQueryEnabled.value?.value).toBe(true)
   })
 
   it('renders accessible access, loading, blocked, empty, and ready states', async () => {

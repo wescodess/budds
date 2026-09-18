@@ -351,7 +351,7 @@ export const getProjectionDisconnectBatch = internalQuery({
       return { activeCreate: false, projections: [] }
     }
     const activeCreate = await ctx.db.query('calendarProjections')
-      .withIndex('by_calendarConnectionId_and_status_and_providerCreateLeaseExpiresAt', q => q
+      .withIndex('by_connectionId_and_status_and_createLeaseExpiresAt', q => q
         .eq('calendarConnectionId', connection._id)
         .eq('status', 'creating')
         .gt('providerCreateLeaseExpiresAt', Date.now()))
