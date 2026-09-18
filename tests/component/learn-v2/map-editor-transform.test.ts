@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { reactive } from 'vue'
 import { applyLearnMapEdit, type LearnMapCandidate } from '../../../app/utils/learn-v2-map-editor'
 
 const assessment = { version: 'learn-v2.assessment.v1' as const, kind: 'bounded_rubric' as const, responseFormat: 'short_text' as const, instructions: 'Apply the accepted evidence.', passingScorePercent: 80 as const, criteria: [{ key: 'correct', description: 'Correct and supported.', weightPercent: 100 }] }
@@ -13,6 +14,11 @@ function candidate(): LearnMapCandidate {
 }
 
 describe('Learning map revision transform', () => {
+  it('accepts the reactive map projection used by the production workspace', () => {
+    const edited = applyLearnMapEdit(reactive(candidate()), { kind: 'move_objective', objectiveKey: 'objective-2', direction: 'up' }, {})
+    expect(edited.objectives[0]?.key).toBe('objective-2')
+  })
+
   it('reorders without changing objective identity or prerequisite identity', () => {
     const edited = applyLearnMapEdit(candidate(), { kind: 'move_objective', objectiveKey: 'objective-2', direction: 'up' }, {})
     expect(edited.objectives.map(objective => objective.key)).toEqual(['objective-2', 'objective-1', 'objective-3', 'objective-4', 'objective-5', 'objective-6'])
