@@ -10,7 +10,7 @@ const activeSection = computed<LearnWorkspaceSection>(() => ['overview', 'source
 const journey = useLearnV2Journey(id)
 const { allowed, checkingAccess, mission, snapshot, sources, objectives, readiness, plan, busy, error, generation, generationIsActive, canResearch, researching, researchResults } = journey
 const editingPlan = ref(false)
-
+const selectedSourceId = ref<string | null>(null)
 function editMap(payload: LearnMapEdit) { void journey.editLearningMap(payload) }
 function generationStatusLabel(status: string) { return ({ queued: 'Queued', leased: 'Preparing', running: 'Generating', awaiting_approval: 'Ready for review', completed: 'Completed', failed: 'Needs attention' } as Record<string, string>)[status] ?? status.replaceAll('_', ' ') }
 function savePlan(input: LearnScheduleInput) { if (plan.value) void journey.editPlanPreview(input, 'availability_changed').then(() => { editingPlan.value = false }); else void journey.createPlanPreview(input) }
@@ -38,7 +38,7 @@ function nextAction() {
         <LearnV2CapabilityShelf :objectives="objectives" @open-objective="navigate('progress')" @start-review="nextAction" />
       </section>
       <section v-else-if="activeSection === 'sources'" class="space-y-5">
-        <LearnV2EvidenceDesk :sources="sources" :can-research="canResearch" :research-busy="researching" :research-results="researchResults" @research="journey.researchPublicSources" @accept-source="sourceId => { const source = sources.find(item => item.id === sourceId); if (source) journey.prepareAndAcceptSource(source) }" @reject-source="sourceId => { const source = sources.find(item => item.id === sourceId); if (source) journey.rejectSource(source) }" @add-url="journey.addUrlSource" />
+        <LearnV2EvidenceDesk :sources="sources" :selected-source-id="selectedSourceId" :can-research="canResearch" :research-busy="researching" :research-results="researchResults" @select-source="selectedSourceId = $event" @research="journey.researchPublicSources" @accept-source="sourceId => { const source = sources.find(item => item.id === sourceId); if (source) journey.acceptSource(source) }" @prepare-source="sourceId => { const source = sources.find(item => item.id === sourceId); if (source) journey.prepareSource(source) }" @reject-source="sourceId => { const source = sources.find(item => item.id === sourceId); if (source) journey.rejectSource(source) }" @add-url="journey.addUrlSource" />
         <UiCard v-if="mission?.currentBlueprint" class="p-4"><p class="text-sm text-muted-foreground">When the accepted evidence is ready, generate an editable capability map.</p><p v-if="generation" class="mt-2 text-sm text-muted-foreground" data-testid="learn-v2-map-generation-status">Map generation: {{ generationStatusLabel(generation.status) }}<template v-if="generation.terminalReason"> · {{ generation.terminalReason.replaceAll('_', ' ') }}</template></p><UiButton class="mt-3" data-testid="learn-v2-generate-map" :disabled="busy || generationIsActive || !mission.sources.counts.accepted" @click="journey.startMapGeneration">{{ generationIsActive ? 'Generating learning map…' : 'Generate learning map' }}</UiButton></UiCard>
       </section>
       <section v-else-if="activeSection === 'map'" class="space-y-5">
