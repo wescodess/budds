@@ -22,7 +22,13 @@ type Candidate = {
 }
 type Block = { kind: string, content: string, order?: number }
 type SessionContent = { revision: number, blocks: Block[] } | null
-type Feedback = { scorePercent?: number, state?: string, replayed?: boolean }
+type Feedback = {
+  scorePercent?: number
+  state?: string
+  nextReviewAt?: number | null
+  replayed?: boolean
+  feedback?: { criterionResults: Array<{ key: string, awarded: boolean, rationale?: string }>, misconceptionTags: string[] }
+}
 
 const { candidate } = defineProps<{ candidate: Candidate }>()
 
@@ -33,9 +39,11 @@ const submitMutation = import.meta.client ? useConvexAction(api.learnV2Mastery.s
 const started = ref(false)
 const sessionRevision = ref(candidate.sessionRevision)
 const contentRevision = ref(candidate.contentRevision)
-const phase = ref<'start' | 'retrieval' | 'objective' | 'cold_attempt' | 'explanation' | 'independent_application' | 'confidence_teach_back' | 'feedback' | 'next_review'>('start')
+const phase = ref<'start' | 'retrieval' | 'prediction' | 'teaching' | 'fading' | 'transfer' | 'confidence' | 'feedback' | 'next_review'>('start')
 const prediction = ref('')
-const response = ref('')
+const fadedResponse = ref('')
+const transferResponse = ref('')
+const teachBack = ref('')
 const confidence = ref<number | null>(null)
 const hint = ref<string | null>(null)
 const reveal = ref<string | null>(null)
@@ -58,11 +66,16 @@ const contentQuery = import.meta.client
 
 const blocks = computed(() => ((contentQuery.data?.value as SessionContent)?.blocks ?? []).slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0)))
 function block(kind: string) { return blocks.value.find(item => item.kind === kind)?.content ?? '' }
-const currentContent = computed(() => block(phase.value))
+const blockKind = computed(() => ({ retrieval: 'retrieval', prediction: 'cold_attempt', teaching: 'explanation', transfer: 'independent_application', confidence: 'confidence_teach_back' } as const)[phase.value as 'retrieval' | 'prediction' | 'teaching' | 'transfer' | 'confidence'])
+const currentContent = computed(() => phase.value === 'fading' ? 'Try a faded practice response with as little support as you can. A server-recorded hint is available if you need it.' : blockKind.value ? block(blockKind.value) : '')
+const phaseLabel = computed(() => ({ retrieval: 'Retrieval', prediction: 'Prediction', teaching: 'Teaching', fading: 'Fading practice', transfer: 'Transfer', confidence: 'Confidence and teach-back' } as const)[phase.value as 'retrieval' | 'prediction' | 'teaching' | 'fading' | 'transfer' | 'confidence'] ?? '')
+const contentReady = computed(() => blocks.value.length > 0 && (phase.value === 'fading' || phase.value === 'feedback' || phase.value === 'next_review' || !!currentContent.value))
 const canContinue = computed(() => {
-  if (phase.value === 'cold_attempt') return prediction.value.trim().length > 0
-  if (phase.value === 'independent_application') return response.value.trim().length > 0
-  if (phase.value === 'confidence_teach_back') return confidence.value !== null && response.value.trim().length > 0
+  if (!contentReady.value) return false
+  if (phase.value === 'prediction') return prediction.value.trim().length > 0
+  if (phase.value === 'fading') return fadedResponse.value.trim().length > 0
+  if (phase.value === 'transfer') return transferResponse.value.trim().length > 0
+  if (phase.value === 'confidence') return confidence.value !== null && teachBack.value.trim().length > 0
   return true
 })
 
@@ -101,7 +114,7 @@ async function submit() {
   busy.value = true; error.value = null
   submitKey.value ??= makeKey('learn-v2-attempt')
   try {
-    const result = await submitMutation.mutate({ studySessionId: candidate.studySessionId as never, expectedSessionRevision: sessionRevision.value, expectedContentRevision: contentRevision.value, expectedPlanRecordRevision: candidate.planRecordRevision, expectedBlueprintRecordRevision: candidate.blueprintRecordRevision, response: response.value.trim(), confidence: confidence.value as number, idempotencyKey: submitKey.value }) as { status: 'completed' | 'in_progress', scorePercent?: number, state?: string, replayed?: boolean }
+    const result = await submitMutation.mutate({ studySessionId: candidate.studySessionId as never, expectedSessionRevision: sessionRevision.value, expectedContentRevision: contentRevision.value, expectedPlanRecordRevision: candidate.planRecordRevision, expectedBlueprintRecordRevision: candidate.blueprintRecordRevision, response: transferResponse.value.trim(), confidence: confidence.value as number, idempotencyKey: submitKey.value }) as Feedback & { status: 'completed' | 'in_progress' }
     if (result.status === 'in_progress') { scorePending.value = true; notice.value = 'Scoring is still in progress. Use retry to reconcile this attempt.'; return }
     feedback.value = result; scorePending.value = false; move('feedback')
   } catch (cause) { error.value = getErrorMessage(cause, 'Could not submit your response. Try again.') }
@@ -117,17 +130,18 @@ async function retryScore() { await submit() }
     <p v-if="error" role="alert" data-testid="learn-v2-error" class="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{{ error }}</p>
     <div v-if="phase === 'start'" class="rounded-lg border p-5"><p>Ready for a focused, evidence-grounded session.</p><button type="button" data-testid="learn-v2-start" :disabled="busy" class="mt-4 rounded bg-primary px-4 py-2 text-primary-foreground disabled:opacity-50" @click="start">{{ busy ? 'Starting…' : 'Start' }}</button></div>
     <template v-else>
-      <article v-if="phase !== 'feedback' && phase !== 'next_review'" class="rounded-lg border p-5" :data-testid="`learn-v2-phase-${phase}`"><h2 class="text-lg font-medium">{{ phase.replaceAll('_', ' ') }}</h2><p class="mt-3 whitespace-pre-wrap">{{ currentContent }}</p>
-        <label v-if="phase === 'cold_attempt'" class="mt-4 block">Your prediction<textarea v-model="prediction" aria-label="Your prediction" class="mt-1 w-full rounded border p-2" /></label>
-        <template v-if="phase === 'explanation'"><button type="button" data-testid="learn-v2-reveal" :disabled="busy || !!reveal" class="mt-4 rounded border px-3 py-2 disabled:opacity-50" @click="assistance('answer_reveal')">Reveal worked example</button><p v-if="reveal" data-testid="learn-v2-reveal-content" class="mt-3 whitespace-pre-wrap">{{ reveal }}</p></template>
-        <template v-if="phase === 'independent_application'"><label class="mt-4 block">Your response<textarea v-model="response" aria-label="Your response" class="mt-1 w-full rounded border p-2" /></label><button type="button" data-testid="learn-v2-hint" :disabled="busy || !!hint" class="mt-3 rounded border px-3 py-2 disabled:opacity-50" @click="assistance('substantive_hint')">Get a hint</button><p v-if="hint" data-testid="learn-v2-hint-content" class="mt-3 whitespace-pre-wrap">{{ hint }}</p></template>
-        <template v-if="phase === 'confidence_teach_back'"><label class="mt-4 block">Teach it back<textarea v-model="response" aria-label="Teach it back" class="mt-1 w-full rounded border p-2" /></label><fieldset class="mt-3"><legend>Confidence</legend><label v-for="value in 5" :key="value" class="mr-3"><input v-model="confidence" type="radio" name="confidence" :value="value"> {{ value }}</label></fieldset></template>
-        <button v-if="phase !== 'confidence_teach_back'" type="button" data-testid="learn-v2-continue" :disabled="busy || !canContinue" class="mt-4 rounded bg-primary px-4 py-2 text-primary-foreground disabled:opacity-50" @click="phase === 'retrieval' ? move('objective') : phase === 'objective' ? move('cold_attempt') : phase === 'cold_attempt' ? move('explanation') : phase === 'explanation' ? move('independent_application') : move('confidence_teach_back')">Continue</button>
+      <article v-if="phase !== 'feedback' && phase !== 'next_review'" class="rounded-lg border p-5" :data-testid="`learn-v2-phase-${phase}`"><h2 class="text-lg font-medium">{{ phaseLabel }}</h2><p v-if="currentContent" class="mt-3 whitespace-pre-wrap">{{ currentContent }}</p><p v-else role="status" class="mt-3 text-muted-foreground">Loading session content…</p>
+        <label v-if="phase === 'prediction'" class="mt-4 block">Your prediction<textarea v-model="prediction" aria-label="Your prediction" class="mt-1 w-full rounded border p-2" /></label>
+        <template v-if="phase === 'teaching'"><button type="button" data-testid="learn-v2-reveal" :disabled="busy || !!reveal" class="mt-4 rounded border px-3 py-2 disabled:opacity-50" @click="assistance('answer_reveal')">Reveal worked example</button><p v-if="reveal" data-testid="learn-v2-reveal-content" class="mt-3 whitespace-pre-wrap">{{ reveal }}</p></template>
+        <template v-if="phase === 'fading'"><label class="mt-4 block">Your faded-practice response<textarea v-model="fadedResponse" aria-label="Your faded-practice response" class="mt-1 w-full rounded border p-2" /></label><button type="button" data-testid="learn-v2-hint" :disabled="busy || !!hint" class="mt-3 rounded border px-3 py-2 disabled:opacity-50" @click="assistance('substantive_hint')">Get a fading hint</button><p v-if="hint" data-testid="learn-v2-hint-content" class="mt-3 whitespace-pre-wrap">{{ hint }}</p></template>
+        <label v-if="phase === 'transfer'" class="mt-4 block">Your transfer response<textarea v-model="transferResponse" aria-label="Your transfer response" class="mt-1 w-full rounded border p-2" /></label>
+        <template v-if="phase === 'confidence'"><label class="mt-4 block">Teach it back<textarea v-model="teachBack" aria-label="Teach it back" class="mt-1 w-full rounded border p-2" /></label><fieldset class="mt-3"><legend>Confidence</legend><label v-for="value in 5" :key="value" class="mr-3"><input v-model="confidence" type="radio" name="confidence" :value="value"> {{ value }}</label></fieldset></template>
+        <button v-if="phase !== 'confidence'" type="button" data-testid="learn-v2-continue" :disabled="busy || !canContinue" class="mt-4 rounded bg-primary px-4 py-2 text-primary-foreground disabled:opacity-50" @click="phase === 'retrieval' ? move('prediction') : phase === 'prediction' ? move('teaching') : phase === 'teaching' ? move('fading') : phase === 'fading' ? move('transfer') : move('confidence')">Continue</button>
         <button v-else type="button" data-testid="learn-v2-submit" :disabled="busy || !canContinue" class="mt-4 rounded bg-primary px-4 py-2 text-primary-foreground disabled:opacity-50" @click="submit">{{ busy ? 'Submitting…' : 'Submit for feedback' }}</button>
       </article>
       <article v-if="scorePending" data-testid="learn-v2-score-pending" class="rounded-lg border p-5" role="status">Scoring is in progress. <button type="button" data-testid="learn-v2-score-retry" :disabled="busy" class="underline" @click="retryScore">Retry</button></article>
-      <article v-if="phase === 'feedback'" data-testid="learn-v2-feedback" class="rounded-lg border p-5"><h2 class="text-lg font-medium">Server feedback</h2><p v-if="feedback?.scorePercent !== undefined">Score: {{ feedback.scorePercent }}%</p><p v-if="feedback?.state">Mastery state: {{ feedback.state }}</p><button type="button" data-testid="learn-v2-next-review" class="mt-4 rounded bg-primary px-4 py-2 text-primary-foreground" @click="move('next_review')">See next review</button></article>
-      <article v-if="phase === 'next_review'" data-testid="learn-v2-next-review-panel" class="rounded-lg border p-5"><h2 class="text-lg font-medium">Next review</h2><p>{{ candidate.nextScheduledAt ? new Date(candidate.nextScheduledAt).toLocaleString() : 'Your next review will appear when scheduled.' }}</p></article>
+      <article v-if="phase === 'feedback'" data-testid="learn-v2-feedback" class="rounded-lg border p-5"><h2 class="text-lg font-medium">Server feedback</h2><p v-if="feedback?.scorePercent !== undefined">Score: {{ feedback.scorePercent }}%</p><p v-if="feedback?.state">Mastery state: {{ feedback.state }}</p><ul v-if="feedback?.feedback?.criterionResults.length" class="mt-3 list-disc space-y-1 pl-5"><li v-for="criterion in feedback.feedback.criterionResults" :key="criterion.key"><span class="font-medium">{{ criterion.key }}:</span> {{ criterion.awarded ? 'met' : 'not yet' }}<span v-if="criterion.rationale"> — {{ criterion.rationale }}</span></li></ul><p v-if="feedback?.feedback?.misconceptionTags.length" class="mt-3">Review: {{ feedback.feedback.misconceptionTags.join(', ') }}</p><button type="button" data-testid="learn-v2-next-review" class="mt-4 rounded bg-primary px-4 py-2 text-primary-foreground" @click="move('next_review')">See next review</button></article>
+      <article v-if="phase === 'next_review'" data-testid="learn-v2-next-review-panel" class="rounded-lg border p-5"><h2 class="text-lg font-medium">Next review</h2><p>{{ feedback?.nextReviewAt ? new Date(feedback.nextReviewAt).toLocaleString() : 'No further review is scheduled yet.' }}</p></article>
     </template>
   </section>
 </template>

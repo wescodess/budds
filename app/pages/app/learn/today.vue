@@ -1,15 +1,15 @@
 <script setup lang="ts">
 import { api } from '#convex/api'
 
-type TodayResult = { status: 'ready', sessionId: string, sessionRevision: number, content: { revision: number }, plan: { recordRevision: number, blueprintRecordRevision: number }, objective: { title: string, capability?: string | null, estimatedMinutes?: number | null }, scheduledStartAt: number, scheduledEndAt?: number | null, mastery?: { state?: string, nextReviewAt?: number | null }, nextScheduledAt?: number | null } | { status: 'pending' | 'blocked' | 'empty', reason?: string, nextScheduledAt?: number | null }
+type TodayResult = { status: 'ready', sessionId: string, sessionRevision: number, content: { revision: number }, plan: { recordRevision: number, blueprintRecordRevision: number }, objective: { title: string, capability?: string | null, estimatedMinutes?: number | null }, scheduledStartAt: number, scheduledEndAt?: number | null, timezone: string, mastery?: { state?: string, nextReviewAt?: number | null }, nextScheduledAt?: number | null } | { status: 'pending' | 'blocked' | 'empty', reason?: string, nextScheduledAt?: number | null }
 const access = import.meta.client ? useConvexQuery(api.learnV2Access.status, {}) : { data: ref({ kind: 'denied' }) }
-const today = import.meta.client ? useConvexQuery(api.learnV2Today.getToday, {}) : { data: ref<TodayResult | null>(null) }
 const allowed = computed(() => (access.data?.value as { kind?: string } | undefined)?.kind === 'allowed')
+const today = import.meta.client ? useConvexQuery(api.learnV2Today.getToday, {}, { enabled: allowed }) : { data: ref<TodayResult | null>(null) }
 const result = computed(() => today.data?.value as TodayResult | null | undefined)
 const candidate = computed(() => {
   if (result.value?.status !== 'ready') return null
   const row = result.value
-  return { studySessionId: row.sessionId, sessionRevision: row.sessionRevision, contentRevision: row.content.revision, planRecordRevision: row.plan.recordRevision, blueprintRecordRevision: row.plan.blueprintRecordRevision, objectiveTitle: row.objective.title, capability: row.objective.capability ?? undefined, estimatedMinutes: row.objective.estimatedMinutes ?? 10, scheduledStartAt: row.scheduledStartAt, scheduledEndAt: row.scheduledEndAt ?? undefined, timezone: 'UTC', reason: 'today', masteryState: row.mastery?.state, nextScheduledAt: row.nextScheduledAt ?? row.mastery?.nextReviewAt ?? undefined, progress: { retained: 0, independent: 0, total: 0 } }
+  return { studySessionId: row.sessionId, sessionRevision: row.sessionRevision, contentRevision: row.content.revision, planRecordRevision: row.plan.recordRevision, blueprintRecordRevision: row.plan.blueprintRecordRevision, objectiveTitle: row.objective.title, capability: row.objective.capability ?? undefined, estimatedMinutes: row.objective.estimatedMinutes ?? 10, scheduledStartAt: row.scheduledStartAt, scheduledEndAt: row.scheduledEndAt ?? undefined, timezone: row.timezone, reason: 'today', masteryState: row.mastery?.state, nextScheduledAt: row.nextScheduledAt ?? row.mastery?.nextReviewAt ?? undefined, progress: { retained: 0, independent: 0, total: 0 } }
 })
 </script>
 
