@@ -89,6 +89,49 @@ describe('Learn V2 journey workspace seams', () => {
     expect(original.attributes('rel')).toContain('noopener')
   })
 
+  it('makes unavailable evidence replaceable instead of leaving it preparing forever', async () => {
+    const Comp = await import(`${path}/EvidenceDesk.vue`)
+    const wrapper = await mountSuspended(Comp.default, {
+      props: {
+        sources: [{ id: 'source_failed', title: 'Unavailable reference', origin: 'user_url' as const, retrievedLabel: 'Could not retrieve', coverage: 'gap' as const, lifecycle: 'unavailable' as const, objectives: [], originalUrl: 'https://example.org/', accessNote: 'The source could not be retrieved.' }],
+        selectedSourceId: 'source_failed',
+      },
+    })
+
+    const inspector = wrapper.get('[data-testid="learn-v2-source-inspector"]')
+    expect(inspector.text()).toContain('Evidence is unavailable')
+    expect(inspector.text()).not.toContain('Preparing evidence')
+    await wrapper.get('[data-testid="learn-v2-source-replace-source_failed"]').trigger('click')
+    expect(wrapper.get('[data-testid="learn-v2-source-url"]').attributes('aria-describedby')).toBe('learn-v2-source-replacement-help')
+    expect(wrapper.emitted('replaceSource')?.[0]).toEqual(['source_failed'])
+  })
+
+  it('lets the learner prepare a candidate after a transient evidence check failure', async () => {
+    const Comp = await import(`${path}/EvidenceDesk.vue`)
+    const wrapper = await mountSuspended(Comp.default, {
+      props: { sources: [{ id: 'source_pending', title: 'Reference', origin: 'user_url' as const, retrievedLabel: 'candidate', coverage: 'partial' as const, lifecycle: 'candidate' as const, objectives: [] }] },
+    })
+
+    expect(wrapper.text()).not.toContain('Preparing evidence')
+    await wrapper.get('[data-testid="learn-v2-source-prepare-source_pending"]').trigger('click')
+    expect(wrapper.emitted('prepareSource')?.[0]).toEqual(['source_pending'])
+  })
+
+  it('opens the source the learner selects when the workspace does not control selection', async () => {
+    const Comp = await import(`${path}/EvidenceDesk.vue`)
+    const wrapper = await mountSuspended(Comp.default, {
+      props: { sources: [
+        { id: 'source_failed', title: 'Unavailable reference', origin: 'user_url' as const, retrievedLabel: 'unavailable', coverage: 'gap' as const, lifecycle: 'unavailable' as const, objectives: [] },
+        { id: 'source_ready', title: 'Ready reference', origin: 'folder_document' as const, retrievedLabel: 'evaluated', coverage: 'partial' as const, lifecycle: 'evaluated' as const, objectives: [] },
+      ] },
+    })
+
+    expect(wrapper.get('[data-testid="learn-v2-source-inspector"]').text()).toContain('Unavailable reference')
+    await wrapper.get('[data-testid="learn-v2-source-row-source_ready"]').trigger('click')
+    expect(wrapper.get('[data-testid="learn-v2-source-inspector"]').text()).toContain('Ready reference')
+    expect(wrapper.find('[data-testid="learn-v2-source-accept-source_ready"]').exists()).toBe(true)
+  })
+
   it('offers every workspace area and reports the blocked next action', async () => {
     const Comp = await import(`${path}/MissionWorkspaceShell.vue`)
     const wrapper = await mountSuspended(Comp.default, {

@@ -775,15 +775,13 @@ export const releaseFetchLease = internalMutation({
   },
 })
 
-export const recordEvaluation = internalMutation({
-  args: {
-    tokenIdentifier: v.string(),
-    sourceSnapshotId: v.id('learnSourceSnapshots'),
-    expectedRevision: v.number(),
-    idempotencyKey: v.string(),
-    conflictStatus: v.union(v.literal('clear'), v.literal('unresolved')),
-  },
-  handler: async (ctx, args) => {
+async function recordEvaluationCommand(ctx: MutationCtx, args: {
+  tokenIdentifier: string
+  sourceSnapshotId: Id<'learnSourceSnapshots'>
+  expectedRevision: number
+  idempotencyKey: string
+  conflictStatus: 'clear' | 'unresolved'
+}) {
     validateKey(args.idempotencyKey)
     validateRevision(args.expectedRevision)
     if (!(await hasLearnV2Access(ctx, args.tokenIdentifier))) throw new Error('Learn V2 access denied')
@@ -800,7 +798,34 @@ export const recordEvaluation = internalMutation({
     await ctx.db.patch(source._id, { status: 'evaluated', effectiveStatus: 'evaluated', conflictStatus: args.conflictStatus, evaluatedAt: now, updatedAt: now, recordRevision })
     const response = { sourceSnapshotId: source._id, status: 'evaluated', effectiveStatus: 'evaluated', recordRevision, conflictStatus: args.conflictStatus }
     return await saveReceipt(ctx, { userId: args.tokenIdentifier, learningVoidId: source.learningVoidId, sourceSnapshotId: source._id, idempotencyKey: args.idempotencyKey, command: 'evaluate_source', requestFingerprint, response })
+}
+
+export const recordEvaluation = internalMutation({
+  args: {
+    tokenIdentifier: v.string(),
+    sourceSnapshotId: v.id('learnSourceSnapshots'),
+    expectedRevision: v.number(),
+    idempotencyKey: v.string(),
+    conflictStatus: v.union(v.literal('clear'), v.literal('unresolved')),
   },
+  handler: recordEvaluationCommand,
+})
+
+/** Resumes the bounded review transition when retrieval committed but the
+ * follow-up evaluation call was interrupted. It cannot fetch or accept a
+ * source and retains the same revision and ownership guards as the internal
+ * orchestration path. */
+export const prepareFetchedSourceForReview = mutation({
+  args: {
+    sourceSnapshotId: v.id('learnSourceSnapshots'),
+    expectedRevision: v.number(),
+    idempotencyKey: v.string(),
+  },
+  handler: async (ctx, args) => await recordEvaluationCommand(ctx, {
+    ...args,
+    tokenIdentifier: await requireLearnV2MutationAccess(ctx),
+    conflictStatus: 'clear',
+  }),
 })
 
 // Folder evidence is already fetched into Budds-owned storage. This command is
