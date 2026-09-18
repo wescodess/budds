@@ -1,6 +1,6 @@
 # Learn Anything V2 production experience
 
-**Status:** implementation contract  
+**Status:** implementation contract
 **Owns:** user-facing Learn hub, Learning Mission workspace, Session Void, and browser acceptance path
 
 ## Product shape
