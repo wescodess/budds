@@ -201,6 +201,35 @@ jobs:
       - name: Run Phase 0-4 beta contracts
         run: pnpm verify:learn-v2-beta
 
+  learn-v2-calendar:
+    name: Learn V2 calendar admission gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: quality
+    env:
+      LEARN_V2_ENABLED: 'true'
+      LEARN_V2_CALENDAR_ENABLED: 'true'
+      LEARN_V2_CALENDAR_WEBHOOK_URL: 'https://calendar-webhook.invalid/learn-v2/calendar/webhook'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 9.12.3
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Run synthetic calendar admission contracts
+        run: pnpm verify:learn-v2-calendar
+
   burn-in:
     name: Scheduled burn-in
     runs-on: ubuntu-latest
@@ -242,7 +271,7 @@ jobs:
     name: CI gate
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [security, quality, test, build, learn-v2-beta, burn-in]
+    needs: [security, quality, test, build, learn-v2-beta, learn-v2-calendar, burn-in]
     if: always()
     steps:
       - name: Publish summary and enforce gate
@@ -252,6 +281,7 @@ jobs:
           TEST_RESULT: ${{ needs.test.result }}
           BUILD_RESULT: ${{ needs.build.result }}
           LEARN_V2_BETA_RESULT: ${{ needs.learn-v2-beta.result }}
+          LEARN_V2_CALENDAR_RESULT: ${{ needs.learn-v2-calendar.result }}
           BURN_IN_RESULT: ${{ needs.burn-in.result }}
         run: |
           {
@@ -262,6 +292,7 @@ jobs:
             echo "- Tests: $TEST_RESULT"
             echo "- Production build: $BUILD_RESULT"
             echo "- Learn V2 beta gate: $LEARN_V2_BETA_RESULT"
+            echo "- Learn V2 calendar admission gate: $LEARN_V2_CALENDAR_RESULT"
             echo "- Burn-in: $BURN_IN_RESULT"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -270,6 +301,7 @@ jobs:
           test "$TEST_RESULT" = 'success'
           test "$BUILD_RESULT" = 'success'
           test "$LEARN_V2_BETA_RESULT" = 'success'
+          test "$LEARN_V2_CALENDAR_RESULT" = 'success'
           if [[ "$BURN_IN_RESULT" != 'success' && "$BURN_IN_RESULT" != 'skipped' ]]; then
             exit 1
           fi
