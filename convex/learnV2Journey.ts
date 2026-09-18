@@ -205,10 +205,18 @@ export const getSessionCandidate = query({
     if (!plan.blueprintRevisionId) return null
     const blueprint = await ctx.db.get(plan.blueprintRevisionId)
     const objective = await ctx.db.get(session.primaryObjectiveId)
-    if (!blueprint || blueprint.userId !== userId || !objective || objective.userId !== userId || objective.blueprintRevisionId !== blueprint._id) return null
+    if (!blueprint || blueprint.userId !== userId || blueprint.status !== 'accepted'
+      || plan.blueprintRecordRevision !== blueprint.recordRevision
+      || !objective || objective.userId !== userId || objective.blueprintRevisionId !== blueprint._id) return null
     const content = session.status === 'in_progress' && session.startedSessionContentRevision !== undefined
       ? await ctx.db.query('sessionContent').withIndex('by_userId_and_studySessionId_and_revision', q => q.eq('userId', userId).eq('studySessionId', session._id).eq('revision', session.startedSessionContentRevision!)).unique()
       : await ctx.db.query('sessionContent').withIndex('by_userId_and_studySessionId_and_revision', q => q.eq('userId', userId).eq('studySessionId', session._id)).order('desc').first()
-    return { status: session.status, studySessionId: session._id, sessionRevision: session.revision, scheduledStartAt: session.scheduledStartAt, scheduledEndAt: session.scheduledEndAt, timezone: session.timezone, objective: { title: objective.title, capability: objective.capability, estimatedMinutes: objective.estimatedMinutes ?? null }, plan: { recordRevision: plan.recordRevision ?? 1 }, blueprint: { recordRevision: blueprint.recordRevision }, content: content?.status === 'published' ? { revision: content.revision } : null }
+    const contentIsPinned = content?.status === 'published'
+      && content.studyPlanRevisionId === plan._id
+      && content.blueprintRevisionId === blueprint._id
+      && content.objectiveId === objective._id
+      && (session.status !== 'in_progress'
+        || session.startedSessionContentId === content._id && session.startedSessionContentRevision === content.revision)
+    return { status: session.status, studySessionId: session._id, sessionRevision: session.revision, scheduledStartAt: session.scheduledStartAt, scheduledEndAt: session.scheduledEndAt, timezone: session.timezone, objective: { title: objective.title, capability: objective.capability, estimatedMinutes: objective.estimatedMinutes ?? null }, plan: { recordRevision: plan.recordRevision ?? 1 }, blueprint: { recordRevision: blueprint.recordRevision }, content: contentIsPinned ? { revision: content.revision } : null }
   },
 })
