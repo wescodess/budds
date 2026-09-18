@@ -4,6 +4,7 @@ import { convex } from '@convex-dev/better-auth/plugins'
 import { components, internal } from './_generated/api'
 import type { DataModel } from './_generated/dataModel'
 import authConfig from './auth.config'
+import { canBootstrapLearnV2E2e } from './lib/learnV2E2e'
 
 export const authComponent = createClient<DataModel>(components.betterAuth)
 
@@ -12,13 +13,11 @@ function normalizeUrl(value: string | undefined) {
 }
 
 function e2eEmailPasswordEnabled() {
-  if (process.env.BUDDS_E2E_MODE !== 'true' || (process.env.BUDDS_E2E_AUTH_TOKEN?.length ?? 0) < 32) return false
-  try {
-    return ['127.0.0.1', 'localhost'].includes(new URL(normalizeUrl(process.env.CONVEX_CLOUD_URL)).hostname)
-  }
-  catch {
-    return false
-  }
+  return canBootstrapLearnV2E2e({
+    BUDDS_E2E_MODE: process.env.BUDDS_E2E_MODE,
+    BUDDS_E2E_AUTH_TOKEN: process.env.BUDDS_E2E_AUTH_TOKEN,
+    CONVEX_CLOUD_URL: process.env.CONVEX_CLOUD_URL,
+  })
 }
 
 /**

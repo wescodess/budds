@@ -32,6 +32,32 @@ describe('Story 1.1 — Verify & Harden Authentication Flow', () => {
       expect(user!.avatarUrl).toBe('https://example.com/avatar.jpg')
     })
 
+    test('upsertUser grants the disposable local E2E cohort only under the loopback guard', async () => {
+      const previous = {
+        BUDDS_E2E_MODE: process.env.BUDDS_E2E_MODE,
+        BUDDS_E2E_AUTH_TOKEN: process.env.BUDDS_E2E_AUTH_TOKEN,
+        CONVEX_CLOUD_URL: process.env.CONVEX_CLOUD_URL,
+      }
+      process.env.BUDDS_E2E_MODE = 'true'
+      process.env.BUDDS_E2E_AUTH_TOKEN = 'a'.repeat(32)
+      process.env.CONVEX_CLOUD_URL = 'http://127.0.0.1:3210'
+      try {
+        const t = convexTest(schema, modules)
+        const asUser = t.withIdentity(TEST_IDENTITY)
+        await asUser.mutation(api.users.upsertUser, {})
+        const entitlement = await t.run(async (ctx) => (
+          await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', TEST_IDENTITY.tokenIdentifier)).unique()
+        )?.learnV2Entitlement)
+        expect(entitlement?.enabled).toBe(true)
+      }
+      finally {
+        for (const [name, value] of Object.entries(previous)) {
+          if (value === undefined) Reflect.deleteProperty(process.env, name)
+          else process.env[name] = value
+        }
+      }
+    })
+
     test('upsertUser updates existing user record on subsequent login', async () => {
       const t = convexTest(schema, modules)
       const asUser = t.withIdentity(TEST_IDENTITY)

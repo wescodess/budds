@@ -1,6 +1,7 @@
 import { mutation, query } from './_generated/server'
 import { AUDIO_OVERVIEW_DAILY_CAP, todayUtcYmd } from './lib/audioOverviewPolicy'
 import { getOptionalAuthUserId, requireAuth } from './lib/auth'
+import { canBootstrapLearnV2E2e } from './lib/learnV2E2e'
 
 export { AUDIO_OVERVIEW_DAILY_CAP }
 
@@ -10,6 +11,11 @@ export const upsertUser = mutation({
     const identity = await ctx.auth.getUserIdentity()
     if (!identity) throw new Error('Unauthenticated')
     const userId = await requireAuth(ctx)
+    const bootstrapLearnV2 = canBootstrapLearnV2E2e({
+      BUDDS_E2E_MODE: process.env.BUDDS_E2E_MODE,
+      BUDDS_E2E_AUTH_TOKEN: process.env.BUDDS_E2E_AUTH_TOKEN,
+      CONVEX_CLOUD_URL: process.env.CONVEX_CLOUD_URL,
+    })
 
     const existing = await ctx.db
       .query('users')
@@ -23,6 +29,9 @@ export const upsertUser = mutation({
         name: identity.name ?? existing.name,
         email: identity.email ?? existing.email,
         avatarUrl: identity.pictureUrl ?? existing.avatarUrl,
+        ...(bootstrapLearnV2 && existing.learnV2Entitlement === undefined
+          ? { learnV2Entitlement: { enabled: true, updatedAt: Date.now() } }
+          : {}),
       })
       return existing._id
     }
@@ -32,6 +41,9 @@ export const upsertUser = mutation({
       name: identity.name ?? 'Unknown',
       email: identity.email ?? undefined,
       avatarUrl: identity.pictureUrl ?? undefined,
+      ...(bootstrapLearnV2
+        ? { learnV2Entitlement: { enabled: true, updatedAt: Date.now() } }
+        : {}),
     })
   },
 })
