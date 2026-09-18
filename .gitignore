@@ -19,3 +19,6 @@ wrangler.local.toml
 /.agents/skills/bmad-*/
 /package-lock.json
 /screen_*.png
+/test-results/
+/playwright-report/
+/blob-report/
