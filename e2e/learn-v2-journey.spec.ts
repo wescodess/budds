@@ -72,7 +72,7 @@ test('learner can advance the Learn V2 mastery journey through production UI', a
   await acceptSource.click()
   await expect(page.getByTestId('learn-v2-evidence-desk')).toContainText('Accepted')
   await page.getByTestId('learn-v2-generate-map').click()
-  await expect(page.getByTestId('learn-v2-map-generation-status')).toContainText(/completed|succeeded|ready/i, { timeout: 120_000 })
+  await expect(page.getByTestId('learn-v2-map-generation-status')).toContainText(/ready for review/i, { timeout: 120_000 })
 
   await page.getByTestId('learn-v2-workspace-nav-map').click()
   await expect(page.getByTestId('learn-v2-learning-trail')).toBeVisible()
