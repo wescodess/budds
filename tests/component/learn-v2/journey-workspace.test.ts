@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
+import { parseLearnV2PlanResult } from '~/utils/learn-v2-plan-result'
 
 const path = ['~', 'components', 'learn-v2'].join('/')
 
@@ -13,6 +14,11 @@ const mission = {
 }
 
 describe('Learn V2 journey workspace seams', () => {
+  it('degrades malformed legacy plan snapshots instead of taking down the workspace', () => {
+    expect(parseLearnV2PlanResult('{not-json')).toEqual({})
+    expect(parseLearnV2PlanResult(JSON.stringify({ status: 'feasible', reasonCodes: ['deadline'], alternatives: [{ code: 'extend_target' }, { code: 2 }] }))).toEqual({ status: 'feasible', reasonCodes: ['deadline'], alternatives: [{ code: 'extend_target' }] })
+  })
+
   it('makes the next learning action decisive and emits its intent', async () => {
     const Comp = await import(`${path}/LearnHub.vue`)
     const wrapper = await mountSuspended(Comp.default, { props: { snapshot: { today: mission, missions: [mission] } } })
@@ -56,6 +62,31 @@ describe('Learn V2 journey workspace seams', () => {
     expect(wrapper.get('[data-testid="learn-v2-source-inspector"]').text()).toContain('MDN')
     await wrapper.get('[data-testid="learn-v2-source-accept-source_1"]').trigger('click')
     expect(wrapper.emitted('acceptSource')?.[0]).toEqual(['source_1'])
+  })
+
+  it('turns a learner research query into an explicit, reviewable discovery action', async () => {
+    const Comp = await import(`${path}/EvidenceDesk.vue`)
+    const wrapper = await mountSuspended(Comp.default, {
+      props: { sources: [], researchResults: [{ title: 'MDN AbortController', url: 'https://developer.mozilla.org/en-US/docs/Web/API/AbortController', snippet: 'Cancellation API reference.' }] },
+    })
+
+    await wrapper.get('[data-testid="learn-v2-research-query"]').setValue('AbortController cancellation')
+    await wrapper.find('form').trigger('submit')
+    expect(wrapper.emitted('research')?.[0]).toEqual(['AbortController cancellation'])
+    await wrapper.get('[aria-label="Research results"] button').trigger('click')
+    expect(wrapper.emitted('addUrl')?.[0]).toEqual(['https://developer.mozilla.org/en-US/docs/Web/API/AbortController', 'MDN AbortController'])
+  })
+
+  it('renders permitted evidence and a safe original-source link in the inspector', async () => {
+    const Comp = await import(`${path}/EvidenceDesk.vue`)
+    const wrapper = await mountSuspended(Comp.default, {
+      props: { sources: [{ id: 'source_1', title: 'AbortController', origin: 'user_url' as const, retrievedLabel: 'Retrieved today', coverage: 'partial' as const, lifecycle: 'evaluated' as const, objectives: [], excerpt: 'AbortController lets you cancel requests.', originalUrl: 'https://developer.mozilla.org/' }], selectedSourceId: 'source_1' },
+    })
+
+    expect(wrapper.get('[data-testid="learn-v2-source-inspector"]').text()).toContain('cancel requests')
+    const original = wrapper.get('a[href="https://developer.mozilla.org/"]')
+    expect(original.attributes('target')).toBe('_blank')
+    expect(original.attributes('rel')).toContain('noopener')
   })
 
   it('offers every workspace area and reports the blocked next action', async () => {

@@ -157,6 +157,9 @@ async function requireCurrentBlueprint(
     .order('desc')
     .first()
   if (!newest || newest._id !== revision._id) throw new Error('Blueprint revision conflict')
+  // This is an authority boundary, not merely a UI affordance: a forged
+  // client action must not spend public-search capacity on folder-only work.
+  if (revision.sourcePolicy === 'folder_only') throw new Error('Web research is disabled by this source policy')
   return { learningVoid, revision }
 }
 
