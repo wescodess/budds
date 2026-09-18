@@ -33,6 +33,7 @@ const blueprintCandidateValidator = v.object({
     title: v.string(),
     capability: v.string(),
     estimatedMinutes: v.number(),
+    depth: v.optional(v.union(v.literal('foundational'), v.literal('working'), v.literal('advanced'))),
     coverage: v.union(v.literal('strong'), v.literal('partial'), v.literal('gap')),
     gapReason: v.optional(v.string()),
     sourceSnapshotIds: v.array(v.id('learnSourceSnapshots')),
@@ -166,13 +167,13 @@ export const replaceDraftMap = mutation({
     await clearMap(ctx, userId, blueprint._id)
     const milestoneIds = new Map<string, Id<'learnMilestones'>>()
     for (const milestone of candidate.milestones) {
-      milestoneIds.set(milestone.key, await ctx.db.insert('learnMilestones', { userId, blueprintRevisionId: blueprint._id, order: milestone.order, title: milestone.title, description: milestone.description }))
+      milestoneIds.set(milestone.key, await ctx.db.insert('learnMilestones', { userId, blueprintRevisionId: blueprint._id, stableKey: milestone.key, order: milestone.order, title: milestone.title, description: milestone.description }))
     }
     const objectiveIds = new Map<string, Id<'learnObjectives'>>()
     for (const objective of candidate.objectives) {
       const milestoneId = milestoneIds.get(objective.milestoneKey)
       if (!milestoneId) throw new Error('Blueprint objective milestone disappeared')
-      const objectiveId = await ctx.db.insert('learnObjectives', { userId, blueprintRevisionId: blueprint._id, milestoneId, order: objective.order, title: objective.title, capability: objective.capability, estimatedMinutes: objective.estimatedMinutes, coverage: objective.coverage, gapReason: objective.gapReason, assessmentContract: objective.assessmentContract })
+      const objectiveId = await ctx.db.insert('learnObjectives', { userId, blueprintRevisionId: blueprint._id, stableKey: objective.key, milestoneId, order: objective.order, title: objective.title, capability: objective.capability, estimatedMinutes: objective.estimatedMinutes, depth: objective.depth, coverage: objective.coverage, gapReason: objective.gapReason, assessmentContract: objective.assessmentContract })
       objectiveIds.set(objective.key, objectiveId)
       for (const sourceSnapshotId of objective.sourceSnapshotIds) await ctx.db.insert('learnObjectiveSources', { userId, objectiveId, sourceSnapshotId: sourceSnapshotId as Id<'learnSourceSnapshots'>, coverage: objective.coverage })
       for (const sourceSnapshotId of objective.gapSourceSnapshotIds) await ctx.db.insert('learnObjectiveSources', { userId, objectiveId, sourceSnapshotId: sourceSnapshotId as Id<'learnSourceSnapshots'>, coverage: 'gap' })
