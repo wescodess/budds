@@ -12,9 +12,13 @@ function normalizeUrl(value: string | undefined) {
 }
 
 function e2eEmailPasswordEnabled() {
-  return process.env.NODE_ENV !== 'production'
-    && process.env.BUDDS_E2E_MODE === 'true'
-    && (process.env.BUDDS_E2E_AUTH_TOKEN?.length ?? 0) >= 32
+  if (process.env.BUDDS_E2E_MODE !== 'true' || (process.env.BUDDS_E2E_AUTH_TOKEN?.length ?? 0) < 32) return false
+  try {
+    return ['127.0.0.1', 'localhost'].includes(new URL(normalizeUrl(process.env.CONVEX_CLOUD_URL)).hostname)
+  }
+  catch {
+    return false
+  }
 }
 
 /**
