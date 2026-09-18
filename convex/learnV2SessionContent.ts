@@ -1055,6 +1055,7 @@ export const getSessionContent = query({
     const userId = await requireLearnV2QueryAccess(ctx);
     const session = await ctx.db.get(args.studySessionId);
     if (!session || session.userId !== userId) return null;
+    if (session.status !== "ready" && session.status !== "in_progress") return null;
     const plan = await ctx.db.get(session.studyPlanRevisionId);
     if (!plan || plan.userId !== userId || plan.status !== "accepted")
       return null;
@@ -1068,14 +1069,11 @@ export const getSessionContent = query({
       !(await ctx.db.get(learningVoid.folderId))
     )
       return null;
-    const content = await ctx.db
-      .query("sessionContent")
-      .withIndex("by_userId_and_studySessionId_and_revision", (q) =>
-        q.eq("userId", userId).eq("studySessionId", session._id),
-      )
-      .order("desc")
-      .first();
-    if (!content || content.status !== "published") return null;
+    const content = session.status === "in_progress"
+      ? await ctx.db.query("sessionContent").withIndex("by_userId_and_studySessionId_and_revision", (q) => q.eq("userId", userId).eq("studySessionId", session._id).eq("revision", session.startedSessionContentRevision!)).unique()
+      : await ctx.db.query("sessionContent").withIndex("by_userId_and_studySessionId_and_revision", (q) => q.eq("userId", userId).eq("studySessionId", session._id)).order("desc").first();
+    if (!content || content.status !== "published"
+      || (session.status === "in_progress" && (session.startedSessionContentId !== content._id || session.startedSessionContentRevision !== content.revision))) return null;
     const blocks = await ctx.db
       .query("sessionContentBlocks")
       .withIndex("by_userId_and_sessionContentId_and_order", (q) =>

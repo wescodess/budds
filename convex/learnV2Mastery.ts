@@ -3,7 +3,7 @@ import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import { action, internalMutation, internalQuery, mutation, type MutationCtx, type QueryCtx } from './_generated/server'
 import { hasLearnV2Access, requireLearnV2MutationAccess } from './lib/learnV2Access'
-import { deriveMastery, LEARN_V2_MASTERY_SCORER_VERSION, localDateAt, scoreCriteria } from '../shared/learn-v2-mastery'
+import { addCalendarDays, deriveMastery, LEARN_V2_MASTERY_SCORER_VERSION, localDateAt, scoreCriteria } from '../shared/learn-v2-mastery'
 import { classifyAiGatewayFailure, generateCompletion } from '../server/utils/ai-gateway'
 
 const MAX_RESPONSE = 12_000
@@ -11,6 +11,7 @@ const MAX_MISCONCEPTIONS = 16
 const MAX_SOURCES = 64
 const SCORING_JOB_TYPE = 'mastery_scoring'
 const SCORING_LEASE_MS = 5 * 60_000
+const FOLLOW_UP_JOB_TYPE = 'session_content_generation'
 const scorerVerdictValidator = v.object({
   scorerVersion: v.string(), criterionResults: v.array(v.object({ key: v.string(), awarded: v.boolean(), rationale: v.optional(v.string()) })),
   misconceptionTags: v.array(v.string()), verifierVersions: v.array(v.string()),
@@ -32,6 +33,17 @@ function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
   if (value && typeof value === 'object') { const row = value as Record<string, unknown>; return `{${Object.keys(row).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(row[key])}`).join(',')}}` }
   return JSON.stringify(value)
+}
+async function digest(value: unknown) {
+  const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(value))))
+  return `sha256:${[...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('')}`
+}
+function feedback(attempt: Doc<'masteryAttempts'>) {
+  let criterionResults: Array<{ key: string, awarded: boolean, rationale?: string }> = []
+  let misconceptionTags: string[] = []
+  try { criterionResults = JSON.parse(attempt.criterionResultsJson ?? '[]') } catch { /* persisted rows before feedback */ }
+  try { misconceptionTags = JSON.parse(attempt.misconceptionTagsJson ?? '[]') } catch { /* persisted rows before feedback */ }
+  return { criterionResults: criterionResults.map(({ key, awarded, rationale }) => ({ key, awarded, ...(rationale ? { rationale } : {}) })), misconceptionTags }
 }
 
 async function sessionScope(ctx: MutationCtx | QueryCtx, userId: string, sessionId: Id<'studySessions'>) {
@@ -73,7 +85,36 @@ async function exactContentEvidence(ctx: MutationCtx | QueryCtx, userId: string,
     }
   }
   if (!sourceIds.size || sourceIds.size > MAX_SOURCES) throw new Error('Started session evidence scope is unavailable')
-  return { sourceIds: [...sourceIds.keys()].sort(), verifierVersions: [...verifierVersions].sort(), items }
+  return { sourceIds: [...sourceIds.keys()].sort(), sourceSnapshotIds: [...sourceIds.values()].sort((a, b) => String(a).localeCompare(String(b))), verifierVersions: [...verifierVersions].sort(), items }
+}
+
+/** A fixed mid-morning local instant avoids DST gaps while preserving calendar-day semantics. */
+function localDayAtNineUtcMs(localDate: string, timezone: string) {
+  const [year, month, day] = localDate.split('-').map(Number)
+  const targetUtc = Date.UTC(year!, month! - 1, day!, 9)
+  // Offset at the target local day is converged from Intl rather than assuming 24h days.
+  const offset = (instant: number) => {
+    const parts = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23', minute: '2-digit' }).formatToParts(instant)
+    const part = (kind: Intl.DateTimeFormatPartTypes) => Number(parts.find(row => row.type === kind)?.value)
+    return Date.UTC(part('year'), part('month') - 1, part('day'), part('hour'), part('minute')) - instant
+  }
+  let instant = targetUtc
+  for (let index = 0; index < 2; index++) instant = targetUtc - offset(instant)
+  return instant
+}
+
+async function createFollowUp(ctx: MutationCtx, input: { userId: string, scope: Awaited<ReturnType<typeof sessionScope>>, attemptId: Id<'masteryAttempts'>, outcome: { state: string, remediation: boolean, setFirstIndependent: boolean }, now: number, timezone: string, firstIndependentLocalDate?: string, sourceIds: Id<'learnSourceSnapshots'>[] }) {
+  const kind = input.outcome.remediation ? 'review' as const : input.outcome.state === 'guided' ? 'review' as const : input.outcome.setFirstIndependent ? 'retained_review' as const : null
+  if (!kind) return null
+  const priority = input.outcome.remediation ? 'prerequisite_remediation' : input.outcome.state === 'guided' ? 'due_review' : 'overdue_retained_review'
+  const date = kind === 'retained_review' && input.firstIndependentLocalDate ? addCalendarDays(input.firstIndependentLocalDate, 7) : undefined
+  const scheduledStartAt = date ? Math.max(input.now, localDayAtNineUtcMs(date, input.timezone)) : input.now
+  const durationMinutes = Math.max(15, Math.min(60, input.scope.objective.estimatedMinutes ?? 30))
+  const sessionId = await ctx.db.insert('studySessions', { userId: input.userId, studyPlanRevisionId: input.scope.plan._id, primaryObjectiveId: input.scope.objective._id, status: 'planned', revision: 1, scheduledStartAt, scheduledEndAt: scheduledStartAt + durationMinutes * 60_000, timezone: input.timezone, placementKind: kind, schedulingPriority: priority, schedulerVersion: 'learn-v2.mastery-followup.v1', auditReasonCode: `mastery_followup:${input.attemptId}` })
+  const inputDigest = await digest({ attemptId: String(input.attemptId), planRevisionId: String(input.scope.plan._id), sessionId: String(sessionId), objectiveId: String(input.scope.objective._id), sourceIds: input.sourceIds.map(String).sort() })
+  const jobId = await ctx.db.insert('learnJobs', { userId: input.userId, learningVoidId: input.scope.voidRow._id, blueprintRevisionId: input.scope.blueprint._id, studyPlanRevisionId: input.scope.plan._id, studySessionId: sessionId, type: FOLLOW_UP_JOB_TYPE, status: 'queued', revision: 1, idempotencyKey: `mastery-followup:${input.attemptId}`, requestFingerprint: inputDigest, inputDigest, expectedVoidRevision: input.scope.voidRow.revision, expectedBlueprintRecordRevision: input.scope.blueprint.recordRevision, expectedSessionRevision: 1, attempts: 0, dispatchSupportingSourceSnapshotIds: input.sourceIds, providerEnabled: process.env.LEARN_V2_SESSION_CONTENT_PROVIDER_ENABLED === 'true', providerModel: process.env.LEARN_V2_SESSION_CONTENT_MODEL?.trim() || undefined, providerPolicyVersion: 'learn-v2.session-content-provider.v1', createdAt: input.now, updatedAt: input.now })
+  await ctx.scheduler.runAfter(0, internal.learnV2SessionContent.executeSessionContentGeneration, { tokenIdentifier: input.userId, jobId, expectedRevision: 1 })
+  return sessionId
 }
 
 export const recordAssistanceUse = mutation({
@@ -110,7 +151,7 @@ export const beginMasteryScoring = internalMutation({
     const attempt = await ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', args.tokenIdentifier).eq('idempotencyKey', args.idempotencyKey)).unique()
     if (attempt) {
       if (attempt.requestFingerprint !== fingerprint) throw new Error('Idempotency key was already used for a different request')
-      return { kind: 'replay' as const, attemptId: attempt._id, scorePercent: attempt.serverScorePercent, state: attempt.result }
+      return { kind: 'replay' as const, attemptId: attempt._id, scorePercent: attempt.serverScorePercent, state: attempt.result, feedback: feedback(attempt) }
     }
     const scope = await sessionScope(ctx, args.tokenIdentifier, args.studySessionId)
     if (scope.session.status !== 'in_progress' || scope.session.revision !== args.expectedSessionRevision || scope.content.revision !== args.expectedContentRevision || scope.plan.recordRevision !== args.expectedPlanRecordRevision || scope.blueprint.recordRevision !== args.expectedBlueprintRecordRevision) throw new Error('Started session revision conflict')
@@ -165,7 +206,7 @@ export const getMasteryScoringInput = internalQuery({
     const prior = await ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', args.tokenIdentifier).eq('idempotencyKey', args.idempotencyKey)).unique()
     if (prior) {
       if (prior.requestFingerprint !== fingerprint) throw new Error('Idempotency key was already used for a different request')
-      return { kind: 'replay' as const, attemptId: prior._id, scorePercent: prior.serverScorePercent, state: prior.result }
+      return { kind: 'replay' as const, attemptId: prior._id, scorePercent: prior.serverScorePercent, state: prior.result, feedback: feedback(prior) }
     }
     const scope = await sessionScope(ctx, args.tokenIdentifier, args.studySessionId)
     if (scope.session.status !== 'in_progress' || scope.session.revision !== args.expectedSessionRevision || scope.content.revision !== args.expectedContentRevision || scope.plan.recordRevision !== args.expectedPlanRecordRevision || scope.blueprint.recordRevision !== args.expectedBlueprintRecordRevision) throw new Error('Started session revision conflict')
@@ -185,11 +226,11 @@ export const submitMasteryAttempt = action({
     studySessionId: v.id('studySessions'), expectedSessionRevision: v.number(), expectedContentRevision: v.number(), expectedPlanRecordRevision: v.number(), expectedBlueprintRecordRevision: v.number(),
     response: v.string(), confidence: v.number(), idempotencyKey: v.string(),
   },
-  handler: async (ctx, args): Promise<{ status: 'completed', attemptId: Id<'masteryAttempts'>, scorePercent?: number, state?: string, replayed: boolean } | { status: 'in_progress', replayed: false }> => {
+  handler: async (ctx, args): Promise<{ status: 'completed', attemptId: Id<'masteryAttempts'>, scorePercent?: number, state?: string, feedback?: { criterionResults: Array<{ key: string, awarded: boolean, rationale?: string }>, misconceptionTags: string[] }, replayed: boolean } | { status: 'in_progress', replayed: false }> => {
     const identity = await ctx.auth.getUserIdentity()
     if (!identity) throw new Error('Learn V2 access denied')
     const reservation = await ctx.runMutation(internal.learnV2Mastery.beginMasteryScoring, { tokenIdentifier: identity.tokenIdentifier, ...args })
-    if (reservation.kind === 'replay') return { status: 'completed', attemptId: reservation.attemptId, scorePercent: reservation.scorePercent, state: reservation.state, replayed: true }
+    if (reservation.kind === 'replay') return { status: 'completed', attemptId: reservation.attemptId, scorePercent: reservation.scorePercent, state: reservation.state, feedback: reservation.feedback, replayed: true }
     if (reservation.kind === 'pending') {
       if (reservation.status === 'blocked') throw new Error('Mastery scoring outcome requires reconciliation')
       return { status: 'in_progress', replayed: false }
@@ -201,7 +242,7 @@ export const submitMasteryAttempt = action({
       await ctx.runMutation(internal.learnV2Mastery.finishMasteryScoringFailure, { tokenIdentifier: identity.tokenIdentifier, jobId: reservation.jobId, leaseToken: reservation.leaseToken, outcome: 'not_dispatched' })
       throw error
     }
-    if (input.kind === 'replay') return { status: 'completed', attemptId: input.attemptId, scorePercent: input.scorePercent, state: input.state, replayed: true }
+    if (input.kind === 'replay') return { status: 'completed', attemptId: input.attemptId, scorePercent: input.scorePercent, state: input.state, feedback: input.feedback, replayed: true }
     await ctx.runMutation(internal.learnV2Mastery.markMasteryScoringDispatched, { tokenIdentifier: identity.tokenIdentifier, jobId: reservation.jobId, leaseToken: reservation.leaseToken })
     try {
       const completion = await generateCompletion({
@@ -255,7 +296,7 @@ export const recordMasteryAttempt = internalMutation({
     const prior = await ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', args.tokenIdentifier).eq('idempotencyKey', args.idempotencyKey)).unique()
     if (prior) {
       if (prior.requestFingerprint !== requestFingerprintValue) throw new Error('Idempotency key was already used for a different request')
-      return { attemptId: prior._id, scorePercent: prior.serverScorePercent, state: prior.result, replayed: true }
+      return { attemptId: prior._id, scorePercent: prior.serverScorePercent, state: prior.result, feedback: feedback(prior), replayed: true }
     }
     const scope = await sessionScope(ctx, args.tokenIdentifier, args.studySessionId)
     if (scope.session.status !== 'in_progress' || scope.session.revision !== args.expectedSessionRevision || scope.content.revision !== args.expectedContentRevision || scope.session.startedSessionContentRevision !== scope.content.revision || scope.plan.recordRevision !== args.expectedPlanRecordRevision || scope.blueprint.recordRevision !== args.expectedBlueprintRecordRevision) throw new Error('Started session revision conflict')
@@ -277,9 +318,10 @@ export const recordMasteryAttempt = internalMutation({
     const patch = { state: outcome.state, schedulingPriority: outcome.remediation ? 'remediation' as const : 'standard' as const, recordRevision: (record?.recordRevision ?? 0) + 1, lastAttemptAt: now, lastAttemptId: attemptId, nextReviewAt: outcome.remediation ? now : undefined, remediationAttemptId: outcome.remediation ? attemptId : undefined, ...(outcome.setFirstIndependent ? { firstIndependentPassAt: now, firstIndependentLocalDate: attemptLocalDate, firstIndependentTimezone: attemptTimezone } : {}), updatedAt: now }
     if (record) await ctx.db.patch(record._id, patch)
     else await ctx.db.insert('masteryRecords', { userId: args.tokenIdentifier, blueprintRevisionId: scope.blueprint._id, objectiveId: scope.objective._id, ...patch })
+    await createFollowUp(ctx, { userId: args.tokenIdentifier, scope, attemptId, outcome, now, timezone: attemptTimezone, firstIndependentLocalDate: outcome.setFirstIndependent ? attemptLocalDate : record?.firstIndependentLocalDate, sourceIds: evidence.sourceSnapshotIds })
     if (scoringJob) await ctx.db.patch(scoringJob._id, { status: 'succeeded', providerResponseId: args.providerResponseId, leaseToken: undefined, leaseExpiresAt: undefined, checkpoint: `attempt:${String(attemptId)}`, terminalReason: undefined, revision: scoringJob.revision + 1, updatedAt: now })
     await ctx.db.patch(scope.session._id, { status: 'completed', revision: scope.session.revision + 1, auditReasonCode: 'mastery_attempt_recorded' })
     await ctx.db.insert('learnPlanAuditEvents', { userId: args.tokenIdentifier, learningVoidId: scope.voidRow._id, studyPlanRevisionId: scope.plan._id, studySessionId: scope.session._id, reasonCode: 'mastery_attempt_recorded', details: JSON.stringify({ attemptId, kind, scorePercent, state: outcome.state, assisted }), createdAt: now })
-    return { attemptId, scorePercent, state: outcome.state, replayed: false }
+    return { attemptId, scorePercent, state: outcome.state, feedback: { criterionResults: args.scorerVerdict.criterionResults.map(({ key, awarded, rationale }) => ({ key, awarded, ...(rationale ? { rationale } : {}) })), misconceptionTags: args.scorerVerdict.misconceptionTags }, replayed: false }
   },
 })
