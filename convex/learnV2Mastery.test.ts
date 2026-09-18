@@ -28,8 +28,11 @@ async function fixture(options: { placementKind?: 'learning' | 'retained_review'
     const planRevisionId = await ctx.db.insert('studyPlanRevisions', { userId: OWNER.tokenIdentifier, studyPlanId: planId, learningVoidId: voidId, revision: 1, recordRevision: 5, status: 'accepted', blueprintRevisionId: blueprintIdRevision, blueprintRecordRevision: 3, timezone: options.sessionTimezone ?? 'America/Toronto', createdAt: now })
     await ctx.db.patch(planId, { activeRevisionId: planRevisionId })
     const sessionId = await ctx.db.insert('studySessions', { userId: OWNER.tokenIdentifier, studyPlanRevisionId: planRevisionId, primaryObjectiveId: objectiveId, status: 'in_progress', revision: 7, scheduledStartAt: now, timezone: options.sessionTimezone ?? 'America/Toronto', placementKind: options.placementKind ?? 'learning' })
-    const contentId = await ctx.db.insert('sessionContent', { userId: OWNER.tokenIdentifier, studySessionId: sessionId, studyPlanRevisionId: planRevisionId, blueprintRevisionId: blueprintIdRevision, objectiveId, revision: 11, status: 'published', assessmentRubricSnapshot: rubric, createdAt: now, publishedAt: now })
+    const contentId = await ctx.db.insert('sessionContent', { userId: OWNER.tokenIdentifier, studySessionId: sessionId, studyPlanRevisionId: planRevisionId, blueprintRevisionId: blueprintIdRevision, objectiveId, revision: 11, status: 'published', assessmentRubricSnapshot: rubric, providerModel: 'test/mastery-model', createdAt: now, publishedAt: now })
     await ctx.db.patch(sessionId, { startedSessionContentId: contentId, startedSessionContentRevision: 11 })
+    await ctx.db.insert('sessionContentBlocks', { userId: OWNER.tokenIdentifier, sessionContentId: contentId, order: 1, kind: 'worked_example', content: 'Revealed worked answer.' })
+    await ctx.db.insert('sessionContentBlocks', { userId: OWNER.tokenIdentifier, sessionContentId: contentId, order: 2, kind: 'faded_example', content: 'Substantive hint.' })
+    await ctx.db.insert('sessionContentBlocks', { userId: OWNER.tokenIdentifier, sessionContentId: contentId, order: 3, kind: 'independent_application', content: 'Apply the evidence to a novel case.' })
     const sourceIdentityId = await ctx.db.insert('learnSourceIdentities', { userId: OWNER.tokenIdentifier, learningVoidId: voidId, origin: 'user_url', externalKey: 'mastery-source' })
     const sourceId = await ctx.db.insert('learnSourceSnapshots', { userId: OWNER.tokenIdentifier, sourceIdentityId, learningVoidId: voidId, revision: 1, status: 'user_accepted', effectiveStatus: 'user_accepted', rightsStatus: 'permitted', conflictStatus: 'clear', createdAt: now })
     await ctx.db.insert('learnObjectiveSources', { userId: OWNER.tokenIdentifier, objectiveId, sourceSnapshotId: sourceId, coverage: 'strong' })
@@ -46,13 +49,37 @@ async function fixture(options: { placementKind?: 'learning' | 'retained_review'
 describe('LA2-12 server-scored mastery attempts', () => {
   test('records monotonic server-observed hint/reveal use and denies another owner', async () => {
     const { t, owner, ids } = await fixture()
+    expect((await owner.query(api.learnV2SessionContent.getSessionContent, { studySessionId: ids.sessionId }))!.blocks.map(block => block.kind)).not.toContain('faded_example')
     const hint = await owner.mutation(api.learnV2Mastery.recordAssistanceUse, { studySessionId: ids.sessionId, expectedSessionRevision: 7, kind: 'substantive_hint' })
-    expect(hint).toMatchObject({ revision: 8, replayed: false })
+    expect(hint).toMatchObject({ revision: 8, replayed: false, assistance: { content: 'Substantive hint.' } })
+    expect((await owner.query(api.learnV2SessionContent.getSessionContent, { studySessionId: ids.sessionId }))!.blocks.map(block => block.kind)).toContain('faded_example')
     expect(await owner.mutation(api.learnV2Mastery.recordAssistanceUse, { studySessionId: ids.sessionId, expectedSessionRevision: 8, kind: 'substantive_hint' })).toMatchObject({ revision: 8, replayed: true })
     await t.withIdentity(OTHER).mutation(api.users.upsertUser, {})
     await t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: OTHER.tokenIdentifier, enabled: true })
     await expect(t.withIdentity(OTHER).mutation(api.learnV2Mastery.recordAssistanceUse, { studySessionId: ids.sessionId, expectedSessionRevision: 8, kind: 'answer_reveal' })).rejects.toThrow(/Study session not found/)
-    expect(await owner.mutation(api.learnV2Mastery.recordAssistanceUse, { studySessionId: ids.sessionId, expectedSessionRevision: 8, kind: 'answer_reveal' })).toMatchObject({ revision: 9, replayed: false })
+    expect(await owner.mutation(api.learnV2Mastery.recordAssistanceUse, { studySessionId: ids.sessionId, expectedSessionRevision: 8, kind: 'answer_reveal' })).toMatchObject({ revision: 9, replayed: false, assistance: { content: 'Revealed worked answer.' } })
+  })
+
+  test('scores through the authenticated server action and replays before provider dispatch', async () => {
+    const { owner, args } = await fixture()
+    const internalArgs = args('public-submit', 80)
+    const { tokenIdentifier: _tokenIdentifier, scorerVerdict: _scorerVerdict, ...publicArgs } = internalArgs
+    const provider = vi.fn(async () => new Response(JSON.stringify({ id: 'score-1', model: 'test/mastery-model', choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({ criterionResults: verdict(80).criterionResults.map(row => ({ ...row, rationale: 'Pinned evidence supports this decision.' })), misconceptionTags: [] }) } }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', provider)
+    process.env.OPENROUTER_API_KEY = 'test-key'
+    process.env.CF_ACCOUNT_ID = 'test-account'
+    process.env.CLOUDFLARE_AI_GATEWAY_ID = 'test-gateway'
+    try {
+      await expect(owner.action(api.learnV2Mastery.submitMasteryAttempt, publicArgs)).resolves.toMatchObject({ scorePercent: 80, state: 'independent', replayed: false })
+      await expect(owner.action(api.learnV2Mastery.submitMasteryAttempt, publicArgs)).resolves.toMatchObject({ scorePercent: 80, state: 'independent', replayed: true })
+      expect(provider).toHaveBeenCalledTimes(1)
+    }
+    finally {
+      delete process.env.OPENROUTER_API_KEY
+      delete process.env.CF_ACCOUNT_ID
+      delete process.env.CLOUDFLARE_AI_GATEWAY_ID
+      vi.unstubAllGlobals()
+    }
   })
 
   test('enforces exact started content/session/active-plan pins and rejects purged evidence', async () => {
@@ -71,6 +98,7 @@ describe('LA2-12 server-scored mastery attempts', () => {
     const first = await t.mutation(internal.learnV2Mastery.recordMasteryAttempt, args('same-key', 79))
     expect(first).toMatchObject({ scorePercent: 79, state: 'needs_review', replayed: false })
     expect(await t.mutation(internal.learnV2Mastery.recordMasteryAttempt, args('same-key', 79))).toMatchObject({ attemptId: first.attemptId, replayed: true })
+    expect(await t.mutation(internal.learnV2Mastery.recordMasteryAttempt, args('same-key', 80))).toMatchObject({ attemptId: first.attemptId, scorePercent: 79, replayed: true })
     await expect(t.mutation(internal.learnV2Mastery.recordMasteryAttempt, { ...args('same-key', 80), response: 'changed' })).rejects.toThrow(/different request/)
     const rows = await t.run(async ctx => ({ attempts: await ctx.db.query('masteryAttempts').withIndex('by_userId_and_objectiveId_and_attemptedAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('objectiveId', ids.objectiveId)).take(3), record: await ctx.db.query('masteryRecords').withIndex('by_userId_and_objectiveId', q => q.eq('userId', OWNER.tokenIdentifier).eq('objectiveId', ids.objectiveId)).unique() }))
     expect(rows.attempts).toHaveLength(1)
@@ -86,6 +114,12 @@ describe('LA2-12 server-scored mastery attempts', () => {
     const result = await t.mutation(internal.learnV2Mastery.recordMasteryAttempt, { ...args('assisted'), expectedSessionRevision: 8 })
     expect(result).toMatchObject({ scorePercent: 100, state: 'independent' })
     expect(await t.run(ctx => ctx.db.get(ids.sessionId))).toMatchObject({ substantiveHintUsedAt: expect.any(Number), status: 'completed' })
+  })
+
+  test('caps an answer-revealed pass at guided', async () => {
+    const { t, owner, ids, args } = await fixture()
+    await owner.mutation(api.learnV2Mastery.recordAssistanceUse, { studySessionId: ids.sessionId, expectedSessionRevision: 7, kind: 'answer_reveal' })
+    await expect(t.mutation(internal.learnV2Mastery.recordMasteryAttempt, { ...args('revealed'), expectedSessionRevision: 8 })).resolves.toMatchObject({ scorePercent: 100, state: 'guided' })
   })
 
   test('rejects day 6 and accepts retained day 7 across the DST boundary', async () => {
