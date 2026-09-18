@@ -94,7 +94,11 @@ describe('LearnV2TodaySession', () => {
     submit.mockResolvedValueOnce({ status: 'in_progress', replayed: false }).mockResolvedValueOnce({ status: 'completed', scorePercent: 80, state: 'independent' })
     const wrapper = await mount(); await startSession(wrapper); await reachConfidence(wrapper)
     await wrapper.find('textarea[aria-label="Teach it back"]').setValue('teach'); await wrapper.find('input[value="4"]').setValue(); await wrapper.find('[data-testid="learn-v2-submit"]').trigger('click')
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-v2-score-pending"]').exists()).toBe(true)); const first = submit.mock.calls[0]![0].idempotencyKey; await wrapper.find('[data-testid="learn-v2-score-retry"]').trigger('click'); await vi.waitFor(() => expect(submit).toHaveBeenCalledTimes(2)); expect(submit.mock.calls[1]![0].idempotencyKey).toBe(first)
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-v2-score-pending"]').exists()).toBe(true)); const first = submit.mock.calls[0]![0].idempotencyKey
+    isOnline.value = false; await wrapper.vm.$nextTick()
+    expect((wrapper.find('[data-testid="learn-v2-score-retry"]').element as HTMLButtonElement).disabled).toBe(true)
+    isOnline.value = true; await wrapper.vm.$nextTick(); await wrapper.find('[data-testid="learn-v2-score-retry"]').trigger('click')
+    await vi.waitFor(() => expect(submit).toHaveBeenCalledTimes(2)); expect(submit.mock.calls[1]![0].idempotencyKey).toBe(first)
   })
   it('announces and displays server feedback and next review', async () => {
     const wrapper = await mount(); await startSession(wrapper); await reachConfidence(wrapper)
