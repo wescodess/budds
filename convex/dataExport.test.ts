@@ -163,7 +163,7 @@ describe('dataExport paginated queries', () => {
         const snapshotId = await ctx.db.insert('learnSourceSnapshots', { userId: USER_A.tokenIdentifier, sourceIdentityId, learningVoidId: voidId, blueprintRevisionId: revisionId, folderManifestId: manifestId, revision: 1, status: 'candidate', contentHash: 'b'.repeat(64), sourceRevision: `sha256:${'b'.repeat(64)}`, objectKey: 'private/object/key', folderId, folderRevision, filename: 'private-source.txt', publicLocator: 'https://example.com/capability/snapshot-secret?token=secret#fragment', privateLocator: 'https://example.com/capability/snapshot-secret?token=secret#fragment', createdAt: 1 })
         const manifestFolderId = await ctx.db.insert('learnFolderSourceManifestFolders', { userId: USER_A.tokenIdentifier, manifestId, folderId, name: 'Private folder', folderRevision, depth: 0, order: 0, stage: 'complete', documentCount: 1 })
         const manifestEntryId = await ctx.db.insert('learnFolderSourceManifestEntries', { userId: USER_A.tokenIdentifier, manifestId, order: 0, documentId: docId, folderId, folderRevision, sourceIdentityId, sourceSnapshotId: snapshotId, contentHash: 'b'.repeat(64), documentRevision: `sha256:${'b'.repeat(64)}`, availability: 'available' })
-        return { voidId, revisionId, objectiveId, sessionId, snapshotId, sourceIdentityId, manifestId, manifestFolderId, manifestEntryId }
+        return { voidId, revisionId, objectiveId, planRevisionId, sessionId, snapshotId, sourceIdentityId, manifestId, manifestFolderId, manifestEntryId }
       })
       await t.run(async ctx => {
         const contentId = await ctx.db.insert('sessionContent', { userId: USER_A.tokenIdentifier, studySessionId: ids.sessionId, revision: 1, status: 'draft', createdAt: 1 })
@@ -176,7 +176,7 @@ describe('dataExport paginated queries', () => {
         await ctx.db.insert('learnMilestones', { userId: USER_A.tokenIdentifier, blueprintRevisionId: ids.revisionId, order: 1, title: 'Milestone' })
         await ctx.db.insert('learnObjectivePrerequisites', { userId: USER_A.tokenIdentifier, blueprintRevisionId: ids.revisionId, objectiveId: ids.objectiveId, prerequisiteObjectiveId: ids.objectiveId })
         await ctx.db.insert('learnObjectiveSources', { userId: USER_A.tokenIdentifier, objectiveId: ids.objectiveId, sourceSnapshotId: ids.snapshotId, coverage: 'strong' })
-        await ctx.db.insert('masteryAttempts', { userId: USER_A.tokenIdentifier, objectiveId: ids.objectiveId, attemptedAt: 1, idempotencyKey: 'private-attempt-key', requestFingerprint: 'private-attempt-fingerprint' })
+        await ctx.db.insert('masteryAttempts', { userId: USER_A.tokenIdentifier, blueprintRevisionId: ids.revisionId, objectiveId: ids.objectiveId, studySessionId: ids.sessionId, sessionContentId: contentId, studyPlanRevisionId: ids.planRevisionId, attemptedAt: 1, idempotencyKey: 'private-attempt-key', requestFingerprint: 'private-attempt-fingerprint', response: 'private learner response', criterionResultsJson: '[{"private":true}]', misconceptionTagsJson: '["private-misconception"]', rubricSnapshot: '{"private":true}', verifierVersionsJson: '["private-verifier"]', sourceSnapshotIdsJson: '["private-source"]' })
         await ctx.db.insert('masteryRecords', { userId: USER_A.tokenIdentifier, objectiveId: ids.objectiveId, state: 'learning' })
         await ctx.db.insert('studySessionRetrievalObjectives', { userId: USER_A.tokenIdentifier, studySessionId: ids.sessionId, objectiveId: ids.objectiveId, order: 1 })
         await ctx.db.insert('sessionContentBlocks', { userId: USER_A.tokenIdentifier, sessionContentId: contentId, order: 1, kind: 'prompt' })
@@ -198,6 +198,7 @@ describe('dataExport paginated queries', () => {
       const masteryAttempt = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'masteryAttempts', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
       expect(masteryAttempt).not.toHaveProperty('idempotencyKey')
       expect(masteryAttempt).not.toHaveProperty('requestFingerprint')
+      for (const key of ['response', 'criterionResultsJson', 'misconceptionTagsJson', 'rubricSnapshot', 'verifierVersionsJson', 'sourceSnapshotIdsJson', 'studySessionId', 'sessionContentId', 'studyPlanRevisionId', 'blueprintRevisionId', 'objectiveId']) expect(masteryAttempt).not.toHaveProperty(key)
       const sourceIdentity = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnSourceIdentities', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
       expect(sourceIdentity).not.toHaveProperty('externalKey')
       expect(sourceIdentity).not.toHaveProperty('canonicalUrl')
