@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import { api } from '#convex/api'
 import { getErrorMessage } from '~~/shared/errors'
+import { useOnlineStatus } from '~/composables/useOnlineStatus'
 
 type Candidate = {
   studySessionId: string
@@ -31,6 +32,7 @@ type Feedback = {
 }
 
 const { candidate } = defineProps<{ candidate: Candidate }>()
+const { isOnline } = useOnlineStatus()
 
 const startMutation = import.meta.client ? useConvexMutation(api.learnV2SessionContent.startStudySession) : { mutate: async () => ({}) }
 const assistanceMutation = import.meta.client ? useConvexMutation(api.learnV2Mastery.recordAssistanceUse) : { mutate: async () => ({}) }
@@ -54,6 +56,9 @@ const feedback = ref<Feedback | null>(null)
 const scorePending = ref(false)
 const startKey = ref<string | null>(null)
 const submitKey = ref<string | null>(null)
+const reduceMotion = ref(false)
+const enhancedContrast = ref(false)
+const hideTimeGuidance = ref(false)
 
 function makeKey(prefix: string) {
   const id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -85,7 +90,7 @@ function move(next: typeof phase.value) {
   notice.value = `Now in ${next.replaceAll('_', ' ')}.`
 }
 async function start() {
-  if (busy.value || started.value) return
+  if (!isOnline.value || busy.value || started.value) return
   busy.value = true; error.value = null
   startKey.value ??= makeKey('learn-v2-start')
   try {
@@ -98,7 +103,7 @@ async function start() {
   finally { busy.value = false }
 }
 async function assistance(kind: 'substantive_hint' | 'answer_reveal') {
-  if (busy.value || (kind === 'substantive_hint' && hint.value) || (kind === 'answer_reveal' && reveal.value)) return
+  if (!isOnline.value || busy.value || (kind === 'substantive_hint' && hint.value) || (kind === 'answer_reveal' && reveal.value)) return
   busy.value = true; error.value = null
   try {
     const result = await assistanceMutation.mutate({ studySessionId: candidate.studySessionId as never, expectedSessionRevision: sessionRevision.value, kind }) as { revision: number, assistance: { content: string } }
@@ -110,7 +115,7 @@ async function assistance(kind: 'substantive_hint' | 'answer_reveal') {
   finally { busy.value = false }
 }
 async function submit() {
-  if (busy.value || !canContinue.value) return
+  if (!isOnline.value || busy.value || !canContinue.value) return
   busy.value = true; error.value = null
   submitKey.value ??= makeKey('learn-v2-attempt')
   try {
@@ -124,24 +129,61 @@ async function retryScore() { await submit() }
 </script>
 
 <template>
-  <section aria-labelledby="today-session-title" data-testid="learn-v2-session" class="mx-auto w-full max-w-3xl space-y-5 p-4 sm:p-6">
-    <header><p class="text-sm text-muted-foreground">Today · {{ candidate.estimatedMinutes }} minutes</p><h1 id="today-session-title" class="text-2xl font-semibold">{{ candidate.objectiveTitle }}</h1></header>
+  <section aria-labelledby="today-session-title" data-testid="learn-v2-session" class="learn-v2-session mx-auto w-full max-w-3xl space-y-5 p-4 sm:p-6" :class="{ 'learn-v2-reduced-motion': reduceMotion, 'learn-v2-enhanced-contrast': enhancedContrast }">
+    <header><p class="text-sm text-muted-foreground">Today<span v-if="!hideTimeGuidance"> · {{ candidate.estimatedMinutes }} minutes</span></p><h1 id="today-session-title" class="text-2xl font-semibold">{{ candidate.objectiveTitle }}</h1></header>
+    <details class="rounded-md border p-3 text-sm" data-testid="learn-v2-accessibility-preferences">
+      <summary class="cursor-pointer font-medium">Accessibility and session preferences</summary>
+      <div class="mt-3 grid gap-2">
+        <label><input v-model="reduceMotion" type="checkbox" data-testid="learn-v2-reduce-motion"> Reduce motion</label>
+        <label><input v-model="enhancedContrast" type="checkbox" data-testid="learn-v2-enhanced-contrast"> Increase contrast</label>
+        <label><input v-model="hideTimeGuidance" type="checkbox" data-testid="learn-v2-hide-time"> Hide time guidance</label>
+      </div>
+    </details>
     <p aria-live="polite" data-testid="learn-v2-live" class="sr-only">{{ notice }}</p>
+    <p v-if="!isOnline" id="learn-v2-offline-notice" data-testid="learn-v2-offline-notice" role="status" class="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">Server-scored sessions require a connection. No offline attempt is queued.</p>
     <p v-if="error" role="alert" data-testid="learn-v2-error" class="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{{ error }}</p>
-    <div v-if="phase === 'start'" class="rounded-lg border p-5"><p>Ready for a focused, evidence-grounded session.</p><button type="button" data-testid="learn-v2-start" :disabled="busy" class="mt-4 rounded bg-primary px-4 py-2 text-primary-foreground disabled:opacity-50" @click="start">{{ busy ? 'Starting…' : 'Start' }}</button></div>
+    <div v-if="phase === 'start'" class="rounded-lg border p-5"><p>Ready for a focused, evidence-grounded session.</p><button type="button" data-testid="learn-v2-start" :disabled="busy || !isOnline" :aria-describedby="!isOnline ? 'learn-v2-offline-notice' : undefined" class="mt-4 rounded bg-primary px-4 py-2 text-primary-foreground disabled:opacity-50" @click="start">{{ busy ? 'Starting…' : 'Start' }}</button></div>
     <template v-else>
       <article v-if="phase !== 'feedback' && phase !== 'next_review'" class="rounded-lg border p-5" :data-testid="`learn-v2-phase-${phase}`"><h2 class="text-lg font-medium">{{ phaseLabel }}</h2><p v-if="currentContent" class="mt-3 whitespace-pre-wrap">{{ currentContent }}</p><p v-else role="status" class="mt-3 text-muted-foreground">Loading session content…</p>
         <label v-if="phase === 'prediction'" class="mt-4 block">Your prediction<textarea v-model="prediction" aria-label="Your prediction" class="mt-1 w-full rounded border p-2" /></label>
-        <template v-if="phase === 'teaching'"><button type="button" data-testid="learn-v2-reveal" :disabled="busy || !!reveal" class="mt-4 rounded border px-3 py-2 disabled:opacity-50" @click="assistance('answer_reveal')">Reveal worked example</button><p v-if="reveal" data-testid="learn-v2-reveal-content" class="mt-3 whitespace-pre-wrap">{{ reveal }}</p></template>
-        <template v-if="phase === 'fading'"><label class="mt-4 block">Your faded-practice response<textarea v-model="fadedResponse" aria-label="Your faded-practice response" class="mt-1 w-full rounded border p-2" /></label><button type="button" data-testid="learn-v2-hint" :disabled="busy || !!hint" class="mt-3 rounded border px-3 py-2 disabled:opacity-50" @click="assistance('substantive_hint')">Get a fading hint</button><p v-if="hint" data-testid="learn-v2-hint-content" class="mt-3 whitespace-pre-wrap">{{ hint }}</p></template>
+        <template v-if="phase === 'teaching'"><button type="button" data-testid="learn-v2-reveal" :disabled="busy || !isOnline || !!reveal" :aria-describedby="!isOnline ? 'learn-v2-offline-notice' : undefined" class="mt-4 rounded border px-3 py-2 disabled:opacity-50" @click="assistance('answer_reveal')">Reveal worked example</button><p v-if="reveal" data-testid="learn-v2-reveal-content" class="mt-3 whitespace-pre-wrap">{{ reveal }}</p></template>
+        <template v-if="phase === 'fading'"><label class="mt-4 block">Your faded-practice response<textarea v-model="fadedResponse" aria-label="Your faded-practice response" class="mt-1 w-full rounded border p-2" /></label><button type="button" data-testid="learn-v2-hint" :disabled="busy || !isOnline || !!hint" :aria-describedby="!isOnline ? 'learn-v2-offline-notice' : undefined" class="mt-3 rounded border px-3 py-2 disabled:opacity-50" @click="assistance('substantive_hint')">Get a fading hint</button><p v-if="hint" data-testid="learn-v2-hint-content" class="mt-3 whitespace-pre-wrap">{{ hint }}</p></template>
         <label v-if="phase === 'transfer'" class="mt-4 block">Your transfer response<textarea v-model="transferResponse" aria-label="Your transfer response" class="mt-1 w-full rounded border p-2" /></label>
         <template v-if="phase === 'confidence'"><label class="mt-4 block">Teach it back<textarea v-model="teachBack" aria-label="Teach it back" class="mt-1 w-full rounded border p-2" /></label><fieldset class="mt-3"><legend>Confidence</legend><label v-for="value in 5" :key="value" class="mr-3"><input v-model="confidence" type="radio" name="confidence" :value="value"> {{ value }}</label></fieldset></template>
         <button v-if="phase !== 'confidence'" type="button" data-testid="learn-v2-continue" :disabled="busy || !canContinue" class="mt-4 rounded bg-primary px-4 py-2 text-primary-foreground disabled:opacity-50" @click="phase === 'retrieval' ? move('prediction') : phase === 'prediction' ? move('teaching') : phase === 'teaching' ? move('fading') : phase === 'fading' ? move('transfer') : move('confidence')">Continue</button>
-        <button v-else type="button" data-testid="learn-v2-submit" :disabled="busy || !canContinue" class="mt-4 rounded bg-primary px-4 py-2 text-primary-foreground disabled:opacity-50" @click="submit">{{ busy ? 'Submitting…' : 'Submit for feedback' }}</button>
+        <button v-else type="button" data-testid="learn-v2-submit" :disabled="busy || !isOnline || !canContinue" :aria-describedby="!isOnline ? 'learn-v2-offline-notice' : undefined" class="mt-4 rounded bg-primary px-4 py-2 text-primary-foreground disabled:opacity-50" @click="submit">{{ busy ? 'Submitting…' : 'Submit for feedback' }}</button>
       </article>
-      <article v-if="scorePending" data-testid="learn-v2-score-pending" class="rounded-lg border p-5" role="status">Scoring is in progress. <button type="button" data-testid="learn-v2-score-retry" :disabled="busy" class="underline" @click="retryScore">Retry</button></article>
+      <article v-if="scorePending" data-testid="learn-v2-score-pending" class="rounded-lg border p-5" role="status">Scoring is in progress. <button type="button" data-testid="learn-v2-score-retry" :disabled="busy || !isOnline" :aria-describedby="!isOnline ? 'learn-v2-offline-notice' : undefined" class="underline disabled:opacity-50" @click="retryScore">Retry</button></article>
       <article v-if="phase === 'feedback'" data-testid="learn-v2-feedback" class="rounded-lg border p-5"><h2 class="text-lg font-medium">Server feedback</h2><p v-if="feedback?.scorePercent !== undefined">Score: {{ feedback.scorePercent }}%</p><p v-if="feedback?.state">Mastery state: {{ feedback.state }}</p><ul v-if="feedback?.feedback?.criterionResults.length" class="mt-3 list-disc space-y-1 pl-5"><li v-for="criterion in feedback.feedback.criterionResults" :key="criterion.key"><span class="font-medium">{{ criterion.key }}:</span> {{ criterion.awarded ? 'met' : 'not yet' }}<span v-if="criterion.rationale"> — {{ criterion.rationale }}</span></li></ul><p v-if="feedback?.feedback?.misconceptionTags.length" class="mt-3">Review: {{ feedback.feedback.misconceptionTags.join(', ') }}</p><button type="button" data-testid="learn-v2-next-review" class="mt-4 rounded bg-primary px-4 py-2 text-primary-foreground" @click="move('next_review')">See next review</button></article>
       <article v-if="phase === 'next_review'" data-testid="learn-v2-next-review-panel" class="rounded-lg border p-5"><h2 class="text-lg font-medium">Next review</h2><p>{{ feedback?.nextReviewAt ? new Date(feedback.nextReviewAt).toLocaleString() : 'No further review is scheduled yet.' }}</p></article>
     </template>
   </section>
 </template>
+
+<style scoped>
+.learn-v2-reduced-motion,
+.learn-v2-reduced-motion * {
+  scroll-behavior: auto !important;
+  animation: none !important;
+  transition: none !important;
+}
+
+.learn-v2-enhanced-contrast {
+  filter: contrast(1.25);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .learn-v2-session,
+  .learn-v2-session * {
+    scroll-behavior: auto !important;
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .learn-v2-session :is(button, textarea, fieldset, article, details) {
+    border: 1px solid ButtonText;
+  }
+}
+</style>

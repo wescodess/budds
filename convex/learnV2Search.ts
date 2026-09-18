@@ -1032,11 +1032,17 @@ export const quotaStatus = query({
       findBucket(ctx, 'learning_void_broad', voidScope, 'lifetime'),
     ])
     const limits = [SEARCH_LIMITS.productMonth, SEARCH_LIMITS.productDay, SEARCH_LIMITS.userDay, SEARCH_LIMITS.learningVoidLifetime]
+    const scopes = ['product_month', 'product_day', 'user_day', 'learning_void_broad'] as const
+    const now = new Date()
+    const nextUtcDay = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1)
+    const nextUtcMonth = Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)
     return rows.map((row, index) => ({
+      scope: scopes[index]!,
       limit: limits[index]!,
       reserved: row?.reservedCredits ?? 0,
       consumed: row?.consumedCredits ?? 0,
       available: limits[index]! - (row?.reservedCredits ?? 0) - (row?.consumedCredits ?? 0),
+      resetAt: index === 0 ? nextUtcMonth : index < 3 ? nextUtcDay : null,
     }))
   },
 })

@@ -101,6 +101,10 @@ const showPaceSelector = ref(false)
         <LearnStartLearningButton :course-id="courseId" :folder-id="folderId" />
       </div>
 
+      <div class="mb-6">
+        <LearnV2UpgradeLegacyCourseButton :legacy-course-id="courseId" />
+      </div>
+
       <div class="space-y-2" role="list" aria-label="Course sections">
         <template v-for="(section, idx) in sections" :key="section._id">
           <NuxtLink
