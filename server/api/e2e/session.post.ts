@@ -32,21 +32,38 @@ export default defineEventHandler(async (event) => {
   })
   if (!response.ok) throw createError({ statusCode: 503, statusMessage: 'Disposable auth bootstrap failed' })
   const cookies = typeof response.headers.getSetCookie === 'function' ? response.headers.getSetCookie() : []
-  const cookie = cookies.map(value => value.split(';', 1)[0]).join('; ')
-  const tokenResponse = await fetch(new URL('/api/auth/convex/token', target), {
-    headers: { cookie, origin: getRequestURL(event).origin },
-  })
-  const tokenPayload = tokenResponse.ok ? await tokenResponse.json() as { token?: unknown } : null
-  const convexUrl = readConfiguredRuntimeValue(useRuntimeConfig(event).public?.convex?.url, 'NUXT_PUBLIC_CONVEX_URL', 'CONVEX_URL')
+  const cookiePairs = cookies.map(value => value.split(';', 1)[0]).filter((value): value is string => Boolean(value))
+  const cookie = cookiePairs.join('; ')
+  const convexCookie = cookiePairs.find(value => value.startsWith('better-auth.convex_jwt='))
+  let convexToken = convexCookie ? decodeURIComponent(convexCookie.slice('better-auth.convex_jwt='.length)) : null
+  if (!convexToken) {
+    const tokenResponse = await fetch(new URL('/api/auth/convex/token', target), {
+      headers: { cookie, origin: getRequestURL(event).origin },
+    })
+    const tokenPayload = tokenResponse.ok ? await tokenResponse.json() as { token?: unknown } : null
+    convexToken = typeof tokenPayload?.token === 'string' ? tokenPayload.token : null
+  }
+  const convexUrl = readConfiguredRuntimeValue(process.env.CONVEX_URL, 'NUXT_PUBLIC_CONVEX_URL')
   let parsedConvexUrl: URL
   try { parsedConvexUrl = new URL(convexUrl) }
   catch { throw createError({ statusCode: 503, statusMessage: 'Isolated profile backend unavailable' }) }
-  if (parsedConvexUrl.protocol !== 'http:' || !['127.0.0.1', 'localhost'].includes(parsedConvexUrl.hostname) || typeof tokenPayload?.token !== 'string') {
+  if (parsedConvexUrl.protocol !== 'http:' || !['127.0.0.1', 'localhost'].includes(parsedConvexUrl.hostname) || !convexToken) {
     throw createError({ statusCode: 503, statusMessage: 'Isolated profile backend unavailable' })
   }
   const client = new ConvexHttpClient(parsedConvexUrl.toString())
-  client.setAuth(tokenPayload.token)
-  await client.mutation(api.users.upsertUser, {})
+  client.setAuth(convexToken)
+  // The anonymous local Convex backend can briefly reject a newly-issued JWT
+  // while its auth state settles. Retry only inside this loopback-only seam.
+  for (let attempt = 0; attempt < 90; attempt++) {
+    try {
+      await client.mutation(api.users.upsertUser, {})
+      break
+    }
+    catch (error) {
+      if (attempt === 89) throw error
+      await new Promise(resolve => setTimeout(resolve, 1_000))
+    }
+  }
   for (const cookie of cookies) appendResponseHeader(event, 'set-cookie', cookie.replace(/;\s*Domain=[^;]+/ig, '').replace(/;\s*Secure/ig, '').replace(/SameSite=None/ig, 'SameSite=Lax'))
   return { authenticated: true }
 })

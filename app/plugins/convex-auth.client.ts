@@ -39,7 +39,7 @@ export default defineNuxtPlugin({
       upsertPending = true
       void (async () => {
         try {
-          for (let attempt = 0; attempt < 3; attempt++) {
+          for (let attempt = 0; attempt < 5; attempt++) {
             try {
               await convexClient.mutation(upsertUserRef, {})
               if (epoch !== authEpoch) return
@@ -48,7 +48,7 @@ export default defineNuxtPlugin({
               return
             }
             catch {
-              if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)))
+              if (attempt < 4) await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)))
             }
           }
           if (epoch === authEpoch) {
