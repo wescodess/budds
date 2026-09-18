@@ -120,6 +120,26 @@ export const createLearningVoid = mutation({
   },
 })
 
+export const updateLearningVoidDraft = mutation({
+  args: { learningVoidId: v.id('learningVoids'), title: v.string(), expectedRevision: v.number(), idempotencyKey: v.string() },
+  handler: async (ctx, args) => {
+    assertNonEmptyText(args.title, 'Learning Void title')
+    assertTextAtMost(args.title, MAX_LEARNING_VOID_TITLE_LENGTH, 'Learning Void title')
+    assertPositiveInteger(args.expectedRevision, 'Expected Learning Void revision')
+    assertIdempotencyKey(args.idempotencyKey)
+    const userId = await requireLearnV2MutationAccess(ctx)
+    const requestFingerprint = fingerprint('updateLearningVoidDraft', args)
+    const replay = await replayOrReject(ctx, userId, args.idempotencyKey, requestFingerprint)
+    if (replay) return learningVoidReceiptOutcome(replay)
+    const row = await requireLiveOwnedVoid(ctx, userId, args.learningVoidId)
+    if (row.status !== 'draft' || row.revision !== args.expectedRevision) throw new Error('Learning Void draft is no longer editable')
+    const revision = row.revision + 1
+    await ctx.db.patch(row._id, { title: args.title.trim(), revision, lastIdempotencyKey: args.idempotencyKey, updatedAt: Date.now() })
+    await persistReceipt(ctx, { userId, learningVoidId: row._id, idempotencyKey: args.idempotencyKey, command: 'updateLearningVoidDraft', requestFingerprint, revision, status: 'draft', blueprintRevisionId: row.activeBlueprintRevisionId })
+    return learningVoidOutcome({ learningVoidId: row._id, status: 'draft', revision, activeBlueprintRevisionId: row.activeBlueprintRevisionId })
+  },
+})
+
 export const transitionLearningVoid = mutation({
   args: { learningVoidId: v.id('learningVoids'), status: voidStatus, expectedRevision: v.number(), idempotencyKey: v.string() },
   handler: async (ctx, args) => {
@@ -200,6 +220,8 @@ export const forkBlueprintDraft = mutation({
       mode: source.mode,
       desiredDepth: source.desiredDepth,
       sourcePolicy: source.sourcePolicy,
+      targetLocalDate: source.targetLocalDate,
+      sessionMinutes: source.sessionMinutes,
       generatorVersion: source.generatorVersion,
       createdAt: now,
       updatedAt: now,

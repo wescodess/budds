@@ -35,6 +35,18 @@ describe('Learn V2 journey workspace seams', () => {
     expect(wrapper.emitted('continueToSources')?.[0]?.[0]).toMatchObject({ outcome: 'Explain cancellation to a teammate', sourcePolicy: 'folder_plus_web' })
   })
 
+  it('keeps target date and session length in the saved outcome intent', async () => {
+    const Comp = await import(`${path}/OutcomeCanvas.vue`)
+    const wrapper = await mountSuspended(Comp.default, {
+      props: { draft: { folderName: 'Frontend foundations', folderDocumentCount: 3, outcome: 'Explain cancellation to a teammate', mode: 'understand', depth: 'working', sessionMinutes: 25, sourcePolicy: 'folder_plus_web' } },
+    })
+    const selects = wrapper.findAll('select')
+    await selects[2]!.setValue('45')
+    await wrapper.find('input[type="date"]').setValue('2031-05-20')
+    await wrapper.get('button').trigger('click')
+    expect(wrapper.emitted('saveDraft')?.[0]).toEqual([expect.objectContaining({ targetDate: '2031-05-20', sessionMinutes: 45 })])
+  })
+
   it('keeps source acceptance explicit and distinguishes evidence origin', async () => {
     const Comp = await import(`${path}/EvidenceDesk.vue`)
     const source = { id: 'source_1', title: 'AbortController', origin: 'folder_document' as const, publisher: 'MDN', retrievedLabel: 'Reviewed from your folder', coverage: 'strong' as const, lifecycle: 'evaluated' as const, objectives: ['Cancel a request safely'] }
