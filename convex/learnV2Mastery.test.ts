@@ -111,6 +111,18 @@ describe('LA2-12 server-scored mastery attempts', () => {
     }
   })
 
+  test('turns an expired post-dispatch lease into a reconciliation block', async () => {
+    const { t, args } = await fixture()
+    const { scorerVerdict: _scorerVerdict, ...request } = args('crashed-dispatch', 80)
+    const reservation = await t.mutation(internal.learnV2Mastery.beginMasteryScoring, request)
+    expect(reservation.kind).toBe('acquired')
+    if (reservation.kind !== 'acquired') throw new Error('Expected scoring lease')
+    await t.mutation(internal.learnV2Mastery.markMasteryScoringDispatched, { tokenIdentifier: OWNER.tokenIdentifier, jobId: reservation.jobId, leaseToken: reservation.leaseToken })
+    await t.run(ctx => ctx.db.patch(reservation.jobId, { leaseExpiresAt: Date.now() - 1 }))
+    await expect(t.mutation(internal.learnV2Mastery.beginMasteryScoring, request)).resolves.toEqual({ kind: 'pending', status: 'blocked' })
+    await expect(t.run(ctx => ctx.db.get(reservation.jobId))).resolves.toMatchObject({ status: 'blocked', terminalReason: 'provider_outcome_requires_reconciliation' })
+  })
+
   test('enforces exact started content/session/active-plan pins and rejects purged evidence', async () => {
     const stale = await fixture()
     await stale.t.run(ctx => ctx.db.patch(stale.ids.planId, { activeRevisionId: undefined }))

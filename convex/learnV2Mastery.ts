@@ -118,7 +118,12 @@ export const beginMasteryScoring = internalMutation({
     const existing = await ctx.db.query('learnJobs').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', args.tokenIdentifier).eq('idempotencyKey', args.idempotencyKey)).unique()
     if (existing) {
       if (existing.type !== SCORING_JOB_TYPE || existing.requestFingerprint !== fingerprint) throw new Error('Idempotency key was already used for a different request')
-      if (existing.status === 'running' || existing.status === 'blocked') return { kind: 'pending' as const, status: existing.status === 'blocked' ? 'blocked' as const : 'in_progress' as const }
+      if (existing.status === 'blocked') return { kind: 'pending' as const, status: 'blocked' as const }
+      if (existing.status === 'running') {
+        if ((existing.leaseExpiresAt ?? 0) > now) return { kind: 'pending' as const, status: 'in_progress' as const }
+        await ctx.db.patch(existing._id, { status: 'blocked', leaseToken: undefined, leaseExpiresAt: undefined, checkpoint: undefined, terminalReason: 'provider_outcome_requires_reconciliation', revision: existing.revision + 1, updatedAt: now })
+        return { kind: 'pending' as const, status: 'blocked' as const }
+      }
       if ((existing.status === 'leased' || existing.status === 'queued') && (existing.leaseExpiresAt ?? 0) > now) return { kind: 'pending' as const, status: 'in_progress' as const }
       const leaseToken = crypto.randomUUID()
       await ctx.db.patch(existing._id, { status: 'leased', leaseToken, leaseExpiresAt: now + SCORING_LEASE_MS, checkpoint: 'reserved', terminalReason: undefined, revision: existing.revision + 1, updatedAt: now })
