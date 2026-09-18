@@ -22,7 +22,24 @@ export interface LearnMapCandidate {
 }
 
 function clone(candidate: LearnMapCandidate): LearnMapCandidate {
-  return structuredClone(candidate)
+  // Convex projections arrive through Vue as reactive proxies, which the
+  // browser structured-clone algorithm rejects. Copy this bounded DTO
+  // explicitly at the adapter boundary so revision editing works for both
+  // reactive UI state and plain test/server values.
+  return {
+    ...candidate,
+    milestones: candidate.milestones.map(milestone => ({ ...milestone })),
+    objectives: candidate.objectives.map(objective => ({
+      ...objective,
+      sourceSnapshotIds: [...objective.sourceSnapshotIds],
+      gapSourceSnapshotIds: [...objective.gapSourceSnapshotIds],
+      prerequisiteObjectiveKeys: [...objective.prerequisiteObjectiveKeys],
+      assessmentContract: {
+        ...objective.assessmentContract,
+        criteria: objective.assessmentContract.criteria.map(criterion => ({ ...criterion })),
+      },
+    })),
+  }
 }
 
 function normalizeOrders(candidate: LearnMapCandidate) {
