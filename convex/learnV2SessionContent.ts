@@ -1082,6 +1082,9 @@ export const getSessionContent = query({
         q.eq("userId", userId).eq("sessionContentId", content._id),
       )
       .take(16);
+    const visibleBlocks = blocks.filter((block) =>
+      (block.kind !== "faded_example" || session.substantiveHintUsedAt !== undefined)
+      && (block.kind !== "worked_example" || session.answerRevealedAt !== undefined));
     const claims = await ctx.db
       .query("sessionContentClaims")
       .withIndex("by_userId_and_sessionContentId_and_order", (q) =>
@@ -1106,6 +1109,6 @@ export const getSessionContent = query({
       );
     }
     const { providerRequestId: _providerRequestId, ...publicContent } = content;
-    return { ...publicContent, blocks, claims, supports };
+    return { ...publicContent, blocks: visibleBlocks, claims, supports };
   },
 });
