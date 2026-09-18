@@ -12,6 +12,12 @@ function getEncryptionKey(): string {
   return key
 }
 
+/** Used only after a durable OAuth-revoke checkpoint: refresh may already be revoked. */
+export async function getStoredCalendarAccessToken(connection: Doc<'calendarConnections'>): Promise<string> {
+  const access = await decryptLegacyOrEncryptedCalendarToken(connection.accessToken, getEncryptionKey())
+  return access.plaintext
+}
+
 async function refreshGoogleToken(refreshToken: string): Promise<{ accessToken: string; expiresAt: number }> {
   const clientId = process.env.GOOGLE_CLIENT_ID
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET

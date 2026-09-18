@@ -2,7 +2,7 @@ import { v } from 'convex/values'
 import { action, internalAction, internalMutation, internalQuery, mutation, query, type ActionCtx } from './_generated/server'
 import { api, internal } from './_generated/api'
 import { requireAuth } from './lib/auth'
-import { getCalendarAccessToken } from './lib/calendarTokenRuntime'
+import { getCalendarAccessToken, getStoredCalendarAccessToken } from './lib/calendarTokenRuntime'
 import type { Doc, Id } from './_generated/dataModel'
 import { markCalendarEventManaged, reserveCalendarCleanup } from './calendarEventCleanup'
 import { hasAccountDeletionTombstone } from './lib/accountDeletionTombstone'
@@ -356,10 +356,17 @@ export const getProjectionDisconnectBatch = internalQuery({
         .eq('status', 'creating')
         .gt('providerCreateLeaseExpiresAt', Date.now()))
       .first()
+    const settlingCreate = activeCreate ? null : await ctx.db.query('calendarProjections')
+      .withIndex('by_calendarConnectionId_and_status_and_providerCreateSettleAfter', q => q
+        .eq('calendarConnectionId', connection._id)
+        .eq('status', 'creating')
+        .gt('providerCreateSettleAfter', Date.now()))
+      .first()
+    const withinGrace = Boolean(settlingCreate)
     const projections = await ctx.db.query('calendarProjections')
       .withIndex('by_calendarConnectionId', q => q.eq('calendarConnectionId', connection._id))
       .take(DISCONNECT_BATCH_SIZE)
-    return { activeCreate: Boolean(activeCreate), projections }
+    return { activeCreate: Boolean(activeCreate || withinGrace), projections }
   },
 })
 
@@ -389,7 +396,9 @@ async function runDisconnectForUser(
 
   let accessToken: string
   try {
-    accessToken = await getCalendarAccessToken(ctx, userId, claim.connection)
+    accessToken = claim.connection.disconnectRevokeStartedAt
+      ? await getStoredCalendarAccessToken(claim.connection)
+      : await getCalendarAccessToken(ctx, userId, claim.connection)
   }
   catch (error) {
     await ctx.runMutation(internal.calendarConnections.recordDisconnectBatch, {
@@ -400,6 +409,36 @@ async function runDisconnectForUser(
       error: error instanceof Error ? error.message : String(error),
     })
     return { disconnected: false, googleEventsDeleted: 0, googleEventsFailed: 1 }
+  }
+
+  // Stop the current V2 channel before deleting managed provider events. Google
+  // permits overlapping renewal channels, so only the stored current pair is
+  // stopped; a missing/expired channel is already settled.
+  const watchChannels: Doc<'calendarWatchChannels'>[] = await ctx.runQuery(internal.learnV2CalendarReconciliation.getWatchStopBatch, { calendarConnectionId: claim.connection._id, includeCurrent: true })
+  // Pre-ledger connections retain the legacy pair; once ledgered, stop each
+  // durable channel exactly once below.
+  if (watchChannels.length === 0 && claim.connection.learnV2WatchChannelId && claim.connection.learnV2WatchResourceId) {
+    try {
+      const stopped = await fetch('https://www.googleapis.com/calendar/v3/channels/stop', {
+        method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: claim.connection.learnV2WatchChannelId, resourceId: claim.connection.learnV2WatchResourceId }), signal: AbortSignal.timeout(15_000),
+      })
+      if (!stopped.ok && stopped.status !== 404 && stopped.status !== 410) throw new Error(`Google Calendar watch stop failed with status ${stopped.status}`)
+      await ctx.runMutation(internal.learnV2CalendarReconciliation.clearStoppedWatch, { calendarConnectionId: claim.connection._id })
+    } catch (error) {
+      await ctx.runMutation(internal.calendarConnections.recordDisconnectBatch, { calendarConnectionId: claim.connection._id, leaseToken, deletedEventIds: [], failures: 1, error: error instanceof Error ? error.message : String(error) })
+      return { disconnected: false, googleEventsDeleted: 0, googleEventsFailed: 1 }
+    }
+  }
+  for (const channel of watchChannels) {
+    try {
+      const stopped = await fetch('https://www.googleapis.com/calendar/v3/channels/stop', { method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ id: channel.channelId, resourceId: channel.resourceId }), signal: AbortSignal.timeout(15_000) })
+      if (!stopped.ok && stopped.status !== 404 && stopped.status !== 410) throw new Error(`Google Calendar watch stop failed with status ${stopped.status}`)
+      await ctx.runMutation(internal.learnV2CalendarReconciliation.markWatchStopped, { calendarConnectionId: claim.connection._id, channelId: channel.channelId })
+    } catch (error) {
+      await ctx.runMutation(internal.calendarConnections.recordDisconnectBatch, { calendarConnectionId: claim.connection._id, leaseToken, deletedEventIds: [], failures: 1, error: error instanceof Error ? error.message : String(error) })
+      return { disconnected: false, googleEventsDeleted: 0, googleEventsFailed: 1 }
+    }
   }
 
   const events: Doc<'calendarEvents'>[] = await ctx.runQuery(internal.calendarEvents.getDisconnectBatch, {
@@ -465,8 +504,22 @@ async function runDisconnectForUser(
     failures: failures.length,
     ...(failures[0] ? { error: failures[0].error } : {}),
   })
+  if (result.state === 'ready_to_revoke') {
+    const checkpointed = await ctx.runMutation(internal.calendarConnections.beginOAuthRevoke, { calendarConnectionId: claim.connection._id, leaseToken })
+    if (!checkpointed) return { disconnected: false, googleEventsDeleted: deletedEventIds.length + deletedProjectionIds.length, googleEventsFailed: 0 }
+    try {
+      const revoked = await fetch('https://oauth2.googleapis.com/revoke', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ token: accessToken }), signal: AbortSignal.timeout(15_000) })
+      // A checkpoint makes an already-invalid token a settled retry outcome.
+      if (revoked.status !== 200 && revoked.status !== 400) throw new Error(`Google OAuth revoke failed with status ${revoked.status}`)
+      const finalized = await ctx.runMutation(internal.calendarConnections.finalizeOAuthRevocation, { calendarConnectionId: claim.connection._id, leaseToken })
+      return { disconnected: finalized, googleEventsDeleted: deletedEventIds.length + deletedProjectionIds.length, googleEventsFailed: 0 }
+    } catch (error) {
+      await ctx.runMutation(internal.calendarConnections.recordDisconnectBatch, { calendarConnectionId: claim.connection._id, leaseToken, deletedEventIds: [], failures: 1, error: error instanceof Error ? error.message : String(error) })
+      return { disconnected: false, googleEventsDeleted: deletedEventIds.length + deletedProjectionIds.length, googleEventsFailed: 1 }
+    }
+  }
   return {
-    disconnected: result.state === 'disconnected',
+    disconnected: false,
     googleEventsDeleted: deletedEventIds.length + deletedProjectionIds.length,
     googleEventsFailed: failures.length,
   }

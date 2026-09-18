@@ -42,6 +42,7 @@ import type * as http from "../http.js";
 import type * as learnProfile from "../learnProfile.js";
 import type * as learnV2Access from "../learnV2Access.js";
 import type * as learnV2Calendar from "../learnV2Calendar.js";
+import type * as learnV2CalendarReconciliation from "../learnV2CalendarReconciliation.js";
 import type * as learnV2Blueprints from "../learnV2Blueprints.js";
 import type * as learnV2FolderManifests from "../learnV2FolderManifests.js";
 import type * as learnV2Lifecycle from "../learnV2Lifecycle.js";
@@ -118,6 +119,7 @@ declare const fullApi: ApiFromModules<{
   learnProfile: typeof learnProfile;
   learnV2Access: typeof learnV2Access;
   learnV2Calendar: typeof learnV2Calendar;
+  learnV2CalendarReconciliation: typeof learnV2CalendarReconciliation;
   learnV2Blueprints: typeof learnV2Blueprints;
   learnV2FolderManifests: typeof learnV2FolderManifests;
   learnV2Lifecycle: typeof learnV2Lifecycle;

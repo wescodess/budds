@@ -53,7 +53,7 @@ const exportCollectionValidator = v.union(
   v.literal('audioOverviewInterjectionsV2'),
   v.literal('audioOverviewInterjectionUtterances'),
   v.literal('audioOverviewInterjectionSources'),
-  v.literal('learningVoids'), v.literal('learnBlueprints'), v.literal('learnBlueprintRevisions'), v.literal('learnMilestones'), v.literal('learnObjectives'), v.literal('learnObjectivePrerequisites'), v.literal('learnSourceIdentities'), v.literal('learnSourceSnapshots'), v.literal('learnSourceFetchLeases'), v.literal('learnSourceFetchRateEvents'), v.literal('learnMasteryScoringRateEvents'), v.literal('learnSourceCommandReceipts'), v.literal('learnFolderSourceManifests'), v.literal('learnFolderSourceManifestFolders'), v.literal('learnFolderSourceManifestEntries'), v.literal('learnSourceExcerpts'), v.literal('learnObjectiveSources'), v.literal('learnClaimSupports'), v.literal('masteryAttempts'), v.literal('masteryRecords'), v.literal('studyPlans'), v.literal('studyPlanRevisions'), v.literal('studySessions'), v.literal('studySessionRetrievalObjectives'), v.literal('sessionContent'), v.literal('sessionContentBlocks'), v.literal('sessionContentClaims'), v.literal('calendarProjections'), v.literal('reminderPolicies'), v.literal('searchQuotaBuckets'), v.literal('searchReservations'), v.literal('learnJobs'), v.literal('learnLifecycleReceipts'), v.literal('learnPlanCommandReceipts'), v.literal('learnPlanAuditEvents'),
+  v.literal('learningVoids'), v.literal('learnBlueprints'), v.literal('learnBlueprintRevisions'), v.literal('learnMilestones'), v.literal('learnObjectives'), v.literal('learnObjectivePrerequisites'), v.literal('learnSourceIdentities'), v.literal('learnSourceSnapshots'), v.literal('learnSourceFetchLeases'), v.literal('learnSourceFetchRateEvents'), v.literal('learnMasteryScoringRateEvents'), v.literal('learnSourceCommandReceipts'), v.literal('learnFolderSourceManifests'), v.literal('learnFolderSourceManifestFolders'), v.literal('learnFolderSourceManifestEntries'), v.literal('learnSourceExcerpts'), v.literal('learnObjectiveSources'), v.literal('learnClaimSupports'), v.literal('masteryAttempts'), v.literal('masteryRecords'), v.literal('studyPlans'), v.literal('studyPlanRevisions'), v.literal('studySessions'), v.literal('studySessionRetrievalObjectives'), v.literal('sessionContent'), v.literal('sessionContentBlocks'), v.literal('sessionContentClaims'), v.literal('calendarProjections'), v.literal('calendarReconciliationProposals'), v.literal('calendarWebhookReceipts'), v.literal('calendarWatchChannels'), v.literal('reminderPolicies'), v.literal('searchQuotaBuckets'), v.literal('searchReservations'), v.literal('learnJobs'), v.literal('learnLifecycleReceipts'), v.literal('learnPlanCommandReceipts'), v.literal('learnPlanAuditEvents'),
 )
 
 function boundedPaginationOpts(paginationOpts: { numItems: number, cursor: string | null }) {
@@ -146,7 +146,7 @@ export const getUserDataPage = query({
         const result = await ctx.db.query('calendarConnections').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
         return {
           ...result,
-          page: result.page.map(({ accessToken: _accessToken, refreshToken: _refreshToken, ...connection }) => connection),
+          page: result.page.map(connection => ({ _id: connection._id, _creationTime: connection._creationTime, userId: connection.userId, provider: connection.provider, timezone: connection.timezone, status: connection.status, connectedAt: connection.connectedAt, preferences: connection.preferences, learnV2ConsentVersion: connection.learnV2ConsentVersion, ...(connection.learnV2AttentionReason ? { calendarAttention: connection.learnV2AttentionReason } : {}) })),
         }
       }
       case 'calendarEvents':
@@ -249,6 +249,18 @@ export const getUserDataPage = query({
             ...row
           }) => row),
         }
+      }
+      case 'calendarReconciliationProposals': {
+        const result = await ctx.db.query('calendarReconciliationProposals').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+        return { ...result, page: result.page.map(({ calendarConnectionId: _connection, projectionId: _projection, providerUpdatedAt: _providerUpdated, ...row }) => row) }
+      }
+      case 'calendarWebhookReceipts': {
+        const result = await ctx.db.query('calendarWebhookReceipts').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+        return { ...result, page: result.page.map(row => ({ _id: row._id, _creationTime: row._creationTime, userId: row.userId, receivedAt: row.receivedAt })) }
+      }
+      case 'calendarWatchChannels': {
+        const result = await ctx.db.query('calendarWatchChannels').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+        return { ...result, page: result.page.map(row => ({ _id: row._id, _creationTime: row._creationTime, userId: row.userId, status: row.status, expiresAt: row.expiresAt, createdAt: row.createdAt, updatedAt: row.updatedAt })) }
       }
       case 'reminderPolicies': return await ctx.db.query('reminderPolicies').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
       case 'searchQuotaBuckets': {

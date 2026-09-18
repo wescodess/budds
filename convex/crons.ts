@@ -19,5 +19,9 @@ crons.interval('recover expired Learn V2 blueprint jobs', { minutes: 5 }, intern
 crons.interval('recover expired Learn V2 session-content jobs', { minutes: 5 }, internal.learnV2SessionContent.recoverExpiredSessionContentJobs, {})
 crons.interval('recover expired Learn V2 mastery scoring jobs', { minutes: 5 }, internal.learnV2Mastery.recoverExpiredMasteryScoringJobs, {})
 crons.interval('cleanup Learn V2 mastery scoring rate events', { hours: 1 }, internal.learnV2Mastery.cleanupExpiredMasteryScoringRateEvents, {})
+crons.interval('expire Learn V2 calendar reconciliation proposals', { hours: 1 }, internal.learnV2CalendarReconciliation.expireProposals, {})
+crons.interval('poll and renew Learn V2 calendar watches', { minutes: 15 }, internal.learnV2CalendarReconciliation.maintainConnections, { cursor: null })
+crons.interval('purge Learn V2 calendar webhook receipts', { hours: 1 }, internal.learnV2CalendarReconciliation.purgeWebhookReceipts, {})
+crons.interval('purge stopped Learn V2 calendar watches', { hours: 1 }, internal.learnV2CalendarReconciliation.purgeStoppedWatches, {})
 
 export default crons

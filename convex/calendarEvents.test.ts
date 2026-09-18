@@ -500,7 +500,9 @@ describe('calendarEvents', () => {
 
     const previousEncryptionKey = process.env.CALENDAR_TOKEN_ENCRYPTION_KEY
     process.env.CALENDAR_TOKEN_ENCRYPTION_KEY = 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY='
-    const deleteGoogleEvent = vi.fn().mockResolvedValue(new Response(null, { status: 204 }))
+    const deleteGoogleEvent = vi.fn(async (url: string) => new Response(null, {
+      status: url.includes('/revoke') ? 200 : 204,
+    }))
     vi.stubGlobal('fetch', deleteGoogleEvent)
     try {
       const result = await asAlice.action(api.calendarEvents.disconnectCalendar, {})
@@ -512,7 +514,8 @@ describe('calendarEvents', () => {
       vi.unstubAllGlobals()
     }
 
-    expect(deleteGoogleEvent).toHaveBeenCalledTimes(25)
+    expect(deleteGoogleEvent).toHaveBeenCalledTimes(26)
+    expect(deleteGoogleEvent.mock.calls.filter(([url]) => String(url).includes('/revoke'))).toHaveLength(1)
     expect(await asAlice.query(api.calendarConnections.getByUser, {})).toBeNull()
     expect(await asAlice.query(api.calendarEvents.listByUser, {})).toEqual([])
   })

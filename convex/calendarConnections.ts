@@ -58,6 +58,7 @@ export const upsertConnection = mutation({
         connectedAt: Date.now(),
         ...(args.grantedScopes ? { grantedScopes: [...new Set(args.grantedScopes)].sort() } : {}),
         ...(args.learnV2ConsentVersion ? { learnV2ConsentVersion: args.learnV2ConsentVersion } : {}),
+        ...(args.learnV2ConsentVersion ? { learnV2AttentionRequiredAt: undefined, learnV2AttentionReason: undefined, learnV2SyncToken: undefined, learnV2SyncPageToken: undefined } : {}),
       })
       return existing._id
     }
@@ -100,6 +101,10 @@ export const disconnect = internalMutation({
       .withIndex('by_calendarConnectionId', q => q.eq('calendarConnectionId', connection._id))
       .first()
     if (projection) throw new Error('Calendar projections must be removed by the provider-first disconnect')
+    const proposal = await ctx.db.query('calendarReconciliationProposals').withIndex('by_calendarConnectionId', q => q.eq('calendarConnectionId', connection._id)).first()
+    const receipt = await ctx.db.query('calendarWebhookReceipts').withIndex('by_calendarConnectionId', q => q.eq('calendarConnectionId', connection._id)).first()
+    const watch = await ctx.db.query('calendarWatchChannels').withIndex('by_calendarConnectionId', q => q.eq('calendarConnectionId', connection._id)).first()
+    if (proposal || receipt || watch) throw new Error('Calendar reconciliation evidence must be removed by the provider-first disconnect')
     await assertCalendarCleanupSettled(ctx, connection._id)
     const cleanup = await ctx.db
       .query('calendarEventCleanupJobs')
@@ -271,11 +276,43 @@ export const recordDisconnectBatch = internalMutation({
       })
       return { state: 'purging_evidence' as const, deleted: terminalCleanup.length }
     }
-
-    await ctx.db.delete(connection._id)
-    return { state: 'disconnected' as const, deleted: deletedCount }
+    const proposals = await ctx.db.query('calendarReconciliationProposals').withIndex('by_calendarConnectionId', q => q.eq('calendarConnectionId', connection._id)).take(25)
+    const receipts = proposals.length === 0 ? await ctx.db.query('calendarWebhookReceipts').withIndex('by_calendarConnectionId', q => q.eq('calendarConnectionId', connection._id)).take(25) : []
+    const watches = proposals.length === 0 && receipts.length === 0 ? await ctx.db.query('calendarWatchChannels').withIndex('by_calendarConnectionId', q => q.eq('calendarConnectionId', connection._id)).take(25) : []
+    if (proposals.length || receipts.length || watches.length) {
+      for (const row of [...proposals, ...receipts, ...watches]) await ctx.db.delete(row._id)
+      await ctx.db.patch(connection._id, { disconnectLeaseToken: undefined, disconnectLeaseExpiresAt: undefined, disconnectUpdatedAt: now })
+      await ctx.scheduler.runAfter(0, internal.calendarEvents.continueDisconnect, { calendarConnectionId: connection._id })
+      return { state: 'purging_reconciliation' as const, deleted: proposals.length + receipts.length + watches.length }
+    }
+    // Keep encrypted credentials until the action has checkpointed and
+    // completed Google OAuth revocation; a retry can safely recognize 400.
+    return { state: 'ready_to_revoke' as const, deleted: deletedCount }
   },
 })
+
+export const beginOAuthRevoke = internalMutation({ args: { calendarConnectionId: v.id('calendarConnections'), leaseToken: v.string() }, handler: async (ctx, args) => {
+  const connection = await ctx.db.get(args.calendarConnectionId)
+  if (!connection || connection.status !== 'disconnecting' || connection.disconnectLeaseToken !== args.leaseToken) return false
+  if (!connection.disconnectRevokeStartedAt) await ctx.db.patch(connection._id, { disconnectRevokeStartedAt: Date.now() })
+  return true
+} })
+
+export const finalizeOAuthRevocation = internalMutation({ args: { calendarConnectionId: v.id('calendarConnections'), leaseToken: v.string() }, handler: async (ctx, args) => {
+  const connection = await ctx.db.get(args.calendarConnectionId)
+  if (!connection || connection.status !== 'disconnecting' || connection.disconnectLeaseToken !== args.leaseToken || !connection.disconnectRevokeStartedAt) return false
+  const [event, projection, cleanup, proposal, receipt, watch] = await Promise.all([
+    ctx.db.query('calendarEvents').withIndex('by_calendarConnectionId_and_calendarEventId', q => q.eq('calendarConnectionId', connection._id)).first(),
+    ctx.db.query('calendarProjections').withIndex('by_calendarConnectionId', q => q.eq('calendarConnectionId', connection._id)).first(),
+    ctx.db.query('calendarEventCleanupJobs').withIndex('by_calendarConnectionId_and_calendarEventId', q => q.eq('calendarConnectionId', connection._id)).first(),
+    ctx.db.query('calendarReconciliationProposals').withIndex('by_calendarConnectionId', q => q.eq('calendarConnectionId', connection._id)).first(),
+    ctx.db.query('calendarWebhookReceipts').withIndex('by_calendarConnectionId', q => q.eq('calendarConnectionId', connection._id)).first(),
+    ctx.db.query('calendarWatchChannels').withIndex('by_calendarConnectionId', q => q.eq('calendarConnectionId', connection._id)).first(),
+  ])
+  if (event || projection || cleanup || proposal || receipt || watch) throw new Error('Calendar provider cleanup must settle before credential finalization')
+  await ctx.db.delete(connection._id)
+  return true
+} })
 
 export const hasConnectionForUser = internalQuery({
   args: { userId: v.string() },
