@@ -1,12 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { getFunctionName } from 'convex/server'
-import { useNuxtApp } from '#app'
 
 const access = ref<any>({ kind: 'allowed' })
 const pending = ref(false)
 const quota = ref<any[]>([])
 const upgrade = vi.fn()
+const convexAuthReady = ref(true)
+const convexAuthenticated = ref(true)
+
+mockNuxtImport('useLearnV2Access', () => () => ({
+  allowed: computed(() => convexAuthReady.value && convexAuthenticated.value && access.value.kind === 'allowed'),
+  checkingAccess: computed(() => !convexAuthReady.value || (convexAuthenticated.value && pending.value)),
+}))
 
 mockNuxtImport('useConvexQuery', () => (reference: any) => getFunctionName(reference)?.includes('quotaStatus')
   ? { data: quota, pending: ref(false) }
@@ -19,8 +25,8 @@ const path = ['~', 'components', 'learn-v2', 'UpgradeLegacyCourseButton.vue'].jo
 
 describe('LearnV2UpgradeLegacyCourseButton', () => {
   beforeEach(() => {
-    ;(useNuxtApp().$convexAuthReady as Ref<boolean>).value = true
-    ;(useNuxtApp().$convexAuthenticated as Ref<boolean>).value = true
+    convexAuthReady.value = true
+    convexAuthenticated.value = true
     access.value = { kind: 'allowed' }
     pending.value = false
     quota.value = []
