@@ -37,7 +37,7 @@ describe('Learn V2 journey workspace seams', () => {
 
   it('keeps source acceptance explicit and distinguishes evidence origin', async () => {
     const Comp = await import(`${path}/EvidenceDesk.vue`)
-    const source = { id: 'source_1', title: 'AbortController', origin: 'folder_document' as const, publisher: 'MDN', retrievedLabel: 'Added from your folder', coverage: 'strong' as const, lifecycle: 'fetched' as const, objectives: ['Cancel a request safely'] }
+    const source = { id: 'source_1', title: 'AbortController', origin: 'folder_document' as const, publisher: 'MDN', retrievedLabel: 'Reviewed from your folder', coverage: 'strong' as const, lifecycle: 'evaluated' as const, objectives: ['Cancel a request safely'] }
     const wrapper = await mountSuspended(Comp.default, { props: { sources: [source], selectedSourceId: 'source_1' } })
 
     expect(wrapper.text()).toContain('Your folder')
