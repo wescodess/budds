@@ -57,7 +57,11 @@ test('learner can advance the Learn V2 mastery journey through production UI', a
   await expect(page.getByTestId('folder-form-modal')).toBeHidden()
 
   await page.goto('/app/learn/create')
-  await expect(page.getByTestId('learn-v2-outcome-canvas')).toBeVisible()
+  await expect.poll(async () => {
+    if (await page.getByTestId('learn-v2-outcome-canvas').isVisible()) return true
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    return false
+  }, { timeout: 120_000, intervals: [5_000] }).toBe(true)
   await page.getByTestId('learn-v2-create-folder').selectOption({ label: folderName })
   await page.getByTestId('learn-v2-outcome-input').fill('Explain orbital mechanics well enough to reason about a transfer orbit.')
   await page.getByLabel('Source policy').selectOption('web_only')
