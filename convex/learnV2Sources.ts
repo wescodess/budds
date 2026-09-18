@@ -323,6 +323,7 @@ export const registerCandidate = mutation({
     if (!blueprint || blueprint.userId !== userId || blueprint.learningVoidId !== learningVoid._id) throw new Error('Blueprint revision not found')
     if (blueprint.recordRevision !== args.expectedBlueprintRecordRevision) throw new Error('Blueprint revision conflict')
     if (!['draft', 'source_review'].includes(blueprint.status)) throw new Error('Blueprint revision is not editable')
+    if (blueprint.sourcePolicy === 'folder_only') throw new Error('This learning plan only allows folder sources')
     await requireNewestBlueprintRevision(ctx, userId, blueprint._id)
     const externalKey = await digest({ sourceUrl: canonicalUrl })
     let identity = await ctx.db.query('learnSourceIdentities')
