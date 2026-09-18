@@ -99,8 +99,9 @@ export function useLearnV2Journey(learningVoidId?: MaybeRef<string | null | unde
     // The fork copies sources and the authoritative map. Wait for the subscription so
     // candidate source IDs are scoped to that new revision rather than the source map.
     await new Promise<void>((resolve, reject) => {
-      const started = Date.now(); const stop = watch(mission, value => { if (String(value?.currentBlueprint?._id) === String(fork._id)) { stop(); resolve() } else if (Date.now() - started > 5_000) { stop(); reject(new Error('The editable map revision did not become available. Refresh and try again.')) } }, { flush: 'sync' })
-      setTimeout(() => { stop(); reject(new Error('The editable map revision did not become available. Refresh and try again.')) }, 5_100)
+      let settled = false; let stop = () => {}; const timer = setTimeout(() => { if (settled) return; settled = true; stop(); reject(new Error('The editable map revision did not become available. Refresh and try again.')) }, 5_000)
+      const watcher = watch(mission, value => { if (!settled && String(value?.currentBlueprint?._id) === String(fork._id)) { settled = true; clearTimeout(timer); stop(); resolve() } }, { flush: 'sync', immediate: true })
+      stop = watcher; if (settled) stop()
     })
     const row = mission.value
     if (!row?.map || !row.currentBlueprint || String(row.currentBlueprint._id) !== String(fork._id)) throw new Error('The editable map revision is unavailable')
