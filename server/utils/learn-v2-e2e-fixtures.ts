@@ -46,5 +46,5 @@ export function deterministicLearnV2Source(url: string): SafeFetchResult | null 
   if (!isE2eServerMode()) return null
   const finalUrl = new URL(url)
   if (finalUrl.protocol !== 'https:' || finalUrl.hostname !== 'e2e.budds.invalid') throw new Error('E2E source fixture only permits e2e.budds.invalid')
-  return { finalUrl: finalUrl.toString(), publicLocator: `${finalUrl.origin}/`, contentHash: 'sha256:e2e-source-fixture', contentType: 'text/html', wireBytes: 128, decodedBytes: 128, excerpt: 'Deterministic accepted evidence for the Learn V2 browser journey.', trustClassification: 'untrusted_source_data', rights: { status: 'permitted', provenance: 'html_license', policyVersion: 'learn-v2.rights.v2' }, fetchPolicyVersion: 'learn-v2.fetch.v2' }
+  return { finalUrl: finalUrl.toString(), publicLocator: `${finalUrl.origin}/`, contentHash: 'e'.repeat(64), contentType: 'text/html', wireBytes: 128, decodedBytes: 128, excerpt: 'Deterministic accepted evidence for the Learn V2 browser journey.', trustClassification: 'untrusted_source_data', rights: { status: 'permitted', provenance: 'html_license', policyVersion: 'learn-v2.rights.v2' }, fetchPolicyVersion: 'learn-v2.fetch.v2' }
 }
