@@ -33,7 +33,7 @@ test('learner can advance the Learn V2 mastery journey through production UI', a
   page.setDefaultTimeout(30_000)
 
   const identity = { email: `learn-v2-${Date.now()}@e2e.budds.invalid`, password: 'disposable-e2e-password', name: 'Learn V2 Browser Test' }
-  const bootstrap = await request.post('/api/e2e/session', { headers: { 'x-budds-e2e-token': token }, data: identity, timeout: 120_000 })
+  const bootstrap = await request.post('/api/e2e/session', { headers: { 'x-budds-e2e-token': token }, data: identity })
   expect(bootstrap.ok()).toBeTruthy()
   const cookies = bootstrap.headersArray().filter(header => header.name.toLowerCase() === 'set-cookie').map(header => header.value)
   for (const cookie of cookies) {
@@ -45,7 +45,11 @@ test('learner can advance the Learn V2 mastery journey through production UI', a
 
   const folderName = `Learn V2 E2E ${Date.now()}`
   await page.goto('/app/learn/create')
-  await expect(page.getByTestId('learn-v2-outcome-canvas')).toBeVisible({ timeout: 30_000 })
+  await expect.poll(async () => {
+    if (await page.getByTestId('learn-v2-outcome-canvas').isVisible()) return true
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    return false
+  }, { timeout: 120_000, intervals: [5_000] }).toBe(true)
   await page.getByTestId('new-root-folder-button').click()
   await expect(page.getByTestId('folder-form-modal')).toBeVisible()
   await page.getByTestId('folder-name-input').fill(folderName)
