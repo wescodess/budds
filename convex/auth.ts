@@ -11,6 +11,12 @@ function normalizeUrl(value: string | undefined) {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : ''
 }
 
+function e2eEmailPasswordEnabled() {
+  return process.env.NODE_ENV !== 'production'
+    && process.env.BUDDS_E2E_MODE === 'true'
+    && (process.env.BUDDS_E2E_AUTH_TOKEN?.length ?? 0) >= 32
+}
+
 /**
  * Better Auth's Convex plugin uses the Convex site URL as the JWT issuer and
  * the Better Auth user id as the subject. Keep this construction beside the
@@ -62,6 +68,9 @@ export const createAuth = (ctx: GenericCtx<DataModel>) => {
         clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
       },
     },
+    // A disposable local browser-test account is created through Better Auth's
+    // normal endpoint. This provider is never enabled in production.
+    ...(e2eEmailPasswordEnabled() ? { emailAndPassword: { enabled: true } } : {}),
     user: {
       deleteUser: {
         enabled: true,
