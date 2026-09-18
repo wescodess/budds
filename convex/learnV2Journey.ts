@@ -102,7 +102,7 @@ async function sourceProjection(ctx: Parameters<typeof requireLearnV2QueryAccess
   return { items, counts }
 }
 
-async function planProjection(ctx: Parameters<typeof requireLearnV2QueryAccess>[0], userId: string, voidRow: VoidRow, blueprint: BlueprintRow | null) {
+async function planProjection(ctx: Parameters<typeof requireLearnV2QueryAccess>[0], userId: string, voidRow: VoidRow) {
   const roots = await ctx.db.query('studyPlans').withIndex('by_userId_and_learningVoidId', q => q.eq('userId', userId).eq('learningVoidId', voidRow._id)).take(2)
   if (roots.length > 1) throw new Error('Learn V2 study plan identity is ambiguous')
   const root = roots[0]
@@ -133,7 +133,7 @@ async function journey(ctx: Parameters<typeof requireLearnV2QueryAccess>[0], use
   const sources = await sourceProjection(ctx, userId, blueprint)
   const map = await mapProjection(ctx, userId, blueprint)
   const calibrationAttempts = blueprint ? await ctx.db.query('masteryAttempts').withIndex('by_userId_and_blueprintRevisionId_and_kind', q => q.eq('userId', userId).eq('blueprintRevisionId', blueprint._id).eq('kind', 'calibration')).take(8) : []
-  const plan = await planProjection(ctx, userId, voidRow, blueprint)
+  const plan = await planProjection(ctx, userId, voidRow)
   const mastery = []
   for (const objective of map?.objectives ?? []) {
     const record = await ctx.db.query('masteryRecords').withIndex('by_userId_and_objectiveId', q => q.eq('userId', userId).eq('objectiveId', objective._id)).first()
@@ -159,7 +159,7 @@ export const listHub = query({
       if (!owned) continue
       const blueprint = await currentBlueprint(ctx, userId, row)
       const sources = await sourceProjection(ctx, userId, blueprint)
-      const plan = await planProjection(ctx, userId, row, blueprint)
+      const plan = await planProjection(ctx, userId, row)
       items.push({ _id: row._id, title: row.title, status: row.status, revision: row.revision, folderId: row.folderId, blueprintRevisionId: blueprint?._id ?? null, nextAction: nextAction(row, blueprint, sources, plan), nextScheduledAt: plan.sessions.filter(session => session.status === 'planned' || session.status === 'ready').map(session => session.scheduledStartAt).sort((a, b) => a - b)[0] ?? null })
     }
     return { items }
