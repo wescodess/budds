@@ -40,6 +40,7 @@ export type LearnV2BlueprintCandidate = {
     title: string
     capability: string
     estimatedMinutes: number
+    depth?: 'foundational' | 'working' | 'advanced'
     coverage: 'strong' | 'partial' | 'gap'
     gapReason?: string
     sourceSnapshotIds: string[]
@@ -192,11 +193,13 @@ export function validateLearnV2BlueprintCandidate(
     exactKeys(item, [
       'key', 'milestoneKey', 'order', 'title', 'capability', 'estimatedMinutes', 'coverage',
       'sourceSnapshotIds', 'prerequisiteObjectiveKeys', 'assessmentContract',
-    ], ['gapReason', 'gapSourceSnapshotIds'], `Objective ${index}`)
+    ], ['depth', 'gapReason', 'gapSourceSnapshotIds'], `Objective ${index}`)
     const objectiveKey = key(item.key, `Objective ${index} key`)
     const milestoneKey = key(item.milestoneKey, `Objective ${objectiveKey} milestone key`)
     if (!milestoneKeys.has(milestoneKey)) throw new Error(`Objective ${objectiveKey} references an unknown milestone`)
     if (item.coverage !== 'strong' && item.coverage !== 'partial' && item.coverage !== 'gap') throw new Error(`Objective ${objectiveKey} has invalid coverage`)
+    if (item.depth !== undefined && item.depth !== 'foundational' && item.depth !== 'working' && item.depth !== 'advanced') throw new Error(`Objective ${objectiveKey} has invalid depth`)
+    const depth = item.depth as LearnV2BlueprintCandidate['objectives'][number]['depth']
     const coverage: 'strong' | 'partial' | 'gap' = item.coverage
     const sourceSnapshotIds = array(item.sourceSnapshotIds, 0, LEARN_V2_BLUEPRINT_LIMITS.maximumSourcesPerObjective, `Objective ${objectiveKey} sources`)
       .map((value, sourceIndex) => text(value, `Objective ${objectiveKey} source ${sourceIndex}`, 200))
@@ -226,6 +229,7 @@ export function validateLearnV2BlueprintCandidate(
       title: text(item.title, `Objective ${objectiveKey} title`, 200),
       capability: text(item.capability, `Objective ${objectiveKey} capability`, 500),
       estimatedMinutes: integer(item.estimatedMinutes, 5, 480, `Objective ${objectiveKey} estimated minutes`),
+      ...(depth === undefined ? {} : { depth }),
       coverage,
       ...(gapReason === undefined ? {} : { gapReason }),
       sourceSnapshotIds,

@@ -61,6 +61,7 @@ function editedCandidate(sourceSnapshotId: Id<'learnSourceSnapshots'>) {
       title: `Edited objective ${index + 1}`,
       capability: `Edited capability ${index + 1}`,
       estimatedMinutes: 25,
+      depth: index === 0 ? 'advanced' as const : 'working' as const,
       coverage: 'strong' as const,
       sourceSnapshotIds: [sourceSnapshotId],
       gapSourceSnapshotIds: [],
@@ -111,6 +112,7 @@ describe('Learn V2 revision-safe map editing and calibration', () => {
       const child = await setup.owner.query(api.learnV2Blueprints.getBlueprintMap, { blueprintRevisionId: fork!._id })
       expect(parent?.objectives[0]?.title).toBe('Objective 1')
       expect(child?.objectives[0]?.title).toBe('Edited objective 1')
+      expect(child?.objectives[0]).toMatchObject({ stableKey: 'objective-1', depth: 'advanced' })
       const accepted = await setup.owner.mutation(api.learnV2MapCalibration.acceptBlueprintMap, { blueprintRevisionId: fork!._id, expectedRecordRevision: 2, expectedVoidRevision: 4, idempotencyKey: 'accept-map' })
       expect(accepted.status).toBe('accepted')
       await expect(setup.owner.mutation(api.learnV2MapCalibration.replaceDraftMap, { ...editArgs, expectedRecordRevision: 3, expectedVoidRevision: 5, idempotencyKey: 'mutate-accepted' })).rejects.toThrow(/not ready|different request/)
