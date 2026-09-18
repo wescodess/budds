@@ -86,6 +86,7 @@ async function sourceProjection(ctx: Parameters<typeof requireLearnV2QueryAccess
       : null
     items.push({
       _id: source._id,
+      sourceIdentityId: source.sourceIdentityId,
       status: source.status,
       effectiveStatus: status,
       recordRevision: source.recordRevision ?? 1,

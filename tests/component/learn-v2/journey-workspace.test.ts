@@ -55,7 +55,7 @@ describe('Learn V2 journey workspace seams', () => {
 
   it('keeps source acceptance explicit and distinguishes evidence origin', async () => {
     const Comp = await import(`${path}/EvidenceDesk.vue`)
-    const source = { id: 'source_1', title: 'AbortController', origin: 'folder_document' as const, publisher: 'MDN', retrievedLabel: 'Reviewed from your folder', coverage: 'strong' as const, lifecycle: 'evaluated' as const, objectives: ['Cancel a request safely'] }
+    const source = { id: 'source_1', sourceKey: 'identity_1', title: 'AbortController', origin: 'folder_document' as const, publisher: 'MDN', retrievedLabel: 'Reviewed from your folder', coverage: 'strong' as const, lifecycle: 'evaluated' as const, objectives: ['Cancel a request safely'] }
     const wrapper = await mountSuspended(Comp.default, { props: { sources: [source], selectedSourceId: 'source_1' } })
 
     expect(wrapper.text()).toContain('Your folder')
@@ -103,14 +103,35 @@ describe('Learn V2 journey workspace seams', () => {
 
   it('keeps map edits explicit and emits a complete learner change', async () => {
     const Comp = await import(`${path}/LearningTrail.vue`)
+    const assessmentContract = { version: 'learn-v2.assessment.v1' as const, kind: 'bounded_rubric' as const, responseFormat: 'short_text' as const, instructions: 'Explain from evidence.', passingScorePercent: 80 as const, criteria: [{ key: 'correct', description: 'Correct and supported.', weightPercent: 100 }] }
     const wrapper = await mountSuspended(Comp.default, {
-      props: { objectives: [{ id: 'objective_1', title: 'Understand cancellation', capability: 'Explain cancellation boundaries', milestone: 'Foundation', effortMinutes: 25, mastery: 'unseen', coverage: 'strong' }] },
+      props: { objectives: [{ id: 'objective_1', stableKey: 'objective-1', title: 'Understand cancellation', capability: 'Explain cancellation boundaries', milestoneKey: 'milestone-1', milestone: 'Foundation', effortMinutes: 25, depth: 'working', mastery: 'unseen', coverage: 'strong', prerequisiteIds: [], prerequisiteKeys: [], assessment: assessmentContract.instructions, assessmentContract, sourceLinks: [{ sourceKey: 'identity-1', title: 'AbortController', origin: 'folder_document', coverage: 'strong', evidenceStatus: 'evidence_available' }] }], sources: [{ id: 'source-1', sourceKey: 'identity-1', title: 'AbortController', origin: 'folder_document', retrievedLabel: 'Accepted', coverage: 'strong', lifecycle: 'user_accepted', objectives: [] }] },
     })
 
     await wrapper.get('[data-testid="learn-v2-map-edit-objective"]').trigger('click')
     await wrapper.get('[data-testid="learn-v2-objective-title"]').setValue('Explain cancellation safely')
     await wrapper.get('[data-testid="learn-v2-save-objective"]').trigger('click')
-    expect(wrapper.emitted('saveObjective')?.[0]).toEqual([{ objectiveId: 'objective_1', title: 'Explain cancellation safely', capability: 'Explain cancellation boundaries' }])
+    expect(wrapper.emitted('editMap')?.[0]?.[0]).toMatchObject({ kind: 'save_objective', objective: { objectiveKey: 'objective-1', title: 'Explain cancellation safely', depth: 'working', supportingSourceKeys: ['identity-1'], assessmentContract: { passingScorePercent: 80 } } })
+  })
+
+  it('offers revision-safe reorder, split, and confirmed removal controls', async () => {
+    const Comp = await import(`${path}/LearningTrail.vue`)
+    const assessmentContract = { version: 'learn-v2.assessment.v1' as const, kind: 'bounded_rubric' as const, responseFormat: 'short_text' as const, instructions: 'Explain from evidence.', passingScorePercent: 80 as const, criteria: [{ key: 'correct', description: 'Correct and supported.', weightPercent: 100 }] }
+    const objectives = Array.from({ length: 7 }, (_, index) => ({ id: `objective_${index + 1}`, stableKey: `objective-${index + 1}`, title: `Objective ${index + 1}`, capability: `Capability ${index + 1}`, milestoneKey: `milestone-${Math.min(3, Math.floor(index / 2) + 1)}`, milestone: `Milestone ${Math.min(3, Math.floor(index / 2) + 1)}`, effortMinutes: 25, depth: 'working' as const, mastery: 'unseen' as const, coverage: 'strong' as const, prerequisiteIds: [], prerequisiteKeys: index ? [`objective-${index}`] : [], assessment: assessmentContract.instructions, assessmentContract, sourceLinks: [{ sourceKey: 'identity-1', title: 'Accepted evidence', origin: 'folder_document' as const, coverage: 'strong' as const, evidenceStatus: 'evidence_available' as const }] }))
+    const wrapper = await mountSuspended(Comp.default, { props: { objectives } })
+
+    await wrapper.get('[data-testid="learn-v2-map-move-down-objective-1"]').trigger('click')
+    await wrapper.get('[data-testid="learn-v2-map-split-objective"]').trigger('click')
+    await wrapper.get('[data-testid="learn-v2-split-second-title"]').setValue('Apply objective 1')
+    await wrapper.get('[data-testid="learn-v2-save-split"]').trigger('click')
+    await wrapper.get('[data-testid="learn-v2-map-remove-objective"]').trigger('click')
+    await wrapper.get('[data-testid="learn-v2-confirm-remove-objective"]').trigger('click')
+
+    expect(wrapper.emitted('editMap')?.map(event => event[0])).toEqual([
+      { kind: 'move_objective', objectiveKey: 'objective-1', direction: 'down' },
+      { kind: 'split_objective', objectiveKey: 'objective-1', firstTitle: 'Objective 1', secondTitle: 'Apply objective 1' },
+      { kind: 'remove_objective', objectiveKey: 'objective-1' },
+    ])
   })
 
   it('makes feasibility-aware plan inputs editable before preview generation', async () => {
