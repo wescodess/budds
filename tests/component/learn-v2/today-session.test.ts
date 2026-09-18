@@ -49,6 +49,20 @@ describe('LearnV2TodaySession', () => {
     expect(wrapper.findAll('button').filter((button: any) => button.text() === 'Start')).toHaveLength(1)
     expect(wrapper.find('[data-testid="learn-v2-phase-retrieval"]').exists()).toBe(false)
   })
+  it('keeps the learner oriented with a quiet session path, evidence context, and a safe leave intent', async () => {
+    const wrapper = await mount()
+    expect(wrapper.get('[data-testid="learn-v2-session-path"]').attributes('aria-label')).toContain('Session progress')
+    expect(wrapper.get('[data-testid="learn-v2-evidence-context"]').text()).toContain('evidence')
+    await wrapper.get('[data-testid="learn-v2-leave"]').trigger('click')
+    expect(wrapper.emitted('leave')).toHaveLength(1)
+
+    await startSession(wrapper)
+    expect(wrapper.get('[data-testid="learn-v2-current-stage"]').text()).toContain('Retrieve')
+    await wrapper.get('[data-testid="learn-v2-continue"]').trigger('click')
+    await wrapper.find('textarea[aria-label="Your prediction"]').setValue('prediction')
+    await wrapper.get('[data-testid="learn-v2-continue"]').trigger('click')
+    expect(wrapper.get('[data-testid="learn-v2-assistance-consequence"]').text()).toContain('guided')
+  })
   it('applies motion, contrast, and untimed-session preferences to rendering', async () => {
     const wrapper = await mount()
     expect(wrapper.text()).toContain('12 minutes')
