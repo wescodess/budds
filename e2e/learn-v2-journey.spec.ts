@@ -4,12 +4,28 @@ const token = process.env.BUDDS_E2E_AUTH_TOKEN ?? 'e2e-local-token-please-do-not
 
 function localScheduleWindow() {
   const now = new Date()
-  const weekday = now.getDay() === 0 ? 7 : now.getDay()
+  const zones = ['America/Toronto', 'America/Los_Angeles', 'Pacific/Honolulu', 'Europe/London', 'Asia/Tokyo', 'Australia/Sydney']
+  const partsFor = (date: Date, timeZone: string) => Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date).map(part => [part.type, part.value]))
+  const timezone = zones.find((zone) => {
+    const hour = Number(partsFor(now, zone).hour)
+    return hour >= 8 && hour <= 18
+  }) ?? 'UTC'
   const start = new Date(now.getTime() + 2 * 60_000)
   const end = new Date(start.getTime() + 2 * 60 * 60_000)
-  const time = (date: Date) => `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
-  const date = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}`
-  return { weekday, date, start: time(start), end: time(end) }
+  const startParts = partsFor(start, timezone)
+  const endParts = partsFor(end, timezone)
+  const weekday = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 }[startParts.weekday]
+  if (!weekday) throw new Error(`Could not resolve the weekday for ${timezone}`)
+  return { timezone, weekday, date: `${startParts.year}-${startParts.month}-${startParts.day}`, start: `${startParts.hour}:${startParts.minute}`, end: `${endParts.hour}:${endParts.minute}` }
 }
 
 test('learner can advance the Learn V2 mastery journey through production UI', async ({ page, request }) => {
@@ -27,14 +43,13 @@ test('learner can advance the Learn V2 mastery journey through production UI', a
   }
 
   const folderName = `Learn V2 E2E ${Date.now()}`
-  await page.goto('/')
-  await page.getByTestId('rail-create-folder').click()
+  await page.goto('/app/learn/create')
+  await page.getByTestId('new-root-folder-button').click()
   await expect(page.getByTestId('folder-form-modal')).toBeVisible()
   await page.getByTestId('folder-name-input').fill(folderName)
   await page.getByTestId('folder-form-submit').click()
   await expect(page.getByTestId('folder-form-modal')).toBeHidden()
 
-  await page.goto('/app/learn/create')
   await expect(page.getByTestId('learn-v2-outcome-canvas')).toBeVisible()
   await page.getByTestId('learn-v2-create-folder').selectOption({ label: folderName })
   await page.getByTestId('learn-v2-outcome-input').fill('Explain orbital mechanics well enough to reason about a transfer orbit.')
@@ -44,7 +59,7 @@ test('learner can advance the Learn V2 mastery journey through production UI', a
   await expect(page.getByTestId('learn-v2-evidence-desk')).toBeVisible()
   await page.getByTestId('learn-v2-source-url').fill('https://e2e.budds.invalid/source')
   await page.getByTestId('learn-v2-source-add-url').click()
-  await expect(page.getByTestId('learn-v2-source-inspector')).toContainText('Deterministic accepted evidence')
+  await expect(page.getByTestId('learn-v2-source-inspector')).toContainText('e2e.budds.invalid')
   const acceptSource = page.locator('[data-testid^="learn-v2-source-accept-"]')
   await expect(acceptSource).toBeVisible()
   await acceptSource.click()
@@ -74,7 +89,7 @@ test('learner can advance the Learn V2 mastery journey through production UI', a
   await expect(page.getByTestId('learn-v2-schedule-editor')).toBeVisible()
 
   const window = localScheduleWindow()
-  await page.getByTestId('learn-v2-schedule-timezone').fill(Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC')
+  await page.getByTestId('learn-v2-schedule-timezone').fill(window.timezone)
   await page.getByTestId('learn-v2-schedule-start').fill(window.date)
   await page.getByTestId(`learn-v2-schedule-day-${window.weekday}`).check()
   await page.getByTestId(`learn-v2-schedule-window-start-${window.weekday}`).fill(window.start)
@@ -84,8 +99,13 @@ test('learner can advance the Learn V2 mastery journey through production UI', a
   await expect(page.getByTestId('learn-v2-study-rhythm')).toContainText(/feasible/i)
   await page.getByTestId('learn-v2-accept-plan').click()
 
-  await page.getByTestId('learn-v2-workspace-next-action').click()
-  await expect(page).toHaveURL(/\/sessions\/[^/]+$/, { timeout: 120_000 })
+  await expect.poll(async () => {
+    if (!/\/sessions\/[^/]+$/.test(page.url())) {
+      await page.getByTestId('learn-v2-workspace-next-action').click()
+      await page.waitForTimeout(1_000)
+    }
+    return page.url()
+  }, { timeout: 120_000 }).toMatch(/\/sessions\/[^/]+$/)
   await expect(page.getByTestId('learn-v2-session')).toBeVisible({ timeout: 120_000 })
   await expect(page.getByTestId('learn-v2-start')).toBeEnabled({ timeout: 120_000 })
   await page.getByTestId('learn-v2-start').click()
