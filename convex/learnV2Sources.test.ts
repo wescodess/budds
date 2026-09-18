@@ -738,6 +738,33 @@ describe('Learn V2 source lifecycle', () => {
     }
   })
 
+  test('lets the owner resume evaluation after a fetched source review was interrupted', async () => {
+    const previous = process.env.LEARN_V2_ENABLED
+    process.env.LEARN_V2_ENABLED = 'true'
+    try {
+      const setupResult = await setup()
+      const registered = await register(setupResult, 'resume-fetched-review')
+      await setupResult.t.run(ctx => ctx.db.patch(registered.sourceSnapshotId, {
+        status: 'fetched',
+        effectiveStatus: 'fetched',
+        recordRevision: 2,
+        rightsStatus: 'unknown',
+        rightsProvenance: 'none',
+        rightsPolicyVersion: 'learn-v2.rights.v2',
+      }))
+
+      await expect(setupResult.owner.mutation(api.learnV2Sources.prepareFetchedSourceForReview, {
+        sourceSnapshotId: registered.sourceSnapshotId,
+        expectedRevision: 2,
+        idempotencyKey: 'resume-fetched-review',
+      })).resolves.toMatchObject({ status: 'evaluated', recordRevision: 3, conflictStatus: 'clear' })
+    }
+    finally {
+      if (previous === undefined) delete process.env.LEARN_V2_ENABLED
+      else process.env.LEARN_V2_ENABLED = previous
+    }
+  })
+
   test('rejects registration and lifecycle writes against an older Blueprint revision', async () => {
     const previous = process.env.LEARN_V2_ENABLED
     process.env.LEARN_V2_ENABLED = 'true'
