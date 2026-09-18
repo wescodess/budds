@@ -187,3 +187,28 @@ export const getCurrentMission = query({
     return owned ? await journey(ctx, userId, owned.row, owned.folder) : null
   },
 })
+
+/** A bounded, owner-scoped session handoff. Routes use this instead of
+ * reconstructing authoritative revisions from content fragments. */
+export const getSessionCandidate = query({
+  args: { learningVoidId: v.id('learningVoids'), studySessionId: v.id('studySessions') },
+  handler: async (ctx, args) => {
+    const userId = await requireLearnV2QueryAccess(ctx)
+    const owned = await ownedVoid(ctx, userId, args.learningVoidId)
+    if (!owned) return null
+    const session = await ctx.db.get(args.studySessionId)
+    if (!session || session.userId !== userId) return null
+    const plan = await ctx.db.get(session.studyPlanRevisionId)
+    if (!plan || plan.userId !== userId || plan.learningVoidId !== owned.row._id || plan.status !== 'accepted') return null
+    const stablePlan = await ctx.db.get(plan.studyPlanId)
+    if (!stablePlan || stablePlan.activeRevisionId !== plan._id) return null
+    if (!plan.blueprintRevisionId) return null
+    const blueprint = await ctx.db.get(plan.blueprintRevisionId)
+    const objective = await ctx.db.get(session.primaryObjectiveId)
+    if (!blueprint || blueprint.userId !== userId || !objective || objective.userId !== userId || objective.blueprintRevisionId !== blueprint._id) return null
+    const content = session.status === 'in_progress' && session.startedSessionContentRevision !== undefined
+      ? await ctx.db.query('sessionContent').withIndex('by_userId_and_studySessionId_and_revision', q => q.eq('userId', userId).eq('studySessionId', session._id).eq('revision', session.startedSessionContentRevision!)).unique()
+      : await ctx.db.query('sessionContent').withIndex('by_userId_and_studySessionId_and_revision', q => q.eq('userId', userId).eq('studySessionId', session._id)).order('desc').first()
+    return { status: session.status, studySessionId: session._id, sessionRevision: session.revision, scheduledStartAt: session.scheduledStartAt, scheduledEndAt: session.scheduledEndAt, timezone: session.timezone, objective: { title: objective.title, capability: objective.capability, estimatedMinutes: objective.estimatedMinutes ?? null }, plan: { recordRevision: plan.recordRevision ?? 1 }, blueprint: { recordRevision: blueprint.recordRevision }, content: content?.status === 'published' ? { revision: content.revision } : null }
+  },
+})
