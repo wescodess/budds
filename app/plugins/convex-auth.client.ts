@@ -22,6 +22,7 @@ export default defineNuxtPlugin({
     }
 
     let upsertDone = false
+    let upsertPending = false
 
     const fetchToken = async (_opts: { forceRefreshToken: boolean }) => {
       try {
@@ -40,15 +41,25 @@ export default defineNuxtPlugin({
         convexAuthenticated.value = false
         convexClient.client.setAuth(fetchToken, (isAuthenticated: boolean) => {
           convexAuthenticated.value = isAuthenticated
-          convexAuthReady.value = true
-          if (isAuthenticated && !upsertDone) {
+          if (isAuthenticated && !upsertDone && !upsertPending) {
+            upsertPending = true
             convexClient.mutation(upsertUserRef, {})
-              .then(() => { upsertDone = true })
-              .catch(() => { upsertDone = false })
+              .then(() => {
+                upsertDone = true
+                convexAuthReady.value = true
+              })
+              .catch(() => {
+                upsertDone = false
+                convexAuthenticated.value = false
+                convexAuthReady.value = true
+              })
+              .finally(() => { upsertPending = false })
           }
+          else if (!upsertPending) convexAuthReady.value = true
         })
       } else {
         upsertDone = false
+        upsertPending = false
         convexAuthenticated.value = false
         convexAuthReady.value = true
         convexClient.client.clearAuth()

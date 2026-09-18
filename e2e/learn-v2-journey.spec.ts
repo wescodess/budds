@@ -44,13 +44,13 @@ test('learner can advance the Learn V2 mastery journey through production UI', a
 
   const folderName = `Learn V2 E2E ${Date.now()}`
   await page.goto('/app/learn/create')
+  await expect(page.getByTestId('learn-v2-outcome-canvas')).toBeVisible({ timeout: 30_000 })
   await page.getByTestId('new-root-folder-button').click()
   await expect(page.getByTestId('folder-form-modal')).toBeVisible()
   await page.getByTestId('folder-name-input').fill(folderName)
   await page.getByTestId('folder-form-submit').click()
   await expect(page.getByTestId('folder-form-modal')).toBeHidden()
 
-  await expect(page.getByTestId('learn-v2-outcome-canvas')).toBeVisible()
   await page.getByTestId('learn-v2-create-folder').selectOption({ label: folderName })
   await page.getByTestId('learn-v2-outcome-input').fill('Explain orbital mechanics well enough to reason about a transfer orbit.')
   await page.getByLabel('Source policy').selectOption('web_only')
