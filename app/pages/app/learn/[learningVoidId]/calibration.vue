@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useLearnV2Journey } from '~/composables/useLearnV2Journey'
+
 const route = useRoute(); const router = useRouter(); const id = computed(() => String(route.params.learningVoidId)); const journey = useLearnV2Journey(id); const response = ref(''); const confidence = ref(3)
 const { busy, error, mission } = journey
 const attemptedIds = computed(() => new Set((mission.value?.calibration?.attempts ?? []).map((attempt: { objectiveId: unknown }) => String(attempt.objectiveId))))
