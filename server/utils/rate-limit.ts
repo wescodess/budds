@@ -5,6 +5,7 @@ import type { H3Event } from 'h3'
 export type RateLimitedRoute
   = | 'calendar.disconnect'
     | 'calendar.sync'
+    | 'learn-v2.calendar.disconnect'
     | 'course.generate-outline'
     | 'course.generate-section'
     | 'export.me'

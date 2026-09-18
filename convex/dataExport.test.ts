@@ -180,7 +180,34 @@ describe('dataExport paginated queries', () => {
         await ctx.db.insert('masteryRecords', { userId: USER_A.tokenIdentifier, objectiveId: ids.objectiveId, state: 'learning' })
         await ctx.db.insert('studySessionRetrievalObjectives', { userId: USER_A.tokenIdentifier, studySessionId: ids.sessionId, objectiveId: ids.objectiveId, order: 1 })
         await ctx.db.insert('sessionContentBlocks', { userId: USER_A.tokenIdentifier, sessionContentId: contentId, order: 1, kind: 'prompt' })
-        await ctx.db.insert('calendarProjections', { userId: USER_A.tokenIdentifier, studySessionId: ids.sessionId, status: 'pending_projection' })
+        const calendarConnectionId = await ctx.db.insert('calendarConnections', {
+          userId: USER_A.tokenIdentifier,
+          provider: 'google',
+          accessToken: 'private-access-token',
+          refreshToken: 'private-refresh-token',
+          expiresAt: 10,
+          timezone: 'UTC',
+          status: 'connected',
+          connectedAt: 1,
+        })
+        await ctx.db.insert('calendarProjections', {
+          userId: USER_A.tokenIdentifier,
+          calendarConnectionId,
+          studySessionId: ids.sessionId,
+          studyPlanRevisionId: ids.planRevisionId,
+          pinnedPlanRevision: 1,
+          pinnedSessionRevision: 1,
+          provider: 'google',
+          externalEventId: 'private-provider-event-id',
+          status: 'projected',
+          privateMetadata: '{"private":"metadata"}',
+          providerEtag: 'private-etag',
+          providerVersion: 'private-version',
+          providerCreateLeaseToken: 'private-provider-lease',
+          providerCreateLeaseExpiresAt: 10,
+          createdAt: 1,
+          updatedAt: 1,
+        })
         await ctx.db.insert('reminderPolicies', { userId: USER_A.tokenIdentifier, learningVoidId: ids.voidId, timezone: 'UTC', channel: 'local' })
         const bucketId = await ctx.db.insert('searchQuotaBuckets', { userId: USER_A.tokenIdentifier, learningVoidId: ids.voidId, provider: 'tavily_free', scopeKind: 'learning_void_broad', scopeKey: 'secret', periodKey: 'lifetime', limit: 2, providerUsageBaseline: 9, providerReportedUsageObservedAt: 10, reservedCredits: 1, consumedCredits: 0, revision: 1, reconciliationStatus: 'matched', createdAt: 1, updatedAt: 1 })
         await ctx.db.insert('searchReservations', { userId: USER_A.tokenIdentifier, learningVoidId: ids.voidId, blueprintRevisionId: ids.revisionId, expectedVoidRevision: 1, expectedBlueprintRecordRevision: 1, voidScopeKey: 'secret', provider: 'tavily_free', searchClass: 'broad', status: 'reserved', dispatchState: 'started', reconciliationRequired: true, productMonthBucketId: bucketId, productDayBucketId: bucketId, userDayBucketId: bucketId, learningVoidBucketId: bucketId, productMonthPeriodKey: '2026-01', productDayPeriodKey: '2026-01-01', userDayPeriodKey: '2026-01-01', learningVoidPeriodKey: 'lifetime', expectedCredits: 1, idempotencyKeyHash: 'sha256:private-key', requestFingerprint: 'sha256:private-fingerprint', queryDigest: 'sha256:private-query', executionTokenHash: 'sha256:private-token', reconciliationKeyHash: 'sha256:private-reconciliation-key', reconciliationRequestFingerprint: 'sha256:private-reconciliation-fingerprint', providerUsageBeforeDispatch: 17, ownerDeletedAt: 3, revision: 1, createdAt: 1, updatedAt: 1, expiresAt: 2, dispatchedAt: 2, outcomeCode: 'private-outcome' })
@@ -246,6 +273,9 @@ describe('dataExport paginated queries', () => {
       const claimSupport = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnClaimSupports', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
       expect(claimSupport).not.toHaveProperty('sourceExcerptId')
       expect(claimSupport).not.toHaveProperty('sessionContentClaimId')
+      const calendarProjection = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'calendarProjections', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
+      for (const key of ['calendarConnectionId', 'provider', 'externalEventId', 'privateMetadata', 'providerEtag', 'providerVersion', 'providerCreateLeaseToken']) expect(calendarProjection).not.toHaveProperty(key)
+      expect(JSON.stringify(calendarProjection)).not.toContain('private-')
       expect((await asUser.query(api.dataExport.getUserDataPage, { collection: 'searchQuotaBuckets', paginationOpts: { cursor: null, numItems: 8 } })).page[0]).not.toHaveProperty('count')
       expect((await asUser.query(api.dataExport.getUserDataPage, { collection: 'searchQuotaBuckets', paginationOpts: { cursor: null, numItems: 8 } })).page[0]).not.toHaveProperty('providerUsageBaseline')
       expect((await asUser.query(api.dataExport.getUserDataPage, { collection: 'searchQuotaBuckets', paginationOpts: { cursor: null, numItems: 8 } })).page[0]).not.toHaveProperty('providerReportedUsageObservedAt')

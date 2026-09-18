@@ -343,6 +343,26 @@ export const getDisconnectBatch = internalQuery({
   },
 })
 
+export const getProjectionDisconnectBatch = internalQuery({
+  args: { calendarConnectionId: v.id('calendarConnections'), leaseToken: v.string() },
+  handler: async (ctx, args) => {
+    const connection = await ctx.db.get(args.calendarConnectionId)
+    if (!connection || connection.status !== 'disconnecting' || connection.disconnectLeaseToken !== args.leaseToken) {
+      return { activeCreate: false, projections: [] }
+    }
+    const activeCreate = await ctx.db.query('calendarProjections')
+      .withIndex('by_calendarConnectionId_and_status_and_providerCreateLeaseExpiresAt', q => q
+        .eq('calendarConnectionId', connection._id)
+        .eq('status', 'creating')
+        .gt('providerCreateLeaseExpiresAt', Date.now()))
+      .first()
+    const projections = await ctx.db.query('calendarProjections')
+      .withIndex('by_calendarConnectionId', q => q.eq('calendarConnectionId', connection._id))
+      .take(DISCONNECT_BATCH_SIZE)
+    return { activeCreate: Boolean(activeCreate), projections }
+  },
+})
+
 type DisconnectActionResult = {
   disconnected: boolean
   googleEventsDeleted: number
@@ -386,10 +406,26 @@ async function runDisconnectForUser(
     calendarConnectionId: claim.connection._id,
     leaseToken,
   })
-  const outcomes = await Promise.all(events.map(async (event) => {
+  const projectionBatch: { activeCreate: boolean, projections: Doc<'calendarProjections'>[] } = await ctx.runQuery(internal.calendarEvents.getProjectionDisconnectBatch, {
+    calendarConnectionId: claim.connection._id,
+    leaseToken,
+  })
+  if (projectionBatch.activeCreate) {
+    await ctx.runMutation(internal.calendarConnections.recordDisconnectBatch, {
+      calendarConnectionId: claim.connection._id,
+      leaseToken,
+      deletedEventIds: [],
+      failures: 1,
+      error: 'Waiting for an in-flight calendar projection to settle',
+    })
+    return { disconnected: false, googleEventsDeleted: 0, googleEventsFailed: 0 }
+  }
+  const projections = projectionBatch.projections
+  const localOnlyProjectionIds = projections.filter(row => !row.externalEventId).map(row => row._id)
+  const outcomes = await Promise.all([...events.map(event => ({ id: event._id, externalEventId: event.calendarEventId, kind: 'event' as const })), ...projections.filter((projection): projection is Doc<'calendarProjections'> & { externalEventId: string } => Boolean(projection.externalEventId)).map(projection => ({ id: projection._id, externalEventId: projection.externalEventId, kind: 'projection' as const }))].map(async (row) => {
     try {
       const response = await fetch(
-        `https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(event.calendarEventId)}`,
+        `https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(row.externalEventId)}`,
         {
           method: 'DELETE',
           headers: { Authorization: `Bearer ${accessToken}` },
@@ -397,7 +433,7 @@ async function runDisconnectForUser(
         },
       )
       return {
-        eventId: event._id,
+        id: row.id, kind: row.kind,
         ok: response.ok || response.status === 404 || response.status === 410,
         status: response.status,
         error: `Google Calendar delete failed with status ${response.status}`,
@@ -405,14 +441,15 @@ async function runDisconnectForUser(
     }
     catch (error) {
       return {
-        eventId: event._id,
+        id: row.id, kind: row.kind,
         ok: false,
         status: undefined,
         error: error instanceof Error ? error.message : String(error),
       }
     }
   }))
-  const deletedEventIds = outcomes.filter(result => result.ok).map(result => result.eventId)
+  const deletedEventIds = outcomes.filter(result => result.ok && result.kind === 'event').map(result => result.id as Id<'calendarEvents'>)
+  const deletedProjectionIds = [...localOnlyProjectionIds, ...outcomes.filter(result => result.ok && result.kind === 'projection').map(result => result.id as Id<'calendarProjections'>)]
   const failures = outcomes.filter(result => !result.ok)
   if (failures.some(result => result.status === 401)) {
     await ctx.runMutation(internal.calendarConnections.expireAccessTokenForCleanup, {
@@ -424,12 +461,13 @@ async function runDisconnectForUser(
     calendarConnectionId: claim.connection._id,
     leaseToken,
     deletedEventIds,
+    deletedProjectionIds,
     failures: failures.length,
     ...(failures[0] ? { error: failures[0].error } : {}),
   })
   return {
     disconnected: result.state === 'disconnected',
-    googleEventsDeleted: deletedEventIds.length,
+    googleEventsDeleted: deletedEventIds.length + deletedProjectionIds.length,
     googleEventsFailed: failures.length,
   }
 }
