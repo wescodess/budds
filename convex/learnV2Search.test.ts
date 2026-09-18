@@ -64,6 +64,24 @@ async function setup() {
 }
 
 describe('Learn V2 zero-paid search ledger', () => {
+  test('enforces folder-only source policy before reserving public-web capacity', async () => {
+    const { t, owner, learningVoidId, blueprintRevisionId } = await setup()
+    await t.run(async ctx => await ctx.db.patch(blueprintRevisionId, { sourcePolicy: 'folder_only' }))
+    const provider = vi.fn()
+    vi.stubGlobal('fetch', provider)
+
+    await expect(owner.action(api.learnV2SearchActions.searchPublicWeb, {
+      learningVoidId,
+      blueprintRevisionId,
+      expectedVoidRevision: 2,
+      expectedBlueprintRecordRevision: 1,
+      query: 'history of solar energy in Ontario',
+      idempotencyKey: 'folder-only-search-denied',
+    })).rejects.toThrow('Web research is disabled by this source policy')
+    expect(provider).not.toHaveBeenCalled()
+    expect(await t.run(async ctx => ctx.db.query('searchReservations').take(1))).toEqual([])
+  })
+
   test('runs the public action through the real digest and ledger contract', async () => {
     const { t, owner, learningVoidId, blueprintRevisionId } = await setup()
     process.env.TAVILY_API_KEY = 'tvly-action-ledger-test'
