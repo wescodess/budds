@@ -111,7 +111,8 @@
       "ws": "8.21.3"
     },
     "patchedDependencies": {
-      "nuxt-convex@0.0.6": "patches/nuxt-convex@0.0.6.patch"
+      "nuxt-convex@0.0.6": "patches/nuxt-convex@0.0.6.patch",
+      "@convex-dev/better-auth@0.12.5": "patches/@convex-dev__better-auth@0.12.5.patch"
     }
   }
 }

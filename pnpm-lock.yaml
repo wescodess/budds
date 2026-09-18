@@ -21,6 +21,9 @@ overrides:
   ws: 8.21.3
 
 patchedDependencies:
+  '@convex-dev/better-auth@0.12.5':
+    hash: ln3ykdtff6tnfmb2n4w3c5glhq
+    path: patches/@convex-dev__better-auth@0.12.5.patch
   nuxt-convex@0.0.6:
     hash: m2hybjclhmbhirs74bb2wklqcu
     path: patches/nuxt-convex@0.0.6.patch
@@ -34,7 +37,7 @@ importers:
         version: 3.1029.0
       '@convex-dev/better-auth':
         specifier: ^0.12.5
-        version: 0.12.5(@standard-schema/spec@1.1.0)(better-auth@1.6.30(sbwtjrv7g6ti5nzeexqh4dptwq))(convex@1.45.0(react@19.2.4))(hono@4.13.8)(react@19.2.4)(typescript@5.9.3)
+        version: 0.12.5(patch_hash=ln3ykdtff6tnfmb2n4w3c5glhq)(@standard-schema/spec@1.1.0)(better-auth@1.6.30(sbwtjrv7g6ti5nzeexqh4dptwq))(convex@1.45.0(react@19.2.4))(hono@4.13.8)(react@19.2.4)(typescript@5.9.3)
       '@convex-vue/core':
         specifier: 0.0.4
         version: 0.0.4(react@19.2.4)(typescript@5.9.3)
@@ -8875,7 +8878,7 @@ snapshots:
 
   '@colordx/core@5.8.0': {}
 
-  '@convex-dev/better-auth@0.12.5(@standard-schema/spec@1.1.0)(better-auth@1.6.30(sbwtjrv7g6ti5nzeexqh4dptwq))(convex@1.45.0(react@19.2.4))(hono@4.13.8)(react@19.2.4)(typescript@5.9.3)':
+  '@convex-dev/better-auth@0.12.5(patch_hash=ln3ykdtff6tnfmb2n4w3c5glhq)(@standard-schema/spec@1.1.0)(better-auth@1.6.30(sbwtjrv7g6ti5nzeexqh4dptwq))(convex@1.45.0(react@19.2.4))(hono@4.13.8)(react@19.2.4)(typescript@5.9.3)':
     dependencies:
       '@better-fetch/fetch': 1.3.1
       better-auth: 1.6.30(sbwtjrv7g6ti5nzeexqh4dptwq)
