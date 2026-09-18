@@ -94,6 +94,15 @@ It is a source-deletion seam, not a fetch, manifest, or source-acceptance API.
 
 ## Executable evidence
 
+LA2-16 reconciliation uses the same exact calendar flag and explicit V2
+re-consent. Google watch delivery is an authenticated, replay-protected hint
+only: no provider event body is accepted. Hints trigger bounded incremental
+sync; the final `nextSyncToken` is durable and HTTP 410 clears the cursor for
+a later full resync. A managed external move or deletion creates a redacted,
+revision-guarded owner proposal and never silently edits a Budds plan.
+Connection expiry, revocation, and scope loss preserve in-app state and require
+explicit re-consent.
+
 ```bash
 pnpm exec vitest run \
   convex/learnV2Access.test.ts \

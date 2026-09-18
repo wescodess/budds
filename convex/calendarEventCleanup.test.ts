@@ -587,7 +587,15 @@ describe('calendar event compensating cleanup', () => {
       leaseToken: 'disconnect-lease-two',
       deletedEventIds: [],
       failures: 0,
-    })).toMatchObject({ state: 'disconnected' })
+    })).toMatchObject({ state: 'ready_to_revoke' })
+    await expect(t.mutation(internal.calendarConnections.beginOAuthRevoke, {
+      calendarConnectionId,
+      leaseToken: 'disconnect-lease-two',
+    })).resolves.toBe(true)
+    await expect(t.mutation(internal.calendarConnections.finalizeOAuthRevocation, {
+      calendarConnectionId,
+      leaseToken: 'disconnect-lease-two',
+    })).resolves.toBe(true)
   })
 
   test('[P1] disconnect purges more than one bounded batch of terminal cleanup before credentials', async () => {

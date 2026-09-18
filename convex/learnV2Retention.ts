@@ -135,6 +135,17 @@ async function deleteVoidFoundation(ctx: MutationCtx, userId: string, learningVo
         if (await removeRows(ctx, retrievalObjectives)) return true
         const projections = await ctx.db.query('calendarProjections')
           .withIndex('by_userId_and_studySessionId', q => q.eq('userId', userId).eq('studySessionId', session._id)).take(BATCH_SIZE)
+        for (const projection of projections) {
+          const proposals = await ctx.db.query('calendarReconciliationProposals')
+            .withIndex('by_projectionId_and_status', q => q.eq('projectionId', projection._id).eq('status', 'open')).take(BATCH_SIZE)
+          if (await removeRows(ctx, proposals)) return true
+          const rejected = await ctx.db.query('calendarReconciliationProposals')
+            .withIndex('by_projectionId_and_status', q => q.eq('projectionId', projection._id).eq('status', 'rejected')).take(BATCH_SIZE)
+          if (await removeRows(ctx, rejected)) return true
+          const expired = await ctx.db.query('calendarReconciliationProposals')
+            .withIndex('by_projectionId_and_status', q => q.eq('projectionId', projection._id).eq('status', 'expired')).take(BATCH_SIZE)
+          if (await removeRows(ctx, expired)) return true
+        }
         if (await removeRows(ctx, projections)) return true
         const contents = await ctx.db.query('sessionContent')
           .withIndex('by_userId_and_studySessionId_and_revision', q => q.eq('userId', userId).eq('studySessionId', session._id)).take(BATCH_SIZE)
