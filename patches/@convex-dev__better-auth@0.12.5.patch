@@ -1,0 +1,28 @@
+diff --git a/dist/component/convex.config.d.ts b/dist/component/convex.config.d.ts
+index 89260388c98b82d93f8af0dc28567b4f63b1f471..a654991e0cc2b6836ad4425898ef84f5495c4e0c 100644
+--- a/dist/component/convex.config.d.ts
++++ b/dist/component/convex.config.d.ts
+@@ -1,3 +1,6 @@
+-declare const component: import("convex/server").ComponentDefinition<any, {}>;
++declare const component: import("convex/server").ComponentDefinition<any, {
++    BUDDS_E2E_MODE: import("convex/values").VOptional<import("convex/values").VString<string, "required">>;
++    BUDDS_E2E_AUTH_TOKEN: import("convex/values").VOptional<import("convex/values").VString<string, "required">>;
++}>;
+ export default component;
+ //# sourceMappingURL=convex.config.d.ts.map
+diff --git a/dist/component/convex.config.js b/dist/component/convex.config.js
+index 1ed9f537b0ca5de1b74ffb5ecaef01775bee2f1a..a56263e4a7bd43497f4e7d9f506f8d935a52afe4 100644
+--- a/dist/component/convex.config.js
++++ b/dist/component/convex.config.js
+@@ -1,4 +1,10 @@
+ import { defineComponent } from "convex/server";
+-const component = defineComponent("betterAuth");
++import { v } from "convex/values";
++const component = defineComponent("betterAuth", {
++    env: {
++        BUDDS_E2E_MODE: v.optional(v.string()),
++        BUDDS_E2E_AUTH_TOKEN: v.optional(v.string()),
++    },
++});
+ export default component;
+ //# sourceMappingURL=convex.config.js.map
