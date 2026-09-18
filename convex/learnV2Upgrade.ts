@@ -69,7 +69,7 @@ export const upgradeLegacyCourse = mutation({
     const selectedDocuments: Array<Doc<'documents'>> = []
     const seenDocumentIds = new Set<string>()
     for (const source of legacySources) {
-      if (!source.documentId) throw new Error('Document not found')
+      if (source.userId !== userId || !source.documentId) throw new Error('Document not found')
       const document = await ctx.db.get(source.documentId)
       if (!document || document.userId !== userId) throw new Error('Document not found')
       const documentFolder = await ctx.db.get(document.folderId)

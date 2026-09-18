@@ -132,6 +132,10 @@ describe('legacy course V1 to V2 upgrade', () => {
       await t.withIdentity(OTHER).mutation(api.users.upsertUser, {})
       await t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: OTHER.tokenIdentifier, enabled: true })
       await expect(t.withIdentity(OTHER).mutation(api.learnV2Upgrade.upgradeLegacyCourse, { legacyCourseId: courseId, idempotencyKey: 'other' })).rejects.toThrow(/not found/)
+      const sourceId = await t.run(async ctx => (await ctx.db.query('courseSourceDocs').withIndex('by_courseId', q => q.eq('courseId', courseId)).first())!._id)
+      await t.run(ctx => ctx.db.patch(sourceId, { userId: OTHER.tokenIdentifier }))
+      await expect(owner.mutation(api.learnV2Upgrade.upgradeLegacyCourse, { legacyCourseId: courseId, idempotencyKey: 'cross-owner-source' })).rejects.toThrow(/Document not found/)
+      await t.run(ctx => ctx.db.patch(sourceId, { userId: OWNER.tokenIdentifier }))
       await t.run(async ctx => {
         const source = await ctx.db.query('courseSourceDocs').withIndex('by_courseId', q => q.eq('courseId', courseId)).first()
         if (!source?.documentId) throw new Error('fixture missing source')
