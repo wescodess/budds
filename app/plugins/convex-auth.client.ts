@@ -23,6 +23,7 @@ export default defineNuxtPlugin({
 
     let upsertDone = false
     let upsertPending = false
+    let authEpoch = 0
 
     const fetchToken = async (_opts: { forceRefreshToken: boolean }) => {
       try {
@@ -33,28 +34,44 @@ export default defineNuxtPlugin({
       }
     }
 
+    const bootstrapProfile = (epoch: number) => {
+      if (upsertDone || upsertPending) return
+      upsertPending = true
+      void (async () => {
+        try {
+          for (let attempt = 0; attempt < 3; attempt++) {
+            try {
+              await convexClient.mutation(upsertUserRef, {})
+              if (epoch !== authEpoch) return
+              upsertDone = true
+              convexAuthReady.value = true
+              return
+            }
+            catch {
+              if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)))
+            }
+          }
+          if (epoch === authEpoch) {
+            convexAuthenticated.value = false
+            convexAuthReady.value = true
+          }
+        }
+        finally {
+          upsertPending = false
+        }
+      })()
+    }
+
     watch([loggedIn, ready], ([isLoggedIn, isReady]) => {
       if (!isReady) return
+      const epoch = ++authEpoch
 
       if (isLoggedIn) {
         convexAuthReady.value = false
         convexAuthenticated.value = false
         convexClient.client.setAuth(fetchToken, (isAuthenticated: boolean) => {
           convexAuthenticated.value = isAuthenticated
-          if (isAuthenticated && !upsertDone && !upsertPending) {
-            upsertPending = true
-            convexClient.mutation(upsertUserRef, {})
-              .then(() => {
-                upsertDone = true
-                convexAuthReady.value = true
-              })
-              .catch(() => {
-                upsertDone = false
-                convexAuthenticated.value = false
-                convexAuthReady.value = true
-              })
-              .finally(() => { upsertPending = false })
-          }
+          if (isAuthenticated && !upsertDone) bootstrapProfile(epoch)
           else if (!upsertPending) convexAuthReady.value = true
         })
       } else {
