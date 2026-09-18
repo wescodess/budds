@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import type { Id } from '~~/convex/_generated/dataModel'
 import { api } from '#convex/api'
 import { getErrorMessage } from '~~/shared/errors'
+const router = useRouter()
 
 const { legacyCourseId } = defineProps<{ legacyCourseId: Id<'courses'> }>()
 
@@ -33,6 +34,7 @@ async function upgrade() {
     const result = await upgradeMutation.mutate({ legacyCourseId, idempotencyKey: idempotencyKey.value }) as { _id?: Id<'learningVoids'> }
     upgradedVoidId.value = result._id ?? null
     success.value = true
+    if (upgradedVoidId.value) await router.push(`/app/learn/${upgradedVoidId.value}`)
   } catch (cause) {
     error.value = getErrorMessage(cause, 'Could not create your V2 draft. Try again.')
   } finally {
