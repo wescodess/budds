@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { parseLearnV2BlueprintAliasCandidate } from '../../shared/learn-v2-blueprint'
-import { deterministicLearnV2Completion } from './learn-v2-e2e-fixtures'
+import { deterministicLearnV2Completion, deterministicLearnV2Source } from './learn-v2-e2e-fixtures'
 
 const saved = { ...process.env }
 afterEach(() => { process.env = { ...saved } })
@@ -23,5 +23,6 @@ describe('Learn V2 deterministic E2E fixtures', () => {
     expect(calibration.criterionResults[0]).toMatchObject({ key: 'criterion', awarded: true })
     expect(mastery).toMatchObject({ misconceptionTags: [] })
     expect(verification).toMatchObject({ version: 'learn-v2.entailment.v2', decisions: [expect.objectContaining({ decision: 'entailed' })] })
+    expect(deterministicLearnV2Source('https://e2e.budds.invalid/source')?.contentHash).toMatch(/^[a-f0-9]{64}$/)
   })
 })
