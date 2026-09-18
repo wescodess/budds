@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useLearnV2Journey } from '~/composables/useLearnV2Journey'
 import type { LearnOutcomeDraft } from '~/types/learn-v2-journey'
 const route = useRoute(); const router = useRouter(); const { allFolders } = useFolders()
 const draftId = computed(() => typeof route.query.draftId === 'string' ? route.query.draftId : null)
