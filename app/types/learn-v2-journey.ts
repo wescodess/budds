@@ -20,5 +20,8 @@ export interface LearnObjectiveSnapshot { id: string; title: string; capability:
 export interface LearnPlanSessionSnapshot { id: string; title: string; when: string; durationMinutes: number; kind: 'learning' | 'review' | 'buffer' | 'rest' | 'retained_check'; objectiveId?: string }
 export interface LearnPlanSnapshot { feasibility: 'feasible' | 'constrained' | 'pending'; headline: string; detail: string; weeklyLoadLabel: string; targetLabel: string; sessions: LearnPlanSessionSnapshot[]; alternatives?: string[]; calendarStatus?: 'not_connected' | 'ready' | 'attention' }
 
+export interface LearnScheduleInput { version: 'learn-v2.schedule-input.v1'; timezone: string; startLocalDate: string; targetLocalDate: string | null; sessionMinutes: 15 | 20 | 25 | 30 | 45 | 60; availability: Array<{ weekday: number; start: string; end: string }>; blackoutDates: string[]; reviewIntervalsDays: number[]; minRestMinutes: number }
+export interface LearnObjectiveEdit { objectiveId?: string; title: string; capability: string }
+
 export type LearnOutcomeIntent = LearnOutcomeDraft
 export type LearnSourceIntent = { query?: string; url?: string }

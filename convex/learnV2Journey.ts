@@ -116,6 +116,23 @@ async function planProjection(ctx: Parameters<typeof requireLearnV2QueryAccess>[
   return { root, preview, accepted, sessions }
 }
 
+async function blueprintGenerationProjection(ctx: Parameters<typeof requireLearnV2QueryAccess>[0], userId: string, blueprint: BlueprintRow | null) {
+  if (!blueprint) return null
+  const jobs = await ctx.db.query('learnJobs')
+    .withIndex('by_userId_and_learningVoidId_and_type', q => q.eq('userId', userId).eq('learningVoidId', blueprint.learningVoidId).eq('type', 'blueprint_generation'))
+    .take(8)
+  const job = jobs
+    .filter(row => row.blueprintRevisionId === blueprint._id)
+    .sort((left, right) => (right.updatedAt ?? right._creationTime) - (left.updatedAt ?? left._creationTime))[0]
+  if (!job) return null
+  return {
+    status: job.status,
+    attempts: job.attempts ?? 0,
+    terminalReason: job.terminalReason ?? null,
+    updatedAt: job.updatedAt ?? job._creationTime,
+  }
+}
+
 function nextAction(voidRow: VoidRow, blueprint: BlueprintRow | null, sourceCounts: Awaited<ReturnType<typeof sourceProjection>>, plan: Awaited<ReturnType<typeof planProjection>>) {
   if (voidRow.status === 'draft' || voidRow.status === 'sourcing') return 'source_selection'
   if (voidRow.status === 'source_review' && sourceCounts.counts.accepted === 0) return 'source_review'
@@ -132,6 +149,7 @@ async function journey(ctx: Parameters<typeof requireLearnV2QueryAccess>[0], use
   const blueprint = await currentBlueprint(ctx, userId, voidRow)
   const sources = await sourceProjection(ctx, userId, blueprint)
   const map = await mapProjection(ctx, userId, blueprint)
+  const generation = await blueprintGenerationProjection(ctx, userId, blueprint)
   const calibrationAttempts = blueprint ? await ctx.db.query('masteryAttempts').withIndex('by_userId_and_blueprintRevisionId_and_kind', q => q.eq('userId', userId).eq('blueprintRevisionId', blueprint._id).eq('kind', 'calibration')).take(8) : []
   const plan = await planProjection(ctx, userId, voidRow)
   const mastery = []
@@ -144,7 +162,7 @@ async function journey(ctx: Parameters<typeof requireLearnV2QueryAccess>[0], use
     const rubric = objective.assessmentContract && typeof objective.assessmentContract === 'object' ? objective.assessmentContract : null
     return { objectiveId: objective._id, title: objective.title, capability: objective.capability, prompt: rubric && 'instructions' in rubric && typeof rubric.instructions === 'string' ? rubric.instructions : null, rubric }
   })
-  return { folder, learningVoid: voidRow, currentBlueprint: blueprint, nextAction: nextAction(voidRow, blueprint, sources, plan), sources, map, calibration: { attempts: calibrationAttempts, items: calibrationItems, completed: voidRow.status !== 'calibration' && calibrationAttempts.length >= 3 }, plan, mastery }
+  return { folder, learningVoid: voidRow, currentBlueprint: blueprint, generation, nextAction: nextAction(voidRow, blueprint, sources, plan), sources, map, calibration: { attempts: calibrationAttempts, items: calibrationItems, completed: voidRow.status !== 'calibration' && calibrationAttempts.length >= 3 }, plan, mastery }
 }
 
 export const listHub = query({
