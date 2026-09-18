@@ -10,6 +10,7 @@ import {
   safeFetchSource,
   type SafeFetchResult,
 } from '../server/utils/learn-v2-safe-fetch'
+import { deterministicLearnV2Source } from '../server/utils/learn-v2-e2e-fixtures'
 
 type FetchSourceArgs = {
   sourceSnapshotId: Id<'learnSourceSnapshots'>
@@ -107,5 +108,5 @@ export const fetchSource = action({
     expectedRevision: v.number(),
     idempotencyKey: v.string(),
   },
-  handler: orchestrateSourceFetch,
+  handler: (ctx, args) => orchestrateSourceFetch(ctx, args, async (url) => deterministicLearnV2Source(url) ?? await safeFetchSource(url)),
 })
