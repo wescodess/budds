@@ -10,6 +10,8 @@ const MAX_IDEMPOTENCY_KEY_LENGTH = 128
 const MIN_CALIBRATION_ITEMS = 3
 const MAX_CALIBRATION_ITEMS = 7
 const MAX_RESPONSE_LENGTH = 12_000
+const CALIBRATION_JOB_TYPE = 'calibration_scoring'
+const CALIBRATION_LEASE_MS = 5 * 60_000
 
 const assessmentContractValidator = v.object({
   version: v.literal('learn-v2.assessment.v1'),
@@ -51,6 +53,10 @@ function assertIdempotencyKey(value: string) {
 
 function fingerprint(command: string, args: Record<string, unknown>) {
   return JSON.stringify({ command, ...args })
+}
+
+function calibrationRequestFingerprint(args: { blueprintRevisionId: Id<'learnBlueprintRevisions'>, objectiveId: Id<'learnObjectives'>, expectedBlueprintRecordRevision: number, expectedVoidRevision: number, response: string, confidence: number, usedHint: boolean, usedReveal: boolean, idempotencyKey: string }) {
+  return fingerprint('submitCalibrationAttempt', { blueprintRevisionId: String(args.blueprintRevisionId), objectiveId: String(args.objectiveId), expectedBlueprintRecordRevision: args.expectedBlueprintRecordRevision, expectedVoidRevision: args.expectedVoidRevision, response: args.response, confidence: args.confidence, usedHint: args.usedHint, usedReveal: args.usedReveal, idempotencyKey: args.idempotencyKey })
 }
 
 async function requireLiveVoid(ctx: MutationCtx | QueryCtx, userId: string, learningVoidId: Id<'learningVoids'>) {
@@ -255,8 +261,62 @@ export const acceptBlueprintMap = mutation({
   },
 })
 
+export const reserveCalibrationScoring = internalMutation({
+  args: {
+    tokenIdentifier: v.string(), blueprintRevisionId: v.id('learnBlueprintRevisions'), objectiveId: v.id('learnObjectives'), expectedBlueprintRecordRevision: v.number(), expectedVoidRevision: v.number(), response: v.string(), confidence: v.number(), usedHint: v.boolean(), usedReveal: v.boolean(), idempotencyKey: v.string(),
+  },
+  handler: async (ctx, args) => {
+    if (!(await hasLearnV2Access(ctx, args.tokenIdentifier))) throw new Error('Learn V2 access denied')
+    const requestFingerprint = calibrationRequestFingerprint(args)
+    const prior = await ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', args.tokenIdentifier).eq('idempotencyKey', args.idempotencyKey)).unique()
+    if (prior) {
+      if (prior.requestFingerprint !== requestFingerprint) throw new Error('Idempotency key was already used for a different request')
+      return { kind: 'replay' as const, attemptId: prior._id, result: prior.result }
+    }
+    const existing = await ctx.db.query('learnJobs').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', args.tokenIdentifier).eq('idempotencyKey', args.idempotencyKey)).unique()
+    const now = Date.now()
+    if (existing) {
+      if (existing.type !== CALIBRATION_JOB_TYPE || existing.requestFingerprint !== requestFingerprint) throw new Error('Idempotency key was already used for a different request')
+      if (existing.status === 'blocked') return { kind: 'pending' as const, status: 'blocked' as const }
+      if ((existing.status === 'running' || existing.status === 'leased' || existing.status === 'queued') && (existing.leaseExpiresAt ?? 0) > now) return { kind: 'pending' as const, status: 'in_progress' as const }
+      if (existing.status === 'running') {
+        await ctx.db.patch(existing._id, { status: 'blocked', leaseToken: undefined, leaseExpiresAt: undefined, terminalReason: 'provider_outcome_requires_reconciliation', revision: existing.revision + 1, updatedAt: now })
+        return { kind: 'pending' as const, status: 'blocked' as const }
+      }
+      const leaseToken = crypto.randomUUID()
+      await ctx.db.patch(existing._id, { status: 'leased', leaseToken, leaseExpiresAt: now + CALIBRATION_LEASE_MS, revision: existing.revision + 1, updatedAt: now })
+      return { kind: 'acquired' as const, jobId: existing._id, leaseToken, revision: existing.revision + 1 }
+    }
+    const blueprint = await requireCurrentBlueprint(ctx, args.tokenIdentifier, args.blueprintRevisionId)
+    const learningVoid = await requireLiveVoid(ctx, args.tokenIdentifier, blueprint.learningVoidId)
+    const jobId = await ctx.db.insert('learnJobs', { userId: args.tokenIdentifier, learningVoidId: learningVoid._id, blueprintRevisionId: blueprint._id, type: CALIBRATION_JOB_TYPE, status: 'leased', revision: 1, idempotencyKey: args.idempotencyKey, requestFingerprint, expectedVoidRevision: args.expectedVoidRevision, expectedBlueprintRecordRevision: args.expectedBlueprintRecordRevision, attempts: 0, providerEnabled: true, providerModel: process.env.LEARN_V2_CALIBRATION_MODEL?.trim() || process.env.LEARN_V2_MASTERY_MODEL?.trim() || undefined, providerPolicyVersion: 'learn-v2.calibration-provider.v1', leaseToken: crypto.randomUUID(), leaseExpiresAt: now + CALIBRATION_LEASE_MS, createdAt: now, updatedAt: now })
+    const job = await ctx.db.get(jobId)
+    if (!job || !job.leaseToken) throw new Error('Unable to reserve calibration scoring')
+    return { kind: 'acquired' as const, jobId, leaseToken: job.leaseToken, revision: job.revision }
+  },
+})
+
+export const markCalibrationScoringDispatched = internalMutation({
+  args: { tokenIdentifier: v.string(), jobId: v.id('learnJobs'), leaseToken: v.string(), expectedRevision: v.number() },
+  handler: async (ctx, args) => {
+    const job = await ctx.db.get(args.jobId)
+    if (!job || job.userId !== args.tokenIdentifier || job.type !== CALIBRATION_JOB_TYPE || job.status !== 'leased' || job.revision !== args.expectedRevision || job.leaseToken !== args.leaseToken || (job.leaseExpiresAt ?? 0) <= Date.now()) throw new Error('Calibration scoring lease unavailable')
+    await ctx.db.patch(job._id, { status: 'running', checkpoint: 'provider_dispatched', attempts: (job.attempts ?? 0) + 1, revision: job.revision + 1, updatedAt: Date.now() })
+    return { revision: job.revision + 1 }
+  },
+})
+
+export const finishCalibrationScoringFailure = internalMutation({
+  args: { tokenIdentifier: v.string(), jobId: v.id('learnJobs'), leaseToken: v.string(), outcome: v.union(v.literal('not_dispatched'), v.literal('ambiguous')) },
+  handler: async (ctx, args) => {
+    const job = await ctx.db.get(args.jobId)
+    if (!job || job.userId !== args.tokenIdentifier || job.type !== CALIBRATION_JOB_TYPE || job.leaseToken !== args.leaseToken || (job.status !== 'leased' && job.status !== 'running')) return
+    await ctx.db.patch(job._id, { status: args.outcome === 'not_dispatched' ? 'queued' : 'blocked', leaseToken: undefined, leaseExpiresAt: undefined, checkpoint: undefined, terminalReason: args.outcome === 'not_dispatched' ? 'provider_not_dispatched' : 'provider_outcome_requires_reconciliation', revision: job.revision + 1, updatedAt: Date.now() })
+  },
+})
+
 export const recordCalibrationAttempt = internalMutation({
-  args: { tokenIdentifier: v.string(), blueprintRevisionId: v.id('learnBlueprintRevisions'), objectiveId: v.id('learnObjectives'), expectedBlueprintRecordRevision: v.number(), expectedVoidRevision: v.number(), idempotencyKey: v.string(), serverScorePercent: v.number(), usedHint: v.boolean(), usedReveal: v.boolean(), confidence: v.number(), rubricVersion: v.string() },
+  args: { tokenIdentifier: v.string(), blueprintRevisionId: v.id('learnBlueprintRevisions'), objectiveId: v.id('learnObjectives'), expectedBlueprintRecordRevision: v.number(), expectedVoidRevision: v.number(), idempotencyKey: v.string(), serverScorePercent: v.number(), usedHint: v.boolean(), usedReveal: v.boolean(), confidence: v.number(), rubricVersion: v.string(), response: v.optional(v.string()), scorerVersion: v.optional(v.string()), scorerModel: v.optional(v.string()), criterionResultsJson: v.optional(v.string()), rubricSnapshot: v.optional(v.string()), providerResponseId: v.optional(v.string()), scoringJobId: v.optional(v.id('learnJobs')), scoringLeaseToken: v.optional(v.string()) },
   handler: async (ctx, args) => {
     if (!(await hasLearnV2Access(ctx, args.tokenIdentifier))) throw new Error('Learn V2 access denied')
     assertIdempotencyKey(args.idempotencyKey)
@@ -265,7 +325,9 @@ export const recordCalibrationAttempt = internalMutation({
     if (!Number.isFinite(args.serverScorePercent) || args.serverScorePercent < 0 || args.serverScorePercent > 100) throw new Error('Server score must be between 0 and 100')
     if (!Number.isSafeInteger(args.confidence) || args.confidence < 1 || args.confidence > 5) throw new Error('Confidence must be an integer from 1 to 5')
     if (!args.rubricVersion.trim() || args.rubricVersion.length > 96) throw new Error('Rubric version is invalid')
-    const requestFingerprint = fingerprint('recordCalibrationAttempt', args)
+    const requestFingerprint = args.scoringJobId
+      ? calibrationRequestFingerprint({ blueprintRevisionId: args.blueprintRevisionId, objectiveId: args.objectiveId, expectedBlueprintRecordRevision: args.expectedBlueprintRecordRevision, expectedVoidRevision: args.expectedVoidRevision, response: args.response ?? '', confidence: args.confidence, usedHint: args.usedHint, usedReveal: args.usedReveal, idempotencyKey: args.idempotencyKey })
+      : fingerprint('recordCalibrationAttempt', args)
     const prior = await ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', args.tokenIdentifier).eq('idempotencyKey', args.idempotencyKey)).unique()
     if (prior) {
       if (prior.requestFingerprint !== requestFingerprint) throw new Error('Idempotency key was already used for a different request')
@@ -277,6 +339,8 @@ export const recordCalibrationAttempt = internalMutation({
     if (blueprint.recordRevision !== args.expectedBlueprintRecordRevision || learningVoid.revision !== args.expectedVoidRevision) throw new Error('Calibration revision conflict')
     const objective = await ctx.db.get(args.objectiveId)
     if (!objective || objective.userId !== args.tokenIdentifier || objective.blueprintRevisionId !== blueprint._id) throw new Error('Calibration objective not found')
+    const scoringJob = args.scoringJobId && await ctx.db.get(args.scoringJobId)
+    if (args.scoringJobId && (!scoringJob || scoringJob.userId !== args.tokenIdentifier || scoringJob.type !== CALIBRATION_JOB_TYPE || scoringJob.status !== 'running' || scoringJob.leaseToken !== args.scoringLeaseToken || scoringJob.requestFingerprint !== requestFingerprint)) throw new Error('Calibration scoring command is invalid')
     const existing = await ctx.db.query('masteryAttempts').withIndex('by_userId_and_blueprintRevisionId_and_kind', q => q.eq('userId', args.tokenIdentifier).eq('blueprintRevisionId', blueprint._id).eq('kind', 'calibration')).take(MAX_CALIBRATION_ITEMS + 1)
     if (existing.length >= MAX_CALIBRATION_ITEMS) throw new Error('Calibration already has seven items')
     if (existing.some(row => row.objectiveId === objective._id)) throw new Error('Calibration objective was already attempted')
@@ -284,10 +348,11 @@ export const recordCalibrationAttempt = internalMutation({
     const result = unassistedPass ? 'provisionally_known' as const : 'learning' as const
     const schedulingPriority = unassistedPass ? 'deprioritized' as const : 'remediation' as const
     const now = Date.now()
-    const attemptId = await ctx.db.insert('masteryAttempts', { userId: args.tokenIdentifier, blueprintRevisionId: blueprint._id, objectiveId: objective._id, kind: 'calibration', attemptedAt: now, idempotencyKey: args.idempotencyKey, requestFingerprint, serverScorePercent: args.serverScorePercent, usedHint: args.usedHint, usedReveal: args.usedReveal, confidence: args.confidence, rubricVersion: args.rubricVersion, result })
+    const attemptId = await ctx.db.insert('masteryAttempts', { userId: args.tokenIdentifier, blueprintRevisionId: blueprint._id, objectiveId: objective._id, kind: 'calibration', attemptedAt: now, idempotencyKey: args.idempotencyKey, requestFingerprint, serverScorePercent: args.serverScorePercent, usedHint: args.usedHint, usedReveal: args.usedReveal, confidence: args.confidence, rubricVersion: args.rubricVersion, response: args.response, scorerVersion: args.scorerVersion, scorerModel: args.scorerModel, criterionResultsJson: args.criterionResultsJson, rubricSnapshot: args.rubricSnapshot, result })
     const record = await ctx.db.query('masteryRecords').withIndex('by_userId_and_objectiveId', q => q.eq('userId', args.tokenIdentifier).eq('objectiveId', objective._id)).unique()
     if (record) await ctx.db.patch(record._id, { blueprintRevisionId: blueprint._id, state: result, schedulingPriority, recordRevision: (record.recordRevision ?? 0) + 1, updatedAt: now })
     else await ctx.db.insert('masteryRecords', { userId: args.tokenIdentifier, blueprintRevisionId: blueprint._id, objectiveId: objective._id, state: result, schedulingPriority, recordRevision: 1, updatedAt: now })
+    if (scoringJob && args.scoringLeaseToken) await ctx.db.patch(scoringJob._id, { status: 'succeeded', leaseToken: undefined, leaseExpiresAt: undefined, checkpoint: 'recorded', providerResponseId: args.providerResponseId, providerResponseModel: args.scorerModel, revision: scoringJob.revision + 1, updatedAt: now })
     return { attemptId, result, schedulingPriority, replayed: false }
   },
 })
@@ -295,6 +360,8 @@ export const recordCalibrationAttempt = internalMutation({
 export const getCalibrationScoringInput = internalQuery({
   args: {
     tokenIdentifier: v.string(),
+    jobId: v.id('learnJobs'),
+    leaseToken: v.string(),
     blueprintRevisionId: v.id('learnBlueprintRevisions'),
     objectiveId: v.id('learnObjectives'),
     response: v.string(),
@@ -302,6 +369,8 @@ export const getCalibrationScoringInput = internalQuery({
   handler: async (ctx, args) => {
     if (!(await hasLearnV2Access(ctx, args.tokenIdentifier))) throw new Error('Learn V2 access denied')
     if (!args.response.trim() || args.response.length > MAX_RESPONSE_LENGTH) throw new Error('Calibration response is invalid')
+    const job = await ctx.db.get(args.jobId)
+    if (!job || job.userId !== args.tokenIdentifier || job.type !== CALIBRATION_JOB_TYPE || job.status !== 'running' || job.leaseToken !== args.leaseToken || (job.leaseExpiresAt ?? 0) <= Date.now()) throw new Error('Calibration scoring lease unavailable')
     const blueprint = await requireCurrentBlueprint(ctx, args.tokenIdentifier, args.blueprintRevisionId)
     const learningVoid = await requireLiveVoid(ctx, args.tokenIdentifier, blueprint.learningVoidId)
     if (blueprint.status !== 'accepted' || learningVoid.status !== 'calibration') throw new Error('Blueprint is not in calibration')
@@ -336,7 +405,25 @@ export const submitCalibrationAttempt = action({
   handler: async (ctx, args): Promise<Record<string, unknown>> => {
     const identity = await ctx.auth.getUserIdentity()
     if (!identity) throw new Error('Learn V2 access denied')
-    const input: { model: string, objective: { assessmentContract?: unknown, title: string, capability?: string }, evidence: Array<{ excerpt?: string, locator: string }>, learnerResponse: string } = await ctx.runQuery(internal.learnV2MapCalibration.getCalibrationScoringInput, { tokenIdentifier: identity.tokenIdentifier, blueprintRevisionId: args.blueprintRevisionId, objectiveId: args.objectiveId, response: args.response })
+    const reservation: { kind: 'replay', attemptId: string, result?: string } | { kind: 'pending', status: 'blocked' | 'in_progress' } | { kind: 'acquired', jobId: Id<'learnJobs'>, leaseToken: string, revision: number } = await ctx.runMutation(internal.learnV2MapCalibration.reserveCalibrationScoring, { tokenIdentifier: identity.tokenIdentifier, ...args })
+    if (reservation.kind === 'replay') return { status: 'completed', attemptId: reservation.attemptId, result: reservation.result ?? null, replayed: true }
+    if (reservation.kind === 'pending') {
+      if (reservation.status === 'blocked') throw new Error('Calibration scoring outcome requires reconciliation')
+      return { status: 'in_progress', replayed: false }
+    }
+    try {
+      await ctx.runMutation(internal.learnV2MapCalibration.markCalibrationScoringDispatched, { tokenIdentifier: identity.tokenIdentifier, jobId: reservation.jobId, leaseToken: reservation.leaseToken, expectedRevision: reservation.revision })
+    } catch (error) {
+      await ctx.runMutation(internal.learnV2MapCalibration.finishCalibrationScoringFailure, { tokenIdentifier: identity.tokenIdentifier, jobId: reservation.jobId, leaseToken: reservation.leaseToken, outcome: 'not_dispatched' })
+      throw error
+    }
+    let input: { model: string, objective: { assessmentContract?: unknown, title: string, capability?: string }, evidence: Array<{ excerpt?: string, locator: string }>, learnerResponse: string }
+    try {
+      input = await ctx.runQuery(internal.learnV2MapCalibration.getCalibrationScoringInput, { tokenIdentifier: identity.tokenIdentifier, jobId: reservation.jobId, leaseToken: reservation.leaseToken, blueprintRevisionId: args.blueprintRevisionId, objectiveId: args.objectiveId, response: args.response })
+    } catch (error) {
+      await ctx.runMutation(internal.learnV2MapCalibration.finishCalibrationScoringFailure, { tokenIdentifier: identity.tokenIdentifier, jobId: reservation.jobId, leaseToken: reservation.leaseToken, outcome: 'not_dispatched' })
+      throw error
+    }
     const contract = input.objective.assessmentContract as { version?: string, criteria?: Array<{ key: string, weightPercent: number }> } | undefined
     if (!contract?.version || !contract.criteria?.length) throw new Error('Calibration rubric is unavailable')
     let completion
@@ -350,15 +437,26 @@ export const submitCalibrationAttempt = action({
       })
     } catch (error) {
       const kind = classifyAiGatewayFailure(error)
+      await ctx.runMutation(internal.learnV2MapCalibration.finishCalibrationScoringFailure, { tokenIdentifier: identity.tokenIdentifier, jobId: reservation.jobId, leaseToken: reservation.leaseToken, outcome: kind === 'outcome_unknown' ? 'ambiguous' : 'not_dispatched' })
       throw new Error(kind === 'outcome_unknown' ? 'Calibration scoring outcome requires reconciliation' : 'Calibration scoring is unavailable')
     }
     let parsed: { criterionResults?: Array<{ key: string, awarded: boolean, rationale?: string }> }
-    try { parsed = JSON.parse(completion.choices[0]?.message.content ?? '') as typeof parsed } catch { throw new Error('Calibration scorer returned invalid output') }
-    if (!parsed.criterionResults) throw new Error('Calibration scorer returned invalid output')
+    try { parsed = JSON.parse(completion.choices[0]?.message.content ?? '') as typeof parsed } catch {
+      await ctx.runMutation(internal.learnV2MapCalibration.finishCalibrationScoringFailure, { tokenIdentifier: identity.tokenIdentifier, jobId: reservation.jobId, leaseToken: reservation.leaseToken, outcome: 'not_dispatched' })
+      throw new Error('Calibration scorer returned invalid output')
+    }
+    if (!parsed.criterionResults) {
+      await ctx.runMutation(internal.learnV2MapCalibration.finishCalibrationScoringFailure, { tokenIdentifier: identity.tokenIdentifier, jobId: reservation.jobId, leaseToken: reservation.leaseToken, outcome: 'not_dispatched' })
+      throw new Error('Calibration scorer returned invalid output')
+    }
     const criterionKeys = contract.criteria.map(criterion => criterion.key)
-    if (parsed.criterionResults.length !== criterionKeys.length || new Set(parsed.criterionResults.map(result => result.key)).size !== parsed.criterionResults.length || parsed.criterionResults.some(result => !criterionKeys.includes(result.key))) throw new Error('Calibration scorer returned invalid output')
+    const totalWeight = contract.criteria.reduce((sum, criterion) => sum + criterion.weightPercent, 0)
+    if (totalWeight !== 100 || contract.criteria.some(criterion => !criterion.key.trim() || !Number.isFinite(criterion.weightPercent) || criterion.weightPercent < 0) || parsed.criterionResults.length !== criterionKeys.length || new Set(parsed.criterionResults.map(result => result.key)).size !== parsed.criterionResults.length || parsed.criterionResults.some(result => !criterionKeys.includes(result.key) || typeof result.awarded !== 'boolean')) {
+      await ctx.runMutation(internal.learnV2MapCalibration.finishCalibrationScoringFailure, { tokenIdentifier: identity.tokenIdentifier, jobId: reservation.jobId, leaseToken: reservation.leaseToken, outcome: 'not_dispatched' })
+      throw new Error('Calibration scorer returned invalid output')
+    }
     const score = contract.criteria.reduce((total, criterion) => total + (parsed.criterionResults!.find(result => result.key === criterion.key)?.awarded ? criterion.weightPercent : 0), 0)
-    return await ctx.runMutation(internal.learnV2MapCalibration.recordCalibrationAttempt, { tokenIdentifier: identity.tokenIdentifier, blueprintRevisionId: args.blueprintRevisionId, objectiveId: args.objectiveId, expectedBlueprintRecordRevision: args.expectedBlueprintRecordRevision, expectedVoidRevision: args.expectedVoidRevision, idempotencyKey: args.idempotencyKey, serverScorePercent: score, usedHint: args.usedHint, usedReveal: args.usedReveal, confidence: args.confidence, rubricVersion: contract.version })
+    return await ctx.runMutation(internal.learnV2MapCalibration.recordCalibrationAttempt, { tokenIdentifier: identity.tokenIdentifier, blueprintRevisionId: args.blueprintRevisionId, objectiveId: args.objectiveId, expectedBlueprintRecordRevision: args.expectedBlueprintRecordRevision, expectedVoidRevision: args.expectedVoidRevision, idempotencyKey: args.idempotencyKey, serverScorePercent: score, usedHint: args.usedHint, usedReveal: args.usedReveal, confidence: args.confidence, rubricVersion: contract.version, response: args.response, scorerVersion: 'learn-v2.calibration-scorer.v1', scorerModel: input.model, criterionResultsJson: JSON.stringify(parsed.criterionResults), rubricSnapshot: JSON.stringify(input.objective.assessmentContract), providerResponseId: completion.id, scoringJobId: reservation.jobId, scoringLeaseToken: reservation.leaseToken })
   },
 })
 

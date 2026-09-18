@@ -1,9 +1,14 @@
 /// <reference types="vite/client" />
 import { convexTest } from 'convex-test'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import schema from './schema'
+
+vi.mock('../server/utils/ai-gateway', () => ({
+  classifyAiGatewayFailure: vi.fn(() => 'definitive_failure'),
+  generateCompletion: vi.fn(async () => ({ id: 'calibration-provider-1', model: 'mock-calibration', choices: [{ message: { content: JSON.stringify({ criterionResults: [{ key: 'correct', awarded: true, rationale: 'Matches the pinned evidence.' }] }) } }] })),
+}))
 
 const modules = import.meta.glob('./**/*.ts')
 const identity = { tokenIdentifier: 'https://auth.example.com|map-owner', name: 'Map Owner' }
@@ -164,6 +169,24 @@ describe('Learn V2 revision-safe map editing and calibration', () => {
     finally {
       if (previous === undefined) delete process.env.LEARN_V2_ENABLED
       else process.env.LEARN_V2_ENABLED = previous
+    }
+  })
+
+  test('scores calibration through the public action, persists provider pins, and replays before dispatch', async () => {
+    const previousModel = process.env.LEARN_V2_CALIBRATION_MODEL
+    process.env.LEARN_V2_CALIBRATION_MODEL = 'mock-calibration'
+    try {
+      const setup = await setupMap()
+      const accepted = await setup.owner.mutation(api.learnV2MapCalibration.acceptBlueprintMap, { blueprintRevisionId: setup.blueprint._id, expectedRecordRevision: 1, expectedVoidRevision: 2, idempotencyKey: 'public-accept' })
+      const args = { blueprintRevisionId: setup.blueprint._id, objectiveId: setup.objectives[0]!, expectedBlueprintRecordRevision: accepted.recordRevision, expectedVoidRevision: 3, response: 'The supported answer.', confidence: 4, usedHint: false, usedReveal: false, idempotencyKey: 'public-calibration-1' }
+      const scored = await setup.owner.action(api.learnV2MapCalibration.submitCalibrationAttempt, args)
+      expect(scored).toMatchObject({ result: 'provisionally_known', replayed: false })
+      expect(await setup.owner.action(api.learnV2MapCalibration.submitCalibrationAttempt, args)).toMatchObject({ result: 'provisionally_known', replayed: true })
+      expect(await setup.t.run(ctx => ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', identity.tokenIdentifier).eq('idempotencyKey', args.idempotencyKey)).unique())).toMatchObject({ response: args.response, scorerModel: 'mock-calibration', scorerVersion: 'learn-v2.calibration-scorer.v1' })
+    }
+    finally {
+      if (previousModel === undefined) delete process.env.LEARN_V2_CALIBRATION_MODEL
+      else process.env.LEARN_V2_CALIBRATION_MODEL = previousModel
     }
   })
 })
