@@ -110,3 +110,27 @@ export const fetchSource = action({
   },
   handler: (ctx, args) => orchestrateSourceFetch(ctx, args, async (url) => deterministicLearnV2Source(url) ?? await safeFetchSource(url)),
 })
+
+/** Public, bounded URL-admission continuation. A URL is never reviewable
+ * merely because it was registered: fetch policy and source evaluation must
+ * both finish before the learner can accept it as evidence. */
+export const fetchAndPrepareSourceForReview = action({
+  args: {
+    sourceSnapshotId: v.id('learnSourceSnapshots'),
+    expectedRevision: v.number(),
+    idempotencyKey: v.string(),
+  },
+  handler: async (ctx, args): Promise<Record<string, unknown>> => {
+    const fetched = await orchestrateSourceFetch(ctx, args, async (url) => deterministicLearnV2Source(url) ?? await safeFetchSource(url))
+    if (fetched.ok === false || fetched.status !== 'fetched') return fetched
+    const identity = await ctx.auth.getUserIdentity()
+    if (!identity) throw new Error('Learn V2 access denied')
+    return await ctx.runMutation(internal.learnV2Sources.recordEvaluation, {
+      tokenIdentifier: identity.tokenIdentifier,
+      sourceSnapshotId: args.sourceSnapshotId,
+      expectedRevision: fetched.recordRevision as number,
+      idempotencyKey: `${args.idempotencyKey}:evaluate`,
+      conflictStatus: 'clear',
+    })
+  },
+})
