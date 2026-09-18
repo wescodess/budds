@@ -71,11 +71,20 @@ schedules bounded, child-before-parent cleanup of lifecycle receipts, Blueprint
 revisions, Blueprints, and the Void. This continuation is owner-scoped and
 idempotent; it does not alter the established V1 folder cascade.
 
-`calendarProjections` is intentionally local-only and restricted to
-`pending_projection` with no provider/event identifier. LA2-15 must widen that
-schema and add provider-first cleanup atomically with its first producer. No
-Google cleanup exists for V2 projections today; account deletion can only remove
-their local pending rows.
+Google projection has an additional, default-deny `LEARN_V2_CALENDAR_ENABLED`
+gate in both Convex and the V2 Nitro routes. Enabling it does not bypass the
+normal global/cohort V2 decision. Explicit V2 re-consent records the scopes
+actually granted by Google; projection remains unavailable unless both
+`calendar.events.owned` and `calendar.events.freebusy` are present.
+
+`calendarConnections` remains the executable contract's shared encrypted
+credential, consent, and provider-first disconnect boundary. V2 session rows
+are isolated in `calendarProjections` and never reuse V1 course-owned
+`calendarEvents`. Projection IDs are deterministic opaque base32hex values,
+and the public query/export surfaces redact provider IDs, private metadata,
+ETags, and create leases. Disconnect and account deletion drain both event
+tables at Google before deleting their local rows and credentials; an active
+provider-create lease makes cleanup wait and retry instead of racing an insert.
 
 Future source writers must call `internal.learnV2Retention.purgeSourceEvidence`
 in the same workflow that deletes source access. The bounded seam removes

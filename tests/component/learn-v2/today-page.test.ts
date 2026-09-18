@@ -32,6 +32,10 @@ describe('Learn V2 Today route states', () => {
             props: ['candidate'],
             template: '<section data-testid="learn-v2-ready-stub"><h1>{{ candidate.objectiveTitle }}</h1></section>',
           },
+          LearnV2CalendarProjectionCard: {
+            props: ['studySessionId', 'scheduledStartAt'],
+            template: '<section data-testid="learn-v2-calendar-stub">{{ studySessionId }}</section>',
+          },
         },
       },
     })
@@ -65,5 +69,6 @@ describe('Learn V2 Today route states', () => {
     }
     await wrapper.vm.$nextTick()
     expect(wrapper.get('[data-testid="learn-v2-ready-stub"] h1').text()).toBe('Explain gravity')
+    expect(wrapper.get('[data-testid="learn-v2-calendar-stub"]').text()).toBe('session_1')
   })
 })

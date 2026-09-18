@@ -23,6 +23,7 @@ export const getByUser = query({
       status: connection.status,
       connectedAt: connection.connectedAt,
       preferences: connection.preferences ?? null,
+      learnV2ConsentVersion: connection.learnV2ConsentVersion ?? null,
     }
   },
 })
@@ -34,6 +35,8 @@ export const upsertConnection = mutation({
     refreshToken: v.optional(v.string()),
     expiresAt: v.number(),
     timezone: v.string(),
+    grantedScopes: v.optional(v.array(v.string())),
+    learnV2ConsentVersion: v.optional(v.literal(1)),
   },
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx)
@@ -53,6 +56,8 @@ export const upsertConnection = mutation({
         timezone: args.timezone,
         status: 'connected' as const,
         connectedAt: Date.now(),
+        ...(args.grantedScopes ? { grantedScopes: [...new Set(args.grantedScopes)].sort() } : {}),
+        ...(args.learnV2ConsentVersion ? { learnV2ConsentVersion: args.learnV2ConsentVersion } : {}),
       })
       return existing._id
     }
@@ -67,6 +72,8 @@ export const upsertConnection = mutation({
       timezone: args.timezone,
       status: 'connected',
       connectedAt: Date.now(),
+      ...(args.grantedScopes ? { grantedScopes: [...new Set(args.grantedScopes)].sort() } : {}),
+      ...(args.learnV2ConsentVersion ? { learnV2ConsentVersion: args.learnV2ConsentVersion } : {}),
     })
   },
 })
@@ -88,6 +95,11 @@ export const disconnect = internalMutation({
       .withIndex('by_userId', q => q.eq('userId', userId))
       .first()
     if (event) throw new Error('Calendar events must be removed by the provider-first disconnect')
+    const projection = await ctx.db
+      .query('calendarProjections')
+      .withIndex('by_calendarConnectionId', q => q.eq('calendarConnectionId', connection._id))
+      .first()
+    if (projection) throw new Error('Calendar projections must be removed by the provider-first disconnect')
     await assertCalendarCleanupSettled(ctx, connection._id)
     const cleanup = await ctx.db
       .query('calendarEventCleanupJobs')
@@ -153,6 +165,7 @@ export const recordDisconnectBatch = internalMutation({
     calendarConnectionId: v.id('calendarConnections'),
     leaseToken: v.string(),
     deletedEventIds: v.array(v.id('calendarEvents')),
+    deletedProjectionIds: v.optional(v.array(v.id('calendarProjections'))),
     failures: v.number(),
     error: v.optional(v.string()),
   },
@@ -168,9 +181,15 @@ export const recordDisconnectBatch = internalMutation({
       const event = await ctx.db.get(eventId)
       if (event?.calendarConnectionId === connection._id) await ctx.db.delete(eventId)
     }
+    for (const projectionId of args.deletedProjectionIds ?? []) {
+      const projection = await ctx.db.get(projectionId)
+      if (projection?.calendarConnectionId === connection._id) await ctx.db.delete(projectionId)
+    }
 
     const now = Date.now()
-    const deletedCount = (connection.disconnectDeletedCount ?? 0) + args.deletedEventIds.length
+    const deletedCount = (connection.disconnectDeletedCount ?? 0)
+      + args.deletedEventIds.length
+      + (args.deletedProjectionIds?.length ?? 0)
     if (args.failures > 0) {
       const delayMs = Math.min(30_000 * 2 ** Math.min((connection.disconnectAttempts ?? 1) - 1, 7), 60 * 60_000)
       await ctx.db.patch(connection._id, {
@@ -192,7 +211,11 @@ export const recordDisconnectBatch = internalMutation({
         q.eq('calendarConnectionId', connection._id),
       )
       .first()
-    if (remainingEvent) {
+    const remainingProjection = await ctx.db
+      .query('calendarProjections')
+      .withIndex('by_calendarConnectionId', q => q.eq('calendarConnectionId', connection._id))
+      .first()
+    if (remainingEvent || remainingProjection) {
       await ctx.db.patch(connection._id, {
         disconnectDeletedCount: deletedCount,
         disconnectLeaseToken: undefined,
