@@ -132,7 +132,7 @@ test('learner can advance the Learn V2 mastery journey through production UI', a
   await page.getByTestId('learn-v2-continue').click()
   await expect(page.getByTestId('learn-v2-phase-confidence')).toBeVisible()
   await page.getByLabel('Teach it back').fill('The transfer orbit is a deliberate path between two orbital energies.')
-  await page.getByRole('radio', { name: '4 out of 5' }).check()
+  await page.getByTestId('learn-v2-confidence-4').click()
   await page.getByTestId('learn-v2-submit').click()
   await expect(page.getByTestId('learn-v2-feedback')).toBeVisible({ timeout: 120_000 })
   await page.getByTestId('learn-v2-next-review').click()
