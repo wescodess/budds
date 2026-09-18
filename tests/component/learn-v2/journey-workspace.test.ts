@@ -76,7 +76,7 @@ describe('Learn V2 journey workspace seams', () => {
       props: { input: { version: 'learn-v2.schedule-input.v1', timezone: 'America/Toronto', startLocalDate: '2030-09-01', targetLocalDate: '2030-10-01', sessionMinutes: 25, availability: [{ weekday: 1, start: '18:00', end: '20:00' }], blackoutDates: [], reviewIntervalsDays: [1, 3], minRestMinutes: 720 } },
     })
     await wrapper.get('[data-testid="learn-v2-schedule-minutes"]').setValue('45')
-    await wrapper.get('[data-testid="learn-v2-schedule-submit"]').trigger('submit')
+    await wrapper.get('[data-testid="learn-v2-create-plan-preview"]').trigger('submit')
     expect(wrapper.emitted('submit')?.[0]?.[0]).toMatchObject({ timezone: 'America/Toronto', sessionMinutes: 45, availability: [{ weekday: 1, start: '18:00', end: '20:00' }] })
   })
 })
