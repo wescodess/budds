@@ -146,6 +146,14 @@ describe('LA2-12 server-scored mastery attempts', () => {
     await expect(mismatched.owner.query(api.learnV2Today.getToday, {})).resolves.toMatchObject({ status: 'blocked', reason: 'started_content_unavailable' })
   })
 
+  test('does not project or start a ready session after its scheduled window', async () => {
+    const expired = await fixture()
+    const now = Date.now()
+    await expired.t.run(ctx => ctx.db.patch(expired.ids.sessionId, { status: 'ready', scheduledStartAt: now - 120_000, scheduledEndAt: now - 60_000 }))
+    await expect(expired.owner.query(api.learnV2Today.getToday, {})).resolves.toMatchObject({ status: 'empty' })
+    await expect(expired.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: expired.ids.sessionId, expectedSessionRevision: 7, expectedContentRevision: 11, idempotencyKey: 'expired-start' })).rejects.toThrow(/window has expired/)
+  })
+
   test('uses 79/80 boundary, persists remediation, and appends exactly one replay-safe attempt', async () => {
     const { t, owner, ids, args } = await fixture()
     await expect(owner.query(api.learnV2Today.getToday, {})).resolves.toMatchObject({ status: 'ready', sessionId: ids.sessionId, sessionRevision: 7, timezone: 'America/Toronto', content: { revision: 11 }, plan: { recordRevision: 5, blueprintRecordRevision: 3 } })

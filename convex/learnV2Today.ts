@@ -35,7 +35,7 @@ export const getToday = query({
       candidates.push({ session, plan, blueprint, objective, record })
     }
     const nextScheduledAt = candidates.filter(row => row.session.status !== 'in_progress' && row.session.scheduledStartAt > now).map(row => row.session.scheduledStartAt).sort((a, b) => a - b)[0] ?? null
-    const selectable = candidates.filter(row => row.session.status === 'in_progress' || row.session.scheduledStartAt <= now)
+    const selectable = candidates.filter(row => row.session.status === 'in_progress' || row.session.scheduledStartAt <= now && (row.session.scheduledEndAt === undefined || row.session.scheduledEndAt >= now))
     if (!selectable.length) return { status: 'empty' as const, nextScheduledAt }
     selectable.sort((a, b) => rank(a.session, a.record, now) - rank(b.session, b.record, now) || a.session.scheduledStartAt - b.session.scheduledStartAt || String(a.session._id).localeCompare(String(b.session._id)))
     const candidate = selectable[0]!
