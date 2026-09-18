@@ -2,9 +2,7 @@
 import { api } from '#convex/api'
 
 type TodayResult = { status: 'ready', sessionId: string, sessionRevision: number, content: { revision: number }, plan: { recordRevision: number, blueprintRecordRevision: number }, objective: { title: string, capability?: string | null, estimatedMinutes?: number | null }, scheduledStartAt: number, scheduledEndAt?: number | null, timezone: string, mastery?: { state?: string, nextReviewAt?: number | null }, nextScheduledAt?: number | null } | { status: 'pending' | 'blocked' | 'empty', reason?: string, nextScheduledAt?: number | null }
-const access = import.meta.client ? useConvexQuery(api.learnV2Access.status, {}) : { data: ref({ kind: 'denied' }), pending: ref(false) }
-const allowed = computed(() => (access.data?.value as { kind?: string } | undefined)?.kind === 'allowed')
-const checkingAccess = computed(() => access.pending?.value ?? false)
+const { allowed, checkingAccess } = useLearnV2Access()
 const today = import.meta.client ? useConvexQuery(api.learnV2Today.getToday, {}, { enabled: allowed }) : { data: ref<TodayResult | null>(null) }
 const result = computed(() => today.data?.value as TodayResult | null | undefined)
 const candidate = computed(() => {

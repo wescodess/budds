@@ -1,20 +1,16 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { ref } from 'vue'
 import type { Id } from '~~/convex/_generated/dataModel'
 import { api } from '#convex/api'
 import { getErrorMessage } from '~~/shared/errors'
 
 const { legacyCourseId } = defineProps<{ legacyCourseId: Id<'courses'> }>()
 
-const access = import.meta.client
-  ? useConvexQuery(api.learnV2Access.status, {})
-  : { data: ref({ kind: 'denied' }), pending: ref(false) }
+const { allowed, checkingAccess } = useLearnV2Access()
 const upgradeMutation = import.meta.client
   ? useConvexMutation(api.learnV2Upgrade.upgradeLegacyCourse)
   : { mutate: async () => ({}) }
 
-const allowed = computed(() => (access.data?.value as { kind?: string } | undefined)?.kind === 'allowed')
-const checkingAccess = computed(() => access.pending?.value ?? false)
 const busy = ref(false)
 const error = ref<string | null>(null)
 const success = ref(false)

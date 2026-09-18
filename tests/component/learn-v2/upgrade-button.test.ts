@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { getFunctionName } from 'convex/server'
+import { useNuxtApp } from '#app'
 
 const access = ref<any>({ kind: 'allowed' })
 const pending = ref(false)
@@ -18,6 +19,8 @@ const path = ['~', 'components', 'learn-v2', 'UpgradeLegacyCourseButton.vue'].jo
 
 describe('LearnV2UpgradeLegacyCourseButton', () => {
   beforeEach(() => {
+    ;(useNuxtApp().$convexAuthReady as Ref<boolean>).value = true
+    ;(useNuxtApp().$convexAuthenticated as Ref<boolean>).value = true
     access.value = { kind: 'allowed' }
     pending.value = false
     quota.value = []

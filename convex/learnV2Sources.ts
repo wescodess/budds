@@ -410,14 +410,14 @@ export const listSources = query({
             .paginate({ cursor: state.cursor, numItems: paginationOpts.numItems })
         : state.segment === 'legacy_purged'
           ? await ctx.db.query('learnSourceSnapshots')
-              .withIndex('by_userId_and_learningVoidId_and_effectiveStatus_and_evidencePurgedAt', q => q
+              .withIndex('by_userId_and_voidId_and_effective_and_purgedAt', q => q
                 .eq('userId', userId)
                 .eq('learningVoidId', args.learningVoidId)
                 .eq('effectiveStatus', undefined)
                 .gt('evidencePurgedAt', undefined))
               .paginate({ cursor: state.cursor, numItems: paginationOpts.numItems })
           : await ctx.db.query('learnSourceSnapshots')
-              .withIndex('by_userId_and_learningVoidId_and_effectiveStatus_and_status_and_evidencePurgedAt', q => {
+              .withIndex('by_userId_and_voidId_and_effective_and_status_and_purgedAt', q => {
                 const range = q
                   .eq('userId', userId)
                   .eq('learningVoidId', args.learningVoidId)
