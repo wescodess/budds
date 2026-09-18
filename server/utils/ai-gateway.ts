@@ -1,4 +1,5 @@
 import { readConfiguredRuntimeValue } from './runtime-config'
+import { deterministicLearnV2Completion } from './learn-v2-e2e-fixtures'
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant'
@@ -170,6 +171,8 @@ function getGatewayConfig() {
 }
 
 export async function generateCompletion(params: GenerateParams): Promise<GenerateResponse> {
+  const deterministic = deterministicLearnV2Completion(params)
+  if (deterministic) return deterministic
   const { baseUrl, headers: baseHeaders } = getGatewayConfig()
   const headers = { ...baseHeaders }
   if (params.maxAttempts !== undefined) headers['cf-aig-max-attempts'] = String(params.maxAttempts)
