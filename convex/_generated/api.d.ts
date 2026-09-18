@@ -48,6 +48,7 @@ import type * as learnV2FolderManifests from "../learnV2FolderManifests.js";
 import type * as learnV2Lifecycle from "../learnV2Lifecycle.js";
 import type * as learnV2MapCalibration from "../learnV2MapCalibration.js";
 import type * as learnV2Mastery from "../learnV2Mastery.js";
+import type * as learnV2Journey from "../learnV2Journey.js";
 import type * as learnV2Plans from "../learnV2Plans.js";
 import type * as learnV2Retention from "../learnV2Retention.js";
 import type * as learnV2Search from "../learnV2Search.js";
@@ -126,6 +127,7 @@ declare const fullApi: ApiFromModules<{
   learnV2Lifecycle: typeof learnV2Lifecycle;
   learnV2MapCalibration: typeof learnV2MapCalibration;
   learnV2Mastery: typeof learnV2Mastery;
+  learnV2Journey: typeof learnV2Journey;
   learnV2Plans: typeof learnV2Plans;
   learnV2Retention: typeof learnV2Retention;
   learnV2Search: typeof learnV2Search;
