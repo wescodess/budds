@@ -11,6 +11,8 @@ onMounted(() => { hydrated.value = true })
 const showCoursesLoading = computed(() => !hydrated.value || isLoading.value)
 
 const { data: recentChatsData } = useConvexQuery(api.conversations.listRecentForUser, {})
+const { data: learnV2Access } = useConvexQuery(api.learnV2Access.status, {})
+const hasLearnV2Access = computed(() => (learnV2Access.value as { kind?: string } | undefined)?.kind === 'allowed')
 const mostRecent = computed(() => recentChatsData.value?.[0] ?? null)
 const continueHref = computed(() => {
   const convo = mostRecent.value
@@ -74,6 +76,10 @@ function handleFolderPicked(folderId: string) {
         <DashboardChatHero />
 
         <DashboardActionSection label="Studying" :columns="3">
+          <NuxtLink v-if="hasLearnV2Access" to="/app/learn/today" data-testid="dashboard-learn-v2-today" class="group flex h-[120px] w-full flex-col items-start justify-between rounded-xl border border-border bg-card p-4 text-left transition-colors hover:border-primary/40 hover:bg-card/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            <span class="relative flex h-8 w-8 items-center justify-center rounded-lg text-primary"><span class="absolute inset-0 bg-primary opacity-10" /><BookOpen class="relative z-10 h-4 w-4" /></span>
+            <span><span class="block font-dm-sans text-sm font-semibold text-foreground">Today</span><span class="mt-0.5 block font-inter text-xs text-muted-foreground">Your guided study session</span></span>
+          </NuxtLink>
           <DashboardActionCard
             :icon="BookOpen"
             title="Study guide"
