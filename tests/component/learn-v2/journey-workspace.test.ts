@@ -77,6 +77,15 @@ describe('Learn V2 journey workspace seams', () => {
     expect(wrapper.emitted('addUrl')?.[0]).toEqual(['https://developer.mozilla.org/en-US/docs/Web/API/AbortController', 'MDN AbortController'])
   })
 
+  it('disables every web-source intake control for a folder-only plan', async () => {
+    const Comp = await import(`${path}/EvidenceDesk.vue`)
+    const wrapper = await mountSuspended(Comp.default, { props: { sources: [], canResearch: false } })
+
+    expect(wrapper.get('[data-testid="learn-v2-research-query"]').attributes()).toHaveProperty('disabled')
+    expect(wrapper.get('[data-testid="learn-v2-source-url"]').attributes()).toHaveProperty('disabled')
+    expect(wrapper.get('[data-testid="learn-v2-source-add-url"]').attributes()).toHaveProperty('disabled')
+  })
+
   it('renders permitted evidence and a safe original-source link in the inspector', async () => {
     const Comp = await import(`${path}/EvidenceDesk.vue`)
     const wrapper = await mountSuspended(Comp.default, {
@@ -103,7 +112,10 @@ describe('Learn V2 journey workspace seams', () => {
     expect(inspector.text()).not.toContain('Preparing evidence')
     await wrapper.get('[data-testid="learn-v2-source-replace-source_failed"]').trigger('click')
     expect(wrapper.get('[data-testid="learn-v2-source-url"]').attributes('aria-describedby')).toBe('learn-v2-source-replacement-help')
-    expect(wrapper.emitted('replaceSource')?.[0]).toEqual(['source_failed'])
+    await wrapper.get('[data-testid="learn-v2-source-url"]').setValue('https://example.org/replacement')
+    await wrapper.findAll('form')[1]!.trigger('submit')
+    expect(wrapper.emitted('addUrl')?.[0]).toEqual(['https://example.org/replacement'])
+    expect(wrapper.get('[data-testid="learn-v2-source-url"]').attributes('aria-describedby')).toBeUndefined()
   })
 
   it('lets the learner prepare a candidate after a transient evidence check failure', async () => {

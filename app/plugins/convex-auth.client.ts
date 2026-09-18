@@ -23,6 +23,7 @@ export default defineNuxtPlugin({
 
     let upsertDone = false
     let upsertPending = false
+    let queuedBootstrapEpoch: number | null = null
     let authEpoch = 0
 
     const fetchToken = async (_opts: { forceRefreshToken: boolean }) => {
@@ -35,7 +36,11 @@ export default defineNuxtPlugin({
     }
 
     const bootstrapProfile = (epoch: number) => {
-      if (upsertDone || upsertPending) return
+      if (upsertDone) return
+      if (upsertPending) {
+        queuedBootstrapEpoch = epoch
+        return
+      }
       upsertPending = true
       void (async () => {
         try {
@@ -58,6 +63,9 @@ export default defineNuxtPlugin({
         }
         finally {
           upsertPending = false
+          const queuedEpoch = queuedBootstrapEpoch
+          queuedBootstrapEpoch = null
+          if (queuedEpoch === authEpoch && loggedIn.value && ready.value && !upsertDone) bootstrapProfile(queuedEpoch)
         }
       })()
     }
@@ -76,7 +84,7 @@ export default defineNuxtPlugin({
         })
       } else {
         upsertDone = false
-        upsertPending = false
+        queuedBootstrapEpoch = null
         convexAuthenticated.value = false
         convexAuthReady.value = true
         convexClient.client.clearAuth()
