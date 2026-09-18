@@ -20,6 +20,11 @@ const candidate = computed(() => {
     <section v-else-if="!allowed" data-testid="learn-v2-today-denied" class="mx-auto max-w-2xl p-6"><h1 class="text-2xl font-semibold">Today</h1><p class="mt-2 text-muted-foreground">This learning experience is not available for this account.</p></section>
     <section v-else-if="!result || result.status === 'pending'" data-testid="learn-v2-today-pending" class="mx-auto max-w-2xl p-6" aria-live="polite"><h1 class="text-2xl font-semibold">Today</h1><p class="mt-2 text-muted-foreground">{{ result?.reason ?? 'Preparing your study session…' }}</p></section>
     <section v-else-if="result.status !== 'ready'" :data-testid="`learn-v2-today-${result.status}`" class="mx-auto max-w-2xl p-6"><h1 class="text-2xl font-semibold">Today</h1><p class="mt-2 text-muted-foreground">{{ result.reason ?? (result.status === 'empty' ? 'Nothing is scheduled for today.' : 'This session needs attention before it can begin.') }}</p></section>
-    <LearnV2TodaySession v-else-if="candidate" :candidate />
+    <template v-else-if="candidate">
+      <LearnV2TodaySession :candidate />
+      <div class="mx-auto w-full max-w-3xl px-4 pb-6 sm:px-6">
+        <LearnV2CalendarProjectionCard :study-session-id="candidate.studySessionId" :scheduled-start-at="candidate.scheduledStartAt" />
+      </div>
+    </template>
   </main>
 </template>

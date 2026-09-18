@@ -1131,6 +1131,10 @@ export default defineSchema({
     disconnectDeletedCount: v.optional(v.number()),
     disconnectLastError: v.optional(v.string()),
     disconnectUpdatedAt: v.optional(v.number()),
+    // V2 calendar projection has a deliberately separate consent contract.
+    // V1 users retain their existing calendar.events grant unchanged.
+    grantedScopes: v.optional(v.array(v.string())),
+    learnV2ConsentVersion: v.optional(v.literal(1)),
     calendarSlotWatermark: v.optional(v.number()),
     preferences: v.optional(v.object({
       morningStart: v.string(),
@@ -1283,8 +1287,28 @@ export default defineSchema({
   sessionContent: defineTable({ userId: v.string(), studySessionId: v.id('studySessions'), studyPlanRevisionId: v.optional(v.id('studyPlanRevisions')), blueprintRevisionId: v.optional(v.id('learnBlueprintRevisions')), objectiveId: v.optional(v.id('learnObjectives')), revision: v.number(), status: v.union(v.literal('draft'), v.literal('ready'), v.literal('published'), v.literal('superseded')), inputDigest: v.optional(v.string()), candidateDigest: v.optional(v.string()), providerModel: v.optional(v.string()), providerRequestId: v.optional(v.string()), assessmentRubricSnapshot: v.optional(v.string()), generatorVersion: v.optional(v.string()), createdAt: v.number(), publishedAt: v.optional(v.number()) }).index('by_userId', ['userId']).index('by_userId_and_studySessionId_and_revision', ['userId', 'studySessionId', 'revision']).index('by_userId_and_status', ['userId', 'status']),
   sessionContentBlocks: defineTable({ userId: v.string(), sessionContentId: v.id('sessionContent'), order: v.number(), kind: v.string(), content: v.optional(v.string()), claimOrdersJson: v.optional(v.string()) }).index('by_userId', ['userId']).index('by_userId_and_sessionContentId_and_order', ['userId', 'sessionContentId', 'order']),
   sessionContentClaims: defineTable({ userId: v.string(), sessionContentId: v.id('sessionContent'), order: v.number(), claim: v.string(), verifierVersion: v.optional(v.string()), confidence: v.optional(v.number()) }).index('by_userId', ['userId']).index('by_userId_and_sessionContentId_and_order', ['userId', 'sessionContentId', 'order']),
-  // Inert until LA2-15 adds its first provider writer and provider-first cleanup atomically.
-  calendarProjections: defineTable({ userId: v.string(), studySessionId: v.id('studySessions'), status: v.literal('pending_projection'), provider: v.optional(v.string()), externalEventId: v.optional(v.string()) }).index('by_userId', ['userId']).index('by_userId_and_studySessionId', ['userId', 'studySessionId']).index('by_userId_and_provider_and_externalEventId', ['userId', 'provider', 'externalEventId']),
+  // V2-only provider projection ledger. External values and opaque private
+  // metadata never leave server-owned functions or redacted export.
+  calendarProjections: defineTable({
+    userId: v.string(),
+    calendarConnectionId: v.optional(v.id('calendarConnections')),
+    studySessionId: v.id('studySessions'),
+    studyPlanRevisionId: v.optional(v.id('studyPlanRevisions')),
+    pinnedPlanRevision: v.optional(v.number()),
+    pinnedSessionRevision: v.optional(v.number()),
+    provider: v.optional(v.literal('google')),
+    externalEventId: v.optional(v.string()),
+    status: v.union(v.literal('pending_projection'), v.literal('reserving'), v.literal('creating'), v.literal('projected'), v.literal('failed'), v.literal('reconciliation_needed'), v.literal('disconnecting')),
+    privateMetadata: v.optional(v.string()),
+    providerEtag: v.optional(v.string()),
+    providerVersion: v.optional(v.string()),
+    createdAt: v.optional(v.number()),
+    updatedAt: v.optional(v.number()),
+    providerCreateLeaseToken: v.optional(v.string()),
+    providerCreateLeaseExpiresAt: v.optional(v.number()),
+    projectedAt: v.optional(v.number()),
+    lastProviderUpdatedAt: v.optional(v.number()),
+  }).index('by_userId', ['userId']).index('by_userId_and_studySessionId', ['userId', 'studySessionId']).index('by_userId_and_provider_and_externalEventId', ['userId', 'provider', 'externalEventId']).index('by_calendarConnectionId', ['calendarConnectionId']).index('by_calendarConnectionId_and_status', ['calendarConnectionId', 'status']).index('by_calendarConnectionId_and_status_and_providerCreateLeaseExpiresAt', ['calendarConnectionId', 'status', 'providerCreateLeaseExpiresAt']),
   reminderPolicies: defineTable({ userId: v.string(), learningVoidId: v.id('learningVoids'), timezone: v.string(), channel: v.string() }).index('by_userId', ['userId']).index('by_userId_and_learningVoidId', ['userId', 'learningVoidId']),
   searchQuotaBuckets: defineTable({
     userId: v.string(),

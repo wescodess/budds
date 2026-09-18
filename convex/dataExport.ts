@@ -233,7 +233,23 @@ export const getUserDataPage = query({
       case 'sessionContent': return await ctx.db.query('sessionContent').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
       case 'sessionContentBlocks': return await ctx.db.query('sessionContentBlocks').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
       case 'sessionContentClaims': return await ctx.db.query('sessionContentClaims').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
-      case 'calendarProjections': { const result = await ctx.db.query('calendarProjections').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts); return { ...result, page: result.page.map(({ provider: _provider, externalEventId: _event, ...row }) => row) } }
+      case 'calendarProjections': {
+        const result = await ctx.db.query('calendarProjections').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+        return {
+          ...result,
+          page: result.page.map(({
+            provider: _provider,
+            externalEventId: _event,
+            privateMetadata: _metadata,
+            providerEtag: _etag,
+            providerVersion: _version,
+            calendarConnectionId: _connectionId,
+            providerCreateLeaseToken: _createLease,
+            providerCreateLeaseExpiresAt: _createLeaseExpiry,
+            ...row
+          }) => row),
+        }
+      }
       case 'reminderPolicies': return await ctx.db.query('reminderPolicies').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
       case 'searchQuotaBuckets': {
         const result = await ctx.db.query('searchQuotaBuckets').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
