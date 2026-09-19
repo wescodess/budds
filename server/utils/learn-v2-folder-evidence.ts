@@ -115,28 +115,37 @@ export async function retrieveLearnV2FolderEvidence(args: {
   const envelope = await boundedJson(response) as AiSearchEnvelope
   if (envelope.success !== true || !Array.isArray(envelope.result?.data)) throw new Error('Folder evidence search returned an invalid envelope')
 
-  const sourcesByDocument = new Map(args.sources.map(source => [source.documentId, source]))
+  const sourcesByDocument = new Map<string, FolderEvidenceSource[]>()
+  for (const source of args.sources) {
+    const pinned = sourcesByDocument.get(source.documentId) ?? []
+    pinned.push(source)
+    sourcesByDocument.set(source.documentId, pinned)
+  }
   const excerpts = new Map<string, string>()
   let totalChars = 0
   for (const result of envelope.result.data) {
     const file = result.attributes?.file
     if (!file || file.userid !== args.userId || typeof file.documentid !== 'string') continue
-    const source = sourcesByDocument.get(file.documentid)
-    if (!source) continue
+    const sources = sourcesByDocument.get(file.documentid)
+    if (!sources?.length) continue
     const contentHash = file.contentHash ?? file.contenthash
     const sourceRevision = file.sourceRevision ?? file.sourcerevision
-    if (contentHash !== source.contentHash || sourceRevision !== source.sourceRevision || !Array.isArray(result.content)) continue
-    for (const chunk of result.content) {
-      if (typeof chunk.text !== 'string' || typeof chunk.score !== 'number' || !Number.isFinite(chunk.score)) continue
-      const clean = chunk.text.replace(/[\p{Cc}\p{Cf}]/gu, ' ').replace(/\s+/g, ' ').trim()
-      if (!clean) continue
-      const prior = excerpts.get(source.alias) ?? ''
-      const remainingForSource = MAX_SOURCE_EXCERPT_CHARS - prior.length
-      const remainingTotal = MAX_TOTAL_EXCERPT_CHARS - totalChars
-      if (remainingForSource <= 0 || remainingTotal <= 0) break
-      const addition = clean.slice(0, Math.min(remainingForSource, remainingTotal))
-      excerpts.set(source.alias, prior ? `${prior}\n${addition}`.slice(0, MAX_SOURCE_EXCERPT_CHARS) : addition)
-      totalChars += addition.length
+    if (!Array.isArray(result.content)) continue
+    for (const source of sources) {
+      if (contentHash !== source.contentHash || sourceRevision !== source.sourceRevision) continue
+      for (const chunk of result.content) {
+        if (typeof chunk.text !== 'string' || typeof chunk.score !== 'number' || !Number.isFinite(chunk.score)) continue
+        const clean = chunk.text.replace(/[\p{Cc}\p{Cf}]/gu, ' ').replace(/\s+/g, ' ').trim()
+        if (!clean) continue
+        const prior = excerpts.get(source.alias) ?? ''
+        const remainingForSource = MAX_SOURCE_EXCERPT_CHARS - prior.length
+        const remainingTotal = MAX_TOTAL_EXCERPT_CHARS - totalChars
+        if (remainingForSource <= 0 || remainingTotal <= 0) break
+        const addition = clean.slice(0, Math.min(remainingForSource, remainingTotal))
+        excerpts.set(source.alias, prior ? `${prior}\n${addition}`.slice(0, MAX_SOURCE_EXCERPT_CHARS) : addition)
+        totalChars += addition.length
+      }
+      if (totalChars >= MAX_TOTAL_EXCERPT_CHARS) break
     }
     if (totalChars >= MAX_TOTAL_EXCERPT_CHARS) break
   }

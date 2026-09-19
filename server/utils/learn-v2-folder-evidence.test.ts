@@ -84,6 +84,30 @@ describe('Learn V2 transient folder evidence', () => {
     })
   })
 
+  test('returns evidence for every alias pinned to the same document revision', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(JSON.stringify({
+      success: true,
+      result: { data: [{
+        attributes: { file: {
+          userid: 'owner-1',
+          documentid: source.documentId,
+          contentHash: source.contentHash,
+          sourceRevision: source.sourceRevision,
+        } },
+        content: [{ text: 'Shared pinned evidence.', score: 0.9 }],
+      }] },
+    }), { status: 200 }))
+
+    await expect(retrieveLearnV2FolderEvidence({
+      query: 'Apply the accepted evidence',
+      userId: 'owner-1',
+      sources: [source, { ...source, alias: 'source-002' }],
+    })).resolves.toEqual(new Map([
+      ['source-001', 'Shared pinned evidence.'],
+      ['source-002', 'Shared pinned evidence.'],
+    ]))
+  })
+
   test('rejects a declared response larger than the bounded input budget', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response('{}', {
       status: 200,
