@@ -5,11 +5,11 @@ Status: Product and architecture recommendation; no runtime integration has been
 
 ## Decision
 
-If Budds adopts one of these systems first, adopt **Jev in a measured shadow-mode pilot**.
+If Budds adopts one of these systems first, use **Jev as the measured shadow-mode quality baseline**, while treating **Laya as the potential long-run production target** if Cloudflare deployment benchmarks prove its quality, latency, and total cost.
 
 Jev matches Budds' highest-value unresolved problems: deciding whether evidence supports a claim, judging a response against a bounded rubric, identifying ambiguity, and exposing uncertainty to application code. It also fits the existing TypeScript and hosted-provider architecture better than Laya. Jev must not replace the models that write chat answers, cards, quizzes, scripts, or lessons; it does not generate prose.
 
-Retain **Laya as a phase-two option for shared concept tagging and request routing**. Its open Apache-2.0 weights and local inference are attractive for privacy and high volume, but Budds would need to operate a separate Python inference service and create a Budds-specific calibration set. The released models are too new and too weakly validated on education tasks to make authoritative learning decisions today.
+Retain **Laya as a phase-two production candidate for shared concept tagging and request routing, and as a shadow candidate for the same typed judgments evaluated with Jev**. Its open Apache-2.0 weights and local inference are attractive for privacy and high volume. Budds would still need a Python serving boundary, Cloudflare deployment path, and Budds-specific calibration set. The released models are too new and too weakly validated on education tasks to make authoritative learning decisions today, but sustained utilization could make Laya materially cheaper than Jev.
 
 The product opportunity is not five separate integrations. It is one learning-intelligence layer:
 
@@ -45,6 +45,30 @@ Published latency and Jev-comparison numbers are author-reported. The project it
 | Maturity | Early access, proprietary | Beta, released this week, open source | Neither may be authoritative without Budds evaluations |
 | Output | Typed values and probabilities, no prose | Typed values and probabilities, no prose | Keep existing generative models |
 | Main risk | Vendor/privacy dependency and unproven education calibration | New infrastructure plus domain fine-tuning/calibration | Start in shadow mode |
+
+## Cloudflare self-hosting and long-run cost
+
+Laya can plausibly be cheaper at sustained volume, but “self-hosted on Cloudflare” currently has three different meanings:
+
+1. **Workers AI:** Cloudflare exposes a curated model catalog. Its public documentation does not provide self-service upload of an arbitrary Laya checkpoint; private custom models require contacting Cloudflare through its Custom Requirements process ([Workers AI overview](https://developers.cloudflare.com/workers-ai/), [limits](https://developers.cloudflare.com/workers-ai/platform/limits/)). If Cloudflare agrees to host Laya as a private model, this is the best operational shape, but pricing and availability are unknown.
+2. **Cloudflare Containers:** A Python/PyTorch Laya service can potentially run in a container. Public instance types currently expose CPU, memory, and disk—up to 4 vCPU, 12 GiB memory, and 20 GB disk—but no documented GPU allocation. Containers scale to zero and bill active CPU plus provisioned memory/disk ([limits](https://developers.cloudflare.com/containers/platform/limits/), [pricing](https://developers.cloudflare.com/containers/platform/pricing/)). Cold starts are commonly 1–3 seconds before application/model-loading time, and the default idle timeout is ten minutes ([container lifecycle](https://developers.cloudflare.com/containers/concepts/architecture/)).
+3. **AI Gateway:** Gateway can observe, cache, rate-limit, retry, and route to a self-hosted HTTPS endpoint, but it does not supply the inference compute ([custom providers](https://developers.cloudflare.com/ai-gateway/configuration/custom-providers/)).
+
+An illustrative CPU-container calculation shows why both claims can be true. Beyond included allowances, a `standard-2` container's published 1 vCPU, 6 GiB memory, and 12 GB disk cost roughly `$0.00003584` per active second. If Laya completes a request in 300 ms on that actual hardware, compute is about `$0.00001075` per request. Jev at `$0.042/M` costs approximately:
+
+| Average Jev input | Approximate Jev request cost |
+| --- | ---: |
+| 250 tokens | $0.0000105 |
+| 500 tokens | $0.0000210 |
+| 1,000 tokens | $0.0000420 |
+
+Under those assumptions, a warm Laya container becomes cheaper around 256 input tokens per request, and batching/concurrency could improve it further. This is not yet a forecast: Laya's actual CPU latency on Cloudflare is unknown, and keeping the container alive while idle can dominate the cost. Continuously running the same container is roughly `$93/month` before included allowances and ancillary Workers/Durable Object/logging charges; Jev reaches that amount only around 2.2 billion input tokens per month. Conversely, scaling to zero creates multi-second container plus model cold starts that are unsuitable for synchronous chat without a warm-pool or asynchronous design.
+
+Therefore:
+
+- At low or bursty traffic, Jev is likely cheaper and operationally safer.
+- At steady, sufficiently concurrent traffic, Laya can be cheaper and provides stronger data control.
+- The correct decision comes from a Cloudflare CPU-container benchmark or a private Workers AI quote—not model list prices alone.
 
 Privacy is a release gate. TypeSafe says customer inputs are not used to train model weights, but its public policy permits service-provider processing and US processing and says the service is not directed at children under 18 ([privacy policy](https://typesafe.ai/legal/privacy-policy), [customer agreement](https://typesafe.ai/legal/mca)). Before production learner data is sent, Budds must confirm retention, subprocessors, deletion, region, DPA coverage, and the intended age population for either direct TypeSafe or OpenRouter routing.
 
@@ -163,6 +187,8 @@ Pilot gate: on a stratified, human-labeled set of criterion decisions, at least 
 - Add direct-TypeSafe and/or OpenRouter Jev adapters behind a hard feature flag; do not reuse the prose-oriented `generateCompletion` abstraction as if the protocols were identical.
 - Add cost, latency, confidence-band, disagreement, and provider-failure telemetry without logging raw learner content.
 - Resolve privacy, minors, retention, DPA, and provider-route questions.
+- Build a Laya container proof of concept and measure cold start, warm p50/p95 latency, memory, maximum concurrency, and cost per 1,000 decisions using representative Budds payloads.
+- Ask Cloudflare whether private custom Workers AI hosting is available for Laya and obtain an actual quote before choosing the production serving architecture.
 
 ### Phase 1 — No-authority shadow trials
 
@@ -200,6 +226,6 @@ Pilot gate: on a stratified, human-labeled set of criterion decisions, at least 
 
 ## Final recommendation
 
-**Choose Jev first, as a provider-neutral shadow judge.** Start with podcast and Learn V2 because their existing evidence and scoring boundaries make correctness measurable without changing user outcomes. Then apply the proven adapter to flashcard/quiz publication quality and chat answerability.
+**Use Jev first as the quality and calibration baseline behind a provider-neutral adapter, not as the assumed permanent provider.** Start with podcast and Learn V2 because their existing evidence and scoring boundaries make correctness measurable without changing user outcomes. In parallel, run the same versioned decision corpus through a Cloudflare-hosted Laya proof of concept.
 
-**Do not deploy Laya yet.** Run it offline after Budds has a stable concept taxonomy and labeled corpus. If it earns its place, use it as the private, inexpensive classifier that connects the product; keep Jev or existing reasoning models for bounded judgments that need longer context and better measured uncertainty.
+**Promote Laya when it earns the role.** If it meets the feature-specific accuracy/calibration gates and its measured Cloudflare cost and latency beat Jev, make it the default private decision engine and retain Jev or an existing reasoning model as the longer-context/uncertainty fallback. If the Cloudflare benchmark fails, keep Laya offline for taxonomy experiments rather than operating an uneconomic warm service.
