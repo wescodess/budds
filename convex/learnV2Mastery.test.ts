@@ -88,7 +88,7 @@ describe('LA2-12 server-scored mastery attempts', () => {
     try {
       await expect(owner.action(api.learnV2Mastery.submitMasteryAttempt, publicArgs)).resolves.toMatchObject({ scorePercent: 80, state: 'independent', replayed: false })
       expect(retrieveLearnV2FolderEvidenceMock).toHaveBeenCalledWith(expect.objectContaining({
-        query: 'Build verified proof of mastery. Objective Apply evidence faithfully. Apply the evidence to a novel case.',
+        query: 'Build verified proof of mastery. Objective Apply evidence faithfully.',
         userId: OWNER.tokenIdentifier,
       }))
       await expect(owner.action(api.learnV2Mastery.submitMasteryAttempt, publicArgs)).resolves.toMatchObject({ scorePercent: 80, state: 'independent', replayed: true })
