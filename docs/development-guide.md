@@ -77,7 +77,10 @@ offline thereafter. Torch is installed from the CPU-only wheel index and the
 top-level inference dependencies are exact-pinned. The upstream model card currently declares Apache-2.0; review
 the model card and package provenance before a production deployment. The container
 uses one named `budds-shadow-v1` instance, `max_instances: 1`, serialized CPU
-inference, a 60-second sleep timeout, and a daily UTC cap. Its storage is only a
+inference, a five-minute sleep timeout, and a daily UTC cap. A cold request polls
+the private readiness endpoint for roughly 20 seconds before consuming allowance;
+hosted quiz generation keeps this advisory work alive with Cloudflare `waitUntil`
+while returning the user-facing quiz without waiting for Laya. Its storage is only a
 daily counter: prompts, sources, learner state, and raw model output are not
 persisted or logged. Logs contain only sanitized status, count, timing, model,
 and aggregate-confidence fields.

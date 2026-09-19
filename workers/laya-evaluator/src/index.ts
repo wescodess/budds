@@ -8,6 +8,9 @@ export interface Env {
 }
 
 const INSTANCE_NAME = 'budds-shadow-v1'
+const MODEL_READY_ATTEMPTS = 40
+const MODEL_READY_DELAY_MS = 500
+const INFERENCE_TIMEOUT_MS = 5_000
 
 async function tokenMatches(provided: string, expected: string): Promise<boolean> {
   const encode = (value: string) => new TextEncoder().encode(value)
@@ -29,6 +32,24 @@ function allowance(value: string): number | null { const cap = Number(value); re
 
 type AllowanceStorage = Pick<DurableObjectStorage, 'get' | 'put'>
 type GateOptions = { timeoutMs?: number, onTimeout?: () => Promise<void> }
+type ReadyOptions = { attempts?: number, delayMs?: number, delay?: (durationMs: number) => Promise<void> }
+
+/** Waits for the HTTP process and its asynchronously loaded model, not just an open port. */
+export async function waitForModelReady(
+  fetchReady: () => Promise<Response>,
+  options: ReadyOptions = {},
+): Promise<boolean> {
+  const attempts = options.attempts ?? MODEL_READY_ATTEMPTS
+  const delayMs = options.delayMs ?? MODEL_READY_DELAY_MS
+  const delay = options.delay ?? ((duration: number) => new Promise<void>(resolve => setTimeout(resolve, duration)))
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const response = await fetchReady().catch(() => null)
+    if (response?.ok) return true
+    if (response && response.status !== 503) return false
+    if (attempt < attempts - 1) await delay(delayMs)
+  }
+  return false
+}
 
 export class EvaluationGate {
   private active = false
@@ -63,26 +84,39 @@ export class EvaluationGate {
 export class LayaEvaluator extends Container<Env> {
   defaultPort = 8080
   requiredPorts = [8080]
-  sleepAfter = '60s'
+  sleepAfter = '5m'
   enableInternet = false
   pingEndpoint = '/health/live'
   private gate = new EvaluationGate()
+  private active = false
 
   async fetch(request: Request): Promise<Response> {
     if (new URL(request.url).pathname !== '/v1/evaluate' || request.method !== 'POST') return error(404)
     const raw = await request.text()
     const body: unknown = (() => { try { return JSON.parse(raw) } catch { return null } })()
     if (!isEvaluationRequest(body)) return error(422)
-    const now = new Date()
-    const day = now.toISOString().slice(0, 10)
-    const cap = allowance(this.env.LAYA_DAILY_ALLOWANCE || '50')
-    if (cap === null) return error(503, 1)
-    return await this.gate.run(this.ctx.storage, day, cap, async () => {
-      const response = await super.fetch(new Request('http://container/v1/evaluate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: raw }))
-      if (!response.ok) return error(response.status, retryable(response.status) ? 1 : undefined)
-      const result: unknown = await response.json().catch(() => null)
-      return isEvaluation(result) ? Response.json(result) : error(502)
-    }, { timeoutMs: 1_500, onTimeout: async () => { await this.stop() } })
+    if (this.active) return error(429, 1)
+    this.active = true
+    try {
+      const ready = await waitForModelReady(() => super.fetch(new Request('http://container/health/ready')))
+      if (!ready) {
+        await this.stop().catch(() => undefined)
+        return error(503, 1)
+      }
+      const now = new Date()
+      const day = now.toISOString().slice(0, 10)
+      const cap = allowance(this.env.LAYA_DAILY_ALLOWANCE || '50')
+      if (cap === null) return error(503, 1)
+      return await this.gate.run(this.ctx.storage, day, cap, async () => {
+        const response = await super.fetch(new Request('http://container/v1/evaluate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: raw }))
+        if (!response.ok) return error(response.status, retryable(response.status) ? 1 : undefined)
+        const result: unknown = await response.json().catch(() => null)
+        return isEvaluation(result) ? Response.json(result) : error(502)
+      }, { timeoutMs: INFERENCE_TIMEOUT_MS, onTimeout: async () => { await this.stop() } })
+    }
+    finally {
+      this.active = false
+    }
   }
 }
 

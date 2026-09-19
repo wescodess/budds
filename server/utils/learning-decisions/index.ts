@@ -36,3 +36,17 @@ export async function shadowEvaluateQuiz(event: H3Event, items: QuizDecisionItem
   console.info('[learning-decision]', { requestId: request.requestId, inputDigest: digest, provider: result.status === 'completed' ? result.provider : undefined, modelRevision: result.status === 'completed' ? result.modelRevision : undefined, status: result.status, reason: result.status === 'unavailable' ? result.reason : undefined, timingMs: Date.now() - started, itemCount: boundedItems.length, omittedItemCount: items.length - boundedItems.length, supportedCount: result.status === 'completed' ? result.decisions.filter(d => d.label === 'supported').length : undefined, needsReviewCount: result.status === 'completed' ? result.decisions.filter(d => d.label === 'needs_review').length : undefined, meanConfidence: confidences.length ? confidences.reduce((a, b) => a + b, 0) / confidences.length : undefined })
   return result
 }
+
+/**
+ * Cloudflare keeps this advisory work alive after the quiz response. Local and
+ * non-Cloudflare runtimes await it so failures remain observable in tests.
+ */
+export async function scheduleShadowEvaluateQuiz(event: H3Event, items: QuizDecisionItem[]): Promise<void> {
+  const task = shadowEvaluateQuiz(event, items).then(() => undefined, () => undefined)
+  const waitUntil = event.context.waitUntil as ((promise: Promise<unknown>) => void) | undefined
+  if (typeof waitUntil === 'function') {
+    waitUntil(task)
+    return
+  }
+  await task
+}

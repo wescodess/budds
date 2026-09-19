@@ -44,7 +44,7 @@ Feature code must not import Laya DTOs or inspect Laya-native fields. Adapter se
 
 - Add a separately deployed Worker under `workers/laya-evaluator`; do not alter the Nuxt Cloudflare Pages deployment.
 - Route all work to one stable instance ID, `budds-shadow-v1`, with `max_instances: 1`.
-- Begin with `standard-2` (1 vCPU, 6 GiB memory, 12 GB disk) and a 60-second idle timeout.
+- Begin with `standard-2` (1 vCPU, 6 GiB memory, 12 GB disk) and a five-minute idle timeout so a loaded model can serve a short burst without becoming continuously resident.
 - Serialize model inference. Reject excess concurrency with `429` and `Retry-After` instead of creating more containers.
 - Enforce a configurable UTC daily request allowance in Worker-owned durable storage. This is a safety guard, not a Cloudflare billing cap.
 - Keep Workers development URLs disabled. Production traffic arrives through a Pages service binding, with a matching server-only bearer secret as defense in depth.
@@ -68,7 +68,7 @@ A fake backend implements the same internal evaluator protocol without importing
 
 The outer Worker rejects every external route except `POST /v1/evaluate`, uses constant-time token comparison, caps raw body size before JSON parsing, rejects unknown fields, and validates the protocol/model revision. Health endpoints exist only inside the Container lifecycle boundary. Initial quiz-shadow limits are conservative: at most 20 items per batch, eight options per item, 1,200 characters per question, 400 characters per answer or option, and a 32 KB request body.
 
-The Nuxt client applies a short deadline. Disabled configuration, timeout, warming, saturation, allowance exhaustion, malformed provider output, and all provider 5xx responses fail open in shadow mode. The quiz result and persistence path must remain byte-for-byte semantically equivalent to the pre-pilot behavior.
+Hosted Nuxt requests schedule shadow work with Cloudflare `waitUntil`, bounded below the platform's 30-second background limit. The Container polls model readiness for roughly 20 seconds before charging the daily evaluation allowance, then caps warm inference at five seconds. Disabled configuration, timeout, warming failure, saturation, allowance exhaustion, malformed provider output, and all provider 5xx responses fail open in shadow mode. The quiz result and persistence path must remain byte-for-byte semantically equivalent to the pre-pilot behavior.
 
 ## Delivery phases
 

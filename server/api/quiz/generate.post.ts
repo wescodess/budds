@@ -6,7 +6,7 @@ import type { Id } from '../../../convex/_generated/dataModel'
 import type { AISearchChunk } from '../../utils/ai-search'
 import { readConfiguredRuntimeValue } from '../../utils/runtime-config'
 import { requireRateLimit } from '../../utils/rate-limit'
-import { shadowEvaluateQuiz } from '../../utils/learning-decisions'
+import { scheduleShadowEvaluateQuiz } from '../../utils/learning-decisions'
 
 const SEED_QUERY = 'key concepts, definitions, and facts'
 
@@ -170,7 +170,7 @@ export default defineEventHandler(async (event) => {
 
     // Advisory-only and bounded. Nothing below reads its outcome, preserving
     // quiz publication, persistence, and deterministic learner scoring.
-    await shadowEvaluateQuiz(event, parsed.questions.map((question, index) => ({
+    await scheduleShadowEvaluateQuiz(event, parsed.questions.map((question, index) => ({
       id: `q${index}`,
       question: question.question,
       options: question.options,

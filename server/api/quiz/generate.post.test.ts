@@ -1,7 +1,7 @@
 import { vi, describe, test, expect, beforeEach } from 'vitest'
 
-const shadowEvaluateQuiz = vi.hoisted(() => vi.fn())
-vi.mock('../../utils/learning-decisions', () => ({ shadowEvaluateQuiz }))
+const scheduleShadowEvaluateQuiz = vi.hoisted(() => vi.fn())
+vi.mock('../../utils/learning-decisions', () => ({ scheduleShadowEvaluateQuiz }))
 
 vi.stubGlobal('createError', (opts: { statusCode: number; message: string }) =>
   Object.assign(new Error(opts.message), { statusCode: opts.statusCode }),
@@ -66,8 +66,8 @@ describe('POST /api/quiz/generate', () => {
     vi.mocked(globalThis.assertSearchIndexAvailable).mockReset()
     vi.mocked(globalThis.assertSearchIndexAvailable).mockResolvedValue(undefined)
     vi.mocked(globalThis.generateCompletion).mockReset()
-    shadowEvaluateQuiz.mockReset()
-    shadowEvaluateQuiz.mockResolvedValue({ status: 'unavailable', reason: 'disabled', retryable: false })
+    scheduleShadowEvaluateQuiz.mockReset()
+    scheduleShadowEvaluateQuiz.mockResolvedValue(undefined)
     vi.mocked(globalThis.getConvexTokenIdentifier).mockReturnValue('https://auth.example.com|user_test_123')
   })
 
@@ -168,8 +168,8 @@ describe('POST /api/quiz/generate', () => {
       ],
       questionCount: 2,
     })
-    expect(shadowEvaluateQuiz).toHaveBeenCalledOnce()
-    expect(shadowEvaluateQuiz).toHaveBeenCalledWith(expect.anything(), [
+    expect(scheduleShadowEvaluateQuiz).toHaveBeenCalledOnce()
+    expect(scheduleShadowEvaluateQuiz).toHaveBeenCalledWith(expect.anything(), [
       { id: 'q0', question: 'What do mitochondria produce?', options: ['ATP', 'DNA', 'RNA', 'Glucose'], correctAnswer: 'ATP' },
       { id: 'q1', question: 'What is photosynthesis?', options: undefined, correctAnswer: 'Converting light to chemical energy.' },
     ])
@@ -184,7 +184,7 @@ describe('POST /api/quiz/generate', () => {
       ],
     })
     vi.mocked(globalThis.generateCompletion).mockResolvedValue(goodLlmResponse())
-    shadowEvaluateQuiz.mockRejectedValue(new Error('provider unavailable'))
+    scheduleShadowEvaluateQuiz.mockRejectedValue(new Error('provider unavailable'))
 
     const result = await handler(makeEvent())
 

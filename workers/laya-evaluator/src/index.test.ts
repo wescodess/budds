@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from 'vitest'
-import { createWorkerHandler, EvaluationGate, type Env, LayaEvaluator } from './index'
+import { createWorkerHandler, EvaluationGate, type Env, LayaEvaluator, waitForModelReady } from './index'
 
 const containerFetch = vi.hoisted(() => vi.fn())
 const containerStop = vi.hoisted(() => vi.fn(async () => undefined))
@@ -80,6 +80,27 @@ describe('evaluator Worker boundary', () => {
 })
 
 describe('container admission gate', () => {
+  test('waits through cold model loading until the health endpoint is ready', async () => {
+    const fetchReady = vi.fn()
+      .mockResolvedValueOnce(new Response('', { status: 503 }))
+      .mockResolvedValueOnce(new Response('', { status: 503 }))
+      .mockResolvedValueOnce(Response.json({ ready: true }))
+    const delay = vi.fn(async () => undefined)
+
+    await expect(waitForModelReady(fetchReady, { attempts: 3, delayMs: 1, delay })).resolves.toBe(true)
+    expect(fetchReady).toHaveBeenCalledTimes(3)
+    expect(delay).toHaveBeenCalledTimes(2)
+  })
+
+  test('bounds an unavailable model readiness check', async () => {
+    const fetchReady = vi.fn(async () => new Response('', { status: 503 }))
+    const delay = vi.fn(async () => undefined)
+
+    await expect(waitForModelReady(fetchReady, { attempts: 2, delayMs: 1, delay })).resolves.toBe(false)
+    expect(fetchReady).toHaveBeenCalledTimes(2)
+    expect(delay).toHaveBeenCalledOnce()
+  })
+
   test('rejects concurrent and over-budget work with 429', async () => {
     let allowance: { day: string, used: number } | undefined
     const storage = {
@@ -114,14 +135,18 @@ describe('container admission gate', () => {
     }
     const evaluator = new LayaEvaluator({ storage } as unknown as ConstructorParameters<typeof LayaEvaluator>[0], env)
     let release!: () => void
-    containerFetch.mockImplementationOnce(() => new Promise<Response>((resolve) => { release = () => resolve(Response.json(result)) }))
+    containerFetch
+      .mockResolvedValueOnce(Response.json({ ready: true }))
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { release = () => resolve(Response.json(result)) }))
     const first = evaluator.fetch(new Request('https://container/v1/evaluate', { method: 'POST', body }))
     await vi.waitFor(() => expect(containerFetch).toHaveBeenCalled())
     expect((await evaluator.fetch(new Request('https://container/v1/evaluate', { method: 'POST', body }))).status).toBe(429)
     release()
     expect((await first).status).toBe(200)
 
-    containerFetch.mockResolvedValueOnce(Response.json({ unexpected: true }))
+    containerFetch
+      .mockResolvedValueOnce(Response.json({ ready: true }))
+      .mockResolvedValueOnce(Response.json({ unexpected: true }))
     allowance = { day: new Date().toISOString().slice(0, 10), used: 0 }
     expect((await evaluator.fetch(new Request('https://container/v1/evaluate', { method: 'POST', body }))).status).toBe(502)
   })

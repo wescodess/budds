@@ -1,7 +1,7 @@
 import type { H3Event } from 'h3'
 import { describe, expect, test, vi } from 'vitest'
 import { isBoundedDecisionRequest, unavailableDecision } from './contracts'
-import { evaluateTypedDecision, shadowEvaluateQuiz } from './index'
+import { evaluateTypedDecision, scheduleShadowEvaluateQuiz, shadowEvaluateQuiz } from './index'
 import { evaluateWithLaya } from './laya-adapter'
 
 vi.stubGlobal('useRuntimeConfig', vi.fn())
@@ -51,6 +51,22 @@ describe('learning decision boundary', () => {
     vi.mocked(useRuntimeConfig).mockReturnValue({ learningDecisionMode: 'off' } as ReturnType<typeof useRuntimeConfig>)
     await expect(evaluateTypedDecision(event, request)).resolves.toEqual(unavailableDecision('disabled'))
     expect(fetcher).toHaveBeenCalledOnce()
+  })
+
+  test('schedules hosted shadow work without blocking the user response', async () => {
+    let resolve!: (response: Response) => void
+    const pending = new Promise<Response>((done) => { resolve = done })
+    const fetcher = vi.fn(() => pending)
+    const waitUntil = vi.fn()
+    vi.mocked(useRuntimeConfig).mockReturnValue({ learningDecisionMode: 'shadow', learningDecisionProvider: 'laya', layaEvaluatorToken: 'test-token', layaEvaluatorUrl: '' } as ReturnType<typeof useRuntimeConfig>)
+    const event = { context: { waitUntil, cloudflare: { env: { LAYA_EVALUATOR: { fetch: fetcher } } } } } as unknown as H3Event
+
+    await expect(scheduleShadowEvaluateQuiz(event, request.items)).resolves.toBeUndefined()
+    expect(waitUntil).toHaveBeenCalledOnce()
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledOnce())
+
+    resolve(new Response('', { status: 503 }))
+    await expect(waitUntil.mock.calls[0]![0]).resolves.toBeUndefined()
   })
 
   test('bounds quiz shadow batches and logs only sanitized aggregates', async () => {

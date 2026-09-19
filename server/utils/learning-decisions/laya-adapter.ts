@@ -16,7 +16,7 @@ export type LayaAdapterConfig = {
   timeoutMs?: number
 }
 
-const DEFAULT_TIMEOUT_MS = 800
+const DEFAULT_TIMEOUT_MS = 28_000
 const PINNED_REVISION = 'f9ab0b228f0fc0f14d873dbc99038f135c2da1b2'
 
 function unavailableForStatus(status: number): TypedDecisionResult {
@@ -33,7 +33,7 @@ export async function evaluateWithLaya(
   if (!config.token || (!config.binding && !config.url)) return unavailableDecision('unconfigured')
   if (!isBoundedDecisionRequest(request)) return unavailableDecision('malformed')
   const controller = new AbortController()
-  const deadlineMs = Math.min(Math.max(config.timeoutMs ?? DEFAULT_TIMEOUT_MS, 50), 2_000)
+  const deadlineMs = Math.min(Math.max(config.timeoutMs ?? DEFAULT_TIMEOUT_MS, 50), 28_000)
   const abortTimer = setTimeout(() => controller.abort(), deadlineMs)
   let deadlineTimer: ReturnType<typeof setTimeout> | undefined
   try {
