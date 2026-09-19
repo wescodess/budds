@@ -25,9 +25,10 @@ export function masteryEvidenceQuery(input: {
   desiredOutcome?: string
   objectiveTitle: string
   objectiveCapability?: string
-  challenge: string
 }) {
-  return [input.desiredOutcome, input.objectiveTitle, input.objectiveCapability, input.challenge]
+  // Keep retrieval anchored to the accepted learning intent. Generated
+  // challenge wording may drift far enough to suppress otherwise valid hits.
+  return [input.desiredOutcome, input.objectiveTitle, input.objectiveCapability]
     .map(value => value?.trim())
     .filter((value): value is string => Boolean(value))
     .join(' ')
@@ -316,7 +317,6 @@ export const getMasteryScoringInput = internalQuery({
         desiredOutcome: scope.blueprint.desiredOutcome,
         objectiveTitle: scope.objective.title,
         objectiveCapability: scope.objective.capability,
-        challenge,
       }),
       evidence: evidence.items,
       verifierVersions: evidence.verifierVersions,
