@@ -12,6 +12,7 @@ const MAX_MISCONCEPTIONS = 16
 const MAX_SOURCES = 64
 const SCORING_JOB_TYPE = 'mastery_scoring'
 const SCORING_LEASE_MS = 5 * 60_000
+const MAX_MASTERY_EVIDENCE_QUERY_LENGTH = 2_000
 export const LEARN_V2_MASTERY_SCORING_ADMISSION = {
   windowMs: 60 * 60_000,
   maxProviderDispatches: 12,
@@ -19,6 +20,19 @@ export const LEARN_V2_MASTERY_SCORING_ADMISSION = {
 const SCORING_RECOVERY_BATCH = 32
 const RATE_EVENT_CLEANUP_BATCH = 128
 const FOLLOW_UP_JOB_TYPE = 'session_content_generation'
+
+export function masteryEvidenceQuery(input: {
+  desiredOutcome?: string
+  objectiveTitle: string
+  objectiveCapability?: string
+  challenge: string
+}) {
+  return [input.desiredOutcome, input.objectiveTitle, input.objectiveCapability, input.challenge]
+    .map(value => value?.trim())
+    .filter((value): value is string => Boolean(value))
+    .join(' ')
+    .slice(0, MAX_MASTERY_EVIDENCE_QUERY_LENGTH)
+}
 const scorerVerdictValidator = v.object({
   scorerVersion: v.string(), criterionResults: v.array(v.object({ key: v.string(), awarded: v.boolean(), rationale: v.optional(v.string()) })),
   misconceptionTags: v.array(v.string()), verifierVersions: v.array(v.string()),
@@ -292,7 +306,21 @@ export const getMasteryScoringInput = internalQuery({
     if (challenges.length !== 1) throw new Error('Independent application is unavailable')
     const evidence = await exactContentEvidence(ctx, args.tokenIdentifier, scope.content)
     if (!scope.content.providerModel?.trim()) throw new Error('Mastery scorer is unavailable')
-    return { kind: 'score' as const, model: scope.content.providerModel, rubric, challenge: challenges[0]!.content!, evidence: evidence.items, verifierVersions: evidence.verifierVersions }
+    const challenge = challenges[0]!.content!
+    return {
+      kind: 'score' as const,
+      model: scope.content.providerModel,
+      rubric,
+      challenge,
+      evidenceQuery: masteryEvidenceQuery({
+        desiredOutcome: scope.blueprint.desiredOutcome,
+        objectiveTitle: scope.objective.title,
+        objectiveCapability: scope.objective.capability,
+        challenge,
+      }),
+      evidence: evidence.items,
+      verifierVersions: evidence.verifierVersions,
+    }
   },
 })
 
@@ -322,7 +350,7 @@ export const submitMasteryAttempt = action({
     const folderSources = scoringEvidence.flatMap(item => item.folderEvidence ? [{ alias: item.alias, ...item.folderEvidence }] : [])
     if (folderSources.length > 0) {
       try {
-        const retrieved = await retrieveLearnV2FolderEvidence({ query: input.challenge, userId: identity.tokenIdentifier, sources: folderSources })
+        const retrieved = await retrieveLearnV2FolderEvidence({ query: input.evidenceQuery, userId: identity.tokenIdentifier, sources: folderSources })
         scoringEvidence = scoringEvidence.map(item => item.excerpt?.trim() ? item : { ...item, excerpt: retrieved.get(item.alias) })
       }
       catch (error) {
