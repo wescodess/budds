@@ -5,6 +5,14 @@ import { api, internal } from './_generated/api'
 import { LEARN_V2_MASTERY_SCORING_ADMISSION } from './learnV2Mastery'
 import schema from './schema'
 
+const { retrieveLearnV2FolderEvidenceMock } = vi.hoisted(() => ({
+  retrieveLearnV2FolderEvidenceMock: vi.fn(async ({ sources }: { sources: Array<{ alias: string }> }) => new Map(sources.map(source => [source.alias, 'Transient pinned folder evidence.']))),
+}))
+
+vi.mock('../server/utils/learn-v2-folder-evidence', () => ({
+  retrieveLearnV2FolderEvidence: retrieveLearnV2FolderEvidenceMock,
+}))
+
 const modules = import.meta.glob('./**/*.ts')
 const OWNER = { tokenIdentifier: 'https://auth.example.com|mastery-owner', name: 'Mastery Owner' }
 const OTHER = { tokenIdentifier: 'https://auth.example.com|mastery-other', name: 'Mastery Other' }
@@ -12,7 +20,7 @@ const assessment = { version: 'learn-v2.assessment.v1' as const, kind: 'machine_
 const rubric = JSON.stringify(assessment)
 const verdict = (score = 100) => ({ scorerVersion: 'learn-v2.mastery-scorer.v1', criterionResults: [{ key: 'core', awarded: score >= 79 }, { key: 'boundary', awarded: score >= 80 }, { key: 'edge', awarded: score === 100 }], misconceptionTags: [], verifierVersions: ['test.verifier.v1'] })
 
-async function fixture(options: { placementKind?: 'learning' | 'retained_review', state?: 'guided' | 'independent', firstDate?: string, sessionTimezone?: string } = {}) {
+async function fixture(options: { placementKind?: 'learning' | 'retained_review', state?: 'guided' | 'independent', firstDate?: string, sessionTimezone?: string, folderEvidence?: boolean } = {}) {
   process.env.LEARN_V2_ENABLED = 'true'
   const t = convexTest(schema, modules)
   const owner = t.withIdentity(OWNER)
@@ -23,8 +31,8 @@ async function fixture(options: { placementKind?: 'learning' | 'retained_review'
     const folderId = await ctx.db.insert('folders', { userId: OWNER.tokenIdentifier, name: 'Mastery', documentCount: 0 })
     const voidId = await ctx.db.insert('learningVoids', { userId: OWNER.tokenIdentifier, folderId, title: 'Mastery', status: 'active', revision: 1, createdAt: now, updatedAt: now })
     const blueprintId = await ctx.db.insert('learnBlueprints', { userId: OWNER.tokenIdentifier, learningVoidId: voidId, revision: 1, createdAt: now })
-    const blueprintIdRevision = await ctx.db.insert('learnBlueprintRevisions', { userId: OWNER.tokenIdentifier, blueprintId, learningVoidId: voidId, revision: 1, recordRevision: 3, status: 'accepted', createdAt: now, updatedAt: now })
-    const objectiveId = await ctx.db.insert('learnObjectives', { userId: OWNER.tokenIdentifier, blueprintRevisionId: blueprintIdRevision, order: 1, title: 'Objective', assessmentContract: assessment })
+    const blueprintIdRevision = await ctx.db.insert('learnBlueprintRevisions', { userId: OWNER.tokenIdentifier, blueprintId, learningVoidId: voidId, revision: 1, recordRevision: 3, status: 'accepted', desiredOutcome: 'Build verified proof of mastery.', createdAt: now, updatedAt: now })
+    const objectiveId = await ctx.db.insert('learnObjectives', { userId: OWNER.tokenIdentifier, blueprintRevisionId: blueprintIdRevision, order: 1, title: 'Objective', capability: 'Apply evidence faithfully.', assessmentContract: assessment })
     const planId = await ctx.db.insert('studyPlans', { userId: OWNER.tokenIdentifier, learningVoidId: voidId, revision: 1, createdAt: now })
     const planRevisionId = await ctx.db.insert('studyPlanRevisions', { userId: OWNER.tokenIdentifier, studyPlanId: planId, learningVoidId: voidId, revision: 1, recordRevision: 5, status: 'accepted', blueprintRevisionId: blueprintIdRevision, blueprintRecordRevision: 3, timezone: options.sessionTimezone ?? 'America/Toronto', createdAt: now })
     await ctx.db.patch(planId, { activeRevisionId: planRevisionId })
@@ -38,6 +46,12 @@ async function fixture(options: { placementKind?: 'learning' | 'retained_review'
     const sourceId = await ctx.db.insert('learnSourceSnapshots', { userId: OWNER.tokenIdentifier, sourceIdentityId, learningVoidId: voidId, revision: 1, status: 'user_accepted', effectiveStatus: 'user_accepted', rightsStatus: 'permitted', conflictStatus: 'clear', createdAt: now })
     await ctx.db.insert('learnObjectiveSources', { userId: OWNER.tokenIdentifier, objectiveId, sourceSnapshotId: sourceId, coverage: 'strong' })
     const excerptId = await ctx.db.insert('learnSourceExcerpts', { userId: OWNER.tokenIdentifier, sourceSnapshotId: sourceId, locator: 'paragraph:1', excerpt: 'Supported evidence.', rightsStatus: 'permitted' })
+    if (options.folderEvidence) {
+      const documentId = await ctx.db.insert('documents', { userId: OWNER.tokenIdentifier, folderId, filename: 'mastery-evidence.md', status: 'success', fileSize: 100, r2Key: 'owners/mastery/mastery-evidence.md' })
+      await ctx.db.patch(sourceIdentityId, { origin: 'folder_document', externalKey: `document:${documentId}`, folderDocumentId: documentId })
+      await ctx.db.patch(sourceId, { rightsStatus: 'unknown', contentHash: 'a'.repeat(64), sourceRevision: `sha256:${'a'.repeat(64)}` })
+      await ctx.db.patch(excerptId, { rightsStatus: 'unknown', locator: `sha256:${'a'.repeat(64)}`, excerpt: undefined })
+    }
     const claimId = await ctx.db.insert('sessionContentClaims', { userId: OWNER.tokenIdentifier, sessionContentId: contentId, order: 1, claim: 'The evidence supports the answer.', verifierVersion: 'test.verifier.v1', confidence: 0.9 })
     await ctx.db.insert('learnClaimSupports', { userId: OWNER.tokenIdentifier, sessionContentClaimId: claimId, sourceExcerptId: excerptId, sourceSnapshotId: sourceId, entailment: 'entailed', verifierVersion: 'test.verifier.v1', confidence: 0.9, conflictStatus: 'clear', evidenceStatus: 'evidence_available' })
     if (options.state) await ctx.db.insert('masteryRecords', { userId: OWNER.tokenIdentifier, blueprintRevisionId: blueprintIdRevision, objectiveId, state: options.state, recordRevision: 4, firstIndependentLocalDate: options.firstDate, firstIndependentPassAt: options.firstDate ? now : undefined, firstIndependentTimezone: options.firstDate ? 'America/Toronto' : undefined, updatedAt: now })
@@ -62,7 +76,8 @@ describe('LA2-12 server-scored mastery attempts', () => {
   })
 
   test('scores through the authenticated server action and replays before provider dispatch', async () => {
-    const { owner, args } = await fixture()
+    retrieveLearnV2FolderEvidenceMock.mockClear()
+    const { owner, args } = await fixture({ folderEvidence: true })
     const internalArgs = args('public-submit', 80)
     const { tokenIdentifier: _tokenIdentifier, scorerVerdict: _scorerVerdict, ...publicArgs } = internalArgs
     const provider = vi.fn(async () => new Response(JSON.stringify({ id: 'score-1', model: 'test/mastery-model', choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({ criterionResults: verdict(80).criterionResults.map(row => ({ ...row, rationale: 'Pinned evidence supports this decision.' })), misconceptionTags: [] }) } }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }), { status: 200, headers: { 'content-type': 'application/json' } }))
@@ -72,6 +87,10 @@ describe('LA2-12 server-scored mastery attempts', () => {
     process.env.CLOUDFLARE_AI_GATEWAY_ID = 'test-gateway'
     try {
       await expect(owner.action(api.learnV2Mastery.submitMasteryAttempt, publicArgs)).resolves.toMatchObject({ scorePercent: 80, state: 'independent', replayed: false })
+      expect(retrieveLearnV2FolderEvidenceMock).toHaveBeenCalledWith(expect.objectContaining({
+        query: 'Build verified proof of mastery. Objective Apply evidence faithfully. Apply the evidence to a novel case.',
+        userId: OWNER.tokenIdentifier,
+      }))
       await expect(owner.action(api.learnV2Mastery.submitMasteryAttempt, publicArgs)).resolves.toMatchObject({ scorePercent: 80, state: 'independent', replayed: true })
       expect(provider).toHaveBeenCalledTimes(1)
     }
