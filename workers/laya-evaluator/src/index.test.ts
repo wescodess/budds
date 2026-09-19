@@ -3,6 +3,7 @@ import { createWorkerHandler, EvaluationGate, type Env, LayaEvaluator, waitForMo
 
 const containerFetch = vi.hoisted(() => vi.fn())
 const containerStop = vi.hoisted(() => vi.fn(async () => undefined))
+const containerDestroy = vi.hoisted(() => vi.fn(async () => undefined))
 
 vi.mock('@cloudflare/containers', () => ({
   Container: class MockContainer {
@@ -11,6 +12,7 @@ vi.mock('@cloudflare/containers', () => ({
     constructor(ctx: unknown, env: unknown) { this.ctx = ctx; this.env = env }
     fetch(request: Request) { return containerFetch(request) }
     stop() { return containerStop() }
+    destroy() { return containerDestroy() }
   },
   getContainer: vi.fn(),
 }))
@@ -163,13 +165,13 @@ describe('container admission gate', () => {
     expect((await evaluator.fetch(new Request('https://container/v1/evaluate', { method: 'POST', body }))).status).toBe(502)
   })
 
-  test('stops the deployed container through the private lifecycle route', async () => {
+  test('destroys the deployed container through the private lifecycle route', async () => {
     const storage = { get: vi.fn(), put: vi.fn() }
     const evaluator = new LayaEvaluator({ storage } as unknown as ConstructorParameters<typeof LayaEvaluator>[0], env)
 
     const response = await evaluator.fetch(new Request('https://container/v1/lifecycle/stop', { method: 'POST' }))
 
     expect(response.status).toBe(200)
-    expect(containerStop).toHaveBeenCalled()
+    expect(containerDestroy).toHaveBeenCalled()
   })
 })

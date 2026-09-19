@@ -88,7 +88,8 @@ and aggregate-confidence fields.
 The authenticated private `POST /v1/lifecycle/stop` operation is the deterministic
 scale-to-zero control for staging smoke tests and incident response. It is reachable
 only through an explicit service binding and uses the same bearer secret as
-evaluation; it never changes the daily evaluation allowance.
+evaluation; it force-destroys the current Container instance and never changes the
+daily evaluation allowance.
 A non-2xx, malformed response, cold start, timeout, or exhausted cap is
 treated as unavailable and leaves quiz behavior unchanged.
 

@@ -93,7 +93,7 @@ export class LayaEvaluator extends Container<Env> {
   async fetch(request: Request): Promise<Response> {
     const path = new URL(request.url).pathname
     if (path === '/v1/lifecycle/stop' && request.method === 'POST') {
-      await this.stop()
+      await this.destroy()
       return Response.json({ status: 'stopped' })
     }
     if (path !== '/v1/evaluate' || request.method !== 'POST') return error(404)
