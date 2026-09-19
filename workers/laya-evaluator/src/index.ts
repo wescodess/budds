@@ -91,7 +91,12 @@ export class LayaEvaluator extends Container<Env> {
   private active = false
 
   async fetch(request: Request): Promise<Response> {
-    if (new URL(request.url).pathname !== '/v1/evaluate' || request.method !== 'POST') return error(404)
+    const path = new URL(request.url).pathname
+    if (path === '/v1/lifecycle/stop' && request.method === 'POST') {
+      await this.stop()
+      return Response.json({ status: 'stopped' })
+    }
+    if (path !== '/v1/evaluate' || request.method !== 'POST') return error(404)
     const raw = await request.text()
     const body: unknown = (() => { try { return JSON.parse(raw) } catch { return null } })()
     if (!isEvaluationRequest(body)) return error(422)
@@ -127,11 +132,20 @@ export function createWorkerHandler(resolveContainer: ResolveContainer = (env, n
   return {
     async fetch(request: Request, env: Env): Promise<Response> {
       const url = new URL(request.url)
-      if (url.pathname !== '/v1/evaluate') return error(404)
+      if (url.pathname !== '/v1/evaluate' && url.pathname !== '/v1/lifecycle/stop') return error(404)
       if (request.method !== 'POST') return error(405)
       const authorization = request.headers.get('Authorization')
       const provided = authorization?.startsWith('Bearer ') ? authorization.slice(7) : ''
       if (!provided || env.LAYA_EVALUATOR_TOKEN.length < 32 || !await tokenMatches(provided, env.LAYA_EVALUATOR_TOKEN)) return error(401)
+      if (url.pathname === '/v1/lifecycle/stop') {
+        const container = resolveContainer(env, INSTANCE_NAME)
+        try {
+          return await container.fetch(new Request('http://container/v1/lifecycle/stop', { method: 'POST' }))
+        }
+        catch {
+          return error(503, 1)
+        }
+      }
       const contentLength = Number(request.headers.get('Content-Length') || 0)
       if (!Number.isFinite(contentLength) || contentLength > MAX_REQUEST_BYTES) return error(413)
       const raw = await request.text()

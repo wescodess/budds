@@ -77,6 +77,18 @@ describe('evaluator Worker boundary', () => {
     const unavailable = createWorkerHandler(() => ({ fetch: vi.fn(async () => new Response('', { status: 503, headers: { 'Retry-After': '1' } })) }))
     expect((await invoke(unavailable, request())).status).toBe(503)
   })
+
+  test('exposes an authenticated private stop operation for deterministic scale-to-zero', async () => {
+    const fetcher = vi.fn(async (_forwarded: Request) => Response.json({ status: 'stopped' }))
+    const resolve = vi.fn(() => ({ fetch: fetcher }))
+    const handler = createWorkerHandler(resolve)
+
+    const response = await invoke(handler, request('/v1/lifecycle/stop', { body: undefined }))
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({ status: 'stopped' })
+    expect(new URL(fetcher.mock.calls[0]![0].url).pathname).toBe('/v1/lifecycle/stop')
+  })
 })
 
 describe('container admission gate', () => {
@@ -149,5 +161,15 @@ describe('container admission gate', () => {
       .mockResolvedValueOnce(Response.json({ unexpected: true }))
     allowance = { day: new Date().toISOString().slice(0, 10), used: 0 }
     expect((await evaluator.fetch(new Request('https://container/v1/evaluate', { method: 'POST', body }))).status).toBe(502)
+  })
+
+  test('stops the deployed container through the private lifecycle route', async () => {
+    const storage = { get: vi.fn(), put: vi.fn() }
+    const evaluator = new LayaEvaluator({ storage } as unknown as ConstructorParameters<typeof LayaEvaluator>[0], env)
+
+    const response = await evaluator.fetch(new Request('https://container/v1/lifecycle/stop', { method: 'POST' }))
+
+    expect(response.status).toBe(200)
+    expect(containerStop).toHaveBeenCalled()
   })
 })

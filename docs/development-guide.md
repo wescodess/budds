@@ -84,6 +84,11 @@ while returning the user-facing quiz without waiting for Laya. Its storage is on
 daily counter: prompts, sources, learner state, and raw model output are not
 persisted or logged. Logs contain only sanitized status, count, timing, model,
 and aggregate-confidence fields.
+
+The authenticated private `POST /v1/lifecycle/stop` operation is the deterministic
+scale-to-zero control for staging smoke tests and incident response. It is reachable
+only through an explicit service binding and uses the same bearer secret as
+evaluation; it never changes the daily evaluation allowance.
 A non-2xx, malformed response, cold start, timeout, or exhausted cap is
 treated as unavailable and leaves quiz behavior unchanged.
 
