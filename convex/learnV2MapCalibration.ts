@@ -13,6 +13,19 @@ const MAX_CALIBRATION_ITEMS = 7
 const MAX_RESPONSE_LENGTH = 12_000
 const CALIBRATION_JOB_TYPE = 'calibration_scoring'
 const CALIBRATION_LEASE_MS = 5 * 60_000
+const MAX_CALIBRATION_EVIDENCE_QUERY_LENGTH = 2_000
+
+export function calibrationEvidenceQuery(input: {
+  desiredOutcome: string
+  objectiveTitle: string
+  objectiveCapability?: string
+}) {
+  return [input.desiredOutcome, input.objectiveTitle, input.objectiveCapability]
+    .map(value => value?.trim())
+    .filter((value): value is string => Boolean(value))
+    .join(' ')
+    .slice(0, MAX_CALIBRATION_EVIDENCE_QUERY_LENGTH)
+}
 
 const assessmentContractValidator = v.object({
   version: v.literal('learn-v2.assessment.v1'),
@@ -413,7 +426,7 @@ export const getCalibrationScoringInput = internalQuery({
     if (!evidence.length) throw new Error('Calibration evidence is unavailable')
     const model = process.env.LEARN_V2_CALIBRATION_MODEL?.trim() || process.env.LEARN_V2_MASTERY_MODEL?.trim()
     if (!model) throw new Error('Calibration scorer is unavailable')
-    return { model, objective: { title: objective.title, capability: objective.capability, assessmentContract: objective.assessmentContract }, evidence, learnerResponse: args.response }
+    return { model, desiredOutcome: blueprint.desiredOutcome?.trim() ?? '', objective: { title: objective.title, capability: objective.capability, assessmentContract: objective.assessmentContract }, evidence, learnerResponse: args.response }
   },
 })
 
@@ -444,6 +457,7 @@ export const submitCalibrationAttempt = action({
     }
     let input: {
       model: string
+      desiredOutcome: string
       objective: { assessmentContract?: unknown, title: string, capability?: string }
       evidence: Array<{ alias: string, excerpt?: string, locator: string, folderEvidence?: { documentId: string, contentHash: string, sourceRevision: string } }>
       learnerResponse: string
@@ -460,7 +474,11 @@ export const submitCalibrationAttempt = action({
     if (folderSources.length > 0) {
       try {
         const retrieved = await retrieveLearnV2FolderEvidence({
-          query: `${input.objective.title} ${input.objective.capability ?? ''}`.trim(),
+          query: calibrationEvidenceQuery({
+            desiredOutcome: input.desiredOutcome,
+            objectiveTitle: input.objective.title,
+            objectiveCapability: input.objective.capability,
+          }),
           userId: identity.tokenIdentifier,
           sources: folderSources,
         })

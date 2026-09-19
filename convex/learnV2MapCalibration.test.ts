@@ -4,13 +4,18 @@ import { describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import schema from './schema'
+import { calibrationEvidenceQuery } from './learnV2MapCalibration'
+
+const { retrieveLearnV2FolderEvidenceMock } = vi.hoisted(() => ({
+  retrieveLearnV2FolderEvidenceMock: vi.fn(async ({ sources }: { sources: Array<{ alias: string }> }) => new Map(sources.map(source => [source.alias, 'Transient pinned folder evidence.']))),
+}))
 
 vi.mock('../server/utils/ai-gateway', () => ({
   classifyAiGatewayFailure: vi.fn(() => 'definitive_failure'),
   generateCompletion: vi.fn(async () => ({ id: 'calibration-provider-1', model: 'mock-calibration', choices: [{ message: { content: JSON.stringify({ criterionResults: [{ key: 'correct', awarded: true, rationale: 'Matches the pinned evidence.' }] }) } }] })),
 }))
 vi.mock('../server/utils/learn-v2-folder-evidence', () => ({
-  retrieveLearnV2FolderEvidence: vi.fn(async ({ sources }: { sources: Array<{ alias: string }> }) => new Map(sources.map(source => [source.alias, 'Transient pinned folder evidence.']))),
+  retrieveLearnV2FolderEvidence: retrieveLearnV2FolderEvidenceMock,
 }))
 
 const modules = import.meta.glob('./**/*.ts')
@@ -75,6 +80,18 @@ function editedCandidate(sourceSnapshotId: Id<'learnSourceSnapshots'>) {
 }
 
 describe('Learn V2 revision-safe map editing and calibration', () => {
+  test('anchors folder evidence retrieval in the original learning outcome', () => {
+    expect(calibrationEvidenceQuery({
+      desiredOutcome: '  Build a truthful strategic resume from verified experience.  ',
+      objectiveTitle: 'Separate evidence from claims',
+      objectiveCapability: 'Apply the evidence hierarchy',
+    })).toBe('Build a truthful strategic resume from verified experience. Separate evidence from claims Apply the evidence hierarchy')
+    expect(calibrationEvidenceQuery({
+      desiredOutcome: 'x'.repeat(2_100),
+      objectiveTitle: 'This must be truncated',
+    })).toHaveLength(2_000)
+  })
+
   test('forks a complete private copy and rejects a concurrent stale fork without mutating the parent', async () => {
     const previous = process.env.LEARN_V2_ENABLED
     try {
@@ -181,6 +198,7 @@ describe('Learn V2 revision-safe map editing and calibration', () => {
     const previousModel = process.env.LEARN_V2_CALIBRATION_MODEL
     process.env.LEARN_V2_CALIBRATION_MODEL = 'mock-calibration'
     try {
+      retrieveLearnV2FolderEvidenceMock.mockClear()
       const setup = await setupMap()
       await setup.t.run(async (ctx) => {
         const source = await ctx.db.get(setup.sourceSnapshotId)
@@ -190,11 +208,16 @@ describe('Learn V2 revision-safe map editing and calibration', () => {
         await ctx.db.patch(source!.sourceIdentityId, { origin: 'folder_document', externalKey: `document:${documentId}`, canonicalUrl: undefined, folderDocumentId: documentId })
         await ctx.db.patch(source!._id, { rightsStatus: 'unknown', objectKey: 'owners/map/folder-evidence.pdf', contentHash: 'a'.repeat(64), sourceRevision: `sha256:${'a'.repeat(64)}` })
         await ctx.db.patch(excerpt!._id, { rightsStatus: 'unknown', locator: `sha256:${'a'.repeat(64)}`, excerpt: undefined })
+        await ctx.db.patch(setup.blueprint._id, { desiredOutcome: 'Build a truthful strategic resume from verified experience.' })
       })
       const accepted = await setup.owner.mutation(api.learnV2MapCalibration.acceptBlueprintMap, { blueprintRevisionId: setup.blueprint._id, expectedRecordRevision: 1, expectedVoidRevision: 2, idempotencyKey: 'public-accept' })
       const args = { blueprintRevisionId: setup.blueprint._id, objectiveId: setup.objectives[0]!, expectedBlueprintRecordRevision: accepted.recordRevision, expectedVoidRevision: 3, response: 'The supported answer.', confidence: 4, usedHint: false, usedReveal: false, idempotencyKey: 'public-calibration-1' }
       const scored = await setup.owner.action(api.learnV2MapCalibration.submitCalibrationAttempt, args)
       expect(scored).toMatchObject({ result: 'provisionally_known', replayed: false })
+      expect(retrieveLearnV2FolderEvidenceMock).toHaveBeenCalledWith(expect.objectContaining({
+        query: 'Build a truthful strategic resume from verified experience. Objective 1 Capability 1',
+        userId: identity.tokenIdentifier,
+      }))
       expect(await setup.owner.action(api.learnV2MapCalibration.submitCalibrationAttempt, args)).toMatchObject({ result: 'provisionally_known', replayed: true })
       expect(await setup.t.run(ctx => ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', identity.tokenIdentifier).eq('idempotencyKey', args.idempotencyKey)).unique())).toMatchObject({ response: args.response, scorerModel: 'mock-calibration', scorerVersion: 'learn-v2.calibration-scorer.v1' })
     }
