@@ -3,7 +3,7 @@ import { describe, expect, test } from 'vitest'
 import { api, internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import schema from './schema'
-import { LEARN_V2_MASTERY_LOOP_BLOCKS, validateLearnV2EntailmentDecisions, validateLearnV2SessionContentCandidate } from '../shared/learn-v2-session-content'
+import { LEARN_V2_MASTERY_LOOP_BLOCKS, learnV2SessionCandidateFailureReason, normalizeLearnV2SessionContentProviderOutput, validateLearnV2EntailmentDecisions, validateLearnV2SessionContentCandidate } from '../shared/learn-v2-session-content'
 
 const sourceId = 'source-snapshot-1'
 const identity = { tokenIdentifier: 'https://auth.example.com|session-content-owner', name: 'Session Content Owner' }
@@ -76,6 +76,43 @@ describe('Learn V2 session-content publication contract', () => {
     unreferenced.claims.push({ ...unreferenced.claims[0]!, order: 1, claim: 'Unused claim.' })
     expect(() => validateLearnV2SessionContentCandidate(unreferenced, [sourceId])).toThrow(/Every claim must be referenced/)
 
+  })
+
+  test('canonicalizes harmless provider ordering, declared claim orders, and aliases without inventing content', () => {
+    const input = candidate()
+    input.blocks.reverse()
+    input.blocks.forEach(block => { block.claimOrders = [7] })
+    input.claims[0]!.order = 7
+    input.claims[0]!.supportSourceSnapshotIds = ['source-001']
+    input.assessmentRubric.instructions = 'Provider tried to replace the accepted rubric.'
+    const authoritativeRubric = candidate().assessmentRubric
+    const normalized = normalizeLearnV2SessionContentProviderOutput(input, new Map([['source-001', sourceId]]), authoritativeRubric)
+
+    expect(validateLearnV2SessionContentCandidate(normalized, [sourceId])).toMatchObject({
+      assessmentRubric: authoritativeRubric,
+      blocks: LEARN_V2_MASTERY_LOOP_BLOCKS.map((kind, order) => expect.objectContaining({ kind, order, claimOrders: [0] })),
+      claims: [{ order: 0, supportSourceSnapshotIds: [sourceId] }],
+    })
+  })
+
+  test('keeps missing, duplicate, and unused provider claim links invalid', () => {
+    const missing = candidate()
+    missing.blocks[0]!.claimOrders = [7]
+    expect(() => validateLearnV2SessionContentCandidate(normalizeLearnV2SessionContentProviderOutput(missing, new Map(), candidate().assessmentRubric), [sourceId])).toThrow(/Every claim must be referenced/)
+
+    const duplicate = candidate()
+    duplicate.blocks[0]!.claimOrders = [0, 0]
+    expect(() => validateLearnV2SessionContentCandidate(normalizeLearnV2SessionContentProviderOutput(duplicate, new Map(), candidate().assessmentRubric), [sourceId])).toThrow(/claim links must be unique/)
+
+    const unused = candidate()
+    unused.claims.push({ order: 1, claim: 'Unused provider claim.', supportSourceSnapshotIds: [sourceId] })
+    expect(() => validateLearnV2SessionContentCandidate(normalizeLearnV2SessionContentProviderOutput(unused, new Map(), candidate().assessmentRubric), [sourceId])).toThrow(/Every claim must be referenced/)
+  })
+
+  test('records a bounded diagnostic reason for strict provider candidate failures', () => {
+    expect(learnV2SessionCandidateFailureReason(new Error('Session content must contain the complete mastery loop in order'))).toBe('provider_output_invalid_block_order')
+    expect(learnV2SessionCandidateFailureReason(new Error('Every factual claim requires an accepted source'))).toBe('provider_output_invalid_claim_support')
+    expect(learnV2SessionCandidateFailureReason(new Error('unexpected provider shape'))).toBe('provider_output_invalid')
   })
 
   test('fails closed for hallucinated, low-confidence, incomplete, and mismatched entailment decisions', () => {
@@ -237,6 +274,44 @@ describe('Learn V2 session-content publication contract', () => {
     expect(await postDispatch.t.run(ctx => ctx.db.get(postDispatch.graph.sessionId))).toMatchObject({ status: 'blocked', auditReasonCode: 'provider_outcome_unknown' })
   })
 
+  test('lets the owner explicitly retry a terminal session generation without changing accepted plan or evidence pins', async () => {
+    process.env.LEARN_V2_SESSION_CONTENT_PROVIDER_ENABLED = 'true'
+    process.env.LEARN_V2_SESSION_CONTENT_MODEL = 'openai/gpt-4o-mini'
+    const { t, owner, graph } = await seedGenerationGraph()
+    const { lease, begun } = await leaseAndBegin(t, graph.jobId)
+    await t.mutation(internal.learnV2SessionContent.terminalizeSessionContentGeneration, {
+      tokenIdentifier: identity.tokenIdentifier,
+      jobId: graph.jobId,
+      leaseToken: lease.leaseToken,
+      expectedRevision: begun.revision,
+      reason: 'provider_outcome_unknown',
+      sessionStatus: 'blocked',
+    })
+
+    const result = await owner.mutation(api.learnV2SessionContent.retrySessionContentGeneration, {
+      studySessionId: graph.sessionId,
+      expectedSessionRevision: 2,
+      idempotencyKey: 'retry-session-generation',
+    })
+
+    expect(result).toMatchObject({ status: 'pending', sessionRevision: 3 })
+    const rows = await t.run(async ctx => ({
+      session: await ctx.db.get(graph.sessionId),
+      jobs: await ctx.db.query('learnJobs')
+        .withIndex('by_userId_and_studySessionId_and_type_and_status', q => q
+          .eq('userId', identity.tokenIdentifier)
+          .eq('studySessionId', graph.sessionId)
+          .eq('type', 'session_content_generation'))
+        .take(4),
+    }))
+    expect(rows.session).toMatchObject({ status: 'planned', revision: 3 })
+    expect(rows.session).not.toHaveProperty('auditReasonCode')
+    expect(rows.jobs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ _id: graph.jobId, status: 'failed', terminalReason: 'provider_outcome_reviewed_no_candidate' }),
+      expect.objectContaining({ status: 'queued', expectedSessionRevision: 3, attempts: 0 }),
+    ]))
+  })
+
   test('starts only the exact published revision and returns the durable receipt only to its owner', async () => {
     const { t, owner, graph } = await seedGenerationGraph()
     const { lease, begun } = await leaseAndBegin(t, graph.jobId)
@@ -259,5 +334,33 @@ describe('Learn V2 session-content publication contract', () => {
     await other.mutation(api.users.upsertUser, {})
     await t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: otherIdentity.tokenIdentifier, enabled: true })
     await expect(other.mutation(api.learnV2SessionContent.startStudySession, args)).rejects.toThrow(/Study session is not ready/)
+  })
+
+  test('allows a ready session to start early on its scheduled local day but not on a future day', async () => {
+    const { t, owner, graph } = await seedGenerationGraph()
+    const { lease, begun } = await leaseAndBegin(t, graph.jobId)
+    const published = await t.mutation(internal.learnV2SessionContent.commitSessionContentCandidate, {
+      tokenIdentifier: identity.tokenIdentifier, jobId: graph.jobId, leaseToken: lease.leaseToken,
+      expectedRevision: begun.revision, candidateJson: JSON.stringify(candidate()).replaceAll(sourceId, String(graph.snapshotId)),
+      verifierDecisionsJson: verifierDecisionsJson(graph.snapshotId, graph.excerptId),
+    })
+    if (published.status !== 'ready') throw new Error('expected published session content')
+    await t.run(ctx => ctx.db.patch(graph.sessionId, { scheduledStartAt: Date.now() + 60_000, timezone: 'America/Toronto' }))
+    await expect(owner.mutation(api.learnV2SessionContent.startStudySession, {
+      studySessionId: graph.sessionId, expectedSessionRevision: 2, expectedContentRevision: 1, idempotencyKey: 'start-early-today',
+    })).resolves.toMatchObject({ status: 'in_progress' })
+
+    const future = await seedGenerationGraph()
+    const futureLease = await leaseAndBegin(future.t, future.graph.jobId)
+    const futurePublished = await future.t.mutation(internal.learnV2SessionContent.commitSessionContentCandidate, {
+      tokenIdentifier: identity.tokenIdentifier, jobId: future.graph.jobId, leaseToken: futureLease.lease.leaseToken,
+      expectedRevision: futureLease.begun.revision, candidateJson: JSON.stringify(candidate()).replaceAll(sourceId, String(future.graph.snapshotId)),
+      verifierDecisionsJson: verifierDecisionsJson(future.graph.snapshotId, future.graph.excerptId),
+    })
+    if (futurePublished.status !== 'ready') throw new Error('expected published future session content')
+    await future.t.run(ctx => ctx.db.patch(future.graph.sessionId, { scheduledStartAt: Date.now() + 48 * 60 * 60_000, timezone: 'America/Toronto' }))
+    await expect(future.owner.mutation(api.learnV2SessionContent.startStudySession, {
+      studySessionId: future.graph.sessionId, expectedSessionRevision: 2, expectedContentRevision: 1, idempotencyKey: 'start-too-early',
+    })).rejects.toThrow(/not scheduled for today/)
   })
 })

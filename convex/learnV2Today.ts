@@ -1,6 +1,7 @@
 import type { Doc } from './_generated/dataModel'
 import { query } from './_generated/server'
 import { requireLearnV2QueryAccess } from './lib/learnV2Access'
+import { localDateAt } from '../shared/learn-v2-mastery'
 
 const MAX_SESSIONS = 128
 const MAX_CLAIMS = 32
@@ -42,11 +43,24 @@ export const getToday = query({
       candidates.push({ session, plan, blueprint, objective, record })
     }
     const nextScheduledAt = candidates.filter(row => row.session.status !== 'in_progress' && row.session.scheduledStartAt > now).map(row => row.session.scheduledStartAt).sort((a, b) => a - b)[0] ?? null
-    const selectable = candidates.filter(row => row.session.status === 'in_progress' || row.session.scheduledStartAt <= now && (row.session.scheduledEndAt === undefined || row.session.scheduledEndAt >= now))
+    const selectable = candidates.filter(row => {
+      if (row.session.status === 'in_progress') return true
+      if (row.session.scheduledEndAt !== undefined && row.session.scheduledEndAt < now) return false
+      if (row.session.scheduledStartAt <= now) return true
+      const timezone = row.session.timezone ?? row.plan.timezone ?? 'UTC'
+      return localDateAt(row.session.scheduledStartAt, timezone) === localDateAt(now, timezone)
+    })
     if (!selectable.length) return { status: 'empty' as const, nextScheduledAt }
     selectable.sort((a, b) => rank(a.session, a.record, now) - rank(b.session, b.record, now) || a.session.scheduledStartAt - b.session.scheduledStartAt || String(a.session._id).localeCompare(String(b.session._id)))
     const candidate = selectable[0]!
-    if (candidate.session.status === 'blocked' || candidate.session.status === 'generation_failed') return { status: 'blocked' as const, reason: candidate.session.auditReasonCode ?? 'session_generation_unavailable', nextScheduledAt }
+    if (candidate.session.status === 'blocked' || candidate.session.status === 'generation_failed') return {
+      status: 'blocked' as const,
+      reason: candidate.session.auditReasonCode ?? 'session_generation_unavailable',
+      sessionId: candidate.session._id,
+      sessionRevision: candidate.session.revision,
+      canRetryGeneration: true,
+      nextScheduledAt,
+    }
     if (candidate.session.status === 'planned') return { status: 'pending' as const, sessionId: candidate.session._id, scheduledStartAt: candidate.session.scheduledStartAt, nextScheduledAt }
     const content = candidate.session.status === 'in_progress'
       ? await ctx.db.query('sessionContent').withIndex('by_userId_and_studySessionId_and_revision', q => q.eq('userId', userId).eq('studySessionId', candidate.session._id).eq('revision', candidate.session.startedSessionContentRevision!)).unique()

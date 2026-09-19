@@ -29,6 +29,72 @@ export type LearnV2EntailmentDecision = {
   confidence: number
 }
 
+export function learnV2SessionCandidateFailureReason(error: unknown) {
+  const message = error instanceof Error ? error.message : ''
+  if (/complete mastery loop in order/.test(message)) return 'provider_output_invalid_block_order'
+  if (/complete mastery loop/.test(message)) return 'provider_output_invalid_mastery_loop'
+  if (/requires supported claims|claim links must be unique/.test(message)) return 'provider_output_invalid_block_claims'
+  if (/Every factual claim requires/.test(message)) return 'provider_output_invalid_claim_support'
+  if (/Every claim must be referenced/.test(message)) return 'provider_output_invalid_claim_references'
+  if (/Assessment rubric|Assessment criterion|Assessment instructions/.test(message)) return 'provider_output_invalid_assessment'
+  if (/invalid shape/.test(message)) return 'provider_output_invalid_shape'
+  if (/bounded nonblank text/.test(message)) return 'provider_output_invalid_text'
+  return 'provider_output_invalid'
+}
+
+/**
+ * Canonicalize representation-only provider variance before strict validation.
+ * This never invents claims, evidence links, block content, or assessment rules.
+ */
+export function normalizeLearnV2SessionContentProviderOutput(
+  input: unknown,
+  sourceAliases: ReadonlyMap<string, string>,
+  assessmentRubric: LearnV2AssessmentContract,
+) {
+  const candidate = object(input, 'Session content candidate')
+  candidate.assessmentRubric = assessmentRubric
+  if (!Array.isArray(candidate.blocks) || !Array.isArray(candidate.claims)) return candidate
+
+  const blocks = candidate.blocks.map((value) => object(value, 'Session content block'))
+  const blocksByKind = new Map(blocks.map(block => [block.kind, block]))
+  const orderedBlocks = blocksByKind.size === LEARN_V2_MASTERY_LOOP_BLOCKS.length
+    && LEARN_V2_MASTERY_LOOP_BLOCKS.every(kind => blocksByKind.has(kind))
+    ? LEARN_V2_MASTERY_LOOP_BLOCKS.map(kind => blocksByKind.get(kind)!)
+    : blocks
+  const claims = candidate.claims.map((value) => object(value, 'Session content claim'))
+  const claimKeys = claims.map((claim, index) => Number.isSafeInteger(claim.order) && (claim.order as number) >= 0 ? claim.order as number : index)
+  if (new Set(claimKeys).size !== claimKeys.length) return candidate
+  const claimsByKey = new Map(claimKeys.map((key, index) => [key, claims[index]!]))
+  const resolveClaimKey = (value: unknown) => {
+    if (!Number.isSafeInteger(value) || (value as number) < 0) return undefined
+    if (claimsByKey.has(value as number)) return value as number
+    return claimKeys[value as number]
+  }
+  const remappedOrder = new Map(claimKeys.map((priorOrder, nextOrder) => [priorOrder, nextOrder]))
+
+  candidate.blocks = orderedBlocks.map((block, order) => ({
+    ...block,
+    order,
+    claimOrders: Array.isArray(block.claimOrders)
+      ? block.claimOrders.map(value => {
+          const resolved = resolveClaimKey(value)
+          return resolved === undefined ? value : remappedOrder.get(resolved)!
+        })
+      : block.claimOrders,
+  }))
+  candidate.claims = claimKeys.map((priorOrder, order) => {
+    const claim = claimsByKey.get(priorOrder)!
+    return {
+      ...claim,
+      order,
+      supportSourceSnapshotIds: Array.isArray(claim.supportSourceSnapshotIds)
+        ? claim.supportSourceSnapshotIds.map(value => typeof value === 'string' ? sourceAliases.get(value) ?? value : value)
+        : claim.supportSourceSnapshotIds,
+    }
+  })
+  return candidate
+}
+
 function object(value: unknown, label: string): RecordValue { if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} must be an object`); return value as RecordValue }
 function string(value: unknown, label: string, maximum = 4_000) { if (typeof value !== 'string' || !value.trim() || value.trim().length > maximum) throw new Error(`${label} must be bounded nonblank text`); return value.trim() }
 function order(value: unknown, label: string, maximum: number) { if (!Number.isSafeInteger(value) || (value as number) < 0 || (value as number) > maximum) throw new Error(`${label} must be a bounded order`); return value as number }
