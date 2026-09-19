@@ -29,11 +29,12 @@
     "audio:workflow:dev": "pnpm --dir workers/audio-overview dev",
     "audio:workflow:test": "pnpm --dir workers/audio-overview test",
     "audio:workflow:typecheck": "pnpm --dir workers/audio-overview typecheck",
+    "laya:evaluator:test": "pnpm --dir workers/laya-evaluator test && pnpm --dir workers/laya-evaluator typecheck && python -m unittest discover -s workers/laya-evaluator/service/tests -p 'test_*.py'",
     "typecheck": "vue-tsc --noEmit",
     "typecheck:convex": "node scripts/validate-convex-index-names.mjs && tsc --noEmit -p convex/tsconfig.json",
     "lint": "eslint .",
     "lint:ci": "eslint . --max-warnings 0",
-    "verify": "pnpm lint:ci && pnpm typecheck && pnpm typecheck:convex && pnpm test && pnpm test:component && pnpm test:component:audio && pnpm audio:workflow:typecheck && pnpm audio:workflow:test && pnpm audit && pnpm --dir workers/audio-overview audit"
+    "verify": "pnpm lint:ci && pnpm typecheck && pnpm typecheck:convex && pnpm test && pnpm test:component && pnpm test:component:audio && pnpm audio:workflow:typecheck && pnpm audio:workflow:test && pnpm laya:evaluator:test && pnpm audit && pnpm --dir workers/audio-overview audit && pnpm --dir workers/laya-evaluator audit"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1029.0",
