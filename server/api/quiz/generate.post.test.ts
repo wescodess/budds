@@ -1,5 +1,8 @@
 import { vi, describe, test, expect, beforeEach } from 'vitest'
 
+const shadowEvaluateQuiz = vi.hoisted(() => vi.fn())
+vi.mock('../../utils/learning-decisions', () => ({ shadowEvaluateQuiz }))
+
 vi.stubGlobal('createError', (opts: { statusCode: number; message: string }) =>
   Object.assign(new Error(opts.message), { statusCode: opts.statusCode }),
 )
@@ -63,6 +66,8 @@ describe('POST /api/quiz/generate', () => {
     vi.mocked(globalThis.assertSearchIndexAvailable).mockReset()
     vi.mocked(globalThis.assertSearchIndexAvailable).mockResolvedValue(undefined)
     vi.mocked(globalThis.generateCompletion).mockReset()
+    shadowEvaluateQuiz.mockReset()
+    shadowEvaluateQuiz.mockResolvedValue({ status: 'unavailable', reason: 'disabled', retryable: false })
     vi.mocked(globalThis.getConvexTokenIdentifier).mockReturnValue('https://auth.example.com|user_test_123')
   })
 
@@ -163,6 +168,29 @@ describe('POST /api/quiz/generate', () => {
       ],
       questionCount: 2,
     })
+    expect(shadowEvaluateQuiz).toHaveBeenCalledOnce()
+    expect(shadowEvaluateQuiz).toHaveBeenCalledWith(expect.anything(), [
+      { id: 'q0', question: 'What do mitochondria produce?', options: ['ATP', 'DNA', 'RNA', 'Glucose'], correctAnswer: 'ATP' },
+      { id: 'q1', question: 'What is photosynthesis?', options: undefined, correctAnswer: 'Converting light to chemical energy.' },
+    ])
+  })
+
+  test('[P0] evaluator failure leaves the quiz response unchanged', async () => {
+    vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc' })
+    vi.mocked(globalThis.searchDocuments).mockResolvedValue({
+      data: [
+        { id: '1', content: 'Photosynthesis content', score: 0.9, attributes: { filename: 'bio1.pdf', documentId: 'doc_1' } },
+        { id: '2', content: 'Mitochondria content', score: 0.85, attributes: { filename: 'bio2.pdf', documentId: 'doc_2' } },
+      ],
+    })
+    vi.mocked(globalThis.generateCompletion).mockResolvedValue(goodLlmResponse())
+    shadowEvaluateQuiz.mockRejectedValue(new Error('provider unavailable'))
+
+    const result = await handler(makeEvent())
+
+    expect(result.title).toBe('Cellular Biology Quiz')
+    expect(result.questionCount).toBe(2)
+    expect(result.questions.map((question: { correctAnswer: string }) => question.correctAnswer)).toEqual(['ATP', 'Converting light to chemical energy.'])
   })
 
   test('[P0] 502 when parseQuizResponse yields no valid questions', async () => {

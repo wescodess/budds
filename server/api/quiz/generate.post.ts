@@ -6,6 +6,7 @@ import type { Id } from '../../../convex/_generated/dataModel'
 import type { AISearchChunk } from '../../utils/ai-search'
 import { readConfiguredRuntimeValue } from '../../utils/runtime-config'
 import { requireRateLimit } from '../../utils/rate-limit'
+import { shadowEvaluateQuiz } from '../../utils/learning-decisions'
 
 const SEED_QUERY = 'key concepts, definitions, and facts'
 
@@ -166,6 +167,15 @@ export default defineEventHandler(async (event) => {
       await failTask(msg)
       throw createError({ statusCode: 502, message: msg })
     }
+
+    // Advisory-only and bounded. Nothing below reads its outcome, preserving
+    // quiz publication, persistence, and deterministic learner scoring.
+    await shadowEvaluateQuiz(event, parsed.questions.map((question, index) => ({
+      id: `q${index}`,
+      question: question.question,
+      options: question.options,
+      correctAnswer: question.correctAnswer,
+    }))).catch(() => undefined)
 
     const persistQuestions = parsed.questions.map((q, index) => {
       const chunk = chunks[q.sourceIndex] ?? chunks[index] ?? chunks[0]!

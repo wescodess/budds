@@ -9,7 +9,7 @@ The workflow runs these stages:
 1. `security`: a full-history Gitleaks scan that blocks committed credentials.
 2. `quality`: a zero-warning ESLint gate, application and Convex-native
    typechecks, and the root dependency audit.
-3. `test`: four parallel suites for Convex/Nitro unit tests, Nuxt mounted components, the dedicated Audio Overview component harness, and the Audio Workflow Worker. The Worker shard also runs its own typecheck, environment-contract validation, and dependency audit.
+3. `test`: parallel suites for Convex/Nitro unit tests, Nuxt mounted components, the dedicated Audio Overview component harness, the Audio Workflow Worker, and the Laya evaluator Worker. The Laya shard runs its TypeScript contract tests and Python fake-backend service tests without Docker or model weights.
 4. `build`: strict configuration validation and a Cloudflare Pages production build.
 5. `learn-v2-beta`: the production-like synthetic Phase 0-4 admission contract.
 6. `learn-v2-calendar`: the independent synthetic Calendar admission contract

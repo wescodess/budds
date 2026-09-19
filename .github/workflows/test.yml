@@ -86,7 +86,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: [unit, component, audio-component, audio-worker]
+        suite: [unit, component, audio-component, audio-worker, laya-worker]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -105,11 +105,14 @@ jobs:
             pnpm-lock.yaml
             workers/audio-overview/pnpm-lock.yaml
       - name: Install application dependencies
-        if: matrix.suite != 'audio-worker'
+        if: matrix.suite != 'audio-worker' && matrix.suite != 'laya-worker'
         run: pnpm install --frozen-lockfile
       - name: Install Audio Workflow dependencies
         if: matrix.suite == 'audio-worker'
         run: pnpm --dir workers/audio-overview install --frozen-lockfile
+      - name: Install Laya evaluator dependencies
+        if: matrix.suite == 'laya-worker'
+        run: pnpm --dir workers/laya-evaluator install --frozen-lockfile
       - name: Run unit tests
         if: matrix.suite == 'unit'
         run: |
@@ -133,6 +136,14 @@ jobs:
           pnpm audio:workflow:typecheck
           pnpm audio:workflow:test 2>&1 | tee test-output.log
           pnpm --dir workers/audio-overview audit
+      - name: Validate and test Laya evaluator without model weights
+        if: matrix.suite == 'laya-worker'
+        run: |
+          set -o pipefail
+          pnpm --dir workers/laya-evaluator typecheck
+          pnpm --dir workers/laya-evaluator test 2>&1 | tee test-output.log
+          python -m unittest discover -s workers/laya-evaluator/service/tests -p 'test_*.py'
+          pnpm --dir workers/laya-evaluator audit
       - name: Upload test log
         if: always()
         uses: actions/upload-artifact@v7
