@@ -33,7 +33,7 @@ type Feedback = {
 }
 
 const { candidate } = defineProps<{ candidate: Candidate }>()
-const emit = defineEmits<{ leave: [] }>()
+const emit = defineEmits<{ leave: [], started: [], completed: [] }>()
 const { isOnline } = useOnlineStatus()
 
 const startMutation = import.meta.client ? useConvexMutation(api.learnV2SessionContent.startStudySession) : { mutate: async () => ({}) }
@@ -111,6 +111,7 @@ async function start() {
     sessionRevision.value += 1
     contentRevision.value = result.sessionContentRevision ?? contentRevision.value
     started.value = true
+    emit('started')
     move('retrieval')
   } catch (cause) { error.value = getErrorMessage(cause, 'Could not start this study session. Try again.') }
   finally { busy.value = false }
@@ -134,7 +135,7 @@ async function submit() {
   try {
     const result = await submitMutation.mutate({ studySessionId: candidate.studySessionId as never, expectedSessionRevision: sessionRevision.value, expectedContentRevision: contentRevision.value, expectedPlanRecordRevision: candidate.planRecordRevision, expectedBlueprintRecordRevision: candidate.blueprintRecordRevision, response: transferResponse.value.trim(), confidence: confidence.value as number, idempotencyKey: submitKey.value }) as Feedback & { status: 'completed' | 'in_progress' }
     if (result.status === 'in_progress') { scorePending.value = true; notice.value = 'Scoring is still in progress. Use retry to reconcile this attempt.'; return }
-    feedback.value = result; scorePending.value = false; move('feedback')
+    feedback.value = result; scorePending.value = false; emit('completed'); move('feedback')
   } catch (cause) { error.value = getErrorMessage(cause, 'Could not submit your response. Try again.') }
   finally { busy.value = false }
 }

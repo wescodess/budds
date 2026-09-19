@@ -209,12 +209,18 @@ describe('LA2-12 server-scored mastery attempts', () => {
     await expect(purged.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, purged.args('purged-evidence'))).rejects.toThrow(/evidence is unavailable/)
   })
 
-  test('keeps future sessions scheduled and requires the exact started-content id', async () => {
+  test('allows same-day early starts, keeps future-day sessions scheduled, and requires the exact started-content id', async () => {
     const future = await fixture()
     const scheduledStartAt = Date.now() + 60_000
-    await future.t.run(ctx => ctx.db.patch(future.ids.sessionId, { status: 'ready', scheduledStartAt }))
-    await expect(future.owner.query(api.learnV2Today.getToday, {})).resolves.toMatchObject({ status: 'empty', nextScheduledAt: scheduledStartAt })
-    await expect(future.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: future.ids.sessionId, expectedSessionRevision: 7, expectedContentRevision: 11, idempotencyKey: 'future-start' })).rejects.toThrow(/has not started/)
+    await future.t.run(ctx => ctx.db.patch(future.ids.sessionId, { status: 'ready', scheduledStartAt, timezone: 'America/Toronto' }))
+    await expect(future.owner.query(api.learnV2Today.getToday, {})).resolves.toMatchObject({ status: 'ready', nextScheduledAt: scheduledStartAt })
+    await expect(future.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: future.ids.sessionId, expectedSessionRevision: 7, expectedContentRevision: 11, idempotencyKey: 'future-start' })).resolves.toMatchObject({ status: 'in_progress' })
+
+    const futureDay = await fixture()
+    const futureDayStart = Date.now() + 48 * 60 * 60_000
+    await futureDay.t.run(ctx => ctx.db.patch(futureDay.ids.sessionId, { status: 'ready', scheduledStartAt: futureDayStart, timezone: 'America/Toronto' }))
+    await expect(futureDay.owner.query(api.learnV2Today.getToday, {})).resolves.toMatchObject({ status: 'empty', nextScheduledAt: futureDayStart })
+    await expect(futureDay.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: futureDay.ids.sessionId, expectedSessionRevision: 7, expectedContentRevision: 11, idempotencyKey: 'future-day-start' })).rejects.toThrow(/not scheduled for today/)
 
     const mismatched = await fixture()
     await mismatched.t.run(ctx => ctx.db.patch(mismatched.ids.sessionId, { startedSessionContentId: undefined }))
