@@ -22,6 +22,10 @@ const completePagesEnv = {
   AUDIO_OVERVIEW_JOB_SECRET: 'test-audio-job-secret-with-sufficient-length',
   AUDIO_OVERVIEW_WORKER_TOKEN: 'test-worker-token-with-sufficient-length',
   CALENDAR_TOKEN_ENCRYPTION_KEY: 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=',
+  NUXT_LEARNING_DECISION_MODE: 'off',
+  NUXT_LEARNING_DECISION_PROVIDER: '',
+  NUXT_LAYA_EVALUATOR_TOKEN: '',
+  NUXT_LAYA_EVALUATOR_URL: '',
 }
 
 function workspaceWithConfig(config: string) {
@@ -151,5 +155,35 @@ describe('Cloudflare Pages environment validation', () => {
       },
       stdio: 'pipe',
     })).not.toThrow()
+  })
+
+  it('accepts a complete Laya shadow configuration', () => {
+    expect(() => execFileSync(process.execPath, [validator, 'build', '--strict'], {
+      cwd: process.cwd(),
+      env: {
+        ...completePagesEnv,
+        NUXT_LEARNING_DECISION_MODE: 'shadow',
+        NUXT_LEARNING_DECISION_PROVIDER: 'laya',
+        NUXT_LAYA_EVALUATOR_TOKEN: 'test-laya-token-with-sufficient-length',
+        NUXT_LAYA_EVALUATOR_URL: 'http://localhost:8788',
+      },
+      stdio: 'pipe',
+    })).not.toThrow()
+  })
+
+  it.each([
+    ['invalid mode', { NUXT_LEARNING_DECISION_MODE: 'enforced' }, 'mode must be off or shadow'],
+    ['invalid provider', { NUXT_LEARNING_DECISION_MODE: 'shadow', NUXT_LEARNING_DECISION_PROVIDER: 'other', NUXT_LAYA_EVALUATOR_TOKEN: 'test-laya-token-with-sufficient-length' }, 'provider must be laya'],
+    ['short token', { NUXT_LEARNING_DECISION_MODE: 'shadow', NUXT_LEARNING_DECISION_PROVIDER: 'laya', NUXT_LAYA_EVALUATOR_TOKEN: 'short' }, 'at least 32 characters'],
+    ['malformed URL', { NUXT_LEARNING_DECISION_MODE: 'shadow', NUXT_LEARNING_DECISION_PROVIDER: 'laya', NUXT_LAYA_EVALUATOR_TOKEN: 'test-laya-token-with-sufficient-length', NUXT_LAYA_EVALUATOR_URL: 'not-a-url' }, 'must be an HTTP(S) URL'],
+  ])('rejects %s for Laya shadow mode', (_name, overrides, message) => {
+    const result = spawnSync(process.execPath, [validator, 'build', '--strict'], {
+      cwd: process.cwd(),
+      env: { ...completePagesEnv, ...overrides },
+      encoding: 'utf8',
+    })
+
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain(message)
   })
 })

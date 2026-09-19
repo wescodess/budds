@@ -49,6 +49,50 @@ The `postinstall` script runs `validate-env.mjs` and `nuxt prepare` automaticall
 
 Dia variables are legacy evaluation settings. They do not configure the production Audio Renderer, and production generation must never fall back to Dia or Aura.
 
+### Laya decision-evaluator pilot (private, opt-in)
+
+Quiz generation can send a bounded, advisory-only shadow request to the private
+`budds-laya-evaluator` Worker. It never changes generated questions, quiz
+publication, persistence, or learner scoring. Set `NUXT_LEARNING_DECISION_MODE=shadow`,
+`NUXT_LEARNING_DECISION_PROVIDER=laya`, and the 32+ character
+`NUXT_LAYA_EVALUATOR_TOKEN` as Pages secrets. In production,
+bind the Worker as `LAYA_EVALUATOR`; the local-only `NUXT_LAYA_EVALUATOR_URL` is an
+HTTP(S) fallback for development. Keep all three server-only and never expose the
+Worker to browsers or Convex.
+
+Deploy the evaluator separately after setting its `LAYA_EVALUATOR_TOKEN` secret and
+choosing a conservative `LAYA_DAILY_ALLOWANCE` (default 50 UTC requests):
+
+```bash
+pnpm --dir workers/laya-evaluator install --frozen-lockfile
+pnpm --dir workers/laya-evaluator test
+pnpm --dir workers/laya-evaluator typecheck
+python -m unittest discover -s workers/laya-evaluator/service/tests -p 'test_*.py'
+pnpm --dir workers/laya-evaluator deploy:dry
+```
+
+The image pins `laya==0.3.3` and the `convaiinnovations/laya-typed-decisions` revision
+`f9ab0b228f0fc0f14d873dbc99038f135c2da1b2` (including a checked model.safetensors SHA256), downloaded while building and run
+offline thereafter. Torch is installed from the CPU-only wheel index and the
+top-level inference dependencies are exact-pinned. The upstream model card currently declares Apache-2.0; review
+the model card and package provenance before a production deployment. The container
+uses one named `budds-shadow-v1` instance, `max_instances: 1`, serialized CPU
+inference, a five-minute sleep timeout, and a daily UTC cap. A cold request polls
+the private readiness endpoint for roughly 20 seconds before consuming allowance;
+hosted quiz generation keeps this advisory work alive with Cloudflare `waitUntil`
+while returning the user-facing quiz without waiting for Laya. Its storage is only a
+daily counter: prompts, sources, learner state, and raw model output are not
+persisted or logged. Logs contain only sanitized status, count, timing, model,
+and aggregate-confidence fields.
+
+The authenticated private `POST /v1/lifecycle/stop` operation is the deterministic
+scale-to-zero control for staging smoke tests and incident response. It is reachable
+only through an explicit service binding and uses the same bearer secret as
+evaluation; it force-destroys the current Container instance and never changes the
+daily evaluation allowance.
+A non-2xx, malformed response, cold start, timeout, or exhausted cap is
+treated as unavailable and leaves quiz behavior unchanged.
+
 ### Audio Overview Workflow Worker
 
 | Secret, variable, or binding | Kind | Purpose |

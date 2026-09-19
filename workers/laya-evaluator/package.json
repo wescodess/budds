@@ -1,0 +1,18 @@
+{
+  "name": "budds-laya-evaluator",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "deploy:dry": "wrangler deploy --dry-run"
+  },
+  "devDependencies": {
+    "@cloudflare/containers": "0.3.7",
+    "@cloudflare/workers-types": "5.20260919.1",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.4",
+    "wrangler": "^4.131.1"
+  }
+}

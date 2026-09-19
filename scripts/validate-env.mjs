@@ -100,6 +100,10 @@ const audioOverviewWorkerToken
 const calendarTokenEncryptionKey
   = mergedEnv.NUXT_CALENDAR_TOKEN_ENCRYPTION_KEY || mergedEnv.CALENDAR_TOKEN_ENCRYPTION_KEY || ''
 const invalidBlocking = []
+const learningDecisionMode = mergedEnv.NUXT_LEARNING_DECISION_MODE || 'off'
+const learningDecisionProvider = mergedEnv.NUXT_LEARNING_DECISION_PROVIDER || ''
+const layaEvaluatorToken = mergedEnv.NUXT_LAYA_EVALUATOR_TOKEN || ''
+const layaEvaluatorUrl = mergedEnv.NUXT_LAYA_EVALUATOR_URL || ''
 
 function isHttpUrl(value) {
   try {
@@ -164,6 +168,15 @@ if (!audioWorkflowPhase && calendarTokenEncryptionKey) {
       names: ['NUXT_CALENDAR_TOKEN_ENCRYPTION_KEY', 'CALENDAR_TOKEN_ENCRYPTION_KEY'],
     })
   }
+}
+
+if (!audioWorkflowPhase && !['off', 'shadow'].includes(learningDecisionMode)) {
+  invalidBlocking.push({ kind: 'var', label: 'Learning decision mode must be off or shadow', names: ['NUXT_LEARNING_DECISION_MODE'] })
+}
+if (!audioWorkflowPhase && learningDecisionMode === 'shadow') {
+  if (learningDecisionProvider !== 'laya') invalidBlocking.push({ kind: 'var', label: 'Learning decision provider must be laya for this pilot', names: ['NUXT_LEARNING_DECISION_PROVIDER'] })
+  if (layaEvaluatorToken.length < 32) invalidBlocking.push({ kind: 'secret', label: 'Laya evaluator credential must be at least 32 characters', names: ['NUXT_LAYA_EVALUATOR_TOKEN'] })
+  if (layaEvaluatorUrl && !isHttpUrl(layaEvaluatorUrl)) invalidBlocking.push({ kind: 'var', label: 'Laya evaluator local URL must be an HTTP(S) URL', names: ['NUXT_LAYA_EVALUATOR_URL'] })
 }
 
 if (audioWorkflowPhase) {
