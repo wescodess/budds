@@ -5,6 +5,7 @@ import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import { S3Client, PutObjectCommand, DeleteObjectCommand, CopyObjectCommand } from '@aws-sdk/client-s3'
 import { createSourceObjectMetadata, readSourceIdentityMetadata } from '../shared/source-identity'
+import { deterministicLearnV2FolderUpload } from '../server/utils/learn-v2-e2e-fixtures'
 async function loadExtractors() {
   return await import('./sourceExtractors')
 }
@@ -725,6 +726,19 @@ export const ingestDocument = internalAction({
             failureReason: `File is ${sizeMB} MB — exceeds the 4 MB indexing limit. Try splitting it into smaller files.`,
             taskId: args.taskId,
           })
+          return
+        }
+
+        const fixture = await deterministicLearnV2FolderUpload(args.filename, new Uint8Array(arrayBuffer))
+        if (fixture) {
+          await ctx.runMutation(internal.documents.updateDocumentStatus, {
+            id: args.documentId,
+            status: 'success',
+            r2Key: `e2e-fixture/${args.documentId}.md`,
+            ...fixture,
+          })
+          if (args.taskId) await ctx.runMutation(internal.tasks.complete, { taskId: args.taskId, result: { documentId: String(args.documentId) } })
+          await ctx.storage.delete(args.fileId)
           return
         }
 

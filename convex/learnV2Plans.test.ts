@@ -58,6 +58,22 @@ describe('Learn V2 study-plan preview and acceptance', () => {
     expect(sessions.every(row => row.status === 'planned' && row.schedulerVersion === 'learn-v2.scheduler.v1')).toBe(true)
   })
 
+  test('normalizes legacy objective estimates below the scheduler minimum', async () => {
+    const setup = await setupPlan()
+    await setup.t.run(ctx => ctx.db.patch(setup.objectiveIds[0]!, { estimatedMinutes: 5 }))
+    const preview = await setup.owner.mutation(api.learnV2Plans.createPlanPreview, {
+      learningVoidId: setup.learningVoid._id,
+      blueprintRevisionId: setup.blueprint._id,
+      expectedVoidRevision: 5,
+      expectedBlueprintRecordRevision: 4,
+      idempotencyKey: 'legacy-short-objective',
+      schedulingInput: input(),
+    })
+    const row = await setup.t.run(ctx => ctx.db.get(preview._id as Id<'studyPlanRevisions'>))
+    const storedInput = JSON.parse(row!.inputSnapshot!)
+    expect(storedInput.objectives[0].estimatedMinutes).toBe(15)
+  })
+
   test('anchors retained reviews to the immutable first independent pass', async () => {
     const setup = await setupPlan()
     const firstIndependentPassAt = Date.parse('2030-09-10T02:00:00Z')

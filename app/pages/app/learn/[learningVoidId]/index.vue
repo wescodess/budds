@@ -14,7 +14,16 @@ const editingPlan = ref(false)
 const selectedSourceId = ref<string | null>(null)
 function editMap(payload: LearnMapEdit) { void journey.editLearningMap(payload) }
 function generationStatusLabel(status: string) { return ({ queued: 'Queued', leased: 'Preparing', running: 'Generating', awaiting_approval: 'Ready for review', completed: 'Completed', failed: 'Needs attention' } as Record<string, string>)[status] ?? status.replaceAll('_', ' ') }
-function savePlan(input: LearnScheduleInput) { if (plan.value) void journey.editPlanPreview(input, 'availability_changed').then(() => { editingPlan.value = false }); else void journey.createPlanPreview(input) }
+async function savePlan(input: LearnScheduleInput) {
+  try {
+    if (plan.value) {
+      await journey.editPlanPreview(input, 'availability_changed')
+      editingPlan.value = false
+    } else await journey.createPlanPreview(input)
+  } catch {
+    // The journey composable retains the actionable error for the editor.
+  }
+}
 function navigate(section: LearnWorkspaceSection) { void router.replace({ query: { ...route.query, section } }) }
 function nextAction() {
   const action = snapshot.value?.nextAction.kind
@@ -47,7 +56,7 @@ function nextAction() {
         <UiButton v-if="snapshot.lifecycle === 'map_review'" data-testid="learn-v2-accept-map" :disabled="busy" @click="journey.acceptLearningMap">Accept learning map</UiButton>
       </section>
       <section v-else-if="activeSection === 'plan'" class="space-y-5">
-        <LearnV2StudyPlanEditor v-if="!plan || editingPlan" :input="journey.planInput()" :busy="busy" :submit-label="plan ? 'Update plan preview' : 'Build plan preview'" @submit="savePlan" @cancel="editingPlan = false" />
+        <LearnV2StudyPlanEditor v-if="!plan || editingPlan" :input="journey.planInput()" :busy="busy" :error="error" :submit-label="plan ? 'Update plan preview' : 'Build plan preview'" @submit="savePlan" @cancel="editingPlan = false" />
         <LearnV2StudyRhythm v-else :plan="plan" @accept-plan="journey.acceptPlan" @edit-plan="editingPlan = true" @resolve-constraint="editingPlan = true" />
       </section>
       <LearnV2CapabilityShelf v-else-if="activeSection === 'progress'" :objectives="objectives" @start-review="nextAction" />

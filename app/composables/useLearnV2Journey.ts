@@ -180,7 +180,25 @@ export function useLearnV2Journey(learningVoidId?: MaybeRef<string | null | unde
   async function submitCalibrationAttempt(objectiveId: string, response: string, confidence: number) { const row = mission.value; if (!row?.currentBlueprint) return; return await run(() => submitCalibration.mutate({ blueprintRevisionId: row.currentBlueprint._id, objectiveId: objectiveId as never, expectedBlueprintRecordRevision: row.currentBlueprint.recordRevision, expectedVoidRevision: row.learningVoid.revision, response, confidence, usedHint: false, usedReveal: false, idempotencyKey: key('calibration') })) }
   async function completeCalibration() { const row = mission.value; if (!row?.currentBlueprint) return; return await run(() => completeCalibrationMutation.mutate({ blueprintRevisionId: row.currentBlueprint._id, expectedBlueprintRecordRevision: row.currentBlueprint.recordRevision, expectedVoidRevision: row.learningVoid.revision, idempotencyKey: key('complete-calibration') })) }
   function defaultSchedule(): LearnScheduleInput { const now = new Date(); const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; return { version: 'learn-v2.schedule-input.v1', timezone, startLocalDate: now.toLocaleDateString('en-CA'), targetLocalDate: mission.value?.currentBlueprint?.targetLocalDate ?? null, sessionMinutes: mission.value?.currentBlueprint?.sessionMinutes ?? 25, availability: [{ weekday: 1, start: '18:00', end: '20:00' }, { weekday: 3, start: '18:00', end: '20:00' }, { weekday: 6, start: '10:00', end: '12:00' }], blackoutDates: [], reviewIntervalsDays: [1, 3], minRestMinutes: 720 } }
-  function planInput(): LearnScheduleInput { const raw = mission.value?.plan?.preview?.inputSnapshot; try { return raw ? JSON.parse(raw) as LearnScheduleInput : defaultSchedule() } catch { return defaultSchedule() } }
+  function planInput(): LearnScheduleInput {
+    const fallback = defaultSchedule()
+    const raw = mission.value?.plan?.preview?.inputSnapshot
+    if (!raw) return fallback
+    try {
+      const stored = JSON.parse(raw) as Partial<LearnScheduleInput>
+      return {
+        version: 'learn-v2.schedule-input.v1',
+        timezone: stored.timezone ?? fallback.timezone,
+        startLocalDate: stored.startLocalDate ?? fallback.startLocalDate,
+        targetLocalDate: stored.targetLocalDate ?? null,
+        sessionMinutes: stored.sessionMinutes ?? fallback.sessionMinutes,
+        availability: Array.isArray(stored.availability) ? stored.availability.map(item => ({ weekday: item.weekday, start: item.start, end: item.end })) : fallback.availability,
+        blackoutDates: Array.isArray(stored.blackoutDates) ? [...stored.blackoutDates] : [],
+        reviewIntervalsDays: Array.isArray(stored.reviewIntervalsDays) ? [...stored.reviewIntervalsDays] : fallback.reviewIntervalsDays,
+        minRestMinutes: stored.minRestMinutes ?? fallback.minRestMinutes,
+      }
+    } catch { return fallback }
+  }
   async function createPlanPreview(schedulingInput: LearnScheduleInput) { const row = mission.value; if (!row?.currentBlueprint) return; return await run(() => createPreviewMutation.mutate({ learningVoidId: row.learningVoid._id, blueprintRevisionId: row.currentBlueprint._id, expectedVoidRevision: row.learningVoid.revision, expectedBlueprintRecordRevision: row.currentBlueprint.recordRevision, idempotencyKey: key('plan-preview'), schedulingInput })) }
   async function editPlanPreview(schedulingInput: LearnScheduleInput, changeReason: 'availability_changed' | 'deadline_changed' | 'session_length_changed') { const row = mission.value; const preview = row?.plan?.preview; if (!row?.currentBlueprint || !preview) return; return await run(() => editPreviewMutation.mutate({ studyPlanRevisionId: preview._id, expectedPlanRecordRevision: preview.recordRevision, expectedVoidRevision: row.learningVoid.revision, expectedBlueprintRecordRevision: row.currentBlueprint.recordRevision, changeReason, idempotencyKey: key('edit-plan-preview'), schedulingInput })) }
   async function editLearningMap(edit: LearnMapEdit) { const original = mission.value; if (!original?.currentBlueprint || !original.map) return; return await run(async () => {

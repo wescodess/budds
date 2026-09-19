@@ -63,9 +63,14 @@ export const getToday = query({
         const excerpt = await ctx.db.get(support.sourceExcerptId)
         const sourceId = support.sourceSnapshotId ?? excerpt?.sourceSnapshotId
         const source = sourceId && await ctx.db.get(sourceId)
-        if (!excerpt || excerpt.userId !== userId || excerpt.evidencePurgedAt !== undefined || excerpt.rightsStatus !== 'permitted' || !excerpt.excerpt?.trim()
-          || !source || source.userId !== userId || source.evidencePurgedAt !== undefined || source.status !== 'user_accepted' || source.effectiveStatus !== 'user_accepted' || source.rightsStatus !== 'permitted' || source.conflictStatus !== 'clear'
+        if (!excerpt || excerpt.userId !== userId || excerpt.evidencePurgedAt !== undefined
+          || !source || source.userId !== userId || source.evidencePurgedAt !== undefined || source.status !== 'user_accepted' || source.effectiveStatus !== 'user_accepted' || source.conflictStatus !== 'clear'
           || support.entailment !== 'entailed' || support.conflictStatus !== 'clear' || support.evidenceStatus !== 'evidence_available' || !support.verifierVersion?.trim() || (support.confidence ?? 0) < 0.8) return { status: 'blocked' as const, reason: 'content_evidence_unavailable', nextScheduledAt }
+        const storedEvidence = source.rightsStatus === 'permitted' && excerpt.rightsStatus === 'permitted' && !!excerpt.excerpt?.trim()
+        const identity = storedEvidence ? null : await ctx.db.get(source.sourceIdentityId)
+        const folderLocator = identity?.userId === userId && identity.origin === 'folder_document' && !!identity.folderDocumentId
+          && typeof source.contentHash === 'string' && typeof source.sourceRevision === 'string'
+        if (!storedEvidence && !folderLocator) return { status: 'blocked' as const, reason: 'content_evidence_unavailable', nextScheduledAt }
       }
     }
     if (!Number.isSafeInteger(candidate.plan.recordRevision)) return { status: 'blocked' as const, reason: 'plan_revision_unavailable', nextScheduledAt }

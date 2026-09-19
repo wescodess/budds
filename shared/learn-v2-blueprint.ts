@@ -228,7 +228,7 @@ export function validateLearnV2BlueprintCandidate(
       order: integer(item.order, 0, LEARN_V2_BLUEPRINT_LIMITS.maximumObjectives - 1, `Objective ${objectiveKey} order`),
       title: text(item.title, `Objective ${objectiveKey} title`, 200),
       capability: text(item.capability, `Objective ${objectiveKey} capability`, 500),
-      estimatedMinutes: integer(item.estimatedMinutes, 5, 480, `Objective ${objectiveKey} estimated minutes`),
+      estimatedMinutes: integer(item.estimatedMinutes, 15, 480, `Objective ${objectiveKey} estimated minutes`),
       ...(depth === undefined ? {} : { depth }),
       coverage,
       ...(gapReason === undefined ? {} : { gapReason }),
@@ -296,9 +296,9 @@ export function parseLearnV2BlueprintAliasCandidate(
   const milestones = array(candidate.milestones, LEARN_V2_BLUEPRINT_LIMITS.minimumMilestones, LEARN_V2_BLUEPRINT_LIMITS.maximumMilestones, 'Blueprint milestones')
     .map((raw, index) => {
       const milestone = record(raw, `Milestone ${index}`)
-      if (milestone.description !== null) return milestone
+      if (milestone.description !== null) return { ...milestone, order: index }
       const { description: _description, ...rest } = milestone
-      return rest
+      return { ...rest, order: index }
     })
   const objectives = array(candidate.objectives, LEARN_V2_BLUEPRINT_LIMITS.minimumObjectives, LEARN_V2_BLUEPRINT_LIMITS.maximumObjectives, 'Blueprint objectives')
     .map((raw, index) => {
@@ -310,6 +310,7 @@ export function parseLearnV2BlueprintAliasCandidate(
       const { sourceAliases, gapSourceAliases, gapReason, ...rest } = objective
       return {
         ...rest,
+        order: index,
         ...(gapReason === null ? {} : { gapReason }),
         sourceSnapshotIds: sourceAliases,
         gapSourceSnapshotIds: gapSourceAliases,

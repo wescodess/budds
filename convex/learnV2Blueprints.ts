@@ -25,6 +25,7 @@ const BLUEPRINT_JOB_LEASE_MS = 5 * 60_000
 const BLUEPRINT_JOB_MAX_ATTEMPTS = 2
 const MAX_IDEMPOTENCY_KEY_LENGTH = 128
 const BLUEPRINT_RECOVERY_BATCH = 16
+const BLUEPRINT_PROVIDER_TIMEOUT_MS = 90_000
 const BLUEPRINT_INTENT_VERSION = 'learn-v2.blueprint-intent.v1' as const
 const BLUEPRINT_PROVIDER_POLICY_VERSION = 'learn-v2.blueprint-provider.v1'
 
@@ -96,7 +97,7 @@ const BLUEPRINT_PROVIDER_JSON_SCHEMA = {
     additionalProperties: false,
     required: ['version', 'milestones', 'objectives'],
     properties: {
-      version: { const: 'learn-v2.blueprint-candidate.v1' },
+      version: { type: 'string', const: 'learn-v2.blueprint-candidate.v1' },
       milestones: {
         type: 'array', minItems: 3, maxItems: 6,
         items: {
@@ -121,21 +122,21 @@ const BLUEPRINT_PROVIDER_JSON_SCHEMA = {
             order: { type: 'integer', minimum: 0, maximum: 14 },
             title: { type: 'string', minLength: 1, maxLength: 200 },
             capability: { type: 'string', minLength: 1, maxLength: 500 },
-            estimatedMinutes: { type: 'integer', minimum: 5, maximum: 480 },
-            coverage: { enum: ['strong', 'partial', 'gap'] },
+            estimatedMinutes: { type: 'integer', minimum: 15, maximum: 480 },
+            coverage: { type: 'string', enum: ['strong', 'partial', 'gap'] },
             gapReason: { anyOf: [{ type: 'string', minLength: 1, maxLength: 500 }, { type: 'null' }] },
-            sourceAliases: { type: 'array', minItems: 0, maxItems: 10, uniqueItems: true, items: { type: 'string', pattern: '^source-[0-9]{3}$' } },
-            gapSourceAliases: { type: 'array', minItems: 0, maxItems: 10, uniqueItems: true, items: { type: 'string', pattern: '^source-[0-9]{3}$' } },
-            prerequisiteObjectiveKeys: { type: 'array', minItems: 0, maxItems: 14, uniqueItems: true, items: { type: 'string', pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$', maxLength: 64 } },
+            sourceAliases: { type: 'array', minItems: 0, maxItems: 10, items: { type: 'string', pattern: '^source-[0-9]{3}$' } },
+            gapSourceAliases: { type: 'array', minItems: 0, maxItems: 10, items: { type: 'string', pattern: '^source-[0-9]{3}$' } },
+            prerequisiteObjectiveKeys: { type: 'array', minItems: 0, maxItems: 14, items: { type: 'string', pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$', maxLength: 64 } },
             assessmentContract: {
               type: 'object', additionalProperties: false,
               required: ['version', 'kind', 'responseFormat', 'instructions', 'passingScorePercent', 'criteria'],
               properties: {
-                version: { const: 'learn-v2.assessment.v1' },
-                kind: { enum: ['machine_checkable', 'bounded_rubric'] },
-                responseFormat: { enum: ['short_text', 'structured'] },
+                version: { type: 'string', const: 'learn-v2.assessment.v1' },
+                kind: { type: 'string', enum: ['machine_checkable', 'bounded_rubric'] },
+                responseFormat: { type: 'string', enum: ['short_text', 'structured'] },
                 instructions: { type: 'string', minLength: 1, maxLength: 1000 },
-                passingScorePercent: { const: 80 },
+                passingScorePercent: { type: 'integer', const: 80 },
                 criteria: {
                   type: 'array', minItems: 1, maxItems: 8,
                   items: {
@@ -952,7 +953,7 @@ export const executeBlueprintGeneration = internalAction({
     let providerResponseId: string
     let providerResponseModel: string
     const providerAbort = new AbortController()
-    const providerDeadline = setTimeout(() => providerAbort.abort(), 30_000)
+    const providerDeadline = setTimeout(() => providerAbort.abort(), BLUEPRINT_PROVIDER_TIMEOUT_MS)
     try {
       const response = await generateCompletion({
         model,
@@ -985,6 +986,12 @@ export const executeBlueprintGeneration = internalAction({
     }
     catch (error) {
       const failureKind = classifyAiGatewayFailure(error)
+      console.warn('Learn V2 Blueprint provider request failed', {
+        failureKind,
+        statusCode: typeof error === 'object' && error !== null && 'statusCode' in error
+          ? (error as { statusCode?: unknown }).statusCode
+          : undefined,
+      })
       if (failureKind === 'not_dispatched' || failureKind === 'definitive_failure') return await block('provider_unavailable')
       if (failureKind === 'invalid_response') return await block('provider_output_invalid')
       return await block('provider_outcome_unknown')
@@ -1000,7 +1007,10 @@ export const executeBlueprintGeneration = internalAction({
       const gapAliases = providerSources.map(source => source.alias)
       candidate = parseLearnV2BlueprintAliasCandidate(responseText, supportingAliases, gapAliases)
     }
-    catch {
+    catch (error) {
+      console.warn('Learn V2 Blueprint candidate validation failed', {
+        message: error instanceof Error ? error.message.slice(0, 500) : undefined,
+      })
       return await block('provider_output_invalid')
     }
     const sourceIdsByAlias = new Map(providerSources.map(source => [source.alias, source.sourceSnapshotId]))

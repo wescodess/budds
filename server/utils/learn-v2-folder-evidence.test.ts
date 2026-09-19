@@ -48,12 +48,38 @@ describe('Learn V2 transient folder evidence', () => {
       sources: [source],
     })).resolves.toEqual(new Map([['source-001', 'Exact pinned evidence.']]))
 
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as {
+      filters: unknown
+      ranking_options?: unknown
+      score_threshold?: unknown
+    }
+    expect(body.filters).toEqual({
+      type: 'eq',
+      key: 'documentid',
+      value: 'document-1',
+    })
+    expect(body.ranking_options).toEqual({ score_threshold: 0.05 })
+    expect(body.score_threshold).toBeUndefined()
+  })
+
+  test('uses a flat same-key OR filter for multiple pinned documents', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(JSON.stringify({
+      success: true,
+      result: { data: [] },
+    }), { status: 200 }))
+
+    await retrieveLearnV2FolderEvidence({
+      query: 'Apply the accepted evidence',
+      userId: 'owner-1',
+      sources: [source, { ...source, alias: 'source-002', documentId: 'document-2' }],
+    })
+
     const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as { filters: unknown }
     expect(body.filters).toEqual({
-      type: 'and',
+      type: 'or',
       filters: [
-        { type: 'eq', key: 'userid', value: 'owner-1' },
-        { type: 'or', filters: [{ type: 'eq', key: 'documentid', value: 'document-1' }] },
+        { type: 'eq', key: 'documentid', value: 'document-1' },
+        { type: 'eq', key: 'documentid', value: 'document-2' },
       ],
     })
   })
