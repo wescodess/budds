@@ -9,6 +9,9 @@ vi.mock('../server/utils/ai-gateway', () => ({
   classifyAiGatewayFailure: vi.fn(() => 'definitive_failure'),
   generateCompletion: vi.fn(async () => ({ id: 'calibration-provider-1', model: 'mock-calibration', choices: [{ message: { content: JSON.stringify({ criterionResults: [{ key: 'correct', awarded: true, rationale: 'Matches the pinned evidence.' }] }) } }] })),
 }))
+vi.mock('../server/utils/learn-v2-folder-evidence', () => ({
+  retrieveLearnV2FolderEvidence: vi.fn(async ({ sources }: { sources: Array<{ alias: string }> }) => new Map(sources.map(source => [source.alias, 'Transient pinned folder evidence.']))),
+}))
 
 const modules = import.meta.glob('./**/*.ts')
 const identity = { tokenIdentifier: 'https://auth.example.com|map-owner', name: 'Map Owner' }
@@ -179,6 +182,15 @@ describe('Learn V2 revision-safe map editing and calibration', () => {
     process.env.LEARN_V2_CALIBRATION_MODEL = 'mock-calibration'
     try {
       const setup = await setupMap()
+      await setup.t.run(async (ctx) => {
+        const source = await ctx.db.get(setup.sourceSnapshotId)
+        const excerpt = await ctx.db.query('learnSourceExcerpts').withIndex('by_userId_and_sourceSnapshotId', q => q.eq('userId', identity.tokenIdentifier).eq('sourceSnapshotId', setup.sourceSnapshotId)).unique()
+        const learningVoid = await ctx.db.get(setup.learningVoid._id)
+        const documentId = await ctx.db.insert('documents', { userId: identity.tokenIdentifier, folderId: learningVoid!.folderId, filename: 'folder-evidence.pdf', status: 'success', fileSize: 100, r2Key: 'owners/map/folder-evidence.pdf' })
+        await ctx.db.patch(source!.sourceIdentityId, { origin: 'folder_document', externalKey: `document:${documentId}`, canonicalUrl: undefined, folderDocumentId: documentId })
+        await ctx.db.patch(source!._id, { rightsStatus: 'unknown', objectKey: 'owners/map/folder-evidence.pdf', contentHash: 'a'.repeat(64), sourceRevision: `sha256:${'a'.repeat(64)}` })
+        await ctx.db.patch(excerpt!._id, { rightsStatus: 'unknown', locator: `sha256:${'a'.repeat(64)}`, excerpt: undefined })
+      })
       const accepted = await setup.owner.mutation(api.learnV2MapCalibration.acceptBlueprintMap, { blueprintRevisionId: setup.blueprint._id, expectedRecordRevision: 1, expectedVoidRevision: 2, idempotencyKey: 'public-accept' })
       const args = { blueprintRevisionId: setup.blueprint._id, objectiveId: setup.objectives[0]!, expectedBlueprintRecordRevision: accepted.recordRevision, expectedVoidRevision: 3, response: 'The supported answer.', confidence: 4, usedHint: false, usedReveal: false, idempotencyKey: 'public-calibration-1' }
       const scored = await setup.owner.action(api.learnV2MapCalibration.submitCalibrationAttempt, args)

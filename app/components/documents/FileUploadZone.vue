@@ -40,6 +40,8 @@ const emit = defineEmits<{
 
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const isDragOver = ref(false)
+const hydrated = ref(false)
+onMounted(() => { hydrated.value = true })
 
 function openFilePicker() {
   if (props.disabled) return
@@ -142,6 +144,8 @@ function handleDragLeave() {
     <input
       ref="fileInputRef"
       type="file"
+      data-testid="documents-file-upload-input"
+      :data-hydrated="hydrated ? 'true' : 'false'"
       accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx,text/plain,.txt,text/markdown,.md,text/csv,.csv,text/html,.html,image/png,.png,image/jpeg,.jpg,.jpeg,image/webp,.webp,image/gif,.gif"
       multiple
       class="hidden"

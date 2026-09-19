@@ -24,7 +24,14 @@ async function supportedSourceIds(ctx: MutationCtx, userId: string, objectiveId:
   for (const link of links) {
     if (link.coverage === 'gap') continue
     const source = await ctx.db.get(link.sourceSnapshotId)
-    if (source?.userId === userId && source.status === 'user_accepted' && source.effectiveStatus === 'user_accepted' && source.rightsStatus === 'permitted' && source.conflictStatus === 'clear' && source.evidencePurgedAt === undefined) sourceIds.push(source._id)
+    if (!source || source.userId !== userId || source.status !== 'user_accepted' || source.effectiveStatus !== 'user_accepted' || source.conflictStatus !== 'clear' || source.evidencePurgedAt !== undefined) continue
+    if (source.rightsStatus === 'permitted') {
+      sourceIds.push(source._id)
+      continue
+    }
+    const identity = await ctx.db.get(source.sourceIdentityId)
+    if (identity?.userId === userId && identity.origin === 'folder_document' && identity.folderDocumentId
+      && typeof source.contentHash === 'string' && typeof source.sourceRevision === 'string') sourceIds.push(source._id)
   }
   const unique = [...new Map(sourceIds.map(id => [String(id), id])).values()].sort((a, b) => String(a).localeCompare(String(b)))
   return unique
@@ -90,7 +97,10 @@ async function buildSchedulingInput(ctx: MutationCtx, userId: string, blueprint:
     const prerequisites = await ctx.db.query('learnObjectivePrerequisites').withIndex('by_userId_and_blueprintRevisionId_and_objectiveId', q => q.eq('userId', userId).eq('blueprintRevisionId', blueprint._id).eq('objectiveId', objective._id)).take(MAX_OBJECTIVES + 1)
     if (prerequisites.length > MAX_OBJECTIVES) throw new Error('Objective prerequisite set is outside the bounded plan contract')
     const record = await ctx.db.query('masteryRecords').withIndex('by_userId_and_objectiveId', q => q.eq('userId', userId).eq('objectiveId', objective._id)).first()
-    scheduledObjectives.push({ id: String(objective._id), order: objective.order, estimatedMinutes: objective.estimatedMinutes ?? input.sessionMinutes, prerequisiteIds: prerequisites.map(row => String(row.prerequisiteObjectiveId)), priority: record?.schedulingPriority === 'remediation' ? 'prerequisite_remediation' : 'new_learning' })
+    // Older/provider-produced maps may predate the scheduler's 15-minute floor.
+    // Preserve their reachability while all newly validated maps enforce the floor.
+    const estimatedMinutes = Math.max(15, objective.estimatedMinutes ?? input.sessionMinutes)
+    scheduledObjectives.push({ id: String(objective._id), order: objective.order, estimatedMinutes, prerequisiteIds: prerequisites.map(row => String(row.prerequisiteObjectiveId)), priority: record?.schedulingPriority === 'remediation' ? 'prerequisite_remediation' : 'new_learning' })
     if (record?.state === 'independent' && record.firstIndependentPassAt !== undefined) {
       const parts = new Intl.DateTimeFormat('en-CA', { timeZone: input.timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(record.firstIndependentPassAt)
       const value = (type: Intl.DateTimeFormatPartTypes) => parts.find(row => row.type === type)?.value

@@ -3,6 +3,7 @@ import type { Doc, Id } from './_generated/dataModel'
 import { action, internalMutation, internalQuery, mutation, type MutationCtx, type QueryCtx } from './_generated/server'
 import { internal } from './_generated/api'
 import { classifyAiGatewayFailure, generateCompletion } from '../server/utils/ai-gateway'
+import { retrieveLearnV2FolderEvidence } from '../server/utils/learn-v2-folder-evidence'
 import { hasLearnV2Access, requireLearnV2MutationAccess } from './lib/learnV2Access'
 import { LEARN_V2_BLUEPRINT_LIMITS, validateLearnV2BlueprintCandidate } from '../shared/learn-v2-blueprint'
 
@@ -379,12 +380,35 @@ export const getCalibrationScoringInput = internalQuery({
     if (!objective || objective.userId !== args.tokenIdentifier || objective.blueprintRevisionId !== blueprint._id) throw new Error('Calibration objective not found')
     const links = await ctx.db.query('learnObjectiveSources').withIndex('by_userId_and_objectiveId_and_sourceSnapshotId', q => q.eq('userId', args.tokenIdentifier).eq('objectiveId', objective._id)).take(9)
     if (links.length > 8) throw new Error('Calibration evidence exceeds its bounded contract')
-    const evidence = []
+    const evidence: Array<{
+      alias: string
+      locator: string
+      excerpt?: string
+      folderEvidence?: { documentId: string, contentHash: string, sourceRevision: string }
+    }> = []
     for (const link of links) {
       if (link.coverage === 'gap') continue
       const source = await ctx.db.get(link.sourceSnapshotId)
       const excerpt = await ctx.db.query('learnSourceExcerpts').withIndex('by_userId_and_sourceSnapshotId_and_evidencePurgedAt', q => q.eq('userId', args.tokenIdentifier).eq('sourceSnapshotId', link.sourceSnapshotId).eq('evidencePurgedAt', undefined)).first()
-      if (source?.status === 'user_accepted' && source.effectiveStatus === 'user_accepted' && source.rightsStatus === 'permitted' && source.conflictStatus === 'clear' && excerpt?.excerpt?.trim()) evidence.push({ excerpt: excerpt.excerpt, locator: excerpt.locator })
+      if (!source || source.userId !== args.tokenIdentifier || source.status !== 'user_accepted' || source.effectiveStatus !== 'user_accepted' || source.conflictStatus !== 'clear' || source.evidencePurgedAt !== undefined || !excerpt) continue
+      const alias = `source-${String(evidence.length + 1).padStart(3, '0')}`
+      if (source.rightsStatus === 'permitted' && excerpt.rightsStatus === 'permitted' && excerpt.excerpt?.trim()) {
+        evidence.push({ alias, excerpt: excerpt.excerpt, locator: excerpt.locator })
+        continue
+      }
+      const identity = await ctx.db.get(source.sourceIdentityId)
+      if (identity?.userId === args.tokenIdentifier && identity.origin === 'folder_document' && identity.folderDocumentId
+        && typeof source.contentHash === 'string' && typeof source.sourceRevision === 'string') {
+        evidence.push({
+          alias,
+          locator: excerpt.locator,
+          folderEvidence: {
+            documentId: String(identity.folderDocumentId),
+            contentHash: source.contentHash,
+            sourceRevision: source.sourceRevision,
+          },
+        })
+      }
     }
     if (!evidence.length) throw new Error('Calibration evidence is unavailable')
     const model = process.env.LEARN_V2_CALIBRATION_MODEL?.trim() || process.env.LEARN_V2_MASTERY_MODEL?.trim()
@@ -418,12 +442,43 @@ export const submitCalibrationAttempt = action({
       await ctx.runMutation(internal.learnV2MapCalibration.finishCalibrationScoringFailure, { tokenIdentifier: identity.tokenIdentifier, jobId: reservation.jobId, leaseToken: reservation.leaseToken, outcome: 'not_dispatched' })
       throw error
     }
-    let input: { model: string, objective: { assessmentContract?: unknown, title: string, capability?: string }, evidence: Array<{ excerpt?: string, locator: string }>, learnerResponse: string }
+    let input: {
+      model: string
+      objective: { assessmentContract?: unknown, title: string, capability?: string }
+      evidence: Array<{ alias: string, excerpt?: string, locator: string, folderEvidence?: { documentId: string, contentHash: string, sourceRevision: string } }>
+      learnerResponse: string
+    }
     try {
       input = await ctx.runQuery(internal.learnV2MapCalibration.getCalibrationScoringInput, { tokenIdentifier: identity.tokenIdentifier, jobId: reservation.jobId, leaseToken: reservation.leaseToken, blueprintRevisionId: args.blueprintRevisionId, objectiveId: args.objectiveId, response: args.response })
     } catch (error) {
       await ctx.runMutation(internal.learnV2MapCalibration.finishCalibrationScoringFailure, { tokenIdentifier: identity.tokenIdentifier, jobId: reservation.jobId, leaseToken: reservation.leaseToken, outcome: 'not_dispatched' })
       throw error
+    }
+    const folderSources = input.evidence.flatMap(item => item.folderEvidence
+      ? [{ alias: item.alias, ...item.folderEvidence }]
+      : [])
+    if (folderSources.length > 0) {
+      try {
+        const retrieved = await retrieveLearnV2FolderEvidence({
+          query: `${input.objective.title} ${input.objective.capability ?? ''}`.trim(),
+          userId: identity.tokenIdentifier,
+          sources: folderSources,
+        })
+        input = {
+          ...input,
+          evidence: input.evidence.map(item => item.excerpt?.trim()
+            ? item
+            : { ...item, excerpt: retrieved.get(item.alias) }),
+        }
+      }
+      catch (error) {
+        await ctx.runMutation(internal.learnV2MapCalibration.finishCalibrationScoringFailure, { tokenIdentifier: identity.tokenIdentifier, jobId: reservation.jobId, leaseToken: reservation.leaseToken, outcome: 'not_dispatched' })
+        throw new Error('Calibration evidence is unavailable', { cause: error })
+      }
+    }
+    if (input.evidence.some(item => !item.excerpt?.trim())) {
+      await ctx.runMutation(internal.learnV2MapCalibration.finishCalibrationScoringFailure, { tokenIdentifier: identity.tokenIdentifier, jobId: reservation.jobId, leaseToken: reservation.leaseToken, outcome: 'not_dispatched' })
+      throw new Error('Calibration evidence is unavailable')
     }
     const contract = input.objective.assessmentContract as { version?: string, criteria?: Array<{ key: string, weightPercent: number }> } | undefined
     if (!contract?.version || !contract.criteria?.length) throw new Error('Calibration rubric is unavailable')

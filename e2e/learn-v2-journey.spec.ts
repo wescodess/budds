@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { readFile } from 'node:fs/promises'
 
 const token = process.env.BUDDS_E2E_AUTH_TOKEN ?? 'e2e-local-token-please-do-not-use-outside-tests'
 
@@ -56,6 +57,18 @@ test('learner can advance the Learn V2 mastery journey through production UI', a
   await page.getByTestId('folder-form-submit').click()
   await expect(page.getByTestId('folder-form-modal')).toBeHidden()
 
+  const folderOption = page.getByTestId('learn-v2-create-folder').locator('option', { hasText: folderName })
+  await expect(folderOption).toHaveCount(1)
+  const folderId = await folderOption.getAttribute('value')
+  expect(folderId).toBeTruthy()
+  await page.goto(`/app/folders/${folderId}/documents`)
+  await expect(page.getByTestId('documents-file-upload-input')).toHaveAttribute('data-hydrated', 'true')
+  const fixture = await readFile(new URL('./fixtures/learn-v2-orbital-mechanics.md', import.meta.url))
+  await page.getByTestId('documents-file-upload-input').setInputFiles({ name: 'learn-v2-orbital-mechanics.md', mimeType: 'text/markdown', buffer: fixture })
+  const documentRow = page.getByTestId('files-list').locator('[data-testid^="file-row-"]').filter({ hasText: 'learn-v2-orbital-mechanics.md' })
+  await expect(documentRow).toBeVisible({ timeout: 30_000 })
+  await expect(documentRow.locator('[data-status="success"]')).toBeVisible({ timeout: 120_000 })
+
   await page.goto('/app/learn')
   await page.reload({ waitUntil: 'domcontentloaded' })
   await expect(page).not.toHaveTitle(/500 - Internal Server Error/)
@@ -67,9 +80,9 @@ test('learner can advance the Learn V2 mastery journey through production UI', a
     await page.reload({ waitUntil: 'domcontentloaded' })
     return false
   }, { timeout: 120_000, intervals: [5_000] }).toBe(true)
-  await page.getByTestId('learn-v2-create-folder').selectOption({ label: folderName })
+  await page.getByTestId('learn-v2-create-folder').selectOption(folderId!)
   await page.getByTestId('learn-v2-outcome-input').fill('Explain orbital mechanics well enough to reason about a transfer orbit.')
-  await page.getByLabel('Source policy').selectOption('web_only')
+  await page.getByLabel('Source policy').selectOption('folder_only')
   await page.getByTestId('learn-v2-outcome-continue').click()
   await expect(page).toHaveURL(/\/app\/learn\/[^/]+\?section=sources/)
   await expect(page.getByTestId('learn-v2-evidence-desk')).toBeVisible()
@@ -78,11 +91,14 @@ test('learner can advance the Learn V2 mastery journey through production UI', a
   await page.reload({ waitUntil: 'domcontentloaded' })
   await expect(page).not.toHaveTitle(/500 - Internal Server Error/)
   await expect(page.getByTestId('learn-v2-evidence-desk')).toBeVisible()
-  await page.getByTestId('learn-v2-source-url').fill('https://e2e.budds.invalid/source')
-  await page.getByTestId('learn-v2-source-add-url').click()
-  await expect(page.getByTestId('learn-v2-source-inspector')).toContainText('e2e.budds.invalid')
+  const folderSource = page.locator('[data-testid^="learn-v2-source-row-"]').filter({ hasText: 'learn-v2-orbital-mechanics.md' })
+  await expect(folderSource).toBeVisible()
+  await folderSource.click()
+  const prepareSource = page.locator('[data-testid^="learn-v2-source-prepare-"]')
+  await expect(prepareSource).toBeVisible()
+  await prepareSource.click()
   const acceptSource = page.locator('[data-testid^="learn-v2-source-accept-"]')
-  await expect(acceptSource).toBeVisible()
+  await expect(acceptSource).toBeVisible({ timeout: 30_000 })
   await acceptSource.click()
   await expect(page.getByTestId('learn-v2-evidence-desk')).toContainText('Accepted')
   await page.getByTestId('learn-v2-generate-map').click()

@@ -2,6 +2,51 @@ import type { GenerateParams, GenerateResponse } from './ai-gateway'
 import type { SafeFetchResult } from './learn-v2-safe-fetch'
 import { isE2eServerMode } from './e2e-mode'
 
+export const LEARN_V2_E2E_FOLDER_FIXTURE_FILENAME = 'learn-v2-orbital-mechanics.md'
+export const LEARN_V2_E2E_FOLDER_FIXTURE_TEXT = `# Transfer orbits
+
+A transfer orbit is a deliberate path used to move between two orbital energies. For circular orbits, the learner compares the velocity changes required at the departure and arrival points. The maneuver changes velocity at the appropriate orbital points, and those changes alter the spacecraft's orbital energy.
+
+To explain a transfer, identify the initial orbit, the target orbit, the required velocity changes, and why each change occurs at that point. The same reasoning can then be applied to a new pair of circular orbits.
+`
+
+type FixtureEnvironment = Record<string, string | undefined>
+
+function isLoopbackConvex(env: FixtureEnvironment) {
+  try {
+    const url = new URL(env.CONVEX_SITE_URL ?? env.CONVEX_URL ?? '')
+    return url.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(url.hostname)
+  } catch { return false }
+}
+
+async function sha256(value: Uint8Array) {
+  const digest = await crypto.subtle.digest('SHA-256', Uint8Array.from(value).buffer)
+  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('')
+}
+
+export async function deterministicLearnV2FolderUpload(
+  filename: string,
+  bytes: Uint8Array,
+  env: FixtureEnvironment = process.env,
+): Promise<{ contentHash: string; sourceRevision: string } | null> {
+  if (!isE2eServerMode(env) || !isLoopbackConvex(env) || filename !== LEARN_V2_E2E_FOLDER_FIXTURE_FILENAME) return null
+  const expected = new TextEncoder().encode(LEARN_V2_E2E_FOLDER_FIXTURE_TEXT)
+  if (bytes.length !== expected.length || bytes.some((byte, index) => byte !== expected[index])) return null
+  const contentHash = await sha256(bytes)
+  return { contentHash, sourceRevision: `sha256:${contentHash}` }
+}
+
+export async function deterministicLearnV2FolderEvidence(
+  sources: Array<{ alias: string; contentHash: string; sourceRevision: string }>,
+  env: FixtureEnvironment = process.env,
+): Promise<Map<string, string> | null> {
+  if (!isE2eServerMode(env) || !isLoopbackConvex(env) || sources.length === 0) return null
+  const contentHash = await sha256(new TextEncoder().encode(LEARN_V2_E2E_FOLDER_FIXTURE_TEXT))
+  const sourceRevision = `sha256:${contentHash}`
+  if (sources.some(source => source.contentHash !== contentHash || source.sourceRevision !== sourceRevision)) return null
+  return new Map(sources.map(source => [source.alias, LEARN_V2_E2E_FOLDER_FIXTURE_TEXT.slice(0, 4_000)]))
+}
+
 const assessment = { version: 'learn-v2.assessment.v1', kind: 'bounded_rubric', responseFormat: 'short_text', instructions: 'Explain the supported idea in your own words.', passingScorePercent: 80, criteria: [{ key: 'supported-explanation', description: 'Explains the accepted evidence.', weightPercent: 100 }] } as const
 
 function requestPayload(params: GenerateParams) {

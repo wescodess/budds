@@ -198,4 +198,15 @@ describe('Learn V2 journey workspace seams', () => {
     await wrapper.get('[data-testid="learn-v2-create-plan-preview"]').trigger('submit')
     expect(wrapper.emitted('submit')?.[0]?.[0]).toMatchObject({ timezone: 'America/Toronto', sessionMinutes: 45, availability: [{ weekday: 1, start: '18:00', end: '20:00' }] })
   })
+
+  it('shows plan mutation failures beside the editable schedule', async () => {
+    const Comp = await import(`${path}/StudyPlanEditor.vue`)
+    const wrapper = await mountSuspended(Comp.default, {
+      props: {
+        input: { version: 'learn-v2.schedule-input.v1', timezone: 'America/Toronto', startLocalDate: '2030-09-01', targetLocalDate: null, sessionMinutes: 25, availability: [{ weekday: 1, start: '18:00', end: '20:00' }], blackoutDates: [], reviewIntervalsDays: [1, 3], minRestMinutes: 720 },
+        error: 'Availability must leave room for a final buffer.',
+      },
+    })
+    expect(wrapper.get('[data-testid="learn-v2-plan-error"]').text()).toContain('final buffer')
+  })
 })

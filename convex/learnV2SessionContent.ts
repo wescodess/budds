@@ -24,6 +24,7 @@ import {
   classifyAiGatewayFailure,
   generateCompletion,
 } from "../server/utils/ai-gateway";
+import { retrieveLearnV2FolderEvidence } from "../server/utils/learn-v2-folder-evidence";
 
 const TYPE = "session_content_generation";
 const LEASE_MS = 5 * 60_000;
@@ -51,6 +52,7 @@ type ProviderInput = {
     sourceSnapshotId: Id<"learnSourceSnapshots">;
     sourceExcerptId: Id<"learnSourceExcerpts">;
     excerpt: string;
+    folderEvidence?: { documentId: string; contentHash: string; sourceRevision: string };
   }>;
 };
 
@@ -67,15 +69,15 @@ const providerCandidateSchema = {
     "claims",
   ],
   properties: {
-    version: { const: "learn-v2.session-content.v1" },
+    version: { type: "string", const: "learn-v2.session-content.v1" },
     generatorVersion: { type: "string", minLength: 1, maxLength: 200 },
     assessmentRubric: {
       type: "object", additionalProperties: false,
       required: ["version", "kind", "responseFormat", "instructions", "passingScorePercent", "criteria"],
       properties: {
-        version: { const: "learn-v2.assessment.v1" }, kind: { enum: ["machine_checkable", "bounded_rubric"] },
-        responseFormat: { enum: ["short_text", "structured"] }, instructions: { type: "string", minLength: 1, maxLength: 1000 },
-        passingScorePercent: { const: 80 }, criteria: { type: "array", minItems: 1, maxItems: 8, items: {
+        version: { type: "string", const: "learn-v2.assessment.v1" }, kind: { type: "string", enum: ["machine_checkable", "bounded_rubric"] },
+        responseFormat: { type: "string", enum: ["short_text", "structured"] }, instructions: { type: "string", minLength: 1, maxLength: 1000 },
+        passingScorePercent: { type: "integer", const: 80 }, criteria: { type: "array", minItems: 1, maxItems: 8, items: {
           type: "object", additionalProperties: false, required: ["key", "description", "weightPercent"],
           properties: { key: { type: "string", minLength: 1, maxLength: 64 }, description: { type: "string", minLength: 1, maxLength: 300 }, weightPercent: { type: "integer", minimum: 1, maximum: 100 } },
         } },
@@ -86,7 +88,7 @@ const providerCandidateSchema = {
       minItems: 10,
       maxItems: 10,
       items: { type: "object", additionalProperties: false, required: ["order", "kind", "content", "claimOrders"], properties: {
-        order: { type: "integer", minimum: 0, maximum: 9 }, kind: { enum: ["retrieval", "objective", "cold_attempt", "explanation", "worked_example", "faded_example", "independent_application", "confidence_teach_back", "misconception_feedback", "next_review"] }, content: { type: "string", minLength: 1, maxLength: 4000 }, claimOrders: { type: "array", minItems: 1, maxItems: 8, items: { type: "integer", minimum: 0, maximum: 31 } },
+        order: { type: "integer", minimum: 0, maximum: 9 }, kind: { type: "string", enum: ["retrieval", "objective", "cold_attempt", "explanation", "worked_example", "faded_example", "independent_application", "confidence_teach_back", "misconception_feedback", "next_review"] }, content: { type: "string", minLength: 1, maxLength: 4000 }, claimOrders: { type: "array", minItems: 1, maxItems: 8, items: { type: "integer", minimum: 0, maximum: 31 } },
       } },
     },
     claims: { type: "array", minItems: 1, maxItems: 32, items: { type: "object", additionalProperties: false, required: ["order", "claim", "supportSourceSnapshotIds"], properties: {
@@ -97,9 +99,9 @@ const providerCandidateSchema = {
 
 const entailmentVerifierSchema = {
   type: "object", additionalProperties: false, required: ["version", "decisions"], properties: {
-    version: { const: LEARN_V2_ENTAILMENT_VERIFIER_VERSION },
+    version: { type: "string", const: LEARN_V2_ENTAILMENT_VERIFIER_VERSION },
     decisions: { type: "array", minItems: 1, maxItems: 256, items: { type: "object", additionalProperties: false, required: ["claimOrder", "sourceSnapshotId", "sourceExcerptId", "decision", "verifierVersion", "confidence"], properties: {
-      claimOrder: { type: "integer", minimum: 0, maximum: 31 }, sourceSnapshotId: { type: "string", minLength: 1, maxLength: 200 }, sourceExcerptId: { type: "string", minLength: 1, maxLength: 200 }, decision: { enum: ["entailed", "not_entailed"] }, verifierVersion: { const: LEARN_V2_ENTAILMENT_VERIFIER_VERSION }, confidence: { type: "number", minimum: 0, maximum: 1 },
+      claimOrder: { type: "integer", minimum: 0, maximum: 31 }, sourceSnapshotId: { type: "string", minLength: 1, maxLength: 200 }, sourceExcerptId: { type: "string", minLength: 1, maxLength: 200 }, decision: { type: "string", enum: ["entailed", "not_entailed"] }, verifierVersion: { type: "string", const: LEARN_V2_ENTAILMENT_VERIFIER_VERSION }, confidence: { type: "number", minimum: 0, maximum: 1 },
     } } },
   },
 } as const;
@@ -322,7 +324,8 @@ export const getSessionContentGenerationInput = internalQuery({
       alias: string;
       sourceSnapshotId: Id<"learnSourceSnapshots">;
       sourceExcerptId: Id<"learnSourceExcerpts">;
-      excerpt: string;
+      excerpt?: string;
+      folderEvidence?: { documentId: string; contentHash: string; sourceRevision: string };
     }>;
     const sourceIds = job.dispatchSupportingSourceSnapshotIds ?? [];
     if (!sourceIds.length || sourceIds.length > 64 || new Set(sourceIds.map(String)).size !== sourceIds.length)
@@ -347,25 +350,20 @@ export const getSessionContentGenerationInput = internalQuery({
             .eq("evidencePurgedAt", undefined),
         )
         .first();
-      if (
-        !source ||
-        !linked ||
-        linked.coverage === "gap" ||
-        source.status !== "user_accepted" ||
-        source.effectiveStatus !== "user_accepted" ||
-        source.rightsStatus !== "permitted" ||
-        source.conflictStatus !== "clear" ||
-        source.evidencePurgedAt ||
-        !excerpt?.excerpt ||
-        excerpt.rightsStatus !== "permitted"
-      )
+      if (!source || !linked || linked.coverage === "gap" || source.status !== "user_accepted" || source.effectiveStatus !== "user_accepted" || source.conflictStatus !== "clear" || source.evidencePurgedAt || !excerpt)
         throw new Error("evidence_unavailable");
-      sources.push({
+      const base = {
         alias: `source-${String(sources.length + 1).padStart(3, "0")}`,
         sourceSnapshotId: sourceId,
         sourceExcerptId: excerpt._id,
-        excerpt: excerpt.excerpt,
-      });
+      };
+      if (source.rightsStatus === "permitted" && excerpt.rightsStatus === "permitted" && excerpt.excerpt?.trim()) {
+        sources.push({ ...base, excerpt: excerpt.excerpt });
+        continue;
+      }
+      const identity = await ctx.db.get(source.sourceIdentityId);
+      if (!identity || identity.userId !== args.tokenIdentifier || identity.origin !== "folder_document" || !identity.folderDocumentId || typeof source.contentHash !== "string" || typeof source.sourceRevision !== "string") throw new Error("evidence_unavailable");
+      sources.push({ ...base, folderEvidence: { documentId: String(identity.folderDocumentId), contentHash: source.contentHash, sourceRevision: source.sourceRevision } });
     }
     if (!sources.length) throw new Error("evidence_unavailable");
     return {
@@ -625,16 +623,7 @@ export const commitSessionContentCandidate = internalMutation({
     const sourceEvidence = new Map<string, { sourceExcerptId: string }>();
     for (const sourceId of job.dispatchSupportingSourceSnapshotIds ?? []) {
       const source = await ctx.db.get(sourceId);
-      if (
-        !source ||
-        source.userId !== args.tokenIdentifier ||
-        source.status !== "user_accepted" ||
-        (source.effectiveStatus &&
-          source.effectiveStatus !== "user_accepted") ||
-        source.rightsStatus !== "permitted" ||
-        source.conflictStatus !== "clear" ||
-        source.evidencePurgedAt !== undefined
-      ) {
+      if (!source || source.userId !== args.tokenIdentifier || source.status !== "user_accepted" || (source.effectiveStatus && source.effectiveStatus !== "user_accepted") || source.conflictStatus !== "clear" || source.evidencePurgedAt !== undefined) {
         await block(ctx, job, "evidence_unavailable");
         return { status: "blocked" as const };
       }
@@ -647,11 +636,10 @@ export const commitSessionContentCandidate = internalMutation({
             .eq("evidencePurgedAt", undefined),
         )
         .first();
-      if (
-        !excerpt ||
-        excerpt.rightsStatus !== "permitted" ||
-        !excerpt.excerpt
-      ) {
+      const identity = await ctx.db.get(source.sourceIdentityId);
+      const storedEvidence = excerpt?.rightsStatus === "permitted" && !!excerpt.excerpt?.trim() && source.rightsStatus === "permitted";
+      const folderLocator = !!excerpt && identity?.userId === args.tokenIdentifier && identity.origin === "folder_document" && !!identity.folderDocumentId && typeof source.contentHash === "string" && typeof source.sourceRevision === "string";
+      if (!excerpt || (!storedEvidence && !folderLocator)) {
         await block(ctx, job, "evidence_unavailable");
         return { status: "blocked" as const };
       }
@@ -836,6 +824,38 @@ export const executeSessionContentGeneration = internalAction({
       );
       return { status: "generation_failed" };
     }
+    const providerModel = input.model;
+    const folderSources = input.sources.flatMap((source) => source.folderEvidence
+      ? [{ alias: source.alias, ...source.folderEvidence }]
+      : []);
+    if (folderSources.length > 0) {
+      try {
+        const retrieved = await retrieveLearnV2FolderEvidence({
+          query: `${input.objective.title} ${input.objective.capability}`.trim(),
+          userId: args.tokenIdentifier,
+          sources: folderSources,
+        });
+        input = {
+          ...input,
+          sources: input.sources.map((source) => source.excerpt?.trim()
+            ? source
+            : { ...source, excerpt: retrieved.get(source.alias) ?? "" }),
+        };
+      } catch {
+        await ctx.runMutation(internal.learnV2SessionContent.terminalizeSessionContentGeneration, {
+          ...args, leaseToken: lease.leaseToken, expectedRevision: begun.revision,
+          reason: "evidence_unavailable", sessionStatus: "blocked",
+        });
+        return { status: "blocked" };
+      }
+    }
+    if (input.sources.some((source) => !source.excerpt.trim())) {
+      await ctx.runMutation(internal.learnV2SessionContent.terminalizeSessionContentGeneration, {
+        ...args, leaseToken: lease.leaseToken, expectedRevision: begun.revision,
+        reason: "evidence_unavailable", sessionStatus: "blocked",
+      });
+      return { status: "blocked" };
+    }
     await ctx.runMutation(
       internal.learnV2SessionContent.markSessionContentDispatchStarted,
       {
@@ -846,7 +866,7 @@ export const executeSessionContentGeneration = internalAction({
     );
     try {
       const response = await generateCompletion({
-        model: input.model,
+        model: providerModel,
         temperature: 0,
         maxAttempts: 1,
         allowProviderFallbacks: false,
@@ -865,6 +885,7 @@ export const executeSessionContentGeneration = internalAction({
             role: "user",
             content: JSON.stringify({
               version: "learn-v2.session-content.v1",
+              ordering: "Return blocks and claims in ascending array order, with order equal to the zero-based array index.",
               objective: input.objective,
               sources: input.sources.map(({ alias, excerpt }) => ({
                 alias,
@@ -885,8 +906,11 @@ export const executeSessionContentGeneration = internalAction({
         },
       );
       const raw = JSON.parse(response.choices[0]!.message.content) as {
-        claims?: Array<{ supportSourceSnapshotIds?: string[] }>;
+        blocks?: Array<{ order?: number }>;
+        claims?: Array<{ order?: number; supportSourceSnapshotIds?: string[] }>;
       };
+      raw.blocks?.forEach((block, index) => { block.order = index; });
+      raw.claims?.forEach((claim, index) => { claim.order = index; });
       const aliases = new Map(
         input.sources.map((source) => [
           source.alias,
@@ -920,7 +944,7 @@ export const executeSessionContentGeneration = internalAction({
         }),
       );
       const verifier = await generateCompletion({
-        model: input.model,
+        model: providerModel,
         temperature: 0,
         maxAttempts: 1,
         allowProviderFallbacks: false,

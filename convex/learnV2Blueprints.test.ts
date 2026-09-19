@@ -387,14 +387,18 @@ describe('Learn V2 evidence-bound Blueprint generation', () => {
       expect(map?.objectives.every(objective => objective.coverage === 'strong'
         && objective.sourceLinks.every(link => link.evidenceStatus === 'evidence_available'))).toBe(true)
       expect(fetchMock).toHaveBeenCalledTimes(2)
-      const searchBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as { filters: unknown }
+      const searchBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as {
+        filters: unknown
+        ranking_options?: unknown
+        score_threshold?: unknown
+      }
       expect(searchBody.filters).toEqual({
-        type: 'and',
-        filters: [
-          { type: 'eq', key: 'userid', value: identity.tokenIdentifier },
-          { type: 'or', filters: [{ type: 'eq', key: 'documentid', value: String(folderEvidence.documentId) }] },
-        ],
+        type: 'eq',
+        key: 'documentid',
+        value: String(folderEvidence.documentId),
       })
+      expect(searchBody.ranking_options).toEqual({ score_threshold: 0.05 })
+      expect(searchBody.score_threshold).toBeUndefined()
       expect(JSON.stringify(searchBody)).not.toContain('private-notes.txt')
       const requestBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body)) as { messages: Array<{ content: string }> }
       const modelInput = requestBody.messages.at(-1)?.content ?? ''
@@ -526,10 +530,13 @@ describe('Learn V2 evidence-bound Blueprint generation', () => {
     process.env.NUXT_CLOUDFLARE_ACCOUNT_ID = 'test-account'
     process.env.NUXT_CLOUDFLARE_AI_GATEWAY_ID = 'test-gateway'
     process.env.NUXT_OPENROUTER_API_KEY = 'test-key'
+    const providerOutput = providerCandidate()
+    providerOutput.milestones.forEach(milestone => { milestone.order = 0 })
+    providerOutput.objectives.forEach(objective => { objective.order = 0 })
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(JSON.stringify({
       id: 'blueprint-response',
       model: 'openai/test-blueprint',
-      choices: [{ index: 0, message: { role: 'assistant', content: JSON.stringify(providerCandidate()) }, finish_reason: 'stop' }],
+      choices: [{ index: 0, message: { role: 'assistant', content: JSON.stringify(providerOutput) }, finish_reason: 'stop' }],
       usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
     }), { status: 200 }))
     try {
@@ -555,10 +562,20 @@ describe('Learn V2 evidence-bound Blueprint generation', () => {
       const request = fetchMock.mock.calls[0]?.[1]
       const body = JSON.parse(String(request?.body)) as {
         messages: Array<{ content: string }>
-        response_format: { type: string, json_schema: { strict: boolean, schema: { additionalProperties: boolean } } }
+        response_format: { type: string, json_schema: { strict: boolean, schema: Record<string, unknown> } }
         provider: { require_parameters: boolean, allow_fallbacks: boolean }
       }
       expect(body.response_format).toMatchObject({ type: 'json_schema', json_schema: { strict: true, schema: { additionalProperties: false } } })
+      const invalidTypedKeywords: string[] = []
+      const inspectSchema = (value: unknown, path = '$') => {
+        if (!value || typeof value !== 'object') return
+        const node = value as Record<string, unknown>
+        if (('const' in node || 'enum' in node) && typeof node.type !== 'string') invalidTypedKeywords.push(path)
+        for (const [key, child] of Object.entries(node)) inspectSchema(child, `${path}.${key}`)
+      }
+      inspectSchema(body.response_format.json_schema.schema)
+      expect(invalidTypedKeywords).toEqual([])
+      expect(JSON.stringify(body.response_format.json_schema.schema)).not.toContain('uniqueItems')
       expect(body.provider).toEqual({ require_parameters: true, allow_fallbacks: false })
       expect(body.messages.at(-1)?.content).toContain('source-001')
       expect(body.messages.at(-1)?.content).toContain('folder_plus_web')

@@ -1,4 +1,5 @@
 import { readConfiguredRuntimeValue } from './runtime-config'
+import { deterministicLearnV2FolderEvidence } from './learn-v2-e2e-fixtures'
 
 const MAX_RESPONSE_BYTES = 512_000
 const MAX_RESULTS = 32
@@ -10,6 +11,21 @@ export type FolderEvidenceSource = {
   documentId: string
   contentHash: string
   sourceRevision: string
+}
+
+function documentFilters(sources: FolderEvidenceSource[]): Record<string, unknown> {
+  const documentIds = [...new Set(sources.map(source => source.documentId))]
+  if (documentIds.length === 1) {
+    return { type: 'eq', key: 'documentid', value: filterValue(documentIds[0]!) }
+  }
+  return {
+    type: 'or',
+    filters: documentIds.map(documentId => ({
+      type: 'eq',
+      key: 'documentid',
+      value: filterValue(documentId),
+    })),
+  }
 }
 
 type AiSearchEnvelope = {
@@ -75,6 +91,8 @@ export async function retrieveLearnV2FolderEvidence(args: {
   signal?: AbortSignal
 }): Promise<Map<string, string>> {
   if (args.sources.length === 0) return new Map()
+  const deterministic = await deterministicLearnV2FolderEvidence(args.sources)
+  if (deterministic) return deterministic
   const runtime = globalThis as typeof globalThis & { useRuntimeConfig?: () => Record<string, unknown> }
   const config = runtime.useRuntimeConfig?.() ?? {}
   const accountId = readConfiguredRuntimeValue(config.cloudflareAccountId, 'NUXT_CLOUDFLARE_ACCOUNT_ID', 'CF_ACCOUNT_ID')
@@ -89,17 +107,8 @@ export async function retrieveLearnV2FolderEvidence(args: {
     body: JSON.stringify({
       query: args.query,
       max_num_results: MAX_RESULTS,
-      score_threshold: 0.05,
-      filters: {
-        type: 'and',
-        filters: [
-          { type: 'eq', key: 'userid', value: filterValue(args.userId) },
-          {
-            type: 'or',
-            filters: args.sources.map(source => ({ type: 'eq', key: 'documentid', value: filterValue(source.documentId) })),
-          },
-        ],
-      },
+      ranking_options: { score_threshold: 0.05 },
+      filters: documentFilters(args.sources),
     }),
   })
   if (!response.ok) throw new Error(`Folder evidence search returned ${response.status}`)
