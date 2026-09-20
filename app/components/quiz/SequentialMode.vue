@@ -43,6 +43,9 @@ const isLast = computed(() => props.currentIndex >= props.questions.length - 1)
 const currentAnswer = computed(() => localAnswers.value[currentQuestion.value?._id as string] ?? '')
 const currentFeedback = computed(() => feedbackMap.value[currentQuestion.value?._id as string] ?? null)
 const hasAnswered = computed(() => currentAnswer.value.trim().length > 0)
+const currentQuestionIsFreeForm = computed(() =>
+  currentQuestion.value?.type === 'free-response' || currentQuestion.value?.type === 'fill_in_the_blank',
+)
 
 function setAnswer(value: string) {
   if (!currentQuestion.value || currentFeedback.value) return
@@ -87,7 +90,10 @@ defineExpose({ receiveFeedback })
       :transition="springSnappy"
       class="flex-1 space-y-6 p-6"
     >
-      <div v-if="currentFeedback && immediateFeedback" class="rounded-lg p-3">
+      <div
+        v-if="currentFeedback && immediateFeedback && (currentFeedback.isCorrect || !currentQuestionIsFreeForm)"
+        class="rounded-lg p-3"
+      >
         <div
           v-if="currentFeedback.isCorrect"
           class="flex items-center gap-2 rounded-lg bg-green-500/10 px-4 py-3 text-green-500"
@@ -144,9 +150,8 @@ defineExpose({ receiveFeedback })
       </div>
 
       <div v-if="currentFeedback && immediateFeedback && !currentFeedback.isCorrect && currentQuestion.explanation" class="rounded-lg bg-muted/50 p-4 text-sm">
-        <p class="mb-1 text-xs font-medium text-muted-foreground">Correct answer:</p>
-        <p class="text-green-500">{{ currentFeedback.correctAnswer }}</p>
-        <p class="mt-2 text-muted-foreground">{{ currentQuestion.explanation }}</p>
+        <p class="mb-1 text-xs font-medium text-muted-foreground">Explanation</p>
+        <p class="text-muted-foreground">{{ currentQuestion.explanation }}</p>
       </div>
 
       <button
