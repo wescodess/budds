@@ -53,7 +53,10 @@ export default defineNuxtConfig({
       nodeCompat: true,
     },
     externals: {
-      inline: [fileURLToPath(new URL('./convex/_generated/', import.meta.url))],
+      inline: [
+        fileURLToPath(new URL('./convex/_generated/', import.meta.url)),
+        fileURLToPath(new URL('./shared/quiz-semantic-calibration.mjs', import.meta.url)),
+      ],
     },
   },
   modules: ['shadcn-nuxt', 'nuxt-convex', '@onmax/nuxt-better-auth', '@nuxtjs/mdc'],

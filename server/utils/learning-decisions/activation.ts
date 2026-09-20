@@ -5,7 +5,7 @@ import activation from '../../../convex/quizSemanticActivationManifest.json'
 import bundledReport from '../../../workers/laya-evaluator/calibration/report.json'
 import bundledCalibrator from '../../../workers/laya-evaluator/calibration/probability-calibrator.v1.json'
 import bundledThresholds from '../../../workers/laya-evaluator/calibration/thresholds.json'
-import { verifyQuizSemanticActivation, type ActivationDecision } from '../../../scripts/lib/quiz-semantic-calibration.mjs'
+import { verifyQuizSemanticActivation, type ActivationDecision } from '../../../shared/quiz-semantic-calibration.mjs'
 
 export const QUIZ_SEMANTIC_ACTIVATION_MANIFEST_VERSION = activation.manifestVersion
 

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
-import { applyTemperature, calculateCalibrationEvidence, CALIBRATION_LABELS, fitTemperature } from './lib/quiz-semantic-calibration.mjs'
+import { applyTemperature, calculateCalibrationEvidence, CALIBRATION_LABELS, fitTemperature } from '../shared/quiz-semantic-calibration.mjs'
 
 const root = process.cwd()
 const calibrationDirectory = path.join(root, 'workers/laya-evaluator/calibration')

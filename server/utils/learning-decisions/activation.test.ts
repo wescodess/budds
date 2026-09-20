@@ -4,7 +4,7 @@ import {
   isQuizSemanticAdvisoryEnabled,
   QUIZ_SEMANTIC_ACTIVATION_MANIFEST_VERSION,
 } from './activation'
-import { applyTemperature, calculateCalibrationMetrics, fitTemperature, verifyQuizSemanticActivation } from '../../../scripts/lib/quiz-semantic-calibration.mjs'
+import { applyTemperature, calculateCalibrationMetrics, fitTemperature, verifyQuizSemanticActivation } from '../../../shared/quiz-semantic-calibration.mjs'
 
 const hash = 'a'.repeat(64)
 const deployment = { applicationEnvironment: 'development', pagesEnvironment: 'preview', pagesBranch: 'dev', convexUrl: 'https://cautious-elephant-39.convex.cloud' }

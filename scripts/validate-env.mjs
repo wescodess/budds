@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
-import { verifyQuizSemanticActivation } from './lib/quiz-semantic-calibration.mjs'
+import { verifyQuizSemanticActivation } from '../shared/quiz-semantic-calibration.mjs'
 
 const phase = process.argv[2] || 'build'
 const audioWorkflowPhase = phase === 'audio-workflow'
