@@ -13,7 +13,7 @@ import {
 } from '../../utils/learning-decisions'
 import { readConfiguredRuntimeValue } from '../../utils/runtime-config'
 import { requireRateLimit } from '../../utils/rate-limit'
-import { isQuizSemanticAdvisoryEnabled } from '../../utils/learning-decisions/activation'
+import { bundledQuizSemanticActivationDecision } from '../../utils/learning-decisions/activation'
 
 type PendingAssessment = {
   assessmentId: Id<'quizAnswerAssessments'>
@@ -40,7 +40,13 @@ export default defineEventHandler(async (event) => {
   const runtimeConfig = useRuntimeConfig(event)
   const mode = readConfiguredRuntimeValue(runtimeConfig.learningDecisionMode, 'NUXT_LEARNING_DECISION_MODE')
   const activationManifest = readConfiguredRuntimeValue(runtimeConfig.quizSemanticActivationManifest, 'NUXT_QUIZ_SEMANTIC_ACTIVATION_MANIFEST')
-  if (!isQuizSemanticAdvisoryEnabled(mode, activationManifest)) return { status: 'disabled' as const }
+  const activation = bundledQuizSemanticActivationDecision(mode, activationManifest, {
+    applicationEnvironment: readConfiguredRuntimeValue(runtimeConfig.quizSemanticApplicationEnvironment, 'NUXT_APPLICATION_ENVIRONMENT'),
+    pagesEnvironment: readConfiguredRuntimeValue(runtimeConfig.quizSemanticPagesEnvironment, 'CF_PAGES_ENVIRONMENT'),
+    pagesBranch: readConfiguredRuntimeValue(runtimeConfig.quizSemanticPagesBranch, 'CF_PAGES_BRANCH'),
+    convexUrl: readConfiguredRuntimeValue(runtimeConfig.public?.convex?.url, 'NUXT_PUBLIC_CONVEX_URL'),
+  })
+  if (!activation.enabled) return { status: 'disabled' as const, reason: activation.code }
   const body = await readBody<{ attemptId?: string }>(event)
   if (!body?.attemptId?.trim()) throw createError({ statusCode: 400, message: 'attemptId is required' })
   const client = makeConvexClient(event)

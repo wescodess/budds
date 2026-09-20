@@ -1,5 +1,7 @@
 import fs from 'node:fs'
+import { createHash } from 'node:crypto'
 import path from 'node:path'
+import { verifyQuizSemanticActivation } from './lib/quiz-semantic-calibration.mjs'
 
 const phase = process.argv[2] || 'build'
 const audioWorkflowPhase = phase === 'audio-workflow'
@@ -109,7 +111,34 @@ const quizSemanticActivationVersion = mergedEnv.NUXT_QUIZ_SEMANTIC_ACTIVATION_MA
 const quizSemanticActivationPath = path.join(projectRoot, 'convex/quizSemanticActivationManifest.json')
 const quizSemanticActivation = !audioWorkflowPhase && fs.existsSync(quizSemanticActivationPath)
   ? JSON.parse(fs.readFileSync(quizSemanticActivationPath, 'utf8'))
-  : { status: 'not-approved', allowedModes: [], approvedCalibrationEvidence: null, manifestVersion: '' }
+  : { status: 'not-approved', allowedModes: [], evidence: null, manifestVersion: '' }
+
+function readCalibrationEvidence() {
+  const report = readJsonArtifact(quizSemanticActivation?.evidence?.reportPath)
+  const thresholds = readJsonArtifact(quizSemanticActivation?.thresholds?.path)
+  const fit = readJsonArtifact(quizSemanticActivation?.corpora?.fit?.path)
+  const heldout = readJsonArtifact(quizSemanticActivation?.corpora?.heldout?.path)
+  const evaluationManifest = readJsonArtifact(quizSemanticActivation?.evaluationManifest?.path)
+  const calibrator = readJsonArtifact(quizSemanticActivation?.calibrator?.path)
+  return {
+    report: report.value,
+    reportSha256: report.sha256,
+    thresholds: thresholds.value,
+    thresholdsSha256: thresholds.sha256,
+    artifactSha256: { fit: fit.sha256, heldout: heldout.sha256, evaluationManifest: evaluationManifest.sha256, calibrator: calibrator.sha256 },
+    calibrator: calibrator.value,
+  }
+}
+
+function readJsonArtifact(relativePath) {
+  if (typeof relativePath !== 'string') return { value: null, sha256: '' }
+  const artifactPath = path.resolve(projectRoot, relativePath)
+  if (!artifactPath.startsWith(`${projectRoot}${path.sep}`) || !fs.existsSync(artifactPath)) return { value: null, sha256: '' }
+  const bytes = fs.readFileSync(artifactPath)
+  const sha256 = createHash('sha256').update(bytes).digest('hex')
+  try { return { value: JSON.parse(bytes.toString('utf8')), sha256 } }
+  catch { return { value: null, sha256 } }
+}
 
 function isHttpUrl(value) {
   try {
@@ -183,11 +212,21 @@ if (!audioWorkflowPhase && (learningDecisionMode === 'shadow' || learningDecisio
   if (learningDecisionProvider !== 'laya') invalidBlocking.push({ kind: 'var', label: 'Learning decision provider must be laya for this pilot', names: ['NUXT_LEARNING_DECISION_PROVIDER'] })
   if (layaEvaluatorToken.length < 32) invalidBlocking.push({ kind: 'secret', label: 'Laya evaluator credential must be at least 32 characters', names: ['NUXT_LAYA_EVALUATOR_TOKEN'] })
   if (learningDecisionMode === 'advisory' && quizAssessmentWriteSecret.length < 32) invalidBlocking.push({ kind: 'secret', label: 'Quiz assessment write credential must be at least 32 characters', names: ['NUXT_QUIZ_ASSESSMENT_WRITE_SECRET'] })
-  if (learningDecisionMode === 'advisory' && (quizSemanticActivation.status !== 'approved'
-    || !quizSemanticActivation.allowedModes?.includes('advisory')
-    || !quizSemanticActivation.approvedCalibrationEvidence
-    || quizSemanticActivationVersion !== quizSemanticActivation.manifestVersion)) {
-    invalidBlocking.push({ kind: 'var', label: 'Quiz semantic advisory mode requires the committed approved calibration manifest', names: ['NUXT_QUIZ_SEMANTIC_ACTIVATION_MANIFEST'] })
+  if (learningDecisionMode === 'advisory') {
+    const evidence = readCalibrationEvidence()
+    const activationDecision = verifyQuizSemanticActivation({
+      mode: learningDecisionMode,
+      configuredManifestVersion: quizSemanticActivationVersion,
+      manifest: quizSemanticActivation,
+      ...evidence,
+      deployment: {
+        applicationEnvironment: mergedEnv.NUXT_APPLICATION_ENVIRONMENT || '',
+        pagesEnvironment: mergedEnv.CF_PAGES_ENVIRONMENT || '',
+        pagesBranch: mergedEnv.CF_PAGES_BRANCH || '',
+        convexUrl: mergedEnv.NUXT_PUBLIC_CONVEX_URL || mergedEnv.CONVEX_URL || '',
+      },
+    })
+    if (!activationDecision.enabled) invalidBlocking.push({ kind: 'var', label: `Quiz semantic advisory mode requires the committed approved calibration manifest (${activationDecision.code})`, names: ['NUXT_QUIZ_SEMANTIC_ACTIVATION_MANIFEST'] })
   }
   if (layaEvaluatorUrl && !isHttpUrl(layaEvaluatorUrl)) invalidBlocking.push({ kind: 'var', label: 'Laya evaluator local URL must be an HTTP(S) URL', names: ['NUXT_LAYA_EVALUATOR_URL'] })
 }

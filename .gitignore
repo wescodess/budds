@@ -26,3 +26,7 @@ wrangler.local.toml
 /test-results/
 /playwright-report/
 /blob-report/
+/workers/laya-evaluator/calibration/.fit-report-work.json
+/workers/laya-evaluator/calibration/.heldout-report-work.json
+/workers/laya-evaluator/calibration/probability-calibrator.candidate.json
+/workers/laya-evaluator/calibration/report.candidate.json

@@ -4,10 +4,11 @@ const query = vi.hoisted(() => vi.fn())
 const mutation = vi.hoisted(() => vi.fn())
 const evaluateTypedDecision = vi.hoisted(() => vi.fn())
 const requireRateLimit = vi.hoisted(() => vi.fn(async () => undefined))
+const activationDecision = vi.hoisted(() => vi.fn(() => ({ enabled: true, code: 'enabled' })))
 
 vi.mock('../../utils/convex-client', () => ({ makeConvexClient: vi.fn(() => ({ query, mutation })) }))
 vi.mock('../../utils/rate-limit', () => ({ requireRateLimit }))
-vi.mock('../../utils/learning-decisions/activation', () => ({ isQuizSemanticAdvisoryEnabled: (mode: unknown) => mode === 'advisory' }))
+vi.mock('../../utils/learning-decisions/activation', () => ({ bundledQuizSemanticActivationDecision: activationDecision }))
 vi.mock('../../utils/learning-decisions', async importOriginal => ({
   ...await importOriginal<typeof import('../../utils/learning-decisions')>(),
   evaluateTypedDecision,
@@ -47,7 +48,8 @@ describe('POST /api/quiz/assess-attempt', () => {
     query.mockReset().mockResolvedValue(pending)
     mutation.mockReset().mockImplementation(async (_ref, args: { assessmentIds?: string[] }) => args.assessmentIds ?? null)
     evaluateTypedDecision.mockReset()
-    vi.mocked(readBody).mockResolvedValue({ attemptId: 'attempt_123' })
+    activationDecision.mockReset().mockReturnValue({ enabled: true, code: 'enabled' })
+    vi.mocked(readBody).mockReset().mockResolvedValue({ attemptId: 'attempt_123' })
     vi.mocked(useRuntimeConfig).mockReturnValue({ learningDecisionMode: 'advisory', quizAssessmentWriteSecret: 'test-assessment-write-secret-long-enough', public: { convex: { url: 'https://convex.test' } } } as ReturnType<typeof useRuntimeConfig>)
     vi.spyOn(console, 'info').mockImplementation(() => undefined)
   })
@@ -84,7 +86,16 @@ describe('POST /api/quiz/assess-attempt', () => {
 
   test('does not expose or run advisory assessment outside advisory mode', async () => {
     vi.mocked(useRuntimeConfig).mockReturnValue({ learningDecisionMode: 'shadow' } as ReturnType<typeof useRuntimeConfig>)
-    await expect(handler(event())).resolves.toEqual({ status: 'disabled' })
+    activationDecision.mockReturnValue({ enabled: false, code: 'mode_off' })
+    await expect(handler(event())).resolves.toEqual({ status: 'disabled', reason: 'mode_off' })
+    expect(query).not.toHaveBeenCalled()
+    expect(evaluateTypedDecision).not.toHaveBeenCalled()
+  })
+
+  test.each(['evidence_hash_mismatch', 'artifact_mismatch', 'deployment_mismatch', 'production_forbidden'])('fails closed at the endpoint before body or provider work for %s', async (code) => {
+    activationDecision.mockReturnValue({ enabled: false, code })
+    await expect(handler(event())).resolves.toEqual({ status: 'disabled', reason: code })
+    expect(readBody).not.toHaveBeenCalled()
     expect(query).not.toHaveBeenCalled()
     expect(evaluateTypedDecision).not.toHaveBeenCalled()
   })

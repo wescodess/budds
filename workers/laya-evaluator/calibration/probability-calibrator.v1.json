@@ -1,0 +1,5 @@
+{
+  "schemaVersion": "budds.laya-semantic-temperature-calibrator.v1",
+  "status": "not-fitted",
+  "note": "Fail-closed placeholder. Replace only with a reviewed real-model fit artifact generated from fit.v1.jsonl."
+}

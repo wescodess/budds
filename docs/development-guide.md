@@ -99,6 +99,17 @@ the mode alone fails environment validation and exposes neither the learner card
 nor the assessment POST. Activate and validate this separately per environment;
 this change does not enable advisory mode in production.
 
+Calibration is a two-phase, fail-closed process. `fit.v1.jsonl` and
+`heldout.v1.jsonl` each contain 800 balanced cases in disjoint scenario groups.
+Run fit only against a real evaluator explicitly using
+`LAYA_CALIBRATION_MODE=fit`, the sole uncalibrated inference mode. Review and
+install its temperature-calibrator candidate before evaluating held-out data.
+The report binds the exact corpora, evaluator manifest, calibrator, thresholds,
+and observed package/model checksums. A recorded 120-second calibration timeout
+override is not operational proof for the unchanged 12-second client and
+11-second container deadlines; smoke a production-sized eight-item batch under
+the normal limits before activation.
+
 Advisory mode additionally requires one independently generated 32+ character
 write capability installed as `NUXT_QUIZ_ASSESSMENT_WRITE_SECRET` in Pages and
 as `QUIZ_ASSESSMENT_WRITE_SECRET` in the matching Convex deployment. Nitro uses
@@ -164,6 +175,9 @@ CONVEX_URL=<local-convex-url>
 | `pnpm audio:workflow:dev` | Start the local Audio Overview Workflow Worker on port 8787 |
 | `pnpm audio:workflow:test` | Run the standalone Workflow tests |
 | `pnpm audio:workflow:typecheck` | Type-check the standalone Workflow Worker |
+| `pnpm laya:quiz-semantic:corpus` | Verify both frozen 800-row fit/held-out corpora |
+| `LAYA_CALIBRATION_PHASE=fit pnpm laya:quiz-semantic:evaluate` | Generate a candidate calibrator from real raw-fit inference |
+| `LAYA_CALIBRATION_PHASE=heldout pnpm laya:quiz-semantic:evaluate` | Generate raw/calibrated held-out evidence with an installed calibrator |
 | `node scripts/validate-env.mjs audio-workflow --strict` | Validate Worker secrets, callback origin, and the private R2 binding |
 | `npx convex dev` | Start Convex dev server (syncs schema and functions) |
 | `npx convex deploy` | Deploy Convex to production |

@@ -32,6 +32,15 @@ const result = {
   decisions: [{ id: 'q1', label: 'supported', confidence: 0.9 }],
 }
 const env = { LAYA_EVALUATOR_TOKEN: token, LAYA_DAILY_ALLOWANCE: '2' } as Env
+const realHeaders = {
+  'X-Laya-Evidence-Backend': 'real',
+  'X-Laya-Package-Version': '0.3.3',
+  'X-Laya-Model-Revision': result.modelRevision,
+  'X-Laya-Model-SHA256': 'a'.repeat(64),
+  'X-Laya-Evaluation-Manifest-SHA256': 'b'.repeat(64),
+  'X-Laya-Calibrator-Status': 'valid',
+  'X-Laya-Calibrator-SHA256': 'c'.repeat(64),
+}
 
 function request(path = '/v1/evaluate', init: RequestInit = {}) {
   return new Request(`https://worker.test${path}`, {
@@ -117,12 +126,24 @@ describe('container admission gate', () => {
     }
     const evaluator = new LayaEvaluator({ storage } as unknown as ConstructorParameters<typeof LayaEvaluator>[0], env)
     let release!: () => void
-    containerFetch.mockImplementationOnce(() => new Promise<Response>((resolve) => { release = () => resolve(Response.json(result)) }))
+    containerFetch.mockImplementationOnce(() => new Promise<Response>((resolve) => { release = () => resolve(Response.json(result, { headers: realHeaders })) }))
     const first = evaluator.fetch(new Request('https://container/v1/evaluate', { method: 'POST', body }))
     await vi.waitFor(() => expect(containerFetch).toHaveBeenCalled())
     expect((await evaluator.fetch(new Request('https://container/v1/evaluate', { method: 'POST', body }))).status).toBe(429)
     release()
     expect((await first).status).toBe(200)
+
+    containerFetch.mockResolvedValueOnce(Response.json(result, { headers: { 'X-Laya-Evidence-Backend': 'real' } }))
+    allowance = { day: new Date().toISOString().slice(0, 10), used: 0 }
+    expect((await evaluator.fetch(new Request('https://container/v1/evaluate', { method: 'POST', body }))).status).toBe(502)
+
+    containerFetch.mockResolvedValueOnce(Response.json(result, { headers: { ...realHeaders, 'X-Laya-Evidence-Backend': 'fake' } }))
+    allowance = { day: new Date().toISOString().slice(0, 10), used: 0 }
+    expect((await evaluator.fetch(new Request('https://container/v1/evaluate', { method: 'POST', body }))).status).toBe(502)
+
+    containerFetch.mockResolvedValueOnce(Response.json(result, { headers: { ...realHeaders, 'X-Laya-Calibrator-Status': 'raw-fit', 'X-Laya-Calibration-Mode': 'fit' } }))
+    allowance = { day: new Date().toISOString().slice(0, 10), used: 0 }
+    expect((await evaluator.fetch(new Request('https://container/v1/evaluate', { method: 'POST', body }))).status).toBe(502)
 
     containerFetch.mockResolvedValueOnce(Response.json({ unexpected: true }))
     allowance = { day: new Date().toISOString().slice(0, 10), used: 0 }

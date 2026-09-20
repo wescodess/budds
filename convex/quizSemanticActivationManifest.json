@@ -1,7 +1,54 @@
 {
   "manifestVersion": "quiz-semantic-advisory.v1",
   "status": "not-approved",
-  "approvedCalibrationEvidence": null,
+  "evidence": {
+    "reportPath": "workers/laya-evaluator/calibration/report.json",
+    "sha256": null
+  },
+  "thresholds": {
+    "path": "workers/laya-evaluator/calibration/thresholds.json",
+    "sha256": "92bdbd224d175eb04e11192604fe920ffbe4c3bde74c4fbefbdea9f17e03c232"
+  },
+  "corpora": {
+    "fit": {
+      "path": "workers/laya-evaluator/calibration/fit.v1.jsonl",
+      "version": "quiz-semantic-fit.v1",
+      "sha256": "1a5eb8d4a929f12d97fabe86117d24fad9c8ffb48ac3f0e07e2a70f9be0f373b"
+    },
+    "heldout": {
+      "path": "workers/laya-evaluator/calibration/heldout.v1.jsonl",
+      "version": "quiz-semantic-heldout.v1",
+      "sha256": "295ecf22f5df3ce8cc55c459862d0c9b03d8ac01b3bbdbd23fb990c79183c128"
+    }
+  },
+  "evaluationManifest": {
+    "path": "workers/laya-evaluator/learningDecisionManifest.json",
+    "sha256": "f063d98aa2d560d4df623f5c05d31f3120dc19a487e94bb6520bdca1dad57d29"
+  },
+  "calibrator": {
+    "path": "workers/laya-evaluator/calibration/probability-calibrator.v1.json",
+    "sha256": "6b5b8a9ee2c8b0b0096bb182c7fdf4836c787969166ea494dd2c62cce46ee8cf",
+    "status": "not-fitted"
+  },
   "allowedModes": ["off", "shadow"],
-  "note": "Advisory learner UI remains disabled until a reviewed calibration artifact changes this manifest."
+  "minimumProvenanceTier": "synthetic_reference",
+  "requiredLabels": ["fully_correct", "partially_correct", "incorrect", "uncertain"],
+  "pins": {
+    "provider": "laya",
+    "packageVersion": "0.3.3",
+    "modelRevision": "f9ab0b228f0fc0f14d873dbc99038f135c2da1b2",
+    "modelSha256": "4fa56de72383a9d3efa9cfa78955733c81b9fc8067a587ca4beb82c78107a24e",
+    "contractVersion": "budds.learning-decision-contract.v2",
+    "snapshotVersion": "quiz-answer-snapshot.v2",
+    "rubricVersion": "quiz.free_response_assessment.v1",
+    "thresholdVersion": "quiz-semantic-development-thresholds.v1"
+  },
+  "deployment": {
+    "applicationEnvironment": "development",
+    "pagesEnvironment": "preview",
+    "pagesBranch": "dev",
+    "convexUrl": "https://cautious-elephant-39.convex.cloud"
+  },
+  "productionPolicy": "human-adjudicated-evidence-and-code-policy-change-required",
+  "note": "Fail closed until a reviewed real-model report is committed, hashed, and explicitly approved. Synthetic reference evidence is development-only."
 }
