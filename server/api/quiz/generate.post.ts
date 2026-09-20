@@ -37,6 +37,7 @@ export default defineEventHandler(async (event) => {
     difficulty?: string
     resourceIds?: string[]
     taskId?: string
+    language?: string
   }>(event)
 
   if (!body?.folderId?.trim()) {
@@ -168,18 +169,9 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 502, message: msg })
     }
 
-    // Advisory-only and bounded. Nothing below reads its outcome, preserving
-    // quiz publication, persistence, and deterministic learner scoring.
-    await shadowEvaluateQuiz(event, parsed.questions.map((question, index) => ({
-      id: `q${index}`,
-      question: question.question,
-      options: question.options,
-      correctAnswer: question.correctAnswer,
-    }))).catch(() => undefined)
-
     const persistQuestions = parsed.questions.map((q, index) => {
-      const chunk = chunks[q.sourceIndex] ?? chunks[index] ?? chunks[0]!
-      const attrs = (chunk.attributes ?? {}) as { filename?: string; documentId?: string }
+      const chunk = chunks[q.sourceIndex]
+      const attrs = (chunk?.attributes ?? {}) as { filename?: string; documentId?: string }
       return {
         order: index,
         question: q.question,
@@ -188,10 +180,33 @@ export default defineEventHandler(async (event) => {
         correctAnswer: q.correctAnswer,
         explanation: q.explanation,
         sourceDocumentId: attrs.documentId,
-        sourceChunkContent: chunk.content,
-        sourceFilename: attrs.filename ?? 'Unknown source',
+        sourceChunkContent: chunk?.content,
+        sourceFilename: chunk ? attrs.filename ?? 'Unknown source' : undefined,
       }
     })
+
+    // Advisory-only. Each decision receives the exact, indexed source excerpt
+    // persisted with its question. Invalid/oversized evidence and an absent or
+    // unsupported language are rejected before any provider request.
+    const validQualityItems = parsed.questions.flatMap((question, index) => {
+      const chunk = chunks[question.sourceIndex]
+      return chunk ? [{
+        id: `q${index}`,
+        question: question.question,
+        options: question.options,
+        correctAnswer: question.correctAnswer,
+        language: body.language ?? '',
+        evidence: {
+          sourceIndex: question.sourceIndex,
+          excerpt: chunk.content,
+        },
+      }] : []
+    })
+    const invalidEvidenceCount = parsed.questions.length - validQualityItems.length
+    if (invalidEvidenceCount > 0) {
+      console.info('[quiz-quality-evidence]', { status: 'unavailable', reason: 'missing_evidence', itemCount: invalidEvidenceCount })
+    }
+    if (validQualityItems.length > 0) await shadowEvaluateQuiz(event, validQualityItems).catch(() => undefined)
 
     if (taskId && convexClient) {
       await setTaskProgress('Saving quiz…')
@@ -202,6 +217,7 @@ export default defineEventHandler(async (event) => {
         model,
         creationMethod: 'auto_generated' as const,
         difficulty: body.difficulty,
+        language: body.language,
         questions: persistQuestions,
       })
 

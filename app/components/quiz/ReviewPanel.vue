@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { Check, Clock3, Sparkles, TriangleAlert, X } from '@lucide/vue'
+import { Check, CircleMinus, Clock3, Sparkles, TriangleAlert, X } from '@lucide/vue'
 
 type SemanticAssessment = {
   status: 'pending' | 'available' | 'unavailable'
   label?: 'fully_correct' | 'partially_correct' | 'incorrect' | 'uncertain'
   unavailableReason?: string
+  retryable?: boolean
+  retryDueAt?: number
   deterministicScoreUnchanged: boolean
 }
 
@@ -23,20 +25,41 @@ interface ReviewQuestion {
 const props = defineProps<{
   results: ReviewQuestion[]
   semanticReviewEnabled?: boolean
+  requestFailed?: boolean
 }>()
+const emit = defineEmits<{ retrySemantic: [] }>()
 
 const activeIndex = ref(0)
 const activeResult = computed(() => props.results[activeIndex.value] ?? null)
+const currentTime = ref(Date.now())
+let retryClock: ReturnType<typeof setInterval> | undefined
+
+onMounted(() => {
+  retryClock = setInterval(() => { currentTime.value = Date.now() }, 1_000)
+})
+
+onUnmounted(() => {
+  if (retryClock) clearInterval(retryClock)
+})
 
 function truncate(text: string, max = 60) {
   return text.length > max ? `${text.slice(0, max)}...` : text
 }
 
 function semanticLabel(label?: SemanticAssessment['label']) {
-  if (label === 'fully_correct') return 'Meaning review: fully correct'
-  if (label === 'partially_correct') return 'Meaning review: partially correct'
-  if (label === 'incorrect') return 'Meaning review: incorrect'
+  if (label === 'fully_correct') return 'Strong meaning match'
+  if (label === 'partially_correct') return 'Partial meaning match'
+  if (label === 'incorrect') return 'Meaning does not align with the reference'
   return 'Meaning review: uncertain'
+}
+
+function isFreeForm(type: string) {
+  return type === 'free-response' || type === 'fill_in_the_blank'
+}
+
+function retryIsDue(assessment: SemanticAssessment) {
+  return props.requestFailed === true
+    || (assessment.retryable === true && (assessment.retryDueAt ?? 0) <= currentTime.value)
 }
 </script>
 
@@ -52,6 +75,7 @@ function semanticLabel(label?: SemanticAssessment['label']) {
         @click="activeIndex = i"
       >
         <Check v-if="r.isCorrect" class="h-3 w-3 text-green-500" />
+        <CircleMinus v-else-if="isFreeForm(r.questionType)" class="h-3 w-3 text-muted-foreground" />
         <X v-else class="h-3 w-3 text-destructive" />
         Q{{ i + 1 }}
       </button>
@@ -68,6 +92,7 @@ function semanticLabel(label?: SemanticAssessment['label']) {
       >
         <span class="mt-0.5 shrink-0">
           <Check v-if="r.isCorrect" class="h-3.5 w-3.5 text-green-500" />
+          <CircleMinus v-else-if="isFreeForm(r.questionType)" class="h-3.5 w-3.5 text-muted-foreground" />
           <X v-else class="h-3.5 w-3.5 text-destructive" />
         </span>
         <div class="min-w-0">
@@ -81,32 +106,47 @@ function semanticLabel(label?: SemanticAssessment['label']) {
       <p class="text-base font-medium sm:text-lg">{{ activeResult.questionText }}</p>
 
       <div class="mt-4 space-y-3 sm:mt-6 sm:space-y-4">
-        <div v-if="activeResult.questionType === 'multiple-choice' && activeResult.options" class="space-y-2">
-          <div
-            v-for="opt in activeResult.options"
-            :key="opt"
-            class="flex items-center gap-2 rounded-lg border px-3 py-2.5 text-sm sm:px-4 sm:py-3"
-            :class="{
-              'border-green-500 bg-green-500/10': opt === activeResult.correctAnswer,
-              'border-destructive bg-destructive/5': opt === activeResult.userAnswer && !activeResult.isCorrect && opt !== activeResult.correctAnswer,
-            }"
-          >
-            <span class="min-w-0 flex-1">{{ opt }}</span>
-            <Check v-if="opt === activeResult.correctAnswer" class="h-3.5 w-3.5 shrink-0 text-green-500" />
-            <X v-else-if="opt === activeResult.userAnswer && !activeResult.isCorrect" class="h-3.5 w-3.5 shrink-0 text-destructive" />
+        <template v-if="!isFreeForm(activeResult.questionType)">
+          <div v-if="activeResult.options" class="space-y-2">
+            <div
+              v-for="opt in activeResult.options"
+              :key="opt"
+              class="flex items-center gap-2 rounded-lg border px-3 py-2.5 text-sm sm:px-4 sm:py-3"
+              :class="{
+                'border-green-500 bg-green-500/10': opt === activeResult.correctAnswer,
+                'border-destructive bg-destructive/5': opt === activeResult.userAnswer && !activeResult.isCorrect && opt !== activeResult.correctAnswer,
+              }"
+            >
+              <span class="min-w-0 flex-1">{{ opt }}</span>
+              <Check v-if="opt === activeResult.correctAnswer" class="h-3.5 w-3.5 shrink-0 text-green-500" />
+              <X v-else-if="opt === activeResult.userAnswer && !activeResult.isCorrect" class="h-3.5 w-3.5 shrink-0 text-destructive" />
+            </div>
           </div>
-        </div>
+          <div v-else class="space-y-3">
+            <div>
+              <p class="text-xs font-medium text-muted-foreground">Your answer</p>
+              <p class="mt-1 rounded-md border px-3 py-2 text-sm" :class="activeResult.isCorrect ? 'border-green-500/50' : 'border-destructive/50'">
+                {{ activeResult.userAnswer || '(no answer)' }}
+              </p>
+            </div>
+            <div v-if="!activeResult.isCorrect">
+              <p class="text-xs font-medium text-muted-foreground">Correct answer</p>
+              <p class="mt-1 rounded-md border border-green-500/50 px-3 py-2 text-sm text-green-500">{{ activeResult.correctAnswer }}</p>
+            </div>
+          </div>
+        </template>
 
         <div v-else class="space-y-3">
           <div>
             <p class="text-xs font-medium text-muted-foreground">Your answer</p>
-            <p class="mt-1 rounded-md border px-3 py-2 text-sm" :class="activeResult.isCorrect ? 'border-green-500/50' : 'border-destructive/50'">
+            <p class="mt-1 rounded-md border px-3 py-2 text-sm" :class="activeResult.isCorrect ? 'border-green-500/50' : 'border-muted-foreground/40'">
               {{ activeResult.userAnswer || '(no answer)' }}
             </p>
+            <p v-if="!activeResult.isCorrect" class="mt-1 text-xs font-medium text-muted-foreground">No exact answer match</p>
           </div>
           <div v-if="!activeResult.isCorrect">
-            <p class="text-xs font-medium text-muted-foreground">Correct answer</p>
-            <p class="mt-1 rounded-md border border-green-500/50 px-3 py-2 text-sm text-green-500">
+            <p class="text-xs font-medium text-muted-foreground">Reference answer</p>
+            <p class="mt-1 rounded-md border px-3 py-2 text-sm">
               {{ activeResult.correctAnswer }}
             </p>
           </div>
@@ -119,11 +159,28 @@ function semanticLabel(label?: SemanticAssessment['label']) {
           role="status"
           aria-live="polite"
         >
-          <div v-if="activeResult.semanticAssessment.status === 'pending'" class="flex items-start gap-2">
+          <div v-if="activeResult.semanticAssessment.status === 'pending' && !activeResult.semanticAssessment.retryable && !requestFailed" class="flex items-start gap-2">
             <Clock3 class="mt-0.5 h-4 w-4 shrink-0 text-violet-500" aria-hidden="true" />
             <div>
               <p class="text-sm font-medium">Reviewing meaning and evidence…</p>
               <p class="mt-1 text-xs text-muted-foreground">Your quiz result is ready; this optional review may arrive shortly.</p>
+            </div>
+          </div>
+          <div v-else-if="activeResult.semanticAssessment.status === 'pending'" class="flex items-start gap-2">
+            <TriangleAlert class="mt-0.5 h-4 w-4 shrink-0 text-amber-500" aria-hidden="true" />
+            <div>
+              <p class="text-sm font-medium">Meaning review temporarily unavailable</p>
+              <p class="mt-1 text-xs text-muted-foreground">Your recorded score is complete. You can retry this optional review when it is due.</p>
+              <UiButton
+                class="mt-2"
+                size="sm"
+                variant="outline"
+                :disabled="!retryIsDue(activeResult.semanticAssessment)"
+                data-testid="quiz-semantic-retry"
+                @click="emit('retrySemantic')"
+              >
+                {{ retryIsDue(activeResult.semanticAssessment) ? 'Retry meaning review' : 'Retry available shortly' }}
+              </UiButton>
             </div>
           </div>
           <div v-else-if="activeResult.semanticAssessment.status === 'available'" class="flex items-start gap-2">

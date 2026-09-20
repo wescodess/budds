@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'node:url'
 import tailwindcss from '@tailwindcss/vite'
 import type { NuxtConfig } from 'nuxt/schema'
+import { isQuizSemanticAdvisoryEnabled } from './server/utils/learning-decisions/activation'
 
 function readConfiguredValue(...names: string[]) {
   for (const name of names) {
@@ -117,13 +118,17 @@ export default defineNuxtConfig({
     layaEvaluatorUrl: readConfiguredValue('NUXT_LAYA_EVALUATOR_URL'),
     layaEvaluatorToken: '',
     quizAssessmentWriteSecret: '',
+    quizSemanticActivationManifest: readConfiguredValue('NUXT_QUIZ_SEMANTIC_ACTIVATION_MANIFEST'),
     calendarTokenEncryptionKey: '',
     public: {
       siteUrl: publicSiteUrl,
       convex: {
         url: convexUrl,
       },
-      quizSemanticReviewEnabled: readConfiguredValue('NUXT_LEARNING_DECISION_MODE') === 'advisory',
+      quizSemanticReviewEnabled: isQuizSemanticAdvisoryEnabled(
+        readConfiguredValue('NUXT_LEARNING_DECISION_MODE'),
+        readConfiguredValue('NUXT_QUIZ_SEMANTIC_ACTIVATION_MANIFEST'),
+      ),
     },
   },
   routeRules,

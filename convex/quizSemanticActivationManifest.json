@@ -1,0 +1,7 @@
+{
+  "manifestVersion": "quiz-semantic-advisory.v1",
+  "status": "not-approved",
+  "approvedCalibrationEvidence": null,
+  "allowedModes": ["off", "shadow"],
+  "note": "Advisory learner UI remains disabled until a reviewed calibration artifact changes this manifest."
+}

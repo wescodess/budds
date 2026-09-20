@@ -171,8 +171,8 @@ describe('Cloudflare Pages environment validation', () => {
     })).not.toThrow()
   })
 
-  it('accepts a complete Laya advisory configuration', () => {
-    expect(() => execFileSync(process.execPath, [validator, 'build', '--strict'], {
+  it('rejects Laya advisory configuration until the committed calibration manifest is approved', () => {
+    const result = spawnSync(process.execPath, [validator, 'build', '--strict'], {
       cwd: process.cwd(),
       env: {
         ...completePagesEnv,
@@ -181,9 +181,12 @@ describe('Cloudflare Pages environment validation', () => {
         NUXT_LAYA_EVALUATOR_TOKEN: 'test-laya-token-with-sufficient-length',
         NUXT_LAYA_EVALUATOR_URL: 'http://localhost:8788',
         NUXT_QUIZ_ASSESSMENT_WRITE_SECRET: 'test-assessment-write-secret-long-enough',
+        NUXT_QUIZ_SEMANTIC_ACTIVATION_MANIFEST: 'quiz-semantic-advisory.v1',
       },
-      stdio: 'pipe',
-    })).not.toThrow()
+      encoding: 'utf8',
+    })
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('requires the committed approved calibration manifest')
   })
 
   it.each([

@@ -12,6 +12,7 @@ const props = defineProps<{
 const semanticReviewEnabled = useRuntimeConfig().public.quizSemanticReviewEnabled === true
 const assessmentRequestedFor = ref<string | null>(null)
 const assessmentRequestAttempts = ref(0)
+const assessmentRequestFailed = ref(false)
 let assessmentRetryTimer: ReturnType<typeof setTimeout> | null = null
 
 const emit = defineEmits<{
@@ -102,14 +103,25 @@ function requestPendingAssessment() {
   void $fetch('/api/quiz/assess-attempt', {
     method: 'POST',
     body: { attemptId: props.attemptId },
-  }).catch(() => undefined).finally(() => {
-    if (!results.value?.results.some(result => result.semanticAssessment?.status === 'pending') || assessmentRequestAttempts.value >= 2) return
+  }).then(() => {
+    assessmentRequestFailed.value = false
+  }).catch(() => {
+    if (assessmentRequestAttempts.value >= 2) assessmentRequestFailed.value = true
+  }).finally(() => {
+    if (!results.value?.results.some((result: { semanticAssessment?: { status?: string } }) => result.semanticAssessment?.status === 'pending') || assessmentRequestAttempts.value >= 2) return
     clearAssessmentRetry()
     assessmentRetryTimer = setTimeout(() => {
       assessmentRequestedFor.value = null
       if (results.value) requestPendingAssessment()
     }, 5_000)
   })
+}
+
+function retryPendingAssessment() {
+  assessmentRequestedFor.value = null
+  assessmentRequestAttempts.value = 1
+  assessmentRequestFailed.value = false
+  requestPendingAssessment()
 }
 
 onUnmounted(() => {
@@ -119,9 +131,10 @@ onUnmounted(() => {
 
 watch(results, (value) => {
   if (!import.meta.client || !semanticReviewEnabled || !value) return
-  const hasPending = value.results.some(result => result.semanticAssessment?.status === 'pending')
+  const hasPending = value.results.some((result: { semanticAssessment?: { status?: string } }) => result.semanticAssessment?.status === 'pending')
   if (!hasPending) {
     clearAssessmentRetry()
+    assessmentRequestFailed.value = false
     return
   }
   requestPendingAssessment()
@@ -131,6 +144,7 @@ watch(() => props.attemptId, () => {
   clearAssessmentRetry()
   assessmentRequestedFor.value = null
   assessmentRequestAttempts.value = 0
+  assessmentRequestFailed.value = false
 })
 
 const { springGentle } = useMotionPresets()
@@ -193,7 +207,12 @@ const { springGentle } = useMotionPresets()
 
     <div v-if="results.results.length > 0">
       <h3 class="mb-3 text-sm font-semibold">Question Review</h3>
-      <QuizReviewPanel :results="results.results" :semantic-review-enabled="semanticReviewEnabled" />
+      <QuizReviewPanel
+        :results="results.results"
+        :semantic-review-enabled="semanticReviewEnabled"
+        :request-failed="assessmentRequestFailed"
+        @retry-semantic="retryPendingAssessment"
+      />
     </div>
   </Motion>
 </template>

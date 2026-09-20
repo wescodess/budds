@@ -8,15 +8,15 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from app import FakeBackend, MAX_BODY_BYTES, build_laya_inputs, create_app, valid_request
+from app import CONTRACT_VERSION, FakeBackend, LayaBackend, MANIFEST, MAX_BODY_BYTES, MAX_ITEM_ID_CHARS, MAX_OPTION_COUNT, MAX_REQUEST_ID_CHARS, QUALITY_LABELS, SEMANTIC_LABELS, SNAPSHOT_VERSION, build_laya_inputs, create_app, valid_request
 
 
 def payload():
-    return {"kind": "quiz_quality", "requestId": "r1", "inputDigest": "a" * 64, "items": [{"id": "q1", "question": "What is ATP?", "options": ["Energy"], "correctAnswer": "Energy"}]}
+    return {"kind": "quiz_quality", "requestId": "r1", "inputDigest": "a" * 64, "contractVersion": CONTRACT_VERSION, "snapshotVersion": SNAPSHOT_VERSION, "items": [{"id": "q1", "question": "What is ATP?", "options": ["Energy"], "correctAnswer": "Energy", "language": "en", "evidence": {"sourceIndex": 0, "excerpt": "ATP transfers energy."}}]}
 
 
 def semantic_payload():
-    return {"kind": "quiz.free_response_assessment.v1", "requestId": "s1", "inputDigest": "b" * 64, "items": [{"id": "a1", "question": "Describe ATP.", "questionType": "free-response", "expectedAnswer": "Energy carrier", "learnerAnswer": "Carries energy", "evidenceExcerpt": "ATP carries chemical energy.", "rubricVersion": "quiz.free_response_assessment.v1", "rubric": [{"label": "fully_correct", "description": "The response answers the question completely and is supported by the evidence."}, {"label": "partially_correct", "description": "The response contains a supported correct idea but is materially incomplete or has a minor error."}, {"label": "incorrect", "description": "The response is contradicted by the evidence, unsupported, or misses the requested concept."}, {"label": "uncertain", "description": "The evidence or response is insufficient to make a reliable assessment."}]}]}
+    return {"kind": "quiz.free_response_assessment.v1", "requestId": "s1", "inputDigest": "b" * 64, "contractVersion": CONTRACT_VERSION, "snapshotVersion": SNAPSHOT_VERSION, "items": [{"id": "a1", "question": "Describe ATP.", "questionType": "free-response", "expectedAnswer": "Energy carrier", "learnerAnswer": "Carries energy", "evidenceExcerpt": "ATP carries chemical energy.", "language": "en-CA", "rubricVersion": "quiz.free_response_assessment.v1", "rubric": [{"label": "fully_correct", "description": "The response answers the question completely and is supported by the evidence."}, {"label": "partially_correct", "description": "The response contains a supported correct idea but is materially incomplete or has a minor error."}, {"label": "incorrect", "description": "The response is contradicted by the evidence, unsupported, or misses the requested concept."}, {"label": "uncertain", "description": "The evidence or response is insufficient to make a reliable assessment."}]}]}
 
 
 def call(server, method, path, body=None, declared_length=None):
@@ -62,6 +62,12 @@ class LayaServiceTests(unittest.TestCase):
         self.assertFalse(valid_request({**payload(), "items": []}))
         self.assertFalse(valid_request({**payload(), "requestId": ""}))
         self.assertFalse(valid_request({**payload(), "inputDigest": "z" * 64}))
+        self.assertEqual(MANIFEST["manifestVersion"], "budds.learning-decisions.v2")
+        self.assertEqual(MAX_REQUEST_ID_CHARS, MANIFEST["limits"]["requestIdChars"])
+        self.assertEqual(MAX_ITEM_ID_CHARS, MANIFEST["limits"]["itemIdChars"])
+        self.assertEqual(MAX_OPTION_COUNT, MANIFEST["limits"]["optionCount"])
+        self.assertEqual(QUALITY_LABELS, tuple(MANIFEST["decisionKinds"]["quizQuality"]["labels"]))
+        self.assertEqual(SEMANTIC_LABELS, tuple(MANIFEST["decisionKinds"]["freeResponse"]["labels"]))
         duplicate = payload(); duplicate["items"].append(dict(duplicate["items"][0]))
         self.assertFalse(valid_request(duplicate))
         invalid_item = payload(); invalid_item["items"][0]["unknown"] = True
@@ -80,9 +86,11 @@ class LayaServiceTests(unittest.TestCase):
             server.shutdown(); server.server_close()
 
     def test_laya_questions_identify_their_own_state_items(self):
-        batch = payload()["items"] + [{"id": "q2", "question": "What is DNA?", "correctAnswer": "Genetic material"}]
+        batch = payload()["items"] + [{"id": "q2", "question": "What is DNA?", "correctAnswer": "Genetic material", "language": "en", "evidence": {"sourceIndex": 1, "excerpt": "DNA stores genetic material."}}]
         state, questions = build_laya_inputs("quiz_quality", batch)
         self.assertEqual(set(state), {"q1", "q2"})
+        self.assertEqual(questions["q1"]["type"], "noul")
+        self.assertEqual(state["q1"]["sourceExcerpt"], "ATP transfers energy.")
         self.assertIn("'q1'", questions["q1"]["instructions"])
         self.assertIn("'q2'", questions["q2"]["instructions"])
         self.assertNotEqual(questions["q1"]["instructions"], questions["q2"]["instructions"])
@@ -103,6 +111,29 @@ class LayaServiceTests(unittest.TestCase):
                 self.assertEqual(call(server, "POST", "/v1/evaluate", payload()), (503, {"error": "Unavailable"}))
             finally:
                 server.shutdown(); server.server_close()
+
+    def test_production_backend_maps_noul_probabilities_with_fallback_threshold_and_clamping(self):
+        class Agent:
+            def __init__(self): self.questions = None
+            def predict(self, _state, questions):
+                self.questions = questions
+                return {"answers": {
+                    "q1": {"probability": 0.75, "confidence": 2},
+                    "q2": {"noul": 0.49, "confidence": 0.4},
+                    "q3": {"probability": -3, "confidence": -1},
+                }}
+
+        backend = LayaBackend.__new__(LayaBackend)
+        backend.agent = Agent()
+        base = payload()["items"][0]
+        items = [{**base, "id": key} for key in ("q1", "q2", "q3")]
+
+        decisions = backend.evaluate("quiz_quality", items)
+
+        self.assertTrue(all(question["type"] == "noul" for question in backend.agent.questions.values()))
+        self.assertEqual(decisions[0], {"id": "q1", "label": "supported", "confidence": 1, "probabilities": {"supported": 0.75, "needs_review": 0.25}})
+        self.assertEqual(decisions[1], {"id": "q2", "label": "needs_review", "confidence": 0.4, "probabilities": {"supported": 0.49, "needs_review": 0.51}})
+        self.assertEqual(decisions[2], {"id": "q3", "label": "needs_review", "confidence": 0, "probabilities": {"supported": 0, "needs_review": 1}})
 
 
 if __name__ == "__main__":

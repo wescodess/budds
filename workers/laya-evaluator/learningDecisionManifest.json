@@ -1,0 +1,65 @@
+{
+  "manifestVersion": "budds.learning-decisions.v2",
+  "contractVersion": "budds.learning-decision-contract.v2",
+  "snapshotVersion": "quiz-answer-snapshot.v2",
+  "model": {
+    "provider": "laya",
+    "checkpoint": "laya-typed-decisions",
+    "revision": "f9ab0b228f0fc0f14d873dbc99038f135c2da1b2"
+  },
+  "supportedLanguages": ["en", "en-*"],
+  "limits": {
+    "requestBytes": 32000,
+    "qualityBatchSize": 20,
+    "semanticBatchSize": 8,
+    "requestIdChars": 128,
+    "itemIdChars": 64,
+    "optionCount": 8,
+    "questionChars": 1200,
+    "optionChars": 400,
+    "evidenceChars": 1200,
+    "learnerAnswerChars": 800
+  },
+  "retry": {
+    "maxAttempts": 3,
+    "baseDelayMs": 2000,
+    "maxDelayMs": 60000,
+    "leaseMs": 30000,
+    "retryAfterMinMs": 1000,
+    "retryAfterMaxMs": 60000
+  },
+  "timeouts": {
+    "clientDeadlineMs": 12000,
+    "containerDeadlineMs": 11000
+  },
+  "decisionKinds": {
+    "quizQuality": {
+      "kind": "quiz_quality",
+      "primitive": "noul",
+      "labels": ["supported", "needs_review"]
+    },
+    "freeResponse": {
+      "kind": "quiz.free_response_assessment.v1",
+      "primitive": "choice",
+      "labels": ["fully_correct", "partially_correct", "incorrect", "uncertain"],
+      "rubric": [
+        {
+          "label": "fully_correct",
+          "description": "The response answers the question completely and is supported by the evidence."
+        },
+        {
+          "label": "partially_correct",
+          "description": "The response contains a supported correct idea but is materially incomplete or has a minor error."
+        },
+        {
+          "label": "incorrect",
+          "description": "The response is contradicted by the evidence, unsupported, or misses the requested concept."
+        },
+        {
+          "label": "uncertain",
+          "description": "The evidence or response is insufficient to make a reliable assessment."
+        }
+      ]
+    }
+  }
+}

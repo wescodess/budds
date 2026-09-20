@@ -129,6 +129,7 @@ export function useQuizGeneration(folderId: Ref<Id<'folders'>>) {
           topics: allTopics.value.length > 0 ? allTopics.value : undefined,
           questionTypes: questionTypes.value,
           difficulty: difficulty.value,
+          language: 'en',
         },
       }).catch(() => {})
     }

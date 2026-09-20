@@ -1,13 +1,9 @@
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
+import manifest from '../../workers/laya-evaluator/learningDecisionManifest.json'
 
-export const FREE_RESPONSE_ASSESSMENT_KIND = 'quiz.free_response_assessment.v1' as const
-export const FREE_RESPONSE_RUBRIC = [
-  { label: 'fully_correct', description: 'The response answers the question completely and is supported by the evidence.' },
-  { label: 'partially_correct', description: 'The response contains a supported correct idea but is materially incomplete or has a minor error.' },
-  { label: 'incorrect', description: 'The response is contradicted by the evidence, unsupported, or misses the requested concept.' },
-  { label: 'uncertain', description: 'The evidence or response is insufficient to make a reliable assessment.' },
-]
+export const FREE_RESPONSE_ASSESSMENT_KIND = manifest.decisionKinds.freeResponse.kind as 'quiz.free_response_assessment.v1'
+export const FREE_RESPONSE_RUBRIC = manifest.decisionKinds.freeResponse.rubric
 export async function createPendingAnswerAssessment(
   ctx: MutationCtx,
   input: {
@@ -25,12 +21,18 @@ export async function createPendingAnswerAssessment(
     .withIndex('by_attemptAnswerId', q => q.eq('attemptAnswerId', input.attemptAnswerId))
     .unique()
   if (existing) return existing._id
+  const quiz = await ctx.db.get(input.question.quizId)
+  const language = quiz?.language?.trim().toLowerCase().replaceAll('_', '-') || 'unknown'
+  const now = Date.now()
   return await ctx.db.insert('quizAnswerAssessments', {
     userId: input.userId,
     attemptId: input.attemptId,
     attemptAnswerId: input.attemptAnswerId,
     questionId: input.question._id,
     kind: FREE_RESPONSE_ASSESSMENT_KIND,
+    contractVersion: manifest.contractVersion,
+    snapshotVersion: manifest.snapshotVersion,
+    languageSnapshot: language,
     status: 'pending',
     questionSnapshot: {
       question: input.question.question,
@@ -44,6 +46,8 @@ export async function createPendingAnswerAssessment(
     deterministicIsCorrect: input.deterministicIsCorrect,
     rubricVersion: FREE_RESPONSE_ASSESSMENT_KIND,
     rubricSnapshot: FREE_RESPONSE_RUBRIC,
-    requestedAt: Date.now(),
+    attemptCount: 0,
+    nextAttemptAt: now,
+    requestedAt: now,
   })
 }
