@@ -6,6 +6,8 @@ import { classifyAiGatewayFailure, generateCompletion } from '../server/utils/ai
 import { retrieveLearnV2FolderEvidence } from '../server/utils/learn-v2-folder-evidence'
 import { hasLearnV2Access, requireLearnV2MutationAccess } from './lib/learnV2Access'
 import { LEARN_V2_BLUEPRINT_LIMITS, validateLearnV2BlueprintCandidate } from '../shared/learn-v2-blueprint'
+import { requireActiveBlueprint } from './lib/learnV2BlueprintAuthority'
+import { transitionScopedMasteryRecord } from './lib/learnV2MasteryScope'
 
 const MAX_IDEMPOTENCY_KEY_LENGTH = 128
 const MIN_CALIBRATION_ITEMS = 3
@@ -74,8 +76,7 @@ async function requireCurrentBlueprint(ctx: MutationCtx | QueryCtx, userId: stri
   if (!blueprint || blueprint.userId !== userId) throw new Error('Blueprint revision not found')
   if (blueprint.status === 'accepted' || blueprint.status === 'active') {
     const learningVoid = await requireLiveVoid(ctx, userId, blueprint.learningVoidId)
-    if (learningVoid.activeBlueprintRevisionId !== blueprint._id || blueprint.status !== 'accepted') throw new Error('Active Blueprint pointer is unavailable')
-    return blueprint
+    return await requireActiveBlueprint(ctx, userId, learningVoid, blueprint._id)
   }
   const latest = await ctx.db.query('learnBlueprintRevisions')
     .withIndex('by_userId_and_blueprintId_and_revision', q => q.eq('userId', userId).eq('blueprintId', blueprint.blueprintId))
@@ -336,6 +337,44 @@ export const finishCalibrationScoringFailure = internalMutation({
   },
 })
 
+async function calibrationEvidence(ctx: MutationCtx | QueryCtx, userId: string, objectiveId: Id<'learnObjectives'>) {
+  const links = await ctx.db.query('learnObjectiveSources').withIndex('by_userId_and_objectiveId_and_sourceSnapshotId', q => q.eq('userId', userId).eq('objectiveId', objectiveId)).take(9)
+  if (links.length > 8) throw new Error('Calibration evidence exceeds its bounded contract')
+  const evidence: Array<{
+    alias: string
+    locator: string
+    excerpt?: string
+    folderEvidence?: { documentId: string, contentHash: string, sourceRevision: string }
+  }> = []
+  const sourceSnapshotIds: Id<'learnSourceSnapshots'>[] = []
+  const contentRevisionPins: Array<{ sourceSnapshotId: string, revision: number, recordRevision: number, sourceRevision: string | null }> = []
+  for (const link of links) {
+    if (link.coverage === 'gap') continue
+    const source = await ctx.db.get(link.sourceSnapshotId)
+    const excerpt = await ctx.db.query('learnSourceExcerpts').withIndex('by_userId_and_sourceSnapshotId_and_evidencePurgedAt', q => q.eq('userId', userId).eq('sourceSnapshotId', link.sourceSnapshotId).eq('evidencePurgedAt', undefined)).first()
+    if (!source || source.userId !== userId || source.status !== 'user_accepted' || source.effectiveStatus !== 'user_accepted' || source.conflictStatus !== 'clear' || source.evidencePurgedAt !== undefined || !excerpt) continue
+    const alias = `source-${String(evidence.length + 1).padStart(3, '0')}`
+    if (source.rightsStatus === 'permitted' && excerpt.rightsStatus === 'permitted' && excerpt.excerpt?.trim()) {
+      evidence.push({ alias, excerpt: excerpt.excerpt, locator: excerpt.locator })
+    }
+    else {
+      const identity = await ctx.db.get(source.sourceIdentityId)
+      if (identity?.userId !== userId || identity.origin !== 'folder_document' || !identity.folderDocumentId
+        || typeof source.contentHash !== 'string' || typeof source.sourceRevision !== 'string') continue
+      evidence.push({ alias, locator: excerpt.locator, folderEvidence: { documentId: String(identity.folderDocumentId), contentHash: source.contentHash, sourceRevision: source.sourceRevision } })
+    }
+    sourceSnapshotIds.push(source._id)
+    contentRevisionPins.push({ sourceSnapshotId: String(source._id), revision: source.revision, recordRevision: source.recordRevision ?? 1, sourceRevision: source.sourceRevision ?? null })
+  }
+  if (!evidence.length) throw new Error('Calibration evidence is unavailable')
+  return {
+    evidence,
+    sourceSnapshotIds,
+    contentRevisionPins,
+    verifierVersions: ['learn-v2.calibration-evidence-policy.v1'],
+  }
+}
+
 export const recordCalibrationAttempt = internalMutation({
   args: { tokenIdentifier: v.string(), blueprintRevisionId: v.id('learnBlueprintRevisions'), objectiveId: v.id('learnObjectives'), expectedBlueprintRecordRevision: v.number(), expectedVoidRevision: v.number(), idempotencyKey: v.string(), serverScorePercent: v.number(), usedHint: v.boolean(), usedReveal: v.boolean(), confidence: v.number(), rubricVersion: v.string(), response: v.optional(v.string()), scorerVersion: v.optional(v.string()), scorerModel: v.optional(v.string()), criterionResultsJson: v.optional(v.string()), rubricSnapshot: v.optional(v.string()), providerResponseId: v.optional(v.string()), scoringJobId: v.optional(v.id('learnJobs')), scoringLeaseToken: v.optional(v.string()) },
   handler: async (ctx, args) => {
@@ -368,11 +407,10 @@ export const recordCalibrationAttempt = internalMutation({
     const unassistedPass = args.serverScorePercent >= 80 && !args.usedHint && !args.usedReveal
     const result = unassistedPass ? 'provisionally_known' as const : 'learning' as const
     const schedulingPriority = unassistedPass ? 'deprioritized' as const : 'remediation' as const
+    const evidencePins = await calibrationEvidence(ctx, args.tokenIdentifier, objective._id)
     const now = Date.now()
-    const attemptId = await ctx.db.insert('masteryAttempts', { userId: args.tokenIdentifier, blueprintRevisionId: blueprint._id, objectiveId: objective._id, kind: 'calibration', activityContractVersion: 'learn-v2.calibration-attempt.v1', providerVersion: args.scorerModel ? 'openrouter-via-cloudflare-ai-gateway.v1' : undefined, attemptedAt: now, idempotencyKey: args.idempotencyKey, requestFingerprint, serverScorePercent: args.serverScorePercent, usedHint: args.usedHint, usedReveal: args.usedReveal, confidence: args.confidence, rubricVersion: args.rubricVersion, response: args.response, scorerVersion: args.scorerVersion, scorerModel: args.scorerModel, criterionResultsJson: args.criterionResultsJson, rubricSnapshot: args.rubricSnapshot, blueprintRecordRevision: blueprint.recordRevision, result })
-    const record = await ctx.db.query('masteryRecords').withIndex('by_userId_and_blueprintRevisionId_and_objectiveId', q => q.eq('userId', args.tokenIdentifier).eq('blueprintRevisionId', blueprint._id).eq('objectiveId', objective._id)).unique()
-    if (record) await ctx.db.patch(record._id, { blueprintRevisionId: blueprint._id, state: result, schedulingPriority, recordRevision: (record.recordRevision ?? 0) + 1, updatedAt: now })
-    else await ctx.db.insert('masteryRecords', { userId: args.tokenIdentifier, blueprintRevisionId: blueprint._id, objectiveId: objective._id, state: result, schedulingPriority, recordRevision: 1, updatedAt: now })
+    const attemptId = await ctx.db.insert('masteryAttempts', { userId: args.tokenIdentifier, blueprintRevisionId: blueprint._id, objectiveId: objective._id, kind: 'calibration', activityContractVersion: 'learn-v2.calibration-attempt.v1', providerVersion: args.scorerModel ? 'openrouter-via-cloudflare-ai-gateway.v1' : undefined, attemptedAt: now, idempotencyKey: args.idempotencyKey, requestFingerprint, serverScorePercent: args.serverScorePercent, usedHint: args.usedHint, usedReveal: args.usedReveal, confidence: args.confidence, rubricVersion: args.rubricVersion, response: args.response, scorerVersion: args.scorerVersion, scorerModel: args.scorerModel, criterionResultsJson: args.criterionResultsJson, rubricSnapshot: args.rubricSnapshot, verifierVersionsJson: JSON.stringify(evidencePins.verifierVersions), sourceSnapshotIdsJson: JSON.stringify(evidencePins.sourceSnapshotIds), contentRevisionPinsJson: JSON.stringify(evidencePins.contentRevisionPins), blueprintRecordRevision: blueprint.recordRevision, result })
+    await transitionScopedMasteryRecord(ctx, { userId: args.tokenIdentifier, blueprintRevisionId: blueprint._id, objectiveId: objective._id, transition: { state: result, schedulingPriority, updatedAt: now } })
     if (scoringJob && args.scoringLeaseToken) await ctx.db.patch(scoringJob._id, { status: 'succeeded', leaseToken: undefined, leaseExpiresAt: undefined, checkpoint: 'recorded', providerResponseId: args.providerResponseId, providerResponseModel: args.scorerModel, revision: scoringJob.revision + 1, updatedAt: now })
     return { attemptId, result, schedulingPriority, replayed: false }
   },
@@ -397,42 +435,10 @@ export const getCalibrationScoringInput = internalQuery({
     if (blueprint.status !== 'accepted' || learningVoid.status !== 'calibration') throw new Error('Blueprint is not in calibration')
     const objective = await ctx.db.get(args.objectiveId)
     if (!objective || objective.userId !== args.tokenIdentifier || objective.blueprintRevisionId !== blueprint._id) throw new Error('Calibration objective not found')
-    const links = await ctx.db.query('learnObjectiveSources').withIndex('by_userId_and_objectiveId_and_sourceSnapshotId', q => q.eq('userId', args.tokenIdentifier).eq('objectiveId', objective._id)).take(9)
-    if (links.length > 8) throw new Error('Calibration evidence exceeds its bounded contract')
-    const evidence: Array<{
-      alias: string
-      locator: string
-      excerpt?: string
-      folderEvidence?: { documentId: string, contentHash: string, sourceRevision: string }
-    }> = []
-    for (const link of links) {
-      if (link.coverage === 'gap') continue
-      const source = await ctx.db.get(link.sourceSnapshotId)
-      const excerpt = await ctx.db.query('learnSourceExcerpts').withIndex('by_userId_and_sourceSnapshotId_and_evidencePurgedAt', q => q.eq('userId', args.tokenIdentifier).eq('sourceSnapshotId', link.sourceSnapshotId).eq('evidencePurgedAt', undefined)).first()
-      if (!source || source.userId !== args.tokenIdentifier || source.status !== 'user_accepted' || source.effectiveStatus !== 'user_accepted' || source.conflictStatus !== 'clear' || source.evidencePurgedAt !== undefined || !excerpt) continue
-      const alias = `source-${String(evidence.length + 1).padStart(3, '0')}`
-      if (source.rightsStatus === 'permitted' && excerpt.rightsStatus === 'permitted' && excerpt.excerpt?.trim()) {
-        evidence.push({ alias, excerpt: excerpt.excerpt, locator: excerpt.locator })
-        continue
-      }
-      const identity = await ctx.db.get(source.sourceIdentityId)
-      if (identity?.userId === args.tokenIdentifier && identity.origin === 'folder_document' && identity.folderDocumentId
-        && typeof source.contentHash === 'string' && typeof source.sourceRevision === 'string') {
-        evidence.push({
-          alias,
-          locator: excerpt.locator,
-          folderEvidence: {
-            documentId: String(identity.folderDocumentId),
-            contentHash: source.contentHash,
-            sourceRevision: source.sourceRevision,
-          },
-        })
-      }
-    }
-    if (!evidence.length) throw new Error('Calibration evidence is unavailable')
+    const pins = await calibrationEvidence(ctx, args.tokenIdentifier, objective._id)
     const model = process.env.LEARN_V2_CALIBRATION_MODEL?.trim() || process.env.LEARN_V2_MASTERY_MODEL?.trim()
     if (!model) throw new Error('Calibration scorer is unavailable')
-    return { model, objective: { title: objective.title, capability: objective.capability, assessmentContract: objective.assessmentContract }, evidence, learnerResponse: args.response }
+    return { model, objective: { title: objective.title, capability: objective.capability, assessmentContract: objective.assessmentContract }, evidence: pins.evidence, learnerResponse: args.response }
   },
 })
 

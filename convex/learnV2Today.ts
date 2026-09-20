@@ -2,6 +2,8 @@ import type { Doc } from './_generated/dataModel'
 import { query } from './_generated/server'
 import { requireLearnV2QueryAccess } from './lib/learnV2Access'
 import { localDateAt } from '../shared/learn-v2-mastery'
+import { requireActiveBlueprint } from './lib/learnV2BlueprintAuthority'
+import { getScopedMasteryRecord } from './lib/learnV2MasteryScope'
 
 const MAX_SESSIONS = 128
 const MAX_CLAIMS = 32
@@ -38,8 +40,10 @@ export const getToday = query({
       const plan = await ctx.db.get(session.studyPlanRevisionId); const root = plan && await ctx.db.get(plan.studyPlanId)
       const blueprint = plan?.blueprintRevisionId && await ctx.db.get(plan.blueprintRevisionId); const objective = await ctx.db.get(session.primaryObjectiveId)
       const voidRow = plan && await ctx.db.get(plan.learningVoidId); const folder = voidRow && await ctx.db.get(voidRow.folderId)
-      if (!plan || !root || !blueprint || !objective || !voidRow || !folder || plan.userId !== userId || root.userId !== userId || blueprint.userId !== userId || objective.userId !== userId || voidRow.userId !== userId || folder.userId !== userId || root.activeRevisionId !== plan._id || plan.status !== 'accepted' || blueprint.status !== 'accepted' || voidRow.activeBlueprintRevisionId !== blueprint._id || plan.blueprintRecordRevision !== blueprint.recordRevision || objective.blueprintRevisionId !== blueprint._id) continue
-      const record = await ctx.db.query('masteryRecords').withIndex('by_userId_and_blueprintRevisionId_and_objectiveId', q => q.eq('userId', userId).eq('blueprintRevisionId', blueprint._id).eq('objectiveId', objective._id)).unique()
+      if (!plan || !root || !blueprint || !objective || !voidRow || !folder || plan.userId !== userId || root.userId !== userId || blueprint.userId !== userId || objective.userId !== userId || voidRow.userId !== userId || folder.userId !== userId || root.activeRevisionId !== plan._id || plan.status !== 'accepted' || blueprint.status !== 'accepted' || plan.blueprintRecordRevision !== blueprint.recordRevision || objective.blueprintRevisionId !== blueprint._id) continue
+      try { await requireActiveBlueprint(ctx, userId, voidRow, blueprint._id) }
+      catch { continue }
+      const record = (await getScopedMasteryRecord(ctx, userId, blueprint._id, objective._id)).record
       candidates.push({ session, plan, blueprint, objective, record })
     }
     const nextScheduledAt = candidates.filter(row => row.session.status !== 'in_progress' && row.session.scheduledStartAt > now).map(row => row.session.scheduledStartAt).sort((a, b) => a - b)[0] ?? null

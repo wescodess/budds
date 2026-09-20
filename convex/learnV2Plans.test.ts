@@ -4,6 +4,7 @@ import { describe, expect, test } from 'vitest'
 import { api, internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import schema from './schema'
+import { masteryScopeKey } from './lib/learnV2MasteryScope'
 
 const modules = import.meta.glob('./**/*.ts')
 const identity = { tokenIdentifier: 'https://auth.example.com|plan-owner', name: 'Plan Owner' }
@@ -102,8 +103,9 @@ describe('Learn V2 study-plan preview and acceptance', () => {
   test('anchors retained reviews to the immutable first independent pass', async () => {
     const setup = await setupPlan()
     const firstIndependentPassAt = Date.parse('2030-09-10T02:00:00Z')
-    await setup.t.run(ctx => ctx.db.insert('masteryRecords', {
+    await setup.t.run(async ctx => ctx.db.insert('masteryRecords', {
       userId: identity.tokenIdentifier, blueprintRevisionId: setup.blueprint._id, objectiveId: setup.objectiveIds[0]!, state: 'independent',
+      scopeKey: await masteryScopeKey(identity.tokenIdentifier, setup.blueprint._id, setup.objectiveIds[0]!),
       firstIndependentPassAt, updatedAt: Date.parse('2030-09-12T02:00:00Z'),
     }))
     const preview = await setup.owner.mutation(api.learnV2Plans.createPlanPreview, { learningVoidId: setup.learningVoid._id, blueprintRevisionId: setup.blueprint._id, expectedVoidRevision: 5, expectedBlueprintRecordRevision: 4, idempotencyKey: 'retained', schedulingInput: input() })

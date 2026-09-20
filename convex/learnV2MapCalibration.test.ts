@@ -260,7 +260,17 @@ describe('Learn V2 revision-safe map editing and calibration', () => {
       const scored = await setup.owner.action(api.learnV2MapCalibration.submitCalibrationAttempt, args)
       expect(scored).toMatchObject({ result: 'provisionally_known', replayed: false })
       expect(await setup.owner.action(api.learnV2MapCalibration.submitCalibrationAttempt, args)).toMatchObject({ result: 'provisionally_known', replayed: true })
-      expect(await setup.t.run(ctx => ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', identity.tokenIdentifier).eq('idempotencyKey', args.idempotencyKey)).unique())).toMatchObject({ response: args.response, activityContractVersion: 'learn-v2.calibration-attempt.v1', providerVersion: 'openrouter-via-cloudflare-ai-gateway.v1', blueprintRecordRevision: accepted.recordRevision, scorerModel: 'mock-calibration', scorerVersion: 'learn-v2.calibration-scorer.v1' })
+      expect(await setup.t.run(ctx => ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', identity.tokenIdentifier).eq('idempotencyKey', args.idempotencyKey)).unique())).toMatchObject({
+        response: args.response,
+        activityContractVersion: 'learn-v2.calibration-attempt.v1',
+        providerVersion: 'openrouter-via-cloudflare-ai-gateway.v1',
+        blueprintRecordRevision: accepted.recordRevision,
+        scorerModel: 'mock-calibration',
+        scorerVersion: 'learn-v2.calibration-scorer.v1',
+        verifierVersionsJson: JSON.stringify(['learn-v2.calibration-evidence-policy.v1']),
+        sourceSnapshotIdsJson: JSON.stringify([setup.sourceSnapshotId]),
+        contentRevisionPinsJson: JSON.stringify([{ sourceSnapshotId: String(setup.sourceSnapshotId), revision: 1, recordRevision: 1, sourceRevision: `sha256:${'a'.repeat(64)}` }]),
+      })
     }
     finally {
       if (previousModel === undefined) delete process.env.LEARN_V2_CALIBRATION_MODEL

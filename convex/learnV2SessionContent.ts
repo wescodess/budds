@@ -15,6 +15,7 @@ import {
   requireLearnV2MutationAccess,
   requireLearnV2QueryAccess,
 } from "./lib/learnV2Access";
+import { requireActiveBlueprint } from "./lib/learnV2BlueprintAuthority";
 import {
   LEARN_V2_ENTAILMENT_VERIFIER_VERSION,
   LEARN_V2_MASTERY_LOOP_BLOCKS,
@@ -188,11 +189,11 @@ async function inputs(
     !learningVoid ||
     learningVoid.userId !== userId ||
     learningVoid.revision !== job.expectedVoidRevision ||
-    learningVoid.activeBlueprintRevisionId !== blueprint._id ||
     !folder ||
     folder.userId !== userId
   )
     throw new Error("input_revision_conflict");
+  await requireActiveBlueprint(ctx, userId, learningVoid, blueprint._id);
   const retrieval = await ctx.db
     .query("studySessionRetrievalObjectives")
     .withIndex("by_userId_and_studySessionId_and_order", (q) =>
@@ -1111,8 +1112,9 @@ export const retrySessionContentGeneration = mutation({
     const root = plan && await ctx.db.get(plan.studyPlanId);
     const learningVoid = plan && await ctx.db.get(plan.learningVoidId);
     const blueprint = plan?.blueprintRevisionId && await ctx.db.get(plan.blueprintRevisionId);
-    if (!plan || !root || !learningVoid || !blueprint || plan.userId !== userId || root.userId !== userId || learningVoid.userId !== userId || blueprint.userId !== userId || root.activeRevisionId !== plan._id || plan.status !== "accepted" || blueprint.status !== "accepted" || learningVoid.activeBlueprintRevisionId !== blueprint._id || plan.blueprintRecordRevision !== blueprint.recordRevision)
+    if (!plan || !root || !learningVoid || !blueprint || plan.userId !== userId || root.userId !== userId || learningVoid.userId !== userId || blueprint.userId !== userId || root.activeRevisionId !== plan._id || plan.status !== "accepted" || blueprint.status !== "accepted" || plan.blueprintRecordRevision !== blueprint.recordRevision)
       throw new Error("Study session is not current");
+    await requireActiveBlueprint(ctx, userId, learningVoid, blueprint._id);
     const terminalJobs = (await Promise.all((["blocked", "failed"] as const).map((status) => ctx.db.query("learnJobs")
       .withIndex("by_userId_and_studySessionId_and_type_and_status", (q) => q.eq("userId", userId).eq("studySessionId", session._id).eq("type", TYPE).eq("status", status))
       .order("desc")
@@ -1206,9 +1208,9 @@ export const startStudySession = mutation({
     const blueprint = plan.blueprintRevisionId && await ctx.db.get(plan.blueprintRevisionId);
     if (!learningVoid || learningVoid.userId !== userId || !blueprint || blueprint.userId !== userId
       || blueprint.learningVoidId !== learningVoid._id || blueprint.status !== "accepted"
-      || learningVoid.activeBlueprintRevisionId !== blueprint._id
       || plan.blueprintRecordRevision !== blueprint.recordRevision)
       throw new Error("Active Blueprint pointer is unavailable");
+    await requireActiveBlueprint(ctx, userId, learningVoid, blueprint._id);
     const fingerprint = sessionStartFingerprint(args);
     const prior = await ctx.db
       .query("learnPlanCommandReceipts")
@@ -1299,11 +1301,12 @@ export const getSessionContent = query({
       !blueprint ||
       blueprint.userId !== userId ||
       blueprint.status !== "accepted" ||
-      learningVoid.activeBlueprintRevisionId !== blueprint._id ||
       plan.blueprintRecordRevision !== blueprint.recordRevision ||
       !(await ctx.db.get(learningVoid.folderId))
     )
       return null;
+    try { await requireActiveBlueprint(ctx, userId, learningVoid, blueprint._id); }
+    catch { return null; }
     const content = session.status === "in_progress"
       ? await ctx.db.query("sessionContent").withIndex("by_userId_and_studySessionId_and_revision", (q) => q.eq("userId", userId).eq("studySessionId", session._id).eq("revision", session.startedSessionContentRevision!)).unique()
       : await ctx.db.query("sessionContent").withIndex("by_userId_and_studySessionId_and_revision", (q) => q.eq("userId", userId).eq("studySessionId", session._id)).order("desc").first();
