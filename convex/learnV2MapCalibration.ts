@@ -16,6 +16,12 @@ const MAX_RESPONSE_LENGTH = 12_000
 const CALIBRATION_JOB_TYPE = 'calibration_scoring'
 const CALIBRATION_LEASE_MS = 5 * 60_000
 
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
+  if (value && typeof value === 'object') { const row = value as Record<string, unknown>; return `{${Object.keys(row).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(row[key])}`).join(',')}}` }
+  return JSON.stringify(value)
+}
+
 const assessmentContractValidator = v.object({
   version: v.literal('learn-v2.assessment.v1'),
   kind: v.union(v.literal('machine_checkable'), v.literal('bounded_rubric')),
@@ -376,7 +382,7 @@ async function calibrationEvidence(ctx: MutationCtx | QueryCtx, userId: string, 
 }
 
 export const recordCalibrationAttempt = internalMutation({
-  args: { tokenIdentifier: v.string(), blueprintRevisionId: v.id('learnBlueprintRevisions'), objectiveId: v.id('learnObjectives'), expectedBlueprintRecordRevision: v.number(), expectedVoidRevision: v.number(), idempotencyKey: v.string(), serverScorePercent: v.number(), usedHint: v.boolean(), usedReveal: v.boolean(), confidence: v.number(), rubricVersion: v.string(), response: v.optional(v.string()), scorerVersion: v.optional(v.string()), scorerModel: v.optional(v.string()), criterionResultsJson: v.optional(v.string()), rubricSnapshot: v.optional(v.string()), providerResponseId: v.optional(v.string()), scoringJobId: v.optional(v.id('learnJobs')), scoringLeaseToken: v.optional(v.string()) },
+  args: { tokenIdentifier: v.string(), blueprintRevisionId: v.id('learnBlueprintRevisions'), objectiveId: v.id('learnObjectives'), expectedBlueprintRecordRevision: v.number(), expectedVoidRevision: v.number(), idempotencyKey: v.string(), serverScorePercent: v.number(), usedHint: v.boolean(), usedReveal: v.boolean(), confidence: v.number(), rubricVersion: v.string(), response: v.optional(v.string()), scorerVersion: v.optional(v.string()), scorerModel: v.optional(v.string()), criterionResultsJson: v.optional(v.string()), rubricSnapshot: v.optional(v.string()), providerResponseId: v.optional(v.string()), scoringJobId: v.optional(v.id('learnJobs')), scoringLeaseToken: v.optional(v.string()), scoredSourceSnapshotIds: v.optional(v.array(v.id('learnSourceSnapshots'))), scoredContentRevisionPins: v.optional(v.array(v.object({ sourceSnapshotId: v.string(), revision: v.number(), recordRevision: v.number(), sourceRevision: v.union(v.string(), v.null()) }))), scoredVerifierVersions: v.optional(v.array(v.string())) },
   handler: async (ctx, args) => {
     if (!(await hasLearnV2Access(ctx, args.tokenIdentifier))) throw new Error('Learn V2 access denied')
     assertIdempotencyKey(args.idempotencyKey)
@@ -401,13 +407,24 @@ export const recordCalibrationAttempt = internalMutation({
     if (!objective || objective.userId !== args.tokenIdentifier || objective.blueprintRevisionId !== blueprint._id) throw new Error('Calibration objective not found')
     const scoringJob = args.scoringJobId && await ctx.db.get(args.scoringJobId)
     if (args.scoringJobId && (!scoringJob || scoringJob.userId !== args.tokenIdentifier || scoringJob.type !== CALIBRATION_JOB_TYPE || scoringJob.status !== 'running' || scoringJob.leaseToken !== args.scoringLeaseToken || scoringJob.requestFingerprint !== requestFingerprint)) throw new Error('Calibration scoring command is invalid')
+    if (scoringJob && (!args.scoredSourceSnapshotIds?.length || !args.scoredContentRevisionPins?.length || !args.scoredVerifierVersions?.length)) throw new Error('Calibration scoring evidence pins are unavailable')
     const existing = await ctx.db.query('masteryAttempts').withIndex('by_userId_and_blueprintRevisionId_and_kind', q => q.eq('userId', args.tokenIdentifier).eq('blueprintRevisionId', blueprint._id).eq('kind', 'calibration')).take(MAX_CALIBRATION_ITEMS + 1)
     if (existing.length >= MAX_CALIBRATION_ITEMS) throw new Error('Calibration already has seven items')
     if (existing.some(row => row.objectiveId === objective._id)) throw new Error('Calibration objective was already attempted')
     const unassistedPass = args.serverScorePercent >= 80 && !args.usedHint && !args.usedReveal
     const result = unassistedPass ? 'provisionally_known' as const : 'learning' as const
     const schedulingPriority = unassistedPass ? 'deprioritized' as const : 'remediation' as const
-    const evidencePins = await calibrationEvidence(ctx, args.tokenIdentifier, objective._id)
+    const currentEvidencePins = await calibrationEvidence(ctx, args.tokenIdentifier, objective._id)
+    const evidencePins = scoringJob
+      ? { sourceSnapshotIds: args.scoredSourceSnapshotIds!, contentRevisionPins: args.scoredContentRevisionPins!, verifierVersions: args.scoredVerifierVersions! }
+      : currentEvidencePins
+    if (new Set(evidencePins.sourceSnapshotIds.map(String)).size !== evidencePins.sourceSnapshotIds.length
+      || evidencePins.contentRevisionPins.length !== evidencePins.sourceSnapshotIds.length
+      || evidencePins.contentRevisionPins.some((pin, index) => pin.sourceSnapshotId !== String(evidencePins.sourceSnapshotIds[index]) || !Number.isSafeInteger(pin.revision) || pin.revision < 1 || !Number.isSafeInteger(pin.recordRevision) || pin.recordRevision < 1)
+      || evidencePins.verifierVersions.some(version => !version.trim())) throw new Error('Calibration scoring evidence pins are invalid')
+    if (scoringJob && (canonicalJson(evidencePins.sourceSnapshotIds.map(String)) !== canonicalJson(currentEvidencePins.sourceSnapshotIds.map(String))
+      || canonicalJson(evidencePins.contentRevisionPins) !== canonicalJson(currentEvidencePins.contentRevisionPins)
+      || canonicalJson(evidencePins.verifierVersions) !== canonicalJson(currentEvidencePins.verifierVersions))) throw new Error('Calibration scoring evidence pins no longer match the accepted sources')
     const now = Date.now()
     const attemptId = await ctx.db.insert('masteryAttempts', { userId: args.tokenIdentifier, blueprintRevisionId: blueprint._id, objectiveId: objective._id, kind: 'calibration', activityContractVersion: 'learn-v2.calibration-attempt.v1', providerVersion: args.scorerModel ? 'openrouter-via-cloudflare-ai-gateway.v1' : undefined, attemptedAt: now, idempotencyKey: args.idempotencyKey, requestFingerprint, serverScorePercent: args.serverScorePercent, usedHint: args.usedHint, usedReveal: args.usedReveal, confidence: args.confidence, rubricVersion: args.rubricVersion, response: args.response, scorerVersion: args.scorerVersion, scorerModel: args.scorerModel, criterionResultsJson: args.criterionResultsJson, rubricSnapshot: args.rubricSnapshot, verifierVersionsJson: JSON.stringify(evidencePins.verifierVersions), sourceSnapshotIdsJson: JSON.stringify(evidencePins.sourceSnapshotIds), contentRevisionPinsJson: JSON.stringify(evidencePins.contentRevisionPins), blueprintRecordRevision: blueprint.recordRevision, result })
     await transitionScopedMasteryRecord(ctx, { userId: args.tokenIdentifier, blueprintRevisionId: blueprint._id, objectiveId: objective._id, transition: { state: result, schedulingPriority, updatedAt: now } })
@@ -438,7 +455,7 @@ export const getCalibrationScoringInput = internalQuery({
     const pins = await calibrationEvidence(ctx, args.tokenIdentifier, objective._id)
     const model = process.env.LEARN_V2_CALIBRATION_MODEL?.trim() || process.env.LEARN_V2_MASTERY_MODEL?.trim()
     if (!model) throw new Error('Calibration scorer is unavailable')
-    return { model, objective: { title: objective.title, capability: objective.capability, assessmentContract: objective.assessmentContract }, evidence: pins.evidence, learnerResponse: args.response }
+    return { model, objective: { title: objective.title, capability: objective.capability, assessmentContract: objective.assessmentContract }, evidence: pins.evidence, sourceSnapshotIds: pins.sourceSnapshotIds, contentRevisionPins: pins.contentRevisionPins, verifierVersions: pins.verifierVersions, learnerResponse: args.response }
   },
 })
 
@@ -471,6 +488,9 @@ export const submitCalibrationAttempt = action({
       model: string
       objective: { assessmentContract?: unknown, title: string, capability?: string }
       evidence: Array<{ alias: string, excerpt?: string, locator: string, folderEvidence?: { documentId: string, contentHash: string, sourceRevision: string } }>
+      sourceSnapshotIds: Id<'learnSourceSnapshots'>[]
+      contentRevisionPins: Array<{ sourceSnapshotId: string, revision: number, recordRevision: number, sourceRevision: string | null }>
+      verifierVersions: string[]
       learnerResponse: string
     }
     try {
@@ -537,7 +557,7 @@ export const submitCalibrationAttempt = action({
       throw new Error('Calibration scorer returned invalid output')
     }
     const score = contract.criteria.reduce((total, criterion) => total + (parsed.criterionResults!.find(result => result.key === criterion.key)?.awarded ? criterion.weightPercent : 0), 0)
-    return await ctx.runMutation(internal.learnV2MapCalibration.recordCalibrationAttempt, { tokenIdentifier: identity.tokenIdentifier, blueprintRevisionId: args.blueprintRevisionId, objectiveId: args.objectiveId, expectedBlueprintRecordRevision: args.expectedBlueprintRecordRevision, expectedVoidRevision: args.expectedVoidRevision, idempotencyKey: args.idempotencyKey, serverScorePercent: score, usedHint: args.usedHint, usedReveal: args.usedReveal, confidence: args.confidence, rubricVersion: contract.version, response: args.response, scorerVersion: 'learn-v2.calibration-scorer.v1', scorerModel: input.model, criterionResultsJson: JSON.stringify(parsed.criterionResults), rubricSnapshot: JSON.stringify(input.objective.assessmentContract), providerResponseId: completion.id, scoringJobId: reservation.jobId, scoringLeaseToken: reservation.leaseToken })
+    return await ctx.runMutation(internal.learnV2MapCalibration.recordCalibrationAttempt, { tokenIdentifier: identity.tokenIdentifier, blueprintRevisionId: args.blueprintRevisionId, objectiveId: args.objectiveId, expectedBlueprintRecordRevision: args.expectedBlueprintRecordRevision, expectedVoidRevision: args.expectedVoidRevision, idempotencyKey: args.idempotencyKey, serverScorePercent: score, usedHint: args.usedHint, usedReveal: args.usedReveal, confidence: args.confidence, rubricVersion: contract.version, response: args.response, scorerVersion: 'learn-v2.calibration-scorer.v1', scorerModel: input.model, criterionResultsJson: JSON.stringify(parsed.criterionResults), rubricSnapshot: JSON.stringify(input.objective.assessmentContract), providerResponseId: completion.id, scoringJobId: reservation.jobId, scoringLeaseToken: reservation.leaseToken, scoredSourceSnapshotIds: input.sourceSnapshotIds, scoredContentRevisionPins: input.contentRevisionPins, scoredVerifierVersions: input.verifierVersions })
   },
 })
 

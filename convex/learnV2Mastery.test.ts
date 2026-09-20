@@ -73,6 +73,26 @@ describe('LA2-12 server-scored mastery attempts', () => {
     await expect(beforeCommit.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, beforeCommit.args('stale-before-commit', 80))).rejects.toThrow(/active Blueprint pointer/i)
   })
 
+  test('fails closed when scored evidence revisions drift before attempt commit', async () => {
+    const setup = await fixture()
+    const { scorerVerdict: _verdict, ...request } = setup.args('evidence-drift', 80)
+    const reservation = await setup.t.mutation(internal.learnV2Mastery.beginMasteryScoring, request)
+    expect(reservation.kind).toBe('acquired')
+    if (reservation.kind !== 'acquired') throw new Error('Expected scoring lease')
+    const input = await setup.t.query(internal.learnV2Mastery.getMasteryScoringInput, request)
+    expect(input.kind).toBe('score')
+    if (input.kind !== 'score') throw new Error('Expected scoring input')
+    await setup.t.mutation(internal.learnV2Mastery.markMasteryScoringDispatched, { tokenIdentifier: OWNER.tokenIdentifier, jobId: reservation.jobId, leaseToken: reservation.leaseToken })
+    await setup.t.run(ctx => ctx.db.patch(setup.ids.sourceId, { recordRevision: 2 }))
+    await expect(setup.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, {
+      ...setup.args('evidence-drift', 80),
+      scoringJobId: reservation.jobId,
+      scoringLeaseToken: reservation.leaseToken,
+      scoredSourceSnapshotIds: input.sourceSnapshotIds,
+      scoredContentRevisionPins: input.contentRevisionPins,
+    })).rejects.toThrow(/evidence pins do not match/i)
+  })
+
   test('leaves legacy unscoped mastery read-only and creates the scoped projection', async () => {
     const { t, ids, args } = await fixture()
     const legacyRecordId = await t.run(ctx => ctx.db.insert('masteryRecords', {
@@ -110,16 +130,28 @@ describe('LA2-12 server-scored mastery attempts', () => {
       planRecordRevision: 5,
       blueprintRecordRevision: 3,
     })
+    expect(JSON.parse(rows.attempt!.contentRevisionPinsJson!)).toMatchObject([{ sourceSnapshotId: String(ids.sourceId), sourceRevisionNumber: 1, sourceRecordRevision: 1, sourceRevision: null, excerptLocator: 'paragraph:1', verifierVersion: 'test.verifier.v1' }])
     expect(rows.scoped).toMatchObject({ blueprintRevisionId: ids.blueprintIdRevision, objectiveId: ids.objectiveId, scopeKey: await masteryScopeKey(OWNER.tokenIdentifier, ids.blueprintIdRevision, ids.objectiveId), state: 'independent' })
   })
 
   test('commits at most one deterministic mastery projection for concurrent same-scope commands', async () => {
     const setup = await fixture()
+    const secondSessionId = await setup.t.run(async (ctx) => {
+      const now = Date.now()
+      const sessionId = await ctx.db.insert('studySessions', { userId: OWNER.tokenIdentifier, studyPlanRevisionId: setup.ids.planRevisionId, primaryObjectiveId: setup.ids.objectiveId, status: 'in_progress', revision: 7, scheduledStartAt: now + 1, timezone: 'America/Toronto', placementKind: 'learning' })
+      const contentId = await ctx.db.insert('sessionContent', { userId: OWNER.tokenIdentifier, studySessionId: sessionId, studyPlanRevisionId: setup.ids.planRevisionId, blueprintRevisionId: setup.ids.blueprintIdRevision, objectiveId: setup.ids.objectiveId, revision: 11, status: 'published', assessmentRubricSnapshot: rubric, providerModel: 'test/mastery-model', createdAt: now, publishedAt: now })
+      await ctx.db.patch(sessionId, { startedSessionContentId: contentId, startedSessionContentRevision: 11 })
+      await ctx.db.insert('sessionContentBlocks', { userId: OWNER.tokenIdentifier, sessionContentId: contentId, order: 1, kind: 'independent_application', content: 'Apply the evidence to another novel case.' })
+      const excerpt = await ctx.db.query('learnSourceExcerpts').withIndex('by_userId_and_sourceSnapshotId', q => q.eq('userId', OWNER.tokenIdentifier).eq('sourceSnapshotId', setup.ids.sourceId)).unique()
+      const claimId = await ctx.db.insert('sessionContentClaims', { userId: OWNER.tokenIdentifier, sessionContentId: contentId, order: 1, claim: 'The evidence supports another answer.', verifierVersion: 'test.verifier.v1', confidence: 0.9 })
+      await ctx.db.insert('learnClaimSupports', { userId: OWNER.tokenIdentifier, sessionContentClaimId: claimId, sourceExcerptId: excerpt!._id, sourceSnapshotId: setup.ids.sourceId, entailment: 'entailed', verifierVersion: 'test.verifier.v1', confidence: 0.9, conflictStatus: 'clear', evidenceStatus: 'evidence_available' })
+      return sessionId
+    })
     const [first, second] = await Promise.allSettled([
       setup.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, setup.args('scope-race-a', 80)),
-      setup.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, setup.args('scope-race-b', 80)),
+      setup.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, { ...setup.args('scope-race-b', 80), studySessionId: secondSessionId }),
     ])
-    expect([first.status, second.status].sort()).toEqual(['fulfilled', 'rejected'])
+    expect([first.status, second.status]).toEqual(['fulfilled', 'fulfilled'])
     const scopeKey = await masteryScopeKey(OWNER.tokenIdentifier, setup.ids.blueprintIdRevision, setup.ids.objectiveId)
     const records = await setup.t.run(ctx => ctx.db.query('masteryRecords').withIndex('by_userId_and_scopeKey', q => q.eq('userId', OWNER.tokenIdentifier).eq('scopeKey', scopeKey)).take(2))
     expect(records).toHaveLength(1)

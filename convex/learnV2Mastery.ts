@@ -78,6 +78,17 @@ async function exactContentEvidence(ctx: MutationCtx | QueryCtx, userId: string,
   if (!claims.length || claims.length > 32) throw new Error('Started session evidence is unavailable')
   const sourceIds = new Map<string, Id<'learnSourceSnapshots'>>()
   const verifierVersions = new Set<string>()
+  const contentRevisionPins: Array<{
+    claimId: string
+    supportId: string
+    sourceExcerptId: string
+    sourceSnapshotId: string
+    sourceRevisionNumber: number
+    sourceRecordRevision: number
+    sourceRevision: string | null
+    excerptLocator: string
+    verifierVersion: string
+  }> = []
   const items: Array<{
     alias: string
     claim: string
@@ -96,6 +107,7 @@ async function exactContentEvidence(ctx: MutationCtx | QueryCtx, userId: string,
         || support.entailment !== 'entailed' || support.conflictStatus !== 'clear' || support.evidenceStatus !== 'evidence_available' || !support.verifierVersion?.trim() || (support.confidence ?? 0) < 0.8) throw new Error('Started session evidence is unavailable')
       sourceIds.set(String(source._id), source._id)
       verifierVersions.add(support.verifierVersion)
+      contentRevisionPins.push({ claimId: String(claim._id), supportId: String(support._id), sourceExcerptId: String(excerpt._id), sourceSnapshotId: String(source._id), sourceRevisionNumber: source.revision, sourceRecordRevision: source.recordRevision ?? 1, sourceRevision: source.sourceRevision ?? null, excerptLocator: excerpt.locator, verifierVersion: support.verifierVersion })
       const alias = `source-${String(items.length + 1).padStart(3, '0')}`
       if (source.rightsStatus === 'permitted' && excerpt.rightsStatus === 'permitted' && excerpt.excerpt?.trim()) {
         items.push({ alias, claim: claim.claim, excerpt: excerpt.excerpt })
@@ -108,7 +120,7 @@ async function exactContentEvidence(ctx: MutationCtx | QueryCtx, userId: string,
     }
   }
   if (!sourceIds.size || sourceIds.size > MAX_SOURCES) throw new Error('Started session evidence scope is unavailable')
-  return { sourceIds: [...sourceIds.keys()].sort(), sourceSnapshotIds: [...sourceIds.values()].sort((a, b) => String(a).localeCompare(String(b))), verifierVersions: [...verifierVersions].sort(), items }
+  return { sourceIds: [...sourceIds.keys()].sort(), sourceSnapshotIds: [...sourceIds.values()].sort((a, b) => String(a).localeCompare(String(b))), verifierVersions: [...verifierVersions].sort(), contentRevisionPins: contentRevisionPins.sort((a, b) => a.supportId.localeCompare(b.supportId)), items }
 }
 
 /** A fixed mid-morning local instant avoids DST gaps while preserving calendar-day semantics. */
@@ -298,7 +310,7 @@ export const getMasteryScoringInput = internalQuery({
     if (challenges.length !== 1) throw new Error('Independent application is unavailable')
     const evidence = await exactContentEvidence(ctx, args.tokenIdentifier, scope.content)
     if (!scope.content.providerModel?.trim()) throw new Error('Mastery scorer is unavailable')
-    return { kind: 'score' as const, model: scope.content.providerModel, rubric, challenge: challenges[0]!.content!, evidence: evidence.items, verifierVersions: evidence.verifierVersions }
+    return { kind: 'score' as const, model: scope.content.providerModel, rubric, challenge: challenges[0]!.content!, evidence: evidence.items, sourceSnapshotIds: evidence.sourceSnapshotIds, contentRevisionPins: evidence.contentRevisionPins, verifierVersions: evidence.verifierVersions }
   },
 })
 
@@ -366,6 +378,7 @@ export const submitMasteryAttempt = action({
       if (!Array.isArray(result.criterionResults) || !Array.isArray(result.misconceptionTags)) throw new Error('Mastery scorer returned invalid output')
       const recorded = await ctx.runMutation(internal.learnV2Mastery.recordMasteryAttempt, {
         tokenIdentifier: identity.tokenIdentifier, ...args, scoringJobId: reservation.jobId, scoringLeaseToken: reservation.leaseToken, providerResponseId: completion.id,
+        scoredSourceSnapshotIds: input.sourceSnapshotIds, scoredContentRevisionPins: input.contentRevisionPins,
         scorerVerdict: { scorerVersion: LEARN_V2_MASTERY_SCORER_VERSION, criterionResults: result.criterionResults as Array<{ key: string, awarded: boolean, rationale?: string }>, misconceptionTags: result.misconceptionTags as string[], verifierVersions: input.verifierVersions },
       })
       return { status: 'completed', ...recorded }
@@ -383,6 +396,8 @@ export const recordMasteryAttempt = internalMutation({
     tokenIdentifier: v.string(), studySessionId: v.id('studySessions'), expectedSessionRevision: v.number(), expectedContentRevision: v.number(), expectedPlanRecordRevision: v.number(), expectedBlueprintRecordRevision: v.number(),
     response: v.string(), confidence: v.number(), idempotencyKey: v.string(), scorerVerdict: scorerVerdictValidator,
     scoringJobId: v.optional(v.id('learnJobs')), scoringLeaseToken: v.optional(v.string()), providerResponseId: v.optional(v.string()),
+    scoredSourceSnapshotIds: v.optional(v.array(v.id('learnSourceSnapshots'))),
+    scoredContentRevisionPins: v.optional(v.array(v.object({ claimId: v.string(), supportId: v.string(), sourceExcerptId: v.string(), sourceSnapshotId: v.string(), sourceRevisionNumber: v.number(), sourceRecordRevision: v.number(), sourceRevision: v.union(v.string(), v.null()), excerptLocator: v.string(), verifierVersion: v.string() }))),
   },
   handler: async (ctx, args) => {
     if (!(await hasLearnV2Access(ctx, args.tokenIdentifier))) throw new Error('Learn V2 access denied')
@@ -398,6 +413,7 @@ export const recordMasteryAttempt = internalMutation({
     if ((args.scoringJobId === undefined) !== (args.scoringLeaseToken === undefined)) throw new Error('Mastery scoring command is invalid')
     const scoringJob = args.scoringJobId && await ctx.db.get(args.scoringJobId)
     if (args.scoringJobId && (!scoringJob || scoringJob.userId !== args.tokenIdentifier || scoringJob.type !== SCORING_JOB_TYPE || scoringJob.status !== 'running' || scoringJob.leaseToken !== args.scoringLeaseToken || scoringJob.requestFingerprint !== requestFingerprintValue)) throw new Error('Mastery scoring command is invalid')
+    if (scoringJob && (!args.scoredSourceSnapshotIds?.length || !args.scoredContentRevisionPins?.length)) throw new Error('Mastery scoring evidence pins are unavailable')
     const prior = await ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', args.tokenIdentifier).eq('idempotencyKey', args.idempotencyKey)).unique()
     if (prior) {
       if (prior.requestFingerprint !== requestFingerprintValue) throw new Error('Idempotency key was already used for a different request')
@@ -412,6 +428,10 @@ export const recordMasteryAttempt = internalMutation({
     const scorePercent = scoreCriteria(rubric.criteria, args.scorerVerdict.criterionResults)
     const evidence = await exactContentEvidence(ctx, args.tokenIdentifier, scope.content)
     if (canonicalJson([...args.scorerVerdict.verifierVersions].sort()) !== canonicalJson(evidence.verifierVersions)) throw new Error('Server scorer verifier pins do not match the published content')
+    const scoredSourceSnapshotIds = scoringJob ? args.scoredSourceSnapshotIds! : evidence.sourceSnapshotIds
+    const scoredContentRevisionPins = scoringJob ? args.scoredContentRevisionPins! : evidence.contentRevisionPins
+    if (canonicalJson(scoredSourceSnapshotIds.map(String).sort()) !== canonicalJson(evidence.sourceIds)
+      || canonicalJson(scoredContentRevisionPins) !== canonicalJson(evidence.contentRevisionPins)) throw new Error('Mastery scoring evidence pins do not match the published content')
     const now = Date.now(); const sessionTimezone = scope.session.timezone ?? scope.plan.timezone
     if (!sessionTimezone) throw new Error('Started session timezone pin is unavailable')
     const record = (await getScopedMasteryRecord(ctx, args.tokenIdentifier, scope.blueprint._id, scope.objective._id)).record
@@ -420,7 +440,7 @@ export const recordMasteryAttempt = internalMutation({
     const attemptTimezone = kind === 'retained_transfer' && record?.firstIndependentTimezone ? record.firstIndependentTimezone : sessionTimezone
     const attemptLocalDate = localDateAt(now, attemptTimezone)
     const outcome = deriveMastery({ scorePercent, assisted, kind, previousState: record?.state, firstIndependentLocalDate: record?.firstIndependentLocalDate, attemptLocalDate })
-    const attemptId = await ctx.db.insert('masteryAttempts', { userId: args.tokenIdentifier, blueprintRevisionId: scope.blueprint._id, objectiveId: scope.objective._id, studySessionId: scope.session._id, sessionContentId: scope.content._id, studyPlanRevisionId: scope.plan._id, kind, activityContractVersion: 'learn-v2.mastery-attempt.v1', providerVersion: 'openrouter-via-cloudflare-ai-gateway.v1', attemptedAt: now, attemptLocalDate, attemptTimezone, idempotencyKey: args.idempotencyKey, requestFingerprint: requestFingerprintValue, serverScorePercent: scorePercent, response: args.response, criterionResultsJson: JSON.stringify(args.scorerVerdict.criterionResults), misconceptionTagsJson: JSON.stringify(args.scorerVerdict.misconceptionTags), usedHint: scope.session.substantiveHintUsedAt !== undefined, usedReveal: scope.session.answerRevealedAt !== undefined, confidence: args.confidence, rubricVersion: rubric.version, rubricSnapshot: scope.content.assessmentRubricSnapshot, scorerVersion: args.scorerVerdict.scorerVersion, scorerModel: scope.content.providerModel, verifierVersionsJson: JSON.stringify(evidence.verifierVersions), sourceSnapshotIdsJson: JSON.stringify(evidence.sourceIds), sessionRevision: scope.session.revision, contentRevision: scope.content.revision, planRevision: scope.plan.revision, planRecordRevision: scope.plan.recordRevision, blueprintRecordRevision: scope.blueprint.recordRevision, result: outcome.state })
+    const attemptId = await ctx.db.insert('masteryAttempts', { userId: args.tokenIdentifier, blueprintRevisionId: scope.blueprint._id, objectiveId: scope.objective._id, studySessionId: scope.session._id, sessionContentId: scope.content._id, studyPlanRevisionId: scope.plan._id, kind, activityContractVersion: 'learn-v2.mastery-attempt.v1', providerVersion: 'openrouter-via-cloudflare-ai-gateway.v1', attemptedAt: now, attemptLocalDate, attemptTimezone, idempotencyKey: args.idempotencyKey, requestFingerprint: requestFingerprintValue, serverScorePercent: scorePercent, response: args.response, criterionResultsJson: JSON.stringify(args.scorerVerdict.criterionResults), misconceptionTagsJson: JSON.stringify(args.scorerVerdict.misconceptionTags), usedHint: scope.session.substantiveHintUsedAt !== undefined, usedReveal: scope.session.answerRevealedAt !== undefined, confidence: args.confidence, rubricVersion: rubric.version, rubricSnapshot: scope.content.assessmentRubricSnapshot, scorerVersion: args.scorerVerdict.scorerVersion, scorerModel: scope.content.providerModel, verifierVersionsJson: JSON.stringify(evidence.verifierVersions), sourceSnapshotIdsJson: JSON.stringify(scoredSourceSnapshotIds.map(String).sort()), contentRevisionPinsJson: JSON.stringify(scoredContentRevisionPins), sessionRevision: scope.session.revision, contentRevision: scope.content.revision, planRevision: scope.plan.revision, planRecordRevision: scope.plan.recordRevision, blueprintRecordRevision: scope.blueprint.recordRevision, result: outcome.state })
     const followUp = await createFollowUp(ctx, { userId: args.tokenIdentifier, scope, attemptId, outcome, now, timezone: attemptTimezone, firstIndependentLocalDate: outcome.setFirstIndependent ? attemptLocalDate : record?.firstIndependentLocalDate, sourceIds: evidence.sourceSnapshotIds })
     const patch = { state: outcome.state, schedulingPriority: outcome.remediation ? 'remediation' as const : 'standard' as const, lastAttemptAt: now, lastAttemptId: attemptId, nextReviewAt: followUp?.scheduledStartAt, remediationAttemptId: outcome.remediation ? attemptId : undefined, ...(outcome.setFirstIndependent ? { firstIndependentPassAt: now, firstIndependentLocalDate: attemptLocalDate, firstIndependentTimezone: attemptTimezone } : {}), updatedAt: now }
     await transitionScopedMasteryRecord(ctx, { userId: args.tokenIdentifier, blueprintRevisionId: scope.blueprint._id, objectiveId: scope.objective._id, transition: patch })

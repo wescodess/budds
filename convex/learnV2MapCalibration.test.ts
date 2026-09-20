@@ -241,6 +241,36 @@ describe('Learn V2 revision-safe map editing and calibration', () => {
     }
   })
 
+  test('fails closed when calibration evidence revisions drift after scorer input is pinned', async () => {
+    const previousModel = process.env.LEARN_V2_CALIBRATION_MODEL
+    process.env.LEARN_V2_CALIBRATION_MODEL = 'mock-calibration'
+    try {
+      const setup = await setupMap()
+      const accepted = await setup.owner.mutation(api.learnV2MapCalibration.acceptBlueprintMap, { blueprintRevisionId: setup.blueprint._id, expectedRecordRevision: 1, expectedVoidRevision: 2, idempotencyKey: 'drift-accept' })
+      const request = { tokenIdentifier: identity.tokenIdentifier, blueprintRevisionId: setup.blueprint._id, objectiveId: setup.objectives[0]!, expectedBlueprintRecordRevision: accepted.recordRevision, expectedVoidRevision: 3, response: 'Pinned response.', confidence: 4, usedHint: false, usedReveal: false, idempotencyKey: 'drift-calibration' }
+      const reservation = await setup.t.mutation(internal.learnV2MapCalibration.reserveCalibrationScoring, request)
+      expect(reservation.kind).toBe('acquired')
+      if (reservation.kind !== 'acquired') throw new Error('Expected calibration scoring lease')
+      await setup.t.mutation(internal.learnV2MapCalibration.markCalibrationScoringDispatched, { tokenIdentifier: identity.tokenIdentifier, jobId: reservation.jobId, leaseToken: reservation.leaseToken, expectedRevision: reservation.revision })
+      const input = await setup.t.query(internal.learnV2MapCalibration.getCalibrationScoringInput, { tokenIdentifier: identity.tokenIdentifier, jobId: reservation.jobId, leaseToken: reservation.leaseToken, blueprintRevisionId: setup.blueprint._id, objectiveId: setup.objectives[0]!, response: request.response })
+      await setup.t.run(ctx => ctx.db.patch(setup.sourceSnapshotId, { recordRevision: 2 }))
+      await expect(setup.t.mutation(internal.learnV2MapCalibration.recordCalibrationAttempt, {
+        ...request,
+        serverScorePercent: 100,
+        rubricVersion: 'learn-v2.assessment.v1',
+        scoringJobId: reservation.jobId,
+        scoringLeaseToken: reservation.leaseToken,
+        scoredSourceSnapshotIds: input.sourceSnapshotIds,
+        scoredContentRevisionPins: input.contentRevisionPins,
+        scoredVerifierVersions: input.verifierVersions,
+      })).rejects.toThrow(/evidence pins no longer match/i)
+    }
+    finally {
+      if (previousModel === undefined) delete process.env.LEARN_V2_CALIBRATION_MODEL
+      else process.env.LEARN_V2_CALIBRATION_MODEL = previousModel
+    }
+  })
+
   test('scores calibration through the public action, persists provider pins, and replays before dispatch', async () => {
     const previousModel = process.env.LEARN_V2_CALIBRATION_MODEL
     process.env.LEARN_V2_CALIBRATION_MODEL = 'mock-calibration'
@@ -260,7 +290,8 @@ describe('Learn V2 revision-safe map editing and calibration', () => {
       const scored = await setup.owner.action(api.learnV2MapCalibration.submitCalibrationAttempt, args)
       expect(scored).toMatchObject({ result: 'provisionally_known', replayed: false })
       expect(await setup.owner.action(api.learnV2MapCalibration.submitCalibrationAttempt, args)).toMatchObject({ result: 'provisionally_known', replayed: true })
-      expect(await setup.t.run(ctx => ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', identity.tokenIdentifier).eq('idempotencyKey', args.idempotencyKey)).unique())).toMatchObject({
+      const persistedAttempt = await setup.t.run(ctx => ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', identity.tokenIdentifier).eq('idempotencyKey', args.idempotencyKey)).unique())
+      expect(persistedAttempt).toMatchObject({
         response: args.response,
         activityContractVersion: 'learn-v2.calibration-attempt.v1',
         providerVersion: 'openrouter-via-cloudflare-ai-gateway.v1',
@@ -269,8 +300,8 @@ describe('Learn V2 revision-safe map editing and calibration', () => {
         scorerVersion: 'learn-v2.calibration-scorer.v1',
         verifierVersionsJson: JSON.stringify(['learn-v2.calibration-evidence-policy.v1']),
         sourceSnapshotIdsJson: JSON.stringify([setup.sourceSnapshotId]),
-        contentRevisionPinsJson: JSON.stringify([{ sourceSnapshotId: String(setup.sourceSnapshotId), revision: 1, recordRevision: 1, sourceRevision: `sha256:${'a'.repeat(64)}` }]),
       })
+      expect(JSON.parse(persistedAttempt!.contentRevisionPinsJson!)).toEqual([{ sourceSnapshotId: String(setup.sourceSnapshotId), revision: 1, recordRevision: 1, sourceRevision: `sha256:${'a'.repeat(64)}` }])
     }
     finally {
       if (previousModel === undefined) delete process.env.LEARN_V2_CALIBRATION_MODEL
