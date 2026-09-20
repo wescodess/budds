@@ -1,6 +1,7 @@
 import { CONVEX_INJECTION_KEY } from '@convex-vue/core'
 import { makeFunctionReference } from 'convex/server'
 import { inject } from 'vue'
+import { isCurrentAuthenticatedCallback } from '~/utils/convex-auth-state'
 
 const upsertUserRef = makeFunctionReference<'mutation'>('users:upsertUser')
 
@@ -78,9 +79,20 @@ export default defineNuxtPlugin({
         convexAuthReady.value = false
         convexAuthenticated.value = false
         convexClient.client.setAuth(fetchToken, (isAuthenticated: boolean) => {
-          convexAuthenticated.value = isAuthenticated
-          if (isAuthenticated && !upsertDone) bootstrapProfile(epoch)
-          else if (!upsertPending) convexAuthReady.value = true
+          // Convex can emit an initial false callback while it is still
+          // resolving the token. That is not an account-access decision, and
+          // applying it after a successful callback can incorrectly replace
+          // an authenticated hard refresh with the Learn V2 denied state.
+          if (!isCurrentAuthenticatedCallback(
+            epoch,
+            authEpoch,
+            loggedIn.value,
+            isAuthenticated,
+          )) return
+
+          convexAuthenticated.value = true
+          if (!upsertDone) bootstrapProfile(epoch)
+          else convexAuthReady.value = true
         })
       } else {
         upsertDone = false

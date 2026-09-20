@@ -2,6 +2,7 @@ import { v } from 'convex/values'
 import { query } from './_generated/server'
 import type { Doc, Id } from './_generated/dataModel'
 import { requireLearnV2QueryAccess } from './lib/learnV2Access'
+import { addCalendarDays, localDateAt } from '../shared/learn-v2-mastery'
 
 const MAX_VOIDS = 32
 const MAX_SOURCES = 64
@@ -114,7 +115,21 @@ async function planProjection(ctx: Parameters<typeof requireLearnV2QueryAccess>[
   const accepted = root.activeRevisionId ? await ctx.db.get(root.activeRevisionId) : revisions.find(row => row.status === 'accepted') ?? null
   const sessions = accepted ? await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q => q.eq('userId', userId).eq('studyPlanRevisionId', accepted._id)).take(MAX_SESSIONS + 1) : []
   if (sessions.length > MAX_SESSIONS) throw new Error('Learn V2 sessions exceed their bounded contract')
-  return { root, preview, accepted, sessions }
+  const now = Date.now()
+  const projectedSessions = []
+  for (const session of sessions) {
+    let canStartEarly = session.status === 'in_progress'
+    if (session.status === 'ready' && (session.scheduledEndAt === undefined || session.scheduledEndAt >= now)) {
+      if (session.placementKind !== 'retained_review') canStartEarly = true
+      else {
+        const record = await ctx.db.query('masteryRecords').withIndex('by_userId_and_objectiveId', q => q.eq('userId', userId).eq('objectiveId', session.primaryObjectiveId)).unique()
+        const timezone = record?.firstIndependentTimezone ?? session.timezone ?? accepted?.timezone ?? 'UTC'
+        canStartEarly = Boolean(record?.firstIndependentLocalDate && localDateAt(now, timezone) >= addCalendarDays(record.firstIndependentLocalDate, 7))
+      }
+    }
+    projectedSessions.push({ ...session, canStartEarly })
+  }
+  return { root, preview, accepted, sessions: projectedSessions }
 }
 
 async function blueprintGenerationProjection(ctx: Parameters<typeof requireLearnV2QueryAccess>[0], userId: string, blueprint: BlueprintRow | null) {

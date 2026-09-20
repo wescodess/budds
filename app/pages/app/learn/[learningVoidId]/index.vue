@@ -1,6 +1,5 @@
 <script setup lang="ts">
-/* eslint-disable @typescript-eslint/no-explicit-any -- session rows are an adapter boundary from the authoritative projection. */
-import { useLearnV2Journey } from '~/composables/useLearnV2Journey'
+import { selectLearnV2StartableSession, useLearnV2Journey } from '~/composables/useLearnV2Journey'
 import type { LearnMapEdit, LearnScheduleInput, LearnWorkspaceSection } from '~/types/learn-v2-journey'
 
 const route = useRoute()
@@ -29,7 +28,7 @@ function nextAction() {
   const action = snapshot.value?.nextAction.kind
   if (action === 'calibrate') void router.push(`/app/learn/${id.value}/calibration`)
   else if (action === 'start_session' || action === 'resume_session') {
-    const session = mission.value?.plan?.sessions?.find((row: any) => ['ready', 'in_progress'].includes(row.status))
+    const session = selectLearnV2StartableSession(mission.value?.plan?.sessions)
     if (session) void router.push(`/app/learn/${id.value}/sessions/${session._id}`)
   }
   else navigate(action === 'review_sources' || action === 'finish_setup' ? 'sources' : action === 'review_map' ? 'map' : action === 'review_plan' ? 'plan' : 'overview')

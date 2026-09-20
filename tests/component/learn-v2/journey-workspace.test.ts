@@ -15,11 +15,15 @@ const mission = {
 
 describe('Learn V2 journey workspace seams', () => {
   it('prefers the accepted plan revision over a stale preview', async () => {
-    const { selectLearnV2PlanRevision } = await import('~/composables/useLearnV2Journey')
+    const { selectLearnV2PlanRevision, selectLearnV2StartableSession } = await import('~/composables/useLearnV2Journey')
     const preview = { _id: 'preview' }
     const accepted = { _id: 'accepted' }
     expect(selectLearnV2PlanRevision({ preview, accepted })).toEqual({ accepted: true, revision: accepted })
     expect(selectLearnV2PlanRevision({ preview, accepted: null })).toEqual({ accepted: false, revision: preview })
+    expect(selectLearnV2StartableSession([
+      { _id: 'retained', status: 'ready', canStartEarly: false },
+      { _id: 'learning', status: 'ready', canStartEarly: true },
+    ])?._id).toBe('learning')
   })
 
   it('degrades malformed legacy plan snapshots instead of taking down the workspace', () => {
