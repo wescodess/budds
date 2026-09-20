@@ -15,7 +15,7 @@ export function useLearnV2Access() {
   )
 
   const access = import.meta.client
-    ? useConvexQuery(api.learnV2Access.status, {}, { enabled: convexAuthUsable })
+    ? useConvexQuery(api.learnV2Access.status, {}, { enabled: convexAuthUsable, ssr: false })
     : { data: ref<LearnV2AccessStatus>(), pending: ref(false) }
 
   const allowed = computed(
