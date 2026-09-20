@@ -105,6 +105,7 @@ describe('GET /api/export/me', () => {
       ],
       conversations: [{ _id: 'c1', title: 'chat', userId: 'tok|user1', folderId: 'f1' }],
       messages: [{ _id: 'm1', role: 'user', content: 'hi', userId: 'tok|user1', conversationId: 'c1' }],
+      quizAnswerAssessments: [{ _id: 'qa1', userId: 'tok|user1', status: 'available', label: 'fully_correct' }],
       learnFolderSourceManifests: [{ _id: 'fm1', status: 'frozen', userId: 'tok|user1' }],
       learnFolderSourceManifestFolders: [{ _id: 'ff1', manifestId: 'fm1', userId: 'tok|user1' }],
       learnFolderSourceManifestEntries: [{ _id: 'fe1', manifestId: 'fm1', userId: 'tok|user1' }],
@@ -201,6 +202,7 @@ describe('GET /api/export/me', () => {
         'masteryAttempts.json',
         'masteryRecords.json',
         'messages.json',
+        'quizAnswerAssessments.json',
         'quizAttempts.json',
         'quizQuestions.json',
         'quizzes.json',
@@ -221,17 +223,21 @@ describe('GET /api/export/me', () => {
     )
 
     const manifest = JSON.parse(strFromU8(entries['manifest.json']!))
-    expect(manifest.schemaVersion).toBe(8)
+    expect(manifest.schemaVersion).toBe(9)
     expect(manifest.userId).toBe('tok|user1')
     expect(manifest.counts.documents).toBe(1)
     expect(manifest.counts.learnFolderSourceManifests).toBe(1)
     expect(manifest.counts.learnFolderSourceManifestFolders).toBe(1)
     expect(manifest.counts.learnFolderSourceManifestEntries).toBe(1)
+    expect(manifest.counts.quizAnswerAssessments).toBe(1)
     expect(manifest.unresolvedDocuments).toEqual([])
     expect(manifest.nonFileBackedDocuments).toEqual([])
 
     const pdf = strFromU8(entries['documents/d1.pdf']!)
     expect(pdf).toContain('%PDF-1.4')
+    expect(JSON.parse(strFromU8(entries['quizAnswerAssessments.json']!))).toEqual([
+      { _id: 'qa1', userId: 'tok|user1', status: 'available', label: 'fully_correct' },
+    ])
   })
 
   test('follows Convex cursors and streams message and folder-manifest pages into their JSON entries', async () => {

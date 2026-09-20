@@ -4,7 +4,7 @@ import { LEARNING_DECISION_MAX_ITEMS, type QuizDecisionItem, type TypedDecisionR
 import { evaluateWithLaya, type LayaEvaluatorBinding } from './laya-adapter'
 
 export * from './contracts'
-export type LearningDecisionMode = 'off' | 'shadow'
+export type LearningDecisionMode = 'off' | 'shadow' | 'advisory'
 export type LearningDecisionProvider = 'laya'
 
 /** Provider-neutral dispatch. Feature callers do not import a provider adapter. */
@@ -12,7 +12,7 @@ export async function evaluateTypedDecision(event: H3Event, request: TypedDecisi
   const config = useRuntimeConfig(event)
   const mode = readConfiguredRuntimeValue(config.learningDecisionMode, 'NUXT_LEARNING_DECISION_MODE') as LearningDecisionMode
   const provider = readConfiguredRuntimeValue(config.learningDecisionProvider, 'NUXT_LEARNING_DECISION_PROVIDER') as LearningDecisionProvider
-  if (mode !== 'shadow') return unavailableDecision('disabled')
+  if (mode !== 'shadow' && mode !== 'advisory') return unavailableDecision('disabled')
   const token = readConfiguredRuntimeValue(config.layaEvaluatorToken, 'NUXT_LAYA_EVALUATOR_TOKEN')
   const url = readConfiguredRuntimeValue(config.layaEvaluatorUrl, 'NUXT_LAYA_EVALUATOR_URL')
   const cloudflareEnv = event.context.cloudflare?.env as Record<string, unknown> | undefined

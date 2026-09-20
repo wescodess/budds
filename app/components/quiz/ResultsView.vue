@@ -9,6 +9,11 @@ const props = defineProps<{
   attemptId: Id<'quizAttempts'>
 }>()
 
+const semanticReviewEnabled = useRuntimeConfig().public.quizSemanticReviewEnabled === true
+const assessmentRequestedFor = ref<string | null>(null)
+const assessmentRequestAttempts = ref(0)
+let assessmentRetryTimer: ReturnType<typeof setTimeout> | null = null
+
 const emit = defineEmits<{
   retake: []
   back: []
@@ -84,7 +89,49 @@ watch(results, (r) => {
   scoreRafId = requestAnimationFrame(tick)
 }, { immediate: true })
 
-onUnmounted(cancelScoreAnimation)
+function clearAssessmentRetry() {
+  if (assessmentRetryTimer) clearTimeout(assessmentRetryTimer)
+  assessmentRetryTimer = null
+}
+
+function requestPendingAssessment() {
+  const attemptKey = String(props.attemptId)
+  if (assessmentRequestedFor.value === attemptKey || assessmentRequestAttempts.value >= 2) return
+  assessmentRequestedFor.value = attemptKey
+  assessmentRequestAttempts.value++
+  void $fetch('/api/quiz/assess-attempt', {
+    method: 'POST',
+    body: { attemptId: props.attemptId },
+  }).catch(() => undefined).finally(() => {
+    if (!results.value?.results.some(result => result.semanticAssessment?.status === 'pending') || assessmentRequestAttempts.value >= 2) return
+    clearAssessmentRetry()
+    assessmentRetryTimer = setTimeout(() => {
+      assessmentRequestedFor.value = null
+      if (results.value) requestPendingAssessment()
+    }, 5_000)
+  })
+}
+
+onUnmounted(() => {
+  cancelScoreAnimation()
+  clearAssessmentRetry()
+})
+
+watch(results, (value) => {
+  if (!import.meta.client || !semanticReviewEnabled || !value) return
+  const hasPending = value.results.some(result => result.semanticAssessment?.status === 'pending')
+  if (!hasPending) {
+    clearAssessmentRetry()
+    return
+  }
+  requestPendingAssessment()
+}, { immediate: true })
+
+watch(() => props.attemptId, () => {
+  clearAssessmentRetry()
+  assessmentRequestedFor.value = null
+  assessmentRequestAttempts.value = 0
+})
 
 const { springGentle } = useMotionPresets()
 </script>
@@ -146,7 +193,7 @@ const { springGentle } = useMotionPresets()
 
     <div v-if="results.results.length > 0">
       <h3 class="mb-3 text-sm font-semibold">Question Review</h3>
-      <QuizReviewPanel :results="results.results" />
+      <QuizReviewPanel :results="results.results" :semantic-review-enabled="semanticReviewEnabled" />
     </div>
   </Motion>
 </template>

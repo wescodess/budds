@@ -1096,7 +1096,7 @@ describe('courses.deleteCourse — AC3: cascade deletion', () => {
       folderId,
     })
 
-    const { courseScopedQuizId, normalQuizId } = await t.run(async (ctx) => {
+    const { courseScopedQuizId, normalQuizId, assessmentId, answerId, attemptId } = await t.run(async (ctx) => {
       const csQuizId = await ctx.db.insert('quizzes', {
         userId: USER_A.tokenIdentifier,
         folderId,
@@ -1116,6 +1116,45 @@ describe('courses.deleteCourse — AC3: cascade deletion', () => {
         masteryLevel: 'new',
       })
 
+      const questionId = await ctx.db.insert('quizQuestions', {
+        quizId: csQuizId,
+        userId: USER_A.tokenIdentifier,
+        order: 0,
+        question: 'Explain the course concept.',
+        type: 'free-response',
+        correctAnswer: 'A grounded answer.',
+        sourceChunkContent: 'Course evidence.',
+      })
+      const quizAttemptId = await ctx.db.insert('quizAttempts', {
+        userId: USER_A.tokenIdentifier,
+        quizId: csQuizId,
+        score: 0,
+        total: 1,
+        status: 'completed',
+        completedAt: Date.now(),
+      })
+      const attemptAnswerId = await ctx.db.insert('attemptAnswers', {
+        attemptId: quizAttemptId,
+        questionId,
+        userAnswer: 'A learner answer.',
+        isCorrect: false,
+        answeredAt: Date.now(),
+      })
+      const quizAssessmentId = await ctx.db.insert('quizAnswerAssessments', {
+        userId: USER_A.tokenIdentifier,
+        attemptId: quizAttemptId,
+        attemptAnswerId,
+        questionId,
+        kind: 'quiz.free_response_assessment.v1',
+        status: 'pending',
+        questionSnapshot: { question: 'Explain the course concept.', questionType: 'free-response', expectedAnswer: 'A grounded answer.', evidenceExcerpt: 'Course evidence.' },
+        learnerAnswerSnapshot: 'A learner answer.',
+        deterministicIsCorrect: false,
+        rubricVersion: 'quiz.free_response_assessment.v1',
+        rubricSnapshot: [],
+        requestedAt: Date.now(),
+      })
+
       const nQuizId = await ctx.db.insert('quizzes', {
         userId: USER_A.tokenIdentifier,
         folderId,
@@ -1123,13 +1162,16 @@ describe('courses.deleteCourse — AC3: cascade deletion', () => {
         status: 'ready',
       })
 
-      return { courseScopedQuizId: csQuizId, normalQuizId: nQuizId }
+      return { courseScopedQuizId: csQuizId, normalQuizId: nQuizId, assessmentId: quizAssessmentId, answerId: attemptAnswerId, attemptId: quizAttemptId }
     })
 
     await asUser.action(api.courses.deleteCourse, { id: result.courseId })
 
     const csQuiz = await t.run(async (ctx) => ctx.db.get(courseScopedQuizId))
     expect(csQuiz).toBeNull()
+    expect(await t.run(ctx => ctx.db.get(assessmentId))).toBeNull()
+    expect(await t.run(ctx => ctx.db.get(answerId))).toBeNull()
+    expect(await t.run(ctx => ctx.db.get(attemptId))).toBeNull()
 
     const normalQuiz = await t.run(async (ctx) => ctx.db.get(normalQuizId))
     expect(normalQuiz).not.toBeNull()

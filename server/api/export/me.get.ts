@@ -14,6 +14,7 @@ const EXPORT_COLLECTIONS = [
   'quizzes',
   'quizQuestions',
   'quizAttempts',
+  'quizAnswerAssessments',
   'flashcardSets',
   'flashcards',
   'flashcardRooms',
@@ -320,7 +321,7 @@ export default defineEventHandler(async (event) => {
       }
 
       await addJsonValue('manifest.json', {
-        schemaVersion: 8,
+        schemaVersion: 9,
         exportedAt: new Date().toISOString(),
         userId: metadata.userId,
         user: metadata.user,

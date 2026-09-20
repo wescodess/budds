@@ -15,6 +15,7 @@ const exportCollectionValidator = v.union(
   v.literal('quizzes'),
   v.literal('quizQuestions'),
   v.literal('quizAttempts'),
+  v.literal('quizAnswerAssessments'),
   v.literal('flashcardSets'),
   v.literal('flashcards'),
   v.literal('flashcardRooms'),
@@ -118,6 +119,8 @@ export const getUserDataPage = query({
         return await ctx.db.query('quizQuestions').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
       case 'quizAttempts':
         return await ctx.db.query('quizAttempts').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+      case 'quizAnswerAssessments':
+        return await ctx.db.query('quizAnswerAssessments').withIndex('by_userId_and_attemptId', q => q.eq('userId', userId)).paginate(paginationOpts)
       case 'flashcardSets':
         return await ctx.db.query('flashcardSets').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
       case 'flashcards':

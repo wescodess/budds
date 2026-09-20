@@ -63,6 +63,7 @@ const TEST_EXPORT_COLLECTIONS = [
   'quizzes',
   'quizQuestions',
   'quizAttempts',
+  'quizAnswerAssessments',
   'flashcardSets',
   'flashcards',
   'flashcardRooms',
@@ -596,21 +597,28 @@ describe('dataExport paginated queries', () => {
       quizId: bQuiz.quizId,
       answers: [{ questionId: bQs[0]!._id, response: 'A1' }],
     })
-    await t.run(async (ctx) => {
-      await ctx.db.insert('attemptAnswers', {
+    const { aAnswerId, bAnswerId } = await t.run(async (ctx) => ({
+      aAnswerId: await ctx.db.insert('attemptAnswers', {
         attemptId: aAttempt.attemptId,
         questionId: aQs[0]!._id,
         userAnswer: 'A1',
         isCorrect: true,
         answeredAt: Date.now(),
-      })
-      await ctx.db.insert('attemptAnswers', {
+      }),
+      bAnswerId: await ctx.db.insert('attemptAnswers', {
         attemptId: bAttempt.attemptId,
         questionId: bQs[0]!._id,
         userAnswer: 'A1',
         isCorrect: true,
         answeredAt: Date.now(),
-      })
+      }),
+    }))
+    const { aAssessmentId } = await t.run(async (ctx) => {
+      const snapshot = { question: 'Q1', questionType: 'free-response' as const, expectedAnswer: 'A1', evidenceExcerpt: 'c1' }
+      return {
+        aAssessmentId: await ctx.db.insert('quizAnswerAssessments', { userId: USER_A.tokenIdentifier, attemptId: aAttempt.attemptId, attemptAnswerId: aAnswerId, questionId: aQs[0]!._id, kind: 'quiz.free_response_assessment.v1', status: 'pending', questionSnapshot: snapshot, learnerAnswerSnapshot: 'A1', deterministicIsCorrect: true, rubricVersion: 'quiz.free_response_assessment.v1', rubricSnapshot: [], requestedAt: Date.now() }),
+        bAssessmentId: await ctx.db.insert('quizAnswerAssessments', { userId: USER_B.tokenIdentifier, attemptId: bAttempt.attemptId, attemptAnswerId: bAnswerId, questionId: bQs[0]!._id, kind: 'quiz.free_response_assessment.v1', status: 'pending', questionSnapshot: snapshot, learnerAnswerSnapshot: 'A1', deterministicIsCorrect: true, rubricVersion: 'quiz.free_response_assessment.v1', rubricSnapshot: [], requestedAt: Date.now() }),
+      }
     })
 
     const result = await collectUserDataForTest(a.asUser)
@@ -619,6 +627,9 @@ describe('dataExport paginated queries', () => {
     expect(result.quizAttempts.every((a: any) => a.userId === USER_A.tokenIdentifier)).toBe(true)
     expect(result.attemptAnswers).toHaveLength(1)
     expect(result.attemptAnswers[0]!.attemptId).toBe(aAttempt.attemptId)
+    expect(result.quizAnswerAssessments).toHaveLength(1)
+    expect(result.quizAnswerAssessments[0]!._id).toBe(aAssessmentId)
+    expect(result.quizAnswerAssessments[0]!.userId).toBe(USER_A.tokenIdentifier)
   })
 
   test('exports calendar metadata for the caller without OAuth credentials', async () => {

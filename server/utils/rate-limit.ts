@@ -11,6 +11,7 @@ export type RateLimitedRoute
     | 'export.me'
     | 'flashcards.generate'
     | 'quiz.generate'
+    | 'quiz.assess-attempt'
     | 'rag.chat'
 
 export async function requireRateLimit(

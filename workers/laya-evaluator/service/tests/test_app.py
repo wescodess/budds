@@ -15,6 +15,10 @@ def payload():
     return {"kind": "quiz_quality", "requestId": "r1", "inputDigest": "a" * 64, "items": [{"id": "q1", "question": "What is ATP?", "options": ["Energy"], "correctAnswer": "Energy"}]}
 
 
+def semantic_payload():
+    return {"kind": "quiz.free_response_assessment.v1", "requestId": "s1", "inputDigest": "b" * 64, "items": [{"id": "a1", "question": "Describe ATP.", "questionType": "free-response", "expectedAnswer": "Energy carrier", "learnerAnswer": "Carries energy", "evidenceExcerpt": "ATP carries chemical energy.", "rubricVersion": "quiz.free_response_assessment.v1", "rubric": [{"label": "fully_correct", "description": "The response answers the question completely and is supported by the evidence."}, {"label": "partially_correct", "description": "The response contains a supported correct idea but is materially incomplete or has a minor error."}, {"label": "incorrect", "description": "The response is contradicted by the evidence, unsupported, or misses the requested concept."}, {"label": "uncertain", "description": "The evidence or response is insufficient to make a reliable assessment."}]}]}
+
+
 def call(server, method, path, body=None, declared_length=None):
     raw = None if body is None else (body if isinstance(body, bytes) else json.dumps(body).encode())
     headers = {"Content-Type": "application/json"}
@@ -46,7 +50,9 @@ class LayaServiceTests(unittest.TestCase):
             self.assertEqual(call(server, "GET", "/health/ready")[0], 200)
             status, result = call(server, "POST", "/v1/evaluate", payload())
             self.assertEqual(status, 200)
-            self.assertEqual(result["decisions"], [{"id": "q1", "label": "supported", "confidence": 0.5}])
+            self.assertEqual(result["decisions"][0]["label"], "supported")
+            self.assertEqual(result["decisions"][0]["confidence"], 1.0)
+            self.assertEqual(result["decisions"][0]["probabilities"], {"supported": 1.0, "needs_review": 0.0})
         finally:
             server.shutdown(); server.server_close()
 
@@ -60,6 +66,11 @@ class LayaServiceTests(unittest.TestCase):
         self.assertFalse(valid_request(duplicate))
         invalid_item = payload(); invalid_item["items"][0]["unknown"] = True
         self.assertFalse(valid_request(invalid_item))
+        self.assertTrue(valid_request(semantic_payload()))
+        invalid_semantic = semantic_payload(); invalid_semantic["items"][0]["evidenceExcerpt"] = ""
+        self.assertFalse(valid_request(invalid_semantic))
+        changed_policy = semantic_payload(); changed_policy["items"][0]["rubric"][0]["description"] = "changed policy"
+        self.assertFalse(valid_request(changed_policy))
         server, _ = running_app(FakeBackend())
         try:
             self.assertEqual(call(server, "POST", "/v1/evaluate", {"unexpected": True})[0], 422)
@@ -70,17 +81,22 @@ class LayaServiceTests(unittest.TestCase):
 
     def test_laya_questions_identify_their_own_state_items(self):
         batch = payload()["items"] + [{"id": "q2", "question": "What is DNA?", "correctAnswer": "Genetic material"}]
-        state, questions = build_laya_inputs(batch)
+        state, questions = build_laya_inputs("quiz_quality", batch)
         self.assertEqual(set(state), {"q1", "q2"})
         self.assertIn("'q1'", questions["q1"]["instructions"])
         self.assertIn("'q2'", questions["q2"]["instructions"])
         self.assertNotEqual(questions["q1"]["instructions"], questions["q2"]["instructions"])
 
+        semantic = semantic_payload()
+        state, questions = build_laya_inputs(semantic["kind"], semantic["items"])
+        self.assertEqual(state["a1"]["learnerAnswer"], "Carries energy")
+        self.assertEqual(set(questions["a1"]["criteria"]), {"fully_correct", "partially_correct", "incorrect", "uncertain"})
+
     def test_backend_failures_and_mismatched_ids_are_redacted_as_unavailable(self):
         class FailingBackend:
-            def evaluate(self, _items): raise RuntimeError("sensitive raw model output")
+            def evaluate(self, _kind, _items): raise RuntimeError("sensitive raw model output")
         class WrongIdsBackend:
-            def evaluate(self, _items): return [{"id": "other", "label": "supported", "confidence": 1}]
+            def evaluate(self, _kind, _items): return [{"id": "other", "label": "supported", "confidence": 1}]
         for backend in (FailingBackend(), WrongIdsBackend()):
             server, _ = running_app(backend)
             try:

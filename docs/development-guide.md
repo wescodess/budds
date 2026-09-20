@@ -46,6 +46,7 @@ The `postinstall` script runs `validate-env.mjs` and `nuxt prepare` automaticall
 | `NUXT_AUDIO_OVERVIEW_WORKER_TOKEN` | `AUDIO_OVERVIEW_WORKER_TOKEN` | Shared 32+ character launch/orchestration credential for the Workflow Worker and Convex lifecycle mutations |
 | `NUXT_AUDIO_OVERVIEW_WORKER_URL` | `AUDIO_OVERVIEW_WORKER_URL` | Local Worker URL; production uses the service binding instead |
 | `NUXT_CALENDAR_TOKEN_ENCRYPTION_KEY` | `CALENDAR_TOKEN_ENCRYPTION_KEY` | Server-only Base64 AES key; use the `NUXT_` name in Pages and the unprefixed name in Convex |
+| `NUXT_QUIZ_ASSESSMENT_WRITE_SECRET` | `QUIZ_ASSESSMENT_WRITE_SECRET` | Separate 32+ character capability for Nitro-owned advisory assessment writes; configure the matching value in Pages and Convex |
 
 Dia variables are legacy evaluation settings. They do not configure the production Audio Renderer, and production generation must never fall back to Dia or Aura.
 
@@ -83,6 +84,22 @@ persisted or logged. Logs contain only sanitized status, count, timing, model,
 and aggregate-confidence fields.
 A non-2xx, malformed response, cold start, timeout, or exhausted cap is
 treated as unavailable and leaves quiz behavior unchanged.
+
+The optional `advisory` mode also evaluates completed modern quiz answers whose
+type is `free-response` or `fill_in_the_blank`. It stores the submitted answer,
+question, expected answer, supporting evidence, deterministic result, and rubric
+as an immutable assessment snapshot, then shows a semantic label in review. The
+label is explanatory only: it never rewrites `isCorrect`, score, mastery, or
+publication state. Use `NUXT_LEARNING_DECISION_MODE=advisory` only in an environment
+where the private Worker binding or local evaluator URL and token are configured.
+Activate and validate this separately per environment; this change does not enable
+advisory mode in production.
+
+Advisory mode additionally requires one independently generated 32+ character
+write capability installed as `NUXT_QUIZ_ASSESSMENT_WRITE_SECRET` in Pages and
+as `QUIZ_ASSESSMENT_WRITE_SECRET` in the matching Convex deployment. Nitro uses
+it only for terminal assessment writes; it must not be exposed to the browser,
+reused as the evaluator token, or shared across environments.
 
 ### Audio Overview Workflow Worker
 
