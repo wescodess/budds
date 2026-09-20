@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Budds Adaptive Learn — mobile thread and evidence drawer reference</title>
+  <style>
+    :root { --background:#1c1917; --foreground:#fafaf9; --card:#292524; --muted:#292524; --muted-foreground:#a8a29e; --primary:#f59e0b; --primary-foreground:#1c1917; --accent:#fcd34d; --border:rgb(250 250 249 / 12%); --input:rgb(250 250 249 / 15%); --ring:#f59e0b; --success:#6ee7b7; --warning:#fb923c; --radius:12px; }
+    * { box-sizing:border-box; } body { margin:0; background:var(--background); color:var(--foreground); font:14px/1.6 "DM Sans",system-ui,sans-serif; }
+    .device { width:min(100%,430px); min-height:100dvh; margin:auto; background:var(--background); position:relative; overflow:hidden; }
+    .topbar { min-height:64px; display:flex; align-items:center; justify-content:space-between; gap:10px; padding:12px 16px; border-bottom:1px solid var(--border); }
+    .content { padding:20px 16px 128px; }
+    h1,h2,h3 { margin:0; line-height:1.33; } h1 { font-size:20px; } h2 { font-size:18px; } h3 { font-size:16px; }
+    .eyebrow,.meta { color:var(--muted-foreground); font:500 12px/1.5 Inter,system-ui,sans-serif; text-transform:uppercase; letter-spacing:.08em; }
+    .muted { color:var(--muted-foreground); } .stack { display:grid; gap:16px; }
+    .card { padding:16px; border:1px solid var(--border); border-radius:var(--radius); background:var(--card); }
+    button { min-height:44px; border:1px solid var(--border); border-radius:var(--radius); padding:9px 12px; background:transparent; color:var(--foreground); font:600 14px/1.4 inherit; }
+    button.primary { border-color:var(--primary); background:var(--primary); color:var(--primary-foreground); }
+    button:focus-visible,textarea:focus-visible { outline:3px solid var(--ring); outline-offset:2px; }
+    textarea { width:100%; min-height:128px; resize:vertical; padding:12px; border:1px solid var(--input); border-radius:8px; background:var(--background); color:var(--foreground); font:inherit; }
+    .row { display:flex; flex-wrap:wrap; align-items:center; gap:8px; } .between { display:flex; justify-content:space-between; gap:10px; align-items:start; }
+    .source { display:inline-flex; padding:3px 8px; border-radius:8px; color:var(--accent); background:var(--card); background:color-mix(in srgb,var(--primary) 16%,transparent); font:500 12px/1.5 Inter,system-ui,sans-serif; }
+    .status { color:var(--success); } .attention { color:var(--warning); }
+    .action-bar { position:absolute; inset:auto 0 0; padding:12px 16px calc(12px + env(safe-area-inset-bottom) + var(--vk-height, 0px)); border-top:1px solid var(--border); background:var(--background); }
+    .action-bar .row { justify-content:space-between; } .action-bar small { color:var(--muted-foreground); }
+    /* Static state reference: drawer is visible to make the focus target and evidence state inspectable. */
+    .drawer { position:absolute; inset:0 0 0 18%; z-index:2; padding:16px; overflow:auto; background:var(--card); border-left:1px solid var(--border); box-shadow:-12px 0 24px rgb(0 0 0 / 35%); }
+    .drawer-backdrop { position:absolute; inset:0; z-index:1; background:rgb(0 0 0 / 48%); }
+    .drawer header { display:flex; justify-content:space-between; gap:10px; align-items:start; margin-bottom:20px; }
+    .drawer .source-row { display:block; width:100%; text-align:left; margin-top:8px; padding:12px; }
+    .drawer .selected { border-color:var(--primary); background:var(--card); background:color-mix(in srgb,var(--primary) 10%,var(--card)); }
+    .focus-note { padding:8px 10px; border-left:2px solid var(--primary); color:var(--muted-foreground); font-size:12px; }
+  </style>
+</head>
+<body>
+  <div class="device">
+    <!-- Landmark: mobile Learning Thread. Focus order starts Close drawer, source rows, source action, then returns to canvas. -->
+    <header class="topbar" aria-labelledby="mobile-thread-title" inert>
+      <button type="button" aria-label="Back to Learning Home">Back</button>
+      <div><p class="eyebrow">Learning Thread</p><h1 id="mobile-thread-title">Async boundaries</h1></div>
+      <button type="button" aria-label="Thread options">More</button>
+    </header>
+    <!-- The open dialog makes the canvas inert in the real Sheet implementation. -->
+    <main class="content" aria-label="Mobile adaptive canvas" inert>
+      <div class="stack">
+        <div class="between"><div><p class="meta">Understand · Saved</p><p class="muted">Activity 2 · response draft preserved</p></div><button type="button">Why this?</button></div>
+        <article class="card" aria-labelledby="mobile-activity-title">
+          <p class="eyebrow">Cited explanation</p><h2 id="mobile-activity-title">Cancellation belongs at the boundary that owns the request lifecycle.</h2>
+          <p class="muted">The caller can signal intent, while the request boundary owns retry and cleanup. This is grounded in the accepted sources shown in the drawer.</p>
+          <div class="row"><span class="source">Evidence ready</span><button type="button" aria-controls="evidence-drawer">Evidence (2)</button></div>
+        </article>
+        <article class="card" aria-labelledby="mobile-response-title">
+          <p class="eyebrow">Independent application</p><h2 id="mobile-response-title">Apply it to a new scenario</h2>
+          <label for="mobile-response">Your response</label>
+          <textarea id="mobile-response" placeholder="Your draft stays here if the drawer opens."></textarea>
+          <div class="focus-note">Focus order: response → Why this? → Evidence → primary action. Drawer close returns focus to Evidence.</div>
+        </article>
+        <section class="card" aria-labelledby="mobile-overrides-title">
+          <!-- Overrides remain in the canvas but do not interrupt the response draft. -->
+          <h2 id="mobile-overrides-title">Change the next move</h2><div class="row" style="margin-top:10px"><button type="button">Example</button><button type="button">Quiz me</button><button type="button">Easier</button></div>
+        </section>
+      </div>
+    </main>
+    <!-- Mobile keyboard-safe action bar: implementation uses 100dvh and --vk-safe-bottom/--vk-height. -->
+    <footer class="action-bar" aria-label="Response actions" inert>
+      <div class="row"><small>Saved locally · syncs when online</small><button type="button" class="primary">Submit response</button></div>
+    </footer>
+
+    <!-- Landmark: Evidence Drawer Sheet. Static visible state demonstrates selected ready source and recovery affordance. -->
+    <div class="drawer-backdrop" aria-hidden="true"></div>
+    <aside id="evidence-drawer" class="drawer" aria-labelledby="drawer-title" aria-describedby="drawer-description" aria-modal="true" role="dialog">
+      <header><div><p class="eyebrow">Context</p><h2 id="drawer-title">Evidence</h2><p id="drawer-description" class="muted">Sources currently supporting this activity.</p></div><button type="button" aria-label="Close evidence drawer">Close</button></header>
+      <div role="status" class="status">Evidence ready · 2 accepted sources</div>
+      <section aria-labelledby="folder-source-title" style="margin-top:20px"><p id="folder-source-title" class="eyebrow">Your folder</p><button type="button" class="source-row selected"><strong>AbortController reference</strong><br><span class="muted">Reviewed today · strong coverage</span></button></section>
+      <section aria-labelledby="web-source-title" style="margin-top:20px"><p id="web-source-title" class="eyebrow">Added by you</p><button type="button" class="source-row"><strong>Request lifecycle notes</strong><br><span class="muted">Reviewed yesterday · partial coverage</span></button></section>
+      <section class="card" style="margin-top:20px" aria-labelledby="drawer-inspector-title"><p class="eyebrow">Selected source</p><h3 id="drawer-inspector-title">AbortController reference</h3><p class="muted">Supports cancellation boundaries and cleanup ownership.</p><button type="button">Open original source</button></section>
+      <p class="focus-note" style="margin-top:20px">Focus trap while open. Escape closes. On close, return focus to the Evidence button that opened this drawer.</p>
+    </aside>
+  </div>
+</body>
+</html>

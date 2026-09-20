@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Budds Adaptive Learn — tablet thread reference</title>
+  <style>
+    :root{--background:#1c1917;--foreground:#fafaf9;--card:#292524;--muted-foreground:#a8a29e;--primary:#f59e0b;--primary-foreground:#1c1917;--accent:#fcd34d;--border:rgb(250 250 249 / 12%);--input:rgb(250 250 249 / 15%);--ring:#f59e0b;--success:#6ee7b7;--radius:12px}*{box-sizing:border-box}body{margin:0;background:var(--background);color:var(--foreground);font:14px/1.6 "DM Sans",system-ui,sans-serif}.viewport{width:900px;max-width:100%;min-height:700px;margin:auto;padding:20px}.shell{display:grid;grid-template-columns:64px minmax(0,1fr);min-height:650px;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}.rail{padding:16px 8px;border-right:1px solid var(--border);color:var(--muted-foreground)}.canvas{min-width:0}.topbar{display:flex;justify-content:space-between;gap:12px;padding:16px;border-bottom:1px solid var(--border)}.content{max-width:680px;margin:auto;padding:24px 20px 140px}.card{padding:16px;border:1px solid var(--border);border-radius:var(--radius);background:var(--card)}.eyebrow,.meta{color:var(--muted-foreground);font:500 12px/1.5 Inter,system-ui,sans-serif;text-transform:uppercase;letter-spacing:.08em}.muted{color:var(--muted-foreground)}.stack{display:grid;gap:16px}.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}.between{display:flex;justify-content:space-between;gap:12px;align-items:start}button{min-height:44px;padding:9px 12px;border:1px solid var(--border);border-radius:var(--radius);background:transparent;color:var(--foreground);font:600 14px/1.4 inherit}button.primary{background:var(--primary);border-color:var(--primary);color:var(--primary-foreground)}button:focus-visible{outline:3px solid var(--ring);outline-offset:2px}.drawer{position:absolute;right:20px;top:92px;width:min(420px,calc(100% - 104px));padding:16px;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);box-shadow:-12px 0 24px rgb(0 0 0 / 35%)}.drawer header{display:flex;justify-content:space-between;gap:8px}.source{padding:10px;border:1px solid var(--primary);border-radius:8px}.action-bar{position:absolute;right:20px;bottom:20px;left:84px;padding:12px 20px;border-top:1px solid var(--border);background:var(--background)}@media(max-width:767px){.viewport{width:100%;padding:0}.shell{display:block;border:0;border-radius:0}.rail{display:none}.drawer{inset:0;width:100%;top:0;right:0;border-radius:0}}
+  </style>
+</head>
+<body>
+  <div class="viewport">
+    <p class="meta">Tablet reference · 768–1023px · context is a drawer, not a second column</p>
+    <div class="shell">
+      <nav class="rail" aria-label="Collapsed application navigation"><span aria-hidden="true">B</span><p class="meta">Home</p><p class="meta">Learn</p></nav>
+      <div class="canvas">
+        <header class="topbar" aria-labelledby="tablet-title"><div><p class="eyebrow">Learning Thread</p><h1 id="tablet-title">Async cancellation boundaries</h1></div><div class="row"><span class="meta">Saved</span><button type="button">Evidence</button></div></header>
+        <main class="content" aria-label="Tablet adaptive canvas">
+          <div class="stack"><div class="between"><div><p class="meta">Prepare · activity 2</p><p class="muted">Response remains mounted while the context drawer is open.</p></div><button type="button">Why this?</button></div><article class="card" aria-labelledby="tablet-activity"><p class="eyebrow">Source comparison</p><h2 id="tablet-activity">Which source best supports this decision?</h2><p class="muted">Select a source, then explain why it is sufficient for the scenario.</p><div class="row"><button class="primary" type="button">Folder source</button><button type="button">Added source</button></div></article><article class="card" aria-labelledby="tablet-response"><h2 id="tablet-response">Your rationale</h2><textarea aria-label="Your rationale" rows="5" style="width:100%;margin-top:8px;background:var(--background);color:var(--foreground);border:1px solid var(--input);border-radius:8px;padding:12px"></textarea></article></div>
+        </main>
+        <footer class="action-bar" aria-label="Tablet response actions"><div class="between"><span class="muted">Saved locally · primary action remains reachable</span><button class="primary" type="button">Submit rationale</button></div></footer>
+        <!-- Static drawer state: real implementation traps focus, marks canvas inert, closes on Escape, and restores Evidence focus. -->
+        <aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="tablet-drawer-title" aria-describedby="tablet-drawer-description"><header><div><p class="eyebrow">Context</p><h2 id="tablet-drawer-title">Evidence</h2><p id="tablet-drawer-description" class="muted">Tablet drawer width is bounded and leaves the thread readable.</p></div><button type="button" aria-label="Close Evidence drawer">Close</button></header><p class="meta" style="margin-top:20px">Your folder</p><div class="source"><strong>AbortController reference</strong><br><span class="muted">Ready · strong coverage</span></div><p class="meta" style="margin-top:20px">Focus order: close → source rows → source action. Background is inert while open.</p></aside>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

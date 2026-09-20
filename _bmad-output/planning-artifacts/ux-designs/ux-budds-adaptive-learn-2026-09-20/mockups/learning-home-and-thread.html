@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Budds Adaptive Learn — Home and Thread reference</title>
+  <style>
+    :root {
+      --background: #1c1917; --foreground: #fafaf9; --card: #292524;
+      --muted: #292524; --muted-foreground: #a8a29e; --primary: #f59e0b;
+      --primary-foreground: #1c1917; --accent: #fcd34d; --border: rgb(250 250 249 / 12%);
+      --input: rgb(250 250 249 / 15%); --ring: #f59e0b; --success: #6ee7b7;
+      --warning: #fb923c; --destructive: #fb7185; --radius: 12px;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--background); color: var(--foreground); font: 14px/1.6 "DM Sans", system-ui, sans-serif; }
+    .page { max-width: 1440px; margin: auto; padding: 24px; }
+    .intro { margin-bottom: 24px; }
+    .eyebrow, .meta { color: var(--muted-foreground); font: 500 12px/1.5 Inter, system-ui, sans-serif; letter-spacing: .08em; text-transform: uppercase; }
+    h1, h2, h3 { margin: 0; line-height: 1.33; }
+    h1 { font-size: 24px; } h2 { font-size: 18px; } h3 { font-size: 16px; }
+    .views { display: grid; grid-template-columns: minmax(360px, .85fr) minmax(480px, 1.15fr); gap: 24px; }
+    .surface { min-width: 0; border: 1px solid var(--border); border-radius: var(--radius); background: var(--background); background: color-mix(in srgb, var(--background) 92%, white); overflow: hidden; }
+    .surface > header { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 16px; border-bottom: 1px solid var(--border); }
+    .surface > main { padding: 24px 16px; }
+    .stack { display: grid; gap: 16px; }
+    .card { padding: 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); }
+    .composer { display: grid; gap: 12px; padding: 16px; border: 1px solid var(--primary); border-radius: var(--radius); background: var(--card); }
+    label { display: grid; gap: 6px; font-weight: 600; }
+    textarea, input { width: 100%; border: 1px solid var(--input); border-radius: 8px; background: var(--background); color: var(--foreground); padding: 12px; font: inherit; }
+    textarea { min-height: 96px; resize: vertical; }
+    button { min-height: 44px; border: 1px solid var(--border); border-radius: var(--radius); padding: 9px 14px; background: transparent; color: var(--foreground); font: 600 14px/1.4 inherit; cursor: pointer; }
+    button.primary { border-color: var(--primary); background: var(--primary); color: var(--primary-foreground); }
+    button.chip { min-height: 36px; border-radius: 8px; color: var(--muted-foreground); }
+    button:hover, button:focus-visible { border-color: var(--primary); }
+    button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 3px solid var(--ring); outline-offset: 2px; }
+    .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .between { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
+    .muted { color: var(--muted-foreground); }
+    .status { color: var(--success); } .attention { color: var(--warning); }
+    .source { display: inline-flex; align-items: center; gap: 6px; border-radius: 8px; background: var(--card); background: color-mix(in srgb, var(--primary) 16%, transparent); color: var(--accent); padding: 3px 8px; font: 500 12px/1.5 Inter, system-ui, sans-serif; }
+    .progress { height: 6px; border-radius: 999px; background: var(--muted); overflow: hidden; } .progress span { display: block; width: 42%; height: 100%; background: var(--primary); }
+    .focus-order { color: var(--muted-foreground); font-size: 12px; }
+    .skip-link { position:absolute; left:-9999px; top:8px; z-index:5; padding:8px 12px; border-radius:8px; background:var(--primary); color:var(--primary-foreground); }
+    .skip-link:focus { left:8px; }
+    @media (max-width: 900px) { .views { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#showcase">Skip to reference surfaces</a>
+  <div class="page">
+    <header class="intro" aria-labelledby="reference-title">
+      <p class="eyebrow">Static reference mock · Warm Focus</p>
+      <h1 id="reference-title">Learning Home and Learning Thread</h1>
+      <p class="muted">Desktop reference: both surfaces are shown together so the first-value handoff is explicit.</p>
+    </header>
+    <!-- One document-level main landmark; each surface is a labelled section for this composite showcase. -->
+    <main id="showcase" class="views" aria-label="Learning Home and Thread reference surfaces">
+      <!-- Landmark: Learning Home surface. Focus order starts at search, then composer, resume, revisit, history. -->
+      <section class="surface" aria-labelledby="home-title">
+        <header>
+          <div><p class="eyebrow">Learning Home</p><h2 id="home-title">Start from a need</h2></div>
+          <button type="button" aria-label="Search learning threads">Search</button>
+        </header>
+        <div>
+          <div class="stack">
+            <!-- Primary action: compose a need before any map, schedule, or source administration. -->
+            <form class="composer" aria-labelledby="composer-title">
+              <h3 id="composer-title">What are you trying to understand or do?</h3>
+              <label for="need">Your need</label>
+              <textarea id="need" placeholder="For example: Explain cancellation so I can choose the right boundary."></textarea>
+              <div class="row" aria-label="Optional context and intent">
+                <button type="button" class="chip">Add folder or material</button>
+                <button type="button" class="chip">Understand</button>
+                <button type="button" class="chip">Prepare</button>
+                <button type="button" class="chip">Build</button>
+              </div>
+              <div class="between">
+                <span class="muted">One useful activity starts first.</span>
+                <button type="submit" class="primary">Start with this</button>
+              </div>
+            </form>
+            <!-- Resume: unresolved point and promised payoff are visible; no streak pressure. -->
+            <section class="card" aria-labelledby="resume-title">
+              <div class="between"><div><p class="eyebrow">Resume</p><h3 id="resume-title">Async cancellation boundaries</h3></div><span class="status">Saved</span></div>
+              <p class="muted">Unresolved: choose whether cancellation belongs in the caller or request boundary.</p>
+              <p class="meta">Next payoff · justify the choice in a new scenario</p>
+              <button type="button" class="primary">Continue thread</button>
+            </section>
+            <section class="card" aria-labelledby="revisit-title">
+              <p class="eyebrow">Worth revisiting</p><h3 id="revisit-title">One capability is vulnerable</h3>
+              <p class="muted">A short retrieval check protects “Explain error boundaries” before it decays.</p>
+              <button type="button">Review now</button>
+            </section>
+            <section class="card" aria-labelledby="history-title">
+              <div class="between"><h3 id="history-title">Other threads</h3><span class="meta">3 active</span></div>
+              <p class="muted">Exam prep · API design · Explore orbital mechanics</p>
+            </section>
+          </div>
+        </div>
+      </section>
+
+      <!-- Landmark: Learning Thread. Focus order follows header, Why this, evidence, activity, overrides, next move. -->
+      <section class="surface" aria-labelledby="thread-title">
+        <header>
+          <div><p class="eyebrow">Learning Thread · Frontend foundations</p><h2 id="thread-title">Async cancellation boundaries</h2></div>
+          <div class="row"><span class="status" role="status">Saved</span><button type="button">Leave</button></div>
+        </header>
+        <div>
+          <div class="stack">
+            <div class="between">
+              <div><p class="meta">Current intent · Understand</p><p class="muted">Activity 2 of the current learning loop</p></div>
+              <!-- Why this control explains the reason code without changing activity state. -->
+              <button type="button" aria-describedby="why-copy">Why this?</button>
+            </div>
+            <p id="why-copy" class="muted">This compares your boundary choice against the misconception seen in your last response.</p>
+            <div class="row" aria-label="Evidence scope"><span class="source">Evidence ready</span><span class="muted">2 accepted sources</span><button type="button">Open evidence</button></div>
+            <article class="card" aria-labelledby="activity-title">
+              <p class="eyebrow">Independent application</p>
+              <h3 id="activity-title">Choose a boundary for this scenario</h3>
+              <p class="muted">A request can be cancelled by the user while the server is still retrying. Where should cancellation be owned, and why?</p>
+              <label for="response">Your response</label>
+              <textarea id="response" placeholder="Explain your choice in your own words."></textarea>
+              <div class="between" style="margin-top:12px"><span class="focus-order">Focus 1: response · Focus 2: submit</span><button type="button" class="primary">Submit for feedback</button></div>
+            </article>
+            <!-- Overrides: each is a safe next-move preference, not a mastery mutation. -->
+            <section class="card" aria-labelledby="override-title">
+              <h3 id="override-title">Change the next move</h3>
+              <div class="row" style="margin-top:10px"><button type="button">Explain differently</button><button type="button">Show an example</button><button type="button">Let me try</button><button type="button">Make it practical</button><button type="button">Easier</button></div>
+            </section>
+            <section class="card" aria-labelledby="next-title">
+              <p class="eyebrow">After this response</p><h3 id="next-title">We’ll test the choice in a new scenario.</h3>
+              <div class="progress" role="progressbar" aria-label="Learning loop progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="42"><span></span></div>
+              <p class="meta">What changes is saved; retained mastery requires a later unassisted check.</p>
+            </section>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>
