@@ -75,6 +75,54 @@ function editedCandidate(sourceSnapshotId: Id<'learnSourceSnapshots'>) {
 }
 
 describe('Learn V2 revision-safe map editing and calibration', () => {
+  test('installs and atomically replaces the active Blueprint pointer with exact replay', async () => {
+    const previous = process.env.LEARN_V2_ENABLED
+    try {
+      const setup = await setupMap()
+      const firstAcceptanceArgs = { blueprintRevisionId: setup.blueprint._id, expectedRecordRevision: 1, expectedVoidRevision: 2, idempotencyKey: 'accept-first-map' }
+      const firstAcceptance = await setup.owner.mutation(api.learnV2MapCalibration.acceptBlueprintMap, firstAcceptanceArgs)
+      expect(await setup.owner.mutation(api.learnV2MapCalibration.acceptBlueprintMap, firstAcceptanceArgs)).toEqual(firstAcceptance)
+      expect(await setup.t.run(ctx => ctx.db.get(setup.learningVoid._id))).toMatchObject({
+        activeBlueprintRevisionId: setup.blueprint._id,
+        revision: 3,
+        status: 'calibration',
+      })
+
+      const fork = await setup.owner.mutation(api.learnV2Lifecycle.forkBlueprintDraft, {
+        blueprintRevisionId: setup.blueprint._id,
+        expectedRecordRevision: firstAcceptance.recordRevision,
+        expectedVoidRevision: 3,
+        idempotencyKey: 'fork-active-map',
+      })
+      const clonedSource = await setup.t.run(ctx => ctx.db.query('learnSourceSnapshots')
+        .withIndex('by_userId_and_blueprintRevisionId', q => q.eq('userId', identity.tokenIdentifier).eq('blueprintRevisionId', fork!._id))
+        .first())
+      await setup.owner.mutation(api.learnV2MapCalibration.replaceDraftMap, {
+        blueprintRevisionId: fork!._id,
+        expectedRecordRevision: 1,
+        expectedVoidRevision: 4,
+        idempotencyKey: 'replace-active-map',
+        candidate: editedCandidate(clonedSource!._id),
+      })
+      const replacementArgs = { blueprintRevisionId: fork!._id, expectedRecordRevision: 2, expectedVoidRevision: 5, idempotencyKey: 'accept-replacement-map' }
+      const replacement = await setup.owner.mutation(api.learnV2MapCalibration.acceptBlueprintMap, replacementArgs)
+      expect(await setup.owner.mutation(api.learnV2MapCalibration.acceptBlueprintMap, replacementArgs)).toEqual(replacement)
+      expect(await setup.t.run(async (ctx) => ({
+        learningVoid: await ctx.db.get(setup.learningVoid._id),
+        previous: await ctx.db.get(setup.blueprint._id),
+        replacement: await ctx.db.get(fork!._id),
+      }))).toMatchObject({
+        learningVoid: { activeBlueprintRevisionId: fork!._id, revision: 6, status: 'calibration' },
+        previous: { status: 'superseded', recordRevision: firstAcceptance.recordRevision + 1 },
+        replacement: { status: 'accepted', recordRevision: replacement.recordRevision },
+      })
+    }
+    finally {
+      if (previous === undefined) delete process.env.LEARN_V2_ENABLED
+      else process.env.LEARN_V2_ENABLED = previous
+    }
+  })
+
   test('forks a complete private copy and rejects a concurrent stale fork without mutating the parent', async () => {
     const previous = process.env.LEARN_V2_ENABLED
     try {
@@ -160,6 +208,22 @@ describe('Learn V2 revision-safe map editing and calibration', () => {
     }
   })
 
+  test('revalidates the active Blueprint pointer before calibration provider dispatch', async () => {
+    const setup = await setupMap()
+    const accepted = await setup.owner.mutation(api.learnV2MapCalibration.acceptBlueprintMap, { blueprintRevisionId: setup.blueprint._id, expectedRecordRevision: 1, expectedVoidRevision: 2, idempotencyKey: 'dispatch-accept' })
+    const request = { tokenIdentifier: identity.tokenIdentifier, blueprintRevisionId: setup.blueprint._id, objectiveId: setup.objectives[0]!, expectedBlueprintRecordRevision: accepted.recordRevision, expectedVoidRevision: 3, response: 'Supported answer.', confidence: 4, usedHint: false, usedReveal: false, idempotencyKey: 'dispatch-reservation' }
+    const reservation = await setup.t.mutation(internal.learnV2MapCalibration.reserveCalibrationScoring, request)
+    expect(reservation.kind).toBe('acquired')
+    if (reservation.kind !== 'acquired') throw new Error('Expected calibration lease')
+    await setup.t.run(ctx => ctx.db.patch(setup.learningVoid._id, { activeBlueprintRevisionId: undefined }))
+    await expect(setup.t.mutation(internal.learnV2MapCalibration.markCalibrationScoringDispatched, {
+      tokenIdentifier: identity.tokenIdentifier,
+      jobId: reservation.jobId,
+      leaseToken: reservation.leaseToken,
+      expectedRevision: reservation.revision,
+    })).rejects.toThrow(/active Blueprint pointer/i)
+  })
+
   test('rejects a malformed persisted map whose prerequisite edge count exceeds the contract', async () => {
     const previous = process.env.LEARN_V2_ENABLED
     try {
@@ -196,7 +260,7 @@ describe('Learn V2 revision-safe map editing and calibration', () => {
       const scored = await setup.owner.action(api.learnV2MapCalibration.submitCalibrationAttempt, args)
       expect(scored).toMatchObject({ result: 'provisionally_known', replayed: false })
       expect(await setup.owner.action(api.learnV2MapCalibration.submitCalibrationAttempt, args)).toMatchObject({ result: 'provisionally_known', replayed: true })
-      expect(await setup.t.run(ctx => ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', identity.tokenIdentifier).eq('idempotencyKey', args.idempotencyKey)).unique())).toMatchObject({ response: args.response, scorerModel: 'mock-calibration', scorerVersion: 'learn-v2.calibration-scorer.v1' })
+      expect(await setup.t.run(ctx => ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', identity.tokenIdentifier).eq('idempotencyKey', args.idempotencyKey)).unique())).toMatchObject({ response: args.response, activityContractVersion: 'learn-v2.calibration-attempt.v1', providerVersion: 'openrouter-via-cloudflare-ai-gateway.v1', blueprintRecordRevision: accepted.recordRevision, scorerModel: 'mock-calibration', scorerVersion: 'learn-v2.calibration-scorer.v1' })
     }
     finally {
       if (previousModel === undefined) delete process.env.LEARN_V2_CALIBRATION_MODEL

@@ -72,6 +72,11 @@ async function requireLiveVoid(ctx: MutationCtx | QueryCtx, userId: string, lear
 async function requireCurrentBlueprint(ctx: MutationCtx | QueryCtx, userId: string, blueprintRevisionId: Id<'learnBlueprintRevisions'>) {
   const blueprint = await ctx.db.get(blueprintRevisionId)
   if (!blueprint || blueprint.userId !== userId) throw new Error('Blueprint revision not found')
+  if (blueprint.status === 'accepted' || blueprint.status === 'active') {
+    const learningVoid = await requireLiveVoid(ctx, userId, blueprint.learningVoidId)
+    if (learningVoid.activeBlueprintRevisionId !== blueprint._id || blueprint.status !== 'accepted') throw new Error('Active Blueprint pointer is unavailable')
+    return blueprint
+  }
   const latest = await ctx.db.query('learnBlueprintRevisions')
     .withIndex('by_userId_and_blueprintId_and_revision', q => q.eq('userId', userId).eq('blueprintId', blueprint.blueprintId))
     .order('desc').first()
@@ -256,8 +261,18 @@ export const acceptBlueprintMap = mutation({
     const now = Date.now()
     const recordRevision = blueprint.recordRevision + 1
     const voidRevision = learningVoid.revision + 1
+    const previousActive = learningVoid.activeBlueprintRevisionId
+      ? await ctx.db.get(learningVoid.activeBlueprintRevisionId)
+      : null
+    if (learningVoid.activeBlueprintRevisionId && (!previousActive || previousActive.userId !== userId || previousActive.learningVoidId !== learningVoid._id)) {
+      throw new Error('Active Blueprint pointer is invalid')
+    }
+    if (previousActive && previousActive._id !== blueprint._id) {
+      if (previousActive.status !== 'accepted' && previousActive.status !== 'active') throw new Error('Active Blueprint pointer is stale')
+      await ctx.db.patch(previousActive._id, { status: 'superseded', recordRevision: previousActive.recordRevision + 1, updatedAt: now })
+    }
     await ctx.db.patch(blueprint._id, { status: 'accepted', recordRevision, acceptedAt: now, updatedAt: now })
-    await ctx.db.patch(learningVoid._id, { status: 'calibration', revision: voidRevision, lastIdempotencyKey: args.idempotencyKey, updatedAt: now })
+    await ctx.db.patch(learningVoid._id, { status: 'calibration', activeBlueprintRevisionId: blueprint._id, revision: voidRevision, lastIdempotencyKey: args.idempotencyKey, updatedAt: now })
     await ctx.db.insert('learnLifecycleReceipts', { userId, learningVoidId: learningVoid._id, idempotencyKey: args.idempotencyKey, command: 'acceptBlueprintMap', requestFingerprint, revision: voidRevision, status: 'accepted', blueprintRevisionId: blueprint._id, blueprintRevisionOrdinal: blueprint.revision, blueprintRecordRevision: recordRevision, createdAt: now })
     return { _id: blueprint._id, status: 'accepted' as const, revision: blueprint.revision, recordRevision }
   },
@@ -303,6 +318,10 @@ export const markCalibrationScoringDispatched = internalMutation({
   handler: async (ctx, args) => {
     const job = await ctx.db.get(args.jobId)
     if (!job || job.userId !== args.tokenIdentifier || job.type !== CALIBRATION_JOB_TYPE || job.status !== 'leased' || job.revision !== args.expectedRevision || job.leaseToken !== args.leaseToken || (job.leaseExpiresAt ?? 0) <= Date.now()) throw new Error('Calibration scoring lease unavailable')
+    if (!job.blueprintRevisionId || job.expectedBlueprintRecordRevision === undefined || job.expectedVoidRevision === undefined) throw new Error('Calibration scoring authority is unavailable')
+    const blueprint = await requireCurrentBlueprint(ctx, args.tokenIdentifier, job.blueprintRevisionId)
+    const learningVoid = await requireLiveVoid(ctx, args.tokenIdentifier, blueprint.learningVoidId)
+    if (blueprint.recordRevision !== job.expectedBlueprintRecordRevision || learningVoid.revision !== job.expectedVoidRevision) throw new Error('Calibration revision conflict')
     await ctx.db.patch(job._id, { status: 'running', checkpoint: 'provider_dispatched', attempts: (job.attempts ?? 0) + 1, revision: job.revision + 1, updatedAt: Date.now() })
     return { revision: job.revision + 1 }
   },
@@ -350,8 +369,8 @@ export const recordCalibrationAttempt = internalMutation({
     const result = unassistedPass ? 'provisionally_known' as const : 'learning' as const
     const schedulingPriority = unassistedPass ? 'deprioritized' as const : 'remediation' as const
     const now = Date.now()
-    const attemptId = await ctx.db.insert('masteryAttempts', { userId: args.tokenIdentifier, blueprintRevisionId: blueprint._id, objectiveId: objective._id, kind: 'calibration', attemptedAt: now, idempotencyKey: args.idempotencyKey, requestFingerprint, serverScorePercent: args.serverScorePercent, usedHint: args.usedHint, usedReveal: args.usedReveal, confidence: args.confidence, rubricVersion: args.rubricVersion, response: args.response, scorerVersion: args.scorerVersion, scorerModel: args.scorerModel, criterionResultsJson: args.criterionResultsJson, rubricSnapshot: args.rubricSnapshot, result })
-    const record = await ctx.db.query('masteryRecords').withIndex('by_userId_and_objectiveId', q => q.eq('userId', args.tokenIdentifier).eq('objectiveId', objective._id)).unique()
+    const attemptId = await ctx.db.insert('masteryAttempts', { userId: args.tokenIdentifier, blueprintRevisionId: blueprint._id, objectiveId: objective._id, kind: 'calibration', activityContractVersion: 'learn-v2.calibration-attempt.v1', providerVersion: args.scorerModel ? 'openrouter-via-cloudflare-ai-gateway.v1' : undefined, attemptedAt: now, idempotencyKey: args.idempotencyKey, requestFingerprint, serverScorePercent: args.serverScorePercent, usedHint: args.usedHint, usedReveal: args.usedReveal, confidence: args.confidence, rubricVersion: args.rubricVersion, response: args.response, scorerVersion: args.scorerVersion, scorerModel: args.scorerModel, criterionResultsJson: args.criterionResultsJson, rubricSnapshot: args.rubricSnapshot, blueprintRecordRevision: blueprint.recordRevision, result })
+    const record = await ctx.db.query('masteryRecords').withIndex('by_userId_and_blueprintRevisionId_and_objectiveId', q => q.eq('userId', args.tokenIdentifier).eq('blueprintRevisionId', blueprint._id).eq('objectiveId', objective._id)).unique()
     if (record) await ctx.db.patch(record._id, { blueprintRevisionId: blueprint._id, state: result, schedulingPriority, recordRevision: (record.recordRevision ?? 0) + 1, updatedAt: now })
     else await ctx.db.insert('masteryRecords', { userId: args.tokenIdentifier, blueprintRevisionId: blueprint._id, objectiveId: objective._id, state: result, schedulingPriority, recordRevision: 1, updatedAt: now })
     if (scoringJob && args.scoringLeaseToken) await ctx.db.patch(scoringJob._id, { status: 'succeeded', leaseToken: undefined, leaseExpiresAt: undefined, checkpoint: 'recorded', providerResponseId: args.providerResponseId, providerResponseModel: args.scorerModel, revision: scoringJob.revision + 1, updatedAt: now })
@@ -536,7 +555,7 @@ export const completeCalibration = mutation({
     const now = Date.now()
     const revision = learningVoid.revision + 1
     await ctx.db.patch(learningVoid._id, { status: 'plan_review', revision, lastIdempotencyKey: args.idempotencyKey, updatedAt: now })
-    await ctx.db.insert('learnLifecycleReceipts', { userId, learningVoidId: learningVoid._id, idempotencyKey: args.idempotencyKey, command: 'completeCalibration', requestFingerprint, revision, status: 'plan_review', createdAt: now })
-    return { _id: learningVoid._id, status: 'plan_review' as const, revision, activeBlueprintRevisionId: null }
+    await ctx.db.insert('learnLifecycleReceipts', { userId, learningVoidId: learningVoid._id, idempotencyKey: args.idempotencyKey, command: 'completeCalibration', requestFingerprint, revision, status: 'plan_review', blueprintRevisionId: blueprint._id, createdAt: now })
+    return { _id: learningVoid._id, status: 'plan_review' as const, revision, activeBlueprintRevisionId: blueprint._id }
   },
 })

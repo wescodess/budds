@@ -191,11 +191,17 @@ async function deleteVoidFoundation(ctx: MutationCtx, userId: string, learningVo
         .withIndex('by_userId_and_objectiveId_and_sourceSnapshotId', q => q.eq('userId', userId).eq('objectiveId', objective._id)).take(BATCH_SIZE)
       if (await removeRows(ctx, objectiveSources)) return true
       const attempts = await ctx.db.query('masteryAttempts')
-        .withIndex('by_userId_and_objectiveId_and_attemptedAt', q => q.eq('userId', userId).eq('objectiveId', objective._id)).take(BATCH_SIZE)
+        .withIndex('by_userId_blueprintRevisionId_objectiveId_attemptedAt', q => q.eq('userId', userId).eq('blueprintRevisionId', revision._id).eq('objectiveId', objective._id)).take(BATCH_SIZE)
       if (await removeRows(ctx, attempts)) return true
+      const legacyAttempts = await ctx.db.query('masteryAttempts')
+        .withIndex('by_userId_blueprintRevisionId_objectiveId_attemptedAt', q => q.eq('userId', userId).eq('blueprintRevisionId', undefined).eq('objectiveId', objective._id)).take(BATCH_SIZE)
+      if (await removeRows(ctx, legacyAttempts)) return true
       const records = await ctx.db.query('masteryRecords')
-        .withIndex('by_userId_and_objectiveId', q => q.eq('userId', userId).eq('objectiveId', objective._id)).take(BATCH_SIZE)
+        .withIndex('by_userId_and_blueprintRevisionId_and_objectiveId', q => q.eq('userId', userId).eq('blueprintRevisionId', revision._id).eq('objectiveId', objective._id)).take(BATCH_SIZE)
       if (await removeRows(ctx, records)) return true
+      const legacyRecords = await ctx.db.query('masteryRecords')
+        .withIndex('by_userId_and_blueprintRevisionId_and_objectiveId', q => q.eq('userId', userId).eq('blueprintRevisionId', undefined).eq('objectiveId', objective._id)).take(BATCH_SIZE)
+      if (await removeRows(ctx, legacyRecords)) return true
       await ctx.db.delete(objective._id)
       return true
     }

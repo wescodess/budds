@@ -188,6 +188,7 @@ async function inputs(
     !learningVoid ||
     learningVoid.userId !== userId ||
     learningVoid.revision !== job.expectedVoidRevision ||
+    learningVoid.activeBlueprintRevisionId !== blueprint._id ||
     !folder ||
     folder.userId !== userId
   )
@@ -1110,7 +1111,7 @@ export const retrySessionContentGeneration = mutation({
     const root = plan && await ctx.db.get(plan.studyPlanId);
     const learningVoid = plan && await ctx.db.get(plan.learningVoidId);
     const blueprint = plan?.blueprintRevisionId && await ctx.db.get(plan.blueprintRevisionId);
-    if (!plan || !root || !learningVoid || !blueprint || plan.userId !== userId || root.userId !== userId || learningVoid.userId !== userId || blueprint.userId !== userId || root.activeRevisionId !== plan._id || plan.status !== "accepted" || blueprint.status !== "accepted" || plan.blueprintRecordRevision !== blueprint.recordRevision)
+    if (!plan || !root || !learningVoid || !blueprint || plan.userId !== userId || root.userId !== userId || learningVoid.userId !== userId || blueprint.userId !== userId || root.activeRevisionId !== plan._id || plan.status !== "accepted" || blueprint.status !== "accepted" || learningVoid.activeBlueprintRevisionId !== blueprint._id || plan.blueprintRecordRevision !== blueprint.recordRevision)
       throw new Error("Study session is not current");
     const terminalJobs = (await Promise.all((["blocked", "failed"] as const).map((status) => ctx.db.query("learnJobs")
       .withIndex("by_userId_and_studySessionId_and_type_and_status", (q) => q.eq("userId", userId).eq("studySessionId", session._id).eq("type", TYPE).eq("status", status))
@@ -1201,6 +1202,13 @@ export const startStudySession = mutation({
     const stable = await ctx.db.get(plan.studyPlanId);
     if (!stable || stable.activeRevisionId !== plan._id || plan.status !== "accepted")
       throw new Error("Study session is not current");
+    const learningVoid = await ctx.db.get(plan.learningVoidId);
+    const blueprint = plan.blueprintRevisionId && await ctx.db.get(plan.blueprintRevisionId);
+    if (!learningVoid || learningVoid.userId !== userId || !blueprint || blueprint.userId !== userId
+      || blueprint.learningVoidId !== learningVoid._id || blueprint.status !== "accepted"
+      || learningVoid.activeBlueprintRevisionId !== blueprint._id
+      || plan.blueprintRecordRevision !== blueprint.recordRevision)
+      throw new Error("Active Blueprint pointer is unavailable");
     const fingerprint = sessionStartFingerprint(args);
     const prior = await ctx.db
       .query("learnPlanCommandReceipts")
@@ -1242,7 +1250,9 @@ export const startStudySession = mutation({
           .eq("revision", args.expectedContentRevision),
       )
       .unique();
-    if (!content || content.status !== "published" || content.revision !== args.expectedContentRevision)
+    if (!content || content.status !== "published" || content.revision !== args.expectedContentRevision
+      || content.studyPlanRevisionId !== plan._id || content.blueprintRevisionId !== blueprint._id
+      || content.objectiveId !== session.primaryObjectiveId)
       throw new Error("Published session content is required");
     const response = {
       status: "in_progress" as const,
@@ -1280,11 +1290,17 @@ export const getSessionContent = query({
       return null;
     const stable = await ctx.db.get(plan.studyPlanId);
     const learningVoid = await ctx.db.get(plan.learningVoidId);
+    const blueprint = plan.blueprintRevisionId && await ctx.db.get(plan.blueprintRevisionId);
     if (
       !stable ||
       stable.activeRevisionId !== plan._id ||
       !learningVoid ||
       learningVoid.userId !== userId ||
+      !blueprint ||
+      blueprint.userId !== userId ||
+      blueprint.status !== "accepted" ||
+      learningVoid.activeBlueprintRevisionId !== blueprint._id ||
+      plan.blueprintRecordRevision !== blueprint.recordRevision ||
       !(await ctx.db.get(learningVoid.folderId))
     )
       return null;
@@ -1292,6 +1308,7 @@ export const getSessionContent = query({
       ? await ctx.db.query("sessionContent").withIndex("by_userId_and_studySessionId_and_revision", (q) => q.eq("userId", userId).eq("studySessionId", session._id).eq("revision", session.startedSessionContentRevision!)).unique()
       : await ctx.db.query("sessionContent").withIndex("by_userId_and_studySessionId_and_revision", (q) => q.eq("userId", userId).eq("studySessionId", session._id)).order("desc").first();
     if (!content || content.status !== "published"
+      || content.studyPlanRevisionId !== plan._id || content.blueprintRevisionId !== blueprint._id || content.objectiveId !== session.primaryObjectiveId
       || (session.status === "in_progress" && (session.startedSessionContentId !== content._id || session.startedSessionContentRevision !== content.revision))) return null;
     const blocks = await ctx.db
       .query("sessionContentBlocks")

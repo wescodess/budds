@@ -36,6 +36,7 @@ async function seedGenerationGraph() {
     const voidId = await ctx.db.insert('learningVoids', { userId: identity.tokenIdentifier, folderId, title: 'Learn', status: 'scheduled', revision: 2, createdAt: now, updatedAt: now })
     const blueprintId = await ctx.db.insert('learnBlueprints', { userId: identity.tokenIdentifier, learningVoidId: voidId, revision: 1, createdAt: now })
     const blueprintRevisionId = await ctx.db.insert('learnBlueprintRevisions', { userId: identity.tokenIdentifier, blueprintId, learningVoidId: voidId, revision: 1, recordRevision: 1, status: 'accepted', createdAt: now, updatedAt: now })
+    await ctx.db.patch(voidId, { activeBlueprintRevisionId: blueprintRevisionId })
     const objectiveId = await ctx.db.insert('learnObjectives', { userId: identity.tokenIdentifier, blueprintRevisionId, order: 0, title: 'Objective', assessmentContract: candidate().assessmentRubric })
     const planId = await ctx.db.insert('studyPlans', { userId: identity.tokenIdentifier, learningVoidId: voidId, revision: 1, createdAt: now })
     const planRevisionId = await ctx.db.insert('studyPlanRevisions', { userId: identity.tokenIdentifier, studyPlanId: planId, learningVoidId: voidId, revision: 1, recordRevision: 1, status: 'accepted', blueprintRevisionId, blueprintRecordRevision: 1, createdAt: now, updatedAt: now })
@@ -46,7 +47,7 @@ async function seedGenerationGraph() {
     await ctx.db.insert('learnSourceExcerpts', { userId: identity.tokenIdentifier, sourceSnapshotId: snapshotId, locator: 'page:1', excerpt: 'The source supports this fact.', rightsStatus: 'permitted' })
     await ctx.db.insert('learnObjectiveSources', { userId: identity.tokenIdentifier, objectiveId, sourceSnapshotId: snapshotId, coverage: 'strong' })
     const jobId = await ctx.db.insert('learnJobs', { userId: identity.tokenIdentifier, learningVoidId: voidId, blueprintRevisionId, studyPlanRevisionId: planRevisionId, studySessionId: sessionId, type: 'session_content_generation', status: 'queued', revision: 1, idempotencyKey: 'job', inputDigest: 'sha256:input', expectedVoidRevision: 2, expectedBlueprintRecordRevision: 1, expectedSessionRevision: 1, attempts: 0, dispatchSupportingSourceSnapshotIds: [snapshotId], createdAt: now, updatedAt: now })
-    return { planId, planRevisionId, sessionId, snapshotId, excerptId: (await ctx.db.query('learnSourceExcerpts').withIndex('by_userId_and_sourceSnapshotId_and_evidencePurgedAt', q => q.eq('userId', identity.tokenIdentifier).eq('sourceSnapshotId', snapshotId).eq('evidencePurgedAt', undefined)).unique())!._id, jobId }
+    return { voidId, blueprintRevisionId, planId, planRevisionId, sessionId, snapshotId, excerptId: (await ctx.db.query('learnSourceExcerpts').withIndex('by_userId_and_sourceSnapshotId_and_evidencePurgedAt', q => q.eq('userId', identity.tokenIdentifier).eq('sourceSnapshotId', snapshotId).eq('evidencePurgedAt', undefined)).unique())!._id, jobId }
   })
   return { t, owner, graph }
 }
@@ -143,6 +144,7 @@ describe('Learn V2 session-content publication contract', () => {
       const voidId = await ctx.db.insert('learningVoids', { userId: identity.tokenIdentifier, folderId, title: 'Learn', status: 'scheduled', revision: 2, createdAt: now, updatedAt: now })
       const blueprintId = await ctx.db.insert('learnBlueprints', { userId: identity.tokenIdentifier, learningVoidId: voidId, revision: 1, createdAt: now })
       const blueprintIdRevision = await ctx.db.insert('learnBlueprintRevisions', { userId: identity.tokenIdentifier, blueprintId, learningVoidId: voidId, revision: 1, recordRevision: 1, status: 'accepted', createdAt: now, updatedAt: now })
+      await ctx.db.patch(voidId, { activeBlueprintRevisionId: blueprintIdRevision })
       const objectiveId = await ctx.db.insert('learnObjectives', { userId: identity.tokenIdentifier, blueprintRevisionId: blueprintIdRevision, order: 0, title: 'Objective', assessmentContract: candidate().assessmentRubric })
       const planId = await ctx.db.insert('studyPlans', { userId: identity.tokenIdentifier, learningVoidId: voidId, revision: 1, createdAt: now })
       const planRevisionId = await ctx.db.insert('studyPlanRevisions', { userId: identity.tokenIdentifier, studyPlanId: planId, learningVoidId: voidId, revision: 1, recordRevision: 1, status: 'accepted', blueprintRevisionId: blueprintIdRevision, blueprintRecordRevision: 1, createdAt: now, updatedAt: now })
@@ -334,6 +336,27 @@ describe('Learn V2 session-content publication contract', () => {
     await other.mutation(api.users.upsertUser, {})
     await t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: otherIdentity.tokenIdentifier, enabled: true })
     await expect(other.mutation(api.learnV2SessionContent.startStudySession, args)).rejects.toThrow(/Study session is not ready/)
+  })
+
+  test('rejects session admission when the active Blueprint pointer disappears', async () => {
+    const { t, owner, graph } = await seedGenerationGraph()
+    const { lease, begun } = await leaseAndBegin(t, graph.jobId)
+    const published = await t.mutation(internal.learnV2SessionContent.commitSessionContentCandidate, {
+      tokenIdentifier: identity.tokenIdentifier, jobId: graph.jobId, leaseToken: lease.leaseToken,
+      expectedRevision: begun.revision, candidateJson: JSON.stringify(candidate()).replaceAll(sourceId, String(graph.snapshotId)),
+      verifierDecisionsJson: verifierDecisionsJson(graph.snapshotId, graph.excerptId),
+    })
+    if (published.status !== 'ready') throw new Error('expected published session content')
+    await t.run(async (ctx) => {
+      await ctx.db.patch(graph.sessionId, { scheduledStartAt: Date.now() - 1 })
+      await ctx.db.patch(graph.voidId, { activeBlueprintRevisionId: undefined })
+    })
+    await expect(owner.mutation(api.learnV2SessionContent.startStudySession, {
+      studySessionId: graph.sessionId,
+      expectedSessionRevision: 2,
+      expectedContentRevision: 1,
+      idempotencyKey: 'missing-active-pointer',
+    })).rejects.toThrow(/active Blueprint pointer/i)
   })
 
   test('allows a ready session to start early on its scheduled local day but not on a future day', async () => {

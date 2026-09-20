@@ -24,6 +24,7 @@ async function fixture(options: { placementKind?: 'learning' | 'retained_review'
     const voidId = await ctx.db.insert('learningVoids', { userId: OWNER.tokenIdentifier, folderId, title: 'Mastery', status: 'active', revision: 1, createdAt: now, updatedAt: now })
     const blueprintId = await ctx.db.insert('learnBlueprints', { userId: OWNER.tokenIdentifier, learningVoidId: voidId, revision: 1, createdAt: now })
     const blueprintIdRevision = await ctx.db.insert('learnBlueprintRevisions', { userId: OWNER.tokenIdentifier, blueprintId, learningVoidId: voidId, revision: 1, recordRevision: 3, status: 'accepted', createdAt: now, updatedAt: now })
+    await ctx.db.patch(voidId, { activeBlueprintRevisionId: blueprintIdRevision })
     const objectiveId = await ctx.db.insert('learnObjectives', { userId: OWNER.tokenIdentifier, blueprintRevisionId: blueprintIdRevision, order: 1, title: 'Objective', assessmentContract: assessment })
     const planId = await ctx.db.insert('studyPlans', { userId: OWNER.tokenIdentifier, learningVoidId: voidId, revision: 1, createdAt: now })
     const planRevisionId = await ctx.db.insert('studyPlanRevisions', { userId: OWNER.tokenIdentifier, studyPlanId: planId, learningVoidId: voidId, revision: 1, recordRevision: 5, status: 'accepted', blueprintRevisionId: blueprintIdRevision, blueprintRecordRevision: 3, timezone: options.sessionTimezone ?? 'America/Toronto', createdAt: now })
@@ -48,6 +49,69 @@ async function fixture(options: { placementKind?: 'learning' | 'retained_review'
 }
 
 describe('LA2-12 server-scored mastery attempts', () => {
+  test('revalidates the active Blueprint pointer before reservation and provider dispatch', async () => {
+    const beforeReservation = await fixture()
+    await beforeReservation.t.run(ctx => ctx.db.patch(beforeReservation.ids.voidId, { activeBlueprintRevisionId: undefined }))
+    const { scorerVerdict: _firstVerdict, ...missingPointerRequest } = beforeReservation.args('missing-pointer', 80)
+    await expect(beforeReservation.t.mutation(internal.learnV2Mastery.beginMasteryScoring, missingPointerRequest)).rejects.toThrow(/active Blueprint pointer/i)
+
+    const beforeDispatch = await fixture()
+    const { scorerVerdict: _secondVerdict, ...dispatchRequest } = beforeDispatch.args('stale-before-dispatch', 80)
+    const reservation = await beforeDispatch.t.mutation(internal.learnV2Mastery.beginMasteryScoring, dispatchRequest)
+    expect(reservation.kind).toBe('acquired')
+    if (reservation.kind !== 'acquired') throw new Error('Expected scoring lease')
+    await beforeDispatch.t.run(ctx => ctx.db.patch(beforeDispatch.ids.voidId, { activeBlueprintRevisionId: undefined }))
+    await expect(beforeDispatch.t.mutation(internal.learnV2Mastery.markMasteryScoringDispatched, {
+      tokenIdentifier: OWNER.tokenIdentifier,
+      jobId: reservation.jobId,
+      leaseToken: reservation.leaseToken,
+    })).rejects.toThrow(/active Blueprint pointer/i)
+
+    const beforeCommit = await fixture()
+    await beforeCommit.t.run(ctx => ctx.db.patch(beforeCommit.ids.voidId, { activeBlueprintRevisionId: undefined }))
+    await expect(beforeCommit.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, beforeCommit.args('stale-before-commit', 80))).rejects.toThrow(/active Blueprint pointer/i)
+  })
+
+  test('leaves legacy unscoped mastery read-only and creates the scoped projection', async () => {
+    const { t, ids, args } = await fixture()
+    const legacyRecordId = await t.run(ctx => ctx.db.insert('masteryRecords', {
+      userId: OWNER.tokenIdentifier,
+      objectiveId: ids.objectiveId,
+      state: 'guided',
+      recordRevision: 7,
+      updatedAt: 1,
+    }))
+    const result = await t.mutation(internal.learnV2Mastery.recordMasteryAttempt, args('scoped-projection', 80))
+    expect(result).toMatchObject({ state: 'independent', replayed: false })
+    const rows = await t.run(async (ctx) => ({
+      legacy: await ctx.db.get(legacyRecordId),
+      attempt: await ctx.db.get(result.attemptId),
+      scoped: await ctx.db.query('masteryRecords')
+        .withIndex('by_userId_and_blueprintRevisionId', q => q.eq('userId', OWNER.tokenIdentifier).eq('blueprintRevisionId', ids.blueprintIdRevision))
+        .unique(),
+    }))
+    expect(rows.legacy).not.toHaveProperty('blueprintRevisionId')
+    expect(rows.legacy).toMatchObject({ state: 'guided', recordRevision: 7 })
+    expect(rows.attempt).toMatchObject({
+      blueprintRevisionId: ids.blueprintIdRevision,
+      objectiveId: ids.objectiveId,
+      sessionContentId: ids.contentId,
+      studyPlanRevisionId: ids.planRevisionId,
+      activityContractVersion: 'learn-v2.mastery-attempt.v1',
+      providerVersion: 'openrouter-via-cloudflare-ai-gateway.v1',
+      rubricVersion: 'learn-v2.assessment.v1',
+      scorerVersion: 'learn-v2.mastery-scorer.v1',
+      scorerModel: 'test/mastery-model',
+      verifierVersionsJson: JSON.stringify(['test.verifier.v1']),
+      sessionRevision: 7,
+      contentRevision: 11,
+      planRevision: 1,
+      planRecordRevision: 5,
+      blueprintRecordRevision: 3,
+    })
+    expect(rows.scoped).toMatchObject({ blueprintRevisionId: ids.blueprintIdRevision, objectiveId: ids.objectiveId, state: 'independent' })
+  })
+
   test('records monotonic server-observed hint/reveal use and denies another owner', async () => {
     const { t, owner, ids } = await fixture()
     expect((await owner.query(api.learnV2SessionContent.getSessionContent, { studySessionId: ids.sessionId }))!.blocks.map(block => block.kind)).not.toContain('faded_example')
@@ -264,7 +328,7 @@ describe('LA2-12 server-scored mastery attempts', () => {
     expect(await t.mutation(internal.learnV2Mastery.recordMasteryAttempt, args('same-key', 79))).toMatchObject({ attemptId: first.attemptId, replayed: true })
     expect(await t.mutation(internal.learnV2Mastery.recordMasteryAttempt, args('same-key', 80))).toMatchObject({ attemptId: first.attemptId, scorePercent: 79, replayed: true })
     await expect(t.mutation(internal.learnV2Mastery.recordMasteryAttempt, { ...args('same-key', 80), response: 'changed' })).rejects.toThrow(/different request/)
-    const rows = await t.run(async ctx => ({ attempts: await ctx.db.query('masteryAttempts').withIndex('by_userId_and_objectiveId_and_attemptedAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('objectiveId', ids.objectiveId)).take(3), record: await ctx.db.query('masteryRecords').withIndex('by_userId_and_objectiveId', q => q.eq('userId', OWNER.tokenIdentifier).eq('objectiveId', ids.objectiveId)).unique(), sessions: await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('studyPlanRevisionId', ids.planRevisionId)).take(4), jobs: await ctx.db.query('learnJobs').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', OWNER.tokenIdentifier).eq('idempotencyKey', `mastery-followup:${first.attemptId}`)).unique(), calendar: await ctx.db.query('calendarProjections').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(2) }))
+    const rows = await t.run(async ctx => ({ attempts: await ctx.db.query('masteryAttempts').withIndex('by_userId_blueprintRevisionId_objectiveId_attemptedAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('blueprintRevisionId', ids.blueprintIdRevision).eq('objectiveId', ids.objectiveId)).take(3), record: await ctx.db.query('masteryRecords').withIndex('by_userId_and_blueprintRevisionId_and_objectiveId', q => q.eq('userId', OWNER.tokenIdentifier).eq('blueprintRevisionId', ids.blueprintIdRevision).eq('objectiveId', ids.objectiveId)).unique(), sessions: await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('studyPlanRevisionId', ids.planRevisionId)).take(4), jobs: await ctx.db.query('learnJobs').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', OWNER.tokenIdentifier).eq('idempotencyKey', `mastery-followup:${first.attemptId}`)).unique(), calendar: await ctx.db.query('calendarProjections').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(2) }))
     expect(rows.attempts).toHaveLength(1)
     expect(rows.attempts[0]).toMatchObject({ studySessionId: ids.sessionId, sessionContentId: expect.any(String), studyPlanRevisionId: expect.any(String), blueprintRevisionId: expect.any(String), sessionRevision: 7, contentRevision: 11, planRecordRevision: 5, blueprintRecordRevision: 3, sourceSnapshotIdsJson: expect.stringContaining('learnSourceSnapshots') })
     expect(rows.record).toMatchObject({ state: 'needs_review', schedulingPriority: 'remediation', remediationAttemptId: first.attemptId, nextReviewAt: expect.any(Number) })

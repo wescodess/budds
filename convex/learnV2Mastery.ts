@@ -64,10 +64,17 @@ async function sessionScope(ctx: MutationCtx | QueryCtx, userId: string, session
   const voidRow = plan && await ctx.db.get(plan.learningVoidId)
   const folder = voidRow && await ctx.db.get(voidRow.folderId)
   if (!plan || !root || !content || !blueprint || !objective || !voidRow || !folder || plan.userId !== userId || root.userId !== userId || content.userId !== userId || blueprint.userId !== userId || objective.userId !== userId || voidRow.userId !== userId || folder.userId !== userId) throw new Error('Started session pin is unavailable')
+  if (!voidRow.activeBlueprintRevisionId || voidRow.activeBlueprintRevisionId !== blueprint._id) throw new Error('Active Blueprint pointer is unavailable')
   if (root.activeRevisionId !== plan._id || plan.status !== 'accepted' || blueprint.status !== 'accepted' || plan.blueprintRecordRevision !== blueprint.recordRevision || objective.blueprintRevisionId !== blueprint._id
     || content.status !== 'published' || content.studySessionId !== session._id || content.blueprintRevisionId !== blueprint._id || content.objectiveId !== objective._id || content.studyPlanRevisionId !== plan._id
     || session.startedSessionContentRevision !== content.revision) throw new Error('Started session pin is no longer current')
   return { session, plan, root, content, blueprint, objective, voidRow }
+}
+
+async function scopedMasteryRecord(ctx: MutationCtx | QueryCtx, userId: string, blueprintRevisionId: Id<'learnBlueprintRevisions'>, objectiveId: Id<'learnObjectives'>) {
+  return await ctx.db.query('masteryRecords')
+    .withIndex('by_userId_and_blueprintRevisionId_and_objectiveId', q => q.eq('userId', userId).eq('blueprintRevisionId', blueprintRevisionId).eq('objectiveId', objectiveId))
+    .unique()
 }
 
 async function exactContentEvidence(ctx: MutationCtx | QueryCtx, userId: string, content: Doc<'sessionContent'>) {
@@ -171,7 +178,7 @@ export const beginMasteryScoring = internalMutation({
     const attempt = await ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', args.tokenIdentifier).eq('idempotencyKey', args.idempotencyKey)).unique()
     if (attempt) {
       if (attempt.requestFingerprint !== fingerprint) throw new Error('Idempotency key was already used for a different request')
-      const record = await ctx.db.query('masteryRecords').withIndex('by_userId_and_objectiveId', q => q.eq('userId', args.tokenIdentifier).eq('objectiveId', attempt.objectiveId)).unique()
+      const record = attempt.blueprintRevisionId ? await scopedMasteryRecord(ctx, args.tokenIdentifier, attempt.blueprintRevisionId, attempt.objectiveId) : null
       return { kind: 'replay' as const, attemptId: attempt._id, scorePercent: attempt.serverScorePercent, state: attempt.result, nextReviewAt: record?.lastAttemptId === attempt._id ? record.nextReviewAt ?? null : null, feedback: feedback(attempt) }
     }
     const scope = await sessionScope(ctx, args.tokenIdentifier, args.studySessionId)
@@ -202,6 +209,9 @@ export const markMasteryScoringDispatched = internalMutation({
   handler: async (ctx, args) => {
     const job = await ctx.db.get(args.jobId)
     if (!job || job.userId !== args.tokenIdentifier || job.type !== SCORING_JOB_TYPE || job.status !== 'leased' || job.leaseToken !== args.leaseToken || (job.leaseExpiresAt ?? 0) <= Date.now()) throw new Error('Mastery scoring lease unavailable')
+    if (!job.studySessionId || !job.blueprintRevisionId) throw new Error('Mastery scoring authority is unavailable')
+    const scope = await sessionScope(ctx, args.tokenIdentifier, job.studySessionId)
+    if (scope.blueprint._id !== job.blueprintRevisionId) throw new Error('Active Blueprint pointer is unavailable')
     const now = Date.now()
     const windowStart = now - LEARN_V2_MASTERY_SCORING_ADMISSION.windowMs
     const recent = await ctx.db.query('learnMasteryScoringRateEvents')
@@ -280,7 +290,7 @@ export const getMasteryScoringInput = internalQuery({
     const prior = await ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', args.tokenIdentifier).eq('idempotencyKey', args.idempotencyKey)).unique()
     if (prior) {
       if (prior.requestFingerprint !== fingerprint) throw new Error('Idempotency key was already used for a different request')
-      const record = await ctx.db.query('masteryRecords').withIndex('by_userId_and_objectiveId', q => q.eq('userId', args.tokenIdentifier).eq('objectiveId', prior.objectiveId)).unique()
+      const record = prior.blueprintRevisionId ? await scopedMasteryRecord(ctx, args.tokenIdentifier, prior.blueprintRevisionId, prior.objectiveId) : null
       return { kind: 'replay' as const, attemptId: prior._id, scorePercent: prior.serverScorePercent, state: prior.result, nextReviewAt: record?.lastAttemptId === prior._id ? record.nextReviewAt ?? null : null, feedback: feedback(prior) }
     }
     const scope = await sessionScope(ctx, args.tokenIdentifier, args.studySessionId)
@@ -395,7 +405,7 @@ export const recordMasteryAttempt = internalMutation({
     const prior = await ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', args.tokenIdentifier).eq('idempotencyKey', args.idempotencyKey)).unique()
     if (prior) {
       if (prior.requestFingerprint !== requestFingerprintValue) throw new Error('Idempotency key was already used for a different request')
-      const currentRecord = await ctx.db.query('masteryRecords').withIndex('by_userId_and_objectiveId', q => q.eq('userId', args.tokenIdentifier).eq('objectiveId', prior.objectiveId)).unique()
+      const currentRecord = prior.blueprintRevisionId ? await scopedMasteryRecord(ctx, args.tokenIdentifier, prior.blueprintRevisionId, prior.objectiveId) : null
       return { attemptId: prior._id, scorePercent: prior.serverScorePercent, state: prior.result, nextReviewAt: currentRecord?.lastAttemptId === prior._id ? currentRecord.nextReviewAt ?? null : null, feedback: feedback(prior), replayed: true }
     }
     const scope = await sessionScope(ctx, args.tokenIdentifier, args.studySessionId)
@@ -408,13 +418,13 @@ export const recordMasteryAttempt = internalMutation({
     if (canonicalJson([...args.scorerVerdict.verifierVersions].sort()) !== canonicalJson(evidence.verifierVersions)) throw new Error('Server scorer verifier pins do not match the published content')
     const now = Date.now(); const sessionTimezone = scope.session.timezone ?? scope.plan.timezone
     if (!sessionTimezone) throw new Error('Started session timezone pin is unavailable')
-    const record = await ctx.db.query('masteryRecords').withIndex('by_userId_and_objectiveId', q => q.eq('userId', args.tokenIdentifier).eq('objectiveId', scope.objective._id)).unique()
+    const record = await scopedMasteryRecord(ctx, args.tokenIdentifier, scope.blueprint._id, scope.objective._id)
     const kind = scope.session.placementKind === 'retained_review' ? 'retained_transfer' as const : 'independent_application' as const
     const assisted = scope.session.substantiveHintUsedAt !== undefined || scope.session.answerRevealedAt !== undefined
     const attemptTimezone = kind === 'retained_transfer' && record?.firstIndependentTimezone ? record.firstIndependentTimezone : sessionTimezone
     const attemptLocalDate = localDateAt(now, attemptTimezone)
     const outcome = deriveMastery({ scorePercent, assisted, kind, previousState: record?.state, firstIndependentLocalDate: record?.firstIndependentLocalDate, attemptLocalDate })
-    const attemptId = await ctx.db.insert('masteryAttempts', { userId: args.tokenIdentifier, blueprintRevisionId: scope.blueprint._id, objectiveId: scope.objective._id, studySessionId: scope.session._id, sessionContentId: scope.content._id, studyPlanRevisionId: scope.plan._id, kind, attemptedAt: now, attemptLocalDate, attemptTimezone, idempotencyKey: args.idempotencyKey, requestFingerprint: requestFingerprintValue, serverScorePercent: scorePercent, response: args.response, criterionResultsJson: JSON.stringify(args.scorerVerdict.criterionResults), misconceptionTagsJson: JSON.stringify(args.scorerVerdict.misconceptionTags), usedHint: scope.session.substantiveHintUsedAt !== undefined, usedReveal: scope.session.answerRevealedAt !== undefined, confidence: args.confidence, rubricVersion: rubric.version, rubricSnapshot: scope.content.assessmentRubricSnapshot, scorerVersion: args.scorerVerdict.scorerVersion, scorerModel: scope.content.providerModel, verifierVersionsJson: JSON.stringify(evidence.verifierVersions), sourceSnapshotIdsJson: JSON.stringify(evidence.sourceIds), sessionRevision: scope.session.revision, contentRevision: scope.content.revision, planRevision: scope.plan.revision, planRecordRevision: scope.plan.recordRevision, blueprintRecordRevision: scope.blueprint.recordRevision, result: outcome.state })
+    const attemptId = await ctx.db.insert('masteryAttempts', { userId: args.tokenIdentifier, blueprintRevisionId: scope.blueprint._id, objectiveId: scope.objective._id, studySessionId: scope.session._id, sessionContentId: scope.content._id, studyPlanRevisionId: scope.plan._id, kind, activityContractVersion: 'learn-v2.mastery-attempt.v1', providerVersion: 'openrouter-via-cloudflare-ai-gateway.v1', attemptedAt: now, attemptLocalDate, attemptTimezone, idempotencyKey: args.idempotencyKey, requestFingerprint: requestFingerprintValue, serverScorePercent: scorePercent, response: args.response, criterionResultsJson: JSON.stringify(args.scorerVerdict.criterionResults), misconceptionTagsJson: JSON.stringify(args.scorerVerdict.misconceptionTags), usedHint: scope.session.substantiveHintUsedAt !== undefined, usedReveal: scope.session.answerRevealedAt !== undefined, confidence: args.confidence, rubricVersion: rubric.version, rubricSnapshot: scope.content.assessmentRubricSnapshot, scorerVersion: args.scorerVerdict.scorerVersion, scorerModel: scope.content.providerModel, verifierVersionsJson: JSON.stringify(evidence.verifierVersions), sourceSnapshotIdsJson: JSON.stringify(evidence.sourceIds), sessionRevision: scope.session.revision, contentRevision: scope.content.revision, planRevision: scope.plan.revision, planRecordRevision: scope.plan.recordRevision, blueprintRecordRevision: scope.blueprint.recordRevision, result: outcome.state })
     const followUp = await createFollowUp(ctx, { userId: args.tokenIdentifier, scope, attemptId, outcome, now, timezone: attemptTimezone, firstIndependentLocalDate: outcome.setFirstIndependent ? attemptLocalDate : record?.firstIndependentLocalDate, sourceIds: evidence.sourceSnapshotIds })
     const patch = { state: outcome.state, schedulingPriority: outcome.remediation ? 'remediation' as const : 'standard' as const, recordRevision: (record?.recordRevision ?? 0) + 1, lastAttemptAt: now, lastAttemptId: attemptId, nextReviewAt: followUp?.scheduledStartAt, remediationAttemptId: outcome.remediation ? attemptId : undefined, ...(outcome.setFirstIndependent ? { firstIndependentPassAt: now, firstIndependentLocalDate: attemptLocalDate, firstIndependentTimezone: attemptTimezone } : {}), updatedAt: now }
     if (record) await ctx.db.patch(record._id, patch)

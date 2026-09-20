@@ -22,6 +22,16 @@ async function ownedVoid(ctx: Parameters<typeof requireLearnV2QueryAccess>[0], u
 }
 
 async function currentBlueprint(ctx: Parameters<typeof requireLearnV2QueryAccess>[0], userId: string, voidRow: VoidRow) {
+  if (voidRow.activeBlueprintRevisionId) {
+    const active = await ctx.db.get(voidRow.activeBlueprintRevisionId)
+    if (!active || active.userId !== userId || active.learningVoidId !== voidRow._id || active.status !== 'accepted') {
+      throw new Error('Active Blueprint pointer is invalid')
+    }
+    return active
+  }
+  if (!['draft', 'sourcing', 'source_review', 'map_review'].includes(voidRow.status)) {
+    throw new Error('Active Blueprint pointer is unavailable')
+  }
   const rows = await ctx.db.query('learnBlueprintRevisions')
     .withIndex('by_userId_and_learningVoidId', q => q.eq('userId', userId).eq('learningVoidId', voidRow._id))
     .order('desc').take(MAX_REVISIONS + 1)
@@ -155,8 +165,8 @@ async function journey(ctx: Parameters<typeof requireLearnV2QueryAccess>[0], use
   const plan = await planProjection(ctx, userId, voidRow)
   const mastery = []
   for (const objective of map?.objectives ?? []) {
-    const record = await ctx.db.query('masteryRecords').withIndex('by_userId_and_objectiveId', q => q.eq('userId', userId).eq('objectiveId', objective._id)).first()
-    const attempts = await ctx.db.query('masteryAttempts').withIndex('by_userId_and_objectiveId_and_attemptedAt', q => q.eq('userId', userId).eq('objectiveId', objective._id)).order('desc').take(MAX_ATTEMPTS_PER_OBJECTIVE)
+    const record = await ctx.db.query('masteryRecords').withIndex('by_userId_and_blueprintRevisionId_and_objectiveId', q => q.eq('userId', userId).eq('blueprintRevisionId', blueprint!._id).eq('objectiveId', objective._id)).unique()
+    const attempts = await ctx.db.query('masteryAttempts').withIndex('by_userId_blueprintRevisionId_objectiveId_attemptedAt', q => q.eq('userId', userId).eq('blueprintRevisionId', blueprint!._id).eq('objectiveId', objective._id)).order('desc').take(MAX_ATTEMPTS_PER_OBJECTIVE)
     mastery.push({ objectiveId: objective._id, record, attempts })
   }
   const calibrationItems = (map?.objectives ?? []).map(objective => {
@@ -226,6 +236,7 @@ export const getSessionCandidate = query({
     const blueprint = await ctx.db.get(plan.blueprintRevisionId)
     const objective = await ctx.db.get(session.primaryObjectiveId)
     if (!blueprint || blueprint.userId !== userId || blueprint.status !== 'accepted'
+      || owned.row.activeBlueprintRevisionId !== blueprint._id
       || plan.blueprintRecordRevision !== blueprint.recordRevision
       || !objective || objective.userId !== userId || objective.blueprintRevisionId !== blueprint._id) return null
     const content = session.status === 'in_progress' && session.startedSessionContentRevision !== undefined

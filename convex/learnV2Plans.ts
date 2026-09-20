@@ -79,8 +79,8 @@ async function audit(ctx: MutationCtx, data: { userId: string, learningVoidId: I
 async function currentBlueprint(ctx: MutationCtx, userId: string, blueprintRevisionId: Id<'learnBlueprintRevisions'>, learningVoidId: Id<'learningVoids'>) {
   const blueprint = await ctx.db.get(blueprintRevisionId)
   if (!blueprint || blueprint.userId !== userId || blueprint.learningVoidId !== learningVoidId || blueprint.status !== 'accepted') throw new Error('Accepted Blueprint revision not found')
-  const latest = await ctx.db.query('learnBlueprintRevisions').withIndex('by_userId_and_blueprintId_and_revision', q => q.eq('userId', userId).eq('blueprintId', blueprint.blueprintId)).order('desc').first()
-  if (!latest || latest._id !== blueprint._id) throw new Error('Blueprint revision conflict')
+  const learningVoid = await ctx.db.get(learningVoidId)
+  if (!learningVoid || learningVoid.userId !== userId || learningVoid.activeBlueprintRevisionId !== blueprint._id) throw new Error('Active Blueprint pointer is unavailable')
   return blueprint
 }
 async function planForVoid(ctx: MutationCtx, userId: string, learningVoidId: Id<'learningVoids'>, now: number) {
@@ -96,7 +96,7 @@ async function buildSchedulingInput(ctx: MutationCtx, userId: string, blueprint:
   for (const objective of objectives) {
     const prerequisites = await ctx.db.query('learnObjectivePrerequisites').withIndex('by_userId_and_blueprintRevisionId_and_objectiveId', q => q.eq('userId', userId).eq('blueprintRevisionId', blueprint._id).eq('objectiveId', objective._id)).take(MAX_OBJECTIVES + 1)
     if (prerequisites.length > MAX_OBJECTIVES) throw new Error('Objective prerequisite set is outside the bounded plan contract')
-    const record = await ctx.db.query('masteryRecords').withIndex('by_userId_and_objectiveId', q => q.eq('userId', userId).eq('objectiveId', objective._id)).first()
+    const record = await ctx.db.query('masteryRecords').withIndex('by_userId_and_blueprintRevisionId_and_objectiveId', q => q.eq('userId', userId).eq('blueprintRevisionId', blueprint._id).eq('objectiveId', objective._id)).unique()
     // Older/provider-produced maps may predate the scheduler's 15-minute floor.
     // Preserve their reachability while all newly validated maps enforce the floor.
     const estimatedMinutes = Math.max(15, objective.estimatedMinutes ?? input.sessionMinutes)
