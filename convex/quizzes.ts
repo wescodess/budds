@@ -46,15 +46,69 @@ function normalizeForCompare(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, ' ')
 }
 
+function listFactorTokens(value: string): string[] {
+  return value
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+}
+
+function splitListFactors(value: string): string[][] {
+  return value
+    .split(/\s*(?:,|;|&|\band\b)\s*/i)
+    .map(listFactorTokens)
+    .filter(tokens => tokens.length > 0)
+}
+
+function isExplicitListMatch(question: string, response: string, correctAnswer: string): boolean {
+  const directive = question.match(/^\s*(?:list|name|identify|give|provide|state)\s+(?:(?:the|any)\s+)?(two|three|four|five|[2-5])\b/i)
+  if (!directive) return false
+  const countByWord: Record<string, number> = { two: 2, three: 3, four: 4, five: 5 }
+  const requestedCount = countByWord[directive[1]!.toLowerCase()] ?? Number(directive[1])
+  if (!Number.isInteger(requestedCount) || requestedCount < 2 || requestedCount > 5) return false
+
+  const expectedFactors = splitListFactors(correctAnswer)
+  const responseFactors = splitListFactors(response)
+  if (expectedFactors.length !== requestedCount || responseFactors.length !== requestedCount) return false
+  if (responseFactors.some(tokens => tokens.some(token => ['no', 'not', 'never', 'without'].includes(token)))) return false
+
+  const expectedConcepts = expectedFactors
+  const responseConcepts = responseFactors
+
+  const expectedHeads = expectedFactors.map(tokens => tokens.at(-1)!)
+  if (expectedHeads.some(head => head.length < 4)) return false
+  if (new Set(expectedHeads).size !== expectedHeads.length) return false
+  const responseSignatures = responseConcepts.map(tokens => tokens.join(' '))
+  if (new Set(responseSignatures).size !== responseSignatures.length) return false
+  const expectedTokenSets = expectedConcepts.map(tokens => new Set(tokens))
+
+  const usedExpected = new Set<number>()
+  for (const actual of responseConcepts) {
+    const matchIndex = expectedConcepts.findIndex((expected, index) =>
+      !usedExpected.has(index)
+      && actual.includes(expected.at(-1)!)
+      && actual.every(token => expectedTokenSets[index]!.has(token)),
+    )
+    if (matchIndex < 0) return false
+    usedExpected.add(matchIndex)
+  }
+  return usedExpected.size === requestedCount
+}
+
 function scoreAnswer(
   type: string,
   response: string,
   correctAnswer: string,
+  question: string,
 ): boolean {
   if (type === 'multiple-choice' || type === 'true_false') {
     return response === correctAnswer
   }
   return normalizeForCompare(response) === normalizeForCompare(correctAnswer)
+    || isExplicitListMatch(question, response, correctAnswer)
 }
 
 function shuffleArray<T>(arr: T[]): T[] {
@@ -536,7 +590,7 @@ export const submitAnswer = mutation({
       }
     }
 
-    const isCorrect = scoreAnswer(question.type, args.userAnswer, question.correctAnswer)
+    const isCorrect = scoreAnswer(question.type, args.userAnswer, question.correctAnswer, question.question)
 
     const attemptAnswerId = await ctx.db.insert('attemptAnswers', {
       attemptId: args.attemptId,
@@ -608,7 +662,7 @@ export const submitAllAnswers = mutation({
       if (!question) continue
       if (alreadyAnswered.has(a.questionId as string)) continue
 
-      const isCorrect = scoreAnswer(question.type, a.userAnswer, question.correctAnswer)
+      const isCorrect = scoreAnswer(question.type, a.userAnswer, question.correctAnswer, question.question)
       if (isCorrect) correctCount++
 
       const attemptAnswerId = await ctx.db.insert('attemptAnswers', {
@@ -903,7 +957,7 @@ export const submitAttempt = mutation({
       return {
         questionId: a.questionId,
         response: a.response,
-        isCorrect: scoreAnswer(q.type, a.response, q.correctAnswer),
+        isCorrect: scoreAnswer(q.type, a.response, q.correctAnswer, q.question),
       }
     })
 
