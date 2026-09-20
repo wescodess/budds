@@ -14,6 +14,14 @@ const mission = {
 }
 
 describe('Learn V2 journey workspace seams', () => {
+  it('prefers the accepted plan revision over a stale preview', async () => {
+    const { selectLearnV2PlanRevision } = await import('~/composables/useLearnV2Journey')
+    const preview = { _id: 'preview' }
+    const accepted = { _id: 'accepted' }
+    expect(selectLearnV2PlanRevision({ preview, accepted })).toEqual({ accepted: true, revision: accepted })
+    expect(selectLearnV2PlanRevision({ preview, accepted: null })).toEqual({ accepted: false, revision: preview })
+  })
+
   it('degrades malformed legacy plan snapshots instead of taking down the workspace', () => {
     expect(parseLearnV2PlanResult('{not-json')).toEqual({})
     expect(parseLearnV2PlanResult(JSON.stringify({ status: 'feasible', reasonCodes: ['deadline'], alternatives: [{ code: 'extend_target' }, { code: 2 }] }))).toEqual({ status: 'feasible', reasonCodes: ['deadline'], alternatives: [{ code: 'extend_target' }] })
@@ -208,5 +216,26 @@ describe('Learn V2 journey workspace seams', () => {
       },
     })
     expect(wrapper.get('[data-testid="learn-v2-plan-error"]').text()).toContain('final buffer')
+  })
+
+  it('does not offer plan acceptance after the plan is already accepted', async () => {
+    const Comp = await import(`${path}/StudyRhythm.vue`)
+    const wrapper = await mountSuspended(Comp.default, {
+      props: {
+        plan: {
+          accepted: true,
+          feasibility: 'feasible',
+          headline: 'Your plan is feasible',
+          detail: 'capacity_available',
+          weeklyLoadLabel: 'Based on your availability',
+          targetLabel: 'America/Toronto',
+          sessions: [],
+        },
+      },
+    })
+
+    expect(wrapper.find('[data-testid="learn-v2-accept-plan"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="learn-v2-plan-edit"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="learn-v2-plan-accepted"]').text()).toContain('Plan accepted')
   })
 })

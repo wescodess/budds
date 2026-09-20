@@ -20,7 +20,7 @@ mockNuxtImport('useConvexAction', () => (reference: any) => ({ mutate: getFuncti
 mockNuxtImport('useConvexQuery', () => (reference: any) => ({ data: getFunctionName(reference)?.includes('getSessionContent') ? content : ref(null) }))
 
 const path = ['~', 'components', 'learn-v2', 'TodaySession.vue'].join('/')
-const candidate = { studySessionId: 'session_1', sessionRevision: 1, contentRevision: 2, planRecordRevision: 3, blueprintRecordRevision: 4, objectiveTitle: 'Explain gravity', estimatedMinutes: 12, scheduledStartAt: 0, timezone: 'America/Toronto', reason: 'due', progress: { retained: 0, independent: 0, total: 1 } }
+const candidate = { studySessionId: 'session_1', sessionRevision: 1, contentRevision: 2, planRecordRevision: 3, blueprintRecordRevision: 4, objectiveTitle: 'Explain gravity', estimatedMinutes: 12, scheduledStartAt: 0, scheduledEndAt: 17 * 60_000, timezone: 'America/Toronto', reason: 'due', progress: { retained: 0, independent: 0, total: 1 } }
 const blocks = ['retrieval', 'objective', 'cold_attempt', 'explanation', 'worked_example', 'faded_example', 'independent_application', 'confidence_teach_back'].map((kind, order) => ({ kind, order, content: `${kind} content` }))
 
 describe('LearnV2TodaySession', () => {
@@ -31,7 +31,7 @@ describe('LearnV2TodaySession', () => {
     content.value = { revision: 2, blocks }
     isOnline.value = true
   })
-  async function mount() { const Comp = await import(path); return await mountSuspended(Comp.default, { props: { candidate } }) }
+  async function mount(overrides: Partial<typeof candidate> = {}) { const Comp = await import(path); return await mountSuspended(Comp.default, { props: { candidate: { ...candidate, ...overrides } } }) }
   async function startSession(wrapper: any) { await wrapper.find('[data-testid="learn-v2-start"]').trigger('click'); await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(1)) }
   async function reachConfidence(wrapper: any) {
     await wrapper.find('[data-testid="learn-v2-continue"]').trigger('click')
@@ -65,14 +65,18 @@ describe('LearnV2TodaySession', () => {
   })
   it('applies motion, contrast, and untimed-session preferences to rendering', async () => {
     const wrapper = await mount()
-    expect(wrapper.text()).toContain('12 minutes')
+    expect(wrapper.text()).toContain('17 minutes')
     await wrapper.get('[data-testid="learn-v2-reduce-motion"]').setValue(true)
     await wrapper.get('[data-testid="learn-v2-enhanced-contrast"]').setValue(true)
     await wrapper.get('[data-testid="learn-v2-hide-time"]').setValue(true)
     const session = wrapper.get('[data-testid="learn-v2-session"]')
     expect(session.classes()).toContain('learn-v2-reduced-motion')
     expect(session.classes()).toContain('learn-v2-enhanced-contrast')
-    expect(wrapper.text()).not.toContain('12 minutes')
+    expect(wrapper.text()).not.toContain('17 minutes')
+  })
+  it('falls back to objective effort when a valid scheduled interval is unavailable', async () => {
+    expect((await mount({ scheduledEndAt: undefined })).text()).toContain('12 minutes')
+    expect((await mount({ scheduledEndAt: 0 })).text()).toContain('12 minutes')
   })
   it('keeps server-scored sessions unavailable offline without queuing an attempt', async () => {
     isOnline.value = false

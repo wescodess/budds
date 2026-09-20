@@ -61,6 +61,9 @@ const submitKey = ref<string | null>(null)
 const reduceMotion = ref(false)
 const enhancedContrast = ref(false)
 const hideTimeGuidance = ref(false)
+const durationMinutes = computed(() => candidate.scheduledEndAt && candidate.scheduledEndAt > candidate.scheduledStartAt
+  ? Math.max(1, Math.round((candidate.scheduledEndAt - candidate.scheduledStartAt) / 60_000))
+  : candidate.estimatedMinutes)
 
 function makeKey(prefix: string) {
   const id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -153,7 +156,7 @@ async function retryScore() { await submit() }
     <header class="border-b border-border pb-5">
       <div class="flex items-start justify-between gap-4">
         <div class="min-w-0">
-          <p class="font-inter text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Today<span v-if="!hideTimeGuidance"> · about {{ candidate.estimatedMinutes }} minutes</span></p>
+          <p class="font-inter text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Today<span v-if="!hideTimeGuidance"> · about {{ durationMinutes }} minutes</span></p>
           <h1 id="today-session-title" class="mt-2 font-dm-sans text-2xl font-bold tracking-tight text-foreground sm:text-3xl">{{ candidate.objectiveTitle }}</h1>
           <p v-if="candidate.capability" class="mt-2 text-sm leading-6 text-muted-foreground">{{ candidate.capability }}</p>
         </div>
