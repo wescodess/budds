@@ -1,13 +1,15 @@
 import type { H3Event } from 'h3'
 import { describe, expect, test, vi } from 'vitest'
-import { FREE_RESPONSE_ASSESSMENT_KIND, FREE_RESPONSE_RUBRIC, isBoundedDecisionRequest, isCompletedTypedDecision, unavailableDecision } from './contracts'
+import { FREE_RESPONSE_ASSESSMENT_KIND, FREE_RESPONSE_RUBRIC, isBoundedDecisionRequest, isCompletedTypedDecision, LEARNING_DECISION_CONTRACT_VERSION, LEARNING_DECISION_SNAPSHOT_VERSION, unavailableDecision } from './contracts'
 import { evaluateTypedDecision, shadowEvaluateQuiz } from './index'
 import { evaluateWithLaya } from './laya-adapter'
 
 vi.stubGlobal('useRuntimeConfig', vi.fn())
 
-const request = { kind: 'quiz_quality' as const, requestId: 'r1', inputDigest: 'a'.repeat(64), items: [{ id: 'q1', question: 'What is ATP?', correctAnswer: 'Energy', options: ['Energy'] }] }
+const envelope = { contractVersion: LEARNING_DECISION_CONTRACT_VERSION, snapshotVersion: LEARNING_DECISION_SNAPSHOT_VERSION }
+const request = { ...envelope, kind: 'quiz_quality' as const, requestId: 'r1', inputDigest: 'a'.repeat(64), items: [{ id: 'q1', question: 'What is ATP?', correctAnswer: 'Energy', options: ['Energy'], language: 'en-CA', evidence: { sourceIndex: 2, excerpt: 'ATP transfers chemical energy.' } }] }
 const semanticRequest = {
+  ...envelope,
   kind: FREE_RESPONSE_ASSESSMENT_KIND,
   requestId: 'semantic-1',
   inputDigest: 'b'.repeat(64),
@@ -18,6 +20,7 @@ const semanticRequest = {
     expectedAnswer: 'Cell division into two identical daughter cells.',
     learnerAnswer: 'One cell divides into two genetically identical cells.',
     evidenceExcerpt: 'Mitosis produces two genetically identical daughter cells.',
+    language: 'en',
     rubricVersion: FREE_RESPONSE_ASSESSMENT_KIND,
     rubric: [...FREE_RESPONSE_RUBRIC],
   }],
@@ -50,7 +53,21 @@ describe('learning decision boundary', () => {
   test('malformed and unavailable provider responses fail open', async () => {
     await expect(evaluateWithLaya(request, { enabled: true, token: 'x', url: 'https://internal', binding: { fetch: vi.fn(async () => new Response('{}')) } })).resolves.toMatchObject({ status: 'unavailable', reason: 'malformed' })
     await expect(evaluateWithLaya(request, { enabled: true, token: 'x', url: 'https://internal', binding: { fetch: vi.fn(async () => new Response('', { status: 503 })) } })).resolves.toMatchObject({ status: 'unavailable', reason: 'unavailable', retryable: true })
-    await expect(evaluateWithLaya(request, { enabled: true, token: 'x', url: 'https://internal', binding: { fetch: vi.fn(async () => new Response('', { status: 429 })) } })).resolves.toMatchObject({ status: 'unavailable', reason: 'over_budget', retryable: true })
+    await expect(evaluateWithLaya(request, { enabled: true, token: 'x', url: 'https://internal', binding: { fetch: vi.fn(async () => new Response('', { status: 429, headers: { 'Retry-After': '9999' } })) } })).resolves.toMatchObject({ status: 'unavailable', reason: 'over_budget', retryable: true, retryAfterMs: 60_000 })
+  })
+
+  test('parses and clamps an HTTP-date Retry-After value', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-20T12:00:00.000Z'))
+    try {
+      const response = new Response('', { status: 503, headers: { 'Retry-After': 'Sun, 20 Sep 2026 12:00:30 GMT' } })
+      await expect(evaluateWithLaya(request, {
+        enabled: true, token: 'x', url: 'https://internal', binding: { fetch: vi.fn(async () => response) },
+      })).resolves.toMatchObject({ status: 'unavailable', retryAfterMs: 30_000 })
+    }
+    finally {
+      vi.useRealTimers()
+    }
   })
 
   test('times out and rejects mismatched decision IDs', async () => {
@@ -84,25 +101,42 @@ describe('learning decision boundary', () => {
     expect(fetcher).toHaveBeenCalledOnce()
   })
 
-  test('bounds quiz shadow batches and logs only sanitized aggregates', async () => {
-    const items = Array.from({ length: 25 }, (_, index) => ({ id: `q${index}`, question: `question-${index}`, correctAnswer: `answer-${index}` }))
-    let forwarded: typeof request | undefined
-    const fetcher = vi.fn(async (outbound: Request) => {
-      forwarded = await outbound.json() as typeof request
-      return Response.json({ status: 'completed', provider: 'laya', modelRevision: 'f9ab0b228f0fc0f14d873dbc99038f135c2da1b2', decisions: forwarded.items.map(item => ({ id: item.id, label: 'supported', confidence: 0.5 })) })
-    })
-    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined)
+  test('rejects over-budget shadow batches instead of evaluating a truncated prefix', async () => {
+    const items = Array.from({ length: 25 }, (_, index) => ({ id: `q${index}`, question: `question-${index}`, correctAnswer: `answer-${index}`, language: 'en', evidence: { sourceIndex: index, excerpt: `evidence-${index}` } }))
+    const fetcher = vi.fn()
     vi.mocked(useRuntimeConfig).mockReturnValue({ learningDecisionMode: 'shadow', learningDecisionProvider: 'laya', layaEvaluatorToken: 'test-token', layaEvaluatorUrl: '' } as ReturnType<typeof useRuntimeConfig>)
     const event = { context: { cloudflare: { env: { LAYA_EVALUATOR: { fetch: fetcher } } } } } as unknown as H3Event
 
-    await shadowEvaluateQuiz(event, items)
+    await expect(shadowEvaluateQuiz(event, items)).resolves.toEqual(unavailableDecision('over_budget'))
+    expect(fetcher).not.toHaveBeenCalled()
+  })
 
-    expect(forwarded?.items).toHaveLength(20)
-    expect(forwarded?.items.at(-1)?.id).toBe('q19')
-    const logged = info.mock.calls[0]![1]
-    expect(logged).toMatchObject({ itemCount: 20, omittedItemCount: 5, supportedCount: 20, needsReviewCount: 0, meanConfidence: 0.5 })
-    expect(JSON.stringify(logged)).not.toContain('question-')
-    expect(JSON.stringify(logged)).not.toContain('answer-')
-    info.mockRestore()
+  test('rejects an encoded request over the manifest byte budget before provider transport', async () => {
+    const fetcher = vi.fn()
+    vi.mocked(useRuntimeConfig).mockReturnValue({ learningDecisionMode: 'shadow', learningDecisionProvider: 'laya', layaEvaluatorToken: 'test-token' } as ReturnType<typeof useRuntimeConfig>)
+    const event = { context: { cloudflare: { env: { LAYA_EVALUATOR: { fetch: fetcher } } } } } as unknown as H3Event
+    const items = Array.from({ length: 20 }, (_, index) => ({
+      id: `q${index}`,
+      question: '😀'.repeat(1_200),
+      correctAnswer: 'answer',
+      language: 'en',
+      evidence: { sourceIndex: index, excerpt: 'evidence' },
+    }))
+
+    await expect(evaluateTypedDecision(event, { ...request, items })).resolves.toEqual(unavailableDecision('over_budget'))
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  test.each([
+    [{ ...request.items[0], language: '' }, 'unknown_language'],
+    [{ ...request.items[0], language: 'fr' }, 'unsupported_language'],
+    [{ ...request.items[0], evidence: { sourceIndex: 0, excerpt: '' } }, 'missing_evidence'],
+    [{ ...request.items[0], evidence: { sourceIndex: 0, excerpt: 'x'.repeat(1_201) } }, 'oversized_evidence'],
+  ])('returns typed unavailable without a provider request for invalid language or evidence', async (item, reason) => {
+    const fetcher = vi.fn()
+    vi.mocked(useRuntimeConfig).mockReturnValue({ learningDecisionMode: 'shadow', learningDecisionProvider: 'laya', layaEvaluatorToken: 'test-token' } as ReturnType<typeof useRuntimeConfig>)
+    const event = { context: { cloudflare: { env: { LAYA_EVALUATOR: { fetch: fetcher } } } } } as unknown as H3Event
+    await expect(evaluateTypedDecision(event, { ...request, items: [item] })).resolves.toMatchObject({ status: 'unavailable', reason })
+    expect(fetcher).not.toHaveBeenCalled()
   })
 })

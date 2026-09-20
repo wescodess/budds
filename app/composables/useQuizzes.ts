@@ -74,7 +74,7 @@ export function useQuizzes(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
         }>
       }>('/api/quiz/generate', {
         method: 'POST',
-        body: { folderId: id.value, ...options },
+        body: { folderId: id.value, ...options, language: 'en' },
       })
 
       await createQuizMutation.mutate({
@@ -83,6 +83,7 @@ export function useQuizzes(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
         model: generated.model,
         creationMethod: 'auto_generated' as const,
         difficulty: options.difficulty,
+        language: 'en',
         questions: generated.questions,
       })
     }

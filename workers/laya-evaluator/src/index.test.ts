@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from 'vitest'
 import { createWorkerHandler, EvaluationGate, type Env, LayaEvaluator } from './index'
+import { CONTRACT_VERSION, SNAPSHOT_VERSION } from './contracts'
 
 const containerFetch = vi.hoisted(() => vi.fn())
 const containerStop = vi.hoisted(() => vi.fn(async () => undefined))
@@ -20,7 +21,9 @@ const body = JSON.stringify({
   kind: 'quiz_quality',
   requestId: 'request-1',
   inputDigest: 'a'.repeat(64),
-  items: [{ id: 'q1', question: 'What is ATP?', correctAnswer: 'Energy', options: ['Energy'] }],
+  contractVersion: CONTRACT_VERSION,
+  snapshotVersion: SNAPSHOT_VERSION,
+  items: [{ id: 'q1', question: 'What is ATP?', correctAnswer: 'Energy', options: ['Energy'], language: 'en', evidence: { sourceIndex: 0, excerpt: 'ATP transfers energy.' } }],
 })
 const result = {
   status: 'completed',

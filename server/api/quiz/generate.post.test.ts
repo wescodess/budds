@@ -75,7 +75,7 @@ describe('POST /api/quiz/generate', () => {
     vi.mocked(globalThis.getConvexTokenIdentifier).mockImplementation(() => {
       throw Object.assign(new Error('Convex authentication token not available'), { statusCode: 401 })
     })
-    vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc' })
+    vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc', language: 'en' })
 
     const err = await (handler(makeEvent()) as Promise<any>).catch((e: any) => e)
     expect(err.statusCode).toBe(401)
@@ -131,7 +131,7 @@ describe('POST /api/quiz/generate', () => {
   })
 
   test('[P0] 200 happy path: returns generated quiz payload for client persistence', async () => {
-    vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc' })
+    vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc', language: 'en' })
     vi.mocked(globalThis.searchDocuments).mockResolvedValue({
       data: [
         { id: '1', content: 'Photosynthesis content', score: 0.9, attributes: { filename: 'bio1.pdf', documentId: 'doc_1' } },
@@ -170,9 +170,74 @@ describe('POST /api/quiz/generate', () => {
     })
     expect(shadowEvaluateQuiz).toHaveBeenCalledOnce()
     expect(shadowEvaluateQuiz).toHaveBeenCalledWith(expect.anything(), [
-      { id: 'q0', question: 'What do mitochondria produce?', options: ['ATP', 'DNA', 'RNA', 'Glucose'], correctAnswer: 'ATP' },
-      { id: 'q1', question: 'What is photosynthesis?', options: undefined, correctAnswer: 'Converting light to chemical energy.' },
+      { id: 'q0', question: 'What do mitochondria produce?', options: ['ATP', 'DNA', 'RNA', 'Glucose'], correctAnswer: 'ATP', language: 'en', evidence: { sourceIndex: 1, excerpt: 'Mitochondria content' } },
+      { id: 'q1', question: 'What is photosynthesis?', options: undefined, correctAnswer: 'Converting light to chemical energy.', language: 'en', evidence: { sourceIndex: 0, excerpt: 'Photosynthesis content' } },
     ])
+  })
+
+  test('[P0] preserves a generated question with an invalid source index without substituting or evaluating false provenance', async () => {
+    vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc', language: 'en' })
+    vi.mocked(globalThis.searchDocuments).mockResolvedValue({
+      data: [
+        { id: '1', content: 'Photosynthesis content', score: 0.9, attributes: { filename: 'bio1.pdf', documentId: 'doc_1' } },
+        { id: '2', content: 'Mitochondria content', score: 0.85, attributes: { filename: 'bio2.pdf', documentId: 'doc_2' } },
+      ],
+    })
+    const generated = goodLlmResponse()
+    generated.choices[0]!.message.content = JSON.stringify({
+      title: 'Cellular Biology Quiz',
+      questions: [{
+        order: 0,
+        question: 'What do mitochondria produce?',
+        type: 'multiple-choice',
+        options: ['ATP', 'DNA', 'RNA', 'Glucose'],
+        correctAnswer: 'ATP',
+        sourceIndex: 99,
+      }],
+    })
+    vi.mocked(globalThis.generateCompletion).mockResolvedValue(generated)
+
+    const result = await handler(makeEvent())
+
+    expect(result.questions).toEqual([{
+      order: 0,
+      question: 'What do mitochondria produce?',
+      type: 'multiple-choice',
+      options: ['ATP', 'DNA', 'RNA', 'Glucose'],
+      correctAnswer: 'ATP',
+      explanation: undefined,
+      sourceDocumentId: undefined,
+      sourceChunkContent: undefined,
+      sourceFilename: undefined,
+    }])
+    expect(shadowEvaluateQuiz).not.toHaveBeenCalled()
+  })
+
+  test('[P0] evaluates exactly sourced items while reporting invalid evidence without substitution', async () => {
+    vi.spyOn(console, 'info').mockImplementation(() => undefined)
+    vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc', language: 'en' })
+    vi.mocked(globalThis.searchDocuments).mockResolvedValue({
+      data: [
+        { id: '1', content: 'Photosynthesis content', score: 0.9, attributes: { filename: 'bio1.pdf', documentId: 'doc_1' } },
+        { id: '2', content: 'Mitochondria content', score: 0.85, attributes: { filename: 'bio2.pdf', documentId: 'doc_2' } },
+      ],
+    })
+    const generated = goodLlmResponse()
+    const payload = JSON.parse(generated.choices[0]!.message.content)
+    payload.questions[1].sourceIndex = 99
+    generated.choices[0]!.message.content = JSON.stringify(payload)
+    vi.mocked(globalThis.generateCompletion).mockResolvedValue(generated)
+
+    const result = await handler(makeEvent())
+
+    expect(result.questions[1]).toMatchObject({ sourceDocumentId: undefined, sourceChunkContent: undefined, sourceFilename: undefined })
+    expect(shadowEvaluateQuiz).toHaveBeenCalledOnce()
+    expect(shadowEvaluateQuiz).toHaveBeenCalledWith(expect.anything(), [expect.objectContaining({
+      id: 'q0', evidence: { sourceIndex: 1, excerpt: 'Mitochondria content' },
+    })])
+    expect(console.info).toHaveBeenCalledWith('[quiz-quality-evidence]', {
+      status: 'unavailable', reason: 'missing_evidence', itemCount: 1,
+    })
   })
 
   test('[P0] evaluator failure leaves the quiz response unchanged', async () => {

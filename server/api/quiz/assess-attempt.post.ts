@@ -5,15 +5,22 @@ import { makeConvexClient } from '../../utils/convex-client'
 import {
   evaluateTypedDecision,
   FREE_RESPONSE_ASSESSMENT_KIND,
+  LEARNING_DECISION_CONTRACT_VERSION,
+  LEARNING_DECISION_MAX_ATTEMPTS,
+  LEARNING_DECISION_SNAPSHOT_VERSION,
   type FreeResponseAssessmentItem,
   type FreeResponseDecisionLabel,
 } from '../../utils/learning-decisions'
 import { readConfiguredRuntimeValue } from '../../utils/runtime-config'
 import { requireRateLimit } from '../../utils/rate-limit'
+import { isQuizSemanticAdvisoryEnabled } from '../../utils/learning-decisions/activation'
 
 type PendingAssessment = {
   assessmentId: Id<'quizAnswerAssessments'>
   kind: typeof FREE_RESPONSE_ASSESSMENT_KIND
+  contractVersion: string
+  snapshotVersion: string
+  languageSnapshot: string
   questionSnapshot: {
     question: string
     questionType: 'free-response' | 'fill_in_the_blank'
@@ -23,18 +30,22 @@ type PendingAssessment = {
   learnerAnswerSnapshot: string
   rubricVersion: typeof FREE_RESPONSE_ASSESSMENT_KIND
   rubricSnapshot: Array<{ label: string, description: string }>
+  attemptCount: number
 }
 const MAX_EVALUATOR_REQUEST_BYTES = 30_000
+const MAX_ASSESSMENT_DRAIN_PASSES = 26
 
 export default defineEventHandler(async (event) => {
   await requireRateLimit(event, 5, 'quiz.assess-attempt')
-  const mode = readConfiguredRuntimeValue(useRuntimeConfig(event).learningDecisionMode, 'NUXT_LEARNING_DECISION_MODE')
-  if (mode !== 'advisory') return { status: 'disabled' as const }
+  const runtimeConfig = useRuntimeConfig(event)
+  const mode = readConfiguredRuntimeValue(runtimeConfig.learningDecisionMode, 'NUXT_LEARNING_DECISION_MODE')
+  const activationManifest = readConfiguredRuntimeValue(runtimeConfig.quizSemanticActivationManifest, 'NUXT_QUIZ_SEMANTIC_ACTIVATION_MANIFEST')
+  if (!isQuizSemanticAdvisoryEnabled(mode, activationManifest)) return { status: 'disabled' as const }
   const body = await readBody<{ attemptId?: string }>(event)
   if (!body?.attemptId?.trim()) throw createError({ statusCode: 400, message: 'attemptId is required' })
   const client = makeConvexClient(event)
   if (!client) throw createError({ statusCode: 401, message: 'Authentication required' })
-  const evaluatorSecret = useRuntimeConfig(event).quizAssessmentWriteSecret
+  const evaluatorSecret = runtimeConfig.quizAssessmentWriteSecret
   if (typeof evaluatorSecret !== 'string' || evaluatorSecret.length < 32) throw createError({ statusCode: 503, message: 'Advisory assessment is not configured' })
   const attemptId = body.attemptId as Id<'quizAttempts'>
 
@@ -54,62 +65,85 @@ async function processPendingAssessments(
   attemptId: Id<'quizAttempts'>,
   evaluatorSecret: string,
 ) {
-  const pending = await client.query(api.quizAnswerAssessments.listPendingForAttempt, { attemptId }) as PendingAssessment[]
-  for (const batch of boundedBatches(pending)) {
-    const items = batch.map(toCanonicalItem)
-    const inputDigest = await digest(items)
-    const claimed = await client.mutation(api.quizAnswerAssessments.claimBatch, {
-      attemptId,
-      assessmentIds: batch.map(row => row.assessmentId),
-      inputDigest,
-    }) as Array<Id<'quizAnswerAssessments'>>
-    const claimedSet = new Set(claimed.map(String))
-    const claimedItems = items.filter(item => claimedSet.has(item.id))
-    if (claimedItems.length === 0) continue
-    try {
-      const requestId = crypto.randomUUID()
-      const started = Date.now()
-      const result = await evaluateTypedDecision(event, {
-        kind: FREE_RESPONSE_ASSESSMENT_KIND,
-        requestId,
-        inputDigest,
-        items: claimedItems,
+  const seenAssessmentIds = new Set<string>()
+  for (let pass = 0; pass < MAX_ASSESSMENT_DRAIN_PASSES; pass++) {
+    const pending = (await client.query(api.quizAnswerAssessments.listPendingForAttempt, { attemptId }) as PendingAssessment[])
+      .filter(row => !seenAssessmentIds.has(String(row.assessmentId)))
+    if (pending.length === 0) break
+    for (const row of pending) seenAssessmentIds.add(String(row.assessmentId))
+    const exhausted = pending.filter(row => row.attemptCount >= LEARNING_DECISION_MAX_ATTEMPTS)
+    for (const batch of boundedBatches(exhausted)) {
+      await client.mutation(api.quizAnswerAssessments.claimBatch, {
+        attemptId,
+        assessmentIds: batch.map(row => row.assessmentId),
+        inputDigest: await digest(batch.map(toCanonicalItem)),
+        claimId: crypto.randomUUID(),
       })
-      logAssessmentResult(requestId, inputDigest, result, claimedItems.length, Date.now() - started)
-      if (result.status === 'unavailable') {
+    }
+    for (const batch of boundedBatches(pending.filter(row => row.attemptCount < LEARNING_DECISION_MAX_ATTEMPTS))) {
+      const items = batch.map(toCanonicalItem)
+      const inputDigest = await digest(items)
+      const claimId = crypto.randomUUID()
+      const claimed = await client.mutation(api.quizAnswerAssessments.claimBatch, {
+        attemptId,
+        assessmentIds: batch.map(row => row.assessmentId),
+        inputDigest,
+        claimId,
+      }) as Array<Id<'quizAnswerAssessments'>>
+      const claimedSet = new Set(claimed.map(String))
+      const claimedItems = items.filter(item => claimedSet.has(item.id))
+      if (claimedItems.length === 0) continue
+      try {
+        const requestId = crypto.randomUUID()
+        const started = Date.now()
+        const result = await evaluateTypedDecision(event, {
+          kind: FREE_RESPONSE_ASSESSMENT_KIND,
+          requestId,
+          inputDigest,
+          contractVersion: batch[0]!.contractVersion as typeof LEARNING_DECISION_CONTRACT_VERSION,
+          snapshotVersion: batch[0]!.snapshotVersion as typeof LEARNING_DECISION_SNAPSHOT_VERSION,
+          items: claimedItems,
+        })
+        logAssessmentResult(requestId, inputDigest, result, claimedItems.length, Date.now() - started)
+        if (result.status === 'unavailable') {
+          await client.mutation(api.quizAnswerAssessments.recordUnavailable, {
+            attemptId,
+            evaluatorSecret,
+            assessmentIds: claimed,
+            inputDigest,
+            claimId,
+            reason: result.reason,
+            retryable: result.retryable,
+            retryAfterMs: result.retryAfterMs,
+          })
+          continue
+        }
+        await client.mutation(api.quizAnswerAssessments.recordAvailable, {
+          attemptId,
+          evaluatorSecret,
+          provider: result.provider,
+          modelRevision: result.modelRevision,
+          results: result.decisions.map(decision => ({
+            assessmentId: decision.id as Id<'quizAnswerAssessments'>,
+            inputDigest,
+            claimId,
+            label: decision.label as FreeResponseDecisionLabel,
+            confidence: decision.confidence,
+            probabilities: toStoredProbabilities(decision.probabilities),
+          })),
+        })
+      }
+      catch {
         await client.mutation(api.quizAnswerAssessments.recordUnavailable, {
           attemptId,
           evaluatorSecret,
           assessmentIds: claimed,
           inputDigest,
-          reason: result.reason,
-          retryable: result.retryable,
-        })
-        continue
+          claimId,
+          reason: 'unavailable',
+          retryable: true,
+        }).catch(() => undefined)
       }
-      await client.mutation(api.quizAnswerAssessments.recordAvailable, {
-        attemptId,
-        evaluatorSecret,
-        provider: result.provider,
-        modelRevision: result.modelRevision,
-        results: result.decisions.map(decision => ({
-          assessmentId: decision.id as Id<'quizAnswerAssessments'>,
-          inputDigest,
-          label: decision.label as FreeResponseDecisionLabel,
-          confidence: decision.confidence,
-          probabilities: toStoredProbabilities(decision.probabilities),
-        })),
-      })
-    }
-    catch {
-      await client.mutation(api.quizAnswerAssessments.recordUnavailable, {
-        attemptId,
-        evaluatorSecret,
-        assessmentIds: claimed,
-        inputDigest,
-        reason: 'unavailable',
-        retryable: true,
-      }).catch(() => undefined)
     }
   }
 }
@@ -117,18 +151,15 @@ async function processPendingAssessments(
 function toCanonicalItem(row: PendingAssessment): FreeResponseAssessmentItem {
   return {
     id: String(row.assessmentId),
-    question: bounded(row.questionSnapshot.question, 1_200),
+    question: row.questionSnapshot.question.trim(),
     questionType: row.questionSnapshot.questionType,
-    expectedAnswer: bounded(row.questionSnapshot.expectedAnswer, 400),
-    learnerAnswer: bounded(row.learnerAnswerSnapshot, 800),
-    evidenceExcerpt: bounded(row.questionSnapshot.evidenceExcerpt, 1_200),
+    expectedAnswer: row.questionSnapshot.expectedAnswer.trim(),
+    learnerAnswer: row.learnerAnswerSnapshot.trim(),
+    evidenceExcerpt: row.questionSnapshot.evidenceExcerpt.trim(),
+    language: row.languageSnapshot,
     rubricVersion: row.rubricVersion,
     rubric: row.rubricSnapshot as FreeResponseAssessmentItem['rubric'],
   }
-}
-
-function bounded(value: string, maxLength: number) {
-  return value.trim().slice(0, maxLength)
 }
 
 function boundedBatches(rows: PendingAssessment[]) {
@@ -136,7 +167,8 @@ function boundedBatches(rows: PendingAssessment[]) {
   let current: PendingAssessment[] = []
   for (const row of rows) {
     const candidate = [...current, row]
-    if (current.length > 0 && (candidate.length > 8 || encodedRequestBytes(candidate.map(toCanonicalItem)) > MAX_EVALUATOR_REQUEST_BYTES)) {
+    const changesContract = current.length > 0 && (row.contractVersion !== current[0]!.contractVersion || row.snapshotVersion !== current[0]!.snapshotVersion)
+    if (current.length > 0 && (changesContract || candidate.length > 8 || encodedRequestBytes(candidate.map(toCanonicalItem)) > MAX_EVALUATOR_REQUEST_BYTES)) {
       batches.push(current)
       current = [row]
     }
@@ -151,6 +183,8 @@ function encodedRequestBytes(items: FreeResponseAssessmentItem[]) {
     kind: FREE_RESPONSE_ASSESSMENT_KIND,
     requestId: '0'.repeat(36),
     inputDigest: '0'.repeat(64),
+    contractVersion: LEARNING_DECISION_CONTRACT_VERSION,
+    snapshotVersion: LEARNING_DECISION_SNAPSHOT_VERSION,
     items,
   })).byteLength
 }

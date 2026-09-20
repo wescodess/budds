@@ -14,6 +14,7 @@ COPY --from=builder /usr/local/lib/python3.11/site-packages/laya-0.3.3.dist-info
 COPY --from=builder /opt/laya-model /opt/laya-model
 WORKDIR /app
 COPY service/app.py /app/app.py
+COPY learningDecisionManifest.json /app/learningDecisionManifest.json
 COPY THIRD_PARTY_NOTICES.md /licenses/THIRD_PARTY_NOTICES.md
 RUN useradd --create-home --uid 10001 appuser && chown -R appuser:appuser /app /opt/laya-model
 USER appuser

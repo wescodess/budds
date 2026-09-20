@@ -1,5 +1,5 @@
 import { Container, getContainer } from '@cloudflare/containers'
-import { isEvaluation, isEvaluationRequest, MAX_REQUEST_BYTES } from './contracts'
+import { CONTAINER_DEADLINE_MS, isEvaluation, isEvaluationRequest, MAX_REQUEST_BYTES } from './contracts'
 
 export interface Env {
   LAYA_EVALUATOR: DurableObjectNamespace<LayaEvaluator>
@@ -41,7 +41,7 @@ export class EvaluationGate {
       const used = allowance?.day === day ? allowance.used : 0
       if (used >= cap) return error(429, 60 * 60)
       await storage.put('utc-allowance', { day, used: used + 1 })
-      const timeoutMs = options.timeoutMs ?? 1_500
+      const timeoutMs = options.timeoutMs ?? CONTAINER_DEADLINE_MS
       let timer: ReturnType<typeof setTimeout> | undefined
       const outcome = await Promise.race([
         operation().then(response => ({ response }), () => ({ response: error(503, 1) })),
@@ -82,7 +82,7 @@ export class LayaEvaluator extends Container<Env> {
       if (!response.ok) return error(response.status, retryable(response.status) ? 1 : undefined)
       const result: unknown = await response.json().catch(() => null)
       return isEvaluation(result, body.kind) ? Response.json(result) : error(502)
-    }, { timeoutMs: 1_500, onTimeout: async () => { await this.stop() } })
+    }, { timeoutMs: CONTAINER_DEADLINE_MS, onTimeout: async () => { await this.stop() } })
   }
 }
 

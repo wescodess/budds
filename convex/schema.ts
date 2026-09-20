@@ -127,10 +127,12 @@ export default defineSchema({
     questionCount: v.optional(v.number()),
     latestAttemptStatus: v.optional(v.union(v.literal('in_progress'), v.literal('completed'), v.literal('abandoned'))),
     courseScoped: v.optional(v.boolean()),
+    deletedAt: v.optional(v.number()),
   })
     .index('by_userId', ['userId'])
     .index('by_folderId', ['folderId'])
-    .index('by_userId_and_folderId', ['userId', 'folderId']),
+    .index('by_userId_and_folderId', ['userId', 'folderId'])
+    .index('by_userId_and_folderId_and_courseScoped_and_deletedAt', ['userId', 'folderId', 'courseScoped', 'deletedAt']),
 
   quizQuestions: defineTable({
     quizId: v.id('quizzes'),
@@ -319,8 +321,15 @@ export default defineSchema({
     attemptAnswerId: v.id('attemptAnswers'),
     questionId: v.id('quizQuestions'),
     kind: v.literal('quiz.free_response_assessment.v1'),
+    contractVersion: v.optional(v.string()),
+    snapshotVersion: v.optional(v.string()),
+    languageSnapshot: v.optional(v.string()),
     inputDigest: v.optional(v.string()),
+    claimId: v.optional(v.string()),
     claimedAt: v.optional(v.number()),
+    leaseExpiresAt: v.optional(v.number()),
+    attemptCount: v.optional(v.number()),
+    nextAttemptAt: v.optional(v.number()),
     status: v.union(v.literal('pending'), v.literal('available'), v.literal('unavailable')),
     questionSnapshot: v.object({
       question: v.string(),
@@ -356,6 +365,10 @@ export default defineSchema({
       v.literal('unavailable'),
       v.literal('malformed'),
       v.literal('over_budget'),
+      v.literal('unsupported_language'),
+      v.literal('unknown_language'),
+      v.literal('missing_evidence'),
+      v.literal('oversized_evidence'),
     )),
     retryable: v.optional(v.boolean()),
     requestedAt: v.number(),
@@ -363,7 +376,8 @@ export default defineSchema({
   })
     .index('by_attemptId', ['attemptId'])
     .index('by_attemptAnswerId', ['attemptAnswerId'])
-    .index('by_userId_and_attemptId', ['userId', 'attemptId']),
+    .index('by_userId_and_attemptId', ['userId', 'attemptId'])
+    .index('by_userId_and_attemptId_and_status_and_nextAttemptAt', ['userId', 'attemptId', 'status', 'nextAttemptAt']),
 
   tasks: defineTable({
     userId: v.string(),

@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 import { convexTest } from 'convex-test'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 import { api } from './_generated/api'
 import schema from './schema'
 
@@ -18,6 +18,7 @@ async function createAttempt() {
   const { quizId } = await alice.mutation(api.quizzes.createWithQuestions, {
     folderId,
     title: 'Mitosis',
+    language: 'en',
     questions: [{
       order: 0,
       question: 'What is produced by mitosis?',
@@ -56,20 +57,23 @@ describe('quiz answer semantic assessments', () => {
       attemptId,
       assessmentIds: [pending[0]!.assessmentId],
       inputDigest,
+      claimId: 'claim-a',
     })
     expect(claimed).toEqual([pending[0]!.assessmentId])
     expect(await alice.mutation(api.quizAnswerAssessments.claimBatch, {
       attemptId,
       assessmentIds: [pending[0]!.assessmentId],
       inputDigest,
+      claimId: 'claim-b',
     })).toEqual([])
 
-    await t.run(async ctx => await ctx.db.patch(pending[0]!.assessmentId, { claimedAt: Date.now() - 5 * 60 * 1000 - 1 }))
+    await t.run(async ctx => await ctx.db.patch(pending[0]!.assessmentId, { claimedAt: 0, leaseExpiresAt: 0 }))
     expect(await alice.query(api.quizAnswerAssessments.listPendingForAttempt, { attemptId })).toHaveLength(1)
     expect(await alice.mutation(api.quizAnswerAssessments.claimBatch, {
       attemptId,
       assessmentIds: [pending[0]!.assessmentId],
       inputDigest: 'd'.repeat(64),
+      claimId: 'claim-d',
     })).toEqual([pending[0]!.assessmentId])
   })
 
@@ -97,14 +101,15 @@ describe('quiz answer semantic assessments', () => {
     expect(rows[0]!.questionSnapshot.expectedAnswer).toHaveLength(500)
     expect(rows[0]!.questionSnapshot.evidenceExcerpt).toHaveLength(1_300)
     expect(rows[0]!.learnerAnswerSnapshot).toHaveLength(900)
+    expect(rows.every(row => row.languageSnapshot === 'unknown')).toBe(true)
   })
 
   test('rejects forged terminal writes and invalid confidence', async () => {
     const { alice, attemptId } = await createAttempt()
     const [pending] = await alice.query(api.quizAnswerAssessments.listPendingForAttempt, { attemptId })
     const inputDigest = 'e'.repeat(64)
-    await alice.mutation(api.quizAnswerAssessments.claimBatch, { attemptId, assessmentIds: [pending!.assessmentId], inputDigest })
-    const result = { assessmentId: pending!.assessmentId, inputDigest, label: 'fully_correct' as const, confidence: 0.8 }
+    await alice.mutation(api.quizAnswerAssessments.claimBatch, { attemptId, assessmentIds: [pending!.assessmentId], inputDigest, claimId: 'claim-e' })
+    const result = { assessmentId: pending!.assessmentId, inputDigest, claimId: 'claim-e', label: 'fully_correct' as const, confidence: 0.8 }
     await expect(alice.mutation(api.quizAnswerAssessments.recordAvailable, {
       attemptId, evaluatorSecret: 'browser-forged-secret-that-is-long-enough', provider: 'laya', modelRevision: 'x', results: [result],
     })).rejects.toThrow(/not authorized/)
@@ -117,7 +122,7 @@ describe('quiz answer semantic assessments', () => {
     const { alice, attemptId, questionId } = await createAttempt()
     const [pending] = await alice.query(api.quizAnswerAssessments.listPendingForAttempt, { attemptId })
     const inputDigest = 'b'.repeat(64)
-    await alice.mutation(api.quizAnswerAssessments.claimBatch, { attemptId, assessmentIds: [pending!.assessmentId], inputDigest })
+    await alice.mutation(api.quizAnswerAssessments.claimBatch, { attemptId, assessmentIds: [pending!.assessmentId], inputDigest, claimId: 'claim-b' })
     await alice.mutation(api.quizAnswerAssessments.recordAvailable, {
       attemptId,
       evaluatorSecret: WRITE_SECRET,
@@ -126,6 +131,7 @@ describe('quiz answer semantic assessments', () => {
       results: [{
         assessmentId: pending!.assessmentId,
         inputDigest,
+        claimId: 'claim-b',
         label: 'fully_correct',
         confidence: 0.81,
         probabilities: { fullyCorrect: 0.81, partiallyCorrect: 0.1, incorrect: 0.04, uncertain: 0.05 },
@@ -153,21 +159,137 @@ describe('quiz answer semantic assessments', () => {
     })
   })
 
-  test('records provider failure without changing the deterministic result', async () => {
+  test('enforces exponential/provider backoff and terminal exhaustion without rewriting due times', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_000)
+    const { t, alice, attemptId } = await createAttempt()
+    const [pending] = await alice.query(api.quizAnswerAssessments.listPendingForAttempt, { attemptId })
+    const original = await t.run(ctx => ctx.db.get(pending!.assessmentId))
+
+    try {
+      const firstDigest = '1'.repeat(64)
+      expect(await alice.mutation(api.quizAnswerAssessments.claimBatch, { attemptId, assessmentIds: [pending!.assessmentId], inputDigest: firstDigest, claimId: 'claim-1' })).toEqual([pending!.assessmentId])
+      await alice.mutation(api.quizAnswerAssessments.recordUnavailable, {
+        attemptId,
+        evaluatorSecret: WRITE_SECRET,
+        assessmentIds: [pending!.assessmentId],
+        inputDigest: firstDigest,
+        claimId: 'claim-1',
+        reason: 'timeout',
+        retryable: true,
+        retryAfterMs: 1_000,
+      })
+      expect((await t.run(ctx => ctx.db.get(pending!.assessmentId)))?.nextAttemptAt).toBe(3_000)
+      expect(await alice.query(api.quizAnswerAssessments.listPendingForAttempt, { attemptId })).toEqual([])
+      expect(await alice.mutation(api.quizAnswerAssessments.claimBatch, { attemptId, assessmentIds: [pending!.assessmentId], inputDigest: '2'.repeat(64), claimId: 'claim-early' })).toEqual([])
+
+      vi.setSystemTime(3_000)
+      expect(await alice.query(api.quizAnswerAssessments.listPendingForAttempt, { attemptId })).toHaveLength(1)
+      const secondDigest = '2'.repeat(64)
+      expect(await alice.mutation(api.quizAnswerAssessments.claimBatch, { attemptId, assessmentIds: [pending!.assessmentId], inputDigest: secondDigest, claimId: 'claim-2' })).toEqual([pending!.assessmentId])
+      await alice.mutation(api.quizAnswerAssessments.recordUnavailable, {
+        attemptId, evaluatorSecret: WRITE_SECRET, assessmentIds: [pending!.assessmentId], inputDigest: secondDigest,
+        claimId: 'claim-2', reason: 'timeout', retryable: true, retryAfterMs: 10_000,
+      })
+      expect((await t.run(ctx => ctx.db.get(pending!.assessmentId)))?.nextAttemptAt).toBe(13_000)
+      expect(await alice.query(api.quizAnswerAssessments.listPendingForAttempt, { attemptId })).toEqual([])
+
+      vi.setSystemTime(13_000)
+      const thirdDigest = '3'.repeat(64)
+      expect(await alice.mutation(api.quizAnswerAssessments.claimBatch, { attemptId, assessmentIds: [pending!.assessmentId], inputDigest: thirdDigest, claimId: 'claim-3' })).toEqual([pending!.assessmentId])
+      await alice.mutation(api.quizAnswerAssessments.recordUnavailable, {
+        attemptId, evaluatorSecret: WRITE_SECRET, assessmentIds: [pending!.assessmentId], inputDigest: thirdDigest,
+        claimId: 'claim-3', reason: 'timeout', retryable: true,
+      })
+      const results = await alice.query(api.quizzes.getAttemptResults, { attemptId })
+      expect(results?.results[0]!.semanticAssessment).toMatchObject({ status: 'unavailable', retryable: false, attemptCount: 3 })
+      expect(await alice.query(api.quizAnswerAssessments.listPendingForAttempt, { attemptId })).toEqual([])
+
+      const persisted = await t.run(ctx => ctx.db.get(pending!.assessmentId))
+      expect(JSON.stringify({ questionSnapshot: persisted?.questionSnapshot, learnerAnswerSnapshot: persisted?.learnerAnswerSnapshot,
+        contractVersion: persisted?.contractVersion, snapshotVersion: persisted?.snapshotVersion,
+        languageSnapshot: persisted?.languageSnapshot, rubricSnapshot: persisted?.rubricSnapshot }))
+        .toBe(JSON.stringify({ questionSnapshot: original?.questionSnapshot, learnerAnswerSnapshot: original?.learnerAnswerSnapshot,
+          contractVersion: original?.contractVersion, snapshotVersion: original?.snapshotVersion,
+          languageSnapshot: original?.languageSnapshot, rubricSnapshot: original?.rubricSnapshot }))
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('never requeues a nonretryable unavailable result', async () => {
     const { alice, attemptId } = await createAttempt()
     const [pending] = await alice.query(api.quizAnswerAssessments.listPendingForAttempt, { attemptId })
-    const inputDigest = 'c'.repeat(64)
-    await alice.mutation(api.quizAnswerAssessments.claimBatch, { attemptId, assessmentIds: [pending!.assessmentId], inputDigest })
+    const inputDigest = 'f'.repeat(64)
+    await alice.mutation(api.quizAnswerAssessments.claimBatch, { attemptId, assessmentIds: [pending!.assessmentId], inputDigest, claimId: 'claim-f' })
     await alice.mutation(api.quizAnswerAssessments.recordUnavailable, {
       attemptId,
       evaluatorSecret: WRITE_SECRET,
       assessmentIds: [pending!.assessmentId],
       inputDigest,
-      reason: 'timeout',
-      retryable: true,
+      claimId: 'claim-f',
+      reason: 'unsupported_language',
+      retryable: false,
     })
+    expect(await alice.query(api.quizAnswerAssessments.listPendingForAttempt, { attemptId })).toEqual([])
     const results = await alice.query(api.quizzes.getAttemptResults, { attemptId })
-    expect(results?.score).toBe(0)
-    expect(results?.results[0]!.semanticAssessment).toMatchObject({ status: 'unavailable', unavailableReason: 'timeout', retryable: true })
+    expect(results?.results[0]!.semanticAssessment).toMatchObject({ status: 'unavailable', unavailableReason: 'unsupported_language', retryable: false })
+  })
+
+  test('rejects duplicate IDs before incrementing and rejects a late response from an expired claim', async () => {
+    const { t, alice, attemptId } = await createAttempt()
+    const [pending] = await alice.query(api.quizAnswerAssessments.listPendingForAttempt, { attemptId })
+    const digest = 'a'.repeat(64)
+    await expect(alice.mutation(api.quizAnswerAssessments.claimBatch, {
+      attemptId, assessmentIds: [pending!.assessmentId, pending!.assessmentId], inputDigest: digest, claimId: 'duplicate',
+    })).rejects.toThrow(/Invalid assessment claim/)
+    expect((await t.run(ctx => ctx.db.get(pending!.assessmentId)))?.attemptCount).toBe(0)
+
+    await alice.mutation(api.quizAnswerAssessments.claimBatch, { attemptId, assessmentIds: [pending!.assessmentId], inputDigest: digest, claimId: 'old-claim' })
+    await t.run(ctx => ctx.db.patch(pending!.assessmentId, { leaseExpiresAt: 0 }))
+    await alice.mutation(api.quizAnswerAssessments.claimBatch, { attemptId, assessmentIds: [pending!.assessmentId], inputDigest: digest, claimId: 'new-claim' })
+    await expect(alice.mutation(api.quizAnswerAssessments.recordAvailable, {
+      attemptId, evaluatorSecret: WRITE_SECRET, provider: 'laya', modelRevision: 'x',
+      results: [{ assessmentId: pending!.assessmentId, inputDigest: digest, claimId: 'old-claim', label: 'fully_correct', confidence: 0.9 }],
+    })).rejects.toThrow(/Assessment not found/)
+
+    await t.run(ctx => ctx.db.patch(pending!.assessmentId, { attemptCount: 3, leaseExpiresAt: 0 }))
+    expect(await alice.query(api.quizAnswerAssessments.listPendingForAttempt, { attemptId })).toHaveLength(1)
+    expect(await alice.mutation(api.quizAnswerAssessments.claimBatch, {
+      attemptId, assessmentIds: [pending!.assessmentId], inputDigest: digest, claimId: 'exhausted-claim',
+    })).toEqual([])
+    expect((await t.run(ctx => ctx.db.get(pending!.assessmentId)))?.status).toBe('unavailable')
+  })
+
+  test('finds a legacy pending row even when terminal rows exceed the scan bound', async () => {
+    const { t, alice, attemptId } = await createAttempt()
+    const [pending] = await alice.query(api.quizAnswerAssessments.listPendingForAttempt, { attemptId })
+    const source = await t.run(ctx => ctx.db.get(pending!.assessmentId))
+    await t.run(async (ctx) => {
+      await ctx.db.patch(pending!.assessmentId, { nextAttemptAt: undefined })
+      for (let index = 0; index < 205; index++) {
+        await ctx.db.insert('quizAnswerAssessments', {
+          userId: source!.userId,
+          attemptId,
+          attemptAnswerId: source!.attemptAnswerId,
+          questionId: source!.questionId,
+          kind: source!.kind,
+          status: 'unavailable',
+          questionSnapshot: source!.questionSnapshot,
+          learnerAnswerSnapshot: source!.learnerAnswerSnapshot,
+          deterministicIsCorrect: source!.deterministicIsCorrect,
+          rubricVersion: source!.rubricVersion,
+          rubricSnapshot: source!.rubricSnapshot,
+          requestedAt: source!.requestedAt + index + 1,
+          unavailableReason: 'unavailable',
+          retryable: false,
+          completedAt: source!.requestedAt + index + 1,
+        })
+      }
+    })
+
+    expect(await alice.query(api.quizAnswerAssessments.listPendingForAttempt, { attemptId }))
+      .toEqual([expect.objectContaining({ assessmentId: pending!.assessmentId })])
   })
 })

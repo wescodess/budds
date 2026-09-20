@@ -593,31 +593,15 @@ describe('dataExport paginated queries', () => {
       quizId: aQuiz.quizId,
       answers: [{ questionId: aQs[0]!._id, response: 'A1' }],
     })
-    const bAttempt = await b.asUser.mutation(api.quizzes.submitAttempt, {
+    await b.asUser.mutation(api.quizzes.submitAttempt, {
       quizId: bQuiz.quizId,
       answers: [{ questionId: bQs[0]!._id, response: 'A1' }],
     })
-    const { aAnswerId, bAnswerId } = await t.run(async (ctx) => ({
-      aAnswerId: await ctx.db.insert('attemptAnswers', {
-        attemptId: aAttempt.attemptId,
-        questionId: aQs[0]!._id,
-        userAnswer: 'A1',
-        isCorrect: true,
-        answeredAt: Date.now(),
-      }),
-      bAnswerId: await ctx.db.insert('attemptAnswers', {
-        attemptId: bAttempt.attemptId,
-        questionId: bQs[0]!._id,
-        userAnswer: 'A1',
-        isCorrect: true,
-        answeredAt: Date.now(),
-      }),
-    }))
     const { aAssessmentId } = await t.run(async (ctx) => {
-      const snapshot = { question: 'Q1', questionType: 'free-response' as const, expectedAnswer: 'A1', evidenceExcerpt: 'c1' }
+      const [aAssessment] = await ctx.db.query('quizAnswerAssessments')
+        .withIndex('by_attemptId', q => q.eq('attemptId', aAttempt.attemptId)).take(1)
       return {
-        aAssessmentId: await ctx.db.insert('quizAnswerAssessments', { userId: USER_A.tokenIdentifier, attemptId: aAttempt.attemptId, attemptAnswerId: aAnswerId, questionId: aQs[0]!._id, kind: 'quiz.free_response_assessment.v1', status: 'pending', questionSnapshot: snapshot, learnerAnswerSnapshot: 'A1', deterministicIsCorrect: true, rubricVersion: 'quiz.free_response_assessment.v1', rubricSnapshot: [], requestedAt: Date.now() }),
-        bAssessmentId: await ctx.db.insert('quizAnswerAssessments', { userId: USER_B.tokenIdentifier, attemptId: bAttempt.attemptId, attemptAnswerId: bAnswerId, questionId: bQs[0]!._id, kind: 'quiz.free_response_assessment.v1', status: 'pending', questionSnapshot: snapshot, learnerAnswerSnapshot: 'A1', deterministicIsCorrect: true, rubricVersion: 'quiz.free_response_assessment.v1', rubricSnapshot: [], requestedAt: Date.now() }),
+        aAssessmentId: aAssessment!._id,
       }
     })
 

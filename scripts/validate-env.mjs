@@ -105,6 +105,11 @@ const learningDecisionProvider = mergedEnv.NUXT_LEARNING_DECISION_PROVIDER || ''
 const layaEvaluatorToken = mergedEnv.NUXT_LAYA_EVALUATOR_TOKEN || ''
 const layaEvaluatorUrl = mergedEnv.NUXT_LAYA_EVALUATOR_URL || ''
 const quizAssessmentWriteSecret = mergedEnv.NUXT_QUIZ_ASSESSMENT_WRITE_SECRET || ''
+const quizSemanticActivationVersion = mergedEnv.NUXT_QUIZ_SEMANTIC_ACTIVATION_MANIFEST || ''
+const quizSemanticActivationPath = path.join(projectRoot, 'convex/quizSemanticActivationManifest.json')
+const quizSemanticActivation = !audioWorkflowPhase && fs.existsSync(quizSemanticActivationPath)
+  ? JSON.parse(fs.readFileSync(quizSemanticActivationPath, 'utf8'))
+  : { status: 'not-approved', allowedModes: [], approvedCalibrationEvidence: null, manifestVersion: '' }
 
 function isHttpUrl(value) {
   try {
@@ -178,6 +183,12 @@ if (!audioWorkflowPhase && (learningDecisionMode === 'shadow' || learningDecisio
   if (learningDecisionProvider !== 'laya') invalidBlocking.push({ kind: 'var', label: 'Learning decision provider must be laya for this pilot', names: ['NUXT_LEARNING_DECISION_PROVIDER'] })
   if (layaEvaluatorToken.length < 32) invalidBlocking.push({ kind: 'secret', label: 'Laya evaluator credential must be at least 32 characters', names: ['NUXT_LAYA_EVALUATOR_TOKEN'] })
   if (learningDecisionMode === 'advisory' && quizAssessmentWriteSecret.length < 32) invalidBlocking.push({ kind: 'secret', label: 'Quiz assessment write credential must be at least 32 characters', names: ['NUXT_QUIZ_ASSESSMENT_WRITE_SECRET'] })
+  if (learningDecisionMode === 'advisory' && (quizSemanticActivation.status !== 'approved'
+    || !quizSemanticActivation.allowedModes?.includes('advisory')
+    || !quizSemanticActivation.approvedCalibrationEvidence
+    || quizSemanticActivationVersion !== quizSemanticActivation.manifestVersion)) {
+    invalidBlocking.push({ kind: 'var', label: 'Quiz semantic advisory mode requires the committed approved calibration manifest', names: ['NUXT_QUIZ_SEMANTIC_ACTIVATION_MANIFEST'] })
+  }
   if (layaEvaluatorUrl && !isHttpUrl(layaEvaluatorUrl)) invalidBlocking.push({ kind: 'var', label: 'Laya evaluator local URL must be an HTTP(S) URL', names: ['NUXT_LAYA_EVALUATOR_URL'] })
 }
 

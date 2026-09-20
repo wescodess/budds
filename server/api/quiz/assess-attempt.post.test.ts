@@ -7,6 +7,7 @@ const requireRateLimit = vi.hoisted(() => vi.fn(async () => undefined))
 
 vi.mock('../../utils/convex-client', () => ({ makeConvexClient: vi.fn(() => ({ query, mutation })) }))
 vi.mock('../../utils/rate-limit', () => ({ requireRateLimit }))
+vi.mock('../../utils/learning-decisions/activation', () => ({ isQuizSemanticAdvisoryEnabled: (mode: unknown) => mode === 'advisory' }))
 vi.mock('../../utils/learning-decisions', async importOriginal => ({
   ...await importOriginal<typeof import('../../utils/learning-decisions')>(),
   evaluateTypedDecision,
@@ -22,6 +23,9 @@ const assessmentId = 'assessment_123'
 const pending = [{
   assessmentId,
   kind: 'quiz.free_response_assessment.v1',
+  contractVersion: 'budds.learning-decision-contract.v2',
+  snapshotVersion: 'quiz-answer-snapshot.v2',
+  languageSnapshot: 'en',
   questionSnapshot: { question: 'Describe ATP.', questionType: 'free-response', expectedAnswer: 'Energy carrier', evidenceExcerpt: 'ATP carries energy.' },
   learnerAnswerSnapshot: 'It carries energy.',
   rubricVersion: 'quiz.free_response_assessment.v1',
@@ -31,6 +35,7 @@ const pending = [{
     { label: 'incorrect', description: 'The response is contradicted by the evidence, unsupported, or misses the requested concept.' },
     { label: 'uncertain', description: 'The evidence or response is insufficient to make a reliable assessment.' },
   ],
+  attemptCount: 0,
 }]
 
 function event() {
@@ -61,10 +66,10 @@ describe('POST /api/quiz/assess-attempt', () => {
   })
 
   test('persists a sanitized unavailable result and leaves scoring outside the route', async () => {
-    evaluateTypedDecision.mockResolvedValue({ status: 'unavailable', reason: 'timeout', retryable: true })
+    evaluateTypedDecision.mockResolvedValue({ status: 'unavailable', reason: 'timeout', retryable: true, retryAfterMs: 12_345 })
     await handler(event())
     expect(mutation).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({
-      assessmentIds: [assessmentId], reason: 'timeout', retryable: true,
+      assessmentIds: [assessmentId], reason: 'timeout', retryable: true, retryAfterMs: 12_345,
     }))
     expect(JSON.stringify(mutation.mock.calls)).not.toContain('It carries energy.')
   })
@@ -84,7 +89,7 @@ describe('POST /api/quiz/assess-attempt', () => {
     expect(evaluateTypedDecision).not.toHaveBeenCalled()
   })
 
-  test('bounds fields and splits maximum-size snapshots below the evaluator byte budget', async () => {
+  test('never truncates immutable snapshots while splitting requests by byte budget', async () => {
     const largePending = Array.from({ length: 8 }, (_, index) => ({
       ...pending[0]!,
       assessmentId: `assessment_${index}`,
@@ -104,9 +109,42 @@ describe('POST /api/quiz/assess-attempt', () => {
     expect(evaluateTypedDecision.mock.calls.length).toBeGreaterThan(1)
     for (const [, request] of evaluateTypedDecision.mock.calls) {
       expect(new TextEncoder().encode(JSON.stringify(request)).byteLength).toBeLessThan(32_000)
-      expect(request.items.every((item: any) => item.question.length <= 1_200
-        && item.expectedAnswer.length <= 400 && item.evidenceExcerpt.length <= 1_200
-        && item.learnerAnswer.length <= 800)).toBe(true)
+      expect(request.items.every((item: any) => item.question.length === 2_600
+        && item.expectedAnswer.length === 500 && item.evidenceExcerpt.length === 1_300
+        && item.learnerAnswer.length === 900)).toBe(true)
     }
+  })
+
+  test('drains more than one bounded pending page in a single request', async () => {
+    const rows = Array.from({ length: 17 }, (_, index) => ({ ...pending[0]!, assessmentId: `assessment_${index}` }))
+    query
+      .mockResolvedValueOnce(rows.slice(0, 8))
+      .mockResolvedValueOnce(rows.slice(8, 16))
+      .mockResolvedValueOnce(rows.slice(16))
+      .mockResolvedValueOnce([])
+    evaluateTypedDecision.mockResolvedValue({ status: 'unavailable', reason: 'unsupported_language', retryable: false })
+
+    await handler(event())
+
+    expect(evaluateTypedDecision).toHaveBeenCalledTimes(3)
+    expect(evaluateTypedDecision.mock.calls.flatMap(([, request]) => request.items)).toHaveLength(17)
+    expect(query).toHaveBeenCalledTimes(4)
+  })
+
+  test('terminalizes exhausted rows separately and evaluates only claimable snapshots', async () => {
+    const exhausted = { ...pending[0]!, assessmentId: 'assessment_exhausted', attemptCount: 3 }
+    const claimable = { ...pending[0]!, assessmentId: 'assessment_claimable', attemptCount: 2 }
+    query.mockResolvedValueOnce([exhausted, claimable]).mockResolvedValueOnce([])
+    mutation
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([claimable.assessmentId])
+      .mockResolvedValueOnce(null)
+    evaluateTypedDecision.mockResolvedValue({ status: 'unavailable', reason: 'unsupported_language', retryable: false })
+
+    await handler(event())
+
+    expect(evaluateTypedDecision).toHaveBeenCalledTimes(1)
+    expect(evaluateTypedDecision.mock.calls[0]![1].items.map((item: { id: string }) => item.id)).toEqual([claimable.assessmentId])
+    expect(mutation.mock.calls[0]![1]).toEqual(expect.objectContaining({ assessmentIds: [exhausted.assessmentId] }))
   })
 })

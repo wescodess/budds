@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 import { convexTest } from 'convex-test'
-import { describe, expect, test } from 'vitest'
-import { api } from './_generated/api'
+import { describe, expect, test, vi } from 'vitest'
+import { api, internal } from './_generated/api'
 import schema from './schema'
 
 const modules = import.meta.glob('./**/*.ts')
@@ -135,6 +135,55 @@ describe('quizzes.createWithQuestions', () => {
   })
 })
 
+describe('quizzes.addQuestion', () => {
+  test('[P0] rejects insertion when the quiz already has the bounded maximum of 200 questions', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Large quiz' })
+    const { quizId } = await asUser.mutation(api.quizzes.createWithQuestions, {
+      folderId,
+      title: 'At capacity',
+      questions: Array.from({ length: 200 }, (_, order) => ({
+        order,
+        question: `Question ${order}`,
+        type: 'free-response' as const,
+        correctAnswer: `Answer ${order}`,
+      })),
+    })
+
+    await expect(asUser.mutation(api.quizzes.addQuestion, {
+      quizId,
+      type: 'free-response',
+      questionText: 'Question 201',
+      correctAnswer: 'Answer 201',
+    })).rejects.toThrow(/maximum of 200 questions/i)
+
+    const rows = await t.run(ctx => ctx.db.query('quizQuestions').withIndex('by_quizId', q => q.eq('quizId', quizId)).collect())
+    expect(rows).toHaveLength(200)
+  })
+})
+
+describe('quiz creation bounds', () => {
+  const oversizedQuestions = () => Array.from({ length: 201 }, (_, order) => ({
+    order, question: `Question ${order}`, type: 'free-response' as const, correctAnswer: `Answer ${order}`,
+  }))
+
+  test('[P0] rejects oversized user and course-scoped creation before inserting a quiz', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bounded' })
+
+    await expect(asUser.mutation(api.quizzes.createWithQuestions, {
+      folderId, title: 'Too large', questions: oversizedQuestions(),
+    })).rejects.toThrow(/cannot exceed 200 questions/i)
+    await expect(t.mutation(internal.quizzes.createCourseScopedQuiz, {
+      userId: USER_A.tokenIdentifier, folderId, title: 'Too large course quiz', questions: oversizedQuestions(),
+    })).rejects.toThrow(/cannot exceed 200 questions/i)
+
+    expect(await t.run(ctx => ctx.db.query('quizzes').withIndex('by_folderId', q => q.eq('folderId', folderId)).collect())).toEqual([])
+  })
+})
+
 describe('quizzes.listByFolder', () => {
   test('[P0] returns only caller\'s quizzes for that folder', async () => {
     const t = convexTest(schema, modules)
@@ -162,6 +211,23 @@ describe('quizzes.listByFolder', () => {
 
     const aTryingB = await asUserA.query(api.quizzes.listByFolder, { folderId: folderB })
     expect(aTryingB).toEqual([])
+  })
+
+  test('[P0] returns visible quizzes even when newer hidden rows exceed the result window', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Crowded' })
+    await t.run(async ctx => {
+      for (let index = 0; index < 2; index++) {
+        await ctx.db.insert('quizzes', { userId: USER_A.tokenIdentifier, folderId, title: `Visible ${index}`, status: 'ready', courseScoped: false })
+      }
+      for (let index = 0; index < 110; index++) {
+        await ctx.db.insert('quizzes', { userId: USER_A.tokenIdentifier, folderId, title: `Hidden ${index}`, status: 'ready', courseScoped: true })
+      }
+    })
+
+    const rows = await asUser.query(api.quizzes.listByFolder, { folderId })
+    expect(rows.map(row => row.title).sort()).toEqual(['Visible 0', 'Visible 1'])
   })
 })
 
@@ -199,6 +265,26 @@ describe('quizzes.getWithQuestions', () => {
     expect(result!.questions).toHaveLength(2)
     expect(result!.questions[0]!.order).toBe(0)
     expect(result!.questions[1]!.order).toBe(1)
+  })
+})
+
+describe('quizzes.startAttempt', () => {
+  test('[P0] resumes the newest in-progress attempt after more than 100 historical attempts', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'History' })
+    const { quizId } = await asUser.mutation(api.quizzes.createWithQuestions, { folderId, title: 'Long history', questions: sampleQuestions() })
+    await t.run(async ctx => {
+      for (let index = 0; index < 100; index++) {
+        await ctx.db.insert('quizAttempts', { userId: USER_A.tokenIdentifier, quizId, score: 0, total: 2, status: 'completed', completedAt: index })
+      }
+    })
+    const settings = { shuffleQuestions: false, showAllQuestions: false, immediateFeedback: true }
+    const started = await asUser.mutation(api.quizzes.startAttempt, { quizId, settings })
+    const resumed = await asUser.mutation(api.quizzes.startAttempt, { quizId, settings })
+
+    expect(resumed.status).toBe('resumed')
+    expect(resumed.attemptId).toBe(started.attemptId)
   })
 })
 
@@ -306,7 +392,14 @@ describe('quizzes.submitAttempt', () => {
       ctx.db.query('quizAttempts').withIndex('by_quizId', (q) => q.eq('quizId', quizId)).collect(),
     )
     expect(attempts).toHaveLength(1)
-    expect(attempts[0]!.answers!.every((a) => a.isCorrect)).toBe(true)
+    expect(attempts[0]!.answers).toBeUndefined()
+    const answerRows = await t.run(async ctx => ctx.db
+      .query('attemptAnswers').withIndex('by_attemptId', q => q.eq('attemptId', result.attemptId)).collect())
+    expect(answerRows).toHaveLength(2)
+    expect(answerRows.every(answer => answer.isCorrect)).toBe(true)
+    const assessments = await t.run(async ctx => ctx.db
+      .query('quizAnswerAssessments').withIndex('by_attemptId', q => q.eq('attemptId', result.attemptId)).collect())
+    expect(assessments).toHaveLength(1)
   })
 
   test('[P0] updates parent quizzes.score as rounded percentage + completedAt', async () => {
@@ -403,6 +496,10 @@ describe('quizzes.listAttempts', () => {
 
     const aAttempts = await asA.query(api.quizzes.listAttempts, { quizId })
     expect(aAttempts).toHaveLength(1)
+    expect(aAttempts[0]!.answers).toEqual([
+      { questionId: questions[0]!._id, response: 'Energy currency', isCorrect: true },
+      { questionId: questions[1]!._id, response: 'x', isCorrect: false },
+    ])
 
     const bView = await asB.query(api.quizzes.listAttempts, { quizId })
     expect(bView).toEqual([])
@@ -568,7 +665,175 @@ describe('quizzes.updateQuestion', () => {
   })
 })
 
+describe('quizzes incremental and bulk submission convergence', () => {
+  test('[P0] includes previously stored correct answers and creates semantic rows for every free-form path', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
+    const { quizId } = await asUser.mutation(api.quizzes.createWithQuestions, {
+      folderId,
+      title: 'Mixed submission',
+      language: 'en',
+      questions: sampleQuestions(),
+    })
+    const started = await asUser.mutation(api.quizzes.startAttempt, {
+      quizId,
+      settings: { shuffleQuestions: false, showAllQuestions: false, immediateFeedback: true },
+    })
+    const mc = started.questions.find(question => question.type === 'multiple-choice')!
+    const freeResponse = started.questions.find(question => question.type === 'free-response')!
+    await asUser.mutation(api.quizzes.submitAnswer, {
+      attemptId: started.attemptId,
+      questionId: mc._id,
+      userAnswer: mc.correctAnswer,
+    })
+    const result = await asUser.mutation(api.quizzes.submitAllAnswers, {
+      attemptId: started.attemptId,
+      answers: [{ questionId: freeResponse._id, userAnswer: freeResponse.correctAnswer }],
+    })
+    expect(result).toMatchObject({ score: 2, total: 2, percentage: 100 })
+    const answers = await t.run(async ctx => ctx.db.query('attemptAnswers')
+      .withIndex('by_attemptId', q => q.eq('attemptId', started.attemptId)).collect())
+    expect(answers).toHaveLength(2)
+    const assessments = await t.run(async ctx => ctx.db.query('quizAnswerAssessments')
+      .withIndex('by_attemptId', q => q.eq('attemptId', started.attemptId)).collect())
+    expect(assessments).toHaveLength(1)
+  })
+
+  test('[P0] excludes previously correct answers whose questions were deleted before bulk completion', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Changing quiz' })
+    const { quizId } = await asUser.mutation(api.quizzes.createWithQuestions, { folderId, title: 'Changing', questions: sampleQuestions() })
+    const started = await asUser.mutation(api.quizzes.startAttempt, {
+      quizId, settings: { shuffleQuestions: false, showAllQuestions: false, immediateFeedback: true },
+    })
+    const first = started.questions[0]!
+    const remaining = started.questions[1]!
+    await asUser.mutation(api.quizzes.submitAnswer, { attemptId: started.attemptId, questionId: first._id, userAnswer: first.correctAnswer })
+    await asUser.mutation(api.quizzes.deleteQuestion, { questionId: first._id })
+
+    const result = await asUser.mutation(api.quizzes.submitAllAnswers, {
+      attemptId: started.attemptId, answers: [{ questionId: remaining._id, userAnswer: 'wrong' }],
+    })
+
+    expect(result).toMatchObject({ score: 0, total: 1, percentage: 0 })
+  })
+
+  test('[P0] rejects question and attempt mutations after the parent quiz is tombstoned', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Deleting' })
+    const { quizId } = await asUser.mutation(api.quizzes.createWithQuestions, { folderId, title: 'Deleting', questions: sampleQuestions() })
+    const started = await asUser.mutation(api.quizzes.startAttempt, {
+      quizId, settings: { shuffleQuestions: false, showAllQuestions: false, immediateFeedback: true },
+    })
+    const questionId = started.questions[0]!._id
+    await t.run(ctx => ctx.db.patch(quizId, { deletedAt: Date.now() }))
+
+    await expect(asUser.mutation(api.quizzes.updateQuestion, { questionId, question: 'Changed' })).rejects.toThrow(/Quiz not found/)
+    await expect(asUser.mutation(api.quizzes.deleteQuestion, { questionId })).rejects.toThrow(/Quiz not found/)
+    await expect(asUser.mutation(api.quizzes.submitAnswer, { attemptId: started.attemptId, questionId, userAnswer: 'x' })).rejects.toThrow(/Quiz not found/)
+    await expect(asUser.mutation(api.quizzes.submitAllAnswers, { attemptId: started.attemptId, answers: [] })).rejects.toThrow(/Quiz not found/)
+    await expect(asUser.mutation(api.quizzes.completeAttempt, { attemptId: started.attemptId })).rejects.toThrow(/Quiz not found/)
+    await expect(asUser.mutation(api.quizzes.abandonAttempt, { attemptId: started.attemptId })).rejects.toThrow(/Quiz not found/)
+  })
+})
+
 describe('quizzes.deleteQuiz', () => {
+  test('[P0] drains more questions than one deletion batch', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Large quiz' })
+    const { quizId } = await asUser.mutation(api.quizzes.createWithQuestions, {
+      folderId,
+      title: 'Large quiz',
+      questions: Array.from({ length: 120 }, (_, order) => ({
+        order,
+        question: `Question ${order}`,
+        type: 'free-response' as const,
+        correctAnswer: `Answer ${order}`,
+      })),
+    })
+    await asUser.mutation(api.quizzes.deleteQuiz, { quizId })
+    vi.useFakeTimers()
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
+    vi.useRealTimers()
+    expect(await t.run(ctx => ctx.db.get(quizId))).toBeNull()
+    expect(await t.run(ctx => ctx.db.query('quizQuestions').withIndex('by_quizId', q => q.eq('quizId', quizId)).collect())).toEqual([])
+  })
+
+  test('[P0] drains answers and assessments across deletion batch boundaries', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Large attempt' })
+    const { quizId } = await asUser.mutation(api.quizzes.createWithQuestions, {
+      folderId,
+      title: 'Large attempt',
+      questions: sampleQuestions().slice(0, 1),
+    })
+    const question = await t.run(ctx => ctx.db
+      .query('quizQuestions').withIndex('by_quizId', q => q.eq('quizId', quizId)).first())
+    const attemptId = await t.run(ctx => ctx.db.insert('quizAttempts', {
+      userId: USER_A.tokenIdentifier,
+      quizId,
+      score: 0,
+      total: 1,
+      status: 'completed',
+      completedAt: Date.now(),
+      startedAt: Date.now(),
+    }))
+    const assessmentIds = await t.run(async (ctx) => {
+      const ids = []
+      for (let index = 0; index < 60; index++) {
+        const attemptAnswerId = await ctx.db.insert('attemptAnswers', {
+          attemptId,
+          questionId: question!._id,
+          userAnswer: `Answer ${index}`,
+          isCorrect: false,
+          answeredAt: Date.now(),
+        })
+        ids.push(await ctx.db.insert('quizAnswerAssessments', {
+          userId: USER_A.tokenIdentifier,
+          attemptId,
+          attemptAnswerId,
+          questionId: question!._id,
+          kind: 'quiz.free_response_assessment.v1',
+          status: 'pending',
+          questionSnapshot: {
+            question: question!.question,
+            questionType: 'free-response',
+            expectedAnswer: question!.correctAnswer,
+            evidenceExcerpt: 'Evidence',
+          },
+          learnerAnswerSnapshot: `Answer ${index}`,
+          deterministicIsCorrect: false,
+          rubricVersion: 'quiz.free_response_assessment.v1',
+          rubricSnapshot: [],
+          requestedAt: Date.now(),
+        }))
+      }
+      return ids
+    })
+
+    expect(await t.run(ctx => ctx.db.query('attemptAnswers').withIndex('by_attemptId', q => q.eq('attemptId', attemptId)).collect())).toHaveLength(60)
+    expect(await t.run(ctx => ctx.db.query('quizAnswerAssessments').withIndex('by_attemptId', q => q.eq('attemptId', attemptId)).collect())).toHaveLength(60)
+
+    await asUser.mutation(api.quizzes.deleteQuiz, { quizId })
+    vi.useFakeTimers()
+    try {
+      await t.finishAllScheduledFunctions(vi.runAllTimers)
+    }
+    finally {
+      vi.useRealTimers()
+    }
+
+    expect(await t.run(ctx => ctx.db.get(quizId))).toBeNull()
+    expect(await t.run(ctx => ctx.db.get(attemptId))).toBeNull()
+    expect(await t.run(ctx => ctx.db.query('attemptAnswers').withIndex('by_attemptId', q => q.eq('attemptId', attemptId)).collect())).toEqual([])
+    expect(await Promise.all(assessmentIds.map(id => t.run(ctx => ctx.db.get(id))))).toEqual(Array(60).fill(null))
+  })
+
   test('[P0] rejects unauthenticated callers', async () => {
     const t = convexTest(schema, modules)
     const asUser = t.withIdentity(USER_A)
@@ -600,7 +865,7 @@ describe('quizzes.deleteQuiz', () => {
     ).rejects.toThrow(/Quiz not found/)
   })
 
-  test('[P0] removes attempts, questions, and quiz for caller; foreign rows survive', async () => {
+  test('[P0] tombstones immediately then drains attempts, questions, and assessments in bounded batches', async () => {
     const t = convexTest(schema, modules)
     const asA = t.withIdentity(USER_A)
     const asB = t.withIdentity(USER_B)
@@ -651,8 +916,15 @@ describe('quizzes.deleteQuiz', () => {
     })
 
     const result = await asA.mutation(api.quizzes.deleteQuiz, { quizId: quizA })
-    expect(result.deletedAttempts).toBe(1)
-    expect(result.deletedQuestions).toBe(2)
+    expect(result).toEqual({ tombstoned: true })
+    expect(await asA.query(api.quizzes.getWithQuestions, { id: quizA })).toBeNull()
+
+    const tombstonedQuizA = await t.run(async (ctx) => ctx.db.get(quizA))
+    expect(tombstonedQuizA?.deletedAt).toEqual(expect.any(Number))
+
+    vi.useFakeTimers()
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
+    vi.useRealTimers()
 
     const surviveQuizA = await t.run(async (ctx) => ctx.db.get(quizA))
     expect(surviveQuizA).toBeNull()
