@@ -2,7 +2,7 @@
 import { api } from '#convex/api'
 import { getErrorMessage } from '~~/shared/errors'
 
-type TodayResult = { status: 'ready', sessionId: string, sessionRevision: number, content: { revision: number }, plan: { recordRevision: number, blueprintRecordRevision: number }, objective: { title: string, capability?: string | null, estimatedMinutes?: number | null }, scheduledStartAt: number, scheduledEndAt?: number | null, timezone: string, mastery?: { state?: string, nextReviewAt?: number | null }, nextScheduledAt?: number | null } | { status: 'pending' | 'blocked' | 'empty', reason?: string, sessionId?: string, sessionRevision?: number, canRetryGeneration?: boolean, nextScheduledAt?: number | null }
+type TodayResult = { status: 'ready', inProgress?: boolean, sessionId: string, sessionRevision: number, content: { revision: number }, plan: { recordRevision: number, blueprintRecordRevision: number }, objective: { title: string, capability?: string | null, estimatedMinutes?: number | null }, scheduledStartAt: number, scheduledEndAt?: number | null, timezone: string, mastery?: { state?: string, nextReviewAt?: number | null }, nextScheduledAt?: number | null } | { status: 'pending' | 'blocked' | 'empty', reason?: string, sessionId?: string, sessionRevision?: number, canRetryGeneration?: boolean, nextScheduledAt?: number | null }
 const { allowed, checkingAccess } = useLearnV2Access()
 const today = import.meta.client ? useConvexQuery(api.learnV2Today.getToday, {}, { enabled: allowed }) : { data: ref<TodayResult | null>(null) }
 const retryMutation = import.meta.client ? useConvexMutation(api.learnV2SessionContent.retrySessionContentGeneration) : { mutate: async () => ({}) }
@@ -39,7 +39,7 @@ async function retryGeneration() {
 const liveCandidate = computed(() => {
   if (result.value?.status !== 'ready') return null
   const row = result.value
-  return { studySessionId: row.sessionId, sessionRevision: row.sessionRevision, contentRevision: row.content.revision, planRecordRevision: row.plan.recordRevision, blueprintRecordRevision: row.plan.blueprintRecordRevision, objectiveTitle: row.objective.title, capability: row.objective.capability ?? undefined, estimatedMinutes: row.objective.estimatedMinutes ?? 10, scheduledStartAt: row.scheduledStartAt, scheduledEndAt: row.scheduledEndAt ?? undefined, timezone: row.timezone, reason: 'today', masteryState: row.mastery?.state, nextScheduledAt: row.nextScheduledAt ?? row.mastery?.nextReviewAt ?? undefined, progress: { retained: 0, independent: 0, total: 0 } }
+  return { studySessionId: row.sessionId, sessionRevision: row.sessionRevision, contentRevision: row.content.revision, planRecordRevision: row.plan.recordRevision, blueprintRecordRevision: row.plan.blueprintRecordRevision, objectiveTitle: row.objective.title, capability: row.objective.capability ?? undefined, estimatedMinutes: row.objective.estimatedMinutes ?? 10, scheduledStartAt: row.scheduledStartAt, scheduledEndAt: row.scheduledEndAt ?? undefined, timezone: row.timezone, reason: 'today', masteryState: row.mastery?.state, nextScheduledAt: row.nextScheduledAt ?? row.mastery?.nextReviewAt ?? undefined, progress: { retained: 0, independent: 0, total: 0 }, initiallyStarted: row.inProgress }
 })
 const retainedCandidate = shallowRef<NonNullable<typeof liveCandidate.value> | null>(null)
 watch(liveCandidate, (value) => {
@@ -75,7 +75,7 @@ function leaveSession() {
     <section v-else-if="result.status !== 'ready' && !candidate" :data-testid="`learn-v2-today-${result.status}`" class="mx-auto max-w-2xl p-6"><h1 class="text-2xl font-semibold">Today</h1><p class="mt-2 text-muted-foreground">{{ result.reason ?? (result.status === 'empty' ? 'Nothing is scheduled for today.' : 'This session needs attention before it can begin.') }}</p></section>
     <template v-else-if="candidate">
       <LearnV2TodaySession :candidate @started="beginSession" @completed="completeSession" @leave="leaveSession" />
-      <div class="mx-auto w-full max-w-3xl px-4 pb-6 sm:px-6">
+      <div v-if="!sessionActive" class="mx-auto w-full max-w-3xl px-4 pb-6 sm:px-6">
         <LearnV2CalendarProjectionCard :study-session-id="candidate.studySessionId" :scheduled-start-at="candidate.scheduledStartAt" />
       </div>
     </template>

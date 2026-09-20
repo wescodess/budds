@@ -28,7 +28,7 @@ import {
   generateCompletion,
 } from "../server/utils/ai-gateway";
 import { retrieveLearnV2FolderEvidence } from "../server/utils/learn-v2-folder-evidence";
-import { localDateAt } from "../shared/learn-v2-mastery";
+import { addCalendarDays, localDateAt } from "../shared/learn-v2-mastery";
 import type { LearnV2AssessmentContract } from "../shared/learn-v2-blueprint";
 
 const TYPE = "session_content_generation";
@@ -1228,11 +1228,20 @@ export const startStudySession = mutation({
     )
       throw new Error("Study session is not ready");
     const now = Date.now();
-    const timezone = session.timezone ?? plan.timezone ?? "UTC";
-    if (session.scheduledStartAt > now && localDateAt(session.scheduledStartAt, timezone) !== localDateAt(now, timezone))
-      throw new Error("Study session is not scheduled for today");
     if (session.scheduledEndAt !== undefined && session.scheduledEndAt < now)
       throw new Error("Study session window has expired");
+    if (session.placementKind === "retained_review") {
+      const record = await ctx.db
+        .query("masteryRecords")
+        .withIndex("by_userId_and_objectiveId", (q) =>
+          q.eq("userId", userId).eq("objectiveId", session.primaryObjectiveId),
+        )
+        .unique();
+      const timezone = record?.firstIndependentTimezone ?? session.timezone ?? plan.timezone ?? "UTC";
+      if (!record?.firstIndependentLocalDate
+        || localDateAt(now, timezone) < addCalendarDays(record.firstIndependentLocalDate, 7))
+        throw new Error("Retained review is not eligible yet");
+    }
     const content = await ctx.db
       .query("sessionContent")
       .withIndex("by_userId_and_studySessionId_and_revision", (q) =>

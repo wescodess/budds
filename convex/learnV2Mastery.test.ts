@@ -4,6 +4,7 @@ import { describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import { LEARN_V2_MASTERY_SCORING_ADMISSION } from './learnV2Mastery'
 import schema from './schema'
+import { localDateAt } from '../shared/learn-v2-mastery'
 
 const { retrieveLearnV2FolderEvidenceMock } = vi.hoisted(() => ({
   retrieveLearnV2FolderEvidenceMock: vi.fn(async ({ sources }: { sources: Array<{ alias: string }> }) => new Map(sources.map(source => [source.alias, 'Transient pinned folder evidence.']))),
@@ -228,7 +229,7 @@ describe('LA2-12 server-scored mastery attempts', () => {
     await expect(purged.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, purged.args('purged-evidence'))).rejects.toThrow(/evidence is unavailable/)
   })
 
-  test('allows same-day early starts, keeps future-day sessions scheduled, and requires the exact started-content id', async () => {
+  test('offers and starts future-day sessions early while requiring the exact started-content id', async () => {
     const future = await fixture()
     const scheduledStartAt = Date.now() + 60_000
     await future.t.run(ctx => ctx.db.patch(future.ids.sessionId, { status: 'ready', scheduledStartAt, timezone: 'America/Toronto' }))
@@ -238,12 +239,47 @@ describe('LA2-12 server-scored mastery attempts', () => {
     const futureDay = await fixture()
     const futureDayStart = Date.now() + 48 * 60 * 60_000
     await futureDay.t.run(ctx => ctx.db.patch(futureDay.ids.sessionId, { status: 'ready', scheduledStartAt: futureDayStart, timezone: 'America/Toronto' }))
-    await expect(futureDay.owner.query(api.learnV2Today.getToday, {})).resolves.toMatchObject({ status: 'empty', nextScheduledAt: futureDayStart })
-    await expect(futureDay.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: futureDay.ids.sessionId, expectedSessionRevision: 7, expectedContentRevision: 11, idempotencyKey: 'future-day-start' })).rejects.toThrow(/not scheduled for today/)
+    await expect(futureDay.owner.query(api.learnV2Today.getToday, {})).resolves.toMatchObject({ status: 'ready', nextScheduledAt: futureDayStart })
+    await expect(futureDay.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: futureDay.ids.sessionId, expectedSessionRevision: 7, expectedContentRevision: 11, idempotencyKey: 'future-day-start' })).resolves.toMatchObject({ status: 'in_progress' })
 
     const mismatched = await fixture()
     await mismatched.t.run(ctx => ctx.db.patch(mismatched.ids.sessionId, { startedSessionContentId: undefined }))
     await expect(mismatched.owner.query(api.learnV2Today.getToday, {})).resolves.toMatchObject({ status: 'blocked', reason: 'started_content_unavailable' })
+  })
+
+  test('keeps an ineligible retained review unavailable before its seven-day boundary', async () => {
+    const firstDate = localDateAt(Date.now(), 'America/Toronto')
+    const retained = await fixture({ placementKind: 'retained_review', state: 'independent', firstDate })
+    const scheduledStartAt = Date.now() + 48 * 60 * 60_000
+    await retained.t.run(ctx => ctx.db.patch(retained.ids.sessionId, { status: 'ready', scheduledStartAt }))
+
+    await expect(retained.owner.query(api.learnV2Today.getToday, {})).resolves.toMatchObject({ status: 'empty', nextScheduledAt: scheduledStartAt })
+    await expect(retained.owner.mutation(api.learnV2SessionContent.startStudySession, {
+      studySessionId: retained.ids.sessionId,
+      expectedSessionRevision: 7,
+      expectedContentRevision: 11,
+      idempotencyKey: 'retained-too-early',
+    })).rejects.toThrow(/retained review is not eligible yet/i)
+  })
+
+  test('does not let a later high-priority session displace a ready session due now', async () => {
+    const current = await fixture()
+    const futureId = await current.t.run(async (ctx) => {
+      const now = Date.now()
+      await ctx.db.patch(current.ids.sessionId, { status: 'ready', scheduledStartAt: now - 1_000, startedSessionContentId: undefined, startedSessionContentRevision: undefined })
+      const originalContent = await ctx.db.get(current.ids.contentId)
+      const originalClaim = await ctx.db.query('sessionContentClaims').withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', OWNER.tokenIdentifier).eq('sessionContentId', current.ids.contentId)).first()
+      const originalSupport = originalClaim && await ctx.db.query('learnClaimSupports').withIndex('by_userId_and_sessionContentClaimId', q => q.eq('userId', OWNER.tokenIdentifier).eq('sessionContentClaimId', originalClaim._id)).first()
+      if (!originalContent || !originalClaim || !originalSupport) throw new Error('expected evidence fixture')
+      const studySessionId = await ctx.db.insert('studySessions', { userId: OWNER.tokenIdentifier, studyPlanRevisionId: current.ids.planRevisionId, primaryObjectiveId: current.ids.objectiveId, status: 'ready', revision: 1, scheduledStartAt: now + 48 * 60 * 60_000, timezone: 'America/Toronto', placementKind: 'review', schedulingPriority: 'due_review' })
+      const contentId = await ctx.db.insert('sessionContent', { userId: OWNER.tokenIdentifier, studySessionId, studyPlanRevisionId: current.ids.planRevisionId, blueprintRevisionId: originalContent.blueprintRevisionId, objectiveId: current.ids.objectiveId, revision: 1, status: 'published', assessmentRubricSnapshot: originalContent.assessmentRubricSnapshot, providerModel: 'test/mastery-model', createdAt: now, publishedAt: now })
+      const claimId = await ctx.db.insert('sessionContentClaims', { userId: OWNER.tokenIdentifier, sessionContentId: contentId, order: 1, claim: originalClaim.claim, verifierVersion: originalClaim.verifierVersion, confidence: originalClaim.confidence })
+      await ctx.db.insert('learnClaimSupports', { userId: originalSupport.userId, sessionContentClaimId: claimId, sourceExcerptId: originalSupport.sourceExcerptId, sourceSnapshotId: originalSupport.sourceSnapshotId, entailment: originalSupport.entailment, verifierVersion: originalSupport.verifierVersion, confidence: originalSupport.confidence, conflictStatus: originalSupport.conflictStatus, evidenceStatus: originalSupport.evidenceStatus })
+      return studySessionId
+    })
+
+    await expect(current.owner.query(api.learnV2Today.getToday, {})).resolves.toMatchObject({ status: 'ready', sessionId: current.ids.sessionId })
+    expect(futureId).not.toBe(current.ids.sessionId)
   })
 
   test('does not project or start a ready session after its scheduled window', async () => {
