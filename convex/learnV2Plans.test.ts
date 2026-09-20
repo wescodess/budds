@@ -4,6 +4,7 @@ import { describe, expect, test } from 'vitest'
 import { api, internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import schema from './schema'
+import { masteryScopeKey } from './lib/learnV2MasteryScope'
 
 const modules = import.meta.glob('./**/*.ts')
 const identity = { tokenIdentifier: 'https://auth.example.com|plan-owner', name: 'Plan Owner' }
@@ -18,7 +19,7 @@ async function setupPlan() {
   const learningVoid = await owner.mutation(api.learnV2Lifecycle.createLearningVoid, { folderId, title: 'Plan me', idempotencyKey: 'void' })
   const blueprint = await owner.mutation(api.learnV2Lifecycle.createBlueprintDraft, { learningVoidId: learningVoid!._id, expectedVoidRevision: 1, idempotencyKey: 'blueprint' })
   const objectiveIds = await t.run(async ctx => {
-    await ctx.db.patch(learningVoid!._id, { status: 'plan_review', revision: 5 })
+    await ctx.db.patch(learningVoid!._id, { status: 'plan_review', activeBlueprintRevisionId: blueprint!._id, revision: 5 })
     await ctx.db.patch(blueprint!._id, { status: 'accepted', recordRevision: 4 })
     return await Promise.all([0, 1].map(async order => await ctx.db.insert('learnObjectives', {
       userId: identity.tokenIdentifier, blueprintRevisionId: blueprint!._id, order, title: `Objective ${order + 1}`,
@@ -42,6 +43,31 @@ function input() {
 }
 
 describe('Learn V2 study-plan preview and acceptance', () => {
+  test('uses the active Blueprint pointer instead of a newer draft revision', async () => {
+    const setup = await setupPlan()
+    await setup.t.run(async (ctx) => {
+      const activeBlueprint = await ctx.db.get(setup.blueprint._id)
+      await ctx.db.insert('learnBlueprintRevisions', {
+        userId: identity.tokenIdentifier,
+        blueprintId: activeBlueprint!.blueprintId,
+        learningVoidId: setup.learningVoid._id,
+        revision: setup.blueprint.revision + 1,
+        recordRevision: 1,
+        status: 'draft',
+        createdAt: 2,
+        updatedAt: 2,
+      })
+    })
+    await expect(setup.owner.mutation(api.learnV2Plans.createPlanPreview, {
+      learningVoidId: setup.learningVoid._id,
+      blueprintRevisionId: setup.blueprint._id,
+      expectedVoidRevision: 5,
+      expectedBlueprintRecordRevision: 4,
+      idempotencyKey: 'active-not-latest',
+      schedulingInput: input(),
+    })).resolves.toMatchObject({ status: 'draft' })
+  })
+
   test('pins a feasible latest preview, accepts it exactly once, and creates immutable session shells', async () => {
     const setup = await setupPlan()
     const args = { learningVoidId: setup.learningVoid._id, blueprintRevisionId: setup.blueprint._id, expectedVoidRevision: 5, expectedBlueprintRecordRevision: 4, idempotencyKey: 'preview-1', schedulingInput: input() }
@@ -77,8 +103,9 @@ describe('Learn V2 study-plan preview and acceptance', () => {
   test('anchors retained reviews to the immutable first independent pass', async () => {
     const setup = await setupPlan()
     const firstIndependentPassAt = Date.parse('2030-09-10T02:00:00Z')
-    await setup.t.run(ctx => ctx.db.insert('masteryRecords', {
+    await setup.t.run(async ctx => ctx.db.insert('masteryRecords', {
       userId: identity.tokenIdentifier, blueprintRevisionId: setup.blueprint._id, objectiveId: setup.objectiveIds[0]!, state: 'independent',
+      scopeKey: await masteryScopeKey(identity.tokenIdentifier, setup.blueprint._id, setup.objectiveIds[0]!),
       firstIndependentPassAt, updatedAt: Date.parse('2030-09-12T02:00:00Z'),
     }))
     const preview = await setup.owner.mutation(api.learnV2Plans.createPlanPreview, { learningVoidId: setup.learningVoid._id, blueprintRevisionId: setup.blueprint._id, expectedVoidRevision: 5, expectedBlueprintRecordRevision: 4, idempotencyKey: 'retained', schedulingInput: input() })

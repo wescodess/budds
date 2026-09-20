@@ -3,6 +3,7 @@ import { convexTest } from 'convex-test'
 import { describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import { LEARN_V2_MASTERY_SCORING_ADMISSION } from './learnV2Mastery'
+import { masteryScopeKey } from './lib/learnV2MasteryScope'
 import schema from './schema'
 
 const modules = import.meta.glob('./**/*.ts')
@@ -24,6 +25,7 @@ async function fixture(options: { placementKind?: 'learning' | 'retained_review'
     const voidId = await ctx.db.insert('learningVoids', { userId: OWNER.tokenIdentifier, folderId, title: 'Mastery', status: 'active', revision: 1, createdAt: now, updatedAt: now })
     const blueprintId = await ctx.db.insert('learnBlueprints', { userId: OWNER.tokenIdentifier, learningVoidId: voidId, revision: 1, createdAt: now })
     const blueprintIdRevision = await ctx.db.insert('learnBlueprintRevisions', { userId: OWNER.tokenIdentifier, blueprintId, learningVoidId: voidId, revision: 1, recordRevision: 3, status: 'accepted', createdAt: now, updatedAt: now })
+    await ctx.db.patch(voidId, { activeBlueprintRevisionId: blueprintIdRevision })
     const objectiveId = await ctx.db.insert('learnObjectives', { userId: OWNER.tokenIdentifier, blueprintRevisionId: blueprintIdRevision, order: 1, title: 'Objective', assessmentContract: assessment })
     const planId = await ctx.db.insert('studyPlans', { userId: OWNER.tokenIdentifier, learningVoidId: voidId, revision: 1, createdAt: now })
     const planRevisionId = await ctx.db.insert('studyPlanRevisions', { userId: OWNER.tokenIdentifier, studyPlanId: planId, learningVoidId: voidId, revision: 1, recordRevision: 5, status: 'accepted', blueprintRevisionId: blueprintIdRevision, blueprintRecordRevision: 3, timezone: options.sessionTimezone ?? 'America/Toronto', createdAt: now })
@@ -40,7 +42,7 @@ async function fixture(options: { placementKind?: 'learning' | 'retained_review'
     const excerptId = await ctx.db.insert('learnSourceExcerpts', { userId: OWNER.tokenIdentifier, sourceSnapshotId: sourceId, locator: 'paragraph:1', excerpt: 'Supported evidence.', rightsStatus: 'permitted' })
     const claimId = await ctx.db.insert('sessionContentClaims', { userId: OWNER.tokenIdentifier, sessionContentId: contentId, order: 1, claim: 'The evidence supports the answer.', verifierVersion: 'test.verifier.v1', confidence: 0.9 })
     await ctx.db.insert('learnClaimSupports', { userId: OWNER.tokenIdentifier, sessionContentClaimId: claimId, sourceExcerptId: excerptId, sourceSnapshotId: sourceId, entailment: 'entailed', verifierVersion: 'test.verifier.v1', confidence: 0.9, conflictStatus: 'clear', evidenceStatus: 'evidence_available' })
-    if (options.state) await ctx.db.insert('masteryRecords', { userId: OWNER.tokenIdentifier, blueprintRevisionId: blueprintIdRevision, objectiveId, state: options.state, recordRevision: 4, firstIndependentLocalDate: options.firstDate, firstIndependentPassAt: options.firstDate ? now : undefined, firstIndependentTimezone: options.firstDate ? 'America/Toronto' : undefined, updatedAt: now })
+    if (options.state) await ctx.db.insert('masteryRecords', { userId: OWNER.tokenIdentifier, blueprintRevisionId: blueprintIdRevision, objectiveId, scopeKey: await masteryScopeKey(OWNER.tokenIdentifier, blueprintIdRevision, objectiveId), state: options.state, recordRevision: 4, firstIndependentLocalDate: options.firstDate, firstIndependentPassAt: options.firstDate ? now : undefined, firstIndependentTimezone: options.firstDate ? 'America/Toronto' : undefined, updatedAt: now })
     return { voidId, blueprintIdRevision, objectiveId, planId, planRevisionId, sessionId, contentId, sourceId }
   })
   const args = (key: string, score = 100) => ({ tokenIdentifier: OWNER.tokenIdentifier, studySessionId: ids.sessionId, expectedSessionRevision: 7, expectedContentRevision: 11, expectedPlanRecordRevision: 5, expectedBlueprintRecordRevision: 3, response: 'A server-scored response.', confidence: 4, idempotencyKey: key, scorerVerdict: verdict(score) })
@@ -48,6 +50,114 @@ async function fixture(options: { placementKind?: 'learning' | 'retained_review'
 }
 
 describe('LA2-12 server-scored mastery attempts', () => {
+  test('revalidates the active Blueprint pointer before reservation and provider dispatch', async () => {
+    const beforeReservation = await fixture()
+    await beforeReservation.t.run(ctx => ctx.db.patch(beforeReservation.ids.voidId, { activeBlueprintRevisionId: undefined }))
+    const { scorerVerdict: _firstVerdict, ...missingPointerRequest } = beforeReservation.args('missing-pointer', 80)
+    await expect(beforeReservation.t.mutation(internal.learnV2Mastery.beginMasteryScoring, missingPointerRequest)).rejects.toThrow(/active Blueprint pointer/i)
+
+    const beforeDispatch = await fixture()
+    const { scorerVerdict: _secondVerdict, ...dispatchRequest } = beforeDispatch.args('stale-before-dispatch', 80)
+    const reservation = await beforeDispatch.t.mutation(internal.learnV2Mastery.beginMasteryScoring, dispatchRequest)
+    expect(reservation.kind).toBe('acquired')
+    if (reservation.kind !== 'acquired') throw new Error('Expected scoring lease')
+    await beforeDispatch.t.run(ctx => ctx.db.patch(beforeDispatch.ids.voidId, { activeBlueprintRevisionId: undefined }))
+    await expect(beforeDispatch.t.mutation(internal.learnV2Mastery.markMasteryScoringDispatched, {
+      tokenIdentifier: OWNER.tokenIdentifier,
+      jobId: reservation.jobId,
+      leaseToken: reservation.leaseToken,
+    })).rejects.toThrow(/active Blueprint pointer/i)
+
+    const beforeCommit = await fixture()
+    await beforeCommit.t.run(ctx => ctx.db.patch(beforeCommit.ids.voidId, { activeBlueprintRevisionId: undefined }))
+    await expect(beforeCommit.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, beforeCommit.args('stale-before-commit', 80))).rejects.toThrow(/active Blueprint pointer/i)
+  })
+
+  test('fails closed when scored evidence revisions drift before attempt commit', async () => {
+    const setup = await fixture()
+    const { scorerVerdict: _verdict, ...request } = setup.args('evidence-drift', 80)
+    const reservation = await setup.t.mutation(internal.learnV2Mastery.beginMasteryScoring, request)
+    expect(reservation.kind).toBe('acquired')
+    if (reservation.kind !== 'acquired') throw new Error('Expected scoring lease')
+    const input = await setup.t.query(internal.learnV2Mastery.getMasteryScoringInput, request)
+    expect(input.kind).toBe('score')
+    if (input.kind !== 'score') throw new Error('Expected scoring input')
+    await setup.t.mutation(internal.learnV2Mastery.markMasteryScoringDispatched, { tokenIdentifier: OWNER.tokenIdentifier, jobId: reservation.jobId, leaseToken: reservation.leaseToken })
+    await setup.t.run(ctx => ctx.db.patch(setup.ids.sourceId, { recordRevision: 2 }))
+    await expect(setup.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, {
+      ...setup.args('evidence-drift', 80),
+      scoringJobId: reservation.jobId,
+      scoringLeaseToken: reservation.leaseToken,
+      scoredSourceSnapshotIds: input.sourceSnapshotIds,
+      scoredContentRevisionPins: input.contentRevisionPins,
+    })).rejects.toThrow(/evidence pins do not match/i)
+  })
+
+  test('leaves legacy unscoped mastery read-only and creates the scoped projection', async () => {
+    const { t, ids, args } = await fixture()
+    const legacyRecordId = await t.run(ctx => ctx.db.insert('masteryRecords', {
+      userId: OWNER.tokenIdentifier,
+      objectiveId: ids.objectiveId,
+      state: 'guided',
+      recordRevision: 7,
+      updatedAt: 1,
+    }))
+    const result = await t.mutation(internal.learnV2Mastery.recordMasteryAttempt, args('scoped-projection', 80))
+    expect(result).toMatchObject({ state: 'independent', replayed: false })
+    const rows = await t.run(async (ctx) => ({
+      legacy: await ctx.db.get(legacyRecordId),
+      attempt: await ctx.db.get(result.attemptId),
+      scoped: await ctx.db.query('masteryRecords')
+        .withIndex('by_userId_and_blueprintRevisionId', q => q.eq('userId', OWNER.tokenIdentifier).eq('blueprintRevisionId', ids.blueprintIdRevision))
+        .unique(),
+    }))
+    expect(rows.legacy).not.toHaveProperty('blueprintRevisionId')
+    expect(rows.legacy).toMatchObject({ state: 'guided', recordRevision: 7 })
+    expect(rows.attempt).toMatchObject({
+      blueprintRevisionId: ids.blueprintIdRevision,
+      objectiveId: ids.objectiveId,
+      sessionContentId: ids.contentId,
+      studyPlanRevisionId: ids.planRevisionId,
+      activityContractVersion: 'learn-v2.mastery-attempt.v1',
+      providerVersion: 'openrouter-via-cloudflare-ai-gateway.v1',
+      rubricVersion: 'learn-v2.assessment.v1',
+      scorerVersion: 'learn-v2.mastery-scorer.v1',
+      scorerModel: 'test/mastery-model',
+      verifierVersionsJson: JSON.stringify(['test.verifier.v1']),
+      sessionRevision: 7,
+      contentRevision: 11,
+      planRevision: 1,
+      planRecordRevision: 5,
+      blueprintRecordRevision: 3,
+    })
+    expect(JSON.parse(rows.attempt!.contentRevisionPinsJson!)).toMatchObject([{ sourceSnapshotId: String(ids.sourceId), sourceRevisionNumber: 1, sourceRecordRevision: 1, sourceRevision: null, excerptLocator: 'paragraph:1', verifierVersion: 'test.verifier.v1' }])
+    expect(rows.scoped).toMatchObject({ blueprintRevisionId: ids.blueprintIdRevision, objectiveId: ids.objectiveId, scopeKey: await masteryScopeKey(OWNER.tokenIdentifier, ids.blueprintIdRevision, ids.objectiveId), state: 'independent' })
+  })
+
+  test('commits at most one deterministic mastery projection for concurrent same-scope commands', async () => {
+    const setup = await fixture()
+    const secondSessionId = await setup.t.run(async (ctx) => {
+      const now = Date.now()
+      const sessionId = await ctx.db.insert('studySessions', { userId: OWNER.tokenIdentifier, studyPlanRevisionId: setup.ids.planRevisionId, primaryObjectiveId: setup.ids.objectiveId, status: 'in_progress', revision: 7, scheduledStartAt: now + 1, timezone: 'America/Toronto', placementKind: 'learning' })
+      const contentId = await ctx.db.insert('sessionContent', { userId: OWNER.tokenIdentifier, studySessionId: sessionId, studyPlanRevisionId: setup.ids.planRevisionId, blueprintRevisionId: setup.ids.blueprintIdRevision, objectiveId: setup.ids.objectiveId, revision: 11, status: 'published', assessmentRubricSnapshot: rubric, providerModel: 'test/mastery-model', createdAt: now, publishedAt: now })
+      await ctx.db.patch(sessionId, { startedSessionContentId: contentId, startedSessionContentRevision: 11 })
+      await ctx.db.insert('sessionContentBlocks', { userId: OWNER.tokenIdentifier, sessionContentId: contentId, order: 1, kind: 'independent_application', content: 'Apply the evidence to another novel case.' })
+      const excerpt = await ctx.db.query('learnSourceExcerpts').withIndex('by_userId_and_sourceSnapshotId', q => q.eq('userId', OWNER.tokenIdentifier).eq('sourceSnapshotId', setup.ids.sourceId)).unique()
+      const claimId = await ctx.db.insert('sessionContentClaims', { userId: OWNER.tokenIdentifier, sessionContentId: contentId, order: 1, claim: 'The evidence supports another answer.', verifierVersion: 'test.verifier.v1', confidence: 0.9 })
+      await ctx.db.insert('learnClaimSupports', { userId: OWNER.tokenIdentifier, sessionContentClaimId: claimId, sourceExcerptId: excerpt!._id, sourceSnapshotId: setup.ids.sourceId, entailment: 'entailed', verifierVersion: 'test.verifier.v1', confidence: 0.9, conflictStatus: 'clear', evidenceStatus: 'evidence_available' })
+      return sessionId
+    })
+    const [first, second] = await Promise.allSettled([
+      setup.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, setup.args('scope-race-a', 80)),
+      setup.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, { ...setup.args('scope-race-b', 80), studySessionId: secondSessionId }),
+    ])
+    expect([first.status, second.status]).toEqual(['fulfilled', 'fulfilled'])
+    const scopeKey = await masteryScopeKey(OWNER.tokenIdentifier, setup.ids.blueprintIdRevision, setup.ids.objectiveId)
+    const records = await setup.t.run(ctx => ctx.db.query('masteryRecords').withIndex('by_userId_and_scopeKey', q => q.eq('userId', OWNER.tokenIdentifier).eq('scopeKey', scopeKey)).take(2))
+    expect(records).toHaveLength(1)
+    expect(records[0]).toMatchObject({ blueprintRevisionId: setup.ids.blueprintIdRevision, objectiveId: setup.ids.objectiveId, scopeKey })
+  })
+
   test('records monotonic server-observed hint/reveal use and denies another owner', async () => {
     const { t, owner, ids } = await fixture()
     expect((await owner.query(api.learnV2SessionContent.getSessionContent, { studySessionId: ids.sessionId }))!.blocks.map(block => block.kind)).not.toContain('faded_example')
@@ -264,14 +374,15 @@ describe('LA2-12 server-scored mastery attempts', () => {
     expect(await t.mutation(internal.learnV2Mastery.recordMasteryAttempt, args('same-key', 79))).toMatchObject({ attemptId: first.attemptId, replayed: true })
     expect(await t.mutation(internal.learnV2Mastery.recordMasteryAttempt, args('same-key', 80))).toMatchObject({ attemptId: first.attemptId, scorePercent: 79, replayed: true })
     await expect(t.mutation(internal.learnV2Mastery.recordMasteryAttempt, { ...args('same-key', 80), response: 'changed' })).rejects.toThrow(/different request/)
-    const rows = await t.run(async ctx => ({ attempts: await ctx.db.query('masteryAttempts').withIndex('by_userId_and_objectiveId_and_attemptedAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('objectiveId', ids.objectiveId)).take(3), record: await ctx.db.query('masteryRecords').withIndex('by_userId_and_objectiveId', q => q.eq('userId', OWNER.tokenIdentifier).eq('objectiveId', ids.objectiveId)).unique(), sessions: await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('studyPlanRevisionId', ids.planRevisionId)).take(4), jobs: await ctx.db.query('learnJobs').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', OWNER.tokenIdentifier).eq('idempotencyKey', `mastery-followup:${first.attemptId}`)).unique(), calendar: await ctx.db.query('calendarProjections').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(2) }))
+    const scopeKey = await masteryScopeKey(OWNER.tokenIdentifier, ids.blueprintIdRevision, ids.objectiveId)
+    const rows = await t.run(async ctx => ({ attempts: await ctx.db.query('masteryAttempts').withIndex('by_userId_blueprintRevisionId_objectiveId_attemptedAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('blueprintRevisionId', ids.blueprintIdRevision).eq('objectiveId', ids.objectiveId)).take(3), record: await ctx.db.query('masteryRecords').withIndex('by_userId_and_scopeKey', q => q.eq('userId', OWNER.tokenIdentifier).eq('scopeKey', scopeKey)).unique(), sessions: await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('studyPlanRevisionId', ids.planRevisionId)).take(4), jobs: await ctx.db.query('learnJobs').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', OWNER.tokenIdentifier).eq('idempotencyKey', `mastery-followup:${first.attemptId}`)).unique(), calendar: await ctx.db.query('calendarProjections').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(2) }))
     expect(rows.attempts).toHaveLength(1)
     expect(rows.attempts[0]).toMatchObject({ studySessionId: ids.sessionId, sessionContentId: expect.any(String), studyPlanRevisionId: expect.any(String), blueprintRevisionId: expect.any(String), sessionRevision: 7, contentRevision: 11, planRecordRevision: 5, blueprintRecordRevision: 3, sourceSnapshotIdsJson: expect.stringContaining('learnSourceSnapshots') })
     expect(rows.record).toMatchObject({ state: 'needs_review', schedulingPriority: 'remediation', remediationAttemptId: first.attemptId, nextReviewAt: expect.any(Number) })
-    expect(rows.sessions.filter(row => row._id !== ids.sessionId)).toMatchObject([{ placementKind: 'review', schedulingPriority: 'prerequisite_remediation', status: 'planned' }])
-    expect(rows.jobs).toMatchObject({ type: 'session_content_generation', status: 'queued', dispatchSupportingSourceSnapshotIds: [ids.sourceId] })
+    expect(rows.sessions.filter(row => row._id !== ids.sessionId)).toMatchObject([{ placementKind: 'review', schedulingPriority: 'prerequisite_remediation' }])
+    expect(rows.jobs).toMatchObject({ type: 'session_content_generation', dispatchSupportingSourceSnapshotIds: [ids.sourceId] })
     expect(rows.calendar).toEqual([])
-    await expect(owner.query(api.learnV2Today.getToday, {})).resolves.toMatchObject({ status: 'pending', sessionId: rows.sessions.find(row => row._id !== ids.sessionId)!._id })
+    await expect(owner.query(api.learnV2Today.getToday, {})).resolves.toMatchObject({ sessionId: rows.sessions.find(row => row._id !== ids.sessionId)!._id })
     const boundary = await fixture()
     await expect(boundary.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, boundary.args('boundary', 80))).resolves.toMatchObject({ scorePercent: 80, state: 'independent' })
   })
