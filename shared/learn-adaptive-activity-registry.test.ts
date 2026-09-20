@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest'
+import { describe, expect, expectTypeOf, test } from 'vitest'
 import {
   ADAPTIVE_ACTIVITY_CONTRACT_VERSION,
   ADAPTIVE_ACTIVITY_FALLBACK_VERSION,
@@ -7,8 +7,15 @@ import {
   ADAPTIVE_ACTIVITY_VALIDATION_ANALYTICS_VERSION,
   getAdaptiveActivityRegistry,
   validateAdaptiveActivityPrimitive,
-  validateAdaptiveActivityPrimitivePlan,
-} from '../../shared/learn-adaptive-activity-registry'
+  validateAdaptiveActivityPrimitiveSequence,
+  type ValidatedAdaptiveActivityPrimitive,
+} from './learn-adaptive-activity-registry'
+
+const evidence = {
+  'source-1': { integrityState: 'accepted' },
+  'source-2': { integrityState: 'conflict' },
+  'source-snapshot-1': { integrityState: 'accepted' },
+} as const
 
 describe('Adaptive Learn activity registry', () => {
   test('publishes the seven approved primitives with stable versions, actions, and test IDs', () => {
@@ -29,14 +36,15 @@ describe('Adaptive Learn activity registry', () => {
         'reflection_next_move',
       ],
       primitives: [
-        { type: 'cited_explanation', allowedActions: ['continue', 'inspect_source', 'ask_for_example'], testId: 'learn-primitive-cited-explanation', fallbackTestId: 'learn-primitive-cited-explanation-fallback' },
-        { type: 'diagnostic_prompt', allowedActions: ['submit_response'], testId: 'learn-primitive-diagnostic-prompt', fallbackTestId: 'learn-primitive-diagnostic-prompt-fallback' },
-        { type: 'worked_example', allowedActions: ['reveal_example', 'continue'], testId: 'learn-primitive-worked-example', fallbackTestId: 'learn-primitive-worked-example-fallback' },
-        { type: 'independent_application', allowedActions: ['submit_response', 'save_draft'], testId: 'learn-primitive-independent-application', fallbackTestId: 'learn-primitive-independent-application-fallback' },
-        { type: 'source_comparison', allowedActions: ['choose_source', 'submit_comparison'], testId: 'learn-primitive-source-comparison', fallbackTestId: 'learn-primitive-source-comparison-fallback' },
-        { type: 'artifact_workspace', allowedActions: ['save_artifact', 'apply_artifact', 'share_artifact'], testId: 'learn-primitive-artifact-workspace', fallbackTestId: 'learn-primitive-artifact-workspace-fallback' },
-        { type: 'reflection_next_move', allowedActions: ['accept_next_move', 'override_next_move', 'end_thread'], testId: 'learn-primitive-reflection-next-move', fallbackTestId: 'learn-primitive-reflection-next-move-fallback' },
+        { type: 'cited_explanation', allowedActions: ['continue', 'inspect_source', 'ask_for_example'], testId: 'learn-primitive-cited-explanation' },
+        { type: 'diagnostic_prompt', allowedActions: ['submit_response'], testId: 'learn-primitive-diagnostic-prompt' },
+        { type: 'worked_example', allowedActions: ['reveal_example', 'continue'], testId: 'learn-primitive-worked-example' },
+        { type: 'independent_application', allowedActions: ['submit_response', 'save_draft'], testId: 'learn-primitive-independent-application' },
+        { type: 'source_comparison', allowedActions: ['choose_source', 'submit_comparison'], testId: 'learn-primitive-source-comparison' },
+        { type: 'artifact_workspace', allowedActions: ['save_artifact', 'apply_artifact', 'share_artifact'], testId: 'learn-primitive-artifact-workspace' },
+        { type: 'reflection_next_move', allowedActions: ['accept_next_move', 'override_next_move', 'end_thread'], testId: 'learn-primitive-reflection-next-move' },
       ],
+      fallback: { version: ADAPTIVE_ACTIVITY_FALLBACK_VERSION, testId: 'learn-activity-fallback' },
     })
   })
 
@@ -49,7 +57,7 @@ describe('Adaptive Learn activity registry', () => {
         explanation: 'Plants convert light energy into stored chemical energy.',
         sourceRefs: ['source-snapshot-1'],
       },
-    })).toEqual({
+    }, evidence)).toEqual({
       ok: true,
       value: {
         contractVersion: ADAPTIVE_ACTIVITY_CONTRACT_VERSION,
@@ -73,29 +81,25 @@ describe('Adaptive Learn activity registry', () => {
     })
   })
 
-  test('validates contract-bounded props for every registered primitive', () => {
-    const fixtures = [
+  test.each([
       { type: 'cited_explanation', action: 'inspect_source', props: { heading: 'Light energy', explanation: 'Evidence-grounded explanation.', sourceRefs: ['source-1'] } },
       { type: 'diagnostic_prompt', action: 'submit_response', props: { prompt: 'Explain the mechanism.', responseFormat: 'short_text', assistance: 'hint_available' } },
       { type: 'worked_example', action: 'reveal_example', props: { heading: 'Worked mechanism', problem: 'Trace the energy.', steps: ['Identify the input.', 'Trace the conversion.'], guidedConsequence: 'Using this support caps this attempt at guided.', sourceRefs: ['source-1'] } },
       { type: 'independent_application', action: 'save_draft', props: { prompt: 'Apply the mechanism to a new case.', responseFormat: 'long_text', draftPersistence: true } },
-      { type: 'source_comparison', action: 'submit_comparison', props: { prompt: 'Which source better supports the claim?', sources: [{ sourceRef: 'source-1', label: 'Source A', summary: 'Primary evidence.', integrityState: 'accepted' }, { sourceRef: 'source-2', label: 'Source B', summary: 'Conflicting evidence.', integrityState: 'conflict' }] } },
+      { type: 'source_comparison', action: 'submit_comparison', props: { prompt: 'Which source better supports the claim?', sources: [{ sourceRef: 'source-1', label: 'Source A', summary: 'Primary evidence.' }, { sourceRef: 'source-2', label: 'Source B', summary: 'Conflicting evidence.' }] } },
       { type: 'artifact_workspace', action: 'save_artifact', props: { prompt: 'Build a concise plan.', artifactKind: 'plan', starterText: 'Goal:' } },
       { type: 'reflection_next_move', action: 'override_next_move', props: { feedback: 'The core mechanism is secure.', nextMove: 'Compare conflicting cases.', allowedDecisions: ['accept', 'override', 'end'] } },
-    ] as const
-
-    for (const fixture of fixtures) {
-      expect(validateAdaptiveActivityPrimitive(fixture)).toMatchObject({
-        ok: true,
-        value: {
-          contractVersion: ADAPTIVE_ACTIVITY_CONTRACT_VERSION,
-          rendererVersion: ADAPTIVE_ACTIVITY_RENDERER_VERSION,
-          type: fixture.type,
-          action: fixture.action,
-        },
-        analytics: { outcome: 'valid', primitiveType: fixture.type, reasonCode: null },
-      })
-    }
+  ] as const)('validates bounded $type props', (fixture) => {
+    expect(validateAdaptiveActivityPrimitive(fixture, evidence)).toMatchObject({
+      ok: true,
+      value: {
+        contractVersion: ADAPTIVE_ACTIVITY_CONTRACT_VERSION,
+        rendererVersion: ADAPTIVE_ACTIVITY_RENDERER_VERSION,
+        type: fixture.type,
+        action: fixture.action,
+      },
+      analytics: { outcome: 'valid', primitiveType: fixture.type, reasonCode: null },
+    })
   })
 
   test.each([
@@ -115,7 +119,7 @@ describe('Adaptive Learn activity registry', () => {
         title: 'Activity unavailable',
         body: expect.any(String),
         primaryAction: { type: 'continue_safe', label: 'Continue safely' },
-        testId: candidate.type === 'generated_widget' ? 'learn-primitive-fallback' : expect.stringMatching(/^learn-primitive-.+-fallback$/),
+        testId: 'learn-activity-fallback',
       },
       analytics: {
         name: 'adaptive_primitive_validation',
@@ -132,8 +136,67 @@ describe('Adaptive Learn activity registry', () => {
         reasonCode,
       },
     }
-    expect(validateAdaptiveActivityPrimitive(candidate)).toEqual(expected)
-    expect(validateAdaptiveActivityPrimitive(candidate)).toEqual(expected)
+    expect(validateAdaptiveActivityPrimitive(candidate, evidence)).toEqual(expected)
+    expect(validateAdaptiveActivityPrimitive(candidate, evidence)).toEqual(expected)
+  })
+
+  test.each([
+    ['unknown reference', ['source-missing']],
+    ['unaccepted reference', ['source-2']],
+  ])('rejects an %s instead of trusting generated evidence', (_label, sourceRefs) => {
+    expect(validateAdaptiveActivityPrimitive({
+      type: 'cited_explanation',
+      action: 'continue',
+      props: { heading: 'Evidence', explanation: 'Claim.', sourceRefs },
+    }, evidence)).toMatchObject({
+      ok: false,
+      error: { code: 'invalid_evidence_link' },
+      fallback: { testId: 'learn-activity-fallback' },
+      analytics: { reasonCode: 'invalid_evidence_link' },
+      fallbackAnalytics: { reasonCode: 'invalid_evidence_link' },
+    })
+  })
+
+  test('derives source-comparison integrity from the authority projection', () => {
+    const result = validateAdaptiveActivityPrimitive({
+      type: 'source_comparison',
+      action: 'choose_source',
+      props: {
+        prompt: 'Compare.',
+        sources: [
+          { sourceRef: 'source-1', label: 'Accepted', summary: 'Primary.' },
+          { sourceRef: 'source-2', label: 'Conflict', summary: 'Disputed.' },
+        ],
+      },
+    }, evidence)
+    expect(result).toMatchObject({
+      ok: true,
+      value: { props: { sources: [{ integrityState: 'accepted' }, { integrityState: 'conflict' }] } },
+    })
+  })
+
+  test('rejects generated source-comparison integrity instead of trusting it', () => {
+    expect(validateAdaptiveActivityPrimitive({
+      type: 'source_comparison',
+      action: 'choose_source',
+      props: {
+        prompt: 'Compare.',
+        sources: [
+          { sourceRef: 'source-1', label: 'A', summary: 'Primary.', integrityState: 'accepted' },
+          { sourceRef: 'source-2', label: 'B', summary: 'Disputed.', integrityState: 'accepted' },
+        ],
+      },
+    }, evidence)).toMatchObject({ ok: false, error: { code: 'invalid_props' } })
+  })
+
+  test('exports a discriminated output contract for exhaustive renderers', () => {
+    const render = (primitive: ValidatedAdaptiveActivityPrimitive) => {
+      if (primitive.type === 'cited_explanation') {
+        expectTypeOf(primitive.props.sourceRefs).toEqualTypeOf<string[]>()
+        expectTypeOf(primitive.action).toEqualTypeOf<'continue' | 'inspect_source' | 'ask_for_example'>()
+      }
+    }
+    expect(render).toBeTypeOf('function')
   })
 
   test('validates a bounded primitive sequence without mutating its input', () => {
@@ -142,7 +205,7 @@ describe('Adaptive Learn activity registry', () => {
       { type: 'reflection_next_move', action: 'accept_next_move', props: { feedback: 'The mechanism is clear.', nextMove: 'Apply it independently.', allowedDecisions: ['accept', 'override'] } },
     ]
     const before = structuredClone(plan)
-    expect(validateAdaptiveActivityPrimitivePlan(plan)).toMatchObject({
+    expect(validateAdaptiveActivityPrimitiveSequence(plan)).toMatchObject({
       ok: true,
       value: {
         contractVersion: ADAPTIVE_ACTIVITY_CONTRACT_VERSION,
@@ -156,10 +219,10 @@ describe('Adaptive Learn activity registry', () => {
 
   test('rejects an oversized primitive sequence before any item is accepted', () => {
     const item = { type: 'diagnostic_prompt', action: 'submit_response', props: { prompt: 'Explain the mechanism.', responseFormat: 'short_text', assistance: 'none' } }
-    expect(validateAdaptiveActivityPrimitivePlan(Array.from({ length: 8 }, () => structuredClone(item)))).toMatchObject({
+    expect(validateAdaptiveActivityPrimitiveSequence(Array.from({ length: 8 }, () => structuredClone(item)))).toMatchObject({
       ok: false,
       error: { code: 'oversized_plan' },
-      fallback: { version: ADAPTIVE_ACTIVITY_FALLBACK_VERSION, kind: 'text_card', testId: 'learn-primitive-fallback' },
+      fallback: { version: ADAPTIVE_ACTIVITY_FALLBACK_VERSION, kind: 'text_card', testId: 'learn-activity-fallback' },
       analytics: { name: 'adaptive_primitive_plan_validation', outcome: 'rejected', primitiveCount: 8, reasonCode: 'oversized_plan' },
       fallbackAnalytics: { name: 'adaptive_primitive_fallback', version: ADAPTIVE_ACTIVITY_FALLBACK_ANALYTICS_VERSION, outcome: 'fallback', reasonCode: 'oversized_plan' },
     })
