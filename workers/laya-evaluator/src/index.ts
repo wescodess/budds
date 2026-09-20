@@ -81,7 +81,7 @@ export class LayaEvaluator extends Container<Env> {
       const response = await super.fetch(new Request('http://container/v1/evaluate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: raw }))
       if (!response.ok) return error(response.status, retryable(response.status) ? 1 : undefined)
       const result: unknown = await response.json().catch(() => null)
-      return isEvaluation(result) ? Response.json(result) : error(502)
+      return isEvaluation(result, body.kind) ? Response.json(result) : error(502)
     }, { timeoutMs: 1_500, onTimeout: async () => { await this.stop() } })
   }
 }

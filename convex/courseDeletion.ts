@@ -127,6 +127,12 @@ async function processQuizReference(
     .first()
   if (attempt) {
     if (attempt.userId !== job.userId) throw new Error('Course quiz attempt ownership mismatch')
+    const assessments = await ctx.db
+      .query('quizAnswerAssessments')
+      .withIndex('by_attemptId', q => q.eq('attemptId', attempt._id))
+      .take(LOCAL_BATCH_SIZE)
+    for (const assessment of assessments) await ctx.db.delete(assessment._id)
+    if (assessments.length > 0) return true
     const answers = await ctx.db
       .query('attemptAnswers')
       .withIndex('by_attemptId', q => q.eq('attemptId', attempt._id))

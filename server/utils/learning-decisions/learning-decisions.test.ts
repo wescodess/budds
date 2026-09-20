@@ -1,18 +1,44 @@
 import type { H3Event } from 'h3'
 import { describe, expect, test, vi } from 'vitest'
-import { isBoundedDecisionRequest, unavailableDecision } from './contracts'
+import { FREE_RESPONSE_ASSESSMENT_KIND, FREE_RESPONSE_RUBRIC, isBoundedDecisionRequest, isCompletedTypedDecision, unavailableDecision } from './contracts'
 import { evaluateTypedDecision, shadowEvaluateQuiz } from './index'
 import { evaluateWithLaya } from './laya-adapter'
 
 vi.stubGlobal('useRuntimeConfig', vi.fn())
 
 const request = { kind: 'quiz_quality' as const, requestId: 'r1', inputDigest: 'a'.repeat(64), items: [{ id: 'q1', question: 'What is ATP?', correctAnswer: 'Energy', options: ['Energy'] }] }
+const semanticRequest = {
+  kind: FREE_RESPONSE_ASSESSMENT_KIND,
+  requestId: 'semantic-1',
+  inputDigest: 'b'.repeat(64),
+  items: [{
+    id: 'answer-1',
+    question: 'Describe mitosis.',
+    questionType: 'free-response' as const,
+    expectedAnswer: 'Cell division into two identical daughter cells.',
+    learnerAnswer: 'One cell divides into two genetically identical cells.',
+    evidenceExcerpt: 'Mitosis produces two genetically identical daughter cells.',
+    rubricVersion: FREE_RESPONSE_ASSESSMENT_KIND,
+    rubric: [...FREE_RESPONSE_RUBRIC],
+  }],
+}
 
 describe('learning decision boundary', () => {
   test('keeps provider-neutral requests bounded', () => {
     expect(isBoundedDecisionRequest(request)).toBe(true)
     expect(isBoundedDecisionRequest({ ...request, items: [] })).toBe(false)
     expect(isBoundedDecisionRequest({ ...request, unexpected: true })).toBe(false)
+  })
+
+  test('accepts bounded semantic assessments and rejects incomplete evidence or cross-kind labels', () => {
+    expect(isBoundedDecisionRequest(semanticRequest)).toBe(true)
+    expect(isBoundedDecisionRequest({ ...semanticRequest, items: [{ ...semanticRequest.items[0], evidenceExcerpt: '' }] })).toBe(false)
+    expect(isBoundedDecisionRequest({ ...semanticRequest, items: Array.from({ length: 9 }, (_, index) => ({ ...semanticRequest.items[0], id: `a${index}` })) })).toBe(false)
+    const semanticResult = { status: 'completed', provider: 'laya', modelRevision: 'revision', decisions: [{ id: 'answer-1', label: 'fully_correct', confidence: 0.8, probabilities: { fully_correct: 0.8, partially_correct: 0.1, incorrect: 0.05, uncertain: 0.05 } }] }
+    expect(isCompletedTypedDecision(semanticResult, semanticRequest.kind)).toBe(true)
+    expect(isCompletedTypedDecision({ ...semanticResult, decisions: [{ ...semanticResult.decisions[0], probabilities: { fully_correct: 0.8, partially_correct: 0.8, incorrect: 0, uncertain: 0 } }] }, semanticRequest.kind)).toBe(false)
+    expect(isCompletedTypedDecision({ ...semanticResult, decisions: [{ id: 'answer-1', label: 'supported', confidence: 0.8 }] }, semanticRequest.kind)).toBe(false)
+    expect(isCompletedTypedDecision(semanticResult, request.kind)).toBe(false)
   })
 
   test('disabled providers make no network call', async () => {
@@ -37,6 +63,11 @@ describe('learning decision boundary', () => {
   test('returns only a schema-validated canonical result', async () => {
     const response = { status: 'completed', provider: 'laya', modelRevision: 'f9ab0b228f0fc0f14d873dbc99038f135c2da1b2', decisions: [{ id: 'q1', label: 'supported', confidence: 0.9 }] }
     await expect(evaluateWithLaya(request, { enabled: true, token: 'x', url: 'https://internal', binding: { fetch: vi.fn(async () => Response.json(response)) } })).resolves.toEqual(response)
+  })
+
+  test('returns a validated semantic assessment without changing provider-neutral labels', async () => {
+    const response = { status: 'completed', provider: 'laya', modelRevision: 'f9ab0b228f0fc0f14d873dbc99038f135c2da1b2', decisions: [{ id: 'answer-1', label: 'partially_correct', confidence: 0.7, probabilities: { fully_correct: 0.1, partially_correct: 0.7, incorrect: 0.1, uncertain: 0.1 } }] }
+    await expect(evaluateWithLaya(semanticRequest, { enabled: true, token: 'x', url: 'https://internal', binding: { fetch: vi.fn(async () => Response.json(response)) } })).resolves.toEqual(response)
   })
 
   test('dispatches configured shadow work through the service binding', async () => {

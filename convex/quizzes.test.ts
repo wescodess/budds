@@ -616,7 +616,7 @@ describe('quizzes.deleteQuiz', () => {
     const questionsA = await t.run(async (ctx) =>
       ctx.db.query('quizQuestions').withIndex('by_quizId', (q) => q.eq('quizId', quizA)).collect(),
     )
-    await asA.mutation(api.quizzes.submitAttempt, {
+    const aAttempt = await asA.mutation(api.quizzes.submitAttempt, {
       quizId: quizA,
       answers: [
         { questionId: questionsA[0]!._id, response: 'Energy currency' },
@@ -632,12 +632,22 @@ describe('quizzes.deleteQuiz', () => {
     const questionsB = await t.run(async (ctx) =>
       ctx.db.query('quizQuestions').withIndex('by_quizId', (q) => q.eq('quizId', quizB)).collect(),
     )
-    await asB.mutation(api.quizzes.submitAttempt, {
+    const bAttempt = await asB.mutation(api.quizzes.submitAttempt, {
       quizId: quizB,
       answers: [
         { questionId: questionsB[0]!._id, response: 'Energy currency' },
         { questionId: questionsB[1]!._id, response: 'bob answer' },
       ],
+    })
+    const { aAssessmentId, bAssessmentId } = await t.run(async (ctx) => {
+      const aAnswerId = await ctx.db.insert('attemptAnswers', { attemptId: aAttempt.attemptId, questionId: questionsA[1]!._id, userAnswer: 'something', isCorrect: false, answeredAt: Date.now() })
+      const bAnswerId = await ctx.db.insert('attemptAnswers', { attemptId: bAttempt.attemptId, questionId: questionsB[1]!._id, userAnswer: 'bob answer', isCorrect: false, answeredAt: Date.now() })
+      const snapshot = { question: 'Describe mitosis.', questionType: 'free-response' as const, expectedAnswer: 'Cell division', evidenceExcerpt: 'Mitosis divides cells.' }
+      const rubricSnapshot: Array<{ label: string, description: string }> = []
+      return {
+        aAssessmentId: await ctx.db.insert('quizAnswerAssessments', { userId: USER_A.tokenIdentifier, attemptId: aAttempt.attemptId, attemptAnswerId: aAnswerId, questionId: questionsA[1]!._id, kind: 'quiz.free_response_assessment.v1', status: 'pending', questionSnapshot: snapshot, learnerAnswerSnapshot: 'something', deterministicIsCorrect: false, rubricVersion: 'quiz.free_response_assessment.v1', rubricSnapshot, requestedAt: Date.now() }),
+        bAssessmentId: await ctx.db.insert('quizAnswerAssessments', { userId: USER_B.tokenIdentifier, attemptId: bAttempt.attemptId, attemptAnswerId: bAnswerId, questionId: questionsB[1]!._id, kind: 'quiz.free_response_assessment.v1', status: 'pending', questionSnapshot: snapshot, learnerAnswerSnapshot: 'bob answer', deterministicIsCorrect: false, rubricVersion: 'quiz.free_response_assessment.v1', rubricSnapshot, requestedAt: Date.now() }),
+      }
     })
 
     const result = await asA.mutation(api.quizzes.deleteQuiz, { quizId: quizA })
@@ -656,6 +666,7 @@ describe('quizzes.deleteQuiz', () => {
       ctx.db.query('quizAttempts').withIndex('by_quizId', (q) => q.eq('quizId', quizA)).collect(),
     )
     expect(surviveAttemptsA).toEqual([])
+    expect(await t.run(ctx => ctx.db.get(aAssessmentId))).toBeNull()
 
     const surviveQuizB = await t.run(async (ctx) => ctx.db.get(quizB))
     expect(surviveQuizB).not.toBeNull()
@@ -669,5 +680,6 @@ describe('quizzes.deleteQuiz', () => {
       ctx.db.query('quizAttempts').withIndex('by_quizId', (q) => q.eq('quizId', quizB)).collect(),
     )
     expect(surviveAttemptsB).toHaveLength(1)
+    expect(await t.run(ctx => ctx.db.get(bAssessmentId))).not.toBeNull()
   })
 })

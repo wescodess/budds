@@ -104,6 +104,7 @@ const learningDecisionMode = mergedEnv.NUXT_LEARNING_DECISION_MODE || 'off'
 const learningDecisionProvider = mergedEnv.NUXT_LEARNING_DECISION_PROVIDER || ''
 const layaEvaluatorToken = mergedEnv.NUXT_LAYA_EVALUATOR_TOKEN || ''
 const layaEvaluatorUrl = mergedEnv.NUXT_LAYA_EVALUATOR_URL || ''
+const quizAssessmentWriteSecret = mergedEnv.NUXT_QUIZ_ASSESSMENT_WRITE_SECRET || ''
 
 function isHttpUrl(value) {
   try {
@@ -170,12 +171,13 @@ if (!audioWorkflowPhase && calendarTokenEncryptionKey) {
   }
 }
 
-if (!audioWorkflowPhase && !['off', 'shadow'].includes(learningDecisionMode)) {
-  invalidBlocking.push({ kind: 'var', label: 'Learning decision mode must be off or shadow', names: ['NUXT_LEARNING_DECISION_MODE'] })
+if (!audioWorkflowPhase && !['off', 'shadow', 'advisory'].includes(learningDecisionMode)) {
+  invalidBlocking.push({ kind: 'var', label: 'Learning decision mode must be off, shadow, or advisory', names: ['NUXT_LEARNING_DECISION_MODE'] })
 }
-if (!audioWorkflowPhase && learningDecisionMode === 'shadow') {
+if (!audioWorkflowPhase && (learningDecisionMode === 'shadow' || learningDecisionMode === 'advisory')) {
   if (learningDecisionProvider !== 'laya') invalidBlocking.push({ kind: 'var', label: 'Learning decision provider must be laya for this pilot', names: ['NUXT_LEARNING_DECISION_PROVIDER'] })
   if (layaEvaluatorToken.length < 32) invalidBlocking.push({ kind: 'secret', label: 'Laya evaluator credential must be at least 32 characters', names: ['NUXT_LAYA_EVALUATOR_TOKEN'] })
+  if (learningDecisionMode === 'advisory' && quizAssessmentWriteSecret.length < 32) invalidBlocking.push({ kind: 'secret', label: 'Quiz assessment write credential must be at least 32 characters', names: ['NUXT_QUIZ_ASSESSMENT_WRITE_SECRET'] })
   if (layaEvaluatorUrl && !isHttpUrl(layaEvaluatorUrl)) invalidBlocking.push({ kind: 'var', label: 'Laya evaluator local URL must be an HTTP(S) URL', names: ['NUXT_LAYA_EVALUATOR_URL'] })
 }
 

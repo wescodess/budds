@@ -110,18 +110,20 @@ export default defineNuxtConfig({
     audioOverviewJobSecret: '',
     audioOverviewWorkerUrl: readConfiguredValue('NUXT_AUDIO_OVERVIEW_WORKER_URL', 'AUDIO_OVERVIEW_WORKER_URL'),
     audioOverviewWorkerToken: '',
-    // Private-only evaluator pilot. It is off unless mode is `shadow` and
+    // Private-only evaluator pilot. It is off unless mode is `shadow` or `advisory` and
     // a configured provider is selected; neither value is public runtime config.
     learningDecisionMode: readConfiguredValue('NUXT_LEARNING_DECISION_MODE'),
     learningDecisionProvider: readConfiguredValue('NUXT_LEARNING_DECISION_PROVIDER'),
     layaEvaluatorUrl: readConfiguredValue('NUXT_LAYA_EVALUATOR_URL'),
     layaEvaluatorToken: '',
+    quizAssessmentWriteSecret: '',
     calendarTokenEncryptionKey: '',
     public: {
       siteUrl: publicSiteUrl,
       convex: {
         url: convexUrl,
       },
+      quizSemanticReviewEnabled: readConfiguredValue('NUXT_LEARNING_DECISION_MODE') === 'advisory',
     },
   },
   routeRules,

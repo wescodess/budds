@@ -171,11 +171,27 @@ describe('Cloudflare Pages environment validation', () => {
     })).not.toThrow()
   })
 
+  it('accepts a complete Laya advisory configuration', () => {
+    expect(() => execFileSync(process.execPath, [validator, 'build', '--strict'], {
+      cwd: process.cwd(),
+      env: {
+        ...completePagesEnv,
+        NUXT_LEARNING_DECISION_MODE: 'advisory',
+        NUXT_LEARNING_DECISION_PROVIDER: 'laya',
+        NUXT_LAYA_EVALUATOR_TOKEN: 'test-laya-token-with-sufficient-length',
+        NUXT_LAYA_EVALUATOR_URL: 'http://localhost:8788',
+        NUXT_QUIZ_ASSESSMENT_WRITE_SECRET: 'test-assessment-write-secret-long-enough',
+      },
+      stdio: 'pipe',
+    })).not.toThrow()
+  })
+
   it.each([
-    ['invalid mode', { NUXT_LEARNING_DECISION_MODE: 'enforced' }, 'mode must be off or shadow'],
+    ['invalid mode', { NUXT_LEARNING_DECISION_MODE: 'enforced' }, 'mode must be off, shadow, or advisory'],
     ['invalid provider', { NUXT_LEARNING_DECISION_MODE: 'shadow', NUXT_LEARNING_DECISION_PROVIDER: 'other', NUXT_LAYA_EVALUATOR_TOKEN: 'test-laya-token-with-sufficient-length' }, 'provider must be laya'],
     ['short token', { NUXT_LEARNING_DECISION_MODE: 'shadow', NUXT_LEARNING_DECISION_PROVIDER: 'laya', NUXT_LAYA_EVALUATOR_TOKEN: 'short' }, 'at least 32 characters'],
     ['malformed URL', { NUXT_LEARNING_DECISION_MODE: 'shadow', NUXT_LEARNING_DECISION_PROVIDER: 'laya', NUXT_LAYA_EVALUATOR_TOKEN: 'test-laya-token-with-sufficient-length', NUXT_LAYA_EVALUATOR_URL: 'not-a-url' }, 'must be an HTTP(S) URL'],
+    ['missing advisory write secret', { NUXT_LEARNING_DECISION_MODE: 'advisory', NUXT_LEARNING_DECISION_PROVIDER: 'laya', NUXT_LAYA_EVALUATOR_TOKEN: 'test-laya-token-with-sufficient-length' }, 'write credential must be at least 32 characters'],
   ])('rejects %s for Laya shadow mode', (_name, overrides, message) => {
     const result = spawnSync(process.execPath, [validator, 'build', '--strict'], {
       cwd: process.cwd(),

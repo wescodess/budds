@@ -677,6 +677,36 @@ describe('accountDeletion.deleteAccountCascade', () => {
         answeredAt: Date.now(),
       }),
     }))
+    const { aAssessmentId, bAssessmentId } = await t.run(async (ctx) => ({
+      aAssessmentId: await ctx.db.insert('quizAnswerAssessments', {
+        userId: TEST_IDENTITY.tokenIdentifier,
+        attemptId: aAttempt.attemptId,
+        attemptAnswerId: aAnswerId,
+        questionId: aQuestions[0]!._id,
+        kind: 'quiz.free_response_assessment.v1',
+        status: 'pending',
+        questionSnapshot: { question: 'Q?', questionType: 'free-response', expectedAnswer: 'A', evidenceExcerpt: 'src' },
+        learnerAnswerSnapshot: 'A',
+        deterministicIsCorrect: true,
+        rubricVersion: 'quiz.free_response_assessment.v1',
+        rubricSnapshot: [],
+        requestedAt: Date.now(),
+      }),
+      bAssessmentId: await ctx.db.insert('quizAnswerAssessments', {
+        userId: OTHER_IDENTITY.tokenIdentifier,
+        attemptId: bAttempt.attemptId,
+        attemptAnswerId: bAnswerId,
+        questionId: bQuestions[0]!._id,
+        kind: 'quiz.free_response_assessment.v1',
+        status: 'pending',
+        questionSnapshot: { question: 'Q?', questionType: 'free-response', expectedAnswer: 'A', evidenceExcerpt: 'src' },
+        learnerAnswerSnapshot: 'A',
+        deterministicIsCorrect: true,
+        rubricVersion: 'quiz.free_response_assessment.v1',
+        rubricSnapshot: [],
+        requestedAt: Date.now(),
+      }),
+    }))
 
     await asUserA.mutation(internal.accountDeletion.deleteCurrentUser, {})
     await finishDatabaseDeletion(t, TEST_IDENTITY.tokenIdentifier)
@@ -696,6 +726,8 @@ describe('accountDeletion.deleteAccountCascade', () => {
     expect(bAttempts).toHaveLength(1)
     expect(await t.run(ctx => ctx.db.get(aAnswerId))).toBeNull()
     expect(await t.run(ctx => ctx.db.get(bAnswerId))).not.toBeNull()
+    expect(await t.run(ctx => ctx.db.get(aAssessmentId))).toBeNull()
+    expect(await t.run(ctx => ctx.db.get(bAssessmentId))).not.toBeNull()
   })
 
   test('[P0] should remove caller rate-limit buckets while leaving another user\'s untouched', async () => {

@@ -3,6 +3,7 @@ import { mutation, query, internalMutation } from './_generated/server'
 import type { Id } from './_generated/dataModel'
 import type { MutationCtx, QueryCtx } from './_generated/server'
 import { getOptionalAuthUserId, requireAuth } from './lib/auth'
+import { createPendingAnswerAssessment } from './lib/quizAnswerAssessment'
 
 const questionTypeValidator = v.union(
   v.literal('multiple-choice'),
@@ -520,12 +521,20 @@ export const submitAnswer = mutation({
 
     const isCorrect = scoreAnswer(question.type, args.userAnswer, question.correctAnswer)
 
-    await ctx.db.insert('attemptAnswers', {
+    const attemptAnswerId = await ctx.db.insert('attemptAnswers', {
       attemptId: args.attemptId,
       questionId: args.questionId,
       userAnswer: args.userAnswer,
       isCorrect,
       answeredAt: Date.now(),
+    })
+    await createPendingAnswerAssessment(ctx, {
+      userId,
+      attemptId: args.attemptId,
+      attemptAnswerId,
+      question,
+      learnerAnswer: args.userAnswer,
+      deterministicIsCorrect: isCorrect,
     })
 
     const allAnswers = await ctx.db
@@ -584,12 +593,20 @@ export const submitAllAnswers = mutation({
       const isCorrect = scoreAnswer(question.type, a.userAnswer, question.correctAnswer)
       if (isCorrect) correctCount++
 
-      await ctx.db.insert('attemptAnswers', {
+      const attemptAnswerId = await ctx.db.insert('attemptAnswers', {
         attemptId: args.attemptId,
         questionId: a.questionId,
         userAnswer: a.userAnswer,
         isCorrect,
         answeredAt: Date.now(),
+      })
+      await createPendingAnswerAssessment(ctx, {
+        userId,
+        attemptId: args.attemptId,
+        attemptAnswerId,
+        question,
+        learnerAnswer: a.userAnswer,
+        deterministicIsCorrect: isCorrect,
       })
       alreadyAnswered.add(a.questionId as string)
 
@@ -700,19 +717,36 @@ export const getAttemptResults = query({
       .withIndex('by_attemptId', q => q.eq('attemptId', args.attemptId))
       .collect()
 
+    const assessments = await ctx.db
+      .query('quizAnswerAssessments')
+      .withIndex('by_userId_and_attemptId', q => q.eq('userId', userId).eq('attemptId', args.attemptId))
+      .collect()
+    const assessmentMap = new Map(assessments.map(row => [row.attemptAnswerId as string, row]))
+
     if (attemptAnswers.length > 0) {
       const results = attemptAnswers.map(a => {
         const q = questionMap.get(a.questionId as string)
+        const assessment = assessmentMap.get(a._id as string)
         return {
           questionId: a.questionId,
-          questionText: q?.question ?? '',
-          questionType: q?.type ?? 'multiple-choice',
+          questionText: assessment?.questionSnapshot.question ?? q?.question ?? '',
+          questionType: assessment?.questionSnapshot.questionType ?? q?.type ?? 'multiple-choice',
           options: q?.options,
           userAnswer: a.userAnswer,
           isCorrect: a.isCorrect,
-          correctAnswer: q?.correctAnswer ?? '',
-          explanation: q?.explanation,
+          correctAnswer: assessment?.questionSnapshot.expectedAnswer ?? q?.correctAnswer ?? '',
+          explanation: assessment?.questionSnapshot.explanation ?? q?.explanation,
           feedback: a.feedback,
+          semanticAssessment: assessment ? {
+            status: assessment.status,
+            label: assessment.label,
+            confidence: assessment.confidence,
+            probabilities: assessment.probabilities,
+            unavailableReason: assessment.unavailableReason,
+            retryable: assessment.retryable,
+            rubricVersion: assessment.rubricVersion,
+            deterministicScoreUnchanged: true,
+          } : undefined,
         }
       })
 
@@ -743,6 +777,7 @@ export const getAttemptResults = query({
           correctAnswer: q?.correctAnswer ?? '',
           explanation: q?.explanation,
           feedback: undefined,
+          semanticAssessment: undefined,
         }
       })
 
@@ -912,6 +947,11 @@ export const deleteQuiz = mutation({
       .collect()
 
     for (const a of attempts) {
+      const assessments = await ctx.db
+        .query('quizAnswerAssessments')
+        .withIndex('by_attemptId', q => q.eq('attemptId', a._id))
+        .collect()
+      for (const assessment of assessments) await ctx.db.delete(assessment._id)
       const answers = await ctx.db
         .query('attemptAnswers')
         .withIndex('by_attemptId', q => q.eq('attemptId', a._id))

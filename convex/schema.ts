@@ -313,6 +313,58 @@ export default defineSchema({
     .index('by_attemptId', ['attemptId'])
     .index('by_attemptId_and_questionId', ['attemptId', 'questionId']),
 
+  quizAnswerAssessments: defineTable({
+    userId: v.string(),
+    attemptId: v.id('quizAttempts'),
+    attemptAnswerId: v.id('attemptAnswers'),
+    questionId: v.id('quizQuestions'),
+    kind: v.literal('quiz.free_response_assessment.v1'),
+    inputDigest: v.optional(v.string()),
+    claimedAt: v.optional(v.number()),
+    status: v.union(v.literal('pending'), v.literal('available'), v.literal('unavailable')),
+    questionSnapshot: v.object({
+      question: v.string(),
+      questionType: v.union(v.literal('free-response'), v.literal('fill_in_the_blank')),
+      expectedAnswer: v.string(),
+      evidenceExcerpt: v.string(),
+      sourceFilename: v.optional(v.string()),
+      explanation: v.optional(v.string()),
+    }),
+    learnerAnswerSnapshot: v.string(),
+    deterministicIsCorrect: v.boolean(),
+    rubricVersion: v.literal('quiz.free_response_assessment.v1'),
+    rubricSnapshot: v.array(v.object({ label: v.string(), description: v.string() })),
+    label: v.optional(v.union(
+      v.literal('fully_correct'),
+      v.literal('partially_correct'),
+      v.literal('incorrect'),
+      v.literal('uncertain'),
+    )),
+    confidence: v.optional(v.number()),
+    probabilities: v.optional(v.object({
+      fullyCorrect: v.number(),
+      partiallyCorrect: v.number(),
+      incorrect: v.number(),
+      uncertain: v.number(),
+    })),
+    provider: v.optional(v.string()),
+    modelRevision: v.optional(v.string()),
+    unavailableReason: v.optional(v.union(
+      v.literal('disabled'),
+      v.literal('unconfigured'),
+      v.literal('timeout'),
+      v.literal('unavailable'),
+      v.literal('malformed'),
+      v.literal('over_budget'),
+    )),
+    retryable: v.optional(v.boolean()),
+    requestedAt: v.number(),
+    completedAt: v.optional(v.number()),
+  })
+    .index('by_attemptId', ['attemptId'])
+    .index('by_attemptAnswerId', ['attemptAnswerId'])
+    .index('by_userId_and_attemptId', ['userId', 'attemptId']),
+
   tasks: defineTable({
     userId: v.string(),
     folderId: v.optional(v.id('folders')),

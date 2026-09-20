@@ -49,7 +49,7 @@ export async function evaluateWithLaya(
     ])
     if (!response.ok) return unavailableForStatus(response.status)
     const payload: unknown = await response.json().catch(() => null)
-    if (!isCompletedTypedDecision(payload) || payload.modelRevision !== PINNED_REVISION) return unavailableDecision('malformed')
+    if (!isCompletedTypedDecision(payload, request.kind) || payload.modelRevision !== PINNED_REVISION) return unavailableDecision('malformed')
     const requestedIds = request.items.map(item => item.id).sort()
     const responseIds = payload.decisions.map(item => item.id).sort()
     return requestedIds.length === responseIds.length && requestedIds.every((id, index) => id === responseIds[index])

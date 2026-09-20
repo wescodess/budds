@@ -431,6 +431,15 @@ async function deleteAttemptAnswerBatch(ctx: MutationCtx, job: AccountDeletionJo
     await updatePhase(ctx, job, 'quizQuestions')
     return
   }
+  const assessments = await ctx.db
+    .query('quizAnswerAssessments')
+    .withIndex('by_attemptId', q => q.eq('attemptId', attempt._id))
+    .take(DELETE_BATCH_SIZE)
+  for (const assessment of assessments) await ctx.db.delete(assessment._id)
+  if (assessments.length > 0) {
+    await continuePhase(ctx, job)
+    return
+  }
   const answers = await ctx.db
     .query('attemptAnswers')
     .withIndex('by_attemptId', q => q.eq('attemptId', attempt._id))

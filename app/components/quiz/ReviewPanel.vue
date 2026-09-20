@@ -1,5 +1,12 @@
 <script setup lang="ts">
-import { Check, X } from '@lucide/vue'
+import { Check, Clock3, Sparkles, TriangleAlert, X } from '@lucide/vue'
+
+type SemanticAssessment = {
+  status: 'pending' | 'available' | 'unavailable'
+  label?: 'fully_correct' | 'partially_correct' | 'incorrect' | 'uncertain'
+  unavailableReason?: string
+  deterministicScoreUnchanged: boolean
+}
 
 interface ReviewQuestion {
   questionId: string
@@ -10,10 +17,12 @@ interface ReviewQuestion {
   isCorrect: boolean
   correctAnswer: string
   explanation?: string
+  semanticAssessment?: SemanticAssessment
 }
 
 const props = defineProps<{
   results: ReviewQuestion[]
+  semanticReviewEnabled?: boolean
 }>()
 
 const activeIndex = ref(0)
@@ -21,6 +30,13 @@ const activeResult = computed(() => props.results[activeIndex.value] ?? null)
 
 function truncate(text: string, max = 60) {
   return text.length > max ? `${text.slice(0, max)}...` : text
+}
+
+function semanticLabel(label?: SemanticAssessment['label']) {
+  if (label === 'fully_correct') return 'Meaning review: fully correct'
+  if (label === 'partially_correct') return 'Meaning review: partially correct'
+  if (label === 'incorrect') return 'Meaning review: incorrect'
+  return 'Meaning review: uncertain'
 }
 </script>
 
@@ -94,6 +110,39 @@ function truncate(text: string, max = 60) {
               {{ activeResult.correctAnswer }}
             </p>
           </div>
+        </div>
+
+        <div
+          v-if="semanticReviewEnabled && activeResult.semanticAssessment"
+          class="rounded-lg border border-violet-500/30 bg-violet-500/5 p-3 sm:p-4"
+          data-testid="quiz-semantic-assessment"
+          role="status"
+          aria-live="polite"
+        >
+          <div v-if="activeResult.semanticAssessment.status === 'pending'" class="flex items-start gap-2">
+            <Clock3 class="mt-0.5 h-4 w-4 shrink-0 text-violet-500" aria-hidden="true" />
+            <div>
+              <p class="text-sm font-medium">Reviewing meaning and evidence…</p>
+              <p class="mt-1 text-xs text-muted-foreground">Your quiz result is ready; this optional review may arrive shortly.</p>
+            </div>
+          </div>
+          <div v-else-if="activeResult.semanticAssessment.status === 'available'" class="flex items-start gap-2">
+            <Sparkles class="mt-0.5 h-4 w-4 shrink-0 text-violet-500" aria-hidden="true" />
+            <div>
+              <p class="text-sm font-medium">{{ semanticLabel(activeResult.semanticAssessment.label) }}</p>
+              <p class="mt-1 text-xs text-muted-foreground">Advisory review compares your response with the saved answer and source evidence.</p>
+            </div>
+          </div>
+          <div v-else class="flex items-start gap-2">
+            <TriangleAlert class="mt-0.5 h-4 w-4 shrink-0 text-amber-500" aria-hidden="true" />
+            <div>
+              <p class="text-sm font-medium">Meaning review unavailable</p>
+              <p class="mt-1 text-xs text-muted-foreground">The automatic reviewer could not make a reliable assessment.</p>
+            </div>
+          </div>
+          <p class="mt-3 border-t border-violet-500/20 pt-2 text-xs font-medium text-muted-foreground">
+            Advisory only — your recorded score has not changed.
+          </p>
         </div>
 
         <div v-if="activeResult.explanation" class="rounded-lg bg-muted/50 p-3 sm:p-4">
