@@ -63,6 +63,24 @@ function splitListFactors(value: string): string[][] {
     .filter(tokens => tokens.length > 0)
 }
 
+function regularPlural(token: string): string | null {
+  if (token.endsWith('s')) return null
+  if (/[^aeiou]y$/i.test(token)) return `${token.slice(0, -1)}ies`
+  if (/(?:x|ch|sh)$/i.test(token)) return `${token}es`
+  if (token.endsWith('z')) return null
+  return `${token}s`
+}
+
+function listFactorMatches(expected: string[], actual: string[]): boolean {
+  const expectedHeadIndex = expected.length - 1
+  const expectedHead = expected[expectedHeadIndex]!
+  const expectedPluralHead = regularPlural(expectedHead)
+  return actual.some(token => token === expectedHead || (expectedPluralHead !== null && token === expectedPluralHead))
+    && actual.every(token => expected.some((expectedToken, index) =>
+      token === expectedToken || (index === expectedHeadIndex && expectedPluralHead !== null && token === expectedPluralHead),
+    ))
+}
+
 function isExplicitListMatch(question: string, response: string, correctAnswer: string): boolean {
   const directive = question.match(/^\s*(?:list|name|identify|give|provide|state)\s+(?:(?:the|any)\s+)?(two|three|four|five|[2-5])\b/i)
   if (!directive) return false
@@ -83,14 +101,11 @@ function isExplicitListMatch(question: string, response: string, correctAnswer: 
   if (new Set(expectedHeads).size !== expectedHeads.length) return false
   const responseSignatures = responseConcepts.map(tokens => tokens.join(' '))
   if (new Set(responseSignatures).size !== responseSignatures.length) return false
-  const expectedTokenSets = expectedConcepts.map(tokens => new Set(tokens))
-
   const usedExpected = new Set<number>()
   for (const actual of responseConcepts) {
     const matchIndex = expectedConcepts.findIndex((expected, index) =>
       !usedExpected.has(index)
-      && actual.includes(expected.at(-1)!)
-      && actual.every(token => expectedTokenSets[index]!.has(token)),
+      && listFactorMatches(expected, actual),
     )
     if (matchIndex < 0) return false
     usedExpected.add(matchIndex)

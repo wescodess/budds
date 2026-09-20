@@ -410,26 +410,26 @@ describe('quizzes.submitAttempt', () => {
       folderId,
       title: 'Company preferences',
       questions: [
-        ...Array.from({ length: 9 }, (_, order) => ({
+        ...Array.from({ length: 13 }, (_, order) => ({
           order,
           question: 'List two factors you should consider when ranking your preferred companies.',
           type: 'free-response' as const,
           correctAnswer: 'Company culture, job opportunities',
         })),
         {
-          order: 9,
+          order: 13,
           question: 'State whether company culture and salary are equally important.',
           type: 'free-response' as const,
           correctAnswer: 'Company culture, salary',
         },
         {
-          order: 10,
+          order: 14,
           question: 'State two factors you should consider when ranking your preferred companies.',
           type: 'free-response' as const,
           correctAnswer: 'Company culture, job opportunities',
         },
         {
-          order: 11,
+          order: 15,
           question: 'List two factors you should consider.',
           type: 'free-response' as const,
           correctAnswer: 'Company culture, annual pay',
@@ -443,17 +443,21 @@ describe('quizzes.submitAttempt', () => {
       quizId,
       answers: [
         { questionId: questions[0]!._id, response: 'culture and opportunities' },
-        { questionId: questions[1]!._id, response: 'opportunities & culture' },
+        { questionId: questions[1]!._id, response: 'opportunities & cultures' },
         { questionId: questions[2]!._id, response: 'culture and salary' },
         { questionId: questions[3]!._id, response: 'culture and culture' },
         { questionId: questions[4]!._id, response: 'culture, opportunities, salary' },
-        { questionId: questions[5]!._id, response: 'no culture and no opportunities' },
+        { questionId: questions[5]!._id, response: 'no cultures and no opportunities' },
         { questionId: questions[6]!._id, response: 'company and opportunities' },
         { questionId: questions[7]!._id, response: 'culture, opportunities, pay' },
         { questionId: questions[8]!._id, response: "isn't culture and isn't opportunities" },
-        { questionId: questions[9]!._id, response: 'culture and salary' },
-        { questionId: questions[10]!._id, response: 'culture and opportunities' },
-        { questionId: questions[11]!._id, response: 'culture and annual' },
+        { questionId: questions[9]!._id, response: 'companies and opportunities' },
+        { questionId: questions[10]!._id, response: 'cultured and opportunities' },
+        { questionId: questions[11]!._id, response: 'culturess and opportunities' },
+        { questionId: questions[12]!._id, response: 'culture and opportunitieses' },
+        { questionId: questions[13]!._id, response: 'culture and salary' },
+        { questionId: questions[14]!._id, response: 'culture and opportunities' },
+        { questionId: questions[15]!._id, response: 'culture and annual' },
       ],
     })
 
@@ -461,6 +465,10 @@ describe('quizzes.submitAttempt', () => {
     expect(result.results.map(answer => answer.isCorrect)).toEqual([
       true,
       true,
+      false,
+      false,
+      false,
+      false,
       false,
       false,
       false,
