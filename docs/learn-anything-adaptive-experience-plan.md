@@ -123,6 +123,10 @@ The thread shell contains:
 - optional path and schedule details;
 - learner memory controls.
 
+Adaptive threads use `/app/learn/thread/:threadId`. Existing V2 missions remain
+at `/app/learn/:learningVoidId`; route parameters never multiplex the two
+authorities.
+
 Source management, blueprint revisions, assessment contracts, and scheduling remain advanced views rather than required tabs.
 
 ### Adaptive Canvas
@@ -229,6 +233,11 @@ Deliver:
 - source/evidence drawer;
 - feature-flagged rollout.
 
+Refresh uses the registered `diagnostic_prompt` primitive in Phase 1; retrieval
+burst remains deferred. V2-backed provider dispatch is admitted only under a
+finite default-deny pilot manifest. That manifest is pilot admission evidence,
+not general-availability approval.
+
 The initial 30–90 second SLA applies to users with ready evidence/content. New-thread preparation timing is measured separately until the source and content pipeline is optimized.
 
 Exit gate: at least 70% of eligible users reach a meaningful activity within 90 seconds, 60% complete it, and at least 50% report 4/5 usefulness in the pilot. Metrics are decision thresholds, not permanent product claims.
@@ -278,6 +287,9 @@ Deliver:
 - documented rollback and support procedures;
 - general-availability cohort expansion.
 
+Slice 5 owns general-availability provider activation approval, separate from
+the pilot manifest required for any Slice-1 V2-backed dispatch.
+
 ## 11. Measurement contract
 
 Primary signal:
@@ -303,6 +315,10 @@ Required event taxonomy:
 - learner abandoned or explicitly ended the thread.
 
 Metric definitions and denominators are versioned. Seven-day retention is reported only for capabilities eligible for a seven-day check. Time spent, generated-content views, confidence, DAU, streaks, and completion percentages are not mastery proxies.
+
+For ready-content first value, the timer starts at authoritative
+`thread_command_committed.v1` and stops only at server-authorized
+`meaningful_activity_started.v1`; preparing sessions use a separate denominator.
 
 ## 12. E2E acceptance journeys
 
