@@ -4,6 +4,7 @@ import {
   ADAPTIVE_ACTIVITY_FALLBACK_VERSION,
   ADAPTIVE_ACTIVITY_FALLBACK_ANALYTICS_VERSION,
   ADAPTIVE_ACTIVITY_RENDERER_VERSION,
+  ADAPTIVE_ACTIVITY_SEQUENCE_VALIDATION_ANALYTICS_VERSION,
   ADAPTIVE_ACTIVITY_VALIDATION_ANALYTICS_VERSION,
   getAdaptiveActivityRegistry,
   validateAdaptiveActivityPrimitive,
@@ -24,6 +25,7 @@ describe('Adaptive Learn activity registry', () => {
       rendererVersion: ADAPTIVE_ACTIVITY_RENDERER_VERSION,
       analytics: {
         validation: { name: 'adaptive_primitive_validation', version: ADAPTIVE_ACTIVITY_VALIDATION_ANALYTICS_VERSION, outcomes: ['valid', 'rejected'] },
+        sequenceValidation: { name: 'adaptive_primitive_sequence_validation', version: ADAPTIVE_ACTIVITY_SEQUENCE_VALIDATION_ANALYTICS_VERSION, outcomes: ['valid', 'rejected'] },
         fallback: { name: 'adaptive_primitive_fallback', version: ADAPTIVE_ACTIVITY_FALLBACK_ANALYTICS_VERSION, outcomes: ['fallback'] },
       },
       registeredTypes: [
@@ -175,6 +177,20 @@ describe('Adaptive Learn activity registry', () => {
     })
   })
 
+  test.each(['constructor', 'toString'])('rejects prototype key %s as an evidence reference', (sourceRef) => {
+    expect(validateAdaptiveActivityPrimitive({
+      type: 'source_comparison',
+      action: 'choose_source',
+      props: {
+        prompt: 'Compare.',
+        sources: [
+          { sourceRef, label: 'Forged', summary: 'Inherited property.' },
+          { sourceRef: 'source-1', label: 'Known', summary: 'Accepted source.' },
+        ],
+      },
+    }, evidence)).toMatchObject({ ok: false, error: { code: 'invalid_evidence_link' } })
+  })
+
   test('rejects generated source-comparison integrity instead of trusting it', () => {
     expect(validateAdaptiveActivityPrimitive({
       type: 'source_comparison',
@@ -212,7 +228,7 @@ describe('Adaptive Learn activity registry', () => {
         rendererVersion: ADAPTIVE_ACTIVITY_RENDERER_VERSION,
         primitives: [{ type: 'diagnostic_prompt' }, { type: 'reflection_next_move' }],
       },
-      analytics: { name: 'adaptive_primitive_plan_validation', outcome: 'valid', primitiveCount: 2, reasonCode: null },
+      analytics: { name: 'adaptive_primitive_sequence_validation', version: ADAPTIVE_ACTIVITY_SEQUENCE_VALIDATION_ANALYTICS_VERSION, outcome: 'valid', primitiveCount: 2, reasonCode: null },
     })
     expect(plan).toEqual(before)
   })
@@ -223,7 +239,7 @@ describe('Adaptive Learn activity registry', () => {
       ok: false,
       error: { code: 'oversized_plan' },
       fallback: { version: ADAPTIVE_ACTIVITY_FALLBACK_VERSION, kind: 'text_card', testId: 'learn-activity-fallback' },
-      analytics: { name: 'adaptive_primitive_plan_validation', outcome: 'rejected', primitiveCount: 8, reasonCode: 'oversized_plan' },
+      analytics: { name: 'adaptive_primitive_sequence_validation', version: ADAPTIVE_ACTIVITY_SEQUENCE_VALIDATION_ANALYTICS_VERSION, outcome: 'rejected', primitiveCount: 8, reasonCode: 'oversized_plan' },
       fallbackAnalytics: { name: 'adaptive_primitive_fallback', version: ADAPTIVE_ACTIVITY_FALLBACK_ANALYTICS_VERSION, outcome: 'fallback', reasonCode: 'oversized_plan' },
     })
   })

@@ -1,6 +1,7 @@
 export const ADAPTIVE_ACTIVITY_CONTRACT_VERSION = 'learn-adaptive.activity-contract.v1' as const
 export const ADAPTIVE_ACTIVITY_RENDERER_VERSION = 'learn-adaptive.renderer.v1' as const
 export const ADAPTIVE_ACTIVITY_VALIDATION_ANALYTICS_VERSION = 'learn-adaptive.primitive-validation.v1' as const
+export const ADAPTIVE_ACTIVITY_SEQUENCE_VALIDATION_ANALYTICS_VERSION = 'learn-adaptive.primitive-sequence-validation.v1' as const
 export const ADAPTIVE_ACTIVITY_FALLBACK_ANALYTICS_VERSION = 'learn-adaptive.primitive-fallback.v1' as const
 export const ADAPTIVE_ACTIVITY_FALLBACK_VERSION = 'learn-adaptive.text-card-fallback.v1' as const
 
@@ -19,6 +20,7 @@ const registry = [
 export type AdaptiveActivityPrimitiveType = typeof registry[number]['type']
 export type AdaptiveEvidenceIntegrityState = 'accepted' | 'conflict' | 'gap' | 'stale' | 'unavailable'
 export type AdaptiveActivityEvidenceContext = Readonly<Record<string, Readonly<{ integrityState: AdaptiveEvidenceIntegrityState }>>>
+type AdaptiveActivityAction<Type extends AdaptiveActivityPrimitiveType> = Extract<typeof registry[number], { type: Type }>['allowedActions'][number]
 
 interface AdaptiveActivityProps {
   cited_explanation: { heading: string, explanation: string, sourceRefs: string[] }
@@ -30,21 +32,11 @@ interface AdaptiveActivityProps {
   reflection_next_move: { feedback: string, nextMove: string, allowedDecisions: Array<'accept' | 'override' | 'end'> }
 }
 
-interface AdaptiveActivityActions {
-  cited_explanation: 'continue' | 'inspect_source' | 'ask_for_example'
-  diagnostic_prompt: 'submit_response'
-  worked_example: 'reveal_example' | 'continue'
-  independent_application: 'submit_response' | 'save_draft'
-  source_comparison: 'choose_source' | 'submit_comparison'
-  artifact_workspace: 'save_artifact' | 'apply_artifact' | 'share_artifact'
-  reflection_next_move: 'accept_next_move' | 'override_next_move' | 'end_thread'
-}
-
 type PrimitiveValue<Type extends AdaptiveActivityPrimitiveType> = {
   contractVersion: typeof ADAPTIVE_ACTIVITY_CONTRACT_VERSION
   rendererVersion: typeof ADAPTIVE_ACTIVITY_RENDERER_VERSION
   type: Type
-  action: AdaptiveActivityActions[Type]
+  action: AdaptiveActivityAction<Type>
   props: AdaptiveActivityProps[Type]
   testId: Extract<typeof registry[number], { type: Type }>['testId']
 }
@@ -107,9 +99,16 @@ function textArray(value: unknown, label: string, minimum: number, maximum: numb
 }
 
 function evidenceReference(sourceRef: string, context: AdaptiveActivityEvidenceContext, acceptedOnly: boolean) {
-  const evidence = context[sourceRef]
-  if (!evidence || (acceptedOnly && evidence.integrityState !== 'accepted')) invalid('invalid_evidence_link', `Evidence reference ${sourceRef} is not valid for this activity`)
-  return evidence
+  const contextRecord = context as Readonly<Record<string, unknown>>
+  const candidate = Object.hasOwn(contextRecord, sourceRef) ? contextRecord[sourceRef] : null
+  const integrityState = candidate && typeof candidate === 'object' && !Array.isArray(candidate)
+    ? (candidate as UnknownRecord).integrityState
+    : null
+  const integrityStates: readonly AdaptiveEvidenceIntegrityState[] = ['accepted', 'conflict', 'gap', 'stale', 'unavailable']
+  if (typeof integrityState !== 'string' || !integrityStates.includes(integrityState as AdaptiveEvidenceIntegrityState) || (acceptedOnly && integrityState !== 'accepted')) {
+    invalid('invalid_evidence_link', `Evidence reference ${sourceRef} is not valid for this activity`)
+  }
+  return { integrityState: integrityState as AdaptiveEvidenceIntegrityState }
 }
 
 function validateProps<Type extends AdaptiveActivityPrimitiveType>(type: Type, value: unknown, context: AdaptiveActivityEvidenceContext): AdaptiveActivityProps[Type] {
@@ -186,6 +185,7 @@ export function getAdaptiveActivityRegistry() {
     rendererVersion: ADAPTIVE_ACTIVITY_RENDERER_VERSION,
     analytics: {
       validation: { name: 'adaptive_primitive_validation' as const, version: ADAPTIVE_ACTIVITY_VALIDATION_ANALYTICS_VERSION, outcomes: ['valid', 'rejected'] as const },
+      sequenceValidation: { name: 'adaptive_primitive_sequence_validation' as const, version: ADAPTIVE_ACTIVITY_SEQUENCE_VALIDATION_ANALYTICS_VERSION, outcomes: ['valid', 'rejected'] as const },
       fallback: { name: 'adaptive_primitive_fallback' as const, version: ADAPTIVE_ACTIVITY_FALLBACK_ANALYTICS_VERSION, outcomes: ['fallback'] as const },
     },
     registeredTypes: registry.map(entry => entry.type),
@@ -231,7 +231,7 @@ export function validateAdaptiveActivityPrimitiveSequence(input: unknown, eviden
     ok: false as const,
     error: { code, message, primitiveIndex },
     fallback: fallback(code),
-    analytics: { name: 'adaptive_primitive_plan_validation' as const, version: ADAPTIVE_ACTIVITY_VALIDATION_ANALYTICS_VERSION, outcome: 'rejected' as const, primitiveCount, primitiveIndex, reasonCode: code },
+    analytics: { name: 'adaptive_primitive_sequence_validation' as const, version: ADAPTIVE_ACTIVITY_SEQUENCE_VALIDATION_ANALYTICS_VERSION, outcome: 'rejected' as const, primitiveCount, primitiveIndex, reasonCode: code },
     fallbackAnalytics: { name: 'adaptive_primitive_fallback' as const, version: ADAPTIVE_ACTIVITY_FALLBACK_ANALYTICS_VERSION, outcome: 'fallback' as const, primitiveCount, primitiveIndex, reasonCode: code },
   })
   if (!Array.isArray(input) || input.length < 1) return sequenceFailure('invalid_props', 'Adaptive primitive sequence must contain at least one item')
@@ -245,6 +245,6 @@ export function validateAdaptiveActivityPrimitiveSequence(input: unknown, eviden
   return {
     ok: true as const,
     value: { contractVersion: ADAPTIVE_ACTIVITY_CONTRACT_VERSION, rendererVersion: ADAPTIVE_ACTIVITY_RENDERER_VERSION, primitives },
-    analytics: { name: 'adaptive_primitive_plan_validation' as const, version: ADAPTIVE_ACTIVITY_VALIDATION_ANALYTICS_VERSION, outcome: 'valid' as const, primitiveCount: primitives.length, primitiveIndex: null, reasonCode: null },
+    analytics: { name: 'adaptive_primitive_sequence_validation' as const, version: ADAPTIVE_ACTIVITY_SEQUENCE_VALIDATION_ANALYTICS_VERSION, outcome: 'valid' as const, primitiveCount: primitives.length, primitiveIndex: null, reasonCode: null },
   }
 }
