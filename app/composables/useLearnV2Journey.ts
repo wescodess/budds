@@ -10,6 +10,9 @@ export function selectLearnV2PlanRevision<T>(plan?: { accepted?: T | null, previ
   const accepted = plan?.accepted ?? null
   return { accepted: accepted !== null, revision: accepted ?? plan?.preview ?? null }
 }
+export function selectLearnV2StartableSession<T extends { _id: string, status: string, canStartEarly?: boolean }>(sessions?: T[] | null) {
+  return sessions?.find(row => row.status === 'in_progress') ?? sessions?.find(row => row.status === 'ready' && row.canStartEarly === true)
+}
 const key = (name: string) => `${name}:${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`}`
 const dateTime = (value?: number | null) => value ? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(value) : 'Not scheduled yet'
 const sourceFailureMessage = (reason?: string) => (({

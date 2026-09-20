@@ -3,6 +3,7 @@ import { convexTest } from 'convex-test'
 import { afterEach, describe, expect, test } from 'vitest'
 import { api, internal } from './_generated/api'
 import schema from './schema'
+import { localDateAt } from '../shared/learn-v2-mastery'
 
 const modules = import.meta.glob('./**/*.ts')
 const owner = { tokenIdentifier: 'https://auth.example.com|journey-owner', name: 'Journey Owner' }
@@ -57,13 +58,18 @@ describe('Learn V2 public journey read model', () => {
       const objectiveId = await ctx.db.insert('learnObjectives', { userId: owner.tokenIdentifier, blueprintRevisionId: blueprint._id, order: 0, title: 'Pinned objective', capability: 'Explain the evidence.', estimatedMinutes: 25 })
       const sessionId = await ctx.db.insert('studySessions', { userId: owner.tokenIdentifier, studyPlanRevisionId: planRevisionId, primaryObjectiveId: objectiveId, status: 'ready', revision: 7, scheduledStartAt: 1, scheduledEndAt: Date.now() + 60_000, timezone: 'America/Toronto' })
       await ctx.db.insert('sessionContent', { userId: owner.tokenIdentifier, studySessionId: sessionId, studyPlanRevisionId: planRevisionId, blueprintRevisionId: blueprint._id, objectiveId, status: 'published', revision: 11, createdAt: 1 })
-      return { sessionId }
+      const retainedSessionId = await ctx.db.insert('studySessions', { userId: owner.tokenIdentifier, studyPlanRevisionId: planRevisionId, primaryObjectiveId: objectiveId, status: 'ready', revision: 1, scheduledStartAt: Date.now() + 48 * 60 * 60_000, scheduledEndAt: Date.now() + 48 * 60 * 60_000 + 25 * 60_000, timezone: 'America/Toronto', placementKind: 'retained_review' })
+      await ctx.db.insert('masteryRecords', { userId: owner.tokenIdentifier, blueprintRevisionId: blueprint._id, objectiveId, state: 'independent', recordRevision: 1, firstIndependentLocalDate: localDateAt(Date.now(), 'America/Toronto'), firstIndependentPassAt: Date.now(), firstIndependentTimezone: 'America/Toronto', updatedAt: Date.now() })
+      return { sessionId, retainedSessionId }
     })
     await expect(setupResult.asOwner.query(api.learnV2Journey.getSessionCandidate, { learningVoidId: setupResult.learningVoid._id, studySessionId: ids.sessionId })).resolves.toMatchObject({ status: 'ready', sessionRevision: 7, plan: { recordRevision: 5 }, blueprint: { recordRevision: 3 }, content: { revision: 11 } })
     const asOther = setupResult.t.withIdentity(other)
     await asOther.mutation(api.users.upsertUser, {})
     await setupResult.t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: other.tokenIdentifier, enabled: true })
     await expect(asOther.query(api.learnV2Journey.getSessionCandidate, { learningVoidId: setupResult.learningVoid._id, studySessionId: ids.sessionId })).resolves.toBeNull()
+    const mission = await setupResult.asOwner.query(api.learnV2Journey.getMission, { learningVoidId: setupResult.learningVoid._id })
+    expect(mission?.plan.sessions.find(session => session._id === ids.sessionId)).toMatchObject({ canStartEarly: true })
+    expect(mission?.plan.sessions.find(session => session._id === ids.retainedSessionId)).toMatchObject({ canStartEarly: false })
   })
 
   test('projects the latest blueprint generation state without exposing provider data', async () => {
