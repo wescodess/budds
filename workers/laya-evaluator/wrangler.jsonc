@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "budds-laya-evaluator",
+  "name": "budds-laya-evaluator-dev",
   "main": "src/index.ts",
   "workers_dev": false,
   "compatibility_date": "2026-09-19",
@@ -8,5 +8,5 @@
   "containers": [{ "class_name": "LayaEvaluator", "image": "./Dockerfile", "instance_type": "standard-2", "max_instances": 1 }],
   "durable_objects": { "bindings": [{ "name": "LAYA_EVALUATOR", "class_name": "LayaEvaluator" }] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["LayaEvaluator"] }],
-  "vars": { "LAYA_DAILY_ALLOWANCE": "50" }
+  "vars": { "LAYA_DAILY_ALLOWANCE": "150", "LAYA_APPLICATION_ENVIRONMENT": "development" }
 }

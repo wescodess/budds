@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url'
 import tailwindcss from '@tailwindcss/vite'
 import type { NuxtConfig } from 'nuxt/schema'
-import { isQuizSemanticAdvisoryEnabled } from './server/utils/learning-decisions/activation'
+import { quizSemanticActivationDecision } from './server/utils/learning-decisions/activation'
 
 function readConfiguredValue(...names: string[]) {
   for (const name of names) {
@@ -23,6 +23,14 @@ const convexUrl = readConfiguredValue('NUXT_PUBLIC_CONVEX_URL', 'CONVEX_URL')
 const siteUrl = readConfiguredValue('SITE_URL', 'NUXT_PUBLIC_SITE_URL', 'CF_PAGES_URL')
 const publicSiteUrl = siteUrl || readConfiguredValue('NUXT_PUBLIC_SITE_URL', 'CF_PAGES_URL')
 const authProxyTargetUrl = readConfiguredValue('AUTH_PROXY_TARGET_URL', 'NUXT_AUTH_PROXY_TARGET_URL') || toConvexSiteUrl(convexUrl)
+const applicationEnvironment = readConfiguredValue('NUXT_APPLICATION_ENVIRONMENT')
+const pagesEnvironment = readConfiguredValue('CF_PAGES_ENVIRONMENT')
+const pagesBranch = readConfiguredValue('CF_PAGES_BRANCH')
+const quizSemanticActivation = quizSemanticActivationDecision(
+  readConfiguredValue('NUXT_LEARNING_DECISION_MODE'),
+  readConfiguredValue('NUXT_QUIZ_SEMANTIC_ACTIVATION_MANIFEST'),
+  { applicationEnvironment, pagesEnvironment, pagesBranch, convexUrl },
+)
 const serverAuthEnabled = process.env.NODE_ENV !== 'development'
 const routeRules = {
   '/': { auth: serverAuthEnabled ? 'user' as const : undefined },
@@ -45,7 +53,10 @@ export default defineNuxtConfig({
       nodeCompat: true,
     },
     externals: {
-      inline: [fileURLToPath(new URL('./convex/_generated/', import.meta.url))],
+      inline: [
+        fileURLToPath(new URL('./convex/_generated/', import.meta.url)),
+        fileURLToPath(new URL('./shared/quiz-semantic-calibration.mjs', import.meta.url)),
+      ],
     },
   },
   modules: ['shadcn-nuxt', 'nuxt-convex', '@onmax/nuxt-better-auth', '@nuxtjs/mdc'],
@@ -119,16 +130,16 @@ export default defineNuxtConfig({
     layaEvaluatorToken: '',
     quizAssessmentWriteSecret: '',
     quizSemanticActivationManifest: readConfiguredValue('NUXT_QUIZ_SEMANTIC_ACTIVATION_MANIFEST'),
+    quizSemanticApplicationEnvironment: applicationEnvironment,
+    quizSemanticPagesEnvironment: pagesEnvironment,
+    quizSemanticPagesBranch: pagesBranch,
     calendarTokenEncryptionKey: '',
     public: {
       siteUrl: publicSiteUrl,
       convex: {
         url: convexUrl,
       },
-      quizSemanticReviewEnabled: isQuizSemanticAdvisoryEnabled(
-        readConfiguredValue('NUXT_LEARNING_DECISION_MODE'),
-        readConfiguredValue('NUXT_QUIZ_SEMANTIC_ACTIVATION_MANIFEST'),
-      ),
+      quizSemanticReviewEnabled: quizSemanticActivation.enabled,
     },
   },
   routeRules,

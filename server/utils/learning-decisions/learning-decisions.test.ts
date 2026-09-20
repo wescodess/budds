@@ -1,5 +1,7 @@
 import type { H3Event } from 'h3'
 import { describe, expect, test, vi } from 'vitest'
+import activation from '../../../convex/quizSemanticActivationManifest.json'
+import evaluatorManifest from '../../../workers/laya-evaluator/learningDecisionManifest.json'
 import { FREE_RESPONSE_ASSESSMENT_KIND, FREE_RESPONSE_RUBRIC, isBoundedDecisionRequest, isCompletedTypedDecision, LEARNING_DECISION_CONTRACT_VERSION, LEARNING_DECISION_SNAPSHOT_VERSION, unavailableDecision } from './contracts'
 import { evaluateTypedDecision, shadowEvaluateQuiz } from './index'
 import { evaluateWithLaya } from './laya-adapter'
@@ -7,6 +9,25 @@ import { evaluateWithLaya } from './laya-adapter'
 vi.stubGlobal('useRuntimeConfig', vi.fn())
 
 const envelope = { contractVersion: LEARNING_DECISION_CONTRACT_VERSION, snapshotVersion: LEARNING_DECISION_SNAPSHOT_VERSION }
+const expectedProvenance = {
+  packageVersion: evaluatorManifest.model.packageVersion,
+  modelRevision: evaluatorManifest.model.revision,
+  modelSha256: evaluatorManifest.model.sha256,
+  evaluationManifestSha256: activation.evaluationManifest.sha256,
+  calibratorSha256: activation.calibrator.sha256,
+}
+const configured = { enabled: true, token: 'x', url: 'https://internal', expectedProvenance }
+function realResponse(payload: unknown) {
+  return Response.json(payload, { headers: {
+    'X-Laya-Evidence-Backend': 'real',
+    'X-Laya-Calibrator-Status': 'valid',
+    'X-Laya-Package-Version': expectedProvenance.packageVersion,
+    'X-Laya-Model-Revision': expectedProvenance.modelRevision,
+    'X-Laya-Model-SHA256': expectedProvenance.modelSha256,
+    'X-Laya-Evaluation-Manifest-SHA256': expectedProvenance.evaluationManifestSha256,
+    'X-Laya-Calibrator-SHA256': expectedProvenance.calibratorSha256,
+  } })
+}
 const request = { ...envelope, kind: 'quiz_quality' as const, requestId: 'r1', inputDigest: 'a'.repeat(64), items: [{ id: 'q1', question: 'What is ATP?', correctAnswer: 'Energy', options: ['Energy'], language: 'en-CA', evidence: { sourceIndex: 2, excerpt: 'ATP transfers chemical energy.' } }] }
 const semanticRequest = {
   ...envelope,
@@ -51,9 +72,9 @@ describe('learning decision boundary', () => {
   })
 
   test('malformed and unavailable provider responses fail open', async () => {
-    await expect(evaluateWithLaya(request, { enabled: true, token: 'x', url: 'https://internal', binding: { fetch: vi.fn(async () => new Response('{}')) } })).resolves.toMatchObject({ status: 'unavailable', reason: 'malformed' })
-    await expect(evaluateWithLaya(request, { enabled: true, token: 'x', url: 'https://internal', binding: { fetch: vi.fn(async () => new Response('', { status: 503 })) } })).resolves.toMatchObject({ status: 'unavailable', reason: 'unavailable', retryable: true })
-    await expect(evaluateWithLaya(request, { enabled: true, token: 'x', url: 'https://internal', binding: { fetch: vi.fn(async () => new Response('', { status: 429, headers: { 'Retry-After': '9999' } })) } })).resolves.toMatchObject({ status: 'unavailable', reason: 'over_budget', retryable: true, retryAfterMs: 60_000 })
+    await expect(evaluateWithLaya(request, { ...configured, binding: { fetch: vi.fn(async () => new Response('{}')) } })).resolves.toMatchObject({ status: 'unavailable', reason: 'malformed' })
+    await expect(evaluateWithLaya(request, { ...configured, binding: { fetch: vi.fn(async () => new Response('', { status: 503 })) } })).resolves.toMatchObject({ status: 'unavailable', reason: 'unavailable', retryable: true })
+    await expect(evaluateWithLaya(request, { ...configured, binding: { fetch: vi.fn(async () => new Response('', { status: 429, headers: { 'Retry-After': '9999' } })) } })).resolves.toMatchObject({ status: 'unavailable', reason: 'over_budget', retryable: true, retryAfterMs: 60_000 })
   })
 
   test('parses and clamps an HTTP-date Retry-After value', async () => {
@@ -62,7 +83,7 @@ describe('learning decision boundary', () => {
     try {
       const response = new Response('', { status: 503, headers: { 'Retry-After': 'Sun, 20 Sep 2026 12:00:30 GMT' } })
       await expect(evaluateWithLaya(request, {
-        enabled: true, token: 'x', url: 'https://internal', binding: { fetch: vi.fn(async () => response) },
+        ...configured, binding: { fetch: vi.fn(async () => response) },
       })).resolves.toMatchObject({ status: 'unavailable', retryAfterMs: 30_000 })
     }
     finally {
@@ -72,24 +93,40 @@ describe('learning decision boundary', () => {
 
   test('times out and rejects mismatched decision IDs', async () => {
     const never = { fetch: vi.fn(() => new Promise<Response>(() => undefined)) }
-    await expect(evaluateWithLaya(request, { enabled: true, token: 'x', url: 'https://internal', binding: never, timeoutMs: 50 })).resolves.toMatchObject({ status: 'unavailable', reason: 'timeout', retryable: true })
+    await expect(evaluateWithLaya(request, { ...configured, binding: never, timeoutMs: 50 })).resolves.toMatchObject({ status: 'unavailable', reason: 'timeout', retryable: true })
     const mismatched = { status: 'completed', provider: 'laya', modelRevision: 'pinned', decisions: [{ id: 'other', label: 'supported', confidence: 0.9 }] }
-    await expect(evaluateWithLaya(request, { enabled: true, token: 'x', url: 'https://internal', binding: { fetch: vi.fn(async () => Response.json(mismatched)) } })).resolves.toMatchObject({ status: 'unavailable', reason: 'malformed' })
+    await expect(evaluateWithLaya(request, { ...configured, binding: { fetch: vi.fn(async () => realResponse(mismatched)) } })).resolves.toMatchObject({ status: 'unavailable', reason: 'malformed' })
   })
 
   test('returns only a schema-validated canonical result', async () => {
     const response = { status: 'completed', provider: 'laya', modelRevision: 'f9ab0b228f0fc0f14d873dbc99038f135c2da1b2', decisions: [{ id: 'q1', label: 'supported', confidence: 0.9 }] }
-    await expect(evaluateWithLaya(request, { enabled: true, token: 'x', url: 'https://internal', binding: { fetch: vi.fn(async () => Response.json(response)) } })).resolves.toEqual(response)
+    await expect(evaluateWithLaya(request, { ...configured, binding: { fetch: vi.fn(async () => realResponse(response)) } })).resolves.toEqual(response)
+  })
+
+  test('rejects fake, raw-fit, and drifted runtime provenance', async () => {
+    const response = { status: 'completed', provider: 'laya', modelRevision: expectedProvenance.modelRevision, decisions: [{ id: 'q1', label: 'supported', confidence: 0.9 }] }
+    const fake = realResponse(response)
+    fake.headers.set('X-Laya-Evidence-Backend', 'fake')
+    await expect(evaluateWithLaya(request, { ...configured, binding: { fetch: vi.fn(async () => fake) } })).resolves.toMatchObject({ status: 'unavailable', reason: 'malformed' })
+
+    const rawFit = realResponse(response)
+    rawFit.headers.set('X-Laya-Calibrator-Status', 'raw-fit')
+    rawFit.headers.set('X-Laya-Calibration-Mode', 'fit')
+    await expect(evaluateWithLaya(request, { ...configured, binding: { fetch: vi.fn(async () => rawFit) } })).resolves.toMatchObject({ status: 'unavailable', reason: 'malformed' })
+
+    const drifted = realResponse(response)
+    drifted.headers.set('X-Laya-Calibrator-SHA256', 'd'.repeat(64))
+    await expect(evaluateWithLaya(request, { ...configured, binding: { fetch: vi.fn(async () => drifted) } })).resolves.toMatchObject({ status: 'unavailable', reason: 'malformed' })
   })
 
   test('returns a validated semantic assessment without changing provider-neutral labels', async () => {
     const response = { status: 'completed', provider: 'laya', modelRevision: 'f9ab0b228f0fc0f14d873dbc99038f135c2da1b2', decisions: [{ id: 'answer-1', label: 'partially_correct', confidence: 0.7, probabilities: { fully_correct: 0.1, partially_correct: 0.7, incorrect: 0.1, uncertain: 0.1 } }] }
-    await expect(evaluateWithLaya(semanticRequest, { enabled: true, token: 'x', url: 'https://internal', binding: { fetch: vi.fn(async () => Response.json(response)) } })).resolves.toEqual(response)
+    await expect(evaluateWithLaya(semanticRequest, { ...configured, binding: { fetch: vi.fn(async () => realResponse(response)) } })).resolves.toEqual(response)
   })
 
   test('dispatches configured shadow work through the service binding', async () => {
     const response = { status: 'completed', provider: 'laya', modelRevision: 'f9ab0b228f0fc0f14d873dbc99038f135c2da1b2', decisions: [{ id: 'q1', label: 'supported', confidence: 0.9 }] }
-    const fetcher = vi.fn(async () => Response.json(response))
+    const fetcher = vi.fn(async () => realResponse(response))
     vi.mocked(useRuntimeConfig).mockReturnValue({ learningDecisionMode: 'shadow', learningDecisionProvider: 'laya', layaEvaluatorToken: 'test-token', layaEvaluatorUrl: '' } as ReturnType<typeof useRuntimeConfig>)
     const event = { context: { cloudflare: { env: { LAYA_EVALUATOR: { fetch: fetcher } } } } } as unknown as H3Event
 

@@ -1,20 +1,25 @@
 """Private, offline Laya HTTP service. It deliberately never logs request bodies."""
 from __future__ import annotations
 
+import hashlib
+import importlib
 import json
+import math
 import os
 import re
 import threading
+from importlib import metadata
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Lock
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 MANIFEST_PATH = Path(os.environ.get("LAYA_EVALUATOR_MANIFEST", Path(__file__).with_name("learningDecisionManifest.json")))
 if not MANIFEST_PATH.exists():
     MANIFEST_PATH = Path(__file__).resolve().parents[1] / "learningDecisionManifest.json"
-with MANIFEST_PATH.open(encoding="utf-8") as manifest_file:
-    MANIFEST = json.load(manifest_file)
+MANIFEST_BYTES = MANIFEST_PATH.read_bytes()
+MANIFEST = json.loads(MANIFEST_BYTES)
+EVALUATION_MANIFEST_SHA256 = hashlib.sha256(MANIFEST_BYTES).hexdigest()
 
 MODEL_REVISION = MANIFEST["model"]["revision"]
 MODEL_PATH = os.environ.get("LAYA_MODEL_PATH", "/opt/laya-model")
@@ -32,6 +37,72 @@ QUALITY_PRIMITIVE = MANIFEST["decisionKinds"]["quizQuality"]["primitive"]
 QUALITY_LABELS = tuple(MANIFEST["decisionKinds"]["quizQuality"]["labels"])
 SEMANTIC_LABELS = tuple(MANIFEST["decisionKinds"]["freeResponse"]["labels"])
 SEMANTIC_RUBRIC = tuple((entry["label"], entry["description"]) for entry in MANIFEST["decisionKinds"]["freeResponse"]["rubric"])
+CALIBRATOR_SCHEMA_VERSION = "budds.laya-semantic-temperature-calibrator.v1"
+CALIBRATOR_METHOD = "multiclass_temperature_scaling"
+CALIBRATOR_EPSILON = 1e-12
+MIN_CALIBRATOR_TEMPERATURE = 0.05
+MAX_CALIBRATOR_TEMPERATURE = 10
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def temperature_scale(probabilities: dict[str, float], temperature: float) -> dict[str, float]:
+    """Apply multiclass temperature scaling to an already-normalized distribution."""
+    weights = {
+        label: math.exp(math.log(max(probability, CALIBRATOR_EPSILON)) / temperature)
+        for label, probability in probabilities.items()
+    }
+    total = sum(weights.values())
+    return {label: weight / total for label, weight in weights.items()}
+
+
+def load_calibrator(path: Path, provenance: dict[str, str]) -> tuple[float, str]:
+    """Load an exact, provenance-bound calibrator or fail closed."""
+    raw = path.read_bytes()
+    value = json.loads(raw)
+    root_names = {"schemaVersion", "status", "method", "labels", "bounds", "epsilon", "fitCorpus", "pins", "fitResult"}
+    if not isinstance(value, dict) or set(value) != root_names:
+        raise ValueError("invalid calibrator")
+    if value["schemaVersion"] != CALIBRATOR_SCHEMA_VERSION or value["status"] != "fitted" or value["method"] != CALIBRATOR_METHOD:
+        raise ValueError("invalid calibrator")
+    if value["bounds"] != {"minimumTemperature": MIN_CALIBRATOR_TEMPERATURE, "maximumTemperature": MAX_CALIBRATOR_TEMPERATURE}:
+        raise ValueError("invalid calibrator")
+    if value["epsilon"] != CALIBRATOR_EPSILON:
+        raise ValueError("invalid calibrator")
+    if value["labels"] != list(SEMANTIC_LABELS):
+        raise ValueError("invalid calibrator")
+    fit_corpus = value["fitCorpus"]
+    if not isinstance(fit_corpus, dict) or set(fit_corpus) != {"path", "version", "sha256"}:
+        raise ValueError("invalid calibrator")
+    if not all(isinstance(fit_corpus.get(name), str) and fit_corpus[name] for name in ("path", "version")):
+        raise ValueError("invalid calibrator")
+    if not isinstance(fit_corpus.get("sha256"), str) or re.fullmatch(r"[a-f0-9]{64}", fit_corpus["sha256"]) is None:
+        raise ValueError("invalid calibrator")
+    pins = value["pins"]
+    pin_names = {"packageVersion", "modelRevision", "modelSha256", "evaluationManifestSha256"}
+    if not isinstance(pins, dict) or set(pins) != pin_names or any(not isinstance(pins[name], str) for name in pin_names):
+        raise ValueError("invalid calibrator")
+    if pins != provenance:
+        raise ValueError("invalid calibrator")
+    fit_result = value["fitResult"]
+    if not isinstance(fit_result, dict) or set(fit_result) != {"temperature", "negativeLogLikelihood", "iterations"}:
+        raise ValueError("invalid calibrator")
+    temperature = fit_result["temperature"]
+    nll = fit_result["negativeLogLikelihood"]
+    iterations = fit_result["iterations"]
+    if isinstance(temperature, bool) or not isinstance(temperature, (int, float)) or not math.isfinite(temperature) or not MIN_CALIBRATOR_TEMPERATURE <= temperature <= MAX_CALIBRATOR_TEMPERATURE:
+        raise ValueError("invalid calibrator")
+    if isinstance(nll, bool) or not isinstance(nll, (int, float)) or not math.isfinite(nll) or nll < 0:
+        raise ValueError("invalid calibrator")
+    if isinstance(iterations, bool) or not isinstance(iterations, int) or iterations < 1:
+        raise ValueError("invalid calibrator")
+    return float(temperature), hashlib.sha256(raw).hexdigest()
 
 
 class Backend(Protocol):
@@ -47,45 +118,115 @@ class FakeBackend:
         return [{"id": item["id"], "label": label, "confidence": 1.0, "probabilities": probabilities} for item in items]
 
 
-def build_laya_inputs(kind: str, items: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any]]:
+def build_laya_input(kind: str, item: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Map one independent decision item to Laya's one-state public API.
+
+    Laya evaluates every question in a call against the same state. Unrelated
+    quiz items must therefore be sent as separate predict calls, otherwise an
+    item can observe another learner answer and the shared state can truncate.
+    """
     if kind == FREE_RESPONSE_KIND:
-        state = {item["id"]: {
+        state = {
             "question": item["question"], "questionType": item["questionType"],
             "expectedAnswer": item["expectedAnswer"], "learnerAnswer": item["learnerAnswer"],
             "evidenceExcerpt": item["evidenceExcerpt"], "language": item["language"], "rubricVersion": item["rubricVersion"],
-        } for item in items}
+        }
         questions = {item["id"]: {
             "type": "choice",
-            "instructions": f"Assess only the learner answer stored at state key '{item['id']}' against its question, expected answer, and evidence. Select uncertain whenever the evidence is insufficient.",
+            "instructions": "Grade the learner answer against the expected answer using only the evidence. Count every distinct requested component. Accept equivalent wording and order. Missing evidence is uncertain.",
             "criteria": {entry["label"]: entry["description"] for entry in item["rubric"]},
-        } for item in items}
+        }}
         return state, questions
-    state = {item["id"]: {
+    state = {
         "question": item["question"], "options": item.get("options", []), "correctAnswer": item["correctAnswer"],
         "language": item["language"], "sourceIndex": item["evidence"]["sourceIndex"], "sourceExcerpt": item["evidence"]["excerpt"],
-    } for item in items}
+    }
     questions = {
         item["id"]: {
             "type": QUALITY_PRIMITIVE,
-            "instructions": f"Is the stated answer for quiz item '{item['id']}' directly supported by its exact source excerpt?",
-        }
-        for item in items
+            "instructions": "Is the stated answer directly supported by its exact source excerpt?",
+        },
     }
     return state, questions
 
 
+def assert_laya_state_fits(agent: Any, state: dict[str, Any]) -> None:
+    """Reject input that Laya would silently truncate after its question head."""
+    config = getattr(agent, "cfg", None)
+    tokenizer = getattr(agent, "tok", None)
+    if not isinstance(config, dict) or not callable(tokenizer):
+        raise ValueError("invalid Laya runtime")
+    max_len = config.get("max_len", 512)
+    head_max_len = config.get("head_max_len", 192)
+    if isinstance(max_len, bool) or not isinstance(max_len, int) or isinstance(head_max_len, bool) or not isinstance(head_max_len, int):
+        raise ValueError("invalid Laya token budget")
+    # build_sequence reserves at most head_max_len tokens for instructions and
+    # choices plus four structural tokens. Using the minimum remaining room
+    # prevents any state field from being silently discarded.
+    state_budget = max_len - head_max_len - 4
+    encoded = tokenizer(json.dumps(state, ensure_ascii=False), add_special_tokens=False)
+    input_ids = encoded.get("input_ids") if isinstance(encoded, dict) else getattr(encoded, "input_ids", None)
+    if state_budget < 1 or not isinstance(input_ids, (list, tuple)) or len(input_ids) > state_budget:
+        raise ValueError("Laya state exceeds model token budget")
+
+
 class LayaBackend:
-    def __init__(self) -> None:
-        import laya  # Imported only in the production image.
-        self.agent = laya.load(MODEL_PATH)
+    def __init__(
+        self,
+        *,
+        model_path: str | Path = MODEL_PATH,
+        model_revision: str = MODEL_REVISION,
+        package_version_resolver: Callable[[str], str] = metadata.version,
+        agent_loader: Callable[[str], Any] | None = None,
+        calibrator_path: str | Path | None = None,
+        calibration_mode: str | None = None,
+    ) -> None:
+        resolved_model_path = Path(model_path)
+        self.provenance = {
+            "packageVersion": package_version_resolver("laya"),
+            "modelRevision": model_revision,
+            "modelSha256": sha256_file(resolved_model_path / "model.safetensors"),
+            "evaluationManifestSha256": EVALUATION_MANIFEST_SHA256,
+        }
+        self.calibration_mode = calibration_mode if calibration_mode is not None else os.environ.get("LAYA_CALIBRATION_MODE", "")
+        if self.calibration_mode not in ("", "fit"):
+            raise ValueError("invalid calibration mode")
+        configured_calibrator = calibrator_path if calibrator_path is not None else os.environ.get("LAYA_CALIBRATOR_PATH")
+        self.calibrator_temperature: float | None = None
+        self.calibrator_sha256: str | None = None
+        # Raw fitting must never consume an existing calibrator. Normal runtime,
+        # by contrast, remains unready unless the exact fitted artifact loads.
+        if configured_calibrator and self.calibration_mode != "fit":
+            self.calibrator_temperature, self.calibrator_sha256 = load_calibrator(Path(configured_calibrator), self.provenance)
+        if agent_loader is None:
+            laya = importlib.import_module("laya")  # Imported only in the production image.
+            agent_loader = laya.load
+        self.agent = agent_loader(str(resolved_model_path))
+
+    def evidence_headers(self) -> dict[str, str]:
+        calibrator_status = "valid" if self.calibrator_sha256 else ("raw-fit" if self.calibration_mode == "fit" else "absent")
+        headers = {
+            "X-Laya-Evidence-Backend": "real",
+            "X-Laya-Package-Version": self.provenance["packageVersion"],
+            "X-Laya-Model-Revision": self.provenance["modelRevision"],
+            "X-Laya-Model-SHA256": self.provenance["modelSha256"],
+            "X-Laya-Evaluation-Manifest-SHA256": self.provenance["evaluationManifestSha256"],
+            "X-Laya-Calibrator-Status": calibrator_status,
+        }
+        if self.calibration_mode == "fit" and not self.calibrator_sha256:
+            headers["X-Laya-Calibration-Mode"] = "fit"
+        if self.calibrator_sha256:
+            headers["X-Laya-Calibrator-SHA256"] = self.calibrator_sha256
+        return headers
 
     def evaluate(self, kind: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         # This is intentionally the sole mapping from our canonical task to Laya.
-        state, questions = build_laya_inputs(kind, items)
-        result = self.agent.predict(state, questions)
-        answers = result["answers"]
         decisions = []
         for item in items:
+            state, questions = build_laya_input(kind, item)
+            assert_laya_state_fits(self.agent, state)
+            result = self.agent.predict(state, questions)
+            answers = result["answers"]
             answer = answers[item["id"]]
             confidence = float(answer.get("confidence", 0))
             if kind == QUALITY_KIND:
@@ -97,15 +238,21 @@ class LayaBackend:
                 continue
             allowed = SEMANTIC_LABELS
             uncertain_label = allowed[-1]
-            label = answer.get("choice", uncertain_label)
-            selected = label if label in allowed else uncertain_label
             raw_probabilities = answer.get("probabilities", {})
             probabilities = {candidate: min(1, max(0, float(raw_probabilities.get(candidate, 0)))) for candidate in allowed}
             total = sum(probabilities.values())
+            label = answer.get("choice", uncertain_label)
+            selected = label if label in allowed else uncertain_label
             decision = {"id": item["id"], "label": selected, "confidence": min(1, max(0, confidence))}
-            if total > 0:
-                normalized = {candidate: probability / total for candidate, probability in probabilities.items()}
-                if normalized[selected] >= max(normalized.values()): decision["probabilities"] = normalized
+            if total <= 0:
+                raise ValueError("semantic probabilities missing")
+            normalized = {candidate: probability / total for candidate, probability in probabilities.items()}
+            if normalized[selected] != max(normalized.values()):
+                raise ValueError("semantic choice and probability argmax disagree")
+            calibrated = temperature_scale(normalized, self.calibrator_temperature) if self.calibrator_temperature is not None else normalized
+            if calibrated[selected] != max(calibrated.values()):
+                raise ValueError("calibrator changed argmax")
+            decision.update(label=selected, confidence=calibrated[selected], probabilities=calibrated)
             decisions.append(decision)
         return decisions
 
@@ -151,13 +298,23 @@ def valid_evidence(value: Any) -> bool:
 
 def create_app(backend: Backend | None):
     inference_lock = Lock()
-    state = {"backend": backend, "ready": backend is not None}
-    def set_backend(value: Backend | None): state.update(backend=value, ready=value is not None)
+    def evidence_headers(value: Backend | None) -> dict[str, str]:
+        if isinstance(value, FakeBackend): return {"X-Laya-Evidence-Backend": "fake"}
+        if isinstance(value, LayaBackend): return value.evidence_headers()
+        return {"X-Laya-Evidence-Backend": "unknown"}
+    def normal_ready(value: Backend | None) -> bool:
+        return value is not None and (not isinstance(value, LayaBackend) or value.calibrator_sha256 is not None)
+    def raw_fit_ready(value: Backend | None) -> bool:
+        return isinstance(value, LayaBackend) and value.calibrator_sha256 is None and value.calibration_mode == "fit"
+    state = {"backend": backend, "ready": normal_ready(backend), "rawFitReady": raw_fit_ready(backend), "evidenceHeaders": evidence_headers(backend)}
+    def set_backend(value: Backend | None): state.update(backend=value, ready=normal_ready(value), rawFitReady=raw_fit_ready(value), evidenceHeaders=evidence_headers(value))
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, _format: str, *_args: Any) -> None: pass
-        def send_json(self, status: int, payload: dict[str, Any]) -> None:
+        def send_json(self, status: int, payload: dict[str, Any], headers: dict[str, str] | None = None) -> None:
             raw = json.dumps(payload, separators=(",", ":")).encode()
-            self.send_response(status); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(raw))); self.end_headers(); self.wfile.write(raw)
+            self.send_response(status); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(raw)))
+            for name, value in (headers or {}).items(): self.send_header(name, value)
+            self.end_headers(); self.wfile.write(raw)
         def do_GET(self) -> None:
             if self.path == "/health/live": self.send_json(200, {"live": True})
             elif self.path == "/health/ready": self.send_json(200 if state["ready"] else 503, {"ready": state["ready"], "modelRevision": MODEL_REVISION})
@@ -171,11 +328,11 @@ def create_app(backend: Backend | None):
             try: body = json.loads(self.rfile.read(size))
             except (UnicodeDecodeError, json.JSONDecodeError): self.send_json(422, {"error": "Request rejected"}); return
             if not valid_request(body): self.send_json(422, {"error": "Request rejected"}); return
-            if not state["ready"]: self.send_json(503, {"error": "Unavailable"}); return
+            if not state["ready"] and not (state["rawFitReady"] and body["kind"] == FREE_RESPONSE_KIND): self.send_json(503, {"error": "Unavailable"}); return
             try:
                 with inference_lock: decisions = state["backend"].evaluate(body["kind"], body["items"])
                 if not isinstance(decisions, list) or {item.get("id") for item in decisions if isinstance(item, dict)} != {item["id"] for item in body["items"]} or len(decisions) != len(body["items"]): raise ValueError("invalid backend result")
-                self.send_json(200, {"status": "completed", "provider": "laya", "modelRevision": MODEL_REVISION, "decisions": decisions})
+                self.send_json(200, {"status": "completed", "provider": "laya", "modelRevision": MODEL_REVISION, "decisions": decisions}, state["evidenceHeaders"])
             except Exception:
                 # Never include model/provider content in the response or logs.
                 self.send_json(503, {"error": "Unavailable"})

@@ -4,8 +4,10 @@
   "snapshotVersion": "quiz-answer-snapshot.v2",
   "model": {
     "provider": "laya",
+    "packageVersion": "0.3.3",
     "checkpoint": "laya-typed-decisions",
-    "revision": "f9ab0b228f0fc0f14d873dbc99038f135c2da1b2"
+    "revision": "f9ab0b228f0fc0f14d873dbc99038f135c2da1b2",
+    "sha256": "4fa56de72383a9d3efa9cfa78955733c81b9fc8067a587ca4beb82c78107a24e"
   },
   "supportedLanguages": ["en", "en-*"],
   "limits": {
@@ -45,19 +47,19 @@
       "rubric": [
         {
           "label": "fully_correct",
-          "description": "The response answers the question completely and is supported by the evidence."
+          "description": "Evidence supports every distinct requested component; equivalent wording or order is acceptable; nothing is contradicted."
         },
         {
           "label": "partially_correct",
-          "description": "The response contains a supported correct idea but is materially incomplete or has a minor error."
+          "description": "Evidence supports at least one but not every requested component, or the answer adds a minor unsupported claim."
         },
         {
           "label": "incorrect",
-          "description": "The response is contradicted by the evidence, unsupported, or misses the requested concept."
+          "description": "The answer is contradicted, unrelated, materially unsupported, or substitutes or repeats a wrong component."
         },
         {
           "label": "uncertain",
-          "description": "The evidence or response is insufficient to make a reliable assessment."
+          "description": "Evidence is missing, ambiguous, or conflicting, so correctness cannot be verified."
         }
       ]
     }

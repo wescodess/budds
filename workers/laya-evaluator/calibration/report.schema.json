@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "budds.quiz-semantic-calibration-report.v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "reportId", "generatedAt", "corpus", "evaluationManifest", "calibrator", "execution", "provenance", "pins", "thresholdArtifact", "rawMetrics", "rawStatistics", "metrics", "statistics", "thresholds", "passed"],
+  "properties": {
+    "schemaVersion": { "const": "budds.quiz-semantic-calibration-report.v2" },
+    "reportId": { "type": "string", "minLength": 1 },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "corpus": { "$ref": "#/$defs/versionedArtifact" },
+    "evaluationManifest": { "$ref": "#/$defs/artifact" },
+    "calibrator": { "$ref": "#/$defs/artifact" },
+    "execution": { "type": "object", "additionalProperties": false, "required": ["requestTimeoutMs", "timeoutOverride", "operationalParityProven"], "properties": { "requestTimeoutMs": { "type": "integer", "minimum": 1, "maximum": 120000 }, "timeoutOverride": { "type": "boolean" }, "operationalParityProven": { "const": false } } },
+    "provenance": { "type": "object", "additionalProperties": false, "required": ["tier", "referenceSource", "evaluatorBackend", "containsRawLearnerData"], "properties": { "tier": { "const": "synthetic_reference" }, "referenceSource": { "const": "versioned_synthetic_policy" }, "evaluatorBackend": { "const": "real" }, "containsRawLearnerData": { "const": false } } },
+    "pins": { "$ref": "#/$defs/pins" },
+    "thresholdArtifact": { "$ref": "#/$defs/artifact" },
+    "rawMetrics": { "$ref": "#/$defs/metrics" },
+    "rawStatistics": { "$ref": "#/$defs/statistics" },
+    "metrics": { "$ref": "#/$defs/metrics" },
+    "statistics": { "$ref": "#/$defs/statistics" },
+    "thresholds": { "type": "object", "additionalProperties": false, "required": ["version", "minimumSampleCount", "minimumPerLabelSupport", "minimumReferenceAgreement", "minimumMacroF1", "maximumBrierScore", "maximumEce", "requiredProbabilityCompleteness"] },
+    "passed": { "type": "boolean" }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "artifact": { "type": "object", "additionalProperties": false, "required": ["path", "sha256"], "properties": { "path": { "type": "string", "minLength": 1 }, "sha256": { "$ref": "#/$defs/sha256" } } },
+    "versionedArtifact": { "type": "object", "additionalProperties": false, "required": ["path", "version", "sha256", "sampleCount"], "properties": { "path": { "type": "string", "minLength": 1 }, "version": { "type": "string", "minLength": 1 }, "sha256": { "$ref": "#/$defs/sha256" }, "sampleCount": { "type": "integer", "minimum": 800 } } },
+    "pins": { "type": "object", "additionalProperties": false, "required": ["provider", "packageVersion", "modelRevision", "modelSha256", "contractVersion", "snapshotVersion", "rubricVersion"], "properties": { "provider": { "const": "laya" }, "packageVersion": { "type": "string", "minLength": 1 }, "modelRevision": { "type": "string", "minLength": 1 }, "modelSha256": { "$ref": "#/$defs/sha256" }, "contractVersion": { "type": "string", "minLength": 1 }, "snapshotVersion": { "type": "string", "minLength": 1 }, "rubricVersion": { "type": "string", "minLength": 1 } } },
+    "metrics": { "type": "object", "additionalProperties": false, "required": ["sampleCount", "referenceAgreement", "macroF1", "brierScore", "ece", "probabilityCompleteness", "perLabel"], "properties": { "sampleCount": { "type": "integer", "minimum": 1 }, "referenceAgreement": { "type": "number", "minimum": 0, "maximum": 1 }, "macroF1": { "type": "number", "minimum": 0, "maximum": 1 }, "brierScore": { "type": "number", "minimum": 0, "maximum": 1 }, "ece": { "type": "number", "minimum": 0, "maximum": 1 }, "probabilityCompleteness": { "type": "number", "minimum": 0, "maximum": 1 }, "perLabel": { "type": "object", "minProperties": 4, "maxProperties": 4 } } },
+    "statistics": { "type": "object", "additionalProperties": false, "required": ["confusionMatrix", "calibrationBins", "completeProbabilityRows", "brierSum"], "properties": { "confusionMatrix": { "type": "object", "minProperties": 4, "maxProperties": 4 }, "calibrationBins": { "type": "array", "minItems": 10, "maxItems": 10 }, "completeProbabilityRows": { "type": "integer", "minimum": 0 }, "brierSum": { "type": "number", "minimum": 0 } } }
+  }
+}

@@ -42,12 +42,7 @@ describe('Laya evaluator DTO boundary', () => {
       items: [{
         id: 'a1', question: 'Describe ATP.', questionType: 'free-response', expectedAnswer: 'Energy carrier', learnerAnswer: 'Carries energy',
         evidenceExcerpt: 'ATP carries chemical energy.', language: 'en-CA', rubricVersion: FREE_RESPONSE_ASSESSMENT_KIND,
-        rubric: [
-          { label: 'fully_correct', description: 'The response answers the question completely and is supported by the evidence.' },
-          { label: 'partially_correct', description: 'The response contains a supported correct idea but is materially incomplete or has a minor error.' },
-          { label: 'incorrect', description: 'The response is contradicted by the evidence, unsupported, or misses the requested concept.' },
-          { label: 'uncertain', description: 'The evidence or response is insufficient to make a reliable assessment.' },
-        ],
+        rubric: manifest.decisionKinds.freeResponse.rubric.map(entry => ({ ...entry })),
       }],
     }
     expect(isEvaluationRequest(semantic)).toBe(true)

@@ -24,6 +24,8 @@ describe('QuizReviewPanel semantic assessment', () => {
     expect(wrapper.text()).toContain('No exact answer match')
     expect(wrapper.text()).toContain('Reference answer')
     expect(wrapper.html()).not.toContain('text-destructive')
+    expect(wrapper.text()).toContain('Development beta · AI-reviewed')
+    expect(wrapper.text()).toContain('not a corrected grade')
     expect(wrapper.text()).toContain('score has not changed')
   })
 

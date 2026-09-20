@@ -30,6 +30,8 @@
     "audio:workflow:test": "pnpm --dir workers/audio-overview test",
     "audio:workflow:typecheck": "pnpm --dir workers/audio-overview typecheck",
     "laya:evaluator:test": "pnpm --dir workers/laya-evaluator test && pnpm --dir workers/laya-evaluator typecheck && python -m unittest discover -s workers/laya-evaluator/service/tests -p 'test_*.py'",
+    "laya:quiz-semantic:corpus": "node scripts/generate-laya-calibration-corpus.mjs",
+    "laya:quiz-semantic:evaluate": "node scripts/evaluate-laya-calibration.mjs",
     "typecheck": "vue-tsc --noEmit",
     "typecheck:convex": "node scripts/validate-convex-index-names.mjs && tsc --noEmit -p convex/tsconfig.json",
     "lint": "eslint .",

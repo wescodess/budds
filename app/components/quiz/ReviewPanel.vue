@@ -159,6 +159,9 @@ function retryIsDue(assessment: SemanticAssessment) {
           role="status"
           aria-live="polite"
         >
+          <p class="mb-3 inline-flex rounded-full border border-violet-500/30 bg-violet-500/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-violet-700 dark:text-violet-300">
+            Development beta · AI-reviewed
+          </p>
           <div v-if="activeResult.semanticAssessment.status === 'pending' && !activeResult.semanticAssessment.retryable && !requestFailed" class="flex items-start gap-2">
             <Clock3 class="mt-0.5 h-4 w-4 shrink-0 text-violet-500" aria-hidden="true" />
             <div>
@@ -198,7 +201,7 @@ function retryIsDue(assessment: SemanticAssessment) {
             </div>
           </div>
           <p class="mt-3 border-t border-violet-500/20 pt-2 text-xs font-medium text-muted-foreground">
-            Advisory only — your recorded score has not changed.
+            Advisory only — this is not a corrected grade. Your recorded score has not changed.
           </p>
         </div>
 

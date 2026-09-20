@@ -80,8 +80,20 @@ export class LayaEvaluator extends Container<Env> {
     return await this.gate.run(this.ctx.storage, day, cap, async () => {
       const response = await super.fetch(new Request('http://container/v1/evaluate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: raw }))
       if (!response.ok) return error(response.status, retryable(response.status) ? 1 : undefined)
+      const evidenceBackend = response.headers.get('X-Laya-Evidence-Backend')
+      // The deployed Worker is a learner-facing runtime boundary. Raw-fit and
+      // fake backends are calibration/test-only and must never cross it.
+      if (evidenceBackend !== 'real') return error(502)
+      const provenanceHeaders = new Headers({ 'X-Laya-Evidence-Backend': evidenceBackend })
+      const required = ['X-Laya-Package-Version', 'X-Laya-Model-Revision', 'X-Laya-Model-SHA256', 'X-Laya-Evaluation-Manifest-SHA256', 'X-Laya-Calibrator-Status', 'X-Laya-Calibrator-SHA256']
+      for (const name of required) {
+        const value = response.headers.get(name)
+        if (!value) return error(502)
+        provenanceHeaders.set(name, value)
+      }
+      if (provenanceHeaders.get('X-Laya-Calibrator-Status') !== 'valid' || response.headers.has('X-Laya-Calibration-Mode')) return error(502)
       const result: unknown = await response.json().catch(() => null)
-      return isEvaluation(result, body.kind) ? Response.json(result) : error(502)
+      return isEvaluation(result, body.kind) ? Response.json(result, { headers: provenanceHeaders }) : error(502)
     }, { timeoutMs: CONTAINER_DEADLINE_MS, onTimeout: async () => { await this.stop() } })
   }
 }

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "budds.quiz-semantic-synthetic-corpus.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "expectedLabel", "scenarioId", "question", "questionType", "expectedAnswer", "learnerAnswer", "evidenceExcerpt", "language"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^(fit|heldout)-[0-9]{3}$" },
+    "scenarioId": { "type": "string", "pattern": "^(fit|heldout)-scenario-[0-9]{3}$" },
+    "expectedLabel": { "enum": ["fully_correct", "partially_correct", "incorrect", "uncertain"] },
+    "question": { "type": "string", "minLength": 1, "maxLength": 1200 },
+    "questionType": { "enum": ["free-response", "fill_in_the_blank"] },
+    "expectedAnswer": { "type": "string", "minLength": 1, "maxLength": 400 },
+    "learnerAnswer": { "type": "string", "minLength": 1, "maxLength": 800 },
+    "evidenceExcerpt": { "type": "string", "minLength": 1, "maxLength": 1200 },
+    "language": { "const": "en" }
+  }
+}

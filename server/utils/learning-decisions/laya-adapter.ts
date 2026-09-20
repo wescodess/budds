@@ -18,6 +18,24 @@ export type LayaAdapterConfig = {
   url: string
   binding?: LayaEvaluatorBinding
   timeoutMs?: number
+  expectedProvenance?: {
+    packageVersion: string
+    modelRevision: string
+    modelSha256: string
+    evaluationManifestSha256: string
+    calibratorSha256: string
+  }
+}
+
+function hasExpectedProvenance(response: Response, expected: NonNullable<LayaAdapterConfig['expectedProvenance']>): boolean {
+  return response.headers.get('X-Laya-Evidence-Backend') === 'real'
+    && response.headers.get('X-Laya-Calibrator-Status') === 'valid'
+    && response.headers.get('X-Laya-Calibration-Mode') === null
+    && response.headers.get('X-Laya-Package-Version') === expected.packageVersion
+    && response.headers.get('X-Laya-Model-Revision') === expected.modelRevision
+    && response.headers.get('X-Laya-Model-SHA256') === expected.modelSha256
+    && response.headers.get('X-Laya-Evaluation-Manifest-SHA256') === expected.evaluationManifestSha256
+    && response.headers.get('X-Laya-Calibrator-SHA256') === expected.calibratorSha256
 }
 
 function clampedRetryAfter(response: Response): number | undefined {
@@ -43,7 +61,7 @@ export async function evaluateWithLaya(
   config: LayaAdapterConfig,
 ): Promise<TypedDecisionResult> {
   if (!config.enabled) return unavailableDecision('disabled')
-  if (!config.token || (!config.binding && !config.url)) return unavailableDecision('unconfigured')
+  if (!config.token || (!config.binding && !config.url) || !config.expectedProvenance) return unavailableDecision('unconfigured')
   if (!isBoundedDecisionRequest(request)) return unavailableDecision('malformed')
   const controller = new AbortController()
   const deadlineMs = Math.min(Math.max(config.timeoutMs ?? LEARNING_DECISION_CLIENT_DEADLINE_MS, 50), 15_000)
@@ -61,6 +79,7 @@ export async function evaluateWithLaya(
       new Promise<never>((_, reject) => { deadlineTimer = setTimeout(() => reject(new DOMException('Timed out', 'AbortError')), deadlineMs) }),
     ])
     if (!response.ok) return unavailableForResponse(response)
+    if (!hasExpectedProvenance(response, config.expectedProvenance)) return unavailableDecision('malformed')
     const payload: unknown = await response.json().catch(() => null)
     if (!isCompletedTypedDecision(payload, request.kind) || payload.modelRevision !== LEARNING_DECISION_MODEL_REVISION) return unavailableDecision('malformed')
     const requestedIds = request.items.map(item => item.id).sort()

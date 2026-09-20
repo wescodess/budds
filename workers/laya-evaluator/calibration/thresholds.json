@@ -1,0 +1,10 @@
+{
+  "version": "quiz-semantic-development-thresholds.v1",
+  "minimumSampleCount": 800,
+  "minimumPerLabelSupport": 200,
+  "minimumReferenceAgreement": 0.8,
+  "minimumMacroF1": 0.75,
+  "maximumBrierScore": 0.2,
+  "maximumEce": 0.2,
+  "requiredProbabilityCompleteness": 1
+}

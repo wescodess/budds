@@ -1,4 +1,6 @@
 import type { H3Event } from 'h3'
+import activation from '../../../convex/quizSemanticActivationManifest.json'
+import evaluatorManifest from '../../../workers/laya-evaluator/learningDecisionManifest.json'
 import { readConfiguredRuntimeValue } from '../runtime-config'
 import {
   LEARNING_DECISION_CONTRACT_VERSION,
@@ -28,7 +30,19 @@ export async function evaluateTypedDecision(event: H3Event, request: TypedDecisi
   const url = readConfiguredRuntimeValue(config.layaEvaluatorUrl, 'NUXT_LAYA_EVALUATOR_URL')
   const cloudflareEnv = event.context.cloudflare?.env as Record<string, unknown> | undefined
   const binding = cloudflareEnv?.LAYA_EVALUATOR as LayaEvaluatorBinding | undefined
-  if (provider === 'laya') return await evaluateWithLaya(request, { enabled: true, token, url, binding })
+  if (provider === 'laya') return await evaluateWithLaya(request, {
+    enabled: true,
+    token,
+    url,
+    binding,
+    expectedProvenance: {
+      packageVersion: evaluatorManifest.model.packageVersion,
+      modelRevision: evaluatorManifest.model.revision,
+      modelSha256: evaluatorManifest.model.sha256,
+      evaluationManifestSha256: activation.evaluationManifest.sha256,
+      calibratorSha256: activation.calibrator.sha256,
+    },
+  })
   return unavailableDecision('unconfigured')
 }
 
