@@ -55,8 +55,11 @@ The additive tables below are the minimum fields. System `_id` and
 ### `learningThreads`
 
 `userId`, `originalNeed`, `intent` (`understand|prepare|build|master|refresh|explore`),
-`availableTime` (`15|25|45|60|no_limit`), `sourceScope` (bounded object with
-`kind: none|folder|document|url|pasted`, opaque source IDs/URL hash only),
+`availableTime` (`15|25|45|60|no_limit`), `authorityKind`
+(`standalone|v2_mission`), optional immutable `learningVoidId` when
+`authorityKind=v2_mission`, and `sourceScope` (bounded object with
+`kind: none|folder|document|url|pasted`, opaque source IDs/URL hash or pasted
+content digest/byte count only),
 `evidenceState` (`none|preparing|ready|blocked|stale|invalidated|unavailable`),
 `lifecycle` (`draft|preparing|ready|active|paused|ended|blocked|rollback`),
 `revision`, optional `currentActivityId`, optional `unresolvedPoint`, optional
@@ -65,6 +68,20 @@ The additive tables below are the minimum fields. System `_id` and
 `[userId,lifecycle,updatedAt]` and `by_userId_and_updatedAt` on
 `[userId,updatedAt]`; direct `_id` reads are owner-checked rather than
 requiring an `_id` index.
+
+The V2 anchor is owner-checked at creation and on every factual activity. It
+never changes to another Learning Void and does not copy mission, plan,
+evidence, session, attempt, or mastery state. Exact session and revision pins
+belong to `learningThreadActivities`. A standalone thread can be promoted to a
+V2-backed thread only by creating a new thread with an explicit copy-only
+handoff; authority is never silently changed in place.
+
+Phase 1 does not persist raw pasted material. The browser may retain a bounded
+local draft while an owned document import is requested; Convex stores only the
+digest and byte count. Until the existing import pipeline returns an owned
+document identity and V2 evidence reaches `ready`, pasted input can drive only
+provider-free non-factual goal shaping or diagnostics. It cannot support a
+factual claim, provider payload, score, or mastery transition.
 
 ### `learningThreadActivities`
 
@@ -111,9 +128,19 @@ and `explicit_end`.
 
 ### `learnActivityCommandReceipts`
 
-`userId`, `idempotencyKey`, `commandName`, `targetRevision`, `resultKind`,
-bounded result/error reference, `createdAt`, `expiresAt`. Unique index:
-`by_userId_and_idempotencyKey`.
+`userId`, server-derived `idempotencyKeyHash`, `requestFingerprint`, `commandName`,
+`targetRevision`, `resultKind`, bounded result/error reference, `createdAt`,
+`resultExpiresAt`, and optional `resultRedactedAt`. Unique index:
+`by_userId_and_idempotencyKeyHash`. Public commands accept the bounded opaque
+key, hash it before lookup/storage, and never persist the raw key.
+
+Receipt identity is retained until its owning thread or account is deleted.
+After 30 days a bounded cleanup may redact the result/error payload and set
+`resultRedactedAt`, but it preserves the key, fingerprint, command, target,
+and terminal kind. A later retry with the same key and fingerprint returns the
+terminal kind (or `result_expired` when the detailed payload was redacted); the
+same key with a different fingerprint always conflicts. Cleanup can never make
+an old key executable again.
 
 ### `learningThreadContributions`
 
@@ -150,17 +177,22 @@ mutation accepts `expectedRevision` and `idempotencyKey`; response submission
 also accepts `activityId` and `attemptKey`. Commands reject client score,
 verdict, mastery, evidence acceptance, or provider fields.
 
-`convex/learnAdaptiveActions.ts` is the sole adaptive provider dispatcher. It
-exports internal `evaluateResponse` and `reconcileProviderOutcome` actions;
-both use the existing Cloudflare AI Gateway/OpenRouter configuration through
-`shared/adaptive-provider-port.ts`, reserve quota before I/O, and return only
-`not_dispatched|definitive_failure|ambiguous|validated_feedback`. No new
-provider is introduced and no Nuxt route dispatches provider work.
+Phase 0/1 do not add an adaptive provider dispatcher. A V2-backed activity
+uses the existing `startStudySession`, `recordAssistanceUse`, and
+`submitMasteryAttempt` authority through shared server-side helpers extracted
+from those paths; both the existing V2 APIs and adaptive orchestration call the
+same helpers. Adaptive code may persist only its activity reference and a
+projection of the committed V2 result. It cannot create a second scoring job,
+provider request, attempt, feedback verdict, or mastery transition. Standalone
+non-factual activities are deterministic and provider-free.
 
-`shared/adaptive-provider-port.ts` defines the provider-neutral request
-(`requestDigest`, provider/model/policy versions, bounded payload, timeout,
-reservation ID, reconciliation key) and validated response. `shared/
-adaptive-claim-adapter.ts` is the only claim bridge. For factual activities it
+`convex/learnAdaptiveActions.ts` and `shared/adaptive-provider-port.ts` are
+deferred until a later slice explicitly approves standalone provider-backed
+activity work, its job table/manifest, lease and reconciliation behavior,
+quota, deletion/export contract, and activation evidence. No Nuxt route
+dispatches adaptive provider work.
+
+`shared/adaptive-claim-adapter.ts` is the only claim bridge. For factual activities it
 accepts immutable published V2 `sessionContentId` plus claim/support IDs and
 returns permitted origin/locator/revision/status projections. For standalone
 non-factual activities it returns `{ kind: 'non_factual', claims: [] }`; it
@@ -173,6 +205,24 @@ manifest entry, owner/parent indexes, bounded export shape, deletion order,
 and fixture. Story 1.2 adds thread/activity entries; Story 1.3 receipts;
 Story 1.9 events; Story 2.9 artifacts; Story 3.2 decisions; Story 5.2
 contributions.
+
+## Feedback contract
+
+Provider rationale is untrusted input and is never rendered or persisted as
+learner-facing feedback. The initial controlled misconception taxonomy is
+`missing_required_step`, `unsupported_claim`, `confused_concepts`,
+`incorrect_sequence`, `scope_overgeneralization`, `incomplete_transfer`,
+`calculation_or_unit_error`, and `evidence_mismatch`; no misconception is an
+empty list. Unknown, duplicate, or over-limit tags reject the provider result.
+
+The server maps verifier-approved criterion outcomes and allowed tags to these
+versioned templates: `criterion_met`, `criterion_not_met`,
+`evidence_insufficient`, `response_incomplete`, and `provider_unavailable`.
+Templates may interpolate only a bounded criterion label from the pinned
+assessment contract. They may not interpolate provider prose, source text,
+private locators, or raw learner content. `provider_unavailable` explicitly
+states that the response was saved and no mastery change was made. Template
+and taxonomy version are pinned on every committed feedback projection.
 
 ## Component contract
 
@@ -192,9 +242,10 @@ primitive and keyboard-inset owners.
 
 ## Fixtures and test ownership
 
-Pure contracts/routing/claim/provider/storage types: `shared/*test.ts`.
+Pure contracts/routing/claim/storage types: `shared/*test.ts`.
 Convex authority, schema, receipts, conflict, deletion/export, source purge,
-and provider reconciliation: `convex/learnAdaptive*.test.ts`,
+and delegation to existing V2 session/scoring authority:
+`convex/learnAdaptive*.test.ts`,
 `convex/accountDeletion.test.ts`, and `convex/dataExport.test.ts`.
 Home/thread/canvas and drawer contracts: `tests/component/learn-adaptive/*.test.ts`.
 Route precedence, refresh, back/forward, duplicate-tab conflict, and rollback:

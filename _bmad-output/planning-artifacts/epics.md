@@ -94,9 +94,10 @@ This document decomposes the approved adaptive learning experience into implemen
 - **AD-12:** Canonical gate uses optional `users.learnAdaptiveExperienceEntitlement`, internal cohort mutation, sole `hasAdaptiveExperienceAccess` guard, JWT/status/body ordering, 401/404/503 semantics, tombstones, and one gate matrix.
 - **AD-13:** `shared/adaptive-learn-storage-manifest.ts` is consumed by schema/export/deletion; initial tables are threads, activities, artifacts, decisions, events, and receipts; artifact R2 cleanup precedes local deletion.
 - **AD-14:** Mastery scope key is `sha256(canonicalJson(["learn-v2-mastery-scope.v1", userId, blueprintRevisionId, objectiveId]))`; sole transition mutation uses `.unique()`, receipt-before-mutation, and one transaction; legacy unscoped rows are read-only/quarantined.
-- **AD-15:** Reuse `learnJobs` only for V2-backed factual work with non-null pins; standalone non-factual work is deterministic/provider-free; adaptive provider dispatch belongs only to `learnAdaptiveActions.ts` through `adaptive-provider-port.ts`. Slice-1 dispatch requires a finite default-deny pilot manifest; Slice 5 separately owns GA activation approval.
+- **AD-15:** Phase 0/1 adaptive orchestration reuses the existing V2 session start, assistance, scoring, `learnJobs`, attempt, feedback, and mastery authority through shared server-side helpers; it cannot create a second provider/scoring path. Standalone non-factual work is deterministic/provider-free, and standalone adaptive provider dispatch is deferred pending a separate architecture and activation contract.
 - **AD-16:** Activities have immutable activity ID, boundary ordinal, plan revision, class, and replacement identity; Phase 1 factual activities reuse published V2 session claims/supports; events use a closed allowlist and bounded metadata.
 - **AD-17:** Source purge marks support unavailable, purges protected excerpts/locators, emits one invalidation per boundary, blocks factual activities and fallbacks, and preserves historical attempts/feedback read-only.
+- **AD-18:** Learner-facing feedback uses a closed misconception taxonomy and versioned server templates; provider rationale is untrusted and cannot be rendered or persisted as feedback.
 - Pilot caps are default-deny and activation-configurable: <=7 primitives, <=32 claims, <=64 snapshots, bounded fanout/payloads, 90s provider timeout, 5m lease, <=2 attempts, ambiguity blocks, and quota/cost ceilings.
 - Deployment uses the pinned Nuxt/Vue/TypeScript/Convex/Better Auth/Vitest/Playwright stack and lockfile; Cloudflare Pages Git promotion follows backward-compatible Convex deployment; worker locks remain separate.
 - Deployment evidence names tested SHA, hosted gate, cohort/flag owner, provider quota/config, keyboard/screen-reader smoke, and rollback owner; local tests do not stand in for live provider/search/Calendar/spend/assistive-tech evidence.
@@ -415,9 +416,43 @@ So that feedback remains fair and reproducible when content changes.
 **When** the attempt is created
 **Then** it pins blueprint revision, objective, content, rubric, scorer, verifier, provider, and activity contract versions.
 
+**Given** an accepted blueprint revision becomes authoritative
+**When** map acceptance commits or replays
+**Then** `learningVoids.activeBlueprintRevisionId` is installed or moved in the
+same mutation, the previously pointed revision is superseded, and `accepted`
+remains the operational status consumed by plan/session code.
+
+**And** an exact replay returns the recorded replacement result without a
+second pointer move, while reuse of the key with different inputs conflicts.
+
+**Given** a Learning Void is still in draft, sourcing, source review, or map
+review and has no active pointer
+**When** its setup projection is read
+**Then** bounded pre-acceptance setup remains usable and is not mistaken for
+current accepted authority.
+
+**Given** a newer draft or map-review revision exists beside the active pointer
+**When** journey, plan, Today, scoring, or mastery projection runs
+**Then** only the owner-checked pointed revision is current; newest ordinal or
+creation time is never used as current authority.
+
+**Given** mastery state is read or written
+**When** the objective is resolved
+**Then** the deterministic owner + blueprint revision + objective scope is
+used, legacy unscoped rows remain read-only, and no state crosses revisions.
+
 **Given** the active pointer is missing, foreign, superseded, or stale
 **When** an attempt is admitted
 **Then** the server rejects admission with a recoverable revision-state reason.
+
+**And** calibration and mastery scoring revalidate the pointer before provider
+dispatch and again before authoritative commit, so a replacement during I/O
+cannot update stale mastery.
+
+**Given** retention or deletion traverses mastery for one blueprint revision
+**When** another revision has records for the same stable objective
+**Then** only the explicitly scoped revision is selected, while historical
+attempts remain immutable according to the evidence-retention contract.
 
 **Given** the same attempt is submitted twice
 **When** the server processes the submissions
@@ -437,7 +472,10 @@ So that an outage never corrupts my accepted learning state.
 
 **Given** a response requires provider evaluation
 **When** dispatch is admitted
-**Then** payload minimization, size limits, timeout, quota, policy, model, and request versions are recorded before I/O.
+**Then** adaptive orchestration uses the same server-side helper as the existing
+V2 `submitMasteryAttempt` path, and its payload minimization, size limits,
+timeout, quota, policy, model, job, and request versions are recorded before
+I/O; no adaptive-specific provider request or scoring job is created.
 
 **And** Slice-1 V2-backed dispatch occurs only when a finite default-deny pilot
 manifest is approved; that manifest admits the pilot but does not satisfy the
@@ -463,15 +501,20 @@ So that an outage or unsafe rationale never corrupts my accepted learning state.
 
 **Given** the provider returns a rationale or misconception
 **When** feedback is committed
-**Then** the server accepts only verifier-approved templates/taxonomy and never trusts client-provided authority.
+**Then** the server rejects provider prose and accepts only verified criterion
+outcomes plus the AD-18 misconception allowlist, rendering a versioned server
+template and never trusting client-provided authority.
 
-**Given** dispatch times out before or after the provider may have committed
-**When** `reconcileProviderOutcome` runs
-**Then** the attempt enters `reconciling` or `blocked`, is not auto-replayed, and accepted learner state is preserved.
+**Given** dispatch times out after the provider may have accepted the request
+**When** the existing V2 recovery path observes the expired running job
+**Then** the V2 `learnJobs` row enters `blocked` with its ambiguity reason, the
+adaptive activity projects a blocked/reconciliation-needed state, no attempt
+or mastery change is invented, and the request is not auto-replayed.
 
 **Given** the same reconciliation key is retried
-**When** the action resolves the outcome
-**Then** one typed feedback result and one authoritative attempt outcome are returned.
+**When** adaptive orchestration reads the existing V2 job/result
+**Then** it returns the same blocked state or the one committed authoritative
+attempt outcome; it never creates a second job, attempt, or feedback result.
 
 ### Story 1.8: Implement explicit monotonic mastery transitions
 
@@ -550,6 +593,11 @@ So that I can start learning without building a course first.
 **Given** I provide a goal/question with optional folder, document, URL, pasted material, or no material
 **When** I submit the composer
 **Then** a valid server-owned thread draft is created without requiring curriculum, rubric, schedule, or Calendar setup.
+
+**And** raw pasted material remains a bounded local draft until the existing
+owned-document import pipeline accepts it; Convex stores only its digest and
+byte count, and it can drive only provider-free non-factual work until an owned
+document identity and ready V2 evidence exist.
 
 **Given** I submit the draft
 **When** it is persisted
@@ -749,7 +797,10 @@ So that an explanation becomes practical value and existing learning routes rema
 
 **Given** an existing V2 mission/session can be referenced
 **When** the adaptive thread is created
-**Then** it stores a copy-only reference to the immutable V2 identity without duplicating authority or inferring evidence, mastery, or schedule.
+**Then** it stores immutable `authorityKind=v2_mission` plus the owner-checked
+`learningVoidId`; exact session, blueprint, objective, and content revisions
+remain activity pins, without duplicating authority or inferring evidence,
+mastery, or schedule.
 
 **Given** adaptive access is disabled or rolled back
 **When** I open a legacy V1/V2 route

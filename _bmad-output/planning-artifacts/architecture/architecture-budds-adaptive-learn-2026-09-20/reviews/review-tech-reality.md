@@ -201,7 +201,9 @@ The spine is ready to hand to independently built epics when it has, either as
 ADs or explicitly inherited contracts:
 
 1. the adaptive gate and entitlement schema/route contract;
-2. one adaptive job substrate and provider-port interface;
+2. one provider/scoring authority boundary: Phase 0/1 delegates to the existing
+   V2 job/session/scoring helpers, and any future adaptive provider port requires
+   a separate approved job/manifest/activation contract;
 3. a mastery projection uniqueness/migration protocol;
 4. a shared adaptive table manifest covering schema indexes, export, deletion,
    object cleanup, and source invalidation;
@@ -212,3 +214,10 @@ ADs or explicitly inherited contracts:
 Until those are fixed, the document is a useful direction and mostly faithful
 technology snapshot, but only a **partial** reflection of the plan and current
 implementation reality.
+
+## Resolution
+
+The finalized spine addresses these acceptance conditions in AD-12 through
+AD-18. In particular, AD-15 resolves the job-substrate question by prohibiting
+a second adaptive provider/scoring path in Phase 0/1; adaptive orchestration
+reuses the existing V2 authority.

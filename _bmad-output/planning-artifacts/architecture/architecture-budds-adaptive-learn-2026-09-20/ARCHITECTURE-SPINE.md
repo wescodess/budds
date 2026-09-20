@@ -94,7 +94,9 @@ rollback that corrupts a legacy course.
 V2 mission/session/evidence identities in Phase 1. V1 `courses` and V2
 `learningVoids` remain independent. Upgrade is copy-only and never infers
 mastery, accepted sources, blueprint acceptance, or schedules. A later thread
-aggregate never becomes a replacement for V1/V2 identifiers.
+aggregate never becomes a replacement for V1/V2 identifiers. A V2-backed
+thread stores immutable `authorityKind=v2_mission` plus its owner-checked
+`learningVoidId`; exact session and revision identities remain activity pins.
 
 ### AD-3 — Explicit revision and mastery scope
 
@@ -154,8 +156,11 @@ activity declares `activityClass: factual | non_factual`; V2
 mastery-affecting activity. A non-factual diagnostic/goal-shaping activity has
 neither claim support nor mastery attempt. Standalone threads may not dispatch
 provider work until they explicitly create a V2 reference (otherwise a later,
-separate adaptive job type must be introduced). Save artifacts and
-representative performances as normalized children. A direct answer never
+separate adaptive job type must be introduced). Raw pasted material remains a
+bounded client draft; Convex stores only its digest/byte count until the
+existing owned-document import pipeline returns a document identity. Before
+that promotion it can drive only provider-free non-factual work. Save artifacts
+and representative performances as normalized children. A direct answer never
 implies mastery.
 
 ### AD-6 — Evidence and feedback integrity `[ADOPTED]`
@@ -168,8 +173,8 @@ claims, unsupported grading rationales, and private source leakage.
 
 **Rule:** factual activity content cites accepted, unpurged source snapshots
 and claim support. Rights/conflict/deletion state gates eligibility. Feedback
-uses verifier-approved or safely templated rationales and a controlled
-misconception taxonomy. Keep private locators, protected excerpts, credentials,
+uses the versioned templates and closed misconception taxonomy in AD-18;
+provider rationale is never learner-facing. Keep private locators, protected excerpts, credentials,
 and raw learner responses out of public views and telemetry. Source deletion
 marks affected evidence unavailable while retaining the attempt ledger.
 
@@ -389,7 +394,7 @@ missed by a child-before-parent delete.
 manifest consumed and assertion-tested by schema, `dataExport`, and
 `accountDeletion`. A table enters the manifest in the same earliest story that
 introduces its writer: Stories 1.2/1.3 add thread, activity, and receipt
-entries; 1.8 adds events; 2.8 adds artifacts; 3.2 adds decisions; and 5.2 adds
+entries; 1.9 adds events; 2.9 adds artifacts; 3.2 adds decisions; and 5.2 adds
 `learningThreadContributions` before any contribution writer. For each table
 it fixes owner index, parent/access index, bounded export shape/redaction,
 deletion phase/order, parent dependencies, and external object cleanup.
@@ -435,27 +440,21 @@ quota, and future standalone expansion.
 **Prevents:** thread-only work being shoehorned into V2 jobs, provider calls
 from routes, or provider-specific request semantics.
 
-**Rule:** Phase 0/1 reuse `learnJobs` only for V2-backed factual work, with a
-non-null `learningVoidId`, pinned blueprint/session revisions, existing
-lease/checkpoint states, and existing V2 cron recovery. Standalone
-`non_factual` activity is deterministic and provider-free. A standalone
-provider job is deferred until a new `adaptiveLearnJobs` table, manifest entry,
-lease/recovery cron, deletion/export path, and explicit AD are approved.
+**Rule:** Phase 0/1 adaptive orchestration wraps the existing V2 session
+authority. The current `startStudySession`, `recordAssistanceUse`, and
+`submitMasteryAttempt` paths are refactored behind shared server-side helpers
+that both V2 and adaptive entrypoints call. Their existing `learnJobs`, quota,
+lease, checkpoint, ambiguity, attempt, feedback, and mastery transitions remain
+the only authority. Adaptive code stores a reference/projection only; it never
+opens a second scoring or provider path. Standalone `non_factual` activity is
+deterministic and provider-free.
 
-`shared/adaptive-provider-port.ts` is the one provider-neutral request/response
-contract: bounded request payload, `provider`, `model`, `policyVersion`,
-`requestDigest`, timeout, reservation ID, and reconciliation key in; validated
-proposal or `not_dispatched | definitive_failure | ambiguous` out.
-`convex/learnAdaptiveActions.ts` is the sole adaptive dispatch owner and calls
-the configured Cloudflare AI Gateway/OpenRouter endpoint from the Convex action
-runtime. It implements the shared contract directly; it does not import the
-Nuxt-only `server/utils/ai-gateway.ts`, which remains the existing Chat adapter.
-Nitro routes never dispatch adaptive provider work. Secrets stay runtime-private.
-The action reserves quota before dispatch, records dispatch before I/O, and
-sends ambiguous outcomes to blocked reconciliation without automatic replay.
-Any Slice-1 dispatch additionally requires an approved finite default-deny
-pilot manifest. That pilot admission is distinct from the Slice-5 GA activation
-manifest and cannot authorize GA cohort expansion.
+`convex/learnAdaptiveActions.ts`, a standalone provider port, and any
+`adaptiveLearnJobs` table are deferred until a later explicit architecture
+decision supplies their manifest, lease/recovery, deletion/export, quota, and
+activation contracts. Nitro routes never dispatch adaptive provider work.
+Any future provider-backed adaptive dispatch requires a finite default-deny
+pilot manifest; that admission remains distinct from the Slice-5 GA approval.
 
 ### AD-16 — Canonical activity provenance and identity
 
@@ -501,6 +500,26 @@ non-source-derived learner artifacts, and already-issued feedback remain
 historical/read-only but are labelled `evidence_unavailable`; none can produce
 new mastery or factual activity. Account/folder deletion owns subsequent R2
 cleanup and continues while ordinary access is denied.
+
+### AD-18 — Controlled learner-facing feedback
+
+**Binds:** V2 scorer output, adaptive feedback projection, misconception
+analytics, and safe recovery copy.
+
+**Prevents:** unverified provider prose or an open-ended label becoming trusted
+learner guidance.
+
+**Rule:** provider rationale is never rendered or persisted as learner-facing
+feedback. The initial closed misconception taxonomy is
+`missing_required_step`, `unsupported_claim`, `confused_concepts`,
+`incorrect_sequence`, `scope_overgeneralization`, `incomplete_transfer`,
+`calculation_or_unit_error`, and `evidence_mismatch`; an empty list represents
+no misconception. Unknown, duplicate, or over-limit tags reject the result.
+The server maps verified criterion outcomes and allowed tags to versioned
+`criterion_met`, `criterion_not_met`, `evidence_insufficient`,
+`response_incomplete`, or `provider_unavailable` templates. Only the bounded
+criterion label from the pinned assessment contract may be interpolated.
+Every feedback projection pins template and taxonomy versions.
 
 ### Pilot bounds — activation-configurable caps, default-deny budgets
 
@@ -562,13 +581,13 @@ evidence separately.
 
 ## Implementation contract handoff
 
-The story-level route, schema, Convex function, provider-port, claim-adapter,
+The story-level route, schema, Convex function, V2 provider-delegation, claim-adapter,
 component, fixture, duplicate-tab, and navigation contracts are canonical in
 `_bmad-output/planning-artifacts/implementation-contracts.md`. In particular,
 the adaptive route is the static Nuxt page
 `app/pages/app/learn/thread/[threadId].vue`; the existing
 `app/pages/app/learn/[learningVoidId]/index.vue` remains the V2 mission route.
-No implementation may introduce a second adaptive route, provider adapter, or
+No Phase 0/1 implementation may introduce a second adaptive route, provider adapter, or
 claim projection. Slice 0 owns the shared storage manifest and first-value
 metric denominator/query; Epic 6 may only extend operational readouts.
 
