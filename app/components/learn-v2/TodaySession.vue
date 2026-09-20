@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { useNow } from '@vueuse/core'
 import { ArrowLeft, BookOpenCheck, ChevronRight, CircleCheck, Eye, Lightbulb, ShieldCheck } from '@lucide/vue'
 import { api } from '#convex/api'
 import { getErrorMessage } from '~~/shared/errors'
@@ -21,6 +22,7 @@ type Candidate = {
   masteryState?: string
   nextScheduledAt?: number
   progress: { retained: number, independent: number, total: number }
+  initiallyStarted?: boolean
 }
 type Block = { kind: string, content: string, order?: number }
 type SessionContent = { revision: number, blocks: Block[] } | null
@@ -40,10 +42,10 @@ const startMutation = import.meta.client ? useConvexMutation(api.learnV2SessionC
 const assistanceMutation = import.meta.client ? useConvexMutation(api.learnV2Mastery.recordAssistanceUse) : { mutate: async () => ({}) }
 const submitMutation = import.meta.client ? useConvexAction(api.learnV2Mastery.submitMasteryAttempt) : { mutate: async () => ({}) }
 
-const started = ref(false)
+const started = ref(Boolean(candidate.initiallyStarted))
 const sessionRevision = ref(candidate.sessionRevision)
 const contentRevision = ref(candidate.contentRevision)
-const phase = ref<'start' | 'retrieval' | 'prediction' | 'teaching' | 'fading' | 'transfer' | 'confidence' | 'feedback' | 'next_review'>('start')
+const phase = ref<'start' | 'retrieval' | 'prediction' | 'teaching' | 'fading' | 'transfer' | 'confidence' | 'feedback' | 'next_review'>(candidate.initiallyStarted ? 'retrieval' : 'start')
 const prediction = ref('')
 const fadedResponse = ref('')
 const transferResponse = ref('')
@@ -61,9 +63,16 @@ const submitKey = ref<string | null>(null)
 const reduceMotion = ref(false)
 const enhancedContrast = ref(false)
 const hideTimeGuidance = ref(false)
+const now = useNow({ interval: 1_000 })
 const durationMinutes = computed(() => candidate.scheduledEndAt && candidate.scheduledEndAt > candidate.scheduledStartAt
   ? Math.max(1, Math.round((candidate.scheduledEndAt - candidate.scheduledStartAt) / 60_000))
   : candidate.estimatedMinutes)
+const isEarlyStart = computed(() => !started.value && candidate.scheduledStartAt > now.value.getTime())
+const scheduledLabel = computed(() => new Intl.DateTimeFormat(undefined, {
+  dateStyle: 'medium',
+  timeStyle: 'short',
+  timeZone: candidate.timezone,
+}).format(candidate.scheduledStartAt))
 
 function makeKey(prefix: string) {
   const id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -156,7 +165,7 @@ async function retryScore() { await submit() }
     <header class="border-b border-border pb-5">
       <div class="flex items-start justify-between gap-4">
         <div class="min-w-0">
-          <p class="font-inter text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Today<span v-if="!hideTimeGuidance"> · about {{ durationMinutes }} minutes</span></p>
+          <p data-testid="learn-v2-session-timing" class="font-inter text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">{{ isEarlyStart ? 'Next session' : 'Today' }}<span v-if="!hideTimeGuidance"> · about {{ durationMinutes }} minutes</span></p>
           <h1 id="today-session-title" class="mt-2 font-dm-sans text-2xl font-bold tracking-tight text-foreground sm:text-3xl">{{ candidate.objectiveTitle }}</h1>
           <p v-if="candidate.capability" class="mt-2 text-sm leading-6 text-muted-foreground">{{ candidate.capability }}</p>
         </div>
@@ -199,6 +208,7 @@ async function retryScore() { await submit() }
         <BookOpenCheck class="h-6 w-6 text-primary" aria-hidden="true" />
         <h2 class="mt-4 font-dm-sans text-xl font-semibold text-foreground">A focused, evidence-grounded session</h2>
         <p class="mt-2 max-w-xl leading-7 text-muted-foreground">You will retrieve what you know, work through one capability, and finish with an independent application. Take the time you need.</p>
+        <p v-if="isEarlyStart" data-testid="learn-v2-early-start-note" class="mt-4 rounded-lg border border-primary/25 bg-primary/5 px-4 py-3 text-sm leading-6 text-muted-foreground forced-colors:border-current">Planned for {{ scheduledLabel }}. You can start now; the rest of your learning plan stays on schedule.</p>
         <button type="button" data-testid="learn-v2-start" :disabled="busy || !isOnline" :aria-describedby="!isOnline ? 'learn-v2-offline-notice' : undefined" class="mt-6 inline-flex min-h-11 items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none" @click="start">{{ busy ? 'Starting…' : 'Start' }}<ChevronRight v-if="!busy" class="h-4 w-4" aria-hidden="true" /></button>
       </article>
 

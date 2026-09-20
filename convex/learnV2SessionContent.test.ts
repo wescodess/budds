@@ -336,7 +336,7 @@ describe('Learn V2 session-content publication contract', () => {
     await expect(other.mutation(api.learnV2SessionContent.startStudySession, args)).rejects.toThrow(/Study session is not ready/)
   })
 
-  test('allows a ready session to start early on its scheduled local day but not on a future day', async () => {
+  test('allows a ready session to start before its scheduled day without changing its schedule', async () => {
     const { t, owner, graph } = await seedGenerationGraph()
     const { lease, begun } = await leaseAndBegin(t, graph.jobId)
     const published = await t.mutation(internal.learnV2SessionContent.commitSessionContentCandidate, {
@@ -358,9 +358,12 @@ describe('Learn V2 session-content publication contract', () => {
       verifierDecisionsJson: verifierDecisionsJson(future.graph.snapshotId, future.graph.excerptId),
     })
     if (futurePublished.status !== 'ready') throw new Error('expected published future session content')
-    await future.t.run(ctx => ctx.db.patch(future.graph.sessionId, { scheduledStartAt: Date.now() + 48 * 60 * 60_000, timezone: 'America/Toronto' }))
+    const scheduledStartAt = Date.now() + 48 * 60 * 60_000
+    const scheduledEndAt = scheduledStartAt + 25 * 60_000
+    await future.t.run(ctx => ctx.db.patch(future.graph.sessionId, { scheduledStartAt, scheduledEndAt, timezone: 'America/Toronto' }))
     await expect(future.owner.mutation(api.learnV2SessionContent.startStudySession, {
       studySessionId: future.graph.sessionId, expectedSessionRevision: 2, expectedContentRevision: 1, idempotencyKey: 'start-too-early',
-    })).rejects.toThrow(/not scheduled for today/)
+    })).resolves.toMatchObject({ status: 'in_progress' })
+    await expect(future.t.run(ctx => ctx.db.get(future.graph.sessionId))).resolves.toMatchObject({ scheduledStartAt, scheduledEndAt })
   })
 })

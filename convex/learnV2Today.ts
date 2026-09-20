@@ -1,7 +1,7 @@
 import type { Doc } from './_generated/dataModel'
 import { query } from './_generated/server'
 import { requireLearnV2QueryAccess } from './lib/learnV2Access'
-import { localDateAt } from '../shared/learn-v2-mastery'
+import { addCalendarDays, localDateAt } from '../shared/learn-v2-mastery'
 
 const MAX_SESSIONS = 128
 const MAX_CLAIMS = 32
@@ -16,6 +16,13 @@ function rank(session: { placementKind?: string, schedulingPriority?: string, sc
 }
 
 type Candidate = { session: Doc<'studySessions'>, plan: Doc<'studyPlanRevisions'>, blueprint: Doc<'learnBlueprintRevisions'>, objective: Doc<'learnObjectives'>, record: Doc<'masteryRecords'> | null }
+
+function retainedReviewEligible(row: Candidate, now: number) {
+  if (row.session.placementKind !== 'retained_review') return true
+  if (!row.record?.firstIndependentLocalDate) return false
+  const timezone = row.record.firstIndependentTimezone ?? row.session.timezone ?? row.plan.timezone ?? 'UTC'
+  return localDateAt(now, timezone) >= addCalendarDays(row.record.firstIndependentLocalDate, 7)
+}
 
 // The projection intentionally verifies current pins again. A stale shell is not a
 // to-do item: it remains invisible until the plan/generation path repairs it.
@@ -43,15 +50,13 @@ export const getToday = query({
       candidates.push({ session, plan, blueprint, objective, record })
     }
     const nextScheduledAt = candidates.filter(row => row.session.status !== 'in_progress' && row.session.scheduledStartAt > now).map(row => row.session.scheduledStartAt).sort((a, b) => a - b)[0] ?? null
-    const selectable = candidates.filter(row => {
-      if (row.session.status === 'in_progress') return true
-      if (row.session.scheduledEndAt !== undefined && row.session.scheduledEndAt < now) return false
-      if (row.session.scheduledStartAt <= now) return true
-      const timezone = row.session.timezone ?? row.plan.timezone ?? 'UTC'
-      return localDateAt(row.session.scheduledStartAt, timezone) === localDateAt(now, timezone)
-    })
+    const eligible = candidates.filter(row => (row.session.status === 'in_progress' || row.session.scheduledEndAt === undefined || row.session.scheduledEndAt >= now) && retainedReviewEligible(row, now))
+    const due = eligible.filter(row => row.session.status === 'in_progress' || row.session.scheduledStartAt <= now)
+    const futureReady = eligible.filter(row => row.session.status === 'ready' && row.session.scheduledStartAt > now)
+    const futureUnavailable = eligible.filter(row => row.session.status !== 'ready' && row.session.scheduledStartAt > now)
+    const selectable = due.length ? due : futureReady.length ? futureReady : futureUnavailable
     if (!selectable.length) return { status: 'empty' as const, nextScheduledAt }
-    selectable.sort((a, b) => rank(a.session, a.record, now) - rank(b.session, b.record, now) || a.session.scheduledStartAt - b.session.scheduledStartAt || String(a.session._id).localeCompare(String(b.session._id)))
+    selectable.sort((a, b) => (due.length ? rank(a.session, a.record, now) - rank(b.session, b.record, now) : a.session.scheduledStartAt - b.session.scheduledStartAt) || a.session.scheduledStartAt - b.session.scheduledStartAt || String(a.session._id).localeCompare(String(b.session._id)))
     const candidate = selectable[0]!
     if (candidate.session.status === 'blocked' || candidate.session.status === 'generation_failed') return {
       status: 'blocked' as const,
@@ -88,6 +93,6 @@ export const getToday = query({
       }
     }
     if (!Number.isSafeInteger(candidate.plan.recordRevision)) return { status: 'blocked' as const, reason: 'plan_revision_unavailable', nextScheduledAt }
-    return { status: 'ready' as const, sessionId: candidate.session._id, sessionRevision: candidate.session.revision, scheduledStartAt: candidate.session.scheduledStartAt, scheduledEndAt: candidate.session.scheduledEndAt ?? null, timezone: candidate.session.timezone ?? candidate.plan.timezone ?? 'UTC', placementKind: candidate.session.placementKind ?? 'learning', objective: { id: candidate.objective._id, title: candidate.objective.title, capability: candidate.objective.capability ?? null, estimatedMinutes: candidate.objective.estimatedMinutes ?? null }, mastery: { state: candidate.record?.state ?? 'unseen', nextReviewAt: candidate.record?.nextReviewAt ?? null }, content: { id: content._id, revision: content.revision, assessmentRubricVersion: (() => { try { return JSON.parse(content.assessmentRubricSnapshot ?? '{}').version ?? null } catch { return null } })() }, plan: { revisionId: candidate.plan._id, recordRevision: candidate.plan.recordRevision!, blueprintRevisionId: candidate.blueprint._id, blueprintRecordRevision: candidate.blueprint.recordRevision }, nextScheduledAt }
+    return { status: 'ready' as const, inProgress: candidate.session.status === 'in_progress', sessionId: candidate.session._id, sessionRevision: candidate.session.revision, scheduledStartAt: candidate.session.scheduledStartAt, scheduledEndAt: candidate.session.scheduledEndAt ?? null, timezone: candidate.session.timezone ?? candidate.plan.timezone ?? 'UTC', placementKind: candidate.session.placementKind ?? 'learning', objective: { id: candidate.objective._id, title: candidate.objective.title, capability: candidate.objective.capability ?? null, estimatedMinutes: candidate.objective.estimatedMinutes ?? null }, mastery: { state: candidate.record?.state ?? 'unseen', nextReviewAt: candidate.record?.nextReviewAt ?? null }, content: { id: content._id, revision: content.revision, assessmentRubricVersion: (() => { try { return JSON.parse(content.assessmentRubricSnapshot ?? '{}').version ?? null } catch { return null } })() }, plan: { revisionId: candidate.plan._id, recordRevision: candidate.plan.recordRevision!, blueprintRevisionId: candidate.blueprint._id, blueprintRecordRevision: candidate.blueprint.recordRevision }, nextScheduledAt }
   },
 })

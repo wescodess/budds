@@ -20,7 +20,7 @@ mockNuxtImport('useConvexAction', () => (reference: any) => ({ mutate: getFuncti
 mockNuxtImport('useConvexQuery', () => (reference: any) => ({ data: getFunctionName(reference)?.includes('getSessionContent') ? content : ref(null) }))
 
 const path = ['~', 'components', 'learn-v2', 'TodaySession.vue'].join('/')
-const candidate = { studySessionId: 'session_1', sessionRevision: 1, contentRevision: 2, planRecordRevision: 3, blueprintRecordRevision: 4, objectiveTitle: 'Explain gravity', estimatedMinutes: 12, scheduledStartAt: 0, scheduledEndAt: 17 * 60_000, timezone: 'America/Toronto', reason: 'due', progress: { retained: 0, independent: 0, total: 1 } }
+const candidate = { studySessionId: 'session_1', sessionRevision: 1, contentRevision: 2, planRecordRevision: 3, blueprintRecordRevision: 4, objectiveTitle: 'Explain gravity', estimatedMinutes: 12, scheduledStartAt: 0, scheduledEndAt: 17 * 60_000, timezone: 'America/Toronto', reason: 'due', progress: { retained: 0, independent: 0, total: 1 }, initiallyStarted: false }
 const blocks = ['retrieval', 'objective', 'cold_attempt', 'explanation', 'worked_example', 'faded_example', 'independent_application', 'confidence_teach_back'].map((kind, order) => ({ kind, order, content: `${kind} content` }))
 
 describe('LearnV2TodaySession', () => {
@@ -48,6 +48,20 @@ describe('LearnV2TodaySession', () => {
     const wrapper = await mount()
     expect(wrapper.findAll('button').filter((button: any) => button.text() === 'Start')).toHaveLength(1)
     expect(wrapper.find('[data-testid="learn-v2-phase-retrieval"]').exists()).toBe(false)
+  })
+  it('resumes an authoritative in-progress session without asking to start again', async () => {
+    const wrapper = await mount({ initiallyStarted: true })
+    expect(wrapper.find('[data-testid="learn-v2-start"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="learn-v2-phase-retrieval"]').isVisible()).toBe(true)
+  })
+  it('makes an early start explicit without implying the session was rescheduled', async () => {
+    const wrapper = await mount({ scheduledStartAt: Date.now() + 48 * 60 * 60_000, scheduledEndAt: Date.now() + 48 * 60 * 60_000 + 17 * 60_000 })
+    expect(wrapper.get('[data-testid="learn-v2-session-timing"]').text()).toContain('Next session')
+    expect(wrapper.get('[data-testid="learn-v2-early-start-note"]').text()).toContain('You can start now')
+    expect(wrapper.get('[data-testid="learn-v2-early-start-note"]').text()).toContain('stays on schedule')
+    await startSession(wrapper)
+    expect(wrapper.get('[data-testid="learn-v2-session-timing"]').text()).toContain('Today')
+    expect(wrapper.find('[data-testid="learn-v2-early-start-note"]').exists()).toBe(false)
   })
   it('keeps the learner oriented with a quiet session path, evidence context, and a safe leave intent', async () => {
     const wrapper = await mount()
