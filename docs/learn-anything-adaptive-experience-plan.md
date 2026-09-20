@@ -1,8 +1,8 @@
 # Learn Anything adaptive experience plan
 
-**Status:** approved for staged implementation  
-**Date:** 2026-09-20  
-**Replaces:** the learner-facing assumptions in `docs/learn-v2-production-experience.md`; it does not remove the current V1 or V2 data planes  
+**Status:** approved for staged implementation
+**Date:** 2026-09-20
+**Replaces:** the learner-facing assumptions in `docs/learn-v2-production-experience.md`; it does not remove the current V1 or V2 data planes
 **Product promise:** Bring Budds a goal or material and leave each visit able to do something you could not do before.
 
 ## 1. Why this change
