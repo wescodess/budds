@@ -253,7 +253,10 @@ describe('Learn V2 revision-safe map editing and calibration', () => {
       if (reservation.kind !== 'acquired') throw new Error('Expected calibration scoring lease')
       await setup.t.mutation(internal.learnV2MapCalibration.markCalibrationScoringDispatched, { tokenIdentifier: identity.tokenIdentifier, jobId: reservation.jobId, leaseToken: reservation.leaseToken, expectedRevision: reservation.revision })
       const input = await setup.t.query(internal.learnV2MapCalibration.getCalibrationScoringInput, { tokenIdentifier: identity.tokenIdentifier, jobId: reservation.jobId, leaseToken: reservation.leaseToken, blueprintRevisionId: setup.blueprint._id, objectiveId: setup.objectives[0]!, response: request.response })
-      await setup.t.run(ctx => ctx.db.patch(setup.sourceSnapshotId, { recordRevision: 2 }))
+      await setup.t.run(async (ctx) => {
+        const excerpt = await ctx.db.query('learnSourceExcerpts').withIndex('by_userId_and_sourceSnapshotId', q => q.eq('userId', identity.tokenIdentifier).eq('sourceSnapshotId', setup.sourceSnapshotId)).unique()
+        await ctx.db.patch(excerpt!._id, { excerpt: 'Mutated evidence after dispatch.' })
+      })
       await expect(setup.t.mutation(internal.learnV2MapCalibration.recordCalibrationAttempt, {
         ...request,
         serverScorePercent: 100,
@@ -301,7 +304,7 @@ describe('Learn V2 revision-safe map editing and calibration', () => {
         verifierVersionsJson: JSON.stringify(['learn-v2.calibration-evidence-policy.v1']),
         sourceSnapshotIdsJson: JSON.stringify([setup.sourceSnapshotId]),
       })
-      expect(JSON.parse(persistedAttempt!.contentRevisionPinsJson!)).toEqual([{ sourceSnapshotId: String(setup.sourceSnapshotId), revision: 1, recordRevision: 1, sourceRevision: `sha256:${'a'.repeat(64)}` }])
+      expect(JSON.parse(persistedAttempt!.contentRevisionPinsJson!)).toMatchObject([{ sourceSnapshotId: String(setup.sourceSnapshotId), sourceExcerptId: expect.any(String), locator: `sha256:${'a'.repeat(64)}`, revision: 1, recordRevision: 1, sourceRevision: `sha256:${'a'.repeat(64)}`, evidenceContentHash: 'a'.repeat(64) }])
     }
     finally {
       if (previousModel === undefined) delete process.env.LEARN_V2_CALIBRATION_MODEL

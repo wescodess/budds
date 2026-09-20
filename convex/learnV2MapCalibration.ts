@@ -22,6 +22,11 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(value)
 }
 
+async function sha256Text(value: string) {
+  const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))
+  return `sha256:${[...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('')}`
+}
+
 const assessmentContractValidator = v.object({
   version: v.literal('learn-v2.assessment.v1'),
   kind: v.union(v.literal('machine_checkable'), v.literal('bounded_rubric')),
@@ -353,24 +358,27 @@ async function calibrationEvidence(ctx: MutationCtx | QueryCtx, userId: string, 
     folderEvidence?: { documentId: string, contentHash: string, sourceRevision: string }
   }> = []
   const sourceSnapshotIds: Id<'learnSourceSnapshots'>[] = []
-  const contentRevisionPins: Array<{ sourceSnapshotId: string, revision: number, recordRevision: number, sourceRevision: string | null }> = []
+  const contentRevisionPins: Array<{ sourceSnapshotId: string, sourceExcerptId: string, locator: string, revision: number, recordRevision: number, sourceRevision: string | null, evidenceContentHash: string }> = []
   for (const link of links) {
     if (link.coverage === 'gap') continue
     const source = await ctx.db.get(link.sourceSnapshotId)
     const excerpt = await ctx.db.query('learnSourceExcerpts').withIndex('by_userId_and_sourceSnapshotId_and_evidencePurgedAt', q => q.eq('userId', userId).eq('sourceSnapshotId', link.sourceSnapshotId).eq('evidencePurgedAt', undefined)).first()
     if (!source || source.userId !== userId || source.status !== 'user_accepted' || source.effectiveStatus !== 'user_accepted' || source.conflictStatus !== 'clear' || source.evidencePurgedAt !== undefined || !excerpt) continue
     const alias = `source-${String(evidence.length + 1).padStart(3, '0')}`
+    let evidenceContentHash: string
     if (source.rightsStatus === 'permitted' && excerpt.rightsStatus === 'permitted' && excerpt.excerpt?.trim()) {
       evidence.push({ alias, excerpt: excerpt.excerpt, locator: excerpt.locator })
+      evidenceContentHash = await sha256Text(excerpt.excerpt)
     }
     else {
       const identity = await ctx.db.get(source.sourceIdentityId)
       if (identity?.userId !== userId || identity.origin !== 'folder_document' || !identity.folderDocumentId
         || typeof source.contentHash !== 'string' || typeof source.sourceRevision !== 'string') continue
       evidence.push({ alias, locator: excerpt.locator, folderEvidence: { documentId: String(identity.folderDocumentId), contentHash: source.contentHash, sourceRevision: source.sourceRevision } })
+      evidenceContentHash = source.contentHash
     }
     sourceSnapshotIds.push(source._id)
-    contentRevisionPins.push({ sourceSnapshotId: String(source._id), revision: source.revision, recordRevision: source.recordRevision ?? 1, sourceRevision: source.sourceRevision ?? null })
+    contentRevisionPins.push({ sourceSnapshotId: String(source._id), sourceExcerptId: String(excerpt._id), locator: excerpt.locator, revision: source.revision, recordRevision: source.recordRevision ?? 1, sourceRevision: source.sourceRevision ?? null, evidenceContentHash })
   }
   if (!evidence.length) throw new Error('Calibration evidence is unavailable')
   return {
@@ -382,7 +390,7 @@ async function calibrationEvidence(ctx: MutationCtx | QueryCtx, userId: string, 
 }
 
 export const recordCalibrationAttempt = internalMutation({
-  args: { tokenIdentifier: v.string(), blueprintRevisionId: v.id('learnBlueprintRevisions'), objectiveId: v.id('learnObjectives'), expectedBlueprintRecordRevision: v.number(), expectedVoidRevision: v.number(), idempotencyKey: v.string(), serverScorePercent: v.number(), usedHint: v.boolean(), usedReveal: v.boolean(), confidence: v.number(), rubricVersion: v.string(), response: v.optional(v.string()), scorerVersion: v.optional(v.string()), scorerModel: v.optional(v.string()), criterionResultsJson: v.optional(v.string()), rubricSnapshot: v.optional(v.string()), providerResponseId: v.optional(v.string()), scoringJobId: v.optional(v.id('learnJobs')), scoringLeaseToken: v.optional(v.string()), scoredSourceSnapshotIds: v.optional(v.array(v.id('learnSourceSnapshots'))), scoredContentRevisionPins: v.optional(v.array(v.object({ sourceSnapshotId: v.string(), revision: v.number(), recordRevision: v.number(), sourceRevision: v.union(v.string(), v.null()) }))), scoredVerifierVersions: v.optional(v.array(v.string())) },
+  args: { tokenIdentifier: v.string(), blueprintRevisionId: v.id('learnBlueprintRevisions'), objectiveId: v.id('learnObjectives'), expectedBlueprintRecordRevision: v.number(), expectedVoidRevision: v.number(), idempotencyKey: v.string(), serverScorePercent: v.number(), usedHint: v.boolean(), usedReveal: v.boolean(), confidence: v.number(), rubricVersion: v.string(), response: v.optional(v.string()), scorerVersion: v.optional(v.string()), scorerModel: v.optional(v.string()), criterionResultsJson: v.optional(v.string()), rubricSnapshot: v.optional(v.string()), providerResponseId: v.optional(v.string()), scoringJobId: v.optional(v.id('learnJobs')), scoringLeaseToken: v.optional(v.string()), scoredSourceSnapshotIds: v.optional(v.array(v.id('learnSourceSnapshots'))), scoredContentRevisionPins: v.optional(v.array(v.object({ sourceSnapshotId: v.string(), sourceExcerptId: v.string(), locator: v.string(), revision: v.number(), recordRevision: v.number(), sourceRevision: v.union(v.string(), v.null()), evidenceContentHash: v.string() }))), scoredVerifierVersions: v.optional(v.array(v.string())) },
   handler: async (ctx, args) => {
     if (!(await hasLearnV2Access(ctx, args.tokenIdentifier))) throw new Error('Learn V2 access denied')
     assertIdempotencyKey(args.idempotencyKey)
@@ -420,7 +428,7 @@ export const recordCalibrationAttempt = internalMutation({
       : currentEvidencePins
     if (new Set(evidencePins.sourceSnapshotIds.map(String)).size !== evidencePins.sourceSnapshotIds.length
       || evidencePins.contentRevisionPins.length !== evidencePins.sourceSnapshotIds.length
-      || evidencePins.contentRevisionPins.some((pin, index) => pin.sourceSnapshotId !== String(evidencePins.sourceSnapshotIds[index]) || !Number.isSafeInteger(pin.revision) || pin.revision < 1 || !Number.isSafeInteger(pin.recordRevision) || pin.recordRevision < 1)
+      || evidencePins.contentRevisionPins.some((pin, index) => pin.sourceSnapshotId !== String(evidencePins.sourceSnapshotIds[index]) || !pin.sourceExcerptId || !pin.locator.trim() || !pin.evidenceContentHash.trim() || !Number.isSafeInteger(pin.revision) || pin.revision < 1 || !Number.isSafeInteger(pin.recordRevision) || pin.recordRevision < 1)
       || evidencePins.verifierVersions.some(version => !version.trim())) throw new Error('Calibration scoring evidence pins are invalid')
     if (scoringJob && (canonicalJson(evidencePins.sourceSnapshotIds.map(String)) !== canonicalJson(currentEvidencePins.sourceSnapshotIds.map(String))
       || canonicalJson(evidencePins.contentRevisionPins) !== canonicalJson(currentEvidencePins.contentRevisionPins)
@@ -489,7 +497,7 @@ export const submitCalibrationAttempt = action({
       objective: { assessmentContract?: unknown, title: string, capability?: string }
       evidence: Array<{ alias: string, excerpt?: string, locator: string, folderEvidence?: { documentId: string, contentHash: string, sourceRevision: string } }>
       sourceSnapshotIds: Id<'learnSourceSnapshots'>[]
-      contentRevisionPins: Array<{ sourceSnapshotId: string, revision: number, recordRevision: number, sourceRevision: string | null }>
+      contentRevisionPins: Array<{ sourceSnapshotId: string, sourceExcerptId: string, locator: string, revision: number, recordRevision: number, sourceRevision: string | null, evidenceContentHash: string }>
       verifierVersions: string[]
       learnerResponse: string
     }
