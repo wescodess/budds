@@ -105,7 +105,12 @@ export type AdaptiveClaimIntegrityInput = {
       revision: number
       status: 'draft' | 'ready' | 'published' | 'superseded'
     }) | null
-    claim: (OwnedRecord & { sessionContentId: string, claim: string, verifierVersion?: string }) | null
+    claim: (OwnedRecord & {
+      sessionContentId: string
+      claim: string
+      verifierVersion?: string
+      epistemicStatus?: AdaptiveClaimStatus
+    }) | null
     support: (OwnedRecord & {
       sessionContentClaimId: string
       sourceExcerptId: string
@@ -254,7 +259,7 @@ export function projectAdaptiveClaimIntegrity(input: AdaptiveClaimIntegrityInput
     claimText: parentageValid
       ? boundedText(claim!.claim, 'Claim text', 4_000)
       : null,
-    claimStatus: integrityState === 'accepted' ? 'fact' : 'unknown',
+    claimStatus: integrityState === 'accepted' ? (claim!.epistemicStatus ?? 'unknown') : 'unknown',
     integrityState,
     source: {
       origin: parentageValid ? identity!.origin : null,

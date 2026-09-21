@@ -201,11 +201,11 @@ describe('adaptive claim adapter', () => {
     })).toThrow('Non-factual activity cannot carry factual authority')
   })
 
-  test('projects an accepted entailed claim as a fact without protected source data', () => {
+  test('keeps an accepted entailed claim epistemically unknown when V2 has no authoritative classifier', () => {
     expect(projectAdaptiveClaimIntegrity(integrityInput())).toEqual({
       claimId: 'claim-1',
       claimText: 'Plants convert light energy.',
-      claimStatus: 'fact',
+      claimStatus: 'unknown',
       integrityState: 'accepted',
       source: {
         origin: 'user_url',
@@ -215,6 +215,17 @@ describe('adaptive claim adapter', () => {
         sourceRecordRevision: 7,
       },
     })
+  })
+
+  test('passes through only an explicit authoritative epistemic classification', () => {
+    const input = integrityInput()
+    input.records.claim!.epistemicStatus = 'synthesis'
+
+    const projection = projectAdaptiveClaimIntegrity(input)
+
+    expect(projection.claimStatus).toBe('synthesis')
+    delete input.records.claim!.epistemicStatus
+    expect(projectAdaptiveClaimIntegrity(input).claimStatus).toBe('unknown')
   })
 
   test.each([

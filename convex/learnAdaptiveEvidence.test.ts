@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 import { convexTest } from 'convex-test'
 import { describe, expect, test } from 'vitest'
-import { api } from './_generated/api'
+import { internal } from './_generated/api'
 import schema from './schema'
 
 const modules = import.meta.glob('./**/*.ts')
@@ -72,18 +72,18 @@ async function fixture() {
 
 async function project(t: Awaited<ReturnType<typeof fixture>>['t']) {
   return await t.withIdentity({ tokenIdentifier: ownerId }).query(
-    api.learnAdaptiveEvidence.getActivityEvidence,
+    internal.learnAdaptiveEvidence.getActivityEvidence,
     { activityId: 'activity-evidence-1' },
   )
 }
 
 describe('Adaptive activity evidence projection', () => {
-  test('returns an authenticated accepted fact projection with only permitted source data', async () => {
+  test('returns an authenticated accepted projection with conservative claim status and permitted source data', async () => {
     const { t } = await fixture()
 
-    await expect(t.query(api.learnAdaptiveEvidence.getActivityEvidence, { activityId: 'activity-evidence-1' }))
+    await expect(t.query(internal.learnAdaptiveEvidence.getActivityEvidence, { activityId: 'activity-evidence-1' }))
       .rejects.toThrow('Unauthenticated')
-    expect(await t.withIdentity({ tokenIdentifier: otherId }).query(api.learnAdaptiveEvidence.getActivityEvidence, { activityId: 'activity-evidence-1' }))
+    expect(await t.withIdentity({ tokenIdentifier: otherId }).query(internal.learnAdaptiveEvidence.getActivityEvidence, { activityId: 'activity-evidence-1' }))
       .toBeNull()
 
     const result = await project(t)
@@ -96,7 +96,7 @@ describe('Adaptive activity evidence projection', () => {
       claims: [{
         claimId: expect.any(String),
         claimText: 'Plants convert light energy.',
-        claimStatus: 'fact',
+        claimStatus: 'unknown',
         integrityState: 'accepted',
         source: { origin: 'user_url', locator: 'page:1', sourceSnapshotId: expect.any(String), sourceSnapshotRevision: 3, sourceRecordRevision: 7 },
       }],

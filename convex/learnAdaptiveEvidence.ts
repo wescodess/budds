@@ -1,25 +1,11 @@
 import { v } from 'convex/values'
-import { query } from './_generated/server'
+import { internalQuery } from './_generated/server'
 import { requireAuth } from './lib/auth'
-import {
-  projectAdaptiveClaimIntegrity,
-  type AdaptiveEvidenceIntegrityState,
-} from '../shared/adaptive-claim-adapter'
+import { loadAdaptiveClaimProjection } from './lib/adaptiveClaimProjection'
 
-const INTEGRITY_PRIORITY: readonly AdaptiveEvidenceIntegrityState[] = [
-  'deleted',
-  'unavailable',
-  'conflicting',
-  'stale',
-  'insufficient',
-  'accepted',
-]
-
-function aggregateIntegrity(states: AdaptiveEvidenceIntegrityState[]): AdaptiveEvidenceIntegrityState {
-  return INTEGRITY_PRIORITY.find(state => states.includes(state)) ?? 'insufficient'
-}
-
-export const getActivityEvidence = query({
+// Integration note: compose this private projection behind the canonical
+// adaptive access gate in learnAdaptive.getThread after ALA 1.3 is integrated.
+export const getActivityEvidence = internalQuery({
   args: { activityId: v.string() },
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx)
@@ -59,56 +45,13 @@ export const getActivityEvidence = query({
       }
     }
 
-    const sessionContentId = activity.sessionContentId
-    const sessionContentRevision = activity.generationInputs.sessionContentRevision
-    const sessionContent = await ctx.db.get(sessionContentId)
-    const claims = await Promise.all(activity.evidenceReferences.map(async (pinned) => {
-      const [claim, support, snapshot] = await Promise.all([
-        ctx.db.get(pinned.claimId),
-        ctx.db.get(pinned.supportId),
-        ctx.db.get(pinned.sourceSnapshotId),
-      ])
-      const excerpt = support ? await ctx.db.get(support.sourceExcerptId) : null
-      const identity = snapshot ? await ctx.db.get(snapshot.sourceIdentityId) : null
-
-      return projectAdaptiveClaimIntegrity({
-        ownerId: userId,
-        historical,
-        sessionContentId: String(sessionContentId),
-        sessionContentRevision,
-        pinned: {
-          claimId: String(pinned.claimId),
-          supportId: String(pinned.supportId),
-          sourceSnapshotId: String(pinned.sourceSnapshotId),
-          sourceSnapshotRevision: pinned.sourceSnapshotRevision,
-          sourceRecordRevision: pinned.sourceRecordRevision,
-          sourceEffectiveStatus: pinned.sourceEffectiveStatus,
-          verifierVersion: pinned.verifierVersion,
-          integrityState: pinned.integrityState,
-        },
-        records: {
-          sessionContent: sessionContent
-            ? { id: String(sessionContent._id), userId: sessionContent.userId, revision: sessionContent.revision, status: sessionContent.status }
-            : null,
-          claim: claim
-            ? { id: String(claim._id), userId: claim.userId, sessionContentId: String(claim.sessionContentId), claim: claim.claim, verifierVersion: claim.verifierVersion }
-            : null,
-          support: support
-            ? { id: String(support._id), userId: support.userId, sessionContentClaimId: String(support.sessionContentClaimId), sourceExcerptId: String(support.sourceExcerptId), sourceSnapshotId: support.sourceSnapshotId ? String(support.sourceSnapshotId) : undefined, entailment: support.entailment, verifierVersion: support.verifierVersion, conflictStatus: support.conflictStatus, evidenceStatus: support.evidenceStatus }
-            : null,
-          sourceSnapshot: snapshot
-            ? { id: String(snapshot._id), userId: snapshot.userId, sourceIdentityId: String(snapshot.sourceIdentityId), revision: snapshot.revision, recordRevision: snapshot.recordRevision, status: snapshot.status, effectiveStatus: snapshot.effectiveStatus, rightsStatus: snapshot.rightsStatus, conflictStatus: snapshot.conflictStatus, evidencePurgedAt: snapshot.evidencePurgedAt }
-            : null,
-          sourceExcerpt: excerpt
-            ? { id: String(excerpt._id), userId: excerpt.userId, sourceSnapshotId: String(excerpt.sourceSnapshotId), locator: excerpt.locator, rightsStatus: excerpt.rightsStatus, evidencePurgedAt: excerpt.evidencePurgedAt }
-            : null,
-          sourceIdentity: identity
-            ? { id: String(identity._id), userId: identity.userId, origin: identity.origin, tombstonedAt: identity.tombstonedAt }
-            : null,
-        },
-      })
-    }))
-    const integrityState = aggregateIntegrity(claims.map(claim => claim.integrityState))
+    const { claims, integrityState } = await loadAdaptiveClaimProjection(ctx, {
+      userId,
+      historical,
+      sessionContentId: activity.sessionContentId,
+      sessionContentRevision: activity.generationInputs.sessionContentRevision,
+      evidenceReferences: activity.evidenceReferences,
+    })
     const statusAllowsEligibility = !['blocked', 'ended', 'replaced'].includes(activity.status)
 
     return {
