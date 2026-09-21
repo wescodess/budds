@@ -9,6 +9,25 @@ import { ADAPTIVE_LEARN_EXPORT_COLLECTIONS } from '../shared/adaptive-learn-stor
 const MAX_EXPORT_PAGE_SIZE = 8
 const [learningThreadsCollection, learningThreadActivitiesCollection] = ADAPTIVE_LEARN_EXPORT_COLLECTIONS
 
+function redactAdaptivePrimitiveSources(primitive: { props: unknown } & Record<string, unknown>) {
+  if (!primitive.props || typeof primitive.props !== 'object' || Array.isArray(primitive.props)) return primitive
+  const props = primitive.props as Record<string, unknown>
+  const sourceRefs = Array.isArray(props.sourceRefs) ? props.sourceRefs.map(() => '[redacted]') : undefined
+  const sources = Array.isArray(props.sources)
+    ? props.sources.map((source) => source && typeof source === 'object' && !Array.isArray(source)
+      ? { ...(source as Record<string, unknown>), sourceRef: '[redacted]' }
+      : source)
+    : undefined
+  return {
+    ...primitive,
+    props: {
+      ...props,
+      ...(sourceRefs ? { sourceRefs } : {}),
+      ...(sources ? { sources } : {}),
+    },
+  }
+}
+
 const exportCollectionValidator = v.union(
   v.literal('folders'),
   v.literal('documents'),
@@ -217,10 +236,15 @@ export const getUserDataPage = query({
         const result = await ctx.db.query('learningThreadActivities').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
         return {
           ...result,
-          page: result.page.map(({ canonicalInputSnapshot: _snapshot, inputDigest: _digest, evidenceReferences, generationInputs, ...row }) => ({
+          page: result.page.map(({ canonicalInputSnapshot: _snapshot, inputDigest: _digest, evidenceReferences, generationInputs, decisionInputs, primitivePlan, ...row }) => ({
             ...row,
+            primitivePlan: primitivePlan.map(redactAdaptivePrimitiveSources),
             evidenceReferences: evidenceReferences.map(({ claimId: _claim, supportId: _support, sourceSnapshotId: _source, ...reference }) => reference),
             generationInputs: { sessionContentRevision: generationInputs.sessionContentRevision, generatorVersion: generationInputs.generatorVersion },
+            decisionInputs: {
+              ...decisionInputs,
+              sourceInputs: decisionInputs.sourceInputs.map(({ sourceSnapshotId: _sourceSnapshotId, ...sourceInput }) => sourceInput),
+            },
           })),
         }
       }

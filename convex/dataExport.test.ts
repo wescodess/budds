@@ -167,7 +167,7 @@ describe('dataExport paginated queries', () => {
         accessibilityMetadata: { heading: 'Learning goal', instructions: 'Answer the prompt.', focusTargetTestId: 'learn-primitive-diagnostic-prompt', liveRegionMode: 'polite' },
         pins: { learningVoidId: null, blueprintRevisionId: null, objectiveId: null, sessionContentId: null }, evidenceReferences: [],
         generationInputs: { sessionContentRevision: null, sessionContentInputDigest: null, generatorVersion: null },
-        decisionInputs: { availableTime: '15', sourceState: 'none', priorActivityId: null, priorOutcome: null, assistance: 'none', confidence: null },
+        decisionInputs: { intentRevision: 1, routerVersion: 'learn-adaptive.router.v1', availableTime: '15', sourceState: 'none', sourceInputs: [], priorActivityId: null, priorAttemptId: null, priorOutcome: null, assistance: 'none', confidence: null },
       })
       const activityId = await ctx.db.insert('learningThreadActivities', {
         userId: USER_A.tokenIdentifier, threadId, activityId: plan.activityId, boundaryOrdinal: plan.boundaryOrdinal, planRevision: plan.planRevision, activityClass: plan.activityClass, status: 'eligible',
@@ -175,6 +175,18 @@ describe('dataExport paginated queries', () => {
         intent: plan.intent, objectiveId: null, purpose: plan.purpose, reasonCode: plan.reasonCode, primitivePlan: plan.primitivePlan, requiredAction: plan.requiredAction, evaluationContract: plan.evaluationContract, fallback: plan.fallback, accessibilityMetadata: plan.accessibilityMetadata,
         learningVoidId: null, blueprintRevisionId: null, sessionContentId: null, evidenceReferences: [], generationInputs: plan.generationInputs, decisionInputs: plan.decisionInputs, replacesActivityId: null,
         canonicalInputSnapshot: plan.canonicalInputSnapshot, inputDigest: plan.inputDigest, createdAt: 1, updatedAt: 1,
+      })
+      await ctx.db.patch(activityId, {
+        activityClass: 'factual',
+        primitivePlan: [{
+          contractVersion: 'learn-adaptive.activity-contract.v1',
+          rendererVersion: 'learn-adaptive.renderer.v1',
+          type: 'cited_explanation',
+          action: 'continue',
+          props: { heading: 'Accepted source', explanation: 'A supported explanation.', sourceRefs: ['private-snapshot-id'] },
+          testId: 'learn-primitive-cited-explanation',
+        }],
+        decisionInputs: { ...plan.decisionInputs, sourceState: 'ready', sourceInputs: [{ sourceSnapshotId: 'private-snapshot-id', effectiveStatus: 'user_accepted', recordRevision: 7 }] },
       })
       return { threadId, activityId }
     })
@@ -184,10 +196,11 @@ describe('dataExport paginated queries', () => {
     expect(threads.page).toHaveLength(1)
     expect(activities.page).toHaveLength(1)
     expect(threads.page[0]).toMatchObject({ _id: ids.threadId, originalNeed: 'Shape a learning goal.' })
-    expect(activities.page[0]).toMatchObject({ _id: ids.activityId, activityId: 'export-activity', primitivePlan: [{ type: 'diagnostic_prompt' }] })
+    expect(activities.page[0]).toMatchObject({ _id: ids.activityId, activityId: 'export-activity', activityClass: 'factual', primitivePlan: [{ type: 'cited_explanation', props: { sourceRefs: ['[redacted]'] } }] })
     expect(activities.page[0]).not.toHaveProperty('canonicalInputSnapshot')
     expect(activities.page[0]).not.toHaveProperty('inputDigest')
     expect((activities.page[0] as { generationInputs: Record<string, unknown> }).generationInputs).not.toHaveProperty('sessionContentInputDigest')
+    expect(JSON.stringify(activities.page[0])).not.toContain('private-snapshot-id')
   })
   test('exports calendar operational ledgers with strict redaction', async () => {
     const t = convexTest(schema, modules)

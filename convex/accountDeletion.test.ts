@@ -130,7 +130,7 @@ describe('accountDeletion.deleteAccountCascade', () => {
         requiredAction: { kind: 'submit_response', label: 'Continue' }, evaluationContract: { version: 'learn-adaptive.evaluation.v1', kind: 'learner_response', responseFormat: 'short_text', passingScorePercent: null },
         accessibilityMetadata: { heading: 'Learning goal', instructions: 'Answer the prompt.', focusTargetTestId: 'learn-primitive-diagnostic-prompt', liveRegionMode: 'polite' },
         pins: { learningVoidId: null, blueprintRevisionId: null, objectiveId: null, sessionContentId: null }, evidenceReferences: [], generationInputs: { sessionContentRevision: null, sessionContentInputDigest: null, generatorVersion: null },
-        decisionInputs: { availableTime: '15', sourceState: 'none', priorActivityId: null, priorOutcome: null, assistance: 'none', confidence: null },
+        decisionInputs: { intentRevision: 1, routerVersion: 'learn-adaptive.router.v1', availableTime: '15', sourceState: 'none', sourceInputs: [], priorActivityId: null, priorAttemptId: null, priorOutcome: null, assistance: 'none', confidence: null },
       })
       const activityId = await ctx.db.insert('learningThreadActivities', {
         userId: TEST_IDENTITY.tokenIdentifier, threadId, activityId: plan.activityId, boundaryOrdinal: plan.boundaryOrdinal, planRevision: plan.planRevision, activityClass: plan.activityClass, status: 'eligible',
