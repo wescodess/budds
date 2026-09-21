@@ -2,7 +2,8 @@ const KEY_PATTERN = /^[A-Za-z0-9._~-]{16,128}$/
 const MAX_PAYLOAD_BYTES = 12_000
 const FORBIDDEN_AUTHORITY_FIELDS = new Set([
   'score', 'scorePercent', 'serverScorePercent', 'verdict', 'mastery', 'masteryState',
-  'masteryTransition', 'evidenceAcceptance', 'provider', 'providerModel', 'providerVerdict',
+  'masteryTransition', 'masteryTransitionReason', 'masteryClock', 'nowUtcMs',
+  'evidenceAcceptance', 'provider', 'providerModel', 'providerVerdict',
 ])
 
 export type AdaptiveCommandInput = {

@@ -6,8 +6,9 @@ import { classifyAiGatewayFailure, generateCompletion } from '../server/utils/ai
 import { retrieveLearnV2FolderEvidence } from '../server/utils/learn-v2-folder-evidence'
 import { hasLearnV2Access, requireLearnV2MutationAccess } from './lib/learnV2Access'
 import { LEARN_V2_BLUEPRINT_LIMITS, validateLearnV2BlueprintCandidate } from '../shared/learn-v2-blueprint'
+import { deriveMastery } from '../shared/learn-v2-mastery'
 import { requireActiveBlueprint } from './lib/learnV2BlueprintAuthority'
-import { transitionScopedMasteryRecord } from './lib/learnV2MasteryScope'
+import { getScopedMasteryRecord, transitionScopedMasteryRecord } from './lib/learnV2MasteryScope'
 
 const MAX_IDEMPOTENCY_KEY_LENGTH = 128
 const MIN_CALIBRATION_ITEMS = 3
@@ -419,9 +420,6 @@ export const recordCalibrationAttempt = internalMutation({
     const existing = await ctx.db.query('masteryAttempts').withIndex('by_userId_and_blueprintRevisionId_and_kind', q => q.eq('userId', args.tokenIdentifier).eq('blueprintRevisionId', blueprint._id).eq('kind', 'calibration')).take(MAX_CALIBRATION_ITEMS + 1)
     if (existing.length >= MAX_CALIBRATION_ITEMS) throw new Error('Calibration already has seven items')
     if (existing.some(row => row.objectiveId === objective._id)) throw new Error('Calibration objective was already attempted')
-    const unassistedPass = args.serverScorePercent >= 80 && !args.usedHint && !args.usedReveal
-    const result = unassistedPass ? 'provisionally_known' as const : 'learning' as const
-    const schedulingPriority = unassistedPass ? 'deprioritized' as const : 'remediation' as const
     const currentEvidencePins = await calibrationEvidence(ctx, args.tokenIdentifier, objective._id)
     const evidencePins = scoringJob
       ? { sourceSnapshotIds: args.scoredSourceSnapshotIds!, contentRevisionPins: args.scoredContentRevisionPins!, verifierVersions: args.scoredVerifierVersions! }
@@ -434,8 +432,13 @@ export const recordCalibrationAttempt = internalMutation({
       || canonicalJson(evidencePins.contentRevisionPins) !== canonicalJson(currentEvidencePins.contentRevisionPins)
       || canonicalJson(evidencePins.verifierVersions) !== canonicalJson(currentEvidencePins.verifierVersions))) throw new Error('Calibration scoring evidence pins no longer match the accepted sources')
     const now = Date.now()
-    const attemptId = await ctx.db.insert('masteryAttempts', { userId: args.tokenIdentifier, blueprintRevisionId: blueprint._id, objectiveId: objective._id, kind: 'calibration', activityContractVersion: 'learn-v2.calibration-attempt.v1', providerVersion: args.scorerModel ? 'openrouter-via-cloudflare-ai-gateway.v1' : undefined, attemptedAt: now, idempotencyKey: args.idempotencyKey, requestFingerprint, serverScorePercent: args.serverScorePercent, usedHint: args.usedHint, usedReveal: args.usedReveal, confidence: args.confidence, rubricVersion: args.rubricVersion, response: args.response, scorerVersion: args.scorerVersion, scorerModel: args.scorerModel, criterionResultsJson: args.criterionResultsJson, rubricSnapshot: args.rubricSnapshot, verifierVersionsJson: JSON.stringify(evidencePins.verifierVersions), sourceSnapshotIdsJson: JSON.stringify(evidencePins.sourceSnapshotIds), contentRevisionPinsJson: JSON.stringify(evidencePins.contentRevisionPins), blueprintRecordRevision: blueprint.recordRevision, result })
-    await transitionScopedMasteryRecord(ctx, { userId: args.tokenIdentifier, blueprintRevisionId: blueprint._id, objectiveId: objective._id, transition: { state: result, schedulingPriority, updatedAt: now } })
+    const record = (await getScopedMasteryRecord(ctx, args.tokenIdentifier, blueprint._id, objective._id)).record
+    const outcome = deriveMastery({ scorePercent: args.serverScorePercent, assisted: args.usedHint || args.usedReveal, kind: 'calibration', previousState: record?.state })
+    const result = outcome.state
+    const schedulingPriority = result === 'provisionally_known' ? 'deprioritized' as const : outcome.remediation ? 'remediation' as const : 'standard' as const
+    const masteryRecordRevision = (record?.recordRevision ?? 0) + 1
+    const attemptId = await ctx.db.insert('masteryAttempts', { userId: args.tokenIdentifier, blueprintRevisionId: blueprint._id, objectiveId: objective._id, kind: 'calibration', activityContractVersion: 'learn-v2.calibration-attempt.v1', providerVersion: args.scorerModel ? 'openrouter-via-cloudflare-ai-gateway.v1' : undefined, attemptedAt: now, idempotencyKey: args.idempotencyKey, requestFingerprint, serverScorePercent: args.serverScorePercent, usedHint: args.usedHint, usedReveal: args.usedReveal, confidence: args.confidence, rubricVersion: args.rubricVersion, response: args.response, scorerVersion: args.scorerVersion, scorerModel: args.scorerModel, criterionResultsJson: args.criterionResultsJson, rubricSnapshot: args.rubricSnapshot, verifierVersionsJson: JSON.stringify(evidencePins.verifierVersions), sourceSnapshotIdsJson: JSON.stringify(evidencePins.sourceSnapshotIds), contentRevisionPinsJson: JSON.stringify(evidencePins.contentRevisionPins), blueprintRecordRevision: blueprint.recordRevision, masteryStateBefore: outcome.previousState, masteryStateAfter: outcome.state, masteryTransitionReason: outcome.reason, masteryTransitionVersion: outcome.transitionVersion, masteryRecordRevision, result })
+    await transitionScopedMasteryRecord(ctx, { userId: args.tokenIdentifier, blueprintRevisionId: blueprint._id, objectiveId: objective._id, historyAttemptId: attemptId, transition: { state: result, schedulingPriority, recordRevision: masteryRecordRevision, updatedAt: now } })
     if (scoringJob && args.scoringLeaseToken) await ctx.db.patch(scoringJob._id, { status: 'succeeded', leaseToken: undefined, leaseExpiresAt: undefined, checkpoint: 'recorded', providerResponseId: args.providerResponseId, providerResponseModel: args.scorerModel, revision: scoringJob.revision + 1, updatedAt: now })
     return { attemptId, result, schedulingPriority, replayed: false }
   },
@@ -475,12 +478,13 @@ const calibrationScoreSchema = {
 
 export const submitCalibrationAttempt = action({
   args: {
-    blueprintRevisionId: v.id('learnBlueprintRevisions'), objectiveId: v.id('learnObjectives'), expectedBlueprintRecordRevision: v.number(), expectedVoidRevision: v.number(), response: v.string(), confidence: v.number(), usedHint: v.boolean(), usedReveal: v.boolean(), idempotencyKey: v.string(),
+    blueprintRevisionId: v.id('learnBlueprintRevisions'), objectiveId: v.id('learnObjectives'), expectedBlueprintRecordRevision: v.number(), expectedVoidRevision: v.number(), response: v.string(), confidence: v.number(), idempotencyKey: v.string(),
   },
   handler: async (ctx, args): Promise<Record<string, unknown>> => {
     const identity = await ctx.auth.getUserIdentity()
     if (!identity) throw new Error('Learn V2 access denied')
-    const reservation: { kind: 'replay', attemptId: string, result?: string } | { kind: 'pending', status: 'blocked' | 'in_progress' } | { kind: 'acquired', jobId: Id<'learnJobs'>, leaseToken: string, revision: number } = await ctx.runMutation(internal.learnV2MapCalibration.reserveCalibrationScoring, { tokenIdentifier: identity.tokenIdentifier, ...args })
+    const command = { ...args, usedHint: false, usedReveal: false }
+    const reservation: { kind: 'replay', attemptId: string, result?: string } | { kind: 'pending', status: 'blocked' | 'in_progress' } | { kind: 'acquired', jobId: Id<'learnJobs'>, leaseToken: string, revision: number } = await ctx.runMutation(internal.learnV2MapCalibration.reserveCalibrationScoring, { tokenIdentifier: identity.tokenIdentifier, ...command })
     if (reservation.kind === 'replay') return { status: 'completed', attemptId: reservation.attemptId, result: reservation.result ?? null, replayed: true }
     if (reservation.kind === 'pending') {
       if (reservation.status === 'blocked') throw new Error('Calibration scoring outcome requires reconciliation')
@@ -565,7 +569,7 @@ export const submitCalibrationAttempt = action({
       throw new Error('Calibration scorer returned invalid output')
     }
     const score = contract.criteria.reduce((total, criterion) => total + (parsed.criterionResults!.find(result => result.key === criterion.key)?.awarded ? criterion.weightPercent : 0), 0)
-    return await ctx.runMutation(internal.learnV2MapCalibration.recordCalibrationAttempt, { tokenIdentifier: identity.tokenIdentifier, blueprintRevisionId: args.blueprintRevisionId, objectiveId: args.objectiveId, expectedBlueprintRecordRevision: args.expectedBlueprintRecordRevision, expectedVoidRevision: args.expectedVoidRevision, idempotencyKey: args.idempotencyKey, serverScorePercent: score, usedHint: args.usedHint, usedReveal: args.usedReveal, confidence: args.confidence, rubricVersion: contract.version, response: args.response, scorerVersion: 'learn-v2.calibration-scorer.v1', scorerModel: input.model, criterionResultsJson: JSON.stringify(parsed.criterionResults), rubricSnapshot: JSON.stringify(input.objective.assessmentContract), providerResponseId: completion.id, scoringJobId: reservation.jobId, scoringLeaseToken: reservation.leaseToken, scoredSourceSnapshotIds: input.sourceSnapshotIds, scoredContentRevisionPins: input.contentRevisionPins, scoredVerifierVersions: input.verifierVersions })
+    return await ctx.runMutation(internal.learnV2MapCalibration.recordCalibrationAttempt, { tokenIdentifier: identity.tokenIdentifier, blueprintRevisionId: args.blueprintRevisionId, objectiveId: args.objectiveId, expectedBlueprintRecordRevision: args.expectedBlueprintRecordRevision, expectedVoidRevision: args.expectedVoidRevision, idempotencyKey: args.idempotencyKey, serverScorePercent: score, usedHint: false, usedReveal: false, confidence: args.confidence, rubricVersion: contract.version, response: args.response, scorerVersion: 'learn-v2.calibration-scorer.v1', scorerModel: input.model, criterionResultsJson: JSON.stringify(parsed.criterionResults), rubricSnapshot: JSON.stringify(input.objective.assessmentContract), providerResponseId: completion.id, scoringJobId: reservation.jobId, scoringLeaseToken: reservation.leaseToken, scoredSourceSnapshotIds: input.sourceSnapshotIds, scoredContentRevisionPins: input.contentRevisionPins, scoredVerifierVersions: input.verifierVersions })
   },
 })
 

@@ -158,6 +158,26 @@ describe('LA2-12 server-scored mastery attempts', () => {
     expect(rows.scoped).toMatchObject({ blueprintRevisionId: ids.blueprintIdRevision, objectiveId: ids.objectiveId, scopeKey: await masteryScopeKey(OWNER.tokenIdentifier, ids.blueprintIdRevision, ids.objectiveId), state: 'independent' })
   })
 
+  test('appends one scoped before-and-after transition history row and replays it', async () => {
+    const { t, ids, args } = await fixture({ state: 'guided' })
+    const first = await t.mutation(internal.learnV2Mastery.recordMasteryAttempt, args('transition-history', 80))
+    const replay = await t.mutation(internal.learnV2Mastery.recordMasteryAttempt, args('transition-history', 80))
+    const attempts = await t.run(ctx => ctx.db.query('masteryAttempts')
+      .withIndex('by_userId_blueprintRevisionId_objectiveId_attemptedAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('blueprintRevisionId', ids.blueprintIdRevision).eq('objectiveId', ids.objectiveId))
+      .take(2))
+
+    expect(replay).toMatchObject({ attemptId: first.attemptId, replayed: true })
+    expect(attempts).toHaveLength(1)
+    expect(attempts[0]).toMatchObject({
+      masteryStateBefore: 'guided',
+      masteryStateAfter: 'independent',
+      masteryTransitionReason: 'unassisted_pass_independent',
+      masteryTransitionVersion: 'learn-v2.mastery-transition.v1',
+      masteryRecordRevision: 5,
+      attemptedAt: expect.any(Number),
+    })
+  })
+
   test('commits at most one deterministic mastery projection for concurrent same-scope commands', async () => {
     const setup = await fixture()
     const secondSessionId = await setup.t.run(async (ctx) => {
@@ -178,8 +198,13 @@ describe('LA2-12 server-scored mastery attempts', () => {
     expect([first.status, second.status]).toEqual(['fulfilled', 'fulfilled'])
     const scopeKey = await masteryScopeKey(OWNER.tokenIdentifier, setup.ids.blueprintIdRevision, setup.ids.objectiveId)
     const records = await setup.t.run(ctx => ctx.db.query('masteryRecords').withIndex('by_userId_and_scopeKey', q => q.eq('userId', OWNER.tokenIdentifier).eq('scopeKey', scopeKey)).take(2))
+    const history = await setup.t.run(ctx => ctx.db.query('masteryAttempts').withIndex('by_userId_blueprintRevisionId_objectiveId_attemptedAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('blueprintRevisionId', setup.ids.blueprintIdRevision).eq('objectiveId', setup.ids.objectiveId)).take(3))
     expect(records).toHaveLength(1)
-    expect(records[0]).toMatchObject({ blueprintRevisionId: setup.ids.blueprintIdRevision, objectiveId: setup.ids.objectiveId, scopeKey })
+    expect(records[0]).toMatchObject({ blueprintRevisionId: setup.ids.blueprintIdRevision, objectiveId: setup.ids.objectiveId, scopeKey, recordRevision: 2 })
+    expect(history.sort((a, b) => a.masteryRecordRevision! - b.masteryRecordRevision!)).toMatchObject([
+      { masteryStateBefore: 'unseen', masteryStateAfter: 'independent', masteryRecordRevision: 1 },
+      { masteryStateBefore: 'independent', masteryStateAfter: 'independent', masteryRecordRevision: 2 },
+    ])
   })
 
   test('records monotonic server-observed hint/reveal use and denies another owner', async () => {
@@ -193,6 +218,42 @@ describe('LA2-12 server-scored mastery attempts', () => {
     await t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: OTHER.tokenIdentifier, enabled: true })
     await expect(t.withIdentity(OTHER).mutation(api.learnV2Mastery.recordAssistanceUse, { studySessionId: ids.sessionId, expectedSessionRevision: 8, kind: 'answer_reveal' })).rejects.toThrow(/Study session not found/)
     expect(await owner.mutation(api.learnV2Mastery.recordAssistanceUse, { studySessionId: ids.sessionId, expectedSessionRevision: 8, kind: 'answer_reveal' })).toMatchObject({ revision: 9, replayed: false, assistance: { content: 'Revealed worked answer.' } })
+  })
+
+  test('serializes assistance against scoring so a pass cannot outrun its assistance cap', async () => {
+    const setup = await fixture()
+    const [assistance, scoring] = await Promise.allSettled([
+      setup.owner.mutation(api.learnV2Mastery.recordAssistanceUse, { studySessionId: setup.ids.sessionId, expectedSessionRevision: 7, kind: 'substantive_hint' }),
+      setup.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, setup.args('assistance-score-race', 100)),
+    ])
+    expect([assistance.status, scoring.status].filter(status => status === 'fulfilled')).toHaveLength(1)
+    const state = await setup.t.run(async ctx => ({
+      attempts: await ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', OWNER.tokenIdentifier).eq('idempotencyKey', 'assistance-score-race')).take(2),
+      session: await ctx.db.get(setup.ids.sessionId),
+    }))
+    if (state.attempts.length === 1) {
+      expect(state.attempts[0]).toMatchObject({ usedHint: false, masteryStateAfter: 'independent' })
+      expect(state.session).toMatchObject({ status: 'completed', substantiveHintUsedAt: undefined })
+    }
+    else {
+      expect(state.session).toMatchObject({ status: 'in_progress', substantiveHintUsedAt: expect.any(Number) })
+    }
+  })
+
+  test('does not let confidence or observational client fields raise mastery', async () => {
+    const confidence = await fixture()
+    await expect(confidence.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, { ...confidence.args('high-confidence-fail', 79), confidence: 5 })).resolves.toMatchObject({ state: 'needs_review' })
+
+    const observations = await fixture()
+    await expect(observations.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, {
+      ...observations.args('observations-only', 100),
+      timeOnPageMs: 60_000,
+      clickCount: 12,
+      contentViews: 5,
+      planningRationale: 'I feel ready.',
+      unverifiedKnowledge: 'claimed',
+    } as never)).rejects.toThrow()
+    expect(await observations.t.run(ctx => ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', OWNER.tokenIdentifier).eq('idempotencyKey', 'observations-only')).take(1))).toEqual([])
   })
 
   test('scores through the authenticated server action and replays before provider dispatch', async () => {
@@ -743,5 +804,20 @@ describe('LA2-12 server-scored mastery attempts', () => {
       expect(attempt).toMatchObject({ attemptLocalDate: '2026-03-08', attemptTimezone: 'America/Toronto' })
     }
     finally { vi.useRealTimers() }
+  })
+
+  test('rejects malformed timezone and independent-date pins before writing history', async () => {
+    const invalidZone = await fixture({ sessionTimezone: 'Not/A_Zone' })
+    await expect(invalidZone.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, invalidZone.args('invalid-zone'))).rejects.toThrow()
+    expect(await invalidZone.t.run(ctx => ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', OWNER.tokenIdentifier).eq('idempotencyKey', 'invalid-zone')).take(1))).toEqual([])
+
+    const invalidDate = await fixture({ placementKind: 'retained_review', state: 'independent', firstDate: '2026-02-30' })
+    await expect(invalidDate.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, invalidDate.args('invalid-date'))).rejects.toThrow(/local date/i)
+    const state = await invalidDate.t.run(async ctx => ({
+      attempts: await ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', OWNER.tokenIdentifier).eq('idempotencyKey', 'invalid-date')).take(1),
+      record: await ctx.db.query('masteryRecords').withIndex('by_userId_and_blueprintRevisionId_and_objectiveId', q => q.eq('userId', OWNER.tokenIdentifier).eq('blueprintRevisionId', invalidDate.ids.blueprintIdRevision).eq('objectiveId', invalidDate.ids.objectiveId)).unique(),
+    }))
+    expect(state.attempts).toEqual([])
+    expect(state.record).toMatchObject({ state: 'independent', recordRevision: 4 })
   })
 })
