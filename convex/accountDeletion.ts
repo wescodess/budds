@@ -12,6 +12,7 @@ import type { Doc, Id, TableNames } from './_generated/dataModel'
 import { scheduleAudioOverviewDeletion } from './audioOverviews'
 import { isAccountDeletionActive } from './lib/accountDeletionTombstone'
 import { prepareSearchReservationForAccountDeletion } from './learnV2Search'
+import { ADAPTIVE_LEARN_ACCOUNT_DELETE_ORDER } from '../shared/adaptive-learn-storage-manifest'
 
 export { isAccountDeletionActive } from './lib/accountDeletionTombstone'
 
@@ -84,7 +85,7 @@ const DIRECT_PHASES = {
 
 // Child-before-parent order keeps each deletion transaction bounded and never
 // leaves V2 rows reachable while the account tombstone is active.
-const LEARN_V2_DELETE_ORDER = ['calendarWebhookReceipts', 'calendarWatchChannels', 'calendarReconciliationProposals', 'learnFolderSourceManifestEntries', 'learnFolderSourceManifestFolders', 'learnFolderSourceManifests', 'learnSourceFetchLeases', 'learnSourceFetchRateEvents', 'learnMasteryScoringRateEvents', 'learnSourceCommandReceipts', 'learnLifecycleReceipts', 'learnPlanAuditEvents', 'learnPlanCommandReceipts', 'learnClaimSupports', 'sessionContentClaims', 'sessionContentBlocks', 'sessionContent', 'studySessionRetrievalObjectives', 'calendarProjections', 'studySessions', 'studyPlanRevisions', 'studyPlans', 'masteryAttempts', 'masteryRecords', 'learnObjectiveSources', 'learnSourceExcerpts', 'learnSourceSnapshots', 'learnObjectivePrerequisites', 'learnObjectives', 'learnMilestones', 'learnBlueprintRevisions', 'learnBlueprints', 'searchReservations', 'searchQuotaBuckets', 'learnJobs', 'reminderPolicies', 'learnSourceIdentities', 'learningVoids'] as const
+const LEARN_V2_DELETE_ORDER = [...ADAPTIVE_LEARN_ACCOUNT_DELETE_ORDER, 'calendarWebhookReceipts', 'calendarWatchChannels', 'calendarReconciliationProposals', 'learnFolderSourceManifestEntries', 'learnFolderSourceManifestFolders', 'learnFolderSourceManifests', 'learnSourceFetchLeases', 'learnSourceFetchRateEvents', 'learnMasteryScoringRateEvents', 'learnSourceCommandReceipts', 'learnLifecycleReceipts', 'learnPlanAuditEvents', 'learnPlanCommandReceipts', 'learnClaimSupports', 'sessionContentClaims', 'sessionContentBlocks', 'sessionContent', 'studySessionRetrievalObjectives', 'calendarProjections', 'studySessions', 'studyPlanRevisions', 'studyPlans', 'masteryAttempts', 'masteryRecords', 'learnObjectiveSources', 'learnSourceExcerpts', 'learnSourceSnapshots', 'learnObjectivePrerequisites', 'learnObjectives', 'learnMilestones', 'learnBlueprintRevisions', 'learnBlueprints', 'searchReservations', 'searchQuotaBuckets', 'learnJobs', 'reminderPolicies', 'learnSourceIdentities', 'learningVoids'] as const
 type LearnV2Table = typeof LEARN_V2_DELETE_ORDER[number]
 
 export function backoffMs(attempts: number): number {

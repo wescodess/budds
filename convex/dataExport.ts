@@ -2,10 +2,12 @@ import { paginationOptsValidator } from 'convex/server'
 import { v } from 'convex/values'
 import { query } from './_generated/server'
 import { requireAuth } from './lib/auth'
+import { ADAPTIVE_LEARN_EXPORT_COLLECTIONS } from '../shared/adaptive-learn-storage-manifest'
 
 // A single Convex document can approach 1 MiB. Keep pages comfortably below
 // the 16 MiB transaction and return-value ceilings even at the per-row limit.
 const MAX_EXPORT_PAGE_SIZE = 8
+const [learningThreadsCollection, learningThreadActivitiesCollection] = ADAPTIVE_LEARN_EXPORT_COLLECTIONS
 
 const exportCollectionValidator = v.union(
   v.literal('folders'),
@@ -54,6 +56,8 @@ const exportCollectionValidator = v.union(
   v.literal('audioOverviewInterjectionsV2'),
   v.literal('audioOverviewInterjectionUtterances'),
   v.literal('audioOverviewInterjectionSources'),
+  v.literal(learningThreadsCollection),
+  v.literal(learningThreadActivitiesCollection),
   v.literal('learningVoids'), v.literal('learnBlueprints'), v.literal('learnBlueprintRevisions'), v.literal('learnMilestones'), v.literal('learnObjectives'), v.literal('learnObjectivePrerequisites'), v.literal('learnSourceIdentities'), v.literal('learnSourceSnapshots'), v.literal('learnSourceFetchLeases'), v.literal('learnSourceFetchRateEvents'), v.literal('learnMasteryScoringRateEvents'), v.literal('learnSourceCommandReceipts'), v.literal('learnFolderSourceManifests'), v.literal('learnFolderSourceManifestFolders'), v.literal('learnFolderSourceManifestEntries'), v.literal('learnSourceExcerpts'), v.literal('learnObjectiveSources'), v.literal('learnClaimSupports'), v.literal('masteryAttempts'), v.literal('masteryRecords'), v.literal('studyPlans'), v.literal('studyPlanRevisions'), v.literal('studySessions'), v.literal('studySessionRetrievalObjectives'), v.literal('sessionContent'), v.literal('sessionContentBlocks'), v.literal('sessionContentClaims'), v.literal('calendarProjections'), v.literal('calendarReconciliationProposals'), v.literal('calendarWebhookReceipts'), v.literal('calendarWatchChannels'), v.literal('reminderPolicies'), v.literal('searchQuotaBuckets'), v.literal('searchReservations'), v.literal('learnJobs'), v.literal('learnLifecycleReceipts'), v.literal('learnPlanCommandReceipts'), v.literal('learnPlanAuditEvents'),
 )
 
@@ -207,6 +211,19 @@ export const getUserDataPage = query({
         return await ctx.db.query('audioOverviewInterjectionUtterances').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
       case 'audioOverviewInterjectionSources':
         return await ctx.db.query('audioOverviewInterjectionSources').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+      case 'learningThreads':
+        return await ctx.db.query('learningThreads').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+      case 'learningThreadActivities': {
+        const result = await ctx.db.query('learningThreadActivities').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+        return {
+          ...result,
+          page: result.page.map(({ canonicalInputSnapshot: _snapshot, inputDigest: _digest, evidenceReferences, generationInputs, ...row }) => ({
+            ...row,
+            evidenceReferences: evidenceReferences.map(({ claimId: _claim, supportId: _support, sourceSnapshotId: _source, ...reference }) => reference),
+            generationInputs: { sessionContentRevision: generationInputs.sessionContentRevision, generatorVersion: generationInputs.generatorVersion },
+          })),
+        }
+      }
       // Retention-class redaction deliberately keeps protected evidence,
       // provider identifiers, quota details, and job internals out of export.
       case 'learningVoids': return await ctx.db.query('learningVoids').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
