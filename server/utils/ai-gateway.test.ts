@@ -196,6 +196,13 @@ describe('generateCompletion', () => {
     await expect(generateCompletion(baseParams)).rejects.toThrow('AI Gateway error: Rate limited')
   })
 
+  test('redacts an upstream error body at privacy-sensitive provider boundaries', async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(new Response('private learner response and token=secret-value', { status: 429 }))
+    const failure = generateCompletion({ ...baseParams, redactUpstreamErrorBody: true })
+    await expect(failure).rejects.toThrow('AI Gateway error: Upstream provider request failed')
+    await expect(failure).rejects.not.toThrow(/private learner|secret-value/)
+  })
+
   test('keeps a gateway 5xx outcome ambiguous to prevent automatic duplicate dispatch', async () => {
     vi.mocked(globalThis.fetch).mockResolvedValueOnce(new Response('Upstream timeout', { status: 504 }))
     await expect(generateCompletion(baseParams)).rejects.toMatchObject({ aiGatewayFailureKind: 'outcome_unknown' })
@@ -208,6 +215,11 @@ describe('generateCompletion', () => {
     }))
 
     await expect(generateCompletion({ ...baseParams, maxResponseBytes: 32 })).rejects.toThrow('AI Gateway response exceeded the byte limit')
+  })
+
+  test('rejects an oversized encoded request before provider I/O', async () => {
+    await expect(generateCompletion({ ...baseParams, maxRequestBytes: 8 })).rejects.toThrow('AI Gateway request exceeded the byte limit')
+    expect(globalThis.fetch).not.toHaveBeenCalled()
   })
 
   test('classifies a malformed successful completion envelope as an invalid response', async () => {

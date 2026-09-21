@@ -140,6 +140,7 @@ The checked-in Worker config binds `AUDIO_ARTIFACTS` to the local/development bu
 | `AUDIO_OVERVIEW_JOB_SECRET` | Must exactly match the Pages/Nuxt Audio Overview job secret so Convex can verify server-derived capabilities |
 | `AUDIO_OVERVIEW_WORKER_TOKEN` | Must exactly match the 32+ character Pages/Nuxt and Worker token; seals Interjection scripting, rendering, failure, and publication mutations from browser callers |
 | `LEARN_V2_ENABLED` | Convex-only internal-beta gate; enabled only by the exact string `true` and otherwise defaults off |
+| `LEARN_ADAPTIVE_V2_PILOT_MANIFEST` | Exact source-controlled Slice-1 pilot manifest version; the committed manifest is pending approval, so this remains fail-closed and never grants GA activation |
 
 `LEARN_V2_ENABLED` belongs only to the Convex environment. Do not duplicate it
 in Nuxt runtime config, Cloudflare Pages variables, or any public/client-visible
@@ -149,6 +150,16 @@ check, so the global flag alone never grants access.
 Rollback disables `LEARN_V2_ENABLED` (or removes the entitlement), immediately
 blocking ordinary V2 lifecycle access without deleting additive records.
 Account deletion and redacted export remain available during rollback.
+
+Adaptive V2-backed scoring additionally requires the finite pilot manifest in
+`shared/adaptive-v2-pilot-policy.ts` to set `pilotApproved` after independent approval,
+within its start/end window, with an allowlisted model and exact activity
+versions. Its approval is explicitly not Slice-5 general-availability approval.
+Requests use metadata-only logs, request digests rather than payloads, a 90-second
+deadline, one gateway attempt, zero-data-retention/data-collection-deny flags,
+and the existing V2 job/account-deletion lifecycle. Private URLs, filenames,
+identifiers, credentials, unpublished notes, raw queries, and raw provider
+envelopes are not approved pilot fields.
 
 ### Local Convex Overrides (`.env.local`)
 
