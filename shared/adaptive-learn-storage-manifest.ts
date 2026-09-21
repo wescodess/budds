@@ -27,6 +27,15 @@ export const ADAPTIVE_LEARN_STORAGE_MANIFEST = [
 
 export const ADAPTIVE_LEARN_ACCOUNT_DELETE_ORDER = ADAPTIVE_LEARN_STORAGE_MANIFEST.map(entry => entry.table)
 export const ADAPTIVE_LEARN_EXPORT_COLLECTIONS = ['learningThreads', 'learningThreadActivities'] as const
+export const ADAPTIVE_ACTIVITY_STORAGE_REGISTRY = [
+  { type: 'cited_explanation', allowedActions: ['continue', 'inspect_source', 'ask_for_example'], testId: 'learn-primitive-cited-explanation' },
+  { type: 'diagnostic_prompt', allowedActions: ['submit_response'], testId: 'learn-primitive-diagnostic-prompt' },
+  { type: 'worked_example', allowedActions: ['reveal_example', 'continue'], testId: 'learn-primitive-worked-example' },
+  { type: 'independent_application', allowedActions: ['submit_response', 'save_draft'], testId: 'learn-primitive-independent-application' },
+  { type: 'source_comparison', allowedActions: ['choose_source', 'submit_comparison'], testId: 'learn-primitive-source-comparison' },
+  { type: 'artifact_workspace', allowedActions: ['save_artifact', 'apply_artifact', 'share_artifact'], testId: 'learn-primitive-artifact-workspace' },
+  { type: 'reflection_next_move', allowedActions: ['accept_next_move', 'override_next_move', 'end_thread'], testId: 'learn-primitive-reflection-next-move' },
+] as const
 
 const learningIntentValidator = v.union(v.literal('understand'), v.literal('prepare'), v.literal('build'), v.literal('master'), v.literal('refresh'), v.literal('explore'))
 const availableTimeValidator = v.union(v.literal('15'), v.literal('25'), v.literal('45'), v.literal('60'), v.literal('no_limit'))
@@ -75,9 +84,24 @@ export const adaptiveEvaluationContractValidator = v.object({
 })
 export const adaptiveAccessibilityMetadataValidator = v.object({ heading: v.string(), instructions: v.string(), focusTargetTestId: v.string(), liveRegionMode: v.union(v.literal('off'), v.literal('polite'), v.literal('assertive')) })
 export const adaptiveDecisionInputsValidator = v.object({
+  intentRevision: v.number(),
+  routerVersion: v.string(),
+  availableTime: availableTimeValidator,
+  sourceState: evidenceStateValidator,
+  sourceInputs: v.array(v.object({ sourceSnapshotId: v.string(), effectiveStatus: v.literal('user_accepted'), recordRevision: v.number() })),
+  priorActivityId: v.union(v.string(), v.null()),
+  priorAttemptId: v.union(v.string(), v.null()),
+  priorOutcome: v.union(v.string(), v.null()),
+  assistance: v.union(v.literal('none'), v.literal('hint'), v.literal('reveal')),
+  confidence: v.union(v.number(), v.null()),
+})
+
+export const adaptiveDecisionInputArgsValidator = v.object({
+  routerVersion: v.string(),
   availableTime: availableTimeValidator,
   sourceState: evidenceStateValidator,
   priorActivityId: v.union(v.string(), v.null()),
+  priorAttemptId: v.union(v.string(), v.null()),
   priorOutcome: v.union(v.string(), v.null()),
   assistance: v.union(v.literal('none'), v.literal('hint'), v.literal('reveal')),
   confidence: v.union(v.number(), v.null()),
@@ -134,7 +158,7 @@ export const learningThreadActivityFields = {
   learningVoidId: v.union(v.id('learningVoids'), v.null()),
   blueprintRevisionId: v.union(v.id('learnBlueprintRevisions'), v.null()),
   sessionContentId: v.union(v.id('sessionContent'), v.null()),
-  evidenceReferences: v.array(v.object({ claimId: v.id('sessionContentClaims'), supportId: v.id('learnClaimSupports'), sourceSnapshotId: v.id('learnSourceSnapshots'), sourceSnapshotRevision: v.number(), sourceRecordRevision: v.number(), verifierVersion: v.string(), integrityState: v.literal('accepted') })),
+  evidenceReferences: v.array(v.object({ claimId: v.id('sessionContentClaims'), supportId: v.id('learnClaimSupports'), sourceSnapshotId: v.id('learnSourceSnapshots'), sourceSnapshotRevision: v.number(), sourceRecordRevision: v.number(), sourceEffectiveStatus: v.literal('user_accepted'), verifierVersion: v.string(), integrityState: v.literal('accepted') })),
   generationInputs: v.object({ sessionContentRevision: v.union(v.number(), v.null()), sessionContentInputDigest: v.union(v.string(), v.null()), generatorVersion: v.union(v.string(), v.null()) }),
   decisionInputs: adaptiveDecisionInputsValidator,
   replacesActivityId: v.union(v.string(), v.null()),
@@ -145,7 +169,6 @@ export const learningThreadActivityFields = {
 }
 
 export const commitAdaptiveActivityPlanValidator = v.object({
-  tokenIdentifier: v.string(),
   threadId: v.id('learningThreads'),
   activityId: v.string(),
   boundaryOrdinal: v.number(),
@@ -163,6 +186,6 @@ export const commitAdaptiveActivityPlanValidator = v.object({
   blueprintRevisionId: v.union(v.id('learnBlueprintRevisions'), v.null()),
   sessionContentId: v.union(v.id('sessionContent'), v.null()),
   evidenceReferences: v.array(v.object({ claimId: v.id('sessionContentClaims'), supportId: v.id('learnClaimSupports'), sourceSnapshotId: v.id('learnSourceSnapshots') })),
-  decisionInputs: adaptiveDecisionInputsValidator,
+  decisionInputs: adaptiveDecisionInputArgsValidator,
   replacesActivityId: v.optional(v.string()),
 })

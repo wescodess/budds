@@ -22,6 +22,7 @@ export type AdaptiveActivityEvidenceReference = {
   sourceSnapshotId: string
   sourceSnapshotRevision: number
   sourceRecordRevision: number
+  sourceEffectiveStatus: 'user_accepted'
   verifierVersion: string
   integrityState: 'accepted'
 }
@@ -63,9 +64,17 @@ export type AdaptiveActivityPlanInput = {
     generatorVersion: string | null
   }
   decisionInputs: {
+    intentRevision: number
+    routerVersion: string
     availableTime: AdaptiveAvailableTime
     sourceState: AdaptiveEvidenceState
+    sourceInputs: Array<{
+      sourceSnapshotId: string
+      effectiveStatus: 'user_accepted'
+      recordRevision: number
+    }>
     priorActivityId: string | null
+    priorAttemptId: string | null
     priorOutcome: string | null
     assistance: 'none' | 'hint' | 'reveal'
     confidence: number | null
@@ -136,10 +145,12 @@ function validateEvidence(input: AdaptiveActivityPlanInput) {
       sourceSnapshotId: boundedText(reference.sourceSnapshotId, 'Source snapshot reference', 200),
       sourceSnapshotRevision: positiveInteger(reference.sourceSnapshotRevision, 'Source snapshot revision'),
       sourceRecordRevision: positiveInteger(reference.sourceRecordRevision, 'Source record revision'),
+      sourceEffectiveStatus: reference.sourceEffectiveStatus,
       verifierVersion: boundedText(reference.verifierVersion, 'Evidence verifier version', 120),
       integrityState: reference.integrityState,
     }
     if (validated.integrityState !== 'accepted') throw new Error('Factual activity requires accepted evidence')
+    if (validated.sourceEffectiveStatus !== 'user_accepted') throw new Error('Factual activity requires accepted evidence')
     const key = `${validated.claimId}\u0000${validated.supportId}\u0000${validated.sourceSnapshotId}`
     if (keys.has(key)) throw new Error('Activity evidence references must be unique')
     keys.add(key)
@@ -172,6 +183,15 @@ export async function composeAdaptiveActivityPlan(input: AdaptiveActivityPlanInp
   if (input.decisionInputs.confidence !== null && (!Number.isFinite(input.decisionInputs.confidence) || input.decisionInputs.confidence < 0 || input.decisionInputs.confidence > 1)) {
     throw new Error('Decision confidence is invalid')
   }
+  const sourceInputs = input.decisionInputs.sourceInputs.map(source => ({
+    sourceSnapshotId: boundedText(source.sourceSnapshotId, 'Decision source snapshot', 200),
+    effectiveStatus: source.effectiveStatus,
+    recordRevision: positiveInteger(source.recordRevision, 'Decision source record revision'),
+  }))
+  if (sourceInputs.length !== evidenceReferences.length || sourceInputs.some((source, index) => {
+    const evidence = evidenceReferences[index]
+    return !evidence || source.sourceSnapshotId !== evidence.sourceSnapshotId || source.effectiveStatus !== evidence.sourceEffectiveStatus || source.recordRevision !== evidence.sourceRecordRevision
+  })) throw new Error('Decision source inputs do not match accepted evidence')
 
   const core = {
     planVersion: ADAPTIVE_ACTIVITY_PLAN_VERSION,
@@ -228,9 +248,13 @@ export async function composeAdaptiveActivityPlan(input: AdaptiveActivityPlanInp
       generatorVersion: input.generationInputs.generatorVersion === null ? null : boundedText(input.generationInputs.generatorVersion, 'Generator version', 120),
     },
     decisionInputs: {
+      intentRevision: positiveInteger(input.decisionInputs.intentRevision, 'Intent revision'),
+      routerVersion: boundedText(input.decisionInputs.routerVersion, 'Router version', 120),
       availableTime: input.decisionInputs.availableTime,
       sourceState: input.decisionInputs.sourceState,
-      priorActivityId: input.decisionInputs.priorActivityId,
+      sourceInputs,
+      priorActivityId: input.decisionInputs.priorActivityId === null ? null : boundedText(input.decisionInputs.priorActivityId, 'Prior activity identity', 160),
+      priorAttemptId: input.decisionInputs.priorAttemptId === null ? null : boundedText(input.decisionInputs.priorAttemptId, 'Prior attempt identity', 200),
       priorOutcome: input.decisionInputs.priorOutcome === null ? null : boundedText(input.decisionInputs.priorOutcome, 'Prior outcome', 120),
       assistance: input.decisionInputs.assistance,
       confidence: input.decisionInputs.confidence,
