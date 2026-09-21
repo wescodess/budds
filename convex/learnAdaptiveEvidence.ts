@@ -1,14 +1,14 @@
 import { v } from 'convex/values'
 import { internalQuery } from './_generated/server'
-import { requireAuth } from './lib/auth'
+import { requireAdaptiveQueryAccess } from './lib/adaptiveLearnAccess'
 import { loadAdaptiveClaimProjection } from './lib/adaptiveClaimProjection'
 
-// Integration note: compose this private projection behind the canonical
-// adaptive access gate in learnAdaptive.getThread after ALA 1.3 is integrated.
+// Story 2.x may compose this private projection into getThread; it is not a
+// separate public endpoint and already consumes the canonical adaptive gate.
 export const getActivityEvidence = internalQuery({
   args: { activityId: v.string() },
   handler: async (ctx, args) => {
-    const userId = await requireAuth(ctx)
+    const userId = await requireAdaptiveQueryAccess(ctx)
     const activity = await ctx.db.query('learningThreadActivities')
       .withIndex('by_userId_and_activityId', q => q.eq('userId', userId).eq('activityId', args.activityId))
       .unique()

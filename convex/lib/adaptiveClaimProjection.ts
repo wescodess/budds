@@ -17,6 +17,15 @@ const INTEGRITY_PRIORITY: readonly AdaptiveEvidenceIntegrityState[] = [
 ]
 
 type EvidenceReference = Doc<'learningThreadActivities'>['evidenceReferences'][number]
+type EvidenceReferenceIds = Pick<EvidenceReference, 'claimId' | 'supportId' | 'sourceSnapshotId'>
+
+export type LoadedAdaptiveClaimGraph = Array<{
+  claim: Doc<'sessionContentClaims'> | null
+  support: Doc<'learnClaimSupports'> | null
+  snapshot: Doc<'learnSourceSnapshots'> | null
+  excerpt: Doc<'learnSourceExcerpts'> | null
+  identity: Doc<'learnSourceIdentities'> | null
+}>
 
 export type LoadedAdaptiveClaimProjection = {
   claims: AdaptiveClaimIntegrityProjection[]
@@ -25,6 +34,25 @@ export type LoadedAdaptiveClaimProjection = {
 
 function aggregateIntegrity(states: AdaptiveEvidenceIntegrityState[]): AdaptiveEvidenceIntegrityState {
   return INTEGRITY_PRIORITY.find(state => states.includes(state)) ?? 'insufficient'
+}
+
+export async function loadAdaptiveClaimGraph(
+  ctx: Pick<QueryCtx, 'db'>,
+  references: EvidenceReferenceIds[],
+): Promise<LoadedAdaptiveClaimGraph> {
+  if (references.length < 1 || references.length > MAX_ACTIVITY_EVIDENCE_REFERENCES) {
+    throw new Error('Factual activity requires between 1 and 16 evidence references')
+  }
+  return await Promise.all(references.map(async (reference) => {
+    const [claim, support, snapshot] = await Promise.all([
+      ctx.db.get(reference.claimId),
+      ctx.db.get(reference.supportId),
+      ctx.db.get(reference.sourceSnapshotId),
+    ])
+    const excerpt = support ? await ctx.db.get(support.sourceExcerptId) : null
+    const identity = snapshot ? await ctx.db.get(snapshot.sourceIdentityId) : null
+    return { claim, support, snapshot, excerpt, identity }
+  }))
 }
 
 export async function loadAdaptiveClaimProjection(
@@ -37,20 +65,10 @@ export async function loadAdaptiveClaimProjection(
     evidenceReferences: EvidenceReference[]
   },
 ): Promise<LoadedAdaptiveClaimProjection> {
-  if (input.evidenceReferences.length < 1 || input.evidenceReferences.length > MAX_ACTIVITY_EVIDENCE_REFERENCES) {
-    throw new Error('Factual activity evidence reference count is invalid')
-  }
-
   const sessionContent = await ctx.db.get(input.sessionContentId)
-  const claims = await Promise.all(input.evidenceReferences.map(async (pinned) => {
-    const [claim, support, snapshot] = await Promise.all([
-      ctx.db.get(pinned.claimId),
-      ctx.db.get(pinned.supportId),
-      ctx.db.get(pinned.sourceSnapshotId),
-    ])
-    const excerpt = support ? await ctx.db.get(support.sourceExcerptId) : null
-    const identity = snapshot ? await ctx.db.get(snapshot.sourceIdentityId) : null
-
+  const graph = await loadAdaptiveClaimGraph(ctx, input.evidenceReferences)
+  const claims = input.evidenceReferences.map((pinned, index) => {
+    const { claim, support, snapshot, excerpt, identity } = graph[index]!
     return projectAdaptiveClaimIntegrity({
       ownerId: input.userId,
       historical: input.historical,
@@ -89,7 +107,7 @@ export async function loadAdaptiveClaimProjection(
           : null,
       },
     })
-  }))
+  })
 
   return { claims, integrityState: aggregateIntegrity(claims.map(claim => claim.integrityState)) }
 }

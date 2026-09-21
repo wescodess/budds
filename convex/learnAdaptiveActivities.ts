@@ -9,6 +9,7 @@ import {
 } from '../shared/learn-adaptive-activity-plan'
 import { projectAdaptiveClaimAuthority } from '../shared/adaptive-claim-adapter'
 import { requireAdaptiveQueryAccess } from './lib/adaptiveLearnAccess'
+import { loadAdaptiveClaimGraph, loadAdaptiveClaimProjection } from './lib/adaptiveClaimProjection'
 import { requireActiveBlueprint } from './lib/learnV2BlueprintAuthority'
 import { AdaptiveCommandConflict, executeAdaptiveThreadCommand } from './learnAdaptiveCommands'
 
@@ -41,16 +42,7 @@ async function requireEvidenceAuthority(ctx: MutationCtx, userId: string, args: 
   ])
   if (!learningVoid || learningVoid.userId !== userId) throw new Error('Learning Void not found')
   await requireActiveBlueprint(ctx, userId, learningVoid, blueprint?._id)
-  const loaded = await Promise.all(args.evidenceReferences.map(async (reference) => {
-    const [claim, support, snapshot] = await Promise.all([
-      ctx.db.get(reference.claimId),
-      ctx.db.get(reference.supportId),
-      ctx.db.get(reference.sourceSnapshotId),
-    ])
-    const excerpt = support ? await ctx.db.get(support.sourceExcerptId) : null
-    const identity = snapshot ? await ctx.db.get(snapshot.sourceIdentityId) : null
-    return { claim, support, snapshot, excerpt, identity }
-  }))
+  const loaded = await loadAdaptiveClaimGraph(ctx, args.evidenceReferences)
 
   return projectAdaptiveClaimAuthority({
     kind: 'factual',
@@ -238,6 +230,34 @@ export const replayActivityPlan = internalQuery({
       .withIndex('by_userId_and_activityId', q => q.eq('userId', userId).eq('activityId', args.activityId))
       .unique()
     if (!row) return { ok: false as const, reason: 'activity_not_found' as const }
+    if (row.activityClass === 'factual') {
+      const thread = await ctx.db.get(row.threadId)
+      if (!thread || thread.userId !== userId) return { ok: false as const, reason: 'activity_not_found' as const }
+      if (!row.sessionContentId
+        || row.generationInputs.sessionContentRevision === null
+        || row.evidenceReferences.length < 1
+        || row.evidenceReferences.length > 16) {
+        return { ok: false as const, reason: 'evidence_invalidated' as const }
+      }
+      const historical = thread.currentActivityId !== row._id
+        || row.status === 'replaced'
+        || row.status === 'ended'
+      const projection = await loadAdaptiveClaimProjection(ctx, {
+        userId,
+        historical,
+        sessionContentId: row.sessionContentId,
+        sessionContentRevision: row.generationInputs.sessionContentRevision,
+        evidenceReferences: row.evidenceReferences,
+      })
+      if (projection.integrityState !== 'accepted') {
+        return {
+          ok: false as const,
+          reason: projection.integrityState === 'unavailable'
+            ? 'evidence_unavailable' as const
+            : 'evidence_invalidated' as const,
+        }
+      }
+    }
     return await replayAdaptiveActivityPlan(rowToComposed(row))
   },
 })
