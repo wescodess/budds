@@ -1,5 +1,6 @@
 const KEY_PATTERN = /^[A-Za-z0-9._~-]{16,128}$/
 const MAX_PAYLOAD_BYTES = 12_000
+export const MAX_ADAPTIVE_COMMAND_REFERENCE_CHARS = 4_096
 const FORBIDDEN_AUTHORITY_FIELDS = new Set([
   'score', 'scorePercent', 'serverScorePercent', 'verdict', 'mastery', 'masteryState',
   'masteryTransition', 'masteryTransitionReason', 'masteryClock', 'nowUtcMs',
@@ -13,6 +14,12 @@ export type AdaptiveCommandInput = {
   expectedRevision: number
   idempotencyKey: string
   payload: Record<string, unknown>
+}
+
+export function boundedAdaptiveCommandReference(value: unknown): string {
+  const encoded = JSON.stringify(value)
+  if (encoded.length > MAX_ADAPTIVE_COMMAND_REFERENCE_CHARS) throw new Error('Adaptive command result exceeds receipt bounds')
+  return encoded
 }
 
 function canonicalJson(value: unknown): string {

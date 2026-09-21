@@ -138,6 +138,7 @@ export const adaptiveDecisionInputArgsValidator = v.object({
 export const learningThreadFields = {
   userId: v.string(),
   originalNeed: v.string(),
+  outcome: v.optional(v.string()),
   intent: learningIntentValidator,
   availableTime: availableTimeValidator,
   authorityKind: v.union(v.literal('standalone'), v.literal('v2_mission')),
