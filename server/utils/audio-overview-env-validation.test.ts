@@ -193,6 +193,26 @@ describe('Cloudflare Pages environment validation', () => {
     })).not.toThrow()
   })
 
+  it('allows feature-branch preview builds while runtime keeps shadow execution dev-only', () => {
+    expect(() => execFileSync(process.execPath, [validator, 'build', '--strict'], {
+      cwd: process.cwd(),
+      env: {
+        ...completePagesEnv,
+        NUXT_LEARNING_DECISION_MODE: 'shadow',
+        NUXT_LEARNING_DECISION_PROVIDER: 'structured-llm',
+        NUXT_QUIZ_SEMANTIC_LLM_MODEL: 'openai/gpt-4o-mini',
+        NUXT_CLOUDFLARE_ACCOUNT_ID: 'account',
+        NUXT_CLOUDFLARE_AI_GATEWAY_ID: 'gateway',
+        NUXT_OPENROUTER_API_KEY: 'openrouter-key',
+        NUXT_QUIZ_ASSESSMENT_WRITE_SECRET: 'test-assessment-write-secret-long-enough',
+        NUXT_APPLICATION_ENVIRONMENT: 'development',
+        CF_PAGES_ENVIRONMENT: 'preview',
+        CF_PAGES_BRANCH: 'feat/safe-preview-build',
+      },
+      stdio: 'pipe',
+    })).not.toThrow()
+  })
+
   it('rejects structured LLM shadow execution on a production deployment', () => {
     const result = spawnSync(process.execPath, [validator, 'build', '--strict'], {
       cwd: process.cwd(),

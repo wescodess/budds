@@ -225,9 +225,8 @@ if (!audioWorkflowPhase && (learningDecisionMode === 'shadow' || learningDecisio
   }
   if (learningDecisionMode === 'shadow') {
     if (mergedEnv.NUXT_APPLICATION_ENVIRONMENT !== structuredLlmPolicy.shadowDeployment.applicationEnvironment
-      || (mergedEnv.CF_PAGES_ENVIRONMENT && mergedEnv.CF_PAGES_ENVIRONMENT !== structuredLlmPolicy.shadowDeployment.pagesEnvironment)
-      || (mergedEnv.CF_PAGES_BRANCH && mergedEnv.CF_PAGES_BRANCH !== structuredLlmPolicy.shadowDeployment.pagesBranch)) {
-      invalidBlocking.push({ kind: 'var', label: 'Shadow learning decisions are development-only on the dev preview deployment', names: ['NUXT_APPLICATION_ENVIRONMENT', 'CF_PAGES_ENVIRONMENT', 'CF_PAGES_BRANCH'] })
+      || (mergedEnv.CF_PAGES_ENVIRONMENT && mergedEnv.CF_PAGES_ENVIRONMENT !== structuredLlmPolicy.shadowDeployment.pagesEnvironment)) {
+      invalidBlocking.push({ kind: 'var', label: 'Shadow learning decisions are development-only on preview deployments', names: ['NUXT_APPLICATION_ENVIRONMENT', 'CF_PAGES_ENVIRONMENT'] })
     }
   }
   if (quizAssessmentWriteSecret.length < 32) invalidBlocking.push({ kind: 'secret', label: 'Quiz assessment write credential must be at least 32 characters', names: ['NUXT_QUIZ_ASSESSMENT_WRITE_SECRET'] })
