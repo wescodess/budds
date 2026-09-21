@@ -194,7 +194,7 @@ describe('dataExport paginated queries', () => {
         resultKind: 'ok', resultReference: '{"private":"command-result"}', errorReference: 'private-error',
         createdAt: 1, resultExpiresAt: 2, redactionStatus: 'pending',
       })
-      const deletionJobId = await ctx.db.insert('learnAdaptiveThreadDeletionJobs', { userId: USER_A.tokenIdentifier, threadId, phase: 'children', createdAt: 1, updatedAt: 1 })
+      const deletionJobId = await ctx.db.insert('learnAdaptiveThreadDeletionJobs', { userId: USER_A.tokenIdentifier, threadId, phase: 'children', status: 'queued', attempts: 0, createdAt: 1, updatedAt: 1 })
       return { threadId, activityId, receiptId, deletionJobId }
     })
 
@@ -214,7 +214,7 @@ describe('dataExport paginated queries', () => {
     expect(receipts.page[0]).toMatchObject({ _id: ids.receiptId, commandName: 'endThread', resultKind: 'ok' })
     for (const key of ['idempotencyKeyHash', 'requestFingerprint', 'resultReference', 'errorReference']) expect(receipts.page[0]).not.toHaveProperty(key)
     expect(JSON.stringify(receipts.page[0])).not.toContain('private')
-    expect(deletionJobs.page).toEqual([expect.objectContaining({ _id: ids.deletionJobId, threadId: ids.threadId, phase: 'children' })])
+    expect(deletionJobs.page).toEqual([expect.objectContaining({ _id: ids.deletionJobId, threadId: ids.threadId, phase: 'children', status: 'queued', attempts: 0 })])
   })
   test('exports calendar operational ledgers with strict redaction', async () => {
     const t = convexTest(schema, modules)

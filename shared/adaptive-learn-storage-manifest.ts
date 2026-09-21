@@ -203,6 +203,9 @@ export const learnAdaptiveThreadDeletionJobFields = {
   userId: v.string(),
   threadId: v.id('learningThreads'),
   phase: v.union(v.literal('children'), v.literal('receipts')),
+  status: v.union(v.literal('queued'), v.literal('running'), v.literal('retrying'), v.literal('failed')),
+  attempts: v.number(),
+  terminalReason: v.optional(v.union(v.literal('authority_mismatch'), v.literal('batch_failed'))),
   createdAt: v.number(),
   updatedAt: v.number(),
 }

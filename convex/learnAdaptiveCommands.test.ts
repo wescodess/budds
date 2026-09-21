@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 import { convexTest } from 'convex-test'
-import { afterAll, beforeEach, describe, expect, test } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import { executeAdaptiveThreadCommand } from './learnAdaptiveCommands'
 import schema from './schema'
@@ -10,7 +10,8 @@ const originalFlag = process.env.LEARN_V2_ENABLED
 const OWNER = { tokenIdentifier: 'https://auth.example.com|command-owner', subject: 'command-owner', issuer: 'https://auth.example.com' }
 const OTHER = { tokenIdentifier: 'https://auth.example.com|command-other', subject: 'command-other', issuer: 'https://auth.example.com' }
 
-beforeEach(() => { process.env.LEARN_V2_ENABLED = 'true' })
+beforeEach(() => { process.env.LEARN_V2_ENABLED = 'true'; vi.useFakeTimers() })
+afterEach(() => { vi.useRealTimers() })
 afterAll(() => { if (originalFlag === undefined) delete process.env.LEARN_V2_ENABLED; else process.env.LEARN_V2_ENABLED = originalFlag })
 
 async function setup() {
@@ -83,7 +84,7 @@ describe('Adaptive Learn command receipts', () => {
     expect(rows.every(row => row.redactionStatus === 'redacted' && row.resultReference === null)).toBe(true)
   })
 
-  test('deletes one thread authority plane in bounded child-before-parent phases', async () => {
+  test('one authenticated initiation schedules bounded child-before-parent deletion to completion', async () => {
     const { t, threadId, owner } = await setup()
     const command = {
       threadId, expectedRevision: 1, idempotencyKey: 'delete-safety-key-01', commandName: 'endThread', payload: {},
@@ -102,18 +103,16 @@ describe('Adaptive Learn command receipts', () => {
         intent: 'understand', objectiveId: null, purpose: 'fixture', reasonCode: 'fixture', primitivePlan: [], requiredAction: { kind: 'continue', label: 'Continue' }, evaluationContract: { version: 'v1', kind: 'acknowledgement', responseFormat: 'none', passingScorePercent: null }, fallback: { version: 'learn-adaptive.text-card-fallback.v1', kind: 'text_card', title: 'Fallback', body: 'Fallback', primaryAction: { type: 'continue_safe', label: 'Continue' }, testId: 'learn-activity-fallback' }, accessibilityMetadata: { heading: 'Fixture', instructions: 'Fixture', focusTargetTestId: 'fixture', liveRegionMode: 'off' }, learningVoidId: null, blueprintRevisionId: null, sessionContentId: null, evidenceReferences: [], generationInputs: { sessionContentRevision: null, sessionContentInputDigest: null, generatorVersion: null }, decisionInputs: { intentRevision: 1, routerVersion: 'v1', availableTime: '15', sourceState: 'none', sourceInputs: [], priorActivityId: null, priorAttemptId: null, priorOutcome: null, assistance: 'none', confidence: null }, replacesActivityId: null, canonicalInputSnapshot: '{}', inputDigest: `sha256:${'3'.repeat(64)}`, createdAt: 1, updatedAt: 1,
       })
     })
-    await expect(owner.mutation(internal.learnAdaptiveCommands.deleteThreadAuthorityRows, { threadId })).resolves.toMatchObject({ phase: 'marked', done: false })
+    await expect(t.withIdentity(OTHER).mutation(api.learnAdaptiveCommands.deleteThread, { threadId })).rejects.toThrow(/Thread not found/)
+    await expect(owner.mutation(api.learnAdaptiveCommands.deleteThread, { threadId })).resolves.toMatchObject({ status: 'queued' })
     await expect(owner.mutation(ctx => executeAdaptiveThreadCommand(ctx, command))).resolves.toEqual(committed)
     await expect(owner.mutation(ctx => executeAdaptiveThreadCommand(ctx, { ...command, payload: { changed: true } }))).resolves.toMatchObject({ kind: 'conflict', code: 'duplicate_key' })
     await expect(owner.mutation(ctx => executeAdaptiveThreadCommand(ctx, { ...command, idempotencyKey: 'delete-new-key-0001' }))).rejects.toThrow(/deletion is in progress/)
-    await expect(owner.mutation(internal.learnAdaptiveCommands.deleteThreadAuthorityRows, { threadId })).resolves.toMatchObject({ phase: 'activities', done: false })
     expect(await t.run(ctx => ctx.db.query('learnActivityCommandReceipts').withIndex('by_userId_and_threadId', q => q.eq('userId', OWNER.tokenIdentifier).eq('threadId', threadId)).collect())).toHaveLength(9)
     await expect(owner.mutation(ctx => executeAdaptiveThreadCommand(ctx, command))).resolves.toEqual(committed)
-    await expect(owner.mutation(internal.learnAdaptiveCommands.deleteThreadAuthorityRows, { threadId })).resolves.toMatchObject({ phase: 'parent_and_receipts', deleted: 9, done: false })
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
     expect(await t.run(ctx => ctx.db.get(threadId))).toBeNull()
-    expect(await t.run(ctx => ctx.db.query('learnActivityCommandReceipts').withIndex('by_userId_and_threadId', q => q.eq('userId', OWNER.tokenIdentifier).eq('threadId', threadId)).collect())).toHaveLength(1)
-    await expect(t.withIdentity(OTHER).mutation(internal.learnAdaptiveCommands.deleteThreadAuthorityRows, { threadId })).rejects.toThrow(/Thread not found/)
-    await expect(owner.mutation(internal.learnAdaptiveCommands.deleteThreadAuthorityRows, { threadId })).resolves.toMatchObject({ phase: 'receipts', deleted: 1, done: true })
+    expect(await t.run(ctx => ctx.db.query('learnActivityCommandReceipts').withIndex('by_userId_and_threadId', q => q.eq('userId', OWNER.tokenIdentifier).eq('threadId', threadId)).collect())).toEqual([])
     expect(await t.run(ctx => ctx.db.query('learnAdaptiveThreadDeletionJobs').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).collect())).toEqual([])
   })
 
@@ -121,8 +120,27 @@ describe('Adaptive Learn command receipts', () => {
     const { t, threadId, owner } = await setup()
     await owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: false })
     process.env.LEARN_V2_ENABLED = 'false'
-    await expect(owner.mutation(internal.learnAdaptiveCommands.deleteThreadAuthorityRows, { threadId })).resolves.toMatchObject({ phase: 'marked' })
-    await expect(owner.mutation(internal.learnAdaptiveCommands.deleteThreadAuthorityRows, { threadId })).resolves.toMatchObject({ phase: 'parent_and_receipts', done: true })
+    await expect(owner.mutation(api.learnAdaptiveCommands.deleteThread, { threadId })).resolves.toMatchObject({ status: 'queued' })
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
     expect(await t.run(ctx => ctx.db.get(threadId))).toBeNull()
+  })
+
+  test('bounds worker retries and retains a terminal job when durable authority is inconsistent', async () => {
+    const { t } = await setup()
+    const foreignThreadId = await t.run(ctx => ctx.db.insert('learningThreads', {
+      userId: OTHER.tokenIdentifier, originalNeed: 'Foreign authority', intent: 'understand', availableTime: '15', authorityKind: 'standalone',
+      sourceScope: { kind: 'none' }, evidenceState: 'none', lifecycle: 'active', revision: 1, createdAt: 1, updatedAt: 1,
+    }))
+    const jobId = await t.run(ctx => ctx.db.insert('learnAdaptiveThreadDeletionJobs', {
+      userId: OWNER.tokenIdentifier, threadId: foreignThreadId, phase: 'children', status: 'queued', attempts: 0, createdAt: 1, updatedAt: 1,
+    }))
+
+    await expect(t.mutation(internal.learnAdaptiveCommands.runThreadDeletionJob, { jobId }))
+      .resolves.toMatchObject({ state: 'retrying', attempts: 1, retryAfterMs: 1_000 })
+    expect(await t.run(ctx => ctx.db.get(jobId))).toMatchObject({ status: 'retrying', attempts: 1, terminalReason: 'authority_mismatch' })
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
+
+    expect(await t.run(ctx => ctx.db.get(jobId))).toMatchObject({ status: 'failed', attempts: 3, terminalReason: 'authority_mismatch' })
+    expect(await t.run(ctx => ctx.db.get(foreignThreadId))).not.toBeNull()
   })
 })

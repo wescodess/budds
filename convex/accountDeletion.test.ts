@@ -145,7 +145,7 @@ describe('accountDeletion.deleteAccountCascade', () => {
         resultKind: 'ok', resultReference: '{"kind":"ok"}', errorReference: null,
         createdAt: now, resultExpiresAt: now + 1, redactionStatus: 'pending',
       })
-      const threadDeletionJobId = await ctx.db.insert('learnAdaptiveThreadDeletionJobs', { userId: TEST_IDENTITY.tokenIdentifier, threadId, phase: 'children', createdAt: now, updatedAt: now })
+      const threadDeletionJobId = await ctx.db.insert('learnAdaptiveThreadDeletionJobs', { userId: TEST_IDENTITY.tokenIdentifier, threadId, phase: 'children', status: 'queued', attempts: 0, createdAt: now, updatedAt: now })
       await ctx.db.insert('accountDeletionJobs', { userId: TEST_IDENTITY.tokenIdentifier, status: 'active', phase: 'learnV2', startedAt: now, updatedAt: now })
       return { threadId, activityId, receiptId, threadDeletionJobId }
     })
