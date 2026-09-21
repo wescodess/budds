@@ -9,6 +9,7 @@ export type AdaptiveLearnPublicStatus = {
 // AD-13/AD-15 intentionally defer an adaptive action/provider surface until
 // its storage manifest, lease/reconciliation, quota, and activation contracts exist.
 export const ADAPTIVE_PROVIDER_ACTIONS = 'deferred_pending_manifest_and_activation' as const
+export const ADAPTIVE_EXTERNAL_OBJECT_CLEANUP = 'deferred_no_adaptive_objects' as const
 
 const status = (allowed: boolean): AdaptiveLearnPublicStatus => ({
   kind: allowed ? 'allowed' : 'denied',

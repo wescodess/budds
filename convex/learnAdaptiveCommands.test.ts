@@ -79,21 +79,48 @@ describe('Adaptive Learn command receipts', () => {
     })
     await expect(t.mutation(internal.learnAdaptiveCommands.redactExpiredReceiptResults, { now: 3 })).resolves.toEqual({ scanned: 32, redacted: 32 })
     await expect(t.mutation(internal.learnAdaptiveCommands.redactExpiredReceiptResults, { now: 3 })).resolves.toEqual({ scanned: 1, redacted: 1 })
-    expect(await t.run(ctx => ctx.db.query('learnActivityCommandReceipts').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).collect())).toSatisfy(rows => rows.every(row => row.redactionStatus === 'redacted' && row.resultReference === null))
+    const rows = await t.run(ctx => ctx.db.query('learnActivityCommandReceipts').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).collect())
+    expect(rows.every(row => row.redactionStatus === 'redacted' && row.resultReference === null)).toBe(true)
   })
 
   test('deletes one thread authority plane in bounded child-before-parent phases', async () => {
     const { t, threadId, owner } = await setup()
+    const command = {
+      threadId, expectedRevision: 1, idempotencyKey: 'delete-safety-key-01', commandName: 'endThread', payload: {},
+      apply: async (ctx: Parameters<typeof executeAdaptiveThreadCommand>[0]) => { await ctx.db.patch(threadId, { revision: 2 }); return { value: { ended: true }, revision: 2 } },
+    }
+    await owner.mutation(ctx => executeAdaptiveThreadCommand(ctx, command))
     await t.run(async (ctx) => {
-      await ctx.db.insert('learnActivityCommandReceipts', { userId: OWNER.tokenIdentifier, threadId, idempotencyKeyHash: `sha256:${'1'.repeat(64)}`, requestFingerprint: `sha256:${'2'.repeat(64)}`, commandName: 'fixture', targetRevision: 1, resultKind: 'ok', resultReference: '{}', errorReference: null, createdAt: 1, resultExpiresAt: 2, redactionStatus: 'pending' })
+      for (let index = 0; index < 8; index++) await ctx.db.insert('learnActivityCommandReceipts', {
+        userId: OWNER.tokenIdentifier, threadId, idempotencyKeyHash: `sha256:${(index + 10).toString(16).padStart(64, '0')}`,
+        requestFingerprint: `sha256:${(index + 100).toString(16).padStart(64, '0')}`, commandName: 'fixture', targetRevision: 2,
+        resultKind: 'ok', resultReference: '{}', errorReference: null, createdAt: index + 2, resultExpiresAt: 100, redactionStatus: 'pending',
+      })
       await ctx.db.insert('learningThreadActivities', {
         userId: OWNER.tokenIdentifier, threadId, activityId: 'delete-fixture', boundaryOrdinal: 1, planRevision: 1, activityClass: 'non_factual', status: 'eligible',
         planVersion: 'learn-adaptive.activity-plan.v1', replayVersion: 'learn-adaptive.activity-replay.v1', contractVersion: 'learn-adaptive.activity-contract.v1', rendererVersion: 'learn-adaptive.renderer.v1', validationVersion: 'learn-adaptive.primitive-validation.v1', sequenceValidationVersion: 'learn-adaptive.primitive-sequence-validation.v1', fallbackVersion: 'learn-adaptive.text-card-fallback.v1',
         intent: 'understand', objectiveId: null, purpose: 'fixture', reasonCode: 'fixture', primitivePlan: [], requiredAction: { kind: 'continue', label: 'Continue' }, evaluationContract: { version: 'v1', kind: 'acknowledgement', responseFormat: 'none', passingScorePercent: null }, fallback: { version: 'learn-adaptive.text-card-fallback.v1', kind: 'text_card', title: 'Fallback', body: 'Fallback', primaryAction: { type: 'continue_safe', label: 'Continue' }, testId: 'learn-activity-fallback' }, accessibilityMetadata: { heading: 'Fixture', instructions: 'Fixture', focusTargetTestId: 'fixture', liveRegionMode: 'off' }, learningVoidId: null, blueprintRevisionId: null, sessionContentId: null, evidenceReferences: [], generationInputs: { sessionContentRevision: null, sessionContentInputDigest: null, generatorVersion: null }, decisionInputs: { intentRevision: 1, routerVersion: 'v1', availableTime: '15', sourceState: 'none', sourceInputs: [], priorActivityId: null, priorAttemptId: null, priorOutcome: null, assistance: 'none', confidence: null }, replacesActivityId: null, canonicalInputSnapshot: '{}', inputDigest: `sha256:${'3'.repeat(64)}`, createdAt: 1, updatedAt: 1,
       })
     })
-    await expect(owner.mutation(internal.learnAdaptiveCommands.deleteThreadAuthorityRows, { threadId })).resolves.toMatchObject({ phase: 'receipts', done: false })
+    await expect(owner.mutation(internal.learnAdaptiveCommands.deleteThreadAuthorityRows, { threadId })).resolves.toMatchObject({ phase: 'marked', done: false })
+    await expect(owner.mutation(ctx => executeAdaptiveThreadCommand(ctx, command))).rejects.toThrow(/deletion is in progress/)
     await expect(owner.mutation(internal.learnAdaptiveCommands.deleteThreadAuthorityRows, { threadId })).resolves.toMatchObject({ phase: 'activities', done: false })
+    expect(await t.run(ctx => ctx.db.query('learnActivityCommandReceipts').withIndex('by_userId_and_threadId', q => q.eq('userId', OWNER.tokenIdentifier).eq('threadId', threadId)).collect())).toHaveLength(9)
+    await expect(owner.mutation(ctx => executeAdaptiveThreadCommand(ctx, command))).rejects.toThrow(/deletion is in progress/)
+    await expect(owner.mutation(internal.learnAdaptiveCommands.deleteThreadAuthorityRows, { threadId })).resolves.toMatchObject({ phase: 'receipts', deleted: 8, done: false })
+    await expect(owner.mutation(ctx => executeAdaptiveThreadCommand(ctx, command))).rejects.toThrow(/deletion is in progress/)
+    await expect(owner.mutation(internal.learnAdaptiveCommands.deleteThreadAuthorityRows, { threadId })).resolves.toMatchObject({ phase: 'receipts', deleted: 1, done: false })
+    await expect(owner.mutation(ctx => executeAdaptiveThreadCommand(ctx, command))).rejects.toThrow(/deletion is in progress/)
+    await expect(owner.mutation(internal.learnAdaptiveCommands.deleteThreadAuthorityRows, { threadId })).resolves.toMatchObject({ phase: 'thread', done: true })
+    await expect(owner.mutation(ctx => executeAdaptiveThreadCommand(ctx, command))).rejects.toThrow(/Thread not found/)
+    expect(await t.run(ctx => ctx.db.get(threadId))).toBeNull()
+  })
+
+  test('continues authenticated thread maintenance while adaptive and V2 rollout are disabled', async () => {
+    const { t, threadId, owner } = await setup()
+    await owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: false })
+    process.env.LEARN_V2_ENABLED = 'false'
+    await expect(owner.mutation(internal.learnAdaptiveCommands.deleteThreadAuthorityRows, { threadId })).resolves.toMatchObject({ phase: 'marked' })
     await expect(owner.mutation(internal.learnAdaptiveCommands.deleteThreadAuthorityRows, { threadId })).resolves.toMatchObject({ phase: 'thread', done: true })
     expect(await t.run(ctx => ctx.db.get(threadId))).toBeNull()
   })

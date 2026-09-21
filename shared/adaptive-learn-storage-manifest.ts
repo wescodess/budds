@@ -134,6 +134,7 @@ export const learningThreadFields = {
   currentActivityId: v.optional(v.id('learningThreadActivities')),
   unresolvedPoint: v.optional(v.string()),
   nextAction: v.optional(v.object({ kind: v.string(), label: v.string(), reasonCode: v.string(), activityId: v.string() })),
+  deletionStartedAt: v.optional(v.number()),
   createdAt: v.number(),
   updatedAt: v.number(),
 }

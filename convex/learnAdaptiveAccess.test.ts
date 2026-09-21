@@ -2,7 +2,7 @@
 import { convexTest } from 'convex-test'
 import { afterAll, beforeEach, describe, expect, test } from 'vitest'
 import { api, internal } from './_generated/api'
-import { ADAPTIVE_PROVIDER_ACTIONS, requireAdaptiveJobAdmission, requireAdaptiveMutationAccess, requireAdaptiveQueryAccess } from './lib/adaptiveLearnAccess'
+import { ADAPTIVE_EXTERNAL_OBJECT_CLEANUP, ADAPTIVE_PROVIDER_ACTIONS, requireAdaptiveJobAdmission, requireAdaptiveMutationAccess, requireAdaptiveQueryAccess } from './lib/adaptiveLearnAccess'
 import schema from './schema'
 
 const modules = import.meta.glob('./**/*.ts')
@@ -52,9 +52,25 @@ describe('Adaptive Learn canonical access gate', () => {
   test('keeps provider actions explicitly deferred and maintenance export outside the rollout gate', async () => {
     const { t, owner } = await setup()
     expect(ADAPTIVE_PROVIDER_ACTIONS).toBe('deferred_pending_manifest_and_activation')
+    expect(ADAPTIVE_EXTERNAL_OBJECT_CLEANUP).toBe('deferred_no_adaptive_objects')
     const threadId = await t.run(ctx => ctx.db.insert('learningThreads', { userId: OWNER.tokenIdentifier, originalNeed: 'Export during rollback', intent: 'understand', availableTime: '15', authorityKind: 'standalone', sourceScope: { kind: 'none' }, evidenceState: 'none', lifecycle: 'ready', revision: 1, createdAt: 1, updatedAt: 1 }))
     process.env.LEARN_V2_ENABLED = 'false'
     await expect(owner.query(api.dataExport.getUserDataPage, { collection: 'learningThreads', paginationOpts: { cursor: null, numItems: 8 } })).resolves.toMatchObject({ page: [{ _id: threadId }] })
+  })
+
+  test('keeps account deletion and source-purge maintenance available during rollback', async () => {
+    const { t } = await setup()
+    const ids = await t.run(async (ctx) => {
+      const folderId = await ctx.db.insert('folders', { userId: OWNER.tokenIdentifier, name: 'Maintenance', documentCount: 0 })
+      const learningVoidId = await ctx.db.insert('learningVoids', { userId: OWNER.tokenIdentifier, folderId, title: 'Maintenance', status: 'active', revision: 1, createdAt: 1, updatedAt: 1 })
+      const sourceIdentityId = await ctx.db.insert('learnSourceIdentities', { userId: OWNER.tokenIdentifier, learningVoidId, origin: 'user_url', externalKey: 'private-source', canonicalUrl: 'https://example.com/private' })
+      return { sourceIdentityId }
+    })
+    process.env.LEARN_V2_ENABLED = 'false'
+    await expect(t.mutation(internal.learnV2Retention.purgeSourceEvidence, { userId: OWNER.tokenIdentifier, sourceIdentityId: ids.sourceIdentityId })).resolves.toMatchObject({ pending: false })
+    expect(await t.run(ctx => ctx.db.get(ids.sourceIdentityId))).toMatchObject({ tombstonedAt: expect.any(Number) })
+    await t.run(ctx => ctx.db.insert('accountDeletionJobs', { userId: OWNER.tokenIdentifier, status: 'active', phase: 'learnV2', startedAt: 1, updatedAt: 1 }))
+    await expect(t.mutation(internal.accountDeletion.runDeletionBatch, { userId: OWNER.tokenIdentifier })).resolves.toMatchObject({ state: 'running', phase: 'learnV2' })
   })
 
   test('derives the entitlement owner from auth and denies anonymous or tombstoned changes', async () => {
