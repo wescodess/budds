@@ -359,6 +359,29 @@ export default defineSchema({
     })),
     provider: v.optional(v.string()),
     modelRevision: v.optional(v.string()),
+    shadowStatus: v.optional(v.union(v.literal('available'), v.literal('unavailable'))),
+    shadowInputDigest: v.optional(v.string()),
+    shadowClaimId: v.optional(v.string()),
+    shadowClaimedAt: v.optional(v.number()),
+    shadowLeaseExpiresAt: v.optional(v.number()),
+    shadowEvaluatedAt: v.optional(v.number()),
+    shadowProvider: v.optional(v.string()),
+    shadowModelRevision: v.optional(v.string()),
+    shadowLabel: v.optional(v.union(
+      v.literal('fully_correct'),
+      v.literal('partially_correct'),
+      v.literal('incorrect'),
+      v.literal('uncertain'),
+    )),
+    shadowConfidence: v.optional(v.number()),
+    shadowReviewRequired: v.optional(v.boolean()),
+    shadowProbabilities: v.optional(v.object({
+      fullyCorrect: v.number(),
+      partiallyCorrect: v.number(),
+      incorrect: v.number(),
+      uncertain: v.number(),
+    })),
+    shadowUnavailableReason: v.optional(v.string()),
     unavailableReason: v.optional(v.union(
       v.literal('disabled'),
       v.literal('unconfigured'),
@@ -378,6 +401,7 @@ export default defineSchema({
     .index('by_attemptId', ['attemptId'])
     .index('by_attemptAnswerId', ['attemptAnswerId'])
     .index('by_userId_and_attemptId', ['userId', 'attemptId'])
+    .index('by_user_attempt_status_shadow_deterministic', ['userId', 'attemptId', 'status', 'shadowStatus', 'deterministicIsCorrect'])
     .index('by_userId_and_attemptId_and_status_and_nextAttemptAt', ['userId', 'attemptId', 'status', 'nextAttemptAt']),
 
   tasks: defineTable({

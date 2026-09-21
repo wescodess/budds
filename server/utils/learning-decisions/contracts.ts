@@ -61,7 +61,7 @@ export type QuizQualityDecisionRequest = RequestEnvelope & { kind: 'quiz_quality
 export type FreeResponseAssessmentRequest = RequestEnvelope & { kind: typeof FREE_RESPONSE_ASSESSMENT_KIND, items: FreeResponseAssessmentItem[] }
 export type TypedDecisionRequest = QuizQualityDecisionRequest | FreeResponseAssessmentRequest
 
-export type TypedDecision = { id: string, label: TypedDecisionLabel, confidence: number, probabilities?: Record<string, number> }
+export type TypedDecision = { id: string, label: TypedDecisionLabel, confidence: number, probabilities?: Record<string, number>, reviewRequired?: boolean }
 export type CompletedTypedDecision = { status: 'completed', provider: string, modelRevision: string, decisions: TypedDecision[], timingMs?: number }
 export type UnavailableTypedDecision = {
   status: 'unavailable'
@@ -174,10 +174,11 @@ function isFreeResponseItem(item: unknown): item is FreeResponseAssessmentItem {
 }
 
 function isDecision(value: unknown, labels: Set<TypedDecisionLabel>): value is TypedDecision {
-  if (!value || typeof value !== 'object' || !hasOnlyKeys(value, ['id', 'label', 'confidence', 'probabilities'])) return false
+  if (!value || typeof value !== 'object' || !hasOnlyKeys(value, ['id', 'label', 'confidence', 'probabilities', 'reviewRequired'])) return false
   const decision = value as Partial<TypedDecision>
   return validId(decision.id) && typeof decision.label === 'string' && labels.has(decision.label as TypedDecisionLabel)
     && validProbability(decision.confidence)
+    && (decision.reviewRequired === undefined || typeof decision.reviewRequired === 'boolean')
     && (decision.probabilities === undefined || isProbabilityRecord(decision.probabilities, labels, decision.label as TypedDecisionLabel))
 }
 

@@ -13,10 +13,12 @@ import {
   unavailableDecision,
 } from './contracts'
 import { evaluateWithLaya, type LayaEvaluatorBinding } from './laya-adapter'
+import { evaluateWithStructuredLlm } from './structured-llm-adapter'
+import { isAllowedStructuredLlmModel, structuredLlmProviderPin } from './structured-llm-models'
 
 export * from './contracts'
 export type LearningDecisionMode = 'off' | 'shadow' | 'advisory'
-export type LearningDecisionProvider = 'laya'
+export type LearningDecisionProvider = 'laya' | 'structured-llm'
 
 /** Provider-neutral dispatch. Feature callers do not import a provider adapter. */
 export async function evaluateTypedDecision(event: H3Event, request: TypedDecisionRequest): Promise<TypedDecisionResult> {
@@ -26,23 +28,32 @@ export async function evaluateTypedDecision(event: H3Event, request: TypedDecisi
   const mode = readConfiguredRuntimeValue(config.learningDecisionMode, 'NUXT_LEARNING_DECISION_MODE') as LearningDecisionMode
   const provider = readConfiguredRuntimeValue(config.learningDecisionProvider, 'NUXT_LEARNING_DECISION_PROVIDER') as LearningDecisionProvider
   if (mode !== 'shadow' && mode !== 'advisory') return unavailableDecision('disabled')
-  const token = readConfiguredRuntimeValue(config.layaEvaluatorToken, 'NUXT_LAYA_EVALUATOR_TOKEN')
-  const url = readConfiguredRuntimeValue(config.layaEvaluatorUrl, 'NUXT_LAYA_EVALUATOR_URL')
-  const cloudflareEnv = event.context.cloudflare?.env as Record<string, unknown> | undefined
-  const binding = cloudflareEnv?.LAYA_EVALUATOR as LayaEvaluatorBinding | undefined
-  if (provider === 'laya') return await evaluateWithLaya(request, {
-    enabled: true,
-    token,
-    url,
-    binding,
-    expectedProvenance: {
-      packageVersion: evaluatorManifest.model.packageVersion,
-      modelRevision: evaluatorManifest.model.revision,
-      modelSha256: evaluatorManifest.model.sha256,
-      evaluationManifestSha256: activation.evaluationManifest.sha256,
-      calibratorSha256: activation.calibrator.sha256,
-    },
-  })
+  if (provider === 'laya') {
+    const token = readConfiguredRuntimeValue(config.layaEvaluatorToken, 'NUXT_LAYA_EVALUATOR_TOKEN')
+    const url = readConfiguredRuntimeValue(config.layaEvaluatorUrl, 'NUXT_LAYA_EVALUATOR_URL')
+    const cloudflareEnv = event.context.cloudflare?.env as Record<string, unknown> | undefined
+    const binding = cloudflareEnv?.LAYA_EVALUATOR as LayaEvaluatorBinding | undefined
+    return await evaluateWithLaya(request, {
+      enabled: true,
+      token,
+      url,
+      binding,
+      expectedProvenance: {
+        packageVersion: evaluatorManifest.model.packageVersion,
+        modelRevision: evaluatorManifest.model.revision,
+        modelSha256: evaluatorManifest.model.sha256,
+        evaluationManifestSha256: activation.evaluationManifest.sha256,
+        calibratorSha256: activation.calibrator.sha256,
+      },
+    })
+  }
+  if (provider === 'structured-llm') {
+    if (mode !== 'shadow') return unavailableDecision('disabled')
+    const model = readConfiguredRuntimeValue(config.quizSemanticLlmModel, 'NUXT_QUIZ_SEMANTIC_LLM_MODEL')
+    const providerPin = structuredLlmProviderPin(model)
+    if (!isAllowedStructuredLlmModel(model) || !providerPin) return unavailableDecision('unconfigured')
+    return await evaluateWithStructuredLlm(request, { enabled: true, model, upstreamProvider: providerPin })
+  }
   return unavailableDecision('unconfigured')
 }
 
@@ -65,6 +76,6 @@ export async function shadowEvaluateQuiz(event: H3Event, items: QuizDecisionItem
   const started = Date.now()
   const result = await evaluateTypedDecision(event, request)
   const confidences = result.status === 'completed' ? result.decisions.map(d => d.confidence) : []
-  console.info('[learning-decision]', { requestId: request.requestId, inputDigest: digest, provider: result.status === 'completed' ? result.provider : undefined, modelRevision: result.status === 'completed' ? result.modelRevision : undefined, status: result.status, reason: result.status === 'unavailable' ? result.reason : undefined, timingMs: Date.now() - started, itemCount: items.length, omittedItemCount: 0, supportedCount: result.status === 'completed' ? result.decisions.filter(d => d.label === 'supported').length : undefined, needsReviewCount: result.status === 'completed' ? result.decisions.filter(d => d.label === 'needs_review').length : undefined, meanConfidence: confidences.length ? confidences.reduce((a, b) => a + b, 0) / confidences.length : undefined })
+  console.info('[learning-decision]', { requestId: request.requestId, inputDigest: digest, provider: result.status === 'completed' ? result.provider : undefined, modelRevision: result.status === 'completed' ? result.modelRevision : undefined, status: result.status, reason: result.status === 'unavailable' ? result.reason : undefined, timingMs: Date.now() - started, itemCount: items.length, omittedItemCount: 0, supportedCount: result.status === 'completed' ? result.decisions.filter(d => d.label === 'supported').length : undefined, needsReviewCount: result.status === 'completed' ? result.decisions.filter(d => d.label === 'needs_review' || d.reviewRequired).length : undefined, meanConfidence: confidences.length ? confidences.reduce((a, b) => a + b, 0) / confidences.length : undefined })
   return result
 }

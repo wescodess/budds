@@ -24,8 +24,12 @@ const completePagesEnv = {
   CALENDAR_TOKEN_ENCRYPTION_KEY: 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=',
   NUXT_LEARNING_DECISION_MODE: 'off',
   NUXT_LEARNING_DECISION_PROVIDER: '',
+  NUXT_APPLICATION_ENVIRONMENT: 'development',
+  CF_PAGES_ENVIRONMENT: 'preview',
+  CF_PAGES_BRANCH: 'dev',
   NUXT_LAYA_EVALUATOR_TOKEN: '',
   NUXT_LAYA_EVALUATOR_URL: '',
+  NUXT_QUIZ_SEMANTIC_LLM_MODEL: '',
 }
 
 function workspaceWithConfig(config: string) {
@@ -166,9 +170,113 @@ describe('Cloudflare Pages environment validation', () => {
         NUXT_LEARNING_DECISION_PROVIDER: 'laya',
         NUXT_LAYA_EVALUATOR_TOKEN: 'test-laya-token-with-sufficient-length',
         NUXT_LAYA_EVALUATOR_URL: 'http://localhost:8788',
+        NUXT_QUIZ_ASSESSMENT_WRITE_SECRET: 'test-assessment-write-secret-long-enough',
       },
       stdio: 'pipe',
     })).not.toThrow()
+  })
+
+  it('accepts a complete structured LLM shadow configuration', () => {
+    expect(() => execFileSync(process.execPath, [validator, 'build', '--strict'], {
+      cwd: process.cwd(),
+      env: {
+        ...completePagesEnv,
+        NUXT_LEARNING_DECISION_MODE: 'shadow',
+        NUXT_LEARNING_DECISION_PROVIDER: 'structured-llm',
+        NUXT_QUIZ_SEMANTIC_LLM_MODEL: 'openai/gpt-4o-mini',
+        NUXT_CLOUDFLARE_ACCOUNT_ID: 'account',
+        NUXT_CLOUDFLARE_AI_GATEWAY_ID: 'gateway',
+        NUXT_OPENROUTER_API_KEY: 'openrouter-key',
+        NUXT_QUIZ_ASSESSMENT_WRITE_SECRET: 'test-assessment-write-secret-long-enough',
+      },
+      stdio: 'pipe',
+    })).not.toThrow()
+  })
+
+  it('allows feature-branch preview builds while runtime keeps shadow execution dev-only', () => {
+    expect(() => execFileSync(process.execPath, [validator, 'build', '--strict'], {
+      cwd: process.cwd(),
+      env: {
+        ...completePagesEnv,
+        NUXT_LEARNING_DECISION_MODE: 'shadow',
+        NUXT_LEARNING_DECISION_PROVIDER: 'structured-llm',
+        NUXT_QUIZ_SEMANTIC_LLM_MODEL: 'openai/gpt-4o-mini',
+        NUXT_CLOUDFLARE_ACCOUNT_ID: 'account',
+        NUXT_CLOUDFLARE_AI_GATEWAY_ID: 'gateway',
+        NUXT_OPENROUTER_API_KEY: 'openrouter-key',
+        NUXT_QUIZ_ASSESSMENT_WRITE_SECRET: 'test-assessment-write-secret-long-enough',
+        NUXT_APPLICATION_ENVIRONMENT: 'development',
+        CF_PAGES_ENVIRONMENT: 'preview',
+        CF_PAGES_BRANCH: 'feat/safe-preview-build',
+      },
+      stdio: 'pipe',
+    })).not.toThrow()
+  })
+
+  it('rejects structured LLM shadow execution on a production deployment', () => {
+    const result = spawnSync(process.execPath, [validator, 'build', '--strict'], {
+      cwd: process.cwd(),
+      env: {
+        ...completePagesEnv,
+        NUXT_LEARNING_DECISION_MODE: 'shadow',
+        NUXT_LEARNING_DECISION_PROVIDER: 'structured-llm',
+        NUXT_QUIZ_SEMANTIC_LLM_MODEL: 'openai/gpt-4o-mini',
+        NUXT_CLOUDFLARE_ACCOUNT_ID: 'account',
+        NUXT_CLOUDFLARE_AI_GATEWAY_ID: 'gateway',
+        NUXT_OPENROUTER_API_KEY: 'openrouter-key',
+        NUXT_QUIZ_ASSESSMENT_WRITE_SECRET: 'test-assessment-write-secret-long-enough',
+        NUXT_APPLICATION_ENVIRONMENT: 'production',
+        CF_PAGES_ENVIRONMENT: 'production',
+        CF_PAGES_BRANCH: 'main',
+      },
+      encoding: 'utf8',
+    })
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('Shadow learning decisions are development-only')
+  })
+
+  it('rejects structured LLM advisory mode until it has separate calibration approval', () => {
+    const result = spawnSync(process.execPath, [validator, 'build', '--strict'], {
+      cwd: process.cwd(),
+      env: {
+        ...completePagesEnv,
+        NUXT_LEARNING_DECISION_MODE: 'advisory',
+        NUXT_LEARNING_DECISION_PROVIDER: 'structured-llm',
+        NUXT_QUIZ_SEMANTIC_LLM_MODEL: 'openai/gpt-4o-mini',
+        NUXT_CLOUDFLARE_ACCOUNT_ID: 'account',
+        NUXT_CLOUDFLARE_AI_GATEWAY_ID: 'gateway',
+        NUXT_OPENROUTER_API_KEY: 'openrouter-key',
+        NUXT_QUIZ_ASSESSMENT_WRITE_SECRET: 'test-assessment-write-secret-long-enough',
+      },
+      encoding: 'utf8',
+    })
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('Structured LLM grading is shadow-only')
+  })
+
+  it.each([
+    ['missing model', { NUXT_QUIZ_SEMANTIC_LLM_MODEL: '' }, 'model is required'],
+    ['unapproved model', { NUXT_QUIZ_SEMANTIC_LLM_MODEL: 'openai/unapproved' }, 'model is not approved'],
+    ['missing gateway', { NUXT_CLOUDFLARE_AI_GATEWAY_ID: '', CLOUDFLARE_AI_GATEWAY_ID: '' }, 'AI Gateway id is required'],
+    ['missing OpenRouter key', { NUXT_OPENROUTER_API_KEY: '', OPENROUTER_API_KEY: '' }, 'OpenRouter key is required'],
+  ])('rejects structured LLM shadow configuration with %s', (_name, overrides, message) => {
+    const result = spawnSync(process.execPath, [validator, 'build', '--strict'], {
+      cwd: process.cwd(),
+      env: {
+        ...completePagesEnv,
+        NUXT_LEARNING_DECISION_MODE: 'shadow',
+        NUXT_LEARNING_DECISION_PROVIDER: 'structured-llm',
+        NUXT_QUIZ_SEMANTIC_LLM_MODEL: 'openai/gpt-4o-mini',
+        NUXT_CLOUDFLARE_ACCOUNT_ID: 'account',
+        NUXT_CLOUDFLARE_AI_GATEWAY_ID: 'gateway',
+        NUXT_OPENROUTER_API_KEY: 'openrouter-key',
+        NUXT_QUIZ_ASSESSMENT_WRITE_SECRET: 'test-assessment-write-secret-long-enough',
+        ...overrides,
+      },
+      encoding: 'utf8',
+    })
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain(message)
   })
 
   it('rejects Laya advisory configuration until the committed calibration manifest is approved', () => {
@@ -191,9 +299,9 @@ describe('Cloudflare Pages environment validation', () => {
 
   it.each([
     ['invalid mode', { NUXT_LEARNING_DECISION_MODE: 'enforced' }, 'mode must be off, shadow, or advisory'],
-    ['invalid provider', { NUXT_LEARNING_DECISION_MODE: 'shadow', NUXT_LEARNING_DECISION_PROVIDER: 'other', NUXT_LAYA_EVALUATOR_TOKEN: 'test-laya-token-with-sufficient-length' }, 'provider must be laya'],
-    ['short token', { NUXT_LEARNING_DECISION_MODE: 'shadow', NUXT_LEARNING_DECISION_PROVIDER: 'laya', NUXT_LAYA_EVALUATOR_TOKEN: 'short' }, 'at least 32 characters'],
-    ['malformed URL', { NUXT_LEARNING_DECISION_MODE: 'shadow', NUXT_LEARNING_DECISION_PROVIDER: 'laya', NUXT_LAYA_EVALUATOR_TOKEN: 'test-laya-token-with-sufficient-length', NUXT_LAYA_EVALUATOR_URL: 'not-a-url' }, 'must be an HTTP(S) URL'],
+    ['invalid provider', { NUXT_LEARNING_DECISION_MODE: 'shadow', NUXT_LEARNING_DECISION_PROVIDER: 'other', NUXT_LAYA_EVALUATOR_TOKEN: 'test-laya-token-with-sufficient-length', NUXT_QUIZ_ASSESSMENT_WRITE_SECRET: 'test-assessment-write-secret-long-enough' }, 'provider must be laya or structured-llm'],
+    ['short token', { NUXT_LEARNING_DECISION_MODE: 'shadow', NUXT_LEARNING_DECISION_PROVIDER: 'laya', NUXT_LAYA_EVALUATOR_TOKEN: 'short', NUXT_QUIZ_ASSESSMENT_WRITE_SECRET: 'test-assessment-write-secret-long-enough' }, 'at least 32 characters'],
+    ['malformed URL', { NUXT_LEARNING_DECISION_MODE: 'shadow', NUXT_LEARNING_DECISION_PROVIDER: 'laya', NUXT_LAYA_EVALUATOR_TOKEN: 'test-laya-token-with-sufficient-length', NUXT_LAYA_EVALUATOR_URL: 'not-a-url', NUXT_QUIZ_ASSESSMENT_WRITE_SECRET: 'test-assessment-write-secret-long-enough' }, 'must be an HTTP(S) URL'],
     ['missing advisory write secret', { NUXT_LEARNING_DECISION_MODE: 'advisory', NUXT_LEARNING_DECISION_PROVIDER: 'laya', NUXT_LAYA_EVALUATOR_TOKEN: 'test-laya-token-with-sufficient-length' }, 'write credential must be at least 32 characters'],
   ])('rejects %s for Laya shadow mode', (_name, overrides, message) => {
     const result = spawnSync(process.execPath, [validator, 'build', '--strict'], {

@@ -6,6 +6,7 @@ import bundledReport from '../../../workers/laya-evaluator/calibration/report.js
 import bundledCalibrator from '../../../workers/laya-evaluator/calibration/probability-calibrator.v1.json'
 import bundledThresholds from '../../../workers/laya-evaluator/calibration/thresholds.json'
 import { verifyQuizSemanticActivation, type ActivationDecision } from '../../../shared/quiz-semantic-calibration.mjs'
+import structuredLlmPolicy from '../../../shared/quiz-structured-llm-policy.json'
 
 export const QUIZ_SEMANTIC_ACTIVATION_MANIFEST_VERSION = activation.manifestVersion
 
@@ -14,6 +15,16 @@ export type QuizSemanticDeploymentIdentity = {
   pagesEnvironment: string
   pagesBranch: string
   convexUrl: string
+}
+
+/** Shadow execution is development-only and never implies advisory approval. */
+export function isQuizSemanticShadowEnabled(mode: unknown, deployment: QuizSemanticDeploymentIdentity): boolean {
+  const required = structuredLlmPolicy.shadowDeployment
+  if (mode !== 'shadow' || deployment.applicationEnvironment !== required.applicationEnvironment) return false
+  const localDevelopment = !deployment.pagesEnvironment && !deployment.pagesBranch && process.env.NODE_ENV === 'development'
+  if (localDevelopment) return true
+  return deployment.pagesEnvironment === required.pagesEnvironment
+    && deployment.pagesBranch === required.pagesBranch
 }
 
 function currentDeploymentIdentity(): QuizSemanticDeploymentIdentity {

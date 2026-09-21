@@ -41,6 +41,20 @@ function requireProbability(value: number) {
   if (!Number.isFinite(value) || value < 0 || value > 1) throw new Error('Invalid assessment probability')
 }
 
+function requireProbabilityDistribution(
+  label: 'fully_correct' | 'partially_correct' | 'incorrect' | 'uncertain',
+  probabilities: { fullyCorrect: number, partiallyCorrect: number, incorrect: number, uncertain: number } | undefined,
+) {
+  if (!probabilities) return
+  const values = Object.values(probabilities)
+  for (const probability of values) requireProbability(probability)
+  if (Math.abs(values.reduce((sum, value) => sum + value, 0) - 1) > 0.001) throw new Error('Invalid assessment probability')
+  const selected = label === 'fully_correct' ? probabilities.fullyCorrect
+    : label === 'partially_correct' ? probabilities.partiallyCorrect
+      : label === 'incorrect' ? probabilities.incorrect : probabilities.uncertain
+  if (selected < Math.max(...values)) throw new Error('Invalid assessment probability')
+}
+
 export const listPendingForAttempt = query({
   args: { attemptId: v.id('quizAttempts') },
   handler: async (ctx, args) => {
@@ -70,10 +84,155 @@ export const listPendingForAttempt = query({
       languageSnapshot: row.languageSnapshot ?? 'unknown',
       questionSnapshot: row.questionSnapshot,
       learnerAnswerSnapshot: row.learnerAnswerSnapshot,
+      deterministicIsCorrect: row.deterministicIsCorrect,
       rubricVersion: row.rubricVersion,
       rubricSnapshot: row.rubricSnapshot,
       attemptCount: row.attemptCount ?? 0,
     }))
+  },
+})
+
+export const listPendingForShadowAttempt = query({
+  args: { attemptId: v.id('quizAttempts') },
+  handler: async (ctx, args) => {
+    const userId = await requireAuth(ctx)
+    const attempt = await ctx.db.get(args.attemptId)
+    if (!attempt || attempt.userId !== userId) throw new Error('Attempt not found')
+    if (attempt.status !== 'completed') return []
+    const now = Date.now()
+    const rows = await ctx.db
+      .query('quizAnswerAssessments')
+      .withIndex('by_user_attempt_status_shadow_deterministic', q => q
+        .eq('userId', userId)
+        .eq('attemptId', args.attemptId)
+        .eq('status', 'pending')
+        .eq('shadowStatus', undefined)
+        .eq('deterministicIsCorrect', false))
+      .take(PENDING_SCAN_LIMIT)
+    return rows.filter(row => row.shadowInputDigest === undefined || (row.shadowLeaseExpiresAt ?? 0) <= now)
+      .slice(0, MAX_BATCH).map(row => ({
+        assessmentId: row._id,
+        kind: row.kind,
+        contractVersion: row.contractVersion ?? manifest.contractVersion,
+        snapshotVersion: row.snapshotVersion ?? manifest.snapshotVersion,
+        languageSnapshot: row.languageSnapshot ?? 'unknown',
+        questionSnapshot: row.questionSnapshot,
+        learnerAnswerSnapshot: row.learnerAnswerSnapshot,
+        deterministicIsCorrect: row.deterministicIsCorrect,
+        rubricVersion: row.rubricVersion,
+        rubricSnapshot: row.rubricSnapshot,
+        attemptCount: row.attemptCount ?? 0,
+      }))
+  },
+})
+
+export const claimShadowBatch = mutation({
+  args: {
+    attemptId: v.id('quizAttempts'),
+    assessmentIds: v.array(v.id('quizAnswerAssessments')),
+    inputDigest: v.string(),
+    claimId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireAuth(ctx)
+    const attempt = await ctx.db.get(args.attemptId)
+    if (!attempt || attempt.userId !== userId || attempt.status !== 'completed') throw new Error('Attempt not found')
+    if (!/^[a-f0-9]{64}$/.test(args.inputDigest) || args.claimId.length < 1 || args.claimId.length > 128
+      || args.assessmentIds.length < 1 || args.assessmentIds.length > MAX_BATCH
+      || new Set(args.assessmentIds.map(String)).size !== args.assessmentIds.length) throw new Error('Invalid shadow assessment claim')
+    const now = Date.now()
+    const rows = []
+    for (const assessmentId of args.assessmentIds) {
+      const row = await ctx.db.get(assessmentId)
+      const activeClaim = row?.shadowInputDigest !== undefined && (row.shadowLeaseExpiresAt ?? 0) > now
+      if (!row || row.userId !== userId || row.attemptId !== args.attemptId || row.status !== 'pending'
+        || row.shadowStatus !== undefined || activeClaim) return []
+      rows.push(row)
+    }
+    for (const row of rows) {
+      await ctx.db.patch(row._id, {
+        shadowInputDigest: args.inputDigest,
+        shadowClaimId: args.claimId,
+        shadowClaimedAt: now,
+        shadowLeaseExpiresAt: now + CLAIM_LEASE_MS,
+      })
+    }
+    return rows.map(row => row._id)
+  },
+})
+
+export const recordShadowAvailable = mutation({
+  args: {
+    attemptId: v.id('quizAttempts'),
+    evaluatorSecret: v.string(),
+    provider: v.string(),
+    modelRevision: v.string(),
+    results: v.array(v.object({
+      assessmentId: v.id('quizAnswerAssessments'),
+      inputDigest: v.string(),
+      claimId: v.string(),
+      label: labelValidator,
+      confidence: v.number(),
+      reviewRequired: v.boolean(),
+      probabilities: v.optional(probabilitiesValidator),
+    })),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireAuth(ctx)
+    requireEvaluatorSecret(args.evaluatorSecret)
+    if (args.results.length < 1 || args.results.length > MAX_BATCH) throw new Error('Invalid shadow assessment result')
+    for (const result of args.results) {
+      requireProbability(result.confidence)
+      requireProbabilityDistribution(result.label, result.probabilities)
+      const row = await ctx.db.get(result.assessmentId)
+      if (!row || row.userId !== userId || row.attemptId !== args.attemptId || row.status !== 'pending'
+        || row.shadowStatus !== undefined || row.shadowInputDigest !== result.inputDigest || row.shadowClaimId !== result.claimId) throw new Error('Shadow assessment not found')
+      await ctx.db.patch(result.assessmentId, {
+        shadowStatus: 'available',
+        shadowProvider: args.provider,
+        shadowModelRevision: args.modelRevision,
+        shadowLabel: result.label,
+        shadowConfidence: result.confidence,
+        shadowReviewRequired: result.reviewRequired,
+        shadowProbabilities: result.probabilities,
+        shadowClaimId: undefined,
+        shadowClaimedAt: undefined,
+        shadowLeaseExpiresAt: undefined,
+        shadowEvaluatedAt: Date.now(),
+        shadowUnavailableReason: undefined,
+      })
+    }
+    return null
+  },
+})
+
+export const recordShadowUnavailable = mutation({
+  args: {
+    attemptId: v.id('quizAttempts'),
+    evaluatorSecret: v.string(),
+    assessmentIds: v.array(v.id('quizAnswerAssessments')),
+    inputDigest: v.string(),
+    claimId: v.string(),
+    reason: reasonValidator,
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireAuth(ctx)
+    requireEvaluatorSecret(args.evaluatorSecret)
+    if (args.assessmentIds.length < 1 || args.assessmentIds.length > MAX_BATCH) throw new Error('Invalid shadow assessment result')
+    for (const assessmentId of args.assessmentIds) {
+      const row = await ctx.db.get(assessmentId)
+      if (!row || row.userId !== userId || row.attemptId !== args.attemptId || row.status !== 'pending'
+        || row.shadowStatus !== undefined || row.shadowInputDigest !== args.inputDigest || row.shadowClaimId !== args.claimId) throw new Error('Shadow assessment not found')
+      await ctx.db.patch(assessmentId, {
+        shadowStatus: 'unavailable',
+        shadowClaimId: undefined,
+        shadowClaimedAt: undefined,
+        shadowLeaseExpiresAt: undefined,
+        shadowUnavailableReason: args.reason,
+        shadowEvaluatedAt: Date.now(),
+      })
+    }
+    return null
   },
 })
 
@@ -150,17 +309,7 @@ export const recordAvailable = mutation({
     if (args.results.length < 1 || args.results.length > MAX_BATCH) throw new Error('Invalid assessment result')
     for (const result of args.results) {
       requireProbability(result.confidence)
-      for (const probability of Object.values(result.probabilities ?? {})) {
-        requireProbability(probability)
-      }
-      if (result.probabilities) {
-        const values = Object.values(result.probabilities)
-        if (Math.abs(values.reduce((sum, value) => sum + value, 0) - 1) > 0.001) throw new Error('Invalid assessment probability')
-        const selected = result.label === 'fully_correct' ? result.probabilities.fullyCorrect
-          : result.label === 'partially_correct' ? result.probabilities.partiallyCorrect
-            : result.label === 'incorrect' ? result.probabilities.incorrect : result.probabilities.uncertain
-        if (selected < Math.max(...values)) throw new Error('Invalid assessment probability')
-      }
+      requireProbabilityDistribution(result.label, result.probabilities)
       const row = await ctx.db.get(result.assessmentId)
       if (!row || row.userId !== userId || row.attemptId !== args.attemptId || row.status !== 'pending'
         || row.inputDigest !== result.inputDigest || row.claimId !== result.claimId) throw new Error('Assessment not found')

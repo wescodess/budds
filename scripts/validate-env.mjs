@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { verifyQuizSemanticActivation } from '../shared/quiz-semantic-calibration.mjs'
 
 const phase = process.argv[2] || 'build'
@@ -104,11 +105,14 @@ const calendarTokenEncryptionKey
 const invalidBlocking = []
 const learningDecisionMode = mergedEnv.NUXT_LEARNING_DECISION_MODE || 'off'
 const learningDecisionProvider = mergedEnv.NUXT_LEARNING_DECISION_PROVIDER || ''
+const quizSemanticLlmModel = mergedEnv.NUXT_QUIZ_SEMANTIC_LLM_MODEL || ''
 const layaEvaluatorToken = mergedEnv.NUXT_LAYA_EVALUATOR_TOKEN || ''
 const layaEvaluatorUrl = mergedEnv.NUXT_LAYA_EVALUATOR_URL || ''
 const quizAssessmentWriteSecret = mergedEnv.NUXT_QUIZ_ASSESSMENT_WRITE_SECRET || ''
 const quizSemanticActivationVersion = mergedEnv.NUXT_QUIZ_SEMANTIC_ACTIVATION_MANIFEST || ''
 const quizSemanticActivationPath = path.join(projectRoot, 'convex/quizSemanticActivationManifest.json')
+const scriptRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const structuredLlmPolicy = JSON.parse(fs.readFileSync(path.join(scriptRoot, 'shared/quiz-structured-llm-policy.json'), 'utf8'))
 const quizSemanticActivation = !audioWorkflowPhase && fs.existsSync(quizSemanticActivationPath)
   ? JSON.parse(fs.readFileSync(quizSemanticActivationPath, 'utf8'))
   : { status: 'not-approved', allowedModes: [], evidence: null, manifestVersion: '' }
@@ -209,9 +213,23 @@ if (!audioWorkflowPhase && !['off', 'shadow', 'advisory'].includes(learningDecis
   invalidBlocking.push({ kind: 'var', label: 'Learning decision mode must be off, shadow, or advisory', names: ['NUXT_LEARNING_DECISION_MODE'] })
 }
 if (!audioWorkflowPhase && (learningDecisionMode === 'shadow' || learningDecisionMode === 'advisory')) {
-  if (learningDecisionProvider !== 'laya') invalidBlocking.push({ kind: 'var', label: 'Learning decision provider must be laya for this pilot', names: ['NUXT_LEARNING_DECISION_PROVIDER'] })
-  if (layaEvaluatorToken.length < 32) invalidBlocking.push({ kind: 'secret', label: 'Laya evaluator credential must be at least 32 characters', names: ['NUXT_LAYA_EVALUATOR_TOKEN'] })
-  if (learningDecisionMode === 'advisory' && quizAssessmentWriteSecret.length < 32) invalidBlocking.push({ kind: 'secret', label: 'Quiz assessment write credential must be at least 32 characters', names: ['NUXT_QUIZ_ASSESSMENT_WRITE_SECRET'] })
+  if (!['laya', 'structured-llm'].includes(learningDecisionProvider)) invalidBlocking.push({ kind: 'var', label: 'Learning decision provider must be laya or structured-llm', names: ['NUXT_LEARNING_DECISION_PROVIDER'] })
+  if (learningDecisionProvider === 'laya' && layaEvaluatorToken.length < 32) invalidBlocking.push({ kind: 'secret', label: 'Laya evaluator credential must be at least 32 characters', names: ['NUXT_LAYA_EVALUATOR_TOKEN'] })
+  if (learningDecisionProvider === 'structured-llm') {
+    if (learningDecisionMode !== 'shadow') invalidBlocking.push({ kind: 'var', label: 'Structured LLM grading is shadow-only until separately calibrated and approved', names: ['NUXT_LEARNING_DECISION_MODE', 'NUXT_LEARNING_DECISION_PROVIDER'] })
+    if (!quizSemanticLlmModel) invalidBlocking.push({ kind: 'var', label: 'Structured LLM model is required', names: ['NUXT_QUIZ_SEMANTIC_LLM_MODEL'] })
+    else if (!structuredLlmPolicy.modelAllowlist.includes(quizSemanticLlmModel)) invalidBlocking.push({ kind: 'var', label: 'Structured LLM model is not approved', names: ['NUXT_QUIZ_SEMANTIC_LLM_MODEL'] })
+    if (!(mergedEnv.NUXT_CLOUDFLARE_ACCOUNT_ID || mergedEnv.CF_ACCOUNT_ID)) invalidBlocking.push({ kind: 'var', label: 'Cloudflare account id is required for structured LLM grading', names: ['NUXT_CLOUDFLARE_ACCOUNT_ID', 'CF_ACCOUNT_ID'] })
+    if (!(mergedEnv.NUXT_CLOUDFLARE_AI_GATEWAY_ID || mergedEnv.CLOUDFLARE_AI_GATEWAY_ID)) invalidBlocking.push({ kind: 'var', label: 'Cloudflare AI Gateway id is required for structured LLM grading', names: ['NUXT_CLOUDFLARE_AI_GATEWAY_ID', 'CLOUDFLARE_AI_GATEWAY_ID'] })
+    if (!(mergedEnv.NUXT_OPENROUTER_API_KEY || mergedEnv.OPENROUTER_API_KEY)) invalidBlocking.push({ kind: 'secret', label: 'OpenRouter key is required for structured LLM grading', names: ['NUXT_OPENROUTER_API_KEY', 'OPENROUTER_API_KEY'] })
+  }
+  if (learningDecisionMode === 'shadow') {
+    if (mergedEnv.NUXT_APPLICATION_ENVIRONMENT !== structuredLlmPolicy.shadowDeployment.applicationEnvironment
+      || (mergedEnv.CF_PAGES_ENVIRONMENT && mergedEnv.CF_PAGES_ENVIRONMENT !== structuredLlmPolicy.shadowDeployment.pagesEnvironment)) {
+      invalidBlocking.push({ kind: 'var', label: 'Shadow learning decisions are development-only on preview deployments', names: ['NUXT_APPLICATION_ENVIRONMENT', 'CF_PAGES_ENVIRONMENT'] })
+    }
+  }
+  if (quizAssessmentWriteSecret.length < 32) invalidBlocking.push({ kind: 'secret', label: 'Quiz assessment write credential must be at least 32 characters', names: ['NUXT_QUIZ_ASSESSMENT_WRITE_SECRET'] })
   if (learningDecisionMode === 'advisory') {
     const evidence = readCalibrationEvidence()
     const activationDecision = verifyQuizSemanticActivation({
@@ -228,7 +246,7 @@ if (!audioWorkflowPhase && (learningDecisionMode === 'shadow' || learningDecisio
     })
     if (!activationDecision.enabled) invalidBlocking.push({ kind: 'var', label: `Quiz semantic advisory mode requires the committed approved calibration manifest (${activationDecision.code})`, names: ['NUXT_QUIZ_SEMANTIC_ACTIVATION_MANIFEST'] })
   }
-  if (layaEvaluatorUrl && !isHttpUrl(layaEvaluatorUrl)) invalidBlocking.push({ kind: 'var', label: 'Laya evaluator local URL must be an HTTP(S) URL', names: ['NUXT_LAYA_EVALUATOR_URL'] })
+  if (learningDecisionProvider === 'laya' && layaEvaluatorUrl && !isHttpUrl(layaEvaluatorUrl)) invalidBlocking.push({ kind: 'var', label: 'Laya evaluator local URL must be an HTTP(S) URL', names: ['NUXT_LAYA_EVALUATOR_URL'] })
 }
 
 if (audioWorkflowPhase) {

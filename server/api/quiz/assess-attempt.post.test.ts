@@ -5,10 +5,11 @@ const mutation = vi.hoisted(() => vi.fn())
 const evaluateTypedDecision = vi.hoisted(() => vi.fn())
 const requireRateLimit = vi.hoisted(() => vi.fn(async () => undefined))
 const activationDecision = vi.hoisted(() => vi.fn(() => ({ enabled: true, code: 'enabled' })))
+const shadowEnabled = vi.hoisted(() => vi.fn((_mode: unknown, deployment: { applicationEnvironment?: string }) => deployment.applicationEnvironment === 'development'))
 
 vi.mock('../../utils/convex-client', () => ({ makeConvexClient: vi.fn(() => ({ query, mutation })) }))
 vi.mock('../../utils/rate-limit', () => ({ requireRateLimit }))
-vi.mock('../../utils/learning-decisions/activation', () => ({ bundledQuizSemanticActivationDecision: activationDecision }))
+vi.mock('../../utils/learning-decisions/activation', () => ({ bundledQuizSemanticActivationDecision: activationDecision, isQuizSemanticShadowEnabled: shadowEnabled }))
 vi.mock('../../utils/learning-decisions', async importOriginal => ({
   ...await importOriginal<typeof import('../../utils/learning-decisions')>(),
   evaluateTypedDecision,
@@ -29,6 +30,7 @@ const pending = [{
   languageSnapshot: 'en',
   questionSnapshot: { question: 'Describe ATP.', questionType: 'free-response', expectedAnswer: 'Energy carrier', evidenceExcerpt: 'ATP carries energy.' },
   learnerAnswerSnapshot: 'It carries energy.',
+  deterministicIsCorrect: false,
   rubricVersion: 'quiz.free_response_assessment.v1',
   rubricSnapshot: [
     { label: 'fully_correct', description: 'The response answers the question completely and is supported by the evidence.' },
@@ -49,6 +51,7 @@ describe('POST /api/quiz/assess-attempt', () => {
     mutation.mockReset().mockImplementation(async (_ref, args: { assessmentIds?: string[] }) => args.assessmentIds ?? null)
     evaluateTypedDecision.mockReset()
     activationDecision.mockReset().mockReturnValue({ enabled: true, code: 'enabled' })
+    shadowEnabled.mockClear()
     vi.mocked(readBody).mockReset().mockResolvedValue({ attemptId: 'attempt_123' })
     vi.mocked(useRuntimeConfig).mockReturnValue({ learningDecisionMode: 'advisory', quizAssessmentWriteSecret: 'test-assessment-write-secret-long-enough', public: { convex: { url: 'https://convex.test' } } } as ReturnType<typeof useRuntimeConfig>)
     vi.spyOn(console, 'info').mockImplementation(() => undefined)
@@ -85,11 +88,92 @@ describe('POST /api/quiz/assess-attempt', () => {
   })
 
   test('does not expose or run advisory assessment outside advisory mode', async () => {
-    vi.mocked(useRuntimeConfig).mockReturnValue({ learningDecisionMode: 'shadow' } as ReturnType<typeof useRuntimeConfig>)
+    vi.mocked(useRuntimeConfig).mockReturnValue({ learningDecisionMode: 'off' } as ReturnType<typeof useRuntimeConfig>)
     activationDecision.mockReturnValue({ enabled: false, code: 'mode_off' })
     await expect(handler(event())).resolves.toEqual({ status: 'disabled', reason: 'mode_off' })
     expect(query).not.toHaveBeenCalled()
     expect(evaluateTypedDecision).not.toHaveBeenCalled()
+  })
+
+  test('evaluates in development shadow mode and persists a private shadow verdict', async () => {
+    vi.mocked(useRuntimeConfig).mockReturnValue({
+      learningDecisionMode: 'shadow',
+      quizSemanticApplicationEnvironment: 'development',
+      quizSemanticPagesEnvironment: 'preview',
+      quizSemanticPagesBranch: 'dev',
+      quizAssessmentWriteSecret: 'test-assessment-write-secret-long-enough',
+      public: { convex: { url: 'https://convex.test' } },
+    } as ReturnType<typeof useRuntimeConfig>)
+    evaluateTypedDecision.mockResolvedValue({
+      status: 'completed', provider: 'structured-llm', modelRevision: 'openai/gpt-4o-mini',
+      decisions: [{ id: assessmentId, label: 'fully_correct', confidence: 0.9, reviewRequired: false, probabilities: { fully_correct: 0.9, partially_correct: 0.05, incorrect: 0.03, uncertain: 0.02 } }],
+    })
+    query.mockResolvedValueOnce(pending).mockResolvedValueOnce([])
+
+    await expect(handler(event())).resolves.toEqual({ status: 'completed' })
+    expect(evaluateTypedDecision).toHaveBeenCalledOnce()
+    expect(query).toHaveBeenCalledTimes(2)
+    expect(mutation).toHaveBeenCalledTimes(2)
+    expect(mutation).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({
+      provider: 'structured-llm',
+      results: [expect.objectContaining({ assessmentId, label: 'fully_correct', reviewRequired: false })],
+    }))
+    expect(activationDecision).not.toHaveBeenCalled()
+  })
+
+  test('drains every bounded shadow page in one request', async () => {
+    vi.mocked(useRuntimeConfig).mockReturnValue({
+      learningDecisionMode: 'shadow',
+      quizSemanticApplicationEnvironment: 'development',
+      quizSemanticPagesEnvironment: 'preview',
+      quizSemanticPagesBranch: 'dev',
+      quizAssessmentWriteSecret: 'test-assessment-write-secret-long-enough',
+      public: { convex: { url: 'https://convex.test' } },
+    } as ReturnType<typeof useRuntimeConfig>)
+    const firstPage = Array.from({ length: 8 }, (_, index) => ({ ...pending[0]!, assessmentId: `assessment_${index}` }))
+    const secondPage = [{ ...pending[0]!, assessmentId: 'assessment_8' }]
+    query.mockResolvedValueOnce(firstPage).mockResolvedValueOnce(secondPage).mockResolvedValueOnce([])
+    evaluateTypedDecision.mockImplementation(async (_event, request) => ({
+      status: 'completed', provider: 'structured-llm', modelRevision: 'openai/gpt-4o-mini',
+      decisions: request.items.map((item: { id: string }) => ({
+        id: item.id, label: 'incorrect', confidence: 0.9, reviewRequired: false,
+        probabilities: { fully_correct: 0.03, partially_correct: 0.05, incorrect: 0.9, uncertain: 0.02 },
+      })),
+    }))
+
+    await expect(handler(event())).resolves.toEqual({ status: 'completed' })
+    expect(query).toHaveBeenCalledTimes(3)
+    expect(evaluateTypedDecision).toHaveBeenCalledTimes(2)
+    expect(evaluateTypedDecision.mock.calls.flatMap(([, request]) => request.items)).toHaveLength(9)
+  })
+
+  test('refuses shadow execution outside the development deployment boundary', async () => {
+    vi.mocked(useRuntimeConfig).mockReturnValue({
+      learningDecisionMode: 'shadow',
+      quizSemanticApplicationEnvironment: 'production',
+      quizSemanticPagesEnvironment: 'production',
+      quizSemanticPagesBranch: 'main',
+    } as ReturnType<typeof useRuntimeConfig>)
+
+    await expect(handler(event())).resolves.toEqual({ status: 'disabled', reason: 'production_forbidden' })
+    expect(query).not.toHaveBeenCalled()
+    expect(evaluateTypedDecision).not.toHaveBeenCalled()
+  })
+
+  test('does not disclose deterministically correct answers to the shadow provider', async () => {
+    vi.mocked(useRuntimeConfig).mockReturnValue({
+      learningDecisionMode: 'shadow',
+      quizSemanticApplicationEnvironment: 'development',
+      quizSemanticPagesEnvironment: 'preview',
+      quizSemanticPagesBranch: 'dev',
+      quizAssessmentWriteSecret: 'test-assessment-write-secret-long-enough',
+      public: { convex: { url: 'https://convex.test' } },
+    } as ReturnType<typeof useRuntimeConfig>)
+    query.mockResolvedValue([{ ...pending[0]!, deterministicIsCorrect: true }])
+
+    await expect(handler(event())).resolves.toEqual({ status: 'completed' })
+    expect(evaluateTypedDecision).not.toHaveBeenCalled()
+    expect(mutation).not.toHaveBeenCalled()
   })
 
   test.each(['evidence_hash_mismatch', 'artifact_mismatch', 'deployment_mismatch', 'production_forbidden'])('fails closed at the endpoint before body or provider work for %s', async (code) => {

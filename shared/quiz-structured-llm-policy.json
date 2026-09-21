@@ -1,0 +1,16 @@
+{
+  "modelAllowlist": [
+    "openai/gpt-4o-mini",
+    "google/gemini-2.5-flash-lite"
+  ],
+  "providerPins": {
+    "openai/gpt-4o-mini": "azure",
+    "google/gemini-2.5-flash-lite": "google-vertex"
+  },
+  "reviewConfidenceThreshold": 0.7,
+  "shadowDeployment": {
+    "applicationEnvironment": "development",
+    "pagesEnvironment": "preview",
+    "pagesBranch": "dev"
+  }
+}
