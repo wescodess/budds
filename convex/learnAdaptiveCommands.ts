@@ -2,11 +2,10 @@ import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import { internalMutation, type MutationCtx } from './_generated/server'
-import { prepareAdaptiveCommand } from '../shared/adaptive-command-authority'
+import { boundedAdaptiveCommandReference, prepareAdaptiveCommand } from '../shared/adaptive-command-authority'
 import { requireAdaptiveMutationAccess } from './lib/adaptiveLearnAccess'
 
 const RECEIPT_DETAIL_TTL_MS = 30 * 24 * 60 * 60 * 1000
-const MAX_RESULT_REFERENCE_CHARS = 4_096
 const THREAD_DELETION_BATCH_SIZE = 8
 const THREAD_DELETION_MAX_ATTEMPTS = 3
 const THREAD_DELETION_RETRY_DELAYS_MS = [1_000, 5_000] as const
@@ -29,12 +28,6 @@ export class AdaptiveCommandConflict extends Error {
   constructor(public readonly code: 'activity_boundary_changed', public readonly actualRevision: number) {
     super(code)
   }
-}
-
-function boundedReference(value: unknown): string {
-  const encoded = JSON.stringify(value)
-  if (encoded.length > MAX_RESULT_REFERENCE_CHARS) throw new Error('Adaptive command result exceeds receipt bounds')
-  return encoded
 }
 
 export async function executeAdaptiveThreadCommand<T>(ctx: MutationCtx, input: CommandInput<T>): Promise<AdaptiveResult<T>> {
@@ -60,11 +53,11 @@ export async function executeAdaptiveThreadCommand<T>(ctx: MutationCtx, input: C
       userId, threadId: thread._id, idempotencyKeyHash: prepared.idempotencyKeyHash,
       requestFingerprint: prepared.requestFingerprint, commandName: input.commandName,
       targetRevision: input.expectedRevision, resultKind: 'conflict', resultReference: null,
-      errorReference: boundedReference({ code, actualRevision }),
+      errorReference: boundedAdaptiveCommandReference({ code, actualRevision }),
       createdAt: now, resultExpiresAt: now + RECEIPT_DETAIL_TTL_MS, redactionStatus: 'pending',
     })
     const result = { kind: 'conflict' as const, code, expectedRevision: input.expectedRevision, actualRevision, authority: 'convex' as const }
-    await ctx.db.patch(receiptId, { resultReference: boundedReference(result) })
+    await ctx.db.patch(receiptId, { resultReference: boundedAdaptiveCommandReference(result) })
     return result
   }
   if (thread.revision !== input.expectedRevision) return await persistConflict('stale_revision', thread.revision)
@@ -88,7 +81,7 @@ export async function executeAdaptiveThreadCommand<T>(ctx: MutationCtx, input: C
     errorReference: null, createdAt: now, resultExpiresAt: now + RECEIPT_DETAIL_TTL_MS, redactionStatus: 'pending',
   })
   const result = { kind: 'ok' as const, value: committed.value, revision: committed.revision, receiptId: String(receiptId) }
-  await ctx.db.patch(receiptId, { resultReference: boundedReference(result) })
+  await ctx.db.patch(receiptId, { resultReference: boundedAdaptiveCommandReference(result) })
   return result
 }
 

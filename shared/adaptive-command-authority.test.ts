@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { prepareAdaptiveCommand } from './adaptive-command-authority'
+import { boundedAdaptiveCommandReference, prepareAdaptiveCommand } from './adaptive-command-authority'
 
 describe('Adaptive Learn command authority', () => {
   test('creates stable owner-scoped hashes and fingerprints without retaining the raw key', async () => {
@@ -45,5 +45,10 @@ describe('Adaptive Learn command authority', () => {
     await expect(prepareAdaptiveCommand({ ...base, expectedRevision: 0 })).rejects.toThrow(/revision/i)
     await expect(prepareAdaptiveCommand({ ...base, idempotencyKey: 'short' })).rejects.toThrow(/idempotency/i)
     await expect(prepareAdaptiveCommand({ ...base, payload: { note: 'x'.repeat(12_001) } })).rejects.toThrow(/payload/i)
+  })
+
+  test('shares a bounded receipt reference policy across command writers', () => {
+    expect(JSON.parse(boundedAdaptiveCommandReference({ status: 'ok' }))).toEqual({ status: 'ok' })
+    expect(() => boundedAdaptiveCommandReference({ value: 'x'.repeat(4_097) })).toThrow(/receipt bounds/i)
   })
 })
