@@ -13,6 +13,20 @@ describe('Adaptive Learn storage manifest', () => {
   test('registers activity children before thread parents with bounded owner-scoped retention', () => {
     expect(ADAPTIVE_LEARN_STORAGE_MANIFEST).toEqual([
       {
+        table: 'learnActivityEvidenceLinks',
+        ownerIndex: 'by_userId',
+        parentIndex: 'by_userId_and_threadId',
+        export: 'redacted_bounded',
+        accountDeletion: 'delete',
+      },
+      {
+        table: 'learnActivityEvents',
+        ownerIndex: 'by_userId',
+        parentIndex: 'by_userId_and_threadId_and_occurredAt',
+        export: 'metadata_only_bounded',
+        accountDeletion: 'delete',
+      },
+      {
         table: 'learnActivityCommandReceipts',
         ownerIndex: 'by_userId',
         parentIndex: 'by_userId_and_threadId',
@@ -41,8 +55,8 @@ describe('Adaptive Learn storage manifest', () => {
         accountDeletion: 'delete',
       },
     ])
-    expect(ADAPTIVE_LEARN_ACCOUNT_DELETE_ORDER).toEqual(['learnActivityCommandReceipts', 'learningThreadActivities', 'learnAdaptiveThreadDeletionJobs', 'learningThreads'])
-    expect(ADAPTIVE_LEARN_EXPORT_COLLECTIONS).toEqual(['learningThreads', 'learningThreadActivities', 'learnActivityCommandReceipts', 'learnAdaptiveThreadDeletionJobs'])
+    expect(ADAPTIVE_LEARN_ACCOUNT_DELETE_ORDER).toEqual(['learnActivityEvidenceLinks', 'learnActivityEvents', 'learnActivityCommandReceipts', 'learningThreadActivities', 'learnAdaptiveThreadDeletionJobs', 'learningThreads'])
+    expect(ADAPTIVE_LEARN_EXPORT_COLLECTIONS).toEqual(['learningThreads', 'learningThreadActivities', 'learnActivityEvidenceLinks', 'learnActivityEvents', 'learnActivityCommandReceipts', 'learnAdaptiveThreadDeletionJobs'])
   })
 
   test('keeps stored primitive discriminants and actions aligned with the runtime registry', () => {

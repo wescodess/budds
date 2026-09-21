@@ -31,11 +31,50 @@ import {
 import { retrieveLearnV2FolderEvidence } from "../server/utils/learn-v2-folder-evidence";
 import { localDateAt } from "../shared/learn-v2-mastery";
 import type { LearnV2AssessmentContract } from "../shared/learn-v2-blueprint";
+import { findCurrentAdaptiveActivityForSessionContent, hasLearnActivityEvent, writeLearnActivityEvent } from "./lib/learnAdaptiveEvents";
+import { hasAdaptiveExperienceAccess } from "./lib/adaptiveLearnAccess";
+import { loadAdaptiveClaimProjection } from "./lib/adaptiveClaimProjection";
 
 const TYPE = "session_content_generation";
 const LEASE_MS = 5 * 60_000;
 const PROVIDER_TIMEOUT_MS = 90_000;
 const MAX_ATTEMPTS = 2;
+
+function isMeaningfulAdaptiveSessionActivity(
+  activity: Doc<"learningThreadActivities">,
+  content: Doc<"sessionContent">,
+) {
+  const primitive = activity.primitivePlan.length === 1 ? activity.primitivePlan[0] : undefined;
+  return activity.activityClass === "factual"
+    && activity.objectiveId === content.objectiveId
+    && activity.blueprintRevisionId === content.blueprintRevisionId
+    && activity.decisionInputs.sourceState === "ready"
+    && activity.evidenceReferences.length > 0
+    && primitive?.type === "cited_explanation"
+    && primitive.action === "continue"
+    && activity.purpose.trim().length > 0
+    && activity.reasonCode.trim().length > 0
+    && activity.requiredAction.kind === primitive.action
+    && activity.requiredAction.label.trim().length > 0;
+}
+
+async function isAuthoritativeReadyAdaptiveSessionActivity(
+  ctx: MutationCtx | QueryCtx,
+  userId: string,
+  activity: Doc<"learningThreadActivities">,
+  content: Doc<"sessionContent">,
+) {
+  if (!isMeaningfulAdaptiveSessionActivity(activity, content)
+    || !activity.sessionContentId || activity.generationInputs.sessionContentRevision === null) return false;
+  const projection = await loadAdaptiveClaimProjection(ctx, {
+    userId,
+    historical: false,
+    sessionContentId: activity.sessionContentId,
+    sessionContentRevision: activity.generationInputs.sessionContentRevision,
+    evidenceReferences: activity.evidenceReferences,
+  });
+  return projection.integrityState === "accepted";
+}
 const digest = async (value: unknown) => {
   const bytes = new Uint8Array(
     await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(value))),
@@ -1261,12 +1300,72 @@ export const startStudySession = mutation({
       sessionContentId: content._id,
       sessionContentRevision: content.revision,
     };
+    const adaptive = await hasAdaptiveExperienceAccess(ctx, userId)
+      ? await findCurrentAdaptiveActivityForSessionContent(ctx, userId, content._id, new Set(["eligible", "blocked"] as const))
+      : null;
     await ctx.db.patch(session._id, {
       status: "in_progress",
       revision: session.revision + 1,
       startedSessionContentId: content._id,
       startedSessionContentRevision: content.revision,
     });
+    const meaningfulAdaptive = adaptive?.activity.status === "eligible"
+      && await isAuthoritativeReadyAdaptiveSessionActivity(ctx, userId, adaptive.activity, content) ? adaptive : null;
+    if (adaptive?.activity.boundaryOrdinal === 1) {
+      const firstValueEligibility = meaningfulAdaptive ? "ready_factual_content" as const : "excluded" as const;
+      const firstValueExclusionCode = meaningfulAdaptive
+        ? undefined
+        : adaptive.activity.activityClass === "non_factual"
+          ? "standalone_activity_invalid" as const
+          : adaptive.activity.status === "blocked" || adaptive.activity.decisionInputs.sourceState !== "ready" || adaptive.activity.evidenceReferences.length === 0
+            ? "evidence_blocked_at_commit" as const
+            : "explicit_exclusion" as const;
+      await writeLearnActivityEvent(ctx, {
+        userId,
+        threadId: adaptive.thread._id,
+        activityId: adaptive.activity._id,
+        eventType: "thread_command_committed",
+        eventVersion: "thread_command_committed.v1",
+        sourceVersion: adaptive.activity.planVersion,
+        contractVersion: adaptive.activity.contractVersion,
+        metricDefinitionVersion: "first_value.v1",
+        semanticKey: `thread:${String(adaptive.thread._id)}:opportunity:1:command`,
+        occurredAt: now,
+        reasonCode: meaningfulAdaptive ? "learner_started_ready_session" : "learner_started_excluded_session",
+        outcomeCode: meaningfulAdaptive ? "ready_content" : "excluded",
+        metadata: {
+          activityClass: adaptive.activity.activityClass,
+          boundaryOrdinal: adaptive.activity.boundaryOrdinal,
+          planRevision: adaptive.activity.planRevision,
+          opportunityOrdinal: 1,
+          firstValueEligibility,
+          ...(firstValueExclusionCode ? { firstValueExclusionCode } : {}),
+          cohort: "adaptive_experience_entitled",
+        },
+      });
+    }
+    if (meaningfulAdaptive) {
+      await ctx.db.patch(meaningfulAdaptive.activity._id, { status: "started", updatedAt: now });
+      const metadata = {
+        activityClass: meaningfulAdaptive.activity.activityClass,
+        boundaryOrdinal: meaningfulAdaptive.activity.boundaryOrdinal,
+        planRevision: meaningfulAdaptive.activity.planRevision,
+      };
+      await writeLearnActivityEvent(ctx, {
+        userId,
+        threadId: meaningfulAdaptive.thread._id,
+        activityId: meaningfulAdaptive.activity._id,
+        eventType: "activity_started",
+        eventVersion: "activity_started.v1",
+        sourceVersion: meaningfulAdaptive.activity.planVersion,
+        contractVersion: meaningfulAdaptive.activity.contractVersion,
+        semanticKey: `activity:${meaningfulAdaptive.activity.activityId}:started`,
+        occurredAt: now,
+        reasonCode: "study_session_started",
+        outcomeCode: "started",
+        metadata,
+      });
+    }
     await ctx.db.insert("learnPlanCommandReceipts", {
       userId,
       learningVoidId: plan.learningVoidId,
@@ -1277,6 +1376,48 @@ export const startStudySession = mutation({
       createdAt: Date.now(),
     });
     return response;
+  },
+});
+
+export const recordMeaningfulActivityStarted = mutation({
+  args: {
+    studySessionId: v.id("studySessions"),
+    expectedContentRevision: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireLearnV2MutationAccess(ctx);
+    if (!(await hasAdaptiveExperienceAccess(ctx, userId))) throw new Error("Adaptive Learn access denied");
+    const session = await ctx.db.get(args.studySessionId);
+    if (!session || session.userId !== userId || !["in_progress", "completed"].includes(session.status)
+      || session.startedSessionContentRevision !== args.expectedContentRevision
+      || !session.startedSessionContentId) throw new Error("Study session is not in progress");
+    const content = await ctx.db.get(session.startedSessionContentId);
+    if (!content || content.userId !== userId || content.status !== "published"
+      || content.revision !== args.expectedContentRevision || content.studySessionId !== session._id) {
+      throw new Error("Published session content is unavailable");
+    }
+    const adaptive = await findCurrentAdaptiveActivityForSessionContent(ctx, userId, content._id, new Set(["started", "submitted", "scoring", "feedback", "reconciling", "blocked"] as const));
+    if (!adaptive || adaptive.activity.boundaryOrdinal !== 1
+      || !(await hasLearnActivityEvent(ctx, userId, adaptive.activity._id, "activity_started"))
+      || !(await isAuthoritativeReadyAdaptiveSessionActivity(ctx, userId, adaptive.activity, content))) {
+      throw new Error("Adaptive activity is not ready");
+    }
+    const result = await writeLearnActivityEvent(ctx, {
+      userId,
+      threadId: adaptive.thread._id,
+      activityId: adaptive.activity._id,
+      eventType: "meaningful_activity_started",
+      eventVersion: "meaningful_activity_started.v1",
+      sourceVersion: adaptive.activity.rendererVersion,
+      contractVersion: adaptive.activity.contractVersion,
+      metricDefinitionVersion: "first_value.v1",
+      semanticKey: `thread:${String(adaptive.thread._id)}:opportunity:1:meaningful_start`,
+      occurredAt: Date.now(),
+      reasonCode: "rendered_operable_activity_acknowledged",
+      outcomeCode: "meaningful_start",
+      metadata: { activityClass: adaptive.activity.activityClass, boundaryOrdinal: adaptive.activity.boundaryOrdinal, planRevision: adaptive.activity.planRevision, opportunityOrdinal: 1 },
+    });
+    return { status: "recorded" as const, replayed: result.replayed };
   },
 });
 
@@ -1346,6 +1487,25 @@ export const getSessionContent = query({
       );
     }
     const { providerRequestId: _providerRequestId, ...publicContent } = content;
-    return { ...publicContent, blocks: visibleBlocks, claims, supports };
+    const adaptive = session.status === "in_progress" && await hasAdaptiveExperienceAccess(ctx, userId)
+      ? await findCurrentAdaptiveActivityForSessionContent(ctx, userId, content._id, new Set(["started", "submitted", "scoring", "feedback", "reconciling", "blocked"] as const))
+      : null;
+    const adaptivePrimitive = adaptive?.activity.primitivePlan[0];
+    const adaptivePresentation = adaptive && adaptivePrimitive?.type === "cited_explanation"
+      && await hasLearnActivityEvent(ctx, userId, adaptive.activity._id, "activity_started")
+      && await isAuthoritativeReadyAdaptiveSessionActivity(ctx, userId, adaptive.activity, content)
+      ? {
+          purpose: adaptive.activity.purpose,
+          reasonCode: adaptive.activity.reasonCode,
+          requiredAction: adaptive.activity.requiredAction,
+          composition: {
+            type: "cited_explanation" as const,
+            testId: adaptivePrimitive.testId,
+            heading: adaptivePrimitive.props.heading,
+            explanation: adaptivePrimitive.props.explanation,
+          },
+        }
+      : null;
+    return { ...publicContent, blocks: visibleBlocks, claims, supports, ...(adaptivePresentation ? { adaptivePresentation } : {}) };
   },
 });

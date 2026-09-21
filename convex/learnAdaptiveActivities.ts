@@ -12,6 +12,7 @@ import { requireAdaptiveQueryAccess } from './lib/adaptiveLearnAccess'
 import { loadAdaptiveClaimGraph, loadAdaptiveClaimProjection } from './lib/adaptiveClaimProjection'
 import { requireActiveBlueprint } from './lib/learnV2BlueprintAuthority'
 import { AdaptiveCommandConflict, executeAdaptiveThreadCommand } from './learnAdaptiveCommands'
+import { writeLearnActivityEvent } from './lib/learnAdaptiveEvents'
 
 type CommitArgs = Infer<typeof commitAdaptiveActivityPlanValidator>
 
@@ -213,6 +214,30 @@ export const commitActivityPlan = internalMutation({
     })
     const revision = thread.revision + 1
     await commandCtx.db.patch(thread._id, { currentActivityId: activityDocumentId, revision, updatedAt: now })
+    for (const sourceSnapshotId of new Set(args.evidenceReferences.map(reference => reference.sourceSnapshotId))) {
+      await commandCtx.db.insert('learnActivityEvidenceLinks', {
+        userId,
+        threadId: thread._id,
+        activityId: activityDocumentId,
+        sourceSnapshotId,
+        boundaryOrdinal: composed.boundaryOrdinal,
+        createdAt: now,
+      })
+    }
+    await writeLearnActivityEvent(commandCtx, {
+      userId,
+      threadId: thread._id,
+      activityId: activityDocumentId,
+      eventType: 'activity_eligible',
+      eventVersion: 'activity_eligible.v1',
+      sourceVersion: composed.planVersion,
+      contractVersion: composed.contractVersion,
+      semanticKey: `activity:${composed.activityId}:eligible`,
+      occurredAt: now,
+      reasonCode: 'activity_plan_committed',
+      outcomeCode: 'eligible',
+      metadata: { activityClass: composed.activityClass, boundaryOrdinal: composed.boundaryOrdinal, planRevision: composed.planRevision },
+    })
     return {
       value: { activityDocumentId, activityId: composed.activityId, boundaryOrdinal: composed.boundaryOrdinal, planRevision: composed.planRevision, inputDigest: composed.inputDigest, replayable: true as const },
       revision,

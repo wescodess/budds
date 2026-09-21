@@ -4,7 +4,7 @@ import type { Doc, Id } from './_generated/dataModel'
 import { action, internalMutation, internalQuery, mutation, type ActionCtx, type MutationCtx, type QueryCtx } from './_generated/server'
 import { hasLearnV2Access, requireLearnV2MutationAccess } from './lib/learnV2Access'
 import { hasAdaptiveExperienceAccess } from './lib/adaptiveLearnAccess'
-import { addCalendarDays, deriveMastery, LEARN_V2_MASTERY_SCORER_VERSION, masteryAttemptTime, scoreCriteria } from '../shared/learn-v2-mastery'
+import { addCalendarDays, deriveMastery, LEARN_V2_MASTERY_SCORER_VERSION, LEARN_V2_MASTERY_THRESHOLD, masteryAttemptTime, scoreCriteria } from '../shared/learn-v2-mastery'
 import { classifyAiGatewayFailure, generateCompletion } from '../server/utils/ai-gateway'
 import { retrieveLearnV2FolderEvidence } from '../server/utils/learn-v2-folder-evidence'
 import { requireActiveBlueprint } from './lib/learnV2BlueprintAuthority'
@@ -18,6 +18,7 @@ import {
   renderControlledFeedbackTemplate,
   type ControlledFeedbackProjection,
 } from '../shared/adaptive-controlled-feedback'
+import { findCurrentAdaptiveActivityForSessionContent, writeLearnActivityEvent } from './lib/learnAdaptiveEvents'
 
 const MAX_RESPONSE = 12_000
 const MAX_MISCONCEPTIONS = ADAPTIVE_MISCONCEPTION_TAGS.length
@@ -202,6 +203,26 @@ async function blockAmbiguousMasteryJob(ctx: MutationCtx, job: Doc<'learnJobs'>,
     updatedAt: now,
   })
   await projectAdaptiveReconciliation(ctx, job)
+  if (job.adaptiveActivityId && job.adaptiveThreadId) {
+    const activity = await ctx.db.get(job.adaptiveActivityId)
+    const thread = await ctx.db.get(job.adaptiveThreadId)
+    if (activity && thread && activity.userId === job.userId && activity.threadId === thread._id && thread.userId === job.userId) {
+      await writeLearnActivityEvent(ctx, {
+        userId: job.userId,
+        threadId: thread._id,
+        activityId: activity._id,
+        eventType: 'provider_ambiguity',
+        eventVersion: 'provider_ambiguity.v1',
+        sourceVersion: ADAPTIVE_V2_PILOT_MANIFEST.requestVersion,
+        contractVersion: activity.contractVersion,
+        semanticKey: `job:${String(job._id)}:provider_ambiguity`,
+        occurredAt: now,
+        reasonCode: 'provider_outcome_requires_reconciliation',
+        outcomeCode: 'blocked',
+        metadata: { providerStage: 'reconciliation' },
+      })
+    }
+  }
 }
 
 async function projectAdaptiveFeedback(ctx: MutationCtx, job: Doc<'learnJobs'>, attemptId: Id<'masteryAttempts'>, projection: ControlledFeedbackProjection) {
@@ -219,6 +240,73 @@ async function projectAdaptiveFeedback(ctx: MutationCtx, job: Doc<'learnJobs'>, 
     feedbackProjection: projection,
     updatedAt: Date.now(),
   })
+}
+
+async function emitAdaptiveAttemptEvents(ctx: MutationCtx, input: {
+  job: Doc<'learnJobs'>
+  attemptId: Id<'masteryAttempts'>
+  now: number
+  scorePercent: number
+  kind: 'independent_application' | 'retained_transfer'
+  assistanceLevel: 'none' | 'hint' | 'reveal'
+  outcome: { previousState: string, state: string, remediation: boolean }
+  scorerVersion: string
+}) {
+  if (!input.job.adaptiveActivityId || !input.job.adaptiveThreadId) return
+  const [activity, thread] = await Promise.all([ctx.db.get(input.job.adaptiveActivityId), ctx.db.get(input.job.adaptiveThreadId)])
+  if (!activity || !thread || activity.userId !== input.job.userId || activity.threadId !== thread._id || thread.userId !== input.job.userId) throw new Error('Adaptive attempt event authority is unavailable')
+  const common = {
+    userId: input.job.userId,
+    threadId: thread._id,
+    activityId: activity._id,
+    sourceVersion: input.scorerVersion,
+    contractVersion: activity.contractVersion,
+    occurredAt: input.now,
+    metadata: {
+      activityClass: activity.activityClass,
+      boundaryOrdinal: activity.boundaryOrdinal,
+      planRevision: activity.planRevision,
+      assistanceLevel: input.assistanceLevel,
+      attemptKind: input.kind,
+      masteryState: input.outcome.state as 'unseen' | 'learning' | 'guided' | 'independent' | 'retained' | 'needs_review' | 'blocked' | 'provisionally_known',
+    },
+  }
+  await writeLearnActivityEvent(ctx, { ...common, eventType: 'activity_completed', eventVersion: 'activity_completed.v1', semanticKey: `attempt:${String(input.attemptId)}:completed`, reasonCode: 'server_scored_attempt_committed', outcomeCode: 'completed' })
+  const passed = input.scorePercent >= LEARN_V2_MASTERY_THRESHOLD
+  await writeLearnActivityEvent(ctx, { ...common, eventType: passed ? 'representative_pass' : 'representative_fail', eventVersion: passed ? 'representative_pass.v1' : 'representative_fail.v1', semanticKey: `attempt:${String(input.attemptId)}:representative`, reasonCode: 'server_scored_outcome', outcomeCode: passed ? 'pass' : 'fail' })
+  if (input.kind === 'retained_transfer') {
+    if (input.assistanceLevel === 'none') {
+      await writeLearnActivityEvent(ctx, { ...common, eventType: 'delayed_check_eligible', eventVersion: 'delayed_check_eligible.v1', semanticKey: `attempt:${String(input.attemptId)}:delayed_eligible`, reasonCode: 'seven_calendar_days_elapsed', outcomeCode: 'eligible' })
+    }
+    await writeLearnActivityEvent(ctx, { ...common, eventType: 'delayed_check_attempt', eventVersion: 'delayed_check_attempt.v1', semanticKey: `attempt:${String(input.attemptId)}:delayed_attempt`, reasonCode: input.assistanceLevel === 'none' ? 'eligible_delayed_check_committed' : 'assisted_delayed_check_committed', outcomeCode: passed ? 'pass' : 'fail' })
+  }
+  if (input.outcome.state === 'retained' && input.outcome.previousState !== 'retained') {
+    await writeLearnActivityEvent(ctx, { ...common, eventType: 'retained', eventVersion: 'retained.v1', semanticKey: `attempt:${String(input.attemptId)}:retained`, reasonCode: 'eligible_delayed_pass', outcomeCode: 'retained' })
+  }
+  if (input.outcome.remediation) {
+    await writeLearnActivityEvent(ctx, { ...common, eventType: 'remediation', eventVersion: 'remediation.v1', semanticKey: `attempt:${String(input.attemptId)}:remediation`, reasonCode: 'failed_check', outcomeCode: 'needs_review' })
+  }
+}
+
+async function emitAdaptiveMeaningfulResponse(ctx: MutationCtx, input: { userId: string, threadId: Id<'learningThreads'>, activity: Doc<'learningThreadActivities'>, jobId: Id<'learnJobs'>, occurredAt: number }) {
+  await writeLearnActivityEvent(ctx, {
+    userId: input.userId,
+    threadId: input.threadId,
+    activityId: input.activity._id,
+    eventType: 'meaningful_response',
+    eventVersion: 'meaningful_response.v1',
+    sourceVersion: input.activity.evaluationContract.version,
+    contractVersion: input.activity.contractVersion,
+    semanticKey: `job:${String(input.jobId)}:meaningful_response`,
+    occurredAt: input.occurredAt,
+    reasonCode: 'server_scoring_reserved',
+    outcomeCode: 'response_saved',
+    metadata: { activityClass: input.activity.activityClass, boundaryOrdinal: input.activity.boundaryOrdinal, planRevision: input.activity.planRevision },
+  })
+}
+
+async function linkedAdaptiveActivityForSession(ctx: MutationCtx, userId: string, sessionContentId: Id<'sessionContent'>) {
+  return await findCurrentAdaptiveActivityForSessionContent(ctx, userId, sessionContentId)
 }
 
 async function masteryScoringLedger(args: AttemptRequest, adaptiveAdmission?: AdaptiveAdmissionContext) {
@@ -344,6 +432,23 @@ export const recordAssistanceUse = mutation({
       ...(args.kind === 'substantive_hint' ? { substantiveHintUsedAt: now } : { answerRevealedAt: now }),
       assistanceRevision: (scope.session.assistanceRevision ?? 0) + 1, revision: scope.session.revision + 1,
     })
+    const adaptive = await hasAdaptiveExperienceAccess(ctx, userId)
+      ? await linkedAdaptiveActivityForSession(ctx, userId, scope.content._id)
+      : null
+    if (adaptive) await writeLearnActivityEvent(ctx, {
+      userId,
+      threadId: adaptive.thread._id,
+      activityId: adaptive.activity._id,
+      eventType: 'assistance',
+      eventVersion: 'assistance.v1',
+      sourceVersion: 'learn-v2.assistance.v1',
+      contractVersion: adaptive.activity.contractVersion,
+      semanticKey: `session:${String(scope.session._id)}:assistance:${args.kind}`,
+      occurredAt: now,
+      reasonCode: args.kind,
+      outcomeCode: 'recorded',
+      metadata: { activityClass: adaptive.activity.activityClass, boundaryOrdinal: adaptive.activity.boundaryOrdinal, planRevision: adaptive.activity.planRevision, assistanceLevel: args.kind === 'answer_reveal' ? 'reveal' : 'hint' },
+    })
     return { status: 'recorded' as const, revision: scope.session.revision + 1, replayed: false, assistance }
   },
 })
@@ -403,7 +508,10 @@ export const beginMasteryScoring = internalMutation({
       }
       const leaseToken = crypto.randomUUID()
       await ctx.db.patch(existing._id, { ...await masteryScoringLedger(args, args.adaptiveAdmission), requestFingerprint: fingerprints.digest, status: 'leased', leaseToken, leaseExpiresAt: now + SCORING_LEASE_MS, checkpoint: 'reserved', terminalReason: undefined, revision: existing.revision + 1, updatedAt: now })
-      if (adaptiveActivity) await ctx.db.patch(adaptiveActivity._id, { status: 'scoring', scoringJobId: existing._id, submittedResponse: args.response, reconciliationReason: undefined, recoveryFeedback: undefined, updatedAt: now })
+      if (adaptiveActivity) {
+        await ctx.db.patch(adaptiveActivity._id, { status: 'scoring', scoringJobId: existing._id, submittedResponse: args.response, reconciliationReason: undefined, recoveryFeedback: undefined, updatedAt: now })
+        await emitAdaptiveMeaningfulResponse(ctx, { userId: args.tokenIdentifier, threadId: args.adaptiveAdmission!.threadId, activity: adaptiveActivity, jobId: existing._id, occurredAt: now })
+      }
       return { kind: 'acquired' as const, jobId: existing._id, leaseToken }
     }
     scope ??= await sessionScope(ctx, args.tokenIdentifier, args.studySessionId)
@@ -421,7 +529,10 @@ export const beginMasteryScoring = internalMutation({
     }
     const leaseToken = crypto.randomUUID()
     const jobId = await ctx.db.insert('learnJobs', { userId: args.tokenIdentifier, learningVoidId: scope.voidRow._id, blueprintRevisionId: scope.blueprint._id, studyPlanRevisionId: scope.plan._id, studySessionId: scope.session._id, ...(adaptiveActivity && args.adaptiveAdmission ? { adaptiveThreadId: args.adaptiveAdmission.threadId, adaptiveActivityId: adaptiveActivity._id } : {}), type: SCORING_JOB_TYPE, status: 'leased', revision: 1, idempotencyKey: args.idempotencyKey, requestFingerprint: fingerprints.digest, ...await masteryScoringLedger(args, args.adaptiveAdmission), expectedBlueprintRecordRevision: args.expectedBlueprintRecordRevision, expectedSessionRevision: args.expectedSessionRevision, attempts: 0, providerModel: scope.content.providerModel, leaseToken, leaseExpiresAt: now + SCORING_LEASE_MS, checkpoint: 'reserved', createdAt: now, updatedAt: now })
-    if (adaptiveActivity) await ctx.db.patch(adaptiveActivity._id, { status: 'scoring', scoringJobId: jobId, submittedResponse: args.response, updatedAt: now })
+    if (adaptiveActivity) {
+      await ctx.db.patch(adaptiveActivity._id, { status: 'scoring', scoringJobId: jobId, submittedResponse: args.response, updatedAt: now })
+      await emitAdaptiveMeaningfulResponse(ctx, { userId: args.tokenIdentifier, threadId: args.adaptiveAdmission!.threadId, activity: adaptiveActivity, jobId, occurredAt: now })
+    }
     return { kind: 'acquired' as const, jobId, leaseToken }
   },
 })
@@ -547,7 +658,7 @@ export const cleanupExpiredMasteryScoringRateEvents = internalMutation({
 })
 
 export const finishMasteryScoringFailure = internalMutation({
-  args: { tokenIdentifier: v.string(), jobId: v.id('learnJobs'), leaseToken: v.string(), outcome: v.union(v.literal('not_dispatched'), v.literal('ambiguous')) },
+  args: { tokenIdentifier: v.string(), jobId: v.id('learnJobs'), leaseToken: v.string(), outcome: v.union(v.literal('not_dispatched'), v.literal('definitive_failure'), v.literal('ambiguous')) },
   handler: async (ctx, args) => {
     const job = await ctx.db.get(args.jobId)
     if (!job || job.userId !== args.tokenIdentifier || job.type !== SCORING_JOB_TYPE || job.leaseToken !== args.leaseToken || (job.status !== 'leased' && job.status !== 'running')) return
@@ -555,7 +666,26 @@ export const finishMasteryScoringFailure = internalMutation({
       await blockAmbiguousMasteryJob(ctx, job, Date.now())
       return
     }
-    await ctx.db.patch(job._id, { status: 'queued', leaseToken: undefined, leaseExpiresAt: undefined, checkpoint: undefined, terminalReason: 'provider_not_dispatched', revision: job.revision + 1, updatedAt: Date.now() })
+    const now = Date.now()
+    const definitive = args.outcome === 'definitive_failure'
+    await ctx.db.patch(job._id, { status: 'queued', leaseToken: undefined, leaseExpiresAt: undefined, checkpoint: undefined, terminalReason: definitive ? 'provider_definitive_failure' : 'provider_not_dispatched', revision: job.revision + 1, updatedAt: now })
+    if (job.adaptiveActivityId && job.adaptiveThreadId) {
+      const [activity, thread] = await Promise.all([ctx.db.get(job.adaptiveActivityId), ctx.db.get(job.adaptiveThreadId)])
+      if (activity && thread && activity.userId === job.userId && activity.threadId === thread._id && thread.userId === job.userId) await writeLearnActivityEvent(ctx, {
+        userId: job.userId,
+        threadId: thread._id,
+        activityId: activity._id,
+        eventType: 'provider_failure',
+        eventVersion: 'provider_failure.v1',
+        sourceVersion: ADAPTIVE_V2_PILOT_MANIFEST.requestVersion,
+        contractVersion: activity.contractVersion,
+        semanticKey: `job:${String(job._id)}:provider_failure:${job.revision + 1}`,
+        occurredAt: now,
+        reasonCode: definitive ? 'provider_definitive_failure' : 'provider_not_dispatched',
+        outcomeCode: 'queued',
+        metadata: { providerStage: definitive ? 'outcome' : 'reservation' },
+      })
+    }
   },
 })
 
@@ -717,7 +847,7 @@ export async function submitMasteryAttemptForOwner(
     }
     catch (error) {
       const failure = classifyAiGatewayFailure(error)
-      await ctx.runMutation(internal.learnV2Mastery.finishMasteryScoringFailure, { tokenIdentifier, jobId, leaseToken, outcome: failure === 'not_dispatched' || failure === 'definitive_failure' ? 'not_dispatched' : 'ambiguous' })
+      await ctx.runMutation(internal.learnV2Mastery.finishMasteryScoringFailure, { tokenIdentifier, jobId, leaseToken, outcome: failure === 'not_dispatched' ? 'not_dispatched' : failure === 'definitive_failure' ? 'definitive_failure' : 'ambiguous' })
       if (adaptiveAdmission && failure !== 'not_dispatched' && failure !== 'definitive_failure') return { status: 'blocked', code: 'provider_outcome_requires_reconciliation', message: 'Scoring needs reconciliation. No mastery change was made.', retryable: false }
       throw error
     }
@@ -799,6 +929,7 @@ export const recordMasteryAttempt = internalMutation({
     if (scoringJob) {
       await ctx.db.patch(scoringJob._id, { status: 'succeeded', providerResponseId: args.providerResponseId, leaseToken: undefined, leaseExpiresAt: undefined, checkpoint: `attempt:${String(attemptId)}`, terminalReason: undefined, revision: scoringJob.revision + 1, updatedAt: now })
       await projectAdaptiveFeedback(ctx, scoringJob, attemptId, controlledFeedback)
+      await emitAdaptiveAttemptEvents(ctx, { job: scoringJob, attemptId, now, scorePercent, kind, assistanceLevel: scope.session.answerRevealedAt !== undefined ? 'reveal' : scope.session.substantiveHintUsedAt !== undefined ? 'hint' : 'none', outcome, scorerVersion: args.scorerVerdict.scorerVersion })
     }
     await ctx.db.patch(scope.session._id, { status: 'completed', revision: scope.session.revision + 1, auditReasonCode: 'mastery_attempt_recorded' })
     await ctx.db.insert('learnPlanAuditEvents', { userId: args.tokenIdentifier, learningVoidId: scope.voidRow._id, studyPlanRevisionId: scope.plan._id, studySessionId: scope.session._id, reasonCode: 'mastery_attempt_recorded', details: JSON.stringify({ attemptId, kind, scorePercent, state: outcome.state, assisted }), createdAt: now })

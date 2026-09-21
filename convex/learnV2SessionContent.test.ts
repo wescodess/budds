@@ -47,7 +47,7 @@ async function seedGenerationGraph() {
     await ctx.db.insert('learnSourceExcerpts', { userId: identity.tokenIdentifier, sourceSnapshotId: snapshotId, locator: 'page:1', excerpt: 'The source supports this fact.', rightsStatus: 'permitted' })
     await ctx.db.insert('learnObjectiveSources', { userId: identity.tokenIdentifier, objectiveId, sourceSnapshotId: snapshotId, coverage: 'strong' })
     const jobId = await ctx.db.insert('learnJobs', { userId: identity.tokenIdentifier, learningVoidId: voidId, blueprintRevisionId, studyPlanRevisionId: planRevisionId, studySessionId: sessionId, type: 'session_content_generation', status: 'queued', revision: 1, idempotencyKey: 'job', inputDigest: 'sha256:input', expectedVoidRevision: 2, expectedBlueprintRecordRevision: 1, expectedSessionRevision: 1, attempts: 0, dispatchSupportingSourceSnapshotIds: [snapshotId], createdAt: now, updatedAt: now })
-    return { voidId, blueprintRevisionId, planId, planRevisionId, sessionId, snapshotId, excerptId: (await ctx.db.query('learnSourceExcerpts').withIndex('by_userId_and_sourceSnapshotId_and_evidencePurgedAt', q => q.eq('userId', identity.tokenIdentifier).eq('sourceSnapshotId', snapshotId).eq('evidencePurgedAt', undefined)).unique())!._id, jobId }
+    return { voidId, blueprintRevisionId, objectiveId, planId, planRevisionId, sessionId, sourceIdentityId, snapshotId, excerptId: (await ctx.db.query('learnSourceExcerpts').withIndex('by_userId_and_sourceSnapshotId_and_evidencePurgedAt', q => q.eq('userId', identity.tokenIdentifier).eq('sourceSnapshotId', snapshotId).eq('evidencePurgedAt', undefined)).unique())!._id, jobId }
   })
   return { t, owner, graph }
 }
@@ -336,6 +336,129 @@ describe('Learn V2 session-content publication contract', () => {
     await other.mutation(api.users.upsertUser, {})
     await t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: otherIdentity.tokenIdentifier, enabled: true })
     await expect(other.mutation(api.learnV2SessionContent.startStudySession, args)).rejects.toThrow(/Study session is not ready/)
+  })
+
+  test('records first value only after the linked adaptive content is rendered and operable', async () => {
+    const { t, owner, graph } = await seedGenerationGraph()
+    const { lease, begun } = await leaseAndBegin(t, graph.jobId)
+    const published = await t.mutation(internal.learnV2SessionContent.commitSessionContentCandidate, {
+      tokenIdentifier: identity.tokenIdentifier, jobId: graph.jobId, leaseToken: lease.leaseToken,
+      expectedRevision: begun.revision, candidateJson: JSON.stringify(candidate()).replaceAll(sourceId, String(graph.snapshotId)),
+      verifierDecisionsJson: verifierDecisionsJson(graph.snapshotId, graph.excerptId),
+    })
+    if (published.status !== 'ready') throw new Error('expected published session content')
+    await owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true })
+    const linked = await t.run(async (ctx) => {
+      const now = Date.now()
+      const claim = await ctx.db.query('sessionContentClaims').withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', identity.tokenIdentifier).eq('sessionContentId', published.sessionContentId)).unique()
+      const support = claim && await ctx.db.query('learnClaimSupports').withIndex('by_userId_and_sessionContentClaimId', q => q.eq('userId', identity.tokenIdentifier).eq('sessionContentClaimId', claim._id)).unique()
+      if (!claim || !support) throw new Error('expected published evidence')
+      await ctx.db.patch(graph.snapshotId, { recordRevision: 1 })
+      const threadId = await ctx.db.insert('learningThreads', { userId: identity.tokenIdentifier, originalNeed: 'Practice safely', intent: 'master', availableTime: '15', authorityKind: 'v2_mission', learningVoidId: graph.voidId, sourceScope: { kind: 'none' }, evidenceState: 'ready', lifecycle: 'active', revision: 1, createdAt: now, updatedAt: now })
+      return { threadId, claimId: claim._id, supportId: support._id }
+    })
+    const committed = await owner.mutation(internal.learnAdaptiveActivities.commitActivityPlan, {
+      threadId: linked.threadId, expectedRevision: 1, idempotencyKey: 'linked-session-start-plan', activityId: 'linked-session-start', boundaryOrdinal: 1, planRevision: 1,
+      activityClass: 'factual', intent: 'master', objectiveId: graph.objectiveId, purpose: 'Read the supported explanation and continue.', reasonCode: 'accepted_evidence_explanation',
+      primitiveSequence: [{ type: 'cited_explanation', action: 'continue', props: { heading: 'Supported concept', explanation: 'The accepted evidence supports this explanation.', sourceRefs: [String(graph.snapshotId)] } }],
+      requiredAction: { kind: 'continue', label: 'Continue' }, evaluationContract: { version: 'learn-adaptive.evaluation.v1', kind: 'acknowledgement', responseFormat: 'none', passingScorePercent: null }, accessibilityMetadata: { heading: 'Supported concept', instructions: 'Read and continue.', focusTargetTestId: 'learn-primitive-cited-explanation', liveRegionMode: 'polite' },
+      learningVoidId: graph.voidId, blueprintRevisionId: graph.blueprintRevisionId, sessionContentId: published.sessionContentId,
+      evidenceReferences: [{ claimId: linked.claimId, supportId: linked.supportId, sourceSnapshotId: graph.snapshotId }],
+      decisionInputs: { routerVersion: 'learn-adaptive.router.v1', availableTime: '15', sourceState: 'ready', priorActivityId: null, priorAttemptId: null, priorOutcome: null, assistance: 'none', confidence: null },
+    })
+    if (committed.kind !== 'ok') throw new Error('expected committed adaptive plan')
+    const activityId = committed.value.activityDocumentId as Id<'learningThreadActivities'>
+    await t.run(ctx => ctx.db.patch(graph.sessionId, { scheduledStartAt: Date.now() - 1 }))
+    await owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: false })
+    await expect(owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: graph.sessionId, expectedSessionRevision: 2, expectedContentRevision: 1, idempotencyKey: 'adaptive-start-gate-off' })).resolves.toMatchObject({ status: 'in_progress' })
+    expect(await t.run(ctx => ctx.db.get(activityId))).toMatchObject({ status: 'eligible' })
+    expect((await t.run(ctx => ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', identity.tokenIdentifier).eq('threadId', linked.threadId)).collect())).map(event => event.eventVersion)).toEqual(['activity_eligible.v1'])
+    await t.run(async (ctx) => {
+      await ctx.db.patch(graph.sessionId, { status: 'ready', revision: 2, startedSessionContentId: undefined, startedSessionContentRevision: undefined })
+      const receipt = await ctx.db.query('learnPlanCommandReceipts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', identity.tokenIdentifier).eq('idempotencyKey', 'adaptive-start-gate-off')).unique()
+      if (receipt) await ctx.db.delete(receipt._id)
+    })
+    await owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true })
+    const args = { studySessionId: graph.sessionId, expectedSessionRevision: 2, expectedContentRevision: 1, idempotencyKey: 'adaptive-start-once' }
+    const first = await owner.mutation(api.learnV2SessionContent.startStudySession, args)
+    await expect(owner.mutation(api.learnV2SessionContent.startStudySession, args)).resolves.toEqual(first)
+    const startedRows = await t.run(async ctx => ({
+      activity: await ctx.db.get(activityId),
+      events: await ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', identity.tokenIdentifier).eq('threadId', linked.threadId)).collect(),
+    }))
+    expect(startedRows.activity).toMatchObject({ status: 'started' })
+    expect(startedRows.events.map(event => event.eventVersion)).toEqual(['activity_eligible.v1', 'thread_command_committed.v1', 'activity_started.v1'])
+    await t.run(ctx => ctx.db.patch(activityId, { requiredAction: { kind: 'unsupported_action', label: 'Do something else' } }))
+    await expect(owner.query(api.learnV2SessionContent.getSessionContent, { studySessionId: graph.sessionId })).resolves.not.toHaveProperty('adaptivePresentation')
+    await expect(owner.mutation(api.learnV2SessionContent.recordMeaningfulActivityStarted, { studySessionId: graph.sessionId, expectedContentRevision: 1 })).rejects.toThrow(/not ready/)
+    await t.run(ctx => ctx.db.patch(activityId, { requiredAction: { kind: 'continue', label: 'Continue' } }))
+    await expect(owner.query(api.learnV2SessionContent.getSessionContent, { studySessionId: graph.sessionId })).resolves.toMatchObject({
+      adaptivePresentation: { purpose: 'Read the supported explanation and continue.', reasonCode: 'accepted_evidence_explanation', requiredAction: { kind: 'continue', label: 'Continue' } },
+    })
+    const renderedArgs = { studySessionId: graph.sessionId, expectedContentRevision: 1 }
+    await owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: false })
+    await expect(owner.mutation(api.learnV2SessionContent.recordMeaningfulActivityStarted, renderedArgs)).rejects.toThrow(/Adaptive Learn access denied/)
+    await owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true })
+    await expect(owner.mutation(api.learnV2Mastery.recordAssistanceUse, { studySessionId: graph.sessionId, expectedSessionRevision: 3, kind: 'substantive_hint' })).resolves.toMatchObject({ status: 'recorded', revision: 4 })
+    await t.run(async (ctx) => {
+      await ctx.db.patch(graph.sessionId, { status: 'completed' })
+      await ctx.db.patch(activityId, { status: 'feedback' })
+    })
+    await expect(owner.mutation(api.learnV2SessionContent.recordMeaningfulActivityStarted, renderedArgs)).resolves.toMatchObject({ status: 'recorded', replayed: false })
+    await expect(owner.mutation(api.learnV2SessionContent.recordMeaningfulActivityStarted, renderedArgs)).resolves.toMatchObject({ status: 'recorded', replayed: true })
+    const events = await t.run(ctx => ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', identity.tokenIdentifier).eq('threadId', linked.threadId)).collect())
+    expect(events.map(event => event.eventVersion)).toEqual(['activity_eligible.v1', 'thread_command_committed.v1', 'activity_started.v1', 'assistance.v1', 'meaningful_activity_started.v1'])
+    expect(events[4]).toMatchObject({ metricDefinitionVersion: 'first_value.v1', metadata: expect.objectContaining({ opportunityOrdinal: 1 }) })
+  })
+
+  test('records a reachable first-value exclusion when evidence is invalidated before learner start', async () => {
+    const { t, owner, graph } = await seedGenerationGraph()
+    const { lease, begun } = await leaseAndBegin(t, graph.jobId)
+    const published = await t.mutation(internal.learnV2SessionContent.commitSessionContentCandidate, {
+      tokenIdentifier: identity.tokenIdentifier, jobId: graph.jobId, leaseToken: lease.leaseToken,
+      expectedRevision: begun.revision, candidateJson: JSON.stringify(candidate()).replaceAll(sourceId, String(graph.snapshotId)),
+      verifierDecisionsJson: verifierDecisionsJson(graph.snapshotId, graph.excerptId),
+    })
+    if (published.status !== 'ready') throw new Error('expected published session content')
+    await owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true })
+    const linked = await t.run(async (ctx) => {
+      const now = Date.now()
+      const claim = await ctx.db.query('sessionContentClaims').withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', identity.tokenIdentifier).eq('sessionContentId', published.sessionContentId)).unique()
+      const support = claim && await ctx.db.query('learnClaimSupports').withIndex('by_userId_and_sessionContentClaimId', q => q.eq('userId', identity.tokenIdentifier).eq('sessionContentClaimId', claim._id)).unique()
+      if (!claim || !support) throw new Error('expected published evidence')
+      await ctx.db.patch(graph.snapshotId, { recordRevision: 1 })
+      const threadId = await ctx.db.insert('learningThreads', { userId: identity.tokenIdentifier, originalNeed: 'Practice safely', intent: 'master', availableTime: '15', authorityKind: 'v2_mission', learningVoidId: graph.voidId, sourceScope: { kind: 'none' }, evidenceState: 'ready', lifecycle: 'active', revision: 1, createdAt: now, updatedAt: now })
+      return { threadId, claimId: claim._id, supportId: support._id }
+    })
+    const committed = await owner.mutation(internal.learnAdaptiveActivities.commitActivityPlan, {
+      threadId: linked.threadId, expectedRevision: 1, idempotencyKey: 'linked-excluded-start-plan', activityId: 'linked-excluded-start', boundaryOrdinal: 1, planRevision: 1,
+      activityClass: 'factual', intent: 'master', objectiveId: graph.objectiveId, purpose: 'Read the supported explanation and continue.', reasonCode: 'accepted_evidence_explanation',
+      primitiveSequence: [{ type: 'cited_explanation', action: 'continue', props: { heading: 'Supported concept', explanation: 'The accepted evidence supports this explanation.', sourceRefs: [String(graph.snapshotId)] } }],
+      requiredAction: { kind: 'continue', label: 'Continue' }, evaluationContract: { version: 'learn-adaptive.evaluation.v1', kind: 'acknowledgement', responseFormat: 'none', passingScorePercent: null }, accessibilityMetadata: { heading: 'Supported concept', instructions: 'Read and continue.', focusTargetTestId: 'learn-primitive-cited-explanation', liveRegionMode: 'polite' },
+      learningVoidId: graph.voidId, blueprintRevisionId: graph.blueprintRevisionId, sessionContentId: published.sessionContentId,
+      evidenceReferences: [{ claimId: linked.claimId, supportId: linked.supportId, sourceSnapshotId: graph.snapshotId }],
+      decisionInputs: { routerVersion: 'learn-adaptive.router.v1', availableTime: '15', sourceState: 'ready', priorActivityId: null, priorAttemptId: null, priorOutcome: null, assistance: 'none', confidence: null },
+    })
+    if (committed.kind !== 'ok') throw new Error('expected committed adaptive plan')
+    const activityId = committed.value.activityDocumentId as Id<'learningThreadActivities'>
+    for (let batch = 0; batch < 8; batch++) {
+      const result = await t.mutation(internal.learnV2Retention.purgeSourceEvidence, { userId: identity.tokenIdentifier, sourceIdentityId: graph.sourceIdentityId, reason: 'access_lost' })
+      if (!result.pending) break
+    }
+    await t.run(ctx => ctx.db.patch(graph.sessionId, { scheduledStartAt: Date.now() - 1 }))
+    await expect(owner.mutation(api.learnV2SessionContent.startStudySession, {
+      studySessionId: graph.sessionId, expectedSessionRevision: 2, expectedContentRevision: 1, idempotencyKey: 'adaptive-excluded-start',
+    })).resolves.toMatchObject({ status: 'in_progress' })
+    const state = await t.run(async ctx => ({
+      activity: await ctx.db.get(activityId),
+      events: await ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', identity.tokenIdentifier).eq('threadId', linked.threadId)).collect(),
+    }))
+    expect(state.activity).toMatchObject({ status: 'blocked' })
+    expect(state.events.map(event => event.eventType)).toEqual(['activity_eligible', 'evidence_invalidation', 'evidence_gap', 'thread_command_committed'])
+    expect(state.events[3]).toMatchObject({
+      reasonCode: 'learner_started_excluded_session', outcomeCode: 'excluded', metricDefinitionVersion: 'first_value.v1',
+      metadata: expect.objectContaining({ firstValueEligibility: 'excluded', firstValueExclusionCode: 'evidence_blocked_at_commit' }),
+    })
   })
 
   test('rejects session admission when the active Blueprint pointer disappears', async () => {

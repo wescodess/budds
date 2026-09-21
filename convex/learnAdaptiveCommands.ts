@@ -112,8 +112,21 @@ export async function deleteAdaptiveThreadAuthorityBatch(ctx: MutationCtx, job: 
   const thread = await ctx.db.get(threadId)
   if (thread && thread.userId !== userId) throw new Error('Thread deletion authority mismatch')
 
+  if (thread && thread.deletionStartedAt === undefined) await ctx.db.patch(threadId, { deletionStartedAt: Date.now() })
+  const evidenceLinks = await ctx.db.query('learnActivityEvidenceLinks').withIndex('by_userId_and_threadId', q => q.eq('userId', userId).eq('threadId', threadId)).take(THREAD_DELETION_BATCH_SIZE)
+  if (evidenceLinks.length > 0) {
+    for (const link of evidenceLinks) await ctx.db.delete(link._id)
+    await ctx.db.patch(job._id, { phase: 'children', updatedAt: Date.now() })
+    return { phase: 'evidence_links' as const, deleted: evidenceLinks.length, done: false, jobId: job._id }
+  }
+  const events = await ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', userId).eq('threadId', threadId)).take(THREAD_DELETION_BATCH_SIZE)
+  if (events.length > 0) {
+    for (const event of events) await ctx.db.delete(event._id)
+    await ctx.db.patch(job._id, { phase: 'children', updatedAt: Date.now() })
+    return { phase: 'events' as const, deleted: events.length, done: false, jobId: job._id }
+  }
+
   if (thread) {
-    if (thread.deletionStartedAt === undefined) await ctx.db.patch(threadId, { deletionStartedAt: Date.now() })
     const activities = await ctx.db.query('learningThreadActivities').withIndex('by_userId_and_threadId_and_boundaryOrdinal', q => q.eq('userId', userId).eq('threadId', threadId)).take(THREAD_DELETION_BATCH_SIZE)
     if (activities.length > 0) {
       for (const activity of activities) await ctx.db.delete(activity._id)

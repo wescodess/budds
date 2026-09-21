@@ -1,6 +1,7 @@
 import { defineSchema, defineTable } from 'convex/server'
 import { v } from 'convex/values'
-import { learnActivityCommandReceiptFields, learnAdaptiveThreadDeletionJobFields, learningThreadActivityFields, learningThreadFields } from '../shared/adaptive-learn-storage-manifest'
+import { learnActivityCommandReceiptFields, learnActivityEvidenceLinkFields, learnAdaptiveThreadDeletionJobFields, learningThreadActivityFields, learningThreadFields } from '../shared/adaptive-learn-storage-manifest'
+import { learnActivityEventFields } from '../shared/learn-adaptive-events'
 import { masteryStateValidator, masteryTransitionReasonValidator } from '../shared/learn-v2-mastery'
 
 export default defineSchema({
@@ -1379,7 +1380,21 @@ export default defineSchema({
     .index('by_userId', ['userId'])
     .index('by_userId_and_threadId_and_boundaryOrdinal', ['userId', 'threadId', 'boundaryOrdinal'])
     .index('by_userId_and_activityId', ['userId', 'activityId'])
+    .index('by_userId_and_sessionContentId_and_updatedAt', ['userId', 'sessionContentId', 'updatedAt'])
     .index('by_userId_and_status_and_updatedAt', ['userId', 'status', 'updatedAt']),
+
+  learnActivityEvidenceLinks: defineTable(learnActivityEvidenceLinkFields)
+    .index('by_userId', ['userId'])
+    .index('by_userId_and_threadId', ['userId', 'threadId'])
+    .index('by_userId_and_activityId', ['userId', 'activityId'])
+    .index('by_userId_and_sourceSnapshotId_and_invalidatedAt', ['userId', 'sourceSnapshotId', 'invalidatedAt']),
+
+  learnActivityEvents: defineTable(learnActivityEventFields)
+    .index('by_userId', ['userId'])
+    .index('by_userId_and_threadId_and_occurredAt', ['userId', 'threadId', 'occurredAt'])
+    .index('by_userId_and_eventType_and_occurredAt', ['userId', 'eventType', 'occurredAt'])
+    .index('by_userId_and_activityId_and_eventType_and_occurredAt', ['userId', 'activityId', 'eventType', 'occurredAt'])
+    .index('by_userId_and_dedupeKeyHash', ['userId', 'dedupeKeyHash']),
 
   learnActivityCommandReceipts: defineTable(learnActivityCommandReceiptFields)
     .index('by_userId', ['userId'])

@@ -195,12 +195,18 @@ describe('dataExport paginated queries', () => {
         resultKind: 'ok', resultReference: '{"private":"command-result"}', errorReference: 'private-error',
         createdAt: 1, resultExpiresAt: 2, redactionStatus: 'pending',
       })
+      const eventId = await ctx.db.insert('learnActivityEvents', {
+        userId: USER_A.tokenIdentifier, threadId, activityId, eventType: 'activity_eligible', eventVersion: 'activity_eligible.v1', taxonomyVersion: 'learn-adaptive.activity-events.v1', occurredAt: 1,
+        reasonCode: 'activity_plan_committed', outcomeCode: 'eligible', sourceVersion: 'learn-adaptive.activity-plan.v1', contractVersion: 'learn-adaptive.activity-contract.v1',
+        metadata: { activityClass: 'factual', boundaryOrdinal: 1, planRevision: 1 }, dedupeKeyHash: `sha256:${'c'.repeat(64)}`,
+      })
       const deletionJobId = await ctx.db.insert('learnAdaptiveThreadDeletionJobs', { userId: USER_A.tokenIdentifier, threadId, phase: 'children', status: 'queued', attempts: 0, createdAt: 1, updatedAt: 1 })
-      return { threadId, activityId, receiptId, deletionJobId }
+      return { threadId, activityId, eventId, receiptId, deletionJobId }
     })
 
     const threads = await asUser.query(api.dataExport.getUserDataPage, { collection: 'learningThreads', paginationOpts: { cursor: null, numItems: 100 } })
     const activities = await asUser.query(api.dataExport.getUserDataPage, { collection: 'learningThreadActivities', paginationOpts: { cursor: null, numItems: 100 } })
+    const events = await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnActivityEvents', paginationOpts: { cursor: null, numItems: 100 } })
     const receipts = await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnActivityCommandReceipts', paginationOpts: { cursor: null, numItems: 100 } })
     const deletionJobs = await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnAdaptiveThreadDeletionJobs', paginationOpts: { cursor: null, numItems: 100 } })
     expect(threads.page).toHaveLength(1)
@@ -213,6 +219,8 @@ describe('dataExport paginated queries', () => {
     expect((activities.page[0] as { generationInputs: Record<string, unknown> }).generationInputs).not.toHaveProperty('sessionContentInputDigest')
     expect(JSON.stringify(activities.page[0])).not.toContain('private-snapshot-id')
     expect(JSON.stringify(activities.page[0])).not.toContain('private learner response')
+    expect(events.page).toEqual([expect.objectContaining({ _id: ids.eventId, eventType: 'activity_eligible', metadata: { activityClass: 'factual', boundaryOrdinal: 1, planRevision: 1 } })])
+    expect(events.page[0]).not.toHaveProperty('dedupeKeyHash')
     expect(receipts.page).toHaveLength(1)
     expect(receipts.page[0]).toMatchObject({ _id: ids.receiptId, commandName: 'endThread', resultKind: 'ok' })
     for (const key of ['idempotencyKeyHash', 'requestFingerprint', 'resultReference', 'errorReference']) expect(receipts.page[0]).not.toHaveProperty(key)

@@ -3,6 +3,7 @@ import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { getFunctionName } from 'convex/server'
 
 const start = vi.fn()
+const recordMeaningfulStart = vi.fn()
 const assist = vi.fn()
 const submit = vi.fn()
 const content = ref<any>(null)
@@ -13,6 +14,7 @@ mockNuxtImport('useOnlineStatus', () => () => ({ isOnline }))
 mockNuxtImport('useConvexMutation', () => (reference: any) => {
   const name = getFunctionName(reference) ?? ''
   if (name.includes('startStudySession')) return { mutate: start }
+  if (name.includes('recordMeaningfulActivityStarted')) return { mutate: recordMeaningfulStart }
   if (name.includes('recordAssistanceUse')) return { mutate: assist }
   return { mutate: vi.fn() }
 })
@@ -22,13 +24,15 @@ mockNuxtImport('useConvexQuery', () => (reference: any) => ({ data: getFunctionN
 const path = ['~', 'components', 'learn-v2', 'TodaySession.vue'].join('/')
 const candidate = { studySessionId: 'session_1', sessionRevision: 1, contentRevision: 2, planRecordRevision: 3, blueprintRecordRevision: 4, objectiveTitle: 'Explain gravity', estimatedMinutes: 12, scheduledStartAt: 0, timezone: 'America/Toronto', reason: 'due', progress: { retained: 0, independent: 0, total: 1 } }
 const blocks = ['retrieval', 'objective', 'cold_attempt', 'explanation', 'worked_example', 'faded_example', 'independent_application', 'confidence_teach_back'].map((kind, order) => ({ kind, order, content: `${kind} content` }))
+const adaptivePresentation = { purpose: 'Read the supported explanation and continue.', reasonCode: 'accepted_evidence_explanation', requiredAction: { kind: 'continue', label: 'Continue' }, composition: { type: 'cited_explanation', testId: 'learn-primitive-cited-explanation', heading: 'Supported concept', explanation: 'The accepted evidence supports this explanation.' } }
 
 describe('LearnV2TodaySession', () => {
   beforeEach(() => {
     start.mockReset().mockResolvedValue({ sessionContentRevision: 2 })
+    recordMeaningfulStart.mockReset().mockResolvedValue({ status: 'recorded', replayed: false })
     assist.mockReset().mockResolvedValue({ revision: 3, assistance: { content: 'Server assistance' } })
     submit.mockReset().mockResolvedValue({ status: 'completed', scorePercent: 80, state: 'independent', nextReviewAt: Date.UTC(2026, 8, 24, 13), feedback: { criterionResults: [{ key: 'accuracy', label: 'Accuracy', awarded: true, message: 'Accuracy: criterion met.' }], misconceptionFeedback: [] } })
-    content.value = { revision: 2, blocks }
+    content.value = { revision: 2, blocks, adaptivePresentation }
     isOnline.value = true
   })
   async function mount() { const Comp = await import(path); return await mountSuspended(Comp.default, { props: { candidate } }) }
@@ -53,6 +57,7 @@ describe('LearnV2TodaySession', () => {
     const wrapper = await mount()
     expect(wrapper.get('[data-testid="learn-v2-session-path"]').attributes('aria-label')).toContain('Session progress')
     expect(wrapper.get('[data-testid="learn-v2-evidence-context"]').text()).toContain('evidence')
+    expect(wrapper.get('[data-testid="learn-v2-session-reason"]').text()).toContain(candidate.reason)
     await wrapper.get('[data-testid="learn-v2-leave"]').trigger('click')
     expect(wrapper.emitted('leave')).toHaveLength(1)
 
@@ -62,6 +67,66 @@ describe('LearnV2TodaySession', () => {
     await wrapper.find('textarea[aria-label="Your prediction"]').setValue('prediction')
     await wrapper.get('[data-testid="learn-v2-continue"]').trigger('click')
     expect(wrapper.get('[data-testid="learn-v2-assistance-consequence"]').text()).toContain('guided')
+  })
+  it('acknowledges first value only after supported content is rendered', async () => {
+    content.value = null
+    const wrapper = await mount(); await startSession(wrapper)
+    expect(recordMeaningfulStart).not.toHaveBeenCalled()
+    content.value = { revision: 2, blocks, adaptivePresentation }
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="learn-v2-phase-retrieval"]').text()).toContain('retrieval content'))
+    expect(wrapper.get('[data-testid="learn-v2-adaptive-context"]').text()).toContain(adaptivePresentation.purpose)
+    expect(wrapper.get('[data-testid="learn-v2-adaptive-context"]').text()).toContain('accepted evidence explanation')
+    expect(wrapper.get('[data-testid="learn-primitive-cited-explanation"]').text()).toContain(adaptivePresentation.composition.explanation)
+    await vi.waitFor(() => expect(recordMeaningfulStart).toHaveBeenCalledTimes(1))
+    expect(recordMeaningfulStart).toHaveBeenCalledWith({ studySessionId: candidate.studySessionId, expectedContentRevision: 2 })
+  })
+  it('retries a transient render acknowledgement without blocking learning', async () => {
+    for (let attempt = 0; attempt < 5; attempt++) recordMeaningfulStart.mockRejectedValueOnce(new Error('temporary network failure'))
+    recordMeaningfulStart.mockResolvedValueOnce({ status: 'recorded', replayed: false })
+    const wrapper = await mount(); await startSession(wrapper)
+    expect(wrapper.get('[data-testid="learn-v2-phase-retrieval"]').text()).toContain('retrieval content')
+    await vi.waitFor(() => expect(recordMeaningfulStart).toHaveBeenCalledTimes(6), { timeout: 2_000 })
+  })
+  it('backs off persistent acknowledgement failures', async () => {
+    recordMeaningfulStart.mockRejectedValue(new Error('temporary network failure'))
+    const transient = await mount(); await startSession(transient)
+    await vi.waitFor(() => expect(recordMeaningfulStart).toHaveBeenCalledTimes(5), { timeout: 1_000 })
+    await new Promise(resolve => setTimeout(resolve, 500))
+    expect(recordMeaningfulStart).toHaveBeenCalledTimes(5)
+  })
+  it('stops acknowledgement retries on terminal authority errors', async () => {
+    recordMeaningfulStart.mockRejectedValue(new Error('Adaptive activity is not ready'))
+    const terminal = await mount(); await startSession(terminal)
+    await vi.waitFor(() => expect(recordMeaningfulStart).toHaveBeenCalledTimes(1))
+    await new Promise(resolve => setTimeout(resolve, 100))
+    expect(recordMeaningfulStart).toHaveBeenCalledTimes(1)
+  })
+  it('retries after progression and submit remove the original operable control', async () => {
+    let rejectFirst!: (cause: Error) => void
+    recordMeaningfulStart.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectFirst = reject })).mockResolvedValueOnce({ status: 'recorded', replayed: false })
+    const wrapper = await mount(); await startSession(wrapper)
+    await vi.waitFor(() => expect(recordMeaningfulStart).toHaveBeenCalledTimes(1))
+    await reachConfidence(wrapper)
+    await wrapper.find('textarea[aria-label="Teach it back"]').setValue('teach')
+    await wrapper.find('input[value="4"]').setValue()
+    await wrapper.find('[data-testid="learn-v2-submit"]').trigger('click')
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-v2-feedback"]').exists()).toBe(true))
+    rejectFirst(new Error('late acknowledgement response'))
+    await vi.waitFor(() => expect(recordMeaningfulStart).toHaveBeenCalledTimes(2))
+  })
+  it('retries render acknowledgement with the authoritative revision after assistance wins the race', async () => {
+    let rejectFirst!: (cause: Error) => void
+    recordMeaningfulStart.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectFirst = reject })).mockResolvedValueOnce({ status: 'recorded', replayed: false })
+    const wrapper = await mount(); await startSession(wrapper)
+    await vi.waitFor(() => expect(recordMeaningfulStart).toHaveBeenCalledTimes(1))
+    await wrapper.find('[data-testid="learn-v2-continue"]').trigger('click')
+    await wrapper.find('textarea[aria-label="Your prediction"]').setValue('prediction')
+    await wrapper.find('[data-testid="learn-v2-continue"]').trigger('click')
+    await wrapper.find('[data-testid="learn-v2-reveal"]').trigger('click')
+    await vi.waitFor(() => expect(assist).toHaveBeenCalledTimes(1))
+    rejectFirst(new Error('session revision conflict'))
+    await vi.waitFor(() => expect(recordMeaningfulStart).toHaveBeenCalledTimes(2))
+    expect(recordMeaningfulStart).toHaveBeenLastCalledWith({ studySessionId: candidate.studySessionId, expectedContentRevision: 2 })
   })
   it('applies motion, contrast, and untimed-session preferences to rendering', async () => {
     const wrapper = await mount()

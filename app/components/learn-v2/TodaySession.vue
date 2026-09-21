@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { ArrowLeft, BookOpenCheck, ChevronRight, CircleCheck, Eye, Lightbulb, ShieldCheck } from '@lucide/vue'
 import { api } from '#convex/api'
 import { getErrorMessage } from '~~/shared/errors'
@@ -23,7 +23,7 @@ type Candidate = {
   progress: { retained: number, independent: number, total: number }
 }
 type Block = { kind: string, content: string, order?: number }
-type SessionContent = { revision: number, blocks: Block[] } | null
+type SessionContent = { revision: number, blocks: Block[], adaptivePresentation?: { purpose: string, reasonCode: string, requiredAction: { kind: 'continue', label: string }, composition: { type: 'cited_explanation', testId: string, heading: string, explanation: string } } } | null
 type Feedback = {
   scorePercent?: number
   state?: string
@@ -37,6 +37,7 @@ const emit = defineEmits<{ leave: [], started: [], completed: [] }>()
 const { isOnline } = useOnlineStatus()
 
 const startMutation = import.meta.client ? useConvexMutation(api.learnV2SessionContent.startStudySession) : { mutate: async () => ({}) }
+const meaningfulStartMutation = import.meta.client ? useConvexMutation(api.learnV2SessionContent.recordMeaningfulActivityStarted) : { mutate: async () => ({}) }
 const assistanceMutation = import.meta.client ? useConvexMutation(api.learnV2Mastery.recordAssistanceUse) : { mutate: async () => ({}) }
 const submitMutation = import.meta.client ? useConvexAction(api.learnV2Mastery.submitMasteryAttempt) : { mutate: async () => ({}) }
 
@@ -61,6 +62,15 @@ const submitKey = ref<string | null>(null)
 const reduceMotion = ref(false)
 const enhancedContrast = ref(false)
 const hideTimeGuidance = ref(false)
+const meaningfulStartRecorded = ref(false)
+const meaningfulStartPending = ref(false)
+const meaningfulStartRetryTick = ref(0)
+const adaptiveActionElement = ref<HTMLButtonElement | null>(null)
+const meaningfulStartOperableSeen = ref(false)
+let meaningfulStartRetryAttempt = 0
+let meaningfulStartRetryTimer: ReturnType<typeof setTimeout> | undefined
+let meaningfulStartDisposed = false
+let meaningfulStartTerminal = false
 
 function makeKey(prefix: string) {
   const id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -72,6 +82,7 @@ const contentQuery = import.meta.client
   : { data: ref<SessionContent>(null) }
 
 const blocks = computed(() => ((contentQuery.data?.value as SessionContent)?.blocks ?? []).slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0)))
+const adaptivePresentation = computed(() => (contentQuery.data?.value as SessionContent)?.adaptivePresentation ?? null)
 function block(kind: string) { return blocks.value.find(item => item.kind === kind)?.content ?? '' }
 const blockKind = computed(() => ({ retrieval: 'retrieval', prediction: 'cold_attempt', teaching: 'explanation', transfer: 'independent_application', confidence: 'confidence_teach_back' } as const)[phase.value as 'retrieval' | 'prediction' | 'teaching' | 'transfer' | 'confidence'])
 const currentContent = computed(() => phase.value === 'fading' ? 'Try a faded practice response with as little support as you can. A server-recorded hint is available if you need it.' : blockKind.value ? block(blockKind.value) : '')
@@ -96,6 +107,58 @@ const canContinue = computed(() => {
   if (phase.value === 'confidence') return confidence.value !== null && teachBack.value.trim().length > 0
   return true
 })
+
+function scheduleMeaningfulStartRetry() {
+  const delays = [25, 50, 100, 250, 1_000, 4_000, 15_000, 60_000] as const
+  if (meaningfulStartDisposed || meaningfulStartRetryTimer) return
+  const delay = delays[Math.min(meaningfulStartRetryAttempt++, delays.length - 1)]!
+  meaningfulStartRetryTimer = setTimeout(() => {
+    meaningfulStartRetryTimer = undefined
+    meaningfulStartRetryTick.value += 1
+  }, delay)
+}
+
+function isTerminalMeaningfulStartError(cause: unknown) {
+  const message = getErrorMessage(cause, '')
+  return [
+    'Adaptive Learn access denied',
+    'Learn V2 access denied',
+    'Authentication required',
+    'Adaptive activity is not ready',
+    'Study session is not in progress',
+    'Published session content is unavailable',
+  ].some(value => message.includes(value))
+}
+
+onBeforeUnmount(() => {
+  meaningfulStartDisposed = true
+  if (meaningfulStartRetryTimer) clearTimeout(meaningfulStartRetryTimer)
+})
+
+watch([started, contentReady, adaptivePresentation, isOnline, sessionRevision, meaningfulStartRetryTick, phase, canContinue, busy], async ([hasStarted, isReady, presentation, online]) => {
+  if (!hasStarted || !online || meaningfulStartTerminal || meaningfulStartRecorded.value || meaningfulStartPending.value) return
+  meaningfulStartPending.value = true
+  try {
+    await nextTick()
+    if (!meaningfulStartOperableSeen.value) {
+      if (!isReady || !presentation || !adaptiveActionElement.value || adaptiveActionElement.value.disabled
+        || adaptiveActionElement.value.textContent?.trim() !== presentation.requiredAction.label) return
+      meaningfulStartOperableSeen.value = true
+    }
+    await meaningfulStartMutation.mutate({
+      studySessionId: candidate.studySessionId as never,
+      expectedContentRevision: contentRevision.value,
+    })
+    meaningfulStartRecorded.value = true
+  } catch (cause) {
+    // This acknowledgement is conservative telemetry. The usable session must
+    // remain available if the metric write is denied or temporarily fails.
+    if (isTerminalMeaningfulStartError(cause)) meaningfulStartTerminal = true
+    else scheduleMeaningfulStartRetry()
+  } finally {
+    meaningfulStartPending.value = false
+  }
+}, { flush: 'post' })
 
 function move(next: typeof phase.value) {
   error.value = null
@@ -156,6 +219,7 @@ async function retryScore() { await submit() }
           <p class="font-inter text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Today<span v-if="!hideTimeGuidance"> · about {{ candidate.estimatedMinutes }} minutes</span></p>
           <h1 id="today-session-title" class="mt-2 font-dm-sans text-2xl font-bold tracking-tight text-foreground sm:text-3xl">{{ candidate.objectiveTitle }}</h1>
           <p v-if="candidate.capability" class="mt-2 text-sm leading-6 text-muted-foreground">{{ candidate.capability }}</p>
+          <p data-testid="learn-v2-session-reason" class="mt-2 text-sm leading-6 text-muted-foreground">{{ candidate.reason }}</p>
         </div>
         <button type="button" data-testid="learn-v2-leave" class="inline-flex shrink-0 items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:border-stone-600 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none forced-colors:border-current" aria-label="Leave study session and return to your workspace" @click="emit('leave')">
           <ArrowLeft class="h-4 w-4" aria-hidden="true" />
@@ -200,6 +264,15 @@ async function retryScore() { await submit() }
       </article>
 
       <template v-else>
+        <div v-if="adaptivePresentation" data-testid="learn-v2-adaptive-context" class="rounded-lg border border-border bg-card/50 px-4 py-3 text-sm leading-6 forced-colors:border-current">
+          <p class="font-medium text-foreground">{{ adaptivePresentation.purpose }}</p>
+          <p class="mt-1 text-muted-foreground">Reason: {{ adaptivePresentation.reasonCode.replaceAll('_', ' ') }}</p>
+          <p class="mt-1 text-muted-foreground">Next action: {{ adaptivePresentation.requiredAction.label }}</p>
+          <section :data-testid="adaptivePresentation.composition.testId" class="mt-3 rounded-md bg-background/60 p-3">
+            <h2 class="font-medium text-foreground">{{ adaptivePresentation.composition.heading }}</h2>
+            <p class="mt-1 text-muted-foreground">{{ adaptivePresentation.composition.explanation }}</p>
+          </section>
+        </div>
         <article v-if="phase !== 'feedback' && phase !== 'next_review'" class="rounded-xl border border-border bg-card p-5 sm:p-6 forced-colors:border-current" :data-testid="`learn-v2-phase-${phase}`">
           <p class="font-inter text-xs font-medium uppercase tracking-[0.16em] text-primary">{{ phaseLabel }}</p>
           <h2 class="mt-2 font-dm-sans text-xl font-semibold text-foreground">{{ phase === 'transfer' ? 'Apply it to a new case' : phase === 'confidence' ? 'Reflect on your answer' : phaseLabel }}</h2>
@@ -234,7 +307,7 @@ async function retryScore() { await submit() }
             </fieldset>
           </template>
 
-          <button v-if="phase !== 'confidence'" type="button" data-testid="learn-v2-continue" :disabled="busy || !canContinue" class="mt-7 inline-flex min-h-11 items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none" @click="phase === 'retrieval' ? move('prediction') : phase === 'prediction' ? move('teaching') : phase === 'teaching' ? move('fading') : phase === 'fading' ? move('transfer') : move('confidence')">Continue<ChevronRight class="h-4 w-4" aria-hidden="true" /></button>
+          <button v-if="phase !== 'confidence'" ref="adaptiveActionElement" type="button" data-testid="learn-v2-continue" :disabled="busy || !canContinue" class="mt-7 inline-flex min-h-11 items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none" @click="phase === 'retrieval' ? move('prediction') : phase === 'prediction' ? move('teaching') : phase === 'teaching' ? move('fading') : phase === 'fading' ? move('transfer') : move('confidence')">{{ phase === 'retrieval' && adaptivePresentation ? adaptivePresentation.requiredAction.label : 'Continue' }}</button>
           <button v-else type="button" data-testid="learn-v2-submit" :disabled="busy || !isOnline || !canContinue" :aria-describedby="!isOnline ? 'learn-v2-offline-notice' : undefined" class="mt-7 inline-flex min-h-11 items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none" @click="submit">{{ busy ? 'Submitting…' : 'Submit for feedback' }}<ChevronRight v-if="!busy" class="h-4 w-4" aria-hidden="true" /></button>
         </article>
 
