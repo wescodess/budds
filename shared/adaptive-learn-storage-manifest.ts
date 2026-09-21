@@ -10,10 +10,24 @@ import { ADAPTIVE_ACTIVITY_PLAN_VERSION, ADAPTIVE_ACTIVITY_REPLAY_VERSION } from
 
 export const ADAPTIVE_LEARN_STORAGE_MANIFEST = [
   {
+    table: 'learnActivityCommandReceipts',
+    ownerIndex: 'by_userId',
+    parentIndex: 'by_userId_and_threadId',
+    export: 'redacted_bounded',
+    accountDeletion: 'delete',
+  },
+  {
     table: 'learningThreadActivities',
     ownerIndex: 'by_userId',
     parentIndex: 'by_userId_and_threadId_and_boundaryOrdinal',
     export: 'redacted_bounded',
+    accountDeletion: 'delete',
+  },
+  {
+    table: 'learnAdaptiveThreadDeletionJobs',
+    ownerIndex: 'by_userId',
+    parentIndex: 'by_userId_and_threadId',
+    export: 'bounded',
     accountDeletion: 'delete',
   },
   {
@@ -26,7 +40,7 @@ export const ADAPTIVE_LEARN_STORAGE_MANIFEST = [
 ] as const
 
 export const ADAPTIVE_LEARN_ACCOUNT_DELETE_ORDER = ADAPTIVE_LEARN_STORAGE_MANIFEST.map(entry => entry.table)
-export const ADAPTIVE_LEARN_EXPORT_COLLECTIONS = ['learningThreads', 'learningThreadActivities'] as const
+export const ADAPTIVE_LEARN_EXPORT_COLLECTIONS = ['learningThreads', 'learningThreadActivities', 'learnActivityCommandReceipts', 'learnAdaptiveThreadDeletionJobs'] as const
 export const ADAPTIVE_ACTIVITY_STORAGE_REGISTRY = [
   { type: 'cited_explanation', allowedActions: ['continue', 'inspect_source', 'ask_for_example'], testId: 'learn-primitive-cited-explanation', inputProps: ['heading', 'explanation', 'sourceRefs'], storedProps: ['heading', 'explanation', 'sourceRefs'] },
   { type: 'diagnostic_prompt', allowedActions: ['submit_response'], testId: 'learn-primitive-diagnostic-prompt', inputProps: ['prompt', 'responseFormat', 'assistance'], storedProps: ['prompt', 'responseFormat', 'assistance'] },
@@ -127,6 +141,7 @@ export const learningThreadFields = {
   currentActivityId: v.optional(v.id('learningThreadActivities')),
   unresolvedPoint: v.optional(v.string()),
   nextAction: v.optional(v.object({ kind: v.string(), label: v.string(), reasonCode: v.string(), activityId: v.string() })),
+  deletionStartedAt: v.optional(v.number()),
   createdAt: v.number(),
   updatedAt: v.number(),
 }
@@ -168,8 +183,37 @@ export const learningThreadActivityFields = {
   updatedAt: v.number(),
 }
 
+export const learnActivityCommandReceiptFields = {
+  userId: v.string(),
+  threadId: v.id('learningThreads'),
+  idempotencyKeyHash: v.string(),
+  requestFingerprint: v.string(),
+  commandName: v.string(),
+  targetRevision: v.number(),
+  resultKind: v.union(v.literal('ok'), v.literal('conflict'), v.literal('denied'), v.literal('blocked'), v.literal('invalid')),
+  resultReference: v.union(v.string(), v.null()),
+  errorReference: v.union(v.string(), v.null()),
+  createdAt: v.number(),
+  resultExpiresAt: v.number(),
+  redactionStatus: v.union(v.literal('pending'), v.literal('redacted')),
+  resultRedactedAt: v.optional(v.number()),
+}
+
+export const learnAdaptiveThreadDeletionJobFields = {
+  userId: v.string(),
+  threadId: v.id('learningThreads'),
+  phase: v.union(v.literal('children'), v.literal('receipts')),
+  status: v.union(v.literal('queued'), v.literal('running'), v.literal('retrying'), v.literal('failed')),
+  attempts: v.number(),
+  terminalReason: v.optional(v.union(v.literal('authority_mismatch'), v.literal('batch_failed'))),
+  createdAt: v.number(),
+  updatedAt: v.number(),
+}
+
 export const commitAdaptiveActivityPlanValidator = v.object({
   threadId: v.id('learningThreads'),
+  expectedRevision: v.number(),
+  idempotencyKey: v.string(),
   activityId: v.string(),
   boundaryOrdinal: v.number(),
   planRevision: v.number(),

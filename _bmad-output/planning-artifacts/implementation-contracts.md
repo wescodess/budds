@@ -177,6 +177,14 @@ mutation accepts `expectedRevision` and `idempotencyKey`; response submission
 also accepts `activityId` and `attemptKey`. Commands reject client score,
 verdict, mastery, evidence acceptance, or provider fields.
 
+`learnAdaptive.requestThreadDeletion` is the sole data-lifecycle maintenance
+exception on this public surface. It derives the owner from base authentication
+and remains available when the adaptive or V2 rollout is disabled so a user can
+delete owned data. It is not an adaptive domain command: `expectedRevision`,
+`idempotencyKey`, and `AdaptiveResult` do not apply. The unique durable
+owner-and-thread deletion job makes initiation idempotent and authorizes only
+the internal bounded continuation worker.
+
 Phase 0/1 do not add an adaptive provider dispatcher. A V2-backed activity
 uses the existing `startStudySession`, `recordAssistanceUse`, and
 `submitMasteryAttempt` authority through shared server-side helpers extracted
