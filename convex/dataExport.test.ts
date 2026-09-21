@@ -178,6 +178,7 @@ describe('dataExport paginated queries', () => {
       })
       await ctx.db.patch(activityId, {
         activityClass: 'factual',
+        submittedResponse: 'private learner response',
         primitivePlan: [{
           contractVersion: 'learn-adaptive.activity-contract.v1',
           rendererVersion: 'learn-adaptive.renderer.v1',
@@ -208,8 +209,10 @@ describe('dataExport paginated queries', () => {
     expect(activities.page[0]).toMatchObject({ _id: ids.activityId, activityId: 'export-activity', activityClass: 'factual', primitivePlan: [{ type: 'cited_explanation', props: { sourceRefs: ['[redacted]'] } }] })
     expect(activities.page[0]).not.toHaveProperty('canonicalInputSnapshot')
     expect(activities.page[0]).not.toHaveProperty('inputDigest')
+    expect(activities.page[0]).not.toHaveProperty('submittedResponse')
     expect((activities.page[0] as { generationInputs: Record<string, unknown> }).generationInputs).not.toHaveProperty('sessionContentInputDigest')
     expect(JSON.stringify(activities.page[0])).not.toContain('private-snapshot-id')
+    expect(JSON.stringify(activities.page[0])).not.toContain('private learner response')
     expect(receipts.page).toHaveLength(1)
     expect(receipts.page[0]).toMatchObject({ _id: ids.receiptId, commandName: 'endThread', resultKind: 'ok' })
     for (const key of ['idempotencyKeyHash', 'requestFingerprint', 'resultReference', 'errorReference']) expect(receipts.page[0]).not.toHaveProperty(key)

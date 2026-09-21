@@ -54,10 +54,10 @@ function requestPayload(params: GenerateParams) {
   try { return typeof message === 'string' ? JSON.parse(message) as Record<string, unknown> : {} } catch { return {} }
 }
 
-function criterionResults(payload: Record<string, unknown>) {
+function verifiedCriterionResults(payload: Record<string, unknown>) {
   const rubric = (payload.rubric ?? (payload.objective as { assessmentContract?: unknown } | undefined)?.assessmentContract) as { criteria?: unknown } | undefined
   const criteria = Array.isArray(rubric?.criteria) ? rubric.criteria : []
-  return criteria.map((criterion) => ({ key: typeof criterion === 'object' && criterion ? String((criterion as { key?: unknown }).key) : '', awarded: true, rationale: 'Supported by the deterministic accepted evidence.' })).filter(result => result.key)
+  return criteria.map((criterion) => ({ key: typeof criterion === 'object' && criterion ? String((criterion as { key?: unknown }).key) : '', awarded: true })).filter(result => result.key)
 }
 
 export function deterministicLearnV2Completion(params: GenerateParams): GenerateResponse | null {
@@ -79,9 +79,9 @@ export function deterministicLearnV2Completion(params: GenerateParams): Generate
     const pairs = Array.isArray(payload.pairs) ? payload.pairs : []
     content = { version: 'learn-v2.entailment.v2', decisions: pairs.map((pair) => ({ claimOrder: Number((pair as { claimOrder?: unknown }).claimOrder), sourceSnapshotId: String((pair as { sourceSnapshotId?: unknown }).sourceSnapshotId), sourceExcerptId: String((pair as { sourceExcerptId?: unknown }).sourceExcerptId), decision: 'entailed', verifierVersion: 'learn-v2.entailment.v2', confidence: 1 })) }
   } else if (schemaName === 'learn_v2_calibration_score') {
-    content = { criterionResults: criterionResults(payload) }
+    content = { criterionResults: verifiedCriterionResults(payload).map(result => ({ ...result, rationale: 'Supported by the deterministic accepted evidence.' })) }
   } else if (schemaName === 'learn_v2_mastery_score') {
-    content = { criterionResults: criterionResults(payload), misconceptionTags: [] }
+    content = { criterionResults: verifiedCriterionResults(payload), misconceptionTags: [] }
   }
   if (!content) return null
   return { id: 'e2e-deterministic-response', model: 'budds-e2e-fixture.v1', choices: [{ index: 0, message: { role: 'assistant', content: JSON.stringify(content) }, finish_reason: 'stop' }], usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } }

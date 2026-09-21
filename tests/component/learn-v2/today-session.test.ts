@@ -27,7 +27,7 @@ describe('LearnV2TodaySession', () => {
   beforeEach(() => {
     start.mockReset().mockResolvedValue({ sessionContentRevision: 2 })
     assist.mockReset().mockResolvedValue({ revision: 3, assistance: { content: 'Server assistance' } })
-    submit.mockReset().mockResolvedValue({ status: 'completed', scorePercent: 80, state: 'independent', nextReviewAt: Date.UTC(2026, 8, 24, 13), feedback: { criterionResults: [{ key: 'accuracy', awarded: true, rationale: 'Correctly applied the evidence.' }], misconceptionTags: [] } })
+    submit.mockReset().mockResolvedValue({ status: 'completed', scorePercent: 80, state: 'independent', nextReviewAt: Date.UTC(2026, 8, 24, 13), feedback: { criterionResults: [{ key: 'accuracy', label: 'Accuracy', awarded: true, message: 'Accuracy: criterion met.' }], misconceptionFeedback: [] } })
     content.value = { revision: 2, blocks }
     isOnline.value = true
   })
@@ -128,6 +128,6 @@ describe('LearnV2TodaySession', () => {
   it('announces and displays server feedback and next review', async () => {
     const wrapper = await mount(); await startSession(wrapper); await reachConfidence(wrapper)
     await wrapper.find('textarea[aria-label="Teach it back"]').setValue('teach'); await wrapper.find('input[value="5"]').setValue(); await wrapper.find('[data-testid="learn-v2-submit"]').trigger('click')
-    await vi.waitFor(() => expect(wrapper.text()).toContain('Score: 80%')); expect(wrapper.text()).toContain('Correctly applied the evidence.'); expect(submit).toHaveBeenCalledWith(expect.objectContaining({ response: 'transfer answer' })); expect(wrapper.find('[data-testid="learn-v2-live"]').attributes('aria-live')).toBe('polite'); await wrapper.find('[data-testid="learn-v2-next-review"]').trigger('click'); expect(wrapper.find('[data-testid="learn-v2-next-review-panel"]').text()).not.toContain('No further review')
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Score: 80%')); expect(wrapper.text()).toContain('Accuracy: criterion met.'); expect(submit).toHaveBeenCalledWith(expect.objectContaining({ response: 'transfer answer' })); expect(wrapper.find('[data-testid="learn-v2-live"]').attributes('aria-live')).toBe('polite'); await wrapper.find('[data-testid="learn-v2-next-review"]').trigger('click'); expect(wrapper.find('[data-testid="learn-v2-next-review-panel"]').text()).not.toContain('No further review')
   })
 })
