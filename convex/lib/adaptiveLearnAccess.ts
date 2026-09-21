@@ -1,4 +1,5 @@
-import type { MutationCtx, QueryCtx } from '../_generated/server'
+import { internalQuery, type MutationCtx, type QueryCtx } from '../_generated/server'
+import { v } from 'convex/values'
 import { hasLearnV2Access } from './learnV2Access'
 
 export type AdaptiveLearnPublicStatus = {
@@ -6,9 +7,9 @@ export type AdaptiveLearnPublicStatus = {
   capabilities: { entry: boolean, read: boolean, write: boolean, jobAdmission: boolean }
 }
 
-// AD-13/AD-15 intentionally defer an adaptive action/provider surface until
-// its storage manifest, lease/reconciliation, quota, and activation contracts exist.
-export const ADAPTIVE_PROVIDER_ACTIONS = 'deferred_pending_manifest_and_activation' as const
+// AD-15 permits only the existing V2 scoring orchestration behind an adaptive
+// wrapper. A standalone adaptive provider/job surface remains deferred.
+export const ADAPTIVE_PROVIDER_ACTIONS = 'v2_wrapped_only_standalone_deferred' as const
 export const ADAPTIVE_EXTERNAL_OBJECT_CLEANUP = 'deferred_no_adaptive_objects' as const
 
 const status = (allowed: boolean): AdaptiveLearnPublicStatus => ({
@@ -36,3 +37,10 @@ async function requireAdaptiveAccess(ctx: QueryCtx | MutationCtx): Promise<strin
 export const requireAdaptiveQueryAccess = async (ctx: QueryCtx) => await requireAdaptiveAccess(ctx)
 export const requireAdaptiveMutationAccess = async (ctx: MutationCtx) => await requireAdaptiveAccess(ctx)
 export const requireAdaptiveJobAdmission = async (ctx: MutationCtx) => await requireAdaptiveAccess(ctx)
+
+// Actions cannot read Convex state directly. This is the one internal adapter
+// used by adaptive orchestration to evaluate the canonical conjunctive gate.
+export const checkAdaptiveJobAdmission = internalQuery({
+  args: { tokenIdentifier: v.string() },
+  handler: async (ctx, args) => ({ allowed: await hasAdaptiveExperienceAccess(ctx, args.tokenIdentifier) }),
+})

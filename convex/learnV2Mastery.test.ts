@@ -175,7 +175,7 @@ describe('LA2-12 server-scored mastery attempts', () => {
     const { owner, args } = await fixture()
     const internalArgs = args('public-submit', 80)
     const { tokenIdentifier: _tokenIdentifier, scorerVerdict: _scorerVerdict, ...publicArgs } = internalArgs
-    const provider = vi.fn(async () => new Response(JSON.stringify({ id: 'score-1', model: 'test/mastery-model', choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({ criterionResults: verdict(80).criterionResults.map(row => ({ ...row, rationale: 'Pinned evidence supports this decision.' })), misconceptionTags: [] }) } }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    const provider = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ id: 'score-1', model: 'test/mastery-model', choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({ criterionResults: verdict(80).criterionResults.map(row => ({ ...row, rationale: 'Pinned evidence supports this decision.' })), misconceptionTags: [] }) } }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }), { status: 200, headers: { 'content-type': 'application/json' } }))
     vi.stubGlobal('fetch', provider)
     process.env.OPENROUTER_API_KEY = 'test-key'
     process.env.CF_ACCOUNT_ID = 'test-account'
@@ -184,11 +184,77 @@ describe('LA2-12 server-scored mastery attempts', () => {
       await expect(owner.action(api.learnV2Mastery.submitMasteryAttempt, publicArgs)).resolves.toMatchObject({ scorePercent: 80, state: 'independent', replayed: false })
       await expect(owner.action(api.learnV2Mastery.submitMasteryAttempt, publicArgs)).resolves.toMatchObject({ scorePercent: 80, state: 'independent', replayed: true })
       expect(provider).toHaveBeenCalledTimes(1)
+      const request = provider.mock.calls[0]![1] as RequestInit
+      expect(request.headers).toMatchObject({ 'cf-aig-max-attempts': '1', 'cf-aig-collect-log-payload': 'false', 'cf-aig-skip-cache': 'true' })
+      expect(JSON.parse(String(request.body))).toMatchObject({ max_tokens: 1_200, provider: { allow_fallbacks: false, zdr: true, data_collection: 'deny' } })
     }
     finally {
       delete process.env.OPENROUTER_API_KEY
       delete process.env.CF_ACCOUNT_ID
       delete process.env.CLOUDFLARE_AI_GATEWAY_ID
+      vi.unstubAllGlobals()
+    }
+  })
+
+  test('records the versioned minimized request ledger before provider I/O without raw payloads', async () => {
+    const { t, args } = await fixture()
+    const { scorerVerdict: _verdict, ...request } = args('request-ledger', 80)
+    const reservation = await t.mutation(internal.learnV2Mastery.beginMasteryScoring, request)
+    expect(reservation.kind).toBe('acquired')
+    if (reservation.kind !== 'acquired') throw new Error('Expected scoring lease')
+    const job = await t.run(ctx => ctx.db.get(reservation.jobId))
+    expect(job).toMatchObject({
+      providerRequestVersion: 'adaptive-v2-mastery-request.v1',
+      providerVersion: 'openrouter-via-cloudflare-ai-gateway.v1',
+      providerJobVersion: 'learn-v2.mastery-scoring-job.v1',
+      providerPayloadPolicyVersion: 'learn-v2.mastery-minimized-payload.v1',
+      providerLogPolicyVersion: 'metadata-only-no-payload.v1',
+      providerRetentionPolicyVersion: 'zero_data_retention_requested',
+      providerDeletionPolicyVersion: 'delete_with_v2_job_on_account_deletion',
+      providerTimeoutMs: 90_000,
+      providerMaxRequestBytes: 48_000,
+      providerMaxResponseBytes: 32_000,
+      providerMaxOutputTokens: 1_200,
+      providerRequestDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+      providerRequestBytes: expect.any(Number),
+      checkpoint: 'reserved',
+    })
+    expect(JSON.stringify(job)).not.toContain(request.response)
+    expect(JSON.stringify(job)).not.toContain('learnerResponse')
+  })
+
+  test('returns typed adaptive gate and pending-pilot outcomes without jobs, attempts, or provider I/O', async () => {
+    const { t, owner, ids, args } = await fixture()
+    const activity = await t.run(async (ctx) => {
+      const support = await ctx.db.query('learnClaimSupports').withIndex('by_userId_and_sessionContentClaimId').take(1)
+      const claim = await ctx.db.query('sessionContentClaims').withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', OWNER.tokenIdentifier).eq('sessionContentId', ids.contentId)).unique()
+      if (!support[0] || !claim) throw new Error('Expected evidence fixture')
+      const threadId = await ctx.db.insert('learningThreads', { userId: OWNER.tokenIdentifier, originalNeed: 'Practice safely', intent: 'master', availableTime: '15', authorityKind: 'v2_mission', learningVoidId: ids.voidId, sourceScope: { kind: 'none' }, evidenceState: 'ready', lifecycle: 'active', revision: 1, createdAt: 1, updatedAt: 1 })
+      const activityDocumentId = await ctx.db.insert('learningThreadActivities', {
+        userId: OWNER.tokenIdentifier, threadId, activityId: 'adaptive-scored-1', boundaryOrdinal: 1, planRevision: 1, activityClass: 'factual', status: 'submitted',
+        planVersion: 'learn-adaptive.activity-plan.v1', replayVersion: 'learn-adaptive.activity-replay.v1', contractVersion: 'learn-adaptive.activity-contract.v1', rendererVersion: 'learn-adaptive.renderer.v1', validationVersion: 'learn-adaptive.primitive-validation.v1', sequenceValidationVersion: 'learn-adaptive.primitive-sequence-validation.v1', fallbackVersion: 'learn-adaptive.text-card-fallback.v1',
+        intent: 'master', objectiveId: ids.objectiveId, purpose: 'Demonstrate mastery.', reasonCode: 'pilot_scoring', primitivePlan: [], requiredAction: { kind: 'submit_response', label: 'Submit' }, evaluationContract: { version: 'learn-adaptive.evaluation.v1', kind: 'server_scored', responseFormat: 'short_text', passingScorePercent: 80 }, fallback: { version: 'learn-adaptive.text-card-fallback.v1', kind: 'text_card', title: 'Saved', body: 'Try later.', primaryAction: { type: 'continue_safe', label: 'Continue' }, testId: 'learn-activity-fallback' }, accessibilityMetadata: { heading: 'Practice', instructions: 'Answer.', focusTargetTestId: 'adaptive-scored', liveRegionMode: 'polite' }, learningVoidId: ids.voidId, blueprintRevisionId: ids.blueprintIdRevision, sessionContentId: ids.contentId,
+        evidenceReferences: [{ claimId: claim._id, supportId: support[0]._id, sourceSnapshotId: ids.sourceId, sourceSnapshotRevision: 1, sourceRecordRevision: 1, sourceEffectiveStatus: 'user_accepted', verifierVersion: 'test.verifier.v1', integrityState: 'accepted' }], generationInputs: { sessionContentRevision: 11, sessionContentInputDigest: null, generatorVersion: null }, decisionInputs: { intentRevision: 1, routerVersion: 'v1', availableTime: '15', sourceState: 'ready', sourceInputs: [{ sourceSnapshotId: String(ids.sourceId), effectiveStatus: 'user_accepted', recordRevision: 1 }], priorActivityId: null, priorAttemptId: null, priorOutcome: null, assistance: 'none', confidence: 4 }, replacesActivityId: null, canonicalInputSnapshot: '{}', inputDigest: `sha256:${'a'.repeat(64)}`, createdAt: 1, updatedAt: 1,
+      })
+      await ctx.db.patch(threadId, { currentActivityId: activityDocumentId })
+      return { threadId }
+    })
+    const { tokenIdentifier: _token, scorerVerdict: _verdict, ...attempt } = args('adaptive-pilot-pending', 80)
+    const provider = vi.fn()
+    vi.stubGlobal('fetch', provider)
+    try {
+      await expect(owner.action(api.learnAdaptive.submitResponse, { threadId: activity.threadId, activityId: 'adaptive-scored-1', ...attempt }))
+        .resolves.toMatchObject({ kind: 'denied', code: 'adaptive_gate_unavailable' })
+      await owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true })
+      process.env.LEARN_ADAPTIVE_V2_PILOT_MANIFEST = 'adaptive-v2-pilot.v1'
+      await expect(owner.action(api.learnAdaptive.submitResponse, { threadId: activity.threadId, activityId: 'adaptive-scored-1', ...attempt }))
+        .resolves.toMatchObject({ kind: 'blocked', code: 'pilot_manifest_not_approved' })
+      expect(provider).not.toHaveBeenCalled()
+      expect(await t.run(ctx => ctx.db.query('learnJobs').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', OWNER.tokenIdentifier).eq('idempotencyKey', attempt.idempotencyKey)).unique())).toBeNull()
+      expect(await t.run(ctx => ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', OWNER.tokenIdentifier).eq('idempotencyKey', attempt.idempotencyKey)).unique())).toBeNull()
+    }
+    finally {
+      delete process.env.LEARN_ADAPTIVE_V2_PILOT_MANIFEST
       vi.unstubAllGlobals()
     }
   })
@@ -272,6 +338,17 @@ describe('LA2-12 server-scored mastery attempts', () => {
     })
     await expect(t.mutation(internal.learnV2Mastery.markMasteryScoringDispatched, { tokenIdentifier: OWNER.tokenIdentifier, jobId: reservation.jobId, leaseToken: reservation.leaseToken })).resolves.toBeNull()
     expect(await t.run(ctx => ctx.db.query('learnMasteryScoringRateEvents').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(20))).toHaveLength(LEARN_V2_MASTERY_SCORING_ADMISSION.maxProviderDispatches + 1)
+  })
+
+  test('enforces the finite two-dispatch-attempt job cap before provider admission', async () => {
+    const { t, args } = await fixture()
+    const { scorerVerdict: _verdict, ...request } = args('dispatch-attempt-cap', 80)
+    const reservation = await t.mutation(internal.learnV2Mastery.beginMasteryScoring, request)
+    if (reservation.kind !== 'acquired') throw new Error('Expected scoring lease')
+    await t.run(ctx => ctx.db.patch(reservation.jobId, { attempts: 2 }))
+    await expect(t.mutation(internal.learnV2Mastery.markMasteryScoringDispatched, { tokenIdentifier: OWNER.tokenIdentifier, jobId: reservation.jobId, leaseToken: reservation.leaseToken }))
+      .rejects.toThrow(/dispatch attempt cap reached/)
+    expect(await t.run(ctx => ctx.db.query('learnMasteryScoringRateEvents').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(1))).toEqual([])
   })
 
   test('releases a quota-denied pre-dispatch job for retry once the window expires', async () => {

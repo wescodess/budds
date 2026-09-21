@@ -51,7 +51,7 @@ describe('Adaptive Learn canonical access gate', () => {
 
   test('keeps provider actions explicitly deferred and maintenance export outside the rollout gate', async () => {
     const { t, owner } = await setup()
-    expect(ADAPTIVE_PROVIDER_ACTIONS).toBe('deferred_pending_manifest_and_activation')
+    expect(ADAPTIVE_PROVIDER_ACTIONS).toBe('v2_wrapped_only_standalone_deferred')
     expect(ADAPTIVE_EXTERNAL_OBJECT_CLEANUP).toBe('deferred_no_adaptive_objects')
     const threadId = await t.run(ctx => ctx.db.insert('learningThreads', { userId: OWNER.tokenIdentifier, originalNeed: 'Export during rollback', intent: 'understand', availableTime: '15', authorityKind: 'standalone', sourceScope: { kind: 'none' }, evidenceState: 'none', lifecycle: 'ready', revision: 1, createdAt: 1, updatedAt: 1 }))
     process.env.LEARN_V2_ENABLED = 'false'
