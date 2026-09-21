@@ -10,6 +10,13 @@ import { ADAPTIVE_ACTIVITY_PLAN_VERSION, ADAPTIVE_ACTIVITY_REPLAY_VERSION } from
 
 export const ADAPTIVE_LEARN_STORAGE_MANIFEST = [
   {
+    table: 'learnActivityCommandReceipts',
+    ownerIndex: 'by_userId',
+    parentIndex: 'by_userId_and_threadId',
+    export: 'redacted_bounded',
+    accountDeletion: 'delete',
+  },
+  {
     table: 'learningThreadActivities',
     ownerIndex: 'by_userId',
     parentIndex: 'by_userId_and_threadId_and_boundaryOrdinal',
@@ -26,7 +33,7 @@ export const ADAPTIVE_LEARN_STORAGE_MANIFEST = [
 ] as const
 
 export const ADAPTIVE_LEARN_ACCOUNT_DELETE_ORDER = ADAPTIVE_LEARN_STORAGE_MANIFEST.map(entry => entry.table)
-export const ADAPTIVE_LEARN_EXPORT_COLLECTIONS = ['learningThreads', 'learningThreadActivities'] as const
+export const ADAPTIVE_LEARN_EXPORT_COLLECTIONS = ['learningThreads', 'learningThreadActivities', 'learnActivityCommandReceipts'] as const
 export const ADAPTIVE_ACTIVITY_STORAGE_REGISTRY = [
   { type: 'cited_explanation', allowedActions: ['continue', 'inspect_source', 'ask_for_example'], testId: 'learn-primitive-cited-explanation', inputProps: ['heading', 'explanation', 'sourceRefs'], storedProps: ['heading', 'explanation', 'sourceRefs'] },
   { type: 'diagnostic_prompt', allowedActions: ['submit_response'], testId: 'learn-primitive-diagnostic-prompt', inputProps: ['prompt', 'responseFormat', 'assistance'], storedProps: ['prompt', 'responseFormat', 'assistance'] },
@@ -166,6 +173,21 @@ export const learningThreadActivityFields = {
   inputDigest: v.string(),
   createdAt: v.number(),
   updatedAt: v.number(),
+}
+
+export const learnActivityCommandReceiptFields = {
+  userId: v.string(),
+  threadId: v.id('learningThreads'),
+  idempotencyKeyHash: v.string(),
+  requestFingerprint: v.string(),
+  commandName: v.string(),
+  targetRevision: v.number(),
+  resultKind: v.union(v.literal('ok'), v.literal('conflict'), v.literal('denied'), v.literal('blocked'), v.literal('invalid')),
+  resultReference: v.union(v.string(), v.null()),
+  errorReference: v.union(v.string(), v.null()),
+  createdAt: v.number(),
+  resultExpiresAt: v.number(),
+  resultRedactedAt: v.optional(v.number()),
 }
 
 export const commitAdaptiveActivityPlanValidator = v.object({

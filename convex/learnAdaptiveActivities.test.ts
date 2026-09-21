@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 import { convexTest } from 'convex-test'
 import type { Infer } from 'convex/values'
-import { describe, expect, test } from 'vitest'
+import { afterAll, beforeAll, describe, expect, test } from 'vitest'
 import { internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import schema from './schema'
@@ -10,11 +10,19 @@ import type { commitAdaptiveActivityPlanValidator } from '../shared/adaptive-lea
 const modules = import.meta.glob('./**/*.ts')
 const ownerId = 'https://auth.example.com|adaptive-plan-owner'
 const otherId = 'https://auth.example.com|adaptive-plan-other'
+const originalLearnV2Flag = process.env.LEARN_V2_ENABLED
+
+beforeAll(() => { process.env.LEARN_V2_ENABLED = 'true' })
+afterAll(() => { if (originalLearnV2Flag === undefined) delete process.env.LEARN_V2_ENABLED; else process.env.LEARN_V2_ENABLED = originalLearnV2Flag })
 
 async function fixture() {
   const t = convexTest(schema, modules)
   const ids = await t.run(async (ctx) => {
     const now = 1_800_000_000_000
+    for (const tokenIdentifier of [ownerId, otherId]) await ctx.db.insert('users', {
+      tokenIdentifier, name: tokenIdentifier, learnV2Entitlement: { enabled: true, updatedAt: now },
+      learnAdaptiveExperienceEntitlement: { enabled: true, updatedAt: now },
+    })
     const folderId = await ctx.db.insert('folders', { userId: ownerId, name: 'Adaptive sources', documentCount: 0 })
     const learningVoidId = await ctx.db.insert('learningVoids', { userId: ownerId, folderId, title: 'Photosynthesis', status: 'active', revision: 4, createdAt: now, updatedAt: now })
     const blueprintId = await ctx.db.insert('learnBlueprints', { userId: ownerId, learningVoidId, revision: 1, createdAt: now })
@@ -169,7 +177,7 @@ describe('Adaptive activity plan authority', () => {
   test('rejects forged ownership, evidence, and revision boundaries before persistence', async () => {
     const { t, ids } = await fixture()
     await expect(t.mutation(internal.learnAdaptiveActivities.commitActivityPlan, planArgs(ids)))
-      .rejects.toThrow('Unauthenticated')
+      .rejects.toThrow('Adaptive Learn access denied')
     await expect(t.withIdentity({ tokenIdentifier: otherId }).mutation(internal.learnAdaptiveActivities.commitActivityPlan, planArgs(ids)))
       .rejects.toThrow('Thread not found')
     const actor = t.withIdentity({ tokenIdentifier: ownerId })

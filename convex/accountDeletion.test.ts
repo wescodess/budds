@@ -139,10 +139,19 @@ describe('accountDeletion.deleteAccountCascade', () => {
         learningVoidId: null, blueprintRevisionId: null, sessionContentId: null, evidenceReferences: [], generationInputs: plan.generationInputs, decisionInputs: plan.decisionInputs, replacesActivityId: null,
         canonicalInputSnapshot: plan.canonicalInputSnapshot, inputDigest: plan.inputDigest, createdAt: now, updatedAt: now,
       })
+      const receiptId = await ctx.db.insert('learnActivityCommandReceipts', {
+        userId: TEST_IDENTITY.tokenIdentifier, threadId, idempotencyKeyHash: `sha256:${'a'.repeat(64)}`,
+        requestFingerprint: `sha256:${'b'.repeat(64)}`, commandName: 'endThread', targetRevision: 1,
+        resultKind: 'ok', resultReference: '{"kind":"ok"}', errorReference: null,
+        createdAt: now, resultExpiresAt: now + 1,
+      })
       await ctx.db.insert('accountDeletionJobs', { userId: TEST_IDENTITY.tokenIdentifier, status: 'active', phase: 'learnV2', startedAt: now, updatedAt: now })
-      return { threadId, activityId }
+      return { threadId, activityId, receiptId }
     })
 
+    await t.mutation(internal.accountDeletion.runDeletionBatch, { userId: TEST_IDENTITY.tokenIdentifier })
+    expect(await t.run(ctx => ctx.db.get(ids.receiptId))).toBeNull()
+    expect(await t.run(ctx => ctx.db.get(ids.activityId))).not.toBeNull()
     await t.mutation(internal.accountDeletion.runDeletionBatch, { userId: TEST_IDENTITY.tokenIdentifier })
     expect(await t.run(ctx => ctx.db.get(ids.activityId))).toBeNull()
     expect(await t.run(ctx => ctx.db.get(ids.threadId))).not.toBeNull()

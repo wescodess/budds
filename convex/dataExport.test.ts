@@ -188,11 +188,18 @@ describe('dataExport paginated queries', () => {
         }],
         decisionInputs: { ...plan.decisionInputs, sourceState: 'ready', sourceInputs: [{ sourceSnapshotId: 'private-snapshot-id', effectiveStatus: 'user_accepted', recordRevision: 7 }] },
       })
-      return { threadId, activityId }
+      const receiptId = await ctx.db.insert('learnActivityCommandReceipts', {
+        userId: USER_A.tokenIdentifier, threadId, idempotencyKeyHash: `sha256:${'a'.repeat(64)}`,
+        requestFingerprint: `sha256:${'b'.repeat(64)}`, commandName: 'endThread', targetRevision: 1,
+        resultKind: 'ok', resultReference: '{"private":"command-result"}', errorReference: 'private-error',
+        createdAt: 1, resultExpiresAt: 2,
+      })
+      return { threadId, activityId, receiptId }
     })
 
     const threads = await asUser.query(api.dataExport.getUserDataPage, { collection: 'learningThreads', paginationOpts: { cursor: null, numItems: 100 } })
     const activities = await asUser.query(api.dataExport.getUserDataPage, { collection: 'learningThreadActivities', paginationOpts: { cursor: null, numItems: 100 } })
+    const receipts = await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnActivityCommandReceipts', paginationOpts: { cursor: null, numItems: 100 } })
     expect(threads.page).toHaveLength(1)
     expect(activities.page).toHaveLength(1)
     expect(threads.page[0]).toMatchObject({ _id: ids.threadId, originalNeed: 'Shape a learning goal.' })
@@ -201,6 +208,10 @@ describe('dataExport paginated queries', () => {
     expect(activities.page[0]).not.toHaveProperty('inputDigest')
     expect((activities.page[0] as { generationInputs: Record<string, unknown> }).generationInputs).not.toHaveProperty('sessionContentInputDigest')
     expect(JSON.stringify(activities.page[0])).not.toContain('private-snapshot-id')
+    expect(receipts.page).toHaveLength(1)
+    expect(receipts.page[0]).toMatchObject({ _id: ids.receiptId, commandName: 'endThread', resultKind: 'ok' })
+    for (const key of ['idempotencyKeyHash', 'requestFingerprint', 'resultReference', 'errorReference']) expect(receipts.page[0]).not.toHaveProperty(key)
+    expect(JSON.stringify(receipts.page[0])).not.toContain('private')
   })
   test('exports calendar operational ledgers with strict redaction', async () => {
     const t = convexTest(schema, modules)

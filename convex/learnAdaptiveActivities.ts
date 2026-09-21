@@ -8,7 +8,7 @@ import {
   type ComposedAdaptiveActivityPlan,
 } from '../shared/learn-adaptive-activity-plan'
 import { projectAdaptiveClaimAuthority } from '../shared/adaptive-claim-adapter'
-import { requireAuth } from './lib/auth'
+import { requireAdaptiveMutationAccess, requireAdaptiveQueryAccess } from './lib/adaptiveLearnAccess'
 import { requireActiveBlueprint } from './lib/learnV2BlueprintAuthority'
 
 type CommitArgs = Infer<typeof commitAdaptiveActivityPlanValidator>
@@ -111,7 +111,7 @@ function rowToComposed(row: Doc<'learningThreadActivities'>): ComposedAdaptiveAc
 export const commitActivityPlan = internalMutation({
   args: commitAdaptiveActivityPlanValidator.fields,
   handler: async (ctx, args) => {
-    const userId = await requireAuth(ctx)
+    const userId = await requireAdaptiveMutationAccess(ctx)
     const thread = await ctx.db.get(args.threadId)
     if (!thread || thread.userId !== userId) throw new Error('Thread not found')
     if (thread.intent !== args.intent || thread.availableTime !== args.decisionInputs.availableTime) throw new Error('Thread plan inputs are stale')
@@ -221,7 +221,7 @@ export const commitActivityPlan = internalMutation({
 export const replayActivityPlan = internalQuery({
   args: { activityId: v.string() },
   handler: async (ctx, args) => {
-    const userId = await requireAuth(ctx)
+    const userId = await requireAdaptiveQueryAccess(ctx)
     const row = await ctx.db.query('learningThreadActivities')
       .withIndex('by_userId_and_activityId', q => q.eq('userId', userId).eq('activityId', args.activityId))
       .unique()
