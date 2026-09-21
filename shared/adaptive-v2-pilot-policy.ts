@@ -5,15 +5,15 @@ export const ADAPTIVE_V2_PILOT_MANIFEST = {
   scope: 'slice_1_pilot',
   startsAt: '2026-09-20T00:00:00.000Z',
   endsAt: '2026-12-19T00:00:00.000Z',
-  cohort: { kind: 'adaptive_entitlement', maxLearners: 50 },
-  allowedModels: [] as string[],
+  cohort: { kind: 'hashed_allowlist', maxLearners: 50, subjectHashes: [] as string[] },
+  modelPolicies: [] as Array<{ model: string, inputUsdPerMillionTokens: number, outputUsdPerMillionTokens: number }>,
   allowedProviders: ['openrouter-via-cloudflare-ai-gateway.v1'],
   activityContractVersions: ['learn-adaptive.activity-contract.v1'],
   evaluationContractVersions: ['learn-adaptive.evaluation.v1'],
   policyVersion: 'adaptive-v2-provider-policy.v1',
   requestVersion: 'adaptive-v2-mastery-request.v1',
   jobVersion: 'learn-v2.mastery-scoring-job.v1',
-  quotaVersion: 'learn-v2.mastery-hourly.v1',
+  quotaVersion: 'learn-v2.mastery-hourly-daily.v1',
   retention: {
     provider: 'zero_data_retention_requested',
     logs: 'metadata_only_no_payload',
@@ -29,6 +29,7 @@ export const ADAPTIVE_V2_PILOT_MANIFEST = {
     maxDispatchAttemptsPerJob: 2,
     maxConcurrentPerLearner: 1,
     quotaWindowMs: 3_600_000,
+    dailyQuotaWindowMs: 86_400_000,
     maxProviderDispatchesPerWindow: 12,
     maxProviderDispatchesPerDay: 24,
     costCeilingUsdPerRequest: 0.10,
@@ -37,7 +38,7 @@ export const ADAPTIVE_V2_PILOT_MANIFEST = {
 
 export type AdaptiveV2PilotDecision =
   | { allowed: true }
-  | { allowed: false, code: 'pilot_manifest_missing' | 'pilot_manifest_mismatch' | 'pilot_manifest_invalid' | 'pilot_manifest_not_approved' }
+  | { allowed: false, code: 'pilot_manifest_missing' | 'pilot_manifest_mismatch' | 'pilot_manifest_invalid' | 'pilot_manifest_not_approved' | 'pilot_cohort_denied' | 'pilot_model_denied' }
 
 export type AdaptiveV2PilotManifest = {
   version: string
@@ -46,8 +47,8 @@ export type AdaptiveV2PilotManifest = {
   scope: string
   startsAt: string
   endsAt: string
-  cohort: { kind: string, maxLearners: number }
-  allowedModels: readonly string[]
+  cohort: { kind: string, maxLearners: number, subjectHashes: readonly string[] }
+  modelPolicies: ReadonlyArray<{ model: string, inputUsdPerMillionTokens: number, outputUsdPerMillionTokens: number }>
   allowedProviders: readonly string[]
   activityContractVersions: readonly string[]
   evaluationContractVersions: readonly string[]
@@ -66,6 +67,7 @@ export type AdaptiveV2PilotManifest = {
     maxDispatchAttemptsPerJob: number
     maxConcurrentPerLearner: number
     quotaWindowMs: number
+    dailyQuotaWindowMs: number
     maxProviderDispatchesPerWindow: number
     maxProviderDispatchesPerDay: number
     costCeilingUsdPerRequest: number
@@ -74,6 +76,13 @@ export type AdaptiveV2PilotManifest = {
 
 export function isFiniteAdaptiveV2PilotManifest(manifest: AdaptiveV2PilotManifest): boolean {
   const limits = Object.values(manifest.limits)
+  const hashes = manifest.cohort.subjectHashes
+  const models = manifest.modelPolicies.map(policy => policy.model)
+  const pricesAreFinite = manifest.modelPolicies.every(policy => policy.model.trim()
+    && Number.isFinite(policy.inputUsdPerMillionTokens) && policy.inputUsdPerMillionTokens > 0
+    && Number.isFinite(policy.outputUsdPerMillionTokens) && policy.outputUsdPerMillionTokens > 0
+    && ((manifest.limits.maxRequestBytes * policy.inputUsdPerMillionTokens
+      + manifest.limits.maxOutputTokens * policy.outputUsdPerMillionTokens) / 1_000_000) <= manifest.limits.costCeilingUsdPerRequest)
   return manifest.scope === 'slice_1_pilot'
     && manifest.gaApproved === false
     && Number.isFinite(Date.parse(manifest.startsAt))
@@ -84,26 +93,34 @@ export function isFiniteAdaptiveV2PilotManifest(manifest: AdaptiveV2PilotManifes
     && manifest.limits.maxDispatchAttemptsPerJob <= 2
     && manifest.limits.timeoutMs === 90_000
     && manifest.limits.leaseMs === 300_000
-    && manifest.cohort.maxLearners > 0
+    && manifest.cohort.kind === 'hashed_allowlist'
+    && Number.isSafeInteger(manifest.cohort.maxLearners) && manifest.cohort.maxLearners > 0
+    && hashes.length <= manifest.cohort.maxLearners
+    && new Set(hashes).size === hashes.length
+    && hashes.every(hash => /^sha256:[a-f0-9]{64}$/.test(hash))
     && manifest.allowedProviders.length > 0
-    && (!manifest.pilotApproved || manifest.allowedModels.length > 0)
+    && new Set(models).size === models.length
+    && pricesAreFinite
+    && (!manifest.pilotApproved || (hashes.length > 0 && models.length > 0))
 }
 
 export function adaptiveV2PilotDecision(
   configuredVersion: unknown,
-  input: { model: string, now: number, activityContractVersion: string, evaluationContractVersion: string } = {
-    model: '', now: Date.now(), activityContractVersion: '', evaluationContractVersion: '',
+  input: { model: string, now: number, activityContractVersion: string, evaluationContractVersion: string, learnerHash: string } = {
+    model: '', now: Date.now(), activityContractVersion: '', evaluationContractVersion: '', learnerHash: '',
   },
   manifest: AdaptiveV2PilotManifest = ADAPTIVE_V2_PILOT_MANIFEST,
 ): AdaptiveV2PilotDecision {
   if (typeof configuredVersion !== 'string' || !configuredVersion.trim()) return { allowed: false, code: 'pilot_manifest_missing' }
   if (configuredVersion !== manifest.version) return { allowed: false, code: 'pilot_manifest_mismatch' }
   if (!isFiniteAdaptiveV2PilotManifest(manifest)) return { allowed: false, code: 'pilot_manifest_invalid' }
+  if (!manifest.pilotApproved) return { allowed: false, code: 'pilot_manifest_not_approved' }
+  if (!manifest.cohort.subjectHashes.includes(input.learnerHash)) return { allowed: false, code: 'pilot_cohort_denied' }
+  if (!manifest.modelPolicies.some(policy => policy.model === input.model)) return { allowed: false, code: 'pilot_model_denied' }
   const withinWindow = input.now >= Date.parse(manifest.startsAt) && input.now < Date.parse(manifest.endsAt)
-  const pinsMatch = manifest.allowedModels.includes(input.model)
-    && (manifest.activityContractVersions as readonly string[]).includes(input.activityContractVersion)
+  const pinsMatch = (manifest.activityContractVersions as readonly string[]).includes(input.activityContractVersion)
     && (manifest.evaluationContractVersions as readonly string[]).includes(input.evaluationContractVersion)
-  if (!manifest.pilotApproved || !withinWindow || !pinsMatch) return { allowed: false, code: 'pilot_manifest_not_approved' }
+  if (!withinWindow || !pinsMatch) return { allowed: false, code: 'pilot_manifest_not_approved' }
   return { allowed: true }
 }
 

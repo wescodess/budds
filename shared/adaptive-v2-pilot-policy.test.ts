@@ -33,17 +33,32 @@ describe('Adaptive V2 pilot policy', () => {
     const manifest = {
       ...ADAPTIVE_V2_PILOT_MANIFEST,
       pilotApproved: true,
-      allowedModels: ['test/mastery-model'],
+      cohort: { ...ADAPTIVE_V2_PILOT_MANIFEST.cohort, subjectHashes: [`sha256:${'a'.repeat(64)}`] },
+      modelPolicies: [{ model: 'test/mastery-model', inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 4 }],
     }
     const input = {
       model: 'test/mastery-model',
       now: Date.parse('2026-10-01T00:00:00.000Z'),
       activityContractVersion: 'learn-adaptive.activity-contract.v1',
       evaluationContractVersion: 'learn-adaptive.evaluation.v1',
+      learnerHash: `sha256:${'a'.repeat(64)}`,
     }
     expect(adaptiveV2PilotDecision(manifest.version, input, manifest)).toEqual({ allowed: true })
     expect(adaptiveV2PilotDecision(manifest.version, input, { ...manifest, gaApproved: true })).toMatchObject({ allowed: false, code: 'pilot_manifest_invalid' })
     expect(adaptiveV2PilotDecision(manifest.version, { ...input, model: 'unapproved/model' }, manifest)).toMatchObject({ allowed: false })
+    expect(adaptiveV2PilotDecision(manifest.version, { ...input, learnerHash: `sha256:${'b'.repeat(64)}` }, manifest)).toEqual({ allowed: false, code: 'pilot_cohort_denied' })
+  })
+
+  test('denies a 51st hashed learner and rejects a manifest that tries to expand past the finite cohort', () => {
+    const subjectHashes = Array.from({ length: 50 }, (_, index) => `sha256:${index.toString(16).padStart(64, '0')}`)
+    const manifest = { ...ADAPTIVE_V2_PILOT_MANIFEST, pilotApproved: true, cohort: { ...ADAPTIVE_V2_PILOT_MANIFEST.cohort, subjectHashes }, modelPolicies: [{ model: 'test/mastery-model', inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 4 }] }
+    const fiftyFirst = `sha256:${(50).toString(16).padStart(64, '0')}`
+    expect(adaptiveV2PilotDecision(manifest.version, {
+      model: 'test/mastery-model', now: Date.parse('2026-10-01T00:00:00.000Z'),
+      activityContractVersion: 'learn-adaptive.activity-contract.v1', evaluationContractVersion: 'learn-adaptive.evaluation.v1', learnerHash: fiftyFirst,
+    }, manifest)).toEqual({ allowed: false, code: 'pilot_cohort_denied' })
+    expect(isFiniteAdaptiveV2PilotManifest({ ...manifest, cohort: { ...manifest.cohort, subjectHashes: [...subjectHashes, fiftyFirst] } })).toBe(false)
+    expect(JSON.stringify(manifest)).not.toContain('auth.example.com')
   })
 
   test.each([
@@ -52,6 +67,7 @@ describe('Adaptive V2 pilot policy', () => {
     ['wrong timeout', { limits: { ...ADAPTIVE_V2_PILOT_MANIFEST.limits, timeoutMs: 30_000 } }],
     ['GA conflation', { gaApproved: true }],
     ['invalid window', { endsAt: ADAPTIVE_V2_PILOT_MANIFEST.startsAt }],
+    ['unenforceable cost ceiling', { modelPolicies: [{ model: 'expensive', inputUsdPerMillionTokens: 10_000, outputUsdPerMillionTokens: 10_000 }] }],
   ])('rejects malformed finite policy: %s', (_label, override) => {
     const manifest = { ...ADAPTIVE_V2_PILOT_MANIFEST, ...override }
     expect(isFiniteAdaptiveV2PilotManifest(manifest)).toBe(false)

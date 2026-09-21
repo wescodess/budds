@@ -2,7 +2,9 @@
 import { convexTest } from 'convex-test'
 import { describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
+import { toAdaptiveSubmissionAdmission } from './learnAdaptive'
 import { LEARN_V2_MASTERY_SCORING_ADMISSION } from './learnV2Mastery'
+import { ADAPTIVE_V2_PILOT_MANIFEST } from '../shared/adaptive-v2-pilot-policy'
 import { masteryScopeKey } from './lib/learnV2MasteryScope'
 import schema from './schema'
 
@@ -12,6 +14,11 @@ const OTHER = { tokenIdentifier: 'https://auth.example.com|mastery-other', name:
 const assessment = { version: 'learn-v2.assessment.v1' as const, kind: 'machine_checkable' as const, responseFormat: 'short_text' as const, instructions: 'Answer from the evidence.', passingScorePercent: 80 as const, criteria: [{ key: 'core', description: 'Core correctness.', weightPercent: 79 }, { key: 'boundary', description: 'Boundary correctness.', weightPercent: 1 }, { key: 'edge', description: 'Complete correctness.', weightPercent: 20 }] }
 const rubric = JSON.stringify(assessment)
 const verdict = (score = 100) => ({ scorerVersion: 'learn-v2.mastery-scorer.v1', criterionResults: [{ key: 'core', awarded: score >= 79 }, { key: 'boundary', awarded: score >= 80 }, { key: 'edge', awarded: score === 100 }], misconceptionTags: [], verifierVersions: ['test.verifier.v1'] })
+const legacyFingerprint = (args: { studySessionId: string, expectedSessionRevision: number, expectedContentRevision: number, expectedPlanRecordRevision: number, expectedBlueprintRecordRevision: number, response: string, confidence: number }) => JSON.stringify({
+  command: 'submitMasteryAttempt', studySessionId: String(args.studySessionId), expectedSessionRevision: args.expectedSessionRevision,
+  expectedContentRevision: args.expectedContentRevision, expectedPlanRecordRevision: args.expectedPlanRecordRevision,
+  expectedBlueprintRecordRevision: args.expectedBlueprintRecordRevision, response: args.response, confidence: args.confidence,
+})
 
 async function fixture(options: { placementKind?: 'learning' | 'retained_review', state?: 'guided' | 'independent', firstDate?: string, sessionTimezone?: string } = {}) {
   process.env.LEARN_V2_ENABLED = 'true'
@@ -196,6 +203,61 @@ describe('LA2-12 server-scored mastery attempts', () => {
     }
   })
 
+  test('replays a completed attempt carrying the exact legacy raw fingerprint without provider I/O', async () => {
+    const { t, owner, args } = await fixture()
+    const internalArgs = args('legacy-completed-attempt', 80)
+    const recorded = await t.mutation(internal.learnV2Mastery.recordMasteryAttempt, internalArgs)
+    await t.run(ctx => ctx.db.patch(recorded.attemptId, { requestFingerprint: legacyFingerprint(internalArgs) }))
+    const { tokenIdentifier: _tokenIdentifier, scorerVerdict: _scorerVerdict, ...publicArgs } = internalArgs
+    const provider = vi.fn()
+    vi.stubGlobal('fetch', provider)
+    try {
+      await expect(owner.action(api.learnV2Mastery.submitMasteryAttempt, publicArgs)).resolves.toMatchObject({
+        status: 'completed', attemptId: recorded.attemptId, replayed: true,
+      })
+      expect(provider).not.toHaveBeenCalled()
+    }
+    finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  test('reacquires and backfills a legacy pre-dispatch job before any provider I/O', async () => {
+    const { t, args } = await fixture()
+    const { scorerVerdict: _verdict, ...request } = args('legacy-pre-dispatch', 80)
+    const first = await t.mutation(internal.learnV2Mastery.beginMasteryScoring, request)
+    if (first.kind !== 'acquired') throw new Error('Expected scoring lease')
+    await t.run(ctx => ctx.db.patch(first.jobId, {
+      status: 'queued', requestFingerprint: legacyFingerprint(request), leaseToken: undefined, leaseExpiresAt: undefined,
+      inputDigest: undefined, providerVersion: undefined, providerPolicyVersion: undefined, providerRequestVersion: undefined,
+      providerJobVersion: undefined, providerPayloadPolicyVersion: undefined, providerLogPolicyVersion: undefined,
+      providerRetentionPolicyVersion: undefined, providerDeletionPolicyVersion: undefined, providerTimeoutPolicyVersion: undefined,
+      providerQuotaPolicyVersion: undefined, providerPilotManifestVersion: undefined, providerRequestDigest: undefined,
+      providerRequestBytes: undefined, providerMaxRequestBytes: undefined, providerMaxResponseBytes: undefined,
+      providerMaxOutputTokens: undefined, providerTimeoutMs: undefined, providerCostCeilingUsd: undefined,
+    }))
+    const reacquired = await t.mutation(internal.learnV2Mastery.beginMasteryScoring, request)
+    expect(reacquired).toMatchObject({ kind: 'acquired', jobId: first.jobId })
+    const migrated = await t.run(ctx => ctx.db.get(first.jobId))
+    expect(migrated).toMatchObject({
+      requestFingerprint: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+      providerRequestVersion: ADAPTIVE_V2_PILOT_MANIFEST.requestVersion,
+      providerQuotaPolicyVersion: ADAPTIVE_V2_PILOT_MANIFEST.quotaVersion,
+      providerRequestDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+      checkpoint: 'reserved',
+    })
+    expect(JSON.stringify(migrated)).not.toContain(request.response)
+  })
+
+  test('projects only a bounded adaptive admission result, never V2 mastery or feedback authority', () => {
+    const mapped = toAdaptiveSubmissionAdmission({
+      status: 'completed', attemptId: 'attempt-reference' as never, scorePercent: 100, state: 'independent', nextReviewAt: 123,
+      feedback: { criterionResults: [{ key: 'secret', awarded: true, rationale: 'private rationale' }], misconceptionTags: ['private'] }, replayed: false,
+    })
+    expect(mapped).toEqual({ kind: 'accepted', status: 'completed', attemptReference: 'attempt-reference', replayed: false })
+    expect(JSON.stringify(mapped)).not.toMatch(/score|mastery|feedback|rationale|nextReview|receipt|revision/)
+  })
+
   test('records the versioned minimized request ledger before provider I/O without raw payloads', async () => {
     const { t, args } = await fixture()
     const { scorerVerdict: _verdict, ...request } = args('request-ledger', 80)
@@ -252,6 +314,15 @@ describe('LA2-12 server-scored mastery attempts', () => {
       expect(provider).not.toHaveBeenCalled()
       expect(await t.run(ctx => ctx.db.query('learnJobs').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', OWNER.tokenIdentifier).eq('idempotencyKey', attempt.idempotencyKey)).unique())).toBeNull()
       expect(await t.run(ctx => ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', OWNER.tokenIdentifier).eq('idempotencyKey', attempt.idempotencyKey)).unique())).toBeNull()
+
+      const completed = args('adaptive-replay-after-revocation', 80)
+      await t.mutation(internal.learnV2Mastery.recordMasteryAttempt, completed)
+      await owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: false })
+      const { tokenIdentifier: _completedToken, scorerVerdict: _completedVerdict, ...completedAttempt } = completed
+      const revokedReplay = await owner.action(api.learnAdaptive.submitResponse, { threadId: activity.threadId, activityId: 'adaptive-scored-1', ...completedAttempt })
+      expect(revokedReplay).toMatchObject({ kind: 'denied', code: 'adaptive_gate_unavailable' })
+      expect(JSON.stringify(revokedReplay)).not.toMatch(/feedback|scorePercent|state|attemptReference/)
+      expect(provider).not.toHaveBeenCalled()
     }
     finally {
       delete process.env.LEARN_ADAPTIVE_V2_PILOT_MANIFEST
@@ -338,6 +409,34 @@ describe('LA2-12 server-scored mastery attempts', () => {
     })
     await expect(t.mutation(internal.learnV2Mastery.markMasteryScoringDispatched, { tokenIdentifier: OWNER.tokenIdentifier, jobId: reservation.jobId, leaseToken: reservation.leaseToken })).resolves.toBeNull()
     expect(await t.run(ctx => ctx.db.query('learnMasteryScoringRateEvents').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(20))).toHaveLength(LEARN_V2_MASTERY_SCORING_ADMISSION.maxProviderDispatches + 1)
+  })
+
+  test('retains dispatch events across hourly cleanup until the authoritative daily quota window ends', async () => {
+    const { t, args } = await fixture()
+    const { scorerVerdict: _verdict, ...request } = args('daily-cleanup-boundary', 80)
+    const reservation = await t.mutation(internal.learnV2Mastery.beginMasteryScoring, request)
+    if (reservation.kind !== 'acquired') throw new Error('Expected scoring lease')
+    const now = new Date('2026-10-01T00:00:00.000Z').getTime()
+    await t.run(async ctx => {
+      for (let index = 0; index < ADAPTIVE_V2_PILOT_MANIFEST.limits.maxProviderDispatchesPerDay; index += 1) {
+        await ctx.db.insert('learnMasteryScoringRateEvents', {
+          userId: OWNER.tokenIdentifier, jobId: reservation.jobId, createdAt: now,
+          expiresAt: now + ADAPTIVE_V2_PILOT_MANIFEST.limits.dailyQuotaWindowMs,
+        })
+      }
+    })
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(now + ADAPTIVE_V2_PILOT_MANIFEST.limits.quotaWindowMs + 1)
+      await expect(t.mutation(internal.learnV2Mastery.cleanupExpiredMasteryScoringRateEvents, {})).resolves.toEqual({ deleted: 0 })
+      expect(await t.run(ctx => ctx.db.query('learnMasteryScoringRateEvents').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(25)))
+        .toHaveLength(ADAPTIVE_V2_PILOT_MANIFEST.limits.maxProviderDispatchesPerDay)
+      vi.setSystemTime(now + ADAPTIVE_V2_PILOT_MANIFEST.limits.dailyQuotaWindowMs)
+      await expect(t.mutation(internal.learnV2Mastery.cleanupExpiredMasteryScoringRateEvents, {})).resolves.toEqual({ deleted: ADAPTIVE_V2_PILOT_MANIFEST.limits.maxProviderDispatchesPerDay })
+    }
+    finally {
+      vi.useRealTimers()
+    }
   })
 
   test('enforces the finite two-dispatch-attempt job cap before provider admission', async () => {

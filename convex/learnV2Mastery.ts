@@ -17,9 +17,10 @@ const MAX_SOURCES = 64
 const SCORING_JOB_TYPE = 'mastery_scoring'
 const SCORING_LEASE_MS = ADAPTIVE_V2_PILOT_MANIFEST.limits.leaseMs
 export const LEARN_V2_MASTERY_SCORING_ADMISSION = {
-  windowMs: 60 * 60_000,
-  maxProviderDispatches: 12,
+  windowMs: ADAPTIVE_V2_PILOT_MANIFEST.limits.quotaWindowMs,
+  maxProviderDispatches: ADAPTIVE_V2_PILOT_MANIFEST.limits.maxProviderDispatchesPerWindow,
 } as const
+const SCORING_RATE_EVENT_RETENTION_MS = ADAPTIVE_V2_PILOT_MANIFEST.limits.dailyQuotaWindowMs
 const SCORING_RECOVERY_BATCH = 32
 const RATE_EVENT_CLEANUP_BATCH = 128
 const FOLLOW_UP_JOB_TYPE = 'session_content_generation'
@@ -36,7 +37,10 @@ const scorerResponseSchema = {
 export type MasteryAttemptRequest = { studySessionId: Id<'studySessions'>, expectedSessionRevision: number, expectedContentRevision: number, expectedPlanRecordRevision: number, expectedBlueprintRecordRevision: number, response: string, confidence: number, idempotencyKey: string }
 type AdaptiveAdmissionContext = { threadId: Id<'learningThreads'>, activityId: string, manifestVersion: string }
 type AttemptRequest = MasteryAttemptRequest
-async function requestFingerprint(args: AttemptRequest) { return await digest({ command: 'submitMasteryAttempt', studySessionId: String(args.studySessionId), expectedSessionRevision: args.expectedSessionRevision, expectedContentRevision: args.expectedContentRevision, expectedPlanRecordRevision: args.expectedPlanRecordRevision, expectedBlueprintRecordRevision: args.expectedBlueprintRecordRevision, response: args.response, confidence: args.confidence }) }
+function requestFingerprintPayload(args: AttemptRequest) { return { command: 'submitMasteryAttempt', studySessionId: String(args.studySessionId), expectedSessionRevision: args.expectedSessionRevision, expectedContentRevision: args.expectedContentRevision, expectedPlanRecordRevision: args.expectedPlanRecordRevision, expectedBlueprintRecordRevision: args.expectedBlueprintRecordRevision, response: args.response, confidence: args.confidence } }
+function legacyRequestFingerprint(args: AttemptRequest) { return JSON.stringify(requestFingerprintPayload(args)) }
+async function requestFingerprints(args: AttemptRequest) { return { digest: await digest(requestFingerprintPayload(args)), legacy: legacyRequestFingerprint(args) } }
+function fingerprintMatches(stored: string | undefined, fingerprints: Awaited<ReturnType<typeof requestFingerprints>>) { return stored === fingerprints.digest || stored === fingerprints.legacy }
 function validText(value: string, label: string, max: number) { if (!value.trim() || value.length > max) throw new Error(`${label} is invalid`) }
 function validateAttemptRequest(args: AttemptRequest) {
   validText(args.idempotencyKey, 'Idempotency key', 128); validText(args.response, 'Response', MAX_RESPONSE)
@@ -100,9 +104,36 @@ async function adaptiveScoringAuthority(
     now: Date.now(),
     activityContractVersion: activity.contractVersion,
     evaluationContractVersion: activity.evaluationContract.version,
+    learnerHash: await digest(['adaptive-v2-pilot-cohort.v1', userId]),
   })
   if (!pilot.allowed) return { allowed: false as const, kind: 'blocked' as const, code: pilot.code }
   return { allowed: true as const, activity }
+}
+
+async function masteryScoringLedger(args: AttemptRequest, adaptiveAdmission?: AdaptiveAdmissionContext) {
+  const admissionPayload = JSON.stringify({ response: args.response, confidence: args.confidence })
+  const requestDigest = await digest(admissionPayload)
+  return {
+    inputDigest: requestDigest,
+    providerVersion: ADAPTIVE_V2_PILOT_MANIFEST.allowedProviders[0],
+    providerPolicyVersion: ADAPTIVE_V2_PILOT_MANIFEST.policyVersion,
+    providerRequestVersion: ADAPTIVE_V2_PILOT_MANIFEST.requestVersion,
+    providerJobVersion: ADAPTIVE_V2_PILOT_MANIFEST.jobVersion,
+    providerPayloadPolicyVersion: 'learn-v2.mastery-minimized-payload.v1',
+    providerLogPolicyVersion: 'metadata-only-no-payload.v1',
+    providerRetentionPolicyVersion: ADAPTIVE_V2_PILOT_MANIFEST.retention.provider,
+    providerDeletionPolicyVersion: ADAPTIVE_V2_PILOT_MANIFEST.retention.local,
+    providerTimeoutPolicyVersion: 'learn-v2.mastery-timeout.v1',
+    providerQuotaPolicyVersion: ADAPTIVE_V2_PILOT_MANIFEST.quotaVersion,
+    providerPilotManifestVersion: adaptiveAdmission?.manifestVersion,
+    providerRequestDigest: requestDigest,
+    providerRequestBytes: new TextEncoder().encode(admissionPayload).byteLength,
+    providerMaxRequestBytes: ADAPTIVE_V2_PILOT_MANIFEST.limits.maxRequestBytes,
+    providerMaxResponseBytes: ADAPTIVE_V2_PILOT_MANIFEST.limits.maxResponseBytes,
+    providerMaxOutputTokens: ADAPTIVE_V2_PILOT_MANIFEST.limits.maxOutputTokens,
+    providerTimeoutMs: ADAPTIVE_V2_PILOT_MANIFEST.limits.timeoutMs,
+    providerCostCeilingUsd: ADAPTIVE_V2_PILOT_MANIFEST.limits.costCeilingUsdPerRequest,
+  }
 }
 
 async function exactContentEvidence(ctx: MutationCtx | QueryCtx, userId: string, content: Doc<'sessionContent'>) {
@@ -218,23 +249,25 @@ export const beginMasteryScoring = internalMutation({
       throw new Error('Learn V2 access denied')
     }
     validateAttemptRequest(args)
-    const fingerprint = await requestFingerprint(args)
-    const attempt = await ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', args.tokenIdentifier).eq('idempotencyKey', args.idempotencyKey)).unique()
-    if (attempt) {
-      if (attempt.requestFingerprint !== fingerprint) throw new Error('Idempotency key was already used for a different request')
-      const record = attempt.blueprintRevisionId ? (await getScopedMasteryRecord(ctx, args.tokenIdentifier, attempt.blueprintRevisionId, attempt.objectiveId)).record : null
-      return { kind: 'replay' as const, attemptId: attempt._id, scorePercent: attempt.serverScorePercent, state: attempt.result, nextReviewAt: record?.lastAttemptId === attempt._id ? record.nextReviewAt ?? null : null, feedback: feedback(attempt) }
-    }
-    const scope = await sessionScope(ctx, args.tokenIdentifier, args.studySessionId)
-    if (scope.session.status !== 'in_progress' || scope.session.revision !== args.expectedSessionRevision || scope.content.revision !== args.expectedContentRevision || scope.plan.recordRevision !== args.expectedPlanRecordRevision || scope.blueprint.recordRevision !== args.expectedBlueprintRecordRevision) throw new Error('Started session revision conflict')
+    const fingerprints = await requestFingerprints(args)
+    let scope: Awaited<ReturnType<typeof sessionScope>> | undefined
     if (args.adaptiveAdmission) {
+      scope = await sessionScope(ctx, args.tokenIdentifier, args.studySessionId)
       const authority = await adaptiveScoringAuthority(ctx, args.tokenIdentifier, scope, args.adaptiveAdmission)
       if (!authority.allowed) return { kind: authority.kind, code: authority.code, message: authority.kind === 'denied' ? 'Adaptive scoring is unavailable.' : 'Adaptive pilot dispatch is not approved.', retryable: false }
     }
+    const attempt = await ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', args.tokenIdentifier).eq('idempotencyKey', args.idempotencyKey)).unique()
+    if (attempt) {
+      if (!fingerprintMatches(attempt.requestFingerprint, fingerprints)) throw new Error('Idempotency key was already used for a different request')
+      const record = attempt.blueprintRevisionId ? (await getScopedMasteryRecord(ctx, args.tokenIdentifier, attempt.blueprintRevisionId, attempt.objectiveId)).record : null
+      return { kind: 'replay' as const, attemptId: attempt._id, scorePercent: attempt.serverScorePercent, state: attempt.result, nextReviewAt: record?.lastAttemptId === attempt._id ? record.nextReviewAt ?? null : null, feedback: feedback(attempt) }
+    }
+    scope ??= await sessionScope(ctx, args.tokenIdentifier, args.studySessionId)
+    if (scope.session.status !== 'in_progress' || scope.session.revision !== args.expectedSessionRevision || scope.content.revision !== args.expectedContentRevision || scope.plan.recordRevision !== args.expectedPlanRecordRevision || scope.blueprint.recordRevision !== args.expectedBlueprintRecordRevision) throw new Error('Started session revision conflict')
     const now = Date.now()
     const existing = await ctx.db.query('learnJobs').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', args.tokenIdentifier).eq('idempotencyKey', args.idempotencyKey)).unique()
     if (existing) {
-      if (existing.type !== SCORING_JOB_TYPE || existing.requestFingerprint !== fingerprint) throw new Error('Idempotency key was already used for a different request')
+      if (existing.type !== SCORING_JOB_TYPE || !fingerprintMatches(existing.requestFingerprint, fingerprints)) throw new Error('Idempotency key was already used for a different request')
       if (existing.status === 'blocked') return { kind: 'pending' as const, status: 'blocked' as const }
       if (existing.status === 'running') {
         if ((existing.leaseExpiresAt ?? 0) > now) return { kind: 'pending' as const, status: 'in_progress' as const }
@@ -243,7 +276,7 @@ export const beginMasteryScoring = internalMutation({
       }
       if ((existing.status === 'leased' || existing.status === 'queued') && (existing.leaseExpiresAt ?? 0) > now) return { kind: 'pending' as const, status: 'in_progress' as const }
       const leaseToken = crypto.randomUUID()
-      await ctx.db.patch(existing._id, { status: 'leased', leaseToken, leaseExpiresAt: now + SCORING_LEASE_MS, checkpoint: 'reserved', terminalReason: undefined, revision: existing.revision + 1, updatedAt: now })
+      await ctx.db.patch(existing._id, { ...await masteryScoringLedger(args, args.adaptiveAdmission), requestFingerprint: fingerprints.digest, status: 'leased', leaseToken, leaseExpiresAt: now + SCORING_LEASE_MS, checkpoint: 'reserved', terminalReason: undefined, revision: existing.revision + 1, updatedAt: now })
       return { kind: 'acquired' as const, jobId: existing._id, leaseToken }
     }
     if (args.adaptiveAdmission) {
@@ -254,8 +287,7 @@ export const beginMasteryScoring = internalMutation({
       if (runningJobs.length + leasedJobs.length >= ADAPTIVE_V2_PILOT_MANIFEST.limits.maxConcurrentPerLearner) return { kind: 'blocked' as const, code: 'adaptive_concurrency_cap', message: 'Adaptive scoring is at capacity.', retryable: true }
     }
     const leaseToken = crypto.randomUUID()
-    const admissionPayload = JSON.stringify({ response: args.response, confidence: args.confidence })
-    const jobId = await ctx.db.insert('learnJobs', { userId: args.tokenIdentifier, learningVoidId: scope.voidRow._id, blueprintRevisionId: scope.blueprint._id, studyPlanRevisionId: scope.plan._id, studySessionId: scope.session._id, type: SCORING_JOB_TYPE, status: 'leased', revision: 1, idempotencyKey: args.idempotencyKey, requestFingerprint: fingerprint, inputDigest: await digest(admissionPayload), expectedBlueprintRecordRevision: args.expectedBlueprintRecordRevision, expectedSessionRevision: args.expectedSessionRevision, attempts: 0, providerVersion: ADAPTIVE_V2_PILOT_MANIFEST.allowedProviders[0], providerModel: scope.content.providerModel, providerPolicyVersion: ADAPTIVE_V2_PILOT_MANIFEST.policyVersion, providerRequestVersion: ADAPTIVE_V2_PILOT_MANIFEST.requestVersion, providerJobVersion: ADAPTIVE_V2_PILOT_MANIFEST.jobVersion, providerPayloadPolicyVersion: 'learn-v2.mastery-minimized-payload.v1', providerLogPolicyVersion: 'metadata-only-no-payload.v1', providerRetentionPolicyVersion: ADAPTIVE_V2_PILOT_MANIFEST.retention.provider, providerDeletionPolicyVersion: ADAPTIVE_V2_PILOT_MANIFEST.retention.local, providerTimeoutPolicyVersion: 'learn-v2.mastery-timeout.v1', providerQuotaPolicyVersion: ADAPTIVE_V2_PILOT_MANIFEST.quotaVersion, providerPilotManifestVersion: args.adaptiveAdmission?.manifestVersion, providerRequestDigest: await digest(admissionPayload), providerRequestBytes: new TextEncoder().encode(admissionPayload).byteLength, providerMaxRequestBytes: ADAPTIVE_V2_PILOT_MANIFEST.limits.maxRequestBytes, providerMaxResponseBytes: ADAPTIVE_V2_PILOT_MANIFEST.limits.maxResponseBytes, providerMaxOutputTokens: ADAPTIVE_V2_PILOT_MANIFEST.limits.maxOutputTokens, providerTimeoutMs: ADAPTIVE_V2_PILOT_MANIFEST.limits.timeoutMs, providerCostCeilingUsd: ADAPTIVE_V2_PILOT_MANIFEST.limits.costCeilingUsdPerRequest, leaseToken, leaseExpiresAt: now + SCORING_LEASE_MS, checkpoint: 'reserved', createdAt: now, updatedAt: now })
+    const jobId = await ctx.db.insert('learnJobs', { userId: args.tokenIdentifier, learningVoidId: scope.voidRow._id, blueprintRevisionId: scope.blueprint._id, studyPlanRevisionId: scope.plan._id, studySessionId: scope.session._id, type: SCORING_JOB_TYPE, status: 'leased', revision: 1, idempotencyKey: args.idempotencyKey, requestFingerprint: fingerprints.digest, ...await masteryScoringLedger(args, args.adaptiveAdmission), expectedBlueprintRecordRevision: args.expectedBlueprintRecordRevision, expectedSessionRevision: args.expectedSessionRevision, attempts: 0, providerModel: scope.content.providerModel, leaseToken, leaseExpiresAt: now + SCORING_LEASE_MS, checkpoint: 'reserved', createdAt: now, updatedAt: now })
     return { kind: 'acquired' as const, jobId, leaseToken }
   },
 })
@@ -271,7 +303,10 @@ export const markMasteryScoringDispatched = internalMutation({
     if (!job.providerRequestDigest || !job.providerRequestBytes || !job.providerRequestVersion || !job.providerPolicyVersion || !job.providerJobVersion
       || !job.providerPayloadPolicyVersion || !job.providerLogPolicyVersion || !job.providerRetentionPolicyVersion || !job.providerDeletionPolicyVersion
       || !job.providerTimeoutPolicyVersion || !job.providerQuotaPolicyVersion || !job.providerMaxRequestBytes || !job.providerMaxResponseBytes
-      || !job.providerMaxOutputTokens || !job.providerTimeoutMs || !job.providerCostCeilingUsd) throw new Error('Mastery scoring request ledger is unavailable')
+      || !job.providerMaxOutputTokens || !job.providerTimeoutMs || !job.providerCostCeilingUsd) {
+      if (args.adaptiveAdmission) return { kind: 'blocked' as const, code: 'adaptive_request_ledger_unavailable', retryable: false }
+      throw new Error('Mastery scoring request ledger is unavailable')
+    }
     if ((job.attempts ?? 0) >= ADAPTIVE_V2_PILOT_MANIFEST.limits.maxDispatchAttemptsPerJob) {
       if (args.adaptiveAdmission) return { kind: 'blocked' as const, code: 'adaptive_dispatch_attempt_cap', retryable: false }
       throw new Error('Mastery scoring dispatch attempt cap reached')
@@ -292,11 +327,11 @@ export const markMasteryScoringDispatched = internalMutation({
     }
     if (args.adaptiveAdmission) {
       const daily = await ctx.db.query('learnMasteryScoringRateEvents')
-        .withIndex('by_userId_and_createdAt', q => q.eq('userId', args.tokenIdentifier).gt('createdAt', now - 86_400_000))
+        .withIndex('by_userId_and_createdAt', q => q.eq('userId', args.tokenIdentifier).gt('createdAt', now - ADAPTIVE_V2_PILOT_MANIFEST.limits.dailyQuotaWindowMs))
         .take(ADAPTIVE_V2_PILOT_MANIFEST.limits.maxProviderDispatchesPerDay + 1)
       if (daily.length >= ADAPTIVE_V2_PILOT_MANIFEST.limits.maxProviderDispatchesPerDay) return { kind: 'blocked' as const, code: 'adaptive_daily_quota', retryable: true }
     }
-    await ctx.db.insert('learnMasteryScoringRateEvents', { userId: args.tokenIdentifier, jobId: job._id, createdAt: now, expiresAt: now + LEARN_V2_MASTERY_SCORING_ADMISSION.windowMs })
+    await ctx.db.insert('learnMasteryScoringRateEvents', { userId: args.tokenIdentifier, jobId: job._id, createdAt: now, expiresAt: now + SCORING_RATE_EVENT_RETENTION_MS })
     await ctx.db.patch(job._id, { status: 'running', checkpoint: 'provider_dispatched', attempts: (job.attempts ?? 0) + 1, revision: job.revision + 1, updatedAt: now })
     return args.adaptiveAdmission ? { kind: 'allowed' as const } : null
   },
@@ -392,10 +427,10 @@ export const getMasteryScoringInput = internalQuery({
   handler: async (ctx, args) => {
     if (!(await hasLearnV2Access(ctx, args.tokenIdentifier))) throw new Error('Learn V2 access denied')
     validateAttemptRequest(args)
-    const fingerprint = await requestFingerprint(args)
+    const fingerprints = await requestFingerprints(args)
     const prior = await ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', args.tokenIdentifier).eq('idempotencyKey', args.idempotencyKey)).unique()
     if (prior) {
-      if (prior.requestFingerprint !== fingerprint) throw new Error('Idempotency key was already used for a different request')
+      if (!fingerprintMatches(prior.requestFingerprint, fingerprints)) throw new Error('Idempotency key was already used for a different request')
       const record = prior.blueprintRevisionId ? (await getScopedMasteryRecord(ctx, args.tokenIdentifier, prior.blueprintRevisionId, prior.objectiveId)).record : null
       return { kind: 'replay' as const, attemptId: prior._id, scorePercent: prior.serverScorePercent, state: prior.result, nextReviewAt: record?.lastAttemptId === prior._id ? record.nextReviewAt ?? null : null, feedback: feedback(prior) }
     }
@@ -571,14 +606,14 @@ export const recordMasteryAttempt = internalMutation({
       || new Set(args.scorerVerdict.misconceptionTags).size !== args.scorerVerdict.misconceptionTags.length
       || args.scorerVerdict.verifierVersions.some(version => !version.trim() || version.length > 200)
       || new Set(args.scorerVerdict.verifierVersions).size !== args.scorerVerdict.verifierVersions.length) throw new Error('Server scorer verdict is invalid')
-    const requestFingerprintValue = await requestFingerprint(args)
+    const requestFingerprintValue = await requestFingerprints(args)
     if ((args.scoringJobId === undefined) !== (args.scoringLeaseToken === undefined)) throw new Error('Mastery scoring command is invalid')
     const scoringJob = args.scoringJobId && await ctx.db.get(args.scoringJobId)
-    if (args.scoringJobId && (!scoringJob || scoringJob.userId !== args.tokenIdentifier || scoringJob.type !== SCORING_JOB_TYPE || scoringJob.status !== 'running' || scoringJob.leaseToken !== args.scoringLeaseToken || scoringJob.requestFingerprint !== requestFingerprintValue)) throw new Error('Mastery scoring command is invalid')
+    if (args.scoringJobId && (!scoringJob || scoringJob.userId !== args.tokenIdentifier || scoringJob.type !== SCORING_JOB_TYPE || scoringJob.status !== 'running' || scoringJob.leaseToken !== args.scoringLeaseToken || !fingerprintMatches(scoringJob.requestFingerprint, requestFingerprintValue))) throw new Error('Mastery scoring command is invalid')
     if (scoringJob && (!args.scoredSourceSnapshotIds?.length || !args.scoredContentRevisionPins?.length)) throw new Error('Mastery scoring evidence pins are unavailable')
     const prior = await ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', args.tokenIdentifier).eq('idempotencyKey', args.idempotencyKey)).unique()
     if (prior) {
-      if (prior.requestFingerprint !== requestFingerprintValue) throw new Error('Idempotency key was already used for a different request')
+      if (!fingerprintMatches(prior.requestFingerprint, requestFingerprintValue)) throw new Error('Idempotency key was already used for a different request')
       const currentRecord = prior.blueprintRevisionId ? (await getScopedMasteryRecord(ctx, args.tokenIdentifier, prior.blueprintRevisionId, prior.objectiveId)).record : null
       return { attemptId: prior._id, scorePercent: prior.serverScorePercent, state: prior.result, nextReviewAt: currentRecord?.lastAttemptId === prior._id ? currentRecord.nextReviewAt ?? null : null, feedback: feedback(prior), replayed: true }
     }
@@ -602,7 +637,7 @@ export const recordMasteryAttempt = internalMutation({
     const attemptTimezone = kind === 'retained_transfer' && record?.firstIndependentTimezone ? record.firstIndependentTimezone : sessionTimezone
     const attemptLocalDate = localDateAt(now, attemptTimezone)
     const outcome = deriveMastery({ scorePercent, assisted, kind, previousState: record?.state, firstIndependentLocalDate: record?.firstIndependentLocalDate, attemptLocalDate })
-    const attemptId = await ctx.db.insert('masteryAttempts', { userId: args.tokenIdentifier, blueprintRevisionId: scope.blueprint._id, objectiveId: scope.objective._id, studySessionId: scope.session._id, sessionContentId: scope.content._id, studyPlanRevisionId: scope.plan._id, kind, activityContractVersion: 'learn-v2.mastery-attempt.v1', providerVersion: 'openrouter-via-cloudflare-ai-gateway.v1', attemptedAt: now, attemptLocalDate, attemptTimezone, idempotencyKey: args.idempotencyKey, requestFingerprint: requestFingerprintValue, serverScorePercent: scorePercent, response: args.response, criterionResultsJson: JSON.stringify(args.scorerVerdict.criterionResults), misconceptionTagsJson: JSON.stringify(args.scorerVerdict.misconceptionTags), usedHint: scope.session.substantiveHintUsedAt !== undefined, usedReveal: scope.session.answerRevealedAt !== undefined, confidence: args.confidence, rubricVersion: rubric.version, rubricSnapshot: scope.content.assessmentRubricSnapshot, scorerVersion: args.scorerVerdict.scorerVersion, scorerModel: scope.content.providerModel, verifierVersionsJson: JSON.stringify(evidence.verifierVersions), sourceSnapshotIdsJson: JSON.stringify(scoredSourceSnapshotIds.map(String).sort()), contentRevisionPinsJson: JSON.stringify(scoredContentRevisionPins), sessionRevision: scope.session.revision, contentRevision: scope.content.revision, planRevision: scope.plan.revision, planRecordRevision: scope.plan.recordRevision, blueprintRecordRevision: scope.blueprint.recordRevision, result: outcome.state })
+    const attemptId = await ctx.db.insert('masteryAttempts', { userId: args.tokenIdentifier, blueprintRevisionId: scope.blueprint._id, objectiveId: scope.objective._id, studySessionId: scope.session._id, sessionContentId: scope.content._id, studyPlanRevisionId: scope.plan._id, kind, activityContractVersion: 'learn-v2.mastery-attempt.v1', providerVersion: 'openrouter-via-cloudflare-ai-gateway.v1', attemptedAt: now, attemptLocalDate, attemptTimezone, idempotencyKey: args.idempotencyKey, requestFingerprint: requestFingerprintValue.digest, serverScorePercent: scorePercent, response: args.response, criterionResultsJson: JSON.stringify(args.scorerVerdict.criterionResults), misconceptionTagsJson: JSON.stringify(args.scorerVerdict.misconceptionTags), usedHint: scope.session.substantiveHintUsedAt !== undefined, usedReveal: scope.session.answerRevealedAt !== undefined, confidence: args.confidence, rubricVersion: rubric.version, rubricSnapshot: scope.content.assessmentRubricSnapshot, scorerVersion: args.scorerVerdict.scorerVersion, scorerModel: scope.content.providerModel, verifierVersionsJson: JSON.stringify(evidence.verifierVersions), sourceSnapshotIdsJson: JSON.stringify(scoredSourceSnapshotIds.map(String).sort()), contentRevisionPinsJson: JSON.stringify(scoredContentRevisionPins), sessionRevision: scope.session.revision, contentRevision: scope.content.revision, planRevision: scope.plan.revision, planRecordRevision: scope.plan.recordRevision, blueprintRecordRevision: scope.blueprint.recordRevision, result: outcome.state })
     const followUp = await createFollowUp(ctx, { userId: args.tokenIdentifier, scope, attemptId, outcome, now, timezone: attemptTimezone, firstIndependentLocalDate: outcome.setFirstIndependent ? attemptLocalDate : record?.firstIndependentLocalDate, sourceIds: evidence.sourceSnapshotIds })
     const patch = { state: outcome.state, schedulingPriority: outcome.remediation ? 'remediation' as const : 'standard' as const, lastAttemptAt: now, lastAttemptId: attemptId, nextReviewAt: followUp?.scheduledStartAt, remediationAttemptId: outcome.remediation ? attemptId : undefined, ...(outcome.setFirstIndependent ? { firstIndependentPassAt: now, firstIndependentLocalDate: attemptLocalDate, firstIndependentTimezone: attemptTimezone } : {}), updatedAt: now }
     await transitionScopedMasteryRecord(ctx, { userId: args.tokenIdentifier, blueprintRevisionId: scope.blueprint._id, objectiveId: scope.objective._id, transition: patch })
