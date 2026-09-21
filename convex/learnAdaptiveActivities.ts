@@ -1,0 +1,231 @@
+import { v, type Infer } from 'convex/values'
+import { internalMutation, internalQuery, type MutationCtx } from './_generated/server'
+import type { Doc } from './_generated/dataModel'
+import { commitAdaptiveActivityPlanValidator } from '../shared/adaptive-learn-storage-manifest'
+import {
+  composeAdaptiveActivityPlan,
+  replayAdaptiveActivityPlan,
+  type ComposedAdaptiveActivityPlan,
+} from '../shared/learn-adaptive-activity-plan'
+import { projectAdaptiveClaimAuthority } from '../shared/adaptive-claim-adapter'
+import { requireAuth } from './lib/auth'
+import { requireActiveBlueprint } from './lib/learnV2BlueprintAuthority'
+
+type CommitArgs = Infer<typeof commitAdaptiveActivityPlanValidator>
+
+async function requireEvidenceAuthority(ctx: MutationCtx, userId: string, args: CommitArgs) {
+  const pins = {
+    learningVoidId: args.learningVoidId ? String(args.learningVoidId) : null,
+    blueprintRevisionId: args.blueprintRevisionId ? String(args.blueprintRevisionId) : null,
+    objectiveId: args.objectiveId ? String(args.objectiveId) : null,
+    sessionContentId: args.sessionContentId ? String(args.sessionContentId) : null,
+  }
+  const requestedReferences = args.evidenceReferences.map(reference => ({
+    claimId: String(reference.claimId),
+    supportId: String(reference.supportId),
+    sourceSnapshotId: String(reference.sourceSnapshotId),
+  }))
+  if (args.activityClass === 'non_factual') {
+    return projectAdaptiveClaimAuthority({ kind: 'non_factual', ownerId: userId, pins, requestedReferences })
+  }
+  if (!args.learningVoidId || !args.blueprintRevisionId || !args.objectiveId || !args.sessionContentId) {
+    throw new Error('Factual activity requires complete matching V2 pins')
+  }
+
+  const [learningVoid, blueprint, objective, content] = await Promise.all([
+    ctx.db.get(args.learningVoidId),
+    ctx.db.get(args.blueprintRevisionId),
+    ctx.db.get(args.objectiveId),
+    ctx.db.get(args.sessionContentId),
+  ])
+  if (!learningVoid || learningVoid.userId !== userId) throw new Error('Learning Void not found')
+  await requireActiveBlueprint(ctx, userId, learningVoid, blueprint?._id)
+  const loaded = await Promise.all(args.evidenceReferences.map(async (reference) => {
+    const [claim, support, snapshot] = await Promise.all([
+      ctx.db.get(reference.claimId),
+      ctx.db.get(reference.supportId),
+      ctx.db.get(reference.sourceSnapshotId),
+    ])
+    const excerpt = support ? await ctx.db.get(support.sourceExcerptId) : null
+    const identity = snapshot ? await ctx.db.get(snapshot.sourceIdentityId) : null
+    return { claim, support, snapshot, excerpt, identity }
+  }))
+
+  return projectAdaptiveClaimAuthority({
+    kind: 'factual',
+    ownerId: userId,
+    pins,
+    requestedReferences,
+    authority: {
+      learningVoid: learningVoid ? { id: String(learningVoid._id), userId: learningVoid.userId } : null,
+      blueprintRevision: blueprint ? { id: String(blueprint._id), userId: blueprint.userId, learningVoidId: String(blueprint.learningVoidId) } : null,
+      objective: objective ? { id: String(objective._id), userId: objective.userId, blueprintRevisionId: String(objective.blueprintRevisionId) } : null,
+      sessionContent: content ? { id: String(content._id), userId: content.userId, blueprintRevisionId: content.blueprintRevisionId ? String(content.blueprintRevisionId) : undefined, objectiveId: content.objectiveId ? String(content.objectiveId) : undefined, revision: content.revision, status: content.status, inputDigest: content.inputDigest, generatorVersion: content.generatorVersion } : null,
+      claims: loaded.flatMap(({ claim }) => claim ? [{ id: String(claim._id), userId: claim.userId, sessionContentId: String(claim.sessionContentId), verifierVersion: claim.verifierVersion }] : []),
+      supports: loaded.flatMap(({ support }) => support ? [{ id: String(support._id), userId: support.userId, sessionContentClaimId: String(support.sessionContentClaimId), sourceExcerptId: String(support.sourceExcerptId), sourceSnapshotId: support.sourceSnapshotId ? String(support.sourceSnapshotId) : undefined, entailment: support.entailment, verifierVersion: support.verifierVersion, conflictStatus: support.conflictStatus, evidenceStatus: support.evidenceStatus }] : []),
+      sourceSnapshots: loaded.flatMap(({ snapshot }) => snapshot ? [{ id: String(snapshot._id), userId: snapshot.userId, sourceIdentityId: String(snapshot.sourceIdentityId), learningVoidId: String(snapshot.learningVoidId), blueprintRevisionId: snapshot.blueprintRevisionId ? String(snapshot.blueprintRevisionId) : undefined, revision: snapshot.revision, recordRevision: snapshot.recordRevision, status: snapshot.status, effectiveStatus: snapshot.effectiveStatus, rightsStatus: snapshot.rightsStatus, conflictStatus: snapshot.conflictStatus, evidencePurgedAt: snapshot.evidencePurgedAt }] : []),
+      sourceExcerpts: loaded.flatMap(({ excerpt }) => excerpt ? [{ id: String(excerpt._id), userId: excerpt.userId, sourceSnapshotId: String(excerpt.sourceSnapshotId), locator: excerpt.locator, privateLocator: excerpt.privateLocator, rightsStatus: excerpt.rightsStatus, evidencePurgedAt: excerpt.evidencePurgedAt }] : []),
+      sourceIdentities: loaded.flatMap(({ identity }) => identity ? [{ id: String(identity._id), userId: identity.userId, learningVoidId: String(identity.learningVoidId), origin: identity.origin, tombstonedAt: identity.tombstonedAt }] : []),
+    },
+  })
+}
+
+function rowToComposed(row: Doc<'learningThreadActivities'>): ComposedAdaptiveActivityPlan {
+  return {
+    planVersion: row.planVersion,
+    replayVersion: row.replayVersion,
+    contractVersion: row.contractVersion,
+    rendererVersion: row.rendererVersion,
+    validationVersion: row.validationVersion,
+    sequenceValidationVersion: row.sequenceValidationVersion,
+    fallbackVersion: row.fallbackVersion,
+    activityId: row.activityId,
+    threadId: String(row.threadId),
+    boundaryOrdinal: row.boundaryOrdinal,
+    planRevision: row.planRevision,
+    activityClass: row.activityClass,
+    intent: row.intent,
+    objectiveId: row.objectiveId ? String(row.objectiveId) : null,
+    purpose: row.purpose,
+    reasonCode: row.reasonCode,
+    primitivePlan: row.primitivePlan,
+    requiredAction: row.requiredAction,
+    evaluationContract: row.evaluationContract,
+    fallback: row.fallback,
+    accessibilityMetadata: row.accessibilityMetadata,
+    pins: {
+      learningVoidId: row.learningVoidId ? String(row.learningVoidId) : null,
+      blueprintRevisionId: row.blueprintRevisionId ? String(row.blueprintRevisionId) : null,
+      objectiveId: row.objectiveId ? String(row.objectiveId) : null,
+      sessionContentId: row.sessionContentId ? String(row.sessionContentId) : null,
+    },
+    evidenceReferences: row.evidenceReferences.map(reference => ({ ...reference, claimId: String(reference.claimId), supportId: String(reference.supportId), sourceSnapshotId: String(reference.sourceSnapshotId) })),
+    generationInputs: row.generationInputs,
+    decisionInputs: row.decisionInputs,
+    replacesActivityId: row.replacesActivityId,
+    canonicalInputSnapshot: row.canonicalInputSnapshot,
+    inputDigest: row.inputDigest,
+  }
+}
+
+export const commitActivityPlan = internalMutation({
+  args: commitAdaptiveActivityPlanValidator.fields,
+  handler: async (ctx, args) => {
+    const userId = await requireAuth(ctx)
+    const thread = await ctx.db.get(args.threadId)
+    if (!thread || thread.userId !== userId) throw new Error('Thread not found')
+    if (thread.intent !== args.intent || thread.availableTime !== args.decisionInputs.availableTime) throw new Error('Thread plan inputs are stale')
+    if (args.activityClass === 'factual' && (thread.authorityKind !== 'v2_mission' || thread.learningVoidId !== args.learningVoidId)) {
+      throw new Error('Thread factual authority does not match the activity')
+    }
+
+    const duplicate = await ctx.db.query('learningThreadActivities')
+      .withIndex('by_userId_and_activityId', q => q.eq('userId', userId).eq('activityId', args.activityId))
+      .unique()
+    if (duplicate) throw new Error('Activity identity already exists')
+    const latest = await ctx.db.query('learningThreadActivities')
+      .withIndex('by_userId_and_threadId_and_boundaryOrdinal', q => q.eq('userId', userId).eq('threadId', thread._id))
+      .order('desc')
+      .first()
+    if (!latest) {
+      if (args.boundaryOrdinal !== 1 || args.planRevision !== 1 || args.replacesActivityId !== undefined) throw new Error('Activity must begin at the first boundary and plan revision')
+    }
+    else if (args.boundaryOrdinal !== latest.boundaryOrdinal + 1 || args.planRevision !== latest.planRevision + 1 || args.replacesActivityId !== latest.activityId) {
+      throw new Error('Replacement must create the next boundary and plan revision')
+    }
+
+    const authority = await requireEvidenceAuthority(ctx, userId, args)
+    const composed = await composeAdaptiveActivityPlan({
+      activityId: args.activityId,
+      threadId: String(thread._id),
+      boundaryOrdinal: args.boundaryOrdinal,
+      planRevision: args.planRevision,
+      activityClass: args.activityClass,
+      intent: args.intent,
+      objectiveId: args.objectiveId ? String(args.objectiveId) : null,
+      purpose: args.purpose,
+      reasonCode: args.reasonCode,
+      primitiveSequence: args.primitiveSequence,
+      requiredAction: args.requiredAction,
+      evaluationContract: args.evaluationContract,
+      accessibilityMetadata: args.accessibilityMetadata,
+      pins: {
+        learningVoidId: args.learningVoidId ? String(args.learningVoidId) : null,
+        blueprintRevisionId: args.blueprintRevisionId ? String(args.blueprintRevisionId) : null,
+        objectiveId: args.objectiveId ? String(args.objectiveId) : null,
+        sessionContentId: args.sessionContentId ? String(args.sessionContentId) : null,
+      },
+      evidenceReferences: authority.evidenceReferences,
+      generationInputs: authority.generationInputs,
+      decisionInputs: {
+        ...args.decisionInputs,
+        intentRevision: thread.revision,
+        sourceInputs: authority.evidenceReferences.map(reference => ({ sourceSnapshotId: reference.sourceSnapshotId, effectiveStatus: reference.sourceEffectiveStatus, recordRevision: reference.sourceRecordRevision })),
+      },
+      replacesActivityId: args.replacesActivityId,
+    })
+    const now = Date.now()
+    const activityDocumentId = await ctx.db.insert('learningThreadActivities', {
+      userId,
+      threadId: thread._id,
+      activityId: composed.activityId,
+      boundaryOrdinal: composed.boundaryOrdinal,
+      planRevision: composed.planRevision,
+      activityClass: composed.activityClass,
+      status: 'eligible',
+      planVersion: composed.planVersion,
+      replayVersion: composed.replayVersion,
+      contractVersion: composed.contractVersion,
+      rendererVersion: composed.rendererVersion,
+      validationVersion: composed.validationVersion,
+      sequenceValidationVersion: composed.sequenceValidationVersion,
+      fallbackVersion: composed.fallbackVersion,
+      intent: composed.intent,
+      objectiveId: args.objectiveId,
+      purpose: composed.purpose,
+      reasonCode: composed.reasonCode,
+      primitivePlan: composed.primitivePlan,
+      requiredAction: composed.requiredAction,
+      evaluationContract: composed.evaluationContract,
+      fallback: composed.fallback,
+      accessibilityMetadata: composed.accessibilityMetadata,
+      learningVoidId: args.learningVoidId,
+      blueprintRevisionId: args.blueprintRevisionId,
+      sessionContentId: args.sessionContentId,
+      evidenceReferences: args.evidenceReferences.map((reference, index) => {
+        const pinned = authority.evidenceReferences[index]!
+        return {
+          claimId: reference.claimId,
+          supportId: reference.supportId,
+          sourceSnapshotId: reference.sourceSnapshotId,
+          sourceSnapshotRevision: pinned.sourceSnapshotRevision,
+          sourceRecordRevision: pinned.sourceRecordRevision,
+          sourceEffectiveStatus: pinned.sourceEffectiveStatus,
+          verifierVersion: pinned.verifierVersion,
+          integrityState: pinned.integrityState,
+        }
+      }),
+      generationInputs: composed.generationInputs,
+      decisionInputs: composed.decisionInputs,
+      replacesActivityId: composed.replacesActivityId,
+      canonicalInputSnapshot: composed.canonicalInputSnapshot,
+      inputDigest: composed.inputDigest,
+      createdAt: now,
+      updatedAt: now,
+    })
+    await ctx.db.patch(thread._id, { currentActivityId: activityDocumentId, revision: thread.revision + 1, updatedAt: now })
+    return { activityDocumentId, activityId: composed.activityId, boundaryOrdinal: composed.boundaryOrdinal, planRevision: composed.planRevision, inputDigest: composed.inputDigest, replayable: true as const }
+  },
+})
+
+export const replayActivityPlan = internalQuery({
+  args: { activityId: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await requireAuth(ctx)
+    const row = await ctx.db.query('learningThreadActivities')
+      .withIndex('by_userId_and_activityId', q => q.eq('userId', userId).eq('activityId', args.activityId))
+      .unique()
+    if (!row) return { ok: false as const, reason: 'activity_not_found' as const }
+    return await replayAdaptiveActivityPlan(rowToComposed(row))
+  },
+})

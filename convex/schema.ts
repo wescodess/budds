@@ -1,5 +1,6 @@
 import { defineSchema, defineTable } from 'convex/server'
 import { v } from 'convex/values'
+import { learningThreadActivityFields, learningThreadFields } from '../shared/adaptive-learn-storage-manifest'
 
 export default defineSchema({
   users: defineTable({
@@ -1341,6 +1342,15 @@ export default defineSchema({
 
   // Learn Anything V2 is deliberately additive. These records do not share
   // mutable V1 course/session shapes and are unreachable until the V2 gate.
+  learningThreads: defineTable(learningThreadFields)
+    .index('by_userId', ['userId'])
+    .index('by_userId_and_lifecycle_and_updatedAt', ['userId', 'lifecycle', 'updatedAt'])
+    .index('by_userId_and_updatedAt', ['userId', 'updatedAt']),
+  learningThreadActivities: defineTable(learningThreadActivityFields)
+    .index('by_userId', ['userId'])
+    .index('by_userId_and_threadId_and_boundaryOrdinal', ['userId', 'threadId', 'boundaryOrdinal'])
+    .index('by_userId_and_activityId', ['userId', 'activityId'])
+    .index('by_userId_and_status_and_updatedAt', ['userId', 'status', 'updatedAt']),
   learningVoids: defineTable({ userId: v.string(), folderId: v.id('folders'), title: v.string(), status: v.union(v.literal('draft'), v.literal('sourcing'), v.literal('source_review'), v.literal('map_review'), v.literal('calibration'), v.literal('plan_review'), v.literal('scheduled'), v.literal('active'), v.literal('completed'), v.literal('paused'), v.literal('needs_attention'), v.literal('failed'), v.literal('archived')), revision: v.number(), activeBlueprintRevisionId: v.optional(v.id('learnBlueprintRevisions')), lastIdempotencyKey: v.optional(v.string()), legacyCourseId: v.optional(v.id('courses')), legacyUpgradeIdempotencyKey: v.optional(v.string()), legacyUpgradeRequestFingerprint: v.optional(v.string()), legacySourcePolicy: v.optional(v.union(v.literal('folder_only'), v.literal('folder_plus_web'), v.literal('web_only'))), createdAt: v.number(), updatedAt: v.number() }).index('by_userId', ['userId']).index('by_userId_and_folderId', ['userId', 'folderId']).index('by_userId_and_status', ['userId', 'status']).index('by_userId_and_legacyCourseId', ['userId', 'legacyCourseId']).index('by_userId_and_legacyUpgradeIdempotencyKey', ['userId', 'legacyUpgradeIdempotencyKey']),
   learnBlueprints: defineTable({ userId: v.string(), learningVoidId: v.id('learningVoids'), revision: v.number(), createdAt: v.number() }).index('by_userId', ['userId']).index('by_userId_and_learningVoidId', ['userId', 'learningVoidId']),
   learnBlueprintRevisions: defineTable({ userId: v.string(), blueprintId: v.id('learnBlueprints'), learningVoidId: v.id('learningVoids'), revision: v.number(), recordRevision: v.number(), status: v.union(v.literal('draft'), v.literal('source_review'), v.literal('map_review'), v.literal('accepted'), v.literal('active'), v.literal('superseded')), intentVersion: v.optional(v.literal('learn-v2.blueprint-intent.v1')), desiredOutcome: v.optional(v.string()), mode: v.optional(v.union(v.literal('understand'), v.literal('prepare'), v.literal('apply'))), desiredDepth: v.optional(v.union(v.literal('overview'), v.literal('working'), v.literal('deep'))), sourcePolicy: v.optional(v.union(v.literal('folder_only'), v.literal('folder_plus_web'), v.literal('web_only'))), targetLocalDate: v.optional(v.string()), sessionMinutes: v.optional(v.number()), generationInputDigest: v.optional(v.string()), generationSupportingSourceSnapshotIds: v.optional(v.array(v.id('learnSourceSnapshots'))), generatorVersion: v.optional(v.string()), generationProvider: v.optional(v.literal('openrouter_via_cloudflare_ai_gateway')), generationModel: v.optional(v.string()), generationRequestId: v.optional(v.string()), generatedAt: v.optional(v.number()), acceptedAt: v.optional(v.number()), createdAt: v.number(), updatedAt: v.number() }).index('by_userId', ['userId']).index('by_userId_and_blueprintId_and_revision', ['userId', 'blueprintId', 'revision']).index('by_userId_and_learningVoidId', ['userId', 'learningVoidId']).index('by_userId_and_learningVoidId_and_status', ['userId', 'learningVoidId', 'status']),

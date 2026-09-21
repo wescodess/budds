@@ -5,6 +5,7 @@ import { api, internal } from './_generated/api'
 import schema from './schema'
 import { backoffMs } from './accountDeletion'
 import { tokenIdentifierForAuthUser } from './auth'
+import { composeAdaptiveActivityPlan } from '../shared/learn-adaptive-activity-plan'
 
 const modules = import.meta.glob('./**/*.ts')
 
@@ -106,6 +107,48 @@ async function seedUserData(
 }
 
 describe('accountDeletion.deleteAccountCascade', () => {
+  test('[P0] deletes Adaptive Learn activity children before thread parents in bounded batches', async () => {
+    const t = convexTest(schema, modules)
+    const ids = await t.run(async (ctx) => {
+      const now = Date.now()
+      const threadId = await ctx.db.insert('learningThreads', {
+        userId: TEST_IDENTITY.tokenIdentifier,
+        originalNeed: 'Shape a learning goal.',
+        intent: 'explore',
+        availableTime: '15',
+        authorityKind: 'standalone',
+        sourceScope: { kind: 'none' },
+        evidenceState: 'none',
+        lifecycle: 'ready',
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+      })
+      const plan = await composeAdaptiveActivityPlan({
+        activityId: 'delete-activity', threadId: String(threadId), boundaryOrdinal: 1, planRevision: 1, activityClass: 'non_factual', intent: 'explore', objectiveId: null,
+        purpose: 'Clarify the learning goal.', reasonCode: 'goal_shaping', primitiveSequence: [{ type: 'diagnostic_prompt', action: 'submit_response', props: { prompt: 'What do you want to learn?', responseFormat: 'short_text', assistance: 'none' } }],
+        requiredAction: { kind: 'submit_response', label: 'Continue' }, evaluationContract: { version: 'learn-adaptive.evaluation.v1', kind: 'learner_response', responseFormat: 'short_text', passingScorePercent: null },
+        accessibilityMetadata: { heading: 'Learning goal', instructions: 'Answer the prompt.', focusTargetTestId: 'learn-primitive-diagnostic-prompt', liveRegionMode: 'polite' },
+        pins: { learningVoidId: null, blueprintRevisionId: null, objectiveId: null, sessionContentId: null }, evidenceReferences: [], generationInputs: { sessionContentRevision: null, sessionContentInputDigest: null, generatorVersion: null },
+        decisionInputs: { intentRevision: 1, routerVersion: 'learn-adaptive.router.v1', availableTime: '15', sourceState: 'none', sourceInputs: [], priorActivityId: null, priorAttemptId: null, priorOutcome: null, assistance: 'none', confidence: null },
+      })
+      const activityId = await ctx.db.insert('learningThreadActivities', {
+        userId: TEST_IDENTITY.tokenIdentifier, threadId, activityId: plan.activityId, boundaryOrdinal: plan.boundaryOrdinal, planRevision: plan.planRevision, activityClass: plan.activityClass, status: 'eligible',
+        planVersion: plan.planVersion, replayVersion: plan.replayVersion, contractVersion: plan.contractVersion, rendererVersion: plan.rendererVersion, validationVersion: plan.validationVersion, sequenceValidationVersion: plan.sequenceValidationVersion, fallbackVersion: plan.fallbackVersion,
+        intent: plan.intent, objectiveId: null, purpose: plan.purpose, reasonCode: plan.reasonCode, primitivePlan: plan.primitivePlan, requiredAction: plan.requiredAction, evaluationContract: plan.evaluationContract, fallback: plan.fallback, accessibilityMetadata: plan.accessibilityMetadata,
+        learningVoidId: null, blueprintRevisionId: null, sessionContentId: null, evidenceReferences: [], generationInputs: plan.generationInputs, decisionInputs: plan.decisionInputs, replacesActivityId: null,
+        canonicalInputSnapshot: plan.canonicalInputSnapshot, inputDigest: plan.inputDigest, createdAt: now, updatedAt: now,
+      })
+      await ctx.db.insert('accountDeletionJobs', { userId: TEST_IDENTITY.tokenIdentifier, status: 'active', phase: 'learnV2', startedAt: now, updatedAt: now })
+      return { threadId, activityId }
+    })
+
+    await t.mutation(internal.accountDeletion.runDeletionBatch, { userId: TEST_IDENTITY.tokenIdentifier })
+    expect(await t.run(ctx => ctx.db.get(ids.activityId))).toBeNull()
+    expect(await t.run(ctx => ctx.db.get(ids.threadId))).not.toBeNull()
+    await t.mutation(internal.accountDeletion.runDeletionBatch, { userId: TEST_IDENTITY.tokenIdentifier })
+    expect(await t.run(ctx => ctx.db.get(ids.threadId))).toBeNull()
+  })
   test('deletes owner search metadata without resetting global product usage', async () => {
     const t = convexTest(schema, modules)
     const ids = await t.run(async (ctx) => {
