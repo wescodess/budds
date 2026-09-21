@@ -2,6 +2,7 @@
 import { convexTest } from 'convex-test'
 import { afterAll, afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
+import * as adaptiveCommandsModule from './learnAdaptiveCommands'
 import { executeAdaptiveThreadCommand } from './learnAdaptiveCommands'
 import schema from './schema'
 
@@ -103,8 +104,10 @@ describe('Adaptive Learn command receipts', () => {
         intent: 'understand', objectiveId: null, purpose: 'fixture', reasonCode: 'fixture', primitivePlan: [], requiredAction: { kind: 'continue', label: 'Continue' }, evaluationContract: { version: 'v1', kind: 'acknowledgement', responseFormat: 'none', passingScorePercent: null }, fallback: { version: 'learn-adaptive.text-card-fallback.v1', kind: 'text_card', title: 'Fallback', body: 'Fallback', primaryAction: { type: 'continue_safe', label: 'Continue' }, testId: 'learn-activity-fallback' }, accessibilityMetadata: { heading: 'Fixture', instructions: 'Fixture', focusTargetTestId: 'fixture', liveRegionMode: 'off' }, learningVoidId: null, blueprintRevisionId: null, sessionContentId: null, evidenceReferences: [], generationInputs: { sessionContentRevision: null, sessionContentInputDigest: null, generatorVersion: null }, decisionInputs: { intentRevision: 1, routerVersion: 'v1', availableTime: '15', sourceState: 'none', sourceInputs: [], priorActivityId: null, priorAttemptId: null, priorOutcome: null, assistance: 'none', confidence: null }, replacesActivityId: null, canonicalInputSnapshot: '{}', inputDigest: `sha256:${'3'.repeat(64)}`, createdAt: 1, updatedAt: 1,
       })
     })
-    await expect(t.withIdentity(OTHER).mutation(api.learnAdaptiveCommands.deleteThread, { threadId })).rejects.toThrow(/Thread not found/)
-    await expect(owner.mutation(api.learnAdaptiveCommands.deleteThread, { threadId })).resolves.toMatchObject({ status: 'queued' })
+    expect('deleteThread' in adaptiveCommandsModule).toBe(false)
+    expect('requestThreadDeletion' in adaptiveCommandsModule).toBe(false)
+    await expect(t.withIdentity(OTHER).mutation(api.learnAdaptive.requestThreadDeletion, { threadId })).rejects.toThrow(/Thread not found/)
+    await expect(owner.mutation(api.learnAdaptive.requestThreadDeletion, { threadId })).resolves.toMatchObject({ status: 'queued' })
     await expect(owner.mutation(ctx => executeAdaptiveThreadCommand(ctx, command))).resolves.toEqual(committed)
     await expect(owner.mutation(ctx => executeAdaptiveThreadCommand(ctx, { ...command, payload: { changed: true } }))).resolves.toMatchObject({ kind: 'conflict', code: 'duplicate_key' })
     await expect(owner.mutation(ctx => executeAdaptiveThreadCommand(ctx, { ...command, idempotencyKey: 'delete-new-key-0001' }))).rejects.toThrow(/deletion is in progress/)
@@ -120,7 +123,7 @@ describe('Adaptive Learn command receipts', () => {
     const { t, threadId, owner } = await setup()
     await owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: false })
     process.env.LEARN_V2_ENABLED = 'false'
-    await expect(owner.mutation(api.learnAdaptiveCommands.deleteThread, { threadId })).resolves.toMatchObject({ status: 'queued' })
+    await expect(owner.mutation(api.learnAdaptive.requestThreadDeletion, { threadId })).resolves.toMatchObject({ status: 'queued' })
     await t.finishAllScheduledFunctions(vi.runAllTimers)
     expect(await t.run(ctx => ctx.db.get(threadId))).toBeNull()
   })

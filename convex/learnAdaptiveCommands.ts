@@ -1,10 +1,9 @@
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
-import { internalMutation, mutation, type MutationCtx } from './_generated/server'
+import { internalMutation, type MutationCtx } from './_generated/server'
 import { prepareAdaptiveCommand } from '../shared/adaptive-command-authority'
 import { requireAdaptiveMutationAccess } from './lib/adaptiveLearnAccess'
-import { requireAuth } from './lib/auth'
 
 const RECEIPT_DETAIL_TTL_MS = 30 * 24 * 60 * 60 * 1000
 const MAX_RESULT_REFERENCE_CHARS = 4_096
@@ -146,28 +145,22 @@ export async function deleteAdaptiveThreadAuthorityBatch(ctx: MutationCtx, job: 
   return { phase: 'receipts' as const, deleted: receipts.length, done: true, jobId: job._id }
 }
 
-export const deleteThread = mutation({
-  args: { threadId: v.id('learningThreads') },
-  handler: async (ctx, args) => {
-    // Maintenance uses base identity and deliberately bypasses rollout gates so
-    // disabling Adaptive Learn cannot strand user-owned data.
-    const userId = await requireAuth(ctx)
-    const existing = await ctx.db.query('learnAdaptiveThreadDeletionJobs')
-      .withIndex('by_userId_and_threadId', q => q.eq('userId', userId).eq('threadId', args.threadId))
-      .unique()
-    if (existing) return { jobId: existing._id, status: existing.status }
+export async function initiateAdaptiveThreadDeletion(ctx: MutationCtx, userId: string, threadId: Id<'learningThreads'>) {
+  const existing = await ctx.db.query('learnAdaptiveThreadDeletionJobs')
+    .withIndex('by_userId_and_threadId', q => q.eq('userId', userId).eq('threadId', threadId))
+    .unique()
+  if (existing) return { jobId: existing._id, status: existing.status }
 
-    const thread = await ctx.db.get(args.threadId)
-    if (!thread || thread.userId !== userId) throw new Error('Thread not found')
-    const now = Date.now()
-    const jobId = await ctx.db.insert('learnAdaptiveThreadDeletionJobs', {
-      userId, threadId: thread._id, phase: 'children', status: 'queued', attempts: 0, createdAt: now, updatedAt: now,
-    })
-    await ctx.db.patch(thread._id, { deletionStartedAt: now })
-    await ctx.scheduler.runAfter(0, internal.learnAdaptiveCommands.runThreadDeletionJob, { jobId })
-    return { jobId, status: 'queued' as const }
-  },
-})
+  const thread = await ctx.db.get(threadId)
+  if (!thread || thread.userId !== userId) throw new Error('Thread not found')
+  const now = Date.now()
+  const jobId = await ctx.db.insert('learnAdaptiveThreadDeletionJobs', {
+    userId, threadId: thread._id, phase: 'children', status: 'queued', attempts: 0, createdAt: now, updatedAt: now,
+  })
+  await ctx.db.patch(thread._id, { deletionStartedAt: now })
+  await ctx.scheduler.runAfter(0, internal.learnAdaptiveCommands.runThreadDeletionJob, { jobId })
+  return { jobId, status: 'queued' as const }
+}
 
 export const runThreadDeletionJob = internalMutation({
   args: { jobId: v.id('learnAdaptiveThreadDeletionJobs') },

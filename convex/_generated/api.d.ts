@@ -39,6 +39,7 @@ import type * as folderIcons from "../folderIcons.js";
 import type * as folderPalette from "../folderPalette.js";
 import type * as folders from "../folders.js";
 import type * as http from "../http.js";
+import type * as learnAdaptive from "../learnAdaptive.js";
 import type * as learnAdaptiveActivities from "../learnAdaptiveActivities.js";
 import type * as learnAdaptiveAccess from "../learnAdaptiveAccess.js";
 import type * as learnAdaptiveCommands from "../learnAdaptiveCommands.js";
@@ -124,6 +125,7 @@ declare const fullApi: ApiFromModules<{
   folderPalette: typeof folderPalette;
   folders: typeof folders;
   http: typeof http;
+  learnAdaptive: typeof learnAdaptive;
   learnAdaptiveActivities: typeof learnAdaptiveActivities;
   learnAdaptiveAccess: typeof learnAdaptiveAccess;
   learnAdaptiveCommands: typeof learnAdaptiveCommands;
