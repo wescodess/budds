@@ -84,6 +84,25 @@ function planArgs(ids: Awaited<ReturnType<typeof fixture>>['ids'], overrides: Re
 }
 
 describe('Adaptive activity plan authority', () => {
+  test('rejects a first activity while the initial clarification is pending', async () => {
+    const { t, ids } = await fixture()
+    await t.run(ctx => ctx.db.patch(ids.threadId, {
+      initialDecision: {
+        decisionVersion: 'learn-adaptive.initial-decision.v1',
+        templateVersion: 'learn-adaptive.clarification-templates.v1',
+        inputDigest: `sha256:${'b'.repeat(64)}`,
+        inputSnapshot: { intent: 'understand', availableTime: '25', authorityKind: 'v2_mission', sourceKind: 'folder', evidenceState: 'ready', outcomeProvenance: 'need_fallback', threadRevision: 1 },
+        status: 'pending',
+        reasonCode: 'outcome_needed_for_first_move',
+        continuationKind: 'ready_v2',
+        questionKey: 'useful_outcome',
+        preparedAt: 1,
+      },
+    }))
+    await expect(t.withIdentity({ tokenIdentifier: ownerId }).mutation(internal.learnAdaptiveActivities.commitActivityPlan, planArgs(ids))).rejects.toThrow(/initial clarification/i)
+    expect(await t.run(ctx => ctx.db.query('learningThreadActivities').withIndex('by_userId_and_threadId_and_boundaryOrdinal', q => q.eq('userId', ownerId).eq('threadId', ids.threadId)).take(1))).toEqual([])
+  })
+
   test('commits a standalone non-factual plan without inventing V2 authority', async () => {
     const { t, ids } = await fixture()
     const threadId = await t.run(ctx => ctx.db.insert('learningThreads', {

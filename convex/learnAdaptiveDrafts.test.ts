@@ -31,6 +31,7 @@ describe('need-first thread draft authority', () => {
     if (created.kind !== 'created') throw new Error('expected created draft')
     expect(await owner.mutation(api.learnAdaptiveDrafts.createThreadDraft, args)).toEqual({ ...created, replayed: true })
     expect(created).toMatchObject({ kind: 'created', replayed: false, status: 'draft_created', thread: { originalNeed: args.need, outcome: args.outcome, authorityKind: 'standalone', sourceScope: { kind: 'none' }, evidenceState: 'none', lifecycle: 'draft', revision: 1 } })
+    expect((await t.run(ctx => ctx.db.get(created.thread.id)))?.outcomeProvenance).toBe('explicit')
     const rows = await t.run(async ctx => ({
       threads: await ctx.db.query('learningThreads').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(2),
       receipts: await ctx.db.query('learnActivityCommandReceipts').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(2),
@@ -58,12 +59,15 @@ describe('need-first thread draft authority', () => {
   })
 
   test('creates from a goal alone and defaults the distinct outcome projection to the exact need', async () => {
-    const { owner } = await setup()
+    const { t, owner } = await setup()
     const args = { need: 'Teach me how this mechanism works.', intent: 'understand' as const, availableTime: '15' as const, sourceScope: { kind: 'none' as const }, idempotencyKey: 'need-draft-goal-only-01' }
-    await expect(owner.mutation(api.learnAdaptiveDrafts.createThreadDraft, args)).resolves.toMatchObject({
+    const created = await owner.mutation(api.learnAdaptiveDrafts.createThreadDraft, args)
+    expect(created).toMatchObject({
       kind: 'created',
       thread: { originalNeed: args.need, outcome: args.need },
     })
+    if (created.kind !== 'created') throw new Error('expected created draft')
+    expect((await t.run(ctx => ctx.db.get(created.thread.id)))?.outcomeProvenance).toBe('need_fallback')
   })
 
   test('projects a legacy thread outcome without rewriting the aggregate', async () => {

@@ -7,6 +7,7 @@ import {
   ADAPTIVE_ACTIVITY_VALIDATION_ANALYTICS_VERSION,
 } from './learn-adaptive-activity-registry'
 import { ADAPTIVE_ACTIVITY_PLAN_VERSION, ADAPTIVE_ACTIVITY_REPLAY_VERSION } from './learn-adaptive-activity-plan'
+import { CLARIFICATION_TEMPLATE_VERSION, INITIAL_DECISION_VERSION } from './learn-adaptive-clarification'
 
 export const ADAPTIVE_LEARN_STORAGE_MANIFEST = [
   {
@@ -68,6 +69,17 @@ export const ADAPTIVE_ACTIVITY_STORAGE_REGISTRY = [
 const learningIntentValidator = v.union(v.literal('understand'), v.literal('prepare'), v.literal('build'), v.literal('master'), v.literal('refresh'), v.literal('explore'))
 const availableTimeValidator = v.union(v.literal('15'), v.literal('25'), v.literal('45'), v.literal('60'), v.literal('no_limit'))
 const evidenceStateValidator = v.union(v.literal('none'), v.literal('preparing'), v.literal('ready'), v.literal('blocked'), v.literal('stale'), v.literal('invalidated'), v.literal('unavailable'))
+const outcomeProvenanceValidator = v.union(v.literal('explicit'), v.literal('need_fallback'), v.literal('clarification'))
+const initialContinuationValidator = v.union(v.literal('ready_v2'), v.literal('standalone_non_factual'), v.literal('preparing_non_factual'), v.literal('evidence_recovery'))
+const initialDecisionInputValidator = v.object({
+  intent: learningIntentValidator,
+  availableTime: availableTimeValidator,
+  authorityKind: v.union(v.literal('standalone'), v.literal('v2_mission')),
+  sourceKind: v.union(v.literal('none'), v.literal('folder'), v.literal('document'), v.literal('url'), v.literal('pasted')),
+  evidenceState: evidenceStateValidator,
+  outcomeProvenance: outcomeProvenanceValidator,
+  threadRevision: v.number(),
+})
 
 const citedExplanationProps = v.object({ heading: v.string(), explanation: v.string(), sourceRefs: v.array(v.string()) })
 const diagnosticPromptProps = v.object({ prompt: v.string(), responseFormat: v.union(v.literal('short_text'), v.literal('long_text')), assistance: v.union(v.literal('none'), v.literal('hint_available')) })
@@ -139,6 +151,7 @@ export const learningThreadFields = {
   userId: v.string(),
   originalNeed: v.string(),
   outcome: v.optional(v.string()),
+  outcomeProvenance: v.optional(outcomeProvenanceValidator),
   intent: learningIntentValidator,
   availableTime: availableTimeValidator,
   authorityKind: v.union(v.literal('standalone'), v.literal('v2_mission')),
@@ -156,6 +169,19 @@ export const learningThreadFields = {
   currentActivityId: v.optional(v.id('learningThreadActivities')),
   unresolvedPoint: v.optional(v.string()),
   nextAction: v.optional(v.object({ kind: v.string(), label: v.string(), reasonCode: v.string(), activityId: v.string() })),
+  initialDecision: v.optional(v.object({
+    decisionVersion: v.literal(INITIAL_DECISION_VERSION),
+    templateVersion: v.literal(CLARIFICATION_TEMPLATE_VERSION),
+    inputDigest: v.string(),
+    inputSnapshot: initialDecisionInputValidator,
+    status: v.union(v.literal('not_required'), v.literal('pending'), v.literal('answered'), v.literal('skipped')),
+    reasonCode: v.union(v.literal('outcome_needed_for_first_move'), v.literal('declared_inputs_sufficient'), v.literal('evidence_requires_recovery')),
+    continuationKind: initialContinuationValidator,
+    questionKey: v.optional(v.literal('useful_outcome')),
+    answer: v.optional(v.string()),
+    preparedAt: v.number(),
+    resolvedAt: v.optional(v.number()),
+  })),
   deletionStartedAt: v.optional(v.number()),
   createdAt: v.number(),
   updatedAt: v.number(),
