@@ -192,7 +192,7 @@ describe('dataExport paginated queries', () => {
         userId: USER_A.tokenIdentifier, threadId, idempotencyKeyHash: `sha256:${'a'.repeat(64)}`,
         requestFingerprint: `sha256:${'b'.repeat(64)}`, commandName: 'endThread', targetRevision: 1,
         resultKind: 'ok', resultReference: '{"private":"command-result"}', errorReference: 'private-error',
-        createdAt: 1, resultExpiresAt: 2,
+        createdAt: 1, resultExpiresAt: 2, redactionStatus: 'pending',
       })
       return { threadId, activityId, receiptId }
     })

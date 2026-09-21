@@ -6,6 +6,10 @@ export type AdaptiveLearnPublicStatus = {
   capabilities: { entry: boolean, read: boolean, write: boolean, jobAdmission: boolean }
 }
 
+// AD-13/AD-15 intentionally defer an adaptive action/provider surface until
+// its storage manifest, lease/reconciliation, quota, and activation contracts exist.
+export const ADAPTIVE_PROVIDER_ACTIONS = 'deferred_pending_manifest_and_activation' as const
+
 const status = (allowed: boolean): AdaptiveLearnPublicStatus => ({
   kind: allowed ? 'allowed' : 'denied',
   capabilities: { entry: allowed, read: allowed, write: allowed, jobAdmission: allowed },
@@ -30,3 +34,4 @@ async function requireAdaptiveAccess(ctx: QueryCtx | MutationCtx): Promise<strin
 
 export const requireAdaptiveQueryAccess = async (ctx: QueryCtx) => await requireAdaptiveAccess(ctx)
 export const requireAdaptiveMutationAccess = async (ctx: MutationCtx) => await requireAdaptiveAccess(ctx)
+export const requireAdaptiveJobAdmission = async (ctx: MutationCtx) => await requireAdaptiveAccess(ctx)

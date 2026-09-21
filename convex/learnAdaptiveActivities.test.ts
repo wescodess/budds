@@ -60,6 +60,8 @@ async function fixture() {
 function planArgs(ids: Awaited<ReturnType<typeof fixture>>['ids'], overrides: Record<string, unknown> = {}): Infer<typeof commitAdaptiveActivityPlanValidator> {
   return {
     threadId: ids.threadId,
+    expectedRevision: 1,
+    idempotencyKey: 'activity-plan-key-0001',
     activityId: 'activity-001',
     boundaryOrdinal: 1,
     planRevision: 1,
@@ -112,8 +114,9 @@ describe('Adaptive activity plan authority', () => {
       evidenceReferences: [],
       decisionInputs: { routerVersion: 'learn-adaptive.router.v1', availableTime: '15', sourceState: 'none', priorActivityId: null, priorAttemptId: null, priorOutcome: null, assistance: 'none', confidence: null },
     }))
-
-    expect(await t.run(ctx => ctx.db.get(committed.activityDocumentId as Id<'learningThreadActivities'>))).toMatchObject({
+    expect(committed.kind).toBe('ok')
+    if (committed.kind !== 'ok') throw new Error('Expected committed activity')
+    expect(await t.run(ctx => ctx.db.get(committed.value.activityDocumentId as Id<'learningThreadActivities'>))).toMatchObject({
       activityClass: 'non_factual',
       objectiveId: null,
       learningVoidId: null,
@@ -127,10 +130,13 @@ describe('Adaptive activity plan authority', () => {
   test('commits a complete immutable factual plan and replays only its stored snapshot', async () => {
     const { t, ids } = await fixture()
     const actor = t.withIdentity({ tokenIdentifier: ownerId })
-    const committed = await actor.mutation(internal.learnAdaptiveActivities.commitActivityPlan, planArgs(ids))
-
-    expect(committed).toMatchObject({ activityId: 'activity-001', boundaryOrdinal: 1, planRevision: 1, replayable: true })
-    const row = await t.run(ctx => ctx.db.get(committed.activityDocumentId as Id<'learningThreadActivities'>))
+    const args = planArgs(ids)
+    const committed = await actor.mutation(internal.learnAdaptiveActivities.commitActivityPlan, args)
+    expect(await actor.mutation(internal.learnAdaptiveActivities.commitActivityPlan, args)).toEqual(committed)
+    expect(await t.run(ctx => ctx.db.query('learningThreadActivities').withIndex('by_userId', q => q.eq('userId', ownerId)).take(2))).toHaveLength(1)
+    expect(committed).toMatchObject({ kind: 'ok', value: { activityId: 'activity-001', boundaryOrdinal: 1, planRevision: 1, replayable: true }, revision: 2 })
+    if (committed.kind !== 'ok') throw new Error('Expected committed activity')
+    const row = await t.run(ctx => ctx.db.get(committed.value.activityDocumentId as Id<'learningThreadActivities'>))
     expect(row).toMatchObject({
       userId: ownerId,
       threadId: ids.threadId,
@@ -160,18 +166,22 @@ describe('Adaptive activity plan authority', () => {
     const { t, ids } = await fixture()
     const actor = t.withIdentity({ tokenIdentifier: ownerId })
     const first = await actor.mutation(internal.learnAdaptiveActivities.commitActivityPlan, planArgs(ids))
-    const before = await t.run(ctx => ctx.db.get(first.activityDocumentId as Id<'learningThreadActivities'>))
+    if (first.kind !== 'ok') throw new Error('Expected first activity')
+    const before = await t.run(ctx => ctx.db.get(first.value.activityDocumentId as Id<'learningThreadActivities'>))
     const second = await actor.mutation(internal.learnAdaptiveActivities.commitActivityPlan, planArgs(ids, {
       activityId: 'activity-002',
+      expectedRevision: 2,
+      idempotencyKey: 'activity-plan-key-0002',
       boundaryOrdinal: 2,
       planRevision: 2,
       replacesActivityId: 'activity-001',
       reasonCode: 'learner_requested_replacement',
     }))
 
-    expect(second).toMatchObject({ activityId: 'activity-002', boundaryOrdinal: 2, planRevision: 2 })
-    expect(await t.run(ctx => ctx.db.get(first.activityDocumentId as Id<'learningThreadActivities'>))).toEqual(before)
-    expect(await t.run(ctx => ctx.db.get(ids.threadId))).toMatchObject({ currentActivityId: second.activityDocumentId, revision: 3 })
+    expect(second).toMatchObject({ kind: 'ok', value: { activityId: 'activity-002', boundaryOrdinal: 2, planRevision: 2 }, revision: 3 })
+    if (second.kind !== 'ok') throw new Error('Expected replacement activity')
+    expect(await t.run(ctx => ctx.db.get(first.value.activityDocumentId as Id<'learningThreadActivities'>))).toEqual(before)
+    expect(await t.run(ctx => ctx.db.get(ids.threadId))).toMatchObject({ currentActivityId: second.value.activityDocumentId, revision: 3 })
   })
 
   test('rejects forged ownership, evidence, and revision boundaries before persistence', async () => {
@@ -184,8 +194,19 @@ describe('Adaptive activity plan authority', () => {
     await expect(actor.mutation(internal.learnAdaptiveActivities.commitActivityPlan, planArgs(ids, { evidenceReferences: [] })))
       .rejects.toThrow('Factual activity requires between 1 and 16 evidence references')
     await expect(actor.mutation(internal.learnAdaptiveActivities.commitActivityPlan, planArgs(ids, { boundaryOrdinal: 2 })))
-      .rejects.toThrow('first boundary')
+      .resolves.toMatchObject({ kind: 'conflict', code: 'activity_boundary_changed', actualRevision: 1 })
     expect(await t.run(ctx => ctx.db.query('learningThreadActivities').withIndex('by_userId', q => q.eq('userId', ownerId)).take(2))).toEqual([])
+  })
+
+  test('persists and replays a stale-revision result before activity boundary validation', async () => {
+    const { t, ids } = await fixture()
+    const actor = t.withIdentity({ tokenIdentifier: ownerId })
+    const args = planArgs(ids, { expectedRevision: 2, boundaryOrdinal: 99, idempotencyKey: 'stale-plan-key-0001' })
+    const first = await actor.mutation(internal.learnAdaptiveActivities.commitActivityPlan, args)
+    expect(first).toEqual({ kind: 'conflict', code: 'stale_revision', expectedRevision: 2, actualRevision: 1, authority: 'convex' })
+    expect(await actor.mutation(internal.learnAdaptiveActivities.commitActivityPlan, args)).toEqual(first)
+    expect(await t.run(ctx => ctx.db.query('learningThreadActivities').withIndex('by_userId', q => q.eq('userId', ownerId)).take(1))).toEqual([])
+    expect(await t.run(ctx => ctx.db.query('learnActivityCommandReceipts').withIndex('by_userId', q => q.eq('userId', ownerId)).take(2))).toHaveLength(1)
   })
 
   test('rejects a factual plan when its blueprint revision is no longer authoritative', async () => {
@@ -213,11 +234,12 @@ describe('Adaptive activity plan authority', () => {
     const { t, ids } = await fixture()
     const actor = t.withIdentity({ tokenIdentifier: ownerId })
     const committed = await actor.mutation(internal.learnAdaptiveActivities.commitActivityPlan, planArgs(ids))
-    await t.run(ctx => ctx.db.patch(committed.activityDocumentId as Id<'learningThreadActivities'>, { purpose: 'Tampered purpose' }))
+    if (committed.kind !== 'ok') throw new Error('Expected committed activity')
+    await t.run(ctx => ctx.db.patch(committed.value.activityDocumentId as Id<'learningThreadActivities'>, { purpose: 'Tampered purpose' }))
 
     expect(await actor.query(internal.learnAdaptiveActivities.replayActivityPlan, { activityId: 'activity-001' }))
       .toEqual({ ok: false, reason: 'replay_integrity_failed' })
-    expect(await t.run(ctx => ctx.db.get(committed.activityDocumentId as Id<'learningThreadActivities'>)))
-      .toMatchObject({ purpose: 'Tampered purpose', inputDigest: committed.inputDigest })
+    expect(await t.run(ctx => ctx.db.get(committed.value.activityDocumentId as Id<'learningThreadActivities'>)))
+      .toMatchObject({ purpose: 'Tampered purpose', inputDigest: committed.value.inputDigest })
   })
 })

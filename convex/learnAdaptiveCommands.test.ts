@@ -42,20 +42,59 @@ describe('Adaptive Learn command receipts', () => {
 
   test('conflicts changed requests, rejects foreign owners, and rejects client authority before writes', async () => {
     const { t, threadId, owner, other } = await setup()
-    const base = { threadId, expectedRevision: 1, idempotencyKey: 'command-key-0000001', commandName: 'submitResponse', apply: async () => ({ value: { accepted: true }, revision: 2 }) }
+    const base = { threadId, expectedRevision: 1, idempotencyKey: 'command-key-0000001', commandName: 'submitResponse', apply: async (ctx: Parameters<typeof executeAdaptiveThreadCommand>[0]) => { await ctx.db.patch(threadId, { revision: 2 }); return { value: { accepted: true }, revision: 2 } } }
     await expect(owner.mutation(ctx => executeAdaptiveThreadCommand(ctx, { ...base, payload: { serverScorePercent: 100 } }))).rejects.toThrow(/authoritative field/)
     await expect(other.mutation(ctx => executeAdaptiveThreadCommand(ctx, { ...base, payload: {} }))).rejects.toThrow(/not found/)
     await owner.mutation(ctx => executeAdaptiveThreadCommand(ctx, { ...base, payload: { responseRef: 'one' } }))
     await expect(owner.mutation(ctx => executeAdaptiveThreadCommand(ctx, { ...base, payload: { responseRef: 'two' } }))).resolves.toMatchObject({ kind: 'conflict', code: 'duplicate_key' })
-    expect(await t.run(ctx => ctx.db.get(threadId))).toMatchObject({ revision: 1 })
+    expect(await t.run(ctx => ctx.db.get(threadId))).toMatchObject({ revision: 2 })
   })
 
   test('redacts expired detail while preserving terminal receipt identity', async () => {
     const { t, threadId, owner } = await setup()
-    const args = { threadId, expectedRevision: 1, idempotencyKey: 'expired-key-0000001', commandName: 'endThread', payload: {}, apply: async () => ({ value: { ended: true }, revision: 1 }) }
+    const args = { threadId, expectedRevision: 1, idempotencyKey: 'expired-key-0000001', commandName: 'endThread', payload: {}, apply: async (ctx: Parameters<typeof executeAdaptiveThreadCommand>[0]) => { await ctx.db.patch(threadId, { revision: 2 }); return { value: { ended: true }, revision: 2 } } }
     await owner.mutation(ctx => executeAdaptiveThreadCommand(ctx, args))
     await t.mutation(internal.learnAdaptiveCommands.redactExpiredReceiptResults, { now: Date.now() + 31 * 24 * 60 * 60 * 1000 })
     await expect(owner.mutation(ctx => executeAdaptiveThreadCommand(ctx, args))).resolves.toMatchObject({ kind: 'invalid', code: 'result_expired' })
     expect(await t.run(ctx => ctx.db.query('learnActivityCommandReceipts').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).collect())).toHaveLength(1)
+  })
+
+  test('rejects a callback that reports a revision not committed to authority', async () => {
+    const { t, threadId, owner } = await setup()
+    await expect(owner.mutation(ctx => executeAdaptiveThreadCommand(ctx, {
+      threadId, expectedRevision: 1, idempotencyKey: 'fabricated-rev-0001', commandName: 'endThread', payload: {},
+      apply: async () => ({ value: { ended: true }, revision: 2 }),
+    }))).rejects.toThrow(/non-authoritative revision/)
+    expect(await t.run(ctx => ctx.db.query('learnActivityCommandReceipts').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(1))).toEqual([])
+  })
+
+  test('redacts more than one bounded batch without starving pending receipts', async () => {
+    const { t, threadId } = await setup()
+    await t.run(async (ctx) => {
+      for (let index = 0; index < 33; index++) await ctx.db.insert('learnActivityCommandReceipts', {
+        userId: OWNER.tokenIdentifier, threadId, idempotencyKeyHash: `sha256:${index.toString(16).padStart(64, '0')}`,
+        requestFingerprint: `sha256:${(index + 100).toString(16).padStart(64, '0')}`, commandName: 'fixture', targetRevision: 1,
+        resultKind: 'ok', resultReference: '{}', errorReference: null, createdAt: 1, resultExpiresAt: 2, redactionStatus: 'pending',
+      })
+    })
+    await expect(t.mutation(internal.learnAdaptiveCommands.redactExpiredReceiptResults, { now: 3 })).resolves.toEqual({ scanned: 32, redacted: 32 })
+    await expect(t.mutation(internal.learnAdaptiveCommands.redactExpiredReceiptResults, { now: 3 })).resolves.toEqual({ scanned: 1, redacted: 1 })
+    expect(await t.run(ctx => ctx.db.query('learnActivityCommandReceipts').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).collect())).toSatisfy(rows => rows.every(row => row.redactionStatus === 'redacted' && row.resultReference === null))
+  })
+
+  test('deletes one thread authority plane in bounded child-before-parent phases', async () => {
+    const { t, threadId, owner } = await setup()
+    await t.run(async (ctx) => {
+      await ctx.db.insert('learnActivityCommandReceipts', { userId: OWNER.tokenIdentifier, threadId, idempotencyKeyHash: `sha256:${'1'.repeat(64)}`, requestFingerprint: `sha256:${'2'.repeat(64)}`, commandName: 'fixture', targetRevision: 1, resultKind: 'ok', resultReference: '{}', errorReference: null, createdAt: 1, resultExpiresAt: 2, redactionStatus: 'pending' })
+      await ctx.db.insert('learningThreadActivities', {
+        userId: OWNER.tokenIdentifier, threadId, activityId: 'delete-fixture', boundaryOrdinal: 1, planRevision: 1, activityClass: 'non_factual', status: 'eligible',
+        planVersion: 'learn-adaptive.activity-plan.v1', replayVersion: 'learn-adaptive.activity-replay.v1', contractVersion: 'learn-adaptive.activity-contract.v1', rendererVersion: 'learn-adaptive.renderer.v1', validationVersion: 'learn-adaptive.primitive-validation.v1', sequenceValidationVersion: 'learn-adaptive.primitive-sequence-validation.v1', fallbackVersion: 'learn-adaptive.text-card-fallback.v1',
+        intent: 'understand', objectiveId: null, purpose: 'fixture', reasonCode: 'fixture', primitivePlan: [], requiredAction: { kind: 'continue', label: 'Continue' }, evaluationContract: { version: 'v1', kind: 'acknowledgement', responseFormat: 'none', passingScorePercent: null }, fallback: { version: 'learn-adaptive.text-card-fallback.v1', kind: 'text_card', title: 'Fallback', body: 'Fallback', primaryAction: { type: 'continue_safe', label: 'Continue' }, testId: 'learn-activity-fallback' }, accessibilityMetadata: { heading: 'Fixture', instructions: 'Fixture', focusTargetTestId: 'fixture', liveRegionMode: 'off' }, learningVoidId: null, blueprintRevisionId: null, sessionContentId: null, evidenceReferences: [], generationInputs: { sessionContentRevision: null, sessionContentInputDigest: null, generatorVersion: null }, decisionInputs: { intentRevision: 1, routerVersion: 'v1', availableTime: '15', sourceState: 'none', sourceInputs: [], priorActivityId: null, priorAttemptId: null, priorOutcome: null, assistance: 'none', confidence: null }, replacesActivityId: null, canonicalInputSnapshot: '{}', inputDigest: `sha256:${'3'.repeat(64)}`, createdAt: 1, updatedAt: 1,
+      })
+    })
+    await expect(owner.mutation(internal.learnAdaptiveCommands.deleteThreadAuthorityRows, { threadId })).resolves.toMatchObject({ phase: 'receipts', done: false })
+    await expect(owner.mutation(internal.learnAdaptiveCommands.deleteThreadAuthorityRows, { threadId })).resolves.toMatchObject({ phase: 'activities', done: false })
+    await expect(owner.mutation(internal.learnAdaptiveCommands.deleteThreadAuthorityRows, { threadId })).resolves.toMatchObject({ phase: 'thread', done: true })
+    expect(await t.run(ctx => ctx.db.get(threadId))).toBeNull()
   })
 })

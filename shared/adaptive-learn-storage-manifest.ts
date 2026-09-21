@@ -187,11 +187,14 @@ export const learnActivityCommandReceiptFields = {
   errorReference: v.union(v.string(), v.null()),
   createdAt: v.number(),
   resultExpiresAt: v.number(),
+  redactionStatus: v.union(v.literal('pending'), v.literal('redacted')),
   resultRedactedAt: v.optional(v.number()),
 }
 
 export const commitAdaptiveActivityPlanValidator = v.object({
   threadId: v.id('learningThreads'),
+  expectedRevision: v.number(),
+  idempotencyKey: v.string(),
   activityId: v.string(),
   boundaryOrdinal: v.number(),
   planRevision: v.number(),

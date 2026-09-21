@@ -8,8 +8,9 @@ import {
   type ComposedAdaptiveActivityPlan,
 } from '../shared/learn-adaptive-activity-plan'
 import { projectAdaptiveClaimAuthority } from '../shared/adaptive-claim-adapter'
-import { requireAdaptiveMutationAccess, requireAdaptiveQueryAccess } from './lib/adaptiveLearnAccess'
+import { requireAdaptiveQueryAccess } from './lib/adaptiveLearnAccess'
 import { requireActiveBlueprint } from './lib/learnV2BlueprintAuthority'
+import { AdaptiveCommandConflict, executeAdaptiveThreadCommand } from './learnAdaptiveCommands'
 
 type CommitArgs = Infer<typeof commitAdaptiveActivityPlanValidator>
 
@@ -111,30 +112,35 @@ function rowToComposed(row: Doc<'learningThreadActivities'>): ComposedAdaptiveAc
 export const commitActivityPlan = internalMutation({
   args: commitAdaptiveActivityPlanValidator.fields,
   handler: async (ctx, args) => {
-    const userId = await requireAdaptiveMutationAccess(ctx)
-    const thread = await ctx.db.get(args.threadId)
-    if (!thread || thread.userId !== userId) throw new Error('Thread not found')
+    const { expectedRevision, idempotencyKey, ...payload } = args
+    return await executeAdaptiveThreadCommand(ctx, {
+      threadId: args.threadId,
+      expectedRevision,
+      idempotencyKey,
+      commandName: 'commitActivityPlan',
+      payload,
+      apply: async (commandCtx, thread, userId) => {
     if (thread.intent !== args.intent || thread.availableTime !== args.decisionInputs.availableTime) throw new Error('Thread plan inputs are stale')
     if (args.activityClass === 'factual' && (thread.authorityKind !== 'v2_mission' || thread.learningVoidId !== args.learningVoidId)) {
       throw new Error('Thread factual authority does not match the activity')
     }
 
-    const duplicate = await ctx.db.query('learningThreadActivities')
+    const duplicate = await commandCtx.db.query('learningThreadActivities')
       .withIndex('by_userId_and_activityId', q => q.eq('userId', userId).eq('activityId', args.activityId))
       .unique()
     if (duplicate) throw new Error('Activity identity already exists')
-    const latest = await ctx.db.query('learningThreadActivities')
+    const latest = await commandCtx.db.query('learningThreadActivities')
       .withIndex('by_userId_and_threadId_and_boundaryOrdinal', q => q.eq('userId', userId).eq('threadId', thread._id))
       .order('desc')
       .first()
     if (!latest) {
-      if (args.boundaryOrdinal !== 1 || args.planRevision !== 1 || args.replacesActivityId !== undefined) throw new Error('Activity must begin at the first boundary and plan revision')
+      if (args.boundaryOrdinal !== 1 || args.planRevision !== 1 || args.replacesActivityId !== undefined) throw new AdaptiveCommandConflict('activity_boundary_changed', thread.revision)
     }
     else if (args.boundaryOrdinal !== latest.boundaryOrdinal + 1 || args.planRevision !== latest.planRevision + 1 || args.replacesActivityId !== latest.activityId) {
-      throw new Error('Replacement must create the next boundary and plan revision')
+      throw new AdaptiveCommandConflict('activity_boundary_changed', thread.revision)
     }
 
-    const authority = await requireEvidenceAuthority(ctx, userId, args)
+    const authority = await requireEvidenceAuthority(commandCtx, userId, args)
     const composed = await composeAdaptiveActivityPlan({
       activityId: args.activityId,
       threadId: String(thread._id),
@@ -165,7 +171,7 @@ export const commitActivityPlan = internalMutation({
       replacesActivityId: args.replacesActivityId,
     })
     const now = Date.now()
-    const activityDocumentId = await ctx.db.insert('learningThreadActivities', {
+    const activityDocumentId = await commandCtx.db.insert('learningThreadActivities', {
       userId,
       threadId: thread._id,
       activityId: composed.activityId,
@@ -213,8 +219,14 @@ export const commitActivityPlan = internalMutation({
       createdAt: now,
       updatedAt: now,
     })
-    await ctx.db.patch(thread._id, { currentActivityId: activityDocumentId, revision: thread.revision + 1, updatedAt: now })
-    return { activityDocumentId, activityId: composed.activityId, boundaryOrdinal: composed.boundaryOrdinal, planRevision: composed.planRevision, inputDigest: composed.inputDigest, replayable: true as const }
+    const revision = thread.revision + 1
+    await commandCtx.db.patch(thread._id, { currentActivityId: activityDocumentId, revision, updatedAt: now })
+    return {
+      value: { activityDocumentId, activityId: composed.activityId, boundaryOrdinal: composed.boundaryOrdinal, planRevision: composed.planRevision, inputDigest: composed.inputDigest, replayable: true as const },
+      revision,
+    }
+      },
+    })
   },
 })
 

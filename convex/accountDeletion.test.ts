@@ -143,7 +143,7 @@ describe('accountDeletion.deleteAccountCascade', () => {
         userId: TEST_IDENTITY.tokenIdentifier, threadId, idempotencyKeyHash: `sha256:${'a'.repeat(64)}`,
         requestFingerprint: `sha256:${'b'.repeat(64)}`, commandName: 'endThread', targetRevision: 1,
         resultKind: 'ok', resultReference: '{"kind":"ok"}', errorReference: null,
-        createdAt: now, resultExpiresAt: now + 1,
+        createdAt: now, resultExpiresAt: now + 1, redactionStatus: 'pending',
       })
       await ctx.db.insert('accountDeletionJobs', { userId: TEST_IDENTITY.tokenIdentifier, status: 'active', phase: 'learnV2', startedAt: now, updatedAt: now })
       return { threadId, activityId, receiptId }
