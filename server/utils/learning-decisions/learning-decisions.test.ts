@@ -7,6 +7,7 @@ import { evaluateTypedDecision, shadowEvaluateQuiz } from './index'
 import { evaluateWithLaya } from './laya-adapter'
 
 vi.stubGlobal('useRuntimeConfig', vi.fn())
+vi.stubGlobal('fetch', vi.fn())
 
 const envelope = { contractVersion: LEARNING_DECISION_CONTRACT_VERSION, snapshotVersion: LEARNING_DECISION_SNAPSHOT_VERSION }
 const expectedProvenance = {
@@ -136,6 +137,57 @@ describe('learning decision boundary', () => {
     vi.mocked(useRuntimeConfig).mockReturnValue({ learningDecisionMode: 'off' } as ReturnType<typeof useRuntimeConfig>)
     await expect(evaluateTypedDecision(event, request)).resolves.toEqual(unavailableDecision('disabled'))
     expect(fetcher).toHaveBeenCalledOnce()
+  })
+
+  test('dispatches free-response shadow work through the structured LLM without changing the canonical contract', async () => {
+    vi.mocked(useRuntimeConfig).mockReturnValue({
+      learningDecisionMode: 'shadow',
+      learningDecisionProvider: 'structured-llm',
+      quizSemanticLlmModel: 'openai/gpt-4o-mini',
+      cloudflareAccountId: 'account',
+      cloudflareAiGatewayId: 'gateway',
+      openrouterApiKey: 'key',
+    } as ReturnType<typeof useRuntimeConfig>)
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(Response.json({
+      id: 'completion-1',
+      model: 'openai/gpt-4o-mini',
+      choices: [{ index: 0, message: { role: 'assistant', content: JSON.stringify({ decisions: [{ id: 'answer-1', label: 'fully_correct', confidence: 0.9, probabilities: { fully_correct: 0.9, partially_correct: 0.05, incorrect: 0.03, uncertain: 0.02 } }] }) }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 },
+    }))
+
+    await expect(evaluateTypedDecision({ context: {} } as H3Event, semanticRequest)).resolves.toMatchObject({
+      status: 'completed',
+      provider: 'structured-llm',
+      modelRevision: 'openai/gpt-4o-mini@azure:quiz-free-response-judge.v1',
+      decisions: [{ id: 'answer-1', label: 'fully_correct' }],
+    })
+    expect(globalThis.fetch).toHaveBeenCalledOnce()
+  })
+
+  test('fails closed before dispatch for an unapproved structured grading model', async () => {
+    vi.mocked(useRuntimeConfig).mockReturnValue({
+      learningDecisionMode: 'shadow',
+      learningDecisionProvider: 'structured-llm',
+      quizSemanticLlmModel: 'openai/unapproved-model',
+    } as ReturnType<typeof useRuntimeConfig>)
+    vi.mocked(globalThis.fetch).mockReset()
+
+    await expect(evaluateTypedDecision({ context: {} } as H3Event, semanticRequest))
+      .resolves.toEqual(unavailableDecision('unconfigured'))
+    expect(globalThis.fetch).not.toHaveBeenCalled()
+  })
+
+  test('keeps the structured LLM provider shadow-only even if advisory mode is configured', async () => {
+    vi.mocked(useRuntimeConfig).mockReturnValue({
+      learningDecisionMode: 'advisory',
+      learningDecisionProvider: 'structured-llm',
+      quizSemanticLlmModel: 'openai/gpt-4o-mini',
+    } as ReturnType<typeof useRuntimeConfig>)
+    vi.mocked(globalThis.fetch).mockReset()
+
+    await expect(evaluateTypedDecision({ context: {} } as H3Event, semanticRequest))
+      .resolves.toEqual(unavailableDecision('disabled'))
+    expect(globalThis.fetch).not.toHaveBeenCalled()
   })
 
   test('rejects over-budget shadow batches instead of evaluating a truncated prefix', async () => {

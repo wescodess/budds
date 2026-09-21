@@ -41,6 +41,40 @@ async function createAttempt() {
 }
 
 describe('quiz answer semantic assessments', () => {
+  test('durably deduplicates shadow judgments without exposing them as advisory results', async () => {
+    const { t, alice, attemptId } = await createAttempt()
+    const [pending] = await alice.query(api.quizAnswerAssessments.listPendingForShadowAttempt, { attemptId })
+    const inputDigest = '9'.repeat(64)
+    expect(await alice.mutation(api.quizAnswerAssessments.claimShadowBatch, {
+      attemptId, assessmentIds: [pending!.assessmentId], inputDigest, claimId: 'shadow-claim-1',
+    })).toEqual([pending!.assessmentId])
+    expect(await alice.mutation(api.quizAnswerAssessments.claimShadowBatch, {
+      attemptId, assessmentIds: [pending!.assessmentId], inputDigest, claimId: 'shadow-claim-2',
+    })).toEqual([])
+    await alice.mutation(api.quizAnswerAssessments.recordShadowAvailable, {
+      attemptId,
+      evaluatorSecret: WRITE_SECRET,
+      provider: 'structured-llm',
+      modelRevision: 'openai/gpt-4o-mini@azure:quiz-free-response-judge.v1',
+      results: [{
+        assessmentId: pending!.assessmentId,
+        inputDigest,
+        claimId: 'shadow-claim-1',
+        label: 'fully_correct',
+        confidence: 0.9,
+        reviewRequired: false,
+        probabilities: { fullyCorrect: 0.9, partiallyCorrect: 0.05, incorrect: 0.03, uncertain: 0.02 },
+      }],
+    })
+
+    expect(await alice.query(api.quizAnswerAssessments.listPendingForShadowAttempt, { attemptId })).toEqual([])
+    const stored = await t.run(ctx => ctx.db.get(pending!.assessmentId))
+    expect(stored).toMatchObject({ shadowStatus: 'available', shadowLabel: 'fully_correct', shadowReviewRequired: false })
+    const results = await alice.query(api.quizzes.getAttemptResults, { attemptId })
+    expect(results?.results[0]!.semanticAssessment).toMatchObject({ status: 'pending', deterministicScoreUnchanged: true })
+    expect(results?.score).toBe(0)
+  })
+
   test('snapshots evidence, is owner-scoped, and is idempotently claimed', async () => {
     const { t, alice, bob, attemptId } = await createAttempt()
     const pending = await alice.query(api.quizAnswerAssessments.listPendingForAttempt, { attemptId })

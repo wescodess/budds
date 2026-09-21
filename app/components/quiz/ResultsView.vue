@@ -10,6 +10,7 @@ const props = defineProps<{
 }>()
 
 const semanticReviewEnabled = useRuntimeConfig().public.quizSemanticReviewEnabled === true
+const semanticAssessmentEnabled = useRuntimeConfig().public.quizSemanticAssessmentEnabled === true
 const assessmentRequestedFor = ref<string | null>(null)
 const assessmentRequestAttempts = ref(0)
 const assessmentRequestFailed = ref(false)
@@ -108,6 +109,7 @@ function requestPendingAssessment() {
   }).catch(() => {
     if (assessmentRequestAttempts.value >= 2) assessmentRequestFailed.value = true
   }).finally(() => {
+    if (!semanticReviewEnabled) return
     if (!results.value?.results.some((result: { semanticAssessment?: { status?: string } }) => result.semanticAssessment?.status === 'pending') || assessmentRequestAttempts.value >= 2) return
     clearAssessmentRetry()
     assessmentRetryTimer = setTimeout(() => {
@@ -130,7 +132,7 @@ onUnmounted(() => {
 })
 
 watch(results, (value) => {
-  if (!import.meta.client || !semanticReviewEnabled || !value) return
+  if (!import.meta.client || !semanticAssessmentEnabled || !value) return
   const hasPending = value.results.some((result: { semanticAssessment?: { status?: string } }) => result.semanticAssessment?.status === 'pending')
   if (!hasPending) {
     clearAssessmentRetry()

@@ -134,6 +134,28 @@ describe('generateCompletion', () => {
     expect(body.provider).toEqual({ require_parameters: true })
   })
 
+  test('[P0] can suppress learner payload logs and require zero-retention routing', async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(minimalResponse) } as any)
+
+    await generateCompletion({
+      ...baseParams,
+      jsonMode: true,
+      collectLogPayload: false,
+      requireZeroDataRetention: true,
+      denyProviderDataCollection: true,
+      skipGatewayCache: true,
+      allowProviderFallbacks: false,
+      providerOrder: ['azure'],
+    })
+
+    const [, init] = vi.mocked(globalThis.fetch).mock.calls[0]!
+    const headers = init!.headers as Record<string, string>
+    const body = JSON.parse(init!.body as string)
+    expect(headers['cf-aig-collect-log-payload']).toBe('false')
+    expect(headers['cf-aig-skip-cache']).toBe('true')
+    expect(body.provider).toEqual({ require_parameters: true, allow_fallbacks: false, zdr: true, data_collection: 'deny', order: ['azure'], only: ['azure'] })
+  })
+
   test('throws when config is missing', async () => {
     vi.mocked((globalThis as any).useRuntimeConfig).mockReturnValue({})
 

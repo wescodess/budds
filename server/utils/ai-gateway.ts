@@ -14,6 +14,11 @@ export interface GenerateParams {
   stream?: boolean
   maxAttempts?: number
   allowProviderFallbacks?: boolean
+  collectLogPayload?: boolean
+  requireZeroDataRetention?: boolean
+  denyProviderDataCollection?: boolean
+  skipGatewayCache?: boolean
+  providerOrder?: string[]
   jsonMode?: boolean
   signal?: AbortSignal
   maxResponseBytes?: number
@@ -176,6 +181,8 @@ export async function generateCompletion(params: GenerateParams): Promise<Genera
   const { baseUrl, headers: baseHeaders } = getGatewayConfig()
   const headers = { ...baseHeaders }
   if (params.maxAttempts !== undefined) headers['cf-aig-max-attempts'] = String(params.maxAttempts)
+  if (params.collectLogPayload !== undefined) headers['cf-aig-collect-log-payload'] = String(params.collectLogPayload)
+  if (params.skipGatewayCache !== undefined) headers['cf-aig-skip-cache'] = String(params.skipGatewayCache)
   const url = `${baseUrl}/openrouter/v1/chat/completions`
 
   const response = await fetch(url, {
@@ -197,12 +204,21 @@ export async function generateCompletion(params: GenerateParams): Promise<Genera
             provider: {
               require_parameters: true,
               ...(params.allowProviderFallbacks === false ? { allow_fallbacks: false } : {}),
+              ...(params.requireZeroDataRetention ? { zdr: true } : {}),
+              ...(params.denyProviderDataCollection ? { data_collection: 'deny' } : {}),
+              ...(params.providerOrder?.length ? { order: params.providerOrder, only: params.providerOrder } : {}),
             },
           }
         : params.jsonMode
         ? {
             response_format: { type: 'json_object' },
-            provider: { require_parameters: true },
+            provider: {
+              require_parameters: true,
+              ...(params.allowProviderFallbacks === false ? { allow_fallbacks: false } : {}),
+              ...(params.requireZeroDataRetention ? { zdr: true } : {}),
+              ...(params.denyProviderDataCollection ? { data_collection: 'deny' } : {}),
+              ...(params.providerOrder?.length ? { order: params.providerOrder, only: params.providerOrder } : {}),
+            },
           }
         : {}),
     }),

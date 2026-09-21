@@ -13,7 +13,7 @@ import {
 } from '../../utils/learning-decisions'
 import { readConfiguredRuntimeValue } from '../../utils/runtime-config'
 import { requireRateLimit } from '../../utils/rate-limit'
-import { bundledQuizSemanticActivationDecision } from '../../utils/learning-decisions/activation'
+import { bundledQuizSemanticActivationDecision, isQuizSemanticShadowEnabled } from '../../utils/learning-decisions/activation'
 
 type PendingAssessment = {
   assessmentId: Id<'quizAnswerAssessments'>
@@ -28,6 +28,7 @@ type PendingAssessment = {
     evidenceExcerpt: string
   }
   learnerAnswerSnapshot: string
+  deterministicIsCorrect: boolean
   rubricVersion: typeof FREE_RESPONSE_ASSESSMENT_KIND
   rubricSnapshot: Array<{ label: string, description: string }>
   attemptCount: number
@@ -40,20 +41,30 @@ export default defineEventHandler(async (event) => {
   const runtimeConfig = useRuntimeConfig(event)
   const mode = readConfiguredRuntimeValue(runtimeConfig.learningDecisionMode, 'NUXT_LEARNING_DECISION_MODE')
   const activationManifest = readConfiguredRuntimeValue(runtimeConfig.quizSemanticActivationManifest, 'NUXT_QUIZ_SEMANTIC_ACTIVATION_MANIFEST')
-  const activation = bundledQuizSemanticActivationDecision(mode, activationManifest, {
+  const deployment = {
     applicationEnvironment: readConfiguredRuntimeValue(runtimeConfig.quizSemanticApplicationEnvironment, 'NUXT_APPLICATION_ENVIRONMENT'),
     pagesEnvironment: readConfiguredRuntimeValue(runtimeConfig.quizSemanticPagesEnvironment, 'CF_PAGES_ENVIRONMENT'),
     pagesBranch: readConfiguredRuntimeValue(runtimeConfig.quizSemanticPagesBranch, 'CF_PAGES_BRANCH'),
     convexUrl: readConfiguredRuntimeValue(runtimeConfig.public?.convex?.url, 'NUXT_PUBLIC_CONVEX_URL'),
-  })
-  if (!activation.enabled) return { status: 'disabled' as const, reason: activation.code }
+  }
+  if (mode === 'shadow') {
+    if (!isQuizSemanticShadowEnabled(mode, deployment)) return { status: 'disabled' as const, reason: 'production_forbidden' }
+  }
+  else {
+    const activation = bundledQuizSemanticActivationDecision(mode, activationManifest, deployment)
+    if (!activation.enabled) return { status: 'disabled' as const, reason: activation.code }
+  }
   const body = await readBody<{ attemptId?: string }>(event)
   if (!body?.attemptId?.trim()) throw createError({ statusCode: 400, message: 'attemptId is required' })
   const client = makeConvexClient(event)
   if (!client) throw createError({ statusCode: 401, message: 'Authentication required' })
-  const evaluatorSecret = runtimeConfig.quizAssessmentWriteSecret
-  if (typeof evaluatorSecret !== 'string' || evaluatorSecret.length < 32) throw createError({ statusCode: 503, message: 'Advisory assessment is not configured' })
   const attemptId = body.attemptId as Id<'quizAttempts'>
+  const evaluatorSecret = runtimeConfig.quizAssessmentWriteSecret
+  if (typeof evaluatorSecret !== 'string' || evaluatorSecret.length < 32) throw createError({ statusCode: 503, message: 'Semantic assessment is not configured' })
+  if (mode === 'shadow') {
+    await processShadowAssessments(event, client, attemptId, evaluatorSecret)
+    return { status: 'completed' as const }
+  }
 
   const task = processPendingAssessments(event, client, attemptId, evaluatorSecret)
   const waitUntil = event.context.waitUntil as ((promise: Promise<unknown>) => void) | undefined
@@ -64,6 +75,63 @@ export default defineEventHandler(async (event) => {
   await task
   return { status: 'completed' as const }
 })
+
+async function processShadowAssessments(
+  event: H3Event,
+  client: NonNullable<ReturnType<typeof makeConvexClient>>,
+  attemptId: Id<'quizAttempts'>,
+  evaluatorSecret: string,
+) {
+  for (let pass = 0; pass < MAX_ASSESSMENT_DRAIN_PASSES; pass++) {
+    const pending = await client.query(api.quizAnswerAssessments.listPendingForShadowAttempt, { attemptId }) as PendingAssessment[]
+    if (pending.length === 0) break
+    const semanticPending = pending.filter(row => !row.deterministicIsCorrect)
+    if (semanticPending.length === 0) break
+    for (const batch of boundedBatches(semanticPending)) {
+      const items = batch.map(toCanonicalItem)
+      const inputDigest = await digest(items)
+      const claimId = crypto.randomUUID()
+      const claimed = await client.mutation(api.quizAnswerAssessments.claimShadowBatch, {
+        attemptId,
+        assessmentIds: batch.map(row => row.assessmentId),
+        inputDigest,
+        claimId,
+      }) as Array<Id<'quizAnswerAssessments'>>
+      const claimedSet = new Set(claimed.map(String))
+      const claimedItems = items.filter(item => claimedSet.has(item.id))
+      if (claimedItems.length === 0) continue
+      try {
+        const result = await evaluateAssessmentBatch(event, batch[0]!, claimedItems, inputDigest)
+        if (result.status === 'unavailable') {
+          await client.mutation(api.quizAnswerAssessments.recordShadowUnavailable, {
+            attemptId, evaluatorSecret, assessmentIds: claimed, inputDigest, claimId, reason: result.reason,
+          })
+          continue
+        }
+        await client.mutation(api.quizAnswerAssessments.recordShadowAvailable, {
+          attemptId,
+          evaluatorSecret,
+          provider: result.provider,
+          modelRevision: result.modelRevision,
+          results: result.decisions.map(decision => ({
+            assessmentId: decision.id as Id<'quizAnswerAssessments'>,
+            inputDigest,
+            claimId,
+            label: decision.label as FreeResponseDecisionLabel,
+            confidence: decision.confidence,
+            reviewRequired: decision.reviewRequired ?? true,
+            probabilities: toStoredProbabilities(decision.probabilities),
+          })),
+        })
+      }
+      catch {
+        await client.mutation(api.quizAnswerAssessments.recordShadowUnavailable, {
+          attemptId, evaluatorSecret, assessmentIds: claimed, inputDigest, claimId, reason: 'unavailable',
+        }).catch(() => undefined)
+      }
+    }
+  }
+}
 
 async function processPendingAssessments(
   event: H3Event,
@@ -100,17 +168,7 @@ async function processPendingAssessments(
       const claimedItems = items.filter(item => claimedSet.has(item.id))
       if (claimedItems.length === 0) continue
       try {
-        const requestId = crypto.randomUUID()
-        const started = Date.now()
-        const result = await evaluateTypedDecision(event, {
-          kind: FREE_RESPONSE_ASSESSMENT_KIND,
-          requestId,
-          inputDigest,
-          contractVersion: batch[0]!.contractVersion as typeof LEARNING_DECISION_CONTRACT_VERSION,
-          snapshotVersion: batch[0]!.snapshotVersion as typeof LEARNING_DECISION_SNAPSHOT_VERSION,
-          items: claimedItems,
-        })
-        logAssessmentResult(requestId, inputDigest, result, claimedItems.length, Date.now() - started)
+        const result = await evaluateAssessmentBatch(event, batch[0]!, claimedItems, inputDigest)
         if (result.status === 'unavailable') {
           await client.mutation(api.quizAnswerAssessments.recordUnavailable, {
             attemptId,
@@ -152,6 +210,26 @@ async function processPendingAssessments(
       }
     }
   }
+}
+
+async function evaluateAssessmentBatch(
+  event: H3Event,
+  batchHead: PendingAssessment,
+  items: FreeResponseAssessmentItem[],
+  inputDigest: string,
+) {
+  const requestId = crypto.randomUUID()
+  const started = Date.now()
+  const result = await evaluateTypedDecision(event, {
+    kind: FREE_RESPONSE_ASSESSMENT_KIND,
+    requestId,
+    inputDigest,
+    contractVersion: batchHead.contractVersion as typeof LEARNING_DECISION_CONTRACT_VERSION,
+    snapshotVersion: batchHead.snapshotVersion as typeof LEARNING_DECISION_SNAPSHOT_VERSION,
+    items,
+  })
+  logAssessmentResult(requestId, inputDigest, result, items.length, Date.now() - started)
+  return result
 }
 
 function toCanonicalItem(row: PendingAssessment): FreeResponseAssessmentItem {

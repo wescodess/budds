@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest'
 import {
   bundledQuizSemanticActivationDecision,
   isQuizSemanticAdvisoryEnabled,
+  isQuizSemanticShadowEnabled,
   QUIZ_SEMANTIC_ACTIVATION_MANIFEST_VERSION,
 } from './activation'
 import { applyTemperature, calculateCalibrationMetrics, fitTemperature, verifyQuizSemanticActivation } from '../../../shared/quiz-semantic-calibration.mjs'
@@ -56,6 +57,15 @@ function verify(overrides: Record<string, unknown> = {}) {
 }
 
 describe('quiz semantic activation boundary', () => {
+  test('allows hidden shadow execution only on the development dev-preview boundary', () => {
+    expect(isQuizSemanticShadowEnabled('shadow', deployment)).toBe(true)
+    expect(isQuizSemanticShadowEnabled('advisory', deployment)).toBe(false)
+    expect(isQuizSemanticShadowEnabled('shadow', { ...deployment, applicationEnvironment: 'production' })).toBe(false)
+    expect(isQuizSemanticShadowEnabled('shadow', { ...deployment, pagesEnvironment: 'production' })).toBe(false)
+    expect(isQuizSemanticShadowEnabled('shadow', { ...deployment, pagesBranch: 'feature' })).toBe(false)
+    expect(isQuizSemanticShadowEnabled('shadow', { ...deployment, pagesEnvironment: '', pagesBranch: '' })).toBe(false)
+  })
+
   test('keeps learner advisory mode disabled without approved calibration evidence', () => {
     expect(QUIZ_SEMANTIC_ACTIVATION_MANIFEST_VERSION).toBe('quiz-semantic-advisory.v1')
     expect(isQuizSemanticAdvisoryEnabled('off', QUIZ_SEMANTIC_ACTIVATION_MANIFEST_VERSION)).toBe(false)

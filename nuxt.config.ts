@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url'
 import tailwindcss from '@tailwindcss/vite'
 import type { NuxtConfig } from 'nuxt/schema'
-import { quizSemanticActivationDecision } from './server/utils/learning-decisions/activation'
+import { isQuizSemanticShadowEnabled, quizSemanticActivationDecision } from './server/utils/learning-decisions/activation'
 
 function readConfiguredValue(...names: string[]) {
   for (const name of names) {
@@ -29,6 +29,10 @@ const pagesBranch = readConfiguredValue('CF_PAGES_BRANCH')
 const quizSemanticActivation = quizSemanticActivationDecision(
   readConfiguredValue('NUXT_LEARNING_DECISION_MODE'),
   readConfiguredValue('NUXT_QUIZ_SEMANTIC_ACTIVATION_MANIFEST'),
+  { applicationEnvironment, pagesEnvironment, pagesBranch, convexUrl },
+)
+const quizSemanticShadowEnabled = isQuizSemanticShadowEnabled(
+  readConfiguredValue('NUXT_LEARNING_DECISION_MODE'),
   { applicationEnvironment, pagesEnvironment, pagesBranch, convexUrl },
 )
 const serverAuthEnabled = process.env.NODE_ENV !== 'development'
@@ -126,6 +130,7 @@ export default defineNuxtConfig({
     // a configured provider is selected; neither value is public runtime config.
     learningDecisionMode: readConfiguredValue('NUXT_LEARNING_DECISION_MODE'),
     learningDecisionProvider: readConfiguredValue('NUXT_LEARNING_DECISION_PROVIDER'),
+    quizSemanticLlmModel: readConfiguredValue('NUXT_QUIZ_SEMANTIC_LLM_MODEL'),
     layaEvaluatorUrl: readConfiguredValue('NUXT_LAYA_EVALUATOR_URL'),
     layaEvaluatorToken: '',
     quizAssessmentWriteSecret: '',
@@ -140,6 +145,7 @@ export default defineNuxtConfig({
         url: convexUrl,
       },
       quizSemanticReviewEnabled: quizSemanticActivation.enabled,
+      quizSemanticAssessmentEnabled: quizSemanticActivation.enabled || quizSemanticShadowEnabled,
     },
   },
   routeRules,

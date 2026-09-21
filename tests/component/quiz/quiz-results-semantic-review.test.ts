@@ -42,6 +42,7 @@ describe('QuizResultsView semantic assessment orchestration', () => {
     resultsData.value = attempt('pending')
     historyData.value = []
     useRuntimeConfig().public.quizSemanticReviewEnabled = true
+    useRuntimeConfig().public.quizSemanticAssessmentEnabled = true
     fetchMock.mockReset().mockResolvedValue({ status: 'queued' })
   })
 
@@ -138,6 +139,7 @@ describe('QuizResultsView semantic assessment orchestration', () => {
 
   it('does not post or render semantic review when activation is off', async () => {
     useRuntimeConfig().public.quizSemanticReviewEnabled = false
+    useRuntimeConfig().public.quizSemanticAssessmentEnabled = false
     const ResultsView = await import(resultsViewPath)
     const wrapper = await mountSuspended(ResultsView.default, {
       props: { quizId: 'quiz_1', attemptId: 'attempt_1' },
@@ -147,5 +149,28 @@ describe('QuizResultsView semantic assessment orchestration', () => {
     expect(fetchMock).not.toHaveBeenCalled()
     expect(wrapper.find('[data-testid="quiz-semantic-assessment"]').exists()).toBe(false)
     wrapper.unmount()
+  })
+
+  it('runs hidden shadow assessment without rendering a learner-facing verdict', async () => {
+    vi.useFakeTimers()
+    useRuntimeConfig().public.quizSemanticReviewEnabled = false
+    useRuntimeConfig().public.quizSemanticAssessmentEnabled = true
+    try {
+      const ResultsView = await import(resultsViewPath)
+      const wrapper = await mountSuspended(ResultsView.default, {
+        props: { quizId: 'quiz_1', attemptId: 'attempt_1' },
+        global: { stubs: { Motion: { template: '<div><slot /></div>' }, QuizHistoryDropdown: true } },
+      })
+      await flushPromises()
+      expect(fetchMock).toHaveBeenCalledOnce()
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(fetchMock).toHaveBeenCalledOnce()
+      expect(wrapper.find('[data-testid="quiz-semantic-assessment"]').exists()).toBe(false)
+      expect(wrapper.text()).toContain('0 of 1')
+      wrapper.unmount()
+    }
+    finally {
+      vi.useRealTimers()
+    }
   })
 })
