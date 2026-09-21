@@ -157,9 +157,27 @@ describe('Adaptive activity plan authority', () => {
     expect(await actor.query(internal.learnAdaptiveActivities.replayActivityPlan, { activityId: 'activity-001' }))
       .toMatchObject({ ok: true, value: { activityId: 'activity-001', reasonCode: 'accepted_evidence_explanation' } })
 
+    const beforeInvalidation = await t.run(ctx => ctx.db.get(committed.value.activityDocumentId as Id<'learningThreadActivities'>))
     await t.run(ctx => ctx.db.patch(ids.sourceSnapshotId, { status: 'unavailable', effectiveStatus: 'unavailable', evidencePurgedAt: Date.now() }))
-    expect(await actor.query(internal.learnAdaptiveActivities.replayActivityPlan, { activityId: 'activity-001' }))
-      .toMatchObject({ ok: true, value: { activityId: 'activity-001' } })
+    const invalidatedReplay = await actor.query(internal.learnAdaptiveActivities.replayActivityPlan, { activityId: 'activity-001' })
+    expect(invalidatedReplay).toEqual({ ok: false, reason: 'evidence_invalidated' })
+    expect(JSON.stringify(invalidatedReplay)).not.toContain('Activity unavailable')
+    expect(await t.run(ctx => ctx.db.get(committed.value.activityDocumentId as Id<'learningThreadActivities'>))).toEqual(beforeInvalidation)
+  })
+
+  test('suppresses replay when accepted support becomes unavailable', async () => {
+    const { t, ids } = await fixture()
+    const actor = t.withIdentity({ tokenIdentifier: ownerId })
+    const committed = await actor.mutation(internal.learnAdaptiveActivities.commitActivityPlan, planArgs(ids))
+    if (committed.kind !== 'ok') throw new Error('Expected committed activity')
+    const before = await t.run(ctx => ctx.db.get(committed.value.activityDocumentId as Id<'learningThreadActivities'>))
+    await t.run(ctx => ctx.db.patch(ids.supportId, { evidenceStatus: 'evidence_unavailable' }))
+
+    const replay = await actor.query(internal.learnAdaptiveActivities.replayActivityPlan, { activityId: 'activity-001' })
+
+    expect(replay).toEqual({ ok: false, reason: 'evidence_unavailable' })
+    expect(JSON.stringify(replay)).not.toContain('Activity unavailable')
+    expect(await t.run(ctx => ctx.db.get(committed.value.activityDocumentId as Id<'learningThreadActivities'>))).toEqual(before)
   })
 
   test('creates a replacement at the next boundary without mutating its prior plan', async () => {
@@ -182,6 +200,12 @@ describe('Adaptive activity plan authority', () => {
     if (second.kind !== 'ok') throw new Error('Expected replacement activity')
     expect(await t.run(ctx => ctx.db.get(first.value.activityDocumentId as Id<'learningThreadActivities'>))).toEqual(before)
     expect(await t.run(ctx => ctx.db.get(ids.threadId))).toMatchObject({ currentActivityId: second.value.activityDocumentId, revision: 3 })
+
+    await t.run(ctx => ctx.db.patch(ids.sourceSnapshotId, { status: 'unavailable', effectiveStatus: 'unavailable', evidencePurgedAt: Date.now() }))
+    const historicalReplay = await actor.query(internal.learnAdaptiveActivities.replayActivityPlan, { activityId: 'activity-001' })
+    expect(historicalReplay).toEqual({ ok: false, reason: 'evidence_unavailable' })
+    expect(JSON.stringify(historicalReplay)).not.toContain(before!.fallback.body)
+    expect(await t.run(ctx => ctx.db.get(first.value.activityDocumentId as Id<'learningThreadActivities'>))).toEqual(before)
   })
 
   test('rejects forged ownership, evidence, and revision boundaries before persistence', async () => {

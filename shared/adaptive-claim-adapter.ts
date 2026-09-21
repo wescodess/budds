@@ -91,6 +91,74 @@ export type AdaptiveClaimAuthorityProjection =
     generationInputs: AdaptiveActivityPlanInput['generationInputs']
   }
 
+export type AdaptiveClaimStatus = 'fact' | 'synthesis' | 'inference' | 'unknown'
+export type AdaptiveEvidenceIntegrityState = 'accepted' | 'insufficient' | 'conflicting' | 'stale' | 'deleted' | 'unavailable'
+
+export type AdaptiveClaimIntegrityInput = {
+  ownerId: string
+  historical: boolean
+  sessionContentId: string
+  sessionContentRevision: number
+  pinned: AdaptiveActivityEvidenceReference
+  records: {
+    sessionContent: (OwnedRecord & {
+      revision: number
+      status: 'draft' | 'ready' | 'published' | 'superseded'
+    }) | null
+    claim: (OwnedRecord & {
+      sessionContentId: string
+      claim: string
+      verifierVersion?: string
+      epistemicStatus?: AdaptiveClaimStatus
+    }) | null
+    support: (OwnedRecord & {
+      sessionContentClaimId: string
+      sourceExcerptId: string
+      sourceSnapshotId?: string
+      entailment: 'entailed' | 'not_entailed' | 'not_evaluated'
+      verifierVersion?: string
+      conflictStatus: 'clear' | 'unresolved'
+      evidenceStatus?: 'evidence_available' | 'evidence_unavailable'
+    }) | null
+    sourceSnapshot: (OwnedRecord & {
+      sourceIdentityId: string
+      revision: number
+      recordRevision?: number
+      status: 'candidate' | 'fetched' | 'evaluated' | 'user_accepted' | 'rejected' | 'unavailable'
+      effectiveStatus?: 'candidate' | 'fetched' | 'evaluated' | 'user_accepted' | 'rejected' | 'unavailable'
+      rightsStatus?: 'permitted' | 'unknown' | 'prohibited'
+      conflictStatus?: 'clear' | 'unresolved'
+      evidencePurgedAt?: number
+    }) | null
+    sourceExcerpt: (OwnedRecord & {
+      sourceSnapshotId: string
+      locator: string
+      privateLocator?: string
+      rightsStatus: 'permitted' | 'unknown' | 'prohibited'
+      evidencePurgedAt?: number
+    }) | null
+    sourceIdentity: (OwnedRecord & {
+      origin: AdaptiveClaimAuthorityRecords['sourceIdentities'][number]['origin']
+      privateLocator?: string
+      tombstonedAt?: number
+    }) | null
+  }
+}
+
+export type AdaptiveClaimIntegrityProjection = {
+  claimId: string
+  claimText: string | null
+  claimStatus: AdaptiveClaimStatus
+  integrityState: AdaptiveEvidenceIntegrityState
+  source: {
+    origin: AdaptiveClaimAuthorityRecords['sourceIdentities'][number]['origin'] | null
+    locator: string | null
+    sourceSnapshotId: string
+    sourceSnapshotRevision: number
+    sourceRecordRevision: number
+  }
+}
+
 function boundedText(value: string | undefined, label: string, maximum = 200): string {
   if (typeof value !== 'string' || !value.trim() || value.length > maximum || /[\p{Cc}\p{Cf}]/u.test(value)) throw new Error(`${label} is invalid`)
   return value.trim()
@@ -103,6 +171,104 @@ function positiveInteger(value: number | undefined, label: string): number {
 
 function owned(record: OwnedRecord | null | undefined, ownerId: string, label: string): asserts record is OwnedRecord {
   if (!record || record.userId !== ownerId) throw new Error(`${label} not found`)
+}
+
+function belongsToOwner(record: OwnedRecord | null, ownerId: string) {
+  return record !== null && record.userId === ownerId
+}
+
+/**
+ * Applies current evidence state over an immutable accepted activity pin.
+ * V2 sessionContentClaims are factual claims and carry no synthesis/inference
+ * classifier, so only fully accepted entailment is labelled `fact`; degraded
+ * evidence is conservatively `unknown` rather than inferred from claim prose.
+ */
+export function projectAdaptiveClaimIntegrity(input: AdaptiveClaimIntegrityInput): AdaptiveClaimIntegrityProjection {
+  const { sessionContent, claim, support, sourceSnapshot: snapshot, sourceExcerpt: excerpt, sourceIdentity: identity } = input.records
+  const allOwned = belongsToOwner(sessionContent, input.ownerId)
+    && belongsToOwner(claim, input.ownerId)
+    && belongsToOwner(support, input.ownerId)
+    && belongsToOwner(snapshot, input.ownerId)
+    && belongsToOwner(excerpt, input.ownerId)
+    && belongsToOwner(identity, input.ownerId)
+  const parentageValid = allOwned
+    && sessionContent?.id === input.sessionContentId
+    && claim?.id === input.pinned.claimId
+    && claim.sessionContentId === input.sessionContentId
+    && support?.id === input.pinned.supportId
+    && support.sessionContentClaimId === claim.id
+    && support.sourceSnapshotId === input.pinned.sourceSnapshotId
+    && excerpt?.id === support.sourceExcerptId
+    && excerpt.sourceSnapshotId === input.pinned.sourceSnapshotId
+    && snapshot?.id === input.pinned.sourceSnapshotId
+    && identity?.id === snapshot.sourceIdentityId
+
+  const purged = parentageValid && (
+    snapshot?.evidencePurgedAt !== undefined
+    || excerpt?.evidencePurgedAt !== undefined
+    || identity?.tombstonedAt !== undefined
+  )
+  const conflicting = parentageValid && (
+    support?.conflictStatus === 'unresolved'
+    || snapshot?.conflictStatus === 'unresolved'
+  )
+  const stale = parentageValid && (
+    sessionContent?.revision !== input.sessionContentRevision
+    || sessionContent?.status !== 'published'
+    || snapshot?.revision !== input.pinned.sourceSnapshotRevision
+    || snapshot?.recordRevision !== input.pinned.sourceRecordRevision
+    || claim?.verifierVersion !== input.pinned.verifierVersion
+    || support?.verifierVersion !== input.pinned.verifierVersion
+  )
+  const unavailable = parentageValid && (
+    support?.evidenceStatus === 'evidence_unavailable'
+    || snapshot?.status === 'unavailable'
+    || snapshot?.effectiveStatus === 'unavailable'
+  )
+  const accepted = parentageValid
+    && support?.entailment === 'entailed'
+    && support.evidenceStatus === 'evidence_available'
+    && support.conflictStatus === 'clear'
+    && snapshot?.status === 'user_accepted'
+    && snapshot.effectiveStatus === 'user_accepted'
+    && snapshot.rightsStatus === 'permitted'
+    && snapshot.conflictStatus === 'clear'
+    && excerpt?.rightsStatus === 'permitted'
+    && !purged
+    && !stale
+
+  let integrityState: AdaptiveEvidenceIntegrityState
+  if (!allOwned) integrityState = 'unavailable'
+  else if (!parentageValid) integrityState = 'insufficient'
+  else if (purged) integrityState = input.historical ? 'unavailable' : 'deleted'
+  else if (conflicting) integrityState = 'conflicting'
+  else if (stale) integrityState = 'stale'
+  else if (unavailable) integrityState = 'unavailable'
+  else if (accepted) integrityState = 'accepted'
+  else integrityState = 'insufficient'
+
+  const locatorPermitted = parentageValid
+    && excerpt?.rightsStatus === 'permitted'
+    && excerpt.evidencePurgedAt === undefined
+    && snapshot.evidencePurgedAt === undefined
+    && identity?.tombstonedAt === undefined
+    && !['insufficient', 'deleted', 'unavailable'].includes(integrityState)
+
+  return {
+    claimId: input.pinned.claimId,
+    claimText: parentageValid
+      ? boundedText(claim!.claim, 'Claim text', 4_000)
+      : null,
+    claimStatus: integrityState === 'accepted' ? (claim!.epistemicStatus ?? 'unknown') : 'unknown',
+    integrityState,
+    source: {
+      origin: parentageValid ? identity!.origin : null,
+      locator: locatorPermitted ? boundedText(excerpt!.locator, 'Source locator', 1_000) : null,
+      sourceSnapshotId: input.pinned.sourceSnapshotId,
+      sourceSnapshotRevision: input.pinned.sourceSnapshotRevision,
+      sourceRecordRevision: input.pinned.sourceRecordRevision,
+    },
+  }
 }
 
 export function projectAdaptiveClaimAuthority(input: AdaptiveClaimAuthorityInput): AdaptiveClaimAuthorityProjection {
