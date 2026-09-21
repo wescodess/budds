@@ -24,6 +24,13 @@ export const ADAPTIVE_LEARN_STORAGE_MANIFEST = [
     accountDeletion: 'delete',
   },
   {
+    table: 'learnAdaptiveThreadDeletionJobs',
+    ownerIndex: 'by_userId',
+    parentIndex: 'by_userId_and_threadId',
+    export: 'bounded',
+    accountDeletion: 'delete',
+  },
+  {
     table: 'learningThreads',
     ownerIndex: 'by_userId',
     parentIndex: 'by_userId_and_updatedAt',
@@ -33,7 +40,7 @@ export const ADAPTIVE_LEARN_STORAGE_MANIFEST = [
 ] as const
 
 export const ADAPTIVE_LEARN_ACCOUNT_DELETE_ORDER = ADAPTIVE_LEARN_STORAGE_MANIFEST.map(entry => entry.table)
-export const ADAPTIVE_LEARN_EXPORT_COLLECTIONS = ['learningThreads', 'learningThreadActivities', 'learnActivityCommandReceipts'] as const
+export const ADAPTIVE_LEARN_EXPORT_COLLECTIONS = ['learningThreads', 'learningThreadActivities', 'learnActivityCommandReceipts', 'learnAdaptiveThreadDeletionJobs'] as const
 export const ADAPTIVE_ACTIVITY_STORAGE_REGISTRY = [
   { type: 'cited_explanation', allowedActions: ['continue', 'inspect_source', 'ask_for_example'], testId: 'learn-primitive-cited-explanation', inputProps: ['heading', 'explanation', 'sourceRefs'], storedProps: ['heading', 'explanation', 'sourceRefs'] },
   { type: 'diagnostic_prompt', allowedActions: ['submit_response'], testId: 'learn-primitive-diagnostic-prompt', inputProps: ['prompt', 'responseFormat', 'assistance'], storedProps: ['prompt', 'responseFormat', 'assistance'] },
@@ -190,6 +197,14 @@ export const learnActivityCommandReceiptFields = {
   resultExpiresAt: v.number(),
   redactionStatus: v.union(v.literal('pending'), v.literal('redacted')),
   resultRedactedAt: v.optional(v.number()),
+}
+
+export const learnAdaptiveThreadDeletionJobFields = {
+  userId: v.string(),
+  threadId: v.id('learningThreads'),
+  phase: v.union(v.literal('children'), v.literal('receipts')),
+  createdAt: v.number(),
+  updatedAt: v.number(),
 }
 
 export const commitAdaptiveActivityPlanValidator = v.object({

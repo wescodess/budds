@@ -7,7 +7,7 @@ import { ADAPTIVE_LEARN_EXPORT_COLLECTIONS } from '../shared/adaptive-learn-stor
 // A single Convex document can approach 1 MiB. Keep pages comfortably below
 // the 16 MiB transaction and return-value ceilings even at the per-row limit.
 const MAX_EXPORT_PAGE_SIZE = 8
-const [learningThreadsCollection, learningThreadActivitiesCollection, learnActivityCommandReceiptsCollection] = ADAPTIVE_LEARN_EXPORT_COLLECTIONS
+const [learningThreadsCollection, learningThreadActivitiesCollection, learnActivityCommandReceiptsCollection, learnAdaptiveThreadDeletionJobsCollection] = ADAPTIVE_LEARN_EXPORT_COLLECTIONS
 
 function redactAdaptivePrimitiveSources(primitive: { props: unknown } & Record<string, unknown>) {
   if (!primitive.props || typeof primitive.props !== 'object' || Array.isArray(primitive.props)) return primitive
@@ -78,6 +78,7 @@ const exportCollectionValidator = v.union(
   v.literal(learningThreadsCollection),
   v.literal(learningThreadActivitiesCollection),
   v.literal(learnActivityCommandReceiptsCollection),
+  v.literal(learnAdaptiveThreadDeletionJobsCollection),
   v.literal('learningVoids'), v.literal('learnBlueprints'), v.literal('learnBlueprintRevisions'), v.literal('learnMilestones'), v.literal('learnObjectives'), v.literal('learnObjectivePrerequisites'), v.literal('learnSourceIdentities'), v.literal('learnSourceSnapshots'), v.literal('learnSourceFetchLeases'), v.literal('learnSourceFetchRateEvents'), v.literal('learnMasteryScoringRateEvents'), v.literal('learnSourceCommandReceipts'), v.literal('learnFolderSourceManifests'), v.literal('learnFolderSourceManifestFolders'), v.literal('learnFolderSourceManifestEntries'), v.literal('learnSourceExcerpts'), v.literal('learnObjectiveSources'), v.literal('learnClaimSupports'), v.literal('masteryAttempts'), v.literal('masteryRecords'), v.literal('studyPlans'), v.literal('studyPlanRevisions'), v.literal('studySessions'), v.literal('studySessionRetrievalObjectives'), v.literal('sessionContent'), v.literal('sessionContentBlocks'), v.literal('sessionContentClaims'), v.literal('calendarProjections'), v.literal('calendarReconciliationProposals'), v.literal('calendarWebhookReceipts'), v.literal('calendarWatchChannels'), v.literal('reminderPolicies'), v.literal('searchQuotaBuckets'), v.literal('searchReservations'), v.literal('learnJobs'), v.literal('learnLifecycleReceipts'), v.literal('learnPlanCommandReceipts'), v.literal('learnPlanAuditEvents'),
 )
 
@@ -256,6 +257,8 @@ export const getUserDataPage = query({
           page: result.page.map(({ idempotencyKeyHash: _keyHash, requestFingerprint: _fingerprint, resultReference: _result, errorReference: _error, ...row }) => row),
         }
       }
+      case 'learnAdaptiveThreadDeletionJobs':
+        return await ctx.db.query('learnAdaptiveThreadDeletionJobs').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
       // Retention-class redaction deliberately keeps protected evidence,
       // provider identifiers, quota details, and job internals out of export.
       case 'learningVoids': return await ctx.db.query('learningVoids').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)

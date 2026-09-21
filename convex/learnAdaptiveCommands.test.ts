@@ -89,7 +89,7 @@ describe('Adaptive Learn command receipts', () => {
       threadId, expectedRevision: 1, idempotencyKey: 'delete-safety-key-01', commandName: 'endThread', payload: {},
       apply: async (ctx: Parameters<typeof executeAdaptiveThreadCommand>[0]) => { await ctx.db.patch(threadId, { revision: 2 }); return { value: { ended: true }, revision: 2 } },
     }
-    await owner.mutation(ctx => executeAdaptiveThreadCommand(ctx, command))
+    const committed = await owner.mutation(ctx => executeAdaptiveThreadCommand(ctx, command))
     await t.run(async (ctx) => {
       for (let index = 0; index < 8; index++) await ctx.db.insert('learnActivityCommandReceipts', {
         userId: OWNER.tokenIdentifier, threadId, idempotencyKeyHash: `sha256:${(index + 10).toString(16).padStart(64, '0')}`,
@@ -103,17 +103,18 @@ describe('Adaptive Learn command receipts', () => {
       })
     })
     await expect(owner.mutation(internal.learnAdaptiveCommands.deleteThreadAuthorityRows, { threadId })).resolves.toMatchObject({ phase: 'marked', done: false })
-    await expect(owner.mutation(ctx => executeAdaptiveThreadCommand(ctx, command))).rejects.toThrow(/deletion is in progress/)
+    await expect(owner.mutation(ctx => executeAdaptiveThreadCommand(ctx, command))).resolves.toEqual(committed)
+    await expect(owner.mutation(ctx => executeAdaptiveThreadCommand(ctx, { ...command, payload: { changed: true } }))).resolves.toMatchObject({ kind: 'conflict', code: 'duplicate_key' })
+    await expect(owner.mutation(ctx => executeAdaptiveThreadCommand(ctx, { ...command, idempotencyKey: 'delete-new-key-0001' }))).rejects.toThrow(/deletion is in progress/)
     await expect(owner.mutation(internal.learnAdaptiveCommands.deleteThreadAuthorityRows, { threadId })).resolves.toMatchObject({ phase: 'activities', done: false })
     expect(await t.run(ctx => ctx.db.query('learnActivityCommandReceipts').withIndex('by_userId_and_threadId', q => q.eq('userId', OWNER.tokenIdentifier).eq('threadId', threadId)).collect())).toHaveLength(9)
-    await expect(owner.mutation(ctx => executeAdaptiveThreadCommand(ctx, command))).rejects.toThrow(/deletion is in progress/)
-    await expect(owner.mutation(internal.learnAdaptiveCommands.deleteThreadAuthorityRows, { threadId })).resolves.toMatchObject({ phase: 'receipts', deleted: 8, done: false })
-    await expect(owner.mutation(ctx => executeAdaptiveThreadCommand(ctx, command))).rejects.toThrow(/deletion is in progress/)
-    await expect(owner.mutation(internal.learnAdaptiveCommands.deleteThreadAuthorityRows, { threadId })).resolves.toMatchObject({ phase: 'receipts', deleted: 1, done: false })
-    await expect(owner.mutation(ctx => executeAdaptiveThreadCommand(ctx, command))).rejects.toThrow(/deletion is in progress/)
-    await expect(owner.mutation(internal.learnAdaptiveCommands.deleteThreadAuthorityRows, { threadId })).resolves.toMatchObject({ phase: 'thread', done: true })
-    await expect(owner.mutation(ctx => executeAdaptiveThreadCommand(ctx, command))).rejects.toThrow(/Thread not found/)
+    await expect(owner.mutation(ctx => executeAdaptiveThreadCommand(ctx, command))).resolves.toEqual(committed)
+    await expect(owner.mutation(internal.learnAdaptiveCommands.deleteThreadAuthorityRows, { threadId })).resolves.toMatchObject({ phase: 'parent_and_receipts', deleted: 9, done: false })
     expect(await t.run(ctx => ctx.db.get(threadId))).toBeNull()
+    expect(await t.run(ctx => ctx.db.query('learnActivityCommandReceipts').withIndex('by_userId_and_threadId', q => q.eq('userId', OWNER.tokenIdentifier).eq('threadId', threadId)).collect())).toHaveLength(1)
+    await expect(t.withIdentity(OTHER).mutation(internal.learnAdaptiveCommands.deleteThreadAuthorityRows, { threadId })).rejects.toThrow(/Thread not found/)
+    await expect(owner.mutation(internal.learnAdaptiveCommands.deleteThreadAuthorityRows, { threadId })).resolves.toMatchObject({ phase: 'receipts', deleted: 1, done: true })
+    expect(await t.run(ctx => ctx.db.query('learnAdaptiveThreadDeletionJobs').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).collect())).toEqual([])
   })
 
   test('continues authenticated thread maintenance while adaptive and V2 rollout are disabled', async () => {
@@ -121,7 +122,7 @@ describe('Adaptive Learn command receipts', () => {
     await owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: false })
     process.env.LEARN_V2_ENABLED = 'false'
     await expect(owner.mutation(internal.learnAdaptiveCommands.deleteThreadAuthorityRows, { threadId })).resolves.toMatchObject({ phase: 'marked' })
-    await expect(owner.mutation(internal.learnAdaptiveCommands.deleteThreadAuthorityRows, { threadId })).resolves.toMatchObject({ phase: 'thread', done: true })
+    await expect(owner.mutation(internal.learnAdaptiveCommands.deleteThreadAuthorityRows, { threadId })).resolves.toMatchObject({ phase: 'parent_and_receipts', done: true })
     expect(await t.run(ctx => ctx.db.get(threadId))).toBeNull()
   })
 })

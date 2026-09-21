@@ -145,8 +145,9 @@ describe('accountDeletion.deleteAccountCascade', () => {
         resultKind: 'ok', resultReference: '{"kind":"ok"}', errorReference: null,
         createdAt: now, resultExpiresAt: now + 1, redactionStatus: 'pending',
       })
+      const threadDeletionJobId = await ctx.db.insert('learnAdaptiveThreadDeletionJobs', { userId: TEST_IDENTITY.tokenIdentifier, threadId, phase: 'children', createdAt: now, updatedAt: now })
       await ctx.db.insert('accountDeletionJobs', { userId: TEST_IDENTITY.tokenIdentifier, status: 'active', phase: 'learnV2', startedAt: now, updatedAt: now })
-      return { threadId, activityId, receiptId }
+      return { threadId, activityId, receiptId, threadDeletionJobId }
     })
 
     await t.mutation(internal.accountDeletion.runDeletionBatch, { userId: TEST_IDENTITY.tokenIdentifier })
@@ -154,6 +155,9 @@ describe('accountDeletion.deleteAccountCascade', () => {
     expect(await t.run(ctx => ctx.db.get(ids.activityId))).not.toBeNull()
     await t.mutation(internal.accountDeletion.runDeletionBatch, { userId: TEST_IDENTITY.tokenIdentifier })
     expect(await t.run(ctx => ctx.db.get(ids.activityId))).toBeNull()
+    expect(await t.run(ctx => ctx.db.get(ids.threadId))).not.toBeNull()
+    await t.mutation(internal.accountDeletion.runDeletionBatch, { userId: TEST_IDENTITY.tokenIdentifier })
+    expect(await t.run(ctx => ctx.db.get(ids.threadDeletionJobId))).toBeNull()
     expect(await t.run(ctx => ctx.db.get(ids.threadId))).not.toBeNull()
     await t.mutation(internal.accountDeletion.runDeletionBatch, { userId: TEST_IDENTITY.tokenIdentifier })
     expect(await t.run(ctx => ctx.db.get(ids.threadId))).toBeNull()
