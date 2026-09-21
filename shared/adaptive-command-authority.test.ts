@@ -27,6 +27,10 @@ describe('Adaptive Learn command authority', () => {
     { serverScorePercent: 90 },
     { verdict: 'pass' },
     { mastery: 'retained' },
+    { masteryState: 'independent' },
+    { masteryTransitionReason: 'unassisted_pass_independent' },
+    { masteryClock: 'client-clock' },
+    { nowUtcMs: 1 },
     { nested: { providerModel: 'client-choice' } },
     { evidenceAcceptance: true },
   ])('rejects client-supplied authority before preparing a command: %j', async payload => {

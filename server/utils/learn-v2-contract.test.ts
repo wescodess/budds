@@ -150,12 +150,16 @@ describe('Learn Anything V2 executable contract', () => {
       'calibration-is-provisional-only',
       'failed-calibration-starts-learning',
       'assisted-calibration-starts-learning',
+      'calibration-preserves-guided-mastery',
       'unassisted-independent-pass',
       'hint-caps-at-guided',
       'answer-reveal-caps-at-guided',
       'retained-too-early',
       'eligible-retained-transfer',
       'failed-independent-check',
+      'retained-ordinary-pass-is-preserved',
+      'retained-regresses-only-on-failed-delayed-check',
+      'assisted-delayed-failure-is-not-an-eligible-retained-check',
       'client-score-is-non-authoritative',
     ])
     for (const fixture of LEARN_V2_CONTRACT_FIXTURES.mastery) {

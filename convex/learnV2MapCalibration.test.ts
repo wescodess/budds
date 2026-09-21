@@ -193,6 +193,13 @@ describe('Learn V2 revision-safe map editing and calibration', () => {
       const args = { tokenIdentifier: identity.tokenIdentifier, blueprintRevisionId: setup.blueprint._id, objectiveId: setup.objectives[0]!, expectedBlueprintRecordRevision: accepted.recordRevision, expectedVoidRevision: 3, idempotencyKey: 'single-attempt', serverScorePercent: 80, usedHint: false, usedReveal: false, confidence: 3, rubricVersion: 'rubric.v1' }
       const attempt = await setup.t.mutation(internal.learnV2MapCalibration.recordCalibrationAttempt, args)
       expect((await setup.t.mutation(internal.learnV2MapCalibration.recordCalibrationAttempt, args)).attemptId).toBe(attempt.attemptId)
+      expect(await setup.t.run(ctx => ctx.db.get(attempt.attemptId))).toMatchObject({
+        masteryStateBefore: 'unseen',
+        masteryStateAfter: 'provisionally_known',
+        masteryTransitionReason: 'calibration_provisional',
+        masteryTransitionVersion: 'learn-v2.mastery-transition.v1',
+        masteryRecordRevision: 1,
+      })
       await expect(setup.t.mutation(internal.learnV2MapCalibration.recordCalibrationAttempt, { ...args, serverScorePercent: 100 })).rejects.toThrow(/different request/)
       await expect(setup.t.mutation(internal.learnV2MapCalibration.recordCalibrationAttempt, { ...args, idempotencyKey: 'duplicate-objective' })).rejects.toThrow(/already attempted/)
       await setup.t.run(async (ctx) => {
@@ -289,7 +296,8 @@ describe('Learn V2 revision-safe map editing and calibration', () => {
         await ctx.db.patch(excerpt!._id, { rightsStatus: 'unknown', locator: `sha256:${'a'.repeat(64)}`, excerpt: undefined })
       })
       const accepted = await setup.owner.mutation(api.learnV2MapCalibration.acceptBlueprintMap, { blueprintRevisionId: setup.blueprint._id, expectedRecordRevision: 1, expectedVoidRevision: 2, idempotencyKey: 'public-accept' })
-      const args = { blueprintRevisionId: setup.blueprint._id, objectiveId: setup.objectives[0]!, expectedBlueprintRecordRevision: accepted.recordRevision, expectedVoidRevision: 3, response: 'The supported answer.', confidence: 4, usedHint: false, usedReveal: false, idempotencyKey: 'public-calibration-1' }
+      const args = { blueprintRevisionId: setup.blueprint._id, objectiveId: setup.objectives[0]!, expectedBlueprintRecordRevision: accepted.recordRevision, expectedVoidRevision: 3, response: 'The supported answer.', confidence: 4, idempotencyKey: 'public-calibration-1' }
+      await expect(setup.owner.action(api.learnV2MapCalibration.submitCalibrationAttempt, { ...args, objectiveId: setup.objectives[1]!, idempotencyKey: 'spoofed-calibration-assistance', usedHint: false, usedReveal: false } as never)).rejects.toThrow()
       const scored = await setup.owner.action(api.learnV2MapCalibration.submitCalibrationAttempt, args)
       expect(scored).toMatchObject({ result: 'provisionally_known', replayed: false })
       expect(await setup.owner.action(api.learnV2MapCalibration.submitCalibrationAttempt, args)).toMatchObject({ result: 'provisionally_known', replayed: true })

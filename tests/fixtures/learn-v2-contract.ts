@@ -56,6 +56,11 @@ export const LEARN_V2_CONTRACT_FIXTURES = {
       expected: 'learning',
     },
     {
+      id: 'calibration-preserves-guided-mastery',
+      input: { priorState: 'guided', attemptKind: 'calibration', serverScorePercent: 0, daysSinceIndependent: null, usedSubstantiveHint: false, revealedAnswer: false },
+      expected: 'guided',
+    },
+    {
       id: 'unassisted-independent-pass',
       input: { priorState: 'learning', attemptKind: 'independent_application', serverScorePercent: 80, daysSinceIndependent: null, usedSubstantiveHint: false, revealedAnswer: false },
       expected: 'independent',
@@ -84,6 +89,21 @@ export const LEARN_V2_CONTRACT_FIXTURES = {
       id: 'failed-independent-check',
       input: { priorState: 'guided', attemptKind: 'independent_application', serverScorePercent: 79, daysSinceIndependent: null, usedSubstantiveHint: false, revealedAnswer: false },
       expected: 'needs_review',
+    },
+    {
+      id: 'retained-ordinary-pass-is-preserved',
+      input: { priorState: 'retained', attemptKind: 'independent_application', serverScorePercent: 100, daysSinceIndependent: 8, usedSubstantiveHint: false, revealedAnswer: false },
+      expected: 'retained',
+    },
+    {
+      id: 'retained-regresses-only-on-failed-delayed-check',
+      input: { priorState: 'retained', attemptKind: 'delayed_transfer', serverScorePercent: 79, daysSinceIndependent: 8, usedSubstantiveHint: false, revealedAnswer: false },
+      expected: 'needs_review',
+    },
+    {
+      id: 'assisted-delayed-failure-is-not-an-eligible-retained-check',
+      input: { priorState: 'retained', attemptKind: 'delayed_transfer', serverScorePercent: 79, daysSinceIndependent: 8, usedSubstantiveHint: true, revealedAnswer: false },
+      expected: 'retained',
     },
     {
       id: 'client-score-is-non-authoritative',

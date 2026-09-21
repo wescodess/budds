@@ -1,3 +1,5 @@
+import { deriveMastery } from './learn-v2-mastery'
+
 export type ContractIndex = {
   name: string
   fields: string[]
@@ -614,26 +616,27 @@ export function evaluateEvidenceContract(input: EvidenceContractInput): Evidence
 
 export function evaluateMasteryContract(input: MasteryContractInput): MasteryState {
   if (input.serverScorePercent === null) return input.priorState
-
-  const passed = input.serverScorePercent >= LEARN_V2_CONTRACT.mastery.independentThresholdPercent
-  if (input.attemptKind === 'calibration') {
-    const calibrationPassed = input.serverScorePercent >= LEARN_V2_CONTRACT.mastery.calibrationProvisionalThresholdPercent
-    return calibrationPassed && !input.usedSubstantiveHint && !input.revealedAnswer ? 'provisionally_known' : 'learning'
-  }
-  if (input.attemptKind === 'guided_application') return passed ? 'guided' : 'learning'
-
   const assisted = input.usedSubstantiveHint || input.revealedAnswer
-  if (assisted) return passed ? 'guided' : 'needs_review'
-
   if (input.attemptKind === 'delayed_transfer') {
     const eligible = input.daysSinceIndependent !== null
       && input.daysSinceIndependent >= LEARN_V2_CONTRACT.mastery.retainedMinimumCalendarDays
       && (input.priorState === 'independent' || input.priorState === 'retained')
     if (!eligible) return input.priorState
-    return passed ? 'retained' : 'needs_review'
   }
-
-  return passed ? 'independent' : 'needs_review'
+  return deriveMastery({
+    scorePercent: input.serverScorePercent,
+    assisted,
+    kind: input.attemptKind === 'calibration'
+      ? 'calibration'
+      : input.attemptKind === 'guided_application'
+        ? 'guided_application'
+        : input.attemptKind === 'delayed_transfer'
+          ? 'retained_transfer'
+          : 'independent_application',
+    previousState: input.priorState,
+    firstIndependentLocalDate: input.attemptKind === 'delayed_transfer' ? '2000-01-01' : undefined,
+    attemptLocalDate: input.attemptKind === 'delayed_transfer' ? '2000-01-08' : undefined,
+  }).state
 }
 
 export function evaluateSchedulingContract(input: SchedulingContractInput): SchedulingContractResult {

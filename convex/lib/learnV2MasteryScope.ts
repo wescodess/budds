@@ -40,11 +40,19 @@ export async function transitionScopedMasteryRecord(
     userId: string
     blueprintRevisionId: Id<'learnBlueprintRevisions'>
     objectiveId: Id<'learnObjectives'>
+    historyAttemptId: Id<'masteryAttempts'>
     transition: MasteryTransition
   },
 ) {
   const { record, scopeKey } = await getScopedMasteryRecord(ctx, input.userId, input.blueprintRevisionId, input.objectiveId)
-  const transition = { ...input.transition, recordRevision: (record?.recordRevision ?? 0) + 1 }
+  const recordRevision = (record?.recordRevision ?? 0) + 1
+  const history = await ctx.db.get(input.historyAttemptId)
+  if (!history || history.userId !== input.userId || history.blueprintRevisionId !== input.blueprintRevisionId || history.objectiveId !== input.objectiveId
+    || history.masteryStateBefore !== (record?.state ?? 'unseen') || history.masteryStateAfter !== input.transition.state
+    || history.masteryTransitionVersion !== 'learn-v2.mastery-transition.v1' || history.masteryRecordRevision !== recordRevision) {
+    throw new Error('Mastery transition history does not authorize the projection')
+  }
+  const transition = { ...input.transition, recordRevision }
   if (record) {
     await ctx.db.patch(record._id, transition)
     return record._id
