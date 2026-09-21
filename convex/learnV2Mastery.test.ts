@@ -481,6 +481,38 @@ describe('LA2-12 server-scored mastery attempts', () => {
     await expect(t.run(ctx => ctx.db.get(reservation.jobId))).resolves.toMatchObject({ status: 'blocked', terminalReason: 'provider_outcome_requires_reconciliation' })
   })
 
+  test('emits a bounded provider failure when linked work returns to the pre-dispatch queue', async () => {
+    const setup = await fixture()
+    const activity = await addAdaptiveActivity(setup, 'adaptive-provider-failure')
+    const { scorerVerdict: _verdict, ...request } = setup.args('adaptive-provider-failure-key', 80)
+    const acquired = await setup.t.mutation(internal.learnV2Mastery.beginMasteryScoring, request)
+    if (acquired.kind !== 'acquired') throw new Error('Expected scoring lease')
+    await setup.t.run(async (ctx) => {
+      await ctx.db.patch(acquired.jobId, { adaptiveThreadId: activity.threadId, adaptiveActivityId: activity.activityDocumentId })
+      await ctx.db.patch(activity.activityDocumentId, { status: 'scoring', scoringJobId: acquired.jobId, submittedResponse: request.response })
+    })
+    await setup.t.mutation(internal.learnV2Mastery.finishMasteryScoringFailure, { tokenIdentifier: OWNER.tokenIdentifier, jobId: acquired.jobId, leaseToken: acquired.leaseToken, outcome: 'not_dispatched' })
+    const events = await setup.t.run(ctx => ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('threadId', activity.threadId)).take(4))
+    expect(events).toEqual([expect.objectContaining({ eventType: 'provider_failure', eventVersion: 'provider_failure.v1', metadata: { providerStage: 'reservation' } })])
+    expect(JSON.stringify(events)).not.toContain(request.response)
+  })
+
+  test('preserves a definitive provider response as outcome-stage failure telemetry', async () => {
+    const setup = await fixture()
+    const activity = await addAdaptiveActivity(setup, 'adaptive-definitive-failure')
+    const { scorerVerdict: _verdict, ...request } = setup.args('adaptive-definitive-failure-key', 80)
+    const acquired = await setup.t.mutation(internal.learnV2Mastery.beginMasteryScoring, request)
+    if (acquired.kind !== 'acquired') throw new Error('Expected scoring lease')
+    await setup.t.run(async (ctx) => {
+      await ctx.db.patch(acquired.jobId, { adaptiveThreadId: activity.threadId, adaptiveActivityId: activity.activityDocumentId })
+      await ctx.db.patch(activity.activityDocumentId, { status: 'scoring', scoringJobId: acquired.jobId, submittedResponse: request.response })
+    })
+    await setup.t.mutation(internal.learnV2Mastery.finishMasteryScoringFailure, { tokenIdentifier: OWNER.tokenIdentifier, jobId: acquired.jobId, leaseToken: acquired.leaseToken, outcome: 'definitive_failure' })
+    expect(await setup.t.run(ctx => ctx.db.get(acquired.jobId))).toMatchObject({ status: 'queued', terminalReason: 'provider_definitive_failure' })
+    const events = await setup.t.run(ctx => ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('threadId', activity.threadId)).take(2))
+    expect(events).toEqual([expect.objectContaining({ eventType: 'provider_failure', reasonCode: 'provider_definitive_failure', metadata: { providerStage: 'outcome' } })])
+  })
+
   test('cron recovery requeues only expired pre-dispatch work and blocks ambiguous provider work', async () => {
     const { t, args } = await fixture()
     const { scorerVerdict: _scorerVerdict, ...preDispatchRequest } = args('recovery-pre-dispatch', 80)
@@ -525,6 +557,9 @@ describe('LA2-12 server-scored mastery attempts', () => {
     expect(state.attempts).toEqual([])
     expect(state.records).toEqual([])
     expect(state.session).toMatchObject({ status: 'in_progress', revision: 7 })
+    expect(await setup.t.run(ctx => ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('threadId', activity.threadId)).take(8))).toEqual([
+      expect.objectContaining({ eventType: 'provider_ambiguity', eventVersion: 'provider_ambiguity.v1', metadata: { providerStage: 'reconciliation' } }),
+    ])
     await setup.t.run(async (ctx) => {
       await ctx.db.patch(setup.ids.sessionId, { revision: 8 })
       await ctx.db.patch(activity.activityDocumentId, { status: 'ended' })
@@ -578,12 +613,17 @@ describe('LA2-12 server-scored mastery attempts', () => {
     expect(state.attempt).toMatchObject({ misconceptionTagsJson: JSON.stringify(['missing_required_step']), feedbackTemplateVersion: 'learn-adaptive.feedback-templates.v1', misconceptionTaxonomyVersion: 'learn-adaptive.misconception-taxonomy.v1' })
     expect(JSON.parse(state.attempt!.criterionResultsJson!)).toEqual(command.scorerVerdict.criterionResults)
     expect(JSON.stringify(state)).not.toContain('provider-response-private')
+    const committedEvents = await setup.t.run(ctx => ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('threadId', activity.threadId)).take(8))
+    expect(committedEvents.map(event => event.eventType)).toEqual(['activity_completed', 'representative_pass'])
+    expect(JSON.stringify(committedEvents)).not.toContain(request.response)
+    expect(JSON.stringify(committedEvents)).not.toContain('provider-response-private')
     await setup.t.run(async (ctx) => {
       await ctx.db.patch(result.attemptId, { criterionResultsJson: JSON.stringify([{ key: 'tampered-legacy-field', awarded: false }]) })
       await ctx.db.patch(activity.activityDocumentId, { status: 'replaced' })
       await ctx.db.patch(activity.threadId, { currentActivityId: undefined })
     })
     await expect(setup.t.mutation(internal.learnV2Mastery.beginMasteryScoring, request)).resolves.toMatchObject({ kind: 'replay', attemptId: result.attemptId, feedback: result.feedback })
+    expect(await setup.t.run(ctx => ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('threadId', activity.threadId)).take(8))).toHaveLength(2)
     expect(await setup.t.run(ctx => ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', OWNER.tokenIdentifier).eq('idempotencyKey', request.idempotencyKey)).take(2))).toHaveLength(1)
     await setup.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true })
     process.env.LEARN_ADAPTIVE_V2_PILOT_MANIFEST = 'expired-or-revoked-manifest'
@@ -594,6 +634,64 @@ describe('LA2-12 server-scored mastery attempts', () => {
       expect(await setup.t.run(ctx => ctx.db.get(activity.activityDocumentId))).toMatchObject({ status: 'replaced', masteryAttemptId: result.attemptId })
     }
     finally { delete process.env.LEARN_ADAPTIVE_V2_PILOT_MANIFEST }
+  })
+
+  test('emits delayed retention and remediation events only with linked authoritative attempts', async () => {
+    const retainedSetup = await fixture({ placementKind: 'retained_review', state: 'independent', firstDate: '2026-03-01' })
+    const retainedActivity = await addAdaptiveActivity(retainedSetup, 'adaptive-retained')
+    const retainedCommand = retainedSetup.args('adaptive-retained-key', 80)
+    const { scorerVerdict: _retainedVerdict, ...retainedRequest } = retainedCommand
+    const retainedJob = await retainedSetup.t.mutation(internal.learnV2Mastery.beginMasteryScoring, retainedRequest)
+    if (retainedJob.kind !== 'acquired') throw new Error('Expected retained scoring lease')
+    const retainedInput = await retainedSetup.t.query(internal.learnV2Mastery.getMasteryScoringInput, retainedRequest)
+    if (retainedInput.kind !== 'score') throw new Error('Expected retained scoring input')
+    await retainedSetup.t.run(async (ctx) => {
+      await ctx.db.patch(retainedJob.jobId, { adaptiveThreadId: retainedActivity.threadId, adaptiveActivityId: retainedActivity.activityDocumentId })
+      await ctx.db.patch(retainedActivity.activityDocumentId, { status: 'scoring', scoringJobId: retainedJob.jobId, submittedResponse: retainedRequest.response })
+    })
+    await retainedSetup.t.mutation(internal.learnV2Mastery.markMasteryScoringDispatched, { tokenIdentifier: OWNER.tokenIdentifier, jobId: retainedJob.jobId, leaseToken: retainedJob.leaseToken })
+    await retainedSetup.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, { ...retainedCommand, scoringJobId: retainedJob.jobId, scoringLeaseToken: retainedJob.leaseToken, scoredSourceSnapshotIds: retainedInput.sourceSnapshotIds, scoredContentRevisionPins: retainedInput.contentRevisionPins })
+    expect((await retainedSetup.t.run(ctx => ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('threadId', retainedActivity.threadId)).take(8))).map(event => event.eventType)).toEqual([
+      'activity_completed', 'representative_pass', 'delayed_check_eligible', 'delayed_check_attempt', 'retained',
+    ])
+
+    const assistedSetup = await fixture({ placementKind: 'retained_review', state: 'independent', firstDate: '2026-03-01' })
+    const assistedActivity = await addAdaptiveActivity(assistedSetup, 'adaptive-assisted-retained')
+    await assistedSetup.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true })
+    await assistedSetup.owner.mutation(api.learnV2Mastery.recordAssistanceUse, { studySessionId: assistedSetup.ids.sessionId, expectedSessionRevision: 7, kind: 'substantive_hint' })
+    const assistedCommand = { ...assistedSetup.args('adaptive-assisted-retained-key', 80), expectedSessionRevision: 8 }
+    const { scorerVerdict: _assistedVerdict, ...assistedRequest } = assistedCommand
+    const assistedJob = await assistedSetup.t.mutation(internal.learnV2Mastery.beginMasteryScoring, assistedRequest)
+    if (assistedJob.kind !== 'acquired') throw new Error('Expected assisted scoring lease')
+    const assistedInput = await assistedSetup.t.query(internal.learnV2Mastery.getMasteryScoringInput, assistedRequest)
+    if (assistedInput.kind !== 'score') throw new Error('Expected assisted scoring input')
+    await assistedSetup.t.run(async (ctx) => {
+      await ctx.db.patch(assistedJob.jobId, { adaptiveThreadId: assistedActivity.threadId, adaptiveActivityId: assistedActivity.activityDocumentId })
+      await ctx.db.patch(assistedActivity.activityDocumentId, { status: 'scoring', scoringJobId: assistedJob.jobId, submittedResponse: assistedRequest.response })
+    })
+    await assistedSetup.t.mutation(internal.learnV2Mastery.markMasteryScoringDispatched, { tokenIdentifier: OWNER.tokenIdentifier, jobId: assistedJob.jobId, leaseToken: assistedJob.leaseToken })
+    await assistedSetup.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, { ...assistedCommand, scoringJobId: assistedJob.jobId, scoringLeaseToken: assistedJob.leaseToken, scoredSourceSnapshotIds: assistedInput.sourceSnapshotIds, scoredContentRevisionPins: assistedInput.contentRevisionPins })
+    const assistedEvents = await assistedSetup.t.run(ctx => ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('threadId', assistedActivity.threadId)).take(8))
+    expect(assistedEvents.map(event => event.eventType)).toEqual(['assistance', 'activity_completed', 'representative_pass', 'delayed_check_attempt'])
+    expect(assistedEvents.at(-1)).toMatchObject({ reasonCode: 'assisted_delayed_check_committed' })
+
+    const remediationSetup = await fixture()
+    const remediationActivity = await addAdaptiveActivity(remediationSetup, 'adaptive-remediation')
+    const remediationCommand = remediationSetup.args('adaptive-remediation-key', 79)
+    const { scorerVerdict: _remediationVerdict, ...remediationRequest } = remediationCommand
+    const remediationJob = await remediationSetup.t.mutation(internal.learnV2Mastery.beginMasteryScoring, remediationRequest)
+    if (remediationJob.kind !== 'acquired') throw new Error('Expected remediation scoring lease')
+    const remediationInput = await remediationSetup.t.query(internal.learnV2Mastery.getMasteryScoringInput, remediationRequest)
+    if (remediationInput.kind !== 'score') throw new Error('Expected remediation scoring input')
+    await remediationSetup.t.run(async (ctx) => {
+      await ctx.db.patch(remediationJob.jobId, { adaptiveThreadId: remediationActivity.threadId, adaptiveActivityId: remediationActivity.activityDocumentId })
+      await ctx.db.patch(remediationActivity.activityDocumentId, { status: 'scoring', scoringJobId: remediationJob.jobId, submittedResponse: remediationRequest.response })
+    })
+    await remediationSetup.t.mutation(internal.learnV2Mastery.markMasteryScoringDispatched, { tokenIdentifier: OWNER.tokenIdentifier, jobId: remediationJob.jobId, leaseToken: remediationJob.leaseToken })
+    await remediationSetup.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, { ...remediationCommand, scoringJobId: remediationJob.jobId, scoringLeaseToken: remediationJob.leaseToken, scoredSourceSnapshotIds: remediationInput.sourceSnapshotIds, scoredContentRevisionPins: remediationInput.contentRevisionPins })
+    expect((await remediationSetup.t.run(ctx => ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('threadId', remediationActivity.threadId)).take(8))).map(event => event.eventType)).toEqual([
+      'activity_completed', 'representative_fail', 'remediation',
+    ])
   })
 
   test('enforces a rolling provider-dispatch budget without charging an idempotent lease twice', async () => {
@@ -772,10 +870,25 @@ describe('LA2-12 server-scored mastery attempts', () => {
 
   test('caps assisted passes without downgrading established independence', async () => {
     const { t, owner, ids, args } = await fixture({ state: 'independent', firstDate: '2026-03-01' })
+    const activity = await addAdaptiveActivity({ t, owner, ids, args }, 'adaptive-assistance')
+    await owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true })
     await owner.mutation(api.learnV2Mastery.recordAssistanceUse, { studySessionId: ids.sessionId, expectedSessionRevision: 7, kind: 'substantive_hint' })
     const result = await t.mutation(internal.learnV2Mastery.recordMasteryAttempt, { ...args('assisted'), expectedSessionRevision: 8 })
     expect(result).toMatchObject({ scorePercent: 100, state: 'independent' })
     expect(await t.run(ctx => ctx.db.get(ids.sessionId))).toMatchObject({ substantiveHintUsedAt: expect.any(Number), status: 'completed' })
+    expect(await t.run(ctx => ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('threadId', activity.threadId)).take(2))).toEqual([
+      expect.objectContaining({ eventType: 'assistance', eventVersion: 'assistance.v1', metadata: expect.objectContaining({ assistanceLevel: 'hint' }) }),
+    ])
+  })
+
+  test('keeps V2 assistance available without creating adaptive events after adaptive revocation', async () => {
+    const setup = await fixture()
+    const activity = await addAdaptiveActivity(setup, 'adaptive-assistance-revoked')
+    await setup.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: false })
+    await expect(setup.owner.mutation(api.learnV2Mastery.recordAssistanceUse, { studySessionId: setup.ids.sessionId, expectedSessionRevision: 7, kind: 'substantive_hint' })).resolves.toMatchObject({ status: 'recorded', replayed: false })
+    expect(await setup.t.run(ctx => ctx.db.get(setup.ids.sessionId))).toMatchObject({ substantiveHintUsedAt: expect.any(Number), revision: 8 })
+    expect(await setup.t.run(ctx => ctx.db.get(activity.activityDocumentId))).toMatchObject({ status: 'submitted' })
+    expect(await setup.t.run(ctx => ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('threadId', activity.threadId)).take(1))).toEqual([])
   })
 
   test('caps an answer-revealed pass at guided and commits only controlled feedback', async () => {

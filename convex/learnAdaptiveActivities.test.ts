@@ -125,6 +125,8 @@ describe('Adaptive activity plan authority', () => {
       evidenceReferences: [],
       generationInputs: { sessionContentRevision: null, sessionContentInputDigest: null, generatorVersion: null },
     })
+    expect(await t.run(ctx => ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', ownerId).eq('threadId', threadId)).collect()))
+      .toEqual([expect.objectContaining({ eventType: 'activity_eligible' })])
   })
 
   test('commits a complete immutable factual plan and replays only its stored snapshot', async () => {
@@ -134,6 +136,9 @@ describe('Adaptive activity plan authority', () => {
     const committed = await actor.mutation(internal.learnAdaptiveActivities.commitActivityPlan, args)
     expect(await actor.mutation(internal.learnAdaptiveActivities.commitActivityPlan, args)).toEqual(committed)
     expect(await t.run(ctx => ctx.db.query('learningThreadActivities').withIndex('by_userId', q => q.eq('userId', ownerId)).take(2))).toHaveLength(1)
+    expect(await t.run(ctx => ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', ownerId).eq('threadId', ids.threadId)).take(4))).toEqual([
+      expect.objectContaining({ eventType: 'activity_eligible', eventVersion: 'activity_eligible.v1', metadata: expect.objectContaining({ activityClass: 'factual', boundaryOrdinal: 1 }) }),
+    ])
     expect(committed).toMatchObject({ kind: 'ok', value: { activityId: 'activity-001', boundaryOrdinal: 1, planRevision: 1, replayable: true }, revision: 2 })
     if (committed.kind !== 'ok') throw new Error('Expected committed activity')
     const row = await t.run(ctx => ctx.db.get(committed.value.activityDocumentId as Id<'learningThreadActivities'>))

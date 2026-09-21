@@ -8,11 +8,49 @@ import {
   tombstonedSourceExternalKey,
 } from './lib/learnV2SourceSanitization'
 import { releaseSearchReservationClaims } from './learnV2Search'
+import { writeLearnActivityEvent } from './lib/learnAdaptiveEvents'
 
 // This deliberately stays below the account-deletion batch. Folder deletion
 // only has live lifecycle producers today; later producers must add their
 // child-before-parent rows here in the ticket that introduces them.
 const BATCH_SIZE = 8
+
+async function invalidateLinkedAdaptiveActivities(
+  ctx: MutationCtx,
+  userId: string,
+  sourceSnapshotId: Id<'learnSourceSnapshots'>,
+  reason: 'access_lost' | 'policy_denied' | 'source_deleted',
+) {
+  const links = await ctx.db.query('learnActivityEvidenceLinks')
+    .withIndex('by_userId_and_sourceSnapshotId_and_invalidatedAt', q => q.eq('userId', userId).eq('sourceSnapshotId', sourceSnapshotId).eq('invalidatedAt', undefined))
+    .take(BATCH_SIZE)
+  const now = Date.now()
+  for (const link of links) {
+    const [activity, thread] = await Promise.all([ctx.db.get(link.activityId), ctx.db.get(link.threadId)])
+    if (activity && thread && activity.userId === userId && activity.threadId === thread._id && thread.userId === userId) {
+      const current = thread.currentActivityId === activity._id && activity.status !== 'ended' && activity.status !== 'replaced'
+      const common = {
+        userId,
+        threadId: thread._id,
+        activityId: activity._id,
+        sourceVersion: 'learn-v2.evidence-purge.v1',
+        contractVersion: activity.contractVersion,
+        occurredAt: now,
+        metadata: { activityClass: activity.activityClass, boundaryOrdinal: activity.boundaryOrdinal, planRevision: activity.planRevision },
+      }
+      // The link id participates only in the writer's hash. It is never
+      // persisted in event metadata or exposed through export.
+      await writeLearnActivityEvent(ctx, { ...common, eventType: 'evidence_invalidation', eventVersion: 'evidence_invalidation.v1', semanticKey: `activity:${activity.activityId}:evidence:${String(link._id)}:invalidation`, reasonCode: reason, outcomeCode: current ? 'blocked' : 'historical' })
+      await writeLearnActivityEvent(ctx, { ...common, eventType: 'evidence_gap', eventVersion: 'evidence_gap.v1', semanticKey: `activity:${activity.activityId}:evidence:${String(link._id)}:gap`, reasonCode: 'required_support_unavailable', outcomeCode: current ? 'blocked' : 'historical' })
+      if (current && (activity.status !== 'blocked' || thread.evidenceState !== 'invalidated')) {
+        await ctx.db.patch(activity._id, { status: 'blocked', updatedAt: now })
+        await ctx.db.patch(thread._id, { evidenceState: 'invalidated', revision: thread.revision + 1, updatedAt: now })
+      }
+    }
+    await ctx.db.patch(link._id, { invalidatedAt: now })
+  }
+  return links.length > 0
+}
 
 async function removeRows<TableName extends TableNames>(ctx: MutationCtx, rows: Doc<TableName>[]) {
   for (const row of rows) await ctx.db.delete(row._id)
@@ -86,6 +124,7 @@ async function deleteVoidFoundation(ctx: MutationCtx, userId: string, learningVo
   const snapshots = await ctx.db.query('learnSourceSnapshots')
     .withIndex('by_userId_and_learningVoidId_and_status', q => q.eq('userId', userId).eq('learningVoidId', learningVoidId)).take(BATCH_SIZE)
   for (const snapshot of snapshots) {
+    if (await invalidateLinkedAdaptiveActivities(ctx, userId, snapshot._id, 'source_deleted')) return true
     const objectiveSources = await ctx.db.query('learnObjectiveSources')
       .withIndex('by_userId_and_sourceSnapshotId', q => q.eq('userId', userId).eq('sourceSnapshotId', snapshot._id)).take(BATCH_SIZE)
     if (await removeRows(ctx, objectiveSources)) return true
@@ -315,6 +354,10 @@ export const purgeSourceEvidence = internalMutation({
         .eq('userId', args.userId).eq('sourceIdentityId', args.sourceIdentityId).eq('evidencePurgedAt', undefined))
       .take(BATCH_SIZE)
     for (const snapshot of snapshots) {
+      if (await invalidateLinkedAdaptiveActivities(ctx, args.userId, snapshot._id, reason)) {
+        await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeSourceEvidence, args)
+        return { pending: true }
+      }
       const leases = await ctx.db.query('learnSourceFetchLeases')
         .withIndex('by_userId_and_sourceSnapshotId_and_expiresAt', q => q
           .eq('userId', args.userId).eq('sourceSnapshotId', snapshot._id))

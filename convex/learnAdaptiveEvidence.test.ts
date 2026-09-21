@@ -75,7 +75,8 @@ async function fixture() {
       updatedAt: now,
     })
     await ctx.db.patch(threadId, { currentActivityId: activityId })
-    return { threadId, activityId, objectiveId, blueprintRevisionId, sessionContentId, sourceIdentityId, sourceSnapshotId, sourceExcerptId, claimId, supportId }
+    await ctx.db.insert('learnActivityEvidenceLinks', { userId: ownerId, threadId, activityId, sourceSnapshotId, boundaryOrdinal: 1, createdAt: now })
+    return { folderId, learningVoidId, threadId, activityId, objectiveId, blueprintRevisionId, sessionContentId, sourceIdentityId, sourceSnapshotId, sourceExcerptId, claimId, supportId }
   })
   return { t, ids }
 }
@@ -88,6 +89,83 @@ async function project(t: Awaited<ReturnType<typeof fixture>>['t']) {
 }
 
 describe('Adaptive activity evidence projection', () => {
+  test('projects source purge into exactly-once bounded invalidation and gap events', async () => {
+    const { t, ids } = await fixture()
+    for (let batch = 0; batch < 8; batch++) {
+      const result = await t.mutation(internal.learnV2Retention.purgeSourceEvidence, { userId: ownerId, sourceIdentityId: ids.sourceIdentityId })
+      if (!result.pending) break
+    }
+    const state = await t.run(async ctx => ({
+      activity: await ctx.db.get(ids.activityId),
+      thread: await ctx.db.get(ids.threadId),
+      links: await ctx.db.query('learnActivityEvidenceLinks').withIndex('by_userId_and_activityId', q => q.eq('userId', ownerId).eq('activityId', ids.activityId)).collect(),
+      events: await ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', ownerId).eq('threadId', ids.threadId)).collect(),
+    }))
+    expect(state.activity).toMatchObject({ status: 'blocked' })
+    expect(state.thread).toMatchObject({ evidenceState: 'invalidated' })
+    expect(state.links).toEqual([expect.objectContaining({ invalidatedAt: expect.any(Number) })])
+    expect(state.events.map(event => event.eventType)).toEqual(['evidence_invalidation', 'evidence_gap'])
+    expect(JSON.stringify(state.events)).not.toMatch(/private|locator|excerpt/i)
+    await t.mutation(internal.learnV2Retention.purgeSourceEvidence, { userId: ownerId, sourceIdentityId: ids.sourceIdentityId })
+    expect(await t.run(ctx => ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', ownerId).eq('threadId', ids.threadId)).collect())).toHaveLength(2)
+  })
+
+  test('drains two source links with distinct reasons without dedupe conflicts', async () => {
+    const { t, ids } = await fixture()
+    const second = await t.run(async (ctx) => {
+      const sourceIdentityId = await ctx.db.insert('learnSourceIdentities', { userId: ownerId, learningVoidId: ids.learningVoidId, origin: 'user_url', externalKey: 'source-2' })
+      const sourceSnapshotId = await ctx.db.insert('learnSourceSnapshots', { userId: ownerId, sourceIdentityId, learningVoidId: ids.learningVoidId, blueprintRevisionId: ids.blueprintRevisionId, revision: 1, recordRevision: 1, status: 'user_accepted', effectiveStatus: 'user_accepted', rightsStatus: 'permitted', conflictStatus: 'clear', createdAt: 1 })
+      await ctx.db.insert('learnActivityEvidenceLinks', { userId: ownerId, threadId: ids.threadId, activityId: ids.activityId, sourceSnapshotId, boundaryOrdinal: 1, createdAt: 1 })
+      return { sourceIdentityId }
+    })
+    for (const input of [
+      { sourceIdentityId: ids.sourceIdentityId, reason: 'access_lost' as const },
+      { sourceIdentityId: second.sourceIdentityId, reason: 'policy_denied' as const },
+    ]) {
+      for (let batch = 0; batch < 8; batch++) {
+        const result = await t.mutation(internal.learnV2Retention.purgeSourceEvidence, { userId: ownerId, ...input })
+        if (!result.pending) break
+      }
+      if (input.sourceIdentityId === ids.sourceIdentityId) {
+        await t.run(async (ctx) => {
+          await ctx.db.patch(ids.activityId, { status: 'ended' })
+          await ctx.db.patch(ids.threadId, { currentActivityId: undefined })
+        })
+      }
+    }
+    const state = await t.run(async ctx => ({
+      links: await ctx.db.query('learnActivityEvidenceLinks').withIndex('by_userId_and_activityId', q => q.eq('userId', ownerId).eq('activityId', ids.activityId)).collect(),
+      events: await ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', ownerId).eq('threadId', ids.threadId)).collect(),
+    }))
+    expect(state.links).toHaveLength(2)
+    expect(state.links.every(link => link.invalidatedAt !== undefined)).toBe(true)
+    expect(state.events.map(event => [event.eventType, event.reasonCode, event.outcomeCode])).toEqual([
+      ['evidence_invalidation', 'access_lost', 'blocked'],
+      ['evidence_gap', 'required_support_unavailable', 'blocked'],
+      ['evidence_invalidation', 'policy_denied', 'historical'],
+      ['evidence_gap', 'required_support_unavailable', 'historical'],
+    ])
+  })
+
+  test('projects invalidation before folder deletion removes the evidence graph', async () => {
+    const { t, ids } = await fixture()
+    for (let batch = 0; batch < 32; batch++) {
+      await t.mutation(internal.learnV2Retention.deleteFolderFoundation, { userId: ownerId, folderId: ids.folderId })
+      const link = await t.run(ctx => ctx.db.query('learnActivityEvidenceLinks').withIndex('by_userId_and_activityId', q => q.eq('userId', ownerId).eq('activityId', ids.activityId)).first())
+      if (link?.invalidatedAt !== undefined) break
+    }
+    const state = await t.run(async ctx => ({
+      activity: await ctx.db.get(ids.activityId),
+      thread: await ctx.db.get(ids.threadId),
+      link: await ctx.db.query('learnActivityEvidenceLinks').withIndex('by_userId_and_activityId', q => q.eq('userId', ownerId).eq('activityId', ids.activityId)).first(),
+      events: await ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', ownerId).eq('threadId', ids.threadId)).collect(),
+    }))
+    expect(state.activity).toMatchObject({ status: 'blocked' })
+    expect(state.thread).toMatchObject({ evidenceState: 'invalidated' })
+    expect(state.link).toMatchObject({ invalidatedAt: expect.any(Number) })
+    expect(state.events.map(event => event.eventType)).toEqual(['evidence_invalidation', 'evidence_gap'])
+  })
+
   test('returns an authenticated accepted projection with conservative claim status and permitted source data', async () => {
     const { t } = await fixture()
 

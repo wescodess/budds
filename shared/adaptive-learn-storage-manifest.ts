@@ -10,6 +10,20 @@ import { ADAPTIVE_ACTIVITY_PLAN_VERSION, ADAPTIVE_ACTIVITY_REPLAY_VERSION } from
 
 export const ADAPTIVE_LEARN_STORAGE_MANIFEST = [
   {
+    table: 'learnActivityEvidenceLinks',
+    ownerIndex: 'by_userId',
+    parentIndex: 'by_userId_and_threadId',
+    export: 'redacted_bounded',
+    accountDeletion: 'delete',
+  },
+  {
+    table: 'learnActivityEvents',
+    ownerIndex: 'by_userId',
+    parentIndex: 'by_userId_and_threadId_and_occurredAt',
+    export: 'metadata_only_bounded',
+    accountDeletion: 'delete',
+  },
+  {
     table: 'learnActivityCommandReceipts',
     ownerIndex: 'by_userId',
     parentIndex: 'by_userId_and_threadId',
@@ -40,7 +54,7 @@ export const ADAPTIVE_LEARN_STORAGE_MANIFEST = [
 ] as const
 
 export const ADAPTIVE_LEARN_ACCOUNT_DELETE_ORDER = ADAPTIVE_LEARN_STORAGE_MANIFEST.map(entry => entry.table)
-export const ADAPTIVE_LEARN_EXPORT_COLLECTIONS = ['learningThreads', 'learningThreadActivities', 'learnActivityCommandReceipts', 'learnAdaptiveThreadDeletionJobs'] as const
+export const ADAPTIVE_LEARN_EXPORT_COLLECTIONS = ['learningThreads', 'learningThreadActivities', 'learnActivityEvidenceLinks', 'learnActivityEvents', 'learnActivityCommandReceipts', 'learnAdaptiveThreadDeletionJobs'] as const
 export const ADAPTIVE_ACTIVITY_STORAGE_REGISTRY = [
   { type: 'cited_explanation', allowedActions: ['continue', 'inspect_source', 'ask_for_example'], testId: 'learn-primitive-cited-explanation', inputProps: ['heading', 'explanation', 'sourceRefs'], storedProps: ['heading', 'explanation', 'sourceRefs'] },
   { type: 'diagnostic_prompt', allowedActions: ['submit_response'], testId: 'learn-primitive-diagnostic-prompt', inputProps: ['prompt', 'responseFormat', 'assistance'], storedProps: ['prompt', 'responseFormat', 'assistance'] },
@@ -225,6 +239,16 @@ export const learningThreadActivityFields = {
   inputDigest: v.string(),
   createdAt: v.number(),
   updatedAt: v.number(),
+}
+
+export const learnActivityEvidenceLinkFields = {
+  userId: v.string(),
+  threadId: v.id('learningThreads'),
+  activityId: v.id('learningThreadActivities'),
+  sourceSnapshotId: v.id('learnSourceSnapshots'),
+  boundaryOrdinal: v.number(),
+  invalidatedAt: v.optional(v.number()),
+  createdAt: v.number(),
 }
 
 export const learnActivityCommandReceiptFields = {
