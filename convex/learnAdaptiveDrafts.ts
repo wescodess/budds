@@ -69,6 +69,7 @@ export const createThreadDraft = mutation({
       userId,
       originalNeed: input.need,
       outcome: input.outcome?.trim() ? input.outcome : input.need,
+      outcomeProvenance: input.outcome?.trim() ? 'explicit' : 'need_fallback',
       intent: input.intent,
       availableTime: input.availableTime,
       authorityKind: 'standalone',

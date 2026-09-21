@@ -113,6 +113,7 @@ export const commitActivityPlan = internalMutation({
       commandName: 'commitActivityPlan',
       payload,
       apply: async (commandCtx, thread, userId) => {
+    if (thread.initialDecision?.status === 'pending') throw new Error('Resolve or skip the initial clarification before starting an activity')
     if (thread.intent !== args.intent || thread.availableTime !== args.decisionInputs.availableTime) throw new Error('Thread plan inputs are stale')
     if (args.activityClass === 'factual' && (thread.authorityKind !== 'v2_mission' || thread.learningVoidId !== args.learningVoidId)) {
       throw new Error('Thread factual authority does not match the activity')
