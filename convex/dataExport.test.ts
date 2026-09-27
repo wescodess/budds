@@ -141,6 +141,52 @@ async function collectUserDataForTest(asUser: TestClient): Promise<TestUserDataE
 }
 
 describe('dataExport paginated queries', () => {
+  test('exports an owner-only completed non-factual diagnostic response', async () => {
+    const t = convexTest(schema, modules)
+    const activityId = await t.run(async ctx => {
+      const threadId = await ctx.db.insert('learningThreads', { userId: USER_A.tokenIdentifier, originalNeed: 'Check what I know.',
+        intent: 'refresh', availableTime: '15', authorityKind: 'standalone', sourceScope: { kind: 'none' },
+        evidenceState: 'none', lifecycle: 'active', revision: 3, createdAt: 1, updatedAt: 1 })
+      const plan = await composeAdaptiveActivityPlan({ activityId: `diagnostic:${String(threadId)}`, threadId: String(threadId),
+        boundaryOrdinal: 1, planRevision: 1, activityClass: 'non_factual', intent: 'refresh', objectiveId: null,
+        purpose: 'Record a starting point.', reasonCode: 'standalone_diagnostic',
+        primitiveSequence: [{ type: 'diagnostic_prompt', action: 'submit_response', props: { prompt: 'What do you know?', responseFormat: 'short_text', assistance: 'none' } }],
+        requiredAction: { kind: 'submit_response', label: 'Save response' },
+        evaluationContract: { version: 'learn-adaptive.evaluation.v1', kind: 'learner_response', responseFormat: 'short_text', passingScorePercent: null },
+        accessibilityMetadata: { heading: 'Starting point', instructions: 'Answer the prompt.', focusTargetTestId: 'learn-primitive-diagnostic-prompt', liveRegionMode: 'polite' },
+        pins: { learningVoidId: null, blueprintRevisionId: null, objectiveId: null, sessionContentId: null },
+        evidenceReferences: [], generationInputs: { sessionContentRevision: null, sessionContentInputDigest: null, generatorVersion: null },
+        decisionInputs: { intentRevision: 2, routerVersion: 'learn-adaptive.preparing-diagnostic.v1', availableTime: '15', sourceState: 'none', sourceInputs: [], priorActivityId: null, priorAttemptId: null, priorOutcome: null, assistance: 'none', confidence: null },
+      })
+      return await ctx.db.insert('learningThreadActivities', { userId: USER_A.tokenIdentifier, threadId,
+        activityId: plan.activityId, boundaryOrdinal: plan.boundaryOrdinal, planRevision: plan.planRevision,
+        activityClass: plan.activityClass, status: 'submitted', planVersion: plan.planVersion,
+        replayVersion: plan.replayVersion, contractVersion: plan.contractVersion, rendererVersion: plan.rendererVersion,
+        validationVersion: plan.validationVersion, sequenceValidationVersion: plan.sequenceValidationVersion,
+        fallbackVersion: plan.fallbackVersion, intent: plan.intent, objectiveId: null, purpose: plan.purpose,
+        reasonCode: plan.reasonCode, primitivePlan: plan.primitivePlan, requiredAction: plan.requiredAction,
+        evaluationContract: plan.evaluationContract, fallback: plan.fallback, accessibilityMetadata: plan.accessibilityMetadata,
+        learningVoidId: null, blueprintRevisionId: null, sessionContentId: null, evidenceReferences: [],
+        generationInputs: plan.generationInputs, decisionInputs: plan.decisionInputs, replacesActivityId: null,
+        canonicalInputSnapshot: plan.canonicalInputSnapshot, inputDigest: plan.inputDigest,
+        submittedResponse: 'My saved diagnostic answer.', createdAt: 1, updatedAt: 1 })
+    })
+    const owner = await t.withIdentity(USER_A).query(api.dataExport.getUserDataPage, { collection: 'learningThreadActivities', paginationOpts: { cursor: null, numItems: 8 } })
+    expect(owner.page).toEqual([expect.objectContaining({ _id: activityId, diagnosticResponse: 'My saved diagnostic answer.' })])
+    expect(owner.page[0]).not.toHaveProperty('submittedResponse')
+    await t.run(ctx => ctx.db.patch(activityId, { status: 'replaced' }))
+    const historical = await t.withIdentity(USER_A).query(api.dataExport.getUserDataPage, { collection: 'learningThreadActivities', paginationOpts: { cursor: null, numItems: 8 } })
+    expect(historical.page[0]).toMatchObject({ status: 'replaced', diagnosticResponse: 'My saved diagnostic answer.' })
+    await t.run(async ctx => {
+      const activity = (await ctx.db.get(activityId))!
+      await ctx.db.patch(activityId, { decisionInputs: { ...activity.decisionInputs, routerVersion: 'learn-adaptive.other-router.v1' } })
+    })
+    const otherRouter = await t.withIdentity(USER_A).query(api.dataExport.getUserDataPage, { collection: 'learningThreadActivities', paginationOpts: { cursor: null, numItems: 8 } })
+    expect(otherRouter.page[0]).not.toHaveProperty('diagnosticResponse')
+    const other = await t.withIdentity(USER_B).query(api.dataExport.getUserDataPage, { collection: 'learningThreadActivities', paginationOpts: { cursor: null, numItems: 8 } })
+    expect(other.page).toEqual([])
+  })
+
   test('exports bounded Adaptive Learn plans without replay digests or authority identifiers', async () => {
     const t = convexTest(schema, modules)
     const asUser = t.withIdentity(USER_A)

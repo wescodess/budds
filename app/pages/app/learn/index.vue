@@ -81,8 +81,7 @@ async function hydrateInitialDecision(threadId: string, ownerId: string, epoch: 
   if (currentOwnerId.value !== ownerId || ownerEpoch.value !== epoch) return null
   if (!projection) { clearDecisionAnswers(ownerId, threadId); clearDecisionPointer(ownerId); initialDecision.value = null; return null }
   initialDecision.value = { threadId, originalNeed: projection.originalNeed, intent: projection.intent, revision: projection.revision, decision: projection }
-  if (projection.status === 'pending') storeDecisionPointer(ownerId, threadId)
-  else clearDecisionPointer(ownerId)
+  storeDecisionPointer(ownerId, threadId)
   return projection
 }
 async function reconcileClarificationConflict(threadId: string, ownerId: string, epoch: number) {
@@ -118,7 +117,7 @@ function useAuthoritativeClarification() {
   const ownerId = currentOwnerId.value
   if (!current || !conflict || !ownerId) return
   initialDecision.value = { threadId: current.threadId, originalNeed: conflict.projection.originalNeed, intent: conflict.projection.intent, revision: conflict.projection.revision, decision: conflict.projection }
-  clearDecisionPointer(ownerId)
+  storeDecisionPointer(ownerId, current.threadId)
   authorityConflict.value = null
   clarificationRequestKey.value = null
   clarificationResolution.value = null
@@ -156,6 +155,9 @@ watch(() => userQuery.data.value?._id ? String(userQuery.data.value._id) : null,
 }, { immediate: true })
 function openMission(id: string) { void router.push(`/app/learn/${id}`) }
 function resumeDraft(id: string) { void router.push(`/app/learn/create?draftId=${encodeURIComponent(id)}`) }
+function openDiagnosticThread(threadId: string) {
+  void router.push(`/app/learn/thread/${threadId}`)
+}
 watch(() => readySession.value && `${readySession.value.id}:${readySession.value.revision}`, (value, previous) => { if (value !== previous) attachKey.value = null })
 async function continueReadySession() {
   const selected = readySession.value
@@ -288,7 +290,12 @@ async function selectThreadIntent(intent: Intent) {
           <UiButton type="button" class="min-h-11 self-start" data-testid="learn-adaptive-continue-ready" :disabled="attachBusy" @click="continueReadySession">{{ attachBusy ? 'Opening…' : 'Continue in your learning thread' }}</UiButton>
         </UiCard>
       </section>
-      <LearnAdaptiveInitialClarification v-if="initialDecision" :original-need="initialDecision.originalNeed" :intent="initialDecision.intent" :decision="initialDecision.decision" :busy="clarificationBusy || intentBusy" :intent-saved="intentSaved" :server-error="clarificationError" :intent-error="intentError" :answer-storage-key="currentOwnerId ? decisionAnswerKey(currentOwnerId, initialDecision.threadId) : undefined" :locked-resolution-kind="clarificationResolution?.kind" :authority-conflict="authorityConflict ? { keptLocal: authorityConflict.keptLocal } : null" @resolve="resolveInitialClarification" @select-intent="selectThreadIntent" @use-authority="useAuthoritativeClarification" @keep-local="keepLocalClarification" />
+      <template v-if="initialDecision">
+        <LearnAdaptiveInitialClarification :original-need="initialDecision.originalNeed" :intent="initialDecision.intent" :decision="initialDecision.decision" :busy="clarificationBusy || intentBusy" :intent-saved="intentSaved" :server-error="clarificationError" :intent-error="intentError" :answer-storage-key="currentOwnerId ? decisionAnswerKey(currentOwnerId, initialDecision.threadId) : undefined" :locked-resolution-kind="clarificationResolution?.kind" :authority-conflict="authorityConflict ? { keptLocal: authorityConflict.keptLocal } : null" @resolve="resolveInitialClarification" @select-intent="selectThreadIntent" @use-authority="useAuthoritativeClarification" @keep-local="keepLocalClarification" />
+        <div v-if="initialDecision.decision.status !== 'pending'" class="mx-auto max-w-3xl px-4 pb-6 sm:px-6">
+          <UiButton type="button" class="min-h-11" data-testid="learn-adaptive-open-diagnostic" @click="openDiagnosticThread(initialDecision.threadId)">Open your learning thread</UiButton>
+        </div>
+      </template>
       <section v-else-if="decisionHydrating || decisionLoadError" class="mx-auto max-w-2xl p-6" aria-live="polite" data-testid="learn-clarification-restore"><p>{{ decisionHydrating ? 'Restoring your saved clarification…' : decisionLoadError }}</p><UiButton v-if="decisionLoadError" type="button" class="mt-3 min-h-11" data-testid="learn-clarification-restore-retry" @click="restoreInitialDecision">Retry</UiButton></section>
       <LearnAdaptiveLearningHome v-else :busy="draftBusy" :server-error="draftError" :acknowledged-request-key="acknowledgedRequestKey" @start="createNeedDraft" />
     </template>

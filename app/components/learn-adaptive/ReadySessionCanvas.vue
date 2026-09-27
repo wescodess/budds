@@ -13,6 +13,7 @@ type Canvas = {
   }
   session: { studySessionId: string, revision: number, contentRevision: number, planRecordRevision: number, blueprintRecordRevision: number, scheduledStartAt: number, scheduledEndAt: number | null, timezone: string }
   responsePrompt: string | null
+  recovery?: { title: string, body: string, action: string } | null
   savedResponse?: { response: string, confidence: number } | null
 }
 
@@ -201,12 +202,12 @@ async function submit() {
     <p v-if="error" role="alert" data-testid="learn-canvas-error" class="mt-4 rounded-lg border border-destructive/40 p-3 text-sm text-destructive">{{ error }}</p>
 
     <div v-if="canvas.status === 'blocked' || !citedExplanation || !canvas.responsePrompt" :data-testid="canvas.activity.fallback.testId" class="mt-6 rounded-xl border border-border bg-card p-5">
-      <h2 class="font-dm-sans text-lg font-semibold">{{ canvas.activity.fallback.title }}</h2>
-      <p role="status" class="mt-2 text-sm text-muted-foreground">{{ canvas.activity.fallback.body }}</p>
+      <h2 class="font-dm-sans text-lg font-semibold">{{ canvas.recovery?.title ?? canvas.activity.fallback.title }}</h2>
+      <p role="status" class="mt-2 text-sm text-muted-foreground">{{ canvas.recovery?.body ?? canvas.activity.fallback.body }}</p>
       <div v-if="authoritativeSavedResponse" data-testid="learn-canvas-saved-fallback" class="mt-4 rounded-lg border border-border p-3 text-sm">
         <p role="status">Your response is saved. This activity must become available before scoring can continue.</p>
       </div>
-      <button type="button" data-testid="learn-canvas-fallback-action" class="mt-4 min-h-11 rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground" @click="emit('leave')">{{ canvas.activity.fallback.primaryAction.label }}</button>
+      <button type="button" data-testid="learn-canvas-fallback-action" class="mt-4 min-h-11 rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground" @click="emit('leave')">{{ canvas.recovery?.action ?? canvas.activity.fallback.primaryAction.label }}</button>
     </div>
     <div v-else-if="!started" data-testid="learn-canvas-ready" class="mt-6 rounded-xl border border-border bg-card p-5">
       <p class="text-sm text-muted-foreground">The supported activity is ready to begin.</p>

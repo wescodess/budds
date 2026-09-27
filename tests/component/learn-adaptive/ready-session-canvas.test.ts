@@ -117,6 +117,18 @@ describe('ready adaptive Canvas', () => {
     expect(submit).not.toHaveBeenCalled()
   })
 
+  it('explains invalidated evidence while keeping a staged response and safe action', async () => {
+    const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
+    const blockedCanvas = { ...canvas, status: 'blocked', activity: { ...canvas.activity, status: 'submitted', primitive: null }, responsePrompt: null,
+      savedResponse: { response: 'Still saved.', confidence: 5 },
+      recovery: { title: 'Evidence was invalidated', body: 'The earlier support is no longer usable. Your response remains saved.', action: 'Back to Learn' } }
+    const wrapper = await mountSuspended(Comp.default, { props: { canvas: blockedCanvas } })
+    expect(wrapper.get('[data-testid="learn-activity-fallback"]').text()).toContain('Evidence was invalidated')
+    expect(wrapper.get('[data-testid="learn-canvas-saved-fallback"]').text()).toContain('saved')
+    expect(wrapper.get('[data-testid="learn-canvas-fallback-action"]').text()).toBe('Back to Learn')
+    expect(submit).not.toHaveBeenCalled()
+  })
+
   it('keeps rendered activity operable and retries a transient meaningful-start acknowledgement', async () => {
     meaningfulStart.mockRejectedValueOnce(new Error('temporary transport failure')).mockResolvedValueOnce({ status: 'recorded', replayed: true })
     const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
