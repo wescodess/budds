@@ -42,4 +42,15 @@ describe('initial clarification', () => {
     expect(wrapper.get('[data-testid="learn-continuation-ready"]').text()).toContain('next step is ready')
     expect(wrapper.find('[data-testid="learn-clarification-answer"]').exists()).toBe(false)
   })
+
+  it('keeps a local intent selection visible after a save conflict for retry', async () => {
+    const wrapper = await mount({ intent: 'prepare' })
+    await wrapper.get('[data-testid="learn-intent-chip-explore"]').trigger('click')
+    expect(wrapper.emitted('selectIntent')?.[0]).toEqual(['explore'])
+    await wrapper.setProps({ intent: 'master', intentError: 'Thread changed in another session. Retry.' })
+    expect(wrapper.get('[data-testid="learn-intent-chip-explore"]').attributes('aria-pressed')).toBe('true')
+    expect(wrapper.get('[data-testid="learn-intent-save-error"]').text()).toContain('Retry')
+    await wrapper.get('[data-testid="learn-intent-retry"]').trigger('click')
+    expect(wrapper.emitted('selectIntent')?.[1]).toEqual(['explore'])
+  })
 })

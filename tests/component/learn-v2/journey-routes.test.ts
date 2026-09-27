@@ -12,6 +12,7 @@ const checkingAdaptiveAccess = ref(false)
 const createDraft = vi.fn()
 const prepareDecision = vi.fn()
 const resolveClarification = vi.fn()
+const setIntent = vi.fn()
 const getInitialDecision = vi.fn()
 const currentUser = ref<{ _id: string } | null>({ _id: 'owner_1' })
 
@@ -21,6 +22,7 @@ mockNuxtImport('useConvexMutation', () => (reference: unknown) => {
   const name = getFunctionName(reference as never)
   if (name?.includes('prepareInitialDecision')) return { mutate: prepareDecision }
   if (name?.includes('resolveClarification')) return { mutate: resolveClarification }
+  if (name?.includes('setIntent')) return { mutate: setIntent }
   return { mutate: createDraft }
 })
 mockNuxtImport('useConvexQuery', () => () => ({ data: currentUser }))
@@ -35,6 +37,7 @@ describe('Learn V2 route entry', () => {
     createDraft.mockReset()
     prepareDecision.mockReset().mockResolvedValue({ kind: 'ok', revision: 2, value: { status: 'not_required', reasonCode: 'declared_inputs_sufficient', continuationKind: 'standalone_non_factual' } })
     resolveClarification.mockReset()
+    setIntent.mockReset()
     getInitialDecision.mockReset().mockResolvedValue({ status: 'not_required', reasonCode: 'declared_inputs_sufficient', continuationKind: 'standalone_non_factual', originalNeed: 'Understand this system', outcome: 'Explain the system safely', revision: 2 })
     currentUser.value = { _id: 'owner_1' }
     sessionStorage.clear()
@@ -45,6 +48,75 @@ describe('Learn V2 route entry', () => {
       global: { stubs: { LearnV2LearnHub: { props: ['snapshot'], template: '<section data-testid="hub" />' } } },
     })
     expect(wrapper.find('[data-testid="hub"]').exists()).toBe(true)
+  })
+
+  it('saves a selected thread intent and keeps the local chip selected across a stale conflict', async () => {
+    adaptiveAllowed.value = true
+    createDraft.mockResolvedValue({ kind: 'created', thread: { id: 'thread_1', originalNeed: 'Understand this system', outcome: 'Understand this system', revision: 1 } })
+    getInitialDecision.mockResolvedValueOnce({ status: 'not_required', continuationKind: 'standalone_non_factual', originalNeed: 'Understand this system', outcome: 'Understand this system', intent: 'understand', revision: 2 })
+      .mockResolvedValueOnce({ status: 'not_required', continuationKind: 'standalone_non_factual', originalNeed: 'Understand this system', outcome: 'Understand this system', intent: 'master', revision: 3 })
+      .mockResolvedValue({ status: 'not_required', continuationKind: 'standalone_non_factual', originalNeed: 'Understand this system', outcome: 'Understand this system', intent: 'explore', revision: 4 })
+    setIntent.mockResolvedValueOnce({ kind: 'conflict', code: 'stale_revision', actualRevision: 3 })
+      .mockResolvedValueOnce({ kind: 'ok', value: { intent: 'explore' }, revision: 4 })
+    const Page = await import(['~', 'pages', 'app', 'learn', 'index.vue'].join('/'))
+    const wrapper = await mountSuspended(Page.default, { global: { stubs: { LearnAdaptiveLearningHome: { emits: ['start'], template: '<button data-testid="emit-start" @click="$emit(\'start\', { clientDraftId: \'intent-draft-01\', need: \'Understand this system\', intent: \'understand\', availableTime: \'15\', sourceScope: { kind: \'none\' } })">Start</button>' }, LearnV2LearnHub: { template: '<section />' } } } })
+    await wrapper.get('[data-testid="emit-start"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="learn-intent-chip-explore"]').trigger('click')
+    await flushPromises()
+    expect(setIntent.mock.calls[0]?.[0]).toMatchObject({ threadId: 'thread_1', expectedRevision: 2, intent: 'explore' })
+    expect(wrapper.get('[data-testid="learn-intent-chip-explore"]').attributes('aria-pressed')).toBe('true')
+    expect(wrapper.get('[data-testid="learn-intent-save-error"]').text()).toContain('another session')
+    await wrapper.get('[data-testid="learn-intent-retry"]').trigger('click')
+    await flushPromises()
+    expect(setIntent.mock.calls[1]?.[0]).toMatchObject({ threadId: 'thread_1', expectedRevision: 3, intent: 'explore' })
+    expect(wrapper.get('[data-testid="learn-intent-chip-explore"]').attributes('aria-pressed')).toBe('true')
+    expect(wrapper.get('[data-testid="learn-intent-saved"]').text()).toBe('Intent saved.')
+  })
+
+  it('retains the selected intent for retry when another tab changes authority after the save returns', async () => {
+    adaptiveAllowed.value = true
+    createDraft.mockResolvedValue({ kind: 'created', thread: { id: 'thread_1', originalNeed: 'Understand this system', outcome: 'Understand this system', revision: 1 } })
+    let returnAuthority!: (projection: unknown) => void
+    getInitialDecision.mockResolvedValueOnce({ status: 'not_required', continuationKind: 'standalone_non_factual', originalNeed: 'Understand this system', outcome: 'Understand this system', intent: 'understand', revision: 2 })
+      .mockImplementationOnce(() => new Promise(resolve => { returnAuthority = resolve }))
+      .mockResolvedValue({ status: 'not_required', continuationKind: 'standalone_non_factual', originalNeed: 'Understand this system', outcome: 'Understand this system', intent: 'explore', revision: 4 })
+    setIntent.mockResolvedValueOnce({ kind: 'ok', value: { intent: 'explore' }, revision: 3 })
+      .mockResolvedValueOnce({ kind: 'ok', value: { intent: 'explore' }, revision: 4 })
+    const Page = await import(['~', 'pages', 'app', 'learn', 'index.vue'].join('/'))
+    const wrapper = await mountSuspended(Page.default, { global: { stubs: { LearnAdaptiveLearningHome: { emits: ['start'], template: '<button data-testid="emit-start" @click="$emit(\'start\', { clientDraftId: \'intent-race-01\', need: \'Understand this system\', intent: \'understand\', availableTime: \'15\', sourceScope: { kind: \'none\' } })">Start</button>' }, LearnV2LearnHub: { template: '<section />' } } } })
+    await wrapper.get('[data-testid="emit-start"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="learn-intent-chip-explore"]').trigger('click')
+    await vi.waitFor(() => expect(getInitialDecision).toHaveBeenCalledTimes(2))
+    returnAuthority({ status: 'not_required', continuationKind: 'standalone_non_factual', originalNeed: 'Understand this system', outcome: 'Understand this system', intent: 'master', revision: 4 })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="learn-intent-chip-explore"]').attributes('aria-pressed')).toBe('true')
+    expect(wrapper.find('[data-testid="learn-intent-saved"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="learn-intent-save-error"]').text()).toContain('another session')
+    await wrapper.get('[data-testid="learn-intent-retry"]').trigger('click')
+    await flushPromises()
+    expect(setIntent.mock.calls[1]?.[0]).toMatchObject({ expectedRevision: 4, intent: 'explore' })
+    expect(wrapper.get('[data-testid="learn-intent-saved"]').text()).toBe('Intent saved.')
+  })
+
+  it('discards a late intent save response after the signed-in owner changes', async () => {
+    adaptiveAllowed.value = true
+    createDraft.mockResolvedValue({ kind: 'created', thread: { id: 'thread_1', originalNeed: 'Understand this system', outcome: 'Understand this system', revision: 1 } })
+    getInitialDecision.mockResolvedValue({ status: 'not_required', continuationKind: 'standalone_non_factual', originalNeed: 'Understand this system', outcome: 'Understand this system', intent: 'understand', revision: 2 })
+    let settle!: (result: unknown) => void
+    setIntent.mockImplementationOnce(() => new Promise(resolve => { settle = resolve }))
+    const Page = await import(['~', 'pages', 'app', 'learn', 'index.vue'].join('/'))
+    const wrapper = await mountSuspended(Page.default, { global: { stubs: { LearnAdaptiveLearningHome: { emits: ['start'], template: '<button data-testid="emit-start" @click="$emit(\'start\', { clientDraftId: \'intent-switch-01\', need: \'Understand this system\', intent: \'understand\', availableTime: \'15\', sourceScope: { kind: \'none\' } })">Start</button>' }, LearnV2LearnHub: { template: '<section />' } } } })
+    await wrapper.get('[data-testid="emit-start"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="learn-intent-chip-master"]').trigger('click')
+    currentUser.value = { _id: 'owner_2' }
+    await flushPromises()
+    settle({ kind: 'ok', revision: 3, value: { intent: 'master' } })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="learn-initial-decision"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="learn-intent-saved"]').exists()).toBe(false)
   })
 
   it('shows the need-first composer only through exact adaptive access and reuses one key across a failed retry', async () => {

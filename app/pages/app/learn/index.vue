@@ -3,6 +3,9 @@ import { useLearnV2Journey } from '~/composables/useLearnV2Journey'
 import { useLearnAdaptiveAccess } from '~/composables/useLearnAdaptiveAccess'
 import { getErrorMessage } from '~~/shared/errors'
 import { api } from '#convex/api'
+import type { NeedFirstDraftInput } from '~~/shared/learn-adaptive-draft'
+
+type Intent = NeedFirstDraftInput['intent']
 
 const router = useRouter()
 const { allowed, checkingAccess, hub } = useLearnV2Journey()
@@ -10,6 +13,7 @@ const { allowed: adaptiveAllowed, checkingAccess: checkingAdaptiveAccess } = use
 const createDraftMutation = import.meta.client ? useConvexMutation(api.learnAdaptiveDrafts.createThreadDraft) : { mutate: async () => null }
 const prepareDecisionMutation = import.meta.client ? useConvexMutation(api.learnAdaptiveClarifications.prepareInitialDecision) : { mutate: async () => null }
 const resolveClarificationMutation = import.meta.client ? useConvexMutation(api.learnAdaptiveClarifications.resolveClarification) : { mutate: async () => null }
+const setIntentMutation = import.meta.client ? useConvexMutation(api.learnAdaptive.setIntent) : { mutate: async () => null }
 const convex = import.meta.client ? useConvex() : null
 const userQuery = import.meta.client ? useConvexQuery(api.users.getUser, {}) : { data: ref<{ _id: string } | null>(null) }
 const draftBusy = ref(false)
@@ -18,12 +22,17 @@ const draftRequestKey = ref<string | null>(null)
 const acknowledgedRequestKey = ref<string | null>(null)
 type DraftPayload = { clientDraftId: string, need: string, outcome?: string, intent: string, availableTime: string, sourceScope: Record<string, unknown> }
 type InitialDecision = { status: 'not_required' | 'pending' | 'answered' | 'skipped', continuationKind: 'ready_v2' | 'standalone_non_factual' | 'preparing_non_factual' | 'evidence_recovery', reasonCode?: string, question?: { key: 'useful_outcome', templateVersion: string, prompt: string, help: string } }
-type InitialProjection = InitialDecision & { originalNeed: string, revision: number }
-const initialDecision = ref<{ threadId: string, originalNeed: string, revision: number, decision: InitialDecision } | null>(null)
+type InitialProjection = InitialDecision & { originalNeed: string, intent: Intent, revision: number }
+const initialDecision = ref<{ threadId: string, originalNeed: string, intent: Intent, revision: number, decision: InitialDecision } | null>(null)
 const clarificationBusy = ref(false)
 const clarificationError = ref<string | null>(null)
 const clarificationRequestKey = ref<string | null>(null)
 const clarificationResolution = ref<{ kind: 'answer', answer: string } | { kind: 'skip' } | null>(null)
+const intentBusy = ref(false)
+const intentError = ref<string | null>(null)
+const intentSaved = ref(false)
+const intentRequestKey = ref<string | null>(null)
+const pendingIntent = ref<Intent | null>(null)
 const authorityConflict = ref<{ projection: InitialProjection, keptLocal: boolean } | null>(null)
 const decisionHydrating = ref(false)
 const decisionLoadError = ref<string | null>(null)
@@ -64,7 +73,7 @@ async function hydrateInitialDecision(threadId: string, ownerId: string, epoch: 
   const projection = await convex.query(api.learnAdaptiveClarifications.getInitialDecision, { threadId: threadId as never }) as InitialProjection | null
   if (currentOwnerId.value !== ownerId || ownerEpoch.value !== epoch) return null
   if (!projection) { clearDecisionAnswers(ownerId, threadId); clearDecisionPointer(ownerId); initialDecision.value = null; return null }
-  initialDecision.value = { threadId, originalNeed: projection.originalNeed, revision: projection.revision, decision: projection }
+  initialDecision.value = { threadId, originalNeed: projection.originalNeed, intent: projection.intent, revision: projection.revision, decision: projection }
   if (projection.status === 'pending') storeDecisionPointer(ownerId, threadId)
   else clearDecisionPointer(ownerId)
   return projection
@@ -75,7 +84,7 @@ async function reconcileClarificationConflict(threadId: string, ownerId: string,
   if (currentOwnerId.value !== ownerId || ownerEpoch.value !== epoch || !projection) return false
   if (projection.status === 'pending') {
     if (initialDecision.value?.threadId === threadId && initialDecision.value.revision === projection.revision) return false
-    initialDecision.value = { threadId, originalNeed: projection.originalNeed, revision: projection.revision, decision: projection }
+    initialDecision.value = { threadId, originalNeed: projection.originalNeed, intent: projection.intent, revision: projection.revision, decision: projection }
     clarificationRequestKey.value = null
     clarificationError.value = 'The thread changed in another session. Your original answer is retained; retry to apply it to the current revision.'
     return true
@@ -101,7 +110,7 @@ function useAuthoritativeClarification() {
   const conflict = authorityConflict.value
   const ownerId = currentOwnerId.value
   if (!current || !conflict || !ownerId) return
-  initialDecision.value = { threadId: current.threadId, originalNeed: conflict.projection.originalNeed, revision: conflict.projection.revision, decision: conflict.projection }
+  initialDecision.value = { threadId: current.threadId, originalNeed: conflict.projection.originalNeed, intent: conflict.projection.intent, revision: conflict.projection.revision, decision: conflict.projection }
   clearDecisionPointer(ownerId)
   authorityConflict.value = null
   clarificationRequestKey.value = null
@@ -121,6 +130,11 @@ watch(() => userQuery.data.value?._id ? String(userQuery.data.value._id) : null,
   clarificationError.value = null
   clarificationRequestKey.value = null
   clarificationResolution.value = null
+  intentBusy.value = false
+  intentError.value = null
+  intentSaved.value = false
+  intentRequestKey.value = null
+  pendingIntent.value = null
   authorityConflict.value = null
   decisionHydrating.value = false
   decisionLoadError.value = null
@@ -192,5 +206,45 @@ async function resolveInitialClarification(resolution: { kind: 'answer', answer:
   }
   finally { if (isCurrentDispatch()) clarificationBusy.value = false }
 }
+
+async function selectThreadIntent(intent: Intent) {
+  const current = initialDecision.value
+  const dispatchOwnerId = currentOwnerId.value
+  const dispatchEpoch = ownerEpoch.value
+  if (!current || !dispatchOwnerId || intentBusy.value || clarificationBusy.value) return
+  const isCurrentDispatch = () => currentOwnerId.value === dispatchOwnerId && ownerEpoch.value === dispatchEpoch && initialDecision.value?.threadId === current.threadId
+  if (pendingIntent.value !== intent) intentRequestKey.value = null
+  pendingIntent.value = intent
+  intentRequestKey.value ??= `set-intent-${current.threadId}-${crypto.randomUUID?.() ?? Date.now()}`
+  intentBusy.value = true
+  intentError.value = null
+  intentSaved.value = false
+  try {
+    const result = await setIntentMutation.mutate({ threadId: current.threadId, intent, expectedRevision: current.revision, idempotencyKey: intentRequestKey.value } as never) as { kind: string, revision?: number }
+    if (!isCurrentDispatch()) return
+    if (result.kind === 'conflict') {
+      await hydrateInitialDecision(current.threadId, dispatchOwnerId, dispatchEpoch)
+      if (!isCurrentDispatch()) return
+      intentRequestKey.value = null
+      pendingIntent.value = null
+      intentError.value = 'The thread changed in another session. Your selected intent is still here. Retry to save it.'
+      return
+    }
+    if (result.kind !== 'ok') throw new Error('Could not save the selected intent.')
+    const authoritative = await hydrateInitialDecision(current.threadId, dispatchOwnerId, dispatchEpoch)
+    if (!authoritative || !isCurrentDispatch()) return
+    intentRequestKey.value = null
+    pendingIntent.value = null
+    if (authoritative.intent !== intent) {
+      intentError.value = 'The thread changed in another session. Your selected intent is still here. Retry to save it.'
+      return
+    }
+    intentSaved.value = true
+  }
+  catch (cause) {
+    if (isCurrentDispatch()) intentError.value = getErrorMessage(cause, 'Could not save the selected intent. Your choice is still here.')
+  }
+  finally { if (isCurrentDispatch()) intentBusy.value = false }
+}
 </script>
-<template><main><section v-if="checkingAccess || checkingAdaptiveAccess" class="mx-auto max-w-2xl p-6" aria-live="polite"><h1 class="font-dm-sans text-2xl font-bold">Learn</h1><p class="mt-2 text-muted-foreground">Checking access…</p></section><section v-else-if="!allowed" class="mx-auto max-w-2xl p-6"><h1 class="font-dm-sans text-2xl font-bold">Learn</h1><p class="mt-2 text-muted-foreground">This learning experience is not available for this account.</p></section><template v-else-if="adaptiveAllowed"><LearnAdaptiveInitialClarification v-if="initialDecision" :original-need="initialDecision.originalNeed" :decision="initialDecision.decision" :busy="clarificationBusy" :server-error="clarificationError" :answer-storage-key="currentOwnerId ? decisionAnswerKey(currentOwnerId, initialDecision.threadId) : undefined" :locked-resolution-kind="clarificationResolution?.kind" :authority-conflict="authorityConflict ? { keptLocal: authorityConflict.keptLocal } : null" @resolve="resolveInitialClarification" @use-authority="useAuthoritativeClarification" @keep-local="keepLocalClarification" /><section v-else-if="decisionHydrating || decisionLoadError" class="mx-auto max-w-2xl p-6" aria-live="polite" data-testid="learn-clarification-restore"><p>{{ decisionHydrating ? 'Restoring your saved clarification…' : decisionLoadError }}</p><UiButton v-if="decisionLoadError" type="button" class="mt-3 min-h-11" data-testid="learn-clarification-restore-retry" @click="restoreInitialDecision">Retry</UiButton></section><LearnAdaptiveLearningHome v-else :busy="draftBusy" :server-error="draftError" :acknowledged-request-key="acknowledgedRequestKey" @start="createNeedDraft" /></template><LearnV2LearnHub v-else :snapshot="hub" @create="router.push('/app/learn/create')" @open-mission="openMission" @start-session="openMission" @continue-setup="openMission" @resume-draft="resumeDraft" /></main></template>
+<template><main><section v-if="checkingAccess || checkingAdaptiveAccess" class="mx-auto max-w-2xl p-6" aria-live="polite"><h1 class="font-dm-sans text-2xl font-bold">Learn</h1><p class="mt-2 text-muted-foreground">Checking access…</p></section><section v-else-if="!allowed" class="mx-auto max-w-2xl p-6"><h1 class="font-dm-sans text-2xl font-bold">Learn</h1><p class="mt-2 text-muted-foreground">This learning experience is not available for this account.</p></section><template v-else-if="adaptiveAllowed"><LearnAdaptiveInitialClarification v-if="initialDecision" :original-need="initialDecision.originalNeed" :intent="initialDecision.intent" :decision="initialDecision.decision" :busy="clarificationBusy || intentBusy" :intent-saved="intentSaved" :server-error="clarificationError" :intent-error="intentError" :answer-storage-key="currentOwnerId ? decisionAnswerKey(currentOwnerId, initialDecision.threadId) : undefined" :locked-resolution-kind="clarificationResolution?.kind" :authority-conflict="authorityConflict ? { keptLocal: authorityConflict.keptLocal } : null" @resolve="resolveInitialClarification" @select-intent="selectThreadIntent" @use-authority="useAuthoritativeClarification" @keep-local="keepLocalClarification" /><section v-else-if="decisionHydrating || decisionLoadError" class="mx-auto max-w-2xl p-6" aria-live="polite" data-testid="learn-clarification-restore"><p>{{ decisionHydrating ? 'Restoring your saved clarification…' : decisionLoadError }}</p><UiButton v-if="decisionLoadError" type="button" class="mt-3 min-h-11" data-testid="learn-clarification-restore-retry" @click="restoreInitialDecision">Retry</UiButton></section><LearnAdaptiveLearningHome v-else :busy="draftBusy" :server-error="draftError" :acknowledged-request-key="acknowledgedRequestKey" @start="createNeedDraft" /></template><LearnV2LearnHub v-else :snapshot="hub" @create="router.push('/app/learn/create')" @open-mission="openMission" @start-session="openMission" @continue-setup="openMission" @resume-draft="resumeDraft" /></main></template>

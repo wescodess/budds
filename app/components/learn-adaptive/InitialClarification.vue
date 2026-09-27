@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { nextTick, onMounted, ref, watch } from 'vue'
 import { CLARIFICATION_MAX_ANSWER_BYTES } from '~~/shared/learn-adaptive-clarification'
+import type { NeedFirstDraftInput } from '~~/shared/learn-adaptive-draft'
+
+type Intent = NeedFirstDraftInput['intent']
 
 type Decision = {
   status: 'not_required' | 'pending' | 'answered' | 'skipped'
@@ -9,9 +12,11 @@ type Decision = {
   question?: { key: 'useful_outcome', templateVersion: string, prompt: string, help: string }
 }
 
-const props = withDefaults(defineProps<{ originalNeed: string, decision: Decision, busy?: boolean, serverError?: string | null, answerStorageKey?: string, lockedResolutionKind?: 'answer' | 'skip', authorityConflict?: { keptLocal: boolean } | null }>(), { busy: false, serverError: null, answerStorageKey: undefined, lockedResolutionKind: undefined, authorityConflict: null })
-const emit = defineEmits<{ resolve: [resolution: { kind: 'answer', answer: string } | { kind: 'skip' }]; useAuthority: []; keepLocal: [] }>()
+const props = withDefaults(defineProps<{ originalNeed: string, decision: Decision, intent?: Intent, busy?: boolean, intentSaved?: boolean, serverError?: string | null, intentError?: string | null, answerStorageKey?: string, lockedResolutionKind?: 'answer' | 'skip', authorityConflict?: { keptLocal: boolean } | null }>(), { intent: 'understand', busy: false, intentSaved: false, serverError: null, intentError: null, answerStorageKey: undefined, lockedResolutionKind: undefined, authorityConflict: null })
+const emit = defineEmits<{ resolve: [resolution: { kind: 'answer', answer: string } | { kind: 'skip' }]; selectIntent: [intent: Intent]; useAuthority: []; keepLocal: [] }>()
 const answer = ref('')
+const selectedIntent = ref<Intent>(props.intent)
+const localIntentChoice = ref(false)
 const validationError = ref<string | null>(null)
 const answerField = ref<HTMLTextAreaElement | null>(null)
 const ERROR_ID = 'learn-clarification-error'
@@ -33,6 +38,18 @@ watch(answer, (value) => {
   try { if (value) sessionStorage.setItem(props.answerStorageKey, JSON.stringify({ answer: value, savedAt: Date.now() })); else sessionStorage.removeItem(props.answerStorageKey) } catch { return }
 })
 watch(() => props.decision.status, status => { if (status !== 'pending') safeRemoveAnswer() })
+watch(() => props.intent, intent => {
+  if (!localIntentChoice.value || intent === selectedIntent.value) {
+    selectedIntent.value = intent
+    localIntentChoice.value = false
+  }
+})
+
+function selectIntent(intent: Intent) {
+  selectedIntent.value = intent
+  localIntentChoice.value = true
+  emit('selectIntent', intent)
+}
 
 async function submitAnswer() {
   validationError.value = null
@@ -58,6 +75,9 @@ function skip() {
   <section class="mx-auto w-full max-w-3xl px-4 pt-6 sm:px-6" aria-live="polite" data-testid="learn-initial-decision">
     <UiCard class="gap-5 p-5">
       <div><p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Your original wording</p><pre class="mt-2 whitespace-pre-wrap font-sans text-sm" data-testid="learn-clarification-original-need">{{ originalNeed }}</pre></div>
+      <LearnAdaptiveIntentChips :model-value="selectedIntent" :disabled="busy" @update:model-value="selectIntent" />
+      <p v-if="intentSaved" role="status" aria-live="polite" class="text-sm text-muted-foreground" data-testid="learn-intent-saved">Intent saved.</p>
+      <div v-if="intentError" class="flex flex-wrap items-center gap-2"><p role="alert" class="text-sm text-destructive" data-testid="learn-intent-save-error">{{ intentError }}</p><UiButton type="button" variant="outline" size="sm" class="min-h-11" data-testid="learn-intent-retry" :disabled="busy" @click="emit('selectIntent', selectedIntent)">Retry saving intent</UiButton></div>
       <template v-if="decision.status === 'pending' && decision.question">
         <label class="text-sm font-medium">{{ decision.question.prompt }}
           <textarea ref="answerField" v-model="answer" rows="3" maxlength="1000" class="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2" data-testid="learn-clarification-answer" :disabled="busy || !!lockedResolutionKind" :aria-describedby="validationError || serverError ? ERROR_ID : undefined" :aria-invalid="validationError || serverError ? true : undefined" />

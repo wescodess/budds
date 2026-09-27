@@ -149,6 +149,7 @@ export const getInitialDecision = query({
       ...projectDecision(thread.initialDecision),
       originalNeed: thread.originalNeed,
       outcome: thread.outcome ?? thread.originalNeed,
+      intent: thread.intent,
       revision: thread.revision,
     }
   },
