@@ -311,7 +311,7 @@ describe('Learn V2 route entry', () => {
     expect(wrapper.get('[data-testid="learn-clarification-answer"]').exists()).toBe(true)
   })
 
-  it('removes retained raw answer storage when remount finds terminal authority', async () => {
+  it('retains the route to terminal authority while removing the raw answer', async () => {
     adaptiveAllowed.value = true
     const pointerKey = 'budds.learn.adaptive-initial-decision.v1:owner_1'
     const answerKey = 'budds.learn.adaptive-initial-decision.v1:answer:owner_1:thread_terminal'
@@ -322,8 +322,10 @@ describe('Learn V2 route entry', () => {
     const wrapper = await mountSuspended(Page.default, { global: { stubs: { LearnV2LearnHub: { template: '<section />' } } } })
     await flushPromises()
     expect(wrapper.get('[data-testid="learn-continuation-ready"]').exists()).toBe(true)
-    expect(sessionStorage.getItem(pointerKey)).toBeNull()
+    expect(JSON.parse(sessionStorage.getItem(pointerKey) ?? '{}')).toMatchObject({ threadId: 'thread_terminal' })
     expect(sessionStorage.getItem(answerKey)).toBeNull()
+    await wrapper.get('[data-testid="learn-adaptive-open-diagnostic"]').trigger('click')
+    expect(JSON.parse(sessionStorage.getItem(pointerKey) ?? '{}')).toMatchObject({ threadId: 'thread_terminal' })
   })
 
   it.each(['expired_pointer', 'missing_authority'] as const)('removes unreachable raw answers for %s', async state => {
@@ -387,6 +389,6 @@ describe('Learn V2 route entry', () => {
     await flushPromises()
     expect(wrapper.get('[data-testid="learn-continuation-ready"]').exists()).toBe(true)
     expect(wrapper.find('[role="alert"]').exists()).toBe(false)
-    expect(sessionStorage.getItem('budds.learn.adaptive-initial-decision.v1:owner_1')).toBeNull()
+    expect(JSON.parse(sessionStorage.getItem('budds.learn.adaptive-initial-decision.v1:owner_1') ?? '{}')).toMatchObject({ threadId: 'thread_two_tab' })
   })
 })

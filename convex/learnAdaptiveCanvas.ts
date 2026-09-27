@@ -9,6 +9,7 @@ import { isLearnV2ContentEvidenceReady } from './lib/learnV2ContentEvidenceReady
 import { boundedAdaptiveCommandReference, prepareAdaptiveCommand } from '../shared/adaptive-command-authority'
 import { composeAdaptiveActivityPlan, replayAdaptiveActivityPlan } from '../shared/learn-adaptive-activity-plan'
 import { localDateAt } from '../shared/learn-v2-mastery'
+import { adaptiveRecoveryCopy } from '../shared/learn-adaptive-recovery'
 import { executeAdaptiveThreadCommand } from './learnAdaptiveCommands'
 
 const RECEIPT_TTL_MS = 30 * 24 * 60 * 60_000
@@ -242,8 +243,14 @@ export const getCanvas = query({
       : activity.status === 'eligible' && session.status === 'ready' ? 'ready' as const
         : activity.status === 'started' && session.status === 'in_progress' ? 'started' as const
           : ['submitted', 'scoring', 'feedback', 'reconciling'].includes(activity.status) ? activity.status : 'blocked' as const
+    const recoveryState = thread.evidenceState === 'invalidated' || evidence?.integrityState === 'deleted' || !replay.ok ? 'invalidated'
+      : evidence?.integrityState === 'unavailable' || thread.evidenceState === 'unavailable' ? 'unavailable'
+        : evidence?.integrityState === 'stale' || thread.evidenceState === 'stale' ? 'stale'
+          : thread.evidenceState === 'blocked' || evidence?.integrityState === 'insufficient' || evidence?.integrityState === 'conflicting' ? 'blocked'
+            : !current ? 'stale' : 'blocked'
     return {
       status, ownerId: owner._id, thread: { id: thread._id, outcome: thread.outcome ?? thread.originalNeed, intent: thread.intent, revision: thread.revision },
+      recovery: status === 'blocked' ? adaptiveRecoveryCopy(recoveryState) : null,
       activity: { id: activity.activityId, status: activity.status, purpose: activity.purpose, reasonCode: activity.reasonCode,
         primitive: status !== 'blocked' && replay.ok ? activity.primitivePlan[0] : null,
         fallback: activity.fallback, requiredAction: activity.requiredAction },

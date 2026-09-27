@@ -242,6 +242,16 @@ export const getUserDataPage = query({
           ...result,
           page: result.page.map(({ canonicalInputSnapshot: _snapshot, inputDigest: _digest, scoringJobId: _scoringJobId, masteryAttemptId: _masteryAttemptId, submittedResponse: _submittedResponse, submittedConfidence: _submittedConfidence, evidenceReferences, generationInputs, decisionInputs, primitivePlan, ...row }) => ({
             ...row,
+            ...(row.activityClass === 'non_factual'
+              && row.activityId === `diagnostic:${String(row.threadId)}`
+              && decisionInputs.routerVersion === 'learn-adaptive.preparing-diagnostic.v1'
+              && primitivePlan.length === 1 && primitivePlan[0]?.type === 'diagnostic_prompt'
+              && primitivePlan[0].action === 'submit_response'
+              && row.evaluationContract.kind === 'learner_response'
+              && row.learningVoidId === null && row.blueprintRevisionId === null && row.sessionContentId === null
+              && row.objectiveId === null && evidenceReferences.length === 0
+              && !_scoringJobId && !_masteryAttemptId && _submittedResponse
+              ? { diagnosticResponse: _submittedResponse } : {}),
             primitivePlan: primitivePlan.map(redactAdaptivePrimitiveSources),
             evidenceReferences: evidenceReferences.map(({ claimId: _claim, supportId: _support, sourceSnapshotId: _source, ...reference }) => reference),
             generationInputs: { sessionContentRevision: generationInputs.sessionContentRevision, generatorVersion: generationInputs.generatorVersion },
