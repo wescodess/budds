@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { FIRST_VALUE_METRIC_DEFINITION, evaluateFirstValueFixture } from '../shared/learn-adaptive-metrics'
+import { buildFirstValuePilotReport, FIRST_VALUE_METRIC_DEFINITION, evaluateFirstValueFixture, type FirstValueFixtureEvent } from '../shared/learn-adaptive-metrics'
 
 describe('Adaptive Learn first-value metric', () => {
   test('freezes the ready-content denominator and inclusive 90-second numerator', () => {
@@ -41,5 +41,27 @@ describe('Adaptive Learn first-value metric', () => {
       { eventId: 'ready', userId: 'u1', threadId: 't1', opportunityOrdinal: 1, eventVersion: 'evidence_ready.v1', occurredAt: 2 },
       { eventId: 'meaningful', userId: 'u1', threadId: 't1', opportunityOrdinal: 1, eventVersion: 'meaningful_activity_started.v1', occurredAt: 3 },
     ])).toMatchObject({ readyDenominator: 0, readyNumerator: 0, preparingDenominator: 1 })
+  })
+
+  test('reproducible query fixture returns the 70 percent threshold within the frozen 90-second window', () => {
+    const readyStarts: FirstValueFixtureEvent[] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(index => ({
+      eventId: `ready-start-${index}`, userId: `ready-user-${index}`, threadId: `ready-thread-${index}`,
+      opportunityOrdinal: 1, eventVersion: 'thread_command_committed.v1', occurredAt: index * 100_000,
+      firstValueEligibility: 'ready_factual_content', cohort: 'pilot_fixture', activityContractVersion: 'learn-adaptive.activity-contract.v1',
+    }))
+    const onTimeStops: FirstValueFixtureEvent[] = [1, 2, 3, 4, 5, 6, 7].map(index => ({
+      eventId: `ready-stop-${index}`, userId: `ready-user-${index}`, threadId: `ready-thread-${index}`,
+      opportunityOrdinal: 1, eventVersion: 'meaningful_activity_started.v1', occurredAt: index * 100_000 + 90_000,
+    }))
+    const fixture: FirstValueFixtureEvent[] = [
+      ...readyStarts, ...onTimeStops,
+      { eventId: 'late-stop', userId: 'ready-user-8', threadId: 'ready-thread-8', opportunityOrdinal: 1, eventVersion: 'meaningful_activity_started.v1', occurredAt: 890_001 },
+      { eventId: 'preparing-start', userId: 'preparing-user', threadId: 'preparing-thread', opportunityOrdinal: 1, eventVersion: 'thread_command_committed.v1', occurredAt: 2_000_000, firstValueEligibility: 'preparing', cohort: 'pilot_fixture', activityContractVersion: 'learn-adaptive.activity-contract.v1' },
+      { eventId: 'excluded-start', userId: 'excluded-user', threadId: 'excluded-thread', opportunityOrdinal: 1, eventVersion: 'thread_command_committed.v1', occurredAt: 2_100_000, firstValueEligibility: 'excluded', firstValueExclusionCode: 'explicit_exclusion', cohort: 'pilot_fixture', activityContractVersion: 'learn-adaptive.activity-contract.v1' },
+    ]
+    expect(buildFirstValuePilotReport(fixture)).toMatchObject({
+      metricVersion: 'first_value.v1', timeWindowMs: 90_000, targetReadyRate: 0.7,
+      readyDenominator: 10, readyNumerator: 7, readyRate: 0.7, preparingDenominator: 1, excluded: 1, meetsPilotTarget: true,
+    })
   })
 })

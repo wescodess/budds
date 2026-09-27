@@ -128,6 +128,7 @@ async function adaptiveScoringAuthority(
   userId: string,
   scope: Awaited<ReturnType<typeof sessionScope>>,
   admission: AdaptiveAdmissionContext,
+  stagedInput?: { response: string, confidence: number },
 ) {
   if (!(await hasAdaptiveExperienceAccess(ctx, userId))) return { allowed: false as const, kind: 'denied' as const, code: 'adaptive_gate_unavailable' as const }
   const thread = await ctx.db.get(admission.threadId)
@@ -150,6 +151,9 @@ async function adaptiveScoringAuthority(
     learnerHash: await digest(['adaptive-v2-pilot-cohort.v1', userId]),
   })
   if (!pilot.allowed) return { allowed: false as const, kind: 'blocked' as const, code: pilot.code }
+  if (stagedInput && (activity.submittedResponse !== stagedInput.response || activity.submittedConfidence !== stagedInput.confidence)) {
+    return { allowed: false as const, kind: 'denied' as const, code: 'adaptive_activity_authority_unavailable' as const }
+  }
   return { allowed: true as const, activity }
 }
 
@@ -235,6 +239,7 @@ async function projectAdaptiveFeedback(ctx: MutationCtx, job: Doc<'learnJobs'>, 
     scoringJobId: job._id,
     masteryAttemptId: attemptId,
     submittedResponse: undefined,
+    submittedConfidence: undefined,
     reconciliationReason: undefined,
     recoveryFeedback: undefined,
     feedbackProjection: projection,
@@ -503,7 +508,7 @@ export const beginMasteryScoring = internalMutation({
       scope ??= await sessionScope(ctx, args.tokenIdentifier, args.studySessionId)
       if (scope.session.status !== 'in_progress' || scope.session.revision !== args.expectedSessionRevision || scope.content.revision !== args.expectedContentRevision || scope.plan.recordRevision !== args.expectedPlanRecordRevision || scope.blueprint.recordRevision !== args.expectedBlueprintRecordRevision) throw new Error('Started session revision conflict')
       if (args.adaptiveAdmission) {
-        const authority = await adaptiveScoringAuthority(ctx, args.tokenIdentifier, scope, args.adaptiveAdmission)
+        const authority = await adaptiveScoringAuthority(ctx, args.tokenIdentifier, scope, args.adaptiveAdmission, args)
         if (!authority.allowed || authority.activity._id !== adaptiveActivity?._id) return { kind: 'denied' as const, code: 'adaptive_activity_authority_unavailable' as const, message: 'Adaptive scoring is unavailable.', retryable: false }
       }
       const leaseToken = crypto.randomUUID()
@@ -517,7 +522,7 @@ export const beginMasteryScoring = internalMutation({
     scope ??= await sessionScope(ctx, args.tokenIdentifier, args.studySessionId)
     if (scope.session.status !== 'in_progress' || scope.session.revision !== args.expectedSessionRevision || scope.content.revision !== args.expectedContentRevision || scope.plan.recordRevision !== args.expectedPlanRecordRevision || scope.blueprint.recordRevision !== args.expectedBlueprintRecordRevision) throw new Error('Started session revision conflict')
     if (args.adaptiveAdmission) {
-      const authority = await adaptiveScoringAuthority(ctx, args.tokenIdentifier, scope, args.adaptiveAdmission)
+      const authority = await adaptiveScoringAuthority(ctx, args.tokenIdentifier, scope, args.adaptiveAdmission, args)
       if (!authority.allowed) return { kind: authority.kind, code: authority.code, message: authority.kind === 'denied' ? 'Adaptive scoring is unavailable.' : 'Adaptive pilot dispatch is not approved.', retryable: false }
       adaptiveActivity = authority.activity
       if (adaptiveActivity?.status !== 'submitted' || adaptiveActivity.scoringJobId || adaptiveActivity.masteryAttemptId) return { kind: 'denied' as const, code: 'adaptive_activity_authority_unavailable' as const, message: 'Adaptive scoring is unavailable.', retryable: false }
