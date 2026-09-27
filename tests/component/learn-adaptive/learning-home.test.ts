@@ -35,6 +35,17 @@ describe('need-first LearningHome', () => {
     await wrapper.get('[data-testid="learn-adaptive-outcome"]').setValue('Explain the key idea in my own words')
   }
 
+  it('saves a single selected intent chip in the owner draft and submits that intent', async () => {
+    const wrapper = await mount()
+    await fillRequired(wrapper)
+    await wrapper.get('[data-testid="learn-intent-chip-master"]').trigger('click')
+    expect(wrapper.findAll('[aria-pressed="true"]')).toHaveLength(1)
+    expect(wrapper.get('[data-testid="learn-intent-chip-master"]').attributes('aria-pressed')).toBe('true')
+    await vi.waitFor(() => expect(sessionStorage.getItem(ordinaryKey())).toContain('"intent":"master"'))
+    await wrapper.get('form').trigger('submit')
+    expect(wrapper.emitted('start')?.[0]?.[0]).toMatchObject({ intent: 'master' })
+  })
+
   it('keeps entered content, associates the correction, and focuses the first invalid field', async () => {
     const wrapper = await mount()
     const need = wrapper.get('[data-testid="learn-adaptive-need"]')

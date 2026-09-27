@@ -21,6 +21,7 @@ type CommandInput<T> = {
   idempotencyKey: string
   commandName: string
   payload: Record<string, unknown>
+  allowNoop?: boolean
   apply: (ctx: MutationCtx, thread: Doc<'learningThreads'>, userId: string) => Promise<{ value: T, revision: number }>
 }
 
@@ -71,7 +72,7 @@ export async function executeAdaptiveThreadCommand<T>(ctx: MutationCtx, input: C
     throw error
   }
   const authoritativeThread = await ctx.db.get(thread._id)
-  if (!authoritativeThread || authoritativeThread.userId !== userId || committed.revision <= input.expectedRevision || authoritativeThread.revision !== committed.revision) {
+  if (!authoritativeThread || authoritativeThread.userId !== userId || committed.revision < input.expectedRevision || (!input.allowNoop && committed.revision === input.expectedRevision) || authoritativeThread.revision !== committed.revision) {
     throw new Error('Adaptive command reported a non-authoritative revision')
   }
   const receiptId = await ctx.db.insert('learnActivityCommandReceipts', {

@@ -1,8 +1,28 @@
 import { v } from 'convex/values'
 import { action, mutation } from './_generated/server'
-import { initiateAdaptiveThreadDeletion } from './learnAdaptiveCommands'
+import { executeAdaptiveThreadCommand, initiateAdaptiveThreadDeletion } from './learnAdaptiveCommands'
 import { requireAuth } from './lib/auth'
 import { masteryAttemptArgs, submitMasteryAttemptForOwner, type MasteryAttemptActionResult } from './learnV2Mastery'
+import { needFirstDraftArgsValidator } from '../shared/learn-adaptive-draft'
+
+export const setIntent = mutation({
+  args: { threadId: v.id('learningThreads'), intent: needFirstDraftArgsValidator.intent, expectedRevision: v.number(), idempotencyKey: v.string() },
+  handler: async (ctx, args) => await executeAdaptiveThreadCommand(ctx, {
+    threadId: args.threadId,
+    expectedRevision: args.expectedRevision,
+    idempotencyKey: args.idempotencyKey,
+    commandName: 'setIntent',
+    payload: { intent: args.intent },
+    allowNoop: true,
+    apply: async (commandCtx, thread) => {
+      if (thread.lifecycle === 'ended' || thread.lifecycle === 'rollback') throw new Error('Thread intent cannot be changed in its current lifecycle')
+      if (thread.intent === args.intent) return { value: { intent: thread.intent }, revision: thread.revision }
+      const revision = thread.revision + 1
+      await commandCtx.db.patch(thread._id, { intent: args.intent, revision, updatedAt: Date.now() })
+      return { value: { intent: args.intent }, revision }
+    },
+  }),
+})
 
 // Data-lifecycle exception: this ownership-scoped maintenance request uses
 // base authentication and remains available when Adaptive Learn is disabled.
