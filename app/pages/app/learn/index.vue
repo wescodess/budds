@@ -16,6 +16,13 @@ const resolveClarificationMutation = import.meta.client ? useConvexMutation(api.
 const setIntentMutation = import.meta.client ? useConvexMutation(api.learnAdaptive.setIntent) : { mutate: async () => null }
 const convex = import.meta.client ? useConvex() : null
 const userQuery = import.meta.client ? useConvexQuery(api.users.getUser, {}) : { data: ref<{ _id: string } | null>(null) }
+const readyTodayQuery = import.meta.client ? useConvexQuery(api.learnV2Today.getToday, {}, { enabled: adaptiveAllowed }) : { data: ref(null) }
+const attachReadyMutation = import.meta.client ? useConvexMutation(api.learnAdaptiveCanvas.attachReadySession) : { mutate: async () => null }
+const readyToday = computed(() => readyTodayQuery.data.value as { status: string, sessionId?: string, sessionRevision?: number, objective?: { title: string } } | null)
+const readySession = computed(() => readyToday.value?.status === 'ready' && readyToday.value.sessionId && readyToday.value.sessionRevision !== undefined ? { id: readyToday.value.sessionId, revision: readyToday.value.sessionRevision, title: readyToday.value.objective?.title ?? 'Ready study session' } : null)
+const attachBusy = ref(false)
+const attachError = ref<string | null>(null)
+const attachKey = ref<string | null>(null)
 const draftBusy = ref(false)
 const draftError = ref<string | null>(null)
 const draftRequestKey = ref<string | null>(null)
@@ -126,6 +133,9 @@ watch(() => userQuery.data.value?._id ? String(userQuery.data.value._id) : null,
   draftRequestKey.value = null
   acknowledgedRequestKey.value = null
   draftBusy.value = false
+  attachBusy.value = false
+  attachError.value = null
+  attachKey.value = null
   clarificationBusy.value = false
   clarificationError.value = null
   clarificationRequestKey.value = null
@@ -146,6 +156,24 @@ watch(() => userQuery.data.value?._id ? String(userQuery.data.value._id) : null,
 }, { immediate: true })
 function openMission(id: string) { void router.push(`/app/learn/${id}`) }
 function resumeDraft(id: string) { void router.push(`/app/learn/create?draftId=${encodeURIComponent(id)}`) }
+watch(() => readySession.value && `${readySession.value.id}:${readySession.value.revision}`, (value, previous) => { if (value !== previous) attachKey.value = null })
+async function continueReadySession() {
+  const selected = readySession.value
+  const ownerId = currentOwnerId.value
+  const epoch = ownerEpoch.value
+  if (!selected || !ownerId || attachBusy.value) return
+  attachBusy.value = true
+  attachError.value = null
+  attachKey.value ??= `adaptive-ready:${crypto.randomUUID?.() ?? Date.now()}`
+  try {
+    const result = await attachReadyMutation.mutate({ studySessionId: selected.id as never, expectedSessionRevision: selected.revision, idempotencyKey: attachKey.value }) as { kind: string, threadId?: string }
+    if (ownerEpoch.value !== epoch || currentOwnerId.value !== ownerId || readySession.value?.id !== selected.id || readySession.value.revision !== selected.revision) return
+    if (result.kind !== 'attached' || !result.threadId) throw new Error('Could not open the ready learning thread.')
+    await router.push(`/app/learn/thread/${result.threadId}`)
+  }
+  catch (cause) { if (ownerEpoch.value === epoch && currentOwnerId.value === ownerId) attachError.value = getErrorMessage(cause, 'Could not open the ready session. Try again.') }
+  finally { if (ownerEpoch.value === epoch && currentOwnerId.value === ownerId) attachBusy.value = false }
+}
 async function createNeedDraft(payload: DraftPayload) {
   const dispatchOwnerId = currentOwnerId.value
   const dispatchEpoch = ownerEpoch.value
@@ -247,4 +275,23 @@ async function selectThreadIntent(intent: Intent) {
   finally { if (isCurrentDispatch()) intentBusy.value = false }
 }
 </script>
-<template><main><section v-if="checkingAccess || checkingAdaptiveAccess" class="mx-auto max-w-2xl p-6" aria-live="polite"><h1 class="font-dm-sans text-2xl font-bold">Learn</h1><p class="mt-2 text-muted-foreground">Checking access…</p></section><section v-else-if="!allowed" class="mx-auto max-w-2xl p-6"><h1 class="font-dm-sans text-2xl font-bold">Learn</h1><p class="mt-2 text-muted-foreground">This learning experience is not available for this account.</p></section><template v-else-if="adaptiveAllowed"><LearnAdaptiveInitialClarification v-if="initialDecision" :original-need="initialDecision.originalNeed" :intent="initialDecision.intent" :decision="initialDecision.decision" :busy="clarificationBusy || intentBusy" :intent-saved="intentSaved" :server-error="clarificationError" :intent-error="intentError" :answer-storage-key="currentOwnerId ? decisionAnswerKey(currentOwnerId, initialDecision.threadId) : undefined" :locked-resolution-kind="clarificationResolution?.kind" :authority-conflict="authorityConflict ? { keptLocal: authorityConflict.keptLocal } : null" @resolve="resolveInitialClarification" @select-intent="selectThreadIntent" @use-authority="useAuthoritativeClarification" @keep-local="keepLocalClarification" /><section v-else-if="decisionHydrating || decisionLoadError" class="mx-auto max-w-2xl p-6" aria-live="polite" data-testid="learn-clarification-restore"><p>{{ decisionHydrating ? 'Restoring your saved clarification…' : decisionLoadError }}</p><UiButton v-if="decisionLoadError" type="button" class="mt-3 min-h-11" data-testid="learn-clarification-restore-retry" @click="restoreInitialDecision">Retry</UiButton></section><LearnAdaptiveLearningHome v-else :busy="draftBusy" :server-error="draftError" :acknowledged-request-key="acknowledgedRequestKey" @start="createNeedDraft" /></template><LearnV2LearnHub v-else :snapshot="hub" @create="router.push('/app/learn/create')" @open-mission="openMission" @start-session="openMission" @continue-setup="openMission" @resume-draft="resumeDraft" /></main></template>
+<template>
+  <main>
+    <section v-if="checkingAccess || checkingAdaptiveAccess" class="mx-auto max-w-2xl p-6" aria-live="polite"><h1 class="font-dm-sans text-2xl font-bold">Learn</h1><p class="mt-2 text-muted-foreground">Checking access…</p></section>
+    <section v-else-if="!allowed" class="mx-auto max-w-2xl p-6"><h1 class="font-dm-sans text-2xl font-bold">Learn</h1><p class="mt-2 text-muted-foreground">This learning experience is not available for this account.</p></section>
+    <template v-else-if="adaptiveAllowed">
+      <section v-if="readySession" class="mx-auto w-full max-w-3xl px-4 pt-6 sm:px-6" data-testid="learn-adaptive-ready-session">
+        <UiCard class="gap-3 p-5">
+          <h2 class="font-dm-sans text-lg font-semibold">Ready to continue</h2>
+          <p class="text-sm text-muted-foreground">{{ readySession.title }}</p>
+          <p v-if="attachError" role="alert" data-testid="learn-adaptive-attach-error" class="text-sm text-destructive">{{ attachError }}</p>
+          <UiButton type="button" class="min-h-11 self-start" data-testid="learn-adaptive-continue-ready" :disabled="attachBusy" @click="continueReadySession">{{ attachBusy ? 'Opening…' : 'Continue in your learning thread' }}</UiButton>
+        </UiCard>
+      </section>
+      <LearnAdaptiveInitialClarification v-if="initialDecision" :original-need="initialDecision.originalNeed" :intent="initialDecision.intent" :decision="initialDecision.decision" :busy="clarificationBusy || intentBusy" :intent-saved="intentSaved" :server-error="clarificationError" :intent-error="intentError" :answer-storage-key="currentOwnerId ? decisionAnswerKey(currentOwnerId, initialDecision.threadId) : undefined" :locked-resolution-kind="clarificationResolution?.kind" :authority-conflict="authorityConflict ? { keptLocal: authorityConflict.keptLocal } : null" @resolve="resolveInitialClarification" @select-intent="selectThreadIntent" @use-authority="useAuthoritativeClarification" @keep-local="keepLocalClarification" />
+      <section v-else-if="decisionHydrating || decisionLoadError" class="mx-auto max-w-2xl p-6" aria-live="polite" data-testid="learn-clarification-restore"><p>{{ decisionHydrating ? 'Restoring your saved clarification…' : decisionLoadError }}</p><UiButton v-if="decisionLoadError" type="button" class="mt-3 min-h-11" data-testid="learn-clarification-restore-retry" @click="restoreInitialDecision">Retry</UiButton></section>
+      <LearnAdaptiveLearningHome v-else :busy="draftBusy" :server-error="draftError" :acknowledged-request-key="acknowledgedRequestKey" @start="createNeedDraft" />
+    </template>
+    <LearnV2LearnHub v-else :snapshot="hub" @create="router.push('/app/learn/create')" @open-mission="openMission" @start-session="openMission" @continue-setup="openMission" @resume-draft="resumeDraft" />
+  </main>
+</template>
