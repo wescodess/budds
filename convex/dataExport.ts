@@ -240,7 +240,7 @@ export const getUserDataPage = query({
         const result = await ctx.db.query('learningThreadActivities').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
         return {
           ...result,
-          page: result.page.map(({ canonicalInputSnapshot: _snapshot, inputDigest: _digest, scoringJobId: _scoringJobId, masteryAttemptId: _masteryAttemptId, submittedResponse: _submittedResponse, evidenceReferences, generationInputs, decisionInputs, primitivePlan, ...row }) => ({
+          page: result.page.map(({ canonicalInputSnapshot: _snapshot, inputDigest: _digest, scoringJobId: _scoringJobId, masteryAttemptId: _masteryAttemptId, submittedResponse: _submittedResponse, submittedConfidence: _submittedConfidence, evidenceReferences, generationInputs, decisionInputs, primitivePlan, ...row }) => ({
             ...row,
             primitivePlan: primitivePlan.map(redactAdaptivePrimitiveSources),
             evidenceReferences: evidenceReferences.map(({ claimId: _claim, supportId: _support, sourceSnapshotId: _source, ...reference }) => reference),

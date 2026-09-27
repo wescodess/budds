@@ -93,14 +93,40 @@ describe('ready V2 adaptive Canvas', () => {
     expect(submitted).toMatchObject({ kind: 'ok', value: { status: 'submitted' } })
     expect(await owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, { threadId: attached.threadId, activityId: attached.activityId, studySessionId: ids.studySessionId, expectedSessionRevision: 4, expectedRevision: 2, response: 'The apple falls because Earth attracts it.', confidence: 4, idempotencyKey: 'canvas-submit-response-0001' })).toEqual(submitted)
     expect(await owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, { threadId: attached.threadId, activityId: attached.activityId, studySessionId: ids.studySessionId, expectedSessionRevision: 4, expectedRevision: 2, response: 'A different response.', confidence: 4, idempotencyKey: 'canvas-submit-response-0001' })).toMatchObject({ kind: 'conflict', code: 'duplicate_key' })
-    expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'submitted', activity: { status: 'submitted' } })
+    expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({
+      status: 'submitted', activity: { status: 'submitted' },
+      savedResponse: { response: 'The apple falls because Earth attracts it.', confidence: 4 },
+    })
     const stagedActivity = await t.run(async ctx => ctx.db.query('learningThreadActivities').withIndex('by_userId_and_threadId_and_boundaryOrdinal', q => q.eq('userId', OWNER.tokenIdentifier).eq('threadId', attached.threadId)).first())
-    expect(stagedActivity?.submittedResponse).toBeUndefined()
+    expect(stagedActivity).toMatchObject({ submittedResponse: 'The apple falls because Earth attracts it.', submittedConfidence: 4 })
     const stagingReceipt = await t.run(async ctx => ctx.db.query('learnActivityCommandReceipts').withIndex('by_userId_and_threadId', q => q.eq('userId', OWNER.tokenIdentifier).eq('threadId', attached.threadId)).collect())
     expect(JSON.stringify(stagingReceipt)).not.toContain('The apple falls because Earth attracts it.')
+    const telemetry = await t.run(async ctx => ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('threadId', attached.threadId)).take(20))
+    expect(JSON.stringify(telemetry)).not.toContain('The apple falls because Earth attracts it.')
     expect(await owner.action(api.learnAdaptive.submitResponse, { threadId: attached.threadId, activityId: attached.activityId, studySessionId: ids.studySessionId, expectedSessionRevision: 4, expectedContentRevision: 1, expectedPlanRecordRevision: 5, expectedBlueprintRecordRevision: 3, response: 'The apple falls because Earth attracts it.', confidence: 4, idempotencyKey: `adaptive-canvas-score:${attached.activityId}` })).toMatchObject({ kind: 'blocked' })
     const durable = await t.run(async ctx => ({ jobs: await ctx.db.query('learnJobs').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(2), attempts: await ctx.db.query('masteryAttempts').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(2) }))
     expect(durable).toEqual({ jobs: [], attempts: [] })
+  })
+
+  test('rejects scoring input that differs from the atomically staged response', async () => {
+    pilotFixture.approved = true
+    process.env.LEARN_ADAPTIVE_V2_PILOT_MANIFEST = 'adaptive-v2-pilot.v1'
+    try {
+      const { t, owner, ids } = await fixture()
+      const attached = await owner.mutation(api.learnAdaptiveCanvas.attachReadySession, { studySessionId: ids.studySessionId, expectedSessionRevision: 2, idempotencyKey: 'canvas-match-attach-0001' })
+      await owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: ids.studySessionId, expectedSessionRevision: 2, expectedContentRevision: 1, idempotencyKey: 'canvas-match-start-0001' })
+      const staged = await owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, { threadId: attached.threadId, activityId: attached.activityId, studySessionId: ids.studySessionId, expectedSessionRevision: 3, expectedRevision: 2, response: '  Earth attracts the apple.  ', confidence: 4, idempotencyKey: 'canvas-match-stage-0001' })
+      expect(await owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, { threadId: attached.threadId, activityId: attached.activityId, studySessionId: ids.studySessionId, expectedSessionRevision: 3, expectedRevision: 2, response: 'Earth attracts the apple.', confidence: 4, idempotencyKey: 'canvas-match-stage-0001' })).toEqual(staged)
+      expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ savedResponse: { response: 'Earth attracts the apple.', confidence: 4 } })
+      expect(await owner.action(api.learnAdaptive.submitResponse, { threadId: attached.threadId, activityId: attached.activityId, studySessionId: ids.studySessionId, expectedSessionRevision: 3, expectedContentRevision: 1, expectedPlanRecordRevision: 5, expectedBlueprintRecordRevision: 3, response: 'Changed after staging.', confidence: 4, idempotencyKey: 'canvas-match-score-0001' })).toMatchObject({ kind: 'denied', code: 'adaptive_activity_authority_unavailable' })
+      expect(await owner.action(api.learnAdaptive.submitResponse, { threadId: attached.threadId, activityId: attached.activityId, studySessionId: ids.studySessionId, expectedSessionRevision: 3, expectedContentRevision: 1, expectedPlanRecordRevision: 5, expectedBlueprintRecordRevision: 3, response: 'Earth attracts the apple.', confidence: 5, idempotencyKey: 'canvas-match-score-0002' })).toMatchObject({ kind: 'denied', code: 'adaptive_activity_authority_unavailable' })
+      expect(await owner.action(api.learnAdaptive.submitResponse, { threadId: attached.threadId, activityId: attached.activityId, studySessionId: ids.studySessionId, expectedSessionRevision: 3, expectedContentRevision: 1, expectedPlanRecordRevision: 5, expectedBlueprintRecordRevision: 3, response: ' Earth attracts the apple. ', confidence: 4, idempotencyKey: 'canvas-match-score-0003' })).toMatchObject({ kind: 'denied', code: 'adaptive_activity_authority_unavailable' })
+      expect(await t.run(ctx => ctx.db.query('learnJobs').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(1))).toEqual([])
+    }
+    finally {
+      pilotFixture.approved = false
+      delete process.env.LEARN_ADAPTIVE_V2_PILOT_MANIFEST
+    }
   })
 
   test('later prompt claim invalidation blocks rendering and guarded submission', async () => {
@@ -170,6 +196,7 @@ describe('ready V2 adaptive Canvas', () => {
       expect(durable.attempts[0]).toMatchObject({ studySessionId: ids.studySessionId, response: 'Earth attracts the apple.' })
       expect(durable.activity).toMatchObject({ activityId: attached.activityId, status: 'feedback' })
       expect(durable.activity?.submittedResponse).toBeUndefined()
+      expect(durable.activity?.submittedConfidence).toBeUndefined()
       expect(durable.activity?.evidenceReferences).toHaveLength(2)
     }
     finally {

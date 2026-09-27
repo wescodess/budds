@@ -220,6 +220,7 @@ export const learningThreadActivityFields = {
   scoringJobId: v.optional(v.id('learnJobs')),
   masteryAttemptId: v.optional(v.id('masteryAttempts')),
   submittedResponse: v.optional(v.string()),
+  submittedConfidence: v.optional(v.number()),
   reconciliationReason: v.optional(v.literal('provider_outcome_requires_reconciliation')),
   recoveryFeedback: v.optional(v.object({
     templateVersion: v.literal('learn-adaptive.feedback-templates.v1'),

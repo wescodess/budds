@@ -73,3 +73,15 @@ export function evaluateFirstValueFixture(events: FirstValueFixtureEvent[]) {
     opportunities,
   }
 }
+
+export function buildFirstValuePilotReport(events: FirstValueFixtureEvent[]) {
+  const evaluation = evaluateFirstValueFixture(events)
+  const readyRate = evaluation.readyDenominator === 0 ? null : evaluation.readyNumerator / evaluation.readyDenominator
+  return {
+    ...evaluation,
+    timeWindowMs: FIRST_VALUE_METRIC_DEFINITION.timeWindowMs,
+    targetReadyRate: 0.7,
+    readyRate,
+    meetsPilotTarget: readyRate !== null && readyRate >= 0.7,
+  }
+}

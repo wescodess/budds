@@ -252,6 +252,9 @@ export const getCanvas = query({
         scheduledStartAt: session.scheduledStartAt, scheduledEndAt: session.scheduledEndAt ?? null,
         timezone: session.timezone ?? plan.timezone ?? 'UTC' },
       responsePrompt: status === 'blocked' ? null : prompt ?? null,
+      savedResponse: activity.submittedResponse !== undefined && activity.submittedConfidence !== undefined
+        ? { response: activity.submittedResponse, confidence: activity.submittedConfidence }
+        : null,
     }
   },
 })
@@ -261,8 +264,9 @@ export const getCanvas = query({
 export const submitCanvasResponse = mutation({
   args: { threadId: v.id('learningThreads'), activityId: v.string(), studySessionId: v.id('studySessions'), expectedSessionRevision: v.number(), expectedRevision: v.number(), response: v.string(), confidence: v.number(), idempotencyKey: v.string() },
   handler: async (ctx, args) => {
-    if (!args.response.trim() || args.response.length > 12_000 || !Number.isInteger(args.confidence) || args.confidence < 1 || args.confidence > 5) throw new Error('Canvas response is invalid')
-    const responseHash = `sha256:${Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(args.response)))).map(byte => byte.toString(16).padStart(2, '0')).join('')}`
+    const canonicalResponse = args.response.trim()
+    if (!canonicalResponse || canonicalResponse.length > 12_000 || !Number.isInteger(args.confidence) || args.confidence < 1 || args.confidence > 5) throw new Error('Canvas response is invalid')
+    const responseHash = `sha256:${Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonicalResponse)))).map(byte => byte.toString(16).padStart(2, '0')).join('')}`
     return await executeAdaptiveThreadCommand(ctx, {
       threadId: args.threadId, expectedRevision: args.expectedRevision, idempotencyKey: args.idempotencyKey,
       commandName: 'submitCanvasResponse',
@@ -291,7 +295,9 @@ export const submitCanvasResponse = mutation({
           || (await loadAdaptiveClaimProjection(commandCtx, { userId, historical: false, sessionContentId: content._id, sessionContentRevision: content.revision, evidenceReferences: activity.evidenceReferences })).integrityState !== 'accepted'
           || !(await isLearnV2ContentEvidenceReady(commandCtx, userId, content, learningVoid._id))) throw new Error('Started Canvas evidence is unavailable')
         const now = Date.now()
-        await commandCtx.db.patch(activity._id, { status: 'submitted', updatedAt: now })
+        await commandCtx.db.patch(activity._id, {
+          status: 'submitted', submittedResponse: canonicalResponse, submittedConfidence: args.confidence, updatedAt: now,
+        })
         const revision = thread.revision + 1
         await commandCtx.db.patch(thread._id, { revision, lifecycle: 'active', updatedAt: now })
         return { value: { status: 'submitted' as const, activityId: activity.activityId }, revision }
