@@ -48,10 +48,19 @@ export const attachReadySession = mutation({
       const thread = await ctx.db.get(saved.threadId)
       if (!thread || thread.userId !== userId || thread.currentActivityId === undefined) throw new Error('Attached thread is unavailable')
       const activity = await ctx.db.get(thread.currentActivityId)
-      if (!activity || activity.activityId !== saved.activityId || activity.status === 'ended' || activity.status === 'replaced') throw new Error('Attached activity is unavailable')
+      if (!activity || activity.userId !== userId || activity.threadId !== thread._id
+        || activity.activityId !== saved.activityId || activity.status === 'ended' || activity.status === 'replaced') throw new Error('Attached activity is unavailable')
       const content = activity.sessionContentId && await ctx.db.get(activity.sessionContentId)
-      if (!content || !activity.learningVoidId || content.studySessionId !== args.studySessionId
-        || !(await isLearnV2ContentEvidenceReady(ctx, userId, content, activity.learningVoidId))) throw new Error('Attached Canvas evidence is unavailable')
+      const session = content && await ctx.db.get(content.studySessionId)
+      const plan = session && await ctx.db.get(session.studyPlanRevisionId)
+      const learningVoid = plan && await ctx.db.get(plan.learningVoidId)
+      if (!content || !session || !plan || !learningVoid || content.studySessionId !== args.studySessionId
+        || content.userId !== userId || session.userId !== userId || plan.userId !== userId
+        || thread.authorityKind !== 'v2_mission' || thread.learningVoidId !== learningVoid._id
+        || activity.learningVoidId !== learningVoid._id || learningVoid.userId !== userId
+        || activity.blueprintRevisionId !== content.blueprintRevisionId || activity.objectiveId !== content.objectiveId
+        || activity.generationInputs.sessionContentRevision !== content.revision) throw new Error('Attached V2 anchor is unavailable')
+      if (!(await isLearnV2ContentEvidenceReady(ctx, userId, content, learningVoid._id))) throw new Error('Attached Canvas evidence is unavailable')
       return { kind: 'attached' as const, ...saved, replayed: true as const }
     }
 
@@ -82,7 +91,13 @@ export const attachReadySession = mutation({
       || (session.status === 'in_progress' && (session.startedSessionContentId !== content._id || session.startedSessionContentRevision !== content.revision))) throw new Error('Published study content is unavailable')
     if (!(await isLearnV2ContentEvidenceReady(ctx, userId, content, learningVoid._id))) throw new Error('Ready Canvas evidence is unavailable')
     const linked = await findCurrentAdaptiveActivityForSessionContent(ctx, userId, content._id)
-    if (linked) return { kind: 'attached' as const, threadId: linked.thread._id, activityId: linked.activity.activityId, replayed: true as const }
+    if (linked) {
+      if (linked.thread.authorityKind !== 'v2_mission' || linked.thread.learningVoidId !== learningVoid._id
+        || linked.activity.learningVoidId !== learningVoid._id || linked.activity.blueprintRevisionId !== blueprint._id
+        || linked.activity.objectiveId !== objective._id || linked.activity.sessionContentId !== content._id
+        || linked.activity.generationInputs.sessionContentRevision !== content.revision) throw new Error('Attached V2 anchor is unavailable')
+      return { kind: 'attached' as const, threadId: linked.thread._id, activityId: linked.activity.activityId, replayed: true as const }
+    }
     if (session.status !== 'ready') throw new Error('This started session has no adaptive thread')
     const attachedRows = await ctx.db.query('learningThreadActivities')
       .withIndex('by_userId_and_sessionContentId_and_updatedAt', q => q.eq('userId', userId).eq('sessionContentId', content._id))
@@ -198,7 +213,8 @@ export async function loadReadyCanvas(ctx: QueryCtx | MutationCtx, userId: strin
     const thread = await ctx.db.get(threadId)
     if (!owner || !thread || thread.userId !== userId || thread.authorityKind !== 'v2_mission' || thread.deletionStartedAt !== undefined || !thread.currentActivityId) return null
     const activity = await ctx.db.get(thread.currentActivityId)
-    if (!activity || activity.userId !== userId || activity.threadId !== thread._id || !activity.sessionContentId || !activity.learningVoidId) return null
+    if (!activity || activity.userId !== userId || activity.threadId !== thread._id || !activity.sessionContentId || !activity.learningVoidId
+      || thread.learningVoidId !== activity.learningVoidId) return null
     const content = await ctx.db.get(activity.sessionContentId)
     const session = content && await ctx.db.get(content.studySessionId)
     const learningVoid = await ctx.db.get(activity.learningVoidId)
@@ -227,6 +243,12 @@ export async function loadReadyCanvas(ctx: QueryCtx | MutationCtx, userId: strin
       ? await loadAdaptiveClaimProjection(ctx, { userId, historical: false, sessionContentId: content._id, sessionContentRevision: activity.generationInputs.sessionContentRevision, evidenceReferences: activity.evidenceReferences })
       : null
     const contentEvidenceReady = await isLearnV2ContentEvidenceReady(ctx, userId, content, learningVoid._id)
+    const scoredAttempt = activity.masteryAttemptId && await ctx.db.get(activity.masteryAttemptId)
+    const completedFeedback = activity.status === 'feedback' && session.status === 'completed' && scoredAttempt
+      && scoredAttempt.userId === userId && scoredAttempt.studySessionId === session._id
+      && scoredAttempt.sessionContentId === content._id && scoredAttempt.blueprintRevisionId === blueprint._id
+      && scoredAttempt.objectiveId === objective._id && scoredAttempt.contentRevision === content.revision
+      && session.startedSessionContentId === content._id && session.startedSessionContentRevision === content.revision
     const current = plan.status === 'accepted' && stablePlan.activeRevisionId === plan._id && blueprint.status === 'accepted' && content.status === 'published'
       && contentEvidenceReady
       && activity.sessionContentId === content._id && activity.objectiveId === objective._id
@@ -234,7 +256,7 @@ export async function loadReadyCanvas(ctx: QueryCtx | MutationCtx, userId: strin
       && session.studyPlanRevisionId === plan._id && content.studyPlanRevisionId === plan._id
       && content.blueprintRevisionId === blueprint._id && content.objectiveId === objective._id
       && learningVoid.activeBlueprintRevisionId === blueprint._id
-      && (session.status === 'ready' || session.status === 'in_progress')
+      && (session.status === 'ready' || session.status === 'in_progress' || Boolean(completedFeedback))
       && (session.status !== 'in_progress' || session.startedSessionContentId === content._id && session.startedSessionContentRevision === content.revision)
     const blocks = await ctx.db.query('sessionContentBlocks').withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', userId).eq('sessionContentId', content._id)).take(17)
     const prompt = blocks.length <= 16 ? blocks.find(block => block.kind === 'independent_application')?.content : undefined
@@ -306,6 +328,8 @@ export const submitCanvasResponse = mutation({
           || session.status !== 'in_progress' || session.revision !== args.expectedSessionRevision
           || session.startedSessionContentId !== content._id || session.startedSessionContentRevision !== content.revision
           || !plan || !stablePlan || !learningVoid || !blueprint
+          || thread.authorityKind !== 'v2_mission' || thread.learningVoidId !== learningVoid._id
+          || activity.learningVoidId !== learningVoid._id
           || plan.userId !== userId || learningVoid.userId !== userId || blueprint.userId !== userId
           || stablePlan.activeRevisionId !== plan._id || plan.status !== 'accepted' || blueprint.status !== 'accepted'
           || plan.blueprintRecordRevision !== blueprint.recordRevision || activity.blueprintRevisionId !== blueprint._id

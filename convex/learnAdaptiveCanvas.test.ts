@@ -69,6 +69,53 @@ async function fixture() {
 }
 
 describe('ready V2 adaptive Canvas', () => {
+  test('a replay cannot retarget an attached activity to a different or missing immutable V2 anchor', async () => {
+    const { t, owner, ids } = await fixture()
+    const attached = await owner.mutation(api.learnAdaptiveCanvas.attachReadySession, {
+      studySessionId: ids.studySessionId, expectedSessionRevision: 2, idempotencyKey: 'canvas-anchor-attach-0001',
+    })
+    expect(await owner.query(api.learnAdaptive.getThread, { threadId: attached.threadId })).toMatchObject({ thread: {
+      authorityKind: 'v2_mission', learningVoidId: ids.learningVoidId,
+    } })
+    await t.run(ctx => ctx.db.patch(attached.threadId, { learningVoidId: undefined }))
+    expect(await owner.query(api.learnAdaptive.getThread, { threadId: attached.threadId })).toBeNull()
+    expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toBeNull()
+    await expect(owner.mutation(api.learnAdaptiveCanvas.attachReadySession, {
+      studySessionId: ids.studySessionId, expectedSessionRevision: 2, idempotencyKey: 'canvas-anchor-attach-0001',
+    })).rejects.toThrow(/anchor/i)
+    await expect(owner.mutation(api.learnAdaptiveCanvas.attachReadySession, {
+      studySessionId: ids.studySessionId, expectedSessionRevision: 2, idempotencyKey: 'canvas-anchor-attach-0002',
+    })).rejects.toThrow(/anchor/i)
+    await t.run(ctx => ctx.db.patch(attached.threadId, { learningVoidId: ids.learningVoidId, authorityKind: 'standalone' }))
+    await expect(owner.mutation(api.learnAdaptiveCanvas.attachReadySession, {
+      studySessionId: ids.studySessionId, expectedSessionRevision: 2, idempotencyKey: 'canvas-anchor-attach-0001',
+    })).rejects.toThrow(/anchor/i)
+  })
+
+  test('an attachment receipt cannot replay an activity no longer owned by the caller', async () => {
+    const { t, owner, ids } = await fixture()
+    const args = { studySessionId: ids.studySessionId, expectedSessionRevision: 2, idempotencyKey: 'canvas-owner-replay-0001' }
+    const attached = await owner.mutation(api.learnAdaptiveCanvas.attachReadySession, args)
+    const activityId = await t.run(async ctx => (await ctx.db.get(attached.threadId))!.currentActivityId!)
+    await t.run(ctx => ctx.db.patch(activityId, { userId: OTHER.tokenIdentifier }))
+    await expect(owner.mutation(api.learnAdaptiveCanvas.attachReadySession, args)).rejects.toThrow(/unavailable/i)
+  })
+
+  test('a staged representative response cannot use an activity whose thread V2 anchor changed', async () => {
+    const { t, owner, ids } = await fixture()
+    const attached = await owner.mutation(api.learnAdaptiveCanvas.attachReadySession, {
+      studySessionId: ids.studySessionId, expectedSessionRevision: 2, idempotencyKey: 'canvas-anchor-stage-0001',
+    })
+    await owner.mutation(api.learnV2SessionContent.startStudySession, {
+      studySessionId: ids.studySessionId, expectedSessionRevision: 2, expectedContentRevision: 1, idempotencyKey: 'canvas-anchor-start-0001',
+    })
+    await t.run(ctx => ctx.db.patch(attached.threadId, { learningVoidId: undefined }))
+    await expect(owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, {
+      threadId: attached.threadId, activityId: attached.activityId, studySessionId: ids.studySessionId,
+      expectedSessionRevision: 3, expectedRevision: 2, response: 'Earth attracts it.', confidence: 4,
+      idempotencyKey: 'canvas-anchor-submit-0001',
+    })).rejects.toThrow(/unavailable/i)
+  })
   test('offers supported closed controls only while live source authority is ready', async () => {
     const { t, owner, ids } = await fixture()
     const attached = await owner.mutation(api.learnAdaptiveCanvas.attachReadySession, {
@@ -277,7 +324,11 @@ describe('ready V2 adaptive Canvas', () => {
     try {
       const { t, owner, ids } = await fixture()
       const attached = await owner.mutation(api.learnAdaptiveCanvas.attachReadySession, { studySessionId: ids.studySessionId, expectedSessionRevision: 2, idempotencyKey: 'canvas-admit-attach-0001' })
+      expect(await owner.query(api.learnAdaptive.getThread, { threadId: attached.threadId })).toMatchObject({
+        completion: null, thread: { authorityKind: 'v2_mission', learningVoidId: ids.learningVoidId },
+      })
       await owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: ids.studySessionId, expectedSessionRevision: 2, expectedContentRevision: 1, idempotencyKey: 'canvas-admit-start-0001' })
+      expect(await owner.query(api.learnAdaptive.getThread, { threadId: attached.threadId })).toMatchObject({ completion: null })
       await owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, { threadId: attached.threadId, activityId: attached.activityId, studySessionId: ids.studySessionId, expectedSessionRevision: 3, expectedRevision: 2, response: 'Earth attracts the apple.', confidence: 4, idempotencyKey: 'canvas-admit-stage-0001' })
       const admitted = await owner.action(api.learnAdaptive.submitResponse, { threadId: attached.threadId, activityId: attached.activityId, studySessionId: ids.studySessionId, expectedSessionRevision: 3, expectedContentRevision: 1, expectedPlanRecordRevision: 5, expectedBlueprintRecordRevision: 3, response: 'Earth attracts the apple.', confidence: 4, idempotencyKey: 'canvas-admit-score-0001' })
       expect(admitted).toMatchObject({ kind: 'accepted', status: 'completed' })
@@ -295,6 +346,26 @@ describe('ready V2 adaptive Canvas', () => {
       expect(durable.activity?.submittedResponse).toBeUndefined()
       expect(durable.activity?.submittedConfidence).toBeUndefined()
       expect(durable.activity?.evidenceReferences).toHaveLength(2)
+      expect(await owner.query(api.learnAdaptive.getThread, { threadId: attached.threadId })).toMatchObject({
+        thread: { authorityKind: 'v2_mission', learningVoidId: ids.learningVoidId, evidenceState: 'ready' },
+        completion: { status: 'passed', basis: 'server_scored_representative_task', activityId: attached.activityId },
+        nextAction: { kind: 'open_v2_mission', reasonCode: 'representative_pass', activityId: attached.activityId },
+      })
+      expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'feedback' })
+      await t.run(ctx => ctx.db.patch(ids.studySessionId, { startedSessionContentRevision: 2 }))
+      expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'blocked' })
+      await t.run(ctx => ctx.db.patch(ids.studySessionId, { startedSessionContentRevision: 1 }))
+      await t.run(ctx => ctx.db.patch(ids.studySessionId, { startedSessionContentId: undefined }))
+      expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'blocked' })
+      await t.run(ctx => ctx.db.patch(ids.studySessionId, { startedSessionContentId: ids.sessionContentId }))
+      await t.run(ctx => ctx.db.patch(durable.attempts[0]!._id, { contentRevision: 2 }))
+      expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'blocked' })
+      await t.run(ctx => ctx.db.patch(durable.attempts[0]!._id, { contentRevision: 1 }))
+      expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'feedback' })
+      await t.run(ctx => ctx.db.patch(ids.sessionContentId, { status: 'superseded' }))
+      expect(await owner.query(api.learnAdaptive.getThread, { threadId: attached.threadId })).toMatchObject({
+        completion: { status: 'passed' }, thread: { evidenceState: 'stale' }, nextAction: { kind: 'recover' },
+      })
     }
     finally {
       pilotFixture.approved = false

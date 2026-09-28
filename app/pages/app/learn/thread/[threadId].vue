@@ -89,7 +89,9 @@ function leave() { void router.push(safeDestination.value) }
 
       <section class="mt-6 rounded-xl border border-border bg-[var(--learn-context-surface)] p-5" aria-labelledby="learn-thread-next-title">
         <h2 id="learn-thread-next-title" class="font-dm-sans text-lg font-semibold">Your next move</h2>
-        <p class="mt-2 text-sm">{{ canvas || diagnostic ? thread.nextAction.label : detailPending ? 'Loading current activity…' : 'Review this thread from your learning home.' }}</p>
+        <p v-if="thread.completion" class="mt-2 text-sm" data-testid="learn-representative-outcome" role="status">{{ thread.completion.status === 'passed' ? 'Representative task passed.' : 'Representative task needs more practice.' }} This result describes the scored task, not mastery.</p>
+        <p class="mt-2 text-sm">{{ thread.completion || canvas || diagnostic ? thread.nextAction.label : detailPending ? 'Loading current activity…' : 'Review this thread from your learning home.' }}</p>
+        <NuxtLink v-if="thread.completion && thread.thread.authorityKind === 'v2_mission'" :to="safeDestination" data-testid="learn-representative-next-move" class="mt-2 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)]">{{ safeDestinationLabel }}</NuxtLink>
         <NuxtLink v-if="thread.nextAction.kind === 'clarify' && (canvas || diagnostic)" :to="safeDestination" class="mt-2 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)]">{{ safeDestinationLabel }}</NuxtLink>
       </section>
 

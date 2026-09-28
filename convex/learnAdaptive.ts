@@ -1,5 +1,5 @@
 import { v } from 'convex/values'
-import { action, mutation, query } from './_generated/server'
+import { action, mutation, query, type QueryCtx } from './_generated/server'
 import type { Doc } from './_generated/dataModel'
 import { executeAdaptiveThreadCommand, initiateAdaptiveThreadDeletion } from './learnAdaptiveCommands'
 import { requireAdaptiveQueryAccess } from './lib/adaptiveLearnAccess'
@@ -9,6 +9,9 @@ import { requireAuth } from './lib/auth'
 import { masteryAttemptArgs, submitMasteryAttemptForOwner, type MasteryAttemptActionResult } from './learnV2Mastery'
 import { needFirstDraftArgsValidator } from '../shared/learn-adaptive-draft'
 import { ADAPTIVE_OVERRIDE_VERSION, adaptiveOverrideOptionValidator, fixedNextPlanForOverride, projectAdaptiveControls } from '../shared/learn-adaptive-controls'
+import { ADAPTIVE_REPRESENTATIVE_COMPLETION_VERSION, representativeNextAction } from '../shared/learn-adaptive-completion'
+import { LEARN_V2_MASTERY_THRESHOLD } from '../shared/learn-v2-mastery'
+import { learnActivityEventDedupeHash } from './lib/learnAdaptiveEvents'
 
 export const setIntent = mutation({
   args: { threadId: v.id('learningThreads'), intent: needFirstDraftArgsValidator.intent, expectedRevision: v.number(), idempotencyKey: v.string() },
@@ -65,15 +68,56 @@ export const applyOverride = mutation({
 
 const HISTORY_LIMIT = 8
 
-function nextThreadAction(thread: Doc<'learningThreads'>, activity: Doc<'learningThreadActivities'> | null, factualCanvas: Awaited<ReturnType<typeof loadReadyCanvas>>, sourceEvidenceState: Awaited<ReturnType<typeof liveEvidenceState>>) {
+async function representativeCompletion(ctx: QueryCtx, userId: string, activity: Doc<'learningThreadActivities'> | null) {
+  if (!activity || activity.activityClass !== 'factual' || activity.status !== 'feedback'
+    || activity.evaluationContract.kind !== 'server_scored' || !activity.masteryAttemptId || !activity.scoringJobId) return null
+  const [attempt, job, passedEvent, failedEvent] = await Promise.all([
+    ctx.db.get(activity.masteryAttemptId),
+    ctx.db.get(activity.scoringJobId),
+    ctx.db.query('learnActivityEvents').withIndex('by_userId_and_activityId_and_eventType_and_occurredAt', q => q.eq('userId', userId).eq('activityId', activity._id).eq('eventType', 'representative_pass')).first(),
+    ctx.db.query('learnActivityEvents').withIndex('by_userId_and_activityId_and_eventType_and_occurredAt', q => q.eq('userId', userId).eq('activityId', activity._id).eq('eventType', 'representative_fail')).first(),
+  ])
+  if (!attempt || !job || attempt.userId !== userId || attempt.blueprintRevisionId !== activity.blueprintRevisionId
+    || attempt.objectiveId !== activity.objectiveId || attempt.sessionContentId !== activity.sessionContentId
+    || attempt.contentRevision !== activity.generationInputs.sessionContentRevision
+    || !attempt.studySessionId || !attempt.studyPlanRevisionId
+    || job.userId !== userId || job.type !== 'mastery_scoring' || job.status !== 'succeeded'
+    || job.adaptiveThreadId !== activity.threadId || job.adaptiveActivityId !== activity._id
+    || job.studySessionId !== attempt.studySessionId || job.studyPlanRevisionId !== attempt.studyPlanRevisionId
+    || job.learningVoidId !== activity.learningVoidId || job.blueprintRevisionId !== activity.blueprintRevisionId
+    || job.checkpoint !== `attempt:${String(attempt._id)}`
+    || !Number.isFinite(attempt.serverScorePercent) || Boolean(passedEvent) === Boolean(failedEvent)) return null
+  const event = passedEvent ?? failedEvent!
+  const passed = attempt.serverScorePercent! >= LEARN_V2_MASTERY_THRESHOLD
+  if (activity.evaluationContract.passingScorePercent !== LEARN_V2_MASTERY_THRESHOLD
+    || event.threadId !== activity.threadId || event.activityId !== activity._id
+    || event.outcomeCode !== (passed ? 'pass' : 'fail') || Boolean(passedEvent) !== passed
+    || event.sourceVersion !== attempt.scorerVersion || event.contractVersion !== activity.contractVersion
+    || event.metadata.boundaryOrdinal !== activity.boundaryOrdinal || event.metadata.planRevision !== activity.planRevision
+    || event.dedupeKeyHash !== await learnActivityEventDedupeHash({ userId, threadId: activity.threadId,
+      eventVersion: passed ? 'representative_pass.v1' : 'representative_fail.v1', semanticKey: `attempt:${String(attempt._id)}:representative` })) return null
+  return { version: ADAPTIVE_REPRESENTATIVE_COMPLETION_VERSION,
+    status: passedEvent ? 'passed' as const : 'needs_practice' as const,
+    basis: 'server_scored_representative_task' as const, activityId: activity.activityId, recordedAt: event.occurredAt }
+}
+
+function nextThreadAction(thread: Doc<'learningThreads'>, activity: Doc<'learningThreadActivities'> | null, factualCanvas: Awaited<ReturnType<typeof loadReadyCanvas>>, sourceEvidenceState: Awaited<ReturnType<typeof liveEvidenceState>>, completion: Awaited<ReturnType<typeof representativeCompletion>>) {
   if (thread.lifecycle === 'ended' || thread.lifecycle === 'rollback') return {
     kind: 'return_to_learn', label: 'Back to Learn', reasonCode: 'thread_unavailable', activityId: null,
   }
   if (thread.lifecycle === 'blocked' || thread.lifecycle === 'paused') return {
     kind: 'recover', label: 'Back to Learn', reasonCode: `thread_${thread.lifecycle}`, activityId: activity?.activityId ?? null,
   }
-  if (activity?.activityClass === 'factual' && (sourceEvidenceState !== 'ready' || !factualCanvas || factualCanvas.status === 'blocked')) return {
-    kind: 'recover', label: 'Review your learning mission', reasonCode: sourceEvidenceState !== 'ready' ? `source_${sourceEvidenceState}` : factualCanvas ? 'canvas_blocked' : 'canvas_unavailable', activityId: activity.activityId,
+  if (activity?.activityClass === 'factual' && sourceEvidenceState !== 'ready') return {
+    kind: 'recover', label: 'Review your learning mission', reasonCode: `source_${sourceEvidenceState}`, activityId: activity.activityId,
+  }
+  if (activity?.activityClass === 'factual' && (!factualCanvas || factualCanvas.status === 'blocked')) return {
+    kind: 'recover', label: 'Review your learning mission', reasonCode: factualCanvas ? 'canvas_blocked' : 'canvas_unavailable', activityId: activity.activityId,
+  }
+  if (activity && completion) {
+    const expected = representativeNextAction(completion.status === 'passed', activity.activityId)
+    return thread.nextAction?.kind === expected.kind && thread.nextAction.activityId === expected.activityId
+      && thread.nextAction.reasonCode === expected.reasonCode ? thread.nextAction : expected
   }
   if (activity) {
     if (activity.status === 'eligible' || activity.status === 'started') return {
@@ -110,8 +154,14 @@ export const getThread = query({
     if (!owner) return null
     const activity = thread.currentActivityId ? await ctx.db.get(thread.currentActivityId) : null
     if (activity && (activity.userId !== userId || activity.threadId !== thread._id)) return null
+    if (thread.authorityKind === 'v2_mission') {
+      const learningVoid = thread.learningVoidId && await ctx.db.get(thread.learningVoidId)
+      if (!learningVoid || learningVoid.userId !== userId
+        || activity?.activityClass === 'factual' && activity.learningVoidId !== learningVoid._id) return null
+    }
     const sourceEvidenceState = await liveEvidenceState(ctx, thread)
     const factualCanvas = activity?.activityClass === 'factual' ? await loadReadyCanvas(ctx, userId, thread._id) : null
+    const completion = await representativeCompletion(ctx, userId, activity)
     const evidenceState = activity?.activityClass === 'factual'
       ? sourceEvidenceState !== 'ready' ? sourceEvidenceState
         : factualCanvas?.status === 'blocked' ? factualCanvas.recoveryState ?? 'blocked'
@@ -131,12 +181,13 @@ export const getThread = query({
         id: activity.activityId, status: activity.status, activityClass: activity.activityClass,
         purpose: activity.purpose, reasonCode: activity.reasonCode, boundaryOrdinal: activity.boundaryOrdinal,
       } : null,
+      completion,
       history: recent.filter(row => row._id !== thread.currentActivityId).slice(0, HISTORY_LIMIT).map(row => ({
         id: row.activityId, status: row.status, activityClass: row.activityClass,
         purpose: row.purpose, reasonCode: row.reasonCode, boundaryOrdinal: row.boundaryOrdinal,
         updatedAt: row.updatedAt,
       })),
-      nextAction: nextThreadAction(thread, activity, factualCanvas, sourceEvidenceState),
+      nextAction: nextThreadAction(thread, activity, factualCanvas, sourceEvidenceState, completion),
     }
   },
 })

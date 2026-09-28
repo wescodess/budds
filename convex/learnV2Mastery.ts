@@ -5,6 +5,7 @@ import { action, internalMutation, internalQuery, mutation, type ActionCtx, type
 import { hasLearnV2Access, requireLearnV2MutationAccess } from './lib/learnV2Access'
 import { hasAdaptiveExperienceAccess } from './lib/adaptiveLearnAccess'
 import { addCalendarDays, deriveMastery, LEARN_V2_MASTERY_SCORER_VERSION, LEARN_V2_MASTERY_THRESHOLD, masteryAttemptTime, scoreCriteria } from '../shared/learn-v2-mastery'
+import { representativeNextAction } from '../shared/learn-adaptive-completion'
 import { classifyAiGatewayFailure, generateCompletion } from '../server/utils/ai-gateway'
 import { retrieveLearnV2FolderEvidence } from '../server/utils/learn-v2-folder-evidence'
 import { requireActiveBlueprint } from './lib/learnV2BlueprintAuthority'
@@ -137,6 +138,7 @@ async function adaptiveScoringAuthority(
     .unique()
   if (!thread || thread.userId !== userId || thread.deletionStartedAt !== undefined || !activity || activity.threadId !== thread._id
     || thread.currentActivityId !== activity._id || activity.activityClass !== 'factual'
+    || thread.authorityKind !== 'v2_mission' || thread.learningVoidId !== scope.voidRow._id
     || activity.evaluationContract.kind !== 'server_scored'
     || !['submitted', 'scoring', 'reconciling', 'feedback'].includes(activity.status)
     || activity.learningVoidId !== scope.voidRow._id || activity.blueprintRevisionId !== scope.blueprint._id
@@ -260,6 +262,8 @@ async function emitAdaptiveAttemptEvents(ctx: MutationCtx, input: {
   if (!input.job.adaptiveActivityId || !input.job.adaptiveThreadId) return
   const [activity, thread] = await Promise.all([ctx.db.get(input.job.adaptiveActivityId), ctx.db.get(input.job.adaptiveThreadId)])
   if (!activity || !thread || activity.userId !== input.job.userId || activity.threadId !== thread._id || thread.userId !== input.job.userId) throw new Error('Adaptive attempt event authority is unavailable')
+  if (thread.authorityKind !== 'v2_mission' || thread.learningVoidId !== input.job.learningVoidId
+    || activity.learningVoidId !== thread.learningVoidId) throw new Error('Adaptive attempt V2 anchor is unavailable')
   const common = {
     userId: input.job.userId,
     threadId: thread._id,
@@ -279,6 +283,13 @@ async function emitAdaptiveAttemptEvents(ctx: MutationCtx, input: {
   await writeLearnActivityEvent(ctx, { ...common, eventType: 'activity_completed', eventVersion: 'activity_completed.v1', semanticKey: `attempt:${String(input.attemptId)}:completed`, reasonCode: 'server_scored_attempt_committed', outcomeCode: 'completed' })
   const passed = input.scorePercent >= LEARN_V2_MASTERY_THRESHOLD
   await writeLearnActivityEvent(ctx, { ...common, eventType: passed ? 'representative_pass' : 'representative_fail', eventVersion: passed ? 'representative_pass.v1' : 'representative_fail.v1', semanticKey: `attempt:${String(input.attemptId)}:representative`, reasonCode: 'server_scored_outcome', outcomeCode: passed ? 'pass' : 'fail' })
+  if (thread.currentActivityId === activity._id) {
+    await ctx.db.patch(thread._id, {
+      nextAction: representativeNextAction(passed, activity.activityId),
+      revision: thread.revision + 1,
+      updatedAt: input.now,
+    })
+  }
   if (input.kind === 'retained_transfer') {
     if (input.assistanceLevel === 'none') {
       await writeLearnActivityEvent(ctx, { ...common, eventType: 'delayed_check_eligible', eventVersion: 'delayed_check_eligible.v1', semanticKey: `attempt:${String(input.attemptId)}:delayed_eligible`, reasonCode: 'seven_calendar_days_elapsed', outcomeCode: 'eligible' })
