@@ -9,6 +9,7 @@ const diagnostic = ref<Record<string, unknown> | null>(null)
 const artifact = ref<Record<string, unknown> | null>(null)
 const reflection = ref<Record<string, unknown> | null>(null)
 const evidence = ref<Record<string, unknown> | null>(null)
+const memory = ref<Record<string, unknown> | null>(null)
 const projection = ref<Record<string, unknown> | null>(null)
 const canvasPending = ref(false)
 const diagnosticPending = ref(false)
@@ -16,24 +17,25 @@ const user = ref<{ _id: string } | null>({ _id: 'owner_1' })
 const requestedRoute = reactive({ params: { threadId: 'thread_1' }, query: { activity: undefined as string | undefined } })
 const calls = vi.fn()
 const mutationCalls = vi.fn().mockResolvedValue({ kind: 'ok' })
+const memoryMutationCalls = vi.fn().mockResolvedValue({ kind: 'ok', revision: 4 })
 const isOnline = ref(true)
 
 mockNuxtImport('useLearnAdaptiveAccess', () => () => ({ allowed, checkingAccess: ref(false) }))
 mockNuxtImport('useRoute', () => () => requestedRoute)
 mockNuxtImport('useOnlineStatus', () => () => ({ isOnline }))
-mockNuxtImport('useConvexMutation', () => () => ({ mutate: mutationCalls }))
+mockNuxtImport('useConvexMutation', () => (reference: never) => ({ mutate: getFunctionName(reference).startsWith('learnAdaptive:setMemoryPreference') || getFunctionName(reference).startsWith('learnAdaptive:deleteArtifact') ? memoryMutationCalls : mutationCalls }))
 mockNuxtImport('useConvexAction', () => () => ({ mutate: vi.fn() }))
 mockNuxtImport('useConvexQuery', () => (reference: never, args: unknown) => {
   const name = getFunctionName(reference)
   calls(name, args)
-  return { data: name === 'users:getUser' ? user : name === 'learnAdaptive:getThread' ? projection : name === 'learnAdaptiveRecovery:getDiagnosticCanvas' ? diagnostic : name === 'learnAdaptiveEvidence:getThreadActivityEvidence' ? evidence : name === 'learnAdaptive:getArtifactCanvas' ? artifact : name === 'learnAdaptive:getReflectionCanvas' ? reflection : name === 'learnAdaptive:listThreadArtifacts' ? ref([]) : canvas,
+  return { data: name === 'users:getUser' ? user : name === 'learnAdaptive:getThread' ? projection : name === 'learnAdaptive:getMemory' ? memory : name === 'learnAdaptiveRecovery:getDiagnosticCanvas' ? diagnostic : name === 'learnAdaptiveEvidence:getThreadActivityEvidence' ? evidence : name === 'learnAdaptive:getArtifactCanvas' ? artifact : name === 'learnAdaptive:getReflectionCanvas' ? reflection : name === 'learnAdaptive:listThreadArtifacts' ? ref([]) : canvas,
     pending: name === 'learnAdaptiveRecovery:getDiagnosticCanvas' ? diagnosticPending : name === 'learnAdaptiveCanvas:getCanvas' ? canvasPending : ref(false) }
 })
 
 const path = ['~', 'pages', 'app', 'learn', 'thread', '[threadId].vue'].join('/')
 
 describe('adaptive thread route isolation', () => {
-  beforeEach(() => { allowed.value = true; isOnline.value = true; canvas.value = null; diagnostic.value = null; artifact.value = null; reflection.value = null; evidence.value = null; projection.value = null; canvasPending.value = false; diagnosticPending.value = false; user.value = { _id: 'owner_1' }; requestedRoute.params.threadId = 'thread_1'; requestedRoute.query.activity = undefined; calls.mockClear(); mutationCalls.mockClear(); sessionStorage.clear() })
+  beforeEach(() => { allowed.value = true; isOnline.value = true; canvas.value = null; diagnostic.value = null; artifact.value = null; reflection.value = null; evidence.value = null; memory.value = null; projection.value = null; canvasPending.value = false; diagnosticPending.value = false; user.value = { _id: 'owner_1' }; requestedRoute.params.threadId = 'thread_1'; requestedRoute.query.activity = undefined; calls.mockClear(); mutationCalls.mockClear(); memoryMutationCalls.mockReset().mockResolvedValue({ kind: 'ok', revision: 4 }); sessionStorage.clear() })
 
   it('restores the saved goal, unresolved point, attempt context, artifact, and next move', async () => {
     const Page = await import(path)
@@ -526,5 +528,129 @@ describe('adaptive thread route isolation', () => {
     expect(wrapper.get('[data-testid="learn-adaptive-thread-shell"]').text()).toContain('Gravity')
     expect(wrapper.get('[data-testid="learn-thread-rollback-recovery"]').text()).toContain('unavailable')
     expect(wrapper.get('[data-testid="learn-thread-rollback-recovery"] a').attributes('href')).toBe('/app/learn/void_1')
+  })
+
+  it('opens owned memory and closes back to its trigger without exposing another owner projection', async () => {
+    const Page = await import(path)
+    projection.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Build a plan', intent: 'build', evidenceState: 'none', lifecycle: 'active', revision: 3, authorityKind: 'standalone' },
+      currentActivity: null, history: [], nextAction: { kind: 'continue', label: 'Continue', activityId: null } }
+    memory.value = { ownerId: 'owner_1', threadId: 'thread_1', threadRevision: 3, lifecycle: 'active', unresolvedPoint: 'Plan the next step',
+      nextAction: { label: 'Continue' }, evidenceState: 'none', preferences: [], artifacts: [], history: [] }
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1', attachTo: document.body })
+    expect(calls.mock.calls.some(([name]) => name === 'learnAdaptive:getMemory')).toBe(true)
+    const trigger = wrapper.get('[data-testid="learn-memory-open"]')
+    await trigger.trigger('click')
+    expect(document.querySelector('[data-testid="learn-memory-drawer"]')?.textContent).toContain('Plan the next step')
+    ;(document.querySelector('[data-testid="learn-memory-close"]') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(document.activeElement).toBe(trigger.element))
+    memory.value = { ...memory.value, ownerId: 'owner_2', unresolvedPoint: 'Private other-owner memory' }
+    await trigger.trigger('click')
+    expect(document.querySelector('[data-testid="learn-memory-drawer"]')?.textContent).not.toContain('Private other-owner memory')
+    expect(document.querySelector('[data-testid="learn-memory-drawer"]')?.textContent).toContain('Memory is unavailable')
+    wrapper.unmount()
+  })
+
+  it('sends a revision-checked preference command and preserves an edit after a server conflict', async () => {
+    const Page = await import(path)
+    projection.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Build a plan', intent: 'build', evidenceState: 'none', lifecycle: 'active', revision: 3, authorityKind: 'standalone' },
+      currentActivity: null, history: [], nextAction: { kind: 'continue', label: 'Continue', activityId: null } }
+    memory.value = { ownerId: 'owner_1', threadId: 'thread_1', threadRevision: 3, lifecycle: 'active', unresolvedPoint: null,
+      nextAction: { label: 'Continue' }, evidenceState: 'none', preferences: [{ key: 'representation', value: 'Use diagrams', state: 'active', revision: 1 }], artifacts: [], history: [] }
+    memoryMutationCalls.mockResolvedValueOnce({ kind: 'conflict', code: 'stale_revision', actualRevision: 4 })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1', attachTo: document.body })
+    await wrapper.get('[data-testid="learn-memory-open"]').trigger('click')
+    const drawer = document.querySelector('[data-testid="learn-memory-drawer"]') as HTMLElement
+    const input = drawer.querySelector('[data-testid="learn-memory-preference-representation"]') as HTMLInputElement
+    input.value = 'Use short diagrams'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    ;(drawer.querySelector('[data-testid="learn-memory-save-representation"]') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(memoryMutationCalls).toHaveBeenCalledWith(expect.objectContaining({
+      threadId: 'thread_1', key: 'representation', operation: 'set', value: 'Use short diagrams', expectedRevision: 3,
+      idempotencyKey: expect.any(String),
+    })))
+    await vi.waitFor(() => expect(drawer.querySelector('[role="alert"]')?.textContent).toContain('changed'))
+    expect(input.value).toBe('Use short diagrams')
+    wrapper.unmount()
+  })
+
+  it('retries an unconfirmed memory command with its original key and clears it on account change', async () => {
+    const Page = await import(path)
+    projection.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Build a plan', intent: 'build', evidenceState: 'none', lifecycle: 'active', revision: 3, authorityKind: 'standalone' },
+      currentActivity: null, history: [], nextAction: { kind: 'continue', label: 'Continue', activityId: null } }
+    memory.value = { ownerId: 'owner_1', threadId: 'thread_1', threadRevision: 3, lifecycle: 'active', unresolvedPoint: null,
+      nextAction: { label: 'Continue' }, evidenceState: 'none', preferences: [], artifacts: [], history: [] }
+    memoryMutationCalls.mockRejectedValueOnce(new Error('timeout')).mockResolvedValueOnce({ kind: 'ok', revision: 4 })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1', attachTo: document.body })
+    await wrapper.get('[data-testid="learn-memory-open"]').trigger('click')
+    const drawer = document.querySelector('[data-testid="learn-memory-drawer"]') as HTMLElement
+    const input = drawer.querySelector('[data-testid="learn-memory-preference-pace"]') as HTMLInputElement
+    input.value = 'Short steps'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    await nextTick()
+    ;(drawer.querySelector('[data-testid="learn-memory-save-pace"]') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(memoryMutationCalls).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(drawer.querySelector('[role="alert"]')?.textContent).toContain('could not be confirmed'))
+    await vi.waitFor(() => expect(drawer.querySelector('[data-testid="learn-memory-retry"]')).not.toBeNull())
+    ;(drawer.querySelector('[data-testid="learn-memory-refresh"]') as HTMLButtonElement).click()
+    expect(drawer.querySelector('[data-testid="learn-memory-retry"]')).not.toBeNull()
+    const first = memoryMutationCalls.mock.calls[0]?.[0]
+    ;(drawer.querySelector('[data-testid="learn-memory-retry"]') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(memoryMutationCalls).toHaveBeenCalledTimes(2))
+    expect(memoryMutationCalls.mock.calls[1]?.[0]).toEqual(first)
+    await vi.waitFor(() => expect(drawer.querySelector('[data-testid="learn-memory-status"]')?.textContent).toContain('saved'))
+    memoryMutationCalls.mockRejectedValueOnce(new Error('timeout'))
+    const another = drawer.querySelector('[data-testid="learn-memory-preference-practice_style"]') as HTMLInputElement
+    another.value = 'Recall first'
+    another.dispatchEvent(new Event('input', { bubbles: true }))
+    await nextTick()
+    ;(drawer.querySelector('[data-testid="learn-memory-save-practice_style"]') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(drawer.querySelector('[data-testid="learn-memory-retry"]')).not.toBeNull())
+    user.value = { _id: 'owner_2' }
+    projection.value = { ...projection.value!, ownerId: 'owner_2' }
+    memory.value = { ...memory.value!, ownerId: 'owner_2' }
+    await nextTick()
+    expect(document.querySelector('[data-testid="learn-memory-retry"]')).toBeNull()
+    expect(wrapper.text()).not.toContain('The result could not be confirmed')
+    wrapper.unmount()
+  })
+
+  it('deletes an owned artifact through the existing command and reports pending cleanup', async () => {
+    const Page = await import(path)
+    projection.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Build a plan', intent: 'build', evidenceState: 'none', lifecycle: 'active', revision: 3, authorityKind: 'standalone' },
+      currentActivity: null, history: [], nextAction: { kind: 'continue', label: 'Continue', activityId: null } }
+    memory.value = { ownerId: 'owner_1', threadId: 'thread_1', threadRevision: 3, lifecycle: 'active', unresolvedPoint: null,
+      nextAction: { label: 'Continue' }, evidenceState: 'none', preferences: [],
+      artifacts: [{ id: 'artifact_1', kind: 'plan', title: 'My plan', summary: 'Three steps', status: 'saved', revision: 1, updatedAt: 1,
+        historical: false, readOnly: false, evidenceLabel: null }], history: [] }
+    memoryMutationCalls.mockResolvedValueOnce({ kind: 'ok', revision: 4, value: { cleanupPending: true } })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1', attachTo: document.body })
+    await wrapper.get('[data-testid="learn-memory-open"]').trigger('click')
+    const drawer = document.querySelector('[data-testid="learn-memory-drawer"]') as HTMLElement
+    ;(drawer.querySelector('[data-testid="learn-memory-delete-artifact_1"]') as HTMLButtonElement).click()
+    await nextTick()
+    expect(memoryMutationCalls).not.toHaveBeenCalled()
+    ;(drawer.querySelector('[data-testid="learn-memory-confirm-delete-artifact_1"]') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(memoryMutationCalls).toHaveBeenCalledWith(expect.objectContaining({
+      threadId: 'thread_1', artifactId: 'artifact_1', expectedRevision: 3, idempotencyKey: expect.any(String),
+    })))
+    await vi.waitFor(() => expect(drawer.querySelector('[data-testid="learn-memory-status"]')?.textContent).toContain('cleanup is pending'))
+    wrapper.unmount()
+  })
+
+  it('lets an ended thread review memory without mounting an editable activity', async () => {
+    const Page = await import(path)
+    projection.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Finished plan', intent: 'build', evidenceState: 'none', lifecycle: 'ended', revision: 4, authorityKind: 'standalone' },
+      currentActivity: { id: 'artifact_1', status: 'ended', activityClass: 'non_factual', purpose: 'Build a plan' }, history: [],
+      nextAction: { kind: 'return_to_learn', label: 'Back to Learn', activityId: 'artifact_1' } }
+    memory.value = { ownerId: 'owner_1', threadId: 'thread_1', threadRevision: 4, lifecycle: 'ended', unresolvedPoint: 'Review the plan',
+      nextAction: { label: 'Back to Learn' }, evidenceState: 'none', preferences: [], artifacts: [], history: [] }
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1', attachTo: document.body })
+    expect(wrapper.get('[data-testid="learn-thread-ended-history"]').text()).toContain('ended')
+    expect(wrapper.find('[data-testid="learn-primitive-artifact-workspace"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="learn-memory-open"]').trigger('click')
+    const drawer = document.querySelector('[data-testid="learn-memory-drawer"]') as HTMLElement
+    expect(drawer.textContent).toContain('Review the plan')
+    expect(drawer.querySelector('[data-testid="learn-memory-save-representation"]')).toBeNull()
+    wrapper.unmount()
   })
 })

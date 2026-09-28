@@ -29,6 +29,103 @@ const thread = computed(() => {
   const value = threadQuery.data.value
   return allowed.value && value?.thread.id === threadId.value && value.ownerId === ownerId.value ? value : null
 })
+const memoryQuery = import.meta.client
+  ? useConvexQuery(api.learnAdaptive.getMemory, computed(() => ({ threadId: threadId.value as never })), { enabled: computed(() => allowed.value && Boolean(thread.value)) })
+  : { data: ref(null), pending: ref(false) }
+const memory = computed(() => {
+  const value = memoryQuery.data.value
+  const current = thread.value
+  return current && value && value.ownerId === ownerId.value && value.threadId === current.thread.id
+    && value.threadRevision >= current.thread.revision ? value : null
+})
+const setMemoryPreferenceMutation = import.meta.client
+  ? useConvexMutation(api.learnAdaptive.setMemoryPreference)
+  : { mutate: async (_: unknown) => ({ kind: 'blocked' }) }
+const deleteMemoryArtifactMutation = import.meta.client
+  ? useConvexMutation(api.learnAdaptive.deleteArtifact)
+  : { mutate: async (_: unknown) => ({ kind: 'blocked' }) }
+type MemoryPreferenceChange = { key: 'representation' | 'pace' | 'practice_style', operation: 'set' | 'disable' | 'clear', value?: string }
+type MemoryCommand = { kind: 'preference', payload: MemoryPreferenceChange, threadId: string, ownerId: string, expectedRevision: number, idempotencyKey: string }
+  | { kind: 'delete_artifact', artifactId: string, threadId: string, ownerId: string, expectedRevision: number, idempotencyKey: string }
+const pendingMemoryCommand = ref<MemoryCommand | null>(null)
+const memoryBusy = ref(false)
+const memoryError = ref('')
+const memoryNotice = ref('')
+let memoryScopeEpoch = 0
+watch([ownerId, threadId, allowed], () => {
+  memoryScopeEpoch += 1
+  pendingMemoryCommand.value = null
+  memoryBusy.value = false
+  memoryError.value = ''
+  memoryNotice.value = ''
+})
+function memoryCommandKey() { return `memory:${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}` }
+async function runMemoryCommand(command: MemoryCommand) {
+  if (memoryBusy.value) return
+  if (!thread.value || thread.value.thread.id !== command.threadId || ownerId.value !== command.ownerId) {
+    pendingMemoryCommand.value = null
+    memoryError.value = 'This memory belongs to another thread or account. Open your own thread to continue.'
+    return
+  }
+  memoryBusy.value = true
+  const scopeEpoch = memoryScopeEpoch
+  memoryError.value = ''
+  memoryNotice.value = ''
+  try {
+    const result = (command.kind === 'preference'
+      ? await setMemoryPreferenceMutation.mutate({ threadId: command.threadId as never,
+          ...command.payload, expectedRevision: command.expectedRevision, idempotencyKey: command.idempotencyKey })
+      : await deleteMemoryArtifactMutation.mutate({ threadId: command.threadId as never, artifactId: command.artifactId as never,
+          expectedRevision: command.expectedRevision, idempotencyKey: command.idempotencyKey })) as { kind: string, value?: { cleanupPending?: boolean } }
+    if (scopeEpoch !== memoryScopeEpoch) return
+    if (result.kind === 'ok') {
+      pendingMemoryCommand.value = null
+      memoryNotice.value = command.kind === 'preference' ? 'Preference change saved.'
+        : result.value?.cleanupPending ? 'Artifact is hidden. Storage cleanup is pending.' : 'Artifact deletion recorded.'
+    }
+    else if (result.kind === 'conflict') {
+      pendingMemoryCommand.value = null
+      memoryError.value = 'Memory changed in another tab. Review current memory and retry your edit.'
+    }
+    else {
+      pendingMemoryCommand.value = null
+      memoryError.value = 'This memory change could not be saved. Review current memory and try again.'
+    }
+  }
+  catch {
+    if (scopeEpoch !== memoryScopeEpoch) return
+    memoryError.value = 'The result could not be confirmed. Retry the same change to check its outcome.'
+  }
+  finally { if (scopeEpoch === memoryScopeEpoch) memoryBusy.value = false }
+}
+function requestMemoryCommand(input: MemoryPreferenceChange | { artifactId: string }) {
+  const current = memory.value
+  if (!current || !thread.value || !ownerId.value) {
+    memoryError.value = 'Memory is unavailable for this thread. Review current memory before changing it.'
+    return
+  }
+  if (pendingMemoryCommand.value) {
+    memoryError.value = 'A previous change is not confirmed. Retry that same change before starting another.'
+    return
+  }
+  const base = { threadId: current.threadId, ownerId: String(ownerId.value),
+    expectedRevision: current.threadRevision, idempotencyKey: memoryCommandKey() }
+  const command: MemoryCommand = 'artifactId' in input
+    ? { ...base, kind: 'delete_artifact', artifactId: input.artifactId }
+    : { ...base, kind: 'preference', payload: input }
+  pendingMemoryCommand.value = command
+  void runMemoryCommand(command)
+}
+function requestMemoryArtifactDeletion(artifactId: string) { requestMemoryCommand({ artifactId }) }
+function reviewCurrentMemory() {
+  if (pendingMemoryCommand.value) {
+    memoryError.value = 'The previous change is still unconfirmed. Retry the same change to check its outcome.'
+    return
+  }
+  memoryError.value = ''
+  memoryNotice.value = 'Current memory is shown. Review it before trying another change.'
+}
+function retryMemoryCommand() { if (pendingMemoryCommand.value) void runMemoryCommand(pendingMemoryCommand.value) }
 const canvas = computed(() => {
   const value = canvasQuery.data.value
   const current = thread.value
@@ -57,8 +154,9 @@ const projectionPending = computed(() => Boolean(threadQuery.pending.value || us
 const detailPending = computed(() => thread.value?.thread.authorityKind === 'v2_mission'
   ? canvasQuery.pending.value || artifactQuery.pending.value || reflectionQuery.pending.value
   : thread.value?.thread.authorityKind === 'standalone' ? diagnosticQuery.pending.value || artifactQuery.pending.value || reflectionQuery.pending.value : false)
-const shellReady = computed(() => thread.value && (thread.value.thread.lifecycle !== 'ended' || reflection.value?.status === 'completed'))
+const shellReady = computed(() => Boolean(thread.value))
 const rollback = computed(() => thread.value?.thread.lifecycle === 'rollback')
+const endedReadOnly = computed(() => thread.value?.thread.lifecycle === 'ended' && reflection.value?.status !== 'completed')
 const selectedActivityId = computed(() => typeof route.query.activity === 'string' ? route.query.activity : null)
 const selectedHistory = computed(() => thread.value?.history.find(item => item.id === selectedActivityId.value) ?? null)
 const showCurrent = computed(() => !selectedActivityId.value || selectedActivityId.value === thread.value?.currentActivity?.id)
@@ -111,6 +209,7 @@ function leave() { void router.push(safeDestination.value) }
         <p class="mt-3 rounded-lg bg-[var(--learn-evidence)] px-3 py-2 text-sm text-muted-foreground" role="status" aria-live="polite">{{ thread.thread.lifecycle }} · Evidence {{ thread.thread.evidenceState }}</p>
         <div class="mt-3 flex items-center gap-3">
           <LearnAdaptiveEvidenceDrawer :evidence="evidence as never" :pending="evidenceQuery.pending.value" :source-state="selectedHistory ? evidence?.integrityState ?? 'unavailable' : thread.thread.evidenceState" :safe-destination="safeDestination" :safe-destination-label="safeDestinationLabel" :open-request="evidenceOpenRequest" :return-focus-to="evidenceReturnFocus" />
+          <LearnAdaptiveMemoryDrawer :key="`${ownerId}:${threadId}`" :memory="memory as never" :pending="memoryQuery.pending.value" :busy="memoryBusy" :error="memoryError" :notice="memoryNotice" :retry-available="Boolean(pendingMemoryCommand)" @set-preference="requestMemoryCommand" @delete-artifact="requestMemoryArtifactDeletion" @refresh="reviewCurrentMemory" @retry="retryMemoryCommand" />
         </div>
       </header>
 
@@ -149,7 +248,12 @@ function leave() { void router.push(safeDestination.value) }
           <p class="mt-2 text-sm text-muted-foreground">Your goal and past activity remain available for review. Open Learn to choose a safe next step.</p>
           <NuxtLink :to="safeDestination" class="mt-3 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline">{{ safeDestinationLabel }}</NuxtLink>
         </div>
-        <div v-show="showCurrent && !canvasUnsafe && !rollback">
+        <div v-if="showCurrent && endedReadOnly" data-testid="learn-thread-ended-history" class="rounded-lg border border-border p-5" role="status">
+          <h2 class="font-dm-sans text-lg font-semibold">This thread has ended</h2>
+          <p class="mt-2 text-sm text-muted-foreground">Your learning memory and past activity remain available for review.</p>
+          <NuxtLink :to="safeDestination" class="mt-3 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline">{{ safeDestinationLabel }}</NuxtLink>
+        </div>
+        <div v-show="showCurrent && !canvasUnsafe && !rollback && !endedReadOnly">
           <LearnAdaptiveReadySessionCanvas v-if="canvas" :key="`${ownerId}:${canvas.thread.id}:${canvas.activity.id}`" :canvas="canvas as never" :authoritative-revision="Math.max(thread.thread.revision, canvas.thread.revision)" :show-header="false" :active="showCurrent && !canvasUnsafe && !rollback" @leave="leave" @inspect-evidence="inspectEvidence" />
           <LearnAdaptiveArtifactWorkspace v-else-if="artifact" :key="`${ownerId}:${artifact.thread.id}:${artifact.activity.id}`" :canvas="artifact as never" :authoritative-revision="Math.max(thread.thread.revision, artifact.thread.revision)" @leave="leave" />
           <LearnAdaptiveReflectionNextMove v-else-if="reflection" :key="`${ownerId}:${reflection.thread.id}:${reflection.activity.id}`" :canvas="reflection as never" :authoritative-revision="Math.max(thread.thread.revision, reflection.thread.revision)" @leave="leave" />

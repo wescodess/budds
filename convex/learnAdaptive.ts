@@ -22,6 +22,8 @@ const memoryPreferenceKeyValidator = v.union(v.literal('representation'), v.lite
 const memoryPreferenceOperationValidator = v.union(v.literal('set'), v.literal('disable'), v.literal('clear'))
 const MEMORY_HISTORY_LIMIT = 8
 type MemoryProjection = {
+  ownerId: Id<'users'>
+  threadId: Id<'learningThreads'>
   threadRevision: number
   lifecycle: Doc<'learningThreads'>['lifecycle']
   unresolvedPoint: string | null
@@ -43,7 +45,8 @@ export const getMemory = query({
     const userId = await requireAdaptiveQueryAccess(ctx)
     const thread = await ctx.db.get(args.threadId)
     if (!thread || thread.userId !== userId || thread.deletionStartedAt !== undefined) return null
-    const [preferences, artifacts, recent] = await Promise.all([
+    const [owner, preferences, artifacts, recent] = await Promise.all([
+      ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique(),
       ctx.db.query('learningThreadPreferences')
         .withIndex('by_userId_and_threadId_and_key', q => q.eq('userId', userId).eq('threadId', thread._id)).take(3),
       ctx.runQuery(api.learnAdaptive.listThreadArtifacts, { threadId: thread._id }),
@@ -51,6 +54,7 @@ export const getMemory = query({
         .withIndex('by_userId_and_threadId_and_boundaryOrdinal', q => q.eq('userId', userId).eq('threadId', thread._id))
         .order('desc').take(MEMORY_HISTORY_LIMIT),
     ])
+    if (!owner) return null
     const history = await Promise.all(recent.filter(row => row._id !== thread.currentActivityId).map(async row => {
       const evidenceStatus = row.activityClass === 'non_factual' ? 'not_required' as const
         : row.evidenceReferences.length === 0 || await artifactEvidenceUnavailable(ctx, thread, row)
@@ -67,6 +71,8 @@ export const getMemory = query({
     }))
     const continuation: { nextAction: { label: string } | null } | null = await ctx.runQuery(api.learnAdaptive.getThread, { threadId: thread._id })
     return {
+      ownerId: owner._id,
+      threadId: thread._id,
       threadRevision: thread.revision,
       lifecycle: thread.lifecycle,
       unresolvedPoint: thread.unresolvedPoint?.slice(0, 240) ?? null,
@@ -192,6 +198,7 @@ export const deleteArtifact = mutation({
     commandName: 'deleteArtifact', payload: { artifactId: String(args.artifactId) },
     returnBlockedWhenDeleting: true,
     apply: async (commandCtx, thread, userId) => {
+      if (thread.lifecycle === 'rollback') throw new AdaptiveCommandRejection('blocked', 'thread_not_editable', 'This thread is read-only')
       const artifact = await commandCtx.db.get(args.artifactId)
       if (!artifact || artifact.userId !== userId || artifact.threadId !== thread._id || artifact.status === 'deleted') throw new AdaptiveCommandRejection('blocked', 'artifact_unavailable', 'Artifact is unavailable')
       const removed = await queueAdaptiveArtifactDeletion(commandCtx, artifact)

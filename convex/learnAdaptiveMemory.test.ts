@@ -31,7 +31,7 @@ async function fixture() {
 test('memory is owner scoped and keeps editable preferences separate from historical context', async () => {
   const { t, threadId, owner, other } = await fixture()
   const initial = await owner.query(api.learnAdaptive.getMemory, { threadId })
-  expect(initial).toMatchObject({ threadRevision: 1, unresolvedPoint: 'I cannot explain it yet', preferences: [], artifacts: [], history: [] })
+  expect(initial).toMatchObject({ threadId, ownerId: expect.any(String), threadRevision: 1, unresolvedPoint: 'I cannot explain it yet', preferences: [], artifacts: [], history: [] })
   expect(initial).not.toHaveProperty('mastery')
   expect(await other.query(api.learnAdaptive.getMemory, { threadId })).toBeNull()
   const input = { threadId, key: 'representation' as const, operation: 'set' as const, value: 'Use concise diagrams', expectedRevision: 1, idempotencyKey: 'memory-set-0000001' }

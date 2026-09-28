@@ -19,8 +19,10 @@ type Memory = {
 const props = defineProps<{
   memory: Memory | null
   pending: boolean
+  busy?: boolean
   error?: string | null
   notice?: string | null
+  retryAvailable?: boolean
   openRequest?: number
   returnFocusTo?: HTMLButtonElement | null
 }>()
@@ -28,6 +30,7 @@ const emit = defineEmits<{
   'set-preference': [payload: { key: PreferenceKey, operation: 'set' | 'disable' | 'clear', value?: string }]
   'delete-artifact': [artifactId: string]
   'refresh': []
+  'retry': []
 }>()
 
 const preferenceKeys = [
@@ -103,7 +106,10 @@ function deleteArtifact(id: string) {
       <p v-if="pending" role="status" aria-live="polite" class="text-sm">Loading memory…</p>
       <p v-if="error" role="alert" data-testid="learn-memory-error" class="rounded-lg border border-destructive p-3 text-sm">{{ error }} Your unsaved edits remain here.</p>
       <p v-if="!error && (notice || localAnnouncement)" role="status" aria-live="polite" data-testid="learn-memory-status" class="text-sm">{{ notice || localAnnouncement }}</p>
-      <button v-if="error" type="button" data-testid="learn-memory-refresh" class="min-h-11 rounded-lg border border-border px-4 text-sm" @click="emit('refresh')">Refresh memory</button>
+      <div v-if="error" class="flex flex-wrap gap-2">
+        <button type="button" data-testid="learn-memory-refresh" class="min-h-11 rounded-lg border border-border px-4 text-sm" @click="emit('refresh')">Review current memory</button>
+        <button v-if="retryAvailable" type="button" data-testid="learn-memory-retry" :disabled="busy" class="min-h-11 rounded-lg border border-border px-4 text-sm disabled:opacity-50" @click="emit('retry')">Retry same change</button>
+      </div>
       <p v-if="!pending && !memory" role="status" class="text-sm">Memory is unavailable. Try refreshing the thread.</p>
       <template v-else-if="memory">
         <section aria-labelledby="learn-memory-next-heading" class="rounded-xl border border-border p-4">
@@ -118,11 +124,11 @@ function deleteArtifact(id: string) {
           <div v-for="item in preferenceKeys" :key="item.key" class="rounded-xl border border-border p-3">
             <label :for="`learn-memory-input-${item.key}`" class="block text-sm font-medium">{{ item.label }}</label>
             <p class="my-1 text-xs">Status: {{ preference(item.key)?.state ?? 'not set' }}</p>
-            <input :id="`learn-memory-input-${item.key}`" v-model="drafts[item.key]" :data-testid="`learn-memory-preference-${item.key}`" :disabled="!editable" maxlength="120" type="text" class="min-h-11 w-full rounded-lg border border-border bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)]" @input="dirty[item.key] = true">
+            <input :id="`learn-memory-input-${item.key}`" v-model="drafts[item.key]" :data-testid="`learn-memory-preference-${item.key}`" :disabled="!editable || busy" maxlength="120" type="text" class="min-h-11 w-full rounded-lg border border-border bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)]" @input="dirty[item.key] = true">
             <div v-if="editable" class="mt-2 flex flex-wrap gap-2">
-              <button type="button" :data-testid="`learn-memory-save-${item.key}`" :disabled="!drafts[item.key].trim()" class="min-h-11 rounded-lg border border-border px-3 text-sm disabled:opacity-50" @click="save(item.key)">Save preference</button>
-              <button v-if="preference(item.key)?.state === 'active'" type="button" class="min-h-11 rounded-lg border border-border px-3 text-sm" @click="changePreference(item.key, 'disable')">Disable</button>
-              <button v-if="preference(item.key)" type="button" class="min-h-11 rounded-lg border border-border px-3 text-sm" @click="changePreference(item.key, 'clear')">Clear</button>
+              <button type="button" :data-testid="`learn-memory-save-${item.key}`" :disabled="busy || !drafts[item.key].trim()" class="min-h-11 rounded-lg border border-border px-3 text-sm disabled:opacity-50" @click="save(item.key)">Save preference</button>
+              <button v-if="preference(item.key)?.state === 'active'" type="button" :disabled="busy" class="min-h-11 rounded-lg border border-border px-3 text-sm disabled:opacity-50" @click="changePreference(item.key, 'disable')">Disable</button>
+              <button v-if="preference(item.key)" type="button" :disabled="busy" class="min-h-11 rounded-lg border border-border px-3 text-sm disabled:opacity-50" @click="changePreference(item.key, 'clear')">Clear</button>
             </div>
           </div>
           <h4 class="font-medium">Saved artifacts</h4>
@@ -133,7 +139,7 @@ function deleteArtifact(id: string) {
               <p class="font-medium">{{ artifact.title }} · {{ artifact.status }}</p>
               <p class="mt-1">{{ artifact.summary }}</p>
               <p v-if="artifact.historical" class="mt-1">Historical artifact · supporting evidence unavailable · read-only content</p>
-              <button v-if="artifactEditable" type="button" :data-testid="confirmArtifactId === artifact.id ? `learn-memory-confirm-delete-${artifact.id}` : `learn-memory-delete-${artifact.id}`" class="mt-2 min-h-11 rounded-lg border border-border px-3 text-sm" @click="deleteArtifact(artifact.id)">{{ confirmArtifactId === artifact.id ? 'Confirm delete artifact' : 'Delete artifact' }}</button>
+              <button v-if="artifactEditable" type="button" :disabled="busy" :data-testid="confirmArtifactId === artifact.id ? `learn-memory-confirm-delete-${artifact.id}` : `learn-memory-delete-${artifact.id}`" class="mt-2 min-h-11 rounded-lg border border-border px-3 text-sm disabled:opacity-50" @click="deleteArtifact(artifact.id)">{{ confirmArtifactId === artifact.id ? 'Confirm delete artifact' : 'Delete artifact' }}</button>
             </li>
           </ul>
         </section>
