@@ -5,11 +5,12 @@ import { getFunctionName } from 'convex/server'
 const continueDraft = vi.fn()
 const submit = vi.fn()
 const renderAck = vi.fn()
+const applyOverride = vi.fn()
 const isOnline = ref(true)
 mockNuxtImport('useOnlineStatus', () => () => ({ isOnline }))
 mockNuxtImport('useConvexMutation', () => (reference: never) => {
   const name = getFunctionName(reference) ?? ''
-  return { mutate: name.includes('continueDraft') ? continueDraft : name.includes('recordDiagnosticRendered') ? renderAck : submit }
+  return { mutate: name.includes('continueDraft') ? continueDraft : name.includes('recordDiagnosticRendered') ? renderAck : name.includes('applyOverride') ? applyOverride : submit }
 })
 
 const base = {
@@ -21,7 +22,27 @@ const base = {
 }
 
 describe('standalone diagnostic Canvas', () => {
-  beforeEach(() => { continueDraft.mockReset().mockResolvedValue({ kind: 'ok' }); submit.mockReset().mockResolvedValue({ kind: 'ok' }); renderAck.mockReset().mockResolvedValue({ status: 'recorded' }); isOnline.value = true; sessionStorage.clear() })
+  beforeEach(() => { continueDraft.mockReset().mockResolvedValue({ kind: 'ok' }); submit.mockReset().mockResolvedValue({ kind: 'ok' }); renderAck.mockReset().mockResolvedValue({ status: 'recorded' }); applyOverride.mockReset().mockResolvedValue({ kind: 'ok', revision: 3, value: { fixedNextPlan: { version: 'learn-adaptive.fixed-next-plan.v1', inputOption: 'time_45', nextActivity: 'continue_with_time', availableTime: '45', difficulty: 'same', maxNewActivities: 1, authority: 'server_revalidate_at_boundary' } } }); isOnline.value = true; sessionStorage.clear() })
+
+  it('opens Why controls, explains disabled choices and preserves the response through a time choice', async () => {
+    const Comp = await import('~/components/learn-adaptive/DiagnosticCanvas.vue')
+    const controlled = { ...base, activity: { ...base.activity, controls: { reasonText: { version: 'learn-adaptive.reason-text.v1', purpose: 'Record your starting point.', text: 'No source was selected, so this non-factual starting point does not make factual claims.' }, selected: null, fixedNextPlan: null,
+      options: [{ key: 'example' as const, label: 'Show an example', available: false, unavailableReason: 'evidence' as const },
+        { key: 'time_45' as const, label: '45 minutes', available: true, unavailableReason: null }] } } }
+    const wrapper = await mountSuspended(Comp.default, { props: { canvas: controlled } })
+    await wrapper.get('[data-testid="learn-diagnostic-response"]').setValue('My unsent thought.')
+    await wrapper.get('[data-testid="learn-why-toggle"]').trigger('click')
+    expect(wrapper.get('[data-testid="learn-why-reason"]').text()).toContain('starting point')
+    expect(wrapper.get('[data-testid="learn-override-example"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('Current evidence cannot support this choice.')
+    await wrapper.get('[data-testid="learn-override-example"]').trigger('click')
+    expect(applyOverride).not.toHaveBeenCalled()
+    await wrapper.get('[data-testid="learn-override-time_45"]').trigger('click')
+    await vi.waitFor(() => expect(applyOverride).toHaveBeenCalledWith(expect.objectContaining({ option: 'time_45', activityId: 'diagnostic:thread_1', expectedRevision: 2 })))
+    expect((wrapper.get('[data-testid="learn-diagnostic-response"]').element as HTMLTextAreaElement).value).toBe('My unsent thought.')
+    await wrapper.get('[data-testid="learn-diagnostic-submit"]').trigger('click')
+    await vi.waitFor(() => expect(submit).toHaveBeenCalledWith(expect.objectContaining({ expectedRevision: 3, response: 'My unsent thought.' })))
+  })
 
   it('restores an unsaved owner-scoped response draft after refresh without overriding a saved response', async () => {
     const Comp = await import('~/components/learn-adaptive/DiagnosticCanvas.vue')

@@ -13,6 +13,7 @@ import { loadAdaptiveClaimGraph, loadAdaptiveClaimProjection } from './lib/adapt
 import { requireActiveBlueprint } from './lib/learnV2BlueprintAuthority'
 import { AdaptiveCommandConflict, executeAdaptiveThreadCommand } from './learnAdaptiveCommands'
 import { writeLearnActivityEvent } from './lib/learnAdaptiveEvents'
+import { reasonTextForActivity } from '../shared/learn-adaptive-controls'
 
 type CommitArgs = Infer<typeof commitAdaptiveActivityPlanValidator>
 
@@ -184,6 +185,8 @@ export const commitActivityPlan = internalMutation({
       objectiveId: args.objectiveId,
       purpose: composed.purpose,
       reasonCode: composed.reasonCode,
+      reasonText: reasonTextForActivity({ activityClass: composed.activityClass, purpose: composed.purpose,
+        reasonCode: composed.reasonCode, sourceState: composed.decisionInputs.sourceState }),
       primitivePlan: composed.primitivePlan,
       requiredAction: composed.requiredAction,
       evaluationContract: composed.evaluationContract,

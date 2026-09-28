@@ -27,14 +27,12 @@ const canvas = computed(() => {
   const value = canvasQuery.data.value
   const current = thread.value
   return current?.thread.authorityKind === 'v2_mission' && value?.thread.id === current.thread.id
-    && value.thread.revision === current.thread.revision
     && value.ownerId === ownerId.value && value.activity.id === current.currentActivity?.id ? value : null
 })
 const diagnostic = computed(() => {
   const value = diagnosticQuery.data.value
   const current = thread.value
   return current?.thread.authorityKind === 'standalone' && value?.thread.id === current.thread.id
-    && value.thread.revision === current.thread.revision
     && value.ownerId === ownerId.value && (value.activity?.id ?? null) === (current.currentActivity?.id ?? null) ? value : null
 })
 const projectionPending = computed(() => Boolean(threadQuery.pending.value || userQuery.pending.value))
@@ -111,8 +109,8 @@ function leave() { void router.push(safeDestination.value) }
           <NuxtLink :to="safeDestination" class="mt-3 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline">{{ safeDestinationLabel }}</NuxtLink>
         </div>
         <div v-show="showCurrent && !canvasUnsafe">
-          <LearnAdaptiveReadySessionCanvas v-if="canvas" :key="`${ownerId}:${canvas.thread.id}:${canvas.activity.id}`" :canvas="canvas as never" :show-header="false" :active="showCurrent && !canvasUnsafe" @leave="leave" />
-          <LearnAdaptiveDiagnosticCanvas v-else-if="diagnostic" :key="`${ownerId}:${diagnostic.thread.id}:${diagnostic.activity?.id ?? 'draft'}`" :canvas="diagnostic as never" :show-header="false" :active="showCurrent" @leave="leave" />
+          <LearnAdaptiveReadySessionCanvas v-if="canvas" :key="`${ownerId}:${canvas.thread.id}:${canvas.activity.id}`" :canvas="canvas as never" :authoritative-revision="Math.max(thread.thread.revision, canvas.thread.revision)" :show-header="false" :active="showCurrent && !canvasUnsafe" @leave="leave" />
+          <LearnAdaptiveDiagnosticCanvas v-else-if="diagnostic" :key="`${ownerId}:${diagnostic.thread.id}:${diagnostic.activity?.id ?? 'draft'}`" :canvas="diagnostic as never" :authoritative-revision="Math.max(thread.thread.revision, diagnostic.thread.revision)" :show-header="false" :active="showCurrent" @leave="leave" />
           <div v-else-if="detailPending" data-testid="learn-adaptive-canvas-loading" class="rounded-lg border border-border p-5" role="status" aria-live="polite">
             <h2 class="font-dm-sans text-lg font-semibold">Loading current activity…</h2>
             <p class="mt-2 text-sm text-muted-foreground">Your thread and history are available while the activity loads.</p>

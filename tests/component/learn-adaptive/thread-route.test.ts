@@ -12,11 +12,12 @@ const diagnosticPending = ref(false)
 const user = ref<{ _id: string } | null>({ _id: 'owner_1' })
 const requestedRoute = reactive({ params: { threadId: 'thread_1' }, query: { activity: undefined as string | undefined } })
 const calls = vi.fn()
+const mutationCalls = vi.fn().mockResolvedValue({ kind: 'ok' })
 
 mockNuxtImport('useLearnAdaptiveAccess', () => () => ({ allowed, checkingAccess: ref(false) }))
 mockNuxtImport('useRoute', () => () => requestedRoute)
 mockNuxtImport('useOnlineStatus', () => () => ({ isOnline: ref(true) }))
-mockNuxtImport('useConvexMutation', () => () => ({ mutate: vi.fn() }))
+mockNuxtImport('useConvexMutation', () => () => ({ mutate: mutationCalls }))
 mockNuxtImport('useConvexAction', () => () => ({ mutate: vi.fn() }))
 mockNuxtImport('useConvexQuery', () => (reference: never, args: unknown) => {
   const name = getFunctionName(reference)
@@ -28,7 +29,55 @@ mockNuxtImport('useConvexQuery', () => (reference: never, args: unknown) => {
 const path = ['~', 'pages', 'app', 'learn', 'thread', '[threadId].vue'].join('/')
 
 describe('adaptive thread route isolation', () => {
-  beforeEach(() => { allowed.value = true; canvas.value = null; diagnostic.value = null; evidence.value = null; projection.value = null; canvasPending.value = false; diagnosticPending.value = false; user.value = { _id: 'owner_1' }; requestedRoute.params.threadId = 'thread_1'; requestedRoute.query.activity = undefined; calls.mockClear(); sessionStorage.clear() })
+  beforeEach(() => { allowed.value = true; canvas.value = null; diagnostic.value = null; evidence.value = null; projection.value = null; canvasPending.value = false; diagnosticPending.value = false; user.value = { _id: 'owner_1' }; requestedRoute.params.threadId = 'thread_1'; requestedRoute.query.activity = undefined; calls.mockClear(); mutationCalls.mockClear(); sessionStorage.clear() })
+
+  it('keeps an unsent diagnostic mounted through a newer thread revision when storage is unavailable', async () => {
+    const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('storage unavailable') })
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('storage unavailable') })
+    try {
+      const Page = await import(path)
+      projection.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Check my learning', intent: 'refresh', evidenceState: 'none', lifecycle: 'active', revision: 2, authorityKind: 'standalone' },
+        currentActivity: { id: 'diagnostic:thread_1', status: 'eligible', purpose: 'Record your starting point.' }, history: [],
+        nextAction: { kind: 'submit_response', label: 'Save response', activityId: 'diagnostic:thread_1' } }
+      diagnostic.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Check my learning', intent: 'refresh', revision: 2 }, status: 'eligible', evidenceState: 'none', decisionPending: false,
+        recovery: { title: 'Your starting point', body: 'Record what you know.', action: 'Back to Learn' },
+        activity: { id: 'diagnostic:thread_1', status: 'eligible', primitive: { type: 'diagnostic_prompt', action: 'submit_response', testId: 'learn-primitive-diagnostic-prompt', props: { prompt: 'What do you know?', responseFormat: 'short_text' } }, response: null,
+          requiredAction: { kind: 'submit_response', label: 'Save response' } } }
+      const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
+      await wrapper.get('[data-testid="learn-diagnostic-response"]').setValue('Unsent answer in memory.')
+      projection.value = { ...projection.value!, thread: { ...(projection.value!.thread as Record<string, unknown>), revision: 3 } }
+      await nextTick()
+      expect((wrapper.get('[data-testid="learn-diagnostic-response"]').element as HTMLTextAreaElement).value).toBe('Unsent answer in memory.')
+      await wrapper.get('[data-testid="learn-diagnostic-submit"]').trigger('click')
+      await vi.waitFor(() => expect(mutationCalls).toHaveBeenCalledWith(expect.objectContaining({ response: 'Unsent answer in memory.', expectedRevision: 3 })))
+      wrapper.unmount()
+    }
+    finally { getItem.mockRestore(); setItem.mockRestore() }
+  })
+
+  it('keeps an unsent diagnostic mounted through a newer Canvas revision when storage is unavailable', async () => {
+    const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('storage unavailable') })
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('storage unavailable') })
+    try {
+      const Page = await import(path)
+      projection.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Check my learning', intent: 'refresh', evidenceState: 'none', lifecycle: 'active', revision: 3, authorityKind: 'standalone' },
+        currentActivity: { id: 'diagnostic:thread_1', status: 'eligible', purpose: 'Record your starting point.' }, history: [],
+        nextAction: { kind: 'submit_response', label: 'Save response', activityId: 'diagnostic:thread_1' } }
+      diagnostic.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Check my learning', intent: 'refresh', revision: 3 }, status: 'eligible', evidenceState: 'none', decisionPending: false,
+        recovery: { title: 'Your starting point', body: 'Record what you know.', action: 'Back to Learn' },
+        activity: { id: 'diagnostic:thread_1', status: 'eligible', primitive: { type: 'diagnostic_prompt', action: 'submit_response', testId: 'learn-primitive-diagnostic-prompt', props: { prompt: 'What do you know?', responseFormat: 'short_text' } }, response: null,
+          requiredAction: { kind: 'submit_response', label: 'Save response' } } }
+      const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
+      await wrapper.get('[data-testid="learn-diagnostic-response"]').setValue('Still unsent after Canvas update.')
+      diagnostic.value = { ...diagnostic.value!, thread: { ...(diagnostic.value!.thread as Record<string, unknown>), revision: 4 } }
+      await nextTick()
+      expect((wrapper.get('[data-testid="learn-diagnostic-response"]').element as HTMLTextAreaElement).value).toBe('Still unsent after Canvas update.')
+      await wrapper.get('[data-testid="learn-diagnostic-submit"]').trigger('click')
+      await vi.waitFor(() => expect(mutationCalls).toHaveBeenCalledWith(expect.objectContaining({ response: 'Still unsent after Canvas update.', expectedRevision: 4 })))
+      wrapper.unmount()
+    }
+    finally { getItem.mockRestore(); setItem.mockRestore() }
+  })
 
   it('restores a URL-selected historical activity while retaining the mounted current Canvas for back/forward', async () => {
     const Page = await import(path)
@@ -153,7 +202,11 @@ describe('adaptive thread route isolation', () => {
     expect(wrapper.find('[data-testid="learn-adaptive-canvas"]').exists()).toBe(true)
     projection.value = { ...projection.value!, thread: { ...(projection.value!.thread as Record<string, unknown>), revision: 3 } }
     await nextTick()
-    expect(wrapper.find('[data-testid="learn-adaptive-canvas"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="learn-adaptive-canvas"]').exists()).toBe(true)
+    canvas.value = { ...canvas.value!, thread: { ...(canvas.value!.thread as Record<string, unknown>), revision: 4 } }
+    await nextTick()
+    expect(wrapper.find('[data-testid="learn-adaptive-canvas"]').exists()).toBe(true)
+    canvas.value = { ...canvas.value!, thread: { ...(canvas.value!.thread as Record<string, unknown>), revision: 2 } }
     projection.value = { ...projection.value!, thread: { ...(projection.value!.thread as Record<string, unknown>), revision: 2 } }
     await nextTick()
     expect(wrapper.find('[data-testid="learn-adaptive-canvas"]').exists()).toBe(true)

@@ -7,12 +7,13 @@ const assist = vi.fn()
 const stage = vi.fn()
 const submit = vi.fn()
 const meaningfulStart = vi.fn()
+const applyOverride = vi.fn()
 const isOnline = ref(true)
 
 mockNuxtImport('useOnlineStatus', () => () => ({ isOnline }))
 mockNuxtImport('useConvexMutation', () => (reference: never) => {
   const name = getFunctionName(reference) ?? ''
-  return { mutate: name.includes('startStudySession') ? start : name.includes('recordMeaningfulActivityStarted') ? meaningfulStart : name.includes('recordAssistanceUse') ? assist : name.includes('submitCanvasResponse') ? stage : vi.fn() }
+  return { mutate: name.includes('startStudySession') ? start : name.includes('recordMeaningfulActivityStarted') ? meaningfulStart : name.includes('recordAssistanceUse') ? assist : name.includes('submitCanvasResponse') ? stage : name.includes('applyOverride') ? applyOverride : vi.fn() }
 })
 mockNuxtImport('useConvexAction', () => (reference: never) => ({ mutate: getFunctionName(reference)?.includes('submitResponse') ? submit : vi.fn() }))
 
@@ -33,8 +34,37 @@ describe('ready adaptive Canvas', () => {
     stage.mockReset().mockResolvedValue({ kind: 'ok', revision: 3, value: { status: 'submitted' } })
     submit.mockReset().mockResolvedValue({ kind: 'accepted', status: 'in_progress' })
     meaningfulStart.mockReset().mockResolvedValue({ status: 'recorded', replayed: false })
+    applyOverride.mockReset().mockImplementation(async (input: { option: string }) => ({ kind: 'ok', revision: 3, value: { fixedNextPlan: { version: 'learn-adaptive.fixed-next-plan.v1', inputOption: input.option, nextActivity: input.option === 'answer_now' ? 'answer_step' : 'worked_example', availableTime: '25', difficulty: 'same', maxNewActivities: 1, authority: 'server_revalidate_at_boundary' } } }))
     isOnline.value = true
     sessionStorage.clear()
+  })
+
+  it('keeps the factual response draft mounted while choosing a supported next-boundary control', async () => {
+    const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
+    const controlled = { ...canvas, status: 'started', activity: { ...canvas.activity, status: 'started', controls: { reasonText: { version: 'learn-adaptive.reason-text.v1', purpose: 'Study a supported explanation.', text: 'This activity uses accepted sources.' }, selected: null, fixedNextPlan: null,
+      options: [{ key: 'example' as const, label: 'Show an example', available: true, unavailableReason: null }] } } }
+    const wrapper = await mountSuspended(Comp.default, { props: { canvas: controlled } })
+    await wrapper.get('[data-testid="learn-canvas-continue"]').trigger('click')
+    await wrapper.get('[data-testid="learn-canvas-response"]').setValue('A draft about gravity.')
+    await wrapper.get('[data-testid="learn-why-toggle"]').trigger('click')
+    await wrapper.get('[data-testid="learn-override-example"]').trigger('click')
+    await vi.waitFor(() => expect(applyOverride).toHaveBeenCalledWith(expect.objectContaining({ option: 'example', activityId: 'ready-session:session_1', expectedRevision: 2 })))
+    expect((wrapper.get('[data-testid="learn-canvas-response"]').element as HTMLTextAreaElement).value).toBe('A draft about gravity.')
+    expect(wrapper.get('[data-testid="learn-why-controls"]').text()).toContain('Selected: Show an example')
+  })
+
+  it('reveals the existing answer step after the server accepts Answer now', async () => {
+    const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
+    const controlled = { ...canvas, status: 'started', activity: { ...canvas.activity, status: 'started', controls: {
+      reasonText: { version: 'learn-adaptive.reason-text.v1', purpose: 'Study a supported explanation.', text: 'This activity uses accepted sources.' }, selected: null, fixedNextPlan: null,
+      options: [{ key: 'answer_now' as const, label: 'Answer now', available: true, unavailableReason: null }],
+    } } }
+    const wrapper = await mountSuspended(Comp.default, { props: { canvas: controlled } })
+    expect(wrapper.find('[data-testid="learn-canvas-response"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="learn-why-toggle"]').trigger('click')
+    await wrapper.get('[data-testid="learn-override-answer_now"]').trigger('click')
+    await vi.waitFor(() => expect(applyOverride).toHaveBeenCalledWith(expect.objectContaining({ option: 'answer_now' })))
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-canvas-response"]').exists()).toBe(true))
   })
 
   it('restores the current unsent answer and confidence after refresh', async () => {

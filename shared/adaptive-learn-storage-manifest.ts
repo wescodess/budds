@@ -7,9 +7,17 @@ import {
   ADAPTIVE_ACTIVITY_VALIDATION_ANALYTICS_VERSION,
 } from './learn-adaptive-activity-registry'
 import { ADAPTIVE_ACTIVITY_PLAN_VERSION, ADAPTIVE_ACTIVITY_REPLAY_VERSION } from './learn-adaptive-activity-plan'
+import { ADAPTIVE_OVERRIDE_VERSION, ADAPTIVE_REASON_TEXT_VERSION, adaptiveFixedNextPlanValidator, adaptiveOverrideOptionValidator } from './learn-adaptive-controls'
 import { CLARIFICATION_TEMPLATE_VERSION, INITIAL_DECISION_VERSION } from './learn-adaptive-clarification'
 
 export const ADAPTIVE_LEARN_STORAGE_MANIFEST = [
+  {
+    table: 'learnActivityOverrides',
+    ownerIndex: 'by_userId',
+    parentIndex: 'by_userId_and_threadId_and_createdAt',
+    export: 'bounded',
+    accountDeletion: 'delete',
+  },
   {
     table: 'learnActivityEvidenceLinks',
     ownerIndex: 'by_userId',
@@ -55,7 +63,7 @@ export const ADAPTIVE_LEARN_STORAGE_MANIFEST = [
 ] as const
 
 export const ADAPTIVE_LEARN_ACCOUNT_DELETE_ORDER = ADAPTIVE_LEARN_STORAGE_MANIFEST.map(entry => entry.table)
-export const ADAPTIVE_LEARN_EXPORT_COLLECTIONS = ['learningThreads', 'learningThreadActivities', 'learnActivityEvidenceLinks', 'learnActivityEvents', 'learnActivityCommandReceipts', 'learnAdaptiveThreadDeletionJobs'] as const
+export const ADAPTIVE_LEARN_EXPORT_COLLECTIONS = ['learningThreads', 'learningThreadActivities', 'learnActivityEvidenceLinks', 'learnActivityEvents', 'learnActivityCommandReceipts', 'learnAdaptiveThreadDeletionJobs', 'learnActivityOverrides'] as const
 export const ADAPTIVE_ACTIVITY_STORAGE_REGISTRY = [
   { type: 'cited_explanation', allowedActions: ['continue', 'inspect_source', 'ask_for_example'], testId: 'learn-primitive-cited-explanation', inputProps: ['heading', 'explanation', 'sourceRefs'], storedProps: ['heading', 'explanation', 'sourceRefs'] },
   { type: 'diagnostic_prompt', allowedActions: ['submit_response'], testId: 'learn-primitive-diagnostic-prompt', inputProps: ['prompt', 'responseFormat', 'assistance'], storedProps: ['prompt', 'responseFormat', 'assistance'] },
@@ -206,6 +214,7 @@ export const learningThreadActivityFields = {
   objectiveId: v.union(v.id('learnObjectives'), v.null()),
   purpose: v.string(),
   reasonCode: v.string(),
+  reasonText: v.optional(v.object({ version: v.literal(ADAPTIVE_REASON_TEXT_VERSION), purpose: v.string(), text: v.string() })),
   primitivePlan: adaptiveActivityPrimitivePlanValidator,
   requiredAction: adaptiveRequiredActionValidator,
   evaluationContract: adaptiveEvaluationContractValidator,
@@ -276,6 +285,18 @@ export const learnActivityEvidenceLinkFields = {
   sourceSnapshotId: v.id('learnSourceSnapshots'),
   boundaryOrdinal: v.number(),
   invalidatedAt: v.optional(v.number()),
+  createdAt: v.number(),
+}
+
+export const learnActivityOverrideFields = {
+  userId: v.string(),
+  threadId: v.id('learningThreads'),
+  activityId: v.id('learningThreadActivities'),
+  option: adaptiveOverrideOptionValidator,
+  source: v.literal('learner'),
+  version: v.literal(ADAPTIVE_OVERRIDE_VERSION),
+  fixedNextPlan: adaptiveFixedNextPlanValidator,
+  boundaryOrdinal: v.number(),
   createdAt: v.number(),
 }
 
