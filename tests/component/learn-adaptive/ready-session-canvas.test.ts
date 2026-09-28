@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { getFunctionName } from 'convex/server'
+import { adaptiveRecoveryCopy } from '~~/shared/learn-adaptive-recovery'
 
 const start = vi.fn()
 const assist = vi.fn()
@@ -611,6 +612,39 @@ describe('ready adaptive Canvas', () => {
     if (role === 'alert') await vi.waitFor(() => expect(document.activeElement?.getAttribute('data-testid')).toBe('learn-canvas-fallback-action'))
     await action.trigger('click')
     expect(wrapper.emitted('leave')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it.each(primitiveFixtures)('keeps the $type Canvas boundary and one safe action through server recovery states', async fixture => {
+    const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
+    const activity = { ...canvas.activity,
+      evidenceScope: fixture.type === 'source_comparison' ? comparison.activity.evidenceScope : canvas.activity.evidenceScope,
+      primitive: { ...canvas.activity.primitive, type: fixture.type, action: fixture.action,
+        testId: `learn-primitive-${fixture.type.replaceAll('_', '-')}`, props: fixture.props },
+      requiredAction: { kind: fixture.action, label: fixture.label } }
+    const current = { ...canvas, status: 'started', activity }
+    const wrapper = await mountSuspended(Comp.default, { props: { canvas: current }, attachTo: document.body })
+    for (const state of ['preparing', 'blocked', 'stale', 'invalidated', 'unavailable'] as const) {
+      const recovery = adaptiveRecoveryCopy(state)
+      await wrapper.setProps({ canvas: { ...current, status: 'blocked', recoveryState: state, recovery,
+        activity: { ...activity, primitive: null }, responsePrompt: null } })
+      const boundary = wrapper.get('[data-testid="learn-adaptive-canvas"]')
+      expect(boundary.attributes('aria-labelledby')).toBe('learn-canvas-title')
+      expect(boundary.get('h1').text()).toBe('Explain gravity')
+      const fallback = wrapper.get('[data-testid="learn-activity-fallback"]')
+      expect(fallback.attributes('role')).toBe(state === 'preparing' ? 'status' : 'alert')
+      expect(fallback.get('h2').text()).toBe(recovery.title)
+      expect(fallback.text()).toContain(recovery.body)
+      expect(wrapper.find(`[data-testid="${activity.primitive.testId}"]`).exists()).toBe(false)
+      const actions = fallback.findAll('button')
+      expect(actions).toHaveLength(1)
+      expect(actions[0]!.text()).toBe(recovery.action)
+      expect(actions[0]!.classes()).toContain('min-h-11')
+      expect(actions[0]!.element).toBeInstanceOf(HTMLButtonElement)
+      if (state !== 'preparing') await vi.waitFor(() => expect(document.activeElement).toBe(actions[0]!.element))
+      await actions[0]!.trigger('click')
+      expect(wrapper.emitted('leave')).toHaveLength(['preparing', 'blocked', 'stale', 'invalidated', 'unavailable'].indexOf(state) + 1)
+    }
     wrapper.unmount()
   })
 

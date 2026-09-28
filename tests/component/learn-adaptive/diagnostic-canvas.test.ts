@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { getFunctionName } from 'convex/server'
+import { adaptiveRecoveryCopy } from '~~/shared/learn-adaptive-recovery'
 
 const continueDraft = vi.fn()
 const submit = vi.fn()
@@ -172,6 +173,30 @@ describe('standalone diagnostic Canvas', () => {
     await wrapper.get('[data-testid="learn-diagnostic-recovery-action"]').trigger('click')
     expect(wrapper.emitted('leave')).toHaveLength(1)
     expect(submit).not.toHaveBeenCalled()
+  })
+
+  it.each(['preparing', 'blocked', 'stale', 'invalidated', 'unavailable'] as const)('keeps the non-factual diagnostic operable through %s evidence recovery', async evidenceState => {
+    const Comp = await import('~/components/learn-adaptive/DiagnosticCanvas.vue')
+    const recovery = adaptiveRecoveryCopy(evidenceState)
+    const wrapper = await mountSuspended(Comp.default, { props: { canvas: { ...base, evidenceState, recovery } }, attachTo: document.body })
+    expect(wrapper.get('[data-testid="learn-diagnostic-canvas"]').attributes('aria-labelledby')).toBe('learn-diagnostic-title')
+    expect(wrapper.get('[data-testid="learn-diagnostic-recovery"] [role="status"]').text()).toBe(recovery.body)
+    expect(wrapper.get('[data-testid="learn-diagnostic-recovery"] h2').text()).toBe(recovery.title)
+    const safeAction = wrapper.get('[data-testid="learn-diagnostic-recovery-action"]')
+    expect(safeAction.text()).toBe(recovery.action)
+    expect(safeAction.classes()).toContain('min-h-11')
+    expect(safeAction.element).toBeInstanceOf(HTMLButtonElement)
+    expect(wrapper.get('[data-testid="learn-diagnostic-response"]').attributes('aria-label')).toBe('Your response')
+    await wrapper.get('[data-testid="learn-diagnostic-response"]').setValue('An unfinished starting point.')
+    isOnline.value = false
+    await nextTick()
+    expect(wrapper.text()).toContain('Reconnect to save your response.')
+    expect((wrapper.get('[data-testid="learn-diagnostic-response"]').element as HTMLTextAreaElement).value).toBe('An unfinished starting point.')
+    expect((wrapper.get('[data-testid="learn-diagnostic-submit"]').element as HTMLButtonElement).disabled).toBe(true)
+    await safeAction.trigger('click')
+    expect(wrapper.emitted('leave')).toHaveLength(1)
+    expect(submit).not.toHaveBeenCalled()
+    wrapper.unmount()
   })
 
   it('keeps the response usable when render telemetry fails and retries it without blocking save', async () => {

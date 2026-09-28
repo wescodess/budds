@@ -24,6 +24,7 @@
     "test:learn-v2:calendar": "vitest run convex/learnV2Calendar.test.ts convex/learnV2CalendarReconciliation.test.ts convex/calendarConnections.test.ts convex/calendarEvents.test.ts convex/calendarEventCleanup.test.ts convex/accountDeletion.test.ts convex/dataExport.test.ts server/api/learn-v2/calendar/*.test.ts && vitest run --config vitest.config.component.ts tests/component/learn-v2/calendar-*.test.ts",
     "e2e:stack": "node scripts/e2e-stack.mjs",
     "test:e2e:learn-v2": "playwright test --config playwright.config.ts e2e/learn-v2-journey.spec.ts",
+    "test:e2e:learn": "playwright test --config playwright.config.ts e2e/learn-v2-journey.spec.ts e2e/learn-adaptive-recovery.spec.ts",
     "verify:learn-v2-beta": "pnpm typecheck && pnpm typecheck:convex && pnpm test:learn-v2:unit && pnpm test:learn-v2:component",
     "verify:learn-v2-calendar": "pnpm typecheck && pnpm typecheck:convex && pnpm test:learn-v2:calendar",
     "audio:workflow:dev": "pnpm --dir workers/audio-overview dev",

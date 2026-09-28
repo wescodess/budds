@@ -94,6 +94,15 @@ it('shows saved completion and keeps actions usable in a narrow viewport', async
   expect(wrapper.get('[data-testid="learn-artifact-saved-status"]').text()).not.toContain('mastery')
   expect(wrapper.get('[data-testid="learn-artifact-save"]').classes()).toContain('min-h-11')
   expect(wrapper.get('[data-testid="learn-artifact-save"]').element).toBeInstanceOf(HTMLButtonElement)
+  expect(wrapper.get('[data-testid="learn-artifact-canvas"]').attributes('aria-label')).toBe('Artifact workspace')
+  const title = wrapper.get('[data-testid="learn-artifact-title"]').element as HTMLInputElement
+  const content = wrapper.get('[data-testid="learn-artifact-content"]').element as HTMLTextAreaElement
+  expect(title.closest('label')?.textContent).toContain('Title')
+  expect(content.closest('label')?.textContent).toContain('Content')
+  const actionRow = wrapper.get('[data-testid="learn-artifact-save"]').element.parentElement!
+  expect(actionRow.className).toContain('pb-[env(safe-area-inset-bottom)]')
+  expect([...actionRow.querySelectorAll('button')].map(button => button.textContent?.trim())).toEqual(['Save draft', 'Save artifact', 'Delete artifact', 'Leave workspace'])
+  expect([...actionRow.querySelectorAll('button')].every(button => button.className.includes('min-h-11'))).toBe(true)
   wrapper.unmount()
 })
 

@@ -242,7 +242,7 @@ jobs:
         run: pnpm verify:learn-v2-calendar
 
   learn-v2-browser:
-    name: Learn V2 browser journey
+    name: Learn browser journeys
     runs-on: ubuntu-latest
     timeout-minutes: 35
     needs: quality
@@ -255,11 +255,11 @@ jobs:
         with: { node-version: '24', cache: pnpm }
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium
-      - run: pnpm test:e2e:learn-v2
+      - run: pnpm test:e2e:learn
       - if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: learn-v2-browser-artifacts
+          name: learn-browser-artifacts
           path: |
             playwright-report/
             test-results/
@@ -330,7 +330,7 @@ jobs:
             echo "- Production build: $BUILD_RESULT"
             echo "- Learn V2 beta gate: $LEARN_V2_BETA_RESULT"
             echo "- Learn V2 calendar admission gate: $LEARN_V2_CALENDAR_RESULT"
-            echo "- Learn V2 browser journey: $LEARN_V2_BROWSER_RESULT"
+            echo "- Learn browser journeys: $LEARN_V2_BROWSER_RESULT"
             echo "- Burn-in: $BURN_IN_RESULT"
           } >> "$GITHUB_STEP_SUMMARY"
 

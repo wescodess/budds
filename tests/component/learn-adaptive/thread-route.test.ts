@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { getFunctionName } from 'convex/server'
+import { adaptiveRecoveryCopy } from '~~/shared/learn-adaptive-recovery'
 
 const allowed = ref(true)
 const canvas = ref<Record<string, unknown> | null>(null)
@@ -15,10 +16,11 @@ const user = ref<{ _id: string } | null>({ _id: 'owner_1' })
 const requestedRoute = reactive({ params: { threadId: 'thread_1' }, query: { activity: undefined as string | undefined } })
 const calls = vi.fn()
 const mutationCalls = vi.fn().mockResolvedValue({ kind: 'ok' })
+const isOnline = ref(true)
 
 mockNuxtImport('useLearnAdaptiveAccess', () => () => ({ allowed, checkingAccess: ref(false) }))
 mockNuxtImport('useRoute', () => () => requestedRoute)
-mockNuxtImport('useOnlineStatus', () => () => ({ isOnline: ref(true) }))
+mockNuxtImport('useOnlineStatus', () => () => ({ isOnline }))
 mockNuxtImport('useConvexMutation', () => () => ({ mutate: mutationCalls }))
 mockNuxtImport('useConvexAction', () => () => ({ mutate: vi.fn() }))
 mockNuxtImport('useConvexQuery', () => (reference: never, args: unknown) => {
@@ -31,7 +33,110 @@ mockNuxtImport('useConvexQuery', () => (reference: never, args: unknown) => {
 const path = ['~', 'pages', 'app', 'learn', 'thread', '[threadId].vue'].join('/')
 
 describe('adaptive thread route isolation', () => {
-  beforeEach(() => { allowed.value = true; canvas.value = null; diagnostic.value = null; artifact.value = null; reflection.value = null; evidence.value = null; projection.value = null; canvasPending.value = false; diagnosticPending.value = false; user.value = { _id: 'owner_1' }; requestedRoute.params.threadId = 'thread_1'; requestedRoute.query.activity = undefined; calls.mockClear(); mutationCalls.mockClear(); sessionStorage.clear() })
+  beforeEach(() => { allowed.value = true; isOnline.value = true; canvas.value = null; diagnostic.value = null; artifact.value = null; reflection.value = null; evidence.value = null; projection.value = null; canvasPending.value = false; diagnosticPending.value = false; user.value = { _id: 'owner_1' }; requestedRoute.params.threadId = 'thread_1'; requestedRoute.query.activity = undefined; calls.mockClear(); mutationCalls.mockClear(); sessionStorage.clear() })
+
+  it.each(['preparing', 'blocked', 'stale', 'invalidated', 'unavailable'] as const)('keeps an owned factual response through routed %s recovery', async evidenceState => {
+    const Page = await import(path)
+    const primitive = { contractVersion: 'learn-adaptive.activity-contract.v1', rendererVersion: 'learn-adaptive.renderer.v1',
+      type: 'independent_application', action: 'submit_response', testId: 'learn-primitive-independent-application',
+      props: { prompt: 'Explain why an apple falls.', responseFormat: 'long_text', draftPersistence: true } }
+    projection.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Explain gravity', intent: 'understand', evidenceState: 'ready', lifecycle: 'active', revision: 2, authorityKind: 'v2_mission', learningVoidId: 'void_1' },
+      currentActivity: { id: 'activity_1', status: 'started', purpose: 'Apply gravity independently.' }, history: [],
+      nextAction: { kind: 'submit_response', label: 'Submit response', activityId: 'activity_1' } }
+    canvas.value = { ownerId: 'owner_1', status: 'started', thread: { id: 'thread_1', outcome: 'Explain gravity', intent: 'understand', revision: 2 },
+      activity: { id: 'activity_1', status: 'started', purpose: 'Apply gravity independently.', reasonCode: 'ready_v2_session', planRevision: 1,
+        evidenceScope: { version: 'learn-adaptive.canvas-evidence-scope.v1', integrityState: 'accepted', sourceRefs: ['source_1'] },
+        primitive, fallback: { testId: 'learn-activity-fallback', title: 'Activity unavailable', body: 'Try later.', primaryAction: { label: 'Back to Learn' } },
+        requiredAction: { kind: 'submit_response', label: 'Submit response' } },
+      session: { studySessionId: 'session_1', revision: 2, contentRevision: 1, planRecordRevision: 5, blueprintRecordRevision: 3, scheduledStartAt: 0, scheduledEndAt: null, timezone: 'UTC' },
+      responsePrompt: 'Explain why an apple falls.' }
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1', attachTo: document.body })
+    await wrapper.get('[data-testid="learn-canvas-response"]').setValue('My unfinished answer.')
+    expect(wrapper.get('[data-testid="learn-adaptive-canvas-frame"]').attributes('aria-label')).toBe('Current learning activity')
+    projection.value = { ...projection.value!, thread: { ...(projection.value!.thread as Record<string, unknown>), evidenceState } }
+    await nextTick()
+    const guard = wrapper.get('[data-testid="learn-current-source-recovery"]')
+    expect(guard.attributes('role')).toBe('alert')
+    expect(guard.text()).toContain(`Evidence ${evidenceState}`)
+    expect(guard.get('a').attributes('href')).toBe('/app/learn/void_1')
+    expect(wrapper.get('[data-testid="learn-adaptive-canvas"]').element.parentElement?.getAttribute('style')).toContain('display: none')
+    expect((wrapper.get('[data-testid="learn-canvas-response"]').element as HTMLTextAreaElement).value).toBe('My unfinished answer.')
+
+    const recovery = adaptiveRecoveryCopy(evidenceState)
+    canvas.value = { ...canvas.value!, status: 'blocked', recoveryState: evidenceState, recovery }
+    await nextTick()
+    expect(wrapper.find('[data-testid="learn-current-source-recovery"]').exists()).toBe(false)
+    const fallback = wrapper.get('[data-testid="learn-activity-fallback"]')
+    expect(fallback.attributes('role')).toBe(evidenceState === 'preparing' ? 'status' : 'alert')
+    expect(fallback.text()).toContain(recovery.title)
+    expect(fallback.text()).toContain('Your unfinished response remains on this device.')
+    expect(fallback.get('button').text()).toBe('Back to Learn')
+    expect(wrapper.find('[data-testid="learn-canvas-submit"]').exists()).toBe(false)
+    if (evidenceState !== 'preparing') await vi.waitFor(() => expect(document.activeElement).toBe(fallback.get('button').element))
+    projection.value = { ...projection.value!, thread: { ...(projection.value!.thread as Record<string, unknown>), evidenceState: 'ready' } }
+    canvas.value = { ...canvas.value!, status: 'started', recoveryState: null, recovery: null }
+    await nextTick()
+    expect((wrapper.get('[data-testid="learn-canvas-response"]').element as HTMLTextAreaElement).value).toBe('My unfinished answer.')
+    wrapper.unmount()
+  })
+
+  it('keeps a routed diagnostic draft through offline, timed-out save, and rollback', async () => {
+    const Page = await import(path)
+    projection.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Check my learning', intent: 'refresh', evidenceState: 'preparing', lifecycle: 'active', revision: 2, authorityKind: 'standalone' },
+      currentActivity: { id: 'diagnostic:thread_1', status: 'eligible', purpose: 'Record your starting point.' }, history: [],
+      nextAction: { kind: 'submit_response', label: 'Save response', activityId: 'diagnostic:thread_1' } }
+    diagnostic.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Check my learning', intent: 'refresh', revision: 2 },
+      status: 'eligible', evidenceState: 'preparing', decisionPending: false, recovery: adaptiveRecoveryCopy('preparing'),
+      activity: { id: 'diagnostic:thread_1', status: 'eligible', planRevision: 1,
+        primitive: { contractVersion: 'learn-adaptive.activity-contract.v1', rendererVersion: 'learn-adaptive.renderer.v1', type: 'diagnostic_prompt', action: 'submit_response', testId: 'learn-primitive-diagnostic-prompt', props: { prompt: 'What do you know?', responseFormat: 'short_text', assistance: 'none' } },
+        response: null, requiredAction: { kind: 'submit_response', label: 'Save response' } } }
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1', attachTo: document.body })
+    await wrapper.get('[data-testid="learn-diagnostic-response"]').setValue('My unsent starting point.')
+    isOnline.value = false
+    await nextTick()
+    expect(wrapper.text()).toContain('Reconnect to save your response.')
+    expect((wrapper.get('[data-testid="learn-diagnostic-submit"]').element as HTMLButtonElement).disabled).toBe(true)
+    expect((wrapper.get('[data-testid="learn-diagnostic-response"]').element as HTMLTextAreaElement).value).toBe('My unsent starting point.')
+    isOnline.value = true
+    await nextTick()
+    mutationCalls.mockRejectedValueOnce(new Error('timeout'))
+    await wrapper.get('[data-testid="learn-diagnostic-submit"]').trigger('click')
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="learn-diagnostic-error"]').attributes('role')).toBe('alert'))
+    expect((wrapper.get('[data-testid="learn-diagnostic-response"]').element as HTMLTextAreaElement).value).toBe('My unsent starting point.')
+    projection.value = { ...projection.value!, thread: { ...(projection.value!.thread as Record<string, unknown>), lifecycle: 'rollback' } }
+    await nextTick()
+    expect(wrapper.get('[data-testid="learn-adaptive-thread-unavailable"] [role="status"]').text()).toContain('unavailable')
+    expect(wrapper.get('[data-testid="learn-adaptive-safe-destination"]').attributes('href')).toBe('/app/learn')
+    expect(wrapper.find('[data-testid="learn-diagnostic-submit"]').exists()).toBe(false)
+    projection.value = { ...projection.value!, thread: { ...(projection.value!.thread as Record<string, unknown>), lifecycle: 'active' } }
+    await nextTick()
+    expect((wrapper.get('[data-testid="learn-diagnostic-response"]').element as HTMLTextAreaElement).value).toBe('My unsent starting point.')
+    wrapper.unmount()
+  })
+
+  it('routes an ambiguous saved scoring outcome to reconciliation with one safe action', async () => {
+    const Page = await import(path)
+    projection.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Explain gravity', intent: 'understand', evidenceState: 'ready', lifecycle: 'active', revision: 3, authorityKind: 'v2_mission', learningVoidId: 'void_1' },
+      currentActivity: { id: 'activity_1', status: 'reconciling', purpose: 'Apply gravity independently.' }, history: [],
+      nextAction: { kind: 'recover', label: 'Wait for scoring reconciliation', activityId: 'activity_1' } }
+    canvas.value = { ownerId: 'owner_1', status: 'reconciling', thread: { id: 'thread_1', outcome: 'Explain gravity', intent: 'understand', revision: 3 },
+      activity: { id: 'activity_1', status: 'reconciling', purpose: 'Apply gravity independently.', reasonCode: 'ready_v2_session', planRevision: 1,
+        evidenceScope: { version: 'learn-adaptive.canvas-evidence-scope.v1', integrityState: 'accepted', sourceRefs: ['source_1'] },
+        primitive: { contractVersion: 'learn-adaptive.activity-contract.v1', rendererVersion: 'learn-adaptive.renderer.v1', type: 'independent_application', action: 'submit_response', testId: 'learn-primitive-independent-application', props: { prompt: 'Explain why an apple falls.', responseFormat: 'long_text', draftPersistence: true } },
+        fallback: { testId: 'learn-activity-fallback', title: 'Activity unavailable', body: 'Try later.', primaryAction: { label: 'Back to Learn' } }, requiredAction: { kind: 'submit_response', label: 'Submit response' } },
+      session: { studySessionId: 'session_1', revision: 3, contentRevision: 1, planRecordRevision: 5, blueprintRecordRevision: 3, scheduledStartAt: 0, scheduledEndAt: null, timezone: 'UTC' },
+      responsePrompt: 'Explain why an apple falls.', savedResponse: { response: 'Gravity pulls the apple down.', confidence: 4 } }
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1', attachTo: document.body })
+    const status = wrapper.get('[data-testid="learn-canvas-status"]')
+    expect(status.attributes('role')).toBe('status')
+    expect(status.text()).toContain('Scoring needs reconciliation. Your response is saved.')
+    expect(wrapper.find('[data-testid="learn-canvas-retry-scoring"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="learn-canvas-submit"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="learn-canvas-scoring-safe-action"]').text()).toBe('Back to Learn')
+    expect(wrapper.get('[data-testid="learn-canvas-scoring-safe-action"]').classes()).toContain('min-h-11')
+    expect(wrapper.text()).not.toContain('Mastery achieved')
+    wrapper.unmount()
+  })
 
   it('keeps an ended thread available for its authoritative reflection completion', async () => {
     const Page = await import(path)
