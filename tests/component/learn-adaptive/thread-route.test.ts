@@ -5,11 +5,12 @@ import { getFunctionName } from 'convex/server'
 const allowed = ref(true)
 const canvas = ref<Record<string, unknown> | null>(null)
 const diagnostic = ref<Record<string, unknown> | null>(null)
+const evidence = ref<Record<string, unknown> | null>(null)
 const projection = ref<Record<string, unknown> | null>(null)
 const canvasPending = ref(false)
 const diagnosticPending = ref(false)
 const user = ref<{ _id: string } | null>({ _id: 'owner_1' })
-const requestedRoute = reactive({ params: { threadId: 'thread_1' } })
+const requestedRoute = reactive({ params: { threadId: 'thread_1' }, query: { activity: undefined as string | undefined } })
 const calls = vi.fn()
 
 mockNuxtImport('useLearnAdaptiveAccess', () => () => ({ allowed, checkingAccess: ref(false) }))
@@ -20,14 +21,89 @@ mockNuxtImport('useConvexAction', () => () => ({ mutate: vi.fn() }))
 mockNuxtImport('useConvexQuery', () => (reference: never, args: unknown) => {
   const name = getFunctionName(reference)
   calls(name, args)
-  return { data: name === 'users:getUser' ? user : name === 'learnAdaptive:getThread' ? projection : name === 'learnAdaptiveRecovery:getDiagnosticCanvas' ? diagnostic : canvas,
+  return { data: name === 'users:getUser' ? user : name === 'learnAdaptive:getThread' ? projection : name === 'learnAdaptiveRecovery:getDiagnosticCanvas' ? diagnostic : name === 'learnAdaptiveEvidence:getThreadActivityEvidence' ? evidence : canvas,
     pending: name === 'learnAdaptiveRecovery:getDiagnosticCanvas' ? diagnosticPending : name === 'learnAdaptiveCanvas:getCanvas' ? canvasPending : ref(false) }
 })
 
 const path = ['~', 'pages', 'app', 'learn', 'thread', '[threadId].vue'].join('/')
 
 describe('adaptive thread route isolation', () => {
-  beforeEach(() => { allowed.value = true; canvas.value = null; diagnostic.value = null; projection.value = null; canvasPending.value = false; diagnosticPending.value = false; user.value = { _id: 'owner_1' }; requestedRoute.params.threadId = 'thread_1'; calls.mockClear() })
+  beforeEach(() => { allowed.value = true; canvas.value = null; diagnostic.value = null; evidence.value = null; projection.value = null; canvasPending.value = false; diagnosticPending.value = false; user.value = { _id: 'owner_1' }; requestedRoute.params.threadId = 'thread_1'; requestedRoute.query.activity = undefined; calls.mockClear(); sessionStorage.clear() })
+
+  it('restores a URL-selected historical activity while retaining the mounted current Canvas for back/forward', async () => {
+    const Page = await import(path)
+    projection.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Gravity', intent: 'understand', evidenceState: 'ready', lifecycle: 'active', revision: 2, authorityKind: 'v2_mission', learningVoidId: 'void_1' },
+      currentActivity: { id: 'activity_2', status: 'started', purpose: 'Current explanation.' }, history: [{ id: 'activity_1', status: 'replaced', purpose: 'Earlier explanation.' }],
+      nextAction: { kind: 'continue', label: 'Continue', activityId: 'activity_2' } }
+    canvas.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Gravity', intent: 'understand', revision: 2 }, status: 'ready',
+      activity: { id: 'activity_2', status: 'started', purpose: 'Current explanation.', reasonCode: 'ready_v2_session', primitive: null,
+        fallback: { testId: 'learn-activity-fallback', title: 'Unavailable', body: 'Try later.', primaryAction: { label: 'Back to Learn' } }, requiredAction: { kind: 'continue', label: 'Continue' } },
+      session: { studySessionId: 'session_1', revision: 2, contentRevision: 1, planRecordRevision: 5, blueprintRecordRevision: 3, scheduledStartAt: 0, scheduledEndAt: null, timezone: 'UTC' }, responsePrompt: null }
+    requestedRoute.query.activity = 'activity_1'
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1?activity=activity_1' })
+    expect(wrapper.get('[data-testid="learn-selected-history"]').text()).toContain('Earlier explanation.')
+    expect(wrapper.get('[data-testid="learn-adaptive-canvas"]').element.parentElement?.getAttribute('style')).toContain('display: none')
+    expect(wrapper.get('[data-testid="learn-current-activity-link"]').attributes('href')).toBe('/app/learn/thread/thread_1')
+    requestedRoute.query.activity = undefined
+    await nextTick()
+    expect(wrapper.find('[data-testid="learn-selected-history"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="learn-adaptive-canvas"]').element.parentElement?.getAttribute('style') ?? '').not.toContain('display: none')
+  })
+
+  it('binds the mounted Evidence drawer to the URL-selected owned activity', async () => {
+    const Page = await import(path)
+    projection.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Gravity', intent: 'understand', evidenceState: 'stale', lifecycle: 'active', revision: 2, authorityKind: 'v2_mission', learningVoidId: 'void_1' },
+      currentActivity: { id: 'activity_2', status: 'blocked', purpose: 'Current explanation.' }, history: [{ id: 'activity_1', status: 'replaced', purpose: 'Earlier explanation.' }],
+      nextAction: { kind: 'recover', label: 'Review your learning mission', activityId: 'activity_2' } }
+    requestedRoute.query.activity = 'activity_1'
+    evidence.value = { ownerId: 'owner_1', threadId: 'thread_1', kind: 'factual', activityId: 'activity_1', eligibility: 'historical', readOnly: true, integrityState: 'stale',
+      claims: [{ claimId: 'claim_1', claimText: 'Gravity attracts masses.', claimStatus: 'unknown', integrityState: 'stale',
+        source: { origin: 'user_url', locator: 'page:2', sourceSnapshotId: 'source_1', sourceSnapshotRevision: 2, sourceRecordRevision: 4 } }] }
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1?activity=activity_1', attachTo: document.body })
+    const args = calls.mock.calls.find(([name]) => name === 'learnAdaptiveEvidence:getThreadActivityEvidence')?.[1] as Ref<{ threadId: string, activityId: string }>
+    expect(args.value).toEqual({ threadId: 'thread_1', activityId: 'activity_1' })
+    await wrapper.get('[data-testid="learn-evidence-open"]').trigger('click')
+    expect(document.querySelector('[data-testid="learn-evidence-drawer"]')?.textContent).toContain('Past activity, read-only')
+    expect(document.querySelector('[data-testid="learn-evidence-drawer"]')?.textContent).toContain('page:2')
+    requestedRoute.query.activity = undefined
+    await nextTick()
+    expect(args.value).toEqual({ threadId: 'thread_1', activityId: 'activity_2' })
+    wrapper.unmount()
+  })
+
+  it.each([
+    { ownerId: 'owner_2', threadId: 'thread_1' },
+    { ownerId: 'https://auth.example.com|owner_1', threadId: 'thread_1' },
+    { ownerId: 'owner_1', threadId: 'thread_2' },
+  ])('does not render a cached Evidence collision from $ownerId/$threadId', async identity => {
+    const Page = await import(path)
+    projection.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Gravity', intent: 'understand', evidenceState: 'ready', lifecycle: 'active', revision: 2, authorityKind: 'v2_mission', learningVoidId: 'void_1' },
+      currentActivity: { id: 'activity_1', status: 'eligible', purpose: 'Explain gravity.' }, history: [], nextAction: { kind: 'continue', label: 'Continue', activityId: 'activity_1' } }
+    evidence.value = { ...identity, activityId: 'activity_1', kind: 'factual', eligibility: 'eligible', readOnly: false, integrityState: 'accepted',
+      claims: [{ claimId: 'claim_1', claimText: 'Wrong cached claim', claimStatus: 'fact', integrityState: 'accepted',
+        source: { origin: 'user_url', locator: 'page:1', sourceSnapshotId: 'source_1', sourceSnapshotRevision: 1, sourceRecordRevision: 1 } }] }
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1', attachTo: document.body })
+    await wrapper.get('[data-testid="learn-evidence-open"]').trigger('click')
+    const drawer = document.querySelector('[data-testid="learn-evidence-drawer"]') as HTMLElement
+    expect(drawer.textContent).toContain('Evidence details are unavailable')
+    expect(drawer.textContent).not.toContain('Wrong cached claim')
+    wrapper.unmount()
+  })
+
+  it('shows only safe recovery when source authority is unavailable but a retained Canvas is ready', async () => {
+    const Page = await import(path)
+    projection.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Gravity', intent: 'understand', evidenceState: 'unavailable', lifecycle: 'active', revision: 2, authorityKind: 'v2_mission', learningVoidId: 'void_1' },
+      currentActivity: { id: 'activity_2', status: 'started', purpose: 'Current explanation.' }, history: [],
+      nextAction: { kind: 'recover', label: 'Review your learning mission', activityId: 'activity_2' } }
+    canvas.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Gravity', intent: 'understand', revision: 2 }, status: 'ready',
+      activity: { id: 'activity_2', status: 'started', purpose: 'Current explanation.', reasonCode: 'ready_v2_session', primitive: null,
+        fallback: { testId: 'learn-activity-fallback', title: 'Unavailable', body: 'Try later.', primaryAction: { label: 'Back to Learn' } }, requiredAction: { kind: 'continue', label: 'Continue' } },
+      session: { studySessionId: 'session_1', revision: 2, contentRevision: 1, planRecordRevision: 5, blueprintRecordRevision: 3, scheduledStartAt: 0, scheduledEndAt: null, timezone: 'UTC' }, responsePrompt: null }
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
+    expect(wrapper.get('[data-testid="learn-current-source-recovery"]').text()).toContain('unavailable')
+    expect(wrapper.get('[data-testid="learn-current-source-recovery"] a').attributes('href')).toBe('/app/learn/void_1')
+    expect(wrapper.get('[data-testid="learn-adaptive-canvas"]').element.parentElement?.getAttribute('style')).toContain('display: none')
+  })
 
   it('resolves the static thread segment before the V2 learning void parameter', async () => {
     const Page = await import(path)

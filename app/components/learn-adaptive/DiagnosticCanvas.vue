@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { api } from '#convex/api'
 import { getErrorMessage } from '~~/shared/errors'
+import { useAdaptiveResponseDraft } from '~/composables/useAdaptiveResponseDraft'
 
 type Canvas = {
   ownerId: string
@@ -18,7 +19,7 @@ type Canvas = {
   }
 }
 
-const props = withDefaults(defineProps<{ canvas: Canvas, showHeader?: boolean }>(), { showHeader: true })
+const props = withDefaults(defineProps<{ canvas: Canvas, showHeader?: boolean, active?: boolean }>(), { showHeader: true, active: true })
 const emit = defineEmits<{ leave: [] }>()
 const { isOnline } = useOnlineStatus()
 const continueMutation = import.meta.client ? useConvexMutation(api.learnAdaptiveRecovery.continueDraft) : { mutate: async () => ({}) }
@@ -42,6 +43,7 @@ let renderOperableSeen = false
 
 const diagnostic = computed(() => props.canvas.activity?.primitive?.type === 'diagnostic_prompt' ? props.canvas.activity.primitive : null)
 const saved = computed(() => props.canvas.activity?.response ?? localSaved.value)
+useAdaptiveResponseDraft(props.canvas.activity ? `learn-response:${props.canvas.ownerId}:${props.canvas.thread.id}:${props.canvas.activity.id}` : null, response, computed(() => Boolean(saved.value)))
 const canSubmit = computed(() => !!diagnostic.value && !saved.value && isOnline.value && !busy.value && response.value.trim().length > 0 && new TextEncoder().encode(response.value.trim()).byteLength <= 12_000)
 const safeAction = computed(() => props.canvas.recovery.action)
 
@@ -56,8 +58,8 @@ function retryRenderAck() {
 }
 
 onBeforeUnmount(() => { renderAckDisposed = true; if (renderAckTimer) clearTimeout(renderAckTimer) })
-watch([diagnostic, saved, isOnline, busy, renderAckTick], async ([primitive, currentSaved, online, active]) => {
-  if (!primitive || (currentSaved && !renderOperableSeen) || !online || active || renderAckRecorded.value || renderAckPending.value || !props.canvas.activity) return
+watch([diagnostic, saved, isOnline, busy, renderAckTick, () => props.active], async ([primitive, currentSaved, online, busyNow, , visible]) => {
+  if (!visible || !primitive || (currentSaved && !renderOperableSeen) || !online || busyNow || renderAckRecorded.value || renderAckPending.value || !props.canvas.activity) return
   renderAckPending.value = true
   try {
     await nextTick()

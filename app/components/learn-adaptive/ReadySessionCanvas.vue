@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { api } from '#convex/api'
 import { getErrorMessage } from '~~/shared/errors'
+import { useAdaptiveResponseDraft } from '~/composables/useAdaptiveResponseDraft'
 
 type Canvas = {
+  ownerId: string
   status: string
   thread: { id: string, outcome: string, intent: string, revision: number }
   activity: {
@@ -17,7 +19,7 @@ type Canvas = {
   savedResponse?: { response: string, confidence: number } | null
 }
 
-const props = withDefaults(defineProps<{ canvas: Canvas, showHeader?: boolean }>(), { showHeader: true })
+const props = withDefaults(defineProps<{ canvas: Canvas, showHeader?: boolean, active?: boolean }>(), { showHeader: true, active: true })
 const emit = defineEmits<{ leave: [] }>()
 const { isOnline } = useOnlineStatus()
 const startMutation = import.meta.client ? useConvexMutation(api.learnV2SessionContent.startStudySession) : { mutate: async () => ({}) }
@@ -39,6 +41,7 @@ const error = ref<string | null>(null)
 const notice = ref('')
 const scoreState = ref<'idle' | 'pending' | 'complete'>('idle')
 const staged = ref(!!props.canvas.savedResponse || props.canvas.status === 'submitted' || props.canvas.status === 'scoring' || props.canvas.status === 'reconciling' || props.canvas.status === 'feedback')
+useAdaptiveResponseDraft(`learn-response:${props.canvas.ownerId}:${props.canvas.thread.id}:${props.canvas.activity.id}`, response, staged, confidence)
 const startKey = ref<string | null>(null)
 const stageKey = ref<string | null>(null)
 const scoreKey = ref<string | null>(null)
@@ -81,8 +84,8 @@ onBeforeUnmount(() => {
   if (meaningfulStartRetryTimer) clearTimeout(meaningfulStartRetryTimer)
 })
 
-watch([started, responseStep, isOnline, busy, meaningfulStartRetryTick], async ([hasStarted, showingResponse, online]) => {
-  if (!hasStarted || !online || meaningfulStartRecorded.value || meaningfulStartPending.value) return
+watch([started, responseStep, isOnline, busy, meaningfulStartRetryTick, () => props.active], async ([hasStarted, showingResponse, online, , , visible]) => {
+  if (!visible || !hasStarted || !online || meaningfulStartRecorded.value || meaningfulStartPending.value) return
   meaningfulStartPending.value = true
   try {
     await nextTick()
