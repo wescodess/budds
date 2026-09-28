@@ -19,6 +19,7 @@ mockNuxtImport('useLearnAdaptiveAccess', () => () => ({ allowed, checkingAccess:
 mockNuxtImport('useUserSession', () => () => ({ loggedIn: ref(true), ready: ref(true) }))
 mockNuxtImport('useOnlineStatus', () => () => ({ isOnline: ref(true) }))
 mockNuxtImport('useConvexMutation', () => () => ({ mutate: vi.fn().mockResolvedValue({ kind: 'ok' }) }))
+mockNuxtImport('useConvex', () => () => ({ query: vi.fn() }))
 mockNuxtImport('useConvexAction', () => () => ({ mutate: vi.fn() }))
 mockNuxtImport('useConvexQuery', () => (reference: never) => {
   const name = getFunctionName(reference)

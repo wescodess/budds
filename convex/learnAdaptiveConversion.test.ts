@@ -58,7 +58,8 @@ test('owner converts a contribution into an attributed, replayable, non-scoring 
   expect(await owner.query(internal.learnAdaptiveActivities.replayActivityPlan, { activityId: created.value.activityId }))
     .toMatchObject({ ok: true, value: { attribution: { contributionId }, evidenceReferences: [] } })
   expect(await owner.query(api.learnAdaptive.getArtifactCanvas, { threadId }))
-    .toMatchObject({ status: 'eligible', activity: { id: created.value.activityId, primitive: { type: 'artifact_workspace' } } })
+    .toMatchObject({ status: 'eligible', activity: { id: created.value.activityId, primitive: { type: 'artifact_workspace',
+      props: { prompt: expect.stringContaining('contents are not shown') } } } })
   expect(await owner.mutation(api.learnAdaptive.saveArtifact, {
     threadId, activityId: created.value.activityId, artifactKind: 'plan', title: 'My next step',
     summary: 'Review and practice the concept.', status: 'saved', expectedRevision: created.revision,
