@@ -28,7 +28,7 @@ test.describe('static Canvas projections in real Chromium', () => {
         const harness = page.getByTestId('canvas-browser-harness')
         const primitive = harness.getByTestId(`learn-primitive-${kind.replaceAll('_', '-')}`)
         await expect(primitive, `${kind} ${viewport.name}: real renderer`).toBeVisible()
-        await expect.poll(() => page.evaluate(() => Reflect.get(globalThis, '__buddsCanvasProjectionOnly')), { message: `${kind} ${viewport.name}: projection-only transport` }).toBe(true)
+        await expect(harness, `${kind} ${viewport.name}: projection-only transport`).toHaveAttribute('data-projection-only', 'true')
         await expect(harness.getByTestId('learn-activity-fallback')).toHaveCount(0)
         await expect(harness.locator('h1')).toHaveText('Canvas browser fixture')
         await expect(page.getByRole('main')).toHaveCount(1)

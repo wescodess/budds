@@ -9,6 +9,7 @@ definePageMeta({ layout: false })
 // Static, bounded projections. They are browser fixtures, not learner data or
 // evidence of a server decision. The production renderer components remain real.
 const route = useRoute()
+const projectionOnly = Reflect.get(globalThis, '__buddsCanvasProjectionOnly') === true
 const kinds = ['cited_explanation', 'diagnostic_prompt', 'worked_example', 'independent_application', 'source_comparison', 'artifact_workspace', 'reflection_next_move'] as const
 const states = ['ready', 'active', 'completed', 'fallback', 'blocked', 'preparing', 'offline'] as const
 const kind = computed(() => kinds.find(value => value === route.query.kind) ?? kinds[0])
@@ -80,7 +81,7 @@ const left = ref(false)
 </script>
 
 <template>
-  <main class="mx-auto w-full max-w-3xl px-4 py-6 sm:px-6" data-testid="canvas-browser-harness">
+  <main class="mx-auto w-full max-w-3xl px-4 py-6 sm:px-6" data-testid="canvas-browser-harness" :data-projection-only="projectionOnly">
     <h1 class="text-2xl font-semibold">Canvas browser fixture</h1>
     <p class="mt-2 text-sm">Static projection for local browser testing. No learning result is saved here.</p>
     <p v-if="left" role="status">Back to Learn was requested.</p>
