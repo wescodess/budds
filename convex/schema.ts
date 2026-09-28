@@ -1,6 +1,6 @@
 import { defineSchema, defineTable } from 'convex/server'
 import { v } from 'convex/values'
-import { learnActivityCommandReceiptFields, learnActivityEvidenceLinkFields, learnActivityOverrideFields, learnAdaptiveThreadDeletionJobFields, learningThreadActivityFields, learningThreadArtifactFields, learningThreadFields } from '../shared/adaptive-learn-storage-manifest'
+import { learnActivityCommandReceiptFields, learnActivityDecisionFields, learnActivityEvidenceLinkFields, learnActivityOverrideFields, learnAdaptiveThreadDeletionJobFields, learningThreadActivityFields, learningThreadArtifactFields, learningThreadFields } from '../shared/adaptive-learn-storage-manifest'
 import { learnActivityEventFields } from '../shared/learn-adaptive-events'
 import { masteryStateValidator, masteryTransitionReasonValidator } from '../shared/learn-v2-mastery'
 
@@ -1405,6 +1405,13 @@ export default defineSchema({
     .index('by_userId_and_activityId', ['userId', 'activityId'])
     .index('by_userId_and_activityId_and_invalidatedAt', ['userId', 'activityId', 'invalidatedAt'])
     .index('by_userId_and_sourceSnapshotId_and_invalidatedAt', ['userId', 'sourceSnapshotId', 'invalidatedAt']),
+
+  learnActivityDecisions: defineTable(learnActivityDecisionFields)
+    .index('by_userId', ['userId'])
+    .index('by_userId_and_threadId_and_createdAt', ['userId', 'threadId', 'createdAt'])
+    .index('by_userId_and_threadId_and_boundaryOrdinal', ['userId', 'threadId', 'boundaryOrdinal'])
+    .index('by_userId_and_activityId_and_createdAt', ['userId', 'activityId', 'createdAt'])
+    .index('by_userId_and_idempotencyKeyHash', ['userId', 'idempotencyKeyHash']),
 
   learnActivityEvents: defineTable(learnActivityEventFields)
     .index('by_userId', ['userId'])

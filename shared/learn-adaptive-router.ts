@@ -80,6 +80,10 @@ function pinId(value: unknown): value is string {
   return typeof value === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(value)
 }
 
+function activityIdentity(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9_:-]{1,200}$/.test(value)
+}
+
 function revision(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1
 }
@@ -123,7 +127,7 @@ function invalidReason(input: unknown): AdaptiveRouterReasonCode | null {
   if (input.priorActivity !== null) {
     if (!exactKeys(input.priorActivity, PRIOR_KEYS)) return 'unsupported_prior_activity'
     const prior = input.priorActivity
-    if (!pinId(prior.activityId) || !member(prior.primitive, PRIMITIVES)
+    if (!activityIdentity(prior.activityId) || !member(prior.primitive, PRIMITIVES)
       || !member(prior.activityClass, ['factual', 'non_factual'])
       || !member(prior.outcome, ['completed', 'representative_pass', 'representative_fail', 'incomplete', 'provider_failure'])
       || !member(prior.assistance, ['none', 'hint', 'reveal'])) return 'unsupported_prior_activity'

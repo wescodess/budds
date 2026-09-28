@@ -163,7 +163,7 @@ export const applyOverride = mutation({
 
 const HISTORY_LIMIT = 8
 
-async function representativeCompletion(ctx: QueryCtx, userId: string, activity: Doc<'learningThreadActivities'> | null) {
+export async function representativeCompletion(ctx: QueryCtx | MutationCtx, userId: string, activity: Doc<'learningThreadActivities'> | null) {
   if (!activity || activity.activityClass !== 'factual' || activity.status !== 'feedback'
     || activity.evaluationContract.kind !== 'server_scored' || !activity.masteryAttemptId || !activity.scoringJobId) return null
   const [attempt, job, passedEvent, failedEvent] = await Promise.all([
@@ -190,7 +190,8 @@ async function representativeCompletion(ctx: QueryCtx, userId: string, activity:
     || event.sourceVersion !== attempt.scorerVersion || event.contractVersion !== activity.contractVersion
     || event.metadata.boundaryOrdinal !== activity.boundaryOrdinal || event.metadata.planRevision !== activity.planRevision
     || event.dedupeKeyHash !== await learnActivityEventDedupeHash({ userId, threadId: activity.threadId,
-      eventVersion: passed ? 'representative_pass.v1' : 'representative_fail.v1', semanticKey: `attempt:${String(attempt._id)}:representative` })) return null
+      eventVersion: passed ? 'representative_pass.v1' : 'representative_fail.v1', semanticKey: `attempt:${String(attempt._id)}:representative`,
+      taxonomyVersion: event.taxonomyVersion })) return null
   return { version: ADAPTIVE_REPRESENTATIVE_COMPLETION_VERSION,
     status: passedEvent ? 'passed' as const : 'needs_practice' as const,
     basis: 'server_scored_representative_task' as const, activityId: activity.activityId, recordedAt: event.occurredAt }

@@ -1,6 +1,7 @@
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import {
+  LEGACY_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION,
   LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION,
   validateLearnActivityEventInput,
   type LearnActivityEventInput,
@@ -18,8 +19,13 @@ async function digest(value: string) {
   return `sha256:${[...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('')}`
 }
 
-export async function learnActivityEventDedupeHash(input: { userId: string, threadId: Id<'learningThreads'>, eventVersion: string, semanticKey: string }) {
-  return await digest(JSON.stringify([LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION, input.userId, String(input.threadId), input.eventVersion, input.semanticKey]))
+type EventTaxonomyVersion = typeof LEGACY_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION | typeof LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION
+
+export async function learnActivityEventDedupeHash(input: { userId: string, threadId: Id<'learningThreads'>, eventVersion: string, semanticKey: string, taxonomyVersion?: EventTaxonomyVersion }) {
+  const taxonomyVersion = input.taxonomyVersion ?? LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION
+  if (taxonomyVersion === LEGACY_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION && input.eventVersion === 'routing_decision.v1')
+    throw new Error('Routing decisions are unavailable in the legacy event taxonomy')
+  return await digest(JSON.stringify([taxonomyVersion, input.userId, String(input.threadId), input.eventVersion, input.semanticKey]))
 }
 
 export async function writeLearnActivityEvent(ctx: MutationCtx, input: WriteEventInput) {
@@ -31,10 +37,23 @@ export async function writeLearnActivityEvent(ctx: MutationCtx, input: WriteEven
     const activity = await ctx.db.get(activityId)
     if (!activity || activity.userId !== userId || activity.threadId !== threadId) throw new Error('Adaptive event activity authority is unavailable')
   }
-  const dedupeKeyHash = await learnActivityEventDedupeHash({ userId, threadId, eventVersion: event.eventVersion, semanticKey: event.semanticKey })
-  const prior = await ctx.db.query('learnActivityEvents')
-    .withIndex('by_userId_and_dedupeKeyHash', q => q.eq('userId', userId).eq('dedupeKeyHash', dedupeKeyHash))
-    .unique()
+  const lookupVersions: EventTaxonomyVersion[] = event.eventType === 'routing_decision'
+    ? [LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION]
+    : [LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION, LEGACY_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION]
+  const matches = [] as Doc<'learnActivityEvents'>[]
+  for (const taxonomyVersion of lookupVersions) {
+    const hash = await learnActivityEventDedupeHash({ userId, threadId, eventVersion: event.eventVersion,
+      semanticKey: event.semanticKey, taxonomyVersion })
+    const found = await ctx.db.query('learnActivityEvents')
+      .withIndex('by_userId_and_dedupeKeyHash', q => q.eq('userId', userId).eq('dedupeKeyHash', hash))
+      .unique()
+    if (found) {
+      if (found.taxonomyVersion !== taxonomyVersion) throw new Error('Adaptive event taxonomy/hash mismatch')
+      matches.push(found)
+    }
+  }
+  if (matches.length > 1) throw new Error('Adaptive event semantic key has duplicate taxonomy records')
+  const prior = matches[0]
   if (prior) {
     const same = prior.threadId === threadId
       && prior.activityId === activityId
@@ -49,6 +68,7 @@ export async function writeLearnActivityEvent(ctx: MutationCtx, input: WriteEven
     if (!same) throw new Error('Adaptive event semantic key conflicts with the authoritative event')
     return { eventId: prior._id, replayed: true as const }
   }
+  const dedupeKeyHash = await learnActivityEventDedupeHash({ userId, threadId, eventVersion: event.eventVersion, semanticKey: event.semanticKey })
   const eventId = await ctx.db.insert('learnActivityEvents', {
     userId,
     threadId,

@@ -9,6 +9,7 @@ import {
 import { ADAPTIVE_ACTIVITY_PLAN_VERSION, ADAPTIVE_ACTIVITY_REPLAY_VERSION } from './learn-adaptive-activity-plan'
 import { ADAPTIVE_OVERRIDE_VERSION, ADAPTIVE_REASON_TEXT_VERSION, adaptiveFixedNextPlanValidator, adaptiveOverrideOptionValidator } from './learn-adaptive-controls'
 import { CLARIFICATION_TEMPLATE_VERSION, INITIAL_DECISION_VERSION } from './learn-adaptive-clarification'
+import { ADAPTIVE_ROUTER_VERSION } from './learn-adaptive-router'
 
 export const ADAPTIVE_LEARN_STORAGE_MANIFEST = [
   {
@@ -29,6 +30,13 @@ export const ADAPTIVE_LEARN_STORAGE_MANIFEST = [
     table: 'learnActivityEvidenceLinks',
     ownerIndex: 'by_userId',
     parentIndex: 'by_userId_and_threadId',
+    export: 'redacted_bounded',
+    accountDeletion: 'delete',
+  },
+  {
+    table: 'learnActivityDecisions',
+    ownerIndex: 'by_userId',
+    parentIndex: 'by_userId_and_threadId_and_createdAt',
     export: 'redacted_bounded',
     accountDeletion: 'delete',
   },
@@ -70,7 +78,7 @@ export const ADAPTIVE_LEARN_STORAGE_MANIFEST = [
 ] as const
 
 export const ADAPTIVE_LEARN_ACCOUNT_DELETE_ORDER = ADAPTIVE_LEARN_STORAGE_MANIFEST.map(entry => entry.table)
-export const ADAPTIVE_LEARN_EXPORT_COLLECTIONS = ['learningThreads', 'learningThreadActivities', 'learningThreadArtifacts', 'learnActivityEvidenceLinks', 'learnActivityEvents', 'learnActivityCommandReceipts', 'learnAdaptiveThreadDeletionJobs', 'learnActivityOverrides'] as const
+export const ADAPTIVE_LEARN_EXPORT_COLLECTIONS = ['learningThreads', 'learningThreadActivities', 'learningThreadArtifacts', 'learnActivityEvidenceLinks', 'learnActivityDecisions', 'learnActivityEvents', 'learnActivityCommandReceipts', 'learnAdaptiveThreadDeletionJobs', 'learnActivityOverrides'] as const
 export const ADAPTIVE_ACTIVITY_STORAGE_REGISTRY = [
   { type: 'cited_explanation', allowedActions: ['continue', 'inspect_source', 'ask_for_example'], testId: 'learn-primitive-cited-explanation', inputProps: ['heading', 'explanation', 'sourceRefs'], storedProps: ['heading', 'explanation', 'sourceRefs'] },
   { type: 'diagnostic_prompt', allowedActions: ['submit_response'], testId: 'learn-primitive-diagnostic-prompt', inputProps: ['prompt', 'responseFormat', 'assistance'], storedProps: ['prompt', 'responseFormat', 'assistance'] },
@@ -318,6 +326,29 @@ export const learnActivityOverrideFields = {
   version: v.literal(ADAPTIVE_OVERRIDE_VERSION),
   fixedNextPlan: adaptiveFixedNextPlanValidator,
   boundaryOrdinal: v.number(),
+  createdAt: v.number(),
+}
+
+export const learnActivityDecisionFields = {
+  userId: v.string(),
+  threadId: v.id('learningThreads'),
+  activityId: v.string(),
+  boundaryOrdinal: v.number(),
+  routerVersion: v.literal(ADAPTIVE_ROUTER_VERSION),
+  inputSnapshot: v.string(),
+  inputDigest: v.string(),
+  status: v.union(v.literal('recommended'), v.literal('blocked')),
+  selectedActivity: v.union(v.object({ primitive: v.union(
+    v.literal('cited_explanation'), v.literal('diagnostic_prompt'), v.literal('worked_example'),
+    v.literal('independent_application'), v.literal('source_comparison'), v.literal('artifact_workspace'),
+    v.literal('reflection_next_move')),
+  activityClass: v.union(v.literal('factual'), v.literal('non_factual')) }), v.null()),
+  reasonCode: v.string(),
+  fallback: v.string(),
+  overrideMetadata: v.string(),
+  targetRevision: v.number(),
+  resultRevision: v.number(),
+  idempotencyKeyHash: v.string(),
   createdAt: v.number(),
 }
 
