@@ -24,7 +24,8 @@ type CommandInput<T> = {
   payload: Record<string, unknown>
   allowNoop?: boolean
   returnBlockedWhenDeleting?: boolean
-  apply: (ctx: MutationCtx, thread: Doc<'learningThreads'>, userId: string) => Promise<{ value: T, revision: number }>
+  replayExpiredResult?: (ctx: MutationCtx, receipt: Doc<'learnActivityCommandReceipts'>, userId: string) => Promise<AdaptiveResult<T> | null>
+  apply: (ctx: MutationCtx, thread: Doc<'learningThreads'>, userId: string, command: { idempotencyKeyHash: string }) => Promise<{ value: T, revision: number }>
 }
 
 export class AdaptiveCommandConflict extends Error {
@@ -50,7 +51,10 @@ export async function executeAdaptiveThreadCommand<T>(ctx: MutationCtx, input: C
     .unique()
   if (prior) {
     if (prior.requestFingerprint !== prepared.requestFingerprint) return { kind: 'conflict', code: 'duplicate_key', expectedRevision: input.expectedRevision, actualRevision: prior.targetRevision, authority: 'convex' }
-    if (prior.resultRedactedAt !== undefined || prior.resultReference === null) return { kind: 'invalid', code: 'result_expired', message: 'The original command result has expired', retryable: false }
+    if (prior.resultRedactedAt !== undefined || prior.resultReference === null) {
+      const durable = await input.replayExpiredResult?.(ctx, prior, userId)
+      return durable ?? { kind: 'invalid', code: 'result_expired', message: 'The original command result has expired', retryable: false }
+    }
     return JSON.parse(prior.resultReference) as AdaptiveResult<T>
   }
   const thread = await ctx.db.get(input.threadId)
@@ -87,7 +91,7 @@ export async function executeAdaptiveThreadCommand<T>(ctx: MutationCtx, input: C
 
   let committed: { value: T, revision: number }
   try {
-    committed = await input.apply(ctx, thread, userId)
+    committed = await input.apply(ctx, thread, userId, { idempotencyKeyHash: prepared.idempotencyKeyHash })
   }
   catch (error) {
     if (error instanceof AdaptiveCommandConflict) return await persistConflict(error.code, error.actualRevision)
@@ -150,6 +154,14 @@ export async function deleteAdaptiveThreadAuthorityBatch(ctx: MutationCtx, job: 
     for (const link of evidenceLinks) await ctx.db.delete(link._id)
     await ctx.db.patch(job._id, { phase: 'children', updatedAt: Date.now() })
     return { phase: 'evidence_links' as const, deleted: evidenceLinks.length, done: false, jobId: job._id }
+  }
+  const decisions = await ctx.db.query('learnActivityDecisions')
+    .withIndex('by_userId_and_threadId_and_createdAt', q => q.eq('userId', userId).eq('threadId', threadId))
+    .take(THREAD_DELETION_BATCH_SIZE)
+  if (decisions.length > 0) {
+    for (const decision of decisions) await ctx.db.delete(decision._id)
+    await ctx.db.patch(job._id, { phase: 'children', updatedAt: Date.now() })
+    return { phase: 'decisions' as const, deleted: decisions.length, done: false, jobId: job._id }
   }
   const events = await ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', userId).eq('threadId', threadId)).take(THREAD_DELETION_BATCH_SIZE)
   if (events.length > 0) {

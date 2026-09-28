@@ -34,6 +34,13 @@ describe('Adaptive Learn storage manifest', () => {
         accountDeletion: 'delete',
       },
       {
+        table: 'learnActivityDecisions',
+        ownerIndex: 'by_userId',
+        parentIndex: 'by_userId_and_threadId_and_createdAt',
+        export: 'redacted_bounded',
+        accountDeletion: 'delete',
+      },
+      {
         table: 'learnActivityEvents',
         ownerIndex: 'by_userId',
         parentIndex: 'by_userId_and_threadId_and_occurredAt',
@@ -69,8 +76,8 @@ describe('Adaptive Learn storage manifest', () => {
         accountDeletion: 'delete',
       },
     ])
-    expect(ADAPTIVE_LEARN_ACCOUNT_DELETE_ORDER).toEqual(['learningThreadArtifacts', 'learnActivityOverrides', 'learnActivityEvidenceLinks', 'learnActivityEvents', 'learnActivityCommandReceipts', 'learningThreadActivities', 'learnAdaptiveThreadDeletionJobs', 'learningThreads'])
-    expect(ADAPTIVE_LEARN_EXPORT_COLLECTIONS).toEqual(['learningThreads', 'learningThreadActivities', 'learningThreadArtifacts', 'learnActivityEvidenceLinks', 'learnActivityEvents', 'learnActivityCommandReceipts', 'learnAdaptiveThreadDeletionJobs', 'learnActivityOverrides'])
+    expect(ADAPTIVE_LEARN_ACCOUNT_DELETE_ORDER).toEqual(['learningThreadArtifacts', 'learnActivityOverrides', 'learnActivityEvidenceLinks', 'learnActivityDecisions', 'learnActivityEvents', 'learnActivityCommandReceipts', 'learningThreadActivities', 'learnAdaptiveThreadDeletionJobs', 'learningThreads'])
+    expect(ADAPTIVE_LEARN_EXPORT_COLLECTIONS).toEqual(['learningThreads', 'learningThreadActivities', 'learningThreadArtifacts', 'learnActivityEvidenceLinks', 'learnActivityDecisions', 'learnActivityEvents', 'learnActivityCommandReceipts', 'learnAdaptiveThreadDeletionJobs', 'learnActivityOverrides'])
   })
 
   test('keeps stored primitive discriminants and actions aligned with the runtime registry', () => {

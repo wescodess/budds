@@ -2,10 +2,16 @@
 import { convexTest } from 'convex-test'
 import { describe, expect, test } from 'vitest'
 import schema from './schema'
-import { writeLearnActivityEvent } from './lib/learnAdaptiveEvents'
+import { learnActivityEventDedupeHash, writeLearnActivityEvent } from './lib/learnAdaptiveEvents'
 
 const modules = import.meta.glob('./**/*.ts')
 const OWNER = 'https://auth.example.com|event-owner'
+
+async function legacyEventHash(threadId: string, eventVersion: string, semanticKey: string) {
+  const canonical = JSON.stringify(['learn-adaptive.activity-events.v1', OWNER, threadId, eventVersion, semanticKey])
+  const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical)))
+  return `sha256:${[...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('')}`
+}
 
 async function fixture() {
   const t = convexTest(schema, modules)
@@ -14,6 +20,27 @@ async function fixture() {
 }
 
 describe('Adaptive Learn event writer', () => {
+  test('replays an unchanged pre-v2 event instead of writing its v2 hash twice', async () => {
+    const { t, threadId } = await fixture()
+    const input = { userId: OWNER, threadId, eventType: 'activity_eligible' as const,
+      eventVersion: 'activity_eligible.v1' as const, sourceVersion: 'learn-adaptive.activity-plan.v1',
+      contractVersion: 'learn-adaptive.activity-contract.v1', semanticKey: 'activity:legacy:eligible',
+      occurredAt: 10, outcomeCode: 'eligible', metadata: { activityClass: 'non_factual' as const, boundaryOrdinal: 1 } }
+    const first = await t.run(ctx => writeLearnActivityEvent(ctx, input))
+    await t.run(async ctx => ctx.db.patch(first.eventId, { taxonomyVersion: 'learn-adaptive.activity-events.v1',
+      dedupeKeyHash: await legacyEventHash(String(threadId), input.eventVersion, input.semanticKey) }))
+    expect(await t.run(ctx => writeLearnActivityEvent(ctx, input))).toEqual({ eventId: first.eventId, replayed: true })
+    expect(await t.run(ctx => ctx.db.query('learnActivityEvents')
+      .withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', OWNER).eq('threadId', threadId)).take(2))).toHaveLength(1)
+  })
+
+  test('does not assign the legacy taxonomy to a routing decision', async () => {
+    const { threadId } = await fixture()
+    await expect(learnActivityEventDedupeHash({ userId: OWNER, threadId,
+      eventVersion: 'routing_decision.v1', semanticKey: 'routing:next',
+      taxonomyVersion: 'learn-adaptive.activity-events.v1' })).rejects.toThrow(/unavailable in the legacy event taxonomy/i)
+  })
+
   test('writes one owner-scoped event for a deterministic semantic key', async () => {
     const { t, threadId } = await fixture()
     const input = {
@@ -32,7 +59,7 @@ describe('Adaptive Learn event writer', () => {
     const first = await t.run(ctx => writeLearnActivityEvent(ctx, input))
     expect(await t.run(ctx => writeLearnActivityEvent(ctx, input))).toEqual({ eventId: first.eventId, replayed: true })
     const rows = await t.run(ctx => ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', OWNER).eq('threadId', threadId)).take(2))
-    expect(rows).toEqual([expect.objectContaining({ eventType: 'activity_eligible', eventVersion: 'activity_eligible.v1', taxonomyVersion: 'learn-adaptive.activity-events.v1', metadata: input.metadata })])
+    expect(rows).toEqual([expect.objectContaining({ eventType: 'activity_eligible', eventVersion: 'activity_eligible.v1', taxonomyVersion: 'learn-adaptive.activity-events.v2', metadata: input.metadata })])
     expect(rows[0]).not.toHaveProperty('semanticKey')
   })
 

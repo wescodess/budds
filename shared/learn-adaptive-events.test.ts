@@ -7,13 +7,13 @@ import {
 } from './learn-adaptive-events'
 
 describe('Adaptive Learn event contract', () => {
-  test('freezes the exact closed v1 taxonomy and type/version pairing', () => {
-    expect(LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION).toBe('learn-adaptive.activity-events.v1')
+  test('freezes the exact closed v2 taxonomy and type/version pairing', () => {
+    expect(LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION).toBe('learn-adaptive.activity-events.v2')
     expect(LEARN_ACTIVITY_EVENT_TAXONOMY).toEqual([
       'thread_command_committed', 'meaningful_activity_started', 'thread_drafted', 'evidence_ready', 'evidence_blocked',
       'activity_eligible', 'activity_started', 'meaningful_response', 'assistance', 'activity_completed',
       'representative_pass', 'representative_fail', 'delayed_check_eligible', 'delayed_check_attempt', 'retained',
-      'remediation', 'provider_failure', 'provider_ambiguity', 'evidence_gap', 'evidence_invalidation', 'abandonment', 'explicit_end',
+      'remediation', 'provider_failure', 'provider_ambiguity', 'evidence_gap', 'evidence_invalidation', 'abandonment', 'explicit_end', 'routing_decision',
     ])
     expect(LEARN_ACTIVITY_EVENT_TAXONOMY.map(type => eventVersionFor(type))).toEqual(
       LEARN_ACTIVITY_EVENT_TAXONOMY.map(type => `${type}.v1`),
@@ -38,5 +38,17 @@ describe('Adaptive Learn event contract', () => {
       expect(() => validateLearnActivityEventInput({ ...safe, metadata: { ...safe.metadata, [forbidden]: 'private-value' } } as never), forbidden).toThrow(/metadata/i)
     }
     expect(() => validateLearnActivityEventInput({ ...safe, reasonCode: 'https://private.example/a' })).toThrow(/reason code/i)
+  })
+
+  test('routing decision events carry only a boundary and optional closed activity class', () => {
+    const routing = { eventType: 'routing_decision' as const, eventVersion: 'routing_decision.v1' as const,
+      sourceVersion: 'learn-adaptive.router.v1', contractVersion: 'learn-adaptive.routing-decision.v1',
+      semanticKey: 'routing:activity-1', occurredAt: 1, reasonCode: 'source_free_diagnostic',
+      outcomeCode: 'recommended', metadata: { boundaryOrdinal: 1, activityClass: 'non_factual' as const } }
+    expect(validateLearnActivityEventInput(routing)).toEqual(routing)
+    expect(() => validateLearnActivityEventInput({ ...routing, metadata: { boundaryOrdinal: 1, cohort: 'private_cohort' } } as never))
+      .toThrow(/routing decision metadata/i)
+    expect(() => validateLearnActivityEventInput({ ...routing, metricDefinitionVersion: 'first_value.v1' }))
+      .toThrow(/routing decision metadata/i)
   })
 })

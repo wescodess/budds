@@ -1,11 +1,12 @@
 import { v } from 'convex/values'
 
-export const LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION = 'learn-adaptive.activity-events.v1' as const
+export const LEGACY_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION = 'learn-adaptive.activity-events.v1' as const
+export const LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION = 'learn-adaptive.activity-events.v2' as const
 export const LEARN_ACTIVITY_EVENT_TAXONOMY = [
   'thread_command_committed', 'meaningful_activity_started', 'thread_drafted', 'evidence_ready', 'evidence_blocked',
   'activity_eligible', 'activity_started', 'meaningful_response', 'assistance', 'activity_completed',
   'representative_pass', 'representative_fail', 'delayed_check_eligible', 'delayed_check_attempt', 'retained',
-  'remediation', 'provider_failure', 'provider_ambiguity', 'evidence_gap', 'evidence_invalidation', 'abandonment', 'explicit_end',
+  'remediation', 'provider_failure', 'provider_ambiguity', 'evidence_gap', 'evidence_invalidation', 'abandonment', 'explicit_end', 'routing_decision',
 ] as const
 
 export type LearnActivityEventType = typeof LEARN_ACTIVITY_EVENT_TAXONOMY[number]
@@ -38,7 +39,10 @@ export const learnActivityEventFields = {
   activityId: v.optional(v.id('learningThreadActivities')),
   eventType: learnActivityEventTypeValidator,
   eventVersion: learnActivityEventVersionValidator,
-  taxonomyVersion: v.literal(LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION),
+  taxonomyVersion: v.union(
+    v.literal(LEGACY_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION),
+    v.literal(LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION),
+  ),
   occurredAt: v.number(),
   reasonCode: v.optional(v.string()),
   outcomeCode: v.optional(v.string()),
@@ -104,5 +108,8 @@ export function validateLearnActivityEventInput<T extends LearnActivityEventInpu
   if (metadata.firstValueExclusionCode !== undefined && metadata.firstValueEligibility !== 'excluded') throw new Error('Adaptive event first-value exclusion is invalid')
   if (input.eventType === 'thread_command_committed' && (input.metricDefinitionVersion !== 'first_value.v1' || metadata.opportunityOrdinal === undefined || metadata.firstValueEligibility === undefined || metadata.cohort === undefined)) throw new Error('Adaptive first-value opportunity metadata is invalid')
   if (input.eventType === 'meaningful_activity_started' && (input.metricDefinitionVersion !== 'first_value.v1' || metadata.opportunityOrdinal === undefined)) throw new Error('Adaptive first-value stop metadata is invalid')
+  if (input.eventType === 'routing_decision' && (input.metricDefinitionVersion !== undefined
+    || metadata.boundaryOrdinal === undefined || Object.keys(metadata).some(key => key !== 'boundaryOrdinal' && key !== 'activityClass')
+    || !['recommended', 'blocked'].includes(input.outcomeCode ?? ''))) throw new Error('Adaptive routing decision metadata is invalid')
   return input
 }
