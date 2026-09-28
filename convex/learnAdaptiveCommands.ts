@@ -89,7 +89,7 @@ export async function executeAdaptiveThreadCommand<T>(ctx: MutationCtx, input: C
   }
   if (thread.revision !== input.expectedRevision) return await persistConflict('stale_revision', thread.revision)
   if ((thread.lifecycle === 'paused' || thread.lifecycle === 'ended')
-    && ['continueStandaloneDiagnostic', 'submitStandaloneDiagnostic', 'commitActivityPlan',
+    && ['continueStandaloneDiagnostic', 'submitStandaloneDiagnostic', 'commitActivityPlan', 'convertContributionToActivity',
       'submitCanvasResponse', 'saveArtifact', 'deleteArtifact', 'applyOverride'].includes(input.commandName)) {
     return await persistRejection(new AdaptiveCommandRejection('blocked', 'thread_not_active', 'Thread lifecycle does not accept this command'))
   }

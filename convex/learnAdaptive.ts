@@ -6,7 +6,7 @@ import type { Doc, Id } from './_generated/dataModel'
 import { AdaptiveCommandRejection, executeAdaptiveThreadCommand, initiateAdaptiveThreadDeletion } from './learnAdaptiveCommands'
 import { requireAdaptiveMutationAccess, requireAdaptiveQueryAccess } from './lib/adaptiveLearnAccess'
 import { isOperableDiagnosticActivity, liveEvidenceState, storedPlan } from './learnAdaptiveRecovery'
-import { replayAdaptiveActivityPlan } from '../shared/learn-adaptive-activity-plan'
+import { composeAdaptiveActivityPlan, replayAdaptiveActivityPlan } from '../shared/learn-adaptive-activity-plan'
 import { loadReadyCanvas } from './learnAdaptiveCanvas'
 import { requireAuth } from './lib/auth'
 import { masteryAttemptArgs, submitMasteryAttemptForOwner, type MasteryAttemptActionResult } from './learnV2Mastery'
@@ -34,6 +34,15 @@ const contributionSourceIdValidator = v.union(
 export type ContributionSource = Infer<typeof contributionSourceIdValidator>
 const contributionSubmissionSourceValidator = v.object({ feature: v.string(), id: v.string(), revision: v.string() })
 const CONTRIBUTION_VERSION = 'learn-adaptive.contribution.v1' as const
+
+function normalizeContributionSource(ctx: QueryCtx | MutationCtx, feature: Doc<'learningThreadContributions'>['sourceFeature'], sourceId: string): ContributionSource | null {
+  if (feature === 'chat') { const id = ctx.db.normalizeId('messages', sourceId); return id ? { feature, id } : null }
+  if (feature === 'quiz') { const id = ctx.db.normalizeId('quizzes', sourceId); return id ? { feature, id } : null }
+  if (feature === 'flashcards') { const id = ctx.db.normalizeId('flashcardRoomVersions', sourceId); return id ? { feature, id } : null }
+  if (feature === 'podcast') { const id = ctx.db.normalizeId('audioOverviews', sourceId); return id ? { feature, id } : null }
+  const id = ctx.db.normalizeId('documents', sourceId)
+  return id ? { feature: 'documents', id } : null
+}
 
 async function contributionDigest(value: string) {
   const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))
@@ -192,6 +201,114 @@ export const recordContribution = mutation({
       occurredAt: now, reasonCode: 'source_verified', outcomeCode: 'recorded', metadata: {} })
     return { kind: 'recorded' as const, contributionId, replayed: false, revision: thread.revision }
   },
+})
+
+export const convertContributionToActivity = mutation({
+  args: { threadId: v.id('learningThreads'), contributionId: v.id('learningThreadContributions'),
+    expectedRevision: v.number(), idempotencyKey: v.string() },
+  handler: async (ctx, args) => await executeAdaptiveThreadCommand(ctx, {
+    threadId: args.threadId, expectedRevision: args.expectedRevision, idempotencyKey: args.idempotencyKey,
+    commandName: 'convertContributionToActivity', payload: { contributionId: String(args.contributionId) },
+    returnBlockedWhenDeleting: true,
+    apply: async (commandCtx, thread, userId) => {
+      const contribution = await commandCtx.db.get(args.contributionId)
+      if (!contribution || contribution.userId !== userId || contribution.threadId !== thread._id)
+        throw new AdaptiveCommandRejection('blocked', 'contribution_unavailable', 'Contribution is unavailable')
+      const blocked = async (code: string) => {
+        if (code === 'source_unavailable' || code === 'source_revision_changed') {
+          await writeLearnActivityEvent(commandCtx, { userId, threadId: thread._id,
+            eventType: 'cross_feature_activity_invalidated', eventVersion: 'cross_feature_activity_invalidated.v1',
+            sourceVersion: CONTRIBUTION_VERSION, contractVersion: CONTRIBUTION_VERSION,
+            semanticKey: `contribution:${String(contribution._id)}:invalidated:${code}`,
+            occurredAt: Date.now(), reasonCode: code, outcomeCode: 'invalidated', metadata: {} })
+        }
+        await writeLearnActivityEvent(commandCtx, { userId, threadId: thread._id,
+          eventType: 'cross_feature_activity_blocked', eventVersion: 'cross_feature_activity_blocked.v1',
+          sourceVersion: CONTRIBUTION_VERSION, contractVersion: CONTRIBUTION_VERSION,
+          semanticKey: `contribution:${String(contribution._id)}:conversion:${code}`,
+          occurredAt: Date.now(), reasonCode: code, outcomeCode: 'blocked', metadata: {} })
+        throw new AdaptiveCommandRejection('blocked', code, 'Contribution cannot be converted at this boundary')
+      }
+      if (thread.lifecycle === 'draft' || thread.lifecycle === 'rollback') return await blocked('thread_not_ready')
+      if (thread.initialDecision?.status === 'pending') return await blocked('clarification_pending')
+      if (contribution.sourceStatus !== 'available') return await blocked('source_unavailable')
+      const source = normalizeContributionSource(commandCtx, contribution.sourceFeature, contribution.sourceIdentity)
+      if (!source) return await blocked('source_unavailable')
+      const currentSource = await loadContributionSource(commandCtx, userId, source)
+      if (!currentSource) return await blocked('source_unavailable')
+      if (currentSource.revision !== contribution.sourceRevision) return await blocked('source_revision_changed')
+      // A snapshot marked accepted_evidence only proves that one source snapshot
+      // was accepted. Factual conversion requires independent V2 claim and
+      // session pins, which the contribution contract does not supply.
+      if (contribution.classification === 'accepted_evidence') return await blocked('factual_authority_unavailable')
+      const latest = await commandCtx.db.query('learningThreadActivities')
+        .withIndex('by_userId_and_threadId_and_boundaryOrdinal', q => q.eq('userId', userId).eq('threadId', thread._id))
+        .order('desc').first()
+      if (latest && (thread.currentActivityId !== latest._id || ['started', 'submitted', 'scoring', 'feedback', 'reconciling'].includes(latest.status)))
+        return await blocked('activity_boundary_unavailable')
+      if (!latest && thread.currentActivityId) return await blocked('activity_boundary_unavailable')
+      const boundaryOrdinal = (latest?.boundaryOrdinal ?? 0) + 1
+      const planRevision = (latest?.planRevision ?? 0) + 1
+      const activityId = `contribution:${String(contribution._id)}:${boundaryOrdinal}`
+      const composed = await composeAdaptiveActivityPlan({
+        activityId, threadId: String(thread._id), boundaryOrdinal, planRevision,
+        attribution: { contributionId: String(contribution._id), sourceFeature: contribution.sourceFeature,
+          classification: contribution.classification, provenanceVersion: contribution.provenanceVersion },
+        activityClass: 'non_factual', intent: thread.intent, objectiveId: null,
+        purpose: 'Use this contribution to plan a useful next learning move.',
+        reasonCode: 'cross_feature_contribution',
+        primitiveSequence: [{ type: 'artifact_workspace', action: 'save_artifact', props: {
+          prompt: 'Write a next step or practice plan based on the contribution you selected.',
+          artifactKind: 'plan', starterText: 'My next learning step is to…',
+        } }],
+        requiredAction: { kind: 'save_artifact', label: 'Save artifact' },
+        evaluationContract: { version: 'learn-adaptive.evaluation.v1', kind: 'learner_response', responseFormat: 'long_text', passingScorePercent: null },
+        accessibilityMetadata: { heading: 'Plan your next move', instructions: 'Use the attributed contribution to write a plan. This is not scored.', focusTargetTestId: 'learn-primitive-artifact-workspace', liveRegionMode: 'polite' },
+        pins: { learningVoidId: null, blueprintRevisionId: null, objectiveId: null, sessionContentId: null },
+        evidenceReferences: [], generationInputs: { sessionContentRevision: null, sessionContentInputDigest: null, generatorVersion: null },
+        decisionInputs: { intentRevision: thread.revision, routerVersion: 'learn-adaptive.contribution-conversion.v1',
+          availableTime: thread.availableTime, sourceState: await liveEvidenceState(commandCtx, thread), sourceInputs: [],
+          priorActivityId: latest?.activityId ?? null, priorAttemptId: null, priorOutcome: null, assistance: 'none', confidence: null },
+        replacesActivityId: latest?.activityId,
+      })
+      const now = Date.now()
+      const activityDocumentId = await commandCtx.db.insert('learningThreadActivities', {
+        userId, threadId: thread._id, attribution: { contributionId: String(contribution._id),
+          sourceFeature: contribution.sourceFeature, classification: contribution.classification,
+          provenanceVersion: contribution.provenanceVersion },
+        activityId, boundaryOrdinal, planRevision, activityClass: 'non_factual', status: 'eligible',
+        planVersion: composed.planVersion, replayVersion: composed.replayVersion, contractVersion: composed.contractVersion,
+        rendererVersion: composed.rendererVersion, validationVersion: composed.validationVersion,
+        sequenceValidationVersion: composed.sequenceValidationVersion, fallbackVersion: composed.fallbackVersion,
+        intent: composed.intent, objectiveId: null, purpose: composed.purpose, reasonCode: composed.reasonCode,
+        reasonText: reasonTextForActivity({ activityClass: 'non_factual', purpose: composed.purpose,
+          reasonCode: composed.reasonCode, sourceState: composed.decisionInputs.sourceState }),
+        primitivePlan: composed.primitivePlan, requiredAction: composed.requiredAction,
+        evaluationContract: composed.evaluationContract, fallback: composed.fallback,
+        accessibilityMetadata: composed.accessibilityMetadata, learningVoidId: null, blueprintRevisionId: null,
+        sessionContentId: null, evidenceReferences: [], generationInputs: composed.generationInputs,
+        decisionInputs: composed.decisionInputs, replacesActivityId: composed.replacesActivityId,
+        canonicalInputSnapshot: composed.canonicalInputSnapshot, inputDigest: composed.inputDigest,
+        createdAt: now, updatedAt: now,
+      })
+      const revision = thread.revision + 1
+      await commandCtx.db.patch(thread._id, { currentActivityId: activityDocumentId, lifecycle: 'active',
+        nextAction: { kind: 'save_artifact', label: 'Save artifact', reasonCode: composed.reasonCode, activityId },
+        revision, updatedAt: now })
+      await writeLearnActivityEvent(commandCtx, { userId, threadId: thread._id, activityId: activityDocumentId,
+        eventType: 'activity_eligible', eventVersion: 'activity_eligible.v1',
+        sourceVersion: composed.planVersion, contractVersion: composed.contractVersion,
+        semanticKey: `activity:${activityId}:eligible`, occurredAt: now, reasonCode: composed.reasonCode,
+        outcomeCode: 'eligible', metadata: { activityClass: 'non_factual', boundaryOrdinal, planRevision } })
+      await writeLearnActivityEvent(commandCtx, { userId, threadId: thread._id, activityId: activityDocumentId,
+        eventType: 'cross_feature_activity_created', eventVersion: 'cross_feature_activity_created.v1',
+        sourceVersion: CONTRIBUTION_VERSION, contractVersion: composed.contractVersion,
+        semanticKey: `contribution:${String(contribution._id)}:activity:${activityId}`, occurredAt: now,
+        reasonCode: 'contribution_converted', outcomeCode: 'created', metadata: { activityClass: 'non_factual', boundaryOrdinal, planRevision } })
+      return { value: { activityDocumentId, activityId, activityClass: 'non_factual' as const,
+        boundaryOrdinal, planRevision, replacesActivityId: latest?.activityId ?? null }, revision }
+    },
+  }),
 })
 
 export const listPromotionProposals = query({
@@ -958,6 +1075,20 @@ function nextThreadAction(thread: Doc<'learningThreads'>, activity: Doc<'learnin
   return { kind: 'continue', label: 'Start learning', reasonCode: 'thread_ready_for_first_move', activityId: null }
 }
 
+async function projectActivityAttribution(ctx: QueryCtx, userId: string, activity: Doc<'learningThreadActivities'>) {
+  if (!activity.attribution) return null
+  const contributionId = ctx.db.normalizeId('learningThreadContributions', activity.attribution.contributionId)
+  const contribution = contributionId && await ctx.db.get(contributionId)
+  let sourceStatus: 'available' | 'source_revision_changed' | 'source_unavailable' = 'source_unavailable'
+  if (contribution?.userId === userId && contribution.threadId === activity.threadId && contribution.sourceStatus === 'available') {
+    const source = normalizeContributionSource(ctx, contribution.sourceFeature, contribution.sourceIdentity)
+    const live = source && await loadContributionSource(ctx, userId, source)
+    sourceStatus = !live ? 'source_unavailable'
+      : live.revision === contribution.sourceRevision ? 'available' : 'source_revision_changed'
+  }
+  return { ...activity.attribution, sourceStatus }
+}
+
 async function projectThread(ctx: QueryCtx, userId: string, thread: Doc<'learningThreads'>) {
   const owner = await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique()
   if (!owner) return null
@@ -987,6 +1118,14 @@ async function projectThread(ctx: QueryCtx, userId: string, thread: Doc<'learnin
   const recent = await ctx.db.query('learningThreadActivities')
     .withIndex('by_userId_and_threadId_and_boundaryOrdinal', q => q.eq('userId', userId).eq('threadId', thread._id))
     .order('desc').take(HISTORY_LIMIT + 1)
+  const currentAttribution = activity ? await projectActivityAttribution(ctx, userId, activity) : null
+  const history = await Promise.all(recent.filter(row => row._id !== thread.currentActivityId).slice(0, HISTORY_LIMIT).map(async row => ({
+    id: row.activityId, status: row.status, activityClass: row.activityClass,
+    purpose: row.purpose, reasonCode: row.reasonCode, boundaryOrdinal: row.boundaryOrdinal,
+    attribution: await projectActivityAttribution(ctx, userId, row),
+    planRevision: row.planRevision, replacesActivityId: row.replacesActivityId,
+    updatedAt: row.updatedAt,
+  })))
   return {
     ownerId: owner._id,
     thread: {
@@ -998,6 +1137,8 @@ async function projectThread(ctx: QueryCtx, userId: string, thread: Doc<'learnin
     currentActivity: activity ? {
       id: activity.activityId, status: activity.status, activityClass: activity.activityClass,
       purpose: activity.purpose, reasonCode: activity.reasonCode, boundaryOrdinal: activity.boundaryOrdinal,
+      attribution: currentAttribution,
+      planRevision: activity.planRevision, replacesActivityId: activity.replacesActivityId,
     } : null,
     attemptContext: activity ? {
       priorOutcome: activity.decisionInputs.priorOutcome,
@@ -1007,11 +1148,7 @@ async function projectThread(ctx: QueryCtx, userId: string, thread: Doc<'learnin
       activityId: artifactActivity?.activityId ?? null, historical: artifactHistorical } : null,
     unresolvedPoint: thread.unresolvedPoint?.slice(0, 240) ?? null,
     completion,
-    history: recent.filter(row => row._id !== thread.currentActivityId).slice(0, HISTORY_LIMIT).map(row => ({
-      id: row.activityId, status: row.status, activityClass: row.activityClass,
-      purpose: row.purpose, reasonCode: row.reasonCode, boundaryOrdinal: row.boundaryOrdinal,
-      updatedAt: row.updatedAt,
-    })),
+    history,
     nextAction: nextThreadAction(thread, activity, factualCanvas, sourceEvidenceState, completion, reflectionDecisionValid, artifactActionValid),
   }
 }

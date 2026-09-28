@@ -25,6 +25,7 @@ export async function liveEvidenceState(ctx: QueryCtx | MutationCtx, thread: Doc
 
 export function storedPlan(activity: Doc<'learningThreadActivities'>): ComposedAdaptiveActivityPlan {
   return {
+    ...(activity.attribution ? { attribution: { ...activity.attribution, contributionId: String(activity.attribution.contributionId) } } : {}),
     planVersion: activity.planVersion, replayVersion: activity.replayVersion, contractVersion: activity.contractVersion,
     rendererVersion: activity.rendererVersion, validationVersion: activity.validationVersion,
     sequenceValidationVersion: activity.sequenceValidationVersion, fallbackVersion: activity.fallbackVersion,

@@ -251,6 +251,12 @@ export const learningThreadFields = {
 export const learningThreadActivityFields = {
   userId: v.string(),
   threadId: v.id('learningThreads'),
+  attribution: v.optional(v.object({
+    contributionId: v.string(),
+    sourceFeature: learningThreadContributionFields.sourceFeature,
+    classification: learningThreadContributionFields.classification,
+    provenanceVersion: learningThreadContributionFields.provenanceVersion,
+  })),
   activityId: v.string(),
   boundaryOrdinal: v.number(),
   planRevision: v.number(),
