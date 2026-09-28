@@ -6,6 +6,7 @@ const allowed = ref(true)
 const canvas = ref<Record<string, unknown> | null>(null)
 const diagnostic = ref<Record<string, unknown> | null>(null)
 const artifact = ref<Record<string, unknown> | null>(null)
+const reflection = ref<Record<string, unknown> | null>(null)
 const evidence = ref<Record<string, unknown> | null>(null)
 const projection = ref<Record<string, unknown> | null>(null)
 const canvasPending = ref(false)
@@ -23,14 +24,29 @@ mockNuxtImport('useConvexAction', () => () => ({ mutate: vi.fn() }))
 mockNuxtImport('useConvexQuery', () => (reference: never, args: unknown) => {
   const name = getFunctionName(reference)
   calls(name, args)
-  return { data: name === 'users:getUser' ? user : name === 'learnAdaptive:getThread' ? projection : name === 'learnAdaptiveRecovery:getDiagnosticCanvas' ? diagnostic : name === 'learnAdaptiveEvidence:getThreadActivityEvidence' ? evidence : name === 'learnAdaptive:getArtifactCanvas' ? artifact : name === 'learnAdaptive:listThreadArtifacts' ? ref([]) : canvas,
+  return { data: name === 'users:getUser' ? user : name === 'learnAdaptive:getThread' ? projection : name === 'learnAdaptiveRecovery:getDiagnosticCanvas' ? diagnostic : name === 'learnAdaptiveEvidence:getThreadActivityEvidence' ? evidence : name === 'learnAdaptive:getArtifactCanvas' ? artifact : name === 'learnAdaptive:getReflectionCanvas' ? reflection : name === 'learnAdaptive:listThreadArtifacts' ? ref([]) : canvas,
     pending: name === 'learnAdaptiveRecovery:getDiagnosticCanvas' ? diagnosticPending : name === 'learnAdaptiveCanvas:getCanvas' ? canvasPending : ref(false) }
 })
 
 const path = ['~', 'pages', 'app', 'learn', 'thread', '[threadId].vue'].join('/')
 
 describe('adaptive thread route isolation', () => {
-  beforeEach(() => { allowed.value = true; canvas.value = null; diagnostic.value = null; artifact.value = null; evidence.value = null; projection.value = null; canvasPending.value = false; diagnosticPending.value = false; user.value = { _id: 'owner_1' }; requestedRoute.params.threadId = 'thread_1'; requestedRoute.query.activity = undefined; calls.mockClear(); mutationCalls.mockClear(); sessionStorage.clear() })
+  beforeEach(() => { allowed.value = true; canvas.value = null; diagnostic.value = null; artifact.value = null; reflection.value = null; evidence.value = null; projection.value = null; canvasPending.value = false; diagnosticPending.value = false; user.value = { _id: 'owner_1' }; requestedRoute.params.threadId = 'thread_1'; requestedRoute.query.activity = undefined; calls.mockClear(); mutationCalls.mockClear(); sessionStorage.clear() })
+
+  it('keeps an ended thread available for its authoritative reflection completion', async () => {
+    const Page = await import(path)
+    projection.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Learn deliberately', intent: 'explore', evidenceState: 'none', lifecycle: 'ended', revision: 4, authorityKind: 'standalone' },
+      currentActivity: { id: 'reflection_1', status: 'ended', activityClass: 'non_factual', purpose: 'Choose what to do next.' }, history: [], nextAction: { kind: 'return_to_learn', label: 'Back to Learn', reasonCode: 'reflection_thread_ended', activityId: 'reflection_1' } }
+    reflection.value = { ownerId: 'owner_1', status: 'completed', decision: { outcome: 'ended', nextMove: 'Try one independent example.', decidedAt: 2 },
+      thread: { id: 'thread_1', revision: 4, outcome: 'Learn deliberately', lifecycle: 'ended' },
+      activity: { id: 'reflection_1', planRevision: 1, status: 'ended', purpose: 'Choose what to do next.', reason: 'The guided step is complete.',
+        primitive: { contractVersion: 'learn-adaptive.activity-contract.v1', rendererVersion: 'learn-adaptive.renderer.v1', type: 'reflection_next_move', action: 'accept_next_move', testId: 'learn-primitive-reflection-next-move', props: { feedback: 'You completed the guided example.', nextMove: 'Try one independent example.', allowedDecisions: ['accept', 'override', 'end'] } },
+        fallback: { title: 'Unavailable', body: 'Try later.', testId: 'learn-activity-fallback', primaryAction: { label: 'Continue safely' } } } }
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
+    expect(wrapper.get('[data-testid="learn-reflection-completed"]').text()).toContain('Thread ended')
+    expect(wrapper.find('[data-testid="learn-adaptive-thread-unavailable"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
 
   it('routes a current artifact workspace from its owner-bound projection', async () => {
     const Page = await import(path)
