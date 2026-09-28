@@ -285,6 +285,8 @@ async function emitAdaptiveAttemptEvents(ctx: MutationCtx, input: {
   await writeLearnActivityEvent(ctx, { ...common, eventType: passed ? 'representative_pass' : 'representative_fail', eventVersion: passed ? 'representative_pass.v1' : 'representative_fail.v1', semanticKey: `attempt:${String(input.attemptId)}:representative`, reasonCode: 'server_scored_outcome', outcomeCode: passed ? 'pass' : 'fail' })
   if (thread.currentActivityId === activity._id) {
     await ctx.db.patch(thread._id, {
+      unresolvedPoint: passed && input.assistanceLevel === 'none' ? thread.unresolvedPoint?.slice(0, 240)
+        : (thread.unresolvedPoint ?? thread.originalNeed).slice(0, 240),
       nextAction: representativeNextAction(passed, activity.activityId),
       revision: thread.revision + 1,
       updatedAt: input.now,

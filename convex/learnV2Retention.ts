@@ -45,7 +45,10 @@ async function invalidateLinkedAdaptiveActivities(
       await writeLearnActivityEvent(ctx, { ...common, eventType: 'evidence_gap', eventVersion: 'evidence_gap.v1', semanticKey: `activity:${activity.activityId}:evidence:${String(link._id)}:gap`, reasonCode: 'required_support_unavailable', outcomeCode: current ? 'blocked' : 'historical' })
       if (current && (activity.status !== 'blocked' || thread.evidenceState !== 'invalidated')) {
         await ctx.db.patch(activity._id, { status: 'blocked', updatedAt: now })
-        await ctx.db.patch(thread._id, { evidenceState: 'invalidated', revision: thread.revision + 1, updatedAt: now })
+        await ctx.db.patch(thread._id, { evidenceState: 'invalidated',
+          unresolvedPoint: (thread.unresolvedPoint ?? thread.originalNeed).slice(0, 240),
+          nextAction: { kind: 'recover', label: 'Review your learning mission', reasonCode: 'source_invalidated', activityId: activity.activityId },
+          revision: thread.revision + 1, updatedAt: now })
       }
     }
     await ctx.db.patch(link._id, { invalidatedAt: now })

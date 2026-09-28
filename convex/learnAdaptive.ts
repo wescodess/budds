@@ -26,6 +26,20 @@ async function artifactEvidenceUnavailable(ctx: QueryCtx | MutationCtx, thread: 
   return invalidated !== null
 }
 
+async function latestLiveThreadArtifact(ctx: QueryCtx | MutationCtx, thread: Doc<'learningThreads'>) {
+  const [draft, saved] = await Promise.all([
+    ctx.db.query('learningThreadArtifacts')
+      .withIndex('by_userId_and_threadId_and_status_and_updatedAt', q => q.eq('userId', thread.userId).eq('threadId', thread._id).eq('status', 'draft'))
+      .order('desc').first(),
+    ctx.db.query('learningThreadArtifacts')
+      .withIndex('by_userId_and_threadId_and_status_and_updatedAt', q => q.eq('userId', thread.userId).eq('threadId', thread._id).eq('status', 'saved'))
+      .order('desc').first(),
+  ])
+  if (!draft) return saved
+  if (!saved) return draft
+  return draft.updatedAt > saved.updatedAt || draft.updatedAt === saved.updatedAt && String(draft._id) > String(saved._id) ? draft : saved
+}
+
 export const saveArtifact = mutation({
   args: { threadId: v.id('learningThreads'), activityId: v.string(), artifactId: v.optional(v.id('learningThreadArtifacts')),
     artifactKind: adaptiveArtifactKindValidator, title: v.string(), summary: v.string(), status: adaptiveArtifactStatusValidator,
@@ -59,7 +73,11 @@ export const saveArtifact = mutation({
           artifactKind: args.artifactKind, ...text, status: args.status, revision: artifactRevision, createdAt: now, updatedAt: now })
       }
       const revision = thread.revision + 1
-      await commandCtx.db.patch(thread._id, { revision, updatedAt: now })
+      await commandCtx.db.patch(thread._id, { unresolvedPoint: (thread.unresolvedPoint ?? thread.originalNeed).slice(0, 240),
+        nextAction: { kind: args.status === 'saved' ? 'review_artifact' : 'continue_artifact',
+          label: args.status === 'saved' ? 'Review your saved artifact' : 'Continue your artifact',
+          reasonCode: args.status === 'saved' ? 'artifact_saved' : 'artifact_draft', activityId: activity.activityId },
+        revision, updatedAt: now })
       return { value: { artifactId, status: args.status, revision: artifactRevision }, revision }
     },
   }),
@@ -76,7 +94,19 @@ export const deleteArtifact = mutation({
       if (!artifact || artifact.userId !== userId || artifact.threadId !== thread._id || artifact.status === 'deleted') throw new AdaptiveCommandRejection('blocked', 'artifact_unavailable', 'Artifact is unavailable')
       const removed = await queueAdaptiveArtifactDeletion(commandCtx, artifact)
       const revision = thread.revision + 1
-      await commandCtx.db.patch(thread._id, { revision, updatedAt: Date.now() })
+      const now = Date.now()
+      const latest = await latestLiveThreadArtifact(commandCtx, thread)
+      const latestActivity = latest && await commandCtx.db.get(latest.activityId)
+      const current = thread.currentActivityId && await commandCtx.db.get(thread.currentActivityId)
+      const nextAction = latest && latestActivity?.userId === userId && latestActivity.threadId === thread._id
+        ? { kind: latest.status === 'saved' ? 'review_artifact' : 'continue_artifact',
+            label: latest.status === 'saved' ? 'Review your saved artifact' : 'Continue your artifact',
+            reasonCode: latest.status === 'saved' ? 'artifact_saved' : 'artifact_draft',
+            activityId: latestActivity.activityId }
+        : current ? { kind: current.requiredAction.kind, label: current.requiredAction.label,
+            reasonCode: current.reasonCode, activityId: current.activityId }
+          : undefined
+      await commandCtx.db.patch(thread._id, { nextAction, revision, updatedAt: now })
       return { value: { artifactId: artifact._id, status: 'deleted' as const, cleanupPending: !removed }, revision }
     },
   }),
@@ -273,6 +303,8 @@ export const decideReflectionNextMove = mutation({
           : { kind: 'return_to_learn', label: 'Back to Learn', reasonCode: 'reflection_thread_ended', activityId: activity.activityId }
       await commandCtx.db.patch(thread._id, { lifecycle: args.decision === 'end' ? 'ended' : thread.lifecycle,
         ...(args.decision === 'end' ? { lifecycleChangedAt: now } : {}),
+        unresolvedPoint: (thread.unresolvedPoint ?? (args.decision === 'accept'
+          ? primitive.props.nextMove : thread.originalNeed)).slice(0, 240),
         nextAction, revision, updatedAt: now })
       await writeLearnActivityEvent(commandCtx, { userId, threadId: thread._id, activityId: activity._id,
         eventType: 'activity_completed', eventVersion: 'activity_completed.v1', sourceVersion: activity.planVersion,
@@ -416,6 +448,9 @@ export const endThread = mutation({
       const revision = thread.revision + 1
       await commandCtx.db.patch(thread._id, {
         lifecycle: 'ended', lifecycleBeforePause: undefined, lifecycleChangedAt: changedAt,
+        unresolvedPoint: (thread.unresolvedPoint ?? thread.originalNeed).slice(0, 240),
+        nextAction: { kind: 'return_to_learn', label: 'Back to Learn', reasonCode: 'thread_ended',
+          activityId: thread.currentActivityId ? (await commandCtx.db.get(thread.currentActivityId))?.activityId ?? '' : '' },
         revision, updatedAt: changedAt,
       })
       await writeLearnActivityEvent(commandCtx, {
@@ -463,7 +498,21 @@ export async function representativeCompletion(ctx: QueryCtx | MutationCtx, user
     basis: 'server_scored_representative_task' as const, activityId: activity.activityId, recordedAt: event.occurredAt }
 }
 
-function nextThreadAction(thread: Doc<'learningThreads'>, activity: Doc<'learningThreadActivities'> | null, factualCanvas: Awaited<ReturnType<typeof loadReadyCanvas>>, sourceEvidenceState: Awaited<ReturnType<typeof liveEvidenceState>>, completion: Awaited<ReturnType<typeof representativeCompletion>>, reflectionDecisionValid = false) {
+async function validArtifactNextAction(ctx: QueryCtx, thread: Doc<'learningThreads'>) {
+  const action = thread.nextAction
+  if (!action || !['artifact_saved', 'artifact_draft'].includes(action.reasonCode)) return false
+  const latest = await latestLiveThreadArtifact(ctx, thread)
+  if (!latest) return false
+  const sourceActivity = await ctx.db.get(latest.activityId)
+  if (!sourceActivity || sourceActivity.userId !== thread.userId || sourceActivity.threadId !== thread._id
+    || sourceActivity.activityId !== action.activityId) return false
+  const saved = latest.status === 'saved'
+  return action.kind === (saved ? 'review_artifact' : 'continue_artifact')
+    && action.label === (saved ? 'Review your saved artifact' : 'Continue your artifact')
+    && action.reasonCode === (saved ? 'artifact_saved' : 'artifact_draft')
+}
+
+function nextThreadAction(thread: Doc<'learningThreads'>, activity: Doc<'learningThreadActivities'> | null, factualCanvas: Awaited<ReturnType<typeof loadReadyCanvas>>, sourceEvidenceState: Awaited<ReturnType<typeof liveEvidenceState>>, completion: Awaited<ReturnType<typeof representativeCompletion>>, reflectionDecisionValid = false, artifactActionValid = false) {
   if (thread.lifecycle === 'rollback') return {
     kind: 'return_to_learn', label: 'Back to Learn', reasonCode: 'thread_unavailable', activityId: null,
   }
@@ -490,6 +539,7 @@ function nextThreadAction(thread: Doc<'learningThreads'>, activity: Doc<'learnin
   if (activity?.activityClass === 'factual' && (!factualCanvas || factualCanvas.status === 'blocked')) return {
     kind: 'recover', label: 'Review your learning mission', reasonCode: factualCanvas ? 'canvas_blocked' : 'canvas_unavailable', activityId: activity.activityId,
   }
+  if (artifactActionValid && thread.nextAction) return thread.nextAction
   if (activity && completion) {
     const expected = representativeNextAction(completion.status === 'passed', activity.activityId)
     return thread.nextAction?.kind === expected.kind && thread.nextAction.activityId === expected.activityId
@@ -541,6 +591,7 @@ export const getThread = query({
     const reflectionPrimitive = activity ? await validReflectionActivity(activity) : null
     const reflectionDecisionValid = Boolean(activity && reflectionPrimitive
       && await validPersistedReflectionDecision(ctx, thread, activity, reflectionPrimitive))
+    const artifactActionValid = await validArtifactNextAction(ctx, thread)
     const evidenceState = activity?.activityClass === 'factual'
       ? sourceEvidenceState !== 'ready' ? sourceEvidenceState
         : factualCanvas?.status === 'blocked' ? factualCanvas.recoveryState ?? 'blocked'
@@ -561,13 +612,14 @@ export const getThread = query({
         id: activity.activityId, status: activity.status, activityClass: activity.activityClass,
         purpose: activity.purpose, reasonCode: activity.reasonCode, boundaryOrdinal: activity.boundaryOrdinal,
       } : null,
+      unresolvedPoint: thread.unresolvedPoint?.slice(0, 240) ?? null,
       completion,
       history: recent.filter(row => row._id !== thread.currentActivityId).slice(0, HISTORY_LIMIT).map(row => ({
         id: row.activityId, status: row.status, activityClass: row.activityClass,
         purpose: row.purpose, reasonCode: row.reasonCode, boundaryOrdinal: row.boundaryOrdinal,
         updatedAt: row.updatedAt,
       })),
-      nextAction: nextThreadAction(thread, activity, factualCanvas, sourceEvidenceState, completion, reflectionDecisionValid),
+      nextAction: nextThreadAction(thread, activity, factualCanvas, sourceEvidenceState, completion, reflectionDecisionValid, artifactActionValid),
     }
   },
 })

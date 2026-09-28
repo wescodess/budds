@@ -219,7 +219,9 @@ export const submitDiagnosticResponse = mutation({
         await recordDiagnosticStartEvents(commandCtx, userId, thread, activity, now)
         await commandCtx.db.patch(activity._id, { status: 'submitted', submittedResponse: response, updatedAt: now })
         const revision = thread.revision + 1
-        await commandCtx.db.patch(thread._id, { lifecycle: 'active', revision, updatedAt: now })
+        await commandCtx.db.patch(thread._id, { lifecycle: 'active', unresolvedPoint: thread.originalNeed.slice(0, 240),
+          nextAction: { kind: 'review_saved_response', label: 'Your response is saved', reasonCode: 'diagnostic_response_saved', activityId: activity.activityId },
+          revision, updatedAt: now })
         await writeLearnActivityEvent(commandCtx, { userId, threadId: thread._id, activityId: activity._id,
           eventType: 'meaningful_response', eventVersion: 'meaningful_response.v1', sourceVersion: activity.planVersion,
           contractVersion: activity.contractVersion, semanticKey: `activity:${activity.activityId}:response`, occurredAt: now,

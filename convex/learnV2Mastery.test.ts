@@ -582,6 +582,7 @@ describe('LA2-12 server-scored mastery attempts', () => {
   test('commits one server-rendered feedback projection for a linked authoritative attempt and replays it', async () => {
     const setup = await fixture()
     const activity = await addAdaptiveActivity(setup, 'adaptive-feedback')
+    await setup.t.run(ctx => ctx.db.patch(activity.threadId, { unresolvedPoint: 'Check a second case independently.' }))
     await setup.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true })
     expect(await setup.owner.query(api.learnAdaptive.getThread, { threadId: activity.threadId })).toMatchObject({ completion: null })
     const command = setup.args('adaptive-feedback-key', 80)
@@ -622,6 +623,7 @@ describe('LA2-12 server-scored mastery attempts', () => {
       nextAction: { kind: 'recover', activityId: 'adaptive-feedback' },
     })
     expect(await setup.t.run(ctx => ctx.db.get(activity.threadId))).toMatchObject({
+      unresolvedPoint: 'Check a second case independently.',
       nextAction: { kind: 'open_v2_mission', reasonCode: 'representative_pass', activityId: 'adaptive-feedback' },
     })
     const representative = committedEvents[1]!
@@ -701,6 +703,9 @@ describe('LA2-12 server-scored mastery attempts', () => {
     const assistedEvents = await assistedSetup.t.run(ctx => ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('threadId', assistedActivity.threadId)).take(8))
     expect(assistedEvents.map(event => event.eventType)).toEqual(['assistance', 'activity_completed', 'representative_pass', 'delayed_check_attempt'])
     expect(assistedEvents.at(-1)).toMatchObject({ reasonCode: 'assisted_delayed_check_committed' })
+    expect(await assistedSetup.t.run(ctx => ctx.db.get(assistedActivity.threadId))).toMatchObject({
+      unresolvedPoint: expect.any(String), nextAction: { reasonCode: 'representative_pass' },
+    })
 
     const remediationSetup = await fixture()
     const remediationActivity = await addAdaptiveActivity(remediationSetup, 'adaptive-remediation')
@@ -725,6 +730,7 @@ describe('LA2-12 server-scored mastery attempts', () => {
       nextAction: { kind: 'recover', activityId: 'adaptive-remediation' },
     })
     expect(await remediationSetup.t.run(ctx => ctx.db.get(remediationActivity.threadId))).toMatchObject({
+      unresolvedPoint: expect.any(String),
       nextAction: { kind: 'open_v2_mission', reasonCode: 'representative_fail', activityId: 'adaptive-remediation' },
     })
   })

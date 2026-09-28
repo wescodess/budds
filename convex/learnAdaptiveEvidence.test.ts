@@ -135,6 +135,7 @@ describe('Adaptive activity evidence projection', () => {
   })
   test('projects source purge into exactly-once bounded invalidation and gap events', async () => {
     const { t, ids } = await fixture()
+    await t.run(ctx => ctx.db.patch(ids.threadId, { unresolvedPoint: 'Need to check the core explanation.' }))
     for (let batch = 0; batch < 8; batch++) {
       const result = await t.mutation(internal.learnV2Retention.purgeSourceEvidence, { userId: ownerId, sourceIdentityId: ids.sourceIdentityId })
       if (!result.pending) break
@@ -147,6 +148,8 @@ describe('Adaptive activity evidence projection', () => {
     }))
     expect(state.activity).toMatchObject({ status: 'blocked' })
     expect(state.thread).toMatchObject({ evidenceState: 'invalidated' })
+    expect(state.thread).toMatchObject({ unresolvedPoint: 'Need to check the core explanation.',
+      nextAction: { kind: 'recover', reasonCode: 'source_invalidated' } })
     expect(state.links).toEqual([expect.objectContaining({ invalidatedAt: expect.any(Number) })])
     expect(state.events.map(event => event.eventType)).toEqual(['evidence_invalidation', 'evidence_gap'])
     expect(JSON.stringify(state.events)).not.toMatch(/private|locator|excerpt/i)
