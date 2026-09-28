@@ -13,6 +13,8 @@ type StartPayload = { clientDraftId: string, need: string, outcome?: string, int
 type Folder = { _id: string, name: string }
 type Document = { _id: string, folderId: string, filename: string, status: string }
 type Stored<T> = { savedAt: number, value: T }
+type ThreadHistoryRow = { threadId: string, outcome: string, lifecycle: string, updatedAt: number }
+type ThreadHistoryPage = { page: ThreadHistoryRow[], continueCursor: string, isDone: boolean }
 
 const props = withDefaults(defineProps<{ busy?: boolean, serverError?: string | null, acknowledgedRequestKey?: string | null }>(), { busy: false, serverError: null, acknowledgedRequestKey: null })
 const emit = defineEmits<{ start: [payload: StartPayload]; resume: [threadId: string]; legacyHandoff: [route: string] }>()
@@ -45,6 +47,7 @@ const urlField = ref<HTMLInputElement | null>(null)
 const pasteField = ref<HTMLTextAreaElement | null>(null)
 
 const userQuery = import.meta.client ? useConvexQuery(api.users.getUser, {}) : { data: ref<{ _id: string } | null>(null) }
+const convex = import.meta.client ? useConvex() : null
 const resumeQuery = import.meta.client ? useConvexQuery(api.learnAdaptive.listResumeCandidates, {}) : { data: ref([]) }
 const foldersQuery = import.meta.client ? useConvexQuery(api.folders.listAllFolders, {}) : { data: ref<Folder[]>([]) }
 const documentArgs = computed(() => ({ folderId: documentFolderId.value as never }))
@@ -54,7 +57,46 @@ const documentsQuery = import.meta.client
 const ownerId = computed(() => userQuery.data.value?._id ? String(userQuery.data.value._id) : null)
 const folders = computed(() => (foldersQuery.data.value ?? []) as Folder[])
 const documents = computed(() => ((documentsQuery.data.value ?? []) as Document[]).filter(document => document.status === 'success'))
-const resumeCandidates = computed(() => ownerId.value ? (resumeQuery.data.value ?? []).filter(candidate => candidate.ownerId === ownerId.value).slice(0, 4) : [])
+const resumeCandidates = computed(() => ownerId.value ? (resumeQuery.data.value ?? []).filter(candidate => candidate.ownerId === ownerId.value) : [])
+const primaryResume = computed(() => resumeCandidates.value[0] ?? null)
+const worthRevisiting = computed(() => resumeCandidates.value.find(candidate => candidate.reviewCapability
+  && (candidate.threadId !== primaryResume.value?.threadId || primaryResume.value.reason !== 'needs_review')) ?? null)
+const historyRows = ref<ThreadHistoryRow[]>([])
+const historyCursor = ref<string | null>(null)
+const historyDone = ref(false)
+const historyLoaded = ref(false)
+const historyBusy = ref(false)
+const historyError = ref<string | null>(null)
+let historyEpoch = 0
+async function loadHistory() {
+  const userId = ownerId.value
+  if (!convex || !userId || historyBusy.value || historyDone.value) return
+  const epoch = historyEpoch
+  historyBusy.value = true
+  historyError.value = null
+  try {
+    const result = await convex.query(api.learnAdaptive.listThreadHistory, { cursor: historyCursor.value }) as ThreadHistoryPage
+    if (historyEpoch !== epoch || ownerId.value !== userId) return
+    historyRows.value = [...historyRows.value, ...result.page.filter(row => !historyRows.value.some(existing => existing.threadId === row.threadId))]
+    historyCursor.value = result.continueCursor
+    historyDone.value = result.isDone
+    historyLoaded.value = true
+  }
+  catch {
+    if (historyEpoch === epoch && ownerId.value === userId) historyError.value = 'Could not load your learning history. Try again.'
+  }
+  finally { if (historyEpoch === epoch && ownerId.value === userId) historyBusy.value = false }
+}
+watch(ownerId, (userId) => {
+  historyEpoch += 1
+  historyRows.value = []
+  historyCursor.value = null
+  historyDone.value = false
+  historyLoaded.value = false
+  historyBusy.value = false
+  historyError.value = null
+  if (userId) void loadHistory()
+}, { immediate: true })
 function resumeReason(reason: string) {
   return reason === 'unfinished_activity' ? 'Unfinished activity' : reason === 'needs_review' ? 'Knowledge to review'
     : reason === 'source_recovery' ? 'Source needs attention' : 'Recent thread'
@@ -202,16 +244,20 @@ function discardPaste() {
 <template>
   <section class="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6" data-testid="learn-adaptive-home">
     <header><p class="font-inter text-xs uppercase tracking-wide text-primary">Learn anything</p><h1 class="mt-2 font-dm-sans text-3xl font-bold">What do you need to understand or do?</h1><p class="mt-2 text-sm text-muted-foreground">Start with the real need. You do not need a course, rubric, schedule, or Calendar connection.</p></header>
-    <section v-if="resumeCandidates.length" class="mt-6" aria-labelledby="learn-resume-heading" data-testid="learn-adaptive-resume-list">
-      <h2 id="learn-resume-heading" class="font-dm-sans text-xl font-semibold">Pick up where you left off</h2>
-      <ol class="mt-3 space-y-3">
-        <li v-for="candidate in resumeCandidates" :key="candidate.threadId" class="rounded-xl border border-border bg-card p-4">
-          <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">{{ resumeReason(candidate.reason) }}</p>
-          <h3 class="mt-1 font-medium">{{ candidate.outcome }}</h3>
-          <p v-if="candidate.unresolvedPoint" class="mt-1 text-sm text-muted-foreground">Still open: {{ candidate.unresolvedPoint }}</p>
-          <NuxtLink :to="`/app/learn/thread/${encodeURIComponent(candidate.threadId)}`" class="mt-2 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline" @click="openResume($event, candidate.threadId)">{{ candidate.reason === 'source_recovery' ? 'Review thread' : 'Resume thread' }}</NuxtLink>
-        </li>
-      </ol>
+    <section v-if="primaryResume" class="mt-6 rounded-xl border border-border bg-card p-4" aria-labelledby="learn-resume-heading" data-testid="learn-adaptive-primary-resume">
+      <h2 id="learn-resume-heading" class="font-dm-sans text-xl font-semibold">Resume</h2>
+      <p v-if="primaryResume.reason === 'needs_review'" class="mt-2 text-sm font-medium">Worth revisiting: {{ primaryResume.reviewCapability }} needs review.</p>
+      <p class="mt-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">{{ resumeReason(primaryResume.reason) }}</p>
+      <h3 class="mt-1 font-medium">{{ primaryResume.outcome }}</h3>
+      <p v-if="primaryResume.unresolvedPoint" class="mt-1 text-sm text-muted-foreground">Still open: {{ primaryResume.unresolvedPoint }}</p>
+      <p class="mt-1 text-sm text-muted-foreground">Next: {{ primaryResume.nextAction.label }}</p>
+      <NuxtLink :to="`/app/learn/thread/${encodeURIComponent(primaryResume.threadId)}`" class="mt-2 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline" @click="openResume($event, primaryResume.threadId)">{{ primaryResume.reason === 'needs_review' ? 'Review capability in thread' : primaryResume.reason === 'source_recovery' ? 'Review thread' : 'Continue' }}</NuxtLink>
+    </section>
+    <section v-if="worthRevisiting" class="mt-5 rounded-xl border border-border bg-card p-4" aria-labelledby="learn-review-heading" data-testid="learn-adaptive-worth-revisiting">
+      <h2 id="learn-review-heading" class="font-dm-sans text-lg font-semibold">Worth revisiting</h2>
+      <p class="mt-1 text-sm text-muted-foreground">{{ worthRevisiting.reviewCapability }} is marked as needing review.</p>
+      <h3 class="mt-2 font-medium">{{ worthRevisiting.outcome }}</h3>
+      <NuxtLink :to="`/app/learn/thread/${encodeURIComponent(worthRevisiting.threadId)}`" class="mt-2 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline" @click="openResume($event, worthRevisiting.threadId)">Review capability in thread</NuxtLink>
     </section>
     <form @submit.prevent="submit"><UiCard class="mt-6 gap-5 p-5">
       <label class="text-sm font-medium">Your goal or question<textarea ref="needField" v-model="need" data-testid="learn-adaptive-need" rows="4" maxlength="8000" class="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2" placeholder="For example: Help me understand why this proof works." :aria-describedby="invalidField === 'need' ? ERROR_ID : undefined" :aria-invalid="invalidField === 'need' ? true : undefined" /></label>
@@ -226,5 +272,17 @@ function discardPaste() {
       <p v-if="validationError || serverError" :id="ERROR_ID" role="alert" class="text-sm text-destructive">{{ validationError ?? serverError }}</p>
       <div class="flex justify-end"><UiButton type="submit" data-testid="learn-adaptive-start" :disabled="busy || !ownerId">{{ busy ? 'Saving…' : 'Start learning' }}</UiButton></div>
     </UiCard></form>
+    <section class="mt-8" aria-labelledby="learn-history-heading" data-testid="learn-adaptive-thread-history">
+      <h2 id="learn-history-heading" class="font-dm-sans text-lg font-semibold">Learning history</h2>
+      <p v-if="historyLoaded && !historyRows.length && historyDone" class="mt-2 text-sm text-muted-foreground">Your learning threads will appear here.</p>
+      <ol v-if="historyRows.length" class="mt-3 space-y-2">
+        <li v-for="thread in historyRows" :key="thread.threadId" class="rounded-lg border border-border p-3">
+          <NuxtLink :to="`/app/learn/thread/${encodeURIComponent(thread.threadId)}`" class="inline-flex min-h-11 items-center text-sm font-medium text-[var(--learn-action)] underline">{{ thread.outcome }}</NuxtLink>
+          <p class="text-xs capitalize text-muted-foreground">{{ thread.lifecycle }}</p>
+        </li>
+      </ol>
+      <p v-if="historyError" role="alert" class="mt-2 text-sm text-destructive">{{ historyError }}</p>
+      <UiButton v-if="!historyDone || historyError" type="button" variant="ghost" class="mt-3 min-h-11" data-testid="learn-adaptive-history-more" :disabled="historyBusy" @click="loadHistory">{{ historyBusy ? 'Loading…' : historyError ? 'Retry history' : 'More history' }}</UiButton>
+    </section>
   </section>
 </template>

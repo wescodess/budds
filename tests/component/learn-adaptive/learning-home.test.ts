@@ -6,7 +6,10 @@ import { nextTick } from 'vue'
 const currentUser = ref<{ _id: string } | null>({ _id: 'owner_1' })
 const folders = ref([{ _id: 'folder_1', name: 'Proofs' }])
 const documents = ref([{ _id: 'document_1', folderId: 'folder_1', filename: 'proof.pdf', status: 'success' }])
-const resumeCandidates = ref<Array<{ ownerId: string, threadId: string, outcome: string, reason: string, unresolvedPoint: string | null }>>([])
+const resumeCandidates = ref<Array<{ ownerId: string, threadId: string, outcome: string, reason: string, unresolvedPoint: string | null, nextAction: { label: string }, reviewCapability?: string }>>([])
+const historyPage = vi.fn(async ({ cursor }: { cursor: string | null }) => cursor
+  ? { page: [{ threadId: 'thread_old', outcome: 'Older work', lifecycle: 'ended', updatedAt: 1 }], continueCursor: '', isDone: true }
+  : { page: [{ threadId: 'thread_recent', outcome: 'Recent work', lifecycle: 'ready', updatedAt: 2 }], continueCursor: 'next', isDone: false })
 
 mockNuxtImport('useConvexQuery', () => (reference: unknown) => {
   const name = getFunctionName(reference as never)
@@ -14,6 +17,7 @@ mockNuxtImport('useConvexQuery', () => (reference: unknown) => {
   if (name?.includes('listResumeCandidates')) return { data: resumeCandidates }
   return { data: name?.includes('listDocumentsByFolder') ? documents : folders }
 })
+mockNuxtImport('useConvex', () => () => ({ query: (_reference: unknown, args: { cursor: string | null }) => historyPage(args) }))
 
 const path = ['~', 'components', 'learn-adaptive', 'LearningHome.vue'].join('/')
 const ordinaryKey = (owner = 'owner_1') => `budds.learn.adaptive-draft.v1:${owner}`
@@ -25,6 +29,7 @@ describe('need-first LearningHome', () => {
     sessionStorage.clear()
     currentUser.value = { _id: 'owner_1' }
     resumeCandidates.value = []
+    historyPage.mockClear()
   })
   async function mount(props: Record<string, unknown> = {}) {
     const component = await import(path)
@@ -33,24 +38,65 @@ describe('need-first LearningHome', () => {
     await nextTick()
     return wrapper
   }
+
+  it('shows the ranked target as Resume and only persisted needs-review work as Worth revisiting', async () => {
+    resumeCandidates.value = [
+      { ownerId: 'owner_1', threadId: 'thread_primary', outcome: 'Finish a proof', reason: 'unfinished_activity', unresolvedPoint: 'The final step', nextAction: { label: 'Review feedback' } },
+      { ownerId: 'owner_1', threadId: 'thread_review', outcome: 'Revisit gravity', reason: 'needs_review', unresolvedPoint: null, nextAction: { label: 'Review capability' }, reviewCapability: 'Explain gravity' },
+      { ownerId: 'owner_1', threadId: 'thread_source', outcome: 'Changed source', reason: 'source_recovery', unresolvedPoint: null, nextAction: { label: 'Review source' } },
+      { ownerId: 'owner_1', threadId: 'thread_recent', outcome: 'Recent notes', reason: 'recent_thread', unresolvedPoint: null, nextAction: { label: 'Continue' } },
+    ]
+    const wrapper = await mount()
+    expect(wrapper.get('[data-testid="learn-adaptive-primary-resume"]').text()).toContain('Finish a proof')
+    expect(wrapper.get('[data-testid="learn-adaptive-primary-resume"]').text()).toContain('The final step')
+    expect(wrapper.get('[data-testid="learn-adaptive-worth-revisiting"]').text()).toContain('Revisit gravity')
+    expect(wrapper.get('[data-testid="learn-adaptive-worth-revisiting"]').text()).toContain('Explain gravity')
+    expect(wrapper.get('[data-testid="learn-adaptive-worth-revisiting"] a').text()).toBe('Review capability in thread')
+    expect(wrapper.get('[data-testid="learn-adaptive-worth-revisiting"]').text()).not.toContain('Changed source')
+    expect(wrapper.get('[data-testid="learn-adaptive-worth-revisiting"]').text()).not.toContain('Recent notes')
+    resumeCandidates.value = resumeCandidates.value.filter(item => item.reason !== 'needs_review')
+    await nextTick()
+    expect(wrapper.find('[data-testid="learn-adaptive-worth-revisiting"]').exists()).toBe(false)
+    resumeCandidates.value = [{ ownerId: 'owner_1', threadId: 'thread_review', outcome: 'Revisit gravity', reason: 'needs_review', unresolvedPoint: null, nextAction: { label: 'Review capability' }, reviewCapability: 'Explain gravity' }]
+    await nextTick()
+    expect(wrapper.get('[data-testid="learn-adaptive-primary-resume"]').text()).toContain('Worth revisiting')
+    expect(wrapper.get('[data-testid="learn-adaptive-primary-resume"]').text()).toContain('Explain gravity needs review')
+    expect(wrapper.get('[data-testid="learn-adaptive-primary-resume"] a').text()).toBe('Review capability in thread')
+    resumeCandidates.value = [{ ownerId: 'owner_1', threadId: 'thread_review', outcome: 'Finish gravity check', reason: 'unfinished_activity', unresolvedPoint: null, nextAction: { label: 'Finish response' }, reviewCapability: 'Explain gravity' }]
+    await nextTick()
+    expect(wrapper.get('[data-testid="learn-adaptive-primary-resume"] a').text()).toBe('Continue')
+    expect(wrapper.get('[data-testid="learn-adaptive-worth-revisiting"]').text()).toContain('Explain gravity')
+  })
+
+  it('loads thread summary history one page at a time and keeps owner changes isolated', async () => {
+    const wrapper = await mount()
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="learn-adaptive-thread-history"]').text()).toContain('Recent work'))
+    expect(wrapper.text()).not.toContain('Older work')
+    await wrapper.get('[data-testid="learn-adaptive-history-more"]').trigger('click')
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="learn-adaptive-thread-history"]').text()).toContain('Older work'))
+    expect(wrapper.find('[data-testid="learn-adaptive-history-more"]').exists()).toBe(false)
+    currentUser.value = { _id: 'owner_2' }
+    await vi.waitFor(() => expect(historyPage.mock.calls.length).toBeGreaterThanOrEqual(3))
+    expect(wrapper.get('[data-testid="learn-adaptive-thread-history"]').text()).not.toContain('Older work')
+  })
   async function fillRequired(wrapper: Awaited<ReturnType<typeof mount>>) {
     await wrapper.get('[data-testid="learn-adaptive-need"]').setValue('Help me understand these notes')
     await wrapper.get('[data-testid="learn-adaptive-outcome"]').setValue('Explain the key idea in my own words')
   }
 
   it('presents the ranked resume target and its unresolved point before the new goal form', async () => {
-    resumeCandidates.value = [{ ownerId: 'owner_1', threadId: 'thread_1', outcome: 'Explain orbital motion', reason: 'unfinished_activity', unresolvedPoint: 'Why does the orbit curve?' }]
+    resumeCandidates.value = [{ ownerId: 'owner_1', threadId: 'thread_1', outcome: 'Explain orbital motion', reason: 'unfinished_activity', unresolvedPoint: 'Why does the orbit curve?', nextAction: { label: 'Explain the orbit' } }]
     const wrapper = await mount()
-    const list = wrapper.get('[data-testid="learn-adaptive-resume-list"]')
+    const list = wrapper.get('[data-testid="learn-adaptive-primary-resume"]')
     expect(list.text()).toContain('Unfinished activity')
     expect(list.text()).toContain('Why does the orbit curve?')
     expect(list.get('a').attributes('href')).toBe('/app/learn/thread/thread_1')
     await list.get('a').trigger('click')
     expect(wrapper.emitted('resume')?.[0]).toEqual(['thread_1'])
-    expect(wrapper.element.querySelector('[data-testid="learn-adaptive-resume-list"]')?.compareDocumentPosition(wrapper.element.querySelector('form')!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+    expect(wrapper.element.querySelector('[data-testid="learn-adaptive-primary-resume"]')?.compareDocumentPosition(wrapper.element.querySelector('form')!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
     currentUser.value = { _id: 'owner_2' }
     await nextTick()
-    expect(wrapper.find('[data-testid="learn-adaptive-resume-list"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="learn-adaptive-primary-resume"]').exists()).toBe(false)
     wrapper.unmount()
   })
 

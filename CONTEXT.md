@@ -86,6 +86,10 @@ _Avoid_: Desired outcome, inferred misconception
 A Learning Thread offered to a returning learner for unfinished work, knowledge marked for review, or source recovery. Recency only distinguishes threads with the same kind of need.
 _Avoid_: Latest thread
 
+**Worth Revisiting**:
+A Home prompt for a capability with a persisted needs-review state. A recent thread or changed source alone does not qualify.
+_Avoid_: Recent activity, source recovery
+
 **Promotion Proposal**:
 A learner-requested, pinned invitation to continue meaningful work in review or mastery. It is not a mastery attempt, mastery claim, or scheduled session.
 _Avoid_: Automatic mastery, mastery result

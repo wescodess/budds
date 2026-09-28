@@ -2,6 +2,7 @@
 import { convexTest } from 'convex-test'
 import { afterAll, beforeEach, describe, expect, test } from 'vitest'
 import { api, internal } from './_generated/api'
+import type { Id } from './_generated/dataModel'
 import schema from './schema'
 
 const modules = import.meta.glob('./**/*.ts')
@@ -31,6 +32,29 @@ async function fixture() {
 }
 
 describe('meaningful resume projection', () => {
+  test('pages only owner history, retains ended threads, and closes adaptive reads when access is off', async () => {
+    const { t, owner, other, create } = await fixture()
+    const ids: Id<'learningThreads'>[] = []
+    for (let index = 0; index < 10; index++) ids.push(await create(`History thread ${index}`, `history-thread-${index}`))
+    await t.run(async ctx => {
+      for (let index = 0; index < ids.length; index++) await ctx.db.patch(ids[index]!, { updatedAt: 1_000 + index })
+      await ctx.db.patch(ids[9]!, { lifecycle: 'ended' })
+      await ctx.db.patch(ids[8]!, { deletionStartedAt: Date.now() })
+    })
+    const first = await owner.query(api.learnAdaptive.listThreadHistory, { cursor: null })
+    expect(first.page).toHaveLength(7)
+    expect(first.page.map(item => item.threadId)).toContain(ids[9])
+    expect(first.page.map(item => item.threadId)).not.toContain(ids[8])
+    expect(first.isDone).toBe(false)
+    const second = await owner.query(api.learnAdaptive.listThreadHistory, { cursor: first.continueCursor })
+    expect([...first.page, ...second.page].map(item => item.threadId)).toEqual([...ids].reverse().filter(id => id !== ids[8]))
+    expect(second.isDone).toBe(true)
+    expect(await other.query(api.learnAdaptive.listThreadHistory, { cursor: null })).toMatchObject({ page: [], isDone: true })
+    await owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: false })
+    await expect(owner.query(api.learnAdaptive.listThreadHistory, { cursor: null })).rejects.toThrow(/denied/)
+    expect(await t.run(ctx => ctx.db.get(ids[9]!))).toMatchObject({ lifecycle: 'ended' })
+  })
+
   test('prioritizes an actionable unfinished activity over a more recent draft and excludes another owner', async () => {
     const { t, owner, other, create } = await fixture()
     const unfinished = await create('Finish orbital motion', 'resume-unfinished-0001')
@@ -85,8 +109,15 @@ describe('meaningful resume projection', () => {
     })
     for (let index = 0; index < 17; index++) await create(`New draft ${index}`, `resume-review-draft-${String(index).padStart(4, '0')}`)
     const ranked = await owner.query(api.learnAdaptive.listResumeCandidates, {})
-    expect(ranked[0]).toMatchObject({ threadId: review, reason: 'needs_review' })
+    expect(ranked[0]).toMatchObject({ threadId: review, reason: 'needs_review', reviewCapability: 'Explain gravity' })
     expect(await t.run(ctx => ctx.db.get(masteryId))).toMatchObject({ state: 'needs_review', updatedAt: 1 })
+    await t.run(async ctx => {
+      const record = await ctx.db.get(masteryId)
+      if (!record) throw new Error('Expected mastery record')
+      await ctx.db.patch(record.objectiveId, { userId: 'another-user' })
+    })
+    expect((await owner.query(api.learnAdaptive.listResumeCandidates, {})).find(candidate => candidate.threadId === review))
+      .toMatchObject({ reason: 'recent_thread', reviewCapability: null })
   })
 
   test('places a stale factual boundary in recovery without offering its old submission', async () => {

@@ -34,7 +34,8 @@ mockNuxtImport('useConvexQuery', () => (reference: never) => {
   const name = getFunctionName(reference)
   return { data: name === 'folders:listAllFolders' ? folderRows : name === 'learnAdaptive:listResumeCandidates' ? resumeRows : currentUser }
 })
-mockNuxtImport('useConvex', () => () => ({ query: getInitialDecision }))
+mockNuxtImport('useConvex', () => () => ({ query: (reference: never, args: unknown) => getFunctionName(reference) === 'learnAdaptive:listThreadHistory'
+  ? Promise.resolve({ page: [], continueCursor: '', isDone: true }) : getInitialDecision(args) }))
 
 describe('Learn V2 route entry', () => {
   beforeEach(() => {
@@ -78,9 +79,16 @@ describe('Learn V2 route entry', () => {
     const rolledBack = await mountSuspended(Page.default, { route: '/app/learn' })
     expect(rolledBack.find('[data-testid="learn-v2-hub"]').exists()).toBe(true)
     expect(rolledBack.find('[data-testid="learn-adaptive-learning-home"]').exists()).toBe(false)
+    expect(rolledBack.get('[data-testid="learn-legacy-v1-home"]').attributes('href')).toBe('/')
+    expect(rolledBack.find('[data-testid="learn-legacy-v2-hub"]').exists()).toBe(false)
     expect(rolledBack.vm.$router.resolve('/app/folders/folder_1/learn').matched.at(-1)?.path).toContain('/learn')
     expect(rolledBack.vm.$router.resolve('/app/learn/void_1').matched.at(-1)?.path).toContain('learningVoidId')
     rolledBack.unmount()
+    allowed.value = false
+    const v2Denied = await mountSuspended(Page.default, { route: '/app/learn' })
+    expect(v2Denied.get('[data-testid="learn-legacy-v1-home"]').attributes('href')).toBe('/')
+    expect(v2Denied.find('[data-testid="learn-legacy-v2-create"]').exists()).toBe(false)
+    v2Denied.unmount()
   })
 
   it('saves a selected thread intent and keeps the local chip selected across a stale conflict', async () => {

@@ -302,12 +302,12 @@ async function selectThreadIntent(intent: Intent) {
       <LearnAdaptiveLearningHome v-else :busy="draftBusy" :server-error="draftError" :acknowledged-request-key="acknowledgedRequestKey" @start="createNeedDraft" @resume="openDiagnosticThread" />
     </template>
     <LearnV2LearnHub v-else :snapshot="hub" @create="router.push('/app/learn/create')" @open-mission="openMission" @start-session="openMission" @continue-setup="openMission" @resume-draft="resumeDraft" />
-    <nav v-if="allowed && adaptiveAllowed" aria-label="Existing learning routes" class="mx-auto w-full max-w-3xl px-4 pb-8 sm:px-6" data-testid="learn-legacy-handoffs">
+    <nav v-if="!checkingAccess && !checkingAdaptiveAccess" aria-label="Existing learning routes" class="mx-auto w-full max-w-3xl px-4 pb-8 sm:px-6" data-testid="learn-legacy-handoffs">
       <h2 class="font-dm-sans text-lg font-semibold">Existing learning routes</h2>
       <p class="mt-1 text-sm text-muted-foreground">Your existing courses and learning missions remain available.</p>
-      <div class="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-sm">
-        <NuxtLink v-if="legacyV2Mode" to="/app/learn" class="min-h-11 content-center text-[var(--learn-action)] underline">Return to adaptive Learn</NuxtLink>
-        <NuxtLink v-else to="/app/learn?legacy=v2" data-testid="learn-legacy-v2-hub" class="min-h-11 content-center text-[var(--learn-action)] underline">Open V2 learning plans</NuxtLink>
+      <div v-if="allowed" class="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-sm">
+        <NuxtLink v-if="adaptiveAllowed && legacyV2Mode" to="/app/learn" class="min-h-11 content-center text-[var(--learn-action)] underline">Return to adaptive Learn</NuxtLink>
+        <NuxtLink v-else-if="adaptiveAllowed" to="/app/learn?legacy=v2" data-testid="learn-legacy-v2-hub" class="min-h-11 content-center text-[var(--learn-action)] underline">Open V2 learning plans</NuxtLink>
         <NuxtLink to="/app/learn/today" data-testid="learn-legacy-v2-today" class="min-h-11 content-center text-[var(--learn-action)] underline">Open today's sessions</NuxtLink>
         <NuxtLink to="/app/learn/review" data-testid="learn-legacy-v2-review" class="min-h-11 content-center text-[var(--learn-action)] underline">Open review</NuxtLink>
         <NuxtLink to="/app/learn/create" data-testid="learn-legacy-v2-create" class="min-h-11 content-center text-[var(--learn-action)] underline">Create a V2 learning plan</NuxtLink>
