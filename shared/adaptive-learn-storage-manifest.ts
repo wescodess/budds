@@ -14,6 +14,13 @@ import { ADAPTIVE_ROUTER_VERSION } from './learn-adaptive-router'
 
 export const ADAPTIVE_LEARN_STORAGE_MANIFEST = [
   {
+    table: 'learningThreadPreferences',
+    ownerIndex: 'by_userId',
+    parentIndex: 'by_userId_and_threadId_and_key',
+    export: 'bounded',
+    accountDeletion: 'delete',
+  },
+  {
     table: 'learningThreadArtifacts',
     ownerIndex: 'by_userId',
     parentIndex: 'by_userId_and_threadId_and_updatedAt',
@@ -79,7 +86,7 @@ export const ADAPTIVE_LEARN_STORAGE_MANIFEST = [
 ] as const
 
 export const ADAPTIVE_LEARN_ACCOUNT_DELETE_ORDER = ADAPTIVE_LEARN_STORAGE_MANIFEST.map(entry => entry.table)
-export const ADAPTIVE_LEARN_EXPORT_COLLECTIONS = ['learningThreads', 'learningThreadActivities', 'learningThreadArtifacts', 'learnActivityEvidenceLinks', 'learnActivityDecisions', 'learnActivityEvents', 'learnActivityCommandReceipts', 'learnAdaptiveThreadDeletionJobs', 'learnActivityOverrides'] as const
+export const ADAPTIVE_LEARN_EXPORT_COLLECTIONS = ['learningThreads', 'learningThreadActivities', 'learningThreadArtifacts', 'learnActivityEvidenceLinks', 'learnActivityDecisions', 'learnActivityEvents', 'learnActivityCommandReceipts', 'learnAdaptiveThreadDeletionJobs', 'learnActivityOverrides', 'learningThreadPreferences'] as const
 export const ADAPTIVE_ACTIVITY_STORAGE_REGISTRY = [
   { type: 'cited_explanation', allowedActions: ['continue', 'inspect_source', 'ask_for_example'], testId: 'learn-primitive-cited-explanation', inputProps: ['heading', 'explanation', 'sourceRefs'], storedProps: ['heading', 'explanation', 'sourceRefs'] },
   { type: 'diagnostic_prompt', allowedActions: ['submit_response'], testId: 'learn-primitive-diagnostic-prompt', inputProps: ['prompt', 'responseFormat', 'assistance'], storedProps: ['prompt', 'responseFormat', 'assistance'] },
@@ -324,6 +331,17 @@ export const learningThreadArtifactFields = {
   summary: v.string(),
   r2ObjectKey: v.optional(v.string()),
   status: v.union(v.literal('draft'), v.literal('saved'), v.literal('deleted')),
+  createdAt: v.number(),
+  updatedAt: v.number(),
+}
+
+export const learningThreadPreferenceFields = {
+  userId: v.string(),
+  threadId: v.id('learningThreads'),
+  key: v.union(v.literal('representation'), v.literal('pace'), v.literal('practice_style')),
+  value: v.union(v.string(), v.null()),
+  state: v.union(v.literal('active'), v.literal('disabled')),
+  revision: v.number(),
   createdAt: v.number(),
   updatedAt: v.number(),
 }

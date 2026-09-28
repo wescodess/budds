@@ -270,6 +270,9 @@ describe('adaptive thread artifacts', () => {
       if (!result.pending) break
     }
     expect(await owner.query(api.learnAdaptive.listThreadArtifacts, { threadId })).toMatchObject([{ id: saved.value.artifactId, title: 'Evidence note', historical: true, readOnly: true, evidenceLabel: 'evidence_unavailable' }])
+    expect(await owner.query(api.learnAdaptive.getMemory, { threadId })).toMatchObject({
+      artifacts: [{ id: saved.value.artifactId, title: 'Evidence note', historical: true, readOnly: true, evidenceLabel: 'evidence_unavailable' }],
+    })
     const revisionAfterInvalidation = (await t.run(ctx => ctx.db.get(threadId)))!.revision
     const edit = { threadId, activityId, artifactId: saved.value.artifactId, artifactKind: 'answer' as const, title: 'Revised', summary: 'Should not write.', status: 'saved' as const, expectedRevision: revisionAfterInvalidation, idempotencyKey: 'artifact-invalidated-edit-0001' }
     const rejected = await owner.mutation(api.learnAdaptive.saveArtifact, edit)

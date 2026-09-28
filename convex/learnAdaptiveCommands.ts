@@ -148,6 +148,14 @@ export async function deleteAdaptiveThreadAuthorityBatch(ctx: MutationCtx, job: 
     await ctx.db.patch(job._id, { phase: 'children', updatedAt: Date.now() })
     return { phase: 'artifacts' as const, deleted: artifacts.length, done: false, waitingExternal: awaitingRemote, jobId: job._id }
   }
+  const preferences = await ctx.db.query('learningThreadPreferences')
+    .withIndex('by_userId_and_threadId_and_key', q => q.eq('userId', userId).eq('threadId', threadId))
+    .take(THREAD_DELETION_BATCH_SIZE)
+  if (preferences.length > 0) {
+    for (const preference of preferences) await ctx.db.delete(preference._id)
+    await ctx.db.patch(job._id, { phase: 'children', updatedAt: Date.now() })
+    return { phase: 'preferences' as const, deleted: preferences.length, done: false, jobId: job._id }
+  }
   const overrides = await ctx.db.query('learnActivityOverrides').withIndex('by_userId_and_threadId_and_createdAt', q => q.eq('userId', userId).eq('threadId', threadId)).take(THREAD_DELETION_BATCH_SIZE)
   if (overrides.length > 0) {
     for (const override of overrides) await ctx.db.delete(override._id)
