@@ -10,6 +10,7 @@ const artifact = ref<Record<string, unknown> | null>(null)
 const reflection = ref<Record<string, unknown> | null>(null)
 const evidence = ref<Record<string, unknown> | null>(null)
 const memory = ref<Record<string, unknown> | null>(null)
+const contributions = ref({ page: [], isDone: true, continueCursor: '' })
 const projection = ref<Record<string, unknown> | null>(null)
 const canvasPending = ref(false)
 const diagnosticPending = ref(false)
@@ -28,7 +29,7 @@ mockNuxtImport('useConvexAction', () => () => ({ mutate: vi.fn() }))
 mockNuxtImport('useConvexQuery', () => (reference: never, args: unknown) => {
   const name = getFunctionName(reference)
   calls(name, args)
-  return { data: name === 'users:getUser' ? user : name === 'learnAdaptive:getThread' ? projection : name === 'learnAdaptive:getMemory' ? memory : name === 'learnAdaptiveRecovery:getDiagnosticCanvas' ? diagnostic : name === 'learnAdaptiveEvidence:getThreadActivityEvidence' ? evidence : name === 'learnAdaptive:getArtifactCanvas' ? artifact : name === 'learnAdaptive:getReflectionCanvas' ? reflection : name === 'learnAdaptive:listThreadArtifacts' ? ref([]) : canvas,
+  return { data: name === 'users:getUser' ? user : name === 'learnAdaptive:getThread' ? projection : name === 'learnAdaptive:getMemory' ? memory : name === 'learnAdaptive:listThreadContributions' ? contributions : name === 'learnAdaptiveRecovery:getDiagnosticCanvas' ? diagnostic : name === 'learnAdaptiveEvidence:getThreadActivityEvidence' ? evidence : name === 'learnAdaptive:getArtifactCanvas' ? artifact : name === 'learnAdaptive:getReflectionCanvas' ? reflection : name === 'learnAdaptive:listThreadArtifacts' ? ref([]) : canvas,
     pending: name === 'learnAdaptiveRecovery:getDiagnosticCanvas' ? diagnosticPending : name === 'learnAdaptiveCanvas:getCanvas' ? canvasPending : ref(false) }
 })
 
