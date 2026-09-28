@@ -242,6 +242,20 @@
   --color-folder-graphite: #374151;
 }
 
+/* Adaptive Learn aliases inherit Warm Focus semantic colors in both themes. */
+:root, .dark {
+  --learn-thread-surface: var(--background);
+  --learn-activity-surface: var(--card);
+  --learn-context-surface: var(--popover);
+  --learn-action: var(--primary);
+  --learn-support: var(--accent);
+  --learn-evidence: var(--source-highlight);
+  --learn-success: var(--success);
+  --learn-attention: var(--warning);
+  --learn-error: var(--destructive);
+  --learn-focus-ring: var(--ring);
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

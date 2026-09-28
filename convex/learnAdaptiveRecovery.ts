@@ -9,7 +9,7 @@ import { hasLearnActivityEvent, writeLearnActivityEvent } from './lib/learnAdapt
 
 const DIAGNOSTIC_ROUTER_VERSION = 'learn-adaptive.preparing-diagnostic.v1'
 
-async function liveEvidenceState(ctx: QueryCtx | MutationCtx, thread: Doc<'learningThreads'>): Promise<AdaptiveEvidenceState> {
+export async function liveEvidenceState(ctx: QueryCtx | MutationCtx, thread: Doc<'learningThreads'>): Promise<AdaptiveEvidenceState> {
   if (thread.sourceScope.kind === 'folder') {
     const folder = await ctx.db.get(thread.sourceScope.sourceId as Id<'folders'>)
     if (!folder || folder.userId !== thread.userId) return 'unavailable'

@@ -1,5 +1,5 @@
 import { v } from 'convex/values'
-import { mutation, query } from './_generated/server'
+import { mutation, query, type QueryCtx } from './_generated/server'
 import type { Id } from './_generated/dataModel'
 import { requireAdaptiveMutationAccess, requireAdaptiveQueryAccess } from './lib/adaptiveLearnAccess'
 import { requireActiveBlueprint } from './lib/learnV2BlueprintAuthority'
@@ -7,7 +7,7 @@ import { findCurrentAdaptiveActivityForSessionContent, hasLearnActivityEvent, wr
 import { loadAdaptiveClaimProjection } from './lib/adaptiveClaimProjection'
 import { isLearnV2ContentEvidenceReady } from './lib/learnV2ContentEvidenceReady'
 import { boundedAdaptiveCommandReference, prepareAdaptiveCommand } from '../shared/adaptive-command-authority'
-import { composeAdaptiveActivityPlan, replayAdaptiveActivityPlan } from '../shared/learn-adaptive-activity-plan'
+import { composeAdaptiveActivityPlan, replayAdaptiveActivityPlan, type AdaptiveEvidenceState } from '../shared/learn-adaptive-activity-plan'
 import { localDateAt } from '../shared/learn-v2-mastery'
 import { adaptiveRecoveryCopy } from '../shared/learn-adaptive-recovery'
 import { executeAdaptiveThreadCommand } from './learnAdaptiveCommands'
@@ -190,12 +190,9 @@ export const attachReadySession = mutation({
   },
 })
 
-export const getCanvas = query({
-  args: { threadId: v.id('learningThreads') },
-  handler: async (ctx, args) => {
-    const userId = await requireAdaptiveQueryAccess(ctx)
+export async function loadReadyCanvas(ctx: QueryCtx, userId: string, threadId: Id<'learningThreads'>) {
     const owner = await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique()
-    const thread = await ctx.db.get(args.threadId)
+    const thread = await ctx.db.get(threadId)
     if (!owner || !thread || thread.userId !== userId || thread.authorityKind !== 'v2_mission' || thread.deletionStartedAt !== undefined || !thread.currentActivityId) return null
     const activity = await ctx.db.get(thread.currentActivityId)
     if (!activity || activity.userId !== userId || activity.threadId !== thread._id || !activity.sessionContentId || !activity.learningVoidId) return null
@@ -243,13 +240,14 @@ export const getCanvas = query({
       : activity.status === 'eligible' && session.status === 'ready' ? 'ready' as const
         : activity.status === 'started' && session.status === 'in_progress' ? 'started' as const
           : ['submitted', 'scoring', 'feedback', 'reconciling'].includes(activity.status) ? activity.status : 'blocked' as const
-    const recoveryState = thread.evidenceState === 'invalidated' || evidence?.integrityState === 'deleted' || !replay.ok ? 'invalidated'
+    const recoveryState: AdaptiveEvidenceState = thread.evidenceState === 'invalidated' || evidence?.integrityState === 'deleted' || !replay.ok ? 'invalidated'
       : evidence?.integrityState === 'unavailable' || thread.evidenceState === 'unavailable' ? 'unavailable'
         : evidence?.integrityState === 'stale' || thread.evidenceState === 'stale' ? 'stale'
           : thread.evidenceState === 'blocked' || evidence?.integrityState === 'insufficient' || evidence?.integrityState === 'conflicting' ? 'blocked'
             : !current ? 'stale' : 'blocked'
     return {
       status, ownerId: owner._id, thread: { id: thread._id, outcome: thread.outcome ?? thread.originalNeed, intent: thread.intent, revision: thread.revision },
+      recoveryState: status === 'blocked' ? recoveryState : null,
       recovery: status === 'blocked' ? adaptiveRecoveryCopy(recoveryState) : null,
       activity: { id: activity.activityId, status: activity.status, purpose: activity.purpose, reasonCode: activity.reasonCode,
         primitive: status !== 'blocked' && replay.ok ? activity.primitivePlan[0] : null,
@@ -263,7 +261,11 @@ export const getCanvas = query({
         ? { response: activity.submittedResponse, confidence: activity.submittedConfidence }
         : null,
     }
-  },
+}
+
+export const getCanvas = query({
+  args: { threadId: v.id('learningThreads') },
+  handler: async (ctx, args) => await loadReadyCanvas(ctx, await requireAdaptiveQueryAccess(ctx), args.threadId),
 })
 
 // A single response boundary precedes shared V2 scoring. No score, attempt,
