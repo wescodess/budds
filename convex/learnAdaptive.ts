@@ -1,6 +1,7 @@
 import { v } from 'convex/values'
+import { api } from './_generated/api'
 import { action, mutation, query, type MutationCtx, type QueryCtx } from './_generated/server'
-import type { Doc } from './_generated/dataModel'
+import type { Doc, Id } from './_generated/dataModel'
 import { AdaptiveCommandRejection, executeAdaptiveThreadCommand, initiateAdaptiveThreadDeletion } from './learnAdaptiveCommands'
 import { requireAdaptiveQueryAccess } from './lib/adaptiveLearnAccess'
 import { isOperableDiagnosticActivity, liveEvidenceState, storedPlan } from './learnAdaptiveRecovery'
@@ -16,6 +17,113 @@ import { learnActivityEventDedupeHash, writeLearnActivityEvent } from './lib/lea
 import { adaptiveArtifactKindValidator, adaptiveArtifactStatusValidator, boundedArtifactText } from '../shared/learn-adaptive-artifact'
 import { queueAdaptiveArtifactDeletion } from './lib/learnAdaptiveArtifacts'
 import { prepareAdaptiveCommand } from '../shared/adaptive-command-authority'
+
+const memoryPreferenceKeyValidator = v.union(v.literal('representation'), v.literal('pace'), v.literal('practice_style'))
+const memoryPreferenceOperationValidator = v.union(v.literal('set'), v.literal('disable'), v.literal('clear'))
+const MEMORY_HISTORY_LIMIT = 8
+type MemoryProjection = {
+  ownerId: Id<'users'>
+  threadId: Id<'learningThreads'>
+  threadRevision: number
+  lifecycle: Doc<'learningThreads'>['lifecycle']
+  unresolvedPoint: string | null
+  nextAction: { label: string } | null
+  evidenceState: string
+  preferences: { key: Doc<'learningThreadPreferences'>['key'], value: string | null, state: 'active' | 'disabled', revision: number }[]
+  artifacts: { id: Id<'learningThreadArtifacts'>, kind: Doc<'learningThreadArtifacts'>['artifactKind'], title: string,
+    summary: string, status: Doc<'learningThreadArtifacts'>['status'], revision: number, updatedAt: number,
+    historical: boolean, readOnly: boolean, evidenceLabel: 'evidence_unavailable' | null }[]
+  history: { activityId: string, purpose: string, status: Doc<'learningThreadActivities'>['status'],
+    activityClass: Doc<'learningThreadActivities'>['activityClass'], updatedAt: number, readOnly: true,
+    evidenceStatus: 'ready' | 'unavailable' | 'not_required',
+    attempt: { id: Id<'masteryAttempts'>, scorePercent: number, masteryStateAfter: Doc<'masteryRecords'>['state'] | null } | null }[]
+}
+
+export const getMemory = query({
+  args: { threadId: v.id('learningThreads') },
+  handler: async (ctx, args): Promise<MemoryProjection | null> => {
+    const userId = await requireAdaptiveQueryAccess(ctx)
+    const thread = await ctx.db.get(args.threadId)
+    if (!thread || thread.userId !== userId || thread.deletionStartedAt !== undefined) return null
+    const [owner, preferences, artifacts, recent] = await Promise.all([
+      ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique(),
+      ctx.db.query('learningThreadPreferences')
+        .withIndex('by_userId_and_threadId_and_key', q => q.eq('userId', userId).eq('threadId', thread._id)).take(3),
+      ctx.runQuery(api.learnAdaptive.listThreadArtifacts, { threadId: thread._id }),
+      ctx.db.query('learningThreadActivities')
+        .withIndex('by_userId_and_threadId_and_boundaryOrdinal', q => q.eq('userId', userId).eq('threadId', thread._id))
+        .order('desc').take(MEMORY_HISTORY_LIMIT),
+    ])
+    if (!owner) return null
+    const history = await Promise.all(recent.filter(row => row._id !== thread.currentActivityId).map(async row => {
+      const evidenceStatus = row.activityClass === 'non_factual' ? 'not_required' as const
+        : row.evidenceReferences.length === 0 || await artifactEvidenceUnavailable(ctx, thread, row)
+            ? 'unavailable' as const : 'ready' as const
+      const completion = await representativeCompletion(ctx, userId, row)
+      const storedAttempt = completion && row.masteryAttemptId ? await ctx.db.get(row.masteryAttemptId) : null
+      const attempt = storedAttempt && storedAttempt.userId === userId && storedAttempt.objectiveId === row.objectiveId
+        && typeof storedAttempt.serverScorePercent === 'number' && Number.isFinite(storedAttempt.serverScorePercent)
+        ? { id: storedAttempt._id, scorePercent: storedAttempt.serverScorePercent,
+            masteryStateAfter: storedAttempt.masteryStateAfter ?? null } : null
+      return { activityId: row.activityId, purpose: row.purpose, status: row.status,
+        activityClass: row.activityClass, updatedAt: row.updatedAt, readOnly: true as const,
+        evidenceStatus, attempt }
+    }))
+    const continuation: { nextAction: { label: string } | null } | null = await ctx.runQuery(api.learnAdaptive.getThread, { threadId: thread._id })
+    return {
+      ownerId: owner._id,
+      threadId: thread._id,
+      threadRevision: thread.revision,
+      lifecycle: thread.lifecycle,
+      unresolvedPoint: thread.unresolvedPoint?.slice(0, 240) ?? null,
+      nextAction: continuation?.nextAction ?? null,
+      evidenceState: await liveEvidenceState(ctx, thread),
+      preferences: preferences.map(row => ({ key: row.key, value: row.value, state: row.state, revision: row.revision })),
+      artifacts: artifacts.map(row => ({ id: row.id, kind: row.artifactKind, title: row.title, summary: row.summary,
+        status: row.status, revision: row.revision, updatedAt: row.updatedAt,
+        historical: row.historical, readOnly: row.readOnly, evidenceLabel: row.evidenceLabel })),
+      history,
+    }
+  },
+})
+
+export const setMemoryPreference = mutation({
+  args: { threadId: v.id('learningThreads'), key: memoryPreferenceKeyValidator,
+    operation: memoryPreferenceOperationValidator, value: v.optional(v.string()),
+    expectedRevision: v.number(), idempotencyKey: v.string() },
+  handler: async (ctx, args) => await executeAdaptiveThreadCommand(ctx, {
+    threadId: args.threadId, expectedRevision: args.expectedRevision, idempotencyKey: args.idempotencyKey,
+    commandName: 'setMemoryPreference', payload: { key: args.key, operation: args.operation, value: args.value ?? null },
+    returnBlockedWhenDeleting: true,
+    apply: async (commandCtx, thread, userId) => {
+      if (thread.lifecycle === 'ended' || thread.lifecycle === 'rollback') {
+        throw new AdaptiveCommandRejection('blocked', 'thread_not_editable', 'This thread is read-only')
+      }
+      const value = args.value?.trim() ?? ''
+      if (args.operation === 'set' ? value.length < 1 || value.length > 120 : args.value !== undefined) {
+        throw new AdaptiveCommandRejection('invalid', 'preference_value_invalid', 'Preference value is invalid')
+      }
+      const existing = await commandCtx.db.query('learningThreadPreferences')
+        .withIndex('by_userId_and_threadId_and_key', q => q.eq('userId', userId).eq('threadId', thread._id).eq('key', args.key)).unique()
+      if (args.operation === 'clear' && !existing) {
+        throw new AdaptiveCommandRejection('blocked', 'preference_unavailable', 'Preference is unavailable')
+      }
+      const now = Date.now()
+      if (args.operation === 'clear') await commandCtx.db.delete(existing!._id)
+      else if (existing) await commandCtx.db.patch(existing._id, {
+        value: args.operation === 'set' ? value : null,
+        state: args.operation === 'set' ? 'active' : 'disabled', revision: existing.revision + 1, updatedAt: now,
+      })
+      else await commandCtx.db.insert('learningThreadPreferences', {
+        userId, threadId: thread._id, key: args.key, value: args.operation === 'set' ? value : null,
+        state: args.operation === 'set' ? 'active' : 'disabled', revision: 1, createdAt: now, updatedAt: now,
+      })
+      const revision = thread.revision + 1
+      await commandCtx.db.patch(thread._id, { revision, updatedAt: now })
+      return { value: { key: args.key, state: args.operation === 'clear' ? 'cleared' as const : args.operation === 'set' ? 'active' as const : 'disabled' as const }, revision }
+    },
+  }),
+})
 
 async function artifactEvidenceUnavailable(ctx: QueryCtx | MutationCtx, thread: Doc<'learningThreads'>, activity: Doc<'learningThreadActivities'>) {
   if (activity.activityClass !== 'factual') return false
@@ -90,6 +198,7 @@ export const deleteArtifact = mutation({
     commandName: 'deleteArtifact', payload: { artifactId: String(args.artifactId) },
     returnBlockedWhenDeleting: true,
     apply: async (commandCtx, thread, userId) => {
+      if (thread.lifecycle === 'rollback') throw new AdaptiveCommandRejection('blocked', 'thread_not_editable', 'This thread is read-only')
       const artifact = await commandCtx.db.get(args.artifactId)
       if (!artifact || artifact.userId !== userId || artifact.threadId !== thread._id || artifact.status === 'deleted') throw new AdaptiveCommandRejection('blocked', 'artifact_unavailable', 'Artifact is unavailable')
       const removed = await queueAdaptiveArtifactDeletion(commandCtx, artifact)

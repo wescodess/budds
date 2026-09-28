@@ -646,10 +646,17 @@ describe('LA2-12 server-scored mastery attempts', () => {
     expect(await setup.owner.query(api.learnAdaptive.getThread, { threadId: activity.threadId })).toMatchObject({ completion: { status: 'passed' } })
     expect(JSON.stringify(committedEvents)).not.toContain(request.response)
     expect(JSON.stringify(committedEvents)).not.toContain('provider-response-private')
+    await setup.t.run(ctx => ctx.db.patch(activity.threadId, { currentActivityId: undefined }))
+    expect(await setup.owner.query(api.learnAdaptive.getMemory, { threadId: activity.threadId })).toMatchObject({
+      history: [{ activityId: 'adaptive-feedback', readOnly: true,
+        attempt: { id: result.attemptId, scorePercent: 80 }, evidenceStatus: 'ready' }],
+    })
+    await setup.t.run(ctx => ctx.db.patch(representative._id, { dedupeKeyHash: `sha256:${'0'.repeat(64)}` }))
+    expect(await setup.owner.query(api.learnAdaptive.getMemory, { threadId: activity.threadId })).toMatchObject({ history: [{ attempt: null }] })
+    await setup.t.run(ctx => ctx.db.patch(representative._id, { dedupeKeyHash: representative.dedupeKeyHash }))
     await setup.t.run(async (ctx) => {
       await ctx.db.patch(result.attemptId, { criterionResultsJson: JSON.stringify([{ key: 'tampered-legacy-field', awarded: false }]) })
       await ctx.db.patch(activity.activityDocumentId, { status: 'replaced' })
-      await ctx.db.patch(activity.threadId, { currentActivityId: undefined })
     })
     await expect(setup.t.mutation(internal.learnV2Mastery.beginMasteryScoring, request)).resolves.toMatchObject({ kind: 'replay', attemptId: result.attemptId, feedback: result.feedback })
     expect(await setup.t.run(ctx => ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('threadId', activity.threadId)).take(8))).toHaveLength(2)

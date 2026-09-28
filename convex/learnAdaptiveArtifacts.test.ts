@@ -123,6 +123,18 @@ describe('adaptive thread artifacts', () => {
     expect(await t.run(ctx => ctx.db.get(cleanup!._id))).toBeNull()
   })
 
+  test('does not delete an artifact from a rolled-back read-only thread', async () => {
+    const { t, owner, threadId, activityId } = await fixture()
+    const saved = await owner.mutation(api.learnAdaptive.saveArtifact, { threadId, activityId, artifactKind: 'plan',
+      title: 'Past plan', summary: 'Keep this history.', status: 'saved', expectedRevision: 3, idempotencyKey: 'artifact-rollback-save-0001' })
+    if (saved.kind !== 'ok') throw new Error('Expected saved artifact')
+    await t.run(ctx => ctx.db.patch(threadId, { lifecycle: 'rollback' }))
+    expect(await owner.mutation(api.learnAdaptive.deleteArtifact, { threadId, artifactId: saved.value.artifactId,
+      expectedRevision: 4, idempotencyKey: 'artifact-rollback-delete-0001' }))
+      .toMatchObject({ kind: 'blocked', code: 'thread_not_editable' })
+    expect(await t.run(ctx => ctx.db.get(saved.value.artifactId))).toMatchObject({ status: 'saved', summary: 'Keep this history.' })
+  })
+
   test('thread deletion waits for artifact R2 confirmation before deleting activity and parent', async () => {
     const { t, owner, threadId, activityId } = await fixture()
     const saved = await owner.mutation(api.learnAdaptive.saveArtifact, { threadId, activityId, artifactKind: 'note', title: 'Keep', summary: 'Private note.', status: 'saved', expectedRevision: 3, idempotencyKey: 'artifact-thread-save-0001' })
@@ -270,6 +282,9 @@ describe('adaptive thread artifacts', () => {
       if (!result.pending) break
     }
     expect(await owner.query(api.learnAdaptive.listThreadArtifacts, { threadId })).toMatchObject([{ id: saved.value.artifactId, title: 'Evidence note', historical: true, readOnly: true, evidenceLabel: 'evidence_unavailable' }])
+    expect(await owner.query(api.learnAdaptive.getMemory, { threadId })).toMatchObject({
+      artifacts: [{ id: saved.value.artifactId, title: 'Evidence note', historical: true, readOnly: true, evidenceLabel: 'evidence_unavailable' }],
+    })
     const revisionAfterInvalidation = (await t.run(ctx => ctx.db.get(threadId)))!.revision
     const edit = { threadId, activityId, artifactId: saved.value.artifactId, artifactKind: 'answer' as const, title: 'Revised', summary: 'Should not write.', status: 'saved' as const, expectedRevision: revisionAfterInvalidation, idempotencyKey: 'artifact-invalidated-edit-0001' }
     const rejected = await owner.mutation(api.learnAdaptive.saveArtifact, edit)
