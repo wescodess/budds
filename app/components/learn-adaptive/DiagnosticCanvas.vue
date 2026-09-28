@@ -3,6 +3,7 @@ import { api } from '#convex/api'
 import { getErrorMessage } from '~~/shared/errors'
 import { useAdaptiveResponseDraft } from '~/composables/useAdaptiveResponseDraft'
 import type { AdaptiveFixedNextPlan, AdaptiveOverrideOption } from '~~/shared/learn-adaptive-controls'
+import { ADAPTIVE_ACTIVITY_CONTRACT_VERSION, ADAPTIVE_ACTIVITY_RENDERER_VERSION, validateAdaptiveActivityPrimitive } from '~~/shared/learn-adaptive-activity-registry'
 
 type Canvas = {
   ownerId: string
@@ -13,10 +14,11 @@ type Canvas = {
   recovery: { title: string, body: string, action: string }
   activity: null | {
     id: string
+    planRevision?: number
     status: string
     controls?: { reasonText: { version: string, purpose: string, text: string }, selected: AdaptiveOverrideOption | null, fixedNextPlan: AdaptiveFixedNextPlan | null,
       options: Array<{ key: AdaptiveOverrideOption, label: string, available: boolean, unavailableReason: 'evidence' | 'mastery' | 'state' | 'policy' | null }> }
-    primitive: null | { type: string, action: string, testId: string, props: { prompt: string, responseFormat: string } }
+    primitive: null | { contractVersion: string, rendererVersion: string, type: string, action: string, testId: string, props: unknown }
     response: string | null
     requiredAction: { kind: string, label: string }
   }
@@ -28,6 +30,7 @@ const { isOnline } = useOnlineStatus()
 const continueMutation = import.meta.client ? useConvexMutation(api.learnAdaptiveRecovery.continueDraft) : { mutate: async () => ({}) }
 const submitMutation = import.meta.client ? useConvexMutation(api.learnAdaptiveRecovery.submitDiagnosticResponse) : { mutate: async () => ({}) }
 const renderAckMutation = import.meta.client ? useConvexMutation(api.learnAdaptiveRecovery.recordDiagnosticRendered) : { mutate: async () => ({}) }
+const reportRenderFailureMutation = import.meta.client ? useConvexMutation(api.learnAdaptiveCanvas.reportRenderFailure) : { mutate: async () => ({}) }
 const busy = ref(false)
 const threadRevision = ref(Math.max(props.canvas.thread.revision, props.authoritativeRevision ?? 0))
 watch([() => props.canvas.thread.revision, () => props.authoritativeRevision], ([canvasRevision, authoritativeRevision]) => {
@@ -48,7 +51,28 @@ let renderAckTimer: ReturnType<typeof setTimeout> | undefined
 let renderAckDisposed = false
 let renderOperableSeen = false
 
-const diagnostic = computed(() => props.canvas.activity?.primitive?.type === 'diagnostic_prompt' ? props.canvas.activity.primitive : null)
+const diagnosticValidation = computed(() => {
+  const primitive = props.canvas.activity?.primitive
+  if (!primitive) return { primitive: null, reason: null }
+  if (primitive.contractVersion !== ADAPTIVE_ACTIVITY_CONTRACT_VERSION
+    || primitive.rendererVersion !== ADAPTIVE_ACTIVITY_RENDERER_VERSION || Object.keys(primitive).length !== 6
+    || props.canvas.activity?.requiredAction.kind !== 'submit_response'
+    || props.canvas.activity.requiredAction.label !== 'Save response') return { primitive: null, reason: 'invalid_props' as const }
+  const validated = validateAdaptiveActivityPrimitive({ type: primitive.type, action: primitive.action, props: primitive.props })
+  if (!validated.ok) return { primitive: null, reason: validated.error.code }
+  if (validated.value.type !== 'diagnostic_prompt' || primitive.testId !== validated.value.testId) return { primitive: null, reason: 'invalid_props' as const }
+  return { primitive: validated.value, reason: null }
+})
+const diagnostic = computed(() => diagnosticValidation.value.primitive)
+const reportedRenderFailures = new Set<string>()
+watch([diagnosticValidation, isOnline, () => props.canvas.activity?.id, () => props.canvas.activity?.planRevision], async ([result, online, activityId, planRevision]) => {
+  if (!online || !result.reason || !activityId || !Number.isSafeInteger(planRevision) || !planRevision || planRevision < 1) return
+  const reportKey = `${activityId}:${planRevision}:${result.reason}`
+  if (reportedRenderFailures.has(reportKey)) return
+  reportedRenderFailures.add(reportKey)
+  try { await reportRenderFailureMutation.mutate({ threadId: props.canvas.thread.id as never, activityId, expectedPlanRevision: planRevision, reasonCode: result.reason }) }
+  catch { reportedRenderFailures.delete(reportKey) }
+}, { immediate: true })
 const saved = computed(() => props.canvas.activity?.response ?? localSaved.value)
 useAdaptiveResponseDraft(props.canvas.activity ? `learn-response:${props.canvas.ownerId}:${props.canvas.thread.id}:${props.canvas.activity.id}` : null, response, computed(() => Boolean(saved.value)))
 const canSubmit = computed(() => !!diagnostic.value && !saved.value && isOnline.value && !busy.value && response.value.trim().length > 0 && new TextEncoder().encode(response.value.trim()).byteLength <= 12_000)
@@ -133,7 +157,10 @@ async function submit() {
       <button type="button" data-testid="learn-diagnostic-start" :disabled="busy || !isOnline" class="mt-4 min-h-11 rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50" @click="continueDraft">{{ busy ? 'Starting…' : 'Start diagnostic' }}</button>
     </div>
     <div v-else-if="!diagnostic" class="mt-6 rounded-xl border border-border bg-card p-5" role="status" data-testid="learn-diagnostic-fallback">
-      This activity cannot be displayed safely. Your previous response remains saved. Return to Learn to continue.
+      <p>This activity cannot be displayed safely.</p>
+      <p v-if="saved" class="mt-2">Your saved response remains available.</p>
+      <p v-else-if="response.trim()" class="mt-2">Your unfinished response is kept on this device and will return when this activity is available.</p>
+      <p class="mt-2">Return to Learn to continue.</p>
     </div>
     <div v-else :data-testid="diagnostic.testId" class="mt-6 rounded-xl border border-border bg-card p-5">
       <h2 class="font-dm-sans text-xl font-semibold">Your starting point</h2>
@@ -144,7 +171,7 @@ async function submit() {
         <p class="mt-2 whitespace-pre-wrap rounded-lg bg-muted p-3 text-sm">{{ saved }}</p>
       </div>
       <template v-else>
-        <label class="mt-4 block text-sm font-medium">Your response<textarea ref="responseField" v-model="response" data-testid="learn-diagnostic-response" rows="5" maxlength="12000" class="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2" /></label>
+        <label class="mt-4 block text-sm font-medium">Your response<textarea ref="responseField" v-model="response" data-testid="learn-diagnostic-response" aria-label="Your response" :rows="diagnostic.props.responseFormat === 'long_text' ? 8 : 3" maxlength="12000" class="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2" /></label>
         <button ref="saveAction" type="button" data-testid="learn-diagnostic-submit" :disabled="busy || !isOnline" class="mt-4 min-h-11 rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50" @click="submit">{{ busy ? 'Saving…' : canvas.activity.requiredAction.label }}</button>
       </template>
     </div>

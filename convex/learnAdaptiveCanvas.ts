@@ -13,7 +13,8 @@ import { adaptiveRecoveryCopy } from '../shared/learn-adaptive-recovery'
 import { executeAdaptiveThreadCommand } from './learnAdaptiveCommands'
 import { liveEvidenceState } from './learnAdaptiveRecovery'
 import { projectAdaptiveControls, reasonTextForActivity } from '../shared/learn-adaptive-controls'
-import { ADAPTIVE_ACTIVITY_VALIDATION_ANALYTICS_VERSION } from '../shared/learn-adaptive-activity-registry'
+import { ADAPTIVE_ACTIVITY_VALIDATION_ANALYTICS_VERSION, validateAdaptiveActivityPrimitive } from '../shared/learn-adaptive-activity-registry'
+import { decodeSourceComparisonResponse } from '../shared/learn-adaptive-source-comparison-response'
 
 const RECEIPT_TTL_MS = 30 * 24 * 60 * 60_000
 
@@ -279,9 +280,12 @@ export async function loadReadyCanvas(ctx: QueryCtx | MutationCtx, userId: strin
     return {
       status, ownerId: owner._id, thread: { id: thread._id, outcome: thread.outcome ?? thread.originalNeed, intent: thread.intent, revision: thread.revision },
       recoveryState: status === 'blocked' ? recoveryState : null,
+      recoveryEvidenceIssue: status === 'blocked' && evidence?.integrityState === 'conflicting' ? 'conflict' as const
+        : status === 'blocked' && evidence?.integrityState === 'insufficient' ? 'gap' as const : null,
       recovery: status === 'blocked' ? adaptiveRecoveryCopy(recoveryState) : null,
       activity: { id: activity.activityId, status: activity.status, purpose: activity.purpose, reasonCode: activity.reasonCode,
         planRevision: activity.planRevision,
+        draftKind: replay.ok && activity.primitivePlan.length === 1 && activity.primitivePlan[0]?.type === 'source_comparison' ? 'source_comparison' as const : null,
         evidenceScope: { version: 'learn-adaptive.canvas-evidence-scope.v1' as const,
           integrityState: status === 'blocked' ? 'blocked' as const : 'accepted' as const,
           sourceRefs: status === 'blocked' ? [] : [...new Set(activity.evidenceReferences.map(reference => String(reference.sourceSnapshotId)))].sort() },
@@ -377,6 +381,19 @@ export const submitCanvasResponse = mutation({
         if (activity.evidenceReferences.length < 1 || activity.generationInputs.sessionContentRevision !== content.revision
           || (await loadAdaptiveClaimProjection(commandCtx, { userId, historical: false, sessionContentId: content._id, sessionContentRevision: content.revision, evidenceReferences: activity.evidenceReferences })).integrityState !== 'accepted'
           || !(await isLearnV2ContentEvidenceReady(commandCtx, userId, content, learningVoid._id))) throw new Error('Started Canvas evidence is unavailable')
+        const primitive = activity.primitivePlan[0]
+        if (primitive?.type === 'source_comparison') {
+          const pinnedSourceRefs = new Set(activity.evidenceReferences.map(reference => String(reference.sourceSnapshotId)))
+          const evidenceContext = Object.fromEntries([...pinnedSourceRefs].map(sourceRef => [sourceRef, { integrityState: 'accepted' as const }]))
+          const validated = validateAdaptiveActivityPrimitive({ type: primitive.type, action: primitive.action,
+            props: { prompt: primitive.props.prompt, sources: primitive.props.sources.map(source => ({ sourceRef: source.sourceRef, label: source.label, summary: source.summary })) } }, evidenceContext)
+          if (activity.primitivePlan.length !== 1 || !validated.ok || validated.value.type !== 'source_comparison'
+            || primitive.props.sources.some(source => source.integrityState !== 'accepted')
+            || validated.value.props.sources.some(source => !pinnedSourceRefs.has(source.sourceRef))
+            || !decodeSourceComparisonResponse(canonicalResponse, validated.value.props.sources.map(source => source.sourceRef))) {
+            throw new Error('Source comparison response is invalid')
+          }
+        }
         const now = Date.now()
         await commandCtx.db.patch(activity._id, {
           status: 'submitted', submittedResponse: canonicalResponse, submittedConfidence: args.confidence, updatedAt: now,

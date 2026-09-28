@@ -185,7 +185,7 @@ export const getDiagnosticCanvas = query({
       .order('desc').first()
     return { ownerId: owner._id, thread: { id: thread._id, outcome: thread.outcome ?? thread.originalNeed, intent: thread.intent, revision: thread.revision },
       status: primitive ? activity.status : 'blocked', evidenceState, recovery, decisionPending: false,
-      activity: { id: activity.activityId, status: activity.status, primitive,
+      activity: { id: activity.activityId, status: activity.status, planRevision: activity.planRevision, primitive,
         controls: projectAdaptiveControls({ activityClass: 'non_factual', activityStatus: primitive ? activity.status : 'blocked', lifecycle: thread.lifecycle,
           evidenceReady: evidenceState === 'ready', sourceCount: 0, currentTime: thread.availableTime,
           selected: selectedOverride?.option, fixedNextPlan: selectedOverride?.fixedNextPlan, reasonText: activity.reasonText,

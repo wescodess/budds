@@ -41,7 +41,7 @@ describe('adaptive thread route isolation', () => {
         nextAction: { kind: 'submit_response', label: 'Save response', activityId: 'diagnostic:thread_1' } }
       diagnostic.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Check my learning', intent: 'refresh', revision: 2 }, status: 'eligible', evidenceState: 'none', decisionPending: false,
         recovery: { title: 'Your starting point', body: 'Record what you know.', action: 'Back to Learn' },
-        activity: { id: 'diagnostic:thread_1', status: 'eligible', primitive: { type: 'diagnostic_prompt', action: 'submit_response', testId: 'learn-primitive-diagnostic-prompt', props: { prompt: 'What do you know?', responseFormat: 'short_text' } }, response: null,
+        activity: { id: 'diagnostic:thread_1', status: 'eligible', planRevision: 1, primitive: { contractVersion: 'learn-adaptive.activity-contract.v1', rendererVersion: 'learn-adaptive.renderer.v1', type: 'diagnostic_prompt', action: 'submit_response', testId: 'learn-primitive-diagnostic-prompt', props: { prompt: 'What do you know?', responseFormat: 'short_text', assistance: 'none' } }, response: null,
           requiredAction: { kind: 'submit_response', label: 'Save response' } } }
       const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
       await wrapper.get('[data-testid="learn-diagnostic-response"]').setValue('Unsent answer in memory.')
@@ -65,7 +65,7 @@ describe('adaptive thread route isolation', () => {
         nextAction: { kind: 'submit_response', label: 'Save response', activityId: 'diagnostic:thread_1' } }
       diagnostic.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Check my learning', intent: 'refresh', revision: 3 }, status: 'eligible', evidenceState: 'none', decisionPending: false,
         recovery: { title: 'Your starting point', body: 'Record what you know.', action: 'Back to Learn' },
-        activity: { id: 'diagnostic:thread_1', status: 'eligible', primitive: { type: 'diagnostic_prompt', action: 'submit_response', testId: 'learn-primitive-diagnostic-prompt', props: { prompt: 'What do you know?', responseFormat: 'short_text' } }, response: null,
+        activity: { id: 'diagnostic:thread_1', status: 'eligible', planRevision: 1, primitive: { contractVersion: 'learn-adaptive.activity-contract.v1', rendererVersion: 'learn-adaptive.renderer.v1', type: 'diagnostic_prompt', action: 'submit_response', testId: 'learn-primitive-diagnostic-prompt', props: { prompt: 'What do you know?', responseFormat: 'short_text', assistance: 'none' } }, response: null,
           requiredAction: { kind: 'submit_response', label: 'Save response' } } }
       const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
       await wrapper.get('[data-testid="learn-diagnostic-response"]').setValue('Still unsent after Canvas update.')

@@ -3,6 +3,7 @@ import { convexTest } from 'convex-test'
 import { afterAll, beforeEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import schema from './schema'
+import { composeAdaptiveActivityPlan } from '../shared/learn-adaptive-activity-plan'
 
 const pilotFixture = vi.hoisted(() => ({ approved: false }))
 vi.mock('../shared/adaptive-v2-pilot-policy', async (importOriginal) => {
@@ -302,6 +303,83 @@ describe('ready V2 adaptive Canvas', () => {
     await t.run(async ctx => { await ctx.db.patch(ids.laterSourceSnapshotId, { effectiveStatus: 'rejected', recordRevision: 2 }) })
     expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'blocked', responsePrompt: null, activity: { primitive: null } })
     await expect(owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, { threadId: attached.threadId, activityId: attached.activityId, studySessionId: ids.studySessionId, expectedSessionRevision: 3, expectedRevision: 2, response: 'Earth attracts it.', confidence: 4, idempotencyKey: 'canvas-blocked-later-0001' })).rejects.toThrow(/evidence is unavailable/i)
+  })
+
+  test('a comparison response selects exactly one of two pinned sources with a rationale', async () => {
+    const { t, owner, ids } = await fixture()
+    const attached = await owner.mutation(api.learnAdaptiveCanvas.attachReadySession, { studySessionId: ids.studySessionId, expectedSessionRevision: 2, idempotencyKey: 'canvas-comparison-attach-0001' })
+    await owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: ids.studySessionId, expectedSessionRevision: 2, expectedContentRevision: 1, idempotencyKey: 'canvas-comparison-start-0001' })
+    await t.run(async ctx => {
+      const thread = (await ctx.db.get(attached.threadId))!
+      const activity = (await ctx.db.get(thread.currentActivityId!))!
+      await ctx.db.patch(activity._id, { primitivePlan: [{
+        contractVersion: 'learn-adaptive.activity-contract.v1', rendererVersion: 'learn-adaptive.renderer.v1',
+        type: 'source_comparison', action: 'submit_comparison', testId: 'learn-primitive-source-comparison',
+        props: { prompt: 'Which source is stronger?', sources: [
+          { sourceRef: String(ids.sourceSnapshotId), label: 'Source A', summary: 'First source.', integrityState: 'accepted' },
+          { sourceRef: String(ids.laterSourceSnapshotId), label: 'Source B', summary: 'Second source.', integrityState: 'accepted' },
+        ] },
+      }], requiredAction: { kind: 'submit_comparison', label: 'Submit comparison' } })
+    })
+    const baseInput = { threadId: attached.threadId, activityId: attached.activityId, studySessionId: ids.studySessionId,
+      expectedSessionRevision: 3, expectedRevision: 2, confidence: 4 }
+    const invalid = [
+      'Arbitrary prose without a selected source.',
+      '{"version":"learn-adaptive.source-comparison-response.v1","sourceRef":"missing-source","rationale":"A clear rationale."}',
+      `{"version":"learn-adaptive.source-comparison-response.v1","sourceRef":"${String(ids.sourceSnapshotId)}","rationale":""}`,
+      `{"version":"learn-adaptive.source-comparison-response.v1","sourceRef":"${String(ids.sourceSnapshotId)}","sourceRef":"${String(ids.laterSourceSnapshotId)}","rationale":"A reason."}`,
+    ]
+    for (const [index, response] of invalid.entries()) {
+      await expect(owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, { ...baseInput, response, idempotencyKey: `canvas-comparison-invalid-${index}` })).rejects.toThrow(/comparison response/i)
+    }
+    const response = `{"version":"learn-adaptive.source-comparison-response.v1","sourceRef":"${String(ids.laterSourceSnapshotId)}","rationale":"This later review explains the observation."}`
+    expect(await owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, { ...baseInput, response, idempotencyKey: 'canvas-comparison-valid-0001' })).toMatchObject({ kind: 'ok', value: { status: 'submitted' } })
+    expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ savedResponse: { response, confidence: 4 } })
+  })
+
+  test.each([
+    ['conflict', { conflictStatus: 'unresolved' as const }],
+    ['gap', { entailment: 'not_evaluated' as const }],
+  ])('projects a bounded %s reason when pinned evidence can no longer support comparison', async (expected, update) => {
+    const { t, owner, ids } = await fixture()
+    const attached = await owner.mutation(api.learnAdaptiveCanvas.attachReadySession, { studySessionId: ids.studySessionId, expectedSessionRevision: 2, idempotencyKey: `canvas-${expected}-attach-0001` })
+    await t.run(async ctx => {
+      const support = (await ctx.db.query('learnClaimSupports').withIndex('by_userId_and_sessionContentClaimId', q => q.eq('userId', OWNER.tokenIdentifier).eq('sessionContentClaimId', ids.laterClaimId)).unique())!
+      await ctx.db.patch(support._id, update)
+    })
+    expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'blocked', recoveryEvidenceIssue: expected, activity: { primitive: null } })
+  })
+
+  test('keeps the signed comparison kind available for local draft recovery while evidence blocks rendering', async () => {
+    const { t, owner, ids } = await fixture()
+    const attached = await owner.mutation(api.learnAdaptiveCanvas.attachReadySession, { studySessionId: ids.studySessionId, expectedSessionRevision: 2, idempotencyKey: 'canvas-comparison-draft-attach-0001' })
+    const supportId = await t.run(async ctx => {
+      const thread = (await ctx.db.get(attached.threadId))!
+      const activity = (await ctx.db.get(thread.currentActivityId!))!
+      const requiredAction = { kind: 'submit_comparison', label: 'Submit comparison' }
+      const composed = await composeAdaptiveActivityPlan({
+        activityId: activity.activityId, threadId: String(thread._id), boundaryOrdinal: activity.boundaryOrdinal,
+        planRevision: activity.planRevision, activityClass: activity.activityClass, intent: activity.intent,
+        objectiveId: String(activity.objectiveId), purpose: activity.purpose, reasonCode: activity.reasonCode,
+        primitiveSequence: [{ type: 'source_comparison', action: 'submit_comparison', props: { prompt: 'Which source is stronger?', sources: [
+          { sourceRef: String(ids.sourceSnapshotId), label: 'Source A', summary: 'First source.' },
+          { sourceRef: String(ids.laterSourceSnapshotId), label: 'Source B', summary: 'Second source.' },
+        ] } }], requiredAction, evaluationContract: activity.evaluationContract,
+        accessibilityMetadata: activity.accessibilityMetadata,
+        pins: { learningVoidId: String(activity.learningVoidId), blueprintRevisionId: String(activity.blueprintRevisionId), objectiveId: String(activity.objectiveId), sessionContentId: String(activity.sessionContentId) },
+        evidenceReferences: activity.evidenceReferences.map(reference => ({ ...reference, claimId: String(reference.claimId), supportId: String(reference.supportId), sourceSnapshotId: String(reference.sourceSnapshotId) })),
+        generationInputs: activity.generationInputs, decisionInputs: activity.decisionInputs,
+      })
+      await ctx.db.patch(activity._id, { primitivePlan: composed.primitivePlan, requiredAction,
+        canonicalInputSnapshot: composed.canonicalInputSnapshot, inputDigest: composed.inputDigest })
+      const support = (await ctx.db.query('learnClaimSupports').withIndex('by_userId_and_sessionContentClaimId', q => q.eq('userId', OWNER.tokenIdentifier).eq('sessionContentClaimId', ids.laterClaimId)).unique())!
+      return support._id
+    })
+    expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'ready', activity: { draftKind: 'source_comparison', primitive: { type: 'source_comparison' } } })
+    await t.run(ctx => ctx.db.patch(supportId, { conflictStatus: 'unresolved' }))
+    expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'blocked', activity: { draftKind: 'source_comparison', primitive: null } })
+    await t.run(ctx => ctx.db.patch(supportId, { conflictStatus: 'clear' }))
+    expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'ready', activity: { draftKind: 'source_comparison', primitive: { type: 'source_comparison' } } })
   })
 
   test('non-rendered claims and extra supports must be ready before attach and while responding', async () => {
