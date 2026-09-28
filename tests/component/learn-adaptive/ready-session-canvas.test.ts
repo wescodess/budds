@@ -17,7 +17,7 @@ mockNuxtImport('useConvexMutation', () => (reference: never) => {
 mockNuxtImport('useConvexAction', () => (reference: never) => ({ mutate: getFunctionName(reference)?.includes('submitResponse') ? submit : vi.fn() }))
 
 const canvas = {
-  status: 'ready', thread: { id: 'thread_1', outcome: 'Explain gravity', intent: 'understand', revision: 2 },
+  ownerId: 'owner_1', status: 'ready', thread: { id: 'thread_1', outcome: 'Explain gravity', intent: 'understand', revision: 2 },
   activity: { id: 'ready-session:session_1', status: 'eligible', purpose: 'Study a supported explanation.', reasonCode: 'ready_v2_session',
     primitive: { type: 'cited_explanation', action: 'continue', testId: 'learn-primitive-cited-explanation', props: { heading: 'Gravity', explanation: 'Gravity attracts masses.', sourceRefs: ['source_1'] } },
     fallback: { testId: 'learn-activity-fallback', title: 'Activity unavailable', body: 'Try later.', primaryAction: { label: 'Continue safely' } },
@@ -34,6 +34,31 @@ describe('ready adaptive Canvas', () => {
     submit.mockReset().mockResolvedValue({ kind: 'accepted', status: 'in_progress' })
     meaningfulStart.mockReset().mockResolvedValue({ status: 'recorded', replayed: false })
     isOnline.value = true
+    sessionStorage.clear()
+  })
+
+  it('restores the current unsent answer and confidence after refresh', async () => {
+    const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
+    const current = { ...canvas, status: 'started', activity: { ...canvas.activity, status: 'started' } }
+    const first = await mountSuspended(Comp.default, { props: { canvas: current } })
+    await first.get('[data-testid="learn-canvas-continue"]').trigger('click')
+    await first.get('[data-testid="learn-canvas-response"]').setValue('A draft about gravity.')
+    await first.get('[data-testid="learn-canvas-confidence-4"]').setValue()
+    first.unmount()
+    const restored = await mountSuspended(Comp.default, { props: { canvas: current } })
+    await restored.get('[data-testid="learn-canvas-continue"]').trigger('click')
+    expect((restored.get('[data-testid="learn-canvas-response"]').element as HTMLTextAreaElement).value).toBe('A draft about gravity.')
+    expect((restored.get('[data-testid="learn-canvas-confidence-4"]').element as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('does not acknowledge a hidden current activity until the URL selects it again', async () => {
+    const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
+    const current = { ...canvas, status: 'started', activity: { ...canvas.activity, status: 'started' } }
+    const wrapper = await mountSuspended(Comp.default, { props: { canvas: current, active: false } })
+    await new Promise(resolve => setTimeout(resolve, 400))
+    expect(meaningfulStart).not.toHaveBeenCalled()
+    await wrapper.setProps({ active: true })
+    await vi.waitFor(() => expect(meaningfulStart).toHaveBeenCalledWith({ studySessionId: 'session_1', expectedContentRevision: 1 }))
   })
 
   it('starts in the thread and submits one independent response through shared V2 admission', async () => {

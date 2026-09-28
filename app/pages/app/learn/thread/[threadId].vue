@@ -42,6 +42,20 @@ const detailPending = computed(() => thread.value?.thread.authorityKind === 'v2_
   ? canvasQuery.pending.value
   : thread.value?.thread.authorityKind === 'standalone' ? diagnosticQuery.pending.value : false)
 const shellReady = computed(() => thread.value && !['rollback', 'ended'].includes(thread.value.thread.lifecycle))
+const selectedActivityId = computed(() => typeof route.query.activity === 'string' ? route.query.activity : null)
+const selectedHistory = computed(() => thread.value?.history.find(item => item.id === selectedActivityId.value) ?? null)
+const showCurrent = computed(() => !selectedActivityId.value || selectedActivityId.value === thread.value?.currentActivity?.id)
+const canvasUnsafe = computed(() => Boolean(canvas.value && canvas.value.status !== 'blocked' && thread.value?.thread.evidenceState !== 'ready'))
+const currentActivityUrl = computed(() => `/app/learn/thread/${encodeURIComponent(threadId.value)}`)
+const evidenceActivityId = computed(() => selectedHistory.value?.id ?? (showCurrent.value ? thread.value?.currentActivity?.id : null))
+const evidenceQuery = import.meta.client
+  ? useConvexQuery(api.learnAdaptiveEvidence.getThreadActivityEvidence, computed(() => ({ threadId: threadId.value as never, activityId: evidenceActivityId.value ?? '' })), { enabled: computed(() => allowed.value && Boolean(thread.value && evidenceActivityId.value)) })
+  : { data: ref(null), pending: ref(false) }
+const evidence = computed(() => {
+  const value = evidenceQuery.data.value
+  return value && value.ownerId === ownerId.value && value.threadId === thread.value?.thread.id
+    && value.activityId === evidenceActivityId.value ? value : null
+})
 const safeDestination = computed(() => {
   const value = thread.value?.thread
   return value?.authorityKind === 'v2_mission' && value.learningVoidId
@@ -70,6 +84,9 @@ function leave() { void router.push(safeDestination.value) }
         <p class="text-xs font-medium uppercase tracking-wide text-primary">Learning thread · {{ thread.thread.intent }}</p>
         <h1 class="mt-2 font-dm-sans text-3xl font-bold">{{ thread.thread.outcome }}</h1>
         <p class="mt-3 rounded-lg bg-[var(--learn-evidence)] px-3 py-2 text-sm text-muted-foreground" role="status" aria-live="polite">{{ thread.thread.lifecycle }} · Evidence {{ thread.thread.evidenceState }}</p>
+        <div class="mt-3 flex items-center gap-3">
+          <LearnAdaptiveEvidenceDrawer :evidence="evidence as never" :pending="evidenceQuery.pending.value" :source-state="selectedHistory ? evidence?.integrityState ?? 'unavailable' : thread.thread.evidenceState" :safe-destination="safeDestination" :safe-destination-label="safeDestinationLabel" />
+        </div>
       </header>
 
       <section class="mt-6 rounded-xl border border-border bg-[var(--learn-context-surface)] p-5" aria-labelledby="learn-thread-next-title">
@@ -79,16 +96,32 @@ function leave() { void router.push(safeDestination.value) }
       </section>
 
       <section class="mt-6 rounded-xl bg-[var(--learn-activity-surface)] p-4" data-testid="learn-adaptive-canvas-frame" aria-label="Current learning activity">
-        <LearnAdaptiveReadySessionCanvas v-if="canvas" :key="`${ownerId}:${canvas.thread.id}:${canvas.activity.id}`" :canvas="canvas as never" :show-header="false" @leave="leave" />
-        <LearnAdaptiveDiagnosticCanvas v-else-if="diagnostic" :key="`${ownerId}:${diagnostic.thread.id}:${diagnostic.activity?.id ?? 'draft'}`" :canvas="diagnostic as never" :show-header="false" @leave="leave" />
-        <div v-else-if="detailPending" data-testid="learn-adaptive-canvas-loading" class="rounded-lg border border-border p-5" role="status" aria-live="polite">
-          <h2 class="font-dm-sans text-lg font-semibold">Loading current activity…</h2>
-          <p class="mt-2 text-sm text-muted-foreground">Your thread and history are available while the activity loads.</p>
+        <div v-if="selectedActivityId && !showCurrent" data-testid="learn-selected-history" class="rounded-lg border border-border p-5">
+          <template v-if="selectedHistory">
+            <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Past activity · {{ selectedHistory.status }}</p>
+            <h2 class="mt-2 font-dm-sans text-lg font-semibold">{{ selectedHistory.purpose }}</h2>
+            <p class="mt-2 text-sm text-muted-foreground">This past activity is read-only. Your current response remains in place.</p>
+          </template>
+          <p v-else role="status">This selected activity is unavailable.</p>
+          <NuxtLink :to="currentActivityUrl" data-testid="learn-current-activity-link" class="mt-3 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline">Return to current activity</NuxtLink>
         </div>
-        <div v-else data-testid="learn-adaptive-canvas-fallback" class="rounded-lg border border-border p-5" role="status">
-          <h2 class="font-dm-sans text-lg font-semibold">Current activity unavailable</h2>
-          <p class="mt-2 text-sm text-muted-foreground">Your thread and activity history are saved. Open the learning destination to continue safely.</p>
-          <NuxtLink :to="safeDestination" data-testid="learn-adaptive-canvas-fallback-action" class="mt-3 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)]">{{ safeDestinationLabel }}</NuxtLink>
+        <div v-if="showCurrent && canvasUnsafe" data-testid="learn-current-source-recovery" class="rounded-lg border border-border p-5" role="alert">
+          <h2 class="font-dm-sans text-lg font-semibold">Evidence {{ thread.thread.evidenceState }}</h2>
+          <p class="mt-2 text-sm text-muted-foreground">This factual activity cannot continue until its source is reviewed. Your response draft remains in place.</p>
+          <NuxtLink :to="safeDestination" class="mt-3 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline">{{ safeDestinationLabel }}</NuxtLink>
+        </div>
+        <div v-show="showCurrent && !canvasUnsafe">
+          <LearnAdaptiveReadySessionCanvas v-if="canvas" :key="`${ownerId}:${canvas.thread.id}:${canvas.activity.id}`" :canvas="canvas as never" :show-header="false" :active="showCurrent && !canvasUnsafe" @leave="leave" />
+          <LearnAdaptiveDiagnosticCanvas v-else-if="diagnostic" :key="`${ownerId}:${diagnostic.thread.id}:${diagnostic.activity?.id ?? 'draft'}`" :canvas="diagnostic as never" :show-header="false" :active="showCurrent" @leave="leave" />
+          <div v-else-if="detailPending" data-testid="learn-adaptive-canvas-loading" class="rounded-lg border border-border p-5" role="status" aria-live="polite">
+            <h2 class="font-dm-sans text-lg font-semibold">Loading current activity…</h2>
+            <p class="mt-2 text-sm text-muted-foreground">Your thread and history are available while the activity loads.</p>
+          </div>
+          <div v-else data-testid="learn-adaptive-canvas-fallback" class="rounded-lg border border-border p-5" role="status">
+            <h2 class="font-dm-sans text-lg font-semibold">Current activity unavailable</h2>
+            <p class="mt-2 text-sm text-muted-foreground">Your thread and activity history are saved. Open the learning destination to continue safely.</p>
+            <NuxtLink :to="safeDestination" data-testid="learn-adaptive-canvas-fallback-action" class="mt-3 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)]">{{ safeDestinationLabel }}</NuxtLink>
+          </div>
         </div>
       </section>
 
@@ -97,7 +130,7 @@ function leave() { void router.push(safeDestination.value) }
         <p v-if="thread.history.length === 0" class="mt-2 text-sm text-muted-foreground">Your activity history will appear here.</p>
         <ol v-else class="mt-3 space-y-2">
           <li v-for="item in thread.history" :key="item.id" class="rounded-lg border border-border px-4 py-3 text-sm">
-            <p class="font-medium">{{ item.purpose }}</p>
+            <NuxtLink :to="{ path: currentActivityUrl, query: { activity: item.id } }" class="inline-flex min-h-11 items-center font-medium text-[var(--learn-action)] underline">{{ item.purpose }}</NuxtLink>
             <p class="mt-1 text-xs text-muted-foreground">{{ item.status }}</p>
           </li>
         </ol>

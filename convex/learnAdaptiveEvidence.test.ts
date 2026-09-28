@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 import { convexTest } from 'convex-test'
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
-import { internal } from './_generated/api'
+import { api, internal } from './_generated/api'
 import schema from './schema'
 
 const modules = import.meta.glob('./**/*.ts')
@@ -16,9 +16,15 @@ async function fixture() {
   const t = convexTest(schema, modules)
   const ids = await t.run(async (ctx) => {
     const now = 1_800_000_000_000
-    for (const tokenIdentifier of [ownerId, otherId]) await ctx.db.insert('users', {
-      tokenIdentifier,
-      name: tokenIdentifier,
+    const ownerUserId = await ctx.db.insert('users', {
+      tokenIdentifier: ownerId,
+      name: ownerId,
+      learnV2Entitlement: { enabled: true, updatedAt: now },
+      learnAdaptiveExperienceEntitlement: { enabled: true, updatedAt: now },
+    })
+    await ctx.db.insert('users', {
+      tokenIdentifier: otherId,
+      name: otherId,
       learnV2Entitlement: { enabled: true, updatedAt: now },
       learnAdaptiveExperienceEntitlement: { enabled: true, updatedAt: now },
     })
@@ -76,7 +82,7 @@ async function fixture() {
     })
     await ctx.db.patch(threadId, { currentActivityId: activityId })
     await ctx.db.insert('learnActivityEvidenceLinks', { userId: ownerId, threadId, activityId, sourceSnapshotId, boundaryOrdinal: 1, createdAt: now })
-    return { folderId, learningVoidId, threadId, activityId, objectiveId, blueprintRevisionId, sessionContentId, sourceIdentityId, sourceSnapshotId, sourceExcerptId, claimId, supportId }
+    return { ownerUserId, folderId, learningVoidId, threadId, activityId, objectiveId, blueprintRevisionId, sessionContentId, sourceIdentityId, sourceSnapshotId, sourceExcerptId, claimId, supportId }
   })
   return { t, ids }
 }
@@ -89,6 +95,44 @@ async function project(t: Awaited<ReturnType<typeof fixture>>['t']) {
 }
 
 describe('Adaptive activity evidence projection', () => {
+  test('public drawer read is bound to the owned thread and returns only safe projected fields', async () => {
+    const { t, ids } = await fixture()
+    const owner = t.withIdentity({ tokenIdentifier: ownerId })
+    const other = t.withIdentity({ tokenIdentifier: otherId })
+    const input = { threadId: ids.threadId, activityId: 'activity-evidence-1' }
+    await expect(t.query(api.learnAdaptiveEvidence.getThreadActivityEvidence, input)).rejects.toThrow('Adaptive Learn access denied')
+    expect(await other.query(api.learnAdaptiveEvidence.getThreadActivityEvidence, input)).toBeNull()
+    expect(await owner.query(api.learnAdaptiveEvidence.getThreadActivityEvidence, { ...input, activityId: 'missing' })).toBeNull()
+    const result = await owner.query(api.learnAdaptiveEvidence.getThreadActivityEvidence, input)
+    expect(ids.ownerUserId).not.toBe(ownerId)
+    expect(result).toMatchObject({ ownerId: ids.ownerUserId, threadId: ids.threadId, kind: 'factual', eligibility: 'eligible', integrityState: 'accepted', claims: [{ source: { origin: 'user_url', locator: 'page:1', sourceSnapshotRevision: 3 } }] })
+    expect(JSON.stringify(result)).not.toMatch(/private|Protected source passage|r2:\/\//)
+  })
+
+  test('public drawer read cannot present retained accepted snapshots as eligible after the selected source is deleted', async () => {
+    const { t, ids } = await fixture()
+    await t.run(ctx => ctx.db.delete(ids.folderId))
+    const result = await t.withIdentity({ tokenIdentifier: ownerId }).query(api.learnAdaptiveEvidence.getThreadActivityEvidence, { threadId: ids.threadId, activityId: 'activity-evidence-1' })
+    expect(result).toMatchObject({ kind: 'factual', eligibility: 'blocked', integrityState: 'unavailable',
+      claims: [{ integrityState: 'unavailable', claimStatus: 'unknown', source: { locator: null } }] })
+  })
+
+  test.each(['deleted_folder', 'non_owned_document'] as const)('historical public evidence stays read-only but redacts support after %s source loss', async sourceLoss => {
+    const { t, ids } = await fixture()
+    await t.run(async ctx => {
+      await ctx.db.patch(ids.activityId, { status: 'replaced' })
+      await ctx.db.patch(ids.threadId, { currentActivityId: undefined })
+      if (sourceLoss === 'deleted_folder') await ctx.db.delete(ids.folderId)
+      else {
+        const documentId = await ctx.db.insert('documents', { userId: ownerId, folderId: ids.folderId, filename: 'Photosynthesis.pdf', status: 'success', fileSize: 10 })
+        await ctx.db.patch(ids.threadId, { sourceScope: { kind: 'document', sourceId: String(documentId) } })
+        await ctx.db.patch(documentId, { userId: otherId })
+      }
+    })
+    const result = await t.withIdentity({ tokenIdentifier: ownerId }).query(api.learnAdaptiveEvidence.getThreadActivityEvidence, { threadId: ids.threadId, activityId: 'activity-evidence-1' })
+    expect(result).toMatchObject({ ownerId: ids.ownerUserId, threadId: ids.threadId, eligibility: 'historical', readOnly: true, integrityState: 'unavailable',
+      claims: [{ integrityState: 'unavailable', claimStatus: 'unknown', source: { locator: null } }] })
+  })
   test('projects source purge into exactly-once bounded invalidation and gap events', async () => {
     const { t, ids } = await fixture()
     for (let batch = 0; batch < 8; batch++) {

@@ -363,6 +363,15 @@ export async function clearSyncedAttempts(): Promise<void> {
 }
 
 export async function clearOfflineData(): Promise<void> {
+  // Sign-out and account deletion must not leave unsent private adaptive
+  // responses in this tab, even if IndexedDB deletion is blocked elsewhere.
+  try {
+    for (let index = sessionStorage.length - 1; index >= 0; index--) {
+      const key = sessionStorage.key(index)
+      if (key?.startsWith('learn-response:')) sessionStorage.removeItem(key)
+    }
+  }
+  catch { /* Storage may be disabled; continue clearing other offline data. */ }
   if ('caches' in globalThis) await caches.delete(LEGACY_AUDIO_CACHE_NAME)
   await new Promise<void>((resolve, reject) => {
     const request = indexedDB.deleteDatabase(DB_NAME)

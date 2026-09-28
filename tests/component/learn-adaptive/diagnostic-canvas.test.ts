@@ -21,7 +21,39 @@ const base = {
 }
 
 describe('standalone diagnostic Canvas', () => {
-  beforeEach(() => { continueDraft.mockReset().mockResolvedValue({ kind: 'ok' }); submit.mockReset().mockResolvedValue({ kind: 'ok' }); renderAck.mockReset().mockResolvedValue({ status: 'recorded' }); isOnline.value = true })
+  beforeEach(() => { continueDraft.mockReset().mockResolvedValue({ kind: 'ok' }); submit.mockReset().mockResolvedValue({ kind: 'ok' }); renderAck.mockReset().mockResolvedValue({ status: 'recorded' }); isOnline.value = true; sessionStorage.clear() })
+
+  it('restores an unsaved owner-scoped response draft after refresh without overriding a saved response', async () => {
+    const Comp = await import('~/components/learn-adaptive/DiagnosticCanvas.vue')
+    const first = await mountSuspended(Comp.default, { props: { canvas: base } })
+    await first.get('[data-testid="learn-diagnostic-response"]').setValue('My unsaved explanation.')
+    first.unmount()
+    const restored = await mountSuspended(Comp.default, { props: { canvas: base } })
+    expect((restored.get('[data-testid="learn-diagnostic-response"]').element as HTMLTextAreaElement).value).toBe('My unsaved explanation.')
+    restored.unmount()
+    const saved = await mountSuspended(Comp.default, { props: { canvas: { ...base, activity: { ...base.activity, response: 'Authoritative answer.' } } } })
+    expect(saved.get('[data-testid="learn-diagnostic-saved"]').text()).toContain('Authoritative answer.')
+    expect(JSON.stringify(sessionStorage)).not.toContain('My unsaved explanation.')
+  })
+
+  it('expires an unsent response draft after 24 hours', async () => {
+    const key = 'learn-response:owner_1:thread_1:diagnostic:thread_1'
+    sessionStorage.setItem(key, JSON.stringify({ response: 'Expired private answer.', confidence: null, savedAt: Date.now() - 25 * 60 * 60 * 1_000 }))
+    const Comp = await import('~/components/learn-adaptive/DiagnosticCanvas.vue')
+    const wrapper = await mountSuspended(Comp.default, { props: { canvas: base } })
+    expect((wrapper.get('[data-testid="learn-diagnostic-response"]').element as HTMLTextAreaElement).value).toBe('')
+    expect(sessionStorage.getItem(key)).toBeNull()
+  })
+
+  it('does not acknowledge an activity while URL selection keeps its Canvas hidden', async () => {
+    const Comp = await import('~/components/learn-adaptive/DiagnosticCanvas.vue')
+    const hidden = { ...base, activity: { ...base.activity, id: 'diagnostic:thread_hidden' } }
+    const wrapper = await mountSuspended(Comp.default, { props: { canvas: hidden, active: false } })
+    await new Promise(resolve => setTimeout(resolve, 400))
+    expect(renderAck.mock.calls.some(([input]) => input.activityId === 'diagnostic:thread_hidden')).toBe(false)
+    await wrapper.setProps({ active: true })
+    await vi.waitFor(() => expect(renderAck).toHaveBeenCalledWith({ threadId: 'thread_1', activityId: 'diagnostic:thread_hidden' }))
+  })
 
   it('starts from the draft and renders an operable registered diagnostic', async () => {
     const Comp = await import('~/components/learn-adaptive/DiagnosticCanvas.vue')
