@@ -394,6 +394,15 @@ export const submitCanvasResponse = mutation({
             throw new Error('Source comparison response is invalid')
           }
         }
+        else if (primitive?.type === 'independent_application') {
+          const validated = validateAdaptiveActivityPrimitive({ type: primitive.type, action: primitive.action, props: primitive.props })
+          const blocks = await commandCtx.db.query('sessionContentBlocks')
+            .withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', userId).eq('sessionContentId', content._id)).take(17)
+          const prompt = blocks.length <= 16 ? blocks.find(block => block.kind === 'independent_application')?.content?.trim() : null
+          if (activity.primitivePlan.length !== 1 || !validated.ok || validated.value.type !== 'independent_application'
+            || validated.value.action !== 'submit_response' || activity.requiredAction.kind !== 'submit_response'
+            || validated.value.props.prompt !== prompt) throw new Error('Independent application response is invalid')
+        }
         const now = Date.now()
         await commandCtx.db.patch(activity._id, {
           status: 'submitted', submittedResponse: canonicalResponse, submittedConfidence: args.confidence, updatedAt: now,

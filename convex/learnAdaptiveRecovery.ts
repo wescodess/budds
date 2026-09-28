@@ -23,7 +23,7 @@ export async function liveEvidenceState(ctx: QueryCtx | MutationCtx, thread: Doc
   return thread.evidenceState
 }
 
-function storedPlan(activity: Doc<'learningThreadActivities'>): ComposedAdaptiveActivityPlan {
+export function storedPlan(activity: Doc<'learningThreadActivities'>): ComposedAdaptiveActivityPlan {
   return {
     planVersion: activity.planVersion, replayVersion: activity.replayVersion, contractVersion: activity.contractVersion,
     rendererVersion: activity.rendererVersion, validationVersion: activity.validationVersion,

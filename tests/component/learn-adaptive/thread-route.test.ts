@@ -5,6 +5,7 @@ import { getFunctionName } from 'convex/server'
 const allowed = ref(true)
 const canvas = ref<Record<string, unknown> | null>(null)
 const diagnostic = ref<Record<string, unknown> | null>(null)
+const artifact = ref<Record<string, unknown> | null>(null)
 const evidence = ref<Record<string, unknown> | null>(null)
 const projection = ref<Record<string, unknown> | null>(null)
 const canvasPending = ref(false)
@@ -22,14 +23,26 @@ mockNuxtImport('useConvexAction', () => () => ({ mutate: vi.fn() }))
 mockNuxtImport('useConvexQuery', () => (reference: never, args: unknown) => {
   const name = getFunctionName(reference)
   calls(name, args)
-  return { data: name === 'users:getUser' ? user : name === 'learnAdaptive:getThread' ? projection : name === 'learnAdaptiveRecovery:getDiagnosticCanvas' ? diagnostic : name === 'learnAdaptiveEvidence:getThreadActivityEvidence' ? evidence : canvas,
+  return { data: name === 'users:getUser' ? user : name === 'learnAdaptive:getThread' ? projection : name === 'learnAdaptiveRecovery:getDiagnosticCanvas' ? diagnostic : name === 'learnAdaptiveEvidence:getThreadActivityEvidence' ? evidence : name === 'learnAdaptive:getArtifactCanvas' ? artifact : name === 'learnAdaptive:listThreadArtifacts' ? ref([]) : canvas,
     pending: name === 'learnAdaptiveRecovery:getDiagnosticCanvas' ? diagnosticPending : name === 'learnAdaptiveCanvas:getCanvas' ? canvasPending : ref(false) }
 })
 
 const path = ['~', 'pages', 'app', 'learn', 'thread', '[threadId].vue'].join('/')
 
 describe('adaptive thread route isolation', () => {
-  beforeEach(() => { allowed.value = true; canvas.value = null; diagnostic.value = null; evidence.value = null; projection.value = null; canvasPending.value = false; diagnosticPending.value = false; user.value = { _id: 'owner_1' }; requestedRoute.params.threadId = 'thread_1'; requestedRoute.query.activity = undefined; calls.mockClear(); mutationCalls.mockClear(); sessionStorage.clear() })
+  beforeEach(() => { allowed.value = true; canvas.value = null; diagnostic.value = null; artifact.value = null; evidence.value = null; projection.value = null; canvasPending.value = false; diagnosticPending.value = false; user.value = { _id: 'owner_1' }; requestedRoute.params.threadId = 'thread_1'; requestedRoute.query.activity = undefined; calls.mockClear(); mutationCalls.mockClear(); sessionStorage.clear() })
+
+  it('routes a current artifact workspace from its owner-bound projection', async () => {
+    const Page = await import(path)
+    projection.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Build a plan', intent: 'build', evidenceState: 'none', lifecycle: 'active', revision: 3, authorityKind: 'standalone' },
+      currentActivity: { id: 'artifact_1', status: 'eligible', activityClass: 'non_factual', purpose: 'Build a plan.' }, history: [], nextAction: { kind: 'save_artifact', label: 'Save artifact', activityId: 'artifact_1' } }
+    artifact.value = { ownerId: 'owner_1', status: 'eligible', thread: { id: 'thread_1', revision: 3, outcome: 'Build a plan' }, activity: { id: 'artifact_1', planRevision: 1, status: 'eligible',
+      primitive: { contractVersion: 'learn-adaptive.activity-contract.v1', rendererVersion: 'learn-adaptive.renderer.v1', type: 'artifact_workspace', action: 'save_artifact', testId: 'learn-primitive-artifact-workspace', props: { prompt: 'Build a plan.', artifactKind: 'plan', starterText: 'Goal:' } },
+      fallback: { title: 'Unavailable', body: 'Try later.', testId: 'learn-activity-fallback', primaryAction: { label: 'Continue safely' } } } }
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
+    expect(wrapper.get('[data-testid="learn-primitive-artifact-workspace"]').text()).toContain('Build a plan.')
+    wrapper.unmount()
+  })
 
   it('keeps an unsent diagnostic mounted through a newer thread revision when storage is unavailable', async () => {
     const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('storage unavailable') })

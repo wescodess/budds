@@ -54,6 +54,51 @@ describe('ready adaptive Canvas', () => {
       requiredAction: { kind: 'submit_comparison', label: 'Submit comparison' } },
   }
 
+  it('renders an independent application and submits through the authoritative scoring path', async () => {
+    const application = { ...canvas, status: 'started', activity: { ...canvas.activity,
+      primitive: { ...canvas.activity.primitive, type: 'independent_application', action: 'submit_response', testId: 'learn-primitive-independent-application', props: { prompt: 'Explain why an apple falls.', responseFormat: 'long_text', draftPersistence: true } },
+      requiredAction: { kind: 'submit_response', label: 'Submit response' } } }
+    const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
+    const wrapper = await mountSuspended(Comp.default, { props: { canvas: application } })
+    expect(wrapper.find('[data-testid="learn-primitive-independent-application"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Explain why an apple falls.')
+    await wrapper.get('[data-testid="learn-canvas-response"]').setValue('The moon follows a curved path under gravity.')
+    await wrapper.get('[data-testid="learn-canvas-confidence-3"]').setValue()
+    await wrapper.get('[data-testid="learn-canvas-submit"]').trigger('click')
+    await vi.waitFor(() => expect(stage).toHaveBeenCalledWith(expect.objectContaining({ response: 'The moon follows a curved path under gravity.' })))
+    await vi.waitFor(() => expect(submit).toHaveBeenCalledOnce())
+    wrapper.unmount()
+  })
+
+  it('shows independent ready, scored, and safe fallback states from the plan', async () => {
+    const application = { ...canvas, activity: { ...canvas.activity,
+      primitive: { ...canvas.activity.primitive, type: 'independent_application', action: 'submit_response', testId: 'learn-primitive-independent-application', props: { prompt: 'Explain why an apple falls.', responseFormat: 'long_text', draftPersistence: true } },
+      requiredAction: { kind: 'submit_response', label: 'Submit response' } } }
+    const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
+    const ready = await mountSuspended(Comp.default, { props: { canvas: application } })
+    expect(ready.get('[data-testid="learn-primitive-independent-application-ready"]').text()).toContain('Apply it independently')
+    ready.unmount()
+    const completed = await mountSuspended(Comp.default, { props: { canvas: { ...application, status: 'feedback', savedResponse: { response: 'Gravity pulls the apple toward Earth.', confidence: 4 } } } })
+    expect(completed.get('[data-testid="learn-canvas-status"]').text()).toContain('Response scored')
+    completed.unmount()
+    const mismatched = await mountSuspended(Comp.default, { props: { canvas: { ...application, activity: { ...application.activity,
+      primitive: { ...application.activity.primitive, props: { ...application.activity.primitive.props, prompt: 'A different question.' } } } } } })
+    expect(mismatched.get('[data-testid="learn-activity-fallback"]').text()).toContain('could not be displayed safely')
+    mismatched.unmount()
+  })
+
+  it('moves focus to the independent response after Start succeeds', async () => {
+    const application = { ...canvas, activity: { ...canvas.activity,
+      primitive: { ...canvas.activity.primitive, type: 'independent_application', action: 'submit_response', testId: 'learn-primitive-independent-application', props: { prompt: 'Explain why an apple falls.', responseFormat: 'long_text', draftPersistence: true } },
+      requiredAction: { kind: 'submit_response', label: 'Submit response' } } }
+    const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
+    const wrapper = await mountSuspended(Comp.default, { props: { canvas: application }, attachTo: document.body })
+    await wrapper.get('[data-testid="learn-canvas-start"]').trigger('click')
+    await vi.waitFor(() => expect(start).toHaveBeenCalledOnce())
+    await vi.waitFor(() => expect(document.activeElement).toBe(wrapper.get('[data-testid="learn-canvas-independent-response-heading"]').element))
+    wrapper.unmount()
+  })
+
   it('renders two accepted source cards and preserves choice and rationale after a failed submission', async () => {
     stage.mockRejectedValueOnce(new Error('timeout before commit'))
     const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
