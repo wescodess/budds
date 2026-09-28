@@ -1,7 +1,7 @@
 import { v } from 'convex/values'
-import { action, mutation, query, type QueryCtx } from './_generated/server'
+import { action, mutation, query, type MutationCtx, type QueryCtx } from './_generated/server'
 import type { Doc } from './_generated/dataModel'
-import { executeAdaptiveThreadCommand, initiateAdaptiveThreadDeletion } from './learnAdaptiveCommands'
+import { AdaptiveCommandRejection, executeAdaptiveThreadCommand, initiateAdaptiveThreadDeletion } from './learnAdaptiveCommands'
 import { requireAdaptiveQueryAccess } from './lib/adaptiveLearnAccess'
 import { isOperableDiagnosticActivity, liveEvidenceState } from './learnAdaptiveRecovery'
 import { loadReadyCanvas } from './learnAdaptiveCanvas'
@@ -12,6 +12,101 @@ import { ADAPTIVE_OVERRIDE_VERSION, adaptiveOverrideOptionValidator, fixedNextPl
 import { ADAPTIVE_REPRESENTATIVE_COMPLETION_VERSION, representativeNextAction } from '../shared/learn-adaptive-completion'
 import { LEARN_V2_MASTERY_THRESHOLD } from '../shared/learn-v2-mastery'
 import { learnActivityEventDedupeHash } from './lib/learnAdaptiveEvents'
+import { adaptiveArtifactKindValidator, adaptiveArtifactStatusValidator, boundedArtifactText } from '../shared/learn-adaptive-artifact'
+import { queueAdaptiveArtifactDeletion } from './lib/learnAdaptiveArtifacts'
+
+async function artifactEvidenceUnavailable(ctx: QueryCtx | MutationCtx, thread: Doc<'learningThreads'>, activity: Doc<'learningThreadActivities'>) {
+  if (activity.activityClass !== 'factual') return false
+  if (activity.status === 'blocked' || await liveEvidenceState(ctx, thread) !== 'ready') return true
+  const invalidated = await ctx.db.query('learnActivityEvidenceLinks')
+    .withIndex('by_userId_and_activityId_and_invalidatedAt', q => q.eq('userId', thread.userId).eq('activityId', activity._id).gt('invalidatedAt', 0))
+    .first()
+  return invalidated !== null
+}
+
+export const saveArtifact = mutation({
+  args: { threadId: v.id('learningThreads'), activityId: v.string(), artifactId: v.optional(v.id('learningThreadArtifacts')),
+    artifactKind: adaptiveArtifactKindValidator, title: v.string(), summary: v.string(), status: adaptiveArtifactStatusValidator,
+    expectedRevision: v.number(), idempotencyKey: v.string() },
+  handler: async (ctx, args) => await executeAdaptiveThreadCommand(ctx, {
+    threadId: args.threadId, expectedRevision: args.expectedRevision, idempotencyKey: args.idempotencyKey,
+    commandName: 'saveArtifact', payload: { activityId: args.activityId, artifactId: args.artifactId ? String(args.artifactId) : null,
+      artifactKind: args.artifactKind, title: args.title, summary: args.summary, status: args.status },
+    returnBlockedWhenDeleting: true,
+    apply: async (commandCtx, thread, userId) => {
+      if (thread.lifecycle === 'ended' || thread.lifecycle === 'rollback') throw new AdaptiveCommandRejection('blocked', 'thread_not_editable', 'Thread is unavailable for artifact editing')
+      let text: ReturnType<typeof boundedArtifactText>
+      try { text = boundedArtifactText(args.title, args.summary, args.status) }
+      catch { throw new AdaptiveCommandRejection('invalid', 'artifact_text_invalid', 'Artifact title or summary is invalid') }
+      const activity = await commandCtx.db.query('learningThreadActivities')
+        .withIndex('by_userId_and_activityId', q => q.eq('userId', userId).eq('activityId', args.activityId)).unique()
+      if (!activity || activity.threadId !== thread._id) throw new AdaptiveCommandRejection('blocked', 'activity_unavailable', 'Activity is unavailable')
+      if (await artifactEvidenceUnavailable(commandCtx, thread, activity)) throw new AdaptiveCommandRejection('blocked', 'artifact_evidence_unavailable', 'This activity evidence is unavailable; the artifact is read-only')
+      const now = Date.now()
+      let artifactId = args.artifactId
+      let artifactRevision = 1
+      if (artifactId) {
+        const existing = await commandCtx.db.get(artifactId)
+        if (!existing || existing.userId !== userId || existing.threadId !== thread._id || existing.activityId !== activity._id || existing.status === 'deleted') throw new AdaptiveCommandRejection('blocked', 'artifact_unavailable', 'Artifact is unavailable')
+        artifactRevision = existing.revision + 1
+        await commandCtx.db.patch(artifactId, { artifactKind: args.artifactKind, ...text, status: args.status, revision: artifactRevision, updatedAt: now })
+      }
+      else {
+        if (thread.currentActivityId !== activity._id) throw new AdaptiveCommandRejection('blocked', 'activity_not_current', 'Current activity is unavailable')
+        artifactId = await commandCtx.db.insert('learningThreadArtifacts', { userId, threadId: thread._id, activityId: activity._id,
+          artifactKind: args.artifactKind, ...text, status: args.status, revision: artifactRevision, createdAt: now, updatedAt: now })
+      }
+      const revision = thread.revision + 1
+      await commandCtx.db.patch(thread._id, { revision, updatedAt: now })
+      return { value: { artifactId, status: args.status, revision: artifactRevision }, revision }
+    },
+  }),
+})
+
+export const deleteArtifact = mutation({
+  args: { threadId: v.id('learningThreads'), artifactId: v.id('learningThreadArtifacts'), expectedRevision: v.number(), idempotencyKey: v.string() },
+  handler: async (ctx, args) => await executeAdaptiveThreadCommand(ctx, {
+    threadId: args.threadId, expectedRevision: args.expectedRevision, idempotencyKey: args.idempotencyKey,
+    commandName: 'deleteArtifact', payload: { artifactId: String(args.artifactId) },
+    returnBlockedWhenDeleting: true,
+    apply: async (commandCtx, thread, userId) => {
+      const artifact = await commandCtx.db.get(args.artifactId)
+      if (!artifact || artifact.userId !== userId || artifact.threadId !== thread._id || artifact.status === 'deleted') throw new AdaptiveCommandRejection('blocked', 'artifact_unavailable', 'Artifact is unavailable')
+      const removed = await queueAdaptiveArtifactDeletion(commandCtx, artifact)
+      const revision = thread.revision + 1
+      await commandCtx.db.patch(thread._id, { revision, updatedAt: Date.now() })
+      return { value: { artifactId: artifact._id, status: 'deleted' as const, cleanupPending: !removed }, revision }
+    },
+  }),
+})
+
+export const listThreadArtifacts = query({
+  args: { threadId: v.id('learningThreads') },
+  handler: async (ctx, args) => {
+    const userId = await requireAdaptiveQueryAccess(ctx)
+    const thread = await ctx.db.get(args.threadId)
+    if (!thread || thread.userId !== userId || thread.deletionStartedAt !== undefined) throw new Error('Thread not found')
+    const [drafts, saved] = await Promise.all([
+      ctx.db.query('learningThreadArtifacts')
+        .withIndex('by_userId_and_threadId_and_status_and_updatedAt', q => q.eq('userId', userId).eq('threadId', thread._id).eq('status', 'draft'))
+        .order('desc').take(16),
+      ctx.db.query('learningThreadArtifacts')
+        .withIndex('by_userId_and_threadId_and_status_and_updatedAt', q => q.eq('userId', userId).eq('threadId', thread._id).eq('status', 'saved'))
+        .order('desc').take(16),
+    ])
+    const rows = [...drafts, ...saved].sort((a, b) => b.updatedAt - a.updatedAt || String(b._id).localeCompare(String(a._id))).slice(0, 16)
+    return await Promise.all(rows.map(async row => {
+      const activity = await ctx.db.get(row.activityId)
+      const evidenceUnavailable = !activity || await artifactEvidenceUnavailable(ctx, thread, activity)
+      return {
+        id: row._id, activityId: row.activityId, artifactKind: row.artifactKind, revision: row.revision,
+        title: row.title, summary: row.summary, status: row.status, createdAt: row.createdAt, updatedAt: row.updatedAt,
+        historical: evidenceUnavailable, readOnly: evidenceUnavailable || thread.lifecycle === 'ended' || thread.lifecycle === 'rollback',
+        evidenceLabel: evidenceUnavailable ? 'evidence_unavailable' as const : null,
+      }
+    }))
+  },
+})
 
 export const setIntent = mutation({
   args: { threadId: v.id('learningThreads'), intent: needFirstDraftArgsValidator.intent, expectedRevision: v.number(), idempotencyKey: v.string() },

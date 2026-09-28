@@ -9,6 +9,7 @@ import {
 } from './lib/learnV2SourceSanitization'
 import { releaseSearchReservationClaims } from './learnV2Search'
 import { writeLearnActivityEvent } from './lib/learnAdaptiveEvents'
+import { initiateAdaptiveThreadDeletion } from './learnAdaptiveCommands'
 
 // This deliberately stays below the account-deletion batch. Folder deletion
 // only has live lifecycle producers today; later producers must add their
@@ -264,6 +265,32 @@ export const deleteFolderFoundation = internalMutation({
       .withIndex('by_userId_and_folderId', q => q.eq('userId', args.userId).eq('folderId', args.folderId)).take(BATCH_SIZE)
     for (const learningVoid of voids) {
       if (learningVoid.userId !== args.userId) throw new Error('Learning Void cleanup ownership mismatch')
+      const threads = await ctx.db.query('learningThreads')
+        .withIndex('by_userId_and_learningVoidId_and_authorityKind', q => q.eq('userId', args.userId)
+          .eq('learningVoidId', learningVoid._id).eq('authorityKind', 'v2_mission'))
+        .take(BATCH_SIZE)
+      if (threads.length > 0) {
+        // Preserve the existing AD-17 invalidation transition before draining
+        // the adaptive graph. The exact thread/link indexes keep this bounded.
+        for (const thread of threads) {
+          const links = await ctx.db.query('learnActivityEvidenceLinks')
+            .withIndex('by_userId_and_threadId_and_invalidatedAt', q => q.eq('userId', args.userId)
+              .eq('threadId', thread._id).eq('invalidatedAt', undefined)).take(BATCH_SIZE)
+          for (const link of links) {
+            const snapshot = await ctx.db.get(link.sourceSnapshotId)
+            if (snapshot?.userId === args.userId && snapshot.learningVoidId === learningVoid._id
+              && await invalidateLinkedAdaptiveActivities(ctx, args.userId, snapshot._id, 'source_deleted')) {
+              await ctx.scheduler.runAfter(0, internal.learnV2Retention.deleteFolderFoundation, args)
+              return { deleted: 0, hasMore: true }
+            }
+          }
+        }
+        for (const thread of threads) await initiateAdaptiveThreadDeletion(ctx, args.userId, thread._id)
+        // The thread worker owns child-first R2 cleanup; the Void remains
+        // authoritative until every exact owner-and-Void thread is gone.
+        await ctx.scheduler.runAfter(60_000, internal.learnV2Retention.deleteFolderFoundation, args)
+        return { deleted: 0, hasMore: true }
+      }
       await deleteVoidFoundation(ctx, args.userId, learningVoid._id)
       await ctx.scheduler.runAfter(0, internal.learnV2Retention.deleteFolderFoundation, args)
       return { deleted: 1, hasMore: true }

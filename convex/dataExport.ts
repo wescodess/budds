@@ -7,7 +7,7 @@ import { ADAPTIVE_LEARN_EXPORT_COLLECTIONS } from '../shared/adaptive-learn-stor
 // A single Convex document can approach 1 MiB. Keep pages comfortably below
 // the 16 MiB transaction and return-value ceilings even at the per-row limit.
 const MAX_EXPORT_PAGE_SIZE = 8
-const [learningThreadsCollection, learningThreadActivitiesCollection, learnActivityEvidenceLinksCollection, learnActivityEventsCollection, learnActivityCommandReceiptsCollection, learnAdaptiveThreadDeletionJobsCollection, learnActivityOverridesCollection] = ADAPTIVE_LEARN_EXPORT_COLLECTIONS
+const [learningThreadsCollection, learningThreadActivitiesCollection, learningThreadArtifactsCollection, learnActivityEvidenceLinksCollection, learnActivityEventsCollection, learnActivityCommandReceiptsCollection, learnAdaptiveThreadDeletionJobsCollection, learnActivityOverridesCollection] = ADAPTIVE_LEARN_EXPORT_COLLECTIONS
 
 function redactAdaptivePrimitiveSources(primitive: { props: unknown } & Record<string, unknown>) {
   if (!primitive.props || typeof primitive.props !== 'object' || Array.isArray(primitive.props)) return primitive
@@ -77,6 +77,7 @@ const exportCollectionValidator = v.union(
   v.literal('audioOverviewInterjectionSources'),
   v.literal(learningThreadsCollection),
   v.literal(learningThreadActivitiesCollection),
+  v.literal(learningThreadArtifactsCollection),
   v.literal(learnActivityEvidenceLinksCollection),
   v.literal(learnActivityEventsCollection),
   v.literal(learnActivityCommandReceiptsCollection),
@@ -262,6 +263,12 @@ export const getUserDataPage = query({
             },
           })),
         }
+      }
+      case 'learningThreadArtifacts': {
+        const result = await ctx.db.query('learningThreadArtifacts').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+        return { ...result, page: result.page.map(({ r2ObjectKey: _r2ObjectKey, ...artifact }) => artifact.status === 'deleted'
+          ? { ...artifact, title: '[deleted]', summary: '' }
+          : artifact) }
       }
       case 'learnActivityEvidenceLinks': {
         const result = await ctx.db.query('learnActivityEvidenceLinks').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)

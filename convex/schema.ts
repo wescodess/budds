@@ -1,6 +1,6 @@
 import { defineSchema, defineTable } from 'convex/server'
 import { v } from 'convex/values'
-import { learnActivityCommandReceiptFields, learnActivityEvidenceLinkFields, learnActivityOverrideFields, learnAdaptiveThreadDeletionJobFields, learningThreadActivityFields, learningThreadFields } from '../shared/adaptive-learn-storage-manifest'
+import { learnActivityCommandReceiptFields, learnActivityEvidenceLinkFields, learnActivityOverrideFields, learnAdaptiveThreadDeletionJobFields, learningThreadActivityFields, learningThreadArtifactFields, learningThreadFields } from '../shared/adaptive-learn-storage-manifest'
 import { learnActivityEventFields } from '../shared/learn-adaptive-events'
 import { masteryStateValidator, masteryTransitionReasonValidator } from '../shared/learn-v2-mastery'
 
@@ -1352,6 +1352,7 @@ export default defineSchema({
     documentId: v.string(),
     r2Key: v.optional(v.string()),
     audioArtifactId: v.optional(v.id('audioOverviewAudioArtifacts')),
+    learningThreadArtifactId: v.optional(v.id('learningThreadArtifacts')),
     fileId: v.optional(v.id('_storage')),
     kind: v.union(v.literal('ai-search'), v.literal('r2'), v.literal('convex-storage')),
     attempts: v.number(),
@@ -1364,6 +1365,7 @@ export default defineSchema({
     .index('by_userId_and_lastAttemptAt', ['userId', 'lastAttemptAt'])
     .index('by_userId_and_attempts_and_nextAttemptAt', ['userId', 'attempts', 'nextAttemptAt'])
     .index('by_audioArtifactId', ['audioArtifactId'])
+    .index('by_learningThreadArtifactId', ['learningThreadArtifactId'])
     .index('by_fileId', ['fileId'])
     .index('by_r2Key', ['r2Key'])
     .index('by_lastAttemptAt', ['lastAttemptAt'])
@@ -1374,6 +1376,7 @@ export default defineSchema({
   // mutable V1 course/session shapes and are unreachable until the V2 gate.
   learningThreads: defineTable(learningThreadFields)
     .index('by_userId', ['userId'])
+    .index('by_userId_and_learningVoidId_and_authorityKind', ['userId', 'learningVoidId', 'authorityKind'])
     .index('by_userId_and_lifecycle_and_updatedAt', ['userId', 'lifecycle', 'updatedAt'])
     .index('by_userId_and_updatedAt', ['userId', 'updatedAt']),
   learningThreadActivities: defineTable(learningThreadActivityFields)
@@ -1381,6 +1384,13 @@ export default defineSchema({
     .index('by_userId_and_threadId_and_boundaryOrdinal', ['userId', 'threadId', 'boundaryOrdinal'])
     .index('by_userId_and_activityId', ['userId', 'activityId'])
     .index('by_userId_and_sessionContentId_and_updatedAt', ['userId', 'sessionContentId', 'updatedAt'])
+    .index('by_userId_and_status_and_updatedAt', ['userId', 'status', 'updatedAt']),
+
+  learningThreadArtifacts: defineTable(learningThreadArtifactFields)
+    .index('by_userId', ['userId'])
+    .index('by_userId_and_threadId_and_updatedAt', ['userId', 'threadId', 'updatedAt'])
+    .index('by_userId_and_threadId_and_status_and_updatedAt', ['userId', 'threadId', 'status', 'updatedAt'])
+    .index('by_userId_and_activityId_and_updatedAt', ['userId', 'activityId', 'updatedAt'])
     .index('by_userId_and_status_and_updatedAt', ['userId', 'status', 'updatedAt']),
 
   learnActivityOverrides: defineTable(learnActivityOverrideFields)
@@ -1391,7 +1401,9 @@ export default defineSchema({
   learnActivityEvidenceLinks: defineTable(learnActivityEvidenceLinkFields)
     .index('by_userId', ['userId'])
     .index('by_userId_and_threadId', ['userId', 'threadId'])
+    .index('by_userId_and_threadId_and_invalidatedAt', ['userId', 'threadId', 'invalidatedAt'])
     .index('by_userId_and_activityId', ['userId', 'activityId'])
+    .index('by_userId_and_activityId_and_invalidatedAt', ['userId', 'activityId', 'invalidatedAt'])
     .index('by_userId_and_sourceSnapshotId_and_invalidatedAt', ['userId', 'sourceSnapshotId', 'invalidatedAt']),
 
   learnActivityEvents: defineTable(learnActivityEventFields)
