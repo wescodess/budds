@@ -44,9 +44,14 @@ const setMemoryPreferenceMutation = import.meta.client
 const deleteMemoryArtifactMutation = import.meta.client
   ? useConvexMutation(api.learnAdaptive.deleteArtifact)
   : { mutate: async (_: unknown) => ({ kind: 'blocked' }) }
+const requestPromotionMutation = import.meta.client
+  ? useConvexMutation(api.learnAdaptive.requestPromotion)
+  : { mutate: async (_: unknown) => ({ kind: 'blocked' }) }
 type MemoryPreferenceChange = { key: 'representation' | 'pace' | 'practice_style', operation: 'set' | 'disable' | 'clear', value?: string }
+type PromotionChange = { kind: 'review' | 'mastery', basis: 'useful_artifact' | 'representative_performance', sourceId: string }
 type MemoryCommand = { kind: 'preference', payload: MemoryPreferenceChange, threadId: string, ownerId: string, expectedRevision: number, idempotencyKey: string }
   | { kind: 'delete_artifact', artifactId: string, threadId: string, ownerId: string, expectedRevision: number, idempotencyKey: string }
+  | { kind: 'promotion', payload: PromotionChange, threadId: string, ownerId: string, expectedRevision: number, idempotencyKey: string }
 const pendingMemoryCommand = ref<MemoryCommand | null>(null)
 const memoryBusy = ref(false)
 const memoryError = ref('')
@@ -75,13 +80,20 @@ async function runMemoryCommand(command: MemoryCommand) {
     const result = (command.kind === 'preference'
       ? await setMemoryPreferenceMutation.mutate({ threadId: command.threadId as never,
           ...command.payload, expectedRevision: command.expectedRevision, idempotencyKey: command.idempotencyKey })
-      : await deleteMemoryArtifactMutation.mutate({ threadId: command.threadId as never, artifactId: command.artifactId as never,
-          expectedRevision: command.expectedRevision, idempotencyKey: command.idempotencyKey })) as { kind: string, value?: { cleanupPending?: boolean } }
+      : command.kind === 'delete_artifact'
+        ? await deleteMemoryArtifactMutation.mutate({ threadId: command.threadId as never, artifactId: command.artifactId as never,
+            expectedRevision: command.expectedRevision, idempotencyKey: command.idempotencyKey })
+        : await requestPromotionMutation.mutate({ threadId: command.threadId as never, kind: command.payload.kind,
+            ...(command.payload.basis === 'useful_artifact'
+              ? { artifactId: command.payload.sourceId as never }
+              : { activityId: command.payload.sourceId as never }),
+            expectedRevision: command.expectedRevision, idempotencyKey: command.idempotencyKey })) as { kind: string, value?: { cleanupPending?: boolean } }
     if (scopeEpoch !== memoryScopeEpoch) return
     if (result.kind === 'ok') {
       pendingMemoryCommand.value = null
       memoryNotice.value = command.kind === 'preference' ? 'Preference change saved.'
-        : result.value?.cleanupPending ? 'Artifact is hidden. Storage cleanup is pending.' : 'Artifact deletion recorded.'
+        : command.kind === 'promotion' ? 'Your proposal was saved. No check was scheduled and no mastery was awarded.'
+          : result.value?.cleanupPending ? 'Artifact is hidden. Storage cleanup is pending.' : 'Artifact deletion recorded.'
     }
     else if (result.kind === 'conflict') {
       pendingMemoryCommand.value = null
@@ -98,7 +110,7 @@ async function runMemoryCommand(command: MemoryCommand) {
   }
   finally { if (scopeEpoch === memoryScopeEpoch) memoryBusy.value = false }
 }
-function requestMemoryCommand(input: MemoryPreferenceChange | { artifactId: string }) {
+function requestMemoryCommand(input: MemoryPreferenceChange | { artifactId: string } | { promotion: PromotionChange }) {
   const current = memory.value
   if (!current || !thread.value || !ownerId.value) {
     memoryError.value = 'Memory is unavailable for this thread. Review current memory before changing it.'
@@ -112,11 +124,14 @@ function requestMemoryCommand(input: MemoryPreferenceChange | { artifactId: stri
     expectedRevision: current.threadRevision, idempotencyKey: memoryCommandKey() }
   const command: MemoryCommand = 'artifactId' in input
     ? { ...base, kind: 'delete_artifact', artifactId: input.artifactId }
-    : { ...base, kind: 'preference', payload: input }
+    : 'promotion' in input
+      ? { ...base, kind: 'promotion', payload: input.promotion }
+      : { ...base, kind: 'preference', payload: input }
   pendingMemoryCommand.value = command
   void runMemoryCommand(command)
 }
 function requestMemoryArtifactDeletion(artifactId: string) { requestMemoryCommand({ artifactId }) }
+function requestMemoryPromotion(promotion: PromotionChange) { requestMemoryCommand({ promotion }) }
 function reviewCurrentMemory() {
   if (pendingMemoryCommand.value) {
     memoryError.value = 'The previous change is still unconfirmed. Retry the same change to check its outcome.'
@@ -209,7 +224,7 @@ function leave() { void router.push(safeDestination.value) }
         <p class="mt-3 rounded-lg bg-[var(--learn-evidence)] px-3 py-2 text-sm text-muted-foreground" role="status" aria-live="polite">{{ thread.thread.lifecycle }} · Evidence {{ thread.thread.evidenceState }}</p>
         <div class="mt-3 flex items-center gap-3">
           <LearnAdaptiveEvidenceDrawer :evidence="evidence as never" :pending="evidenceQuery.pending.value" :source-state="selectedHistory ? evidence?.integrityState ?? 'unavailable' : thread.thread.evidenceState" :safe-destination="safeDestination" :safe-destination-label="safeDestinationLabel" :open-request="evidenceOpenRequest" :return-focus-to="evidenceReturnFocus" />
-          <LearnAdaptiveMemoryDrawer :key="`${ownerId}:${threadId}`" :memory="memory as never" :pending="memoryQuery.pending.value" :busy="memoryBusy" :error="memoryError" :notice="memoryNotice" :retry-available="Boolean(pendingMemoryCommand)" @set-preference="requestMemoryCommand" @delete-artifact="requestMemoryArtifactDeletion" @refresh="reviewCurrentMemory" @retry="retryMemoryCommand" />
+          <LearnAdaptiveMemoryDrawer :key="`${ownerId}:${threadId}`" :memory="memory as never" :pending="memoryQuery.pending.value" :busy="memoryBusy" :error="memoryError" :notice="memoryNotice" :retry-available="Boolean(pendingMemoryCommand)" @set-preference="requestMemoryCommand" @delete-artifact="requestMemoryArtifactDeletion" @request-promotion="requestMemoryPromotion" @refresh="reviewCurrentMemory" @retry="retryMemoryCommand" />
         </div>
       </header>
 

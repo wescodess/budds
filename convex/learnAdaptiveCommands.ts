@@ -139,6 +139,14 @@ export async function deleteAdaptiveThreadAuthorityBatch(ctx: MutationCtx, job: 
   if (thread && thread.userId !== userId) throw new Error('Thread deletion authority mismatch')
 
   if (thread && thread.deletionStartedAt === undefined) await ctx.db.patch(threadId, { deletionStartedAt: Date.now() })
+  const proposals = await ctx.db.query('learningThreadPromotionProposals')
+    .withIndex('by_userId_and_threadId_and_createdAt', q => q.eq('userId', userId).eq('threadId', threadId))
+    .take(THREAD_DELETION_BATCH_SIZE)
+  if (proposals.length > 0) {
+    for (const proposal of proposals) await ctx.db.delete(proposal._id)
+    await ctx.db.patch(job._id, { phase: 'children', updatedAt: Date.now() })
+    return { phase: 'promotion_proposals' as const, deleted: proposals.length, done: false, jobId: job._id }
+  }
   const artifacts = await ctx.db.query('learningThreadArtifacts')
     .withIndex('by_userId_and_threadId_and_updatedAt', q => q.eq('userId', userId).eq('threadId', threadId))
     .take(THREAD_DELETION_BATCH_SIZE)

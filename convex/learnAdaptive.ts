@@ -21,6 +21,83 @@ import { prepareAdaptiveCommand } from '../shared/adaptive-command-authority'
 const memoryPreferenceKeyValidator = v.union(v.literal('representation'), v.literal('pace'), v.literal('practice_style'))
 const memoryPreferenceOperationValidator = v.union(v.literal('set'), v.literal('disable'), v.literal('clear'))
 const MEMORY_HISTORY_LIMIT = 8
+const PROMOTION_HISTORY_LIMIT = 20
+
+export const listPromotionProposals = query({
+  args: { threadId: v.id('learningThreads') },
+  handler: async (ctx, args) => {
+    const userId = await requireAdaptiveQueryAccess(ctx)
+    const thread = await ctx.db.get(args.threadId)
+    if (!thread || thread.userId !== userId || thread.deletionStartedAt !== undefined) return []
+    return await ctx.db.query('learningThreadPromotionProposals')
+      .withIndex('by_userId_and_threadId_and_createdAt', q => q.eq('userId', userId).eq('threadId', thread._id))
+      .order('desc').take(PROMOTION_HISTORY_LIMIT)
+  },
+})
+
+export const requestPromotion = mutation({
+  args: {
+    threadId: v.id('learningThreads'), kind: v.union(v.literal('review'), v.literal('mastery')),
+    artifactId: v.optional(v.id('learningThreadArtifacts')),
+    activityId: v.optional(v.id('learningThreadActivities')),
+    expectedRevision: v.number(), idempotencyKey: v.string(),
+  },
+  handler: async (ctx, args) => await executeAdaptiveThreadCommand(ctx, {
+    threadId: args.threadId, expectedRevision: args.expectedRevision, idempotencyKey: args.idempotencyKey,
+    commandName: 'requestPromotion',
+    payload: { kind: args.kind, artifactId: args.artifactId ?? null, activityId: args.activityId ?? null },
+    returnBlockedWhenDeleting: true,
+    apply: async (commandCtx, thread, userId) => {
+      if (thread.lifecycle === 'ended' || thread.lifecycle === 'rollback')
+        throw new AdaptiveCommandRejection('blocked', 'thread_not_editable', 'This thread cannot accept a promotion proposal')
+      if (Boolean(args.artifactId) === Boolean(args.activityId))
+        throw new AdaptiveCommandRejection('invalid', 'promotion_basis_required', 'Choose one saved artifact or representative performance')
+
+      const artifact = args.artifactId ? await commandCtx.db.get(args.artifactId) : null
+      if (args.artifactId && (!artifact || artifact.userId !== userId || artifact.threadId !== thread._id
+        || artifact.status !== 'saved' || !artifact.title.trim() || !artifact.summary.trim()))
+        throw new AdaptiveCommandRejection('blocked', 'artifact_unavailable', 'The saved artifact is unavailable')
+
+      const activityId = artifact?.activityId ?? args.activityId!
+      const activity = await commandCtx.db.get(activityId)
+      if (!activity || activity.userId !== userId || activity.threadId !== thread._id
+        || activity.status === 'replaced' || activity.status === 'blocked')
+        throw new AdaptiveCommandRejection('blocked', 'activity_unavailable', 'The activity is unavailable')
+      if (thread.authorityKind === 'v2_mission') {
+        const learningVoid = thread.learningVoidId ? await commandCtx.db.get(thread.learningVoidId) : null
+        if (!learningVoid || learningVoid.userId !== userId || activity.learningVoidId !== learningVoid._id)
+          throw new AdaptiveCommandRejection('blocked', 'authority_changed', 'The learning mission has changed')
+      }
+      if (activity.activityClass === 'factual' && await artifactEvidenceUnavailable(commandCtx, thread, activity))
+        throw new AdaptiveCommandRejection('blocked', 'evidence_unavailable', 'Review the source before requesting promotion')
+
+      const completion = artifact ? null : await representativeCompletion(commandCtx, userId, activity)
+      if (!artifact && (!completion || !activity.masteryAttemptId))
+        throw new AdaptiveCommandRejection('blocked', 'representative_unavailable', 'A representative outcome is unavailable')
+      if (!artifact && args.kind === 'mastery' && completion?.status !== 'passed')
+        throw new AdaptiveCommandRejection('blocked', 'representative_not_passed', 'A passing representative outcome is required')
+
+      const now = Date.now()
+      const proposalId = await commandCtx.db.insert('learningThreadPromotionProposals', {
+        userId, threadId: thread._id, kind: args.kind,
+        basis: artifact ? 'useful_artifact' as const : 'representative_performance' as const,
+        proposalVersion: 'learn-adaptive.promotion-proposal.v1',
+        threadRevision: thread.revision, activityId: activity._id, activityPlanRevision: activity.planRevision,
+        ...(artifact ? { artifactId: artifact._id, artifactRevision: artifact.revision } : {}),
+        ...(!artifact && activity.masteryAttemptId ? { attemptId: activity.masteryAttemptId, representativeOutcome: completion!.status } : {}),
+        ...(thread.learningVoidId ? { learningVoidId: thread.learningVoidId } : {}),
+        ...(activity.blueprintRevisionId ? { blueprintRevisionId: activity.blueprintRevisionId } : {}),
+        ...(activity.objectiveId ? { objectiveId: activity.objectiveId } : {}),
+        ...(activity.sessionContentId ? { sessionContentId: activity.sessionContentId } : {}),
+        createdAt: now,
+      })
+      const revision = thread.revision + 1
+      await commandCtx.db.patch(thread._id, { revision, updatedAt: now })
+      return { value: { proposalId, kind: args.kind,
+        basis: artifact ? 'useful_artifact' as const : 'representative_performance' as const }, revision }
+    },
+  }),
+})
 type MemoryProjection = {
   ownerId: Id<'users'>
   threadId: Id<'learningThreads'>
@@ -37,6 +114,10 @@ type MemoryProjection = {
     activityClass: Doc<'learningThreadActivities'>['activityClass'], updatedAt: number, readOnly: true,
     evidenceStatus: 'ready' | 'unavailable' | 'not_required',
     attempt: { id: Id<'masteryAttempts'>, scorePercent: number, masteryStateAfter: Doc<'masteryRecords'>['state'] | null } | null }[]
+  promotionCandidates: { basis: 'useful_artifact' | 'representative_performance', sourceId: string,
+    label: string, allowedKinds: readonly ('review' | 'mastery')[] }[]
+  promotionProposals: { id: Id<'learningThreadPromotionProposals'>, kind: 'review' | 'mastery',
+    basis: 'useful_artifact' | 'representative_performance', sourceLabel: string }[]
 }
 
 export const getMemory = query({
@@ -45,13 +126,16 @@ export const getMemory = query({
     const userId = await requireAdaptiveQueryAccess(ctx)
     const thread = await ctx.db.get(args.threadId)
     if (!thread || thread.userId !== userId || thread.deletionStartedAt !== undefined) return null
-    const [owner, preferences, artifacts, recent] = await Promise.all([
+    const [owner, preferences, artifacts, recent, proposalRows] = await Promise.all([
       ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique(),
       ctx.db.query('learningThreadPreferences')
         .withIndex('by_userId_and_threadId_and_key', q => q.eq('userId', userId).eq('threadId', thread._id)).take(3),
       ctx.runQuery(api.learnAdaptive.listThreadArtifacts, { threadId: thread._id }),
       ctx.db.query('learningThreadActivities')
         .withIndex('by_userId_and_threadId_and_boundaryOrdinal', q => q.eq('userId', userId).eq('threadId', thread._id))
+        .order('desc').take(MEMORY_HISTORY_LIMIT),
+      ctx.db.query('learningThreadPromotionProposals')
+        .withIndex('by_userId_and_threadId_and_createdAt', q => q.eq('userId', userId).eq('threadId', thread._id))
         .order('desc').take(MEMORY_HISTORY_LIMIT),
     ])
     if (!owner) return null
@@ -65,11 +149,30 @@ export const getMemory = query({
         && typeof storedAttempt.serverScorePercent === 'number' && Number.isFinite(storedAttempt.serverScorePercent)
         ? { id: storedAttempt._id, scorePercent: storedAttempt.serverScorePercent,
             masteryStateAfter: storedAttempt.masteryStateAfter ?? null } : null
-      return { activityId: row.activityId, purpose: row.purpose, status: row.status,
+      return { activityId: row.activityId, sourceActivityId: row._id, purpose: row.purpose, status: row.status,
         activityClass: row.activityClass, updatedAt: row.updatedAt, readOnly: true as const,
-        evidenceStatus, attempt }
+        evidenceStatus, attempt, completionStatus: completion?.status ?? null }
     }))
     const continuation: { nextAction: { label: string } | null } | null = await ctx.runQuery(api.learnAdaptive.getThread, { threadId: thread._id })
+    const current = thread.currentActivityId ? await ctx.db.get(thread.currentActivityId) : null
+    const currentCompletion = current && current.userId === userId && current.threadId === thread._id
+      && !await artifactEvidenceUnavailable(ctx, thread, current)
+      ? await representativeCompletion(ctx, userId, current) : null
+    const promotionCandidates: MemoryProjection['promotionCandidates'] = [
+      ...artifacts.filter(row => row.status === 'saved' && !row.historical && row.title.trim() && row.summary.trim())
+        .map(row => ({ basis: 'useful_artifact' as const, sourceId: String(row.id), label: row.title,
+          allowedKinds: ['review', 'mastery'] as const })),
+      ...(current && currentCompletion ? [{ basis: 'representative_performance' as const,
+        sourceId: String(current._id), label: current.purpose,
+        allowedKinds: currentCompletion.status === 'passed' ? ['review', 'mastery'] as const : ['review'] as const }] : []),
+      ...history.filter(row => row.completionStatus && row.evidenceStatus === 'ready')
+        .map(row => ({ basis: 'representative_performance' as const, sourceId: String(row.sourceActivityId),
+          label: row.purpose,
+          allowedKinds: row.completionStatus === 'passed' ? ['review', 'mastery'] as const : ['review'] as const })),
+    ]
+    const artifactLabels = new Map(artifacts.map(row => [String(row.id), row]))
+    const activityLabels = new Map([...(current ? [[String(current._id), current.purpose] as const] : []),
+      ...history.map(row => [String(row.sourceActivityId), row.purpose] as const)])
     return {
       ownerId: owner._id,
       threadId: thread._id,
@@ -83,6 +186,11 @@ export const getMemory = query({
         status: row.status, revision: row.revision, updatedAt: row.updatedAt,
         historical: row.historical, readOnly: row.readOnly, evidenceLabel: row.evidenceLabel })),
       history,
+      promotionCandidates,
+      promotionProposals: proposalRows.map(row => ({ id: row._id, kind: row.kind, basis: row.basis,
+        sourceLabel: row.artifactId ? artifactLabels.get(String(row.artifactId))?.revision === row.artifactRevision
+          ? artifactLabels.get(String(row.artifactId))!.title : 'Earlier saved artifact'
+          : activityLabels.get(String(row.activityId)) ?? 'Representative task' })),
     }
   },
 })
