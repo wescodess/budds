@@ -17,6 +17,9 @@ const diagnosticQuery = import.meta.client
 const artifactQuery = import.meta.client
   ? useConvexQuery(api.learnAdaptive.getArtifactCanvas, computed(() => ({ threadId: threadId.value as never })), { enabled: allowed })
   : { data: ref(null), pending: ref(false) }
+const reflectionQuery = import.meta.client
+  ? useConvexQuery(api.learnAdaptive.getReflectionCanvas, computed(() => ({ threadId: threadId.value as never })), { enabled: allowed })
+  : { data: ref(null), pending: ref(false) }
 const userQuery = import.meta.client
   ? useConvexQuery(api.users.getUser, {}, { enabled: allowed })
   : { data: ref(null), pending: ref(false) }
@@ -44,11 +47,18 @@ const artifact = computed(() => {
   return current && value?.thread.id === current.thread.id && value.ownerId === ownerId.value
     && value.activity.id === current.currentActivity?.id ? value : null
 })
+const reflection = computed(() => {
+  const value = reflectionQuery.data.value
+  const current = thread.value
+  return current && value?.thread.id === current.thread.id && value.ownerId === ownerId.value
+    && value.activity.id === current.currentActivity?.id ? value : null
+})
 const projectionPending = computed(() => Boolean(threadQuery.pending.value || userQuery.pending.value))
 const detailPending = computed(() => thread.value?.thread.authorityKind === 'v2_mission'
-  ? canvasQuery.pending.value || artifactQuery.pending.value
-  : thread.value?.thread.authorityKind === 'standalone' ? diagnosticQuery.pending.value || artifactQuery.pending.value : false)
-const shellReady = computed(() => thread.value && !['rollback', 'ended'].includes(thread.value.thread.lifecycle))
+  ? canvasQuery.pending.value || artifactQuery.pending.value || reflectionQuery.pending.value
+  : thread.value?.thread.authorityKind === 'standalone' ? diagnosticQuery.pending.value || artifactQuery.pending.value || reflectionQuery.pending.value : false)
+const shellReady = computed(() => thread.value && thread.value.thread.lifecycle !== 'rollback'
+  && (thread.value.thread.lifecycle !== 'ended' || reflection.value?.status === 'completed'))
 const selectedActivityId = computed(() => typeof route.query.activity === 'string' ? route.query.activity : null)
 const selectedHistory = computed(() => thread.value?.history.find(item => item.id === selectedActivityId.value) ?? null)
 const showCurrent = computed(() => !selectedActivityId.value || selectedActivityId.value === thread.value?.currentActivity?.id)
@@ -105,7 +115,7 @@ function leave() { void router.push(safeDestination.value) }
       <section class="mt-6 rounded-xl border border-border bg-[var(--learn-context-surface)] p-5" aria-labelledby="learn-thread-next-title">
         <h2 id="learn-thread-next-title" class="font-dm-sans text-lg font-semibold">Your next move</h2>
         <p v-if="thread.completion" class="mt-2 text-sm" data-testid="learn-representative-outcome" role="status">{{ thread.completion.status === 'passed' ? 'Representative task passed.' : 'Representative task needs more practice.' }} This result describes the scored task, not mastery.</p>
-        <p class="mt-2 text-sm">{{ thread.completion || canvas || diagnostic || artifact ? thread.nextAction.label : detailPending ? 'Loading current activity…' : 'Review this thread from your learning home.' }}</p>
+        <p class="mt-2 text-sm">{{ thread.completion || canvas || diagnostic || artifact || reflection ? thread.nextAction.label : detailPending ? 'Loading current activity…' : 'Review this thread from your learning home.' }}</p>
         <NuxtLink v-if="thread.completion && thread.thread.authorityKind === 'v2_mission'" :to="safeDestination" data-testid="learn-representative-next-move" class="mt-2 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)]">{{ safeDestinationLabel }}</NuxtLink>
         <NuxtLink v-if="thread.nextAction.kind === 'clarify' && (canvas || diagnostic)" :to="safeDestination" class="mt-2 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)]">{{ safeDestinationLabel }}</NuxtLink>
       </section>
@@ -128,6 +138,7 @@ function leave() { void router.push(safeDestination.value) }
         <div v-show="showCurrent && !canvasUnsafe">
           <LearnAdaptiveReadySessionCanvas v-if="canvas" :key="`${ownerId}:${canvas.thread.id}:${canvas.activity.id}`" :canvas="canvas as never" :authoritative-revision="Math.max(thread.thread.revision, canvas.thread.revision)" :show-header="false" :active="showCurrent && !canvasUnsafe" @leave="leave" @inspect-evidence="inspectEvidence" />
           <LearnAdaptiveArtifactWorkspace v-else-if="artifact" :key="`${ownerId}:${artifact.thread.id}:${artifact.activity.id}`" :canvas="artifact as never" :authoritative-revision="Math.max(thread.thread.revision, artifact.thread.revision)" @leave="leave" />
+          <LearnAdaptiveReflectionNextMove v-else-if="reflection" :key="`${ownerId}:${reflection.thread.id}:${reflection.activity.id}`" :canvas="reflection as never" :authoritative-revision="Math.max(thread.thread.revision, reflection.thread.revision)" @leave="leave" />
           <LearnAdaptiveDiagnosticCanvas v-else-if="diagnostic" :key="`${ownerId}:${diagnostic.thread.id}:${diagnostic.activity?.id ?? 'draft'}`" :canvas="diagnostic as never" :authoritative-revision="Math.max(thread.thread.revision, diagnostic.thread.revision)" :show-header="false" :active="showCurrent" @leave="leave" />
           <div v-else-if="detailPending" data-testid="learn-adaptive-canvas-loading" class="rounded-lg border border-border p-5" role="status" aria-live="polite">
             <h2 class="font-dm-sans text-lg font-semibold">Loading current activity…</h2>
@@ -151,7 +162,7 @@ function leave() { void router.push(safeDestination.value) }
           </li>
         </ol>
       </section>
-      <NuxtLink v-if="canvas || diagnostic || artifact" :to="safeDestination" data-testid="learn-adaptive-safe-destination" class="mt-6 inline-flex min-h-11 items-center text-sm text-muted-foreground underline">{{ safeDestinationLabel }}</NuxtLink>
+      <NuxtLink v-if="canvas || diagnostic || artifact || reflection" :to="safeDestination" data-testid="learn-adaptive-safe-destination" class="mt-6 inline-flex min-h-11 items-center text-sm text-muted-foreground underline">{{ safeDestinationLabel }}</NuxtLink>
     </div>
   </main>
 </template>

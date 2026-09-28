@@ -9,12 +9,13 @@ import { loadReadyCanvas } from './learnAdaptiveCanvas'
 import { requireAuth } from './lib/auth'
 import { masteryAttemptArgs, submitMasteryAttemptForOwner, type MasteryAttemptActionResult } from './learnV2Mastery'
 import { needFirstDraftArgsValidator } from '../shared/learn-adaptive-draft'
-import { ADAPTIVE_OVERRIDE_VERSION, adaptiveOverrideOptionValidator, fixedNextPlanForOverride, projectAdaptiveControls } from '../shared/learn-adaptive-controls'
+import { ADAPTIVE_OVERRIDE_VERSION, adaptiveOverrideOptionValidator, fixedNextPlanForOverride, projectAdaptiveControls, reasonTextForActivity } from '../shared/learn-adaptive-controls'
 import { ADAPTIVE_REPRESENTATIVE_COMPLETION_VERSION, representativeNextAction } from '../shared/learn-adaptive-completion'
 import { LEARN_V2_MASTERY_THRESHOLD } from '../shared/learn-v2-mastery'
-import { learnActivityEventDedupeHash } from './lib/learnAdaptiveEvents'
+import { learnActivityEventDedupeHash, writeLearnActivityEvent } from './lib/learnAdaptiveEvents'
 import { adaptiveArtifactKindValidator, adaptiveArtifactStatusValidator, boundedArtifactText } from '../shared/learn-adaptive-artifact'
 import { queueAdaptiveArtifactDeletion } from './lib/learnAdaptiveArtifacts'
+import { prepareAdaptiveCommand } from '../shared/adaptive-command-authority'
 
 async function artifactEvidenceUnavailable(ctx: QueryCtx | MutationCtx, thread: Doc<'learningThreads'>, activity: Doc<'learningThreadActivities'>) {
   if (activity.activityClass !== 'factual') return false
@@ -138,6 +139,150 @@ export const getArtifactCanvas = query({
   },
 })
 
+const reflectionDecisionValidator = v.union(v.literal('accept'), v.literal('override'), v.literal('end'))
+const REFLECTION_DECISION_VERSION = 'learn-adaptive.reflection-decision.v1' as const
+
+function reflectionDecisionInput(outcome: 'accepted' | 'overridden' | 'ended') {
+  return outcome === 'accepted' ? 'accept' as const : outcome === 'overridden' ? 'override' as const : 'end' as const
+}
+
+async function reflectionReceiptMatches(thread: Doc<'learningThreads'>, activity: Doc<'learningThreadActivities'>,
+  receipt: Doc<'learnActivityCommandReceipts'>, outcome: 'accepted' | 'overridden' | 'ended') {
+  const expected = await prepareAdaptiveCommand({
+    userId: activity.userId, commandName: 'decideReflectionNextMove', targetId: String(thread._id),
+    expectedRevision: receipt.targetRevision, idempotencyKey: 'reflection-integrity-check',
+    payload: { activityId: activity.activityId, decision: reflectionDecisionInput(outcome) },
+  })
+  return receipt.requestFingerprint === expected.requestFingerprint
+}
+
+async function validReflectionActivity(activity: Doc<'learningThreadActivities'>) {
+  if (activity.activityClass !== 'non_factual' || activity.primitivePlan.length !== 1
+    || activity.primitivePlan[0]?.type !== 'reflection_next_move'
+    || activity.requiredAction.kind !== activity.primitivePlan[0].action
+    || activity.evaluationContract.kind !== 'acknowledgement'
+    || activity.evaluationContract.responseFormat !== 'none'
+    || activity.evaluationContract.passingScorePercent !== null
+    || activity.evidenceReferences.length !== 0
+    || activity.learningVoidId !== null || activity.blueprintRevisionId !== null
+    || activity.objectiveId !== null || activity.sessionContentId !== null) return null
+  const expectedReason = reasonTextForActivity({ activityClass: activity.activityClass, purpose: activity.purpose,
+    reasonCode: activity.reasonCode, sourceState: activity.decisionInputs.sourceState })
+  if (!activity.reasonText || activity.reasonText.version !== expectedReason.version
+    || activity.reasonText.purpose !== expectedReason.purpose || activity.reasonText.text !== expectedReason.text) return null
+  const replay = await replayAdaptiveActivityPlan(storedPlan(activity))
+  if (!replay.ok) return null
+  const primitive = activity.primitivePlan[0]
+  const primaryDecision = primitive.action === 'accept_next_move' ? 'accept'
+    : primitive.action === 'override_next_move' ? 'override' : 'end'
+  return primitive.props.allowedDecisions.includes(primaryDecision) ? primitive : null
+}
+
+async function validPersistedReflectionDecision(ctx: QueryCtx | MutationCtx, thread: Doc<'learningThreads'>, activity: Doc<'learningThreadActivities'>,
+  primitive: NonNullable<Awaited<ReturnType<typeof validReflectionActivity>>>) {
+  const decision = activity.reflectionDecision
+  if (!decision) return false
+  if (activity.status !== 'ended' || decision.version !== REFLECTION_DECISION_VERSION
+    || decision.nextMove !== primitive.props.nextMove
+    || !Number.isSafeInteger(decision.decisionRevision) || decision.decisionRevision < 2
+    || decision.decisionRevision > thread.revision
+    || !/^sha256:[a-f0-9]{64}$/.test(decision.idempotencyKeyHash)
+    || (decision.outcome === 'ended') !== (thread.lifecycle === 'ended')) return false
+  const receipt = await ctx.db.query('learnActivityCommandReceipts')
+    .withIndex('by_userId_and_idempotencyKeyHash', q => q.eq('userId', activity.userId).eq('idempotencyKeyHash', decision.idempotencyKeyHash))
+    .unique()
+  return Boolean(receipt && receipt.threadId === thread._id && receipt.commandName === 'decideReflectionNextMove'
+    && receipt.targetRevision + 1 === decision.decisionRevision && receipt.resultKind === 'ok'
+    && await reflectionReceiptMatches(thread, activity, receipt, decision.outcome))
+}
+
+export const getReflectionCanvas = query({
+  args: { threadId: v.id('learningThreads') },
+  handler: async (ctx, args) => {
+    const userId = await requireAdaptiveQueryAccess(ctx)
+    const thread = await ctx.db.get(args.threadId)
+    if (!thread || thread.userId !== userId || thread.deletionStartedAt !== undefined || !thread.currentActivityId) return null
+    const activity = await ctx.db.get(thread.currentActivityId)
+    if (!activity || activity.userId !== userId || activity.threadId !== thread._id) return null
+    if (activity.primitivePlan.length !== 1 || activity.primitivePlan[0]?.type !== 'reflection_next_move') return null
+    const owner = await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique()
+    if (!owner) return null
+    const primitive = await validReflectionActivity(activity)
+    const decision = activity.reflectionDecision
+    const decisionValid = !decision || primitive && await validPersistedReflectionDecision(ctx, thread, activity, primitive)
+    const ready = primitive && !decision && ['eligible', 'started'].includes(activity.status)
+      && ['ready', 'active'].includes(thread.lifecycle)
+    const completed = primitive && decision && decisionValid
+    return {
+      ownerId: owner._id,
+      thread: { id: thread._id, revision: thread.revision, outcome: thread.outcome ?? thread.originalNeed, lifecycle: thread.lifecycle },
+      activity: {
+        id: activity.activityId, planRevision: activity.planRevision, status: activity.status,
+        purpose: activity.purpose, reason: activity.reasonText?.text ?? activity.purpose,
+        primitive: ready || completed ? primitive : null, fallback: activity.fallback,
+      },
+      status: completed ? 'completed' as const : ready ? activity.status : 'blocked' as const,
+      decision: completed ? { outcome: decision.outcome, nextMove: decision.nextMove, decidedAt: decision.decidedAt } : null,
+    }
+  },
+})
+
+export const decideReflectionNextMove = mutation({
+  args: { threadId: v.id('learningThreads'), activityId: v.string(), decision: reflectionDecisionValidator,
+    expectedRevision: v.number(), idempotencyKey: v.string() },
+  handler: async (ctx, args) => await executeAdaptiveThreadCommand(ctx, {
+    threadId: args.threadId, expectedRevision: args.expectedRevision, idempotencyKey: args.idempotencyKey,
+    commandName: 'decideReflectionNextMove', payload: { activityId: args.activityId, decision: args.decision },
+    returnBlockedWhenDeleting: true,
+    replayExpiredResult: async (commandCtx, receipt, userId) => {
+      const thread = await commandCtx.db.get(receipt.threadId)
+      const activity = thread?.currentActivityId && await commandCtx.db.get(thread.currentActivityId)
+      const durable = activity?.reflectionDecision
+      if (!thread || thread.userId !== userId || !activity || activity.userId !== userId || activity.activityId !== args.activityId
+        || !durable || durable.idempotencyKeyHash !== receipt.idempotencyKeyHash
+        || durable.outcome !== (args.decision === 'accept' ? 'accepted' : args.decision === 'override' ? 'overridden' : 'ended')
+        || durable.decisionRevision !== receipt.targetRevision + 1 || durable.decisionRevision > thread.revision) return null
+      const primitive = await validReflectionActivity(activity)
+      if (!primitive || !(await validPersistedReflectionDecision(commandCtx, thread, activity, primitive))) return null
+      return { kind: 'ok' as const, value: { outcome: durable.outcome, nextMove: durable.nextMove }, revision: durable.decisionRevision, receiptId: String(receipt._id) }
+    },
+    apply: async (commandCtx, thread, userId, command) => {
+      const activity = thread.currentActivityId && await commandCtx.db.get(thread.currentActivityId)
+      if (!activity || activity.userId !== userId || activity.threadId !== thread._id || activity.activityId !== args.activityId) {
+        throw new AdaptiveCommandRejection('blocked', 'activity_unavailable', 'Reflection activity is unavailable')
+      }
+      const primitive = await validReflectionActivity(activity)
+      if (!primitive || activity.reflectionDecision || !['eligible', 'started'].includes(activity.status)
+        || !['ready', 'active'].includes(thread.lifecycle)) {
+        throw new AdaptiveCommandRejection('blocked', 'activity_unavailable', 'Reflection activity is unavailable')
+      }
+      if (!primitive.props.allowedDecisions.includes(args.decision)) {
+        throw new AdaptiveCommandRejection('blocked', 'decision_unavailable', 'That reflection choice is unavailable')
+      }
+      const outcome = args.decision === 'accept' ? 'accepted' as const : args.decision === 'override' ? 'overridden' as const : 'ended' as const
+      const revision = thread.revision + 1
+      const now = Date.now()
+      await commandCtx.db.patch(activity._id, { status: 'ended', reflectionDecision: {
+        version: REFLECTION_DECISION_VERSION, outcome, nextMove: primitive.props.nextMove,
+        decisionRevision: revision, idempotencyKeyHash: command.idempotencyKeyHash, decidedAt: now,
+      }, updatedAt: now })
+      const nextAction = args.decision === 'accept'
+        ? { kind: 'continue', label: primitive.props.nextMove, reasonCode: 'reflection_next_move_accepted', activityId: activity.activityId }
+        : args.decision === 'override'
+          ? { kind: 'override', label: 'Choose a different next move', reasonCode: 'reflection_next_move_overridden', activityId: activity.activityId }
+          : { kind: 'return_to_learn', label: 'Back to Learn', reasonCode: 'reflection_thread_ended', activityId: activity.activityId }
+      await commandCtx.db.patch(thread._id, { lifecycle: args.decision === 'end' ? 'ended' : thread.lifecycle,
+        nextAction, revision, updatedAt: now })
+      await writeLearnActivityEvent(commandCtx, { userId, threadId: thread._id, activityId: activity._id,
+        eventType: 'activity_completed', eventVersion: 'activity_completed.v1', sourceVersion: activity.planVersion,
+        contractVersion: activity.contractVersion, semanticKey: `activity:${activity.activityId}:reflection:${outcome}`,
+        occurredAt: now, reasonCode: `reflection_${outcome}`, outcomeCode: outcome,
+        metadata: { activityClass: 'non_factual', boundaryOrdinal: activity.boundaryOrdinal, planRevision: activity.planRevision } })
+      return { value: { outcome, nextMove: primitive.props.nextMove }, revision }
+    },
+  }),
+})
+
 export const setIntent = mutation({
   args: { threadId: v.id('learningThreads'), intent: needFirstDraftArgsValidator.intent, expectedRevision: v.number(), idempotencyKey: v.string() },
   handler: async (ctx, args) => await executeAdaptiveThreadCommand(ctx, {
@@ -228,12 +373,26 @@ export async function representativeCompletion(ctx: QueryCtx | MutationCtx, user
     basis: 'server_scored_representative_task' as const, activityId: activity.activityId, recordedAt: event.occurredAt }
 }
 
-function nextThreadAction(thread: Doc<'learningThreads'>, activity: Doc<'learningThreadActivities'> | null, factualCanvas: Awaited<ReturnType<typeof loadReadyCanvas>>, sourceEvidenceState: Awaited<ReturnType<typeof liveEvidenceState>>, completion: Awaited<ReturnType<typeof representativeCompletion>>) {
-  if (thread.lifecycle === 'ended' || thread.lifecycle === 'rollback') return {
+function nextThreadAction(thread: Doc<'learningThreads'>, activity: Doc<'learningThreadActivities'> | null, factualCanvas: Awaited<ReturnType<typeof loadReadyCanvas>>, sourceEvidenceState: Awaited<ReturnType<typeof liveEvidenceState>>, completion: Awaited<ReturnType<typeof representativeCompletion>>, reflectionDecisionValid = false) {
+  if (thread.lifecycle === 'rollback') return {
     kind: 'return_to_learn', label: 'Back to Learn', reasonCode: 'thread_unavailable', activityId: null,
   }
   if (thread.lifecycle === 'blocked' || thread.lifecycle === 'paused') return {
     kind: 'recover', label: 'Back to Learn', reasonCode: `thread_${thread.lifecycle}`, activityId: activity?.activityId ?? null,
+  }
+  if (activity?.reflectionDecision && reflectionDecisionValid && thread.nextAction) {
+    const decision = activity.reflectionDecision
+    const expected = decision.outcome === 'accepted'
+      ? { kind: 'continue', label: decision.nextMove, reasonCode: 'reflection_next_move_accepted' }
+      : decision.outcome === 'overridden'
+        ? { kind: 'override', label: 'Choose a different next move', reasonCode: 'reflection_next_move_overridden' }
+        : { kind: 'return_to_learn', label: 'Back to Learn', reasonCode: 'reflection_thread_ended' }
+    if (thread.nextAction.kind === expected.kind && thread.nextAction.label === expected.label
+      && thread.nextAction.reasonCode === expected.reasonCode && thread.nextAction.activityId === activity.activityId) return thread.nextAction
+    return { kind: 'recover', label: 'Back to Learn', reasonCode: 'reflection_decision_invalid', activityId: activity.activityId }
+  }
+  if (thread.lifecycle === 'ended') return {
+    kind: 'return_to_learn', label: 'Back to Learn', reasonCode: 'thread_unavailable', activityId: null,
   }
   if (activity?.activityClass === 'factual' && sourceEvidenceState !== 'ready') return {
     kind: 'recover', label: 'Review your learning mission', reasonCode: `source_${sourceEvidenceState}`, activityId: activity.activityId,
@@ -289,6 +448,9 @@ export const getThread = query({
     const sourceEvidenceState = await liveEvidenceState(ctx, thread)
     const factualCanvas = activity?.activityClass === 'factual' ? await loadReadyCanvas(ctx, userId, thread._id) : null
     const completion = await representativeCompletion(ctx, userId, activity)
+    const reflectionPrimitive = activity ? await validReflectionActivity(activity) : null
+    const reflectionDecisionValid = Boolean(activity && reflectionPrimitive
+      && await validPersistedReflectionDecision(ctx, thread, activity, reflectionPrimitive))
     const evidenceState = activity?.activityClass === 'factual'
       ? sourceEvidenceState !== 'ready' ? sourceEvidenceState
         : factualCanvas?.status === 'blocked' ? factualCanvas.recoveryState ?? 'blocked'
@@ -314,7 +476,7 @@ export const getThread = query({
         purpose: row.purpose, reasonCode: row.reasonCode, boundaryOrdinal: row.boundaryOrdinal,
         updatedAt: row.updatedAt,
       })),
-      nextAction: nextThreadAction(thread, activity, factualCanvas, sourceEvidenceState, completion),
+      nextAction: nextThreadAction(thread, activity, factualCanvas, sourceEvidenceState, completion, reflectionDecisionValid),
     }
   },
 })
