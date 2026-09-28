@@ -3,7 +3,7 @@ import { api } from '#convex/api'
 import { getErrorMessage } from '~~/shared/errors'
 import { useAdaptiveResponseDraft } from '~/composables/useAdaptiveResponseDraft'
 import type { AdaptiveFixedNextPlan, AdaptiveOverrideOption } from '~~/shared/learn-adaptive-controls'
-import { ADAPTIVE_ACTIVITY_CONTRACT_VERSION, ADAPTIVE_ACTIVITY_RENDERER_VERSION, validateAdaptiveActivityPrimitive } from '~~/shared/learn-adaptive-activity-registry'
+import { resolveAdaptiveActivityRenderer } from '~~/shared/learn-adaptive-renderer-contract'
 
 type Canvas = {
   ownerId: string
@@ -54,13 +54,11 @@ let renderOperableSeen = false
 const diagnosticValidation = computed(() => {
   const primitive = props.canvas.activity?.primitive
   if (!primitive) return { primitive: null, reason: null }
-  if (primitive.contractVersion !== ADAPTIVE_ACTIVITY_CONTRACT_VERSION
-    || primitive.rendererVersion !== ADAPTIVE_ACTIVITY_RENDERER_VERSION || Object.keys(primitive).length !== 6
-    || props.canvas.activity?.requiredAction.kind !== 'submit_response'
+  if (props.canvas.activity?.requiredAction.kind !== 'submit_response'
     || props.canvas.activity.requiredAction.label !== 'Save response') return { primitive: null, reason: 'invalid_props' as const }
-  const validated = validateAdaptiveActivityPrimitive({ type: primitive.type, action: primitive.action, props: primitive.props })
-  if (!validated.ok) return { primitive: null, reason: validated.error.code }
-  if (validated.value.type !== 'diagnostic_prompt' || primitive.testId !== validated.value.testId) return { primitive: null, reason: 'invalid_props' as const }
+  const validated = resolveAdaptiveActivityRenderer(primitive, 'diagnostic')
+  if (!validated.ok) return { primitive: null, reason: validated.reason }
+  if (validated.value.type !== 'diagnostic_prompt') return { primitive: null, reason: 'renderer_unavailable' as const }
   return { primitive: validated.value, reason: null }
 })
 const diagnostic = computed(() => diagnosticValidation.value.primitive)

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { api } from '#convex/api'
-import { ADAPTIVE_ACTIVITY_CONTRACT_VERSION, ADAPTIVE_ACTIVITY_RENDERER_VERSION, adaptiveActivityFallbackForReason, validateAdaptiveActivityPrimitive } from '~~/shared/learn-adaptive-activity-registry'
+import { adaptiveActivityFallbackForReason } from '~~/shared/learn-adaptive-activity-registry'
+import { resolveAdaptiveActivityRenderer } from '~~/shared/learn-adaptive-renderer-contract'
 import { boundedArtifactText } from '~~/shared/learn-adaptive-artifact'
 
 type Artifact = { id: string, activityId: string, artifactKind: 'note' | 'plan' | 'draft' | 'answer' | 'other', title: string, summary: string, status: 'draft' | 'saved' | 'deleted', readOnly: boolean, historical: boolean, evidenceLabel: string | null, createdAt?: number }
@@ -18,11 +19,9 @@ const deleteMutation = import.meta.client ? useConvexMutation(api.learnAdaptive.
 const validation = computed(() => {
   const primitive = props.canvas.activity.primitive
   if (!primitive || props.canvas.status === 'blocked') return { value: null, reason: 'renderer_unavailable' as const }
-  if (primitive.contractVersion !== ADAPTIVE_ACTIVITY_CONTRACT_VERSION || primitive.rendererVersion !== ADAPTIVE_ACTIVITY_RENDERER_VERSION
-    || Object.keys(primitive).length !== 6) return { value: null, reason: 'invalid_props' as const }
-  const result = validateAdaptiveActivityPrimitive({ type: primitive.type, action: primitive.action, props: primitive.props })
-  if (!result.ok) return { value: null, reason: result.error.code }
-  if (result.value.type !== 'artifact_workspace' || result.value.action !== 'save_artifact' || result.value.testId !== primitive.testId) return { value: null, reason: 'unsupported_action' as const }
+  const result = resolveAdaptiveActivityRenderer(primitive, 'artifact')
+  if (!result.ok) return { value: null, reason: result.reason }
+  if (result.value.type !== 'artifact_workspace' || result.value.action !== 'save_artifact') return { value: null, reason: 'unsupported_action' as const }
   return { value: result.value, reason: null }
 })
 const workspace = computed(() => validation.value.value)

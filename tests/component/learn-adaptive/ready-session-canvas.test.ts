@@ -54,6 +54,51 @@ describe('ready adaptive Canvas', () => {
       requiredAction: { kind: 'submit_comparison', label: 'Submit comparison' } },
   }
 
+  const primitiveFixtures = [
+    { type: 'cited_explanation', action: 'continue', label: 'Continue', props: canvas.activity.primitive.props, heading: 'Gravity' },
+    { type: 'worked_example', action: 'reveal_example', label: 'Reveal example', props: { heading: 'Guided gravity', problem: 'Trace the apple.', steps: ['Find the mass.'], guidedConsequence: 'This is guided.', sourceRefs: ['source_1'] }, heading: 'Guided gravity' },
+    { type: 'independent_application', action: 'submit_response', label: 'Submit response', props: { prompt: 'Explain why an apple falls.', responseFormat: 'long_text', draftPersistence: true }, heading: 'Apply it independently' },
+    { type: 'source_comparison', action: 'choose_source', label: 'Choose source', props: comparison.activity.primitive.props, heading: 'Compare two sources' },
+  ] as const
+
+  it.each(primitiveFixtures)('mounts $type in ready, completed, mobile, and fallback states', async fixture => {
+    const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
+    const activity = { ...canvas.activity,
+      evidenceScope: fixture.type === 'source_comparison' ? comparison.activity.evidenceScope : canvas.activity.evidenceScope,
+      primitive: { ...canvas.activity.primitive, type: fixture.type, action: fixture.action,
+        testId: `learn-primitive-${fixture.type.replaceAll('_', '-')}`, props: fixture.props },
+      requiredAction: { kind: fixture.action, label: fixture.label } }
+    const readyCanvas = { ...canvas, activity }
+    const ready = await mountSuspended(Comp.default, { props: { canvas: readyCanvas }, attachTo: document.body })
+    const readyArticle = ready.get(`[data-testid="${activity.primitive.testId}-ready"]`)
+    expect(readyArticle.attributes('aria-label')).toBe('Activity ready')
+    expect(readyArticle.get('h2').text()).toContain(fixture.heading)
+    expect(ready.get('[data-testid="learn-canvas-start"]').element).toBeInstanceOf(HTMLButtonElement)
+    ready.unmount()
+
+    const completed = await mountSuspended(Comp.default, { props: { canvas: { ...readyCanvas, status: 'feedback',
+      savedResponse: { response: 'Gravity pulls the apple down.', confidence: 4 } } }, attachTo: document.body })
+    expect(completed.get(`[data-testid="${activity.primitive.testId}"]`).exists()).toBe(true)
+    expect(completed.get('[data-testid="learn-canvas-status"]').attributes('role')).toBe('status')
+    expect(completed.get('[data-testid="learn-canvas-status"]').text()).toContain('Response scored')
+    completed.unmount()
+
+    const mobile = await mountSuspended(Comp.default, { props: { canvas: { ...readyCanvas, status: 'started' }, showHeader: false }, attachTo: document.body })
+    expect(mobile.get('[data-testid="learn-adaptive-canvas"]').attributes('aria-label')).toBe('Current activity')
+    expect(mobile.get(`[data-testid="${activity.primitive.testId}"]`).classes()).toContain('min-w-0')
+    const mobileAction = fixture.type === 'cited_explanation' ? 'learn-canvas-continue'
+      : fixture.type === 'worked_example' ? 'learn-canvas-reveal-example' : 'learn-canvas-submit'
+    expect(mobile.get(`[data-testid="${mobileAction}"]`).classes()).toContain('min-h-11')
+    mobile.unmount()
+
+    const fallback = await mountSuspended(Comp.default, { props: { canvas: { ...readyCanvas,
+      activity: { ...activity, primitive: { ...activity.primitive, rendererVersion: 'learn-adaptive.renderer.v2' } } } }, attachTo: document.body })
+    expect(fallback.get('[data-testid="learn-activity-fallback"]').attributes('role')).toBe('alert')
+    expect(fallback.get('[data-testid="learn-canvas-fallback-action"]').text()).toBe('Continue safely')
+    expect(fallback.find(`[data-testid="${activity.primitive.testId}"]`).exists()).toBe(false)
+    fallback.unmount()
+  })
+
   it('renders an independent application and submits through the authoritative scoring path', async () => {
     const application = { ...canvas, status: 'started', activity: { ...canvas.activity,
       primitive: { ...canvas.activity.primitive, type: 'independent_application', action: 'submit_response', testId: 'learn-primitive-independent-application', props: { prompt: 'Explain why an apple falls.', responseFormat: 'long_text', draftPersistence: true } },

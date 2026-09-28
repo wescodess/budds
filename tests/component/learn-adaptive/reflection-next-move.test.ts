@@ -23,6 +23,31 @@ const canvas = {
 
 beforeEach(() => { decide.mockReset().mockResolvedValue({ kind: 'ok', revision: 4, value: { outcome: 'accepted' } }); reportRenderFailure.mockReset().mockResolvedValue({ recorded: true }); isOnline.value = true })
 
+it('mounts reflection ready, completed, mobile, and version fallback fixtures with accessible actions', async () => {
+  const Component = await import('~/components/learn-adaptive/ReflectionNextMove.vue')
+  const ready = await mountSuspended(Component.default, { props: { canvas }, attachTo: document.body })
+  expect(ready.get('[data-testid="learn-primitive-reflection-next-move"]').attributes('aria-labelledby')).toBe('learn-reflection-title')
+  expect(ready.get('[data-testid="learn-reflection-accept"]').text()).toBe('Accept next move')
+  ready.unmount()
+
+  const completedCanvas = { ...canvas, status: 'completed', decision: { outcome: 'accepted', nextMove: 'Try one independent example.', decidedAt: 2 } }
+  const completed = await mountSuspended(Component.default, { props: { canvas: completedCanvas }, attachTo: document.body })
+  expect(completed.get('[data-testid="learn-reflection-completed"]').attributes('role')).toBe('status')
+  expect(completed.get('[data-testid="learn-reflection-completed"]').text()).toContain('Next move accepted')
+  completed.unmount()
+
+  const mobile = await mountSuspended(Component.default, { props: { canvas }, attachTo: document.body })
+  expect(mobile.get('[data-testid="learn-reflection-accept"]').classes()).toContain('w-full')
+  expect(mobile.get('[data-testid="learn-reflection-accept"]').classes()).toContain('min-h-11')
+  mobile.unmount()
+
+  const fallback = await mountSuspended(Component.default, { props: { canvas: { ...canvas,
+    activity: { ...canvas.activity, primitive: { ...primitive, rendererVersion: 'learn-adaptive.renderer.v2' } } } }, attachTo: document.body })
+  expect(fallback.get('[data-testid="learn-activity-fallback"]').attributes('role')).toBe('alert')
+  expect(fallback.find('[data-testid="learn-reflection-accept"]').exists()).toBe(false)
+  fallback.unmount()
+})
+
 it('renders persisted reflection content and bounded keyboard actions without a mastery claim', async () => {
   const Component = await import('~/components/learn-adaptive/ReflectionNextMove.vue')
   const wrapper = await mountSuspended(Component.default, { props: { canvas } })

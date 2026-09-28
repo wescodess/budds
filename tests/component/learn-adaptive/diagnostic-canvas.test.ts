@@ -25,6 +25,31 @@ const base = {
 describe('standalone diagnostic Canvas', () => {
   beforeEach(() => { continueDraft.mockReset().mockResolvedValue({ kind: 'ok' }); submit.mockReset().mockResolvedValue({ kind: 'ok' }); renderAck.mockReset().mockResolvedValue({ status: 'recorded' }); renderFailure.mockReset().mockResolvedValue({ recorded: true }); applyOverride.mockReset().mockResolvedValue({ kind: 'ok', revision: 3, value: { fixedNextPlan: { version: 'learn-adaptive.fixed-next-plan.v1', inputOption: 'time_45', nextActivity: 'continue_with_time', availableTime: '45', difficulty: 'same', maxNewActivities: 1, authority: 'server_revalidate_at_boundary' } } }); isOnline.value = true; sessionStorage.clear() })
 
+  it('mounts diagnostic ready, completed, mobile, and version fallback fixtures with accessible actions', async () => {
+    const Comp = await import('~/components/learn-adaptive/DiagnosticCanvas.vue')
+    const ready = await mountSuspended(Comp.default, { props: { canvas: base }, attachTo: document.body })
+    expect(ready.get('[data-testid="learn-primitive-diagnostic-prompt"] h2').text()).toContain('starting point')
+    expect(ready.get('[data-testid="learn-diagnostic-response"]').attributes('aria-label')).toBe('Your response')
+    ready.unmount()
+
+    const completed = await mountSuspended(Comp.default, { props: { canvas: { ...base,
+      activity: { ...base.activity, response: 'Gravity is a force.' } } }, attachTo: document.body })
+    expect(completed.get('[data-testid="learn-diagnostic-saved"]').attributes('role')).toBe('status')
+    expect(completed.find('[data-testid="learn-diagnostic-submit"]').exists()).toBe(false)
+    completed.unmount()
+
+    const mobile = await mountSuspended(Comp.default, { props: { canvas: base, showHeader: false }, attachTo: document.body })
+    expect(mobile.get('[data-testid="learn-diagnostic-canvas"]').attributes('aria-label')).toBe('Current activity')
+    expect(mobile.get('[data-testid="learn-diagnostic-submit"]').classes()).toContain('min-h-11')
+    mobile.unmount()
+
+    const fallback = await mountSuspended(Comp.default, { props: { canvas: { ...base,
+      activity: { ...base.activity, primitive: { ...base.activity.primitive, rendererVersion: 'learn-adaptive.renderer.v2' } } } }, attachTo: document.body })
+    expect(fallback.get('[data-testid="learn-diagnostic-fallback"]').attributes('role')).toBe('status')
+    expect(fallback.find('[data-testid="learn-diagnostic-submit"]').exists()).toBe(false)
+    fallback.unmount()
+  })
+
   it('opens Why controls, explains disabled choices and preserves the response through a time choice', async () => {
     const Comp = await import('~/components/learn-adaptive/DiagnosticCanvas.vue')
     const controlled = { ...base, activity: { ...base.activity, controls: { reasonText: { version: 'learn-adaptive.reason-text.v1', purpose: 'Record your starting point.', text: 'No source was selected, so this non-factual starting point does not make factual claims.' }, selected: null, fixedNextPlan: null,
