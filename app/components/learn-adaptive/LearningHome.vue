@@ -45,6 +45,7 @@ const urlField = ref<HTMLInputElement | null>(null)
 const pasteField = ref<HTMLTextAreaElement | null>(null)
 
 const userQuery = import.meta.client ? useConvexQuery(api.users.getUser, {}) : { data: ref<{ _id: string } | null>(null) }
+const resumeQuery = import.meta.client ? useConvexQuery(api.learnAdaptive.listResumeCandidates, {}) : { data: ref([]) }
 const foldersQuery = import.meta.client ? useConvexQuery(api.folders.listAllFolders, {}) : { data: ref<Folder[]>([]) }
 const documentArgs = computed(() => ({ folderId: documentFolderId.value as never }))
 const documentsQuery = import.meta.client
@@ -53,6 +54,16 @@ const documentsQuery = import.meta.client
 const ownerId = computed(() => userQuery.data.value?._id ? String(userQuery.data.value._id) : null)
 const folders = computed(() => (foldersQuery.data.value ?? []) as Folder[])
 const documents = computed(() => ((documentsQuery.data.value ?? []) as Document[]).filter(document => document.status === 'success'))
+const resumeCandidates = computed(() => ownerId.value ? (resumeQuery.data.value ?? []).filter(candidate => candidate.ownerId === ownerId.value).slice(0, 4) : [])
+function resumeReason(reason: string) {
+  return reason === 'unfinished_activity' ? 'Unfinished activity' : reason === 'needs_review' ? 'Knowledge to review'
+    : reason === 'source_recovery' ? 'Source needs attention' : 'Recent thread'
+}
+function openResume(event: MouseEvent, threadId: string) {
+  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+  event.preventDefault()
+  emit('resume', threadId)
+}
 
 function newDraftId() {
   return crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -191,6 +202,17 @@ function discardPaste() {
 <template>
   <section class="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6" data-testid="learn-adaptive-home">
     <header><p class="font-inter text-xs uppercase tracking-wide text-primary">Learn anything</p><h1 class="mt-2 font-dm-sans text-3xl font-bold">What do you need to understand or do?</h1><p class="mt-2 text-sm text-muted-foreground">Start with the real need. You do not need a course, rubric, schedule, or Calendar connection.</p></header>
+    <section v-if="resumeCandidates.length" class="mt-6" aria-labelledby="learn-resume-heading" data-testid="learn-adaptive-resume-list">
+      <h2 id="learn-resume-heading" class="font-dm-sans text-xl font-semibold">Pick up where you left off</h2>
+      <ol class="mt-3 space-y-3">
+        <li v-for="candidate in resumeCandidates" :key="candidate.threadId" class="rounded-xl border border-border bg-card p-4">
+          <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">{{ resumeReason(candidate.reason) }}</p>
+          <h3 class="mt-1 font-medium">{{ candidate.outcome }}</h3>
+          <p v-if="candidate.unresolvedPoint" class="mt-1 text-sm text-muted-foreground">Still open: {{ candidate.unresolvedPoint }}</p>
+          <NuxtLink :to="`/app/learn/thread/${encodeURIComponent(candidate.threadId)}`" class="mt-2 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline" @click="openResume($event, candidate.threadId)">{{ candidate.reason === 'source_recovery' ? 'Review thread' : 'Resume thread' }}</NuxtLink>
+        </li>
+      </ol>
+    </section>
     <form @submit.prevent="submit"><UiCard class="mt-6 gap-5 p-5">
       <label class="text-sm font-medium">Your goal or question<textarea ref="needField" v-model="need" data-testid="learn-adaptive-need" rows="4" maxlength="8000" class="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2" placeholder="For example: Help me understand why this proof works." :aria-describedby="invalidField === 'need' ? ERROR_ID : undefined" :aria-invalid="invalidField === 'need' ? true : undefined" /></label>
       <label class="text-sm font-medium">Useful outcome <span class="font-normal text-muted-foreground">(optional)</span><textarea ref="outcomeField" v-model="outcome" data-testid="learn-adaptive-outcome" rows="2" maxlength="8000" class="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2" placeholder="For example: Explain the proof clearly in my own words." :aria-describedby="invalidField === 'outcome' ? ERROR_ID : undefined" :aria-invalid="invalidField === 'outcome' ? true : undefined" /></label>

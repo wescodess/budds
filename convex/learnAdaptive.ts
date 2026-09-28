@@ -570,57 +570,143 @@ function nextThreadAction(thread: Doc<'learningThreads'>, activity: Doc<'learnin
   return { kind: 'continue', label: 'Start learning', reasonCode: 'thread_ready_for_first_move', activityId: null }
 }
 
+async function projectThread(ctx: QueryCtx, userId: string, thread: Doc<'learningThreads'>) {
+  const owner = await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique()
+  if (!owner) return null
+  const activity = thread.currentActivityId ? await ctx.db.get(thread.currentActivityId) : null
+  if (activity && (activity.userId !== userId || activity.threadId !== thread._id)) return null
+  if (thread.authorityKind === 'v2_mission') {
+    const learningVoid = thread.learningVoidId && await ctx.db.get(thread.learningVoidId)
+    if (!learningVoid || learningVoid.userId !== userId
+      || activity?.activityClass === 'factual' && activity.learningVoidId !== learningVoid._id) return null
+  }
+  const sourceEvidenceState = await liveEvidenceState(ctx, thread)
+  const factualCanvas = activity?.activityClass === 'factual' ? await loadReadyCanvas(ctx, userId, thread._id) : null
+  const completion = await representativeCompletion(ctx, userId, activity)
+  const reflectionPrimitive = activity ? await validReflectionActivity(activity) : null
+  const reflectionDecisionValid = Boolean(activity && reflectionPrimitive
+    && await validPersistedReflectionDecision(ctx, thread, activity, reflectionPrimitive))
+  const artifactActionValid = await validArtifactNextAction(ctx, thread)
+  const liveArtifact = await latestLiveThreadArtifact(ctx, thread)
+  const artifactActivity = liveArtifact ? await ctx.db.get(liveArtifact.activityId) : null
+  const artifactHistorical = !artifactActivity || artifactActivity.userId !== userId || artifactActivity.threadId !== thread._id
+    || await artifactEvidenceUnavailable(ctx, thread, artifactActivity)
+  const evidenceState = activity?.activityClass === 'factual'
+    ? sourceEvidenceState !== 'ready' ? sourceEvidenceState
+      : factualCanvas?.status === 'blocked' ? factualCanvas.recoveryState ?? 'blocked'
+        : factualCanvas ? 'ready' : 'unavailable'
+    : sourceEvidenceState
+  const recent = await ctx.db.query('learningThreadActivities')
+    .withIndex('by_userId_and_threadId_and_boundaryOrdinal', q => q.eq('userId', userId).eq('threadId', thread._id))
+    .order('desc').take(HISTORY_LIMIT + 1)
+  return {
+    ownerId: owner._id,
+    thread: {
+      id: thread._id, goal: thread.originalNeed, outcome: thread.outcome ?? thread.originalNeed, intent: thread.intent,
+      sourceScope: thread.sourceScope, evidenceState, lifecycle: thread.lifecycle, revision: thread.revision,
+      lifecycleChangedAt: thread.lifecycleChangedAt ?? null,
+      authorityKind: thread.authorityKind, learningVoidId: thread.learningVoidId ?? null,
+    },
+    currentActivity: activity ? {
+      id: activity.activityId, status: activity.status, activityClass: activity.activityClass,
+      purpose: activity.purpose, reasonCode: activity.reasonCode, boundaryOrdinal: activity.boundaryOrdinal,
+    } : null,
+    attemptContext: activity ? {
+      priorOutcome: activity.decisionInputs.priorOutcome,
+      assistance: activity.decisionInputs.assistance,
+    } : null,
+    artifact: liveArtifact ? { id: liveArtifact._id, title: liveArtifact.title, status: liveArtifact.status,
+      activityId: artifactActivity?.activityId ?? null, historical: artifactHistorical } : null,
+    unresolvedPoint: thread.unresolvedPoint?.slice(0, 240) ?? null,
+    completion,
+    history: recent.filter(row => row._id !== thread.currentActivityId).slice(0, HISTORY_LIMIT).map(row => ({
+      id: row.activityId, status: row.status, activityClass: row.activityClass,
+      purpose: row.purpose, reasonCode: row.reasonCode, boundaryOrdinal: row.boundaryOrdinal,
+      updatedAt: row.updatedAt,
+    })),
+    nextAction: nextThreadAction(thread, activity, factualCanvas, sourceEvidenceState, completion, reflectionDecisionValid, artifactActionValid),
+  }
+}
+
 export const getThread = query({
   args: { threadId: v.id('learningThreads') },
   handler: async (ctx, args) => {
     const userId = await requireAdaptiveQueryAccess(ctx)
     const thread = await ctx.db.get(args.threadId)
     if (!thread || thread.userId !== userId || thread.deletionStartedAt !== undefined) return null
-    const owner = await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique()
-    if (!owner) return null
-    const activity = thread.currentActivityId ? await ctx.db.get(thread.currentActivityId) : null
-    if (activity && (activity.userId !== userId || activity.threadId !== thread._id)) return null
-    if (thread.authorityKind === 'v2_mission') {
-      const learningVoid = thread.learningVoidId && await ctx.db.get(thread.learningVoidId)
-      if (!learningVoid || learningVoid.userId !== userId
-        || activity?.activityClass === 'factual' && activity.learningVoidId !== learningVoid._id) return null
+    return await projectThread(ctx, userId, thread)
+  },
+})
+
+// A bounded window of recent owner-owned threads is ranked by durable value.
+// Priority is lexicographic; timestamps only settle ties within a priority.
+const RESUME_CANDIDATE_LIMIT = 16
+const RESUME_SIGNAL_LIMIT = 8
+export const listResumeCandidates = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await requireAdaptiveQueryAccess(ctx)
+    const recentThreads = await ctx.db.query('learningThreads')
+      .withIndex('by_userId_and_updatedAt', q => q.eq('userId', userId))
+      .order('desc').take(RESUME_CANDIDATE_LIMIT)
+    const threads = new Map(recentThreads.map(thread => [String(thread._id), thread]))
+    for (const status of ['eligible', 'started', 'feedback'] as const) {
+      const activities = await ctx.db.query('learningThreadActivities')
+        .withIndex('by_userId_and_status_and_updatedAt', q => q.eq('userId', userId).eq('status', status))
+        .order('desc').take(RESUME_SIGNAL_LIMIT)
+      for (const activity of activities) {
+        const thread = await ctx.db.get(activity.threadId)
+        if (thread?.userId === userId && thread.currentActivityId === activity._id) threads.set(String(thread._id), thread)
+      }
     }
-    const sourceEvidenceState = await liveEvidenceState(ctx, thread)
-    const factualCanvas = activity?.activityClass === 'factual' ? await loadReadyCanvas(ctx, userId, thread._id) : null
-    const completion = await representativeCompletion(ctx, userId, activity)
-    const reflectionPrimitive = activity ? await validReflectionActivity(activity) : null
-    const reflectionDecisionValid = Boolean(activity && reflectionPrimitive
-      && await validPersistedReflectionDecision(ctx, thread, activity, reflectionPrimitive))
-    const artifactActionValid = await validArtifactNextAction(ctx, thread)
-    const evidenceState = activity?.activityClass === 'factual'
-      ? sourceEvidenceState !== 'ready' ? sourceEvidenceState
-        : factualCanvas?.status === 'blocked' ? factualCanvas.recoveryState ?? 'blocked'
-          : factualCanvas ? 'ready' : 'unavailable'
-      : sourceEvidenceState
-    const recent = await ctx.db.query('learningThreadActivities')
-      .withIndex('by_userId_and_threadId_and_boundaryOrdinal', q => q.eq('userId', userId).eq('threadId', thread._id))
-      .order('desc').take(HISTORY_LIMIT + 1)
-    return {
-      ownerId: owner._id,
-      thread: {
-        id: thread._id, outcome: thread.outcome ?? thread.originalNeed, intent: thread.intent,
-        sourceScope: thread.sourceScope, evidenceState, lifecycle: thread.lifecycle, revision: thread.revision,
-        lifecycleChangedAt: thread.lifecycleChangedAt ?? null,
-        authorityKind: thread.authorityKind, learningVoidId: thread.learningVoidId ?? null,
-      },
-      currentActivity: activity ? {
-        id: activity.activityId, status: activity.status, activityClass: activity.activityClass,
-        purpose: activity.purpose, reasonCode: activity.reasonCode, boundaryOrdinal: activity.boundaryOrdinal,
-      } : null,
-      unresolvedPoint: thread.unresolvedPoint?.slice(0, 240) ?? null,
-      completion,
-      history: recent.filter(row => row._id !== thread.currentActivityId).slice(0, HISTORY_LIMIT).map(row => ({
-        id: row.activityId, status: row.status, activityClass: row.activityClass,
-        purpose: row.purpose, reasonCode: row.reasonCode, boundaryOrdinal: row.boundaryOrdinal,
-        updatedAt: row.updatedAt,
-      })),
-      nextAction: nextThreadAction(thread, activity, factualCanvas, sourceEvidenceState, completion, reflectionDecisionValid, artifactActionValid),
+    for (const evidenceState of ['stale', 'invalidated', 'unavailable'] as const) {
+      const changedThreads = await ctx.db.query('learningThreads')
+        .withIndex('by_userId_and_evidenceState_and_updatedAt', q => q.eq('userId', userId).eq('evidenceState', evidenceState))
+        .order('desc').take(RESUME_SIGNAL_LIMIT)
+      for (const thread of changedThreads) threads.set(String(thread._id), thread)
     }
+    const vulnerableRecords = await ctx.db.query('masteryRecords')
+      .withIndex('by_userId_and_state_and_updatedAt', q => q.eq('userId', userId).eq('state', 'needs_review'))
+      .order('desc').take(RESUME_SIGNAL_LIMIT)
+    for (const record of vulnerableRecords) {
+      const activities = await ctx.db.query('learningThreadActivities')
+        .withIndex('by_userId_and_objectiveId_and_updatedAt', q => q.eq('userId', userId).eq('objectiveId', record.objectiveId))
+        .order('desc').take(RESUME_SIGNAL_LIMIT)
+      for (const activity of activities) {
+        if (activity.blueprintRevisionId !== record.blueprintRevisionId) continue
+        const thread = await ctx.db.get(activity.threadId)
+        if (thread?.userId === userId && thread.currentActivityId === activity._id) threads.set(String(thread._id), thread)
+      }
+    }
+    const candidates = []
+    for (const thread of threads.values()) {
+      if (thread.deletionStartedAt !== undefined || ['ended', 'rollback'].includes(thread.lifecycle)) continue
+      const projection = await projectThread(ctx, userId, thread)
+      if (!projection) continue
+      const activity = thread.currentActivityId ? await ctx.db.get(thread.currentActivityId) : null
+      const action = projection.nextAction
+      const safeAction = !['recover', 'return_to_learn', 'wait'].includes(action.kind)
+        && (activity?.activityClass !== 'factual' || projection.thread.evidenceState === 'ready')
+      const planValid = activity && (await replayAdaptiveActivityPlan(storedPlan(activity))).ok
+      const unfinished = Boolean(activity && planValid && ['eligible', 'started', 'feedback'].includes(activity.status) && safeAction)
+      const mastery = activity?.objectiveId && activity.blueprintRevisionId
+        ? await ctx.db.query('masteryRecords').withIndex('by_userId_and_blueprintRevisionId_and_objectiveId', q => q.eq('userId', userId)
+          .eq('blueprintRevisionId', activity.blueprintRevisionId!).eq('objectiveId', activity.objectiveId!)).first()
+        : null
+      const vulnerable = mastery?.state === 'needs_review'
+      const changedSource = activity?.activityClass === 'factual'
+        && ['stale', 'invalidated', 'unavailable'].includes(await liveEvidenceState(ctx, thread))
+      const priority = unfinished ? 3 : vulnerable ? 2 : changedSource ? 1 : 0
+      const reason = unfinished ? 'unfinished_activity' as const : vulnerable ? 'needs_review' as const
+        : changedSource ? 'source_recovery' as const : 'recent_thread' as const
+      candidates.push({ ownerId: projection.ownerId, threadId: thread._id, outcome: projection.thread.outcome, intent: projection.thread.intent,
+        lifecycle: projection.thread.lifecycle, evidenceState: projection.thread.evidenceState,
+        unresolvedPoint: projection.unresolvedPoint, currentActivity: projection.currentActivity,
+        nextAction: action, reason, updatedAt: thread.updatedAt, priority })
+    }
+    return candidates.sort((a, b) => b.priority - a.priority || b.updatedAt - a.updatedAt
+      || String(a.threadId).localeCompare(String(b.threadId)))
+      .map(({ priority: _priority, ...candidate }) => candidate)
   },
 })
 

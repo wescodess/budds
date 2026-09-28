@@ -81,3 +81,7 @@ _Avoid_: Leave, delete
 **Unresolved Point**:
 The learner's stated gap or an explicitly chosen next move that remains open in a Learning Thread. It does not imply a score or mastery state.
 _Avoid_: Desired outcome, inferred misconception
+
+**Resume Target**:
+A Learning Thread offered to a returning learner for unfinished work, knowledge marked for review, or source recovery. Recency only distinguishes threads with the same kind of need.
+_Avoid_: Latest thread

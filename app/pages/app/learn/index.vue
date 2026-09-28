@@ -158,7 +158,7 @@ watch(() => userQuery.data.value?._id ? String(userQuery.data.value._id) : null,
 function openMission(id: string) { void router.push(`/app/learn/${id}`) }
 function resumeDraft(id: string) { void router.push(`/app/learn/create?draftId=${encodeURIComponent(id)}`) }
 function openDiagnosticThread(threadId: string) {
-  void router.push(`/app/learn/thread/${threadId}`)
+  void router.push(`/app/learn/thread/${encodeURIComponent(threadId)}`)
 }
 watch(() => readySession.value && `${readySession.value.id}:${readySession.value.revision}`, (value, previous) => { if (value !== previous) attachKey.value = null })
 async function continueReadySession() {
@@ -299,7 +299,7 @@ async function selectThreadIntent(intent: Intent) {
         </div>
       </template>
       <section v-else-if="decisionHydrating || decisionLoadError" class="mx-auto max-w-2xl p-6" aria-live="polite" data-testid="learn-clarification-restore"><p>{{ decisionHydrating ? 'Restoring your saved clarification…' : decisionLoadError }}</p><UiButton v-if="decisionLoadError" type="button" class="mt-3 min-h-11" data-testid="learn-clarification-restore-retry" @click="restoreInitialDecision">Retry</UiButton></section>
-      <LearnAdaptiveLearningHome v-else :busy="draftBusy" :server-error="draftError" :acknowledged-request-key="acknowledgedRequestKey" @start="createNeedDraft" />
+      <LearnAdaptiveLearningHome v-else :busy="draftBusy" :server-error="draftError" :acknowledged-request-key="acknowledgedRequestKey" @start="createNeedDraft" @resume="openDiagnosticThread" />
     </template>
     <LearnV2LearnHub v-else :snapshot="hub" @create="router.push('/app/learn/create')" @open-mission="openMission" @start-session="openMission" @continue-setup="openMission" @resume-draft="resumeDraft" />
     <nav v-if="allowed && adaptiveAllowed" aria-label="Existing learning routes" class="mx-auto w-full max-w-3xl px-4 pb-8 sm:px-6" data-testid="learn-legacy-handoffs">

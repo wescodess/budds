@@ -16,6 +16,7 @@ const setIntent = vi.fn()
 const getInitialDecision = vi.fn()
 const currentUser = ref<{ _id: string } | null>({ _id: 'owner_1' })
 const folderRows = ref([{ _id: 'folder_1', name: 'Physics' }])
+const resumeRows = ref([])
 const routeState = reactive({ path: '/app/learn', query: { legacy: undefined as string | undefined } })
 
 mockNuxtImport('useLearnV2Journey', () => () => ({ allowed, checkingAccess, hub }))
@@ -29,7 +30,10 @@ mockNuxtImport('useConvexMutation', () => (reference: unknown) => {
   if (name?.includes('setIntent')) return { mutate: setIntent }
   return { mutate: createDraft }
 })
-mockNuxtImport('useConvexQuery', () => (reference: never) => ({ data: getFunctionName(reference) === 'folders:listAllFolders' ? folderRows : currentUser }))
+mockNuxtImport('useConvexQuery', () => (reference: never) => {
+  const name = getFunctionName(reference)
+  return { data: name === 'folders:listAllFolders' ? folderRows : name === 'learnAdaptive:listResumeCandidates' ? resumeRows : currentUser }
+})
 mockNuxtImport('useConvex', () => () => ({ query: getInitialDecision }))
 
 describe('Learn V2 route entry', () => {
