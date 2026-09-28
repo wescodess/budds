@@ -42,6 +42,176 @@ describe('ready adaptive Canvas', () => {
     sessionStorage.clear()
   })
 
+  const comparison = {
+    ...canvas,
+    activity: { ...canvas.activity,
+      evidenceScope: { ...canvas.activity.evidenceScope, sourceRefs: ['source_1', 'source_2'] },
+      primitive: { ...canvas.activity.primitive, type: 'source_comparison', action: 'submit_comparison', testId: 'learn-primitive-source-comparison',
+        props: { prompt: 'Which source better supports the claim?', sources: [
+          { sourceRef: 'source_1', label: 'Source A', summary: 'A primary observation.', integrityState: 'accepted' },
+          { sourceRef: 'source_2', label: 'Source B', summary: 'A later review.', integrityState: 'accepted' },
+        ] } },
+      requiredAction: { kind: 'submit_comparison', label: 'Submit comparison' } },
+  }
+
+  it('renders two accepted source cards and preserves choice and rationale after a failed submission', async () => {
+    stage.mockRejectedValueOnce(new Error('timeout before commit'))
+    const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
+    const ready = await mountSuspended(Comp.default, { props: { canvas: comparison } })
+    expect(ready.get('[data-testid="learn-primitive-source-comparison-ready"]').text()).toContain('Which source better supports the claim?')
+    ready.unmount()
+    const wrapper = await mountSuspended(Comp.default, { props: { canvas: { ...comparison, status: 'started' } } })
+    const cards = wrapper.findAll('[data-testid^="learn-canvas-comparison-source-"]')
+    expect(cards).toHaveLength(2)
+    await vi.waitFor(() => expect(meaningfulStart).toHaveBeenCalledWith({ studySessionId: 'session_1', expectedContentRevision: 1 }))
+    expect(cards[0]!.text()).toContain('Accepted evidence')
+    expect(cards[1]!.text()).toContain('A later review.')
+    await wrapper.get('[data-testid="learn-canvas-comparison-choice-2"]').setValue()
+    await wrapper.get('[data-testid="learn-canvas-comparison-rationale"]').setValue('The review explains the newer result.')
+    await wrapper.get('[data-testid="learn-canvas-confidence-3"]').setValue()
+    await wrapper.get('[data-testid="learn-canvas-submit"]').trigger('click')
+    await vi.waitFor(() => expect(wrapper.get('[role="alert"]').text()).toContain('Submission did not confirm'))
+    expect((wrapper.get('[data-testid="learn-canvas-comparison-choice-2"]').element as HTMLInputElement).checked).toBe(true)
+    expect((wrapper.get('[data-testid="learn-canvas-comparison-rationale"]').element as HTMLTextAreaElement).value).toBe('The review explains the newer result.')
+    expect(stage).toHaveBeenCalledWith(expect.objectContaining({ response: '{"version":"learn-adaptive.source-comparison-response.v1","sourceRef":"source_2","rationale":"The review explains the newer result."}' }))
+    wrapper.unmount()
+  })
+
+  it('focuses the comparison heading after the shared session start succeeds', async () => {
+    const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
+    const wrapper = await mountSuspended(Comp.default, { props: { canvas: comparison }, attachTo: document.body })
+    await wrapper.get('[data-testid="learn-canvas-start"]').trigger('click')
+    await vi.waitFor(() => expect(start).toHaveBeenCalledOnce())
+    await vi.waitFor(() => expect(document.activeElement).toBe(wrapper.get('[data-testid="learn-canvas-comparison-heading"]').element))
+    wrapper.unmount()
+  })
+
+  it('renders a saved comparison and refuses a source integrity value that does not match the accepted server scope', async () => {
+    const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
+    const draftKey = 'learn-comparison:owner_1:thread_1:ready-session:session_1:plan:1'
+    sessionStorage.setItem(draftKey, JSON.stringify({ sourceRef: 'source_2', rationale: 'Stale local draft.', savedAt: Date.now() }))
+    const saved = await mountSuspended(Comp.default, { props: { canvas: { ...comparison, status: 'feedback', savedResponse: { response: '{"version":"learn-adaptive.source-comparison-response.v1","sourceRef":"source_1","rationale":"It is the primary observation."}', confidence: 4 } } } })
+    expect(saved.get('[data-testid="learn-primitive-source-comparison"]').text()).toContain('Accepted evidence')
+    expect(saved.get('[data-testid="learn-canvas-comparison-saved"]').text()).toContain('Source A')
+    expect((saved.get('[data-testid="learn-canvas-comparison-choice-1"]').element as HTMLInputElement).checked).toBe(true)
+    expect(saved.get('[data-testid="learn-canvas-comparison-saved"]').text()).toContain('Rationale: It is the primary observation.')
+    expect(sessionStorage.getItem(draftKey)).toBeNull()
+    saved.unmount()
+    const conflict = { ...comparison, activity: { ...comparison.activity, primitive: { ...comparison.activity.primitive,
+      props: { ...comparison.activity.primitive.props, sources: [comparison.activity.primitive.props.sources[0], { ...comparison.activity.primitive.props.sources[1], integrityState: 'conflict' }] } } } }
+    const fallback = await mountSuspended(Comp.default, { props: { canvas: conflict } })
+    expect(fallback.get('[data-testid="learn-activity-fallback"]').text()).toContain('evidence')
+    await vi.waitFor(() => expect(reportRenderFailure).toHaveBeenCalledWith(expect.objectContaining({ reasonCode: 'invalid_evidence_link' })))
+    fallback.unmount()
+  })
+
+  it('keeps source identity, evidence access, and form errors usable in a narrow layout', async () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 })
+    const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
+    const wrapper = await mountSuspended(Comp.default, { props: { canvas: { ...comparison, status: 'started' } }, attachTo: document.body })
+    expect(wrapper.get('[data-testid="learn-primitive-source-comparison"]').classes()).toContain('min-w-0')
+    expect(wrapper.get('[data-testid="learn-canvas-comparison-source-1"]').classes()).toContain('min-w-0')
+    expect(wrapper.get('[data-testid="learn-canvas-comparison-source-2"]').text()).toContain('Accepted evidence')
+    expect(wrapper.get('[data-testid="learn-canvas-source-2"]').attributes('aria-label')).toContain('Source B')
+    await wrapper.get('[data-testid="learn-canvas-submit"]').trigger('click')
+    expect(wrapper.get('[role="alert"]').text()).toContain('Choose one of the two sources')
+    await wrapper.get('[data-testid="learn-canvas-comparison-choice-1"]').setValue()
+    await wrapper.get('[data-testid="learn-canvas-submit"]').trigger('click')
+    expect(wrapper.get('[role="alert"]').text()).toContain('Explain why')
+    expect(document.activeElement).toBe(wrapper.get('[data-testid="learn-canvas-comparison-rationale"]').element)
+    await wrapper.get('[data-testid="learn-canvas-comparison-rationale"]').setValue('Primary observation.')
+    expect((wrapper.get('[data-testid="learn-canvas-comparison-rationale"]').element as HTMLTextAreaElement).value).toBe('Primary observation.')
+    await wrapper.get('[data-testid="learn-canvas-submit"]').trigger('click')
+    expect(wrapper.get('[role="alert"]').text()).toContain('Choose your confidence')
+    wrapper.unmount()
+  })
+
+  it.each([
+    ['ASCII', 'a'.repeat(11_950)],
+    ['multibyte', '🙂'.repeat(3_000)],
+  ])('explains an oversized %s comparison and focuses the rationale without submitting', async (_, rationale) => {
+    const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
+    const wrapper = await mountSuspended(Comp.default, { props: { canvas: { ...comparison, status: 'started' } }, attachTo: document.body })
+    await wrapper.get('[data-testid="learn-canvas-comparison-choice-1"]').setValue()
+    await wrapper.get('[data-testid="learn-canvas-comparison-rationale"]').setValue(rationale)
+    await wrapper.get('[data-testid="learn-canvas-confidence-3"]').setValue()
+    expect(wrapper.get('[data-testid="learn-canvas-submit"]').attributes('disabled')).toBeUndefined()
+    await wrapper.get('[data-testid="learn-canvas-submit"]').trigger('click')
+    expect(wrapper.get('[role="alert"]').text()).toContain('12 KB')
+    expect(document.activeElement).toBe(wrapper.get('[data-testid="learn-canvas-comparison-rationale"]').element)
+    expect((wrapper.get('[data-testid="learn-canvas-comparison-rationale"]').element as HTMLTextAreaElement).value).toBe(rationale)
+    expect(stage).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it.each([
+    ['ASCII at the field limit', 'a'.repeat(12_000)],
+    ['multibyte', '🙂'.repeat(3_000)],
+  ])('restores an oversized %s comparison choice and rationale after refresh', async (_, rationale) => {
+    const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
+    const current = { ...comparison, status: 'started' }
+    const first = await mountSuspended(Comp.default, { props: { canvas: current } })
+    await first.get('[data-testid="learn-canvas-comparison-choice-2"]').setValue()
+    await first.get('[data-testid="learn-canvas-comparison-rationale"]').setValue(rationale)
+    first.unmount()
+
+    const restored = await mountSuspended(Comp.default, { props: { canvas: current } })
+    expect((restored.get('[data-testid="learn-canvas-comparison-choice-2"]').element as HTMLInputElement).checked).toBe(true)
+    expect((restored.get('[data-testid="learn-canvas-comparison-rationale"]').element as HTMLTextAreaElement).value).toBe(rationale)
+    await restored.get('[data-testid="learn-canvas-confidence-3"]').setValue()
+    await restored.get('[data-testid="learn-canvas-submit"]').trigger('click')
+    expect(restored.get('[role="alert"]').text()).toContain('12 KB')
+    expect(stage).not.toHaveBeenCalled()
+    restored.unmount()
+  })
+
+  it('discards a comparison draft beyond the bounded rationale field', async () => {
+    const key = 'learn-comparison:owner_1:thread_1:ready-session:session_1:plan:1'
+    sessionStorage.setItem(key, JSON.stringify({ sourceRef: 'source_2', rationale: 'a'.repeat(12_001), savedAt: Date.now() }))
+    const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
+    const wrapper = await mountSuspended(Comp.default, { props: { canvas: { ...comparison, status: 'started' } } })
+    expect((wrapper.get('[data-testid="learn-canvas-comparison-choice-2"]').element as HTMLInputElement).checked).toBe(false)
+    expect((wrapper.get('[data-testid="learn-canvas-comparison-rationale"]').element as HTMLTextAreaElement).value).toBe('')
+    expect(sessionStorage.getItem(key)).toBeNull()
+    wrapper.unmount()
+  })
+
+  it('restores a blocked comparison draft when the same plan recovers without remounting, but not a new plan', async () => {
+    const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
+    const current = { ...comparison, status: 'started', activity: { ...comparison.activity, draftKind: 'source_comparison' } }
+    const first = await mountSuspended(Comp.default, { props: { canvas: current } })
+    await first.get('[data-testid="learn-canvas-comparison-choice-2"]').setValue()
+    await first.get('[data-testid="learn-canvas-comparison-rationale"]').setValue('The later review is more direct.')
+    first.unmount()
+
+    const blocked = { ...current, status: 'blocked', responsePrompt: null, activity: { ...current.activity, primitive: null } }
+    const restored = await mountSuspended(Comp.default, { props: { canvas: blocked } })
+    expect(restored.get('[data-testid="learn-activity-fallback"]').exists()).toBe(true)
+    expect(restored.find('[data-testid="learn-primitive-source-comparison"]').exists()).toBe(false)
+    await restored.setProps({ canvas: current })
+    expect((restored.get('[data-testid="learn-canvas-comparison-choice-2"]').element as HTMLInputElement).checked).toBe(true)
+    expect((restored.get('[data-testid="learn-canvas-comparison-rationale"]').element as HTMLTextAreaElement).value).toBe('The later review is more direct.')
+
+    await restored.setProps({ canvas: { ...current, activity: { ...current.activity, planRevision: 2 } } })
+    expect((restored.get('[data-testid="learn-canvas-comparison-choice-2"]').element as HTMLInputElement).checked).toBe(false)
+    expect((restored.get('[data-testid="learn-canvas-comparison-rationale"]').element as HTMLTextAreaElement).value).toBe('')
+    await restored.setProps({ canvas: { ...canvas, status: 'started', activity: { ...canvas.activity, planRevision: 3 } } })
+    expect((restored.get('[data-testid="learn-canvas-response"]').element as HTMLTextAreaElement).value).toBe('')
+    restored.unmount()
+  })
+
+  it.each([
+    ['conflict', 'An unresolved source conflict'],
+    ['gap', 'An evidence gap'],
+  ])('names a server-projected %s while keeping the factual activity blocked', async (recoveryEvidenceIssue, message) => {
+    const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
+    const blocked = { ...comparison, status: 'blocked', recoveryEvidenceIssue, activity: { ...comparison.activity, primitive: null }, responsePrompt: null }
+    const wrapper = await mountSuspended(Comp.default, { props: { canvas: blocked } })
+    expect(wrapper.get('[data-testid="learn-activity-fallback"]').text()).toContain(message)
+    expect(wrapper.find('[data-testid="learn-canvas-submit"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it.each([
     ['unknown_primitive', { type: 'generated_widget' }],
     ['unsupported_action', { action: 'run_tool' }],

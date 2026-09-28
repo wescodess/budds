@@ -5,24 +5,25 @@ import { getFunctionName } from 'convex/server'
 const continueDraft = vi.fn()
 const submit = vi.fn()
 const renderAck = vi.fn()
+const renderFailure = vi.fn()
 const applyOverride = vi.fn()
 const isOnline = ref(true)
 mockNuxtImport('useOnlineStatus', () => () => ({ isOnline }))
 mockNuxtImport('useConvexMutation', () => (reference: never) => {
   const name = getFunctionName(reference) ?? ''
-  return { mutate: name.includes('continueDraft') ? continueDraft : name.includes('recordDiagnosticRendered') ? renderAck : name.includes('applyOverride') ? applyOverride : submit }
+  return { mutate: name.includes('continueDraft') ? continueDraft : name.includes('recordDiagnosticRendered') ? renderAck : name.includes('reportRenderFailure') ? renderFailure : name.includes('applyOverride') ? applyOverride : submit }
 })
 
 const base = {
   ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Check my understanding', intent: 'refresh', revision: 2 },
   status: 'eligible', evidenceState: 'preparing', decisionPending: false,
   recovery: { title: 'Your material is preparing', body: 'You can record what you already know while the selected material prepares.', action: 'Review source' },
-  activity: { id: 'diagnostic:thread_1', status: 'eligible', primitive: { type: 'diagnostic_prompt', action: 'submit_response', testId: 'learn-primitive-diagnostic-prompt', props: { prompt: 'What do you already know?', responseFormat: 'short_text' } }, response: null,
+  activity: { id: 'diagnostic:thread_1', status: 'eligible', planRevision: 1, primitive: { contractVersion: 'learn-adaptive.activity-contract.v1', rendererVersion: 'learn-adaptive.renderer.v1', type: 'diagnostic_prompt', action: 'submit_response', testId: 'learn-primitive-diagnostic-prompt', props: { prompt: 'What do you already know?', responseFormat: 'short_text', assistance: 'none' } }, response: null,
     requiredAction: { kind: 'submit_response', label: 'Save response' } },
 }
 
 describe('standalone diagnostic Canvas', () => {
-  beforeEach(() => { continueDraft.mockReset().mockResolvedValue({ kind: 'ok' }); submit.mockReset().mockResolvedValue({ kind: 'ok' }); renderAck.mockReset().mockResolvedValue({ status: 'recorded' }); applyOverride.mockReset().mockResolvedValue({ kind: 'ok', revision: 3, value: { fixedNextPlan: { version: 'learn-adaptive.fixed-next-plan.v1', inputOption: 'time_45', nextActivity: 'continue_with_time', availableTime: '45', difficulty: 'same', maxNewActivities: 1, authority: 'server_revalidate_at_boundary' } } }); isOnline.value = true; sessionStorage.clear() })
+  beforeEach(() => { continueDraft.mockReset().mockResolvedValue({ kind: 'ok' }); submit.mockReset().mockResolvedValue({ kind: 'ok' }); renderAck.mockReset().mockResolvedValue({ status: 'recorded' }); renderFailure.mockReset().mockResolvedValue({ recorded: true }); applyOverride.mockReset().mockResolvedValue({ kind: 'ok', revision: 3, value: { fixedNextPlan: { version: 'learn-adaptive.fixed-next-plan.v1', inputOption: 'time_45', nextActivity: 'continue_with_time', availableTime: '45', difficulty: 'same', maxNewActivities: 1, authority: 'server_revalidate_at_boundary' } } }); isOnline.value = true; sessionStorage.clear() })
 
   it('opens Why controls, explains disabled choices and preserves the response through a time choice', async () => {
     const Comp = await import('~/components/learn-adaptive/DiagnosticCanvas.vue')
@@ -85,6 +86,44 @@ describe('standalone diagnostic Canvas', () => {
     expect(wrapper.get('[data-testid="learn-primitive-diagnostic-prompt"]').text()).toContain('already know')
     expect(wrapper.get('[data-testid="learn-diagnostic-submit"]').attributes('disabled')).toBeUndefined()
     await vi.waitFor(() => expect(renderAck).toHaveBeenCalledWith({ threadId: 'thread_1', activityId: 'diagnostic:thread_1' }))
+  })
+
+  it('keeps a long diagnostic non-factual, labelled, and actionable when empty', async () => {
+    const Comp = await import('~/components/learn-adaptive/DiagnosticCanvas.vue')
+    const long = { ...base, activity: { ...base.activity, primitive: { ...base.activity.primitive, props: { ...base.activity.primitive.props, responseFormat: 'long_text', assistance: 'hint_available' } } } }
+    const wrapper = await mountSuspended(Comp.default, { props: { canvas: long } })
+    expect(wrapper.get('[data-testid="learn-primitive-diagnostic-prompt"]').text()).toContain('non-factual')
+    expect(wrapper.get('[data-testid="learn-diagnostic-response"]').attributes('aria-label')).toBe('Your response')
+    expect(wrapper.get('[data-testid="learn-diagnostic-response"]').attributes('rows')).toBe('8')
+    await wrapper.get('[data-testid="learn-diagnostic-submit"]').trigger('click')
+    expect(wrapper.get('[role="alert"]').text()).toContain('Add a response')
+    expect(submit).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('falls back for a malformed diagnostic plan without acknowledging or submitting it', async () => {
+    const Comp = await import('~/components/learn-adaptive/DiagnosticCanvas.vue')
+    const invalid = { ...base, activity: { ...base.activity, primitive: { ...base.activity.primitive, props: { ...base.activity.primitive.props, prompt: '<script>bad</script>' } } } }
+    const wrapper = await mountSuspended(Comp.default, { props: { canvas: invalid } })
+    expect(wrapper.get('[data-testid="learn-diagnostic-fallback"]').text()).toContain('cannot be displayed safely')
+    expect(wrapper.find('[data-testid="learn-diagnostic-submit"]').exists()).toBe(false)
+    expect(renderAck).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(renderFailure).toHaveBeenCalledWith({ threadId: 'thread_1', activityId: 'diagnostic:thread_1', expectedPlanRevision: 1, reasonCode: 'executable_content' }))
+    wrapper.unmount()
+  })
+
+  it('describes an unfinished diagnostic as an on-device draft until a valid activity returns', async () => {
+    const Comp = await import('~/components/learn-adaptive/DiagnosticCanvas.vue')
+    const key = 'learn-response:owner_1:thread_1:diagnostic:thread_1'
+    sessionStorage.setItem(key, JSON.stringify({ response: 'My unsent starting point.', confidence: null, savedAt: Date.now() }))
+    const invalid = { ...base, activity: { ...base.activity, primitive: { ...base.activity.primitive, props: { ...base.activity.primitive.props, prompt: '<script>bad</script>' } } } }
+    const wrapper = await mountSuspended(Comp.default, { props: { canvas: invalid } })
+    expect(wrapper.get('[data-testid="learn-diagnostic-fallback"]').text()).toContain('unfinished response is kept on this device')
+    expect(wrapper.get('[data-testid="learn-diagnostic-fallback"]').text()).toContain('return when this activity is available')
+    expect(wrapper.get('[data-testid="learn-diagnostic-fallback"]').text()).not.toContain('saved response')
+    await wrapper.setProps({ canvas: base })
+    expect((wrapper.get('[data-testid="learn-diagnostic-response"]').element as HTMLTextAreaElement).value).toBe('My unsent starting point.')
+    wrapper.unmount()
   })
 
   it('saves one response and keeps it visible through a ready status transition', async () => {

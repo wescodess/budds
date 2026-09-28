@@ -12,7 +12,7 @@ const projection = ref({ ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 
 const diagnostic = ref({ ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Check my understanding', intent: 'refresh', revision: 2 },
   status: 'eligible', evidenceState: 'preparing', decisionPending: false,
   recovery: { title: 'Your material is preparing', body: 'Record what you know.', action: 'Back to Learn' },
-  activity: { id: 'diagnostic:thread_1', status: 'eligible', primitive: { type: 'diagnostic_prompt', action: 'submit_response', testId: 'learn-primitive-diagnostic-prompt', props: { prompt: 'What do you already know?', responseFormat: 'short_text' } }, response: null,
+  activity: { id: 'diagnostic:thread_1', status: 'eligible', planRevision: 1, primitive: { contractVersion: 'learn-adaptive.activity-contract.v1', rendererVersion: 'learn-adaptive.renderer.v1', type: 'diagnostic_prompt', action: 'submit_response', testId: 'learn-primitive-diagnostic-prompt', props: { prompt: 'What do you already know?', responseFormat: 'short_text', assistance: 'none' } }, response: null,
     requiredAction: { kind: 'submit_response', label: 'Save response' } } })
 
 mockNuxtImport('useLearnAdaptiveAccess', () => () => ({ allowed, checkingAccess: ref(false) }))

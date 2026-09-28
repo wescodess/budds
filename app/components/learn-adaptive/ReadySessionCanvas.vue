@@ -2,15 +2,17 @@
 import { api } from '#convex/api'
 import { getErrorMessage } from '~~/shared/errors'
 import { useAdaptiveResponseDraft } from '~/composables/useAdaptiveResponseDraft'
+import { useAdaptiveComparisonDraft } from '~/composables/useAdaptiveComparisonDraft'
 import type { AdaptiveFixedNextPlan, AdaptiveOverrideOption } from '~~/shared/learn-adaptive-controls'
 import { ADAPTIVE_ACTIVITY_CONTRACT_VERSION, ADAPTIVE_ACTIVITY_RENDERER_VERSION, adaptiveActivityFallbackForReason, validateAdaptiveActivityPrimitive, type AdaptiveActivityValidationReason } from '~~/shared/learn-adaptive-activity-registry'
+import { decodeSourceComparisonResponse, encodeSourceComparisonResponse, sourceComparisonResponseFitsLimit } from '~~/shared/learn-adaptive-source-comparison-response'
 
 type Canvas = {
   ownerId: string
   status: string
   thread: { id: string, outcome: string, intent: string, revision: number }
   activity: {
-    id: string, status: string, purpose: string, reasonCode: string, planRevision?: number
+    id: string, status: string, purpose: string, reasonCode: string, planRevision?: number, draftKind?: 'source_comparison' | null
     evidenceScope?: { version: string, integrityState: string, sourceRefs: string[] }
     controls?: { reasonText: { version: string, purpose: string, text: string }, selected: AdaptiveOverrideOption | null, fixedNextPlan: AdaptiveFixedNextPlan | null,
       options: Array<{ key: AdaptiveOverrideOption, label: string, available: boolean, unavailableReason: 'evidence' | 'mastery' | 'state' | 'policy' | null }> }
@@ -21,6 +23,7 @@ type Canvas = {
   session: { studySessionId: string, revision: number, contentRevision: number, planRecordRevision: number, blueprintRecordRevision: number, scheduledStartAt: number, scheduledEndAt: number | null, timezone: string }
   responsePrompt: string | null
   recoveryState?: string | null
+  recoveryEvidenceIssue?: 'conflict' | 'gap' | null
   recovery?: { title: string, body: string, action: string } | null
   savedResponse?: { response: string, confidence: number } | null
 }
@@ -38,12 +41,36 @@ const submitAction = import.meta.client ? useConvexAction(api.learnAdaptive.subm
 const sessionRevision = ref(props.canvas.session.revision)
 const threadRevision = ref(Math.max(props.canvas.thread.revision, props.authoritativeRevision ?? 0))
 const started = ref(['started', 'submitted', 'scoring', 'reconciling', 'feedback'].includes(props.canvas.status))
-const responseStep = ref(['submitted', 'scoring', 'reconciling', 'feedback'].includes(props.canvas.status))
+const responseStep = ref(props.canvas.activity.primitive?.type === 'source_comparison' || ['submitted', 'scoring', 'reconciling', 'feedback'].includes(props.canvas.status))
 const exampleRevealed = ref(props.canvas.activity.primitive?.type !== 'worked_example' || ['submitted', 'scoring', 'reconciling', 'feedback'].includes(props.canvas.status))
 const exampleRevealPending = ref(false)
 const exampleStepsHeading = ref<HTMLElement | null>(null)
 const responseHeading = ref<HTMLElement | null>(null)
+const comparisonHeading = ref<HTMLElement | null>(null)
 const response = ref(props.canvas.savedResponse?.response ?? '')
+const comparisonDraftKey = computed(() => {
+  const activity = props.canvas.activity
+  if ((activity.draftKind ?? (activity.primitive?.type === 'source_comparison' ? 'source_comparison' : null)) !== 'source_comparison') return null
+  if (!Number.isSafeInteger(activity.planRevision) || !activity.planRevision || activity.planRevision < 1) return null
+  return `learn-comparison:${props.canvas.ownerId}:${props.canvas.thread.id}:${activity.id}:plan:${activity.planRevision}`
+})
+const comparisonChoice = ref(decodeSourceComparisonResponse(response.value, undefined, true)?.sourceRef ?? '')
+const comparisonRationale = ref(decodeSourceComparisonResponse(response.value, undefined, true)?.rationale ?? '')
+const comparisonChoiceGroup = ref<HTMLElement | null>(null)
+const comparisonRationaleField = ref<HTMLTextAreaElement | null>(null)
+let locallyEncodedComparisonDraft = ''
+watch([comparisonChoice, comparisonRationale], ([sourceRef, rationale]) => {
+  if (comparisonDraftKey.value && !staged.value) {
+    locallyEncodedComparisonDraft = sourceRef || rationale ? encodeSourceComparisonResponse(sourceRef, rationale) : ''
+    response.value = locallyEncodedComparisonDraft
+  }
+})
+watch(response, (value) => {
+  if (!comparisonDraftKey.value || value === locallyEncodedComparisonDraft) return
+  const parsed = decodeSourceComparisonResponse(value, undefined, true)
+  if ((parsed?.sourceRef ?? '') !== comparisonChoice.value) comparisonChoice.value = parsed?.sourceRef ?? ''
+  if ((parsed?.rationale ?? '') !== comparisonRationale.value) comparisonRationale.value = parsed?.rationale ?? ''
+})
 const confidence = ref<number | null>(props.canvas.savedResponse?.confidence ?? null)
 const authoritativeSavedResponse = ref(props.canvas.savedResponse ? { ...props.canvas.savedResponse } : null)
 const assistanceText = ref<string | null>(null)
@@ -52,7 +79,8 @@ const error = ref<string | null>(null)
 const notice = ref('')
 const scoreState = ref<'idle' | 'pending' | 'complete' | 'unconfirmed' | 'reconciling' | 'blocked'>('idle')
 const staged = ref(!!props.canvas.savedResponse || props.canvas.status === 'submitted' || props.canvas.status === 'scoring' || props.canvas.status === 'reconciling' || props.canvas.status === 'feedback')
-useAdaptiveResponseDraft(`learn-response:${props.canvas.ownerId}:${props.canvas.thread.id}:${props.canvas.activity.id}`, response, staged, confidence)
+useAdaptiveResponseDraft(comparisonDraftKey.value ? null : `learn-response:${props.canvas.ownerId}:${props.canvas.thread.id}:${props.canvas.activity.id}`, response, staged, confidence)
+useAdaptiveComparisonDraft(comparisonDraftKey, comparisonChoice, comparisonRationale, staged)
 const startKey = ref<string | null>(null)
 const stageKey = ref<string | null>(null)
 const scoreKey = ref<string | null>(null)
@@ -70,7 +98,7 @@ watch([() => props.canvas.thread.revision, () => props.authoritativeRevision], (
   threadRevision.value = Math.max(threadRevision.value, canvasRevision, authoritativeRevision ?? 0)
 })
 watch(() => props.canvas.status, value => {
-  if (value === 'started') started.value = true
+  if (value === 'started') { started.value = true; if (props.canvas.activity.primitive?.type === 'source_comparison') responseStep.value = true }
   if (['submitted', 'scoring', 'reconciling', 'feedback'].includes(value)) { started.value = true; staged.value = true; responseStep.value = true }
   if (value === 'reconciling') scoreState.value = 'reconciling'
   if (value === 'feedback') scoreState.value = 'complete'
@@ -82,6 +110,7 @@ watch([
   () => props.canvas.activity.primitive?.action,
 ], () => {
   exampleRevealed.value = props.canvas.activity.primitive?.type !== 'worked_example' || responseStep.value
+  if (props.canvas.activity.primitive?.type === 'source_comparison') responseStep.value = true
 })
 watch(() => props.canvas.savedResponse, (saved) => {
   if (!saved) return
@@ -113,7 +142,7 @@ watch([started, responseStep, exampleRevealed, isOnline, busy, meaningfulStartRe
   try {
     await nextTick()
     if (!meaningfulStartOperableSeen) {
-      if (showingResponse || !renderedPrimitive.value || !props.canvas.responsePrompt || !meaningfulStartAction.value || meaningfulStartAction.value.disabled
+      if ((showingResponse && renderedPrimitive.value?.type !== 'source_comparison') || !renderedPrimitive.value || !props.canvas.responsePrompt || !meaningfulStartAction.value || meaningfulStartAction.value.disabled
         || meaningfulStartAction.value.textContent?.trim() !== props.canvas.activity.requiredAction.label) {
         scheduleMeaningfulStartRetry()
         return
@@ -149,13 +178,27 @@ const renderValidation = computed(() => {
     || primitive.rendererVersion !== ADAPTIVE_ACTIVITY_RENDERER_VERSION
     || Object.keys(primitive).length !== 6) return { reason: 'invalid_props' as const, primitive: null }
   const context = Object.fromEntries(scope.sourceRefs.map(sourceRef => [sourceRef, { integrityState: 'accepted' as const }]))
-  const validated = validateAdaptiveActivityPrimitive({ type: primitive.type, action: primitive.action, props: primitive.props }, context)
+  let inputProps = primitive.props
+  if (primitive.type === 'source_comparison') {
+    const raw = primitive.props as { prompt?: unknown, sources?: unknown }
+    if (!raw || typeof raw !== 'object' || !Array.isArray(raw.sources) || raw.sources.length !== 2) return { reason: 'invalid_props' as const, primitive: null }
+    const sources = raw.sources.map((source: unknown) => {
+      if (!source || typeof source !== 'object' || Array.isArray(source)) return null
+      const value = source as Record<string, unknown>
+      if (Object.keys(value).length !== 4 || value.integrityState !== 'accepted'
+        || typeof value.sourceRef !== 'string' || !scope.sourceRefs.includes(value.sourceRef)) return null
+      return { sourceRef: value.sourceRef, label: value.label, summary: value.summary }
+    })
+    if (sources.includes(null)) return { reason: 'invalid_evidence_link' as const, primitive: null }
+    inputProps = { prompt: raw.prompt, sources }
+  }
+  const validated = validateAdaptiveActivityPrimitive({ type: primitive.type, action: primitive.action, props: inputProps }, context)
   if (!validated.ok) return { reason: validated.error.code, primitive: null }
   if (primitive.testId !== validated.value.testId) return { reason: 'invalid_props' as const, primitive: null }
-  if (validated.value.type !== 'cited_explanation' && validated.value.type !== 'worked_example') return { reason: 'renderer_unavailable' as const, primitive: null }
+  if (validated.value.type !== 'cited_explanation' && validated.value.type !== 'worked_example' && validated.value.type !== 'source_comparison') return { reason: 'renderer_unavailable' as const, primitive: null }
   if (validated.value.type === 'cited_explanation' && validated.value.action !== 'continue'
     || props.canvas.activity.requiredAction.kind !== validated.value.action
-    || props.canvas.activity.requiredAction.label !== (validated.value.action === 'reveal_example' ? 'Reveal example' : 'Continue')) return { reason: 'unsupported_action' as const, primitive: null }
+    || props.canvas.activity.requiredAction.label !== (validated.value.type === 'source_comparison' ? (validated.value.action === 'choose_source' ? 'Choose source' : 'Submit comparison') : validated.value.action === 'reveal_example' ? 'Reveal example' : 'Continue')) return { reason: 'unsupported_action' as const, primitive: null }
   const prompt = props.canvas.responsePrompt
   if (typeof prompt !== 'string' || !prompt.trim()) return { reason: 'invalid_props' as const, primitive: null }
   if (prompt.length > 4_000) return { reason: 'oversized_prop' as const, primitive: null }
@@ -167,6 +210,7 @@ const renderFailureCode = computed<AdaptiveActivityValidationReason | null>(() =
 const renderedPrimitive = computed(() => renderValidation.value.primitive)
 const citedExplanation = computed(() => renderedPrimitive.value?.type === 'cited_explanation' ? renderedPrimitive.value : null)
 const workedExample = computed(() => renderedPrimitive.value?.type === 'worked_example' ? renderedPrimitive.value : null)
+const sourceComparison = computed(() => renderedPrimitive.value?.type === 'source_comparison' ? renderedPrimitive.value : null)
 async function recordWorkedExampleGuidance() {
   if (!workedExample.value || !started.value || staged.value || exampleRevealed.value || exampleRevealPending.value || !isOnline.value) return false
   exampleRevealPending.value = true
@@ -255,7 +299,8 @@ watch([renderFailureCode, isOnline, () => props.canvas.activity.id, () => props.
   if (!reasonCode || !Number.isSafeInteger(planRevision) || !planRevision || planRevision < 1) return
   void reportCanvasFailure(reasonCode, activityId, planRevision)
 }, { immediate: true })
-const canSubmit = computed(() => isOnline.value && !busy.value && !staged.value && response.value.trim().length > 0 && response.value.length <= 12_000 && confidence.value !== null)
+const canSubmit = computed(() => isOnline.value && !busy.value && !staged.value && response.value.trim().length > 0 && response.value.length <= 12_000 && confidence.value !== null
+  && (!sourceComparison.value || sourceComparison.value.props.sources.some(source => source.sourceRef === comparisonChoice.value) && comparisonRationale.value.trim().length > 0))
 async function start() {
   if (!isOnline.value || busy.value || started.value || props.canvas.status !== 'ready') return
   busy.value = true; error.value = null
@@ -265,7 +310,11 @@ async function start() {
     await startMutation.mutate({ studySessionId: props.canvas.session.studySessionId as never, expectedSessionRevision: dispatchedRevision, expectedContentRevision: props.canvas.session.contentRevision, idempotencyKey: startKey.value })
     sessionRevision.value = Math.max(sessionRevision.value, dispatchedRevision + 1)
     started.value = true
-    notice.value = workedExample.value ? 'Session started. Review the guided example.' : 'Session started. Read the supported explanation.'
+    notice.value = sourceComparison.value ? 'Session started. Compare the two supported sources.' : workedExample.value ? 'Session started. Review the guided example.' : 'Session started. Read the supported explanation.'
+    if (sourceComparison.value) {
+      await nextTick()
+      comparisonHeading.value?.focus()
+    }
   }
   catch (cause) { error.value = getErrorMessage(cause, 'Could not start this session. Try again.') }
   finally { busy.value = false }
@@ -345,6 +394,33 @@ async function submit() {
   finally { busy.value = false }
   if (stageSucceeded) await score(submissionSnapshot)
 }
+
+async function submitWithValidation() {
+  if (sourceComparison.value && !staged.value && isOnline.value && !busy.value) {
+    if (!sourceComparison.value.props.sources.some(source => source.sourceRef === comparisonChoice.value)) {
+      error.value = 'Choose one of the two sources before submitting.'
+      comparisonChoiceGroup.value?.focus()
+      return
+    }
+    if (!comparisonRationale.value.trim()) {
+      error.value = 'Explain why you chose that source before submitting.'
+      comparisonRationaleField.value?.focus()
+      return
+    }
+    if (confidence.value === null) {
+      error.value = 'Choose your confidence before submitting.'
+      return
+    }
+    const candidate = encodeSourceComparisonResponse(comparisonChoice.value, comparisonRationale.value)
+    if (!sourceComparisonResponseFitsLimit(candidate)) {
+      error.value = 'This comparison exceeds 12 KB. Shorten your rationale before submitting.'
+      comparisonRationaleField.value?.focus()
+      return
+    }
+    response.value = candidate
+  }
+  await submit()
+}
 </script>
 
 <template>
@@ -360,6 +436,7 @@ async function submit() {
     <div v-if="canvas.status === 'blocked' || !renderedPrimitive || !canvas.responsePrompt" :data-testid="renderFallback?.testId ?? canvas.activity.fallback.testId" :role="canvas.recoveryState === 'preparing' ? 'status' : 'alert'" class="mt-6 rounded-xl border border-border bg-card p-5">
       <h2 class="font-dm-sans text-lg font-semibold">{{ renderFallback?.title ?? canvas.recovery?.title ?? canvas.activity.fallback.title }}</h2>
       <p class="mt-2 text-sm text-muted-foreground">{{ renderFallback?.body ?? canvas.recovery?.body ?? canvas.activity.fallback.body }}</p>
+      <p v-if="canvas.status === 'blocked' && canvas.recoveryEvidenceIssue" data-testid="learn-canvas-evidence-issue" class="mt-2 text-sm" role="status">{{ canvas.recoveryEvidenceIssue === 'conflict' ? 'An unresolved source conflict blocks this activity.' : 'An evidence gap blocks this activity.' }} Review the source in Learn before continuing.</p>
       <div v-if="authoritativeSavedResponse" data-testid="learn-canvas-saved-fallback" class="mt-4 rounded-lg border border-border p-3 text-sm">
         <p role="status">Your response is saved. This activity must become available before scoring can continue.</p>
       </div>
@@ -368,8 +445,9 @@ async function submit() {
     </div>
     <div v-else-if="!started" data-testid="learn-canvas-ready" class="mt-6 rounded-xl border border-border bg-card p-5">
       <article :data-testid="`${renderedPrimitive.testId}-ready`" aria-label="Activity ready">
-        <h2 class="font-dm-sans text-xl font-semibold">{{ renderedPrimitive.props.heading }}</h2>
+        <h2 class="font-dm-sans text-xl font-semibold">{{ renderedPrimitive.type === 'source_comparison' ? 'Compare two sources' : renderedPrimitive.props.heading }}</h2>
         <p v-if="renderedPrimitive.type === 'cited_explanation'" class="mt-2 text-sm text-muted-foreground">A cited explanation supported by {{ renderedPrimitive.props.sourceRefs.length }} accepted {{ renderedPrimitive.props.sourceRefs.length === 1 ? 'source is' : 'sources are' }} ready.</p>
+        <p v-else-if="renderedPrimitive.type === 'source_comparison'" class="mt-2 whitespace-pre-wrap break-words text-sm">{{ renderedPrimitive.props.prompt }} Two accepted sources are ready for comparison.</p>
         <template v-else>
           <p class="mt-2 whitespace-pre-wrap break-words text-sm">{{ renderedPrimitive.props.problem }}</p>
           <p data-testid="learn-canvas-ready-guided-consequence" class="mt-3 rounded-lg border border-border bg-muted p-3 text-sm">Guided support: {{ renderedPrimitive.props.guidedConsequence }} The steps remain hidden until the session starts; viewing them is recorded as guided support.</p>
@@ -400,26 +478,42 @@ async function submit() {
           <button v-for="(_, index) in workedExample.props.sourceRefs" :key="index" type="button" :data-testid="`learn-canvas-source-${index + 1}`" :aria-label="`Open Evidence for worked example source ${index + 1}`" class="min-h-11 rounded-lg border border-border px-3 py-2 text-sm text-[var(--learn-action)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)]" @click="inspectEvidence">Source {{ index + 1 }} · Evidence</button>
         </div>
       </article>
+      <article v-if="sourceComparison" :data-testid="sourceComparison.testId" class="min-w-0 rounded-xl border border-border bg-card p-4 sm:p-5" aria-label="Source comparison">
+        <h2 ref="comparisonHeading" tabindex="-1" data-testid="learn-canvas-comparison-heading" class="font-dm-sans text-xl font-semibold focus:outline-none">Compare two sources</h2>
+        <p class="mt-2 whitespace-pre-wrap break-words">{{ sourceComparison.props.prompt }}</p>
+        <fieldset ref="comparisonChoiceGroup" tabindex="-1" class="mt-4 rounded-lg focus:outline-none"><legend class="text-sm font-medium">Choose the source that better supports the claim</legend>
+          <div class="mt-2 grid min-w-0 gap-3 sm:grid-cols-2">
+            <div v-for="(source, index) in sourceComparison.props.sources" :key="source.sourceRef" :data-testid="`learn-canvas-comparison-source-${index + 1}`" class="min-w-0 rounded-lg border border-border p-3">
+              <label class="flex min-h-11 items-center gap-2 text-sm font-semibold"><input v-model="comparisonChoice" type="radio" name="canvas-comparison-source" :value="source.sourceRef" :data-testid="`learn-canvas-comparison-choice-${index + 1}`" :disabled="staged">{{ source.label }}</label>
+              <p class="mt-1 break-words text-xs">Accepted evidence</p>
+              <p class="mt-2 whitespace-pre-wrap break-words text-sm">{{ source.summary }}</p>
+              <button type="button" :data-testid="`learn-canvas-source-${index + 1}`" :aria-label="`Open Evidence for ${source.label}`" class="mt-2 min-h-11 rounded-lg border border-border px-3 py-2 text-sm text-[var(--learn-action)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)]" @click="inspectEvidence">Inspect evidence</button>
+            </div>
+          </div>
+        </fieldset>
+      </article>
       <template v-if="!responseStep">
         <button v-if="citedExplanation" ref="meaningfulStartAction" type="button" data-testid="learn-canvas-continue" class="min-h-11 rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)]" @click="continueActivity">Continue</button>
         <button v-else-if="workedExample && !exampleRevealed" ref="meaningfulStartAction" type="button" data-testid="learn-canvas-reveal-example" :disabled="exampleRevealPending || !isOnline" class="min-h-11 rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)] disabled:opacity-50" @click="revealExample">{{ exampleRevealPending ? 'Recording guided support…' : 'Reveal example' }}</button>
         <button v-else-if="workedExample" ref="meaningfulStartAction" type="button" data-testid="learn-canvas-continue" class="min-h-11 rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)]" @click="continueActivity">Continue</button>
       </template>
       <div v-else class="rounded-xl border border-border bg-card p-5">
-        <h2 ref="responseHeading" tabindex="-1" class="font-dm-sans text-xl font-semibold focus:outline-none">{{ workedExample ? 'Respond after guided support' : 'Apply what you learned' }}</h2>
+        <h2 ref="responseHeading" tabindex="-1" class="font-dm-sans text-xl font-semibold focus:outline-none">{{ sourceComparison ? 'Explain your source choice' : workedExample ? 'Respond after guided support' : 'Apply what you learned' }}</h2>
         <p v-if="workedExample" data-testid="learn-canvas-worked-status" role="status" class="mt-2 text-sm">Guided support reviewed. This response follows a worked example and is not an independent attempt or proof of mastery.</p>
-        <p data-testid="learn-canvas-response-prompt" class="mt-3 whitespace-pre-wrap leading-7">{{ canvas.responsePrompt }}</p>
+        <p v-if="!sourceComparison" data-testid="learn-canvas-response-prompt" class="mt-3 whitespace-pre-wrap leading-7">{{ canvas.responsePrompt }}</p>
         <template v-if="!staged">
-          <div class="mt-4 flex flex-wrap gap-2">
+          <div v-if="!sourceComparison" class="mt-4 flex flex-wrap gap-2">
             <button type="button" data-testid="learn-canvas-hint" :disabled="busy || !isOnline" class="min-h-11 rounded-lg border border-border px-3 py-2 text-sm disabled:opacity-50" @click="assistance('substantive_hint')">Get a hint</button>
             <button type="button" data-testid="learn-canvas-reveal" :disabled="busy || !isOnline" class="min-h-11 rounded-lg border border-border px-3 py-2 text-sm disabled:opacity-50" @click="assistance('answer_reveal')">Reveal example</button>
           </div>
           <p v-if="assistanceText" class="mt-3 whitespace-pre-wrap rounded-lg bg-muted p-3 text-sm">{{ assistanceText }}</p>
-          <label class="mt-4 block text-sm font-medium">Your response<textarea v-model="response" data-testid="learn-canvas-response" rows="5" maxlength="12000" class="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2" /></label>
+          <label v-if="sourceComparison" class="mt-4 block text-sm font-medium">Why did you choose this source?<textarea ref="comparisonRationaleField" v-model="comparisonRationale" data-testid="learn-canvas-comparison-rationale" rows="5" maxlength="12000" class="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2" /></label>
+          <label v-else class="mt-4 block text-sm font-medium">Your response<textarea v-model="response" data-testid="learn-canvas-response" rows="5" maxlength="12000" class="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2" /></label>
           <fieldset class="mt-4"><legend class="text-sm font-medium">How confident are you?</legend><div class="mt-2 flex flex-wrap gap-3"><label v-for="value in [1, 2, 3, 4, 5]" :key="value" class="flex min-h-11 items-center gap-1 text-sm"><input v-model.number="confidence" type="radio" name="canvas-confidence" :value="value" :data-testid="`learn-canvas-confidence-${value}`">{{ value }}</label></div></fieldset>
-          <button type="button" data-testid="learn-canvas-submit" :disabled="!canSubmit" class="mt-4 min-h-11 rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50" @click="submit">{{ busy ? 'Submitting…' : 'Submit response' }}</button>
+          <button :ref="sourceComparison ? 'meaningfulStartAction' : undefined" type="button" data-testid="learn-canvas-submit" :disabled="sourceComparison ? busy || !isOnline : !canSubmit" class="mt-4 min-h-11 rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50" @click="submitWithValidation">{{ busy ? 'Submitting…' : sourceComparison ? canvas.activity.requiredAction.label : 'Submit response' }}</button>
         </template>
         <div v-else data-testid="learn-canvas-status" role="status" class="mt-4 text-sm">
+          <p v-if="sourceComparison && authoritativeSavedResponse" data-testid="learn-canvas-comparison-saved" class="mb-2">Chosen source: {{ sourceComparison.props.sources.find(source => source.sourceRef === decodeSourceComparisonResponse(authoritativeSavedResponse!.response)?.sourceRef)?.label ?? 'Saved choice' }}. Rationale: {{ decodeSourceComparisonResponse(authoritativeSavedResponse!.response)?.rationale ?? '' }}</p>
           {{ scoreState === 'complete' || canvas.status === 'feedback' ? 'Response scored.' : scoreState === 'reconciling' || canvas.status === 'reconciling' ? 'Scoring needs reconciliation. Your response is saved.' : scoreState === 'unconfirmed' ? 'Scoring outcome is unconfirmed. Your response is saved.' : scoreState === 'blocked' ? 'Scoring is unavailable. Your response is saved.' : scoreState === 'pending' || canvas.status === 'scoring' ? 'Scoring is in progress.' : 'Response submitted.' }}
           <button v-if="!['complete', 'reconciling', 'blocked'].includes(scoreState) && canvas.status !== 'reconciling' && authoritativeSavedResponse" type="button" data-testid="learn-canvas-retry-scoring" :disabled="busy || !isOnline" class="ml-2 min-h-11 underline disabled:opacity-50" @click="score()">Retry scoring</button>
           <button v-if="scoreState === 'reconciling' || scoreState === 'blocked' || canvas.status === 'reconciling'" type="button" data-testid="learn-canvas-scoring-safe-action" class="ml-2 min-h-11 underline" @click="emit('leave')">Back to Learn</button>
