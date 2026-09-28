@@ -7,7 +7,7 @@ import { ADAPTIVE_LEARN_EXPORT_COLLECTIONS } from '../shared/adaptive-learn-stor
 // A single Convex document can approach 1 MiB. Keep pages comfortably below
 // the 16 MiB transaction and return-value ceilings even at the per-row limit.
 const MAX_EXPORT_PAGE_SIZE = 8
-const [learningThreadsCollection, learningThreadActivitiesCollection, learningThreadArtifactsCollection, learnActivityEvidenceLinksCollection, learnActivityDecisionsCollection, learnActivityEventsCollection, learnActivityCommandReceiptsCollection, learnAdaptiveThreadDeletionJobsCollection, learnActivityOverridesCollection, learningThreadPreferencesCollection, learningThreadPromotionProposalsCollection] = ADAPTIVE_LEARN_EXPORT_COLLECTIONS
+const [learningThreadContributionsCollection, learningThreadsCollection, learningThreadActivitiesCollection, learningThreadArtifactsCollection, learnActivityEvidenceLinksCollection, learnActivityDecisionsCollection, learnActivityEventsCollection, learnActivityCommandReceiptsCollection, learnAdaptiveThreadDeletionJobsCollection, learnActivityOverridesCollection, learningThreadPreferencesCollection, learningThreadPromotionProposalsCollection] = ADAPTIVE_LEARN_EXPORT_COLLECTIONS
 
 function redactAdaptivePrimitiveSources(primitive: { props: unknown } & Record<string, unknown>) {
   if (!primitive.props || typeof primitive.props !== 'object' || Array.isArray(primitive.props)) return primitive
@@ -76,6 +76,7 @@ const exportCollectionValidator = v.union(
   v.literal('audioOverviewInterjectionUtterances'),
   v.literal('audioOverviewInterjectionSources'),
   v.literal(learningThreadsCollection),
+  v.literal(learningThreadContributionsCollection),
   v.literal(learningThreadActivitiesCollection),
   v.literal(learningThreadArtifactsCollection),
   v.literal(learnActivityEvidenceLinksCollection),
@@ -276,6 +277,10 @@ export const getUserDataPage = query({
         return { ...result, page: result.page.map(({ r2ObjectKey: _r2ObjectKey, ...artifact }) => artifact.status === 'deleted'
           ? { ...artifact, title: '[deleted]', summary: '' }
           : artifact) }
+      }
+      case 'learningThreadContributions': {
+        const result = await ctx.db.query('learningThreadContributions').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+        return { ...result, page: result.page.map(({ provenanceKey: _key, evidenceSnapshotId: _snapshot, idempotencyKeyHash: _idempotency, requestFingerprint: _fingerprint, ...row }) => row) }
       }
       case 'learnActivityEvidenceLinks': {
         const result = await ctx.db.query('learnActivityEvidenceLinks').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)

@@ -54,6 +54,23 @@ describe('Adaptive Learn event writer', () => {
     expect(await t.run(ctx => writeLearnActivityEvent(ctx, input))).toEqual({ eventId: first.eventId, replayed: true })
   })
 
+  test('replays a v3 Canvas failure after the v4 contribution taxonomy upgrade', async () => {
+    const { t, threadId } = await fixture()
+    const input = { userId: OWNER, threadId, eventType: 'canvas_render_failure' as const,
+      eventVersion: 'canvas_render_failure.v1' as const, sourceVersion: 'learn-adaptive.primitive-validation.v1',
+      contractVersion: 'learn-adaptive.activity-contract.v1', semanticKey: 'canvas:legacy-v3',
+      occurredAt: 10, reasonCode: 'unsafe_url', outcomeCode: 'fallback_rendered',
+      metadata: { activityClass: 'non_factual' as const, boundaryOrdinal: 1, planRevision: 1 } }
+    const first = await t.run(ctx => writeLearnActivityEvent(ctx, input))
+    await t.run(async ctx => ctx.db.patch(first.eventId, { taxonomyVersion: 'learn-adaptive.activity-events.v3',
+      dedupeKeyHash: await learnActivityEventDedupeHash({ userId: OWNER, threadId, eventVersion: input.eventVersion,
+        semanticKey: input.semanticKey, taxonomyVersion: 'learn-adaptive.activity-events.v3' }) }))
+    expect(await t.run(ctx => writeLearnActivityEvent(ctx, input))).toEqual({ eventId: first.eventId, replayed: true })
+    await expect(learnActivityEventDedupeHash({ userId: OWNER, threadId,
+      eventVersion: 'contribution_recorded.v1', semanticKey: 'contribution:old',
+      taxonomyVersion: 'learn-adaptive.activity-events.v3' })).rejects.toThrow(/older event taxonomy/i)
+  })
+
   test('writes one owner-scoped event for a deterministic semantic key', async () => {
     const { t, threadId } = await fixture()
     const input = {
@@ -72,7 +89,7 @@ describe('Adaptive Learn event writer', () => {
     const first = await t.run(ctx => writeLearnActivityEvent(ctx, input))
     expect(await t.run(ctx => writeLearnActivityEvent(ctx, input))).toEqual({ eventId: first.eventId, replayed: true })
     const rows = await t.run(ctx => ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', OWNER).eq('threadId', threadId)).take(2))
-    expect(rows).toEqual([expect.objectContaining({ eventType: 'activity_eligible', eventVersion: 'activity_eligible.v1', taxonomyVersion: 'learn-adaptive.activity-events.v3', metadata: input.metadata })])
+    expect(rows).toEqual([expect.objectContaining({ eventType: 'activity_eligible', eventVersion: 'activity_eligible.v1', taxonomyVersion: 'learn-adaptive.activity-events.v4', metadata: input.metadata })])
     expect(rows[0]).not.toHaveProperty('semanticKey')
   })
 

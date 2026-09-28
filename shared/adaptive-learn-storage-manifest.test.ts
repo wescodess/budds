@@ -13,6 +13,13 @@ describe('Adaptive Learn storage manifest', () => {
   test('registers activity children before thread parents with bounded owner-scoped retention', () => {
     expect(ADAPTIVE_LEARN_STORAGE_MANIFEST).toEqual([
       {
+        table: 'learningThreadContributions',
+        ownerIndex: 'by_userId',
+        parentIndex: 'by_userId_and_threadId_and_createdAt',
+        export: 'redacted_bounded',
+        accountDeletion: 'delete',
+      },
+      {
         table: 'learningThreadPromotionProposals',
         ownerIndex: 'by_userId',
         parentIndex: 'by_userId_and_threadId_and_createdAt',
@@ -90,8 +97,8 @@ describe('Adaptive Learn storage manifest', () => {
         accountDeletion: 'delete',
       },
     ])
-    expect(ADAPTIVE_LEARN_ACCOUNT_DELETE_ORDER).toEqual(['learningThreadPromotionProposals', 'learningThreadPreferences', 'learningThreadArtifacts', 'learnActivityOverrides', 'learnActivityEvidenceLinks', 'learnActivityDecisions', 'learnActivityEvents', 'learnActivityCommandReceipts', 'learningThreadActivities', 'learnAdaptiveThreadDeletionJobs', 'learningThreads'])
-    expect(ADAPTIVE_LEARN_EXPORT_COLLECTIONS).toEqual(['learningThreads', 'learningThreadActivities', 'learningThreadArtifacts', 'learnActivityEvidenceLinks', 'learnActivityDecisions', 'learnActivityEvents', 'learnActivityCommandReceipts', 'learnAdaptiveThreadDeletionJobs', 'learnActivityOverrides', 'learningThreadPreferences', 'learningThreadPromotionProposals'])
+    expect(ADAPTIVE_LEARN_ACCOUNT_DELETE_ORDER).toEqual(['learningThreadContributions', 'learningThreadPromotionProposals', 'learningThreadPreferences', 'learningThreadArtifacts', 'learnActivityOverrides', 'learnActivityEvidenceLinks', 'learnActivityDecisions', 'learnActivityEvents', 'learnActivityCommandReceipts', 'learningThreadActivities', 'learnAdaptiveThreadDeletionJobs', 'learningThreads'])
+    expect(ADAPTIVE_LEARN_EXPORT_COLLECTIONS).toEqual(['learningThreadContributions', 'learningThreads', 'learningThreadActivities', 'learningThreadArtifacts', 'learnActivityEvidenceLinks', 'learnActivityDecisions', 'learnActivityEvents', 'learnActivityCommandReceipts', 'learnAdaptiveThreadDeletionJobs', 'learnActivityOverrides', 'learningThreadPreferences', 'learningThreadPromotionProposals'])
   })
 
   test('keeps stored primitive discriminants and actions aligned with the runtime registry', () => {

@@ -1,9 +1,10 @@
-import { v } from 'convex/values'
+import { v, type Infer } from 'convex/values'
+import { paginationOptsValidator } from 'convex/server'
 import { api } from './_generated/api'
 import { action, mutation, query, type MutationCtx, type QueryCtx } from './_generated/server'
 import type { Doc, Id } from './_generated/dataModel'
 import { AdaptiveCommandRejection, executeAdaptiveThreadCommand, initiateAdaptiveThreadDeletion } from './learnAdaptiveCommands'
-import { requireAdaptiveQueryAccess } from './lib/adaptiveLearnAccess'
+import { requireAdaptiveMutationAccess, requireAdaptiveQueryAccess } from './lib/adaptiveLearnAccess'
 import { isOperableDiagnosticActivity, liveEvidenceState, storedPlan } from './learnAdaptiveRecovery'
 import { replayAdaptiveActivityPlan } from '../shared/learn-adaptive-activity-plan'
 import { loadReadyCanvas } from './learnAdaptiveCanvas'
@@ -22,6 +23,176 @@ const memoryPreferenceKeyValidator = v.union(v.literal('representation'), v.lite
 const memoryPreferenceOperationValidator = v.union(v.literal('set'), v.literal('disable'), v.literal('clear'))
 const MEMORY_HISTORY_LIMIT = 8
 const PROMOTION_HISTORY_LIMIT = 20
+
+const contributionSourceIdValidator = v.union(
+  v.object({ feature: v.literal('chat'), id: v.id('messages') }),
+  v.object({ feature: v.literal('quiz'), id: v.id('quizzes') }),
+  v.object({ feature: v.literal('flashcards'), id: v.id('flashcardRoomVersions') }),
+  v.object({ feature: v.literal('podcast'), id: v.id('audioOverviews') }),
+  v.object({ feature: v.literal('documents'), id: v.id('documents') }),
+)
+export type ContributionSource = Infer<typeof contributionSourceIdValidator>
+const contributionSubmissionSourceValidator = v.object({ feature: v.string(), id: v.string(), revision: v.string() })
+const CONTRIBUTION_VERSION = 'learn-adaptive.contribution.v1' as const
+
+async function contributionDigest(value: string) {
+  const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))
+  return `sha256:${[...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('')}`
+}
+
+export async function loadContributionSource(ctx: QueryCtx | MutationCtx, userId: string, source: ContributionSource) {
+  if (source.feature === 'chat') {
+    const row = await ctx.db.get(source.id)
+    if (!row || row.userId !== userId) return null
+    const conversation = await ctx.db.get(row.conversationId)
+    if (!conversation || conversation.userId !== userId || (await ctx.db.get(conversation.folderId))?.userId !== userId) return null
+    return { revision: await contributionDigest(JSON.stringify(row)) }
+  }
+  if (source.feature === 'flashcards') {
+    const row = await ctx.db.get(source.id)
+    if (!row || row.userId !== userId) return null
+    const room = await ctx.db.get(row.roomId)
+    if (!room || room.userId !== userId || (await ctx.db.get(room.folderId))?.userId !== userId) return null
+    return { revision: await contributionDigest(JSON.stringify(row)) }
+  }
+  if (source.feature === 'quiz') {
+    const row = await ctx.db.get(source.id)
+    if (!row || row.userId !== userId || row.status !== 'ready' || row.deletedAt !== undefined
+      || (await ctx.db.get(row.folderId))?.userId !== userId) return null
+    const questions = await ctx.db.query('quizQuestions')
+      .withIndex('by_quizId', q => q.eq('quizId', row._id)).take(201)
+    if (questions.length > 200 || questions.some(question => question.userId !== userId)) return null
+    const sourceRecord = JSON.stringify([row, questions])
+    if (new TextEncoder().encode(sourceRecord).length > 500_000) return null
+    return { revision: await contributionDigest(sourceRecord) }
+  }
+  const row = source.feature === 'podcast' ? await ctx.db.get(source.id)
+      : await ctx.db.get(source.id)
+  if (!row || row.userId !== userId || (await ctx.db.get(row.folderId))?.userId !== userId) return null
+  if (source.feature === 'podcast' && row.status !== 'ready') return null
+  if (source.feature === 'documents' && row.status !== 'success') return null
+  return { revision: await contributionDigest(JSON.stringify(row)) }
+}
+
+export const inspectContributionSource = query({
+  args: { source: contributionSourceIdValidator },
+  handler: async (ctx, args) => {
+    const userId = await requireAdaptiveQueryAccess(ctx)
+    const source = await loadContributionSource(ctx, userId, args.source)
+    return source ? { status: 'available' as const, revision: source.revision }
+      : { status: 'unavailable' as const, revision: null }
+  },
+})
+
+export const listThreadContributions = query({
+  args: { threadId: v.id('learningThreads'), paginationOpts: paginationOptsValidator },
+  handler: async (ctx, args) => {
+    const userId = await requireAdaptiveQueryAccess(ctx)
+    const thread = await ctx.db.get(args.threadId)
+    if (!thread || thread.userId !== userId || thread.deletionStartedAt !== undefined) return { page: [], isDone: true, continueCursor: '' }
+    const result = await ctx.db.query('learningThreadContributions')
+      .withIndex('by_userId_and_threadId_and_createdAt', q => q.eq('userId', userId).eq('threadId', args.threadId))
+      .order('desc').paginate({ cursor: args.paginationOpts.cursor, numItems: Math.min(50, Math.max(1, Math.floor(args.paginationOpts.numItems))) })
+    return { ...result, page: result.page.map(({ provenanceKey: _provenanceKey, idempotencyKeyHash: _key, requestFingerprint: _fingerprint, evidenceSnapshotId: _evidence, ...row }) => row) }
+  },
+})
+
+export const recordContribution = mutation({
+  args: {
+    threadId: v.id('learningThreads'), source: contributionSubmissionSourceValidator,
+    contributionKind: v.string(), classification: v.string(),
+    evidenceSnapshotId: v.optional(v.id('learnSourceSnapshots')),
+    metadata: v.object({ role: v.optional(v.string()) }), expectedRevision: v.number(), idempotencyKey: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireAdaptiveMutationAccess(ctx)
+    const thread = await ctx.db.get(args.threadId)
+    if (!thread || thread.userId !== userId || thread.deletionStartedAt !== undefined || ['ended', 'rollback'].includes(thread.lifecycle))
+      return { kind: 'rejected' as const, code: 'thread_unavailable' as const, recovery: 'select_thread' as const }
+    const reject = async (code: 'invalid_key' | 'source_unavailable' | 'source_revision_changed' | 'evidence_unavailable' | 'invalid_provenance' | 'duplicate_key' | 'unsupported_source' | 'oversized_payload') => {
+      const semanticKey = `contribution:rejection:${await contributionDigest(JSON.stringify([args.idempotencyKey.slice(0, 128), code]))}`
+      await writeLearnActivityEvent(ctx, { userId, threadId: thread._id, eventType: 'contribution_rejected', eventVersion: 'contribution_rejected.v1',
+        sourceVersion: CONTRIBUTION_VERSION, contractVersion: CONTRIBUTION_VERSION, semanticKey,
+        occurredAt: Date.now(), reasonCode: code, outcomeCode: 'rejected', metadata: {} })
+      return { kind: 'rejected' as const, code, recovery: code === 'source_revision_changed' ? 'refresh_source' as const : 'review_contribution' as const }
+    }
+    if (JSON.stringify(args).length > 4096 || args.source.id.length > 128 || args.source.revision.length > 80
+      || args.contributionKind.length > 32 || args.classification.length > 32 || (args.metadata.role?.length ?? 0) > 32)
+      return await reject('oversized_payload')
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(args.idempotencyKey)) return await reject('invalid_key')
+    if (!['accepted_evidence', 'synthesis', 'inference', 'unknown', 'non_factual'].includes(args.classification)
+      || (args.metadata.role !== undefined && !['background', 'practice', 'review'].includes(args.metadata.role))) return await reject('invalid_provenance')
+    const source = args.source.feature === 'chat' ? (() => { const id = ctx.db.normalizeId('messages', args.source.id); return id ? { feature: 'chat' as const, id } : null })()
+      : args.source.feature === 'quiz' ? (() => { const id = ctx.db.normalizeId('quizzes', args.source.id); return id ? { feature: 'quiz' as const, id } : null })()
+        : args.source.feature === 'flashcards' ? (() => { const id = ctx.db.normalizeId('flashcardRoomVersions', args.source.id); return id ? { feature: 'flashcards' as const, id } : null })()
+          : args.source.feature === 'podcast' ? (() => { const id = ctx.db.normalizeId('audioOverviews', args.source.id); return id ? { feature: 'podcast' as const, id } : null })()
+            : args.source.feature === 'documents' ? (() => { const id = ctx.db.normalizeId('documents', args.source.id); return id ? { feature: 'documents' as const, id } : null })()
+              : null
+    if (!source) return await reject('unsupported_source')
+    if (!/^sha256:[a-f0-9]{64}$/.test(args.source.revision)) return await reject('source_revision_changed')
+    if (args.classification === 'accepted_evidence' !== Boolean(args.evidenceSnapshotId)) return await reject('invalid_provenance')
+    const allowedKinds = source.feature === 'chat' || source.feature === 'quiz' || source.feature === 'flashcards'
+      ? ['context', 'question']
+      : args.source.feature === 'podcast' ? ['context'] : ['source', 'context']
+    if (!allowedKinds.includes(args.contributionKind)) return await reject('invalid_provenance')
+    const keyHash = await contributionDigest(JSON.stringify([userId, args.idempotencyKey]))
+    const requestFingerprint = await contributionDigest(JSON.stringify([args.threadId, args.source, args.contributionKind, args.classification, args.evidenceSnapshotId ?? null, args.metadata]))
+    // The normalized contribution is the durable receipt for a successful append;
+    // its owner-scoped key and fingerprint preserve replay/conflict identity.
+    const priorKey = await ctx.db.query('learningThreadContributions')
+      .withIndex('by_userId_and_idempotencyKeyHash', q => q.eq('userId', userId).eq('idempotencyKeyHash', keyHash)).unique()
+    if (priorKey && (priorKey.requestFingerprint !== requestFingerprint || priorKey.threadId !== thread._id))
+      return await reject('duplicate_key')
+    const authoritativeSource = await loadContributionSource(ctx, userId, source)
+    if (!authoritativeSource) return await reject('source_unavailable')
+    if (authoritativeSource.revision !== args.source.revision) return await reject('source_revision_changed')
+    if (args.evidenceSnapshotId) {
+      const evidence = await ctx.db.get(args.evidenceSnapshotId)
+      if (!evidence || evidence.userId !== userId || evidence.status !== 'user_accepted'
+        || evidence.effectiveStatus !== 'user_accepted' || evidence.evidencePurgedAt !== undefined
+        || evidence.rightsStatus !== 'permitted' || evidence.conflictStatus !== 'clear'
+        || (thread.learningVoidId && evidence.learningVoidId !== thread.learningVoidId)) return await reject('evidence_unavailable')
+      const excerpt = await ctx.db.query('learnSourceExcerpts')
+        .withIndex('by_userId_and_sourceSnapshotId_and_evidencePurgedAt', q => q
+          .eq('userId', userId).eq('sourceSnapshotId', evidence._id).eq('evidencePurgedAt', undefined))
+        .first()
+      if (!excerpt || excerpt.rightsStatus !== 'permitted' || !excerpt.excerpt?.trim()) return await reject('evidence_unavailable')
+      if (source.feature !== 'documents') return await reject('invalid_provenance')
+      const document = await ctx.db.get(source.id)
+      const identity = await ctx.db.get(evidence.sourceIdentityId)
+      if (!document || document.userId !== userId || !identity || identity.userId !== userId
+        || identity.folderDocumentId !== document._id || identity.tombstonedAt !== undefined
+        || (!document.sourceRevision && !document.contentHash)
+        || (document.sourceRevision && evidence.sourceRevision !== document.sourceRevision)
+        || (document.contentHash && evidence.contentHash !== document.contentHash)) return await reject('evidence_unavailable')
+    }
+    if (priorKey) return priorKey.sourceStatus === 'available'
+      ? { kind: 'recorded' as const, contributionId: priorKey._id, replayed: true, revision: thread.revision }
+      : await reject('source_unavailable')
+    const provenanceKey = await contributionDigest(JSON.stringify(['learn-thread-contribution.v1', userId, String(thread._id), source.feature, String(source.id), args.source.revision, args.contributionKind]))
+    const priorOrigin = await ctx.db.query('learningThreadContributions')
+      .withIndex('by_userId_and_provenanceKey', q => q.eq('userId', userId).eq('provenanceKey', provenanceKey)).unique()
+    if (priorOrigin) return priorOrigin.threadId === thread._id && priorOrigin.requestFingerprint === requestFingerprint
+      ? priorOrigin.sourceStatus === 'available'
+        ? { kind: 'recorded' as const, contributionId: priorOrigin._id, replayed: true, revision: thread.revision }
+        : await reject('source_unavailable')
+      : await reject('duplicate_key')
+    if (!Number.isSafeInteger(args.expectedRevision) || args.expectedRevision !== thread.revision)
+      return { kind: 'conflict' as const, code: 'stale_revision' as const, actualRevision: thread.revision, recovery: 'refresh_thread' as const }
+    const now = Date.now()
+    const contributionId = await ctx.db.insert('learningThreadContributions', {
+      userId, threadId: thread._id, sourceFeature: source.feature, sourceIdentity: String(source.id),
+      sourceRevision: args.source.revision, contributionKind: args.contributionKind as 'context' | 'question' | 'result' | 'artifact' | 'source',
+      provenanceVersion: CONTRIBUTION_VERSION, provenanceKey, classification: args.classification as 'accepted_evidence' | 'synthesis' | 'inference' | 'unknown' | 'non_factual',
+      ...(args.evidenceSnapshotId ? { evidenceSnapshotId: args.evidenceSnapshotId } : {}),
+      metadata: args.metadata as { role?: 'background' | 'practice' | 'review' }, sourceStatus: 'available', idempotencyKeyHash: keyHash, requestFingerprint, createdAt: now,
+    })
+    await writeLearnActivityEvent(ctx, { userId, threadId: thread._id, eventType: 'contribution_recorded', eventVersion: 'contribution_recorded.v1',
+      sourceVersion: CONTRIBUTION_VERSION, contractVersion: CONTRIBUTION_VERSION, semanticKey: `contribution:${String(contributionId)}`,
+      occurredAt: now, reasonCode: 'source_verified', outcomeCode: 'recorded', metadata: {} })
+    return { kind: 'recorded' as const, contributionId, replayed: false, revision: thread.revision }
+  },
+})
 
 export const listPromotionProposals = query({
   args: { threadId: v.id('learningThreads') },

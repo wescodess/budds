@@ -385,6 +385,7 @@ export const deleteFolder = mutation({
       await ctx.db.delete(descendants[i]!._id)
     }
     await ctx.db.delete(args.id)
+    await ctx.scheduler.runAfter(0, internal.learnAdaptiveContributionRetention.purgeUnavailableContributions, { userId })
 
     for (const folderId of folderIds) {
       // The folder is already gone, so V2's public commands reject the

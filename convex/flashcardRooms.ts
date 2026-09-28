@@ -1,4 +1,5 @@
 import { v } from 'convex/values'
+import { internal } from './_generated/api'
 import { mutation, query, internalMutation } from './_generated/server'
 import type { Id, Doc } from './_generated/dataModel'
 import type { MutationCtx, QueryCtx } from './_generated/server'
@@ -695,6 +696,7 @@ export const deleteRoom = mutation({
     }
 
     await ctx.db.delete(room._id)
+    await ctx.scheduler.runAfter(0, internal.learnAdaptiveContributionRetention.purgeUnavailableContributions, { userId })
     return { roomId: args.roomId }
   },
 })

@@ -1066,6 +1066,7 @@ export const deleteQuiz = mutation({
     const quiz = await ctx.db.get(args.quizId)
     if (!quiz || quiz.userId !== userId) throw new Error('Quiz not found')
     if (quiz.deletedAt === undefined) await ctx.db.patch(args.quizId, { deletedAt: Date.now() })
+    await ctx.scheduler.runAfter(0, internal.learnAdaptiveContributionRetention.purgeUnavailableContributions, { userId })
     await ctx.scheduler.runAfter(0, internal.quizzes.drainQuizDeletion, { quizId: args.quizId })
     return { tombstoned: true }
   },
