@@ -2,6 +2,7 @@ import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import {
   LEGACY_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION,
+  SECOND_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION,
   PREVIOUS_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION,
   LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION,
   validateLearnActivityEventInput,
@@ -20,14 +21,17 @@ async function digest(value: string) {
   return `sha256:${[...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('')}`
 }
 
-type EventTaxonomyVersion = typeof LEGACY_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION | typeof PREVIOUS_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION | typeof LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION
+type EventTaxonomyVersion = typeof LEGACY_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION | typeof SECOND_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION | typeof PREVIOUS_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION | typeof LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION
 
 export async function learnActivityEventDedupeHash(input: { userId: string, threadId: Id<'learningThreads'>, eventVersion: string, semanticKey: string, taxonomyVersion?: EventTaxonomyVersion }) {
   const taxonomyVersion = input.taxonomyVersion ?? LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION
   if (taxonomyVersion === LEGACY_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION && input.eventVersion === 'routing_decision.v1')
     throw new Error('Routing decisions are unavailable in the legacy event taxonomy')
-  if (taxonomyVersion !== LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION && input.eventVersion === 'canvas_render_failure.v1')
-    throw new Error('Canvas render failures are unavailable in an older event taxonomy')
+  if (taxonomyVersion === LEGACY_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION || taxonomyVersion === SECOND_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION) {
+    if (input.eventVersion === 'canvas_render_failure.v1') throw new Error('Canvas render failures are unavailable in an older event taxonomy')
+  }
+  if (taxonomyVersion !== LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION && (input.eventVersion === 'contribution_recorded.v1' || input.eventVersion === 'contribution_rejected.v1'))
+    throw new Error('Contributions are unavailable in an older event taxonomy')
   return await digest(JSON.stringify([taxonomyVersion, input.userId, String(input.threadId), input.eventVersion, input.semanticKey]))
 }
 
@@ -40,11 +44,13 @@ export async function writeLearnActivityEvent(ctx: MutationCtx, input: WriteEven
     const activity = await ctx.db.get(activityId)
     if (!activity || activity.userId !== userId || activity.threadId !== threadId) throw new Error('Adaptive event activity authority is unavailable')
   }
-  const lookupVersions: EventTaxonomyVersion[] = event.eventType === 'canvas_render_failure'
+  const lookupVersions: EventTaxonomyVersion[] = event.eventType === 'contribution_recorded' || event.eventType === 'contribution_rejected'
     ? [LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION]
-    : event.eventType === 'routing_decision'
+    : event.eventType === 'canvas_render_failure'
       ? [LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION, PREVIOUS_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION]
-      : [LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION, PREVIOUS_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION, LEGACY_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION]
+      : event.eventType === 'routing_decision'
+        ? [LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION, PREVIOUS_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION, SECOND_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION]
+        : [LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION, PREVIOUS_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION, SECOND_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION, LEGACY_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION]
   const matches = [] as Doc<'learnActivityEvents'>[]
   for (const taxonomyVersion of lookupVersions) {
     const hash = await learnActivityEventDedupeHash({ userId, threadId, eventVersion: event.eventVersion,

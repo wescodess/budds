@@ -223,6 +223,7 @@ export async function scheduleAudioOverviewDeletion(
       publishedAt: undefined,
     })
   }
+  await ctx.scheduler.runAfter(0, internal.learnAdaptiveContributionRetention.purgeUnavailableContributions, { userId })
   if (await stageV2OverviewDeletion(ctx, overview, userId)) return
   await ctx.scheduler.runAfter(0, internal.audioOverviews.deleteOverviewBatch, {
     overviewId: overview._id,

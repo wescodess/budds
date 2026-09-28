@@ -7,13 +7,13 @@ import {
 } from './learn-adaptive-events'
 
 describe('Adaptive Learn event contract', () => {
-  test('freezes the exact closed v3 taxonomy and type/version pairing', () => {
-    expect(LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION).toBe('learn-adaptive.activity-events.v3')
+  test('freezes the exact closed v4 taxonomy and type/version pairing', () => {
+    expect(LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION).toBe('learn-adaptive.activity-events.v4')
     expect(LEARN_ACTIVITY_EVENT_TAXONOMY).toEqual([
       'thread_command_committed', 'meaningful_activity_started', 'thread_drafted', 'evidence_ready', 'evidence_blocked',
       'activity_eligible', 'activity_started', 'meaningful_response', 'assistance', 'activity_completed',
       'representative_pass', 'representative_fail', 'delayed_check_eligible', 'delayed_check_attempt', 'retained',
-      'remediation', 'provider_failure', 'provider_ambiguity', 'evidence_gap', 'evidence_invalidation', 'abandonment', 'explicit_end', 'routing_decision', 'canvas_render_failure',
+      'remediation', 'provider_failure', 'provider_ambiguity', 'evidence_gap', 'evidence_invalidation', 'abandonment', 'explicit_end', 'routing_decision', 'canvas_render_failure', 'contribution_recorded', 'contribution_rejected',
     ])
     expect(LEARN_ACTIVITY_EVENT_TAXONOMY.map(type => eventVersionFor(type))).toEqual(
       LEARN_ACTIVITY_EVENT_TAXONOMY.map(type => `${type}.v1`),

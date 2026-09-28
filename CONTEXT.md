@@ -93,3 +93,7 @@ _Avoid_: Recent activity, source recovery
 **Promotion Proposal**:
 A learner-requested, pinned invitation to continue meaningful work in review or mastery. It is not a mastery attempt, mastery claim, or scheduled session.
 _Avoid_: Automatic mastery, mastery result
+
+**Cross-feature Contribution**:
+A learner-authorized reference that brings prior Chat, Quiz, Flashcards, Audio Overview, or document context into a Learning Thread while retaining its origin and factual classification. It does not by itself establish mastery.
+_Avoid_: Imported memory, mastery result

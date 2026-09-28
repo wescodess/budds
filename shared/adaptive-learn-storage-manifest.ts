@@ -14,6 +14,13 @@ import { ADAPTIVE_ROUTER_VERSION } from './learn-adaptive-router'
 
 export const ADAPTIVE_LEARN_STORAGE_MANIFEST = [
   {
+    table: 'learningThreadContributions',
+    ownerIndex: 'by_userId',
+    parentIndex: 'by_userId_and_threadId_and_createdAt',
+    export: 'redacted_bounded',
+    accountDeletion: 'delete',
+  },
+  {
     table: 'learningThreadPromotionProposals',
     ownerIndex: 'by_userId',
     parentIndex: 'by_userId_and_threadId_and_createdAt',
@@ -93,7 +100,21 @@ export const ADAPTIVE_LEARN_STORAGE_MANIFEST = [
 ] as const
 
 export const ADAPTIVE_LEARN_ACCOUNT_DELETE_ORDER = ADAPTIVE_LEARN_STORAGE_MANIFEST.map(entry => entry.table)
-export const ADAPTIVE_LEARN_EXPORT_COLLECTIONS = ['learningThreads', 'learningThreadActivities', 'learningThreadArtifacts', 'learnActivityEvidenceLinks', 'learnActivityDecisions', 'learnActivityEvents', 'learnActivityCommandReceipts', 'learnAdaptiveThreadDeletionJobs', 'learnActivityOverrides', 'learningThreadPreferences', 'learningThreadPromotionProposals'] as const
+export const ADAPTIVE_LEARN_EXPORT_COLLECTIONS = ['learningThreadContributions', 'learningThreads', 'learningThreadActivities', 'learningThreadArtifacts', 'learnActivityEvidenceLinks', 'learnActivityDecisions', 'learnActivityEvents', 'learnActivityCommandReceipts', 'learnAdaptiveThreadDeletionJobs', 'learnActivityOverrides', 'learningThreadPreferences', 'learningThreadPromotionProposals'] as const
+
+export const learningThreadContributionFields = {
+  userId: v.string(), threadId: v.id('learningThreads'),
+  sourceFeature: v.union(v.literal('chat'), v.literal('quiz'), v.literal('flashcards'), v.literal('podcast'), v.literal('documents')),
+  sourceIdentity: v.string(), sourceRevision: v.string(),
+  contributionKind: v.union(v.literal('context'), v.literal('question'), v.literal('result'), v.literal('artifact'), v.literal('source')),
+  provenanceVersion: v.literal('learn-adaptive.contribution.v1'), provenanceKey: v.string(),
+  classification: v.union(v.literal('accepted_evidence'), v.literal('synthesis'), v.literal('inference'), v.literal('unknown'), v.literal('non_factual')),
+  evidenceSnapshotId: v.optional(v.id('learnSourceSnapshots')),
+  idempotencyKeyHash: v.string(), requestFingerprint: v.string(),
+  metadata: v.object({ role: v.optional(v.union(v.literal('background'), v.literal('practice'), v.literal('review'))) }),
+  sourceStatus: v.union(v.literal('available'), v.literal('source_unavailable')),
+  createdAt: v.number(),
+}
 export const ADAPTIVE_ACTIVITY_STORAGE_REGISTRY = [
   { type: 'cited_explanation', allowedActions: ['continue', 'inspect_source', 'ask_for_example'], testId: 'learn-primitive-cited-explanation', inputProps: ['heading', 'explanation', 'sourceRefs'], storedProps: ['heading', 'explanation', 'sourceRefs'] },
   { type: 'diagnostic_prompt', allowedActions: ['submit_response'], testId: 'learn-primitive-diagnostic-prompt', inputProps: ['prompt', 'responseFormat', 'assistance'], storedProps: ['prompt', 'responseFormat', 'assistance'] },

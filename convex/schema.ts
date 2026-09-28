@@ -1,6 +1,6 @@
 import { defineSchema, defineTable } from 'convex/server'
 import { v } from 'convex/values'
-import { learnActivityCommandReceiptFields, learnActivityDecisionFields, learnActivityEvidenceLinkFields, learnActivityOverrideFields, learnAdaptiveThreadDeletionJobFields, learningThreadActivityFields, learningThreadArtifactFields, learningThreadFields, learningThreadPreferenceFields } from '../shared/adaptive-learn-storage-manifest'
+import { learnActivityCommandReceiptFields, learnActivityDecisionFields, learnActivityEvidenceLinkFields, learnActivityOverrideFields, learnAdaptiveThreadDeletionJobFields, learningThreadActivityFields, learningThreadArtifactFields, learningThreadContributionFields, learningThreadFields, learningThreadPreferenceFields } from '../shared/adaptive-learn-storage-manifest'
 import { learnActivityEventFields } from '../shared/learn-adaptive-events'
 import { masteryStateValidator, masteryTransitionReasonValidator } from '../shared/learn-v2-mastery'
 
@@ -1380,6 +1380,13 @@ export default defineSchema({
     .index('by_userId_and_lifecycle_and_updatedAt', ['userId', 'lifecycle', 'updatedAt'])
     .index('by_userId_and_updatedAt', ['userId', 'updatedAt'])
     .index('by_userId_and_evidenceState_and_updatedAt', ['userId', 'evidenceState', 'updatedAt']),
+  learningThreadContributions: defineTable(learningThreadContributionFields)
+    .index('by_userId', ['userId'])
+    .index('by_userId_and_threadId_and_createdAt', ['userId', 'threadId', 'createdAt'])
+    .index('by_userId_and_provenanceKey', ['userId', 'provenanceKey'])
+    .index('by_userId_and_idempotencyKeyHash', ['userId', 'idempotencyKeyHash'])
+    .index('by_userId_and_evidenceSnapshotId', ['userId', 'evidenceSnapshotId'])
+    .index('by_userId_and_sourceFeature_and_sourceIdentity_and_sourceStatus', ['userId', 'sourceFeature', 'sourceIdentity', 'sourceStatus']),
   learningThreadActivities: defineTable(learningThreadActivityFields)
     .index('by_userId', ['userId'])
     .index('by_userId_and_threadId_and_boundaryOrdinal', ['userId', 'threadId', 'boundaryOrdinal'])

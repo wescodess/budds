@@ -384,6 +384,17 @@ export const purgeSourceEvidence = internalMutation({
         .eq('userId', args.userId).eq('sourceIdentityId', args.sourceIdentityId).eq('evidencePurgedAt', undefined))
       .take(BATCH_SIZE)
     for (const snapshot of snapshots) {
+      const contributions = await ctx.db.query('learningThreadContributions')
+        .withIndex('by_userId_and_evidenceSnapshotId', q => q.eq('userId', args.userId).eq('evidenceSnapshotId', snapshot._id))
+        .take(BATCH_SIZE)
+      for (const contribution of contributions) await ctx.db.patch(contribution._id, {
+        sourceIdentity: '[purged]', sourceRevision: '[purged]', evidenceSnapshotId: undefined,
+        metadata: {}, sourceStatus: 'source_unavailable',
+      })
+      if (contributions.length > 0) {
+        await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeSourceEvidence, args)
+        return { pending: true }
+      }
       if (await invalidateLinkedAdaptiveActivities(ctx, args.userId, snapshot._id, reason)) {
         await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeSourceEvidence, args)
         return { pending: true }
@@ -441,6 +452,18 @@ export const purgeSourceEvidence = internalMutation({
 export const purgeFolderDocumentSources = internalMutation({
   args: { userId: v.string(), documentId: v.id('documents') },
   handler: async (ctx, args) => {
+    const contributions = await ctx.db.query('learningThreadContributions')
+      .withIndex('by_userId_and_sourceFeature_and_sourceIdentity_and_sourceStatus', q => q
+        .eq('userId', args.userId).eq('sourceFeature', 'documents').eq('sourceIdentity', String(args.documentId)).eq('sourceStatus', 'available'))
+      .take(BATCH_SIZE)
+    for (const contribution of contributions) await ctx.db.patch(contribution._id, {
+      sourceIdentity: '[purged]', sourceRevision: '[purged]', evidenceSnapshotId: undefined,
+      metadata: {}, sourceStatus: 'source_unavailable',
+    })
+    if (contributions.length > 0) {
+      await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeFolderDocumentSources, args)
+      return { pending: true }
+    }
     const identities = await ctx.db.query('learnSourceIdentities')
       .withIndex('by_userId_and_folderDocumentId', q => q
         .eq('userId', args.userId).eq('folderDocumentId', args.documentId))

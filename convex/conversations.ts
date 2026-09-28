@@ -1,4 +1,5 @@
 import { v } from 'convex/values'
+import { internal } from './_generated/api'
 import { mutation, query } from './_generated/server'
 import { getOptionalAuthUserId, requireAuth } from './lib/auth'
 import { scheduleAudioOverviewDeletion } from './audioOverviews'
@@ -98,6 +99,7 @@ export const deleteConversation = mutation({
     for (const msg of messages) {
       await ctx.db.delete(msg._id)
     }
+    await ctx.scheduler.runAfter(0, internal.learnAdaptiveContributionRetention.purgeUnavailableContributions, { userId })
 
     const audioRoom = await ctx.db
       .query('audioOverviewRooms')
