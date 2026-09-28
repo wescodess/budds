@@ -23,7 +23,7 @@ const isOnline = ref(true)
 mockNuxtImport('useLearnAdaptiveAccess', () => () => ({ allowed, checkingAccess: ref(false) }))
 mockNuxtImport('useRoute', () => () => requestedRoute)
 mockNuxtImport('useOnlineStatus', () => () => ({ isOnline }))
-mockNuxtImport('useConvexMutation', () => (reference: never) => ({ mutate: getFunctionName(reference).startsWith('learnAdaptive:setMemoryPreference') || getFunctionName(reference).startsWith('learnAdaptive:deleteArtifact') ? memoryMutationCalls : mutationCalls }))
+mockNuxtImport('useConvexMutation', () => (reference: never) => ({ mutate: ['learnAdaptive:setMemoryPreference', 'learnAdaptive:deleteArtifact', 'learnAdaptive:requestPromotion'].some(name => getFunctionName(reference).startsWith(name)) ? memoryMutationCalls : mutationCalls }))
 mockNuxtImport('useConvexAction', () => () => ({ mutate: vi.fn() }))
 mockNuxtImport('useConvexQuery', () => (reference: never, args: unknown) => {
   const name = getFunctionName(reference)
@@ -634,6 +634,25 @@ describe('adaptive thread route isolation', () => {
       threadId: 'thread_1', artifactId: 'artifact_1', expectedRevision: 3, idempotencyKey: expect.any(String),
     })))
     await vi.waitFor(() => expect(drawer.querySelector('[data-testid="learn-memory-status"]')?.textContent).toContain('cleanup is pending'))
+    wrapper.unmount()
+  })
+
+  it('sends an explicit proposal with the selected source and thread revision', async () => {
+    const Page = await import(path)
+    projection.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Build a plan', intent: 'build', evidenceState: 'none', lifecycle: 'active', revision: 3, authorityKind: 'standalone' },
+      currentActivity: null, history: [], nextAction: { kind: 'continue', label: 'Continue', activityId: null } }
+    memory.value = { ownerId: 'owner_1', threadId: 'thread_1', threadRevision: 3, lifecycle: 'active', unresolvedPoint: null,
+      nextAction: { label: 'Continue' }, evidenceState: 'none', preferences: [], artifacts: [], history: [],
+      promotionCandidates: [{ basis: 'useful_artifact', sourceId: 'artifact_1', label: 'My plan', allowedKinds: ['review', 'mastery'] }],
+      promotionProposals: [] }
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1', attachTo: document.body })
+    await wrapper.get('[data-testid="learn-memory-open"]').trigger('click')
+    const drawer = document.querySelector('[data-testid="learn-memory-drawer"]') as HTMLElement
+    ;(drawer.querySelector('[data-testid="learn-memory-promote-review-artifact_1"]') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(memoryMutationCalls).toHaveBeenCalledWith(expect.objectContaining({
+      threadId: 'thread_1', kind: 'review', artifactId: 'artifact_1', expectedRevision: 3, idempotencyKey: expect.any(String),
+    })))
+    await vi.waitFor(() => expect(drawer.querySelector('[data-testid="learn-memory-status"]')?.textContent).toContain('No check was scheduled'))
     wrapper.unmount()
   })
 

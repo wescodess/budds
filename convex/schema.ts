@@ -1435,6 +1435,24 @@ export default defineSchema({
   learningThreadPreferences: defineTable(learningThreadPreferenceFields)
     .index('by_userId', ['userId'])
     .index('by_userId_and_threadId_and_key', ['userId', 'threadId', 'key']),
+  learningThreadPromotionProposals: defineTable({
+    userId: v.string(), threadId: v.id('learningThreads'),
+    kind: v.union(v.literal('review'), v.literal('mastery')),
+    basis: v.union(v.literal('useful_artifact'), v.literal('representative_performance')),
+    proposalVersion: v.literal('learn-adaptive.promotion-proposal.v1'),
+    threadRevision: v.number(), activityId: v.id('learningThreadActivities'),
+    activityPlanRevision: v.number(),
+    artifactId: v.optional(v.id('learningThreadArtifacts')),
+    artifactRevision: v.optional(v.number()),
+    attemptId: v.optional(v.id('masteryAttempts')),
+    representativeOutcome: v.optional(v.union(v.literal('passed'), v.literal('needs_practice'))),
+    learningVoidId: v.optional(v.id('learningVoids')),
+    blueprintRevisionId: v.optional(v.id('learnBlueprintRevisions')),
+    objectiveId: v.optional(v.id('learnObjectives')),
+    sessionContentId: v.optional(v.id('sessionContent')),
+    createdAt: v.number(),
+  }).index('by_userId', ['userId'])
+    .index('by_userId_and_threadId_and_createdAt', ['userId', 'threadId', 'createdAt']),
   learningVoids: defineTable({ userId: v.string(), folderId: v.id('folders'), title: v.string(), status: v.union(v.literal('draft'), v.literal('sourcing'), v.literal('source_review'), v.literal('map_review'), v.literal('calibration'), v.literal('plan_review'), v.literal('scheduled'), v.literal('active'), v.literal('completed'), v.literal('paused'), v.literal('needs_attention'), v.literal('failed'), v.literal('archived')), revision: v.number(), activeBlueprintRevisionId: v.optional(v.id('learnBlueprintRevisions')), lastIdempotencyKey: v.optional(v.string()), legacyCourseId: v.optional(v.id('courses')), legacyUpgradeIdempotencyKey: v.optional(v.string()), legacyUpgradeRequestFingerprint: v.optional(v.string()), legacySourcePolicy: v.optional(v.union(v.literal('folder_only'), v.literal('folder_plus_web'), v.literal('web_only'))), createdAt: v.number(), updatedAt: v.number() }).index('by_userId', ['userId']).index('by_userId_and_folderId', ['userId', 'folderId']).index('by_userId_and_status', ['userId', 'status']).index('by_userId_and_legacyCourseId', ['userId', 'legacyCourseId']).index('by_userId_and_legacyUpgradeIdempotencyKey', ['userId', 'legacyUpgradeIdempotencyKey']),
   learnBlueprints: defineTable({ userId: v.string(), learningVoidId: v.id('learningVoids'), revision: v.number(), createdAt: v.number() }).index('by_userId', ['userId']).index('by_userId_and_learningVoidId', ['userId', 'learningVoidId']),
   learnBlueprintRevisions: defineTable({ userId: v.string(), blueprintId: v.id('learnBlueprints'), learningVoidId: v.id('learningVoids'), revision: v.number(), recordRevision: v.number(), status: v.union(v.literal('draft'), v.literal('source_review'), v.literal('map_review'), v.literal('accepted'), v.literal('active'), v.literal('superseded')), intentVersion: v.optional(v.literal('learn-v2.blueprint-intent.v1')), desiredOutcome: v.optional(v.string()), mode: v.optional(v.union(v.literal('understand'), v.literal('prepare'), v.literal('apply'))), desiredDepth: v.optional(v.union(v.literal('overview'), v.literal('working'), v.literal('deep'))), sourcePolicy: v.optional(v.union(v.literal('folder_only'), v.literal('folder_plus_web'), v.literal('web_only'))), targetLocalDate: v.optional(v.string()), sessionMinutes: v.optional(v.number()), generationInputDigest: v.optional(v.string()), generationSupportingSourceSnapshotIds: v.optional(v.array(v.id('learnSourceSnapshots'))), generatorVersion: v.optional(v.string()), generationProvider: v.optional(v.literal('openrouter_via_cloudflare_ai_gateway')), generationModel: v.optional(v.string()), generationRequestId: v.optional(v.string()), generatedAt: v.optional(v.number()), acceptedAt: v.optional(v.number()), createdAt: v.number(), updatedAt: v.number() }).index('by_userId', ['userId']).index('by_userId_and_blueprintId_and_revision', ['userId', 'blueprintId', 'revision']).index('by_userId_and_learningVoidId', ['userId', 'learningVoidId']).index('by_userId_and_learningVoidId_and_status', ['userId', 'learningVoidId', 'status']),

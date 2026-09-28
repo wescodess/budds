@@ -41,6 +41,28 @@ it('separates editable memory from read-only history and emits explicit intents'
   wrapper.unmount()
 })
 
+it('offers review and mastery only when a learner chooses a pinned source', async () => {
+  const Comp = await import('~/components/learn-adaptive/MemoryDrawer.vue')
+  const projected = { ...memory,
+    promotionCandidates: [
+      { basis: 'useful_artifact' as const, sourceId: 'artifact-1', label: 'My plan', allowedKinds: ['review', 'mastery'] as const },
+      { basis: 'representative_performance' as const, sourceId: 'activity-2', label: 'Practice result', allowedKinds: ['review'] as const },
+    ],
+    promotionProposals: [{ id: 'proposal-1', kind: 'review' as const, basis: 'useful_artifact' as const, sourceLabel: 'My plan' }],
+  }
+  const wrapper = await mountSuspended(Comp.default, { props: { memory: projected, pending: false }, attachTo: document.body })
+  await wrapper.get('[data-testid="learn-memory-open"]').trigger('click')
+  const drawer = document.querySelector('[data-testid="learn-memory-drawer"]') as HTMLElement
+  expect(drawer.textContent).toContain('Review proposed from My plan')
+  expect(drawer.textContent).toContain('Assisted work still needs independent evidence before mastery can advance.')
+  expect((drawer.querySelector('[data-testid="learn-memory-promote-mastery-artifact-1"]') as HTMLButtonElement).textContent).toContain('Explore mastery path')
+  expect(drawer.querySelectorAll('[data-testid^="learn-memory-promote-"]')).toHaveLength(3)
+  ;(drawer.querySelector('[data-testid="learn-memory-promote-review-artifact-1"]') as HTMLButtonElement).click()
+  expect(wrapper.emitted('request-promotion')?.[0]).toEqual([{ kind: 'review', basis: 'useful_artifact', sourceId: 'artifact-1' }])
+  expect(drawer.querySelector('[data-testid="learn-memory-promote-mastery-activity-2"]')).toBeNull()
+  wrapper.unmount()
+})
+
 it('labels stale artifacts and shows only verified score and mastery facts in read-only history', async () => {
   const Comp = await import('~/components/learn-adaptive/MemoryDrawer.vue')
   const projected = {

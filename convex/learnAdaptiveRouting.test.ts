@@ -151,6 +151,25 @@ async function completedFactualFixture(input: { kind: 'independent_application' 
 }
 
 describe('server-authorized adaptive routing decisions', () => {
+  test('explicit promotion pins a verified representative pass without another mastery transition', async () => {
+    const { t, owner, ids, attached } = await completedFactualFixture({ kind: 'independent_application', scorePercent: 92,
+      stateBefore: 'unseen', stateAfter: 'independent', reason: 'unassisted_pass_independent' })
+    const activity = await t.run(async ctx => ctx.db.get((await ctx.db.get(attached.threadId))!.currentActivityId!))
+    if (!activity) throw new Error('Expected activity')
+    const proposed = await owner.mutation(api.learnAdaptive.requestPromotion, {
+      threadId: attached.threadId, activityId: activity._id, kind: 'mastery',
+      expectedRevision: 2, idempotencyKey: 'routing-promotion-master-0001',
+    })
+    expect(proposed).toMatchObject({ kind: 'ok', value: { kind: 'mastery', basis: 'representative_performance' }, revision: 3 })
+    expect(await owner.query(api.learnAdaptive.listPromotionProposals, { threadId: attached.threadId })).toMatchObject([{
+      kind: 'mastery', basis: 'representative_performance', activityId: activity._id,
+      attemptId: activity.masteryAttemptId, objectiveId: ids.objectiveId,
+      blueprintRevisionId: ids.blueprintRevisionId, sessionContentId: ids.sessionContentId,
+    }])
+    expect((await t.run(ctx => ctx.db.query('masteryAttempts').withIndex('by_userId', q => q.eq('userId', ownerId)).take(2))).length).toBe(1)
+    expect((await t.run(ctx => ctx.db.query('studySessions').withIndex('by_userId', q => q.eq('userId', ownerId)).take(2))).length).toBe(1)
+  })
+
   test('applies Compare sources only from two live accepted source pins', async () => {
     const { owner, attached } = await completedFactualFixture({ kind: 'retained_transfer', scorePercent: 92,
       stateBefore: 'independent', stateAfter: 'retained', reason: 'eligible_delayed_pass_retained',

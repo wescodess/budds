@@ -14,6 +14,10 @@ type Memory = {
   history: readonly { activityId: string, purpose: string, status: string, activityClass: string, updatedAt: number, readOnly: true,
     evidenceStatus: 'ready' | 'unavailable' | 'not_required',
     attempt: { id: string, scorePercent: number, masteryStateAfter: string | null } | null }[]
+  promotionCandidates?: readonly { basis: 'useful_artifact' | 'representative_performance', sourceId: string,
+    label: string, allowedKinds: readonly ('review' | 'mastery')[] }[]
+  promotionProposals?: readonly { id: string, kind: 'review' | 'mastery',
+    basis: 'useful_artifact' | 'representative_performance', sourceLabel: string }[]
 }
 
 const props = defineProps<{
@@ -29,6 +33,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   'set-preference': [payload: { key: PreferenceKey, operation: 'set' | 'disable' | 'clear', value?: string }]
   'delete-artifact': [artifactId: string]
+  'request-promotion': [payload: { kind: 'review' | 'mastery', basis: 'useful_artifact' | 'representative_performance', sourceId: string }]
   'refresh': []
   'retry': []
 }>()
@@ -91,6 +96,10 @@ function deleteArtifact(id: string) {
   localAnnouncement.value = 'Artifact deletion requested. Waiting for confirmation.'
   confirmArtifactId.value = null
 }
+function requestPromotion(kind: 'review' | 'mastery', candidate: NonNullable<Memory['promotionCandidates']>[number]) {
+  emit('request-promotion', { kind, basis: candidate.basis, sourceId: candidate.sourceId })
+  localAnnouncement.value = 'Proposal requested. Waiting for confirmation.'
+}
 </script>
 
 <template>
@@ -140,6 +149,25 @@ function deleteArtifact(id: string) {
               <p class="mt-1">{{ artifact.summary }}</p>
               <p v-if="artifact.historical" class="mt-1">Historical artifact · supporting evidence unavailable · read-only content</p>
               <button v-if="artifactEditable" type="button" :disabled="busy" :data-testid="confirmArtifactId === artifact.id ? `learn-memory-confirm-delete-${artifact.id}` : `learn-memory-delete-${artifact.id}`" class="mt-2 min-h-11 rounded-lg border border-border px-3 text-sm disabled:opacity-50" @click="deleteArtifact(artifact.id)">{{ confirmArtifactId === artifact.id ? 'Confirm delete artifact' : 'Delete artifact' }}</button>
+            </li>
+          </ul>
+        </section>
+        <section aria-labelledby="learn-memory-promotion-heading" data-testid="learn-memory-promotion" class="space-y-3 border-t border-border pt-4">
+          <h3 id="learn-memory-promotion-heading" class="font-semibold">Optional review and mastery</h3>
+          <p class="text-sm text-muted-foreground">Choose a saved artifact or representative result to request a future path. A proposal does not award mastery or schedule a check. Assisted work still needs independent evidence before mastery can advance.</p>
+          <p v-if="!memory.promotionCandidates?.length" class="text-sm">No work is ready for an optional proposal yet.</p>
+          <ul v-else-if="editable" class="space-y-2">
+            <li v-for="candidate in memory.promotionCandidates" :key="`${candidate.basis}:${candidate.sourceId}`" class="rounded-lg border border-border p-3 text-sm">
+              <p>{{ candidate.label }} · {{ candidate.basis === 'useful_artifact' ? 'Saved artifact' : 'Representative result' }}</p>
+              <div class="mt-2 flex flex-wrap gap-2">
+                <button v-for="kind in candidate.allowedKinds" :key="kind" type="button" :disabled="busy || Boolean(error)" :data-testid="`learn-memory-promote-${kind}-${candidate.sourceId}`" class="min-h-11 rounded-lg border border-border px-3 text-sm disabled:opacity-50" @click="requestPromotion(kind, candidate)">{{ kind === 'mastery' ? 'Explore mastery path' : 'Propose review' }}</button>
+              </div>
+            </li>
+          </ul>
+          <p v-if="memory.lifecycle === 'ended'" class="text-sm text-muted-foreground">This ended thread is available for review only.</p>
+          <ul v-if="memory.promotionProposals?.length" class="space-y-2" aria-label="Requested proposals">
+            <li v-for="proposal in memory.promotionProposals" :key="proposal.id" class="rounded-lg border border-border p-3 text-sm">
+              {{ proposal.kind === 'review' ? 'Review' : 'Mastery path' }} proposed from {{ proposal.sourceLabel }}. No check is scheduled and no mastery is awarded.
             </li>
           </ul>
         </section>
