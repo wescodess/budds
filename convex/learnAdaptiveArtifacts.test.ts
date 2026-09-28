@@ -4,6 +4,8 @@ import { afterAll, beforeEach, describe, expect, test } from 'vitest'
 import { api, internal } from './_generated/api'
 import schema from './schema'
 import { privateAdaptiveArtifactR2Key } from './lib/learnAdaptiveArtifacts'
+import { composeAdaptiveActivityPlan } from '../shared/learn-adaptive-activity-plan'
+import { storedPlan } from './learnAdaptiveRecovery'
 
 const modules = import.meta.glob('./**/*.ts')
 const OWNER = { tokenIdentifier: 'https://auth.example.com|artifact-owner' }
@@ -34,6 +36,30 @@ async function fixture() {
 }
 
 describe('adaptive thread artifacts', () => {
+  test('projects only the current owner artifact plan after replay validation', async () => {
+    const { t, owner, other, threadId } = await fixture()
+    expect(await owner.query(api.learnAdaptive.getArtifactCanvas, { threadId })).toBeNull()
+    const activity = await t.run(async ctx => {
+      const thread = await ctx.db.get(threadId)
+      return thread?.currentActivityId ? ctx.db.get(thread.currentActivityId) : null
+    })
+    if (!activity) throw new Error('Expected current activity')
+    const composed = await composeAdaptiveActivityPlan({ ...storedPlan(activity), replacesActivityId: activity.replacesActivityId ?? undefined,
+      primitiveSequence: [{ type: 'artifact_workspace', action: 'save_artifact', props: { prompt: 'Build a usable study plan.', artifactKind: 'plan', starterText: 'Goal:' } }],
+      requiredAction: { kind: 'save_artifact', label: 'Save artifact' },
+      evaluationContract: { version: 'learn-adaptive.evaluation.v1', kind: 'learner_response', responseFormat: 'long_text', passingScorePercent: null },
+      accessibilityMetadata: { heading: 'Study plan', instructions: 'Write a plan and save it.', focusTargetTestId: 'learn-primitive-artifact-workspace', liveRegionMode: 'polite' },
+    })
+    await t.run(ctx => ctx.db.patch(activity._id, { primitivePlan: composed.primitivePlan, requiredAction: composed.requiredAction,
+      evaluationContract: composed.evaluationContract, accessibilityMetadata: composed.accessibilityMetadata,
+      canonicalInputSnapshot: composed.canonicalInputSnapshot, inputDigest: composed.inputDigest }))
+    const projected = await owner.query(api.learnAdaptive.getArtifactCanvas, { threadId })
+    expect(projected).toMatchObject({ status: 'eligible', activity: { primitive: { type: 'artifact_workspace', action: 'save_artifact' } } })
+    expect(await other.query(api.learnAdaptive.getArtifactCanvas, { threadId })).toBeNull()
+    await t.run(ctx => ctx.db.patch(activity._id, { inputDigest: 'tampered' }))
+    expect(await owner.query(api.learnAdaptive.getArtifactCanvas, { threadId })).toMatchObject({ status: 'blocked', activity: { primitive: null } })
+  })
+
   test('saves one bounded owner-scoped artifact with a receipt and no attempt authority', async () => {
     const { t, owner, other, threadId, activityId } = await fixture()
     const input = { threadId, activityId, artifactKind: 'plan' as const, title: 'My study plan', summary: 'Practice the core idea and explain it back.', status: 'saved' as const, expectedRevision: 3, idempotencyKey: 'artifact-save-0001' }

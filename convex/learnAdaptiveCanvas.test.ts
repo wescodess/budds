@@ -382,6 +382,27 @@ describe('ready V2 adaptive Canvas', () => {
     expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'ready', activity: { draftKind: 'source_comparison', primitive: { type: 'source_comparison' } } })
   })
 
+  test('stages an independent application only when its prompt matches the scored content', async () => {
+    const { t, owner, ids } = await fixture()
+    const attached = await owner.mutation(api.learnAdaptiveCanvas.attachReadySession, { studySessionId: ids.studySessionId, expectedSessionRevision: 2, idempotencyKey: 'canvas-application-attach-0001' })
+    await owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: ids.studySessionId, expectedSessionRevision: 2, expectedContentRevision: 1, idempotencyKey: 'canvas-application-start-0001' })
+    const prompt = await t.run(async ctx => {
+      const thread = (await ctx.db.get(attached.threadId))!
+      const activity = (await ctx.db.get(thread.currentActivityId!))!
+      const blocks = await ctx.db.query('sessionContentBlocks').withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', OWNER.tokenIdentifier).eq('sessionContentId', activity.sessionContentId!)).take(17)
+      const prompt = blocks.find(block => block.kind === 'independent_application')!.content!
+      await ctx.db.patch(activity._id, { primitivePlan: [{ contractVersion: 'learn-adaptive.activity-contract.v1', rendererVersion: 'learn-adaptive.renderer.v1', type: 'independent_application', action: 'submit_response', testId: 'learn-primitive-independent-application', props: { prompt: 'Different scored question.', responseFormat: 'long_text', draftPersistence: true } }], requiredAction: { kind: 'submit_response', label: 'Submit response' } })
+      return prompt
+    })
+    const input = { threadId: attached.threadId, activityId: attached.activityId, studySessionId: ids.studySessionId, expectedSessionRevision: 3, expectedRevision: 2, response: 'Earth attracts the apple.', confidence: 4 }
+    await expect(owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, { ...input, idempotencyKey: 'canvas-application-bad-0001' })).rejects.toThrow(/Independent application response is invalid/)
+    await t.run(async ctx => {
+      const thread = (await ctx.db.get(attached.threadId))!
+      await ctx.db.patch(thread.currentActivityId!, { primitivePlan: [{ contractVersion: 'learn-adaptive.activity-contract.v1', rendererVersion: 'learn-adaptive.renderer.v1', type: 'independent_application', action: 'submit_response', testId: 'learn-primitive-independent-application', props: { prompt, responseFormat: 'long_text', draftPersistence: true } }] })
+    })
+    expect(await owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, { ...input, idempotencyKey: 'canvas-application-good-0001' })).toMatchObject({ kind: 'ok', value: { status: 'submitted' } })
+  })
+
   test('non-rendered claims and extra supports must be ready before attach and while responding', async () => {
     const beforeAttach = await fixture()
     await beforeAttach.t.run(async ctx => {

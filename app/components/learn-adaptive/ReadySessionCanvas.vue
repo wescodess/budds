@@ -41,7 +41,7 @@ const submitAction = import.meta.client ? useConvexAction(api.learnAdaptive.subm
 const sessionRevision = ref(props.canvas.session.revision)
 const threadRevision = ref(Math.max(props.canvas.thread.revision, props.authoritativeRevision ?? 0))
 const started = ref(['started', 'submitted', 'scoring', 'reconciling', 'feedback'].includes(props.canvas.status))
-const responseStep = ref(props.canvas.activity.primitive?.type === 'source_comparison' || ['submitted', 'scoring', 'reconciling', 'feedback'].includes(props.canvas.status))
+const responseStep = ref(['source_comparison', 'independent_application'].includes(props.canvas.activity.primitive?.type ?? '') || ['submitted', 'scoring', 'reconciling', 'feedback'].includes(props.canvas.status))
 const exampleRevealed = ref(props.canvas.activity.primitive?.type !== 'worked_example' || ['submitted', 'scoring', 'reconciling', 'feedback'].includes(props.canvas.status))
 const exampleRevealPending = ref(false)
 const exampleStepsHeading = ref<HTMLElement | null>(null)
@@ -98,7 +98,7 @@ watch([() => props.canvas.thread.revision, () => props.authoritativeRevision], (
   threadRevision.value = Math.max(threadRevision.value, canvasRevision, authoritativeRevision ?? 0)
 })
 watch(() => props.canvas.status, value => {
-  if (value === 'started') { started.value = true; if (props.canvas.activity.primitive?.type === 'source_comparison') responseStep.value = true }
+  if (value === 'started') { started.value = true; if (['source_comparison', 'independent_application'].includes(props.canvas.activity.primitive?.type ?? '')) responseStep.value = true }
   if (['submitted', 'scoring', 'reconciling', 'feedback'].includes(value)) { started.value = true; staged.value = true; responseStep.value = true }
   if (value === 'reconciling') scoreState.value = 'reconciling'
   if (value === 'feedback') scoreState.value = 'complete'
@@ -110,7 +110,7 @@ watch([
   () => props.canvas.activity.primitive?.action,
 ], () => {
   exampleRevealed.value = props.canvas.activity.primitive?.type !== 'worked_example' || responseStep.value
-  if (props.canvas.activity.primitive?.type === 'source_comparison') responseStep.value = true
+  if (['source_comparison', 'independent_application'].includes(props.canvas.activity.primitive?.type ?? '')) responseStep.value = true
 })
 watch(() => props.canvas.savedResponse, (saved) => {
   if (!saved) return
@@ -142,7 +142,7 @@ watch([started, responseStep, exampleRevealed, isOnline, busy, meaningfulStartRe
   try {
     await nextTick()
     if (!meaningfulStartOperableSeen) {
-      if ((showingResponse && renderedPrimitive.value?.type !== 'source_comparison') || !renderedPrimitive.value || !props.canvas.responsePrompt || !meaningfulStartAction.value || meaningfulStartAction.value.disabled
+      if ((showingResponse && !['source_comparison', 'independent_application'].includes(renderedPrimitive.value?.type ?? '')) || !renderedPrimitive.value || !props.canvas.responsePrompt || !meaningfulStartAction.value || meaningfulStartAction.value.disabled
         || meaningfulStartAction.value.textContent?.trim() !== props.canvas.activity.requiredAction.label) {
         scheduleMeaningfulStartRetry()
         return
@@ -195,12 +195,15 @@ const renderValidation = computed(() => {
   const validated = validateAdaptiveActivityPrimitive({ type: primitive.type, action: primitive.action, props: inputProps }, context)
   if (!validated.ok) return { reason: validated.error.code, primitive: null }
   if (primitive.testId !== validated.value.testId) return { reason: 'invalid_props' as const, primitive: null }
-  if (validated.value.type !== 'cited_explanation' && validated.value.type !== 'worked_example' && validated.value.type !== 'source_comparison') return { reason: 'renderer_unavailable' as const, primitive: null }
+  if (validated.value.type !== 'cited_explanation' && validated.value.type !== 'worked_example'
+    && validated.value.type !== 'source_comparison' && validated.value.type !== 'independent_application') return { reason: 'renderer_unavailable' as const, primitive: null }
   if (validated.value.type === 'cited_explanation' && validated.value.action !== 'continue'
+    || validated.value.type === 'independent_application' && validated.value.action !== 'submit_response'
     || props.canvas.activity.requiredAction.kind !== validated.value.action
-    || props.canvas.activity.requiredAction.label !== (validated.value.type === 'source_comparison' ? (validated.value.action === 'choose_source' ? 'Choose source' : 'Submit comparison') : validated.value.action === 'reveal_example' ? 'Reveal example' : 'Continue')) return { reason: 'unsupported_action' as const, primitive: null }
+    || props.canvas.activity.requiredAction.label !== (validated.value.type === 'source_comparison' ? (validated.value.action === 'choose_source' ? 'Choose source' : 'Submit comparison') : validated.value.type === 'independent_application' ? 'Submit response' : validated.value.action === 'reveal_example' ? 'Reveal example' : 'Continue')) return { reason: 'unsupported_action' as const, primitive: null }
   const prompt = props.canvas.responsePrompt
   if (typeof prompt !== 'string' || !prompt.trim()) return { reason: 'invalid_props' as const, primitive: null }
+  if (validated.value.type === 'independent_application' && validated.value.props.prompt !== prompt.trim()) return { reason: 'invalid_props' as const, primitive: null }
   if (prompt.length > 4_000) return { reason: 'oversized_prop' as const, primitive: null }
   if (/\b(?:javascript|vbscript|file)\s*:|\bdata\s*:\s*text\/html/iu.test(prompt)) return { reason: 'unsafe_url' as const, primitive: null }
   if (/<\/?[a-z][^>]*>|\bon[a-z]+\s*=/iu.test(prompt)) return { reason: 'executable_content' as const, primitive: null }
@@ -211,6 +214,7 @@ const renderedPrimitive = computed(() => renderValidation.value.primitive)
 const citedExplanation = computed(() => renderedPrimitive.value?.type === 'cited_explanation' ? renderedPrimitive.value : null)
 const workedExample = computed(() => renderedPrimitive.value?.type === 'worked_example' ? renderedPrimitive.value : null)
 const sourceComparison = computed(() => renderedPrimitive.value?.type === 'source_comparison' ? renderedPrimitive.value : null)
+const independentApplication = computed(() => renderedPrimitive.value?.type === 'independent_application' ? renderedPrimitive.value : null)
 async function recordWorkedExampleGuidance() {
   if (!workedExample.value || !started.value || staged.value || exampleRevealed.value || exampleRevealPending.value || !isOnline.value) return false
   exampleRevealPending.value = true
@@ -310,10 +314,14 @@ async function start() {
     await startMutation.mutate({ studySessionId: props.canvas.session.studySessionId as never, expectedSessionRevision: dispatchedRevision, expectedContentRevision: props.canvas.session.contentRevision, idempotencyKey: startKey.value })
     sessionRevision.value = Math.max(sessionRevision.value, dispatchedRevision + 1)
     started.value = true
-    notice.value = sourceComparison.value ? 'Session started. Compare the two supported sources.' : workedExample.value ? 'Session started. Review the guided example.' : 'Session started. Read the supported explanation.'
+    notice.value = sourceComparison.value ? 'Session started. Compare the two supported sources.' : independentApplication.value ? 'Session started. Apply the evidence independently.' : workedExample.value ? 'Session started. Review the guided example.' : 'Session started. Read the supported explanation.'
     if (sourceComparison.value) {
       await nextTick()
       comparisonHeading.value?.focus()
+    }
+    else if (independentApplication.value) {
+      await nextTick()
+      responseHeading.value?.focus()
     }
   }
   catch (cause) { error.value = getErrorMessage(cause, 'Could not start this session. Try again.') }
@@ -445,9 +453,10 @@ async function submitWithValidation() {
     </div>
     <div v-else-if="!started" data-testid="learn-canvas-ready" class="mt-6 rounded-xl border border-border bg-card p-5">
       <article :data-testid="`${renderedPrimitive.testId}-ready`" aria-label="Activity ready">
-        <h2 class="font-dm-sans text-xl font-semibold">{{ renderedPrimitive.type === 'source_comparison' ? 'Compare two sources' : renderedPrimitive.props.heading }}</h2>
+        <h2 class="font-dm-sans text-xl font-semibold">{{ renderedPrimitive.type === 'source_comparison' ? 'Compare two sources' : renderedPrimitive.type === 'independent_application' ? 'Apply it independently' : renderedPrimitive.props.heading }}</h2>
         <p v-if="renderedPrimitive.type === 'cited_explanation'" class="mt-2 text-sm text-muted-foreground">A cited explanation supported by {{ renderedPrimitive.props.sourceRefs.length }} accepted {{ renderedPrimitive.props.sourceRefs.length === 1 ? 'source is' : 'sources are' }} ready.</p>
         <p v-else-if="renderedPrimitive.type === 'source_comparison'" class="mt-2 whitespace-pre-wrap break-words text-sm">{{ renderedPrimitive.props.prompt }} Two accepted sources are ready for comparison.</p>
+        <p v-else-if="renderedPrimitive.type === 'independent_application'" class="mt-2 whitespace-pre-wrap break-words text-sm">{{ renderedPrimitive.props.prompt }} Your response will be evaluated by the server after submission.</p>
         <template v-else>
           <p class="mt-2 whitespace-pre-wrap break-words text-sm">{{ renderedPrimitive.props.problem }}</p>
           <p data-testid="learn-canvas-ready-guided-consequence" class="mt-3 rounded-lg border border-border bg-muted p-3 text-sm">Guided support: {{ renderedPrimitive.props.guidedConsequence }} The steps remain hidden until the session starts; viewing them is recorded as guided support.</p>
@@ -492,13 +501,18 @@ async function submitWithValidation() {
           </div>
         </fieldset>
       </article>
+      <article v-if="independentApplication" :data-testid="independentApplication.testId" class="min-w-0 rounded-xl border border-border bg-card p-4 sm:p-5" aria-label="Independent application">
+        <h2 class="font-dm-sans text-xl font-semibold">Apply it independently</h2>
+        <p class="mt-2 whitespace-pre-wrap break-words">{{ independentApplication.props.prompt }}</p>
+        <p class="mt-2 text-sm text-muted-foreground">Your answer is saved before server evaluation. Hints or reveals can affect the evaluation.</p>
+      </article>
       <template v-if="!responseStep">
         <button v-if="citedExplanation" ref="meaningfulStartAction" type="button" data-testid="learn-canvas-continue" class="min-h-11 rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)]" @click="continueActivity">Continue</button>
         <button v-else-if="workedExample && !exampleRevealed" ref="meaningfulStartAction" type="button" data-testid="learn-canvas-reveal-example" :disabled="exampleRevealPending || !isOnline" class="min-h-11 rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)] disabled:opacity-50" @click="revealExample">{{ exampleRevealPending ? 'Recording guided support…' : 'Reveal example' }}</button>
         <button v-else-if="workedExample" ref="meaningfulStartAction" type="button" data-testid="learn-canvas-continue" class="min-h-11 rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)]" @click="continueActivity">Continue</button>
       </template>
       <div v-else class="rounded-xl border border-border bg-card p-5">
-        <h2 ref="responseHeading" tabindex="-1" class="font-dm-sans text-xl font-semibold focus:outline-none">{{ sourceComparison ? 'Explain your source choice' : workedExample ? 'Respond after guided support' : 'Apply what you learned' }}</h2>
+        <h2 ref="responseHeading" tabindex="-1" :data-testid="independentApplication ? 'learn-canvas-independent-response-heading' : undefined" class="font-dm-sans text-xl font-semibold focus:outline-none">{{ sourceComparison ? 'Explain your source choice' : workedExample ? 'Respond after guided support' : independentApplication ? 'Your independent response' : 'Apply what you learned' }}</h2>
         <p v-if="workedExample" data-testid="learn-canvas-worked-status" role="status" class="mt-2 text-sm">Guided support reviewed. This response follows a worked example and is not an independent attempt or proof of mastery.</p>
         <p v-if="!sourceComparison" data-testid="learn-canvas-response-prompt" class="mt-3 whitespace-pre-wrap leading-7">{{ canvas.responsePrompt }}</p>
         <template v-if="!staged">
@@ -510,7 +524,7 @@ async function submitWithValidation() {
           <label v-if="sourceComparison" class="mt-4 block text-sm font-medium">Why did you choose this source?<textarea ref="comparisonRationaleField" v-model="comparisonRationale" data-testid="learn-canvas-comparison-rationale" rows="5" maxlength="12000" class="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2" /></label>
           <label v-else class="mt-4 block text-sm font-medium">Your response<textarea v-model="response" data-testid="learn-canvas-response" rows="5" maxlength="12000" class="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2" /></label>
           <fieldset class="mt-4"><legend class="text-sm font-medium">How confident are you?</legend><div class="mt-2 flex flex-wrap gap-3"><label v-for="value in [1, 2, 3, 4, 5]" :key="value" class="flex min-h-11 items-center gap-1 text-sm"><input v-model.number="confidence" type="radio" name="canvas-confidence" :value="value" :data-testid="`learn-canvas-confidence-${value}`">{{ value }}</label></div></fieldset>
-          <button :ref="sourceComparison ? 'meaningfulStartAction' : undefined" type="button" data-testid="learn-canvas-submit" :disabled="sourceComparison ? busy || !isOnline : !canSubmit" class="mt-4 min-h-11 rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50" @click="submitWithValidation">{{ busy ? 'Submitting…' : sourceComparison ? canvas.activity.requiredAction.label : 'Submit response' }}</button>
+          <button :ref="sourceComparison || independentApplication ? 'meaningfulStartAction' : undefined" type="button" data-testid="learn-canvas-submit" :disabled="sourceComparison ? busy || !isOnline : !canSubmit" class="mt-4 min-h-11 rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50" @click="submitWithValidation">{{ busy ? 'Submitting…' : sourceComparison ? canvas.activity.requiredAction.label : 'Submit response' }}</button>
         </template>
         <div v-else data-testid="learn-canvas-status" role="status" class="mt-4 text-sm">
           <p v-if="sourceComparison && authoritativeSavedResponse" data-testid="learn-canvas-comparison-saved" class="mb-2">Chosen source: {{ sourceComparison.props.sources.find(source => source.sourceRef === decodeSourceComparisonResponse(authoritativeSavedResponse!.response)?.sourceRef)?.label ?? 'Saved choice' }}. Rationale: {{ decodeSourceComparisonResponse(authoritativeSavedResponse!.response)?.rationale ?? '' }}</p>

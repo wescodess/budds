@@ -3,7 +3,8 @@ import { action, mutation, query, type MutationCtx, type QueryCtx } from './_gen
 import type { Doc } from './_generated/dataModel'
 import { AdaptiveCommandRejection, executeAdaptiveThreadCommand, initiateAdaptiveThreadDeletion } from './learnAdaptiveCommands'
 import { requireAdaptiveQueryAccess } from './lib/adaptiveLearnAccess'
-import { isOperableDiagnosticActivity, liveEvidenceState } from './learnAdaptiveRecovery'
+import { isOperableDiagnosticActivity, liveEvidenceState, storedPlan } from './learnAdaptiveRecovery'
+import { replayAdaptiveActivityPlan } from '../shared/learn-adaptive-activity-plan'
 import { loadReadyCanvas } from './learnAdaptiveCanvas'
 import { requireAuth } from './lib/auth'
 import { masteryAttemptArgs, submitMasteryAttemptForOwner, type MasteryAttemptActionResult } from './learnV2Mastery'
@@ -105,6 +106,35 @@ export const listThreadArtifacts = query({
         evidenceLabel: evidenceUnavailable ? 'evidence_unavailable' as const : null,
       }
     }))
+  },
+})
+
+export const getArtifactCanvas = query({
+  args: { threadId: v.id('learningThreads') },
+  handler: async (ctx, args) => {
+    const userId = await requireAdaptiveQueryAccess(ctx)
+    const thread = await ctx.db.get(args.threadId)
+    if (!thread || thread.userId !== userId || thread.deletionStartedAt !== undefined || !thread.currentActivityId) return null
+    const activity = await ctx.db.get(thread.currentActivityId)
+    if (!activity || activity.userId !== userId || activity.threadId !== thread._id
+      || activity.activityClass !== 'non_factual' || activity.primitivePlan.length !== 1
+      || activity.primitivePlan[0]?.type !== 'artifact_workspace') return null
+    const owner = await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique()
+    if (!owner) return null
+    const replay = await replayAdaptiveActivityPlan(storedPlan(activity))
+    const operable = replay.ok && activity.requiredAction.kind === 'save_artifact'
+      && activity.requiredAction.label === 'Save artifact'
+      && activity.primitivePlan[0].action === 'save_artifact'
+      && activity.evaluationContract.kind !== 'server_scored'
+      && ['eligible', 'started', 'submitted', 'feedback'].includes(activity.status)
+      && !['ended', 'rollback'].includes(thread.lifecycle)
+    return {
+      ownerId: owner._id,
+      thread: { id: thread._id, revision: thread.revision, outcome: thread.outcome ?? thread.originalNeed },
+      activity: { id: activity.activityId, planRevision: activity.planRevision, status: activity.status,
+        primitive: operable ? activity.primitivePlan[0] : null, fallback: activity.fallback },
+      status: operable ? activity.status : 'blocked' as const,
+    }
   },
 })
 
