@@ -5,6 +5,7 @@ import { api, internal } from './_generated/api'
 import schema from './schema'
 import { writeLearnActivityEvent } from './lib/learnAdaptiveEvents'
 import { masteryScopeKey } from './lib/learnV2MasteryScope'
+import type { AdaptiveOverrideOption } from '../shared/learn-adaptive-controls'
 
 const modules = import.meta.glob('./**/*.ts')
 const ownerId = 'https://auth.example.com|routing-owner'
@@ -32,7 +33,7 @@ async function standaloneFixture() {
   return { t, threadId, owner: t.withIdentity({ tokenIdentifier: ownerId }) }
 }
 
-async function factualFixture() {
+async function factualFixture(twoSources = false) {
   const t = convexTest(schema, modules)
   const owner = t.withIdentity({ tokenIdentifier: ownerId })
   const ids = await t.run(async ctx => {
@@ -58,9 +59,9 @@ async function factualFixture() {
       blueprintRevisionId, objectiveId, revision: 1, status: 'published', inputDigest: `sha256:${'a'.repeat(64)}`,
       generatorVersion: 'learn-v2.session-content.v1', createdAt: now, publishedAt: now })
     await ctx.db.insert('sessionContentBlocks', { userId: ownerId, sessionContentId, order: 0, kind: 'explanation',
-      content: 'Gravity attracts masses.', claimOrdersJson: '[0]' })
+      content: 'Gravity attracts masses.', claimOrdersJson: twoSources ? '[0,1]' : '[0]' })
     await ctx.db.insert('sessionContentBlocks', { userId: ownerId, sessionContentId, order: 1, kind: 'independent_application',
-      content: 'Explain why an apple falls.', claimOrdersJson: '[0]' })
+      content: 'Explain why an apple falls.', claimOrdersJson: twoSources ? '[0,1]' : '[0]' })
     const sourceIdentityId = await ctx.db.insert('learnSourceIdentities', { userId: ownerId, learningVoidId,
       origin: 'user_url', externalKey: 'gravity-source' })
     const sourceSnapshotId = await ctx.db.insert('learnSourceSnapshots', { userId: ownerId, sourceIdentityId, learningVoidId,
@@ -74,6 +75,21 @@ async function factualFixture() {
     await ctx.db.insert('learnClaimSupports', { userId: ownerId, sessionContentClaimId: claimId, sourceExcerptId,
       sourceSnapshotId, entailment: 'entailed', verifierVersion: 'learn-v2.entailment.v2', confidence: 0.95,
       conflictStatus: 'clear', evidenceStatus: 'evidence_available' })
+    if (twoSources) {
+      const secondIdentityId = await ctx.db.insert('learnSourceIdentities', { userId: ownerId, learningVoidId,
+        origin: 'user_url', externalKey: 'gravity-source-two' })
+      const secondSnapshotId = await ctx.db.insert('learnSourceSnapshots', { userId: ownerId,
+        sourceIdentityId: secondIdentityId, learningVoidId, blueprintRevisionId, revision: 1, recordRevision: 2,
+        status: 'user_accepted', effectiveStatus: 'user_accepted', rightsStatus: 'permitted', conflictStatus: 'clear', createdAt: now })
+      await ctx.db.insert('learnObjectiveSources', { userId: ownerId, objectiveId, sourceSnapshotId: secondSnapshotId, coverage: 'strong' })
+      const secondExcerptId = await ctx.db.insert('learnSourceExcerpts', { userId: ownerId,
+        sourceSnapshotId: secondSnapshotId, locator: 'private-page-2', excerpt: 'PRIVATE SOURCE TWO', rightsStatus: 'permitted' })
+      const secondClaimId = await ctx.db.insert('sessionContentClaims', { userId: ownerId, sessionContentId, order: 1,
+        claim: 'Objects attract one another.', verifierVersion: 'learn-v2.entailment.v2', confidence: 0.95 })
+      await ctx.db.insert('learnClaimSupports', { userId: ownerId, sessionContentClaimId: secondClaimId,
+        sourceExcerptId: secondExcerptId, sourceSnapshotId: secondSnapshotId, entailment: 'entailed',
+        verifierVersion: 'learn-v2.entailment.v2', confidence: 0.95, conflictStatus: 'clear', evidenceStatus: 'evidence_available' })
+    }
     return { folderId, learningVoidId, blueprintRevisionId, objectiveId, studySessionId, studyPlanRevisionId, sessionContentId, sourceSnapshotId }
   })
   const attached = await owner.mutation(api.learnAdaptiveCanvas.attachReadySession, {
@@ -85,9 +101,16 @@ async function factualFixture() {
 async function completedFactualFixture(input: { kind: 'independent_application' | 'retained_transfer', scorePercent: number,
   stateBefore: 'unseen' | 'independent' | 'retained', stateAfter: 'independent' | 'retained' | 'needs_review',
   reason: 'unassisted_pass_independent' | 'eligible_delayed_pass_retained' | 'eligible_delayed_failure_needs_review' | 'assisted_mastery_preserved',
-  assistance?: 'hint' | 'reveal' }) {
-  const fixture = await factualFixture()
+  assistance?: 'hint' | 'reveal', selectedOverride?: AdaptiveOverrideOption, twoSources?: boolean }) {
+  const fixture = await factualFixture(input.twoSources)
   const { t, ids, attached } = fixture
+  if (input.selectedOverride) {
+    const selected = await fixture.owner.mutation(api.learnAdaptive.applyOverride, {
+      threadId: attached.threadId, activityId: attached.activityId, option: input.selectedOverride,
+      expectedRevision: 2, idempotencyKey: `routing-factual-override-${input.selectedOverride}-0001`,
+    })
+    if (selected.kind !== 'ok') throw new Error('Expected override selection')
+  }
   await t.run(async ctx => {
     const now = Date.now()
     const thread = await ctx.db.get(attached.threadId)
@@ -128,6 +151,156 @@ async function completedFactualFixture(input: { kind: 'independent_application' 
 }
 
 describe('server-authorized adaptive routing decisions', () => {
+  test('applies Compare sources only from two live accepted source pins', async () => {
+    const { owner, attached } = await completedFactualFixture({ kind: 'retained_transfer', scorePercent: 92,
+      stateBefore: 'independent', stateAfter: 'retained', reason: 'eligible_delayed_pass_retained',
+      selectedOverride: 'compare_sources', twoSources: true })
+    expect(await owner.mutation(api.learnAdaptiveRouting.decideNextActivity, {
+      threadId: attached.threadId, expectedRevision: 3, idempotencyKey: 'routing-two-sources-0001',
+    })).toMatchObject({ kind: 'ok', value: { status: 'recommended',
+      selectedActivity: { primitive: 'source_comparison', activityClass: 'factual' },
+      reasonCode: 'learner_requested_compare_sources',
+      overrideApplication: { option: 'compare_sources', outcome: 'applied' } } })
+  })
+
+  test('consumes a selected factual override into a blocked fallback when accepted evidence turns stale', async () => {
+    const { t, owner, ids, attached } = await completedFactualFixture({ kind: 'retained_transfer', scorePercent: 92,
+      stateBefore: 'independent', stateAfter: 'retained', reason: 'eligible_delayed_pass_retained', selectedOverride: 'example' })
+    await t.run(ctx => ctx.db.patch(ids.sourceSnapshotId, { effectiveStatus: 'rejected', recordRevision: 8 }))
+    const result = await owner.mutation(api.learnAdaptiveRouting.decideNextActivity, {
+      threadId: attached.threadId, expectedRevision: 3, idempotencyKey: 'routing-stale-override-0001',
+    })
+    expect(result).toMatchObject({ kind: 'ok', value: { status: 'blocked', selectedActivity: null,
+      reasonCode: 'evidence_stale', fallback: { kind: 'non_factual_activity' },
+      overrideApplication: { option: 'example', outcome: 'fallback', applicationReason: 'router_blocked' } } })
+    if (result.kind !== 'ok') throw new Error('Expected fallback decision')
+    const selection = await t.run(ctx => ctx.db.query('learnActivityOverrides')
+      .withIndex('by_userId_and_threadId_and_createdAt', q => q.eq('userId', ownerId).eq('threadId', attached.threadId)).first())
+    expect(selection?.consumedDecisionId).toBe(result.value.decisionId)
+    expect(await owner.query(api.learnAdaptiveRouting.replayDecision, { decisionId: result.value.decisionId as never }))
+      .toMatchObject({ status: 'replayed', value: result.value })
+    await t.run(ctx => ctx.db.patch(ids.sourceSnapshotId, { effectiveStatus: 'user_accepted', recordRevision: 7 }))
+    const later = await owner.mutation(api.learnAdaptiveRouting.decideNextActivity, {
+      threadId: attached.threadId, expectedRevision: 4, idempotencyKey: 'routing-stale-override-later-0001',
+    })
+    if (later.kind === 'ok') expect(later.value).not.toHaveProperty('overrideApplication')
+    else expect(later).toMatchObject({ kind: 'blocked' })
+  })
+
+  test.each([
+    ['time', 'time_45', { availableTime: '60' }],
+    ['activity', 'example', { nextActivity: 'challenge_step' }],
+    ['difficulty', 'example', { difficulty: 'harder' }],
+    ['original time', 'example', { availableTime: '15' }],
+  ] as const)('consumes a corrupt %s override plan as a safe fallback', async (caseName, option, alteration) => {
+    const { t, owner, attached } = await completedFactualFixture({ kind: 'retained_transfer', scorePercent: 92,
+      stateBefore: 'independent', stateAfter: 'retained', reason: 'eligible_delayed_pass_retained', selectedOverride: option })
+    const before = await t.run(ctx => ctx.db.get(attached.threadId))
+    await t.run(async ctx => {
+      const selection = await ctx.db.query('learnActivityOverrides')
+        .withIndex('by_userId_and_threadId_and_createdAt', q => q.eq('userId', ownerId).eq('threadId', attached.threadId)).first()
+      if (!selection) throw new Error('Expected override')
+      await ctx.db.patch(selection._id, { fixedNextPlan: { ...selection.fixedNextPlan, ...alteration } })
+    })
+    const result = await owner.mutation(api.learnAdaptiveRouting.decideNextActivity, {
+      threadId: attached.threadId, expectedRevision: 3, idempotencyKey: `routing-corrupt-${caseName.replaceAll(' ', '-')}-0001`,
+    })
+    expect(result).toMatchObject({ kind: 'ok', value: { status: 'blocked', selectedActivity: null,
+      reasonCode: 'override_plan_invalid', overrideApplication: { option, outcome: 'fallback', applicationReason: 'plan_invalid' } } })
+    if (result.kind !== 'ok') throw new Error('Expected safe fallback')
+    const after = await t.run(async ctx => ({ thread: await ctx.db.get(attached.threadId),
+      selection: await ctx.db.query('learnActivityOverrides')
+        .withIndex('by_userId_and_threadId_and_createdAt', q => q.eq('userId', ownerId).eq('threadId', attached.threadId)).first() }))
+    expect(after.thread?.currentActivityId).toBe(before?.currentActivityId)
+    expect(after.thread?.availableTime).toBe(before?.availableTime)
+    expect(after.selection?.consumedDecisionId).toBe(result.value.decisionId)
+    expect(await owner.query(api.learnAdaptiveRouting.replayDecision, { decisionId: result.value.decisionId as never }))
+      .toMatchObject({ status: 'replayed', value: result.value })
+  })
+
+  test('consumes a selected override into the provider-failure fallback without replacing the response', async () => {
+    const { t, owner, attached } = await factualFixture()
+    expect(await owner.mutation(api.learnAdaptive.applyOverride, { threadId: attached.threadId,
+      activityId: attached.activityId, option: 'example', expectedRevision: 2,
+      idempotencyKey: 'routing-provider-override-0001' })).toMatchObject({ kind: 'ok' })
+    await t.run(async ctx => {
+      const thread = await ctx.db.get(attached.threadId)
+      const activity = thread?.currentActivityId && await ctx.db.get(thread.currentActivityId)
+      if (!activity) throw new Error('Expected factual activity')
+      await ctx.db.patch(activity._id, { status: 'blocked' })
+      await writeLearnActivityEvent(ctx, { userId: ownerId, threadId: attached.threadId, activityId: activity._id,
+        eventType: 'provider_failure', eventVersion: 'provider_failure.v1', sourceVersion: 'provider.v1',
+        contractVersion: activity.contractVersion, semanticKey: `provider:${String(activity._id)}:failure`,
+        occurredAt: Date.now(), outcomeCode: 'failure', metadata: { activityClass: 'factual',
+          boundaryOrdinal: activity.boundaryOrdinal, planRevision: activity.planRevision, providerStage: 'outcome' } })
+    })
+    expect(await owner.mutation(api.learnAdaptiveRouting.decideNextActivity, {
+      threadId: attached.threadId, expectedRevision: 3, idempotencyKey: 'routing-provider-fallback-0001',
+    })).toMatchObject({ kind: 'ok', value: { status: 'blocked', reasonCode: 'evidence_blocked',
+      fallback: { kind: 'non_factual_activity' },
+      overrideApplication: { option: 'example', outcome: 'fallback', applicationReason: 'router_blocked' } } })
+  })
+
+  test('ignores a foreign override even when it names the current activity and boundary', async () => {
+    const { t, owner, attached } = await completedFactualFixture({ kind: 'retained_transfer', scorePercent: 92,
+      stateBefore: 'independent', stateAfter: 'retained', reason: 'eligible_delayed_pass_retained' })
+    await t.run(async ctx => {
+      const activity = await ctx.db.get((await ctx.db.get(attached.threadId))!.currentActivityId!)
+      if (!activity) throw new Error('Expected activity')
+      await ctx.db.insert('learnActivityOverrides', { userId: 'https://auth.example.com|other-owner',
+        threadId: attached.threadId, activityId: activity._id, option: 'example', source: 'learner',
+        version: 'learn-adaptive.override.v1', fixedNextPlan: { version: 'learn-adaptive.fixed-next-plan.v1',
+          inputOption: 'example', nextActivity: 'worked_example', availableTime: '25', difficulty: 'same',
+          maxNewActivities: 1, authority: 'server_revalidate_at_boundary' },
+        boundaryOrdinal: activity.boundaryOrdinal, selectedRevision: 3, createdAt: Date.now() })
+    })
+    const result = await owner.mutation(api.learnAdaptiveRouting.decideNextActivity, {
+      threadId: attached.threadId, expectedRevision: 2, idempotencyKey: 'routing-foreign-override-0001',
+    })
+    expect(result).toMatchObject({ kind: 'ok', value: { selectedActivity: { primitive: 'reflection_next_move' },
+      reasonCode: 'reflect_on_demonstration' } })
+    if (result.kind !== 'ok') throw new Error('Expected decision')
+    expect(result.value).not.toHaveProperty('overrideApplication')
+  })
+
+  test.each(['activity', 'ordinal'] as const)('ignores an override bound to the wrong %s', async mismatch => {
+    const { t, owner, attached } = await completedFactualFixture({ kind: 'retained_transfer', scorePercent: 92,
+      stateBefore: 'independent', stateAfter: 'retained', reason: 'eligible_delayed_pass_retained', selectedOverride: 'example' })
+    await t.run(async ctx => {
+      const selection = await ctx.db.query('learnActivityOverrides')
+        .withIndex('by_userId_and_threadId_and_createdAt', q => q.eq('userId', ownerId).eq('threadId', attached.threadId)).first()
+      const activity = await ctx.db.get((await ctx.db.get(attached.threadId))!.currentActivityId!)
+      if (!selection || !activity) throw new Error('Expected selection and activity')
+      if (mismatch === 'ordinal') await ctx.db.patch(selection._id, { boundaryOrdinal: activity.boundaryOrdinal + 1 })
+      else {
+        const thread = await ctx.db.get(attached.threadId)
+        if (!thread) throw new Error('Expected thread')
+        const { _id: _threadId, _creationTime: _threadCreated, ...otherThread } = thread
+        const otherThreadId = await ctx.db.insert('learningThreads', { ...otherThread, currentActivityId: undefined })
+        const { _id: _id, _creationTime: _created, ...otherActivity } = activity
+        const otherActivityId = await ctx.db.insert('learningThreadActivities', { ...otherActivity,
+          threadId: otherThreadId, activityId: `other:${String(activity._id)}`, boundaryOrdinal: activity.boundaryOrdinal + 1 })
+        await ctx.db.patch(selection._id, { activityId: otherActivityId })
+      }
+    })
+    const result = await owner.mutation(api.learnAdaptiveRouting.decideNextActivity, {
+      threadId: attached.threadId, expectedRevision: 3, idempotencyKey: `routing-wrong-${mismatch}-0001`,
+    })
+    expect(result).toMatchObject({ kind: 'ok', value: { selectedActivity: { primitive: 'reflection_next_move' },
+      reasonCode: 'reflect_on_demonstration' } })
+    if (result.kind !== 'ok') throw new Error('Expected decision')
+    expect(result.value).not.toHaveProperty('overrideApplication')
+  })
+
+  test('rejects a source-comparison selection when only one accepted source is pinned', async () => {
+    const { t, owner, attached } = await factualFixture()
+    await expect(owner.mutation(api.learnAdaptive.applyOverride, { threadId: attached.threadId,
+      activityId: attached.activityId, option: 'compare_sources', expectedRevision: 2,
+      idempotencyKey: 'routing-rejected-compare-0001' })).rejects.toThrow('Override unavailable: evidence')
+    expect(await t.run(ctx => ctx.db.query('learnActivityOverrides')
+      .withIndex('by_userId_and_threadId_and_createdAt', q => q.eq('userId', ownerId).eq('threadId', attached.threadId)).take(1))).toEqual([])
+  })
+
   test('routes from a v1 representative event whose stored hash remains authoritative', async () => {
     const { t, owner, attached } = await completedFactualFixture({ kind: 'retained_transfer', scorePercent: 92,
       stateBefore: 'independent', stateAfter: 'retained', reason: 'eligible_delayed_pass_retained' })
@@ -237,6 +410,8 @@ describe('server-authorized adaptive routing decisions', () => {
     const args = { threadId, expectedRevision: 1, idempotencyKey: 'routing-durable-replay-0001' }
     const first = await owner.mutation(api.learnAdaptiveRouting.decideNextActivity, args)
     if (first.kind !== 'ok') throw new Error('Expected routed decision')
+    expect(first.value.routerVersion).toBe('learn-adaptive.router.v1')
+    expect(first.value).not.toHaveProperty('overrideApplication')
     await t.run(async ctx => {
       const receipt = await ctx.db.get(first.receiptId as never)
       if (!receipt) throw new Error('Expected receipt')
@@ -288,7 +463,8 @@ describe('server-authorized adaptive routing decisions', () => {
     const { t, threadId, owner } = await standaloneFixture()
     const base = { threadId, expectedRevision: 1, idempotencyKey: 'routing-adversarial-0001' }
     for (const extra of [{ serverScorePercent: 100 }, { mastery: 'retained' },
-      { evidenceAcceptance: 'user_accepted' }, { sourceInputs: Array.from({ length: 200 }, () => 'private') }]) {
+      { evidenceAcceptance: 'user_accepted' }, { sourceInputs: Array.from({ length: 200 }, () => 'private') },
+      { overrideOption: 'answer_now' }, { routeTo: 'https://private.example.com' }]) {
       await expect(owner.mutation(api.learnAdaptiveRouting.decideNextActivity, { ...base, ...extra } as never)).rejects.toThrow()
     }
     await t.run(ctx => ctx.db.insert('users', { tokenIdentifier: 'https://auth.example.com|routing-other', name: 'Other',

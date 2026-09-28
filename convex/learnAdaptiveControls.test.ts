@@ -2,6 +2,7 @@
 import { convexTest } from 'convex-test'
 import { afterAll, beforeEach, describe, expect, test } from 'vitest'
 import { api, internal } from './_generated/api'
+import type { Id } from './_generated/dataModel'
 import schema from './schema'
 
 const modules = import.meta.glob('./**/*.ts')
@@ -33,6 +34,117 @@ async function fixture() {
 }
 
 describe('bounded learner controls', () => {
+  test('saves a time preference without changing the current thread or creating a route', async () => {
+    const { t, owner, threadId, activityId } = await fixture()
+    const before = await t.run(ctx => ctx.db.get(threadId))
+    const selected = await owner.mutation(api.learnAdaptive.applyOverride, { threadId, activityId, option: 'time_45',
+      expectedRevision: 3, idempotencyKey: 'controls-deferred-time-0001' })
+    expect(selected.kind).toBe('ok')
+    const after = await t.run(ctx => ctx.db.get(threadId))
+    expect(after?.availableTime).toBe('25')
+    expect(after?.currentActivityId).toBe(before?.currentActivityId)
+    expect(await t.run(ctx => ctx.db.query('learnActivityDecisions')
+      .withIndex('by_userId_and_threadId_and_createdAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('threadId', threadId)).take(1))).toEqual([])
+  })
+
+  test('consumes the time preference once at the completed boundary and replays the decision', async () => {
+    const { t, owner, threadId, activityId } = await fixture()
+    const selected = await owner.mutation(api.learnAdaptive.applyOverride, { threadId, activityId, option: 'time_45',
+      expectedRevision: 3, idempotencyKey: 'controls-boundary-time-0001' })
+    expect(selected.kind).toBe('ok')
+    const submitted = await owner.mutation(api.learnAdaptiveRecovery.submitDiagnosticResponse, {
+      threadId, activityId, expectedRevision: 4, response: 'A saved response about orbital motion.',
+      idempotencyKey: 'controls-boundary-submit-0001',
+    })
+    expect(submitted.kind).toBe('ok')
+    const decided = await owner.mutation(api.learnAdaptiveRouting.decideNextActivity, {
+      threadId, expectedRevision: 5, idempotencyKey: 'controls-boundary-route-0001',
+    })
+    expect(decided).toMatchObject({ kind: 'ok', value: { status: 'recommended',
+      reasonCode: 'learner_requested_time_45',
+      overrideApplication: { version: 'learn-adaptive.override-application.v1', option: 'time_45',
+        outcome: 'applied', applicationReason: 'applied', effectiveAvailableTime: '45' } } })
+    if (decided.kind !== 'ok') throw new Error('Expected decision')
+    const after = await t.run(ctx => ctx.db.get(threadId))
+    expect(after?.availableTime).toBe('45')
+    expect((await owner.query(api.learnAdaptiveRecovery.getDiagnosticCanvas, { threadId }))?.activity?.response)
+      .toBe('A saved response about orbital motion.')
+    expect(await owner.query(api.learnAdaptiveRouting.replayDecision, { decisionId: decided.value.decisionId as never }))
+      .toMatchObject({ status: 'replayed', value: decided.value })
+    const exported = (await owner.query(api.dataExport.getUserDataPage, {
+      collection: 'learnActivityDecisions', paginationOpts: { cursor: null, numItems: 10 },
+    })).page.find(row => row._id === decided.value.decisionId) as { overrideApplication?: unknown } | undefined
+    expect(exported?.overrideApplication).toEqual({ version: 'learn-adaptive.override-application.v1',
+      option: 'time_45', outcome: 'applied', applicationReason: 'applied', effectiveAvailableTime: '45' })
+    const exportedOverrides = (await owner.query(api.dataExport.getUserDataPage, {
+      collection: 'learnActivityOverrides', paginationOpts: { cursor: null, numItems: 10 },
+    })).page
+    expect(exportedOverrides[0]).not.toHaveProperty('consumedDecisionId')
+    expect(await owner.mutation(api.learnAdaptiveRouting.decideNextActivity, {
+      threadId, expectedRevision: 5, idempotencyKey: 'controls-boundary-route-0001',
+    })).toEqual(decided)
+    await t.run(async ctx => {
+      const receipt = await ctx.db.get(decided.receiptId as never)
+      if (!receipt) throw new Error('Expected decision receipt')
+      await ctx.db.patch(receipt._id, { resultReference: null, resultRedactedAt: Date.now(), redactionStatus: 'redacted' })
+      await ctx.db.patch(threadId, { evidenceState: 'unavailable', revision: 20 })
+    })
+    expect(await owner.mutation(api.learnAdaptiveRouting.decideNextActivity, {
+      threadId, expectedRevision: 5, idempotencyKey: 'controls-boundary-route-0001',
+    })).toEqual(decided)
+  })
+
+  test('the latest same-activity preference wins while older selections remain audit history', async () => {
+    const { t, owner, threadId, activityId } = await fixture()
+    await owner.mutation(api.learnAdaptive.applyOverride, { threadId, activityId, option: 'time_45',
+      expectedRevision: 3, idempotencyKey: 'controls-last-first-0001' })
+    await owner.mutation(api.learnAdaptive.applyOverride, { threadId, activityId, option: 'time_60',
+      expectedRevision: 4, idempotencyKey: 'controls-last-second-0001' })
+    await owner.mutation(api.learnAdaptiveRecovery.submitDiagnosticResponse, { threadId, activityId,
+      expectedRevision: 5, response: 'Keep my answer.', idempotencyKey: 'controls-last-submit-0001' })
+    const decision = await owner.mutation(api.learnAdaptiveRouting.decideNextActivity, {
+      threadId, expectedRevision: 6, idempotencyKey: 'controls-last-route-0001',
+    })
+    expect(decision).toMatchObject({ kind: 'ok', value: { reasonCode: 'learner_requested_time_60',
+      overrideApplication: { option: 'time_60', effectiveAvailableTime: '60' } } })
+    if (decision.kind !== 'ok') throw new Error('Expected decision')
+    expect((await t.run(ctx => ctx.db.get(threadId)))?.availableTime).toBe('60')
+    const selections = await t.run(ctx => ctx.db.query('learnActivityOverrides')
+      .withIndex('by_userId_and_threadId_and_createdAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('threadId', threadId)).take(3))
+    expect(selections.map(row => [row.option, row.consumedDecisionId ?? null])).toEqual([
+      ['time_45', null], ['time_60', decision.value.decisionId],
+    ])
+    expect(await owner.mutation(api.learnAdaptiveRouting.decideNextActivity, {
+      threadId, expectedRevision: 7, idempotencyKey: 'controls-last-repeat-0001',
+    })).toMatchObject({ kind: 'blocked', code: 'routing_boundary_recorded' })
+  })
+
+  test('does not replay a decision if its selected output or override digest is changed', async () => {
+    for (const mutation of ['output', 'digest'] as const) {
+      const { t, owner, threadId, activityId } = await fixture()
+      await owner.mutation(api.learnAdaptive.applyOverride, { threadId, activityId, option: 'time_45',
+        expectedRevision: 3, idempotencyKey: `controls-tamper-select-${mutation}-0001` })
+      await owner.mutation(api.learnAdaptiveRecovery.submitDiagnosticResponse, { threadId, activityId,
+        expectedRevision: 4, response: 'Keep my response.', idempotencyKey: `controls-tamper-submit-${mutation}-0001` })
+      const args = { threadId, expectedRevision: 5, idempotencyKey: `controls-tamper-route-${mutation}-0001` }
+      const first = await owner.mutation(api.learnAdaptiveRouting.decideNextActivity, args)
+      if (first.kind !== 'ok') throw new Error('Expected decision')
+      await t.run(async ctx => {
+        const receipt = await ctx.db.get(first.receiptId as never)
+        const decision = await ctx.db.get(first.value.decisionId as Id<'learnActivityDecisions'>)
+        if (!receipt || !decision?.overrideApplication) throw new Error('Expected durable decision')
+        await ctx.db.patch(receipt._id, { resultReference: null, resultRedactedAt: Date.now(), redactionStatus: 'redacted' })
+        if (mutation === 'output') await ctx.db.patch(decision._id, { reasonCode: 'source_free_diagnostic' })
+        else await ctx.db.patch(decision._id, { overrideApplication: { ...decision.overrideApplication,
+          inputDigest: `sha256:${'f'.repeat(64)}` } })
+      })
+      expect(await owner.query(api.learnAdaptiveRouting.replayDecision, { decisionId: first.value.decisionId as never }))
+        .toMatchObject({ status: 'integrity_failed' })
+      expect(await owner.mutation(api.learnAdaptiveRouting.decideNextActivity, args))
+        .toMatchObject({ kind: 'invalid', code: 'result_expired' })
+    }
+  })
+
   test('projects persisted Why text and closed options; records one learner selection without replacing the current response', async () => {
     const { t, owner, threadId, activityId } = await fixture()
     const before = await owner.query(api.learnAdaptiveRecovery.getDiagnosticCanvas, { threadId })
@@ -64,6 +176,8 @@ describe('bounded learner controls', () => {
     await expect(owner.mutation(api.learnAdaptive.applyOverride, { threadId, activityId, option: 'example', expectedRevision: 3, idempotencyKey: 'controls-disabled-0001' })).rejects.toThrow('Override unavailable: evidence')
     await expect(owner.mutation(api.learnAdaptive.applyOverride, { threadId, activityId, option: 'time_45', expectedRevision: 3,
       idempotencyKey: 'controls-forged-0001', source: 'provider', score: 100 } as never)).rejects.toThrow()
+    await expect(owner.mutation(api.learnAdaptive.applyOverride, { threadId, activityId, option: 'write_a_plan',
+      expectedRevision: 3, idempotencyKey: 'controls-unknown-option-0001' } as never)).rejects.toThrow()
     const activityCount = await t.run(ctx => ctx.db.query('learningThreadActivities').withIndex('by_userId_and_threadId_and_boundaryOrdinal', q => q.eq('userId', OWNER.tokenIdentifier).eq('threadId', threadId)).take(2))
     expect(activityCount).toHaveLength(1)
   })

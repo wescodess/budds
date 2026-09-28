@@ -153,9 +153,10 @@ export const applyOverride = mutation({
       const fixedNextPlan = fixedNextPlanForOverride(args.option, thread.availableTime)
       await commandCtx.db.insert('learnActivityOverrides', { userId, threadId: thread._id, activityId: activity._id,
         option: args.option, source: 'learner', version: ADAPTIVE_OVERRIDE_VERSION,
-        fixedNextPlan, boundaryOrdinal: activity.boundaryOrdinal, createdAt: now })
+        fixedNextPlan, selectionAvailableTime: thread.availableTime,
+        boundaryOrdinal: activity.boundaryOrdinal, selectedRevision: thread.revision + 1, createdAt: now })
       const revision = thread.revision + 1
-      await commandCtx.db.patch(thread._id, { availableTime: fixedNextPlan.availableTime, revision, updatedAt: now })
+      await commandCtx.db.patch(thread._id, { revision, updatedAt: now })
       return { value: { option: args.option, source: 'learner' as const, fixedNextPlan }, revision }
     },
   }),
