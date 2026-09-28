@@ -35,6 +35,23 @@ const path = ['~', 'pages', 'app', 'learn', 'thread', '[threadId].vue'].join('/'
 describe('adaptive thread route isolation', () => {
   beforeEach(() => { allowed.value = true; isOnline.value = true; canvas.value = null; diagnostic.value = null; artifact.value = null; reflection.value = null; evidence.value = null; projection.value = null; canvasPending.value = false; diagnosticPending.value = false; user.value = { _id: 'owner_1' }; requestedRoute.params.threadId = 'thread_1'; requestedRoute.query.activity = undefined; calls.mockClear(); mutationCalls.mockClear(); sessionStorage.clear() })
 
+  it('restores the saved goal, unresolved point, attempt context, artifact, and next move', async () => {
+    const Page = await import(path)
+    projection.value = { ownerId: 'owner_1', thread: { id: 'thread_1', goal: 'Understand gravity', outcome: 'Explain an orbit', intent: 'understand', evidenceState: 'none', lifecycle: 'active', revision: 3, authorityKind: 'standalone' },
+      currentActivity: { id: 'activity_1', status: 'feedback', purpose: 'Explain the orbit' },
+      unresolvedPoint: 'Why does it keep curving?', attemptContext: { priorOutcome: 'representative_fail', assistance: 'hint' },
+      artifact: { id: 'artifact_1', title: 'Orbit sketch', status: 'saved', activityId: 'activity_1' },
+      history: [], nextAction: { kind: 'review_feedback', label: 'Review your feedback', activityId: 'activity_1' } }
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
+    expect(wrapper.get('[data-testid="learn-thread-goal"]').text()).toContain('Understand gravity')
+    expect(wrapper.get('[data-testid="learn-thread-unresolved"]').text()).toContain('Why does it keep curving?')
+    expect(wrapper.get('[data-testid="learn-thread-resume-context"]').text()).toContain('representative_fail')
+    expect(wrapper.get('[data-testid="learn-thread-resume-context"]').text()).toContain('Earlier work used a hint')
+    expect(wrapper.get('[data-testid="learn-thread-resume-context"]').text()).toContain('Orbit sketch')
+    expect(wrapper.get('#learn-thread-next-title').element.parentElement?.textContent).toContain('Review your feedback')
+    wrapper.unmount()
+  })
+
   it.each(['preparing', 'blocked', 'stale', 'invalidated', 'unavailable'] as const)('keeps an owned factual response through routed %s recovery', async evidenceState => {
     const Page = await import(path)
     const primitive = { contractVersion: 'learn-adaptive.activity-contract.v1', rendererVersion: 'learn-adaptive.renderer.v1',
@@ -103,11 +120,14 @@ describe('adaptive thread route isolation', () => {
     await wrapper.get('[data-testid="learn-diagnostic-submit"]').trigger('click')
     await vi.waitFor(() => expect(wrapper.get('[data-testid="learn-diagnostic-error"]').attributes('role')).toBe('alert'))
     expect((wrapper.get('[data-testid="learn-diagnostic-response"]').element as HTMLTextAreaElement).value).toBe('My unsent starting point.')
-    projection.value = { ...projection.value!, thread: { ...(projection.value!.thread as Record<string, unknown>), lifecycle: 'rollback' } }
+    projection.value = { ...projection.value!, thread: { ...(projection.value!.thread as Record<string, unknown>), lifecycle: 'rollback' },
+      unresolvedPoint: 'Check the earlier explanation.', history: [{ id: 'activity_before', status: 'ended', purpose: 'Earlier explanation', boundaryOrdinal: 1 }] }
     await nextTick()
-    expect(wrapper.get('[data-testid="learn-adaptive-thread-unavailable"] [role="status"]').text()).toContain('unavailable')
-    expect(wrapper.get('[data-testid="learn-adaptive-safe-destination"]').attributes('href')).toBe('/app/learn')
-    expect(wrapper.find('[data-testid="learn-diagnostic-submit"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="learn-thread-rollback-recovery"]').text()).toContain('past activity remain available')
+    expect(wrapper.get('[data-testid="learn-thread-unresolved"]').text()).toContain('Check the earlier explanation.')
+    expect(wrapper.get('#learn-thread-history-title').element.parentElement?.textContent).toContain('Earlier explanation')
+    expect(wrapper.get('[data-testid="learn-thread-rollback-recovery"] a').attributes('href')).toBe('/app/learn')
+    expect(wrapper.get('[data-testid="learn-adaptive-canvas-frame"] > div:last-child').attributes('style')).toContain('display: none')
     projection.value = { ...projection.value!, thread: { ...(projection.value!.thread as Record<string, unknown>), lifecycle: 'active' } }
     await nextTick()
     expect((wrapper.get('[data-testid="learn-diagnostic-response"]').element as HTMLTextAreaElement).value).toBe('My unsent starting point.')
@@ -503,7 +523,8 @@ describe('adaptive thread route isolation', () => {
     projection.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Gravity', intent: 'understand', evidenceState: 'ready', lifecycle: 'rollback', revision: 3, authorityKind: 'v2_mission', learningVoidId: 'void_1' },
       currentActivity: null, history: [], nextAction: { kind: 'return_to_learn', label: 'Back to Learn', activityId: null } }
     await nextTick()
-    expect(wrapper.get('[data-testid="learn-adaptive-thread-unavailable"]').text()).toContain('unavailable')
-    expect(wrapper.get('[data-testid="learn-adaptive-safe-destination"]').attributes('href')).toBe('/app/learn/void_1')
+    expect(wrapper.get('[data-testid="learn-adaptive-thread-shell"]').text()).toContain('Gravity')
+    expect(wrapper.get('[data-testid="learn-thread-rollback-recovery"]').text()).toContain('unavailable')
+    expect(wrapper.get('[data-testid="learn-thread-rollback-recovery"] a').attributes('href')).toBe('/app/learn/void_1')
   })
 })

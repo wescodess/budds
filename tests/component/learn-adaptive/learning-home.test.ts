@@ -6,10 +6,12 @@ import { nextTick } from 'vue'
 const currentUser = ref<{ _id: string } | null>({ _id: 'owner_1' })
 const folders = ref([{ _id: 'folder_1', name: 'Proofs' }])
 const documents = ref([{ _id: 'document_1', folderId: 'folder_1', filename: 'proof.pdf', status: 'success' }])
+const resumeCandidates = ref<Array<{ ownerId: string, threadId: string, outcome: string, reason: string, unresolvedPoint: string | null }>>([])
 
 mockNuxtImport('useConvexQuery', () => (reference: unknown) => {
   const name = getFunctionName(reference as never)
   if (name?.includes('users:getUser')) return { data: currentUser }
+  if (name?.includes('listResumeCandidates')) return { data: resumeCandidates }
   return { data: name?.includes('listDocumentsByFolder') ? documents : folders }
 })
 
@@ -22,6 +24,7 @@ describe('need-first LearningHome', () => {
     localStorage.clear()
     sessionStorage.clear()
     currentUser.value = { _id: 'owner_1' }
+    resumeCandidates.value = []
   })
   async function mount(props: Record<string, unknown> = {}) {
     const component = await import(path)
@@ -34,6 +37,22 @@ describe('need-first LearningHome', () => {
     await wrapper.get('[data-testid="learn-adaptive-need"]').setValue('Help me understand these notes')
     await wrapper.get('[data-testid="learn-adaptive-outcome"]').setValue('Explain the key idea in my own words')
   }
+
+  it('presents the ranked resume target and its unresolved point before the new goal form', async () => {
+    resumeCandidates.value = [{ ownerId: 'owner_1', threadId: 'thread_1', outcome: 'Explain orbital motion', reason: 'unfinished_activity', unresolvedPoint: 'Why does the orbit curve?' }]
+    const wrapper = await mount()
+    const list = wrapper.get('[data-testid="learn-adaptive-resume-list"]')
+    expect(list.text()).toContain('Unfinished activity')
+    expect(list.text()).toContain('Why does the orbit curve?')
+    expect(list.get('a').attributes('href')).toBe('/app/learn/thread/thread_1')
+    await list.get('a').trigger('click')
+    expect(wrapper.emitted('resume')?.[0]).toEqual(['thread_1'])
+    expect(wrapper.element.querySelector('[data-testid="learn-adaptive-resume-list"]')?.compareDocumentPosition(wrapper.element.querySelector('form')!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+    currentUser.value = { _id: 'owner_2' }
+    await nextTick()
+    expect(wrapper.find('[data-testid="learn-adaptive-resume-list"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
 
   it('saves a single selected intent chip in the owner draft and submits that intent', async () => {
     const wrapper = await mount()
