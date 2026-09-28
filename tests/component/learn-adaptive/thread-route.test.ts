@@ -243,6 +243,30 @@ describe('adaptive thread route isolation', () => {
     expect(shell.text()).toContain('Your response is being checked')
   })
 
+  it('opens the canonical Evidence drawer from a cited explanation source and returns focus', async () => {
+    const Page = await import(path)
+    projection.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Explain gravity', intent: 'understand', evidenceState: 'ready', lifecycle: 'active', revision: 2, authorityKind: 'v2_mission', learningVoidId: 'void_1' },
+      currentActivity: { id: 'activity_1', status: 'started', purpose: 'Study a supported explanation.' }, history: [], nextAction: { kind: 'continue', label: 'Continue', activityId: 'activity_1' } }
+    canvas.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Explain gravity', intent: 'understand', revision: 2 }, status: 'started',
+      activity: { id: 'activity_1', status: 'started', purpose: 'Study a supported explanation.', reasonCode: 'ready_v2_session', planRevision: 1,
+        evidenceScope: { version: 'learn-adaptive.canvas-evidence-scope.v1', integrityState: 'accepted', sourceRefs: ['source_1'] },
+        primitive: { contractVersion: 'learn-adaptive.activity-contract.v1', rendererVersion: 'learn-adaptive.renderer.v1', type: 'cited_explanation', action: 'continue', testId: 'learn-primitive-cited-explanation', props: { heading: 'Gravity', explanation: 'Gravity attracts masses.', sourceRefs: ['source_1'] } },
+        fallback: { testId: 'learn-activity-fallback', title: 'Unavailable', body: 'Try later.', primaryAction: { label: 'Back to Learn' } }, requiredAction: { kind: 'continue', label: 'Continue' } },
+      session: { studySessionId: 'session_1', revision: 2, contentRevision: 1, planRecordRevision: 5, blueprintRecordRevision: 3, scheduledStartAt: 0, scheduledEndAt: null, timezone: 'UTC' }, responsePrompt: 'Explain why an apple falls.' }
+    evidence.value = { ownerId: 'owner_1', threadId: 'thread_1', kind: 'factual', activityId: 'activity_1', eligibility: 'eligible', readOnly: false, integrityState: 'accepted',
+      claims: [{ claimId: 'claim_1', claimText: 'Gravity attracts masses.', claimStatus: 'fact', integrityState: 'accepted', source: { origin: 'user_url', locator: 'page:1', sourceSnapshotId: 'source_1', sourceSnapshotRevision: 1, sourceRecordRevision: 1 } }] }
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1', attachTo: document.body })
+    const source = wrapper.get('[data-testid="learn-canvas-source-1"]')
+    await source.trigger('click')
+    const drawer = document.querySelector('[data-testid="learn-evidence-drawer"]') as HTMLElement
+    expect(drawer.getAttribute('role')).toBe('dialog')
+    expect(drawer.textContent).toContain('Gravity attracts masses.')
+    expect(drawer.textContent).toContain('page:1')
+    ;(drawer.querySelector('[data-testid="learn-evidence-close"]') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(document.activeElement).toBe(source.element))
+    wrapper.unmount()
+  })
+
   it('shows a scored representative result and named V2 next move even while Canvas detail is absent', async () => {
     const Page = await import(path)
     projection.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Explain gravity', intent: 'understand', evidenceState: 'ready', lifecycle: 'active', revision: 4, authorityKind: 'v2_mission', learningVoidId: 'void_1' },

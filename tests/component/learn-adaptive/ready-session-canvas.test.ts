@@ -127,6 +127,152 @@ describe('ready adaptive Canvas', () => {
     expect(wrapper.get('[data-testid="learn-canvas-evidence-scope"]').text()).toContain('2 accepted sources')
   })
 
+  it('renders cited source controls as keyboard buttons that request the canonical Evidence drawer', async () => {
+    const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
+    const wrapper = await mountSuspended(Comp.default, { props: { canvas: { ...canvas, status: 'started' } }, attachTo: document.body })
+    const article = wrapper.get('[data-testid="learn-primitive-cited-explanation"]')
+    expect(article.element.tagName).toBe('ARTICLE')
+    const source = wrapper.get('[data-testid="learn-canvas-source-1"]')
+    expect(source.element.tagName).toBe('BUTTON')
+    expect(source.attributes('type')).toBe('button')
+    expect(source.attributes('aria-label')).toContain('Evidence')
+    expect(source.attributes('href')).toBeUndefined()
+    ;(source.element as HTMLButtonElement).focus()
+    expect(document.activeElement).toBe(source.element)
+    await source.trigger('click')
+    expect(wrapper.emitted('inspectEvidence')?.[0]?.[0]).toBe(source.element)
+    wrapper.unmount()
+  })
+
+  it('renders a worked example as guided support through reveal and completed states', async () => {
+    const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
+    const example = { ...canvas, status: 'started', activity: { ...canvas.activity, primitive: {
+      ...canvas.activity.primitive, type: 'worked_example', action: 'reveal_example', testId: 'learn-primitive-worked-example',
+      props: { heading: 'Gravity example', problem: 'Why does an apple fall?', steps: ['Identify the masses.', 'Describe their attraction.'], guidedConsequence: 'This is guided support and cannot count as an independent attempt.', sourceRefs: ['source_1'] },
+    }, requiredAction: { kind: 'reveal_example', label: 'Reveal example' } } }
+    const wrapper = await mountSuspended(Comp.default, { props: { canvas: example }, attachTo: document.body })
+    const article = wrapper.get('[data-testid="learn-primitive-worked-example"]')
+    expect(article.element.tagName).toBe('ARTICLE')
+    expect(article.text()).toContain('guided support and cannot count as an independent attempt')
+    expect(article.text()).not.toContain('Identify the masses.')
+    await wrapper.get('[data-testid="learn-canvas-reveal-example"]').trigger('click')
+    await vi.waitFor(() => expect(assist).toHaveBeenCalledWith({ studySessionId: 'session_1', expectedSessionRevision: 2, kind: 'answer_reveal' }))
+    await vi.waitFor(() => expect(article.text()).toContain('Identify the masses.'))
+    expect(article.find('ol').exists()).toBe(true)
+    expect(document.activeElement).toBe(article.get('h3').element)
+    expect(wrapper.get('[data-testid="learn-canvas-worked-status"]').text()).toContain('Guided support reviewed')
+    await wrapper.setProps({ canvas: { ...example, session: { ...example.session, revision: 3 }, activity: { ...example.activity, primitive: { ...example.activity.primitive } } } })
+    expect(article.text()).toContain('Identify the masses.')
+    wrapper.unmount()
+  })
+
+  it('keeps worked steps hidden when the server cannot record guided assistance', async () => {
+    assist.mockRejectedValueOnce(new Error('revision conflict'))
+    const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
+    const example = { ...canvas, status: 'started', activity: { ...canvas.activity, primitive: {
+      ...canvas.activity.primitive, type: 'worked_example', action: 'reveal_example', testId: 'learn-primitive-worked-example',
+      props: { heading: 'Gravity example', problem: 'Why?', steps: ['Guided step.'], guidedConsequence: 'Guided support only.', sourceRefs: ['source_1'] },
+    }, requiredAction: { kind: 'reveal_example', label: 'Reveal example' } } }
+    const wrapper = await mountSuspended(Comp.default, { props: { canvas: example } })
+    await wrapper.get('[data-testid="learn-canvas-reveal-example"]').trigger('click')
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="learn-canvas-error"]').text()).toContain('worked steps remain hidden'))
+    expect(wrapper.get('[data-testid="learn-primitive-worked-example"]').text()).not.toContain('Guided step.')
+    expect(wrapper.find('[data-testid="learn-canvas-continue"]').exists()).toBe(false)
+  })
+
+  it('records an already-visible worked-example plan as guided before allowing the response', async () => {
+    const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
+    const example = { ...canvas, status: 'started', activity: { ...canvas.activity, primitive: {
+      ...canvas.activity.primitive, type: 'worked_example', action: 'continue', testId: 'learn-primitive-worked-example',
+      props: { heading: 'Gravity example', problem: 'Why?', steps: ['Guided step.'], guidedConsequence: 'Guided support only.', sourceRefs: ['source_1'] },
+    } } }
+    const wrapper = await mountSuspended(Comp.default, { props: { canvas: example } })
+    await vi.waitFor(() => expect(assist).toHaveBeenCalledWith({ studySessionId: 'session_1', expectedSessionRevision: 2, kind: 'answer_reveal' }))
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="learn-primitive-worked-example"]').text()).toContain('Guided step.'))
+    await wrapper.get('[data-testid="learn-canvas-continue"]').trigger('click')
+    await wrapper.get('[data-testid="learn-canvas-response"]').setValue('A guided response.')
+    await wrapper.get('[data-testid="learn-canvas-confidence-3"]').setValue()
+    await wrapper.get('[data-testid="learn-canvas-submit"]').trigger('click')
+    await vi.waitFor(() => expect(stage).toHaveBeenCalledWith(expect.objectContaining({ expectedSessionRevision: 4 })))
+  })
+
+  it('records meaningful start when a delayed guided acknowledgement makes Continue operable', async () => {
+    let finishGuidance!: (value: unknown) => void
+    assist.mockImplementationOnce(() => new Promise(resolve => { finishGuidance = resolve }))
+    const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
+    const example = { ...canvas, status: 'started', activity: { ...canvas.activity, primitive: {
+      ...canvas.activity.primitive, type: 'worked_example', action: 'continue', testId: 'learn-primitive-worked-example',
+      props: { heading: 'Gravity example', problem: 'Why?', steps: ['Guided step.'], guidedConsequence: 'Guided support only.', sourceRefs: ['source_1'] },
+    } } }
+    const wrapper = await mountSuspended(Comp.default, { props: { canvas: example } })
+    await vi.waitFor(() => expect(assist).toHaveBeenCalledTimes(1))
+    expect(meaningfulStart).not.toHaveBeenCalled()
+    finishGuidance({ revision: 4, assistance: { content: 'Guided step.' } })
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-canvas-continue"]').exists()).toBe(true))
+    await vi.waitFor(() => expect(meaningfulStart).toHaveBeenCalledWith({ studySessionId: 'session_1', expectedContentRevision: 1 }))
+    wrapper.unmount()
+  })
+
+  it('renders primitive-specific ready states before the server-owned session start', async () => {
+    const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
+    const cited = await mountSuspended(Comp.default, { props: { canvas } })
+    expect(cited.get('[data-testid="learn-primitive-cited-explanation-ready"]').text()).toContain('1 accepted source is ready')
+    expect(cited.get('[data-testid="learn-canvas-start"]').text()).toBe('Start')
+    cited.unmount()
+
+    const example = { ...canvas, activity: { ...canvas.activity, primitive: {
+      ...canvas.activity.primitive, type: 'worked_example', action: 'reveal_example', testId: 'learn-primitive-worked-example',
+      props: { heading: 'Gravity example', problem: 'Why does an apple fall?', steps: ['Identify the masses.'], guidedConsequence: 'This remains guided.', sourceRefs: ['source_1'] },
+    }, requiredAction: { kind: 'reveal_example', label: 'Reveal example' } } }
+    const worked = await mountSuspended(Comp.default, { props: { canvas: example } })
+    expect(worked.get('[data-testid="learn-primitive-worked-example-ready"]').text()).toContain('Why does an apple fall?')
+    expect(worked.get('[data-testid="learn-canvas-ready-guided-consequence"]').text()).toContain('steps remain hidden')
+    expect(worked.text()).not.toContain('Identify the masses.')
+    expect(worked.get('[data-testid="learn-canvas-start"]').text()).toBe('Start')
+    worked.unmount()
+  })
+
+  it.each([390, 768])('keeps both primitive controls in one readable column at %ipx', async width => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: width })
+    const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
+    const wrapper = await mountSuspended(Comp.default, { props: { canvas: { ...canvas, status: 'started' } } })
+    expect(wrapper.get('[data-testid="learn-primitive-cited-explanation"]').classes()).toContain('min-w-0')
+    expect(wrapper.get('[data-testid="learn-canvas-source-1"]').classes()).toContain('min-h-11')
+    expect(wrapper.get('[data-testid="learn-canvas-continue"]').classes()).toContain('focus-visible:ring-2')
+    wrapper.unmount()
+    const example = { ...canvas, status: 'started', activity: { ...canvas.activity, primitive: { ...canvas.activity.primitive, type: 'worked_example', action: 'continue', testId: 'learn-primitive-worked-example',
+      props: { heading: 'Gravity example', problem: 'Why?', steps: ['Trace gravity.'], guidedConsequence: 'Guided support only.', sourceRefs: ['source_1'] } } } }
+    const worked = await mountSuspended(Comp.default, { props: { canvas: example } })
+    expect(worked.get('[data-testid="learn-primitive-worked-example"]').classes()).toContain('min-w-0')
+    expect(worked.get('[data-testid="learn-canvas-source-1"]').classes()).toContain('min-h-11')
+    worked.unmount()
+  })
+
+  it('keeps a completed worked example labelled as guided, with the saved response status', async () => {
+    const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
+    const completed = { ...canvas, status: 'feedback', savedResponse: { response: 'Gravity acts between masses.', confidence: 3 }, activity: { ...canvas.activity, primitive: {
+      ...canvas.activity.primitive, type: 'worked_example', action: 'continue', testId: 'learn-primitive-worked-example',
+      props: { heading: 'Gravity example', problem: 'Why does an apple fall?', steps: ['Identify the masses.'], guidedConsequence: 'This is guided support.', sourceRefs: ['source_1'] },
+    } } }
+    const wrapper = await mountSuspended(Comp.default, { props: { canvas: completed } })
+    expect(wrapper.get('[data-testid="learn-canvas-worked-status"]').text()).toContain('not an independent attempt or proof of mastery')
+    expect(wrapper.get('[data-testid="learn-canvas-status"]').text()).toContain('Response scored')
+    expect(wrapper.get('[data-testid="learn-primitive-worked-example"]').text()).toContain('Identify the masses.')
+  })
+
+  it('falls back for invalid worked example props and actions with the same bounded report', async () => {
+    const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
+    const base = { ...canvas, activity: { ...canvas.activity, primitive: { ...canvas.activity.primitive, type: 'worked_example', action: 'continue', testId: 'learn-primitive-worked-example',
+      props: { heading: 'Gravity example', problem: 'Why?', steps: ['Trace gravity.'], guidedConsequence: 'Guided support only.', sourceRefs: ['source_1'] } } } }
+    const invalid = { ...base, activity: { ...base.activity, primitive: { ...base.activity.primitive, props: { ...base.activity.primitive.props, steps: ['<script>bad</script>'] } } } }
+    const wrapper = await mountSuspended(Comp.default, { props: { canvas: invalid } })
+    expect(wrapper.get('[data-testid="learn-activity-fallback"]').text()).toContain('unsupported executable content')
+    await vi.waitFor(() => expect(reportRenderFailure).toHaveBeenCalledWith(expect.objectContaining({ reasonCode: 'executable_content' })))
+    await wrapper.setProps({ canvas: { ...base, activity: { ...base.activity, primitive: { ...base.activity.primitive, action: 'run_tool' } } } })
+    expect(wrapper.get('[data-testid="learn-activity-fallback"]').text()).toContain('action is not supported')
+    wrapper.unmount()
+  })
+
   it('keeps the factual response draft mounted while choosing a supported next-boundary control', async () => {
     const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
     const controlled = { ...canvas, status: 'started', activity: { ...canvas.activity, status: 'started', controls: { reasonText: { version: 'learn-adaptive.reason-text.v1', purpose: 'Study a supported explanation.', text: 'This activity uses accepted sources.' }, selected: null, fixedNextPlan: null,

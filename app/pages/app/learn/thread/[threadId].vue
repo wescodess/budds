@@ -61,6 +61,12 @@ const safeDestination = computed(() => {
     : '/app/learn'
 })
 const safeDestinationLabel = computed(() => safeDestination.value === '/app/learn' ? 'Back to Learn' : 'Open your learning mission')
+const evidenceOpenRequest = ref(0)
+const evidenceReturnFocus = ref<HTMLButtonElement | null>(null)
+function inspectEvidence(origin: HTMLButtonElement) {
+  evidenceReturnFocus.value = origin
+  evidenceOpenRequest.value += 1
+}
 
 function leave() { void router.push(safeDestination.value) }
 </script>
@@ -83,7 +89,7 @@ function leave() { void router.push(safeDestination.value) }
         <h1 class="mt-2 font-dm-sans text-3xl font-bold">{{ thread.thread.outcome }}</h1>
         <p class="mt-3 rounded-lg bg-[var(--learn-evidence)] px-3 py-2 text-sm text-muted-foreground" role="status" aria-live="polite">{{ thread.thread.lifecycle }} · Evidence {{ thread.thread.evidenceState }}</p>
         <div class="mt-3 flex items-center gap-3">
-          <LearnAdaptiveEvidenceDrawer :evidence="evidence as never" :pending="evidenceQuery.pending.value" :source-state="selectedHistory ? evidence?.integrityState ?? 'unavailable' : thread.thread.evidenceState" :safe-destination="safeDestination" :safe-destination-label="safeDestinationLabel" />
+          <LearnAdaptiveEvidenceDrawer :evidence="evidence as never" :pending="evidenceQuery.pending.value" :source-state="selectedHistory ? evidence?.integrityState ?? 'unavailable' : thread.thread.evidenceState" :safe-destination="safeDestination" :safe-destination-label="safeDestinationLabel" :open-request="evidenceOpenRequest" :return-focus-to="evidenceReturnFocus" />
         </div>
       </header>
 
@@ -111,7 +117,7 @@ function leave() { void router.push(safeDestination.value) }
           <NuxtLink :to="safeDestination" class="mt-3 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline">{{ safeDestinationLabel }}</NuxtLink>
         </div>
         <div v-show="showCurrent && !canvasUnsafe">
-          <LearnAdaptiveReadySessionCanvas v-if="canvas" :key="`${ownerId}:${canvas.thread.id}:${canvas.activity.id}`" :canvas="canvas as never" :authoritative-revision="Math.max(thread.thread.revision, canvas.thread.revision)" :show-header="false" :active="showCurrent && !canvasUnsafe" @leave="leave" />
+          <LearnAdaptiveReadySessionCanvas v-if="canvas" :key="`${ownerId}:${canvas.thread.id}:${canvas.activity.id}`" :canvas="canvas as never" :authoritative-revision="Math.max(thread.thread.revision, canvas.thread.revision)" :show-header="false" :active="showCurrent && !canvasUnsafe" @leave="leave" @inspect-evidence="inspectEvidence" />
           <LearnAdaptiveDiagnosticCanvas v-else-if="diagnostic" :key="`${ownerId}:${diagnostic.thread.id}:${diagnostic.activity?.id ?? 'draft'}`" :canvas="diagnostic as never" :authoritative-revision="Math.max(thread.thread.revision, diagnostic.thread.revision)" :show-header="false" :active="showCurrent" @leave="leave" />
           <div v-else-if="detailPending" data-testid="learn-adaptive-canvas-loading" class="rounded-lg border border-border p-5" role="status" aria-live="polite">
             <h2 class="font-dm-sans text-lg font-semibold">Loading current activity…</h2>

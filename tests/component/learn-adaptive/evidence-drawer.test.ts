@@ -48,6 +48,26 @@ describe('adaptive Evidence drawer', () => {
     wrapper.unmount()
   })
 
+  it('uses the focus origin for only the external open cycle', async () => {
+    const origin = document.createElement('button')
+    document.body.append(origin)
+    const Comp = await import('~/components/learn-adaptive/EvidenceDrawer.vue')
+    const wrapper = await mountSuspended(Comp.default, { props: { evidence: base, pending: false, sourceState: 'ready', safeDestination: '/app/learn/void_1', safeDestinationLabel: 'Open your learning mission', openRequest: 0, returnFocusTo: origin }, attachTo: document.body })
+    await wrapper.setProps({ openRequest: 1 })
+    let drawer = document.querySelector('[data-testid="learn-evidence-drawer"]') as HTMLElement
+    ;(drawer.querySelector('[data-testid="learn-evidence-close"]') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(document.activeElement).toBe(origin))
+
+    const trigger = wrapper.get('[data-testid="learn-evidence-open"]')
+    ;(trigger.element as HTMLButtonElement).focus()
+    await trigger.trigger('click')
+    drawer = document.querySelector('[data-testid="learn-evidence-drawer"]') as HTMLElement
+    ;(drawer.querySelector('[data-testid="learn-evidence-close"]') as HTMLButtonElement).click()
+    await vi.waitFor(() => expect(document.activeElement).toBe(trigger.element))
+    wrapper.unmount()
+    origin.remove()
+  })
+
   it.each(['preparing', 'blocked', 'stale', 'invalidated'] as const)('shows live %s source status over retained accepted claims', async sourceState => {
     const Comp = await import('~/components/learn-adaptive/EvidenceDrawer.vue')
     const wrapper = await mountSuspended(Comp.default, { props: { evidence: base, pending: false, sourceState, safeDestination: '/app/learn/void_1', safeDestinationLabel: 'Open your learning mission' }, attachTo: document.body })

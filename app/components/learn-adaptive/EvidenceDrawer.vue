@@ -17,10 +17,13 @@ const props = defineProps<{
   sourceState: string
   safeDestination: string
   safeDestinationLabel: string
+  openRequest?: number
+  returnFocusTo?: HTMLButtonElement | null
 }>()
 
 const open = ref(false)
 const trigger = ref<HTMLButtonElement | null>(null)
+const externalReturnFocus = shallowRef<HTMLButtonElement | null>(null)
 const originLabels = {
   folder_document: 'Your folder', user_url: 'Added by you', open_database: 'Open databases', general_web_search: 'Web research',
 } as const
@@ -39,15 +42,30 @@ const status = computed(() => props.sourceState === 'ready' ? props.evidence?.in
 const recovery = computed(() => recoveryCopy[status.value] ?? null)
 const needsRecovery = computed(() => recovery.value !== null)
 const locatorUnavailable = computed(() => ['preparing', 'blocked', 'invalidated', 'deleted', 'unavailable'].includes(status.value))
+watch(() => props.openRequest, (value, oldValue) => {
+  if (value === oldValue) return
+  externalReturnFocus.value = props.returnFocusTo?.isConnected ? props.returnFocusTo : null
+  open.value = true
+})
 watch(open, async value => { if (!value) { await nextTick(); trigger.value?.focus() } })
+function useDefaultTriggerFocus() {
+  externalReturnFocus.value = null
+}
+function restoreSourceFocus(event: Event) {
+  const origin = externalReturnFocus.value
+  externalReturnFocus.value = null
+  if (!origin?.isConnected) return
+  event.preventDefault()
+  origin.focus()
+}
 </script>
 
 <template>
   <Sheet v-model:open="open">
     <SheetTrigger as-child>
-      <button ref="trigger" type="button" data-testid="learn-evidence-open" class="min-h-11 rounded-lg border border-border px-4 text-sm font-medium text-[var(--learn-action)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)]">Evidence</button>
+      <button ref="trigger" type="button" data-testid="learn-evidence-open" class="min-h-11 rounded-lg border border-border px-4 text-sm font-medium text-[var(--learn-action)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)]" @click="useDefaultTriggerFocus">Evidence</button>
     </SheetTrigger>
-    <SheetContent side="right" data-testid="learn-evidence-drawer" class="w-screen max-w-none gap-3 bg-[var(--learn-context-surface)] p-4 md:w-[32rem] md:max-w-md">
+    <SheetContent side="right" data-testid="learn-evidence-drawer" class="w-screen max-w-none gap-3 bg-[var(--learn-context-surface)] p-4 md:w-[32rem] md:max-w-md" @close-auto-focus="restoreSourceFocus">
       <header class="pr-8">
         <SheetTitle class="font-dm-sans text-xl font-semibold">Evidence</SheetTitle>
         <SheetDescription>Sources currently supporting this activity. Source locators are shown only when permitted.</SheetDescription>
