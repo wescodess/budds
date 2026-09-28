@@ -272,12 +272,20 @@ export const decideReflectionNextMove = mutation({
           ? { kind: 'override', label: 'Choose a different next move', reasonCode: 'reflection_next_move_overridden', activityId: activity.activityId }
           : { kind: 'return_to_learn', label: 'Back to Learn', reasonCode: 'reflection_thread_ended', activityId: activity.activityId }
       await commandCtx.db.patch(thread._id, { lifecycle: args.decision === 'end' ? 'ended' : thread.lifecycle,
+        ...(args.decision === 'end' ? { lifecycleChangedAt: now } : {}),
         nextAction, revision, updatedAt: now })
       await writeLearnActivityEvent(commandCtx, { userId, threadId: thread._id, activityId: activity._id,
         eventType: 'activity_completed', eventVersion: 'activity_completed.v1', sourceVersion: activity.planVersion,
         contractVersion: activity.contractVersion, semanticKey: `activity:${activity.activityId}:reflection:${outcome}`,
         occurredAt: now, reasonCode: `reflection_${outcome}`, outcomeCode: outcome,
         metadata: { activityClass: 'non_factual', boundaryOrdinal: activity.boundaryOrdinal, planRevision: activity.planRevision } })
+      if (args.decision === 'end') await writeLearnActivityEvent(commandCtx, {
+        userId, threadId: thread._id, activityId: activity._id,
+        eventType: 'explicit_end', eventVersion: 'explicit_end.v1',
+        sourceVersion: 'learn-adaptive.lifecycle.v1', contractVersion: activity.contractVersion,
+        semanticKey: `thread:${String(thread._id)}:explicit_end`, occurredAt: now,
+        reasonCode: 'learner_ended_thread', outcomeCode: 'ended', metadata: {},
+      })
       return { value: { outcome, nextMove: primitive.props.nextMove }, revision }
     },
   }),
@@ -293,7 +301,7 @@ export const setIntent = mutation({
     payload: { intent: args.intent },
     allowNoop: true,
     apply: async (commandCtx, thread) => {
-      if (thread.lifecycle === 'ended' || thread.lifecycle === 'rollback') throw new Error('Thread intent cannot be changed in its current lifecycle')
+      if (thread.lifecycle === 'paused' || thread.lifecycle === 'ended' || thread.lifecycle === 'rollback') throw new Error('Thread intent cannot be changed in its current lifecycle')
       if (thread.intent === args.intent) return { value: { intent: thread.intent }, revision: thread.revision }
       const revision = thread.revision + 1
       await commandCtx.db.patch(thread._id, { intent: args.intent, revision, updatedAt: Date.now() })
@@ -338,6 +346,88 @@ export const applyOverride = mutation({
 })
 
 const HISTORY_LIMIT = 8
+
+const lifecycleArgs = { threadId: v.id('learningThreads'), expectedRevision: v.number(), idempotencyKey: v.string() }
+
+async function requireLifecycleAnchor(ctx: MutationCtx, thread: Doc<'learningThreads'>, userId: string) {
+  if (thread.authorityKind !== 'v2_mission') return
+  const learningVoid = thread.learningVoidId && await ctx.db.get(thread.learningVoidId)
+  if (!learningVoid || learningVoid.userId !== userId) throw new Error('Thread mission anchor is unavailable')
+  if (!thread.currentActivityId) return
+  const activity = await ctx.db.get(thread.currentActivityId)
+  if (!activity || activity.userId !== userId || activity.threadId !== thread._id
+    || activity.activityClass === 'factual' && activity.learningVoidId !== learningVoid._id) {
+    throw new Error('Thread mission anchor is unavailable')
+  }
+}
+
+export const leaveThread = mutation({
+  args: lifecycleArgs,
+  handler: async (ctx, args) => await executeAdaptiveThreadCommand(ctx, {
+    ...args, commandName: 'leaveThread', payload: {}, returnBlockedWhenDeleting: true,
+    apply: async (commandCtx, thread, userId) => {
+      await requireLifecycleAnchor(commandCtx, thread, userId)
+      if (thread.lifecycle === 'paused' || thread.lifecycle === 'ended' || thread.lifecycle === 'rollback') {
+        throw new AdaptiveCommandRejection('blocked', 'lifecycle_unavailable', 'Thread cannot be left in its current lifecycle')
+      }
+      const previousLifecycle = thread.lifecycle
+      const changedAt = Date.now()
+      const revision = thread.revision + 1
+      await commandCtx.db.patch(thread._id, {
+        lifecycle: 'paused', lifecycleBeforePause: previousLifecycle, lifecycleChangedAt: changedAt,
+        revision, updatedAt: changedAt,
+      })
+      return { value: { lifecycle: 'paused' as const, previousLifecycle, changedAt }, revision }
+    },
+  }),
+})
+
+export const resumeThread = mutation({
+  args: lifecycleArgs,
+  handler: async (ctx, args) => await executeAdaptiveThreadCommand(ctx, {
+    ...args, commandName: 'resumeThread', payload: {}, returnBlockedWhenDeleting: true,
+    apply: async (commandCtx, thread, userId) => {
+      await requireLifecycleAnchor(commandCtx, thread, userId)
+      if (thread.lifecycle !== 'paused' || !thread.lifecycleBeforePause) {
+        throw new AdaptiveCommandRejection('blocked', 'lifecycle_unavailable', 'Thread is not available to resume')
+      }
+      const lifecycle = thread.lifecycleBeforePause
+      const changedAt = Date.now()
+      const revision = thread.revision + 1
+      await commandCtx.db.patch(thread._id, {
+        lifecycle, lifecycleBeforePause: undefined, lifecycleChangedAt: changedAt,
+        revision, updatedAt: changedAt,
+      })
+      return { value: { lifecycle, changedAt }, revision }
+    },
+  }),
+})
+
+export const endThread = mutation({
+  args: lifecycleArgs,
+  handler: async (ctx, args) => await executeAdaptiveThreadCommand(ctx, {
+    ...args, commandName: 'endThread', payload: {}, returnBlockedWhenDeleting: true,
+    apply: async (commandCtx, thread, userId) => {
+      await requireLifecycleAnchor(commandCtx, thread, userId)
+      if (thread.lifecycle === 'ended' || thread.lifecycle === 'rollback') {
+        throw new AdaptiveCommandRejection('blocked', 'lifecycle_unavailable', 'Thread cannot be ended in its current lifecycle')
+      }
+      const changedAt = Date.now()
+      const revision = thread.revision + 1
+      await commandCtx.db.patch(thread._id, {
+        lifecycle: 'ended', lifecycleBeforePause: undefined, lifecycleChangedAt: changedAt,
+        revision, updatedAt: changedAt,
+      })
+      await writeLearnActivityEvent(commandCtx, {
+        userId, threadId: thread._id, eventType: 'explicit_end', eventVersion: 'explicit_end.v1',
+        sourceVersion: 'learn-adaptive.lifecycle.v1', contractVersion: 'learn-adaptive.thread.v1',
+        semanticKey: `thread:${String(thread._id)}:explicit_end`, occurredAt: changedAt,
+        reasonCode: 'learner_ended_thread', outcomeCode: 'ended', metadata: {},
+      })
+      return { value: { lifecycle: 'ended' as const, changedAt }, revision }
+    },
+  }),
+})
 
 export async function representativeCompletion(ctx: QueryCtx | MutationCtx, userId: string, activity: Doc<'learningThreadActivities'> | null) {
   if (!activity || activity.activityClass !== 'factual' || activity.status !== 'feedback'
@@ -464,6 +554,7 @@ export const getThread = query({
       thread: {
         id: thread._id, outcome: thread.outcome ?? thread.originalNeed, intent: thread.intent,
         sourceScope: thread.sourceScope, evidenceState, lifecycle: thread.lifecycle, revision: thread.revision,
+        lifecycleChangedAt: thread.lifecycleChangedAt ?? null,
         authorityKind: thread.authorityKind, learningVoidId: thread.learningVoidId ?? null,
       },
       currentActivity: activity ? {
