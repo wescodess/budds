@@ -7,13 +7,13 @@ import {
 } from './learn-adaptive-events'
 
 describe('Adaptive Learn event contract', () => {
-  test('freezes the exact closed v2 taxonomy and type/version pairing', () => {
-    expect(LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION).toBe('learn-adaptive.activity-events.v2')
+  test('freezes the exact closed v3 taxonomy and type/version pairing', () => {
+    expect(LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION).toBe('learn-adaptive.activity-events.v3')
     expect(LEARN_ACTIVITY_EVENT_TAXONOMY).toEqual([
       'thread_command_committed', 'meaningful_activity_started', 'thread_drafted', 'evidence_ready', 'evidence_blocked',
       'activity_eligible', 'activity_started', 'meaningful_response', 'assistance', 'activity_completed',
       'representative_pass', 'representative_fail', 'delayed_check_eligible', 'delayed_check_attempt', 'retained',
-      'remediation', 'provider_failure', 'provider_ambiguity', 'evidence_gap', 'evidence_invalidation', 'abandonment', 'explicit_end', 'routing_decision',
+      'remediation', 'provider_failure', 'provider_ambiguity', 'evidence_gap', 'evidence_invalidation', 'abandonment', 'explicit_end', 'routing_decision', 'canvas_render_failure',
     ])
     expect(LEARN_ACTIVITY_EVENT_TAXONOMY.map(type => eventVersionFor(type))).toEqual(
       LEARN_ACTIVITY_EVENT_TAXONOMY.map(type => `${type}.v1`),
@@ -50,5 +50,17 @@ describe('Adaptive Learn event contract', () => {
       .toThrow(/routing decision metadata/i)
     expect(() => validateLearnActivityEventInput({ ...routing, metricDefinitionVersion: 'first_value.v1' }))
       .toThrow(/routing decision metadata/i)
+  })
+
+  test('Canvas render failures contain only a closed reason and bounded fallback metadata', () => {
+    const failure = { eventType: 'canvas_render_failure' as const, eventVersion: 'canvas_render_failure.v1' as const,
+      sourceVersion: 'learn-adaptive.primitive-validation.v1', contractVersion: 'learn-adaptive.activity-contract.v1',
+      semanticKey: 'activity:one:plan:1:render:unsafe_url', occurredAt: 1, reasonCode: 'unsafe_url',
+      outcomeCode: 'fallback_rendered', metadata: { activityClass: 'factual' as const, boundaryOrdinal: 1, planRevision: 1 } }
+    expect(validateLearnActivityEventInput(failure)).toEqual(failure)
+    expect(validateLearnActivityEventInput({ ...failure, reasonCode: 'renderer_unavailable' })).toMatchObject({ reasonCode: 'renderer_unavailable' })
+    expect(() => validateLearnActivityEventInput({ ...failure, reasonCode: 'private_source_url' })).toThrow(/Canvas render failure metadata/i)
+    expect(() => validateLearnActivityEventInput({ ...failure, metadata: { ...failure.metadata, cohort: 'private' } } as never)).toThrow(/Canvas render failure metadata/i)
+    expect(() => validateLearnActivityEventInput({ ...failure, outcomeCode: 'success' })).toThrow(/Canvas render failure metadata/i)
   })
 })

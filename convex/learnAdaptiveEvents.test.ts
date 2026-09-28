@@ -41,6 +41,19 @@ describe('Adaptive Learn event writer', () => {
       taxonomyVersion: 'learn-adaptive.activity-events.v1' })).rejects.toThrow(/unavailable in the legacy event taxonomy/i)
   })
 
+  test('replays a v2 routing event after the v3 taxonomy upgrade', async () => {
+    const { t, threadId } = await fixture()
+    const input = { userId: OWNER, threadId, eventType: 'routing_decision' as const,
+      eventVersion: 'routing_decision.v1' as const, sourceVersion: 'learn-adaptive.router.v1',
+      contractVersion: 'learn-adaptive.routing-decision.v1', semanticKey: 'routing:legacy-v2',
+      occurredAt: 10, outcomeCode: 'recommended', metadata: { boundaryOrdinal: 1, activityClass: 'non_factual' as const } }
+    const first = await t.run(ctx => writeLearnActivityEvent(ctx, input))
+    await t.run(async ctx => ctx.db.patch(first.eventId, { taxonomyVersion: 'learn-adaptive.activity-events.v2',
+      dedupeKeyHash: await learnActivityEventDedupeHash({ userId: OWNER, threadId, eventVersion: input.eventVersion,
+        semanticKey: input.semanticKey, taxonomyVersion: 'learn-adaptive.activity-events.v2' }) }))
+    expect(await t.run(ctx => writeLearnActivityEvent(ctx, input))).toEqual({ eventId: first.eventId, replayed: true })
+  })
+
   test('writes one owner-scoped event for a deterministic semantic key', async () => {
     const { t, threadId } = await fixture()
     const input = {
@@ -59,7 +72,7 @@ describe('Adaptive Learn event writer', () => {
     const first = await t.run(ctx => writeLearnActivityEvent(ctx, input))
     expect(await t.run(ctx => writeLearnActivityEvent(ctx, input))).toEqual({ eventId: first.eventId, replayed: true })
     const rows = await t.run(ctx => ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', OWNER).eq('threadId', threadId)).take(2))
-    expect(rows).toEqual([expect.objectContaining({ eventType: 'activity_eligible', eventVersion: 'activity_eligible.v1', taxonomyVersion: 'learn-adaptive.activity-events.v2', metadata: input.metadata })])
+    expect(rows).toEqual([expect.objectContaining({ eventType: 'activity_eligible', eventVersion: 'activity_eligible.v1', taxonomyVersion: 'learn-adaptive.activity-events.v3', metadata: input.metadata })])
     expect(rows[0]).not.toHaveProperty('semanticKey')
   })
 

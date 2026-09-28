@@ -63,7 +63,7 @@ async function fixture() {
     const laterExcerptId = await ctx.db.insert('learnSourceExcerpts', { userId, sourceSnapshotId: laterSourceSnapshotId, locator: 'p:2', excerpt: 'Earth attracts nearby apples.', rightsStatus: 'permitted' })
     const laterClaimId = await ctx.db.insert('sessionContentClaims', { userId, sessionContentId, order: 1, claim: 'Earth attracts nearby apples.', verifierVersion: 'learn-v2.entailment.v2', confidence: 0.95 })
     await ctx.db.insert('learnClaimSupports', { userId, sessionContentClaimId: laterClaimId, sourceExcerptId: laterExcerptId, sourceSnapshotId: laterSourceSnapshotId, entailment: 'entailed', verifierVersion: 'learn-v2.entailment.v2', confidence: 0.95, conflictStatus: 'clear', evidenceStatus: 'evidence_available' })
-    return { folderId, studySessionId, sessionContentId, learningVoidId, laterSourceSnapshotId, laterExcerptId, laterClaimId }
+    return { folderId, studySessionId, sessionContentId, learningVoidId, sourceSnapshotId, laterSourceSnapshotId, laterExcerptId, laterClaimId }
   })
   return { t, owner, other, ids }
 }
@@ -122,6 +122,8 @@ describe('ready V2 adaptive Canvas', () => {
       studySessionId: ids.studySessionId, expectedSessionRevision: 2, idempotencyKey: 'canvas-controls-attach-0001',
     })
     const ready = await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })
+    expect(ready?.activity.evidenceScope).toEqual({ version: 'learn-adaptive.canvas-evidence-scope.v1', integrityState: 'accepted', sourceRefs: [String(ids.sourceSnapshotId), String(ids.laterSourceSnapshotId)] })
+    expect(ready?.activity.primitive?.type === 'cited_explanation' ? ready.activity.primitive.props.sourceRefs : null).toEqual([String(ids.sourceSnapshotId)])
     expect(ready?.activity.controls).toMatchObject({ reasonText: { version: 'learn-adaptive.reason-text.v1', purpose: expect.stringContaining('supported explanation'), text: expect.stringContaining('accepted sources') },
       options: expect.arrayContaining([{ key: 'example', label: 'Show an example', available: true, unavailableReason: null }]) })
     await t.run(ctx => ctx.db.delete(ids.folderId))
@@ -129,6 +131,26 @@ describe('ready V2 adaptive Canvas', () => {
     expect(lost?.activity.controls.options.find(option => option.key === 'example')).toMatchObject({ available: false, unavailableReason: 'state' })
     await expect(owner.mutation(api.learnAdaptive.applyOverride, { threadId: attached.threadId, activityId: attached.activityId,
       option: 'example', expectedRevision: ready!.thread.revision, idempotencyKey: 'canvas-controls-lost-0001' })).rejects.toThrow(/Override unavailable/)
+  })
+
+  test('records one versioned render failure only for the owned current Canvas', async () => {
+    const { t, owner, other, ids } = await fixture()
+    const attached = await owner.mutation(api.learnAdaptiveCanvas.attachReadySession, {
+      studySessionId: ids.studySessionId, expectedSessionRevision: 2, idempotencyKey: 'canvas-render-attach-0001',
+    })
+    const input = { threadId: attached.threadId, activityId: attached.activityId, expectedPlanRevision: 1, reasonCode: 'unsafe_url' as const }
+    await expect(other.mutation(api.learnAdaptiveCanvas.reportRenderFailure, input)).rejects.toThrow()
+    await expect(owner.mutation(api.learnAdaptiveCanvas.reportRenderFailure, { ...input, expectedPlanRevision: 2 })).rejects.toThrow(/authority/i)
+    await expect(owner.mutation(api.learnAdaptiveCanvas.reportRenderFailure, { ...input, reasonCode: 'private_source_url' as never })).rejects.toThrow()
+    await expect(owner.mutation(api.learnAdaptiveCanvas.reportRenderFailure, { ...input, rawPayload: 'private data' } as never)).rejects.toThrow()
+    expect(await owner.mutation(api.learnAdaptiveCanvas.reportRenderFailure, input)).toMatchObject({ recorded: true })
+    expect(await owner.mutation(api.learnAdaptiveCanvas.reportRenderFailure, input)).toMatchObject({ recorded: false })
+    const events = await t.run(ctx => ctx.db.query('learnActivityEvents')
+      .withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('threadId', attached.threadId)).take(4))
+    expect(events.filter(event => event.eventType === 'canvas_render_failure')).toMatchObject([
+      { eventVersion: 'canvas_render_failure.v1', reasonCode: 'unsafe_url', outcomeCode: 'fallback_rendered' },
+    ])
+    expect((await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId }))?.thread.revision).toBe(2)
   })
 
   test('factual thread recovers from deleted or non-owned folder despite retained ready Canvas snapshots', async () => {
