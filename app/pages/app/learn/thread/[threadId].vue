@@ -29,12 +29,12 @@ const thread = computed(() => {
   const value = threadQuery.data.value
   return allowed.value && value?.thread.id === threadId.value && value.ownerId === ownerId.value ? value : null
 })
+const CONTRIBUTION_FEATURE_LABELS: Record<string, string> = { chat: 'Chat', quiz: 'Quiz', flashcards: 'Flashcards', podcast: 'Audio Overview', documents: 'Document' }
 function contributionOrigin(feature: string, classification: string, sourceStatus: string) {
-  const labels: Record<string, string> = { chat: 'Chat', quiz: 'Quiz', flashcards: 'Flashcards', podcast: 'Audio Overview', documents: 'Document' }
   const kind = classification === 'non_factual' ? 'non-factual context'
     : classification === 'inference' ? 'inference' : classification === 'synthesis' ? 'synthesis'
       : classification === 'unknown' ? 'unverified context' : 'accepted evidence'
-  return `From ${labels[feature] ?? 'another feature'} · ${kind}${sourceStatus === 'available' ? '' : sourceStatus === 'source_revision_changed' ? ' · source changed' : ' · source unavailable'}`
+  return `From ${CONTRIBUTION_FEATURE_LABELS[feature] ?? 'another feature'} · ${kind}${sourceStatus === 'available' ? '' : sourceStatus === 'source_revision_changed' ? ' · source changed' : ' · source unavailable'}`
 }
 const memoryQuery = import.meta.client
   ? useConvexQuery(api.learnAdaptive.getMemory, computed(() => ({ threadId: threadId.value as never })), { enabled: computed(() => allowed.value && Boolean(thread.value)) })
@@ -45,6 +45,129 @@ const memory = computed(() => {
   return current && value && value.ownerId === ownerId.value && value.threadId === current.thread.id
     && value.threadRevision >= current.thread.revision ? value : null
 })
+type ContributionRow = { _id: string, threadId: string, sourceFeature: string, contributionKind: string, classification: string, sourceStatus: string, createdAt: number }
+type ContributionPage = { page: ContributionRow[], isDone: boolean, continueCursor: string }
+const contributionsQuery = import.meta.client
+  ? useConvexQuery(api.learnAdaptive.listThreadContributions,
+    computed(() => ({ threadId: threadId.value as never, paginationOpts: { numItems: 20, cursor: null } })),
+    { enabled: computed(() => allowed.value && Boolean(thread.value)) })
+  : { data: ref<ContributionPage | null>(null), pending: ref(false) }
+const contributions = computed(() => {
+  const current = thread.value
+  const value = contributionsQuery.data.value as ContributionPage | null
+  return current && value ? value.page.filter(row => row.threadId === current.thread.id) : []
+})
+const convertedContributionIds = computed(() => new Set([
+  thread.value?.currentActivity?.attribution?.contributionId,
+  ...(thread.value?.history ?? []).map(item => item.attribution?.contributionId),
+  ...locallyConvertedContributionIds.value,
+].filter((id): id is string => typeof id === 'string')))
+const conversionMutation = import.meta.client ? useConvexMutation(api.learnAdaptive.convertContributionToActivity) : { mutate: async (_: unknown) => ({ kind: 'blocked' }) }
+type ContributionConversionCommand = { threadId: string, ownerId: string, contributionId: string, expectedRevision: number, idempotencyKey: string }
+const pendingContributionConversion = ref<ContributionConversionCommand | null>(null)
+const locallyConvertedContributionIds = ref(new Set<string>())
+const locallyRejectedSources = ref(new Map<string, 'source_revision_changed' | 'source_unavailable'>())
+const contributionConversionBusy = ref(false)
+const contributionConversionError = ref('')
+const contributionConversionNotice = ref('')
+let contributionScopeEpoch = 0
+watch([ownerId, threadId, allowed], () => {
+  contributionScopeEpoch += 1
+  pendingContributionConversion.value = null
+  locallyConvertedContributionIds.value = new Set()
+  locallyRejectedSources.value = new Map()
+  contributionConversionBusy.value = false
+  contributionConversionError.value = ''
+  contributionConversionNotice.value = ''
+})
+function canConvertContribution(row: ContributionRow) {
+  const current = thread.value
+  const currentStatus = current?.currentActivity?.status
+  return Boolean(current && row.classification !== 'accepted_evidence' && row.classification !== 'factual'
+    && row.sourceStatus === 'available' && !locallyRejectedSources.value.has(row._id) && !convertedContributionIds.value.has(row._id)
+    && !['draft', 'paused', 'ended', 'rollback'].includes(current.thread.lifecycle)
+    && !(currentStatus && ['started', 'submitted', 'scoring', 'feedback', 'reconciling'].includes(currentStatus)))
+}
+function contributionFeatureLabel(feature: string) {
+  return CONTRIBUTION_FEATURE_LABELS[feature] ?? 'Another feature'
+}
+function contributionClassificationLabel(classification: string) {
+  return ({ non_factual: 'non-factual context', inference: 'inference', synthesis: 'synthesis', unknown: 'unverified context', accepted_evidence: 'accepted evidence' } as Record<string, string>)[classification] ?? 'unclassified context'
+}
+function contributionStatusLabel(row: ContributionRow) {
+  if (row.classification === 'accepted_evidence' || row.classification === 'factual') return 'Factual activity unavailable until independent factual authority is available.'
+  if (locallyRejectedSources.value.get(row._id) === 'source_revision_changed') return 'Source changed; review it before using this contribution.'
+  if (locallyRejectedSources.value.get(row._id) === 'source_unavailable') return 'Source unavailable; this contribution cannot be used.'
+  if (row.sourceStatus === 'source_revision_changed') return 'Source changed; review it before using this contribution.'
+  if (row.sourceStatus !== 'available') return 'Source unavailable; this contribution cannot be used.'
+  if (convertedContributionIds.value.has(row._id)) return 'Already used in an activity.'
+  const lifecycle = thread.value?.thread.lifecycle
+  if (lifecycle === 'paused' || lifecycle === 'ended' || lifecycle === 'rollback' || lifecycle === 'draft') return 'This thread cannot accept a contribution activity right now.'
+  const currentStatus = thread.value?.currentActivity?.status
+  if (currentStatus && ['started', 'submitted', 'scoring', 'feedback', 'reconciling'].includes(currentStatus)) return 'Finish the current activity before choosing another next move.'
+  return 'Recorded as available. Its source will be checked when selected; the activity is unscored.'
+}
+function conversionErrorMessage(code: string) {
+  if (code === 'source_revision_changed' || code === 'source_unavailable' || code === 'contribution_unavailable') return 'This source changed or is unavailable. Review the contribution list before trying again.'
+  if (code === 'factual_authority_unavailable') return 'This contribution cannot create a factual activity until independent factual authority is available.'
+  if (['thread_not_active', 'thread_not_ready', 'thread_deleting', 'clarification_pending', 'activity_boundary_unavailable'].includes(code)) return 'The thread or current activity changed. Review the current state before choosing another next move.'
+  return 'This contribution could not be used. Review the current thread and try again if it is still available.'
+}
+function contributionConversionKey() { return `contribution-conversion:${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}` }
+async function runContributionConversion(command: ContributionConversionCommand) {
+  if (contributionConversionBusy.value) return
+  if (!thread.value || thread.value.thread.id !== command.threadId || ownerId.value !== command.ownerId || !allowed.value) {
+    pendingContributionConversion.value = null
+    contributionConversionError.value = 'This contribution belongs to another thread or account. Open your own thread to continue.'
+    return
+  }
+  contributionConversionBusy.value = true
+  const scopeEpoch = contributionScopeEpoch
+  contributionConversionError.value = ''
+  contributionConversionNotice.value = ''
+  try {
+    const result = await conversionMutation.mutate({ threadId: command.threadId as never, contributionId: command.contributionId as never,
+      expectedRevision: command.expectedRevision, idempotencyKey: command.idempotencyKey }) as { kind: string, code?: string }
+    if (scopeEpoch !== contributionScopeEpoch) return
+    if (result.kind === 'ok') {
+      pendingContributionConversion.value = null
+      locallyConvertedContributionIds.value = new Set([...locallyConvertedContributionIds.value, command.contributionId])
+      contributionConversionNotice.value = 'Your next planning activity is ready. It is unscored and does not award mastery.'
+    }
+    else if (result.kind === 'conflict') {
+      pendingContributionConversion.value = null
+      contributionConversionError.value = 'The thread changed in another tab. Review the refreshed thread, then choose the contribution again.'
+    }
+    else {
+      pendingContributionConversion.value = null
+      if (result.code === 'source_revision_changed' || result.code === 'source_unavailable' || result.code === 'contribution_unavailable') {
+        locallyRejectedSources.value = new Map(locallyRejectedSources.value).set(command.contributionId,
+          result.code === 'source_revision_changed' ? 'source_revision_changed' : 'source_unavailable')
+      }
+      contributionConversionError.value = conversionErrorMessage(result.code ?? '')
+    }
+  }
+  catch {
+    if (scopeEpoch !== contributionScopeEpoch) return
+    contributionConversionError.value = 'The outcome could not be confirmed. Retry the same conversion to check its result.'
+  }
+  finally { if (scopeEpoch === contributionScopeEpoch) contributionConversionBusy.value = false }
+}
+function requestContributionConversion(row: ContributionRow) {
+  const current = thread.value
+  if (!current || !ownerId.value || !canConvertContribution(row)) return
+  if (pendingContributionConversion.value) {
+    contributionConversionError.value = 'A previous conversion is unconfirmed. Retry that same conversion before starting another.'
+    return
+  }
+  const command = { threadId: current.thread.id, ownerId: String(ownerId.value), contributionId: row._id,
+    expectedRevision: current.thread.revision, idempotencyKey: contributionConversionKey() }
+  pendingContributionConversion.value = command
+  void runContributionConversion(command)
+}
+function retryContributionConversion() {
+  if (pendingContributionConversion.value) void runContributionConversion(pendingContributionConversion.value)
+}
 const setMemoryPreferenceMutation = import.meta.client
   ? useConvexMutation(api.learnAdaptive.setMemoryPreference)
   : { mutate: async (_: unknown) => ({ kind: 'blocked' }) }
@@ -249,6 +372,32 @@ function leave() { void router.push(safeDestination.value) }
         <p class="mt-2 text-sm">{{ rollback ? 'Back to Learn' : thread.currentActivity || ['draft', 'ready'].includes(thread.thread.lifecycle) ? thread.nextAction.label : 'Review this thread from your learning home.' }}</p>
         <NuxtLink v-if="thread.completion && thread.thread.authorityKind === 'v2_mission'" :to="safeDestination" data-testid="learn-representative-next-move" class="mt-2 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)]">{{ safeDestinationLabel }}</NuxtLink>
         <NuxtLink v-if="thread.nextAction.kind === 'clarify' && (canvas || diagnostic)" :to="safeDestination" class="mt-2 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)]">{{ safeDestinationLabel }}</NuxtLink>
+      </section>
+
+      <section class="mt-6 rounded-xl border border-border bg-card p-5" aria-labelledby="learn-thread-contributions-title" data-testid="learn-thread-contributions">
+        <h2 id="learn-thread-contributions-title" class="font-dm-sans text-lg font-semibold">Recent contributions</h2>
+        <p class="mt-2 text-sm text-muted-foreground">Choose a recorded contribution to make an attributed, unscored planning activity. Its source will be checked first. This does not verify facts or award mastery.</p>
+        <p v-if="contributionsQuery.pending.value" class="mt-3 text-sm" role="status">Loading recent contributions…</p>
+        <p v-else-if="contributions.length === 0" class="mt-3 text-sm text-muted-foreground">No contributions are available for this thread yet.</p>
+        <ol v-else class="mt-3 space-y-3">
+          <li v-for="item in contributions" :key="item._id" data-testid="learn-thread-contribution-row" class="rounded-lg border border-border p-3">
+            <p class="text-sm font-medium">{{ contributionFeatureLabel(item.sourceFeature) }} · {{ item.contributionKind }}</p>
+            <p class="mt-1 text-sm text-muted-foreground">{{ contributionClassificationLabel(item.classification) }}</p>
+            <p class="mt-1 text-xs text-muted-foreground">{{ contributionStatusLabel(item) }}</p>
+            <button
+              v-if="canConvertContribution(item)" type="button" data-testid="learn-convert-contribution"
+              :disabled="contributionConversionBusy || Boolean(pendingContributionConversion)"
+              class="mt-2 inline-flex min-h-11 items-center rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)]"
+              @click="requestContributionConversion(item)">{{ contributionConversionBusy ? 'Preparing next activity…' : 'Use for my next move' }}</button>
+          </li>
+        </ol>
+        <p v-if="!contributionsQuery.pending.value && contributions.length > 0" class="mt-3 text-xs text-muted-foreground">Showing up to 20 recent contributions.</p>
+        <p v-if="contributionConversionError" class="mt-3 text-sm text-destructive" role="alert" data-testid="learn-thread-conversion-error">{{ contributionConversionError }}</p>
+        <button
+          v-if="pendingContributionConversion && contributionConversionError" type="button" data-testid="learn-thread-conversion-retry"
+          class="mt-2 inline-flex min-h-11 items-center rounded-lg border border-border px-4 py-2 text-sm font-medium underline disabled:opacity-50"
+          :disabled="contributionConversionBusy" @click="retryContributionConversion">Retry same conversion</button>
+        <p v-if="contributionConversionNotice" class="mt-3 text-sm" role="status" data-testid="learn-thread-conversion-notice">{{ contributionConversionNotice }}</p>
       </section>
 
       <section class="mt-6 rounded-xl bg-[var(--learn-activity-surface)] p-4" data-testid="learn-adaptive-canvas-frame" aria-label="Current learning activity">
