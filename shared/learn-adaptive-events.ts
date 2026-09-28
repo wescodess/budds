@@ -4,12 +4,13 @@ import { ADAPTIVE_ACTIVITY_VALIDATION_REASONS, ADAPTIVE_ACTIVITY_VALIDATION_ANAL
 export const LEGACY_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION = 'learn-adaptive.activity-events.v1' as const
 export const SECOND_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION = 'learn-adaptive.activity-events.v2' as const
 export const PREVIOUS_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION = 'learn-adaptive.activity-events.v3' as const
-export const LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION = 'learn-adaptive.activity-events.v4' as const
+export const FOURTH_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION = 'learn-adaptive.activity-events.v4' as const
+export const LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION = 'learn-adaptive.activity-events.v5' as const
 export const LEARN_ACTIVITY_EVENT_TAXONOMY = [
   'thread_command_committed', 'meaningful_activity_started', 'thread_drafted', 'evidence_ready', 'evidence_blocked',
   'activity_eligible', 'activity_started', 'meaningful_response', 'assistance', 'activity_completed',
   'representative_pass', 'representative_fail', 'delayed_check_eligible', 'delayed_check_attempt', 'retained',
-  'remediation', 'provider_failure', 'provider_ambiguity', 'evidence_gap', 'evidence_invalidation', 'abandonment', 'explicit_end', 'routing_decision', 'canvas_render_failure', 'contribution_recorded', 'contribution_rejected',
+  'remediation', 'provider_failure', 'provider_ambiguity', 'evidence_gap', 'evidence_invalidation', 'abandonment', 'explicit_end', 'routing_decision', 'canvas_render_failure', 'contribution_recorded', 'contribution_rejected', 'cross_feature_activity_created', 'cross_feature_activity_blocked', 'cross_feature_activity_invalidated',
 ] as const
 
 export type LearnActivityEventType = typeof LEARN_ACTIVITY_EVENT_TAXONOMY[number]
@@ -46,6 +47,7 @@ export const learnActivityEventFields = {
     v.literal(LEGACY_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION),
     v.literal(SECOND_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION),
     v.literal(PREVIOUS_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION),
+    v.literal(FOURTH_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION),
     v.literal(LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION),
   ),
   occurredAt: v.number(),

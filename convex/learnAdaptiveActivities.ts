@@ -67,6 +67,7 @@ async function requireEvidenceAuthority(ctx: MutationCtx, userId: string, args: 
 
 function rowToComposed(row: Doc<'learningThreadActivities'>): ComposedAdaptiveActivityPlan {
   return {
+    ...(row.attribution ? { attribution: { ...row.attribution, contributionId: String(row.attribution.contributionId) } } : {}),
     planVersion: row.planVersion,
     replayVersion: row.replayVersion,
     contractVersion: row.contractVersion,

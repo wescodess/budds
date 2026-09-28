@@ -29,6 +29,13 @@ const thread = computed(() => {
   const value = threadQuery.data.value
   return allowed.value && value?.thread.id === threadId.value && value.ownerId === ownerId.value ? value : null
 })
+function contributionOrigin(feature: string, classification: string, sourceStatus: string) {
+  const labels: Record<string, string> = { chat: 'Chat', quiz: 'Quiz', flashcards: 'Flashcards', podcast: 'Audio Overview', documents: 'Document' }
+  const kind = classification === 'non_factual' ? 'non-factual context'
+    : classification === 'inference' ? 'inference' : classification === 'synthesis' ? 'synthesis'
+      : classification === 'unknown' ? 'unverified context' : 'accepted evidence'
+  return `From ${labels[feature] ?? 'another feature'} · ${kind}${sourceStatus === 'available' ? '' : sourceStatus === 'source_revision_changed' ? ' · source changed' : ' · source unavailable'}`
+}
 const memoryQuery = import.meta.client
   ? useConvexQuery(api.learnAdaptive.getMemory, computed(() => ({ threadId: threadId.value as never })), { enabled: computed(() => allowed.value && Boolean(thread.value)) })
   : { data: ref(null), pending: ref(false) }
@@ -230,6 +237,7 @@ function leave() { void router.push(safeDestination.value) }
 
       <section v-if="thread.currentActivity || thread.artifact" class="mt-6 rounded-xl border border-border bg-card p-5" aria-label="Saved learning context" data-testid="learn-thread-resume-context">
         <p v-if="thread.currentActivity" class="text-sm">Current activity: {{ thread.currentActivity.purpose }} · {{ thread.currentActivity.status }}</p>
+        <p v-if="thread.currentActivity?.attribution" class="mt-2 text-sm text-muted-foreground" data-testid="learn-current-contribution-origin">{{ contributionOrigin(thread.currentActivity.attribution.sourceFeature, thread.currentActivity.attribution.classification, thread.currentActivity.attribution.sourceStatus) }}</p>
         <p v-if="thread.attemptContext?.priorOutcome" class="mt-2 text-sm">Previous attempt: {{ thread.attemptContext.priorOutcome }}</p>
         <p v-if="thread.attemptContext?.assistance && thread.attemptContext.assistance !== 'none'" class="mt-2 text-sm">Earlier work used {{ thread.attemptContext.assistance === 'hint' ? 'a hint' : 'a revealed example' }}.</p>
         <p v-if="thread.artifact" class="mt-2 text-sm">{{ thread.artifact.historical ? 'Historical artifact' : thread.artifact.status === 'saved' ? 'Saved artifact' : 'Draft artifact' }}: {{ thread.artifact.title }}</p>
@@ -248,6 +256,7 @@ function leave() { void router.push(safeDestination.value) }
           <template v-if="selectedHistory">
             <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Past activity · {{ selectedHistory.status }}</p>
             <h2 class="mt-2 font-dm-sans text-lg font-semibold">{{ selectedHistory.purpose }}</h2>
+            <p v-if="selectedHistory.attribution" class="mt-2 text-sm text-muted-foreground">{{ contributionOrigin(selectedHistory.attribution.sourceFeature, selectedHistory.attribution.classification, selectedHistory.attribution.sourceStatus) }}</p>
             <p class="mt-2 text-sm text-muted-foreground">This past activity is read-only. Your current response remains in place.</p>
           </template>
           <p v-else role="status">This selected activity is unavailable.</p>
@@ -292,6 +301,7 @@ function leave() { void router.push(safeDestination.value) }
           <li v-for="item in thread.history" :key="item.id" class="rounded-lg border border-border px-4 py-3 text-sm">
             <NuxtLink :to="{ path: currentActivityUrl, query: { activity: item.id } }" class="inline-flex min-h-11 items-center font-medium text-[var(--learn-action)] underline">{{ item.purpose }}</NuxtLink>
             <p class="mt-1 text-xs text-muted-foreground">{{ item.status }}</p>
+            <p v-if="item.attribution" class="mt-1 text-xs text-muted-foreground">{{ contributionOrigin(item.attribution.sourceFeature, item.attribution.classification, item.attribution.sourceStatus) }}</p>
           </li>
         </ol>
       </section>

@@ -28,6 +28,12 @@ export type AdaptiveActivityEvidenceReference = {
 }
 
 export type AdaptiveActivityPlanInput = {
+  attribution?: {
+    contributionId: string
+    sourceFeature: 'chat' | 'quiz' | 'flashcards' | 'podcast' | 'documents'
+    classification: 'accepted_evidence' | 'synthesis' | 'inference' | 'unknown' | 'non_factual'
+    provenanceVersion: 'learn-adaptive.contribution.v1'
+  }
   activityId: string
   threadId: string
   boundaryOrdinal: number
@@ -194,6 +200,12 @@ export async function composeAdaptiveActivityPlan(input: AdaptiveActivityPlanInp
   })) throw new Error('Decision source inputs do not match accepted evidence')
 
   const core = {
+    ...(input.attribution ? { attribution: {
+      contributionId: boundedText(input.attribution.contributionId, 'Contribution identity', 200),
+      sourceFeature: input.attribution.sourceFeature,
+      classification: input.attribution.classification,
+      provenanceVersion: input.attribution.provenanceVersion,
+    } } : {}),
     planVersion: ADAPTIVE_ACTIVITY_PLAN_VERSION,
     replayVersion: ADAPTIVE_ACTIVITY_REPLAY_VERSION,
     contractVersion: ADAPTIVE_ACTIVITY_CONTRACT_VERSION,
