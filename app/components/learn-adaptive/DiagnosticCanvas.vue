@@ -18,7 +18,7 @@ type Canvas = {
   }
 }
 
-const props = defineProps<{ canvas: Canvas }>()
+const props = withDefaults(defineProps<{ canvas: Canvas, showHeader?: boolean }>(), { showHeader: true })
 const emit = defineEmits<{ leave: [] }>()
 const { isOnline } = useOnlineStatus()
 const continueMutation = import.meta.client ? useConvexMutation(api.learnAdaptiveRecovery.continueDraft) : { mutate: async () => ({}) }
@@ -104,9 +104,9 @@ async function submit() {
 </script>
 
 <template>
-  <section class="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6" data-testid="learn-diagnostic-canvas" aria-labelledby="learn-diagnostic-title">
-    <p class="text-xs font-medium uppercase tracking-wide text-primary">Learning thread · {{ canvas.thread.intent }}</p>
-    <h1 id="learn-diagnostic-title" class="mt-2 font-dm-sans text-3xl font-bold">{{ canvas.thread.outcome }}</h1>
+  <section class="w-full" data-testid="learn-diagnostic-canvas" :aria-labelledby="showHeader ? 'learn-diagnostic-title' : undefined" :aria-label="showHeader ? undefined : 'Current activity'">
+    <p v-if="showHeader" class="text-xs font-medium uppercase tracking-wide text-primary">Learning thread · {{ canvas.thread.intent }}</p>
+    <h1 v-if="showHeader" id="learn-diagnostic-title" class="mt-2 font-dm-sans text-3xl font-bold">{{ canvas.thread.outcome }}</h1>
     <div class="mt-6 rounded-xl border border-border bg-card p-5" data-testid="learn-diagnostic-recovery">
       <h2 class="font-dm-sans text-xl font-semibold">{{ canvas.recovery.title }}</h2>
       <p class="mt-2 text-sm text-muted-foreground" role="status">{{ canvas.recovery.body }}</p>

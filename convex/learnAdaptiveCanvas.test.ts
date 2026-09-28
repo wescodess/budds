@@ -63,12 +63,94 @@ async function fixture() {
     const laterExcerptId = await ctx.db.insert('learnSourceExcerpts', { userId, sourceSnapshotId: laterSourceSnapshotId, locator: 'p:2', excerpt: 'Earth attracts nearby apples.', rightsStatus: 'permitted' })
     const laterClaimId = await ctx.db.insert('sessionContentClaims', { userId, sessionContentId, order: 1, claim: 'Earth attracts nearby apples.', verifierVersion: 'learn-v2.entailment.v2', confidence: 0.95 })
     await ctx.db.insert('learnClaimSupports', { userId, sessionContentClaimId: laterClaimId, sourceExcerptId: laterExcerptId, sourceSnapshotId: laterSourceSnapshotId, entailment: 'entailed', verifierVersion: 'learn-v2.entailment.v2', confidence: 0.95, conflictStatus: 'clear', evidenceStatus: 'evidence_available' })
-    return { studySessionId, sessionContentId, learningVoidId, laterSourceSnapshotId, laterExcerptId, laterClaimId }
+    return { folderId, studySessionId, sessionContentId, learningVoidId, laterSourceSnapshotId, laterExcerptId, laterClaimId }
   })
   return { t, owner, other, ids }
 }
 
 describe('ready V2 adaptive Canvas', () => {
+  test('factual thread recovers from deleted or non-owned folder despite retained ready Canvas snapshots', async () => {
+    const { t, owner, ids } = await fixture()
+    const attached = await owner.mutation(api.learnAdaptiveCanvas.attachReadySession, {
+      studySessionId: ids.studySessionId, expectedSessionRevision: 2, idempotencyKey: 'canvas-folder-source-authority1',
+    })
+    const read = async () => await owner.query(api.learnAdaptive.getThread, { threadId: attached.threadId })
+    expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'ready' })
+
+    await t.run(ctx => ctx.db.patch(ids.folderId, { userId: OTHER.tokenIdentifier }))
+    expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'ready' })
+    expect(await read()).toMatchObject({ thread: { evidenceState: 'unavailable' }, nextAction: { kind: 'recover', activityId: attached.activityId } })
+
+    await t.run(ctx => ctx.db.patch(ids.folderId, { userId: OWNER.tokenIdentifier }))
+    expect(await read()).toMatchObject({ thread: { evidenceState: 'ready' }, nextAction: { kind: 'continue' } })
+    await t.run(ctx => ctx.db.delete(ids.folderId))
+    expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'ready' })
+    expect(await read()).toMatchObject({ thread: { evidenceState: 'unavailable' }, nextAction: { kind: 'recover', activityId: attached.activityId } })
+  })
+
+  test('factual thread recovers from deleted or non-owned document despite retained ready Canvas snapshots', async () => {
+    const { t, owner, ids } = await fixture()
+    const attached = await owner.mutation(api.learnAdaptiveCanvas.attachReadySession, {
+      studySessionId: ids.studySessionId, expectedSessionRevision: 2, idempotencyKey: 'canvas-document-source-authority1',
+    })
+    const documentId = await t.run(async ctx => {
+      const documentId = await ctx.db.insert('documents', { userId: OWNER.tokenIdentifier, folderId: ids.folderId, filename: 'Gravity.pdf', status: 'success', fileSize: 123 })
+      await ctx.db.patch(attached.threadId, { sourceScope: { kind: 'document', sourceId: String(documentId) } })
+      return documentId
+    })
+    const read = async () => await owner.query(api.learnAdaptive.getThread, { threadId: attached.threadId })
+    expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'ready' })
+    expect(await read()).toMatchObject({ thread: { evidenceState: 'ready' }, nextAction: { kind: 'continue' } })
+
+    await t.run(ctx => ctx.db.patch(documentId, { userId: OTHER.tokenIdentifier }))
+    expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'ready' })
+    expect(await read()).toMatchObject({ thread: { evidenceState: 'unavailable' }, nextAction: { kind: 'recover', activityId: attached.activityId } })
+
+    await t.run(ctx => ctx.db.patch(documentId, { userId: OWNER.tokenIdentifier }))
+    await t.run(ctx => ctx.db.delete(documentId))
+    expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'ready' })
+    expect(await read()).toMatchObject({ thread: { evidenceState: 'unavailable' }, nextAction: { kind: 'recover', activityId: attached.activityId } })
+  })
+
+  test('thread next action follows live factual Canvas eligibility through stale plan, content, and evidence', async () => {
+    const { t, owner, ids } = await fixture()
+    const attached = await owner.mutation(api.learnAdaptiveCanvas.attachReadySession, {
+      studySessionId: ids.studySessionId, expectedSessionRevision: 2, idempotencyKey: 'canvas-thread-live-authority1',
+    })
+    const read = async () => await owner.query(api.learnAdaptive.getThread, { threadId: attached.threadId })
+    expect(await read()).toMatchObject({ thread: { evidenceState: 'ready' }, nextAction: { kind: 'continue', activityId: attached.activityId } })
+
+    const planId = await t.run(async ctx => (await ctx.db.get(ids.studySessionId))!.studyPlanRevisionId)
+    await t.run(ctx => ctx.db.patch(planId, { status: 'superseded' }))
+    expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'blocked', recoveryState: 'stale' })
+    expect(await read()).toMatchObject({ thread: { evidenceState: 'stale' }, nextAction: { kind: 'recover', activityId: attached.activityId } })
+
+    await t.run(async ctx => {
+      await ctx.db.patch(planId, { status: 'accepted' })
+      await ctx.db.patch(ids.sessionContentId, { status: 'superseded' })
+    })
+    expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'blocked', recoveryState: 'stale' })
+    expect(await read()).toMatchObject({ thread: { evidenceState: 'stale' }, nextAction: { kind: 'recover' } })
+
+    await t.run(async ctx => {
+      await ctx.db.patch(ids.sessionContentId, { status: 'published' })
+      await ctx.db.patch(ids.laterSourceSnapshotId, { effectiveStatus: 'unavailable', status: 'unavailable' })
+    })
+    expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'blocked', recoveryState: 'unavailable' })
+    expect(await read()).toMatchObject({ thread: { evidenceState: 'unavailable' }, nextAction: { kind: 'recover' } })
+
+    await t.run(ctx => ctx.db.patch(ids.laterSourceSnapshotId, { effectiveStatus: 'user_accepted', status: 'user_accepted', conflictStatus: 'unresolved' }))
+    expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'blocked', recoveryState: 'blocked' })
+    expect(await read()).toMatchObject({ thread: { evidenceState: 'blocked' }, nextAction: { kind: 'recover' } })
+
+    await t.run(ctx => ctx.db.patch(ids.laterSourceSnapshotId, { conflictStatus: 'clear', evidencePurgedAt: Date.now() }))
+    expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'blocked', recoveryState: 'invalidated' })
+    expect(await read()).toMatchObject({ thread: { evidenceState: 'invalidated' }, nextAction: { kind: 'recover' } })
+
+    await t.run(ctx => ctx.db.delete(ids.sessionContentId))
+    expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toBeNull()
+    expect(await read()).toMatchObject({ thread: { evidenceState: 'unavailable' }, nextAction: { kind: 'recover' } })
+  })
   test('attaches one ready session to an owned thread, starts shared V2 authority, and admits one response', async () => {
     const { t, owner, other, ids } = await fixture()
     const needFirst = await owner.mutation(api.learnAdaptiveDrafts.createThreadDraft, { need: 'Explain a different concept from scratch.', intent: 'build', availableTime: '15', sourceScope: { kind: 'none' }, idempotencyKey: 'canvas-separate-need-0001' })

@@ -1,6 +1,10 @@
 import { v } from 'convex/values'
-import { action, mutation } from './_generated/server'
+import { action, mutation, query } from './_generated/server'
+import type { Doc } from './_generated/dataModel'
 import { executeAdaptiveThreadCommand, initiateAdaptiveThreadDeletion } from './learnAdaptiveCommands'
+import { requireAdaptiveQueryAccess } from './lib/adaptiveLearnAccess'
+import { liveEvidenceState } from './learnAdaptiveRecovery'
+import { loadReadyCanvas } from './learnAdaptiveCanvas'
 import { requireAuth } from './lib/auth'
 import { masteryAttemptArgs, submitMasteryAttemptForOwner, type MasteryAttemptActionResult } from './learnV2Mastery'
 import { needFirstDraftArgsValidator } from '../shared/learn-adaptive-draft'
@@ -22,6 +26,84 @@ export const setIntent = mutation({
       return { value: { intent: args.intent }, revision }
     },
   }),
+})
+
+const HISTORY_LIMIT = 8
+
+function nextThreadAction(thread: Doc<'learningThreads'>, activity: Doc<'learningThreadActivities'> | null, factualCanvas: Awaited<ReturnType<typeof loadReadyCanvas>>, sourceEvidenceState: Awaited<ReturnType<typeof liveEvidenceState>>) {
+  if (thread.lifecycle === 'ended' || thread.lifecycle === 'rollback') return {
+    kind: 'return_to_learn', label: 'Back to Learn', reasonCode: 'thread_unavailable', activityId: null,
+  }
+  if (thread.lifecycle === 'blocked' || thread.lifecycle === 'paused') return {
+    kind: 'recover', label: 'Back to Learn', reasonCode: `thread_${thread.lifecycle}`, activityId: activity?.activityId ?? null,
+  }
+  if (activity?.activityClass === 'factual' && (sourceEvidenceState !== 'ready' || !factualCanvas || factualCanvas.status === 'blocked')) return {
+    kind: 'recover', label: 'Review your learning mission', reasonCode: sourceEvidenceState !== 'ready' ? `source_${sourceEvidenceState}` : factualCanvas ? 'canvas_blocked' : 'canvas_unavailable', activityId: activity.activityId,
+  }
+  if (activity) {
+    if (activity.status === 'eligible' || activity.status === 'started') return {
+      kind: activity.requiredAction.kind, label: activity.requiredAction.label,
+      reasonCode: activity.reasonCode, activityId: activity.activityId,
+    }
+    if (activity.activityClass === 'non_factual' && activity.status === 'submitted') return {
+      kind: 'review_saved_response', label: 'Your response is saved', reasonCode: 'diagnostic_response_saved', activityId: activity.activityId,
+    }
+    if (activity.status === 'submitted' || activity.status === 'scoring' || activity.status === 'reconciling') return {
+      kind: 'wait', label: 'Your response is being checked', reasonCode: `activity_${activity.status}`, activityId: activity.activityId,
+    }
+    if (activity.status === 'feedback') return {
+      kind: 'review_feedback', label: 'Review your feedback', reasonCode: 'activity_feedback', activityId: activity.activityId,
+    }
+    return { kind: 'recover', label: 'Back to Learn', reasonCode: `activity_${activity.status}`, activityId: activity.activityId }
+  }
+  if (!thread.initialDecision || thread.initialDecision.status === 'pending') return {
+    kind: 'clarify', label: 'Continue on Learn', reasonCode: 'clarification_pending', activityId: null,
+  }
+  if (thread.authorityKind === 'standalone') return {
+    kind: 'continue', label: 'Start diagnostic', reasonCode: 'diagnostic_ready', activityId: null,
+  }
+  return { kind: 'continue', label: 'Start learning', reasonCode: 'thread_ready_for_first_move', activityId: null }
+}
+
+export const getThread = query({
+  args: { threadId: v.id('learningThreads') },
+  handler: async (ctx, args) => {
+    const userId = await requireAdaptiveQueryAccess(ctx)
+    const thread = await ctx.db.get(args.threadId)
+    if (!thread || thread.userId !== userId || thread.deletionStartedAt !== undefined) return null
+    const owner = await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique()
+    if (!owner) return null
+    const activity = thread.currentActivityId ? await ctx.db.get(thread.currentActivityId) : null
+    if (activity && (activity.userId !== userId || activity.threadId !== thread._id)) return null
+    const sourceEvidenceState = await liveEvidenceState(ctx, thread)
+    const factualCanvas = activity?.activityClass === 'factual' ? await loadReadyCanvas(ctx, userId, thread._id) : null
+    const evidenceState = activity?.activityClass === 'factual'
+      ? sourceEvidenceState !== 'ready' ? sourceEvidenceState
+        : factualCanvas?.status === 'blocked' ? factualCanvas.recoveryState ?? 'blocked'
+          : factualCanvas ? 'ready' : 'unavailable'
+      : sourceEvidenceState
+    const recent = await ctx.db.query('learningThreadActivities')
+      .withIndex('by_userId_and_threadId_and_boundaryOrdinal', q => q.eq('userId', userId).eq('threadId', thread._id))
+      .order('desc').take(HISTORY_LIMIT + 1)
+    return {
+      ownerId: owner._id,
+      thread: {
+        id: thread._id, outcome: thread.outcome ?? thread.originalNeed, intent: thread.intent,
+        sourceScope: thread.sourceScope, evidenceState, lifecycle: thread.lifecycle, revision: thread.revision,
+        authorityKind: thread.authorityKind, learningVoidId: thread.learningVoidId ?? null,
+      },
+      currentActivity: activity ? {
+        id: activity.activityId, status: activity.status, activityClass: activity.activityClass,
+        purpose: activity.purpose, reasonCode: activity.reasonCode, boundaryOrdinal: activity.boundaryOrdinal,
+      } : null,
+      history: recent.filter(row => row._id !== thread.currentActivityId).slice(0, HISTORY_LIMIT).map(row => ({
+        id: row.activityId, status: row.status, activityClass: row.activityClass,
+        purpose: row.purpose, reasonCode: row.reasonCode, boundaryOrdinal: row.boundaryOrdinal,
+        updatedAt: row.updatedAt,
+      })),
+      nextAction: nextThreadAction(thread, activity, factualCanvas, sourceEvidenceState),
+    }
+  },
 })
 
 // Data-lifecycle exception: this ownership-scoped maintenance request uses

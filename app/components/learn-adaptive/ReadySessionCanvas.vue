@@ -17,7 +17,7 @@ type Canvas = {
   savedResponse?: { response: string, confidence: number } | null
 }
 
-const props = defineProps<{ canvas: Canvas }>()
+const props = withDefaults(defineProps<{ canvas: Canvas, showHeader?: boolean }>(), { showHeader: true })
 const emit = defineEmits<{ leave: [] }>()
 const { isOnline } = useOnlineStatus()
 const startMutation = import.meta.client ? useConvexMutation(api.learnV2SessionContent.startStudySession) : { mutate: async () => ({}) }
@@ -193,9 +193,9 @@ async function submit() {
 </script>
 
 <template>
-  <section class="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6" data-testid="learn-adaptive-canvas" aria-labelledby="learn-canvas-title">
-    <p class="text-xs font-medium uppercase tracking-wide text-primary">Learning thread · {{ canvas.thread.intent }}</p>
-    <h1 id="learn-canvas-title" class="mt-2 font-dm-sans text-3xl font-bold">{{ canvas.thread.outcome }}</h1>
+  <section class="w-full" data-testid="learn-adaptive-canvas" :aria-labelledby="showHeader ? 'learn-canvas-title' : undefined" :aria-label="showHeader ? undefined : 'Current activity'">
+    <p v-if="showHeader" class="text-xs font-medium uppercase tracking-wide text-primary">Learning thread · {{ canvas.thread.intent }}</p>
+    <h1 v-if="showHeader" id="learn-canvas-title" class="mt-2 font-dm-sans text-3xl font-bold">{{ canvas.thread.outcome }}</h1>
     <p class="mt-2 text-sm text-muted-foreground">{{ canvas.activity.purpose }}</p>
     <p class="sr-only" aria-live="polite">{{ notice }}</p>
     <p v-if="!isOnline" role="status" class="mt-4 rounded-lg border border-amber-500/40 p-3 text-sm">A connection is required to start, get support, or submit a response.</p>
