@@ -13,6 +13,7 @@ import { adaptiveRecoveryCopy } from '../shared/learn-adaptive-recovery'
 import { executeAdaptiveThreadCommand } from './learnAdaptiveCommands'
 import { liveEvidenceState } from './learnAdaptiveRecovery'
 import { projectAdaptiveControls, reasonTextForActivity } from '../shared/learn-adaptive-controls'
+import { ADAPTIVE_ACTIVITY_VALIDATION_ANALYTICS_VERSION } from '../shared/learn-adaptive-activity-registry'
 
 const RECEIPT_TTL_MS = 30 * 24 * 60 * 60_000
 
@@ -268,6 +269,7 @@ export async function loadReadyCanvas(ctx: QueryCtx | MutationCtx, userId: strin
     const recoveryState: AdaptiveEvidenceState = thread.evidenceState === 'invalidated' || evidence?.integrityState === 'deleted' || !replay.ok ? 'invalidated'
       : evidence?.integrityState === 'unavailable' || thread.evidenceState === 'unavailable' ? 'unavailable'
         : evidence?.integrityState === 'stale' || thread.evidenceState === 'stale' ? 'stale'
+          : thread.evidenceState === 'preparing' ? 'preparing'
           : thread.evidenceState === 'blocked' || evidence?.integrityState === 'insufficient' || evidence?.integrityState === 'conflicting' ? 'blocked'
             : !current ? 'stale' : 'blocked'
     const selectedOverride = await ctx.db.query('learnActivityOverrides')
@@ -279,6 +281,10 @@ export async function loadReadyCanvas(ctx: QueryCtx | MutationCtx, userId: strin
       recoveryState: status === 'blocked' ? recoveryState : null,
       recovery: status === 'blocked' ? adaptiveRecoveryCopy(recoveryState) : null,
       activity: { id: activity.activityId, status: activity.status, purpose: activity.purpose, reasonCode: activity.reasonCode,
+        planRevision: activity.planRevision,
+        evidenceScope: { version: 'learn-adaptive.canvas-evidence-scope.v1' as const,
+          integrityState: status === 'blocked' ? 'blocked' as const : 'accepted' as const,
+          sourceRefs: status === 'blocked' ? [] : [...new Set(activity.evidenceReferences.map(reference => String(reference.sourceSnapshotId)))].sort() },
         controls: projectAdaptiveControls({ activityClass: 'factual', activityStatus: status === 'blocked' || !sourceReady ? 'blocked' : activity.status, lifecycle: thread.lifecycle,
           evidenceReady: status !== 'blocked' && sourceReady, sourceCount: new Set(activity.evidenceReferences.map(reference => String(reference.sourceSnapshotId))).size,
           currentTime: thread.availableTime,
@@ -300,6 +306,38 @@ export async function loadReadyCanvas(ctx: QueryCtx | MutationCtx, userId: strin
 export const getCanvas = query({
   args: { threadId: v.id('learningThreads') },
   handler: async (ctx, args) => await loadReadyCanvas(ctx, await requireAdaptiveQueryAccess(ctx), args.threadId),
+})
+
+const renderFailureReasonValidator = v.union(
+  v.literal('unknown_primitive'), v.literal('unsupported_action'), v.literal('renderer_unavailable'), v.literal('oversized_prop'),
+  v.literal('oversized_plan'), v.literal('unsafe_url'), v.literal('executable_content'),
+  v.literal('invalid_props'), v.literal('invalid_evidence_link'),
+)
+
+// Rendering telemetry is scoped to an owned current activity and contains only
+// a closed validation code. It does not change the activity or scoring state.
+export const reportRenderFailure = mutation({
+  args: { threadId: v.id('learningThreads'), activityId: v.string(), expectedPlanRevision: v.number(), reasonCode: renderFailureReasonValidator },
+  handler: async (ctx, args) => {
+    const userId = await requireAdaptiveMutationAccess(ctx)
+    const thread = await ctx.db.get(args.threadId)
+    const activity = thread?.currentActivityId && await ctx.db.get(thread.currentActivityId)
+    if (!thread || thread.userId !== userId || thread.deletionStartedAt !== undefined
+      || !activity || activity.userId !== userId || activity.threadId !== thread._id
+      || activity.activityId !== args.activityId || activity.planRevision !== args.expectedPlanRevision) {
+      throw new Error('Current Canvas render authority is unavailable')
+    }
+    const result = await writeLearnActivityEvent(ctx, {
+      userId, threadId: thread._id, activityId: activity._id,
+      eventType: 'canvas_render_failure', eventVersion: 'canvas_render_failure.v1',
+      sourceVersion: ADAPTIVE_ACTIVITY_VALIDATION_ANALYTICS_VERSION,
+      contractVersion: activity.contractVersion,
+      semanticKey: `activity:${String(activity._id)}:plan:${activity.planRevision}:render:${args.reasonCode}`,
+      occurredAt: Date.now(), reasonCode: args.reasonCode, outcomeCode: 'fallback_rendered',
+      metadata: { activityClass: activity.activityClass, boundaryOrdinal: activity.boundaryOrdinal, planRevision: activity.planRevision },
+    })
+    return { recorded: !result.replayed }
+  },
 })
 
 // A single response boundary precedes shared V2 scoring. No score, attempt,

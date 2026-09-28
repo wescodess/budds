@@ -46,7 +46,8 @@ export type ValidatedAdaptiveActivityPrimitive = {
 }[AdaptiveActivityPrimitiveType]
 
 type UnknownRecord = Record<string, unknown>
-export type AdaptiveActivityValidationReason = 'unknown_primitive' | 'unsupported_action' | 'oversized_prop' | 'oversized_plan' | 'unsafe_url' | 'executable_content' | 'invalid_props' | 'invalid_evidence_link'
+export const ADAPTIVE_ACTIVITY_VALIDATION_REASONS = ['unknown_primitive', 'unsupported_action', 'renderer_unavailable', 'oversized_prop', 'oversized_plan', 'unsafe_url', 'executable_content', 'invalid_props', 'invalid_evidence_link'] as const
+export type AdaptiveActivityValidationReason = typeof ADAPTIVE_ACTIVITY_VALIDATION_REASONS[number]
 
 class AdaptiveActivityValidationError extends Error {
   constructor(public readonly code: AdaptiveActivityValidationReason, message: string) { super(message) }
@@ -165,10 +166,11 @@ function validateProps<Type extends AdaptiveActivityPrimitiveType>(type: Type, v
   return validated as AdaptiveActivityProps[Type]
 }
 
-function fallback(code: AdaptiveActivityValidationReason) {
+export function adaptiveActivityFallbackForReason(code: AdaptiveActivityValidationReason) {
   const bodies: Record<AdaptiveActivityValidationReason, string> = {
     unknown_primitive: 'This activity type is not supported.',
     unsupported_action: 'This activity action is not supported.',
+    renderer_unavailable: 'This activity renderer is not available yet.',
     oversized_prop: 'This activity contains too much content.',
     oversized_plan: 'This activity contains too many parts.',
     unsafe_url: 'This activity contains an unsafe link.',
@@ -218,7 +220,7 @@ export function validateAdaptiveActivityPrimitive(input: unknown, evidenceContex
     return {
       ok: false as const,
       error: { code: error.code, message: error.message },
-      fallback: fallback(error.code),
+      fallback: adaptiveActivityFallbackForReason(error.code),
       analytics: { name: 'adaptive_primitive_validation' as const, version: ADAPTIVE_ACTIVITY_VALIDATION_ANALYTICS_VERSION, outcome: 'rejected' as const, primitiveType: knownEntry?.type ?? null, reasonCode: error.code },
       fallbackAnalytics: { name: 'adaptive_primitive_fallback' as const, version: ADAPTIVE_ACTIVITY_FALLBACK_ANALYTICS_VERSION, outcome: 'fallback' as const, primitiveType: knownEntry?.type ?? null, reasonCode: error.code },
     }
@@ -230,7 +232,7 @@ export function validateAdaptiveActivityPrimitiveSequence(input: unknown, eviden
   const sequenceFailure = (code: AdaptiveActivityValidationReason, message: string, primitiveIndex: number | null = null) => ({
     ok: false as const,
     error: { code, message, primitiveIndex },
-    fallback: fallback(code),
+    fallback: adaptiveActivityFallbackForReason(code),
     analytics: { name: 'adaptive_primitive_sequence_validation' as const, version: ADAPTIVE_ACTIVITY_SEQUENCE_VALIDATION_ANALYTICS_VERSION, outcome: 'rejected' as const, primitiveCount, primitiveIndex, reasonCode: code },
     fallbackAnalytics: { name: 'adaptive_primitive_fallback' as const, version: ADAPTIVE_ACTIVITY_FALLBACK_ANALYTICS_VERSION, outcome: 'fallback' as const, primitiveCount, primitiveIndex, reasonCode: code },
   })
