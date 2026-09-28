@@ -24,6 +24,7 @@ const isOnline = ref(true)
 mockNuxtImport('useLearnAdaptiveAccess', () => () => ({ allowed, checkingAccess: ref(false) }))
 mockNuxtImport('useRoute', () => () => requestedRoute)
 mockNuxtImport('useOnlineStatus', () => () => ({ isOnline }))
+mockNuxtImport('useConvex', () => () => ({ query: vi.fn() }))
 mockNuxtImport('useConvexMutation', () => (reference: never) => ({ mutate: ['learnAdaptive:setMemoryPreference', 'learnAdaptive:deleteArtifact', 'learnAdaptive:requestPromotion'].some(name => getFunctionName(reference).startsWith(name)) ? memoryMutationCalls : mutationCalls }))
 mockNuxtImport('useConvexAction', () => () => ({ mutate: vi.fn() }))
 mockNuxtImport('useConvexQuery', () => (reference: never, args: unknown) => {

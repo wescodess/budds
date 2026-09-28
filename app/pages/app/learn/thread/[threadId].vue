@@ -57,6 +57,106 @@ const contributions = computed(() => {
   const value = contributionsQuery.data.value as ContributionPage | null
   return current && value ? value.page.filter(row => row.threadId === current.thread.id) : []
 })
+type ThreadDocument = { _id: string, folderId: string, filename: string, status: string }
+const sourceScopeKey = computed(() => {
+  const scope = thread.value?.thread.sourceScope
+  return scope?.kind === 'folder' || scope?.kind === 'document' ? `${scope.kind}:${scope.sourceId}` : ''
+})
+const folderSourceId = computed(() => thread.value?.thread.sourceScope?.kind === 'folder' ? thread.value.thread.sourceScope.sourceId : '')
+const documentsQuery = import.meta.client
+  ? useConvexQuery(api.documents.listDocumentsByFolder, computed(() => ({ folderId: folderSourceId.value as never })),
+    { enabled: computed(() => allowed.value && Boolean(folderSourceId.value)) })
+  : { data: ref<ThreadDocument[]>([]), pending: ref(false) }
+const folderDocuments = computed(() => ((documentsQuery.data.value ?? []) as ThreadDocument[])
+  .filter(document => document.folderId === folderSourceId.value && document.status === 'success'))
+const selectedDocumentId = ref('')
+const recordSourceId = computed(() => {
+  const scope = thread.value?.thread.sourceScope
+  if (scope?.kind === 'document') return scope.sourceId
+  if (scope?.kind === 'folder' && folderDocuments.value.some(document => document._id === selectedDocumentId.value)) return selectedDocumentId.value
+  return ''
+})
+const canRecordDocument = computed(() => Boolean(recordSourceId.value && thread.value
+  && !['ended', 'rollback'].includes(thread.value.thread.lifecycle)))
+const sourceInspector = import.meta.client ? useConvex() : null
+const recordMutation = import.meta.client ? useConvexMutation(api.learnAdaptive.recordContribution) : { mutate: async (_: unknown) => ({ kind: 'rejected' }) }
+type RecordDocumentCommand = { threadId: string, ownerId: string, sourceId: string, sourceRevision: string, expectedRevision: number, idempotencyKey: string }
+const pendingRecord = ref<RecordDocumentCommand | null>(null)
+const recordBusy = ref(false)
+const recordError = ref('')
+const recordNotice = ref('')
+let recordScopeEpoch = 0
+watch([ownerId, threadId, allowed, sourceScopeKey], () => {
+  recordScopeEpoch += 1
+  selectedDocumentId.value = ''
+  pendingRecord.value = null
+  recordBusy.value = false
+  recordError.value = ''
+  recordNotice.value = ''
+})
+function recordDocumentKey() { return `document-contribution:${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}` }
+async function runDocumentRecord(command: RecordDocumentCommand) {
+  if (recordBusy.value) return
+  if (!thread.value || thread.value.thread.id !== command.threadId || ownerId.value !== command.ownerId
+    || !allowed.value || recordSourceId.value !== command.sourceId) {
+    pendingRecord.value = null
+    recordError.value = 'This document is no longer selected for your thread. Review the source before trying again.'
+    return
+  }
+  const scopeEpoch = recordScopeEpoch
+  recordBusy.value = true
+  recordError.value = ''
+  recordNotice.value = ''
+  try {
+    const result = await recordMutation.mutate({ threadId: command.threadId as never,
+      source: { feature: 'documents', id: command.sourceId, revision: command.sourceRevision },
+      contributionKind: 'source', classification: 'non_factual', metadata: { role: 'background' },
+      expectedRevision: command.expectedRevision, idempotencyKey: command.idempotencyKey }) as { kind: string, code?: string }
+    if (scopeEpoch !== recordScopeEpoch) return
+    pendingRecord.value = null
+    if (result.kind === 'recorded') recordNotice.value = 'Document context recorded. Choose it below for an unscored planning activity; no facts were verified or mastery awarded.'
+    else if (result.kind === 'conflict') recordError.value = 'The thread changed in another tab. Review the refreshed thread and select the document again.'
+    else recordError.value = result.code === 'source_revision_changed' || result.code === 'source_unavailable'
+      ? 'The document changed or is unavailable. Review the source before trying again.'
+      : 'This document could not be recorded. Review the thread and source before trying again.'
+  }
+  catch {
+    if (scopeEpoch === recordScopeEpoch) recordError.value = 'The outcome could not be confirmed. Retry the same record to check its result.'
+  }
+  finally { if (scopeEpoch === recordScopeEpoch) recordBusy.value = false }
+}
+async function requestDocumentRecord() {
+  const current = thread.value
+  const sourceId = recordSourceId.value
+  if (!sourceInspector || !current || !ownerId.value || !canRecordDocument.value || !allowed.value || recordBusy.value) return
+  if (pendingRecord.value) {
+    recordError.value = 'A previous record is unconfirmed. Retry it before starting another.'
+    return
+  }
+  const scopeEpoch = recordScopeEpoch
+  recordBusy.value = true
+  recordError.value = ''
+  recordNotice.value = ''
+  try {
+    const inspected = await sourceInspector.query(api.learnAdaptive.inspectContributionSource,
+      { source: { feature: 'documents', id: sourceId as never } })
+    if (scopeEpoch !== recordScopeEpoch) return
+    if (inspected.status !== 'available' || !inspected.revision) {
+      recordError.value = 'This document is unavailable. Review the source before trying again.'
+      return
+    }
+    const command = { threadId: current.thread.id, ownerId: String(ownerId.value), sourceId,
+      sourceRevision: inspected.revision, expectedRevision: current.thread.revision, idempotencyKey: recordDocumentKey() }
+    pendingRecord.value = command
+  }
+  catch {
+    if (scopeEpoch === recordScopeEpoch) recordError.value = 'Could not check the document. Try again when it is available.'
+    return
+  }
+  finally { if (scopeEpoch === recordScopeEpoch) recordBusy.value = false }
+  if (pendingRecord.value) void runDocumentRecord(pendingRecord.value)
+}
+function retryDocumentRecord() { if (pendingRecord.value) void runDocumentRecord(pendingRecord.value) }
 const convertedContributionIds = computed(() => new Set([
   thread.value?.currentActivity?.attribution?.contributionId,
   ...(thread.value?.history ?? []).map(item => item.attribution?.contributionId),
@@ -377,6 +477,31 @@ function leave() { void router.push(safeDestination.value) }
       <section class="mt-6 rounded-xl border border-border bg-card p-5" aria-labelledby="learn-thread-contributions-title" data-testid="learn-thread-contributions">
         <h2 id="learn-thread-contributions-title" class="font-dm-sans text-lg font-semibold">Recent contributions</h2>
         <p class="mt-2 text-sm text-muted-foreground">Choose a recorded contribution to make an attributed, unscored planning activity. Its source will be checked first. This does not verify facts or award mastery.</p>
+        <div v-if="thread.thread.sourceScope?.kind === 'document' || thread.thread.sourceScope?.kind === 'folder'" class="mt-4 rounded-lg border border-border p-3" data-testid="learn-thread-document-producer">
+          <p class="text-sm font-medium">Add document context</p>
+          <p class="mt-1 text-sm text-muted-foreground">Record a document already selected for this thread as context only. This does not verify its claims.</p>
+          <p v-if="thread.thread.sourceScope.kind === 'document'" class="mt-2 text-sm">Selected thread document</p>
+          <template v-else>
+            <label for="learn-document-select" class="mt-2 block text-sm">Document in this thread’s folder</label>
+            <select
+              id="learn-document-select" v-model="selectedDocumentId" data-testid="learn-document-select" :disabled="recordBusy || Boolean(pendingRecord)"
+              class="mt-1 min-h-11 w-full rounded-lg border border-border bg-background px-3 text-sm">
+              <option value="">Choose a ready document</option>
+              <option v-for="document in folderDocuments" :key="document._id" :value="document._id">{{ document.filename }}</option>
+            </select>
+            <p v-if="documentsQuery.pending.value" class="mt-1 text-xs" role="status">Loading documents…</p>
+            <p v-else-if="folderDocuments.length === 0" class="mt-1 text-xs text-muted-foreground">No ready documents are available in this folder.</p>
+          </template>
+          <button
+            type="button" data-testid="learn-record-document" :disabled="!canRecordDocument || recordBusy || Boolean(pendingRecord)"
+            class="mt-2 inline-flex min-h-11 items-center rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50"
+            @click="requestDocumentRecord">{{ recordBusy ? 'Checking document…' : 'Record document context' }}</button>
+          <p v-if="recordError" data-testid="learn-thread-record-error" class="mt-2 text-sm text-destructive" role="alert">{{ recordError }}</p>
+          <button
+            v-if="pendingRecord && recordError" type="button" data-testid="learn-thread-record-retry" :disabled="recordBusy"
+            class="mt-2 inline-flex min-h-11 items-center rounded-lg border border-border px-4 text-sm underline" @click="retryDocumentRecord">Retry same record</button>
+          <p v-if="recordNotice" data-testid="learn-thread-record-notice" class="mt-2 text-sm" role="status">{{ recordNotice }}</p>
+        </div>
         <p v-if="contributionsQuery.pending.value" class="mt-3 text-sm" role="status">Loading recent contributions…</p>
         <p v-else-if="contributions.length === 0" class="mt-3 text-sm text-muted-foreground">No contributions are available for this thread yet.</p>
         <ol v-else class="mt-3 space-y-3">
