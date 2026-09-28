@@ -63,9 +63,12 @@ test.describe('static Canvas projections in real Chromium', () => {
         expect(metrics.forcedColors).toBe(true)
 
         for (const button of await harness.locator('button:visible').all()) {
+          const target = await button.getAttribute('data-testid') ?? await button.textContent()
+          await expect.poll(async () => (await button.boundingBox())?.height ?? 0, {
+            message: `${kind} ${viewport.name}: target height for ${target}`,
+          }).toBeGreaterThanOrEqual(44)
           const box = await button.boundingBox()
           expect(box, `${kind} ${viewport.name}: visible button box`).not.toBeNull()
-          expect(box!.height, `${kind} ${viewport.name}: target height`).toBeGreaterThanOrEqual(44)
           expect(box!.x, `${kind} ${viewport.name}: left inset`).toBeGreaterThanOrEqual(0)
           expect(box!.x + box!.width, `${kind} ${viewport.name}: right inset`).toBeLessThanOrEqual(viewport.width + 1)
         }
