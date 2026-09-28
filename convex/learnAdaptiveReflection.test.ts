@@ -86,10 +86,14 @@ describe('reflection and next-move authority', () => {
       attempts: await ctx.db.query('masteryAttempts').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(2),
       jobs: await ctx.db.query('learnJobs').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(2),
       events: await ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('threadId', threadId)).take(4) }))
-    expect(durable.thread).toMatchObject({ lifecycle, revision: 4, nextAction: { label } })
+    expect(durable.thread).toMatchObject({ lifecycle, revision: 4, nextAction: { label },
+      ...(decision === 'end' ? { lifecycleChangedAt: expect.any(Number) } : {}) })
     expect(durable.attempts).toEqual([])
     expect(durable.jobs).toEqual([])
-    expect(durable.events).toEqual([expect.objectContaining({ eventType: 'activity_completed', outcomeCode: outcome })])
+    expect(durable.events).toEqual([
+      expect.objectContaining({ eventType: 'activity_completed', outcomeCode: outcome }),
+      ...(decision === 'end' ? [expect.objectContaining({ eventType: 'explicit_end', outcomeCode: 'ended' })] : []),
+    ])
   })
 
   test('rejects a decision not offered by the persisted plan', async () => {

@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 
 const primitives = [
   'cited_explanation',
@@ -17,6 +17,18 @@ const viewports = [
   { name: 'mobile', width: 375, height: 667 },
 ] as const
 
+async function visitHarness(page: Page, path: string) {
+  try {
+    await page.goto(path)
+  }
+  catch (error) {
+    // Nuxt can reload once while compiling the first fixture route in CI.
+    if (!(error instanceof Error) || !error.message.includes('net::ERR_ABORTED')) throw error
+    await page.goto(path)
+  }
+  await expect(page.getByTestId('canvas-browser-harness')).toHaveAttribute('data-projection-only', 'true')
+}
+
 test.describe('static Canvas projections in real Chromium', () => {
   for (const kind of primitives) {
     test(`${kind} mounts at desktop, tablet, and mobile sizes with safe fallback`, async ({ page }) => {
@@ -24,7 +36,7 @@ test.describe('static Canvas projections in real Chromium', () => {
       await page.emulateMedia({ reducedMotion: 'reduce', forcedColors: 'active' })
       for (const viewport of viewports) {
         await page.setViewportSize(viewport)
-        await page.goto(`/__e2e/canvas-browser-harness?kind=${kind}&state=active`)
+        await visitHarness(page, `/__e2e/canvas-browser-harness?kind=${kind}&state=active`)
         const harness = page.getByTestId('canvas-browser-harness')
         const primitive = harness.getByTestId(`learn-primitive-${kind.replaceAll('_', '-')}`)
         await expect(primitive, `${kind} ${viewport.name}: real renderer`).toBeVisible()
@@ -51,23 +63,28 @@ test.describe('static Canvas projections in real Chromium', () => {
         expect(metrics.forcedColors).toBe(true)
 
         for (const button of await harness.locator('button:visible').all()) {
+          const target = await button.getAttribute('data-testid') ?? await button.textContent()
+          await expect.poll(async () => (await button.boundingBox())?.height ?? 0, {
+            message: `${kind} ${viewport.name}: target height for ${target}`,
+          }).toBeGreaterThanOrEqual(44)
           const box = await button.boundingBox()
           expect(box, `${kind} ${viewport.name}: visible button box`).not.toBeNull()
-          expect(box!.height, `${kind} ${viewport.name}: target height`).toBeGreaterThanOrEqual(44)
           expect(box!.x, `${kind} ${viewport.name}: left inset`).toBeGreaterThanOrEqual(0)
           expect(box!.x + box!.width, `${kind} ${viewport.name}: right inset`).toBeLessThanOrEqual(viewport.width + 1)
         }
 
         const controls = harness.locator('button:not([disabled]):visible, textarea:not([disabled]):visible, input:not([disabled]):visible')
         if (await controls.count() > 1) {
-          await controls.first().focus()
-          await expect(controls.first()).toBeFocused()
-          await page.keyboard.press('Tab')
-          await expect(controls.nth(1), `${kind} ${viewport.name}: keyboard order`).toBeFocused()
+          await expect(async () => {
+            await controls.first().focus()
+            await expect(controls.first()).toBeFocused()
+            await page.keyboard.press('Tab')
+            await expect(controls.nth(1), `${kind} ${viewport.name}: keyboard order`).toBeFocused()
+          }).toPass({ timeout: 10_000 })
         }
       }
 
-      await page.goto(`/__e2e/canvas-browser-harness?kind=${kind}&state=fallback`)
+      await visitHarness(page, `/__e2e/canvas-browser-harness?kind=${kind}&state=fallback`)
       const fallback = page.getByTestId('canvas-browser-harness').getByTestId(kind === 'diagnostic_prompt' ? 'learn-diagnostic-fallback' : 'learn-activity-fallback')
       await expect(fallback).toBeVisible()
       expect(await fallback.getAttribute('role')).toMatch(/^(alert|status)$/)
@@ -79,18 +96,18 @@ test.describe('static Canvas projections in real Chromium', () => {
   test('ready, completed, preparing, and blocked projections stay distinguishable', async ({ page }) => {
     test.setTimeout(3 * 60_000)
     for (const kind of ['cited_explanation', 'worked_example', 'independent_application', 'source_comparison'] as const) {
-      await page.goto(`/__e2e/canvas-browser-harness?kind=${kind}&state=ready`)
+      await visitHarness(page, `/__e2e/canvas-browser-harness?kind=${kind}&state=ready`)
       await expect(page.getByTestId(`learn-primitive-${kind.replaceAll('_', '-')}-ready`)).toBeVisible()
-      await page.goto(`/__e2e/canvas-browser-harness?kind=${kind}&state=completed`)
+      await visitHarness(page, `/__e2e/canvas-browser-harness?kind=${kind}&state=completed`)
       await expect(page.getByTestId('learn-canvas-status')).toContainText('Response scored')
-      await page.goto(`/__e2e/canvas-browser-harness?kind=${kind}&state=preparing`)
+      await visitHarness(page, `/__e2e/canvas-browser-harness?kind=${kind}&state=preparing`)
       await expect(page.getByTestId('learn-activity-fallback')).toHaveAttribute('role', 'status')
-      await page.goto(`/__e2e/canvas-browser-harness?kind=${kind}&state=blocked`)
+      await visitHarness(page, `/__e2e/canvas-browser-harness?kind=${kind}&state=blocked`)
       await expect(page.getByTestId('learn-activity-fallback')).toHaveAttribute('role', 'alert')
     }
-    await page.goto('/__e2e/canvas-browser-harness?kind=diagnostic_prompt&state=completed')
+    await visitHarness(page, '/__e2e/canvas-browser-harness?kind=diagnostic_prompt&state=completed')
     await expect(page.getByTestId('learn-diagnostic-saved')).toContainText('A saved starting point.')
-    await page.goto('/__e2e/canvas-browser-harness?kind=reflection_next_move&state=completed')
+    await visitHarness(page, '/__e2e/canvas-browser-harness?kind=reflection_next_move&state=completed')
     await expect(page.getByTestId('learn-reflection-completed')).toContainText('Next move accepted')
   })
 })

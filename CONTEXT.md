@@ -63,3 +63,17 @@ _Avoid_: Transcription, estimated timing
 **Interjection**:
 A private listener-session question and grounded audio response that temporarily pauses, then resumes, the immutable Audio Overview.
 _Avoid_: Spliced turn, edited podcast, interruption record
+
+## Adaptive Learn language
+
+**Learning Thread**:
+A learner-owned record of a learning need and its continuing activities, artifacts, and next move.
+_Avoid_: Learning Void, study session
+
+**Leave**:
+A reversible pause of a Learning Thread that preserves the point from which the learner can resume.
+_Avoid_: End, abandon
+
+**End**:
+An explicit terminal choice that keeps a Learning Thread available for review without resuming its activities.
+_Avoid_: Leave, delete

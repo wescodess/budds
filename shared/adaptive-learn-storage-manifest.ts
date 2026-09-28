@@ -189,6 +189,8 @@ export const learningThreadFields = {
   ),
   evidenceState: evidenceStateValidator,
   lifecycle: v.union(v.literal('draft'), v.literal('preparing'), v.literal('ready'), v.literal('active'), v.literal('paused'), v.literal('ended'), v.literal('blocked'), v.literal('rollback')),
+  lifecycleBeforePause: v.optional(v.union(v.literal('draft'), v.literal('preparing'), v.literal('ready'), v.literal('active'), v.literal('blocked'))),
+  lifecycleChangedAt: v.optional(v.number()),
   revision: v.number(),
   currentActivityId: v.optional(v.id('learningThreadActivities')),
   unresolvedPoint: v.optional(v.string()),

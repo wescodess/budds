@@ -70,6 +70,42 @@ async function fixture() {
 }
 
 describe('ready V2 adaptive Canvas', () => {
+  test('lifecycle transitions preserve the attached session pins and V2 authority', async () => {
+    const { t, owner, ids } = await fixture()
+    const attached = await owner.mutation(api.learnAdaptiveCanvas.attachReadySession, {
+      studySessionId: ids.studySessionId, expectedSessionRevision: 2, idempotencyKey: 'canvas-lifecycle-attach-0001',
+    })
+    const before = await t.run(async ctx => {
+      const thread = await ctx.db.get(attached.threadId)
+      return { thread, activity: thread?.currentActivityId ? await ctx.db.get(thread.currentActivityId) : null,
+        session: await ctx.db.get(ids.studySessionId), mission: await ctx.db.get(ids.learningVoidId) }
+    })
+    if (!before.thread || !before.activity || !before.session || !before.mission) throw new Error('Expected attached session')
+    const left = await owner.mutation(api.learnAdaptive.leaveThread, {
+      threadId: attached.threadId, expectedRevision: before.thread.revision, idempotencyKey: 'canvas-lifecycle-leave-0001',
+    })
+    expect(left).toMatchObject({ kind: 'ok', value: { lifecycle: 'paused' } })
+    const resumed = await owner.mutation(api.learnAdaptive.resumeThread, {
+      threadId: attached.threadId, expectedRevision: before.thread.revision + 1, idempotencyKey: 'canvas-lifecycle-resume-0001',
+    })
+    expect(resumed).toMatchObject({ kind: 'ok', value: { lifecycle: before.thread.lifecycle } })
+    const ended = await owner.mutation(api.learnAdaptive.endThread, {
+      threadId: attached.threadId, expectedRevision: before.thread.revision + 2, idempotencyKey: 'canvas-lifecycle-end-0001',
+    })
+    expect(ended).toMatchObject({ kind: 'ok', value: { lifecycle: 'ended' } })
+    const after = await t.run(async ctx => ({ thread: await ctx.db.get(attached.threadId),
+      activity: await ctx.db.get(before.activity!._id), session: await ctx.db.get(ids.studySessionId),
+      mission: await ctx.db.get(ids.learningVoidId),
+      attempts: await ctx.db.query('masteryAttempts').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(1),
+      jobs: await ctx.db.query('learnJobs').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(1) }))
+    expect(after.thread).toMatchObject({ authorityKind: 'v2_mission', learningVoidId: ids.learningVoidId, currentActivityId: before.activity._id })
+    expect(after.activity).toEqual(before.activity)
+    expect(after.session).toEqual(before.session)
+    expect(after.mission).toEqual(before.mission)
+    expect(after.attempts).toEqual([])
+    expect(after.jobs).toEqual([])
+  })
+
   test('a replay cannot retarget an attached activity to a different or missing immutable V2 anchor', async () => {
     const { t, owner, ids } = await fixture()
     const attached = await owner.mutation(api.learnAdaptiveCanvas.attachReadySession, {
