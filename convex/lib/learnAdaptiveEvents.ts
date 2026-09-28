@@ -18,6 +18,10 @@ async function digest(value: string) {
   return `sha256:${[...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('')}`
 }
 
+export async function learnActivityEventDedupeHash(input: { userId: string, threadId: Id<'learningThreads'>, eventVersion: string, semanticKey: string }) {
+  return await digest(JSON.stringify([LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION, input.userId, String(input.threadId), input.eventVersion, input.semanticKey]))
+}
+
 export async function writeLearnActivityEvent(ctx: MutationCtx, input: WriteEventInput) {
   const { userId, threadId, activityId, ...candidate } = input
   const event = validateLearnActivityEventInput(candidate)
@@ -27,7 +31,7 @@ export async function writeLearnActivityEvent(ctx: MutationCtx, input: WriteEven
     const activity = await ctx.db.get(activityId)
     if (!activity || activity.userId !== userId || activity.threadId !== threadId) throw new Error('Adaptive event activity authority is unavailable')
   }
-  const dedupeKeyHash = await digest(JSON.stringify([LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION, userId, String(threadId), event.eventVersion, event.semanticKey]))
+  const dedupeKeyHash = await learnActivityEventDedupeHash({ userId, threadId, eventVersion: event.eventVersion, semanticKey: event.semanticKey })
   const prior = await ctx.db.query('learnActivityEvents')
     .withIndex('by_userId_and_dedupeKeyHash', q => q.eq('userId', userId).eq('dedupeKeyHash', dedupeKeyHash))
     .unique()

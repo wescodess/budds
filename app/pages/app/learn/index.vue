@@ -8,8 +8,10 @@ import type { NeedFirstDraftInput } from '~~/shared/learn-adaptive-draft'
 type Intent = NeedFirstDraftInput['intent']
 
 const router = useRouter()
+const route = useRoute()
 const { allowed, checkingAccess, hub } = useLearnV2Journey()
 const { allowed: adaptiveAllowed, checkingAccess: checkingAdaptiveAccess } = useLearnAdaptiveAccess()
+const legacyV2Mode = computed(() => adaptiveAllowed.value && route.query.legacy === 'v2')
 const createDraftMutation = import.meta.client ? useConvexMutation(api.learnAdaptiveDrafts.createThreadDraft) : { mutate: async () => null }
 const prepareDecisionMutation = import.meta.client ? useConvexMutation(api.learnAdaptiveClarifications.prepareInitialDecision) : { mutate: async () => null }
 const resolveClarificationMutation = import.meta.client ? useConvexMutation(api.learnAdaptiveClarifications.resolveClarification) : { mutate: async () => null }
@@ -281,7 +283,7 @@ async function selectThreadIntent(intent: Intent) {
   <main>
     <section v-if="checkingAccess || checkingAdaptiveAccess" class="mx-auto max-w-2xl p-6" aria-live="polite"><h1 class="font-dm-sans text-2xl font-bold">Learn</h1><p class="mt-2 text-muted-foreground">Checking access…</p></section>
     <section v-else-if="!allowed" class="mx-auto max-w-2xl p-6"><h1 class="font-dm-sans text-2xl font-bold">Learn</h1><p class="mt-2 text-muted-foreground">This learning experience is not available for this account.</p></section>
-    <template v-else-if="adaptiveAllowed">
+    <template v-else-if="adaptiveAllowed && !legacyV2Mode">
       <section v-if="readySession" class="mx-auto w-full max-w-3xl px-4 pt-6 sm:px-6" data-testid="learn-adaptive-ready-session">
         <UiCard class="gap-3 p-5">
           <h2 class="font-dm-sans text-lg font-semibold">Ready to continue</h2>
@@ -300,5 +302,18 @@ async function selectThreadIntent(intent: Intent) {
       <LearnAdaptiveLearningHome v-else :busy="draftBusy" :server-error="draftError" :acknowledged-request-key="acknowledgedRequestKey" @start="createNeedDraft" />
     </template>
     <LearnV2LearnHub v-else :snapshot="hub" @create="router.push('/app/learn/create')" @open-mission="openMission" @start-session="openMission" @continue-setup="openMission" @resume-draft="resumeDraft" />
+    <nav v-if="allowed && adaptiveAllowed" aria-label="Existing learning routes" class="mx-auto w-full max-w-3xl px-4 pb-8 sm:px-6" data-testid="learn-legacy-handoffs">
+      <h2 class="font-dm-sans text-lg font-semibold">Existing learning routes</h2>
+      <p class="mt-1 text-sm text-muted-foreground">Your existing courses and learning missions remain available.</p>
+      <div class="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-sm">
+        <NuxtLink v-if="legacyV2Mode" to="/app/learn" class="min-h-11 content-center text-[var(--learn-action)] underline">Return to adaptive Learn</NuxtLink>
+        <NuxtLink v-else to="/app/learn?legacy=v2" data-testid="learn-legacy-v2-hub" class="min-h-11 content-center text-[var(--learn-action)] underline">Open V2 learning plans</NuxtLink>
+        <NuxtLink to="/app/learn/today" data-testid="learn-legacy-v2-today" class="min-h-11 content-center text-[var(--learn-action)] underline">Open today's sessions</NuxtLink>
+        <NuxtLink to="/app/learn/review" data-testid="learn-legacy-v2-review" class="min-h-11 content-center text-[var(--learn-action)] underline">Open review</NuxtLink>
+        <NuxtLink to="/app/learn/create" data-testid="learn-legacy-v2-create" class="min-h-11 content-center text-[var(--learn-action)] underline">Create a V2 learning plan</NuxtLink>
+      </div>
+      <p class="mt-3 text-sm text-muted-foreground">Classic courses remain in each folder's Learn tab.</p>
+      <NuxtLink to="/" data-testid="learn-legacy-v1-home" class="min-h-11 content-center text-sm text-[var(--learn-action)] underline">Open your folders for classic courses</NuxtLink>
+    </nav>
   </main>
 </template>

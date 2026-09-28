@@ -15,8 +15,12 @@ const resolveClarification = vi.fn()
 const setIntent = vi.fn()
 const getInitialDecision = vi.fn()
 const currentUser = ref<{ _id: string } | null>({ _id: 'owner_1' })
+const folderRows = ref([{ _id: 'folder_1', name: 'Physics' }])
+const routeState = reactive({ path: '/app/learn', query: { legacy: undefined as string | undefined } })
 
 mockNuxtImport('useLearnV2Journey', () => () => ({ allowed, checkingAccess, hub }))
+mockNuxtImport('useUserSession', () => () => ({ loggedIn: ref(true), ready: ref(true) }))
+mockNuxtImport('useRoute', () => () => routeState)
 mockNuxtImport('useLearnAdaptiveAccess', () => () => ({ allowed: adaptiveAllowed, checkingAccess: checkingAdaptiveAccess }))
 mockNuxtImport('useConvexMutation', () => (reference: unknown) => {
   const name = getFunctionName(reference as never)
@@ -25,7 +29,7 @@ mockNuxtImport('useConvexMutation', () => (reference: unknown) => {
   if (name?.includes('setIntent')) return { mutate: setIntent }
   return { mutate: createDraft }
 })
-mockNuxtImport('useConvexQuery', () => () => ({ data: currentUser }))
+mockNuxtImport('useConvexQuery', () => (reference: never) => ({ data: getFunctionName(reference) === 'folders:listAllFolders' ? folderRows : currentUser }))
 mockNuxtImport('useConvex', () => () => ({ query: getInitialDecision }))
 
 describe('Learn V2 route entry', () => {
@@ -40,6 +44,7 @@ describe('Learn V2 route entry', () => {
     setIntent.mockReset()
     getInitialDecision.mockReset().mockResolvedValue({ status: 'not_required', reasonCode: 'declared_inputs_sufficient', continuationKind: 'standalone_non_factual', originalNeed: 'Understand this system', outcome: 'Explain the system safely', revision: 2 })
     currentUser.value = { _id: 'owner_1' }
+    routeState.query.legacy = undefined
     sessionStorage.clear()
   })
   it('renders the real Learn hub instead of the legacy Today-only destination', async () => {
@@ -48,6 +53,30 @@ describe('Learn V2 route entry', () => {
       global: { stubs: { LearnV2LearnHub: { props: ['snapshot'], template: '<section data-testid="hub" />' } } },
     })
     expect(wrapper.find('[data-testid="hub"]').exists()).toBe(true)
+  })
+
+  it('offers named V1/V2 handoffs while adaptive is on, and keeps the V2 hub when adaptive is off', async () => {
+    adaptiveAllowed.value = true
+    const Page = await import(['~', 'pages', 'app', 'learn', 'index.vue'].join('/'))
+    const adaptive = await mountSuspended(Page.default, { route: '/app/learn' })
+    expect(adaptive.get('[data-testid="learn-legacy-v1-home"]').attributes('href')).toBe('/')
+    expect(adaptive.vm.$router.resolve('/').matched.at(-1)?.path).toBe('/')
+    expect(adaptive.text()).not.toContain('Physics')
+    expect(adaptive.get('[data-testid="learn-legacy-handoffs"]').text()).not.toContain('Physics')
+    expect(adaptive.get('[data-testid="learn-legacy-v2-hub"]').attributes('href')).toBe('/app/learn?legacy=v2')
+    expect(adaptive.get('[data-testid="learn-legacy-v2-today"]').attributes('href')).toBe('/app/learn/today')
+    expect(adaptive.get('[data-testid="learn-legacy-v2-review"]').attributes('href')).toBe('/app/learn/review')
+    routeState.query.legacy = 'v2'
+    await nextTick()
+    expect(adaptive.find('[data-testid="learn-v2-hub"]').exists()).toBe(true)
+    adaptive.unmount()
+    adaptiveAllowed.value = false
+    const rolledBack = await mountSuspended(Page.default, { route: '/app/learn' })
+    expect(rolledBack.find('[data-testid="learn-v2-hub"]').exists()).toBe(true)
+    expect(rolledBack.find('[data-testid="learn-adaptive-learning-home"]').exists()).toBe(false)
+    expect(rolledBack.vm.$router.resolve('/app/folders/folder_1/learn').matched.at(-1)?.path).toContain('/learn')
+    expect(rolledBack.vm.$router.resolve('/app/learn/void_1').matched.at(-1)?.path).toContain('learningVoidId')
+    rolledBack.unmount()
   })
 
   it('saves a selected thread intent and keeps the local chip selected across a stale conflict', async () => {

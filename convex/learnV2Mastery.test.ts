@@ -50,7 +50,7 @@ async function fixture(options: { placementKind?: 'learning' | 'retained_review'
     const claimId = await ctx.db.insert('sessionContentClaims', { userId: OWNER.tokenIdentifier, sessionContentId: contentId, order: 1, claim: 'The evidence supports the answer.', verifierVersion: 'test.verifier.v1', confidence: 0.9 })
     await ctx.db.insert('learnClaimSupports', { userId: OWNER.tokenIdentifier, sessionContentClaimId: claimId, sourceExcerptId: excerptId, sourceSnapshotId: sourceId, entailment: 'entailed', verifierVersion: 'test.verifier.v1', confidence: 0.9, conflictStatus: 'clear', evidenceStatus: 'evidence_available' })
     if (options.state) await ctx.db.insert('masteryRecords', { userId: OWNER.tokenIdentifier, blueprintRevisionId: blueprintIdRevision, objectiveId, scopeKey: await masteryScopeKey(OWNER.tokenIdentifier, blueprintIdRevision, objectiveId), state: options.state, recordRevision: 4, firstIndependentLocalDate: options.firstDate, firstIndependentPassAt: options.firstDate ? now : undefined, firstIndependentTimezone: options.firstDate ? 'America/Toronto' : undefined, updatedAt: now })
-    return { voidId, blueprintIdRevision, objectiveId, planId, planRevisionId, sessionId, contentId, sourceId }
+    return { folderId, voidId, blueprintIdRevision, objectiveId, planId, planRevisionId, sessionId, contentId, sourceId }
   })
   const args = (key: string, score = 100) => ({ tokenIdentifier: OWNER.tokenIdentifier, studySessionId: ids.sessionId, expectedSessionRevision: 7, expectedContentRevision: 11, expectedPlanRecordRevision: 5, expectedBlueprintRecordRevision: 3, response: 'A server-scored response.', confidence: 4, idempotencyKey: key, scorerVerdict: verdict(score) })
   return { t, owner, ids, args }
@@ -61,7 +61,7 @@ async function addAdaptiveActivity(setup: Awaited<ReturnType<typeof fixture>>, a
     const support = await ctx.db.query('learnClaimSupports').withIndex('by_userId_and_sessionContentClaimId').take(1)
     const claim = await ctx.db.query('sessionContentClaims').withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', OWNER.tokenIdentifier).eq('sessionContentId', setup.ids.contentId)).unique()
     if (!support[0] || !claim) throw new Error('Expected evidence fixture')
-    const threadId = await ctx.db.insert('learningThreads', { userId: OWNER.tokenIdentifier, originalNeed: 'Practice safely', intent: 'master', availableTime: '15', authorityKind: 'v2_mission', learningVoidId: setup.ids.voidId, sourceScope: { kind: 'none' }, evidenceState: 'ready', lifecycle: 'active', revision: 1, createdAt: 1, updatedAt: 1 })
+    const threadId = await ctx.db.insert('learningThreads', { userId: OWNER.tokenIdentifier, originalNeed: 'Practice safely', intent: 'master', availableTime: '15', authorityKind: 'v2_mission', learningVoidId: setup.ids.voidId, sourceScope: { kind: 'folder', sourceId: String(setup.ids.folderId) }, evidenceState: 'ready', lifecycle: 'active', revision: 1, createdAt: 1, updatedAt: 1 })
     const activityDocumentId = await ctx.db.insert('learningThreadActivities', {
       userId: OWNER.tokenIdentifier, threadId, activityId, boundaryOrdinal: 1, planRevision: 1, activityClass: 'factual', status: 'submitted',
       planVersion: 'learn-adaptive.activity-plan.v1', replayVersion: 'learn-adaptive.activity-replay.v1', contractVersion: 'learn-adaptive.activity-contract.v1', rendererVersion: 'learn-adaptive.renderer.v1', validationVersion: 'learn-adaptive.primitive-validation.v1', sequenceValidationVersion: 'learn-adaptive.primitive-sequence-validation.v1', fallbackVersion: 'learn-adaptive.text-card-fallback.v1',
@@ -582,6 +582,8 @@ describe('LA2-12 server-scored mastery attempts', () => {
   test('commits one server-rendered feedback projection for a linked authoritative attempt and replays it', async () => {
     const setup = await fixture()
     const activity = await addAdaptiveActivity(setup, 'adaptive-feedback')
+    await setup.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true })
+    expect(await setup.owner.query(api.learnAdaptive.getThread, { threadId: activity.threadId })).toMatchObject({ completion: null })
     const command = setup.args('adaptive-feedback-key', 80)
     const { scorerVerdict: _verdict, ...request } = command
     const acquired = await setup.t.mutation(internal.learnV2Mastery.beginMasteryScoring, request)
@@ -615,6 +617,31 @@ describe('LA2-12 server-scored mastery attempts', () => {
     expect(JSON.stringify(state)).not.toContain('provider-response-private')
     const committedEvents = await setup.t.run(ctx => ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('threadId', activity.threadId)).take(8))
     expect(committedEvents.map(event => event.eventType)).toEqual(['activity_completed', 'representative_pass'])
+    expect(await setup.owner.query(api.learnAdaptive.getThread, { threadId: activity.threadId })).toMatchObject({
+      completion: { status: 'passed', basis: 'server_scored_representative_task', activityId: 'adaptive-feedback' },
+      nextAction: { kind: 'recover', activityId: 'adaptive-feedback' },
+    })
+    expect(await setup.t.run(ctx => ctx.db.get(activity.threadId))).toMatchObject({
+      nextAction: { kind: 'open_v2_mission', reasonCode: 'representative_pass', activityId: 'adaptive-feedback' },
+    })
+    const representative = committedEvents[1]!
+    await setup.t.run(ctx => ctx.db.patch(representative._id, { dedupeKeyHash: `sha256:${'0'.repeat(64)}` }))
+    expect(await setup.owner.query(api.learnAdaptive.getThread, { threadId: activity.threadId })).toMatchObject({ completion: null })
+    await setup.t.run(ctx => ctx.db.patch(representative._id, { dedupeKeyHash: representative.dedupeKeyHash }))
+    await setup.t.run(ctx => ctx.db.patch(result.attemptId, { serverScorePercent: 20 }))
+    expect(await setup.owner.query(api.learnAdaptive.getThread, { threadId: activity.threadId })).toMatchObject({ completion: null })
+    await setup.t.run(ctx => ctx.db.patch(result.attemptId, { serverScorePercent: 80 }))
+    const swappedAttemptId = await setup.t.run(async (ctx) => {
+      const { _id: _id, _creationTime: _creationTime, ...copy } = (await ctx.db.get(result.attemptId))!
+      return await ctx.db.insert('masteryAttempts', { ...copy, idempotencyKey: 'swapped-representative-attempt' })
+    })
+    await setup.t.run(ctx => ctx.db.patch(activity.activityDocumentId, { masteryAttemptId: swappedAttemptId }))
+    expect(await setup.owner.query(api.learnAdaptive.getThread, { threadId: activity.threadId })).toMatchObject({ completion: null })
+    await setup.t.run(ctx => ctx.db.patch(activity.activityDocumentId, { masteryAttemptId: result.attemptId }))
+    await setup.t.run(ctx => ctx.db.patch(acquired.jobId, { checkpoint: 'attempt:unrelated' }))
+    expect(await setup.owner.query(api.learnAdaptive.getThread, { threadId: activity.threadId })).toMatchObject({ completion: null })
+    await setup.t.run(ctx => ctx.db.patch(acquired.jobId, { checkpoint: `attempt:${String(result.attemptId)}` }))
+    expect(await setup.owner.query(api.learnAdaptive.getThread, { threadId: activity.threadId })).toMatchObject({ completion: { status: 'passed' } })
     expect(JSON.stringify(committedEvents)).not.toContain(request.response)
     expect(JSON.stringify(committedEvents)).not.toContain('provider-response-private')
     await setup.t.run(async (ctx) => {
@@ -692,6 +719,14 @@ describe('LA2-12 server-scored mastery attempts', () => {
     expect((await remediationSetup.t.run(ctx => ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('threadId', remediationActivity.threadId)).take(8))).map(event => event.eventType)).toEqual([
       'activity_completed', 'representative_fail', 'remediation',
     ])
+    await remediationSetup.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true })
+    expect(await remediationSetup.owner.query(api.learnAdaptive.getThread, { threadId: remediationActivity.threadId })).toMatchObject({
+      completion: { status: 'needs_practice', basis: 'server_scored_representative_task' },
+      nextAction: { kind: 'recover', activityId: 'adaptive-remediation' },
+    })
+    expect(await remediationSetup.t.run(ctx => ctx.db.get(remediationActivity.threadId))).toMatchObject({
+      nextAction: { kind: 'open_v2_mission', reasonCode: 'representative_fail', activityId: 'adaptive-remediation' },
+    })
   })
 
   test('enforces a rolling provider-dispatch budget without charging an idempotent lease twice', async () => {
