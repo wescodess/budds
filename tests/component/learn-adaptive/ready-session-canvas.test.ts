@@ -53,18 +53,24 @@ describe('ready adaptive Canvas', () => {
     expect(wrapper.get('[data-testid="learn-why-controls"]').text()).toContain('Selected: Show an example')
   })
 
-  it('reveals the existing answer step after the server accepts Answer now', async () => {
+  it('keeps the current Canvas step, focus, and scroll when Answer now is saved for the next boundary', async () => {
     const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
     const controlled = { ...canvas, status: 'started', activity: { ...canvas.activity, status: 'started', controls: {
       reasonText: { version: 'learn-adaptive.reason-text.v1', purpose: 'Study a supported explanation.', text: 'This activity uses accepted sources.' }, selected: null, fixedNextPlan: null,
       options: [{ key: 'answer_now' as const, label: 'Answer now', available: true, unavailableReason: null }],
     } } }
-    const wrapper = await mountSuspended(Comp.default, { props: { canvas: controlled } })
+    const wrapper = await mountSuspended(Comp.default, { props: { canvas: controlled }, attachTo: document.body })
     expect(wrapper.find('[data-testid="learn-canvas-response"]').exists()).toBe(false)
     await wrapper.get('[data-testid="learn-why-toggle"]').trigger('click')
-    await wrapper.get('[data-testid="learn-override-answer_now"]').trigger('click')
+    const answerNow = wrapper.get('[data-testid="learn-override-answer_now"]')
+    answerNow.element.focus()
+    document.documentElement.scrollTop = 240
+    await answerNow.trigger('click')
     await vi.waitFor(() => expect(applyOverride).toHaveBeenCalledWith(expect.objectContaining({ option: 'answer_now' })))
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-canvas-response"]').exists()).toBe(true))
+    expect(wrapper.find('[data-testid="learn-canvas-response"]').exists()).toBe(false)
+    expect(document.activeElement).toBe(answerNow.element)
+    expect(document.documentElement.scrollTop).toBe(240)
+    wrapper.unmount()
   })
 
   it('restores the current unsent answer and confidence after refresh', async () => {

@@ -10,6 +10,8 @@ import { hasLearnActivityEvent, writeLearnActivityEvent } from './lib/learnAdapt
 import { getScopedMasteryRecord } from './lib/learnV2MasteryScope'
 import { canonicalAdaptiveActivityJson } from '../shared/learn-adaptive-activity-plan'
 import { ADAPTIVE_ROUTER_VERSION, routeAdaptiveNextActivity, type AdaptiveRouterInput, type AdaptiveRouterResult } from '../shared/learn-adaptive-router'
+import { applyAdaptiveOverrideAtBoundary, ADAPTIVE_OVERRIDE_APPLICATION_VERSION, type AdaptiveOverrideApplication } from '../shared/learn-adaptive-override-application'
+import { ADAPTIVE_OVERRIDE_VERSION, fixedNextPlanForOverride } from '../shared/learn-adaptive-controls'
 
 const MAX_SNAPSHOT_BYTES = 8_192
 const ROUTING_DECISION_CONTRACT_VERSION = 'learn-adaptive.routing-decision.v1'
@@ -20,9 +22,10 @@ type DecisionValue = {
   routerVersion: typeof ADAPTIVE_ROUTER_VERSION
   status: AdaptiveRouterResult['status']
   selectedActivity: AdaptiveRouterResult['recommendation']
-  reasonCode: AdaptiveRouterResult['reasonCode']
+  reasonCode: AdaptiveRouterResult['reasonCode'] | AdaptiveOverrideApplication['reasonCode']
   fallback: AdaptiveRouterResult['fallback']
   overrides: AdaptiveRouterResult['overrides']
+  overrideApplication?: Omit<NonNullable<Doc<'learnActivityDecisions'>['overrideApplication']>, 'inputDigest'>
 }
 
 async function digest(value: string) {
@@ -31,10 +34,14 @@ async function digest(value: string) {
 }
 
 function decisionValue(row: Doc<'learnActivityDecisions'>): DecisionValue {
+  const overrideApplication = row.overrideApplication
+    ? (({ inputDigest: _inputDigest, ...metadata }) => metadata)(row.overrideApplication)
+    : undefined
   return { decisionId: String(row._id), activityId: row.activityId, routerVersion: row.routerVersion,
-    status: row.status, selectedActivity: row.selectedActivity, reasonCode: row.reasonCode as AdaptiveRouterResult['reasonCode'],
+    status: row.status, selectedActivity: row.selectedActivity, reasonCode: row.reasonCode as DecisionValue['reasonCode'],
     fallback: JSON.parse(row.fallback) as AdaptiveRouterResult['fallback'],
-    overrides: JSON.parse(row.overrideMetadata) as AdaptiveRouterResult['overrides'] }
+    overrides: JSON.parse(row.overrideMetadata) as AdaptiveRouterResult['overrides'],
+    ...(overrideApplication ? { overrideApplication } : {}) }
 }
 
 async function decisionReplays(row: Doc<'learnActivityDecisions'>): Promise<boolean> {
@@ -47,9 +54,22 @@ async function decisionReplays(row: Doc<'learnActivityDecisions'>): Promise<bool
     const parsed = JSON.parse(row.inputSnapshot) as AdaptiveRouterInput
     if (canonicalAdaptiveActivityJson(parsed) !== row.inputSnapshot) return false
     const routed = routeAdaptiveNextActivity(parsed)
-    return routed.routerVersion === row.routerVersion && routed.status === row.status
-      && canonicalAdaptiveActivityJson(routed.recommendation) === canonicalAdaptiveActivityJson(row.selectedActivity)
-      && routed.reasonCode === row.reasonCode && canonicalAdaptiveActivityJson(routed.fallback) === row.fallback
+    let selected: AdaptiveRouterResult | AdaptiveOverrideApplication = routed
+    if (row.overrideApplication) {
+      const { inputDigest, ...metadata } = row.overrideApplication
+      if (metadata.version !== ADAPTIVE_OVERRIDE_APPLICATION_VERSION
+        || metadata.sourceActivityKey !== parsed.priorActivity?.activityId
+        || !Number.isSafeInteger(metadata.sourceBoundaryOrdinal) || metadata.sourceBoundaryOrdinal < 1
+        || metadata.sourceBoundaryOrdinal >= row.boundaryOrdinal
+        || await digest(canonicalAdaptiveActivityJson(metadata)) !== inputDigest) return false
+      const application = applyAdaptiveOverrideAtBoundary(parsed, routed, metadata.option, metadata.planValid !== false)
+      if (application.outcome !== metadata.outcome || application.applicationReason !== metadata.applicationReason
+        || application.effectiveAvailableTime !== metadata.effectiveAvailableTime) return false
+      selected = application
+    }
+    return routed.routerVersion === row.routerVersion && selected.status === row.status
+      && canonicalAdaptiveActivityJson(selected.recommendation) === canonicalAdaptiveActivityJson(row.selectedActivity)
+      && selected.reasonCode === row.reasonCode && canonicalAdaptiveActivityJson(selected.fallback) === row.fallback
       && canonicalAdaptiveActivityJson(routed.overrides) === row.overrideMetadata
   }
   catch { return false }
@@ -145,8 +165,9 @@ export const decideNextActivity = mutation({
               reason: attempt.masteryTransitionReason, version: attempt.masteryTransitionVersion } }
         }
         else priorActivity = { activityId: activity.activityId, primitive: activity.primitivePlan[0]?.type ?? 'cited_explanation',
-          activityClass: 'factual', outcome: 'incomplete', attemptId: null, attemptKind: null,
-          assistance: 'none', confidence: null, masteryTransition: null }
+          activityClass: 'factual', outcome: activity.status === 'blocked'
+            && await hasLearnActivityEvent(commandCtx, userId, activity._id, 'provider_failure') ? 'provider_failure' : 'incomplete',
+          attemptId: null, attemptKind: null, assistance: 'none', confidence: null, masteryTransition: null }
       }
       const input: AdaptiveRouterInput = {
         routerVersion: ADAPTIVE_ROUTER_VERSION, threadState: thread.lifecycle, authorityKind: thread.authorityKind,
@@ -178,24 +199,55 @@ export const decideNextActivity = mutation({
       const existing = await commandCtx.db.query('learnActivityDecisions')
         .withIndex('by_userId_and_activityId_and_createdAt', q => q.eq('userId', userId).eq('activityId', activityId)).first()
       if (existing) throw new AdaptiveCommandRejection('blocked', 'routing_boundary_recorded', 'This activity boundary already has a routing decision')
+      const currentCompleted = priorActivity?.outcome === 'completed' || priorActivity?.outcome === 'representative_pass'
+        || priorActivity?.outcome === 'representative_fail' || priorActivity?.outcome === 'provider_failure'
+      const latestOverride = activity && currentCompleted
+        ? await commandCtx.db.query('learnActivityOverrides')
+            .withIndex('by_userId_and_activityId_and_selectedRevision', q => q.eq('userId', userId).eq('activityId', activity._id))
+            .order('desc').first()
+        : null
+      const applicableOverride = latestOverride && activity && latestOverride.threadId === thread._id
+        && latestOverride.boundaryOrdinal === activity.boundaryOrdinal
+        && latestOverride.version === ADAPTIVE_OVERRIDE_VERSION && latestOverride.source === 'learner'
+        && latestOverride.consumedDecisionId === undefined ? latestOverride : null
+      const planValid = applicableOverride?.selectionAvailableTime !== undefined
+        && canonicalAdaptiveActivityJson(applicableOverride.fixedNextPlan)
+          === canonicalAdaptiveActivityJson(fixedNextPlanForOverride(applicableOverride.option, applicableOverride.selectionAvailableTime))
+      const application = applicableOverride
+        ? applyAdaptiveOverrideAtBoundary(input, routed, applicableOverride.option, planValid) : null
+      const selected = application ?? routed
+      const applicationMetadata = applicableOverride && activity && application ? {
+        version: ADAPTIVE_OVERRIDE_APPLICATION_VERSION, overrideId: applicableOverride._id,
+        sourceActivityId: activity._id, sourceActivityKey: activity.activityId,
+        sourceBoundaryOrdinal: activity.boundaryOrdinal, option: applicableOverride.option,
+        planValid,
+        outcome: application.outcome, applicationReason: application.applicationReason,
+        effectiveAvailableTime: application.effectiveAvailableTime,
+      } : null
       const now = Date.now()
       const revision = thread.revision + 1
       const decisionId = await commandCtx.db.insert('learnActivityDecisions', {
         userId, threadId: thread._id, activityId, boundaryOrdinal, routerVersion: routed.routerVersion,
-        inputSnapshot, inputDigest: await digest(inputSnapshot), status: routed.status,
-        selectedActivity: routed.recommendation, reasonCode: routed.reasonCode,
-        fallback: canonicalAdaptiveActivityJson(routed.fallback), overrideMetadata: canonicalAdaptiveActivityJson(routed.overrides),
+        inputSnapshot, inputDigest: await digest(inputSnapshot), status: selected.status,
+        selectedActivity: selected.recommendation, reasonCode: selected.reasonCode,
+        fallback: canonicalAdaptiveActivityJson(selected.fallback), overrideMetadata: canonicalAdaptiveActivityJson(routed.overrides),
+        ...(applicationMetadata ? { overrideApplication: { ...applicationMetadata,
+          inputDigest: await digest(canonicalAdaptiveActivityJson(applicationMetadata)) } } : {}),
         targetRevision: thread.revision, resultRevision: revision, idempotencyKeyHash: command.idempotencyKeyHash, createdAt: now,
       })
-      await commandCtx.db.patch(thread._id, { revision, updatedAt: now })
+      if (applicableOverride) await commandCtx.db.patch(applicableOverride._id, { consumedDecisionId: decisionId })
+      await commandCtx.db.patch(thread._id, { revision, updatedAt: now,
+        ...(application?.outcome === 'applied' && applicableOverride?.option.startsWith('time_')
+          ? { availableTime: application.effectiveAvailableTime } : {}) })
       await writeLearnActivityEvent(commandCtx, { userId, threadId: thread._id,
         eventType: 'routing_decision', eventVersion: 'routing_decision.v1',
         sourceVersion: routed.routerVersion, contractVersion: ROUTING_DECISION_CONTRACT_VERSION,
-        semanticKey: `routing:${activityId}`, occurredAt: now, reasonCode: routed.reasonCode,
-        outcomeCode: routed.status, metadata: { ...(routed.recommendation ? { activityClass: routed.recommendation.activityClass } : {}), boundaryOrdinal } })
+        semanticKey: `routing:${activityId}`, occurredAt: now, reasonCode: selected.reasonCode,
+        outcomeCode: selected.status, metadata: { ...(selected.recommendation ? { activityClass: selected.recommendation.activityClass } : {}), boundaryOrdinal } })
       return { value: { decisionId: String(decisionId), activityId, routerVersion: routed.routerVersion,
-        status: routed.status, selectedActivity: routed.recommendation, reasonCode: routed.reasonCode,
-        fallback: routed.fallback, overrides: routed.overrides }, revision }
+        status: selected.status, selectedActivity: selected.recommendation, reasonCode: selected.reasonCode,
+        fallback: selected.fallback, overrides: routed.overrides,
+        ...(applicationMetadata ? { overrideApplication: applicationMetadata } : {}) }, revision }
     },
   }),
 })

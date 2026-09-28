@@ -7,7 +7,8 @@ import {
   ADAPTIVE_ACTIVITY_VALIDATION_ANALYTICS_VERSION,
 } from './learn-adaptive-activity-registry'
 import { ADAPTIVE_ACTIVITY_PLAN_VERSION, ADAPTIVE_ACTIVITY_REPLAY_VERSION } from './learn-adaptive-activity-plan'
-import { ADAPTIVE_OVERRIDE_VERSION, ADAPTIVE_REASON_TEXT_VERSION, adaptiveFixedNextPlanValidator, adaptiveOverrideOptionValidator } from './learn-adaptive-controls'
+import { ADAPTIVE_OVERRIDE_VERSION, ADAPTIVE_REASON_TEXT_VERSION, adaptiveAvailableTimeValidator, adaptiveFixedNextPlanValidator, adaptiveOverrideOptionValidator } from './learn-adaptive-controls'
+import { ADAPTIVE_OVERRIDE_APPLICATION_VERSION } from './learn-adaptive-override-application'
 import { CLARIFICATION_TEMPLATE_VERSION, INITIAL_DECISION_VERSION } from './learn-adaptive-clarification'
 import { ADAPTIVE_ROUTER_VERSION } from './learn-adaptive-router'
 
@@ -325,7 +326,10 @@ export const learnActivityOverrideFields = {
   source: v.literal('learner'),
   version: v.literal(ADAPTIVE_OVERRIDE_VERSION),
   fixedNextPlan: adaptiveFixedNextPlanValidator,
+  selectionAvailableTime: v.optional(adaptiveAvailableTimeValidator),
   boundaryOrdinal: v.number(),
+  selectedRevision: v.optional(v.number()),
+  consumedDecisionId: v.optional(v.id('learnActivityDecisions')),
   createdAt: v.number(),
 }
 
@@ -346,6 +350,20 @@ export const learnActivityDecisionFields = {
   reasonCode: v.string(),
   fallback: v.string(),
   overrideMetadata: v.string(),
+  overrideApplication: v.optional(v.object({
+    version: v.literal(ADAPTIVE_OVERRIDE_APPLICATION_VERSION),
+    overrideId: v.id('learnActivityOverrides'),
+    sourceActivityId: v.id('learningThreadActivities'),
+    sourceActivityKey: v.string(),
+    sourceBoundaryOrdinal: v.number(),
+    option: adaptiveOverrideOptionValidator,
+    planValid: v.optional(v.boolean()),
+    outcome: v.union(v.literal('applied'), v.literal('fallback')),
+    applicationReason: v.union(v.literal('applied'), v.literal('router_blocked'), v.literal('evidence_unavailable'),
+      v.literal('insufficient_sources'), v.literal('policy_unavailable'), v.literal('plan_invalid')),
+    effectiveAvailableTime: adaptiveAvailableTimeValidator,
+    inputDigest: v.string(),
+  })),
   targetRevision: v.number(),
   resultRevision: v.number(),
   idempotencyKeyHash: v.string(),

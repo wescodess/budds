@@ -275,11 +275,20 @@ export const getUserDataPage = query({
         const result = await ctx.db.query('learnActivityEvidenceLinks').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
         return { ...result, page: result.page.map(({ sourceSnapshotId: _sourceSnapshotId, ...link }) => link) }
       }
-      case 'learnActivityOverrides':
-        return await ctx.db.query('learnActivityOverrides').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+      case 'learnActivityOverrides': {
+        const result = await ctx.db.query('learnActivityOverrides').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+        return { ...result, page: result.page.map(({ consumedDecisionId: _decisionId, ...row }) => row) }
+      }
       case 'learnActivityDecisions': {
         const result = await ctx.db.query('learnActivityDecisions').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
-        return { ...result, page: result.page.map(({ inputSnapshot: _snapshot, idempotencyKeyHash: _keyHash, ...decision }) => decision) }
+        return { ...result, page: result.page.map(({ inputSnapshot: _snapshot, idempotencyKeyHash: _keyHash, overrideApplication, ...decision }) => ({
+          ...decision,
+          ...(overrideApplication ? { overrideApplication: {
+            version: overrideApplication.version, option: overrideApplication.option,
+            outcome: overrideApplication.outcome, applicationReason: overrideApplication.applicationReason,
+            effectiveAvailableTime: overrideApplication.effectiveAvailableTime,
+          } } : {}),
+        })) }
       }
       case 'learnActivityEvents': {
         const result = await ctx.db.query('learnActivityEvents').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)

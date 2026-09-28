@@ -1396,7 +1396,8 @@ export default defineSchema({
   learnActivityOverrides: defineTable(learnActivityOverrideFields)
     .index('by_userId', ['userId'])
     .index('by_userId_and_threadId_and_createdAt', ['userId', 'threadId', 'createdAt'])
-    .index('by_userId_and_activityId_and_createdAt', ['userId', 'activityId', 'createdAt']),
+    .index('by_userId_and_activityId_and_createdAt', ['userId', 'activityId', 'createdAt'])
+    .index('by_userId_and_activityId_and_selectedRevision', ['userId', 'activityId', 'selectedRevision']),
 
   learnActivityEvidenceLinks: defineTable(learnActivityEvidenceLinkFields)
     .index('by_userId', ['userId'])

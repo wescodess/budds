@@ -119,8 +119,6 @@ watch([started, responseStep, isOnline, busy, meaningfulStartRetryTick, () => pr
 function key(prefix: string) { return `${prefix}:${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}` }
 const citedExplanation = computed(() => props.canvas.activity.primitive?.type === 'cited_explanation' && props.canvas.activity.primitive.action === 'continue' ? props.canvas.activity.primitive : null)
 const canSubmit = computed(() => isOnline.value && !busy.value && !staged.value && response.value.trim().length > 0 && response.value.length <= 12_000 && confidence.value !== null)
-function onControlSelected(option: AdaptiveOverrideOption) { if (option === 'answer_now') responseStep.value = true }
-
 async function start() {
   if (!isOnline.value || busy.value || started.value || props.canvas.status !== 'ready') return
   busy.value = true; error.value = null
@@ -206,7 +204,7 @@ async function submit() {
     <p v-if="showHeader" class="text-xs font-medium uppercase tracking-wide text-primary">Learning thread · {{ canvas.thread.intent }}</p>
     <h1 v-if="showHeader" id="learn-canvas-title" class="mt-2 font-dm-sans text-3xl font-bold">{{ canvas.thread.outcome }}</h1>
     <p class="mt-2 text-sm text-muted-foreground">{{ canvas.activity.purpose }}</p>
-    <LearnAdaptiveWhyControls v-if="canvas.activity.controls" :controls="canvas.activity.controls" :thread-id="canvas.thread.id" :activity-id="canvas.activity.id" :revision="threadRevision" @revision="threadRevision = $event" @selected="onControlSelected" />
+    <LearnAdaptiveWhyControls v-if="canvas.activity.controls" :controls="canvas.activity.controls" :thread-id="canvas.thread.id" :activity-id="canvas.activity.id" :revision="threadRevision" @revision="threadRevision = $event" />
     <p class="sr-only" aria-live="polite">{{ notice }}</p>
     <p v-if="!isOnline" role="status" class="mt-4 rounded-lg border border-amber-500/40 p-3 text-sm">A connection is required to start, get support, or submit a response.</p>
     <p v-if="error" role="alert" data-testid="learn-canvas-error" class="mt-4 rounded-lg border border-destructive/40 p-3 text-sm text-destructive">{{ error }}</p>
