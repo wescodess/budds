@@ -217,7 +217,11 @@ export const commitActivityPlan = internalMutation({
       updatedAt: now,
     })
     const revision = thread.revision + 1
-    await commandCtx.db.patch(thread._id, { currentActivityId: activityDocumentId, revision, updatedAt: now })
+    await commandCtx.db.patch(thread._id, { currentActivityId: activityDocumentId,
+      unresolvedPoint: (thread.unresolvedPoint ?? thread.originalNeed).slice(0, 240),
+      nextAction: { kind: composed.requiredAction.kind, label: composed.requiredAction.label,
+        reasonCode: composed.reasonCode, activityId: composed.activityId },
+      revision, updatedAt: now })
     for (const sourceSnapshotId of new Set(args.evidenceReferences.map(reference => reference.sourceSnapshotId))) {
       await commandCtx.db.insert('learnActivityEvidenceLinks', {
         userId,

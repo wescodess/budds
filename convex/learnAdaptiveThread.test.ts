@@ -103,6 +103,7 @@ describe('owner scoped adaptive thread projection', () => {
     const restored = await owner.query(api.learnAdaptive.getThread, { threadId })
     expect(restored).toMatchObject({
       currentActivity: { status: 'submitted' },
+      unresolvedPoint: 'Explain the hard part of orbital motion.',
       nextAction: { kind: 'review_saved_response', label: 'Your response is saved', activityId: continued.value.activityId },
     })
   })

@@ -163,7 +163,7 @@ export const attachReadySession = mutation({
       outcomeProvenance: 'explicit', intent: 'understand', availableTime,
       authorityKind: 'v2_mission', learningVoidId: learningVoid._id,
       sourceScope: { kind: 'folder', sourceId: String(learningVoid.folderId) },
-      evidenceState: 'ready', lifecycle: 'ready', revision: 2, createdAt: now, updatedAt: now,
+      evidenceState: 'ready', lifecycle: 'ready', unresolvedPoint: objective.title.slice(0, 240), revision: 2, createdAt: now, updatedAt: now,
     })
     const activityId = `ready-session:${String(session._id)}`
     const composed = await composeAdaptiveActivityPlan({

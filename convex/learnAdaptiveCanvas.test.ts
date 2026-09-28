@@ -244,7 +244,8 @@ describe('ready V2 adaptive Canvas', () => {
     const planId = await t.run(async ctx => (await ctx.db.get(ids.studySessionId))!.studyPlanRevisionId)
     await t.run(ctx => ctx.db.patch(planId, { status: 'superseded' }))
     expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'blocked', recoveryState: 'stale' })
-    expect(await read()).toMatchObject({ thread: { evidenceState: 'stale' }, nextAction: { kind: 'recover', activityId: attached.activityId } })
+    expect(await read()).toMatchObject({ thread: { evidenceState: 'stale' },
+      unresolvedPoint: 'Explain gravity', nextAction: { kind: 'recover', activityId: attached.activityId } })
 
     await t.run(async ctx => {
       await ctx.db.patch(planId, { status: 'accepted' })

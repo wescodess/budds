@@ -69,10 +69,10 @@ describe('reflection and next-move authority', () => {
   })
 
   test.each([
-    ['accept', 'accepted', 'active', 'Try one independent example.'],
-    ['override', 'overridden', 'active', 'Choose a different next move'],
-    ['end', 'ended', 'ended', 'Back to Learn'],
-  ] as const)('records %s as an authoritative non-mastery outcome', async (decision, outcome, lifecycle, label) => {
+    ['accept', 'accepted', 'active', 'Try one independent example.', 'Try one independent example.'],
+    ['override', 'overridden', 'active', 'Choose a different next move', 'Choose a useful next step.'],
+    ['end', 'ended', 'ended', 'Back to Learn', 'Choose a useful next step.'],
+  ] as const)('records %s as an authoritative non-mastery outcome', async (decision, outcome, lifecycle, label, unresolvedPoint) => {
     const { t, owner, threadId, activityId } = await fixture()
     const args = { threadId, activityId, decision, expectedRevision: 3, idempotencyKey: `reflection-${decision}-decision-0001` }
     const first = await owner.mutation(api.learnAdaptive.decideReflectionNextMove, args)
@@ -81,7 +81,9 @@ describe('reflection and next-move authority', () => {
     expect(await owner.query(api.learnAdaptive.getReflectionCanvas, { threadId })).toMatchObject({
       status: 'completed', decision: { outcome, nextMove: 'Try one independent example.' },
     })
-    expect(await owner.query(api.learnAdaptive.getThread, { threadId })).toMatchObject({ nextAction: { label } })
+    expect(await owner.query(api.learnAdaptive.getThread, { threadId })).toMatchObject({
+      unresolvedPoint, nextAction: { label },
+    })
     const durable = await t.run(async ctx => ({ thread: await ctx.db.get(threadId),
       attempts: await ctx.db.query('masteryAttempts').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(2),
       jobs: await ctx.db.query('learnJobs').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(2),

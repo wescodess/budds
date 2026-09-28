@@ -104,6 +104,9 @@ describe('durable thread lifecycle', () => {
       threadId, expectedRevision: 4, idempotencyKey: 'lifecycle-end-001',
     })
     expect(ended).toMatchObject({ kind: 'ok', revision: 5, value: { lifecycle: 'ended', changedAt: expect.any(Number) } })
+    expect(await owner.query(api.learnAdaptive.getThread, { threadId })).toMatchObject({
+      unresolvedPoint: 'Understand this topic.', nextAction: { kind: 'return_to_learn' },
+    })
     expect(await owner.mutation(api.learnAdaptive.endThread, {
       threadId, expectedRevision: 4, idempotencyKey: 'lifecycle-end-001',
     })).toEqual(ended)

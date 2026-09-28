@@ -77,3 +77,7 @@ _Avoid_: End, abandon
 **End**:
 An explicit terminal choice that keeps a Learning Thread available for review without resuming its activities.
 _Avoid_: Leave, delete
+
+**Unresolved Point**:
+The learner's stated gap or an explicitly chosen next move that remains open in a Learning Thread. It does not imply a score or mastery state.
+_Avoid_: Desired outcome, inferred misconception

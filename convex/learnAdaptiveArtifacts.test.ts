@@ -67,6 +67,12 @@ describe('adaptive thread artifacts', () => {
     expect(saved).toMatchObject({ kind: 'ok', value: { status: 'saved', revision: 1 }, revision: 4, receiptId: expect.any(String) })
     expect(await owner.mutation(api.learnAdaptive.saveArtifact, input)).toEqual(saved)
     expect(await owner.query(api.learnAdaptive.listThreadArtifacts, { threadId })).toMatchObject([{ title: 'My study plan', summary: 'Practice the core idea and explain it back.', status: 'saved' }])
+    expect(await owner.query(api.learnAdaptive.getThread, { threadId })).toMatchObject({
+      unresolvedPoint: 'Build a concise study plan.',
+      nextAction: { kind: 'review_artifact', reasonCode: 'artifact_saved', activityId },
+    })
+    await t.run(ctx => ctx.db.patch(threadId, { nextAction: { kind: 'review_artifact', label: 'Open another resource', reasonCode: 'artifact_saved', activityId } }))
+    expect(await owner.query(api.learnAdaptive.getThread, { threadId })).toMatchObject({ nextAction: { kind: 'submit_response' } })
     await expect(other.query(api.learnAdaptive.listThreadArtifacts, { threadId })).rejects.toThrow(/not found/i)
     expect(await t.run(ctx => ctx.db.query('masteryAttempts').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(1))).toEqual([])
   })
@@ -85,6 +91,10 @@ describe('adaptive thread artifacts', () => {
     expect(removed).toMatchObject({ kind: 'ok', value: { artifactId, status: 'deleted' }, revision: 6 })
     expect(await owner.mutation(api.learnAdaptive.deleteArtifact, { threadId, artifactId, expectedRevision: 5, idempotencyKey: 'artifact-delete-0001' })).toEqual(removed)
     expect(await owner.query(api.learnAdaptive.listThreadArtifacts, { threadId })).toEqual([])
+    expect(await owner.query(api.learnAdaptive.getThread, { threadId })).toMatchObject({
+      unresolvedPoint: 'Build a concise study plan.',
+      nextAction: { kind: 'submit_response', activityId },
+    })
     expect(await t.run(ctx => ctx.db.get(artifactId))).toBeNull()
     expect(await t.run(ctx => ctx.db.query('masteryAttempts').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(1))).toEqual([])
   })
