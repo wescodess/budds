@@ -910,7 +910,10 @@ export const listResumeCandidates = query({
         ? await ctx.db.query('masteryRecords').withIndex('by_userId_and_blueprintRevisionId_and_objectiveId', q => q.eq('userId', userId)
           .eq('blueprintRevisionId', activity.blueprintRevisionId!).eq('objectiveId', activity.objectiveId!)).first()
         : null
-      const vulnerable = mastery?.state === 'needs_review'
+      const objective = mastery?.state === 'needs_review' ? await ctx.db.get(mastery.objectiveId) : null
+      const reviewCapability = objective?.userId === userId && objective.blueprintRevisionId === activity?.blueprintRevisionId
+        ? objective.capability ?? objective.title : null
+      const vulnerable = mastery?.state === 'needs_review' && reviewCapability !== null
       const changedSource = activity?.activityClass === 'factual'
         && ['stale', 'invalidated', 'unavailable'].includes(await liveEvidenceState(ctx, thread))
       const priority = unfinished ? 3 : vulnerable ? 2 : changedSource ? 1 : 0
@@ -919,11 +922,34 @@ export const listResumeCandidates = query({
       candidates.push({ ownerId: projection.ownerId, threadId: thread._id, outcome: projection.thread.outcome, intent: projection.thread.intent,
         lifecycle: projection.thread.lifecycle, evidenceState: projection.thread.evidenceState,
         unresolvedPoint: projection.unresolvedPoint, currentActivity: projection.currentActivity,
-        nextAction: action, reason, updatedAt: thread.updatedAt, priority })
+        nextAction: action, reason, reviewCapability, updatedAt: thread.updatedAt, priority })
     }
     return candidates.sort((a, b) => b.priority - a.priority || b.updatedAt - a.updatedAt
       || String(a.threadId).localeCompare(String(b.threadId)))
       .map(({ priority: _priority, ...candidate }) => candidate)
+  },
+})
+
+// Home history is a cursor-paged list of thread summaries. Activity history
+// within a thread remains part of getThread's separate bounded projection.
+const THREAD_HISTORY_PAGE_SIZE = 8
+export const listThreadHistory = query({
+  args: { cursor: v.union(v.string(), v.null()) },
+  handler: async (ctx, args) => {
+    const userId = await requireAdaptiveQueryAccess(ctx)
+    const result = await ctx.db.query('learningThreads')
+      .withIndex('by_userId_and_updatedAt', q => q.eq('userId', userId))
+      .order('desc').paginate({ cursor: args.cursor, numItems: THREAD_HISTORY_PAGE_SIZE })
+    return {
+      page: result.page.filter(thread => thread.deletionStartedAt === undefined).map(thread => ({
+        threadId: thread._id,
+        outcome: thread.outcome ?? thread.originalNeed,
+        lifecycle: thread.lifecycle,
+        updatedAt: thread.updatedAt,
+      })),
+      continueCursor: result.continueCursor,
+      isDone: result.isDone,
+    }
   },
 })
 
