@@ -2,6 +2,7 @@
 import { api } from '#convex/api'
 import { getErrorMessage } from '~~/shared/errors'
 import { useAdaptiveResponseDraft } from '~/composables/useAdaptiveResponseDraft'
+import type { AdaptiveFixedNextPlan, AdaptiveOverrideOption } from '~~/shared/learn-adaptive-controls'
 
 type Canvas = {
   ownerId: string
@@ -9,6 +10,8 @@ type Canvas = {
   thread: { id: string, outcome: string, intent: string, revision: number }
   activity: {
     id: string, status: string, purpose: string, reasonCode: string
+    controls?: { reasonText: { version: string, purpose: string, text: string }, selected: AdaptiveOverrideOption | null, fixedNextPlan: AdaptiveFixedNextPlan | null,
+      options: Array<{ key: AdaptiveOverrideOption, label: string, available: boolean, unavailableReason: 'evidence' | 'mastery' | 'state' | 'policy' | null }> }
     primitive: { type: string, action: string, testId: string, props: { heading?: string, explanation?: string, sourceRefs?: string[] } } | null
     fallback: { title: string, body: string, testId: string, primaryAction: { label: string } }
     requiredAction: { kind: string, label: string }
@@ -19,7 +22,7 @@ type Canvas = {
   savedResponse?: { response: string, confidence: number } | null
 }
 
-const props = withDefaults(defineProps<{ canvas: Canvas, showHeader?: boolean, active?: boolean }>(), { showHeader: true, active: true })
+const props = withDefaults(defineProps<{ canvas: Canvas, authoritativeRevision?: number, showHeader?: boolean, active?: boolean }>(), { showHeader: true, active: true })
 const emit = defineEmits<{ leave: [] }>()
 const { isOnline } = useOnlineStatus()
 const startMutation = import.meta.client ? useConvexMutation(api.learnV2SessionContent.startStudySession) : { mutate: async () => ({}) }
@@ -29,7 +32,7 @@ const meaningfulStartMutation = import.meta.client ? useConvexMutation(api.learn
 const submitAction = import.meta.client ? useConvexAction(api.learnAdaptive.submitResponse) : { mutate: async () => ({}) }
 
 const sessionRevision = ref(props.canvas.session.revision)
-const threadRevision = ref(props.canvas.thread.revision)
+const threadRevision = ref(Math.max(props.canvas.thread.revision, props.authoritativeRevision ?? 0))
 const started = ref(['started', 'submitted', 'scoring', 'reconciling', 'feedback'].includes(props.canvas.status))
 const responseStep = ref(['submitted', 'scoring', 'reconciling', 'feedback'].includes(props.canvas.status))
 const response = ref(props.canvas.savedResponse?.response ?? '')
@@ -55,7 +58,9 @@ let meaningfulStartDisposed = false
 let meaningfulStartOperableSeen = false
 
 watch(() => props.canvas.session.revision, value => { sessionRevision.value = Math.max(sessionRevision.value, value) })
-watch(() => props.canvas.thread.revision, value => { threadRevision.value = Math.max(threadRevision.value, value) })
+watch([() => props.canvas.thread.revision, () => props.authoritativeRevision], ([canvasRevision, authoritativeRevision]) => {
+  threadRevision.value = Math.max(threadRevision.value, canvasRevision, authoritativeRevision ?? 0)
+})
 watch(() => props.canvas.status, value => {
   if (value === 'started') started.value = true
   if (['submitted', 'scoring', 'reconciling', 'feedback'].includes(value)) { started.value = true; staged.value = true; responseStep.value = true }
@@ -114,6 +119,7 @@ watch([started, responseStep, isOnline, busy, meaningfulStartRetryTick, () => pr
 function key(prefix: string) { return `${prefix}:${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}` }
 const citedExplanation = computed(() => props.canvas.activity.primitive?.type === 'cited_explanation' && props.canvas.activity.primitive.action === 'continue' ? props.canvas.activity.primitive : null)
 const canSubmit = computed(() => isOnline.value && !busy.value && !staged.value && response.value.trim().length > 0 && response.value.length <= 12_000 && confidence.value !== null)
+function onControlSelected(option: AdaptiveOverrideOption) { if (option === 'answer_now') responseStep.value = true }
 
 async function start() {
   if (!isOnline.value || busy.value || started.value || props.canvas.status !== 'ready') return
@@ -200,6 +206,7 @@ async function submit() {
     <p v-if="showHeader" class="text-xs font-medium uppercase tracking-wide text-primary">Learning thread · {{ canvas.thread.intent }}</p>
     <h1 v-if="showHeader" id="learn-canvas-title" class="mt-2 font-dm-sans text-3xl font-bold">{{ canvas.thread.outcome }}</h1>
     <p class="mt-2 text-sm text-muted-foreground">{{ canvas.activity.purpose }}</p>
+    <LearnAdaptiveWhyControls v-if="canvas.activity.controls" :controls="canvas.activity.controls" :thread-id="canvas.thread.id" :activity-id="canvas.activity.id" :revision="threadRevision" @revision="threadRevision = $event" @selected="onControlSelected" />
     <p class="sr-only" aria-live="polite">{{ notice }}</p>
     <p v-if="!isOnline" role="status" class="mt-4 rounded-lg border border-amber-500/40 p-3 text-sm">A connection is required to start, get support, or submit a response.</p>
     <p v-if="error" role="alert" data-testid="learn-canvas-error" class="mt-4 rounded-lg border border-destructive/40 p-3 text-sm text-destructive">{{ error }}</p>

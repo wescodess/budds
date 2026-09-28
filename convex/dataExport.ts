@@ -7,7 +7,7 @@ import { ADAPTIVE_LEARN_EXPORT_COLLECTIONS } from '../shared/adaptive-learn-stor
 // A single Convex document can approach 1 MiB. Keep pages comfortably below
 // the 16 MiB transaction and return-value ceilings even at the per-row limit.
 const MAX_EXPORT_PAGE_SIZE = 8
-const [learningThreadsCollection, learningThreadActivitiesCollection, learnActivityEvidenceLinksCollection, learnActivityEventsCollection, learnActivityCommandReceiptsCollection, learnAdaptiveThreadDeletionJobsCollection] = ADAPTIVE_LEARN_EXPORT_COLLECTIONS
+const [learningThreadsCollection, learningThreadActivitiesCollection, learnActivityEvidenceLinksCollection, learnActivityEventsCollection, learnActivityCommandReceiptsCollection, learnAdaptiveThreadDeletionJobsCollection, learnActivityOverridesCollection] = ADAPTIVE_LEARN_EXPORT_COLLECTIONS
 
 function redactAdaptivePrimitiveSources(primitive: { props: unknown } & Record<string, unknown>) {
   if (!primitive.props || typeof primitive.props !== 'object' || Array.isArray(primitive.props)) return primitive
@@ -81,6 +81,7 @@ const exportCollectionValidator = v.union(
   v.literal(learnActivityEventsCollection),
   v.literal(learnActivityCommandReceiptsCollection),
   v.literal(learnAdaptiveThreadDeletionJobsCollection),
+  v.literal(learnActivityOverridesCollection),
   v.literal('learningVoids'), v.literal('learnBlueprints'), v.literal('learnBlueprintRevisions'), v.literal('learnMilestones'), v.literal('learnObjectives'), v.literal('learnObjectivePrerequisites'), v.literal('learnSourceIdentities'), v.literal('learnSourceSnapshots'), v.literal('learnSourceFetchLeases'), v.literal('learnSourceFetchRateEvents'), v.literal('learnMasteryScoringRateEvents'), v.literal('learnSourceCommandReceipts'), v.literal('learnFolderSourceManifests'), v.literal('learnFolderSourceManifestFolders'), v.literal('learnFolderSourceManifestEntries'), v.literal('learnSourceExcerpts'), v.literal('learnObjectiveSources'), v.literal('learnClaimSupports'), v.literal('masteryAttempts'), v.literal('masteryRecords'), v.literal('studyPlans'), v.literal('studyPlanRevisions'), v.literal('studySessions'), v.literal('studySessionRetrievalObjectives'), v.literal('sessionContent'), v.literal('sessionContentBlocks'), v.literal('sessionContentClaims'), v.literal('calendarProjections'), v.literal('calendarReconciliationProposals'), v.literal('calendarWebhookReceipts'), v.literal('calendarWatchChannels'), v.literal('reminderPolicies'), v.literal('searchQuotaBuckets'), v.literal('searchReservations'), v.literal('learnJobs'), v.literal('learnLifecycleReceipts'), v.literal('learnPlanCommandReceipts'), v.literal('learnPlanAuditEvents'),
 )
 
@@ -266,6 +267,8 @@ export const getUserDataPage = query({
         const result = await ctx.db.query('learnActivityEvidenceLinks').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
         return { ...result, page: result.page.map(({ sourceSnapshotId: _sourceSnapshotId, ...link }) => link) }
       }
+      case 'learnActivityOverrides':
+        return await ctx.db.query('learnActivityOverrides').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
       case 'learnActivityEvents': {
         const result = await ctx.db.query('learnActivityEvents').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
         return { ...result, page: result.page.map(({ dedupeKeyHash: _dedupeKeyHash, ...event }) => event) }

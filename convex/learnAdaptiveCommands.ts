@@ -107,6 +107,12 @@ export async function deleteAdaptiveThreadAuthorityBatch(ctx: MutationCtx, job: 
   if (thread && thread.userId !== userId) throw new Error('Thread deletion authority mismatch')
 
   if (thread && thread.deletionStartedAt === undefined) await ctx.db.patch(threadId, { deletionStartedAt: Date.now() })
+  const overrides = await ctx.db.query('learnActivityOverrides').withIndex('by_userId_and_threadId_and_createdAt', q => q.eq('userId', userId).eq('threadId', threadId)).take(THREAD_DELETION_BATCH_SIZE)
+  if (overrides.length > 0) {
+    for (const override of overrides) await ctx.db.delete(override._id)
+    await ctx.db.patch(job._id, { phase: 'children', updatedAt: Date.now() })
+    return { phase: 'overrides' as const, deleted: overrides.length, done: false, jobId: job._id }
+  }
   const evidenceLinks = await ctx.db.query('learnActivityEvidenceLinks').withIndex('by_userId_and_threadId', q => q.eq('userId', userId).eq('threadId', threadId)).take(THREAD_DELETION_BATCH_SIZE)
   if (evidenceLinks.length > 0) {
     for (const link of evidenceLinks) await ctx.db.delete(link._id)

@@ -3,11 +3,12 @@ import { action, mutation, query } from './_generated/server'
 import type { Doc } from './_generated/dataModel'
 import { executeAdaptiveThreadCommand, initiateAdaptiveThreadDeletion } from './learnAdaptiveCommands'
 import { requireAdaptiveQueryAccess } from './lib/adaptiveLearnAccess'
-import { liveEvidenceState } from './learnAdaptiveRecovery'
+import { isOperableDiagnosticActivity, liveEvidenceState } from './learnAdaptiveRecovery'
 import { loadReadyCanvas } from './learnAdaptiveCanvas'
 import { requireAuth } from './lib/auth'
 import { masteryAttemptArgs, submitMasteryAttemptForOwner, type MasteryAttemptActionResult } from './learnV2Mastery'
 import { needFirstDraftArgsValidator } from '../shared/learn-adaptive-draft'
+import { ADAPTIVE_OVERRIDE_VERSION, adaptiveOverrideOptionValidator, fixedNextPlanForOverride, projectAdaptiveControls } from '../shared/learn-adaptive-controls'
 
 export const setIntent = mutation({
   args: { threadId: v.id('learningThreads'), intent: needFirstDraftArgsValidator.intent, expectedRevision: v.number(), idempotencyKey: v.string() },
@@ -24,6 +25,40 @@ export const setIntent = mutation({
       const revision = thread.revision + 1
       await commandCtx.db.patch(thread._id, { intent: args.intent, revision, updatedAt: Date.now() })
       return { value: { intent: args.intent }, revision }
+    },
+  }),
+})
+
+// A closed learner preference for the next boundary. The current activity and
+// response stay authoritative; Slice 2 owns replayable route consumption.
+export const applyOverride = mutation({
+  args: { threadId: v.id('learningThreads'), activityId: v.string(), option: adaptiveOverrideOptionValidator,
+    expectedRevision: v.number(), idempotencyKey: v.string() },
+  handler: async (ctx, args) => await executeAdaptiveThreadCommand(ctx, {
+    threadId: args.threadId, expectedRevision: args.expectedRevision, idempotencyKey: args.idempotencyKey,
+    commandName: 'applyOverride', payload: { activityId: args.activityId, option: args.option },
+    apply: async (commandCtx, thread, userId) => {
+      const activity = thread.currentActivityId && await commandCtx.db.get(thread.currentActivityId)
+      if (!activity || activity.userId !== userId || activity.threadId !== thread._id || activity.activityId !== args.activityId) throw new Error('Current activity is unavailable')
+      const factualCanvas = activity.activityClass === 'factual' ? await loadReadyCanvas(commandCtx, userId, thread._id) : null
+      const diagnosticOperable = activity.activityClass === 'non_factual' ? await isOperableDiagnosticActivity(activity) : false
+      const evidenceState = await liveEvidenceState(commandCtx, thread)
+      const controls = projectAdaptiveControls({ activityClass: activity.activityClass,
+        activityStatus: activity.activityClass === 'factual' && (!factualCanvas || factualCanvas.status === 'blocked')
+          || activity.activityClass === 'non_factual' && !diagnosticOperable ? 'blocked' : activity.status,
+        lifecycle: thread.lifecycle, evidenceReady: activity.activityClass === 'factual' && !!factualCanvas && factualCanvas.status !== 'blocked' && evidenceState === 'ready',
+        sourceCount: new Set(activity.evidenceReferences.map(reference => String(reference.sourceSnapshotId))).size,
+        currentTime: thread.availableTime })
+      const option = controls.options.find(candidate => candidate.key === args.option)
+      if (!option?.available) throw new Error(`Override unavailable: ${option?.unavailableReason ?? 'policy'}`)
+      const now = Date.now()
+      const fixedNextPlan = fixedNextPlanForOverride(args.option, thread.availableTime)
+      await commandCtx.db.insert('learnActivityOverrides', { userId, threadId: thread._id, activityId: activity._id,
+        option: args.option, source: 'learner', version: ADAPTIVE_OVERRIDE_VERSION,
+        fixedNextPlan, boundaryOrdinal: activity.boundaryOrdinal, createdAt: now })
+      const revision = thread.revision + 1
+      await commandCtx.db.patch(thread._id, { availableTime: fixedNextPlan.availableTime, revision, updatedAt: now })
+      return { value: { option: args.option, source: 'learner' as const, fixedNextPlan }, revision }
     },
   }),
 })

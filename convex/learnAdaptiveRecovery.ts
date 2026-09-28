@@ -6,6 +6,7 @@ import { composeAdaptiveActivityPlan, replayAdaptiveActivityPlan, type AdaptiveE
 import { adaptiveRecoveryCopy } from '../shared/learn-adaptive-recovery'
 import { executeAdaptiveThreadCommand } from './learnAdaptiveCommands'
 import { hasLearnActivityEvent, writeLearnActivityEvent } from './lib/learnAdaptiveEvents'
+import { projectAdaptiveControls, reasonTextForActivity } from '../shared/learn-adaptive-controls'
 
 const DIAGNOSTIC_ROUTER_VERSION = 'learn-adaptive.preparing-diagnostic.v1'
 
@@ -41,6 +42,12 @@ function storedPlan(activity: Doc<'learningThreadActivities'>): ComposedAdaptive
     replacesActivityId: activity.replacesActivityId, canonicalInputSnapshot: activity.canonicalInputSnapshot,
     inputDigest: activity.inputDigest,
   }
+}
+
+export async function isOperableDiagnosticActivity(activity: Doc<'learningThreadActivities'>) {
+  if (activity.activityClass !== 'non_factual' || activity.primitivePlan.length !== 1
+    || activity.primitivePlan[0]?.type !== 'diagnostic_prompt' || activity.primitivePlan[0].action !== 'submit_response') return false
+  return (await replayAdaptiveActivityPlan(storedPlan(activity))).ok
 }
 
 async function recordDiagnosticStartEvents(ctx: MutationCtx, userId: string, thread: Doc<'learningThreads'>, activity: Doc<'learningThreadActivities'>, occurredAt: number) {
@@ -100,6 +107,7 @@ export const continueDraft = mutation({
         rendererVersion: composed.rendererVersion, validationVersion: composed.validationVersion,
         sequenceValidationVersion: composed.sequenceValidationVersion, fallbackVersion: composed.fallbackVersion,
         intent: composed.intent, objectiveId: null, purpose: composed.purpose, reasonCode: composed.reasonCode,
+        reasonText: reasonTextForActivity({ activityClass: 'non_factual', purpose: composed.purpose, reasonCode: composed.reasonCode, sourceState }),
         primitivePlan: composed.primitivePlan, requiredAction: composed.requiredAction,
         evaluationContract: composed.evaluationContract, fallback: composed.fallback,
         accessibilityMetadata: composed.accessibilityMetadata, learningVoidId: null, blueprintRevisionId: null,
@@ -171,11 +179,17 @@ export const getDiagnosticCanvas = query({
     const recovery = adaptiveRecoveryCopy(evidenceState)
     if (!activity) return { ownerId: owner._id, thread: { id: thread._id, outcome: thread.outcome ?? thread.originalNeed, intent: thread.intent, revision: thread.revision }, status: 'draft' as const, evidenceState, recovery, decisionPending: !thread.initialDecision || thread.initialDecision.status === 'pending', activity: null }
     if (activity.userId !== userId || activity.threadId !== thread._id || activity.activityClass !== 'non_factual') return null
-    const replay = await replayAdaptiveActivityPlan(storedPlan(activity))
-    const primitive = replay.ok && activity.primitivePlan.length === 1 && activity.primitivePlan[0]?.type === 'diagnostic_prompt' ? activity.primitivePlan[0] : null
+    const primitive = await isOperableDiagnosticActivity(activity) ? activity.primitivePlan[0] : null
+    const selectedOverride = await ctx.db.query('learnActivityOverrides')
+      .withIndex('by_userId_and_activityId_and_createdAt', q => q.eq('userId', userId).eq('activityId', activity._id))
+      .order('desc').first()
     return { ownerId: owner._id, thread: { id: thread._id, outcome: thread.outcome ?? thread.originalNeed, intent: thread.intent, revision: thread.revision },
       status: primitive ? activity.status : 'blocked', evidenceState, recovery, decisionPending: false,
       activity: { id: activity.activityId, status: activity.status, primitive,
+        controls: projectAdaptiveControls({ activityClass: 'non_factual', activityStatus: primitive ? activity.status : 'blocked', lifecycle: thread.lifecycle,
+          evidenceReady: evidenceState === 'ready', sourceCount: 0, currentTime: thread.availableTime,
+          selected: selectedOverride?.option, fixedNextPlan: selectedOverride?.fixedNextPlan, reasonText: activity.reasonText,
+          purpose: activity.purpose, reasonCode: activity.reasonCode, sourceState: activity.decisionInputs.sourceState }),
         response: activity.submittedResponse ?? null, fallback: activity.fallback, requiredAction: activity.requiredAction } }
   },
 })

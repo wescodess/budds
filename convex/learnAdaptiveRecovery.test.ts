@@ -42,7 +42,7 @@ describe('standalone diagnostic continuation', () => {
     expect(await owner.mutation(api.learnAdaptiveRecovery.continueDraft, args)).toEqual(first)
     const canvas = await owner.query(api.learnAdaptiveRecovery.getDiagnosticCanvas, { threadId })
     expect(canvas).toMatchObject({ evidenceState: 'preparing', activity: { id: first.kind === 'ok' ? first.value.activityId : '', status: 'eligible', primitive: { type: 'diagnostic_prompt', action: 'submit_response' } } })
-    expect(canvas?.activity?.primitive?.props.prompt).toContain('already know')
+    expect(canvas?.activity?.primitive).toMatchObject({ props: { prompt: expect.stringContaining('already know') } })
     expect(await other.query(api.learnAdaptiveRecovery.getDiagnosticCanvas, { threadId })).toBeNull()
     const activity = await t.run(async ctx => ctx.db.get((await ctx.db.get(threadId))!.currentActivityId!))
     expect(activity).toMatchObject({ activityClass: 'non_factual', evaluationContract: { kind: 'learner_response' }, evidenceReferences: [], learningVoidId: null, sessionContentId: null })

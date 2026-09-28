@@ -2,6 +2,7 @@
 import { api } from '#convex/api'
 import { getErrorMessage } from '~~/shared/errors'
 import { useAdaptiveResponseDraft } from '~/composables/useAdaptiveResponseDraft'
+import type { AdaptiveFixedNextPlan, AdaptiveOverrideOption } from '~~/shared/learn-adaptive-controls'
 
 type Canvas = {
   ownerId: string
@@ -13,19 +14,25 @@ type Canvas = {
   activity: null | {
     id: string
     status: string
+    controls?: { reasonText: { version: string, purpose: string, text: string }, selected: AdaptiveOverrideOption | null, fixedNextPlan: AdaptiveFixedNextPlan | null,
+      options: Array<{ key: AdaptiveOverrideOption, label: string, available: boolean, unavailableReason: 'evidence' | 'mastery' | 'state' | 'policy' | null }> }
     primitive: null | { type: string, action: string, testId: string, props: { prompt: string, responseFormat: string } }
     response: string | null
     requiredAction: { kind: string, label: string }
   }
 }
 
-const props = withDefaults(defineProps<{ canvas: Canvas, showHeader?: boolean, active?: boolean }>(), { showHeader: true, active: true })
+const props = withDefaults(defineProps<{ canvas: Canvas, authoritativeRevision?: number, showHeader?: boolean, active?: boolean }>(), { showHeader: true, active: true })
 const emit = defineEmits<{ leave: [] }>()
 const { isOnline } = useOnlineStatus()
 const continueMutation = import.meta.client ? useConvexMutation(api.learnAdaptiveRecovery.continueDraft) : { mutate: async () => ({}) }
 const submitMutation = import.meta.client ? useConvexMutation(api.learnAdaptiveRecovery.submitDiagnosticResponse) : { mutate: async () => ({}) }
 const renderAckMutation = import.meta.client ? useConvexMutation(api.learnAdaptiveRecovery.recordDiagnosticRendered) : { mutate: async () => ({}) }
 const busy = ref(false)
+const threadRevision = ref(Math.max(props.canvas.thread.revision, props.authoritativeRevision ?? 0))
+watch([() => props.canvas.thread.revision, () => props.authoritativeRevision], ([canvasRevision, authoritativeRevision]) => {
+  threadRevision.value = Math.max(threadRevision.value, canvasRevision, authoritativeRevision ?? 0)
+})
 const error = ref<string | null>(null)
 const response = ref('')
 const localSaved = ref<string | null>(null)
@@ -80,7 +87,7 @@ async function continueDraft() {
   busy.value = true; error.value = null
   continueKey.value ??= commandKey('adaptive-diagnostic-continue')
   try {
-    const result = await continueMutation.mutate({ threadId: props.canvas.thread.id as never, expectedRevision: props.canvas.thread.revision, idempotencyKey: continueKey.value }) as { kind: string }
+    const result = await continueMutation.mutate({ threadId: props.canvas.thread.id as never, expectedRevision: threadRevision.value, idempotencyKey: continueKey.value }) as { kind: string }
     if (result.kind !== 'ok') { continueKey.value = null; throw new Error('This thread changed. Reload it to continue.') }
   }
   catch (cause) { error.value = getErrorMessage(cause, 'Could not start the diagnostic. Try again.') }
@@ -95,7 +102,7 @@ async function submit() {
   submitKey.value ??= commandKey('adaptive-diagnostic-submit')
   try {
     const result = await submitMutation.mutate({ threadId: props.canvas.thread.id as never,
-      activityId: props.canvas.activity.id, expectedRevision: props.canvas.thread.revision,
+      activityId: props.canvas.activity.id, expectedRevision: threadRevision.value,
       response: submission, idempotencyKey: submitKey.value }) as { kind: string }
     if (result.kind !== 'ok') { submitKey.value = null; throw new Error('This response boundary changed. Reload it to continue.') }
     localSaved.value = submission
@@ -109,6 +116,7 @@ async function submit() {
   <section class="w-full" data-testid="learn-diagnostic-canvas" :aria-labelledby="showHeader ? 'learn-diagnostic-title' : undefined" :aria-label="showHeader ? undefined : 'Current activity'">
     <p v-if="showHeader" class="text-xs font-medium uppercase tracking-wide text-primary">Learning thread · {{ canvas.thread.intent }}</p>
     <h1 v-if="showHeader" id="learn-diagnostic-title" class="mt-2 font-dm-sans text-3xl font-bold">{{ canvas.thread.outcome }}</h1>
+    <LearnAdaptiveWhyControls v-if="canvas.activity?.controls" :controls="canvas.activity.controls" :thread-id="canvas.thread.id" :activity-id="canvas.activity.id" :revision="threadRevision" @revision="threadRevision = $event" />
     <div class="mt-6 rounded-xl border border-border bg-card p-5" data-testid="learn-diagnostic-recovery">
       <h2 class="font-dm-sans text-xl font-semibold">{{ canvas.recovery.title }}</h2>
       <p class="mt-2 text-sm text-muted-foreground" role="status">{{ canvas.recovery.body }}</p>

@@ -69,6 +69,21 @@ async function fixture() {
 }
 
 describe('ready V2 adaptive Canvas', () => {
+  test('offers supported closed controls only while live source authority is ready', async () => {
+    const { t, owner, ids } = await fixture()
+    const attached = await owner.mutation(api.learnAdaptiveCanvas.attachReadySession, {
+      studySessionId: ids.studySessionId, expectedSessionRevision: 2, idempotencyKey: 'canvas-controls-attach-0001',
+    })
+    const ready = await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })
+    expect(ready?.activity.controls).toMatchObject({ reasonText: { version: 'learn-adaptive.reason-text.v1', purpose: expect.stringContaining('supported explanation'), text: expect.stringContaining('accepted sources') },
+      options: expect.arrayContaining([{ key: 'example', label: 'Show an example', available: true, unavailableReason: null }]) })
+    await t.run(ctx => ctx.db.delete(ids.folderId))
+    const lost = await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })
+    expect(lost?.activity.controls.options.find(option => option.key === 'example')).toMatchObject({ available: false, unavailableReason: 'state' })
+    await expect(owner.mutation(api.learnAdaptive.applyOverride, { threadId: attached.threadId, activityId: attached.activityId,
+      option: 'example', expectedRevision: ready!.thread.revision, idempotencyKey: 'canvas-controls-lost-0001' })).rejects.toThrow(/Override unavailable/)
+  })
+
   test('factual thread recovers from deleted or non-owned folder despite retained ready Canvas snapshots', async () => {
     const { t, owner, ids } = await fixture()
     const attached = await owner.mutation(api.learnAdaptiveCanvas.attachReadySession, {

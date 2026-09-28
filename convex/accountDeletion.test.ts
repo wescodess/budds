@@ -149,11 +149,20 @@ describe('accountDeletion.deleteAccountCascade', () => {
         userId: TEST_IDENTITY.tokenIdentifier, threadId, activityId, eventType: 'activity_eligible', eventVersion: 'activity_eligible.v1', taxonomyVersion: 'learn-adaptive.activity-events.v1', occurredAt: now,
         sourceVersion: 'learn-adaptive.activity-plan.v1', contractVersion: 'learn-adaptive.activity-contract.v1', metadata: { activityClass: 'non_factual', boundaryOrdinal: 1, planRevision: 1 }, dedupeKeyHash: `sha256:${'c'.repeat(64)}`,
       })
+      const overrideId = await ctx.db.insert('learnActivityOverrides', {
+        userId: TEST_IDENTITY.tokenIdentifier, threadId, activityId, option: 'time_45', source: 'learner',
+        version: 'learn-adaptive.override.v1', fixedNextPlan: { version: 'learn-adaptive.fixed-next-plan.v1',
+          inputOption: 'time_45', nextActivity: 'continue_with_time', availableTime: '45', difficulty: 'same',
+          maxNewActivities: 1, authority: 'server_revalidate_at_boundary' }, boundaryOrdinal: 1, createdAt: now,
+      })
       const threadDeletionJobId = await ctx.db.insert('learnAdaptiveThreadDeletionJobs', { userId: TEST_IDENTITY.tokenIdentifier, threadId, phase: 'children', status: 'queued', attempts: 0, createdAt: now, updatedAt: now })
       await ctx.db.insert('accountDeletionJobs', { userId: TEST_IDENTITY.tokenIdentifier, status: 'active', phase: 'learnV2', startedAt: now, updatedAt: now })
-      return { threadId, activityId, eventId, receiptId, threadDeletionJobId }
+      return { threadId, activityId, eventId, overrideId, receiptId, threadDeletionJobId }
     })
 
+    await t.mutation(internal.accountDeletion.runDeletionBatch, { userId: TEST_IDENTITY.tokenIdentifier })
+    expect(await t.run(ctx => ctx.db.get(ids.overrideId))).toBeNull()
+    expect(await t.run(ctx => ctx.db.get(ids.eventId))).not.toBeNull()
     await t.mutation(internal.accountDeletion.runDeletionBatch, { userId: TEST_IDENTITY.tokenIdentifier })
     expect(await t.run(ctx => ctx.db.get(ids.eventId))).toBeNull()
     expect(await t.run(ctx => ctx.db.get(ids.receiptId))).not.toBeNull()

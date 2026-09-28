@@ -1,5 +1,5 @@
 import { v } from 'convex/values'
-import { mutation, query, type QueryCtx } from './_generated/server'
+import { mutation, query, type MutationCtx, type QueryCtx } from './_generated/server'
 import type { Id } from './_generated/dataModel'
 import { requireAdaptiveMutationAccess, requireAdaptiveQueryAccess } from './lib/adaptiveLearnAccess'
 import { requireActiveBlueprint } from './lib/learnV2BlueprintAuthority'
@@ -11,6 +11,8 @@ import { composeAdaptiveActivityPlan, replayAdaptiveActivityPlan, type AdaptiveE
 import { localDateAt } from '../shared/learn-v2-mastery'
 import { adaptiveRecoveryCopy } from '../shared/learn-adaptive-recovery'
 import { executeAdaptiveThreadCommand } from './learnAdaptiveCommands'
+import { liveEvidenceState } from './learnAdaptiveRecovery'
+import { projectAdaptiveControls, reasonTextForActivity } from '../shared/learn-adaptive-controls'
 
 const RECEIPT_TTL_MS = 30 * 24 * 60 * 60_000
 
@@ -169,6 +171,7 @@ export const attachReadySession = mutation({
       rendererVersion: composed.rendererVersion, validationVersion: composed.validationVersion,
       sequenceValidationVersion: composed.sequenceValidationVersion, fallbackVersion: composed.fallbackVersion,
       intent: composed.intent, objectiveId: objective._id, purpose: composed.purpose, reasonCode: composed.reasonCode,
+      reasonText: reasonTextForActivity({ activityClass: 'factual', purpose: composed.purpose, reasonCode: composed.reasonCode, sourceState: 'ready' }),
       primitivePlan: composed.primitivePlan, requiredAction: composed.requiredAction,
       evaluationContract: composed.evaluationContract, fallback: composed.fallback,
       accessibilityMetadata: composed.accessibilityMetadata,
@@ -190,7 +193,7 @@ export const attachReadySession = mutation({
   },
 })
 
-export async function loadReadyCanvas(ctx: QueryCtx, userId: string, threadId: Id<'learningThreads'>) {
+export async function loadReadyCanvas(ctx: QueryCtx | MutationCtx, userId: string, threadId: Id<'learningThreads'>) {
     const owner = await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique()
     const thread = await ctx.db.get(threadId)
     if (!owner || !thread || thread.userId !== userId || thread.authorityKind !== 'v2_mission' || thread.deletionStartedAt !== undefined || !thread.currentActivityId) return null
@@ -245,11 +248,20 @@ export async function loadReadyCanvas(ctx: QueryCtx, userId: string, threadId: I
         : evidence?.integrityState === 'stale' || thread.evidenceState === 'stale' ? 'stale'
           : thread.evidenceState === 'blocked' || evidence?.integrityState === 'insufficient' || evidence?.integrityState === 'conflicting' ? 'blocked'
             : !current ? 'stale' : 'blocked'
+    const selectedOverride = await ctx.db.query('learnActivityOverrides')
+      .withIndex('by_userId_and_activityId_and_createdAt', q => q.eq('userId', userId).eq('activityId', activity._id))
+      .order('desc').first()
+    const sourceReady = (await liveEvidenceState(ctx, thread)) === 'ready'
     return {
       status, ownerId: owner._id, thread: { id: thread._id, outcome: thread.outcome ?? thread.originalNeed, intent: thread.intent, revision: thread.revision },
       recoveryState: status === 'blocked' ? recoveryState : null,
       recovery: status === 'blocked' ? adaptiveRecoveryCopy(recoveryState) : null,
       activity: { id: activity.activityId, status: activity.status, purpose: activity.purpose, reasonCode: activity.reasonCode,
+        controls: projectAdaptiveControls({ activityClass: 'factual', activityStatus: status === 'blocked' || !sourceReady ? 'blocked' : activity.status, lifecycle: thread.lifecycle,
+          evidenceReady: status !== 'blocked' && sourceReady, sourceCount: new Set(activity.evidenceReferences.map(reference => String(reference.sourceSnapshotId))).size,
+          currentTime: thread.availableTime,
+          selected: selectedOverride?.option, fixedNextPlan: selectedOverride?.fixedNextPlan, reasonText: activity.reasonText,
+          purpose: activity.purpose, reasonCode: activity.reasonCode, sourceState: activity.decisionInputs.sourceState }),
         primitive: status !== 'blocked' && replay.ok ? activity.primitivePlan[0] : null,
         fallback: activity.fallback, requiredAction: activity.requiredAction },
       session: { studySessionId: session._id, revision: session.revision, contentRevision: content.revision,
