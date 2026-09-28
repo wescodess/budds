@@ -63,7 +63,7 @@ function record(value: unknown, label: string): UnknownRecord {
 }
 
 function exact(value: UnknownRecord, required: readonly string[], label: string) {
-  if (Object.keys(value).length !== required.length || required.some(key => !(key in value))) invalid('invalid_props', `${label} has invalid props`)
+  if (Object.keys(value).length !== required.length || required.some(key => !Object.hasOwn(value, key))) invalid('invalid_props', `${label} has invalid props`)
 }
 
 function text(value: unknown, label: string, maximum: number) {

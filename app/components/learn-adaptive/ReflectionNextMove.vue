@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { api } from '#convex/api'
-import { ADAPTIVE_ACTIVITY_CONTRACT_VERSION, ADAPTIVE_ACTIVITY_RENDERER_VERSION, adaptiveActivityFallbackForReason, validateAdaptiveActivityPrimitive } from '~~/shared/learn-adaptive-activity-registry'
+import { adaptiveActivityFallbackForReason } from '~~/shared/learn-adaptive-activity-registry'
+import { resolveAdaptiveActivityRenderer } from '~~/shared/learn-adaptive-renderer-contract'
 
 type ReflectionDecision = 'accept' | 'override' | 'end'
 type Canvas = {
@@ -39,13 +40,9 @@ const fallbackAction = useTemplateRef<HTMLButtonElement>('fallback-action')
 const validation = computed(() => {
   const primitive = props.canvas.activity.primitive
   if (!primitive || props.canvas.status === 'blocked') return { value: null, reason: 'renderer_unavailable' as const }
-  if (primitive.contractVersion !== ADAPTIVE_ACTIVITY_CONTRACT_VERSION
-    || primitive.rendererVersion !== ADAPTIVE_ACTIVITY_RENDERER_VERSION
-    || primitive.testId !== 'learn-primitive-reflection-next-move') return { value: null, reason: 'invalid_props' as const }
-  const result = validateAdaptiveActivityPrimitive({ type: primitive.type, action: primitive.action, props: primitive.props })
-  if (!result.ok) return { value: null, reason: result.error.code }
-  if (Object.keys(primitive).length !== 6) return { value: null, reason: 'invalid_props' as const }
-  if (result.value.type !== 'reflection_next_move') return { value: null, reason: 'unsupported_action' as const }
+  const result = resolveAdaptiveActivityRenderer(primitive, 'reflection')
+  if (!result.ok) return { value: null, reason: result.reason }
+  if (result.value.type !== 'reflection_next_move') return { value: null, reason: 'renderer_unavailable' as const }
   const primaryDecision = result.value.action === 'accept_next_move' ? 'accept'
     : result.value.action === 'override_next_move' ? 'override' : result.value.action === 'end_thread' ? 'end' : null
   if (!primaryDecision || !result.value.props.allowedDecisions.includes(primaryDecision)) return { value: null, reason: 'unsupported_action' as const }

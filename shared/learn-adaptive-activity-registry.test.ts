@@ -142,6 +142,15 @@ describe('Adaptive Learn activity registry', () => {
     expect(validateAdaptiveActivityPrimitive(candidate, evidence)).toEqual(expected)
   })
 
+  test('rejects excess own props even when a required prop is inherited', () => {
+    const props = Object.assign(Object.create({ prompt: 'Answer.' }) as Record<string, unknown>, {
+      responseFormat: 'short_text', assistance: 'none', extra: 'unapproved',
+    })
+    expect(validateAdaptiveActivityPrimitive({ type: 'diagnostic_prompt', action: 'submit_response', props })).toMatchObject({
+      ok: false, error: { code: 'invalid_props' }, fallback: { testId: 'learn-activity-fallback' },
+    })
+  })
+
   test.each([
     ['unknown reference', ['source-missing']],
     ['unaccepted reference', ['source-2']],

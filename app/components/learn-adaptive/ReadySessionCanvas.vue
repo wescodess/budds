@@ -4,7 +4,8 @@ import { getErrorMessage } from '~~/shared/errors'
 import { useAdaptiveResponseDraft } from '~/composables/useAdaptiveResponseDraft'
 import { useAdaptiveComparisonDraft } from '~/composables/useAdaptiveComparisonDraft'
 import type { AdaptiveFixedNextPlan, AdaptiveOverrideOption } from '~~/shared/learn-adaptive-controls'
-import { ADAPTIVE_ACTIVITY_CONTRACT_VERSION, ADAPTIVE_ACTIVITY_RENDERER_VERSION, adaptiveActivityFallbackForReason, validateAdaptiveActivityPrimitive, type AdaptiveActivityValidationReason } from '~~/shared/learn-adaptive-activity-registry'
+import { adaptiveActivityFallbackForReason, type AdaptiveActivityValidationReason, type ValidatedAdaptiveActivityPrimitive } from '~~/shared/learn-adaptive-activity-registry'
+import { resolveAdaptiveActivityRenderer } from '~~/shared/learn-adaptive-renderer-contract'
 import { decodeSourceComparisonResponse, encodeSourceComparisonResponse, sourceComparisonResponseFitsLimit } from '~~/shared/learn-adaptive-source-comparison-response'
 
 type Canvas = {
@@ -26,6 +27,23 @@ type Canvas = {
   recoveryEvidenceIssue?: 'conflict' | 'gap' | null
   recovery?: { title: string, body: string, action: string } | null
   savedResponse?: { response: string, confidence: number } | null
+}
+
+type ReadyPrimitive = Extract<ValidatedAdaptiveActivityPrimitive, { type: 'cited_explanation' | 'worked_example' | 'source_comparison' | 'independent_application' }>
+function readyPrimitiveForCanvas(primitive: ValidatedAdaptiveActivityPrimitive): ReadyPrimitive | null {
+  switch (primitive.type) {
+    case 'cited_explanation':
+    case 'worked_example':
+    case 'source_comparison':
+    case 'independent_application': return primitive
+    case 'diagnostic_prompt':
+    case 'artifact_workspace':
+    case 'reflection_next_move': return null
+    default: {
+      const missing: never = primitive
+      throw new Error(`No Ready Canvas branch for ${String(missing)}`)
+    }
+  }
 }
 
 const props = withDefaults(defineProps<{ canvas: Canvas, authoritativeRevision?: number, showHeader?: boolean, active?: boolean }>(), { showHeader: true, active: true })
@@ -174,14 +192,12 @@ const renderValidation = computed(() => {
     || new Set(scope.sourceRefs).size !== scope.sourceRefs.length) {
     return { reason: 'invalid_evidence_link' as const, primitive: null }
   }
-  if (primitive.contractVersion !== ADAPTIVE_ACTIVITY_CONTRACT_VERSION
-    || primitive.rendererVersion !== ADAPTIVE_ACTIVITY_RENDERER_VERSION
-    || Object.keys(primitive).length !== 6) return { reason: 'invalid_props' as const, primitive: null }
   const context = Object.fromEntries(scope.sourceRefs.map(sourceRef => [sourceRef, { integrityState: 'accepted' as const }]))
   let inputProps = primitive.props
   if (primitive.type === 'source_comparison') {
     const raw = primitive.props as { prompt?: unknown, sources?: unknown }
-    if (!raw || typeof raw !== 'object' || !Array.isArray(raw.sources) || raw.sources.length !== 2) return { reason: 'invalid_props' as const, primitive: null }
+    if (!raw || typeof raw !== 'object' || Object.keys(raw).length !== 2 || !Object.hasOwn(raw, 'prompt')
+      || !Object.hasOwn(raw, 'sources') || !Array.isArray(raw.sources) || raw.sources.length !== 2) return { reason: 'invalid_props' as const, primitive: null }
     const sources = raw.sources.map((source: unknown) => {
       if (!source || typeof source !== 'object' || Array.isArray(source)) return null
       const value = source as Record<string, unknown>
@@ -192,22 +208,21 @@ const renderValidation = computed(() => {
     if (sources.includes(null)) return { reason: 'invalid_evidence_link' as const, primitive: null }
     inputProps = { prompt: raw.prompt, sources }
   }
-  const validated = validateAdaptiveActivityPrimitive({ type: primitive.type, action: primitive.action, props: inputProps }, context)
-  if (!validated.ok) return { reason: validated.error.code, primitive: null }
-  if (primitive.testId !== validated.value.testId) return { reason: 'invalid_props' as const, primitive: null }
-  if (validated.value.type !== 'cited_explanation' && validated.value.type !== 'worked_example'
-    && validated.value.type !== 'source_comparison' && validated.value.type !== 'independent_application') return { reason: 'renderer_unavailable' as const, primitive: null }
-  if (validated.value.type === 'cited_explanation' && validated.value.action !== 'continue'
-    || validated.value.type === 'independent_application' && validated.value.action !== 'submit_response'
-    || props.canvas.activity.requiredAction.kind !== validated.value.action
-    || props.canvas.activity.requiredAction.label !== (validated.value.type === 'source_comparison' ? (validated.value.action === 'choose_source' ? 'Choose source' : 'Submit comparison') : validated.value.type === 'independent_application' ? 'Submit response' : validated.value.action === 'reveal_example' ? 'Reveal example' : 'Continue')) return { reason: 'unsupported_action' as const, primitive: null }
+  const validated = resolveAdaptiveActivityRenderer({ ...primitive, props: inputProps }, 'ready_session', context)
+  if (!validated.ok) return { reason: validated.reason, primitive: null }
+  const readyPrimitive = readyPrimitiveForCanvas(validated.value)
+  if (!readyPrimitive) return { reason: 'renderer_unavailable' as const, primitive: null }
+  if (readyPrimitive.type === 'cited_explanation' && readyPrimitive.action !== 'continue'
+    || readyPrimitive.type === 'independent_application' && readyPrimitive.action !== 'submit_response'
+    || props.canvas.activity.requiredAction.kind !== readyPrimitive.action
+    || props.canvas.activity.requiredAction.label !== (readyPrimitive.type === 'source_comparison' ? (readyPrimitive.action === 'choose_source' ? 'Choose source' : 'Submit comparison') : readyPrimitive.type === 'independent_application' ? 'Submit response' : readyPrimitive.action === 'reveal_example' ? 'Reveal example' : 'Continue')) return { reason: 'unsupported_action' as const, primitive: null }
   const prompt = props.canvas.responsePrompt
   if (typeof prompt !== 'string' || !prompt.trim()) return { reason: 'invalid_props' as const, primitive: null }
-  if (validated.value.type === 'independent_application' && validated.value.props.prompt !== prompt.trim()) return { reason: 'invalid_props' as const, primitive: null }
+  if (readyPrimitive.type === 'independent_application' && readyPrimitive.props.prompt !== prompt.trim()) return { reason: 'invalid_props' as const, primitive: null }
   if (prompt.length > 4_000) return { reason: 'oversized_prop' as const, primitive: null }
   if (/\b(?:javascript|vbscript|file)\s*:|\bdata\s*:\s*text\/html/iu.test(prompt)) return { reason: 'unsafe_url' as const, primitive: null }
   if (/<\/?[a-z][^>]*>|\bon[a-z]+\s*=/iu.test(prompt)) return { reason: 'executable_content' as const, primitive: null }
-  return { reason: null, primitive: validated.value }
+  return { reason: null, primitive: readyPrimitive }
 })
 const renderFailureCode = computed<AdaptiveActivityValidationReason | null>(() => renderValidation.value.reason)
 const renderedPrimitive = computed(() => renderValidation.value.primitive)
