@@ -13,6 +13,7 @@ import { scheduleAudioOverviewDeletion } from './audioOverviews'
 import { isAccountDeletionActive } from './lib/accountDeletionTombstone'
 import { prepareSearchReservationForAccountDeletion } from './learnV2Search'
 import { ADAPTIVE_LEARN_ACCOUNT_DELETE_ORDER } from '../shared/adaptive-learn-storage-manifest'
+import { privateAdaptiveArtifactR2Key, queueAdaptiveArtifactDeletion } from './lib/learnAdaptiveArtifacts'
 
 export { isAccountDeletionActive } from './lib/accountDeletionTombstone'
 
@@ -374,6 +375,15 @@ async function deleteLearnV2Table<TableName extends LearnV2Table>(ctx: MutationC
 }
 
 async function deleteLearnV2Batch(ctx: MutationCtx, job: AccountDeletionJob) {
+  const artifacts = await ctx.db.query('learningThreadArtifacts')
+    .withIndex('by_userId', q => q.eq('userId', job.userId)).take(DELETE_BATCH_SIZE)
+  if (artifacts.length > 0) {
+    let awaitingRemote = false
+    for (const artifact of artifacts) if (!await queueAdaptiveArtifactDeletion(ctx, artifact)) awaitingRemote = true
+    await ctx.db.patch(job._id, { updatedAt: Date.now() })
+    await scheduleDeletionBatch(ctx, job.userId, awaitingRemote ? 60_000 : 0)
+    return
+  }
   for (const table of LEARN_V2_DELETE_ORDER) {
     if (await deleteLearnV2Table(ctx, table, job.userId)) { await continuePhase(ctx, job); return }
   }
@@ -852,6 +862,20 @@ export const getPendingCleanup = internalQuery({
 
 async function removePendingCleanupImpl(ctx: MutationCtx, row: PendingCleanupRow) {
   let overviewDeletionToResume: { overviewId: Doc<'audioOverviews'>['_id'], userId: string } | null = null
+  if (row.learningThreadArtifactId) {
+    const artifact = await ctx.db.get(row.learningThreadArtifactId)
+    if (artifact) {
+      if (row.kind !== 'r2' || row.documentId !== String(artifact._id)
+        || artifact.userId !== row.userId || artifact.status !== 'deleted' || artifact.r2ObjectKey !== row.r2Key
+        || row.r2Key !== await privateAdaptiveArtifactR2Key(row.userId, artifact._id)) throw new Error('Artifact cleanup ownership mismatch')
+      await ctx.db.delete(artifact._id)
+      const deletionJob = await ctx.db.query('learnAdaptiveThreadDeletionJobs')
+        .withIndex('by_userId_and_threadId', q => q.eq('userId', row.userId).eq('threadId', artifact.threadId)).unique()
+      if (deletionJob && deletionJob.status !== 'failed') await ctx.scheduler.runAfter(0, internal.learnAdaptiveCommands.runThreadDeletionJob, { jobId: deletionJob._id })
+      const accountJob = await findDeletionJob(ctx, row.userId)
+      if (accountJob?.status === 'active' && accountJob.phase === 'learnV2') await ctx.scheduler.runAfter(0, internal.accountDeletion.runDeletionBatch, { userId: row.userId })
+    }
+  }
   if (row.audioArtifactId) {
     const artifact = await ctx.db.get(row.audioArtifactId)
     if (artifact

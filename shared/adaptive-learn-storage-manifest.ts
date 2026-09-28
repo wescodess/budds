@@ -12,6 +12,13 @@ import { CLARIFICATION_TEMPLATE_VERSION, INITIAL_DECISION_VERSION } from './lear
 
 export const ADAPTIVE_LEARN_STORAGE_MANIFEST = [
   {
+    table: 'learningThreadArtifacts',
+    ownerIndex: 'by_userId',
+    parentIndex: 'by_userId_and_threadId_and_updatedAt',
+    export: 'redacted_bounded',
+    accountDeletion: 'r2_then_delete',
+  },
+  {
     table: 'learnActivityOverrides',
     ownerIndex: 'by_userId',
     parentIndex: 'by_userId_and_threadId_and_createdAt',
@@ -63,7 +70,7 @@ export const ADAPTIVE_LEARN_STORAGE_MANIFEST = [
 ] as const
 
 export const ADAPTIVE_LEARN_ACCOUNT_DELETE_ORDER = ADAPTIVE_LEARN_STORAGE_MANIFEST.map(entry => entry.table)
-export const ADAPTIVE_LEARN_EXPORT_COLLECTIONS = ['learningThreads', 'learningThreadActivities', 'learnActivityEvidenceLinks', 'learnActivityEvents', 'learnActivityCommandReceipts', 'learnAdaptiveThreadDeletionJobs', 'learnActivityOverrides'] as const
+export const ADAPTIVE_LEARN_EXPORT_COLLECTIONS = ['learningThreads', 'learningThreadActivities', 'learningThreadArtifacts', 'learnActivityEvidenceLinks', 'learnActivityEvents', 'learnActivityCommandReceipts', 'learnAdaptiveThreadDeletionJobs', 'learnActivityOverrides'] as const
 export const ADAPTIVE_ACTIVITY_STORAGE_REGISTRY = [
   { type: 'cited_explanation', allowedActions: ['continue', 'inspect_source', 'ask_for_example'], testId: 'learn-primitive-cited-explanation', inputProps: ['heading', 'explanation', 'sourceRefs'], storedProps: ['heading', 'explanation', 'sourceRefs'] },
   { type: 'diagnostic_prompt', allowedActions: ['submit_response'], testId: 'learn-primitive-diagnostic-prompt', inputProps: ['prompt', 'responseFormat', 'assistance'], storedProps: ['prompt', 'responseFormat', 'assistance'] },
@@ -286,6 +293,20 @@ export const learnActivityEvidenceLinkFields = {
   boundaryOrdinal: v.number(),
   invalidatedAt: v.optional(v.number()),
   createdAt: v.number(),
+}
+
+export const learningThreadArtifactFields = {
+  userId: v.string(),
+  threadId: v.id('learningThreads'),
+  activityId: v.id('learningThreadActivities'),
+  artifactKind: v.union(v.literal('note'), v.literal('plan'), v.literal('draft'), v.literal('answer'), v.literal('other')),
+  revision: v.number(),
+  title: v.string(),
+  summary: v.string(),
+  r2ObjectKey: v.optional(v.string()),
+  status: v.union(v.literal('draft'), v.literal('saved'), v.literal('deleted')),
+  createdAt: v.number(),
+  updatedAt: v.number(),
 }
 
 export const learnActivityOverrideFields = {
