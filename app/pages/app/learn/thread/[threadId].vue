@@ -169,7 +169,7 @@ async function requestDocumentRecord() {
 function retryDocumentRecord() { if (pendingRecord.value) void runDocumentRecord(pendingRecord.value) }
 const convertedContributionIds = computed(() => new Set([
   thread.value?.currentActivity?.attribution?.contributionId,
-  ...(thread.value?.history ?? []).map((item: { attribution?: { contributionId?: string } }) => item.attribution?.contributionId),
+  ...(thread.value?.history ?? []).map((item: { attribution?: { contributionId: string } | null }) => item.attribution?.contributionId),
   ...locallyConvertedContributionIds.value,
 ].filter((id): id is string => typeof id === 'string')))
 const conversionMutation = import.meta.client ? useConvexMutation(api.learnAdaptive.convertContributionToActivity) : { mutate: async (_: unknown) => ({ kind: 'blocked' }) }
