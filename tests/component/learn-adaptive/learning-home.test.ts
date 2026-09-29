@@ -6,6 +6,10 @@ import { nextTick } from 'vue'
 const currentUser = ref<{ _id: string } | null>({ _id: 'owner_1' })
 const folders = ref([{ _id: 'folder_1', name: 'Proofs' }])
 const documents = ref([{ _id: 'document_1', folderId: 'folder_1', filename: 'proof.pdf', status: 'success' }])
+const documentSubscriptions = vi.fn((_reference: unknown, _args: unknown, callback: (value: typeof documents.value) => void) => {
+  callback(documents.value)
+  return vi.fn()
+})
 const resumeCandidates = ref<Array<{ ownerId: string, threadId: string, outcome: string, reason: string, unresolvedPoint: string | null, nextAction: { label: string }, reviewCapability?: string }>>([])
 const historyPage = vi.fn(async ({ cursor }: { cursor: string | null }) => cursor
   ? { page: [{ threadId: 'thread_old', outcome: 'Older work', lifecycle: 'ended', updatedAt: 1 }], continueCursor: '', isDone: true }
@@ -17,7 +21,7 @@ mockNuxtImport('useConvexQuery', () => (reference: unknown) => {
   if (name?.includes('listResumeCandidates')) return { data: resumeCandidates }
   return { data: name?.includes('listDocumentsByFolder') ? documents : folders }
 })
-mockNuxtImport('useConvex', () => () => ({ query: (_reference: unknown, args: { cursor: string | null }) => historyPage(args) }))
+mockNuxtImport('useConvex', () => () => ({ query: (_reference: unknown, args: { cursor: string | null }) => historyPage(args), onUpdate: documentSubscriptions }))
 
 const path = ['~', 'components', 'learn-adaptive', 'LearningHome.vue'].join('/')
 const ordinaryKey = (owner = 'owner_1') => `budds.learn.adaptive-draft.v1:${owner}`
@@ -30,6 +34,7 @@ describe('need-first LearningHome', () => {
     currentUser.value = { _id: 'owner_1' }
     resumeCandidates.value = []
     historyPage.mockClear()
+    documentSubscriptions.mockClear()
   })
   async function mount(props: Record<string, unknown> = {}) {
     const component = await import(path)
@@ -83,6 +88,15 @@ describe('need-first LearningHome', () => {
     await wrapper.get('[data-testid="learn-adaptive-need"]').setValue('Help me understand these notes')
     await wrapper.get('[data-testid="learn-adaptive-outcome"]').setValue('Explain the key idea in my own words')
   }
+
+  it('does not subscribe to documents without a selected folder', async () => {
+    const wrapper = await mount()
+    expect(documentSubscriptions).not.toHaveBeenCalled()
+    await wrapper.get('input[type="radio"][value="document"]').setValue()
+    expect(documentSubscriptions).not.toHaveBeenCalled()
+    await wrapper.get('[data-testid="learn-adaptive-document-folder"]').setValue('folder_1')
+    await vi.waitFor(() => expect(documentSubscriptions).toHaveBeenCalledTimes(1))
+  })
 
   it('presents the ranked resume target and its unresolved point before the new goal form', async () => {
     resumeCandidates.value = [{ ownerId: 'owner_1', threadId: 'thread_1', outcome: 'Explain orbital motion', reason: 'unfinished_activity', unresolvedPoint: 'Why does the orbit curve?', nextAction: { label: 'Explain the orbit' } }]

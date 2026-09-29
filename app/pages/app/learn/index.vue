@@ -17,7 +17,7 @@ const prepareDecisionMutation = import.meta.client ? useConvexMutation(api.learn
 const resolveClarificationMutation = import.meta.client ? useConvexMutation(api.learnAdaptiveClarifications.resolveClarification) : { mutate: async () => null }
 const setIntentMutation = import.meta.client ? useConvexMutation(api.learnAdaptive.setIntent) : { mutate: async () => null }
 const convex = import.meta.client ? useConvex() : null
-const userQuery = import.meta.client ? useConvexQuery(api.users.getUser, {}) : { data: ref<{ _id: string } | null>(null) }
+const userQuery = import.meta.client ? useConvexQuery(api.users.getUser, {}, { ssr: false }) : { data: ref<{ _id: string } | null>(null) }
 const readyTodayQuery = import.meta.client ? useConvexQuery(api.learnV2Today.getToday, {}, { enabled: adaptiveAllowed }) : { data: ref(null) }
 const attachReadyMutation = import.meta.client ? useConvexMutation(api.learnAdaptiveCanvas.attachReadySession) : { mutate: async () => null }
 const readyToday = computed(() => readyTodayQuery.data.value as { status: string, sessionId?: string, sessionRevision?: number, objective?: { title: string } } | null)
@@ -181,7 +181,10 @@ async function continueReadySession() {
 async function createNeedDraft(payload: DraftPayload) {
   const dispatchOwnerId = currentOwnerId.value
   const dispatchEpoch = ownerEpoch.value
-  if (!dispatchOwnerId) return
+  if (!dispatchOwnerId) {
+    draftError.value = 'Your account is still loading. Your goal remains here; try again in a moment.'
+    return
+  }
   const isCurrentDispatch = () => currentOwnerId.value === dispatchOwnerId && ownerEpoch.value === dispatchEpoch
   draftBusy.value = true
   draftError.value = null
@@ -280,7 +283,7 @@ async function selectThreadIntent(intent: Intent) {
 }
 </script>
 <template>
-  <main>
+  <main :data-owner-ready="currentOwnerId ? 'true' : 'false'">
     <section v-if="checkingAccess || checkingAdaptiveAccess" class="mx-auto max-w-2xl p-6" aria-live="polite"><h1 class="font-dm-sans text-2xl font-bold">Learn</h1><p class="mt-2 text-muted-foreground">Checking access…</p></section>
     <section v-else-if="!allowed" class="mx-auto max-w-2xl p-6"><h1 class="font-dm-sans text-2xl font-bold">Learn</h1><p class="mt-2 text-muted-foreground">This learning experience is not available for this account.</p></section>
     <template v-else-if="adaptiveAllowed && !legacyV2Mode">

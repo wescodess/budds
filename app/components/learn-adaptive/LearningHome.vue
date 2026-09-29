@@ -15,6 +15,7 @@ type Document = { _id: string, folderId: string, filename: string, status: strin
 type Stored<T> = { savedAt: number, value: T }
 type ThreadHistoryRow = { threadId: string, outcome: string, lifecycle: string, updatedAt: number }
 type ThreadHistoryPage = { page: ThreadHistoryRow[], continueCursor: string, isDone: boolean }
+type ResumeCandidate = { ownerId: string, threadId: string, outcome: string, reason: string, unresolvedPoint: string | null, nextAction: { label: string }, reviewCapability?: string }
 
 const props = withDefaults(defineProps<{ busy?: boolean, serverError?: string | null, acknowledgedRequestKey?: string | null }>(), { busy: false, serverError: null, acknowledgedRequestKey: null })
 const emit = defineEmits<{ start: [payload: StartPayload]; resume: [threadId: string]; legacyHandoff: [route: string] }>()
@@ -50,14 +51,19 @@ const userQuery = import.meta.client ? useConvexQuery(api.users.getUser, {}) : {
 const convex = import.meta.client ? useConvex() : null
 const resumeQuery = import.meta.client ? useConvexQuery(api.learnAdaptive.listResumeCandidates, {}) : { data: ref([]) }
 const foldersQuery = import.meta.client ? useConvexQuery(api.folders.listAllFolders, {}) : { data: ref<Folder[]>([]) }
-const documentArgs = computed(() => ({ folderId: documentFolderId.value as never }))
-const documentsQuery = import.meta.client
-  ? useConvexQuery(api.documents.listDocumentsByFolder, documentArgs, { enabled: computed(() => sourceKind.value === 'document' && !!documentFolderId.value) })
-  : { data: ref<Document[]>([]) }
+const documentRows = ref<Document[]>([])
+watch([sourceKind, documentFolderId], ([kind, selectedFolder], _previous, onCleanup) => {
+  documentRows.value = []
+  if (!convex || kind !== 'document' || !selectedFolder) return
+  const unsubscribe = convex.onUpdate(api.documents.listDocumentsByFolder, { folderId: selectedFolder as never }, (rows: Document[]) => {
+    documentRows.value = rows as Document[]
+  })
+  onCleanup(unsubscribe)
+}, { immediate: true })
 const ownerId = computed(() => userQuery.data.value?._id ? String(userQuery.data.value._id) : null)
 const folders = computed(() => (foldersQuery.data.value ?? []) as Folder[])
-const documents = computed(() => ((documentsQuery.data.value ?? []) as Document[]).filter(document => document.status === 'success'))
-const resumeCandidates = computed(() => ownerId.value ? (resumeQuery.data.value ?? []).filter(candidate => candidate.ownerId === ownerId.value) : [])
+const documents = computed(() => documentRows.value.filter(document => document.status === 'success'))
+const resumeCandidates = computed(() => ownerId.value ? ((resumeQuery.data.value ?? []) as ResumeCandidate[]).filter(candidate => candidate.ownerId === ownerId.value) : [])
 const primaryResume = computed(() => resumeCandidates.value[0] ?? null)
 const worthRevisiting = computed(() => resumeCandidates.value.find(candidate => candidate.reviewCapability
   && (candidate.threadId !== primaryResume.value?.threadId || primaryResume.value.reason !== 'needs_review')) ?? null)
@@ -242,7 +248,7 @@ function discardPaste() {
 </script>
 
 <template>
-  <section class="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6" data-testid="learn-adaptive-home">
+  <section class="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6" data-testid="learn-adaptive-home" :data-hydrated="mounted && !!ownerId && loadedOwnerId === ownerId ? 'true' : 'false'">
     <header><p class="font-inter text-xs uppercase tracking-wide text-primary">Learn anything</p><h1 class="mt-2 font-dm-sans text-3xl font-bold">What do you need to understand or do?</h1><p class="mt-2 text-sm text-muted-foreground">Start with the real need. You do not need a course, rubric, schedule, or Calendar connection.</p></header>
     <section v-if="primaryResume" class="mt-6 rounded-xl border border-border bg-card p-4" aria-labelledby="learn-resume-heading" data-testid="learn-adaptive-primary-resume">
       <h2 id="learn-resume-heading" class="font-dm-sans text-xl font-semibold">Resume</h2>

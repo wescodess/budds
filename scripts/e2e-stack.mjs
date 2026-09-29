@@ -9,6 +9,7 @@ const root = process.cwd()
 const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
 const token = process.env.BUDDS_E2E_AUTH_TOKEN || 'e2e-local-token-please-do-not-use-outside-tests'
 const baseUrl = assertLoopbackUrl(process.env.BUDDS_E2E_BASE_URL || 'http://127.0.0.1:3102', 'BUDDS_E2E_BASE_URL')
+const realAdaptiveCanvas = process.env.BUDDS_E2E_REAL_ADAPTIVE_CANVAS === 'true'
 
 if (process.env.NODE_ENV === 'production' || process.env.CONVEX_DEPLOY_KEY || process.env.CF_PAGES_ENVIRONMENT) throw new Error('E2E stack refuses production mode, Cloudflare Pages environments, and Convex deploy keys')
 if (process.env.BUDDS_E2E_CONVEX_URL) throw new Error('BUDDS_E2E_CONVEX_URL is unsupported: the runner creates its own disposable local Convex deployment')
@@ -128,7 +129,7 @@ async function main() {
   await startConvex(isolatedRoot)
   await waitForLocalConvex(isolatedRoot)
 
-  nuxt = spawn(pnpm, ['exec', 'nuxt', 'dev', '--extends', './e2e/canvas-layer', '--host', '127.0.0.1', '--port', new URL(baseUrl).port || '3102'], {
+  nuxt = spawn(pnpm, ['exec', 'nuxt', 'dev', ...(realAdaptiveCanvas ? [] : ['--extends', './e2e/canvas-layer']), '--host', '127.0.0.1', '--port', new URL(baseUrl).port || '3102'], {
     cwd: root,
     env: { ...inheritedEnv, NODE_ENV: 'test', BUDDS_E2E_MODE: 'true', BUDDS_E2E_BASE_URL: baseUrl, BUDDS_E2E_AUTH_TOKEN: token, LEARN_V2_ENABLED: 'true', CONVEX_URL: convexUrl, NUXT_PUBLIC_CONVEX_URL: convexUrl, AUTH_PROXY_TARGET_URL: convexSiteUrl, CONVEX_SITE_URL: convexSiteUrl, NUXT_PUBLIC_SITE_URL: baseUrl, SITE_URL: baseUrl },
     stdio: 'inherit',

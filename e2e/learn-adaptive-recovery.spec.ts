@@ -325,9 +325,9 @@ test.describe('static Canvas projections in real Chromium', () => {
   }
 })
 
-// The disposable E2E account has no adaptive entitlement. This exercises the
-// real route's denied recovery boundary, without manufacturing a Canvas state.
-test('an unavailable learning thread offers keyboard-operable recovery at each viewport', async ({ page, request }) => {
+// The disposable E2E account has local Adaptive access, but this thread link
+// contains an invalid ID. Exercise the real route's unavailable recovery boundary.
+test('an invalid learning thread link offers keyboard-operable recovery at each viewport', async ({ page, request }) => {
   test.setTimeout(3 * 60_000)
   const identity = {
     email: `adaptive-recovery-${Date.now()}@e2e.budds.invalid`,
@@ -357,9 +357,9 @@ test('an unavailable learning thread offers keyboard-operable recovery at each v
     await page.emulateMedia({ reducedMotion: 'reduce', forcedColors: 'active' })
     await page.goto('/app/learn/thread/unavailable-e2e-thread')
 
-    const boundary = page.getByTestId('learn-adaptive-thread-denied')
-    await expect(boundary, `${viewport.name}: access boundary`).toBeVisible()
-    await expect(boundary.getByRole('status')).toHaveText('This learning thread is not available for this account.')
+    const boundary = page.getByTestId('learn-adaptive-thread-unavailable')
+    await expect(boundary, `${viewport.name}: unavailable boundary`).toBeVisible()
+    await expect(boundary.getByRole('status')).toHaveText('This learning thread is unavailable.')
     await expect(page.getByTestId('learn-adaptive-canvas-frame')).toHaveCount(0)
 
     const recovery = boundary.getByRole('link', { name: 'Back to Learn' })
@@ -381,6 +381,6 @@ test('an unavailable learning thread offers keyboard-operable recovery at each v
     await expect(recovery).toBeFocused()
     await page.keyboard.press('Enter')
     await expect(page).toHaveURL(/\/app\/learn(?:\?.*)?$/)
-    await expect(page.getByTestId('learn-adaptive-thread-denied')).toHaveCount(0)
+    await expect(page.getByTestId('learn-adaptive-thread-unavailable')).toHaveCount(0)
   }
 })
