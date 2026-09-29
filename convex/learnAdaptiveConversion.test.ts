@@ -98,13 +98,74 @@ test('a changed source remains visible as changed on an existing attributed acti
     .toMatchObject({ contributionId, sourceStatus: 'source_revision_changed' })
 })
 
-test('accepted source snapshot alone cannot create a factual activity', async () => {
+test('an accepted classification without a linked snapshot cannot create a factual activity', async () => {
   const { t, owner, threadId, contributionId } = await fixture()
   await t.run(ctx => ctx.db.patch(contributionId, { classification: 'accepted_evidence' }))
   expect(await owner.mutation(api.learnAdaptive.convertContributionToActivity, {
     threadId, contributionId, expectedRevision: 1, idempotencyKey: 'conversion-factual-001',
-  })).toMatchObject({ kind: 'blocked', code: 'factual_authority_unavailable' })
+  })).toMatchObject({ kind: 'blocked', code: 'evidence_unavailable' })
   expect((await owner.query(api.learnAdaptive.getThread, { threadId }))?.currentActivity).toBeNull()
+})
+
+test.each([
+  { name: 'conflicting', patch: { conflictStatus: 'unresolved' as const }, integrity: 'conflict' },
+  { name: 'stale', patch: { effectiveStatus: 'unavailable' as const }, integrity: 'unavailable' },
+  { name: 'rights-revoked', patch: { rightsStatus: 'prohibited' as const }, integrity: 'unavailable' },
+])('a $name linked snapshot blocks conversion and remains visible in the thread contribution projection', async ({ patch, integrity }) => {
+  const { t, owner, threadId, messageId } = await fixture()
+  const documentId = await t.run(async ctx => {
+    const message = await ctx.db.get(messageId)
+    const conversation = await ctx.db.get(message!.conversationId)
+    return await ctx.db.insert('documents', { userId: ownerId, folderId: conversation!.folderId,
+      filename: 'evidence.pdf', status: 'success', fileSize: 100, sourceRevision: 'document-v1', contentHash: 'hash-v1' })
+  })
+  const source = await owner.query(api.learnAdaptive.inspectContributionSource, { source: { feature: 'documents', id: documentId } })
+  const snapshotId = await t.run(async ctx => {
+    const document = await ctx.db.get(documentId)
+    const learningVoidId = await ctx.db.insert('learningVoids', {
+      userId: ownerId, folderId: document!.folderId, title: 'Evidence', status: 'draft', revision: 1, createdAt: 1, updatedAt: 1,
+    })
+    const sourceIdentityId = await ctx.db.insert('learnSourceIdentities', {
+      userId: ownerId, learningVoidId, origin: 'folder_document', externalKey: `document:${documentId}`, folderDocumentId: documentId,
+    })
+    const id = await ctx.db.insert('learnSourceSnapshots', {
+      userId: ownerId, learningVoidId, sourceIdentityId, revision: 1, status: 'user_accepted',
+      effectiveStatus: 'user_accepted', rightsStatus: 'permitted', conflictStatus: 'clear',
+      sourceRevision: 'document-v1', contentHash: 'hash-v1', createdAt: 1,
+    })
+    await ctx.db.insert('learnSourceExcerpts', {
+      userId: ownerId, sourceSnapshotId: id, locator: 'section-1', excerpt: 'Accepted material', rightsStatus: 'permitted',
+    })
+    return id
+  })
+  const recorded = await owner.mutation(api.learnAdaptive.recordContribution, {
+    threadId, source: { feature: 'documents', id: documentId, revision: source.revision! },
+    contributionKind: 'context', classification: 'accepted_evidence', evidenceSnapshotId: snapshotId,
+    metadata: {}, expectedRevision: 1, idempotencyKey: `conversion-${integrity}-${documentId}`,
+  })
+  if (recorded.kind !== 'recorded') throw new Error('Expected accepted evidence contribution')
+  expect((await owner.query(api.learnAdaptive.listThreadContributions, {
+    threadId, paginationOpts: { numItems: 10, cursor: null },
+  })).page).toContainEqual(expect.objectContaining({ _id: recorded.contributionId, evidenceIntegrity: 'accepted' }))
+  expect(await owner.mutation(api.learnAdaptive.convertContributionToActivity, {
+    threadId, contributionId: recorded.contributionId, expectedRevision: 1,
+    idempotencyKey: `conversion-valid-evidence-${documentId}`,
+  })).toMatchObject({ kind: 'blocked', code: 'factual_authority_unavailable' })
+  await t.run(ctx => ctx.db.patch(snapshotId, patch))
+  expect(await owner.mutation(api.learnAdaptive.convertContributionToActivity, {
+    threadId, contributionId: recorded.contributionId, expectedRevision: 1,
+    idempotencyKey: `conversion-${integrity}-activity-${documentId}`,
+  })).toMatchObject({ kind: 'blocked', code: integrity === 'conflict' ? 'evidence_conflict' : 'evidence_unavailable' })
+  expect((await owner.query(api.learnAdaptive.getThread, { threadId }))?.currentActivity).toBeNull()
+  const listed = await owner.query(api.learnAdaptive.listThreadContributions, {
+    threadId, paginationOpts: { numItems: 10, cursor: null },
+  })
+  expect(listed.page).toContainEqual(expect.objectContaining({ _id: recorded.contributionId,
+    classification: 'accepted_evidence', evidenceIntegrity: integrity }))
+  expect(JSON.stringify(listed)).not.toContain('Accepted material')
+  const events = await t.run(ctx => ctx.db.query('learnActivityEvents')
+    .withIndex('by_userId_and_eventType_and_occurredAt', q => q.eq('userId', ownerId).eq('eventType', 'cross_feature_activity_invalidated')).take(10))
+  expect(events).toContainEqual(expect.objectContaining({ reasonCode: integrity === 'conflict' ? 'evidence_conflict' : 'evidence_unavailable' }))
 })
 
 test('a second contribution makes a new boundary and retains the prior attribution', async () => {
