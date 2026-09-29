@@ -279,6 +279,7 @@ export const listByFolder = query({
           .take(MAX_QUIZ_QUESTIONS)
         return {
           _id: row._id,
+          folderId: row.folderId,
           _creationTime: row._creationTime,
           title: row.title,
           status: row.status,

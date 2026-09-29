@@ -11,6 +11,7 @@ const convert = vi.fn()
 const record = vi.fn()
 const inspect = vi.fn()
 const documents = ref<Record<string, unknown>[]>([])
+const quizzes = ref<Record<string, unknown>[]>([])
 const requestedRoute = reactive({ params: { threadId: 'thread_1' }, query: {} as Record<string, string> })
 
 mockNuxtImport('useLearnAdaptiveAccess', () => () => ({ allowed, checkingAccess: ref(false) }))
@@ -25,7 +26,8 @@ mockNuxtImport('useConvexQuery', () => (reference: never) => {
   const data = name === 'users:getUser' ? user
     : name === 'learnAdaptive:getThread' ? projection
       : name === 'learnAdaptive:listThreadContributions' ? contributions
-        : name === 'documents:listDocumentsByFolder' ? documents : ref(null)
+        : name === 'documents:listDocumentsByFolder' ? documents
+          : name === 'quizzes:listByFolder' ? quizzes : ref(null)
   return { data, pending: ref(false) }
 })
 
@@ -51,6 +53,17 @@ describe('adaptive thread contribution conversion', () => {
     record.mockReset()
     inspect.mockReset().mockResolvedValue({ status: 'available', revision: `sha256:${'a'.repeat(64)}` })
     documents.value = []
+    quizzes.value = []
+  })
+
+  it('offers ready quiz practice from the thread folder beside document context', async () => {
+    projection.value = { ...projection.value!, thread: { ...(projection.value!.thread as Record<string, unknown>), sourceScope: { kind: 'folder', sourceId: 'folder_owned' } } }
+    quizzes.value = [{ _id: 'quiz_ready', folderId: 'folder_owned', title: 'Practice quiz', status: 'ready' }]
+    const Page = await import(path)
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
+    expect(wrapper.get('[data-testid="learn-thread-quiz-producer"]').text()).toContain('Practice quiz')
+    expect(wrapper.get('[data-testid="learn-thread-document-producer"]').exists()).toBe(true)
+    wrapper.unmount()
   })
 
   it('records the pinned document as unscored context before it appears in the existing picker', async () => {
