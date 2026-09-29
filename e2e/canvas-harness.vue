@@ -3,6 +3,7 @@ import ReadySessionCanvas from '~/components/learn-adaptive/ReadySessionCanvas.v
 import DiagnosticCanvas from '~/components/learn-adaptive/DiagnosticCanvas.vue'
 import ArtifactWorkspace from '~/components/learn-adaptive/ArtifactWorkspace.vue'
 import ReflectionNextMove from '~/components/learn-adaptive/ReflectionNextMove.vue'
+import { adaptiveRecoveryCopy } from '~~/shared/learn-adaptive-recovery'
 
 definePageMeta({ layout: false })
 
@@ -11,11 +12,12 @@ definePageMeta({ layout: false })
 const route = useRoute()
 const projectionOnly = Reflect.get(globalThis, '__buddsCanvasProjectionOnly') === true
 const kinds = ['cited_explanation', 'diagnostic_prompt', 'worked_example', 'independent_application', 'source_comparison', 'artifact_workspace', 'reflection_next_move'] as const
-const states = ['ready', 'active', 'completed', 'fallback', 'blocked', 'preparing', 'offline'] as const
+const states = ['ready', 'active', 'completed', 'fallback', 'blocked', 'preparing', 'offline', 'stale', 'invalidated'] as const
 const kind = computed(() => kinds.find(value => value === route.query.kind) ?? kinds[0])
 const state = computed(() => states.find(value => value === route.query.state) ?? states[0])
 const fixtureId = computed(() => `browser-${kind.value}`)
 const fallback = { title: 'Activity unavailable', body: 'Your work remains available. Return to Learn to continue safely.', testId: 'learn-activity-fallback', primaryAction: { label: 'Back to Learn' } }
+const evidenceRecovery = computed(() => state.value === 'stale' || state.value === 'invalidated' ? adaptiveRecoveryCopy(state.value) : null)
 const contractVersion = 'learn-adaptive.activity-contract.v1'
 const rendererVersion = 'learn-adaptive.renderer.v1'
 const sourceRefs = ['source_1', 'source_2']
@@ -45,23 +47,23 @@ const primitive = computed(() => {
 const common = computed(() => ({ ownerId: 'browser-fixture-owner', thread: { id: `browser-${kind.value}-thread`, revision: 3, outcome: 'Practice this topic', intent: 'understand', lifecycle: 'active' } }))
 const readyCanvas = computed(() => ({
   ...common.value,
-  status: state.value === 'completed' ? 'feedback' : state.value === 'blocked' || state.value === 'preparing' ? 'blocked' : state.value === 'ready' ? 'ready' : 'started',
+  status: state.value === 'completed' ? 'feedback' : state.value === 'blocked' || state.value === 'preparing' || evidenceRecovery.value ? 'blocked' : state.value === 'ready' ? 'ready' : 'started',
   activity: {
     id: fixtureId.value, status: 'eligible', purpose: 'Practice one bounded activity.', reasonCode: 'browser_fixture', planRevision: state.value === 'fallback' ? 0 : 1,
-    evidenceScope: { version: 'learn-adaptive.canvas-evidence-scope.v1', integrityState: 'accepted', sourceRefs },
+    evidenceScope: { version: 'learn-adaptive.canvas-evidence-scope.v1', integrityState: evidenceRecovery.value ? 'blocked' : 'accepted', sourceRefs },
     primitive: primitive.value, fallback,
     requiredAction: { kind: descriptors[kind.value].action, label: descriptors[kind.value].label },
   },
   session: { studySessionId: 'browser-fixture-session', revision: 2, contentRevision: 1, planRecordRevision: 1, blueprintRecordRevision: 1, scheduledStartAt: 0, scheduledEndAt: null, timezone: 'UTC' },
   responsePrompt: kind.value === 'independent_application' ? descriptors.independent_application.props.prompt : 'Explain the result in your own words.',
-  recoveryState: state.value === 'preparing' ? 'preparing' : state.value === 'blocked' ? 'blocked' : null,
-  recovery: { title: state.value === 'preparing' ? 'Preparing activity' : 'Activity blocked', body: 'Your response remains available. Check the source in Learn.', action: 'Back to Learn' },
+  recoveryState: evidenceRecovery.value ? state.value : state.value === 'preparing' ? 'preparing' : state.value === 'blocked' ? 'blocked' : null,
+  recovery: evidenceRecovery.value ?? { title: state.value === 'preparing' ? 'Preparing activity' : 'Activity blocked', body: 'Your response remains available. Check the source in Learn.', action: 'Back to Learn' },
   savedResponse: state.value === 'completed' ? { response: 'A saved fixture response.', confidence: 3 } : null,
 }))
 const diagnosticCanvas = computed(() => ({
   ...common.value,
-  status: state.value === 'blocked' || state.value === 'preparing' ? 'blocked' : 'eligible', evidenceState: 'non_factual', decisionPending: false,
-  recovery: { title: state.value === 'blocked' ? 'Activity blocked' : 'Starting point',
+  status: state.value === 'blocked' || state.value === 'preparing' ? 'blocked' : 'eligible', evidenceState: evidenceRecovery.value ? state.value : 'non_factual', decisionPending: false,
+  recovery: evidenceRecovery.value ?? { title: state.value === 'blocked' ? 'Activity blocked' : 'Starting point',
     body: state.value === 'blocked' ? 'Your response remains available. Return to Learn to continue safely.' : 'This response is not scored.',
     action: 'Back to Learn' },
   activity: { id: fixtureId.value, planRevision: state.value === 'fallback' ? 0 : 1, status: 'eligible', primitive: primitive.value,
@@ -70,12 +72,12 @@ const diagnosticCanvas = computed(() => ({
 }))
 const artifactCanvas = computed(() => ({
   ...common.value,
-  status: state.value === 'blocked' ? 'blocked' : 'eligible',
+  status: state.value === 'blocked' || evidenceRecovery.value ? 'blocked' : 'eligible', recovery: evidenceRecovery.value,
   activity: { id: fixtureId.value, planRevision: state.value === 'fallback' ? 0 : 1, status: 'eligible', primitive: primitive.value, fallback },
 }))
 const reflectionCanvas = computed(() => ({
   ...common.value,
-  status: state.value === 'blocked' ? 'blocked' : state.value === 'completed' ? 'completed' : 'eligible',
+  status: state.value === 'blocked' || evidenceRecovery.value ? 'blocked' : state.value === 'completed' ? 'completed' : 'eligible', recovery: evidenceRecovery.value,
   decision: state.value === 'completed' ? { outcome: 'accepted', nextMove: 'Try one independent example.', decidedAt: 1 } : null,
   activity: { id: fixtureId.value, planRevision: state.value === 'fallback' ? 0 : 1, status: 'eligible', purpose: 'Choose what to do next.', reason: 'A guided step has ended.', primitive: primitive.value, fallback },
 }))
@@ -92,7 +94,7 @@ onMounted(() => { hydrated.value = true })
     <p v-if="left" role="status">Back to Learn was requested.</p>
     <button v-if="!visible" type="button" class="mt-4 min-h-11 rounded-lg border px-4" data-testid="show-current-activity" @click="visible = true">Show current activity</button>
     <section v-show="visible" class="mt-6 rounded-xl bg-[var(--learn-activity-surface)] p-4" data-testid="learn-adaptive-canvas-frame" aria-label="Current learning activity">
-      <ReadySessionCanvas v-if="['cited_explanation', 'worked_example', 'independent_application', 'source_comparison'].includes(kind)" :key="`${kind}:${state}`" :canvas="readyCanvas as never" :show-header="false" :active="visible && state === 'blocked'" @leave="left = true" />
+      <ReadySessionCanvas v-if="['cited_explanation', 'worked_example', 'independent_application', 'source_comparison'].includes(kind)" :key="`${kind}:${state}`" :canvas="readyCanvas as never" :show-header="false" :active="visible && (state === 'blocked' || Boolean(evidenceRecovery))" @leave="left = true" />
       <DiagnosticCanvas v-else-if="kind === 'diagnostic_prompt'" :key="`${kind}:${state}`" :canvas="diagnosticCanvas as never" :show-header="false" :active="visible && state === 'blocked'" @leave="left = true" />
       <ArtifactWorkspace v-else-if="kind === 'artifact_workspace'" :key="`${kind}:${state}`" :canvas="artifactCanvas as never" :active="visible" @leave="left = true" />
       <ReflectionNextMove v-else :key="`${kind}:${state}`" :canvas="reflectionCanvas as never" :active="visible" @leave="left = true" />
