@@ -72,6 +72,22 @@ test('owner converts a contribution into an attributed, replayable, non-scoring 
   expect(counts).toEqual({ attempts: 0, activities: 1 })
 })
 
+test('a second conversion request for one contribution cannot create another authority boundary', async () => {
+  const { owner, threadId, contributionId } = await fixture()
+  const first = await owner.mutation(api.learnAdaptive.convertContributionToActivity, {
+    threadId, contributionId, expectedRevision: 1, idempotencyKey: 'conversion-one-origin-first-001',
+  })
+  if (first.kind !== 'ok') throw new Error('Expected the first conversion')
+  expect(await owner.mutation(api.learnAdaptive.convertContributionToActivity, {
+    threadId, contributionId, expectedRevision: first.revision, idempotencyKey: 'conversion-one-origin-second-001',
+  })).toMatchObject({ kind: 'blocked', code: 'contribution_already_converted' })
+  const projected = await owner.query(api.learnAdaptive.getThread, { threadId })
+  expect(projected?.currentActivity).toMatchObject({ id: first.value.activityId, boundaryOrdinal: 1,
+    attribution: { contributionId } })
+  expect(projected?.history).toEqual([])
+  expect(projected?.thread.revision).toBe(first.revision)
+})
+
 test('foreign and changed sources cannot create an activity', async () => {
   const { t, owner, other, messageId, threadId, contributionId } = await fixture()
   const args = { threadId, contributionId, expectedRevision: 1, idempotencyKey: 'conversion-activity-002' }

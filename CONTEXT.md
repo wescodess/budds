@@ -97,3 +97,7 @@ _Avoid_: Automatic mastery, mastery result
 **Cross-feature Contribution**:
 A learner-authorized reference that brings prior Chat, Quiz, Flashcards, Audio Overview, or document context into a Learning Thread while retaining its origin and factual classification. It does not by itself establish mastery.
 _Avoid_: Imported memory, mastery result
+
+**Shared Activity Lineage**:
+A producer-verified, owner-scoped link showing that distinct Cross-feature Contributions refer to one authoritative activity or attempt. Shared source material or session content alone does not prove that two attempts are the same.
+_Avoid_: Client-claimed alias, matching content
