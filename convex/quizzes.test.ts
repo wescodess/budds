@@ -207,6 +207,7 @@ describe('quizzes.listByFolder', () => {
     const aList = await asUserA.query(api.quizzes.listByFolder, { folderId: folderA })
     expect(aList).toHaveLength(1)
     expect(aList[0]!.title).toBe('Alice quiz')
+    expect(aList[0]!.folderId).toBe(folderA)
     expect(aList[0]!.questionCount).toBe(2)
 
     const aTryingB = await asUserA.query(api.quizzes.listByFolder, { folderId: folderB })

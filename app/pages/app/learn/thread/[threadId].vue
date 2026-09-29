@@ -502,6 +502,11 @@ function leave() { void router.push(safeDestination.value) }
             class="mt-2 inline-flex min-h-11 items-center rounded-lg border border-border px-4 text-sm underline" @click="retryDocumentRecord">Retry same record</button>
           <p v-if="recordNotice" data-testid="learn-thread-record-notice" class="mt-2 text-sm" role="status">{{ recordNotice }}</p>
         </div>
+        <LearnAdaptiveQuizContributionPicker
+          v-if="thread.thread.sourceScope?.kind === 'folder'"
+          :key="`${ownerId}:${thread.thread.id}:${thread.thread.sourceScope.sourceId}`"
+          :thread-id="thread.thread.id" :owner-id="String(ownerId)" :folder-id="thread.thread.sourceScope.sourceId"
+          :expected-revision="thread.thread.revision" :lifecycle="thread.thread.lifecycle" />
         <p v-if="contributionsQuery.pending.value" class="mt-3 text-sm" role="status">Loading recent contributions…</p>
         <p v-else-if="contributions.length === 0" class="mt-3 text-sm text-muted-foreground">No contributions are available for this thread yet.</p>
         <ol v-else class="mt-3 space-y-3">
