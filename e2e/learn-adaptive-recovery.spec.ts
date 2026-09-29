@@ -27,6 +27,7 @@ async function visitHarness(page: Page, path: string) {
     await page.goto(path)
   }
   await expect(page.getByTestId('canvas-browser-harness')).toHaveAttribute('data-projection-only', 'true')
+  await expect(page.getByTestId('canvas-browser-harness')).toHaveAttribute('data-hydrated', 'true')
 }
 
 test.describe('static Canvas projections in real Chromium', () => {
@@ -110,6 +111,52 @@ test.describe('static Canvas projections in real Chromium', () => {
     await visitHarness(page, '/__e2e/canvas-browser-harness?kind=reflection_next_move&state=completed')
     await expect(page.getByTestId('learn-reflection-completed')).toContainText('Next move accepted')
   })
+
+  for (const kind of primitives) {
+    test(`${kind} blocked recovery replaces the activity with one focused safe action`, async ({ page }) => {
+      await page.setViewportSize({ width: 375, height: 667 })
+      await visitHarness(page, `/__e2e/canvas-browser-harness?kind=${kind}&state=blocked`)
+      const harness = page.getByTestId('canvas-browser-harness')
+      const recovery = harness.getByRole('alert')
+      await expect(recovery).toBeVisible()
+      await expect(recovery).toContainText(/blocked|unavailable|needs attention/i)
+      await expect(harness.getByTestId(`learn-primitive-${kind.replaceAll('_', '-')}`)).toHaveCount(0)
+      const action = recovery.getByRole('button')
+      await expect(action).toHaveCount(1)
+      await expect(action).toHaveText(/Back to Learn|Continue safely/)
+      await expect(action).toBeFocused()
+      await expect(harness).not.toContainText(/mastery achieved|response scored/i)
+      await action.press('Enter')
+      await expect(harness.getByRole('status').filter({ hasText: 'Back to Learn was requested.' })).toBeVisible()
+    })
+  }
+
+  test('a diagnostic draft survives a blocked recovery and narrow viewport resize', async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 667 })
+    await visitHarness(page, '/__e2e/canvas-browser-harness?kind=diagnostic_prompt&state=active')
+    const draft = 'My starting point is still unfinished.'
+    await page.getByTestId('learn-diagnostic-response').fill(draft)
+    await expect.poll(() => page.evaluate(value => Object.values(sessionStorage).some(entry => entry.includes(value)), draft)).toBe(true)
+    await page.setViewportSize({ width: 375, height: 420 })
+    await expect(page.getByTestId('learn-diagnostic-response')).toHaveValue(draft)
+    await visitHarness(page, '/__e2e/canvas-browser-harness?kind=diagnostic_prompt&state=blocked')
+    await expect(page.getByTestId('learn-diagnostic-response')).toHaveCount(0)
+    await expect(page.getByTestId('learn-diagnostic-recovery')).toHaveAttribute('role', 'alert')
+    await expect(page.getByTestId('learn-diagnostic-recovery-action')).toBeFocused()
+    await visitHarness(page, '/__e2e/canvas-browser-harness?kind=diagnostic_prompt&state=active')
+    await expect(page.getByTestId('learn-diagnostic-response')).toHaveValue(draft)
+  })
+
+  for (const kind of primitives) {
+    test(`${kind} focuses recovery when returning from a hidden history view`, async ({ page }) => {
+      await visitHarness(page, `/__e2e/canvas-browser-harness?kind=${kind}&state=blocked&hidden=1`)
+      await expect(page.getByTestId('learn-adaptive-canvas-frame')).toBeHidden()
+      await page.getByTestId('show-current-activity').click()
+      const recovery = page.getByTestId('canvas-browser-harness').getByRole('alert')
+      await expect(recovery).toBeVisible()
+      await expect(recovery.getByRole('button')).toBeFocused()
+    })
+  }
 })
 
 // The disposable E2E account has no adaptive entitlement. This exercises the

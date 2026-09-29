@@ -43,6 +43,8 @@ const continueKey = ref<string | null>(null)
 const submitKey = ref<string | null>(null)
 const responseField = ref<HTMLTextAreaElement | null>(null)
 const saveAction = ref<HTMLButtonElement | null>(null)
+const recoveryAction = ref<HTMLButtonElement | null>(null)
+const blocked = computed(() => props.canvas.status === 'blocked')
 const renderAckTick = ref(0)
 const renderAckRecorded = ref(false)
 const renderAckPending = ref(false)
@@ -73,7 +75,7 @@ watch([diagnosticValidation, isOnline, () => props.canvas.activity?.id, () => pr
 }, { immediate: true })
 const saved = computed(() => props.canvas.activity?.response ?? localSaved.value)
 useAdaptiveResponseDraft(props.canvas.activity ? `learn-response:${props.canvas.ownerId}:${props.canvas.thread.id}:${props.canvas.activity.id}` : null, response, computed(() => Boolean(saved.value)))
-const canSubmit = computed(() => !!diagnostic.value && !saved.value && isOnline.value && !busy.value && response.value.trim().length > 0 && new TextEncoder().encode(response.value.trim()).byteLength <= 12_000)
+const canSubmit = computed(() => !blocked.value && !!diagnostic.value && !saved.value && isOnline.value && !busy.value && response.value.trim().length > 0 && new TextEncoder().encode(response.value.trim()).byteLength <= 12_000)
 const safeAction = computed(() => props.canvas.recovery.action)
 
 function commandKey(prefix: string) { return `${prefix}:${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}` }
@@ -87,8 +89,12 @@ function retryRenderAck() {
 }
 
 onBeforeUnmount(() => { renderAckDisposed = true; if (renderAckTimer) clearTimeout(renderAckTimer) })
-watch([diagnostic, saved, isOnline, busy, renderAckTick, () => props.active], async ([primitive, currentSaved, online, busyNow, , visible]) => {
-  if (!visible || !primitive || (currentSaved && !renderOperableSeen) || !online || busyNow || renderAckRecorded.value || renderAckPending.value || !props.canvas.activity) return
+onMounted(() => { if (blocked.value && props.active) recoveryAction.value?.focus() })
+watch([blocked, () => props.active], async ([isBlocked, active]) => {
+  if (isBlocked && active) { await nextTick(); recoveryAction.value?.focus() }
+}, { flush: 'post' })
+watch([diagnostic, saved, isOnline, busy, renderAckTick, blocked, () => props.active], async ([primitive, currentSaved, online, busyNow, , isBlocked, visible]) => {
+  if (!visible || isBlocked || !primitive || (currentSaved && !renderOperableSeen) || !online || busyNow || renderAckRecorded.value || renderAckPending.value || !props.canvas.activity) return
   renderAckPending.value = true
   try {
     await nextTick()
@@ -105,7 +111,7 @@ watch([diagnostic, saved, isOnline, busy, renderAckTick, () => props.active], as
 }, { flush: 'post', immediate: true })
 
 async function continueDraft() {
-  if (busy.value || !isOnline.value || props.canvas.activity || props.canvas.decisionPending) return
+  if (blocked.value || busy.value || !isOnline.value || props.canvas.activity || props.canvas.decisionPending) return
   busy.value = true; error.value = null
   continueKey.value ??= commandKey('adaptive-diagnostic-continue')
   try {
@@ -117,7 +123,7 @@ async function continueDraft() {
 }
 
 async function submit() {
-  if (!props.canvas.activity || busy.value || !isOnline.value || saved.value) return
+  if (blocked.value || !props.canvas.activity || busy.value || !isOnline.value || saved.value) return
   if (!canSubmit.value) { error.value = 'Add a response under 12 KB before saving.'; responseField.value?.focus(); return }
   const submission = response.value.trim()
   busy.value = true; error.value = null
@@ -138,15 +144,16 @@ async function submit() {
   <section class="w-full" data-testid="learn-diagnostic-canvas" :aria-labelledby="showHeader ? 'learn-diagnostic-title' : undefined" :aria-label="showHeader ? undefined : 'Current activity'">
     <p v-if="showHeader" class="text-xs font-medium uppercase tracking-wide text-primary">Learning thread · {{ canvas.thread.intent }}</p>
     <h1 v-if="showHeader" id="learn-diagnostic-title" class="mt-2 font-dm-sans text-3xl font-bold">{{ canvas.thread.outcome }}</h1>
-    <LearnAdaptiveWhyControls v-if="canvas.activity?.controls" :controls="canvas.activity.controls" :thread-id="canvas.thread.id" :activity-id="canvas.activity.id" :revision="threadRevision" @revision="threadRevision = $event" />
-    <div class="mt-6 rounded-xl border border-border bg-card p-5" data-testid="learn-diagnostic-recovery">
+    <LearnAdaptiveWhyControls v-if="!blocked && canvas.activity?.controls" :controls="canvas.activity.controls" :thread-id="canvas.thread.id" :activity-id="canvas.activity.id" :revision="threadRevision" @revision="threadRevision = $event" />
+    <div class="mt-6 rounded-xl border border-border bg-card p-5" data-testid="learn-diagnostic-recovery" :role="blocked ? 'alert' : undefined">
       <h2 class="font-dm-sans text-xl font-semibold">{{ canvas.recovery.title }}</h2>
-      <p class="mt-2 text-sm text-muted-foreground" role="status">{{ canvas.recovery.body }}</p>
-      <button type="button" data-testid="learn-diagnostic-recovery-action" class="mt-3 inline-flex min-h-11 items-center text-sm text-primary underline" style="min-height: 44px" @click="emit('leave')">{{ safeAction }}</button>
+      <p class="mt-2 text-sm text-muted-foreground" :role="blocked ? undefined : 'status'">{{ canvas.recovery.body }}</p>
+      <button ref="recoveryAction" type="button" data-testid="learn-diagnostic-recovery-action" class="mt-3 inline-flex min-h-11 items-center text-sm text-primary underline" style="min-height: 44px" @click="emit('leave')">{{ safeAction }}</button>
     </div>
     <p v-if="!isOnline" class="mt-4 text-sm" role="status">Reconnect to save your response.</p>
     <p v-if="error" class="mt-4 text-sm text-destructive" role="alert" data-testid="learn-diagnostic-error">{{ error }}</p>
-    <div v-if="canvas.decisionPending" class="mt-6 rounded-xl border border-border p-5" data-testid="learn-diagnostic-decision-pending">
+    <div v-if="blocked" class="sr-only">Activity blocked; use the recovery action above.</div>
+    <div v-else-if="canvas.decisionPending" class="mt-6 rounded-xl border border-border p-5" data-testid="learn-diagnostic-decision-pending">
       Resolve or skip your initial clarification from Learn to continue.
     </div>
     <div v-else-if="!canvas.activity" class="mt-6 rounded-xl border border-border bg-card p-5" data-testid="learn-diagnostic-ready">

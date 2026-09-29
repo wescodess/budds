@@ -265,8 +265,11 @@ function inspectEvidence(event: MouseEvent) {
 }
 const renderFallback = computed(() => renderFailureCode.value ? adaptiveActivityFallbackForReason(renderFailureCode.value) : null)
 const fallbackAction = ref<HTMLButtonElement | null>(null)
-watch([renderFailureCode, () => props.canvas.status, () => props.canvas.recoveryState], async ([reasonCode, status, recoveryState]) => {
-  if (!reasonCode && (status !== 'blocked' || recoveryState === 'preparing')) return
+onMounted(() => {
+  if (props.active && (renderFailureCode.value || (props.canvas.status === 'blocked' && props.canvas.recoveryState !== 'preparing'))) fallbackAction.value?.focus()
+})
+watch([renderFailureCode, () => props.canvas.status, () => props.canvas.recoveryState, () => props.active], async ([reasonCode, status, recoveryState, active]) => {
+  if (!active || (!reasonCode && (status !== 'blocked' || recoveryState === 'preparing'))) return
   await nextTick()
   fallbackAction.value?.focus()
 })

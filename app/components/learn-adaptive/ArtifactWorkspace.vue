@@ -9,7 +9,7 @@ type Canvas = { ownerId: string, status: string, thread: { id: string, revision:
   id: string, planRevision: number, status: string, primitive: null | { contractVersion: string, rendererVersion: string, type: string, action: string, testId: string, props: unknown },
   fallback: { title: string, body: string, testId: string, primaryAction: { label: string } }
 } }
-const props = defineProps<{ canvas: Canvas, authoritativeRevision?: number }>()
+const props = withDefaults(defineProps<{ canvas: Canvas, authoritativeRevision?: number, active?: boolean }>(), { active: true })
 const emit = defineEmits<{ leave: [] }>()
 const { isOnline } = useOnlineStatus()
 const artifactQuery = import.meta.client ? useConvexQuery(api.learnAdaptive.listThreadArtifacts, computed(() => ({ threadId: props.canvas.thread.id as never }))) : { data: ref<Artifact[] | null>(null), pending: ref(false) }
@@ -156,7 +156,12 @@ function restoreDraft() {
   catch { /* Storage is optional; the server copy remains authoritative. */ }
   storageReady.value = true
 }
-onMounted(() => { restoreDraft(); restoreCommandState() })
+onMounted(async () => {
+  restoreDraft()
+  restoreCommandState()
+  await nextTick()
+  if (!workspace.value && props.active) fallbackAction.value?.focus()
+})
 watch([draftKey, () => latest.value?.id, () => latest.value?.title, () => latest.value?.summary], ([key], [previousKey]) => {
   const hasUnsavedEdits = title.value !== baselineTitle || summary.value !== baselineSummary
   if (key !== previousKey) { restoreDraft(); restoreCommandState() }
@@ -171,7 +176,11 @@ watch([title, summary], () => {
   }
   catch { /* Editing remains available when local storage is full. */ }
 })
-watch(workspace, async value => { if (value) return; await nextTick(); fallbackAction.value?.focus() })
+watch([workspace, () => props.active], async ([value, active]) => {
+  if (value || !active) return
+  await nextTick()
+  fallbackAction.value?.focus()
+})
 
 async function save(status: 'draft' | 'saved') {
   if (!workspace.value || busy.value || !isOnline.value || !listHydrated.value || latest.value?.readOnly || saveUnconfirmed.value && pendingSave.value?.status !== status) return
