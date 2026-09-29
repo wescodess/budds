@@ -141,6 +141,57 @@ async function collectUserDataForTest(asUser: TestClient): Promise<TestUserDataE
 }
 
 describe('dataExport paginated queries', () => {
+  test('exports adaptive activity events in bounded owner-scoped cursor pages', async () => {
+    const t = convexTest(schema, modules)
+    const eventIds = await t.run(async (ctx) => {
+      const insertForOwner = async (userId: string, suffix: string, count: number) => {
+        const threadId = await ctx.db.insert('learningThreads', {
+          userId, originalNeed: 'Review a concept.', intent: 'understand',
+          availableTime: '15', authorityKind: 'standalone', sourceScope: { kind: 'none' },
+          evidenceState: 'none', lifecycle: 'ready', revision: 1, createdAt: 1, updatedAt: 1,
+        })
+        const ids = []
+        for (let index = 0; index < count; index++) {
+          ids.push(await ctx.db.insert('learnActivityEvents', {
+            userId, threadId, eventType: 'activity_eligible',
+            eventVersion: 'activity_eligible.v1', taxonomyVersion: 'learn-adaptive.activity-events.v5',
+            occurredAt: index + 1, sourceVersion: 'learn-adaptive.activity-plan.v1',
+            contractVersion: 'learn-adaptive.activity-contract.v1',
+            metadata: { activityClass: 'non_factual', boundaryOrdinal: index + 1, planRevision: 1 },
+            dedupeKeyHash: `sha256:${suffix.repeat(64)}`,
+          }))
+        }
+        return ids
+      }
+      return {
+        owner: await insertForOwner(USER_A.tokenIdentifier, '1', 3),
+        other: await insertForOwner(USER_B.tokenIdentifier, '2', 1),
+      }
+    })
+    const owner = t.withIdentity(USER_A)
+    const firstPage = await owner.query(api.dataExport.getUserDataPage, {
+      collection: 'learnActivityEvents', paginationOpts: { cursor: null, numItems: 2 },
+    })
+
+    expect(firstPage.page).toHaveLength(2)
+    expect(firstPage.isDone).toBe(false)
+    expect(firstPage.page.map(event => event._id)).toHaveLength(2)
+
+    const secondPage = await owner.query(api.dataExport.getUserDataPage, {
+      collection: 'learnActivityEvents', paginationOpts: { cursor: firstPage.continueCursor, numItems: 2 },
+    })
+    expect(secondPage.page).toHaveLength(1)
+    expect(secondPage.isDone).toBe(true)
+    const returnedIds = [...firstPage.page, ...secondPage.page].map(event => event._id)
+    expect(new Set(returnedIds).size).toBe(3)
+    expect(returnedIds.sort()).toEqual(eventIds.owner.sort())
+    const otherOwnerPage = await t.withIdentity(USER_B).query(api.dataExport.getUserDataPage, {
+      collection: 'learnActivityEvents', paginationOpts: { cursor: null, numItems: 2 },
+    })
+    expect(otherOwnerPage.page.map(event => event._id)).toEqual(eventIds.other)
+    expect(otherOwnerPage.isDone).toBe(true)
+  })
+
   test('exports an owner-only completed non-factual diagnostic response', async () => {
     const t = convexTest(schema, modules)
     const activityId = await t.run(async ctx => {
