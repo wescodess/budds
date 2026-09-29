@@ -245,6 +245,28 @@ test.describe('static Canvas projections in real Chromium', () => {
     }
   })
 
+  test('an independent response draft stays local and submission is disabled while Chromium is offline', async ({ page, context }) => {
+    const response = 'An unfinished response saved before disconnecting.'
+    await visitHarness(page, '/__e2e/canvas-browser-harness?kind=independent_application&state=active')
+    const responseField = page.getByTestId('learn-canvas-response')
+    const submit = page.getByTestId('learn-canvas-submit')
+
+    await responseField.fill(response)
+    await page.getByTestId('learn-canvas-confidence-4').check()
+    await expect.poll(() => page.evaluate(value => Object.values(sessionStorage).some(entry => entry.includes(value)), response)).toBe(true)
+    await expect(submit).toBeEnabled()
+
+    await context.setOffline(true)
+    await expect(page.getByRole('status').filter({ hasText: 'A connection is required' })).toBeVisible()
+    await expect(responseField).toHaveValue(response)
+    await expect(submit).toBeDisabled()
+
+    await context.setOffline(false)
+    await expect(page.getByRole('status').filter({ hasText: 'A connection is required' })).toHaveCount(0)
+    await expect(responseField).toHaveValue(response)
+    await expect(submit).toBeEnabled()
+  })
+
   for (const kind of primitives) {
     test(`${kind} focuses recovery when returning from a hidden history view`, async ({ page }) => {
       await visitHarness(page, `/__e2e/canvas-browser-harness?kind=${kind}&state=blocked&hidden=1`)
