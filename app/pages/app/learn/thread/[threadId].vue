@@ -23,6 +23,7 @@ const reflectionQuery = import.meta.client
 const userQuery = import.meta.client
   ? useConvexQuery(api.users.getUser, {}, { enabled: allowed })
   : { data: ref(null), pending: ref(false) }
+const convex = import.meta.client ? useConvex() : null
 
 const ownerId = computed(() => userQuery.data.value?._id)
 const thread = computed(() => {
@@ -63,11 +64,20 @@ const sourceScopeKey = computed(() => {
   return scope?.kind === 'folder' || scope?.kind === 'document' ? `${scope.kind}:${scope.sourceId}` : ''
 })
 const folderSourceId = computed(() => thread.value?.thread.sourceScope?.kind === 'folder' ? thread.value.thread.sourceScope.sourceId : '')
-const documentsQuery = import.meta.client
-  ? useConvexQuery(api.documents.listDocumentsByFolder, computed(() => ({ folderId: folderSourceId.value as never })),
-    { enabled: computed(() => allowed.value && Boolean(folderSourceId.value)) })
-  : { data: ref<ThreadDocument[]>([]), pending: ref(false) }
-const folderDocuments = computed(() => ((documentsQuery.data.value ?? []) as ThreadDocument[])
+const documentRows = ref<ThreadDocument[]>([])
+const documentsPending = ref(false)
+watch([allowed, folderSourceId], ([hasAccess, selectedFolder], _previous, onCleanup) => {
+  documentRows.value = []
+  documentsPending.value = false
+  if (!convex || !hasAccess || !selectedFolder) return
+  documentsPending.value = true
+  const unsubscribe = convex.onUpdate(api.documents.listDocumentsByFolder, { folderId: selectedFolder as never }, (rows: ThreadDocument[]) => {
+    documentRows.value = rows
+    documentsPending.value = false
+  })
+  onCleanup(unsubscribe)
+}, { immediate: true })
+const folderDocuments = computed(() => documentRows.value
   .filter(document => document.folderId === folderSourceId.value && document.status === 'success'))
 const selectedDocumentId = ref('')
 const recordSourceId = computed(() => {
@@ -159,7 +169,7 @@ async function requestDocumentRecord() {
 function retryDocumentRecord() { if (pendingRecord.value) void runDocumentRecord(pendingRecord.value) }
 const convertedContributionIds = computed(() => new Set([
   thread.value?.currentActivity?.attribution?.contributionId,
-  ...(thread.value?.history ?? []).map(item => item.attribution?.contributionId),
+  ...(thread.value?.history ?? []).map((item: { attribution?: { contributionId?: string } }) => item.attribution?.contributionId),
   ...locallyConvertedContributionIds.value,
 ].filter((id): id is string => typeof id === 'string')))
 const conversionMutation = import.meta.client ? useConvexMutation(api.learnAdaptive.convertContributionToActivity) : { mutate: async (_: unknown) => ({ kind: 'blocked' }) }
@@ -408,7 +418,7 @@ const shellReady = computed(() => Boolean(thread.value))
 const rollback = computed(() => thread.value?.thread.lifecycle === 'rollback')
 const endedReadOnly = computed(() => thread.value?.thread.lifecycle === 'ended' && reflection.value?.status !== 'completed')
 const selectedActivityId = computed(() => typeof route.query.activity === 'string' ? route.query.activity : null)
-const selectedHistory = computed(() => thread.value?.history.find(item => item.id === selectedActivityId.value) ?? null)
+const selectedHistory = computed(() => thread.value?.history.find((item: { id: string }) => item.id === selectedActivityId.value) ?? null)
 const showCurrent = computed(() => !selectedActivityId.value || selectedActivityId.value === thread.value?.currentActivity?.id)
 const canvasUnsafe = computed(() => Boolean(canvas.value && canvas.value.status !== 'blocked' && thread.value?.thread.evidenceState !== 'ready'))
 const currentCanvasVisible = computed(() => showCurrent.value && !canvasUnsafe.value && !rollback.value && !endedReadOnly.value)
@@ -495,7 +505,7 @@ function leave() { void router.push(safeDestination.value) }
               <option value="">Choose a ready document</option>
               <option v-for="document in folderDocuments" :key="document._id" :value="document._id">{{ document.filename }}</option>
             </select>
-            <p v-if="documentsQuery.pending.value" class="mt-1 text-xs" role="status">Loading documents…</p>
+            <p v-if="documentsPending" class="mt-1 text-xs" role="status">Loading documents…</p>
             <p v-else-if="folderDocuments.length === 0" class="mt-1 text-xs text-muted-foreground">No ready documents are available in this folder.</p>
           </template>
           <button

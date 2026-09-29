@@ -78,7 +78,7 @@ useAdaptiveResponseDraft(props.canvas.activity ? `learn-response:${props.canvas.
 const canSubmit = computed(() => !blocked.value && !!diagnostic.value && !saved.value && isOnline.value && !busy.value && response.value.trim().length > 0 && new TextEncoder().encode(response.value.trim()).byteLength <= 12_000)
 const safeAction = computed(() => props.canvas.recovery.action)
 
-function commandKey(prefix: string) { return `${prefix}:${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}` }
+function commandKey(prefix: string) { return `${prefix}-${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}` }
 watch(() => props.canvas.activity?.id, () => { localSaved.value = null; response.value = ''; submitKey.value = null; renderAckRecorded.value = false; renderAckAttempts = 0; renderOperableSeen = false })
 
 function retryRenderAck() {

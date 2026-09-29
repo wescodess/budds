@@ -45,10 +45,11 @@ describe('Story 1.1 — Verify & Harden Authentication Flow', () => {
         const t = convexTest(schema, modules)
         const asUser = t.withIdentity(TEST_IDENTITY)
         await asUser.mutation(api.users.upsertUser, {})
-        const entitlement = await t.run(async (ctx) => (
+        const user = await t.run(async (ctx) => (
           await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', TEST_IDENTITY.tokenIdentifier)).unique()
-        )?.learnV2Entitlement)
-        expect(entitlement?.enabled).toBe(true)
+        ))
+        expect(user?.learnV2Entitlement?.enabled).toBe(true)
+        expect(user?.learnAdaptiveExperienceEntitlement?.enabled).toBe(true)
       }
       finally {
         for (const [name, value] of Object.entries(previous)) {

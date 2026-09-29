@@ -20,7 +20,10 @@ mockNuxtImport('useConvexMutation', () => (reference: never) => ({
   mutate: getFunctionName(reference) === 'learnAdaptive:convertContributionToActivity' ? convert
     : getFunctionName(reference) === 'learnAdaptive:recordContribution' ? record : vi.fn().mockResolvedValue({ kind: 'ok' }),
 }))
-mockNuxtImport('useConvex', () => () => ({ query: inspect }))
+mockNuxtImport('useConvex', () => () => ({ query: inspect, onUpdate: (_reference: unknown, _args: unknown, callback: (rows: Record<string, unknown>[]) => void) => {
+  callback(documents.value)
+  return vi.fn()
+} }))
 mockNuxtImport('useConvexQuery', () => (reference: never) => {
   const name = getFunctionName(reference)
   const data = name === 'users:getUser' ? user

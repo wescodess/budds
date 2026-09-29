@@ -32,6 +32,9 @@ export const upsertUser = mutation({
         ...(bootstrapLearnV2 && existing.learnV2Entitlement === undefined
           ? { learnV2Entitlement: { enabled: true, updatedAt: Date.now() } }
           : {}),
+        ...(bootstrapLearnV2 && existing.learnAdaptiveExperienceEntitlement === undefined
+          ? { learnAdaptiveExperienceEntitlement: { enabled: true, updatedAt: Date.now() } }
+          : {}),
       })
       return existing._id
     }
@@ -42,7 +45,7 @@ export const upsertUser = mutation({
       email: identity.email ?? undefined,
       avatarUrl: identity.pictureUrl ?? undefined,
       ...(bootstrapLearnV2
-        ? { learnV2Entitlement: { enabled: true, updatedAt: Date.now() } }
+        ? { learnV2Entitlement: { enabled: true, updatedAt: Date.now() }, learnAdaptiveExperienceEntitlement: { enabled: true, updatedAt: Date.now() } }
         : {}),
     })
   },
