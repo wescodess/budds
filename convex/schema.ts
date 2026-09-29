@@ -1389,6 +1389,7 @@ export default defineSchema({
     .index('by_userId_and_sourceFeature_and_sourceIdentity_and_sourceStatus', ['userId', 'sourceFeature', 'sourceIdentity', 'sourceStatus']),
   learningThreadActivities: defineTable(learningThreadActivityFields)
     .index('by_userId', ['userId'])
+    .index('by_userId_and_attribution_contributionId', ['userId', 'attribution.contributionId'])
     .index('by_userId_and_threadId_and_boundaryOrdinal', ['userId', 'threadId', 'boundaryOrdinal'])
     .index('by_userId_and_activityId', ['userId', 'activityId'])
     .index('by_userId_and_sessionContentId_and_updatedAt', ['userId', 'sessionContentId', 'updatedAt'])

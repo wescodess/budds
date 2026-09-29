@@ -283,6 +283,10 @@ export const convertContributionToActivity = mutation({
       if (latest && (thread.currentActivityId !== latest._id || ['started', 'submitted', 'scoring', 'feedback', 'reconciling'].includes(latest.status)))
         return await blocked('activity_boundary_unavailable')
       if (!latest && thread.currentActivityId) return await blocked('activity_boundary_unavailable')
+      const priorConversion = await commandCtx.db.query('learningThreadActivities')
+        .withIndex('by_userId_and_attribution_contributionId', q => q
+          .eq('userId', userId).eq('attribution.contributionId', String(contribution._id))).first()
+      if (priorConversion) return await blocked('contribution_already_converted')
       const boundaryOrdinal = (latest?.boundaryOrdinal ?? 0) + 1
       const planRevision = (latest?.planRevision ?? 0) + 1
       const activityId = `contribution:${String(contribution._id)}:${boundaryOrdinal}`

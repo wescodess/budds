@@ -210,6 +210,7 @@ function contributionStatusLabel(row: ContributionRow) {
   return 'Recorded as available. Its source will be checked when selected; the activity is unscored.'
 }
 function conversionErrorMessage(code: string) {
+  if (code === 'contribution_already_converted') return 'This contribution is already represented by an activity in this thread. Review that activity before choosing another source.'
   if (code === 'evidence_conflict') return 'Linked evidence has an unresolved conflict. Review the source before choosing another next move.'
   if (code === 'evidence_unavailable') return 'Linked evidence is no longer available or accepted. Review the source before choosing another next move.'
   if (code === 'source_revision_changed' || code === 'source_unavailable' || code === 'contribution_unavailable') return 'This source changed or is unavailable. Review the contribution list before trying again.'
