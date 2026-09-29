@@ -264,7 +264,7 @@ async function remove() {
       <h2 class="text-xl font-semibold">{{ fallback.title }}</h2>
       <p class="mt-2 text-sm">{{ fallback.body }}</p>
       <p v-if="dirty" role="status" class="mt-2 text-sm">Your unfinished artifact remains on this device.</p>
-      <button ref="fallbackAction" type="button" class="mt-4 min-h-11 rounded-lg border border-border px-4" @click="emit('leave')">{{ fallback.primaryAction.label }}</button>
+      <button ref="fallbackAction" type="button" class="learn-adaptive-recovery-action mt-4 min-h-11 rounded-lg border border-border px-4" @click="emit('leave')">{{ fallback.primaryAction.label }}</button>
     </div>
     <article v-else :data-testid="workspace.testId" class="rounded-xl border border-border bg-card p-5">
       <h2 class="text-xl font-semibold">Build a useful artifact</h2>

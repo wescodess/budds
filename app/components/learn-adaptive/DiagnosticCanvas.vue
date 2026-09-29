@@ -148,7 +148,7 @@ async function submit() {
     <div class="mt-6 rounded-xl border border-border bg-card p-5" data-testid="learn-diagnostic-recovery" :role="blocked ? 'alert' : undefined">
       <h2 class="font-dm-sans text-xl font-semibold">{{ canvas.recovery.title }}</h2>
       <p class="mt-2 text-sm text-muted-foreground" :role="blocked ? undefined : 'status'">{{ canvas.recovery.body }}</p>
-      <button ref="recoveryAction" type="button" data-testid="learn-diagnostic-recovery-action" class="mt-3 inline-flex min-h-11 items-center text-sm text-primary underline" style="min-height: 44px" @click="emit('leave')">{{ safeAction }}</button>
+      <button ref="recoveryAction" type="button" data-testid="learn-diagnostic-recovery-action" class="learn-adaptive-recovery-action mt-3 inline-flex min-h-11 items-center text-sm text-primary underline" style="min-height: 44px" @click="emit('leave')">{{ safeAction }}</button>
     </div>
     <p v-if="!isOnline" class="mt-4 text-sm" role="status">Reconnect to save your response.</p>
     <p v-if="error" class="mt-4 text-sm text-destructive" role="alert" data-testid="learn-diagnostic-error">{{ error }}</p>

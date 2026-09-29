@@ -157,6 +157,52 @@ test.describe('static Canvas projections in real Chromium', () => {
     }
   }
 
+  test('blocked, stale, and invalidated recovery actions retain visible keyboard focus in forced colors', async ({ page }) => {
+    test.setTimeout(3 * 60_000)
+    await page.emulateMedia({ reducedMotion: 'reduce', forcedColors: 'active' })
+
+    for (const kind of primitives) {
+      for (const state of ['blocked', 'stale', 'invalidated'] as const) {
+        for (const viewport of viewports) {
+          await page.setViewportSize(viewport)
+          await visitHarness(page, `/__e2e/canvas-browser-harness?kind=${kind}&state=${state}`)
+          const harness = page.getByTestId('canvas-browser-harness')
+          const recovery = kind === 'diagnostic_prompt'
+            ? harness.getByTestId('learn-diagnostic-recovery')
+            : harness.getByRole('alert')
+          const action = recovery.getByRole('button')
+
+          await expect(recovery, `${kind} ${state} ${viewport.name}: recovery`).toBeVisible()
+          if (state === 'blocked') {
+            await expect(action, `${kind} ${state} ${viewport.name}: recovery action`).toBeFocused()
+          }
+
+          // Exercise keyboard navigation on the safe action and establish
+          // keyboard modality before inspecting the rendered focus indicator.
+          await action.focus()
+          await page.keyboard.press('Tab')
+          await page.keyboard.press('Shift+Tab')
+          await expect(action, `${kind} ${state} ${viewport.name}: keyboard focus`).toBeFocused()
+          const focus = await action.evaluate(element => {
+            const style = getComputedStyle(element)
+            return {
+              visibleFocus: element.matches(':focus-visible'),
+              outlineStyle: style.outlineStyle,
+              outlineWidth: style.outlineWidth,
+              outlineColor: style.outlineColor,
+              outlineOffset: style.outlineOffset,
+            }
+          })
+          expect(focus.visibleFocus, `${kind} ${state} ${viewport.name}: keyboard-visible focus`).toBe(true)
+          expect(focus.outlineStyle, `${kind} ${state} ${viewport.name}: focus outline style`).toBe('solid')
+          expect(Number.parseFloat(focus.outlineWidth), `${kind} ${state} ${viewport.name}: focus outline width`).toBeGreaterThanOrEqual(2)
+          expect(focus.outlineColor, `${kind} ${state} ${viewport.name}: focus outline color`).not.toBe('rgba(0, 0, 0, 0)')
+          expect(Number.parseFloat(focus.outlineOffset), `${kind} ${state} ${viewport.name}: focus outline offset`).toBeGreaterThanOrEqual(1)
+        }
+      }
+    }
+  })
+
   test('ready, completed, preparing, and blocked projections stay distinguishable', async ({ page }) => {
     test.setTimeout(3 * 60_000)
     for (const kind of ['cited_explanation', 'worked_example', 'independent_application', 'source_comparison'] as const) {
