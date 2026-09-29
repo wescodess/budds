@@ -61,7 +61,9 @@ const readyCanvas = computed(() => ({
 const diagnosticCanvas = computed(() => ({
   ...common.value,
   status: state.value === 'blocked' || state.value === 'preparing' ? 'blocked' : 'eligible', evidenceState: 'non_factual', decisionPending: false,
-  recovery: { title: 'Starting point', body: 'This response is not scored.', action: 'Back to Learn' },
+  recovery: { title: state.value === 'blocked' ? 'Activity blocked' : 'Starting point',
+    body: state.value === 'blocked' ? 'Your response remains available. Return to Learn to continue safely.' : 'This response is not scored.',
+    action: 'Back to Learn' },
   activity: { id: fixtureId.value, planRevision: state.value === 'fallback' ? 0 : 1, status: 'eligible', primitive: primitive.value,
     response: state.value === 'completed' ? 'A saved starting point.' : null,
     requiredAction: { kind: 'submit_response', label: 'Save response' } },
@@ -78,18 +80,22 @@ const reflectionCanvas = computed(() => ({
   activity: { id: fixtureId.value, planRevision: state.value === 'fallback' ? 0 : 1, status: 'eligible', purpose: 'Choose what to do next.', reason: 'A guided step has ended.', primitive: primitive.value, fallback },
 }))
 const left = ref(false)
+const visible = ref(route.query.hidden !== '1')
+const hydrated = ref(false)
+onMounted(() => { hydrated.value = true })
 </script>
 
 <template>
-  <main class="mx-auto w-full max-w-3xl px-4 py-6 sm:px-6" data-testid="canvas-browser-harness" :data-projection-only="projectionOnly">
+  <main class="mx-auto w-full max-w-3xl px-4 py-6 sm:px-6" data-testid="canvas-browser-harness" :data-projection-only="projectionOnly" :data-hydrated="hydrated">
     <h1 class="text-2xl font-semibold">Canvas browser fixture</h1>
     <p class="mt-2 text-sm">Static projection for local browser testing. No learning result is saved here.</p>
     <p v-if="left" role="status">Back to Learn was requested.</p>
-    <section class="mt-6 rounded-xl bg-[var(--learn-activity-surface)] p-4" data-testid="learn-adaptive-canvas-frame" aria-label="Current learning activity">
-      <ReadySessionCanvas v-if="['cited_explanation', 'worked_example', 'independent_application', 'source_comparison'].includes(kind)" :key="`${kind}:${state}`" :canvas="readyCanvas as never" :show-header="false" :active="false" @leave="left = true" />
-      <DiagnosticCanvas v-else-if="kind === 'diagnostic_prompt'" :key="`${kind}:${state}`" :canvas="diagnosticCanvas as never" :show-header="false" :active="false" @leave="left = true" />
-      <ArtifactWorkspace v-else-if="kind === 'artifact_workspace'" :key="`${kind}:${state}`" :canvas="artifactCanvas as never" @leave="left = true" />
-      <ReflectionNextMove v-else :key="`${kind}:${state}`" :canvas="reflectionCanvas as never" @leave="left = true" />
+    <button v-if="!visible" type="button" class="mt-4 min-h-11 rounded-lg border px-4" data-testid="show-current-activity" @click="visible = true">Show current activity</button>
+    <section v-show="visible" class="mt-6 rounded-xl bg-[var(--learn-activity-surface)] p-4" data-testid="learn-adaptive-canvas-frame" aria-label="Current learning activity">
+      <ReadySessionCanvas v-if="['cited_explanation', 'worked_example', 'independent_application', 'source_comparison'].includes(kind)" :key="`${kind}:${state}`" :canvas="readyCanvas as never" :show-header="false" :active="visible && state === 'blocked'" @leave="left = true" />
+      <DiagnosticCanvas v-else-if="kind === 'diagnostic_prompt'" :key="`${kind}:${state}`" :canvas="diagnosticCanvas as never" :show-header="false" :active="visible && state === 'blocked'" @leave="left = true" />
+      <ArtifactWorkspace v-else-if="kind === 'artifact_workspace'" :key="`${kind}:${state}`" :canvas="artifactCanvas as never" :active="visible" @leave="left = true" />
+      <ReflectionNextMove v-else :key="`${kind}:${state}`" :canvas="reflectionCanvas as never" :active="visible" @leave="left = true" />
     </section>
   </main>
 </template>

@@ -20,7 +20,7 @@ type Canvas = {
   }
 }
 
-const props = defineProps<{ canvas: Canvas, authoritativeRevision?: number }>()
+const props = withDefaults(defineProps<{ canvas: Canvas, authoritativeRevision?: number, active?: boolean }>(), { active: true })
 const emit = defineEmits<{ leave: [] }>()
 const { isOnline } = useOnlineStatus()
 const mutation = import.meta.client
@@ -73,11 +73,12 @@ watch(completed, async (value, previous) => {
   completedHeading.value?.focus()
 })
 onMounted(() => {
+  if (!props.active) return
   if (completed.value) completedHeading.value?.focus()
   else if (validation.value.reason) fallbackAction.value?.focus()
 })
-watch(() => validation.value.reason, async (reason) => {
-  if (!reason) return
+watch([() => validation.value.reason, () => props.active], async ([reason, active]) => {
+  if (!reason || !active) return
   await nextTick()
   fallbackAction.value?.focus()
 }, { immediate: true })

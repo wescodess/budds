@@ -406,6 +406,7 @@ const selectedActivityId = computed(() => typeof route.query.activity === 'strin
 const selectedHistory = computed(() => thread.value?.history.find(item => item.id === selectedActivityId.value) ?? null)
 const showCurrent = computed(() => !selectedActivityId.value || selectedActivityId.value === thread.value?.currentActivity?.id)
 const canvasUnsafe = computed(() => Boolean(canvas.value && canvas.value.status !== 'blocked' && thread.value?.thread.evidenceState !== 'ready'))
+const currentCanvasVisible = computed(() => showCurrent.value && !canvasUnsafe.value && !rollback.value && !endedReadOnly.value)
 const currentActivityUrl = computed(() => `/app/learn/thread/${encodeURIComponent(threadId.value)}`)
 const evidenceActivityId = computed(() => selectedHistory.value?.id ?? (showCurrent.value ? thread.value?.currentActivity?.id : null))
 const evidenceQuery = import.meta.client
@@ -556,11 +557,11 @@ function leave() { void router.push(safeDestination.value) }
           <p class="mt-2 text-sm text-muted-foreground">Your learning memory and past activity remain available for review.</p>
           <NuxtLink :to="safeDestination" class="mt-3 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline">{{ safeDestinationLabel }}</NuxtLink>
         </div>
-        <div v-show="showCurrent && !canvasUnsafe && !rollback && !endedReadOnly">
-          <LearnAdaptiveReadySessionCanvas v-if="canvas" :key="`${ownerId}:${canvas.thread.id}:${canvas.activity.id}`" :canvas="canvas as never" :authoritative-revision="Math.max(thread.thread.revision, canvas.thread.revision)" :show-header="false" :active="showCurrent && !canvasUnsafe && !rollback" @leave="leave" @inspect-evidence="inspectEvidence" />
-          <LearnAdaptiveArtifactWorkspace v-else-if="artifact" :key="`${ownerId}:${artifact.thread.id}:${artifact.activity.id}`" :canvas="artifact as never" :authoritative-revision="Math.max(thread.thread.revision, artifact.thread.revision)" @leave="leave" />
-          <LearnAdaptiveReflectionNextMove v-else-if="reflection" :key="`${ownerId}:${reflection.thread.id}:${reflection.activity.id}`" :canvas="reflection as never" :authoritative-revision="Math.max(thread.thread.revision, reflection.thread.revision)" @leave="leave" />
-          <LearnAdaptiveDiagnosticCanvas v-else-if="diagnostic" :key="`${ownerId}:${diagnostic.thread.id}:${diagnostic.activity?.id ?? 'draft'}`" :canvas="diagnostic as never" :authoritative-revision="Math.max(thread.thread.revision, diagnostic.thread.revision)" :show-header="false" :active="showCurrent" @leave="leave" />
+        <div v-show="currentCanvasVisible">
+          <LearnAdaptiveReadySessionCanvas v-if="canvas" :key="`${ownerId}:${canvas.thread.id}:${canvas.activity.id}`" :canvas="canvas as never" :authoritative-revision="Math.max(thread.thread.revision, canvas.thread.revision)" :show-header="false" :active="currentCanvasVisible" @leave="leave" @inspect-evidence="inspectEvidence" />
+          <LearnAdaptiveArtifactWorkspace v-else-if="artifact" :key="`${ownerId}:${artifact.thread.id}:${artifact.activity.id}`" :canvas="artifact as never" :authoritative-revision="Math.max(thread.thread.revision, artifact.thread.revision)" :active="currentCanvasVisible" @leave="leave" />
+          <LearnAdaptiveReflectionNextMove v-else-if="reflection" :key="`${ownerId}:${reflection.thread.id}:${reflection.activity.id}`" :canvas="reflection as never" :authoritative-revision="Math.max(thread.thread.revision, reflection.thread.revision)" :active="currentCanvasVisible" @leave="leave" />
+          <LearnAdaptiveDiagnosticCanvas v-else-if="diagnostic" :key="`${ownerId}:${diagnostic.thread.id}:${diagnostic.activity?.id ?? 'draft'}`" :canvas="diagnostic as never" :authoritative-revision="Math.max(thread.thread.revision, diagnostic.thread.revision)" :show-header="false" :active="currentCanvasVisible" @leave="leave" />
           <div v-else-if="detailPending" data-testid="learn-adaptive-canvas-loading" class="rounded-lg border border-border p-5" role="status" aria-live="polite">
             <h2 class="font-dm-sans text-lg font-semibold">Loading current activity…</h2>
             <p class="mt-2 text-sm text-muted-foreground">Your thread and history are available while the activity loads.</p>
