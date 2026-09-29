@@ -467,7 +467,7 @@ async function submitWithValidation() {
         <p role="status">Your response is saved. This activity must become available before scoring can continue.</p>
       </div>
       <p v-if="response && !authoritativeSavedResponse" data-testid="learn-canvas-draft-fallback" class="mt-3 text-sm">Your unfinished response remains on this device.</p>
-      <button ref="fallbackAction" type="button" data-testid="learn-canvas-fallback-action" class="mt-4 min-h-11 rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)]" @click="emit('leave')">{{ renderFallback?.primaryAction.label ?? canvas.recovery?.action ?? canvas.activity.fallback.primaryAction.label }}</button>
+      <button ref="fallbackAction" type="button" data-testid="learn-canvas-fallback-action" class="learn-adaptive-recovery-action mt-4 min-h-11 rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)]" @click="emit('leave')">{{ renderFallback?.primaryAction.label ?? canvas.recovery?.action ?? canvas.activity.fallback.primaryAction.label }}</button>
     </div>
     <div v-else-if="!started" data-testid="learn-canvas-ready" class="mt-6 rounded-xl border border-border bg-card p-5">
       <article :data-testid="`${renderedPrimitive.testId}-ready`" aria-label="Activity ready">

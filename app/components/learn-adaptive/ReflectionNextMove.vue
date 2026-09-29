@@ -160,6 +160,6 @@ const completedLabel = computed(() => props.canvas.decision?.outcome === 'accept
   <section v-else :data-testid="fallback.testId" class="rounded-xl border border-[var(--learn-attention)] bg-[var(--learn-context-surface)] p-5" role="alert" aria-labelledby="learn-reflection-fallback-title">
     <h2 id="learn-reflection-fallback-title" class="font-dm-sans text-lg font-semibold">{{ fallback.title }}</h2>
     <p class="mt-2 text-sm text-muted-foreground">{{ fallback.body }}</p>
-    <button ref="fallback-action" type="button" class="mt-4 inline-flex min-h-11 w-full items-center justify-center rounded-lg border border-border px-4 py-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)] sm:w-auto" @click="emit('leave')">{{ fallback.primaryAction.label }}</button>
+    <button ref="fallback-action" type="button" class="learn-adaptive-recovery-action mt-4 inline-flex min-h-11 w-full items-center justify-center rounded-lg border border-border px-4 py-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)] sm:w-auto" @click="emit('leave')">{{ fallback.primaryAction.label }}</button>
   </section>
 </template>
