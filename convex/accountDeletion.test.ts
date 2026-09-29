@@ -145,10 +145,13 @@ describe('accountDeletion.deleteAccountCascade', () => {
         resultKind: 'ok', resultReference: '{"kind":"ok"}', errorReference: null,
         createdAt: now, resultExpiresAt: now + 1, redactionStatus: 'pending',
       })
-      const eventId = await ctx.db.insert('learnActivityEvents', {
-        userId: TEST_IDENTITY.tokenIdentifier, threadId, activityId, eventType: 'activity_eligible', eventVersion: 'activity_eligible.v1', taxonomyVersion: 'learn-adaptive.activity-events.v1', occurredAt: now,
-        sourceVersion: 'learn-adaptive.activity-plan.v1', contractVersion: 'learn-adaptive.activity-contract.v1', metadata: { activityClass: 'non_factual', boundaryOrdinal: 1, planRevision: 1 }, dedupeKeyHash: `sha256:${'c'.repeat(64)}`,
-      })
+      const eventIds = []
+      for (let index = 0; index < 9; index++) {
+        eventIds.push(await ctx.db.insert('learnActivityEvents', {
+          userId: TEST_IDENTITY.tokenIdentifier, threadId, activityId, eventType: 'activity_eligible', eventVersion: 'activity_eligible.v1', taxonomyVersion: 'learn-adaptive.activity-events.v1', occurredAt: now + index,
+          sourceVersion: 'learn-adaptive.activity-plan.v1', contractVersion: 'learn-adaptive.activity-contract.v1', metadata: { activityClass: 'non_factual', boundaryOrdinal: index + 1, planRevision: 1 }, dedupeKeyHash: `sha256:${String(index + 1).repeat(64)}`,
+        }))
+      }
       const overrideId = await ctx.db.insert('learnActivityOverrides', {
         userId: TEST_IDENTITY.tokenIdentifier, threadId, activityId, option: 'time_45', source: 'learner',
         version: 'learn-adaptive.override.v1', fixedNextPlan: { version: 'learn-adaptive.fixed-next-plan.v1',
@@ -157,14 +160,17 @@ describe('accountDeletion.deleteAccountCascade', () => {
       })
       const threadDeletionJobId = await ctx.db.insert('learnAdaptiveThreadDeletionJobs', { userId: TEST_IDENTITY.tokenIdentifier, threadId, phase: 'children', status: 'queued', attempts: 0, createdAt: now, updatedAt: now })
       await ctx.db.insert('accountDeletionJobs', { userId: TEST_IDENTITY.tokenIdentifier, status: 'active', phase: 'learnV2', startedAt: now, updatedAt: now })
-      return { threadId, activityId, eventId, overrideId, receiptId, threadDeletionJobId }
+      return { threadId, activityId, eventIds, overrideId, receiptId, threadDeletionJobId }
     })
 
     await t.mutation(internal.accountDeletion.runDeletionBatch, { userId: TEST_IDENTITY.tokenIdentifier })
     expect(await t.run(ctx => ctx.db.get(ids.overrideId))).toBeNull()
-    expect(await t.run(ctx => ctx.db.get(ids.eventId))).not.toBeNull()
+    expect((await t.run(async ctx => Promise.all(ids.eventIds.map(eventId => ctx.db.get(eventId))))).filter(Boolean)).toHaveLength(9)
     await t.mutation(internal.accountDeletion.runDeletionBatch, { userId: TEST_IDENTITY.tokenIdentifier })
-    expect(await t.run(ctx => ctx.db.get(ids.eventId))).toBeNull()
+    const afterFirstEventBatch = await t.run(async ctx => Promise.all(ids.eventIds.map(eventId => ctx.db.get(eventId))))
+    expect(afterFirstEventBatch.filter(Boolean)).toHaveLength(1)
+    await t.mutation(internal.accountDeletion.runDeletionBatch, { userId: TEST_IDENTITY.tokenIdentifier })
+    expect(await t.run(async ctx => Promise.all(ids.eventIds.map(eventId => ctx.db.get(eventId))))).toEqual(ids.eventIds.map(() => null))
     expect(await t.run(ctx => ctx.db.get(ids.receiptId))).not.toBeNull()
     await t.mutation(internal.accountDeletion.runDeletionBatch, { userId: TEST_IDENTITY.tokenIdentifier })
     expect(await t.run(ctx => ctx.db.get(ids.receiptId))).toBeNull()
