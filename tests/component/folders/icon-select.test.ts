@@ -4,6 +4,8 @@ import { flushPromises } from '@vue/test-utils'
 import { mockMatchMedia } from '../../support/match-media'
 
 describe('FoldersIconSelect', () => {
+  const mountedWrappers: Array<{ unmount: () => void }> = []
+
   beforeEach(() => {
     vi.resetModules()
     document.body.innerHTML = ''
@@ -11,6 +13,7 @@ describe('FoldersIconSelect', () => {
   })
 
   afterEach(() => {
+    for (const wrapper of mountedWrappers.splice(0)) wrapper.unmount()
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
     document.body.innerHTML = ''
@@ -27,6 +30,7 @@ describe('FoldersIconSelect', () => {
       },
       attachTo: document.body,
     })
+    mountedWrappers.push(wrapper)
 
     await wrapper.get('[data-testid="folder-icon-select"]').trigger('click')
     await flushPromises()
@@ -55,6 +59,7 @@ describe('FoldersIconSelect', () => {
       },
       attachTo: document.body,
     })
+    mountedWrappers.push(wrapper)
 
     await wrapper.get('[data-testid="folder-icon-select"]').trigger('click')
     await flushPromises()
