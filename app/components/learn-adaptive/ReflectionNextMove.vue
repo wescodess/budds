@@ -17,7 +17,7 @@ type Canvas = {
     reason: string
     primitive: null | { contractVersion: string, rendererVersion: string, type: string, action: string, testId: string, props: unknown }
     fallback: { title: string, body: string, testId: string, primaryAction: { label: string } }
-  }
+  }, recovery?: { title: string, body: string, action: string }
 }
 
 const props = withDefaults(defineProps<{ canvas: Canvas, authoritativeRevision?: number, active?: boolean }>(), { active: true })
@@ -49,7 +49,9 @@ const validation = computed(() => {
   return { value: result.value, reason: null }
 })
 const reflection = computed(() => validation.value.value)
-const fallback = computed(() => validation.value.reason ? adaptiveActivityFallbackForReason(validation.value.reason) : props.canvas.activity.fallback)
+const fallback = computed(() => props.canvas.status === 'blocked' && props.canvas.recovery
+  ? { title: props.canvas.recovery.title, body: props.canvas.recovery.body, testId: 'learn-reflection-fallback', primaryAction: { label: props.canvas.recovery.action } }
+  : validation.value.reason ? adaptiveActivityFallbackForReason(validation.value.reason) : props.canvas.activity.fallback)
 const completed = computed(() => props.canvas.status === 'completed' && props.canvas.decision !== null)
 const revision = computed(() => Math.max(props.canvas.thread.revision, props.authoritativeRevision ?? 0))
 const choiceCommitted = computed(() => notice.value.length > 0)

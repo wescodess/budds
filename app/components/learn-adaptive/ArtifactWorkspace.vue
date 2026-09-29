@@ -8,7 +8,7 @@ type Artifact = { id: string, activityId: string, artifactKind: 'note' | 'plan' 
 type Canvas = { ownerId: string, status: string, thread: { id: string, revision: number, outcome: string }, activity: {
   id: string, planRevision: number, status: string, primitive: null | { contractVersion: string, rendererVersion: string, type: string, action: string, testId: string, props: unknown },
   fallback: { title: string, body: string, testId: string, primaryAction: { label: string } }
-} }
+}, recovery?: { title: string, body: string, action: string } }
 const props = withDefaults(defineProps<{ canvas: Canvas, authoritativeRevision?: number, active?: boolean }>(), { active: true })
 const emit = defineEmits<{ leave: [] }>()
 const { isOnline } = useOnlineStatus()
@@ -25,11 +25,13 @@ const validation = computed(() => {
   return { value: result.value, reason: null }
 })
 const workspace = computed(() => validation.value.value)
-const fallback = computed(() => validation.value.reason ? adaptiveActivityFallbackForReason(validation.value.reason) : props.canvas.activity.fallback)
+const fallback = computed(() => props.canvas.status === 'blocked' && props.canvas.recovery
+  ? { title: props.canvas.recovery.title, body: props.canvas.recovery.body, testId: 'learn-activity-fallback', primaryAction: { label: props.canvas.recovery.action } }
+  : validation.value.reason ? adaptiveActivityFallbackForReason(validation.value.reason) : props.canvas.activity.fallback)
 const currentArtifacts = computed(() => (artifactQuery.data.value ?? []).filter((item: Artifact) => item.activityId === props.canvas.activity.id
   && item.artifactKind === workspace.value?.props.artifactKind && item.id !== locallyDeletedArtifactId.value))
 const latest = computed<Artifact | null>(() => localArtifactId.value
-  ? currentArtifacts.value.find(item => item.id === localArtifactId.value) ?? knownSnapshot.value
+  ? currentArtifacts.value.find((item: Artifact) => item.id === localArtifactId.value) ?? knownSnapshot.value
   : currentArtifacts.value[0] ?? null)
 const threadRevision = ref(Math.max(props.canvas.thread.revision, props.authoritativeRevision ?? 0))
 watch([() => props.canvas.thread.revision, () => props.authoritativeRevision], ([a, b]) => { threadRevision.value = Math.max(threadRevision.value, a, b ?? 0) })
