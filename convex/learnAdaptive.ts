@@ -102,9 +102,41 @@ export const listThreadContributions = query({
     const result = await ctx.db.query('learningThreadContributions')
       .withIndex('by_userId_and_threadId_and_createdAt', q => q.eq('userId', userId).eq('threadId', args.threadId))
       .order('desc').paginate({ cursor: args.paginationOpts.cursor, numItems: Math.min(50, Math.max(1, Math.floor(args.paginationOpts.numItems))) })
-    return { ...result, page: result.page.map(({ provenanceKey: _provenanceKey, idempotencyKeyHash: _key, requestFingerprint: _fingerprint, evidenceSnapshotId: _evidence, ...row }) => row) }
+    return { ...result, page: await Promise.all(result.page.map(async contribution => {
+      const evidenceIntegrity = await contributionEvidenceIntegrity(ctx, userId, thread, contribution)
+      const { provenanceKey: _provenanceKey, idempotencyKeyHash: _key, requestFingerprint: _fingerprint,
+        evidenceSnapshotId: _evidence, ...row } = contribution
+      return { ...row, evidenceIntegrity }
+    })) }
   },
 })
+
+async function contributionEvidenceIntegrity(
+  ctx: QueryCtx | MutationCtx, userId: string, thread: Doc<'learningThreads'>,
+  contribution: Doc<'learningThreadContributions'>,
+): Promise<'not_required' | 'accepted' | 'conflict' | 'unavailable'> {
+  if (!contribution.evidenceSnapshotId) return contribution.classification === 'accepted_evidence' ? 'unavailable' : 'not_required'
+  const snapshot = await ctx.db.get(contribution.evidenceSnapshotId)
+  if (!snapshot || snapshot.userId !== userId || snapshot.status !== 'user_accepted'
+    || snapshot.effectiveStatus !== 'user_accepted' || snapshot.evidencePurgedAt !== undefined
+    || snapshot.rightsStatus !== 'permitted'
+    || (thread.learningVoidId && snapshot.learningVoidId !== thread.learningVoidId)) return 'unavailable'
+  if (snapshot.conflictStatus !== 'clear') return 'conflict'
+  const excerpt = await ctx.db.query('learnSourceExcerpts')
+    .withIndex('by_userId_and_sourceSnapshotId_and_evidencePurgedAt', q => q
+      .eq('userId', userId).eq('sourceSnapshotId', snapshot._id).eq('evidencePurgedAt', undefined)).first()
+  if (!excerpt || excerpt.rightsStatus !== 'permitted' || !excerpt.excerpt?.trim()) return 'unavailable'
+  if (contribution.sourceFeature !== 'documents') return 'unavailable'
+  const documentId = ctx.db.normalizeId('documents', contribution.sourceIdentity)
+  const document = documentId && await ctx.db.get(documentId)
+  const identity = await ctx.db.get(snapshot.sourceIdentityId)
+  if (!document || document.userId !== userId || !identity || identity.userId !== userId
+    || identity.folderDocumentId !== document._id || identity.tombstonedAt !== undefined
+    || (!document.sourceRevision && !document.contentHash)
+    || (document.sourceRevision && snapshot.sourceRevision !== document.sourceRevision)
+    || (document.contentHash && snapshot.contentHash !== document.contentHash)) return 'unavailable'
+  return 'accepted'
+}
 
 export const recordContribution = mutation({
   args: {
@@ -215,7 +247,8 @@ export const convertContributionToActivity = mutation({
       if (!contribution || contribution.userId !== userId || contribution.threadId !== thread._id)
         throw new AdaptiveCommandRejection('blocked', 'contribution_unavailable', 'Contribution is unavailable')
       const blocked = async (code: string) => {
-        if (code === 'source_unavailable' || code === 'source_revision_changed') {
+        if (code === 'source_unavailable' || code === 'source_revision_changed'
+          || code === 'evidence_unavailable' || code === 'evidence_conflict') {
           await writeLearnActivityEvent(commandCtx, { userId, threadId: thread._id,
             eventType: 'cross_feature_activity_invalidated', eventVersion: 'cross_feature_activity_invalidated.v1',
             sourceVersion: CONTRIBUTION_VERSION, contractVersion: CONTRIBUTION_VERSION,
@@ -237,6 +270,9 @@ export const convertContributionToActivity = mutation({
       const currentSource = await loadContributionSource(commandCtx, userId, source)
       if (!currentSource) return await blocked('source_unavailable')
       if (currentSource.revision !== contribution.sourceRevision) return await blocked('source_revision_changed')
+      const evidenceIntegrity = await contributionEvidenceIntegrity(commandCtx, userId, thread, contribution)
+      if (evidenceIntegrity === 'conflict') return await blocked('evidence_conflict')
+      if (evidenceIntegrity === 'unavailable') return await blocked('evidence_unavailable')
       // A snapshot marked accepted_evidence only proves that one source snapshot
       // was accepted. Factual conversion requires independent V2 claim and
       // session pins, which the contribution contract does not supply.

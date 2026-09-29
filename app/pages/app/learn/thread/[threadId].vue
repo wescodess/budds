@@ -45,7 +45,7 @@ const memory = computed(() => {
   return current && value && value.ownerId === ownerId.value && value.threadId === current.thread.id
     && value.threadRevision >= current.thread.revision ? value : null
 })
-type ContributionRow = { _id: string, threadId: string, sourceFeature: string, contributionKind: string, classification: string, sourceStatus: string, createdAt: number }
+type ContributionRow = { _id: string, threadId: string, sourceFeature: string, contributionKind: string, classification: string, sourceStatus: string, evidenceIntegrity: 'not_required' | 'accepted' | 'conflict' | 'unavailable', createdAt: number }
 type ContributionPage = { page: ContributionRow[], isDone: boolean, continueCursor: string }
 const contributionsQuery = import.meta.client
   ? useConvexQuery(api.learnAdaptive.listThreadContributions,
@@ -195,6 +195,8 @@ function contributionClassificationLabel(classification: string) {
   return ({ non_factual: 'non-factual context', inference: 'inference', synthesis: 'synthesis', unknown: 'unverified context', accepted_evidence: 'accepted evidence' } as Record<string, string>)[classification] ?? 'unclassified context'
 }
 function contributionStatusLabel(row: ContributionRow) {
+  if (row.evidenceIntegrity === 'conflict') return 'Linked evidence has an unresolved conflict. Review the source before using it.'
+  if (row.evidenceIntegrity === 'unavailable') return 'Linked evidence is no longer available or accepted. Review the source before using it.'
   if (row.classification === 'accepted_evidence' || row.classification === 'factual') return 'Factual activity unavailable until independent factual authority is available.'
   if (locallyRejectedSources.value.get(row._id) === 'source_revision_changed') return 'Source changed; review it before using this contribution.'
   if (locallyRejectedSources.value.get(row._id) === 'source_unavailable') return 'Source unavailable; this contribution cannot be used.'
@@ -208,6 +210,8 @@ function contributionStatusLabel(row: ContributionRow) {
   return 'Recorded as available. Its source will be checked when selected; the activity is unscored.'
 }
 function conversionErrorMessage(code: string) {
+  if (code === 'evidence_conflict') return 'Linked evidence has an unresolved conflict. Review the source before choosing another next move.'
+  if (code === 'evidence_unavailable') return 'Linked evidence is no longer available or accepted. Review the source before choosing another next move.'
   if (code === 'source_revision_changed' || code === 'source_unavailable' || code === 'contribution_unavailable') return 'This source changed or is unavailable. Review the contribution list before trying again.'
   if (code === 'factual_authority_unavailable') return 'This contribution cannot create a factual activity until independent factual authority is available.'
   if (['thread_not_active', 'thread_not_ready', 'thread_deleting', 'clarification_pending', 'activity_boundary_unavailable'].includes(code)) return 'The thread or current activity changed. Review the current state before choosing another next move.'
@@ -514,6 +518,7 @@ function leave() { void router.push(safeDestination.value) }
           <li v-for="item in contributions" :key="item._id" data-testid="learn-thread-contribution-row" class="rounded-lg border border-border p-3">
             <p class="text-sm font-medium">{{ contributionFeatureLabel(item.sourceFeature) }} · {{ item.contributionKind }}</p>
             <p class="mt-1 text-sm text-muted-foreground">{{ contributionClassificationLabel(item.classification) }}</p>
+            <p v-if="item.classification === 'accepted_evidence'" class="mt-1 text-xs text-muted-foreground" data-testid="learn-contribution-evidence-integrity">Evidence integrity: {{ item.evidenceIntegrity === 'accepted' ? 'accepted' : item.evidenceIntegrity === 'conflict' ? 'conflict unresolved' : 'unavailable' }}</p>
             <p class="mt-1 text-xs text-muted-foreground">{{ contributionStatusLabel(item) }}</p>
             <button
               v-if="canConvertContribution(item)" type="button" data-testid="learn-convert-contribution"

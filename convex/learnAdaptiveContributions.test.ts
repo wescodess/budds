@@ -139,6 +139,9 @@ test('a source-attributed contribution can be retried and exported without priva
   const afterEvidencePurge = await t.run(ctx => ctx.db.query('learningThreadContributions')
     .withIndex('by_userId_and_evidenceSnapshotId', q => q.eq('userId', identity.tokenIdentifier).eq('evidenceSnapshotId', evidence.snapshotId)).take(1))
   expect(afterEvidencePurge).toEqual([])
+  expect((await owner.query(api.learnAdaptive.listThreadContributions, { threadId,
+    paginationOpts: { numItems: 10, cursor: null },
+  })).page).toContainEqual(expect.objectContaining({ classification: 'accepted_evidence', evidenceIntegrity: 'unavailable' }))
   await t.mutation(internal.learnV2Retention.purgeFolderDocumentSources, { userId: identity.tokenIdentifier, documentId })
   const afterPurge = await owner.query(api.dataExport.getUserDataPage, { collection: 'learningThreadContributions', paginationOpts: { numItems: 100, cursor: null } })
   type ExportedContribution = Extract<(typeof afterPurge.page)[number], { sourceFeature: string }>
