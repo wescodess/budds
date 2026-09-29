@@ -129,7 +129,7 @@ async function main() {
   await startConvex(isolatedRoot)
   await waitForLocalConvex(isolatedRoot)
 
-  nuxt = spawn(pnpm, ['exec', 'nuxt', 'dev', ...(realAdaptiveCanvas ? [] : ['--extends', './e2e/canvas-layer']), '--host', '127.0.0.1', '--port', new URL(baseUrl).port || '3102'], {
+  nuxt = spawn(pnpm, ['exec', 'nuxt', 'dev', '--extends', realAdaptiveCanvas ? './e2e/authority-layer' : './e2e/canvas-layer', '--host', '127.0.0.1', '--port', new URL(baseUrl).port || '3102'], {
     cwd: root,
     env: { ...inheritedEnv, NODE_ENV: 'test', BUDDS_E2E_MODE: 'true', BUDDS_E2E_BASE_URL: baseUrl, BUDDS_E2E_AUTH_TOKEN: token, LEARN_V2_ENABLED: 'true', CONVEX_URL: convexUrl, NUXT_PUBLIC_CONVEX_URL: convexUrl, AUTH_PROXY_TARGET_URL: convexSiteUrl, CONVEX_SITE_URL: convexSiteUrl, NUXT_PUBLIC_SITE_URL: baseUrl, SITE_URL: baseUrl },
     stdio: 'inherit',
