@@ -23,5 +23,6 @@ crons.interval('expire Learn V2 calendar reconciliation proposals', { hours: 1 }
 crons.interval('poll and renew Learn V2 calendar watches', { minutes: 15 }, internal.learnV2CalendarReconciliation.maintainConnections, { cursor: null })
 crons.interval('purge Learn V2 calendar webhook receipts', { hours: 1 }, internal.learnV2CalendarReconciliation.purgeWebhookReceipts, {})
 crons.interval('purge stopped Learn V2 calendar watches', { hours: 1 }, internal.learnV2CalendarReconciliation.purgeStoppedWatches, {})
+crons.interval('purge expired Adaptive Learn operational events', { hours: 24 }, internal.learnActivityEventRetention.purgeExpiredLearnActivityEvents, {})
 
 export default crons
