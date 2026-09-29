@@ -21,6 +21,36 @@ async function setup() {
 }
 
 describe('Adaptive Learn canonical access gate', () => {
+  test('local browser rollback toggle is owner-scoped and closed outside disposable loopback mode', async () => {
+    const { t, owner } = await setup()
+    const previous = {
+      BUDDS_E2E_MODE: process.env.BUDDS_E2E_MODE,
+      BUDDS_E2E_AUTH_TOKEN: process.env.BUDDS_E2E_AUTH_TOKEN,
+      CONVEX_CLOUD_URL: process.env.CONVEX_CLOUD_URL,
+    }
+    try {
+      await expect(owner.mutation(api.learnAdaptiveAccess.setLocalE2eEntitlement, { enabled: true })).rejects.toThrow(/unavailable/)
+      process.env.BUDDS_E2E_MODE = 'true'
+      process.env.BUDDS_E2E_AUTH_TOKEN = 'a'.repeat(32)
+      process.env.CONVEX_CLOUD_URL = 'https://production.convex.cloud'
+      await expect(owner.mutation(api.learnAdaptiveAccess.setLocalE2eEntitlement, { enabled: true })).rejects.toThrow(/unavailable/)
+      process.env.CONVEX_CLOUD_URL = 'http://127.0.0.1:3210'
+      await expect(t.mutation(api.learnAdaptiveAccess.setLocalE2eEntitlement, { enabled: true })).rejects.toThrow(/denied/)
+      await owner.mutation(api.learnAdaptiveAccess.setLocalE2eEntitlement, { enabled: true })
+      await expect(owner.query(api.learnAdaptiveAccess.adaptiveStatus, {})).resolves.toMatchObject({ kind: 'allowed' })
+      await owner.mutation(api.learnAdaptiveAccess.setLocalE2eEntitlement, { enabled: false })
+      await expect(owner.query(api.learnAdaptiveAccess.adaptiveStatus, {})).resolves.toMatchObject({ kind: 'denied' })
+      await owner.mutation(api.users.upsertUser, {})
+      await expect(owner.query(api.learnAdaptiveAccess.adaptiveStatus, {})).resolves.toMatchObject({ kind: 'denied' })
+    }
+    finally {
+      for (const [name, value] of Object.entries(previous)) {
+        if (value === undefined) Reflect.deleteProperty(process.env, name)
+        else process.env[name] = value
+      }
+    }
+  })
+
   test.each([undefined, '', 'false', 'TRUE', ' true ', '1'])('fails closed for absent or malformed V2 flag %s', async (flag) => {
     const { owner } = await setup()
     await owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true })

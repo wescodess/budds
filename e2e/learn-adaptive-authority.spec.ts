@@ -1,9 +1,8 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 
 const token = process.env.BUDDS_E2E_AUTH_TOKEN ?? 'e2e-local-token-please-do-not-use-outside-tests'
 
-test('routed diagnostic persists the learner response through the disposable backend', async ({ page, request }) => {
-  test.setTimeout(4 * 60_000)
+async function saveRoutedDiagnostic(page: Page, request: APIRequestContext) {
   const bootstrap = await request.post('/api/e2e/session', {
     headers: { 'x-budds-e2e-token': token },
     data: { email: `adaptive-${Date.now()}@e2e.budds.invalid`, password: 'disposable-e2e-password', name: 'Adaptive Browser Test' },
@@ -40,6 +39,52 @@ test('routed diagnostic persists the learner response through the disposable bac
   await page.getByTestId('learn-diagnostic-response').fill(response)
   await page.getByTestId('learn-diagnostic-submit').click()
   await expect(page.getByTestId('learn-diagnostic-saved')).toContainText(response)
+  return { threadUrl: page.url(), response }
+}
+
+test('routed diagnostic persists the learner response through the disposable backend', async ({ page, request }) => {
+  test.setTimeout(4 * 60_000)
+  const { response } = await saveRoutedDiagnostic(page, request)
   await page.reload({ waitUntil: 'domcontentloaded' })
+  await expect(page.getByTestId('learn-diagnostic-saved')).toContainText(response)
+})
+
+test('server-owned rollback hides the routed Canvas and restores saved work', async ({ page, request }) => {
+  test.setTimeout(5 * 60_000)
+  const { threadUrl, response } = await saveRoutedDiagnostic(page, request)
+
+  await page.goto('/__e2e/adaptive-access')
+  await expect(page.getByTestId('adaptive-access-disable')).toBeEnabled()
+  await page.getByTestId('adaptive-access-disable').click()
+  await expect(page.getByRole('status')).toHaveText('Adaptive access rolled back.')
+  await expect(page.getByTestId('adaptive-access-status')).toHaveText('denied')
+
+  for (const viewport of [
+    { name: 'desktop', width: 1280, height: 800 },
+    { name: 'tablet', width: 768, height: 1024 },
+    { name: 'mobile', width: 375, height: 667 },
+  ]) {
+    await page.setViewportSize(viewport)
+    await page.goto(threadUrl)
+    const denied = page.getByTestId('learn-adaptive-thread-denied')
+    await expect(denied, `${viewport.name}: rolled-back route`).toBeVisible()
+    await expect(denied.getByRole('status')).toHaveText('This learning thread is not available for this account.')
+    await expect(page.getByTestId('learn-adaptive-canvas-frame')).toHaveCount(0)
+    const recovery = denied.getByRole('link', { name: 'Back to Learn' })
+    await expect(recovery).toHaveAttribute('href', '/app/learn')
+    const bounds = await recovery.boundingBox()
+    expect(bounds, `${viewport.name}: safe action bounds`).not.toBeNull()
+    expect(bounds!.height, `${viewport.name}: safe action target`).toBeGreaterThanOrEqual(44)
+    expect(bounds!.x + bounds!.width, `${viewport.name}: reflow`).toBeLessThanOrEqual(viewport.width + 1)
+    await recovery.focus()
+    await expect(recovery).toBeFocused()
+  }
+
+  await page.goto('/__e2e/adaptive-access')
+  await expect(page.getByTestId('adaptive-access-enable')).toBeEnabled()
+  await page.getByTestId('adaptive-access-enable').click()
+  await expect(page.getByRole('status')).toHaveText('Adaptive access restored.')
+  await expect(page.getByTestId('adaptive-access-status')).toHaveText('allowed')
+  await page.goto(threadUrl)
   await expect(page.getByTestId('learn-diagnostic-saved')).toContainText(response)
 })
