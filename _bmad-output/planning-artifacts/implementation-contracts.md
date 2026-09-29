@@ -114,8 +114,10 @@ and `by_userId_and_activityId_and_createdAt`.
 
 `userId`, `threadId`, optional `activityId`, closed `eventType`, `eventVersion`,
 `occurredAt`, reason/outcome code, source/contract versions, and bounded
-non-content metadata. Indexes: `by_userId_and_threadId_and_occurredAt` and
-`by_userId_and_eventType_and_occurredAt`. Raw answers, source text/locators,
+non-content metadata. Indexes: `by_userId_and_threadId_and_occurredAt`,
+`by_userId_and_eventType_and_occurredAt`, and the retention indexes
+`by_occurredAt` / `by_userId_and_occurredAt`. Operational events are purged
+after 90 days in bounded owner-scoped batches. Raw answers, source text/locators,
 provider payloads, queries, credentials, and filenames are rejected/redacted.
 The closed event type set includes `thread_command_committed`,
 `meaningful_activity_started`, `thread_drafted`, `evidence_ready`,

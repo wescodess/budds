@@ -1426,6 +1426,8 @@ export default defineSchema({
 
   learnActivityEvents: defineTable(learnActivityEventFields)
     .index('by_userId', ['userId'])
+    .index('by_occurredAt', ['occurredAt'])
+    .index('by_userId_and_occurredAt', ['userId', 'occurredAt'])
     .index('by_userId_and_threadId_and_occurredAt', ['userId', 'threadId', 'occurredAt'])
     .index('by_userId_and_eventType_and_occurredAt', ['userId', 'eventType', 'occurredAt'])
     .index('by_userId_and_activityId_and_eventType_and_occurredAt', ['userId', 'activityId', 'eventType', 'occurredAt'])
