@@ -5,12 +5,13 @@ export const LEGACY_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION = 'learn-adaptive.acti
 export const SECOND_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION = 'learn-adaptive.activity-events.v2' as const
 export const PREVIOUS_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION = 'learn-adaptive.activity-events.v3' as const
 export const FOURTH_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION = 'learn-adaptive.activity-events.v4' as const
-export const LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION = 'learn-adaptive.activity-events.v5' as const
+export const FIFTH_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION = 'learn-adaptive.activity-events.v5' as const
+export const LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION = 'learn-adaptive.activity-events.v6' as const
 export const LEARN_ACTIVITY_EVENT_TAXONOMY = [
   'thread_command_committed', 'meaningful_activity_started', 'thread_drafted', 'evidence_ready', 'evidence_blocked',
   'activity_eligible', 'activity_started', 'meaningful_response', 'assistance', 'activity_completed',
   'representative_pass', 'representative_fail', 'delayed_check_eligible', 'delayed_check_attempt', 'retained',
-  'remediation', 'provider_failure', 'provider_ambiguity', 'evidence_gap', 'evidence_invalidation', 'abandonment', 'explicit_end', 'routing_decision', 'canvas_render_failure', 'contribution_recorded', 'contribution_rejected', 'cross_feature_activity_created', 'cross_feature_activity_blocked', 'cross_feature_activity_invalidated',
+  'remediation', 'provider_failure', 'provider_ambiguity', 'evidence_gap', 'evidence_invalidation', 'abandonment', 'explicit_end', 'routing_decision', 'canvas_render_failure', 'contribution_recorded', 'contribution_rejected', 'cross_feature_activity_created', 'cross_feature_activity_blocked', 'cross_feature_activity_invalidated', 'experiment_assignment',
 ] as const
 
 export type LearnActivityEventType = typeof LEARN_ACTIVITY_EVENT_TAXONOMY[number]
@@ -35,6 +36,9 @@ export const learnActivityEventMetadataValidator = v.object({
   firstValueEligibility: v.optional(firstValueEligibilityValidator),
   firstValueExclusionCode: v.optional(firstValueExclusionCodeValidator),
   cohort: v.optional(v.string()),
+  experimentEligibility: v.optional(v.union(v.literal('eligible'), v.literal('excluded'))),
+  experimentExclusionCode: v.optional(v.union(v.literal('analysis_unapproved'), v.literal('safety_prerequisite_missing'), v.literal('guardrail_rollback'))),
+  experimentAnalysisVersion: v.optional(v.literal('adaptive-routing-analysis.v1')),
 })
 
 export const learnActivityEventFields = {
@@ -48,6 +52,7 @@ export const learnActivityEventFields = {
     v.literal(SECOND_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION),
     v.literal(PREVIOUS_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION),
     v.literal(FOURTH_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION),
+    v.literal(FIFTH_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION),
     v.literal(LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION),
   ),
   occurredAt: v.number(),
@@ -72,6 +77,9 @@ export type LearnActivityEventMetadata = {
   firstValueEligibility?: FirstValueEligibility
   firstValueExclusionCode?: FirstValueExclusionCode
   cohort?: string
+  experimentEligibility?: 'eligible' | 'excluded'
+  experimentExclusionCode?: 'analysis_unapproved' | 'safety_prerequisite_missing' | 'guardrail_rollback'
+  experimentAnalysisVersion?: 'adaptive-routing-analysis.v1'
 }
 
 export type LearnActivityEventInput = {
@@ -88,7 +96,7 @@ export type LearnActivityEventInput = {
 }
 
 const INPUT_KEYS = new Set(['eventType', 'eventVersion', 'sourceVersion', 'contractVersion', 'metricDefinitionVersion', 'semanticKey', 'occurredAt', 'reasonCode', 'outcomeCode', 'metadata'])
-const METADATA_KEYS = new Set(['activityClass', 'boundaryOrdinal', 'planRevision', 'opportunityOrdinal', 'assistanceLevel', 'attemptKind', 'masteryState', 'providerStage', 'firstValueEligibility', 'firstValueExclusionCode', 'cohort'])
+const METADATA_KEYS = new Set(['activityClass', 'boundaryOrdinal', 'planRevision', 'opportunityOrdinal', 'assistanceLevel', 'attemptKind', 'masteryState', 'providerStage', 'firstValueEligibility', 'firstValueExclusionCode', 'cohort', 'experimentEligibility', 'experimentExclusionCode', 'experimentAnalysisVersion'])
 const CODE = /^[a-z0-9][a-z0-9_:-]{0,95}$/
 const VERSION = /^[a-z0-9][a-z0-9._:-]{0,127}$/
 const SEMANTIC_KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,511}$/
@@ -113,11 +121,26 @@ export function validateLearnActivityEventInput<T extends LearnActivityEventInpu
   }
   if (metadata.cohort !== undefined && !CODE.test(metadata.cohort)) throw new Error('Adaptive event cohort is invalid')
   if (metadata.firstValueExclusionCode !== undefined && metadata.firstValueEligibility !== 'excluded') throw new Error('Adaptive event first-value exclusion is invalid')
+  if (input.eventType !== 'experiment_assignment' && (metadata.experimentEligibility !== undefined
+    || metadata.experimentExclusionCode !== undefined || metadata.experimentAnalysisVersion !== undefined))
+    throw new Error('Adaptive experiment metadata is invalid for this event type')
   if (input.eventType === 'thread_command_committed' && (input.metricDefinitionVersion !== 'first_value.v1' || metadata.opportunityOrdinal === undefined || metadata.firstValueEligibility === undefined || metadata.cohort === undefined)) throw new Error('Adaptive first-value opportunity metadata is invalid')
   if (input.eventType === 'meaningful_activity_started' && (input.metricDefinitionVersion !== 'first_value.v1' || metadata.opportunityOrdinal === undefined)) throw new Error('Adaptive first-value stop metadata is invalid')
   if (input.eventType === 'routing_decision' && (input.metricDefinitionVersion !== undefined
     || metadata.boundaryOrdinal === undefined || Object.keys(metadata).some(key => key !== 'boundaryOrdinal' && key !== 'activityClass')
     || !['recommended', 'blocked'].includes(input.outcomeCode ?? ''))) throw new Error('Adaptive routing decision metadata is invalid')
+  if (input.eventType === 'experiment_assignment' && (input.metricDefinitionVersion !== undefined
+    || input.sourceVersion !== 'adaptive-routing-analysis.v1'
+    || input.contractVersion !== 'learn-adaptive.experiment-assignment.v1'
+    || metadata.experimentAnalysisVersion !== 'adaptive-routing-analysis.v1'
+    || !['eligible', 'excluded'].includes(metadata.experimentEligibility ?? '')
+    || !['adaptive', 'fixed', 'excluded'].includes(metadata.cohort ?? '')
+    || (metadata.experimentEligibility === 'eligible' && (metadata.cohort === 'excluded' || metadata.experimentExclusionCode !== undefined))
+    || (metadata.experimentEligibility === 'excluded' && (metadata.cohort !== 'excluded' || !metadata.experimentExclusionCode))
+    || (metadata.experimentEligibility === 'eligible' && (input.outcomeCode !== 'assigned' || input.reasonCode !== undefined))
+    || (metadata.experimentEligibility === 'excluded' && (input.outcomeCode !== 'excluded' || input.reasonCode !== metadata.experimentExclusionCode))
+    || Object.keys(metadata).some(key => !['cohort', 'experimentEligibility', 'experimentExclusionCode', 'experimentAnalysisVersion'].includes(key))))
+    throw new Error('Adaptive experiment assignment metadata is invalid')
   if (input.eventType === 'canvas_render_failure' && (input.metricDefinitionVersion !== undefined
     || input.sourceVersion !== ADAPTIVE_ACTIVITY_VALIDATION_ANALYTICS_VERSION
     || !ADAPTIVE_ACTIVITY_VALIDATION_REASONS.includes(input.reasonCode as typeof ADAPTIVE_ACTIVITY_VALIDATION_REASONS[number])

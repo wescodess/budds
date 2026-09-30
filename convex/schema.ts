@@ -2,6 +2,7 @@ import { defineSchema, defineTable } from 'convex/server'
 import { v } from 'convex/values'
 import { learnActivityCommandReceiptFields, learnActivityDecisionFields, learnActivityEvidenceLinkFields, learnActivityOverrideFields, learnAdaptiveThreadDeletionJobFields, learningThreadActivityFields, learningThreadArtifactFields, learningThreadContributionFields, learningThreadFields, learningThreadPreferenceFields } from '../shared/adaptive-learn-storage-manifest'
 import { learnActivityEventFields } from '../shared/learn-adaptive-events'
+import { adaptiveRoutingAnalysisPlanValidator } from '../shared/learn-adaptive-experiment'
 import { masteryStateValidator, masteryTransitionReasonValidator } from '../shared/learn-v2-mastery'
 
 export default defineSchema({
@@ -1423,6 +1424,48 @@ export default defineSchema({
     .index('by_userId_and_threadId_and_boundaryOrdinal', ['userId', 'threadId', 'boundaryOrdinal'])
     .index('by_userId_and_activityId_and_createdAt', ['userId', 'activityId', 'createdAt'])
     .index('by_userId_and_idempotencyKeyHash', ['userId', 'idempotencyKeyHash']),
+
+  learnAdaptiveExperimentPlans: defineTable({
+    version: v.literal('adaptive-routing-analysis.v1'),
+    plan: adaptiveRoutingAnalysisPlanValidator,
+    digest: v.string(),
+    frozenAt: v.number(),
+  }).index('by_version', ['version']),
+  learnAdaptiveExperimentApprovals: defineTable({
+    planId: v.id('learnAdaptiveExperimentPlans'),
+    productAnalyticsReference: v.string(),
+    productReference: v.string(),
+    qaReference: v.string(),
+    engineeringReference: v.string(),
+    approvedAt: v.number(),
+  }).index('by_planId', ['planId']),
+  learnAdaptiveExperimentAssignments: defineTable({
+    userId: v.string(),
+    planId: v.id('learnAdaptiveExperimentPlans'),
+    analysisVersion: v.literal('adaptive-routing-analysis.v1'),
+    cohort: v.union(v.literal('adaptive'), v.literal('fixed')),
+    eligibility: v.literal('eligible'),
+    contractVersion: v.literal('learn-adaptive.experiment-assignment.v1'),
+    assignedAt: v.number(),
+  }).index('by_userId', ['userId'])
+    .index('by_userId_and_analysisVersion', ['userId', 'analysisVersion']),
+  learnAdaptiveExperimentGuardrailEvaluations: defineTable({
+    planId: v.id('learnAdaptiveExperimentPlans'),
+    snapshotKey: v.string(),
+    snapshotDigest: v.string(),
+    evidenceDigest: v.string(),
+    snapshotSourceVersion: v.string(),
+    status: v.union(v.literal('non_qualifying'), v.literal('insufficient_evidence'), v.literal('guardrails_passed')),
+    rollbackTrigger: v.boolean(),
+    reasons: v.array(v.union(v.literal('accessibility_degradation'), v.literal('recovery_degradation'))),
+    evaluatedAt: v.number(),
+  }).index('by_planId_and_snapshotKey', ['planId', 'snapshotKey'])
+    .index('by_planId_and_evaluatedAt', ['planId', 'evaluatedAt']),
+  learnAdaptiveExperimentRollbacks: defineTable({
+    planId: v.id('learnAdaptiveExperimentPlans'),
+    triggerEvaluationId: v.id('learnAdaptiveExperimentGuardrailEvaluations'),
+    triggeredAt: v.number(),
+  }).index('by_planId', ['planId']),
 
   learnActivityEvents: defineTable(learnActivityEventFields)
     .index('by_userId', ['userId'])

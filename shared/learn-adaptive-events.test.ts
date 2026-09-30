@@ -7,13 +7,13 @@ import {
 } from './learn-adaptive-events'
 
 describe('Adaptive Learn event contract', () => {
-  test('freezes the exact closed v5 taxonomy and type/version pairing', () => {
-    expect(LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION).toBe('learn-adaptive.activity-events.v5')
+  test('freezes the exact closed v6 taxonomy and type/version pairing', () => {
+    expect(LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION).toBe('learn-adaptive.activity-events.v6')
     expect(LEARN_ACTIVITY_EVENT_TAXONOMY).toEqual([
       'thread_command_committed', 'meaningful_activity_started', 'thread_drafted', 'evidence_ready', 'evidence_blocked',
       'activity_eligible', 'activity_started', 'meaningful_response', 'assistance', 'activity_completed',
       'representative_pass', 'representative_fail', 'delayed_check_eligible', 'delayed_check_attempt', 'retained',
-      'remediation', 'provider_failure', 'provider_ambiguity', 'evidence_gap', 'evidence_invalidation', 'abandonment', 'explicit_end', 'routing_decision', 'canvas_render_failure', 'contribution_recorded', 'contribution_rejected', 'cross_feature_activity_created', 'cross_feature_activity_blocked', 'cross_feature_activity_invalidated',
+      'remediation', 'provider_failure', 'provider_ambiguity', 'evidence_gap', 'evidence_invalidation', 'abandonment', 'explicit_end', 'routing_decision', 'canvas_render_failure', 'contribution_recorded', 'contribution_rejected', 'cross_feature_activity_created', 'cross_feature_activity_blocked', 'cross_feature_activity_invalidated', 'experiment_assignment',
     ])
     expect(LEARN_ACTIVITY_EVENT_TAXONOMY.map(type => eventVersionFor(type))).toEqual(
       LEARN_ACTIVITY_EVENT_TAXONOMY.map(type => `${type}.v1`),
@@ -38,6 +38,9 @@ describe('Adaptive Learn event contract', () => {
       expect(() => validateLearnActivityEventInput({ ...safe, metadata: { ...safe.metadata, [forbidden]: 'private-value' } } as never), forbidden).toThrow(/metadata/i)
     }
     expect(() => validateLearnActivityEventInput({ ...safe, reasonCode: 'https://private.example/a' })).toThrow(/reason code/i)
+    expect(() => validateLearnActivityEventInput({ ...safe, metadata: { ...safe.metadata,
+      experimentAnalysisVersion: 'adaptive-routing-analysis.v1', experimentEligibility: 'eligible', cohort: 'adaptive' } }))
+      .toThrow(/experiment metadata/i)
   })
 
   test('routing decision events carry only a boundary and optional closed activity class', () => {
@@ -50,6 +53,23 @@ describe('Adaptive Learn event contract', () => {
       .toThrow(/routing decision metadata/i)
     expect(() => validateLearnActivityEventInput({ ...routing, metricDefinitionVersion: 'first_value.v1' }))
       .toThrow(/routing decision metadata/i)
+  })
+
+  test('experiment assignment event outcome agrees with closed eligibility and exclusion metadata', () => {
+    const assigned = { eventType: 'experiment_assignment' as const, eventVersion: 'experiment_assignment.v1' as const,
+      sourceVersion: 'adaptive-routing-analysis.v1', contractVersion: 'learn-adaptive.experiment-assignment.v1',
+      semanticKey: 'experiment:adaptive-routing-analysis.v1', occurredAt: 1, outcomeCode: 'assigned',
+      metadata: { cohort: 'adaptive', experimentEligibility: 'eligible' as const,
+        experimentAnalysisVersion: 'adaptive-routing-analysis.v1' as const } }
+    expect(validateLearnActivityEventInput(assigned)).toEqual(assigned)
+    expect(() => validateLearnActivityEventInput({ ...assigned, outcomeCode: 'excluded' })).toThrow(/assignment metadata/i)
+    expect(() => validateLearnActivityEventInput({ ...assigned, metadata: { ...assigned.metadata, cohort: 'excluded' } })).toThrow(/assignment metadata/i)
+    const excluded = { ...assigned, outcomeCode: 'excluded', reasonCode: 'guardrail_rollback',
+      metadata: { cohort: 'excluded', experimentEligibility: 'excluded' as const,
+        experimentExclusionCode: 'guardrail_rollback' as const,
+        experimentAnalysisVersion: 'adaptive-routing-analysis.v1' as const } }
+    expect(validateLearnActivityEventInput(excluded)).toEqual(excluded)
+    expect(() => validateLearnActivityEventInput({ ...excluded, reasonCode: 'other' })).toThrow(/assignment metadata/i)
   })
 
   test('Canvas render failures contain only a closed reason and bounded fallback metadata', () => {
