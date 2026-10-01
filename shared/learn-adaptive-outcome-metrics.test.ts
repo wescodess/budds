@@ -180,6 +180,28 @@ test('operator preserves distinct authoritative attempts that merely share sourc
   expect(report(fixture).metrics.crossFeature).toMatchObject({ authoritativeAttempts: 2, distinctOrigins: 6, improvement: { numerator: 2, denominator: 2, rate: 1 } })
 })
 
+const crossFeatureWindow = () => {
+  const fixture = frozen()
+  fixture.windowStart = 1772928000000
+  fixture.attempts = fixture.attempts.filter((row: { kind: string, occurredAt: number }) => row.kind === 'independent_application' || row.occurredAt >= fixture.windowStart)
+  for (const name of ['plans', 'assignments', 'experimentOutcomes', 'accessibilityRuns', 'requests', 'supportContacts', 'supportDenominators']) fixture[name] = []
+  fixture.accessibilityProtocol = null
+  for (const name of ['experiment', 'accessibility', 'requests', 'supportContacts', 'supportDenominators']) fixture.coverage[name] = false
+  return fixture
+}
+
+test('operator excludes historical cross-feature attempts while retaining historical retention baselines', () => {
+  const fixture = crossFeatureWindow()
+  fixture.contributions[0].authoritativeAttemptId = 'first1'
+  expect(report(fixture).metrics).toMatchObject({ crossFeature: { improvement: { status: 'no_denominator', numerator: 0, denominator: 0, rate: null }, authoritativeAttempts: 0, distinctOrigins: 0, exclusions: { out_of_window: 1 } }, retention: { numerator: 1, denominator: 2, missingCount: 1 } })
+})
+
+test.each(['windowStart', 'windowEnd'])('operator includes cross-feature attempts at the inclusive %s boundary', (boundary) => {
+  const fixture = crossFeatureWindow()
+  fixture.attempts.find((row: { attemptId: string }) => row.attemptId === 'delayed1').occurredAt = fixture[boundary]
+  expect(report(fixture).metrics.crossFeature).toMatchObject({ improvement: { status: 'known', numerator: 1, denominator: 1, rate: 1 }, authoritativeAttempts: 1, distinctOrigins: 5, exclusions: { out_of_window: 0 } })
+})
+
 test('operator rejects eligible contacts against an explicitly empty cohort population', () => {
   const fixture = frozen()
   fixture.supportDenominators[0].eligibleLearnerCount = 0

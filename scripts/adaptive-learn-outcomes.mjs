@@ -202,9 +202,14 @@ const experiment = fixture => {
 }
 const crossFeature = fixture => {
   const known = fixture.coverage.crossFeature && fixture.coverage.attempts && fixture.coverage.capabilities
-  const attempts = unique(fixture.contributions.map(row => ({ attemptId: row.authoritativeAttemptId, improved: row.nextActionImproved })), 'attemptId')
-  const origins = unique(fixture.contributions.flatMap(row => row.origins), 'originId')
-  return { improvement: ratio(attempts.filter(row => row.improved === true).length, attempts.length, known, attempts.filter(row => row.improved === null).length), authoritativeAttempts: known ? attempts.length : null, distinctOrigins: known ? origins.length : null, duplicateAttemptProjections: known ? fixture.contributions.length - attempts.length : null, originCounts: known ? Object.fromEntries(originTypes.map(type => [type, origins.filter(row => row.sourceFeature === type).length])) : null, silentMasteryIncrements: known ? 0 : null, hiddenOrigins: known ? 0 : null, corpusEvidence: 'synthetic_only', approval: 'pending' }
+  const attemptTimes = new Map(fixture.attempts.map(row => [row.attemptId, row.occurredAt]))
+  const contributions = fixture.contributions.filter(row => {
+    const occurredAt = attemptTimes.get(row.authoritativeAttemptId)
+    return occurredAt >= fixture.windowStart && occurredAt <= fixture.windowEnd
+  })
+  const attempts = unique(contributions.map(row => ({ attemptId: row.authoritativeAttemptId, improved: row.nextActionImproved })), 'attemptId')
+  const origins = unique(contributions.flatMap(row => row.origins), 'originId')
+  return { improvement: ratio(attempts.filter(row => row.improved === true).length, attempts.length, known, attempts.filter(row => row.improved === null).length), authoritativeAttempts: known ? attempts.length : null, distinctOrigins: known ? origins.length : null, duplicateAttemptProjections: known ? contributions.length - attempts.length : null, originCounts: known ? Object.fromEntries(originTypes.map(type => [type, origins.filter(row => row.sourceFeature === type).length])) : null, exclusions: known ? { out_of_window: fixture.contributions.length - contributions.length } : null, silentMasteryIncrements: known ? 0 : null, hiddenOrigins: known ? 0 : null, corpusEvidence: 'synthetic_only', approval: 'pending' }
 }
 const accessibility = fixture => ({
   ...Object.fromEntries(['fixed', 'adaptive'].map(arm => {
