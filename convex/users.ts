@@ -1,7 +1,8 @@
 import { mutation, query } from './_generated/server'
 import { AUDIO_OVERVIEW_DAILY_CAP, todayUtcYmd } from './lib/audioOverviewPolicy'
 import { getOptionalAuthUserId, requireAuth } from './lib/auth'
-import { canBootstrapLearnV2E2e } from './lib/learnV2E2e'
+import { canBootstrapLearnV2E2e, type LearnV2E2eEnvironment } from './lib/learnV2E2e'
+import { requireAdaptiveActivationApproval } from './lib/adaptiveActivationApproval'
 
 export { AUDIO_OVERVIEW_DAILY_CAP }
 
@@ -11,11 +12,12 @@ export const upsertUser = mutation({
     const identity = await ctx.auth.getUserIdentity()
     if (!identity) throw new Error('Unauthenticated')
     const userId = await requireAuth(ctx)
-    const bootstrapLearnV2 = canBootstrapLearnV2E2e({
+    const localEnvironment: LearnV2E2eEnvironment = {
       BUDDS_E2E_MODE: process.env.BUDDS_E2E_MODE,
       BUDDS_E2E_AUTH_TOKEN: process.env.BUDDS_E2E_AUTH_TOKEN,
       CONVEX_CLOUD_URL: process.env.CONVEX_CLOUD_URL,
-    })
+    }
+    const bootstrapLearnV2 = canBootstrapLearnV2E2e(localEnvironment)
 
     const existing = await ctx.db
       .query('users')
@@ -25,6 +27,7 @@ export const upsertUser = mutation({
       .unique()
 
     if (existing) {
+      if (bootstrapLearnV2 && existing.learnAdaptiveExperienceEntitlement === undefined) requireAdaptiveActivationApproval(localEnvironment)
       await ctx.db.patch(existing._id, {
         name: identity.name ?? existing.name,
         email: identity.email ?? existing.email,
@@ -39,6 +42,7 @@ export const upsertUser = mutation({
       return existing._id
     }
 
+    if (bootstrapLearnV2) requireAdaptiveActivationApproval(localEnvironment)
     return await ctx.db.insert('users', {
       tokenIdentifier: identity.tokenIdentifier,
       name: identity.name ?? 'Unknown',
