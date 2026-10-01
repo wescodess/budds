@@ -12,18 +12,25 @@ const conversationIdRef = ref<Id<'conversations'> | null>(null)
 const {
   messages, loading, streaming, thinking, error,
   hasIndexedDocuments, selectedModel, interjectionInFlight,
-  sendMessage, selectModel, loadConversation, startNewConversation,
+  sendMessage, selectModel, loadConversation, startNewConversation, clearMessages,
 } = useChat(folderId, conversationIdRef)
+
+const app = import.meta.client ? useNuxtApp() : null
+const authReady = import.meta.client ? ((app!.$convexAuthReady as Ref<boolean> | undefined) ?? ref(false)) : ref(false)
+const authenticated = import.meta.client ? ((app!.$convexAuthenticated as Ref<boolean> | undefined) ?? ref(false)) : ref(false)
+const ready = computed(() => authReady.value && authenticated.value)
+let hydrationEpoch = 0
+const client = import.meta.client ? useConvex() : null
 
 const workspaceRef = ref<{ focus: () => void } | null>(null)
 
-async function hydrateFromMostRecent() {
-  if (!import.meta.client) return
+async function hydrateFromMostRecent(epoch: number) {
+  if (!client) return
   try {
-    const client = useConvex()
     const convo = await client.query(api.conversations.getMostRecentForFolder, {
       folderId: folderId.value,
     })
+    if (epoch !== hydrationEpoch || !ready.value) return
     if (convo?._id) {
       conversationIdRef.value = convo._id as Id<'conversations'>
       await loadConversation(convo._id as Id<'conversations'>)
@@ -33,13 +40,21 @@ async function hydrateFromMostRecent() {
   }
 }
 
+watch([ready, folderId], ([isReady]) => {
+  hydrationEpoch += 1
+  clearMessages()
+  conversationIdRef.value = null
+  if (isReady) void hydrateFromMostRecent(hydrationEpoch)
+}, { immediate: true, flush: 'sync' })
+
 onMounted(() => {
-  void hydrateFromMostRecent()
   document.addEventListener('keydown', handleSlashShortcut)
   document.addEventListener('keydown', handleNewChatShortcut)
 })
 
 onUnmounted(() => {
+  hydrationEpoch += 1
+  clearMessages()
   document.removeEventListener('keydown', handleSlashShortcut)
   document.removeEventListener('keydown', handleNewChatShortcut)
 })
@@ -76,6 +91,7 @@ function handleNewChatShortcut(e: KeyboardEvent) {
   const tag = (e.target as HTMLElement)?.tagName
   if (tag === 'INPUT' || tag === 'TEXTAREA') return
   e.preventDefault()
+  hydrationEpoch += 1
   startNewConversation()
   conversationIdRef.value = null
 }

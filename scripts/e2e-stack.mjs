@@ -10,10 +10,13 @@ const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
 const token = process.env.BUDDS_E2E_AUTH_TOKEN || 'e2e-local-token-please-do-not-use-outside-tests'
 const baseUrl = assertLoopbackUrl(process.env.BUDDS_E2E_BASE_URL || 'http://127.0.0.1:3102', 'BUDDS_E2E_BASE_URL')
 const realAdaptiveCanvas = process.env.BUDDS_E2E_REAL_ADAPTIVE_CANVAS === 'true'
+const syntheticApproval = process.env.BUDDS_E2E_SYNTHETIC_ADAPTIVE_APPROVAL === 'true'
 
 if (process.env.NODE_ENV === 'production' || process.env.CONVEX_DEPLOY_KEY || process.env.CF_PAGES_ENVIRONMENT) throw new Error('E2E stack refuses production mode, Cloudflare Pages environments, and Convex deploy keys')
 if (process.env.BUDDS_E2E_CONVEX_URL) throw new Error('BUDDS_E2E_CONVEX_URL is unsupported: the runner creates its own disposable local Convex deployment')
 if (token.length < 32) throw new Error('BUDDS_E2E_AUTH_TOKEN must contain at least 32 characters')
+if (syntheticApproval && !realAdaptiveCanvas) throw new Error('Synthetic Adaptive approval requires the real local Adaptive Canvas journey')
+if (syntheticApproval && ['CONVEX_DEPLOYMENT_TOKEN', 'CLOUDFLARE_API_TOKEN', 'CF_API_TOKEN'].some(key => process.env[key])) throw new Error('Synthetic approval refuses deployment credentials')
 
 const inheritedEnv = { ...process.env }
 for (const key of ['CONVEX_DEPLOYMENT', 'CONVEX_DEPLOY_KEY', 'CONVEX_DEPLOYMENT_TOKEN', 'CONVEX_URL', 'CONVEX_SITE_URL', 'NUXT_PUBLIC_CONVEX_URL', 'AUTH_PROXY_TARGET_URL']) Reflect.deleteProperty(inheritedEnv, key)
@@ -108,6 +111,13 @@ async function main() {
   const convexUrl = assertLoopbackUrl(parseEnv(await readFile(join(isolatedRoot, '.env.local'), 'utf8'), 'VITE_CONVEX_URL'), 'Convex local deployment URL')
   const localConfig = JSON.parse(await readFile(join(isolatedRoot, '.convex/local/default/config.json'), 'utf8'))
   const convexSiteUrl = assertLoopbackUrl(`http://127.0.0.1:${localConfig.ports.site}`, 'Convex local site URL')
+  if (syntheticApproval) {
+    const result = await execFile(process.execPath, [join(root, 'scripts/configure-e2e-synthetic-pilot.mjs'), '--root', isolatedRoot, '--app-url', baseUrl, '--convex-url', convexUrl], {
+      cwd: root, env: { ...inheritedEnv, NODE_ENV: 'test', BUDDS_E2E_MODE: 'true', BUDDS_E2E_SYNTHETIC_ADAPTIVE_APPROVAL: 'true' },
+    })
+    const artifact = JSON.parse(result.stdout)
+    console.log(`Disposable synthetic Adaptive approval: ${artifact.label}; actual provider cost $0; expires ${artifact.endsAt}`)
+  }
   const functionEnv = join(isolatedRoot, '.env.learn-v2-e2e-functions')
   await writeFile(functionEnv, [
     'NODE_ENV=test',
@@ -120,6 +130,7 @@ async function main() {
     'LEARN_V2_SESSION_CONTENT_MODEL=budds-e2e-fixture.v1',
     'LEARN_V2_CALIBRATION_MODEL=budds-e2e-fixture.v1',
     'LEARN_V2_MASTERY_MODEL=budds-e2e-fixture.v1',
+    ...(syntheticApproval ? ['BUDDS_E2E_SYNTHETIC_ADAPTIVE_APPROVAL=true', 'LEARN_ADAPTIVE_V2_PILOT_MANIFEST=adaptive-v2-pilot.v1'] : []),
     `SITE_URL=${baseUrl}`,
     `NUXT_PUBLIC_SITE_URL=${baseUrl}`,
     `CONVEX_SITE_URL=${convexSiteUrl}`,

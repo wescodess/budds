@@ -5,6 +5,7 @@ import type { Id } from './_generated/dataModel'
 import type { MutationCtx, QueryCtx } from './_generated/server'
 import { getOptionalAuthUserId, requireAuth } from './lib/auth'
 import { createPendingAnswerAssessment } from './lib/quizAnswerAssessment'
+import { safeAttemptProjection } from './lib/learnAdaptiveHandoff'
 
 const MAX_QUIZ_QUESTIONS = 200
 const MAX_QUIZZES_PER_FOLDER = 100
@@ -39,6 +40,7 @@ const settingsValidator = v.object({
 async function requireQuiz(ctx: QueryCtx | MutationCtx, quizId: Id<'quizzes'>, userId: string) {
   const quiz = await ctx.db.get(quizId)
   if (!quiz || quiz.userId !== userId || quiz.deletedAt !== undefined) throw new Error('Quiz not found')
+  if (quiz.attemptProjection) throw new Error('Accepted learning results cannot be edited or submitted as legacy quiz attempts')
   return quiz
 }
 
@@ -310,7 +312,23 @@ export const getWithQuestions = query({
 
     questions.sort((a, b) => a.order - b.order)
 
-    return { quiz, questions }
+    const { attemptProjection, ...safeQuiz } = quiz
+    return { quiz: { ...safeQuiz, ...(attemptProjection ? { attemptProjection: await safeAttemptProjection(ctx, userId, attemptProjection) } : {}) }, questions }
+  },
+})
+
+export const getAcceptedAttemptProjection = query({
+  args: { quizId: v.id('quizzes') },
+  handler: async (ctx, args) => {
+    const userId = await getOptionalAuthUserId(ctx)
+    if (!userId) return null
+    const quiz = await ctx.db.get(args.quizId)
+    if (!quiz || quiz.userId !== userId || quiz.deletedAt !== undefined || !quiz.attemptProjection) return null
+    const owner = await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique()
+    if (!owner) return null
+    const safe = await safeAttemptProjection(ctx, userId, quiz.attemptProjection)
+    const thread = await ctx.db.get(quiz.attemptProjection.threadId)
+    return { ...safe, ownerId: owner._id, quizId: quiz._id, folderId: quiz.folderId, threadRevision: thread?.userId === userId && thread.deletionStartedAt === undefined ? thread.revision : null }
   },
 })
 

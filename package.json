@@ -25,7 +25,7 @@
     "e2e:stack": "node scripts/e2e-stack.mjs",
     "test:e2e:learn-v2": "playwright test --config playwright.config.ts e2e/learn-v2-journey.spec.ts",
     "test:e2e:learn": "playwright test --config playwright.config.ts e2e/learn-v2-journey.spec.ts e2e/learn-adaptive-recovery.spec.ts",
-    "test:e2e:learn:authority": "BUDDS_E2E_REAL_ADAPTIVE_CANVAS=true playwright test --config playwright.config.ts e2e/learn-adaptive-authority.spec.ts",
+    "test:e2e:learn:authority": "BUDDS_E2E_REAL_ADAPTIVE_CANVAS=true playwright test --config playwright.config.ts e2e/learn-adaptive-authority.spec.ts e2e/learn-adaptive-handoff.spec.ts",
     "verify:learn-v2-beta": "pnpm typecheck && pnpm typecheck:convex && pnpm test:learn-v2:unit && pnpm test:learn-v2:component",
     "verify:learn-v2-calendar": "pnpm typecheck && pnpm typecheck:convex && pnpm test:learn-v2:calendar",
     "audio:workflow:dev": "pnpm --dir workers/audio-overview dev",

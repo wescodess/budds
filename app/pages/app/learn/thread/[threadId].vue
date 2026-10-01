@@ -420,6 +420,8 @@ const endedReadOnly = computed(() => thread.value?.thread.lifecycle === 'ended' 
 const selectedActivityId = computed(() => typeof route.query.activity === 'string' ? route.query.activity : null)
 const selectedHistory = computed(() => thread.value?.history.find((item: { id: string }) => item.id === selectedActivityId.value) ?? null)
 const showCurrent = computed(() => !selectedActivityId.value || selectedActivityId.value === thread.value?.currentActivity?.id)
+const acceptedAttemptHandoff = computed(() => (showCurrent.value ? thread.value?.currentActivity : selectedHistory.value)?.acceptedAttemptHandoff ?? null)
+const acceptedAttemptOrigins = computed(() => (showCurrent.value ? thread.value?.currentActivity : selectedHistory.value)?.attemptOrigins ?? [])
 const canvasUnsafe = computed(() => Boolean(canvas.value && canvas.value.status !== 'blocked' && thread.value?.thread.evidenceState !== 'ready'))
 const currentCanvasVisible = computed(() => showCurrent.value && !canvasUnsafe.value && !rollback.value && !endedReadOnly.value)
 const currentActivityUrl = computed(() => `/app/learn/thread/${encodeURIComponent(threadId.value)}`)
@@ -549,6 +551,12 @@ function leave() { void router.push(safeDestination.value) }
       </section>
 
       <section class="mt-6 rounded-xl bg-[var(--learn-activity-surface)] p-4" data-testid="learn-adaptive-canvas-frame" aria-label="Current learning activity">
+        <LearnAdaptiveAcceptedAttemptHandoff
+v-if="acceptedAttemptHandoff && ownerId && !rollback"
+          :owner-id="ownerId" :thread-id="threadId" :thread-revision="thread.thread.revision" :candidate="acceptedAttemptHandoff" />
+        <p v-if="acceptedAttemptOrigins.length" data-testid="learn-accepted-attempt-origins" class="mt-3 text-sm">
+          One accepted attempt · <span v-for="origin in acceptedAttemptOrigins" :key="origin.contributionId">{{ contributionFeatureLabel(origin.sourceFeature) }}{{ origin.sourceStatus === 'available' ? '' : ' (unavailable)' }} · </span>
+        </p>
         <div v-if="selectedActivityId && !showCurrent" data-testid="learn-selected-history" class="rounded-lg border border-border p-5">
           <template v-if="selectedHistory">
             <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Past activity · {{ selectedHistory.status }}</p>
