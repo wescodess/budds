@@ -211,6 +211,8 @@ export async function runLearningJourney(page: Page, request: APIRequestContext,
     await expect(page.getByRole('log')).toContainText('Your accepted learning result scored')
     await page.reload({ waitUntil: 'domcontentloaded' })
     await expect(page.getByRole('log')).toContainText('What would you like to discuss next?')
+    await page.goto(chatUrl.slice(0, chatUrl.lastIndexOf('/')))
+    await expect(page.getByRole('log')).toContainText('Your accepted learning result scored')
     await page.goto(quizUrl)
     await page.getByTestId('quiz-accepted-attempt-chat').click()
     await expect(page).toHaveURL(chatUrl)

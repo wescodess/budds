@@ -87,7 +87,7 @@ export function useChat(
     watch(conversationId, (next) => {
       conversationLoadEpoch += 1
       currentConversationId.value = next
-    })
+    }, { flush: 'sync' })
   }
 
   const createConversationMutation = import.meta.client
