@@ -5,8 +5,10 @@ import { createSsrMutationStub } from '~/utils/convexSsrMutation'
 // Loaded only by the guarded disposable authority layer. This fixture invokes
 // public APIs with the signed-in learner; it cannot stamp or seed authority.
 const route = useRoute()
-const sessionId = computed(() => String(route.query.session ?? ''))
-const missionId = computed(() => String(route.query.mission ?? ''))
+// This disposable entry captures its URL once. Route teardown must not issue
+// a new public query with the destination page's empty IDs.
+const sessionId = ref(String(route.query.session ?? ''))
+const missionId = ref(String(route.query.mission ?? ''))
 const auth = useNuxtApp()
 const authReady = (auth.$convexAuthReady as Ref<boolean> | undefined) ?? ref(false)
 const authenticated = (auth.$convexAuthenticated as Ref<boolean> | undefined) ?? ref(false)

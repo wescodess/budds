@@ -20,13 +20,13 @@ const authReady = import.meta.client ? ((app!.$convexAuthReady as Ref<boolean> |
 const authenticated = import.meta.client ? ((app!.$convexAuthenticated as Ref<boolean> | undefined) ?? ref(false)) : ref(false)
 const ready = computed(() => authReady.value && authenticated.value)
 let hydrationEpoch = 0
+const client = import.meta.client ? useConvex() : null
 
 const workspaceRef = ref<{ focus: () => void } | null>(null)
 
 async function hydrateFromMostRecent(epoch: number) {
-  if (!import.meta.client) return
+  if (!client) return
   try {
-    const client = useConvex()
     const convo = await client.query(api.conversations.getMostRecentForFolder, {
       folderId: folderId.value,
     })
@@ -91,6 +91,7 @@ function handleNewChatShortcut(e: KeyboardEvent) {
   const tag = (e.target as HTMLElement)?.tagName
   if (tag === 'INPUT' || tag === 'TEXTAREA') return
   e.preventDefault()
+  hydrationEpoch += 1
   startNewConversation()
   conversationIdRef.value = null
 }
