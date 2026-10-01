@@ -98,6 +98,36 @@ function successfulProviderResponse() {
 }
 
 describe('LA2-12 server-scored mastery attempts', () => {
+  test('denies V2 wrapper reuse of a product-denied adaptive job without dispatch or accounting reset', async () => {
+    const original = structuredClone(ADAPTIVE_V2_PILOT_MANIFEST)
+    const provider = vi.fn(async () => successfulProviderResponse())
+    vi.stubGlobal('fetch', provider)
+    try {
+      const setup = await fixture()
+      await configureSyntheticPilot([OWNER])
+      Object.assign(ADAPTIVE_V2_PILOT_MANIFEST.productControls, { maxReservedMicroUsdPerDay: 1 })
+      await setup.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true })
+      const activity = await addAdaptiveActivity(setup, 'cross-wrapper-denial')
+      const { tokenIdentifier: _token, scorerVerdict: _verdict, ...attempt } = setup.args('cross-wrapper-denial-key', 80)
+      await setup.t.run(ctx => ctx.db.patch(activity.activityDocumentId, { submittedResponse: attempt.response, submittedConfidence: attempt.confidence }))
+      const adaptiveRequest = { threadId: activity.threadId, activityId: 'cross-wrapper-denial', ...attempt }
+      await expect(setup.owner.action(api.learnAdaptive.submitResponse, adaptiveRequest)).resolves.toMatchObject({ kind: 'blocked', code: 'adaptive_product_cost_budget', retryable: false })
+      const exported = await setup.owner.query(api.dataExport.getUserDataPage, { collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })
+      Object.assign(ADAPTIVE_V2_PILOT_MANIFEST.rollback, { enabled: true })
+      const retried = await setup.owner.action(api.learnV2Mastery.submitMasteryAttempt, attempt).catch(error => ({ error }))
+      expect(provider).not.toHaveBeenCalled()
+      expect(retried).toMatchObject({ status: 'denied', code: 'adaptive_activity_authority_unavailable', retryable: false })
+      await expect(setup.owner.query(api.dataExport.getUserDataPage, { collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })).resolves.toEqual(exported)
+      for (const collection of ['masteryAttempts', 'masteryRecords'] as const) {
+        await expect(setup.owner.query(api.dataExport.getUserDataPage, { collection, paginationOpts: { cursor: null, numItems: 8 } })).resolves.toMatchObject({ page: [] })
+      }
+      Object.assign(ADAPTIVE_V2_PILOT_MANIFEST.rollback, { enabled: false })
+      await expect(setup.owner.action(api.learnAdaptive.submitResponse, adaptiveRequest)).resolves.toMatchObject({ kind: 'blocked', code: 'adaptive_product_guardrail_review', retryable: false })
+      expect(provider).not.toHaveBeenCalled()
+    }
+    finally { Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, original); vi.unstubAllEnvs(); vi.unstubAllGlobals() }
+  })
+
   test.each(['rollback', 'thread deletion', 'lease expiry'])('keeps accepted mastery unchanged after %s while a provider reply is pending', async (interruption) => {
     const original = structuredClone(ADAPTIVE_V2_PILOT_MANIFEST)
     const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-09-30T12:00:00.000Z'))

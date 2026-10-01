@@ -617,6 +617,12 @@ export const beginMasteryScoring = internalMutation({
         return { kind: 'blocked' as const, code: 'provider_outcome_requires_reconciliation' as const, message: 'Scoring needs reconciliation. No mastery change was made.', retryable: false }
       }
       if ((existing.status === 'leased' || existing.status === 'queued') && (existing.leaseExpiresAt ?? 0) > now) return { kind: 'pending' as const, status: 'in_progress' as const }
+      // A public wrapper cannot downgrade a persisted adaptive scoring job by
+      // omitting its admission context when acquiring a new dispatch lease.
+      if (!args.adaptiveAdmission && (existing.adaptiveThreadId || existing.adaptiveActivityId
+        || existing.providerPilotManifestVersion || existing.providerProductPolicyVersion || existing.providerRollbackPolicyVersion)) {
+        return { kind: 'denied' as const, code: 'adaptive_activity_authority_unavailable' as const, message: 'Use the Adaptive Learn submission to continue this scoring request.', retryable: false }
+      }
       scope ??= await sessionScope(ctx, args.tokenIdentifier, args.studySessionId)
       if (scope.session.status !== 'in_progress' || scope.session.revision !== args.expectedSessionRevision || scope.content.revision !== args.expectedContentRevision || scope.plan.recordRevision !== args.expectedPlanRecordRevision || scope.blueprint.recordRevision !== args.expectedBlueprintRecordRevision) throw new Error('Started session revision conflict')
       if (args.adaptiveAdmission) {
