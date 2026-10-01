@@ -3,14 +3,16 @@ import { expect, test, type APIRequestContext, type Locator, type Page } from '@
 const token = process.env.BUDDS_E2E_AUTH_TOKEN ?? 'e2e-local-token-please-do-not-use-outside-tests'
 
 async function tabTo(page: Page, control: Locator) {
+  if (await control.evaluate(element => element === document.activeElement)) await page.keyboard.press('Tab')
+  const unfocusedShadow = await control.evaluate(element => getComputedStyle(element).boxShadow)
   for (let step = 0; step < 80; step++) {
     if (await control.evaluate(element => element === document.activeElement)) {
       const focus = await control.evaluate(element => {
         const style = getComputedStyle(element)
-        return { visible: element.matches(':focus-visible'), outline: style.outlineStyle !== 'none' && Number.parseFloat(style.outlineWidth) > 0, ring: style.boxShadow !== 'none' }
+        return { visible: element.matches(':focus-visible'), outline: style.outlineStyle !== 'none' && Number.parseFloat(style.outlineWidth) > 0 && style.outlineColor !== 'rgba(0, 0, 0, 0)', shadow: style.boxShadow }
       })
       expect(focus.visible).toBe(true)
-      expect(focus.outline || focus.ring).toBe(true)
+      expect(focus.outline || focus.shadow !== 'none' && focus.shadow !== unfocusedShadow).toBe(true)
       return
     }
     await page.keyboard.press('Tab')
@@ -65,6 +67,14 @@ async function saveRoutedDiagnostic(page: Page, request: APIRequestContext, keyb
   await activate(page.getByTestId('learn-diagnostic-start'))
   const response = 'The satellite keeps falling while its sideways velocity carries it around Earth.'
   await enter(page.getByTestId('learn-diagnostic-response'), response)
+  if (keyboardOnly) {
+    await activate(page.getByTestId('learn-why-toggle'))
+    await expect(page.getByTestId('learn-why-toggle')).toHaveAttribute('aria-expanded', 'true')
+    await activate(page.getByTestId('learn-override-time_25'))
+    await expect(page.getByTestId('learn-fixed-next-plan')).toContainText('Continue with 25 minutes')
+    await expect(page.getByTestId('learn-override-time_25')).toBeFocused()
+    await expect(page.getByTestId('learn-diagnostic-response')).toHaveValue(response)
+  }
   await activate(page.getByTestId('learn-diagnostic-submit'))
   await expect(page.getByTestId('learn-diagnostic-saved')).toContainText(response)
   return { threadUrl: page.url(), response }
