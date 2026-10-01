@@ -1,0 +1,430 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Adaptive Learn release evidence v1",
+  "description": "Input metadata contract; generated bundle contract is #/$defs/bundle. Assembly never authenticates metadata, even when records claim approved. Synthetic examples must set synthetic=true. Only opaque non-private IDs and digests belong here. Live audits and trusted release review remain separate.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "const": "adaptive-release-input.v1"
+    },
+    "synthetic": {
+      "type": "boolean"
+    },
+    "owners": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "$ref": "#/$defs/owner"
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "$ref": "#/$defs/evidence"
+      }
+    },
+    "knownExclusions": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "$ref": "#/$defs/exclusion"
+      }
+    }
+  },
+  "required": [
+    "version",
+    "synthetic"
+  ],
+  "x-input-byte-limit": 65536,
+  "x-required-evidence-kinds": [
+    "hosted_gate",
+    "provider_quota",
+    "provider_configuration",
+    "keyboard",
+    "physical_screen_reader",
+    "wcag_2_2_aa",
+    "security",
+    "migration",
+    "export",
+    "deletion",
+    "metric_definitions"
+  ],
+  "x-required-owner-roles": [
+    "release",
+    "flag",
+    "rollback",
+    "support"
+  ],
+  "x-completeness-rule": "Every role and evidence kind has one distinct complete record, passed and claimed approved at the selected SHA, required environments and source digests match, and no known exclusions remain. This does not prove approval authenticity, evidence correctness, or activation readiness. Missing/null record fields are semantic exclusions. Unknown properties and invalid values reject the input.",
+  "$defs": {
+    "owner": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "enum": [
+            "release",
+            "flag",
+            "rollback",
+            "support"
+          ]
+        },
+        "ownerId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "role"
+      ]
+    },
+    "sourcePin": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "enum": [
+            "first_value_metrics",
+            "storage_manifest",
+            "schema",
+            "export",
+            "deletion",
+            "migration",
+            "storage_checks",
+            "migration_checks",
+            "export_checks",
+            "deletion_checks",
+            "object_deletion_checks",
+            "events",
+            "operational_metrics",
+            "outcome_metrics",
+            "operational_query",
+            "outcome_query",
+            "provider_policy",
+            "provider_controls",
+            "configuration_approval",
+            "configuration_contract"
+          ]
+        },
+        "digest": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "source"
+      ]
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "hosted_gate",
+            "provider_quota",
+            "provider_configuration",
+            "keyboard",
+            "physical_screen_reader",
+            "wcag_2_2_aa",
+            "security",
+            "migration",
+            "export",
+            "deletion",
+            "metric_definitions"
+          ]
+        },
+        "testedSha": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-f0-9]{40}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "environment": {
+          "anyOf": [
+            {
+              "enum": [
+                "local",
+                "synthetic",
+                "hosted",
+                "provider",
+                "physical"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "result": {
+          "anyOf": [
+            {
+              "enum": [
+                "passed",
+                "failed",
+                "unknown"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "artifactId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "artifactDigest": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reviewerId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reviewDecision": {
+          "anyOf": [
+            {
+              "enum": [
+                "approved",
+                "pending",
+                "denied"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sourceDigests": {
+          "anyOf": [
+            {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "$ref": "#/$defs/sourcePin"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    },
+    "exclusion": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}$"
+        },
+        "subject": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}$"
+        },
+        "ownerId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "code",
+        "subject"
+      ]
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "enum": [
+            "first_value_metrics",
+            "storage_manifest",
+            "schema",
+            "export",
+            "deletion",
+            "migration",
+            "storage_checks",
+            "migration_checks",
+            "export_checks",
+            "deletion_checks",
+            "object_deletion_checks",
+            "events",
+            "operational_metrics",
+            "outcome_metrics",
+            "operational_query",
+            "outcome_query",
+            "provider_policy",
+            "provider_controls",
+            "configuration_approval",
+            "configuration_contract"
+          ]
+        },
+        "path": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "digest": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "versions": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}$"
+          }
+        },
+        "versionLiterals": {
+          "type": "array",
+          "description": "Bounded literal label inventory only; does not evaluate exports or assert exhaustive semantic interpretation.",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}$"
+          }
+        },
+        "versionStatus": {
+          "enum": ["inventoried", "unversioned", "invalid", "unavailable"]
+        }
+      },
+      "required": [
+        "source",
+        "path",
+        "digest",
+        "versions",
+        "versionLiterals",
+        "versionStatus"
+      ]
+    },
+    "bundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": "adaptive-release-evidence.v1"
+        },
+        "testedSha": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "synthetic": {
+          "type": "boolean"
+        },
+        "assemblyComplete": {
+          "type": "boolean"
+        },
+        "activationReady": {
+          "const": false
+        },
+        "activationDecision": {
+          "const": "denied"
+        },
+        "reviewStatus": {
+          "const": "unverified"
+        },
+        "sources": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/source"
+          }
+        },
+        "owners": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/owner"
+          }
+        },
+        "evidence": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/evidence"
+          }
+        },
+        "knownExclusions": {
+          "type": "array",
+          "maxItems": 1024,
+          "items": {
+            "$ref": "#/$defs/exclusion"
+          }
+        }
+      },
+      "required": [
+        "version",
+        "testedSha",
+        "synthetic",
+        "assemblyComplete",
+        "activationReady",
+        "activationDecision",
+        "reviewStatus",
+        "sources",
+        "owners",
+        "evidence",
+        "knownExclusions"
+      ]
+    }
+  }
+}
