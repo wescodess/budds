@@ -16,17 +16,31 @@ const sourcePaths = {
   configuration_approval: 'docs/operations/adaptive-learn-activation-approval.v1.json', configuration_contract: 'shared/adaptive-activation-approval.ts',
 }
 const git = args => execFileSync('git', ['--no-replace-objects', ...args], { cwd: repository, maxBuffer: 2 * 1024 * 1024, timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'] })
+const validVersion = value => typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}$/.test(value)
 const sourcesAt = sha => Object.entries(sourcePaths).sort(([a], [b]) => a < b ? -1 : 1).map(([source, path]) => {
+  let bytes
   try {
-    const bytes = git(['cat-file', 'blob', `${sha}:${path}`])
-    const text = bytes.toString('utf8')
-    const versions = Object.fromEntries([...text.matchAll(/^export const ([A-Z_]*VERSION) = '([a-zA-Z0-9_.-]{1,100})'/gm)].map(match => [match[1], match[2]]))
-    // Literal labels are an inventory, not evaluated exports or active-policy claims.
-    const versionLiterals = [...new Set([...text.matchAll(/'([a-zA-Z0-9_.-]{1,95}\.v[0-9]{1,4})'/g)].map(match => match[1]))].sort()
-    if (path.endsWith('.json')) { const value = JSON.parse(text); if (typeof value.version === 'string' && /^[a-zA-Z0-9_.-]{1,100}$/.test(value.version)) versions.version = value.version }
-    return { source, path, digest: createHash('sha256').update(bytes).digest('hex'), versions, versionLiterals }
+    bytes = git(['cat-file', 'blob', `${sha}:${path}`])
   }
-  catch { return { source, path, digest: null, versions: {}, versionLiterals: [] } }
+  catch { return { source, path, digest: null, versions: {}, versionLiterals: [], versionStatus: 'unavailable' } }
+  const text = bytes.toString('utf8')
+  const declared = [...text.matchAll(/^export const ([A-Z_]*VERSION) = '([^'\r\n]*)'/gm)].map(match => [match[1], match[2]])
+  let invalidVersion = declared.some(([, value]) => !validVersion(value))
+  const versions = Object.fromEntries(declared.filter(([, value]) => validVersion(value)))
+  // Literal labels are a bounded inventory, not evaluated exports or exhaustive semantic claims.
+  const labels = [...text.matchAll(/'([a-zA-Z0-9_.-]{1,95}\.v[0-9]{1,4})'/g)].map(match => match[1])
+  invalidVersion ||= labels.some(value => !validVersion(value))
+  const versionLiterals = [...new Set(labels.filter(validVersion))].sort()
+  if (path.endsWith('.json')) {
+    try {
+      const value = JSON.parse(text)
+      if (validVersion(value?.version)) versions.version = value.version
+      else invalidVersion = true
+    }
+    catch { invalidVersion = true }
+  }
+  const versionStatus = invalidVersion ? 'invalid' : Object.keys(versions).length || versionLiterals.length ? 'inventoried' : 'unversioned'
+  return { source, path, digest: createHash('sha256').update(bytes).digest('hex'), versions, versionLiterals, versionStatus }
 })
 
 const roles = ['release', 'flag', 'rollback', 'support']
@@ -93,6 +107,7 @@ const assemble = (input, sha, sources) => {
   const exclusions = input.knownExclusions.map(row => ({ ...row, ownerId: row.ownerId ?? null }))
   const exclude = (code, subject) => exclusions.push({ code, subject, ownerId: null })
   for (const source of sources) if (source.digest === null) exclude('missing_source', source.source)
+  for (const source of sources) if (source.versionStatus === 'invalid') exclude('invalid_source_version', source.source)
   for (const role of roles) {
     const candidates = owners.filter(row => row.role === role)
     if (!candidates.length || candidates.some(row => row.ownerId === null)) exclude('missing_owner', role)

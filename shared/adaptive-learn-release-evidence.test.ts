@@ -60,6 +60,21 @@ test('operator uses an older selected commit even when current committed and dir
     writeFileSync(join(directory, 'shared/learn-adaptive-events.ts'), 'throw new Error("private dirty fixture")\n')
     expect(run(input(), selected, script).stdout).toBe(first.stdout)
     expect(JSON.parse(run(input(), current, script).stdout).sources.find((source: { source: string }) => source.source === 'events').versions).toEqual({ LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION: 'synthetic.events.v99' })
+    writeFileSync(join(directory, 'shared/learn-adaptive-events.ts'), "export const LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION = '_synthetic.events.v99'\n")
+    writeFileSync(join(directory, 'docs/operations/adaptive-learn-activation-approval.v1.json'), JSON.stringify({ version: '.synthetic-approval.v1' }))
+    git(['add', '.'])
+    git(['-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', 'commit', '--quiet', '-m', 'Synthetic invalid source versions'])
+    const invalidVersions = git(['rev-parse', 'HEAD'])
+    const rejectedVersions = run(input(), invalidVersions, script)
+    expect(rejectedVersions.status).toBe(0)
+    const bundle = JSON.parse(rejectedVersions.stdout)
+    expect(bundle.knownExclusions).toEqual(expect.arrayContaining([
+      { code: 'invalid_source_version', subject: 'events', ownerId: null },
+      { code: 'invalid_source_version', subject: 'configuration_approval', ownerId: null },
+    ]))
+    for (const sourceId of ['events', 'configuration_approval']) {
+      expect(bundle.sources.find((source: { source: string }) => source.source === sourceId)).toMatchObject({ digest: expect.stringMatching(/^[a-f0-9]{64}$/), versions: {}, versionLiterals: [], versionStatus: 'invalid' })
+    }
   }
   finally { rmSync(directory, { recursive: true }) }
 })

@@ -338,10 +338,14 @@
         },
         "versionLiterals": {
           "type": "array",
+          "description": "Bounded literal label inventory only; does not evaluate exports or assert exhaustive semantic interpretation.",
           "items": {
             "type": "string",
             "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}$"
           }
+        },
+        "versionStatus": {
+          "enum": ["inventoried", "unversioned", "invalid", "unavailable"]
         }
       },
       "required": [
@@ -349,7 +353,8 @@
         "path",
         "digest",
         "versions",
-        "versionLiterals"
+        "versionLiterals",
+        "versionStatus"
       ]
     },
     "bundle": {
