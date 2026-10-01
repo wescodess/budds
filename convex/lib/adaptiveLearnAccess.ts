@@ -6,6 +6,9 @@ export type AdaptiveLearnFallbackRoute =
   | { name: 'app-learn', href: '/app/learn?legacy=v2', label: 'Open V2 learning plans' }
   | { name: 'index', href: '/', label: 'Open your folders for classic courses' }
 
+export const CURRENT_V2_FALLBACK_ROUTE = { name: 'app-learn', href: '/app/learn?legacy=v2', label: 'Open V2 learning plans' } as const
+export const CLASSIC_LEARN_FALLBACK_ROUTE = { name: 'index', href: '/', label: 'Open your folders for classic courses' } as const
+
 export type AdaptiveLearnPublicStatus =
   | { kind: 'allowed', capabilities: { entry: true, read: true, write: true, jobAdmission: true } }
   | { kind: 'denied', capabilities: { entry: false, read: false, write: false, jobAdmission: false }, fallbackRoute: AdaptiveLearnFallbackRoute }
@@ -17,8 +20,8 @@ export const ADAPTIVE_EXTERNAL_OBJECT_CLEANUP = 'deferred_no_adaptive_objects' a
 
 async function fallbackRoute(ctx: QueryCtx | MutationCtx, tokenIdentifier?: string): Promise<AdaptiveLearnFallbackRoute> {
   return tokenIdentifier && await hasLearnV2Access(ctx, tokenIdentifier)
-    ? { name: 'app-learn', href: '/app/learn?legacy=v2', label: 'Open V2 learning plans' }
-    : { name: 'index', href: '/', label: 'Open your folders for classic courses' }
+    ? CURRENT_V2_FALLBACK_ROUTE
+    : CLASSIC_LEARN_FALLBACK_ROUTE
 }
 
 export async function hasAdaptiveExperienceAccess(ctx: QueryCtx | MutationCtx, tokenIdentifier: string): Promise<boolean> {

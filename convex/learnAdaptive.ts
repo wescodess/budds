@@ -4,7 +4,7 @@ import { api } from './_generated/api'
 import { action, mutation, query, type MutationCtx, type QueryCtx } from './_generated/server'
 import type { Doc, Id } from './_generated/dataModel'
 import { AdaptiveCommandRejection, executeAdaptiveThreadCommand, initiateAdaptiveThreadDeletion } from './learnAdaptiveCommands'
-import { requireAdaptiveMutationAccess, requireAdaptiveQueryAccess, type AdaptiveLearnFallbackRoute, type AdaptiveLearnPublicStatus } from './lib/adaptiveLearnAccess'
+import { requireAdaptiveMutationAccess, requireAdaptiveQueryAccess, CURRENT_V2_FALLBACK_ROUTE, CLASSIC_LEARN_FALLBACK_ROUTE, type AdaptiveLearnFallbackRoute, type AdaptiveLearnPublicStatus } from './lib/adaptiveLearnAccess'
 import { isOperableDiagnosticActivity, liveEvidenceState, storedPlan } from './learnAdaptiveRecovery'
 import { composeAdaptiveActivityPlan, replayAdaptiveActivityPlan } from '../shared/learn-adaptive-activity-plan'
 import { loadReadyCanvas } from './learnAdaptiveCanvas'
@@ -1335,16 +1335,19 @@ export const submitResponse = action({
   handler: async (ctx, args): Promise<ReturnType<typeof toAdaptiveSubmissionAdmission> | {
     kind: 'denied', code: 'adaptive_gate_unavailable', message: string, retryable: false, fallbackRoute: AdaptiveLearnFallbackRoute
   }> => {
-    const status: AdaptiveLearnPublicStatus = await ctx.runQuery(api.learnAdaptiveAccess.adaptiveStatus, {})
-    if (status.kind === 'denied') return { kind: 'denied' as const, code: 'adaptive_gate_unavailable', message: 'Adaptive Learn is unavailable.', retryable: false, fallbackRoute: status.fallbackRoute }
     const identity = await ctx.auth.getUserIdentity()
-    if (!identity) return { kind: 'denied' as const, code: 'adaptive_gate_unavailable', message: 'Adaptive Learn is unavailable.', retryable: false }
+    if (!identity) return { kind: 'denied' as const, code: 'adaptive_gate_unavailable', message: 'Adaptive Learn is unavailable.', retryable: false, fallbackRoute: CLASSIC_LEARN_FALLBACK_ROUTE }
     const { threadId, activityId, ...attempt } = args
     const result = await submitMasteryAttemptForOwner(ctx, identity.tokenIdentifier, attempt, {
       threadId,
       activityId,
       manifestVersion: process.env.LEARN_ADAPTIVE_V2_PILOT_MANIFEST?.trim() ?? '',
     })
-    return toAdaptiveSubmissionAdmission(result)
+    const admission = toAdaptiveSubmissionAdmission(result)
+    if (admission.kind === 'denied' && admission.code === 'adaptive_gate_unavailable') {
+      const status: AdaptiveLearnPublicStatus = await ctx.runQuery(api.learnAdaptiveAccess.adaptiveStatus, {})
+      return { ...admission, fallbackRoute: status.kind === 'denied' ? status.fallbackRoute : CURRENT_V2_FALLBACK_ROUTE }
+    }
+    return admission
   },
 })
