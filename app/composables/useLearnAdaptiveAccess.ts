@@ -1,6 +1,7 @@
 import { api } from '#convex/api'
+import type { AdaptiveLearnPublicStatus } from '~~/convex/lib/adaptiveLearnAccess'
 
-type AdaptiveStatus = { kind: 'allowed' | 'denied' }
+type AdaptiveStatus = AdaptiveLearnPublicStatus
 
 export function useLearnAdaptiveAccess() {
   const nuxtApp = import.meta.client ? useNuxtApp() : null
@@ -13,5 +14,9 @@ export function useLearnAdaptiveAccess() {
   return {
     allowed: computed(() => authUsable.value && (access.data.value as AdaptiveStatus | undefined)?.kind === 'allowed'),
     checkingAccess: computed(() => !authReady.value || (authenticated.value && access.pending.value)),
+    fallbackRoute: computed(() => {
+      const decision = access.data.value as AdaptiveStatus | undefined
+      return authUsable.value && decision?.kind === 'denied' ? decision.fallbackRoute : null
+    }),
   }
 }

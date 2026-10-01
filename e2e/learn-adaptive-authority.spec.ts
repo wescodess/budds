@@ -70,8 +70,8 @@ test('server-owned rollback hides the routed Canvas and restores saved work', as
     await expect(denied, `${viewport.name}: rolled-back route`).toBeVisible()
     await expect(denied.getByRole('status')).toHaveText('This learning thread is not available for this account.')
     await expect(page.getByTestId('learn-adaptive-canvas-frame')).toHaveCount(0)
-    const recovery = denied.getByRole('link', { name: 'Back to Learn' })
-    await expect(recovery).toHaveAttribute('href', '/app/learn')
+    const recovery = denied.getByRole('link', { name: 'Open V2 learning plans' })
+    await expect(recovery).toHaveAttribute('href', '/app/learn?legacy=v2')
     const bounds = await recovery.boundingBox()
     expect(bounds, `${viewport.name}: safe action bounds`).not.toBeNull()
     expect(bounds!.height, `${viewport.name}: safe action target`).toBeGreaterThanOrEqual(44)
@@ -79,6 +79,11 @@ test('server-owned rollback hides the routed Canvas and restores saved work', as
     await recovery.focus()
     await expect(recovery).toBeFocused()
   }
+
+  await page.getByRole('link', { name: 'Open V2 learning plans', exact: true }).first().click()
+  await expect(page).toHaveURL(/\/app\/learn\?legacy=v2$/)
+  await expect(page.getByTestId('learn-adaptive-home')).toHaveCount(0)
+  await expect(page.getByRole('navigation', { name: 'Existing learning routes' })).toBeVisible()
 
   await page.goto('/__e2e/adaptive-access')
   await expect(page.getByTestId('adaptive-access-enable')).toBeEnabled()

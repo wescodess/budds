@@ -1,21 +1,25 @@
 import { internalQuery, type MutationCtx, type QueryCtx } from '../_generated/server'
-import { v } from 'convex/values'
+import { ConvexError, v } from 'convex/values'
 import { hasLearnV2Access } from './learnV2Access'
 
-export type AdaptiveLearnPublicStatus = {
-  kind: 'allowed' | 'denied'
-  capabilities: { entry: boolean, read: boolean, write: boolean, jobAdmission: boolean }
-}
+export type AdaptiveLearnFallbackRoute =
+  | { name: 'app-learn', href: '/app/learn?legacy=v2', label: 'Open V2 learning plans' }
+  | { name: 'index', href: '/', label: 'Open your folders for classic courses' }
+
+export type AdaptiveLearnPublicStatus =
+  | { kind: 'allowed', capabilities: { entry: true, read: true, write: true, jobAdmission: true } }
+  | { kind: 'denied', capabilities: { entry: false, read: false, write: false, jobAdmission: false }, fallbackRoute: AdaptiveLearnFallbackRoute }
 
 // AD-15 permits only the existing V2 scoring orchestration behind an adaptive
 // wrapper. A standalone adaptive provider/job surface remains deferred.
 export const ADAPTIVE_PROVIDER_ACTIONS = 'v2_wrapped_only_standalone_deferred' as const
 export const ADAPTIVE_EXTERNAL_OBJECT_CLEANUP = 'deferred_no_adaptive_objects' as const
 
-const status = (allowed: boolean): AdaptiveLearnPublicStatus => ({
-  kind: allowed ? 'allowed' : 'denied',
-  capabilities: { entry: allowed, read: allowed, write: allowed, jobAdmission: allowed },
-})
+async function fallbackRoute(ctx: QueryCtx | MutationCtx, tokenIdentifier?: string): Promise<AdaptiveLearnFallbackRoute> {
+  return tokenIdentifier && await hasLearnV2Access(ctx, tokenIdentifier)
+    ? { name: 'app-learn', href: '/app/learn?legacy=v2', label: 'Open V2 learning plans' }
+    : { name: 'index', href: '/', label: 'Open your folders for classic courses' }
+}
 
 export async function hasAdaptiveExperienceAccess(ctx: QueryCtx | MutationCtx, tokenIdentifier: string): Promise<boolean> {
   if (!(await hasLearnV2Access(ctx, tokenIdentifier))) return false
@@ -25,12 +29,19 @@ export async function hasAdaptiveExperienceAccess(ctx: QueryCtx | MutationCtx, t
 
 export async function getAdaptiveLearnPublicStatus(ctx: QueryCtx | MutationCtx): Promise<AdaptiveLearnPublicStatus> {
   const identity = await ctx.auth.getUserIdentity()
-  return status(Boolean(identity && await hasAdaptiveExperienceAccess(ctx, identity.tokenIdentifier)))
+  if (identity && await hasAdaptiveExperienceAccess(ctx, identity.tokenIdentifier)) {
+    return { kind: 'allowed', capabilities: { entry: true, read: true, write: true, jobAdmission: true } }
+  }
+  return { kind: 'denied', capabilities: { entry: false, read: false, write: false, jobAdmission: false },
+    fallbackRoute: await fallbackRoute(ctx, identity?.tokenIdentifier) }
 }
 
 async function requireAdaptiveAccess(ctx: QueryCtx | MutationCtx): Promise<string> {
   const identity = await ctx.auth.getUserIdentity()
-  if (!identity || !(await hasAdaptiveExperienceAccess(ctx, identity.tokenIdentifier))) throw new Error('Adaptive Learn access denied')
+  if (!identity || !(await hasAdaptiveExperienceAccess(ctx, identity.tokenIdentifier))) {
+    throw new ConvexError({ code: 'adaptive_access_denied', message: 'Adaptive Learn access denied',
+      fallbackRoute: await fallbackRoute(ctx, identity?.tokenIdentifier) })
+  }
   return identity.tokenIdentifier
 }
 
