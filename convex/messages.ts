@@ -1,6 +1,7 @@
 import { v } from 'convex/values'
 import { mutation, query } from './_generated/server'
 import { requireAuth } from './lib/auth'
+import { safeAttemptProjection } from './lib/learnAdaptiveHandoff'
 
 const sourcesValidator = v.array(
   v.object({
@@ -20,11 +21,14 @@ export const listByConversation = query({
       throw new Error('Conversation not found')
     }
 
-    return await ctx.db
+    const rows = await ctx.db
       .query('messages')
       .withIndex('by_conversationId', (q) => q.eq('conversationId', args.conversationId))
       .order('asc')
       .take(500)
+    return await Promise.all(rows.map(async ({ attemptProjection, projectionQuizId: _quizId, ...row }) => ({
+      ...row, ...(attemptProjection ? { attemptProjection: await safeAttemptProjection(ctx, userId, attemptProjection) } : {}),
+    })))
   },
 })
 

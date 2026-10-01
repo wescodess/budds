@@ -1,6 +1,7 @@
 import { defineSchema, defineTable } from 'convex/server'
 import { v } from 'convex/values'
 import { adaptiveProviderJobFields, learnActivityCommandReceiptFields, learnActivityDecisionFields, learnActivityEvidenceLinkFields, learnActivityOverrideFields, learnAdaptiveThreadDeletionJobFields, learningThreadActivityFields, learningThreadArtifactFields, learningThreadContributionFields, learningThreadFields, learningThreadPreferenceFields } from '../shared/adaptive-learn-storage-manifest'
+import { acceptedAttemptProjectionValidator } from '../shared/adaptive-learn-storage-manifest'
 import { learnActivityEventFields } from '../shared/learn-adaptive-events'
 import { adaptiveRoutingAnalysisPlanValidator } from '../shared/learn-adaptive-experiment'
 import { masteryStateValidator, masteryTransitionReasonValidator } from '../shared/learn-v2-mastery'
@@ -93,6 +94,8 @@ export default defineSchema({
     .index('by_userId_and_conversationId', ['userId', 'conversationId']),
 
   messages: defineTable({
+    attemptProjection: v.optional(acceptedAttemptProjectionValidator),
+    projectionQuizId: v.optional(v.id('quizzes')),
     conversationId: v.id('conversations'),
     userId: v.string(),
     role: v.union(v.literal('user'), v.literal('assistant')),
@@ -120,6 +123,7 @@ export default defineSchema({
     .index('by_userId', ['userId']),
 
   quizzes: defineTable({
+    attemptProjection: v.optional(acceptedAttemptProjectionValidator),
     userId: v.string(),
     folderId: v.id('folders'),
     title: v.string(),
@@ -1382,6 +1386,7 @@ export default defineSchema({
     .index('by_userId_and_updatedAt', ['userId', 'updatedAt'])
     .index('by_userId_and_evidenceState_and_updatedAt', ['userId', 'evidenceState', 'updatedAt']),
   learningThreadContributions: defineTable(learningThreadContributionFields)
+    .index('by_userId_and_attemptProjection_activityId', ['userId', 'attemptProjection.activityId'])
     .index('by_userId', ['userId'])
     .index('by_userId_and_threadId_and_createdAt', ['userId', 'threadId', 'createdAt'])
     .index('by_userId_and_provenanceKey', ['userId', 'provenanceKey'])
@@ -1389,6 +1394,7 @@ export default defineSchema({
     .index('by_userId_and_evidenceSnapshotId', ['userId', 'evidenceSnapshotId'])
     .index('by_userId_and_sourceFeature_and_sourceIdentity_and_sourceStatus', ['userId', 'sourceFeature', 'sourceIdentity', 'sourceStatus']),
   learningThreadActivities: defineTable(learningThreadActivityFields)
+    .index('by_userId_and_threadId_and_masteryAttemptId', ['userId', 'threadId', 'masteryAttemptId'])
     .index('by_userId', ['userId'])
     .index('by_userId_and_attribution_contributionId', ['userId', 'attribution.contributionId'])
     .index('by_userId_and_threadId_and_boundaryOrdinal', ['userId', 'threadId', 'boundaryOrdinal'])

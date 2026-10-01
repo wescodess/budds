@@ -101,3 +101,7 @@ _Avoid_: Imported memory, mastery result
 **Shared Activity Lineage**:
 A producer-verified, owner-scoped link showing that distinct Cross-feature Contributions refer to one authoritative activity or attempt. Shared source material or session content alone does not prove that two attempts are the same.
 _Avoid_: Client-claimed alias, matching content
+
+**Attempt Projection**:
+A Quiz result or Chat discussion reference derived from one already accepted learning attempt. Each keeps its own origin while sharing the original result and mastery boundary.
+_Avoid_: New attempt, copied score

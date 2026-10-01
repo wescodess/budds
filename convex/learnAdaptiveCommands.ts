@@ -24,6 +24,7 @@ type CommandInput<T> = {
   payload: Record<string, unknown>
   allowNoop?: boolean
   returnBlockedWhenDeleting?: boolean
+  validateReplay?: (ctx: MutationCtx, userId: string) => Promise<boolean>
   replayExpiredResult?: (ctx: MutationCtx, receipt: Doc<'learnActivityCommandReceipts'>, userId: string) => Promise<AdaptiveResult<T> | null>
   apply: (ctx: MutationCtx, thread: Doc<'learningThreads'>, userId: string, command: { idempotencyKeyHash: string }) => Promise<{ value: T, revision: number }>
 }
@@ -51,6 +52,7 @@ export async function executeAdaptiveThreadCommand<T>(ctx: MutationCtx, input: C
     .unique()
   if (prior) {
     if (prior.requestFingerprint !== prepared.requestFingerprint) return { kind: 'conflict', code: 'duplicate_key', expectedRevision: input.expectedRevision, actualRevision: prior.targetRevision, authority: 'convex' }
+    if (input.validateReplay && !await input.validateReplay(ctx, userId)) return { kind: 'blocked', code: 'source_unavailable', message: 'The original handoff is unavailable.', retryable: false }
     if (prior.resultRedactedAt !== undefined || prior.resultReference === null) {
       const durable = await input.replayExpiredResult?.(ctx, prior, userId)
       return durable ?? { kind: 'invalid', code: 'result_expired', message: 'The original command result has expired', retryable: false }

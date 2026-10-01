@@ -136,6 +136,16 @@ export const adaptiveProviderJobFields = {
 export const ADAPTIVE_LEARN_ACCOUNT_DELETE_ORDER = ADAPTIVE_LEARN_STORAGE_MANIFEST.map(entry => entry.table)
 export const ADAPTIVE_LEARN_EXPORT_COLLECTIONS = ['learningThreadContributions', 'learningThreads', 'learningThreadActivities', 'learningThreadArtifacts', 'learnActivityEvidenceLinks', 'learnActivityDecisions', 'learnActivityEvents', 'learnActivityCommandReceipts', 'learnAdaptiveThreadDeletionJobs', 'learnActivityOverrides', 'learningThreadPreferences', 'learningThreadPromotionProposals', 'learnAdaptiveExperimentAssignments'] as const
 
+export const acceptedAttemptProjectionValidator = v.object({
+  version: v.literal('learn-adaptive.accepted-attempt-projection.v1'),
+  threadId: v.id('learningThreads'), activityId: v.id('learningThreadActivities'),
+  attemptId: v.id('masteryAttempts'), scoringJobId: v.id('learnJobs'),
+  studySessionId: v.id('studySessions'), sessionContentId: v.id('sessionContent'), contentRevision: v.number(),
+  studyPlanRevisionId: v.id('studyPlanRevisions'), planRevision: v.number(), planRecordRevision: v.number(),
+  blueprintRevisionId: v.id('learnBlueprintRevisions'), blueprintRecordRevision: v.number(),
+  activityInputDigest: v.string(),
+})
+
 export const learningThreadContributionFields = {
   userId: v.string(), threadId: v.id('learningThreads'),
   sourceFeature: v.union(v.literal('chat'), v.literal('quiz'), v.literal('flashcards'), v.literal('podcast'), v.literal('documents')),
@@ -147,6 +157,7 @@ export const learningThreadContributionFields = {
   idempotencyKeyHash: v.string(), requestFingerprint: v.string(),
   metadata: v.object({ role: v.optional(v.union(v.literal('background'), v.literal('practice'), v.literal('review'))) }),
   sourceStatus: v.union(v.literal('available'), v.literal('source_unavailable')),
+  attemptProjection: v.optional(acceptedAttemptProjectionValidator),
   createdAt: v.number(),
 }
 export const ADAPTIVE_ACTIVITY_STORAGE_REGISTRY = [
@@ -285,6 +296,7 @@ export const learningThreadFields = {
 export const learningThreadActivityFields = {
   userId: v.string(),
   threadId: v.id('learningThreads'),
+  attemptHandoff: v.optional(v.object({ quizId: v.id('quizzes'), conversationId: v.optional(v.id('conversations')), messageId: v.optional(v.id('messages')) })),
   attribution: v.optional(v.object({
     contributionId: v.string(),
     sourceFeature: learningThreadContributionFields.sourceFeature,

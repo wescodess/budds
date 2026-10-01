@@ -18,6 +18,92 @@ import { learnActivityEventDedupeHash, writeLearnActivityEvent } from './lib/lea
 import { adaptiveArtifactKindValidator, adaptiveArtifactStatusValidator, boundedArtifactText } from '../shared/learn-adaptive-artifact'
 import { queueAdaptiveArtifactDeletion } from './lib/learnAdaptiveArtifacts'
 import { prepareAdaptiveCommand } from '../shared/adaptive-command-authority'
+import { acceptedAttemptAuthority, recordAttemptProjectionOrigin, safeAttemptProjection, sameAttemptProjection, unavailableProjection, verifyAttemptProjection } from './lib/learnAdaptiveHandoff'
+
+export const projectAcceptedAttemptToQuiz = mutation({
+  args: { threadId: v.id('learningThreads'), attemptId: v.id('masteryAttempts'), expectedRevision: v.number(), idempotencyKey: v.string() },
+  handler: async (ctx, args) => await executeAdaptiveThreadCommand(ctx, {
+    ...args, commandName: 'projectAcceptedAttemptToQuiz', payload: { attemptId: String(args.attemptId) }, allowNoop: true,
+    returnBlockedWhenDeleting: true,
+    validateReplay: async (commandCtx, userId) => {
+      const authority = await acceptedAttemptAuthority(commandCtx, userId, args.threadId, args.attemptId)
+      const quizId = authority?.activity.attemptHandoff?.quizId
+      const quiz = quizId && await commandCtx.db.get(quizId)
+      return Boolean(quiz && quiz.userId === userId && quiz.deletedAt === undefined && quiz.attemptProjection && await verifyAttemptProjection(commandCtx, userId, quiz.attemptProjection))
+    },
+    apply: async (commandCtx, thread, userId) => {
+      const authority = await acceptedAttemptAuthority(commandCtx, userId, thread._id, args.attemptId)
+      if (!authority) return unavailableProjection()
+      const existingId = authority.activity.attemptHandoff?.quizId
+      if (existingId) {
+        const existing = await commandCtx.db.get(existingId)
+        if (!existing || existing.userId !== userId || existing.deletedAt !== undefined || !existing.attemptProjection
+          || !await verifyAttemptProjection(commandCtx, userId, existing.attemptProjection)) return unavailableProjection()
+        return { value: { threadId: thread._id, quizId: existing._id, folderId: authority.folder._id, activityDocumentId: authority.activity._id,
+          activityId: authority.activity.activityId, attemptId: args.attemptId }, revision: thread.revision }
+      }
+      const quizId = await commandCtx.db.insert('quizzes', { userId, folderId: authority.folder._id,
+        title: 'Accepted learning result', description: 'One accepted learning attempt, available for discussion.',
+        status: 'ready', questionCount: 0, attemptProjection: authority.projection })
+      const quiz = await commandCtx.db.get(quizId)
+      if (!quiz) throw new Error('Quiz projection was not persisted')
+      await recordAttemptProjectionOrigin(commandCtx, userId, authority.projection, { feature: 'quiz', row: quiz })
+      await commandCtx.db.patch(authority.activity._id, { attemptHandoff: { quizId } })
+      const revision = thread.revision + 1
+      await commandCtx.db.patch(thread._id, { revision, updatedAt: Date.now() })
+      return { value: { threadId: thread._id, quizId, folderId: authority.folder._id, activityDocumentId: authority.activity._id,
+        activityId: authority.activity.activityId, attemptId: args.attemptId }, revision }
+    },
+  }),
+})
+
+export const handoffQuizAttemptToChat = mutation({
+  args: { threadId: v.id('learningThreads'), quizId: v.id('quizzes'), expectedRevision: v.number(), idempotencyKey: v.string() },
+  handler: async (ctx, args) => await executeAdaptiveThreadCommand(ctx, {
+    ...args, commandName: 'handoffQuizAttemptToChat', payload: { quizId: String(args.quizId) }, allowNoop: true,
+    returnBlockedWhenDeleting: true,
+    validateReplay: async (commandCtx, userId) => {
+      const quiz = await commandCtx.db.get(args.quizId)
+      const authority = quiz?.userId === userId && quiz.deletedAt === undefined && quiz.attemptProjection
+        && quiz.attemptProjection.threadId === args.threadId ? await verifyAttemptProjection(commandCtx, userId, quiz.attemptProjection) : null
+      const handoff = authority?.activity.attemptHandoff
+      const conversation = handoff?.conversationId && await commandCtx.db.get(handoff.conversationId)
+      const message = handoff?.messageId && await commandCtx.db.get(handoff.messageId)
+      return Boolean(conversation && message && conversation.userId === userId && message.userId === userId && message.conversationId === conversation._id)
+    },
+    apply: async (commandCtx, thread, userId) => {
+      const quiz = await commandCtx.db.get(args.quizId)
+      if (!quiz || quiz.userId !== userId || quiz.deletedAt !== undefined || !quiz.attemptProjection
+        || quiz.attemptProjection.threadId !== thread._id) return unavailableProjection()
+      const authority = await verifyAttemptProjection(commandCtx, userId, quiz.attemptProjection)
+      if (!authority || authority.activity.attemptHandoff?.quizId !== quiz._id) return unavailableProjection()
+      const handoff = authority.activity.attemptHandoff
+      if (handoff.messageId || handoff.conversationId) {
+        const message = handoff.messageId && await commandCtx.db.get(handoff.messageId)
+        const conversation = handoff.conversationId && await commandCtx.db.get(handoff.conversationId)
+        if (!message || !conversation || message.userId !== userId || conversation.userId !== userId
+          || message.conversationId !== conversation._id || !message.attemptProjection
+          || !await verifyAttemptProjection(commandCtx, userId, message.attemptProjection)) return unavailableProjection()
+        return { value: { threadId: thread._id, conversationId: conversation._id, messageId: message._id, folderId: authority.folder._id,
+          attemptId: authority.attempt._id, activityDocumentId: authority.activity._id }, revision: thread.revision }
+      }
+      const conversationId = await commandCtx.db.insert('conversations', { userId, folderId: authority.folder._id, title: 'Discuss your learning result' })
+      const criteria = authority.activity.feedbackProjection?.criterionResults ?? []
+      const criterionText = criteria.slice(0, 20).map((criterion, index) => `Criterion ${index + 1}: ${criterion.awarded ? 'met' : 'not met yet'}.`).join(' ')
+      const messageId = await commandCtx.db.insert('messages', { userId, conversationId, role: 'assistant',
+        content: `Your accepted learning result scored ${authority.attempt.serverScorePercent}%. ${criterionText} What would you like to discuss next?`,
+        attemptProjection: authority.projection, projectionQuizId: quiz._id })
+      const message = await commandCtx.db.get(messageId)
+      if (!message) throw new Error('Chat projection was not persisted')
+      await recordAttemptProjectionOrigin(commandCtx, userId, authority.projection, { feature: 'chat', row: message })
+      await commandCtx.db.patch(authority.activity._id, { attemptHandoff: { quizId: quiz._id, conversationId, messageId } })
+      const revision = thread.revision + 1
+      await commandCtx.db.patch(thread._id, { revision, updatedAt: Date.now() })
+      return { value: { threadId: thread._id, conversationId, messageId, folderId: authority.folder._id,
+        attemptId: authority.attempt._id, activityDocumentId: authority.activity._id }, revision }
+    },
+  }),
+})
 
 const memoryPreferenceKeyValidator = v.union(v.literal('representation'), v.literal('pace'), v.literal('practice_style'))
 const memoryPreferenceOperationValidator = v.union(v.literal('set'), v.literal('disable'), v.literal('clear'))
@@ -55,14 +141,15 @@ export async function loadContributionSource(ctx: QueryCtx | MutationCtx, userId
     if (!row || row.userId !== userId) return null
     const conversation = await ctx.db.get(row.conversationId)
     if (!conversation || conversation.userId !== userId || (await ctx.db.get(conversation.folderId))?.userId !== userId) return null
-    return { revision: await contributionDigest(JSON.stringify(row)) }
+    if (row.attemptProjection && !await verifyAttemptProjection(ctx, userId, row.attemptProjection)) return null
+    return { revision: await contributionDigest(JSON.stringify(row)), attemptProjection: row.attemptProjection }
   }
   if (source.feature === 'flashcards') {
     const row = await ctx.db.get(source.id)
     if (!row || row.userId !== userId) return null
     const room = await ctx.db.get(row.roomId)
     if (!room || room.userId !== userId || (await ctx.db.get(room.folderId))?.userId !== userId) return null
-    return { revision: await contributionDigest(JSON.stringify(row)) }
+    return { revision: await contributionDigest(JSON.stringify(row)), attemptProjection: undefined }
   }
   if (source.feature === 'quiz') {
     const row = await ctx.db.get(source.id)
@@ -73,14 +160,15 @@ export async function loadContributionSource(ctx: QueryCtx | MutationCtx, userId
     if (questions.length > 200 || questions.some(question => question.userId !== userId)) return null
     const sourceRecord = JSON.stringify([row, questions])
     if (new TextEncoder().encode(sourceRecord).length > 500_000) return null
-    return { revision: await contributionDigest(sourceRecord) }
+    if (row.attemptProjection && !await verifyAttemptProjection(ctx, userId, row.attemptProjection)) return null
+    return { revision: await contributionDigest(sourceRecord), attemptProjection: row.attemptProjection }
   }
   const row = source.feature === 'podcast' ? await ctx.db.get(source.id)
       : await ctx.db.get(source.id)
   if (!row || row.userId !== userId || (await ctx.db.get(row.folderId))?.userId !== userId) return null
   if (source.feature === 'podcast' && row.status !== 'ready') return null
   if (source.feature === 'documents' && row.status !== 'success') return null
-  return { revision: await contributionDigest(JSON.stringify(row)) }
+  return { revision: await contributionDigest(JSON.stringify(row)), attemptProjection: undefined }
 }
 
 export const inspectContributionSource = query({
@@ -105,8 +193,11 @@ export const listThreadContributions = query({
     return { ...result, page: await Promise.all(result.page.map(async contribution => {
       const evidenceIntegrity = await contributionEvidenceIntegrity(ctx, userId, thread, contribution)
       const { provenanceKey: _provenanceKey, idempotencyKeyHash: _key, requestFingerprint: _fingerprint,
-        evidenceSnapshotId: _evidence, ...row } = contribution
-      return { ...row, evidenceIntegrity }
+        evidenceSnapshotId: _evidence, attemptProjection, ...row } = contribution
+      const source = normalizeContributionSource(ctx, contribution.sourceFeature, contribution.sourceIdentity)
+      const live = source && await loadContributionSource(ctx, userId, source)
+      return { ...row, sourceStatus: live && contribution.sourceStatus === 'available' ? 'available' as const : 'source_unavailable' as const,
+        evidenceIntegrity, ...(attemptProjection ? { attemptProjection: await safeAttemptProjection(ctx, userId, attemptProjection) } : {}) }
     })) }
   },
 })
@@ -238,9 +329,20 @@ export const recordContribution = mutation({
 export const convertContributionToActivity = mutation({
   args: { threadId: v.id('learningThreads'), contributionId: v.id('learningThreadContributions'),
     expectedRevision: v.number(), idempotencyKey: v.string() },
-  handler: async (ctx, args) => await executeAdaptiveThreadCommand(ctx, {
+  handler: async (ctx, args) => await executeAdaptiveThreadCommand<{
+    activityDocumentId: Id<'learningThreadActivities'>, activityId: string, activityClass: 'factual' | 'non_factual',
+    boundaryOrdinal: number, planRevision: number, replacesActivityId: string | null, attemptId?: Id<'masteryAttempts'>, reconciled?: boolean,
+  }>(ctx, {
     threadId: args.threadId, expectedRevision: args.expectedRevision, idempotencyKey: args.idempotencyKey,
     commandName: 'convertContributionToActivity', payload: { contributionId: String(args.contributionId) },
+    allowNoop: true,
+    validateReplay: async (commandCtx, userId) => {
+      const contribution = await commandCtx.db.get(args.contributionId)
+      if (!contribution?.attemptProjection) return true
+      const source = normalizeContributionSource(commandCtx, contribution.sourceFeature, contribution.sourceIdentity)
+      return Boolean(contribution.userId === userId && contribution.sourceStatus === 'available' && source
+        && await loadContributionSource(commandCtx, userId, source))
+    },
     returnBlockedWhenDeleting: true,
     apply: async (commandCtx, thread, userId) => {
       const contribution = await commandCtx.db.get(args.contributionId)
@@ -270,6 +372,14 @@ export const convertContributionToActivity = mutation({
       const currentSource = await loadContributionSource(commandCtx, userId, source)
       if (!currentSource) return await blocked('source_unavailable')
       if (currentSource.revision !== contribution.sourceRevision) return await blocked('source_revision_changed')
+      if (contribution.attemptProjection) {
+        const authority = await verifyAttemptProjection(commandCtx, userId, contribution.attemptProjection)
+        if (!authority || contribution.attemptProjection.threadId !== thread._id
+          || !currentSource.attemptProjection || !sameAttemptProjection(currentSource.attemptProjection, contribution.attemptProjection)) return await blocked('accepted_attempt_unavailable')
+        return { value: { activityDocumentId: authority.activity._id, activityId: authority.activity.activityId,
+          activityClass: 'factual' as const, boundaryOrdinal: authority.activity.boundaryOrdinal, planRevision: authority.activity.planRevision,
+          replacesActivityId: authority.activity.replacesActivityId, attemptId: authority.attempt._id, reconciled: true }, revision: thread.revision }
+      }
       const evidenceIntegrity = await contributionEvidenceIntegrity(commandCtx, userId, thread, contribution)
       if (evidenceIntegrity === 'conflict') return await blocked('evidence_conflict')
       if (evidenceIntegrity === 'unavailable') return await blocked('evidence_unavailable')
@@ -1129,6 +1239,27 @@ async function projectActivityAttribution(ctx: QueryCtx, userId: string, activit
   return { ...activity.attribution, sourceStatus }
 }
 
+async function projectAttemptOrigins(ctx: QueryCtx, userId: string, activity: Doc<'learningThreadActivities'>) {
+  const origins = await ctx.db.query('learningThreadContributions')
+    .withIndex('by_userId_and_attemptProjection_activityId', q => q.eq('userId', userId).eq('attemptProjection.activityId', activity._id)).take(3)
+  return await Promise.all(origins.map(async contribution => {
+    const source = normalizeContributionSource(ctx, contribution.sourceFeature, contribution.sourceIdentity)
+    const live = contribution.sourceStatus === 'available' && source ? await loadContributionSource(ctx, userId, source) : null
+    return { sourceFeature: contribution.sourceFeature, contributionId: contribution._id,
+      sourceStatus: !live ? 'source_unavailable' as const : live.revision === contribution.sourceRevision ? 'available' as const : 'source_revision_changed' as const }
+  }))
+}
+
+async function acceptedHandoffCandidate(ctx: QueryCtx, userId: string, activity: Doc<'learningThreadActivities'>) {
+  if (!activity.masteryAttemptId) return null
+  const authority = await acceptedAttemptAuthority(ctx, userId, activity.threadId, activity.masteryAttemptId)
+  const quizId = activity.attemptHandoff?.quizId ?? null
+  const quiz = quizId && await ctx.db.get(quizId)
+  const eligible = Boolean(authority && (!quizId || quiz && quiz.userId === userId && quiz.deletedAt === undefined))
+  return { attemptId: activity.masteryAttemptId, activityDocumentId: activity._id, eligible,
+    reasonCode: eligible ? 'accepted_attempt_available' as const : 'accepted_attempt_unavailable' as const, quizId }
+}
+
 async function projectThread(ctx: QueryCtx, userId: string, thread: Doc<'learningThreads'>) {
   const owner = await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique()
   if (!owner) return null
@@ -1163,6 +1294,8 @@ async function projectThread(ctx: QueryCtx, userId: string, thread: Doc<'learnin
     id: row.activityId, status: row.status, activityClass: row.activityClass,
     purpose: row.purpose, reasonCode: row.reasonCode, boundaryOrdinal: row.boundaryOrdinal,
     attribution: await projectActivityAttribution(ctx, userId, row),
+    attemptOrigins: await projectAttemptOrigins(ctx, userId, row),
+    acceptedAttemptHandoff: await acceptedHandoffCandidate(ctx, userId, row),
     planRevision: row.planRevision, replacesActivityId: row.replacesActivityId,
     updatedAt: row.updatedAt,
   })))
@@ -1178,6 +1311,8 @@ async function projectThread(ctx: QueryCtx, userId: string, thread: Doc<'learnin
       id: activity.activityId, status: activity.status, activityClass: activity.activityClass,
       purpose: activity.purpose, reasonCode: activity.reasonCode, boundaryOrdinal: activity.boundaryOrdinal,
       attribution: currentAttribution,
+      attemptOrigins: await projectAttemptOrigins(ctx, userId, activity),
+      acceptedAttemptHandoff: await acceptedHandoffCandidate(ctx, userId, activity),
       planRevision: activity.planRevision, replacesActivityId: activity.replacesActivityId,
     } : null,
     attemptContext: activity ? {

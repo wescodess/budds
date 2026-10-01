@@ -145,10 +145,14 @@ export const getUserDataPage = query({
         return await ctx.db.query('documents').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
       case 'conversations':
         return await ctx.db.query('conversations').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
-      case 'messages':
-        return await ctx.db.query('messages').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
-      case 'quizzes':
-        return await ctx.db.query('quizzes').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+      case 'messages': {
+        const result = await ctx.db.query('messages').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+        return { ...result, page: result.page.map(({ attemptProjection: _projection, projectionQuizId: _quizId, ...row }) => row) }
+      }
+      case 'quizzes': {
+        const result = await ctx.db.query('quizzes').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+        return { ...result, page: result.page.map(({ attemptProjection: _projection, ...row }) => row) }
+      }
       case 'quizQuestions':
         return await ctx.db.query('quizQuestions').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
       case 'quizAttempts':
@@ -281,7 +285,7 @@ export const getUserDataPage = query({
       }
       case 'learningThreadContributions': {
         const result = await ctx.db.query('learningThreadContributions').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
-        return { ...result, page: result.page.map(({ provenanceKey: _key, evidenceSnapshotId: _snapshot, idempotencyKeyHash: _idempotency, requestFingerprint: _fingerprint, ...row }) => row) }
+        return { ...result, page: result.page.map(({ provenanceKey: _key, evidenceSnapshotId: _snapshot, idempotencyKeyHash: _idempotency, requestFingerprint: _fingerprint, attemptProjection: _projection, ...row }) => row) }
       }
       case 'learnActivityEvidenceLinks': {
         const result = await ctx.db.query('learnActivityEvidenceLinks').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
