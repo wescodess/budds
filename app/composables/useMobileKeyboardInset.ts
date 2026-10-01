@@ -33,12 +33,14 @@ export const useMobileKeyboardInset = createSharedComposable(() => {
   }
 
   function scrollActiveFieldIntoView() {
-    if (!import.meta.client || !isTouchLike.value) return
+    if (!import.meta.client) return
     const target = document.activeElement
     if (!isEditableElement(target)) return
+    if (!isTouchLike.value && !target?.closest('.learn-adaptive-surface')) return
     window.setTimeout(() => {
       if (!isEditableElement(document.activeElement)) return
       const activeField = document.activeElement as HTMLElement
+      if (!isTouchLike.value && !activeField.closest('.learn-adaptive-surface')) return
       const viewportHeight = window.visualViewport?.height ?? window.innerHeight
       const rect = activeField.getBoundingClientRect()
       const fieldIsVisible =
@@ -56,10 +58,14 @@ export const useMobileKeyboardInset = createSharedComposable(() => {
   }
 
   if (import.meta.client) {
-    const updateViewport = () => {
+    const updateViewport = (event: Event) => {
       const wasKeyboardOpen = keyboardOpen.value
       applyViewportVars()
-      if (!wasKeyboardOpen && keyboardOpen.value) scrollActiveFieldIntoView()
+      const activeField = document.activeElement
+      const adaptiveFieldResized = event.type === 'resize'
+        && isEditableElement(activeField)
+        && activeField?.closest('.learn-adaptive-surface')
+      if ((!wasKeyboardOpen && keyboardOpen.value) || adaptiveFieldResized) scrollActiveFieldIntoView()
     }
 
     applyViewportVars()

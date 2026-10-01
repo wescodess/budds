@@ -283,7 +283,7 @@ async function selectThreadIntent(intent: Intent) {
 }
 </script>
 <template>
-  <div :data-owner-ready="currentOwnerId ? 'true' : 'false'">
+  <div :class="{ 'learn-adaptive-surface': adaptiveAllowed && !legacyV2Mode }" :data-owner-ready="currentOwnerId ? 'true' : 'false'">
     <section v-if="checkingAccess || checkingAdaptiveAccess" class="mx-auto max-w-2xl p-6" aria-live="polite"><h1 class="font-dm-sans text-2xl font-bold">Learn</h1><p class="mt-2 text-muted-foreground">Checking access…</p></section>
     <section v-else-if="!allowed" class="mx-auto max-w-2xl p-6"><h1 class="font-dm-sans text-2xl font-bold">Learn</h1><p class="mt-2 text-muted-foreground">This learning experience is not available for this account.</p></section>
     <template v-else-if="adaptiveAllowed && !legacyV2Mode">
