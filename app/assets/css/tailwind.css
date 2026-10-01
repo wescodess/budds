@@ -290,6 +290,10 @@
   }
 }
 
+.learn-adaptive-surface :is(input, select, textarea, [contenteditable='true']) {
+  scroll-margin-block: 16px;
+}
+
 .learn-adaptive-surface [data-slot='sheet-close'] {
   display: flex;
   align-items: center;
