@@ -89,6 +89,83 @@ describe('need-first LearningHome', () => {
     await wrapper.get('[data-testid="learn-adaptive-outcome"]').setValue('Explain the key idea in my own words')
   }
 
+  it('names the new learning form and labels its goal, outcome, time, and material choices', async () => {
+    const wrapper = await mount()
+    expect(wrapper.get('form').attributes('aria-label')).toBe('Start a learning thread')
+    for (const [selector, label] of [
+      ['[data-testid="learn-adaptive-need"]', 'Your goal or question'],
+      ['[data-testid="learn-adaptive-outcome"]', 'Useful outcome'],
+      ['[data-testid="learn-adaptive-time"]', 'Time available'],
+    ]) {
+      const field = wrapper.get(selector!).element as HTMLInputElement
+      expect(Array.from(field.labels ?? []).map(item => item.textContent).join(' ')).toContain(label)
+    }
+    expect(wrapper.findAll('fieldset legend').map(legend => legend.text())).toContain('Optional material')
+    for (const [value, label] of [['none', 'No material'], ['folder', 'folder'], ['document', 'document'], ['url', 'url'], ['pasted', 'pasted']]) {
+      const input = wrapper.get(`input[type="radio"][value="${value}"]`).element as HTMLInputElement
+      expect(input.labels?.[0]?.textContent?.trim()).toBe(label)
+    }
+    wrapper.unmount()
+  })
+
+  it('names the Resume, Worth revisiting, and Learning history regions with their visible headings', async () => {
+    resumeCandidates.value = [
+      { ownerId: 'owner_1', threadId: 'thread_1', outcome: 'Finish the proof', reason: 'unfinished_activity', unresolvedPoint: 'The last step', nextAction: { label: 'Continue' } },
+      { ownerId: 'owner_1', threadId: 'thread_2', outcome: 'Review gravity', reason: 'needs_review', unresolvedPoint: null, nextAction: { label: 'Review capability' }, reviewCapability: 'Explain gravity' },
+    ]
+    const wrapper = await mount()
+    for (const [testId, name] of [['learn-adaptive-primary-resume', 'Resume'], ['learn-adaptive-worth-revisiting', 'Worth revisiting'], ['learn-adaptive-thread-history', 'Learning history']]) {
+      const region = wrapper.get(`section[data-testid="${testId}"]`)
+      const heading = wrapper.get(`#${region.attributes('aria-labelledby')}`)
+      expect(heading.text()).toBe(name)
+      expect(heading.isVisible()).toBe(true)
+    }
+    wrapper.unmount()
+  })
+
+  it('announces saving a new learning thread until its creation settles', async () => {
+    const wrapper = await mount()
+    await wrapper.setProps({ busy: true })
+    expect(wrapper.findAll('[role="status"][aria-live="polite"]').map(status => status.text())).toContain('Saving your learning thread…')
+    expect(wrapper.get('[data-testid="learn-adaptive-start"]').attributes('disabled')).toBeDefined()
+    await wrapper.setProps({ busy: false, serverError: 'Your thread could not be saved. Try again.' })
+    expect(wrapper.findAll('[role="status"][aria-live="polite"]').map(status => status.text())).not.toContain('Saving your learning thread…')
+    expect(wrapper.get('[role="alert"]').text()).toBe('Your thread could not be saved. Try again.')
+    wrapper.unmount()
+  })
+
+  it.each([
+    ['folder', [['learn-adaptive-folder', 'Folder']]],
+    ['document', [['learn-adaptive-document-folder', 'Folder'], ['learn-adaptive-document', 'Document']]],
+    ['url', [['learn-adaptive-url', 'URL']]],
+    ['pasted', [['learn-adaptive-paste', 'Pasted material']]],
+  ] as const)('labels the additional fields when %s material is selected', async (kind, fields) => {
+    const wrapper = await mount()
+    await wrapper.get(`input[type="radio"][value="${kind}"]`).setValue()
+    for (const [testId, label] of fields) {
+      const field = wrapper.get(`[data-testid="${testId}"]`).element as HTMLInputElement
+      expect(Array.from(field.labels ?? []).map(item => item.textContent).join(' ')).toContain(label)
+    }
+    wrapper.unmount()
+  })
+
+  it('moves DOM focus to the invalid URL and links its announced correction while preserving the goal', async () => {
+    const component = await import(path)
+    const wrapper = await mountSuspended(component.default, { attachTo: document.body })
+    try {
+      await wrapper.get('[data-testid="learn-adaptive-need"]').setValue('Understand the argument in this article')
+      await wrapper.get('input[type="radio"][value="url"]').setValue()
+      const field = wrapper.get('[data-testid="learn-adaptive-url"]')
+      await field.setValue('invalid')
+      await wrapper.get('form').trigger('submit')
+      expect(document.activeElement).toBe(field.element)
+      expect(field.attributes('aria-invalid')).toBe('true')
+      expect(document.getElementById(field.attributes('aria-describedby')!)?.textContent).toContain('URL')
+      expect((wrapper.get('[data-testid="learn-adaptive-need"]').element as HTMLTextAreaElement).value).toBe('Understand the argument in this article')
+    }
+    finally { wrapper.unmount() }
+  })
+
   it('does not subscribe to documents without a selected folder', async () => {
     const wrapper = await mount()
     expect(documentSubscriptions).not.toHaveBeenCalled()
