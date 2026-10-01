@@ -4,7 +4,7 @@ import { api } from '#convex/api'
 const route = useRoute()
 const router = useRouter()
 const threadId = computed(() => String(route.params.threadId))
-const { allowed, checkingAccess } = useLearnAdaptiveAccess()
+const { allowed, checkingAccess, fallbackRoute } = useLearnAdaptiveAccess()
 const threadQuery = import.meta.client
   ? useConvexQuery(api.learnAdaptive.getThread, computed(() => ({ threadId: threadId.value as never })), { enabled: allowed })
   : { data: ref(null), pending: ref(false) }
@@ -454,7 +454,8 @@ function leave() { void router.push(safeDestination.value) }
     <section v-if="checkingAccess" class="mx-auto max-w-3xl p-6" aria-live="polite">Checking learning access…</section>
     <section v-else-if="!allowed" class="mx-auto max-w-3xl p-6" data-testid="learn-adaptive-thread-denied">
       <p role="status">This learning thread is not available for this account.</p>
-      <NuxtLink to="/app/learn" data-testid="learn-adaptive-safe-destination" class="mt-4 inline-flex min-h-11 items-center text-primary underline">Back to Learn</NuxtLink>
+      <NuxtLink v-if="fallbackRoute" :to="{ name: fallbackRoute.name, query: fallbackRoute.name === 'app-learn' ? { legacy: 'v2' } : {} }" data-testid="learn-adaptive-safe-destination" class="mt-4 inline-flex min-h-11 items-center text-primary underline">{{ fallbackRoute.label }}</NuxtLink>
+      <NuxtLink v-else :to="{ name: 'index' }" data-testid="learn-adaptive-safe-destination" class="mt-4 inline-flex min-h-11 items-center text-primary underline">Open your folders for classic courses</NuxtLink>
     </section>
     <section v-else-if="projectionPending && !thread" class="mx-auto max-w-3xl p-6" aria-live="polite">Loading your learning thread…</section>
     <section v-else-if="!shellReady" class="mx-auto max-w-3xl p-6" data-testid="learn-adaptive-thread-unavailable">
