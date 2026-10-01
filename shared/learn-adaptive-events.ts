@@ -37,8 +37,11 @@ export const learnActivityEventMetadataValidator = v.object({
   firstValueExclusionCode: v.optional(firstValueExclusionCodeValidator),
   cohort: v.optional(v.string()),
   experimentEligibility: v.optional(v.union(v.literal('eligible'), v.literal('excluded'))),
-  experimentExclusionCode: v.optional(v.union(v.literal('analysis_unapproved'), v.literal('safety_prerequisite_missing'), v.literal('guardrail_rollback'))),
+  experimentExclusionCode: v.optional(v.union(v.literal('analysis_unapproved'), v.literal('analysis_contract_unsupported'), v.literal('safety_prerequisite_missing'), v.literal('guardrail_rollback'))),
   experimentAnalysisVersion: v.optional(v.literal('adaptive-routing-analysis.v1')),
+  experimentEligibilityVersion: v.optional(v.literal('learn-adaptive.experiment-eligibility.v1')),
+  experimentExclusionVersion: v.optional(v.literal('learn-adaptive.experiment-exclusion.v1')),
+  experimentAssignmentUnit: v.optional(v.literal('authenticated_learner')),
 })
 
 export const learnActivityEventFields = {
@@ -78,8 +81,11 @@ export type LearnActivityEventMetadata = {
   firstValueExclusionCode?: FirstValueExclusionCode
   cohort?: string
   experimentEligibility?: 'eligible' | 'excluded'
-  experimentExclusionCode?: 'analysis_unapproved' | 'safety_prerequisite_missing' | 'guardrail_rollback'
+  experimentExclusionCode?: 'analysis_unapproved' | 'analysis_contract_unsupported' | 'safety_prerequisite_missing' | 'guardrail_rollback'
   experimentAnalysisVersion?: 'adaptive-routing-analysis.v1'
+  experimentEligibilityVersion?: 'learn-adaptive.experiment-eligibility.v1'
+  experimentExclusionVersion?: 'learn-adaptive.experiment-exclusion.v1'
+  experimentAssignmentUnit?: 'authenticated_learner'
 }
 
 export type LearnActivityEventInput = {
@@ -96,7 +102,8 @@ export type LearnActivityEventInput = {
 }
 
 const INPUT_KEYS = new Set(['eventType', 'eventVersion', 'sourceVersion', 'contractVersion', 'metricDefinitionVersion', 'semanticKey', 'occurredAt', 'reasonCode', 'outcomeCode', 'metadata'])
-const METADATA_KEYS = new Set(['activityClass', 'boundaryOrdinal', 'planRevision', 'opportunityOrdinal', 'assistanceLevel', 'attemptKind', 'masteryState', 'providerStage', 'firstValueEligibility', 'firstValueExclusionCode', 'cohort', 'experimentEligibility', 'experimentExclusionCode', 'experimentAnalysisVersion'])
+const EXPERIMENT_METADATA_KEYS = ['cohort', 'experimentEligibility', 'experimentExclusionCode', 'experimentAnalysisVersion', 'experimentEligibilityVersion', 'experimentExclusionVersion', 'experimentAssignmentUnit']
+const METADATA_KEYS = new Set(['activityClass', 'boundaryOrdinal', 'planRevision', 'opportunityOrdinal', 'assistanceLevel', 'attemptKind', 'masteryState', 'providerStage', 'firstValueEligibility', 'firstValueExclusionCode', ...EXPERIMENT_METADATA_KEYS])
 const CODE = /^[a-z0-9][a-z0-9_:-]{0,95}$/
 const VERSION = /^[a-z0-9][a-z0-9._:-]{0,127}$/
 const SEMANTIC_KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,511}$/
@@ -122,7 +129,9 @@ export function validateLearnActivityEventInput<T extends LearnActivityEventInpu
   if (metadata.cohort !== undefined && !CODE.test(metadata.cohort)) throw new Error('Adaptive event cohort is invalid')
   if (metadata.firstValueExclusionCode !== undefined && metadata.firstValueEligibility !== 'excluded') throw new Error('Adaptive event first-value exclusion is invalid')
   if (input.eventType !== 'experiment_assignment' && (metadata.experimentEligibility !== undefined
-    || metadata.experimentExclusionCode !== undefined || metadata.experimentAnalysisVersion !== undefined))
+    || metadata.experimentExclusionCode !== undefined || metadata.experimentAnalysisVersion !== undefined
+    || metadata.experimentEligibilityVersion !== undefined || metadata.experimentExclusionVersion !== undefined
+    || metadata.experimentAssignmentUnit !== undefined))
     throw new Error('Adaptive experiment metadata is invalid for this event type')
   if (input.eventType === 'thread_command_committed' && (input.metricDefinitionVersion !== 'first_value.v1' || metadata.opportunityOrdinal === undefined || metadata.firstValueEligibility === undefined || metadata.cohort === undefined)) throw new Error('Adaptive first-value opportunity metadata is invalid')
   if (input.eventType === 'meaningful_activity_started' && (input.metricDefinitionVersion !== 'first_value.v1' || metadata.opportunityOrdinal === undefined)) throw new Error('Adaptive first-value stop metadata is invalid')
@@ -133,13 +142,18 @@ export function validateLearnActivityEventInput<T extends LearnActivityEventInpu
     || input.sourceVersion !== 'adaptive-routing-analysis.v1'
     || input.contractVersion !== 'learn-adaptive.experiment-assignment.v1'
     || metadata.experimentAnalysisVersion !== 'adaptive-routing-analysis.v1'
+    || metadata.experimentEligibilityVersion !== 'learn-adaptive.experiment-eligibility.v1'
+    || metadata.experimentExclusionVersion !== 'learn-adaptive.experiment-exclusion.v1'
+    || metadata.experimentAssignmentUnit !== 'authenticated_learner'
     || !['eligible', 'excluded'].includes(metadata.experimentEligibility ?? '')
     || !['adaptive', 'fixed', 'excluded'].includes(metadata.cohort ?? '')
     || (metadata.experimentEligibility === 'eligible' && (metadata.cohort === 'excluded' || metadata.experimentExclusionCode !== undefined))
     || (metadata.experimentEligibility === 'excluded' && (metadata.cohort !== 'excluded' || !metadata.experimentExclusionCode))
+    || (metadata.experimentExclusionCode !== undefined
+      && !['analysis_unapproved', 'analysis_contract_unsupported', 'safety_prerequisite_missing', 'guardrail_rollback'].includes(metadata.experimentExclusionCode))
     || (metadata.experimentEligibility === 'eligible' && (input.outcomeCode !== 'assigned' || input.reasonCode !== undefined))
     || (metadata.experimentEligibility === 'excluded' && (input.outcomeCode !== 'excluded' || input.reasonCode !== metadata.experimentExclusionCode))
-    || Object.keys(metadata).some(key => !['cohort', 'experimentEligibility', 'experimentExclusionCode', 'experimentAnalysisVersion'].includes(key))))
+    || Object.keys(metadata).some(key => !EXPERIMENT_METADATA_KEYS.includes(key))))
     throw new Error('Adaptive experiment assignment metadata is invalid')
   if (input.eventType === 'canvas_render_failure' && (input.metricDefinitionVersion !== undefined
     || input.sourceVersion !== ADAPTIVE_ACTIVITY_VALIDATION_ANALYTICS_VERSION

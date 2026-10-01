@@ -1,12 +1,20 @@
 import { v } from 'convex/values'
-import { internalMutation, mutation, query } from './_generated/server'
+import { internalMutation, internalQuery, mutation, query, type MutationCtx } from './_generated/server'
 import type { Doc } from './_generated/dataModel'
 import { requireAdaptiveMutationAccess, requireAdaptiveQueryAccess } from './lib/adaptiveLearnAccess'
-import { writeLearnActivityEvent } from './lib/learnAdaptiveEvents'
+import { hasLearnActivityEvent, writeLearnActivityEvent } from './lib/learnAdaptiveEvents'
+import { isOperableDiagnosticActivity, liveEvidenceState } from './learnAdaptiveRecovery'
+import { loadReadyCanvas } from './learnAdaptiveCanvas'
+import { representativeCompletion } from './learnAdaptive'
+import { getScopedMasteryRecord } from './lib/learnV2MasteryScope'
 import { canonicalAdaptiveActivityJson } from '../shared/learn-adaptive-activity-plan'
 import {
   ADAPTIVE_ROUTING_ANALYSIS_VERSION,
   ADAPTIVE_ROUTING_ASSIGNMENT_CONTRACT_VERSION,
+  ADAPTIVE_ROUTING_ELIGIBILITY_VERSION,
+  ADAPTIVE_ROUTING_EXCLUSION_VERSION,
+  ADAPTIVE_ROUTING_ASSIGNMENT_UNIT,
+  ADAPTIVE_ROUTING_ROLLBACK_SIGNAL_VERSION,
   adaptiveRoutingAnalysisPlanValidator,
   validateAdaptiveRoutingAnalysisPlan,
 } from '../shared/learn-adaptive-experiment'
@@ -16,6 +24,12 @@ const APPROVAL_CODE = /^[a-z0-9][a-z0-9._:-]{0,127}$/
 const SNAPSHOT_KEY = /^[a-z0-9][a-z0-9_-]{0,95}$/
 const SNAPSHOT_SOURCE_VERSION = /^[a-z0-9][a-z0-9._:-]{0,95}$/
 const EVIDENCE_DIGEST = /^sha256:[a-f0-9]{64}$/
+const EXPERIMENT_METADATA_VERSIONS = {
+  experimentAnalysisVersion: ANALYSIS_VERSION,
+  experimentEligibilityVersion: ADAPTIVE_ROUTING_ELIGIBILITY_VERSION,
+  experimentExclusionVersion: ADAPTIVE_ROUTING_EXCLUSION_VERSION,
+  experimentAssignmentUnit: ADAPTIVE_ROUTING_ASSIGNMENT_UNIT,
+}
 const guardrailObservationValidator = v.object({
   adaptiveSuccesses: v.number(), adaptiveEligible: v.number(),
   fixedSuccesses: v.number(), fixedEligible: v.number(),
@@ -42,20 +56,40 @@ function degradedByMoreThanThreePoints(observation: GuardrailObservation) {
       > 3 * fixedEligible * adaptiveEligible
 }
 
-function guardrailValue(row: Doc<'learnAdaptiveExperimentGuardrailEvaluations'>) {
-  return { analysisVersion: ANALYSIS_VERSION, status: row.status,
-    rollbackTrigger: row.rollbackTrigger, reasons: row.reasons }
+function rollbackSignalValue(row: Doc<'learnAdaptiveExperimentRollbacks'>) {
+  return { signalId: String(row._id), version: row.signalVersion, analysisVersion: ANALYSIS_VERSION,
+    action: row.action, cohort: row.cohort, delivery: row.delivery, reasons: row.reasons,
+    triggerEvaluationId: String(row.triggerEvaluationId), triggeredAt: row.triggeredAt }
 }
 
+function guardrailValue(row: Doc<'learnAdaptiveExperimentGuardrailEvaluations'>,
+  rollback: Doc<'learnAdaptiveExperimentRollbacks'> | null = null) {
+  return { analysisVersion: ANALYSIS_VERSION, status: row.status,
+    rollbackTrigger: row.rollbackTrigger, reasons: row.reasons,
+    rollbackSignal: rollback ? rollbackSignalValue(rollback) : null }
+}
+
+export const getRollbackSignal = internalQuery({
+  args: { analysisVersion: v.literal(ANALYSIS_VERSION) },
+  handler: async (ctx, args) => {
+    const plan = await ctx.db.query('learnAdaptiveExperimentPlans')
+      .withIndex('by_version', q => q.eq('version', args.analysisVersion)).unique()
+    if (!plan) return null
+    const rollback = await ctx.db.query('learnAdaptiveExperimentRollbacks')
+      .withIndex('by_planId', q => q.eq('planId', plan._id)).unique()
+    return rollback ? rollbackSignalValue(rollback) : null
+  },
+})
+
 async function writeExperimentExclusion(ctx: Parameters<typeof writeLearnActivityEvent>[0],
-  args: { userId: string, threadId: Doc<'learningThreads'>['_id'], reason: 'analysis_unapproved' | 'safety_prerequisite_missing' | 'guardrail_rollback' }) {
+  args: { userId: string, threadId: Doc<'learningThreads'>['_id'], reason: 'analysis_unapproved' | 'analysis_contract_unsupported' | 'safety_prerequisite_missing' | 'guardrail_rollback' }) {
   await writeLearnActivityEvent(ctx, { userId: args.userId, threadId: args.threadId,
     eventType: 'experiment_assignment', eventVersion: 'experiment_assignment.v1',
     sourceVersion: ANALYSIS_VERSION, contractVersion: ADAPTIVE_ROUTING_ASSIGNMENT_CONTRACT_VERSION,
     semanticKey: `experiment:${ANALYSIS_VERSION}:excluded:${args.reason}`, occurredAt: Date.now(),
     reasonCode: args.reason, outcomeCode: 'excluded',
     metadata: { cohort: 'excluded', experimentEligibility: 'excluded',
-      experimentExclusionCode: args.reason, experimentAnalysisVersion: ANALYSIS_VERSION },
+      experimentExclusionCode: args.reason, ...EXPERIMENT_METADATA_VERSIONS },
   })
 }
 
@@ -90,6 +124,7 @@ export const recordApproval = internalMutation({
   handler: async (ctx, args) => {
     const plan = await ctx.db.get(args.planId)
     if (!plan || plan.version !== ANALYSIS_VERSION) throw new Error('Adaptive routing analysis is unavailable')
+    validateAdaptiveRoutingAnalysisPlan(plan.plan)
     const { planId, ...references } = args
     if (Object.values(references).some(reference => !APPROVAL_CODE.test(reference)))
       throw new Error('Adaptive routing analysis approval reference is invalid')
@@ -116,6 +151,7 @@ export const evaluateGuardrails = internalMutation({
       .withIndex('by_planId', q => q.eq('planId', plan._id)).unique()
     if (!plan || !approval || plan.version !== ANALYSIS_VERSION)
       throw new Error('Adaptive routing analysis is not approved')
+    validateAdaptiveRoutingAnalysisPlan(plan.plan)
     validateObservation(args.accessibility)
     validateObservation(args.recovery)
     const snapshotDigest = await digest(canonicalAdaptiveActivityJson({
@@ -124,9 +160,11 @@ export const evaluateGuardrails = internalMutation({
     }))
     const prior = await ctx.db.query('learnAdaptiveExperimentGuardrailEvaluations')
       .withIndex('by_planId_and_snapshotKey', q => q.eq('planId', args.planId).eq('snapshotKey', args.snapshotKey)).unique()
+    let rollback = await ctx.db.query('learnAdaptiveExperimentRollbacks')
+      .withIndex('by_planId', q => q.eq('planId', plan._id)).unique()
     if (prior) {
       if (prior.snapshotDigest !== snapshotDigest) throw new Error('Adaptive experiment guardrail snapshot conflicts with prior evaluation')
-      return guardrailValue(prior)
+      return guardrailValue(prior, rollback)
     }
     const reasons: Array<'accessibility_degradation' | 'recovery_degradation'> = []
     if (degradedByMoreThanThreePoints(args.accessibility)) reasons.push('accessibility_degradation')
@@ -142,16 +180,17 @@ export const evaluateGuardrails = internalMutation({
       evidenceDigest: args.evidenceDigest, snapshotSourceVersion: args.snapshotSourceVersion,
       status, rollbackTrigger, reasons, evaluatedAt: Date.now(),
     })
-    if (rollbackTrigger) {
-      const priorRollback = await ctx.db.query('learnAdaptiveExperimentRollbacks')
-        .withIndex('by_planId', q => q.eq('planId', plan._id)).unique()
-      if (!priorRollback) await ctx.db.insert('learnAdaptiveExperimentRollbacks', {
-        planId: plan._id, triggerEvaluationId: evaluationId, triggeredAt: Date.now(),
+    if (rollbackTrigger && !rollback) {
+      const rollbackId = await ctx.db.insert('learnAdaptiveExperimentRollbacks', {
+        planId: plan._id, triggerEvaluationId: evaluationId, triggeredAt: Date.now(), reasons,
+        signalVersion: ADAPTIVE_ROUTING_ROLLBACK_SIGNAL_VERSION,
+        action: 'disable_adaptive_exposure', cohort: 'adaptive', delivery: 'pending',
       })
+      rollback = await ctx.db.get(rollbackId)
     }
     const row = await ctx.db.get(evaluationId)
     if (!row) throw new Error('Adaptive experiment guardrail evaluation was not recorded')
-    return guardrailValue(row)
+    return guardrailValue(row, rollback)
   },
 })
 
@@ -159,6 +198,45 @@ const assignmentValue = (row: { cohort: 'adaptive' | 'fixed' }) => ({
   kind: 'assigned' as const, analysisVersion: ANALYSIS_VERSION,
   cohort: row.cohort, eligibility: 'eligible' as const,
 })
+
+async function hasExperimentSafetyPrerequisites(ctx: MutationCtx, thread: Doc<'learningThreads'>) {
+  if (thread.deletionStartedAt !== undefined || (thread.lifecycle !== 'ready' && thread.lifecycle !== 'active')
+    || thread.initialDecision?.status === 'pending') return false
+  const sourceState = await liveEvidenceState(ctx, thread)
+  if (sourceState !== 'none' && sourceState !== 'ready') return false
+  const activity = thread.currentActivityId ? await ctx.db.get(thread.currentActivityId) : null
+  if (thread.currentActivityId && (!activity || activity.userId !== thread.userId || activity.threadId !== thread._id)) return false
+  const latest = await ctx.db.query('learningThreadActivities')
+    .withIndex('by_userId_and_threadId_and_boundaryOrdinal', q => q.eq('userId', thread.userId).eq('threadId', thread._id))
+    .order('desc').first()
+  if (latest?._id !== activity?._id) return false
+  if (thread.authorityKind === 'standalone') {
+    return !activity || activity.status === 'submitted' && await isOperableDiagnosticActivity(activity)
+      && await hasLearnActivityEvent(ctx, thread.userId, activity._id, 'activity_completed')
+  }
+  if (sourceState !== 'ready' || !activity || activity.activityClass !== 'factual'
+    || !activity.learningVoidId || !activity.blueprintRevisionId || !activity.objectiveId || !activity.sessionContentId
+    || activity.evidenceReferences.length < 1 || activity.evidenceReferences.length > 16) return false
+  const canvas = await loadReadyCanvas(ctx, thread.userId, thread._id)
+  if (!canvas || (canvas.status !== 'ready' && canvas.status !== 'feedback')) return false
+  for (const reference of activity.evidenceReferences) {
+    const source = await ctx.db.get(reference.sourceSnapshotId)
+    if (!source || source.userId !== thread.userId || source.learningVoidId !== activity.learningVoidId
+      || source.blueprintRevisionId !== activity.blueprintRevisionId || source.recordRevision !== reference.sourceRecordRevision
+      || source.status !== 'user_accepted' || source.effectiveStatus !== 'user_accepted'
+      || source.evidencePurgedAt !== undefined || source.rightsStatus !== 'permitted' || source.conflictStatus !== 'clear') return false
+  }
+  if (activity.status === 'feedback') {
+    const completion = await representativeCompletion(ctx, thread.userId, activity)
+    const attempt = activity.masteryAttemptId ? await ctx.db.get(activity.masteryAttemptId) : null
+    const { record: mastery } = await getScopedMasteryRecord(ctx, thread.userId, activity.blueprintRevisionId, activity.objectiveId)
+    if (!completion || !attempt || !mastery || mastery.lastAttemptId !== attempt._id
+      || (attempt.kind !== 'independent_application' && attempt.kind !== 'retained_transfer')
+      || !attempt.masteryStateBefore || !attempt.masteryStateAfter || !attempt.masteryTransitionReason
+      || attempt.masteryTransitionVersion !== 'learn-v2.mastery-transition.v1' || attempt.masteryStateAfter !== mastery.state) return false
+  }
+  return true
+}
 
 export const assignForThread = mutation({
   args: { threadId: v.id('learningThreads') },
@@ -176,15 +254,18 @@ export const assignForThread = mutation({
       await writeExperimentExclusion(ctx, { userId, threadId: thread._id, reason: 'analysis_unapproved' })
       return { kind: 'excluded' as const, reason: 'analysis_unapproved' as const, analysisVersion: ANALYSIS_VERSION }
     }
+    try { validateAdaptiveRoutingAnalysisPlan(plan.plan) }
+    catch {
+      await writeExperimentExclusion(ctx, { userId, threadId: thread._id, reason: 'analysis_contract_unsupported' })
+      return { kind: 'excluded' as const, reason: 'analysis_contract_unsupported' as const, analysisVersion: ANALYSIS_VERSION }
+    }
     const rollback = await ctx.db.query('learnAdaptiveExperimentRollbacks')
       .withIndex('by_planId', q => q.eq('planId', plan._id)).unique()
     if (rollback) {
       await writeExperimentExclusion(ctx, { userId, threadId: thread._id, reason: 'guardrail_rollback' })
       return { kind: 'excluded' as const, reason: 'guardrail_rollback' as const, analysisVersion: ANALYSIS_VERSION }
     }
-    if (thread.deletionStartedAt !== undefined || (thread.lifecycle !== 'ready' && thread.lifecycle !== 'active')
-      || thread.initialDecision?.status === 'pending'
-      || (thread.authorityKind === 'v2_mission' && thread.evidenceState !== 'ready')) {
+    if (!(await hasExperimentSafetyPrerequisites(ctx, thread))) {
       await writeExperimentExclusion(ctx, { userId, threadId: thread._id, reason: 'safety_prerequisite_missing' })
       return { kind: 'excluded' as const, reason: 'safety_prerequisite_missing' as const, analysisVersion: ANALYSIS_VERSION }
     }
@@ -196,6 +277,7 @@ export const assignForThread = mutation({
     const assignedAt = Date.now()
     await ctx.db.insert('learnAdaptiveExperimentAssignments', {
       userId, planId: plan._id, analysisVersion: ANALYSIS_VERSION, cohort, eligibility: 'eligible',
+      eligibilityVersion: ADAPTIVE_ROUTING_ELIGIBILITY_VERSION, assignmentUnit: ADAPTIVE_ROUTING_ASSIGNMENT_UNIT,
       contractVersion: ADAPTIVE_ROUTING_ASSIGNMENT_CONTRACT_VERSION, assignedAt,
     })
     await writeLearnActivityEvent(ctx, { userId, threadId: thread._id,
@@ -203,7 +285,7 @@ export const assignForThread = mutation({
       sourceVersion: ANALYSIS_VERSION, contractVersion: ADAPTIVE_ROUTING_ASSIGNMENT_CONTRACT_VERSION,
       semanticKey: `experiment:${ANALYSIS_VERSION}`, occurredAt: assignedAt,
       outcomeCode: 'assigned', metadata: { cohort, experimentEligibility: 'eligible',
-        experimentAnalysisVersion: ANALYSIS_VERSION },
+        ...EXPERIMENT_METADATA_VERSIONS },
     })
     return assignmentValue({ cohort })
   },
@@ -235,7 +317,7 @@ export const getGuardrailStatus = query({
       .withIndex('by_planId', q => q.eq('planId', assignment.planId)).unique()
     if (rollback) {
       const trigger = await ctx.db.get(rollback.triggerEvaluationId)
-      if (trigger) return guardrailValue(trigger)
+      if (trigger) return guardrailValue(trigger, rollback)
     }
     const latest = await ctx.db.query('learnAdaptiveExperimentGuardrailEvaluations')
       .withIndex('by_planId_and_evaluatedAt', q => q.eq('planId', assignment.planId)).order('desc').first()

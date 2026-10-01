@@ -60,14 +60,20 @@ describe('Adaptive Learn event contract', () => {
       sourceVersion: 'adaptive-routing-analysis.v1', contractVersion: 'learn-adaptive.experiment-assignment.v1',
       semanticKey: 'experiment:adaptive-routing-analysis.v1', occurredAt: 1, outcomeCode: 'assigned',
       metadata: { cohort: 'adaptive', experimentEligibility: 'eligible' as const,
-        experimentAnalysisVersion: 'adaptive-routing-analysis.v1' as const } }
+        experimentAnalysisVersion: 'adaptive-routing-analysis.v1' as const,
+        experimentEligibilityVersion: 'learn-adaptive.experiment-eligibility.v1' as const,
+        experimentExclusionVersion: 'learn-adaptive.experiment-exclusion.v1' as const,
+        experimentAssignmentUnit: 'authenticated_learner' as const } }
     expect(validateLearnActivityEventInput(assigned)).toEqual(assigned)
     expect(() => validateLearnActivityEventInput({ ...assigned, outcomeCode: 'excluded' })).toThrow(/assignment metadata/i)
     expect(() => validateLearnActivityEventInput({ ...assigned, metadata: { ...assigned.metadata, cohort: 'excluded' } })).toThrow(/assignment metadata/i)
     const excluded = { ...assigned, outcomeCode: 'excluded', reasonCode: 'guardrail_rollback',
       metadata: { cohort: 'excluded', experimentEligibility: 'excluded' as const,
         experimentExclusionCode: 'guardrail_rollback' as const,
-        experimentAnalysisVersion: 'adaptive-routing-analysis.v1' as const } }
+        experimentAnalysisVersion: 'adaptive-routing-analysis.v1' as const,
+        experimentEligibilityVersion: 'learn-adaptive.experiment-eligibility.v1' as const,
+        experimentExclusionVersion: 'learn-adaptive.experiment-exclusion.v1' as const,
+        experimentAssignmentUnit: 'authenticated_learner' as const } }
     expect(validateLearnActivityEventInput(excluded)).toEqual(excluded)
     expect(() => validateLearnActivityEventInput({ ...excluded, reasonCode: 'other' })).toThrow(/assignment metadata/i)
   })

@@ -2,12 +2,17 @@ import { v, type Infer } from 'convex/values'
 
 export const ADAPTIVE_ROUTING_ANALYSIS_VERSION = 'adaptive-routing-analysis.v1' as const
 export const ADAPTIVE_ROUTING_ASSIGNMENT_CONTRACT_VERSION = 'learn-adaptive.experiment-assignment.v1' as const
+export const ADAPTIVE_ROUTING_ELIGIBILITY_VERSION = 'learn-adaptive.experiment-eligibility.v1' as const
+export const ADAPTIVE_ROUTING_EXCLUSION_VERSION = 'learn-adaptive.experiment-exclusion.v1' as const
+export const ADAPTIVE_ROUTING_ASSIGNMENT_UNIT = 'authenticated_learner' as const
+export const ADAPTIVE_ROUTING_ROLLBACK_SIGNAL_VERSION = 'learn-adaptive.experiment-rollback-signal.v1' as const
 
 export const adaptiveRoutingAnalysisPlanValidator = v.object({
   version: v.literal(ADAPTIVE_ROUTING_ANALYSIS_VERSION),
   fixedContinuationVersion: v.string(),
   primaryOutcomeVersion: v.string(),
   eligibilityVersion: v.string(),
+  assignmentUnit: v.string(),
   denominatorVersion: v.string(),
   baselineRate: v.number(),
   minimumEffectPercentagePoints: v.number(),
@@ -33,6 +38,8 @@ export const adaptiveRoutingAnalysisPlanValidator = v.object({
 const CODE = /^[a-z0-9][a-z0-9._:-]{0,95}$/
 
 export function validateAdaptiveRoutingAnalysisPlan(plan: Infer<typeof adaptiveRoutingAnalysisPlanValidator>) {
+  if (plan.eligibilityVersion !== ADAPTIVE_ROUTING_ELIGIBILITY_VERSION || plan.assignmentUnit !== ADAPTIVE_ROUTING_ASSIGNMENT_UNIT)
+    throw new Error('Adaptive routing analysis assignment contract is unsupported')
   for (const field of ['fixedContinuationVersion', 'primaryOutcomeVersion', 'eligibilityVersion', 'denominatorVersion',
     'accessibilityCompletionVersion', 'recoverySuccessVersion', 'productAnalyticsOwner', 'productApprover',
     'qaGuardrailVerifier', 'engineeringReplayOwner'] as const) {

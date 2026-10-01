@@ -1445,6 +1445,8 @@ export default defineSchema({
     analysisVersion: v.literal('adaptive-routing-analysis.v1'),
     cohort: v.union(v.literal('adaptive'), v.literal('fixed')),
     eligibility: v.literal('eligible'),
+    eligibilityVersion: v.literal('learn-adaptive.experiment-eligibility.v1'),
+    assignmentUnit: v.literal('authenticated_learner'),
     contractVersion: v.literal('learn-adaptive.experiment-assignment.v1'),
     assignedAt: v.number(),
   }).index('by_userId', ['userId'])
@@ -1464,6 +1466,11 @@ export default defineSchema({
   learnAdaptiveExperimentRollbacks: defineTable({
     planId: v.id('learnAdaptiveExperimentPlans'),
     triggerEvaluationId: v.id('learnAdaptiveExperimentGuardrailEvaluations'),
+    signalVersion: v.literal('learn-adaptive.experiment-rollback-signal.v1'),
+    action: v.literal('disable_adaptive_exposure'),
+    cohort: v.literal('adaptive'),
+    delivery: v.literal('pending'),
+    reasons: v.array(v.union(v.literal('accessibility_degradation'), v.literal('recovery_degradation'))),
     triggeredAt: v.number(),
   }).index('by_planId', ['planId']),
 
