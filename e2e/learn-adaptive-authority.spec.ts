@@ -51,7 +51,8 @@ async function saveRoutedDiagnostic(page: Page, request: APIRequestContext, keyb
   }, { timeout: 120_000, intervals: [5_000] }).toBe(true)
   await page.reload({ waitUntil: 'domcontentloaded' })
   await expect(page.getByTestId('learn-adaptive-home')).toHaveAttribute('data-hydrated', 'true')
-  await expect(page.getByRole('main').last()).toHaveAttribute('data-owner-ready', 'true')
+  await expect(page.locator('[data-owner-ready]')).toHaveAttribute('data-owner-ready', 'true')
+  await expect(page.getByRole('main')).toHaveCount(1)
   await enter(page.getByTestId('learn-adaptive-need'), 'Explain why an orbiting satellite does not fall straight down.')
   await activate(page.getByTestId('learn-adaptive-start'))
   await expect(page.getByTestId('learn-initial-decision')).toBeVisible({ timeout: 30_000 })
@@ -60,6 +61,7 @@ async function saveRoutedDiagnostic(page: Page, request: APIRequestContext, keyb
   await activate(page.getByTestId('learn-adaptive-open-diagnostic'))
   await expect(page).toHaveURL(/\/app\/learn\/thread\/[^/]+$/)
   await expect(page.getByTestId('learn-diagnostic-canvas')).toBeVisible()
+  await expect(page.getByRole('main')).toHaveCount(1)
   await activate(page.getByTestId('learn-diagnostic-start'))
   const response = 'The satellite keeps falling while its sideways velocity carries it around Earth.'
   await enter(page.getByTestId('learn-diagnostic-response'), response)
