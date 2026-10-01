@@ -205,3 +205,32 @@ test('matching Chat content and a legacy Quiz never acquire shared attempt autho
   const thread = await owner.query(api.learnAdaptive.getThread, { threadId: ids.threadId })
   expect(thread?.currentActivity?.attemptOrigins).toHaveLength(2)
 })
+
+test.each([
+  { feature: 'quiz', outcome: 'conflict' }, { feature: 'quiz', outcome: 'blocked' },
+  { feature: 'chat', outcome: 'conflict' }, { feature: 'chat', outcome: 'blocked' },
+] as const)('replays the original $feature $outcome receipt before an origin exists', async ({ feature, outcome }) => {
+  const { t, owner, ids } = await fixture()
+  let quizId: FunctionArgs<typeof api.learnAdaptive.handoffQuizAttemptToChat>['quizId'] | null = null
+  let revision = 1
+  if (feature === 'chat') {
+    const quiz = await owner.mutation(api.learnAdaptive.projectAcceptedAttemptToQuiz, { threadId: ids.threadId, attemptId: ids.attemptId, expectedRevision: 1, idempotencyKey: 'receipt-parent-quiz-0001' })
+    if (quiz.kind !== 'ok') throw new Error('Expected Quiz projection')
+    quizId = quiz.value.quizId
+    revision = quiz.revision
+  }
+  if (outcome === 'blocked') await t.run(ctx => ctx.db.patch(ids.jobId, { status: 'blocked', terminalReason: 'provider_outcome_requires_reconciliation' }))
+  const request = { threadId: ids.threadId, expectedRevision: outcome === 'conflict' ? 99 : revision, idempotencyKey: 'terminal-receipt-retry-0001' }
+  const submit = () => feature === 'quiz'
+    ? owner.mutation(api.learnAdaptive.projectAcceptedAttemptToQuiz, { ...request, attemptId: ids.attemptId })
+    : owner.mutation(api.learnAdaptive.handoffQuizAttemptToChat, { ...request, quizId: quizId! })
+  const original = await submit()
+  expect(original).toMatchObject({ kind: outcome, code: outcome === 'conflict' ? 'stale_revision' : 'accepted_attempt_unavailable' })
+  expect(await submit()).toEqual(original)
+  if (outcome === 'blocked') {
+    await t.run(ctx => ctx.db.patch(ids.jobId, { status: 'succeeded', terminalReason: undefined }))
+    expect(await submit()).toEqual(original)
+  }
+  expect(await owner.query(api.quizzes.listByFolder, { folderId: ids.folderId })).toHaveLength(feature === 'quiz' ? 0 : 1)
+  expect(await owner.query(api.conversations.listRecentForUser, {})).toEqual([])
+})
