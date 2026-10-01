@@ -24,15 +24,23 @@ async function captureAuthority() {
   busy.value = true
   error.value = ''
   try {
-    const collections = ['masteryAttempts', 'masteryRecords', 'learnJobs', 'learnActivityEvents'] as const
-    const pages = await Promise.all(collections.map(collection => client.query(api.dataExport.getUserDataPage,
-      { collection, paginationOpts: { cursor: null, numItems: 100 } })))
-    if (pages.some(page => !page.isDone)) throw new Error('Fixture export exceeds its bounded page')
-    const rows = pages.map(page => page.page as Array<Record<string, unknown>>)
+    const collections = ['masteryAttempts', 'masteryRecords', 'learnJobs', 'learnActivityEvents', 'learningThreadContributions'] as const
+    const rows = await Promise.all(collections.map(async collection => {
+      const records: Array<Record<string, unknown>> = []
+      let cursor: string | null = null
+      for (let pageNumber = 0; pageNumber < 32; pageNumber++) {
+        const page = await client.query(api.dataExport.getUserDataPage, { collection, paginationOpts: { cursor, numItems: 8 } })
+        records.push(...page.page as Array<Record<string, unknown>>)
+        if (page.isDone) return records
+        cursor = page.continueCursor
+      }
+      throw new Error('Fixture export exceeds its bounded pages')
+    }))
     report.value = JSON.stringify({
       attempts: rows[0], mastery: rows[1],
       scoringJobs: rows[2]!.filter(row => row.type === 'mastery_scoring').map(row => ({ id: row._id, status: row.status, revision: row.revision })),
       authorityEvents: rows[3]!.filter(row => ['activity_started', 'meaningful_activity_started', 'meaningful_response', 'activity_completed'].includes(String(row.eventType))),
+      lineage: rows[4]!.filter(row => row.attemptLineage).map(row => ({ feature: row.sourceFeature, ...row.attemptLineage as Record<string, unknown> })),
     })
   }
   catch { error.value = 'Public authority export failed.' }

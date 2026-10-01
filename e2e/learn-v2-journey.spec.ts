@@ -185,12 +185,14 @@ async function runLearningJourney(page: Page, request: APIRequestContext, handof
       return JSON.parse(await page.getByTestId('adaptive-authority-report').innerText()) as {
         attempts: Array<{ _id: string, serverScorePercent: number }>, mastery: unknown[],
         scoringJobs: Array<{ id: string, status: string }>, authorityEvents: unknown[],
+        lineage: Array<{ feature: string, key: string, version: string, status: string }>,
       }
     }
     const beforeHandoff = await authorityExport()
     expect(beforeHandoff.attempts).toHaveLength(1)
     expect(beforeHandoff.mastery.length).toBeGreaterThanOrEqual(1)
     expect(beforeHandoff.scoringJobs).toEqual([expect.objectContaining({ status: 'succeeded' })])
+    expect(beforeHandoff.lineage).toEqual([])
     await page.goto(threadUrl)
     await expect(page.getByTestId('learn-accepted-attempt-open-quiz')).toBeVisible()
     await page.getByTestId('learn-accepted-attempt-open-quiz').click()
@@ -212,7 +214,16 @@ async function runLearningJourney(page: Page, request: APIRequestContext, handof
     await page.goto(threadUrl)
     await expect(page.getByTestId('learn-accepted-attempt-origins')).toContainText('Quiz')
     await expect(page.getByTestId('learn-accepted-attempt-origins')).toContainText('Chat')
-    expect(await authorityExport()).toEqual(beforeHandoff)
+    const { lineage, ...afterAuthority } = await authorityExport()
+    const { lineage: _beforeLineage, ...beforeAuthority } = beforeHandoff
+    expect(afterAuthority).toEqual(beforeAuthority)
+    expect(lineage.map(origin => origin.feature).sort()).toEqual(['chat', 'quiz'])
+    expect(new Set(lineage.map(origin => origin.key)).size).toBe(1)
+    for (const origin of lineage) {
+      expect(origin.status).toBe('verified')
+      expect(origin.key).toMatch(/^sha256:[a-f0-9]{64}$/)
+      expect(origin.version).toBe('learn-adaptive.accepted-attempt-projection.v1')
+    }
     return
   }
   await page.getByTestId('learn-v2-start').click()
