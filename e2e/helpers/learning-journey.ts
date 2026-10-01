@@ -183,13 +183,16 @@ export async function runLearningJourney(page: Page, request: APIRequestContext,
       await page.getByTestId('adaptive-authority-capture').click()
       await expect(page.getByTestId('adaptive-authority-report')).toBeVisible()
       return JSON.parse(await page.getByTestId('adaptive-authority-report').innerText()) as {
-        attempts: Array<{ _id: string, serverScorePercent: number }>, mastery: unknown[],
+        attempts: Array<{ _id: string, serverScorePercent: number, activityContractVersion: string }>, mastery: unknown[],
         scoringJobs: Array<{ id: string, status: string }>, authorityEvents: unknown[],
         lineage: Array<{ feature: string, key: string, version: string, status: string }>,
       }
     }
     const beforeHandoff = await authorityExport()
-    expect(beforeHandoff.attempts).toHaveLength(1)
+    // The public export also includes the three genuine calibration attempts.
+    // Preserve all four in the before/after comparison, not just the handoff.
+    expect(beforeHandoff.attempts).toHaveLength(4)
+    expect(beforeHandoff.attempts.filter(attempt => attempt.activityContractVersion === 'learn-v2.mastery-attempt.v1')).toHaveLength(1)
     expect(beforeHandoff.mastery.length).toBeGreaterThanOrEqual(1)
     expect(beforeHandoff.scoringJobs).toEqual([expect.objectContaining({ status: 'succeeded' })])
     expect(beforeHandoff.lineage).toEqual([])
