@@ -14,6 +14,8 @@ Configuration validation rejects missing shapes, unsupported version/provider/po
 
 The canonical scoring job remains the authority for one dispatch attempt; product controls do not create a second provider dispatcher. The dispatch transaction reserves a conservative cost upper bound and product quota before I/O. Reservations, configured ceilings, and pricing-derived upper bounds are not recorded actual provider cost.
 
+Persisted job provenance seals the authority boundary. The public V2 submission wrapper cannot acquire a new dispatch lease for an adaptive-linked job before rewriting its ledger or dispatching; selecting another wrapper cannot remove pilot, product, or rollback admission. Completed replay, pending/reconciliation projections, and fresh ordinary V2 requests keep their existing behavior.
+
 Product concurrency spans UTC window boundaries. Post-dispatch ambiguity remains reconciling and cannot automatically replay or imply mastery. A safety review or rollback latch must not silently clear through midnight, lease expiry, account deletion, or a configuration-version change.
 
 The safety counter records eligible starts once per admitted job attempt over the lifetime of the pinned manifest. It latches review when ambiguity exceeds 1% or budget denial exceeds 5% of those starts. This is a lifetime guardrail denominator, not a UTC daily metric or the separate first-value denominator. The latch survives UTC window expiry and does not authorize activation or reset itself.
