@@ -178,6 +178,20 @@ async function runLearningJourney(page: Page, request: APIRequestContext, handof
     await page.getByTestId('learn-canvas-confidence-4').check()
     await page.getByTestId('learn-canvas-submit').click()
     await expect(page.getByTestId('learn-canvas-status')).toContainText('Response scored.', { timeout: 120_000 })
+    async function authorityExport() {
+      await page.goto('/__e2e/adaptive-session')
+      await page.getByTestId('adaptive-authority-capture').click()
+      await expect(page.getByTestId('adaptive-authority-report')).toBeVisible()
+      return JSON.parse(await page.getByTestId('adaptive-authority-report').innerText()) as {
+        attempts: Array<{ _id: string, serverScorePercent: number }>, mastery: unknown[],
+        scoringJobs: Array<{ id: string, status: string }>, authorityEvents: unknown[],
+      }
+    }
+    const beforeHandoff = await authorityExport()
+    expect(beforeHandoff.attempts).toHaveLength(1)
+    expect(beforeHandoff.mastery.length).toBeGreaterThanOrEqual(1)
+    expect(beforeHandoff.scoringJobs).toEqual([expect.objectContaining({ status: 'succeeded' })])
+    await page.goto(threadUrl)
     await expect(page.getByTestId('learn-accepted-attempt-open-quiz')).toBeVisible()
     await page.getByTestId('learn-accepted-attempt-open-quiz').click()
     await expect(page).toHaveURL(/\/app\/folders\/[^/]+\/quiz\/[^/]+$/)
@@ -198,6 +212,7 @@ async function runLearningJourney(page: Page, request: APIRequestContext, handof
     await page.goto(threadUrl)
     await expect(page.getByTestId('learn-accepted-attempt-origins')).toContainText('Quiz')
     await expect(page.getByTestId('learn-accepted-attempt-origins')).toContainText('Chat')
+    expect(await authorityExport()).toEqual(beforeHandoff)
     return
   }
   await page.getByTestId('learn-v2-start').click()

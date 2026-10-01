@@ -7,11 +7,37 @@ import { createSsrMutationStub } from '~/utils/convexSsrMutation'
 const route = useRoute()
 const sessionId = computed(() => String(route.query.session ?? ''))
 const content = import.meta.client ? useConvexQuery(api.learnV2Journey.getSessionCandidate,
-  computed(() => ({ studySessionId: sessionId.value as never, learningVoidId: String(route.query.mission ?? '') as never }))) : { data: ref(null) }
+  computed(() => ({ studySessionId: sessionId.value as never, learningVoidId: String(route.query.mission ?? '') as never })),
+  { enabled: computed(() => Boolean(sessionId.value)) }) : { data: ref(null) }
 const attach = import.meta.client ? useConvexMutation(api.learnAdaptiveCanvas.attachReadySession)
   : createSsrMutationStub<typeof api.learnAdaptiveCanvas.attachReadySession>()
 const busy = ref(false)
 const error = ref('')
+const client = import.meta.client ? useConvex() : null
+const auth = useNuxtApp()
+const authReady = (auth.$convexAuthReady as Ref<boolean> | undefined) ?? ref(false)
+const authenticated = (auth.$convexAuthenticated as Ref<boolean> | undefined) ?? ref(false)
+const ready = computed(() => authReady.value && authenticated.value)
+const report = ref('')
+async function captureAuthority() {
+  if (!client || !ready.value || busy.value) return
+  busy.value = true
+  error.value = ''
+  try {
+    const collections = ['masteryAttempts', 'masteryRecords', 'learnJobs', 'learnActivityEvents'] as const
+    const pages = await Promise.all(collections.map(collection => client.query(api.dataExport.getUserDataPage,
+      { collection, paginationOpts: { cursor: null, numItems: 100 } })))
+    if (pages.some(page => !page.isDone)) throw new Error('Fixture export exceeds its bounded page')
+    const rows = pages.map(page => page.page as Array<Record<string, unknown>>)
+    report.value = JSON.stringify({
+      attempts: rows[0], mastery: rows[1],
+      scoringJobs: rows[2]!.filter(row => row.type === 'mastery_scoring').map(row => ({ id: row._id, status: row.status, revision: row.revision })),
+      authorityEvents: rows[3]!.filter(row => ['activity_started', 'meaningful_activity_started', 'meaningful_response', 'activity_completed'].includes(String(row.eventType))),
+    })
+  }
+  catch { error.value = 'Public authority export failed.' }
+  finally { busy.value = false }
+}
 async function openSession() {
   const session = content.data.value
   if (!session || busy.value) return
@@ -28,7 +54,9 @@ async function openSession() {
 
 <template>
   <section aria-label="Disposable public session entry">
-    <button type="button" data-testid="adaptive-session-attach" :disabled="!content.data.value || busy" @click="openSession">Open ready session in Adaptive Learn</button>
+    <button v-if="sessionId" type="button" data-testid="adaptive-session-attach" :disabled="!content.data.value || busy" @click="openSession">Open ready session in Adaptive Learn</button>
+    <button type="button" data-testid="adaptive-authority-capture" :disabled="!ready || busy" @click="captureAuthority">Read owner-visible authority export</button>
+    <pre v-if="report" data-testid="adaptive-authority-report">{{ report }}</pre>
     <p v-if="error" role="alert">{{ error }}</p>
   </section>
 </template>
