@@ -19,6 +19,11 @@ export default defineNuxtConfig({
         path: '/__e2e/adaptive-access',
         file: fileURLToPath(new URL('../adaptive-access-harness.vue', import.meta.url)),
       })
+      pages.push({
+        name: 'adaptive-session-harness',
+        path: '/__e2e/adaptive-session',
+        file: fileURLToPath(new URL('../adaptive-session-harness.vue', import.meta.url)),
+      })
     },
   },
 })

@@ -14,7 +14,8 @@ const user = ref({ _id: 'owner_1' })
 const initialProjection = {
   ownerId: 'owner_1',
   thread: { id: 'thread_1', outcome: 'Check my understanding', intent: 'refresh', evidenceState: 'preparing', lifecycle: 'active', revision: 2, authorityKind: 'standalone' },
-  currentActivity: { id: 'diagnostic:thread_1', status: 'eligible', activityClass: 'non_factual', purpose: 'Record your starting point.' },
+  currentActivity: { id: 'diagnostic:thread_1', status: 'eligible', activityClass: 'non_factual', purpose: 'Record your starting point.',
+    acceptedAttemptHandoff: null as null | { attemptId: string, activityDocumentId: string, eligible: boolean, reasonCode: string, quizId: string | null } },
   history: [{ id: 'older_activity', status: 'replaced', activityClass: 'non_factual', purpose: 'Earlier reflection.' }],
   nextAction: { kind: 'submit_response', label: 'Save response', activityId: 'diagnostic:thread_1' },
 }
@@ -34,6 +35,7 @@ const initialMemory = { ownerId: 'owner_1', threadId: 'thread_1', threadRevision
 const evidence = ref(initialEvidence)
 const memory = ref(initialMemory)
 const overrideMutation = vi.fn()
+const handoffMutation = vi.fn()
 const overrideError = ref<Error | undefined>()
 
 mockNuxtImport('useConvexQuery', () => (reference: never) => {
@@ -50,7 +52,8 @@ mockNuxtImport('useConvexQuery', () => (reference: never) => {
 })
 mockNuxtImport('useConvexMutation', () => (reference: never) => getFunctionName(reference) === 'learnAdaptive:applyOverride'
   ? { mutate: overrideMutation, error: overrideError }
-  : { mutate: vi.fn().mockResolvedValue(getFunctionName(reference) === 'learnAdaptiveRecovery:recordDiagnosticRendered' ? { status: 'recorded' } : { kind: 'ok' }) })
+  : getFunctionName(reference) === 'learnAdaptive:projectAcceptedAttemptToQuiz' ? { mutate: handoffMutation }
+    : { mutate: vi.fn().mockResolvedValue(getFunctionName(reference) === 'learnAdaptiveRecovery:recordDiagnosticRendered' ? { status: 'recorded' } : { kind: 'ok' }) })
 mockNuxtImport('useConvexAction', () => () => ({ mutate: vi.fn() }))
 mockNuxtImport('useConvex', () => () => ({ query: vi.fn().mockResolvedValue({ page: [], isDone: true, continueCursor: '' }), onUpdate: vi.fn().mockReturnValue(vi.fn()) }))
 
@@ -92,6 +95,7 @@ describe('mounted Home and Thread accessibility', () => {
     activityPending.value = false
     diagnostic.value = structuredClone(initialDiagnostic)
     overrideMutation.mockReset()
+    handoffMutation.mockReset()
     overrideError.value = undefined
     evidence.value = structuredClone(initialEvidence)
     const app = useNuxtApp()
@@ -112,6 +116,77 @@ describe('mounted Home and Thread accessibility', () => {
     const app = useNuxtApp()
     app.$convexAuthReady.value = previousAuth.ready
     app.$convexAuthenticated.value = previousAuth.authenticated
+  })
+
+  it('offers an explicitly server-eligible accepted result in Quiz without another assessment', async () => {
+    projection.value.currentActivity.status = 'feedback'
+    projection.value.currentActivity.activityClass = 'factual'
+    projection.value.currentActivity.acceptedAttemptHandoff = {
+      attemptId: 'accepted_attempt_1', activityDocumentId: 'activity_document_1', eligible: true,
+      reasonCode: 'accepted_attempt_available', quizId: null,
+    }
+    diagnostic.value = null
+    const page = await mountLearningRoute()
+    const action = page.get('[data-testid="learn-accepted-attempt-open-quiz"]')
+    expect(action.text()).toBe('Open result in Quiz')
+    expect(action.attributes('disabled')).toBeUndefined()
+    expect(page.text()).toContain('This displays your accepted result; it does not score another attempt.')
+  })
+
+  it('keeps an unconfirmed Quiz handoff recoverable across a refreshed thread revision', async () => {
+    projection.value.currentActivity.acceptedAttemptHandoff = {
+      attemptId: 'accepted_attempt_1', activityDocumentId: 'activity_document_1', eligible: true,
+      reasonCode: 'accepted_attempt_available', quizId: null,
+    }
+    // The external transport loses the first acknowledgement. It will reject a
+    // retry that changes the original command, as the real server would.
+    let firstCommand: unknown
+    handoffMutation.mockImplementation(async (command: unknown) => {
+      if (!firstCommand) { firstCommand = structuredClone(command); return undefined }
+      return JSON.stringify(command) === JSON.stringify(firstCommand)
+        ? { kind: 'blocked', code: 'accepted_attempt_unavailable' }
+        : { kind: 'conflict', code: 'duplicate_key' }
+    })
+    const page = await mountLearningRoute()
+    await page.get('[data-testid="learn-accepted-attempt-open-quiz"]').trigger('click')
+    await nextTick()
+    expect(page.text()).toContain('The outcome could not be confirmed.')
+    projection.value.thread.revision = 3
+    await nextTick()
+    await page.get('[data-testid="learn-accepted-attempt-open-quiz"]').trigger('click')
+    await nextTick()
+    expect(page.text()).toContain('Your saved learning attempt remains unchanged.')
+    expect(page.text()).not.toContain('The thread changed.')
+  })
+
+  it('withdraws the handoff action when the server withdraws its eligibility', async () => {
+    projection.value.currentActivity.acceptedAttemptHandoff = {
+      attemptId: 'accepted_attempt_1', activityDocumentId: 'activity_document_1', eligible: true,
+      reasonCode: 'accepted_attempt_available', quizId: null,
+    }
+    const page = await mountLearningRoute()
+    expect(page.find('[data-testid="learn-accepted-attempt-open-quiz"]').exists()).toBe(true)
+    projection.value.currentActivity.acceptedAttemptHandoff.eligible = false
+    await nextTick()
+    expect(page.find('[data-testid="learn-accepted-attempt-open-quiz"]').exists()).toBe(false)
+    expect(page.text()).toContain('This result is unavailable for handoff.')
+  })
+
+  it('ignores a late Quiz acknowledgement after the learner account changes', async () => {
+    projection.value.currentActivity.acceptedAttemptHandoff = {
+      attemptId: 'accepted_attempt_1', activityDocumentId: 'activity_document_1', eligible: true,
+      reasonCode: 'accepted_attempt_available', quizId: null,
+    }
+    let acknowledge!: (value: unknown) => void
+    handoffMutation.mockImplementation(() => new Promise(resolve => { acknowledge = resolve }))
+    const page = await mountLearningRoute()
+    await page.get('[data-testid="learn-accepted-attempt-open-quiz"]').trigger('click')
+    user.value = { _id: 'different_owner' }
+    await nextTick()
+    acknowledge({ kind: 'ok', value: { folderId: 'previous_owner_folder', quizId: 'previous_owner_quiz' } })
+    await nextTick()
+    expect(page.find('[data-testid="learn-accepted-attempt-open-quiz"]').exists()).toBe(false)
+    expect(useNuxtApp().$router.currentRoute.value.path).toBe('/app/learn/thread/thread_1')
   })
 
   it('provides a named Thread region inside the application landmark and live lifecycle and loading announcements', async () => {

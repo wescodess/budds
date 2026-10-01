@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page, type APIRequestContext } from '@playwright/test'
 import { readFile } from 'node:fs/promises'
 
 const token = process.env.BUDDS_E2E_AUTH_TOKEN ?? 'e2e-local-token-please-do-not-use-outside-tests'
@@ -29,9 +29,10 @@ function localScheduleWindow() {
   return { timezone, weekday, date: `${startParts.year}-${startParts.month}-${startParts.day}`, start: `${startParts.hour}:${startParts.minute}`, end: `${endParts.hour}:${endParts.minute}` }
 }
 
-test('learner can advance the Learn V2 mastery journey through production UI', async ({ page, request }) => {
+async function runLearningJourney(page: Page, request: APIRequestContext, handoff = false) {
   test.setTimeout(8 * 60_000)
   page.setDefaultTimeout(30_000)
+  page.setDefaultNavigationTimeout(120_000)
 
   const identity = { email: `learn-v2-${Date.now()}@e2e.budds.invalid`, password: 'disposable-e2e-password', name: 'Learn V2 Browser Test' }
   const bootstrap = await request.post('/api/e2e/session', { headers: { 'x-budds-e2e-token': token }, data: identity })
@@ -45,7 +46,7 @@ test('learner can advance the Learn V2 mastery journey through production UI', a
   }
 
   const folderName = `Learn V2 E2E ${Date.now()}`
-  await page.goto('/app/learn/create')
+  await page.goto('/app/learn/create', { waitUntil: 'domcontentloaded' })
   await expect.poll(async () => {
     if (await page.getByTestId('learn-v2-outcome-canvas').isVisible()) return true
     await page.reload({ waitUntil: 'domcontentloaded' })
@@ -150,6 +151,43 @@ test('learner can advance the Learn V2 mastery journey through production UI', a
   }, { timeout: 120_000 }).toMatch(/\/sessions\/[^/]+$/)
   await expect(page.getByTestId('learn-v2-session')).toBeVisible({ timeout: 120_000 })
   await expect(page.getByTestId('learn-v2-start')).toBeEnabled({ timeout: 120_000 })
+  if (handoff) {
+    const sessionPath = new URL(page.url()).pathname.split('/')
+    const sessionId = sessionPath.at(-1)!
+    const learningVoidId = sessionPath.at(-3)!
+    await page.goto(`/__e2e/adaptive-session?session=${encodeURIComponent(sessionId)}&mission=${encodeURIComponent(learningVoidId)}`)
+    await expect(page.getByTestId('adaptive-session-attach')).toBeEnabled()
+    await page.getByTestId('adaptive-session-attach').click()
+    await expect(page).toHaveURL(/\/app\/learn\/thread\/[^/]+$/)
+    const threadUrl = page.url()
+    await page.getByTestId('learn-canvas-start').click()
+    if (await page.getByTestId('learn-canvas-continue').isVisible()) await page.getByTestId('learn-canvas-continue').click()
+    await page.getByTestId('learn-canvas-response').fill('The transfer orbit is a deliberate path between two orbital energies.')
+    await page.getByTestId('learn-canvas-confidence-4').check()
+    await page.getByTestId('learn-canvas-submit').click()
+    await expect(page.getByTestId('learn-canvas-status')).toContainText('Response scored.', { timeout: 120_000 })
+    await expect(page.getByTestId('learn-accepted-attempt-open-quiz')).toBeVisible()
+    await page.getByTestId('learn-accepted-attempt-open-quiz').click()
+    await expect(page).toHaveURL(/\/app\/folders\/[^/]+\/quiz\/[^/]+$/)
+    const quizUrl = page.url()
+    await expect(page.getByTestId('quiz-accepted-attempt')).toContainText('Accepted learning result')
+    await expect(page.getByRole('button', { name: /take quiz|retake/i })).toHaveCount(0)
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await expect(page.getByTestId('quiz-accepted-attempt')).toContainText('This displays the same accepted attempt; it does not score another response.')
+    await page.getByTestId('quiz-accepted-attempt-chat').click()
+    await expect(page).toHaveURL(/\/app\/folders\/[^/]+\/chat\/[^/]+$/)
+    const chatUrl = page.url()
+    await expect(page.getByRole('main')).toContainText('Your accepted learning result scored')
+    await page.reload({ waitUntil: 'domcontentloaded' })
+    await expect(page.getByRole('main')).toContainText('What would you like to discuss next?')
+    await page.goto(quizUrl)
+    await page.getByTestId('quiz-accepted-attempt-chat').click()
+    await expect(page).toHaveURL(chatUrl)
+    await page.goto(threadUrl)
+    await expect(page.getByTestId('learn-accepted-attempt-origins')).toContainText('Quiz')
+    await expect(page.getByTestId('learn-accepted-attempt-origins')).toContainText('Chat')
+    return
+  }
   await page.getByTestId('learn-v2-start').click()
 
   await expect(page.getByTestId('learn-v2-phase-retrieval')).toBeVisible()
@@ -172,4 +210,13 @@ test('learner can advance the Learn V2 mastery journey through production UI', a
   await expect(page.getByTestId('learn-v2-feedback')).toBeVisible({ timeout: 120_000 })
   await page.getByTestId('learn-v2-next-review').click()
   await expect(page.getByTestId('learn-v2-next-review-panel')).toBeVisible()
+}
+
+test('learner can advance the Learn V2 mastery journey through production UI', async ({ page, request }) => {
+  await runLearningJourney(page, request)
+})
+
+test('accepted adaptive attempt passes through Quiz into Chat without a second assessment', async ({ page, request }) => {
+  test.skip(process.env.BUDDS_E2E_REAL_ADAPTIVE_CANVAS !== 'true', 'Requires intact public Canvas transport in the disposable authority stack')
+  await runLearningJourney(page, request, true)
 })
