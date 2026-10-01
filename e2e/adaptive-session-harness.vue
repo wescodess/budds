@@ -6,18 +6,18 @@ import { createSsrMutationStub } from '~/utils/convexSsrMutation'
 // public APIs with the signed-in learner; it cannot stamp or seed authority.
 const route = useRoute()
 const sessionId = computed(() => String(route.query.session ?? ''))
+const auth = useNuxtApp()
+const authReady = (auth.$convexAuthReady as Ref<boolean> | undefined) ?? ref(false)
+const authenticated = (auth.$convexAuthenticated as Ref<boolean> | undefined) ?? ref(false)
+const ready = computed(() => authReady.value && authenticated.value)
 const content = import.meta.client ? useConvexQuery(api.learnV2Journey.getSessionCandidate,
   computed(() => ({ studySessionId: sessionId.value as never, learningVoidId: String(route.query.mission ?? '') as never })),
-  { enabled: computed(() => Boolean(sessionId.value)) }) : { data: ref(null) }
+  { enabled: computed(() => ready.value && Boolean(sessionId.value)), ssr: false }) : { data: ref(null) }
 const attach = import.meta.client ? useConvexMutation(api.learnAdaptiveCanvas.attachReadySession)
   : createSsrMutationStub<typeof api.learnAdaptiveCanvas.attachReadySession>()
 const busy = ref(false)
 const error = ref('')
 const client = import.meta.client ? useConvex() : null
-const auth = useNuxtApp()
-const authReady = (auth.$convexAuthReady as Ref<boolean> | undefined) ?? ref(false)
-const authenticated = (auth.$convexAuthenticated as Ref<boolean> | undefined) ?? ref(false)
-const ready = computed(() => authReady.value && authenticated.value)
 const report = ref('')
 async function captureAuthority() {
   if (!client || !ready.value || busy.value) return
