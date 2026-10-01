@@ -83,7 +83,7 @@ async function runLearningJourney(page: Page, request: APIRequestContext, handof
   }, { timeout: 120_000, intervals: [5_000] }).toBe(true)
   await page.getByTestId('learn-v2-create-folder').selectOption(folderId!)
   await page.getByTestId('learn-v2-outcome-input').fill('Explain orbital mechanics well enough to reason about a transfer orbit.')
-  await page.getByLabel('Source policy').selectOption('folder_only')
+  await page.getByLabel('Source policy').selectOption(handoff ? 'web_only' : 'folder_only')
   await page.getByTestId('learn-v2-outcome-continue').click()
   await expect(page).toHaveURL(/\/app\/learn\/[^/]+\?section=sources/)
   await expect(page.getByTestId('learn-v2-evidence-desk')).toBeVisible()
@@ -92,12 +92,24 @@ async function runLearningJourney(page: Page, request: APIRequestContext, handof
   await page.reload({ waitUntil: 'domcontentloaded' })
   await expect(page).not.toHaveTitle(/500 - Internal Server Error/)
   await expect(page.getByTestId('learn-v2-evidence-desk')).toBeVisible()
-  const folderSource = page.locator('[data-testid^="learn-v2-source-row-"]').filter({ hasText: 'learn-v2-orbital-mechanics.md' })
-  await expect(folderSource).toBeVisible()
-  await folderSource.click()
-  const prepareSource = page.locator('[data-testid^="learn-v2-source-prepare-"]')
-  await expect(prepareSource).toBeVisible()
-  await prepareSource.click()
+  if (handoff) {
+    // The existing external-fetch fixture carries a permitted HTML license.
+    // Folder uploads intentionally retain unknown rights and cannot establish
+    // Adaptive factual authority. No production rights guard is bypassed.
+    await page.getByTestId('learn-v2-source-url').fill('https://e2e.budds.invalid/handoff-evidence')
+    await page.getByTestId('learn-v2-source-add-url').click()
+    const source = page.locator('[data-testid^="learn-v2-source-row-"]').filter({ hasText: 'e2e.budds.invalid' })
+    await expect(source).toBeVisible()
+    await source.click()
+  }
+  else {
+    const folderSource = page.locator('[data-testid^="learn-v2-source-row-"]').filter({ hasText: 'learn-v2-orbital-mechanics.md' })
+    await expect(folderSource).toBeVisible()
+    await folderSource.click()
+    const prepareSource = page.locator('[data-testid^="learn-v2-source-prepare-"]')
+    await expect(prepareSource).toBeVisible()
+    await prepareSource.click()
+  }
   const acceptSource = page.locator('[data-testid^="learn-v2-source-accept-"]')
   await expect(acceptSource).toBeVisible({ timeout: 30_000 })
   await acceptSource.click()
@@ -161,7 +173,7 @@ async function runLearningJourney(page: Page, request: APIRequestContext, handof
     await expect(page).toHaveURL(/\/app\/learn\/thread\/[^/]+$/)
     const threadUrl = page.url()
     await page.getByTestId('learn-canvas-start').click()
-    if (await page.getByTestId('learn-canvas-continue').isVisible()) await page.getByTestId('learn-canvas-continue').click()
+    await page.getByTestId('learn-canvas-continue').click()
     await page.getByTestId('learn-canvas-response').fill('The transfer orbit is a deliberate path between two orbital energies.')
     await page.getByTestId('learn-canvas-confidence-4').check()
     await page.getByTestId('learn-canvas-submit').click()
