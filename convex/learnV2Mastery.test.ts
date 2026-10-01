@@ -1,5 +1,5 @@
 /// <reference types="vite/client" />
-import { convexTest } from 'convex-test'
+import { convexTest, type TestConvex } from 'convex-test'
 import { describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import { toAdaptiveSubmissionAdmission } from './learnAdaptive'
@@ -20,50 +20,52 @@ const legacyFingerprint = (args: { studySessionId: string, expectedSessionRevisi
   expectedBlueprintRecordRevision: args.expectedBlueprintRecordRevision, response: args.response, confidence: args.confidence,
 })
 
-async function fixture(options: { placementKind?: 'learning' | 'retained_review', state?: 'guided' | 'independent', firstDate?: string, sessionTimezone?: string } = {}) {
+async function fixture(options: { placementKind?: 'learning' | 'retained_review', state?: 'guided' | 'independent', firstDate?: string, sessionTimezone?: string, runtime?: TestConvex<typeof schema>, identity?: typeof OWNER } = {}) {
   process.env.LEARN_V2_ENABLED = 'true'
-  const t = convexTest(schema, modules)
-  const owner = t.withIdentity(OWNER)
+  const t = options.runtime ?? convexTest(schema, modules)
+  const identity = options.identity ?? OWNER
+  const owner = t.withIdentity(identity)
   await owner.mutation(api.users.upsertUser, {})
-  await t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: OWNER.tokenIdentifier, enabled: true })
+  await t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: identity.tokenIdentifier, enabled: true })
   const ids = await t.run(async ctx => {
     const now = Date.now()
-    const folderId = await ctx.db.insert('folders', { userId: OWNER.tokenIdentifier, name: 'Mastery', documentCount: 0 })
-    const voidId = await ctx.db.insert('learningVoids', { userId: OWNER.tokenIdentifier, folderId, title: 'Mastery', status: 'active', revision: 1, createdAt: now, updatedAt: now })
-    const blueprintId = await ctx.db.insert('learnBlueprints', { userId: OWNER.tokenIdentifier, learningVoidId: voidId, revision: 1, createdAt: now })
-    const blueprintIdRevision = await ctx.db.insert('learnBlueprintRevisions', { userId: OWNER.tokenIdentifier, blueprintId, learningVoidId: voidId, revision: 1, recordRevision: 3, status: 'accepted', createdAt: now, updatedAt: now })
+    const folderId = await ctx.db.insert('folders', { userId: identity.tokenIdentifier, name: 'Mastery', documentCount: 0 })
+    const voidId = await ctx.db.insert('learningVoids', { userId: identity.tokenIdentifier, folderId, title: 'Mastery', status: 'active', revision: 1, createdAt: now, updatedAt: now })
+    const blueprintId = await ctx.db.insert('learnBlueprints', { userId: identity.tokenIdentifier, learningVoidId: voidId, revision: 1, createdAt: now })
+    const blueprintIdRevision = await ctx.db.insert('learnBlueprintRevisions', { userId: identity.tokenIdentifier, blueprintId, learningVoidId: voidId, revision: 1, recordRevision: 3, status: 'accepted', createdAt: now, updatedAt: now })
     await ctx.db.patch(voidId, { activeBlueprintRevisionId: blueprintIdRevision })
-    const objectiveId = await ctx.db.insert('learnObjectives', { userId: OWNER.tokenIdentifier, blueprintRevisionId: blueprintIdRevision, order: 1, title: 'Objective', assessmentContract: assessment })
-    const planId = await ctx.db.insert('studyPlans', { userId: OWNER.tokenIdentifier, learningVoidId: voidId, revision: 1, createdAt: now })
-    const planRevisionId = await ctx.db.insert('studyPlanRevisions', { userId: OWNER.tokenIdentifier, studyPlanId: planId, learningVoidId: voidId, revision: 1, recordRevision: 5, status: 'accepted', blueprintRevisionId: blueprintIdRevision, blueprintRecordRevision: 3, timezone: options.sessionTimezone ?? 'America/Toronto', createdAt: now })
+    const objectiveId = await ctx.db.insert('learnObjectives', { userId: identity.tokenIdentifier, blueprintRevisionId: blueprintIdRevision, order: 1, title: 'Objective', assessmentContract: assessment })
+    const planId = await ctx.db.insert('studyPlans', { userId: identity.tokenIdentifier, learningVoidId: voidId, revision: 1, createdAt: now })
+    const planRevisionId = await ctx.db.insert('studyPlanRevisions', { userId: identity.tokenIdentifier, studyPlanId: planId, learningVoidId: voidId, revision: 1, recordRevision: 5, status: 'accepted', blueprintRevisionId: blueprintIdRevision, blueprintRecordRevision: 3, timezone: options.sessionTimezone ?? 'America/Toronto', createdAt: now })
     await ctx.db.patch(planId, { activeRevisionId: planRevisionId })
-    const sessionId = await ctx.db.insert('studySessions', { userId: OWNER.tokenIdentifier, studyPlanRevisionId: planRevisionId, primaryObjectiveId: objectiveId, status: 'in_progress', revision: 7, scheduledStartAt: now, timezone: options.sessionTimezone ?? 'America/Toronto', placementKind: options.placementKind ?? 'learning' })
-    const contentId = await ctx.db.insert('sessionContent', { userId: OWNER.tokenIdentifier, studySessionId: sessionId, studyPlanRevisionId: planRevisionId, blueprintRevisionId: blueprintIdRevision, objectiveId, revision: 11, status: 'published', assessmentRubricSnapshot: rubric, providerModel: 'test/mastery-model', createdAt: now, publishedAt: now })
+    const sessionId = await ctx.db.insert('studySessions', { userId: identity.tokenIdentifier, studyPlanRevisionId: planRevisionId, primaryObjectiveId: objectiveId, status: 'in_progress', revision: 7, scheduledStartAt: now, timezone: options.sessionTimezone ?? 'America/Toronto', placementKind: options.placementKind ?? 'learning' })
+    const contentId = await ctx.db.insert('sessionContent', { userId: identity.tokenIdentifier, studySessionId: sessionId, studyPlanRevisionId: planRevisionId, blueprintRevisionId: blueprintIdRevision, objectiveId, revision: 11, status: 'published', assessmentRubricSnapshot: rubric, providerModel: 'test/mastery-model', createdAt: now, publishedAt: now })
     await ctx.db.patch(sessionId, { startedSessionContentId: contentId, startedSessionContentRevision: 11 })
-    await ctx.db.insert('sessionContentBlocks', { userId: OWNER.tokenIdentifier, sessionContentId: contentId, order: 1, kind: 'worked_example', content: 'Revealed worked answer.' })
-    await ctx.db.insert('sessionContentBlocks', { userId: OWNER.tokenIdentifier, sessionContentId: contentId, order: 2, kind: 'faded_example', content: 'Substantive hint.' })
-    await ctx.db.insert('sessionContentBlocks', { userId: OWNER.tokenIdentifier, sessionContentId: contentId, order: 3, kind: 'independent_application', content: 'Apply the evidence to a novel case.' })
-    const sourceIdentityId = await ctx.db.insert('learnSourceIdentities', { userId: OWNER.tokenIdentifier, learningVoidId: voidId, origin: 'user_url', externalKey: 'mastery-source' })
-    const sourceId = await ctx.db.insert('learnSourceSnapshots', { userId: OWNER.tokenIdentifier, sourceIdentityId, learningVoidId: voidId, revision: 1, status: 'user_accepted', effectiveStatus: 'user_accepted', rightsStatus: 'permitted', conflictStatus: 'clear', createdAt: now })
-    await ctx.db.insert('learnObjectiveSources', { userId: OWNER.tokenIdentifier, objectiveId, sourceSnapshotId: sourceId, coverage: 'strong' })
-    const excerptId = await ctx.db.insert('learnSourceExcerpts', { userId: OWNER.tokenIdentifier, sourceSnapshotId: sourceId, locator: 'paragraph:1', excerpt: 'Supported evidence.', rightsStatus: 'permitted' })
-    const claimId = await ctx.db.insert('sessionContentClaims', { userId: OWNER.tokenIdentifier, sessionContentId: contentId, order: 1, claim: 'The evidence supports the answer.', verifierVersion: 'test.verifier.v1', confidence: 0.9 })
-    await ctx.db.insert('learnClaimSupports', { userId: OWNER.tokenIdentifier, sessionContentClaimId: claimId, sourceExcerptId: excerptId, sourceSnapshotId: sourceId, entailment: 'entailed', verifierVersion: 'test.verifier.v1', confidence: 0.9, conflictStatus: 'clear', evidenceStatus: 'evidence_available' })
-    if (options.state) await ctx.db.insert('masteryRecords', { userId: OWNER.tokenIdentifier, blueprintRevisionId: blueprintIdRevision, objectiveId, scopeKey: await masteryScopeKey(OWNER.tokenIdentifier, blueprintIdRevision, objectiveId), state: options.state, recordRevision: 4, firstIndependentLocalDate: options.firstDate, firstIndependentPassAt: options.firstDate ? now : undefined, firstIndependentTimezone: options.firstDate ? 'America/Toronto' : undefined, updatedAt: now })
+    await ctx.db.insert('sessionContentBlocks', { userId: identity.tokenIdentifier, sessionContentId: contentId, order: 1, kind: 'worked_example', content: 'Revealed worked answer.' })
+    await ctx.db.insert('sessionContentBlocks', { userId: identity.tokenIdentifier, sessionContentId: contentId, order: 2, kind: 'faded_example', content: 'Substantive hint.' })
+    await ctx.db.insert('sessionContentBlocks', { userId: identity.tokenIdentifier, sessionContentId: contentId, order: 3, kind: 'independent_application', content: 'Apply the evidence to a novel case.' })
+    const sourceIdentityId = await ctx.db.insert('learnSourceIdentities', { userId: identity.tokenIdentifier, learningVoidId: voidId, origin: 'user_url', externalKey: 'mastery-source' })
+    const sourceId = await ctx.db.insert('learnSourceSnapshots', { userId: identity.tokenIdentifier, sourceIdentityId, learningVoidId: voidId, revision: 1, status: 'user_accepted', effectiveStatus: 'user_accepted', rightsStatus: 'permitted', conflictStatus: 'clear', createdAt: now })
+    await ctx.db.insert('learnObjectiveSources', { userId: identity.tokenIdentifier, objectiveId, sourceSnapshotId: sourceId, coverage: 'strong' })
+    const excerptId = await ctx.db.insert('learnSourceExcerpts', { userId: identity.tokenIdentifier, sourceSnapshotId: sourceId, locator: 'paragraph:1', excerpt: 'Supported evidence.', rightsStatus: 'permitted' })
+    const claimId = await ctx.db.insert('sessionContentClaims', { userId: identity.tokenIdentifier, sessionContentId: contentId, order: 1, claim: 'The evidence supports the answer.', verifierVersion: 'test.verifier.v1', confidence: 0.9 })
+    await ctx.db.insert('learnClaimSupports', { userId: identity.tokenIdentifier, sessionContentClaimId: claimId, sourceExcerptId: excerptId, sourceSnapshotId: sourceId, entailment: 'entailed', verifierVersion: 'test.verifier.v1', confidence: 0.9, conflictStatus: 'clear', evidenceStatus: 'evidence_available' })
+    if (options.state) await ctx.db.insert('masteryRecords', { userId: identity.tokenIdentifier, blueprintRevisionId: blueprintIdRevision, objectiveId, scopeKey: await masteryScopeKey(identity.tokenIdentifier, blueprintIdRevision, objectiveId), state: options.state, recordRevision: 4, firstIndependentLocalDate: options.firstDate, firstIndependentPassAt: options.firstDate ? now : undefined, firstIndependentTimezone: options.firstDate ? 'America/Toronto' : undefined, updatedAt: now })
     return { folderId, voidId, blueprintIdRevision, objectiveId, planId, planRevisionId, sessionId, contentId, sourceId }
   })
-  const args = (key: string, score = 100) => ({ tokenIdentifier: OWNER.tokenIdentifier, studySessionId: ids.sessionId, expectedSessionRevision: 7, expectedContentRevision: 11, expectedPlanRecordRevision: 5, expectedBlueprintRecordRevision: 3, response: 'A server-scored response.', confidence: 4, idempotencyKey: key, scorerVerdict: verdict(score) })
+  const args = (key: string, score = 100) => ({ tokenIdentifier: identity.tokenIdentifier, studySessionId: ids.sessionId, expectedSessionRevision: 7, expectedContentRevision: 11, expectedPlanRecordRevision: 5, expectedBlueprintRecordRevision: 3, response: 'A server-scored response.', confidence: 4, idempotencyKey: key, scorerVerdict: verdict(score) })
   return { t, owner, ids, args }
 }
 
 async function addAdaptiveActivity(setup: Awaited<ReturnType<typeof fixture>>, activityId: string) {
+  const userId = setup.args('fixture').tokenIdentifier
   return await setup.t.run(async (ctx) => {
-    const support = await ctx.db.query('learnClaimSupports').withIndex('by_userId_and_sessionContentClaimId').take(1)
-    const claim = await ctx.db.query('sessionContentClaims').withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', OWNER.tokenIdentifier).eq('sessionContentId', setup.ids.contentId)).unique()
+    const support = await ctx.db.query('learnClaimSupports').withIndex('by_userId_and_sessionContentClaimId', q => q.eq('userId', userId)).take(1)
+    const claim = await ctx.db.query('sessionContentClaims').withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', userId).eq('sessionContentId', setup.ids.contentId)).unique()
     if (!support[0] || !claim) throw new Error('Expected evidence fixture')
-    const threadId = await ctx.db.insert('learningThreads', { userId: OWNER.tokenIdentifier, originalNeed: 'Practice safely', intent: 'master', availableTime: '15', authorityKind: 'v2_mission', learningVoidId: setup.ids.voidId, sourceScope: { kind: 'folder', sourceId: String(setup.ids.folderId) }, evidenceState: 'ready', lifecycle: 'active', revision: 1, createdAt: 1, updatedAt: 1 })
+    const threadId = await ctx.db.insert('learningThreads', { userId: userId, originalNeed: 'Practice safely', intent: 'master', availableTime: '15', authorityKind: 'v2_mission', learningVoidId: setup.ids.voidId, sourceScope: { kind: 'folder', sourceId: String(setup.ids.folderId) }, evidenceState: 'ready', lifecycle: 'active', revision: 1, createdAt: 1, updatedAt: 1 })
     const activityDocumentId = await ctx.db.insert('learningThreadActivities', {
-      userId: OWNER.tokenIdentifier, threadId, activityId, boundaryOrdinal: 1, planRevision: 1, activityClass: 'factual', status: 'submitted',
+      userId: userId, threadId, activityId, boundaryOrdinal: 1, planRevision: 1, activityClass: 'factual', status: 'submitted',
       planVersion: 'learn-adaptive.activity-plan.v1', replayVersion: 'learn-adaptive.activity-replay.v1', contractVersion: 'learn-adaptive.activity-contract.v1', rendererVersion: 'learn-adaptive.renderer.v1', validationVersion: 'learn-adaptive.primitive-validation.v1', sequenceValidationVersion: 'learn-adaptive.primitive-sequence-validation.v1', fallbackVersion: 'learn-adaptive.text-card-fallback.v1',
       intent: 'master', objectiveId: setup.ids.objectiveId, purpose: 'Demonstrate mastery.', reasonCode: 'pilot_scoring', primitivePlan: [], requiredAction: { kind: 'submit_response', label: 'Submit' }, evaluationContract: { version: 'learn-adaptive.evaluation.v1', kind: 'server_scored', responseFormat: 'short_text', passingScorePercent: 80 }, fallback: { version: 'learn-adaptive.text-card-fallback.v1', kind: 'text_card', title: 'Saved', body: 'Try later.', primaryAction: { type: 'continue_safe', label: 'Continue' }, testId: 'learn-activity-fallback' }, accessibilityMetadata: { heading: 'Practice', instructions: 'Answer.', focusTargetTestId: 'adaptive-scored', liveRegionMode: 'polite' }, learningVoidId: setup.ids.voidId, blueprintRevisionId: setup.ids.blueprintIdRevision, sessionContentId: setup.ids.contentId,
       evidenceReferences: [{ claimId: claim._id, supportId: support[0]._id, sourceSnapshotId: setup.ids.sourceId, sourceSnapshotRevision: 1, sourceRecordRevision: 1, sourceEffectiveStatus: 'user_accepted', verifierVersion: 'test.verifier.v1', integrityState: 'accepted' }], generationInputs: { sessionContentRevision: 11, sessionContentInputDigest: null, generatorVersion: null }, decisionInputs: { intentRevision: 1, routerVersion: 'v1', availableTime: '15', sourceState: 'ready', sourceInputs: [{ sourceSnapshotId: String(setup.ids.sourceId), effectiveStatus: 'user_accepted', recordRevision: 1 }], priorActivityId: null, priorAttemptId: null, priorOutcome: null, assistance: 'none', confidence: 4 }, replacesActivityId: null, canonicalInputSnapshot: '{}', inputDigest: `sha256:${'a'.repeat(64)}`, createdAt: 1, updatedAt: 1,
@@ -73,7 +75,236 @@ async function addAdaptiveActivity(setup: Awaited<ReturnType<typeof fixture>>, a
   })
 }
 
+async function configureSyntheticPilot(identities: Array<typeof OWNER>) {
+  const hash = async (value: unknown) => {
+    const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(value))))
+    return `sha256:${Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')}`
+  }
+  Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, {
+    pilotApproved: true,
+    cohort: { ...ADAPTIVE_V2_PILOT_MANIFEST.cohort, subjectHashes: await Promise.all(identities.map(identity => hash(['adaptive-v2-pilot-cohort.v1', identity.tokenIdentifier]))) },
+    modelPolicies: [{ model: 'test/mastery-model', inputUsdPerMillionTokens: 0.1, outputUsdPerMillionTokens: 0.1 }],
+    productControls: { ...ADAPTIVE_V2_PILOT_MANIFEST.productControls, maxDispatchesPerHour: 4, maxDispatchesPerDay: 8, maxConcurrent: 2, maxReservedMicroUsdPerDay: 100_000 },
+    rollback: { ...ADAPTIVE_V2_PILOT_MANIFEST.rollback, ownerSubjectHash: await hash(['adaptive-v2-rollback-owner.tokenIdentifier-sha256.v1', OWNER.tokenIdentifier]) },
+  })
+  vi.stubEnv('LEARN_ADAPTIVE_V2_PILOT_MANIFEST', 'adaptive-v2-pilot.v1')
+  vi.stubEnv('OPENROUTER_API_KEY', 'test-key')
+  vi.stubEnv('CF_ACCOUNT_ID', 'test-account')
+  vi.stubEnv('CLOUDFLARE_AI_GATEWAY_ID', 'test-gateway')
+}
+
+function successfulProviderResponse() {
+  return new Response(JSON.stringify({ id: 'synthetic-scoring', model: 'test/mastery-model', choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({ criterionResults: verdict(80).criterionResults, misconceptionTags: [] }) } }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }), { status: 200 })
+}
+
 describe('LA2-12 server-scored mastery attempts', () => {
+  test('denies V2 wrapper reuse of a product-denied adaptive job without dispatch or accounting reset', async () => {
+    const original = structuredClone(ADAPTIVE_V2_PILOT_MANIFEST)
+    const provider = vi.fn(async () => successfulProviderResponse())
+    vi.stubGlobal('fetch', provider)
+    try {
+      const setup = await fixture()
+      await configureSyntheticPilot([OWNER])
+      Object.assign(ADAPTIVE_V2_PILOT_MANIFEST.productControls, { maxReservedMicroUsdPerDay: 1 })
+      await setup.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true })
+      const activity = await addAdaptiveActivity(setup, 'cross-wrapper-denial')
+      const { tokenIdentifier: _token, scorerVerdict: _verdict, ...attempt } = setup.args('cross-wrapper-denial-key', 80)
+      await setup.t.run(ctx => ctx.db.patch(activity.activityDocumentId, { submittedResponse: attempt.response, submittedConfidence: attempt.confidence }))
+      const adaptiveRequest = { threadId: activity.threadId, activityId: 'cross-wrapper-denial', ...attempt }
+      await expect(setup.owner.action(api.learnAdaptive.submitResponse, adaptiveRequest)).resolves.toMatchObject({ kind: 'blocked', code: 'adaptive_product_cost_budget', retryable: false })
+      const exported = await setup.owner.query(api.dataExport.getUserDataPage, { collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })
+      Object.assign(ADAPTIVE_V2_PILOT_MANIFEST.rollback, { enabled: true })
+      const retried = await setup.owner.action(api.learnV2Mastery.submitMasteryAttempt, attempt).catch(error => ({ error }))
+      expect(provider).not.toHaveBeenCalled()
+      expect(retried).toMatchObject({ status: 'denied', code: 'adaptive_activity_authority_unavailable', retryable: false })
+      await expect(setup.owner.query(api.dataExport.getUserDataPage, { collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })).resolves.toEqual(exported)
+      for (const collection of ['masteryAttempts', 'masteryRecords'] as const) {
+        await expect(setup.owner.query(api.dataExport.getUserDataPage, { collection, paginationOpts: { cursor: null, numItems: 8 } })).resolves.toMatchObject({ page: [] })
+      }
+      Object.assign(ADAPTIVE_V2_PILOT_MANIFEST.rollback, { enabled: false })
+      await expect(setup.owner.action(api.learnAdaptive.submitResponse, adaptiveRequest)).resolves.toMatchObject({ kind: 'blocked', code: 'adaptive_product_guardrail_review', retryable: false })
+      expect(provider).not.toHaveBeenCalled()
+    }
+    finally { Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, original); vi.unstubAllEnvs(); vi.unstubAllGlobals() }
+  })
+
+  test.each(['rollback', 'thread deletion', 'lease expiry'])('keeps accepted mastery unchanged after %s while a provider reply is pending', async (interruption) => {
+    const original = structuredClone(ADAPTIVE_V2_PILOT_MANIFEST)
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-09-30T12:00:00.000Z'))
+    let reply!: (response: Response) => void
+    let observed!: () => void
+    const dispatched = new Promise<void>((resolve) => { observed = resolve })
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((resolve) => { reply = resolve; observed() })))
+    try {
+      const setup = await fixture()
+      await configureSyntheticPilot([OWNER])
+      await setup.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true })
+      const activity = await addAdaptiveActivity(setup, 'rollback-pending')
+      const { tokenIdentifier: _token, scorerVerdict: _verdict, ...attempt } = setup.args('rollback-pending-key', 80)
+      await setup.t.run(ctx => ctx.db.patch(activity.activityDocumentId, { submittedResponse: attempt.response, submittedConfidence: attempt.confidence }))
+      const pending = setup.owner.action(api.learnAdaptive.submitResponse, { threadId: activity.threadId, activityId: 'rollback-pending', ...attempt })
+      await Promise.race([dispatched, pending.then(result => { throw new Error(`Expected dispatch, received ${result.kind}`) })])
+      if (interruption === 'rollback') Object.assign(ADAPTIVE_V2_PILOT_MANIFEST.rollback, { enabled: true })
+      else if (interruption === 'lease expiry') clock.mockReturnValue(Date.parse('2026-09-30T12:05:01.000Z'))
+      else {
+        const deletion = await setup.owner.mutation(api.learnAdaptive.requestThreadDeletion, { threadId: activity.threadId })
+        for (let batch = 0; batch < 12; batch++) await setup.t.mutation(internal.learnAdaptiveCommands.runThreadDeletionJob, { jobId: deletion.jobId })
+      }
+      reply(successfulProviderResponse())
+      await expect(pending).resolves.toMatchObject({ kind: 'blocked', code: 'provider_outcome_requires_reconciliation', retryable: false })
+      for (const collection of ['masteryAttempts', 'masteryRecords'] as const) {
+        await expect(setup.owner.query(api.dataExport.getUserDataPage, { collection, paginationOpts: { cursor: null, numItems: 8 } })).resolves.toMatchObject({ page: [] })
+      }
+      const jobs = await setup.owner.query(api.dataExport.getUserDataPage, { collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })
+      expect(jobs.page).toEqual([expect.objectContaining({ providerReservedMicroUsd: 4920, providerReservationStatus: 'ambiguous' })])
+    }
+    finally { reply?.(successfulProviderResponse()); Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, original); clock.mockRestore(); vi.unstubAllEnvs(); vi.unstubAllGlobals() }
+  })
+
+  test('preserves unresolved product concurrency after owner deletion, UTC rollover, cleanup and a late reply', async () => {
+    const original = structuredClone(ADAPTIVE_V2_PILOT_MANIFEST)
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-09-30T23:59:00.000Z'))
+    let reply!: (response: Response) => void
+    let observed!: () => void
+    const dispatched = new Promise<void>((resolve) => { observed = resolve })
+    const provider = vi.fn(() => new Promise<Response>((resolve) => { reply = resolve; observed() }))
+    vi.stubGlobal('fetch', provider)
+    try {
+      const first = await fixture()
+      const second = await fixture({ runtime: first.t, identity: OTHER })
+      await configureSyntheticPilot([OWNER, OTHER])
+      Object.assign(ADAPTIVE_V2_PILOT_MANIFEST.productControls, { maxConcurrent: 1 })
+      const requests = []
+      for (const [index, setup] of [first, second].entries()) {
+        await setup.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true })
+        const activityId = `product-concurrency-${index}`
+        const activity = await addAdaptiveActivity(setup, activityId)
+        const { tokenIdentifier: _token, scorerVerdict: _verdict, ...attempt } = setup.args(`product-concurrency-key-${index}`, 80)
+        await setup.t.run(ctx => ctx.db.patch(activity.activityDocumentId, { submittedResponse: attempt.response, submittedConfidence: attempt.confidence }))
+        requests.push({ threadId: activity.threadId, activityId, ...attempt })
+      }
+      const pending = first.owner.action(api.learnAdaptive.submitResponse, requests[0]!)
+      await Promise.race([dispatched, pending.then(result => { throw new Error(`Expected dispatch, received ${result.kind}`) })])
+      await expect(second.owner.action(api.learnAdaptive.submitResponse, requests[1]!)).resolves.toMatchObject({ kind: 'blocked', code: 'adaptive_product_concurrency_cap', retryable: true })
+      await first.t.mutation(internal.accountDeletion.beginAccountDeletionForAuthUser, { userId: OWNER.tokenIdentifier })
+      for (let batch = 0; batch < 250; batch++) await first.t.mutation(internal.accountDeletion.runDeletionBatch, { userId: OWNER.tokenIdentifier })
+      // The database deletion phases have finished; real external cleanup is
+      // outside this local fixture. The account tombstone denies its exports.
+      await expect(first.t.query(internal.accountDeletion.getDeletionTombstone, { userId: OWNER.tokenIdentifier })).resolves.toMatchObject({ phase: 'waitingExternal' })
+      await expect(first.owner.query(api.dataExport.getUserDataPage, { collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })).rejects.toThrow('Account deletion is in progress')
+      clock.mockReturnValue(Date.parse('2026-10-03T00:01:00.000Z'))
+      await first.t.mutation(internal.learnV2Mastery.cleanupExpiredMasteryScoringRateEvents, {})
+      await expect(second.owner.action(api.learnAdaptive.submitResponse, requests[1]!)).resolves.toMatchObject({ kind: 'blocked', code: 'adaptive_product_guardrail_review', retryable: false })
+      reply(successfulProviderResponse())
+      await expect(pending).resolves.toMatchObject({ kind: 'blocked', code: 'provider_outcome_requires_reconciliation', retryable: false })
+      await expect(second.owner.action(api.learnAdaptive.submitResponse, requests[1]!)).resolves.toMatchObject({ kind: 'blocked', code: 'adaptive_product_guardrail_review', retryable: false })
+      await expect(second.owner.query(api.dataExport.getUserDataPage, { collection: 'masteryAttempts', paginationOpts: { cursor: null, numItems: 8 } })).resolves.toMatchObject({ page: [] })
+      expect(provider).toHaveBeenCalledTimes(1)
+    }
+    finally { reply?.(successfulProviderResponse()); Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, original); clock.mockRestore(); vi.unstubAllEnvs(); vi.unstubAllGlobals() }
+  })
+
+  test.each([
+    ['hourly quota', { maxDispatchesPerHour: 1 }, 'adaptive_product_hourly_quota'],
+    ['daily quota', { maxDispatchesPerDay: 1 }, 'adaptive_product_daily_quota'],
+    ['cost budget', { maxReservedMicroUsdPerDay: 4920 }, 'adaptive_product_cost_budget'],
+  ])('reserves product %s across owners and reports bounded denial metadata', async (_label, caps, code) => {
+    const original = structuredClone(ADAPTIVE_V2_PILOT_MANIFEST)
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-09-30T23:59:00.000Z'))
+    const provider = vi.fn(async () => successfulProviderResponse())
+    vi.stubGlobal('fetch', provider)
+    try {
+      const first = await fixture()
+      const second = await fixture({ runtime: first.t, identity: OTHER })
+      await configureSyntheticPilot([OWNER, OTHER])
+      Object.assign(ADAPTIVE_V2_PILOT_MANIFEST.productControls, caps)
+      for (const [index, setup] of [first, second].entries()) {
+        await setup.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true })
+        const activityId = `product-budget-${index}`
+        const activity = await addAdaptiveActivity(setup, activityId)
+        const { tokenIdentifier: _token, scorerVerdict: _verdict, ...attempt } = setup.args(`product-budget-key-${index}`, 80)
+        await setup.t.run(ctx => ctx.db.patch(activity.activityDocumentId, { submittedResponse: attempt.response, submittedConfidence: attempt.confidence }))
+        const request = { threadId: activity.threadId, activityId, ...attempt }
+        if (index === 0) {
+          await expect(setup.owner.action(api.learnAdaptive.submitResponse, request)).resolves.toMatchObject({ kind: 'accepted', status: 'completed' })
+        }
+        else {
+          await expect(setup.owner.action(api.learnAdaptive.submitResponse, request)).resolves.toMatchObject({
+            kind: 'blocked', code, retryable: false,
+            admission: { version: 'adaptive-v2-provider-admission.v1', stage: 'provider_dispatch', productPolicyVersion: 'adaptive-v2-product-budget.utc-hour-day.v1', rollbackPolicyVersion: 'adaptive-v2-provider-rollback.v1', retryAfterMs: 60_000 },
+          })
+          clock.mockReturnValue(Date.parse('2026-10-01T00:01:00.000Z'))
+          await expect(setup.owner.action(api.learnAdaptive.submitResponse, request)).resolves.toMatchObject({ kind: 'blocked', code: 'adaptive_product_guardrail_review', retryable: false })
+          await expect(setup.owner.query(api.dataExport.getUserDataPage, { collection: 'masteryAttempts', paginationOpts: { cursor: null, numItems: 8 } })).resolves.toMatchObject({ page: [] })
+          const exported = await setup.owner.query(api.dataExport.getUserDataPage, { collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })
+          expect(exported.page).toEqual([expect.objectContaining({ userId: OTHER.tokenIdentifier, providerAdmissionDenialCode: code })])
+          expect(JSON.stringify(exported.page)).not.toContain(OWNER.tokenIdentifier)
+        }
+      }
+      expect(provider).toHaveBeenCalledTimes(1)
+    }
+    finally { Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, original); clock.mockRestore(); vi.unstubAllEnvs(); vi.unstubAllGlobals() }
+  })
+
+  test.each([
+    ['zero product controls', { productControls: ADAPTIVE_V2_PILOT_MANIFEST.productControls }, 'pilot_manifest_invalid'],
+    ['unnamed rollback owner', { rollback: ADAPTIVE_V2_PILOT_MANIFEST.rollback }, 'pilot_manifest_invalid'],
+    ['active rollback', { rollback: { ...ADAPTIVE_V2_PILOT_MANIFEST.rollback, ownerSubjectHash: `sha256:${'a'.repeat(64)}`, enabled: true } }, 'pilot_rollback_active'],
+  ])('denies otherwise approved synthetic admission with %s', async (_label, override, code) => {
+    const original = structuredClone(ADAPTIVE_V2_PILOT_MANIFEST)
+    const provider = vi.fn()
+    vi.stubGlobal('fetch', provider)
+    try {
+      const setup = await fixture()
+      await configureSyntheticPilot([OWNER])
+      Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, override)
+      await setup.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true })
+      const activity = await addAdaptiveActivity(setup, 'unapproved-controls')
+      const { tokenIdentifier: _token, scorerVerdict: _verdict, ...attempt } = setup.args('unapproved-controls-key', 80)
+      await expect(setup.owner.action(api.learnAdaptive.submitResponse, { threadId: activity.threadId, activityId: 'unapproved-controls', ...attempt })).resolves.toMatchObject({ kind: 'blocked', code, retryable: false })
+      await expect(setup.owner.query(api.dataExport.getUserDataPage, { collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })).resolves.toMatchObject({ page: [] })
+      expect(provider).not.toHaveBeenCalled()
+    }
+    finally { Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, original); vi.unstubAllEnvs(); vi.unstubAllGlobals() }
+  })
+
+  test.each([
+    ['missing nested limits', { limits: null }],
+    ['fractional dispatch count', { limits: { ...ADAPTIVE_V2_PILOT_MANIFEST.limits, maxProviderDispatchesPerWindow: 1.5 } }],
+    ['unsupported provider', { allowedProviders: ['unknown-provider.v1'] }],
+    ['unsupported policy', { policyVersion: 'unknown-policy.v1' }],
+    ['missing product limits', { productControls: undefined }],
+    ['non-finite product cost', { productControls: { ...ADAPTIVE_V2_PILOT_MANIFEST.productControls, maxReservedMicroUsdPerDay: Infinity } }],
+    ['fractional product concurrency', { productControls: { ...ADAPTIVE_V2_PILOT_MANIFEST.productControls, maxConcurrent: 1.5 } }],
+    ['unsupported retention', { retention: { ...ADAPTIVE_V2_PILOT_MANIFEST.retention, logs: 'retain_payloads' } }],
+    ['wrong manifest pin', { version: 'unsupported-manifest.v1' }],
+    ['malformed model policy', { modelPolicies: [null] }],
+    ['missing rollback policy', { rollback: null }],
+    ['unsupported owner identity', { rollback: { ...ADAPTIVE_V2_PILOT_MANIFEST.rollback, ownerIdentityVersion: 'subject.v1' } }],
+  ])('returns a bounded denial before I/O for malformed activation: %s', async (_label, override) => {
+    const setup = await fixture()
+    const activity = await addAdaptiveActivity(setup, 'malformed-activation')
+    await setup.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true })
+    const original = structuredClone(ADAPTIVE_V2_PILOT_MANIFEST)
+    const provider = vi.fn()
+    vi.stubGlobal('fetch', provider)
+    vi.stubEnv('LEARN_ADAPTIVE_V2_PILOT_MANIFEST', 'version' in override ? override.version : original.version)
+    const { tokenIdentifier: _token, scorerVerdict: _verdict, ...attempt } = setup.args('malformed-config', 80)
+    try {
+      Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, override)
+      await expect(setup.owner.action(api.learnAdaptive.submitResponse, { threadId: activity.threadId, activityId: 'malformed-activation', ...attempt }))
+        .resolves.toMatchObject({ kind: 'blocked', code: 'pilot_manifest_invalid', retryable: false })
+      expect(provider).not.toHaveBeenCalled()
+      await expect(setup.owner.query(api.dataExport.getUserDataPage, { collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } }))
+        .resolves.toMatchObject({ page: [], isDone: true })
+    }
+    finally {
+      Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, original)
+      vi.unstubAllEnvs()
+      vi.unstubAllGlobals()
+    }
+  })
+
   test('revalidates the active Blueprint pointer before reservation and provider dispatch', async () => {
     const beforeReservation = await fixture()
     await beforeReservation.t.run(ctx => ctx.db.patch(beforeReservation.ids.voidId, { activeBlueprintRevisionId: undefined }))
@@ -499,6 +730,8 @@ describe('LA2-12 server-scored mastery attempts', () => {
       Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, { pilotApproved: true,
         cohort: { ...originalManifest.cohort, subjectHashes: ['sha256:6457ca8dca6676a27a6948bfc1a2f01f6f8e3f7f204da3ff4deff782b6691c95'] },
         modelPolicies: [{ model: 'test/mastery-model', inputUsdPerMillionTokens: 0.1, outputUsdPerMillionTokens: 0.1 }],
+        productControls: { ...originalManifest.productControls, maxDispatchesPerHour: 4, maxDispatchesPerDay: 8, maxConcurrent: 2, maxReservedMicroUsdPerDay: 100_000 },
+        rollback: { ...originalManifest.rollback, ownerSubjectHash: `sha256:${'c'.repeat(64)}` },
       })
       vi.stubEnv('LEARN_ADAPTIVE_V2_PILOT_MANIFEST', 'adaptive-v2-pilot.v1')
       vi.stubEnv('OPENROUTER_API_KEY', 'test-key')
@@ -515,12 +748,23 @@ describe('LA2-12 server-scored mastery attempts', () => {
       })])
       expect(timeout).toHaveBeenCalledExactlyOnceWith(90_000)
       expect(provider).toHaveBeenCalledTimes(1)
+      const dispatchExport = await setup.owner.query(api.dataExport.getUserDataPage, { collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })
+      expect(dispatchExport.page).toEqual([expect.objectContaining({
+        providerProductPolicyVersion: 'adaptive-v2-product-budget.utc-hour-day.v1',
+        providerRollbackPolicyVersion: 'adaptive-v2-provider-rollback.v1',
+        providerReservationAttempt: 1,
+        providerReservedMicroUsd: 4920,
+        providerReservationStatus: 'outstanding',
+      })])
+      expect(dispatchExport.page[0]).not.toHaveProperty('providerActualCostUsd')
       await vi.advanceTimersByTimeAsync(89_999)
       expect(providerSignal).toMatchObject({ aborted: false })
       expect(settled).toBe(false)
       await vi.advanceTimersByTimeAsync(1)
       expect(providerSignal).toMatchObject({ aborted: true, reason: { name: 'TimeoutError' } })
       await expect(submission).resolves.toMatchObject({ kind: 'blocked', code: 'provider_outcome_requires_reconciliation', retryable: false })
+      const ambiguousExport = await setup.owner.query(api.dataExport.getUserDataPage, { collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })
+      expect(ambiguousExport.page).toEqual([expect.objectContaining({ providerReservedMicroUsd: 4920, providerReservationStatus: 'ambiguous' })])
       const events = await exportPage('learnActivityEvents')
       expect(events.isDone).toBe(true)
       expect(events.page).toEqual([

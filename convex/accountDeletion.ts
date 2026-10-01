@@ -12,6 +12,7 @@ import type { Doc, Id, TableNames } from './_generated/dataModel'
 import { scheduleAudioOverviewDeletion } from './audioOverviews'
 import { isAccountDeletionActive } from './lib/accountDeletionTombstone'
 import { prepareSearchReservationForAccountDeletion } from './learnV2Search'
+import { preserveAdaptiveProductReservationOnDeletion } from './learnV2Mastery'
 import { ADAPTIVE_LEARN_ACCOUNT_DELETE_ORDER } from '../shared/adaptive-learn-storage-manifest'
 import { privateAdaptiveArtifactR2Key, queueAdaptiveArtifactDeletion } from './lib/learnAdaptiveArtifacts'
 
@@ -346,6 +347,11 @@ async function deleteDirectUserBatch(ctx: MutationCtx, table: DirectUserTable, u
 }
 
 async function deleteLearnV2Table<TableName extends LearnV2Table>(ctx: MutationCtx, table: TableName, userId: string) {
+  if (table === 'learnJobs') {
+    const jobs = await ctx.db.query('learnJobs').withIndex('by_userId', q => q.eq('userId', userId)).take(DELETE_BATCH_SIZE)
+    for (const row of jobs) await preserveAdaptiveProductReservationOnDeletion(ctx, row)
+    return await deleteRows(ctx, jobs)
+  }
   // The schema guarantees this shared owner index for every listed V2 table;
   // Convex's generic union cannot retain that common index at this call site.
   if (table === 'searchReservations') {

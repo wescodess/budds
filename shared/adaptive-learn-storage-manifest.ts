@@ -108,6 +108,31 @@ export const ADAPTIVE_LEARN_STORAGE_MANIFEST = [
   },
 ] as const
 
+// Anonymous product accounting is intentionally outside owner export/deletion.
+// Hour/day aggregates expire after their UTC window plus one day; the single
+// safety row persists so deletion, rollover, and lease expiry cannot reset it.
+export const ADAPTIVE_PROVIDER_OPERATIONAL_STORAGE_MANIFEST = {
+  table: 'learnAdaptiveProviderBudgets',
+  windowIndex: 'by_scope_and_periodStart',
+  retentionIndex: 'by_expiresAt',
+  windowRetentionMs: 86_400_000,
+  safetyRows: 1,
+  accountDeletion: 'preserve_anonymous_totals',
+  export: 'none',
+} as const
+
+export const adaptiveProviderJobFields = {
+  providerProductPolicyVersion: v.optional(v.string()),
+  providerRollbackPolicyVersion: v.optional(v.string()),
+  providerReservationAttempt: v.optional(v.number()),
+  providerReservedMicroUsd: v.optional(v.number()),
+  providerReservationStatus: v.optional(v.union(v.literal('outstanding'), v.literal('settled'), v.literal('ambiguous'))),
+  providerAdmissionCountedAttempt: v.optional(v.number()),
+  providerBudgetDeniedAttempt: v.optional(v.number()),
+  providerAdmissionDenialCode: v.optional(v.string()),
+  providerAdmissionDeniedAt: v.optional(v.number()),
+}
+
 export const ADAPTIVE_LEARN_ACCOUNT_DELETE_ORDER = ADAPTIVE_LEARN_STORAGE_MANIFEST.map(entry => entry.table)
 export const ADAPTIVE_LEARN_EXPORT_COLLECTIONS = ['learningThreadContributions', 'learningThreads', 'learningThreadActivities', 'learningThreadArtifacts', 'learnActivityEvidenceLinks', 'learnActivityDecisions', 'learnActivityEvents', 'learnActivityCommandReceipts', 'learnAdaptiveThreadDeletionJobs', 'learnActivityOverrides', 'learningThreadPreferences', 'learningThreadPromotionProposals', 'learnAdaptiveExperimentAssignments'] as const
 
