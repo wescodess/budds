@@ -1,7 +1,6 @@
 import { defineSchema, defineTable } from 'convex/server'
 import { v } from 'convex/values'
-import { adaptiveProviderJobFields, learnActivityCommandReceiptFields, learnActivityDecisionFields, learnActivityEvidenceLinkFields, learnActivityOverrideFields, learnAdaptiveThreadDeletionJobFields, learningThreadActivityFields, learningThreadArtifactFields, learningThreadContributionFields, learningThreadFields, learningThreadPreferenceFields } from '../shared/adaptive-learn-storage-manifest'
-import { acceptedAttemptProjectionValidator } from '../shared/adaptive-learn-storage-manifest'
+import { adaptiveProviderJobFields, learnActivityCommandReceiptFields, learnActivityDecisionFields, learnActivityEvidenceLinkFields, learnActivityOverrideFields, learnAdaptiveThreadDeletionJobFields, learningThreadActivityFields, learningThreadArtifactFields, learningThreadContributionFields, learningThreadFields, learningThreadPreferenceFields, acceptedAttemptProjectionValidator  } from '../shared/adaptive-learn-storage-manifest'
 import { learnActivityEventFields } from '../shared/learn-adaptive-events'
 import { adaptiveRoutingAnalysisPlanValidator } from '../shared/learn-adaptive-experiment'
 import { masteryStateValidator, masteryTransitionReasonValidator } from '../shared/learn-v2-mastery'

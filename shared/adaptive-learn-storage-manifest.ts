@@ -141,6 +141,7 @@ export const acceptedAttemptProjectionValidator = v.object({
   threadId: v.id('learningThreads'), activityId: v.id('learningThreadActivities'),
   attemptId: v.id('masteryAttempts'), scoringJobId: v.id('learnJobs'),
   studySessionId: v.id('studySessions'), sessionContentId: v.id('sessionContent'), contentRevision: v.number(),
+  sessionContentInputDigest: v.union(v.string(), v.null()),
   studyPlanRevisionId: v.id('studyPlanRevisions'), planRevision: v.number(), planRecordRevision: v.number(),
   blueprintRevisionId: v.id('learnBlueprintRevisions'), blueprintRecordRevision: v.number(),
   activityInputDigest: v.string(),

@@ -18,7 +18,7 @@ import { learnActivityEventDedupeHash, writeLearnActivityEvent } from './lib/lea
 import { adaptiveArtifactKindValidator, adaptiveArtifactStatusValidator, boundedArtifactText } from '../shared/learn-adaptive-artifact'
 import { queueAdaptiveArtifactDeletion } from './lib/learnAdaptiveArtifacts'
 import { prepareAdaptiveCommand } from '../shared/adaptive-command-authority'
-import { acceptedAttemptAuthority, recordAttemptProjectionOrigin, safeAttemptProjection, sameAttemptProjection, unavailableProjection, verifyAttemptProjection } from './lib/learnAdaptiveHandoff'
+import { acceptedAttemptAuthority, handoffOriginsAvailable, recordAttemptProjectionOrigin, safeAttemptProjection, sameAttemptProjection, unavailableProjection, verifyAttemptProjection } from './lib/learnAdaptiveHandoff'
 
 export const projectAcceptedAttemptToQuiz = mutation({
   args: { threadId: v.id('learningThreads'), attemptId: v.id('masteryAttempts'), expectedRevision: v.number(), idempotencyKey: v.string() },
@@ -1254,8 +1254,7 @@ async function acceptedHandoffCandidate(ctx: QueryCtx, userId: string, activity:
   if (!activity.masteryAttemptId) return null
   const authority = await acceptedAttemptAuthority(ctx, userId, activity.threadId, activity.masteryAttemptId)
   const quizId = activity.attemptHandoff?.quizId ?? null
-  const quiz = quizId && await ctx.db.get(quizId)
-  const eligible = Boolean(authority && (!quizId || quiz && quiz.userId === userId && quiz.deletedAt === undefined))
+  const eligible = Boolean(authority && await handoffOriginsAvailable(ctx, userId, authority))
   return { attemptId: activity.masteryAttemptId, activityDocumentId: activity._id, eligible,
     reasonCode: eligible ? 'accepted_attempt_available' as const : 'accepted_attempt_unavailable' as const, quizId }
 }

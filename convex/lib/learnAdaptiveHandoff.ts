@@ -2,7 +2,9 @@ import type { Infer } from 'convex/values'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { AdaptiveCommandRejection } from '../learnAdaptiveCommands'
-import { acceptedAttemptProjectionValidator } from '../../shared/adaptive-learn-storage-manifest'
+import type { acceptedAttemptProjectionValidator } from '../../shared/adaptive-learn-storage-manifest'
+import { hasAdaptiveExperienceAccess } from './adaptiveLearnAccess'
+import { writeLearnActivityEvent } from './learnAdaptiveEvents'
 
 export type AcceptedAttemptProjection = Infer<typeof acceptedAttemptProjectionValidator>
 export function sameAttemptProjection(left: AcceptedAttemptProjection, right: AcceptedAttemptProjection) {
@@ -47,6 +49,7 @@ export async function acceptedAttemptAuthority(ctx: QueryCtx | MutationCtx, user
     || session.startedSessionContentId !== content?._id || session.startedSessionContentRevision !== attempt.contentRevision
     || !content || content.userId !== userId || content.status !== 'published' || content.publishedAt === undefined
     || content.studySessionId !== session._id || content.revision !== attempt.contentRevision
+    || (content.inputDigest ?? null) !== activity.generationInputs.sessionContentInputDigest
     || content.studyPlanRevisionId !== plan?._id || content.blueprintRevisionId !== blueprint?._id || content.objectiveId !== attempt.objectiveId
     || !plan || plan.userId !== userId || !['accepted', 'active'].includes(plan.status)
     || plan.revision !== attempt.planRevision || plan.recordRevision !== attempt.planRecordRevision
@@ -60,6 +63,7 @@ export async function acceptedAttemptAuthority(ctx: QueryCtx | MutationCtx, user
   const projection: AcceptedAttemptProjection = {
     version: 'learn-adaptive.accepted-attempt-projection.v1', threadId, activityId: activity._id, attemptId,
     scoringJobId: job._id, studySessionId: session._id, sessionContentId: content._id, contentRevision: content.revision,
+    sessionContentInputDigest: content.inputDigest ?? null,
     studyPlanRevisionId: plan._id, planRevision: plan.revision, planRecordRevision: attempt.planRecordRevision,
     blueprintRevisionId: blueprint._id, blueprintRecordRevision: attempt.blueprintRecordRevision, activityInputDigest: activity.inputDigest,
   }
@@ -76,7 +80,22 @@ export async function safeAttemptProjection(ctx: QueryCtx | MutationCtx, userId:
   return { version: projection.version, attemptId: projection.attemptId, threadId: projection.threadId,
     status: authority ? 'accepted' as const : 'unavailable' as const,
     scorePercent: authority?.attempt.serverScorePercent ?? null,
-    feedback: authority?.activity.feedbackProjection ?? null, handoffAllowed: Boolean(authority) }
+    feedback: authority?.activity.feedbackProjection ?? null,
+    handoffAllowed: Boolean(authority && await hasAdaptiveExperienceAccess(ctx, userId) && await handoffOriginsAvailable(ctx, userId, authority)) }
+}
+
+export async function handoffOriginsAvailable(ctx: QueryCtx | MutationCtx, userId: string, authority: NonNullable<Awaited<ReturnType<typeof acceptedAttemptAuthority>>>) {
+  const handoff = authority.activity.attemptHandoff
+  if (!handoff) return true
+  const quiz = await ctx.db.get(handoff.quizId)
+  if (!quiz || quiz.userId !== userId || quiz.folderId !== authority.folder._id || quiz.deletedAt !== undefined
+    || !quiz.attemptProjection || !sameAttemptProjection(quiz.attemptProjection, authority.projection)) return false
+  if (!handoff.conversationId && !handoff.messageId) return true
+  if (!handoff.conversationId || !handoff.messageId) return false
+  const [conversation, message] = await Promise.all([ctx.db.get(handoff.conversationId), ctx.db.get(handoff.messageId)])
+  return Boolean(conversation && message && conversation.userId === userId && conversation.folderId === authority.folder._id
+    && message.userId === userId && message.conversationId === conversation._id && message.projectionQuizId === quiz._id
+    && message.attemptProjection && sameAttemptProjection(message.attemptProjection, authority.projection))
 }
 
 export function unavailableProjection(): never {
@@ -89,11 +108,16 @@ export async function recordAttemptProjectionOrigin(ctx: MutationCtx, userId: st
   const provenanceKey = await projectionDigest(JSON.stringify(['learn-thread-contribution.v1', userId, String(projection.threadId), source.feature, sourceIdentity, sourceRevision, 'result']))
   const prior = await ctx.db.query('learningThreadContributions').withIndex('by_userId_and_provenanceKey', q => q.eq('userId', userId).eq('provenanceKey', provenanceKey)).unique()
   if (prior) return prior._id
-  return await ctx.db.insert('learningThreadContributions', {
+  const contributionId = await ctx.db.insert('learningThreadContributions', {
     userId, threadId: projection.threadId, sourceFeature: source.feature, sourceIdentity, sourceRevision,
     contributionKind: 'result', provenanceVersion: 'learn-adaptive.contribution.v1', provenanceKey,
     classification: 'non_factual', metadata: { role: 'review' }, sourceStatus: 'available', attemptProjection: projection,
     idempotencyKeyHash: await projectionDigest(`accepted-attempt-origin:${userId}:${source.feature}:${sourceIdentity}`),
     requestFingerprint: await projectionDigest(JSON.stringify([projection, source.feature, sourceIdentity, sourceRevision])), createdAt: Date.now(),
   })
+  await writeLearnActivityEvent(ctx, { userId, threadId: projection.threadId, activityId: projection.activityId,
+    eventType: 'contribution_recorded', eventVersion: 'contribution_recorded.v1',
+    sourceVersion: 'learn-adaptive.contribution.v1', contractVersion: 'learn-adaptive.contribution.v1',
+    semanticKey: `contribution:${contributionId}`, occurredAt: Date.now(), reasonCode: 'source_verified', outcomeCode: 'recorded', metadata: {} })
+  return contributionId
 }
