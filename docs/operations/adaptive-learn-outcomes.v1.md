@@ -34,7 +34,7 @@ Retention joins actual delayed unassisted evidence to an independently enumerate
 
 The earliest eligible unassisted check determines the result for each due capability; a later passing retry cannot replace an earlier failure. The observed-check subaggregate remains separate from complete retention. Historical first-independent evidence can predate the reporting window, but reported delayed checks remain inside it.
 
-Experiment performance, task completion, and self-reported usefulness remain separate outcomes. Cross-feature reconciliation requires verified producer lineage and cannot hide an origin or count a retry as another attempt. Missing approval, corpus, baseline, verifier, or source coverage remains explicit; the evaluator does not infer a release decision.
+Experiment performance, task completion, and self-reported usefulness remain separate outcomes. Cross-feature reconciliation requires verified producer lineage and cannot hide an origin or count a retry as another attempt. A cross-feature contribution qualifies only when its referenced authoritative attempt's `occurredAt` falls inside the inclusive reporting window; `out_of_window` counts excluded unique contribution records. Missing approval, corpus, baseline, verifier, or source coverage remains explicit; the evaluator does not infer a release decision.
 
 Cost reservations and configured ceilings remain upper bounds. Missing recorded cost or unknown dispatch prevents a complete cost-per-request result, while any observed partial aggregate carries its own label. Missing support or accessibility evidence is unknown, not zero contacts or a passing audit.
 
