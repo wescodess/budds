@@ -13,11 +13,11 @@ Run the CLI from the repository root with the candidate's full lowercase 40-char
 node scripts/adaptive-learn-release-evidence.mjs --sha FULL_TESTED_COMMIT_SHA --input /absolute/path/release-input.json
 ```
 
-Retain the generated bundle outside the source tree when it contains operational owner or evidence metadata. Repeating assembly with the same commit and equivalent metadata produces the same bundle; no generation timestamp or random identifier changes its identity.
+Retain the generated bundle outside the source tree when it contains operational owner or evidence metadata. Repeating assembly with the same commit and the same records, regardless of object-key or row order, produces the same bundle; no generation timestamp or random identifier changes its identity.
 
 ## Interpret the result
 
-The bundle pins repository source digests and version metadata at the selected commit. Its evidence entries link hosted gates, provider quota and configuration checks, keyboard and physical screen-reader smoke checks, WCAG 2.2 AA and security reviews, migration/export/deletion checks, and metric definitions. A source or version link identifies what reviewers must examine; it does not prove that a check ran or passed.
+The bundle pins repository source digests and literal version metadata at the selected commit, including the frozen first-value definition. Literal labels are an inventory, not evaluated exports or proof of active policy. Its evidence entries link hosted gates, provider quota and configuration checks, keyboard and physical screen-reader smoke checks, WCAG 2.2 AA and security reviews, migration/export/deletion checks, and metric definitions. A source or version link identifies what reviewers must examine; it does not prove that a check ran or passed.
 
 Missing owners, missing evidence, incompatible SHA or source pins, unresolved blockers, and local-only substitutes remain explicit known exclusions. Malformed, unsafe, or over-limit metadata fails with a non-content error and no bundle. A valid incomplete input produces a denied bundle so reviewers can see what remains missing.
 
