@@ -51,10 +51,11 @@ async function choose(option: Controls['options'][number]) {
   error.value = null
   if (pendingOption.value !== option.key) pendingKey.value = null
   pendingOption.value = option.key
-  pendingKey.value ??= `adaptive-override:${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`}`
+  pendingKey.value ??= `adaptive-override-${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`
   try {
     const result = await mutation.mutate({ threadId: props.threadId as never, activityId: props.activityId,
-      option: option.key, expectedRevision: currentRevision.value, idempotencyKey: pendingKey.value }) as { kind: string, revision?: number, value?: { fixedNextPlan?: AdaptiveFixedNextPlan } }
+      option: option.key, expectedRevision: currentRevision.value, idempotencyKey: pendingKey.value }) as { kind: string, revision?: number, value?: { fixedNextPlan?: AdaptiveFixedNextPlan } } | undefined
+    if (!result) throw new Error('Could not save this choice. Try again.')
     if (result.kind !== 'ok' || result.revision === undefined || !result.value?.fixedNextPlan) {
       pendingKey.value = null
       throw new Error('This activity changed. Refresh before choosing again.')
@@ -83,7 +84,7 @@ async function choose(option: Controls['options'][number]) {
       <p v-if="error" class="mt-2 text-sm text-destructive" role="alert">{{ error }}</p>
       <ul class="mt-3 grid gap-2 sm:grid-cols-2">
         <li v-for="option in controls.options" :key="option.key" class="rounded-lg border border-border p-2">
-          <button type="button" :data-testid="`learn-override-${option.key}`" :disabled="!option.available || busy || !isOnline" :aria-describedby="option.unavailableReason ? `learn-override-reason-${option.key}` : undefined" class="min-h-11 text-left text-sm text-[var(--learn-action)] disabled:text-muted-foreground" @click="choose(option)">{{ option.label }}</button>
+          <button type="button" :data-testid="`learn-override-${option.key}`" :disabled="!option.available || !isOnline" :aria-disabled="!option.available || busy || !isOnline" :aria-describedby="option.unavailableReason ? `learn-override-reason-${option.key}` : undefined" class="min-h-11 text-left text-sm text-[var(--learn-action)] disabled:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)]" @click="choose(option)">{{ option.label }}</button>
           <p v-if="option.unavailableReason" :id="`learn-override-reason-${option.key}`" class="text-xs text-muted-foreground">{{ unavailableExplanation(option) }}</p>
         </li>
       </ul>

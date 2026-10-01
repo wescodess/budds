@@ -24,6 +24,8 @@ const initialDiagnostic = {
   status: 'eligible', evidenceState: 'preparing', decisionPending: false,
   recovery: { title: 'Your material is preparing', body: 'Record what you know.', action: 'Back to Learn' },
   activity: { id: 'diagnostic:thread_1', status: 'eligible', planRevision: 1, primitive: { contractVersion: 'learn-adaptive.activity-contract.v1', rendererVersion: 'learn-adaptive.renderer.v1', type: 'diagnostic_prompt', action: 'submit_response', testId: 'learn-primitive-diagnostic-prompt', props: { prompt: 'What do you already know?', responseFormat: 'short_text', assistance: 'none' } }, response: null,
+    controls: { reasonText: { version: 'learn-adaptive.reason-text.v1', purpose: 'Record your starting point.', text: 'A shorter continuation leaves your current response in place.' }, selected: null, fixedNextPlan: null,
+      options: [{ key: 'time_25', label: '25 minutes', available: true, unavailableReason: null }] },
     requiredAction: { kind: 'submit_response', label: 'Save response' } },
 }
 const diagnostic = ref<typeof initialDiagnostic | null>(initialDiagnostic)
@@ -31,6 +33,8 @@ const initialEvidence = { ownerId: 'owner_1', threadId: 'thread_1', activityId: 
 const initialMemory = { ownerId: 'owner_1', threadId: 'thread_1', threadRevision: 2, lifecycle: 'active', unresolvedPoint: 'Review my starting point', nextAction: { label: 'Save response' }, evidenceState: 'preparing', preferences: [], artifacts: [], history: [] }
 const evidence = ref(initialEvidence)
 const memory = ref(initialMemory)
+const overrideMutation = vi.fn()
+const overrideError = ref<Error | undefined>()
 
 mockNuxtImport('useConvexQuery', () => (reference: never) => {
   const name = getFunctionName(reference)
@@ -44,7 +48,9 @@ mockNuxtImport('useConvexQuery', () => (reference: never) => {
                 : ref(null)
   return { data, pending: name === 'learnAdaptiveAccess:adaptiveStatus' ? accessPending : name === 'learnAdaptiveRecovery:getDiagnosticCanvas' ? activityPending : ref(false) }
 })
-mockNuxtImport('useConvexMutation', () => (reference: never) => ({ mutate: vi.fn().mockResolvedValue(getFunctionName(reference) === 'learnAdaptiveRecovery:recordDiagnosticRendered' ? { status: 'recorded' } : { kind: 'ok' }) }))
+mockNuxtImport('useConvexMutation', () => (reference: never) => getFunctionName(reference) === 'learnAdaptive:applyOverride'
+  ? { mutate: overrideMutation, error: overrideError }
+  : { mutate: vi.fn().mockResolvedValue(getFunctionName(reference) === 'learnAdaptiveRecovery:recordDiagnosticRendered' ? { status: 'recorded' } : { kind: 'ok' }) })
 mockNuxtImport('useConvexAction', () => () => ({ mutate: vi.fn() }))
 mockNuxtImport('useConvex', () => () => ({ query: vi.fn().mockResolvedValue({ page: [], isDone: true, continueCursor: '' }), onUpdate: vi.fn().mockReturnValue(vi.fn()) }))
 
@@ -85,6 +91,8 @@ describe('mounted Home and Thread accessibility', () => {
     memory.value = structuredClone(initialMemory)
     activityPending.value = false
     diagnostic.value = structuredClone(initialDiagnostic)
+    overrideMutation.mockReset()
+    overrideError.value = undefined
     evidence.value = structuredClone(initialEvidence)
     const app = useNuxtApp()
     previousAuth = { ready: app.$convexAuthReady.value, authenticated: app.$convexAuthenticated.value }
@@ -144,6 +152,41 @@ describe('mounted Home and Thread accessibility', () => {
     accessPending.value = false
     await nextTick()
     expect(page.get('h1').text()).toBe('Check my understanding')
+  })
+
+  it('keeps the chosen adjustment focused while saving, then announces the next plan without losing the current response', async () => {
+    let acknowledge!: (value: unknown) => void
+    overrideMutation.mockReturnValue(new Promise(resolve => { acknowledge = resolve }))
+    const page = await mountLearningRoute()
+    await page.get('[data-testid="learn-diagnostic-response"]').setValue('My current unsent response.')
+    await page.get('[data-testid="learn-why-toggle"]').trigger('click')
+    const choice = page.get('[data-testid="learn-override-time_25"]')
+    ;(choice.element as HTMLButtonElement).focus()
+    await choice.trigger('click')
+    expect(choice.attributes('disabled')).toBeUndefined()
+    expect(choice.attributes('aria-disabled')).toBe('true')
+    expect(document.activeElement).toBe(choice.element)
+    acknowledge({ kind: 'ok', revision: 3, value: { fixedNextPlan: { version: 'learn-adaptive.fixed-next-plan.v1', inputOption: 'time_25', nextActivity: 'continue_with_time', availableTime: '25', difficulty: 'same', maxNewActivities: 1, authority: 'server_revalidate_at_boundary' } } })
+    await vi.waitFor(() => expect(page.get('[data-testid="learn-fixed-next-plan"]').text()).toContain('Next activity: Continue with 25 minutes'))
+    expect(choice.attributes('aria-disabled')).toBe('false')
+    expect(document.activeElement).toBe(choice.element)
+    expect((page.get('[data-testid="learn-diagnostic-response"]').element as HTMLTextAreaElement).value).toBe('My current unsent response.')
+  })
+
+  it('announces an unconfirmed adjustment safely when the external SDK returns no result', async () => {
+    overrideMutation.mockResolvedValue(undefined)
+    overrideError.value = new Error('Convex transport error with internal stack details')
+    const page = await mountLearningRoute()
+    await page.get('[data-testid="learn-diagnostic-response"]').setValue('Keep my response after an unconfirmed choice.')
+    await page.get('[data-testid="learn-why-toggle"]').trigger('click')
+    const choice = page.get('[data-testid="learn-override-time_25"]')
+    ;(choice.element as HTMLButtonElement).focus()
+    await choice.trigger('click')
+    await vi.waitFor(() => expect(page.get('[data-testid="learn-why-controls"] [role="alert"]').text()).toBe('Could not save this choice. Try again.'))
+    expect(page.find('[data-testid="learn-fixed-next-plan"]').exists()).toBe(false)
+    expect(choice.attributes('aria-disabled')).toBe('false')
+    expect(document.activeElement).toBe(choice.element)
+    expect((page.get('[data-testid="learn-diagnostic-response"]').element as HTMLTextAreaElement).value).toBe('Keep my response after an unconfirmed choice.')
   })
 
   it.each([
