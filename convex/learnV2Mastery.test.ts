@@ -544,6 +544,11 @@ describe('LA2-12 server-scored mastery attempts', () => {
     await setup.t.mutation(internal.learnV2Mastery.markMasteryScoringDispatched, { tokenIdentifier: OWNER.tokenIdentifier, jobId: acquired.jobId, leaseToken: acquired.leaseToken })
     await setup.t.run(ctx => ctx.db.patch(acquired.jobId, { leaseExpiresAt: Date.now() - 1 }))
 
+    const exportPage = (collection: 'learnActivityEvents' | 'masteryAttempts' | 'masteryRecords') => setup.owner.query(api.dataExport.getUserDataPage, { collection, paginationOpts: { cursor: null, numItems: 8 } })
+    const attemptsBeforeRecovery = await exportPage('masteryAttempts')
+    const masteryBeforeRecovery = await exportPage('masteryRecords')
+    expect(attemptsBeforeRecovery).toMatchObject({ page: [], isDone: true })
+    expect(masteryBeforeRecovery).toMatchObject({ page: [], isDone: true })
     await expect(setup.t.mutation(internal.learnV2Mastery.recoverExpiredMasteryScoringJobs, {})).resolves.toMatchObject({ blocked: 1 })
     const state = await setup.t.run(async ctx => ({
       job: await ctx.db.get(acquired.jobId),
@@ -560,6 +565,15 @@ describe('LA2-12 server-scored mastery attempts', () => {
     expect(await setup.t.run(ctx => ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('threadId', activity.threadId)).take(8))).toEqual([
       expect.objectContaining({ eventType: 'provider_ambiguity', eventVersion: 'provider_ambiguity.v1', metadata: { providerStage: 'reconciliation' } }),
     ])
+    const ambiguityExport = await exportPage('learnActivityEvents')
+    expect(ambiguityExport.isDone).toBe(true)
+    expect(ambiguityExport.page).toEqual([
+      expect.objectContaining({ threadId: activity.threadId, eventType: 'provider_ambiguity', eventVersion: 'provider_ambiguity.v1', metadata: { providerStage: 'reconciliation' } }),
+    ])
+    expect(ambiguityExport.page[0]).not.toHaveProperty('dedupeKeyHash')
+    expect(JSON.stringify(ambiguityExport.page)).not.toContain(request.response)
+    expect(JSON.stringify(ambiguityExport.page)).not.toContain(request.idempotencyKey)
+    await expect(setup.t.mutation(internal.learnV2Mastery.recoverExpiredMasteryScoringJobs, {})).resolves.toEqual({ recovered: 0, blocked: 0 })
     await setup.t.run(async (ctx) => {
       await ctx.db.patch(setup.ids.sessionId, { revision: 8 })
       await ctx.db.patch(activity.activityDocumentId, { status: 'ended' })
@@ -572,8 +586,13 @@ describe('LA2-12 server-scored mastery attempts', () => {
     process.env.LEARN_ADAPTIVE_V2_PILOT_MANIFEST = 'expired-or-revoked-manifest'
     const { tokenIdentifier: _token, ...publicRequest } = request
     try {
-      await expect(setup.owner.action(api.learnAdaptive.submitResponse, { threadId: activity.threadId, activityId: 'adaptive-reconciliation', ...publicRequest }))
-        .resolves.toMatchObject({ kind: 'blocked', code: 'provider_outcome_requires_reconciliation', retryable: false })
+      for (let retry = 0; retry < 2; retry++) {
+        await expect(setup.owner.action(api.learnAdaptive.submitResponse, { threadId: activity.threadId, activityId: 'adaptive-reconciliation', ...publicRequest }))
+          .resolves.toMatchObject({ kind: 'blocked', code: 'provider_outcome_requires_reconciliation', retryable: false })
+      }
+      expect(await exportPage('learnActivityEvents')).toEqual(ambiguityExport)
+      expect(await exportPage('masteryAttempts')).toEqual(attemptsBeforeRecovery)
+      expect(await exportPage('masteryRecords')).toEqual(masteryBeforeRecovery)
       expect(await setup.t.run(ctx => ctx.db.get(activity.activityDocumentId))).toMatchObject({ status: 'ended', reconciliationReason: 'provider_outcome_requires_reconciliation' })
     }
     finally { delete process.env.LEARN_ADAPTIVE_V2_PILOT_MANIFEST }
