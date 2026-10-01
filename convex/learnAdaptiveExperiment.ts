@@ -81,7 +81,7 @@ export const getRollbackSignal = internalQuery({
   },
 })
 
-async function writeExperimentExclusion(ctx: Parameters<typeof writeLearnActivityEvent>[0],
+async function excludeFromExperiment(ctx: MutationCtx,
   args: { userId: string, threadId: Doc<'learningThreads'>['_id'], reason: 'analysis_unapproved' | 'analysis_contract_unsupported' | 'safety_prerequisite_missing' | 'guardrail_rollback' }) {
   await writeLearnActivityEvent(ctx, { userId: args.userId, threadId: args.threadId,
     eventType: 'experiment_assignment', eventVersion: 'experiment_assignment.v1',
@@ -91,6 +91,7 @@ async function writeExperimentExclusion(ctx: Parameters<typeof writeLearnActivit
     metadata: { cohort: 'excluded', experimentEligibility: 'excluded',
       experimentExclusionCode: args.reason, ...EXPERIMENT_METADATA_VERSIONS },
   })
+  return { kind: 'excluded' as const, reason: args.reason, analysisVersion: ANALYSIS_VERSION }
 }
 
 async function digest(value: string) {
@@ -251,23 +252,19 @@ export const assignForThread = mutation({
     const approval = plan && await ctx.db.query('learnAdaptiveExperimentApprovals')
       .withIndex('by_planId', q => q.eq('planId', plan._id)).unique()
     if (!plan || !approval) {
-      await writeExperimentExclusion(ctx, { userId, threadId: thread._id, reason: 'analysis_unapproved' })
-      return { kind: 'excluded' as const, reason: 'analysis_unapproved' as const, analysisVersion: ANALYSIS_VERSION }
+      return await excludeFromExperiment(ctx, { userId, threadId: thread._id, reason: 'analysis_unapproved' })
     }
     try { validateAdaptiveRoutingAnalysisPlan(plan.plan) }
     catch {
-      await writeExperimentExclusion(ctx, { userId, threadId: thread._id, reason: 'analysis_contract_unsupported' })
-      return { kind: 'excluded' as const, reason: 'analysis_contract_unsupported' as const, analysisVersion: ANALYSIS_VERSION }
+      return await excludeFromExperiment(ctx, { userId, threadId: thread._id, reason: 'analysis_contract_unsupported' })
     }
     const rollback = await ctx.db.query('learnAdaptiveExperimentRollbacks')
       .withIndex('by_planId', q => q.eq('planId', plan._id)).unique()
     if (rollback) {
-      await writeExperimentExclusion(ctx, { userId, threadId: thread._id, reason: 'guardrail_rollback' })
-      return { kind: 'excluded' as const, reason: 'guardrail_rollback' as const, analysisVersion: ANALYSIS_VERSION }
+      return await excludeFromExperiment(ctx, { userId, threadId: thread._id, reason: 'guardrail_rollback' })
     }
     if (!(await hasExperimentSafetyPrerequisites(ctx, thread))) {
-      await writeExperimentExclusion(ctx, { userId, threadId: thread._id, reason: 'safety_prerequisite_missing' })
-      return { kind: 'excluded' as const, reason: 'safety_prerequisite_missing' as const, analysisVersion: ANALYSIS_VERSION }
+      return await excludeFromExperiment(ctx, { userId, threadId: thread._id, reason: 'safety_prerequisite_missing' })
     }
     const prior = await ctx.db.query('learnAdaptiveExperimentAssignments')
       .withIndex('by_userId_and_analysisVersion', q => q.eq('userId', userId).eq('analysisVersion', ANALYSIS_VERSION)).unique()
