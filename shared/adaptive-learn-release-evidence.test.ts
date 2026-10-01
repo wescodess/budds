@@ -24,6 +24,9 @@ test('operator assembles a reproducible denied bundle naming absent owners and l
   expect(bundle.knownExclusions).toContainEqual({ code: 'missing_owner', subject: 'rollback', ownerId: null })
   expect(bundle.knownExclusions).toContainEqual({ code: 'missing_evidence', subject: 'physical_screen_reader', ownerId: null })
   expect(run(input()).stdout).toBe(first.stdout)
+  const withExclusions = JSON.parse(run({ ...input(), knownExclusions: Array.from({ length: 100 }, (_, index) => ({ code: 'synthetic_blocker', subject: `synthetic-${index}`, ownerId: null })) }).stdout)
+  const schema = JSON.parse(readFileSync('docs/operations/adaptive-learn-release-evidence.v1.json', 'utf8'))
+  expect(withExclusions.knownExclusions.length).toBeLessThanOrEqual(schema.$defs.bundle.properties.knownExclusions.maxItems)
 })
 
 test('operator uses an older selected commit even when current committed and dirty sources differ', () => {

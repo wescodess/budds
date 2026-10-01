@@ -401,7 +401,7 @@
         },
         "knownExclusions": {
           "type": "array",
-          "maxItems": 100,
+          "maxItems": 1024,
           "items": {
             "$ref": "#/$defs/exclusion"
           }
