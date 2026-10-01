@@ -450,7 +450,7 @@ function leave() { void router.push(safeDestination.value) }
 </script>
 
 <template>
-  <main data-testid="learn-adaptive-thread-route" class="min-h-full bg-[var(--learn-thread-surface)]">
+  <section aria-label="Learning thread" data-testid="learn-adaptive-thread-route" class="min-h-full bg-[var(--learn-thread-surface)]">
     <section v-if="checkingAccess" class="mx-auto max-w-3xl p-6" aria-live="polite">Checking learning access…</section>
     <section v-else-if="!allowed" class="mx-auto max-w-3xl p-6" data-testid="learn-adaptive-thread-denied">
       <p role="status">This learning thread is not available for this account.</p>
@@ -604,5 +604,5 @@ function leave() { void router.push(safeDestination.value) }
       </section>
       <NuxtLink v-if="canvas || diagnostic || artifact || reflection" :to="safeDestination" data-testid="learn-adaptive-safe-destination" class="mt-6 inline-flex min-h-11 items-center text-sm text-muted-foreground underline">{{ safeDestinationLabel }}</NuxtLink>
     </div>
-  </main>
+  </section>
 </template>
