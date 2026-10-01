@@ -2,6 +2,7 @@ import { mutation, query } from './_generated/server'
 import { AUDIO_OVERVIEW_DAILY_CAP, todayUtcYmd } from './lib/audioOverviewPolicy'
 import { getOptionalAuthUserId, requireAuth } from './lib/auth'
 import { canBootstrapLearnV2E2e } from './lib/learnV2E2e'
+import { requireAdaptiveActivationApproval } from './lib/adaptiveActivationApproval'
 
 export { AUDIO_OVERVIEW_DAILY_CAP }
 
@@ -25,6 +26,11 @@ export const upsertUser = mutation({
       .unique()
 
     if (existing) {
+      if (bootstrapLearnV2 && existing.learnAdaptiveExperienceEntitlement === undefined) requireAdaptiveActivationApproval({
+        BUDDS_E2E_MODE: process.env.BUDDS_E2E_MODE,
+        BUDDS_E2E_AUTH_TOKEN: process.env.BUDDS_E2E_AUTH_TOKEN,
+        CONVEX_CLOUD_URL: process.env.CONVEX_CLOUD_URL,
+      })
       await ctx.db.patch(existing._id, {
         name: identity.name ?? existing.name,
         email: identity.email ?? existing.email,
@@ -39,6 +45,11 @@ export const upsertUser = mutation({
       return existing._id
     }
 
+    if (bootstrapLearnV2) requireAdaptiveActivationApproval({
+      BUDDS_E2E_MODE: process.env.BUDDS_E2E_MODE,
+      BUDDS_E2E_AUTH_TOKEN: process.env.BUDDS_E2E_AUTH_TOKEN,
+      CONVEX_CLOUD_URL: process.env.CONVEX_CLOUD_URL,
+    })
     return await ctx.db.insert('users', {
       tokenIdentifier: identity.tokenIdentifier,
       name: identity.name ?? 'Unknown',
