@@ -109,6 +109,7 @@ test.each([
   ['input approval override', (fixture: ReturnType<typeof frozen>) => fixture.approval = 'approved'],
   ['zero opportunity ordinal', (fixture: ReturnType<typeof frozen>) => fixture.firstValueEvents[0].opportunityOrdinal = 0],
   ['ready with exclusion', (fixture: ReturnType<typeof frozen>) => fixture.firstValueEvents[0].firstValueExclusionCode = 'flag_ineligible'],
+  ['excluded without recorded code', (fixture: ReturnType<typeof frozen>) => fixture.firstValueEvents[0].firstValueEligibility = 'excluded'],
   ['ambiguity before dispatch', (fixture: ReturnType<typeof frozen>) => fixture.ownerEvents[0].occurredAt = 119999],
 ])('operator rejects %s with a constant private-data-safe error', (_name, change) => {
   const fixture = frozen()

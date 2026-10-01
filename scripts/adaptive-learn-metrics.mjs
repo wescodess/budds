@@ -31,6 +31,7 @@ const validate = fixture => {
         if (!['thread_command_committed.v1', 'meaningful_activity_started.v1'].includes(row.eventVersion)) reject()
         if (row.firstValueEligibility !== undefined && !['ready_factual_content', 'ready_standalone_non_factual', 'preparing', 'excluded'].includes(row.firstValueEligibility)) reject()
         if (row.firstValueExclusionCode !== undefined && !OPERATIONAL_METRIC_DEFINITIONS[0].exclusions.includes(row.firstValueExclusionCode)) reject()
+        if (row.firstValueEligibility === 'excluded' && row.firstValueExclusionCode === undefined) reject()
         if (row.eventVersion === 'thread_command_committed.v1') { token(row.cohort); if (row.activityContractVersion !== 'learn-adaptive.activity-contract.v1' || row.firstValueEligibility === undefined) reject() }
         else if (row.cohort !== undefined || row.activityContractVersion !== undefined || row.firstValueEligibility !== undefined || row.firstValueExclusionCode !== undefined) reject()
       }
