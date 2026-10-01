@@ -189,7 +189,9 @@ test('Learning drawer close controls meet minimum touch targets', async ({ page,
     await page.getByTestId(`learn-${kind}-open`).click()
     const drawer = page.getByTestId(`learn-${kind}-drawer`)
     await expect(drawer).toBeVisible()
-    for (const close of await drawer.getByRole('button', { name: /^Close/ }).all()) {
+    const closeControls = drawer.getByRole('button', { name: /^Close/ })
+    await expect(closeControls).toHaveCount(2)
+    for (const close of await closeControls.all()) {
       const bounds = await close.boundingBox()
       expect(bounds).not.toBeNull()
       expect(bounds!.height).toBeGreaterThanOrEqual(44)
@@ -245,18 +247,51 @@ test('simulated touch keyboard viewport keeps the active response visible and re
     }).toBeLessThanOrEqual(351)
     expect((await field.boundingBox())!.y).toBeGreaterThanOrEqual(16)
     await expect(field).toHaveValue(response)
+    const submit = page.getByTestId('learn-diagnostic-submit')
+    await tabTo(page, submit)
+    const action = await submit.boundingBox()
+    expect(action).not.toBeNull()
+    expect(action!.y).toBeGreaterThanOrEqual(0)
+    expect(action!.y + action!.height).toBeLessThanOrEqual(367)
+    await page.keyboard.press('Enter')
+    await expect(page.getByTestId('learn-diagnostic-saved')).toContainText(response)
     await page.evaluate(() => {
       delete (window.visualViewport as unknown as { height?: number }).height
       window.visualViewport!.dispatchEvent(new Event('resize'))
     })
     await expect(page.locator('html')).toHaveAttribute('data-keyboard-open', 'false')
-    await expect(field).toHaveValue(response)
-    await page.getByTestId('learn-diagnostic-submit').click()
     await expect(page.getByTestId('learn-diagnostic-saved')).toContainText(response)
     await page.reload({ waitUntil: 'domcontentloaded' })
     await expect(page.getByTestId('learn-diagnostic-saved')).toContainText(response)
   }
   finally { await context.close() }
+})
+
+test('200% rendered zoom reflows Home without losing its draft or source', async ({ page, request }) => {
+  test.setTimeout(3 * 60_000)
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await openLearningHome(page, request)
+  const need = page.getByTestId('learn-adaptive-need')
+  await need.fill('Retain this draft at twice the rendered scale.')
+  await page.getByRole('radio', { name: /^url$/i }).check()
+  const url = page.getByTestId('learn-adaptive-url')
+  await url.fill('https://example.com/learning-notes')
+  const unzoomedNeed = await need.boundingBox()
+  expect(unzoomedNeed).not.toBeNull()
+  // CSS zoom exercises doubled rendered text/control dimensions and layout reflow; it is not physical-device proof.
+  await page.evaluate(() => { document.documentElement.style.zoom = '200%' })
+  await expect(need).toHaveValue('Retain this draft at twice the rendered scale.')
+  await expect(url).toHaveValue('https://example.com/learning-notes')
+  await expect(page.getByRole('radio', { name: /^url$/i })).toBeChecked()
+  expect((await need.boundingBox())!.height).toBeGreaterThanOrEqual(unzoomedNeed!.height * 2 - 1)
+  const home = page.getByTestId('learn-adaptive-home')
+  expect(await home.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
+  for (const control of [need, url, page.getByTestId('learn-adaptive-start')]) {
+    const bounds = await control.boundingBox()
+    expect(bounds).not.toBeNull()
+    expect(bounds!.x).toBeGreaterThanOrEqual(0)
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(1281)
+  }
 })
 
 test('routed diagnostic persists the learner response through the disposable backend', async ({ page, request }) => {
