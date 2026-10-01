@@ -7,7 +7,7 @@ import type { FunctionArgs } from 'convex/server'
 
 const modules = import.meta.glob('./**/*.ts')
 const userId = 'https://auth.example.com|handoff-owner'
-afterEach(() => vi.unstubAllEnvs())
+afterEach(() => { vi.unstubAllEnvs(); vi.useRealTimers() })
 
 async function fixture() {
   vi.stubEnv('LEARN_V2_ENABLED', 'true')
@@ -25,6 +25,7 @@ async function fixture() {
     const sessionContentId = await ctx.db.insert('sessionContent', { userId, studySessionId, studyPlanRevisionId, blueprintRevisionId, objectiveId, revision: 11, status: 'published', createdAt: 1, publishedAt: 1 })
     await ctx.db.patch(studySessionId, { startedSessionContentId: sessionContentId, startedSessionContentRevision: 11 })
     const attemptId = await ctx.db.insert('masteryAttempts', { userId, blueprintRevisionId, objectiveId, studySessionId, sessionContentId, studyPlanRevisionId, activityContractVersion: 'learn-v2.mastery-attempt.v1', attemptedAt: 2, idempotencyKey: 'original-authoritative-attempt', serverScorePercent: 80, contentRevision: 11, sessionRevision: 7, planRevision: 2, planRecordRevision: 5, blueprintRecordRevision: 3, result: 'independent', masteryRecordRevision: 1 })
+    await ctx.db.insert('masteryRecords', { userId, blueprintRevisionId, objectiveId, state: 'independent', recordRevision: 1, lastAttemptId: attemptId, lastAttemptAt: 2, updatedAt: 2 })
     const threadId = await ctx.db.insert('learningThreads', { userId, originalNeed: 'Explain a mechanism', intent: 'master', availableTime: '15', authorityKind: 'v2_mission', learningVoidId, sourceScope: { kind: 'folder', sourceId: String(folderId) }, evidenceState: 'ready', lifecycle: 'active', revision: 1, createdAt: 1, updatedAt: 1 })
     const activityId = await ctx.db.insert('learningThreadActivities', {
       userId, threadId, activityId: 'accepted-activity', boundaryOrdinal: 1, planRevision: 1, activityClass: 'factual', status: 'feedback',
@@ -35,6 +36,12 @@ async function fixture() {
     const jobId = await ctx.db.insert('learnJobs', { userId, learningVoidId, blueprintRevisionId, studyPlanRevisionId, studySessionId, adaptiveThreadId: threadId, adaptiveActivityId: activityId, type: 'mastery_scoring', status: 'succeeded', revision: 2, idempotencyKey: 'original-authoritative-attempt', checkpoint: `attempt:${attemptId}` })
     await ctx.db.patch(activityId, { scoringJobId: jobId })
     await ctx.db.patch(threadId, { currentActivityId: activityId })
+    for (const eventType of ['activity_completed', 'representative_pass'] as const) await ctx.db.insert('learnActivityEvents', {
+      userId, threadId, activityId, eventType, eventVersion: `${eventType}.v1`, taxonomyVersion: 'learn-adaptive.activity-events.v6',
+      occurredAt: 2, sourceVersion: 'learn-v2.mastery-attempt.v1', contractVersion: 'learn-adaptive.activity-contract.v1',
+      reasonCode: 'server_scored_attempt_committed', outcomeCode: eventType === 'activity_completed' ? 'completed' : 'pass',
+      metadata: { activityClass: 'factual', boundaryOrdinal: 1, masteryState: 'independent' }, dedupeKeyHash: `sha256:${(eventType === 'activity_completed' ? 'c' : 'd').repeat(64)}`,
+    })
     return { folderId, threadId, activityId, attemptId, jobId, sessionContentId }
   })
   return { t, owner: t.withIdentity({ tokenIdentifier: userId }), ids }
@@ -43,6 +50,9 @@ async function fixture() {
 test('Quiz then Chat preserve two genuine origins of one accepted learning attempt across retries', async () => {
   const { owner, ids } = await fixture()
   const before = await owner.query(api.dataExport.getUserDataPage, { collection: 'masteryAttempts', paginationOpts: { cursor: null, numItems: 8 } })
+  const masteryBefore = await owner.query(api.dataExport.getUserDataPage, { collection: 'masteryRecords', paginationOpts: { cursor: null, numItems: 8 } })
+  const jobsBefore = await owner.query(api.dataExport.getUserDataPage, { collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })
+  const eventsBefore = await owner.query(api.dataExport.getUserDataPage, { collection: 'learnActivityEvents', paginationOpts: { cursor: null, numItems: 8 } })
   const quizArgs = { threadId: ids.threadId, attemptId: ids.attemptId, expectedRevision: 1, idempotencyKey: 'project-to-quiz-0001' }
   const quiz = await owner.mutation(api.learnAdaptive.projectAcceptedAttemptToQuiz, quizArgs)
   expect(quiz).toMatchObject({ kind: 'ok', value: { attemptId: ids.attemptId, activityDocumentId: ids.activityId } })
@@ -65,6 +75,15 @@ test('Quiz then Chat preserve two genuine origins of one accepted learning attem
   expect(thread?.currentActivity).toMatchObject({ id: 'accepted-activity', boundaryOrdinal: 1, attemptOrigins: expect.arrayContaining([expect.objectContaining({ sourceFeature: 'quiz', sourceStatus: 'available' }), expect.objectContaining({ sourceFeature: 'chat', sourceStatus: 'available' })]) })
   expect(thread?.history).toEqual([])
   expect(await owner.query(api.dataExport.getUserDataPage, { collection: 'masteryAttempts', paginationOpts: { cursor: null, numItems: 8 } })).toEqual(before)
+  expect(await owner.query(api.dataExport.getUserDataPage, { collection: 'masteryRecords', paginationOpts: { cursor: null, numItems: 8 } })).toEqual(masteryBefore)
+  expect(await owner.query(api.dataExport.getUserDataPage, { collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })).toEqual(jobsBefore)
+  const eventsAfter = await owner.query(api.dataExport.getUserDataPage, { collection: 'learnActivityEvents', paginationOpts: { cursor: null, numItems: 8 } })
+  expect(eventsAfter.page.filter(event => 'eventType' in event && event.eventType !== 'contribution_recorded')).toEqual(eventsBefore.page)
+  const exportedOrigins = await owner.query(api.dataExport.getUserDataPage, { collection: 'learningThreadContributions', paginationOpts: { cursor: null, numItems: 8 } })
+  const lineage = exportedOrigins.page.map(row => 'attemptLineage' in row ? row.attemptLineage : null)
+  expect(lineage).toHaveLength(2)
+  expect(lineage[0]).toMatchObject({ version: 'learn-adaptive.accepted-attempt-projection.v1', status: 'verified', key: expect.stringMatching(/^sha256:[a-f0-9]{64}$/) })
+  expect(lineage[1]).toEqual(lineage[0])
 })
 
 test('a result handoff exports useful records without its private authority pins', async () => {
@@ -97,13 +116,15 @@ test('new request keys recover the same Quiz and Chat records without another ac
   expect(await owner.query(api.conversations.listRecentForUser, {})).toHaveLength(1)
   expect(await owner.query(api.messages.listByConversation, { conversationId: chat.value.conversationId })).toHaveLength(1)
   const events = await owner.query(api.dataExport.getUserDataPage, { collection: 'learnActivityEvents', paginationOpts: { cursor: null, numItems: 8 } })
-  expect(events.page.map(event => 'eventType' in event ? event.eventType : null)).toEqual(['contribution_recorded', 'contribution_recorded'])
+  expect(events.page.filter(event => 'eventType' in event && event.eventType === 'contribution_recorded')).toHaveLength(2)
+  expect(events.page.filter(event => 'eventType' in event && typeof event.eventType === 'string' && ['activity_completed', 'representative_pass'].includes(event.eventType))).toHaveLength(2)
   expect(await owner.query(api.dataExport.getUserDataPage, { collection: 'learningThreadActivities', paginationOpts: { cursor: null, numItems: 8 } })).toEqual(authorityBefore)
   expect(await owner.query(api.dataExport.getUserDataPage, { collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })).toEqual(jobsBefore)
 })
 
 test.each(['quiz', 'chat'] as const)('deleting the derived %s origin preserves canonical authority and prevents resurrection', async feature => {
-  const { owner, ids } = await fixture()
+  vi.useFakeTimers()
+  const { t, owner, ids } = await fixture()
   const attemptsBefore = await owner.query(api.dataExport.getUserDataPage, { collection: 'masteryAttempts', paginationOpts: { cursor: null, numItems: 8 } })
   const authorityBefore = await owner.query(api.dataExport.getUserDataPage, { collection: 'learningThreadActivities', paginationOpts: { cursor: null, numItems: 8 } })
   const quizArgs = { threadId: ids.threadId, attemptId: ids.attemptId, expectedRevision: 1, idempotencyKey: 'delete-origin-quiz-0001' }
@@ -114,6 +135,7 @@ test.each(['quiz', 'chat'] as const)('deleting the derived %s origin preserves c
   if (chat.kind !== 'ok') throw new Error('Expected Chat handoff')
   if (feature === 'quiz') await owner.mutation(api.quizzes.deleteQuiz, { quizId: quiz.value.quizId })
   else await owner.mutation(api.conversations.deleteConversation, { id: chat.value.conversationId })
+  await t.finishAllScheduledFunctions(vi.runAllTimers)
   const contributions = await owner.query(api.learnAdaptive.listThreadContributions, { threadId: ids.threadId, paginationOpts: { cursor: null, numItems: 8 } })
   expect(contributions.page.find(row => row.sourceFeature === feature)?.sourceStatus).toBe('source_unavailable')
   expect(contributions.page.find(row => row.sourceFeature !== feature)?.sourceStatus).toBe('available')

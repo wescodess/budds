@@ -3,6 +3,7 @@ import { v } from 'convex/values'
 import { query } from './_generated/server'
 import { requireAuth } from './lib/auth'
 import { ADAPTIVE_LEARN_EXPORT_COLLECTIONS } from '../shared/adaptive-learn-storage-manifest'
+import { exportAttemptLineage } from './lib/learnAdaptiveHandoff'
 
 // A single Convex document can approach 1 MiB. Keep pages comfortably below
 // the 16 MiB transaction and return-value ceilings even at the per-row limit.
@@ -285,7 +286,9 @@ export const getUserDataPage = query({
       }
       case 'learningThreadContributions': {
         const result = await ctx.db.query('learningThreadContributions').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
-        return { ...result, page: result.page.map(({ provenanceKey: _key, evidenceSnapshotId: _snapshot, idempotencyKeyHash: _idempotency, requestFingerprint: _fingerprint, attemptProjection: _projection, ...row }) => row) }
+        return { ...result, page: await Promise.all(result.page.map(async ({ provenanceKey: _key, evidenceSnapshotId: _snapshot, idempotencyKeyHash: _idempotency, requestFingerprint: _fingerprint, attemptProjection, ...row }) => ({
+          ...row, ...(attemptProjection ? { attemptLineage: await exportAttemptLineage(ctx, userId, attemptProjection) } : {}),
+        }))) }
       }
       case 'learnActivityEvidenceLinks': {
         const result = await ctx.db.query('learnActivityEvidenceLinks').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)

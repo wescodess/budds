@@ -75,6 +75,17 @@ export async function verifyAttemptProjection(ctx: QueryCtx | MutationCtx, userI
   return authority && sameAttemptProjection(authority.projection, projection) ? authority : null
 }
 
+// Owner export can show that origins share an accepted boundary without
+// disclosing the internal pins. This read-only key is never an API authority.
+export async function exportAttemptLineage(ctx: QueryCtx, userId: string, projection: AcceptedAttemptProjection) {
+  return { version: projection.version,
+    key: await projectionDigest(JSON.stringify([projection.version, userId, projection.threadId, projection.activityId,
+      projection.attemptId, projection.scoringJobId, projection.studySessionId, projection.sessionContentId,
+      projection.contentRevision, projection.sessionContentInputDigest, projection.studyPlanRevisionId, projection.planRevision,
+      projection.planRecordRevision, projection.blueprintRevisionId, projection.blueprintRecordRevision, projection.activityInputDigest])),
+    status: await verifyAttemptProjection(ctx, userId, projection) ? 'verified' as const : 'unavailable' as const }
+}
+
 export async function safeAttemptProjection(ctx: QueryCtx | MutationCtx, userId: string, projection: AcceptedAttemptProjection) {
   const authority = await verifyAttemptProjection(ctx, userId, projection)
   return { version: projection.version, attemptId: projection.attemptId, threadId: projection.threadId,
