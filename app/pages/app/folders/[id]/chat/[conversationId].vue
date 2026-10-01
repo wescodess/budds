@@ -16,13 +16,19 @@ const conversationIdRef = computed<Id<'conversations'> | null>(() => {
 const {
   messages, loading, streaming, thinking, error,
   hasIndexedDocuments, selectedModel, interjectionInFlight,
-  sendMessage, selectModel, loadConversation, startNewConversation,
+  sendMessage, selectModel, loadConversation, startNewConversation, clearMessages,
 } = useChat(folderId, conversationIdRef)
+
+const app = import.meta.client ? useNuxtApp() : null
+const authReady = import.meta.client ? ((app!.$convexAuthReady as Ref<boolean> | undefined) ?? ref(false)) : ref(false)
+const authenticated = import.meta.client ? ((app!.$convexAuthenticated as Ref<boolean> | undefined) ?? ref(false)) : ref(false)
+const ready = computed(() => authReady.value && authenticated.value)
 
 const workspaceRef = ref<{ focus: () => void } | null>(null)
 
-watch(conversationIdRef, async (next, prev) => {
-  if (next === prev) return
+watch([conversationIdRef, ready], async ([next, isReady]) => {
+  clearMessages()
+  if (!isReady) return
   if (next) {
     try {
       await loadConversation(next)

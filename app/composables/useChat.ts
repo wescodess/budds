@@ -81,9 +81,11 @@ export function useChat(
   const interjectionInFlight = ref(false)
   const currentConversationId = ref<Id<'conversations'> | null>(conversationId?.value ?? null)
   const audioOverviewStore = useAudioOverviewStore()
+  let conversationLoadEpoch = 0
 
   if (conversationId) {
     watch(conversationId, (next) => {
+      conversationLoadEpoch += 1
       currentConversationId.value = next
     })
   }
@@ -429,6 +431,7 @@ export function useChat(
 
   async function loadConversation(conversationIdToLoad: Id<'conversations'>) {
     if (!import.meta.client || !convexClient) return
+    const loadEpoch = ++conversationLoadEpoch
     const rows = await convexClient.query(api.messages.listByConversation, {
       conversationId: conversationIdToLoad,
     }) as Array<{
@@ -437,6 +440,8 @@ export function useChat(
       sources?: Source[]
       interjectionContext?: InterjectionContext
     }>
+
+    if (loadEpoch !== conversationLoadEpoch) return
 
     messages.value = rows.map(r => ({
       role: r.role,
@@ -449,6 +454,7 @@ export function useChat(
   }
 
   function clearMessages() {
+    conversationLoadEpoch += 1
     messages.value = []
     error.value = null
   }
