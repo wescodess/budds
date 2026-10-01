@@ -469,6 +469,84 @@ describe('LA2-12 server-scored mastery attempts', () => {
     }
   })
 
+  test('blocks a stalled adaptive provider at the 90-second deadline without redispatch or inferred mastery', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-30T16:00:00.000Z'))
+    const originalManifest = structuredClone(ADAPTIVE_V2_PILOT_MANIFEST)
+    // Native AbortSignal.timeout can bypass fake timers. Instrument only the
+    // clock boundary; the provider receives and rejects on a real abort signal.
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((delay) => {
+      const controller = new AbortController()
+      setTimeout(() => controller.abort(new DOMException('Provider deadline elapsed', 'TimeoutError')), delay)
+      return controller.signal
+    })
+    let providerSignal: AbortSignal | null = null
+    let dispatched!: () => void
+    const dispatchObserved = new Promise<void>((resolve) => { dispatched = resolve })
+    const provider = vi.fn((_url: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      if (!init?.signal) throw new Error('Expected a provider deadline signal')
+      providerSignal = init.signal
+      init.signal.addEventListener('abort', () => reject(init.signal!.reason), { once: true })
+      dispatched()
+    }))
+    vi.stubGlobal('fetch', provider)
+    try {
+      const setup = await fixture()
+      const activity = await addAdaptiveActivity(setup, 'adaptive-provider-timeout')
+      await setup.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true })
+      // Test-only approval configuration; all admission and quota policy code
+      // remains real, and the shipped manifest is restored in finally.
+      Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, { pilotApproved: true,
+        cohort: { ...originalManifest.cohort, subjectHashes: ['sha256:6457ca8dca6676a27a6948bfc1a2f01f6f8e3f7f204da3ff4deff782b6691c95'] },
+        modelPolicies: [{ model: 'test/mastery-model', inputUsdPerMillionTokens: 0.1, outputUsdPerMillionTokens: 0.1 }],
+      })
+      vi.stubEnv('LEARN_ADAPTIVE_V2_PILOT_MANIFEST', 'adaptive-v2-pilot.v1')
+      vi.stubEnv('OPENROUTER_API_KEY', 'test-key')
+      vi.stubEnv('CF_ACCOUNT_ID', 'test-account')
+      vi.stubEnv('CLOUDFLARE_AI_GATEWAY_ID', 'test-gateway')
+      const { tokenIdentifier: _token, scorerVerdict: _verdict, ...attempt } = setup.args('adaptive-provider-timeout-key', 80)
+      await setup.t.run(ctx => ctx.db.patch(activity.activityDocumentId, { submittedResponse: attempt.response, submittedConfidence: attempt.confidence }))
+      const request = { threadId: activity.threadId, activityId: 'adaptive-provider-timeout', ...attempt }
+      const exportPage = (collection: 'learnActivityEvents' | 'masteryAttempts' | 'masteryRecords') => setup.owner.query(api.dataExport.getUserDataPage, { collection, paginationOpts: { cursor: null, numItems: 8 } })
+      let settled = false
+      const submission = setup.owner.action(api.learnAdaptive.submitResponse, request).finally(() => { settled = true })
+      await Promise.race([dispatchObserved, submission.then((result) => {
+        throw new Error(`Expected stalled provider dispatch, received ${JSON.stringify(result)}`)
+      })])
+      expect(timeout).toHaveBeenCalledExactlyOnceWith(90_000)
+      expect(provider).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(89_999)
+      expect(providerSignal).toMatchObject({ aborted: false })
+      expect(settled).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(providerSignal).toMatchObject({ aborted: true, reason: { name: 'TimeoutError' } })
+      await expect(submission).resolves.toMatchObject({ kind: 'blocked', code: 'provider_outcome_requires_reconciliation', retryable: false })
+      const events = await exportPage('learnActivityEvents')
+      expect(events.isDone).toBe(true)
+      expect(events.page).toEqual([
+        expect.objectContaining({ threadId: activity.threadId, eventType: 'meaningful_response', eventVersion: 'meaningful_response.v1', metadata: { activityClass: 'factual', boundaryOrdinal: 1, planRevision: 1 } }),
+        expect.objectContaining({ threadId: activity.threadId, eventType: 'provider_ambiguity', eventVersion: 'provider_ambiguity.v1', metadata: { providerStage: 'reconciliation' } }),
+      ])
+      for (const event of events.page) expect(event).not.toHaveProperty('dedupeKeyHash')
+      expect(JSON.stringify(events.page)).not.toContain(attempt.response)
+      expect(JSON.stringify(events.page)).not.toContain(attempt.idempotencyKey)
+      for (let retry = 0; retry < 2; retry++) {
+        await expect(setup.owner.action(api.learnAdaptive.submitResponse, request)).resolves.toMatchObject({ kind: 'blocked', code: 'provider_outcome_requires_reconciliation', retryable: false })
+      }
+      expect(provider).toHaveBeenCalledTimes(1)
+      expect(await exportPage('learnActivityEvents')).toEqual(events)
+      expect(await exportPage('masteryAttempts')).toMatchObject({ page: [], isDone: true })
+      expect(await exportPage('masteryRecords')).toMatchObject({ page: [], isDone: true })
+    }
+    finally {
+      Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, originalManifest)
+      vi.unstubAllEnvs()
+      timeout.mockRestore()
+      vi.unstubAllGlobals()
+      vi.useRealTimers()
+    }
+  })
+
   test('turns an expired post-dispatch lease into a reconciliation block', async () => {
     const { t, args } = await fixture()
     const { scorerVerdict: _scorerVerdict, ...request } = args('crashed-dispatch', 80)
@@ -544,6 +622,11 @@ describe('LA2-12 server-scored mastery attempts', () => {
     await setup.t.mutation(internal.learnV2Mastery.markMasteryScoringDispatched, { tokenIdentifier: OWNER.tokenIdentifier, jobId: acquired.jobId, leaseToken: acquired.leaseToken })
     await setup.t.run(ctx => ctx.db.patch(acquired.jobId, { leaseExpiresAt: Date.now() - 1 }))
 
+    const exportPage = (collection: 'learnActivityEvents' | 'masteryAttempts' | 'masteryRecords') => setup.owner.query(api.dataExport.getUserDataPage, { collection, paginationOpts: { cursor: null, numItems: 8 } })
+    const attemptsBeforeRecovery = await exportPage('masteryAttempts')
+    const masteryBeforeRecovery = await exportPage('masteryRecords')
+    expect(attemptsBeforeRecovery).toMatchObject({ page: [], isDone: true })
+    expect(masteryBeforeRecovery).toMatchObject({ page: [], isDone: true })
     await expect(setup.t.mutation(internal.learnV2Mastery.recoverExpiredMasteryScoringJobs, {})).resolves.toMatchObject({ blocked: 1 })
     const state = await setup.t.run(async ctx => ({
       job: await ctx.db.get(acquired.jobId),
@@ -560,6 +643,15 @@ describe('LA2-12 server-scored mastery attempts', () => {
     expect(await setup.t.run(ctx => ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('threadId', activity.threadId)).take(8))).toEqual([
       expect.objectContaining({ eventType: 'provider_ambiguity', eventVersion: 'provider_ambiguity.v1', metadata: { providerStage: 'reconciliation' } }),
     ])
+    const ambiguityExport = await exportPage('learnActivityEvents')
+    expect(ambiguityExport.isDone).toBe(true)
+    expect(ambiguityExport.page).toEqual([
+      expect.objectContaining({ threadId: activity.threadId, eventType: 'provider_ambiguity', eventVersion: 'provider_ambiguity.v1', metadata: { providerStage: 'reconciliation' } }),
+    ])
+    expect(ambiguityExport.page[0]).not.toHaveProperty('dedupeKeyHash')
+    expect(JSON.stringify(ambiguityExport.page)).not.toContain(request.response)
+    expect(JSON.stringify(ambiguityExport.page)).not.toContain(request.idempotencyKey)
+    await expect(setup.t.mutation(internal.learnV2Mastery.recoverExpiredMasteryScoringJobs, {})).resolves.toEqual({ recovered: 0, blocked: 0 })
     await setup.t.run(async (ctx) => {
       await ctx.db.patch(setup.ids.sessionId, { revision: 8 })
       await ctx.db.patch(activity.activityDocumentId, { status: 'ended' })
@@ -572,8 +664,13 @@ describe('LA2-12 server-scored mastery attempts', () => {
     process.env.LEARN_ADAPTIVE_V2_PILOT_MANIFEST = 'expired-or-revoked-manifest'
     const { tokenIdentifier: _token, ...publicRequest } = request
     try {
-      await expect(setup.owner.action(api.learnAdaptive.submitResponse, { threadId: activity.threadId, activityId: 'adaptive-reconciliation', ...publicRequest }))
-        .resolves.toMatchObject({ kind: 'blocked', code: 'provider_outcome_requires_reconciliation', retryable: false })
+      for (let retry = 0; retry < 2; retry++) {
+        await expect(setup.owner.action(api.learnAdaptive.submitResponse, { threadId: activity.threadId, activityId: 'adaptive-reconciliation', ...publicRequest }))
+          .resolves.toMatchObject({ kind: 'blocked', code: 'provider_outcome_requires_reconciliation', retryable: false })
+      }
+      expect(await exportPage('learnActivityEvents')).toEqual(ambiguityExport)
+      expect(await exportPage('masteryAttempts')).toEqual(attemptsBeforeRecovery)
+      expect(await exportPage('masteryRecords')).toEqual(masteryBeforeRecovery)
       expect(await setup.t.run(ctx => ctx.db.get(activity.activityDocumentId))).toMatchObject({ status: 'ended', reconciliationReason: 'provider_outcome_requires_reconciliation' })
     }
     finally { delete process.env.LEARN_ADAPTIVE_V2_PILOT_MANIFEST }
