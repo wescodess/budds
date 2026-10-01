@@ -51,6 +51,8 @@ test('Quiz then Chat preserve two genuine origins of one accepted learning attem
   const chat = await owner.mutation(api.learnAdaptive.handoffQuizAttemptToChat, { threadId: ids.threadId, quizId: quiz.value.quizId, expectedRevision: quiz.revision, idempotencyKey: 'handoff-to-chat-0001' })
   if (chat.kind !== 'ok') throw new Error('Expected Chat handoff')
   expect(await owner.query(api.quizzes.getWithQuestions, { id: quiz.value.quizId })).toMatchObject({ quiz: { attemptProjection: { attemptId: ids.attemptId } } })
+  const principal = await owner.query(api.users.getUser, {})
+  expect(await owner.query(api.quizzes.getAcceptedAttemptProjection, { quizId: quiz.value.quizId })).toMatchObject({ ownerId: principal?._id })
   expect(await owner.query(api.messages.listByConversation, { conversationId: chat.value.conversationId })).toMatchObject([{ _id: chat.value.messageId, attemptProjection: { attemptId: ids.attemptId } }])
   const contributions = await owner.query(api.learnAdaptive.listThreadContributions, { threadId: ids.threadId, paginationOpts: { cursor: null, numItems: 8 } })
   expect(contributions.page).toHaveLength(2)

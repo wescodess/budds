@@ -324,9 +324,11 @@ export const getAcceptedAttemptProjection = query({
     if (!userId) return null
     const quiz = await ctx.db.get(args.quizId)
     if (!quiz || quiz.userId !== userId || quiz.deletedAt !== undefined || !quiz.attemptProjection) return null
+    const owner = await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique()
+    if (!owner) return null
     const safe = await safeAttemptProjection(ctx, userId, quiz.attemptProjection)
     const thread = await ctx.db.get(quiz.attemptProjection.threadId)
-    return { ...safe, quizId: quiz._id, folderId: quiz.folderId, threadRevision: thread?.userId === userId && thread.deletionStartedAt === undefined ? thread.revision : null }
+    return { ...safe, ownerId: owner._id, quizId: quiz._id, folderId: quiz.folderId, threadRevision: thread?.userId === userId && thread.deletionStartedAt === undefined ? thread.revision : null }
   },
 })
 
