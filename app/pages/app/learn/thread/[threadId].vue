@@ -450,7 +450,7 @@ function leave() { void router.push(safeDestination.value) }
 </script>
 
 <template>
-  <section aria-label="Learning thread" data-testid="learn-adaptive-thread-route" class="min-h-full bg-[var(--learn-thread-surface)]">
+  <section aria-label="Learning thread" data-testid="learn-adaptive-thread-route" class="learn-adaptive-surface min-h-full bg-[var(--learn-thread-surface)]">
     <section v-if="checkingAccess" class="mx-auto max-w-3xl p-6" aria-live="polite">Checking learning access…</section>
     <section v-else-if="!allowed" class="mx-auto max-w-3xl p-6" data-testid="learn-adaptive-thread-denied">
       <p role="status">This learning thread is not available for this account.</p>

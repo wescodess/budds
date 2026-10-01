@@ -107,8 +107,8 @@ function requestPromotion(kind: 'review' | 'mastery', candidate: NonNullable<Mem
     <SheetTrigger as-child>
       <button ref="trigger" type="button" data-testid="learn-memory-open" class="min-h-11 rounded-lg border border-border px-4 text-sm font-medium text-[var(--learn-action)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)]" @click="externalReturnFocus = null">Memory</button>
     </SheetTrigger>
-    <SheetContent side="right" aria-modal="true" data-testid="learn-memory-drawer" class="w-screen max-w-none gap-4 overflow-y-auto bg-[var(--learn-context-surface)] p-4 md:w-[32rem] md:max-w-md" @close-auto-focus="restoreSourceFocus">
-      <header class="pr-8">
+    <SheetContent side="right" overlay-class="learn-adaptive-surface" aria-modal="true" data-testid="learn-memory-drawer" class="learn-adaptive-surface w-screen max-w-none gap-4 overflow-y-auto bg-[var(--learn-context-surface)] p-4 md:w-[32rem] md:max-w-md" @close-auto-focus="restoreSourceFocus">
+      <header class="pr-14">
         <SheetTitle class="font-dm-sans text-xl font-semibold">Learning memory</SheetTitle>
         <SheetDescription>Review and change what you explicitly asked Budds to remember. Past learning results stay read-only.</SheetDescription>
       </header>

@@ -290,7 +290,24 @@
   }
 }
 
+.learn-adaptive-surface [data-slot='sheet-close'] {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .learn-adaptive-surface,
+  .learn-adaptive-surface * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
 @media (forced-colors: active) {
+  .learn-adaptive-surface :is(a[href], button, input, select, textarea, [tabindex]):focus-visible,
   .learn-adaptive-recovery-action:focus-visible {
     outline: 2px solid Highlight;
     outline-offset: 2px;
