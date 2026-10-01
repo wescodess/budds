@@ -13,7 +13,7 @@ const pending = ref<FunctionArgs<typeof api.learnAdaptive.handoffQuizAttemptToCh
 const busy = ref(false)
 const error = ref('')
 let epoch = 0
-watch(() => [props.ownerId, props.projection.quizId, props.projection.threadId, props.projection.handoffAllowed], () => {
+watch([() => props.ownerId, () => props.projection.quizId, () => props.projection.threadId, () => props.projection.handoffAllowed], () => {
   epoch += 1
   pending.value = null
   busy.value = false

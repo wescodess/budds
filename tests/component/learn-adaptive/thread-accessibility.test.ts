@@ -151,7 +151,14 @@ describe('mounted Home and Thread accessibility', () => {
     await page.get('[data-testid="learn-accepted-attempt-open-quiz"]').trigger('click')
     await nextTick()
     expect(page.text()).toContain('The outcome could not be confirmed.')
-    projection.value.thread.revision = 3
+    // A real query notification replaces the projection objects even when
+    // the owner, accepted attempt, and eligibility are unchanged.
+    projection.value = {
+      ...projection.value,
+      thread: { ...projection.value.thread, revision: 3 },
+      currentActivity: { ...projection.value.currentActivity,
+        acceptedAttemptHandoff: { ...projection.value.currentActivity.acceptedAttemptHandoff! } },
+    }
     await nextTick()
     await page.get('[data-testid="learn-accepted-attempt-open-quiz"]').trigger('click')
     await nextTick()

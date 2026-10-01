@@ -17,7 +17,7 @@ const busy = ref(false)
 const error = ref('')
 const pending = ref<FunctionArgs<typeof api.learnAdaptive.projectAcceptedAttemptToQuiz> | null>(null)
 let epoch = 0
-watch(() => [props.ownerId, props.threadId, props.candidate.attemptId, props.candidate.eligible], () => {
+watch([() => props.ownerId, () => props.threadId, () => props.candidate.attemptId, () => props.candidate.eligible], () => {
   epoch += 1
   pending.value = null
   busy.value = false
