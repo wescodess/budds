@@ -1,8 +1,34 @@
-import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
+import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 
 const token = process.env.BUDDS_E2E_AUTH_TOKEN ?? 'e2e-local-token-please-do-not-use-outside-tests'
 
-async function saveRoutedDiagnostic(page: Page, request: APIRequestContext) {
+async function tabTo(page: Page, control: Locator) {
+  for (let step = 0; step < 80; step++) {
+    if (await control.evaluate(element => element === document.activeElement)) {
+      const focus = await control.evaluate(element => {
+        const style = getComputedStyle(element)
+        return { visible: element.matches(':focus-visible'), outline: style.outlineStyle !== 'none' && Number.parseFloat(style.outlineWidth) > 0, ring: style.boxShadow !== 'none' }
+      })
+      expect(focus.visible).toBe(true)
+      expect(focus.outline || focus.ring).toBe(true)
+      return
+    }
+    await page.keyboard.press('Tab')
+  }
+  throw new Error('Learning control was not reachable through keyboard traversal')
+}
+
+async function saveRoutedDiagnostic(page: Page, request: APIRequestContext, keyboardOnly = false) {
+  async function activate(control: Locator) {
+    if (!keyboardOnly) return control.click()
+    await tabTo(page, control)
+    await page.keyboard.press('Enter')
+  }
+  async function enter(control: Locator, value: string) {
+    if (!keyboardOnly) return control.fill(value)
+    await tabTo(page, control)
+    await page.keyboard.insertText(value)
+  }
   const bootstrap = await request.post('/api/e2e/session', {
     headers: { 'x-budds-e2e-token': token },
     data: { email: `adaptive-${Date.now()}@e2e.budds.invalid`, password: 'disposable-e2e-password', name: 'Adaptive Browser Test' },
@@ -26,18 +52,18 @@ async function saveRoutedDiagnostic(page: Page, request: APIRequestContext) {
   await page.reload({ waitUntil: 'domcontentloaded' })
   await expect(page.getByTestId('learn-adaptive-home')).toHaveAttribute('data-hydrated', 'true')
   await expect(page.getByRole('main').last()).toHaveAttribute('data-owner-ready', 'true')
-  await page.getByTestId('learn-adaptive-need').fill('Explain why an orbiting satellite does not fall straight down.')
-  await page.getByTestId('learn-adaptive-start').click()
+  await enter(page.getByTestId('learn-adaptive-need'), 'Explain why an orbiting satellite does not fall straight down.')
+  await activate(page.getByTestId('learn-adaptive-start'))
   await expect(page.getByTestId('learn-initial-decision')).toBeVisible({ timeout: 30_000 })
-  if (await page.getByTestId('learn-clarification-skip').isVisible()) await page.getByTestId('learn-clarification-skip').click()
+  if (await page.getByTestId('learn-clarification-skip').isVisible()) await activate(page.getByTestId('learn-clarification-skip'))
   await expect(page.getByTestId('learn-adaptive-open-diagnostic')).toBeVisible()
-  await page.getByTestId('learn-adaptive-open-diagnostic').click()
+  await activate(page.getByTestId('learn-adaptive-open-diagnostic'))
   await expect(page).toHaveURL(/\/app\/learn\/thread\/[^/]+$/)
   await expect(page.getByTestId('learn-diagnostic-canvas')).toBeVisible()
-  await page.getByTestId('learn-diagnostic-start').click()
+  await activate(page.getByTestId('learn-diagnostic-start'))
   const response = 'The satellite keeps falling while its sideways velocity carries it around Earth.'
-  await page.getByTestId('learn-diagnostic-response').fill(response)
-  await page.getByTestId('learn-diagnostic-submit').click()
+  await enter(page.getByTestId('learn-diagnostic-response'), response)
+  await activate(page.getByTestId('learn-diagnostic-submit'))
   await expect(page.getByTestId('learn-diagnostic-saved')).toContainText(response)
   return { threadUrl: page.url(), response }
 }
@@ -47,6 +73,30 @@ test('routed diagnostic persists the learner response through the disposable bac
   const { response } = await saveRoutedDiagnostic(page, request)
   await page.reload({ waitUntil: 'domcontentloaded' })
   await expect(page.getByTestId('learn-diagnostic-saved')).toContainText(response)
+})
+
+test('keyboard-only Home to Thread journey saves a response and restores drawer focus', async ({ page, request }) => {
+  test.setTimeout(5 * 60_000)
+  const { response } = await saveRoutedDiagnostic(page, request, true)
+  for (const drawer of [
+    { trigger: 'learn-memory-open', content: 'learn-memory-drawer', name: 'Learning memory' },
+    { trigger: 'learn-evidence-open', content: 'learn-evidence-drawer', name: 'Evidence' },
+  ]) {
+    const trigger = page.getByTestId(drawer.trigger)
+    await tabTo(page, trigger)
+    await page.keyboard.press('Enter')
+    const dialog = page.getByTestId(drawer.content)
+    await expect(dialog).toBeVisible()
+    await expect(dialog).toHaveAccessibleName(drawer.name)
+    for (let step = 0; step < 16; step++) {
+      await page.keyboard.press('Tab')
+      expect(await dialog.evaluate(element => element.contains(document.activeElement))).toBe(true)
+    }
+    await page.keyboard.press('Escape')
+    await expect(dialog).toBeHidden()
+    await expect(trigger).toBeFocused()
+    await expect(page.getByTestId('learn-diagnostic-saved')).toContainText(response)
+  }
 })
 
 test('server-owned rollback hides the routed Canvas and restores saved work', async ({ page, request }) => {
