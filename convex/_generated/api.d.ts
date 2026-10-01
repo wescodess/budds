@@ -49,6 +49,7 @@ import type * as learnActivityEventRetention from "../learnActivityEventRetentio
 import type * as learnAdaptiveClarifications from "../learnAdaptiveClarifications.js";
 import type * as learnAdaptiveDrafts from "../learnAdaptiveDrafts.js";
 import type * as learnAdaptiveEvidence from "../learnAdaptiveEvidence.js";
+import type * as learnAdaptiveExperiment from "../learnAdaptiveExperiment.js";
 import type * as learnAdaptiveRecovery from "../learnAdaptiveRecovery.js";
 import type * as learnAdaptiveRouting from "../learnAdaptiveRouting.js";
 import type * as learnProfile from "../learnProfile.js";
@@ -148,6 +149,7 @@ declare const fullApi: ApiFromModules<{
   learnAdaptiveClarifications: typeof learnAdaptiveClarifications;
   learnAdaptiveDrafts: typeof learnAdaptiveDrafts;
   learnAdaptiveEvidence: typeof learnAdaptiveEvidence;
+  learnAdaptiveExperiment: typeof learnAdaptiveExperiment;
   learnAdaptiveRecovery: typeof learnAdaptiveRecovery;
   learnAdaptiveRouting: typeof learnAdaptiveRouting;
   learnProfile: typeof learnProfile;

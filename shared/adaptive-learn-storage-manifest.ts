@@ -14,6 +14,12 @@ import { ADAPTIVE_ROUTER_VERSION } from './learn-adaptive-router'
 
 export const ADAPTIVE_LEARN_STORAGE_MANIFEST = [
   {
+    table: 'learnAdaptiveExperimentAssignments',
+    ownerIndex: 'by_userId',
+    export: 'redacted_bounded',
+    accountDeletion: 'delete',
+  },
+  {
     table: 'learningThreadContributions',
     ownerIndex: 'by_userId',
     parentIndex: 'by_userId_and_threadId_and_createdAt',
@@ -103,7 +109,7 @@ export const ADAPTIVE_LEARN_STORAGE_MANIFEST = [
 ] as const
 
 export const ADAPTIVE_LEARN_ACCOUNT_DELETE_ORDER = ADAPTIVE_LEARN_STORAGE_MANIFEST.map(entry => entry.table)
-export const ADAPTIVE_LEARN_EXPORT_COLLECTIONS = ['learningThreadContributions', 'learningThreads', 'learningThreadActivities', 'learningThreadArtifacts', 'learnActivityEvidenceLinks', 'learnActivityDecisions', 'learnActivityEvents', 'learnActivityCommandReceipts', 'learnAdaptiveThreadDeletionJobs', 'learnActivityOverrides', 'learningThreadPreferences', 'learningThreadPromotionProposals'] as const
+export const ADAPTIVE_LEARN_EXPORT_COLLECTIONS = ['learningThreadContributions', 'learningThreads', 'learningThreadActivities', 'learningThreadArtifacts', 'learnActivityEvidenceLinks', 'learnActivityDecisions', 'learnActivityEvents', 'learnActivityCommandReceipts', 'learnAdaptiveThreadDeletionJobs', 'learnActivityOverrides', 'learningThreadPreferences', 'learningThreadPromotionProposals', 'learnAdaptiveExperimentAssignments'] as const
 
 export const learningThreadContributionFields = {
   userId: v.string(), threadId: v.id('learningThreads'),
