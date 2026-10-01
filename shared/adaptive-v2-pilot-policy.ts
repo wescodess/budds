@@ -19,6 +19,19 @@ export const ADAPTIVE_V2_PILOT_MANIFEST = {
     logs: 'metadata_only_no_payload',
     local: 'delete_with_v2_job_on_account_deletion',
   },
+  // Zero budgets and an unnamed owner carry no activation authority.
+  productControls: {
+    version: 'adaptive-v2-product-budget.utc-hour-day.v1',
+    maxDispatchesPerHour: 0, maxDispatchesPerDay: 0, maxConcurrent: 0,
+    maxReservedMicroUsdPerDay: 0,
+  },
+  rollback: {
+    version: 'adaptive-v2-provider-rollback.v1',
+    ownerIdentityVersion: 'adaptive-v2-rollback-owner.tokenIdentifier-sha256.v1',
+    ownerSubjectHash: null as string | null,
+    enabled: false,
+    maxAmbiguityPercent: 1, maxBudgetDenialPercent: 5,
+  },
   limits: {
     maxRequestBytes: 48_000,
     maxResponseBytes: 32_000,
@@ -38,7 +51,7 @@ export const ADAPTIVE_V2_PILOT_MANIFEST = {
 
 export type AdaptiveV2PilotDecision =
   | { allowed: true }
-  | { allowed: false, code: 'pilot_manifest_missing' | 'pilot_manifest_mismatch' | 'pilot_manifest_invalid' | 'pilot_manifest_not_approved' | 'pilot_cohort_denied' | 'pilot_model_denied' }
+  | { allowed: false, code: 'pilot_manifest_missing' | 'pilot_manifest_mismatch' | 'pilot_manifest_invalid' | 'pilot_manifest_not_approved' | 'pilot_cohort_denied' | 'pilot_model_denied' | 'pilot_rollback_active' }
 
 export type AdaptiveV2PilotManifest = {
   version: string
@@ -57,6 +70,8 @@ export type AdaptiveV2PilotManifest = {
   jobVersion: string
   quotaVersion: string
   retention: { provider: string, logs: string, local: string }
+  productControls: { version: string, maxDispatchesPerHour: number, maxDispatchesPerDay: number, maxConcurrent: number, maxReservedMicroUsdPerDay: number }
+  rollback: { version: string, ownerIdentityVersion: string, ownerSubjectHash: string | null, enabled: boolean, maxAmbiguityPercent: number, maxBudgetDenialPercent: number }
   limits: {
     maxRequestBytes: number
     maxResponseBytes: number
@@ -74,7 +89,50 @@ export type AdaptiveV2PilotManifest = {
   }
 }
 
-export function isFiniteAdaptiveV2PilotManifest(manifest: AdaptiveV2PilotManifest): boolean {
+function record(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+const EXACT_MANIFEST_PINS = {
+  version: 'adaptive-v2-pilot.v1', policyVersion: 'adaptive-v2-provider-policy.v1',
+  requestVersion: 'adaptive-v2-mastery-request.v1', jobVersion: 'learn-v2.mastery-scoring-job.v1',
+  quotaVersion: 'learn-v2.mastery-hourly-daily.v1',
+} as const
+
+/** Configuration crosses a trust boundary: validate its shape before reading it. */
+export function isFiniteAdaptiveV2PilotManifest(value: unknown): value is AdaptiveV2PilotManifest {
+  if (!record(value) || !record(value.limits) || !record(value.cohort) || !record(value.retention)
+    || !record(value.productControls) || !record(value.rollback)
+    || typeof value.pilotApproved !== 'boolean' || typeof value.startsAt !== 'string' || typeof value.endsAt !== 'string'
+    || !Array.isArray(value.cohort.subjectHashes) || !Array.isArray(value.modelPolicies)
+    || !Array.isArray(value.allowedProviders) || !Array.isArray(value.activityContractVersions) || !Array.isArray(value.evaluationContractVersions)
+    || Object.entries(EXACT_MANIFEST_PINS).some(([key, pin]) => value[key] !== pin)
+    || value.allowedProviders.length !== 1 || value.allowedProviders[0] !== 'openrouter-via-cloudflare-ai-gateway.v1'
+    || value.activityContractVersions.length !== 1 || value.activityContractVersions[0] !== 'learn-adaptive.activity-contract.v1'
+    || value.evaluationContractVersions.length !== 1 || value.evaluationContractVersions[0] !== 'learn-adaptive.evaluation.v1'
+    || value.retention.provider !== 'zero_data_retention_requested' || value.retention.logs !== 'metadata_only_no_payload'
+    || value.retention.local !== 'delete_with_v2_job_on_account_deletion'
+    || value.modelPolicies.some(policy => !record(policy) || typeof policy.model !== 'string'
+      || typeof policy.inputUsdPerMillionTokens !== 'number' || typeof policy.outputUsdPerMillionTokens !== 'number')
+    || value.cohort.subjectHashes.some(hash => typeof hash !== 'string')) return false
+  const product = value.productControls
+  const rollback = value.rollback
+  if (product.version !== 'adaptive-v2-product-budget.utc-hour-day.v1'
+    || ['maxDispatchesPerHour', 'maxDispatchesPerDay', 'maxConcurrent', 'maxReservedMicroUsdPerDay'].some(key => !Number.isSafeInteger(product[key]) || (product[key] as number) < 0)
+    || (product.maxDispatchesPerHour as number) > 4_096 || (product.maxDispatchesPerDay as number) > 4_096
+    || (product.maxConcurrent as number) > 128
+    || (product.maxReservedMicroUsdPerDay as number) > 4_096 * 100_000
+    || rollback.version !== 'adaptive-v2-provider-rollback.v1'
+    || rollback.ownerIdentityVersion !== 'adaptive-v2-rollback-owner.tokenIdentifier-sha256.v1'
+    || typeof rollback.enabled !== 'boolean' || rollback.maxAmbiguityPercent !== 1 || rollback.maxBudgetDenialPercent !== 5
+    || (rollback.ownerSubjectHash !== null && (typeof rollback.ownerSubjectHash !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(rollback.ownerSubjectHash)))) return false
+  if (value.pilotApproved && (rollback.ownerSubjectHash === null
+    || ['maxDispatchesPerHour', 'maxDispatchesPerDay', 'maxConcurrent', 'maxReservedMicroUsdPerDay'].some(key => (product[key] as number) <= 0))) return false
+  const requiredLimits = ['maxRequestBytes', 'maxResponseBytes', 'maxOutputTokens', 'timeoutMs', 'leaseMs', 'maxAttempts', 'maxDispatchAttemptsPerJob', 'maxConcurrentPerLearner', 'quotaWindowMs', 'dailyQuotaWindowMs', 'maxProviderDispatchesPerWindow', 'maxProviderDispatchesPerDay']
+  const finiteLimits = value.limits
+  if (requiredLimits.some(key => typeof finiteLimits[key] !== 'number' || !Number.isSafeInteger(finiteLimits[key]) || (finiteLimits[key] as number) <= 0)
+    || typeof finiteLimits.costCeilingUsdPerRequest !== 'number') return false
+  const manifest = value as AdaptiveV2PilotManifest
   const limits = Object.values(manifest.limits)
   const hashes = manifest.cohort.subjectHashes
   const models = manifest.modelPolicies.map(policy => policy.model)
@@ -93,10 +151,20 @@ export function isFiniteAdaptiveV2PilotManifest(manifest: AdaptiveV2PilotManifes
     && manifest.limits.maxDispatchAttemptsPerJob <= 2
     && manifest.limits.timeoutMs === 90_000
     && manifest.limits.leaseMs === 300_000
+    && manifest.limits.quotaWindowMs === 3_600_000
+    && manifest.limits.dailyQuotaWindowMs === 86_400_000
+    && manifest.limits.maxRequestBytes <= 48_000
+    && manifest.limits.maxResponseBytes <= 32_000
+    && manifest.limits.maxOutputTokens <= 1_200
+    && manifest.limits.maxProviderDispatchesPerWindow <= 12
+    && manifest.limits.maxProviderDispatchesPerDay <= 24
+    && manifest.limits.maxConcurrentPerLearner === 1
+    && manifest.limits.costCeilingUsdPerRequest <= 0.10
     && manifest.cohort.kind === 'hashed_allowlist'
     && Number.isSafeInteger(manifest.cohort.maxLearners) && manifest.cohort.maxLearners > 0
     && hashes.length <= manifest.cohort.maxLearners
     && new Set(hashes).size === hashes.length
+    && manifest.cohort.maxLearners <= 50
     && hashes.every(hash => /^sha256:[a-f0-9]{64}$/.test(hash))
     && manifest.allowedProviders.length > 0
     && new Set(models).size === models.length
@@ -109,12 +177,13 @@ export function adaptiveV2PilotDecision(
   input: { model: string, now: number, activityContractVersion: string, evaluationContractVersion: string, learnerHash: string } = {
     model: '', now: Date.now(), activityContractVersion: '', evaluationContractVersion: '', learnerHash: '',
   },
-  manifest: AdaptiveV2PilotManifest = ADAPTIVE_V2_PILOT_MANIFEST,
+  manifest: unknown = ADAPTIVE_V2_PILOT_MANIFEST,
 ): AdaptiveV2PilotDecision {
   if (typeof configuredVersion !== 'string' || !configuredVersion.trim()) return { allowed: false, code: 'pilot_manifest_missing' }
-  if (configuredVersion !== manifest.version) return { allowed: false, code: 'pilot_manifest_mismatch' }
   if (!isFiniteAdaptiveV2PilotManifest(manifest)) return { allowed: false, code: 'pilot_manifest_invalid' }
+  if (configuredVersion !== manifest.version) return { allowed: false, code: 'pilot_manifest_mismatch' }
   if (!manifest.pilotApproved) return { allowed: false, code: 'pilot_manifest_not_approved' }
+  if (manifest.rollback.enabled) return { allowed: false, code: 'pilot_rollback_active' }
   if (!manifest.cohort.subjectHashes.includes(input.learnerHash)) return { allowed: false, code: 'pilot_cohort_denied' }
   if (!manifest.modelPolicies.some(policy => policy.model === input.model)) return { allowed: false, code: 'pilot_model_denied' }
   const withinWindow = input.now >= Date.parse(manifest.startsAt) && input.now < Date.parse(manifest.endsAt)

@@ -35,6 +35,8 @@ describe('Adaptive V2 pilot policy', () => {
       pilotApproved: true,
       cohort: { ...ADAPTIVE_V2_PILOT_MANIFEST.cohort, subjectHashes: [`sha256:${'a'.repeat(64)}`] },
       modelPolicies: [{ model: 'test/mastery-model', inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 4 }],
+      productControls: { ...ADAPTIVE_V2_PILOT_MANIFEST.productControls, maxDispatchesPerHour: 4, maxDispatchesPerDay: 8, maxConcurrent: 2, maxReservedMicroUsdPerDay: 100_000 },
+      rollback: { ...ADAPTIVE_V2_PILOT_MANIFEST.rollback, ownerSubjectHash: `sha256:${'c'.repeat(64)}` },
     }
     const input = {
       model: 'test/mastery-model',
@@ -51,7 +53,7 @@ describe('Adaptive V2 pilot policy', () => {
 
   test('denies a 51st hashed learner and rejects a manifest that tries to expand past the finite cohort', () => {
     const subjectHashes = Array.from({ length: 50 }, (_, index) => `sha256:${index.toString(16).padStart(64, '0')}`)
-    const manifest = { ...ADAPTIVE_V2_PILOT_MANIFEST, pilotApproved: true, cohort: { ...ADAPTIVE_V2_PILOT_MANIFEST.cohort, subjectHashes }, modelPolicies: [{ model: 'test/mastery-model', inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 4 }] }
+    const manifest = { ...ADAPTIVE_V2_PILOT_MANIFEST, pilotApproved: true, cohort: { ...ADAPTIVE_V2_PILOT_MANIFEST.cohort, subjectHashes }, modelPolicies: [{ model: 'test/mastery-model', inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 4 }], productControls: { ...ADAPTIVE_V2_PILOT_MANIFEST.productControls, maxDispatchesPerHour: 4, maxDispatchesPerDay: 8, maxConcurrent: 2, maxReservedMicroUsdPerDay: 100_000 }, rollback: { ...ADAPTIVE_V2_PILOT_MANIFEST.rollback, ownerSubjectHash: `sha256:${'c'.repeat(64)}` } }
     const fiftyFirst = `sha256:${(50).toString(16).padStart(64, '0')}`
     expect(adaptiveV2PilotDecision(manifest.version, {
       model: 'test/mastery-model', now: Date.parse('2026-10-01T00:00:00.000Z'),

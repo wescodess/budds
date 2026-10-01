@@ -1322,7 +1322,7 @@ export function toAdaptiveSubmissionAdmission(result: MasteryAttemptActionResult
     replayed: result.replayed,
   }
   if (result.status === 'in_progress') return { kind: 'accepted' as const, status: 'in_progress' as const, replayed: false as const }
-  return { kind: result.status, code: result.code, message: result.message, retryable: result.retryable }
+  return { kind: result.status, code: result.code, message: result.message, retryable: result.retryable, ...(result.admission ? { admission: result.admission } : {}) }
 }
 
 // The adaptive public boundary is intentionally only a thin authority wrapper.
