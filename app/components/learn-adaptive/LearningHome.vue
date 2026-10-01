@@ -293,3 +293,10 @@ function discardPaste() {
     </section>
   </section>
 </template>
+
+<style scoped>
+select,
+input[type='url'] {
+  min-height: 44px;
+}
+</style>
