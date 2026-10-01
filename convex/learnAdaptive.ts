@@ -1333,7 +1333,7 @@ export function toAdaptiveSubmissionAdmission(result: MasteryAttemptActionResult
 export const submitResponse = action({
   args: { threadId: v.id('learningThreads'), activityId: v.string(), ...masteryAttemptArgs },
   handler: async (ctx, args): Promise<ReturnType<typeof toAdaptiveSubmissionAdmission> | {
-    kind: 'denied', code: 'adaptive_gate_unavailable', message: string, retryable: false, fallbackRoute: AdaptiveLearnFallbackRoute
+    kind: 'denied', code: string, message: string, retryable: boolean, fallbackRoute: AdaptiveLearnFallbackRoute
   }> => {
     const identity = await ctx.auth.getUserIdentity()
     if (!identity) return { kind: 'denied' as const, code: 'adaptive_gate_unavailable', message: 'Adaptive Learn is unavailable.', retryable: false, fallbackRoute: CLASSIC_LEARN_FALLBACK_ROUTE }
