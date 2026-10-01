@@ -6,13 +6,14 @@ import { createSsrMutationStub } from '~/utils/convexSsrMutation'
 // public APIs with the signed-in learner; it cannot stamp or seed authority.
 const route = useRoute()
 const sessionId = computed(() => String(route.query.session ?? ''))
+const missionId = computed(() => String(route.query.mission ?? ''))
 const auth = useNuxtApp()
 const authReady = (auth.$convexAuthReady as Ref<boolean> | undefined) ?? ref(false)
 const authenticated = (auth.$convexAuthenticated as Ref<boolean> | undefined) ?? ref(false)
 const ready = computed(() => authReady.value && authenticated.value)
 const content = import.meta.client ? useConvexQuery(api.learnV2Journey.getSessionCandidate,
-  computed(() => ({ studySessionId: sessionId.value as never, learningVoidId: String(route.query.mission ?? '') as never })),
-  { enabled: computed(() => ready.value && Boolean(sessionId.value)), ssr: false }) : { data: ref(null) }
+  computed(() => ({ studySessionId: sessionId.value as never, learningVoidId: missionId.value as never })),
+  { enabled: computed(() => ready.value && Boolean(sessionId.value) && Boolean(missionId.value)), ssr: false }) : { data: ref(null) }
 const attach = import.meta.client ? useConvexMutation(api.learnAdaptiveCanvas.attachReadySession)
   : createSsrMutationStub<typeof api.learnAdaptiveCanvas.attachReadySession>()
 const busy = ref(false)
