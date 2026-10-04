@@ -46,6 +46,13 @@ test('operator rejects raw answer fields without echoing private input', () => {
   expect({ status: result.status, stdout: result.stdout, stderr: result.stderr }).toEqual({ status: 1, stdout: '', stderr: 'Cross-feature provenance fixture rejected\n' })
 })
 
+test('operator rejects contribution type arrays rather than coercing them into eligible enum keys', () => {
+  const input = fixture()
+  input.cases[0].contributions[0].type = ['quiz_result']
+  const result = run(input)
+  expect({ status: result.status, stdout: result.stdout, stderr: result.stderr }).toEqual({ status: 1, stdout: '', stderr: 'Cross-feature provenance fixture rejected\n' })
+})
+
 test('operator retains the assigned denominator when outcomes or the practical effect threshold are missing', () => {
   const input = fixture()
   input.cases[1].nextAction.usefulnessRating = null
@@ -164,4 +171,16 @@ test('operator rejects oversized input and invalid command arguments without ech
   expect(run(input).status).toBe(1)
   const result = spawnSync(process.execPath, ['scripts/cross-feature-provenance-analysis.mjs', '--unknown', '/private/path'], { encoding: 'utf8' })
   expect({ status: result.status, stdout: result.stdout, stderr: result.stderr }).toEqual({ status: 1, stdout: '', stderr: 'Cross-feature provenance fixture rejected\n' })
+})
+
+test.runIf(process.platform !== 'win32')('operator rejects a FIFO fixture without waiting for a writer', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'cross-feature-fifo-'))
+  try {
+    const path = join(directory, 'fixture.fifo')
+    const setup = spawnSync('mkfifo', [path], { encoding: 'utf8', timeout: 1000 })
+    expect({ status: setup.status, stderr: setup.stderr }).toEqual({ status: 0, stderr: '' })
+    const result = spawnSync(process.execPath, ['scripts/cross-feature-provenance-analysis.mjs', '--fixture', path], { encoding: 'utf8', timeout: 3000 })
+    expect({ status: result.status, stdout: result.stdout, stderr: result.stderr }).toEqual({ status: 1, stdout: '', stderr: 'Cross-feature provenance fixture rejected\n' })
+  }
+  finally { rmSync(directory, { recursive: true }) }
 })

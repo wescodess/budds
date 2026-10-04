@@ -1,4 +1,5 @@
 import { open } from 'node:fs/promises'
+import { constants } from 'node:fs'
 import { createHash } from 'node:crypto'
 
 const eligibleTypes = ['quiz_result', 'chat_discussion_projection']
@@ -57,7 +58,7 @@ const validate = fixture => {
       for (const field of ['contributionId', 'activityId', 'attemptId', 'originId']) id(contribution[field])
       if (contributions.has(contribution.contributionId)) reject()
       contributions.add(contribution.contributionId)
-      if (contributionFeatures[contribution.type] !== contribution.sourceFeature || contribution.activityId !== row.activityId) reject()
+      if (typeof contribution.type !== 'string' || !Object.hasOwn(contributionFeatures, contribution.type) || contributionFeatures[contribution.type] !== contribution.sourceFeature || contribution.activityId !== row.activityId) reject()
       claim(attempts, contribution.attemptId, row.activityId); claim(origins, contribution.originId, row.activityId)
       claim(contributionOrigins, contribution.originId, contribution.sourceFeature)
       if (eligibleTypes.includes(contribution.type) && row.before.attempts !== null && !row.before.attempts.includes(contribution.attemptId)) reject()
@@ -144,7 +145,7 @@ const generate = fixture => {
 try {
   const args = process.argv.slice(2)
   if (args.length && (args.length !== 2 || args[0] !== '--fixture')) throw new Error('invalid')
-  const handle = await open(args[1] ?? new URL('../docs/experiments/cross-feature-provenance-fixture.v1.json', import.meta.url), 'r')
+  const handle = await open(args[1] ?? new URL('../docs/experiments/cross-feature-provenance-fixture.v1.json', import.meta.url), constants.O_RDONLY | constants.O_NONBLOCK)
   let bytes
   try {
     if (!(await handle.stat()).isFile()) throw new Error('invalid')
