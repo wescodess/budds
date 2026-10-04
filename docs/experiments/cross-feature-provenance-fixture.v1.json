@@ -1,0 +1,25 @@
+{
+  "version": "cross-feature-provenance-fixture.v1",
+  "synthetic": true,
+  "minimumPracticalEffect": null,
+  "declarations": { "owner": null, "approver": null, "verifier": null, "approved": false },
+  "cases": [
+    {
+      "caseId": "fixture-baseline", "activityId": "fixture-activity-one", "arm": "baseline", "eligible": true,
+      "contributions": [{ "contributionId": "fixture-quiz-one", "type": "quiz_result", "activityId": "fixture-activity-one", "attemptId": "fixture-attempt-one", "originId": "fixture-origin-one", "sourceFeature": "quiz" }],
+      "before": { "attempts": ["fixture-attempt-one"], "masteryIncrements": 1, "origins": [{ "originId": "fixture-origin-one", "sourceFeature": "quiz", "visible": true }] },
+      "after": { "attempts": ["fixture-attempt-one"], "masteryIncrements": 1, "origins": [{ "originId": "fixture-origin-one", "sourceFeature": "quiz", "visible": true }] },
+      "nextAction": { "representativeTaskPassed": false, "usefulnessRating": 4, "completed": true, "clickCount": 3 }
+    },
+    {
+      "caseId": "fixture-treatment", "activityId": "fixture-activity-two", "arm": "treatment", "eligible": true,
+      "contributions": [
+        { "contributionId": "fixture-quiz-two", "type": "quiz_result", "activityId": "fixture-activity-two", "attemptId": "fixture-attempt-two", "originId": "fixture-origin-two", "sourceFeature": "quiz" },
+        { "contributionId": "fixture-chat-two", "type": "chat_discussion_projection", "activityId": "fixture-activity-two", "attemptId": "fixture-attempt-two", "originId": "fixture-origin-three", "sourceFeature": "chat" }
+      ],
+      "before": { "attempts": ["fixture-attempt-two"], "masteryIncrements": 1, "origins": [{ "originId": "fixture-origin-two", "sourceFeature": "quiz", "visible": true }] },
+      "after": { "attempts": ["fixture-attempt-two"], "masteryIncrements": 1, "origins": [{ "originId": "fixture-origin-two", "sourceFeature": "quiz", "visible": true }, { "originId": "fixture-origin-three", "sourceFeature": "chat", "visible": true }] },
+      "nextAction": { "representativeTaskPassed": true, "usefulnessRating": 5, "completed": true, "clickCount": 1 }
+    }
+  ]
+}
