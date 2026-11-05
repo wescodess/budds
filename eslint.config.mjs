@@ -6,6 +6,9 @@ export default createConfigForNuxt({
   },
 }).append({
   ignores: [
+    // Vendored skill examples retain their upstream formatting and globals.
+    '.agents/skills/**',
+    '.claude/skills/**',
     '.nuxt/**',
     '.output/**',
     'dist/**',
