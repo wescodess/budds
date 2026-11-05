@@ -1,4 +1,6 @@
 import { spawn, execFile as execFileCallback } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { once } from 'node:events'
 import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -117,13 +119,6 @@ async function main() {
   const convexUrl = assertLoopbackUrl(parseEnv(await readFile(join(isolatedRoot, '.env.local'), 'utf8'), 'VITE_CONVEX_URL'), 'Convex local deployment URL')
   const localConfig = JSON.parse(await readFile(join(isolatedRoot, '.convex/local/default/config.json'), 'utf8'))
   const convexSiteUrl = assertLoopbackUrl(`http://127.0.0.1:${localConfig.ports.site}`, 'Convex local site URL')
-  if (syntheticApproval) {
-    const result = await execFile(process.execPath, [join(root, 'scripts/configure-e2e-synthetic-pilot.mjs'), '--root', isolatedRoot, '--app-url', baseUrl, '--convex-url', convexUrl], {
-      cwd: root, env: { ...inheritedEnv, NODE_ENV: 'test', BUDDS_E2E_MODE: 'true', BUDDS_E2E_SYNTHETIC_ADAPTIVE_APPROVAL: 'true' },
-    })
-    const artifact = JSON.parse(result.stdout)
-    console.log(`Disposable synthetic Adaptive approval: ${artifact.label}; actual provider cost $0; expires ${artifact.endsAt}`)
-  }
   const functionEnv = join(isolatedRoot, '.env.learn-v2-e2e-functions')
   await writeFile(functionEnv, [
     'NODE_ENV=test',
@@ -145,6 +140,26 @@ async function main() {
   await execFile(pnpm, ['exec', 'convex', 'env', 'set', '--from-file', functionEnv, '--force'], { cwd: isolatedRoot, env: { ...inheritedEnv, CONVEX_AGENT_MODE: 'anonymous' } })
   await startConvex(isolatedRoot)
   await waitForLocalConvex(isolatedRoot)
+  if (syntheticApproval) {
+    const learner = JSON.parse(await readFile(join(root, 'e2e/fixtures/adaptive-v2-learner.json'), 'utf8'))
+    const response = await fetch(`${convexSiteUrl}/api/auth/sign-up/email`, {
+      method: 'POST', headers: { 'content-type': 'application/json', origin: baseUrl }, body: JSON.stringify(learner),
+    })
+    if (!response.ok) throw new Error('Synthetic approval requires a real disposable Better Auth learner')
+    const account = await response.json()
+    if (typeof account.user?.id !== 'string' || !account.user.id || account.user.id.includes('|')) throw new Error('Disposable learner has no valid auth subject')
+    const learnerHash = `sha256:${createHash('sha256').update(JSON.stringify(['adaptive-v2-pilot-cohort.v1', `${convexSiteUrl}|${account.user.id}`])).digest('hex')}`
+    const exited = once(convex, 'exit')
+    stop(convex)
+    await exited
+    const result = await execFile(process.execPath, [join(root, 'scripts/configure-e2e-synthetic-pilot.mjs'), '--root', isolatedRoot, '--app-url', baseUrl, '--convex-url', convexUrl, '--learner-hash', learnerHash], {
+      cwd: root, env: { ...inheritedEnv, NODE_ENV: 'test', BUDDS_E2E_MODE: 'true', BUDDS_E2E_SYNTHETIC_ADAPTIVE_APPROVAL: 'true' },
+    })
+    const artifact = JSON.parse(result.stdout)
+    console.log(`Disposable synthetic Adaptive approval: ${artifact.label}; actual provider cost $0; expires ${artifact.endsAt}`)
+    await startConvex(isolatedRoot)
+    await waitForLocalConvex(isolatedRoot)
+  }
 
   const appEnv = { ...inheritedEnv, NODE_ENV: 'test', BUDDS_E2E_MODE: 'true', BUDDS_E2E_BASE_URL: baseUrl, BUDDS_E2E_AUTH_TOKEN: token, LEARN_V2_ENABLED: 'true', CONVEX_URL: convexUrl, NUXT_PUBLIC_CONVEX_URL: convexUrl, AUTH_PROXY_TARGET_URL: convexSiteUrl, CONVEX_SITE_URL: convexSiteUrl, NUXT_PUBLIC_SITE_URL: baseUrl, SITE_URL: baseUrl }
   Object.assign(process.env, appEnv)

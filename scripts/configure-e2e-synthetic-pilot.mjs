@@ -10,7 +10,8 @@ const refused = message => { throw new Error(`Synthetic approval CLI refuses ${m
 
 async function main() {
   const args = process.argv.slice(2)
-  if (args.length !== 6 || args[0] !== '--root' || args[2] !== '--app-url' || args[4] !== '--convex-url') refused('unexpected arguments')
+  if (args.length !== 8 || args[0] !== '--root' || args[2] !== '--app-url' || args[4] !== '--convex-url' || args[6] !== '--learner-hash') refused('unexpected arguments')
+  if (!/^sha256:[a-f0-9]{64}$/.test(args[7])) refused('an invalid learner hash')
   const environment = process.env
   if (environment.NODE_ENV !== 'test' || environment.BUDDS_E2E_MODE !== 'true'
     || environment.BUDDS_E2E_SYNTHETIC_ADAPTIVE_APPROVAL !== 'true') refused('missing explicit test-only configuration')
@@ -52,17 +53,17 @@ async function main() {
     const metadata = policy.match(/\/\/ SYNTHETIC_CONFIGURATION (.+)\n/)
     if (!metadata) refused('an unknown previous injection')
     const configuration = JSON.parse(metadata[1])
-    if (configuration.appUrl !== args[3] || configuration.convexUrl !== args[5]) refused('a changed disposable deployment')
+    if (configuration.appUrl !== args[3] || configuration.convexUrl !== args[5] || configuration.learnerHash !== args[7]) refused('a changed disposable deployment or learner')
     console.log(JSON.stringify(configuration))
     return
   }
   const signature = '): AdaptiveV2PilotDecision {\n'
   if (policy.split(signature).length !== 2 || !policy.includes('pilotApproved: false,')) refused('an unexpected policy source')
   const startsAt = new Date(Date.now() - 60_000).toISOString()
-  const configuration = { label: 'disposable-test-only-synthetic-approval', actualProviderCostUsd: 0, accounting: 'SIMULATED positive ledger reserves; no provider spending', version: 'adaptive-v2-pilot.v1', appUrl: args[3], convexUrl: args[5], startsAt, endsAt: new Date(Date.parse(startsAt) + 3_600_000).toISOString() }
+  const configuration = { label: 'disposable-test-only-synthetic-approval', actualProviderCostUsd: 0, accounting: 'SIMULATED positive ledger reserves; no provider spending', version: 'adaptive-v2-pilot.v1', appUrl: args[3], convexUrl: args[5], learnerHash: args[7], startsAt, endsAt: new Date(Date.parse(startsAt) + 3_600_000).toISOString() }
   const fixture = await readFile(fileURLToPath(new URL('../e2e/fixtures/adaptive-v2-synthetic-approval.ts', import.meta.url)), 'utf8')
   await writeFile(fixturePath, fixture)
-  const hookConfiguration = { appUrl: configuration.appUrl, convexUrl: configuration.convexUrl, startsAt, endsAt: configuration.endsAt }
+  const hookConfiguration = { appUrl: configuration.appUrl, convexUrl: configuration.convexUrl, learnerHash: configuration.learnerHash, startsAt, endsAt: configuration.endsAt }
   const hook = `${signature}  configureDisposableSyntheticPilot(ADAPTIVE_V2_PILOT_MANIFEST, input, ${JSON.stringify(hookConfiguration)})\n`
   await writeFile(policyPath, `${marker}\n// SYNTHETIC_CONFIGURATION ${JSON.stringify(configuration)}\nimport { configureDisposableSyntheticPilot } from '../e2e/fixtures/adaptive-v2-synthetic-approval.ts'\n${policy.replace(signature, hook)}`)
   console.log(JSON.stringify(configuration))

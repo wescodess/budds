@@ -1,6 +1,7 @@
 import { expect, test, type Page, type APIRequestContext } from '@playwright/test'
 import { readFile } from 'node:fs/promises'
 import { waitForView } from './wait-for-view'
+import canvasLearner from '../fixtures/adaptive-v2-learner.json'
 
 const token = process.env.BUDDS_E2E_AUTH_TOKEN ?? 'e2e-local-token-please-do-not-use-outside-tests'
 
@@ -36,7 +37,9 @@ export async function runLearningJourney(page: Page, request: APIRequestContext,
   page.setDefaultNavigationTimeout(120_000)
 
   const identity = { email: `learn-v2-${Date.now()}@e2e.budds.invalid`, password: 'disposable-e2e-password', name: 'Learn V2 Browser Test' }
-  const bootstrap = await request.post('/api/e2e/session', { headers: { 'x-budds-e2e-token': token }, data: identity })
+  const bootstrap = canvas
+    ? await request.post('/api/auth/sign-in/email', { data: canvasLearner, headers: { origin: 'http://127.0.0.1:3102' } })
+    : await request.post('/api/e2e/session', { headers: { 'x-budds-e2e-token': token }, data: identity })
   expect(bootstrap.ok()).toBeTruthy()
   const cookies = bootstrap.headersArray().filter(header => header.name.toLowerCase() === 'set-cookie').map(header => header.value)
   for (const cookie of cookies) {
