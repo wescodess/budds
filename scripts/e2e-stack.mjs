@@ -1,11 +1,11 @@
 import { spawn, execFile as execFileCallback } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { once } from 'node:events'
 import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 import { buildNuxt, loadNuxt, writeTypes } from 'nuxt/kit'
+import { ensureDisposableLearner, redactStartupOutput, stopChild, supportsProcessGroups, waitForPortsClosed } from './e2e-stack-runtime.mjs'
 
 const execFile = promisify(execFileCallback)
 const root = process.cwd()
@@ -29,17 +29,23 @@ let convex
 let nuxt
 let builder
 let cleaned = false
+let convexPorts = []
+let stage = 'creating disposable checkout'
+const secrets = new Set([token, ...Object.entries(inheritedEnv).filter(([key]) => /SECRET|TOKEN|KEY|PASSWORD/.test(key)).map(([, value]) => value)])
 
-function stop(child) {
-  if (!child || child.exitCode !== null || child.killed) return
-  child.kill('SIGTERM')
+async function run(label, command, args, options) {
+  stage = label
+  try { return await execFile(command, args, options) } catch (error) {
+    const details = [error.stderr, error.stdout].filter(Boolean).join('\n') || error.message
+    throw new Error(`${label} failed (exit ${error.code ?? 'unknown'}):\n${redactStartupOutput(details, secrets)}`, { cause: error })
+  }
 }
 
 async function cleanup() {
   if (cleaned) return
   cleaned = true
-  stop(nuxt)
-  stop(convex)
+  await Promise.all([stopChild(nuxt), stopChild(convex)])
+  if (convexPorts.length) await waitForPortsClosed(convexPorts)
   await builder?.close()
   if (isolatedRoot) {
     await execFile('git', ['worktree', 'remove', '--force', isolatedRoot], { cwd: root }).catch(() => {})
@@ -71,7 +77,7 @@ async function waitForLocalConvex(worktree) {
     const url = parseEnv(contents, 'VITE_CONVEX_URL')
     if (url) {
       const localUrl = assertLoopbackUrl(url, 'Convex local deployment URL')
-      if (await fetch(`${localUrl}/instance_name`).then(response => response.ok).catch(() => false)) return localUrl
+      if (await fetch(`${localUrl}/instance_name`, { signal: AbortSignal.timeout(1000) }).then(response => response.ok).catch(() => false)) return localUrl
     }
     if (convex?.exitCode !== null) throw new Error(`Local Convex exited before becoming ready (exit ${convex?.exitCode})`)
     await new Promise(resolve => setTimeout(resolve, 250))
@@ -80,44 +86,48 @@ async function waitForLocalConvex(worktree) {
 }
 
 function startConvex(worktree) {
+  stage = 'starting disposable Convex'
   return new Promise((resolve, reject) => {
     convex = spawn(pnpm, ['exec', 'convex', 'dev', '--typecheck', 'disable', '--codegen', 'disable', '--tail-logs', 'disable'], {
       cwd: worktree,
       env: { ...inheritedEnv, CONVEX_AGENT_MODE: 'anonymous' },
       stdio: ['ignore', 'pipe', 'pipe'],
+      detached: supportsProcessGroups,
     })
     let output = ''
     const observe = chunk => {
-      const text = chunk.toString()
+      const text = redactStartupOutput(chunk.toString(), secrets)
       output += text
       process.stdout.write(text)
       if (output.includes('Convex functions ready!')) resolve()
     }
     convex.stdout.on('data', observe)
     convex.stderr.on('data', chunk => {
-      const text = chunk.toString()
+      const text = redactStartupOutput(chunk.toString(), secrets)
       output += text
       process.stderr.write(text)
       if (output.includes('Convex functions ready!')) resolve()
     })
     convex.once('error', reject)
-    convex.once('exit', code => reject(new Error(`Local Convex exited before functions were ready (exit ${code ?? 'signal'})`)))
+    convex.once('close', code => reject(new Error(`Local Convex exited before functions were ready (exit ${code ?? 'signal'}):\n${output.slice(-8000)}`)))
   })
 }
 
 async function main() {
   const workspace = await mkdtemp(join(tmpdir(), 'budds-learn-v2-e2e-'))
   isolatedRoot = join(workspace, 'app')
-  await execFile('git', ['worktree', 'add', '--detach', isolatedRoot, 'HEAD'], { cwd: root })
+  await run('creating disposable checkout', 'git', ['worktree', 'add', '--detach', isolatedRoot, 'HEAD'], { cwd: root })
   await symlink(join(root, 'node_modules'), join(isolatedRoot, 'node_modules'), 'dir')
 
-  await execFile(pnpm, ['exec', 'convex', 'dev', '--once', '--typecheck', 'disable', '--codegen', 'disable', '--tail-logs', 'disable'], {
+  await run('initializing disposable Convex', pnpm, ['exec', 'convex', 'dev', '--once', '--typecheck', 'disable', '--codegen', 'disable', '--tail-logs', 'disable'], {
     cwd: isolatedRoot,
     env: { ...inheritedEnv, CONVEX_AGENT_MODE: 'anonymous' },
     maxBuffer: 8 * 1024 * 1024,
   })
   const convexUrl = assertLoopbackUrl(parseEnv(await readFile(join(isolatedRoot, '.env.local'), 'utf8'), 'VITE_CONVEX_URL'), 'Convex local deployment URL')
   const localConfig = JSON.parse(await readFile(join(isolatedRoot, '.convex/local/default/config.json'), 'utf8'))
+  convexPorts = [localConfig.ports.cloud, localConfig.ports.site]
+  if (localConfig.adminKey) secrets.add(localConfig.adminKey)
   const convexSiteUrl = assertLoopbackUrl(`http://127.0.0.1:${localConfig.ports.site}`, 'Convex local site URL')
   const functionEnv = join(isolatedRoot, '.env.learn-v2-e2e-functions')
   await writeFile(functionEnv, [
@@ -137,22 +147,19 @@ async function main() {
     `CONVEX_SITE_URL=${convexSiteUrl}`,
     '',
   ].join('\n'))
-  await execFile(pnpm, ['exec', 'convex', 'env', 'set', '--from-file', functionEnv, '--force'], { cwd: isolatedRoot, env: { ...inheritedEnv, CONVEX_AGENT_MODE: 'anonymous' } })
+  await run('configuring disposable Convex', pnpm, ['exec', 'convex', 'env', 'set', '--from-file', functionEnv, '--force'], { cwd: isolatedRoot, env: { ...inheritedEnv, CONVEX_AGENT_MODE: 'anonymous' } })
   await startConvex(isolatedRoot)
   await waitForLocalConvex(isolatedRoot)
   if (syntheticApproval) {
     const learner = JSON.parse(await readFile(join(root, 'e2e/fixtures/adaptive-v2-learner.json'), 'utf8'))
-    const response = await fetch(`${convexSiteUrl}/api/auth/sign-up/email`, {
-      method: 'POST', headers: { 'content-type': 'application/json', origin: baseUrl }, body: JSON.stringify(learner),
-    })
-    if (!response.ok) throw new Error('Synthetic approval requires a real disposable Better Auth learner')
-    const account = await response.json()
-    if (typeof account.user?.id !== 'string' || !account.user.id || account.user.id.includes('|')) throw new Error('Disposable learner has no valid auth subject')
-    const learnerHash = `sha256:${createHash('sha256').update(JSON.stringify(['adaptive-v2-pilot-cohort.v1', `${convexSiteUrl}|${account.user.id}`])).digest('hex')}`
-    const exited = once(convex, 'exit')
-    stop(convex)
-    await exited
-    const result = await execFile(process.execPath, [join(root, 'scripts/configure-e2e-synthetic-pilot.mjs'), '--root', isolatedRoot, '--app-url', baseUrl, '--convex-url', convexUrl, '--learner-hash', learnerHash], {
+    secrets.add(learner.password)
+    stage = 'authenticating disposable learner'
+    const subject = await ensureDisposableLearner(convexSiteUrl, baseUrl, learner)
+    const learnerHash = `sha256:${createHash('sha256').update(JSON.stringify(['adaptive-v2-pilot-cohort.v1', `${convexSiteUrl}|${subject}`])).digest('hex')}`
+    stage = 'stopping disposable Convex for synthetic approval'
+    await stopChild(convex)
+    await waitForPortsClosed(convexPorts)
+    const result = await run('configuring synthetic approval', process.execPath, [join(root, 'scripts/configure-e2e-synthetic-pilot.mjs'), '--root', isolatedRoot, '--app-url', baseUrl, '--convex-url', convexUrl, '--learner-hash', learnerHash], {
       cwd: root, env: { ...inheritedEnv, NODE_ENV: 'test', BUDDS_E2E_MODE: 'true', BUDDS_E2E_SYNTHETIC_ADAPTIVE_APPROVAL: 'true' },
     })
     const artifact = JSON.parse(result.stdout)
@@ -161,6 +168,7 @@ async function main() {
     await waitForLocalConvex(isolatedRoot)
   }
 
+  stage = 'building Nuxt'
   const appEnv = { ...inheritedEnv, NODE_ENV: 'test', BUDDS_E2E_MODE: 'true', BUDDS_E2E_BASE_URL: baseUrl, BUDDS_E2E_AUTH_TOKEN: token, LEARN_V2_ENABLED: 'true', CONVEX_URL: convexUrl, NUXT_PUBLIC_CONVEX_URL: convexUrl, AUTH_PROXY_TARGET_URL: convexSiteUrl, CONVEX_SITE_URL: convexSiteUrl, NUXT_PUBLIC_SITE_URL: baseUrl, SITE_URL: baseUrl }
   Object.assign(process.env, appEnv)
   const outputDir = join(workspace, 'output')
@@ -191,13 +199,14 @@ async function main() {
     cwd: root,
     env: serverEnv,
     stdio: 'inherit',
+    detached: supportsProcessGroups,
   })
-  nuxt.once('error', error => { console.error(error); void cleanup().finally(() => process.exit(1)) })
-  nuxt.once('exit', code => { void cleanup().finally(() => process.exit(code ?? 1)) })
+  nuxt.once('error', error => { console.error(`Nuxt failed to start: ${redactStartupOutput(error.message, secrets)}`); void cleanup().finally(() => process.exit(1)) })
+  nuxt.once('exit', code => { if (!cleaned) void cleanup().finally(() => process.exit(code ?? 1)) })
 }
 
 main().catch(async (error) => {
+  console.error(`E2E stack failed while ${stage}: ${redactStartupOutput(error instanceof Error ? error.message : error, secrets)}`)
   await cleanup()
-  console.error(error instanceof Error ? error.message : error)
   process.exit(1)
 })
