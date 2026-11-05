@@ -1029,6 +1029,7 @@ export async function representativeCompletion(ctx: QueryCtx | MutationCtx, user
     || job.checkpoint !== `attempt:${String(attempt._id)}`
     || !Number.isFinite(attempt.serverScorePercent) || Boolean(passedEvent) === Boolean(failedEvent)) return null
   const event = passedEvent ?? failedEvent!
+  if (event.taxonomyVersion === 'learn-v2.measurement-events.v1') return null
   const passed = attempt.serverScorePercent! >= LEARN_V2_MASTERY_THRESHOLD
   if (activity.evaluationContract.passingScorePercent !== LEARN_V2_MASTERY_THRESHOLD
     || event.threadId !== activity.threadId || event.activityId !== activity._id

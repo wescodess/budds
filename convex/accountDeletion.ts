@@ -13,6 +13,8 @@ import { scheduleAudioOverviewDeletion } from './audioOverviews'
 import { isAccountDeletionActive } from './lib/accountDeletionTombstone'
 import { prepareSearchReservationForAccountDeletion } from './learnV2Search'
 import { preserveAdaptiveProductReservationOnDeletion } from './learnV2Mastery'
+import { LEARN_MEASUREMENT_COLLECTIONS } from '../shared/learn-v2-measurement-storage-manifest'
+import { deleteMeasurementReportRunsBatch, invalidateMeasurementReportRowsBatch } from './lib/learnV2MeasurementRetention'
 import { ADAPTIVE_LEARN_ACCOUNT_DELETE_ORDER } from '../shared/adaptive-learn-storage-manifest'
 import { privateAdaptiveArtifactR2Key, queueAdaptiveArtifactDeletion } from './lib/learnAdaptiveArtifacts'
 
@@ -87,7 +89,7 @@ const DIRECT_PHASES = {
 
 // Child-before-parent order keeps each deletion transaction bounded and never
 // leaves V2 rows reachable while the account tombstone is active.
-const LEARN_V2_DELETE_ORDER = [...ADAPTIVE_LEARN_ACCOUNT_DELETE_ORDER, 'calendarWebhookReceipts', 'calendarWatchChannels', 'calendarReconciliationProposals', 'learnFolderSourceManifestEntries', 'learnFolderSourceManifestFolders', 'learnFolderSourceManifests', 'learnSourceFetchLeases', 'learnSourceFetchRateEvents', 'learnMasteryScoringRateEvents', 'learnSourceCommandReceipts', 'learnLifecycleReceipts', 'learnPlanAuditEvents', 'learnPlanCommandReceipts', 'learnClaimSupports', 'sessionContentClaims', 'sessionContentBlocks', 'sessionContent', 'studySessionRetrievalObjectives', 'calendarProjections', 'studySessions', 'studyPlanRevisions', 'studyPlans', 'masteryAttempts', 'masteryRecords', 'learnObjectiveSources', 'learnSourceExcerpts', 'learnSourceSnapshots', 'learnObjectivePrerequisites', 'learnObjectives', 'learnMilestones', 'learnBlueprintRevisions', 'learnBlueprints', 'searchReservations', 'searchQuotaBuckets', 'learnJobs', 'reminderPolicies', 'learnSourceIdentities', 'learningVoids'] as const
+const LEARN_V2_DELETE_ORDER = [...LEARN_MEASUREMENT_COLLECTIONS, ...ADAPTIVE_LEARN_ACCOUNT_DELETE_ORDER, 'calendarWebhookReceipts', 'calendarWatchChannels', 'calendarReconciliationProposals', 'learnFolderSourceManifestEntries', 'learnFolderSourceManifestFolders', 'learnFolderSourceManifests', 'learnSourceFetchLeases', 'learnSourceFetchRateEvents', 'learnMasteryScoringRateEvents', 'learnSourceCommandReceipts', 'learnLifecycleReceipts', 'learnPlanAuditEvents', 'learnPlanCommandReceipts', 'learnClaimSupports', 'sessionContentClaims', 'sessionContentBlocks', 'sessionContent', 'studySessionRetrievalObjectives', 'calendarProjections', 'studySessions', 'studyPlanRevisions', 'studyPlans', 'masteryAttempts', 'masteryRecords', 'learnObjectiveSources', 'learnSourceExcerpts', 'learnSourceSnapshots', 'learnObjectivePrerequisites', 'learnObjectives', 'learnMilestones', 'learnBlueprintRevisions', 'learnBlueprints', 'searchReservations', 'searchQuotaBuckets', 'learnJobs', 'reminderPolicies', 'learnSourceIdentities', 'learningVoids'] as const
 type LearnV2Table = typeof LEARN_V2_DELETE_ORDER[number]
 
 export function backoffMs(attempts: number): number {
@@ -347,6 +349,7 @@ async function deleteDirectUserBatch(ctx: MutationCtx, table: DirectUserTable, u
 }
 
 async function deleteLearnV2Table<TableName extends LearnV2Table>(ctx: MutationCtx, table: TableName, userId: string) {
+  if (table === 'learnMeasurementReportRuns') return await deleteMeasurementReportRunsBatch(ctx, userId)
   if (table === 'learnJobs') {
     const jobs = await ctx.db.query('learnJobs').withIndex('by_userId', q => q.eq('userId', userId)).take(DELETE_BATCH_SIZE)
     for (const row of jobs) await preserveAdaptiveProductReservationOnDeletion(ctx, row)
@@ -381,6 +384,8 @@ async function deleteLearnV2Table<TableName extends LearnV2Table>(ctx: MutationC
 }
 
 async function deleteLearnV2Batch(ctx: MutationCtx, job: AccountDeletionJob) {
+  if (await invalidateMeasurementReportRowsBatch(ctx, job.userId)) { await continuePhase(ctx, job); return }
+
   const artifacts = await ctx.db.query('learningThreadArtifacts')
     .withIndex('by_userId', q => q.eq('userId', job.userId)).take(DELETE_BATCH_SIZE)
   if (artifacts.length > 0) {
