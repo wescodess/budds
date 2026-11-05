@@ -45,7 +45,8 @@ export default defineEventHandler(async (event) => {
   }
 
   const taskId = body.taskId as Id<'tasks'> | undefined
-  const convexClient = taskId ? makeConvexClient(event) : null
+  const convexClient = makeConvexClient(event)
+  if (!convexClient) throw createError({ statusCode: 503, message: 'Quiz storage unavailable' })
 
   async function setTaskProgress(progress: string) {
     if (!taskId || !convexClient) return
@@ -211,32 +212,23 @@ export default defineEventHandler(async (event) => {
     }
     if (validQualityItems.length > 0) await shadowEvaluateQuiz(event, validQualityItems).catch(() => undefined)
 
-    if (taskId && convexClient) {
-      await setTaskProgress('Saving quiz…')
+    await setTaskProgress('Saving quiz…')
 
-      const { quizId } = await convexClient.mutation(api.quizzes.createWithQuestions, {
-        folderId: body.folderId as Id<'folders'>,
-        title: parsed.title,
-        model,
-        creationMethod: 'auto_generated' as const,
-        difficulty: body.difficulty,
-        language: body.language,
-        questions: persistQuestions,
-      })
+    const { quizId } = await convexClient.mutation(api.quizzes.createWithQuestions, {
+      folderId: body.folderId as Id<'folders'>,
+      title: parsed.title,
+      model,
+      creationMethod: 'auto_generated' as const,
+      difficulty: body.difficulty,
+      language: body.language,
+      questions: persistQuestions,
+    })
 
+    if (taskId) {
       await convexClient.mutation(api.tasks.markComplete, {
         taskId,
         result: { quizId, questionCount: persistQuestions.length },
       })
-
-      return {
-        title: parsed.title,
-        model,
-        questions: responseQuestions,
-        questionCount: persistQuestions.length,
-        taskId,
-        quizId,
-      }
     }
 
     return {
@@ -244,6 +236,8 @@ export default defineEventHandler(async (event) => {
       model,
       questions: responseQuestions,
       questionCount: persistQuestions.length,
+      quizId,
+      ...(taskId ? { taskId } : {}),
     }
   }
   catch (err) {

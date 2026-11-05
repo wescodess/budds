@@ -112,8 +112,8 @@ describe('POST /api/quiz/generate', () => {
     }))
   })
 
-  test('omits internal criteria from a response without task persistence', async () => {
-    vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc' })
+  test('persists direct-generation criteria server-side and returns a safe saved identifier', async () => {
+    vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc', language: 'en' })
     vi.mocked(globalThis.searchDocuments).mockResolvedValue({ data: [
       { id: '1', content: 'Light becomes chemical energy.', score: 1, attributes: {} },
       { id: '2', content: 'Other content.', score: 1, attributes: {} },
@@ -127,8 +127,24 @@ describe('POST /api/quiz/generate', () => {
     const result = await handler(makeEvent())
 
     expect(result.questions).toHaveLength(2)
+    expect(result.quizId).toBe('quiz_123')
+    expect(convexMutation).toHaveBeenCalledTimes(1)
+    expect(convexMutation).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      language: 'en',
+      questions: expect.arrayContaining([expect.objectContaining({ gradingCriteria: payload.questions[1].gradingCriteria })]),
+    }))
     expect(JSON.stringify(result)).not.toContain('gradingCriteria')
     expect(JSON.stringify(result)).not.toContain('weightPercent')
+  })
+
+  test('rejects an unavailable storage client before model generation', async () => {
+    vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc' })
+    const event = makeEvent()
+    event.context.convexToken = undefined
+
+    await expect(handler(event)).rejects.toMatchObject({ statusCode: 503, message: 'Quiz storage unavailable' })
+    expect(globalThis.generateCompletion).not.toHaveBeenCalled()
+    expect(convexMutation).not.toHaveBeenCalled()
   })
 
   test('[P0] 401 when Convex token is missing', async () => {
@@ -190,7 +206,7 @@ describe('POST /api/quiz/generate', () => {
     expect(globalThis.assertSearchIndexAvailable).not.toHaveBeenCalled()
   })
 
-  test('[P0] 200 happy path: returns generated quiz payload for client persistence', async () => {
+  test('[P0] 200 happy path: persists the quiz and returns the generated payload', async () => {
     vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc', language: 'en' })
     vi.mocked(globalThis.searchDocuments).mockResolvedValue({
       data: [
@@ -203,6 +219,7 @@ describe('POST /api/quiz/generate', () => {
     const result = await handler(makeEvent())
 
     expect(result).toEqual({
+      quizId: 'quiz_123',
       title: 'Cellular Biology Quiz',
       model: 'openai/gpt-4o-mini',
       questions: [
