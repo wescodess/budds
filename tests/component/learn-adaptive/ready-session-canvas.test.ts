@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { getFunctionName } from 'convex/server'
+import { prepareAdaptiveCommand } from '~~/shared/adaptive-command-authority'
 import { adaptiveRecoveryCopy } from '~~/shared/learn-adaptive-recovery'
 
 const start = vi.fn()
@@ -42,6 +43,7 @@ describe('ready adaptive Canvas', () => {
     isOnline.value = true
     sessionStorage.clear()
   })
+  afterEach(() => { vi.unstubAllGlobals() })
 
   const comparison = {
     ...canvas,
@@ -686,6 +688,26 @@ describe('ready adaptive Canvas', () => {
     expect(wrapper.text()).not.toContain('telemetry unavailable')
     await wrapper.get('[data-testid="learn-canvas-retry-scoring"]').trigger('click')
     await vi.waitFor(() => expect(submit).toHaveBeenCalledWith(expect.objectContaining({ response: 'Saved answer.', confidence: 3 })))
+  })
+
+  it.each([['randomUUID', false], ['the fallback generator', true]])('saves a response with a key the command validator accepts using %s', async (_generator, fallback) => {
+    if (fallback) vi.stubGlobal('crypto', { subtle: crypto.subtle })
+    const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
+    const wrapper = await mountSuspended(Comp.default, { props: { canvas } })
+    await wrapper.get('[data-testid="learn-canvas-start"]').trigger('click')
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-canvas-continue"]').exists()).toBe(true))
+    await wrapper.get('[data-testid="learn-canvas-continue"]').trigger('click')
+    await wrapper.get('[data-testid="learn-canvas-response"]').setValue('My answer.')
+    await wrapper.get('[data-testid="learn-canvas-confidence-4"]').setValue()
+    await wrapper.get('[data-testid="learn-canvas-submit"]').trigger('click')
+    await vi.waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
+    expect(start.mock.calls[0]?.[0].idempotencyKey).toMatch(/^adaptive-canvas-start-/)
+    const stageKey = stage.mock.calls[0]?.[0].idempotencyKey
+    expect(stageKey).toMatch(fallback ? /^adaptive-canvas-submit-\d+-[a-z0-9]+$/ : /^adaptive-canvas-submit-[0-9a-f-]{36}$/)
+    await expect(prepareAdaptiveCommand({ userId: 'owner_1', commandName: 'submitCanvasResponse', targetId: 'thread_1', expectedRevision: 2, idempotencyKey: stageKey, payload: { response: 'My answer.' } }))
+      .resolves.toMatchObject({ idempotencyKeyHash: expect.stringMatching(/^sha256:/) })
+    expect(submit.mock.calls[0]?.[0].idempotencyKey).toBe(`adaptive-canvas-score:${canvas.activity.id}`)
+    wrapper.unmount()
   })
 
   it('keeps the draft and retries an unconfirmed submission with the same key', async () => {

@@ -181,7 +181,7 @@ watch([started, responseStep, exampleRevealed, isOnline, busy, meaningfulStartRe
   finally { meaningfulStartPending.value = false }
 }, { flush: 'post', immediate: true })
 
-function key(prefix: string) { return `${prefix}:${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}` }
+function key(prefix: string) { return `${prefix}-${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}` }
 const renderValidation = computed(() => {
   if (props.canvas.status === 'blocked') return { reason: null, primitive: null }
   const primitive = props.canvas.activity.primitive

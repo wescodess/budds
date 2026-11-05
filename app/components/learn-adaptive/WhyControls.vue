@@ -51,10 +51,11 @@ async function choose(option: Controls['options'][number]) {
   error.value = null
   if (pendingOption.value !== option.key) pendingKey.value = null
   pendingOption.value = option.key
-  pendingKey.value ??= `adaptive-override:${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`}`
+  pendingKey.value ??= `adaptive-override-${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`
   try {
     const result = await mutation.mutate({ threadId: props.threadId as never, activityId: props.activityId,
-      option: option.key, expectedRevision: currentRevision.value, idempotencyKey: pendingKey.value }) as { kind: string, revision?: number, value?: { fixedNextPlan?: AdaptiveFixedNextPlan } }
+      option: option.key, expectedRevision: currentRevision.value, idempotencyKey: pendingKey.value }) as { kind: string, revision?: number, value?: { fixedNextPlan?: AdaptiveFixedNextPlan } } | undefined
+    if (!result) throw new Error('Could not save this choice. Try again.')
     if (result.kind !== 'ok' || result.revision === undefined || !result.value?.fixedNextPlan) {
       pendingKey.value = null
       throw new Error('This activity changed. Refresh before choosing again.')

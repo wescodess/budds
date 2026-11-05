@@ -168,7 +168,7 @@ async function continueReadySession() {
   if (!selected || !ownerId || attachBusy.value) return
   attachBusy.value = true
   attachError.value = null
-  attachKey.value ??= `adaptive-ready:${crypto.randomUUID?.() ?? Date.now()}`
+  attachKey.value ??= `adaptive-ready-${crypto.randomUUID?.() ?? Date.now()}`
   try {
     const result = await attachReadyMutation.mutate({ studySessionId: selected.id as never, expectedSessionRevision: selected.revision, idempotencyKey: attachKey.value }) as { kind: string, threadId?: string }
     if (ownerEpoch.value !== epoch || currentOwnerId.value !== ownerId || readySession.value?.id !== selected.id || readySession.value.revision !== selected.revision) return
