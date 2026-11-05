@@ -16,6 +16,8 @@ function loadMermaid() {
         startOnLoad: false,
         securityLevel: 'strict',
         theme: 'dark',
+        layout: 'dagre',
+        look: 'classic',
         themeVariables: {
           primaryColor: '#292524',
           primaryTextColor: '#d6d3d1',
