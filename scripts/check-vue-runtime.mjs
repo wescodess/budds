@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises'
 
-const lockfile = await readFile(process.argv[2] || new URL('../pnpm-lock.yaml', import.meta.url), 'utf8')
+const lockfile = (await readFile(process.argv[2] || new URL('../pnpm-lock.yaml', import.meta.url), 'utf8')).replace(/\r\n/g, '\n')
 // pnpm 9 uses two-space package/snapshot keys. Fail closed if its format changes.
 if (!/^lockfileVersion: '9\.0'$/m.test(lockfile)) {
   throw new Error('Unsupported lockfile format; update the Vue runtime check')
@@ -19,14 +19,27 @@ const packages = [
   '@vue/compiler-ssr',
 ]
 const versions = new Map(packages.map(name => [name, new Set()]))
+const errors = []
+let checkingRecords = false
 // Check both package records and snapshots, including peer-qualified snapshots.
-for (const match of lockfile.matchAll(/^ {2}'?(vue|@vue\/[a-z-]+)@([^\s'(:]+)(?:\([^\n]*)?'?:(?: \{\})?$/gm)) {
-  versions.get(match[1])?.add(match[2])
+for (const line of lockfile.split('\n')) {
+  if (/^\S/.test(line)) {
+    checkingRecords = /^(packages|snapshots):$/.test(line)
+    continue
+  }
+  if (!checkingRecords) continue
+  const match = line.match(/^ {2}(['"]?)(vue|@vue\/[a-z-]+)@(.+?)\1:(?: \{\})?$/)
+  if (!match || !versions.has(match[2])) continue
+  const version = match[3].match(/^(\d+\.\d+\.\d+(?:-[\da-zA-Z-]+(?:\.[\da-zA-Z-]+)*)?(?:\+[\da-zA-Z-]+(?:\.[\da-zA-Z-]+)*)?)(?:\([^\n]*\))?$/)
+  if (!version) {
+    errors.push(`${match[2]}: unsupported resolution ${match[3]}`)
+    continue
+  }
+  versions.get(match[2]).add(version[1])
 }
 
 const vueVersions = versions.get('vue')
 const expected = [...vueVersions][0]
-const errors = []
 for (const [name, resolved] of versions) {
   if (resolved.size !== 1 || !resolved.has(expected)) {
     errors.push(`${name}: ${[...resolved].join(', ') || 'missing'} (expected only ${expected || 'one Vue version'})`)

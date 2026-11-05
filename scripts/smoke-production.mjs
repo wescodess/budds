@@ -39,15 +39,27 @@ for (const stream of [server.stdout, server.stderr]) {
   stream.on('data', chunk => { output = (output + chunk.toString()).slice(-32_000) })
 }
 
-function stop() {
-  if (server.pid && server.exitCode === null && server.signalCode === null) {
-    try { process.kill(-server.pid, 'SIGTERM') } catch (error) {
+function stop(signal = 'SIGTERM') {
+  if (server.pid) {
+    try { process.kill(-server.pid, signal) } catch (error) {
       if (error.code !== 'ESRCH') throw error
     }
   }
 }
+async function shutdown() {
+  stop()
+  if (await Promise.race([closed.then(() => true), delay(5_000, false, { ref: false })])) return
+  stop('SIGKILL')
+  if (!await Promise.race([closed.then(() => true), delay(5_000, false, { ref: false })])) {
+    server.stdout.destroy()
+    server.stderr.destroy()
+    throw new Error('Pages preview did not close after SIGKILL')
+  }
+}
 for (const signal of ['SIGINT', 'SIGTERM']) {
-  process.once(signal, () => { stop(); process.exit(signal === 'SIGINT' ? 130 : 143) })
+  process.once(signal, async () => {
+    try { await shutdown() } finally { process.exit(signal === 'SIGINT' ? 130 : 143) }
+  })
 }
 
 try {
@@ -58,20 +70,22 @@ try {
     if (startupError) throw startupError
     if (server.exitCode !== null || server.signalCode !== null) throw new Error('Pages preview exited before readiness')
     // Retry connection startup only. A served 500 must fail immediately.
-    response = await fetch(`${origin}/login`, { redirect: 'manual', signal: AbortSignal.timeout(15_000) }).catch(() => undefined)
+    response = await fetch(`${origin}/login`, { redirect: 'manual', signal: AbortSignal.timeout(15_000) }).catch((error) => {
+      if (error.cause?.code !== 'ECONNREFUSED') throw new Error('/login: production Pages preview request failed or timed out', { cause: error })
+    })
     if (response) break
     await delay(500)
   }
   if (!response) throw new Error('Timed out starting the production Pages preview')
 
-  for (const [pathname, marker] of [['/login', 'Continue with Google'], ['/privacy', '1. What data we collect']]) {
+  for (const [pathname, marker] of [['/login', /<button\b[^>]*\baria-busy="false"/], ['/privacy', /<a\b[^>]*\bhref="\/terms"/]]) {
     const page = pathname === '/login' ? response : await fetch(`${origin}${pathname}`, { redirect: 'manual', signal: AbortSignal.timeout(15_000) })
     const html = await page.text()
     const ssrBody = html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
-    if (page.status !== 200 || !page.headers.get('content-type')?.includes('text/html') || !ssrBody.includes(marker)) {
-      throw new Error(`${pathname}: expected SSR HTML containing "${marker}", got HTTP ${page.status}\n${html.slice(0, 1000)}`)
+    if (page.status !== 200 || !page.headers.get('content-type')?.includes('text/html') || !/<div\b[^>]*\bid="__nuxt"[^>]*>/.test(ssrBody) || !marker.test(ssrBody)) {
+      throw new Error(`${pathname}: expected Nuxt SSR HTML containing ${marker}, got HTTP ${page.status}\n${html.slice(0, 1000)}`)
     }
-    console.log(`Production SSR passed: ${pathname} HTTP 200, rendered "${marker}".`)
+    console.log(`Production SSR passed: ${pathname} HTTP 200, rendered page attributes.`)
   }
   if (/Cannot read properties of null \(reading ['"]ce['"]\)/.test(output)) {
     throw new Error('Vue rendering-state failure in production preview output')
@@ -80,7 +94,5 @@ try {
   console.error(output)
   throw error
 } finally {
-  stop()
-  await closed
-  await rm(temporaryDirectory, { recursive: true, force: true })
+  try { await shutdown() } finally { await rm(temporaryDirectory, { recursive: true, force: true }) }
 }

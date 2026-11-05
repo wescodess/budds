@@ -19,6 +19,17 @@ test('Vue guard rejects split versions, missing records, and format drift', () =
     assert.equal(check(fixture).status, 0)
     // Peer variants of the same version are fine; a second runtime version is not.
     assert.equal(check(`${fixture}  vue@3.5.44(typescript@5.9.3):\n`).status, 0)
+    assert.equal(check(fixture.replaceAll('3.5.44', '3.6.0-beta.2')).status, 0)
+    assert.equal(check(`${fixture}  'vue@3.5.44(patch_hash=abc123)(typescript@5.9.3)':\n`).status, 0)
+    assert.equal(check(`patchedDependencies:\n  vue@3.5.42:\n    path: patches/vue.patch\noverrides:\n  'vue@>=3 <4': 3.5.44\n${fixture}`).status, 0)
+    assert.equal(check(fixture.replaceAll('\n', '\r\n')).status, 0)
+    for (const key of ['vue@https://example.invalid/vue.tgz', "'@vue/runtime-core@https://example.invalid/runtime-core.tgz'", 'vue@file:../vue']) {
+      for (const section of ['packages', 'snapshots']) {
+        const result = check(fixture.replace(`${section}:\n`, `${section}:\n  ${key}:\n`))
+        assert.equal(result.status, 1, `${section}: ${key}`)
+        assert.ok(result.stderr.includes('unsupported resolution'), result.stderr)
+      }
+    }
     for (const name of names) {
       const split = check(`${fixture}  '${name}@3.5.42(vue@3.5.42)':\n`)
       assert.equal(split.status, 1, name)

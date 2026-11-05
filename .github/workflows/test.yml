@@ -182,6 +182,7 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=4096
         run: pnpm build
       - name: Smoke render production Pages output
+        timeout-minutes: 5
         run: node scripts/smoke-production.mjs
       - name: Upload Pages build
         uses: actions/upload-artifact@v7
