@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
-import { buildNuxt, loadNuxt } from 'nuxt/kit'
+import { buildNuxt, loadNuxt, writeTypes } from 'nuxt/kit'
 
 const execFile = promisify(execFileCallback)
 const root = process.cwd()
@@ -148,10 +148,12 @@ async function main() {
     dotenv: false,
     overrides: {
       extends: [realAdaptiveCanvas ? './e2e/authority-layer' : './e2e/canvas-layer'],
-      buildDir: join(workspace, '.nuxt'),
       nitro: { preset: 'node-server', output: { dir: outputDir } },
     },
   })
+  // Match the CLI's preparation step and use the project's .nuxt directory:
+  // tsconfig.json and server/tsconfig.json extend generated files there.
+  await writeTypes(builder)
   await buildNuxt(builder)
   await builder.close()
   builder = undefined
