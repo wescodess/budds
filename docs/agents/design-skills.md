@@ -2,6 +2,8 @@
 
 `DESIGN.md` is the brief for all UI work. It wins over every skill listed here, and vendored skill text is never edited to fit it. Conflicts are listed below instead.
 
+Start with [ui-design-gate](../../.agents/skills/ui-design-gate/SKILL.md) to establish whether a design system exists. If none exists, `frontend-design` covers direction and rendered options; `design-system` covers the audit, tokens, components, patterns, and documentation. The gate governs creation with the human before surface concepts begin.
+
 ## Which skill, in what order
 
 | Step | Job | Use | Notes |
