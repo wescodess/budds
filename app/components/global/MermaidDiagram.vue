@@ -18,6 +18,9 @@ function loadMermaid() {
         theme: 'dark',
         layout: 'dagre',
         look: 'classic',
+        flowchart: { wrappingWidth: 200, minNodeWidth: 0 },
+        state: { wrappingWidth: 200, minNodeWidth: 0 },
+        mindmap: { layout: 'cose-bilkent' },
         themeVariables: {
           primaryColor: '#292524',
           primaryTextColor: '#d6d3d1',
