@@ -390,8 +390,7 @@ test('Home opens one canonical Void entry and legacy links keep history and the 
   const opened = context.waitForEvent('page')
   await historyLink.click({ modifiers: ['ControlOrMeta'] })
   const tab = await opened
-  await tab.waitForLoadState('domcontentloaded')
-  expect(new URL(tab.url()).pathname).toBe(voidPath)
+  await expect(tab).toHaveURL(url => url.pathname === voidPath)
   await tab.close()
   await expect(page).toHaveURL(/\/app\/learn$/)
   await historyLink.click()
