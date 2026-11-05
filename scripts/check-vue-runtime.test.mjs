@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import { fileURLToPath } from 'node:url'
 
 test('Vue guard rejects split versions, missing records, and format drift', () => {
   const directory = mkdtempSync(join(tmpdir(), 'budds-vue-lock-'))
@@ -13,7 +14,7 @@ test('Vue guard rejects split versions, missing records, and format drift', () =
   const fixture = `lockfileVersion: '9.0'\npackages:\n${records}\nsnapshots:\n${records}\n`
   function check(contents) {
     writeFileSync(file, contents)
-    return spawnSync(process.execPath, [new URL('./check-vue-runtime.mjs', import.meta.url).pathname, file], { encoding: 'utf8' })
+    return spawnSync(process.execPath, [fileURLToPath(new URL('./check-vue-runtime.mjs', import.meta.url)), file], { encoding: 'utf8' })
   }
   try {
     assert.equal(check(fixture).status, 0)

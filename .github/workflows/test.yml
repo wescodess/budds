@@ -71,6 +71,8 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Enforce a single Vue runtime
         run: node --test scripts/check-vue-runtime.test.mjs && node scripts/check-vue-runtime.mjs
+      - name: Test production smoke fixtures
+        run: node --test scripts/smoke-production.test.mjs
       - name: Enforce lint warning baseline
         run: pnpm lint:ci
       - name: Typecheck application

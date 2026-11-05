@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 
 const directory = resolve(process.argv[2] || 'dist')
+const startupTimeout = Number(process.env.SMOKE_STARTUP_TIMEOUT_MS) || 180_000
 await access(join(directory, '_worker.js/index.js'))
 const temporaryDirectory = await mkdtemp(join(tmpdir(), 'budds-production-smoke-'))
 const socket = createServer()
@@ -33,10 +34,14 @@ const server = spawn('pnpm', args, {
 })
 const closed = new Promise(resolve => server.once('close', resolve))
 let output = ''
+let ready = false
 let startupError
 server.on('error', error => { startupError = error })
 for (const stream of [server.stdout, server.stderr]) {
-  stream.on('data', chunk => { output = (output + chunk.toString()).slice(-32_000) })
+  stream.on('data', (chunk) => {
+    output = (output + chunk.toString()).slice(-32_000)
+    ready ||= /\bReady on\b/.test(output)
+  })
 }
 
 function stop(signal = 'SIGTERM') {
@@ -62,25 +67,28 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
   })
 }
 
+async function render(pathname) {
+  try {
+    const page = await fetch(`http://127.0.0.1:${port}${pathname}`, { redirect: 'manual', signal: AbortSignal.timeout(15_000) })
+    return { page, html: await page.text() }
+  } catch (error) {
+    const failure = error.name === 'TimeoutError' ? 'renderer hung: no complete response within 15s' : 'request failed'
+    throw new Error(`${pathname}: ${failure} after Wrangler reported ready`, { cause: error })
+  }
+}
+
 try {
-  const origin = `http://127.0.0.1:${port}`
-  const deadline = Date.now() + 180_000
-  let response
-  while (Date.now() < deadline) {
+  // Wrangler's proxy accepts connections and holds requests until the worker has loaded.
+  const deadline = Date.now() + startupTimeout
+  while (!ready) {
     if (startupError) throw startupError
     if (server.exitCode !== null || server.signalCode !== null) throw new Error('Pages preview exited before readiness')
-    // Retry connection startup only. A served 500 must fail immediately.
-    response = await fetch(`${origin}/login`, { redirect: 'manual', signal: AbortSignal.timeout(15_000) }).catch((error) => {
-      if (error.cause?.code !== 'ECONNREFUSED') throw new Error('/login: production Pages preview request failed or timed out', { cause: error })
-    })
-    if (response) break
-    await delay(500)
+    if (Date.now() >= deadline) throw new Error(`Wrangler did not print "Ready on" within ${startupTimeout / 1000}s; see the captured output above, its startup wording may have changed`)
+    await delay(100)
   }
-  if (!response) throw new Error('Timed out starting the production Pages preview')
 
   for (const [pathname, marker] of [['/login', /<button\b[^>]*\baria-busy="false"/], ['/privacy', /<a\b[^>]*\bhref="\/terms"/]]) {
-    const page = pathname === '/login' ? response : await fetch(`${origin}${pathname}`, { redirect: 'manual', signal: AbortSignal.timeout(15_000) })
-    const html = await page.text()
+    const { page, html } = await render(pathname)
     const ssrBody = html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
     if (page.status !== 200 || !page.headers.get('content-type')?.includes('text/html') || !/<div\b[^>]*\bid="__nuxt"[^>]*>/.test(ssrBody) || !marker.test(ssrBody)) {
       throw new Error(`${pathname}: expected Nuxt SSR HTML containing ${marker}, got HTTP ${page.status}\n${html.slice(0, 1000)}`)
@@ -91,7 +99,7 @@ try {
     throw new Error('Vue rendering-state failure in production preview output')
   }
 } catch (error) {
-  console.error(output)
+  console.error(`--- Captured Wrangler output ---\n${output}\n--- End captured Wrangler output ---`)
   throw error
 } finally {
   try { await shutdown() } finally { await rm(temporaryDirectory, { recursive: true, force: true }) }
