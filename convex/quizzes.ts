@@ -4,11 +4,10 @@ import { internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import type { MutationCtx, QueryCtx } from './_generated/server'
 import { getOptionalAuthUserId, requireAuth } from './lib/auth'
-import { quizGradingCriterionValidator } from '../shared/quiz-grading'
+import { QUIZ_RUBRIC_GRADE_VERSION, quizGradingCriterionValidator } from '../shared/quiz-grading'
 import { validatedQuestionGradingCriteria } from './lib/quizQuestionGrading'
 import { createPendingAnswerAssessment, isQuizGradingEnabled, isRubricAssessment, projectLearnerQuizQuestion, projectQuizGrade } from './lib/quizAnswerAssessment'
 import { getQuizAttemptAnswers, getQuizAttemptAssessments, getQuizGradingState, isQuizGradingParentEligible, scheduleQuizGrading } from './lib/quizGrading'
-import { QUIZ_RUBRIC_GRADE_VERSION } from '../shared/quiz-grading'
 
 const MAX_QUIZ_QUESTIONS = 200
 const MAX_QUIZZES_PER_FOLDER = 100
