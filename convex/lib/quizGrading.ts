@@ -8,6 +8,15 @@ import { QUIZ_GRADER_POLICY, type QuizGradingInput } from '../../server/utils/qu
 
 export const MAX_QUIZ_GRADING_ROWS = 200
 
+export function getQuizGradingState(rows: Doc<'quizAnswerAssessments'>[]) {
+  const rubricRows = rows.filter(isRubricAssessment)
+  return {
+    gradingStatus: rubricRows.some(row => row.status === 'pending') ? 'grading' as const : 'settled' as const,
+    // Independent of pending work: History gives checking priority over learner input.
+    gradingNeedsAttention: rubricRows.some(row => row.status === 'unavailable' || (row.status === 'available' && row.label === 'uncertain')),
+  }
+}
+
 export async function getQuizAttemptAnswers(ctx: QueryCtx | MutationCtx, attempt: Doc<'quizAttempts'>) {
   if (!attempt.gradingQuestionIds) {
     return await ctx.db.query('attemptAnswers').withIndex('by_attemptId', q => q.eq('attemptId', attempt._id)).take(MAX_QUIZ_GRADING_ROWS)
@@ -98,7 +107,7 @@ export async function recomputeQuizGradingScore(ctx: MutationCtx, attemptId: Id<
     hundredths += grade ? (grade.status === 'available' ? Math.round((grade.credit ?? 0) * 100) : 0) : answer.isCorrect ? 100 : 0
   }
   const score = hundredths / 100
-  await ctx.db.patch(attemptId, { score, gradingStatus: rows.some(row => row.status === 'pending') ? 'grading' : 'settled' })
+  await ctx.db.patch(attemptId, { score, ...getQuizGradingState(rows) })
   const completed = await ctx.db.query('quizAttempts')
     .withIndex('by_quizId_and_status_and_completedAt', q => q.eq('quizId', scope.quiz._id).eq('status', 'completed')).order('desc').first()
   const legacy = await ctx.db.query('quizAttempts')

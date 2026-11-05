@@ -109,6 +109,7 @@ async function reserve(fixture: Fixture, attemptId: Id<'quizAttempts'>) {
   expect(await fixture.t.mutation(internal.quizGrading.markDispatched, { attemptId, claimId: claim.claimId, items })).toBe(true)
   return {
     claim,
+    items,
     args: {
       attemptId, claimId: claim.claimId,
       results: claim.items.map(item => ({
@@ -117,6 +118,16 @@ async function reserve(fixture: Fixture, attemptId: Id<'quizAttempts'>) {
       })),
     },
   }
+}
+
+async function expectHistoryGrade(fixture: Fixture, attemptId: Id<'quizAttempts'>, expected: {
+  score: number
+  gradingStatus: 'grading' | 'settled'
+  gradingNeedsAttention: boolean
+}) {
+  expect(await fixture.t.run(ctx => ctx.db.get(attemptId))).toMatchObject(expected)
+  const history = await fixture.user.query(api.quizzes.getQuizHistory, { quizId: fixture.quizId })
+  expect(history.find(attempt => attempt._id === attemptId)).toMatchObject(expected)
 }
 
 describe('dispatch and scoring', () => {
@@ -160,7 +171,7 @@ describe('dispatch and scoring', () => {
       const result = await fixture.user.query(api.quizzes.getAttemptResults, { attemptId })
       expect(result).toMatchObject({ score: 200, total: 200, percentage: 100, grading: { pending: 0, unavailable: 0 } })
       expect(result?.results).toHaveLength(200)
-      expect(await fixture.t.run(ctx => ctx.db.get(attemptId))).toMatchObject({ gradingStatus: 'settled' })
+      expect(await fixture.t.run(ctx => ctx.db.get(attemptId))).toMatchObject({ gradingStatus: 'settled', gradingNeedsAttention: false })
       expect(await fixture.t.run(ctx => ctx.db.get(fixture.quizId))).toMatchObject({ score: 100 })
     })
   })
@@ -197,7 +208,7 @@ describe('dispatch and scoring', () => {
     else await fixture.user.mutation(api.quizzes.submitAllAnswers, { attemptId, answers: [answer] })
 
     expect(await fixture.t.run(ctx => ctx.db.get(attemptId))).toMatchObject({
-      score: 1, total: 1, gradingStatus: 'settled', gradingQuestionIds: [answer.questionId],
+      score: 1, total: 1, gradingStatus: 'settled', gradingNeedsAttention: false, gradingQuestionIds: [answer.questionId],
     })
     const result = await fixture.user.query(api.quizzes.getAttemptResults, { attemptId })
     expect(result?.results.map(row => row.questionId)).toEqual([answer.questionId])
@@ -253,15 +264,17 @@ describe('dispatch and scoring', () => {
     const legacyId = await finish(fixture, ['Two identical daughter cells'])
 
     const before = await fixture.user.query(api.quizzes.getQuizHistory, { quizId: fixture.quizId })
-    expect(before.find(attempt => attempt._id === gradingId)).toMatchObject({ gradingStatus: 'grading' })
+    expect(before.find(attempt => attempt._id === gradingId)).toMatchObject({ gradingStatus: 'grading', gradingNeedsAttention: false })
     expect(before.find(attempt => attempt._id === legacyId)).not.toHaveProperty('gradingStatus')
+    expect(before.find(attempt => attempt._id === legacyId)).not.toHaveProperty('gradingNeedsAttention')
 
     await drain(fixture)
 
     const after = await fixture.user.query(api.quizzes.getQuizHistory, { quizId: fixture.quizId })
-    expect(after.find(attempt => attempt._id === gradingId)).toMatchObject({ gradingStatus: 'settled', score: 0.4, percentage: 40 })
+    expect(after.find(attempt => attempt._id === gradingId)).toMatchObject({ gradingStatus: 'settled', gradingNeedsAttention: false, score: 0.4, percentage: 40 })
     expect(after.find(attempt => attempt._id === legacyId)).toMatchObject({ score: 1, percentage: 100 })
     expect(after.find(attempt => attempt._id === legacyId)).not.toHaveProperty('gradingStatus')
+    expect(after.find(attempt => attempt._id === legacyId)).not.toHaveProperty('gradingNeedsAttention')
   })
 
   test.each(['completeAttempt', 'submitAllAnswers', 'submitAttempt'] as const)('%s schedules a durable job only at completion', async (path) => {
@@ -346,7 +359,8 @@ describe('dispatch and scoring', () => {
     await drain(fixture)
     const [row] = await assessments(fixture, attemptId)
     expect(row).toMatchObject({ status: 'available', label: 'uncertain', credit: 0.4 })
-    expect(await fixture.t.run(ctx => ctx.db.get(attemptId))).toMatchObject({ score: 0.4, gradingStatus: 'settled' })
+    expect(await fixture.t.run(ctx => ctx.db.get(attemptId))).toMatchObject({ score: 0.4, gradingStatus: 'settled', gradingNeedsAttention: true })
+    expect((await fixture.user.query(api.quizzes.getQuizHistory, { quizId: fixture.quizId }))[0]).toMatchObject({ score: 0.4, gradingStatus: 'settled', gradingNeedsAttention: true })
     expect((await fixture.user.query(api.quizzes.getAttemptResults, { attemptId }))?.grading).toEqual({ pending: 0, needsReview: 1, unavailable: 0 })
     for (const [verdict, credit] of [['partial', 0.5], ['correct', 1], ['incorrect', 0]] as const) {
       await fixture.user.mutation(api.quizGrading.selfAssess, { attemptAnswerId: row!.attemptAnswerId, verdict })
@@ -355,6 +369,8 @@ describe('dispatch and scoring', () => {
       expect(results).toMatchObject({ score: credit, grading: { needsReview: 0 }, results: [{ attemptAnswerId: row!.attemptAnswerId, grade: { source: 'self', credit } }] })
       expect(JSON.stringify(results)).not.toMatch(/criterionResults|criteriaSnapshot|weightPercent/)
       expect(await fixture.t.run(ctx => ctx.db.get(row!.attemptAnswerId))).toMatchObject({ isCorrect: credit === 1 })
+      expect(await fixture.t.run(ctx => ctx.db.get(attemptId))).toMatchObject({ score: credit, gradingStatus: 'settled', gradingNeedsAttention: false })
+      expect((await fixture.user.query(api.quizzes.getQuizHistory, { quizId: fixture.quizId }))[0]).toMatchObject({ score: credit, gradingNeedsAttention: false })
     }
   })
 
@@ -369,6 +385,167 @@ describe('dispatch and scoring', () => {
     expect(await fixture.t.run(ctx => ctx.db.get(fixture.quizId))).toMatchObject({ score: 100 })
     await fixture.user.mutation(api.quizGrading.selfAssess, { attemptAnswerId: (await assessments(fixture, older))[0]!.attemptAnswerId, verdict: 'incorrect' })
     expect(await fixture.t.run(ctx => ctx.db.get(fixture.quizId))).toMatchObject({ score: 100 })
+  })
+})
+
+describe('history grading attention', () => {
+  test('keeps pending independent of learner input until the last eligible row is resolved', async () => {
+    const fixture = await createQuiz(3)
+    const attemptId = await finish(fixture)
+    const { args, items } = await reserve(fixture, attemptId)
+    const [review, , pending] = args.results
+    expect(await fixture.t.mutation(internal.quizGrading.commitBatch, {
+      ...args, results: [{ ...review!, criterionResults: [
+        { key: criteria[0]!.key, verdict: 'met' }, { key: criteria[1]!.key, verdict: 'uncertain' },
+      ] }],
+    })).toBe(1)
+    expect(await fixture.t.mutation(internal.quizGrading.failBatch, {
+      attemptId, claimId: args.claimId, items: [items[1]!], reason: 'unavailable', retryable: false,
+    })).toBe(1)
+    // Both signals are true: consumers must show checking while grading is pending.
+    await expectHistoryGrade(fixture, attemptId, { score: 0.4, gradingStatus: 'grading', gradingNeedsAttention: true })
+    expect((await fixture.user.query(api.quizzes.getAttemptResults, { attemptId }))?.grading).toEqual({ pending: 1, needsReview: 1, unavailable: 1 })
+
+    const rows = await assessments(fixture, attemptId)
+    await fixture.user.mutation(api.quizGrading.selfAssess, { attemptAnswerId: rows[0]!.attemptAnswerId, verdict: 'partial' })
+    await expectHistoryGrade(fixture, attemptId, { score: 0.5, gradingStatus: 'grading', gradingNeedsAttention: true })
+    await fixture.user.mutation(api.quizGrading.selfAssess, { attemptAnswerId: rows[1]!.attemptAnswerId, verdict: 'incorrect' })
+    await expectHistoryGrade(fixture, attemptId, { score: 0.5, gradingStatus: 'grading', gradingNeedsAttention: false })
+    expect(await fixture.t.mutation(internal.quizGrading.commitBatch, { ...args, results: [pending!] })).toBe(1)
+    await expectHistoryGrade(fixture, attemptId, { score: 1.5, gradingStatus: 'settled', gradingNeedsAttention: false })
+    expect(generateCompletion).not.toHaveBeenCalled()
+  })
+
+  test.each(['graded', 'needs_review', 'unavailable'] as const)('retry clears attention and re-evaluates a %s outcome with grading switched off', async (outcome) => {
+    const fixture = await createQuiz()
+    const attemptId = await finish(fixture)
+    const initial = await reserve(fixture, attemptId)
+    await fixture.t.mutation(internal.quizGrading.failBatch, {
+      attemptId, claimId: initial.args.claimId, items: initial.items, reason: 'over_budget', retryable: false,
+    })
+    await expectHistoryGrade(fixture, attemptId, { score: 0, gradingStatus: 'settled', gradingNeedsAttention: true })
+    vi.stubEnv('QUIZ_GRADING_MODE', 'off')
+    expect(await fixture.user.mutation(api.quizGrading.requestGradingRetry, { attemptId })).toEqual({ retried: 1 })
+    await expectHistoryGrade(fixture, attemptId, { score: 0, gradingStatus: 'grading', gradingNeedsAttention: false })
+
+    const { args, items } = await reserve(fixture, attemptId)
+    if (outcome === 'unavailable') {
+      await fixture.t.mutation(internal.quizGrading.failBatch, {
+        attemptId, claimId: args.claimId, items, reason: 'unavailable', retryable: false,
+      })
+    }
+    else {
+      await fixture.t.mutation(internal.quizGrading.commitBatch, {
+        ...args, results: args.results.map(result => ({
+          ...result, criterionResults: result.criterionResults.map((criterion, index) => ({
+            ...criterion, verdict: outcome === 'needs_review' && index === 1 ? 'uncertain' as const : 'met' as const,
+          })),
+        })),
+      })
+    }
+    await expectHistoryGrade(fixture, attemptId, {
+      score: outcome === 'graded' ? 1 : outcome === 'needs_review' ? 0.4 : 0,
+      gradingStatus: 'settled', gradingNeedsAttention: outcome !== 'graded',
+    })
+    expect(generateCompletion).not.toHaveBeenCalled()
+  })
+
+  test.each([
+    ['exhausted', 1], ['exhausted', 2], ['malformed', 1], ['malformed', 2],
+  ] as const)('records a %s claim-time failure among %s answers', async (kind, count) => {
+    const fixture = await createQuiz(count)
+    const attemptId = await finish(fixture)
+    const [failed] = await assessments(fixture, attemptId)
+    await fixture.t.run(ctx => ctx.db.patch(failed!._id, kind === 'exhausted' ? { attemptCount: 3 } : { criteriaSnapshot: [] }))
+    if (count === 1) {
+      expect(await fixture.t.mutation(internal.quizGrading.claimBatch, { attemptId })).toBeNull()
+    }
+    else {
+      const { args } = await reserve(fixture, attemptId)
+      expect(args.results).toHaveLength(1)
+      await expectHistoryGrade(fixture, attemptId, { score: 0, gradingStatus: 'grading', gradingNeedsAttention: true })
+      expect(await fixture.t.mutation(internal.quizGrading.commitBatch, args)).toBe(1)
+    }
+    await expectHistoryGrade(fixture, attemptId, { score: count - 1, gradingStatus: 'settled', gradingNeedsAttention: true })
+    await fixture.user.mutation(api.quizGrading.selfAssess, { attemptAnswerId: failed!.attemptAnswerId, verdict: 'correct' })
+    await expectHistoryGrade(fixture, attemptId, { score: count, gradingStatus: 'settled', gradingNeedsAttention: false })
+  })
+
+  test('lease exhaustion records attention and fences a late successful result', async () => {
+    const fixture = await createQuiz()
+    const attemptId = await finish(fixture)
+    const [row] = await assessments(fixture, attemptId)
+    await fixture.t.run(ctx => ctx.db.patch(row!._id, { attemptCount: 2 }))
+    const { args, items } = await reserve(fixture, attemptId)
+    const claimed = (await assessments(fixture, attemptId))[0]!
+    vi.setSystemTime(claimed.leaseExpiresAt! + 1)
+    expect(await fixture.t.mutation(internal.quizGrading.recoverBatch, {
+      attemptId, claimId: args.claimId, assessmentIds: items.map(item => item.assessmentId),
+    })).toBe(1)
+    await expectHistoryGrade(fixture, attemptId, { score: 0, gradingStatus: 'settled', gradingNeedsAttention: true })
+    expect(await fixture.t.mutation(internal.quizGrading.commitBatch, args)).toBe(0)
+    await expectHistoryGrade(fixture, attemptId, { score: 0, gradingStatus: 'settled', gradingNeedsAttention: true })
+  })
+
+  test.each(['completeAttempt', 'submitAllAnswers'] as const)('%s ignores replaced rows and retains rubric questions deleted after completion', async (path) => {
+    const fixture = await createQuiz()
+    const { attemptId } = await fixture.user.mutation(api.quizzes.startAttempt, { quizId: fixture.quizId, settings })
+    const deleted = fixture.questions[0]!
+    await fixture.user.mutation(api.quizzes.submitAnswer, { attemptId, questionId: deleted._id, userAnswer: 'A pair of daughter cells' })
+    const [excluded] = await assessments(fixture, attemptId)
+    // Seed a terminal row outside the eventual frozen scope.
+    await fixture.t.run(ctx => ctx.db.patch(excluded!._id, { status: 'unavailable', unavailableReason: 'unavailable' }))
+    await fixture.user.mutation(api.quizzes.deleteQuestion, { questionId: deleted._id })
+    const { questionId } = await fixture.user.mutation(api.quizzes.addQuestion, {
+      quizId: fixture.quizId, type: 'free-response', questionText: 'What do cells copy before division?', correctAnswer: 'DNA',
+    })
+    const answer = { questionId, userAnswer: 'The genetic material' }
+    if (path === 'completeAttempt') {
+      await fixture.user.mutation(api.quizzes.submitAnswer, { attemptId, ...answer })
+      await fixture.user.mutation(api.quizzes.completeAttempt, { attemptId })
+    }
+    else await fixture.user.mutation(api.quizzes.submitAllAnswers, { attemptId, answers: [answer] })
+    await expectHistoryGrade(fixture, attemptId, { score: 0, gradingStatus: 'grading', gradingNeedsAttention: false })
+    expect((await fixture.t.run(ctx => ctx.db.get(attemptId)))?.gradingQuestionIds).toEqual([questionId])
+
+    const { args } = await reserve(fixture, attemptId)
+    await fixture.user.mutation(api.quizzes.deleteQuestion, { questionId })
+    vi.stubEnv('QUIZ_GRADING_MODE', 'off')
+    expect(await fixture.t.mutation(internal.quizGrading.commitBatch, {
+      ...args, results: args.results.map(result => ({
+        ...result, criterionResults: result.criterionResults.map(criterion => ({ ...criterion, verdict: 'uncertain' as const })),
+      })),
+    })).toBe(1)
+    await expectHistoryGrade(fixture, attemptId, { score: 0, gradingStatus: 'settled', gradingNeedsAttention: true })
+    const results = await fixture.user.query(api.quizzes.getAttemptResults, { attemptId })
+    expect(results?.results.map(result => result.questionId)).toEqual([questionId])
+    expect(results?.grading).toEqual({ pending: 0, needsReview: 1, unavailable: 0 })
+    const eligible = (await assessments(fixture, attemptId)).find(row => row.questionId === questionId)!
+    await fixture.user.mutation(api.quizGrading.selfAssess, { attemptAnswerId: eligible.attemptAnswerId, verdict: 'correct' })
+    await expectHistoryGrade(fixture, attemptId, { score: 1, gradingStatus: 'settled', gradingNeedsAttention: false })
+    expect(await fixture.t.run(ctx => ctx.db.get(excluded!._id))).toMatchObject({ status: 'unavailable' })
+  })
+
+  test('history tolerates old rubric attempts without the field and leaves legacy shapes unchanged', async () => {
+    const fixture = await createQuiz()
+    const olderId = await finish(fixture, ['Two identical daughter cells'])
+    await fixture.t.run(ctx => ctx.db.patch(olderId, { gradingNeedsAttention: undefined }))
+    vi.stubEnv('QUIZ_GRADING_MODE', 'off')
+    const legacyId = await finish(fixture)
+    const before = await fixture.t.run(async ctx => [await ctx.db.get(olderId), await ctx.db.get(legacyId)])
+    for (const mode of ['off', 'graded']) {
+      vi.stubEnv('QUIZ_GRADING_MODE', mode)
+      const history = await fixture.user.query(api.quizzes.getQuizHistory, { quizId: fixture.quizId })
+      const older = history.find(attempt => attempt._id === olderId)
+      expect(older).toMatchObject({ score: 1, gradingStatus: 'settled' })
+      expect(older).not.toHaveProperty('gradingNeedsAttention')
+      const legacy = history.find(attempt => attempt._id === legacyId)
+      expect(legacy).not.toHaveProperty('gradingNeedsAttention')
+      expect(legacy).not.toHaveProperty('gradingStatus')
+      expect(JSON.stringify(history)).not.toMatch(/criteria|criterionResults|weightPercent|verdict/)
+    }
+    expect(await fixture.t.run(async ctx => [await ctx.db.get(olderId), await ctx.db.get(legacyId)])).toEqual(before)
+    expect(generateCompletion).not.toHaveBeenCalled()
   })
 })
 
@@ -389,6 +566,9 @@ describe('failures and recovery', () => {
       expect(row).toMatchObject({ unavailableReason: reason, attemptCount: index, status: index < 3 ? 'pending' : 'unavailable' })
       expect(row).not.toHaveProperty('label')
       expect(row).not.toHaveProperty('credit')
+      await expectHistoryGrade(fixture, attemptId, {
+        score: 0, gradingStatus: index < 3 ? 'grading' : 'settled', gradingNeedsAttention: index === 3,
+      })
       if (index < 3) {
         expect(row!.nextAttemptAt!).toBeGreaterThan(Date.now())
         const calls = vi.mocked(generateCompletion).mock.calls.length
@@ -432,6 +612,7 @@ describe('failures and recovery', () => {
     expect(generateCompletion).toHaveBeenCalledTimes(1)
     expect((await assessments(fixture, attemptId))[0]).toMatchObject({ status: 'unavailable', unavailableReason: 'malformed' })
     expect((await assessments(fixture, attemptId))[0]).not.toHaveProperty('label')
+    await expectHistoryGrade(fixture, attemptId, { score: 0, gradingStatus: 'settled', gradingNeedsAttention: true })
   })
 
   test.each([false, true])('a crash recovers after lease expiry (dispatched: %s) and fences the old claim', async (dispatch) => {
@@ -447,6 +628,7 @@ describe('failures and recovery', () => {
     expect(generateCompletion).not.toHaveBeenCalled()
     await drain(fixture)
     expect((await assessments(fixture, attemptId))[0]).toMatchObject({ status: 'available', attemptCount: 2 })
+    await expectHistoryGrade(fixture, attemptId, { score: 0.4, gradingStatus: 'settled', gradingNeedsAttention: false })
     expect(generateCompletion).toHaveBeenCalledTimes(1)
     expect(await fixture.t.mutation(internal.quizGrading.failBatch, { attemptId, claimId: claim.claimId, items, reason: 'timeout', retryable: true })).toBe(0)
   })
@@ -504,8 +686,10 @@ describe('ownership, row mode and fencing', () => {
     for (let cycle = 1; cycle <= 2; cycle++) {
       expect(await fixture.user.mutation(api.quizGrading.requestGradingRetry, { attemptId })).toEqual({ retried: 1 })
       expect((await assessments(fixture, attemptId))[1]).toMatchObject({ status: 'pending', attemptCount: 0, manualRetryCount: cycle })
+      await expectHistoryGrade(fixture, attemptId, { score: 0.5, gradingStatus: 'grading', gradingNeedsAttention: false })
       await drain(fixture)
       expect((await assessments(fixture, attemptId))[1]).toMatchObject({ status: 'unavailable', attemptCount: 3, manualRetryCount: cycle })
+      await expectHistoryGrade(fixture, attemptId, { score: 0.5, gradingStatus: 'settled', gradingNeedsAttention: true })
     }
     expect(await fixture.user.mutation(api.quizGrading.requestGradingRetry, { attemptId })).toEqual({ retried: 0 })
     expect(generateCompletion).toHaveBeenCalledTimes(9)

@@ -83,6 +83,7 @@ export const claimBatch = internalMutation({
       if (failed > 0) await continueGrading(ctx, attemptId)
       return null
     }
+    if (failed > 0) await recomputeQuizGradingScore(ctx, attemptId)
     await ctx.scheduler.runAfter(LEASE_MS, internal.quizGrading.recoverBatch, { attemptId, claimId, assessmentIds })
     return { claimId, items }
   },

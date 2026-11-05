@@ -7,7 +7,7 @@ import { getOptionalAuthUserId, requireAuth } from './lib/auth'
 import { quizGradingCriterionValidator } from '../shared/quiz-grading'
 import { validatedQuestionGradingCriteria } from './lib/quizQuestionGrading'
 import { createPendingAnswerAssessment, isQuizGradingEnabled, isRubricAssessment, projectLearnerQuizQuestion, projectQuizGrade } from './lib/quizAnswerAssessment'
-import { getQuizAttemptAnswers, getQuizAttemptAssessments, scheduleQuizGrading } from './lib/quizGrading'
+import { getQuizAttemptAnswers, getQuizAttemptAssessments, getQuizGradingState, scheduleQuizGrading } from './lib/quizGrading'
 import { QUIZ_RUBRIC_GRADE_VERSION } from '../shared/quiz-grading'
 
 const MAX_QUIZ_QUESTIONS = 200
@@ -55,7 +55,7 @@ async function getAnswerGradingPending(ctx: MutationCtx, attemptAnswerId: Id<'at
     : {}
 }
 
-async function getAttemptGradingStatus(ctx: MutationCtx, attemptId: Id<'quizAttempts'>, gradingQuestionIds: Id<'quizQuestions'>[]) {
+async function getAttemptGradingState(ctx: MutationCtx, attemptId: Id<'quizAttempts'>, gradingQuestionIds: Id<'quizQuestions'>[]) {
   const attempt = await ctx.db.get(attemptId)
   if (!attempt) return undefined
   if (!isQuizGradingEnabled()) {
@@ -66,8 +66,7 @@ async function getAttemptGradingStatus(ctx: MutationCtx, attemptId: Id<'quizAtte
   const frozen = { ...attempt, gradingQuestionIds }
   const answers = await getQuizAttemptAnswers(ctx, frozen)
   const rows = await getQuizAttemptAssessments(ctx, frozen, answers)
-  const rubricRows = rows.filter(isRubricAssessment)
-  return rubricRows.some(row => row.status === 'pending') ? 'grading' as const : 'settled' as const
+  return getQuizGradingState(rows)
 }
 
 function normalizeForCompare(value: string): string {
@@ -747,13 +746,13 @@ export const submitAllAnswers = mutation({
     const now = Date.now()
 
     const gradingQuestionIds = questions.map(question => question._id)
-    const gradingStatus = await getAttemptGradingStatus(ctx, args.attemptId, gradingQuestionIds)
+    const gradingState = await getAttemptGradingState(ctx, args.attemptId, gradingQuestionIds)
     await ctx.db.patch(args.attemptId, {
       status: 'completed',
       score: correctCount,
       total,
       completedAt: now,
-      ...(gradingStatus ? { gradingStatus, gradingQuestionIds } : {}),
+      ...(gradingState ? { ...gradingState, gradingQuestionIds } : {}),
     })
 
     await ctx.db.patch(attempt.quizId, {
@@ -762,8 +761,8 @@ export const submitAllAnswers = mutation({
       latestAttemptStatus: 'completed',
     })
 
-    if (gradingStatus === 'grading') await scheduleQuizGrading(ctx, args.attemptId)
-    return { score: correctCount, total, percentage, results, ...(gradingStatus ? { gradingPending: gradingStatus === 'grading' } : {}) }
+    if (gradingState?.gradingStatus === 'grading') await scheduleQuizGrading(ctx, args.attemptId)
+    return { score: correctCount, total, percentage, results, ...(gradingState ? { gradingPending: gradingState.gradingStatus === 'grading' } : {}) }
   },
 })
 
@@ -790,13 +789,13 @@ export const completeAttempt = mutation({
     const now = Date.now()
 
     const gradingQuestionIds = questions.map(question => question._id)
-    const gradingStatus = await getAttemptGradingStatus(ctx, args.attemptId, gradingQuestionIds)
+    const gradingState = await getAttemptGradingState(ctx, args.attemptId, gradingQuestionIds)
     await ctx.db.patch(args.attemptId, {
       status: 'completed',
       score: correctCount,
       total,
       completedAt: now,
-      ...(gradingStatus ? { gradingStatus, gradingQuestionIds } : {}),
+      ...(gradingState ? { ...gradingState, gradingQuestionIds } : {}),
     })
 
     await ctx.db.patch(attempt.quizId, {
@@ -805,7 +804,7 @@ export const completeAttempt = mutation({
       latestAttemptStatus: 'completed',
     })
 
-    if (gradingStatus === 'grading') await scheduleQuizGrading(ctx, args.attemptId)
+    if (gradingState?.gradingStatus === 'grading') await scheduleQuizGrading(ctx, args.attemptId)
     return { score: correctCount, total, percentage }
   },
 })
@@ -981,6 +980,7 @@ export const getQuizHistory = query({
       currentQuestionIndex: a.currentQuestionIndex ?? 0,
       completedAt: a.completedAt,
       ...(a.gradingStatus ? { gradingStatus: a.gradingStatus } : {}),
+      ...(a.gradingNeedsAttention !== undefined ? { gradingNeedsAttention: a.gradingNeedsAttention } : {}),
     }))
   },
 })
@@ -1058,8 +1058,8 @@ export const submitAttempt = mutation({
     }
 
     const gradingQuestionIds = questions.map(question => question._id)
-    const gradingStatus = await getAttemptGradingStatus(ctx, attemptId, gradingQuestionIds)
-    if (gradingStatus) await ctx.db.patch(attemptId, { gradingStatus, gradingQuestionIds })
+    const gradingState = await getAttemptGradingState(ctx, attemptId, gradingQuestionIds)
+    if (gradingState) await ctx.db.patch(attemptId, { ...gradingState, gradingQuestionIds })
 
     await ctx.db.patch(args.quizId, {
       score: percentage,
@@ -1077,7 +1077,7 @@ export const submitAttempt = mutation({
       }
     })
 
-    if (gradingStatus === 'grading') await scheduleQuizGrading(ctx, attemptId)
+    if (gradingState?.gradingStatus === 'grading') await scheduleQuizGrading(ctx, attemptId)
     return { attemptId, score: correctCount, total, correctCount, results }
   },
 })
