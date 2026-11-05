@@ -18,7 +18,12 @@ const credit = computed(() => formatQuizPoints(quizResultCredit(props.result)))
 const markedByYou = computed(() => props.result.grade?.source === 'self')
 const settled = computed(() => state.value === 'correct' || state.value === 'partial' || state.value === 'incorrect')
 const canChallenge = computed(() => settled.value && props.result.grade?.source === 'model')
-const verdict = computed(() => settled.value ? state.value as QuizSelfVerdict : undefined)
+const verdict = computed(() => {
+  if (!settled.value) return undefined
+  // A model's partial credit need not equal the fixed learner verdict.
+  if (state.value === 'partial' && quizResultCredit(props.result) !== 0.5) return undefined
+  return state.value as QuizSelfVerdict
+})
 const feedback = computed(() => canChallenge.value ? props.result.grade?.feedback : undefined)
 const showOptions = computed(() => !isQuizFreeForm(props.result.questionType) && Boolean(props.result.options))
 const showKey = computed(() => state.value !== 'not_checked' || deciding.value)

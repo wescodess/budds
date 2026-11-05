@@ -237,6 +237,37 @@ describe('QuizResultsView graded results', () => {
     wrapper.unmount()
   })
 
+  it.each([0.33, 0.67])('replaces model credit %s directly with the learner partial verdict', async (credit) => {
+    const row = freeForm('a', { status: 'graded', credit, label: 'partially_correct', source: 'model' })
+    const wrapper = await mountResults(attempt([row], credit))
+    await clickButton(wrapper, 'Think this is wrong?')
+    expect(wrapper.findAll('[data-slot="toggle-group-item"][data-state="on"]')).toHaveLength(0)
+
+    selfAssess.mockImplementationOnce(async () => {
+      resultsData.value = attempt([freeForm('a', { status: 'graded', credit: 0.5, label: 'partially_correct', source: 'self' })], 0.5)
+      await nextTick()
+      return null
+    })
+    await clickButton(wrapper, 'Partly')
+    expect(selfAssess.mock.calls).toEqual([[{ attemptAnswerId: 'answer_a', verdict: 'partial' }]])
+    expect(wrapper.text()).toContain('0.5 of 1')
+    expect(wrapper.text()).toContain('Partly correct · marked by you')
+    expect(wrapper.text()).toContain('Your choice counts')
+    expect(wrapper.text()).not.toContain('Your choice replaces this result.')
+    wrapper.unmount()
+  })
+
+  it('keeps the equivalent half-credit model verdict selected without saving it twice', async () => {
+    const wrapper = await mountResults(attempt([partial('a')], 0.5))
+    await clickButton(wrapper, 'Think this is wrong?')
+    const selected = wrapper.find('[data-slot="toggle-group-item"][data-state="on"]')
+    expect(selected.text()).toBe('Partly')
+    await selected.trigger('click')
+    await flushPromises()
+    expect(selfAssess).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
   it('state 8: renders the mobile strip in the review with previous and next', async () => {
     const wrapper = await mountResults(attempt([correct('a'), partial('b'), incorrect('c')], 1.5))
     expect(wrapper.findAll('[data-testid="quiz-score-strip"]')).toHaveLength(2)
