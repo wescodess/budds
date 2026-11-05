@@ -105,7 +105,7 @@ describe('Adaptive Learn event writer', () => {
     const first = await t.run(ctx => writeLearnActivityEvent(ctx, input))
     expect(await t.run(ctx => writeLearnActivityEvent(ctx, input))).toEqual({ eventId: first.eventId, replayed: true })
     const rows = await t.run(ctx => ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', OWNER).eq('threadId', threadId)).take(2))
-    expect(rows).toEqual([expect.objectContaining({ eventType: 'activity_eligible', eventVersion: 'activity_eligible.v1', taxonomyVersion: 'learn-adaptive.activity-events.v5', metadata: input.metadata })])
+    expect(rows).toEqual([expect.objectContaining({ eventType: 'activity_eligible', eventVersion: 'activity_eligible.v1', taxonomyVersion: 'learn-adaptive.activity-events.v6', metadata: input.metadata })])
     expect(rows[0]).not.toHaveProperty('semanticKey')
   })
 

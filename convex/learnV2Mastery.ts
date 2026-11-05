@@ -20,6 +20,7 @@ import {
   type ControlledFeedbackProjection,
 } from '../shared/adaptive-controlled-feedback'
 import { findCurrentAdaptiveActivityForSessionContent, writeLearnActivityEvent } from './lib/learnAdaptiveEvents'
+import { ADAPTIVE_PROVIDER_OPERATIONAL_STORAGE_MANIFEST } from '../shared/adaptive-learn-storage-manifest'
 
 const MAX_RESPONSE = 12_000
 const MAX_MISCONCEPTIONS = ADAPTIVE_MISCONCEPTION_TAGS.length
@@ -47,6 +48,98 @@ const scorerResponseSchema = {
 export type MasteryAttemptRequest = { studySessionId: Id<'studySessions'>, expectedSessionRevision: number, expectedContentRevision: number, expectedPlanRecordRevision: number, expectedBlueprintRecordRevision: number, response: string, confidence: number, idempotencyKey: string }
 type AdaptiveAdmissionContext = { threadId: Id<'learningThreads'>, activityId: string, manifestVersion: string }
 type AttemptRequest = MasteryAttemptRequest
+const PRODUCT_POLICY_VERSION = 'adaptive-v2-product-budget.utc-hour-day.v1'
+const ROLLBACK_POLICY_VERSION = 'adaptive-v2-provider-rollback.v1'
+const MAX_AMBIGUITY_PERCENT = 1
+const MAX_BUDGET_DENIAL_PERCENT = 5
+type ProductDenialCode = 'adaptive_product_hourly_quota' | 'adaptive_product_daily_quota' | 'adaptive_product_cost_budget' | 'adaptive_product_concurrency_cap' | 'adaptive_product_guardrail_review' | 'adaptive_product_ledger_unavailable'
+type ProductAdmission = { kind: 'allowed' } | { kind: 'blocked', code: ProductDenialCode, retryable: boolean, retryAfterMs?: number }
+
+async function productBudgetRow(ctx: QueryCtx | MutationCtx, scope: 'hour' | 'day' | 'guardrail', now: number) {
+  const windowMs = scope === 'hour' ? 3_600_000 : 86_400_000
+  const periodStart = scope === 'guardrail' ? 0 : Math.floor(now / windowMs) * windowMs
+  return { periodStart, row: await ctx.db.query('learnAdaptiveProviderBudgets').withIndex('by_scope_and_periodStart', q => q.eq('scope', scope).eq('periodStart', periodStart)).unique() }
+}
+
+function productLedgerValid(row: Doc<'learnAdaptiveProviderBudgets'>): boolean {
+  return row.policyVersion === PRODUCT_POLICY_VERSION && row.rollbackVersion === ROLLBACK_POLICY_VERSION
+    && [row.dispatches, row.reservedMicroUsd, row.outstanding, row.eligibleStarts, row.ambiguousOutcomes, row.budgetDenials].every(value => Number.isSafeInteger(value) && value >= 0)
+}
+
+async function ensureProductBudgetRow(ctx: MutationCtx, scope: 'hour' | 'day' | 'guardrail', now: number) {
+  const { periodStart, row } = await productBudgetRow(ctx, scope, now)
+  if (row) return row
+  const id = await ctx.db.insert('learnAdaptiveProviderBudgets', {
+    scope, periodStart, policyVersion: PRODUCT_POLICY_VERSION, rollbackVersion: ROLLBACK_POLICY_VERSION,
+    dispatches: 0, reservedMicroUsd: 0, outstanding: 0, eligibleStarts: 0, ambiguousOutcomes: 0, budgetDenials: 0,
+    rollbackLatched: false, updatedAt: now,
+    ...(scope === 'guardrail' ? {} : { expiresAt: periodStart + (scope === 'hour' ? 3_600_000 : 86_400_000) + ADAPTIVE_PROVIDER_OPERATIONAL_STORAGE_MANIFEST.windowRetentionMs }),
+  })
+  return (await ctx.db.get(id))!
+}
+
+/** One atomic boundary owns quota, concurrency and conservative spend reservation. */
+async function admitAdaptiveProductDispatch(ctx: MutationCtx, job: Doc<'learnJobs'>, reserve: boolean): Promise<ProductAdmission> {
+  const now = Date.now()
+  const policy = ADAPTIVE_V2_PILOT_MANIFEST.productControls
+  const price = ADAPTIVE_V2_PILOT_MANIFEST.modelPolicies.find(row => row.model === job.providerModel)
+  if (job.providerProductPolicyVersion !== PRODUCT_POLICY_VERSION || job.providerRollbackPolicyVersion !== ROLLBACK_POLICY_VERSION || !price
+    || job.providerVersion !== 'openrouter-via-cloudflare-ai-gateway.v1' || job.providerPolicyVersion !== ADAPTIVE_V2_PILOT_MANIFEST.policyVersion
+    || job.providerRequestVersion !== ADAPTIVE_V2_PILOT_MANIFEST.requestVersion || job.providerJobVersion !== ADAPTIVE_V2_PILOT_MANIFEST.jobVersion
+    || job.providerQuotaPolicyVersion !== ADAPTIVE_V2_PILOT_MANIFEST.quotaVersion
+    || job.providerRetentionPolicyVersion !== ADAPTIVE_V2_PILOT_MANIFEST.retention.provider
+    || job.providerMaxRequestBytes !== ADAPTIVE_V2_PILOT_MANIFEST.limits.maxRequestBytes
+    || job.providerMaxOutputTokens !== ADAPTIVE_V2_PILOT_MANIFEST.limits.maxOutputTokens
+    || job.providerReservationStatus === 'outstanding' || job.providerReservationStatus === 'ambiguous') {
+    return { kind: 'blocked', code: 'adaptive_product_ledger_unavailable', retryable: false }
+  }
+  // Every input byte is conservatively charged as a token, including the full
+  // bounded provider envelope; output tokens use the hard completion ceiling.
+  const reservedMicroUsd = Math.ceil(ADAPTIVE_V2_PILOT_MANIFEST.limits.maxRequestBytes * price.inputUsdPerMillionTokens
+    + ADAPTIVE_V2_PILOT_MANIFEST.limits.maxOutputTokens * price.outputUsdPerMillionTokens)
+  if (!Number.isSafeInteger(reservedMicroUsd) || reservedMicroUsd < 1 || reservedMicroUsd > Math.floor(ADAPTIVE_V2_PILOT_MANIFEST.limits.costCeilingUsdPerRequest * 1_000_000)) return { kind: 'blocked', code: 'adaptive_product_ledger_unavailable', retryable: false }
+  const guardrail = await ensureProductBudgetRow(ctx, 'guardrail', now)
+  const hour = await ensureProductBudgetRow(ctx, 'hour', now)
+  const day = await ensureProductBudgetRow(ctx, 'day', now)
+  if (![guardrail, hour, day].every(productLedgerValid)) return { kind: 'blocked', code: 'adaptive_product_ledger_unavailable', retryable: false }
+  if (guardrail.rollbackLatched || guardrail.eligibleStarts >= 1_000_000) return { kind: 'blocked', code: 'adaptive_product_guardrail_review', retryable: false }
+  const attempt = (job.attempts ?? 0) + 1
+  const eligibleStarts = guardrail.eligibleStarts + (job.providerAdmissionCountedAttempt === attempt ? 0 : 1)
+  let denial: Extract<ProductAdmission, { kind: 'blocked' }> | undefined
+  if (guardrail.outstanding >= policy.maxConcurrent) denial = { kind: 'blocked', code: 'adaptive_product_concurrency_cap', retryable: true }
+  else if (hour.dispatches >= policy.maxDispatchesPerHour) denial = { kind: 'blocked', code: 'adaptive_product_hourly_quota', retryable: true, retryAfterMs: hour.periodStart + 3_600_000 - now }
+  else if (day.dispatches >= policy.maxDispatchesPerDay) denial = { kind: 'blocked', code: 'adaptive_product_daily_quota', retryable: true, retryAfterMs: day.periodStart + 86_400_000 - now }
+  else if (day.reservedMicroUsd + reservedMicroUsd > policy.maxReservedMicroUsdPerDay) denial = { kind: 'blocked', code: 'adaptive_product_cost_budget', retryable: true, retryAfterMs: day.periodStart + 86_400_000 - now }
+  const budgetDenied = denial?.kind === 'blocked' && ['adaptive_product_hourly_quota', 'adaptive_product_daily_quota', 'adaptive_product_cost_budget'].includes(denial.code)
+  const budgetDenials = guardrail.budgetDenials + (budgetDenied && job.providerBudgetDeniedAttempt !== attempt ? 1 : 0)
+  const rollbackLatched = budgetDenials * 100 > eligibleStarts * MAX_BUDGET_DENIAL_PERCENT
+  await ctx.db.patch(guardrail._id, { eligibleStarts, budgetDenials, rollbackLatched, updatedAt: now })
+  await ctx.db.patch(job._id, { providerAdmissionCountedAttempt: attempt, ...(budgetDenied ? { providerBudgetDeniedAttempt: attempt } : {}),
+    ...(denial ? { providerAdmissionDenialCode: denial.code, providerAdmissionDeniedAt: now } : {}) })
+  if (denial) return rollbackLatched ? { ...denial, retryable: false } : denial
+  if (reserve) {
+    await ctx.db.patch(hour._id, { dispatches: hour.dispatches + 1, reservedMicroUsd: hour.reservedMicroUsd + reservedMicroUsd, updatedAt: now })
+    await ctx.db.patch(day._id, { dispatches: day.dispatches + 1, reservedMicroUsd: day.reservedMicroUsd + reservedMicroUsd, updatedAt: now })
+    await ctx.db.patch(guardrail._id, { dispatches: guardrail.dispatches + 1, reservedMicroUsd: guardrail.reservedMicroUsd + reservedMicroUsd, outstanding: guardrail.outstanding + 1, updatedAt: now })
+    await ctx.db.patch(job._id, { providerReservationAttempt: attempt, providerReservedMicroUsd: (job.providerReservedMicroUsd ?? 0) + reservedMicroUsd, providerReservationStatus: 'outstanding' })
+  }
+  return { kind: 'allowed' }
+}
+
+async function settleAdaptiveProductReservation(ctx: MutationCtx, job: Doc<'learnJobs'>, ambiguous: boolean, now: number) {
+  if (job.providerProductPolicyVersion !== PRODUCT_POLICY_VERSION || job.providerReservationStatus !== 'outstanding') return
+  const { row } = await productBudgetRow(ctx, 'guardrail', now)
+  if (!row || !productLedgerValid(row) || row.outstanding < 1) throw new Error('Adaptive product reservation is unavailable')
+  const ambiguousOutcomes = row.ambiguousOutcomes + (ambiguous ? 1 : 0)
+  await ctx.db.patch(row._id, { outstanding: row.outstanding - (ambiguous ? 0 : 1), ambiguousOutcomes,
+    rollbackLatched: row.rollbackLatched || ambiguousOutcomes * 100 > row.eligibleStarts * MAX_AMBIGUITY_PERCENT, updatedAt: now })
+  await ctx.db.patch(job._id, { providerReservationStatus: ambiguous ? 'ambiguous' : 'settled' })
+}
+
+/** Owner deletion cannot establish that a dispatched provider request stopped. */
+export async function preserveAdaptiveProductReservationOnDeletion(ctx: MutationCtx, job: Doc<'learnJobs'>) {
+  await settleAdaptiveProductReservation(ctx, job, true, Date.now())
+}
 function requestFingerprintPayload(args: AttemptRequest) { return { command: 'submitMasteryAttempt', studySessionId: String(args.studySessionId), expectedSessionRevision: args.expectedSessionRevision, expectedContentRevision: args.expectedContentRevision, expectedPlanRecordRevision: args.expectedPlanRecordRevision, expectedBlueprintRecordRevision: args.expectedBlueprintRecordRevision, response: args.response, confidence: args.confidence } }
 function legacyRequestFingerprint(args: AttemptRequest) { return JSON.stringify(requestFingerprintPayload(args)) }
 async function requestFingerprints(args: AttemptRequest) { return { digest: await digest(requestFingerprintPayload(args)), legacy: legacyRequestFingerprint(args) } }
@@ -153,6 +246,10 @@ async function adaptiveScoringAuthority(
     learnerHash: await digest(['adaptive-v2-pilot-cohort.v1', userId]),
   })
   if (!pilot.allowed) return { allowed: false as const, kind: 'blocked' as const, code: pilot.code }
+  const { row: productGuardrail } = await productBudgetRow(ctx, 'guardrail', Date.now())
+  if (productGuardrail && (!productLedgerValid(productGuardrail) || productGuardrail.rollbackLatched)) {
+    return { allowed: false as const, kind: 'blocked' as const, code: 'adaptive_product_guardrail_review' as const }
+  }
   if (stagedInput && (activity.submittedResponse !== stagedInput.response || activity.submittedConfidence !== stagedInput.confidence)) {
     return { allowed: false as const, kind: 'denied' as const, code: 'adaptive_activity_authority_unavailable' as const }
   }
@@ -199,6 +296,7 @@ async function projectAdaptiveReconciliation(ctx: MutationCtx, job: Doc<'learnJo
 }
 
 async function blockAmbiguousMasteryJob(ctx: MutationCtx, job: Doc<'learnJobs'>, now: number) {
+  await settleAdaptiveProductReservation(ctx, job, true, now)
   await ctx.db.patch(job._id, {
     status: 'blocked',
     leaseToken: undefined,
@@ -343,6 +441,7 @@ async function masteryScoringLedger(args: AttemptRequest, adaptiveAdmission?: Ad
     providerTimeoutPolicyVersion: 'learn-v2.mastery-timeout.v1',
     providerQuotaPolicyVersion: ADAPTIVE_V2_PILOT_MANIFEST.quotaVersion,
     providerPilotManifestVersion: adaptiveAdmission?.manifestVersion,
+    ...(adaptiveAdmission ? { providerProductPolicyVersion: PRODUCT_POLICY_VERSION, providerRollbackPolicyVersion: ROLLBACK_POLICY_VERSION } : {}),
     providerRequestDigest: requestDigest,
     providerRequestBytes: new TextEncoder().encode(admissionPayload).byteLength,
     providerMaxRequestBytes: ADAPTIVE_V2_PILOT_MANIFEST.limits.maxRequestBytes,
@@ -518,11 +617,18 @@ export const beginMasteryScoring = internalMutation({
         return { kind: 'blocked' as const, code: 'provider_outcome_requires_reconciliation' as const, message: 'Scoring needs reconciliation. No mastery change was made.', retryable: false }
       }
       if ((existing.status === 'leased' || existing.status === 'queued') && (existing.leaseExpiresAt ?? 0) > now) return { kind: 'pending' as const, status: 'in_progress' as const }
+      // A public wrapper cannot downgrade a persisted adaptive scoring job by
+      // omitting its admission context when acquiring a new dispatch lease.
+      if (!args.adaptiveAdmission && (existing.adaptiveThreadId || existing.adaptiveActivityId
+        || existing.providerPilotManifestVersion || existing.providerProductPolicyVersion || existing.providerRollbackPolicyVersion)) {
+        return { kind: 'denied' as const, code: 'adaptive_activity_authority_unavailable' as const, message: 'Use the Adaptive Learn submission to continue this scoring request.', retryable: false }
+      }
       scope ??= await sessionScope(ctx, args.tokenIdentifier, args.studySessionId)
       if (scope.session.status !== 'in_progress' || scope.session.revision !== args.expectedSessionRevision || scope.content.revision !== args.expectedContentRevision || scope.plan.recordRevision !== args.expectedPlanRecordRevision || scope.blueprint.recordRevision !== args.expectedBlueprintRecordRevision) throw new Error('Started session revision conflict')
       if (args.adaptiveAdmission) {
         const authority = await adaptiveScoringAuthority(ctx, args.tokenIdentifier, scope, args.adaptiveAdmission, args)
-        if (!authority.allowed || authority.activity._id !== adaptiveActivity?._id) return { kind: 'denied' as const, code: 'adaptive_activity_authority_unavailable' as const, message: 'Adaptive scoring is unavailable.', retryable: false }
+        if (!authority.allowed) return { kind: authority.kind, code: authority.code, message: 'Adaptive scoring is unavailable.', retryable: false }
+        if (authority.activity._id !== adaptiveActivity?._id) return { kind: 'denied' as const, code: 'adaptive_activity_authority_unavailable' as const, message: 'Adaptive scoring is unavailable.', retryable: false }
       }
       const leaseToken = crypto.randomUUID()
       await ctx.db.patch(existing._id, { ...await masteryScoringLedger(args, args.adaptiveAdmission), requestFingerprint: fingerprints.digest, status: 'leased', leaseToken, leaseExpiresAt: now + SCORING_LEASE_MS, checkpoint: 'reserved', terminalReason: undefined, revision: existing.revision + 1, updatedAt: now })
@@ -594,6 +700,8 @@ export const markMasteryScoringDispatched = internalMutation({
         .withIndex('by_userId_and_createdAt', q => q.eq('userId', args.tokenIdentifier).gt('createdAt', now - ADAPTIVE_V2_PILOT_MANIFEST.limits.dailyQuotaWindowMs))
         .take(ADAPTIVE_V2_PILOT_MANIFEST.limits.maxProviderDispatchesPerDay + 1)
       if (daily.length >= ADAPTIVE_V2_PILOT_MANIFEST.limits.maxProviderDispatchesPerDay) return { kind: 'blocked' as const, code: 'adaptive_daily_quota', retryable: true }
+      const productAdmission = await admitAdaptiveProductDispatch(ctx, job, true)
+      if (productAdmission.kind !== 'allowed') return productAdmission
     }
     await ctx.db.insert('learnMasteryScoringRateEvents', { userId: args.tokenIdentifier, jobId: job._id, createdAt: now, expiresAt: now + SCORING_RATE_EVENT_RETENTION_MS })
     await ctx.db.patch(job._id, { status: 'running', checkpoint: 'provider_dispatched', attempts: (job.attempts ?? 0) + 1, revision: job.revision + 1, updatedAt: now })
@@ -616,6 +724,8 @@ export const authorizeMasteryScoringIo = internalMutation({
     const authority = await adaptiveScoringAuthority(ctx, args.tokenIdentifier, scope, args.adaptiveAdmission)
     if (!authority.allowed) return { kind: authority.kind, code: authority.code, retryable: false }
     if (job.adaptiveThreadId !== args.adaptiveAdmission.threadId || job.adaptiveActivityId !== authority.activity._id || authority.activity.scoringJobId !== job._id) return { kind: 'denied' as const, code: 'adaptive_activity_authority_unavailable', retryable: false }
+    const productAdmission = await admitAdaptiveProductDispatch(ctx, job, false)
+    if (productAdmission.kind !== 'allowed') return productAdmission
     await ctx.db.patch(job._id, { checkpoint: `authorized:${args.stage}`, revision: job.revision + 1, updatedAt: Date.now() })
     return { kind: 'allowed' as const }
   },
@@ -670,6 +780,11 @@ export const cleanupExpiredMasteryScoringRateEvents = internalMutation({
       .withIndex('by_expiresAt', q => q.lte('expiresAt', Date.now()))
       .take(RATE_EVENT_CLEANUP_BATCH)
     for (const row of rows) await ctx.db.delete(row._id)
+    const productRows = await ctx.db.query('learnAdaptiveProviderBudgets')
+      .withIndex('by_expiresAt', q => q.gt('expiresAt', 0).lte('expiresAt', Date.now()))
+      .take(RATE_EVENT_CLEANUP_BATCH)
+    for (const row of productRows) await ctx.db.delete(row._id)
+    if (productRows.length >= RATE_EVENT_CLEANUP_BATCH) await ctx.scheduler.runAfter(0, internal.learnV2Mastery.cleanupExpiredMasteryScoringRateEvents, {})
     if (rows.length >= RATE_EVENT_CLEANUP_BATCH) await ctx.scheduler.runAfter(0, internal.learnV2Mastery.cleanupExpiredMasteryScoringRateEvents, {})
     return { deleted: rows.length }
   },
@@ -686,6 +801,7 @@ export const finishMasteryScoringFailure = internalMutation({
     }
     const now = Date.now()
     const definitive = args.outcome === 'definitive_failure'
+    await settleAdaptiveProductReservation(ctx, job, false, now)
     await ctx.db.patch(job._id, { status: 'queued', leaseToken: undefined, leaseExpiresAt: undefined, checkpoint: undefined, terminalReason: definitive ? 'provider_definitive_failure' : 'provider_not_dispatched', revision: job.revision + 1, updatedAt: now })
     if (job.adaptiveActivityId && job.adaptiveThreadId) {
       const [activity, thread] = await Promise.all([ctx.db.get(job.adaptiveActivityId), ctx.db.get(job.adaptiveThreadId)])
@@ -735,9 +851,14 @@ export const getMasteryScoringInput = internalQuery({
   },
 })
 
+type ProviderAdmissionMetadata = { version: 'adaptive-v2-provider-admission.v1', stage: 'reservation' | 'provider_dispatch', productPolicyVersion: typeof PRODUCT_POLICY_VERSION, rollbackPolicyVersion: typeof ROLLBACK_POLICY_VERSION, retryAfterMs?: number }
+function providerAdmissionMetadata(stage: ProviderAdmissionMetadata['stage'], retryAfterMs?: number): ProviderAdmissionMetadata {
+  return { version: 'adaptive-v2-provider-admission.v1', stage, productPolicyVersion: PRODUCT_POLICY_VERSION, rollbackPolicyVersion: ROLLBACK_POLICY_VERSION,
+    ...(retryAfterMs !== undefined && Number.isSafeInteger(retryAfterMs) && retryAfterMs > 0 && retryAfterMs <= 86_400_000 ? { retryAfterMs } : {}) }
+}
 export type MasteryAttemptActionResult = { status: 'completed', attemptId: Id<'masteryAttempts'>, scorePercent?: number, state?: string, nextReviewAt?: number | null, feedback?: ControlledFeedbackProjection, replayed: boolean }
   | { status: 'in_progress', replayed: false }
-  | { status: 'denied' | 'blocked' | 'invalid', code: string, message: string, retryable: boolean }
+  | { status: 'denied' | 'blocked' | 'invalid', code: string, message: string, retryable: boolean, admission?: ProviderAdmissionMetadata }
 
 /** One orchestration helper owns reservation, evidence loading, provider I/O, and commit for both public wrappers. */
 export async function submitMasteryAttemptForOwner(
@@ -751,7 +872,8 @@ export async function submitMasteryAttemptForOwner(
       if (!gate.allowed) return { status: 'denied', code: 'adaptive_gate_unavailable', message: 'Adaptive Learn is unavailable.', retryable: false }
     }
     const reservation = await ctx.runMutation(internal.learnV2Mastery.beginMasteryScoring, { tokenIdentifier, ...args, ...(adaptiveAdmission ? { adaptiveAdmission } : {}) })
-    if (reservation.kind === 'denied' || reservation.kind === 'blocked') return { status: reservation.kind, code: reservation.code, message: reservation.message, retryable: reservation.retryable }
+    if (reservation.kind === 'denied' || reservation.kind === 'blocked') return { status: reservation.kind, code: reservation.code, message: reservation.message, retryable: reservation.retryable,
+      ...(adaptiveAdmission ? { admission: providerAdmissionMetadata('reservation') } : {}) }
     if (reservation.kind === 'replay') return { status: 'completed', attemptId: reservation.attemptId, scorePercent: reservation.scorePercent, state: reservation.state, nextReviewAt: reservation.nextReviewAt, feedback: reservation.feedback, replayed: true }
     if (reservation.kind === 'pending') {
       return { status: 'in_progress', replayed: false }
@@ -812,7 +934,8 @@ export async function submitMasteryAttemptForOwner(
       const io = await ctx.runMutation(internal.learnV2Mastery.authorizeMasteryScoringIo, { tokenIdentifier, jobId, leaseToken, stage: 'provider_dispatch', adaptiveAdmission })
       if (io.kind !== 'allowed') {
         await ctx.runMutation(internal.learnV2Mastery.finishMasteryScoringFailure, { tokenIdentifier, jobId, leaseToken, outcome: 'not_dispatched' })
-        return { status: io.kind, code: io.code, message: 'Adaptive scoring is unavailable.', retryable: io.retryable }
+        return { status: io.kind, code: io.code, message: 'Adaptive scoring is unavailable.', retryable: io.retryable,
+          admission: providerAdmissionMetadata('provider_dispatch', 'retryAfterMs' in io ? io.retryAfterMs : undefined) }
       }
     }
     try {
@@ -820,7 +943,8 @@ export async function submitMasteryAttemptForOwner(
       if (adaptiveAdmission && dispatch?.kind !== 'allowed') {
         await ctx.runMutation(internal.learnV2Mastery.finishMasteryScoringFailure, { tokenIdentifier, jobId, leaseToken, outcome: 'not_dispatched' })
         if (!dispatch) throw new Error('Adaptive scoring admission is unavailable')
-        return { status: dispatch.kind, code: dispatch.code, message: 'Adaptive scoring is temporarily unavailable.', retryable: dispatch.retryable }
+        return { status: dispatch.kind, code: dispatch.code, message: 'Adaptive scoring is temporarily unavailable.', retryable: dispatch.retryable,
+          admission: providerAdmissionMetadata('provider_dispatch', 'retryAfterMs' in dispatch ? dispatch.retryAfterMs : undefined) }
       }
     }
     catch (error) {
@@ -915,6 +1039,16 @@ export const recordMasteryAttempt = internalMutation({
       return { attemptId: prior._id, scorePercent: prior.serverScorePercent, state: prior.result, nextReviewAt: currentRecord?.lastAttemptId === prior._id ? currentRecord.nextReviewAt ?? null : null, feedback: feedback(prior), replayed: true }
     }
     const scope = await sessionScope(ctx, args.tokenIdentifier, args.studySessionId)
+    if (scoringJob?.providerProductPolicyVersion) {
+      const activity = scoringJob.adaptiveActivityId && await ctx.db.get(scoringJob.adaptiveActivityId)
+      if (!activity || !scoringJob.adaptiveThreadId || !scoringJob.providerPilotManifestVersion
+        || process.env.LEARN_ADAPTIVE_V2_PILOT_MANIFEST !== scoringJob.providerPilotManifestVersion
+        || scoringJob.providerReservationStatus !== 'outstanding' || (scoringJob.leaseExpiresAt ?? 0) <= Date.now()) throw new Error('Adaptive scoring reply requires reconciliation')
+      const authority = await adaptiveScoringAuthority(ctx, args.tokenIdentifier, scope, {
+        threadId: scoringJob.adaptiveThreadId, activityId: activity.activityId, manifestVersion: scoringJob.providerPilotManifestVersion,
+      })
+      if (!authority.allowed || authority.activity.scoringJobId !== scoringJob._id) throw new Error('Adaptive scoring reply requires reconciliation')
+    }
     if (scope.session.status !== 'in_progress' || scope.session.revision !== args.expectedSessionRevision || scope.content.revision !== args.expectedContentRevision || scope.session.startedSessionContentRevision !== scope.content.revision || scope.plan.recordRevision !== args.expectedPlanRecordRevision || scope.blueprint.recordRevision !== args.expectedBlueprintRecordRevision) throw new Error('Started session revision conflict')
     const rubric = JSON.parse(scope.content.assessmentRubricSnapshot ?? 'null') as { version: string, criteria: Array<{ key: string, description?: string, weightPercent: number }> } | null
     if (!rubric || rubric.version !== 'learn-v2.assessment.v1') throw new Error('Started session rubric is unavailable')
@@ -945,6 +1079,7 @@ export const recordMasteryAttempt = internalMutation({
     const patch = { state: outcome.state, schedulingPriority: outcome.remediation ? 'remediation' as const : 'standard' as const, recordRevision: masteryRecordRevision, lastAttemptAt: now, lastAttemptId: attemptId, nextReviewAt: followUp?.scheduledStartAt, remediationAttemptId: outcome.remediation ? attemptId : undefined, ...(outcome.setFirstIndependent ? { firstIndependentPassAt: now, firstIndependentLocalDate: attemptLocalDate, firstIndependentTimezone: attemptTimezone } : {}), updatedAt: now }
     await transitionScopedMasteryRecord(ctx, { userId: args.tokenIdentifier, blueprintRevisionId: scope.blueprint._id, objectiveId: scope.objective._id, historyAttemptId: attemptId, transition: patch })
     if (scoringJob) {
+      await settleAdaptiveProductReservation(ctx, scoringJob, false, now)
       await ctx.db.patch(scoringJob._id, { status: 'succeeded', providerResponseId: args.providerResponseId, leaseToken: undefined, leaseExpiresAt: undefined, checkpoint: `attempt:${String(attemptId)}`, terminalReason: undefined, revision: scoringJob.revision + 1, updatedAt: now })
       await projectAdaptiveFeedback(ctx, scoringJob, attemptId, controlledFeedback)
       await emitAdaptiveAttemptEvents(ctx, { job: scoringJob, attemptId, now, scorePercent, kind, assistanceLevel: scope.session.answerRevealedAt !== undefined ? 'reveal' : scope.session.substantiveHintUsedAt !== undefined ? 'hint' : 'none', outcome, scorerVersion: args.scorerVerdict.scorerVersion })
