@@ -61,7 +61,7 @@ Node 24.20.0, pnpm 9.12.3. `.node-version` and `engines` now match the range Nux
 - `pnpm verify` passes lint, app/Convex typechecks, 2,051 unit/server tests, 737 component tests, 38 audio component tests, 62 audio worker tests, nine Laya worker tests, worker typechecks and 13 Python tests. It then passes all three audits.
 - `pnpm verify:learn-v2-beta` passes both typechecks, 319 unit tests and 74 component tests.
 - `pnpm build` passes, including its built-output secret scan. This builds locally and does not deploy.
-- Ten new auth tests exercise the real Better Auth/Convex component and mocked Nuxt request boundaries: Google authorization URL, PKCE/state, trusted callbacks, local session issuance/readback, RSA JWT signature/issuer/audience, forged cookies, session revocation, proxy cookies/redirects and SSR token exchange/failure. Origin checks are explicitly enabled in the test environment; Better Auth otherwise disables them under Vitest.
+- Eleven new auth tests exercise the real Better Auth/Convex component and mocked Nuxt request boundaries: Google authorization URL, PKCE/state, trusted callbacks, local session issuance/readback, RSA JWT signature/issuer/audience, forged and tampered-signature cookies, session revocation, proxy cookies/redirects and SSR token exchange/failure. Origin checks are explicitly enabled in the test environment; Better Auth otherwise disables them under Vitest.
 
 Live Google consent, code/token exchange, existing hosted sessions across the upgrade and cross-origin browser cookie behavior are unverified without live OAuth credentials. The authorization URL test preserves the current static `SITE_URL` callback through the Nuxt proxy; the live Google redirect allowlist has not been inspected or changed.
 
