@@ -2,7 +2,6 @@
 
 **Direction:** Warm Focus
 **Last Updated:** 2026-04-09
-**Stitch Design System ID:** `assets/11175050301981891392`
 
 ---
 

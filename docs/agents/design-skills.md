@@ -6,15 +6,41 @@
 
 | Step | Job | Use | Notes |
 |---|---|---|---|
-| 1 | Direction for a new or marketing surface | `frontend-design:frontend-design` | Landing, auth, first-run concepts. Skip for routine app screens. |
+| 1 | Direction for a new or marketing surface | `frontend-design` | Landing, auth, first-run concepts. Skip for routine app screens. |
 | 2 | Designing a product surface | `interface-design` | Voids, sidebar, drawers, dashboards, settings. Not for marketing pages. |
-| 3 | Building it | `reka-ui`, `stitch-shadcn-vue`, `motion` | Implementation references, not design direction. |
+| 3 | Building it | `vue`, `nuxt`, `reka-ui`, `motion`, existing `app/components/ui/` | Use shadcn-vue components and the Vue stack. Implementation references, not design direction. |
 | 4 | Worst-case data | `break-ui <component>` | Any surface rendering user data. Always pass a target, or it replies with a greeting and waits. |
 | 5 | Drift and hierarchy audit | `improve-ui <route>` | Explicitly ask for rendered inspection, or it discards hierarchy and clarity findings. Stops at three findings. |
 | 6 | Accessibility | `fixing-accessibility <file>` | `improve-ui` discards accessibility findings, so it does not replace this step. |
 | 7 | Final pass | Checklist below | On the rendered screen, then the diff. |
 
 Use step 1 or step 2 for a given surface, not both.
+
+## Official Anthropic skills
+
+All seven skills in Anthropic's Design plugin are installed, alongside the seven creative/design skills and `webapp-testing` from `anthropics/skills`. Each is available under `.agents/skills/` with a matching `.claude/skills/` symlink. They are also installed at user level for Claude and Codex on this machine.
+
+| Skill | Use |
+|---|---|
+| `frontend-design` | Visual direction and intentional UI composition. |
+| `design-critique` | Feedback on usability, hierarchy, and consistency. |
+| `design-system` | Audit, document, or extend the existing component system. |
+| `design-handoff` | Document approved layouts, states, tokens, and interactions. |
+| `ux-copy` | Labels, errors, empty states, and other interface copy. |
+| `accessibility-review` | Design accessibility audit; pair with `fixing-accessibility` for code fixes. |
+| `user-research` | Research plans, interviews, surveys, and usability testing. |
+| `research-synthesis` | Turn supplied research into evidence-backed findings. |
+| `canvas-design` | Standalone posters, illustrations, and static visual assets. |
+| `algorithmic-art` | Original generative artwork. |
+| `brand-guidelines` | Anthropic-branded artifacts when explicitly requested. |
+| `theme-factory` | Themes for standalone artifacts. |
+| `slack-gif-creator` | Animated GIF assets. |
+| `web-artifacts-builder` | Standalone React HTML artifacts. |
+| `webapp-testing` | Playwright guidance for rendered UI validation. |
+
+Choose the skills that fit the task. Installation does not make every skill a required step. For new Budds UI, follow the project UI design gate: five visual concepts, human selection, iteration, and explicit satisfaction before implementation. UI design and implementation use Opus 5.5 under that gate.
+
+The Design plugin's optional connector reference is preserved at [`.agents/CONNECTORS.md`](../../.agents/CONNECTORS.md), with a Claude symlink so upstream relative links resolve. These skills also work from supplied screenshots, files, and descriptions. Installing them configures no MCP servers or external integrations.
 
 ## Anti-slop checklist
 
@@ -49,6 +75,14 @@ Existing drift, do not copy it (counts of `app/` files, 2026-11-05): `uppercase 
 - Warm Focus is a chosen direction, so its "near-black with one bright accent" and "one radius everywhere" warnings do not apply.
 - Do not act on "choose typefaces deliberately" or "distinct palette". Fonts and palette are locked.
 
+Other official skills:
+
+- `brand-guidelines` and the `algorithmic-art` viewer include Anthropic branding. Budds product screens use `DESIGN.md`; use the branding examples only for separately requested artifacts.
+- `theme-factory` offers new palettes and fonts for standalone artifacts. Budds keeps its existing tokens and typography.
+- `web-artifacts-builder` scaffolds React and shadcn/ui. Use it only for a requested standalone artifact; implement Budds with Nuxt, Vue, and shadcn-vue.
+- `design-system` extends the current tokens and components; `DESIGN.md` remains their design record.
+- `webapp-testing` includes Python server helpers. For Budds, use the repository's existing Playwright setup and checks where applicable. Installing the skill does not run its scripts or install their dependencies.
+
 `interface-design`:
 
 - Ignore "shadows over borders", "space, not lines", darker input fills, and evocative token names. `DESIGN.md` specifies border elevation, `--card` inputs, and existing tokens.
@@ -76,11 +110,11 @@ Existing drift, do not copy it (counts of `app/` files, 2026-11-05): `uppercase 
 
 | Skill or command | Status |
 |---|---|
-| `frontend-design:frontend-design` | Kept, not vendored, to avoid a duplicate. User-level Claude Code plugin 1.1.1, so Codex and other machines do not have it. |
-| `reka-ui`, `motion`, `stitch-shadcn-vue` | Kept as implementation references. User-level. |
+| `frontend-design:frontend-design` | Existing Claude plugin remains installed. The same official skill is now vendored as `frontend-design` for project and Codex discovery; use one copy per task. |
+| `vue`, `nuxt`, `reka-ui`, `motion` | Kept as implementation references. User-level. |
 | `huashu-design`, `design-foundation`, `design-story`, `design-to-vue` | Not vendored. The `huashu-design` licence is personal-use and requires the author's written permission for company or team use. The other three depend on its output. |
-| `/design`, `/design-flow`, `/design-system`, `/design-qa`, `/design-export` | Slash commands that need a Stitch MCP server. None is configured here. |
-| `/design-full`, `/generate-asset` | Need Gemini through Antigravity. `/design-full` also needs Stitch. |
+| Stitch skills and legacy `/design*` commands | Removed from user-level skill and command directories. The old workflow requirements now use HTML concepts and human approval. |
+| `/generate-asset` | Kept; needs Gemini through Antigravity. References to the removed commands were removed. |
 
 ## Rejected
 
@@ -102,8 +136,6 @@ Existing drift, do not copy it (counts of `app/` files, 2026-11-05): `uppercase 
 | `web-ui-best-practices` (`jamditis/claude-skills-journalism`) | React examples with hard-coded light colors, and already covered. |
 | `refactoring-ui`, `ux-heuristics`, `top-design` (`wondelai/skills`) | Amazon affiliate tags in the skill text. |
 | `ui-design-review`, `nielsen-heuristics-audit`, `wcag-accessibility-audit` (`mastepanoski/claude-skills`) | Long scored reports with hour-scale steps, and `ui-design-review` also rates "modern" conventions. |
-| `design-critique` (`anthropics/knowledge-work-plugins`) | Generic and Figma-oriented, with a dead `CONNECTORS.md` link outside its plugin. |
-| `accessibility-review`, `ux-copy` (`anthropics/knowledge-work-plugins`) | Thin WCAG 2.1 summary, and copy guidance `frontend-design` already has. |
 | `taste-design` and others (`google-labs-code/stitch-skills`) | Require Stitch MCP or target React. |
 
 ## Installed
@@ -117,7 +149,12 @@ Files are verbatim from the pinned commit. Skills without an upstream `agents/op
 | `fixing-accessibility` | <https://github.com/ibelick/ui-skills> | `73fb128d046d1f0d74c2909cd26eb616e3415567` | MIT, © 2026 Julien Thibeaut |
 | `break-ui` | <https://github.com/emilkowalski/skill> | `c8a79627b59d72d764d6ab6f2c87c09a48169833` | MIT, © 2026 Emil Kowalski |
 
-Reference, not vendored: `frontend-design` matches <https://github.com/anthropics/skills> at `ca45fc496a3436251f191354091d557da31c15b5` (Apache-2.0).
+Official sources, all pinned and vendored verbatim:
+
+| Skills | Source | Commit | Licence |
+|---|---|---|---|
+| `algorithmic-art`, `brand-guidelines`, `canvas-design`, `frontend-design`, `slack-gif-creator`, `theme-factory`, `web-artifacts-builder`, `webapp-testing` | <https://github.com/anthropics/skills> | `ca45fc496a3436251f191354091d557da31c15b5` | Apache-2.0; bundled fonts retain their individual licences. |
+| `accessibility-review`, `design-critique`, `design-handoff`, `design-system`, `research-synthesis`, `user-research`, `ux-copy` | <https://github.com/anthropics/knowledge-work-plugins/tree/main/design> | `d900840716eb262e1feb17c6f4406c9ce0e06bcf` | Apache-2.0; [licence text](../../.agents/licenses/anthropic-knowledge-work-plugins.txt). |
 
 <details>
 <summary>MIT licence text</summary>
