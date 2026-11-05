@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { GENERATED_MARKDOWN_LIMITS, generatedTextFallback, parseGeneratedMarkdown, validateGeneratedLink } from '~/utils/generated-markdown'
 import { MERMAID_LIMITS, validatePassiveMermaid } from '~/utils/passive-mermaid'
 import { validateCompatibilityMermaid } from '~/utils/compatibility-mermaid'
-import { compatibleDiagrams, refusedDiagrams } from '../support/generated-content-fixtures'
+import { compatibleDiagrams, disguisedRefusals, refusedDiagrams } from '../support/generated-content-fixtures'
 import { normalizeAssistantCitations } from '~/utils/normalize-assistant-citations'
 
 const context = { applicationOrigins: ['https://budds-ci.invalid'], sourceCount: 2 }
@@ -134,6 +134,25 @@ describe('V1 and chat Mermaid source grammar', () => {
   })
 
   it.each(refusedDiagrams)('refuses %s', (_name, source) => {
+    expect(validateCompatibilityMermaid(source)).toBeNull()
+  })
+
+  it.each(refusedDiagrams)('refuses %s across whitespace and line-ending variants', (_name, source) => {
+    const variants = [
+      source.replaceAll('\n', '\r\n'),
+      source.replaceAll('\n', '\n\n'),
+      source.replaceAll('\n', ' \n'),
+      source.replaceAll('\n', '\n\t  '),
+      `\n  ${source}\n`,
+      source.replaceAll(' ', '\t'),
+      source.replaceAll(' ', '\u00A0'),
+      source.replaceAll('\n', '\r'),
+      source.replaceAll('\n', '\u2028'),
+    ]
+    for (const variant of variants) expect(validateCompatibilityMermaid(variant)).toBeNull()
+  })
+
+  it.each(disguisedRefusals)('refuses the disguised construct %j', (source) => {
     expect(validateCompatibilityMermaid(source)).toBeNull()
   })
 

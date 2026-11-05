@@ -223,6 +223,41 @@ describe('real browser Mermaid boundary', () => {
     await page.evaluate(() => window.__generatedContentTest.unmount())
   }, 45_000)
 
+  it.each([
+    ['one actor', 'sequenceDiagram\nactor A\nA->>A: Hello', 2],
+    ['several actors', 'sequenceDiagram\nactor A\nactor B\nactor C\nA->>B: Hello\nB->>C: Hello', 6],
+    ['an actor after a participant', 'sequenceDiagram\nparticipant P\nactor A\nA->>P: Hello', 2],
+  ])('draws every stick figure for %s, with a unique ID on each element', async (_name, source, figures) => {
+    await page.evaluate(source => window.__generatedContentTest.mount('course', `\`\`\`mermaid\n${source}\n\`\`\``), source)
+    const diagram = page.locator('#host svg[role="img"]')
+    await expect.poll(() => diagram.count(), { timeout: 30_000 }).toBe(1)
+    const drawn = await diagram.evaluate((svg) => {
+      const ids = [...svg.querySelectorAll('[id]')].map(el => el.id)
+      return { ids, unique: new Set(ids).size, circles: [...svg.querySelectorAll('circle')].filter(el => !el.closest('marker')).length, lines: svg.querySelectorAll('g > line').length }
+    })
+    expect(drawn.unique).toBe(drawn.ids.length)
+    expect(drawn.circles).toBe(figures)
+    // Each figure has a torso, arms and two legs, on top of the actors' lifelines.
+    expect(drawn.lines).toBeGreaterThanOrEqual(figures * 4)
+    await page.evaluate(() => window.__generatedContentTest.unmount())
+  }, 45_000)
+
+  it('drops only unreferenced repeats of the generated actor figure IDs', async () => {
+    const figure = (id: string, parentClass = 'actor-man') => `<g class="${parentClass}"><line id="${id}" x1="0" y1="0" x2="1" y2="1"/></g>`
+    const svg = (body: string) => `<svg xmlns="http://www.w3.org/2000/svg">${body}</svg>`
+    const clean = await sanitize(svg(figure('actor-man-torso2') + figure('actor-man-arms2') + figure('actor-man-torso2') + figure('actor-man-arms2')))
+    expect(clean.match(/ id=/g)).toHaveLength(2)
+    expect(clean.match(/<line/g)).toHaveLength(4)
+    for (const source of [
+      svg(figure('other-line') + figure('other-line')),
+      svg(figure('actor-man-torso2extra') + figure('actor-man-torso2extra')),
+      svg(figure('actor-man-torso2', 'canary') + figure('actor-man-torso2', 'canary')),
+      svg(`${figure('actor-man-torso2')}<g id="actor-man-torso2"/>${figure('actor-man-torso2')}`),
+      svg(`${figure('actor-man-torso2') + figure('actor-man-torso2')}<rect aria-labelledby="actor-man-torso2"/>`),
+      svg(`${figure('actor-man-torso2') + figure('actor-man-torso2')}<path marker-end="url(#actor-man-torso2)"/>`),
+    ]) await expect(sanitize(source)).rejects.toThrow(/svg-id|svg-reference/)
+  })
+
   it('accepts only the mindmap background ID repeat and keeps its node fill opaque', async () => {
     const clean = await sanitize('<svg xmlns="http://www.w3.org/2000/svg"><g id="node"><path id="node" class="node-bkg" d="M0 0 L10 10"/></g></svg>')
     expect(clean.match(/ id=/g)).toHaveLength(1)

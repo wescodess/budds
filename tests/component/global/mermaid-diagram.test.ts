@@ -3,7 +3,7 @@ import { mountSuspended } from '@nuxt/test-utils/runtime'
 import MermaidDiagram from '~/components/global/MermaidDiagram.vue'
 import TextBlock from '~/components/learn/TextBlock.vue'
 import Message from '~/components/chat/Message.vue'
-import { compatibleDiagrams, refusedDiagrams } from '../../support/generated-content-fixtures'
+import { compatibleDiagrams, disguisedRefusals, refusedDiagrams } from '../../support/generated-content-fixtures'
 
 const { initialize, render, getConfig } = vi.hoisted(() => ({
   initialize: vi.fn(), render: vi.fn(), getConfig: vi.fn(),
@@ -66,6 +66,14 @@ describe('MermaidDiagram', () => {
       try {
         await vi.waitFor(() => expect(wrapper.find('pre').exists()).toBe(true), { timeout: 10_000 })
         expect(wrapper.find('pre').text()).toBe(source.trim())
+        expect(render).not.toHaveBeenCalled()
+      } finally { wrapper.unmount() }
+    }, 15_000)
+
+    it.each(disguisedRefusals)('keeps the disguised construct %j away from Mermaid', async (source) => {
+      const wrapper = await mountFence(source)
+      try {
+        await vi.waitFor(() => expect(wrapper.find('pre').exists()).toBe(true), { timeout: 10_000 })
         expect(render).not.toHaveBeenCalled()
       } finally { wrapper.unmount() }
     }, 15_000)

@@ -6,8 +6,20 @@ const svgNamespace = 'http://www.w3.org/2000/svg'
 const tags = ['svg', 'g', 'defs', 'symbol', 'marker', 'path', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon', 'text', 'tspan', 'title', 'desc', 'clipPath']
 const attributes = ['xmlns', 'id', 'class', 'viewBox', 'width', 'height', 'x', 'y', 'x1', 'y1', 'x2', 'y2', 'cx', 'cy', 'r', 'rx', 'ry', 'd', 'points', 'transform', 'fill', 'stroke', 'stroke-width', 'stroke-dasharray', 'stroke-dashoffset', 'stroke-linecap', 'stroke-linejoin', 'opacity', 'text-anchor', 'dominant-baseline', 'font-size', 'font-family', 'dy', 'dx', 'marker-start', 'marker-mid', 'marker-end', 'markerWidth', 'markerHeight', 'markerUnits', 'refX', 'refY', 'orient', 'clip-path', 'preserveAspectRatio', 'role', 'aria-label', 'aria-labelledby', 'aria-describedby']
 const fragmentAttributes = new Set(['marker-start', 'marker-mid', 'marker-end', 'clip-path'])
+const actorFigureId = /^actor-man-(?:torso|arms)\d+$/
 let renderQueue: Promise<unknown> = Promise.resolve()
 let sequence = 0
+
+// Mermaid 12.3.0 reuses its actor counter for every stick figure's torso and arm lines. An ID that anything refers to stays, and the duplicate guard rejects it.
+function dropRepeatedActorFigureIds(root: Element, elements: Element[]) {
+  const seen = new Set<string>()
+  for (const line of root.querySelectorAll('g.actor-man > line[id]')) {
+    if (!actorFigureId.test(line.id)) continue
+    const referenced = elements.some(el => Array.from(el.attributes).some(attr => attr.name !== 'id' && attr.value.split(/[\s#()]+/).includes(line.id)))
+    if (seen.has(line.id) && !referenced) line.removeAttribute('id')
+    seen.add(line.id)
+  }
+}
 
 export function sanitizeGeneratedMermaidSvg(source: string, prefix: string, description: string): string {
   if (new TextEncoder().encode(source).length > MERMAID_LIMITS.svgBytes || !/^[a-z][\w-]*$/i.test(prefix)) throw new Error('svg-limit')
@@ -30,6 +42,7 @@ export function sanitizeGeneratedMermaidSvg(source: string, prefix: string, desc
   for (const el of root.querySelectorAll('g > path.node-bkg')) {
     if (el.id && el.id === el.parentElement?.id) el.removeAttribute('id')
   }
+  dropRepeatedActorFigureIds(root, elements)
   const ids = new Map<string, string>()
   for (const el of elements) {
     const original = el.getAttribute('id')

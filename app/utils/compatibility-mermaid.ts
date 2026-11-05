@@ -3,210 +3,243 @@ import { MERMAID_LIMITS } from './passive-mermaid'
 const GENERIC_ACCESSIBLE_NAME = 'Diagram'
 const MAX_BLOCK_DEPTH = 4
 
-const direction = '(?:TD|TB|BT|LR|RL)'
-const plain = "\\p{L}\\p{N}\\p{M} .,:'?!_+/=&*%-"
-const word = `[${plain}]{1,120}`
-const quoted = `"[${plain}()\\[\\]]{1,120}"`
-const text = `(?:${quoted}|${word})`
-const prose = `[${plain}()\\[\\]"]{1,160}`
-// Mermaid draws these two exact tokens as separate SVG lines; they are admitted only in the labels built from this.
-const breakable = (characters: string, limit: number) => `(?:[${characters}]|<br/?>){1,${limit}}`
-const breakableWord = breakable(plain, 120)
-const breakableQuoted = `"${breakable(`${plain}()\\[\\]`, 120)}"`
-const flowLabel = `(?:${breakableQuoted}|${breakableWord})`
-const sequenceLabel = breakable(`${plain}()\\[\\]"`, 160)
-const identifier = '[A-Za-z0-9][A-Za-z0-9_]{0,31}'
+type Family = 'flowchart' | 'sequence' | 'class' | 'mindmap'
+type Tally = { entities: Set<string>; edges: number; depth: number; classBody: boolean; description: string }
 
-const describedAs = new RegExp(`^(accTitle|accDescr): ([${plain}()\\[\\]"]{1,${MERMAID_LIMITS.description}})$`, 'u')
+// Mermaid's lexers read most of these as whitespace or line breaks, so they could hide a statement from this scan.
+const hiddenCharacter = /(?![ \t\n‌‍])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Zs}]/u
 const comment = /^%%[^{}]*$/
-const refused = /`|%%|\$\$|:::|@\{|\bfa[bklrs]?:fa-/iu
-const header = new RegExp(`^(?:flowchart|graph)(?: ${direction})?$`)
-// Mermaid also breaks lines on these, so they could hide a statement from this scan.
-const hasHiddenLineBreak = (source: string) => Array.from(source.replace(/\r\n/g, '\n')).some((char) => {
-  const code = char.charCodeAt(0)
-  return (code < 32 && code !== 9 && code !== 10) || code === 127 || code === 0x85 || code === 0x2028 || code === 0x2029
-})
 
-const flowchartReserved = new Set(['end', 'subgraph', 'graph', 'flowchart', 'style', 'class', 'classDef', 'click', 'linkStyle', 'default', 'call', 'href', 'direction', 'interpolate'])
-const sequenceReserved = new Set(['participant', 'actor', 'create', 'destroy', 'box', 'link', 'links', 'properties', 'details', 'loop', 'alt', 'opt', 'par', 'and', 'rect', 'note', 'end', 'else', 'critical', 'option', 'break', 'activate', 'deactivate', 'autonumber', 'title', 'acctitle', 'accdescr'])
-const classReserved = new Set(['class', 'classDef', 'cssClass', 'click', 'callback', 'call', 'link', 'href', 'style', 'note', 'namespace', 'direction', 'end'])
+const refusedAnywhere = [
+  /%%/, /^-{3,}$/,
+  /:::/, /::\s*icon\b/i, /@\s*\{/, /\bfa[a-z]*\s*:\s*fa-/i,
+  /\$\$/, /"\s*`/, /&#?\w+;|#\w+;/,
+  /:\/\/|\/\/\S|\bwww\.|\b(?:javascript|vbscript|mailto)\s*:|\bdata:[\w-]+\/|\burl\s*\(/i,
+]
 
-const slantedShape = [`\\[\\\\${flowLabel}\\\\\\]`, `\\[\\\\${flowLabel}/\\]`, `\\[/${flowLabel}\\\\\\]`]
-const slantedShapes = new RegExp(slantedShape.join('|'), 'gu')
-const hasStrayBackslash = (line: string) => line.replace(slantedShapes, '').includes('\\')
+const refusedStatements: Record<Family, readonly string[]> = {
+  flowchart: ['click', 'call', 'callback', 'href', 'style', 'linkStyle', 'classDef', 'class', 'cssClass'],
+  sequence: ['link', 'links', 'properties', 'details', 'click', 'href', 'style', 'classDef', 'class'],
+  class: ['click', 'call', 'callback', 'link', 'href', 'style', 'classDef', 'cssClass'],
+  mindmap: [],
+}
+const flowchartKeywords = new Set(refusedStatements.flowchart)
+const colourBlock = /^(?:rect|box)\b/i
+const longerIdentifier = /^-?[\p{L}\p{N}_]/u
+const classMemberUse = /^\s*[(:]/
+// Flowchart and class lexing is case-sensitive, and a sequence keyword needs a following name, so a differently cased word used as a node stays a node.
+const nodeUse = /^(?:[[({>]|\s*(?:[xo<]?(?:--|==|-\.|~~)|->|<<|<\||\.\.|\*--|o--))/
 
-const shape = [
-  `\\(\\(\\(${flowLabel}\\)\\)\\)`, `\\(\\(${flowLabel}\\)\\)`, `\\(\\[${flowLabel}\\]\\)`, `\\[\\(${flowLabel}\\)\\]`, `\\[\\[${flowLabel}\\]\\]`,
-  `\\{\\{${flowLabel}\\}\\}`, `\\{${flowLabel}\\}`, ...slantedShape, `\\[${flowLabel}\\]`, `\\(${flowLabel}\\)`, `>${flowLabel}\\]`,
-].join('|')
-const flowNode = new RegExp(`(${identifier})(?:${shape})?`, 'uy')
-const flowJoin = / *& */y
-const edgeCharacters = "\\p{L}\\p{N}\\p{M} ,:'?!_+/&*%"
-const inlineEdgeText = `(?:${breakableQuoted}|${breakable(edgeCharacters, 120)})`
-const flowLink = new RegExp([
-  `[xo<]?-- *${inlineEdgeText} *-{2,8}[xo>]?`,
-  `[xo<]?== *${inlineEdgeText} *={2,8}[xo>]?`,
-  `[xo<]?-\\. *${inlineEdgeText} *\\.-[xo>]?`,
-  `(?:[xo<]?-{2,8}[xo>]|-{3,8}|[xo<]?={2,8}[xo>]|={3,8}|[xo<]?-\\.{1,8}-[xo>]?|~{3,8})(?: *\\|${flowLabel}\\|)?`,
-].join('|'), 'uy')
-const flowSpace = / */y
-const subgraph = new RegExp(`^subgraph(?: (?:${breakableQuoted}|${identifier} *\\[${flowLabel}\\]|${word}))?$`, 'u')
-const flowDirection = new RegExp(`^direction ${direction}$`)
-
-const sequenceArrow = '(?:<<-->>|<<->>|-->>|->>|-->|->|--x|-x|--\\)|-\\))'
-const message = new RegExp(`^(${identifier}) *${sequenceArrow}[+-]? *(${identifier}) *: *${sequenceLabel}$`, 'u')
-const participant = new RegExp(`^(?:participant|actor) (${identifier})(?: as ${breakableWord})?$`, 'u')
-const sequenceNote = new RegExp(`^note (?:left of|right of|over) (${identifier})(?:, *(${identifier}))? *: *${sequenceLabel}$`, 'iu')
-const sequenceOpen = new RegExp(`^(?:loop|alt|opt|par|critical|break)(?: ${prose})?$`, 'u')
-const sequenceBranch = new RegExp(`^(?:else|and|option)(?: ${prose})?$`, 'u')
-const sequenceActivation = new RegExp(`^(?:activate|deactivate) (${identifier})$`, 'u')
-const sequenceSetting = new RegExp(`^(?:autonumber(?: \\d{1,6}(?: \\d{1,6})?| off)?|title:? ${word})$`, 'u')
-
-const classId = `${identifier}(?:~[A-Za-z0-9_, ]{1,40}~)?`
-const classDeclaration = new RegExp(`^class (${classId})(?:\\[${quoted}\\])?(?: ?(\\{))?$`, 'u')
-const classMember = new RegExp(`^[+\\-#~]?[\\p{L}\\p{N}\\p{M}_ .,:()\\[\\]~]{1,120}[*$]?$`, 'u')
-const classMemberOf = new RegExp(`^(${classId}) *: *(.+)$`, 'u')
-const classArrow = '(?:<\\||\\*|o|<)?(?:--|\\.\\.)(?:\\|>|\\*|o|>)?'
-const classCardinality = '(?: *"[A-Za-z0-9.* ]{1,16}")?'
-const classRelation = new RegExp(`^(${classId})${classCardinality} *${classArrow} *${classCardinality} *(${classId})(?: *: *${word})?$`, 'u')
-const classAnnotation = /^<<[A-Za-z]{1,32}>>(?: ([A-Za-z0-9][A-Za-z0-9_]{0,31}))?$/
-const classNote = new RegExp(`^note (?:for (${identifier}) )?${quoted}$`, 'u')
-
-const mindmapShape = `\\(\\(${text}\\)\\)|\\)\\)${text}\\(\\(|\\)${text}\\(|\\{\\{${text}\\}\\}|\\[${text}\\]|\\(${text}\\)`
-const mindmapNode = new RegExp(`^(?:(${identifier})?(?:${mindmapShape})|${quoted}|${word})$`, 'u')
-
-type Tally = { entities: Set<string>; edges: number }
-const addEntity = (tally: Tally, entity: string | undefined) => { if (entity) tally.entities.add(entity) }
-const baseOf = (id: string) => id.split('~')[0]!
-
-function matchAt(pattern: RegExp, source: string, position: number): number | null {
-  pattern.lastIndex = position
-  return pattern.test(source) ? pattern.lastIndex : null
+function opensRefusedStatement(statement: string, family: Family): boolean {
+  if (family === 'sequence' && colourBlock.test(statement)) return true
+  const word = /^[\p{L}\p{N}_]+/u.exec(statement)?.[0]
+  const keyword = word && refusedStatements[family].find(candidate => candidate.toLowerCase() === word.toLowerCase())
+  if (!word || !keyword) return false
+  const rest = statement.slice(word.length)
+  if (longerIdentifier.test(rest) || (family === 'class' && classMemberUse.test(rest))) return false
+  return word === keyword || !nodeUse.test(rest)
 }
 
-function scanFlowNodes(statement: string, start: number, tally: Tally): number | null {
-  let position = start
-  for (;;) {
-    flowNode.lastIndex = position
-    const found = flowNode.exec(statement)
-    if (!found || flowchartReserved.has(found[1]!)) return null
-    tally.entities.add(found[1]!)
-    position = flowNode.lastIndex
-    const joined = matchAt(flowJoin, statement, position)
-    if (joined === null) return position
-    position = joined
+const tagLike = /<[a-z/!?]|<\s+[a-z/!?][^<>]*>/i
+const lineBreakToken = /<br\/?>(?!>)/g
+const labelHasMarkup = (label: string) => tagLike.test(label.replace(lineBreakToken, ' '))
+// Mermaid's SVG text path erases this sign from flowchart labels, which would change what a diagram says.
+const flowLabelRefused = (label: string) => labelHasMarkup(label) || label.replace(lineBreakToken, ' ').includes('>')
+
+const slantedShape = /(?<=[\p{L}\p{N}_])\[(?:\\[^\\[\]]*[\\/]|\/[^\\[\]]*\\)\]/gu
+const asymmetricShape = /(?<=[\p{L}\p{N}_\0])>[^\]]*\]/u
+const innermostBracket = /[[({]([^[\](){}]*)[\])}]/g
+const pipeLabel = /\|([^|]*)\|/g
+const quotedLabel = /"([^"]*)"/g
+const inlineEdges = [
+  /(?<![-=.])--(?![->=.]|[xo]\s)\s*((?:[^-]|-(?!-))+?)\s*--+[-xo>]?/g,
+  /(?<![-=.])==(?![=>-]|[xo]\s)\s*((?:[^=]|=(?!=))+?)\s*==+[=xo>]?/g,
+  /(?<![-=.])-\.(?![-.])\s*((?:[^.]|\.(?!-))+?)\s*\.-[xo>]?/g,
+]
+const flowLink = /(?<![\p{L}\p{N}_])[xo<]?(?:--+[-xo>]|==+[=xo>]|-?\.+-[xo>]?|~~~+)|--+[-xo>]|==+[=xo>]|-?\.+-[xo>]?|~~~+/gu
+const flowDirection = /^direction\s+(?:TD|TB|BT|LR|RL)$/
+
+/** Separates what Mermaid reads as label text from the identifiers and operators around it. */
+function flowchartView(statement: string): { code: string; labels: string[] } {
+  const labels: string[] = []
+  const extract = (pattern: RegExp, replacement: string, code: string) => code.replace(pattern, (_match, label: string) => {
+    labels.push(label)
+    return replacement
+  })
+  let code = extract(pipeLabel, '\0', extract(quotedLabel, '\0', statement))
+  for (let previous = ''; previous !== code;) {
+    previous = code
+    code = extract(innermostBracket, '\0', code)
   }
+  const asymmetric = asymmetricShape.exec(code)?.[0]
+  if (asymmetric) {
+    labels.push(asymmetric.slice(1, -1))
+    code = code.replace(asymmetric, '\0')
+  }
+  for (const edge of inlineEdges) code = extract(edge, ' --> ', code)
+  return { code, labels }
 }
 
-function flowchartStatement(statement: string, tally: Tally, depth: { value: number }): boolean {
+function flowchartStatement(statement: string, tally: Tally): boolean {
+  const opensSubgraph = /^subgraph(?:\s|$)/i.test(statement)
+  if (opensSubgraph ? statement.includes('\\') : statement.replace(slantedShape, '').includes('\\')) return false
+  const { code, labels } = flowchartView(statement)
+  if (tagLike.test(code) || labels.some(flowLabelRefused)) return false
   if (flowDirection.test(statement)) return true
-  if (statement === 'end') return --depth.value >= 0
-  if (subgraph.test(statement)) {
+  if (statement === 'end') return --tally.depth >= 0
+  if (opensSubgraph) {
     tally.entities.add(`subgraph:${statement}`)
-    return ++depth.value <= MAX_BLOCK_DEPTH
+    return ++tally.depth <= MAX_BLOCK_DEPTH
   }
-  let position = scanFlowNodes(statement, 0, tally)
-  while (position !== null) {
-    if (position === statement.length) return true
-    position = matchAt(flowSpace, statement, position)!
-    const linked = matchAt(flowLink, statement, position)
-    if (linked === null) return false
-    tally.edges++
-    position = scanFlowNodes(statement, matchAt(flowSpace, statement, linked)!, tally)
+  tally.edges += code.match(flowLink)?.length ?? 0
+  for (const id of code.replace(flowLink, ' ').split(/[\s&\0]+/)) {
+    if (flowchartKeywords.has(id)) return false
+    if (id) tally.entities.add(id)
   }
-  return false
-}
-
-function sequenceStatement(statement: string, tally: Tally, depth: { value: number }): boolean {
-  if (statement === 'end') return --depth.value >= 0
-  if (sequenceOpen.test(statement)) return ++depth.value <= MAX_BLOCK_DEPTH
-  if (sequenceSetting.test(statement)) return true
-  if (sequenceBranch.test(statement)) return depth.value > 0
-  const declared = participant.exec(statement) ?? sequenceActivation.exec(statement)
-  const related = message.exec(statement) ?? sequenceNote.exec(statement)
-  const named = [declared?.[1], related?.[1], related?.[2]].filter(Boolean) as string[]
-  if (!named.length || named.some(name => sequenceReserved.has(name.toLowerCase()))) return false
-  named.forEach(name => tally.entities.add(name))
-  if (message.test(statement)) tally.edges++
   return true
 }
 
-function classStatement(statement: string, tally: Tally, body: { open: boolean }): boolean {
-  if (body.open) {
-    if (statement === '}') { body.open = false; return true }
-    return /^<<[A-Za-z]{1,32}>>$/.test(statement) || classMember.test(statement)
+const sequenceArrow = '(?:<<-->>|<<->>|-->>|->>|-->|->|--x|-x|--\\)|-\\))'
+const sequenceMessage = new RegExp(`^([^:]*?)\\s*${sequenceArrow}[+-]?\\s*([^:]*?)\\s*:(.*)$`, 'u')
+const sequenceNote = /^(note\s+(?:left of|right of|over)\s+)([^:]*):(.*)$/iu
+const sequenceDeclaration = /^(?:create\s+)?(?:participant|actor)\s+(.+?)(?:\s+as\s+(.*))?$/iu
+const sequenceBlock = /^(?:loop|alt|opt|par|par_over|critical|break)(?:\s|$)/i
+
+function sequenceStatement(statement: string, tally: Tally): boolean {
+  // Mermaid reads the rest of the line as a comment, which would silently cut the text.
+  if (statement.includes('#')) return false
+  if (/^end$/i.test(statement)) return --tally.depth >= 0
+  if (sequenceBlock.test(statement)) {
+    if (tagLike.test(statement)) return false
+    return ++tally.depth <= MAX_BLOCK_DEPTH
   }
-  if (flowDirection.test(statement)) return true
+  const note = sequenceNote.exec(statement)
+  if (note) {
+    const targets = note[2]!.split(',').map(target => target.trim())
+    targets.forEach(target => tally.entities.add(target))
+    return !tagLike.test(note[2]!) && !labelHasMarkup(note[3]!)
+  }
+  const declared = sequenceDeclaration.exec(statement)
+  if (declared) {
+    tally.entities.add(declared[1]!)
+    return !tagLike.test(declared[1]!) && !labelHasMarkup(declared[2] ?? '')
+  }
+  const message = sequenceMessage.exec(statement)
+  if (message) {
+    tally.edges++
+    tally.entities.add(message[1]!).add(message[2]!)
+    return !tagLike.test(message[1]!) && !tagLike.test(message[2]!) && !labelHasMarkup(message[3]!)
+  }
+  return !tagLike.test(statement)
+}
+
+const classAnnotation = /<<\w+>>/g
+const classDeclaration = /^class\s+(`[^`]+`|[^\s{["~:]+)/
+const classRelation = /^(`[^`]+`|[^\s"~:]+)(?:~[^~]*~)?(?:\s+"[^"]*")?\s*(?:<\||\*|o|<|\(\))?(?:--|\.\.)(?:\|>|\*|o|>|\(\))?\s*(?:"[^"]*"\s*)?(`[^`]+`|[^\s"~:]+)/
+const classMemberOf = /^(`[^`]+`|[^\s"~:]+)(?:~[^~]*~)?\s*:/
+const classAnnotated = /^<<\w+>>\s+(\S+)/
+const classNoteFor = /^note\s+for\s+(\S+)/
+
+function classStatement(statement: string, tally: Tally): boolean {
+  if (tagLike.test(statement.replace(classAnnotation, ''))) return false
+  if (tally.classBody) {
+    if (!statement.includes('}')) return true
+    tally.classBody = false
+    return !statement.slice(statement.indexOf('}') + 1).trim()
+  }
   const declared = classDeclaration.exec(statement)
   if (declared) {
-    if (classReserved.has(baseOf(declared[1]!))) return false
-    tally.entities.add(baseOf(declared[1]!))
-    body.open = Boolean(declared[2])
+    tally.entities.add(declared[1]!)
+    tally.classBody = /\{\s*$/.test(statement)
     return true
-  }
-  const annotated = classAnnotation.exec(statement)
-  if (annotated) {
-    addEntity(tally, annotated[1])
-    return !classReserved.has(annotated[1] ?? '')
-  }
-  const noted = classNote.exec(statement)
-  if (noted) {
-    addEntity(tally, noted[1])
-    return !classReserved.has(noted[1] ?? '')
   }
   const related = classRelation.exec(statement)
   if (related) {
-    if (classReserved.has(baseOf(related[1]!)) || classReserved.has(baseOf(related[2]!))) return false
-    tally.entities.add(baseOf(related[1]!)).add(baseOf(related[2]!))
     tally.edges++
+    tally.entities.add(related[1]!).add(related[2]!)
     return true
   }
-  const member = classMemberOf.exec(statement)
-  if (!member || classReserved.has(baseOf(member[1]!)) || !classMember.test(member[2]!)) return false
-  tally.entities.add(baseOf(member[1]!))
+  const named = classMemberOf.exec(statement) ?? classAnnotated.exec(statement) ?? classNoteFor.exec(statement)
+  if (named) tally.entities.add(named[1]!)
   return true
 }
 
+function mindmapStatement(statement: string, tally: Tally): boolean {
+  tally.entities.add(`node:${tally.entities.size}`)
+  return !tagLike.test(statement)
+}
+
+const statementHandlers: Record<Family, (statement: string, tally: Tally) => boolean> = {
+  flowchart: flowchartStatement, sequence: sequenceStatement, class: classStatement, mindmap: mindmapStatement,
+}
+
+function familyOf(header: string): Family | null {
+  if (/^(?:flowchart|graph)(?:[ \t]+(?:TD|TB|BT|LR|RL))?$/.test(header)) return 'flowchart'
+  if (header === 'sequenceDiagram') return 'sequence'
+  if (header === 'classDiagram' || header === 'classDiagram-v2') return 'class'
+  return header === 'mindmap' ? 'mindmap' : null
+}
+
+function splitOutsideQuotes(line: string): string[] {
+  const parts = ['']
+  let quoted = false
+  for (const char of line) {
+    if (char === '"') quoted = !quoted
+    if (char === ';' && !quoted) parts.push('')
+    else parts[parts.length - 1] += char
+  }
+  return parts
+}
+
+const accessibility = /^acc(title|descr)\s*:\s*(.*)$/i
+
+function statementsOf(line: string, family: Family): string[] | null {
+  if (family === 'mindmap') return [line]
+  if (family !== 'flowchart' || accessibility.test(line)) return line.split(';')
+  // A label's closing quote may be on another line, where this scan cannot tell text from statements.
+  return (line.match(/"/g)?.length ?? 0) % 2 ? null : splitOutsideQuotes(line)
+}
+
 /**
- * The V1 and chat diagram grammar. Session content keeps validatePassiveMermaid,
- * which additionally requires a description and admits fewer families.
+ * The V1 and chat source gate. It refuses configuration, interaction, styling,
+ * HTML and resource constructs and leaves other syntax to Mermaid's parser;
+ * sanitizeGeneratedMermaidSvg remains the boundary. Session content keeps
+ * validatePassiveMermaid.
  */
 export function validateCompatibilityMermaid(source: string): { description: string } | null {
-  if (source.length > MERMAID_LIMITS.source || hasHiddenLineBreak(source)) return null
-  const lines = source.split('\n').map(line => line.trim()).filter(line => line && !comment.test(line))
-  if (lines.some(line => refused.test(line) || hasStrayBackslash(line))) return null
-  const splitsStatements = /^(?:flowchart|graph|sequenceDiagram)\b/.test(lines[0] ?? '')
-  const statements = splitsStatements ? lines.flatMap(line => line.split(';').map(part => part.trim()).filter(Boolean)) : lines
-  const first = statements[0] ?? ''
-  const family = header.test(first) ? 'flowchart'
-    : first === 'sequenceDiagram' ? 'sequence'
-      : first === 'classDiagram' ? 'class'
-        : first === 'mindmap' ? 'mindmap' : null
-  if (!family) return null
+  if (source.length > MERMAID_LIMITS.source) return null
+  const normalized = source.replace(/\r\n/g, '\n')
+  if (hiddenCharacter.test(normalized)) return null
+  const lines = normalized.split('\n').map(line => line.trim()).filter(line => line && !comment.test(line))
+  const header = lines[0]?.split(';')[0] ?? ''
+  const family = familyOf(header.trim())
+  if (!family || lines.some(line => refusedAnywhere.some(pattern => pattern.test(line)))) return null
+  if ((family === 'class' || family === 'mindmap') && header !== lines[0]) return null
+  if (family !== 'flowchart' && normalized.includes('\\')) return null
 
-  const tally: Tally = { entities: new Set(), edges: 0 }
-  const depth = { value: 0 }
-  const body = { open: false }
-  let description = ''
-  for (const statement of statements.slice(1)) {
-    const described = family === 'mindmap' || body.open ? null : describedAs.exec(statement)
-    if (described) {
-      if (described[1] === 'accDescr') {
-        if (description) return null
-        description = described[2]!.trim()
+  const tally: Tally = { entities: new Set(), edges: 0, depth: 0, classBody: false, description: '' }
+  const [, ...firstLine] = lines[0]!.split(';')
+  for (const line of [firstLine.join(';'), ...lines.slice(1)]) {
+    const statements = statementsOf(line, family)
+    if (!statements) return null
+    for (const part of statements) {
+      const statement = part.trim()
+      if (!statement) continue
+      if (opensRefusedStatement(statement, family)) return null
+      const described = family === 'mindmap' || tally.classBody ? null : accessibility.exec(statement)
+      if (described) {
+        const text = described[2]!.trim()
+        if (/[<>\\]/.test(text) || text.length > MERMAID_LIMITS.description) return null
+        if (described[1]!.toLowerCase() === 'descr') {
+          if (tally.description) return null
+          tally.description = text
+        }
+        continue
       }
-      continue
+      if (!statementHandlers[family](statement, tally)) return null
+      if (tally.edges > MERMAID_LIMITS.edges || tally.entities.size > MERMAID_LIMITS.entities) return null
     }
-    let admitted: boolean
-    if (family === 'flowchart') admitted = flowchartStatement(statement, tally, depth)
-    else if (family === 'sequence') admitted = sequenceStatement(statement, tally, depth)
-    else if (family === 'class') admitted = classStatement(statement, tally, body)
-    else {
-      admitted = mindmapNode.test(statement)
-      tally.entities.add(`node:${tally.entities.size}`)
-    }
-    if (!admitted || tally.edges > MERMAID_LIMITS.edges || tally.entities.size > MERMAID_LIMITS.entities) return null
   }
-  if (depth.value !== 0 || body.open || tally.entities.size === 0) return null
-  return { description: description || GENERIC_ACCESSIBLE_NAME }
+  if (tally.depth !== 0 || tally.classBody || tally.entities.size === 0) return null
+  return { description: tally.description || GENERIC_ACCESSIBLE_NAME }
 }
