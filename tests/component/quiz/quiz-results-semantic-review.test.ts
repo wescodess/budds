@@ -20,6 +20,7 @@ function attempt(status: 'pending' | 'available') {
     percentage: 0,
     startedAt: 1,
     completedAt: 2,
+    status: 'completed',
     results: [{
       questionId: 'question_1',
       questionText: 'Describe ATP.',

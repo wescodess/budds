@@ -33,6 +33,12 @@ const { data: historyData } = useConvexQuery(
 )
 
 const results = computed(() => resultsData.value)
+const gradedResults = computed(() => {
+  const value = results.value
+  return value?.status === 'completed' && value.grading && value.results.length > 0
+    ? { ...value, grading: value.grading }
+    : null
+})
 const attempts = computed<AttemptHistoryItem[]>(() =>
   (historyData.value as AttemptHistoryItem[] | undefined) ?? [],
 )
@@ -75,7 +81,7 @@ function cancelScoreAnimation() {
 
 watch(results, (r) => {
   cancelScoreAnimation()
-  if (!r) return
+  if (!r || gradedResults.value) return
   animatedPct.value = 0
   const target = r.percentage
   const duration = 800
@@ -175,46 +181,64 @@ const { springGentle } = useMotionPresets()
       <QuizHistoryDropdown :attempts="attempts" @select="handleSelectAttempt" />
     </div>
 
-    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4">
-      <div class="rounded-lg border p-4 text-center sm:p-5">
-        <p class="text-xs font-medium text-muted-foreground">Your Score</p>
-        <div class="relative mx-auto my-3 h-20 w-20">
-          <svg class="h-full w-full -rotate-90" viewBox="0 0 36 36">
-            <circle cx="18" cy="18" r="15.5" fill="none" stroke="currentColor" stroke-width="2" class="text-muted/50" />
-            <circle
-              cx="18" cy="18" r="15.5" fill="none" stroke-width="2.5" stroke-linecap="round"
-              pathLength="100"
-              :class="ringColor(results.percentage)"
-              :stroke-dasharray="`${animatedPct} ${100 - animatedPct}`"
-            />
-          </svg>
-          <span class="absolute inset-0 flex items-center justify-center text-xl font-bold" :class="scoreColor(results.percentage)">
-            {{ displayPct }}%
-          </span>
+    <QuizGradedResults
+      v-if="gradedResults"
+      :key="gradedResults.attemptId"
+      :attempt-id="gradedResults.attemptId"
+      :score="gradedResults.score"
+      :total="gradedResults.total"
+      :percentage="gradedResults.percentage"
+      :grading="gradedResults.grading"
+      :results="gradedResults.results"
+      :semantic-review-enabled="semanticReviewEnabled"
+      :request-failed="assessmentRequestFailed"
+      @retake="emit('retake')"
+      @back="emit('back')"
+      @retry-semantic="retryPendingAssessment"
+    />
+
+    <template v-else>
+      <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4">
+        <div class="rounded-lg border p-4 text-center sm:p-5">
+          <p class="text-xs font-medium text-muted-foreground">Your Score</p>
+          <div class="relative mx-auto my-3 h-20 w-20">
+            <svg class="h-full w-full -rotate-90" viewBox="0 0 36 36">
+              <circle cx="18" cy="18" r="15.5" fill="none" stroke="currentColor" stroke-width="2" class="text-muted/50" />
+              <circle
+                cx="18" cy="18" r="15.5" fill="none" stroke-width="2.5" stroke-linecap="round"
+                pathLength="100"
+                :class="ringColor(results.percentage)"
+                :stroke-dasharray="`${animatedPct} ${100 - animatedPct}`"
+              />
+            </svg>
+            <span class="absolute inset-0 flex items-center justify-center text-xl font-bold" :class="scoreColor(results.percentage)">
+              {{ displayPct }}%
+            </span>
+          </div>
+        </div>
+        <div class="rounded-lg border p-4 text-center sm:p-5">
+          <p class="text-xs font-medium text-muted-foreground">Correct Answers</p>
+          <p class="mt-5 text-3xl font-bold">{{ results.score }} <span class="text-lg text-muted-foreground">of {{ results.total }}</span></p>
         </div>
       </div>
-      <div class="rounded-lg border p-4 text-center sm:p-5">
-        <p class="text-xs font-medium text-muted-foreground">Correct Answers</p>
-        <p class="mt-5 text-3xl font-bold">{{ results.score }} <span class="text-lg text-muted-foreground">of {{ results.total }}</span></p>
+
+      <div class="flex flex-wrap gap-2">
+        <UiButton class="flex-1 sm:flex-none" @click="emit('retake')">
+          <RotateCcw class="mr-1.5 h-3.5 w-3.5" />
+          Retake Quiz
+        </UiButton>
+        <UiButton variant="outline" class="flex-1 sm:flex-none" @click="emit('back')">Back to overview</UiButton>
       </div>
-    </div>
 
-    <div class="flex flex-wrap gap-2">
-      <UiButton class="flex-1 sm:flex-none" @click="emit('retake')">
-        <RotateCcw class="mr-1.5 h-3.5 w-3.5" />
-        Retake Quiz
-      </UiButton>
-      <UiButton variant="outline" class="flex-1 sm:flex-none" @click="emit('back')">Back to overview</UiButton>
-    </div>
-
-    <div v-if="results.results.length > 0">
-      <h3 class="mb-3 text-sm font-semibold">Question Review</h3>
-      <QuizReviewPanel
-        :results="results.results"
-        :semantic-review-enabled="semanticReviewEnabled"
-        :request-failed="assessmentRequestFailed"
-        @retry-semantic="retryPendingAssessment"
-      />
-    </div>
+      <div v-if="results.results.length > 0">
+        <h3 class="mb-3 text-sm font-semibold">Question Review</h3>
+        <QuizReviewPanel
+          :results="results.results"
+          :semantic-review-enabled="semanticReviewEnabled"
+          :request-failed="assessmentRequestFailed"
+          @retry-semantic="retryPendingAssessment"
+        />
+      </div>
+    </template>
   </Motion>
 </template>
