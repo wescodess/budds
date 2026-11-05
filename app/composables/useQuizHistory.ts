@@ -11,6 +11,7 @@ export interface AttemptHistoryItem {
   completedAt?: number
   currentQuestionIndex?: number
   gradingStatus?: 'grading' | 'settled'
+  gradingNeedsAttention?: boolean
 }
 
 export function useQuizHistory(_quizId: Ref<Id<'quizzes'> | null>) {

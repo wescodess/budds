@@ -1076,6 +1076,16 @@ describe('QuizResultsView attempt status', () => {
     expect(reported).toContain('Checking')
     grading.unmount()
   })
+
+  it('carries the backend attention signal through to History', async () => {
+    historyData.value = [historyEntry({ score: 1.5, percentage: 75, gradingStatus: 'settled', gradingNeedsAttention: true })]
+    const wrapper = await mountResults(attempt([yourCall('a'), correct('b')], 1.5), { QuizHistoryDropdown: false })
+    const history = await openHistory(wrapper)
+    expect(history).toContain('1.5/2 so far')
+    expect(history).toContain('Your call')
+    expect(history).not.toContain('75%')
+    wrapper.unmount()
+  })
 })
 
 describe('QuizResultsView without grades', () => {
