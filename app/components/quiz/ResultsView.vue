@@ -35,14 +35,13 @@ const { data: historyData } = useConvexQuery(
 const results = computed(() => resultsData.value)
 const gradedResults = computed(() => {
   const value = results.value
-  return value?.grading && value.results.length > 0 ? { ...value, grading: value.grading } : null
+  return value?.status === 'completed' && value.grading && value.results.length > 0
+    ? { ...value, grading: value.grading }
+    : null
 })
-const attempts = computed<AttemptHistoryItem[]>(() => {
-  const items = (historyData.value as AttemptHistoryItem[] | undefined) ?? []
-  return results.value?.grading?.pending
-    ? items.map(item => item._id === props.attemptId ? { ...item, gradingStatus: 'grading' as const } : item)
-    : items
-})
+const attempts = computed<AttemptHistoryItem[]>(() =>
+  (historyData.value as AttemptHistoryItem[] | undefined) ?? [],
+)
 
 function scoreColor(pct: number) {
   if (pct >= 80) return 'text-green-500'
@@ -82,7 +81,7 @@ function cancelScoreAnimation() {
 
 watch(results, (r) => {
   cancelScoreAnimation()
-  if (!r || r.grading) return
+  if (!r || gradedResults.value) return
   animatedPct.value = 0
   const target = r.percentage
   const duration = 800

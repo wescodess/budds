@@ -74,6 +74,7 @@ function attempt(results: any[], score: number, overrides: Record<string, unknow
     percentage: Math.round((score / results.length) * 100),
     startedAt: 1,
     completedAt: 2,
+    status: 'completed',
     grading: {
       pending: rows.filter(row => row.grade.status === 'pending').length,
       needsReview: rows.filter(row => row.grade.status === 'needs_review').length,
@@ -84,12 +85,13 @@ function attempt(results: any[], score: number, overrides: Record<string, unknow
   }
 }
 
-async function mountResults(data: any) {
+async function mountResults(data: any, stubOverrides: Record<string, unknown> = {}) {
   resultsData.value = data
   const ResultsView = await import(resultsViewPath)
   const wrapper = await mountSuspended(ResultsView.default, {
     props: { quizId: 'quiz_1', attemptId: 'attempt_1' },
-    global: { stubs },
+    global: { stubs: { ...stubs, ...stubOverrides } },
+    attachTo: document.body,
   })
   await flushPromises()
   return wrapper
@@ -530,6 +532,88 @@ describe('QuizResultsView graded results', () => {
   })
 })
 
+describe('QuizResultsView attempt status', () => {
+  const historyEntry = (overrides: Record<string, unknown>) => ({
+    _id: 'attempt_1',
+    _creationTime: 1,
+    score: 1,
+    total: 2,
+    percentage: 50,
+    status: 'completed',
+    startedAt: 1,
+    currentQuestionIndex: 2,
+    completedAt: 2,
+    ...overrides,
+  })
+
+  beforeEach(() => {
+    queryCall = 0
+    historyData.value = []
+    useRuntimeConfig().public.quizSemanticReviewEnabled = false
+    useRuntimeConfig().public.quizSemanticAssessmentEnabled = false
+  })
+
+  async function openHistory(wrapper: any) {
+    await wrapper.findAll('button').find((node: any) => node.text() === 'History')!.trigger('click')
+    await flushPromises()
+    return document.body.querySelector('[data-slot="popover-content"]')!.textContent
+  }
+
+  it.each(['in_progress', 'abandoned'])('keeps an %s attempt with pending rows on the baseline view', async (status) => {
+    const frames: FrameRequestCallback[] = []
+    const raf = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+      frames.push(callback)
+      return frames.length
+    })
+    historyData.value = [historyEntry({ status, completedAt: undefined, currentQuestionIndex: 1 })]
+    const wrapper = await mountResults(attempt([correct('a'), pending('b')], 1, { status, completedAt: undefined }), { QuizHistoryDropdown: false })
+    try {
+      frames.splice(0).forEach(frame => frame(performance.now() + 2_000))
+      await nextTick()
+      expect(wrapper.text()).toContain('Your Score')
+      expect(wrapper.text()).toContain('50%')
+      expect(wrapper.text()).toContain('Correct Answers')
+      expect(wrapper.text()).toContain('1 of 2')
+      expect(wrapper.text()).not.toContain('Score so far')
+      expect(wrapper.text()).not.toContain('Checking')
+      expect(wrapper.text()).not.toContain('It keeps going if you leave')
+      expect(wrapper.find('[data-testid="quiz-score-strip"]').exists()).toBe(false)
+      const history = await openHistory(wrapper)
+      expect(history).toContain('50%')
+      expect(history).not.toContain('Checking')
+    }
+    finally {
+      raf.mockRestore()
+      wrapper.unmount()
+    }
+  })
+
+  it('keeps a completed attempt with undecided rows on the graded view', async () => {
+    const wrapper = await mountResults(attempt([yourCall('a'), correct('b')], 1.5))
+    expect(wrapper.text()).toContain('Your score for now')
+    expect(wrapper.find('[data-testid="quiz-score-strip"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('takes the history status from the backend rather than the open attempt', async () => {
+    historyData.value = [historyEntry({ gradingStatus: 'settled' })]
+    const settled = await mountResults(attempt([correct('a'), pending('b')], 1), { QuizHistoryDropdown: false })
+    expect(settled.text()).toContain('Checking 1 answer.')
+    const history = await openHistory(settled)
+    expect(history).toContain('50%')
+    expect(history).not.toContain('so far')
+    settled.unmount()
+
+    queryCall = 0
+    historyData.value = [historyEntry({ gradingStatus: 'grading' })]
+    const grading = await mountResults(attempt([correct('a'), correct('b')], 2), { QuizHistoryDropdown: false })
+    const reported = await openHistory(grading)
+    expect(reported).toContain('1/2 so far')
+    expect(reported).toContain('Checking')
+    grading.unmount()
+  })
+})
+
 describe('QuizResultsView without grades', () => {
   const legacy = {
     attemptId: 'attempt_1',
@@ -538,6 +622,7 @@ describe('QuizResultsView without grades', () => {
     percentage: 50,
     startedAt: 1,
     completedAt: 2,
+    status: 'completed',
     results: [
       { questionId: 'a', questionText: 'Describe ATP.', questionType: 'free-response', userAnswer: 'It carries energy.', isCorrect: false, correctAnswer: 'An energy carrier.' },
       { questionId: 'b', questionText: 'Pick one.', questionType: 'multiple-choice', options: ['Yes', 'No'], userAnswer: 'Yes', isCorrect: true, correctAnswer: 'Yes' },
