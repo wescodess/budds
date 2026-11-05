@@ -136,7 +136,7 @@ defineExpose({ receiveFeedback })
         <QuizInputsFillInBlank
           :model-value="currentAnswer"
           :disabled="submitting"
-          :feedback="currentFeedback ? { isCorrect: currentFeedback.isCorrect, correctAnswer: currentFeedback.correctAnswer } : null"
+          :feedback="currentFeedback ? { isCorrect: currentFeedback.isCorrect, correctAnswer: currentFeedback.correctAnswer, gradingPending: currentFeedback.gradingPending } : null"
           @update:model-value="setAnswer"
         />
       </div>
@@ -144,7 +144,7 @@ defineExpose({ receiveFeedback })
         <QuizInputsShortResponse
           :model-value="currentAnswer"
           :disabled="submitting"
-          :feedback="currentFeedback ? { isCorrect: currentFeedback.isCorrect, correctAnswer: currentFeedback.correctAnswer } : null"
+          :feedback="currentFeedback ? { isCorrect: currentFeedback.isCorrect, correctAnswer: currentFeedback.correctAnswer, gradingPending: currentFeedback.gradingPending } : null"
           @update:model-value="setAnswer"
         />
       </div>

@@ -50,9 +50,16 @@ function formatTime(ts: number) {
         >
           <div class="flex flex-col gap-0.5">
             <span class="text-xs text-muted-foreground">{{ formatDate(attempt.startedAt) }} at {{ formatTime(attempt.startedAt) }}</span>
-            <span class="text-xs text-muted-foreground">{{ attempt.score }}/{{ attempt.total }}</span>
+            <span class="text-xs text-muted-foreground">{{ attempt.score }}/{{ attempt.total }}<template v-if="attempt.gradingStatus === 'grading'"> so far</template></span>
           </div>
           <span
+            v-if="attempt.gradingStatus === 'grading'"
+            class="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground"
+          >
+            Checking
+          </span>
+          <span
+            v-else
             class="rounded-full px-2 py-0.5 text-xs font-medium"
             :class="scoreColor(attempt.percentage)"
           >

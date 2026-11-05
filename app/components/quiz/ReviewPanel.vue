@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { Check, CircleMinus, Clock3, Sparkles, TriangleAlert, X } from '@lucide/vue'
+import type { QuizGrade } from '../../../shared/quiz-grading'
+import { QUIZ_RESULT_LABELS, QUIZ_STRIP_PAGE_SIZE, quizResultState, usesGradedAnswer } from '~/utils/quiz-results'
 
 type SemanticAssessment = {
   status: 'pending' | 'available' | 'unavailable'
@@ -20,17 +22,37 @@ interface ReviewQuestion {
   correctAnswer: string
   explanation?: string
   semanticAssessment?: SemanticAssessment
+  attemptAnswerId?: string
+  grade?: QuizGrade
 }
 
 const props = defineProps<{
   results: ReviewQuestion[]
   semanticReviewEnabled?: boolean
   requestFailed?: boolean
+  graded?: boolean
+  page?: number
 }>()
 const emit = defineEmits<{ retrySemantic: [] }>()
 
-const activeIndex = ref(0)
+const activeIndex = defineModel<number>('activeIndex', { default: 0 })
 const activeResult = computed(() => props.results[activeIndex.value] ?? null)
+const answerRef = useTemplateRef<HTMLElement>('answer')
+
+const railItems = computed(() => {
+  const items = props.results.map((result, index) => ({ result, index }))
+  if (!props.graded || items.length <= QUIZ_STRIP_PAGE_SIZE) return items
+  const start = (props.page ?? 0) * QUIZ_STRIP_PAGE_SIZE
+  return items.slice(start, start + QUIZ_STRIP_PAGE_SIZE)
+})
+
+function revealAnswer(focus = false) {
+  answerRef.value?.scrollIntoView({ block: 'nearest' })
+  if (focus) answerRef.value?.focus({ preventScroll: true })
+}
+
+defineExpose({ revealAnswer })
+
 const currentTime = ref(Date.now())
 let retryClock: ReturnType<typeof setInterval> | undefined
 
@@ -65,7 +87,10 @@ function retryIsDue(assessment: SemanticAssessment) {
 
 <template>
   <div class="flex flex-col rounded-lg border sm:min-h-[400px] sm:flex-row">
-    <div class="flex gap-1.5 overflow-x-auto border-b p-2 sm:hidden">
+    <div v-if="graded" class="space-y-3 p-4 pb-0 sm:hidden">
+      <slot name="summary" />
+    </div>
+    <div v-else class="flex gap-1.5 overflow-x-auto border-b p-2 sm:hidden">
       <button
         v-for="(r, i) in results"
         :key="r.questionId"
@@ -83,15 +108,18 @@ function retryIsDue(assessment: SemanticAssessment) {
 
     <div class="hidden w-64 shrink-0 overflow-y-auto border-r sm:block">
       <button
-        v-for="(r, i) in results"
+        v-for="{ result: r, index: i } in railItems"
         :key="r.questionId"
         type="button"
         class="flex w-full items-start gap-2 border-b border-border/50 px-3 py-3 text-left text-sm transition-colors last:border-b-0"
+        :aria-current="graded && activeIndex === i ? 'true' : undefined"
+        :aria-label="graded ? `Question ${i + 1}, ${QUIZ_RESULT_LABELS[quizResultState(r)].toLowerCase()}: ${r.questionText}` : undefined"
         :class="activeIndex === i ? 'border-l-2 border-l-primary bg-accent/50' : 'hover:bg-accent/30'"
         @click="activeIndex = i"
       >
         <span class="mt-0.5 shrink-0">
-          <Check v-if="r.isCorrect" class="h-3.5 w-3.5 text-green-500" />
+          <QuizResultIcon v-if="graded" :state="quizResultState(r)" class="size-3.5" :class="activeIndex === i && 'dark:text-foreground'" />
+          <Check v-else-if="r.isCorrect" class="h-3.5 w-3.5 text-green-500" />
           <CircleMinus v-else-if="isFreeForm(r.questionType)" class="h-3.5 w-3.5 text-muted-foreground" />
           <X v-else class="h-3.5 w-3.5 text-destructive" />
         </span>
@@ -102,10 +130,18 @@ function retryIsDue(assessment: SemanticAssessment) {
       </button>
     </div>
 
-    <div v-if="activeResult" class="flex-1 overflow-y-auto p-4 sm:p-6">
+    <div
+      v-if="activeResult"
+      ref="answer"
+      class="flex-1 overflow-y-auto p-4 sm:p-6"
+      :class="graded && 'min-w-0 break-words outline-none'"
+      :tabindex="graded ? -1 : undefined"
+    >
       <p class="text-base font-medium sm:text-lg">{{ activeResult.questionText }}</p>
 
-      <div class="mt-4 space-y-3 sm:mt-6 sm:space-y-4">
+      <slot v-if="graded && usesGradedAnswer(activeResult)" name="answer" :result="activeResult" />
+
+      <div v-else class="mt-4 space-y-3 sm:mt-6 sm:space-y-4">
         <template v-if="!isFreeForm(activeResult.questionType)">
           <div v-if="activeResult.options" class="space-y-2">
             <div
@@ -210,6 +246,11 @@ function retryIsDue(assessment: SemanticAssessment) {
           <p class="text-sm">{{ activeResult.explanation }}</p>
         </div>
       </div>
+    </div>
+
+    <div v-if="graded" class="flex justify-between gap-2 border-t p-4 sm:hidden">
+      <UiButton variant="outline" size="sm" class="hover:text-foreground" :disabled="activeIndex <= 0" @click="activeIndex--">Previous</UiButton>
+      <UiButton variant="outline" size="sm" class="hover:text-foreground" :disabled="activeIndex >= results.length - 1" @click="activeIndex++">Next</UiButton>
     </div>
   </div>
 </template>
