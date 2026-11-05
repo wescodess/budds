@@ -29,7 +29,7 @@ The build output includes:
 pnpm deploy
 ```
 
-This runs the full build and then the pinned Wrangler 4.128.0 CLI with an
+This runs the full build and then the pinned Wrangler 4.157.0 CLI with an
 explicit `budds` project target. Production releases should additionally pass
 the release branch and commit metadata from a clean checkout.
 
@@ -171,9 +171,9 @@ Cloudflare Pages maintains deployment history. To rollback:
 4. Click **Rollback to this deployment**.
 
 List deployments via CLI, then perform the rollback in the Cloudflare
-dashboard. Wrangler 4.128.0 does not expose a Pages rollback command:
+dashboard. Wrangler 4.157.0 does not expose a Pages rollback command:
 ```bash
-pnpm dlx wrangler@4.128.0 pages deployment list --project-name budds
+pnpm dlx wrangler@4.157.0 pages deployment list --project-name budds
 ```
 
 ### Backend (Convex)
@@ -184,10 +184,12 @@ Convex does not natively support instant rollback. To revert:
 2. Run `npx convex deploy` from that commit to push the previous function versions.
 3. If a schema migration was involved, a data migration may be required -- follow the widen-migrate-narrow pattern documented in Convex guidelines.
 
+Steps 1 and 2 can fail once the upgraded backend has created a signing key: the previous schema rejects the JWKS `alg` field. Read the Rollback entry in the [dependency audit record](dependency-audit-2026-11-05.md#better-auth-compatibility-and-breaking-changes) first.
+
 ### Coordinated Rollback
 
 If both frontend and backend changes are coupled:
 
 1. Rollback the frontend first (stops users from hitting new API paths).
-2. Rollback the backend (redeploy previous Convex functions).
+2. Rollback the backend (redeploy previous Convex functions, subject to the JWKS caveat above).
 3. Verify the application works end-to-end.

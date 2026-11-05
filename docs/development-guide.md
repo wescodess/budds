@@ -4,7 +4,7 @@
 
 ## Prerequisites
 
-- **Node.js** 22.19+ or 24.11+ as declared in `package.json` (`.node-version` selects 24.11.0)
+- **Node.js** `^22.22.3 || ^24.15.0 || >=26.0.0` as declared in `package.json` (`.node-version` selects 24.20.0)
 - **pnpm** 9.12.3+
 - **Convex CLI** (`npx convex`)
 - **Google Cloud Console** OAuth 2.0 credentials
