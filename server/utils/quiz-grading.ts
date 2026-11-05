@@ -82,7 +82,7 @@ function hasExactKeys(value: unknown, keys: string[]): value is Record<string, u
 
 function learnerFeedback(feedback: string) {
   const text = feedback.replace(/\s+/g, ' ').trim()
-  if (/\b(?:criteri(?:on|a)|rubrics?|weightPercent|confidence|grad(?:e|es|ed|ing)|grader|AI)\b/i.test(text)
+  if (/\b(?:criteri(?:on|a)|rubrics?|weight(?:s|ed|ing|Percent)?|confidence|grad(?:e|es|ed|ing)|grader|AI)\b/i.test(text)
     || /[.!?]["'”’)]*\s+\S/u.test(text)) {
     return 'Compare your answer with the reference.'
   }

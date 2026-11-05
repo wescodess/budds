@@ -39,6 +39,10 @@ test.each([
   'You met every criterion.',
   'The rubric gives your answer full credit.',
   'The AI has high confidence in this grade.',
+  'The missing part has a weight of 60 percent.',
+  'You satisfied the higher weighted requirement.',
+  'The weights total 100 percent.',
+  'The weighting favors the missing idea.',
 ])('keeps valid judgments while replacing unsuitable learner feedback: %s', async (feedback) => {
   vi.mocked(generateCompletion).mockResolvedValue(completion({ results: [{ ...result, feedback }] }))
   expect(await gradeQuizAnswers(items)).toEqual({
