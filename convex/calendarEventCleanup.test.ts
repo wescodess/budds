@@ -35,6 +35,7 @@ describe('calendar event compensating cleanup', () => {
   let previousEncryptionKey: string | undefined
 
   beforeEach(() => {
+    vi.useFakeTimers()
     previousEncryptionKey = process.env.CALENDAR_TOKEN_ENCRYPTION_KEY
     process.env.CALENDAR_TOKEN_ENCRYPTION_KEY = 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY='
   })
@@ -42,6 +43,7 @@ describe('calendar event compensating cleanup', () => {
   afterEach(() => {
     if (previousEncryptionKey === undefined) delete process.env.CALENDAR_TOKEN_ENCRYPTION_KEY
     else process.env.CALENDAR_TOKEN_ENCRYPTION_KEY = previousEncryptionKey
+    vi.clearAllTimers()
     vi.unstubAllGlobals()
     vi.useRealTimers()
   })
@@ -207,7 +209,6 @@ describe('calendar event compensating cleanup', () => {
     const firstPage = await asUser.action(api.calendarEvents.syncCalendar, {})
     expect(firstPage.created).toBe(25)
     expect(firstPage.message).toBe('Calendar sync continues in the background')
-    vi.useFakeTimers()
     await t.finishAllScheduledFunctions(vi.runAllTimers)
 
     expect(createGoogleEvent).toHaveBeenCalledTimes(101)
@@ -475,7 +476,6 @@ describe('calendar event compensating cleanup', () => {
   })
 
   test('[P0] expired-claim recovery fences a stale cleanup result', async () => {
-    vi.useFakeTimers()
     const t = convexTest(schema, modules)
     const { courseId, calendarConnectionId } = await setup(t)
     const cleanupJobId = await t.mutation(internal.calendarEventCleanup.reserve, {
@@ -508,7 +508,6 @@ describe('calendar event compensating cleanup', () => {
   })
 
   test('[P1] due-job rescue schedules at most one bounded batch', async () => {
-    vi.useFakeTimers()
     const t = convexTest(schema, modules)
     const { courseId, calendarConnectionId } = await setup(t)
     for (let index = 0; index < 26; index++) {
