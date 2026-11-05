@@ -188,7 +188,8 @@ describe('passive generated content policy', () => {
   ])('stays fast and escaped on pathological %s', async (_name, source) => {
     const started = Date.now()
     const result = await parseGeneratedMarkdown(source, context)
-    expect(result.fallback.map(segment => segment.type === 'text' ? segment.value : '').join('')).toBe(source)
+    expect(generatedTextFallback(source, context.sourceCount).map(segment => segment.type === 'text' ? segment.value : '').join('')).toBe(source)
+    if (result.body) expect(result.fallback).toEqual([])
     expect(normalizeAssistantCitations(source)).toBe(source)
     expect(Date.now() - started).toBeLessThan(20_000)
   }, 40_000)

@@ -7,6 +7,18 @@ import TextBlock from '~/components/learn/TextBlock.vue'
 import Message from '~/components/chat/Message.vue'
 
 describe('generated content during server rendering', () => {
+  it.each(['course', 'chat'] as const)('%s emits complete escaped text for over-budget syntax', async (surface) => {
+    const content = '{}'.repeat(30_000)
+    const component = surface === 'course' ? TextBlock : Message
+    const app = createSSRApp({ render: () => h(component, { content, role: 'assistant', animate: false }) })
+    Object.assign(app, { $nuxt: useNuxtApp() })
+    app.component('MDCRenderer', MDCRenderer)
+    app.component('Motion', { setup: (_, { slots }) => () => h('div', slots.default?.()) })
+    const output = await renderToString(app)
+    expect(output).toContain(content)
+    expect(output).not.toContain('data-generated-refused')
+  })
+
   it.each(['course', 'chat'] as const)('%s waits for the same gate before emitting markup', async (surface) => {
     for (const content of ['Ordinary **lesson**', '---\ncomponent:\n  props:\n    id: metadata-canary\n---\nReadable canary', '<b title="canary">Readable canary</b>', '```mermaid\ngraph TD\naccDescr: Start leads to Finish.\nA[Start] --> B[Finish]\n```']) {
       const component = surface === 'course' ? TextBlock : Message

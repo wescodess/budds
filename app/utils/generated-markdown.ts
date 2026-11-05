@@ -3,7 +3,7 @@ import type { MDCElement, MDCNode, MDCRoot } from '@nuxtjs/mdc'
 
 export const GENERATED_RENDER_POLICY = 'generated.passive.v1'
 // Compatibility limits apply per saved section/message, not per conversation.
-export const GENERATED_MARKDOWN_LIMITS = { source: 64_000, depth: 24, nodes: 512, diagrams: 2 } as const
+export const GENERATED_MARKDOWN_LIMITS = { source: 64_000, syntaxWork: 4_000_000, depth: 24, nodes: 512, diagrams: 2 } as const
 
 interface MarkdownNode {
   type: string
@@ -98,40 +98,78 @@ const literalLine = new RegExp(String.raw`<[a-z/!?]|(?:^|\s):+[\w-]+|${reference
 const pathologicalNesting = /^(?:[ \t]*(?:>|(?:[-+*]|\d{1,9}[.)])[ \t])){65}/m
 const componentFences = /^[ \t]*::/gm
 
+// MDC may revisit the remaining input at each syntax delimiter. Bound that
+// work before calling its synchronous tokenizer, including in code/escaped text.
+// Long ordinary prose retains the full source allowance; dense syntax falls back.
+function withinParseBudget(source: string): boolean {
+  let work = 0
+  for (const char of source) {
+    if ('\\`*_{}[]()<>:!~|'.includes(char)) work += source.length
+    if (work > GENERATED_MARKDOWN_LIMITS.syntaxWork) return false
+  }
+  return true
+}
+
 const referenceKey = (label: string) => label.trim().replace(/\s+/g, ' ').toLowerCase()
 const referenceLabels = (source: string) => new Set(Array.from(source.matchAll(new RegExp(referenceDefinition, 'gm')), match => referenceKey(match[1]!)))
 
+// Index every delimiter once instead of searching nested suffixes repeatedly.
+function delimiterEnds(source: string): Uint32Array {
+  const escaped = new Uint8Array(source.length)
+  for (let i = 0; i < source.length; i++) {
+    if (source.charCodeAt(i) === 92 && i + 1 < source.length) escaped[++i] = 1
+  }
+  const ends = new Uint32Array(source.length)
+  const brackets: number[] = []
+  const parentheses: number[] = []
+  for (let i = source.length - 1; i >= 0; i--) {
+    const char = source.charCodeAt(i)
+    if (char === 93 && !escaped[i]) brackets.push(i + 1)
+    if (char === 41 && !escaped[i]) parentheses.push(i + 1)
+    const stack = char === 91 ? brackets : char === 40 ? parentheses : null
+    if (stack) {
+      ends[i] = stack.at(-1) ?? 0
+      // A scan beginning at an escaped opener still sees its following suffix.
+      if (!escaped[i]) stack.pop()
+    }
+  }
+  return ends
+}
+
 // This lexer grants only citation controls in refused text. Everything else is
 // interpolated text. Code, link labels/destinations and authored markup stay literal.
-export function generatedTextFallback(source: string, sourceCount = 0, references = referenceLabels(source)): GeneratedTextSegment[] {
-  if (source.length > GENERATED_MARKDOWN_LIMITS.source) return [{ type: 'text', value: source }]
-  const ranges: Array<[number, number]> = []
-  for (const match of source.matchAll(/\b(?:https?:\/\/|www\.)[^\s<>]+/gi)) ranges.push([match.index, match.index + match[0].length])
-  const lineEnd = (offset: number) => { const end = source.indexOf('\n', offset); return end < 0 ? source.length : end + 1 }
-  const balancedEnd = (start: number, open: string, close: string) => {
-    let depth = 0
-    for (let i = start; i < source.length; i++) {
-      if (source[i] === '\\') { i++; continue }
-      if (source[i] === open) depth++
-      if (source[i] === close && --depth === 0) return i + 1
-    }
-    return source.length
+export function generatedTextFallback(source: string, sourceCount = 0, references?: ReadonlySet<string>): GeneratedTextSegment[] {
+  const literal = (): GeneratedTextSegment[] => [{ type: 'text', value: source }]
+  if (!sourceCount || source.length > GENERATED_MARKDOWN_LIMITS.source) return literal()
+  const labels = references ?? referenceLabels(source)
+  const ends = delimiterEnds(source)
+  // Reference normalization must also be bounded for overlapping nested labels.
+  let referenceWork = source.length * 4
+  const hasReference = (start: number, end: number) => {
+    if (!labels.size) return false
+    referenceWork -= Math.max(0, end - start)
+    return referenceWork >= 0 && labels.has(referenceKey(source.slice(start, end)))
   }
+  const ranges = new Int32Array(source.length + 1)
+  const protect = (start: number, end: number) => { ranges[start]!++; ranges[end]!-- }
+  for (const match of source.matchAll(/\b(?:https?:\/\/|www\.)[^\s<>]+/gi)) protect(match.index, match.index + match[0].length)
+  const lineEnd = (offset: number) => { const end = source.indexOf('\n', offset); return end < 0 ? source.length : end + 1 }
   let cursor = 0
   if (/^\uFEFF?---/.test(source)) {
     const closing = /^---\s*$/gm
     closing.lastIndex = lineEnd(0)
     const end = closing.exec(source)
     cursor = end ? lineEnd(end.index) : source.length
-    ranges.push([0, cursor])
+    protect(0, cursor)
   }
   while (cursor < source.length) {
     if (cursor === 0 || source[cursor - 1] === '\n') {
-      if (indentedCode.test(source.slice(cursor))) {
-        const end = lineEnd(cursor)
-        ranges.push([cursor, end]); cursor = end; continue
+      const end = lineEnd(cursor)
+      const line = source.slice(cursor, end)
+      if (indentedCode.test(line)) {
+        protect(cursor, end); cursor = end; continue
       }
-      const boundary = fenceOpening.exec(source.slice(cursor))
+      const boundary = fenceOpening.exec(line)
       if (boundary) {
         const fence = boundary[1]!
         let end = cursor + boundary[0].length
@@ -141,10 +179,10 @@ export function generatedTextFallback(source: string, sourceCount = 0, reference
           end = next
           if (closing && closing[0] === fence[0] && closing.length >= fence.length) break
         }
-        ranges.push([cursor, end]); cursor = end; continue
+        protect(cursor, end); cursor = end; continue
       }
     }
-    const ticks = /^`+/.exec(source.slice(cursor))?.[0]
+    const ticks = source[cursor] === '`' ? /^`+/.exec(source.slice(cursor))?.[0] : undefined
     if (ticks) {
       const closing = /`+/g
       closing.lastIndex = cursor + ticks.length
@@ -153,40 +191,47 @@ export function generatedTextFallback(source: string, sourceCount = 0, reference
       while ((match = closing.exec(source))) {
         if (match[0] === ticks) { end = match.index + ticks.length; break }
       }
-      ranges.push([cursor, end]); cursor = end; continue
+      protect(cursor, end); cursor = end; continue
     }
     if (source[cursor] === '[') {
-      const labelEnd = balancedEnd(cursor, '[', ']')
+      const labelEnd = ends[cursor]!
+      if (!labelEnd) { protect(cursor, source.length); break }
       let suffixStart = labelEnd
       while (/\s/.test(source[suffixStart] ?? '') && suffixStart < source.length) suffixStart++
       const suffix = source[suffixStart]
-      const referenceEnd = suffix === '[' ? balancedEnd(suffixStart, '[', ']') : suffixStart
-      const referenceLabel = source.slice(suffixStart + 1, referenceEnd - 1) || source.slice(cursor + 1, labelEnd - 1)
-      if ((suffix === '(' && suffixStart === labelEnd) || (suffix === '[' && (suffixStart === labelEnd || references.has(referenceKey(referenceLabel))))) {
-        const end = balancedEnd(suffixStart, suffix, suffix === '(' ? ')' : ']')
-        ranges.push([cursor, end]); cursor = end; continue
+      const attached = suffixStart === labelEnd
+      const referenceEnd = suffix === '[' ? ends[suffixStart] || source.length : suffixStart
+      const referenceStart = referenceEnd > suffixStart + 2 ? suffixStart : cursor
+      const referenceLabelEnd = referenceEnd > suffixStart + 2 ? referenceEnd : labelEnd
+      const reference = suffix === '[' && (attached || hasReference(referenceStart + 1, referenceLabelEnd - 1))
+      if (referenceWork < 0) return literal()
+      if ((suffix === '(' && attached) || reference) {
+        const end = ends[suffixStart] || source.length
+        protect(cursor, end); cursor = end; continue
       }
-      if (references.has(referenceKey(source.slice(cursor + 1, labelEnd - 1)))) {
-        ranges.push([cursor, labelEnd]); cursor = labelEnd; continue
+      if (hasReference(cursor + 1, labelEnd - 1)) {
+        protect(cursor, labelEnd); cursor = labelEnd; continue
       }
-      if (source[labelEnd - 1] !== ']') { ranges.push([cursor, source.length]); break }
+      if (referenceWork < 0) return literal()
     }
     cursor++
   }
   let offset = 0
   for (const line of source.split(/(?<=\n)/)) {
-    if (literalLine.test(line)) ranges.push([offset, offset + line.length])
+    if (literalLine.test(line)) protect(offset, offset + line.length)
     offset += line.length
   }
-  for (const match of source.matchAll(/(?:\[[^[\]\n]*\])?\{[^}\n]*(?:\}|$)/gm)) ranges.push([match.index, match.index + match[0].length])
-  ranges.sort((a, b) => a[0] - b[0])
+  for (const match of source.matchAll(/(?:\[[^[\]\n]*\])?\{[^}\n]*(?:\}|$)/gm)) protect(match.index, match.index + match[0].length)
   const result: GeneratedTextSegment[] = []
   offset = 0
-  for (const [start, end] of ranges) {
-    if (end <= offset) continue
-    if (start > offset) result.push(...citationSegments(source.slice(offset, start), sourceCount))
-    result.push({ type: 'text', value: source.slice(Math.max(offset, start), end) })
-    offset = end
+  let coverage = 0
+  for (let i = 0; i <= source.length; i++) {
+    const wasProtected = coverage > 0
+    coverage += ranges[i]!
+    if (wasProtected === (coverage > 0)) continue
+    if (wasProtected) result.push({ type: 'text', value: source.slice(offset, i) })
+    else result.push(...citationSegments(source.slice(offset, i), sourceCount))
+    offset = i
   }
   result.push(...citationSegments(source.slice(offset), sourceCount))
   return result.length > GENERATED_MARKDOWN_LIMITS.nodes ? [{ type: 'text', value: source }] : result
@@ -224,7 +269,7 @@ export async function parseGeneratedMarkdown(source: string, context: GeneratedM
   try {
     // The parser strips any closed `---` prefix, so block offsets would no longer match the source.
     if (source.length > GENERATED_MARKDOWN_LIMITS.source || markdown.startsWith('---')) throw new Error('source')
-    if (pathologicalNesting.test(markdown) || (markdown.match(componentFences)?.length ?? 0) > 64) throw new Error('nesting')
+    if (!withinParseBudget(markdown) || pathologicalNesting.test(markdown) || (markdown.match(componentFences)?.length ?? 0) > 64) throw new Error('complexity')
     let count = 0
     let diagrams = 0
     const definitions = new Map<string, string>()
@@ -331,5 +376,5 @@ export async function parseGeneratedMarkdown(source: string, context: GeneratedM
     })
     if (!body) throw new Error('parser')
   } catch { body = null; tailRefused = false }
-  return { body, tailRefused, fallback: generatedTextFallback(source, context.sourceCount) }
+  return { body, tailRefused, fallback: body ? [] : generatedTextFallback(source, context.sourceCount) }
 }

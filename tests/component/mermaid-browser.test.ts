@@ -46,6 +46,16 @@ const render = (source: string) => page.evaluate(async (code) => {
 const sanitize = (source: string) => page.evaluate(svg => window.__generatedContentTest.sanitizeGeneratedMermaidSvg(svg, 'owned-canary', 'Start leads to Finish.'), source)
 
 describe('real browser Mermaid boundary', () => {
+  it.each(['course', 'chat'] as const)('%s keeps resource-refused Markdown literal in Chromium and recovers', async (surface) => {
+    const content = `${'{}'.repeat(30_000)}\nFact [1]`
+    await page.evaluate(({ surface, content }) => window.__generatedContentTest.mount(surface, content), { surface, content })
+    await expect.poll(() => page.locator('#host').textContent()).toContain('{}'.repeat(30_000))
+    expect(await page.locator('#host pre, #host strong, #host [data-generated-refused]').count()).toBe(0)
+    expect(await page.locator('#host button').count()).toBe(surface === 'chat' ? 1 : 0)
+    await page.evaluate(() => window.__generatedContentTest.update('Recovered **lesson**'))
+    await expect.poll(() => page.locator('#host strong').textContent()).toBe('lesson')
+  })
+
   it.each(['course', 'chat'] as const)('%s rejects the inert source matrix in Chromium', async (surface) => {
     for (const [, content] of rejectedGeneratedContent) {
       await page.evaluate(({ surface, content }) => window.__generatedContentTest.mount(surface, content!), { surface, content })
