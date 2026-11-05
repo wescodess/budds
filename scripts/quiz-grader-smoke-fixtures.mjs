@@ -1,4 +1,4 @@
-// Hand-labelled synthetic cases. Expected verdicts are never sent to the model.
+// Synthetic cases with explicit expected verdicts, never sent to the model.
 const topics = {
   biology: {
     question: 'During photosynthesis, what happens to carbon dioxide and oxygen?',
