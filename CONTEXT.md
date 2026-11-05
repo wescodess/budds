@@ -64,11 +64,37 @@ _Avoid_: Transcription, estimated timing
 A private listener-session question and grounded audio response that temporarily pauses, then resumes, the immutable Audio Overview.
 _Avoid_: Spliced turn, edited podcast, interruption record
 
+## Learn language
+
+**Void**:
+The single learner-facing place where someone pursues a goal, from one question through to mastery. Internally it currently spans `learningVoids` and, on `dev`, `learningThreads`.
+_Avoid_: Thread, Mission, Course, Session Void, Learning Compiler in learner-facing copy
+
+**Learner Model**:
+The cross-topic, learner-editable record of Knowledge, Support, and Preferences used to choose and shape what happens next.
+_Avoid_: Learning style, learner type, persona
+
+**Learner Brief**:
+The bounded, deterministic summary of the Learner Model and current purpose given to a generator for one step.
+_Avoid_: Prompt context, memory dump
+
+**Provenance Tier**:
+The visible origin of teaching content: T0 accepted and verified, T1 fetched web, T2 model knowledge.
+_Avoid_: Confidence level, trust score
+
+**Measurement Item**:
+An assessment item held out of all teaching and practice, used only to test unassisted capability.
+_Avoid_: Quiz question, practice item
+
+**Verified Learning Gain**:
+The change in unassisted score from a cold attempt to a delayed check on a new, equivalent item.
+_Avoid_: Progress, completion, mastery percentage
+
 ## Adaptive Learn language
 
 **Learning Thread**:
-A learner-owned record of a learning need and its continuing activities, artifacts, and next move.
-_Avoid_: Learning Void, study session
+The internal learner-owned record behind a Void on the adaptive plane, holding a learning need and its continuing activities, artifacts, and next move. The `learningThreads` and `learningVoids` records are not merged yet.
+_Avoid_: Learning Thread in learner-facing copy (use Void), study session
 
 **Leave**:
 A reversible pause of a Learning Thread that preserves the point from which the learner can resume.
