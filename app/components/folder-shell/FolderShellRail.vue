@@ -110,7 +110,7 @@ const voids = computed<VoidItem[]>(() => {
   const courseItems = ((coursesData.value as Doc<'courses'>[] | undefined) ?? []).map<VoidItem>(c => ({
     id: c._id as string,
     type: 'course',
-    title: c.title?.trim() || 'Course',
+    title: c.title?.trim() || 'Void',
     updatedAt: (c.updatedAt as number) ?? (c.createdAt as number) ?? (c._creationTime as number) ?? 0,
   }))
   return [...chats, ...flashes, ...audioRooms, ...quizs, ...courseItems].sort((a, b) => b.updatedAt - a.updatedAt)

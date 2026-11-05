@@ -39,7 +39,8 @@ describe('FolderLearnPage', () => {
     const Comp = await import(pagePath)
     const wrapper = await mountSuspended(Comp.default)
     expect(wrapper.find('[data-testid="folder-learn-empty"]').exists()).toBe(true)
-    expect(wrapper.text()).toContain('No courses in this folder yet.')
+    expect(wrapper.text()).toContain('No Voids in this folder yet.')
+    expect(wrapper.find('h1 + p').text()).toBe('Voids in this folder')
   })
 
   it('renders create course button in empty state', async () => {
@@ -47,6 +48,7 @@ describe('FolderLearnPage', () => {
     const wrapper = await mountSuspended(Comp.default)
     const btn = wrapper.find('[data-testid="folder-learn-create-link"]')
     expect(btn.exists()).toBe(true)
+    expect(btn.text()).toBe('Create a Void from this folder')
   })
 
   it('renders course grid when courses exist', async () => {

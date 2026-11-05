@@ -241,7 +241,7 @@ const isNotReady = computed(() => {
           class="text-sm text-primary hover:text-primary/80"
           @click="navigateBack"
         >
-          Back to course
+          Back to Void
         </button>
       </div>
     </template>

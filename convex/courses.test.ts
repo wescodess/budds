@@ -229,6 +229,20 @@ describe('courses.create — source doc count cap', () => {
 })
 
 describe('courses.create — web-only source', () => {
+  test('defaults a blank title to Untitled Void', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, folderId } = await seedFolder(t, USER_A)
+
+    const result = await asUser.mutation(api.courses.create, {
+      title: '   ',
+      sourceType: 'web-only',
+      folderId,
+    })
+
+    const course = await t.run(async (ctx) => ctx.db.get(result.courseId))
+    expect(course!.title).toBe('Untitled Void')
+  })
+
   test('creates web-only course in folder with no docs', async () => {
     const t = convexTest(schema, modules)
     const { asUser, folderId } = await seedFolder(t, USER_A)

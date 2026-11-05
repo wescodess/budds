@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { ref } from 'vue'
+import { getFunctionName } from 'convex/server'
 import { mockMatchMedia } from '../../support/match-media'
+
+const mockCourses = ref<any[]>([])
 
 mockNuxtImport('useUserSession', () => {
   return () => ({
@@ -10,8 +13,8 @@ mockNuxtImport('useUserSession', () => {
 })
 
 mockNuxtImport('useConvexQuery', () => {
-  return () => ({
-    data: ref([]),
+  return (apiRef: unknown) => ({
+    data: getFunctionName(apiRef as any) === 'courses:listByFolder' ? mockCourses : ref([]),
   })
 })
 
@@ -52,5 +55,32 @@ describe('FolderShellRail', () => {
 
     expect(wrapper.get('[data-testid="rail-item-members"]').exists()).toBe(true)
     expect(wrapper.get('[data-testid="rail-item-knowledge"]').exists()).toBe(true)
+  })
+
+  it('[P2] names an untitled V1 record Void', async () => {
+    mockMatchMedia({ mobile: false, touch: false })
+    mockCourses.value = [{ _id: 'course-1', title: '  ', createdAt: 1 }]
+    const Rail = (await import('~/components/folder-shell/FolderShellRail.vue')).default
+
+    const wrapper = await mountSuspended(Rail, {
+      props: {
+        folderId: 'folder-1' as any,
+        folder: {
+          _id: 'folder-1',
+          name: 'Biology 101',
+          color: null,
+        } as any,
+        activeTab: 'learn',
+        activeConversationId: null,
+        activeVoidId: null,
+        compact: false,
+        hidden: false,
+        mobileExpanded: false,
+        drawerSection: null,
+      },
+    })
+
+    expect(wrapper.get('[data-testid="rail-void-course-course-1"]').text()).toBe('Void')
+    mockCourses.value = []
   })
 })
