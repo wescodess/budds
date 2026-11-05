@@ -280,7 +280,16 @@ describe('courseSections.finalizeSectionGeneration', () => {
     expect(rows[0]?.gradingCriteria).toEqual(gradingCriteria)
     expect(rows[1]).not.toHaveProperty('gradingCriteria')
     expect(rows[2]).not.toHaveProperty('gradingCriteria')
+    await t.run(ctx => ctx.db.patch(sections[0]._id, { status: 'completed' }))
     const content = await asUser.query(api.courseSections.getOfflineCachePayload, { sectionId: sections[0]._id })
+    expect(content).not.toBeNull()
+    const questions = content?.contentBlocks.find(block => block.type === 'quiz')?.quizData?.questions
+    expect(questions).toHaveLength(3)
+    expect(questions?.[0]).toMatchObject({
+      question: base.question,
+      type: base.type,
+      correctAnswer: base.correctAnswer,
+    })
     expect(JSON.stringify(content)).not.toContain('gradingCriteria')
   })
 
