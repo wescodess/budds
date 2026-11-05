@@ -7,6 +7,7 @@ import { resolve } from 'node:path'
 import type {} from '../support/generated-content-browser'
 import { compatibleDiagrams, multilineDiagrams, refusedDiagrams, rejectedGeneratedContent } from '../support/generated-content-fixtures'
 import { goodMarkdownCorpus, mixedMarkdownCorpus } from '../support/generated-markdown-corpus'
+import { costlySyntaxClasses, parserStallSources, permittedSourceLength } from '../support/generated-markdown-resources'
 
 let browser: Browser
 let page: Page
@@ -54,6 +55,27 @@ describe('real browser Mermaid boundary', () => {
     expect(await page.locator('#host button').count()).toBe(surface === 'chat' ? 1 : 0)
     await page.evaluate(() => window.__generatedContentTest.update('Recovered **lesson**'))
     await expect.poll(() => page.locator('#host strong').textContent()).toBe('lesson')
+  })
+
+  it.each(['course', 'chat'] as const)('%s keeps costly syntax classes literal in Chromium and recovers', async (surface) => {
+    const classes = [
+      ...costlySyntaxClasses.filter(([name]) => ['plus run', 'dotted words', 'escaped openers', 'bullets', 'lazy lines in deep quotes', 'mixed grammar'].includes(name)).map(([name, build]) => [name, build(permittedSourceLength)] as const),
+      ...parserStallSources,
+    ]
+    for (const [name, content] of classes) {
+      await page.evaluate(({ surface, content }) => window.__generatedContentTest.mount(surface, content), { surface, content })
+      await expect.poll(() => page.locator('#host').evaluate((host, expected) => host.textContent?.includes(expected), content), name).toBe(true)
+      expect(await page.locator('#host pre, #host strong, #host a, #host ul, #host ol, #host h2, #host blockquote, #host [data-generated-refused]').count(), name).toBe(0)
+    }
+    await page.evaluate(() => window.__generatedContentTest.update('Recovered **lesson**'))
+    await expect.poll(() => page.locator('#host strong').textContent()).toBe('lesson')
+  }, 60_000)
+
+  it.each(['course', 'chat'] as const)('%s renders a whitespace-filled citation label in Chromium', async (surface) => {
+    const content = `Fact [Source 1:${' '.repeat(3_000)}tail`
+    await page.evaluate(({ surface, content }) => window.__generatedContentTest.mount(surface, content), { surface, content })
+    await expect.poll(() => page.locator('#host').textContent()).toContain('tail')
+    expect(await page.locator('#host button').count()).toBe(surface === 'chat' ? 1 : 0)
   })
 
   it.each(['course', 'chat'] as const)('%s rejects the inert source matrix in Chromium', async (surface) => {

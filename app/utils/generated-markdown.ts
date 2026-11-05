@@ -3,7 +3,7 @@ import type { MDCElement, MDCNode, MDCRoot } from '@nuxtjs/mdc'
 
 export const GENERATED_RENDER_POLICY = 'generated.passive.v1'
 // Compatibility limits apply per saved section/message, not per conversation.
-export const GENERATED_MARKDOWN_LIMITS = { source: 64_000, syntaxWork: 4_000_000, depth: 24, nodes: 512, diagrams: 2 } as const
+export const GENERATED_MARKDOWN_LIMITS = { source: 64_000, syntaxWork: 4_000_000, lines: 4_096, blockSyntax: 512, containers: 64, components: 64, depth: 24, nodes: 512, diagrams: 2 } as const
 
 interface MarkdownNode {
   type: string
@@ -59,19 +59,63 @@ export function validateGeneratedLink(value: string, applicationOrigins: string[
   } catch { return null }
 }
 
-const marker = /\[(\d+)\]|\[\s*Source\s+(\d+)(?:\s*:\s*[^\]\n]*)?\s*\]|\(\s*Sources?\s+(\d+)\s*\)|\bSource\s+(\d+)\b/gi
+const citationCandidate = /[[(]|\bsource/gi
+const numericMarker = /\[(\d+)\]/y
+const labelledMarker = /\[\s*source\s+(\d+)\s*(?:\]|:\s*)/iy
+const parenthesizedMarker = /\(\s*sources?\s+(\d+)\s*\)/iy
+const bareMarker = /\bsource\s+(\d+)\b/iy
+const labelBoundary = /[\]\n]/g
+const whitespaceRun = /\s*/y
 
-function citationSegments(value: string, sourceCount = 0): GeneratedTextSegment[] {
+// A `[Source N: label]` may close after one line end. Failed attempts over the
+// same label suffix share this lookup, so a regular expression's rescans cannot return.
+function labelCloser(value: string) {
+  let stop = -1
+  let close = -1
+  return (start: number) => {
+    if (start > stop) {
+      labelBoundary.lastIndex = start
+      stop = labelBoundary.exec(value)?.index ?? value.length
+      whitespaceRun.lastIndex = stop
+      whitespaceRun.test(value)
+      const next = value[stop] === '\n' ? whitespaceRun.lastIndex : stop
+      close = value[next] === ']' ? next : -1
+    }
+    return close
+  }
+}
+
+function citationMarkerAt(value: string, start: number, closeLabel: (start: number) => number) {
+  const read = (pattern: RegExp) => { pattern.lastIndex = start; return pattern.exec(value) }
+  if (value[start] !== '[') {
+    const match = read(value[start] === '(' ? parenthesizedMarker : bareMarker)
+    return match && { numeral: match[1]!, end: start + match[0].length }
+  }
+  const numeric = read(numericMarker)
+  if (numeric) return { numeral: numeric[1]!, end: start + numeric[0].length }
+  const labelled = read(labelledMarker)
+  if (!labelled) return null
+  const prefixEnd = start + labelled[0].length
+  const end = labelled[0].endsWith(']') ? prefixEnd : closeLabel(prefixEnd) + 1
+  return end ? { numeral: labelled[1]!, end } : null
+}
+
+export function citationSegments(value: string, sourceCount = 0): GeneratedTextSegment[] {
   const result: GeneratedTextSegment[] = []
+  const closeLabel = labelCloser(value)
   let offset = 0
-  for (const match of value.matchAll(marker)) {
-    const numeral = match[1] ?? match[2] ?? match[3] ?? match[4] ?? ''
-    if (!/^[1-9]\d*$/.test(numeral)) continue
-    const index = Number(numeral)
+  let cursor = 0
+  for (const { index: start } of value.matchAll(citationCandidate)) {
+    if (start < cursor) continue
+    const marker = citationMarkerAt(value, start, closeLabel)
+    if (!marker) continue
+    cursor = marker.end
+    if (!/^[1-9]\d*$/.test(marker.numeral)) continue
+    const index = Number(marker.numeral)
     if (!Number.isSafeInteger(index) || index < 1 || index > sourceCount) continue
-    if (match.index > offset) result.push({ type: 'text', value: value.slice(offset, match.index) })
+    if (start > offset) result.push({ type: 'text', value: value.slice(offset, start) })
     result.push({ type: 'citation', index })
-    offset = match.index + match[0].length
+    offset = cursor
   }
   if (offset < value.length) result.push({ type: 'text', value: value.slice(offset) })
   return result
@@ -94,20 +138,110 @@ const fenceOpening = new RegExp(String.raw`^${quotePrefix}(?: {0,3}(?:[-+*]|\d+[
 const fenceClosing = new RegExp(String.raw`^${quotePrefix} {0,3}(\`+|~+)\s*$`)
 const referenceDefinition = String.raw`^${quotePrefix} {0,3}\[([^\]\n]+)\]:`
 const literalLine = new RegExp(String.raw`<[a-z/!?]|(?:^|\s):+[\w-]+|${referenceDefinition}`, 'i')
-// The parser's cost grows quickly with these before any tree bound can apply.
-const pathologicalNesting = /^(?:[ \t]*(?:>|(?:[-+*]|\d{1,9}[.)])[ \t])){65}/m
-const componentFences = /^[ \t]*::/gm
+const containerMarker = /[ \t]*(?:>|(?:[-+*]|\d{1,9}[.)])(?:[ \t]|$)|\[\^(?:\\\S|[^\s[\]\\])+\]:)/y
+const bulletItem = /^ {0,3}[-+*][ \t]+\S/
+const parserFenceOpening = /^([ \t]*)(`{3,}(?=[^`]*$)|~{3,})/
+const parserFenceClosing = /^ {0,3}(`{3,}|~{3,})[ \t]*$/
+const nodeSyntax = /[@|]|www\.|:\/\//gi
+const componentDataFence = /^[ \t>]*-[- \t]*$/
+const INLINE_DELIMITER = 2
+const asciiSyntax = new Uint8Array(128)
+for (const char of '"#$%\'()+,-./:;=>?@^|}') asciiSyntax[char.charCodeAt(0)] = 1
+for (const char of '!&*<[\\]_`~{') asciiSyntax[char.charCodeAt(0)] = INLINE_DELIMITER
 
-// MDC may revisit the remaining input at each syntax delimiter. Bound that
-// work before calling its synchronous tokenizer, including in code/escaped text.
-// Long ordinary prose retains the full source allowance; dense syntax falls back.
-function withinParseBudget(source: string): boolean {
+// Nothing can interrupt the synchronous parser once it starts, and its cost is
+// superlinear in several independent ways, so each is charged before it runs.
+// Inline delimiters rescan or walk back through their inline context. Punctuation
+// in an unbroken run drives the autolink scans. Block syntax, lines, containers and
+// component fences multiply document work, and a document above the node limit
+// would be refused anyway, after paying for all of it. Long ordinary prose keeps
+// the full source allowance; dense syntax falls back.
+export function withinGeneratedParseBudget(markdown: string): boolean {
+  const limits = GENERATED_MARKDOWN_LIMITS
+  const lines = markdown.split(/[\r\n]/)
+  if (lines.length > limits.lines) return false
   let work = 0
-  for (const char of source) {
-    if ('\\`*_{}[]()<>:!~|'.includes(char)) work += source.length
-    if (work > GENERATED_MARKDOWN_LIMITS.syntaxWork) return false
+  let blockSyntax = 0
+  let components = 0
+  let opensComponent = false
+  let containerDepth = 0
+  let contextLength = 0
+  let contextDelimiters = 0
+  let openBrackets = 0
+  // A label after a line-leading colon is read at block level, across blank lines.
+  let labelsCrossBlocks = false
+  let openFence = ''
+  // A column-zero fence's content never reaches inline parsing, unless an earlier
+  // indented fence, HTML block or component means the parser disagrees that it is one.
+  let fencesKnown = true
+  const endInlineContext = () => {
+    work += contextLength * contextDelimiters
+    contextLength = 0
+    contextDelimiters = 0
+    if (!labelsCrossBlocks) openBrackets = 0
   }
-  return true
+  for (const line of lines) {
+    if (openFence) {
+      const closing = parserFenceClosing.exec(line)?.[1]
+      if (closing && closing[0] === openFence[0] && closing.length >= openFence.length) openFence = ''
+      continue
+    }
+    let markers = 0
+    let start = 0
+    containerMarker.lastIndex = 0
+    while (containerMarker.test(line)) { markers++; start = containerMarker.lastIndex }
+    while (line[start] === ' ' || line[start] === '\t') start++
+    // MDC parses this YAML during the parse, and its cost explodes within a few hundred characters.
+    if (opensComponent && componentDataFence.test(line)) return false
+    opensComponent = line.startsWith('::', start)
+    if (start === line.length && !markers) { endInlineContext(); continue }
+    // Every nesting level takes at least two prefix characters, apart from a bare `>`.
+    const depth = Math.max(markers, start / 2)
+    if (depth > limits.containers) return false
+    containerDepth = Math.max(containerDepth, depth)
+    const opening = parserFenceOpening.exec(line)
+    if (opening) {
+      if (fencesKnown && !opening[1]) { endInlineContext(); openFence = opening[2]!; continue }
+      fencesKnown = false
+    }
+    const first = line.charCodeAt(start)
+    if (first === 60 || first === 58) fencesKnown = false
+    if (first === 58) labelsCrossBlocks = true
+    if (opensComponent) components++
+    blockSyntax += markers + (asciiSyntax[first] ? 1 : 0) + (line.match(nodeSyntax)?.length ?? 0)
+    if (bulletItem.test(line)) endInlineContext()
+    // Inside a nested label, MDC emits an empty text chunk for this and micromark never finishes tokenizing it.
+    if (line[start] === ']' && openBrackets >= 2) return false
+    let runLength = 0
+    let runPunctuation = 0
+    let previous = 32
+    let escaped = false
+    for (let index = 0; index < line.length; index++) {
+      const code = line.charCodeAt(index)
+      if (escaped) escaped = false
+      else if (code === 92) escaped = true
+      else if (code === 91) openBrackets++
+      else if (code === 93 && openBrackets) openBrackets--
+      if (code === 32 || code === 9) {
+        work += runLength * runPunctuation
+        runLength = 0
+        runPunctuation = 0
+      } else {
+        runLength++
+        if (asciiSyntax[code]) runPunctuation++
+        // MDC reads a colon as syntax only after whitespace or an opening delimiter.
+        if (asciiSyntax[code] === INLINE_DELIMITER || (code === 58 && (previous === 32 || previous === 9 || previous === 91 || previous === 42 || previous === 95 || previous === 40))) contextDelimiters++
+      }
+      previous = code
+    }
+    work += runLength * runPunctuation
+    contextLength += line.length + 1
+  }
+  endInlineContext()
+  // Every line pays for its open containers, even lazily, and each component's
+  // content is tokenized again as a nested document.
+  work += (containerDepth + components) * 128 * lines.length + components * markdown.length
+  return work <= limits.syntaxWork && blockSyntax <= limits.blockSyntax && components <= limits.components
 }
 
 const referenceKey = (label: string) => label.trim().replace(/\s+/g, ' ').toLowerCase()
@@ -136,6 +270,8 @@ function delimiterEnds(source: string): Uint32Array {
   return ends
 }
 
+const backtickRun = /`+/y
+
 // This lexer grants only citation controls in refused text. Everything else is
 // interpolated text. Code, link labels/destinations and authored markup stay literal.
 export function generatedTextFallback(source: string, sourceCount = 0, references?: ReadonlySet<string>): GeneratedTextSegment[] {
@@ -143,6 +279,16 @@ export function generatedTextFallback(source: string, sourceCount = 0, reference
   if (!sourceCount || source.length > GENERATED_MARKDOWN_LIMITS.source) return literal()
   const labels = references ?? referenceLabels(source)
   const ends = delimiterEnds(source)
+  // Escaped openers can share a label end, so its following whitespace is read once.
+  const suffixStarts = new Uint32Array(source.length + 1)
+  const suffixStartAfter = (labelEnd: number) => {
+    if (!suffixStarts[labelEnd]) {
+      whitespaceRun.lastIndex = labelEnd
+      whitespaceRun.test(source)
+      suffixStarts[labelEnd] = whitespaceRun.lastIndex
+    }
+    return suffixStarts[labelEnd]!
+  }
   // Reference normalization must also be bounded for overlapping nested labels.
   let referenceWork = source.length * 4
   const hasReference = (start: number, end: number) => {
@@ -182,8 +328,9 @@ export function generatedTextFallback(source: string, sourceCount = 0, reference
         protect(cursor, end); cursor = end; continue
       }
     }
-    const ticks = source[cursor] === '`' ? /^`+/.exec(source.slice(cursor))?.[0] : undefined
-    if (ticks) {
+    if (source[cursor] === '`') {
+      backtickRun.lastIndex = cursor
+      const ticks = backtickRun.exec(source)![0]
       const closing = /`+/g
       closing.lastIndex = cursor + ticks.length
       let match: RegExpExecArray | null
@@ -196,8 +343,7 @@ export function generatedTextFallback(source: string, sourceCount = 0, reference
     if (source[cursor] === '[') {
       const labelEnd = ends[cursor]!
       if (!labelEnd) { protect(cursor, source.length); break }
-      let suffixStart = labelEnd
-      while (/\s/.test(source[suffixStart] ?? '') && suffixStart < source.length) suffixStart++
+      const suffixStart = suffixStartAfter(labelEnd)
       const suffix = source[suffixStart]
       const attached = suffixStart === labelEnd
       const referenceEnd = suffix === '[' ? ends[suffixStart] || source.length : suffixStart
@@ -269,10 +415,15 @@ export async function parseGeneratedMarkdown(source: string, context: GeneratedM
   try {
     // The parser strips any closed `---` prefix, so block offsets would no longer match the source.
     if (source.length > GENERATED_MARKDOWN_LIMITS.source || markdown.startsWith('---')) throw new Error('source')
-    if (!withinParseBudget(markdown) || pathologicalNesting.test(markdown) || (markdown.match(componentFences)?.length ?? 0) > 64) throw new Error('complexity')
+    if (!withinGeneratedParseBudget(markdown)) throw new Error('complexity')
     let count = 0
     let diagrams = 0
     const definitions = new Map<string, string>()
+    const validatedLinks = new Map<string, string | null>()
+    const validatedLink = (destination: string) => {
+      if (!validatedLinks.has(destination)) validatedLinks.set(destination, validateGeneratedLink(destination, context.applicationOrigins))
+      return validatedLinks.get(destination)
+    }
     const rebuild = (node: MarkdownNode, depth: number, inLink = false): MDCNode[] => {
       if (++count > GENERATED_MARKDOWN_LIMITS.nodes || depth > GENERATED_MARKDOWN_LIMITS.depth) throw new Error('tree')
       const hasAttributes = Object.keys(node.attributes ?? {}).length > 0
@@ -309,7 +460,7 @@ export async function parseGeneratedMarkdown(source: string, context: GeneratedM
       }
       if (node.type === 'definition') return []
       if (node.type === 'link' || node.type === 'linkReference') {
-        const href = validateGeneratedLink(node.url ?? definitions.get(node.identifier ?? '') ?? '', context.applicationOrigins)
+        const href = validatedLink(node.url ?? definitions.get(node.identifier ?? '') ?? '')
         if (!href) throw new Error('link')
         return [element('a', children(true), { href })]
       }
