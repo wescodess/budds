@@ -17,6 +17,7 @@ const renderers = new Set([
 const stubModule = fileURLToPath(new URL('./projection-stubs', import.meta.url))
 
 export default defineNuxtConfig({
+  extends: ['../browser-layer'],
   hooks: {
     'pages:extend'(pages) {
       pages.push({
