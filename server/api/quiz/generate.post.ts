@@ -45,7 +45,8 @@ export default defineEventHandler(async (event) => {
   }
 
   const taskId = body.taskId as Id<'tasks'> | undefined
-  const convexClient = taskId ? makeConvexClient(event) : null
+  const convexClient = makeConvexClient(event)
+  if (!convexClient) throw createError({ statusCode: 503, message: 'Quiz storage unavailable' })
 
   async function setTaskProgress(progress: string) {
     if (!taskId || !convexClient) return
@@ -157,11 +158,12 @@ export default defineEventHandler(async (event) => {
       model,
       messages,
       temperature: 0.3,
-      max_tokens: Math.max(3000, questionCount * 400),
+      max_tokens: Math.max(3000, questionCount * 600),
     })
 
     const raw = completion.choices[0]?.message?.content ?? ''
     const parsed = parseQuizResponse(raw)
+    parsed.questions = parsed.questions.filter(question => !question.gradingCriteria || chunks[question.sourceIndex] !== undefined)
 
     if (parsed.questions.length === 0) {
       const msg = 'Quiz generation produced no valid questions'
@@ -179,11 +181,13 @@ export default defineEventHandler(async (event) => {
         options: q.options,
         correctAnswer: q.correctAnswer,
         explanation: q.explanation,
+        gradingCriteria: chunk ? q.gradingCriteria : undefined,
         sourceDocumentId: attrs.documentId,
         sourceChunkContent: chunk?.content,
         sourceFilename: chunk ? attrs.filename ?? 'Unknown source' : undefined,
       }
     })
+    const responseQuestions = persistQuestions.map(({ gradingCriteria: _criteria, ...question }) => question)
 
     // Advisory-only. Each decision receives the exact, indexed source excerpt
     // persisted with its question. Invalid/oversized evidence and an absent or
@@ -208,39 +212,32 @@ export default defineEventHandler(async (event) => {
     }
     if (validQualityItems.length > 0) await shadowEvaluateQuiz(event, validQualityItems).catch(() => undefined)
 
-    if (taskId && convexClient) {
-      await setTaskProgress('Saving quiz…')
+    await setTaskProgress('Saving quiz…')
 
-      const { quizId } = await convexClient.mutation(api.quizzes.createWithQuestions, {
-        folderId: body.folderId as Id<'folders'>,
-        title: parsed.title,
-        model,
-        creationMethod: 'auto_generated' as const,
-        difficulty: body.difficulty,
-        language: body.language,
-        questions: persistQuestions,
-      })
+    const { quizId } = await convexClient.mutation(api.quizzes.createWithQuestions, {
+      folderId: body.folderId as Id<'folders'>,
+      title: parsed.title,
+      model,
+      creationMethod: 'auto_generated' as const,
+      difficulty: body.difficulty,
+      language: body.language,
+      questions: persistQuestions,
+    })
 
+    if (taskId) {
       await convexClient.mutation(api.tasks.markComplete, {
         taskId,
         result: { quizId, questionCount: persistQuestions.length },
       })
-
-      return {
-        title: parsed.title,
-        model,
-        questions: persistQuestions,
-        questionCount: persistQuestions.length,
-        taskId,
-        quizId,
-      }
     }
 
     return {
       title: parsed.title,
       model,
-      questions: persistQuestions,
+      questions: responseQuestions,
       questionCount: persistQuestions.length,
+      quizId,
+      ...(taskId ? { taskId } : {}),
     }
   }
   catch (err) {

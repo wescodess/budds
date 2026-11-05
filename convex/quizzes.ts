@@ -4,6 +4,8 @@ import { internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import type { MutationCtx, QueryCtx } from './_generated/server'
 import { getOptionalAuthUserId, requireAuth } from './lib/auth'
+import { quizGradingCriterionValidator } from '../shared/quiz-grading'
+import { validatedQuestionGradingCriteria } from './lib/quizQuestionGrading'
 import { createPendingAnswerAssessment, isQuizGradingEnabled, isRubricAssessment, projectLearnerQuizQuestion, projectQuizGrade } from './lib/quizAnswerAssessment'
 
 const MAX_QUIZ_QUESTIONS = 200
@@ -24,6 +26,7 @@ const questionInput = v.object({
   type: questionTypeValidator,
   options: v.optional(v.array(v.string())),
   correctAnswer: v.string(),
+  gradingCriteria: v.optional(v.array(quizGradingCriterionValidator)),
   explanation: v.optional(v.string()),
   sourceDocumentId: v.optional(v.string()),
   sourceChunkContent: v.optional(v.string()),
@@ -204,6 +207,7 @@ export const createWithQuestions = mutation({
         type: q.type,
         options: q.options,
         correctAnswer: q.correctAnswer,
+        gradingCriteria: validatedQuestionGradingCriteria(q.type, q.gradingCriteria),
         explanation: q.explanation,
         sourceDocumentId: resolvedDocId,
         sourceChunkContent: q.sourceChunkContent,
@@ -253,6 +257,7 @@ export const createCourseScopedQuiz = internalMutation({
         type: q.type,
         options: q.options,
         correctAnswer: q.correctAnswer,
+        gradingCriteria: validatedQuestionGradingCriteria(q.type, q.gradingCriteria),
         explanation: q.explanation,
         sourceDocumentId: resolvedDocId,
         sourceChunkContent: q.sourceChunkContent,
@@ -464,6 +469,12 @@ export const updateQuestion = mutation({
 
     if (args.explanation !== undefined) {
       patch.explanation = args.explanation.trim() || undefined
+    }
+
+    if ((patch.question !== undefined && patch.question !== existing.question)
+      || (patch.type !== undefined && patch.type !== existing.type)
+      || (patch.correctAnswer !== undefined && patch.correctAnswer !== existing.correctAnswer)) {
+      patch.gradingCriteria = undefined
     }
 
     await ctx.db.patch(args.questionId, patch)
