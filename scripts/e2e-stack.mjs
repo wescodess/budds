@@ -1,11 +1,11 @@
-import { spawn, execFile as execFileCallback } from 'node:child_process'
+import { execFile as execFileCallback } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { buildNuxt, loadNuxt, writeTypes } from 'nuxt/kit'
-import { ensureDisposableLearner, redactStartupOutput, stopChild, supportsProcessGroups, waitForPortsClosed } from './e2e-stack-runtime.mjs'
+import { cleanupStack, createStartupOutput, ensureDisposableLearner, redactStartupOutput, spawnOwnedChild, stopChild, waitForConvexReady, waitForPortsClosed } from './e2e-stack-runtime.mjs'
 
 const execFile = promisify(execFileCallback)
 const root = process.cwd()
@@ -25,32 +25,47 @@ const inheritedEnv = { ...process.env }
 for (const key of ['CONVEX_DEPLOYMENT', 'CONVEX_DEPLOY_KEY', 'CONVEX_DEPLOYMENT_TOKEN', 'CONVEX_URL', 'CONVEX_SITE_URL', 'NUXT_PUBLIC_CONVEX_URL', 'AUTH_PROXY_TARGET_URL']) Reflect.deleteProperty(inheritedEnv, key)
 
 let isolatedRoot
+let workspace
 let convex
 let nuxt
 let builder
 let cleaned = false
+let cleanupPromise
 let convexPorts = []
 let stage = 'creating disposable checkout'
 const secrets = new Set([token, ...Object.entries(inheritedEnv).filter(([key]) => /SECRET|TOKEN|KEY|PASSWORD/.test(key)).map(([, value]) => value)])
 
 async function run(label, command, args, options) {
   stage = label
-  try { return await execFile(command, args, options) } catch (error) {
-    const details = [error.stderr, error.stdout].filter(Boolean).join('\n') || error.message
-    throw new Error(`${label} failed (exit ${error.code ?? 'unknown'}):\n${redactStartupOutput(details, secrets)}`, { cause: error })
+  const output = createStartupOutput(secrets)
+  try {
+    return await new Promise((resolve, reject) => {
+      const child = execFileCallback(command, args, options, (error, stdout, stderr) => {
+        output.finish()
+        if (error) reject(error)
+        else resolve({ stdout, stderr })
+      })
+      for (const stream of ['stdout', 'stderr']) child[stream]?.on('data', chunk => output.write(stream, chunk))
+    })
+  } catch (error) {
+    output.finish()
+    const details = output.diagnostics || redactStartupOutput(error.message, secrets)
+    throw new Error(`${label} failed (exit ${error.code ?? 'unknown'}):\n${details}`, { cause: error })
   }
 }
 
-async function cleanup() {
-  if (cleaned) return
+function cleanup() {
+  if (cleanupPromise) return cleanupPromise
   cleaned = true
-  await Promise.all([stopChild(nuxt), stopChild(convex)])
-  if (convexPorts.length) await waitForPortsClosed(convexPorts)
-  await builder?.close()
-  if (isolatedRoot) {
-    await execFile('git', ['worktree', 'remove', '--force', isolatedRoot], { cwd: root }).catch(() => {})
-    await rm(dirname(isolatedRoot), { recursive: true, force: true })
-  }
+  cleanupPromise = cleanupStack({
+    server: nuxt, backend: convex, ports: convexPorts, builder,
+    removeWorktree: isolatedRoot ? () => execFile('git', ['worktree', 'remove', '--force', isolatedRoot], { cwd: root }) : undefined,
+    removeWorkspace: workspace ? () => rm(workspace, { recursive: true, force: true }) : undefined,
+  }).then(errors => {
+    for (const { label, error } of errors) console.error(`E2E cleanup failed while ${label}: ${redactStartupOutput(error.message, secrets)}`)
+    return errors.length
+  })
+  return cleanupPromise
 }
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
@@ -79,7 +94,7 @@ async function waitForLocalConvex(worktree) {
       const localUrl = assertLoopbackUrl(url, 'Convex local deployment URL')
       if (await fetch(`${localUrl}/instance_name`, { signal: AbortSignal.timeout(1000) }).then(response => response.ok).catch(() => false)) return localUrl
     }
-    if (convex?.exitCode !== null) throw new Error(`Local Convex exited before becoming ready (exit ${convex?.exitCode})`)
+    if (convex?.commandExited || convex?.exitCode !== null || convex?.signalCode !== null) throw new Error('Local Convex exited before becoming ready')
     await new Promise(resolve => setTimeout(resolve, 250))
   }
   throw new Error('Timed out waiting for the disposable local Convex deployment')
@@ -87,34 +102,15 @@ async function waitForLocalConvex(worktree) {
 
 function startConvex(worktree) {
   stage = 'starting disposable Convex'
-  return new Promise((resolve, reject) => {
-    convex = spawn(pnpm, ['exec', 'convex', 'dev', '--typecheck', 'disable', '--codegen', 'disable', '--tail-logs', 'disable'], {
-      cwd: worktree,
-      env: { ...inheritedEnv, CONVEX_AGENT_MODE: 'anonymous' },
-      stdio: ['ignore', 'pipe', 'pipe'],
-      detached: supportsProcessGroups,
-    })
-    let output = ''
-    const observe = chunk => {
-      const text = redactStartupOutput(chunk.toString(), secrets)
-      output += text
-      process.stdout.write(text)
-      if (output.includes('Convex functions ready!')) resolve()
-    }
-    convex.stdout.on('data', observe)
-    convex.stderr.on('data', chunk => {
-      const text = redactStartupOutput(chunk.toString(), secrets)
-      output += text
-      process.stderr.write(text)
-      if (output.includes('Convex functions ready!')) resolve()
-    })
-    convex.once('error', reject)
-    convex.once('close', code => reject(new Error(`Local Convex exited before functions were ready (exit ${code ?? 'signal'}):\n${output.slice(-8000)}`)))
+  convex = spawnOwnedChild(pnpm, ['exec', 'convex', 'dev', '--typecheck', 'disable', '--codegen', 'disable', '--tail-logs', 'disable'], {
+    cwd: worktree,
+    env: { ...inheritedEnv, CONVEX_AGENT_MODE: 'anonymous' },
   })
+  return waitForConvexReady(convex, secrets, (stream, text) => process[stream].write(text))
 }
 
 async function main() {
-  const workspace = await mkdtemp(join(tmpdir(), 'budds-learn-v2-e2e-'))
+  workspace = await mkdtemp(join(tmpdir(), 'budds-learn-v2-e2e-'))
   isolatedRoot = join(workspace, 'app')
   await run('creating disposable checkout', 'git', ['worktree', 'add', '--detach', isolatedRoot, 'HEAD'], { cwd: root })
   await symlink(join(root, 'node_modules'), join(isolatedRoot, 'node_modules'), 'dir')
@@ -148,11 +144,11 @@ async function main() {
     '',
   ].join('\n'))
   await run('configuring disposable Convex', pnpm, ['exec', 'convex', 'env', 'set', '--from-file', functionEnv, '--force'], { cwd: isolatedRoot, env: { ...inheritedEnv, CONVEX_AGENT_MODE: 'anonymous' } })
+  const learner = syntheticApproval ? JSON.parse(await readFile(join(root, 'e2e/fixtures/adaptive-v2-learner.json'), 'utf8')) : undefined
+  if (learner) secrets.add(learner.password)
   await startConvex(isolatedRoot)
   await waitForLocalConvex(isolatedRoot)
   if (syntheticApproval) {
-    const learner = JSON.parse(await readFile(join(root, 'e2e/fixtures/adaptive-v2-learner.json'), 'utf8'))
-    secrets.add(learner.password)
     stage = 'authenticating disposable learner'
     const subject = await ensureDisposableLearner(convexSiteUrl, baseUrl, learner)
     const learnerHash = `sha256:${createHash('sha256').update(JSON.stringify(['adaptive-v2-pilot-cohort.v1', `${convexSiteUrl}|${subject}`])).digest('hex')}`
@@ -189,20 +185,23 @@ async function main() {
   // tsconfig.json and server/tsconfig.json extend generated files there.
   await writeTypes(builder)
   await buildNuxt(builder)
-  await builder.close()
+  const built = builder
   builder = undefined
+  await built.close()
   const port = new URL(baseUrl).port || '3102'
   const serverEnv = { ...appEnv, HOST: '127.0.0.1', PORT: port, NITRO_HOST: '127.0.0.1', NITRO_PORT: port }
   // Nitro's own endpoint settings take precedence over HOST and PORT.
   for (const key of ['NITRO_UNIX_SOCKET', 'NITRO_SSL_CERT', 'NITRO_SSL_KEY']) Reflect.deleteProperty(serverEnv, key)
-  nuxt = spawn(process.execPath, [join(outputDir, 'server/index.mjs')], {
+  stage = 'starting built Nuxt'
+  nuxt = spawnOwnedChild(process.execPath, [join(outputDir, 'server/index.mjs')], {
     cwd: root,
     env: serverEnv,
-    stdio: 'inherit',
-    detached: supportsProcessGroups,
   })
+  nuxt.stdout.pipe(process.stdout)
+  nuxt.stderr.pipe(process.stderr)
   nuxt.once('error', error => { console.error(`Nuxt failed to start: ${redactStartupOutput(error.message, secrets)}`); void cleanup().finally(() => process.exit(1)) })
-  nuxt.once('exit', code => { if (!cleaned) void cleanup().finally(() => process.exit(code ?? 1)) })
+  nuxt.once('commandExit', code => { if (!cleaned) void cleanup().then(errors => process.exit(errors ? 1 : (code ?? 1))) })
+  nuxt.once('close', () => { if (!cleaned) void cleanup().finally(() => process.exit(1)) })
 }
 
 main().catch(async (error) => {
