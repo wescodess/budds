@@ -2,6 +2,7 @@ import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import { internalMutation, mutation } from './_generated/server'
 import { requireAuth } from './lib/auth'
+import { INTERNAL_RATE_LIMIT_PREFIX } from './lib/quizGradingLimits'
 
 const WINDOW_MS = 60_000
 const CLEANUP_BATCH_SIZE = 200
@@ -15,6 +16,7 @@ export const consume = mutation({
     const userId = await requireAuth(ctx)
     const route = args.route.slice(0, 200)
     const key = `${userId}::${route}`
+    if (key.startsWith(INTERNAL_RATE_LIMIT_PREFIX)) throw new Error('Reserved rate-limit key')
     const now = Date.now()
     const existing = await ctx.db
       .query('rateLimitBuckets')

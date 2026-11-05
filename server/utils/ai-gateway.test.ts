@@ -6,7 +6,8 @@ vi.stubGlobal('createError', (opts: { statusCode: number; message: string }) =>
 )
 vi.stubGlobal('fetch', vi.fn())
 
-const { generateCompletion, generateCompletionStream } = await import('./ai-gateway')
+const { generateCompletion, generateCompletionStream, serializeCompletionRequest } = await import('./ai-gateway')
+const { gradeQuizAnswers, quizGradingRequest, QUIZ_GRADER_POLICY } = await import('./quiz-grading')
 
 const validConfig = {
   cloudflareAccountId: 'test-account',
@@ -60,6 +61,28 @@ describe('generateCompletion', () => {
       'https://gateway.ai.cloudflare.com/v1/test-account/test-gateway/openrouter/v1/chat/completions',
       expect.objectContaining({ method: 'POST' }),
     )
+  })
+
+  test('the quiz byte selector matches the actual escaped wire body at 96000 bytes', async () => {
+    const item = {
+      id: 'wire-boundary', question: 'A question', referenceAnswer: 'The full reference', evidenceExcerpt: 'Evidence 🌱',
+      criteria: [{ key: 'reference_answer', description: 'The required idea', weightPercent: 100 }], learnerAnswer: '\\"🌱\n',
+    }
+    const byteLength = (text: string) => new TextEncoder().encode(text).byteLength
+    item.learnerAnswer += 'x'.repeat(96_000 - byteLength(serializeCompletionRequest(quizGradingRequest([item]))))
+    const requestBody = serializeCompletionRequest(quizGradingRequest([item]))
+    expect(byteLength(requestBody)).toBe(96_000)
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({
+      ...minimalResponse, model: QUIZ_GRADER_POLICY.model,
+      choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({
+        results: [{ id: item.id, criterionResults: [{ key: 'reference_answer', verdict: 'met' }], feedback: 'You explained the idea.' }],
+      }) } }],
+    })))
+    expect(await gradeQuizAnswers([item])).toMatchObject({ status: 'graded' })
+    expect(vi.mocked(fetch).mock.calls[0]![1]!.body).toBe(requestBody)
+    expect(JSON.parse(JSON.parse(requestBody).messages[1].content).items[0]).toEqual(item)
+    expect(await gradeQuizAnswers([{ ...item, learnerAnswer: item.learnerAnswer + 'x' }])).toEqual({ status: 'unavailable', reason: 'oversized_evidence', retryable: false })
+    expect(fetch).toHaveBeenCalledTimes(1)
   })
 
   test('sends correct request body with defaults', async () => {
@@ -162,6 +185,32 @@ describe('generateCompletion', () => {
     await expect(generateCompletion(baseParams)).rejects.toThrow(
       'Missing AI Gateway configuration',
     )
+  })
+
+  test('emits the free-grader price, reasoning and Phala privacy policy only when supplied', async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(new Response(JSON.stringify(minimalResponse)))
+    await generateCompletion({
+      ...baseParams, model: 'xingchen-agi/xing4.0-29b-a4b:free', temperature: 0,
+      maxPrice: { prompt: 0, completion: 0 }, reasoning: { enabled: false },
+      jsonSchema: { name: 'quiz', strict: true, schema: { type: 'object' } },
+      requireZeroDataRetention: true, denyProviderDataCollection: true, allowProviderFallbacks: false,
+      providerOrder: ['phala'], collectLogPayload: false, skipGatewayCache: true, maxAttempts: 1,
+    })
+    const [, init] = vi.mocked(globalThis.fetch).mock.calls[0]!
+    expect(JSON.parse(init!.body as string)).toEqual({
+      model: 'xingchen-agi/xing4.0-29b-a4b:free', messages: baseParams.messages, temperature: 0, max_tokens: 2048, stream: false,
+      reasoning: { enabled: false }, response_format: { type: 'json_schema', json_schema: { name: 'quiz', strict: true, schema: { type: 'object' } } },
+      provider: { require_parameters: true, allow_fallbacks: false, zdr: true, data_collection: 'deny', order: ['phala'], only: ['phala'], max_price: { prompt: 0, completion: 0 } },
+    })
+    expect(init!.headers).toMatchObject({ 'cf-aig-collect-log-payload': 'false', 'cf-aig-skip-cache': 'true', 'cf-aig-max-attempts': '1' })
+  })
+
+  test.each(['120', new Date(Date.now() + 120_000).toUTCString()])('preserves a numeric Retry-After delay from %s', async (retryAfter) => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(new Response('private response', { status: 429, headers: { 'retry-after': retryAfter } }))
+    const error = await generateCompletion({ ...baseParams, redactUpstreamErrorBody: true }).catch(error => error)
+    expect(error).toMatchObject({ statusCode: 429, retryAfterMs: expect.any(Number) })
+    expect(error.retryAfterMs).toBeGreaterThan(115_000)
+    expect(error.retryAfterMs).toBeLessThanOrEqual(120_000)
   })
 
   test('falls back to NUXT_ env vars when runtime config is empty', async () => {

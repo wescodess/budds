@@ -35,6 +35,7 @@ describe('calendar event compensating cleanup', () => {
   let previousEncryptionKey: string | undefined
 
   beforeEach(() => {
+    vi.useFakeTimers()
     previousEncryptionKey = process.env.CALENDAR_TOKEN_ENCRYPTION_KEY
     process.env.CALENDAR_TOKEN_ENCRYPTION_KEY = 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY='
   })
@@ -42,6 +43,7 @@ describe('calendar event compensating cleanup', () => {
   afterEach(() => {
     if (previousEncryptionKey === undefined) delete process.env.CALENDAR_TOKEN_ENCRYPTION_KEY
     else process.env.CALENDAR_TOKEN_ENCRYPTION_KEY = previousEncryptionKey
+    vi.clearAllTimers()
     vi.unstubAllGlobals()
     vi.useRealTimers()
   })
@@ -207,7 +209,6 @@ describe('calendar event compensating cleanup', () => {
     const firstPage = await asUser.action(api.calendarEvents.syncCalendar, {})
     expect(firstPage.created).toBe(25)
     expect(firstPage.message).toBe('Calendar sync continues in the background')
-    vi.useFakeTimers()
     await t.finishAllScheduledFunctions(vi.runAllTimers)
 
     expect(createGoogleEvent).toHaveBeenCalledTimes(101)
@@ -475,7 +476,6 @@ describe('calendar event compensating cleanup', () => {
   })
 
   test('[P0] expired-claim recovery fences a stale cleanup result', async () => {
-    vi.useFakeTimers()
     const t = convexTest(schema, modules)
     const { courseId, calendarConnectionId } = await setup(t)
     const cleanupJobId = await t.mutation(internal.calendarEventCleanup.reserve, {
@@ -489,7 +489,7 @@ describe('calendar event compensating cleanup', () => {
     const firstClaim = await t.mutation(internal.calendarEventCleanup.claim, { cleanupJobId })
     expect(firstClaim?.attempt).toBe(1)
 
-    vi.advanceTimersByTime(60_001)
+    vi.setSystemTime(Date.now() + 60_001)
     expect(await t.mutation(internal.calendarEventCleanup.sweepDue, {})).toEqual({
       expiredClaims: 1,
       due: 0,
@@ -508,7 +508,8 @@ describe('calendar event compensating cleanup', () => {
   })
 
   test('[P1] due-job rescue schedules at most one bounded batch', async () => {
-    vi.useFakeTimers()
+    const deleteGoogleEvent = vi.fn().mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', deleteGoogleEvent)
     const t = convexTest(schema, modules)
     const { courseId, calendarConnectionId } = await setup(t)
     for (let index = 0; index < 26; index++) {
@@ -520,7 +521,9 @@ describe('calendar event compensating cleanup', () => {
         reason: 'missed-reschedule',
       })
     }
-    vi.advanceTimersByTime(2 * 60_000 + 1)
+    vi.setSystemTime(Date.now() + 2 * 60_000 + 1)
+    await t.finishInProgressScheduledFunctions()
+    expect(deleteGoogleEvent).not.toHaveBeenCalled()
 
     expect(await t.mutation(internal.calendarEventCleanup.sweepDue, {})).toEqual({
       expiredClaims: 0,
@@ -599,6 +602,8 @@ describe('calendar event compensating cleanup', () => {
   })
 
   test('[P1] disconnect purges more than one bounded batch of terminal cleanup before credentials', async () => {
+    const revoke = vi.fn().mockResolvedValue(new Response(null, { status: 200 }))
+    vi.stubGlobal('fetch', revoke)
     const t = convexTest(schema, modules)
     const { courseId, calendarConnectionId } = await setup(t)
     await t.run(async (ctx) => {
@@ -627,10 +632,14 @@ describe('calendar event compensating cleanup', () => {
       expect(await t.query(internal.calendarConnections.hasConnectionForUser, {
         userId: USER.tokenIdentifier,
       })).toBe(true)
+      expect(revoke).not.toHaveBeenCalled()
     }
-    expect(await t.action(internal.calendarEvents.startDisconnectForUser, {
+    const result = await t.action(internal.calendarEvents.startDisconnectForUser, {
       userId: USER.tokenIdentifier,
-    })).toMatchObject({ disconnected: true })
+    })
+    expect(revoke).toHaveBeenCalledOnce()
+    expect(revoke).toHaveBeenCalledWith('https://oauth2.googleapis.com/revoke', expect.objectContaining({ method: 'POST' }))
+    expect(result).toMatchObject({ disconnected: true })
     expect(await t.query(internal.calendarConnections.hasConnectionForUser, {
       userId: USER.tokenIdentifier,
     })).toBe(false)

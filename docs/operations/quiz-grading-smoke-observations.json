@@ -1,0 +1,268 @@
+{
+  "version": 1,
+  "requestsUsed": 5,
+  "halted": true,
+  "requests": [
+    {
+      "variant": "production",
+      "at": "2026-11-05T08:30:05.539Z",
+      "batch": 1,
+      "fixtureIds": [
+        "bio-paraphrase",
+        "bio-partial",
+        "bio-contradiction",
+        "bio-padding",
+        "bio-misspelling",
+        "bio-spanish",
+        "bio-ambiguous",
+        "bio-injection-command"
+      ],
+      "requestNumber": 1,
+      "strictSchemaRequested": true,
+      "policy": {
+        "model": "xingchen-agi/xing4.0-29b-a4b:free",
+        "phalaOnly": true,
+        "zdr": true,
+        "denyDataCollection": true,
+        "zeroPriceCap": true,
+        "fallbacks": false,
+        "payloadLogging": false,
+        "skipCache": true,
+        "maxAttempts": 1
+      },
+      "httpStatus": 429,
+      "latencyMs": 3697,
+      "reason": "Provider returned error",
+      "outcome": "unavailable",
+      "failure": {
+        "reason": "over_budget",
+        "retryable": true
+      },
+      "schemaValid": null,
+      "answerCount": 8,
+      "requestBytes": 7617,
+      "requestSizeSource": "reconstructed offline from unchanged adapter and fixtures; confirmed by identical later batch"
+    },
+    {
+      "variant": "production",
+      "kind": "probe",
+      "probe": 1,
+      "at": "2026-11-05T08:39:32.105Z",
+      "fixtureIds": [
+        "bio-paraphrase"
+      ],
+      "requestNumber": 2,
+      "answerCount": 1,
+      "requestBytes": 2765,
+      "requestSizeSource": "measured before dispatch",
+      "strictSchemaRequested": true,
+      "policy": {
+        "model": "xingchen-agi/xing4.0-29b-a4b:free",
+        "phalaOnly": true,
+        "zdr": true,
+        "denyDataCollection": true,
+        "zeroPriceCap": true,
+        "fallbacks": false,
+        "payloadLogging": false,
+        "skipCache": true,
+        "maxAttempts": 1
+      },
+      "httpStatus": 429,
+      "rateLimitHeaders": {},
+      "retryAfterPresent": false,
+      "retryAfterMs": null,
+      "retryAfterNotBefore": null,
+      "latencyMs": 1226,
+      "finishedAt": "2026-11-05T08:39:33.333Z",
+      "reason": "Provider returned error",
+      "upstreamReason": "xingchen-agi/xing4.0-29b-a4b:free is temporarily rate-limited upstream.",
+      "outcome": "unavailable",
+      "failure": {
+        "reason": "over_budget",
+        "retryable": true
+      },
+      "schemaValid": null
+    },
+    {
+      "variant": "production",
+      "kind": "probe",
+      "probe": 2,
+      "at": "2026-11-05T08:49:33.344Z",
+      "fixtureIds": [
+        "bio-paraphrase"
+      ],
+      "requestNumber": 3,
+      "answerCount": 1,
+      "requestBytes": 2765,
+      "requestSizeSource": "measured before dispatch",
+      "strictSchemaRequested": true,
+      "policy": {
+        "model": "xingchen-agi/xing4.0-29b-a4b:free",
+        "phalaOnly": true,
+        "zdr": true,
+        "denyDataCollection": true,
+        "zeroPriceCap": true,
+        "fallbacks": false,
+        "payloadLogging": false,
+        "skipCache": true,
+        "maxAttempts": 1
+      },
+      "httpStatus": 200,
+      "rateLimitHeaders": {},
+      "retryAfterPresent": false,
+      "retryAfterMs": null,
+      "retryAfterNotBefore": null,
+      "latencyMs": 1970,
+      "finishedAt": "2026-11-05T08:49:35.346Z",
+      "returnedModel": "xingchen-agi/xing4.0-29b-a4b:free",
+      "freeSuffix": true,
+      "finishReason": "stop",
+      "cost": 0,
+      "outcome": "graded",
+      "schemaValid": true,
+      "results": [
+        {
+          "id": "bio-paraphrase",
+          "criterionResults": [
+            {
+              "key": "carbon_in",
+              "verdict": "met"
+            },
+            {
+              "key": "oxygen_out",
+              "verdict": "met"
+            }
+          ],
+          "credit": 1,
+          "label": "fully_correct",
+          "wordingViolations": [],
+          "sentenceCount": 2
+        }
+      ]
+    },
+    {
+      "variant": "production",
+      "kind": "fixture_batch",
+      "batch": 1,
+      "at": "2026-11-05T08:49:35.362Z",
+      "fixtureIds": [
+        "bio-paraphrase",
+        "bio-partial",
+        "bio-contradiction",
+        "bio-padding",
+        "bio-misspelling",
+        "bio-spanish",
+        "bio-ambiguous",
+        "bio-injection-command"
+      ],
+      "requestNumber": 4,
+      "answerCount": 8,
+      "requestBytes": 7617,
+      "requestSizeSource": "measured before dispatch",
+      "strictSchemaRequested": true,
+      "policy": {
+        "model": "xingchen-agi/xing4.0-29b-a4b:free",
+        "phalaOnly": true,
+        "zdr": true,
+        "denyDataCollection": true,
+        "zeroPriceCap": true,
+        "fallbacks": false,
+        "payloadLogging": false,
+        "skipCache": true,
+        "maxAttempts": 1
+      },
+      "httpStatus": 429,
+      "rateLimitHeaders": {},
+      "retryAfterPresent": false,
+      "retryAfterMs": null,
+      "retryAfterNotBefore": null,
+      "latencyMs": 671,
+      "finishedAt": "2026-11-05T08:49:36.034Z",
+      "reason": "Provider returned error",
+      "upstreamReason": "xingchen-agi/xing4.0-29b-a4b:free is temporarily rate-limited upstream.",
+      "outcome": "unavailable",
+      "failure": {
+        "reason": "over_budget",
+        "retryable": true
+      },
+      "schemaValid": null
+    },
+    {
+      "variant": "production",
+      "kind": "fixture_batch",
+      "batch": 2,
+      "at": "2026-11-05T08:59:36.047Z",
+      "fixtureIds": [
+        "speed-paraphrase",
+        "speed-wrong-number",
+        "speed-wrong-unit",
+        "speed-injection-role",
+        "club-paraphrase",
+        "club-contradiction",
+        "club-irrelevant",
+        "club-injection-json"
+      ],
+      "requestNumber": 5,
+      "answerCount": 8,
+      "requestBytes": 7397,
+      "requestSizeSource": "measured before dispatch",
+      "strictSchemaRequested": true,
+      "policy": {
+        "model": "xingchen-agi/xing4.0-29b-a4b:free",
+        "phalaOnly": true,
+        "zdr": true,
+        "denyDataCollection": true,
+        "zeroPriceCap": true,
+        "fallbacks": false,
+        "payloadLogging": false,
+        "skipCache": true,
+        "maxAttempts": 1
+      },
+      "httpStatus": 429,
+      "rateLimitHeaders": {},
+      "retryAfterPresent": false,
+      "retryAfterMs": null,
+      "retryAfterNotBefore": null,
+      "latencyMs": 1148,
+      "finishedAt": "2026-11-05T08:59:37.226Z",
+      "reason": "Provider returned error",
+      "upstreamReason": "xingchen-agi/xing4.0-29b-a4b:free is temporarily rate-limited upstream.",
+      "outcome": "unavailable",
+      "failure": {
+        "reason": "over_budget",
+        "retryable": true
+      },
+      "schemaValid": null
+    }
+  ],
+  "allowance": [
+    {
+      "phase": "before",
+      "status": 200,
+      "limit": null,
+      "limit_remaining": null,
+      "usage": 5.626137773,
+      "usage_daily": 0,
+      "usage_weekly": 0,
+      "usage_monthly": 0,
+      "free_model_daily_requests": {
+        "used": 0,
+        "limit": 1000,
+        "remaining": 1000
+      }
+    }
+  ],
+  "retryPlan": {
+    "id": "spaced-probes-v1",
+    "authorizedAt": "2026-11-05T08:39:32.103Z",
+    "status": "stopped_batch_429",
+    "probesUsed": 2,
+    "nextProbeNotBefore": "2026-11-05T08:49:33.337Z",
+    "maximumProbes": 3,
+    "delayAfter429Ms": [
+      600000,
+      1200000
+    ],
+    "nextFixtureNotBefore": "2026-11-05T08:59:36.034Z"
+  }
+}

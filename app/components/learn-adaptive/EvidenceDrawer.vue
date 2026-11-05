@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { Sheet, SheetContent, SheetDescription, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
+import { LEARN_ADAPTIVE_SURFACE } from '~/utils/learn-adaptive-surface'
 import type { AdaptiveClaimIntegrityProjection, AdaptiveEvidenceIntegrityState } from '~~/shared/adaptive-claim-adapter'
 
 type Evidence = {
@@ -65,8 +66,8 @@ function restoreSourceFocus(event: Event) {
     <SheetTrigger as-child>
       <button ref="trigger" type="button" data-testid="learn-evidence-open" class="min-h-11 rounded-lg border border-border px-4 text-sm font-medium text-[var(--learn-action)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)]" @click="useDefaultTriggerFocus">Evidence</button>
     </SheetTrigger>
-    <SheetContent side="right" data-testid="learn-evidence-drawer" class="w-screen max-w-none gap-3 bg-[var(--learn-context-surface)] p-4 md:w-[32rem] md:max-w-md" @close-auto-focus="restoreSourceFocus">
-      <header class="pr-8">
+    <SheetContent side="right" :overlay-class="LEARN_ADAPTIVE_SURFACE" data-testid="learn-evidence-drawer" :class="[LEARN_ADAPTIVE_SURFACE, 'w-screen max-w-none gap-3 bg-[var(--learn-context-surface)] p-4 md:w-[32rem] md:max-w-md']" @close-auto-focus="restoreSourceFocus">
+      <header class="pr-14">
         <SheetTitle class="font-dm-sans text-xl font-semibold">Evidence</SheetTitle>
         <SheetDescription>Sources currently supporting this activity. Source locators are shown only when permitted.</SheetDescription>
       </header>

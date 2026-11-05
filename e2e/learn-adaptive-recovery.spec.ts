@@ -28,14 +28,9 @@ const evidenceRecovery = {
 } as const
 
 async function visitHarness(page: Page, path: string) {
-  try {
-    await page.goto(path)
-  }
-  catch (error) {
-    // Nuxt can reload once while compiling the first fixture route in CI.
-    if (!(error instanceof Error) || !error.message.includes('net::ERR_ABORTED')) throw error
-    await page.goto(path)
-  }
+  // The disposable server serves built output; any aborted navigation is a
+  // failed attempt and must remain visible in the report and retained trace.
+  await page.goto(path)
   await expect(page.getByTestId('canvas-browser-harness')).toHaveAttribute('data-projection-only', 'true')
   await expect(page.getByTestId('canvas-browser-harness')).toHaveAttribute('data-hydrated', 'true')
 }
