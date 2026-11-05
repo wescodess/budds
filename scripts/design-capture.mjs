@@ -41,6 +41,7 @@ async function startStack() {
     if (interrupted || stackFailure) throw new Error(stackFailure || 'Capture interrupted')
     const ready = await fetch(baseUrl, { signal: AbortSignal.timeout(1000) }).then(response => response.ok).catch(() => false)
     if (interrupted || stackFailure) throw new Error(stackFailure || 'Capture interrupted')
+    releaseStackLock.snapshotStack()
     if (ready) return baseUrl.origin
     await delay(250)
   }

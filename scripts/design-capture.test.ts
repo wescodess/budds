@@ -1,6 +1,6 @@
 import { execFileSync, spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -22,6 +22,152 @@ const surface = {
 const capture = captureIdentity('example', surface.cases[0], 'dark', surface.viewports[0])
 const floor = { version: 1, surface: 'example', status: 'complete', errors: [], captures: [capture], violations: [{ id: 'known' }] }
 
+async function deadOwner() {
+  const child = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' })
+  await once(child, 'exit')
+  return child.pid!
+}
+
+async function detachedStack(root: string) {
+  const backendFile = join(root, 'backend.mjs')
+  const stackFile = join(root, 'e2e-stack.mjs')
+  await writeFile(backendFile, `
+    import { writeFileSync } from 'node:fs'
+    setInterval(() => {}, 1000)
+    process.on('SIGTERM', () => {
+      writeFileSync(${JSON.stringify(join(root, 'backend-stopping'))}, 'stopping')
+      setTimeout(() => process.exit(0), 500)
+    })
+    process.stdout.write('ready')
+  `)
+  await writeFile(stackFile, `
+    import { spawn } from 'node:child_process'
+    const backend = spawn(process.execPath, [${JSON.stringify(backendFile)}], { detached: true, stdio: ['ignore', 'pipe', 'ignore'] })
+    backend.stdout.once('data', () => process.stdout.write(String(backend.pid)))
+    process.on('SIGTERM', () => process.exit(0))
+  `)
+  const stack = spawn(process.execPath, [stackFile], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
+  const backendPid = Number(String((await once(stack.stdout!, 'data'))[0]))
+  return { stack, backendPid }
+}
+
+async function staleOwner(lock: string) {
+  const [file] = await readdir(lock)
+  const metadata = JSON.parse(await readFile(join(lock, file), 'utf8'))
+  metadata.pid = await deadOwner()
+  const target = join(lock, `owner-${metadata.pid}-${metadata.token}.json`)
+  await rename(join(lock, file), target)
+  await writeFile(target, JSON.stringify(metadata))
+  return { metadata, target }
+}
+
+describe('verified stack group ownership', () => {
+  it('takes over a reused stack PID without signalling the mismatched group', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'design-capture-reused-'))
+    const lock = join(root, 'stack.lock')
+    const child = spawn(process.execPath, ['-e', "setInterval(() => {}, 1000); process.stdout.write('ready')"], { detached: true, stdio: ['ignore', 'pipe', 'ignore'] })
+    try {
+      await once(child.stdout!, 'data')
+      await acquireCaptureStackLock(lock)
+      const { metadata, target } = await staleOwner(lock)
+      metadata.stackPid = child.pid
+      metadata.stackGroups = [{ pid: child.pid, identities: [{ pid: child.pid, pgid: child.pid, startedAt: 'Thu Jan  1 00:00:00 1970', command: 'node scripts/e2e-stack.mjs' }] }]
+      await writeFile(target, JSON.stringify(metadata))
+      const kill = vi.spyOn(process, 'kill')
+      const release = await acquireCaptureStackLock(lock)
+      expect(kill.mock.calls.filter(([pid, signal]) => pid === -child.pid! && signal !== 0)).toEqual([])
+      expect(() => process.kill(-child.pid!, 0)).not.toThrow()
+      await release()
+      await expect(readdir(lock)).rejects.toThrow('ENOENT')
+    }
+    finally {
+      vi.restoreAllMocks()
+      try { process.kill(-child.pid!, 'SIGKILL') } catch { /* Only this test's group. */ }
+      await rm(root, { recursive: true, force: true })
+    }
+  }, 10_000)
+
+  it('refuses unverifiable identity without signalling and explains manual lock recovery', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'design-capture-unverified-'))
+    const lock = join(root, 'stack.lock')
+    const child = spawn(process.execPath, ['-e', "setInterval(() => {}, 1000); process.stdout.write('ready')"], { detached: true, stdio: ['ignore', 'pipe', 'ignore'] })
+    try {
+      await once(child.stdout!, 'data')
+      await acquireCaptureStackLock(lock)
+      const { metadata, target } = await staleOwner(lock)
+      metadata.stackPid = child.pid
+      metadata.stackGroups = []
+      await writeFile(target, JSON.stringify(metadata))
+      const kill = vi.spyOn(process, 'kill')
+      const recovery = acquireCaptureStackLock(lock)
+      await expect(recovery).rejects.toThrow(`Cannot verify disposable stack identity: ${lock}`)
+      await expect(recovery).rejects.toThrow('remove this lock directory and retry')
+      expect(kill.mock.calls.filter(([pid, signal]) => pid === -child.pid! && signal !== 0)).toEqual([])
+      expect(() => process.kill(-child.pid!, 0)).not.toThrow()
+      expect(await readdir(lock)).toHaveLength(1)
+    }
+    finally {
+      vi.restoreAllMocks()
+      try { process.kill(-child.pid!, 'SIGKILL') } catch { /* Only this test's group. */ }
+      await rm(root, { recursive: true, force: true })
+    }
+  }, 10_000)
+
+  it('holds the lock while a recorded detached descendant is alive and releases after exit', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'design-capture-detached-'))
+    const lock = join(root, 'stack.lock')
+    const { stack, backendPid } = await detachedStack(root)
+    let stopping: Promise<unknown> | undefined
+    try {
+      const release = await acquireCaptureStackLock(lock)
+      release.recordStack(stack.pid)
+      stopping = stopCaptureStack(stack, release)
+      const stopped = once(stack, 'exit')
+      await stopped
+      await new Promise(resolve => setTimeout(resolve, 100))
+      expect(() => process.kill(-backendPid, 0)).not.toThrow()
+      await expect(acquireCaptureStackLock(lock)).rejects.toThrow('Another route capture owns')
+      process.kill(-backendPid, 'SIGTERM')
+      await stopping
+      expect(() => process.kill(-backendPid, 0)).toThrow()
+      const next = await acquireCaptureStackLock(lock)
+      await next()
+    }
+    finally {
+      for (const pid of [stack.pid!, backendPid]) try { process.kill(-pid, 'SIGKILL') } catch { /* Only this test's groups. */ }
+      await stopping?.catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  }, 10_000)
+
+  it('recovery stops recorded detached descendants and waits before handing over the lock', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'design-capture-recover-detached-'))
+    const lock = join(root, 'stack.lock')
+    const { stack, backendPid } = await detachedStack(root)
+    let recovering: Promise<Awaited<ReturnType<typeof acquireCaptureStackLock>>> | undefined
+    try {
+      const release = await acquireCaptureStackLock(lock)
+      release.recordStack(stack.pid)
+      await staleOwner(lock)
+      stack.kill('SIGKILL')
+      await once(stack, 'exit')
+      let handedOver = false
+      recovering = acquireCaptureStackLock(lock).then(value => { handedOver = true; return value })
+      await vi.waitFor(async () => expect(await readFile(join(root, 'backend-stopping'), 'utf8')).toBe('stopping'))
+      expect(handedOver).toBe(false)
+      expect(() => process.kill(-backendPid, 0)).not.toThrow()
+      const recovered = await recovering
+      expect(() => process.kill(-backendPid, 0)).toThrow()
+      await recovered()
+    }
+    finally {
+      for (const pid of [stack.pid!, backendPid]) try { process.kill(-pid, 'SIGKILL') } catch { /* Only this test's groups. */ }
+      await recovering?.then(release => release()).catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  }, 10_000)
+})
+
 describe('capture loopback ports', () => {
   it('claims a dead owner exclusively and stops its recorded orphan stack before returning', async () => {
     const root = await mkdtemp(join(tmpdir(), 'design-capture-orphan-'))
@@ -30,7 +176,7 @@ describe('capture loopback ports', () => {
       import { spawn } from 'node:child_process'
       import { acquireCaptureStackLock } from ${JSON.stringify(new URL('./design-capture-lib.mjs', import.meta.url).href)}
       const release = await acquireCaptureStackLock(${JSON.stringify(lock)})
-      const stack = spawn(process.execPath, ['-e', "setInterval(() => {}, 1000); process.stdout.write('ready')"], { detached: true, stdio: ['ignore', 'pipe', 'ignore'] })
+      const stack = spawn(process.execPath, ['-e', "setInterval(() => {}, 1000); process.stdout.write('ready')", 'e2e-stack.mjs'], { detached: true, stdio: ['ignore', 'pipe', 'ignore'] })
       stack.stdout.once('data', () => { release.recordStack(stack.pid); process.stdout.write(String(stack.pid)) })
     `], { stdio: ['ignore', 'pipe', 'pipe'] })
     let stackPid
@@ -80,7 +226,7 @@ describe('capture loopback ports', () => {
   it('releases the stack lock after forced cleanup while retaining the timeout error', async () => {
     const root = await mkdtemp(join(tmpdir(), 'design-capture-timeout-'))
     const lock = join(root, 'stack.lock')
-    const child = spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.stdout.write('ready')"], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.stdout.write('ready')", 'e2e-stack.mjs'], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
     try {
       await once(child.stdout!, 'data')
       const release = await acquireCaptureStackLock(lock)
@@ -317,7 +463,7 @@ describe('capture publication', () => {
 describe('stack interruption', () => {
   it('releases after transient EPERM only once the owned group is confirmed gone', async () => {
     const root = await mkdtemp(join(tmpdir(), 'design-capture-eperm-'))
-    const child = spawn(process.execPath, ['-e', "setInterval(() => {}, 1000); process.stdout.write('ready')"], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(process.execPath, ['-e', "setInterval(() => {}, 1000); process.stdout.write('ready')", 'e2e-stack.mjs'], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
     const kill = process.kill.bind(process)
     let deniedProbe = false
     try {
@@ -371,23 +517,26 @@ describe('stack interruption', () => {
     }
     finally { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL') }
   })
-  it.each([false, true])('cleans descendants even when the stack has already exited: %s', async alreadyExited => {
+  it.each([false, true])('cleans recorded descendants even when the stack has already exited: %s', async alreadyExited => {
+    const root = await mkdtemp(join(tmpdir(), 'design-capture-descendants-'))
     const child = spawn(process.execPath, ['--input-type=module', '-e', `
       import { spawn } from 'node:child_process'
       const grandchild = spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.stdout.write('ready')"], { stdio: ['ignore', 'pipe', 'ignore'] })
-      grandchild.stdout.once('data', () => {
-        process.stdout.write(String(grandchild.pid))
-        ${alreadyExited ? "grandchild.unref(); grandchild.stdout.destroy(); process.exit(0)" : "process.once('SIGTERM', () => setTimeout(() => process.exit(0), 100))"}
-      })
-    `], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
+      grandchild.stdout.once('data', () => process.stdout.write(String(grandchild.pid)))
+      process.on('SIGTERM', () => setTimeout(() => process.exit(0), 100))
+      process.on('message', () => process.exit(0))
+    `, 'e2e-stack.mjs'], { detached: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] })
     try {
       const pid = Number(String((await once(child.stdout!, 'data'))[0]))
-      if (alreadyExited && child.exitCode === null) await once(child, 'exit')
-      await stopChild(child)
+      const release = await acquireCaptureStackLock(join(root, 'stack.lock'))
+      release.recordStack(child.pid)
+      if (alreadyExited) { child.send('exit'); await once(child, 'exit') }
+      await stopCaptureStack(child, release)
       await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(), { timeout: 2000 })
     }
     finally {
-      try { process.kill(-child.pid!, 'SIGKILL') } catch { /* Only this test's process group is eligible for cleanup. */ }
+      try { process.kill(-child.pid!, 'SIGKILL') } catch { /* Only this test's process group. */ }
+      await rm(root, { recursive: true, force: true })
     }
   })
 
@@ -464,7 +613,7 @@ describe('CLI failure lifecycle without a browser', () => {
     const originalArgv = process.argv
     const originalExitCode = process.exitCode
     const listeners = new Map(['SIGINT', 'SIGTERM'].map(signal => [signal, process.listeners(signal)]))
-    const child = spawn(process.execPath, ['-e', "setInterval(() => {}, 1000); process.stdout.write('ready')"], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(process.execPath, ['-e', "setInterval(() => {}, 1000); process.stdout.write('ready')", 'e2e-stack.mjs'], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
     try {
       await once(child.stdout!, 'data')
       execFileSync('git', ['init', '-q', root])

@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { once } from 'node:events'
 import { renameSync, writeFileSync } from 'node:fs'
@@ -7,20 +8,112 @@ import { tmpdir } from 'node:os'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { z } from 'zod'
 
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms))
+const alive = pid => {
+  try { process.kill(pid, 0); return true }
+  catch (error) { if (error.code === 'ESRCH') return false; if (error.code === 'EPERM') return true; throw error }
+}
+const inspectionError = lock => new Error(`Cannot verify disposable stack identity: ${lock}. No unverified group was signalled. After manually confirming all capture processes have stopped, remove this lock directory and retry.`)
+
+function processIdentity(pid, lock) {
+  let output
+  try { output = execFileSync('ps', ['-ww', '-o', 'lstart=,pgid=,command=', '-p', String(pid)], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' }, stdio: ['ignore', 'pipe', 'pipe'], timeout: 2000, maxBuffer: 4 * 1024 * 1024 }) }
+  catch { if (!alive(pid)) return null; throw inspectionError(lock) }
+  const match = output.trim().match(/^(\w{3}\s+\w{3}\s+\d+\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(\d+)\s+(.+)$/u)
+  if (!match) throw inspectionError(lock)
+  return { pid, startedAt: match[1], pgid: Number(match[2]), command: match[3] }
+}
+
+function processTable(lock) {
+  try {
+    return execFileSync('ps', ['-A', '-o', 'pid=,ppid=,pgid='], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 2000, maxBuffer: 4 * 1024 * 1024 }).trim().split('\n').map(line => {
+      const row = line.trim().split(/\s+/u).map(Number)
+      if (row.length !== 3 || !row.every(Number.isSafeInteger)) throw inspectionError(lock)
+      return { pid: row[0], ppid: row[1], pgid: row[2] }
+    })
+  } catch { throw inspectionError(lock) }
+}
+
+function groupState(group, lock) {
+  if (!Number.isSafeInteger(group.pid) || group.pid <= 0) throw inspectionError(lock)
+  if (!alive(-group.pid)) return false
+  if (!group.identities?.length) throw inspectionError(lock)
+  let reused = false
+  for (const recorded of group.identities) {
+    if (!Number.isSafeInteger(recorded.pid) || recorded.pid <= 0 || recorded.pgid !== group.pid
+      || typeof recorded.startedAt !== 'string' || !recorded.startedAt || typeof recorded.command !== 'string' || !recorded.command) throw inspectionError(lock)
+    const current = processIdentity(recorded.pid, lock)
+    if (!current) continue
+    if (current.startedAt === recorded.startedAt && current.command === recorded.command && current.pgid === group.pid) return true
+    reused ||= recorded.pid === group.pid
+  }
+  // A different leader proves PID reuse. An absent leader with unknown surviving
+  // members cannot establish ownership, so keep the lock for manual recovery.
+  if (reused) return false
+  return null
+}
+
+function snapshotGroups(stack, groups, lock) {
+  if (!groupState(stack, lock)) return groups
+  const rows = processTable(lock)
+  const descendants = new Set([stack.pid])
+  let size
+  do {
+    size = descendants.size
+    for (const row of rows) if (descendants.has(row.ppid)) descendants.add(row.pid)
+  } while (size !== descendants.size)
+  const owned = new Set(groups.filter(group => groupState(group, lock)).map(group => group.pid))
+  for (const row of rows) if (descendants.has(row.pid) && descendants.has(row.pgid)) owned.add(row.pgid)
+  const result = new Map(groups.map(group => [group.pid, group]))
+  for (const pid of owned) {
+    const identities = rows.filter(row => row.pgid === pid).map(row => processIdentity(row.pid, lock)).filter(Boolean).filter(identity => identity.pgid === pid)
+    if (identities.length) result.set(pid, { pid, identities })
+  }
+  return [...result.values()]
+}
+
+async function signalStackGroup(group, signal, lock) {
+  const deadline = Date.now() + 2000
+  let state = groupState(group, lock)
+  while (state === null && Date.now() < deadline) { await delay(25); state = groupState(group, lock) }
+  if (state === null) throw inspectionError(lock)
+  if (!state) return
+  try { process.kill(-group.pid, signal) }
+  catch (error) {
+    if (error.code === 'ESRCH') return
+    if (error.code !== 'EPERM') throw error
+    const deadline = Date.now() + 2000
+    while (alive(-group.pid) && Date.now() < deadline) await delay(25)
+    if (alive(-group.pid)) throw error
+  }
+}
+
+async function finishGroups(groups, lock, timeoutMs = 30_000, recover = false) {
+  const wait = async ms => {
+    const deadline = Date.now() + ms
+    while (groups.some(group => groupState(group, lock) !== false)) {
+      if (Date.now() >= deadline) return false
+      await delay(25)
+    }
+    return true
+  }
+  if (!recover && await wait(timeoutMs)) return
+  for (const group of groups) await signalStackGroup(group, 'SIGTERM', lock)
+  if (await wait(timeoutMs)) return
+  for (const group of groups) await signalStackGroup(group, 'SIGKILL', lock)
+  if (!await wait(2000)) throw new Error(`Owned E2E process groups have not stopped; lock retained: ${lock}`)
+}
+
 // Convex's backend port probes and shared dashboard cache are not isolated per run.
 export async function acquireCaptureStackLock(lock = join(tmpdir(), `budds-design-capture-stack-${process.getuid?.() ?? 'user'}.lock`)) {
-  const owner = { pid: process.pid, token: randomUUID(), startedAt: new Date().toISOString() }
+  const owner = { pid: process.pid, token: randomUUID(), startedAt: new Date().toISOString(), stackGroups: [] }
   const ownerFile = `owner-${owner.pid}-${owner.token}.json`
   const candidate = await mkdtemp(`${lock}.candidate-`)
-  const alive = pid => {
-    try { process.kill(pid, 0); return true }
-    catch (error) { if (error.code === 'ESRCH') return false; if (error.code === 'EPERM') return true; throw error }
-  }
+  const save = () => writeFileSync(join(lock, ownerFile), JSON.stringify(owner))
   try {
     await writeFile(join(candidate, ownerFile), JSON.stringify(owner))
     while (true) {
-      // Installing a populated directory is atomic. It can replace an empty
-      // legacy/crashed lock, but cannot replace another populated owner.
+      // Installing a populated directory is atomic; only one stale contender wins.
       try { renameSync(candidate, lock); break }
       catch (error) { if (!['EEXIST', 'ENOTEMPTY'].includes(error.code)) throw error }
       let files
@@ -34,72 +127,55 @@ export async function acquireCaptureStackLock(lock = join(tmpdir(), `budds-desig
       let previous
       try { previous = JSON.parse(await readFile(join(lock, files[0]), 'utf8')) }
       catch (error) { if (error.code === 'ENOENT') continue; throw error }
-      // Rename the exact dead owner's unique entry to our live PID/token.
-      // Only one contender can claim it; the directory is never left empty.
       try { renameSync(join(lock, files[0]), join(lock, ownerFile)) }
       catch (error) { if (error.code === 'ENOENT') continue; throw error }
+      owner.stackGroups = previous.stackGroups || []
       if (previous.stackPid !== undefined) {
-        if (!Number.isSafeInteger(previous.stackPid) || previous.stackPid <= 0) throw new Error(`Invalid disposable stack process group: ${lock}`)
+        if (!Number.isSafeInteger(previous.stackPid) || previous.stackPid <= 0) throw inspectionError(lock)
         owner.stackPid = previous.stackPid
+        if (!owner.stackGroups.some(group => group.pid === owner.stackPid)) owner.stackGroups.push({ pid: owner.stackPid, identities: [] })
       }
-      // Retain orphan ownership even if this recovery process is hard-killed.
-      writeFileSync(join(lock, ownerFile), JSON.stringify(owner))
-      if (owner.stackPid && alive(-owner.stackPid)) {
-        await signalStackGroup(owner.stackPid, 'SIGTERM')
-        const deadline = Date.now() + 30_000
-        while (alive(-owner.stackPid) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25))
-        if (alive(-owner.stackPid)) await signalStackGroup(owner.stackPid, 'SIGKILL')
-        const killedDeadline = Date.now() + 2000
-        while (alive(-owner.stackPid) && Date.now() < killedDeadline) await new Promise(resolve => setTimeout(resolve, 25))
-        if (alive(-owner.stackPid)) throw new Error(`Orphaned E2E stack group has not stopped: ${owner.stackPid}`)
-      }
+      // Persist orphan identities before recovery can be interrupted.
+      save()
+      const stack = owner.stackGroups.find(group => group.pid === owner.stackPid)
+      if (stack) owner.stackGroups = snapshotGroups(stack, owner.stackGroups, lock)
+      save()
+      await finishGroups(owner.stackGroups, lock, 30_000, true)
       delete owner.stackPid
-      writeFileSync(join(lock, ownerFile), JSON.stringify(owner))
+      owner.stackGroups = []
+      save()
       break
     }
   }
   finally { await rm(candidate, { recursive: true, force: true }) }
   let releasing
-  const release = () => releasing ||= (async () => {
+  const release = timeoutMs => releasing ||= (async () => {
+    await finishGroups(owner.stackGroups, lock, timeoutMs)
     await unlink(join(lock, ownerFile))
     await rmdir(lock).catch(error => { if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(error.code)) throw error })
   })()
   release.recordStack = pid => {
+    const identity = processIdentity(pid, lock)
+    if (!identity || identity.pgid !== pid || !identity.command.includes('e2e-stack.mjs')) throw inspectionError(lock)
     owner.stackPid = pid
-    writeFileSync(join(lock, ownerFile), JSON.stringify(owner))
+    owner.stackGroups = [{ pid, identities: [identity] }]
+    save()
+    release.snapshotStack()
   }
+  release.snapshotStack = () => {
+    if (releasing) return
+    const stack = owner.stackGroups.find(group => group.pid === owner.stackPid)
+    if (stack) owner.stackGroups = snapshotGroups(stack, owner.stackGroups, lock)
+    save()
+  }
+  release.stackGroup = () => owner.stackGroups.find(group => group.pid === owner.stackPid)
   return release
 }
 
-async function confirmStackGroupStopped(pid) {
-  const deadline = Date.now() + 2000
-  while (true) {
-    try { process.kill(-pid, 0) }
-    catch (error) { if (error.code === 'ESRCH') return; if (error.code !== 'EPERM') throw error }
-    if (Date.now() >= deadline) throw new Error(`Owned E2E stack group has not stopped: ${pid}`)
-    await new Promise(resolve => setTimeout(resolve, 25))
-  }
-}
-
-async function signalStackGroup(pid, signal) {
-  try { process.kill(-pid, signal) }
-  catch (error) {
-    if (error.code === 'ESRCH') return
-    // A disappearing group can briefly deny signals on macOS. Suppress the
-    // error only after a subsequent probe confirms the entire group is gone.
-    if (error.code === 'EPERM') await confirmStackGroupStopped(pid)
-    else throw error
-  }
-}
-
 export async function stopCaptureStack(child, release, timeoutMs) {
-  try { await stopChild(child, timeoutMs) }
-  finally {
-    // SIGKILL delivery can precede the last descendant being reaped. Keep the
-    // lock until the owned group is gone, including when stopChild rejects.
-    if (child?.pid) await confirmStackGroupStopped(child.pid)
-    await release?.()
-  }
+  release?.snapshotStack()
+  try { await stopChild(child, timeoutMs, release?.stackGroup()) }
+  finally { await release?.(timeoutMs) }
 }
 
 // Explicit ports are caller-coordinated; default runs ask the OS for a free port.
@@ -257,12 +333,20 @@ export async function publishCaptureOutput(root, surface, staging, output, isInt
 }
 
 const stopping = new WeakMap()
-export function stopChild(child, timeoutMs = 30_000) {
+export function stopChild(child, timeoutMs = 30_000, recordedGroup) {
   if (!child?.pid) return Promise.resolve()
   if (stopping.has(child)) return stopping.get(child)
   const stopped = (async () => {
+    const lock = 'unlocked capture child'
+    if (!recordedGroup && (child.exitCode !== null || child.signalCode !== null)) {
+      if (alive(-child.pid)) throw inspectionError(lock)
+      return
+    }
+    const identity = recordedGroup ? null : processIdentity(child.pid, lock)
+    const group = recordedGroup || (identity?.pgid === child.pid ? snapshotGroups({ pid: child.pid, identities: [identity] }, [], lock).find(group => group.pid === child.pid) : null)
+    if (!group) { if (alive(-child.pid)) throw inspectionError(lock); return }
     const exited = child.exitCode !== null || child.signalCode !== null ? Promise.resolve() : once(child, 'exit')
-    await signalStackGroup(child.pid, 'SIGTERM')
+    await signalStackGroup(group, 'SIGTERM', lock)
     let timer
     try {
       await Promise.race([exited, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('E2E stack cleanup timed out')), timeoutMs) })])
@@ -270,7 +354,7 @@ export function stopChild(child, timeoutMs = 30_000) {
     finally {
       clearTimeout(timer)
       // The stack can exit while a startup subprocess or grandchild is still alive.
-      await signalStackGroup(child.pid, 'SIGKILL')
+      await signalStackGroup(group, 'SIGKILL', lock)
       await exited
     }
   })()
