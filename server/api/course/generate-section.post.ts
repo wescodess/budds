@@ -195,6 +195,7 @@ export default defineEventHandler(async (event) => {
 
         const raw = completion.choices[0]?.message?.content ?? ''
         const parsed = parseQuizResponse(raw)
+        parsed.questions = parsed.questions.filter(question => !question.gradingCriteria || chunks[question.sourceIndex] !== undefined)
 
         if (parsed.questions.length === 0) return null
 

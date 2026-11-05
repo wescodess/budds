@@ -81,7 +81,7 @@ describe('POST /api/quiz/generate', () => {
     vi.mocked(globalThis.getConvexTokenIdentifier).mockReturnValue('https://auth.example.com|user_test_123')
   })
 
-  test.each([0, 99])('passes criteria to task persistence only for a valid source index (%i)', async (sourceIndex) => {
+  test.each([0, 99])('keeps valid-source criteria internal and rejects invalid rubric sources (%i)', async (sourceIndex) => {
     const gradingCriteria = [{ key: 'conversion', description: 'Describes light becoming chemical energy.', weightPercent: 100 }]
     vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc', taskId: 'task_123' })
     vi.mocked(globalThis.searchDocuments).mockResolvedValue({ data: [
@@ -94,15 +94,41 @@ describe('POST /api/quiz/generate', () => {
       }] }) } }],
     })
 
+    if (sourceIndex === 99) {
+      await expect(handler(makeEvent())).rejects.toMatchObject({ statusCode: 502 })
+      expect(convexMutation).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ questions: expect.anything() }))
+      return
+    }
+
     const result = await handler(makeEvent())
 
     expect(result.questionCount).toBe(1)
+    expect(result.questions[0]).not.toHaveProperty('gradingCriteria')
     expect(convexMutation).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       questions: [expect.objectContaining({
         question: 'Describe photosynthesis.',
-        gradingCriteria: sourceIndex === 0 ? gradingCriteria : undefined,
+        gradingCriteria,
       })],
     }))
+  })
+
+  test('omits internal criteria from a response without task persistence', async () => {
+    vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc' })
+    vi.mocked(globalThis.searchDocuments).mockResolvedValue({ data: [
+      { id: '1', content: 'Light becomes chemical energy.', score: 1, attributes: {} },
+      { id: '2', content: 'Other content.', score: 1, attributes: {} },
+    ] })
+    const generated = goodLlmResponse()
+    const payload = JSON.parse(generated.choices[0]!.message.content)
+    payload.questions[1].gradingCriteria = [{ key: 'conversion', description: 'Describes light becoming chemical energy.', weightPercent: 100 }]
+    generated.choices[0]!.message.content = JSON.stringify(payload)
+    vi.mocked(globalThis.generateCompletion).mockResolvedValue(generated)
+
+    const result = await handler(makeEvent())
+
+    expect(result.questions).toHaveLength(2)
+    expect(JSON.stringify(result)).not.toContain('gradingCriteria')
+    expect(JSON.stringify(result)).not.toContain('weightPercent')
   })
 
   test('[P0] 401 when Convex token is missing', async () => {

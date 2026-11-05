@@ -162,6 +162,7 @@ export default defineEventHandler(async (event) => {
 
     const raw = completion.choices[0]?.message?.content ?? ''
     const parsed = parseQuizResponse(raw)
+    parsed.questions = parsed.questions.filter(question => !question.gradingCriteria || chunks[question.sourceIndex] !== undefined)
 
     if (parsed.questions.length === 0) {
       const msg = 'Quiz generation produced no valid questions'
@@ -185,6 +186,7 @@ export default defineEventHandler(async (event) => {
         sourceFilename: chunk ? attrs.filename ?? 'Unknown source' : undefined,
       }
     })
+    const responseQuestions = persistQuestions.map(({ gradingCriteria: _criteria, ...question }) => question)
 
     // Advisory-only. Each decision receives the exact, indexed source excerpt
     // persisted with its question. Invalid/oversized evidence and an absent or
@@ -230,7 +232,7 @@ export default defineEventHandler(async (event) => {
       return {
         title: parsed.title,
         model,
-        questions: persistQuestions,
+        questions: responseQuestions,
         questionCount: persistQuestions.length,
         taskId,
         quizId,
@@ -240,7 +242,7 @@ export default defineEventHandler(async (event) => {
     return {
       title: parsed.title,
       model,
-      questions: persistQuestions,
+      questions: responseQuestions,
       questionCount: persistQuestions.length,
     }
   }

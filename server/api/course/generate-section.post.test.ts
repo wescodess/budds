@@ -161,7 +161,7 @@ describe('POST /api/course/generate-section', () => {
     expect(mockMutation).toHaveBeenCalled()
   })
 
-  test('persists rubrics only from the cited source without changing source fallbacks', async () => {
+  test('rejects invalid rubric sources while retaining valid rubrics and legacy question fallbacks', async () => {
     vi.mocked(globalThis.readBody).mockResolvedValue({ courseId: 'course_123', sectionId: 'section_123' })
     mockQuery
       .mockResolvedValueOnce(mockCourse())
@@ -185,7 +185,6 @@ describe('POST /api/course/generate-section', () => {
     expect(mockMutation).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ quizData: expect.objectContaining({ questions: [
       expect.objectContaining({ gradingCriteria, sourceChunkContent: 'A source fact.' }),
       expect.objectContaining({ gradingCriteria: undefined, sourceChunkContent: 'Another fact.' }),
-      expect.objectContaining({ gradingCriteria: undefined, sourceChunkContent: 'A source fact.' }),
     ] }) }))
   })
 
