@@ -80,6 +80,15 @@ function hasExactKeys(value: unknown, keys: string[]): value is Record<string, u
     && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key))
 }
 
+function learnerFeedback(feedback: string) {
+  const text = feedback.replace(/\s+/g, ' ').trim()
+  if (/\b(?:criteri(?:on|a)|rubrics?|weightPercent|confidence|grad(?:e|es|ed|ing)|grader|AI)\b/i.test(text)
+    || /[.!?]["'”’)]*\s+\S/u.test(text)) {
+    return 'Compare your answer with the reference.'
+  }
+  return text
+}
+
 function parseResults(payload: unknown, items: QuizGradingInput[]): QuizGradingResult[] | null {
   if (!hasExactKeys(payload, ['results']) || !Array.isArray(payload.results) || payload.results.length !== items.length) return null
   const remaining = new Map(items.map(item => [item.id, item]))
@@ -97,7 +106,7 @@ function parseResults(payload: unknown, items: QuizGradingInput[]): QuizGradingR
         || (criterion.verdict !== 'met' && criterion.verdict !== 'not_met' && criterion.verdict !== 'uncertain')) return null
       criterionResults.push({ key: criterion.key, verdict: criterion.verdict })
     }
-    results.push({ id: result.id, criterionResults, feedback: result.feedback })
+    results.push({ id: result.id, criterionResults, feedback: learnerFeedback(result.feedback) })
   }
   return results
 }

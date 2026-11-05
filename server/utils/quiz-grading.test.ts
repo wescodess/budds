@@ -34,6 +34,23 @@ test.each([QUIZ_GRADER_POLICY.model, QUIZ_GRADER_POLICY.model.replace(/:free$/, 
   expect(await gradeQuizAnswers(items)).toEqual({ status: 'graded', results: [result] })
 })
 
+test.each([
+  'You identified both ideas. You used equivalent wording.',
+  'You met every criterion.',
+  'The rubric gives your answer full credit.',
+  'The AI has high confidence in this grade.',
+])('keeps valid judgments while replacing unsuitable learner feedback: %s', async (feedback) => {
+  vi.mocked(generateCompletion).mockResolvedValue(completion({ results: [{ ...result, feedback }] }))
+  expect(await gradeQuizAnswers(items)).toEqual({
+    status: 'graded', results: [{ ...result, feedback: 'Compare your answer with the reference.' }],
+  })
+})
+
+test('normalizes feedback whitespace without changing its meaning', async () => {
+  vi.mocked(generateCompletion).mockResolvedValue(completion({ results: [{ ...result, feedback: '  You identified\n the daughter cells.  ' }] }))
+  expect(await gradeQuizAnswers(items)).toEqual({ status: 'graded', results: [result] })
+})
+
 test.each(['', 'openai/gpt-4o-mini', 'xingchen-agi/xing4.0-29b-a4b', 'xingchen-agi/xing4.0-29b-a4b:free ', 'xingchen-agi/xing4.0-29b-a4b:free:other'])('the request guard rejects %s without falling back', (model) => {
   expect(() => requireFreeQuizGradingModel(model)).toThrow('Unsupported quiz grading model')
   expect(generateCompletion).not.toHaveBeenCalled()
