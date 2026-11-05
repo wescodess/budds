@@ -1,5 +1,6 @@
 /// <reference types="vite/client" />
 import { convexTest, type TestConvex } from 'convex-test'
+import type { FunctionArgs } from 'convex/server'
 import { describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import { toAdaptiveSubmissionAdmission } from './learnAdaptive'
@@ -98,6 +99,118 @@ function successfulProviderResponse() {
 }
 
 describe('LA2-12 server-scored mastery attempts', () => {
+  test('keeps a queued retry within the learner concurrency cap while another session is running', async () => {
+    const original = structuredClone(ADAPTIVE_V2_PILOT_MANIFEST)
+    vi.useFakeTimers()
+    const replies: Array<(response: Response) => void> = []
+    const pending: Array<Promise<unknown>> = []
+    let observed!: () => void
+    const provider = vi.fn(() => new Promise<Response>((resolve) => { replies.push(resolve); observed() }))
+      .mockResolvedValueOnce(new Response('Definitive synthetic provider failure', { status: 400 }))
+    vi.stubGlobal('fetch', provider)
+    try {
+      const first = await fixture()
+      const second = await fixture({ runtime: first.t })
+      const third = await fixture({ runtime: first.t })
+      await configureSyntheticPilot([OWNER])
+      const requests: Array<FunctionArgs<typeof api.learnAdaptive.submitResponse>> = []
+      for (const [index, setup] of [first, second, third].entries()) {
+        await setup.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true })
+        const activityId = `learner-concurrency-${index}`
+        const activity = await addAdaptiveActivity(setup, activityId)
+        const { tokenIdentifier: _token, scorerVerdict: _verdict, ...attempt } = setup.args(`learner-concurrency-key-${index}`, 80)
+        await setup.t.run(ctx => ctx.db.patch(activity.activityDocumentId, { submittedResponse: attempt.response, submittedConfidence: attempt.confidence }))
+        requests.push({ threadId: activity.threadId, activityId, ...attempt })
+      }
+      const snapshot = () => first.t.run(async ctx => ({
+        jobs: (await Promise.all(requests.map(request => ctx.db.query('learnJobs')
+          .withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', OWNER.tokenIdentifier).eq('idempotencyKey', request.idempotencyKey))
+          .unique()))).filter(job => job !== null),
+        budgets: await ctx.db.query('learnAdaptiveProviderBudgets').take(3),
+        rateEvents: await ctx.db.query('learnMasteryScoringRateEvents').withIndex('by_userId_and_createdAt', q => q.eq('userId', OWNER.tokenIdentifier)).take(8),
+      }))
+      await expect(first.owner.action(api.learnAdaptive.submitResponse, requests[0]!)).rejects.toThrow(/AI Gateway error/)
+      const failed = (await snapshot()).jobs[0]!
+      expect(failed).toMatchObject({ status: 'queued', attempts: 1, providerReservedMicroUsd: 4920, providerReservationStatus: 'settled', terminalReason: 'provider_definitive_failure' })
+
+      const dispatched = new Promise<void>((resolve) => { observed = resolve })
+      const running = second.owner.action(api.learnAdaptive.submitResponse, requests[1]!)
+      pending.push(running)
+      await Promise.race([dispatched, running.then(() => { throw new Error('Expected a pending provider reply') })])
+      await expect(second.owner.action(api.learnAdaptive.submitResponse, requests[1]!)).resolves.toMatchObject({ kind: 'accepted', status: 'in_progress' })
+      const denial = await third.owner.action(api.learnAdaptive.submitResponse, requests[2]!)
+      expect(denial).toMatchObject({ kind: 'blocked', code: 'adaptive_concurrency_cap', retryable: true })
+      const beforeRetry = await snapshot()
+      expect(beforeRetry.budgets.find(row => row.scope === 'guardrail')).toMatchObject({ dispatches: 2, outstanding: 1, eligibleStarts: 2, reservedMicroUsd: 9840 })
+
+      const retryDispatched = new Promise<void>((resolve) => { observed = resolve })
+      const retry = first.owner.action(api.learnAdaptive.submitResponse, requests[0]!)
+      pending.push(retry)
+      await Promise.race([retryDispatched, retry])
+      const afterRetry = await snapshot()
+      expect(afterRetry.jobs.filter(job => job.status === 'running')).toHaveLength(1)
+      await expect(retry).resolves.toEqual(denial)
+      expect(afterRetry).toEqual(beforeRetry)
+      expect(provider).toHaveBeenCalledTimes(2)
+
+      replies.shift()!(successfulProviderResponse())
+      await expect(running).resolves.toMatchObject({ kind: 'accepted', status: 'completed', replayed: false })
+      provider.mockImplementation(async () => successfulProviderResponse())
+      const completed = await first.owner.action(api.learnAdaptive.submitResponse, requests[0]!)
+      expect(completed).toMatchObject({ kind: 'accepted', status: 'completed', replayed: false })
+      const settled = await snapshot()
+      expect(settled.jobs.find(job => job._id === failed._id)).toMatchObject({ status: 'succeeded', attempts: 2, providerReservedMicroUsd: 9840, providerReservationStatus: 'settled' })
+      expect(settled.budgets.find(row => row.scope === 'guardrail')).toMatchObject({ dispatches: 3, outstanding: 0, eligibleStarts: 3, reservedMicroUsd: 14760 })
+      expect(settled.rateEvents).toHaveLength(3)
+      await expect(first.owner.action(api.learnAdaptive.submitResponse, requests[0]!)).resolves.toEqual({ ...completed, replayed: true })
+      expect(await snapshot()).toEqual(settled)
+      expect(provider).toHaveBeenCalledTimes(3)
+    }
+    finally {
+      for (const reply of replies) reply(successfulProviderResponse())
+      await Promise.allSettled(pending)
+      Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, original)
+      vi.useRealTimers()
+      vi.unstubAllEnvs()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  test('blocks recovery behind another learner lease and recovers its own expired lease once capacity clears', async () => {
+    const original = structuredClone(ADAPTIVE_V2_PILOT_MANIFEST)
+    try {
+      const first = await fixture()
+      const second = await fixture({ runtime: first.t })
+      await configureSyntheticPilot([OWNER])
+      await first.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true })
+      const requests = []
+      for (const [index, setup] of [first, second].entries()) {
+        const activityId = `learner-lease-${index}`
+        const activity = await addAdaptiveActivity(setup, activityId)
+        const { scorerVerdict: _verdict, ...request } = setup.args(`learner-lease-key-${index}`, 80)
+        await setup.t.run(ctx => ctx.db.patch(activity.activityDocumentId, { submittedResponse: request.response, submittedConfidence: request.confidence }))
+        requests.push({ ...request, adaptiveAdmission: { threadId: activity.threadId, activityId, manifestVersion: ADAPTIVE_V2_PILOT_MANIFEST.version } })
+      }
+      const firstLease = await first.t.mutation(internal.learnV2Mastery.beginMasteryScoring, requests[0]!)
+      if (firstLease.kind !== 'acquired') throw new Error('Expected first scoring lease')
+      await expect(first.t.mutation(internal.learnV2Mastery.beginMasteryScoring, requests[0]!)).resolves.toEqual({ kind: 'pending', status: 'in_progress' })
+      await first.t.run(ctx => ctx.db.patch(firstLease.jobId, { leaseExpiresAt: Date.now() - 1 }))
+      const secondLease = await first.t.mutation(internal.learnV2Mastery.beginMasteryScoring, requests[1]!)
+      if (secondLease.kind !== 'acquired') throw new Error('Expected second scoring lease')
+      const expired = await first.t.run(ctx => ctx.db.get(firstLease.jobId))
+      await expect(first.t.mutation(internal.learnV2Mastery.beginMasteryScoring, requests[0]!)).resolves.toMatchObject({ kind: 'blocked', code: 'adaptive_concurrency_cap', retryable: true })
+      expect(await first.t.run(ctx => ctx.db.get(firstLease.jobId))).toEqual(expired)
+      await first.t.mutation(internal.learnV2Mastery.finishMasteryScoringFailure, { tokenIdentifier: OWNER.tokenIdentifier, jobId: secondLease.jobId, leaseToken: secondLease.leaseToken, outcome: 'not_dispatched' })
+      const recovered = await first.t.mutation(internal.learnV2Mastery.beginMasteryScoring, requests[0]!)
+      expect(recovered).toMatchObject({ kind: 'acquired', jobId: firstLease.jobId })
+      if (recovered.kind !== 'acquired') throw new Error('Expected recovered scoring lease')
+      expect(recovered.leaseToken).not.toBe(firstLease.leaseToken)
+      expect(await first.t.run(ctx => ctx.db.get(firstLease.jobId))).toMatchObject({ status: 'leased', attempts: 0 })
+      await expect(first.t.mutation(internal.learnV2Mastery.beginMasteryScoring, requests[0]!)).resolves.toEqual({ kind: 'pending', status: 'in_progress' })
+    }
+    finally { Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, original); vi.unstubAllEnvs() }
+  })
+
   test('denies V2 wrapper reuse of a product-denied adaptive job without dispatch or accounting reset', async () => {
     const original = structuredClone(ADAPTIVE_V2_PILOT_MANIFEST)
     const provider = vi.fn(async () => successfulProviderResponse())

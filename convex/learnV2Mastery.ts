@@ -629,6 +629,11 @@ export const beginMasteryScoring = internalMutation({
         const authority = await adaptiveScoringAuthority(ctx, args.tokenIdentifier, scope, args.adaptiveAdmission, args)
         if (!authority.allowed) return { kind: authority.kind, code: authority.code, message: 'Adaptive scoring is unavailable.', retryable: false }
         if (authority.activity._id !== adaptiveActivity?._id) return { kind: 'denied' as const, code: 'adaptive_activity_authority_unavailable' as const, message: 'Adaptive scoring is unavailable.', retryable: false }
+        const [runningJobs, leasedJobs] = await Promise.all([
+          ctx.db.query('learnJobs').withIndex('by_userId_and_status_and_leaseExpiresAt', q => q.eq('userId', args.tokenIdentifier).eq('status', 'running').gt('leaseExpiresAt', now)).take(ADAPTIVE_V2_PILOT_MANIFEST.limits.maxConcurrentPerLearner + 1),
+          ctx.db.query('learnJobs').withIndex('by_userId_and_status_and_leaseExpiresAt', q => q.eq('userId', args.tokenIdentifier).eq('status', 'leased').gt('leaseExpiresAt', now)).take(ADAPTIVE_V2_PILOT_MANIFEST.limits.maxConcurrentPerLearner + 1),
+        ])
+        if (runningJobs.length + leasedJobs.length >= ADAPTIVE_V2_PILOT_MANIFEST.limits.maxConcurrentPerLearner) return { kind: 'blocked' as const, code: 'adaptive_concurrency_cap', message: 'Adaptive scoring is at capacity.', retryable: true }
       }
       const leaseToken = crypto.randomUUID()
       await ctx.db.patch(existing._id, { ...await masteryScoringLedger(args, args.adaptiveAdmission), requestFingerprint: fingerprints.digest, status: 'leased', leaseToken, leaseExpiresAt: now + SCORING_LEASE_MS, checkpoint: 'reserved', terminalReason: undefined, revision: existing.revision + 1, updatedAt: now })
