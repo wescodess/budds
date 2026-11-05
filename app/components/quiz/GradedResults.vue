@@ -35,7 +35,6 @@ const activeIndex = ref(0)
 const page = ref(0)
 const retrying = ref(false)
 const retryFailed = ref(false)
-const retryExhausted = ref(false)
 const announcement = ref('')
 
 const checkingCount = computed(() => props.grading.pending)
@@ -120,7 +119,6 @@ watch(() => props.attemptId, () => {
   activeIndex.value = 0
   page.value = 0
   retryFailed.value = false
-  retryExhausted.value = false
   animateScore(0, props.percentage)
 })
 
@@ -130,9 +128,8 @@ watch(activeIndex, (index) => {
   page.value = Math.floor(index / QUIZ_STRIP_PAGE_SIZE)
 })
 
-watch(() => props.grading.unavailable, (count, previous) => {
+watch(() => props.grading.unavailable, () => {
   retryFailed.value = false
-  if (count > previous) retryExhausted.value = false
 })
 
 watch([activeOutcome, attemptProgress], ([outcome, progress], [previousOutcome, previousProgress]) => {
@@ -177,14 +174,10 @@ async function requestRetry() {
   retryFailed.value = false
   const outcome = await retryMutation.mutate({ attemptId: props.attemptId })
   retrying.value = false
-  if (retryMutation.error.value || !outcome) {
+  // Zero can mean a temporary refusal; the API does not expose retry eligibility.
+  if (retryMutation.error.value || !outcome || outcome.retried === 0) {
     retryMutation.error.value = null
     retryFailed.value = true
-    return
-  }
-  retryExhausted.value = outcome.retried === 0
-  if (retryExhausted.value && activeResult.value && quizResultState(activeResult.value) === 'not_checked') {
-    announcement.value = 'This answer can\'t be checked again. You can mark it yourself.'
   }
 }
 </script>
@@ -288,7 +281,6 @@ async function requestRetry() {
             :result="result"
             :retrying="retrying"
             :retry-failed="retryFailed"
-            :retry-exhausted="retryExhausted"
             @retry="requestRetry"
           />
         </template>

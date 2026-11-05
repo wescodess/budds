@@ -20,7 +20,7 @@ const questionOf = (type: string) => ({
   correctAnswer: 'Two identical daughter cells.',
 })
 
-describe.each(['free-response', 'fill_in_the_blank'])('saving a pending %s answer', (type) => {
+describe.each(['free-response', 'fill_in_the_blank'])('saving a graded %s answer', (type) => {
   async function mountSaved(feedback: Record<string, unknown>) {
     const component = await import(sequentialModePath)
     const wrapper = await mountSuspended(component.default, {
@@ -37,8 +37,8 @@ describe.each(['free-response', 'fill_in_the_blank'])('saving a pending %s answe
     return wrapper
   }
 
-  it('shows the saved message and reference right after saving, with no verdict', async () => {
-    const wrapper = await mountSaved({ gradingPending: true })
+  it.each([true, false])('shows the saved message and reference with no verdict when gradingPending is %s', async (gradingPending) => {
+    const wrapper = await mountSaved({ gradingPending })
     expect(wrapper.text()).toContain('Saved. Your result comes with your score.')
     expect(wrapper.text()).toContain('Reference answer')
     expect(wrapper.text()).toContain('Two identical daughter cells.')
@@ -46,6 +46,7 @@ describe.each(['free-response', 'fill_in_the_blank'])('saving a pending %s answe
     expect(wrapper.text()).not.toMatch(/incorrect|not correct/i)
     expect(wrapper.html()).not.toContain('text-destructive')
     expect(wrapper.get('textarea, input').attributes('disabled')).toBeDefined()
+    wrapper.unmount()
   })
 
   it('keeps the existing wording when grading is off', async () => {
@@ -53,6 +54,16 @@ describe.each(['free-response', 'fill_in_the_blank'])('saving a pending %s answe
     expect(wrapper.text()).toContain('No exact answer match')
     expect(wrapper.text()).not.toContain('Saved. Your result comes with your score.')
     expect(wrapper.get('textarea, input').attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it.each([false, undefined])('keeps exact-match feedback when gradingPending is %s', async (gradingPending) => {
+    const wrapper = await mountSaved({ isCorrect: true, gradingPending })
+    expect(wrapper.text()).toContain('Correct!')
+    expect(wrapper.text()).not.toContain('Saved. Your result comes with your score.')
+    expect(wrapper.text()).not.toContain('No exact answer match')
+    expect(wrapper.get('textarea, input').classes()).toContain('border-l-green-500')
+    wrapper.unmount()
   })
 })
 

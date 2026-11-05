@@ -358,17 +358,27 @@ describe('QuizResultsView graded results', () => {
     wrapper.unmount()
   })
 
-  it('retries unchecked answers and hides try again once nothing was retried', async () => {
-    const wrapper = await mountResults(attempt([notChecked('a'), correct('b')], 1))
+  it('keeps retry available for every unchecked answer when no work starts', async () => {
+    requestRetry.mockResolvedValue({ retried: 0 })
+    const wrapper = await mountResults(attempt([notChecked('a'), notChecked('b'), correct('c')], 1))
     await clickButton(wrapper, 'Try again')
     expect(requestRetry).toHaveBeenCalledWith({ attemptId: 'attempt_1' })
-    expect(wrapper.text()).toContain('Try again')
-
-    requestRetry.mockResolvedValue({ retried: 0 })
-    await clickButton(wrapper, 'Try again')
-    expect(wrapper.findAll('button').some(node => node.text() === 'Try again')).toBe(false)
-    expect(wrapper.text()).toContain('You can mark it yourself.')
+    expect(wrapper.get('[role="alert"]').text()).toBe('We couldn\'t start checking again. You can try again or mark it yourself.')
+    expect(wrapper.findAll('button').find(node => node.text() === 'Try again')!.attributes('disabled')).toBeUndefined()
     expect(wrapper.text()).toContain('Mark it myself')
+    expect(wrapper.text()).not.toContain('Checking')
+    expect(wrapper.text()).not.toContain('can\'t be checked again')
+
+    await cells(wrapper)[1].trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Learner answer b')
+    expect(wrapper.findAll('button').find(node => node.text() === 'Try again')!.attributes('disabled')).toBeUndefined()
+    await clickButton(wrapper, 'Try again')
+    expect(requestRetry).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).toContain('Try again later, or mark it yourself.')
+    expect(wrapper.text()).toContain('Mark it myself')
+    expect(wrapper.text()).not.toContain('Checking')
+    expect(wrapper.text()).not.toContain('can\'t be checked again')
     wrapper.unmount()
   })
 
@@ -417,12 +427,13 @@ describe('QuizResultsView graded results', () => {
     requestRetry.mockResolvedValue({ retried: 0 })
     const wrapper = await mountResults(attempt([notChecked('a')], 0))
     await clickButton(wrapper, 'Try again')
-    expect(wrapper.text()).not.toContain('Try again')
+    expect(wrapper.find('[role="alert"]').exists()).toBe(true)
     resultsData.value = attempt([notChecked('b')], 0, { attemptId: 'attempt_2' })
     await wrapper.setProps({ attemptId: 'attempt_2' })
     await flushPromises()
     expect(wrapper.text()).toContain('Try again')
     expect(wrapper.text()).toContain('Learner answer b')
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
@@ -856,13 +867,40 @@ describe('QuizResultsView graded results keyboard focus', () => {
       wrapper.unmount()
     })
 
-    it('moves focus to mark it myself when nothing more can be retried', async () => {
-      requestRetry.mockResolvedValue({ retried: 0 })
+    it('returns focus to try again after no work starts and can retry the same attempt later', async () => {
+      const retry = deferred<{ retried: number }>()
+      requestRetry.mockResolvedValueOnce({ retried: 0 }).mockReturnValueOnce(retry.promise)
       const wrapper = await mountResults(attempt([notChecked('a'), correct('b')], 1))
       await activate(button(wrapper, 'Try again'))
-      expect(wrapper.findAll('button').some((node: any) => node.text() === 'Try again')).toBe(false)
-      expect(document.activeElement).toBe(button(wrapper, 'Mark it myself').element)
-      expect(announcement(wrapper)).toBe('This answer can\'t be checked again. You can mark it yourself.')
+      expect(document.activeElement).toBe(button(wrapper, 'Try again').element)
+      expect(button(wrapper, 'Try again').attributes('disabled')).toBeUndefined()
+      expect(button(wrapper, 'Mark it myself').attributes('disabled')).toBeUndefined()
+      expect(wrapper.get('[role="alert"]').text()).toBe('We couldn\'t start checking again. You can try again or mark it yourself.')
+      expect(announcement(wrapper)).toBe('')
+      expect(wrapper.text()).not.toContain('Checking')
+      expect(wrapper.text()).not.toContain('can\'t be checked again')
+
+      // No remount, new attempt, or subscription change is needed to retry.
+      await activate(button(wrapper, 'Try again'))
+      expect(requestRetry.mock.calls).toEqual([[{ attemptId: 'attempt_1' }], [{ attemptId: 'attempt_1' }]])
+      expect(button(wrapper, 'Try again').attributes('disabled')).toBeDefined()
+      expect(document.activeElement).toBe(answerContainer(wrapper).element)
+      expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+
+      // The query may report accepted work before the mutation resolves.
+      await update(attempt([pending('a'), correct('b')], 1))
+      const container = answerContainer(wrapper)
+      expect(document.activeElement).toBe(container.element)
+      expect(announcement(wrapper)).toBe('Checking 1 answer. Points so far: 1 of 2.')
+
+      retry.resolve({ retried: 1 })
+      await flushPromises()
+      expect(document.activeElement).toBe(container.element)
+      expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+
+      await update(attempt([partial('a'), correct('b')], 1.5))
+      expect(document.activeElement).toBe(container.element)
+      expect(announcement(wrapper)).toBe('Question 1: Partly correct. Points: 1.5 of 2.')
       wrapper.unmount()
     })
 
@@ -933,8 +971,9 @@ describe('QuizResultsView graded results keyboard focus', () => {
       wrapper.unmount()
     })
 
-    it('drops a stale retry error once the rows change', async () => {
-      requestRetry.mockRejectedValue(new Error('offline'))
+    it.each(['refused', 'failed'])('drops a stale %s retry error once the rows change', async (outcome) => {
+      if (outcome === 'refused') requestRetry.mockResolvedValue({ retried: 0 })
+      else requestRetry.mockRejectedValue(new Error('offline'))
       const wrapper = await mountResults(attempt([notChecked('a'), correct('b')], 1))
       await activate(button(wrapper, 'Try again'))
       expect(wrapper.find('[role="alert"]').exists()).toBe(true)

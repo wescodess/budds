@@ -26,7 +26,7 @@ const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
       @input="emit('update:modelValue', ($event.target as HTMLInputElement).value)"
     >
     <div v-if="feedback && !feedback.isCorrect" class="mt-2 rounded-md border bg-muted/30 p-3 text-sm">
-      <span class="text-xs font-medium text-muted-foreground">{{ feedback.gradingPending ? 'Saved. Your result comes with your score.' : 'No exact answer match' }}</span>
+      <span class="text-xs font-medium text-muted-foreground">{{ feedback.gradingPending !== undefined ? 'Saved. Your result comes with your score.' : 'No exact answer match' }}</span>
       <p class="mt-1 text-xs text-muted-foreground">Reference answer</p>
       <p class="mt-1">{{ feedback.correctAnswer }}</p>
     </div>

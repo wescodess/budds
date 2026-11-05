@@ -6,7 +6,6 @@ const props = defineProps<{
   result: QuizGradedResult
   retrying?: boolean
   retryFailed?: boolean
-  retryExhausted?: boolean
 }>()
 
 const emit = defineEmits<{ retry: [] }>()
@@ -128,7 +127,7 @@ watch(() => props.retrying, (active) => {
         <UiAlertDescription>
           <p>
             We couldn't finish checking this answer. It isn't marked wrong and doesn't count yet.
-            {{ retryExhausted ? 'You can mark it yourself.' : 'Try again later, or mark it yourself.' }}
+            Try again later, or mark it yourself.
           </p>
           <QuizGradeDecision
             v-if="deciding"
@@ -138,7 +137,6 @@ watch(() => props.retrying, (active) => {
           />
           <div v-else class="mt-2 flex flex-wrap gap-2 text-foreground">
             <UiButton
-              v-if="!retryExhausted"
               variant="outline"
               class="hover:text-foreground"
               size="sm"
