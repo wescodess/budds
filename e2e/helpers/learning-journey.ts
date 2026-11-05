@@ -1,7 +1,8 @@
 import { expect, test, type Page, type APIRequestContext } from '@playwright/test'
 import { readFile } from 'node:fs/promises'
 import { waitForView } from './wait-for-view'
-import canvasLearner from '../fixtures/adaptive-v2-learner.json'
+
+const canvasLearner = JSON.parse(await readFile(new URL('../fixtures/adaptive-v2-learner.json', import.meta.url), 'utf8')) as { email: string, password: string, name: string }
 
 const token = process.env.BUDDS_E2E_AUTH_TOKEN ?? 'e2e-local-token-please-do-not-use-outside-tests'
 
