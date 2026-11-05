@@ -17,7 +17,7 @@ export const rules = [
 
 export function countViolations(source) {
   const counts = Object.fromEntries(rules.map(rule => [rule, 0]))
-  counts.sparkles = [...source.matchAll(/\bSparkles\b/g)].length
+  counts.sparkles = [...source.matchAll(/\b(?:Lucide)?(?:Wand)?Sparkles?(?:Icon)?\b|\blucide[:-](?:wand-)?sparkles?\b/g)].length
   counts['style-block'] = [...source.matchAll(/<style(?=[\s>])/gi)].length
   counts.gradients = [...source.matchAll(/\bbg-(?:gradient-to-[a-z]+|linear-(?:to-[a-z]+|\d+|\[)|radial|conic)|\b(?:repeating-)?(?:linear|radial|conic)-gradient\s*\(/g)].length
 

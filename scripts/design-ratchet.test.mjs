@@ -26,6 +26,7 @@ describe('countViolations', () => {
     ['uppercase', '<div :class="{uppercase:true}" /><div :class="{italic:a,uppercase:b}" /><div :class="x?{uppercase:y}:{}" />', 3],
     ['uppercase', '<div :class="{uppercase,italic}" /><div :class="{italic,uppercase}" /><div :class="[{italic:a,uppercase}]" /><div :class="{ uppercase, italic }" /><div :class="{uppercase}" />', 5],
     ['sparkles', 'import { Sparkles } from "@lucide/vue"; <Sparkles /><Sparkles />', 3],
+    ['sparkles', 'import { SparklesIcon, LucideSparkles, Sparkle, WandSparkles } from "@lucide/vue"; <Icon name="lucide:sparkles" /><i class="i-lucide-wand-sparkles" />', 6],
     ['backdrop-blur', '<div class="backdrop-blur dark:backdrop-blur-sm" />', 2],
     ['gradients', '<div class="bg-gradient-to-r bg-linear-to-br bg-radial bg-conic bg-linear-[45deg]" />', 5],
     ['gradients', '.shimmer { background: linear-gradient(red, blue) } .x { background: repeating-radial-gradient(red, blue) }', 2],
