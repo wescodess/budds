@@ -170,6 +170,8 @@ describe('mounted Home and Thread accessibility', () => {
     expect(choice.attributes('disabled')).toBeUndefined()
     expect(choice.attributes('aria-disabled')).toBe('true')
     expect(document.activeElement).toBe(choice.element)
+    await choice.trigger('click')
+    expect(overrideMutation).toHaveBeenCalledTimes(1)
     acknowledge({ kind: 'ok', revision: 3, value: { fixedNextPlan: { version: 'learn-adaptive.fixed-next-plan.v1', inputOption: 'time_25', nextActivity: 'continue_with_time', availableTime: '25', difficulty: 'same', maxNewActivities: 1, authority: 'server_revalidate_at_boundary' } } })
     await vi.waitFor(() => expect(page.get('[data-testid="learn-fixed-next-plan"]').text()).toContain('Next activity: Continue with 25 minutes'))
     expect(choice.attributes('aria-disabled')).toBe('false')
