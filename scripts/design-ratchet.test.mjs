@@ -23,6 +23,7 @@ describe('countViolations', () => {
     ['backdrop-blur', '<p class="!backdrop-blur-sm" />', 1],
     ['violet-indigo', '<p class="!text-indigo-500" />', 1],
     ['uppercase', '<div :class="{ uppercase: true }" /><div class="[&>svg]:uppercase" />.x { text-transform: uppercase; }', 3],
+    ['uppercase', '<div :class="{uppercase:true}" /><div :class="{italic:a,uppercase:b}" /><div :class="x?{uppercase:y}:{}" />', 3],
     ['sparkles', 'import { Sparkles } from "@lucide/vue"; <Sparkles /><Sparkles />', 3],
     ['backdrop-blur', '<div class="backdrop-blur dark:backdrop-blur-sm" />', 2],
     ['gradients', '<div class="bg-gradient-to-r bg-linear-to-br bg-radial bg-conic bg-linear-[45deg]" />', 5],
@@ -167,13 +168,16 @@ describe('run', () => {
     expect(await readFile(baselinePath, 'utf8')).toBe(before)
   })
 
-  it('refuses a violation after a quoted comment in both check and update', async () => {
+  it.each([
+    ['raw-amber-orange', '<!-- " --><div class="bg-amber-500"/>'],
+    ['uppercase', '<div :class="{uppercase:true}" />'],
+  ])('refuses an added %s violation in both check and update', async (rule, source) => {
     const { root, baselinePath } = await fixture()
     const before = await readFile(baselinePath, 'utf8')
-    await writeFile(path.join(root, 'app/nested/a.vue'), '<!-- " --><div class="bg-amber-500"/>')
+    await writeFile(path.join(root, 'app/nested/a.vue'), source)
     expect(await run(root)).toBe(1)
     expect(await run(root, ['--update'])).toBe(1)
-    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('raw-amber-orange: app/nested/a.vue: old 0, new 1.'))
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining(`${rule}: app/nested/a.vue: old 0, new 1.`))
     expect(await readFile(baselinePath, 'utf8')).toBe(before)
   })
 
