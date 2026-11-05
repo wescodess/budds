@@ -1,5 +1,5 @@
 import type { Doc, Id } from '../_generated/dataModel'
-import type { MutationCtx } from '../_generated/server'
+import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { internal } from '../_generated/api'
 import { hasAccountDeletionTombstone } from './accountDeletionTombstone'
 import { isRubricAssessment } from './quizAnswerAssessment'
@@ -7,6 +7,29 @@ import { QUIZ_RUBRIC_GRADE_VERSION, validateQuizGradingCriteria } from '../../sh
 import { QUIZ_GRADER_POLICY, type QuizGradingInput } from '../../server/utils/quiz-grading'
 
 export const MAX_QUIZ_GRADING_ROWS = 200
+
+export async function getQuizAttemptAnswers(ctx: QueryCtx | MutationCtx, attempt: Doc<'quizAttempts'>) {
+  if (!attempt.gradingQuestionIds) {
+    return await ctx.db.query('attemptAnswers').withIndex('by_attemptId', q => q.eq('attemptId', attempt._id)).take(MAX_QUIZ_GRADING_ROWS)
+  }
+  const questionIds = [...new Set(attempt.gradingQuestionIds)]
+  if (questionIds.length > MAX_QUIZ_GRADING_ROWS) throw new Error('Quiz question limit exceeded')
+  // Replaced questions can leave more stored answers than the frozen question limit.
+  const answers = await Promise.all(questionIds.map(questionId => ctx.db.query('attemptAnswers')
+    .withIndex('by_attemptId_and_questionId', q => q.eq('attemptId', attempt._id).eq('questionId', questionId)).unique()))
+  return answers.filter(answer => answer !== null)
+    .sort((a, b) => a._creationTime - b._creationTime || String(a._id).localeCompare(String(b._id)))
+}
+
+export async function getQuizAttemptAssessments(ctx: QueryCtx | MutationCtx, attempt: Doc<'quizAttempts'>, answers: Doc<'attemptAnswers'>[]) {
+  if (!attempt.gradingQuestionIds) {
+    return await ctx.db.query('quizAnswerAssessments')
+      .withIndex('by_userId_and_attemptId', q => q.eq('userId', attempt.userId).eq('attemptId', attempt._id)).take(MAX_QUIZ_GRADING_ROWS)
+  }
+  const rows = await Promise.all(answers.map(answer => ctx.db.query('quizAnswerAssessments')
+    .withIndex('by_attemptAnswerId', q => q.eq('attemptAnswerId', answer._id)).unique()))
+  return rows.filter((row): row is Doc<'quizAnswerAssessments'> => row !== null && row.attemptId === attempt._id && row.userId === attempt.userId)
+}
 
 export async function getQuizGradingAttempt(ctx: MutationCtx, attemptId: Id<'quizAttempts'>) {
   const attempt = await ctx.db.get(attemptId)
@@ -19,12 +42,8 @@ export async function getQuizGradingAttempt(ctx: MutationCtx, attemptId: Id<'qui
 export async function getQuizGradingRows(ctx: MutationCtx, attemptId: Id<'quizAttempts'>) {
   const attempt = await ctx.db.get(attemptId)
   if (!attempt?.gradingQuestionIds) return []
-  const rows = await ctx.db.query('quizAnswerAssessments')
-    .withIndex('by_attemptId_and_rubricVersion_and_status', q => q.eq('attemptId', attemptId).eq('rubricVersion', QUIZ_RUBRIC_GRADE_VERSION))
-    .take(MAX_QUIZ_GRADING_ROWS + 1)
-  if (rows.length > MAX_QUIZ_GRADING_ROWS) throw new Error('Quiz grading row limit exceeded')
-  const eligible = new Set(attempt.gradingQuestionIds)
-  return rows.filter(row => eligible.has(row.questionId))
+  const answers = await getQuizAttemptAnswers(ctx, attempt)
+  return (await getQuizAttemptAssessments(ctx, attempt, answers)).filter(isRubricAssessment)
 }
 
 export async function getQuizGradingAnswer(ctx: MutationCtx, row: Doc<'quizAnswerAssessments'>, attempt: Doc<'quizAttempts'>) {
@@ -64,10 +83,10 @@ export async function scheduleQuizGrading(ctx: MutationCtx, attemptId: Id<'quizA
 export async function recomputeQuizGradingScore(ctx: MutationCtx, attemptId: Id<'quizAttempts'>) {
   const scope = await getQuizGradingAttempt(ctx, attemptId)
   if (!scope) return
-  const rows = await getQuizGradingRows(ctx, attemptId)
+  if (!scope.attempt.gradingQuestionIds) return
+  const answers = await getQuizAttemptAnswers(ctx, scope.attempt)
+  const rows = (await getQuizAttemptAssessments(ctx, scope.attempt, answers)).filter(isRubricAssessment)
   if (rows.length === 0) return
-  const answers = await ctx.db.query('attemptAnswers').withIndex('by_attemptId', q => q.eq('attemptId', attemptId)).take(MAX_QUIZ_GRADING_ROWS + 1)
-  if (answers.length > MAX_QUIZ_GRADING_ROWS) throw new Error('Quiz answer limit exceeded')
   const grades = new Map(rows.filter(row => row.userId === scope.attempt.userId).map(row => [row.attemptAnswerId, row]))
   const seen = new Set<Id<'quizQuestions'>>()
   const eligible = new Set(scope.attempt.gradingQuestionIds)

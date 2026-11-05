@@ -120,6 +120,45 @@ async function reserve(fixture: Fixture, attemptId: Id<'quizAttempts'>) {
 }
 
 describe('dispatch and scoring', () => {
+  test.each([
+    ['completeAttempt', 'rubric'], ['submitAllAnswers', 'rubric'],
+    ['completeAttempt', 'mixed'], ['submitAllAnswers', 'mixed'],
+  ] as const)('%s grades all 200 eligible questions after replacement in a %s attempt', async (path, kind) => {
+    const fixture = kind === 'rubric' ? await createQuiz(200) : await createQuiz(1, Array.from({ length: 199 }, (_, index) => ({
+      order: index + 1, question: `Pick A ${index}`, type: 'multiple-choice', options: ['A', 'B'], correctAnswer: 'A',
+    })))
+    const { attemptId } = await fixture.user.mutation(api.quizzes.startAttempt, { quizId: fixture.quizId, settings })
+    const deleted = fixture.questions[0]!
+    await fixture.user.mutation(api.quizzes.submitAnswer, { attemptId, questionId: deleted._id, userAnswer: deleted.correctAnswer })
+    await fixture.user.mutation(api.quizzes.deleteQuestion, { questionId: deleted._id })
+    const replacement = await fixture.user.mutation(api.quizzes.addQuestion, {
+      quizId: fixture.quizId, type: 'free-response', questionText: 'What does mitosis produce?', correctAnswer: 'Two identical daughter cells',
+    })
+    const answers = [
+      ...fixture.questions.slice(1).map(question => ({ questionId: question._id, userAnswer: question.correctAnswer })),
+      { questionId: replacement.questionId, userAnswer: 'A pair of matching daughter cells' },
+    ]
+    if (path === 'completeAttempt') {
+      for (const answer of answers) await fixture.user.mutation(api.quizzes.submitAnswer, { attemptId, ...answer })
+      await fixture.user.mutation(api.quizzes.completeAttempt, { attemptId })
+    }
+    else await fixture.user.mutation(api.quizzes.submitAllAnswers, { attemptId, answers })
+
+    const pending = await fixture.user.query(api.quizzes.getAttemptResults, { attemptId })
+    expect(pending).toMatchObject({ score: 199, total: 200, grading: { pending: 1 } })
+    expect(pending?.results).toHaveLength(200)
+    expect(pending?.results.map(answer => answer.questionId)).not.toContain(deleted._id)
+    expect(pending?.results.map(answer => answer.questionId)).toContain(replacement.questionId)
+    await drain(fixture)
+
+    expect(generateCompletion).toHaveBeenCalledTimes(1)
+    const result = await fixture.user.query(api.quizzes.getAttemptResults, { attemptId })
+    expect(result).toMatchObject({ score: 200, total: 200, percentage: 100, grading: { pending: 0, unavailable: 0 } })
+    expect(result?.results).toHaveLength(200)
+    expect(await fixture.t.run(ctx => ctx.db.get(attemptId))).toMatchObject({ gradingStatus: 'settled' })
+    expect(await fixture.t.run(ctx => ctx.db.get(fixture.quizId))).toMatchObject({ score: 100 })
+  })
+
   test.each(['completeAttempt', 'submitAllAnswers'] as const)('%s excludes questions deleted before completion from later score updates', async (path) => {
     const fixture = await createQuiz(1, [{ order: 1, question: 'What do mitochondria produce?', type: 'multiple-choice', options: ['ATP', 'DNA'], correctAnswer: 'ATP' }])
     const { attemptId } = await fixture.user.mutation(api.quizzes.startAttempt, { quizId: fixture.quizId, settings })

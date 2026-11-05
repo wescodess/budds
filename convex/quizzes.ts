@@ -7,7 +7,7 @@ import { getOptionalAuthUserId, requireAuth } from './lib/auth'
 import { quizGradingCriterionValidator } from '../shared/quiz-grading'
 import { validatedQuestionGradingCriteria } from './lib/quizQuestionGrading'
 import { createPendingAnswerAssessment, isQuizGradingEnabled, isRubricAssessment, projectLearnerQuizQuestion, projectQuizGrade } from './lib/quizAnswerAssessment'
-import { scheduleQuizGrading } from './lib/quizGrading'
+import { getQuizAttemptAnswers, getQuizAttemptAssessments, scheduleQuizGrading } from './lib/quizGrading'
 
 const MAX_QUIZ_QUESTIONS = 200
 const MAX_QUIZZES_PER_FOLDER = 100
@@ -55,12 +55,14 @@ async function getAnswerGradingPending(ctx: MutationCtx, attemptAnswerId: Id<'at
 }
 
 async function getAttemptGradingStatus(ctx: MutationCtx, attemptId: Id<'quizAttempts'>, gradingQuestionIds: Id<'quizQuestions'>[]) {
-  const rows = await ctx.db.query('quizAnswerAssessments')
-    .withIndex('by_attemptId', q => q.eq('attemptId', attemptId)).take(MAX_QUIZ_QUESTIONS)
+  const attempt = await ctx.db.get(attemptId)
+  if (!attempt) return undefined
+  const frozen = { ...attempt, gradingQuestionIds }
+  const answers = await getQuizAttemptAnswers(ctx, frozen)
+  const rows = await getQuizAttemptAssessments(ctx, frozen, answers)
   const rubricRows = rows.filter(isRubricAssessment)
   if (!isQuizGradingEnabled() && rubricRows.length === 0) return undefined
-  const eligible = new Set(gradingQuestionIds)
-  return rubricRows.some(row => eligible.has(row.questionId) && row.status === 'pending') ? 'grading' as const : 'settled' as const
+  return rubricRows.some(row => row.status === 'pending') ? 'grading' as const : 'settled' as const
 }
 
 function normalizeForCompare(value: string): string {
@@ -695,10 +697,7 @@ export const submitAllAnswers = mutation({
 
     const questionMap = new Map(questions.map(q => [q._id as string, q]))
 
-    const existingAnswers = await ctx.db
-      .query('attemptAnswers')
-      .withIndex('by_attemptId', q => q.eq('attemptId', args.attemptId))
-      .take(MAX_QUIZ_QUESTIONS)
+    const existingAnswers = await getQuizAttemptAnswers(ctx, { ...attempt, gradingQuestionIds: questions.map(question => question._id) })
     const alreadyAnswered = new Set(existingAnswers.map(a => a.questionId as string))
 
     const results = []
@@ -773,15 +772,11 @@ export const completeAttempt = mutation({
     if (attempt.status !== 'in_progress') throw new Error('Attempt is not in progress')
     await requireQuiz(ctx, attempt.quizId, userId)
 
-    const answers = await ctx.db
-      .query('attemptAnswers')
-      .withIndex('by_attemptId', q => q.eq('attemptId', args.attemptId))
-      .take(MAX_QUIZ_QUESTIONS)
-
     const questions = await ctx.db
       .query('quizQuestions')
       .withIndex('by_quizId', q => q.eq('quizId', attempt.quizId))
       .take(MAX_QUIZ_QUESTIONS)
+    const answers = await getQuizAttemptAnswers(ctx, { ...attempt, gradingQuestionIds: questions.map(question => question._id) })
     const questionIds = new Set(questions.map(question => String(question._id)))
     const correctCount = answers.filter(answer => answer.isCorrect && questionIds.has(String(answer.questionId))).length
 
@@ -844,15 +839,8 @@ export const getAttemptResults = query({
 
     const questionMap = new Map(questions.map(q => [q._id as string, q]))
 
-    const attemptAnswers = (await ctx.db
-      .query('attemptAnswers')
-      .withIndex('by_attemptId', q => q.eq('attemptId', args.attemptId))
-      .take(MAX_QUIZ_QUESTIONS)).filter(answer => !eligibleQuestionIds || eligibleQuestionIds.has(answer.questionId))
-
-    const assessments = (await ctx.db
-      .query('quizAnswerAssessments')
-      .withIndex('by_userId_and_attemptId', q => q.eq('userId', userId).eq('attemptId', args.attemptId))
-      .take(MAX_QUIZ_QUESTIONS)).filter(row => !eligibleQuestionIds || eligibleQuestionIds.has(row.questionId))
+    const attemptAnswers = await getQuizAttemptAnswers(ctx, attempt)
+    const assessments = await getQuizAttemptAssessments(ctx, attempt, attemptAnswers)
     const assessmentMap = new Map(assessments.map(row => [row.attemptAnswerId as string, row]))
     const rubricRows = assessments.filter(isRubricAssessment)
     const grading = rubricRows.length > 0 ? {
