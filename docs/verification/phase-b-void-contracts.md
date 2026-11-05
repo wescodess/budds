@@ -24,8 +24,8 @@ rg --no-heading --sort path -n -i '\b(threads?|missions?)\b' \
 A supplemental V1 sweep uses the same roots and exclusions with
 `\b(courses?)\b`. Inspect rendered template text, accessible attributes,
 script string literals and server presentation fields separately from internal
-identifiers, learner titles, generation prompts and diagnostics. The remaining
-fixed V1 labels found by that sweep are listed below; no UI change is made here.
+identifiers, learner titles, generation prompts and diagnostics. The fixed V1
+labels found by that sweep, and their follow-up resolution, are listed below.
 
 The `thread`/`mission` sweep finds no missed fixed presentation label beyond the
 owner-reserved sentence at `app/pages/app/learn/index.vue:312`. Internal
@@ -36,32 +36,41 @@ whose projected output says Void. Arbitrary learner/generated text and historica
 records remain intact. Accepted B3 wording includes “Review this Void's sources”
 and the “classic Voids” fallback.
 
-## Missed fixed V1 labels requiring the producing UI fix
+## Fixed V1 labels found by B5 and resolved in the B4 follow-up
 
-These are findings for the producing owner, not approved exceptions or a claim
-that all V1 naming acceptance is complete. Their corrections require the
-project's UI implementation routing; B5 leaves them unchanged.
+B5 found these labels at `42e2f65` and left them unchanged. The B4 follow-up
+renamed each in `8f5b70b` (`fix(learn): name the remaining fixed V1 labels Void`),
+with mounted, route or Convex assertions on the new text. Line numbers are
+unchanged. Existing stored titles are not rewritten and no display-time mapping
+of learner-titled records is added.
 
-| File and line | Fixed label and concrete surface |
-| --- | --- |
-| `app/components/learn/SourceSelector.vue:131` | “Create a Course” on V1 creation. |
-| `app/components/learn/SourceSelector.vue:143` | “Consider completing reviews before starting new courses.” in the review warning. |
-| `app/components/learn/SourceSelector.vue:201` | “The course will be generated from web sources.” in the empty-source state. |
-| `app/components/learn/OutlineEditor.vue:202` | “Course Outline” on V1 outline editing. |
-| `app/components/learn/SectionVoidTopBar.vue:28` | Accessible name “Back to course” during a V1 section. |
-| `app/components/learn/SectionCompletionCard.vue:63` | “Course Complete!” after the last section. |
-| `app/components/learn/SectionCompletionCard.vue:151` | “Back to Course Overview” after section completion. |
-| `app/pages/app/folders/[id]/learn/index.vue:32` | “Courses in this folder” on folder Learn. |
-| `app/pages/app/folders/[id]/learn/index.vue:44` | “No courses in this folder yet.” in the empty state. |
-| `app/pages/app/folders/[id]/learn/index.vue:51` | “Create a course from this folder” in the creation CTA. |
-| `app/pages/app/folders/[id]/learn/[courseId]/index.vue:46` | Accessible name “Back to folder courses” on the V1 overview. |
-| `app/pages/app/folders/[id]/learn/[courseId]/[sectionId].vue:244` | “Back to course” in the unavailable-section recovery link. |
-| `app/pages/app/folders/[id].vue:140` | `course: 'course'` produces “remove the course” in the deletion description. |
-| `app/pages/app/folders/[id].vue:161` | `course: 'Course'` produces “Course deleted” in the deletion toast. |
-| `app/components/folder-shell/FolderShellRail.vue:113` | “Course” fallback for an untitled V1 record. |
-| `app/composables/useFolderPageContext.ts:181` | “Untitled Course” default supplied during V1 creation. |
-| `convex/courses.ts:52` | “Untitled Course” persisted default for a blank new title. Existing titles stay unchanged. |
-| `convex/reviewItems.ts:147` | “Unknown Course” fallback reaches `ReviewCard.vue:57` through `review.vue:403` when the parent is absent. |
+| File and line | Surface | Old label | New label | Status |
+| --- | --- | --- | --- | --- |
+| `app/components/learn/SourceSelector.vue:131` | V1 creation heading | “Create a Course” | “Create a Void” | Resolved in `8f5b70b` |
+| `app/components/learn/SourceSelector.vue:143` | Review backlog warning | “…before starting new courses.” | “…before starting new Voids.” | Resolved in `8f5b70b` |
+| `app/components/learn/SourceSelector.vue:201` | Empty-source state | “The course will be generated from web sources.” | “The Void will be generated from web sources.” | Resolved in `8f5b70b` |
+| `app/components/learn/OutlineEditor.vue:202` | V1 outline heading | “Course Outline” | “Void Outline” | Resolved in `8f5b70b` |
+| `app/components/learn/SectionVoidTopBar.vue:28` | Section back button accessible name | “Back to course” | “Back to Void” | Resolved in `8f5b70b` |
+| `app/components/learn/SectionCompletionCard.vue:63` | Last-section completion title | “Course Complete!” | “Void Complete!” | Resolved in `8f5b70b` |
+| `app/components/learn/SectionCompletionCard.vue:151` | Completion back button | “Back to Course Overview” | “Back to Void Overview” | Resolved in `8f5b70b` |
+| `app/pages/app/folders/[id]/learn/index.vue:32` | Folder Learn subheading | “Courses in this folder” | “Voids in this folder” | Resolved in `8f5b70b` |
+| `app/pages/app/folders/[id]/learn/index.vue:44` | Folder Learn empty state | “No courses in this folder yet.” | “No Voids in this folder yet.” | Resolved in `8f5b70b` |
+| `app/pages/app/folders/[id]/learn/index.vue:51` | Folder Learn creation CTA | “Create a course from this folder” | “Create a Void from this folder” | Resolved in `8f5b70b` |
+| `app/pages/app/folders/[id]/learn/[courseId]/index.vue:46` | V1 overview back link | “Back to folder courses” | “Back to folder Voids” | Resolved in `8f5b70b` |
+| `app/pages/app/folders/[id]/learn/[courseId]/[sectionId].vue:244` | Unavailable-section recovery | “Back to course” | “Back to Void” | Resolved in `8f5b70b` |
+| `app/pages/app/folders/[id].vue:140` | Deletion description | “…remove the course.” | “…remove the Void.” | Resolved in `8f5b70b` |
+| `app/pages/app/folders/[id].vue:161` | Deletion toast | “Course deleted” | “Void deleted” | Resolved in `8f5b70b` |
+| `app/components/folder-shell/FolderShellRail.vue:113` | Untitled V1 record fallback | “Course” | “Void” | Resolved in `8f5b70b` |
+| `app/composables/useFolderPageContext.ts:181` | Client default for a new untitled V1 record | “Untitled Course” | “Untitled Void” | Resolved in `8f5b70b` |
+| `convex/courses.ts:52` | Persisted default for a blank new title | “Untitled Course” | “Untitled Void” | Resolved in `8f5b70b` |
+| `convex/reviewItems.ts:147` | Review fallback when the parent is absent, shown by `ReviewCard.vue:57` | “Unknown Course” | “Unknown Void” | Resolved in `8f5b70b` |
+
+The deletion dialog keeps its title, destructive wording and strength; only the
+object noun changed, matching `DeleteCourseDialog.vue`. The rail's compact-touch
+kind badge at `FolderShellRail.vue:333` still says “Course” beside Chat, Flash
+cards, Audio Overview and Quiz. It names a subtype, like the create dialog's
+Course option, so a literal swap would lose the distinction; it is deferred with
+#399 rather than renamed here.
 
 Dashboard “Your Courses,” course folders, general course-material prose and
 “course corrections” refer to folders, educational material or ordinary language,
@@ -110,7 +119,7 @@ analytics for this rename.
 
 ## Deferred owner items and verification boundary
 
-- #399: the coexistence sentence and create dialog Course option/CTA.
+- #399: the coexistence sentence, the create dialog Course option/CTA and the rail's Course kind badge.
 - #377: signed-out Learn deep-link restoration through authentication.
 - Failed/missing-link terminal recovery UI, including wrong-table V2 links.
 - Historical provider-description repair or any data migration/backfill.
