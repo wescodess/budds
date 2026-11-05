@@ -111,6 +111,9 @@ describe('flag-off compatibility', () => {
     }
     const attempt = await t.run(ctx => ctx.db.get(attemptId))
     expect(attempt).not.toHaveProperty('gradingStatus')
+    expect(attempt).not.toHaveProperty('gradingNeedsAttention')
+    const history = await user.query(api.quizzes.getQuizHistory, { quizId })
+    expect(history.find(entry => entry._id === attemptId)).not.toHaveProperty('gradingNeedsAttention')
     if (bulk) expect(bulk).not.toHaveProperty('gradingPending')
     for (const submission of submissions.values()) expect(submission).not.toHaveProperty('gradingPending')
     const results = await user.query(api.quizzes.getAttemptResults, { attemptId })
@@ -166,7 +169,7 @@ describe('rubric assessment creation and completion', () => {
     expect(pending).not.toHaveProperty('gradeSource')
     expect(exact).not.toHaveProperty('nextAttemptAt')
     expect(empty).not.toHaveProperty('nextAttemptAt')
-    expect(await t.run(ctx => ctx.db.get(attemptId))).toMatchObject({ status: 'completed', gradingStatus: 'grading', score: 3, total: 5 })
+    expect(await t.run(ctx => ctx.db.get(attemptId))).toMatchObject({ status: 'completed', gradingStatus: 'grading', gradingNeedsAttention: false, score: 3, total: 5 })
     expect(await t.run(ctx => ctx.db.get(quizId))).toMatchObject({ score: 60 })
     if (bulk) expect(bulk.gradingPending).toBe(true)
     for (const [questionId, submission] of submissions) {
@@ -181,14 +184,16 @@ describe('rubric assessment creation and completion', () => {
     expectNoRubricData(results)
     for (const submission of submissions.values()) expectNoRubricData(submission)
     if (bulk) expectNoRubricData(bulk)
-    expect(await t.run(ctx => ctx.db.system.query('_scheduled_functions').collect())).toEqual([])
+    expect(await t.run(ctx => ctx.db.system.query('_scheduled_functions').collect())).toMatchObject([
+      { name: 'quizGrading:gradeAttempt', args: [{ attemptId, scheduledFor: NOW }] },
+    ])
   })
 
   test.each(paths)('%s settles when every rubric row has a deterministic result', async (path) => {
     vi.stubEnv('QUIZ_GRADING_MODE', 'graded')
     const fixture = await createQuiz()
     const { attemptId, bulk } = await finish(fixture, path, true)
-    expect(await fixture.t.run(ctx => ctx.db.get(attemptId))).toMatchObject({ gradingStatus: 'settled', score: 4 })
+    expect(await fixture.t.run(ctx => ctx.db.get(attemptId))).toMatchObject({ gradingStatus: 'settled', gradingNeedsAttention: false, score: 4 })
     expect((await fixture.user.query(api.quizzes.getAttemptResults, { attemptId }))?.grading).toEqual({ pending: 0, needsReview: 0, unavailable: 0 })
     if (bulk) expect(bulk.gradingPending).toBe(false)
   })

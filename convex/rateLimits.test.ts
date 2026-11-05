@@ -45,3 +45,18 @@ describe('distributed rate limits', () => {
     })).resolves.toEqual({ allowed: true, retryAfterMs: 0 })
   })
 })
+
+
+test('public caller-owned keys cannot touch protected grading counters', async () => {
+  const t = convexTest(schema, modules)
+  const key = 'internal:quiz-grading:dispatch-user:"a::b"'
+  const id = await t.run(ctx => ctx.db.insert('rateLimitBuckets', {
+    key, userId: 'a::b', route: 'quiz-grading/dispatch-user', count: 25, windowStartedAt: 0, expiresAt: 1,
+  }))
+  const before = await t.run(ctx => ctx.db.get(id))
+  const forgedIdentity = t.withIdentity({ tokenIdentifier: 'internal:quiz-grading:dispatch-user:"a' })
+  await expect(forgedIdentity.mutation(api.rateLimits.consume, { route: 'b"', maxPerMinute: 3 })).rejects.toThrow('Reserved rate-limit key')
+  expect(await t.run(ctx => ctx.db.get(id))).toEqual(before)
+  await t.withIdentity({ tokenIdentifier: 'a::b' }).mutation(api.rateLimits.consume, { route: key, maxPerMinute: 3 })
+  expect(await t.run(ctx => ctx.db.get(id))).toEqual(before)
+})

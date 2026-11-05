@@ -338,7 +338,7 @@ export const finalizeSectionGeneration = mutation({
     if (!section || section.userId !== userId) throw new Error('Section not found')
 
     const course = await ctx.db.get(section.courseId)
-    if (!course) throw new Error('Course not found')
+    if (!course || course.userId !== userId || course.status === 'deleting') throw new Error('Course not found')
 
     const contentBlocks: Array<{
       type: 'text' | 'quiz' | 'flashcard' | 'audio'
@@ -378,6 +378,7 @@ export const finalizeSectionGeneration = mutation({
         creationMethod: 'auto_generated',
         questionCount: args.quizData.questions.length,
         courseScoped: true,
+        courseId: course._id,
       })
 
       for (const q of args.quizData.questions) {

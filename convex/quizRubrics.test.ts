@@ -72,9 +72,10 @@ describe('question rubric persistence', () => {
   })
 
   test('course-scoped generation also revalidates and stores criteria', async () => {
-    const { t, folderId } = await setup()
+    const { t, user, folderId } = await setup()
+    const { courseId } = await user.mutation(api.courses.create, { title: 'Biology course', sourceType: 'web-only', folderId })
     const { quizId } = await t.mutation(internal.quizzes.createCourseScopedQuiz, {
-      userId: identity.tokenIdentifier, folderId, title: 'Course quiz',
+      courseId, userId: identity.tokenIdentifier, folderId, title: 'Course quiz',
       questions: [question, { ...question, order: 1, gradingCriteria: [{ ...criteria[0]!, weightPercent: 1 }] }],
     })
     const rows = await t.run(ctx => ctx.db.query('quizQuestions').withIndex('by_quizId', q => q.eq('quizId', quizId)).collect())
