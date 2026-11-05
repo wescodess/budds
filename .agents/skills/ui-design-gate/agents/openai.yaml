@@ -1,0 +1,5 @@
+interface:
+  display_name: "UI Design Gate"
+  short_description: "Get human approval of visual options before building UI"
+policy:
+  allow_implicit_invocation: true

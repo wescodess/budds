@@ -93,16 +93,14 @@
       "computedHash": "20e5f4afdef502637510bc5c64d27645d3c85c88df9cb006824bbb0980166319"
     },
     "implement": {
-      "source": "mattpocock/skills",
-      "sourceType": "github",
-      "skillPath": "skills/engineering/implement/SKILL.md",
-      "computedHash": "2139cfedf24791adbc839aaab6019cff158af1e28bfead020ec6e0ce01b3e74d"
+      "source": "./.agents/skills/implement",
+      "sourceType": "local",
+      "computedHash": "da2db53928d46e967a739d91a9fa2afcf63aee0fb2dbd1ddde801904058ec9e5"
     },
     "implement-spec": {
-      "source": "mattpocock/skills",
-      "sourceType": "github",
-      "skillPath": "skills/in-progress/implement-spec/SKILL.md",
-      "computedHash": "91670f6f5239fc64da91c2b2f6ada62a27d2f0e8e18215fefe53feeea7a43801"
+      "source": "./.agents/skills/implement-spec",
+      "sourceType": "local",
+      "computedHash": "abcedce5417269a7dab3689bcc102c3f04a79ea5b971477aa66a9f5dfb487371"
     },
     "improve-codebase-architecture": {
       "source": "mattpocock/skills",
@@ -205,6 +203,11 @@
       "sourceType": "github",
       "skillPath": "skills/engineering/triage/SKILL.md",
       "computedHash": "b954d74c219c805bf353d6642251a713c9b2e9cfdb11babfe588bcfe7dfd16d5"
+    },
+    "ui-design-gate": {
+      "source": "./.agents/skills/ui-design-gate",
+      "sourceType": "local",
+      "computedHash": "e8765e5855104ce9fd4a9d99be9244ea5759196992c5b76c3ad0b0df13d2707d"
     },
     "wait-what": {
       "source": "mattpocock/skills",
