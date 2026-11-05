@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { renderGeneratedMermaid } from '~/utils/render-generated-mermaid'
-const props = defineProps<{ code: string }>()
+import { renderGeneratedMermaid, type MermaidSourcePolicy } from '~/utils/render-generated-mermaid'
+const props = defineProps<{ code: string; policy?: MermaidSourcePolicy }>()
 
 const svg = ref('')
 const error = ref(false)
@@ -50,7 +50,7 @@ async function render() {
   error.value = false
   svg.value = ''
   try {
-    const rendered = await renderGeneratedMermaid(code, loadMermaid, () => current === generation)
+    const rendered = await renderGeneratedMermaid(code, loadMermaid, () => current === generation, props.policy)
     if (current === generation) svg.value = rendered
   } catch {
     if (current === generation) error.value = true

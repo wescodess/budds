@@ -1,4 +1,5 @@
 import createDOMPurify from 'dompurify'
+import { validateCompatibilityMermaid } from './compatibility-mermaid'
 import { MERMAID_LIMITS, validatePassiveMermaid } from './passive-mermaid'
 
 const svgNamespace = 'http://www.w3.org/2000/svg'
@@ -25,6 +26,10 @@ export function sanitizeGeneratedMermaidSvg(source: string, prefix: string, desc
   if (!root || clean.children.length !== 1) throw new Error('svg-root')
   const elements = [root, ...root.querySelectorAll('*')]
   if (elements.length > 4096 || elements.some(el => el.namespaceURI !== svgNamespace)) throw new Error('svg-namespace')
+  // Mermaid repeats a mindmap node's ID on its background shape; nothing refers to the copy.
+  for (const el of root.querySelectorAll('g > path.node-bkg')) {
+    if (el.id && el.id === el.parentElement?.id) el.removeAttribute('id')
+  }
   const ids = new Map<string, string>()
   for (const el of elements) {
     const original = el.getAttribute('id')
@@ -33,8 +38,11 @@ export function sanitizeGeneratedMermaidSvg(source: string, prefix: string, desc
       ids.set(original, `${prefix}-${ids.size}`)
     }
   }
+  // These labels are positioned from their left edge once Mermaid's CSS is gone.
+  const startAnchored = new Set(root.querySelectorAll('.cluster-label *, .annotation-group *, .label-group *, .members-group *, .methods-group *, .noteLabel *, .mindmap-node *'))
   for (const el of elements) {
     const actor = el.classList.contains('actor')
+    const nodeBackground = el.classList.contains('node-bkg')
     const dashed = ['edge-pattern-dotted', 'edge-pattern-dashed', 'messageLine1'].some(token => el.classList.contains(token))
     for (const attr of Array.from(el.attributes)) {
       const name = attr.name
@@ -50,7 +58,7 @@ export function sanitizeGeneratedMermaidSvg(source: string, prefix: string, desc
       } else if (!/^[\d\s.,()+eEa-zA-Z%-]*$/.test(attr.value) || /url|https?|data|javascript/i.test(attr.value)) throw new Error('svg-attribute')
     }
     // Fixed application colours replace all library/source CSS at this boundary.
-    if (['rect', 'circle', 'ellipse', 'polygon'].includes(el.localName)) {
+    if (['rect', 'circle', 'ellipse', 'polygon'].includes(el.localName) || nodeBackground) {
       el.setAttribute('fill', '#292524')
       el.setAttribute('stroke', actor ? '#f59e0b' : '#57534e')
     } else if (['path', 'line', 'polyline'].includes(el.localName)) {
@@ -58,7 +66,7 @@ export function sanitizeGeneratedMermaidSvg(source: string, prefix: string, desc
       el.setAttribute('stroke', '#78716c')
       if (dashed) el.setAttribute('stroke-dasharray', '3,3')
     } else if (['text', 'tspan'].includes(el.localName)) {
-      el.setAttribute('text-anchor', el.getAttribute('text-anchor') ?? 'middle')
+      el.setAttribute('text-anchor', el.getAttribute('text-anchor') ?? (startAnchored.has(el) ? 'start' : 'middle'))
       el.setAttribute('fill', '#d6d3d1')
       el.setAttribute('font-family', 'inherit')
       el.setAttribute('font-size', '14px')
@@ -83,9 +91,10 @@ export function sanitizeGeneratedMermaidSvg(source: string, prefix: string, desc
 }
 
 type MermaidModule = typeof import('mermaid')
+export type MermaidSourcePolicy = 'session' | 'compatibility'
 
-export function renderGeneratedMermaid(source: string, load: () => Promise<MermaidModule>, isCurrent: () => boolean): Promise<string> {
-  const validated = validatePassiveMermaid(source)
+export function renderGeneratedMermaid(source: string, load: () => Promise<MermaidModule>, isCurrent: () => boolean, policy: MermaidSourcePolicy = 'session'): Promise<string> {
+  const validated = policy === 'compatibility' ? validateCompatibilityMermaid(source) : validatePassiveMermaid(source)
   if (!validated) return Promise.reject(new Error('mermaid-source'))
   const run = renderQueue.catch(() => {}).then(async () => {
     if (!isCurrent()) throw new Error('stale')

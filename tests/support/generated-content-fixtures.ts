@@ -23,3 +23,42 @@ export const rejectedGeneratedContent = [
   ['fence options', '```text {title="canary"}\nReadable canary\n```'],
   ['task controls', '- [ ] Readable canary'],
 ] as const
+
+export const compatibleDiagrams = [
+  ['flowchart', 'graph TD\n    A[Start] --> B{Is it valid?}\n    B -->|Yes| C[Process] --> D((Done));\n    B -- No --> E[Reject];\n    subgraph Review\n      E -.-> F[(Archive)]\n    end', ['Start', 'Is it valid?', 'Process', 'Done', 'Reject', 'Review', 'Archive']],
+  ['sequence', 'sequenceDiagram\n    participant U as Student\n    participant S as Server\n    U->>+S: Submit answer\n    S-->>-U: Result: 200 OK\n    Note over U,S: Graded instantly\n    alt valid\n        S->>U: Accept\n    else invalid\n        S--xU: Reject\n    end', ['Student', 'Server', 'Submit answer', 'Graded instantly', 'Accept']],
+  ['class', 'classDiagram\n    class Animal {\n        <<abstract>>\n        +String name\n        +makeSound() void\n    }\n    class Dog\n    Animal <|-- Dog\n    Dog "1" --> "*" Toy : plays with\n    Dog : +bark() void', ['Animal', '+String name', 'Dog', 'Toy', 'plays with']],
+  ['mindmap', 'mindmap\n  root((Photosynthesis))\n    Inputs\n      Sunlight\n      Water[H2O]\n    Outputs\n      Glucose\n      ))Oxygen((', ['Photosynthesis', 'Inputs', 'Sunlight', 'H2O', 'Glucose', 'Oxygen']],
+] as const
+
+export const refusedDiagrams = [
+  ['configuration directive', 'graph TD\n%%{init: {}}%%\nA --> B'],
+  ['frontmatter', '---\ntitle: canary\n---\ngraph TD\nA --> B'],
+  ['flowchart interaction', 'graph TD\nA --> B\nclick A "https://example.invalid"'],
+  ['class diagram interaction', 'classDiagram\nclass A\nclick A href "https://example.invalid"'],
+  ['class diagram link', 'classDiagram\nclass A\nlink A "https://example.invalid"'],
+  ['sequence link', 'sequenceDiagram\nA->>B: Hello\nlink A: Notes @ https://example.invalid'],
+  ['flowchart inline style', 'graph TD\nA --> B\nstyle A fill:red'],
+  ['flowchart link style', 'graph TD\nA --> B\nlinkStyle 0 stroke:red'],
+  ['flowchart class definition', 'graph TD\nA --> B\nclassDef canary fill:red'],
+  ['flowchart class assignment', 'graph TD\nA --> B\nclass A canary'],
+  ['flowchart class shorthand', 'graph TD\nA:::canary --> B'],
+  ['class diagram inline style', 'classDiagram\nclass A\nstyle A fill:red'],
+  ['class diagram class assignment', 'classDiagram\nclass A\ncssClass "A" canary'],
+  ['sequence colour block', 'sequenceDiagram\nrect rgb(0, 0, 0)\nA->>B: Hello\nend'],
+  ['mindmap class', 'mindmap\n  root\n    A\n    :::canary'],
+  ['mindmap icon', 'mindmap\n  root\n    A\n    ::icon(fa fa-canary)'],
+  ['HTML label', 'graph TD\nA[<b>Start</b>] --> B'],
+  ['HTML line break', 'graph TD\nA[One<br/>Two] --> B'],
+  ['HTML sequence text', 'sequenceDiagram\nA->>B: <b>Hello</b>'],
+  ['Markdown string', 'graph TD\nA["`**Start**`"] --> B'],
+  ['entity code', 'graph TD\nA["#lt;b#gt;"] --> B'],
+  ['node metadata resource', 'graph TD\nA@{ img: "https://example.invalid/image.png" }'],
+  ['icon reference', 'graph TD\nA[fa:fa-canary] --> B'],
+  ['math label', 'graph TD\nA["$$x$$"] --> B'],
+  ['statement hidden after a line break', 'graph TD\n%% note\rclick A "https://example.invalid"\nA --> B'],
+  ['keyword as a node', 'graph TD\nclick --> B'],
+  ['unterminated block', 'graph TD\nsubgraph canary\nA --> B'],
+  ['unsupported family', 'stateDiagram-v2\n[*] --> A'],
+  ['oversized source', `graph TD\n${Array.from({ length: 300 }, (_, i) => `Node${i} --> Next${i}`).join('\n')}`],
+] as const

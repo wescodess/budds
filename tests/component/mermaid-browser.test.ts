@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type {} from '../support/generated-content-browser'
-import { rejectedGeneratedContent } from '../support/generated-content-fixtures'
+import { compatibleDiagrams, refusedDiagrams, rejectedGeneratedContent } from '../support/generated-content-fixtures'
 
 let browser: Browser
 let page: Page
@@ -115,7 +115,105 @@ describe('real browser Mermaid boundary', () => {
     await expect(sanitize(source)).rejects.toThrow()
   })
 
-  it('keeps unsupported/undescribed historical diagrams as escaped code', async () => {
+  describe.each(['course', 'chat'] as const)('%s diagrams', (surface) => {
+    const mountFence = (source: string) => page.evaluate(({ surface, source }) => window.__generatedContentTest.mount(surface, `\`\`\`mermaid\n${source}\n\`\`\``), { surface, source })
+
+    it.each(compatibleDiagrams)('renders an undescribed %s diagram', async (_family, source, labels) => {
+      await mountFence(source)
+      const diagram = page.locator('#host svg[role="img"]')
+      await expect.poll(() => diagram.count(), { timeout: 30_000 }).toBe(1)
+      expect(await diagram.getAttribute('aria-label')).toBe('Diagram')
+      expect(await page.locator('#host pre').count()).toBe(0)
+      expect(await page.locator('#host foreignObject, #host style, #host a, #host image, #host use').count()).toBe(0)
+      const text = await diagram.textContent()
+      for (const label of labels) expect(text).toContain(label)
+      const layout = await diagram.evaluate((svg) => {
+        const bounds = svg.getBoundingClientRect()
+        const labels = [...svg.querySelectorAll('text')].filter(label => label.textContent?.trim())
+        return { width: bounds.width, height: bounds.height, shapes: svg.querySelectorAll('rect, path, polygon, circle').length, clipped: labels.filter((label) => {
+          const box = label.getBoundingClientRect()
+          return box.left < bounds.left - 1 || box.right > bounds.right + 1 || box.top < bounds.top - 1 || box.bottom > bounds.bottom + 1
+        }).map(label => label.textContent) }
+      })
+      expect(layout.width).toBeGreaterThan(50)
+      expect(layout.height).toBeGreaterThan(50)
+      expect(layout.shapes).toBeGreaterThan(0)
+      expect(layout.clipped).toEqual([])
+      expect(networkRequests).toEqual([])
+      await page.evaluate(() => window.__generatedContentTest.unmount())
+    }, 45_000)
+
+    it.each(refusedDiagrams)('keeps %s as escaped code', async (_name, source) => {
+      await page.evaluate(() => {
+        const context = globalThis as unknown as { __mermaidTestModule: typeof import('mermaid')['default']; savedRender: typeof import('mermaid')['default']['render']; renderCalls: number }
+        context.savedRender = context.__mermaidTestModule.render
+        context.renderCalls = 0
+        context.__mermaidTestModule.render = ((...args: Parameters<typeof context.savedRender>) => { context.renderCalls++; return context.savedRender(...args) }) as typeof context.savedRender
+      })
+      try {
+        await mountFence(source)
+        await expect.poll(() => page.locator('#host pre').count()).toBe(1)
+        expect(await page.locator('#host pre').textContent()).toContain(source.trim().split('\n')[0])
+        expect(await page.locator('#host svg[role="img"]').count()).toBe(0)
+        expect(await page.evaluate(() => (globalThis as unknown as { renderCalls: number }).renderCalls)).toBe(0)
+        expect(await page.locator('[data-generated-mermaid-staging]').count()).toBe(0)
+      } finally {
+        await page.evaluate(() => {
+          const context = globalThis as unknown as { __mermaidTestModule: typeof import('mermaid')['default']; savedRender: typeof import('mermaid')['default']['render'] }
+          context.__mermaidTestModule.render = context.savedRender
+          window.__generatedContentTest.unmount()
+        })
+      }
+    })
+
+    it('still applies the final SVG restriction to an undescribed diagram', async () => {
+      const source = 'graph TD\nA --> B'
+      await page.evaluate(() => {
+        const context = globalThis as unknown as { __mermaidTestModule: typeof import('mermaid')['default']; savedRender: typeof import('mermaid')['default']['render'] }
+        context.savedRender = context.__mermaidTestModule.render
+        context.__mermaidTestModule.render = (async () => ({ svg: '<svg xmlns="http://www.w3.org/2000/svg"><foreignObject><div xmlns="http://www.w3.org/1999/xhtml">integration canary</div></foreignObject></svg>' })) as typeof context.__mermaidTestModule.render
+      })
+      try {
+        await mountFence(source)
+        await expect.poll(() => page.locator('#host pre').count()).toBe(1)
+        expect(await page.locator('#host pre').textContent()).toContain(source)
+        expect(await page.locator('#host foreignObject, #host svg[role="img"]').count()).toBe(0)
+        expect(await page.locator('[data-generated-mermaid-staging]').count()).toBe(0)
+      } finally {
+        await page.evaluate(() => {
+          const context = globalThis as unknown as { __mermaidTestModule: typeof import('mermaid')['default']; savedRender: typeof import('mermaid')['default']['render'] }
+          context.__mermaidTestModule.render = context.savedRender
+          window.__generatedContentTest.unmount()
+        })
+      }
+    })
+  })
+
+  it.each([
+    ['class', compatibleDiagrams[2][1], '+String name', 'start'],
+    ['mindmap', compatibleDiagrams[3][1], 'Sunlight', 'start'],
+    ['flowchart subgraph', compatibleDiagrams[0][1], 'Review', 'start'],
+    ['flowchart node', compatibleDiagrams[0][1], 'Process', 'middle'],
+  ])('anchors %s labels where Mermaid positioned them', async (_family, source, label, anchor) => {
+    await page.evaluate(source => window.__generatedContentTest.mount('course', `\`\`\`mermaid\n${source}\n\`\`\``), source)
+    const text = page.locator('#host svg[role="img"] text', { hasText: label }).first()
+    await expect.poll(() => text.count(), { timeout: 30_000 }).toBe(1)
+    expect(await text.getAttribute('text-anchor')).toBe(anchor)
+    await page.evaluate(() => window.__generatedContentTest.unmount())
+  }, 45_000)
+
+  it('accepts only the mindmap background ID repeat and keeps its node fill opaque', async () => {
+    const clean = await sanitize('<svg xmlns="http://www.w3.org/2000/svg"><g id="node"><path id="node" class="node-bkg" d="M0 0 L10 10"/></g></svg>')
+    expect(clean.match(/ id=/g)).toHaveLength(1)
+    expect(clean).toContain('fill="#292524"')
+    for (const source of [
+      '<svg xmlns="http://www.w3.org/2000/svg"><g id="node"><path id="node" d="M0 0 L10 10"/></g></svg>',
+      '<svg xmlns="http://www.w3.org/2000/svg"><path id="node" class="node-bkg"/><path id="node" class="node-bkg"/></svg>',
+      '<svg xmlns="http://www.w3.org/2000/svg"><g id="other"><path id="node" class="node-bkg"/></g><g id="node"/></svg>',
+    ]) await expect(sanitize(source)).rejects.toThrow('svg-id')
+  })
+
+  it('keeps the session default stricter: undescribed and other-family diagrams stay escaped code', async () => {
     const source = 'classDiagram\nclass A'
     await page.evaluate(source => window.__generatedContentTest.mount('mermaid', source), source)
     await expect.poll(() => page.locator('#host pre').count()).toBe(1)

@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import MermaidDiagram from '~/components/global/MermaidDiagram.vue'
+import TextBlock from '~/components/learn/TextBlock.vue'
+import Message from '~/components/chat/Message.vue'
+import { compatibleDiagrams, refusedDiagrams } from '../../support/generated-content-fixtures'
 
 const { initialize, render, getConfig } = vi.hoisted(() => ({
   initialize: vi.fn(), render: vi.fn(), getConfig: vi.fn(),
@@ -38,7 +41,7 @@ describe('MermaidDiagram', () => {
     } finally { wrapper.unmount() }
   }, 15_000)
 
-  it('keeps an undescribed legacy diagram readable without importing Mermaid', async () => {
+  it('keeps the session default: an undescribed diagram stays readable without importing Mermaid', async () => {
     const legacy = 'flowchart TD\nA --> B'
     const wrapper = await mountSuspended(MermaidDiagram, { props: { code: legacy } })
     try {
@@ -47,4 +50,24 @@ describe('MermaidDiagram', () => {
       expect(render).not.toHaveBeenCalled()
     } finally { wrapper.unmount() }
   }, 15_000)
+
+  describe.each([['course', TextBlock], ['chat', Message]] as const)('%s sink', (_surface, sink) => {
+    const mountFence = (source: string) => mountSuspended(sink, { props: { role: 'assistant', animate: false, content: `\`\`\`mermaid\n${source}\n\`\`\`` } })
+
+    it.each(compatibleDiagrams)('sends an undescribed %s diagram to Mermaid', async (_family, source) => {
+      const wrapper = await mountFence(source)
+      try {
+        await vi.waitFor(() => expect(render).toHaveBeenCalledWith(expect.stringMatching(/^generated-mermaid-/), `${source}\n`, expect.any(HTMLElement)), { timeout: 10_000 })
+      } finally { wrapper.unmount() }
+    }, 15_000)
+
+    it.each(refusedDiagrams)('keeps %s as escaped code without Mermaid', async (_name, source) => {
+      const wrapper = await mountFence(source)
+      try {
+        await vi.waitFor(() => expect(wrapper.find('pre').exists()).toBe(true), { timeout: 10_000 })
+        expect(wrapper.find('pre').text()).toBe(source.trim())
+        expect(render).not.toHaveBeenCalled()
+      } finally { wrapper.unmount() }
+    }, 15_000)
+  })
 })

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { GENERATED_MARKDOWN_LIMITS, generatedTextFallback, parseGeneratedMarkdown, validateGeneratedLink } from '~/utils/generated-markdown'
 import { MERMAID_LIMITS, validatePassiveMermaid } from '~/utils/passive-mermaid'
+import { validateCompatibilityMermaid } from '~/utils/compatibility-mermaid'
+import { compatibleDiagrams, refusedDiagrams } from '../support/generated-content-fixtures'
 import { normalizeAssistantCitations } from '~/utils/normalize-assistant-citations'
 
 const context = { applicationOrigins: ['https://budds-ci.invalid'], sourceCount: 2 }
@@ -72,7 +74,7 @@ describe('passive generated content policy', () => {
   })
 })
 
-describe('static Mermaid source grammar', () => {
+describe('session Mermaid source grammar', () => {
   const graph = 'graph TD\naccDescr: Start leads to Finish.\nA[Start] --> B[Finish]'
   it('admits described static flowcharts and sequences', () => {
     expect(validatePassiveMermaid(graph)).toEqual({ description: 'Start leads to Finish.' })
@@ -97,5 +99,46 @@ describe('static Mermaid source grammar', () => {
     graph + '\n' + Array.from({ length: 65 }, () => 'A --> B').join('\n'),
   ])('rejects unsupported statements, missing descriptions and resource limits', (source) => {
     expect(validatePassiveMermaid(source)).toBeNull()
+  })
+})
+
+describe('V1 and chat Mermaid source grammar', () => {
+  it.each(compatibleDiagrams)('names an undescribed %s diagram generically', (_family, source) => {
+    expect(validateCompatibilityMermaid(source)).toEqual({ description: 'Diagram' })
+    expect(validatePassiveMermaid(source)).toBeNull()
+  })
+
+  it.each([
+    'graph TD;A-->B;B-->C;',
+    'flowchart LR\nA --> B --> C',
+    'graph TD\nA & B --> C & D',
+    'graph TD\nStart[Begin] --> Class[Lesson] --> End[Finish]',
+    'graph TD\nA{Choice} == chosen ==> B{{Prepare}}\nA -. skipped .-> C([Stop])\nA --- D[["Quoted (label)"]]',
+    '%% Overview\ngraph LR\n  %% Steps\n  A --> B',
+    'graph TD\r\nA --> B\r\n',
+    'sequenceDiagram\nA->>B: Hello;B-->>A: Hi;',
+    'classDiagram\nclass Queue~T~ {\n+push(item) void\n}\n<<interface>> Queue\nnote for Queue "First in, first out"\nStudent --> Class',
+  ])('admits ordinary syntax: %s', (source) => {
+    expect(validateCompatibilityMermaid(source)).toEqual({ description: 'Diagram' })
+  })
+
+  it('uses a description when the diagram supplies one and never derives one', () => {
+    expect(validateCompatibilityMermaid('graph TD\naccDescr: Start leads to Finish.\nA[Start] --> B[Finish]')).toEqual({ description: 'Start leads to Finish.' })
+    expect(validateCompatibilityMermaid('graph TD\naccTitle: Overview\nA[Start] --> B[Finish]')).toEqual({ description: 'Diagram' })
+  })
+
+  it.each(refusedDiagrams)('refuses %s', (_name, source) => {
+    expect(validateCompatibilityMermaid(source)).toBeNull()
+  })
+
+  it.each([
+    'graph TD\n' + Array.from({ length: 33 }, (_, i) => `N${i}`).join('\n'),
+    'graph TD\n' + Array.from({ length: 65 }, () => 'A --> B').join('\n'),
+    'mindmap\n' + Array.from({ length: 33 }, (_, i) => `  N${i}`).join('\n'),
+    'graph TD\n' + 'subgraph S\n'.repeat(5) + 'A --> B\n' + 'end\n'.repeat(5),
+    'graph TD\nend',
+    'graph TD',
+  ])('applies structural and resource bounds', (source) => {
+    expect(validateCompatibilityMermaid(source)).toBeNull()
   })
 })
