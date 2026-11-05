@@ -138,3 +138,23 @@ test('rejects empty, oversized, duplicate or invalid rubric batches before dispa
   }
   expect(generateCompletion).not.toHaveBeenCalled()
 })
+
+test.each(['daughter_cells is not_met', 'reference_answer is uncertain', 'The answer is not_met', 'oxygen_out is met', 'Please include oxygen_out'])('hides literal internal keys and verdict codes: %s', async (feedback) => {
+  const input = [{ ...items[0]!, criteria: [{ key: 'oxygen_out', description: 'Releases oxygen', weightPercent: 100 }] }]
+  const judged = { ...result, criterionResults: [{ key: 'oxygen_out', verdict: 'met' }], feedback }
+  vi.mocked(generateCompletion).mockResolvedValue(completion({ results: [judged] }))
+  expect(await gradeQuizAnswers(input)).toEqual({ status: 'graded', results: [{ ...judged, feedback: 'Compare your answer with the reference.' }] })
+})
+
+test('bounds canonical evidence by Unicode characters without truncating the learner answer', async () => {
+  const learnerAnswer = 'Full answer with a quote " and a slash \\'.repeat(30)
+  await gradeQuizAnswers([{ ...items[0]!, evidenceExcerpt: '🌱'.repeat(2000), learnerAnswer }])
+  const sent = JSON.parse(vi.mocked(generateCompletion).mock.calls[0]![0].messages[1]!.content).items[0]
+  expect(sent.evidenceExcerpt).toBe('🌱'.repeat(1200))
+  expect(sent.learnerAnswer).toBe(learnerAnswer)
+})
+
+test('refuses a single unfit answer before calling the gateway', async () => {
+  expect(await gradeQuizAnswers([{ ...items[0]!, learnerAnswer: '\\"'.repeat(40_000) }])).toEqual({ status: 'unavailable', reason: 'oversized_evidence', retryable: false })
+  expect(generateCompletion).not.toHaveBeenCalled()
+})

@@ -5,8 +5,9 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import schema from './schema'
-import { generateCompletion, type GenerateParams, type GenerateResponse } from '../server/utils/ai-gateway'
-import { QUIZ_GRADER_POLICY, type QuizGradingInput } from '../server/utils/quiz-grading'
+import { gradeAttempt as scheduledEntry } from './quizGrading'
+import { generateCompletion, serializeCompletionRequest, type GenerateParams, type GenerateResponse } from '../server/utils/ai-gateway'
+import { QUIZ_GRADER_POLICY, quizGradingRequestBytes, QUIZ_GRADING_MAX_REQUEST_BYTES, type QuizGradingInput } from '../server/utils/quiz-grading'
 
 vi.mock('../server/utils/ai-gateway', async (importOriginal) => ({
   ...await importOriginal<typeof import('../server/utils/ai-gateway')>(), generateCompletion: vi.fn(),
@@ -103,18 +104,24 @@ async function drain(fixture: Fixture) {
   throw new Error('Scheduled grading did not drain')
 }
 
+async function runGrade(fixture: Fixture, attemptId: Id<'quizAttempts'>) {
+  const claim = await fixture.t.mutation(internal.quizGrading.gradeAttempt, { attemptId })
+  if (claim) await fixture.t.action(internal.quizGrading.dispatchBatch, { attemptId, ...claim })
+}
+
 async function reserve(fixture: Fixture, attemptId: Id<'quizAttempts'>) {
   const claim = (await fixture.t.mutation(internal.quizGrading.claimBatch, { attemptId }))!
-  const items = claim.items.map(item => ({ assessmentId: item.input.id as Id<'quizAnswerAssessments'>, inputDigest: item.inputDigest }))
-  expect(await fixture.t.mutation(internal.quizGrading.markDispatched, { attemptId, claimId: claim.claimId, items })).toBe(true)
+  const items = claim.items
+  const inputs = (await fixture.t.mutation(internal.quizGrading.markDispatched, { attemptId, claimId: claim.claimId, items }))!
+  expect(inputs).toHaveLength(items.length)
   return {
     claim,
     items,
     args: {
       attemptId, claimId: claim.claimId,
-      results: claim.items.map(item => ({
-        assessmentId: item.input.id as Id<'quizAnswerAssessments'>, inputDigest: item.inputDigest,
-        criterionResults: item.input.criteria.map(criterion => ({ key: criterion.key, verdict: 'met' as const })), feedback: 'You explained the answer clearly.',
+      results: inputs.map(input => ({
+        assessmentId: input.id as Id<'quizAnswerAssessments'>, inputDigest: items.find(item => item.assessmentId === input.id)!.inputDigest,
+        criterionResults: input.criteria.map(criterion => ({ key: criterion.key, verdict: 'met' as const })), feedback: 'You explained the answer clearly.',
       })),
     },
   }
@@ -262,11 +269,11 @@ describe('course parent grading fence', () => {
     const fixture = await createCourseQuiz()
     const attemptId = await finish(fixture)
     const claim = (await fixture.t.mutation(internal.quizGrading.claimBatch, { attemptId }))!
-    const items = claim.items.map(item => ({ assessmentId: item.input.id as Id<'quizAnswerAssessments'>, inputDigest: item.inputDigest }))
+    const items = claim.items
     await invalidateCourseParent(fixture, kind)
     const before = await gradingSnapshot(fixture, attemptId)
-    expect(await fixture.t.mutation(internal.quizGrading.markDispatched, { attemptId, claimId: claim.claimId, items })).toBe(false)
-    await fixture.t.action(internal.quizGrading.gradeAttempt, { attemptId })
+    expect(await fixture.t.mutation(internal.quizGrading.markDispatched, { attemptId, claimId: claim.claimId, items })).toBeNull()
+    await runGrade(fixture, attemptId)
     expect(generateCompletion).not.toHaveBeenCalled()
     expect(await gradingSnapshot(fixture, attemptId)).toEqual(before)
   })
@@ -281,7 +288,7 @@ describe('course parent grading fence', () => {
       release = () => resolve(completion(params, ['met', 'met']))
       entered()
     }))
-    const grading = fixture.t.action(internal.quizGrading.gradeAttempt, { attemptId })
+    const grading = runGrade(fixture, attemptId)
     await dispatched
     try {
       const before = await gradingSnapshot(fixture, attemptId)
@@ -319,7 +326,7 @@ describe('course parent grading fence', () => {
     expect(await fixture.t.mutation(internal.quizGrading.recoverBatch, {
       attemptId, claimId: args.claimId, assessmentIds: items.map(item => item.assessmentId),
     })).toBe(0)
-    await fixture.t.action(internal.quizGrading.gradeAttempt, { attemptId })
+    await runGrade(fixture, attemptId)
     expect(generateCompletion).not.toHaveBeenCalled()
     expect(await gradingSnapshot(fixture, attemptId)).toEqual(before)
   })
@@ -518,7 +525,7 @@ describe('dispatch and scoring', () => {
     expect(result).not.toHaveProperty('grading')
     expect(await scheduled(fixture)).toEqual([])
     expect(await fixture.user.mutation(api.quizGrading.requestGradingRetry, { attemptId })).toEqual({ retried: 0 })
-    await fixture.t.action(internal.quizGrading.gradeAttempt, { attemptId })
+    await runGrade(fixture, attemptId)
     expect(generateCompletion).not.toHaveBeenCalled()
   })
 
@@ -583,7 +590,7 @@ describe('dispatch and scoring', () => {
   test.each(['completeAttempt', 'submitAllAnswers', 'submitAttempt'] as const)('%s schedules a durable job only at completion', async (path) => {
     const fixture = await createQuiz()
     const attemptId = await finish(fixture, undefined, path)
-    expect(await scheduled(fixture)).toMatchObject([{ name: 'quizGrading:gradeAttempt', args: [{ attemptId }] }])
+    expect(await scheduled(fixture)).toMatchObject([{ name: 'quizGrading:gradeAttempt', args: [{ attemptId, scheduledFor: NOW }] }])
     await drain(fixture)
     expect(generateCompletion).toHaveBeenCalledTimes(1)
     expect((await assessments(fixture, attemptId))[0]).toMatchObject({
@@ -616,11 +623,11 @@ describe('dispatch and scoring', () => {
       entered()
       expect(params.model).toBe(QUIZ_GRADER_POLICY.model)
     }))
-    const first = fixture.t.action(internal.quizGrading.gradeAttempt, { attemptId })
+    const first = runGrade(fixture, attemptId)
     await dispatched
     await Promise.all([
-      fixture.t.action(internal.quizGrading.gradeAttempt, { attemptId }),
-      fixture.t.action(internal.quizGrading.gradeAttempt, { attemptId }),
+      runGrade(fixture, attemptId),
+      runGrade(fixture, attemptId),
     ])
     const [row] = await assessments(fixture, attemptId)
     const commitArgs = {
@@ -864,7 +871,7 @@ describe('failures and recovery', () => {
     const log = vi.spyOn(console, 'log')
     vi.mocked(generateCompletion).mockRejectedValue(error)
     for (let index = 1; index <= 3; index++) {
-      await fixture.t.action(internal.quizGrading.gradeAttempt, { attemptId })
+      await runGrade(fixture, attemptId)
       const [row] = await assessments(fixture, attemptId)
       expect(row).toMatchObject({ unavailableReason: reason, attemptCount: index, status: index < 3 ? 'pending' : 'unavailable' })
       expect(row).not.toHaveProperty('label')
@@ -875,7 +882,7 @@ describe('failures and recovery', () => {
       if (index < 3) {
         expect(row!.nextAttemptAt!).toBeGreaterThan(Date.now())
         const calls = vi.mocked(generateCompletion).mock.calls.length
-        await fixture.t.action(internal.quizGrading.gradeAttempt, { attemptId })
+        await runGrade(fixture, attemptId)
         expect(generateCompletion).toHaveBeenCalledTimes(calls)
         vi.setSystemTime(row!.nextAttemptAt!)
       }
@@ -890,7 +897,7 @@ describe('failures and recovery', () => {
     const fixture = await createQuiz()
     const attemptId = await finish(fixture)
     vi.mocked(generateCompletion).mockRejectedValueOnce({ statusCode: 429, aiGatewayFailureKind: 'definitive_failure', retryAfterMs: 86_400_000 })
-    await fixture.t.action(internal.quizGrading.gradeAttempt, { attemptId })
+    await runGrade(fixture, attemptId)
     expect((await assessments(fixture, attemptId))[0]).toMatchObject({ nextAttemptAt: NOW + 900_000, unavailableReason: 'over_budget' })
     await drain(fixture)
     expect(generateCompletion).toHaveBeenCalledTimes(2)
@@ -922,12 +929,12 @@ describe('failures and recovery', () => {
     const fixture = await createQuiz()
     const attemptId = await finish(fixture)
     const claim = (await fixture.t.mutation(internal.quizGrading.claimBatch, { attemptId }))!
-    const items = claim.items.map(item => ({ assessmentId: item.input.id as Id<'quizAnswerAssessments'>, inputDigest: item.inputDigest }))
+    const items = claim.items
     if (dispatch) await fixture.t.mutation(internal.quizGrading.markDispatched, { attemptId, claimId: claim.claimId, items })
     expect(await fixture.t.mutation(internal.quizGrading.recoverBatch, { attemptId, claimId: claim.claimId, assessmentIds: items.map(item => item.assessmentId) })).toBe(0)
     const [row] = await assessments(fixture, attemptId)
     vi.setSystemTime(row!.leaseExpiresAt! + 1)
-    await fixture.t.action(internal.quizGrading.gradeAttempt, { attemptId })
+    await runGrade(fixture, attemptId)
     expect(generateCompletion).not.toHaveBeenCalled()
     await drain(fixture)
     expect((await assessments(fixture, attemptId))[0]).toMatchObject({ status: 'available', attemptCount: 2 })
@@ -945,7 +952,7 @@ describe('ownership, row mode and fencing', () => {
     const before = await assessments(fixture, attemptId)
     const attempt = await fixture.t.run(ctx => ctx.db.get(attemptId))
     expect(await scheduled(fixture)).toEqual([])
-    await fixture.t.action(internal.quizGrading.gradeAttempt, { attemptId })
+    await runGrade(fixture, attemptId)
     expect(await fixture.user.mutation(api.quizGrading.requestGradingRetry, { attemptId })).toEqual({ retried: 0 })
     expect(await assessments(fixture, attemptId)).toEqual(before)
     expect(await fixture.t.run(ctx => ctx.db.get(attemptId))).toEqual(attempt)
@@ -988,7 +995,7 @@ describe('ownership, row mode and fencing', () => {
     await fixture.user.mutation(api.quizGrading.selfAssess, { attemptAnswerId: rows[0]!.attemptAnswerId, verdict: 'partial' })
     for (let cycle = 1; cycle <= 2; cycle++) {
       expect(await fixture.user.mutation(api.quizGrading.requestGradingRetry, { attemptId })).toEqual({ retried: 1 })
-      expect((await assessments(fixture, attemptId))[1]).toMatchObject({ status: 'pending', attemptCount: 0, manualRetryCount: cycle })
+      expect((await assessments(fixture, attemptId))[1]).toMatchObject({ status: 'pending', attemptCount: 0, manualRetryPending: true })
       await expectHistoryGrade(fixture, attemptId, { score: 0.5, gradingStatus: 'grading', gradingNeedsAttention: false })
       await drain(fixture)
       expect((await assessments(fixture, attemptId))[1]).toMatchObject({ status: 'unavailable', attemptCount: 3, manualRetryCount: cycle })
@@ -1036,9 +1043,9 @@ describe('ownership, row mode and fencing', () => {
         if (kind === 'account') await ctx.db.insert('accountDeletionJobs', { userId: USER.tokenIdentifier, status: 'active', phase: 'documents', startedAt: NOW, updatedAt: NOW })
       })
       expect(await fixture.t.mutation(internal.quizGrading.markDispatched, {
-        attemptId, claimId: claim.claimId, items: claim.items.map(item => ({ assessmentId: item.input.id as Id<'quizAnswerAssessments'>, inputDigest: item.inputDigest })),
-      })).toBe(false)
-      await fixture.t.action(internal.quizGrading.gradeAttempt, { attemptId })
+        attemptId, claimId: claim.claimId, items: claim.items,
+      })).toBeNull()
+      await runGrade(fixture, attemptId)
     }
     expect(generateCompletion).not.toHaveBeenCalled()
   })
@@ -1058,4 +1065,414 @@ describe('ownership, row mode and fencing', () => {
     expect((await assessments(fixture, attemptId))[0]).toMatchObject({ credit: 0, label: 'incorrect', gradeSource: 'model', criteriaSnapshot: criteria })
     expect(await fixture.t.run(ctx => ctx.db.get(attemptId))).toMatchObject({ score: 0 })
   })
+})
+
+describe('Stage B durability and input isolation', () => {
+  test('the scheduled mutation reserves recovery before a body-free dispatch and recovers a dropped action', async () => {
+    expect(scheduledEntry.isMutation).toBe(true)
+    const fixture = await createQuiz()
+    const attemptId = await finish(fixture)
+    const claim = await fixture.t.mutation(internal.quizGrading.gradeAttempt, { attemptId })
+    expect(claim).toMatchObject({ claimId: expect.any(String), items: [{ assessmentId: expect.any(String), inputDigest: expect.any(String) }] })
+    const jobs = await scheduled(fixture)
+    const recovery = jobs.find(job => job.name === 'quizGrading:recoverBatch')!
+    const dispatch = jobs.find(job => job.name === 'quizGrading:dispatchBatch')!
+    expect(recovery.state.kind).toBe('pending')
+    expect(dispatch.state.kind).toBe('pending')
+    expect(dispatch.args).toEqual([{ attemptId, ...claim }])
+    expect(JSON.stringify(dispatch.args)).not.toMatch(/question|evidence|learner|criteria|daughter/)
+    expect(generateCompletion).not.toHaveBeenCalled()
+    await fixture.t.run(ctx => ctx.scheduler.cancel(dispatch._id))
+    await drain(fixture)
+    expect(generateCompletion).toHaveBeenCalledTimes(1)
+    expect((await assessments(fixture, attemptId))[0]).toMatchObject({ status: 'available', attemptCount: 2 })
+  })
+
+  test('one huge answer cannot poison a normal answer or rebuild on manual retry', async () => {
+    const fixture = await createQuiz(2)
+    const attemptId = await finish(fixture, ['\\"'.repeat(40_000), 'A pair of daughter cells'])
+    await drain(fixture)
+    const rows = await assessments(fixture, attemptId)
+    expect(rows[0]).toMatchObject({ status: 'unavailable', unavailableReason: 'oversized_evidence' })
+    expect(rows[1]).toMatchObject({ status: 'available', credit: 0.4 })
+    expect(generateCompletion).toHaveBeenCalledTimes(1)
+    expect(await fixture.user.mutation(api.quizGrading.requestGradingRetry, { attemptId })).toEqual({ retried: 0 })
+    expect(rows[0]!.learnerAnswerSnapshot).toBe('\\"'.repeat(40_000))
+  })
+
+  test('a deleted folder fences queued work and new rubric acceptance', async () => {
+    const fixture = await createQuiz()
+    const quiz = (await fixture.t.run(ctx => ctx.db.get(fixture.quizId)))!
+    const attemptId = await finish(fixture)
+    await fixture.user.mutation(api.folders.deleteFolder, { id: quiz.folderId })
+    await drain(fixture)
+    expect(generateCompletion).not.toHaveBeenCalled()
+    await expect(fixture.user.mutation(api.quizzes.submitAttempt, { quizId: fixture.quizId, answers: [] })).rejects.toThrow(/unavailable/)
+    expect(await fixture.t.mutation(internal.quizGrading.claimBatch, { attemptId })).toBeNull()
+  })
+})
+
+async function seedGradingCounter(fixture: Fixture, kind: 'admission' | 'dispatch-user' | 'dispatch-shared', count: number, userId = USER.tokenIdentifier) {
+  const owner = kind === 'dispatch-shared' ? '' : userId
+  const duration = kind === 'admission' ? 60_000 : 86_400_000
+  const windowStartedAt = kind === 'admission' ? Date.now() : Math.floor(Date.now() / duration) * duration
+  return fixture.t.run(ctx => ctx.db.insert('rateLimitBuckets', {
+    key: `internal:quiz-grading:${kind}${owner ? `:${JSON.stringify(owner)}` : ''}`,
+    userId: owner, route: `quiz-grading/${kind}`, count, windowStartedAt, expiresAt: windowStartedAt + duration,
+  }))
+}
+const gradingCounters = (fixture: Fixture) => fixture.t.run(ctx => ctx.db.query('rateLimitBuckets').take(20))
+
+async function anotherLearner(fixture: Fixture): Promise<Fixture> {
+  const user = fixture.t.withIdentity(OTHER)
+  const folderId = await user.mutation(api.folders.createFolder, { name: 'Other biology' })
+  const { quizId } = await user.mutation(api.quizzes.createWithQuestions, {
+    folderId, title: 'Other quiz', questions: [{ order: 0, question: 'What does mitosis produce?', type: 'free-response', correctAnswer: 'Two identical daughter cells' }],
+  })
+  const questions = (await user.query(api.quizzes.getWithQuestions, { id: quizId }))!.questions
+  await fixture.t.run(ctx => ctx.db.patch(questions[0]!._id, { gradingCriteria: criteria }))
+  return { t: fixture.t, user, quizId, questions }
+}
+
+describe('Stage B canonical wire bounds', () => {
+  test('caps old long snapshots before their digest without rewriting accepted history', async () => {
+    const fixture = await createQuiz(2)
+    await fixture.t.run(ctx => ctx.db.patch(fixture.questions[0]!._id, { sourceChunkContent: '🌱'.repeat(40_000) }))
+    const attemptId = await finish(fixture)
+    const [first, second] = await assessments(fixture, attemptId)
+    expect(first!.questionSnapshot.evidenceExcerpt).toBe('🌱'.repeat(1200))
+    const oldSnapshot = { ...second!.questionSnapshot, evidenceExcerpt: '🧬'.repeat(40_000) }
+    await fixture.t.run(ctx => ctx.db.patch(second!._id, { questionSnapshot: oldSnapshot }))
+    const claim = (await fixture.t.mutation(internal.quizGrading.gradeAttempt, { attemptId }))!
+    const inputs = (await fixture.t.mutation(internal.quizGrading.markDispatched, { attemptId, ...claim }))!
+    expect(inputs.map(input => input.evidenceExcerpt)).toEqual(['🌱'.repeat(1200), '🧬'.repeat(1200)])
+    const { quizGradingInputDigest } = await import('./lib/quizGrading')
+    const oldRow = (await assessments(fixture, attemptId))[1]!
+    expect(claim.items[1]!.inputDigest).toBe(await quizGradingInputDigest({ ...oldRow, questionSnapshot: { ...oldSnapshot, evidenceExcerpt: '🧬'.repeat(1200) } }))
+    expect(oldRow.questionSnapshot).toEqual(oldSnapshot)
+  })
+
+  test('packs escape-heavy Unicode answers by the complete serialized UTF8 wire body', async () => {
+    const fixture = await createQuiz(5)
+    const answer = '"\\🌱\n'.repeat(3200)
+    const attemptId = await finish(fixture, Array(5).fill(answer))
+    await drain(fixture)
+    const batches = vi.mocked(generateCompletion).mock.calls.map(([params]) => {
+      const inputs = JSON.parse(params.messages[1]!.content).items as QuizGradingInput[]
+      const wireBytes = new TextEncoder().encode(serializeCompletionRequest(params)).byteLength
+      expect(wireBytes).toBe(quizGradingRequestBytes(inputs))
+      expect(wireBytes).toBeLessThanOrEqual(QUIZ_GRADING_MAX_REQUEST_BYTES)
+      expect(wireBytes).toBeGreaterThan(new TextEncoder().encode(JSON.stringify(inputs)).byteLength)
+      expect(inputs.every(input => input.learnerAnswer === answer)).toBe(true)
+      return inputs
+    })
+    expect(batches.length).toBeGreaterThan(1)
+    expect(batches.flat()).toHaveLength(5)
+    expect((await assessments(fixture, attemptId)).every(row => row.status === 'available')).toBe(true)
+  })
+
+  test('unfit reference and answer rows dispatch zero items and leave normal rows unaffected', async () => {
+    const fixture = await createQuiz(3)
+    const reference = '\\"'.repeat(40_000)
+    await fixture.t.run(ctx => ctx.db.patch(fixture.questions[1]!._id, { correctAnswer: reference }))
+    const attemptId = await finish(fixture, ['🌱'.repeat(30_000), 'A short response', 'A pair of daughter cells'])
+    await drain(fixture)
+    const rows = await assessments(fixture, attemptId)
+    expect(rows.slice(0, 2).every(row => row.status === 'unavailable' && row.unavailableReason === 'oversized_evidence' && row.credit === undefined && row.label === undefined)).toBe(true)
+    expect(rows[1]!.questionSnapshot.expectedAnswer).toBe(reference)
+    expect(rows[2]).toMatchObject({ status: 'available', credit: 0.4 })
+    expect(generateCompletion).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(vi.mocked(generateCompletion).mock.calls[0]![0].messages[1]!.content).items.map((input: QuizGradingInput) => input.id)).toEqual([rows[2]!._id])
+    expect(await fixture.user.mutation(api.quizGrading.requestGradingRetry, { attemptId })).toEqual({ retried: 0 })
+    await fixture.user.mutation(api.quizGrading.selfAssess, { attemptAnswerId: rows[0]!.attemptAnswerId, verdict: 'partial' })
+    expect((await assessments(fixture, attemptId))[0]).toMatchObject({ gradeSource: 'self', credit: 0.5 })
+  })
+})
+
+describe('Stage B attempt and shared cooldown', () => {
+  test.each([
+    { error: { statusCode: 429, retryAfterMs: 70_000 }, delay: 70_000 },
+    { error: { statusCode: 503 }, delay: 15_000 },
+    { error: Object.assign(new Error('timeout'), { name: 'AbortError' }), delay: 15_000 },
+  ])('delays untried rows of a 19-answer attempt and finishes after $delay ms', async ({ error, delay }) => {
+    const fixture = await createQuiz(19)
+    const attemptId = await finish(fixture)
+    vi.mocked(generateCompletion).mockRejectedValueOnce(error)
+    await runGrade(fixture, attemptId)
+    expect(generateCompletion).toHaveBeenCalledTimes(1)
+    expect((await assessments(fixture, attemptId)).filter(row => row.attemptCount === 0)).toHaveLength(11)
+    for (let duplicate = 0; duplicate < 3; duplicate++) await runGrade(fixture, attemptId)
+    const wakeups = (await scheduled(fixture)).filter(job => job.name === 'quizGrading:gradeAttempt' && job.state.kind === 'pending' && job.scheduledTime === NOW + delay)
+    expect(wakeups).toHaveLength(1)
+    vi.setSystemTime(NOW + delay - 1)
+    await runGrade(fixture, attemptId)
+    expect(generateCompletion).toHaveBeenCalledTimes(1)
+    vi.setSystemTime(NOW + delay)
+    await runGrade(fixture, attemptId)
+    expect(generateCompletion).toHaveBeenCalledTimes(2)
+    await drain(fixture)
+    expect(generateCompletion).toHaveBeenCalledTimes(4)
+    expect((await assessments(fixture, attemptId)).every(row => row.status === 'available' && (row.attemptCount ?? 0) <= 2)).toBe(true)
+  })
+
+  test('429 cooldown cannot be bypassed by a different attempt or learner', async () => {
+    const fixture = await createQuiz()
+    const other = await anotherLearner(fixture)
+    const attemptId = await finish(fixture)
+    const otherAttempt = await finish(other)
+    vi.mocked(generateCompletion).mockRejectedValueOnce({ statusCode: 429, retryAfterMs: 86_400_000 })
+    await runGrade(fixture, attemptId)
+    await runGrade(other, otherAttempt)
+    expect(generateCompletion).toHaveBeenCalledTimes(1)
+    expect((await assessments(other, otherAttempt))[0]!.attemptCount).toBe(0)
+    vi.setSystemTime(NOW + 899_999)
+    await runGrade(other, otherAttempt)
+    expect(generateCompletion).toHaveBeenCalledTimes(1)
+    vi.setSystemTime(NOW + 900_000)
+    await runGrade(other, otherAttempt)
+    expect(generateCompletion).toHaveBeenCalledTimes(2)
+    await drain(fixture)
+    expect((await assessments(other, otherAttempt))[0]!.status).toBe('available')
+    expect((await assessments(fixture, attemptId))[0]!.status).toBe('available')
+    const global = (await gradingCounters(fixture)).find(row => row.route === 'quiz-grading/cooldown')!
+    expect(global.userId).toBe('')
+    expect(JSON.stringify(global)).not.toContain(USER.tokenIdentifier)
+  })
+
+  test.each([429, 503, 408])('persistent %s settles every row within retry and dispatch bounds', async (statusCode) => {
+    const fixture = await createQuiz(9)
+    const attemptId = await finish(fixture)
+    vi.mocked(generateCompletion).mockRejectedValue({ statusCode })
+    await drain(fixture)
+    expect(generateCompletion).toHaveBeenCalledTimes(6)
+    const rows = await assessments(fixture, attemptId)
+    expect(rows.every(row => row.status === 'unavailable' && row.attemptCount === 3 && row.label === undefined)).toBe(true)
+    expect((await fixture.t.run(ctx => ctx.db.get(attemptId)))!.gradingStatus).toBe('settled')
+  })
+})
+
+describe('Stage B transactional model admission and dispatch budgets', () => {
+  test('authenticates and owns admission, admits only three new model attempts per minute', async () => {
+    const fixture = await createQuiz()
+    const counterId = await seedGradingCounter(fixture, 'admission', 2)
+    const args = { quizId: fixture.quizId, answers: [{ questionId: fixture.questions[0]!._id, response: 'A pair of daughter cells' }] }
+    await expect(fixture.t.mutation(api.quizzes.submitAttempt, args)).rejects.toThrow('Unauthenticated')
+    await expect(fixture.t.withIdentity(OTHER).mutation(api.quizzes.submitAttempt, args)).rejects.toThrow('Quiz not found')
+    expect((await fixture.t.run(ctx => ctx.db.get(counterId)))!.count).toBe(2)
+    const attempts = await Promise.all([finish(fixture, undefined, 'submitAttempt'), finish(fixture, undefined, 'submitAttempt')])
+    const rows = (await Promise.all(attempts.map(attempt => assessments(fixture, attempt)))).flat()
+    expect(rows.filter(row => row.status === 'pending')).toHaveLength(1)
+    const refused = rows.find(row => row.status === 'unavailable')!
+    expect(refused).toMatchObject({ unavailableReason: 'over_budget', attemptCount: 0 })
+    expect(refused).not.toHaveProperty('label')
+    expect((await fixture.t.run(ctx => ctx.db.get(counterId)))!.count).toBe(3)
+    expect(await fixture.user.mutation(api.quizGrading.requestGradingRetry, { attemptId: refused.attemptId })).toEqual({ retried: 0 })
+    expect((await fixture.t.run(ctx => ctx.db.get(refused._id)))!.manualRetryCount).toBeUndefined()
+    vi.setSystemTime(NOW + 60_000)
+    expect(await fixture.user.mutation(api.quizGrading.requestGradingRetry, { attemptId: refused.attemptId })).toEqual({ retried: 1 })
+    await drain(fixture)
+    expect((await fixture.t.run(ctx => ctx.db.get(counterId)))!.count).toBe(1)
+    expect((await fixture.t.run(ctx => ctx.db.get(refused._id)))!.manualRetryCount).toBeUndefined()
+    expect(generateCompletion).toHaveBeenCalledTimes(2)
+  })
+
+  test('per-user daily dispatch is shared by concurrent attempts and resets at UTC midnight', async () => {
+    const fixture = await createQuiz()
+    const learnerId = await seedGradingCounter(fixture, 'dispatch-user', 24)
+    const sharedId = await seedGradingCounter(fixture, 'dispatch-shared', 48)
+    const attempts = await Promise.all([finish(fixture, undefined, 'submitAttempt'), finish(fixture, undefined, 'submitAttempt')])
+    await Promise.all(attempts.map(attempt => runGrade(fixture, attempt)))
+    expect(generateCompletion).toHaveBeenCalledTimes(1)
+    expect((await fixture.t.run(ctx => ctx.db.get(learnerId)))!.count).toBe(25)
+    expect((await fixture.t.run(ctx => ctx.db.get(sharedId)))!.count).toBe(49)
+    const rows = (await Promise.all(attempts.map(attempt => assessments(fixture, attempt)))).flat()
+    const refused = rows.find(row => row.status === 'unavailable')!
+    expect(refused).toMatchObject({ unavailableReason: 'over_budget', attemptCount: 0 })
+    for (let retry = 0; retry < 2; retry++) expect(await fixture.user.mutation(api.quizGrading.requestGradingRetry, { attemptId: refused.attemptId })).toEqual({ retried: 0 })
+    expect((await fixture.t.run(ctx => ctx.db.get(refused._id)))!.manualRetryCount).toBeUndefined()
+    vi.setSystemTime(86_399_999)
+    expect(await fixture.user.mutation(api.quizGrading.requestGradingRetry, { attemptId: refused.attemptId })).toEqual({ retried: 0 })
+    vi.setSystemTime(86_400_000)
+    expect(await fixture.user.mutation(api.quizGrading.requestGradingRetry, { attemptId: refused.attemptId })).toEqual({ retried: 1 })
+    await drain(fixture)
+    expect(generateCompletion).toHaveBeenCalledTimes(2)
+    expect((await fixture.t.run(ctx => ctx.db.get(learnerId)))!).toMatchObject({ count: 1, windowStartedAt: 86_400_000, expiresAt: 172_800_000 })
+    expect((await fixture.t.run(ctx => ctx.db.get(sharedId)))!.count).toBe(1)
+    expect((await fixture.t.run(ctx => ctx.db.get(refused._id)))!).toMatchObject({ status: 'available', attemptCount: 1 })
+  })
+
+  test('the fiftieth shared dispatch is atomic across learners and refused work can be self-assessed', async () => {
+    const fixture = await createQuiz()
+    const other = await anotherLearner(fixture)
+    const sharedId = await seedGradingCounter(fixture, 'dispatch-shared', 49)
+    const attemptId = await finish(fixture)
+    const otherAttempt = await finish(other)
+    await Promise.all([runGrade(fixture, attemptId), runGrade(other, otherAttempt)])
+    expect(generateCompletion).toHaveBeenCalledTimes(1)
+    const global = (await fixture.t.run(ctx => ctx.db.get(sharedId)))!
+    expect(global).toMatchObject({ count: 50, userId: '', expiresAt: 86_400_000 })
+    expect(JSON.stringify(global)).not.toMatch(/quiz_grading_job|https:|learner|daughter/)
+    const refusedFixture = (await assessments(fixture, attemptId))[0]!.status === 'unavailable' ? fixture : other
+    const refusedAttempt = refusedFixture === fixture ? attemptId : otherAttempt
+    const [refused] = await assessments(refusedFixture, refusedAttempt)
+    expect(await refusedFixture.user.mutation(api.quizGrading.requestGradingRetry, { attemptId: refusedAttempt })).toEqual({ retried: 0 })
+    await refusedFixture.user.mutation(api.quizGrading.selfAssess, { attemptAnswerId: refused!.attemptAnswerId, verdict: 'correct' })
+    expect((await assessments(refusedFixture, refusedAttempt))[0]).toMatchObject({ gradeSource: 'self', credit: 1 })
+    expect((await fixture.t.run(ctx => ctx.db.get(sharedId)))!.count).toBe(50)
+  })
+
+  test('duplicate dispatch reservations and stale deliveries never double charge', async () => {
+    const fixture = await createQuiz()
+    const attemptId = await finish(fixture)
+    const claim = (await fixture.t.mutation(internal.quizGrading.gradeAttempt, { attemptId }))!
+    const inputs = await fixture.t.mutation(internal.quizGrading.markDispatched, { attemptId, ...claim })
+    expect(inputs).toHaveLength(1)
+    const before = await gradingCounters(fixture)
+    expect(await fixture.t.mutation(internal.quizGrading.markDispatched, { attemptId, ...claim })).toBeNull()
+    await fixture.t.action(internal.quizGrading.dispatchBatch, { attemptId, ...claim })
+    await fixture.t.action(internal.quizGrading.dispatchBatch, { attemptId, ...claim, claimId: 'stale' })
+    expect(await gradingCounters(fixture)).toEqual(before)
+    expect(generateCompletion).not.toHaveBeenCalled()
+  })
+
+  test('a budget race does not burn a queued manual retry cycle', async () => {
+    const fixture = await createQuiz()
+    const attemptId = await finish(fixture)
+    vi.mocked(generateCompletion).mockRejectedValueOnce({ statusCode: 400, aiGatewayFailureKind: 'definitive_failure' })
+    await runGrade(fixture, attemptId)
+    expect(await fixture.user.mutation(api.quizGrading.requestGradingRetry, { attemptId })).toEqual({ retried: 1 })
+    const bucket = (await gradingCounters(fixture)).find(row => row.route === 'quiz-grading/dispatch-shared')!
+    await fixture.t.run(ctx => ctx.db.patch(bucket._id, { count: 50 }))
+    await runGrade(fixture, attemptId)
+    const [refused] = await assessments(fixture, attemptId)
+    expect(refused).toMatchObject({ status: 'unavailable', unavailableReason: 'over_budget', manualRetryPending: true, attemptCount: 0 })
+    expect(refused!.manualRetryCount).toBeUndefined()
+    expect(await fixture.user.mutation(api.quizGrading.requestGradingRetry, { attemptId })).toEqual({ retried: 0 })
+    vi.setSystemTime(86_400_000)
+    expect(await fixture.user.mutation(api.quizGrading.requestGradingRetry, { attemptId })).toEqual({ retried: 1 })
+    await drain(fixture)
+    expect((await assessments(fixture, attemptId))[0]).toMatchObject({ status: 'available', manualRetryCount: 1 })
+    expect(generateCompletion).toHaveBeenCalledTimes(2)
+  })
+
+  test.each(['off', 'graded'])('legacy/deterministic-only attempts bypass all model budgets (%s)', async (mode) => {
+    const fixture = await createQuiz()
+    await seedGradingCounter(fixture, 'admission', 3)
+    await seedGradingCounter(fixture, 'dispatch-user', 25)
+    await seedGradingCounter(fixture, 'dispatch-shared', 50)
+    const before = await gradingCounters(fixture)
+    vi.stubEnv('QUIZ_GRADING_MODE', mode)
+    const attemptId = await finish(fixture, [mode === 'graded' ? 'Two identical daughter cells' : 'A pair of daughter cells'])
+    await drain(fixture)
+    expect(await gradingCounters(fixture)).toEqual(before)
+    expect(generateCompletion).not.toHaveBeenCalled()
+    expect((await fixture.t.run(ctx => ctx.db.get(attemptId)))!.gradingAdmittedAt).toBeUndefined()
+  })
+
+  test('account deletion purges trusted learner counters while shared counters survive until cleanup', async () => {
+    const fixture = await createQuiz()
+    const ownId = await seedGradingCounter(fixture, 'dispatch-user', 25)
+    const otherId = await seedGradingCounter(fixture, 'dispatch-user', 10, OTHER.tokenIdentifier)
+    const globalId = await seedGradingCounter(fixture, 'dispatch-shared', 50)
+    await fixture.t.run(ctx => ctx.db.insert('accountDeletionJobs', {
+      userId: USER.tokenIdentifier, status: 'active', phase: 'rateLimitBuckets', startedAt: NOW, updatedAt: NOW,
+    }))
+    await fixture.t.mutation(internal.accountDeletion.runDeletionBatch, { userId: USER.tokenIdentifier })
+    expect(await fixture.t.run(ctx => ctx.db.get(ownId))).toBeNull()
+    expect(await fixture.t.run(ctx => ctx.db.get(otherId))).not.toBeNull()
+    expect(await fixture.t.run(ctx => ctx.db.get(globalId))).not.toBeNull()
+    vi.setSystemTime(86_400_001)
+    expect(await fixture.t.mutation(internal.rateLimits.cleanupExpired, {})).toEqual({ deleted: 2 })
+    expect(await gradingCounters(fixture)).toEqual([])
+    await expect(finish(fixture, undefined, 'submitAttempt')).rejects.toThrow('Account deletion is in progress')
+  })
+})
+
+describe('Stage B folder ownership and deletion phases', () => {
+  test.each(['off', 'graded'])('real folder deletion between reservation and dispatch rejects external work (%s)', async (mode) => {
+    const fixture = await createQuiz()
+    const attemptId = await finish(fixture)
+    const claim = (await fixture.t.mutation(internal.quizGrading.gradeAttempt, { attemptId }))!
+    const quiz = (await fixture.t.run(ctx => ctx.db.get(fixture.quizId)))!
+    await fixture.user.mutation(api.folders.deleteFolder, { id: quiz.folderId })
+    vi.stubEnv('QUIZ_GRADING_MODE', mode)
+    const before = await gradingSnapshot(fixture, attemptId)
+    await fixture.t.action(internal.quizGrading.dispatchBatch, { attemptId, ...claim })
+    await drain(fixture)
+    expect(generateCompletion).not.toHaveBeenCalled()
+    expect(await gradingSnapshot(fixture, attemptId)).toEqual(before)
+    expect((await gradingCounters(fixture)).filter(row => row.route.includes('dispatch'))).toEqual([])
+    await expect(fixture.user.mutation(api.quizGrading.requestGradingRetry, { attemptId })).rejects.toThrow('Attempt not found')
+    await expect(fixture.user.mutation(api.quizGrading.selfAssess, { attemptAnswerId: before.rows[0]!.attemptAnswerId, verdict: 'correct' })).rejects.toThrow('Attempt not found')
+  })
+
+  test('real folder deletion in flight fences the score and stored grade', async () => {
+    const fixture = await createQuiz()
+    const attemptId = await finish(fixture)
+    let release!: () => void
+    let entered!: () => void
+    const dispatched = new Promise<void>((resolve) => { entered = resolve })
+    vi.mocked(generateCompletion).mockImplementation(params => new Promise((resolve) => {
+      release = () => resolve(completion(params, ['met', 'met']))
+      entered()
+    }))
+    const grading = runGrade(fixture, attemptId)
+    await dispatched
+    const quiz = (await fixture.t.run(ctx => ctx.db.get(fixture.quizId)))!
+    const before = await gradingSnapshot(fixture, attemptId)
+    try {
+      await fixture.user.mutation(api.folders.deleteFolder, { id: quiz.folderId })
+      release()
+      await grading
+      expect(await gradingSnapshot(fixture, attemptId)).toEqual(before)
+      expect(generateCompletion).toHaveBeenCalledTimes(1)
+    }
+    finally { release(); await grading }
+  })
+
+  test.each(['off', 'graded'])('stored rubric rows fail closed on acceptance after folder loss (%s)', async (mode) => {
+    const fixture = await createQuiz()
+    const { attemptId } = await fixture.user.mutation(api.quizzes.startAttempt, { quizId: fixture.quizId, settings })
+    await fixture.user.mutation(api.quizzes.submitAnswer, { attemptId, questionId: fixture.questions[0]!._id, userAnswer: 'A pair of daughter cells' })
+    const quiz = (await fixture.t.run(ctx => ctx.db.get(fixture.quizId)))!
+    await fixture.user.mutation(api.folders.deleteFolder, { id: quiz.folderId })
+    vi.stubEnv('QUIZ_GRADING_MODE', mode)
+    const before = await gradingSnapshot(fixture, attemptId)
+    await expect(fixture.user.mutation(api.quizzes.completeAttempt, { attemptId })).rejects.toThrow(/unavailable/)
+    await expect(fixture.user.mutation(api.quizzes.submitAllAnswers, { attemptId, answers: [] })).rejects.toThrow(/unavailable/)
+    await expect(fixture.user.mutation(api.quizzes.submitAnswer, { attemptId, questionId: fixture.questions[0]!._id, userAnswer: 'Changed' })).rejects.toThrow(/unavailable/)
+    expect(await gradingSnapshot(fixture, attemptId)).toEqual(before)
+  })
+
+  test('foreign folder ownership rejects both claim and enabled acceptance', async () => {
+    const fixture = await createQuiz()
+    const attemptId = await finish(fixture)
+    const quiz = (await fixture.t.run(ctx => ctx.db.get(fixture.quizId)))!
+    await fixture.t.run(ctx => ctx.db.patch(quiz.folderId, { userId: OTHER.tokenIdentifier }))
+    expect(await fixture.t.mutation(internal.quizGrading.gradeAttempt, { attemptId })).toBeNull()
+    await expect(fixture.user.mutation(api.quizzes.submitAttempt, { quizId: fixture.quizId, answers: [] })).rejects.toThrow(/unavailable/)
+  })
+
+  test('legacy flag-off acceptance retains its behavior on an orphaned folder', async () => {
+    vi.stubEnv('QUIZ_GRADING_MODE', 'off')
+    const fixture = await createQuiz()
+    const quiz = (await fixture.t.run(ctx => ctx.db.get(fixture.quizId)))!
+    await fixture.user.mutation(api.folders.deleteFolder, { id: quiz.folderId })
+    const attemptId = await finish(fixture, undefined, 'submitAttempt')
+    expect((await assessments(fixture, attemptId))[0]!.rubricVersion).toBe('quiz.free_response_assessment.v1')
+    expect(await gradingCounters(fixture)).toEqual([])
+  })
+})
+
+test('a normal 200-answer model attempt fits exactly 25 daily dispatch reservations', async () => {
+  const fixture = await createQuiz(200)
+  const attemptId = await finish(fixture)
+  await drain(fixture)
+  expect(generateCompletion).toHaveBeenCalledTimes(25)
+  const rows = await assessments(fixture, attemptId)
+  expect(rows).toHaveLength(200)
+  expect(rows.every(row => row.status === 'available')).toBe(true)
+  const counters = await gradingCounters(fixture)
+  expect(counters.find(row => row.route === 'quiz-grading/dispatch-user')!.count).toBe(25)
+  expect(counters.find(row => row.route === 'quiz-grading/dispatch-shared')!.count).toBe(25)
 })

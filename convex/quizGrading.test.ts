@@ -185,7 +185,7 @@ describe('rubric assessment creation and completion', () => {
     for (const submission of submissions.values()) expectNoRubricData(submission)
     if (bulk) expectNoRubricData(bulk)
     expect(await t.run(ctx => ctx.db.system.query('_scheduled_functions').collect())).toMatchObject([
-      { name: 'quizGrading:gradeAttempt', args: [{ attemptId }] },
+      { name: 'quizGrading:gradeAttempt', args: [{ attemptId, scheduledFor: NOW }] },
     ])
   })
 

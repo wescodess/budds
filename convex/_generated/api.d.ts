@@ -89,6 +89,7 @@ import type * as lib_learnV2SourceSanitization from "../lib/learnV2SourceSanitiz
 import type * as lib_masteryStateMachine from "../lib/masteryStateMachine.js";
 import type * as lib_quizAnswerAssessment from "../lib/quizAnswerAssessment.js";
 import type * as lib_quizGrading from "../lib/quizGrading.js";
+import type * as lib_quizGradingLimits from "../lib/quizGradingLimits.js";
 import type * as lib_sm2 from "../lib/sm2.js";
 import type * as lib_streak from "../lib/streak.js";
 import type * as messages from "../messages.js";
@@ -190,6 +191,7 @@ declare const fullApi: ApiFromModules<{
   "lib/masteryStateMachine": typeof lib_masteryStateMachine;
   "lib/quizAnswerAssessment": typeof lib_quizAnswerAssessment;
   "lib/quizGrading": typeof lib_quizGrading;
+  "lib/quizGradingLimits": typeof lib_quizGradingLimits;
   "lib/sm2": typeof lib_sm2;
   "lib/streak": typeof lib_streak;
   messages: typeof messages;

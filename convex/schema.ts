@@ -303,6 +303,9 @@ export default defineSchema({
     gradingStatus: v.optional(v.union(v.literal('grading'), v.literal('settled'))),
     gradingNeedsAttention: v.optional(v.boolean()),
     gradingQuestionIds: v.optional(v.array(v.id('quizQuestions'))),
+    gradingAdmittedAt: v.optional(v.number()),
+    gradingNotBefore: v.optional(v.number()),
+    gradingWakeAt: v.optional(v.number()),
     settingsSnapshot: v.optional(v.object({
       shuffleQuestions: v.boolean(),
       showAllQuestions: v.boolean(),
@@ -345,6 +348,7 @@ export default defineSchema({
     dispatchedAt: v.optional(v.number()),
     attemptCount: v.optional(v.number()),
     manualRetryCount: v.optional(v.number()),
+    manualRetryPending: v.optional(v.boolean()),
     nextAttemptAt: v.optional(v.number()),
     status: v.union(v.literal('pending'), v.literal('available'), v.literal('unavailable')),
     questionSnapshot: v.object({

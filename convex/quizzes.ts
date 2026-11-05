@@ -48,7 +48,6 @@ async function requireQuiz(ctx: QueryCtx | MutationCtx, quizId: Id<'quizzes'>, u
 
 async function requireQuizForSubmission(ctx: MutationCtx, quizId: Id<'quizzes'>, userId: string, attemptId?: Id<'quizAttempts'>) {
   const quiz = await requireQuiz(ctx, quizId, userId)
-  if (quiz.courseScoped !== true && quiz.courseId === undefined) return quiz
   const gradingEnabled = isQuizGradingEnabled()
   // Stored rubric work keeps its parent fence when new grading is switched off.
   const storedRubric = !gradingEnabled && attemptId
