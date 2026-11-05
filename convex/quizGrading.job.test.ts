@@ -130,6 +130,309 @@ async function expectHistoryGrade(fixture: Fixture, attemptId: Id<'quizAttempts'
   expect(history.find(attempt => attempt._id === attemptId)).toMatchObject(expected)
 }
 
+async function createCourseQuiz() {
+  const t = convexTest(schema, modules)
+  const user = t.withIdentity(USER)
+  const folderId = await user.mutation(api.folders.createFolder, { name: 'Course biology' })
+  const { courseId } = await user.mutation(api.courses.create, { title: 'Cell division', sourceType: 'web-only', folderId })
+  await user.mutation(api.courses.finalizeOutline, {
+    courseId, outlineSections: [{ title: 'Mitosis', description: 'Cell division', knowledgeType: 'factual', order: 0 }],
+    sourceConfidence: { docCount: 0, webPercent: 100 }, totalSectionCount: 1,
+  })
+  const [section] = await user.query(api.courseSections.listByCourse, { courseId })
+  await user.mutation(api.courseSections.finalizeSectionGeneration, {
+    sectionId: section!._id,
+    quizData: { title: 'Mitosis quiz', questions: [{
+      order: 0, question: 'What does mitosis produce?', type: 'free-response', correctAnswer: 'Two identical daughter cells',
+      sourceChunkContent: 'Mitosis produces two genetically identical daughter cells.',
+    }] },
+  })
+  const quizId = (await t.run(async (ctx) => {
+    const generated = await ctx.db.get(section!._id)
+    return ctx.db.normalizeId('quizzes', generated!.contentBlocks.find(block => block.type === 'quiz')!.entityId!)
+  }))!
+  const questions = (await user.query(api.quizzes.getWithQuestions, { id: quizId }))!.questions
+  await t.run(ctx => ctx.db.patch(questions[0]!._id, { gradingCriteria: criteria }))
+  expect(await t.run(ctx => ctx.db.get(quizId))).toMatchObject({ courseId, courseScoped: true, userId: USER.tokenIdentifier })
+  return { t, user, quizId, questions, folderId, courseId, sectionId: section!._id }
+}
+type CourseFixture = Awaited<ReturnType<typeof createCourseQuiz>>
+
+async function startCourseDeletion(fixture: CourseFixture) {
+  await fixture.t.run(async (ctx) => {
+    const calendarConnectionId = await ctx.db.insert('calendarConnections', {
+      userId: USER.tokenIdentifier, provider: 'google', accessToken: 'unused-test-token', refreshToken: 'unused-test-token',
+      expiresAt: NOW, timezone: 'UTC', status: 'disconnected', connectedAt: NOW,
+    })
+    // Unsettled compensation holds the real deletion path before section cleanup.
+    await ctx.db.insert('calendarEventCleanupJobs', {
+      userId: USER.tokenIdentifier, courseId: fixture.courseId, calendarConnectionId, calendarEventId: 'unsettled-test-event',
+      reason: 'sync-create', status: 'pending', attempts: 0, nextAttemptAt: NOW + 900_000, createdAt: NOW, updatedAt: NOW,
+    })
+  })
+  expect(await fixture.user.action(api.courses.deleteCourse, { id: fixture.courseId })).toEqual({ deleted: false, pending: true })
+  const job = (await fixture.t.run(ctx => ctx.db.query('courseDeletionJobs')
+    .withIndex('by_courseId', q => q.eq('courseId', fixture.courseId)).unique()))!
+  expect(job).toMatchObject({ phase: 'settleCalendarCleanup', nextAttemptAt: Date.now() + 30_000 })
+  expect(await fixture.t.run(ctx => ctx.db.get(fixture.courseId))).toMatchObject({ status: 'deleting' })
+  expect(await fixture.t.run(ctx => ctx.db.get(fixture.quizId))).not.toBeNull()
+  return job._id
+}
+
+async function invalidateCourseParent(fixture: CourseFixture, kind: 'unlinked' | 'missing' | 'foreign' | 'deleting') {
+  if (kind === 'deleting') await startCourseDeletion(fixture)
+  else await fixture.t.run(async (ctx) => {
+    if (kind === 'unlinked') await ctx.db.patch(fixture.quizId, { courseId: undefined })
+    if (kind === 'missing') await ctx.db.delete(fixture.courseId)
+    if (kind === 'foreign') await ctx.db.patch(fixture.courseId, { userId: OTHER.tokenIdentifier })
+  })
+}
+
+async function gradingSnapshot(fixture: Fixture, attemptId: Id<'quizAttempts'>) {
+  return await fixture.t.run(async ctx => ({
+    quiz: await ctx.db.get(fixture.quizId), attempt: await ctx.db.get(attemptId),
+    answers: await ctx.db.query('attemptAnswers').withIndex('by_attemptId', q => q.eq('attemptId', attemptId)).take(201),
+    rows: await ctx.db.query('quizAnswerAssessments').withIndex('by_attemptId', q => q.eq('attemptId', attemptId)).take(201),
+  }))
+}
+
+describe('course parent grading fence', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Unexpected fetch in offline course grading test')))
+  })
+  afterEach(() => {
+    const fetchCalls = vi.mocked(fetch).mock.calls.length
+    vi.unstubAllGlobals()
+    expect(fetchCalls).toBe(0)
+  })
+
+  test.each(['completeAttempt', 'submitAllAnswers', 'submitAttempt'] as const)('%s grades a linked active course quiz, including after the flag is disabled', async (path) => {
+    const fixture = await createCourseQuiz()
+    const attemptId = await finish(fixture, undefined, path)
+    vi.stubEnv('QUIZ_GRADING_MODE', 'off')
+    await drain(fixture)
+    expect(generateCompletion).toHaveBeenCalledTimes(1)
+    expect((await assessments(fixture, attemptId))[0]).toMatchObject({ status: 'available', credit: 0.4, gradeSource: 'model' })
+    expect(await fixture.t.run(ctx => ctx.db.get(attemptId))).toMatchObject({ score: 0.4, total: 1, gradingStatus: 'settled' })
+    expect(await fixture.t.run(ctx => ctx.db.get(fixture.quizId))).toMatchObject({ score: 40 })
+  })
+
+  test.each(['completeAttempt', 'submitAllAnswers'] as const)('%s still accepts linked rubric work after the flag changes', async (path) => {
+    const fixture = await createCourseQuiz()
+    const { attemptId } = await fixture.user.mutation(api.quizzes.startAttempt, { quizId: fixture.quizId, settings })
+    await fixture.user.mutation(api.quizzes.submitAnswer, {
+      attemptId, questionId: fixture.questions[0]!._id, userAnswer: 'A pair of daughter cells',
+    })
+    vi.stubEnv('QUIZ_GRADING_MODE', 'off')
+    if (path === 'completeAttempt') await fixture.user.mutation(api.quizzes.completeAttempt, { attemptId })
+    else await fixture.user.mutation(api.quizzes.submitAllAnswers, { attemptId, answers: [] })
+    await drain(fixture)
+    expect(generateCompletion).toHaveBeenCalledTimes(1)
+    expect(await fixture.t.run(ctx => ctx.db.get(attemptId))).toMatchObject({ score: 0.4, gradingStatus: 'settled' })
+    expect(await fixture.t.run(ctx => ctx.db.get(fixture.quizId))).toMatchObject({ score: 40 })
+  })
+
+  test.each(['off', 'graded'])('queued grading dispatches nothing while deletion remains in calendar cleanup (%s)', async (mode) => {
+    const fixture = await createCourseQuiz()
+    const attemptId = await finish(fixture)
+    const before = await gradingSnapshot(fixture, attemptId)
+    const jobId = await startCourseDeletion(fixture)
+    vi.stubEnv('QUIZ_GRADING_MODE', mode)
+    await vi.advanceTimersByTimeAsync(0)
+    await fixture.t.finishInProgressScheduledFunctions()
+    expect(generateCompletion).not.toHaveBeenCalled()
+    expect((await scheduled(fixture)).find(job => job.name === 'quizGrading:gradeAttempt')).toMatchObject({ state: { kind: 'success' } })
+    expect(await fixture.t.run(ctx => ctx.db.get(jobId))).toMatchObject({ phase: 'settleCalendarCleanup' })
+    expect(await gradingSnapshot(fixture, attemptId)).toEqual(before)
+  })
+
+  test.each(['unlinked', 'missing', 'foreign'] as const)('queued grading cannot claim work with a %s parent', async (kind) => {
+    const fixture = await createCourseQuiz()
+    const attemptId = await finish(fixture)
+    await invalidateCourseParent(fixture, kind)
+    const before = await gradingSnapshot(fixture, attemptId)
+    await vi.advanceTimersByTimeAsync(0)
+    await fixture.t.finishInProgressScheduledFunctions()
+    expect((await scheduled(fixture)).find(job => job.name === 'quizGrading:gradeAttempt')).toMatchObject({ state: { kind: 'success' } })
+    expect(generateCompletion).not.toHaveBeenCalled()
+    expect(await gradingSnapshot(fixture, attemptId)).toEqual(before)
+  })
+
+  test.each(['unlinked', 'missing', 'foreign', 'deleting'] as const)('a %s parent between claim and dispatch rejects the reservation without changing grades', async (kind) => {
+    const fixture = await createCourseQuiz()
+    const attemptId = await finish(fixture)
+    const claim = (await fixture.t.mutation(internal.quizGrading.claimBatch, { attemptId }))!
+    const items = claim.items.map(item => ({ assessmentId: item.input.id as Id<'quizAnswerAssessments'>, inputDigest: item.inputDigest }))
+    await invalidateCourseParent(fixture, kind)
+    const before = await gradingSnapshot(fixture, attemptId)
+    expect(await fixture.t.mutation(internal.quizGrading.markDispatched, { attemptId, claimId: claim.claimId, items })).toBe(false)
+    await fixture.t.action(internal.quizGrading.gradeAttempt, { attemptId })
+    expect(generateCompletion).not.toHaveBeenCalled()
+    expect(await gradingSnapshot(fixture, attemptId)).toEqual(before)
+  })
+
+  test('deletion after dispatch makes the in-flight result a no-op for the assessment, answer and scores', async () => {
+    const fixture = await createCourseQuiz()
+    const attemptId = await finish(fixture)
+    let release!: () => void
+    let entered!: () => void
+    const dispatched = new Promise<void>((resolve) => { entered = resolve })
+    vi.mocked(generateCompletion).mockImplementation(params => new Promise((resolve) => {
+      release = () => resolve(completion(params, ['met', 'met']))
+      entered()
+    }))
+    const grading = fixture.t.action(internal.quizGrading.gradeAttempt, { attemptId })
+    await dispatched
+    try {
+      const before = await gradingSnapshot(fixture, attemptId)
+      expect(before.rows[0]).toMatchObject({ status: 'pending', dispatchedAt: NOW })
+      expect(before.answers[0]).toMatchObject({ isCorrect: false })
+      expect(before.attempt).toMatchObject({ score: 0 })
+      expect(before.quiz).toMatchObject({ score: 0 })
+      await startCourseDeletion(fixture)
+      vi.stubEnv('QUIZ_GRADING_MODE', 'off')
+      release()
+      await grading
+      expect(generateCompletion).toHaveBeenCalledTimes(1)
+      expect(await gradingSnapshot(fixture, attemptId)).toEqual(before)
+    }
+    finally {
+      release()
+      await grading
+      await fixture.t.finishInProgressScheduledFunctions()
+    }
+  })
+
+  test.each(['unlinked', 'missing', 'foreign', 'deleting'] as const)('%s parents fence claims, late commits, failures and expired lease recovery', async (kind) => {
+    const fixture = await createCourseQuiz()
+    const attemptId = await finish(fixture)
+    const { args, items } = await reserve(fixture, attemptId)
+    await invalidateCourseParent(fixture, kind)
+    vi.stubEnv('QUIZ_GRADING_MODE', 'off')
+    const before = await gradingSnapshot(fixture, attemptId)
+    expect(await fixture.t.mutation(internal.quizGrading.claimBatch, { attemptId })).toBeNull()
+    expect(await fixture.t.mutation(internal.quizGrading.commitBatch, args)).toBe(0)
+    expect(await fixture.t.mutation(internal.quizGrading.failBatch, {
+      attemptId, claimId: args.claimId, items, reason: 'timeout', retryable: true,
+    })).toBe(0)
+    vi.setSystemTime(NOW + 120_001)
+    expect(await fixture.t.mutation(internal.quizGrading.recoverBatch, {
+      attemptId, claimId: args.claimId, assessmentIds: items.map(item => item.assessmentId),
+    })).toBe(0)
+    await fixture.t.action(internal.quizGrading.gradeAttempt, { attemptId })
+    expect(generateCompletion).not.toHaveBeenCalled()
+    expect(await gradingSnapshot(fixture, attemptId)).toEqual(before)
+  })
+
+  test.each(['unlinked', 'missing', 'foreign', 'deleting'] as const)('%s parents reject self-assessment and manual retries after the flag changes', async (kind) => {
+    const fixture = await createCourseQuiz()
+    const attemptId = await finish(fixture)
+    const { args, items } = await reserve(fixture, attemptId)
+    expect(await fixture.t.mutation(internal.quizGrading.failBatch, {
+      attemptId, claimId: args.claimId, items, reason: 'unavailable', retryable: false,
+    })).toBe(1)
+    await invalidateCourseParent(fixture, kind)
+    vi.stubEnv('QUIZ_GRADING_MODE', 'off')
+    const before = await gradingSnapshot(fixture, attemptId)
+    await expect(fixture.user.mutation(api.quizGrading.selfAssess, {
+      attemptAnswerId: before.rows[0]!.attemptAnswerId, verdict: 'correct',
+    })).rejects.toThrow('Attempt not found')
+    await expect(fixture.user.mutation(api.quizGrading.requestGradingRetry, { attemptId })).rejects.toThrow('Attempt not found')
+    expect(await gradingSnapshot(fixture, attemptId)).toEqual(before)
+    expect(generateCompletion).not.toHaveBeenCalled()
+  })
+
+  describe.each(['unlinked', 'missing', 'foreign', 'deleting'] as const)('%s parent submission eligibility', (kind) => {
+    test.each(['submitAnswer', 'submitAllAnswers', 'completeAttempt', 'submitAttempt'] as const)('%s rejects before writing answers, rubric rows or scores', async (path) => {
+      const fixture = await createCourseQuiz()
+      const { attemptId } = await fixture.user.mutation(api.quizzes.startAttempt, { quizId: fixture.quizId, settings })
+      await invalidateCourseParent(fixture, kind)
+      const before = await gradingSnapshot(fixture, attemptId)
+      const jobs = await scheduled(fixture)
+      const answer = { questionId: fixture.questions[0]!._id, userAnswer: 'A pair of daughter cells' }
+      const submit = () => {
+        if (path === 'submitAnswer') return fixture.user.mutation(api.quizzes.submitAnswer, { attemptId, ...answer })
+        if (path === 'submitAllAnswers') return fixture.user.mutation(api.quizzes.submitAllAnswers, { attemptId, answers: [answer] })
+        if (path === 'completeAttempt') return fixture.user.mutation(api.quizzes.completeAttempt, { attemptId })
+        return fixture.user.mutation(api.quizzes.submitAttempt, { quizId: fixture.quizId, answers: [{ questionId: answer.questionId, response: answer.userAnswer }] })
+      }
+      await expect(submit()).rejects.toThrow('Course quiz is unavailable for grading')
+      expect(await gradingSnapshot(fixture, attemptId)).toEqual(before)
+      expect(before.rows).toEqual([])
+      expect(before.answers).toEqual([])
+      expect(await fixture.t.run(ctx => ctx.db.query('quizAttempts').withIndex('by_quizId', q => q.eq('quizId', fixture.quizId)).take(2))).toEqual([before.attempt])
+      expect(await scheduled(fixture)).toEqual(jobs)
+      expect(generateCompletion).not.toHaveBeenCalled()
+    })
+  })
+
+  test.each(['submitAnswer', 'submitAllAnswers', 'completeAttempt'] as const)('%s honors stored rubric mode at acceptance after the flag changes', async (path) => {
+    const fixture = await createCourseQuiz()
+    const { attemptId } = await fixture.user.mutation(api.quizzes.startAttempt, { quizId: fixture.quizId, settings })
+    const answer = { questionId: fixture.questions[0]!._id, userAnswer: 'A pair of daughter cells' }
+    await fixture.user.mutation(api.quizzes.submitAnswer, { attemptId, ...answer })
+    await startCourseDeletion(fixture)
+    vi.stubEnv('QUIZ_GRADING_MODE', 'off')
+    const before = await gradingSnapshot(fixture, attemptId)
+    const submit = () => {
+      if (path === 'submitAnswer') return fixture.user.mutation(api.quizzes.submitAnswer, { attemptId, ...answer })
+      if (path === 'submitAllAnswers') return fixture.user.mutation(api.quizzes.submitAllAnswers, { attemptId, answers: [] })
+      return fixture.user.mutation(api.quizzes.completeAttempt, { attemptId })
+    }
+    await expect(submit()).rejects.toThrow('Course quiz is unavailable for grading')
+    expect(await gradingSnapshot(fixture, attemptId)).toEqual(before)
+    expect(generateCompletion).not.toHaveBeenCalled()
+  })
+
+  test.each(['completeAttempt', 'submitAllAnswers', 'submitAttempt'] as const)('%s preserves flag-off legacy course acceptance without a parent link', async (path) => {
+    const fixture = await createCourseQuiz()
+    await invalidateCourseParent(fixture, 'unlinked')
+    vi.stubEnv('QUIZ_GRADING_MODE', 'off')
+    const attemptId = await finish(fixture, ['Two identical daughter cells'], path)
+    expect((await assessments(fixture, attemptId))[0]).toMatchObject({ rubricVersion: 'quiz.free_response_assessment.v1', status: 'pending' })
+    const result = await fixture.user.query(api.quizzes.getAttemptResults, { attemptId })
+    expect(result).toMatchObject({ score: 1, total: 1, percentage: 100 })
+    expect(result).not.toHaveProperty('grading')
+    expect(await fixture.t.run(ctx => ctx.db.get(attemptId))).not.toHaveProperty('gradingStatus')
+    expect(await fixture.t.run(ctx => ctx.db.get(fixture.quizId))).toMatchObject({ score: 100 })
+    expect(await scheduled(fixture)).toEqual([])
+    expect(generateCompletion).not.toHaveBeenCalled()
+  })
+
+  test('internal course-quiz creation validates the stored owner and folder before linking', async () => {
+    const fixture = await createCourseQuiz()
+    const input = {
+      courseId: fixture.courseId, userId: USER.tokenIdentifier, folderId: fixture.folderId, title: 'Internal course quiz',
+      questions: [{ order: 0, question: 'Name the process.', type: 'free-response' as const, correctAnswer: 'Mitosis' }],
+    }
+    const before = await fixture.t.run(ctx => ctx.db.query('quizzes').withIndex('by_folderId', q => q.eq('folderId', fixture.folderId)).take(10))
+    const otherFolder = await fixture.user.mutation(api.folders.createFolder, { name: 'Other folder' })
+    await expect(fixture.t.mutation(internal.quizzes.createCourseScopedQuiz, { ...input, userId: OTHER.tokenIdentifier })).rejects.toThrow('Course not found')
+    await expect(fixture.t.mutation(internal.quizzes.createCourseScopedQuiz, { ...input, folderId: otherFolder })).rejects.toThrow('Course not found')
+    expect(await fixture.t.run(ctx => ctx.db.query('quizzes').withIndex('by_folderId', q => q.eq('folderId', fixture.folderId)).take(10))).toEqual(before)
+    const { quizId } = await fixture.t.mutation(internal.quizzes.createCourseScopedQuiz, input)
+    expect(await fixture.t.run(ctx => ctx.db.get(quizId))).toMatchObject({
+      courseId: fixture.courseId, courseScoped: true, userId: USER.tokenIdentifier, folderId: fixture.folderId,
+    })
+    expect((await fixture.user.query(api.quizzes.getWithQuestions, { id: quizId }))?.questions[0]?.userId).toBe(USER.tokenIdentifier)
+  })
+
+  test.each(['missing', 'foreign', 'deleting'] as const)('a %s parent cannot mint course quizzes through either creation path', async (kind) => {
+    const fixture = await createCourseQuiz()
+    await invalidateCourseParent(fixture, kind)
+    const before = await fixture.t.run(ctx => ctx.db.query('quizzes').withIndex('by_folderId', q => q.eq('folderId', fixture.folderId)).take(10))
+    const questions = [{ order: 0, question: 'Name the process.', type: 'free-response' as const, correctAnswer: 'Mitosis' }]
+    await expect(fixture.user.mutation(api.courseSections.finalizeSectionGeneration, {
+      sectionId: fixture.sectionId, quizData: { title: 'Rejected quiz', questions },
+    })).rejects.toThrow('Course not found')
+    await expect(fixture.t.mutation(internal.quizzes.createCourseScopedQuiz, {
+      courseId: fixture.courseId, userId: USER.tokenIdentifier, folderId: fixture.folderId, title: 'Rejected quiz', questions,
+    })).rejects.toThrow('Course not found')
+    expect(await fixture.t.run(ctx => ctx.db.query('quizzes').withIndex('by_folderId', q => q.eq('folderId', fixture.folderId)).take(10))).toEqual(before)
+    expect(generateCompletion).not.toHaveBeenCalled()
+  })
+})
+
 describe('dispatch and scoring', () => {
   describe.each([
     ['completeAttempt', 'rubric'], ['submitAllAnswers', 'rubric'],

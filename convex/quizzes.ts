@@ -7,7 +7,7 @@ import { getOptionalAuthUserId, requireAuth } from './lib/auth'
 import { quizGradingCriterionValidator } from '../shared/quiz-grading'
 import { validatedQuestionGradingCriteria } from './lib/quizQuestionGrading'
 import { createPendingAnswerAssessment, isQuizGradingEnabled, isRubricAssessment, projectLearnerQuizQuestion, projectQuizGrade } from './lib/quizAnswerAssessment'
-import { getQuizAttemptAnswers, getQuizAttemptAssessments, getQuizGradingState, scheduleQuizGrading } from './lib/quizGrading'
+import { getQuizAttemptAnswers, getQuizAttemptAssessments, getQuizGradingState, isQuizGradingParentEligible, scheduleQuizGrading } from './lib/quizGrading'
 import { QUIZ_RUBRIC_GRADE_VERSION } from '../shared/quiz-grading'
 
 const MAX_QUIZ_QUESTIONS = 200
@@ -44,6 +44,21 @@ const settingsValidator = v.object({
 async function requireQuiz(ctx: QueryCtx | MutationCtx, quizId: Id<'quizzes'>, userId: string) {
   const quiz = await ctx.db.get(quizId)
   if (!quiz || quiz.userId !== userId || quiz.deletedAt !== undefined) throw new Error('Quiz not found')
+  return quiz
+}
+
+async function requireQuizForSubmission(ctx: MutationCtx, quizId: Id<'quizzes'>, userId: string, attemptId?: Id<'quizAttempts'>) {
+  const quiz = await requireQuiz(ctx, quizId, userId)
+  if (quiz.courseScoped !== true && quiz.courseId === undefined) return quiz
+  const gradingEnabled = isQuizGradingEnabled()
+  // Stored rubric work keeps its parent fence when new grading is switched off.
+  const storedRubric = !gradingEnabled && attemptId
+    ? await ctx.db.query('quizAnswerAssessments')
+      .withIndex('by_attemptId_and_rubricVersion_and_status', q => q.eq('attemptId', attemptId).eq('rubricVersion', QUIZ_RUBRIC_GRADE_VERSION)).first()
+    : null
+  if ((gradingEnabled || storedRubric) && !await isQuizGradingParentEligible(ctx, quiz)) {
+    throw new Error('Course quiz is unavailable for grading')
+  }
   return quiz
 }
 
@@ -229,6 +244,7 @@ export const createWithQuestions = mutation({
 
 export const createCourseScopedQuiz = internalMutation({
   args: {
+    courseId: v.id('courses'),
     userId: v.string(),
     folderId: v.id('folders'),
     title: v.string(),
@@ -238,9 +254,11 @@ export const createCourseScopedQuiz = internalMutation({
   },
   handler: async (ctx, args) => {
     if (args.questions.length > MAX_QUIZ_QUESTIONS) throw new Error(`Quiz cannot exceed ${MAX_QUIZ_QUESTIONS} questions`)
+    const course = await ctx.db.get(args.courseId)
+    if (!course || course.userId !== args.userId || course.folderId !== args.folderId || course.status === 'deleting') throw new Error('Course not found')
     const quizId = await ctx.db.insert('quizzes', {
-      userId: args.userId,
-      folderId: args.folderId,
+      userId: course.userId,
+      folderId: course.folderId,
       title: args.title.trim().slice(0, 120) || 'Section Quiz',
       status: 'ready',
       model: args.model,
@@ -248,6 +266,7 @@ export const createCourseScopedQuiz = internalMutation({
       difficulty: args.difficulty,
       questionCount: args.questions.length,
       courseScoped: true,
+      courseId: course._id,
     })
 
     for (const q of args.questions) {
@@ -259,7 +278,7 @@ export const createCourseScopedQuiz = internalMutation({
 
       await ctx.db.insert('quizQuestions', {
         quizId,
-        userId: args.userId,
+        userId: course.userId,
         order: q.order,
         question: q.question,
         type: q.type,
@@ -619,7 +638,7 @@ export const submitAnswer = mutation({
     const attempt = await ctx.db.get(args.attemptId)
     if (!attempt || attempt.userId !== userId) throw new Error('Attempt not found')
     if (attempt.status !== 'in_progress') throw new Error('Attempt is not in progress')
-    await requireQuiz(ctx, attempt.quizId, userId)
+    await requireQuizForSubmission(ctx, attempt.quizId, userId, attempt._id)
 
     const question = await ctx.db.get(args.questionId)
     if (!question) throw new Error('Question not found')
@@ -692,7 +711,7 @@ export const submitAllAnswers = mutation({
     const attempt = await ctx.db.get(args.attemptId)
     if (!attempt || attempt.userId !== userId) throw new Error('Attempt not found')
     if (attempt.status !== 'in_progress') throw new Error('Attempt is not in progress')
-    await requireQuiz(ctx, attempt.quizId, userId)
+    await requireQuizForSubmission(ctx, attempt.quizId, userId, attempt._id)
 
     const questions = await ctx.db
       .query('quizQuestions')
@@ -774,7 +793,7 @@ export const completeAttempt = mutation({
     const attempt = await ctx.db.get(args.attemptId)
     if (!attempt || attempt.userId !== userId) throw new Error('Attempt not found')
     if (attempt.status !== 'in_progress') throw new Error('Attempt is not in progress')
-    await requireQuiz(ctx, attempt.quizId, userId)
+    await requireQuizForSubmission(ctx, attempt.quizId, userId, attempt._id)
 
     const questions = await ctx.db
       .query('quizQuestions')
@@ -997,7 +1016,7 @@ export const submitAttempt = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx)
-    await requireQuiz(ctx, args.quizId, userId)
+    await requireQuizForSubmission(ctx, args.quizId, userId)
 
     const questions = await ctx.db
       .query('quizQuestions')

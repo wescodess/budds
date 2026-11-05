@@ -40,11 +40,20 @@ export async function getQuizAttemptAssessments(ctx: QueryCtx | MutationCtx, att
   return rows.filter((row): row is Doc<'quizAnswerAssessments'> => row !== null && row.attemptId === attempt._id && row.userId === attempt.userId)
 }
 
+export async function isQuizGradingParentEligible(ctx: QueryCtx | MutationCtx, quiz: Doc<'quizzes'>) {
+  if (quiz.courseScoped !== true && quiz.courseId === undefined) return true
+  // Legacy course quizzes have no bounded parent lookup and cannot accept rubric work.
+  if (!quiz.courseId) return false
+  const course = await ctx.db.get(quiz.courseId)
+  return course !== null && course.userId === quiz.userId && course.status !== 'deleting'
+}
+
 export async function getQuizGradingAttempt(ctx: MutationCtx, attemptId: Id<'quizAttempts'>) {
   const attempt = await ctx.db.get(attemptId)
   if (!attempt || attempt.status !== 'completed' || await hasAccountDeletionTombstone(ctx, attempt.userId)) return null
   const quiz = await ctx.db.get(attempt.quizId)
   if (!quiz || quiz.deletedAt !== undefined || quiz.userId !== attempt.userId) return null
+  if (!await isQuizGradingParentEligible(ctx, quiz)) return null
   return { attempt, quiz }
 }
 

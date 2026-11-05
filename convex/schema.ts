@@ -135,6 +135,7 @@ export default defineSchema({
     questionCount: v.optional(v.number()),
     latestAttemptStatus: v.optional(v.union(v.literal('in_progress'), v.literal('completed'), v.literal('abandoned'))),
     courseScoped: v.optional(v.boolean()),
+    courseId: v.optional(v.id('courses')),
     deletedAt: v.optional(v.number()),
   })
     .index('by_userId', ['userId'])
