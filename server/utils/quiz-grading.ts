@@ -106,6 +106,7 @@ function learnerFeedback(feedback: string, criterionKeys: string[]) {
 function parseResults(payload: unknown, items: QuizGradingInput[]): QuizGradingResult[] | null {
   if (!hasExactKeys(payload, ['results']) || !Array.isArray(payload.results) || payload.results.length !== items.length) return null
   const remaining = new Map(items.map(item => [item.id, item]))
+  const criterionKeys = [...new Set(items.flatMap(item => item.criteria.map(criterion => criterion.key)))]
   const results: QuizGradingResult[] = []
   for (const result of payload.results) {
     if (!hasExactKeys(result, ['id', 'criterionResults', 'feedback']) || typeof result.id !== 'string') return null
@@ -120,7 +121,7 @@ function parseResults(payload: unknown, items: QuizGradingInput[]): QuizGradingR
         || (criterion.verdict !== 'met' && criterion.verdict !== 'not_met' && criterion.verdict !== 'uncertain')) return null
       criterionResults.push({ key: criterion.key, verdict: criterion.verdict })
     }
-    results.push({ id: result.id, criterionResults, feedback: learnerFeedback(result.feedback, item.criteria.map(criterion => criterion.key)) })
+    results.push({ id: result.id, criterionResults, feedback: learnerFeedback(result.feedback, criterionKeys) })
   }
   return results
 }

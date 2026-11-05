@@ -146,6 +146,23 @@ test.each(['daughter_cells is not_met', 'reference_answer is uncertain', 'The an
   expect(await gradeQuizAnswers(input)).toEqual({ status: 'graded', results: [{ ...judged, feedback: 'Compare your answer with the reference.' }] })
 })
 
+test.each([false, true])('hides other answers\' criterion keys regardless of result order (reversed: %s)', async (reversed) => {
+  const input = ['carbon_in', 'oxygen_out', 'private_balance'].map((key, index) => ({
+    ...items[0]!, id: `answer-${index + 1}`, criteria: [{ key, description: 'The required idea', weightPercent: 100 }],
+  }))
+  const judged = [
+    { id: 'answer-1', criterionResults: [{ key: 'carbon_in', verdict: 'met' }], feedback: 'Please include oxygen_out.' },
+    { id: 'answer-2', criterionResults: [{ key: 'oxygen_out', verdict: 'not_met' }], feedback: 'You described CARBON_IN.' },
+    { id: 'answer-3', criterionResults: [{ key: 'private_balance', verdict: 'uncertain' }], feedback: 'You expressed the idea.' },
+  ]
+  const results = reversed ? [...judged].reverse() : judged
+  vi.mocked(generateCompletion).mockResolvedValue(completion({ results }))
+  expect(await gradeQuizAnswers(input)).toEqual({
+    status: 'graded',
+    results: results.map(row => ({ ...row, feedback: row.id === 'answer-3' ? row.feedback : 'Compare your answer with the reference.' })),
+  })
+})
+
 test('bounds canonical evidence by Unicode characters without truncating the learner answer', async () => {
   const learnerAnswer = 'Full answer with a quote " and a slash \\'.repeat(30)
   await gradeQuizAnswers([{ ...items[0]!, evidenceExcerpt: '🌱'.repeat(2000), learnerAnswer }])
