@@ -12,7 +12,6 @@ if (process.env.NODE_ENV === 'production' || process.env.BUDDS_E2E_MODE !== 'tru
 }
 
 export default defineNuxtConfig({
-  extends: ['../browser-layer'],
   hooks: {
     'pages:extend'(pages) {
       pages.push({

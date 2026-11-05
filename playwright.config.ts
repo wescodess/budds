@@ -17,5 +17,6 @@ export default defineConfig({
     : 'list',
   use: { baseURL: process.env.BUDDS_E2E_BASE_URL ?? 'http://127.0.0.1:3102', trace: 'retain-on-failure', screenshot: 'only-on-failure', video: 'retain-on-failure' },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
-  webServer: { command: 'pnpm e2e:stack', url: 'http://127.0.0.1:3102', timeout: 120_000, reuseExistingServer: false },
+  // Includes a complete build of the disposable application, before any test.
+  webServer: { command: 'pnpm e2e:stack', url: 'http://127.0.0.1:3102', timeout: 300_000, reuseExistingServer: false },
 })
