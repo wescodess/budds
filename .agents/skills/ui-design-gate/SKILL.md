@@ -11,14 +11,16 @@ Batch related components on one surface into one gate; do not ask for five ideas
 
 ## Model routing
 
-All UI/UX work runs on Opus 5.5: ideas, iteration, implementation, browser comparison, and UI fixes. Use `delegate_task` with provider `claudeAgent`, model `claude-opus-5-5`, and `target.options.effort` chosen for complexity. Other work can go to Sol 6.1: provider `codex`, model `gpt-6.1-sol`, and `target.options.reasoningEffort` chosen for complexity.
+All UI/UX work runs on Opus 5.5: design-system creation, ideas, iteration, implementation, browser comparison, and UI fixes. Use `delegate_task` with provider `claudeAgent`, model `claude-opus-5-5`, and `target.options.effort` chosen for complexity. Other work can go to Sol 6.1: provider `codex`, model `gpt-6.1-sol`, and `target.options.reasoningEffort` chosen for complexity.
 
 If the current agent is not Opus 5.5 and reaches UI work, stop that work and hand it back to the orchestrator for routing. If the required model is unavailable, report that blocker; do not substitute another model. Only the orchestrator talks to the human dev. Child agents return artifacts and options to it, then wait for the human's response through it.
 
 ## Round 1
 
-1. Read `DESIGN.md`, `docs/agents/design-skills.md`, and `app/assets/css/tailwind.css`. Use the design skills listed for the task. If a required reference is missing, hand back the blocker.
-2. Brainstorm and render exactly **5 genuinely different concepts**. Vary layout, information hierarchy, or interaction models, not just colours or copy. Use the app's real theme tokens from the CSS file and shadcn-vue's look. Include enough surrounding context to judge the surface.
+1. First determine whether the project has a design system: inspect design docs, theme tokens, and shared component libraries. Read the real component sources, screens adjacent to the surface, and any project design-skill guidance.
+   - **Exists:** every concept, mockup, and build uses the app's real theme, tokens, typography, spacing, radii, components, and interaction patterns. Compose mockups from those sources; invent no colours, tokens, or component styling. Flag any necessary addition explicitly in the proposal for human approval before use.
+   - **None:** pause UI concepts and create the design system with the human first. The orchestrator and its Opus 5.5 children do the audit, proposals, rendered options, and writing of the design doc and tokens, using `frontend-design` for direction and `design-system` for tokens, components, and patterns. The human only reacts, chooses, and approves. Resume this round only after explicit approval of the system.
+2. Brainstorm and render exactly **5 genuinely different concepts**. Vary only layout, information hierarchy, or interaction, composed from the established system. Include enough surrounding context to judge the surface.
 3. Give each concept a name, core idea, and trade-offs. State which concept you recommend and why.
 4. Create self-contained HTML mockups outside app code. In T3 Code, the orchestrator shows every concept using `html_preview` then `html_render`. Elsewhere, produce HTML files and give the dev their absolute paths. Markdown-only proposals never count. This gate's five HTML concepts take precedence over `/prototype`'s default count and app-route approach.
 5. Have the orchestrator ask the dev to pick one or several concepts, or say what to change. Wait for their response before refining.
@@ -40,4 +42,4 @@ Before any UI code starts, the implementer must read both files and the ticket's
 
 ## Check the build
 
-Compare the finished UI with `approved.html` in a browser, including empty, loading, error, and mobile states. Record the comparison in the ticket. Fix differences to match the approved design, or take them to the dev for approval before completing the UI ticket.
+Compare the finished UI with `approved.html` and the design system in a browser, including empty, loading, error, and mobile states. Record the comparison in the ticket. Fix differences to match the approved design and system, or take them to the dev for approval before completing the UI ticket.
