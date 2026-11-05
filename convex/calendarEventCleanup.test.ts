@@ -599,6 +599,8 @@ describe('calendar event compensating cleanup', () => {
   })
 
   test('[P1] disconnect purges more than one bounded batch of terminal cleanup before credentials', async () => {
+    const revoke = vi.fn().mockResolvedValue(new Response(null, { status: 200 }))
+    vi.stubGlobal('fetch', revoke)
     const t = convexTest(schema, modules)
     const { courseId, calendarConnectionId } = await setup(t)
     await t.run(async (ctx) => {
@@ -627,10 +629,14 @@ describe('calendar event compensating cleanup', () => {
       expect(await t.query(internal.calendarConnections.hasConnectionForUser, {
         userId: USER.tokenIdentifier,
       })).toBe(true)
+      expect(revoke).not.toHaveBeenCalled()
     }
-    expect(await t.action(internal.calendarEvents.startDisconnectForUser, {
+    const result = await t.action(internal.calendarEvents.startDisconnectForUser, {
       userId: USER.tokenIdentifier,
-    })).toMatchObject({ disconnected: true })
+    })
+    expect(revoke).toHaveBeenCalledOnce()
+    expect(revoke).toHaveBeenCalledWith('https://oauth2.googleapis.com/revoke', expect.objectContaining({ method: 'POST' }))
+    expect(result).toMatchObject({ disconnected: true })
     expect(await t.query(internal.calendarConnections.hasConnectionForUser, {
       userId: USER.tokenIdentifier,
     })).toBe(false)
