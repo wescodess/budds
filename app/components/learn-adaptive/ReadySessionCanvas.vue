@@ -407,8 +407,13 @@ async function submit() {
       studySessionId: props.canvas.session.studySessionId as never,
       expectedSessionRevision: sessionRevision.value, expectedRevision: threadRevision.value,
       response: submissionSnapshot.response, confidence: submissionSnapshot.confidence, idempotencyKey: stageKey.value,
-    }) as { kind: string, revision?: number }
-    if (result.kind !== 'ok') throw new Error('This Canvas changed in another session. Refresh before retrying.')
+    }) as { kind: string, revision?: number } | undefined
+    if (!result) throw new Error('Submission did not confirm')
+    if (result.kind !== 'ok') {
+      stageKey.value = null
+      error.value = 'This Canvas changed in another session. Refresh before retrying.'
+      return
+    }
     threadRevision.value = result.revision ?? threadRevision.value + 1
     authoritativeSavedResponse.value = submissionSnapshot
     response.value = submissionSnapshot.response

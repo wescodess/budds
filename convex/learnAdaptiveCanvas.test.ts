@@ -70,6 +70,27 @@ async function fixture() {
 }
 
 describe('ready V2 adaptive Canvas', () => {
+  test('a stale or blocked stage receipt pins its key while a fresh key commits exactly once', async () => {
+    const { owner, ids } = await fixture()
+    const attached = await owner.mutation(api.learnAdaptiveCanvas.attachReadySession, { studySessionId: ids.studySessionId, expectedSessionRevision: 2, idempotencyKey: 'canvas-receipt-attach-0001' })
+    await owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: ids.studySessionId, expectedSessionRevision: 2, expectedContentRevision: 1, idempotencyKey: 'canvas-receipt-start-0001' })
+    const stage = (idempotencyKey: string, expectedRevision: number) => owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, {
+      threadId: attached.threadId, activityId: attached.activityId, studySessionId: ids.studySessionId,
+      expectedSessionRevision: 3, expectedRevision, response: 'Earth attracts the apple.', confidence: 4, idempotencyKey,
+    })
+    await owner.mutation(api.learnAdaptive.leaveThread, { threadId: attached.threadId, expectedRevision: 2, idempotencyKey: 'canvas-receipt-leave-0001' })
+    expect(await stage('canvas-receipt-stale-0001', 2)).toMatchObject({ kind: 'conflict', code: 'stale_revision', actualRevision: 3 })
+    expect(await stage('canvas-receipt-stale-0001', 3)).toMatchObject({ kind: 'conflict', code: 'duplicate_key' })
+    expect(await stage('canvas-receipt-paused-0001', 3)).toMatchObject({ kind: 'blocked', code: 'thread_not_active', retryable: false })
+    await owner.mutation(api.learnAdaptive.resumeThread, { threadId: attached.threadId, expectedRevision: 3, idempotencyKey: 'canvas-receipt-resume-0001' })
+    expect(await stage('canvas-receipt-paused-0001', 3)).toMatchObject({ kind: 'blocked', code: 'thread_not_active' })
+    expect(await stage('canvas-receipt-paused-0001', 4)).toMatchObject({ kind: 'conflict', code: 'duplicate_key' })
+    const committed = await stage('canvas-receipt-fresh-0001', 4)
+    expect(committed).toMatchObject({ kind: 'ok', revision: 5 })
+    expect(await stage('canvas-receipt-fresh-0001', 4)).toEqual(committed)
+    await expect(stage('canvas-receipt-after-ack-0001', 5)).rejects.toThrow(/Started Canvas activity is unavailable/)
+  })
+
   test('lifecycle transitions preserve the attached session pins and V2 authority', async () => {
     const { t, owner, ids } = await fixture()
     const attached = await owner.mutation(api.learnAdaptiveCanvas.attachReadySession, {

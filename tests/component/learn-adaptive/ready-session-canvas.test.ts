@@ -728,6 +728,47 @@ describe('ready adaptive Canvas', () => {
     await vi.waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
   })
 
+  it('keeps the same key when a swallowed mutation failure leaves the outcome unknown', async () => {
+    stage.mockResolvedValueOnce(undefined).mockResolvedValueOnce({ kind: 'ok', revision: 3 })
+    const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
+    const wrapper = await mountSuspended(Comp.default, { props: { canvas: { ...canvas, status: 'started', activity: { ...canvas.activity, status: 'started' } } } })
+    await wrapper.get('[data-testid="learn-canvas-continue"]').trigger('click')
+    await wrapper.get('[data-testid="learn-canvas-response"]').setValue('My answer.')
+    await wrapper.get('[data-testid="learn-canvas-confidence-4"]').setValue()
+    await wrapper.get('[data-testid="learn-canvas-submit"]').trigger('click')
+    await vi.waitFor(() => expect(wrapper.get('[role="alert"]').text()).toContain('Submission did not confirm'))
+    await wrapper.get('[data-testid="learn-canvas-submit"]').trigger('click')
+    await vi.waitFor(() => expect(stage).toHaveBeenCalledTimes(2))
+    expect(stage.mock.calls[1]?.[0].idempotencyKey).toBe(stage.mock.calls[0]?.[0].idempotencyKey)
+    await vi.waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
+  })
+
+  it.each([
+    ['stale_revision', { kind: 'conflict', code: 'stale_revision', expectedRevision: 2, actualRevision: 3, authority: 'convex' }],
+    ['duplicate_key', { kind: 'conflict', code: 'duplicate_key', expectedRevision: 2, actualRevision: 2, authority: 'convex' }],
+    ['thread_not_active', { kind: 'blocked', code: 'thread_not_active', message: 'Thread lifecycle does not accept this command', retryable: false }],
+  ])('keeps the draft and retries with a fresh key after a %s result', async (_code, rejection) => {
+    stage.mockResolvedValueOnce(rejection).mockResolvedValueOnce({ kind: 'ok', revision: 4 })
+    const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
+    const current = { ...canvas, status: 'started', activity: { ...canvas.activity, status: 'started' } }
+    const wrapper = await mountSuspended(Comp.default, { props: { canvas: current } })
+    await wrapper.get('[data-testid="learn-canvas-continue"]').trigger('click')
+    await wrapper.get('[data-testid="learn-canvas-response"]').setValue('My answer.')
+    await wrapper.get('[data-testid="learn-canvas-confidence-4"]').setValue()
+    await wrapper.get('[data-testid="learn-canvas-submit"]').trigger('click')
+    await vi.waitFor(() => expect(wrapper.get('[role="alert"]').text()).toBe('This Canvas changed in another session. Refresh before retrying.'))
+    expect((wrapper.get('[data-testid="learn-canvas-response"]').element as HTMLTextAreaElement).value).toBe('My answer.')
+    expect((wrapper.get('[data-testid="learn-canvas-confidence-4"]').element as HTMLInputElement).checked).toBe(true)
+    expect(submit).not.toHaveBeenCalled()
+    await wrapper.setProps({ canvas: { ...current, thread: { ...current.thread, revision: 3 } } })
+    await wrapper.get('[data-testid="learn-canvas-submit"]').trigger('click')
+    await vi.waitFor(() => expect(stage).toHaveBeenCalledTimes(2))
+    expect(stage.mock.calls[1]?.[0].idempotencyKey).not.toBe(stage.mock.calls[0]?.[0].idempotencyKey)
+    expect(stage.mock.calls[1]?.[0]).toMatchObject({ expectedRevision: 3, response: 'My answer.', confidence: 4 })
+    await vi.waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
+    expect(wrapper.find('[data-testid="learn-canvas-error"]').exists()).toBe(false)
+  })
+
   it('shows a saved unconfirmed scoring outcome and reconciles with the same key', async () => {
     submit.mockRejectedValueOnce(new Error('timeout before commit')).mockResolvedValueOnce({ kind: 'accepted', status: 'completed' })
     const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
