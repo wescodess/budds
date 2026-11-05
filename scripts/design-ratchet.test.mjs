@@ -14,6 +14,11 @@ const empty = () => countFiles({})
 describe('countViolations', () => {
   it.each([
     ['uppercase', '<p class="uppercase text-xs tracking-wide" /><p class="font-medium md:uppercase" />', 2],
+    ['hover-lift', '<div class="hover:translate-y-[-2px] hover:[&>svg]:scale-105" />', 2],
+    ['uppercase', '<p class="!uppercase md:!uppercase" />', 2],
+    ['raw-amber-orange', '<p class="!bg-amber-500 hover:!text-orange-400" />', 2],
+    ['backdrop-blur', '<p class="!backdrop-blur-sm" />', 1],
+    ['violet-indigo', '<p class="!text-indigo-500" />', 1],
     ['uppercase', '<div :class="{ uppercase: true }" /><div class="[&>svg]:uppercase" />.x { text-transform: uppercase; }', 3],
     ['sparkles', 'import { Sparkles } from "@lucide/vue"; <Sparkles /><Sparkles />', 3],
     ['backdrop-blur', '<div class="backdrop-blur dark:backdrop-blur-sm" />', 2],
@@ -69,6 +74,7 @@ describe('countViolations', () => {
       <p>Separate content with many intervening tokens stays unrelated.</p>
       <p class="tracking-wide" />
       <p>It's ready</p>
+      <p>uppercase</p>
       <div class="bg-primary text-muted-foreground hover:translate-x-1 scale-105" />
       <div class="text-[12px] bg-[var(--card)] text-[#invalid]" />
       --color-folder-indigo-ink: #6366f1;
@@ -208,6 +214,12 @@ describe('run', () => {
   it('runs in lint:ci', async () => {
     const { scripts } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
     expect(scripts['lint:ci']).toContain('pnpm design:ratchet')
+  })
+
+  it.each(['a.vue', 'a.ts', 'a.css'])('checks %s under app/', async (file) => {
+    const { root } = await fixture()
+    await writeFile(path.join(root, 'app', file), '.x { @apply uppercase; }')
+    expect(await run(root)).toBe(1)
   })
 
   it('scans only app/ and rejects unsupported arguments', async () => {
