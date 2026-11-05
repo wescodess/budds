@@ -54,12 +54,13 @@ async function getAnswerGradingPending(ctx: MutationCtx, attemptAnswerId: Id<'at
     : {}
 }
 
-async function getAttemptGradingStatus(ctx: MutationCtx, attemptId: Id<'quizAttempts'>) {
+async function getAttemptGradingStatus(ctx: MutationCtx, attemptId: Id<'quizAttempts'>, gradingQuestionIds: Id<'quizQuestions'>[]) {
   const rows = await ctx.db.query('quizAnswerAssessments')
     .withIndex('by_attemptId', q => q.eq('attemptId', attemptId)).take(MAX_QUIZ_QUESTIONS)
   const rubricRows = rows.filter(isRubricAssessment)
   if (!isQuizGradingEnabled() && rubricRows.length === 0) return undefined
-  return rubricRows.some(row => row.status === 'pending') ? 'grading' as const : 'settled' as const
+  const eligible = new Set(gradingQuestionIds)
+  return rubricRows.some(row => eligible.has(row.questionId) && row.status === 'pending') ? 'grading' as const : 'settled' as const
 }
 
 function normalizeForCompare(value: string): string {
@@ -741,13 +742,14 @@ export const submitAllAnswers = mutation({
     const percentage = total > 0 ? Math.round((correctCount / total) * 100) : 0
     const now = Date.now()
 
-    const gradingStatus = await getAttemptGradingStatus(ctx, args.attemptId)
+    const gradingQuestionIds = questions.map(question => question._id)
+    const gradingStatus = await getAttemptGradingStatus(ctx, args.attemptId, gradingQuestionIds)
     await ctx.db.patch(args.attemptId, {
       status: 'completed',
       score: correctCount,
       total,
       completedAt: now,
-      ...(gradingStatus ? { gradingStatus } : {}),
+      ...(gradingStatus ? { gradingStatus, gradingQuestionIds } : {}),
     })
 
     await ctx.db.patch(attempt.quizId, {
@@ -787,13 +789,14 @@ export const completeAttempt = mutation({
     const percentage = total > 0 ? Math.round((correctCount / total) * 100) : 0
     const now = Date.now()
 
-    const gradingStatus = await getAttemptGradingStatus(ctx, args.attemptId)
+    const gradingQuestionIds = questions.map(question => question._id)
+    const gradingStatus = await getAttemptGradingStatus(ctx, args.attemptId, gradingQuestionIds)
     await ctx.db.patch(args.attemptId, {
       status: 'completed',
       score: correctCount,
       total,
       completedAt: now,
-      ...(gradingStatus ? { gradingStatus } : {}),
+      ...(gradingStatus ? { gradingStatus, gradingQuestionIds } : {}),
     })
 
     await ctx.db.patch(attempt.quizId, {
@@ -832,6 +835,7 @@ export const getAttemptResults = query({
 
     const quiz = await ctx.db.get(attempt.quizId)
     if (!quiz || quiz.deletedAt !== undefined) return null
+    const eligibleQuestionIds = attempt.gradingQuestionIds ? new Set(attempt.gradingQuestionIds) : undefined
 
     const questions = await ctx.db
       .query('quizQuestions')
@@ -840,15 +844,15 @@ export const getAttemptResults = query({
 
     const questionMap = new Map(questions.map(q => [q._id as string, q]))
 
-    const attemptAnswers = await ctx.db
+    const attemptAnswers = (await ctx.db
       .query('attemptAnswers')
       .withIndex('by_attemptId', q => q.eq('attemptId', args.attemptId))
-      .take(MAX_QUIZ_QUESTIONS)
+      .take(MAX_QUIZ_QUESTIONS)).filter(answer => !eligibleQuestionIds || eligibleQuestionIds.has(answer.questionId))
 
-    const assessments = await ctx.db
+    const assessments = (await ctx.db
       .query('quizAnswerAssessments')
       .withIndex('by_userId_and_attemptId', q => q.eq('userId', userId).eq('attemptId', args.attemptId))
-      .take(MAX_QUIZ_QUESTIONS)
+      .take(MAX_QUIZ_QUESTIONS)).filter(row => !eligibleQuestionIds || eligibleQuestionIds.has(row.questionId))
     const assessmentMap = new Map(assessments.map(row => [row.attemptAnswerId as string, row]))
     const rubricRows = assessments.filter(isRubricAssessment)
     const grading = rubricRows.length > 0 ? {
@@ -905,7 +909,7 @@ export const getAttemptResults = query({
     }
 
     if (attempt.answers) {
-      const results = attempt.answers.map(a => {
+      const results = attempt.answers.filter(answer => !eligibleQuestionIds || eligibleQuestionIds.has(answer.questionId)).map(a => {
         const q = questionMap.get(a.questionId as string)
         return {
           questionId: a.questionId,
@@ -1060,8 +1064,9 @@ export const submitAttempt = mutation({
       })
     }
 
-    const gradingStatus = await getAttemptGradingStatus(ctx, attemptId)
-    if (gradingStatus) await ctx.db.patch(attemptId, { gradingStatus })
+    const gradingQuestionIds = questions.map(question => question._id)
+    const gradingStatus = await getAttemptGradingStatus(ctx, attemptId, gradingQuestionIds)
+    if (gradingStatus) await ctx.db.patch(attemptId, { gradingStatus, gradingQuestionIds })
 
     await ctx.db.patch(args.quizId, {
       score: percentage,

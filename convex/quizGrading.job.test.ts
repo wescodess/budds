@@ -120,6 +120,62 @@ async function reserve(fixture: Fixture, attemptId: Id<'quizAttempts'>) {
 }
 
 describe('dispatch and scoring', () => {
+  test.each(['completeAttempt', 'submitAllAnswers'] as const)('%s excludes questions deleted before completion from later score updates', async (path) => {
+    const fixture = await createQuiz(1, [{ order: 1, question: 'What do mitochondria produce?', type: 'multiple-choice', options: ['ATP', 'DNA'], correctAnswer: 'ATP' }])
+    const { attemptId } = await fixture.user.mutation(api.quizzes.startAttempt, { quizId: fixture.quizId, settings })
+    await fixture.user.mutation(api.quizzes.submitAnswer, { attemptId, questionId: fixture.questions[1]!._id, userAnswer: 'ATP' })
+    await fixture.user.mutation(api.quizzes.submitAnswer, { attemptId, questionId: fixture.questions[0]!._id, userAnswer: 'A pair of daughter cells' })
+    await fixture.user.mutation(api.quizzes.deleteQuestion, { questionId: fixture.questions[1]!._id })
+
+    if (path === 'completeAttempt') await fixture.user.mutation(api.quizzes.completeAttempt, { attemptId })
+    else await fixture.user.mutation(api.quizzes.submitAllAnswers, { attemptId, answers: [] })
+
+    expect(await fixture.t.run(ctx => ctx.db.get(attemptId))).toMatchObject({ score: 0, total: 1, gradingQuestionIds: [fixture.questions[0]!._id] })
+    await drain(fixture)
+    const result = await fixture.user.query(api.quizzes.getAttemptResults, { attemptId })
+    expect(result).toMatchObject({ score: 0.4, total: 1, percentage: 40 })
+    expect(result?.results.map(answer => answer.questionId)).toEqual([fixture.questions[0]!._id])
+    expect(await fixture.t.run(ctx => ctx.db.get(fixture.quizId))).toMatchObject({ score: 40 })
+  })
+
+  test('does not dispatch or report pending grading for a free response deleted before completion', async () => {
+    const fixture = await createQuiz(2)
+    const { attemptId } = await fixture.user.mutation(api.quizzes.startAttempt, { quizId: fixture.quizId, settings })
+    for (const question of fixture.questions) {
+      await fixture.user.mutation(api.quizzes.submitAnswer, { attemptId, questionId: question._id, userAnswer: 'A pair of daughter cells' })
+    }
+    await fixture.user.mutation(api.quizzes.deleteQuestion, { questionId: fixture.questions[0]!._id })
+    await fixture.user.mutation(api.quizzes.completeAttempt, { attemptId })
+    await drain(fixture)
+
+    expect(generateCompletion).toHaveBeenCalledTimes(1)
+    const [params] = vi.mocked(generateCompletion).mock.calls[0]!
+    expect(JSON.parse(params.messages[1]!.content).items).toHaveLength(1)
+    const result = await fixture.user.query(api.quizzes.getAttemptResults, { attemptId })
+    expect(result).toMatchObject({ score: 0.4, total: 1, grading: { pending: 0 } })
+    expect(result?.results.map(answer => answer.questionId)).toEqual([fixture.questions[1]!._id])
+  })
+
+  test('keeps the completion question set when a question is deleted before its grade arrives', async () => {
+    const fixture = await createQuiz(1, [{ order: 1, question: 'What do mitochondria produce?', type: 'multiple-choice', options: ['ATP', 'DNA'], correctAnswer: 'ATP' }])
+    const attemptId = await finish(fixture, ['A pair of daughter cells', 'ATP'])
+    await fixture.user.mutation(api.quizzes.deleteQuestion, { questionId: fixture.questions[1]!._id })
+    await drain(fixture)
+
+    expect(await fixture.t.run(ctx => ctx.db.get(attemptId))).toMatchObject({ score: 1.4, total: 2 })
+    expect(await fixture.t.run(ctx => ctx.db.get(fixture.quizId))).toMatchObject({ score: 70 })
+  })
+
+  test('does not infer a missing completion snapshot from the current quiz', async () => {
+    const fixture = await createQuiz()
+    const attemptId = await finish(fixture)
+    await fixture.t.run(ctx => ctx.db.patch(attemptId, { gradingQuestionIds: undefined }))
+    await drain(fixture)
+
+    expect(generateCompletion).not.toHaveBeenCalled()
+    expect(await fixture.t.run(ctx => ctx.db.get(attemptId))).toMatchObject({ score: 0, total: 1 })
+  })
+
   test('history reports older pending and settled grades while preserving flag-off entries', async () => {
     const fixture = await createQuiz()
     const gradingId = await finish(fixture)
@@ -149,7 +205,7 @@ describe('dispatch and scoring', () => {
       modelRevision: `${QUIZ_GRADER_POLICY.model}@phala:${QUIZ_GRADER_POLICY.promptVersion}`,
       feedback: 'You described the daughter cells but omitted how they compare.', attemptCount: 1,
     })
-    expect(await fixture.t.run(ctx => ctx.db.get(attemptId))).toMatchObject({ score: 0.4, total: 1, gradingStatus: 'settled' })
+    expect(await fixture.t.run(ctx => ctx.db.get(attemptId))).toMatchObject({ score: 0.4, total: 1, gradingStatus: 'settled', gradingQuestionIds: fixture.questions.map(question => question._id) })
     expect(await fixture.t.run(ctx => ctx.db.get(fixture.quizId))).toMatchObject({ score: 40 })
   })
 

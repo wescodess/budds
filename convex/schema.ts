@@ -300,6 +300,7 @@ export default defineSchema({
     completedAt: v.optional(v.number()),
     status: v.optional(v.union(v.literal('in_progress'), v.literal('completed'), v.literal('abandoned'))),
     gradingStatus: v.optional(v.union(v.literal('grading'), v.literal('settled'))),
+    gradingQuestionIds: v.optional(v.array(v.id('quizQuestions'))),
     settingsSnapshot: v.optional(v.object({
       shuffleQuestions: v.boolean(),
       showAllQuestions: v.boolean(),

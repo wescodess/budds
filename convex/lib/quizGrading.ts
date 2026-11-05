@@ -17,15 +17,19 @@ export async function getQuizGradingAttempt(ctx: MutationCtx, attemptId: Id<'qui
 }
 
 export async function getQuizGradingRows(ctx: MutationCtx, attemptId: Id<'quizAttempts'>) {
+  const attempt = await ctx.db.get(attemptId)
+  if (!attempt?.gradingQuestionIds) return []
   const rows = await ctx.db.query('quizAnswerAssessments')
     .withIndex('by_attemptId_and_rubricVersion_and_status', q => q.eq('attemptId', attemptId).eq('rubricVersion', QUIZ_RUBRIC_GRADE_VERSION))
     .take(MAX_QUIZ_GRADING_ROWS + 1)
   if (rows.length > MAX_QUIZ_GRADING_ROWS) throw new Error('Quiz grading row limit exceeded')
-  return rows
+  const eligible = new Set(attempt.gradingQuestionIds)
+  return rows.filter(row => eligible.has(row.questionId))
 }
 
 export async function getQuizGradingAnswer(ctx: MutationCtx, row: Doc<'quizAnswerAssessments'>, attempt: Doc<'quizAttempts'>) {
-  if (!isRubricAssessment(row) || row.attemptId !== attempt._id || row.userId !== attempt.userId) return null
+  if (!isRubricAssessment(row) || row.attemptId !== attempt._id || row.userId !== attempt.userId
+    || !attempt.gradingQuestionIds?.includes(row.questionId)) return null
   const answer = await ctx.db.get(row.attemptAnswerId)
   if (!answer || answer.attemptId !== attempt._id || answer.questionId !== row.questionId || answer.userAnswer !== row.learnerAnswerSnapshot) return null
   return answer
@@ -66,9 +70,10 @@ export async function recomputeQuizGradingScore(ctx: MutationCtx, attemptId: Id<
   if (answers.length > MAX_QUIZ_GRADING_ROWS) throw new Error('Quiz answer limit exceeded')
   const grades = new Map(rows.filter(row => row.userId === scope.attempt.userId).map(row => [row.attemptAnswerId, row]))
   const seen = new Set<Id<'quizQuestions'>>()
+  const eligible = new Set(scope.attempt.gradingQuestionIds)
   let hundredths = 0
   for (const answer of answers) {
-    if (seen.has(answer.questionId)) continue
+    if (!eligible.has(answer.questionId) || seen.has(answer.questionId)) continue
     seen.add(answer.questionId)
     const grade = grades.get(answer._id)
     hundredths += grade ? (grade.status === 'available' ? Math.round((grade.credit ?? 0) * 100) : 0) : answer.isCorrect ? 100 : 0
