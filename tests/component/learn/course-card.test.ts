@@ -75,6 +75,20 @@ describe('CourseCard', () => {
     expect(link.attributes('href')).toContain('/app/folders/folder_456/learn/course_123')
   })
 
+  it('opens the V1 overview route through ordinary folder navigation', async () => {
+    const Comp = await import(componentPath)
+    const wrapper = await mountSuspended(Comp.default, { props: { course: baseCourse } })
+    const route = wrapper.vm.$router.resolve(wrapper.find('a').attributes('href')!)
+    expect(route.name).toBe('app-folders-id-learn-courseId')
+    expect(route.params).toEqual({ id: 'folder_456', courseId: 'course_123' })
+  })
+
+  it('names the Void in its progress label', async () => {
+    const Comp = await import(componentPath)
+    const wrapper = await mountSuspended(Comp.default, { props: { course: baseCourse } })
+    expect(wrapper.find('[role="progressbar"]').attributes('aria-label')).toBe('Void progress: 42%')
+  })
+
   it('shows no status badge for ready courses', async () => {
     const Comp = await import(componentPath)
     const wrapper = await mountSuspended(Comp.default, { props: { course: baseCourse } })

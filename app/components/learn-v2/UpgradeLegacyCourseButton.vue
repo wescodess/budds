@@ -46,7 +46,7 @@ async function upgrade() {
 <template>
   <section aria-labelledby="learn-v2-upgrade-title" class="rounded-lg border border-stone-800 bg-stone-900/50 p-4">
     <h2 id="learn-v2-upgrade-title" class="text-base font-semibold text-stone-100">Try the new learning experience</h2>
-    <p class="mt-1 text-sm text-stone-400">Create a V2 draft from this course’s title and selected sources. V1 progress and mastery stay in V1.</p>
+    <p class="mt-1 text-sm text-stone-400">Create a V2 draft from this Void’s title and selected sources. V1 progress and mastery stay in V1.</p>
     <p v-if="checkingAccess" data-testid="learn-v2-upgrade-pending" aria-live="polite" class="mt-3 text-sm text-stone-400">Checking whether this experience is available…</p>
     <p v-else-if="!allowed" data-testid="learn-v2-upgrade-denied" role="status" class="mt-3 text-sm text-stone-400">The new learning experience is not available for this account.</p>
     <template v-else>

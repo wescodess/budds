@@ -25,10 +25,10 @@ async function handleDelete() {
   try {
     const result = await deleteMutation.mutate({ id: props.courseId })
     open.value = false
-    toast(result?.pending ? 'Course deletion started' : 'Course deleted')
+    toast(result?.pending ? 'Void deletion started' : 'Void deleted')
     emit('deleted')
   } catch {
-    toast.error('Failed to delete course')
+    toast.error('Failed to delete Void')
   } finally {
     deleting.value = false
   }
@@ -44,12 +44,12 @@ async function handleDelete() {
         @click="open = true"
       >
         <Trash2 class="h-4 w-4" />
-        Delete Course
+        Delete Void
       </button>
     </UiAlertDialogTrigger>
     <UiAlertDialogContent data-testid="delete-course-dialog">
       <UiAlertDialogHeader>
-        <UiAlertDialogTitle>Delete Course</UiAlertDialogTitle>
+        <UiAlertDialogTitle>Delete Void</UiAlertDialogTitle>
         <UiAlertDialogDescription>
           This will permanently delete "{{ courseTitle }}" and all its sections, quizzes, flashcards, and audio. This action cannot be undone.
         </UiAlertDialogDescription>

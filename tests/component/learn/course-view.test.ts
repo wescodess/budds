@@ -55,6 +55,20 @@ describe('CourseView — Progress & Mastery Dashboard', () => {
     expect(progressBar.attributes('aria-label')).toContain('60%')
   })
 
+  it('names the Void in fixed labels and keeps its test IDs', async () => {
+    const Comp = await import(componentPath)
+    const wrapper = await mountSuspended(Comp.default, { props: baseProps })
+    expect(wrapper.find('[data-testid="progress-bar"]').attributes('aria-label')).toBe('Void progress: 60%')
+    expect(wrapper.find('[role="list"]').attributes('aria-label')).toBe('Void sections')
+    expect(wrapper.find('[data-testid="mobile-menu-trigger"]').attributes('aria-label')).toBe('Void actions')
+  })
+
+  it('names the Void while loading', async () => {
+    const Comp = await import(componentPath)
+    const wrapper = await mountSuspended(Comp.default, { props: { ...baseProps, course: null } })
+    expect(wrapper.text()).toContain('Loading Void...')
+  })
+
   it('displays section count and percentage text', async () => {
     const Comp = await import(componentPath)
     const wrapper = await mountSuspended(Comp.default, { props: baseProps })
