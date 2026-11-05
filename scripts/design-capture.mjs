@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { chromium } from '@playwright/test'
-import { captureIdentity, compareFloor, resetCaptureOutput, stopChild, validateSurface, violationId } from './design-capture-lib.mjs'
+import { captureIdentity, compareFloor, publishCaptureOutput, readComparisonFloor, resetCaptureOutput, stopChild, validateSurface, violationId } from './design-capture-lib.mjs'
 import { checkPage } from './design-capture-checks.mjs'
 
 const execFile = promisify(execFileCallback)
@@ -38,6 +38,7 @@ async function startStack() {
     cwd: root,
     env: { ...process.env, BUDDS_E2E_BASE_URL: baseUrl.origin, BUDDS_E2E_REAL_ADAPTIVE_CANVAS: 'false' },
     stdio: 'inherit',
+    detached: true,
   })
   stack.once('error', error => { stackFailure = message(error) })
   stack.once('exit', (code, signal) => { stackFailure = `Disposable E2E stack exited (${signal || code})` })
@@ -127,18 +128,18 @@ async function capturePage(surface, identity, entry, baseUrl, output) {
   finally { await context.close() }
 }
 
-async function main() {
+export async function main() {
   const [surfaceName, ...args] = process.argv.slice(2)
   if (!surfaceName || !/^[a-z0-9][a-z0-9_-]*$/u.test(surfaceName) || (args.length && (args.length !== 2 || args[0] !== '--compare' || !args[1]))) throw new Error('Usage: pnpm design:capture <surface> [--compare <capture-dir>]')
   const surface = validateSurface(JSON.parse(await readFile(join(root, 'docs/design/surfaces', `${surfaceName}.json`), 'utf8')))
   const comparing = args.length > 0
-  const baseline = comparing ? JSON.parse(await readFile(resolve(args[1], 'floor.json'), 'utf8')) : null
+  const baseline = comparing ? await readComparisonFloor(resolve(args[1])) : null
   const captures = surface.cases.flatMap(entry => surface.themes.flatMap(theme => surface.viewports.map(viewport => captureIdentity(surfaceName, entry, theme, viewport))))
   if (comparing) compareFloor({ surface: surfaceName, captures, violations: [] }, baseline)
   const sha = (await execFile('git', ['rev-parse', 'HEAD'], { cwd: root })).stdout.trim()
   const dirty = Boolean((await execFile('git', ['status', '--porcelain'], { cwd: root })).stdout.trim())
-  const output = join(root, '.design-captures', surfaceName, sha.slice(0, 7))
-  await resetCaptureOutput(root, surfaceName, output)
+  const published = join(root, '.design-captures', surfaceName, sha.slice(0, 7))
+  const output = await resetCaptureOutput(root, surfaceName, published)
   const started = Date.now()
   const manifest = { version: 1, surface: surfaceName, sha, dirty, definition: surface, startedAt: new Date(started).toISOString(), status: 'running', captures: [] }
   const floor = { version: 1, surface: surfaceName, sha, status: 'error', errors: ['Capture has not completed'], captures: [], violations: [], incomplete: [] }
@@ -146,7 +147,7 @@ async function main() {
   await writeJson(join(output, 'floor.json'), floor)
   floor.errors = []
   try {
-    browser = await chromium.launch()
+    browser = await chromium.launch({ handleSIGINT: false, handleSIGTERM: false })
     const baseUrl = surface.kind === 'routes' ? await startStack() : null
     for (const entry of surface.cases) {
       for (const theme of surface.themes) {
@@ -185,9 +186,21 @@ async function main() {
     await writeJson(join(output, 'manifest.json'), manifest)
     await writeJson(join(output, 'floor.json'), floor)
   }
-  console.log(`${floor.status}: ${manifest.captures.filter(value => value.status === 'complete').length} captures in ${(manifest.durationMs / 1000).toFixed(1)}s; ${floor.violations.length} violations${comparing ? `; ${floor.newViolations.length} new` : ''}\n${output}`)
+  if (!floor.errors.length) {
+    try { await publishCaptureOutput(root, surfaceName, output, published) }
+    catch (error) {
+      floor.errors.push(message(error))
+      floor.status = manifest.status = 'error'
+      await writeJson(join(output, 'manifest.json'), manifest)
+      await writeJson(join(output, 'floor.json'), floor)
+    }
+  }
+  if (floor.errors.length) console.error(`Staging capture kept for inspection; this folder can be deleted: ${output}`)
+  console.log(`${floor.status}: ${manifest.captures.filter(value => value.status === 'complete').length} captures in ${(manifest.durationMs / 1000).toFixed(1)}s; ${floor.violations.length} violations${comparing ? `; ${floor.newViolations.length} new` : ''}\n${floor.errors.length ? output : published}`)
   for (const error of floor.errors) console.error(error)
   process.exitCode = floor.errors.length || (comparing && floor.newViolations.length) ? 1 : 0
 }
 
-main().catch(error => { console.error(message(error)); process.exitCode = 1 })
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  main().catch(error => { console.error(message(error)); process.exitCode = 1 })
+}

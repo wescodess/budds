@@ -85,6 +85,7 @@ export function checkLayout() {
       const rect = element.getBoundingClientRect()
       hiddenInput = element.getClientRects().length > 0 && ((rect.width <= 1 && rect.height <= 1) || style.clip !== 'auto' && style.clip !== '' && style.clip !== 'none'
         || style.clipPath !== 'none' && style.clipPath !== '')
+      if (hiddenInput && (element.getAttribute('aria-hidden') === 'true' || element.tabIndex < 0)) continue
       if (hiddenInput) {
         const labels = [...(element.labels || [])].filter(visible)
         // Any full-size associated label supplies the input's activation target.

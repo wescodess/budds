@@ -1,6 +1,7 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { once } from 'node:events'
-import { mkdir, realpath, rm } from 'node:fs/promises'
+import { renameSync } from 'node:fs'
+import { lstat, mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { z } from 'zod'
 
@@ -76,41 +77,90 @@ export function compareFloor(current, baseline) {
   return current.violations.filter(value => !known.has(value.id))
 }
 
-export async function resetCaptureOutput(root, surface, output) {
+async function safeCapturePath(root, surface, output) {
   name.parse(surface)
-  const child = relative(resolve(root, '.design-captures', surface), resolve(output))
+  const parent = join(await realpath(root), '.design-captures', surface)
+  const logicalChild = relative(resolve(root, '.design-captures', surface), resolve(output))
+  const child = logicalChild.startsWith('../') ? relative(parent, resolve(output)) : logicalChild
   if (!child || child === '..' || child.startsWith('../') || isAbsolute(child)) throw new Error('Capture output must be inside .design-captures/<surface>/')
   if (child.includes('/')) throw new Error('Capture output must be an immediate child of its surface')
-  const parent = join(await realpath(root), '.design-captures', surface)
   const target = join(parent, child)
   await mkdir(parent, { recursive: true })
   if (await realpath(parent) !== parent) throw new Error('Capture output parent must not traverse symlinks')
+  if ((await lstat(target).catch(error => { if (error.code !== 'ENOENT') throw error }))?.isSymbolicLink()) throw new Error('Capture output must not traverse symlinks')
   const actual = await realpath(target).catch(error => {
     if (error.code !== 'ENOENT') throw error
     return target
   })
   if (actual !== target || relative(parent, actual).startsWith('..')) throw new Error('Capture output must not traverse symlinks')
-  await rm(target, { recursive: true, force: true })
-  await mkdir(target)
+  return target
+}
+
+export async function resetCaptureOutput(root, surface, output) {
+  const target = await safeCapturePath(root, surface, output)
+  if (!/^[a-f0-9]{7}$/u.test(relative(resolve(root, '.design-captures', surface), resolve(output)))) throw new Error('Published capture requires a short SHA')
+  return mkdtemp(`${target}.staging-`)
+}
+
+export async function readComparisonFloor(directory) {
+  const actual = await realpath(directory)
+  if ([resolve(directory), actual].some(path => path.split('/').some(part => /\.(?:staging-|previous-|publish-lock)/u.test(part)))) throw new Error('Comparison requires a published capture or a copy, not a staging folder')
+  return JSON.parse(await readFile(join(actual, 'floor.json'), 'utf8'))
+}
+
+export async function publishCaptureOutput(root, surface, staging, output) {
+  const target = await safeCapturePath(root, surface, output)
+  const source = await safeCapturePath(root, surface, staging)
+  const child = relative(resolve(root, '.design-captures', surface), resolve(output))
+  if (!/^[a-f0-9]{7}$/u.test(child) || !source.startsWith(`${target}.staging-`)) throw new Error('Publication requires a short SHA and its staging folder')
+  const lock = await safeCapturePath(root, surface, `${output}.publish-lock`)
+  const deadline = Date.now() + 5000
+  // Only the short rename transaction is serialized; captures remain independent.
+  while (true) {
+    try { await mkdir(lock); break }
+    catch (error) {
+      if (error.code !== 'EEXIST' || Date.now() >= deadline) throw error
+      await new Promise(resolve => setTimeout(resolve, 25))
+    }
+  }
+  let previous
+  try {
+    await safeCapturePath(root, surface, output)
+    previous = `${target}.previous-${randomUUID()}`
+    // Do not yield between renames: keep the publication gap as short as possible.
+    try { renameSync(target, previous) }
+    catch (error) { if (error.code !== 'ENOENT') throw error; previous = null }
+    try { renameSync(source, target) }
+    catch (error) {
+      if (previous) renameSync(previous, target)
+      throw error
+    }
+  }
+  finally { await rm(lock, { recursive: true, force: true }) }
+  if (previous) await rm(previous, { recursive: true, force: true }).catch(error => console.error(`Old capture can be deleted: ${previous}: ${error.message}`))
 }
 
 const stopping = new WeakMap()
 export function stopChild(child, timeoutMs = 30_000) {
-  if (!child || child.exitCode !== null || child.signalCode !== null) return Promise.resolve()
+  if (!child?.pid) return Promise.resolve()
   if (stopping.has(child)) return stopping.get(child)
+  const signalGroup = signal => {
+    try { process.kill(-child.pid, signal) }
+    catch (error) { if (error.code !== 'ESRCH') throw error }
+  }
   const stopped = (async () => {
-    const exited = once(child, 'exit')
-    child.kill('SIGTERM')
+    const exited = child.exitCode !== null || child.signalCode !== null ? Promise.resolve() : once(child, 'exit')
+    signalGroup('SIGTERM')
     let timer
     try {
       await Promise.race([exited, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('E2E stack cleanup timed out')), timeoutMs) })])
     }
-    catch (error) {
-      child.kill('SIGKILL')
+    finally {
+      clearTimeout(timer)
+      // The stack can exit while a startup subprocess or grandchild is still alive.
+      signalGroup('SIGKILL')
       await exited
-      throw error
     }
-    finally { clearTimeout(timer) }
   })()
   stopping.set(child, stopped)
   return stopped

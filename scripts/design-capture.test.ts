@@ -1,11 +1,11 @@
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Window } from 'happy-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { captureIdentity, compareFloor, normalizeSelector, resetCaptureOutput, stopChild, validateSurface, violationId } from './design-capture-lib.mjs'
+import { captureIdentity, compareFloor, normalizeSelector, publishCaptureOutput, readComparisonFloor, resetCaptureOutput, stopChild, validateSurface, violationId } from './design-capture-lib.mjs'
 import { checkLayout } from './design-capture-checks.mjs'
 
 const surface = {
@@ -126,18 +126,42 @@ describe('generated selectors', () => {
   })
 })
 
-describe('capture output reset', () => {
-  it('removes obsolete PNGs and reports at the same SHA', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'design-capture-reset-'))
+describe('capture publication', () => {
+  it('keeps the published baseline until a complete staging capture replaces it', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'design-capture-publish-'))
     try {
       const output = join(root, '.design-captures/example/abc1234')
       await mkdir(output, { recursive: true })
-      await writeFile(join(output, 'obsolete.png'), 'stale frame')
+      await writeFile(join(output, 'obsolete.png'), 'last good frame')
       await writeFile(join(output, 'floor.json'), JSON.stringify(floor))
-      const baseline = JSON.parse(await readFile(join(output, 'floor.json'), 'utf8'))
-      await resetCaptureOutput(root, 'example', output)
-      expect(await readdir(output)).toEqual([])
-      expect(compareFloor(floor, baseline)).toEqual([])
+      const staging = await resetCaptureOutput(root, 'example', output)
+      expect(staging).toMatch(/abc1234\.staging-[^/]+$/)
+      expect(await readdir(staging)).toEqual([])
+      expect(await readComparisonFloor(output)).toEqual(floor)
+      expect(await readFile(join(output, 'obsolete.png'), 'utf8')).toBe('last good frame')
+      await writeFile(join(staging, 'current.png'), 'new frame')
+      await writeFile(join(staging, 'floor.json'), JSON.stringify(floor))
+      await expect(readComparisonFloor(staging)).rejects.toThrow('staging folder')
+      await publishCaptureOutput(root, 'example', staging, output)
+      expect((await readdir(output)).sort()).toEqual(['current.png', 'floor.json'])
+      expect(compareFloor(floor, await readComparisonFloor(output))).toEqual([])
+    }
+    finally { await rm(root, { recursive: true, force: true }) }
+  })
+
+  it('publishes concurrent runs as whole folders without mixing their files', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'design-capture-concurrent-'))
+    try {
+      const output = join(root, '.design-captures/example/abc1234')
+      const stages = await Promise.all([resetCaptureOutput(root, 'example', output), resetCaptureOutput(root, 'example', output)])
+      expect(new Set(stages).size).toBe(2)
+      await Promise.all(stages.map(async (stage, index) => {
+        await writeFile(join(stage, `${index}.png`), String(index))
+        await writeFile(join(stage, 'manifest.json'), String(index))
+      }))
+      await Promise.all(stages.map(stage => publishCaptureOutput(root, 'example', stage, output)))
+      const winner = await readFile(join(output, 'manifest.json'), 'utf8')
+      expect((await readdir(output)).sort()).toEqual([`${winner}.png`, 'manifest.json'])
     }
     finally { await rm(root, { recursive: true, force: true }) }
   })
@@ -167,7 +191,7 @@ describe('stack interruption', () => {
       setInterval(() => {}, 1000)
       process.once('SIGTERM', () => setTimeout(() => { process.stdout.write('cleaned'); process.exit(0) }, 150))
       process.stdout.write('ready')
-    `], { stdio: ['ignore', 'pipe', 'pipe'] })
+    `], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
     try {
       await once(child.stdout!, 'data')
       const cleaned = once(child.stdout!, 'data')
@@ -182,7 +206,7 @@ describe('stack interruption', () => {
   })
 
   it('escalates only when cleanup times out', async () => {
-    const child = spawn(process.execPath, ['-e', `process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.stdout.write('ready')`], { stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(process.execPath, ['-e', `process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.stdout.write('ready')`], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
     try {
       await once(child.stdout!, 'data')
       await expect(stopChild(child, 100)).rejects.toThrow('cleanup timed out')
@@ -190,6 +214,26 @@ describe('stack interruption', () => {
     }
     finally { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL') }
   })
+  it.each([false, true])('cleans descendants even when the stack has already exited: %s', async alreadyExited => {
+    const child = spawn(process.execPath, ['--input-type=module', '-e', `
+      import { spawn } from 'node:child_process'
+      const grandchild = spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.stdout.write('ready')"], { stdio: ['ignore', 'pipe', 'ignore'] })
+      grandchild.stdout.once('data', () => {
+        process.stdout.write(String(grandchild.pid))
+        ${alreadyExited ? "grandchild.unref(); grandchild.stdout.destroy(); process.exit(0)" : "process.once('SIGTERM', () => setTimeout(() => process.exit(0), 100))"}
+      })
+    `], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    try {
+      const pid = Number(String((await once(child.stdout!, 'data'))[0]))
+      if (alreadyExited && child.exitCode === null) await once(child, 'exit')
+      await stopChild(child)
+      await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(), { timeout: 2000 })
+    }
+    finally {
+      try { process.kill(-child.pid!, 'SIGKILL') } catch { /* Only this test's process group is eligible for cleanup. */ }
+    }
+  })
+
 })
 
 describe('adaptive frame separation guard', () => {
@@ -235,6 +279,11 @@ describe('layout target identity and hidden inputs', () => {
     expect(layout('<label id="label">Select<input id="input"></label>', { input: [1, 1], label: [32, 32] })).toEqual([])
   })
 
+  it.each(['aria-hidden="true"', 'tabindex="-1"'])('skips visually hidden form transport inputs: %s', attributes => {
+    expect(layout(`<form><button role="checkbox" id="control">Select</button><input id="transport" type="checkbox" name="selected" ${attributes}></form>`, { control: [32, 32], transport: [1, 1] })).toEqual([])
+    expect(layout(`<input id="visible" ${attributes}>`, { visible: [20, 20] })).toHaveLength(1)
+  })
+
   it('reports a small label and a hidden input without a label', () => {
     const findings = layout('<input id="small"><label id="label" for="small">Small</label><input id="unlabelled">', { small: [1, 1], label: [12, 12], unlabelled: [1, 1] })
     expect(findings.map((finding: any) => finding.selector)).toEqual(['#small', '#unlabelled'])
@@ -247,5 +296,68 @@ describe('layout target identity and hidden inputs', () => {
 
   it('keeps visible undersized inputs as findings even with a large label', () => {
     expect(layout('<input id="input"><label id="label" for="input">Select</label>', { input: [20, 20], label: [32, 32] })).toHaveLength(1)
+  })
+})
+
+
+describe('CLI failure lifecycle without a browser', () => {
+  it.each([false, true])('stages output and stops the detached stack on failure or SIGINT: %s', async interrupt => {
+    const root = await mkdtemp(join(tmpdir(), 'design-capture-cli-'))
+    const originalArgv = process.argv
+    const originalExitCode = process.exitCode
+    const listeners = new Map(['SIGINT', 'SIGTERM'].map(signal => [signal, process.listeners(signal)]))
+    const child = spawn(process.execPath, ['-e', "setInterval(() => {}, 1000); process.stdout.write('ready')"], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    try {
+      await once(child.stdout!, 'data')
+      execFileSync('git', ['init', '-q', root])
+      execFileSync('git', ['-C', root, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-qm', 'test fixture'])
+      const sha = execFileSync('git', ['-C', root, 'rev-parse', '--short=7', 'HEAD'], { encoding: 'utf8' }).trim()
+      await mkdir(join(root, 'docs/design/surfaces'), { recursive: true })
+      await writeFile(join(root, 'docs/design/surfaces/example.json'), JSON.stringify(surface))
+      const output = join(root, '.design-captures/example', sha)
+      await mkdir(output, { recursive: true })
+      await writeFile(join(output, 'keep.png'), 'last good frame')
+      vi.resetModules()
+      const spawnStack = vi.fn(() => child)
+      vi.doMock('node:child_process', async () => ({ ...await vi.importActual<typeof import('node:child_process')>('node:child_process'), spawn: spawnStack }))
+      vi.doMock('node:net', () => ({ createServer: () => ({ once() {}, listen(_port: number, _host: string, ready: () => void) { ready() }, close(done: () => void) { done() } }) }))
+      const launchBrowser = vi.fn(async () => ({ newContext: async () => {
+        if (interrupt) process.emit('SIGINT')
+        throw new Error('synthetic capture failure')
+      }, close: async () => {} }))
+      vi.doMock('@playwright/test', () => ({ chromium: { launch: launchBrowser } }))
+      vi.stubGlobal('fetch', async () => ({ ok: true }))
+      vi.spyOn(process, 'cwd').mockReturnValue(root)
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      process.argv = ['node', 'scripts/design-capture.mjs', 'example']
+      const { main } = await import('./design-capture.mjs')
+      await main()
+      expect(launchBrowser).toHaveBeenCalledWith({ handleSIGINT: false, handleSIGTERM: false })
+      expect(spawnStack).toHaveBeenCalledWith(process.execPath, ['scripts/e2e-stack.mjs'], expect.objectContaining({ detached: true, stdio: 'inherit' }))
+      expect(child.signalCode).toBe('SIGTERM')
+      expect(await readFile(join(output, 'keep.png'), 'utf8')).toBe('last good frame')
+      const stages = (await readdir(join(root, '.design-captures/example'))).filter(value => value.includes('.staging-'))
+      expect(stages).toHaveLength(1)
+      const failed = JSON.parse(await readFile(join(root, '.design-captures/example', stages[0], 'floor.json'), 'utf8'))
+      expect(failed.status).toBe('error')
+      expect(failed.errors).toContain('synthetic capture failure')
+      if (interrupt) expect(failed.errors).toContain('Capture interrupted')
+      expect(console.error).toHaveBeenCalledWith(expect.stringContaining('this folder can be deleted:'))
+      expect(process.exitCode).toBe(1)
+    }
+    finally {
+      vi.doUnmock('node:child_process')
+      vi.doUnmock('node:net')
+      vi.doUnmock('@playwright/test')
+      vi.restoreAllMocks()
+      vi.unstubAllGlobals()
+      vi.resetModules()
+      process.argv = originalArgv
+      process.exitCode = originalExitCode
+      for (const [signal, original] of listeners) for (const listener of process.listeners(signal)) if (!original.includes(listener)) process.removeListener(signal, listener)
+      try { process.kill(-child.pid!, 'SIGKILL') } catch { /* Only this test's process group is eligible for cleanup. */ }
+      await rm(root, { recursive: true, force: true })
+    }
   })
 })
