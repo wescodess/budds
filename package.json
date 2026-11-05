@@ -36,8 +36,9 @@
     "laya:quiz-semantic:evaluate": "node scripts/evaluate-laya-calibration.mjs",
     "typecheck": "vue-tsc --noEmit",
     "typecheck:convex": "node scripts/validate-convex-index-names.mjs && tsc --noEmit -p convex/tsconfig.json",
+    "design:ratchet": "node scripts/design-ratchet.mjs",
     "lint": "eslint .",
-    "lint:ci": "eslint . --max-warnings 0",
+    "lint:ci": "eslint . --max-warnings 0 && pnpm design:ratchet",
     "verify": "pnpm lint:ci && pnpm typecheck && pnpm typecheck:convex && pnpm test && pnpm test:component && pnpm test:component:audio && pnpm audio:workflow:typecheck && pnpm audio:workflow:test && pnpm laya:evaluator:test && pnpm audit && pnpm --dir workers/audio-overview audit && pnpm --dir workers/laya-evaluator audit"
   },
   "dependencies": {
