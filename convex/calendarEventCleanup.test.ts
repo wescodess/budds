@@ -489,7 +489,7 @@ describe('calendar event compensating cleanup', () => {
     const firstClaim = await t.mutation(internal.calendarEventCleanup.claim, { cleanupJobId })
     expect(firstClaim?.attempt).toBe(1)
 
-    vi.advanceTimersByTime(60_001)
+    vi.setSystemTime(Date.now() + 60_001)
     expect(await t.mutation(internal.calendarEventCleanup.sweepDue, {})).toEqual({
       expiredClaims: 1,
       due: 0,
@@ -508,6 +508,8 @@ describe('calendar event compensating cleanup', () => {
   })
 
   test('[P1] due-job rescue schedules at most one bounded batch', async () => {
+    const deleteGoogleEvent = vi.fn().mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', deleteGoogleEvent)
     const t = convexTest(schema, modules)
     const { courseId, calendarConnectionId } = await setup(t)
     for (let index = 0; index < 26; index++) {
@@ -519,7 +521,9 @@ describe('calendar event compensating cleanup', () => {
         reason: 'missed-reschedule',
       })
     }
-    vi.advanceTimersByTime(2 * 60_000 + 1)
+    vi.setSystemTime(Date.now() + 2 * 60_000 + 1)
+    await t.finishInProgressScheduledFunctions()
+    expect(deleteGoogleEvent).not.toHaveBeenCalled()
 
     expect(await t.mutation(internal.calendarEventCleanup.sweepDue, {})).toEqual({
       expiredClaims: 0,
