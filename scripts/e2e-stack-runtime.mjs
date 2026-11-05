@@ -218,8 +218,20 @@ export function createStartupOutput(secrets, emit = () => {}) {
   }
 }
 
-export function waitForConvexReady(child, secrets, emit = undefined) {
+/** @param {Iterable<string>} secrets @param {(stream: string, text: string) => void} [emit] */
+export function forwardChildOutput(child, secrets, emit = undefined) {
   const output = createStartupOutput(secrets, emit)
+  for (const name of ['stdout', 'stderr']) {
+    child[name].on('data', chunk => output.write(name, chunk))
+    for (const event of ['end', 'close']) child[name].once(event, () => output.end(name))
+  }
+  child.once('close', () => output.finish())
+  return output
+}
+
+/** @param {Iterable<string>} secrets @param {(stream: string, text: string) => void} [emit] */
+export function waitForConvexReady(child, secrets, emit = undefined) {
+  const output = forwardChildOutput(child, secrets, emit)
   return new Promise((resolve, reject) => {
     const deadline = setTimeout(() => fail('Timed out waiting for disposable Convex functions'), 120_000)
     const fail = (message) => {
@@ -228,16 +240,14 @@ export function waitForConvexReady(child, secrets, emit = undefined) {
       reject(new Error(`${message}:\n${output.diagnostics}`))
     }
     for (const name of ['stdout', 'stderr']) {
-      child[name].on('data', chunk => {
-        output.write(name, chunk)
+      child[name].on('data', () => {
         if (output.ready) { clearTimeout(deadline); resolve() }
       })
-      child[name].once('end', () => output.end(name))
     }
     child.once('error', error => fail(`Local Convex failed to start: ${redactStartupOutput(error.message, secrets)}`))
     child.once('commandExit', code => fail(`Local Convex exited before functions were ready (exit ${code ?? 'signal'})`))
     child.once('exit', code => fail(`Local Convex owner exited before functions were ready (exit ${code ?? 'signal'})`))
-    child.once('close', code => { output.finish(); fail(`Local Convex exited before functions were ready (exit ${code ?? 'signal'})`) })
+    child.once('close', code => fail(`Local Convex exited before functions were ready (exit ${code ?? 'signal'})`))
   })
 }
 

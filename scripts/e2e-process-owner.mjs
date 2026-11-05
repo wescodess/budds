@@ -34,7 +34,14 @@ process.on('message', message => { if (message === 'stop') stop() })
 
 const report = message => { if (process.connected) process.send(message, () => {}) }
 const command = spawn(process.argv[2], process.argv.slice(3), { stdio: ['ignore', 'pipe', 'pipe'] })
-command.stdout.pipe(process.stdout)
-command.stderr.pipe(process.stderr)
+for (const [source, destination] of [[command.stdout, process.stdout], [command.stderr, process.stderr]]) {
+  destination.on('error', () => {
+    // Broken parent pipes must not cancel shutdown. Drain until force runs.
+    source.unpipe(destination)
+    source.resume()
+    stop()
+  })
+  source.pipe(destination)
+}
 command.once('error', error => report({ type: 'commandError', message: error.message }))
 command.once('exit', (code, signal) => report({ type: 'commandExit', code, signal }))

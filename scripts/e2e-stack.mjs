@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { buildNuxt, loadNuxt, writeTypes } from 'nuxt/kit'
-import { cleanupStack, createStartupOutput, ensureDisposableLearner, redactStartupOutput, spawnOwnedChild, stopChild, waitForConvexReady, waitForPortsClosed } from './e2e-stack-runtime.mjs'
+import { cleanupStack, createStartupOutput, ensureDisposableLearner, forwardChildOutput, redactStartupOutput, spawnOwnedChild, stopChild, waitForConvexReady, waitForPortsClosed } from './e2e-stack-runtime.mjs'
 
 const execFile = promisify(execFileCallback)
 const root = process.cwd()
@@ -197,8 +197,7 @@ async function main() {
     cwd: root,
     env: serverEnv,
   })
-  nuxt.stdout.pipe(process.stdout)
-  nuxt.stderr.pipe(process.stderr)
+  forwardChildOutput(nuxt, secrets, (stream, text) => process[stream].write(text))
   nuxt.once('error', error => { console.error(`Nuxt failed to start: ${redactStartupOutput(error.message, secrets)}`); void cleanup().finally(() => process.exit(1)) })
   nuxt.once('commandExit', code => { if (!cleaned) void cleanup().then(errors => process.exit(errors ? 1 : (code ?? 1))) })
   nuxt.once('close', () => { if (!cleaned) void cleanup().finally(() => process.exit(1)) })

@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { PassThrough } from 'node:stream'
 import { expect, test, vi } from 'vitest'
-import { cleanupStack, createStartupOutput, ensureDisposableLearner, redactStartupOutput, spawnOwnedChild, stopChild, supportsProcessGroups, waitForConvexReady, waitForPortsClosed } from '../scripts/e2e-stack-runtime.mjs'
+import { cleanupStack, createStartupOutput, ensureDisposableLearner, forwardChildOutput, redactStartupOutput, spawnOwnedChild, stopChild, supportsProcessGroups, waitForConvexReady, waitForPortsClosed } from '../scripts/e2e-stack-runtime.mjs'
 
 test('startup redaction does not release a credential split across adjacent chunks', () => {
   const secret = 'synthetic-boundary-credential'
@@ -240,6 +240,21 @@ function startupFixture() {
   return Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough() })
 }
 
+const serverLogStreams: Array<'stdout' | 'stderr'> = ['stdout', 'stderr']
+test.each(serverLogStreams)('built-server %s logs redact split credentials and flush on close', (stream) => {
+  const child = startupFixture()
+  const emitted: Record<string, string> = { stdout: '', stderr: '' }
+  const output = forwardChildOutput(child, new Set(['synthetic-server-credential']), (name: string, text: string) => { emitted[name] += text })
+  child[stream].write('Server listening on loopback\nsynthetic-server-')
+  expect(emitted[stream]).toBe('Server listening on loopback\n')
+  child[stream].write('credential\nRequest completed\nsynthetic-server-')
+  child.emit('close', 0)
+  expect(emitted[stream]).toBe('Server listening on loopback\n[REDACTED]\nRequest completed\n[REDACTED]')
+  expect(output.bufferedCharacters).toBe(0)
+  child[stream].write('ignored after close')
+  expect(emitted[stream]).not.toContain('ignored')
+})
+
 test('startup readiness spans chunks without waiting for a newline or stream closure', async () => {
   const child = startupFixture()
   let emitted = ''
@@ -307,6 +322,32 @@ test.skipIf(!supportsProcessGroups)('a disconnected owner still cleans up its pr
     await waitForPortsClosed([port])
   } finally { await stopChild(child) }
 })
+
+test.skipIf(!supportsProcessGroups)('dead parent and broken output pipes cannot cancel the owner force shutdown', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'budds-e2e-orphan-output-'))
+  const parent = spawn(process.execPath, [resolve('tests/fixtures/e2e-orphan-output.mjs'), 'parent', directory], { stdio: 'ignore' })
+  let port: number | undefined
+  try {
+    await expect.poll(async () => {
+      const backend = await readFile(join(directory, 'backend.json'), 'utf8').then(JSON.parse).catch(() => undefined)
+      port = backend?.port
+      return port ?? 0
+    }).toBeGreaterThan(0)
+    if (!port) throw new Error('Disposable backend did not report its listener')
+    const closed = once(parent, 'close')
+    const started = Date.now()
+    parent.kill('SIGKILL')
+    await closed
+    await expect.poll(() => stat(join(directory, 'write-attempted')).then(() => true).catch(() => false)).toBe(true)
+    expect(await fetch(`http://127.0.0.1:${port}`, { signal: AbortSignal.timeout(1000) }).then(response => response.ok)).toBe(true)
+    await waitForPortsClosed([port])
+    expect(Date.now() - started).toBeGreaterThanOrEqual(29_000)
+  } finally {
+    if (parent.exitCode === null && parent.signalCode === null) parent.kill('SIGKILL')
+    if (port) await fetch(`http://127.0.0.1:${port}/stop`, { signal: AbortSignal.timeout(1000) }).catch(() => {})
+    await rm(directory, { recursive: true, force: true })
+  }
+}, 60_000)
 
 test('direct-child fallback uses the live child handle and waits for closure', async () => {
   const child = spawn(process.execPath, ['-e', "process.on('SIGINT',()=>process.exit(0));console.log('ready');setInterval(()=>{},1000)"], { stdio: ['ignore', 'pipe', 'pipe'] })
