@@ -33,6 +33,15 @@ describe('quiz grading criteria', () => {
     expect(validateQuizGradingCriteria(fallback)).toEqual(fallback)
     expect(defaultQuizGradingCriteria('a'.repeat(500))[0]!.description).toHaveLength(300)
   })
+
+  test('truncates fallback descriptions at a code-point boundary', () => {
+    const fallback = defaultQuizGradingCriteria('a'.repeat(269) + '😀')
+    const description = fallback[0]!.description
+    expect(description.isWellFormed()).toBe(true)
+    expect(description.length).toBeLessThanOrEqual(300)
+    expect(description).toBe(`Conveys the reference answer: ${'a'.repeat(269)}`)
+    expect(validateQuizGradingCriteria(fallback)).toEqual(fallback)
+  })
 })
 
 describe('quiz criterion scoring', () => {
