@@ -25,7 +25,7 @@ const cells = computed(() => props.results.slice(firstIndex.value, lastNumber.va
     state,
     fill: Math.round(quizResultCredit(result) * 100),
     showIcon: !long.value || state !== 'correct',
-    label: `Question ${index + 1}, ${QUIZ_RESULT_LABELS[state].toLowerCase()}`,
+    label: `${long.value ? 'Question ' : 'Q'}${index + 1}, ${QUIZ_RESULT_LABELS[state].toLowerCase()}`,
   }
 }))
 </script>
@@ -42,7 +42,7 @@ const cells = computed(() => props.results.slice(firstIndex.value, lastNumber.va
         :class="[
           cell.state === 'checking' && 'border-dashed text-muted-foreground',
           cell.state === 'your_call' && 'border-primary dark:border-primary',
-          cell.index === selectedIndex && 'border-ring ring-[3px] ring-ring/50 dark:border-ring',
+          cell.index === selectedIndex && 'border-ring ring-[3px] ring-ring/50 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-3 focus-visible:outline-ring dark:border-ring',
         ]"
         :aria-label="cell.label"
         :aria-current="cell.index === selectedIndex ? 'true' : undefined"

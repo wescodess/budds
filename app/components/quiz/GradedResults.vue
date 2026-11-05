@@ -121,6 +121,7 @@ function decideNext() {
     const index = (activeIndex.value + offset) % total
     if (needsQuizDecision(quizResultState(props.results[index]!))) {
       activeIndex.value = index
+      page.value = Math.floor(index / QUIZ_STRIP_PAGE_SIZE)
       nextTick(() => reviewPanel.value?.revealAnswer(true))
       return
     }

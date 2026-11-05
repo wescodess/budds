@@ -510,6 +510,24 @@ describe('QuizResultsView graded results', () => {
       wrapper.unmount()
     })
 
+    it('200 questions page the strip back when the decide button target is already selected', async () => {
+      const rows = Array.from({ length: 200 }, (_, index) => index === 0 ? yourCall(`q${index + 1}`) : correct(`q${index + 1}`))
+      const wrapper = await mountResults(attempt(rows, 199.5))
+      const strip = () => wrapper.findAll('[data-testid="quiz-score-strip"]')[0]!
+      await strip().get('[data-slot="pagination-next"]').trigger('click')
+      await flushPromises()
+      expect(strip().text()).toContain('Questions 25–48 of 200')
+      expect(wrapper.findAll('[aria-current="true"]')).toHaveLength(0)
+
+      await clickButton(wrapper, 'Decide 1 answer')
+      expect(strip().text()).toContain('Questions 1–24 of 200')
+      expect(strip().findAll('[data-testid="quiz-score-cell"]')[0]!.attributes('aria-current')).toBe('true')
+      expect(wrapper.text()).toContain('Question 1')
+      expect(wrapper.text()).not.toContain('Question 25')
+      expect(wrapper.text()).toContain('Question text q1')
+      wrapper.unmount()
+    })
+
     it('200 questions page the strip to the answer the decide button opens', async () => {
       const rows = Array.from({ length: 200 }, (_, index) => index === 150 ? yourCall(`q${index + 1}`) : correct(`q${index + 1}`))
       const wrapper = await mountResults(attempt(rows, 199.5))
@@ -518,6 +536,61 @@ describe('QuizResultsView graded results', () => {
       expect(wrapper.text()).toContain('Question text q151')
       wrapper.unmount()
     })
+  })
+
+  it('starts each short strip name with its visible label', async () => {
+    const wrapper = await mountResults(attempt([correct('a'), partial('b'), yourCall('c')], 2))
+    for (const strip of wrapper.findAll('[data-testid="quiz-score-strip"]')) {
+      const named = strip.findAll('[data-testid="quiz-score-cell"]')
+      expect(named.map(cell => cell.text())).toEqual(['Q1', 'Q2', 'Q3'])
+      expect(named.map(cell => cell.attributes('aria-label'))).toEqual(['Q1, correct', 'Q2, partly correct', 'Q3, your call'])
+    }
+    wrapper.unmount()
+  })
+
+  it('adds a focus-only outline to the selected strip cell', async () => {
+    const outline = ['focus-visible:outline-solid', 'focus-visible:outline-2', 'focus-visible:outline-offset-3', 'focus-visible:outline-ring']
+    const wrapper = await mountResults(attempt([correct('a'), partial('b')], 1.5))
+    expect(cells(wrapper)[0]!.classes()).toEqual(expect.arrayContaining(['ring-[3px]', 'ring-ring/50', ...outline]))
+    expect(cells(wrapper)[1]!.classes()).not.toContain('focus-visible:outline-solid')
+
+    await cells(wrapper)[1]!.trigger('click')
+    expect(cells(wrapper)[1]!.classes()).toEqual(expect.arrayContaining(outline))
+    expect(cells(wrapper)[0]!.classes()).not.toContain('focus-visible:outline-solid')
+    wrapper.unmount()
+  })
+
+  it('leaves out the reference box for a question deleted after completion', async () => {
+    const deleted = { questionId: 'gone', questionText: '', questionType: 'multiple-choice', userAnswer: 'Metaphase', isCorrect: false, correctAnswer: '' }
+    const wrapper = await mountResults(attempt([deleted, partial('b')], 0.5))
+    expect(wrapper.text()).toContain('Incorrect')
+    expect(wrapper.text()).toContain('Metaphase')
+    expect(wrapper.text()).not.toContain('Reference answer')
+    await cells(wrapper)[1]!.trigger('click')
+    expect(wrapper.text()).toContain('Reference answer')
+    wrapper.unmount()
+  })
+
+  it('shows credits other than a half exactly', async () => {
+    const third = freeForm('a', { status: 'graded', credit: 0.33, label: 'partially_correct', source: 'model', feedback: 'One of three.' })
+    const wrapper = await mountResults(attempt([third, correct('b')], 1.33))
+    expect(wrapper.text()).toContain('0.33 of 1')
+    expect(wrapper.text()).toContain('1.33 of 2')
+    expect(cells(wrapper)[0]!.get('[data-testid="quiz-score-cell-fill"]').attributes('style')).toContain('width: 33%')
+    expect(wrapper.text()).not.toContain('0.330000')
+    wrapper.unmount()
+  })
+
+  it('keeps the recorded total when it exceeds the answered questions', async () => {
+    const wrapper = await mountResults(attempt([correct('a'), partial('b'), incorrect('c')], 1.5, { total: 5, percentage: 30 }))
+    expect(cells(wrapper)).toHaveLength(3)
+    expect(wrapper.text()).toContain('1.5 of 5')
+    expect(wrapper.get('[data-testid="quiz-score-value"]').text()).toMatch(/%$/)
+    await clickButton(wrapper, 'Next')
+    await clickButton(wrapper, 'Next')
+    expect(wrapper.text()).toContain('Question text c')
+    expect(wrapper.findAll('button').find(node => node.text() === 'Next')!.attributes('disabled')).toBeDefined()
+    wrapper.unmount()
   })
 
   it('never renders the internal vocabulary or model details', async () => {

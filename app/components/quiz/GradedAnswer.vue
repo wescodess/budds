@@ -59,7 +59,7 @@ const creditLine = computed(() => {
           <p class="text-xs font-medium text-muted-foreground">Your answer</p>
           <p class="mt-1 rounded-md border px-3 py-2 text-sm break-words">{{ result.userAnswer || '(no answer)' }}</p>
         </div>
-        <div v-if="showKey">
+        <div v-if="showKey && result.correctAnswer">
           <p class="text-xs font-medium text-muted-foreground">Reference answer</p>
           <p class="mt-1 rounded-md border px-3 py-2 text-sm break-words">{{ result.correctAnswer }}</p>
         </div>
