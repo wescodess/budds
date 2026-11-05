@@ -29,7 +29,7 @@ async function startStack() {
   releaseStackLock = await acquireCaptureStackLock()
   stack = spawn(process.execPath, ['scripts/e2e-stack.mjs'], {
     cwd: root,
-    env: { ...process.env, BUDDS_E2E_BASE_URL: baseUrl.origin, BUDDS_E2E_REAL_ADAPTIVE_CANVAS: 'false' },
+    env: { ...process.env, BUDDS_E2E_BASE_URL: baseUrl.origin, BUDDS_E2E_REAL_ADAPTIVE_CANVAS: 'false', BUDDS_E2E_OWNED_GROUPS_FILE: releaseStackLock.groupsFile },
     stdio: 'inherit',
     detached: true,
   })
@@ -41,7 +41,7 @@ async function startStack() {
     if (interrupted || stackFailure) throw new Error(stackFailure || 'Capture interrupted')
     const ready = await fetch(baseUrl, { signal: AbortSignal.timeout(1000) }).then(response => response.ok).catch(() => false)
     if (interrupted || stackFailure) throw new Error(stackFailure || 'Capture interrupted')
-    releaseStackLock.snapshotStack()
+    releaseStackLock.readGroups()
     if (ready) return baseUrl.origin
     await delay(250)
   }

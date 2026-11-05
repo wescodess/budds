@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { once } from 'node:events'
-import { renameSync, writeFileSync } from 'node:fs'
+import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, rmdir, unlink, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -88,16 +88,24 @@ async function signalStackGroup(group, signal, lock) {
   }
 }
 
-async function finishGroups(groups, lock, timeoutMs = 30_000, recover = false) {
+async function finishGroups(groups, lock, timeoutMs = 30_000, recover = false, refresh = () => {}) {
   const wait = async ms => {
     const deadline = Date.now() + ms
-    while (groups.some(group => groupState(group, lock) !== false)) {
+    while (true) {
+      refresh()
+      if (groups.every(group => groupState(group, lock) === false)) {
+        // Re-read after the producers exit, including registrations made mid-probe.
+        const count = groups.length
+        refresh()
+        if (groups.length === count) return true
+        continue
+      }
       if (Date.now() >= deadline) return false
       await delay(25)
     }
-    return true
   }
   if (!recover && await wait(timeoutMs)) return
+  refresh()
   for (const group of groups) await signalStackGroup(group, 'SIGTERM', lock)
   if (await wait(timeoutMs)) return
   for (const group of groups) await signalStackGroup(group, 'SIGKILL', lock)
@@ -106,10 +114,39 @@ async function finishGroups(groups, lock, timeoutMs = 30_000, recover = false) {
 
 // Convex's backend port probes and shared dashboard cache are not isolated per run.
 export async function acquireCaptureStackLock(lock = join(tmpdir(), `budds-design-capture-stack-${process.getuid?.() ?? 'user'}.lock`)) {
-  const owner = { pid: process.pid, token: randomUUID(), startedAt: new Date().toISOString(), stackGroups: [] }
+  const owner = { pid: process.pid, token: randomUUID(), startedAt: new Date().toISOString(), stackGroups: [], groupsTokens: [] }
   const ownerFile = `owner-${owner.pid}-${owner.token}.json`
   const candidate = await mkdtemp(`${lock}.candidate-`)
   const save = () => writeFileSync(join(lock, ownerFile), JSON.stringify(owner))
+  const groupsPath = token => {
+    if (typeof token !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/u.test(token)) throw inspectionError(lock)
+    return `${lock}.groups-${token}.jsonl`
+  }
+  const refreshGroups = () => {
+    for (const token of owner.groupsTokens) {
+      let contents
+      try { contents = readFileSync(groupsPath(token), 'utf8') }
+      catch (error) { if (error.code === 'ENOENT') continue; throw inspectionError(lock) }
+      for (const line of contents.split('\n').filter(Boolean)) {
+        let pid
+        try { ({ pid } = JSON.parse(line)) } catch { throw inspectionError(lock) }
+        if (!Number.isSafeInteger(pid) || pid <= 0) throw inspectionError(lock)
+        if (owner.stackGroups.some(group => group.pid === pid)) continue
+        const group = { pid, identities: [] }
+        owner.stackGroups.push(group)
+        save()
+        const identity = processIdentity(pid, lock)
+        if (identity) {
+          if (identity.pgid !== pid || !identity.command.includes('e2e-process-owner.mjs')) throw inspectionError(lock)
+          group.identities.push(identity)
+          save()
+        }
+      }
+    }
+  }
+  const removeGroupsFiles = async () => {
+    for (const token of owner.groupsTokens) await unlink(groupsPath(token)).catch(error => { if (error.code !== 'ENOENT') throw error })
+  }
   try {
     await writeFile(join(candidate, ownerFile), JSON.stringify(owner))
     while (true) {
@@ -130,6 +167,8 @@ export async function acquireCaptureStackLock(lock = join(tmpdir(), `budds-desig
       try { renameSync(join(lock, files[0]), join(lock, ownerFile)) }
       catch (error) { if (error.code === 'ENOENT') continue; throw error }
       owner.stackGroups = previous.stackGroups || []
+      owner.groupsTokens = previous.groupsTokens || []
+      if (!Array.isArray(owner.groupsTokens)) throw inspectionError(lock)
       if (previous.stackPid !== undefined) {
         if (!Number.isSafeInteger(previous.stackPid) || previous.stackPid <= 0) throw inspectionError(lock)
         owner.stackPid = previous.stackPid
@@ -138,9 +177,11 @@ export async function acquireCaptureStackLock(lock = join(tmpdir(), `budds-desig
       // Persist orphan identities before recovery can be interrupted.
       save()
       const stack = owner.stackGroups.find(group => group.pid === owner.stackPid)
-      if (stack) owner.stackGroups = snapshotGroups(stack, owner.stackGroups, lock)
+      if (stack && !owner.groupsTokens.length) owner.stackGroups = snapshotGroups(stack, owner.stackGroups, lock)
       save()
-      await finishGroups(owner.stackGroups, lock, 30_000, true)
+      await finishGroups(owner.stackGroups, lock, 30_000, true, refreshGroups)
+      await removeGroupsFiles()
+      owner.groupsTokens = []
       delete owner.stackPid
       owner.stackGroups = []
       save()
@@ -148,9 +189,14 @@ export async function acquireCaptureStackLock(lock = join(tmpdir(), `budds-desig
     }
   }
   finally { await rm(candidate, { recursive: true, force: true }) }
+  owner.groupsTokens = [owner.token]
+  const groupsFile = groupsPath(owner.token)
+  writeFileSync(groupsFile, '', { flag: 'wx', mode: 0o600 })
+  save()
   let releasing
   const release = timeoutMs => releasing ||= (async () => {
-    await finishGroups(owner.stackGroups, lock, timeoutMs)
+    await finishGroups(owner.stackGroups, lock, timeoutMs, false, refreshGroups)
+    await removeGroupsFiles()
     await unlink(join(lock, ownerFile))
     await rmdir(lock).catch(error => { if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(error.code)) throw error })
   })()
@@ -160,20 +206,19 @@ export async function acquireCaptureStackLock(lock = join(tmpdir(), `budds-desig
     owner.stackPid = pid
     owner.stackGroups = [{ pid, identities: [identity] }]
     save()
-    release.snapshotStack()
-  }
-  release.snapshotStack = () => {
-    if (releasing) return
-    const stack = owner.stackGroups.find(group => group.pid === owner.stackPid)
-    if (stack) owner.stackGroups = snapshotGroups(stack, owner.stackGroups, lock)
+    // One initial snapshot preserves identities of children already in the stack group.
+    owner.stackGroups = snapshotGroups(owner.stackGroups[0], owner.stackGroups, lock)
     save()
+    refreshGroups()
   }
+  release.groupsFile = groupsFile
+  release.readGroups = refreshGroups
   release.stackGroup = () => owner.stackGroups.find(group => group.pid === owner.stackPid)
   return release
 }
 
 export async function stopCaptureStack(child, release, timeoutMs) {
-  release?.snapshotStack()
+  release?.readGroups()
   try { await stopChild(child, timeoutMs, release?.stackGroup()) }
   finally { await release?.(timeoutMs) }
 }

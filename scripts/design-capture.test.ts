@@ -8,6 +8,7 @@ import { Window } from 'happy-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { acquireCaptureStackLock, captureIdentity, compareFloor, normalizeSelector, publishCaptureOutput, readComparisonFloor, resetCaptureOutput, selectCaptureBaseUrl, stopCaptureStack, stopChild, validateSurface, violationId } from './design-capture-lib.mjs'
 import { checkLayout } from './design-capture-checks.mjs'
+import { spawnOwnedChild, stopChild as stopOwnedChild } from './e2e-stack-runtime.mjs'
 
 const surface = {
   version: 1,
@@ -51,6 +52,21 @@ async function detachedStack(root: string) {
   return { stack, backendPid }
 }
 
+async function crashingOwnedStack(root: string, groupsFile: string) {
+  const stackFile = join(root, 'e2e-stack.mjs')
+  await writeFile(stackFile, `
+    import { spawnOwnedChild } from ${JSON.stringify(new URL('./e2e-stack-runtime.mjs', import.meta.url).href)}
+    process.once('message', () => {
+      const backend = spawnOwnedChild(process.execPath, ['-e', ${JSON.stringify(`const { existsSync } = require('node:fs'); setInterval(() => { if (existsSync(${JSON.stringify(join(root, 'finish-backend'))})) process.exit(0) }, 10); process.on('SIGINT', () => {}); process.stdout.write('ready')`)}])
+      backend.stdout.once('data', () => { process.stdout.write(String(backend.pid)); process.exit(1) })
+    })
+    process.stdout.write('ready')
+  `)
+  const stack = spawn(process.execPath, [stackFile], { detached: true, env: { ...process.env, BUDDS_E2E_OWNED_GROUPS_FILE: groupsFile }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] })
+  await once(stack.stdout!, 'data')
+  return stack
+}
+
 async function staleOwner(lock: string) {
   const [file] = await readdir(lock)
   const metadata = JSON.parse(await readFile(join(lock, file), 'utf8'))
@@ -62,6 +78,72 @@ async function staleOwner(lock: string) {
 }
 
 describe('verified stack group ownership', () => {
+  it('holds the lock for a registered backend when the stack crashes before any snapshot', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'design-capture-registration-crash-'))
+    const lock = join(root, 'stack.lock')
+    const release = await acquireCaptureStackLock(lock)
+    const stack = await crashingOwnedStack(root, release.groupsFile)
+    let backendPid: number | undefined
+    let stopping: Promise<unknown> | undefined
+    try {
+      release.recordStack(stack.pid)
+      const registered = once(stack.stdout!, 'data')
+      const exited = once(stack, 'exit')
+      stack.send('spawn')
+      backendPid = Number(String((await registered)[0]))
+      await exited
+      expect(() => process.kill(-backendPid!, 0)).not.toThrow()
+      let released = false
+      stopping = stopCaptureStack(stack, release).then(() => { released = true })
+      await new Promise(resolve => setTimeout(resolve, 100))
+      expect(released).toBe(false)
+      await expect(acquireCaptureStackLock(lock)).rejects.toThrow('Another route capture owns')
+      await writeFile(join(root, 'finish-backend'), 'finish')
+      await stopping
+      expect(() => process.kill(-backendPid!, 0)).toThrow()
+      const next = await acquireCaptureStackLock(lock)
+      await next()
+    }
+    finally {
+      for (const pid of [stack.pid, backendPid]) if (pid) try { process.kill(-pid, 'SIGKILL') } catch { /* Only this test's groups. */ }
+      await stopping?.catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    }
+  }, 10_000)
+
+  it.each(['verified', 'mismatched', 'uninspected', 'unverifiable'])('recovers registered orphan groups safely: %s', async mode => {
+    const root = await mkdtemp(join(tmpdir(), 'design-capture-registered-stale-'))
+    const lock = join(root, 'stack.lock')
+    const release = await acquireCaptureStackLock(lock)
+    const backend = spawnOwnedChild(process.execPath, ['-e', "setInterval(() => {}, 1000); process.on('SIGINT', () => setTimeout(() => process.exit(0), 100)); process.stdout.write('ready')"], { env: { ...process.env, BUDDS_E2E_OWNED_GROUPS_FILE: release.groupsFile } })
+    try {
+      await once(backend.stdout!, 'data')
+      if (mode !== 'uninspected') release.readGroups()
+      const { metadata, target } = await staleOwner(lock)
+      if (mode === 'mismatched') metadata.stackGroups[0].identities[0].command = 'different process'
+      if (mode === 'unverifiable') metadata.stackGroups[0].identities = []
+      await writeFile(target, JSON.stringify(metadata))
+      const kill = vi.spyOn(process, 'kill')
+      if (mode === 'unverifiable') {
+        await expect(acquireCaptureStackLock(lock)).rejects.toThrow('remove this lock directory and retry')
+        expect(await readdir(lock)).toHaveLength(1)
+      }
+      else {
+        const recovered = await acquireCaptureStackLock(lock)
+        if (mode === 'mismatched') expect(() => process.kill(-backend.pid!, 0)).not.toThrow()
+        else expect(() => process.kill(-backend.pid!, 0)).toThrow()
+        await recovered()
+      }
+      if (mode === 'mismatched' || mode === 'unverifiable') expect(kill.mock.calls.filter(([pid, signal]) => pid === -backend.pid! && signal !== 0)).toEqual([])
+      else expect(kill).toHaveBeenCalledWith(-backend.pid!, 'SIGTERM')
+    }
+    finally {
+      vi.restoreAllMocks()
+      await stopOwnedChild(backend)
+      await rm(root, { recursive: true, force: true })
+    }
+  }, 10_000)
+
   it('takes over a reused stack PID without signalling the mismatched group', async () => {
     const root = await mkdtemp(join(tmpdir(), 'design-capture-reused-'))
     const lock = join(root, 'stack.lock')
