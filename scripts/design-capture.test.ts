@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Window } from 'happy-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { acquireCaptureStackLock, captureIdentity, compareFloor, normalizeSelector, publishCaptureOutput, readComparisonFloor, resetCaptureOutput, selectCaptureBaseUrl, stopChild, validateSurface, violationId } from './design-capture-lib.mjs'
+import { acquireCaptureStackLock, captureIdentity, compareFloor, normalizeSelector, publishCaptureOutput, readComparisonFloor, resetCaptureOutput, selectCaptureBaseUrl, stopCaptureStack, stopChild, validateSurface, violationId } from './design-capture-lib.mjs'
 import { checkLayout } from './design-capture-checks.mjs'
 
 const surface = {
@@ -23,13 +23,90 @@ const capture = captureIdentity('example', surface.cases[0], 'dark', surface.vie
 const floor = { version: 1, surface: 'example', status: 'complete', errors: [], captures: [capture], violations: [{ id: 'known' }] }
 
 describe('capture loopback ports', () => {
+  it('claims a dead owner exclusively and stops its recorded orphan stack before returning', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'design-capture-orphan-'))
+    const lock = join(root, 'stack.lock')
+    const child = spawn(process.execPath, ['--input-type=module', '-e', `
+      import { spawn } from 'node:child_process'
+      import { acquireCaptureStackLock } from ${JSON.stringify(new URL('./design-capture-lib.mjs', import.meta.url).href)}
+      const release = await acquireCaptureStackLock(${JSON.stringify(lock)})
+      const stack = spawn(process.execPath, ['-e', "setInterval(() => {}, 1000); process.stdout.write('ready')"], { detached: true, stdio: ['ignore', 'pipe', 'ignore'] })
+      stack.stdout.once('data', () => { release.recordStack(stack.pid); process.stdout.write(String(stack.pid)) })
+    `], { stdio: ['ignore', 'pipe', 'pipe'] })
+    let stackPid
+    try {
+      stackPid = Number(String((await once(child.stdout!, 'data'))[0]))
+      child.kill('SIGKILL')
+      await once(child, 'exit')
+      const contenders = await Promise.allSettled([acquireCaptureStackLock(lock), acquireCaptureStackLock(lock)])
+      for (const contender of contenders) if (contender.status === 'fulfilled') await contender.value()
+      expect(contenders.filter(value => value.status === 'fulfilled')).toHaveLength(1)
+      expect(() => process.kill(-stackPid, 0)).toThrow()
+    }
+    finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+      if (stackPid) try { process.kill(-stackPid, 'SIGKILL') } catch { /* Only this test's recorded stack group. */ }
+      await rm(root, { recursive: true, force: true })
+    }
+  }, 40_000)
+
+  it('recovers a SIGKILLed owner and admits only one stale-lock contender', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'design-capture-stale-'))
+    const lock = join(root, 'stack.lock')
+    const child = spawn(process.execPath, ['--input-type=module', '-e', `
+      import { acquireCaptureStackLock } from ${JSON.stringify(new URL('./design-capture-lib.mjs', import.meta.url).href)}
+      await acquireCaptureStackLock(${JSON.stringify(lock)})
+      process.stdout.write('ready'); setInterval(() => {}, 1000)
+    `], { stdio: ['ignore', 'pipe', 'pipe'] })
+    try {
+      await once(child.stdout!, 'data')
+      const files = await readdir(lock)
+      expect(JSON.parse(await readFile(join(lock, files[0]), 'utf8')).pid).toBe(child.pid)
+      child.kill('SIGKILL')
+      await once(child, 'exit')
+      const contenders = await Promise.allSettled(Array.from({ length: 8 }, () => acquireCaptureStackLock(lock)))
+      const winners = contenders.filter(value => value.status === 'fulfilled')
+      expect(winners).toHaveLength(1)
+      expect(contenders.filter(value => value.status === 'rejected')).toHaveLength(7)
+      for (const winner of winners) if (winner.status === 'fulfilled') await winner.value()
+      await expect(readdir(lock)).rejects.toThrow('ENOENT')
+    }
+    finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+      await rm(root, { recursive: true, force: true })
+    }
+  }, 30_000)
+
+  it('releases the stack lock after forced cleanup while retaining the timeout error', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'design-capture-timeout-'))
+    const lock = join(root, 'stack.lock')
+    const child = spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.stdout.write('ready')"], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    try {
+      await once(child.stdout!, 'data')
+      const release = await acquireCaptureStackLock(lock)
+      await expect(stopCaptureStack(child, release, 100)).rejects.toThrow('cleanup timed out')
+      expect(child.signalCode).toBe('SIGKILL')
+      const releaseNext = await acquireCaptureStackLock(lock)
+      await releaseNext()
+    }
+    finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+      await rm(root, { recursive: true, force: true })
+    }
+  }, 30_000)
+
   it('rejects another route stack until its owner finishes cleanup', async () => {
-    const release = await acquireCaptureStackLock()
-    try { await expect(acquireCaptureStackLock()).rejects.toThrow('Another route capture owns') }
-    finally { await release() }
-    const releaseNext = await acquireCaptureStackLock()
-    await releaseNext()
-    await releaseNext()
+    const root = await mkdtemp(join(tmpdir(), 'design-capture-lock-'))
+    const lock = join(root, 'stack.lock')
+    try {
+      const release = await acquireCaptureStackLock(lock)
+      try { await expect(acquireCaptureStackLock(lock)).rejects.toThrow('Another route capture owns') }
+      finally { await Promise.all([release(), release()]) }
+      const releaseNext = await acquireCaptureStackLock(lock)
+      await releaseNext()
+      await releaseNext()
+    }
+    finally { await rm(root, { recursive: true, force: true }) }
   })
 
   it('uses independent OS-assigned ports for simultaneous default captures', async () => {
@@ -158,6 +235,27 @@ describe('generated selectors', () => {
 })
 
 describe('capture publication', () => {
+  it('keeps the committed result when cancellation arrives after the rename', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'design-capture-committed-'))
+    try {
+      const output = join(root, '.design-captures/example/abc1234')
+      const staging = await resetCaptureOutput(root, 'example', output)
+      await writeFile(join(staging, 'floor.json'), JSON.stringify(floor))
+      let checks = 0
+      let interrupted = false
+      await publishCaptureOutput(root, 'example', staging, output, () => {
+        // The final guard and both renames execute synchronously. A signal
+        // callback can only run on the next yield, after the committed rename.
+        if (++checks === 2) queueMicrotask(() => { interrupted = true })
+        return interrupted
+      })
+      expect(interrupted).toBe(true)
+      expect(await readComparisonFloor(output)).toEqual(floor)
+      await expect(readdir(staging)).rejects.toThrow('ENOENT')
+    }
+    finally { await rm(root, { recursive: true, force: true }) }
+  })
+
   it('keeps the published baseline until a complete staging capture replaces it', async () => {
     const root = await mkdtemp(join(tmpdir(), 'design-capture-publish-'))
     try {
@@ -217,6 +315,34 @@ describe('capture publication', () => {
 })
 
 describe('stack interruption', () => {
+  it('releases after transient EPERM only once the owned group is confirmed gone', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'design-capture-eperm-'))
+    const child = spawn(process.execPath, ['-e', "setInterval(() => {}, 1000); process.stdout.write('ready')"], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    const kill = process.kill.bind(process)
+    let deniedProbe = false
+    try {
+      await once(child.stdout!, 'data')
+      const lock = join(root, 'stack.lock')
+      const release = await acquireCaptureStackLock(lock)
+      vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+        if (pid === -child.pid! && (signal === 'SIGKILL' || signal === 0 && !deniedProbe)) {
+          if (signal === 0) deniedProbe = true
+          throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' })
+        }
+        return kill(pid, signal)
+      })
+      await stopCaptureStack(child, release)
+      expect(deniedProbe).toBe(true)
+      const releaseNext = await acquireCaptureStackLock(lock)
+      await releaseNext()
+    }
+    finally {
+      vi.restoreAllMocks()
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+      await rm(root, { recursive: true, force: true })
+    }
+  }, 30_000)
+
   it('sends one SIGTERM and waits for asynchronous one-shot cleanup', async () => {
     const child = spawn(process.execPath, ['-e', `
       setInterval(() => {}, 1000)
@@ -350,6 +476,7 @@ describe('CLI failure lifecycle without a browser', () => {
       await mkdir(output, { recursive: true })
       await writeFile(join(output, 'keep.png'), 'last good frame')
       vi.resetModules()
+      vi.doMock('node:os', async () => ({ ...await vi.importActual<typeof import('node:os')>('node:os'), tmpdir: () => root }))
       const spawnStack = vi.fn(() => child)
       vi.doMock('node:child_process', async () => ({ ...await vi.importActual<typeof import('node:child_process')>('node:child_process'), spawn: spawnStack }))
       vi.doMock('node:net', () => ({ createServer: () => ({ once() {}, listen(_port: number, _host: string, ready: () => void) { ready() }, address() { return { port: 43210 } }, close(done: () => void) { done() } }) }))
@@ -385,10 +512,12 @@ describe('CLI failure lifecycle without a browser', () => {
       if (interrupt) expect(failed.errors).toContain('Capture interrupted')
       expect(console.error).toHaveBeenCalledWith(expect.stringContaining('this folder can be deleted:'))
       expect(process.exitCode).toBe(1)
+      expect((await readdir(root)).filter(name => name.startsWith('budds-design-capture-stack-'))).toEqual([])
     }
     finally {
       vi.doUnmock('node:child_process')
       vi.doUnmock('node:net')
+      vi.doUnmock('node:os')
       vi.doUnmock('@playwright/test')
       vi.restoreAllMocks()
       vi.unstubAllGlobals()

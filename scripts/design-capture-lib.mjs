@@ -1,25 +1,104 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { once } from 'node:events'
-import { renameSync } from 'node:fs'
-import { lstat, mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises'
+import { renameSync, writeFileSync } from 'node:fs'
+import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, rmdir, unlink, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { z } from 'zod'
 
 // Convex's backend port probes and shared dashboard cache are not isolated per run.
-export async function acquireCaptureStackLock() {
-  const lock = join(tmpdir(), `budds-design-capture-stack-${process.getuid?.() ?? 'user'}.lock`)
-  try { await mkdir(lock) }
-  catch (error) {
-    if (error.code === 'EEXIST') throw new Error(`Another route capture owns the disposable stack lock: ${lock}. Run route captures one at a time; remove a stale lock only after confirming its owner has stopped.`, { cause: error })
-    throw error
+export async function acquireCaptureStackLock(lock = join(tmpdir(), `budds-design-capture-stack-${process.getuid?.() ?? 'user'}.lock`)) {
+  const owner = { pid: process.pid, token: randomUUID(), startedAt: new Date().toISOString() }
+  const ownerFile = `owner-${owner.pid}-${owner.token}.json`
+  const candidate = await mkdtemp(`${lock}.candidate-`)
+  const alive = pid => {
+    try { process.kill(pid, 0); return true }
+    catch (error) { if (error.code === 'ESRCH') return false; if (error.code === 'EPERM') return true; throw error }
   }
-  let released = false
-  return async () => {
-    if (released) return
-    released = true
-    await rm(lock, { recursive: true })
+  try {
+    await writeFile(join(candidate, ownerFile), JSON.stringify(owner))
+    while (true) {
+      // Installing a populated directory is atomic. It can replace an empty
+      // legacy/crashed lock, but cannot replace another populated owner.
+      try { renameSync(candidate, lock); break }
+      catch (error) { if (!['EEXIST', 'ENOTEMPTY'].includes(error.code)) throw error }
+      let files
+      try { files = await readdir(lock) }
+      catch (error) { if (error.code === 'ENOENT') continue; throw error }
+      if (!files.length) continue
+      if (files.length !== 1 || !/^owner-\d+-[a-f0-9-]+\.json$/u.test(files[0])) throw new Error(`Unrecognized disposable stack lock: ${lock}`)
+      const previousPid = Number(files[0].split('-')[1])
+      if (!Number.isSafeInteger(previousPid) || previousPid <= 0) throw new Error(`Invalid disposable stack lock owner: ${lock}`)
+      if (alive(previousPid)) throw new Error(`Another route capture owns the disposable stack lock: ${lock} (PID ${previousPid}). Run route captures one at a time.`)
+      let previous
+      try { previous = JSON.parse(await readFile(join(lock, files[0]), 'utf8')) }
+      catch (error) { if (error.code === 'ENOENT') continue; throw error }
+      // Rename the exact dead owner's unique entry to our live PID/token.
+      // Only one contender can claim it; the directory is never left empty.
+      try { renameSync(join(lock, files[0]), join(lock, ownerFile)) }
+      catch (error) { if (error.code === 'ENOENT') continue; throw error }
+      if (previous.stackPid !== undefined) {
+        if (!Number.isSafeInteger(previous.stackPid) || previous.stackPid <= 0) throw new Error(`Invalid disposable stack process group: ${lock}`)
+        owner.stackPid = previous.stackPid
+      }
+      // Retain orphan ownership even if this recovery process is hard-killed.
+      writeFileSync(join(lock, ownerFile), JSON.stringify(owner))
+      if (owner.stackPid && alive(-owner.stackPid)) {
+        await signalStackGroup(owner.stackPid, 'SIGTERM')
+        const deadline = Date.now() + 30_000
+        while (alive(-owner.stackPid) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25))
+        if (alive(-owner.stackPid)) await signalStackGroup(owner.stackPid, 'SIGKILL')
+        const killedDeadline = Date.now() + 2000
+        while (alive(-owner.stackPid) && Date.now() < killedDeadline) await new Promise(resolve => setTimeout(resolve, 25))
+        if (alive(-owner.stackPid)) throw new Error(`Orphaned E2E stack group has not stopped: ${owner.stackPid}`)
+      }
+      delete owner.stackPid
+      writeFileSync(join(lock, ownerFile), JSON.stringify(owner))
+      break
+    }
+  }
+  finally { await rm(candidate, { recursive: true, force: true }) }
+  let releasing
+  const release = () => releasing ||= (async () => {
+    await unlink(join(lock, ownerFile))
+    await rmdir(lock).catch(error => { if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(error.code)) throw error })
+  })()
+  release.recordStack = pid => {
+    owner.stackPid = pid
+    writeFileSync(join(lock, ownerFile), JSON.stringify(owner))
+  }
+  return release
+}
+
+async function confirmStackGroupStopped(pid) {
+  const deadline = Date.now() + 2000
+  while (true) {
+    try { process.kill(-pid, 0) }
+    catch (error) { if (error.code === 'ESRCH') return; if (error.code !== 'EPERM') throw error }
+    if (Date.now() >= deadline) throw new Error(`Owned E2E stack group has not stopped: ${pid}`)
+    await new Promise(resolve => setTimeout(resolve, 25))
+  }
+}
+
+async function signalStackGroup(pid, signal) {
+  try { process.kill(-pid, signal) }
+  catch (error) {
+    if (error.code === 'ESRCH') return
+    // A disappearing group can briefly deny signals on macOS. Suppress the
+    // error only after a subsequent probe confirms the entire group is gone.
+    if (error.code === 'EPERM') await confirmStackGroupStopped(pid)
+    else throw error
+  }
+}
+
+export async function stopCaptureStack(child, release, timeoutMs) {
+  try { await stopChild(child, timeoutMs) }
+  finally {
+    // SIGKILL delivery can precede the last descendant being reaped. Keep the
+    // lock until the owned group is gone, including when stopChild rejects.
+    if (child?.pid) await confirmStackGroupStopped(child.pid)
+    await release?.()
   }
 }
 
@@ -142,7 +221,7 @@ export async function readComparisonFloor(directory) {
   return JSON.parse(await readFile(join(actual, 'floor.json'), 'utf8'))
 }
 
-export async function publishCaptureOutput(root, surface, staging, output) {
+export async function publishCaptureOutput(root, surface, staging, output, isInterrupted = () => false) {
   const target = await safeCapturePath(root, surface, output)
   const source = await safeCapturePath(root, surface, staging)
   const child = relative(resolve(root, '.design-captures', surface), resolve(output))
@@ -150,7 +229,9 @@ export async function publishCaptureOutput(root, surface, staging, output) {
   const lock = await safeCapturePath(root, surface, `${output}.publish-lock`)
   const deadline = Date.now() + 5000
   // Only the short rename transaction is serialized; captures remain independent.
+  const assertActive = () => { if (isInterrupted()) throw new Error('Capture interrupted before publication') }
   while (true) {
+    assertActive()
     try { await mkdir(lock); break }
     catch (error) {
       if (error.code !== 'EEXIST' || Date.now() >= deadline) throw error
@@ -160,6 +241,7 @@ export async function publishCaptureOutput(root, surface, staging, output) {
   let previous
   try {
     await safeCapturePath(root, surface, output)
+    assertActive()
     previous = `${target}.previous-${randomUUID()}`
     // Do not yield between renames: keep the publication gap as short as possible.
     try { renameSync(target, previous) }
@@ -170,7 +252,7 @@ export async function publishCaptureOutput(root, surface, staging, output) {
       throw error
     }
   }
-  finally { await rm(lock, { recursive: true, force: true }) }
+  finally { await rm(lock, { recursive: true, force: true }).catch(error => console.error(`Publication lock can be deleted: ${lock}: ${error.message}`)) }
   if (previous) await rm(previous, { recursive: true, force: true }).catch(error => console.error(`Old capture can be deleted: ${previous}: ${error.message}`))
 }
 
@@ -178,13 +260,9 @@ const stopping = new WeakMap()
 export function stopChild(child, timeoutMs = 30_000) {
   if (!child?.pid) return Promise.resolve()
   if (stopping.has(child)) return stopping.get(child)
-  const signalGroup = signal => {
-    try { process.kill(-child.pid, signal) }
-    catch (error) { if (error.code !== 'ESRCH') throw error }
-  }
   const stopped = (async () => {
     const exited = child.exitCode !== null || child.signalCode !== null ? Promise.resolve() : once(child, 'exit')
-    signalGroup('SIGTERM')
+    await signalStackGroup(child.pid, 'SIGTERM')
     let timer
     try {
       await Promise.race([exited, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('E2E stack cleanup timed out')), timeoutMs) })])
@@ -192,7 +270,7 @@ export function stopChild(child, timeoutMs = 30_000) {
     finally {
       clearTimeout(timer)
       // The stack can exit while a startup subprocess or grandchild is still alive.
-      signalGroup('SIGKILL')
+      await signalStackGroup(child.pid, 'SIGKILL')
       await exited
     }
   })()

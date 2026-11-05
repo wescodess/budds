@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { chromium } from '@playwright/test'
-import { acquireCaptureStackLock, captureIdentity, compareFloor, publishCaptureOutput, readComparisonFloor, resetCaptureOutput, selectCaptureBaseUrl, stopChild, validateSurface, violationId } from './design-capture-lib.mjs'
+import { acquireCaptureStackLock, captureIdentity, compareFloor, publishCaptureOutput, readComparisonFloor, resetCaptureOutput, selectCaptureBaseUrl, stopCaptureStack, validateSurface, violationId } from './design-capture-lib.mjs'
 import { checkPage } from './design-capture-checks.mjs'
 
 const execFile = promisify(execFileCallback)
@@ -33,6 +33,7 @@ async function startStack() {
     stdio: 'inherit',
     detached: true,
   })
+  releaseStackLock.recordStack(stack.pid)
   stack.once('error', error => { stackFailure = message(error) })
   stack.once('exit', (code, signal) => { stackFailure = `Disposable E2E stack exited (${signal || code})` })
   const deadline = Date.now() + 180_000
@@ -47,8 +48,7 @@ async function startStack() {
 }
 
 async function stopStack() {
-  await stopChild(stack)
-  await releaseStackLock?.()
+  await stopCaptureStack(stack, releaseStackLock)
 }
 
 async function capturePage(surface, identity, entry, baseUrl, output) {
@@ -183,7 +183,10 @@ export async function main() {
     await writeJson(join(output, 'floor.json'), floor)
   }
   if (!floor.errors.length) {
-    try { await publishCaptureOutput(root, surfaceName, output, published) }
+    try {
+      await publishCaptureOutput(root, surfaceName, output, published, () => interrupted)
+      if (interrupted) console.log('Capture interrupted after atomic publication; the complete published result stands.')
+    }
     catch (error) {
       floor.errors.push(message(error))
       floor.status = manifest.status = 'error'
