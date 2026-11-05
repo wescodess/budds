@@ -62,13 +62,15 @@ describe('AudioOverviewShell durable generation command', () => {
     vi.stubGlobal('$fetch', mockCommandFetch)
     vi.stubGlobal('useTasks', () => ({ tasks, cancel: vi.fn() }))
     vi.stubGlobal('useDocuments', () => ({ documents }))
-    vi.stubGlobal('useConvexQuery', (apiRef: unknown) => {
+    const queryStub = (apiRef: unknown) => {
       const name = getFunctionName(apiRef as any) ?? ''
       if (name.includes('getDailyQuota')) return { data: ref({ used: 0, cap: 10, date: '2026-09-02' }) }
       if (name.includes('resolveScope')) return { data: ref({ documentIds: [] }) }
       if (name.includes('listByRoom')) return { data: ref([]) }
       return { data: ref(null) }
-    })
+    }
+    vi.stubGlobal('useConvexQuery', queryStub)
+    vi.stubGlobal('useSkippableConvexQuery', queryStub)
     vi.stubGlobal('useConvexMutation', (apiRef: unknown) => {
       const name = getFunctionName(apiRef as any) ?? ''
       if (name.includes('requestAudioOverview')) return { mutate: mockLegacyReservation, isLoading: ref(false) }
