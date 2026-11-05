@@ -1,7 +1,7 @@
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
 import manifest from '../../workers/laya-evaluator/learningDecisionManifest.json'
-import { QUIZ_RUBRIC_GRADE_VERSION, defaultQuizGradingCriteria, getDeterministicQuizGrade, validateQuizGradingCriteria, type QuizGrade } from '../../shared/quiz-grading'
+import { QUIZ_RUBRIC_GRADE_VERSION, defaultQuizGradingCriteria, validateQuizGradingCriteria, type QuizGrade, type QuizGradingCriterion } from '../../shared/quiz-grading'
 
 export const FREE_RESPONSE_ASSESSMENT_KIND = manifest.decisionKinds.freeResponse.kind as 'quiz.free_response_assessment.v1'
 export const FREE_RESPONSE_RUBRIC = manifest.decisionKinds.freeResponse.rubric
@@ -49,10 +49,20 @@ export async function createPendingAnswerAssessment(
   const quiz = await ctx.db.get(input.question.quizId)
   const language = quiz?.language?.trim().toLowerCase().replaceAll('_', '-') || 'unknown'
   const now = Date.now()
-  const criteria = isQuizGradingEnabled()
-    ? validateQuizGradingCriteria(input.question.gradingCriteria ?? defaultQuizGradingCriteria(input.question.correctAnswer))
-    : undefined
-  const grade = criteria ? getDeterministicQuizGrade(input.learnerAnswer, input.question.correctAnswer) : null
+  let criteria: QuizGradingCriterion[] | undefined
+  if (isQuizGradingEnabled()) {
+    const fallback = defaultQuizGradingCriteria(input.question.correctAnswer)
+    try {
+      criteria = validateQuizGradingCriteria(input.question.gradingCriteria ?? fallback)
+    }
+    catch {
+      criteria = fallback
+    }
+  }
+  const isEmpty = input.learnerAnswer.trim().length === 0
+  const grade = criteria && (input.deterministicIsCorrect || isEmpty)
+    ? { credit: isEmpty ? 0 : 1, label: isEmpty ? 'incorrect' as const : 'fully_correct' as const }
+    : null
   return await ctx.db.insert('quizAnswerAssessments', {
     userId: input.userId,
     attemptId: input.attemptId,

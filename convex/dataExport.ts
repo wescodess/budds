@@ -2,7 +2,6 @@ import { paginationOptsValidator } from 'convex/server'
 import { v } from 'convex/values'
 import { query } from './_generated/server'
 import { requireAuth } from './lib/auth'
-import { isRubricAssessment, projectLearnerQuizQuestion } from './lib/quizAnswerAssessment'
 import { ADAPTIVE_LEARN_EXPORT_COLLECTIONS } from '../shared/adaptive-learn-storage-manifest'
 
 // A single Convex document can approach 1 MiB. Keep pages comfortably below
@@ -149,20 +148,12 @@ export const getUserDataPage = query({
         return await ctx.db.query('messages').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
       case 'quizzes':
         return await ctx.db.query('quizzes').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
-      case 'quizQuestions': {
-        const result = await ctx.db.query('quizQuestions').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
-        return { ...result, page: result.page.map(projectLearnerQuizQuestion) }
-      }
+      case 'quizQuestions':
+        return await ctx.db.query('quizQuestions').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
       case 'quizAttempts':
         return await ctx.db.query('quizAttempts').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
-      case 'quizAnswerAssessments': {
-        const result = await ctx.db.query('quizAnswerAssessments').withIndex('by_userId_and_attemptId', q => q.eq('userId', userId)).paginate(paginationOpts)
-        return { ...result, page: result.page.map(({ criteriaSnapshot: _criteria, criterionResults: _results, ...row }) => {
-          if (!isRubricAssessment(row)) return row
-          const { rubricSnapshot: _rubric, ...grade } = row
-          return grade
-        }) }
-      }
+      case 'quizAnswerAssessments':
+        return await ctx.db.query('quizAnswerAssessments').withIndex('by_userId_and_attemptId', q => q.eq('userId', userId)).paginate(paginationOpts)
       case 'flashcardSets':
         return await ctx.db.query('flashcardSets').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
       case 'flashcards':

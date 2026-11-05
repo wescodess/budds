@@ -218,26 +218,43 @@ describe('rubric assessment creation and completion', () => {
     expect(await t.run(ctx => ctx.db.get(attemptId))).toMatchObject({ gradingStatus: 'grading' })
   })
 
-  test('leaves legacy list matching unchanged when off and pending when graded', async () => {
+  test('keeps explicit-list answers deterministic in both modes', async () => {
     const { t, user, quizId, questions } = await createQuiz()
     const questionId = questions[0]!._id
-    await t.run(ctx => ctx.db.patch(questionId, { question: 'Name two forces.', correctAnswer: 'gravity and friction' }))
+    await t.run(ctx => ctx.db.patch(questionId, { question: 'Name two influences.', correctAnswer: 'cultures and opportunities' }))
     for (const mode of ['off', 'graded']) {
       vi.stubEnv('QUIZ_GRADING_MODE', mode)
       const { attemptId } = await user.mutation(api.quizzes.startAttempt, { quizId, settings, restart: true })
-      const result = await user.mutation(api.quizzes.submitAnswer, { attemptId, questionId, userAnswer: 'friction and gravity' })
-      expect(result.isCorrect).toBe(mode === 'off')
-      if (mode === 'graded') expect(result.gradingPending).toBe(true)
+      const result = await user.mutation(api.quizzes.submitAnswer, { attemptId, questionId, userAnswer: 'opportunities & cultures' })
+      expect(result.isCorrect).toBe(true)
+      if (mode === 'graded') {
+        expect(result.gradingPending).toBe(false)
+        const rows = await t.run(ctx => ctx.db.query('quizAnswerAssessments').withIndex('by_attemptId', q => q.eq('attemptId', attemptId)).collect())
+        expect(rows).toHaveLength(1)
+        expect(rows[0]).toMatchObject({ status: 'available', gradeSource: 'deterministic', credit: 1, label: 'fully_correct' })
+        expect(rows.filter(row => row.status === 'pending')).toEqual([])
+        await user.mutation(api.quizzes.completeAttempt, { attemptId })
+        expect(await t.run(ctx => ctx.db.get(attemptId))).toMatchObject({ gradingStatus: 'settled', score: 1 })
+      }
     }
   })
 
-  test('rejects an invalid pinned rubric atomically', async () => {
+  test.each(paths)('%s falls back to the default rubric without rejecting answers', async (path) => {
     vi.stubEnv('QUIZ_GRADING_MODE', 'graded')
-    const { t, user, quizId, questions } = await createQuiz()
-    await t.run(ctx => ctx.db.patch(questions[0]!._id, { gradingCriteria: [{ ...rubric[0]!, weightPercent: 99 }] }))
-    const { attemptId } = await user.mutation(api.quizzes.startAttempt, { quizId, settings })
-    await expect(user.mutation(api.quizzes.submitAnswer, { attemptId, questionId: questions[0]!._id, userAnswer: 'answer' })).rejects.toThrow('Invalid quiz grading criteria')
-    expect(await t.run(ctx => ctx.db.query('attemptAnswers').withIndex('by_attemptId', q => q.eq('attemptId', attemptId)).collect())).toEqual([])
+    const fixture = await createQuiz()
+    const { t, questions } = fixture
+    await t.run(async (ctx) => {
+      for (const question of questions.slice(0, 3)) await ctx.db.patch(question._id, { gradingCriteria: [{ ...rubric[0]!, weightPercent: 99 }] })
+    })
+    const { attemptId } = await finish(fixture, path)
+    const rows = await t.run(ctx => ctx.db.query('quizAnswerAssessments').withIndex('by_attemptId', q => q.eq('attemptId', attemptId)).collect())
+    expect(rows).toHaveLength(3)
+    for (const row of rows) {
+      const question = questions.find(question => question._id === row.questionId)!
+      expect(row.criteriaSnapshot).toEqual(defaultQuizGradingCriteria(question.correctAnswer))
+      expect(row.status).toBe(question.order === 2 ? 'pending' : 'available')
+    }
+    expect(await t.run(ctx => ctx.db.query('attemptAnswers').withIndex('by_attemptId', q => q.eq('attemptId', attemptId)).collect())).toHaveLength(5)
   })
 })
 
@@ -271,7 +288,7 @@ test('projects seeded partial, review and unavailable grades after the flag is d
   expectNoRubricData(results)
 })
 
-test.each(['off', 'graded'])('keeps criteria internal in question, submission and export responses when %s', async (mode) => {
+test.each(['off', 'graded'])('keeps criteria internal in question and study responses when %s', async (mode) => {
   vi.stubEnv('QUIZ_GRADING_MODE', mode)
   const { t, user, quizId, questions } = await createQuiz()
   const questionId = questions[0]!._id
@@ -285,16 +302,29 @@ test.each(['off', 'graded'])('keeps criteria internal in question, submission an
   expectNoRubricData(await user.mutation(api.quizzes.submitAllAnswers, { attemptId: started.attemptId, answers: [] }))
   const result = await user.query(api.quizzes.getAttemptResults, { attemptId: started.attemptId })
   expectNoRubricData(result)
-  const paginationOpts = { cursor: null, numItems: 8 }
-  expectNoRubricData(await user.query(api.dataExport.getUserDataPage, { collection: 'quizQuestions', paginationOpts }))
-  const exported = await user.query(api.dataExport.getUserDataPage, { collection: 'quizAnswerAssessments', paginationOpts })
-  const row = (await t.run(ctx => ctx.db.query('quizAnswerAssessments').withIndex('by_attemptId', q => q.eq('attemptId', started.attemptId)).unique()))!
-  if (mode === 'graded') {
-    expectNoRubricData(exported)
-    expect(row.criteriaSnapshot).toEqual(rubric)
-  }
-  else expect(exported.page).toStrictEqual([row])
   expect((await t.run(ctx => ctx.db.get(questionId)))?.gradingCriteria).toEqual(rubric)
+})
+
+test('exports complete question criteria, assessment snapshots and criterion verdicts', async () => {
+  vi.stubEnv('QUIZ_GRADING_MODE', 'graded')
+  const { t, user, quizId, questions } = await createQuiz()
+  const questionId = questions[0]!._id
+  const { attemptId } = await user.mutation(api.quizzes.startAttempt, { quizId, settings })
+  await user.mutation(api.quizzes.submitAnswer, { attemptId, questionId, userAnswer: questions[0]!.correctAnswer })
+  const question = await t.run(ctx => ctx.db.get(questionId))
+  const row = (await t.run(ctx => ctx.db.query('quizAnswerAssessments').withIndex('by_attemptId', q => q.eq('attemptId', attemptId)).unique()))!
+  const paginationOpts = { cursor: null, numItems: 8 }
+  const exportedQuestions = await user.query(api.dataExport.getUserDataPage, { collection: 'quizQuestions', paginationOpts })
+  const exportedQuestion = exportedQuestions.page.find(row => row._id === questionId)
+  expect(exportedQuestion).toStrictEqual(question)
+  expect(exportedQuestion).toMatchObject({ gradingCriteria: rubric })
+  const exported = await user.query(api.dataExport.getUserDataPage, { collection: 'quizAnswerAssessments', paginationOpts })
+  expect(exported.page).toStrictEqual([row])
+  expect(exported.page[0]).toMatchObject({
+    criteriaSnapshot: rubric,
+    criterionResults: rubric.map(criterion => ({ key: criterion.key, verdict: 'met' })),
+    rubricSnapshot: manifest.decisionKinds.freeResponse.rubric,
+  })
 })
 
 test('stores verdicts without per-criterion feedback', async () => {
