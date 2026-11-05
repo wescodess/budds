@@ -181,7 +181,9 @@ describe('rubric assessment creation and completion', () => {
     expectNoRubricData(results)
     for (const submission of submissions.values()) expectNoRubricData(submission)
     if (bulk) expectNoRubricData(bulk)
-    expect(await t.run(ctx => ctx.db.system.query('_scheduled_functions').collect())).toEqual([])
+    expect(await t.run(ctx => ctx.db.system.query('_scheduled_functions').collect())).toMatchObject([
+      { name: 'quizGrading:gradeAttempt', args: [{ attemptId }] },
+    ])
   })
 
   test.each(paths)('%s settles when every rubric row has a deterministic result', async (path) => {

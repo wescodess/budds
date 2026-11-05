@@ -312,7 +312,8 @@ export default defineSchema({
     .index('by_userId', ['userId'])
     .index('by_quizId', ['quizId'])
     .index('by_userId_and_quizId', ['userId', 'quizId'])
-    .index('by_quizId_and_status', ['quizId', 'status']),
+    .index('by_quizId_and_status', ['quizId', 'status'])
+    .index('by_quizId_and_status_and_completedAt', ['quizId', 'status', 'completedAt']),
 
   attemptAnswers: defineTable({
     attemptId: v.id('quizAttempts'),
@@ -338,7 +339,9 @@ export default defineSchema({
     claimId: v.optional(v.string()),
     claimedAt: v.optional(v.number()),
     leaseExpiresAt: v.optional(v.number()),
+    dispatchedAt: v.optional(v.number()),
     attemptCount: v.optional(v.number()),
+    manualRetryCount: v.optional(v.number()),
     nextAttemptAt: v.optional(v.number()),
     status: v.union(v.literal('pending'), v.literal('available'), v.literal('unavailable')),
     questionSnapshot: v.object({
@@ -415,6 +418,7 @@ export default defineSchema({
   })
     .index('by_attemptId', ['attemptId'])
     .index('by_attemptAnswerId', ['attemptAnswerId'])
+    .index('by_attemptId_and_rubricVersion_and_status', ['attemptId', 'rubricVersion', 'status'])
     .index('by_userId_and_attemptId', ['userId', 'attemptId'])
     .index('by_user_attempt_status_shadow_deterministic', ['userId', 'attemptId', 'status', 'shadowStatus', 'deterministicIsCorrect'])
     .index('by_userId_and_attemptId_and_status_and_nextAttemptAt', ['userId', 'attemptId', 'status', 'nextAttemptAt']),
