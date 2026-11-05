@@ -164,6 +164,32 @@ describe('generateCompletion', () => {
     )
   })
 
+  test('emits the free-grader price, reasoning and Phala privacy policy only when supplied', async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(new Response(JSON.stringify(minimalResponse)))
+    await generateCompletion({
+      ...baseParams, model: 'xingchen-agi/xing4.0-29b-a4b:free', temperature: 0,
+      maxPrice: { prompt: 0, completion: 0 }, reasoning: { enabled: false },
+      jsonSchema: { name: 'quiz', strict: true, schema: { type: 'object' } },
+      requireZeroDataRetention: true, denyProviderDataCollection: true, allowProviderFallbacks: false,
+      providerOrder: ['phala'], collectLogPayload: false, skipGatewayCache: true, maxAttempts: 1,
+    })
+    const [, init] = vi.mocked(globalThis.fetch).mock.calls[0]!
+    expect(JSON.parse(init!.body as string)).toEqual({
+      model: 'xingchen-agi/xing4.0-29b-a4b:free', messages: baseParams.messages, temperature: 0, max_tokens: 2048, stream: false,
+      reasoning: { enabled: false }, response_format: { type: 'json_schema', json_schema: { name: 'quiz', strict: true, schema: { type: 'object' } } },
+      provider: { require_parameters: true, allow_fallbacks: false, zdr: true, data_collection: 'deny', order: ['phala'], only: ['phala'], max_price: { prompt: 0, completion: 0 } },
+    })
+    expect(init!.headers).toMatchObject({ 'cf-aig-collect-log-payload': 'false', 'cf-aig-skip-cache': 'true', 'cf-aig-max-attempts': '1' })
+  })
+
+  test.each(['120', new Date(Date.now() + 120_000).toUTCString()])('preserves a numeric Retry-After delay from %s', async (retryAfter) => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(new Response('private response', { status: 429, headers: { 'retry-after': retryAfter } }))
+    const error = await generateCompletion({ ...baseParams, redactUpstreamErrorBody: true }).catch(error => error)
+    expect(error).toMatchObject({ statusCode: 429, retryAfterMs: expect.any(Number) })
+    expect(error.retryAfterMs).toBeGreaterThan(115_000)
+    expect(error.retryAfterMs).toBeLessThanOrEqual(120_000)
+  })
+
   test('falls back to NUXT_ env vars when runtime config is empty', async () => {
     vi.mocked((globalThis as any).useRuntimeConfig).mockReturnValue({})
     process.env.NUXT_CLOUDFLARE_ACCOUNT_ID = 'env-account'

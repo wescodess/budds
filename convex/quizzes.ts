@@ -5,6 +5,7 @@ import type { Id } from './_generated/dataModel'
 import type { MutationCtx, QueryCtx } from './_generated/server'
 import { getOptionalAuthUserId, requireAuth } from './lib/auth'
 import { createPendingAnswerAssessment, isQuizGradingEnabled, isRubricAssessment, projectLearnerQuizQuestion, projectQuizGrade } from './lib/quizAnswerAssessment'
+import { scheduleQuizGrading } from './lib/quizGrading'
 
 const MAX_QUIZ_QUESTIONS = 200
 const MAX_QUIZZES_PER_FOLDER = 100
@@ -744,6 +745,7 @@ export const submitAllAnswers = mutation({
       latestAttemptStatus: 'completed',
     })
 
+    if (gradingStatus === 'grading') await scheduleQuizGrading(ctx, args.attemptId)
     return { score: correctCount, total, percentage, results, ...(gradingStatus ? { gradingPending: gradingStatus === 'grading' } : {}) }
   },
 })
@@ -789,6 +791,7 @@ export const completeAttempt = mutation({
       latestAttemptStatus: 'completed',
     })
 
+    if (gradingStatus === 'grading') await scheduleQuizGrading(ctx, args.attemptId)
     return { score: correctCount, total, percentage }
   },
 })
@@ -859,7 +862,7 @@ export const getAttemptResults = query({
           correctAnswer: assessment?.questionSnapshot.expectedAnswer ?? q?.correctAnswer ?? '',
           explanation: assessment?.questionSnapshot.explanation ?? q?.explanation,
           feedback: a.feedback,
-          ...(assessment && isRubricAssessment(assessment) ? { grade: projectQuizGrade(assessment) } : {}),
+          ...(assessment && isRubricAssessment(assessment) ? { attemptAnswerId: a._id, grade: projectQuizGrade(assessment) } : {}),
           semanticAssessment: assessment && !isRubricAssessment(assessment) ? {
             status: assessment.status,
             label: assessment.label,
@@ -1064,6 +1067,7 @@ export const submitAttempt = mutation({
       }
     })
 
+    if (gradingStatus === 'grading') await scheduleQuizGrading(ctx, attemptId)
     return { attemptId, score: correctCount, total, correctCount, results }
   },
 })

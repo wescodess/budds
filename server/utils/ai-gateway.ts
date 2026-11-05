@@ -19,6 +19,8 @@ export interface GenerateParams {
   denyProviderDataCollection?: boolean
   skipGatewayCache?: boolean
   providerOrder?: string[]
+  maxPrice?: { prompt: number, completion: number }
+  reasoning?: { enabled: boolean }
   jsonMode?: boolean
   signal?: AbortSignal
   maxResponseBytes?: number
@@ -193,6 +195,7 @@ export async function generateCompletion(params: GenerateParams): Promise<Genera
       temperature: params.temperature ?? 0.7,
       max_tokens: params.max_tokens ?? 2048,
       stream: false,
+      ...(params.reasoning ? { reasoning: params.reasoning } : {}),
       ...(params.jsonSchema
         ? {
             response_format: {
@@ -205,6 +208,7 @@ export async function generateCompletion(params: GenerateParams): Promise<Genera
               ...(params.requireZeroDataRetention ? { zdr: true } : {}),
               ...(params.denyProviderDataCollection ? { data_collection: 'deny' } : {}),
               ...(params.providerOrder?.length ? { order: params.providerOrder, only: params.providerOrder } : {}),
+              ...(params.maxPrice ? { max_price: params.maxPrice } : {}),
             },
           }
         : params.jsonMode
@@ -216,9 +220,10 @@ export async function generateCompletion(params: GenerateParams): Promise<Genera
               ...(params.requireZeroDataRetention ? { zdr: true } : {}),
               ...(params.denyProviderDataCollection ? { data_collection: 'deny' } : {}),
               ...(params.providerOrder?.length ? { order: params.providerOrder, only: params.providerOrder } : {}),
+              ...(params.maxPrice ? { max_price: params.maxPrice } : {}),
             },
           }
-        : {}),
+        : params.maxPrice ? { provider: { max_price: params.maxPrice } } : {}),
     })
   if (params.maxRequestBytes !== undefined && new TextEncoder().encode(requestBody).byteLength > params.maxRequestBytes) {
     throw providerError({ statusCode: 413, message: 'AI Gateway request exceeded the byte limit' }, 'not_dispatched')
@@ -234,7 +239,10 @@ export async function generateCompletion(params: GenerateParams): Promise<Genera
   if (!response.ok) {
     const error = params.redactUpstreamErrorBody ? 'Upstream provider request failed' : responseText
     const options = { statusCode: response.status, message: `AI Gateway error: ${error}` }
-    throw providerError(options, response.status >= 500 ? 'outcome_unknown' : 'definitive_failure')
+    const retryAfter = response.headers?.get?.('retry-after')
+    const delay = retryAfter ? (/^\d+(?:\.\d+)?$/.test(retryAfter.trim()) ? Number(retryAfter) * 1_000 : Date.parse(retryAfter) - Date.now()) : NaN
+    throw Object.assign(providerError(options, response.status >= 500 ? 'outcome_unknown' : 'definitive_failure'),
+      Number.isFinite(delay) ? { retryAfterMs: Math.max(0, delay) } : {})
   }
 
   let parsed: unknown
