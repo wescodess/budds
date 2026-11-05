@@ -120,6 +120,24 @@ async function reserve(fixture: Fixture, attemptId: Id<'quizAttempts'>) {
 }
 
 describe('dispatch and scoring', () => {
+  test('history reports older pending and settled grades while preserving flag-off entries', async () => {
+    const fixture = await createQuiz()
+    const gradingId = await finish(fixture)
+    vi.stubEnv('QUIZ_GRADING_MODE', 'off')
+    const legacyId = await finish(fixture, ['Two identical daughter cells'])
+
+    const before = await fixture.user.query(api.quizzes.getQuizHistory, { quizId: fixture.quizId })
+    expect(before.find(attempt => attempt._id === gradingId)).toMatchObject({ gradingStatus: 'grading' })
+    expect(before.find(attempt => attempt._id === legacyId)).not.toHaveProperty('gradingStatus')
+
+    await drain(fixture)
+
+    const after = await fixture.user.query(api.quizzes.getQuizHistory, { quizId: fixture.quizId })
+    expect(after.find(attempt => attempt._id === gradingId)).toMatchObject({ gradingStatus: 'settled', score: 0.4, percentage: 40 })
+    expect(after.find(attempt => attempt._id === legacyId)).toMatchObject({ score: 1, percentage: 100 })
+    expect(after.find(attempt => attempt._id === legacyId)).not.toHaveProperty('gradingStatus')
+  })
+
   test.each(['completeAttempt', 'submitAllAnswers', 'submitAttempt'] as const)('%s schedules a durable job only at completion', async (path) => {
     const fixture = await createQuiz()
     const attemptId = await finish(fixture, undefined, path)

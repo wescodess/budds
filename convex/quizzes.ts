@@ -983,6 +983,7 @@ export const getQuizHistory = query({
       startedAt: a.startedAt ?? a._creationTime,
       currentQuestionIndex: a.currentQuestionIndex ?? 0,
       completedAt: a.completedAt,
+      ...(a.gradingStatus ? { gradingStatus: a.gradingStatus } : {}),
     }))
   },
 })
