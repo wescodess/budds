@@ -105,6 +105,9 @@ export function redactStartupOutput(value, secrets) {
 function credentialScanner(secrets, settle, tokens = true) {
   let pending = []
   let mode = ''
+  // Advance through a match one character at a time, so a credential that starts
+  // inside it can extend the masked span.
+  let covered = 0
   const consume = (count, masked) => settle(pending.splice(0, count), masked)
   const push = entry => {
     pending.push(entry)
@@ -119,13 +122,14 @@ function credentialScanner(secrets, settle, tokens = true) {
       const text = pending.map(item => item.char).join('')
       if (secrets.some(secret => secret.length > text.length && secret.startsWith(text))) return
       const matched = secrets.find(secret => text.startsWith(secret))
-      if (matched) { consume([...matched].length, true); continue }
+      if (matched) covered = Math.max(covered, [...matched].length)
       if (tokens) {
         if (text.startsWith('eyJ')) { consume(3, true); mode = 'jwt'; continue }
         if (/^bearer\s/iu.test(text)) { consume(6, true); mode = 'gap'; continue }
         if ('eyJ'.startsWith(text) || 'bearer'.startsWith(text.toLowerCase())) return
       }
-      consume(1, false)
+      consume(1, covered > 0)
+      covered = Math.max(0, covered - 1)
     }
   }
   return {

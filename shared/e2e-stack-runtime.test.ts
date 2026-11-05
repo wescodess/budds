@@ -135,6 +135,22 @@ test.each(['synthetic-boundary-credential', 'bEaReR opaque-fixture-token', 'eyJf
   }
 })
 
+test.each([
+  ['synthetic-left-overlap-right-synthetic', ['synthetic-left-overlap', 'overlap-right-synthetic']],
+  ['synthetic-alpha-beta-gamma-delta', ['synthetic-alpha-beta', 'beta-gamma', 'gamma-delta']],
+  ['synthetic-outer-inner-credential', ['synthetic-outer-inner-credential', 'inner']],
+])('keeps overlapping known credentials masked at every split (%s)', (credential, known) => {
+  for (let split = 1; split <= credential.length; split++) {
+    let emitted = ''
+    const output = createStartupOutput(new Set(known), (_stream: string, text: string) => { emitted += text })
+    output.write('stdout', `SAFE ${credential.slice(0, split)}`)
+    output.write('stdout', `${credential.slice(split)} DONE\n`)
+    output.finish()
+    expect(emitted).toBe('SAFE [REDACTED] DONE\n')
+    expect(output.diagnostics).toBe(emitted)
+  }
+})
+
 test.each(['synthetic-boundary-credential', 'Bearer opaque-fixture-token', 'eyJfixture.payload.signature'])('redacts bytewise, across streams and through interleaving (%#)', (credential) => {
   for (const interleave of [false, true]) {
     const pieces: string[] = []
