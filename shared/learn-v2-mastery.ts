@@ -1,4 +1,5 @@
 import { v, type Infer } from 'convex/values'
+import { z } from 'zod'
 
 export const LEARN_V2_MASTERY_SCORER_VERSION = 'learn-v2.mastery-scorer.v1'
 export const LEARN_V2_MASTERY_THRESHOLD = 80
@@ -134,4 +135,25 @@ export function deriveMastery(input: { scorePercent: number, assisted: boolean, 
             ? 'assisted_pass'
             : input.kind === 'retained_transfer' ? 'delayed_pass' : 'independent_pass'
   return deriveMasteryTransition(previousState, event, input.firstIndependentLocalDate)
+}
+
+export const LEARN_V2_MEASUREMENT_MASTERY_CONTRACT_VERSION = 'learn-v2.measurement-mastery.v1' as const
+const measurementMasteryDateSchema = z.string().length(10).refine(value => {
+  try { addCalendarDays(value, 0); return true }
+  catch { return false }
+})
+export const learnMeasurementMasteryInputSchema = z.strictObject({
+  kind: z.enum(['measurement_cold', 'measurement_delayed']), scorePercent: z.number().finite().min(0).max(100),
+  measurementEligible: z.boolean(), masteryEligible: z.boolean(),
+  previousState: z.enum(['unseen', 'learning', 'guided', 'independent', 'retained', 'needs_review', 'blocked', 'provisionally_known']),
+  firstIndependentLocalDate: measurementMasteryDateSchema.optional(), attemptLocalDate: measurementMasteryDateSchema.optional(),
+})
+
+export function deriveEligibleMeasurementMastery(input: {
+  kind: 'measurement_cold' | 'measurement_delayed', scorePercent: number, measurementEligible: boolean, masteryEligible: boolean,
+  previousState: MasteryState, firstIndependentLocalDate?: string, attemptLocalDate?: string,
+}) {
+  const value = learnMeasurementMasteryInputSchema.parse(input)
+  if (value.kind === 'measurement_cold' || !value.measurementEligible || !value.masteryEligible) return null
+  return deriveMastery({ ...value, kind: 'retained_transfer', assisted: false })
 }

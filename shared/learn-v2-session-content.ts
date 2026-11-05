@@ -1,6 +1,17 @@
 import type { LearnV2AssessmentContract } from './learn-v2-blueprint'
+import { z } from 'zod'
+import { learnDigestSchema, learnIdSchema, learnVersionSchema, parseLearnContract } from './learn-v2-responses'
+import { learnAssessmentPurposeSchema } from './learn-v2-delayed-check'
+import { learnMeasurementItemPinsSchema } from './learn-v2-measurement'
 
 export const LEARN_V2_SESSION_CONTENT_VERSION = 'learn-v2.session-content.v1' as const
+export const LEARN_V2_PURPOSE_SESSION_CONTENT_VERSION = 'learn-v2.session-content.v2' as const
+export const learnAssessmentContentCandidateSchema = z.strictObject({
+  version: z.literal(LEARN_V2_PURPOSE_SESSION_CONTENT_VERSION), purpose: learnAssessmentPurposeSchema,
+  assessmentOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>(), generatorVersion: learnVersionSchema,
+  itemPins: learnMeasurementItemPinsSchema, inputDigest: learnDigestSchema,
+}).refine(value => ['retained_transfer', 'measurement_cold', 'measurement_delayed'].includes(value.purpose.kind), 'Check content requires a held-out purpose')
+export type LearnAssessmentContentCandidate = z.infer<typeof learnAssessmentContentCandidateSchema>
 export const LEARN_V2_ENTAILMENT_VERIFIER_VERSION = 'learn-v2.entailment.v2' as const
 export const LEARN_V2_SESSION_CONTENT_MIN_CONFIDENCE = 0.8
 export const LEARN_V2_MASTERY_LOOP_BLOCKS = [
@@ -107,8 +118,15 @@ function assessment(value: unknown): LearnV2AssessmentContract {
   return { version: 'learn-v2.assessment.v1', kind: input.kind, responseFormat: input.responseFormat, instructions: string(input.instructions, 'Assessment instructions', 1_000), passingScorePercent: 80, criteria }
 }
 
-export function validateLearnV2SessionContentCandidate(input: unknown, acceptedSourceSnapshotIds: readonly string[]): LearnV2SessionContentCandidate {
+export function validateLearnV2SessionContentCandidate(input: unknown, acceptedSourceSnapshotIds: readonly string[], purpose: 'retained_transfer' | 'measurement_cold' | 'measurement_delayed'): LearnAssessmentContentCandidate
+export function validateLearnV2SessionContentCandidate(input: unknown, acceptedSourceSnapshotIds: readonly string[]): LearnV2SessionContentCandidate
+export function validateLearnV2SessionContentCandidate(input: unknown, acceptedSourceSnapshotIds: readonly string[], purpose?: 'retained_transfer' | 'measurement_cold' | 'measurement_delayed'): LearnV2SessionContentCandidate | LearnAssessmentContentCandidate {
   if (!acceptedSourceSnapshotIds.length || acceptedSourceSnapshotIds.length > 64 || new Set(acceptedSourceSnapshotIds).size !== acceptedSourceSnapshotIds.length) throw new Error('Session content requires bounded accepted sources')
+  if (purpose !== undefined) {
+    const candidate = parseLearnContract(learnAssessmentContentCandidateSchema, input)
+    if (candidate.purpose.kind !== purpose) throw new Error('Session content purpose does not match the opportunity')
+    return candidate
+  }
   const candidate = object(input, 'Session content candidate'); exact(candidate, ['version', 'generatorVersion', 'assessmentRubric', 'blocks', 'claims'], 'Session content candidate')
   if (candidate.version !== LEARN_V2_SESSION_CONTENT_VERSION) throw new Error('Session content candidate has an unsupported version')
   if (!Array.isArray(candidate.blocks) || candidate.blocks.length !== LEARN_V2_MASTERY_LOOP_BLOCKS.length) throw new Error('Session content must contain the complete mastery loop')
