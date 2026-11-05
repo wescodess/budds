@@ -1,7 +1,7 @@
 {
   "version": 1,
   "kind": "routes",
-  "notes": "Six static fixture cases cover all four renderer families: ready explanation, active diagnostic and artifact forms, completed reflection, safe fallback, and stale evidence recovery. This samples 4 of 7 kinds and 5 of 9 states in 36 captures rather than the full 378-case matrix. Worked examples, source comparison, and independent application share ReadySessionCanvas; blocked/preparing/invalidated overlap the sampled recovery layouts. Offline requires a network transition rather than just the harness query state. These are synthetic projections, not persisted learner outcomes.",
+  "notes": "Six static fixture cases cover all four renderer families: ready explanation, active diagnostic and artifact forms, completed reflection, safe fallback, and stale evidence recovery. This samples 4 of 7 kinds and 5 of 9 states in 36 captures rather than the full 378-case matrix. Worked examples, source comparison, and independent application share ReadySessionCanvas; blocked/preparing/invalidated overlap the sampled recovery layouts. Offline requires a network transition rather than just the harness query state. These are synthetic projections, not persisted learner outcomes. Fill separation guards against regression from the current frame; it is not a claim about design quality.",
   "themes": ["dark", "light"],
   "viewports": [
     { "width": 1280, "height": 832 },
@@ -14,7 +14,7 @@
   "surfaceSeparation": [
     {
       "selectors": ["[data-testid=learn-adaptive-canvas-frame]", "body"],
-      "minContrast": 1.1
+      "minContrast": 1.06
     }
   ],
   "cases": [

@@ -1,12 +1,11 @@
 import { execFile as execFileCallback, spawn } from 'node:child_process'
-import { once } from 'node:events'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { chromium } from '@playwright/test'
-import { captureIdentity, compareFloor, validateSurface, violationId } from './design-capture-lib.mjs'
+import { captureIdentity, compareFloor, resetCaptureOutput, stopChild, validateSurface, violationId } from './design-capture-lib.mjs'
 import { checkPage } from './design-capture-checks.mjs'
 
 const execFile = promisify(execFileCallback)
@@ -22,7 +21,7 @@ let interrupted = false
 for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => {
   interrupted = true
   void browser?.close()
-  stack?.kill('SIGTERM')
+  void stopStack().catch(error => { stackFailure = message(error) })
 })
 
 async function startStack() {
@@ -51,15 +50,8 @@ async function startStack() {
   throw new Error('Timed out waiting for the disposable E2E stack')
 }
 
-async function stopStack() {
-  if (!stack || stack.exitCode !== null || stack.signalCode !== null) return
-  const exited = once(stack, 'exit')
-  stack.kill('SIGTERM')
-  let timer
-  try {
-    await Promise.race([exited, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('E2E stack cleanup timed out')), 30_000) })])
-  }
-  finally { clearTimeout(timer) }
+function stopStack() {
+  return stopChild(stack)
 }
 
 async function capturePage(surface, identity, entry, baseUrl, output) {
@@ -141,14 +133,15 @@ async function main() {
   const surface = validateSurface(JSON.parse(await readFile(join(root, 'docs/design/surfaces', `${surfaceName}.json`), 'utf8')))
   const comparing = args.length > 0
   const baseline = comparing ? JSON.parse(await readFile(resolve(args[1], 'floor.json'), 'utf8')) : null
-  if (comparing) compareFloor({ surface: surfaceName, violations: [] }, baseline)
+  const captures = surface.cases.flatMap(entry => surface.themes.flatMap(theme => surface.viewports.map(viewport => captureIdentity(surfaceName, entry, theme, viewport))))
+  if (comparing) compareFloor({ surface: surfaceName, captures, violations: [] }, baseline)
   const sha = (await execFile('git', ['rev-parse', 'HEAD'], { cwd: root })).stdout.trim()
   const dirty = Boolean((await execFile('git', ['status', '--porcelain'], { cwd: root })).stdout.trim())
   const output = join(root, '.design-captures', surfaceName, sha.slice(0, 7))
-  await mkdir(output, { recursive: true })
+  await resetCaptureOutput(root, surfaceName, output)
   const started = Date.now()
   const manifest = { version: 1, surface: surfaceName, sha, dirty, definition: surface, startedAt: new Date(started).toISOString(), status: 'running', captures: [] }
-  const floor = { version: 1, surface: surfaceName, sha, status: 'error', errors: ['Capture has not completed'], violations: [], incomplete: [] }
+  const floor = { version: 1, surface: surfaceName, sha, status: 'error', errors: ['Capture has not completed'], captures: [], violations: [], incomplete: [] }
   await writeJson(join(output, 'manifest.json'), manifest)
   await writeJson(join(output, 'floor.json'), floor)
   floor.errors = []
@@ -162,6 +155,7 @@ async function main() {
           const identity = captureIdentity(surfaceName, entry, theme, viewport)
           try {
             const { violations, incomplete, axeVersion, ...files } = await capturePage(surface, identity, entry, baseUrl, output)
+            floor.captures.push(identity)
             manifest.captures.push({ ...identity, status: 'complete', ...files, axeVersion })
             floor.violations.push(...violations.map(violation => ({ ...violation, capture: identity, id: violationId(violation.rule, identity, violation.selector) })))
             floor.incomplete.push(...incomplete.map(value => ({ ...value, capture: identity })))
@@ -181,10 +175,13 @@ async function main() {
     await browser?.close().catch(error => floor.errors.push(message(error)))
     await stopStack().catch(error => floor.errors.push(message(error)))
     if (interrupted) floor.errors.push('Capture interrupted')
+    if (comparing) {
+      try { floor.newViolations = compareFloor(floor, baseline).map(value => value.id) }
+      catch (error) { floor.errors.push(message(error)); floor.newViolations = [] }
+    }
     floor.status = floor.errors.length ? 'error' : 'complete'
     manifest.status = floor.status
     manifest.durationMs = Date.now() - started
-    if (comparing) floor.newViolations = compareFloor(floor, baseline).map(value => value.id)
     await writeJson(join(output, 'manifest.json'), manifest)
     await writeJson(join(output, 'floor.json'), floor)
   }

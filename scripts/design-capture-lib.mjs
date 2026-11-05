@@ -1,4 +1,7 @@
 import { createHash } from 'node:crypto'
+import { once } from 'node:events'
+import { mkdir, realpath, rm } from 'node:fs/promises'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 import { z } from 'zod'
 
 const name = z.string().regex(/^[a-z0-9][a-z0-9_-]*$/u)
@@ -43,20 +46,72 @@ export function captureIdentity(surface, entry, theme, viewport) {
 
 export function violationId(rule, capture, selector) {
   const identity = captureIdentity(capture.surface, capture, capture.theme, capture.viewport)
-  return `${rule}:${createHash('sha256').update(JSON.stringify([rule, identity, selector])).digest('hex').slice(0, 24)}`
+  return `${rule}:${createHash('sha256').update(JSON.stringify([rule, identity, normalizeSelector(selector)])).digest('hex').slice(0, 24)}`
 }
 
+// Vue useId and Reka append allocation counters. Preserve raw selectors in reports.
+export function normalizeSelector(selector) {
+  if (Array.isArray(selector)) return selector.map(normalizeSelector)
+  return selector.replace(/#(?:reka-(?:v-)?|v-)\d+(?:-\d+)*(?=$|[^\w-]|-[a-z])/gu, '#generated-id')
+}
+
+const captureSchema = z.object({ surface: name, kind: name, state: name, theme: z.enum(['dark', 'light']), viewport }).strict()
 const floorSchema = z.object({
   version: z.literal(1),
   surface: name,
   status: z.literal('complete'),
   errors: z.array(z.unknown()).length(0),
+  captures: z.array(captureSchema).min(1),
   violations: z.array(z.object({ id: z.string().min(1) }).passthrough()),
 }).passthrough()
 
 export function compareFloor(current, baseline) {
   floorSchema.parse(baseline)
   if (current.surface !== baseline.surface) throw new Error('Comparison requires the same surface')
+  const key = value => JSON.stringify(captureIdentity(value.surface, value, value.theme, value.viewport))
+  const present = new Set(current.captures.map(key))
+  const missing = baseline.captures.filter(value => !present.has(key(value)))
+  if (missing.length) throw new Error(`Missing baseline captures: ${missing.map(value => `${value.kind}/${value.state} ${value.theme} ${value.viewport.width}x${value.viewport.height}`).join(', ')}`)
   const known = new Set(baseline.violations.map(value => value.id))
   return current.violations.filter(value => !known.has(value.id))
+}
+
+export async function resetCaptureOutput(root, surface, output) {
+  name.parse(surface)
+  const child = relative(resolve(root, '.design-captures', surface), resolve(output))
+  if (!child || child === '..' || child.startsWith('../') || isAbsolute(child)) throw new Error('Capture output must be inside .design-captures/<surface>/')
+  if (child.includes('/')) throw new Error('Capture output must be an immediate child of its surface')
+  const parent = join(await realpath(root), '.design-captures', surface)
+  const target = join(parent, child)
+  await mkdir(parent, { recursive: true })
+  if (await realpath(parent) !== parent) throw new Error('Capture output parent must not traverse symlinks')
+  const actual = await realpath(target).catch(error => {
+    if (error.code !== 'ENOENT') throw error
+    return target
+  })
+  if (actual !== target || relative(parent, actual).startsWith('..')) throw new Error('Capture output must not traverse symlinks')
+  await rm(target, { recursive: true, force: true })
+  await mkdir(target)
+}
+
+const stopping = new WeakMap()
+export function stopChild(child, timeoutMs = 30_000) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return Promise.resolve()
+  if (stopping.has(child)) return stopping.get(child)
+  const stopped = (async () => {
+    const exited = once(child, 'exit')
+    child.kill('SIGTERM')
+    let timer
+    try {
+      await Promise.race([exited, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('E2E stack cleanup timed out')), timeoutMs) })])
+    }
+    catch (error) {
+      child.kill('SIGKILL')
+      await exited
+      throw error
+    }
+    finally { clearTimeout(timer) }
+  })()
+  stopping.set(child, stopped)
+  return stopped
 }

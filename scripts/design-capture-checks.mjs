@@ -11,42 +11,7 @@ export async function checkPage(page, surface) {
     impact: rule.impact,
     helpUrl: rule.helpUrl,
   })))
-  const layout = await page.evaluate(() => {
-    function selectorFor(element) {
-      if (element.id) return `#${CSS.escape(element.id)}`
-      const testId = element.getAttribute('data-testid')
-      if (testId && document.querySelectorAll(`[data-testid="${CSS.escape(testId)}"]`).length === 1) return `[data-testid="${CSS.escape(testId)}"]`
-      const parts = []
-      for (let current = element; current; current = current.parentElement) {
-        const siblings = current.parentElement ? [...current.parentElement.children].filter(value => value.tagName === current.tagName) : [current]
-        parts.unshift(`${current.tagName.toLowerCase()}:nth-of-type(${siblings.indexOf(current) + 1})`)
-      }
-      return parts.join(' > ')
-    }
-    const visible = element => element.checkVisibility({ checkVisibilityCSS: true, checkOpacity: true }) && element.getClientRects().length > 0
-    const findings = []
-    const width = document.documentElement.clientWidth
-    if (Math.max(document.documentElement.scrollWidth, document.body.scrollWidth) > width + 1) {
-      const offenders = [...document.body.querySelectorAll('*')].filter(element => {
-        if (!visible(element)) return false
-        const rect = element.getBoundingClientRect()
-        return rect.right > width + 1 || rect.left < -1
-      })
-      for (const element of offenders.length ? offenders : [document.documentElement]) {
-        findings.push({ rule: 'horizontal-overflow', selector: selectorFor(element), message: `Content exceeds the ${width}px viewport` })
-      }
-    }
-    // A stricter size floor supplements axe's WCAG 2.2 spacing exceptions.
-    const interactive = 'a[href], button, input:not([type="hidden"]), select, textarea, summary, [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="switch"], [role="tab"], [role="menuitem"], [role="slider"], [role="combobox"], [contenteditable="true"]'
-    for (const element of document.querySelectorAll(`${interactive}, [tabindex]`)) {
-      if (!element.matches(interactive) && element.tabIndex < 0) continue
-      if (!visible(element) || element.matches(':disabled, [aria-disabled="true"], [inert] *')) continue
-      const rects = [...element.getClientRects()]
-      if (rects.every(rect => rect.width >= 24 && rect.height >= 24)) continue
-      findings.push({ rule: 'target-size-24', selector: selectorFor(element), message: 'Interactive target is smaller than 24 × 24 CSS pixels', rects: rects.map(({ width, height }) => ({ width, height })) })
-    }
-    return findings
-  })
+  const layout = await page.evaluate(checkLayout)
   const separation = await page.evaluate(pairs => {
     const canvas = document.createElement('canvas')
     canvas.width = canvas.height = 1
@@ -81,4 +46,55 @@ export async function checkPage(page, surface) {
     })
   }, surface.surfaceSeparation)
   return { violations: [...violations, ...layout, ...separation], incomplete: axe.incomplete.map(rule => ({ rule: rule.id, targets: rule.nodes.map(node => node.target) })), axeVersion: axe.testEngine.version }
+}
+
+export function checkLayout() {
+  function selectorFor(element) {
+    const testId = element.getAttribute('data-testid')
+    if (testId && document.querySelectorAll(`[data-testid="${CSS.escape(testId)}"]`).length === 1) return `[data-testid="${CSS.escape(testId)}"]`
+    if (element.id) return `#${CSS.escape(element.id)}`
+    const parts = []
+    for (let current = element; current; current = current.parentElement) {
+      const siblings = current.parentElement ? [...current.parentElement.children].filter(value => value.tagName === current.tagName) : [current]
+      parts.unshift(`${current.tagName.toLowerCase()}:nth-of-type(${siblings.indexOf(current) + 1})`)
+    }
+    return parts.join(' > ')
+  }
+  const visible = element => element.checkVisibility({ checkVisibilityCSS: true, checkOpacity: true }) && element.getClientRects().length > 0
+  const findings = []
+  const width = document.documentElement.clientWidth
+  if (Math.max(document.documentElement.scrollWidth, document.body.scrollWidth) > width + 1) {
+    const offenders = [...document.body.querySelectorAll('*')].filter(element => {
+      if (!visible(element)) return false
+      const rect = element.getBoundingClientRect()
+      return rect.right > width + 1 || rect.left < -1
+    })
+    for (const element of offenders.length ? offenders : [document.documentElement]) {
+      findings.push({ rule: 'horizontal-overflow', selector: selectorFor(element), message: `Content exceeds the ${width}px viewport` })
+    }
+  }
+  // A stricter size floor supplements axe's WCAG 2.2 spacing exceptions.
+  const interactive = 'a[href], button, input:not([type="hidden"]), select, textarea, summary, [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="switch"], [role="tab"], [role="menuitem"], [role="slider"], [role="combobox"], [contenteditable="true"]'
+  for (const element of document.querySelectorAll(`${interactive}, [tabindex]`)) {
+    if (!element.matches(interactive) && element.tabIndex < 0) continue
+    if (element.matches(':disabled, [aria-disabled="true"], [inert] *')) continue
+    let target = element
+    let hiddenInput = false
+    if (element.tagName === 'INPUT') {
+      const style = getComputedStyle(element)
+      const rect = element.getBoundingClientRect()
+      hiddenInput = element.getClientRects().length > 0 && ((rect.width <= 1 && rect.height <= 1) || style.clip !== 'auto' && style.clip !== '' && style.clip !== 'none'
+        || style.clipPath !== 'none' && style.clipPath !== '')
+      if (hiddenInput) {
+        const labels = [...(element.labels || [])].filter(visible)
+        // Any full-size associated label supplies the input's activation target.
+        target = labels.find(label => [...label.getClientRects()].every(rect => rect.width >= 24 && rect.height >= 24)) || labels[0] || element
+      }
+    }
+    if (!hiddenInput && !visible(element)) continue
+    const rects = [...target.getClientRects()]
+    if (!(hiddenInput && target === element) && rects.every(rect => rect.width >= 24 && rect.height >= 24)) continue
+    findings.push({ rule: 'target-size-24', selector: selectorFor(element), message: 'Interactive target is smaller than 24 × 24 CSS pixels', targetSelector: selectorFor(target), rects: rects.map(({ width, height }) => ({ width, height })) })
+  }
+  return findings
 }
