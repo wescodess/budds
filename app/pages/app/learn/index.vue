@@ -2,6 +2,7 @@
 import { useLearnV2Journey } from '~/composables/useLearnV2Journey'
 import { useLearnAdaptiveAccess } from '~/composables/useLearnAdaptiveAccess'
 import { LEARN_ADAPTIVE_SURFACE } from '~/utils/learn-adaptive-surface'
+import { learnVoidRoute } from '~/utils/learn-void-routes'
 import { getErrorMessage } from '~~/shared/errors'
 import { api } from '#convex/api'
 import type { NeedFirstDraftInput } from '~~/shared/learn-adaptive-draft'
@@ -159,7 +160,7 @@ watch(() => userQuery.data.value?._id ? String(userQuery.data.value._id) : null,
 function openMission(id: string) { void router.push(`/app/learn/${id}`) }
 function resumeDraft(id: string) { void router.push(`/app/learn/create?draftId=${encodeURIComponent(id)}`) }
 function openDiagnosticThread(threadId: string) {
-  void router.push(`/app/learn/thread/${encodeURIComponent(threadId)}`)
+  void router.push(learnVoidRoute(threadId))
 }
 watch(() => readySession.value && `${readySession.value.id}:${readySession.value.revision}`, (value, previous) => { if (value !== previous) attachKey.value = null })
 async function continueReadySession() {
@@ -174,7 +175,7 @@ async function continueReadySession() {
     const result = await attachReadyMutation.mutate({ studySessionId: selected.id as never, expectedSessionRevision: selected.revision, idempotencyKey: attachKey.value }) as { kind: string, threadId?: string }
     if (ownerEpoch.value !== epoch || currentOwnerId.value !== ownerId || readySession.value?.id !== selected.id || readySession.value.revision !== selected.revision) return
     if (result.kind !== 'attached' || !result.threadId) throw new Error('Could not open the ready learning thread.')
-    await router.push(`/app/learn/thread/${result.threadId}`)
+    await router.push(learnVoidRoute(result.threadId))
   }
   catch (cause) { if (ownerEpoch.value === epoch && currentOwnerId.value === ownerId) attachError.value = getErrorMessage(cause, 'Could not open the ready session. Try again.') }
   finally { if (ownerEpoch.value === epoch && currentOwnerId.value === ownerId) attachBusy.value = false }

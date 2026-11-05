@@ -181,13 +181,32 @@ describe('need-first LearningHome', () => {
     const list = wrapper.get('[data-testid="learn-adaptive-primary-resume"]')
     expect(list.text()).toContain('Unfinished activity')
     expect(list.text()).toContain('Why does the orbit curve?')
-    expect(list.get('a').attributes('href')).toBe('/app/learn/thread/thread_1')
+    expect(list.get('a').attributes('href')).toBe('/app/learn/void/thread_1')
     await list.get('a').trigger('click')
     expect(wrapper.emitted('resume')?.[0]).toEqual(['thread_1'])
     expect(wrapper.element.querySelector('[data-testid="learn-adaptive-primary-resume"]')?.compareDocumentPosition(wrapper.element.querySelector('form')!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
     currentUser.value = { _id: 'owner_2' }
     await nextTick()
     expect(wrapper.find('[data-testid="learn-adaptive-primary-resume"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('links Resume, Worth revisiting, and history to the canonical Void and leaves modified clicks to the browser', async () => {
+    resumeCandidates.value = [
+      { ownerId: 'owner_1', threadId: 'thread/primary', outcome: 'Finish a proof', reason: 'unfinished_activity', unresolvedPoint: null, nextAction: { label: 'Continue' } },
+      { ownerId: 'owner_1', threadId: 'thread_review', outcome: 'Revisit gravity', reason: 'needs_review', unresolvedPoint: null, nextAction: { label: 'Review capability' }, reviewCapability: 'Explain gravity' },
+    ]
+    const wrapper = await mount()
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="learn-adaptive-thread-history"]').text()).toContain('Recent work'))
+    const resume = wrapper.get('[data-testid="learn-adaptive-primary-resume"] a')
+    expect(resume.attributes('href')).toBe('/app/learn/void/thread%2Fprimary')
+    expect(wrapper.get('[data-testid="learn-adaptive-worth-revisiting"] a').attributes('href')).toBe('/app/learn/void/thread_review')
+    expect(wrapper.get('[data-testid="learn-adaptive-thread-history"] a').attributes('href')).toBe('/app/learn/void/thread_recent')
+    for (const modifier of ['metaKey', 'ctrlKey', 'shiftKey', 'altKey'] as const) await resume.trigger('click', { [modifier]: true })
+    await resume.trigger('click', { button: 1 })
+    expect(wrapper.emitted('resume')).toBeUndefined()
+    await resume.trigger('click')
+    expect(wrapper.emitted('resume')).toEqual([['thread/primary']])
     wrapper.unmount()
   })
 

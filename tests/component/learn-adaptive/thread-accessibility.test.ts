@@ -59,11 +59,11 @@ let previousAuth: { ready: boolean, authenticated: boolean }
 let routeRecord: RouteRecordNormalized | undefined
 let previousRouteAuth: RouteRecordNormalized['meta']['auth']
 let applicationMain: HTMLElement | undefined
-const path = ['~', 'pages', 'app', 'learn', 'thread', '[threadId].vue'].join('/')
+const path = ['~', 'pages', 'app', 'learn', 'void', '[threadId].vue'].join('/')
 
 async function mountLearningRoute(home = false) {
   const app = useNuxtApp()
-  const route = home ? '/app/learn' : '/app/learn/thread/thread_1'
+  const route = home ? '/app/learn' : '/app/learn/void/thread_1'
   routeRecord = app.$router.resolve(route).matched.at(-1)!
   previousRouteAuth = routeRecord.meta.auth
   routeRecord.meta.auth = false
@@ -208,7 +208,7 @@ describe('mounted Home and Thread accessibility', () => {
     expect(accessibleReference(drawer, 'aria-labelledby')).toBe(name)
     expect(accessibleReference(drawer, 'aria-describedby')).toContain(description)
     await vi.waitFor(() => expect(drawer.contains(document.activeElement)).toBe(true))
-    await useNuxtApp().$router.push('/app/learn/thread/thread_1?activity=older_activity')
+    await useNuxtApp().$router.push('/app/learn/void/thread_1?activity=older_activity')
     evidence.value = { ...evidence.value, activityId: 'older_activity', readOnly: true }
     await nextTick()
     document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))

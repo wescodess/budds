@@ -35,7 +35,7 @@ mockNuxtImport('useConvexQuery', () => (reference: never, args: unknown) => {
     pending: name === 'learnAdaptiveRecovery:getDiagnosticCanvas' ? diagnosticPending : name === 'learnAdaptiveCanvas:getCanvas' ? canvasPending : ref(false) }
 })
 
-const path = ['~', 'pages', 'app', 'learn', 'thread', '[threadId].vue'].join('/')
+const path = ['~', 'pages', 'app', 'learn', 'void', '[threadId].vue'].join('/')
 
 describe('adaptive thread route isolation', () => {
   beforeEach(() => { allowed.value = true; isOnline.value = true; canvas.value = null; diagnostic.value = null; artifact.value = null; reflection.value = null; evidence.value = null; memory.value = null; projection.value = null; canvasPending.value = false; diagnosticPending.value = false; user.value = { _id: 'owner_1' }; requestedRoute.params.threadId = 'thread_1'; requestedRoute.query.activity = undefined; calls.mockClear(); documentSubscriptions.mockClear(); mutationCalls.mockClear(); memoryMutationCalls.mockReset().mockResolvedValue({ kind: 'ok', revision: 4 }); sessionStorage.clear() })
@@ -43,7 +43,7 @@ describe('adaptive thread route isolation', () => {
   it('does not subscribe to folder documents for a no-source thread', async () => {
     const Page = await import(path)
     projection.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Explain gravity', intent: 'understand', evidenceState: 'none', lifecycle: 'active', revision: 2, authorityKind: 'standalone', sourceScope: { kind: 'none' } }, history: [], nextAction: { kind: 'resume', label: 'Continue' } }
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
     expect(calls.mock.calls.some(([name]) => name === 'documents:listDocumentsByFolder')).toBe(false)
     expect(documentSubscriptions).not.toHaveBeenCalled()
     wrapper.unmount()
@@ -56,7 +56,7 @@ describe('adaptive thread route isolation', () => {
       unresolvedPoint: 'Why does it keep curving?', attemptContext: { priorOutcome: 'representative_fail', assistance: 'hint' },
       artifact: { id: 'artifact_1', title: 'Orbit sketch', status: 'saved', activityId: 'activity_1' },
       history: [], nextAction: { kind: 'review_feedback', label: 'Review your feedback', activityId: 'activity_1' } }
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
     expect(wrapper.get('[data-testid="learn-thread-goal"]').text()).toContain('Understand gravity')
     expect(wrapper.get('[data-testid="learn-thread-unresolved"]').text()).toContain('Why does it keep curving?')
     expect(wrapper.get('[data-testid="learn-thread-resume-context"]').text()).toContain('representative_fail')
@@ -81,7 +81,7 @@ describe('adaptive thread route isolation', () => {
         requiredAction: { kind: 'submit_response', label: 'Submit response' } },
       session: { studySessionId: 'session_1', revision: 2, contentRevision: 1, planRecordRevision: 5, blueprintRecordRevision: 3, scheduledStartAt: 0, scheduledEndAt: null, timezone: 'UTC' },
       responsePrompt: 'Explain why an apple falls.' }
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1', attachTo: document.body })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1', attachTo: document.body })
     await wrapper.get('[data-testid="learn-canvas-response"]').setValue('My unfinished answer.')
     expect(wrapper.get('[data-testid="learn-adaptive-canvas-frame"]').attributes('aria-label')).toBe('Current learning activity')
     projection.value = { ...projection.value!, thread: { ...(projection.value!.thread as Record<string, unknown>), evidenceState } }
@@ -121,7 +121,7 @@ describe('adaptive thread route isolation', () => {
       activity: { id: 'diagnostic:thread_1', status: 'eligible', planRevision: 1,
         primitive: { contractVersion: 'learn-adaptive.activity-contract.v1', rendererVersion: 'learn-adaptive.renderer.v1', type: 'diagnostic_prompt', action: 'submit_response', testId: 'learn-primitive-diagnostic-prompt', props: { prompt: 'What do you know?', responseFormat: 'short_text', assistance: 'none' } },
         response: null, requiredAction: { kind: 'submit_response', label: 'Save response' } } }
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1', attachTo: document.body })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1', attachTo: document.body })
     await wrapper.get('[data-testid="learn-diagnostic-response"]').setValue('My unsent starting point.')
     isOnline.value = false
     await nextTick()
@@ -160,7 +160,7 @@ describe('adaptive thread route isolation', () => {
         fallback: { testId: 'learn-activity-fallback', title: 'Activity unavailable', body: 'Try later.', primaryAction: { label: 'Back to Learn' } }, requiredAction: { kind: 'submit_response', label: 'Submit response' } },
       session: { studySessionId: 'session_1', revision: 3, contentRevision: 1, planRecordRevision: 5, blueprintRecordRevision: 3, scheduledStartAt: 0, scheduledEndAt: null, timezone: 'UTC' },
       responsePrompt: 'Explain why an apple falls.', savedResponse: { response: 'Gravity pulls the apple down.', confidence: 4 } }
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1', attachTo: document.body })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1', attachTo: document.body })
     const status = wrapper.get('[data-testid="learn-canvas-status"]')
     expect(status.attributes('role')).toBe('status')
     expect(status.text()).toContain('Scoring needs reconciliation. Your response is saved.')
@@ -181,7 +181,7 @@ describe('adaptive thread route isolation', () => {
       activity: { id: 'reflection_1', planRevision: 1, status: 'ended', purpose: 'Choose what to do next.', reason: 'The guided step is complete.',
         primitive: { contractVersion: 'learn-adaptive.activity-contract.v1', rendererVersion: 'learn-adaptive.renderer.v1', type: 'reflection_next_move', action: 'accept_next_move', testId: 'learn-primitive-reflection-next-move', props: { feedback: 'You completed the guided example.', nextMove: 'Try one independent example.', allowedDecisions: ['accept', 'override', 'end'] } },
         fallback: { title: 'Unavailable', body: 'Try later.', testId: 'learn-activity-fallback', primaryAction: { label: 'Continue safely' } } } }
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
     expect(wrapper.get('[data-testid="learn-reflection-completed"]').text()).toContain('Thread ended')
     expect(wrapper.find('[data-testid="learn-adaptive-thread-unavailable"]').exists()).toBe(false)
     wrapper.unmount()
@@ -194,7 +194,7 @@ describe('adaptive thread route isolation', () => {
     artifact.value = { ownerId: 'owner_1', status: 'eligible', thread: { id: 'thread_1', revision: 3, outcome: 'Build a plan' }, activity: { id: 'artifact_1', planRevision: 1, status: 'eligible',
       primitive: { contractVersion: 'learn-adaptive.activity-contract.v1', rendererVersion: 'learn-adaptive.renderer.v1', type: 'artifact_workspace', action: 'save_artifact', testId: 'learn-primitive-artifact-workspace', props: { prompt: 'Build a plan.', artifactKind: 'plan', starterText: 'Goal:' } },
       fallback: { title: 'Unavailable', body: 'Try later.', testId: 'learn-activity-fallback', primaryAction: { label: 'Continue safely' } } } }
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
     expect(wrapper.get('[data-testid="learn-primitive-artifact-workspace"]').text()).toContain('Build a plan.')
     wrapper.unmount()
   })
@@ -211,7 +211,7 @@ describe('adaptive thread route isolation', () => {
         recovery: { title: 'Your starting point', body: 'Record what you know.', action: 'Back to Learn' },
         activity: { id: 'diagnostic:thread_1', status: 'eligible', planRevision: 1, primitive: { contractVersion: 'learn-adaptive.activity-contract.v1', rendererVersion: 'learn-adaptive.renderer.v1', type: 'diagnostic_prompt', action: 'submit_response', testId: 'learn-primitive-diagnostic-prompt', props: { prompt: 'What do you know?', responseFormat: 'short_text', assistance: 'none' } }, response: null,
           requiredAction: { kind: 'submit_response', label: 'Save response' } } }
-      const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
+      const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
       await wrapper.get('[data-testid="learn-diagnostic-response"]').setValue('Unsent answer in memory.')
       projection.value = { ...projection.value!, thread: { ...(projection.value!.thread as Record<string, unknown>), revision: 3 } }
       await nextTick()
@@ -235,7 +235,7 @@ describe('adaptive thread route isolation', () => {
         recovery: { title: 'Your starting point', body: 'Record what you know.', action: 'Back to Learn' },
         activity: { id: 'diagnostic:thread_1', status: 'eligible', planRevision: 1, primitive: { contractVersion: 'learn-adaptive.activity-contract.v1', rendererVersion: 'learn-adaptive.renderer.v1', type: 'diagnostic_prompt', action: 'submit_response', testId: 'learn-primitive-diagnostic-prompt', props: { prompt: 'What do you know?', responseFormat: 'short_text', assistance: 'none' } }, response: null,
           requiredAction: { kind: 'submit_response', label: 'Save response' } } }
-      const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
+      const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
       await wrapper.get('[data-testid="learn-diagnostic-response"]').setValue('Still unsent after Canvas update.')
       diagnostic.value = { ...diagnostic.value!, thread: { ...(diagnostic.value!.thread as Record<string, unknown>), revision: 4 } }
       await nextTick()
@@ -257,10 +257,10 @@ describe('adaptive thread route isolation', () => {
         fallback: { testId: 'learn-activity-fallback', title: 'Unavailable', body: 'Try later.', primaryAction: { label: 'Back to Learn' } }, requiredAction: { kind: 'continue', label: 'Continue' } },
       session: { studySessionId: 'session_1', revision: 2, contentRevision: 1, planRecordRevision: 5, blueprintRecordRevision: 3, scheduledStartAt: 0, scheduledEndAt: null, timezone: 'UTC' }, responsePrompt: null }
     requestedRoute.query.activity = 'activity_1'
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1?activity=activity_1' })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1?activity=activity_1' })
     expect(wrapper.get('[data-testid="learn-selected-history"]').text()).toContain('Earlier explanation.')
     expect(wrapper.get('[data-testid="learn-adaptive-canvas"]').element.parentElement?.getAttribute('style')).toContain('display: none')
-    expect(wrapper.get('[data-testid="learn-current-activity-link"]').attributes('href')).toBe('/app/learn/thread/thread_1')
+    expect(wrapper.get('[data-testid="learn-current-activity-link"]').attributes('href')).toBe('/app/learn/void/thread_1')
     requestedRoute.query.activity = undefined
     await nextTick()
     expect(wrapper.find('[data-testid="learn-selected-history"]').exists()).toBe(false)
@@ -276,7 +276,7 @@ describe('adaptive thread route isolation', () => {
     evidence.value = { ownerId: 'owner_1', threadId: 'thread_1', kind: 'factual', activityId: 'activity_1', eligibility: 'historical', readOnly: true, integrityState: 'stale',
       claims: [{ claimId: 'claim_1', claimText: 'Gravity attracts masses.', claimStatus: 'unknown', integrityState: 'stale',
         source: { origin: 'user_url', locator: 'page:2', sourceSnapshotId: 'source_1', sourceSnapshotRevision: 2, sourceRecordRevision: 4 } }] }
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1?activity=activity_1', attachTo: document.body })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1?activity=activity_1', attachTo: document.body })
     const args = calls.mock.calls.find(([name]) => name === 'learnAdaptiveEvidence:getThreadActivityEvidence')?.[1] as Ref<{ threadId: string, activityId: string }>
     expect(args.value).toEqual({ threadId: 'thread_1', activityId: 'activity_1' })
     await wrapper.get('[data-testid="learn-evidence-open"]').trigger('click')
@@ -299,7 +299,7 @@ describe('adaptive thread route isolation', () => {
     evidence.value = { ...identity, activityId: 'activity_1', kind: 'factual', eligibility: 'eligible', readOnly: false, integrityState: 'accepted',
       claims: [{ claimId: 'claim_1', claimText: 'Wrong cached claim', claimStatus: 'fact', integrityState: 'accepted',
         source: { origin: 'user_url', locator: 'page:1', sourceSnapshotId: 'source_1', sourceSnapshotRevision: 1, sourceRecordRevision: 1 } }] }
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1', attachTo: document.body })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1', attachTo: document.body })
     await wrapper.get('[data-testid="learn-evidence-open"]').trigger('click')
     const drawer = document.querySelector('[data-testid="learn-evidence-drawer"]') as HTMLElement
     expect(drawer.textContent).toContain('Evidence details are unavailable')
@@ -316,21 +316,46 @@ describe('adaptive thread route isolation', () => {
       activity: { id: 'activity_2', status: 'started', purpose: 'Current explanation.', reasonCode: 'ready_v2_session', primitive: null,
         fallback: { testId: 'learn-activity-fallback', title: 'Unavailable', body: 'Try later.', primaryAction: { label: 'Back to Learn' } }, requiredAction: { kind: 'continue', label: 'Continue' } },
       session: { studySessionId: 'session_1', revision: 2, contentRevision: 1, planRecordRevision: 5, blueprintRecordRevision: 3, scheduledStartAt: 0, scheduledEndAt: null, timezone: 'UTC' }, responsePrompt: null }
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
     expect(wrapper.get('[data-testid="learn-current-source-recovery"]').text()).toContain('unavailable')
     expect(wrapper.get('[data-testid="learn-current-source-recovery"] a').attributes('href')).toBe('/app/learn/void_1')
     expect(wrapper.get('[data-testid="learn-adaptive-canvas"]').element.parentElement?.getAttribute('style')).toContain('display: none')
   })
 
-  it('resolves the static thread segment before the V2 learning void parameter', async () => {
+  it('resolves the static Void and legacy thread segments before the V2 learning void parameter', async () => {
     const Page = await import(path)
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
-    expect(wrapper.vm.$router.resolve('/app/learn/thread/thread_1').matched.at(-1)?.path).toBe('/app/learn/thread/:threadId()')
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
+    const router = wrapper.vm.$router
+    expect(router.resolve('/app/learn/void/thread_1').matched.at(-1)?.path).toBe('/app/learn/void/:threadId()')
+    expect(router.resolve('/app/learn/void/calibration')).toMatchObject({ name: 'app-learn-void-threadId', params: { threadId: 'calibration' } })
+    const legacy = router.resolve('/app/learn/thread/thread_1')
+    expect(legacy).toMatchObject({ name: 'app-learn-thread-threadId', params: { threadId: 'thread_1' } })
+    expect(legacy.matched.at(-1)?.redirect).toEqual({ name: 'app-learn-void-threadId' })
+    expect(router.resolve('/app/learn/void_1')).toMatchObject({ name: 'app-learn-learningVoidId', params: { learningVoidId: 'void_1' } })
+    expect(router.resolve('/app/learn/void_1/calibration').name).toBe('app-learn-learningVoidId-calibration')
+    expect(router.resolve('/app/learn/void_1/sessions/session_1').name).toBe('app-learn-learningVoidId-sessions-sessionId')
+    expect(router.resolve('/app/learn/today').name).toBe('app-learn-today')
+    expect(router.resolve('/app/learn/review').name).toBe('app-learn-review')
+    expect(router.resolve('/app/learn/create').name).toBe('app-learn-create')
+  })
+
+  it('treats a V2 learning void ID as an unavailable Void without probing another table', async () => {
+    const Page = await import(path)
+    requestedRoute.params.threadId = 'k57learningvoid'
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/k57learningvoid' })
+    const queried = calls.mock.calls.map(([name]) => name as string)
+    expect(queried.every(name => name === 'users:getUser' || name.startsWith('learnAdaptive'))).toBe(true)
+    for (const [name, args] of calls.mock.calls) {
+      if (name !== 'users:getUser') expect(isRef(args) ? args.value : args).toMatchObject({ threadId: 'k57learningvoid' })
+    }
+    expect(wrapper.get('[data-testid="learn-adaptive-thread-unavailable"]').text()).toContain('unavailable')
+    expect(wrapper.get('[data-testid="learn-adaptive-safe-destination"]').attributes('href')).toBe('/app/learn')
+    expect(mutationCalls).not.toHaveBeenCalled()
   })
 
   it('queries only the owned adaptive Canvas and does not render a V1 or mission session for a missing thread', async () => {
     const Page = await import(path)
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
     expect(calls).toHaveBeenCalledWith('learnAdaptiveCanvas:getCanvas', expect.anything())
     expect(calls).toHaveBeenCalledWith('learnAdaptiveRecovery:getDiagnosticCanvas', expect.anything())
     expect(calls).toHaveBeenCalledWith('learnAdaptive:getThread', expect.anything())
@@ -347,7 +372,7 @@ describe('adaptive thread route isolation', () => {
     diagnostic.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Check my learning', intent: 'refresh', revision: 1 },
       status: 'draft', evidenceState: 'preparing', decisionPending: false,
       recovery: { title: 'Your material is preparing', body: 'Record what you know.', action: 'Review source' }, activity: null }
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
     expect(wrapper.find('[data-testid="learn-diagnostic-canvas"]').exists()).toBe(true)
     expect(wrapper.get('[data-testid="learn-adaptive-thread-shell"]').text()).toContain('Start learning')
     expect(wrapper.find('[data-testid="learn-adaptive-canvas"]').exists()).toBe(false)
@@ -366,7 +391,7 @@ describe('adaptive thread route isolation', () => {
         fallback: { testId: 'learn-activity-fallback', title: 'Unavailable', body: 'Try later.', primaryAction: { label: 'Back to Learn' } }, requiredAction: { kind: 'continue', label: 'Continue' } },
       session: { studySessionId: 'session_1', revision: 2, contentRevision: 1, planRecordRevision: 5, blueprintRecordRevision: 3, scheduledStartAt: 0, scheduledEndAt: null, timezone: 'UTC' }, responsePrompt: null,
     }
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
     expect(wrapper.find('[data-testid="learn-adaptive-canvas"]').exists()).toBe(true)
     projection.value = { ...projection.value!, thread: { ...(projection.value!.thread as Record<string, unknown>), revision: 3 } }
     await nextTick()
@@ -397,7 +422,7 @@ describe('adaptive thread route isolation', () => {
       status: 'ready', activity: { id: 'activity_1', status: 'eligible', purpose: 'Explain the accepted mechanism.', reasonCode: 'ready_v2_session', primitive: null,
         fallback: { testId: 'learn-activity-fallback', title: 'Unavailable', body: 'Try later.', primaryAction: { label: 'Back to Learn' } }, requiredAction: { kind: 'continue', label: 'Continue' } },
       session: { studySessionId: 'session_1', revision: 2, contentRevision: 1, planRecordRevision: 5, blueprintRecordRevision: 3, scheduledStartAt: 0, scheduledEndAt: null, timezone: 'UTC' }, responsePrompt: null }
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
     const shell = wrapper.get('[data-testid="learn-adaptive-thread-shell"]')
     expect(shell.text()).toContain('Explain gravity')
     expect(shell.text()).toContain('understand')
@@ -423,7 +448,7 @@ describe('adaptive thread route isolation', () => {
       session: { studySessionId: 'session_1', revision: 2, contentRevision: 1, planRecordRevision: 5, blueprintRecordRevision: 3, scheduledStartAt: 0, scheduledEndAt: null, timezone: 'UTC' }, responsePrompt: 'Explain why an apple falls.' }
     evidence.value = { ownerId: 'owner_1', threadId: 'thread_1', kind: 'factual', activityId: 'activity_1', eligibility: 'eligible', readOnly: false, integrityState: 'accepted',
       claims: [{ claimId: 'claim_1', claimText: 'Gravity attracts masses.', claimStatus: 'fact', integrityState: 'accepted', source: { origin: 'user_url', locator: 'page:1', sourceSnapshotId: 'source_1', sourceSnapshotRevision: 1, sourceRecordRevision: 1 } }] }
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1', attachTo: document.body })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1', attachTo: document.body })
     const source = wrapper.get('[data-testid="learn-canvas-source-1"]')
     await source.trigger('click')
     const drawer = document.querySelector('[data-testid="learn-evidence-drawer"]') as HTMLElement
@@ -441,7 +466,7 @@ describe('adaptive thread route isolation', () => {
       currentActivity: { id: 'activity_1', status: 'feedback', purpose: 'Apply gravity independently.' }, history: [],
       completion: { version: 'learn-adaptive.representative-completion.v1', status: 'passed', basis: 'server_scored_representative_task', activityId: 'activity_1', recordedAt: 100 },
       nextAction: { kind: 'open_v2_mission', label: 'Choose your next move in your learning mission', reasonCode: 'representative_pass', activityId: 'activity_1' } }
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
     expect(wrapper.get('[data-testid="learn-representative-outcome"]').text()).toContain('Representative task passed')
     expect(wrapper.get('#learn-thread-next-title').element.parentElement?.textContent).toContain('Choose your next move in your learning mission')
     expect(wrapper.get('[data-testid="learn-representative-next-move"]').attributes('href')).toBe('/app/learn/void_1')
@@ -457,7 +482,7 @@ describe('adaptive thread route isolation', () => {
     projection.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Explain orbital motion', intent: 'understand', evidenceState: 'ready', lifecycle: 'active', revision: 2, authorityKind: 'v2_mission', learningVoidId: 'void_1' },
       currentActivity: null, history: [{ id: 'previous_1', status: 'ended', purpose: 'Explore an orbit.' }],
       nextAction: { kind: 'continue', label: 'Start learning', activityId: null } }
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
     const shell = wrapper.get('[data-testid="learn-adaptive-thread-shell"]')
     expect(shell.text()).toContain('Explain orbital motion')
     expect(shell.text()).toContain('Explore an orbit.')
@@ -474,7 +499,7 @@ describe('adaptive thread route isolation', () => {
       currentActivity: { id: 'activity_1', status: 'eligible', purpose: 'Explain the evidence.' },
       history: [{ id: 'previous_1', status: 'replaced', purpose: 'Study the prior example.' }],
       nextAction: { kind: 'recover', label: 'Review evidence', activityId: 'activity_1' } }
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
     const shell = wrapper.get('[data-testid="learn-adaptive-thread-shell"]')
     expect(shell.text()).toContain('Explain gravity')
     expect(shell.text()).toContain('Study the prior example.')
@@ -489,7 +514,7 @@ describe('adaptive thread route isolation', () => {
       currentActivity: { id: 'activity_1', status: 'eligible', purpose: 'Explain the evidence.' }, history: [],
       nextAction: { kind: 'continue', label: 'Continue', activityId: 'activity_1' } }
     canvasPending.value = true
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
     const shell = wrapper.get('[data-testid="learn-adaptive-thread-shell"]')
     expect(shell.text()).toContain('Explain gravity')
     expect(shell.get('[data-testid="learn-adaptive-canvas-loading"]').attributes('role')).toBe('status')
@@ -514,7 +539,7 @@ describe('adaptive thread route isolation', () => {
     projection.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Check my learning', intent: 'refresh', evidenceState: 'none', lifecycle: 'draft', revision: 1, authorityKind: 'standalone' },
       currentActivity: null, history: [], nextAction: { kind: 'clarify', label: 'Continue on Learn', activityId: null } }
     canvasPending.value = true
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
     const shell = wrapper.get('[data-testid="learn-adaptive-thread-shell"]')
     expect(shell.find('[data-testid="learn-adaptive-canvas-loading"]').exists()).toBe(false)
     expect(shell.get('[data-testid="learn-adaptive-canvas-fallback-action"]').attributes('href')).toBe('/app/learn')
@@ -529,7 +554,7 @@ describe('adaptive thread route isolation', () => {
     allowed.value = false
     projection.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Private mission', intent: 'understand', evidenceState: 'ready', lifecycle: 'active', revision: 2, authorityKind: 'v2_mission', learningVoidId: 'void_1' },
       currentActivity: null, history: [], nextAction: { kind: 'continue', label: 'Continue', activityId: null } }
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
     expect(wrapper.get('[data-testid="learn-adaptive-thread-denied"]').text()).toContain('not available')
     expect(wrapper.get('[data-testid="learn-adaptive-safe-destination"]').attributes('href')).toBe('/app/learn?legacy=v2')
     expect(wrapper.get('[data-testid="learn-adaptive-safe-destination"]').text()).toBe('Open V2 learning plans')
@@ -549,7 +574,7 @@ describe('adaptive thread route isolation', () => {
       currentActivity: null, history: [], nextAction: { kind: 'continue', label: 'Continue', activityId: null } }
     memory.value = { ownerId: 'owner_1', threadId: 'thread_1', threadRevision: 3, lifecycle: 'active', unresolvedPoint: 'Plan the next step',
       nextAction: { label: 'Continue' }, evidenceState: 'none', preferences: [], artifacts: [], history: [] }
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1', attachTo: document.body })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1', attachTo: document.body })
     expect(calls.mock.calls.some(([name]) => name === 'learnAdaptive:getMemory')).toBe(true)
     const trigger = wrapper.get('[data-testid="learn-memory-open"]')
     await trigger.trigger('click')
@@ -570,7 +595,7 @@ describe('adaptive thread route isolation', () => {
     memory.value = { ownerId: 'owner_1', threadId: 'thread_1', threadRevision: 3, lifecycle: 'active', unresolvedPoint: null,
       nextAction: { label: 'Continue' }, evidenceState: 'none', preferences: [{ key: 'representation', value: 'Use diagrams', state: 'active', revision: 1 }], artifacts: [], history: [] }
     memoryMutationCalls.mockResolvedValueOnce({ kind: 'conflict', code: 'stale_revision', actualRevision: 4 })
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1', attachTo: document.body })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1', attachTo: document.body })
     await wrapper.get('[data-testid="learn-memory-open"]').trigger('click')
     const drawer = document.querySelector('[data-testid="learn-memory-drawer"]') as HTMLElement
     const input = drawer.querySelector('[data-testid="learn-memory-preference-representation"]') as HTMLInputElement
@@ -593,7 +618,7 @@ describe('adaptive thread route isolation', () => {
     memory.value = { ownerId: 'owner_1', threadId: 'thread_1', threadRevision: 3, lifecycle: 'active', unresolvedPoint: null,
       nextAction: { label: 'Continue' }, evidenceState: 'none', preferences: [], artifacts: [], history: [] }
     memoryMutationCalls.mockRejectedValueOnce(new Error('timeout')).mockResolvedValueOnce({ kind: 'ok', revision: 4 })
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1', attachTo: document.body })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1', attachTo: document.body })
     await wrapper.get('[data-testid="learn-memory-open"]').trigger('click')
     const drawer = document.querySelector('[data-testid="learn-memory-drawer"]') as HTMLElement
     const input = drawer.querySelector('[data-testid="learn-memory-preference-pace"]') as HTMLInputElement
@@ -636,7 +661,7 @@ describe('adaptive thread route isolation', () => {
       artifacts: [{ id: 'artifact_1', kind: 'plan', title: 'My plan', summary: 'Three steps', status: 'saved', revision: 1, updatedAt: 1,
         historical: false, readOnly: false, evidenceLabel: null }], history: [] }
     memoryMutationCalls.mockResolvedValueOnce({ kind: 'ok', revision: 4, value: { cleanupPending: true } })
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1', attachTo: document.body })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1', attachTo: document.body })
     await wrapper.get('[data-testid="learn-memory-open"]').trigger('click')
     const drawer = document.querySelector('[data-testid="learn-memory-drawer"]') as HTMLElement
     ;(drawer.querySelector('[data-testid="learn-memory-delete-artifact_1"]') as HTMLButtonElement).click()
@@ -658,7 +683,7 @@ describe('adaptive thread route isolation', () => {
       nextAction: { label: 'Continue' }, evidenceState: 'none', preferences: [], artifacts: [], history: [],
       promotionCandidates: [{ basis: 'useful_artifact', sourceId: 'artifact_1', label: 'My plan', allowedKinds: ['review', 'mastery'] }],
       promotionProposals: [] }
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1', attachTo: document.body })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1', attachTo: document.body })
     await wrapper.get('[data-testid="learn-memory-open"]').trigger('click')
     const drawer = document.querySelector('[data-testid="learn-memory-drawer"]') as HTMLElement
     ;(drawer.querySelector('[data-testid="learn-memory-promote-review-artifact_1"]') as HTMLButtonElement).click()
@@ -676,7 +701,7 @@ describe('adaptive thread route isolation', () => {
       nextAction: { kind: 'return_to_learn', label: 'Back to Learn', activityId: 'artifact_1' } }
     memory.value = { ownerId: 'owner_1', threadId: 'thread_1', threadRevision: 4, lifecycle: 'ended', unresolvedPoint: 'Review the plan',
       nextAction: { label: 'Back to Learn' }, evidenceState: 'none', preferences: [], artifacts: [], history: [] }
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1', attachTo: document.body })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1', attachTo: document.body })
     expect(wrapper.get('[data-testid="learn-thread-ended-history"]').text()).toContain('ended')
     expect(wrapper.find('[data-testid="learn-primitive-artifact-workspace"]').exists()).toBe(false)
     await wrapper.get('[data-testid="learn-memory-open"]').trigger('click')

@@ -95,6 +95,13 @@ try {
     }
     console.log(`Production SSR passed: ${pathname} HTTP 200, rendered page attributes.`)
   }
+  const legacyVoid = '/app/learn/thread/k57legacy%2Fthread?activity=a&empty=&repeat=1&repeat=2&q=a%2Fb%3F%26'
+  const { page: redirect } = await render(legacyVoid)
+  const location = redirect.headers.get('location')
+  if (redirect.status !== 302 || redirect.headers.get('cache-control') !== 'no-store' || location !== legacyVoid.replace('/app/learn/thread/', '/app/learn/void/')) {
+    throw new Error(`${legacyVoid}: expected HTTP 302 no-store to the canonical Void, got HTTP ${redirect.status} location ${location}`)
+  }
+  console.log('Production redirect passed: legacy adaptive entry HTTP 302 no-store to the canonical Void.')
   if (/Cannot read properties of null \(reading ['"]ce['"]\)/.test(output)) {
     throw new Error('Vue rendering-state failure in production preview output')
   }

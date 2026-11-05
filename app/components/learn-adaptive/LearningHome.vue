@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { api } from '#convex/api'
+import { learnVoidRoute } from '~/utils/learn-void-routes'
 import { NEED_FIRST_DRAFT_MAX_NEED_BYTES, NEED_FIRST_DRAFT_MAX_PASTE_BYTES, canonicalNeedFirstUrl } from '~~/shared/learn-adaptive-draft'
 
 type SourceScope =
@@ -257,13 +258,13 @@ function discardPaste() {
       <h3 class="mt-1 font-medium">{{ primaryResume.outcome }}</h3>
       <p v-if="primaryResume.unresolvedPoint" class="mt-1 text-sm text-muted-foreground">Still open: {{ primaryResume.unresolvedPoint }}</p>
       <p class="mt-1 text-sm text-muted-foreground">Next: {{ primaryResume.nextAction.label }}</p>
-      <NuxtLink :to="`/app/learn/thread/${encodeURIComponent(primaryResume.threadId)}`" class="mt-2 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline" @click="openResume($event, primaryResume.threadId)">{{ primaryResume.reason === 'needs_review' ? 'Review capability in thread' : primaryResume.reason === 'source_recovery' ? 'Review thread' : 'Continue' }}</NuxtLink>
+      <NuxtLink :to="learnVoidRoute(primaryResume.threadId)" class="mt-2 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline" @click="openResume($event, primaryResume.threadId)">{{ primaryResume.reason === 'needs_review' ? 'Review capability in thread' : primaryResume.reason === 'source_recovery' ? 'Review thread' : 'Continue' }}</NuxtLink>
     </section>
     <section v-if="worthRevisiting" class="mt-5 rounded-xl border border-border bg-card p-4" aria-labelledby="learn-review-heading" data-testid="learn-adaptive-worth-revisiting">
       <h2 id="learn-review-heading" class="font-dm-sans text-lg font-semibold">Worth revisiting</h2>
       <p class="mt-1 text-sm text-muted-foreground">{{ worthRevisiting.reviewCapability }} is marked as needing review.</p>
       <h3 class="mt-2 font-medium">{{ worthRevisiting.outcome }}</h3>
-      <NuxtLink :to="`/app/learn/thread/${encodeURIComponent(worthRevisiting.threadId)}`" class="mt-2 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline" @click="openResume($event, worthRevisiting.threadId)">Review capability in thread</NuxtLink>
+      <NuxtLink :to="learnVoidRoute(worthRevisiting.threadId)" class="mt-2 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline" @click="openResume($event, worthRevisiting.threadId)">Review capability in thread</NuxtLink>
     </section>
     <form aria-label="Start a learning thread" @submit.prevent="submit"><UiCard class="mt-6 gap-5 p-5">
       <label class="text-sm font-medium">Your goal or question<textarea ref="needField" v-model="need" data-testid="learn-adaptive-need" rows="4" maxlength="8000" class="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2" placeholder="For example: Help me understand why this proof works." :aria-describedby="invalidField === 'need' ? ERROR_ID : undefined" :aria-invalid="invalidField === 'need' ? true : undefined" /></label>
@@ -284,7 +285,7 @@ function discardPaste() {
       <p v-if="historyLoaded && !historyRows.length && historyDone" class="mt-2 text-sm text-muted-foreground">Your learning threads will appear here.</p>
       <ol v-if="historyRows.length" class="mt-3 space-y-2">
         <li v-for="thread in historyRows" :key="thread.threadId" class="rounded-lg border border-border p-3">
-          <NuxtLink :to="`/app/learn/thread/${encodeURIComponent(thread.threadId)}`" class="inline-flex min-h-11 items-center text-sm font-medium text-[var(--learn-action)] underline">{{ thread.outcome }}</NuxtLink>
+          <NuxtLink :to="learnVoidRoute(thread.threadId)" class="inline-flex min-h-11 items-center text-sm font-medium text-[var(--learn-action)] underline">{{ thread.outcome }}</NuxtLink>
           <p class="text-xs capitalize text-muted-foreground">{{ thread.lifecycle }}</p>
         </li>
       </ol>

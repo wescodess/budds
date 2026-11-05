@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { api } from '#convex/api'
 import { createSsrMutationStub } from '~/utils/convexSsrMutation'
+import { learnVoidRoute } from '~/utils/learn-void-routes'
 
 // Loaded only by the guarded disposable authority layer. This fixture invokes
 // public APIs with the signed-in learner; it cannot stamp or seed authority.
@@ -55,7 +56,7 @@ async function openSession() {
   try {
     const result = await attach.mutate({ studySessionId: sessionId.value as never,
       expectedSessionRevision: session.sessionRevision, idempotencyKey: `browser-attach-${crypto.randomUUID()}` })
-    if (result) await navigateTo(`/app/learn/thread/${encodeURIComponent(result.threadId)}`)
+    if (result) await navigateTo(learnVoidRoute(result.threadId))
   }
   catch { error.value = 'Public session attachment failed.' }
   finally { busy.value = false }

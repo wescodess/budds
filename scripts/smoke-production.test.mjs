@@ -15,26 +15,35 @@ const scenario = process.env.FAKE_WRANGLER_SCENARIO
 const ready = () => console.log('[wrangler:info] Ready on http://127.0.0.1:' + port)
 let loaded = false
 const held = []
-function answer(response) {
+function answer(request, response) {
+  if (scenario !== 'missing-redirect' && request.url.startsWith('/app/learn/thread/')) {
+    response.writeHead(302, { location: request.url.replace('/app/learn/thread/', '/app/learn/void/'), 'cache-control': 'no-store' })
+    response.end()
+    return
+  }
   response.writeHead(200, { 'content-type': 'text/html' })
   response.end(html)
 }
 createServer((request, response) => {
   if (scenario === 'hung') return
-  if (loaded) answer(response)
-  else held.push(response)
+  if (loaded) answer(request, response)
+  else held.push(() => answer(request, response))
 }).listen(port, '127.0.0.1', () => {
   console.log('fake wrangler booted')
   if (scenario === 'hung') ready()
   if (scenario === 'missing-ready') {
     loaded = true
-    held.splice(0).forEach(answer)
+    held.splice(0).forEach(release => release())
+  }
+  if (scenario === 'missing-redirect') {
+    loaded = true
+    ready()
   }
   if (scenario === 'slow-start') {
     setTimeout(() => {
       loaded = true
       ready()
-      held.splice(0).forEach(answer)
+      held.splice(0).forEach(release => release())
     }, 16_000)
   }
 })
@@ -71,6 +80,13 @@ describe('production smoke startup', { concurrency: true }, () => {
     assert.ok(result.elapsed >= 16_000, `elapsed ${result.elapsed}`)
     assert.match(result.stdout, /Production SSR passed: \/login/)
     assert.match(result.stdout, /Production SSR passed: \/privacy/)
+    assert.match(result.stdout, /Production redirect passed: legacy adaptive entry HTTP 302 no-store/)
+  })
+
+  test('a legacy adaptive entry without the canonical redirect fails', async () => {
+    const result = await smoke('missing-redirect')
+    assert.equal(result.status, 1)
+    assert.match(result.stderr, /expected HTTP 302 no-store to the canonical Void, got HTTP 200 location null/)
   })
 
   test('a hung renderer fails at the request limit as a hang', async () => {

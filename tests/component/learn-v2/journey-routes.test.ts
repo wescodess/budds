@@ -384,8 +384,14 @@ describe('Learn V2 route entry', () => {
     expect(wrapper.get('[data-testid="learn-continuation-ready"]').exists()).toBe(true)
     expect(JSON.parse(sessionStorage.getItem(pointerKey) ?? '{}')).toMatchObject({ threadId: 'thread_terminal' })
     expect(sessionStorage.getItem(answerKey)).toBeNull()
+    const push = vi.spyOn(wrapper.vm.$router, 'push').mockResolvedValue(undefined)
     await wrapper.get('[data-testid="learn-adaptive-open-diagnostic"]').trigger('click')
+    expect(push).toHaveBeenCalledTimes(1)
+    expect(wrapper.vm.$router.resolve(push.mock.calls[0]![0]).fullPath).toBe('/app/learn/void/thread_terminal')
+    expect(createDraft).not.toHaveBeenCalled()
+    expect(prepareDecision).not.toHaveBeenCalled()
     expect(JSON.parse(sessionStorage.getItem(pointerKey) ?? '{}')).toMatchObject({ threadId: 'thread_terminal' })
+    push.mockRestore()
   })
 
   it.each(['expired_pointer', 'missing_authority'] as const)('removes unreachable raw answers for %s', async state => {
