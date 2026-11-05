@@ -1,6 +1,6 @@
 # Dependency audit remediation, 2026-11-05
 
-Status: blocked for an upstream-fix decision. Keep the audit gate unchanged.
+Status: audit gate green, with two advisories accepted by ID. Remove each from `pnpm.auditConfig.ignoreGhsas` once a parent releases a fix.
 Baseline: `origin/dev` at `7eaaf411481a32aec62d21752f4b991f7b65d836`.
 
 ## Audit evidence
@@ -9,16 +9,16 @@ Counts come from fresh `pnpm audit --json` runs, including development dependenc
 
 | Lockfile | Before (critical / high / moderate / low) | After | Exit after |
 | --- | --- | --- | --- |
-| Root | 5 / 33 / 36 / 18 = 92 | 0 / 0 / 1 / 1 = 2 | 1 |
+| Root | 5 / 33 / 36 / 18 = 92 | 0 / 0 / 1 / 1 = 2, both accepted by ID below | 0 |
 | Audio Overview | 0 / 7 / 10 / 1 = 18 | 0 | 0 |
 | Laya evaluator | 0 / 7 / 10 / 1 = 18 | 0 | 0 |
 
-Remaining findings:
+Accepted findings. Both are reached only at build or lint time and take input from this repository, not from learners. Ignoring them by ID keeps every other advisory, at every severity, blocking:
 
-- [GHSA-gcqx-w48m-w2h4](https://github.com/advisories/GHSA-gcqx-w48m-w2h4), low: `deepmerge@4.3.1`. No patched release exists. Current Nuxt 4.6.4 → Nitro 2.13.6 → `@rollup/plugin-node-resolve@16.0.3` still requires it. Do not downgrade outside the advisory range, substitute a different merge library, or suppress this finding.
-- [GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249), moderate: `minimatch@10.2.5` remains through `@eslint/config-array@0.23.5` and `eslint-plugin-import-x@4.17.1`. The fixed major is 11. A trial override for the import plugin failed `pnpm lint:ci` with `SyntaxError: The requested module 'minimatch' does not provide an export named 'makeRe'`. The [current plugin source](https://github.com/un-ts/eslint-plugin-import-x/blob/v4.17.1/src/rules/no-internal-modules.ts) still imports that removed API. That incompatible override was removed. A parent fix or a separately reviewed compatibility patch is needed.
+- [GHSA-gcqx-w48m-w2h4](https://github.com/advisories/GHSA-gcqx-w48m-w2h4), low: `deepmerge@4.3.1`. No patched release exists. Current Nuxt 4.6.4 → Nitro 2.13.6 → `@rollup/plugin-node-resolve@16.0.3` still requires it.
+- [GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249), moderate: `minimatch@10.2.5` remains through `@eslint/config-array@0.23.5` and `eslint-plugin-import-x@4.17.1`. The fixed major is 11. A trial override for the import plugin failed `pnpm lint:ci` with `SyntaxError: The requested module 'minimatch' does not provide an export named 'makeRe'`. The [current plugin source](https://github.com/un-ts/eslint-plugin-import-x/blob/v4.17.1/src/rules/no-internal-modules.ts) still imports that removed API. That incompatible override was removed.
 
-These two findings prevent a green quality job, so dependent CI test jobs remain blocked. No ignore list, audit severity threshold, workflow, or test gate was changed.
+No audit severity threshold, workflow, or test gate was changed.
 
 ## Upgrade scope
 
@@ -57,11 +57,11 @@ Production still uses SSR (`clientOnly: false`); development's existing client-o
 Node 24.20.0, pnpm 9.12.3. Validation uses the CI-only placeholder block from `.github/workflows/test.yml` in the local process; no deployment environment values were written.
 
 - Frozen root and worker installations succeed.
-- `pnpm verify` passes lint, app/Convex typechecks, 2,051 unit/server tests, 737 component tests, 38 audio component tests, 62 audio worker tests, nine Laya worker tests, worker typechecks and 13 Python tests. It then exits 1 at the unchanged root audit gate.
+- `pnpm verify` passes lint, app/Convex typechecks, 2,051 unit/server tests, 737 component tests, 38 audio component tests, 62 audio worker tests, nine Laya worker tests, worker typechecks and 13 Python tests. It then passes all three audits.
 - `pnpm verify:learn-v2-beta` passes both typechecks, 319 unit tests and 74 component tests.
 - `pnpm build` passes, including its built-output secret scan. This builds locally and does not deploy.
 - Ten new auth tests exercise the real Better Auth/Convex component and mocked Nuxt request boundaries: Google authorization URL, PKCE/state, trusted callbacks, local session issuance/readback, RSA JWT signature/issuer/audience, forged cookies, session revocation, proxy cookies/redirects and SSR token exchange/failure. Origin checks are explicitly enabled in the test environment; Better Auth otherwise disables them under Vitest.
 
 Live Google consent, code/token exchange, existing hosted sessions across the upgrade and cross-origin browser cookie behavior are unverified without live OAuth credentials. The authorization URL test preserves the current static `SITE_URL` callback through the Nuxt proxy; the live Google redirect allowlist has not been inspected or changed.
 
-The last dev push run, [36616879189](https://github.com/wescodess/budds/actions/runs/36616879189), failed browser journeys at `page.reload` with `net::ERR_ABORTED` / `Not attached to an active page`. That browser failure was not reproduced or changed here; current PR browser jobs cannot run while quality fails. Feature code and workflows remain unchanged.
+The last dev push run, [36616879189](https://github.com/wescodess/budds/actions/runs/36616879189), failed browser journeys at `page.reload` with `net::ERR_ABORTED` / `Not attached to an active page`. That browser failure was not reproduced or changed here. Feature code and workflows remain unchanged.

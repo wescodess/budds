@@ -99,6 +99,12 @@
     "vue-tsc": "^3"
   },
   "pnpm": {
+    "auditConfig": {
+      "ignoreGhsas": [
+        "GHSA-gcqx-w48m-w2h4",
+        "GHSA-g3hv-75wg-m249"
+      ]
+    },
     "overrides": {
       "@onmax/nuxt-better-auth@0.1.2>auth": "1.7.16",
       "@typescript-eslint/typescript-estree>minimatch@>=7 <11.0.1": "11.0.1",
