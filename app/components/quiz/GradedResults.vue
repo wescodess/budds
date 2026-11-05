@@ -1,9 +1,10 @@
 <script setup lang="ts">
+import type { ComponentPublicInstance } from 'vue'
 import { RotateCcw } from '@lucide/vue'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 import { createSsrMutationStub } from '~/utils/convexSsrMutation'
-import { QUIZ_STRIP_PAGE_SIZE, QUIZ_STRIP_TILE_LIMIT, formatQuizPoints, needsQuizDecision, quizResultState, type QuizGradedResult, type QuizGradingSummary } from '~/utils/quiz-results'
+import { QUIZ_RESULT_LABELS, QUIZ_STRIP_PAGE_SIZE, QUIZ_STRIP_TILE_LIMIT, formatQuizPoints, needsQuizDecision, quizResultState, type QuizGradedResult, type QuizGradingSummary } from '~/utils/quiz-results'
 
 const props = defineProps<{
   attemptId: Id<'quizAttempts'>
@@ -27,12 +28,15 @@ const retryMutation = import.meta.client
   : createSsrMutationStub<typeof api.quizGrading.requestGradingRetry>()
 
 const reviewPanel = useTemplateRef<{ revealAnswer: (focus?: boolean) => void }>('reviewPanel')
+const decideButton = useTemplateRef<ComponentPublicInstance>('decideButton')
+const retakeButton = useTemplateRef<ComponentPublicInstance>('retakeButton')
 
 const activeIndex = ref(0)
 const page = ref(0)
 const retrying = ref(false)
 const retryFailed = ref(false)
 const retryExhausted = ref(false)
+const announcement = ref('')
 
 const checkingCount = computed(() => props.grading.pending)
 const decisionCount = computed(() => props.grading.needsReview + props.grading.unavailable)
@@ -50,9 +54,22 @@ const pointsLabel = computed(() => {
   return decisionCount.value > 0 ? 'Points for now' : 'Points'
 })
 
-const checkingCopy = computed(() => {
-  const noun = checkingCount.value === 1 ? 'answer' : 'answers'
-  return `Checking ${checkingCount.value} ${noun}. Usually seconds, sometimes a few minutes. It keeps going if you leave.`
+const checkingCopy = computed(() => `Checking ${answerCount(checkingCount.value)}. Usually seconds, sometimes a few minutes. It keeps going if you leave.`)
+
+const activeResult = computed(() => props.results[activeIndex.value])
+
+const activeOutcome = computed(() => {
+  const result = activeResult.value
+  if (!result) return { questionId: undefined, label: '' }
+  const label = QUIZ_RESULT_LABELS[quizResultState(result)]
+  return { questionId: result.questionId, label: result.grade?.source === 'self' ? `${label}, marked by you` : label }
+})
+
+const attemptProgress = computed(() => {
+  const nextStep = checkingCount.value > 0
+    ? `Checking ${answerCount(checkingCount.value)}. `
+    : decisionCount.value > 0 ? `Decide ${answerCount(decisionCount.value)}. ` : ''
+  return `${nextStep}${pointsLabel.value}: ${points.value} of ${props.total}.`
 })
 
 const scoreTone = computed(() => {
@@ -65,6 +82,10 @@ const scoreTone = computed(() => {
 const animatedPct = ref(0)
 const displayPct = computed(() => Math.round(animatedPct.value))
 let scoreRafId: number | null = null
+
+function answerCount(count: number) {
+  return `${count} ${count === 1 ? 'answer' : 'answers'}`
+}
 
 function cancelScoreAnimation() {
   if (scoreRafId !== null) {
@@ -104,7 +125,23 @@ watch(activeIndex, (index) => {
 })
 
 watch(() => props.grading.unavailable, (count, previous) => {
+  retryFailed.value = false
   if (count > previous) retryExhausted.value = false
+})
+
+watch([activeOutcome, attemptProgress], ([outcome, progress], [previousOutcome, previousProgress]) => {
+  const answerChanged = outcome.questionId === previousOutcome.questionId && outcome.label !== previousOutcome.label
+  if (!answerChanged && progress === previousProgress) return
+  const answer = answerChanged && outcome.label !== QUIZ_RESULT_LABELS.checking
+    ? `Question ${activeIndex.value + 1}: ${outcome.label}. `
+    : ''
+  announcement.value = `${answer}${progress}`
+})
+
+watch(decisionCount, (count) => {
+  if (count === 0 && document.activeElement === decideButton.value?.$el) {
+    nextTick(() => retakeButton.value?.$el.focus())
+  }
 })
 
 onMounted(() => animateScore(0, props.percentage))
@@ -140,6 +177,9 @@ async function requestRetry() {
     return
   }
   retryExhausted.value = outcome.retried === 0
+  if (retryExhausted.value && activeResult.value && quizResultState(activeResult.value) === 'not_checked') {
+    announcement.value = 'This answer can\'t be checked again. You can mark it yourself.'
+  }
 }
 </script>
 
@@ -177,7 +217,7 @@ async function requestRetry() {
           :page="page"
           @select="openAnswer"
         />
-        <p v-if="checkingCount > 0" role="status" class="mt-2 text-center text-xs text-muted-foreground">{{ checkingCopy }}</p>
+        <p v-if="checkingCount > 0" class="mt-2 text-center text-xs text-muted-foreground">{{ checkingCopy }}</p>
       </div>
     </div>
 
@@ -191,23 +231,27 @@ async function requestRetry() {
     />
 
     <div class="flex flex-wrap gap-2">
-      <template v-if="decisionCount > 0">
-        <UiButton class="flex-1 sm:flex-none" @click="decideNext">
-          Decide {{ decisionCount }} {{ decisionCount === 1 ? 'answer' : 'answers' }}
-        </UiButton>
-        <UiButton variant="outline" class="flex-1 hover:text-foreground sm:flex-none" @click="emit('retake')">
-          <RotateCcw class="mr-1.5 h-3.5 w-3.5" />
-          Retake Quiz
-        </UiButton>
-        <UiButton variant="ghost" class="flex-1 sm:flex-none" @click="emit('back')">Back to overview</UiButton>
-      </template>
-      <template v-else>
-        <UiButton class="flex-1 sm:flex-none" @click="emit('retake')">
-          <RotateCcw class="mr-1.5 h-3.5 w-3.5" />
-          Retake Quiz
-        </UiButton>
-        <UiButton variant="outline" class="flex-1 hover:text-foreground sm:flex-none" @click="emit('back')">Back to overview</UiButton>
-      </template>
+      <UiButton v-if="decisionCount > 0" ref="decideButton" class="flex-1 sm:flex-none" @click="decideNext">
+        Decide {{ answerCount(decisionCount) }}
+      </UiButton>
+      <UiButton
+        ref="retakeButton"
+        :variant="decisionCount > 0 ? 'outline' : undefined"
+        class="flex-1 sm:flex-none"
+        :class="decisionCount > 0 && 'hover:text-foreground'"
+        @click="emit('retake')"
+      >
+        <RotateCcw class="mr-1.5 h-3.5 w-3.5" />
+        Retake Quiz
+      </UiButton>
+      <UiButton
+        :variant="decisionCount > 0 ? 'ghost' : 'outline'"
+        class="flex-1 sm:flex-none"
+        :class="decisionCount === 0 && 'hover:text-foreground'"
+        @click="emit('back')"
+      >
+        Back to overview
+      </UiButton>
     </div>
 
     <div>
@@ -230,7 +274,7 @@ async function requestRetry() {
             :selected-index="activeIndex"
             @select="activeIndex = $event"
           />
-          <p v-if="checkingCount > 0" role="status" class="text-xs text-muted-foreground">{{ checkingCopy }}</p>
+          <p v-if="checkingCount > 0" class="text-xs text-muted-foreground">{{ checkingCopy }}</p>
         </template>
         <template #answer="{ result }">
           <QuizGradedAnswer
@@ -243,6 +287,7 @@ async function requestRetry() {
           />
         </template>
       </QuizReviewPanel>
+      <p role="status" aria-live="polite" class="sr-only" data-testid="quiz-grading-announcement">{{ announcement }}</p>
     </div>
   </div>
 </template>

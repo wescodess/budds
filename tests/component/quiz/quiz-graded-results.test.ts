@@ -294,7 +294,8 @@ describe('QuizResultsView graded results', () => {
     const wrapper = await mountResults(attempt([yourCall('a'), correct('b')], 1.5))
     await wrapper.findAll('[data-slot="toggle-group-item"]')[0]!.trigger('click')
     await flushPromises()
-    expect(wrapper.text()).toContain('We couldn\'t save your choice. Check your connection and try again.')
+    expect(wrapper.get('[role="alert"]').text()).toBe('We couldn\'t save your choice. Try again.')
+    expect(wrapper.text()).not.toMatch(/connection/i)
     expect(wrapper.text()).toContain('Your call')
     expect(wrapper.text()).toContain('Learner answer a')
     expect(wrapper.findAll('[data-slot="toggle-group-item"]').every(node => node.attributes('data-state') === 'off')).toBe(true)
@@ -338,7 +339,8 @@ describe('QuizResultsView graded results', () => {
     requestRetry.mockRejectedValue(new Error('offline'))
     const wrapper = await mountResults(attempt([notChecked('a'), correct('b')], 1))
     await clickButton(wrapper, 'Try again')
-    expect(wrapper.text()).toContain('We couldn\'t start checking again.')
+    expect(wrapper.get('[role="alert"]').text()).toBe('We couldn\'t start checking again. You can try again or mark it yourself.')
+    expect(wrapper.text()).not.toMatch(/connection/i)
     expect(wrapper.text()).toContain('Not checked yet')
     expect(wrapper.findAll('button').some(node => node.text() === 'Try again')).toBe(true)
     wrapper.unmount()
@@ -602,6 +604,395 @@ describe('QuizResultsView graded results', () => {
       expect(wrapper.text()).not.toMatch(internal)
     }
     wrapper.unmount()
+  })
+})
+
+describe('QuizResultsView graded results keyboard focus', () => {
+  const markedPartly = (id: string) => freeForm(id, { status: 'graded', credit: 0.5, label: 'partially_correct', source: 'self' })
+
+  beforeEach(() => {
+    queryCall = 0
+    historyData.value = []
+    mutationError.value = null
+    useRuntimeConfig().public.quizSemanticReviewEnabled = true
+    useRuntimeConfig().public.quizSemanticAssessmentEnabled = false
+    selfAssess.mockReset().mockResolvedValue(null)
+    requestRetry.mockReset().mockResolvedValue({ retried: 1 })
+  })
+
+  function toggles(wrapper: any) {
+    return wrapper.findAll('[data-slot="toggle-group-item"]')
+  }
+
+  function button(wrapper: any, label: string) {
+    const match = wrapper.findAll('button').find((node: any) => node.text() === label)
+    expect(match, `button "${label}"`).toBeTruthy()
+    return match
+  }
+
+  function deferred<T = null>() {
+    let resolve!: (value: T) => void
+    let reject!: (error: Error) => void
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res
+      reject = rej
+    })
+    return { promise, resolve, reject }
+  }
+
+  async function activate(control: any) {
+    control.element.focus()
+    expect(document.activeElement).toBe(control.element)
+    await control.trigger('click')
+    await flushPromises()
+  }
+
+  async function update(data: any) {
+    resultsData.value = data
+    await flushPromises()
+  }
+
+  function answerContainer(wrapper: any) {
+    return wrapper.get('[aria-label="Your result"]')
+  }
+
+  function announcement(wrapper: any) {
+    return wrapper.get('[data-testid="quiz-grading-announcement"]').text()
+  }
+
+  describe('opening a decision', () => {
+    it.each([
+      ['Mark it myself', () => notChecked('a'), 'Correct'],
+      ['Change', () => markedPartly('a'), 'Partly'],
+      ['Think this is wrong?', () => incorrect('a'), 'Incorrect'],
+    ])('%s moves focus to the current choice', async (label, row, focused) => {
+      const wrapper = await mountResults(attempt([row(), correct('b')], 1))
+      await activate(button(wrapper, label))
+      expect(document.activeElement).toBe(toggles(wrapper).find((node: any) => node.text() === focused)!.element)
+      expect(wrapper.findAll('button').some((node: any) => node.text() === label)).toBe(false)
+      wrapper.unmount()
+    })
+  })
+
+  describe('saving a decision', () => {
+    it.each([
+      ['your call', () => yourCall('a'), 1.5, null, 1],
+      ['not checked', () => notChecked('a'), 1, 'Mark it myself', 1],
+      ['a model result', () => incorrect('a'), 1, 'Think this is wrong?', 1],
+    ])('holds focus on the busy group, then returns it to the chosen toggle when saving %s fails', async (_name, row, score, opener, choice) => {
+      const save = deferred()
+      selfAssess.mockReturnValueOnce(save.promise)
+      const wrapper = await mountResults(attempt([row(), correct('b')], score))
+      if (opener) await activate(button(wrapper, opener))
+      const group = wrapper.get('[data-slot="toggle-group"]')
+      await activate(toggles(wrapper)[choice])
+      expect(toggles(wrapper)[choice].attributes('disabled')).toBeDefined()
+      expect(group.attributes('aria-busy')).toBe('true')
+      expect(document.activeElement).toBe(group.element)
+
+      save.reject(new Error('Grade cannot be self-assessed'))
+      await flushPromises()
+      expect(toggles(wrapper)[choice].attributes('disabled')).toBeUndefined()
+      expect(document.activeElement).toBe(toggles(wrapper)[choice].element)
+      expect(wrapper.get('[role="alert"]').text()).toBe('We couldn\'t save your choice. Try again.')
+      expect(announcement(wrapper)).toBe('')
+
+      await activate(toggles(wrapper)[choice])
+      expect(selfAssess).toHaveBeenCalledTimes(2)
+      expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+      wrapper.unmount()
+    })
+
+    it('leaves focus alone when the learner has moved on before saving fails', async () => {
+      const save = deferred()
+      selfAssess.mockReturnValueOnce(save.promise)
+      const wrapper = await mountResults(attempt([yourCall('a'), correct('b')], 1.5))
+      await activate(toggles(wrapper)[0])
+      const retake = button(wrapper, 'Retake Quiz')
+      retake.element.focus()
+      save.reject(new Error('offline'))
+      await flushPromises()
+      expect(document.activeElement).toBe(retake.element)
+      wrapper.unmount()
+    })
+
+    it.each([
+      ['your call', () => yourCall('a'), 1.5, null, 0],
+      ['not checked', () => notChecked('a'), 1, 'Mark it myself', 0],
+      ['a model result', () => incorrect('a'), 1, 'Think this is wrong?', 0],
+      ['your earlier choice', () => markedPartly('a'), 1.5, 'Change', 2],
+    ])('moves focus to Change when the saved grade replaces %s before the save resolves', async (_name, row, score, opener, choice) => {
+      const save = deferred()
+      selfAssess.mockReturnValueOnce(save.promise)
+      const wrapper = await mountResults(attempt([row(), correct('b')], score))
+      if (opener) await activate(button(wrapper, opener))
+      await activate(toggles(wrapper)[choice])
+      expect(document.activeElement).toBe(wrapper.get('[data-slot="toggle-group"]').element)
+
+      const replaced = choice === 0 ? marked('a') : freeForm('a', { status: 'graded', credit: 0, label: 'incorrect', source: 'self' })
+      await update(attempt([replaced, correct('b')], choice === 0 ? 2 : 1))
+      expect(toggles(wrapper)).toHaveLength(0)
+      expect(wrapper.text()).toContain('Your choice counts')
+      const change = button(wrapper, 'Change')
+      expect(document.activeElement).toBe(change.element)
+
+      save.resolve(null)
+      await flushPromises()
+      expect(document.activeElement).toBe(change.element)
+      expect(toggles(wrapper)).toHaveLength(0)
+      wrapper.unmount()
+    })
+
+    it.each([
+      ['your call', () => yourCall('a'), 1.5, null],
+      ['not checked', () => notChecked('a'), 1, 'Mark it myself'],
+      ['a model result', () => incorrect('a'), 1, 'Think this is wrong?'],
+    ])('ends on Change when the save resolves before the grade replaces %s', async (_name, row, score, opener) => {
+      const wrapper = await mountResults(attempt([row(), correct('b')], score))
+      if (opener) await activate(button(wrapper, opener))
+      await activate(toggles(wrapper)[0])
+      expect(wrapper.get('[aria-label="Your result"]').element.contains(document.activeElement)).toBe(true)
+
+      await update(attempt([marked('a'), correct('b')], 2))
+      expect(document.activeElement).toBe(button(wrapper, 'Change').element)
+      wrapper.unmount()
+    })
+
+    it('keeps an open decision and its focus when a different answer changes', async () => {
+      const wrapper = await mountResults(attempt([notChecked('a'), pending('b')], 0))
+      await activate(button(wrapper, 'Mark it myself'))
+      const focused = document.activeElement
+      await update(attempt([notChecked('a'), correct('b')], 1))
+      expect(toggles(wrapper)).toHaveLength(3)
+      expect(document.activeElement).toBe(focused)
+      expect(announcement(wrapper)).toBe('Decide 1 answer. Points for now: 1 of 2.')
+      wrapper.unmount()
+    })
+
+    it('moves focus to Change when another tab decides the answer being reviewed', async () => {
+      const wrapper = await mountResults(attempt([yourCall('a'), correct('b')], 1.5))
+      toggles(wrapper)[0].element.focus()
+      await update(attempt([marked('a'), correct('b')], 2))
+      expect(document.activeElement).toBe(button(wrapper, 'Change').element)
+      wrapper.unmount()
+    })
+
+    it('leaves focus alone when the replaced answer did not hold it', async () => {
+      const wrapper = await mountResults(attempt([yourCall('a'), correct('b')], 1.5))
+      const retake = button(wrapper, 'Retake Quiz')
+      retake.element.focus()
+      await update(attempt([marked('a'), correct('b')], 2))
+      expect(document.activeElement).toBe(retake.element)
+      wrapper.unmount()
+    })
+  })
+
+  describe('retrying', () => {
+    it('holds focus on the answer while retrying, then returns it to try again on failure', async () => {
+      const retry = deferred<{ retried: number }>()
+      requestRetry.mockReturnValueOnce(retry.promise)
+      const wrapper = await mountResults(attempt([notChecked('a'), correct('b')], 1))
+      await activate(button(wrapper, 'Try again'))
+      expect(button(wrapper, 'Try again').attributes('disabled')).toBeDefined()
+      expect(document.activeElement).toBe(answerContainer(wrapper).element)
+
+      retry.reject(new Error('Attempt not found'))
+      await flushPromises()
+      expect(document.activeElement).toBe(button(wrapper, 'Try again').element)
+      expect(wrapper.find('[role="alert"]').text()).toContain('You can try again or mark it yourself.')
+      expect(announcement(wrapper)).toBe('')
+      wrapper.unmount()
+    })
+
+    it('moves focus to mark it myself when nothing more can be retried', async () => {
+      requestRetry.mockResolvedValue({ retried: 0 })
+      const wrapper = await mountResults(attempt([notChecked('a'), correct('b')], 1))
+      await activate(button(wrapper, 'Try again'))
+      expect(wrapper.findAll('button').some((node: any) => node.text() === 'Try again')).toBe(false)
+      expect(document.activeElement).toBe(button(wrapper, 'Mark it myself').element)
+      expect(announcement(wrapper)).toBe('This answer can\'t be checked again. You can mark it yourself.')
+      wrapper.unmount()
+    })
+
+    it('keeps focus on the answer when the retried row starts checking, and through its result', async () => {
+      const retry = deferred<{ retried: number }>()
+      requestRetry.mockReturnValueOnce(retry.promise)
+      const wrapper = await mountResults(attempt([notChecked('a'), correct('b')], 1))
+      await activate(button(wrapper, 'Try again'))
+
+      await update(attempt([pending('a'), correct('b')], 1))
+      const container = answerContainer(wrapper)
+      expect(wrapper.text()).toContain('Checking')
+      expect(document.activeElement).toBe(container.element)
+      expect(announcement(wrapper)).toBe('Checking 1 answer. Points so far: 1 of 2.')
+
+      retry.resolve({ retried: 1 })
+      await flushPromises()
+      expect(document.activeElement).toBe(container.element)
+
+      await update(attempt([partial('a'), correct('b')], 1.5))
+      expect(document.activeElement).toBe(container.element)
+      expect(announcement(wrapper)).toBe('Question 1: Partly correct. Points: 1.5 of 2.')
+      wrapper.unmount()
+    })
+  })
+
+  describe('when another tab starts checking', () => {
+    it('closes open decision controls and keeps them closed when checking stops', async () => {
+      const wrapper = await mountResults(attempt([notChecked('a'), correct('b')], 1))
+      await activate(button(wrapper, 'Mark it myself'))
+      expect(toggles(wrapper)).toHaveLength(3)
+
+      await update(attempt([pending('a'), correct('b')], 1))
+      expect(toggles(wrapper)).toHaveLength(0)
+      expect(wrapper.text()).not.toContain('Your choice replaces this result.')
+      expect(document.activeElement).toBe(answerContainer(wrapper).element)
+
+      await update(attempt([notChecked('a'), correct('b')], 1))
+      expect(toggles(wrapper)).toHaveLength(0)
+      expect(wrapper.text()).toContain('Try again')
+      expect(wrapper.text()).toContain('Mark it myself')
+      wrapper.unmount()
+    })
+
+    it('shows no save error when the row is already checking', async () => {
+      const save = deferred()
+      selfAssess.mockReturnValueOnce(save.promise)
+      const wrapper = await mountResults(attempt([notChecked('a'), correct('b')], 1))
+      await activate(button(wrapper, 'Mark it myself'))
+      await activate(toggles(wrapper)[0])
+
+      await update(attempt([pending('a'), correct('b')], 1))
+      save.reject(new Error('Grade cannot be self-assessed'))
+      await flushPromises()
+      expect(toggles(wrapper)).toHaveLength(0)
+      expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+      expect(wrapper.text()).toContain('Checking')
+      expect(document.activeElement).toBe(answerContainer(wrapper).element)
+      wrapper.unmount()
+    })
+
+    it('closes a challenge if its row returns to checking', async () => {
+      const wrapper = await mountResults(attempt([incorrect('a'), correct('b')], 1))
+      await activate(button(wrapper, 'Think this is wrong?'))
+      await update(attempt([pending('a'), correct('b')], 1))
+      expect(toggles(wrapper)).toHaveLength(0)
+      expect(wrapper.text()).not.toContain('Your choice replaces this result.')
+      wrapper.unmount()
+    })
+
+    it('drops a stale retry error once the rows change', async () => {
+      requestRetry.mockRejectedValue(new Error('offline'))
+      const wrapper = await mountResults(attempt([notChecked('a'), correct('b')], 1))
+      await activate(button(wrapper, 'Try again'))
+      expect(wrapper.find('[role="alert"]').exists()).toBe(true)
+
+      await update(attempt([pending('a'), correct('b')], 1))
+      await update(attempt([notChecked('a'), correct('b')], 1))
+      expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+      expect(button(wrapper, 'Try again').attributes('disabled')).toBeUndefined()
+      wrapper.unmount()
+    })
+  })
+
+  describe('leaving the decision flow', () => {
+    it('decide moves focus to the answer, including when the strip was paged away', async () => {
+      const rows = Array.from({ length: 30 }, (_, index) => index === 0 ? yourCall(`q${index + 1}`) : correct(`q${index + 1}`))
+      const wrapper = await mountResults(attempt(rows, 29.5))
+      await wrapper.findAll('[data-testid="quiz-score-strip"]')[0]!.get('[data-slot="pagination-next"]').trigger('click')
+      await flushPromises()
+      await activate(button(wrapper, 'Decide 1 answer'))
+      const focused = document.activeElement as HTMLElement
+      expect(focused.getAttribute('tabindex')).toBe('-1')
+      expect(focused.textContent).toContain('Question text q1')
+      expect(focused.classList.contains('focus-visible:ring-[3px]')).toBe(true)
+      wrapper.unmount()
+    })
+
+    it('keeps retake and back focused when decisions appear', async () => {
+      const wrapper = await mountResults(attempt([pending('a'), correct('b')], 1))
+      const back = button(wrapper, 'Back to overview')
+      const retake = button(wrapper, 'Retake Quiz')
+      expect(back.attributes('data-variant')).toBe('outline')
+      expect(retake.attributes('data-variant')).toBeUndefined()
+      back.element.focus()
+
+      await update(attempt([yourCall('a'), correct('b')], 1.5))
+      expect(button(wrapper, 'Back to overview').element).toBe(back.element)
+      expect(document.activeElement).toBe(back.element)
+      expect(back.attributes('data-variant')).toBe('ghost')
+      expect(retake.attributes('data-variant')).toBe('outline')
+      expect(wrapper.findAll('button').map((node: any) => node.text()).slice(0, 8)).toContain('Decide 1 answer')
+      wrapper.unmount()
+    })
+
+    it('moves focus from decide to retake when the last decision is made elsewhere', async () => {
+      const wrapper = await mountResults(attempt([yourCall('a'), correct('b')], 1.5))
+      button(wrapper, 'Decide 1 answer').element.focus()
+      await update(attempt([marked('a'), correct('b')], 2))
+      expect(wrapper.findAll('button').some((node: any) => node.text().startsWith('Decide'))).toBe(false)
+      expect(document.activeElement).toBe(button(wrapper, 'Retake Quiz').element)
+      wrapper.unmount()
+    })
+  })
+
+  describe('announcements', () => {
+    it('owns a single polite region that starts empty and stays quiet while navigating', async () => {
+      const wrapper = await mountResults(attempt([pending('a'), yourCall('b'), correct('c')], 1.5))
+      expect(wrapper.text()).toContain('Checking 1 answer.')
+      expect(wrapper.findAll('.animate-spin').every((spinner: any) => spinner.attributes('aria-hidden') === 'true')).toBe(true)
+      expect(wrapper.findAll('[role="status"]:not([aria-hidden="true"])')).toHaveLength(1)
+      expect(wrapper.findAll('[aria-live]')).toHaveLength(1)
+      expect(announcement(wrapper)).toBe('')
+
+      await cells(wrapper)[1]!.trigger('click')
+      await cells(wrapper)[2]!.trigger('click')
+      await flushPromises()
+      expect(announcement(wrapper)).toBe('')
+      wrapper.unmount()
+    })
+
+    it('announces the decided answer and what remains', async () => {
+      const wrapper = await mountResults(attempt([yourCall('a'), notChecked('b'), correct('c')], 1.5))
+      await update(attempt([marked('a'), notChecked('b'), correct('c')], 2))
+      expect(announcement(wrapper)).toBe('Question 1: Correct, marked by you. Decide 1 answer. Points for now: 2 of 3.')
+
+      await update(attempt([marked('a'), freeForm('b', { status: 'graded', credit: 0.5, label: 'partially_correct', source: 'self' }), correct('c')], 2.5))
+      expect(announcement(wrapper)).toBe('Points: 2.5 of 3.')
+      wrapper.unmount()
+    })
+
+    it('announces a decision that keeps the same score', async () => {
+      const wrapper = await mountResults(attempt([yourCall('a'), correct('b')], 1.5))
+      await update(attempt([markedPartly('a'), correct('b')], 1.5))
+      expect(announcement(wrapper)).toBe('Question 1: Partly correct, marked by you. Points: 1.5 of 2.')
+      wrapper.unmount()
+    })
+
+    it('announces progress while other answers finish checking', async () => {
+      const wrapper = await mountResults(attempt([correct('a'), pending('b'), pending('c')], 1))
+      await update(attempt([correct('a'), partial('b'), pending('c')], 1.5))
+      expect(announcement(wrapper)).toBe('Checking 1 answer. Points so far: 1.5 of 3.')
+
+      await update(attempt([correct('a'), partial('b'), yourCall('c')], 2))
+      expect(announcement(wrapper)).toBe('Decide 1 answer. Points for now: 2 of 3.')
+      wrapper.unmount()
+    })
+
+    it('does not repeat itself when a query update changes nothing', async () => {
+      const wrapper = await mountResults(attempt([yourCall('a'), correct('b')], 1.5))
+      await update(attempt([marked('a'), correct('b')], 2))
+      const message = announcement(wrapper)
+      const region = wrapper.get('[data-testid="quiz-grading-announcement"]').element
+      const mutations: MutationRecord[] = []
+      const observer = new MutationObserver(records => mutations.push(...records))
+      observer.observe(region, { childList: true, characterData: true, subtree: true })
+      await update(attempt([marked('a'), correct('b')], 2))
+      observer.disconnect()
+      expect(mutations).toHaveLength(0)
+      expect(announcement(wrapper)).toBe(message)
+      wrapper.unmount()
+    })
   })
 })
 

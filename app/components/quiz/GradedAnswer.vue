@@ -12,6 +12,7 @@ const props = defineProps<{
 const emit = defineEmits<{ retry: [] }>()
 
 const deciding = ref(false)
+const answer = useTemplateRef<HTMLElement>('answer')
 
 const state = computed(() => quizResultState(props.result))
 const credit = computed(() => formatQuizPoints(quizResultCredit(props.result)))
@@ -27,10 +28,52 @@ const creditLine = computed(() => {
   if (state.value === 'your_call') return `${credit.value} of 1 for now`
   return settled.value ? `${credit.value} of 1` : null
 })
+const gradeKey = computed(() => {
+  const grade = props.result.grade
+  return [grade?.status, grade?.source, grade?.label, grade?.credit].join()
+})
+
+function focusAnswerControl() {
+  const container = answer.value
+  const control = container?.querySelector<HTMLElement>('button[data-state="on"]:not(:disabled)')
+    ?? container?.querySelector<HTMLElement>('button:not(:disabled)')
+  if (control) control.focus()
+  else container?.focus({ preventScroll: true })
+}
+
+function openDecision() {
+  deciding.value = true
+  nextTick(focusAnswerControl)
+}
+
+async function closeDecision() {
+  const focused = document.activeElement
+  deciding.value = false
+  if (!focused || !answer.value?.contains(focused)) return
+  await nextTick()
+  if (!focused.isConnected || focused.matches(':disabled')) focusAnswerControl()
+}
+
+function requestRetry() {
+  if (answer.value?.contains(document.activeElement)) answer.value.focus({ preventScroll: true })
+  emit('retry')
+}
+
+watch(gradeKey, closeDecision)
+
+watch(() => props.retrying, (active) => {
+  if (!active && document.activeElement === answer.value) nextTick(focusAnswerControl)
+})
 </script>
 
 <template>
-  <div class="break-words">
+  <div
+    ref="answer"
+    role="group"
+    aria-label="Your result"
+    tabindex="-1"
+    class="rounded-lg break-words outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+  >
     <div class="mt-3 flex flex-wrap items-center gap-2">
       <QuizResultBadge :state="state" :marked-by-you="markedByYou" />
       <span v-if="creditLine" class="text-xs font-medium text-muted-foreground">{{ creditLine }}</span>
@@ -75,7 +118,7 @@ const creditLine = computed(() => {
         <UiAlertTitle>Your call</UiAlertTitle>
         <UiAlertDescription>
           <p>We weren't sure about this answer, so it's your call. {{ credit }} is counted for now, and your choice replaces it.</p>
-          <QuizGradeDecision class="mt-2 text-foreground" :attempt-answer-id="result.attemptAnswerId" />
+          <QuizGradeDecision class="mt-2 text-foreground" :attempt-answer-id="result.attemptAnswerId" @decided="closeDecision" />
         </UiAlertDescription>
       </UiAlert>
 
@@ -91,7 +134,7 @@ const creditLine = computed(() => {
             v-if="deciding"
             class="mt-2 text-foreground"
             :attempt-answer-id="result.attemptAnswerId"
-            @decided="deciding = false"
+            @decided="closeDecision"
           />
           <div v-else class="mt-2 flex flex-wrap gap-2 text-foreground">
             <UiButton
@@ -100,27 +143,27 @@ const creditLine = computed(() => {
               class="hover:text-foreground"
               size="sm"
               :disabled="retrying"
-              @click="emit('retry')"
+              @click="requestRetry"
             >
               <UiSpinner v-if="retrying" aria-hidden="true" class="size-3.5 motion-reduce:animate-none" />
               Try again
             </UiButton>
-            <UiButton variant="ghost" size="sm" @click="deciding = true">Mark it myself</UiButton>
+            <UiButton variant="ghost" size="sm" @click="openDecision">Mark it myself</UiButton>
           </div>
           <p v-if="retryFailed" role="alert" class="mt-2 text-xs text-destructive">
-            We couldn't start checking again. Check your connection and try again.
+            We couldn't start checking again. You can try again or mark it yourself.
           </p>
         </UiAlertDescription>
       </UiAlert>
 
-      <div v-else-if="deciding && result.attemptAnswerId">
+      <div v-else-if="deciding && settled && result.attemptAnswerId">
         <p class="mb-2 text-xs font-medium text-muted-foreground">Your choice replaces this result.</p>
-        <QuizGradeDecision :attempt-answer-id="result.attemptAnswerId" :current="verdict" @decided="deciding = false" />
+        <QuizGradeDecision :attempt-answer-id="result.attemptAnswerId" :current="verdict" @decided="closeDecision" />
       </div>
 
       <div v-else-if="markedByYou" class="flex items-center justify-between gap-2">
         <p class="text-xs font-medium text-muted-foreground">Your choice counts</p>
-        <UiButton variant="ghost" size="sm" @click="deciding = true">
+        <UiButton variant="ghost" size="sm" @click="openDecision">
           <Pencil aria-hidden="true" class="h-3.5 w-3.5" />
           Change
         </UiButton>
@@ -128,7 +171,7 @@ const creditLine = computed(() => {
     </div>
 
     <div v-if="canChallenge && !deciding" class="mt-3">
-      <UiButton variant="ghost" size="sm" @click="deciding = true">Think this is wrong?</UiButton>
+      <UiButton variant="ghost" size="sm" @click="openDecision">Think this is wrong?</UiButton>
     </div>
   </div>
 </template>

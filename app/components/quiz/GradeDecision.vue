@@ -13,6 +13,7 @@ const emit = defineEmits<{ decided: [] }>()
 
 const saving = ref<QuizSelfVerdict | null>(null)
 const failed = ref(false)
+const root = useTemplateRef<HTMLElement>('root')
 
 const selfAssessMutation = import.meta.client
   ? useConvexMutation(api.quizGrading.selfAssess)
@@ -21,13 +22,24 @@ const selfAssessMutation = import.meta.client
 async function choose(value: unknown) {
   const verdict = value as QuizSelfVerdict | undefined
   if (!verdict || saving.value || verdict === props.current) return
+  const group = root.value?.querySelector<HTMLElement>('[data-slot="toggle-group"]')
+  const hadFocus = group?.contains(document.activeElement)
   saving.value = verdict
   failed.value = false
-  await selfAssessMutation.mutate({ attemptAnswerId: props.attemptAnswerId as Id<'attemptAnswers'>, verdict })
+  const save = selfAssessMutation.mutate({ attemptAnswerId: props.attemptAnswerId as Id<'attemptAnswers'>, verdict })
+  if (hadFocus) {
+    await nextTick()
+    group?.focus({ preventScroll: true })
+  }
+  await save
   saving.value = null
   if (selfAssessMutation.error.value) {
     selfAssessMutation.error.value = null
     failed.value = true
+    await nextTick()
+    if (document.activeElement === group) {
+      group?.querySelector<HTMLElement>(`button[value="${verdict}"]`)?.focus()
+    }
     return
   }
   emit('decided')
@@ -35,12 +47,12 @@ async function choose(value: unknown) {
 </script>
 
 <template>
-  <div>
+  <div ref="root">
     <UiToggleGroup
       type="single"
       variant="outline"
       size="sm"
-      class="flex-wrap"
+      class="flex-wrap focus-visible:ring-[3px] focus-visible:ring-ring/50"
       aria-label="Mark your answer"
       :spacing="2"
       :model-value="saving ?? current"
@@ -53,7 +65,7 @@ async function choose(value: unknown) {
       <UiToggleGroupItem value="incorrect" class="flex-1 sm:flex-none">Incorrect</UiToggleGroupItem>
     </UiToggleGroup>
     <p v-if="failed" role="alert" class="mt-2 text-xs text-destructive">
-      We couldn't save your choice. Check your connection and try again.
+      We couldn't save your choice. Try again.
     </p>
   </div>
 </template>

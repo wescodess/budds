@@ -134,7 +134,7 @@ function retryIsDue(assessment: SemanticAssessment) {
       v-if="activeResult"
       ref="answer"
       class="flex-1 overflow-y-auto p-4 sm:p-6"
-      :class="graded && 'min-w-0 break-words outline-none'"
+      :class="graded && 'min-w-0 break-words outline-none focus-visible:ring-[3px] focus-visible:ring-inset focus-visible:ring-ring/50'"
       :tabindex="graded ? -1 : undefined"
     >
       <p class="text-base font-medium sm:text-lg">{{ activeResult.questionText }}</p>
