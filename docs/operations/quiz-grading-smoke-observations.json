@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "requestsUsed": 1,
+  "halted": true,
+  "requests": [
+    {
+      "variant": "production",
+      "at": "2026-11-05T08:30:05.539Z",
+      "batch": 1,
+      "fixtureIds": [
+        "bio-paraphrase",
+        "bio-partial",
+        "bio-contradiction",
+        "bio-padding",
+        "bio-misspelling",
+        "bio-spanish",
+        "bio-ambiguous",
+        "bio-injection-command"
+      ],
+      "requestNumber": 1,
+      "strictSchemaRequested": true,
+      "policy": {
+        "model": "xingchen-agi/xing4.0-29b-a4b:free",
+        "phalaOnly": true,
+        "zdr": true,
+        "denyDataCollection": true,
+        "zeroPriceCap": true,
+        "fallbacks": false,
+        "payloadLogging": false,
+        "skipCache": true,
+        "maxAttempts": 1
+      },
+      "httpStatus": 429,
+      "latencyMs": 3697,
+      "reason": "Provider returned error",
+      "outcome": "unavailable",
+      "failure": {
+        "reason": "over_budget",
+        "retryable": true
+      },
+      "schemaValid": null
+    }
+  ],
+  "allowance": [
+    {
+      "phase": "before",
+      "status": 200,
+      "limit": null,
+      "limit_remaining": null,
+      "usage": 5.626137773,
+      "usage_daily": 0,
+      "usage_weekly": 0,
+      "usage_monthly": 0,
+      "free_model_daily_requests": {
+        "used": 0,
+        "limit": 1000,
+        "remaining": 1000
+      }
+    }
+  ]
+}

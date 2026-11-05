@@ -16,4 +16,4 @@ Keep the additive schema fields/indexes and the grading functions deployed until
 
 ## Validation boundary
 
-Local tests use a mocked gateway and synthetic answers. They establish request construction, key validation, score arithmetic, retry limits, leases and deletion fencing. They do not establish the live provider's schema support, ZDR behavior, returned model suffix, latency, cost or resistance to semantic prompt injection. T5 of issue #374 owns that credentialed check before activation.
+Local tests use a mocked gateway and synthetic answers. They establish request construction, key validation, score arithmetic, retry limits, leases and deletion fencing. The [T5 credentialed smoke results](quiz-grading-smoke-results.md) record the real run on 2026-11-05: the first batch returned HTTP 429, and testing stopped after one provider request. No grading completion was obtained, so schema support, ZDR behavior, returned model suffix, completion cost and semantic injection resistance remain unproven. The observed failure latency does not establish successful grading latency. This run does not support production activation.
