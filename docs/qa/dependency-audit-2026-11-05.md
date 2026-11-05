@@ -47,6 +47,7 @@ Reviewed the [1.6.30–1.7.16 changelog](https://github.com/better-auth/better-a
 - **OAuth state cutover:** 1.7.7 separates state encryption keys and verification namespaces. In-flight Google sign-ins must restart, and servers sharing auth state must upgrade together. This app has no Magic Link, SAML, OAuth Proxy plugin, or custom identifier overrides. No deployment was performed.
 - **Account identity:** 1.7.0's required issuer migration was reverted in 1.7.3. The selected 1.7.16 continues to use provider/account identity; no account backfill is required for this upgrade.
 - **Convex endpoint keys and OIDC:** adapter 0.13 renames server API keys and replaces the removed internal OIDC plugin. This app uses the unchanged `/api/auth/convex/token`, JWKS and discovery HTTP paths, with `getAuthConfigProvider()`. It does not act as an OIDC provider. No call-site rename is needed.
+- **Rollback:** once the upgraded backend creates a signing key, its JWKS row carries an `alg` field the previous adapter schema rejects (`Unexpected field alg`), and Convex validates existing documents when a schema deploys. A plain dependency revert can then fail. Roll back with a build that keeps a schema accepting these fields; removing the data instead needs owner approval.
 - **Other adapter constraints:** cookie-cache support is disabled by the new adapter; this app does not enable it. It does not configure `generateId: 'uuid'`, compound unique plugin indexes, unindexed auth sorting, cross-domain one-time tokens, or verbose adapter logs. Their changed behavior needs no application migration.
 - **Other 1.7 migrations:** generic OAuth, experimental joins, custom OAuth providers, Electron, One Tap, device authorization, two-factor, organization, phone, SCIM and MCP plugins are absent from this auth setup. Their API/schema migrations do not apply.
 
@@ -54,7 +55,7 @@ Production still uses SSR (`clientOnly: false`); development's existing client-o
 
 ## Validation and limits
 
-Node 24.20.0, pnpm 9.12.3. Validation uses the CI-only placeholder block from `.github/workflows/test.yml` in the local process; no deployment environment values were written.
+Node 24.20.0, pnpm 9.12.3. `.node-version` and `engines` now match the range Nuxt 4.6.4 requires. Validation uses the CI-only placeholder block from `.github/workflows/test.yml` in the local process; no deployment environment values were written.
 
 - Frozen root and worker installations succeed.
 - `pnpm verify` passes lint, app/Convex typechecks, 2,051 unit/server tests, 737 component tests, 38 audio component tests, 62 audio worker tests, nine Laya worker tests, worker typechecks and 13 Python tests. It then passes all three audits.
