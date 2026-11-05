@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { flushPromises } from '@vue/test-utils'
 
@@ -25,6 +25,11 @@ mockNuxtImport('useConvexMutation', () => () => {
 })
 
 const takingViewPath = ['~', 'components', 'quiz', 'TakingView.vue'].join('/')
+
+beforeAll(async () => {
+  await import(takingViewPath)
+})
+
 const completed = { score: 1, total: 1, percentage: 100 }
 const failureCopy = 'We couldn\'t submit your quiz. Try again.'
 const question = {
