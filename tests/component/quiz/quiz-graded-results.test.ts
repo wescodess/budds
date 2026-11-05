@@ -251,6 +251,43 @@ describe('QuizResultsView graded results', () => {
     wrapper.unmount()
   })
 
+  it.each(['rail', 'next', 'previous', 'mobile strip'])('reveals the start of the answer after %s navigation', async (navigation) => {
+    const wrapper = await mountResults(attempt([correct('a'), partial('b'), incorrect('c')], 1.5))
+    const scroll = vi.spyOn(HTMLElement.prototype, 'scrollIntoView')
+    if (navigation === 'previous') await clickButton(wrapper, 'Next')
+    const pane = wrapper.get('div.flex-1[tabindex="-1"]').element
+    pane.scrollTop = 180
+    scroll.mockClear()
+
+    if (navigation === 'rail') {
+      await wrapper.get('button[aria-label^="Question 2,"]').trigger('click')
+    }
+    else if (navigation === 'mobile strip') {
+      await wrapper.findAll('[data-testid="quiz-score-strip"]')[1]!.findAll('button')[1]!.trigger('click')
+    }
+    else {
+      await clickButton(wrapper, navigation === 'next' ? 'Next' : 'Previous')
+    }
+    await flushPromises()
+
+    expect(pane.scrollTop).toBe(0)
+    expect(scroll).toHaveBeenLastCalledWith({ block: 'start' })
+    expect(pane.textContent).toContain(navigation === 'previous' ? 'Question text a' : 'Question text b')
+    scroll.mockRestore()
+    wrapper.unmount()
+  })
+
+  it.each(['Next', 'Previous'])('keeps focus in the answer when mobile %s becomes disabled', async (label) => {
+    const wrapper = await mountResults(attempt([correct('a'), partial('b')], 1.5))
+    if (label === 'Previous') await clickButton(wrapper, 'Next')
+    const button = wrapper.findAll('button').find(node => node.text() === label)!
+    ;(button.element as HTMLButtonElement).focus()
+    await button.trigger('click')
+    await flushPromises()
+    expect(document.activeElement).toBe(wrapper.get('div.flex-1[tabindex="-1"]').element)
+    wrapper.unmount()
+  })
+
   it('updates live from pending to graded without restarting the score animation', async () => {
     const frames: FrameRequestCallback[] = []
     const raf = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
@@ -527,6 +564,21 @@ describe('QuizResultsView graded results', () => {
       expect(wrapper.text()).toContain('Question 1')
       expect(wrapper.text()).not.toContain('Question 25')
       expect(wrapper.text()).toContain('Question text q1')
+      wrapper.unmount()
+    })
+
+    it('keeps pagination focus on an available control at either end', async () => {
+      const wrapper = await mountResults(quiz(25))
+      const strip = wrapper.findAll('[data-testid="quiz-score-strip"]')[0]!
+      const next = strip.get('[data-slot="pagination-next"]')
+      const previous = strip.get('[data-slot="pagination-previous"]')
+      ;(next.element as HTMLButtonElement).focus()
+      await next.trigger('click')
+      await flushPromises()
+      expect(document.activeElement).toBe(previous.element)
+      await previous.trigger('click')
+      await flushPromises()
+      expect(document.activeElement).toBe(next.element)
       wrapper.unmount()
     })
 

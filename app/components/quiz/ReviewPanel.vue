@@ -47,8 +47,20 @@ const railItems = computed(() => {
 })
 
 function revealAnswer(focus = false) {
-  answerRef.value?.scrollIntoView({ block: 'nearest' })
+  if (props.graded && answerRef.value) answerRef.value.scrollTop = 0
+  answerRef.value?.scrollIntoView({ block: props.graded ? 'start' : 'nearest' })
   if (focus) answerRef.value?.focus({ preventScroll: true })
+}
+
+function selectAnswer(index: number) {
+  const focused = document.activeElement
+  activeIndex.value = index
+  if (props.graded) {
+    nextTick(() => revealAnswer(
+      focused instanceof HTMLButtonElement && focused.disabled
+      && (document.activeElement === focused || document.activeElement === document.body),
+    ))
+  }
 }
 
 defineExpose({ revealAnswer })
@@ -97,7 +109,7 @@ function retryIsDue(assessment: SemanticAssessment) {
         type="button"
         class="inline-flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors"
         :class="activeIndex === i ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:bg-accent/30'"
-        @click="activeIndex = i"
+        @click="selectAnswer(i)"
       >
         <Check v-if="r.isCorrect" class="h-3 w-3 text-green-500" />
         <CircleMinus v-else-if="isFreeForm(r.questionType)" class="h-3 w-3 text-muted-foreground" />
@@ -115,7 +127,7 @@ function retryIsDue(assessment: SemanticAssessment) {
         :aria-current="graded && activeIndex === i ? 'true' : undefined"
         :aria-label="graded ? `Question ${i + 1}, ${QUIZ_RESULT_LABELS[quizResultState(r)].toLowerCase()}: ${r.questionText}` : undefined"
         :class="activeIndex === i ? 'border-l-2 border-l-primary bg-accent/50' : 'hover:bg-accent/30'"
-        @click="activeIndex = i"
+        @click="selectAnswer(i)"
       >
         <span class="mt-0.5 shrink-0">
           <QuizResultIcon v-if="graded" :state="quizResultState(r)" class="size-3.5" :class="activeIndex === i && 'dark:text-foreground'" />
@@ -249,8 +261,8 @@ function retryIsDue(assessment: SemanticAssessment) {
     </div>
 
     <div v-if="graded" class="flex justify-between gap-2 border-t p-4 sm:hidden">
-      <UiButton variant="outline" size="sm" class="hover:text-foreground" :disabled="activeIndex <= 0" @click="activeIndex--">Previous</UiButton>
-      <UiButton variant="outline" size="sm" class="hover:text-foreground" :disabled="activeIndex >= results.length - 1" @click="activeIndex++">Next</UiButton>
+      <UiButton variant="outline" size="sm" class="hover:text-foreground" :disabled="activeIndex <= 0" @click="selectAnswer(activeIndex - 1)">Previous</UiButton>
+      <UiButton variant="outline" size="sm" class="hover:text-foreground" :disabled="activeIndex >= results.length - 1" @click="selectAnswer(activeIndex + 1)">Next</UiButton>
     </div>
   </div>
 </template>

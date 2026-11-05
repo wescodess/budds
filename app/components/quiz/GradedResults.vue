@@ -43,6 +43,12 @@ const decisionCount = computed(() => props.grading.needsReview + props.grading.u
 const provisional = computed(() => checkingCount.value > 0 || decisionCount.value > 0)
 const stripInTile = computed(() => props.results.length <= QUIZ_STRIP_TILE_LIMIT)
 const points = computed(() => formatQuizPoints(props.score))
+const checkingScore = computed(() => `${points.value}/${props.total}`)
+const scoreRingSize = computed(() => checkingCount.value > 0 && checkingScore.value.length > 9 ? 'h-24 w-24' : 'h-20 w-20')
+const scoreValueSize = computed(() => {
+  if (checkingCount.value === 0 || checkingScore.value.length <= 5) return 'text-xl'
+  return checkingScore.value.length <= 7 ? 'text-sm' : 'text-xs'
+})
 
 const scoreLabel = computed(() => {
   if (checkingCount.value > 0) return 'Score so far'
@@ -188,7 +194,7 @@ async function requestRetry() {
     <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4">
       <div class="rounded-lg border p-4 text-center sm:p-5">
         <p class="text-xs font-medium text-muted-foreground">{{ scoreLabel }}</p>
-        <div class="relative mx-auto my-3 h-20 w-20">
+        <div class="relative mx-auto my-3" :class="scoreRingSize">
           <svg class="h-full w-full -rotate-90" viewBox="0 0 36 36" aria-hidden="true">
             <circle cx="18" cy="18" r="15.5" fill="none" stroke="currentColor" stroke-width="2" class="text-muted/50" />
             <circle
@@ -199,8 +205,8 @@ async function requestRetry() {
               data-testid="quiz-score-ring"
             />
           </svg>
-          <span class="absolute inset-0 flex items-center justify-center text-xl font-bold" :class="scoreTone.text" data-testid="quiz-score-value">
-            <template v-if="checkingCount > 0">{{ points }}/{{ total }}</template>
+          <span class="absolute inset-0 flex items-center justify-center font-bold" :class="[scoreTone.text, scoreValueSize]" data-testid="quiz-score-value">
+            <template v-if="checkingCount > 0">{{ checkingScore }}</template>
             <template v-else>{{ displayPct }}%</template>
           </span>
         </div>
@@ -272,7 +278,7 @@ async function requestRetry() {
             v-model:page="page"
             :results="results"
             :selected-index="activeIndex"
-            @select="activeIndex = $event"
+            @select="openAnswer"
           />
           <p v-if="checkingCount > 0" class="text-xs text-muted-foreground">{{ checkingCopy }}</p>
         </template>

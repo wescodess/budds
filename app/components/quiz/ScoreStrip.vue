@@ -11,6 +11,18 @@ const emit = defineEmits<{
   select: [index: number]
   'update:page': [page: number]
 }>()
+const strip = useTemplateRef<HTMLElement>('strip')
+
+async function changePage(page: number) {
+  const focused = document.activeElement
+  const hadFocus = strip.value?.contains(focused)
+  emit('update:page', page - 1)
+  await nextTick()
+  if (hadFocus && focused instanceof HTMLButtonElement && focused.disabled
+    && (document.activeElement === focused || document.activeElement === document.body)) {
+    strip.value?.querySelector<HTMLElement>('button[data-slot^="pagination-"]:not(:disabled)')?.focus()
+  }
+}
 
 const long = computed(() => props.results.length > QUIZ_STRIP_TILE_LIMIT)
 const paged = computed(() => props.results.length > QUIZ_STRIP_PAGE_SIZE)
@@ -31,7 +43,7 @@ const cells = computed(() => props.results.slice(firstIndex.value, lastNumber.va
 </script>
 
 <template>
-  <div class="space-y-3" data-testid="quiz-score-strip">
+  <div ref="strip" class="space-y-3" data-testid="quiz-score-strip">
     <div :class="long ? 'grid grid-cols-6 gap-1.5 sm:grid-cols-12' : 'flex gap-1.5'">
       <UiButton
         v-for="cell in cells"
@@ -65,7 +77,7 @@ const cells = computed(() => props.results.slice(firstIndex.value, lastNumber.va
       :page="page + 1"
       :total="results.length"
       :items-per-page="QUIZ_STRIP_PAGE_SIZE"
-      @update:page="emit('update:page', $event - 1)"
+      @update:page="changePage"
     >
       <UiPaginationContent as="ul">
         <li><UiPaginationPrevious /></li>
