@@ -177,6 +177,31 @@ describe('dispatch and scoring', () => {
     expect(await fixture.t.run(ctx => ctx.db.get(fixture.quizId))).toMatchObject({ score: 40 })
   })
 
+  test.each(['completeAttempt', 'submitAllAnswers'] as const)('%s keeps deleted rubric answers hidden after grading is switched off', async (path) => {
+    const fixture = await createQuiz(1, [{ order: 1, question: 'Pick A', type: 'multiple-choice', options: ['A', 'B'], correctAnswer: 'A' }])
+    const { attemptId } = await fixture.user.mutation(api.quizzes.startAttempt, { quizId: fixture.quizId, settings })
+    await fixture.user.mutation(api.quizzes.submitAnswer, { attemptId, questionId: fixture.questions[0]!._id, userAnswer: 'A pair of daughter cells' })
+    await fixture.user.mutation(api.quizzes.deleteQuestion, { questionId: fixture.questions[0]!._id })
+    vi.stubEnv('QUIZ_GRADING_MODE', 'off')
+    const answer = { questionId: fixture.questions[1]!._id, userAnswer: 'A' }
+    if (path === 'completeAttempt') {
+      await fixture.user.mutation(api.quizzes.submitAnswer, { attemptId, ...answer })
+      await fixture.user.mutation(api.quizzes.completeAttempt, { attemptId })
+    }
+    else await fixture.user.mutation(api.quizzes.submitAllAnswers, { attemptId, answers: [answer] })
+
+    expect(await fixture.t.run(ctx => ctx.db.get(attemptId))).toMatchObject({
+      score: 1, total: 1, gradingStatus: 'settled', gradingQuestionIds: [answer.questionId],
+    })
+    const result = await fixture.user.query(api.quizzes.getAttemptResults, { attemptId })
+    expect(result?.results.map(row => row.questionId)).toEqual([answer.questionId])
+    expect(result).not.toHaveProperty('grading')
+    expect(await scheduled(fixture)).toEqual([])
+    expect(await fixture.user.mutation(api.quizGrading.requestGradingRetry, { attemptId })).toEqual({ retried: 0 })
+    await fixture.t.action(internal.quizGrading.gradeAttempt, { attemptId })
+    expect(generateCompletion).not.toHaveBeenCalled()
+  })
+
   test('does not dispatch or report pending grading for a free response deleted before completion', async () => {
     const fixture = await createQuiz(2)
     const { attemptId } = await fixture.user.mutation(api.quizzes.startAttempt, { quizId: fixture.quizId, settings })

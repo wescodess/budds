@@ -8,6 +8,7 @@ import { quizGradingCriterionValidator } from '../shared/quiz-grading'
 import { validatedQuestionGradingCriteria } from './lib/quizQuestionGrading'
 import { createPendingAnswerAssessment, isQuizGradingEnabled, isRubricAssessment, projectLearnerQuizQuestion, projectQuizGrade } from './lib/quizAnswerAssessment'
 import { getQuizAttemptAnswers, getQuizAttemptAssessments, scheduleQuizGrading } from './lib/quizGrading'
+import { QUIZ_RUBRIC_GRADE_VERSION } from '../shared/quiz-grading'
 
 const MAX_QUIZ_QUESTIONS = 200
 const MAX_QUIZZES_PER_FOLDER = 100
@@ -57,11 +58,15 @@ async function getAnswerGradingPending(ctx: MutationCtx, attemptAnswerId: Id<'at
 async function getAttemptGradingStatus(ctx: MutationCtx, attemptId: Id<'quizAttempts'>, gradingQuestionIds: Id<'quizQuestions'>[]) {
   const attempt = await ctx.db.get(attemptId)
   if (!attempt) return undefined
+  if (!isQuizGradingEnabled()) {
+    const storedRubric = await ctx.db.query('quizAnswerAssessments')
+      .withIndex('by_attemptId_and_rubricVersion_and_status', q => q.eq('attemptId', attemptId).eq('rubricVersion', QUIZ_RUBRIC_GRADE_VERSION)).first()
+    if (!storedRubric) return undefined
+  }
   const frozen = { ...attempt, gradingQuestionIds }
   const answers = await getQuizAttemptAnswers(ctx, frozen)
   const rows = await getQuizAttemptAssessments(ctx, frozen, answers)
   const rubricRows = rows.filter(isRubricAssessment)
-  if (!isQuizGradingEnabled() && rubricRows.length === 0) return undefined
   return rubricRows.some(row => row.status === 'pending') ? 'grading' as const : 'settled' as const
 }
 
