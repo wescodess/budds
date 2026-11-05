@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
+import { buildNuxt, loadNuxt, writeTypes } from 'nuxt/kit'
 
 const execFile = promisify(execFileCallback)
 const root = process.cwd()
@@ -21,6 +22,7 @@ for (const key of ['CONVEX_DEPLOYMENT', 'CONVEX_DEPLOY_KEY', 'CONVEX_DEPLOYMENT_
 let isolatedRoot
 let convex
 let nuxt
+let builder
 let cleaned = false
 
 function stop(child) {
@@ -33,7 +35,11 @@ async function cleanup() {
   cleaned = true
   stop(nuxt)
   stop(convex)
-  if (isolatedRoot) await execFile('git', ['worktree', 'remove', '--force', isolatedRoot], { cwd: root }).catch(() => rm(dirname(isolatedRoot), { recursive: true, force: true }))
+  await builder?.close()
+  if (isolatedRoot) {
+    await execFile('git', ['worktree', 'remove', '--force', isolatedRoot], { cwd: root }).catch(() => {})
+    await rm(dirname(isolatedRoot), { recursive: true, force: true })
+  }
 }
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
@@ -129,11 +135,38 @@ async function main() {
   await startConvex(isolatedRoot)
   await waitForLocalConvex(isolatedRoot)
 
-  nuxt = spawn(pnpm, ['exec', 'nuxt', 'dev', '--extends', realAdaptiveCanvas ? './e2e/authority-layer' : './e2e/canvas-layer', '--host', '127.0.0.1', '--port', new URL(baseUrl).port || '3102'], {
+  const appEnv = { ...inheritedEnv, NODE_ENV: 'test', BUDDS_E2E_MODE: 'true', BUDDS_E2E_BASE_URL: baseUrl, BUDDS_E2E_AUTH_TOKEN: token, LEARN_V2_ENABLED: 'true', CONVEX_URL: convexUrl, NUXT_PUBLIC_CONVEX_URL: convexUrl, AUTH_PROXY_TARGET_URL: convexSiteUrl, CONVEX_SITE_URL: convexSiteUrl, NUXT_PUBLIC_SITE_URL: baseUrl, SITE_URL: baseUrl }
+  Object.assign(process.env, appEnv)
+  const outputDir = join(workspace, 'output')
+  // Build the real entry and lazy routes before exposing HTTP readiness. A dev
+  // optimizer can discover imports mid-hydration and invalidate loaded modules.
+  // The programmatic build preserves NODE_ENV=test for disposable E2E admission;
+  // dev:false still bundles the client and SSR instead of running a Vite server.
+  builder = await loadNuxt({
     cwd: root,
-    env: { ...inheritedEnv, NODE_ENV: 'test', BUDDS_E2E_MODE: 'true', BUDDS_E2E_BASE_URL: baseUrl, BUDDS_E2E_AUTH_TOKEN: token, LEARN_V2_ENABLED: 'true', CONVEX_URL: convexUrl, NUXT_PUBLIC_CONVEX_URL: convexUrl, AUTH_PROXY_TARGET_URL: convexSiteUrl, CONVEX_SITE_URL: convexSiteUrl, NUXT_PUBLIC_SITE_URL: baseUrl, SITE_URL: baseUrl },
+    dev: false,
+    dotenv: false,
+    overrides: {
+      extends: [realAdaptiveCanvas ? './e2e/authority-layer' : './e2e/canvas-layer'],
+      nitro: { preset: 'node-server', output: { dir: outputDir } },
+    },
+  })
+  // Match the CLI's preparation step and use the project's .nuxt directory:
+  // tsconfig.json and server/tsconfig.json extend generated files there.
+  await writeTypes(builder)
+  await buildNuxt(builder)
+  await builder.close()
+  builder = undefined
+  const port = new URL(baseUrl).port || '3102'
+  const serverEnv = { ...appEnv, HOST: '127.0.0.1', PORT: port, NITRO_HOST: '127.0.0.1', NITRO_PORT: port }
+  // Nitro's own endpoint settings take precedence over HOST and PORT.
+  for (const key of ['NITRO_UNIX_SOCKET', 'NITRO_SSL_CERT', 'NITRO_SSL_KEY']) Reflect.deleteProperty(serverEnv, key)
+  nuxt = spawn(process.execPath, [join(outputDir, 'server/index.mjs')], {
+    cwd: root,
+    env: serverEnv,
     stdio: 'inherit',
   })
+  nuxt.once('error', error => { console.error(error); void cleanup().finally(() => process.exit(1)) })
   nuxt.once('exit', code => { void cleanup().finally(() => process.exit(code ?? 1)) })
 }
 

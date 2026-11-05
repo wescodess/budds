@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
+import { waitForView } from './helpers/wait-for-view'
 
 const token = process.env.BUDDS_E2E_AUTH_TOKEN ?? 'e2e-local-token-please-do-not-use-outside-tests'
 
@@ -18,11 +19,7 @@ async function saveRoutedDiagnostic(page: Page, request: APIRequestContext) {
   }
 
   await page.goto('/app/learn')
-  await expect.poll(async () => {
-    if (await page.getByTestId('learn-adaptive-home').isVisible()) return true
-    await page.reload({ waitUntil: 'domcontentloaded' })
-    return false
-  }, { timeout: 120_000, intervals: [5_000] }).toBe(true)
+  await waitForView(page, 'learn-adaptive-home')
   await page.reload({ waitUntil: 'domcontentloaded' })
   await expect(page.getByTestId('learn-adaptive-home')).toHaveAttribute('data-hydrated', 'true')
   await expect(page.getByRole('main').last()).toHaveAttribute('data-owner-ready', 'true')
