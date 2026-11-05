@@ -39,9 +39,14 @@ export function validateQuizGradingCriteria(criteria: QuizGradingCriterion[]) {
 }
 
 export function defaultQuizGradingCriteria(referenceAnswer: string): QuizGradingCriterion[] {
+  let description = ''
+  for (const codePoint of `Conveys the reference answer: ${referenceAnswer.trim()}`) {
+    if (description.length + codePoint.length > 300) break
+    description += codePoint
+  }
   return [{
     key: 'reference_answer',
-    description: `Conveys the reference answer: ${referenceAnswer.trim()}`.slice(0, 300),
+    description,
     weightPercent: 100,
   }]
 }
