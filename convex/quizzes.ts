@@ -4,7 +4,7 @@ import { internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import type { MutationCtx, QueryCtx } from './_generated/server'
 import { getOptionalAuthUserId, requireAuth } from './lib/auth'
-import { createPendingAnswerAssessment, isQuizGradingEnabled, isRubricAssessment, projectQuizGrade } from './lib/quizAnswerAssessment'
+import { createPendingAnswerAssessment, isQuizGradingEnabled, isRubricAssessment, projectLearnerQuizQuestion, projectQuizGrade } from './lib/quizAnswerAssessment'
 import { getDeterministicQuizGrade } from '../shared/quiz-grading'
 
 const MAX_QUIZ_QUESTIONS = 200
@@ -328,7 +328,7 @@ export const getWithQuestions = query({
 
     questions.sort((a, b) => a.order - b.order)
 
-    return { quiz, questions }
+    return { quiz, questions: questions.map(projectLearnerQuizQuestion) }
   },
 })
 
@@ -469,7 +469,7 @@ export const updateQuestion = mutation({
     }
 
     await ctx.db.patch(args.questionId, patch)
-    return await ctx.db.get(args.questionId)
+    return projectLearnerQuizQuestion((await ctx.db.get(args.questionId))!)
   },
 })
 
@@ -540,7 +540,7 @@ export const startAttempt = mutation({
         : [...questions].sort((a, b) => a.order - b.order)
 
       const safeQuestions = orderedQuestions.map(q => ({
-        ...q,
+        ...projectLearnerQuizQuestion(q),
         correctAnswer: answeredIds.has(q._id as string) ? q.correctAnswer : '',
         explanation: answeredIds.has(q._id as string) ? q.explanation : undefined,
       }))
@@ -583,7 +583,7 @@ export const startAttempt = mutation({
       attemptId,
       settings: args.settings,
       currentQuestionIndex: 0,
-      questions: ordered,
+      questions: ordered.map(projectLearnerQuizQuestion),
       answeredQuestionIds: [],
       answers: [],
     }

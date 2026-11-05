@@ -28,6 +28,18 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
+function expectNoRubricData(value: unknown) {
+  if (Array.isArray(value)) {
+    for (const item of value) expectNoRubricData(item)
+  }
+  else if (value && typeof value === 'object') {
+    for (const field of ['criteria', 'gradingCriteria', 'criteriaSnapshot', 'criterionResults', 'key', 'description', 'weightPercent', 'verdict']) {
+      expect(value).not.toHaveProperty(field)
+    }
+    for (const item of Object.values(value)) expectNoRubricData(item)
+  }
+}
+
 async function createQuiz() {
   const t = convexTest(schema, modules)
   const user = t.withIdentity(USER)
@@ -162,10 +174,13 @@ describe('rubric assessment creation and completion', () => {
     }
     const results = await user.query(api.quizzes.getAttemptResults, { attemptId })
     expect(results?.grading).toEqual({ pending: 1, needsReview: 0, unavailable: 0 })
-    expect(results?.results.find(result => result.questionId === exact.questionId)?.grade).toMatchObject({ status: 'graded', credit: 1, label: 'fully_correct', source: 'deterministic', criteria: rubric.map(criterion => ({ ...criterion, verdict: 'met' })) })
+    expect(results?.results.find(result => result.questionId === exact.questionId)?.grade).toStrictEqual({ status: 'graded', credit: 1, label: 'fully_correct', source: 'deterministic' })
     expect(results?.results.find(result => result.questionId === empty.questionId)?.grade).toMatchObject({ status: 'graded', credit: 0, label: 'incorrect', source: 'deterministic' })
     expect(results?.results.find(result => result.questionId === pending.questionId)?.grade).toMatchObject({ status: 'pending' })
     expect(results?.results.every(result => result.semanticAssessment === undefined)).toBe(true)
+    expectNoRubricData(results)
+    for (const submission of submissions.values()) expectNoRubricData(submission)
+    if (bulk) expectNoRubricData(bulk)
     expect(await t.run(ctx => ctx.db.system.query('_scheduled_functions').collect())).toEqual([])
   })
 
@@ -198,7 +213,8 @@ describe('rubric assessment creation and completion', () => {
     await user.mutation(api.quizzes.completeAttempt, { attemptId })
     const results = await user.query(api.quizzes.getAttemptResults, { attemptId })
     expect(results?.grading).toEqual({ pending: 1, needsReview: 0, unavailable: 0 })
-    expect(results?.results[0]).toMatchObject({ correctAnswer: question.correctAnswer, userAnswer: input.userAnswer, grade: { status: 'pending', criteria: rubric } })
+    expect(results?.results[0]).toMatchObject({ correctAnswer: question.correctAnswer, userAnswer: input.userAnswer, grade: { status: 'pending' } })
+    expectNoRubricData(results)
     expect(await t.run(ctx => ctx.db.get(attemptId))).toMatchObject({ gradingStatus: 'grading' })
   })
 
@@ -236,23 +252,59 @@ test('projects seeded partial, review and unavailable grades after the flag is d
     const review = rows.find(row => row.questionId === questions[1]!._id)!
     const unavailable = rows.find(row => row.questionId === questions[2]!._id)!
     await ctx.db.patch(partial._id, { credit: 0.5, label: 'partially_correct', gradeSource: 'self', selfAssessedAt: NOW,
-      criterionResults: [{ key: 'identical', verdict: 'not_met', feedback: 'Identity is missing.' }, { key: 'daughter_cells', verdict: 'met', feedback: 'Division is covered.' }], feedback: 'One of two criteria met.' })
-    await ctx.db.patch(review._id, { label: 'uncertain', credit: undefined, gradeSource: 'model', criterionResults: [{ key: 'reference_answer', verdict: 'uncertain', feedback: 'Needs review.' }] })
+      criterionResults: [{ key: 'identical', verdict: 'not_met' }, { key: 'daughter_cells', verdict: 'met' }], feedback: 'One of two criteria met.' })
+    await ctx.db.patch(review._id, { label: 'uncertain', credit: 0.4, gradeSource: 'model', criteriaSnapshot: rubric,
+      criterionResults: [{ key: 'daughter_cells', verdict: 'met' }, { key: 'identical', verdict: 'uncertain' }], feedback: 'More details needed.' })
     await ctx.db.patch(unavailable._id, { status: 'unavailable', unavailableReason: 'over_budget', retryable: false })
   })
   vi.stubEnv('QUIZ_GRADING_MODE', 'off')
   const results = await user.query(api.quizzes.getAttemptResults, { attemptId })
   expect(results?.grading).toEqual({ pending: 0, needsReview: 1, unavailable: 1 })
   const partial = results?.results.find(result => result.questionId === questions[0]!._id)?.grade
-  expect(partial).toMatchObject({ status: 'graded', credit: 0.5, label: 'partially_correct', source: 'self', feedback: 'One of two criteria met.',
-    criteria: [{ ...rubric[0]!, verdict: 'met', feedback: 'Division is covered.' }, { ...rubric[1]!, verdict: 'not_met', feedback: 'Identity is missing.' }] })
+  expect(partial).toStrictEqual({ status: 'graded', credit: 0.5, label: 'partially_correct', source: 'self', feedback: 'One of two criteria met.' })
   const review = results?.results.find(result => result.questionId === questions[1]!._id)?.grade
-  expect(review).toMatchObject({ status: 'needs_review', source: 'model' })
-  expect(review?.credit).toBeUndefined()
+  expect(review).toStrictEqual({ status: 'needs_review', credit: 0.4, label: 'uncertain', source: 'model', feedback: 'More details needed.' })
   const unavailable = results?.results.find(result => result.questionId === questions[2]!._id)?.grade
   expect(unavailable).toMatchObject({ status: 'unavailable' })
   expect(unavailable?.credit).toBeUndefined()
   expect(unavailable?.label).toBeUndefined()
+  expectNoRubricData(results)
+})
+
+test.each(['off', 'graded'])('keeps criteria internal in question, submission and export responses when %s', async (mode) => {
+  vi.stubEnv('QUIZ_GRADING_MODE', mode)
+  const { t, user, quizId, questions } = await createQuiz()
+  const questionId = questions[0]!._id
+  expectNoRubricData(await user.query(api.quizzes.getWithQuestions, { id: quizId }))
+  const started = await user.mutation(api.quizzes.startAttempt, { quizId, settings })
+  expectNoRubricData(started)
+  expectNoRubricData(await user.mutation(api.quizzes.updateQuestion, { questionId, explanation: 'Updated explanation' }))
+  const submission = await user.mutation(api.quizzes.submitAnswer, { attemptId: started.attemptId, questionId, userAnswer: 'A paraphrase' })
+  expectNoRubricData(submission)
+  expectNoRubricData(await user.mutation(api.quizzes.startAttempt, { quizId, settings }))
+  expectNoRubricData(await user.mutation(api.quizzes.submitAllAnswers, { attemptId: started.attemptId, answers: [] }))
+  const result = await user.query(api.quizzes.getAttemptResults, { attemptId: started.attemptId })
+  expectNoRubricData(result)
+  const paginationOpts = { cursor: null, numItems: 8 }
+  expectNoRubricData(await user.query(api.dataExport.getUserDataPage, { collection: 'quizQuestions', paginationOpts }))
+  const exported = await user.query(api.dataExport.getUserDataPage, { collection: 'quizAnswerAssessments', paginationOpts })
+  const row = (await t.run(ctx => ctx.db.query('quizAnswerAssessments').withIndex('by_attemptId', q => q.eq('attemptId', started.attemptId)).unique()))!
+  if (mode === 'graded') {
+    expectNoRubricData(exported)
+    expect(row.criteriaSnapshot).toEqual(rubric)
+  }
+  else expect(exported.page).toStrictEqual([row])
+  expect((await t.run(ctx => ctx.db.get(questionId)))?.gradingCriteria).toEqual(rubric)
+})
+
+test('stores verdicts without per-criterion feedback', async () => {
+  vi.stubEnv('QUIZ_GRADING_MODE', 'graded')
+  const { t, user, quizId, questions } = await createQuiz()
+  const { attemptId } = await user.mutation(api.quizzes.startAttempt, { quizId, settings })
+  await user.mutation(api.quizzes.submitAnswer, { attemptId, questionId: questions[0]!._id, userAnswer: questions[0]!.correctAnswer })
+  const row = (await t.run(ctx => ctx.db.query('quizAnswerAssessments').withIndex('by_attemptId', q => q.eq('attemptId', attemptId)).unique()))!
+  const criterion = { key: rubric[0]!.key, verdict: 'met' as const, feedback: 'Per-criterion feedback is not part of the contract.' }
+  await expect(t.run(ctx => ctx.db.patch(row._id, { criterionResults: [criterion] }))).rejects.toThrow(/feedback/)
 })
 
 test('enabling grading preserves legacy assessment rows and embedded historical answers', async () => {

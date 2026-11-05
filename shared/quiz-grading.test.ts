@@ -41,8 +41,11 @@ describe('quiz criterion scoring', () => {
     ['not_met', 'not_met', { credit: 0, label: 'incorrect' }],
     ['met', 'not_met', { credit: 0.4, label: 'partially_correct' }],
     ['not_met', 'met', { credit: 0.6, label: 'partially_correct' }],
-    ['uncertain', 'met', { label: 'uncertain' }],
-    ['not_met', 'uncertain', { label: 'uncertain' }],
+    ['uncertain', 'met', { credit: 0.6, label: 'uncertain' }],
+    ['met', 'uncertain', { credit: 0.4, label: 'uncertain' }],
+    ['not_met', 'uncertain', { credit: 0, label: 'uncertain' }],
+    ['uncertain', 'not_met', { credit: 0, label: 'uncertain' }],
+    ['uncertain', 'uncertain', { credit: 0, label: 'uncertain' }],
   ] as const)('scores %s / %s without treating uncertainty as failure', (first, second, expected) => {
     expect(scoreQuizCriteria(criteria, [{ key: 'identical', verdict: second }, { key: 'daughter_cells', verdict: first }])).toEqual(expected)
   })
