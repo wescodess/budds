@@ -2,6 +2,7 @@
 
 **Status:** approved for staged implementation
 **Date:** 2026-09-20
+**Naming and routes updated:** 2026-11-05, per the superseding [Phase B rename resolution](https://github.com/wescodess/budds/issues/358#issuecomment-6651400245) and [V1 link resolution](https://github.com/wescodess/budds/issues/378#issuecomment-6652055956). The experience phases below retain their original scope; Phase B changes naming and routes, not teaching or measurement.
 **Replaces:** the learner-facing assumptions in `docs/learn-v2-production-experience.md`; it does not remove the current V1 or V2 data planes
 **Product promise:** Bring Budds a goal or material and leave each visit able to do something you could not do before.
 
@@ -17,9 +18,9 @@ The new experience keeps the evidence, revision, scoring, recovery, and retentio
 
 Budds becomes an adaptive learning companion that turns the learner's current intent into the best next learning move, grounds factual teaching in inspectable evidence, observes what helps, and remembers enough to resume intelligently.
 
-The primary learner-facing object is a **learning thread** rather than a course, mission, or wizard. A thread may remain a one-time interaction or grow into a durable mastery path.
+The primary learner-facing object is a **Void**, from one question through to mastery. A Void may remain a one-time interaction or grow into a durable mastery path. On the adaptive plane, the internal Learning Thread record remains `learningThreads`; V2 retains its separate `learningVoids` authority, as defined in `CONTEXT.md`.
 
-A learning thread remembers:
+A Void remembers:
 
 - the learner's current outcome and why it matters;
 - source scope and evidence state;
@@ -44,12 +45,12 @@ A learning thread remembers:
 
 | Intent | First useful move | Evidence of value | Optional continuation |
 | --- | --- | --- | --- |
-| Understand now | Cited explanation, comparison, map, or diagnostic question | Learner explains or correctly navigates the idea | Save as a thread or go deeper |
+| Understand now | Cited explanation, comparison, map, or diagnostic question | Learner explains or correctly navigates the idea | Save as a Void or go deeper |
 | Prepare | Diagnose representative gaps and rehearse likely tasks | Improved performance on representative tasks | Deadline-aware practice plan |
 | Build or solve | Work inside a real problem or artifact | Useful output plus transferable reasoning | Critique, revision, or related capability |
 | Master | Diagnostic followed by sequenced practice | Independent and delayed transfer | Spaced review and retention checks |
 | Refresh | Short retrieval targeting decay or a prior error | Rapid recovery without full relearning | Reschedule only if still vulnerable |
-| Explore | Guided questions, connections, and source trails | Learner identifies meaningful new questions | Promote a branch into its own thread |
+| Explore | Guided questions, connections, and source trails | Learner identifies meaningful new questions | Promote a branch into its own Void |
 
 Intent is mutable. Switching intent never discards prior work or silently changes mastery claims.
 
@@ -105,15 +106,15 @@ Budds saves what changed, what remains uncertain, and the next useful move. Retu
 The default `/app/learn` experience contains only:
 
 1. **Start from a need** — goal/question input with optional context and intent suggestions.
-2. **Resume** — the most relevant active thread with the unresolved point and promised payoff.
+2. **Resume** — the most relevant active Void with the unresolved point and promised payoff.
 3. **Worth revisiting** — a due review only when it materially protects learning.
-4. **Other threads** — compact history, search, and management.
+4. **Other Voids** — compact history, search, and management.
 
-Current V1 courses and V2 missions remain reachable through an entitlement-aware coexistence surface during migration.
+V1 and V2 Voids remain reachable through the existing entitlement-aware coexistence surface. The coexistence sentence and create dialog subtype wording remain owner decisions under #399.
 
-### Learning Thread
+### Void
 
-The thread shell contains:
+The Void shell contains:
 
 - outcome and current intent;
 - next meaningful action;
@@ -123,9 +124,27 @@ The thread shell contains:
 - optional path and schedule details;
 - learner memory controls.
 
-Adaptive threads use `/app/learn/thread/:threadId`. Existing V2 missions remain
-at `/app/learn/:learningVoidId`; route parameters never multiplex the two
-authorities.
+Adaptive Voids use `/app/learn/void/:threadId` (`app-learn-void-threadId`).
+The compatibility entry `/app/learn/thread/:threadId`
+(`app-learn-thread-threadId`) redirects before mounting the detail page. SPA
+navigation preserves push/replace history intent, the ID, all query values and
+the fragment; server GET/HEAD returns `302` with `Cache-Control: no-store` and
+no fragment component. Activity navigation preserves unrelated query/fragment
+state, response drafts and authoritative owner/activity/revision scopes.
+
+V2 retains `/app/learn/:learningVoidId`, calibration and session children.
+V1 retains `/app/folders/:id/learn/:courseId` and its section child. New V1
+Calendar and Start Learning links use the owned course's folder-qualified
+overview, through `buildV1CoursePath`; old ambiguous `/app/learn/:courseId`
+links are not reinterpreted or backfilled. Adaptive producers use
+`learnVoidRoute`. Route parameters never multiplex the three authorities.
+
+Rollback artifacts must retain both adaptive entry points. Adaptive revocation
+with V2 access keeps the named `app-learn` fallback at `/app/learn?legacy=v2`;
+loss of V2/product/auth access keeps `index` at `/`. V2-backed recovery retains
+its pinned V2 destination; standalone recovery returns Home. Signed-out
+destination restoration (#377) and failed-link recovery UI remain deferred
+owner decisions; the route bridge does not promise either interaction.
 
 Source management, blueprint revisions, assessment contracts, and scheduling remain advanced views rather than required tabs.
 
@@ -196,13 +215,13 @@ Before adaptive routing can influence mastery, the following correctness work is
 
 ## 9. Migration and coexistence
 
-- V1 folder courses remain a first-class route and data plane until separately retired.
-- Existing V2 missions continue to function during rollout.
+- V1 folder Voids remain a first-class route and data plane until separately retired.
+- Existing V2 Voids continue to function during rollout.
 - Learning threads initially reference existing V2 mission/session records rather than duplicating authority.
 - Upgrade remains copy-only; it never infers mastery, evidence acceptance, or schedules.
 - Feature flags support cohort rollout and immediate rollback to the current experience.
 - Historical attempts retain their pinned blueprint, evidence, content, rubric, scorer, and verifier revisions.
-- “Learning Void,” “Mission,” “Session Void,” and “Learning Compiler” become internal or legacy terms; learner-facing language uses thread, activity, practice, evidence, and review.
+- Learner-facing container names use “Void,” with “activity,” “practice,” “evidence,” and “review” retaining their distinct meanings. Learning Thread, mission and course identifiers remain internal; learner text, generated text and historical records are not rewritten.
 
 ## 10. Delivery phases
 
@@ -220,7 +239,7 @@ Deliver:
 
 Exit gate: authority tests prove adaptive presentation cannot invent evidence, scores, or mastery and cannot break current V1/V2 journeys.
 
-### Phase 1 — instant thread vertical slice
+### Phase 1 — instant Void vertical slice
 
 Deliver:
 
@@ -238,7 +257,7 @@ burst remains deferred. V2-backed provider dispatch is admitted only under a
 finite default-deny pilot manifest. That manifest is pilot admission evidence,
 not general-availability approval.
 
-The initial 30–90 second SLA applies to users with ready evidence/content. New-thread preparation timing is measured separately until the source and content pipeline is optimized.
+The initial 30–90 second SLA applies to users with ready evidence/content. New-Void preparation timing is measured separately until the source and content pipeline is optimized.
 
 Exit gate: at least 70% of eligible users reach a meaningful activity within 90 seconds, 60% complete it, and at least 50% report 4/5 usefulness in the pilot. Metrics are decision thresholds, not permanent product claims.
 
@@ -264,7 +283,7 @@ Deliver:
 - optional mastery/review promotion;
 - return experience based on unfinished value, vulnerable knowledge, or source change.
 
-Exit gate: learners resume after seven days without restating context and voluntarily continue the same thread at a higher rate than the current mission workspace.
+Exit gate: learners resume after seven days without restating context and voluntarily continue the same Void at a higher rate than the current V2 workspace.
 
 ### Phase 4 — cross-feature learning memory
 
