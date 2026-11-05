@@ -157,9 +157,13 @@ async function main() {
   await buildNuxt(builder)
   await builder.close()
   builder = undefined
+  const port = new URL(baseUrl).port || '3102'
+  const serverEnv = { ...appEnv, HOST: '127.0.0.1', PORT: port, NITRO_HOST: '127.0.0.1', NITRO_PORT: port }
+  // Nitro's own endpoint settings take precedence over HOST and PORT.
+  for (const key of ['NITRO_UNIX_SOCKET', 'NITRO_SSL_CERT', 'NITRO_SSL_KEY']) Reflect.deleteProperty(serverEnv, key)
   nuxt = spawn(process.execPath, [join(outputDir, 'server/index.mjs')], {
     cwd: root,
-    env: { ...appEnv, HOST: '127.0.0.1', PORT: new URL(baseUrl).port || '3102' },
+    env: serverEnv,
     stdio: 'inherit',
   })
   nuxt.once('error', error => { console.error(error); void cleanup().finally(() => process.exit(1)) })
