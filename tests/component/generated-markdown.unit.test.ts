@@ -38,6 +38,15 @@ describe('passive generated content policy', () => {
     ])
   })
 
+  it('excludes indented and nested code, bare URLs and reference links in fallback and transport', () => {
+    const literal = '    Source 1 [1]\n\t[1]\n\n> ~~~text\n> Source 1 [1]\n> ~~~\n\n[Source 1]\n[ref]\n\n[Source 2]\n\n[ref]: https://example.invalid\n[Source 2]: https://example.invalid\n\nhttps://example.invalid/[1]'
+    const source = `Fact [1]\n\n${literal}\n\nTail (Source 2)`
+    expect(generatedTextFallback(source, 2).filter(segment => segment.type === 'citation')).toEqual([
+      { type: 'citation', index: 1 }, { type: 'citation', index: 2 },
+    ])
+    expect(normalizeAssistantCitations(source)).toBe(`Fact [1]\n\n${literal}\n\nTail [2]`)
+  })
+
   it('preserves CRLF text and citations', async () => {
     const result = await parseGeneratedMarkdown('First\r\n\r\nFact [1]', context)
     expect(JSON.stringify(result.body)).toContain('"tag":"citation"')

@@ -85,6 +85,9 @@ function citationNodes(value: string, sourceCount?: number): MDCNode[] {
 export function generatedTextFallback(source: string, sourceCount = 0): GeneratedTextSegment[] {
   if (source.length > GENERATED_MARKDOWN_LIMITS.source) return [{ type: 'text', value: source }]
   const ranges: Array<[number, number]> = []
+  const referenceKey = (label: string) => label.trim().replace(/\s+/g, ' ').toLowerCase()
+  const references = new Set(Array.from(source.matchAll(/^ {0,3}\[([^\]\n]+)\]:/gm), match => referenceKey(match[1]!)))
+  for (const match of source.matchAll(/\b(?:https?:\/\/|www\.)[^\s<>]+/gi)) ranges.push([match.index, match.index + match[0].length])
   const lineEnd = (offset: number) => { const end = source.indexOf('\n', offset); return end < 0 ? source.length : end + 1 }
   const balancedEnd = (start: number, open: string, close: string) => {
     let depth = 0
@@ -105,13 +108,17 @@ export function generatedTextFallback(source: string, sourceCount = 0): Generate
   }
   while (cursor < source.length) {
     if (cursor === 0 || source[cursor - 1] === '\n') {
-      const boundary = /^ {0,3}(`{3,}|~{3,})[^\n]*(?:\n|$)/.exec(source.slice(cursor))
+      if (/^(?: {0,3}>[ \t]?)*(?: {4}|\t)/.test(source.slice(cursor))) {
+        const end = lineEnd(cursor)
+        ranges.push([cursor, end]); cursor = end; continue
+      }
+      const boundary = /^(?: {0,3}>[ \t]?)*(?: {0,3}(?:[-+*]|\d+[.)]) )? {0,3}(`{3,}|~{3,})[^\n]*(?:\n|$)/.exec(source.slice(cursor))
       if (boundary) {
         const fence = boundary[1]!
         let end = cursor + boundary[0].length
         while (end < source.length) {
           const next = lineEnd(end)
-          const closing = /^ {0,3}(`+|~+)\s*$/.exec(source.slice(end, next))?.[1]
+          const closing = /^(?: {0,3}>[ \t]?)* {0,3}(`+|~+)\s*$/.exec(source.slice(end, next))?.[1]
           end = next
           if (closing && closing[0] === fence[0] && closing.length >= fence.length) break
         }
@@ -131,10 +138,17 @@ export function generatedTextFallback(source: string, sourceCount = 0): Generate
     }
     if (source[cursor] === '[') {
       const labelEnd = balancedEnd(cursor, '[', ']')
-      const suffix = source[labelEnd]
-      if (suffix === '(' || suffix === '[') {
-        const end = balancedEnd(labelEnd, suffix, suffix === '(' ? ')' : ']')
+      let suffixStart = labelEnd
+      while (/\s/.test(source[suffixStart] ?? '') && suffixStart < source.length) suffixStart++
+      const suffix = source[suffixStart]
+      const referenceEnd = suffix === '[' ? balancedEnd(suffixStart, '[', ']') : suffixStart
+      const referenceLabel = source.slice(suffixStart + 1, referenceEnd - 1) || source.slice(cursor + 1, labelEnd - 1)
+      if (suffix === '(' || (suffix === '[' && (suffixStart === labelEnd || references.has(referenceKey(referenceLabel))))) {
+        const end = balancedEnd(suffixStart, suffix, suffix === '(' ? ')' : ']')
         ranges.push([cursor, end]); cursor = end; continue
+      }
+      if (references.has(referenceKey(source.slice(cursor + 1, labelEnd - 1)))) {
+        ranges.push([cursor, labelEnd]); cursor = labelEnd; continue
       }
       if (source[labelEnd - 1] !== ']') { ranges.push([cursor, source.length]); break }
     }
