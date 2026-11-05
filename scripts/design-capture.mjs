@@ -1,11 +1,10 @@
 import { execFile as execFileCallback, spawn } from 'node:child_process'
 import { readFile, writeFile } from 'node:fs/promises'
-import { createServer } from 'node:net'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { chromium } from '@playwright/test'
-import { captureIdentity, compareFloor, publishCaptureOutput, readComparisonFloor, resetCaptureOutput, stopChild, validateSurface, violationId } from './design-capture-lib.mjs'
+import { acquireCaptureStackLock, captureIdentity, compareFloor, publishCaptureOutput, readComparisonFloor, resetCaptureOutput, selectCaptureBaseUrl, stopChild, validateSurface, violationId } from './design-capture-lib.mjs'
 import { checkPage } from './design-capture-checks.mjs'
 
 const execFile = promisify(execFileCallback)
@@ -14,6 +13,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms))
 const writeJson = (file, value) => writeFile(file, `${JSON.stringify(value, null, 2)}\n`)
 const message = error => error instanceof Error ? error.message : String(error)
 let stack
+let releaseStackLock
 let stackFailure
 let browser
 let interrupted = false
@@ -25,15 +25,8 @@ for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => {
 })
 
 async function startStack() {
-  const baseUrl = new URL(process.env.BUDDS_E2E_BASE_URL || 'http://127.0.0.1:3102')
-  if (baseUrl.protocol !== 'http:' || !['127.0.0.1', 'localhost'].includes(baseUrl.hostname)
-    || baseUrl.username || baseUrl.password || baseUrl.pathname !== '/' || baseUrl.search || baseUrl.hash) throw new Error('Design capture requires an HTTP loopback E2E base URL')
-  const probe = createServer()
-  await new Promise((resolve, reject) => {
-    probe.once('error', reject)
-    probe.listen(Number(baseUrl.port || 80), baseUrl.hostname, resolve)
-  })
-  await new Promise((resolve, reject) => probe.close(error => error ? reject(error) : resolve()))
+  const baseUrl = await selectCaptureBaseUrl(process.env.BUDDS_E2E_BASE_URL)
+  releaseStackLock = await acquireCaptureStackLock()
   stack = spawn(process.execPath, ['scripts/e2e-stack.mjs'], {
     cwd: root,
     env: { ...process.env, BUDDS_E2E_BASE_URL: baseUrl.origin, BUDDS_E2E_REAL_ADAPTIVE_CANVAS: 'false' },
@@ -45,14 +38,17 @@ async function startStack() {
   const deadline = Date.now() + 180_000
   while (Date.now() < deadline) {
     if (interrupted || stackFailure) throw new Error(stackFailure || 'Capture interrupted')
-    if (await fetch(baseUrl, { signal: AbortSignal.timeout(1000) }).then(response => response.ok).catch(() => false)) return baseUrl.origin
+    const ready = await fetch(baseUrl, { signal: AbortSignal.timeout(1000) }).then(response => response.ok).catch(() => false)
+    if (interrupted || stackFailure) throw new Error(stackFailure || 'Capture interrupted')
+    if (ready) return baseUrl.origin
     await delay(250)
   }
   throw new Error('Timed out waiting for the disposable E2E stack')
 }
 
-function stopStack() {
-  return stopChild(stack)
+async function stopStack() {
+  await stopChild(stack)
+  await releaseStackLock?.()
 }
 
 async function capturePage(surface, identity, entry, baseUrl, output) {

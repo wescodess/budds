@@ -2,8 +2,42 @@ import { createHash, randomUUID } from 'node:crypto'
 import { once } from 'node:events'
 import { renameSync } from 'node:fs'
 import { lstat, mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises'
+import { createServer } from 'node:net'
+import { tmpdir } from 'node:os'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { z } from 'zod'
+
+// Convex's backend port probes and shared dashboard cache are not isolated per run.
+export async function acquireCaptureStackLock() {
+  const lock = join(tmpdir(), `budds-design-capture-stack-${process.getuid?.() ?? 'user'}.lock`)
+  try { await mkdir(lock) }
+  catch (error) {
+    if (error.code === 'EEXIST') throw new Error(`Another route capture owns the disposable stack lock: ${lock}. Run route captures one at a time; remove a stale lock only after confirming its owner has stopped.`, { cause: error })
+    throw error
+  }
+  let released = false
+  return async () => {
+    if (released) return
+    released = true
+    await rm(lock, { recursive: true })
+  }
+}
+
+// Explicit ports are caller-coordinated; default runs ask the OS for a free port.
+export async function selectCaptureBaseUrl(explicitUrl) {
+  const baseUrl = new URL(explicitUrl || 'http://127.0.0.1')
+  if (baseUrl.protocol !== 'http:' || !['127.0.0.1', 'localhost'].includes(baseUrl.hostname)
+    || baseUrl.username || baseUrl.password || baseUrl.pathname !== '/' || baseUrl.search || baseUrl.hash) throw new Error('Design capture requires an HTTP loopback E2E base URL')
+  const probe = createServer()
+  await new Promise((resolve, reject) => {
+    probe.once('error', reject)
+    probe.listen(explicitUrl ? Number(baseUrl.port || 80) : 0, baseUrl.hostname, resolve)
+  })
+  const port = probe.address().port
+  await new Promise((resolve, reject) => probe.close(error => error ? reject(error) : resolve()))
+  baseUrl.port = String(port)
+  return baseUrl
+}
 
 const name = z.string().regex(/^[a-z0-9][a-z0-9_-]*$/u)
 const selector = z.string().trim().min(1)

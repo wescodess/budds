@@ -1,11 +1,12 @@
 import { execFileSync, spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Window } from 'happy-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { captureIdentity, compareFloor, normalizeSelector, publishCaptureOutput, readComparisonFloor, resetCaptureOutput, stopChild, validateSurface, violationId } from './design-capture-lib.mjs'
+import { acquireCaptureStackLock, captureIdentity, compareFloor, normalizeSelector, publishCaptureOutput, readComparisonFloor, resetCaptureOutput, selectCaptureBaseUrl, stopChild, validateSurface, violationId } from './design-capture-lib.mjs'
 import { checkLayout } from './design-capture-checks.mjs'
 
 const surface = {
@@ -20,6 +21,36 @@ const surface = {
 }
 const capture = captureIdentity('example', surface.cases[0], 'dark', surface.viewports[0])
 const floor = { version: 1, surface: 'example', status: 'complete', errors: [], captures: [capture], violations: [{ id: 'known' }] }
+
+describe('capture loopback ports', () => {
+  it('rejects another route stack until its owner finishes cleanup', async () => {
+    const release = await acquireCaptureStackLock()
+    try { await expect(acquireCaptureStackLock()).rejects.toThrow('Another route capture owns') }
+    finally { await release() }
+    const releaseNext = await acquireCaptureStackLock()
+    await releaseNext()
+    await releaseNext()
+  })
+
+  it('uses independent OS-assigned ports for simultaneous default captures', async () => {
+    const urls = await Promise.all([selectCaptureBaseUrl(), selectCaptureBaseUrl()])
+    expect(urls[0].hostname).toBe('127.0.0.1')
+    expect(Number(urls[0].port)).toBeGreaterThan(0)
+    expect(urls[0].port).not.toBe(urls[1].port)
+    expect(urls.every(url => url.port !== '3102')).toBe(true)
+  })
+
+  it('preserves explicit ports and rejects an occupied explicit port', async () => {
+    const server = createServer()
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('Expected loopback address')
+    const url = `http://127.0.0.1:${address.port}`
+    try { await expect(selectCaptureBaseUrl(url)).rejects.toThrow('EADDRINUSE') }
+    finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())) }
+    expect((await selectCaptureBaseUrl(url)).origin).toBe(url)
+  })
+})
 
 describe('surface definitions', () => {
   it('accepts route and standalone HTML surfaces', () => {
@@ -301,7 +332,8 @@ describe('layout target identity and hidden inputs', () => {
 
 
 describe('CLI failure lifecycle without a browser', () => {
-  it.each([false, true])('stages output and stops the detached stack on failure or SIGINT: %s', async interrupt => {
+  it.each(['capture failure', 'SIGINT', 'stack exit'])('stages output and stops the detached stack on %s', async mode => {
+    const interrupt = mode === 'SIGINT'
     const root = await mkdtemp(join(tmpdir(), 'design-capture-cli-'))
     const originalArgv = process.argv
     const originalExitCode = process.exitCode
@@ -320,13 +352,20 @@ describe('CLI failure lifecycle without a browser', () => {
       vi.resetModules()
       const spawnStack = vi.fn(() => child)
       vi.doMock('node:child_process', async () => ({ ...await vi.importActual<typeof import('node:child_process')>('node:child_process'), spawn: spawnStack }))
-      vi.doMock('node:net', () => ({ createServer: () => ({ once() {}, listen(_port: number, _host: string, ready: () => void) { ready() }, close(done: () => void) { done() } }) }))
+      vi.doMock('node:net', () => ({ createServer: () => ({ once() {}, listen(_port: number, _host: string, ready: () => void) { ready() }, address() { return { port: 43210 } }, close(done: () => void) { done() } }) }))
       const launchBrowser = vi.fn(async () => ({ newContext: async () => {
         if (interrupt) process.emit('SIGINT')
         throw new Error('synthetic capture failure')
       }, close: async () => {} }))
       vi.doMock('@playwright/test', () => ({ chromium: { launch: launchBrowser } }))
-      vi.stubGlobal('fetch', async () => ({ ok: true }))
+      vi.stubGlobal('fetch', async () => {
+        if (mode === 'stack exit') {
+          const exited = once(child, 'exit')
+          child.kill('SIGTERM')
+          await exited
+        }
+        return { ok: true }
+      })
       vi.spyOn(process, 'cwd').mockReturnValue(root)
       vi.spyOn(console, 'log').mockImplementation(() => {})
       vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -341,7 +380,8 @@ describe('CLI failure lifecycle without a browser', () => {
       expect(stages).toHaveLength(1)
       const failed = JSON.parse(await readFile(join(root, '.design-captures/example', stages[0], 'floor.json'), 'utf8'))
       expect(failed.status).toBe('error')
-      expect(failed.errors).toContain('synthetic capture failure')
+      expect(failed.errors).toContain(mode === 'stack exit' ? 'Disposable E2E stack exited (SIGTERM)' : 'synthetic capture failure')
+      if (mode === 'stack exit') expect(failed.captures).toEqual([])
       if (interrupt) expect(failed.errors).toContain('Capture interrupted')
       expect(console.error).toHaveBeenCalledWith(expect.stringContaining('this folder can be deleted:'))
       expect(process.exitCode).toBe(1)
@@ -359,5 +399,5 @@ describe('CLI failure lifecycle without a browser', () => {
       try { process.kill(-child.pid!, 'SIGKILL') } catch { /* Only this test's process group is eligible for cleanup. */ }
       await rm(root, { recursive: true, force: true })
     }
-  })
+  }, 30_000)
 })
