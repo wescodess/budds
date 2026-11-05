@@ -7,6 +7,7 @@ const props = defineProps<{
   currentIndex: number
   immediateFeedback: boolean
   submitting: boolean
+  submitFailed?: boolean
   answeredIds: Set<string>
 }>()
 
@@ -136,7 +137,7 @@ defineExpose({ receiveFeedback })
         <QuizInputsFillInBlank
           :model-value="currentAnswer"
           :disabled="submitting"
-          :feedback="currentFeedback ? { isCorrect: currentFeedback.isCorrect, correctAnswer: currentFeedback.correctAnswer } : null"
+          :feedback="currentFeedback ? { isCorrect: currentFeedback.isCorrect, correctAnswer: currentFeedback.correctAnswer, gradingPending: currentFeedback.gradingPending } : null"
           @update:model-value="setAnswer"
         />
       </div>
@@ -144,7 +145,7 @@ defineExpose({ receiveFeedback })
         <QuizInputsShortResponse
           :model-value="currentAnswer"
           :disabled="submitting"
-          :feedback="currentFeedback ? { isCorrect: currentFeedback.isCorrect, correctAnswer: currentFeedback.correctAnswer } : null"
+          :feedback="currentFeedback ? { isCorrect: currentFeedback.isCorrect, correctAnswer: currentFeedback.correctAnswer, gradingPending: currentFeedback.gradingPending } : null"
           @update:model-value="setAnswer"
         />
       </div>
@@ -170,6 +171,7 @@ defineExpose({ receiveFeedback })
     </Motion>
 
     <div class="sticky bottom-0 border-t bg-background p-4">
+      <p v-if="submitFailed" role="alert" class="mb-2 text-xs text-destructive">We couldn't submit your quiz. Try again.</p>
       <div class="flex items-center justify-between">
         <span class="text-sm text-muted-foreground">{{ currentIndex + 1 }} of {{ questions.length }}</span>
         <div class="flex-1 mx-4">
@@ -181,6 +183,7 @@ defineExpose({ receiveFeedback })
           </div>
         </div>
         <UiButton
+          data-quiz-submit
           :disabled="(!hasAnswered && !currentFeedback) || (awaitingFeedback && immediateFeedback) || submitting"
           @click="handleNext"
         >

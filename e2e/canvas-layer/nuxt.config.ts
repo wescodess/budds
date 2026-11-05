@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url'
 
-// Selected only by the disposable E2E runner via `nuxt dev --extends`.
+// Selected only by the disposable E2E runner's build overrides.
 // Normal Nuxt builds never load this layer or its fixture route.
 const baseUrl = new URL(process.env.BUDDS_E2E_BASE_URL ?? 'http://127.0.0.1:3102')
 const convexUrl = new URL(process.env.NUXT_PUBLIC_CONVEX_URL ?? 'http://127.0.0.1:3210')

@@ -35,9 +35,12 @@ const completeAttemptMutation = import.meta.client
 const sequentialRef = ref<InstanceType<typeof QuizSequentialMode> | null>(null)
 const currentIndex = ref(props.initialIndex)
 const submitting = ref(false)
+const submitFailed = ref(false)
+const root = useTemplateRef<HTMLElement>('root')
 
 async function handleAnswer(questionId: string, value: string) {
   submitting.value = true
+  submitFailed.value = false
   try {
     const feedback = await submitAnswerMutation.mutate({
       attemptId: props.attemptId,
@@ -68,32 +71,37 @@ function handleNext() {
   }
 }
 
-async function handleComplete() {
+async function finishAttempt(submit: () => Promise<unknown>) {
   submitting.value = true
+  submitFailed.value = false
   try {
-    await completeAttemptMutation.mutate({ attemptId: props.attemptId })
-    emit('complete', props.attemptId)
+    if (await submit()) {
+      emit('complete', props.attemptId)
+      return
+    }
+    submitFailed.value = true
   }
   finally {
     submitting.value = false
+  }
+  await nextTick()
+  if (document.activeElement === document.body) {
+    root.value?.querySelector<HTMLElement>('[data-quiz-submit]')?.focus()
   }
 }
 
-async function handleSubmitAll(answers: Array<{ questionId: string; userAnswer: string }>) {
-  submitting.value = true
-  try {
-    await submitAllMutation.mutate({
-      attemptId: props.attemptId,
-      answers: answers.map(a => ({
-        questionId: a.questionId as Id<'quizQuestions'>,
-        userAnswer: a.userAnswer,
-      })),
-    })
-    emit('complete', props.attemptId)
-  }
-  finally {
-    submitting.value = false
-  }
+function handleComplete() {
+  return finishAttempt(() => completeAttemptMutation.mutate({ attemptId: props.attemptId }))
+}
+
+function handleSubmitAll(answers: Array<{ questionId: string; userAnswer: string }>) {
+  return finishAttempt(() => submitAllMutation.mutate({
+    attemptId: props.attemptId,
+    answers: answers.map(a => ({
+      questionId: a.questionId as Id<'quizQuestions'>,
+      userAnswer: a.userAnswer,
+    })),
+  }))
 }
 
 function handleQuit() {
@@ -102,7 +110,7 @@ function handleQuit() {
 </script>
 
 <template>
-  <div class="flex h-full flex-col">
+  <div ref="root" class="flex h-full flex-col">
     <div class="flex items-center gap-2 border-b p-3">
       <UiButton variant="ghost" size="sm" @click="handleQuit">
         <ArrowLeft class="mr-1 h-3.5 w-3.5" />
@@ -114,6 +122,7 @@ function handleQuit() {
       v-if="settings.showAllQuestions"
       :questions="questions"
       :submitting="submitting"
+      :submit-failed="submitFailed"
       @submit-all="handleSubmitAll"
     />
 
@@ -124,6 +133,7 @@ function handleQuit() {
       :current-index="currentIndex"
       :immediate-feedback="settings.immediateFeedback"
       :submitting="submitting"
+      :submit-failed="submitFailed"
       :answered-ids="answeredIds"
       @answer="handleAnswer"
       @next="handleNext"

@@ -26,8 +26,8 @@
     "test:design-capture": "node --test --test-concurrency=1 scripts/design-capture.browser.test.mjs",
     "design:capture": "node scripts/design-capture.mjs",
     "test:e2e:learn-v2": "playwright test --config playwright.config.ts e2e/learn-v2-journey.spec.ts",
-    "test:e2e:learn": "playwright test --config playwright.config.ts e2e/learn-v2-journey.spec.ts e2e/learn-adaptive-recovery.spec.ts",
-    "test:e2e:learn:authority": "BUDDS_E2E_REAL_ADAPTIVE_CANVAS=true playwright test --config playwright.config.ts e2e/learn-adaptive-authority.spec.ts",
+    "test:e2e:learn": "playwright test --config playwright.config.ts e2e/learn-v2-journey.spec.ts e2e/learn-adaptive-recovery.spec.ts e2e/navigation-readiness.spec.ts",
+    "test:e2e:learn:authority": "BUDDS_E2E_REAL_ADAPTIVE_CANVAS=true BUDDS_E2E_SYNTHETIC_ADAPTIVE_APPROVAL=true playwright test --config playwright.config.ts e2e/learn-adaptive-authority.spec.ts e2e/learn-adaptive-canvas.spec.ts",
     "verify:learn-v2-beta": "pnpm typecheck && pnpm typecheck:convex && pnpm test:learn-v2:unit && pnpm test:learn-v2:component",
     "verify:learn-v2-calendar": "pnpm typecheck && pnpm typecheck:convex && pnpm test:learn-v2:calendar",
     "audio:workflow:dev": "pnpm --dir workers/audio-overview dev",
@@ -38,8 +38,9 @@
     "laya:quiz-semantic:evaluate": "node scripts/evaluate-laya-calibration.mjs",
     "typecheck": "vue-tsc --noEmit",
     "typecheck:convex": "node scripts/validate-convex-index-names.mjs && tsc --noEmit -p convex/tsconfig.json",
+    "design:ratchet": "node scripts/design-ratchet.mjs",
     "lint": "eslint .",
-    "lint:ci": "eslint . --max-warnings 0",
+    "lint:ci": "eslint . --max-warnings 0 && pnpm design:ratchet",
     "verify": "pnpm lint:ci && pnpm typecheck && pnpm typecheck:convex && pnpm test && pnpm test:component && pnpm test:component:audio && pnpm audio:workflow:typecheck && pnpm audio:workflow:test && pnpm laya:evaluator:test && pnpm audit && pnpm --dir workers/audio-overview audit && pnpm --dir workers/laya-evaluator audit"
   },
   "dependencies": {
@@ -72,9 +73,9 @@
     "tailwind-merge": "^3.5.0",
     "vaul-vue": "^0.4.1",
     "vee-validate": "^4.15.1",
-    "vue": "^3.5.42",
+    "vue": "^3.5.44",
     "vue-input-otp": "^0.3.2",
-    "vue-router": "^5.3.1",
+    "vue-router": "^5.4.0",
     "vue-sonner": "^2.0.9",
     "zod": "4.6.6"
   },

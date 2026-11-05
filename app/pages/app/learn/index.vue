@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useLearnV2Journey } from '~/composables/useLearnV2Journey'
 import { useLearnAdaptiveAccess } from '~/composables/useLearnAdaptiveAccess'
+import { LEARN_ADAPTIVE_SURFACE } from '~/utils/learn-adaptive-surface'
 import { getErrorMessage } from '~~/shared/errors'
 import { api } from '#convex/api'
 import type { NeedFirstDraftInput } from '~~/shared/learn-adaptive-draft'
@@ -168,7 +169,7 @@ async function continueReadySession() {
   if (!selected || !ownerId || attachBusy.value) return
   attachBusy.value = true
   attachError.value = null
-  attachKey.value ??= `adaptive-ready:${crypto.randomUUID?.() ?? Date.now()}`
+  attachKey.value ??= `adaptive-ready-${crypto.randomUUID?.() ?? Date.now()}`
   try {
     const result = await attachReadyMutation.mutate({ studySessionId: selected.id as never, expectedSessionRevision: selected.revision, idempotencyKey: attachKey.value }) as { kind: string, threadId?: string }
     if (ownerEpoch.value !== epoch || currentOwnerId.value !== ownerId || readySession.value?.id !== selected.id || readySession.value.revision !== selected.revision) return
@@ -283,7 +284,7 @@ async function selectThreadIntent(intent: Intent) {
 }
 </script>
 <template>
-  <main :data-owner-ready="currentOwnerId ? 'true' : 'false'">
+  <div :class="adaptiveAllowed && !legacyV2Mode ? LEARN_ADAPTIVE_SURFACE : undefined" :data-owner-ready="currentOwnerId ? 'true' : 'false'">
     <section v-if="checkingAccess || checkingAdaptiveAccess" class="mx-auto max-w-2xl p-6" aria-live="polite"><h1 class="font-dm-sans text-2xl font-bold">Learn</h1><p class="mt-2 text-muted-foreground">Checking access…</p></section>
     <section v-else-if="!allowed" class="mx-auto max-w-2xl p-6"><h1 class="font-dm-sans text-2xl font-bold">Learn</h1><p class="mt-2 text-muted-foreground">This learning experience is not available for this account.</p></section>
     <template v-else-if="adaptiveAllowed && !legacyV2Mode">
@@ -318,5 +319,5 @@ async function selectThreadIntent(intent: Intent) {
       <p class="mt-3 text-sm text-muted-foreground">Classic courses remain in each folder's Learn tab.</p>
       <NuxtLink to="/" data-testid="learn-legacy-v1-home" class="min-h-11 content-center text-sm text-[var(--learn-action)] underline">Open your folders for classic courses</NuxtLink>
     </nav>
-  </main>
+  </div>
 </template>

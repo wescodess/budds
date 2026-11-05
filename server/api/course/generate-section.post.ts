@@ -190,11 +190,12 @@ export default defineEventHandler(async (event) => {
           model: requestedModel,
           messages: quizMessages,
           temperature: 0.3,
-          max_tokens: Math.max(3000, engineConfig.quizQuestionCount * 400),
+          max_tokens: Math.max(3000, engineConfig.quizQuestionCount * 600),
         })
 
         const raw = completion.choices[0]?.message?.content ?? ''
         const parsed = parseQuizResponse(raw)
+        parsed.questions = parsed.questions.filter(question => !question.gradingCriteria || chunks[question.sourceIndex] !== undefined)
 
         if (parsed.questions.length === 0) return null
 
@@ -211,6 +212,7 @@ export default defineEventHandler(async (event) => {
               options: q.options,
               correctAnswer: q.correctAnswer,
               explanation: q.explanation,
+              gradingCriteria: chunks[q.sourceIndex] ? q.gradingCriteria : undefined,
               sourceDocumentId: attrs.documentId,
               sourceChunkContent: chunk?.content,
               sourceFilename: attrs.filename ?? 'Unknown source',
