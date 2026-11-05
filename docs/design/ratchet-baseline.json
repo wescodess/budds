@@ -98,7 +98,7 @@
     "app/components/global/ProsePre.vue": 1,
     "app/components/learn/FlashcardBlock.vue": 1
   },
-  "uppercase-tracking": {
+  "uppercase": {
     "app/components/audio-overview/AudioOverviewCustomize.vue": 3,
     "app/components/audio-overview/AudioOverviewPlayer.vue": 1,
     "app/components/audio-overview/PublicAudioShell.vue": 2,
@@ -135,6 +135,7 @@
     "app/components/learn/OutlineEditor.vue": 2,
     "app/components/learn/QuizBlock.vue": 1,
     "app/components/learn/TextBlock.vue": 1,
+    "app/components/quiz/OverviewView.vue": 1,
     "app/components/quiz/ReviewPanel.vue": 1,
     "app/components/quiz/SequentialMode.vue": 1,
     "app/components/quiz/ShowAllMode.vue": 1,

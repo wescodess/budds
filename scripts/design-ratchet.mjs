@@ -1,5 +1,5 @@
 import { realpathSync } from 'node:fs'
-import { readdir, readFile, writeFile } from 'node:fs/promises'
+import { readdir, readFile, rename, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -11,11 +11,9 @@ export const rules = [
   'raw-hex',
   'sparkles',
   'style-block',
-  'uppercase-tracking',
+  'uppercase',
   'violet-indigo',
 ]
-
-const UPPERCASE_TRACKING_WINDOW = 12
 
 export function countViolations(source) {
   const counts = Object.fromEntries(rules.map(rule => [rule, 0]))
@@ -24,22 +22,14 @@ export function countViolations(source) {
   counts.gradients = [...source.matchAll(/\bbg-(?:gradient-to-[a-z]+|linear-(?:to-[a-z]+|\d+|\[)|radial|conic)|\b(?:repeating-)?(?:linear|radial|conic)-gradient\s*\(/g)].length
 
   // Scan all text, including CSS @apply and comments, without pairing quotes.
-  // Closing tags and statements bound a class list, so neighbouring elements never pair.
   // Keep colons and brackets for variants, object keys and arbitrary values.
-  for (const segment of source.split(/["']\s*\/?>|<\/|;/)) {
-    const tokens = segment.split(/[\s"'`<>=,{}()]+/).filter(Boolean)
-    for (const [index, token] of tokens.entries()) {
-      if (/(?:^|:)uppercase!?:?$/.test(token)
-        && tokens.slice(Math.max(0, index - UPPERCASE_TRACKING_WINDOW), index + UPPERCASE_TRACKING_WINDOW + 1)
-          .some(nearby => /(?:^|:)tracking-/.test(nearby))) {
-        counts['uppercase-tracking']++
-      }
-      if (/(?:^|:)backdrop-blur(?:-|!?$)/.test(token)) counts['backdrop-blur']++
-      if (/(?:^|:)(?:group-|peer-)?hover(?:\/[\w-]+)?:(?:[^:]+:)*(?:scale(?:-[xy])?-|-translate-[xy]-)/.test(token)) counts['hover-lift']++
-      if (/(?:^|:)(?:[a-z]+-)+(?:amber|orange)-\d/.test(token)) counts['raw-amber-orange']++
-      if (/(?:^|:)(?:[a-z]+-)+(?:violet|indigo)-\d/.test(token)) counts['violet-indigo']++
-      if (/-\[(?:[a-z-]+:)?#(?:[\da-f]{3}|[\da-f]{4}|[\da-f]{6}|[\da-f]{8})\]/i.test(token)) counts['raw-hex']++
-    }
+  for (const token of source.split(/[\s"'`<>=;,{}()]+/).filter(Boolean)) {
+    if (/(?:^|:)uppercase!?:?$/.test(token)) counts.uppercase++
+    if (/(?:^|:)backdrop-blur(?:-|!?$)/.test(token)) counts['backdrop-blur']++
+    if (/(?:^|:)(?:group-|peer-)?hover(?:\/[\w-]+)?:(?:[^:]+:)*(?:scale(?:-[xy])?-|-translate-[xy]-)/.test(token)) counts['hover-lift']++
+    if (/(?:^|:)(?:[a-z]+-)+(?:amber|orange)-\d/.test(token)) counts['raw-amber-orange']++
+    if (/(?:^|:)(?:[a-z]+-)+(?:violet|indigo)-\d/.test(token)) counts['violet-indigo']++
+    if (/-\[(?:[a-z-]+:)?#(?:[\da-f]{3}|[\da-f]{4}|[\da-f]{6}|[\da-f]{8})\]/i.test(token)) counts['raw-hex']++
   }
   return counts
 }
@@ -114,7 +104,11 @@ export async function run(root, args = []) {
     console.error('Design ratchet failed. Baseline unchanged.')
     return 1
   }
-  if (update) await writeFile(baselinePath, `${JSON.stringify(current, null, 2)}\n`)
+  if (update) {
+    const temporaryPath = `${baselinePath}.${process.pid}.tmp`
+    await writeFile(temporaryPath, `${JSON.stringify(current, null, 2)}\n`)
+    await rename(temporaryPath, baselinePath)
+  }
   console.log(update ? `Design ratchet updated (${changes.length} reductions).` : 'Design ratchet passed (9 rules; baseline matches app/).')
   return 0
 }

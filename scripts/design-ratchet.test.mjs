@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { execFile } from 'node:child_process'
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { copyFile, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -13,7 +13,8 @@ const empty = () => countFiles({})
 
 describe('countViolations', () => {
   it.each([
-    ['uppercase-tracking', '<p class="uppercase text-xs tracking-wide" /><p class="tracking-[.2em] font-medium uppercase" />', 2],
+    ['uppercase', '<p class="uppercase text-xs tracking-wide" /><p class="font-medium md:uppercase" />', 2],
+    ['uppercase', '<div :class="{ uppercase: true }" /><div class="[&>svg]:uppercase" />.x { text-transform: uppercase; }', 3],
     ['sparkles', 'import { Sparkles } from "@lucide/vue"; <Sparkles /><Sparkles />', 3],
     ['backdrop-blur', '<div class="backdrop-blur dark:backdrop-blur-sm" />', 2],
     ['gradients', '<div class="bg-gradient-to-r bg-linear-to-br bg-radial bg-conic bg-linear-[45deg]" />', 5],
@@ -39,7 +40,7 @@ describe('countViolations', () => {
         font-medium tracking-widest" />
     `
     expect(countViolations(source)).toMatchObject({
-      'uppercase-tracking': 3,
+      uppercase: 3,
       'hover-lift': 1,
       'raw-amber-orange': 2,
       'backdrop-blur': 1,
@@ -50,37 +51,12 @@ describe('countViolations', () => {
     expect(countViolations(`<!-- ${quote} --><div class="bg-amber-500"/>`)['raw-amber-orange']).toBe(1)
   })
 
-  it.each([
-    '<div :class="[\'uppercase\', \'tracking-wide\']" />',
-    '<div :class="{ uppercase: true, \'tracking-wide\': true }" />',
-    'const classes = `uppercase ${active ? \'tracking-wide\' : \'\'}`',
-    '<div :class="[\'md:uppercase\', \'lg:tracking-wide\']" />',
-    '<div :class="{ \'md:uppercase\': true, \'tracking-wide\': true }" />',
-    '<p class="tracking-tight uppercase tracking-wide" />',
-  ])('counts a nearby uppercase once across combined classes: %s', (source) => {
-    expect(countViolations(source)['uppercase-tracking']).toBe(1)
-  })
-
-  it.each([
-    ['<p class="uppercase text-xs font-medium text-muted-foreground leading-none tracking-wide" />', 1],
-    ['<p class="tracking-wide text-xs font-medium text-muted-foreground leading-none uppercase" />', 1],
-    ['<h1 class="uppercase">x</h1><h2 class="tracking-wide">y</h2>', 0],
-    ['.a { @apply uppercase; } .b { @apply tracking-wide; }', 0],
-    [`uppercase ${'a '.repeat(12)}tracking-wide`, 0],
-    ['<div class="[&>svg]:uppercase [&>svg]:tracking-wide" />', 1],
-    ['<div :class="count > 1 ? \'uppercase\' : \'tracking-wide\'" />', 1],
-    ['<div :class="items.map(item => \'uppercase\').concat(\'tracking-wide\')" />', 1],
-    ['const classes = ref<string>(\'uppercase\'); const other = \'tracking-wide\'', 0],
-  ])('pairs uppercase and tracking only within one class list: %s', (source, expected) => {
-    expect(countViolations(source)['uppercase-tracking']).toBe(expected)
-  })
-
   it('counts class rules in CSS @apply', () => {
     expect(countViolations('.probe { @apply bg-amber-500 backdrop-blur hover:scale-105 uppercase tracking-wide; }')).toMatchObject({
       'raw-amber-orange': 1,
       'backdrop-blur': 1,
       'hover-lift': 1,
-      'uppercase-tracking': 1,
+      uppercase: 1,
     })
     expect(countViolations('.probe { @apply text-indigo-500 bg-[#fff]; }')).toMatchObject({
       'violet-indigo': 1,
@@ -88,9 +64,8 @@ describe('countViolations', () => {
     })
   })
 
-  it('keeps distant uppercase and tracking, semantic tokens, prose and CSS palette definitions clean', () => {
+  it('keeps tracking alone, semantic tokens, prose and CSS palette definitions clean', () => {
     const source = `
-      <p class="uppercase">A caption without any letter spacing</p>
       <p>Separate content with many intervening tokens stays unrelated.</p>
       <p class="tracking-wide" />
       <p>It's ready</p>
@@ -209,6 +184,30 @@ describe('run', () => {
     for (const entry of [script, link]) {
       await expect(execFileAsync(process.execPath, [entry, '--bad'])).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining('Usage:') })
     }
+  })
+
+  it('propagates check results through the real CLI', async () => {
+    const { root } = await fixture()
+    await mkdir(path.join(root, 'scripts'))
+    const script = path.join(root, 'scripts/design-ratchet.mjs')
+    await copyFile(fileURLToPath(new URL('./design-ratchet.mjs', import.meta.url)), script)
+    await writeFile(path.join(root, 'app/new.vue'), '<Sparkles />')
+    await expect(execFileAsync(process.execPath, [script])).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining('sparkles: app/new.vue: old 0, new 1') })
+    await rm(path.join(root, 'app/new.vue'))
+    await expect(execFileAsync(process.execPath, [script])).resolves.toMatchObject({ stdout: expect.stringContaining('passed') })
+  })
+
+  it('keeps the baseline intact when an update cannot finish', async () => {
+    const { root, baselinePath } = await fixture(countFiles({ 'app/a.vue': '<Sparkles />' }))
+    const before = await readFile(baselinePath, 'utf8')
+    await mkdir(`${baselinePath}.${process.pid}.tmp`)
+    await expect(run(root, ['--update'])).rejects.toThrow()
+    expect(await readFile(baselinePath, 'utf8')).toBe(before)
+  })
+
+  it('runs in lint:ci', async () => {
+    const { scripts } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
+    expect(scripts['lint:ci']).toContain('pnpm design:ratchet')
   })
 
   it('scans only app/ and rejects unsupported arguments', async () => {
