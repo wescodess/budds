@@ -1,11 +1,12 @@
 <script setup lang="ts">
+import { renderGeneratedMermaid } from '~/utils/render-generated-mermaid'
 const props = defineProps<{ code: string }>()
 
 const svg = ref('')
 const error = ref(false)
 const loading = ref(true)
 const container = ref<HTMLElement | null>(null)
-const id = useId()
+let generation = 0
 
 let mermaidPromise: Promise<typeof import('mermaid')> | null = null
 
@@ -43,23 +44,24 @@ function loadMermaid() {
 }
 
 async function render() {
+  const current = ++generation
+  const code = props.code
   loading.value = true
   error.value = false
   svg.value = ''
-
   try {
-    const m = await loadMermaid()
-    const { svg: rendered } = await m.default.render(`mermaid-${id}`, props.code)
-    svg.value = rendered
+    const rendered = await renderGeneratedMermaid(code, loadMermaid, () => current === generation)
+    if (current === generation) svg.value = rendered
   } catch {
-    error.value = true
+    if (current === generation) error.value = true
   } finally {
-    loading.value = false
+    if (current === generation) loading.value = false
   }
 }
 
 onMounted(() => render())
-watch(() => props.code, () => render())
+watch(() => props.code, () => render(), { flush: 'sync' })
+onBeforeUnmount(() => generation++)
 </script>
 
 <template>
@@ -68,11 +70,11 @@ watch(() => props.code, () => render())
       <div v-if="loading" class="flex items-center justify-center py-8">
         <div class="h-5 w-5 animate-spin rounded-full border-2 border-amber-500 border-t-transparent" />
       </div>
-      <!-- eslint-disable vue/no-v-html -- Mermaid strict mode encodes HTML and disables interactive links. -->
+      <!-- eslint-disable vue/no-v-html -- Only the application SVG gate can populate this value. -->
       <div
         v-else-if="svg"
         ref="container"
-        class="flex justify-center [&_svg]:max-w-full"
+        class="flex justify-center [&_svg]:h-auto [&_svg]:max-w-full"
         v-html="svg"
       />
       <!-- eslint-enable vue/no-v-html -->
