@@ -1,6 +1,20 @@
 import { z } from 'zod'
+import { validateQuizGradingCriteria } from '../../shared/quiz-grading'
 import type { ChatMessage } from './ai-gateway'
 import type { AISearchChunk } from './ai-search'
+
+const gradingCriteriaSchema = z.array(z.object({
+  key: z.string(),
+  description: z.string(),
+  weightPercent: z.number(),
+})).transform((criteria) => {
+  try {
+    return validateQuizGradingCriteria(criteria)
+  }
+  catch {
+    return undefined
+  }
+}).catch(undefined).optional()
 
 export const quizQuestionSchema = z.object({
   order: z.number().int().nonnegative(),
@@ -9,7 +23,13 @@ export const quizQuestionSchema = z.object({
   options: z.array(z.string()).optional(),
   correctAnswer: z.string().min(1),
   explanation: z.string().optional(),
+  gradingCriteria: gradingCriteriaSchema,
   sourceIndex: z.number().int().nonnegative(),
+}).transform(({ gradingCriteria, ...question }) => {
+  return {
+    ...question,
+    ...(question.type === 'free-response' && gradingCriteria ? { gradingCriteria } : {}),
+  }
 })
 
 export const quizResponseSchema = z.object({
@@ -89,7 +109,8 @@ Return JSON ONLY. No markdown fences, no commentary, no trailing commas. The res
     "options"?: string[],
     "correctAnswer": string,
     "explanation": string,
-    "sourceIndex": number
+    "sourceIndex": number,
+    "gradingCriteria"?: Array<{ "key": string, "description": string, "weightPercent": number }>
   }>
 }
 
@@ -102,6 +123,7 @@ ${topicInstruction}
 - true_false questions MUST have "options": ["True", "False"]. "correctAnswer" must be "True" or "False".
 - fill_in_the_blank questions: write the question with a blank indicated by "___". Omit "options". "correctAnswer" is the word or phrase that fills the blank.
 - free-response items omit "options" and put the canonical short answer in "correctAnswer".
+- Only free-response items include "gradingCriteria": 1-4 independently checkable criteria judging meaning, not wording. Each must be supported by the cited source passage. Use unique stable lowercase keys matching ^[a-z0-9_]{1,40}$, descriptions at most 300 characters, and positive integer weightPercent values totaling 100. All other types omit it.
 - "explanation" is required for every question. Write 1-2 sentences explaining WHY the correct answer is correct.
 - "sourceIndex" is a 0-based index into the source passages array. Reference only the supplied passages.
 - If no source passages are supplied, return {"title": "Quiz", "questions": []} and nothing else.

@@ -1,7 +1,14 @@
 import { vi, describe, test, expect, beforeEach } from 'vitest'
 
 const shadowEvaluateQuiz = vi.hoisted(() => vi.fn())
+const convexMutation = vi.hoisted(() => vi.fn())
 vi.mock('../../utils/learning-decisions', () => ({ shadowEvaluateQuiz }))
+vi.mock('convex/browser', () => ({
+  ConvexHttpClient: class {
+    setAuth() {}
+    mutation = convexMutation
+  },
+}))
 
 vi.stubGlobal('createError', (opts: { statusCode: number; message: string }) =>
   Object.assign(new Error(opts.message), { statusCode: opts.statusCode }),
@@ -12,6 +19,7 @@ vi.stubGlobal('searchDocuments', vi.fn())
 vi.stubGlobal('fetchFolderDocs', vi.fn(async () => []))
 vi.stubGlobal('assertSearchIndexAvailable', vi.fn(async () => undefined))
 vi.stubGlobal('generateCompletion', vi.fn())
+vi.stubGlobal('useRuntimeConfig', () => ({ public: { convex: { url: 'https://test.convex.cloud' } } }))
 vi.stubGlobal('defineEventHandler', (handler: (...args: never[]) => unknown) => handler)
 vi.stubGlobal('buildQuizPrompt', (await import('../../utils/quiz-prompt')).buildQuizPrompt)
 vi.stubGlobal('parseQuizResponse', (await import('../../utils/quiz-prompt')).parseQuizResponse)
@@ -66,9 +74,35 @@ describe('POST /api/quiz/generate', () => {
     vi.mocked(globalThis.assertSearchIndexAvailable).mockReset()
     vi.mocked(globalThis.assertSearchIndexAvailable).mockResolvedValue(undefined)
     vi.mocked(globalThis.generateCompletion).mockReset()
+    convexMutation.mockReset()
+    convexMutation.mockResolvedValue({ quizId: 'quiz_123' })
     shadowEvaluateQuiz.mockReset()
     shadowEvaluateQuiz.mockResolvedValue({ status: 'unavailable', reason: 'disabled', retryable: false })
     vi.mocked(globalThis.getConvexTokenIdentifier).mockReturnValue('https://auth.example.com|user_test_123')
+  })
+
+  test.each([0, 99])('passes criteria to task persistence only for a valid source index (%i)', async (sourceIndex) => {
+    const gradingCriteria = [{ key: 'conversion', description: 'Describes light becoming chemical energy.', weightPercent: 100 }]
+    vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc', taskId: 'task_123' })
+    vi.mocked(globalThis.searchDocuments).mockResolvedValue({ data: [
+      { id: '1', content: 'Light becomes chemical energy.', score: 1, attributes: {} },
+      { id: '2', content: 'Other content.', score: 1, attributes: {} },
+    ] })
+    vi.mocked(globalThis.generateCompletion).mockResolvedValue({
+      choices: [{ message: { content: JSON.stringify({ title: 'Quiz', questions: [{
+        order: 0, question: 'Describe photosynthesis.', type: 'free-response', correctAnswer: 'Light becomes chemical energy.', sourceIndex, gradingCriteria,
+      }] }) } }],
+    })
+
+    const result = await handler(makeEvent())
+
+    expect(result.questionCount).toBe(1)
+    expect(convexMutation).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      questions: [expect.objectContaining({
+        question: 'Describe photosynthesis.',
+        gradingCriteria: sourceIndex === 0 ? gradingCriteria : undefined,
+      })],
+    }))
   })
 
   test('[P0] 401 when Convex token is missing', async () => {

@@ -157,7 +157,7 @@ export default defineEventHandler(async (event) => {
       model,
       messages,
       temperature: 0.3,
-      max_tokens: Math.max(3000, questionCount * 400),
+      max_tokens: Math.max(3000, questionCount * 600),
     })
 
     const raw = completion.choices[0]?.message?.content ?? ''
@@ -179,6 +179,7 @@ export default defineEventHandler(async (event) => {
         options: q.options,
         correctAnswer: q.correctAnswer,
         explanation: q.explanation,
+        gradingCriteria: chunk ? q.gradingCriteria : undefined,
         sourceDocumentId: attrs.documentId,
         sourceChunkContent: chunk?.content,
         sourceFilename: chunk ? attrs.filename ?? 'Unknown source' : undefined,

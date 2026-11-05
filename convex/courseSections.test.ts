@@ -259,6 +259,31 @@ describe('courses.updateOutline', () => {
 })
 
 describe('courseSections.finalizeSectionGeneration', () => {
+  test('persists valid free-response rubrics and drops invalid or other-type rubrics', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, sections } = await seedCourseWithSections(t)
+    const gradingCriteria = [{ key: 'fact', description: 'States the supported fact.', weightPercent: 100 }]
+    const base = { order: 0, question: 'State the fact.', type: 'free-response' as const, correctAnswer: 'A fact.', gradingCriteria }
+    await asUser.mutation(api.courseSections.finalizeSectionGeneration, {
+      sectionId: sections[0]._id,
+      quizData: {
+        title: 'Quiz',
+        questions: [
+          base,
+          { ...base, order: 1, gradingCriteria: [{ ...gradingCriteria[0]!, weightPercent: 99 }] },
+          { ...base, order: 2, type: 'fill_in_the_blank' },
+        ],
+      },
+    })
+    const rows = await t.run(ctx => ctx.db.query('quizQuestions').collect())
+    expect(rows).toHaveLength(3)
+    expect(rows[0]?.gradingCriteria).toEqual(gradingCriteria)
+    expect(rows[1]).not.toHaveProperty('gradingCriteria')
+    expect(rows[2]).not.toHaveProperty('gradingCriteria')
+    const content = await asUser.query(api.courseSections.getOfflineCachePayload, { sectionId: sections[0]._id })
+    expect(JSON.stringify(content)).not.toContain('gradingCriteria')
+  })
+
   test('creates quiz and flashcard entities and sets section to ready', async () => {
     const t = convexTest(schema, modules)
     const { asUser, sections } = await seedCourseWithSections(t)

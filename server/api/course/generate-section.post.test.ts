@@ -161,6 +161,34 @@ describe('POST /api/course/generate-section', () => {
     expect(mockMutation).toHaveBeenCalled()
   })
 
+  test('persists rubrics only from the cited source without changing source fallbacks', async () => {
+    vi.mocked(globalThis.readBody).mockResolvedValue({ courseId: 'course_123', sectionId: 'section_123' })
+    mockQuery
+      .mockResolvedValueOnce(mockCourse())
+      .mockResolvedValueOnce([mockSection()])
+      .mockResolvedValueOnce([{ folderId: 'folder_123', documentId: 'doc_1' }])
+    vi.mocked(globalThis.searchDocuments).mockResolvedValue({ data: [
+      { id: '1', content: 'A source fact.', score: 1, attributes: { filename: 'source.pdf' } },
+      { id: '2', content: 'Another fact.', score: 1, attributes: { filename: 'other.pdf' } },
+    ] })
+    const gradingCriteria = [{ key: 'fact', description: 'States the source fact.', weightPercent: 100 }]
+    const base = { order: 0, question: 'State the fact.', type: 'free-response', correctAnswer: 'A source fact.', sourceIndex: 0, gradingCriteria }
+    vi.mocked(globalThis.generateCompletion).mockResolvedValue(textCompletionResponse(JSON.stringify({
+      title: 'Quiz', questions: [base, { ...base, order: 1, sourceIndex: 99 }, {
+        ...base, order: 2, type: 'multiple-choice', options: ['A', 'B', 'C', 'D'], correctAnswer: 'A', sourceIndex: 99,
+      }],
+    })))
+    mockMutation.mockResolvedValue({ status: 'ready', blockCount: 2 })
+
+    await handler(makeEvent())
+
+    expect(mockMutation).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ quizData: expect.objectContaining({ questions: [
+      expect.objectContaining({ gradingCriteria, sourceChunkContent: 'A source fact.' }),
+      expect.objectContaining({ gradingCriteria: undefined, sourceChunkContent: 'Another fact.' }),
+      expect.objectContaining({ gradingCriteria: undefined, sourceChunkContent: 'A source fact.' }),
+    ] }) }))
+  })
+
   test('characterizes V1 publishing model-generated text after empty document retrieval', async () => {
     vi.mocked(globalThis.readBody).mockResolvedValue({
       courseId: 'course_123',
