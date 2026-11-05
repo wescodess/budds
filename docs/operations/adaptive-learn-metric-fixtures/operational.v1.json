@@ -1,0 +1,29 @@
+{
+  "version": "adaptive_learn_metric_fixture.v1",
+  "fixtureId": "operational.v1",
+  "synthetic": true,
+  "windowStart": 100000,
+  "windowEnd": 400000,
+  "coverage": { "firstValue": true, "providerBoundaries": true, "ownerEvents": true },
+  "firstValueEvents": [
+    { "eventId": "fv1", "userId": "synthetic-owner", "threadId": "synthetic-thread-1", "opportunityOrdinal": 1, "eventVersion": "thread_command_committed.v1", "occurredAt": 100000, "firstValueEligibility": "ready_factual_content", "cohort": "synthetic", "activityContractVersion": "learn-adaptive.activity-contract.v1" },
+    { "eventId": "fv2", "userId": "synthetic-owner", "threadId": "synthetic-thread-1", "opportunityOrdinal": 1, "eventVersion": "meaningful_activity_started.v1", "occurredAt": 190000 },
+    { "eventId": "fv3", "userId": "synthetic-owner", "threadId": "synthetic-thread-2", "opportunityOrdinal": 1, "eventVersion": "thread_command_committed.v1", "occurredAt": 100000, "firstValueEligibility": "ready_standalone_non_factual", "cohort": "synthetic", "activityContractVersion": "learn-adaptive.activity-contract.v1" },
+    { "eventId": "fv4", "userId": "synthetic-owner", "threadId": "synthetic-thread-3", "opportunityOrdinal": 1, "eventVersion": "thread_command_committed.v1", "occurredAt": 100000, "firstValueEligibility": "preparing", "cohort": "synthetic", "activityContractVersion": "learn-adaptive.activity-contract.v1" },
+    { "eventId": "fv5", "userId": "synthetic-owner", "threadId": "synthetic-thread-4", "opportunityOrdinal": 1, "eventVersion": "thread_command_committed.v1", "occurredAt": 100000, "firstValueEligibility": "excluded", "firstValueExclusionCode": "explicit_exclusion", "cohort": "synthetic", "activityContractVersion": "learn-adaptive.activity-contract.v1" },
+    { "eventId": "fv6", "userId": "synthetic-owner", "threadId": "synthetic-thread-5", "opportunityOrdinal": 1, "eventVersion": "thread_command_committed.v1", "occurredAt": 100000, "firstValueEligibility": "excluded", "firstValueExclusionCode": "not_authenticated", "cohort": "synthetic", "activityContractVersion": "learn-adaptive.activity-contract.v1" },
+    { "eventId": "fv7", "userId": "synthetic-owner", "threadId": "synthetic-thread-6", "opportunityOrdinal": 1, "eventVersion": "thread_command_committed.v1", "occurredAt": 100000, "firstValueEligibility": "excluded", "firstValueExclusionCode": "flag_ineligible", "cohort": "synthetic", "activityContractVersion": "learn-adaptive.activity-contract.v1" },
+    { "eventId": "fv8", "userId": "synthetic-owner", "threadId": "synthetic-thread-7", "opportunityOrdinal": 1, "eventVersion": "thread_command_committed.v1", "occurredAt": 100000, "firstValueEligibility": "excluded", "firstValueExclusionCode": "evidence_blocked_at_commit", "cohort": "synthetic", "activityContractVersion": "learn-adaptive.activity-contract.v1" },
+    { "eventId": "fv9", "userId": "synthetic-owner", "threadId": "synthetic-thread-8", "opportunityOrdinal": 1, "eventVersion": "thread_command_committed.v1", "occurredAt": 100000, "firstValueEligibility": "excluded", "firstValueExclusionCode": "content_not_published_at_commit", "cohort": "synthetic", "activityContractVersion": "learn-adaptive.activity-contract.v1" },
+    { "eventId": "fv10", "userId": "synthetic-owner", "threadId": "synthetic-thread-9", "opportunityOrdinal": 1, "eventVersion": "thread_command_committed.v1", "occurredAt": 100000, "firstValueEligibility": "excluded", "firstValueExclusionCode": "standalone_activity_invalid", "cohort": "synthetic", "activityContractVersion": "learn-adaptive.activity-contract.v1" }
+  ],
+  "providerBoundaries": [
+    { "eventId": "b1", "sourceVersion": "provider_boundary_fixture.v1", "boundaryId": "synthetic-boundary-1", "occurredAt": 110000, "reservationDecision": "admitted", "dispatchState": "dispatched", "dispatchedAt": 110000, "completedAt": 111000, "recordedCostUsdMicros": 1000, "renderAttempt": true },
+    { "eventId": "b2", "sourceVersion": "provider_boundary_fixture.v1", "boundaryId": "synthetic-boundary-2", "occurredAt": 120000, "reservationDecision": "admitted", "dispatchState": "dispatched", "dispatchedAt": 120000, "completedAt": 122000, "recordedCostUsdMicros": 2000, "renderAttempt": true },
+    { "eventId": "b3", "sourceVersion": "provider_boundary_fixture.v1", "boundaryId": "synthetic-boundary-3", "occurredAt": 130000, "reservationDecision": "quota_denied", "dispatchState": "not_dispatched", "dispatchedAt": null, "completedAt": null, "recordedCostUsdMicros": null, "renderAttempt": false }
+  ],
+  "ownerEvents": [
+    { "eventId": "o1", "boundaryId": "synthetic-boundary-2", "eventVersion": "provider_ambiguity.v1", "occurredAt": 123000, "providerStage": "reconciliation" },
+    { "eventId": "o2", "boundaryId": "synthetic-boundary-2", "eventVersion": "canvas_render_failure.v1", "occurredAt": 124000, "outcomeCode": "fallback_rendered" }
+  ]
+}
