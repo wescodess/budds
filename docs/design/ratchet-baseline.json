@@ -23,6 +23,7 @@
     "app/components/audio-overview/AudioOverviewPlayer.vue": 1,
     "app/components/audio-overview/PublicAudioShell.vue": 1,
     "app/components/audio-overview/StickyMiniPlayer.vue": 2,
+    "app/components/dashboard/ChatHero.vue": 1,
     "app/components/folders/IconSelect.vue": 2,
     "app/components/learn/AudioBlock.vue": 1
   },

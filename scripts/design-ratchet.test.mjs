@@ -15,6 +15,8 @@ describe('countViolations', () => {
   it.each([
     ['uppercase', '<p class="uppercase text-xs tracking-wide" /><p class="font-medium md:uppercase" />', 2],
     ['hover-lift', '<div class="hover:translate-y-[-2px] hover:[&>svg]:scale-105" />', 2],
+    ['hover-lift', '<div class="hover:translate-y-1 group-hover:translate-x-0.5 hover:group-data-[collapsible=offcanvas]:scale-105 hover:[&:not(.x)]:scale-105" />', 4],
+    ['raw-amber-orange', '<div :class="[active?\'bg-amber-500\':null,{\'text-orange-400\':open}]" />', 2],
     ['uppercase', '<p class="!uppercase md:!uppercase" />', 2],
     ['raw-amber-orange', '<p class="!bg-amber-500 hover:!text-orange-400" />', 2],
     ['backdrop-blur', '<p class="!backdrop-blur-sm" />', 1],
@@ -75,7 +77,7 @@ describe('countViolations', () => {
       <p class="tracking-wide" />
       <p>It's ready</p>
       <p>uppercase</p>
-      <div class="bg-primary text-muted-foreground hover:translate-x-1 scale-105" />
+      <div class="bg-primary text-muted-foreground translate-x-1 scale-105" />
       <div class="text-[12px] bg-[var(--card)] text-[#invalid]" />
       --color-folder-indigo-ink: #6366f1;
       const NotSparkles = 'style'; <stylesheet />

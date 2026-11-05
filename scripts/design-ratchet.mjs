@@ -22,12 +22,12 @@ export function countViolations(source) {
   counts.gradients = [...source.matchAll(/\bbg-(?:gradient-to-[a-z]+|linear-(?:to-[a-z]+|\d+|\[)|radial|conic)|\b(?:repeating-)?(?:linear|radial|conic)-gradient\s*\(/g)].length
 
   // Scan all text, including CSS @apply and comments, without pairing quotes.
-  // Keep colons and brackets for variants, object keys and arbitrary values.
-  for (const raw of source.split(/[\s"'`=;,{}()]+/).filter(Boolean)) {
-    const token = raw.replace(/(^|:)!/g, '$1')
+  // Split only where a class cannot continue, so variants and arbitrary values stay whole.
+  for (const raw of source.split(/[\s"'`;]+/)) {
+    const token = raw.replace(/^[{(,]+|[,)}>]+$/g, '').replace(/(^|:)!/g, '$1')
     if (/(?:^|:)uppercase!?:?$/.test(token)) counts.uppercase++
     if (/(?:^|:)backdrop-blur(?:-|!?$)/.test(token)) counts['backdrop-blur']++
-    if (/(?:^|:)(?:group-|peer-)?hover(?:\/[\w-]+)?:(?:[^:]+:)*(?:scale(?:-[xy])?-|-translate-[xy]-|translate-[xy]-\[-)/.test(token)) counts['hover-lift']++
+    if (/(?:^|:)(?:group-|peer-)?hover(?:\/[\w-]+)?:(?:[^:]+:)*(?:scale(?:-[xy])?-|-?translate-[xy]-)/.test(token)) counts['hover-lift']++
     if (/(?:^|:)(?:[a-z]+-)+(?:amber|orange)-\d/.test(token)) counts['raw-amber-orange']++
     if (/(?:^|:)(?:[a-z]+-)+(?:violet|indigo)-\d/.test(token)) counts['violet-indigo']++
     if (/-\[(?:[a-z-]+:)?#(?:[\da-f]{3}|[\da-f]{4}|[\da-f]{6}|[\da-f]{8})\]/i.test(token)) counts['raw-hex']++
