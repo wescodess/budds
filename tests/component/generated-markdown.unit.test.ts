@@ -122,6 +122,12 @@ describe('V1 and chat Mermaid source grammar', () => {
     expect(validateCompatibilityMermaid(source)).toEqual({ description: 'Diagram' })
   })
 
+  it('keeps line break tags and slanted shapes out of the session grammar', () => {
+    expect(validatePassiveMermaid('graph TD\naccDescr: Start leads to Finish.\nA[One<br/>Two] --> B')).toBeNull()
+    expect(validatePassiveMermaid('sequenceDiagram\naccDescr: Alice greets Bob.\nAlice->>Bob: One<br>Two')).toBeNull()
+    expect(validatePassiveMermaid('graph TD\naccDescr: Start leads to Finish.\nA[\\One\\] --> B')).toBeNull()
+  })
+
   it('uses a description when the diagram supplies one and never derives one', () => {
     expect(validateCompatibilityMermaid('graph TD\naccDescr: Start leads to Finish.\nA[Start] --> B[Finish]')).toEqual({ description: 'Start leads to Finish.' })
     expect(validateCompatibilityMermaid('graph TD\naccTitle: Overview\nA[Start] --> B[Finish]')).toEqual({ description: 'Diagram' })

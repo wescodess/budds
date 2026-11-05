@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type {} from '../support/generated-content-browser'
-import { compatibleDiagrams, refusedDiagrams, rejectedGeneratedContent } from '../support/generated-content-fixtures'
+import { compatibleDiagrams, multilineDiagrams, refusedDiagrams, rejectedGeneratedContent } from '../support/generated-content-fixtures'
 
 let browser: Browser
 let page: Page
@@ -139,6 +139,27 @@ describe('real browser Mermaid boundary', () => {
       expect(layout.height).toBeGreaterThan(50)
       expect(layout.shapes).toBeGreaterThan(0)
       expect(layout.clipped).toEqual([])
+      expect(networkRequests).toEqual([])
+      await page.evaluate(() => window.__generatedContentTest.unmount())
+    }, 45_000)
+
+    it.each(multilineDiagrams)('draws %s as separate SVG text lines', async (_name, source, lines) => {
+      await mountFence(source)
+      const diagram = page.locator('#host svg[role="img"]')
+      await expect.poll(() => diagram.count(), { timeout: 30_000 }).toBe(1)
+      const drawn = await diagram.evaluate((svg) => {
+        const leaves = [...svg.querySelectorAll('text, tspan')].filter(el => !el.querySelector('tspan') && el.textContent?.trim())
+        return {
+          markup: svg.outerHTML,
+          namespaces: [...new Set([...svg.querySelectorAll('*')].map(el => el.namespaceURI))],
+          leaves: leaves.map(el => ({ text: el.textContent!.trim(), top: el.getBoundingClientRect().top })),
+        }
+      })
+      expect(drawn.markup).not.toMatch(/foreignObject|<br|&lt;|<div|<span|<p\b/)
+      expect(drawn.namespaces).toEqual(['http://www.w3.org/2000/svg'])
+      const tops = lines.map(line => drawn.leaves.find(leaf => leaf.text === line)?.top)
+      expect(tops.every(top => top !== undefined)).toBe(true)
+      for (let index = 0; index < lines.length; index += 2) expect(tops[index + 1]!).toBeGreaterThan(tops[index]!)
       expect(networkRequests).toEqual([])
       await page.evaluate(() => window.__generatedContentTest.unmount())
     }, 45_000)

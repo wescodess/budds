@@ -9,11 +9,17 @@ const word = `[${plain}]{1,120}`
 const quoted = `"[${plain}()\\[\\]]{1,120}"`
 const text = `(?:${quoted}|${word})`
 const prose = `[${plain}()\\[\\]"]{1,160}`
+// Mermaid draws these two exact tokens as separate SVG lines; they are admitted only in the labels built from this.
+const breakable = (characters: string, limit: number) => `(?:[${characters}]|<br/?>){1,${limit}}`
+const breakableWord = breakable(plain, 120)
+const breakableQuoted = `"${breakable(`${plain}()\\[\\]`, 120)}"`
+const flowLabel = `(?:${breakableQuoted}|${breakableWord})`
+const sequenceLabel = breakable(`${plain}()\\[\\]"`, 160)
 const identifier = '[A-Za-z0-9][A-Za-z0-9_]{0,31}'
 
 const describedAs = new RegExp(`^(accTitle|accDescr): ([${plain}()\\[\\]"]{1,${MERMAID_LIMITS.description}})$`, 'u')
 const comment = /^%%[^{}]*$/
-const refused = /[\\`]|%%|\$\$|:::|@\{|\bfa[bklrs]?:fa-/iu
+const refused = /`|%%|\$\$|:::|@\{|\bfa[bklrs]?:fa-/iu
 const header = new RegExp(`^(?:flowchart|graph)(?: ${direction})?$`)
 // Mermaid also breaks lines on these, so they could hide a statement from this scan.
 const hasHiddenLineBreak = (source: string) => Array.from(source.replace(/\r\n/g, '\n')).some((char) => {
@@ -25,28 +31,32 @@ const flowchartReserved = new Set(['end', 'subgraph', 'graph', 'flowchart', 'sty
 const sequenceReserved = new Set(['participant', 'actor', 'create', 'destroy', 'box', 'link', 'links', 'properties', 'details', 'loop', 'alt', 'opt', 'par', 'and', 'rect', 'note', 'end', 'else', 'critical', 'option', 'break', 'activate', 'deactivate', 'autonumber', 'title', 'acctitle', 'accdescr'])
 const classReserved = new Set(['class', 'classDef', 'cssClass', 'click', 'callback', 'call', 'link', 'href', 'style', 'note', 'namespace', 'direction', 'end'])
 
+const slantedShape = [`\\[\\\\${flowLabel}\\\\\\]`, `\\[\\\\${flowLabel}/\\]`, `\\[/${flowLabel}\\\\\\]`]
+const slantedShapes = new RegExp(slantedShape.join('|'), 'gu')
+const hasStrayBackslash = (line: string) => line.replace(slantedShapes, '').includes('\\')
+
 const shape = [
-  `\\(\\(\\(${text}\\)\\)\\)`, `\\(\\(${text}\\)\\)`, `\\(\\[${text}\\]\\)`, `\\[\\(${text}\\)\\]`, `\\[\\[${text}\\]\\]`,
-  `\\{\\{${text}\\}\\}`, `\\{${text}\\}`, `\\[${text}\\]`, `\\(${text}\\)`, `>${text}\\]`,
+  `\\(\\(\\(${flowLabel}\\)\\)\\)`, `\\(\\(${flowLabel}\\)\\)`, `\\(\\[${flowLabel}\\]\\)`, `\\[\\(${flowLabel}\\)\\]`, `\\[\\[${flowLabel}\\]\\]`,
+  `\\{\\{${flowLabel}\\}\\}`, `\\{${flowLabel}\\}`, ...slantedShape, `\\[${flowLabel}\\]`, `\\(${flowLabel}\\)`, `>${flowLabel}\\]`,
 ].join('|')
 const flowNode = new RegExp(`(${identifier})(?:${shape})?`, 'uy')
 const flowJoin = / *& */y
-const edgeText = "[\\p{L}\\p{N}\\p{M} ,:'?!_+/&*%]{1,120}"
-const inlineEdgeText = `(?:${quoted}|${edgeText})`
+const edgeCharacters = "\\p{L}\\p{N}\\p{M} ,:'?!_+/&*%"
+const inlineEdgeText = `(?:${breakableQuoted}|${breakable(edgeCharacters, 120)})`
 const flowLink = new RegExp([
   `[xo<]?-- *${inlineEdgeText} *-{2,8}[xo>]?`,
   `[xo<]?== *${inlineEdgeText} *={2,8}[xo>]?`,
   `[xo<]?-\\. *${inlineEdgeText} *\\.-[xo>]?`,
-  `(?:[xo<]?-{2,8}[xo>]|-{3,8}|[xo<]?={2,8}[xo>]|={3,8}|[xo<]?-\\.{1,8}-[xo>]?|~{3,8})(?: *\\|${text}\\|)?`,
+  `(?:[xo<]?-{2,8}[xo>]|-{3,8}|[xo<]?={2,8}[xo>]|={3,8}|[xo<]?-\\.{1,8}-[xo>]?|~{3,8})(?: *\\|${flowLabel}\\|)?`,
 ].join('|'), 'uy')
 const flowSpace = / */y
-const subgraph = new RegExp(`^subgraph(?: (?:${quoted}|${identifier} *\\[${text}\\]|${word}))?$`, 'u')
+const subgraph = new RegExp(`^subgraph(?: (?:${breakableQuoted}|${identifier} *\\[${flowLabel}\\]|${word}))?$`, 'u')
 const flowDirection = new RegExp(`^direction ${direction}$`)
 
 const sequenceArrow = '(?:<<-->>|<<->>|-->>|->>|-->|->|--x|-x|--\\)|-\\))'
-const message = new RegExp(`^(${identifier}) *${sequenceArrow}[+-]? *(${identifier}) *: *${prose}$`, 'u')
-const participant = new RegExp(`^(?:participant|actor) (${identifier})(?: as ${word})?$`, 'u')
-const sequenceNote = new RegExp(`^note (?:left of|right of|over) (${identifier})(?:, *(${identifier}))? *: *${prose}$`, 'iu')
+const message = new RegExp(`^(${identifier}) *${sequenceArrow}[+-]? *(${identifier}) *: *${sequenceLabel}$`, 'u')
+const participant = new RegExp(`^(?:participant|actor) (${identifier})(?: as ${breakableWord})?$`, 'u')
+const sequenceNote = new RegExp(`^note (?:left of|right of|over) (${identifier})(?:, *(${identifier}))? *: *${sequenceLabel}$`, 'iu')
 const sequenceOpen = new RegExp(`^(?:loop|alt|opt|par|critical|break)(?: ${prose})?$`, 'u')
 const sequenceBranch = new RegExp(`^(?:else|and|option)(?: ${prose})?$`, 'u')
 const sequenceActivation = new RegExp(`^(?:activate|deactivate) (${identifier})$`, 'u')
@@ -164,7 +174,7 @@ function classStatement(statement: string, tally: Tally, body: { open: boolean }
 export function validateCompatibilityMermaid(source: string): { description: string } | null {
   if (source.length > MERMAID_LIMITS.source || hasHiddenLineBreak(source)) return null
   const lines = source.split('\n').map(line => line.trim()).filter(line => line && !comment.test(line))
-  if (lines.some(line => refused.test(line))) return null
+  if (lines.some(line => refused.test(line) || hasStrayBackslash(line))) return null
   const splitsStatements = /^(?:flowchart|graph|sequenceDiagram)\b/.test(lines[0] ?? '')
   const statements = splitsStatements ? lines.flatMap(line => line.split(';').map(part => part.trim()).filter(Boolean)) : lines
   const first = statements[0] ?? ''
