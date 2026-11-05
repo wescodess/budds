@@ -14,8 +14,7 @@ export const rules = [
   'violet-indigo',
 ]
 
-// Existing app/ pairs are adjacent; allow a short conditional or class-map value.
-const UPPERCASE_TRACKING_WINDOW = 4
+const UPPERCASE_TRACKING_WINDOW = 12
 
 export function countViolations(source) {
   const counts = Object.fromEntries(rules.map(rule => [rule, 0]))
@@ -24,19 +23,22 @@ export function countViolations(source) {
   counts.gradients = [...source.matchAll(/\bbg-(?:gradient-to-[a-z]+|linear-(?:to-[a-z]+|\d+|\[)|radial|conic)|\b(?:repeating-)?(?:linear|radial|conic)-gradient\s*\(/g)].length
 
   // Scan all text, including CSS @apply and comments, without pairing quotes.
+  // Tags and statements bound a class list, so neighbouring elements never pair.
   // Keep colons and brackets for variants, object keys and arbitrary values.
-  const tokens = source.split(/[\s"'`<>=;,{}()]+/).filter(Boolean)
-  for (const [index, token] of tokens.entries()) {
-    if (/(?:^|:)uppercase!?:?$/.test(token)
-      && tokens.slice(Math.max(0, index - UPPERCASE_TRACKING_WINDOW), index + UPPERCASE_TRACKING_WINDOW + 1)
-        .some(nearby => /(?:^|:)tracking-/.test(nearby))) {
-      counts['uppercase-tracking']++
+  for (const segment of source.split(/[<>;]/)) {
+    const tokens = segment.split(/[\s"'`=,{}()]+/).filter(Boolean)
+    for (const [index, token] of tokens.entries()) {
+      if (/(?:^|:)uppercase!?:?$/.test(token)
+        && tokens.slice(Math.max(0, index - UPPERCASE_TRACKING_WINDOW), index + UPPERCASE_TRACKING_WINDOW + 1)
+          .some(nearby => /(?:^|:)tracking-/.test(nearby))) {
+        counts['uppercase-tracking']++
+      }
+      if (/(?:^|:)backdrop-blur(?:-|!?$)/.test(token)) counts['backdrop-blur']++
+      if (/(?:^|:)(?:group-|peer-)?hover(?:\/[\w-]+)?:(?:[^:]+:)*(?:scale(?:-[xy])?-|-translate-[xy]-)/.test(token)) counts['hover-lift']++
+      if (/(?:^|:)(?:[a-z]+-)+(?:amber|orange)-\d/.test(token)) counts['raw-amber-orange']++
+      if (/(?:^|:)(?:[a-z]+-)+(?:violet|indigo)-\d/.test(token)) counts['violet-indigo']++
+      if (/-\[(?:[a-z-]+:)?#(?:[\da-f]{3}|[\da-f]{4}|[\da-f]{6}|[\da-f]{8})\]/i.test(token)) counts['raw-hex']++
     }
-    if (/(?:^|:)backdrop-blur(?:-|!?$)/.test(token)) counts['backdrop-blur']++
-    if (/(?:^|:)(?:group-|peer-)?hover(?:\/[\w-]+)?:(?:[^:]+:)*(?:scale(?:-[xy])?-|-translate-[xy]-)/.test(token)) counts['hover-lift']++
-    if (/(?:^|:)(?:[a-z]+-)+(?:amber|orange)-\d/.test(token)) counts['raw-amber-orange']++
-    if (/(?:^|:)(?:[a-z]+-)+(?:violet|indigo)-\d/.test(token)) counts['violet-indigo']++
-    if (/-\[(?:[a-z-]+:)?#(?:[\da-f]{3}|[\da-f]{4}|[\da-f]{6}|[\da-f]{8})\]/i.test(token)) counts['raw-hex']++
   }
   return counts
 }

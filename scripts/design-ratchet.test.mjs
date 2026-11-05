@@ -58,11 +58,12 @@ describe('countViolations', () => {
   })
 
   it.each([
-    ['uppercase a b c tracking-wide', 1],
-    ['tracking-wide a b c uppercase', 1],
-    ['uppercase a b c d tracking-wide', 0],
-    ['tracking-wide a b c d uppercase', 0],
-  ])('uses a four-token window in either direction: %s', (source, expected) => {
+    ['<p class="uppercase text-xs font-medium text-muted-foreground leading-none tracking-wide" />', 1],
+    ['<p class="tracking-wide text-xs font-medium text-muted-foreground leading-none uppercase" />', 1],
+    ['<h1 class="uppercase">x</h1><h2 class="tracking-wide">y</h2>', 0],
+    ['.a { @apply uppercase; } .b { @apply tracking-wide; }', 0],
+    [`uppercase ${'a '.repeat(12)}tracking-wide`, 0],
+  ])('pairs uppercase and tracking only within one class list: %s', (source, expected) => {
     expect(countViolations(source)['uppercase-tracking']).toBe(expected)
   })
 
