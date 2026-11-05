@@ -16,6 +16,7 @@ describe('countViolations', () => {
     ['uppercase', '<p class="uppercase text-xs tracking-wide" /><p class="font-medium md:uppercase" />', 2],
     ['hover-lift', '<div class="hover:translate-y-[-2px] hover:[&>svg]:scale-105" />', 2],
     ['hover-lift', '<div class="hover:translate-y-1 group-hover:translate-x-0.5 hover:group-data-[collapsible=offcanvas]:scale-105 hover:[&:not(.x)]:scale-105" />', 4],
+    ['hover-lift', '<div class="hover:translate-px hover:translate-1" />', 2],
     ['raw-amber-orange', '<div :class="[active?\'bg-amber-500\':null,{\'text-orange-400\':open}]" />', 2],
     ['uppercase', '<p class="!uppercase md:!uppercase" />', 2],
     ['raw-amber-orange', '<p class="!bg-amber-500 hover:!text-orange-400" />', 2],
@@ -222,6 +223,12 @@ describe('run', () => {
     const { root } = await fixture()
     await writeFile(path.join(root, 'app', file), '.x { @apply uppercase; }')
     expect(await run(root)).toBe(1)
+  })
+
+  it('explains how to recover from a conflicted baseline', async () => {
+    const { root, baselinePath } = await fixture()
+    await writeFile(baselinePath, '<<<<<<< HEAD\n{}\n=======\n{}\n>>>>>>> branch\n')
+    await expect(run(root)).rejects.toThrow(/merge conflict markers.*--update/)
   })
 
   it('scans only app/ and rejects unsupported arguments', async () => {

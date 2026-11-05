@@ -27,7 +27,7 @@ export function countViolations(source) {
     const token = raw.replace(/^[{(,]+|[,)}>]+$/g, '').replace(/(^|:)!/g, '$1')
     if (/(?:^|:)uppercase!?:?$/.test(token)) counts.uppercase++
     if (/(?:^|:)backdrop-blur(?:-|!?$)/.test(token)) counts['backdrop-blur']++
-    if (/(?:^|:)(?:group-|peer-)?hover(?:\/[\w-]+)?:(?:[^:]+:)*(?:scale(?:-[xy])?-|-?translate-[xy]-)/.test(token)) counts['hover-lift']++
+    if (/(?:^|:)(?:group-|peer-)?hover(?:\/[\w-]+)?:(?:[^:]+:)*(?:scale(?:-[xy])?-|-?translate-(?:[xy]-|px|\d|\[))/.test(token)) counts['hover-lift']++
     if (/(?:^|:)(?:[a-z]+-)+(?:amber|orange)-\d/.test(token)) counts['raw-amber-orange']++
     if (/(?:^|:)(?:[a-z]+-)+(?:violet|indigo)-\d/.test(token)) counts['violet-indigo']++
     if (/-\[(?:[a-z-]+:)?#(?:[\da-f]{3}|[\da-f]{4}|[\da-f]{6}|[\da-f]{8})\]/i.test(token)) counts['raw-hex']++
@@ -88,7 +88,13 @@ async function collectFiles(root, directory = 'app') {
 export async function run(root, args = []) {
   if (args.some(arg => arg !== '--update') || args.length > 1) throw new Error('Usage: pnpm design:ratchet [--update]')
   const baselinePath = path.join(root, 'docs/design/ratchet-baseline.json')
-  const baseline = JSON.parse(await readFile(baselinePath, 'utf8'))
+  let baseline
+  try {
+    baseline = JSON.parse(await readFile(baselinePath, 'utf8'))
+  }
+  catch (error) {
+    throw new Error(`Cannot read docs/design/ratchet-baseline.json: ${error.message}. Resolve any merge conflict markers, then run pnpm design:ratchet --update.`, { cause: error })
+  }
   validateBaseline(baseline)
   const current = countFiles(await collectFiles(root))
   const changes = compareCounts(baseline, current)
