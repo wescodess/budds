@@ -1,10 +1,14 @@
 // @vitest-environment node
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { compareCounts, countFiles, countViolations, rules, run } from './design-ratchet.mjs'
 
+const execFileAsync = promisify(execFile)
 const empty = () => countFiles({})
 
 describe('countViolations', () => {
@@ -63,6 +67,10 @@ describe('countViolations', () => {
     ['<h1 class="uppercase">x</h1><h2 class="tracking-wide">y</h2>', 0],
     ['.a { @apply uppercase; } .b { @apply tracking-wide; }', 0],
     [`uppercase ${'a '.repeat(12)}tracking-wide`, 0],
+    ['<div class="[&>svg]:uppercase [&>svg]:tracking-wide" />', 1],
+    ['<div :class="count > 1 ? \'uppercase\' : \'tracking-wide\'" />', 1],
+    ['<div :class="items.map(item => \'uppercase\').concat(\'tracking-wide\')" />', 1],
+    ['const classes = ref<string>(\'uppercase\'); const other = \'tracking-wide\'', 0],
   ])('pairs uppercase and tracking only within one class list: %s', (source, expected) => {
     expect(countViolations(source)['uppercase-tracking']).toBe(expected)
   })
@@ -191,6 +199,16 @@ describe('run', () => {
     expect(await run(root, ['--update'])).toBe(1)
     await writeFile(baselinePath, JSON.stringify(countFiles({ 'app/new.vue': '<Sparkles />' })))
     expect(await run(root)).toBe(0)
+  })
+
+  it('exits non-zero from the real CLI entrypoint, including through a symlink', async () => {
+    const script = fileURLToPath(new URL('./design-ratchet.mjs', import.meta.url))
+    const { root } = await fixture()
+    const link = path.join(root, 'ratchet-link.mjs')
+    await symlink(script, link)
+    for (const entry of [script, link]) {
+      await expect(execFileAsync(process.execPath, [entry, '--bad'])).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining('Usage:') })
+    }
   })
 
   it('scans only app/ and rejects unsupported arguments', async () => {

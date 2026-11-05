@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs'
 import { readdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -23,10 +24,10 @@ export function countViolations(source) {
   counts.gradients = [...source.matchAll(/\bbg-(?:gradient-to-[a-z]+|linear-(?:to-[a-z]+|\d+|\[)|radial|conic)|\b(?:repeating-)?(?:linear|radial|conic)-gradient\s*\(/g)].length
 
   // Scan all text, including CSS @apply and comments, without pairing quotes.
-  // Tags and statements bound a class list, so neighbouring elements never pair.
+  // Closing tags and statements bound a class list, so neighbouring elements never pair.
   // Keep colons and brackets for variants, object keys and arbitrary values.
-  for (const segment of source.split(/[<>;]/)) {
-    const tokens = segment.split(/[\s"'`=,{}()]+/).filter(Boolean)
+  for (const segment of source.split(/["']\s*\/?>|<\/|;/)) {
+    const tokens = segment.split(/[\s"'`<>=,{}()]+/).filter(Boolean)
     for (const [index, token] of tokens.entries()) {
       if (/(?:^|:)uppercase!?:?$/.test(token)
         && tokens.slice(Math.max(0, index - UPPERCASE_TRACKING_WINDOW), index + UPPERCASE_TRACKING_WINDOW + 1)
@@ -118,7 +119,7 @@ export async function run(root, args = []) {
   return 0
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     process.exitCode = await run(fileURLToPath(new URL('../', import.meta.url)), process.argv.slice(2))
   }
