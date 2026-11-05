@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { MDCElement, MDCNode, MDCRoot } from '@nuxtjs/mdc'
 import { GENERATED_MARKDOWN_LIMITS, generatedTextFallback, parseGeneratedMarkdown, validateGeneratedLink } from '~/utils/generated-markdown'
 import { MERMAID_LIMITS, validatePassiveMermaid } from '~/utils/passive-mermaid'
 import { validateCompatibilityMermaid } from '~/utils/compatibility-mermaid'
@@ -57,13 +58,174 @@ describe('passive generated content policy', () => {
   it.each([
     'x'.repeat(GENERATED_MARKDOWN_LIMITS.source + 1),
     Array.from({ length: 260 }, (_, i) => `Paragraph ${i}`).join('\n\n'),
-    '> '.repeat(10) + 'Deep content',
     'Source 1 '.repeat(300),
-    Array.from({ length: 3 }, () => '```mermaid\ngraph TD\nA --> B\n```').join('\n\n'),
-  ])('returns complete escaped text when a compatibility limit is exceeded', async (source) => {
+  ])('returns complete escaped text when a document-wide limit is exceeded', async (source) => {
     const result = await parseGeneratedMarkdown(source, context)
     expect(result.body).toBeNull()
     expect(result.fallback.map(segment => segment.type === 'text' ? segment.value : `[${segment.index}]`).join('')).toBe(source)
+  })
+
+  const refusedBlocks = (body: MDCRoot | null) => body!.children.filter(node => node.type === 'element' && 'data-generated-refused' in (node.props ?? {}))
+  const literal = (node: MDCNode) => (node as MDCElement).children.map(child => child.type === 'text' ? child.value : '').join('')
+
+  it.each([
+    '---\ntitle: canary\n---\nBody',
+    '--- \ntitle: canary\n---\nBody',
+    '\uFEFF---\ntitle: canary\n---\nBody',
+    '---',
+  ])('keeps document-wide fallback for frontmatter %j', async (source) => {
+    const result = await parseGeneratedMarkdown(source, context)
+    expect(result.body).toBeNull()
+    expect(result.tailRefused).toBe(false)
+  })
+
+  it('degrades only the third diagram and only over-deep blocks', async () => {
+    const diagram = '```mermaid\ngraph TD\nA --> B\n```'
+    const diagrams = await parseGeneratedMarkdown([diagram, diagram, diagram].join('\n\n'), context)
+    expect(diagrams.body!.children.filter(node => node.type === 'element' && node.tag === 'pre')).toHaveLength(2)
+    expect(refusedBlocks(diagrams.body).map(literal)).toEqual([diagram])
+    const deep = `${'> '.repeat(30)}Deep content`
+    const nested = await parseGeneratedMarkdown(`Good\n\n${deep}\n\nTail`, context)
+    expect(refusedBlocks(nested.body).map(literal)).toEqual([deep])
+    expect(nested.body!.children).toHaveLength(3)
+  })
+
+  it('does not let a refused block consume budgets later blocks need', async () => {
+    const diagram = '```mermaid\ngraph TD\nA --> B\n```'
+    const result = await parseGeneratedMarkdown(`> ${diagram.replaceAll('\n', '\n> ')}\n> <b>refused</b>\n\n${diagram}\n\n${diagram}`, context)
+    expect(refusedBlocks(result.body)).toHaveLength(1)
+    expect(result.body!.children.filter(node => node.type === 'element' && node.tag === 'pre')).toHaveLength(2)
+  })
+
+  it('slices refused blocks exactly across CRLF, tabs and a byte order mark', async () => {
+    for (const [source, expected] of [
+      ['Good\r\n\r\n<b>one</b>\r\n\r\nTail', '<b>one</b>'],
+      ['\tcode\n\n<b>one</b>\n\nTail', '<b>one</b>'],
+      ['\uFEFFGood\n\n<b>one</b>', '<b>one</b>'],
+      ['- \titem\n\n<b>one</b>', '<b>one</b>'],
+    ] as const) {
+      expect(refusedBlocks((await parseGeneratedMarkdown(source, context)).body).map(literal)).toEqual([expected])
+    }
+  })
+
+  it('never reaches the compiler with refused content, so a malformed destination stays block-scoped', async () => {
+    const result = await parseGeneratedMarkdown('Good\n\nSee https://example.invalid/%C3 now\n\nTail', context)
+    expect(refusedBlocks(result.body).map(literal)).toEqual(['See https://example.invalid/%C3 now'])
+    expect(result.tailRefused).toBe(false)
+  })
+
+  it('reports a refused open block, including one refused through a trailing definition', async () => {
+    expect((await parseGeneratedMarkdown('Good\n\nok :smile', context)).tailRefused).toBe(true)
+    expect((await parseGeneratedMarkdown('Good :smile\n\nTail', context)).tailRefused).toBe(false)
+    expect((await parseGeneratedMarkdown('Read [a][r] now\n\n[r]: https://example.invalid/%C3', context)).tailRefused).toBe(true)
+    expect((await parseGeneratedMarkdown('Good\n\n[r]: https://example.invalid', context)).tailRefused).toBe(false)
+  })
+
+  describe('braces', () => {
+    it.each([
+      ['Set {1, 2, 3}', 'Set {1, 2, 3}'],
+      ['$x_{i}$', '$x_{i}$'],
+      ['x_{i}', 'x_{i}'],
+      ['a_{i} b_{j}', 'a_{i} b_{j}'],
+      ['$\\sum_{i=1}^{n} x_{i}$', '$\\sum_{i=1}^{n} x_{i}$'],
+      ['x*{i}', 'x*{i}'],
+      ['word{.canary}', 'word{.canary}'],
+      ['{.canary}', '{.canary}'],
+      ['\\{\\{ value \\}\\}', '{{ value }}'],
+    ])('keeps %s as one plain text node', async (source, value) => {
+      const result = await parseGeneratedMarkdown(source, { ...context, sourceCount: 0 })
+      expect(result.body!.children).toEqual([{ type: 'element', tag: 'p', props: { __ignoreMap: '' }, children: [{ type: 'text', value }] }])
+    })
+
+    it.each([
+      'x_{.canary}',
+      'x_{#canary}',
+      'x_{title="canary"}',
+      'x_{:title="canary"}',
+      '*{.canary}',
+      'x_{i}{.canary}',
+      '**x**{.canary}',
+      '*x*{i}',
+      '[x](https://example.invalid){@click="canary"}',
+      '**x**{@click="canary"}',
+      '`x`{@click="canary"}',
+      '[1]{@click="canary"}',
+      '[**x**{@click="canary"}](https://example.invalid)',
+      '`x`{.canary}',
+      '[x]{.canary}',
+      '[x](https://example.invalid){.canary}',
+      '{{ canary }}',
+      'x_{{ canary }}',
+      ':canary',
+      ':canary{title="canary"}',
+      '&lt;x_{i}',
+      '- a\n  x_{i}\n  y_{.canary}',
+    ])('refuses the attribute, binding or component form %j to literal text', async (source) => {
+      const result = await parseGeneratedMarkdown(source, context)
+      expect(result.body!.children).toHaveLength(1)
+      expect(refusedBlocks(result.body).map(literal)).toEqual([source])
+    })
+  })
+
+  it('preserves zero starts, column alignment and double-tilde deletion only', async () => {
+    const list = (await parseGeneratedMarkdown('0. a\n1. b', context)).body!.children[0] as MDCElement
+    expect(list.props!.start).toBe(0)
+    const table = (await parseGeneratedMarkdown('| a | b | c | d |\n|:--|:-:|--:|---|\n| 1 | 2 | 3 | 4 |', context)).body!.children[0] as MDCElement
+    const row = ((table.children[1] as MDCElement).children[0] as MDCElement).children as MDCElement[]
+    expect(row.map(cell => cell.props!.class)).toEqual(['text-left!', 'text-center!', 'text-right!', undefined])
+    expect(JSON.stringify((await parseGeneratedMarkdown('~~a~~', context)).body)).toContain('"tag":"del"')
+    expect(JSON.stringify((await parseGeneratedMarkdown('H~2~O', context)).body)).not.toContain('"tag":"del"')
+  })
+
+  it.each([
+    ['nested quotes', '> '.repeat(30_000)],
+    ['nested list markers', '- '.repeat(30_000)],
+    ['ordered list markers', '1. '.repeat(20_000)],
+    ['component fences', '::a\n'.repeat(15_000)],
+    ['open brackets', '['.repeat(60_000)],
+    ['open braces', '{'.repeat(60_000)],
+    ['citation labels', `[Source 1: ${' '.repeat(60_000)}`],
+  ])('stays fast and escaped on pathological %s', async (_name, source) => {
+    const started = Date.now()
+    const result = await parseGeneratedMarkdown(source, context)
+    expect(result.fallback.map(segment => segment.type === 'text' ? segment.value : '').join('')).toBe(source)
+    expect(normalizeAssistantCitations(source)).toBe(source)
+    expect(Date.now() - started).toBeLessThan(20_000)
+  }, 40_000)
+
+  it('keeps document-wide fallback only when pathological nesting cannot reach the parser', async () => {
+    expect((await parseGeneratedMarkdown(`Good\n\n${'> '.repeat(65)}x`, context)).body).toBeNull()
+    expect((await parseGeneratedMarkdown(`Good\n\n${'> '.repeat(64)}x`, context)).body).not.toBeNull()
+  })
+
+  it('bounds pathological depth while admitting ordinary nesting', async () => {
+    const nested = (levels: number) => Array.from({ length: levels }, (_, level) => `${'  '.repeat(level)}- **item ${level}**`).join('\n')
+    expect(refusedBlocks((await parseGeneratedMarkdown(nested(6), context)).body)).toHaveLength(0)
+    expect(refusedBlocks((await parseGeneratedMarkdown(nested(12), context)).body)).toHaveLength(1)
+  })
+
+  it.each([
+    ['> Quoted fact [1].', 1],
+    ['For x < y, choose y [1].', 1],
+    ['If a > b and c <= d, stop [1] (Source 2).', 2],
+    ['Set {1, 2} holds [1].', 1],
+    ['A -> B [1]', 1],
+    ['3<5 [1]', 1],
+    ['Inline <b>markup</b> [1]', 0],
+    ['<cite>[1]</cite>', 0],
+    ['[1]{.canary}', 0],
+    ['Note {[1]} here', 0],
+    ['{{ [1] }}', 0],
+    ['Open {[1]', 0],
+    ['> :canary[1]', 0],
+    ['> [1]: https://example.invalid', 0],
+    ['Fact [1] (see the table)', 1],
+    ['[Label [1]](https://example.invalid)', 0],
+    ['::canary[1]', 0],
+  ])('fallback for %s keeps the same text with %i application-created citations', (source, citations) => {
+    const segments = generatedTextFallback(source, 2)
+    expect(segments.filter(segment => segment.type === 'citation')).toHaveLength(citations)
+    if (!citations) expect(segments.map(segment => segment.type === 'text' ? segment.value : '').join('')).toBe(source)
   })
 
   it('normalizes an external URL once and never grants navigation props', () => {

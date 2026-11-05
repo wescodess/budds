@@ -35,28 +35,40 @@ const isAssistant = computed(() => props.role === 'assistant')
 const markdownBody = shallowRef<MDCRoot | null>(null)
 const markdownParseError = ref(false)
 const isMarkdownParsing = ref(false)
+const hasMarkdownResult = ref(false)
 const applicationOrigins = [useRequestURL().origin, useRuntimeConfig().public.siteUrl].filter(Boolean)
 let markdownParseGeneration = 0
 let parsing: Promise<void> | undefined
+let settledContent: string | null = null
 
 const fallbackSegments = computed(() => generatedTextFallback(props.content, sourcesRef.value.length))
-const showMarkdownSkeleton = computed(() => isAssistant.value && isMarkdownParsing.value && !markdownBody.value && props.content.trim().length > 0)
+const showMarkdownSkeleton = computed(() => isAssistant.value && isMarkdownParsing.value && !hasMarkdownResult.value && props.content.trim().length > 0)
 const showMarkdownFallback = computed(() => isAssistant.value && props.content.trim().length > 0 && !markdownBody.value && !showMarkdownSkeleton.value)
 
 async function parseAssistantMarkdown(content: string) {
   const current = ++markdownParseGeneration
-  markdownBody.value = null
-  markdownParseError.value = false
-  isMarkdownParsing.value = false
-  if (!isAssistant.value || !content.trim()) return
+  if (!isAssistant.value || !content.trim()) {
+    markdownBody.value = null
+    markdownParseError.value = false
+    isMarkdownParsing.value = false
+    hasMarkdownResult.value = false
+    settledContent = null
+    return
+  }
   isMarkdownParsing.value = true
   const result = await parseGeneratedMarkdown(content, { applicationOrigins, sourceCount: sourcesRef.value.length })
   if (current !== markdownParseGeneration) return
+  isMarkdownParsing.value = false
+  // A later chunk may still complete a token on the open line, so keep its last good render.
+  const holdOpenBlock = props.streaming && result.tailRefused && settledContent !== null
+    && content.startsWith(settledContent) && !content.slice(settledContent.length).trimStart().includes('\n')
+  if (holdOpenBlock) return
   markdownBody.value = result.body
   markdownParseError.value = !result.body
-  isMarkdownParsing.value = false
+  hasMarkdownResult.value = true
+  settledContent = result.body && !result.tailRefused ? content : null
 }
-watch([() => props.content, isAssistant, () => sourcesRef.value.length], ([content]) => {
+watch([() => props.content, isAssistant, () => sourcesRef.value.length, () => props.streaming], ([content]) => {
   parsing = parseAssistantMarkdown(content)
 }, { immediate: true, flush: 'sync' })
 await parsing

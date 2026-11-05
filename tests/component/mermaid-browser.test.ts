@@ -6,6 +6,7 @@ import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type {} from '../support/generated-content-browser'
 import { compatibleDiagrams, multilineDiagrams, refusedDiagrams, rejectedGeneratedContent } from '../support/generated-content-fixtures'
+import { goodMarkdownCorpus, mixedMarkdownCorpus } from '../support/generated-markdown-corpus'
 
 let browser: Browser
 let page: Page
@@ -53,6 +54,16 @@ describe('real browser Mermaid boundary', () => {
       expect(await page.locator('#host svg').count()).toBe(surface === 'course' ? 1 : 0)
     }
   }, 30_000)
+
+  it.each(['course', 'chat'] as const)('%s renders the Markdown corpus in Chromium, degrading only refused blocks', async (surface) => {
+    for (const { source, selectors, refused } of [...goodMarkdownCorpus, ...mixedMarkdownCorpus] as Array<(typeof mixedMarkdownCorpus)[number] | (typeof goodMarkdownCorpus)[number] & { refused?: undefined }>) {
+      await page.evaluate(({ surface, source }) => window.__generatedContentTest.mount(surface, source), { surface, source })
+      await page.locator(`#host ${selectors[0]!}`).first().waitFor({ state: 'attached' })
+      expect(await page.locator('#host [data-generated-refused]').count(), source).toBe(refused ? 1 : 0)
+      for (const selector of selectors) expect(await page.locator(`#host ${selector}`).count(), selector).toBeGreaterThan(0)
+      expect(await page.locator('#host img, #host iframe, #host video, #host form, #host input, #host math, #host style, #host citation, #host .canary, #host #canary').count(), source).toBe(0)
+    }
+  }, 60_000)
 
   it.each([graph, 'sequenceDiagram\naccDescr: Alice greets Bob.\nparticipant Alice\nparticipant Bob\nAlice->>Bob: Hello'])('renders actual static diagrams through the final sanitizer', async (source) => {
     const svg = await render(source)

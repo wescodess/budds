@@ -41,6 +41,47 @@ describe('generated content asynchronous failures', () => {
     expect(wrapper.element.isConnected).toBe(false)
   })
 
+  it('keeps the previous result on screen while a streaming parse is pending', async () => {
+    const skeleton = '[data-slot="skeleton"]'
+    const wrapper = await mountSuspended(Message, { props: { role: 'assistant', content: '', streaming: true, animate: false } })
+    try {
+      await wrapper.setProps({ content: 'Delayed **first**' })
+      await vi.waitFor(() => expect(parser.pending).toBeTypeOf('function'))
+      await vi.waitFor(() => expect(wrapper.find(skeleton).exists()).toBe(true))
+      parser.pending!()
+      parser.pending = undefined
+      await vi.waitFor(() => expect(wrapper.find('strong').text()).toBe('first'))
+      expect(wrapper.find(skeleton).exists()).toBe(false)
+
+      await wrapper.setProps({ content: 'Delayed **first** and **second**' })
+      await vi.waitFor(() => expect(parser.pending).toBeTypeOf('function'))
+      await flushPromises()
+      expect(wrapper.findAll('strong').map(node => node.text())).toEqual(['first'])
+      expect(wrapper.find(skeleton).exists()).toBe(false)
+      expect(wrapper.find('[data-testid="streaming-cursor"]').exists()).toBe(true)
+
+      await wrapper.setProps({ content: 'Newest **third**' })
+      await vi.waitFor(() => expect(wrapper.find('strong').text()).toBe('third'))
+      parser.pending!()
+      parser.pending = undefined
+      await flushPromises()
+      expect(wrapper.findAll('strong').map(node => node.text())).toEqual(['third'])
+    } finally { wrapper.unmount() }
+  })
+
+  it('does not bring the skeleton back over a whole-document fallback', async () => {
+    const skeleton = '[data-slot="skeleton"]'
+    const wrapper = await mountSuspended(Message, { props: { role: 'assistant', content: 'Unavailable first', streaming: true, animate: false } })
+    try {
+      expect(wrapper.text()).toContain('Unavailable first')
+      await wrapper.setProps({ content: 'Delayed text' })
+      await vi.waitFor(() => expect(parser.pending).toBeTypeOf('function'))
+      await flushPromises()
+      expect(wrapper.find(skeleton).exists()).toBe(false)
+      expect(wrapper.text()).toContain('Delayed text')
+    } finally { wrapper.unmount() }
+  })
+
   it('keeps fallback citation association while code, links and source excerpts remain text', async () => {
     const content = 'Unavailable [1] [0] [2]\n`[1]`\n[Label [1]](https://example.invalid/[1])\n:citation[1]'
     const wrapper = await mountSuspended(Message, { props: { role: 'assistant', content, sources: createSources(1), animate: false } })

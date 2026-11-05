@@ -111,6 +111,67 @@ describe('generated content at the rendering sinks', () => {
     expect(other.findAll('button')).toHaveLength(0)
   })
 
+  describe('open blocks during streaming', () => {
+    const refused = '[data-generated-refused]'
+    const stream = async (first: string) => {
+      const wrapper = await mountSuspended(Message, { props: { role: 'assistant', content: first, sources: createSources(1), streaming: true, animate: false } })
+      wrappers.push(wrapper)
+      await vi.waitFor(() => expect(wrapper.find('strong').exists()).toBe(true))
+      return wrapper
+    }
+    const settle = async () => { await flushPromises(); await new Promise(resolve => setTimeout(resolve, 20)); await flushPromises() }
+
+    it.each([
+      ['a partial emoji shortcode', 'Good **bold** text', ' :smi', 'le: done', '😄 done'],
+      ['a partial percent escape', 'Good **bold** text', ' https://example.invalid/caf%C', '3%A9 done', 'done'],
+      ['a partial block opener', 'Good **bold**\n\nSecond **line**', '\n\n<div', 'ider is fine', '<divider is fine'],
+    ])('holds %s at its last good render until a later chunk validates it', async (_name, first, partial, rest, final) => {
+      const wrapper = await stream(first)
+      await wrapper.setProps({ content: first + partial })
+      await settle()
+      expect(wrapper.find(refused).exists()).toBe(false)
+      expect(wrapper.find('strong').text()).toBe('bold')
+      await wrapper.setProps({ content: first + partial + rest })
+      await vi.waitFor(() => expect(wrapper.text()).toContain(final))
+      expect(wrapper.find(refused).exists()).toBe(false)
+    })
+
+    it('does not freeze a block refused from the first chunk', async () => {
+      const wrapper = await mountSuspended(Message, { props: { role: 'assistant', content: '<b>one', sources: [], streaming: true, animate: false } })
+      wrappers.push(wrapper)
+      await vi.waitFor(() => expect(wrapper.text()).toContain('<b>one'))
+      await wrapper.setProps({ content: '<b>one two' })
+      await vi.waitFor(() => expect(wrapper.text()).toContain('<b>one two'))
+    })
+
+    it('releases a held block when its line ends or the stream finishes', async () => {
+      const first = 'Good **bold** text'
+      const wrapper = await stream(first)
+      await wrapper.setProps({ content: `${first} :canary` })
+      await settle()
+      expect(wrapper.find(refused).exists()).toBe(false)
+      await wrapper.setProps({ content: `${first} :canary\nmore` })
+      await vi.waitFor(() => expect(wrapper.find(refused).exists()).toBe(true))
+      expect(wrapper.find(refused).text()).toContain(':canary\nmore')
+
+      const finished = await stream(first)
+      await finished.setProps({ content: `${first} :canary` })
+      await settle()
+      expect(finished.find(refused).exists()).toBe(false)
+      await finished.setProps({ streaming: false })
+      await vi.waitFor(() => expect(finished.find(refused).exists()).toBe(true))
+      expect(finished.find(refused).text()).toContain(':canary')
+    })
+
+    it('settles a refused block once the next block starts and keeps earlier blocks rich', async () => {
+      const wrapper = await stream('Good **bold**')
+      await wrapper.setProps({ content: 'Good **bold**\n\n<b>canary</b>\n\nNext *block*' })
+      await vi.waitFor(() => expect(wrapper.find('em').exists()).toBe(true))
+      expect(wrapper.find('strong').text()).toBe('bold')
+      expect(wrapper.findAll(refused).map(block => block.text())).toEqual(['<b>canary</b>'])
+    })
+  })
+
   it('revalidates successive partial streaming inputs and clears stale rich content', async () => {
     const wrapper = await mountSuspended(Message, { props: { role: 'assistant', content: 'Initial **text** [1]', sources: createSources(1), streaming: true, animate: false } })
     wrappers.push(wrapper)
@@ -121,8 +182,10 @@ describe('generated content at the rendering sinks', () => {
       await flushPromises()
       expect(wrapper.find('[title="canary"], b, citation').exists()).toBe(false)
     }
+    await wrapper.setProps({ streaming: false })
     await vi.waitFor(() => expect(wrapper.text()).toContain(content))
-    await wrapper.setProps({ content: 'Final **text** [1]', streaming: false })
+    await wrapper.setProps({ content: 'Final **text** [1]', streaming: true })
+    await wrapper.setProps({ streaming: false })
     await vi.waitFor(() => expect(wrapper.find('strong').text()).toBe('text'))
     expect(wrapper.findAll('button[aria-label^="Source "]')).toHaveLength(1)
   })
