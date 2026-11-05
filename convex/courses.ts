@@ -2,6 +2,7 @@ import { v } from 'convex/values'
 import { action, internalQuery, mutation, query } from './_generated/server'
 import { internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
+import type { QueryCtx } from './_generated/server'
 import { getOptionalAuthUserId, requireAuth } from './lib/auth'
 import { getOrCreateProfile } from './learnProfile'
 import { runCourseDeletionSteps } from './courseDeletion'
@@ -231,14 +232,29 @@ export const updatePace = mutation({
   },
 })
 
+async function ownedV1CourseLinkTarget(ctx: QueryCtx, userId: string, courseId: Id<'courses'>) {
+  const course = await ctx.db.get(courseId)
+  if (!course || course.userId !== userId || course.status === 'deleting') return null
+  const folder = await ctx.db.get(course.folderId)
+  if (!folder || folder.userId !== userId) return null
+  return { courseId: course._id, folderId: folder._id, title: course.title }
+}
+
+export const getCalendarLinkTarget = internalQuery({
+  args: { userId: v.string(), courseId: v.id('courses') },
+  handler: async (ctx, args) => await ownedV1CourseLinkTarget(ctx, args.userId, args.courseId),
+})
+
 export const startCourse = mutation({
   args: {
     courseId: v.id('courses'),
   },
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx)
-    const course = await ctx.db.get(args.courseId)
-    if (!course || course.userId !== userId) throw new Error('Course not found')
+    const target = await ownedV1CourseLinkTarget(ctx, userId, args.courseId)
+    if (!target) throw new Error('Course not found')
+    const course = await ctx.db.get(target.courseId)
+    if (!course) throw new Error('Course not found')
     if (course.status !== 'ready') throw new Error('Course is not ready to start')
 
     const firstSection = await ctx.db
@@ -255,7 +271,7 @@ export const startCourse = mutation({
       internal.tasks.createInternal,
       {
         userId,
-        folderId: course.folderId,
+        folderId: target.folderId,
         type: 'section-generate',
         title: `Generating: ${firstSection.title}`,
         metadata: { courseId: args.courseId, sectionId: firstSection._id },
@@ -267,7 +283,7 @@ export const startCourse = mutation({
       taskId,
     })
 
-    return { courseId: args.courseId, sectionId: firstSection._id, taskId }
+    return { courseId: args.courseId, folderId: target.folderId, sectionId: firstSection._id, taskId }
   },
 })
 

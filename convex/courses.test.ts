@@ -696,12 +696,13 @@ describe('courses.updatePace', () => {
 })
 
 describe('courses.startCourse', () => {
-  test('unlocks first section, creates task, returns courseId', async () => {
+  test('starts one section generation and returns the authoritative folder', async () => {
     const t = convexTest(schema, modules)
-    const { asUser, courseId } = await seedReadyCourseWithSections(t, USER_A)
+    const { asUser, folderId, courseId } = await seedReadyCourseWithSections(t, USER_A)
 
     const result = await asUser.mutation(api.courses.startCourse, { courseId })
     expect(result.courseId).toBe(courseId)
+    expect(result.folderId).toBe(folderId)
     expect(result.sectionId).toBeDefined()
     expect(result.taskId).toBeDefined()
 
@@ -720,8 +721,32 @@ describe('courses.startCourse', () => {
     const task = await t.run(async (ctx) => ctx.db.get(sections[0]!.taskId!))
     expect(task).not.toBeNull()
     expect(task!.type).toBe('section-generate')
+    const generationTasks = await asUser.query(api.tasks.listByFolder, { folderId })
+    expect(generationTasks.filter(task => task.type === 'section-generate')).toHaveLength(1)
     expect(task!.metadata).toMatchObject({ courseId, sectionId: sections[0]!._id })
   })
+
+  test.each(['foreign folder', 'missing folder', 'foreign course', 'missing course', 'deleting course'] as const)(
+    'rejects %s before section generation',
+    async (unavailable) => {
+      const t = convexTest(schema, modules)
+      const { asUser, courseId, folderId } = await seedReadyCourseWithSections(t, USER_A)
+      const sectionsBefore = await asUser.query(api.courseSections.listByCourse, { courseId })
+      await t.run(async (ctx) => {
+        if (unavailable === 'foreign folder') await ctx.db.patch(folderId, { userId: USER_B.tokenIdentifier })
+        if (unavailable === 'missing folder') await ctx.db.delete(folderId)
+        if (unavailable === 'foreign course') await ctx.db.patch(courseId, { userId: USER_B.tokenIdentifier })
+        if (unavailable === 'missing course') await ctx.db.delete(courseId)
+        if (unavailable === 'deleting course') await ctx.db.patch(courseId, { status: 'deleting' })
+      })
+      expect(await t.query(internal.courses.getCalendarLinkTarget, { userId: USER_A.tokenIdentifier, courseId })).toBeNull()
+      await expect(asUser.mutation(api.courses.startCourse, { courseId })).rejects.toThrow('Course not found')
+      const tasks = await t.run(async ctx => ctx.db.query('tasks').collect())
+      expect(tasks.filter(task => task.type === 'section-generate')).toEqual([])
+      const sectionsAfter = await t.run(async ctx => ctx.db.query('courseSections').collect())
+      expect(sectionsAfter).toEqual(sectionsBefore)
+    },
+  )
 
   test('rejects course not in ready status', async () => {
     const t = convexTest(schema, modules)
