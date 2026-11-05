@@ -95,12 +95,12 @@
     "implement": {
       "source": "./.agents/skills/implement",
       "sourceType": "local",
-      "computedHash": "da2db53928d46e967a739d91a9fa2afcf63aee0fb2dbd1ddde801904058ec9e5"
+      "computedHash": "4736f2337300fc87788ef07b965269807f416671af9d92e0955a3a2d8603a172"
     },
     "implement-spec": {
       "source": "./.agents/skills/implement-spec",
       "sourceType": "local",
-      "computedHash": "abcedce5417269a7dab3689bcc102c3f04a79ea5b971477aa66a9f5dfb487371"
+      "computedHash": "faa8b640d32829a3dca8e0d77c2c96ea453d1a1e6b20eb8b2032cf73442ccc4a"
     },
     "improve-codebase-architecture": {
       "source": "mattpocock/skills",
@@ -143,6 +143,11 @@
       "sourceType": "github",
       "skillPath": "skills/in-progress/retro/SKILL.md",
       "computedHash": "b9bd2e5e0378214bf54d2a293df50490669b845a4c2a71c8f747ce8ab365f53a"
+    },
+    "review-gate": {
+      "source": "./.agents/skills/review-gate",
+      "sourceType": "local",
+      "computedHash": "cdbb51969e4257b79e6565609362d70b844d82209757150c24edad802593cf81"
     },
     "scaffold-exercises": {
       "source": "mattpocock/skills",

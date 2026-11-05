@@ -32,7 +32,7 @@ Route all UI/UX work, including UI fixes, to Opus 5.5 (`claudeAgent`, `claude-op
 
 6. If this changes the **frontier** of available tickets, kick off more **implementer subagents** to work on the new tickets. This allows for maximum concurrency.
 
-7. Once all tickets are complete, run /code-review on the PR branch. Fix all issues raised by the code review in a single **implementer subagent**.
+7. Once all tickets are complete and integrated, have the orchestrator run [review-gate](../review-gate/SKILL.md) on the committed PR branch instead of /code-review. Use one gate for the completed PR, not per trivial commit, so ticket implementation stays parallel. Follow the gate's reviewer, fixer, and handback rules.
 
 8. Mark the PR as ready for review.
 

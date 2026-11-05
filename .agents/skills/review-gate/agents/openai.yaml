@@ -1,0 +1,5 @@
+interface:
+  display_name: "Review Gate"
+  short_description: "Run independent reviews and record confidence before merging"
+policy:
+  allow_implicit_invocation: true
