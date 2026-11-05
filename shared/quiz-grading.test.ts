@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { defaultQuizGradingCriteria, getDeterministicQuizGrade, scoreQuizCriteria, validateQuizGradingCriteria, type QuizGradingCriterion } from './quiz-grading'
+import { defaultQuizGradingCriteria, scoreQuizCriteria, validateQuizGradingCriteria, type QuizGradingCriterion } from './quiz-grading'
 
 const criteria: QuizGradingCriterion[] = [
   { key: 'daughter_cells', description: 'Two daughter cells', weightPercent: 40 },
@@ -58,11 +58,4 @@ describe('quiz criterion scoring', () => {
       [{ key: 'daughter_cells', verdict: 'met' as const }, { key: 'unknown', verdict: 'uncertain' as const }],
     ]) expect(() => scoreQuizCriteria(criteria, results)).toThrow('Criterion results do not match the pinned rubric')
   })
-})
-
-test('only empty and exact normalized answers have a deterministic grade', () => {
-  expect(getDeterministicQuizGrade('  Two\n IDENTICAL cells ', 'two identical cells')).toEqual({ credit: 1, label: 'fully_correct' })
-  expect(getDeterministicQuizGrade(' \n\t ', 'two identical cells')).toEqual({ credit: 0, label: 'incorrect' })
-  expect(getDeterministicQuizGrade('', '')).toEqual({ credit: 0, label: 'incorrect' })
-  expect(getDeterministicQuizGrade('A pair of identical cells', 'two identical cells')).toBeNull()
 })

@@ -54,9 +54,3 @@ export function scoreQuizCriteria(criteria: QuizGradingCriterion[], results: Qui
   if (results.some(result => result.verdict === 'uncertain')) return { credit, label: 'uncertain' }
   return { credit, label: credit === 1 ? 'fully_correct' : credit === 0 ? 'incorrect' : 'partially_correct' }
 }
-
-export function getDeterministicQuizGrade(answer: string, referenceAnswer: string): { credit: number, label: QuizGradeLabel } | null {
-  if (answer.trim().length === 0) return { credit: 0, label: 'incorrect' }
-  const normalize = (value: string) => value.trim().toLowerCase().replace(/\s+/g, ' ')
-  return normalize(answer) === normalize(referenceAnswer) ? { credit: 1, label: 'fully_correct' } : null
-}

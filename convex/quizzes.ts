@@ -5,7 +5,6 @@ import type { Id } from './_generated/dataModel'
 import type { MutationCtx, QueryCtx } from './_generated/server'
 import { getOptionalAuthUserId, requireAuth } from './lib/auth'
 import { createPendingAnswerAssessment, isQuizGradingEnabled, isRubricAssessment, projectLearnerQuizQuestion, projectQuizGrade } from './lib/quizAnswerAssessment'
-import { getDeterministicQuizGrade } from '../shared/quiz-grading'
 
 const MAX_QUIZ_QUESTIONS = 200
 const MAX_QUIZZES_PER_FOLDER = 100
@@ -139,7 +138,6 @@ function scoreAnswer(
   if (type === 'multiple-choice' || type === 'true_false') {
     return response === correctAnswer
   }
-  if (isQuizGradingEnabled()) return getDeterministicQuizGrade(response, correctAnswer)?.credit === 1
   return normalizeForCompare(response) === normalizeForCompare(correctAnswer)
     || isExplicitListMatch(question, response, correctAnswer)
 }
