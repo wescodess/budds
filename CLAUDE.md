@@ -29,6 +29,11 @@ Google OAuth redirect URI must point to `${CONVEX_SITE_URL}/api/auth/callback/go
 
 ## Agent skills
 
+### UI design and routing
+
+Before new UI/UX or a material visual or interaction change, run [ui-design-gate](.agents/skills/ui-design-gate/SKILL.md): show five visual concepts and wait for the human dev to choose one and confirm satisfaction before UI code starts.
+All UI/UX work, including UI fixes, runs on Opus 5.5 (`claudeAgent`, `claude-opus-5-5`); other work can go to Sol 6.1 (`codex`, `gpt-6.1-sol`). Follow the skill's routing and approval rules.
+
 ### Issue tracker
 
 Issues and specs are tracked in GitHub Issues for `wescodess/budds`. See `docs/agents/issue-tracker.md`.
