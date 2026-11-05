@@ -25,7 +25,7 @@ export function countViolations(source) {
   // Split only where a class cannot continue, so variants and arbitrary values stay whole.
   for (const raw of source.split(/[\s"'`;]+/)) {
     const token = raw.replace(/^[{(,]+|[,)}>]+$/g, '').replace(/(^|:)!/g, '$1')
-    if (/(?:^|:)uppercase!?:?$/.test(token) || /(?:^|[{,])uppercase:./.test(raw)) counts.uppercase++
+    if (/(?:^|:)uppercase!?:?$/.test(token) || /(?:^|[{,])uppercase[:,}]/.test(raw)) counts.uppercase++
     if (/(?:^|:)backdrop-blur(?:-|!?$)/.test(token)) counts['backdrop-blur']++
     if (/(?:^|:)(?:group-|peer-)?hover(?:\/[\w-]+)?:(?:[^:]+:)*(?:scale(?:-[xy])?-|-?translate-(?:[xy]-|px|\d|\[))/.test(token)) counts['hover-lift']++
     if (/(?:^|:)(?:[a-z]+-)+(?:amber|orange)-\d/.test(token)) counts['raw-amber-orange']++

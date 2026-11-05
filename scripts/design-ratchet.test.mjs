@@ -24,6 +24,7 @@ describe('countViolations', () => {
     ['violet-indigo', '<p class="!text-indigo-500" />', 1],
     ['uppercase', '<div :class="{ uppercase: true }" /><div class="[&>svg]:uppercase" />.x { text-transform: uppercase; }', 3],
     ['uppercase', '<div :class="{uppercase:true}" /><div :class="{italic:a,uppercase:b}" /><div :class="x?{uppercase:y}:{}" />', 3],
+    ['uppercase', '<div :class="{uppercase,italic}" /><div :class="{italic,uppercase}" /><div :class="[{italic:a,uppercase}]" /><div :class="{ uppercase, italic }" /><div :class="{uppercase}" />', 5],
     ['sparkles', 'import { Sparkles } from "@lucide/vue"; <Sparkles /><Sparkles />', 3],
     ['backdrop-blur', '<div class="backdrop-blur dark:backdrop-blur-sm" />', 2],
     ['gradients', '<div class="bg-gradient-to-r bg-linear-to-br bg-radial bg-conic bg-linear-[45deg]" />', 5],
@@ -171,6 +172,7 @@ describe('run', () => {
   it.each([
     ['raw-amber-orange', '<!-- " --><div class="bg-amber-500"/>'],
     ['uppercase', '<div :class="{uppercase:true}" />'],
+    ['uppercase', '<div :class="{uppercase,italic}" />'],
   ])('refuses an added %s violation in both check and update', async (rule, source) => {
     const { root, baselinePath } = await fixture()
     const before = await readFile(baselinePath, 'utf8')
