@@ -29,6 +29,8 @@ Google OAuth redirect URI must point to `${CONVEX_SITE_URL}/api/auth/callback/go
 
 ## Agent skills
 
+Before an implementation PR is ready or merged, have the orchestrator run [review-gate](.agents/skills/review-gate/SKILL.md) and record its review ledger at the final PR head. Follow its model routing, stop rules, and escalation requirements.
+
 ### UI design and routing
 
 Before new UI/UX or a material visual or interaction change, run [ui-design-gate](.agents/skills/ui-design-gate/SKILL.md): show five visual concepts and wait for the human dev to choose one and confirm satisfaction before UI code starts.

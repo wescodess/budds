@@ -8,5 +8,7 @@ Convex agent skills for common tasks can be installed by running `npx convex ai-
 
 ## Agent skills
 
+Before an implementation PR is ready or merged, have the orchestrator run [review-gate](.agents/skills/review-gate/SKILL.md) and record its review ledger at the final PR head. Follow its model routing, stop rules, and escalation requirements.
+
 Before new UI/UX or a material visual or interaction change, run [ui-design-gate](.agents/skills/ui-design-gate/SKILL.md): show five visual concepts and wait for the human dev to choose one and confirm satisfaction before UI code starts.
 All UI/UX work, including UI fixes, runs on Opus 5.5 (`claudeAgent`, `claude-opus-5-5`); other work can go to Sol 6.1 (`codex`, `gpt-6.1-sol`). Follow the skill's routing and approval rules.

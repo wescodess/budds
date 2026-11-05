@@ -1,6 +1,6 @@
 # Local skill customizations
 
-`implement` and `implement-spec` are maintained locally. `ui-design-gate` is a project skill. Their `skills-lock.json` entries use `sourceType: "local"` and point to their own directories under `.agents/skills/`.
+`implement` and `implement-spec` are maintained locally. `ui-design-gate` and `review-gate` are project skills. Their `skills-lock.json` entries use `sourceType: "local"` and point to their own directories under `.agents/skills/`.
 
 ## Update behaviour
 
@@ -23,6 +23,7 @@ Both customized skills came from `mattpocock/skills`. The hashes below are the o
 2. In both skills, before implementation, require [ui-design-gate](../../.agents/skills/ui-design-gate/SKILL.md) for every UI ticket and require reading its saved human-approved HTML and decision note before UI code. Keep independent non-UI work moving while approval waits.
 3. In both skills, route UI/UX work and UI fixes to Opus 5.5 (`claudeAgent`, `claude-opus-5-5`), and other tickets to Sol 6.1 (`codex`, `gpt-6.1-sol`). Follow the gate's delegation and handback rules.
 4. In `implement-spec` step 1, require a blocking shared-contract ticket agreeing types and API shape before dependent frontend and backend tickets start. In step 4, run those tickets concurrently wherever the frontier allows, with backend work proceeding while UI approval waits once its own blockers resolve.
-5. These gate edits leave all other upstream text, including the `/code-review` lines, intact. Preserve any separately documented local customizations too. Keep the gate skill and its pointers in `AGENTS.md` and `CLAUDE.md`.
-6. Retain `sourceType: "local"` and `source: "./.agents/skills/<name>"` for each local skill; omit the remote `skillPath`. Recompute `computedHash` using the CLI's folder algorithm: recursively collect files except `.git` and `node_modules`, sort relative paths with JavaScript `localeCompare`, and SHA-256 each relative path followed by its file bytes, with no separators. Include `agents/openai.yaml`.
-7. Parse the edited frontmatter and YAML, check symlinks and `git diff --check`, and verify a project-scoped update leaves the local skills unchanged in a temporary copy before committing.
+5. Replace the `/code-review` instruction in both implementation skills with [review-gate](../../.agents/skills/review-gate/SKILL.md), run by the orchestrator after committing. In `implement-spec` step 7, run once on the completed, integrated PR so ticket implementation stays parallel, not per trivial commit. Preserve the gate's model routing, UI fixer exception, stop rules, escalation, and final-head ledger. Leave `/code-review` itself unchanged as review guidance.
+6. Preserve other upstream text and separately documented local customizations. Keep both project gate skills, their `agents/openai.yaml` files and relative `.claude/skills/` symlinks, and their pointers in `AGENTS.md` and `CLAUDE.md`.
+7. Retain `sourceType: "local"` and `source: "./.agents/skills/<name>"` for each local skill; omit the remote `skillPath`. Recompute `computedHash` using the CLI's folder algorithm: recursively collect files except `.git` and `node_modules`, sort relative paths with JavaScript `localeCompare`, and SHA-256 each relative path followed by its file bytes, with no separators. Include `agents/openai.yaml`.
+8. Parse the edited frontmatter and YAML, check symlinks and `git diff --check`, and verify a project-scoped update leaves the local skills unchanged in a temporary copy before committing.
