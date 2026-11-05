@@ -14,19 +14,17 @@ export function isRubricAssessment(row: Pick<Doc<'quizAnswerAssessments'>, 'rubr
   return row?.rubricVersion === QUIZ_RUBRIC_GRADE_VERSION
 }
 
+export function projectLearnerQuizQuestion({ gradingCriteria: _criteria, ...question }: Doc<'quizQuestions'>) {
+  return question
+}
+
 export function projectQuizGrade(row: Doc<'quizAnswerAssessments'>): QuizGrade {
   const status = row.status === 'available' ? (row.label === 'uncertain' ? 'needs_review' : 'graded') : row.status
-  const resultsByKey = new Map(row.criterionResults?.map(result => [result.key, result]))
   return {
     status,
-    credit: status === 'graded' ? row.credit : undefined,
+    credit: row.status === 'available' ? row.credit : undefined,
     label: row.label,
     source: row.gradeSource,
-    criteria: (row.criteriaSnapshot ?? []).map(criterion => ({
-      ...criterion,
-      verdict: resultsByKey.get(criterion.key)?.verdict,
-      feedback: resultsByKey.get(criterion.key)?.feedback,
-    })),
     feedback: row.feedback,
   }
 }

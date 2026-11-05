@@ -11,7 +11,6 @@ export const quizGradingCriterionValidator = v.object({
 export const quizCriterionResultValidator = v.object({
   key: v.string(),
   verdict: v.union(v.literal('met'), v.literal('not_met'), v.literal('uncertain')),
-  feedback: v.optional(v.string()),
 })
 export const quizGradeSourceValidator = v.union(v.literal('deterministic'), v.literal('model'), v.literal('self'))
 
@@ -23,7 +22,6 @@ export type QuizGrade = {
   credit?: number
   label?: QuizGradeLabel
   source?: Infer<typeof quizGradeSourceValidator>
-  criteria: Array<QuizGradingCriterion & { verdict?: QuizCriterionResult['verdict'], feedback?: string }>
   feedback?: string
 }
 
@@ -48,12 +46,12 @@ export function defaultQuizGradingCriteria(referenceAnswer: string): QuizGrading
   }]
 }
 
-export function scoreQuizCriteria(criteria: QuizGradingCriterion[], results: QuizCriterionResult[]): { credit?: number, label: QuizGradeLabel } {
+export function scoreQuizCriteria(criteria: QuizGradingCriterion[], results: QuizCriterionResult[]): { credit: number, label: QuizGradeLabel } {
   validateQuizGradingCriteria(criteria)
   if (results.some(result => !['met', 'not_met', 'uncertain'].includes(result.verdict))) throw new Error('Invalid quiz criterion verdict')
   const scorePercent = scoreCriteria(criteria, results.map(result => ({ key: result.key, awarded: result.verdict === 'met' })))
-  if (results.some(result => result.verdict === 'uncertain')) return { label: 'uncertain' }
   const credit = scorePercent / 100
+  if (results.some(result => result.verdict === 'uncertain')) return { credit, label: 'uncertain' }
   return { credit, label: credit === 1 ? 'fully_correct' : credit === 0 ? 'incorrect' : 'partially_correct' }
 }
 
