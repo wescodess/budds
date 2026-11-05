@@ -98,6 +98,31 @@ describe('Better Auth with the Convex adapter', () => {
     expect((await t.fetch('/api/auth/convex/token', { headers })).status).toBe(401)
   })
 
+  test('rejects a real session cookie with a tampered signature on both auth paths', async () => {
+    const t = createTestBackend()
+    const signedUp = await t.fetch('/api/auth/sign-up/email', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: siteUrl },
+      body: JSON.stringify({ name: 'Auth test', email: 'auth@budds-ci.invalid', password: 'ci-only-local-password-000000' }),
+    })
+    expect(signedUp.status).toBe(200)
+    const cookie = cookies(signedUp)
+    const headers = { cookie, origin: siteUrl }
+    expect((await (await t.fetch('/api/auth/get-session', { headers })).json()).user.email).toBe('auth@budds-ci.invalid')
+    expect((await t.fetch('/api/auth/convex/token', { headers })).status).toBe(200)
+
+    headers.cookie = cookie.replace(/(session_token=)([^;]+)/, (_match, prefix, value) => {
+      const signedValue = decodeURIComponent(value)
+      const signatureStart = signedValue.lastIndexOf('.') + 1
+      const character = signedValue[signatureStart] === 'A' ? 'B' : 'A'
+      return `${prefix}${encodeURIComponent(`${signedValue.slice(0, signatureStart)}${character}${signedValue.slice(signatureStart + 1)}`)}`
+    })
+    expect(headers.cookie).not.toBe(cookie)
+    const session = await t.fetch('/api/auth/get-session', { headers })
+    const tokenResponse = await t.fetch('/api/auth/convex/token', { headers })
+    expect({ session: await session.json(), tokenStatus: tokenResponse.status }).toEqual({ session: null, tokenStatus: 401 })
+  })
+
   test('rejects forged cookies and unauthenticated token exchanges', async () => {
     const t = createTestBackend()
     const headers = { cookie: 'better-auth.session_token=forged' }
