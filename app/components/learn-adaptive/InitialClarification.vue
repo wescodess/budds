@@ -86,7 +86,7 @@ function skip() {
         <p v-if="validationError || serverError" :id="ERROR_ID" role="alert" class="text-sm text-destructive">{{ validationError ?? serverError }}</p>
         <div v-if="authorityConflict" class="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3" role="status" data-testid="learn-clarification-conflict">
           <p class="text-sm font-medium">This clarification was resolved in another session.</p>
-          <p class="mt-1 text-xs text-muted-foreground">{{ authorityConflict.keptLocal ? 'Your local answer remains only in this browser session.' : 'Choose the saved thread result or keep your local answer without overwriting it.' }}</p>
+          <p class="mt-1 text-xs text-muted-foreground">{{ authorityConflict.keptLocal ? 'Your local answer remains only in this browser session.' : 'Choose the saved Void result or keep your local answer without overwriting it.' }}</p>
           <div class="mt-3 flex flex-wrap gap-2"><UiButton type="button" class="min-h-11" data-testid="learn-clarification-use-authority" @click="emit('useAuthority')">Use saved result</UiButton><UiButton v-if="!authorityConflict.keptLocal" type="button" variant="outline" class="min-h-11" data-testid="learn-clarification-keep-local" @click="emit('keepLocal')">Keep local answer</UiButton></div>
         </div>
         <div class="flex flex-wrap justify-end gap-2">

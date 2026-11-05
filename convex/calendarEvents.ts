@@ -983,7 +983,7 @@ export const checkMissedSessionsForUser = internalAction({
         const deepLink = siteUrl ? `${siteUrl}${buildV1CoursePath(target)}` : ''
         const description = [
           `${prefs.sessionMinutes} min ${missedEvent.sessionType === 'new-content' ? 'new content' : missedEvent.sessionType === 'review' ? 'review' : 'audio-only'} session (rescheduled)`,
-          `Course: ${courseName}`,
+          `Void: ${courseName}`,
           '',
           deepLink,
         ].join('\n')

@@ -76,6 +76,12 @@ async function mountLearningRoute(home = false) {
   return wrapper
 }
 
+function learnerFacingText() {
+  const names = [...document.body.querySelectorAll('[aria-label], [title], [placeholder]')]
+    .flatMap(element => ['aria-label', 'title', 'placeholder'].map(attribute => element.getAttribute(attribute) ?? ''))
+  return [document.body.textContent ?? '', ...names].join('\n')
+}
+
 function accessibleReference(element: Element, attribute: string) {
   const ids = element.getAttribute(attribute)?.split(/\s+/) ?? []
   return ids.map(id => document.getElementById(id)?.textContent?.trim()).join(' ')
@@ -125,7 +131,7 @@ describe('mounted Home and Thread accessibility', () => {
     // The application layout owns main#main-content. Route content supplies a
     // named region, so the routed application does not nest main landmarks.
     expect(applicationMain!.querySelectorAll('main')).toHaveLength(0)
-    expect(page.get('section[aria-label="Learning thread"]').exists()).toBe(true)
+    expect(page.get('section[aria-label="Void"]').exists()).toBe(true)
     expect(page.get('h1').text()).toBe('Check my understanding')
     expect(page.get('section[aria-label="Current learning activity"]').exists()).toBe(true)
     expect(accessibleReference(page.get('section[aria-labelledby="learn-thread-next-title"]').element, 'aria-labelledby')).toBe('Your next move')
@@ -145,7 +151,7 @@ describe('mounted Home and Thread accessibility', () => {
     const page = await mountLearningRoute(true)
     expect(page.get('[data-testid="learn-adaptive-home"]').exists()).toBe(true)
     expect(applicationMain!.querySelectorAll('main')).toHaveLength(0)
-    expect(page.get('form').attributes('aria-label')).toBe('Start a learning thread')
+    expect(page.get('form').attributes('aria-label')).toBe('Start a Void')
   })
 
   it('announces access checks while the real access decision awaits the external status', async () => {
@@ -215,5 +221,38 @@ describe('mounted Home and Thread accessibility', () => {
     await vi.waitFor(() => expect(document.querySelector(`[data-testid="learn-${kind}-drawer"]`)).toBeNull())
     await vi.waitFor(() => expect(document.activeElement).toBe(trigger.element))
     expect(page.get('[data-testid="learn-selected-history"]').text()).toContain('Earlier reflection.')
+  })
+
+  it('names the container Void across the detail page, its activity and memory drawer', async () => {
+    const page = await mountLearningRoute()
+    expect(page.get('section[aria-label="Void"]').exists()).toBe(true)
+    expect(page.get('header').text()).toContain('Void · refresh')
+    await page.get('[data-testid="learn-memory-open"]').trigger('click')
+    await vi.waitFor(() => expect(document.querySelector('[data-testid="learn-memory-drawer"]')).not.toBeNull())
+    expect(learnerFacingText()).not.toMatch(/\b(thread|mission)s?\b/i)
+  })
+
+  it.each([
+    ['denied', () => { status.value = { kind: 'denied', capabilities: { entry: false, read: false, write: false, jobAdmission: false }, fallbackRoute: { name: 'index', href: '/', label: 'Open your folders for classic Voids' } } as never }, 'This Void is not available for this account.'],
+    ['unavailable', () => { projection.value = null as never }, 'This Void is unavailable.'],
+    ['ended', () => { projection.value = { ...structuredClone(initialProjection), thread: { ...initialProjection.thread, lifecycle: 'ended' }, currentActivity: null as never } }, 'This Void has ended'],
+  ])('names the %s detail state Void', async (_state, arrange, message) => {
+    arrange()
+    const page = await mountLearningRoute()
+    expect(page.text()).toContain(message)
+    if (_state === 'denied') expect(page.get('[data-testid="learn-adaptive-safe-destination"]').text()).toBe('Open your folders for classic Voids')
+    expect(learnerFacingText()).not.toMatch(/\b(thread|mission)s?\b/i)
+  })
+
+  it('names the container Void on Home and its classic route without changing the coexistence sentence', async () => {
+    const page = await mountLearningRoute(true)
+    const home = page.get('[data-testid="learn-adaptive-home"]')
+    expect(home.get('form').attributes('aria-label')).toBe('Start a Void')
+    await vi.waitFor(() => expect(home.text()).toContain('Your Voids will appear here.'))
+    expect(home.text()).not.toMatch(/\b(thread|mission)s?\b/i)
+    const routes = page.get('[data-testid="learn-legacy-handoffs"]')
+    expect(routes.text()).toContain('Classic Voids remain in each folder\'s Learn tab.')
+    expect(routes.get('[data-testid="learn-legacy-v1-home"]').text()).toBe('Open your folders for classic Voids')
+    expect(routes.text()).toContain('Your existing courses and learning missions remain available.')
   })
 })

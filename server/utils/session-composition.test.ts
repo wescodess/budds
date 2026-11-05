@@ -131,7 +131,7 @@ describe('buildEventDescription', () => {
       deepLink: 'https://app.budds.com/app/learn/abc123',
     })
     expect(desc).toContain('25 min new content session')
-    expect(desc).toContain('Course: Organic Chemistry')
+    expect(desc).toContain('Void: Organic Chemistry')
     expect(desc).toContain('https://app.budds.com/app/learn/abc123')
   })
 
@@ -143,7 +143,7 @@ describe('buildEventDescription', () => {
       deepLink: '',
     })
     expect(desc).toContain('15 min review session')
-    expect(desc).toContain('Course: React')
+    expect(desc).toContain('Void: React')
   })
 })
 

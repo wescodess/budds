@@ -31,6 +31,7 @@ describe('ready session attachment', () => {
   it.each([['randomUUID', false], ['the fallback generator', true]])('sends a key the command validator accepts using %s', async (_generator, fallback) => {
     if (fallback) vi.stubGlobal('crypto', { subtle: crypto.subtle })
     const wrapper = await mountPage()
+    expect(wrapper.get('[data-testid="learn-adaptive-continue-ready"]').text()).toBe('Continue in your Void')
     await wrapper.get('[data-testid="learn-adaptive-continue-ready"]').trigger('click')
     await vi.waitFor(() => expect(useRouter().push).toHaveBeenCalledWith({ name: 'app-learn-void-threadId', params: { threadId: 'thread_1' } }))
     const idempotencyKey = attach.mock.calls[0]?.[0].idempotencyKey

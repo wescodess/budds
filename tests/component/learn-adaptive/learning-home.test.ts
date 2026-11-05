@@ -56,7 +56,7 @@ describe('need-first LearningHome', () => {
     expect(wrapper.get('[data-testid="learn-adaptive-primary-resume"]').text()).toContain('The final step')
     expect(wrapper.get('[data-testid="learn-adaptive-worth-revisiting"]').text()).toContain('Revisit gravity')
     expect(wrapper.get('[data-testid="learn-adaptive-worth-revisiting"]').text()).toContain('Explain gravity')
-    expect(wrapper.get('[data-testid="learn-adaptive-worth-revisiting"] a').text()).toBe('Review capability in thread')
+    expect(wrapper.get('[data-testid="learn-adaptive-worth-revisiting"] a').text()).toBe('Review capability in Void')
     expect(wrapper.get('[data-testid="learn-adaptive-worth-revisiting"]').text()).not.toContain('Changed source')
     expect(wrapper.get('[data-testid="learn-adaptive-worth-revisiting"]').text()).not.toContain('Recent notes')
     resumeCandidates.value = resumeCandidates.value.filter(item => item.reason !== 'needs_review')
@@ -66,7 +66,7 @@ describe('need-first LearningHome', () => {
     await nextTick()
     expect(wrapper.get('[data-testid="learn-adaptive-primary-resume"]').text()).toContain('Worth revisiting')
     expect(wrapper.get('[data-testid="learn-adaptive-primary-resume"]').text()).toContain('Explain gravity needs review')
-    expect(wrapper.get('[data-testid="learn-adaptive-primary-resume"] a').text()).toBe('Review capability in thread')
+    expect(wrapper.get('[data-testid="learn-adaptive-primary-resume"] a').text()).toBe('Review capability in Void')
     resumeCandidates.value = [{ ownerId: 'owner_1', threadId: 'thread_review', outcome: 'Finish gravity check', reason: 'unfinished_activity', unresolvedPoint: null, nextAction: { label: 'Finish response' }, reviewCapability: 'Explain gravity' }]
     await nextTick()
     expect(wrapper.get('[data-testid="learn-adaptive-primary-resume"] a').text()).toBe('Continue')
@@ -91,7 +91,7 @@ describe('need-first LearningHome', () => {
 
   it('names the new learning form and labels its goal, outcome, time, and material choices', async () => {
     const wrapper = await mount()
-    expect(wrapper.get('form').attributes('aria-label')).toBe('Start a learning thread')
+    expect(wrapper.get('form').attributes('aria-label')).toBe('Start a Void')
     for (const [selector, label] of [
       ['[data-testid="learn-adaptive-need"]', 'Your goal or question'],
       ['[data-testid="learn-adaptive-outcome"]', 'Useful outcome'],
@@ -126,10 +126,10 @@ describe('need-first LearningHome', () => {
   it('announces saving a new learning thread until its creation settles', async () => {
     const wrapper = await mount()
     await wrapper.setProps({ busy: true })
-    expect(wrapper.findAll('[role="status"][aria-live="polite"]').map(status => status.text())).toContain('Saving your learning thread…')
+    expect(wrapper.findAll('[role="status"][aria-live="polite"]').map(status => status.text())).toContain('Saving your Void…')
     expect(wrapper.get('[data-testid="learn-adaptive-start"]').attributes('disabled')).toBeDefined()
     await wrapper.setProps({ busy: false, serverError: 'Your thread could not be saved. Try again.' })
-    expect(wrapper.findAll('[role="status"][aria-live="polite"]').map(status => status.text())).not.toContain('Saving your learning thread…')
+    expect(wrapper.findAll('[role="status"][aria-live="polite"]').map(status => status.text())).not.toContain('Saving your Void…')
     expect(wrapper.get('[role="alert"]').text()).toBe('Your thread could not be saved. Try again.')
     wrapper.unmount()
   })

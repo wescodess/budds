@@ -116,7 +116,7 @@ async function continueDraft() {
   continueKey.value ??= commandKey('adaptive-diagnostic-continue')
   try {
     const result = await continueMutation.mutate({ threadId: props.canvas.thread.id as never, expectedRevision: threadRevision.value, idempotencyKey: continueKey.value }) as { kind: string }
-    if (result.kind !== 'ok') { continueKey.value = null; throw new Error('This thread changed. Reload it to continue.') }
+    if (result.kind !== 'ok') { continueKey.value = null; throw new Error('This Void changed. Reload it to continue.') }
   }
   catch (cause) { error.value = getErrorMessage(cause, 'Could not start the diagnostic. Try again.') }
   finally { busy.value = false }
@@ -142,7 +142,7 @@ async function submit() {
 
 <template>
   <section class="w-full" data-testid="learn-diagnostic-canvas" :aria-labelledby="showHeader ? 'learn-diagnostic-title' : undefined" :aria-label="showHeader ? undefined : 'Current activity'">
-    <p v-if="showHeader" class="text-xs font-medium uppercase tracking-wide text-primary">Learning thread · {{ canvas.thread.intent }}</p>
+    <p v-if="showHeader" class="text-xs font-medium uppercase tracking-wide text-primary">Void · {{ canvas.thread.intent }}</p>
     <h1 v-if="showHeader" id="learn-diagnostic-title" class="mt-2 font-dm-sans text-3xl font-bold">{{ canvas.thread.outcome }}</h1>
     <LearnAdaptiveWhyControls v-if="!blocked && canvas.activity?.controls" :controls="canvas.activity.controls" :thread-id="canvas.thread.id" :activity-id="canvas.activity.id" :revision="threadRevision" @revision="threadRevision = $event" />
     <div class="mt-6 rounded-xl border border-border bg-card p-5" data-testid="learn-diagnostic-recovery" :role="blocked ? 'alert' : undefined">

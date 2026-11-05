@@ -420,7 +420,7 @@ test('server-owned rollback hides the routed Canvas and restores saved work', as
     await page.goto(threadUrl)
     const denied = page.getByTestId('learn-adaptive-thread-denied')
     await expect(denied, `${viewport.name}: rolled-back route`).toBeVisible()
-    await expect(denied.getByRole('status')).toHaveText('This learning thread is not available for this account.')
+    await expect(denied.getByRole('status')).toHaveText('This Void is not available for this account.')
     await expect(page.getByTestId('learn-adaptive-canvas-frame')).toHaveCount(0)
     const recovery = denied.getByRole('link', { name: 'Open V2 learning plans' })
     await expect(recovery).toHaveAttribute('href', '/app/learn?legacy=v2')

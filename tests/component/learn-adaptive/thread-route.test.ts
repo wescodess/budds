@@ -182,7 +182,7 @@ describe('adaptive thread route isolation', () => {
         primitive: { contractVersion: 'learn-adaptive.activity-contract.v1', rendererVersion: 'learn-adaptive.renderer.v1', type: 'reflection_next_move', action: 'accept_next_move', testId: 'learn-primitive-reflection-next-move', props: { feedback: 'You completed the guided example.', nextMove: 'Try one independent example.', allowedDecisions: ['accept', 'override', 'end'] } },
         fallback: { title: 'Unavailable', body: 'Try later.', testId: 'learn-activity-fallback', primaryAction: { label: 'Continue safely' } } } }
     const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
-    expect(wrapper.get('[data-testid="learn-reflection-completed"]').text()).toContain('Thread ended')
+    expect(wrapper.get('[data-testid="learn-reflection-completed"]').text()).toContain('Void ended')
     expect(wrapper.find('[data-testid="learn-adaptive-thread-unavailable"]').exists()).toBe(false)
     wrapper.unmount()
   })
@@ -271,7 +271,7 @@ describe('adaptive thread route isolation', () => {
     const Page = await import(path)
     projection.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Gravity', intent: 'understand', evidenceState: 'stale', lifecycle: 'active', revision: 2, authorityKind: 'v2_mission', learningVoidId: 'void_1' },
       currentActivity: { id: 'activity_2', status: 'blocked', purpose: 'Current explanation.' }, history: [{ id: 'activity_1', status: 'replaced', purpose: 'Earlier explanation.' }],
-      nextAction: { kind: 'recover', label: 'Review your learning mission', activityId: 'activity_2' } }
+      nextAction: { kind: 'recover', label: 'Review your Void', activityId: 'activity_2' } }
     requestedRoute.query.activity = 'activity_1'
     evidence.value = { ownerId: 'owner_1', threadId: 'thread_1', kind: 'factual', activityId: 'activity_1', eligibility: 'historical', readOnly: true, integrityState: 'stale',
       claims: [{ claimId: 'claim_1', claimText: 'Gravity attracts masses.', claimStatus: 'unknown', integrityState: 'stale',
@@ -311,7 +311,7 @@ describe('adaptive thread route isolation', () => {
     const Page = await import(path)
     projection.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Gravity', intent: 'understand', evidenceState: 'unavailable', lifecycle: 'active', revision: 2, authorityKind: 'v2_mission', learningVoidId: 'void_1' },
       currentActivity: { id: 'activity_2', status: 'started', purpose: 'Current explanation.' }, history: [],
-      nextAction: { kind: 'recover', label: 'Review your learning mission', activityId: 'activity_2' } }
+      nextAction: { kind: 'recover', label: 'Review your Void', activityId: 'activity_2' } }
     canvas.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Gravity', intent: 'understand', revision: 2 }, status: 'ready',
       activity: { id: 'activity_2', status: 'started', purpose: 'Current explanation.', reasonCode: 'ready_v2_session', primitive: null,
         fallback: { testId: 'learn-activity-fallback', title: 'Unavailable', body: 'Try later.', primaryAction: { label: 'Back to Learn' } }, requiredAction: { kind: 'continue', label: 'Continue' } },
@@ -465,10 +465,10 @@ describe('adaptive thread route isolation', () => {
     projection.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Explain gravity', intent: 'understand', evidenceState: 'ready', lifecycle: 'active', revision: 4, authorityKind: 'v2_mission', learningVoidId: 'void_1' },
       currentActivity: { id: 'activity_1', status: 'feedback', purpose: 'Apply gravity independently.' }, history: [],
       completion: { version: 'learn-adaptive.representative-completion.v1', status: 'passed', basis: 'server_scored_representative_task', activityId: 'activity_1', recordedAt: 100 },
-      nextAction: { kind: 'open_v2_mission', label: 'Choose your next move in your learning mission', reasonCode: 'representative_pass', activityId: 'activity_1' } }
+      nextAction: { kind: 'open_v2_mission', label: 'Choose your next move in your Void', reasonCode: 'representative_pass', activityId: 'activity_1' } }
     const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
     expect(wrapper.get('[data-testid="learn-representative-outcome"]').text()).toContain('Representative task passed')
-    expect(wrapper.get('#learn-thread-next-title').element.parentElement?.textContent).toContain('Choose your next move in your learning mission')
+    expect(wrapper.get('#learn-thread-next-title').element.parentElement?.textContent).toContain('Choose your next move in your Void')
     expect(wrapper.get('[data-testid="learn-representative-next-move"]').attributes('href')).toBe('/app/learn/void_1')
     expect(wrapper.get('[data-testid="learn-adaptive-canvas-fallback"]')).toBeTruthy()
     user.value = { _id: 'owner_2' }

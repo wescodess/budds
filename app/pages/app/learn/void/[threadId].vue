@@ -112,7 +112,7 @@ async function runDocumentRecord(command: RecordDocumentCommand) {
   if (!thread.value || thread.value.thread.id !== command.threadId || ownerId.value !== command.ownerId
     || !allowed.value || recordSourceId.value !== command.sourceId) {
     pendingRecord.value = null
-    recordError.value = 'This document is no longer selected for your thread. Review the source before trying again.'
+    recordError.value = 'This document is no longer selected for your Void. Review the source before trying again.'
     return
   }
   const scopeEpoch = recordScopeEpoch
@@ -127,10 +127,10 @@ async function runDocumentRecord(command: RecordDocumentCommand) {
     if (scopeEpoch !== recordScopeEpoch) return
     pendingRecord.value = null
     if (result.kind === 'recorded') recordNotice.value = 'Document context recorded. Choose it below for an unscored planning activity; no facts were verified or mastery awarded.'
-    else if (result.kind === 'conflict') recordError.value = 'The thread changed in another tab. Review the refreshed thread and select the document again.'
+    else if (result.kind === 'conflict') recordError.value = 'The Void changed in another tab. Review the refreshed Void and select the document again.'
     else recordError.value = result.code === 'source_revision_changed' || result.code === 'source_unavailable'
       ? 'The document changed or is unavailable. Review the source before trying again.'
-      : 'This document could not be recorded. Review the thread and source before trying again.'
+      : 'This document could not be recorded. Review the Void and source before trying again.'
   }
   catch {
     if (scopeEpoch === recordScopeEpoch) recordError.value = 'The outcome could not be confirmed. Retry the same record to check its result.'
@@ -216,26 +216,26 @@ function contributionStatusLabel(row: ContributionRow) {
   if (row.sourceStatus !== 'available') return 'Source unavailable; this contribution cannot be used.'
   if (convertedContributionIds.value.has(row._id)) return 'Already used in an activity.'
   const lifecycle = thread.value?.thread.lifecycle
-  if (lifecycle === 'paused' || lifecycle === 'ended' || lifecycle === 'rollback' || lifecycle === 'draft') return 'This thread cannot accept a contribution activity right now.'
+  if (lifecycle === 'paused' || lifecycle === 'ended' || lifecycle === 'rollback' || lifecycle === 'draft') return 'This Void cannot accept a contribution activity right now.'
   const currentStatus = thread.value?.currentActivity?.status
   if (currentStatus && ['started', 'submitted', 'scoring', 'feedback', 'reconciling'].includes(currentStatus)) return 'Finish the current activity before choosing another next move.'
   return 'Recorded as available. Its source will be checked when selected; the activity is unscored.'
 }
 function conversionErrorMessage(code: string) {
-  if (code === 'contribution_already_converted') return 'This contribution is already represented by an activity in this thread. Review that activity before choosing another source.'
+  if (code === 'contribution_already_converted') return 'This contribution is already represented by an activity in this Void. Review that activity before choosing another source.'
   if (code === 'evidence_conflict') return 'Linked evidence has an unresolved conflict. Review the source before choosing another next move.'
   if (code === 'evidence_unavailable') return 'Linked evidence is no longer available or accepted. Review the source before choosing another next move.'
   if (code === 'source_revision_changed' || code === 'source_unavailable' || code === 'contribution_unavailable') return 'This source changed or is unavailable. Review the contribution list before trying again.'
   if (code === 'factual_authority_unavailable') return 'This contribution cannot create a factual activity until independent factual authority is available.'
-  if (['thread_not_active', 'thread_not_ready', 'thread_deleting', 'clarification_pending', 'activity_boundary_unavailable'].includes(code)) return 'The thread or current activity changed. Review the current state before choosing another next move.'
-  return 'This contribution could not be used. Review the current thread and try again if it is still available.'
+  if (['thread_not_active', 'thread_not_ready', 'thread_deleting', 'clarification_pending', 'activity_boundary_unavailable'].includes(code)) return 'The Void or current activity changed. Review the current state before choosing another next move.'
+  return 'This contribution could not be used. Review the current Void and try again if it is still available.'
 }
 function contributionConversionKey() { return `contribution-conversion:${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}` }
 async function runContributionConversion(command: ContributionConversionCommand) {
   if (contributionConversionBusy.value) return
   if (!thread.value || thread.value.thread.id !== command.threadId || ownerId.value !== command.ownerId || !allowed.value) {
     pendingContributionConversion.value = null
-    contributionConversionError.value = 'This contribution belongs to another thread or account. Open your own thread to continue.'
+    contributionConversionError.value = 'This contribution belongs to another Void or account. Open your own Void to continue.'
     return
   }
   contributionConversionBusy.value = true
@@ -253,7 +253,7 @@ async function runContributionConversion(command: ContributionConversionCommand)
     }
     else if (result.kind === 'conflict') {
       pendingContributionConversion.value = null
-      contributionConversionError.value = 'The thread changed in another tab. Review the refreshed thread, then choose the contribution again.'
+      contributionConversionError.value = 'The Void changed in another tab. Review the refreshed Void, then choose the contribution again.'
     }
     else {
       pendingContributionConversion.value = null
@@ -316,7 +316,7 @@ async function runMemoryCommand(command: MemoryCommand) {
   if (memoryBusy.value) return
   if (!thread.value || thread.value.thread.id !== command.threadId || ownerId.value !== command.ownerId) {
     pendingMemoryCommand.value = null
-    memoryError.value = 'This memory belongs to another thread or account. Open your own thread to continue.'
+    memoryError.value = 'This memory belongs to another Void or account. Open your own Void to continue.'
     return
   }
   memoryBusy.value = true
@@ -360,7 +360,7 @@ async function runMemoryCommand(command: MemoryCommand) {
 function requestMemoryCommand(input: MemoryPreferenceChange | { artifactId: string } | { promotion: PromotionChange }) {
   const current = memory.value
   if (!current || !thread.value || !ownerId.value) {
-    memoryError.value = 'Memory is unavailable for this thread. Review current memory before changing it.'
+    memoryError.value = 'Memory is unavailable for this Void. Review current memory before changing it.'
     return
   }
   if (pendingMemoryCommand.value) {
@@ -446,7 +446,7 @@ const safeDestination = computed(() => {
     ? `/app/learn/${encodeURIComponent(value.learningVoidId)}`
     : '/app/learn'
 })
-const safeDestinationLabel = computed(() => safeDestination.value === '/app/learn' ? 'Back to Learn' : 'Open your learning mission')
+const safeDestinationLabel = computed(() => safeDestination.value === '/app/learn' ? 'Back to Learn' : 'Open your Void')
 const evidenceOpenRequest = ref(0)
 const evidenceReturnFocus = ref<HTMLButtonElement | null>(null)
 function inspectEvidence(origin: HTMLButtonElement) {
@@ -458,21 +458,21 @@ function leave() { void router.push(safeDestination.value) }
 </script>
 
 <template>
-  <section aria-label="Learning thread" data-testid="learn-adaptive-thread-route" :class="[LEARN_ADAPTIVE_SURFACE, 'min-h-full bg-[var(--learn-thread-surface)]']">
+  <section aria-label="Void" data-testid="learn-adaptive-thread-route" :class="[LEARN_ADAPTIVE_SURFACE, 'min-h-full bg-[var(--learn-thread-surface)]']">
     <section v-if="checkingAccess" class="mx-auto max-w-3xl p-6" aria-live="polite">Checking learning access…</section>
     <section v-else-if="!allowed" class="mx-auto max-w-3xl p-6" data-testid="learn-adaptive-thread-denied">
-      <p role="status">This learning thread is not available for this account.</p>
+      <p role="status">This Void is not available for this account.</p>
       <NuxtLink v-if="fallbackRoute" :to="{ name: fallbackRoute.name, query: fallbackRoute.name === 'app-learn' ? { legacy: 'v2' } : {} }" data-testid="learn-adaptive-safe-destination" class="mt-4 inline-flex min-h-11 items-center text-primary underline">{{ fallbackRoute.label }}</NuxtLink>
-      <NuxtLink v-else :to="{ name: 'index' }" data-testid="learn-adaptive-safe-destination" class="mt-4 inline-flex min-h-11 items-center text-primary underline">Open your folders for classic courses</NuxtLink>
+      <NuxtLink v-else :to="{ name: 'index' }" data-testid="learn-adaptive-safe-destination" class="mt-4 inline-flex min-h-11 items-center text-primary underline">Open your folders for classic Voids</NuxtLink>
     </section>
-    <section v-else-if="projectionPending && !thread" class="mx-auto max-w-3xl p-6" aria-live="polite">Loading your learning thread…</section>
+    <section v-else-if="projectionPending && !thread" class="mx-auto max-w-3xl p-6" aria-live="polite">Loading your Void…</section>
     <section v-else-if="!shellReady" class="mx-auto max-w-3xl p-6" data-testid="learn-adaptive-thread-unavailable">
-      <p role="status">This learning thread is unavailable.</p>
+      <p role="status">This Void is unavailable.</p>
       <NuxtLink :to="safeDestination" data-testid="learn-adaptive-safe-destination" class="mt-4 inline-flex min-h-11 items-center text-primary underline">{{ safeDestinationLabel }}</NuxtLink>
     </section>
     <div v-else-if="thread" class="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6" data-testid="learn-adaptive-thread-shell">
       <header>
-        <p class="text-xs font-medium uppercase tracking-wide text-primary">Learning thread · {{ thread.thread.intent }}</p>
+        <p class="text-xs font-medium uppercase tracking-wide text-primary">Void · {{ thread.thread.intent }}</p>
         <h1 class="mt-2 font-dm-sans text-3xl font-bold">{{ thread.thread.outcome }}</h1>
         <p v-if="thread.thread.goal && thread.thread.goal !== thread.thread.outcome" class="mt-2 text-sm text-muted-foreground" data-testid="learn-thread-goal">Goal: {{ thread.thread.goal }}</p>
         <p v-if="thread.unresolvedPoint" class="mt-2 text-sm" data-testid="learn-thread-unresolved">Still open: {{ thread.unresolvedPoint }}</p>
@@ -494,7 +494,7 @@ function leave() { void router.push(safeDestination.value) }
       <section class="mt-6 rounded-xl border border-border bg-[var(--learn-context-surface)] p-5" aria-labelledby="learn-thread-next-title">
         <h2 id="learn-thread-next-title" class="font-dm-sans text-lg font-semibold">Your next move</h2>
         <p v-if="thread.completion" class="mt-2 text-sm" data-testid="learn-representative-outcome" role="status">{{ thread.completion.status === 'passed' ? 'Representative task passed.' : 'Representative task needs more practice.' }} This result describes the scored task, not mastery.</p>
-        <p class="mt-2 text-sm">{{ rollback ? 'Back to Learn' : thread.currentActivity || ['draft', 'ready'].includes(thread.thread.lifecycle) ? thread.nextAction.label : 'Review this thread from your learning home.' }}</p>
+        <p class="mt-2 text-sm">{{ rollback ? 'Back to Learn' : thread.currentActivity || ['draft', 'ready'].includes(thread.thread.lifecycle) ? thread.nextAction.label : 'Review this Void from your learning home.' }}</p>
         <NuxtLink v-if="thread.completion && thread.thread.authorityKind === 'v2_mission'" :to="safeDestination" data-testid="learn-representative-next-move" class="mt-2 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)]">{{ safeDestinationLabel }}</NuxtLink>
         <NuxtLink v-if="thread.nextAction.kind === 'clarify' && (canvas || diagnostic)" :to="safeDestination" class="mt-2 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)]">{{ safeDestinationLabel }}</NuxtLink>
       </section>
@@ -504,10 +504,10 @@ function leave() { void router.push(safeDestination.value) }
         <p class="mt-2 text-sm text-muted-foreground">Choose a recorded contribution to make an attributed, unscored planning activity. Its source will be checked first. This does not verify facts or award mastery.</p>
         <div v-if="thread.thread.sourceScope?.kind === 'document' || thread.thread.sourceScope?.kind === 'folder'" class="mt-4 rounded-lg border border-border p-3" data-testid="learn-thread-document-producer">
           <p class="text-sm font-medium">Add document context</p>
-          <p class="mt-1 text-sm text-muted-foreground">Record a document already selected for this thread as context only. This does not verify its claims.</p>
-          <p v-if="thread.thread.sourceScope.kind === 'document'" class="mt-2 text-sm">Selected thread document</p>
+          <p class="mt-1 text-sm text-muted-foreground">Record a document already selected for this Void as context only. This does not verify its claims.</p>
+          <p v-if="thread.thread.sourceScope.kind === 'document'" class="mt-2 text-sm">Selected Void document</p>
           <template v-else>
-            <label for="learn-document-select" class="mt-2 block text-sm">Document in this thread’s folder</label>
+            <label for="learn-document-select" class="mt-2 block text-sm">Document in this Void’s folder</label>
             <select
               id="learn-document-select" v-model="selectedDocumentId" data-testid="learn-document-select" :disabled="recordBusy || Boolean(pendingRecord)"
               class="mt-1 min-h-11 w-full rounded-lg border border-border bg-background px-3 text-sm">
@@ -533,7 +533,7 @@ function leave() { void router.push(safeDestination.value) }
           :thread-id="thread.thread.id" :owner-id="String(ownerId)" :folder-id="thread.thread.sourceScope.sourceId"
           :expected-revision="thread.thread.revision" :lifecycle="thread.thread.lifecycle" />
         <p v-if="contributionsQuery.pending.value" class="mt-3 text-sm" role="status">Loading recent contributions…</p>
-        <p v-else-if="contributions.length === 0" class="mt-3 text-sm text-muted-foreground">No contributions are available for this thread yet.</p>
+        <p v-else-if="contributions.length === 0" class="mt-3 text-sm text-muted-foreground">No contributions are available for this Void yet.</p>
         <ol v-else class="mt-3 space-y-3">
           <li v-for="item in contributions" :key="item._id" data-testid="learn-thread-contribution-row" class="rounded-lg border border-border p-3">
             <p class="text-sm font-medium">{{ contributionFeatureLabel(item.sourceFeature) }} · {{ item.contributionKind }}</p>
@@ -578,7 +578,7 @@ function leave() { void router.push(safeDestination.value) }
           <NuxtLink :to="safeDestination" class="mt-3 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline">{{ safeDestinationLabel }}</NuxtLink>
         </div>
         <div v-if="showCurrent && endedReadOnly" data-testid="learn-thread-ended-history" class="rounded-lg border border-border p-5" role="status">
-          <h2 class="font-dm-sans text-lg font-semibold">This thread has ended</h2>
+          <h2 class="font-dm-sans text-lg font-semibold">This Void has ended</h2>
           <p class="mt-2 text-sm text-muted-foreground">Your learning memory and past activity remain available for review.</p>
           <NuxtLink :to="safeDestination" class="mt-3 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline">{{ safeDestinationLabel }}</NuxtLink>
         </div>
@@ -589,11 +589,11 @@ function leave() { void router.push(safeDestination.value) }
           <LearnAdaptiveDiagnosticCanvas v-else-if="diagnostic" :key="`${ownerId}:${diagnostic.thread.id}:${diagnostic.activity?.id ?? 'draft'}`" :canvas="diagnostic as never" :authoritative-revision="Math.max(thread.thread.revision, diagnostic.thread.revision)" :show-header="false" :active="currentCanvasVisible" @leave="leave" />
           <div v-else-if="detailPending" data-testid="learn-adaptive-canvas-loading" class="rounded-lg border border-border p-5" role="status" aria-live="polite">
             <h2 class="font-dm-sans text-lg font-semibold">Loading current activity…</h2>
-            <p class="mt-2 text-sm text-muted-foreground">Your thread and history are available while the activity loads.</p>
+            <p class="mt-2 text-sm text-muted-foreground">Your Void and history are available while the activity loads.</p>
           </div>
           <div v-else data-testid="learn-adaptive-canvas-fallback" class="rounded-lg border border-border p-5" role="status">
             <h2 class="font-dm-sans text-lg font-semibold">Current activity unavailable</h2>
-            <p class="mt-2 text-sm text-muted-foreground">Your thread and activity history are saved. Open the learning destination to continue safely.</p>
+            <p class="mt-2 text-sm text-muted-foreground">Your Void and activity history are saved. Open the learning destination to continue safely.</p>
             <NuxtLink :to="safeDestination" data-testid="learn-adaptive-canvas-fallback-action" class="mt-3 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)]">{{ safeDestinationLabel }}</NuxtLink>
           </div>
         </div>

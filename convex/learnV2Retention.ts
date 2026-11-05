@@ -47,7 +47,7 @@ async function invalidateLinkedAdaptiveActivities(
         await ctx.db.patch(activity._id, { status: 'blocked', updatedAt: now })
         await ctx.db.patch(thread._id, { evidenceState: 'invalidated',
           unresolvedPoint: (thread.unresolvedPoint ?? thread.originalNeed).slice(0, 240),
-          nextAction: { kind: 'recover', label: 'Review your learning mission', reasonCode: 'source_invalidated', activityId: activity.activityId },
+          nextAction: { kind: 'recover', label: 'Review your Void', reasonCode: 'source_invalidated', activityId: activity.activityId },
           revision: thread.revision + 1, updatedAt: now })
       }
     }

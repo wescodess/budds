@@ -732,6 +732,21 @@ describe('owned V1 Calendar destinations', () => {
       .toEqual({ courseId, folderId, title: 'Test Course' })
   })
 
+  test.each(['sync', 'missed'] as const)('%s names the course Void in new descriptions without rewriting issued ones', async (writer) => {
+    const { asAlice, oldEventId, oldDescription, runWriter } = await setupWriter(writer)
+    const descriptions: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      descriptions.push(JSON.parse(String(init.body)).description)
+      return new Response('{}', { status: 200 })
+    }))
+    await runWriter()
+    expect(descriptions).toHaveLength(1)
+    expect(descriptions[0]!.split('\n')[1]).toBe('Void: Test Course')
+    expect(descriptions[0]).not.toContain('Course:')
+    const events = await asAlice.query(api.calendarEvents.listByUser, {})
+    if (oldEventId) expect(events.find(event => event._id === oldEventId)?.description).toBe(oldDescription)
+  })
+
   test.each(['sync', 'missed'] as const)('%s omits the link when no site origin is configured', async (writer) => {
     vi.stubEnv('SITE_URL', undefined)
     vi.stubEnv('NUXT_PUBLIC_SITE_URL', undefined)

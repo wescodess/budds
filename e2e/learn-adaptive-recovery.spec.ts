@@ -354,7 +354,7 @@ test('an invalid learning thread link offers keyboard-operable recovery at each 
 
     const boundary = page.getByTestId('learn-adaptive-thread-unavailable')
     await expect(boundary, `${viewport.name}: unavailable boundary`).toBeVisible()
-    await expect(boundary.getByRole('status')).toHaveText('This learning thread is unavailable.')
+    await expect(boundary.getByRole('status')).toHaveText('This Void is unavailable.')
     await expect(page.getByTestId('learn-adaptive-canvas-frame')).toHaveCount(0)
 
     const recovery = boundary.getByRole('link', { name: 'Back to Learn' })
