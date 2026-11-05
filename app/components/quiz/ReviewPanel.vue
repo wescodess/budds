@@ -98,8 +98,8 @@ function retryIsDue(assessment: SemanticAssessment) {
 </script>
 
 <template>
-  <div class="flex flex-col rounded-lg border sm:min-h-[400px] sm:flex-row">
-    <div v-if="graded" class="space-y-3 p-4 pb-0 sm:hidden">
+  <div class="flex flex-col rounded-lg border" :class="graded ? '@[40rem]:min-h-[400px] @[40rem]:flex-row' : 'sm:min-h-[400px] sm:flex-row'">
+    <div v-if="graded" class="space-y-3 p-4 pb-0 @[40rem]:hidden">
       <slot name="summary" />
     </div>
     <div v-else class="flex gap-1.5 overflow-x-auto border-b p-2 sm:hidden">
@@ -118,7 +118,7 @@ function retryIsDue(assessment: SemanticAssessment) {
       </button>
     </div>
 
-    <div class="hidden w-64 shrink-0 overflow-y-auto border-r sm:block">
+    <div class="hidden w-64 shrink-0 overflow-y-auto border-r" :class="graded ? '@[40rem]:block' : 'sm:block'">
       <button
         v-for="{ result: r, index: i } in railItems"
         :key="r.questionId"
@@ -145,11 +145,11 @@ function retryIsDue(assessment: SemanticAssessment) {
     <div
       v-if="activeResult"
       ref="answer"
-      class="flex-1 overflow-y-auto p-4 sm:p-6"
-      :class="graded && 'min-w-0 break-words outline-none focus-visible:ring-[3px] focus-visible:ring-inset focus-visible:ring-ring/50'"
+      class="flex-1 overflow-y-auto p-4"
+      :class="graded ? 'min-w-0 break-words outline-none focus-visible:ring-[3px] focus-visible:ring-inset focus-visible:ring-ring/50 @[40rem]:p-6' : 'sm:p-6'"
       :tabindex="graded ? -1 : undefined"
     >
-      <p class="text-base font-medium sm:text-lg">{{ activeResult.questionText }}</p>
+      <p class="text-base font-medium" :class="graded ? '@[40rem]:text-lg' : 'sm:text-lg'">{{ activeResult.questionText }}</p>
 
       <slot v-if="graded && usesGradedAnswer(activeResult)" name="answer" :result="activeResult" />
 
@@ -260,7 +260,7 @@ function retryIsDue(assessment: SemanticAssessment) {
       </div>
     </div>
 
-    <div v-if="graded" class="flex justify-between gap-2 border-t p-4 sm:hidden">
+    <div v-if="graded" class="flex justify-between gap-2 border-t p-4 @[40rem]:hidden">
       <UiButton variant="outline" size="sm" class="hover:text-foreground" :disabled="activeIndex <= 0" @click="selectAnswer(activeIndex - 1)">Previous</UiButton>
       <UiButton variant="outline" size="sm" class="hover:text-foreground" :disabled="activeIndex >= results.length - 1" @click="selectAnswer(activeIndex + 1)">Next</UiButton>
     </div>

@@ -190,9 +190,9 @@ async function requestRetry() {
 </script>
 
 <template>
-  <div class="space-y-5 sm:space-y-6">
-    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4">
-      <div class="rounded-lg border p-4 text-center sm:p-5">
+  <div class="@container space-y-5 @[40rem]:space-y-6">
+    <div class="grid grid-cols-1 gap-3 @[40rem]:grid-cols-2 @[40rem]:gap-4">
+      <div class="rounded-lg border p-4 text-center @[40rem]:p-5">
         <p class="text-xs font-medium text-muted-foreground">{{ scoreLabel }}</p>
         <div class="relative mx-auto my-3" :class="scoreRingSize">
           <svg class="h-full w-full -rotate-90" viewBox="0 0 36 36" aria-hidden="true">
@@ -212,7 +212,7 @@ async function requestRetry() {
         </div>
       </div>
 
-      <div class="hidden rounded-lg border p-4 sm:block sm:p-5">
+      <div class="hidden rounded-lg border p-4 @[40rem]:block @[40rem]:p-5">
         <p class="text-center text-xs font-medium text-muted-foreground">{{ pointsLabel }}</p>
         <p class="mt-3 text-center text-3xl font-bold">{{ points }} <span class="text-lg text-muted-foreground">of {{ total }}</span></p>
         <QuizScoreStrip
@@ -230,20 +230,20 @@ async function requestRetry() {
     <QuizScoreStrip
       v-if="!stripInTile"
       v-model:page="page"
-      class="hidden sm:block"
+      class="hidden @[40rem]:block"
       :results="results"
       :selected-index="activeIndex"
       @select="openAnswer"
     />
 
     <div class="flex flex-wrap gap-2">
-      <UiButton v-if="decisionCount > 0" ref="decideButton" class="flex-1 sm:flex-none" @click="decideNext">
+      <UiButton v-if="decisionCount > 0" ref="decideButton" class="flex-1 @[40rem]:flex-none" @click="decideNext">
         Decide {{ answerCount(decisionCount) }}
       </UiButton>
       <UiButton
         ref="retakeButton"
         :variant="decisionCount > 0 ? 'outline' : undefined"
-        class="flex-1 sm:flex-none"
+        class="flex-1 @[40rem]:flex-none"
         :class="decisionCount > 0 && 'hover:text-foreground'"
         @click="emit('retake')"
       >
@@ -252,7 +252,7 @@ async function requestRetry() {
       </UiButton>
       <UiButton
         :variant="decisionCount > 0 ? 'ghost' : 'outline'"
-        class="flex-1 sm:flex-none"
+        class="flex-1 @[40rem]:flex-none"
         :class="decisionCount === 0 && 'hover:text-foreground'"
         @click="emit('back')"
       >

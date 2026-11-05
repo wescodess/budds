@@ -85,7 +85,7 @@ watch(() => props.retrying, (active) => {
         <div
           v-for="opt in result.options"
           :key="opt"
-          class="flex items-center gap-2 rounded-lg border px-3 py-2.5 text-sm sm:px-4 sm:py-3"
+          class="flex items-center gap-2 rounded-lg border px-3 py-2.5 text-sm @[40rem]:px-4 @[40rem]:py-3"
           :class="{
             'border-green-500 bg-green-500/10': opt === result.correctAnswer,
             'border-destructive bg-destructive/5': opt === result.userAnswer && !result.isCorrect && opt !== result.correctAnswer,

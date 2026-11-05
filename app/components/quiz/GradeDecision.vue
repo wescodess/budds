@@ -60,9 +60,9 @@ async function choose(value: unknown) {
       :aria-busy="saving !== null"
       @update:model-value="choose"
     >
-      <UiToggleGroupItem value="correct" class="flex-1 sm:flex-none">Correct</UiToggleGroupItem>
-      <UiToggleGroupItem value="partial" class="flex-1 sm:flex-none">Partly</UiToggleGroupItem>
-      <UiToggleGroupItem value="incorrect" class="flex-1 sm:flex-none">Incorrect</UiToggleGroupItem>
+      <UiToggleGroupItem value="correct" class="min-w-fit flex-1 @[40rem]:flex-none">Correct</UiToggleGroupItem>
+      <UiToggleGroupItem value="partial" class="min-w-fit flex-1 @[40rem]:flex-none">Partly</UiToggleGroupItem>
+      <UiToggleGroupItem value="incorrect" class="min-w-fit flex-1 @[40rem]:flex-none">Incorrect</UiToggleGroupItem>
     </UiToggleGroup>
     <p v-if="failed" role="alert" class="mt-2 text-xs text-destructive">
       We couldn't save your choice. Try again.

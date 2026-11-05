@@ -26,6 +26,12 @@ async function changePage(page: number) {
 
 const long = computed(() => props.results.length > QUIZ_STRIP_TILE_LIMIT)
 const paged = computed(() => props.results.length > QUIZ_STRIP_PAGE_SIZE)
+const columns = computed(() => {
+  if (!long.value) return 'grid-cols-[repeat(auto-fit,minmax(2.25rem,1fr))]'
+  return props.results.length > 99
+    ? 'grid-cols-4 @[20rem]:grid-cols-6 @[40rem]:grid-cols-12'
+    : 'grid-cols-4 @[17rem]:grid-cols-6 @[40rem]:grid-cols-12'
+})
 const firstIndex = computed(() => paged.value ? props.page * QUIZ_STRIP_PAGE_SIZE : 0)
 const lastNumber = computed(() => Math.min(firstIndex.value + QUIZ_STRIP_PAGE_SIZE, props.results.length))
 
@@ -44,13 +50,13 @@ const cells = computed(() => props.results.slice(firstIndex.value, lastNumber.va
 
 <template>
   <div ref="strip" class="space-y-3" data-testid="quiz-score-strip">
-    <div :class="long ? 'grid grid-cols-6 gap-1.5 sm:grid-cols-12' : 'flex gap-1.5'">
+    <div class="grid gap-1.5" :class="columns">
       <UiButton
         v-for="cell in cells"
         :key="cell.index"
         type="button"
         variant="outline"
-        class="relative flex-1 gap-1 overflow-hidden px-0 text-xs hover:text-foreground has-[>svg]:px-0"
+        class="relative gap-1 overflow-hidden px-0 text-xs hover:text-foreground focus-visible:border-solid focus-visible:border-foreground has-[>svg]:px-0 dark:focus-visible:border-foreground"
         :class="[
           cell.state === 'checking' && 'border-dashed text-muted-foreground',
           cell.state === 'your_call' && 'border-primary dark:border-primary',
