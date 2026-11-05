@@ -14,27 +14,29 @@ export const rules = [
   'violet-indigo',
 ]
 
+// Existing app/ pairs are adjacent; allow a short conditional or class-map value.
+const UPPERCASE_TRACKING_WINDOW = 4
+
 export function countViolations(source) {
   const counts = Object.fromEntries(rules.map(rule => [rule, 0]))
   counts.sparkles = [...source.matchAll(/\bSparkles\b/g)].length
   counts['style-block'] = [...source.matchAll(/<style(?=[\s>])/gi)].length
   counts.gradients = [...source.matchAll(/\bbg-(?:gradient-to-[a-z]+|linear-(?:to-[a-z]+|\d+|\[)|radial|conic)|\b(?:repeating-)?(?:linear|radial|conic)-gradient\s*\(/g)].length
 
-  // Literal strings cover static classes, Vue bindings, cn(), and class maps.
-  for (const match of source.matchAll(/(?<![\w])(["'`])((?:\\[\s\S]|(?!\1)[^\\])*?)\1/g)) {
-    for (const literal of match[2].split(/["'`]/)) {
-      const tokens = literal.split(/\s+/)
-      if (tokens.some(token => /(?:^|:)tracking-/.test(token))) {
-        counts['uppercase-tracking'] += tokens.filter(token => /(?:^|:)uppercase!?$/.test(token)).length
-      }
-      for (const token of tokens) {
-        if (/(?:^|:)backdrop-blur(?:-|!?$)/.test(token)) counts['backdrop-blur']++
-        if (/(?:^|:)(?:group-|peer-)?hover(?:\/[\w-]+)?:(?:[^:]+:)*(?:scale(?:-[xy])?-|-translate-[xy]-)/.test(token)) counts['hover-lift']++
-        if (/(?:^|:)(?:[a-z]+-)+(?:amber|orange)-\d/.test(token)) counts['raw-amber-orange']++
-        if (/(?:^|:)(?:[a-z]+-)+(?:violet|indigo)-\d/.test(token)) counts['violet-indigo']++
-        if (/-\[(?:[a-z-]+:)?#(?:[\da-f]{3}|[\da-f]{4}|[\da-f]{6}|[\da-f]{8})\]/i.test(token)) counts['raw-hex']++
-      }
+  // Scan all text, including CSS @apply and comments, without pairing quotes.
+  // Keep colons and brackets for variants, object keys and arbitrary values.
+  const tokens = source.split(/[\s"'`<>=;,{}()]+/).filter(Boolean)
+  for (const [index, token] of tokens.entries()) {
+    if (/(?:^|:)uppercase!?:?$/.test(token)
+      && tokens.slice(Math.max(0, index - UPPERCASE_TRACKING_WINDOW), index + UPPERCASE_TRACKING_WINDOW + 1)
+        .some(nearby => /(?:^|:)tracking-/.test(nearby))) {
+      counts['uppercase-tracking']++
     }
+    if (/(?:^|:)backdrop-blur(?:-|!?$)/.test(token)) counts['backdrop-blur']++
+    if (/(?:^|:)(?:group-|peer-)?hover(?:\/[\w-]+)?:(?:[^:]+:)*(?:scale(?:-[xy])?-|-translate-[xy]-)/.test(token)) counts['hover-lift']++
+    if (/(?:^|:)(?:[a-z]+-)+(?:amber|orange)-\d/.test(token)) counts['raw-amber-orange']++
+    if (/(?:^|:)(?:[a-z]+-)+(?:violet|indigo)-\d/.test(token)) counts['violet-indigo']++
+    if (/-\[(?:[a-z-]+:)?#(?:[\da-f]{3}|[\da-f]{4}|[\da-f]{6}|[\da-f]{8})\]/i.test(token)) counts['raw-hex']++
   }
   return counts
 }

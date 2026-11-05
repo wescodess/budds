@@ -42,10 +42,49 @@ describe('countViolations', () => {
     })
   })
 
-  it('does not combine uppercase and tracking across literals or flag semantic tokens and CSS palette definitions', () => {
+  it.each(['"', "'", '`'])('counts classes after a stray %s in a comment', (quote) => {
+    expect(countViolations(`<!-- ${quote} --><div class="bg-amber-500"/>`)['raw-amber-orange']).toBe(1)
+  })
+
+  it.each([
+    '<div :class="[\'uppercase\', \'tracking-wide\']" />',
+    '<div :class="{ uppercase: true, \'tracking-wide\': true }" />',
+    'const classes = `uppercase ${active ? \'tracking-wide\' : \'\'}`',
+    '<div :class="[\'md:uppercase\', \'lg:tracking-wide\']" />',
+    '<div :class="{ \'md:uppercase\': true, \'tracking-wide\': true }" />',
+    '<p class="tracking-tight uppercase tracking-wide" />',
+  ])('counts a nearby uppercase once across combined classes: %s', (source) => {
+    expect(countViolations(source)['uppercase-tracking']).toBe(1)
+  })
+
+  it.each([
+    ['uppercase a b c tracking-wide', 1],
+    ['tracking-wide a b c uppercase', 1],
+    ['uppercase a b c d tracking-wide', 0],
+    ['tracking-wide a b c d uppercase', 0],
+  ])('uses a four-token window in either direction: %s', (source, expected) => {
+    expect(countViolations(source)['uppercase-tracking']).toBe(expected)
+  })
+
+  it('counts class rules in CSS @apply', () => {
+    expect(countViolations('.probe { @apply bg-amber-500 backdrop-blur hover:scale-105 uppercase tracking-wide; }')).toMatchObject({
+      'raw-amber-orange': 1,
+      'backdrop-blur': 1,
+      'hover-lift': 1,
+      'uppercase-tracking': 1,
+    })
+    expect(countViolations('.probe { @apply text-indigo-500 bg-[#fff]; }')).toMatchObject({
+      'violet-indigo': 1,
+      'raw-hex': 1,
+    })
+  })
+
+  it('keeps distant uppercase and tracking, semantic tokens, prose and CSS palette definitions clean', () => {
     const source = `
-      <p class="uppercase" /><p class="tracking-wide" />
-      <div :class="active ? 'uppercase' : 'tracking-wide'" />
+      <p class="uppercase">A caption without any letter spacing</p>
+      <p>Separate content with many intervening tokens stays unrelated.</p>
+      <p class="tracking-wide" />
+      <p>It's ready</p>
       <div class="bg-primary text-muted-foreground hover:translate-x-1 scale-105" />
       <div class="text-[12px] bg-[var(--card)] text-[#invalid]" />
       --color-folder-indigo-ink: #6366f1;
@@ -132,6 +171,16 @@ describe('run', () => {
     expect(await run(root)).toBe(1)
     expect(await run(root, ['--update'])).toBe(1)
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining('sparkles: app/nested/new.vue: old 0, new 1. Remove the added violation'))
+    expect(await readFile(baselinePath, 'utf8')).toBe(before)
+  })
+
+  it('refuses a violation after a quoted comment in both check and update', async () => {
+    const { root, baselinePath } = await fixture()
+    const before = await readFile(baselinePath, 'utf8')
+    await writeFile(path.join(root, 'app/nested/a.vue'), '<!-- " --><div class="bg-amber-500"/>')
+    expect(await run(root)).toBe(1)
+    expect(await run(root, ['--update'])).toBe(1)
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('raw-amber-orange: app/nested/a.vue: old 0, new 1.'))
     expect(await readFile(baselinePath, 'utf8')).toBe(before)
   })
 
