@@ -160,7 +160,7 @@ Concepts are never ranked against each other, so five concepts stay different.
 4. Write the gate's recommendation from design reasoning, not from counting findings.
 5. Follow [Presentation](#presentation).
 
-Done when every option has green checks and one critique in the ledger.
+Done when every option has green checks and one critique in the ledger. A concept check has no passed result. It is labelled inconclusive only if an automated failure survives two fix attempts.
 
 ## Fidelity and revamp rounds
 
@@ -169,12 +169,12 @@ Measure noise once, before the first round that compares a candidate with a base
 1. **Noise.** For each judge, score the unchanged baseline set three times, fresh and reshuffled each time. The set is the baseline plus references in a revamp, and the baseline plus `TARGET` in fidelity. That judge's noise is the highest overall minus the lowest for the baseline. A change smaller than that spread does not count. Three runs give a rough floor, not a confidence interval. Reuse the figure only for the same surface, judge, effort, rubric and references.
 2. **Commit** the candidate. Run the automated checks until green.
 3. **Sol** judges the commit.
-4. **Opus** judges the same commit only if Sol's result meets the stop rule on its own. Each round therefore costs one judge until Sol is satisfied.
-5. **Triage** every finding yourself against the screenshots, the 1:1 crops and `DESIGN.md`:
+4. **Triage** every finding yourself against the screenshots, the 1:1 crops and `DESIGN.md`:
    - Dismiss with a reason: a scaling artefact, a preference, a contradiction of `DESIGN.md`, or in fidelity a request to differ from `approved.html`.
    - Send to the human dev: a finding that needs a new token or rule, or a real problem with `approved.html`.
    - Otherwise confirm it for fixing.
-6. **Stop** if the [stop rule](#stop-rule) is met.
+5. **Opus** judges the same commit only if, after triage, Sol's result meets the [stop rule](#stop-rule) on its own. Triage its findings the same way. Each round therefore costs one judge until Sol is satisfied.
+6. **Stop** if the stop rule is met for every judge.
 7. **Fix** confirmed findings with a fresh Opus delegate: `claudeAgent`, `claude-opus-5-5`. Give it the findings, `DESIGN.md`, the surface, and `approved.html` in fidelity. Revamp fixes stay in HTML. Return to step 2 for the next round.
 
 Update the ledger after every round.
@@ -205,7 +205,7 @@ A change the human dev asks for starts a new run with a fresh budget.
 Every mode ends here. A climb result is a candidate to show, never approval.
 
 1. **Clean render first.** HTML goes through `html_preview` then `html_render`, or as absolute file paths outside T3 Code. A build goes as a running route or unmarked PNGs. Show no marks, scores or judge text. The gate's name, idea, trade-offs and recommendation may go with concepts. Ask for a reaction and record the exact words before showing anything else.
-2. **Then the evidence.** Annotated before/after tied to finding IDs, judges' objections including those you dismissed, scores with noise, and the label `passed` or `inconclusive`. Show references to the human dev only outside git, PRs and issues.
+2. **Then the evidence.** Annotated before/after tied to finding IDs, judges' objections including those you dismissed, scores with noise, and the label `passed` or `inconclusive` where one applies. Show references to the human dev only outside git, PRs and issues.
 3. **Then the human dev's decision,** under the gate's rules. Log any correction in [misses.md](misses.md).
 
 ## Ledger

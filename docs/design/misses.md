@@ -38,7 +38,7 @@ No entries yet. `DESIGN.md` and `docs/agents/design-skills.md` record no specifi
 
 Rules and rubric lines only pile up unless something removes them. Run a shrink after any PR that adds a rubric line, ratchet rule or check, and before moving the climb into a global skill:
 
-1. Between runs, delete one piece of rubric or skill text at a time. Requirements for human-only approval, `DESIGN.md` precedence, reference storage and `review-gate` stay.
+1. Between runs, delete one piece of rubric or skill text at a time. These stay whatever the checks show: human-only approval, the five-concept rule, the approval record, `DESIGN.md` precedence, reference storage and `review-gate`.
 2. Run `pnpm design:ratchet`, then `pnpm design:capture <surface> --compare <dir>` on the surfaces that text covers, with `<dir>` as the capture from before the deletion. Both must pass.
 3. For each taste case judges flagged, give the chosen and rejected options to one fresh judge using the shrunk rubric. The case stays green if the judge still raises the human dev's complaint against the rejected option.
 4. Keep the deletion only if steps 2 and 3 stay green. Restore it otherwise.
