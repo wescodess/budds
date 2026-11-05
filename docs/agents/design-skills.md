@@ -40,7 +40,7 @@ All seven skills in Anthropic's Design plugin are installed, alongside the seven
 | `web-artifacts-builder` | Standalone React HTML artifacts. |
 | `webapp-testing` | Playwright guidance for rendered UI validation. |
 
-Choose the skills that fit the task. Installation does not make every skill a required step. For new Budds UI, follow the project UI design gate: five visual concepts, human selection, iteration, and explicit satisfaction before implementation. UI design and implementation use Opus 5.5 under that gate.
+Choose the skills that fit the task. Installation does not make every skill a required step. For new Budds UI, follow the project UI design gate: five visual concepts, human selection, iteration, and explicit satisfaction before implementation. UI design and implementation use Opus 5.5 under that gate. One exception: Sol 6.1 may judge UI screenshots, read-only, under the [Design Climb](../design/climb.md); judge output is never approval.
 
 The Design plugin's optional connector reference is preserved at [`.agents/CONNECTORS.md`](../../.agents/CONNECTORS.md), with a Claude symlink so upstream relative links resolve. These skills also work from supplied screenshots, files, and descriptions. Installing them configures no MCP servers or external integrations.
 
@@ -68,7 +68,7 @@ Look at the rendered screen in dark and light themes first, then scan the diff.
 - [ ] Copy uses plain verbs and sentence case. Errors say what happened and how to fix it. No "unlock" or "elevate".
 - [ ] Tailwind utilities only, with no `<style>` block.
 
-Existing drift, do not copy it (counts of `app/` files, 2026-11-05): `uppercase tracking` 45, `Sparkles` icon 14, `backdrop-blur` 10, gradients 5, `hover:scale` or `hover:-translate` 5, `<style>` 5, violet in `quiz/ReviewPanel.vue`.
+Existing drift, do not copy it: `pnpm design:ratchet` fails on any rise, and `docs/design/ratchet-baseline.json` holds the current counts.
 
 ## Conflicts with `DESIGN.md`
 
