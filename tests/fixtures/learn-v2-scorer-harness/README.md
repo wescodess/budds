@@ -32,7 +32,7 @@ The manifest contains the Node patch version, repository commit, lockfile digest
 
 Requests use only the regenerated, permitted public synthetic corpus. Each has a fresh opaque item ID and neutral criterion IDs, independently shuffled by adapter. Locators, class/split labels, expected vectors, essential-atom labels, learner/teaching/time fields and other grades stay local. The unchanged baseline request builder/parser and C3.2 configuration/receipt service remain authoritative for baseline scoring. Independent graders return a strict supported/abstain vector with checked source-span bounds. All scores use the existing local criterion arithmetic.
 
-Each dispatch first publishes an fsynced, exclusive `item_*.intent.json`, retaining the complete non-secret request and maximum reservation. Its immutable `item_*.terminal.json` seals the raw synthetic envelope, outcome, observed identity, usage and locally validated score. An intent without a terminal, a timeout or an unknown post-dispatch outcome keeps the full reservation and blocks that adapter. No request ID is reused. Reconciliation is explicit and metadata-only; there is no retry, fallback, continuation or refund. A crashed lock or interrupted publication requires owner investigation; the CLI never steals locks.
+Each dispatch first publishes an fsynced, exclusive `item_*.intent.json`, retaining the complete non-secret request and maximum reservation. Its immutable `item_*.terminal.json` seals the raw synthetic envelope, outcome, observed identity, usage and locally validated score. An intent without a terminal, a timeout or an unknown post-dispatch outcome keeps the full reservation and blocks that adapter. No request ID is reused. Reconciliation is explicit: replay usable saved evidence locally first, then consider the bounded metadata-only lookup. There is no inference retry, fallback, continuation or refund. A crashed lock or interrupted publication requires owner investigation; the CLI never steals locks.
 
 Reports preserve all 224 core denominators, directional false passes/blocks and unavailable sensitivity bounds. Domain, source packet, seed class, form and scorer configuration counts remain separate. Pairwise grader/baseline disagreement and the 20 repeats have explicit unavailable pairs. Eight injection controls and four diagnostic slots remain outside core support. Only complete support receives point rates. Synthetic variants are correlated; per-packet counts describe coverage, not independent learners or population accuracy.
 
@@ -52,7 +52,7 @@ The versioned owner approval binds the entire manifest digest, owner/approval ID
 
 ## Explicit metadata reconciliation — live use unrun
 
-Live use of `reconcile` still requires owner approval. It accepts only a recorded unresolved intent in its original live run, with its unchanged pins and the same signed approval, cost evidence, owner key, freshness and gateway checks as dispatch:
+Live use of `reconcile` still requires owner approval. It accepts only a recorded unresolved intent in its original live run, with its unchanged pins and the same signed approval, cost evidence, owner key and gateway checks as dispatch. Local replay verifies approval validity at the recorded dispatch time, so expiry cannot strand saved evidence. New metadata I/O also requires current approval, price freshness and the original lookup lease:
 
 ```sh
 node scripts/learn-v2-scorer-harness.mjs reconcile \
@@ -62,8 +62,54 @@ node scripts/learn-v2-scorer-harness.mjs reconcile \
   --owner-public-key /path/to/owner-public.pem
 ```
 
-The command uses the saved generation ID and C3.2 metadata lookup, with at most one lookup and a timeout of at most ten seconds within the original dispatch lease. It cannot call inference. A live observation is sealed before terminal publication so its generation ID survives a later terminal-write failure. The lookup allowance is sealed before metadata I/O; restarting after a crash never grants another lookup.
+The command first replays a saved observation through the same request, identity, output, criterion and lease validation used by dispatch and restart. It seals a missing terminal locally when possible, without a lookup or inference. Only an unresolved baseline observation with an eligible saved generation ID can use the C3.2 metadata lookup, at most once and with a timeout of at most ten seconds within the original dispatch lease. Reconciliation cannot call inference. A live observation is sealed before terminal publication so its generation ID survives a later terminal-write failure. The lookup allowance is sealed before metadata I/O; restarting after a crash never grants another lookup.
 
-Each reconciliation seals `item_*.reconciled.json` as `resolved`, `failed` or `still_unknown`, and records its digest in the global ledger. The global block clears only when every reservation has a durable resolved or failed record. A verified completed result can resolve; matching metadata that establishes cancellation or terminal failure records failure without a grade. Missing or contradictory identity, an unavailable lookup, an expired original lease, an absent saved generation ID or an adapter without the existing metadata seam stays unknown. Interrupted writes keep the block. A durable reconciliation can finish its ledger publication on restart without another lookup. Reservations remain fully charged, and replay uses only saved metadata. Unresolved cases outside this bounded lookup require owner investigation; deleting artifacts or starting a new run does not reconcile them.
+Metadata responses are sealed separately as `item_*.metadata-observation.json` before a reconciled verdict is published. Restart replays those saved bytes through C3.2, with the recorded lookup timing. An expired lease or late metadata cannot produce a resolution. The lookup intent consumes the allowance even if the process stops before I/O or before the response is saved. No restart issues a second lookup.
+
+The first reconciliation attempt is `item_*.reconciled.json`; later attempts append `item_*.reconciled-1.json`, and so on, linking each predecessor's digest. `still_unknown` is a retained observation of uncertainty, not a terminal decision. Repeating with the same evidence is idempotent; later saved observation or metadata evidence can supersede it without erasing history. Missing evidence stays blocked pending investigation, rather than authorizing inference. Known reconciliations cannot be superseded.
+
+Every global resolution verifier opens the original run and performs the same authoritative replay as its restart. It checks the manifest, saved request/intent, observation, terminal or reconciliation history, metadata response, links, digests and replayed status before admitting another run. Rehashing a stored result does not bypass replay. Unknown attempts do not publish a clearing resolution. An earlier unknown global resolution, if present, remains in history when a known resolution is added. All reservations remain fully charged, including failures and unresolved dispatches.
+
+## Live crash-point contract
+
+The durable dispatch sequence is:
+
+```text
+approval consumption → global reservation with complete intent → local intent
+  → single dispatch → observation saved → terminal sealed
+  → global resolution recorded → optional uncertainty marker/report → locks released
+```
+
+The explicit reconciliation sequence is:
+
+```text
+restore a missing local intent from its reservation → replay saved observation
+  → seal missing terminal if possible → otherwise seal metadata lookup intent
+  → at most one metadata lookup → metadata response saved → replay metadata
+  → append reconciliation attempt → global resolution recorded
+  → clear resolved marker → report → locks released
+```
+
+Each row covers a stop or exception immediately before and after that publication. A published artifact remains immutable. A publication that throws after publishing is treated as published on restart. The regression suite uses synthetic transport and publication faults; it does not establish filesystem or provider reliability.
+
+| Point | Durable state at interruption | Required recovery | Implementation / regression |
+| --- | --- | --- | --- |
+| D0: approval consumption | No reservation or transport; approval may be saved | Retry admission with the original approval; charge before transport | `claimLiveApproval`, `reserveLiveDispatch`; `crash table: approval and reservation publication` |
+| D1: global reservation → local intent | Full charge and exact intent saved globally; local intent may be absent | Block all dispatches; explicit reconciliation restores the exact intent, never dispatches it, and retains the charge | `reconcileLive`, `verifyLiveRun`; D0 test and `an interruption between global charging` |
+| D2: local intent → dispatch | Intent exists; transport may not have started | Never redispatch; retain charge and uncertainty; reconcile again when evidence is available | `dispatch`, `reconcileLive`; `crash table: local intent before transport` |
+| D3: dispatch → observation | Transport may have occurred; no usable saved response | Keep the global block; no lookup without an eligible saved generation ID; permit later saved evidence | `reconcileLive`; `crash table: absent observations` (all adapters) |
+| D4: observation → terminal | Saved observation exists; terminal absent or publication threw | Re-derive and seal the terminal through authoritative local replay, even after approval expiry; use metadata only if still unresolved and currently authorized | `evaluate`, `reconcileLive`; `A3 M1 and crash table` (all adapters, valid and refused) |
+| D5: terminal → global resolution | Replayed terminal exists; resolution absent | Verify the saved response and publish its resolution, with no inference or lookup | `recordLiveResolution`, `openRun`; A3 M1 matrix and `known durable terminal` |
+| D6: global resolution → marker/report | Resolution may already exist, or unknown outcome has no clearing resolution | Re-verify every linked record before admission; known restart is idempotent; unknown remains blocked even if marker publication fails | `openLiveLedger`, `verifyResolution`, `dispatchLive`; `crash table: durable resolution` and `post-dispatch publication failures` |
+| R0: restore local intent / seal recovered terminal | Original reservation/observation remains durable | Retry the same exclusive publication; retain charge and block until replay proves a known outcome | `reconcileLive`; D1 and A3 M1 matrices |
+| R1: metadata lookup intent | No lookup intent means no allowance used; published intent means allowance consumed | Retry only an unpublished intent; once published, never repeat metadata I/O, even if the process stopped before lookup | `reconcileLive`, `captureMetadata`; `crash table: metadata intent, saved response and reconciled verdict` |
+| R2: lookup → metadata response | Lookup allowance consumed; response may be absent or saved | Replay saved metadata locally; absent response stays unknown and may accept later saved evidence; no second lookup | `captureMetadata`, `replayMetadata`; R1 matrix and `unknown reconciliation history accepts later saved metadata` |
+| R3: metadata response → reconciliation attempt | Saved response survives verdict publication failure | Replay and append the verdict; a prior unknown attempt remains intact and can be superseded | `openReconciliation`, `reconcileLive`; R1 matrix and history tests |
+| R4: reconciliation attempt → global resolution | Known verdict saved, global publication incomplete | Replay the complete history and metadata response, then finish publication without another lookup | `recordLiveResolution`, `verifyResolution`; `interrupted global resolution publication` |
+| R5: resolution → marker removal | Resolution known; marker may remain or unlink may already have succeeded | Re-verify resolution and idempotently finish marker removal/report; no second lookup or inference | `clearResolvedMarker`, `reconcileLive`; `crash table: marker removal` |
+| D7/R6: locks released | Durable reservation/resolution is independent of transient mutexes | Exceptions releasing locks cannot clear uncertainty. A surviving owner lock is never stolen; its owner must investigate and release it before replay/reconciliation | `exclusiveLock`; `crash table: durable resolution` and `exclusive locks refuse overlapping dispatchers` |
+| Publication internals | Ordinary write/fsync/link exception, or abrupt process death with a temporary file | Ordinary exceptions clean their temporary inode while preserving any published artifact. Abrupt death retains the lock and temporary evidence for owner investigation; preserve/validate the artifact before resuming explicit reconciliation | `seal`, `exclusiveLock`; publication matrices and interrupted-write regressions |
+
+Missing, changed or replay-inconsistent terminal/resolution/metadata bytes block both the original run and other approved runs. Tests exercise the A3 rehashed-terminal reproduction for every adapter, resolution-record link/status validation, metadata tampering, history gaps and lease boundaries. Deleting artifacts, changing approvals or starting another run does not reconcile an unknown outcome.
 
 The direct pins remain Claude `claude-sonnet-5-5`, Messages API `2026-10-21`, adaptive/high, 2,048 output/thinking tokens; and Gemini `gemini-3.6-flash`, `/v1beta/interactions`, `Api-Revision: 2026-05-20`, medium thinking, 2,048 combined output/thinking tokens, `store: false`. Access, protocol compatibility, retention, billed-token bounds and actual costs remain unverified until separately authorized owner setup and canaries. There is no silent substitute or endpoint downgrade. No provider account/key creation, application/mastery writes, deployment or environment/flag change is included.

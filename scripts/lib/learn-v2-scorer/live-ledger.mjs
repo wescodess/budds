@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
 import { readdirSync } from 'node:fs'
 import { isAbsolute, join, resolve } from 'node:path'
-import { exactKeys, hash, readJson, seal, unseal, VERSION } from './artifacts.mjs'
+import { exactKeys, hash, readJson, seal, unseal, exists, VERSION } from './artifacts.mjs'
 import { LIMITS } from './contract.mjs'
+import { openRun, liveOutcome, metadataOutcome } from './run-state.mjs'
 
 const digest = value => typeof value === 'string' && /^sha256:[a-f0-9]{64}$/.test(value)
 const integer = value => Number.isSafeInteger(value) && value >= 0
@@ -10,20 +11,6 @@ const approvalName = value => `approval-${value.slice(7)}.json`
 const reservationName = value => `reservation-${hash({ approvalDigest: value.approvalDigest, id: value.id }).slice(7)}.json`
 const resolutionName = value => reservationName(value).replace('reservation-', 'resolution-')
 const sameRun = (claim, state) => claim.directory === state.directory && claim.pinsDigest === state.pinsDigest
-
-export function liveOutcome(result) {
-  if (['ambiguous', 'outcome_unknown', 'identity_unavailable', 'identity_mismatch', 'upstream_mismatch', 'unexpected_routing', 'nonterminal_output', 'lease_expired'].includes(result.status)) return 'still_unknown'
-  return result.status === 'valid' ? 'resolved' : 'failed'
-}
-
-export function metadataOutcome(result) {
-  const execution = result?.execution
-  const metadata = execution?.metadata
-  if (!metadata || execution.receipt.observedIdentity.status !== 'verified' || result.status === 'upstream_mismatch'
-    || metadata.generationId !== execution.terminal.generationId || metadata.returnedModel === null || metadata.servingProvider === null) return 'still_unknown'
-  if (metadata.cancelled === true || ['content_filter', 'length', 'error'].includes(metadata.finishReason)) return 'failed'
-  return result.status === 'valid' && metadata.finishReason === 'stop' && metadata.cancelled === false ? 'resolved' : 'still_unknown'
-}
 
 function usage(ledger, state, approvalDigest, adapter) {
   let approved = 0
@@ -42,10 +29,10 @@ function usage(ledger, state, approvalDigest, adapter) {
 // The caller holds the fixed global dispatch lock throughout read, charge and
 // transport. Entries are immutable, fsynced, exclusively published artifacts;
 // every reservation remains charged, including unknown post-dispatch outcomes.
-export function openLiveLedger(directory) {
+export async function openLiveLedger(directory) {
   const ledger = { directory, approvals: new Map(), reservations: new Map(), resolutions: new Map() }
   const names = readdirSync(directory).filter(name => !['.learn-v2-scorer-global.lock', 'unresolved.json'].includes(name))
-  for (const name of names) assert.match(name, /^(?:approval|reservation|resolution)-[a-f0-9]{64}\.json$/, 'Interrupted or unknown global ledger entry requires reconciliation')
+  for (const name of names) assert.match(name, /^(?:(?:approval|reservation)-[a-f0-9]{64}|resolution-[a-f0-9]{64}(?:-[a-f0-9]{64})?)\.json$/, 'Interrupted or unknown global ledger entry requires reconciliation')
   for (const name of names.filter(name => name.startsWith('approval-'))) {
     const raw = readJson(join(directory, name))
     const entry = unseal(directory, name, 'live_approval_consumption', raw.pinsDigest)
@@ -62,7 +49,7 @@ export function openLiveLedger(directory) {
     const raw = readJson(join(directory, name))
     const entry = unseal(directory, name, 'live_dispatch_reservation', raw.pinsDigest)
     const reservation = entry.payload
-    exactKeys(reservation, ['approvalDigest', 'id', 'model', 'configuration', 'intentDigest', 'reservationMicroUsd'])
+    exactKeys(reservation, ['approvalDigest', 'id', 'model', 'configuration', 'intentDigest', 'intent', 'reservationMicroUsd'])
     assert.ok(digest(reservation.approvalDigest) && digest(reservation.configuration) && digest(reservation.intentDigest))
     assert.match(reservation.id, /^item_[a-f0-9]{32}$/)
     assert.ok(typeof reservation.model === 'string' && reservation.model.length > 0 && reservation.model.length <= 200)
@@ -71,12 +58,18 @@ export function openLiveLedger(directory) {
     assert.ok(claim, 'Global reservation has no approval consumption record')
     assert.equal(entry.pinsDigest, claim.pinsDigest)
     assert.equal(name, reservationName(reservation))
+    assert.equal(reservation.intentDigest, hash({ version: VERSION, kind: 'dispatch_intent', pinsDigest: claim.pinsDigest, payload: reservation.intent }))
+    assert.equal(reservation.intent.id, reservation.id)
+    assert.equal(reservation.intent.approval.approvalDigest, reservation.approvalDigest)
+    assert.equal(reservation.intent.reservationMicroUsd, reservation.reservationMicroUsd)
+    assert.equal(reservation.intent.dispatched, true)
     const ownedId = hash([claim.directory, claim.pinsDigest, reservation.id])
     assert.ok(!ownedIds.has(ownedId), 'Duplicate global dispatch requires reconciliation')
     ownedIds.add(ownedId)
     ledger.reservations.set(name, reservation)
   }
-  for (const name of names.filter(name => name.startsWith('resolution-'))) {
+  const runs = new Map()
+  for (const name of names.filter(name => name.startsWith('resolution-')).sort()) {
     const raw = readJson(join(directory, name))
     const entry = unseal(directory, name, 'live_dispatch_resolution', raw.pinsDigest)
     const resolution = entry.payload
@@ -86,9 +79,12 @@ export function openLiveLedger(directory) {
     const claim = ledger.approvals.get(reservation.approvalDigest)
     assert.equal(entry.pinsDigest, claim.pinsDigest)
     assert.equal(resolution.intentDigest, reservation.intentDigest)
-    assert.equal(name, resolutionName(reservation))
-    verifyResolution(claim.directory, claim.pinsDigest, resolution)
-    ledger.resolutions.set(reservationName(reservation), resolution)
+    assert.ok(name === resolutionName(reservation) || name === resolutionName(reservation).replace('.json', `-${resolution.recordDigest.slice(7)}.json`))
+    if (!runs.has(claim.directory)) runs.set(claim.directory, await openRun(claim.directory))
+    verifyResolution(runs.get(claim.directory), claim.pinsDigest, resolution)
+    const previous = ledger.resolutions.get(reservationName(reservation))
+    if (previous && previous.status !== 'still_unknown' && resolution.status !== 'still_unknown') assert.deepEqual(previous, resolution, 'Conflicting global resolutions')
+    if (!previous || resolution.status !== 'still_unknown') ledger.resolutions.set(reservationName(reservation), resolution)
   }
   for (const claim of ledger.approvals.values()) {
     const siblings = [...ledger.approvals.values()].filter(other => other.directory === claim.directory)
@@ -102,16 +98,16 @@ export function openLiveLedger(directory) {
   return ledger
 }
 
-function verifyResolution(directory, pinsDigest, resolution) {
+function verifyResolution(state, pinsDigest, resolution) {
   assert.ok(['resolved', 'failed', 'still_unknown'].includes(resolution.status))
-  const reconciled = resolution.recordName === `${resolution.id}.reconciled.json`
+  assert.equal(state.pinsDigest, pinsDigest)
+  const reconciled = new RegExp(`^${resolution.id}\\.reconciled(?:-[1-9][0-9]*)?\\.json$`).test(resolution.recordName)
   assert.ok(reconciled || resolution.recordName === `${resolution.id}.terminal.json`)
-  const record = unseal(directory, resolution.recordName, reconciled ? 'reconciled_verdict' : 'sealed_verdict', pinsDigest)
+  const record = unseal(state.directory, resolution.recordName, reconciled ? 'reconciled_verdict' : 'sealed_verdict', pinsDigest)
   assert.equal(record.digest, resolution.recordDigest)
   assert.equal(record.payload.intentDigest, resolution.intentDigest)
-  const status = reconciled ? metadataOutcome(record.payload.result) : liveOutcome(record.payload.result)
-  assert.equal(resolution.status, status, 'Global resolution differs from its durable terminal record')
-  if (reconciled) assert.equal(record.payload.status, status)
+  const replayed = state.verifiedRecords.get(record.digest)
+  assert.deepEqual(replayed, { name: resolution.recordName, intentDigest: resolution.intentDigest, status: resolution.status }, 'Global resolution differs from authoritative replay')
 }
 
 export function unresolvedLiveDispatches(ledger) {
@@ -120,15 +116,18 @@ export function unresolvedLiveDispatches(ledger) {
   return [...ledger.reservations].filter(([name]) => !['resolved', 'failed'].includes(ledger.resolutions.get(name)?.status)).map(([, reservation]) => reservation)
 }
 
-export function recordLiveResolution(ledger, state, intent, record, reconciled = false) {
+export async function recordLiveResolution(ledger, state, intent, record, recordName = `${intent.payload.id}.terminal.json`) {
   const reservation = ledger.reservations.get(reservationName({ approvalDigest: intent.payload.approval.approvalDigest, id: intent.payload.id }))
   assert.ok(reservation && sameRun(ledger.approvals.get(reservation.approvalDigest), state))
   const resolution = { approvalDigest: reservation.approvalDigest, id: reservation.id, intentDigest: intent.digest,
-    recordName: `${reservation.id}.${reconciled ? 'reconciled' : 'terminal'}.json`, recordDigest: record.digest,
-    status: reconciled ? metadataOutcome(record.payload.result) : liveOutcome(record.payload.result) }
-  verifyResolution(state.directory, state.pinsDigest, resolution)
-  if (!reconciled && resolution.status === 'still_unknown') return
-  seal(ledger.directory, resolutionName(reservation), 'live_dispatch_resolution', state.pinsDigest, resolution)
+    recordName, recordDigest: record.digest,
+    status: record.kind === 'reconciled_verdict' ? metadataOutcome(record.payload.result) : liveOutcome(record.payload.result) }
+  verifyResolution(await openRun(state.directory), state.pinsDigest, resolution)
+  if (resolution.status === 'still_unknown') return
+  const base = resolutionName(reservation)
+  const name = exists(join(ledger.directory, base)) && readJson(join(ledger.directory, base)).payload.status === 'still_unknown'
+    ? base.replace('.json', `-${record.digest.slice(7)}.json`) : base
+  seal(ledger.directory, name, 'live_dispatch_resolution', state.pinsDigest, resolution)
   ledger.resolutions.set(reservationName(reservation), resolution)
 }
 
@@ -148,7 +147,7 @@ export function claimLiveApproval(ledger, state, approval) {
 function reservationFor(state, adapter, intent) {
   return { approvalDigest: intent.approval.approvalDigest, id: intent.id, model: adapter.model, configuration: adapter.configuration,
     intentDigest: hash({ version: VERSION, kind: 'dispatch_intent', pinsDigest: state.pinsDigest, payload: intent }),
-    reservationMicroUsd: intent.reservationMicroUsd }
+    intent, reservationMicroUsd: intent.reservationMicroUsd }
 }
 
 export function verifyLiveRun(ledger, state) {

@@ -60,9 +60,12 @@ export function seal(directory, name, kind, pinsDigest, payload) {
   // complete artifact; an existing intent can never be overwritten on restart.
   const temporary = `${file}.${process.pid}.tmp`
   const fd = openSync(temporary, 'wx', 0o600)
-  try { writeFileSync(fd, bytes); fsyncSync(fd) }
-  finally { closeSync(fd) }
-  try { linkSync(temporary, file); syncDirectory(directory) }
+  try {
+    try { writeFileSync(fd, bytes); fsyncSync(fd) }
+    finally { closeSync(fd) }
+    linkSync(temporary, file)
+    syncDirectory(directory)
+  }
   finally { unlinkSync(temporary) }
   return readJson(file)
 }
