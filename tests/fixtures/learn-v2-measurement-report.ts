@@ -21,7 +21,7 @@ export async function measurementReportSourceFixture() {
       historyStatus: 'prospectively_unexposed', allocationOrder: 'ABC', assignedDay7: true, assignedDay30: true, sourceCoverage: 'complete' },
     clock, coldOpportunityId: 'coldOpportunity1', originalOpportunityId: 'delayedOpportunity1', replacementOpportunityId: null,
     coldAcceptance: { submissionId: 'coldSubmission1', acceptedAt: anchorAt }, delayedAcceptance: { submissionId: 'delayedSubmission1', acceptedAt: openAt },
-    cold: null, delayed: null, replacementClock: null, replacementAcceptance: null, replacement: null, replacementPolicy: { kind: 'secondary_only' },
+    cold: null, delayed: null, coldReplacement: null, replacementClock: null, replacementAcceptance: null, replacement: null, replacementPolicy: { kind: 'secondary_only' },
     operationalEligibility: 'eligible', disposition: 'scoring_pending', reasonCodes: ['scoring_pending'], mixedFlow: false, treatmentEpochChanged: false })
   const claim = learnReportFirstClaimSnapshotSchema.parse({ kind: 'first_check_claim', ...keys, stratum,
     claim: { claimKey: 'claim1', claimSequence: 1, basisAttemptId: 'basisAttempt1', masteryRecordRevision: 1,
@@ -87,6 +87,23 @@ export async function measurementReportIdentityFixture() {
     replacementOpportunityId: 'otherReplacementOpportunity', replacementAcceptance: { ...episode.replacementAcceptance, submissionId: 'otherReplacementSubmission' },
     replacement: { ...replacement, submissionId: 'otherReplacementSubmission', attemptId: 'otherReplacementAttempt', executionId: 'otherReplacementExecution' } })
   return { ...source, episode, day30, otherAssignment }
+}
+
+export async function measurementReportColdReplacementFixture() {
+  const source = await measurementReportIdentityFixture()
+  const openAt = source.cold.acceptedAt
+  const acceptance = { submissionId: 'coldReplacementSubmission', acceptedAt: openAt + 1000 }
+  const coldReplacement = {
+    assessmentOpportunityId: 'coldReplacementOpportunity', replacesOpportunityId: source.episode.coldOpportunityId!,
+    replacementReason: 'unusable_case', openAt, closeAt: openAt + 3_600_000,
+    eligibilityPolicyVersion: 'learn-v2.delayed-check.v1', operationalEligibility: 'eligible', acceptance,
+    validitySnapshot: { policyVersion: 'validity.v1', status: 'valid', measurementEligible: true, masteryEligible: false, exclusionReasons: [] },
+    result: { ...source.cold, ...acceptance, attemptId: 'coldReplacementAttempt', executionId: 'coldReplacementExecution',
+      scorePercent: 20, caseId: 'reserveColdCaseD', itemId: 'reserveColdItemD', formLabel: 'D' },
+  }
+  const episode = learnReportEpisodeSnapshotSchema.parse({ ...source.episode, coldReplacement })
+  const day30 = learnReportEpisodeSnapshotSchema.parse({ ...source.day30, coldReplacement })
+  return { ...source, episode, day30 }
 }
 
 // A visible measurement or retained-check attempt cannot be an Independent basis (#364 §5).

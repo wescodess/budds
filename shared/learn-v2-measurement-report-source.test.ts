@@ -7,16 +7,16 @@ import {
 } from './learn-v2-measurement-report'
 import { emptyMeasurementReportCell, measurementReportBasisFixture, measurementReportIdentityFixture, measurementReportNonAdmittedFixture, measurementReportSourceFixture } from '../tests/fixtures/learn-v2-measurement-report'
 
-describe('report source v3 computation contract', () => {
+describe('report source v4 computation contract', () => {
   it('changes only the source version and rejects prior envelopes', async () => {
-    expect(LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION).toBe('learn-v2.measurement-report-source.v3')
+    expect(LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION).toBe('learn-v2.measurement-report-source.v4')
     expect(LEARN_V2_MEASUREMENT_REPORT_VERSION).toBe('learn-v2.measurement-report.v3')
     expect(LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION).toBe('learn-v2.measurement-report-query.v1')
     const { episode, claim, watermark } = await measurementReportSourceFixture()
     const page = { version: LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION, reportRunId: 'run1', sequence: 0, sourceWatermark: 1,
       rows: [watermark, episode, claim], cursor: null, isDone: true }
     expect(validateLearnReportSourcePage(page).rows).toEqual(page.rows)
-    for (const version of ['learn-v2.measurement-report-source.v1', 'learn-v2.measurement-report-source.v2']) {
+    for (const version of ['learn-v2.measurement-report-source.v1', 'learn-v2.measurement-report-source.v2', 'learn-v2.measurement-report-source.v3']) {
       expect(() => validateLearnReportSourcePage({ ...page, version })).toThrow()
     }
     for (const row of page.rows) {

@@ -9,7 +9,7 @@ import { learnMeasurementFlowSchema, learnMeasurementDepthSchema, learnHistorySt
 import { LEARN_MEASUREMENT_STORAGE_LIMITS } from './learn-v2-measurement-storage-manifest'
 
 export const LEARN_V2_MEASUREMENT_REPORT_VERSION = 'learn-v2.measurement-report.v3' as const
-export const LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION = 'learn-v2.measurement-report-source.v3' as const
+export const LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION = 'learn-v2.measurement-report-source.v4' as const
 export const LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION = 'learn-v2.measurement-report-query.v1' as const
 export const VERIFIED_LEARNING_GAIN_VERSION = 'verified_learning_gain.v1' as const
 export const FALSE_MASTERY_NEXT_DELAYED_VERSION = 'false_mastery_next_delayed.v1' as const
@@ -113,6 +113,21 @@ export const learnReportWatermarkSnapshotSchema = z.strictObject({
   sequence: learnSequenceSchema, dueWorkThrough: learnTimestampSchema.nullable(), historyCoverage: sourceCoverage,
   legacyIndependentAudit: learnReportLegacyIndependentAuditSchema,
 }).refine(value => value.historyCoverage !== 'unknown' || value.legacyIndependentAudit.sourceCoverage === 'unknown', 'Unknown history requires unknown legacy audit coverage')
+export const learnReportColdReplacementSchema = z.strictObject({
+  assessmentOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>(), replacesOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>(),
+  replacementReason: learnCodeSchema, openAt: learnTimestampSchema, closeAt: learnTimestampSchema,
+  eligibilityPolicyVersion: learnVersionSchema, operationalEligibility: z.enum(['pending', 'eligible', 'blocked']),
+  acceptance: learnReportAcceptanceSnapshotSchema.nullable(), validitySnapshot: learnValiditySnapshotSchema.nullable(),
+  result: learnReportResultSnapshotSchema.nullable(),
+}).refine(value => value.openAt < value.closeAt && value.assessmentOpportunityId !== value.replacesOpportunityId,
+  'Cold replacements require a distinct opportunity and bounded window')
+  .refine(value => acceptedResultMatches(value.acceptance, value.result)
+    && ((value.acceptance === null) === (value.validitySnapshot === null))
+    && (value.result === null || value.result.kind === 'measurement_cold'), 'Cold replacement results require cold acceptance and eligibility pins')
+  .refine(value => !value.validitySnapshot?.measurementEligible || (value.acceptance !== null
+    && value.acceptance.acceptedAt >= value.openAt && value.acceptance.acceptedAt < value.closeAt), 'Eligible cold replacement acceptance must be inside its window')
+  .refine(value => !value.result?.measurementEligible || value.validitySnapshot?.measurementEligible === true,
+    'Cold replacement credit requires eligibility at acceptance')
 export const learnReportEpisodeSnapshotSchema = z.strictObject({
   kind: z.literal('episode'), ...computationKeys, assignmentId: learnIdSchema<'learnMeasurementAssignments'>(),
   learningVoidId: learnIdSchema<'learningVoids'>(), blueprintRevisionId: learnIdSchema<'learnBlueprintRevisions'>(), objectiveId: learnIdSchema<'learnObjectives'>(),
@@ -121,6 +136,7 @@ export const learnReportEpisodeSnapshotSchema = z.strictObject({
   originalOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>().nullable(), replacementOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>().nullable(),
   coldAcceptance: learnReportAcceptanceSnapshotSchema.nullable(), delayedAcceptance: learnReportAcceptanceSnapshotSchema.nullable(),
   cold: learnReportResultSnapshotSchema.nullable(), delayed: learnReportResultSnapshotSchema.nullable(),
+  coldReplacement: learnReportColdReplacementSchema.nullable(),
   replacementClock: learnAssessmentClockSchema.nullable(),
   replacementAcceptance: learnReportAcceptanceSnapshotSchema.nullable(), replacement: learnReportResultSnapshotSchema.nullable(),
   replacementPolicy: learnReportReplacementPolicySchema.nullable(), operationalEligibility: z.enum(['pending', 'eligible', 'blocked']),
@@ -131,7 +147,7 @@ export const learnReportEpisodeSnapshotSchema = z.strictObject({
   .refine(value => value.assignment.status === 'admitted' || (value.horizonDays === 7 && value.clock === null
     && value.replacementClock === null && value.coldOpportunityId === null && value.originalOpportunityId === null && value.replacementOpportunityId === null
     && value.coldAcceptance === null && value.delayedAcceptance === null && value.replacementAcceptance === null
-    && value.cold === null && value.delayed === null && value.replacement === null), 'Non-admitted assignments have one inventory row without slots or outcomes')
+    && value.cold === null && value.delayed === null && value.replacement === null && value.coldReplacement === null), 'Non-admitted assignments have one inventory row without slots or outcomes')
   .refine(value => value.assignment.status !== 'admitted' || (value.horizonDays === 7 ? value.assignment.assignedDay7 : value.assignment.assignedDay30), 'Episode horizon must be assigned')
   .refine(value => acceptedResultMatches(value.coldAcceptance, value.cold) && acceptedResultMatches(value.delayedAcceptance, value.delayed)
     && acceptedResultMatches(value.replacementAcceptance, value.replacement), 'Results require their accepted submission and performance time')
@@ -146,9 +162,13 @@ export const learnReportEpisodeSnapshotSchema = z.strictObject({
     && (value.coldOpportunityId === null || ![value.originalOpportunityId, value.replacementOpportunityId].includes(value.coldOpportunityId))
     && ((value.assignment.protocolVersion === null) === (value.replacementPolicy === null))
     && (value.replacementPolicy?.kind !== 'predeclared' || value.replacementPolicy.protocolVersion === value.assignment.protocolVersion), 'Inconsistent original or replacement slot pins')
+  .refine(value => value.coldReplacement === null || (value.coldOpportunityId !== null
+    && value.coldReplacement.replacesOpportunityId === value.coldOpportunityId
+    && ![value.coldOpportunityId, value.originalOpportunityId, value.replacementOpportunityId].includes(value.coldReplacement.assessmentOpportunityId)),
+  'Cold replacement must link to the original cold slot')
   .refine(value => {
-    const submissions = [value.coldAcceptance, value.delayedAcceptance, value.replacementAcceptance].flatMap(acceptance => acceptance ? [acceptance.submissionId] : [])
-    const attempts = [value.cold, value.delayed, value.replacement].flatMap(result => result ? [result.attemptId] : [])
+    const submissions = [value.coldAcceptance, value.delayedAcceptance, value.replacementAcceptance, value.coldReplacement?.acceptance].flatMap(acceptance => acceptance ? [acceptance.submissionId] : [])
+    const attempts = [value.cold, value.delayed, value.replacement, value.coldReplacement?.result].flatMap(result => result ? [result.attemptId] : [])
     return new Set(submissions).size === submissions.length && new Set(attempts).size === attempts.length
   }, 'Distinct slots require distinct submissions and attempts')
 export const learnReportFirstClaimSnapshotSchema = z.strictObject({
@@ -174,7 +194,7 @@ export function reconcileLearnReportSourceRows(roster: readonly string[], rows: 
   const assignments = new Map<string, string>()
   const capabilityKeys = new Map<string, string>()
   const capabilityScopes = new Map<string, string>()
-  type OutcomeBinding = { learnerKey: string, capabilityKey: string, owner: string | null, role: 'cold' | 'delayed' | 'replacement' | 'claim' }
+  type OutcomeBinding = { learnerKey: string, capabilityKey: string, owner: string | null, role: 'cold' | 'cold_replacement' | 'delayed' | 'replacement' | 'claim' }
   const outcomes = new Map<string, (OutcomeBinding & {
     snapshot: string, slotWindow: string | null,
   })[]>()
@@ -225,11 +245,13 @@ export function reconcileLearnReportSourceRows(roster: readonly string[], rows: 
       capabilityKeys.set(scope, row.capabilityKey)
       capabilityScopes.set(capability, scope)
       const frozen = JSON.stringify([row.learnerKey, row.capabilityKey, row.learningVoidId, row.blueprintRevisionId, row.objectiveId,
-        row.assignment, row.coldOpportunityId, row.coldAcceptance, row.cold, row.replacementPolicy])
+        row.assignment, row.coldOpportunityId, row.coldAcceptance, row.cold, row.coldReplacement, row.replacementPolicy])
       if (assignments.has(row.assignmentId) && assignments.get(row.assignmentId) !== frozen) reasons.add('conflicting_assignment_snapshot')
       assignments.set(row.assignmentId, frozen)
       const binding = { learnerKey: row.learnerKey, capabilityKey: row.capabilityKey }
       reconcileOutcome({ ...binding, owner: JSON.stringify(['cold', row.assignmentId]), role: 'cold' }, row.coldOpportunityId, row.coldAcceptance, row.cold)
+      if (row.coldReplacement) reconcileOutcome({ ...binding, owner: JSON.stringify(['cold_replacement', row.assignmentId]), role: 'cold_replacement' },
+        row.coldReplacement.assessmentOpportunityId, row.coldReplacement.acceptance, row.coldReplacement.result)
       const episode = JSON.stringify(['episode', row.assignmentId, row.horizonDays])
       reconcileOutcome({ ...binding, owner: episode, role: 'delayed' }, row.originalOpportunityId, row.delayedAcceptance, row.delayed, row.clock)
       reconcileOutcome({ ...binding, owner: episode, role: 'replacement' }, row.replacementOpportunityId, row.replacementAcceptance, row.replacement, row.replacementClock)
@@ -257,7 +279,7 @@ export function reconcileLearnReportSourceRows(roster: readonly string[], rows: 
     if (slots.length && claims.length) {
       if (group.some(outcome => outcome.learnerKey !== slots[0]!.learnerKey)) reasons.add('claim_learner_mismatch')
       if (group.some(outcome => outcome.capabilityKey !== slots[0]!.capabilityKey)) reasons.add('claim_capability_mismatch')
-      if (slots.some(slot => slot.role === 'cold')) reasons.add('claim_shared_cold_slot')
+      if (slots.some(slot => slot.role === 'cold' || slot.role === 'cold_replacement')) reasons.add('claim_shared_cold_slot')
       const delayedSlots = slots.filter(slot => slot.role === 'delayed' || slot.role === 'replacement')
       if (delayedSlots.length && new Set([...delayedSlots, ...claims].map(outcome => outcome.slotWindow)).size > 1) reasons.add('conflicting_slot_window')
     }
