@@ -11,7 +11,7 @@ The orchestrator runs the climb, triages findings and talks to the human dev. An
 - `DESIGN.md` wins. Palette and fonts are locked. A finding that needs a new token or rule goes to the human dev, never into code.
 - Opus 5.5 does all UI design, implementation and fixes. Sol 6.1 only judges screenshots, read-only.
 - Judge output is never approval, whatever it scores.
-- Reference screenshots of NotebookLM and ChatGPT study mode live in the private Cloudflare R2 bucket `budds-design-anchors`, under `<product>/`, with a README per product. They are kept only while a run needs them and deleted when it ends; capture them again for the next run. Judges download them with `wrangler r2 object get --remote` to a temporary folder and delete it after their round. They never stay on a local disk. This repository is public, so they stay out of git, PRs, issues, candidates and taste cases.
+- Reference screenshots of NotebookLM and ChatGPT study mode live in the private Cloudflare R2 bucket `budds-design-anchors`, under `<product>/`, with a README per product. They are kept only while a run needs them and deleted when it ends; capture them again for the next run. Judges download each one with `wrangler r2 object get budds-design-anchors/<product>/<file> --remote --file <temporary-folder>/<file>` and delete it after their round. They never stay on a local disk. This repository is public, so they stay out of git, PRs, issues, candidates and taste cases.
 
 ## Modes
 
@@ -35,7 +35,7 @@ Terms used below:
 |---|---|
 | `pnpm design:ratchet` | Source checks against `docs/design/ratchet-baseline.json`. |
 | `pnpm design:capture <surface>` | Captures `docs/design/surfaces/<surface>.json` to `.design-captures/<surface>/<short-sha>/`, with PNGs, `manifest.json` and `floor.json`. |
-| `pnpm design:capture <surface> --compare <dir>` | Same, failing only on violations new against that earlier capture. |
+| `pnpm design:capture <surface> --compare <dir>` | Same, failing on violations new against that earlier capture or on any of its captures missing from this run. |
 
 Commit before every capture, because the output folder is named by commit. A missing command is a blocker to report, not a step to skip.
 
