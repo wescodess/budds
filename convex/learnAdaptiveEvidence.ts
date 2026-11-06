@@ -5,6 +5,20 @@ import { requireAdaptiveQueryAccess } from './lib/adaptiveLearnAccess'
 import { loadAdaptiveClaimProjection } from './lib/adaptiveClaimProjection'
 import { liveEvidenceState } from './learnAdaptiveRecovery'
 import type { AdaptiveEvidenceIntegrityState } from '../shared/adaptive-claim-adapter'
+import { canReadActivityTeaching, disclosureLiterals } from './lib/learnV2AssessmentDisclosure'
+import { sanitizePublicSourceLocator } from './lib/learnV2SourceSanitization'
+
+const integrity = disclosureLiterals(['accepted', 'insufficient', 'conflicting', 'stale', 'deleted', 'unavailable'])
+const evidenceFields = {
+  kind: disclosureLiterals(['factual', 'non_factual']), activityId: v.string(),
+  eligibility: disclosureLiterals(['historical', 'not_applicable', 'blocked', 'eligible']), readOnly: v.boolean(),
+  integrityState: v.union(integrity, v.null()), claims: v.array(v.object({
+    claimId: v.string(), claimText: v.union(v.string(), v.null()),
+    claimStatus: disclosureLiterals(['fact', 'synthesis', 'inference', 'unknown']), integrityState: integrity,
+    source: v.object({ origin: v.union(disclosureLiterals(['folder_document', 'user_url', 'open_database', 'general_web_search']), v.null()),
+      locator: v.union(v.string(), v.null()), sourceSnapshotId: v.string(), sourceSnapshotRevision: v.number(), sourceRecordRevision: v.number() }),
+  })),
+}
 
 // Both internal consumers and the drawer use this single owner-scoped
 // projection; the public wrapper additionally binds the selected thread.
@@ -31,6 +45,11 @@ async function readActivityEvidence(ctx: QueryCtx, userId: string, activityId: s
       integrityState: null,
       claims: [],
     }
+  }
+
+  if (!await canReadActivityTeaching(ctx, thread, activity)) return {
+    kind: 'factual' as const, activityId: activity.activityId, eligibility: historical ? 'historical' as const : 'blocked' as const,
+    readOnly: historical, integrityState: 'unavailable' as const, claims: [],
   }
 
   if (!activity.sessionContentId
@@ -63,8 +82,11 @@ async function readActivityEvidence(ctx: QueryCtx, userId: string, activityId: s
     return {
       kind: 'factual' as const, activityId: activity.activityId, eligibility: historical ? 'historical' as const : 'blocked' as const,
       readOnly: historical, integrityState: sourceIntegrity,
-      claims: claims.map(claim => ({ ...claim, integrityState: sourceIntegrity, claimStatus: 'unknown' as const,
-        source: { ...claim.source, locator: locatorUnavailable ? null : claim.source.locator } })),
+      claims: claims.map(claim => ({ claimId: claim.claimId, claimText: null,
+        integrityState: sourceIntegrity, claimStatus: 'unknown' as const,
+        source: { origin: claim.source.origin, sourceSnapshotId: claim.source.sourceSnapshotId,
+          sourceSnapshotRevision: claim.source.sourceSnapshotRevision, sourceRecordRevision: claim.source.sourceRecordRevision,
+          locator: locatorUnavailable ? null : sanitizePublicSourceLocator(claim.source.locator ?? undefined) ?? null } })),
     }
   }
 
@@ -78,7 +100,11 @@ async function readActivityEvidence(ctx: QueryCtx, userId: string, activityId: s
         : 'blocked' as const,
     readOnly: historical,
     integrityState,
-    claims,
+    claims: claims.map(claim => ({ claimId: claim.claimId,
+      claimText: claim.integrityState === 'accepted' ? claim.claimText : null, claimStatus: claim.claimStatus, integrityState: claim.integrityState,
+      source: { origin: claim.source.origin, sourceSnapshotId: claim.source.sourceSnapshotId,
+        sourceSnapshotRevision: claim.source.sourceSnapshotRevision, sourceRecordRevision: claim.source.sourceRecordRevision,
+        locator: claim.integrityState === 'accepted' ? sanitizePublicSourceLocator(claim.source.locator ?? undefined) ?? null : null } })),
   }
 }
 
@@ -86,6 +112,7 @@ async function readActivityEvidence(ctx: QueryCtx, userId: string, activityId: s
 // boundary. No raw evidence records or private locators cross the client seam.
 export const getThreadActivityEvidence = query({
   args: { threadId: v.id('learningThreads'), activityId: v.string() },
+  returns: v.union(v.object({ ...evidenceFields, ownerId: v.id('users'), threadId: v.id('learningThreads') }), v.null()),
   handler: async (ctx, args) => {
     const userId = await requireAdaptiveQueryAccess(ctx)
     const owner = await ctx.db.query('users')
@@ -98,6 +125,7 @@ export const getThreadActivityEvidence = query({
 
 export const getActivityEvidence = internalQuery({
   args: { activityId: v.string() },
+  returns: v.union(v.object(evidenceFields), v.null()),
   handler: async (ctx, args) => {
     const userId = await requireAdaptiveQueryAccess(ctx)
     return await readActivityEvidence(ctx, userId, args.activityId)

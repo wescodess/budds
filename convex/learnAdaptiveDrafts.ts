@@ -5,6 +5,7 @@ import { requireAdaptiveMutationAccess, requireAdaptiveQueryAccess } from './lib
 import { boundedAdaptiveCommandReference, prepareAdaptiveCommand } from '../shared/adaptive-command-authority'
 import { canonicalNeedFirstUrl, NEED_FIRST_DRAFT_VERSION, needFirstDraftArgsValidator, validateNeedFirstDraftInput, type NeedFirstDraftInput } from '../shared/learn-adaptive-draft'
 import { writeLearnActivityEvent } from './lib/learnAdaptiveEvents'
+import { adaptiveDraftSummary, projectSourceScope } from './lib/learnV2AssessmentDisclosure'
 
 const RECEIPT_DETAIL_TTL_MS = 30 * 24 * 60 * 60 * 1_000
 
@@ -21,7 +22,7 @@ function projectThread(thread: Doc<'learningThreads'>) {
     intent: thread.intent,
     availableTime: thread.availableTime,
     authorityKind: thread.authorityKind,
-    sourceScope: thread.sourceScope,
+    sourceScope: projectSourceScope(thread.sourceScope),
     evidenceState: thread.evidenceState,
     lifecycle: thread.lifecycle,
     revision: thread.revision,
@@ -117,10 +118,11 @@ export const createThreadDraft = mutation({
 
 export const getThreadDraft = query({
   args: { threadId: v.id('learningThreads') },
+  returns: v.union(adaptiveDraftSummary, v.null()),
   handler: async (ctx, args) => {
     const userId = await requireAdaptiveQueryAccess(ctx)
     const thread = await ctx.db.get(args.threadId)
-    if (!thread || thread.userId !== userId) return null
+    if (!thread || thread.userId !== userId || thread.deletionStartedAt !== undefined) return null
     return projectThread(thread)
   },
 })

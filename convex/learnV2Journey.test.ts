@@ -45,9 +45,10 @@ describe('Learn V2 public journey read model', () => {
     })
     const args = { learningVoidId: f.learningVoidId }
     const live = await asOwner.query(api.learnV2Journey.getMission, args)
-    // A contract with no supported sources has no revoked dependency.
-    expect(live?.calibration.items[0]?.rubric).toEqual(live?.map?.objectives[0]?.assessmentContract)
-    expect(live?.calibration.items[0]?.prompt).toBe('Existing editable calibration instructions.')
+    // Ownership of the contract does not establish a calibration delivery.
+    expect(live?.calibration.items[0]).not.toHaveProperty('rubric')
+    expect(live?.map?.objectives[0]).not.toHaveProperty('assessmentContract')
+    expect(live?.calibration.items[0]?.prompt).toBeNull()
     expect(live?.calibration.attempts[0]).toMatchObject({ _id: attemptId, response: STORAGE_CANARIES.answer,
       submissionId: f.rows.learnResponses, rubricVersion: 'rubric.v1', scorerVersion: 'scorer.v1', bodyAvailability: 'available' })
     expect(live?.mastery[0]?.attempts[0]).toEqual(live?.calibration.attempts[0])
