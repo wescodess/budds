@@ -24,7 +24,7 @@ export const artifactLookupArgs = { reference: artifactReferenceValidator }
 export const artifactInputAdmissionResultValidator = v.union(
   v.object({ status: v.literal('admitted_registered'), version: v.literal(LEARN_ARTIFACT_INPUT_ADMISSION_VERSION), reasonCode: v.literal('registered_lineage') }),
   v.object({ status: v.literal('admitted_unregistered'), version: v.literal(LEARN_ARTIFACT_INPUT_ADMISSION_VERSION), reasonCode: v.literal('unregistered_ordinary_input') }),
-  v.object({ status: v.literal('rejected'), version: v.literal(LEARN_ARTIFACT_INPUT_ADMISSION_VERSION), reasonCode: v.union(v.literal('registration_required'), v.literal('restricted_lineage'), v.literal('lineage_unavailable')) }),
+  v.object({ status: v.literal('rejected'), version: v.literal(LEARN_ARTIFACT_INPUT_ADMISSION_VERSION), reasonCode: v.union(v.literal('registration_required'), v.literal('restricted_lineage'), v.literal('lineage_unavailable'), v.literal('projection_exceeds_budget')) }),
 )
 export const artifactOwnerRecordValidator = v.union(
   v.object({ kind: v.literal('document'), id: v.id('documents') }),

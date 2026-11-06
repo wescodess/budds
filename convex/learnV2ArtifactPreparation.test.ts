@@ -7,13 +7,13 @@ import type { MutationCtx } from './_generated/server'
 import schema from './schema'
 import {
   advanceAssessmentCatalogForOwner, classifyPersonalWorkDocumentForOwner, classifyPersonalWorkDocumentForRecord,
-  createArtifactLineageReadContext, instructionalReservationSemanticAdapter, isArtifactRegistrationRequired,
+  createArtifactLineageReadContext, createArtifactLineagePublicationContext, instructionalReservationSemanticAdapter, isArtifactRegistrationRequired,
   isArtifactRegistrationRequiredForOwner, isArtifactRegistrationRequiredForRecord, normalizedInstructionalCaseFingerprints,
   prepareAndRegisterInstructionalArtifacts, prepareAndRegisterInstructionalArtifactsForOwner, prepareAndRegisterInstructionalArtifactsForRecord,
   resolveArtifactLineageForOwner,
   admitArtifactInput, artifactContentProjection, artifactPayloadDigest,
 } from './lib/learnV2ArtifactLineage'
-import { LEARN_ARTIFACT_CASE_IDENTITY_VERSION, LEARN_ARTIFACT_DOCUMENT_CHUNK_SET_KEY, LEARN_ARTIFACT_LINEAGE_LIMITS, type LearnArtifactPreparationArgs } from '../shared/learn-v2-artifact-lineage'
+import { LEARN_ARTIFACT_CASE_IDENTITY_VERSION, LEARN_ARTIFACT_DOCUMENT_CHUNK_SET_KEY, LEARN_ARTIFACT_LINEAGE_LIMITS, type LearnArtifactPreparationArgs, type LearnArtifactReference } from '../shared/learn-v2-artifact-lineage'
 
 const modules = import.meta.glob('./**/*.ts')
 const owner = { tokenIdentifier: 'https://auth.example.com|preparation-owner', subject: 'same-subject' }
@@ -412,5 +412,135 @@ describe('in-transaction artifact preparation', () => {
     await f.t.run(ctx => ctx.db.patch(f.documentId, { status }))
     await expect(f.t.run(ctx => classifyPersonalWorkDocumentForRecord(ctx, { kind: 'document', id: f.documentId }))).rejects.toThrow('unavailable')
     await expect(f.asOwner.run(ctx => classifyPersonalWorkDocumentForOwner(ctx, userId, f.documentId))).rejects.toThrow('unavailable')
+  })
+})
+
+
+describe('round-2 producer budgets', () => {
+  test.each(['Quiz', 'section_procedural', 'section_factual', 'section_conceptual', 'Flashcards', 'Audio Overview', 'document'] as const)('%s admits maximum sources and prepares the full output batch', async shape => {
+    const f = await setup()
+    const section = shape.startsWith('section_')
+    const count = shape === 'document' ? 0 : section ? 59 : 50
+    const docs = await f.t.run(async ctx => {
+      const ids = [f.documentId]
+      for (let i = 1; i < count; i++) ids.push(await ctx.db.insert('documents', { userId, folderId: f.folderId, filename: `source-${i}.txt`, fileSize: 8192, status: 'success', sourceRevision: 'source.r1', contentHash: 'a'.repeat(64), r2Key: `owned/source-${i}.r1` }))
+      return ids
+    })
+    const refs: LearnArtifactReference[] = []
+    for (const id of docs.slice(0, count)) refs.push(...(await f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member({ kind: 'document', id }), member({ kind: 'document_chunk', id }, LEARN_ARTIFACT_DOCUMENT_CHUNK_SET_KEY)] }))).references.filter(ref => ref.artifact.kind === 'document'))
+    const result = await f.asOwner.run(async raw => {
+      const total = createArtifactLineagePublicationContext(raw)
+      expect(total.readUsage.limitBytes).toBe(8 * 1024 * 1024)
+      expect(total.admission.readUsage.limitBytes).toBe(4 * 1024 * 1024)
+      expect(total.preparation.readUsage.limitBytes).toBe(6 * 1024 * 1024)
+      const inputs = total.admission.ctx
+      expect(await isArtifactRegistrationRequired(inputs)).toBe(true)
+      for (const reference of refs) expect(await admitArtifactInput(inputs, { reference })).toMatchObject({ status: 'admitted_registered' })
+      const admission = { ...total.admission.readUsage, ranges: total.admission.indexRanges }
+      const ctx = total.preparation.ctx
+      await ctx.db.get(f.folderId)
+      for (const id of docs.slice(0, count)) await ctx.db.get(id)
+      const artifacts: LearnArtifactPreparationArgs['artifacts'] = []
+      if (shape === 'Quiz') artifacts.push(...(await writeQuiz(ctx, f, Array.from({ length: 50 }, (_, i) => ({ question: `Question ${i} ${'q'.repeat(1200)}`, answer: `Answer ${i} ${'a'.repeat(1200)}` })), 's'.repeat(8192))).artifacts)
+      if (shape === 'Flashcards' || section) {
+        const cardCount = shape === 'section_procedural' ? 8 : shape === 'section_conceptual' ? 12 : 16
+        const roomId = await ctx.db.insert('flashcardRooms', { userId, folderId: f.folderId, title: 'Cards', updatedAt: base.createdAt })
+        const versionId = await ctx.db.insert('flashcardRoomVersions', { userId, roomId, title: 'Cards', origin: 'ai', cardCount })
+        for (let i = 0; i < cardCount; i++) {
+          const card = { userId, roomId, term: `Term ${i}`, definition: `Definition ${i}`, displayOrder: i, sourceDocumentId: docs[i], sourceChunkContent: 's'.repeat(8192) }
+          await ctx.db.insert('flashcardRoomCards', card)
+          await ctx.db.insert('flashcardVersionCards', { ...card, versionId })
+        }
+        await ctx.db.patch(roomId, { activeVersionId: versionId })
+        artifacts.push(member({ kind: 'flashcard_version', id: versionId }))
+        if (section) {
+          const courseId = await ctx.db.insert('courses', { userId, folderId: f.folderId, title: 'Course', status: 'ready', sourceType: 'folder', sourceConfidence: { docCount: count, webPercent: 0 }, pace: 'steady', outlineSections: [], completedSectionCount: 0, totalSectionCount: 1, webSearchEnabled: false, createdAt: base.createdAt, updatedAt: base.createdAt })
+          const questionCount = shape === 'section_procedural' ? 10 : shape === 'section_factual' ? 5 : 8
+          const quiz = await writeQuiz(ctx, f, Array.from({ length: questionCount }, (_, i) => ({ question: `Task ${i}`, answer: `Solution ${i}` })), 's'.repeat(8192))
+          artifacts.push(...quiz.artifacts)
+          let audioId: Doc<'audioOverviews'>['_id'] | undefined
+          if (shape === 'section_conceptual') {
+            const audioFileId = await ctx.storage.store(new Blob(['audio']))
+            audioId = await ctx.db.insert('audioOverviews', { userId, folderId: f.folderId, title: 'Course Audio Overview', status: 'ready', courseScoped: true, totalDurationMs: 1000, voiceProfile: { hostA: 'a', hostB: 'b' }, sourceDocumentIds: docs, turns: [{ speaker: 'host_a', text: 'Spoken section content', audioFileId, durationMs: 1000 }] })
+            artifacts.push(member({ kind: 'audio_overview', id: audioId }))
+          }
+          const sectionId = await ctx.db.insert('courseSections', { userId, courseId, title: 'Section', order: 0, knowledgeType: shape === 'section_procedural' ? 'procedural' : shape === 'section_factual' ? 'factual' : 'conceptual', status: 'ready', masteryLevel: 'new', contentBlocks: [{ type: 'text', content: 'Section prose', order: 0 }, { type: 'quiz', entityId: quiz.quizId, order: 1 }, { type: 'flashcard', entityId: roomId, order: 2 }, audioId ? { type: 'audio', entityId: audioId, order: 3 } : { type: 'text', content: 'Section conclusion', order: 3 }] })
+          for (let i = 0; i < 4; i++) artifacts.push(member({ kind: 'section_block', id: sectionId }, `block-${i}`))
+        }
+      }
+      if (shape === 'Audio Overview') {
+        const audioFileId = await ctx.storage.store(new Blob(['audio']))
+        const id = await ctx.db.insert('audioOverviews', { userId, folderId: f.folderId, title: 'Audio Overview', status: 'ready', totalDurationMs: 1000, voiceProfile: { hostA: 'a', hostB: 'b' }, sourceDocumentIds: docs, turns: [{ speaker: 'host_a', text: 'a'.repeat(240000), audioFileId, durationMs: 1000 }] })
+        artifacts.push(member({ kind: 'audio_overview', id }))
+      }
+      if (shape === 'document') artifacts.push(member({ kind: 'document', id: f.documentId }), member({ kind: 'document_chunk', id: f.documentId }, LEARN_ARTIFACT_DOCUMENT_CHUNK_SET_KEY))
+      for (const artifact of artifacts) artifact.sources = docs.slice(0, count).map(documentId => ({ kind: 'document', documentId, sourceRevision: 'source.r1' }))
+      const published = await prepareAndRegisterInstructionalArtifacts(ctx, { artifacts })
+      return { shape, inputs: refs.length, outputs: published.references.length, admission, preparation: { ...total.preparation.readUsage, ranges: total.preparation.indexRanges }, total: { ...total.readUsage, ranges: total.indexRanges } }
+    })
+    const links = await f.t.run(ctx => ctx.db.query('learnArtifactSourceLinks').withIndex('by_userId', q => q.eq('userId', userId)).take(4000))
+    expect(links).toHaveLength(count ? count * (2 + result.outputs) : 2)
+    console.log(JSON.stringify(result))
+    expect(result.total.ranges).toBeLessThanOrEqual(3072)
+    expect(result.total.chargedBytes).toBeLessThan(8 * 1024 * 1024)
+  })
+
+  test.each(['ranges', 'bytes'] as const)('the publication total retains %s charges across phases and rolls back', async kind => {
+    const f = await setup()
+    const before = await inventory(f.t)
+    await expect(f.asOwner.run(async raw => {
+      const total = createArtifactLineagePublicationContext(raw)
+      for (const [index, phase] of [total.admission, total.preparation].entries()) {
+        if (kind === 'ranges') for (let i = 0; i < 1600; i++) await phase.ctx.db.get(f.folderId)
+        else {
+          const id = await phase.ctx.db.insert('documents', { userId, folderId: f.folderId, filename: 'p'.repeat(500000), fileSize: 1, status: 'success' })
+          for (let i = 0; i < (index === 0 ? 6 : 9); i++) await phase.ctx.db.get(id)
+        }
+      }
+      const quiz = await writeQuiz(total.preparation.ctx, f)
+      return prepareAndRegisterInstructionalArtifacts(total.preparation.ctx, { artifacts: quiz.artifacts })
+    })).rejects.toThrow()
+    expect(await inventory(f.t)).toEqual(before)
+  })
+
+  test('publication counters remain live and share both phase charges', async () => {
+    const f = await setup()
+    await f.asOwner.run(async ctx => {
+      const total = createArtifactLineagePublicationContext(ctx)
+      const initial = total.readUsage
+      await total.admission.ctx.db.get(f.folderId)
+      await total.preparation.ctx.db.query('documents').withIndex('by_userId', q => q.eq('userId', userId)).take(1)
+      expect(total.admission.indexRanges).toBe(1)
+      expect(total.preparation.indexRanges).toBe(1)
+      expect(total.indexRanges).toBe(2)
+      expect(createArtifactLineageReadContext(total.admission.ctx).indexRanges).toBe(1)
+      expect(total.readUsage.chargedBytes).toBe(total.admission.readUsage.chargedBytes + total.preparation.readUsage.chargedBytes)
+      expect(total.readUsage.documentsRead).toBe(2)
+      expect(initial.chargedBytes).toBe(0)
+    })
+  })
+
+  test('exhausted preparation returns a structured rejection by throwing', async () => {
+    const f = await setup()
+    await expect(f.asOwner.run(async ctx => {
+      const total = createArtifactLineagePublicationContext(ctx)
+      for (let i = 0; i < 2046; i++) await total.preparation.ctx.db.query('learnAssessmentCases').withIndex('by_userId', q => q.eq('userId', 'absent')).take(1)
+      return prepareAndRegisterInstructionalArtifacts(total.preparation.ctx, { artifacts: [member({ kind: 'document', id: f.documentId })] })
+    })).rejects.toMatchObject({ data: { status: 'rejected', reasonCode: 'projection_exceeds_budget' } })
+  })
+
+  test('preparation snapshots never survive a producer source edit between calls', async () => {
+    const f = await setup()
+    const published = await f.asOwner.run(async raw => {
+      const total = createArtifactLineagePublicationContext(raw)
+      const first = await writeQuiz(total.preparation.ctx, f)
+      const a = await prepareAndRegisterInstructionalArtifacts(total.preparation.ctx, { artifacts: first.artifacts })
+      await total.preparation.ctx.db.patch(f.documentId, { sourceRevision: 'source.r2', contentHash: 'b'.repeat(64) })
+      const second = await writeQuiz(total.preparation.ctx, f, [{ question: 'Fresh task', answer: 'Fresh solution' }])
+      const b = await prepareAndRegisterInstructionalArtifacts(total.preparation.ctx, { artifacts: second.artifacts })
+      return { first: a.references[0]!, second: b.references[0]! }
+    })
+    expect(await f.asOwner.run(ctx => resolveArtifactLineageForOwner(ctx, userId, { reference: published.first }))).toMatchObject({ status: 'unavailable' })
+    expect(await f.asOwner.run(ctx => resolveArtifactLineageForOwner(ctx, userId, { reference: published.second }))).toMatchObject({ status: 'bound' })
   })
 })

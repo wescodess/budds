@@ -338,3 +338,15 @@ describe('enrollment-aware instructional input admission', () => {
     expect(await t.withIdentity(owner).run(ctx => admitArtifactInput(ctx, { reference: ref }))).toMatchObject({ status: 'rejected', reasonCode: 'restricted_lineage' })
   })
 })
+
+
+test('admission never reuses a decision across producer calls', async () => {
+  const f = await setup(null)
+  await f.asOwner.run(async ctx => {
+    const budget = createArtifactLineageReadContext(ctx)
+    const ref = await reference(ctx, f.documentId, 'document')
+    expect(await admitArtifactInput(budget.ctx, { reference: ref })).toMatchObject({ status: 'admitted_unregistered' })
+    await bind(ctx, f.documentId, 'document', 'measurement')
+    expect(await admitArtifactInput(budget.ctx, { reference: ref })).toMatchObject({ status: 'rejected', reasonCode: 'restricted_lineage' })
+  })
+})

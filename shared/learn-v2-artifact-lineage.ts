@@ -33,7 +33,7 @@ export const learnArtifactLookupArgsSchema = z.strictObject({ reference: learnAr
 export const learnArtifactInputAdmissionResultSchema = z.discriminatedUnion('status', [
   z.strictObject({ status: z.literal('admitted_registered'), version: z.literal(LEARN_ARTIFACT_INPUT_ADMISSION_VERSION), reasonCode: z.literal('registered_lineage') }),
   z.strictObject({ status: z.literal('admitted_unregistered'), version: z.literal(LEARN_ARTIFACT_INPUT_ADMISSION_VERSION), reasonCode: z.literal('unregistered_ordinary_input') }),
-  z.strictObject({ status: z.literal('rejected'), version: z.literal(LEARN_ARTIFACT_INPUT_ADMISSION_VERSION), reasonCode: z.enum(['registration_required', 'restricted_lineage', 'lineage_unavailable']) }),
+  z.strictObject({ status: z.literal('rejected'), version: z.literal(LEARN_ARTIFACT_INPUT_ADMISSION_VERSION), reasonCode: z.enum(['registration_required', 'restricted_lineage', 'lineage_unavailable', 'projection_exceeds_budget']) }),
 ])
 // Internal authority references only. A producer rereads the record; neither
 // an owner string nor a caller's copy of a record can authorize a lookup.
