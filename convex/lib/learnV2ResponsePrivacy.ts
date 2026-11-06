@@ -198,7 +198,9 @@ export async function legacyResponseAvailable(ctx: QueryCtx | MutationCtx, userI
   if (attempt.sessionContentId) {
     const activities = await ctx.db.query('learningThreadActivities').withIndex('by_userId_and_sessionContentId_and_updatedAt', q => q.eq('userId', userId).eq('sessionContentId', attempt.sessionContentId!)).take(65)
     if (activities.length > 64) return false
-    for (const activity of activities) if (!await activitySourceAvailable(ctx, userId, activity)) return false
+    for (const activity of activities) {
+      if (!await activitySourceAvailable(ctx, userId, activity) || await activityResponseTargets(ctx, userId, activity) === null) return false
+    }
   }
   let ids = legacySourceIds(ctx, attempt.sourceSnapshotIdsJson)
   if (!ids) return false

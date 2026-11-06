@@ -8,6 +8,7 @@ export const ACTIVITY_RESPONSE_CASES = [
   ['snapshot', 'unrelated_canvas_slots'], ['snapshot', 'unrelated_opportunities'],
   ['legacy', 'own_overflow'], ['direct', 'own_overflow'], ['snapshot', 'own_slot_overflow'],
   ['snapshot', 'own_opportunity_overflow'], ['snapshot', 'mixed_overflow'],
+  ['snapshot', 'mismatched_slot_session'], ['snapshot', 'mismatched_opportunity_session'],
 ] as const
 type TargetKind = 'standalone' | 'canvas_slot' | 'opportunity'
 type TargetFixture = { t: TestConvex<typeof schema>, userId: string, threadId: Id<'learningThreads'>,
@@ -60,13 +61,55 @@ export async function activityResponseFixture(t: TestConvex<typeof schema>, user
   return await backingResponseFixture(t, userId, kind)
 }
 
+export const LEGACY_ACTIVITY_CASES = (['calibration', 'independent_application'] as const).flatMap(kind =>
+  (['mixed_overflow', 'mismatched_slot_session', 'mismatched_opportunity_session'] as const).map(scenario => [kind, scenario] as const))
+
+export async function legacyActivityResponseFixture(t: TestConvex<typeof schema>, userId: string, legacyKind: typeof LEGACY_ACTIVITY_CASES[number][0]) {
+  const f = await activityResponseFixture(t, userId, 'snapshot')
+  const legacyAttemptId = await t.run(async ctx => {
+    if (!f.submissionId || !f.sourceSnapshotId) throw new Error('Expected snapshot fixture')
+    const response = (await ctx.db.get(f.submissionId))!
+    if (response.scopeKind !== 'v2' || response.contextPins.kind !== 'session') throw new Error('Expected session response')
+    await ctx.db.patch(response.learningVoidId, { activeBlueprintRevisionId: response.blueprintRevisionId })
+    await ctx.db.patch(response.blueprintRevisionId, { status: 'accepted' })
+    await ctx.db.patch(f.sourceSnapshotId, { blueprintRevisionId: response.blueprintRevisionId })
+    const attemptId = await ctx.db.insert('masteryAttempts', { userId, blueprintRevisionId: response.blueprintRevisionId,
+      objectiveId: response.objectiveId, sessionContentId: response.contextPins.sessionContentId, studySessionId: response.contextPins.studySessionId,
+      attemptedAt: Date.now(), idempotencyKey: `legacy-${legacyKind}`, kind: legacyKind, response: f.answer,
+      serverScorePercent: 80, confidence: 4, usedHint: false, usedReveal: false, result: 'passed',
+      sourceSnapshotIdsJson: JSON.stringify([f.sourceSnapshotId]) })
+    await ctx.db.patch(f.activityId, { masteryAttemptId: attemptId })
+    return attemptId
+  })
+  return { ...f, legacyAttemptId, legacyKind }
+}
+
+async function mismatchActivitySession(f: TargetFixture, kind: TargetKind) {
+  await f.t.run(async ctx => {
+    const contentId = (await ctx.db.get(f.activityId))!.sessionContentId!
+    const content = (await ctx.db.get(contentId))!
+    const { _id: _sessionId, _creationTime: _sessionTime, ...session } = (await ctx.db.get(content.studySessionId))!
+    const studySessionId = await ctx.db.insert('studySessions', { ...session, revision: session.revision + 1 })
+    const target = kind === 'canvas_slot'
+      ? (await ctx.db.query('learnResponseSlots').withIndex('by_userId_and_contextPins_canvas_activityId', q => q.eq('userId', f.userId).eq('contextPins.canvas.activityId', f.activityId)).take(64)).find(row => row.status === 'terminal')
+      : (await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_contextPins_canvas_activityId', q => q.eq('userId', f.userId).eq('contextPins.canvas.activityId', f.activityId)).take(64)).find(row => row.phase === 'cancelled')
+    if (!target || target.scopeKind !== 'v2' || target.contextPins.kind !== 'session') throw new Error('Expected terminal Canvas target')
+    await ctx.db.patch(target._id, { contextPins: { ...target.contextPins, studySessionId } })
+  })
+}
+
 export async function exerciseActivityResponseLimit(f: Awaited<ReturnType<typeof activityResponseFixture>>, scenario: Scenario,
   assertDisclosure: (disclosed: boolean) => Promise<void>) {
   await assertDisclosure(true)
   const unrelated = scenario.startsWith('unrelated')
   const kind: TargetKind = scenario.includes('opportunit') ? 'opportunity'
-    : scenario.includes('canvas') || scenario === 'own_slot_overflow' ? 'canvas_slot' : 'standalone'
-  if (unrelated) {
+    : scenario.includes('canvas') || scenario === 'own_slot_overflow' || scenario === 'mismatched_slot_session' ? 'canvas_slot' : 'standalone'
+  if (scenario.startsWith('mismatched')) {
+    await appendActivityResponseTargets(f, 1, true, kind)
+    await assertDisclosure(true)
+    await mismatchActivitySession(f, kind)
+    await assertDisclosure(false)
+  } else if (unrelated) {
     await appendActivityResponseTargets(f, f.kind === 'direct' ? 63 : 64, false, kind)
     await assertDisclosure(true)
     await appendActivityResponseTargets(f, 1, false, kind)

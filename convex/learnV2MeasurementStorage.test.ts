@@ -9,7 +9,7 @@ import { seedMeasurementStorage, STORAGE_CANARIES } from '../tests/fixtures/lear
 import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_COLLECTIONS, LEARN_MEASUREMENT_STORAGE_MANIFEST, type LearnMeasurementCollection } from '../shared/learn-v2-measurement-storage-manifest'
 import { readMeasurementSourceDescendants, readMeasurementVoidDescendants } from './lib/learnV2MeasurementRetention'
 import { initiateAdaptiveThreadDeletion } from './learnAdaptiveCommands'
-import type { Doc } from './_generated/dataModel'
+import type { Doc, Id } from './_generated/dataModel'
 import { LEARN_V2_CONTRACT } from '../shared/learn-v2-contract'
 import { LEARN_V2_MEASUREMENT_REPORT_VERSION, LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION, learnReportMetricSchema, learnReportInputSnapshotSchema } from '../shared/learn-v2-measurement-report'
 import { LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION, LEARN_V2_RESPONSE_TERMINALIZATION_VERSION,
@@ -244,12 +244,59 @@ describe('inactive Phase C storage boundaries', () => {
     }
   })
 
+  test.each(['standalone_slot', 'canvas_slot', 'canvas_opportunity'] as const)('registered %s activity lookup excludes another activity and owner', async kind => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => seedMeasurementStorage(ctx, owner.tokenIdentifier))
+    const targetId = await t.run(async ctx => {
+      const activity = (await ctx.db.get(f.activityId))!
+      const { _id: _activityId, _creationTime: _activityTime, ...activityFields } = activity
+      const otherActivityId = await ctx.db.insert('learningThreadActivities', { ...activityFields, activityId: 'other-index-activity', boundaryOrdinal: 2 })
+      const canvas = { threadId: f.threadId, threadRevision: 1, activityId: f.activityId, activityRevision: activity.planRevision,
+        planVersion: activity.planVersion, replayVersion: activity.replayVersion, rendererVersion: activity.rendererVersion,
+        evaluationVersion: activity.evaluationContract.version, pilotConfigurationVersion: 'fixture.v1' }
+      let id: Id<'learnResponseSlots'> | Id<'learnAssessmentOpportunities'>
+      if (kind === 'standalone_slot') id = await ctx.db.insert('learnResponseSlots', { ...f.base, evidenceStatus: 'available',
+        scopeKind: 'standalone', threadId: f.threadId, activityId: f.activityId, threadRevision: 1, activityRevision: 1,
+        activityContractVersion: 'fixture.v1', stage: 'diagnostic', slotKey: 'activity-index', blockId: 'history',
+        promptDigest: 'fixture-digest', promptRevision: 1, responseFormatVersion: 'text.v1', deliveryExposureId: f.rows.learnAssessmentExposures,
+        revision: 1, status: 'terminal', terminalReason: 'cancelled' })
+      else {
+        id = kind === 'canvas_slot' ? f.rows.learnResponseSlots : f.rows.learnAssessmentOpportunities
+        await ctx.db.patch(id, { contextPins: { ...f.scope.contextPins, canvas } })
+      }
+      const row = (await ctx.db.get(id))!
+      const { _id: _id, _creationTime: _time, ...fields } = row
+      if ('stage' in fields) {
+        await ctx.db.insert('learnResponseSlots', { ...fields, userId: foreign.tokenIdentifier })
+        if (fields.scopeKind === 'standalone') await ctx.db.insert('learnResponseSlots', { ...fields, activityId: otherActivityId })
+        else await ctx.db.insert('learnResponseSlots', { ...fields, contextPins: { ...f.scope.contextPins, canvas: { ...canvas, activityId: otherActivityId } } })
+      } else {
+        await ctx.db.insert('learnAssessmentOpportunities', { ...fields, userId: foreign.tokenIdentifier })
+        await ctx.db.insert('learnAssessmentOpportunities', { ...fields, contextPins: { ...f.scope.contextPins, canvas: { ...canvas, activityId: otherActivityId } } })
+      }
+      return id
+    })
+    const rows = await t.run(async (ctx): Promise<Array<Doc<'learnResponseSlots'> | Doc<'learnAssessmentOpportunities'>>> => {
+      if (kind === 'standalone_slot') return await ctx.db.query('learnResponseSlots').withIndex('by_userId_and_activityId', q => q.eq('userId', owner.tokenIdentifier).eq('activityId', f.activityId)).take(8)
+      if (kind === 'canvas_slot') return await ctx.db.query('learnResponseSlots').withIndex('by_userId_and_contextPins_canvas_activityId', q => q.eq('userId', owner.tokenIdentifier).eq('contextPins.canvas.activityId', f.activityId)).take(8)
+      return await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_contextPins_canvas_activityId', q => q.eq('userId', owner.tokenIdentifier).eq('contextPins.canvas.activityId', f.activityId)).take(8)
+    })
+    expect(rows.map(row => row._id)).toEqual([targetId])
+  })
+
   test('executes every registered index over seeded rows and retains separate first-check sequences', async () => {
     const t = convexTest(schema, modules)
     const f = await t.run(ctx => seedMeasurementStorage(ctx, owner.tokenIdentifier))
     for (const entry of LEARN_MEASUREMENT_STORAGE_MANIFEST) {
       const contract = LEARN_V2_CONTRACT.persistence.tables.find(table => table.name === entry.table)
       expect(contract?.retentionClass).toBe(entry.retention)
+      const registered = [['userId'], ...entry.indexes].map(fields => ({
+        name: `by_${fields.map(field => field.replaceAll('.', '_')).join('_and_')}`, fields: [...fields],
+      })).sort((a, b) => a.name.localeCompare(b.name))
+      const declared = schema.tables[entry.table][' indexes']().map(index => ({ name: index.indexDescriptor, fields: index.fields }))
+        .sort((a, b) => a.name.localeCompare(b.name))
+      expect(registered, `${entry.table} index registry`).toEqual(declared)
+      expect([...contract!.indexes].sort((a, b) => a.name.localeCompare(b.name)), `${entry.table} index matrix`).toEqual(declared)
       for (const fields of [['userId'], ...entry.indexes]) {
         const name = `by_${fields.map(field => field.replaceAll('.', '_')).join('_and_')}`
         const rows = await t.run(ctx => ctx.db.query(entry.table).withIndex(name as never).take(8))

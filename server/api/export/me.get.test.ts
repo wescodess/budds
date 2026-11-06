@@ -15,7 +15,7 @@ import { PERSONAL_EXPORT_COLLECTIONS, PERSONAL_EXPORT_CONTENT_COLLECTIONS } from
 import { PERSONAL_EXPORT_CONTENT_CASES, measurementExportFixture, seedExportContent } from '../../../tests/fixtures/learn-v2-export-content'
 import { standaloneResponseFixture } from '../../../tests/fixtures/learn-v2-standalone-response'
 import { BACKING_SOURCE_CASES, BACKING_SOURCE_KINDS, backingResponseFixture, replaceBackingDocument, purgeBackingResponse } from '../../../tests/fixtures/learn-v2-backing-response'
-import { ACTIVITY_RESPONSE_CASES, activityResponseFixture, exerciseActivityResponseLimit } from '../../../tests/fixtures/learn-v2-activity-responses'
+import { ACTIVITY_RESPONSE_CASES, LEGACY_ACTIVITY_CASES, activityResponseFixture, legacyActivityResponseFixture, exerciseActivityResponseLimit } from '../../../tests/fixtures/learn-v2-activity-responses'
 
 vi.mock('../../../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
   const original = await importOriginal<typeof import('../../../shared/learn-v2-measurement-storage-manifest')>()
@@ -113,6 +113,32 @@ describe('GET /api/export/me', () => {
     fetchMock.mockReset()
     for (const key of Object.keys(recordedHeaders)) Reflect.deleteProperty(recordedHeaders, key)
     process.env.CONVEX_URL = 'https://test.convex.cloud'
+  })
+
+  test.each(LEGACY_ACTIVITY_CASES)('decoded ZIP withholds legacy %s aliases through %s', async (kind, scenario) => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_800_000_000_001)
+    vi.stubEnv('LEARN_V2_ENABLED', 'true')
+    const f = await legacyActivityResponseFixture(convexTest(schema, import.meta.glob('../../../convex/**/*.ts')), 'https://owner.example|zip-legacy-activity', kind)
+    authorizeExportMock.mockImplementation(args => f.owner.mutation(api.dataExport.authorizePersonalExport, args))
+    getExportMetadataMock.mockImplementation(() => f.owner.query(api.dataExport.getExportMetadata, {}))
+    getUserDataPageMock.mockImplementation(args => f.owner.query(api.dataExport.getUserDataPage, args))
+    getAttemptAnswersPageMock.mockImplementation(args => f.owner.query(api.dataExport.getAttemptAnswersPage, args))
+    getCourseSourceDocsPageMock.mockImplementation(args => f.owner.query(api.dataExport.getCourseSourceDocsPage, args))
+    getDocumentDownloadUrlMock.mockResolvedValue(null)
+    await exerciseActivityResponseLimit(f, scenario, async disclosed => {
+      vi.stubEnv('LEARN_V2_ENABLED', 'false')
+      const entries = unzipSync(await handler(makeEvent('fixture-jwt')))
+      const attempts = JSON.parse(strFromU8(entries['masteryAttempts.json']!)) as Array<Record<string, unknown>>
+      const attempt = attempts.find(row => row._id === f.legacyAttemptId)
+      expect(attempt).toMatchObject({ kind, serverScorePercent: 80, confidence: 4, attemptedAt: expect.any(Number),
+        bodyAvailability: disclosed ? 'available' : 'unavailable' })
+      if (disclosed) expect(attempt).toHaveProperty('response', f.answer)
+      else {
+        expect(attempt).not.toHaveProperty('response')
+        for (const [name, bytes] of Object.entries(entries)) if (name.endsWith('.json')) expect(strFromU8(bytes)).not.toContain(f.answer)
+      }
+    })
   })
 
   test.each(ACTIVITY_RESPONSE_CASES)('decoded ZIP keeps %s activity bounds local through %s', async (kind, scenario) => {
