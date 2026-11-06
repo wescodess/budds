@@ -423,21 +423,23 @@ async function deleteDocumentBatch(ctx: MutationCtx, job: AccountDeletionJob) {
 }
 
 async function deleteAttemptAnswerBatch(ctx: MutationCtx, job: AccountDeletionJob) {
+  // Owner-scoped discovery also covers snapshots whose attempts were removed
+  // by an older or interrupted deletion path.
+  const assessments = await ctx.db
+    .query('quizAnswerAssessments')
+    .withIndex('by_userId_and_attemptId', q => q.eq('userId', job.userId))
+    .take(DELETE_BATCH_SIZE)
+  for (const assessment of assessments) await ctx.db.delete(assessment._id)
+  if (assessments.length > 0) {
+    await continuePhase(ctx, job)
+    return
+  }
   const attempt = await ctx.db
     .query('quizAttempts')
     .withIndex('by_userId', q => q.eq('userId', job.userId))
     .first()
   if (!attempt) {
     await updatePhase(ctx, job, 'quizQuestions')
-    return
-  }
-  const assessments = await ctx.db
-    .query('quizAnswerAssessments')
-    .withIndex('by_attemptId', q => q.eq('attemptId', attempt._id))
-    .take(DELETE_BATCH_SIZE)
-  for (const assessment of assessments) await ctx.db.delete(assessment._id)
-  if (assessments.length > 0) {
-    await continuePhase(ctx, job)
     return
   }
   const answers = await ctx.db
