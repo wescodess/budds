@@ -34,7 +34,8 @@
     "typecheck:convex": "node scripts/validate-convex-index-names.mjs && tsc --noEmit -p convex/tsconfig.json",
     "lint": "eslint .",
     "lint:ci": "eslint . --max-warnings 0",
-    "verify": "pnpm lint:ci && pnpm typecheck && pnpm typecheck:convex && pnpm test && pnpm test:component && pnpm test:component:audio && pnpm audio:workflow:typecheck && pnpm audio:workflow:test && pnpm laya:evaluator:test && pnpm audit && pnpm --dir workers/audio-overview audit && pnpm --dir workers/laya-evaluator audit"
+    "verify": "pnpm lint:ci && pnpm typecheck && pnpm typecheck:convex && pnpm test && pnpm test:component && pnpm test:component:audio && pnpm audio:workflow:typecheck && pnpm audio:workflow:test && pnpm laya:evaluator:test && pnpm audit && pnpm --dir workers/audio-overview audit && pnpm --dir workers/laya-evaluator audit",
+    "test:dependency-security": "node --test --test-concurrency=1 scripts/dependency-security-probe.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1029.0",
@@ -115,11 +116,14 @@
       "nanoid@<4": "3.3.18",
       "postcss": "8.5.28",
       "valibot": "1.4.2",
-      "ws": "8.21.3"
+      "ws": "8.21.3",
+      "@rollup/plugin-node-resolve@16.0.3>deepmerge": "-"
     },
     "patchedDependencies": {
       "nuxt-convex@0.0.6": "patches/nuxt-convex@0.0.6.patch",
-      "@convex-dev/better-auth@0.13.0": "patches/@convex-dev__better-auth@0.13.0.patch"
+      "@convex-dev/better-auth@0.13.0": "patches/@convex-dev__better-auth@0.13.0.patch",
+      "@rollup/plugin-node-resolve@16.0.3": "patches/@rollup__plugin-node-resolve@16.0.3.patch",
+      "katex@0.16.47": "patches/katex@0.16.47.patch"
     }
   }
 }
