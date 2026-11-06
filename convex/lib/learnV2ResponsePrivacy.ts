@@ -2,6 +2,7 @@ import { learnResponsePayloadSchema } from '../../shared/learn-v2-responses'
 import { z } from 'zod'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
+import { documentHasCurrentRevision, documentMatchesSnapshot } from './learnV2BackingSource'
 
 export function canonicalPrivacyJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalPrivacyJson).join(',')}]`
@@ -47,6 +48,7 @@ export async function threadSourceAvailable(ctx: QueryCtx | MutationCtx, userId:
     const document = id && await ctx.db.get(id)
     const folder = document && await ctx.db.get(document.folderId)
     return !!document && document.userId === userId && document.status === 'success' && !!folder && folder.userId === userId
+      && documentHasCurrentRevision(document)
   }
   // URL and pasted scopes retain only a digest; snapshot dependencies, when
   // present, carry the revocable source identity and revision authority.
@@ -70,7 +72,7 @@ export async function sourceBodyAvailable(ctx: QueryCtx | MutationCtx, userId: s
     const document = await ctx.db.get(identity.folderDocumentId)
     const documentFolder = document && await ctx.db.get(document.folderId)
     if (!document || document.userId !== userId || document.status !== 'success'
-      || document.sourceRevision !== source.sourceRevision || !documentFolder || documentFolder.userId !== userId) return false
+      || !documentMatchesSnapshot(document, source) || !documentFolder || documentFolder.userId !== userId) return false
   }
   const excerpt = await ctx.db.query('learnSourceExcerpts').withIndex('by_userId_and_sourceSnapshotId', q => q.eq('userId', userId).eq('sourceSnapshotId', id)).unique()
   if (excerpt?.evidencePurgedAt !== undefined) return false
@@ -162,7 +164,8 @@ export async function retainedResponsePayload(ctx: QueryCtx | MutationCtx, userI
     else if (dependency.kind === 'document') {
       const document = await ctx.db.get(dependency.documentId)
       const folder = document && await ctx.db.get(document.folderId)
-      if (!document || document.userId !== userId || document.status !== 'success' || document.sourceRevision !== dependency.sourceRevision || !folder || folder.userId !== userId) return null
+      if (!document || document.userId !== userId || document.status !== 'success'
+        || !documentHasCurrentRevision(document, dependency.sourceRevision) || !folder || folder.userId !== userId) return null
     }
     else {
       const folder = await ctx.db.get(dependency.folderId)

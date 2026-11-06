@@ -5,6 +5,7 @@ import { LEARN_V2_BLUEPRINT_LIMITS } from '../shared/learn-v2-blueprint'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import { retainedSourceExcerpt, sourceBodyAvailable } from './lib/learnV2ResponsePrivacy'
+import { documentMatchesSnapshot } from './lib/learnV2BackingSource'
 import {
   internalMutation,
   mutation,
@@ -876,8 +877,7 @@ async function prepareFolderSourceCommand(ctx: MutationCtx, args: {
     }
     const document = await ctx.db.get(identity.folderDocumentId)
     if (!document || document.userId !== args.tokenIdentifier || document.status !== 'success'
-      || document.r2Key?.trim() !== source.objectKey || document.contentHash?.trim().toLowerCase() !== source.contentHash
-      || document.sourceRevision?.trim() !== source.sourceRevision) {
+      || !documentMatchesSnapshot(document, source)) {
       throw new Error('Folder source revision is no longer accessible')
     }
     const now = Date.now()

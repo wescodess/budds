@@ -19,7 +19,7 @@ export async function seedMeasurementStorage(ctx: Pick<MutationCtx, 'db'>, userI
   const base = { userId, storageVersion: 'learn-v2.measurement-storage.v1' as const, createdAt: now }
   const evidenceStatus = 'available' as const
   const folderId = await ctx.db.insert('folders', { userId, name: 'Measurement storage fixture', documentCount: 0 })
-  const documentId = await ctx.db.insert('documents', { userId, folderId, filename: 'fixture.txt', fileSize: 1, status: 'success', sourceRevision: 'source.r1' })
+  const documentId = await ctx.db.insert('documents', { userId, folderId, filename: 'fixture.txt', fileSize: 1, status: 'success', sourceRevision: 'source.r1', contentHash: 'source-hash' })
   const learningVoidId = await ctx.db.insert('learningVoids', { userId, folderId, title: 'Fixture Void', status: 'active', revision: 1, createdAt: now, updatedAt: now })
   const blueprintId = await ctx.db.insert('learnBlueprints', { userId, learningVoidId, revision: 1, createdAt: now })
   const blueprintRevisionId = await ctx.db.insert('learnBlueprintRevisions', { userId, learningVoidId, blueprintId, revision: 1, recordRevision: 1, status: 'active', createdAt: now, updatedAt: now })

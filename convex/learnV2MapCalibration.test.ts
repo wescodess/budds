@@ -290,7 +290,7 @@ describe('Learn V2 revision-safe map editing and calibration', () => {
         const source = await ctx.db.get(setup.sourceSnapshotId)
         const excerpt = await ctx.db.query('learnSourceExcerpts').withIndex('by_userId_and_sourceSnapshotId', q => q.eq('userId', identity.tokenIdentifier).eq('sourceSnapshotId', setup.sourceSnapshotId)).unique()
         const learningVoid = await ctx.db.get(setup.learningVoid._id)
-        const documentId = await ctx.db.insert('documents', { userId: identity.tokenIdentifier, folderId: learningVoid!.folderId, filename: 'folder-evidence.pdf', status: 'success', sourceRevision: `sha256:${'a'.repeat(64)}`, fileSize: 100, r2Key: 'owners/map/folder-evidence.pdf' })
+        const documentId = await ctx.db.insert('documents', { userId: identity.tokenIdentifier, folderId: learningVoid!.folderId, filename: 'folder-evidence.pdf', status: 'success', contentHash: 'a'.repeat(64), sourceRevision: `sha256:${'a'.repeat(64)}`, fileSize: 100, r2Key: 'owners/map/folder-evidence.pdf' })
         await ctx.db.patch(source!.sourceIdentityId, { origin: 'folder_document', externalKey: `document:${documentId}`, canonicalUrl: undefined, folderDocumentId: documentId })
         await ctx.db.patch(source!._id, { rightsStatus: 'unknown', objectKey: 'owners/map/folder-evidence.pdf', contentHash: 'a'.repeat(64), sourceRevision: `sha256:${'a'.repeat(64)}` })
         await ctx.db.patch(excerpt!._id, { rightsStatus: 'unknown', locator: `sha256:${'a'.repeat(64)}`, excerpt: undefined })

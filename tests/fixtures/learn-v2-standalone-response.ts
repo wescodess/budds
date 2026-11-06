@@ -14,7 +14,7 @@ export async function standaloneResponseFixture(t: TestConvex<typeof schema>, us
   await owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true })
   const folderId = await owner.mutation(api.folders.createFolder, { name: 'Standalone source' })
   const documentId = await t.run(ctx => ctx.db.insert('documents', { userId, folderId, filename: 'diagnostic.txt', fileSize: 1,
-    status: 'success', sourceRevision: 'source.r1' }))
+    status: 'success', sourceRevision: `sha256:${'a'.repeat(64)}`, contentHash: 'a'.repeat(64), r2Key: 'standalone/original.txt' }))
   const draft = await owner.mutation(api.learnAdaptiveDrafts.createThreadDraft, {
     need: 'Refresh my understanding while the selected source loads.', outcome: 'Explain what I already know.', intent: 'refresh', availableTime: '15',
     sourceScope: scope === 'document' ? { kind: 'document', documentId } : scope === 'folder' ? { kind: 'folder', folderId } : { kind: 'none' },
