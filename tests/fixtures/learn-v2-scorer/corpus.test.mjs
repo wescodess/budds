@@ -198,7 +198,6 @@ test('sealed artifact pins cover public inputs, keys, rubric, form, response, ge
     ['sourcesSha256', 'tests/fixtures/learn-v2-scorer/sources.v1.json'],
     ['splitsSha256', 'tests/fixtures/learn-v2-scorer/splits.v1.json'],
     ['generatorSha256', 'scripts/learn-v2-scorer-corpus.mjs'],
-    ['lockfileSha256', 'pnpm-lock.yaml'],
   ]) {
     assert.equal(manifest.hashes[name], createHash('sha256').update(await readFile(join(root, file))).digest('hex'))
   }

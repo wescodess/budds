@@ -288,11 +288,10 @@ export function summarizeCorpus(corpus) {
 }
 
 export async function generateCorpus(inputDirectory = fixtures) {
-  const [sourceBytes, splitBytes, generatorBytes, lockfileBytes, researchBytes] = await Promise.all([
+  const [sourceBytes, splitBytes, generatorBytes, researchBytes] = await Promise.all([
     readFile(join(inputDirectory, 'sources.v1.json')),
     readFile(join(inputDirectory, 'splits.v1.json')),
     readFile(scriptPath),
-    readFile(join(root, 'pnpm-lock.yaml')),
     readFile(join(root, 'docs/research/learn-anything-scorer-harness.md')),
   ])
   const sources = JSON.parse(sourceBytes)
@@ -339,7 +338,7 @@ export async function generateCorpus(inputDirectory = fixtures) {
     schemaVersion: 'learn-v2.scorer-corpus-manifest.v1', evidenceStatus: 'offline_contract_only',
     reproductionRuntime: '24.20.0',
     contract: { spec: 415, ticket: 426, resolution: 'https://github.com/wescodess/budds/issues/365#issuecomment-6651691079', researchCommit: 'c1740a662eef13214d682531e37cebc8f6b1014d', researchSha256: hash(researchBytes) },
-    hashes: { sourcesSha256: hash(sourceBytes), splitsSha256: hash(splitBytes), generatorSha256: hash(generatorBytes), proofCheckerSha256: hash(generatorBytes), grammarSha256: hash(grammars), seedSha256: hash(splits.seed), lockfileSha256: hash(lockfileBytes), corpusSha256: hash(corpusJson(corpus)) },
+    hashes: { sourcesSha256: hash(sourceBytes), splitsSha256: hash(splitBytes), generatorSha256: hash(generatorBytes), proofCheckerSha256: hash(generatorBytes), grammarSha256: hash(grammars), seedSha256: hash(splits.seed), corpusSha256: hash(corpusJson(corpus)) },
     rights: sources.rights, acceptance: sources.acceptance,
     ...summarizeCorpus(corpus),
     checks: { sourceFamilyIsolation: 'passed', claimFamilyIsolation: 'passed', sourceSnapshotIsolation: 'passed', answerKeyIsolation: 'passed', executableClaimIsolation: 'passed', normalizedCoreDuplicates: 'passed', executableProofs: 'passed' },

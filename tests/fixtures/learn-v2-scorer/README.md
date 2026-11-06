@@ -37,7 +37,9 @@ Two surface forms and seven classes produce 224 original core responses. Paraphr
 
 Controls and probes use fit packets, preserving held-out families for evaluation. `summarizeCorpus` computes `coreDenominators` exclusively from `core`; duplicating controls or repeats cannot increase that support. Full verification also rejects dispatch-count inflation. Synthetic variants are correlated; these counts are not independent learners.
 
-The manifest seals source/key/rubric/form/response hashes, source acceptance and rights, generator/checker/grammar/seed/lockfile hashes, the accepted research revision, isolation checks and core denominators. It labels all output `offline_contract_only`; real delayed validity remains `pending_real_delayed_evidence`.
+The manifest seals source/key/rubric/form/response hashes, source acceptance and rights, generator/checker/grammar/seed hashes, the accepted research revision, isolation checks and core denominators. It labels all output `offline_contract_only`; real delayed validity remains `pending_real_delayed_evidence`.
+
+The generator uses only Node built-ins. The repository lockfile digest is a harness run pin owned by #428, sealed with the run clock and adapter pins rather than in this frozen corpus manifest.
 
 ## Handoff to #427 and #428
 
