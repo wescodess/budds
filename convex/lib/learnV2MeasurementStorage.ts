@@ -1,5 +1,5 @@
 import { v } from 'convex/values'
-import { LEARN_V2_MEASUREMENT_REPORT_VERSION } from '../../shared/learn-v2-measurement-report'
+import { LEARN_V2_MEASUREMENT_REPORT_VERSION, LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION } from '../../shared/learn-v2-measurement-report'
 import { learnReportMetricValidator } from './learnV2MeasurementReportContract'
 
 // Storage shapes only. Admission, payload limits and command validators are
@@ -333,7 +333,8 @@ const reportResultSnapshot = v.object({
   masteryStateBefore: v.string(), masteryStateAfter: v.string(),
 })
 const reportInputSnapshot = v.union(
-  v.object({ kind: v.literal('owner_watermark'), sequence: v.number(), dueWorkThrough: v.union(v.number(), v.null()), historyCoverage: v.union(v.literal('complete'), v.literal('unknown')) }),
+  v.object({ kind: v.literal('owner_watermark'), sequence: v.number(), dueWorkThrough: v.union(v.number(), v.null()), historyCoverage: v.union(v.literal('complete'), v.literal('unknown')),
+    legacyIndependentAudit: learnReportMetricValidator.fields.legacyIndependentAudit }),
   v.object({ kind: v.literal('episode'), assignment: reportAssignmentSnapshot, clock: v.union(clock, v.null()),
     originalOpportunityId: v.union(v.id('learnAssessmentOpportunities'), v.null()), replacementOpportunityId: v.union(v.id('learnAssessmentOpportunities'), v.null()),
     cold: v.union(reportResultSnapshot, v.null()), delayed: v.union(reportResultSnapshot, v.null()),
@@ -347,7 +348,7 @@ const reportInputSnapshot = v.union(
 )
 export const reportFactFields = {
   ...base, learningVoidId: v.optional(v.id('learningVoids')), sequence: v.number(), epoch: v.string(),
-  factVersion: v.literal('learn-v2.measurement-report-source.v1'), occurredAt: v.number(),
+  factVersion: v.literal(LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION), occurredAt: v.number(),
   fact: v.union(
     v.object({ kind: v.literal('enrollment'), assignmentId: v.id('learnMeasurementAssignments'), recordRevision: v.number(), status: v.union(v.literal('considered'), v.literal('not_admitted'), v.literal('admitted')), snapshot: reportAssignmentSnapshot }),
     v.object({ kind: v.literal('opportunity'), assessmentOpportunityId: v.id('learnAssessmentOpportunities'), recordRevision: v.number(), status: v.string(), dueAt: v.union(v.number(), v.null()), closeAt: v.number(), clock: v.union(clock, v.null()), originalSlot: v.boolean() }),
@@ -358,7 +359,7 @@ export const reportFactFields = {
   ),
 }
 export const reportWatermarkFields = {
-  ...base, sequence: v.number(), sourceVersion: v.literal('learn-v2.measurement-report-source.v1'),
+  ...base, sequence: v.number(), sourceVersion: v.literal(LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION),
   dueWorkThrough: v.union(v.number(), v.null()), historyCoverage: v.union(v.literal('complete'), v.literal('unknown')), updatedAt: v.number(),
 }
 export const reportRunFields = {
@@ -372,7 +373,7 @@ export const reportRunFields = {
 }
 export const reportRowFields = {
   ...base, learningVoidId: v.optional(v.id('learningVoids')), reportRunId: v.id('learnMeasurementReportRuns'),
-  sequence: v.number(), sourceWatermark: v.number(), sourceVersion: v.literal('learn-v2.measurement-report-source.v1'),
+  sequence: v.number(), sourceWatermark: v.number(), sourceVersion: v.literal(LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION),
   assignmentId: v.optional(v.id('learnMeasurementAssignments')), horizonDays: v.optional(horizon),
   rowKind: v.union(v.literal('owner_watermark'), v.literal('episode'), v.literal('first_check_claim')),
   snapshot: reportInputSnapshot,

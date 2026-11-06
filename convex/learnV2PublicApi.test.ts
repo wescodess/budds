@@ -209,6 +209,14 @@ describe('registered inactive measurement API', () => {
     await expect(f.t.withIdentity(OWNER).query(api.learnV2MeasurementReports.getReportCells, { ...f.reportReference, cursor: 'x'.repeat(2001) })).rejects.toThrow('Invalid Learn request')
   })
 
+  test.each(['learn-v2.measurement-report.v1', 'learn-v2.measurement-report.v2'])('rejects the old report reference %s', async version => {
+    const f = await fixture()
+    const reference = { ...f.reportReference, version }
+    await expect(f.t.withIdentity(OWNER).query(api.learnV2MeasurementReports.getReport, reference as never)).rejects.toThrow()
+    await expect(f.t.withIdentity(OWNER).query(api.learnV2MeasurementReports.getReportCells, { ...reference, cursor: null } as never)).rejects.toThrow()
+    await expect(f.t.withIdentity(OWNER).query(api.learnV2MeasurementReports.exportAggregateReport, { ...reference, cursor: null } as never)).rejects.toThrow()
+  })
+
   test.each(['revoked', 'expired', 'foreign'])('all report reads and exports reject %s viewer grants', async state => {
     const f = await fixture()
     await f.t.run(ctx => ctx.db.patch(f.f.rows.learnMeasurementReportViewerGrants,

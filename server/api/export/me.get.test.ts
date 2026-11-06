@@ -6,6 +6,7 @@ import schema from '../../../convex/schema'
 import { seedMeasurementStorage, STORAGE_CANARIES } from '../../../tests/fixtures/learn-v2-measurement-storage'
 import { ADAPTIVE_LEARN_EXPORT_COLLECTIONS } from '../../../shared/adaptive-learn-storage-manifest'
 import { LEARN_MEASUREMENT_STORAGE_MANIFEST, LEARN_MEASUREMENT_COLLECTIONS } from '../../../shared/learn-v2-measurement-storage-manifest'
+import { LEARN_V2_MEASUREMENT_REPORT_VERSION, LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION } from '../../../shared/learn-v2-measurement-report'
 
 const recordedHeaders: Record<string, string> = {}
 
@@ -124,6 +125,12 @@ describe('GET /api/export/me', () => {
         else expect(serialized).not.toContain(canary)
       }
     }
+    const cells = JSON.parse(strFromU8(entries['learnMeasurementReportCells.json']!))
+    expect(cells).toMatchObject([{ reportVersion: LEARN_V2_MEASUREMENT_REPORT_VERSION }])
+    expect(cells[0]).not.toHaveProperty('legacyIndependentAudit')
+    const reportRows = JSON.parse(strFromU8(entries['learnMeasurementReportRows.json']!))
+    expect(reportRows).toMatchObject([{ sourceVersion: LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION }])
+    expect(reportRows[0]).not.toHaveProperty('snapshot')
     const manifest = JSON.parse(strFromU8(entries['manifest.json']!))
     expect(manifest.measurementStorage.version).toBe('learn-v2.measurement-storage.v1')
     expect(manifest.measurementStorage.omitted).toContain('unseen_prompts')

@@ -1,6 +1,6 @@
 # Phase C1 public API contract
 
-API version: `learn-v2.public-api.v1`. Implements [C1.3 #423](https://github.com/wescodess/budds/issues/423) for [C1 #413](https://github.com/wescodess/budds/issues/413). Report output is `learn-v2.measurement-report.v2`; source/query and metric definitions remain v1. This contract adds no active response, delivery, scoring, assistance or report writer.
+API version: `learn-v2.public-api.v1`. Implements [C1.3 #423](https://github.com/wescodess/budds/issues/423) for [C1 #413](https://github.com/wescodess/budds/issues/413). Report output is `learn-v2.measurement-report.v3`; source is v2; query and metric definitions remain v1. This contract adds no active response, delivery, scoring, assistance or report writer.
 
 The accepted [baseline](https://github.com/wescodess/budds/issues/359#issuecomment-6651298918), [lifecycle](https://github.com/wescodess/budds/issues/360#issuecomment-6651303610), [responses](https://github.com/wescodess/budds/issues/363#issuecomment-6651831618), [items](https://github.com/wescodess/budds/issues/364#issuecomment-6651739355), [reports](https://github.com/wescodess/budds/issues/366#issuecomment-6652156993), [disclosure](https://github.com/wescodess/budds/issues/373#issuecomment-6651824980) and [scorer identity](https://github.com/wescodess/budds/issues/380#issuecomment-6651838342) resolutions remain binding.
 
@@ -29,14 +29,15 @@ Authentication derives ownership from `tokenIdentifier` through `requireAuth`, i
 
 Delivery mutations and prompt reads are separate. A future grant result is only a reference; a query cannot create the first grant. Future state/score returns use the C1.2 own-work and safe-result DTOs. Private keys, rubric criteria, sibling forms, seeds, source locators and provider payloads are absent from the new public return validators. The report request identifies a server-managed viewer grant, not a client-chosen cohort/epoch; the grant supplies its authorized scope. Reads recheck its scope, revocation, time and deletion state. Report pages reserve the bounded aggregate DTO; there is no public raw-source adapter or self-grant command.
 
-## Frozen report output v2
+## Frozen report output v3
 
-Report references, disabled receipts, sealed manifests, cell pages and aggregate exports use `learn-v2.measurement-report.v2`. Request queries and source facts remain `learn-v2.measurement-report-query.v1` and `learn-v2.measurement-report-source.v1`; VLG and false-mastery definitions remain v1. Other public APIs retain `learn-v2.public-api.v1`. Old report-output v1 shapes are rejected. These endpoints still return disabled status and perform no write.
+Report references, disabled receipts, sealed manifests, cell pages and aggregate exports use `learn-v2.measurement-report.v3`. Request queries and source facts use `learn-v2.measurement-report-query.v1` and `learn-v2.measurement-report-source.v2`; VLG and false-mastery definitions remain v1. Other public APIs retain `learn-v2.public-api.v1`. Old report-output v1/v2 and source v1 shapes are rejected. These endpoints still return disabled status and perform no write.
 
 `learnReportMetricValidator` in `convex/lib/learnV2MeasurementReportContract.ts` supplies the exact stored/public/exported cell fields. Before a later writer or adapter uses them, `learnReportMetricSchema` and `validateLearnMeasurementReportCells` enforce bounded integers, finite estimates, nested counts, disjoint totals, null/reason states and original-envelope/page bytes. Convex's declared validators enforce the same closed output structure. Cells remain aggregate-only, without learner/assignment/attempt rows or protected payloads.
 
 | Decision requirement | Public cell fields |
 | --- | --- |
+| #366 §2 legacy Independent history | `legacyIndependentAudit.unknownCount` is the separate cohort/epoch count of legacy Independent capabilities with unverifiable provenance. `sourceCoverage = complete` requires a bounded integer (including an enumerated zero); unknown enumeration requires `sourceCoverage = unknown` and a null count. Source v2 owner-watermark snapshots supply the same object. It is repeated audit context across cells, not a prospective stratum or horizon denominator. |
 | #366 §3 disjoint outcomes | `counts.dispositions` contains all eleven closed dispositions; sums reconcile to matured episodes or first-check claims. |
 | #366 §§1–2 accepted but unscored endpoints | `counts.acceptedColdSubmissions`, `acceptedClaims`, alongside existing delayed accepted/valid/paired and distinct-learner counts. |
 | #366 §3 / #364 §4 originals and replacements | `replacements` retains the original population, linked/accepted/valid/comparable replacement subsets, pinned predeclared policy, `primaryIncludedPairs` and a separate secondary estimate. First-slot false mastery is never replaced by a later pass. |
@@ -46,7 +47,11 @@ Report references, disabled receipts, sealed manifests, cell pages and aggregate
 | #366 §§1,3 modality separation | `stratum.responseKind` keeps keyed/numeric/ordered/bounded-rubric outcomes distinct from each other and from deterministic/model scorer strata. |
 | #366 §3 descriptive-band attrition | `attritionByStartingBand` supplies all four bands' population/accepted/valid/paired columns; `startingBand = all` is explicit rather than overloading unknown. |
 
-The [storage field mapping](learn-v2-c1-storage-contract.md#report-cell-v2) names every nested field, count unit and consistency rule. Later report computation/API tickets consume this closed contract without widening it.
+The [storage field mapping](learn-v2-c1-storage-contract.md#report-cell-v3) names every nested field, count unit and consistency rule. Later report computation/API tickets consume this closed contract without widening it.
+
+[#511](https://github.com/wescodess/budds/issues/511) also narrows both `replacements.secondary` and `sensitivity.excludingFlagged`: neither may strengthen an unknown parent population/source state or its validity (verified → provisional → unknown → quarantined). Quarantined parent status requires quarantined sub-estimate validity; unknown-source parent status requires unknown sub-estimate source coverage. Flag exclusion must retain at least `max(0, observed - eitherFlagged)` original pairs or checked claims, and may lose at most one contributing learner per removed observed row. Stronger sub-estimates are rejected, while equal or weaker evidence remains accepted. The fixture's cold-conditioned missing contribution and full arithmetic are recorded in the storage mapping. These refinements change no metric definition, result, score or mastery rule.
+
+Public cell pages, aggregate exports, stored cells and the owner-watermark audit snapshot reuse `convex/lib/learnV2MeasurementReportContract.ts` for the audit's closed structure. Shared schemas apply the integer, null/coverage and parent/sub-estimate refinements before persistence or publication. Personal and ZIP exports still withhold the audit and source snapshots; account/source deletion and run invalidation use the existing registrations.
 
 Scorer alias policy `learn-v2.scorer-identity-policy.v2` permits a verified alias only when its `requestedModel` and `configurationDigest` both match the frozen binding; unrelated flat alias lists cannot authorize a different returned model (#380). A valid measurement-only snapshot may carry only `retained_promotion_ineligible` when measurement eligibility is true and mastery eligibility is false; contamination/evidence/unknown exclusions still cannot accompany valid credit. This preserves delayed measurement below Independent without changing the mastery rule (#366 §2 / #364 §5).
 
