@@ -8,7 +8,7 @@ import { learnAssessmentClockSchema, learnFirstCheckClaimSchema, learnAssessment
 import { learnMeasurementFlowSchema, learnMeasurementDepthSchema, learnHistoryStatusSchema, learnFamilyStatusSchema, learnMeasurementHorizonSchema, LEARN_V2_FORM_ORDERS } from './learn-v2-measurement'
 import { LEARN_MEASUREMENT_STORAGE_LIMITS } from './learn-v2-measurement-storage-manifest'
 
-export const LEARN_V2_MEASUREMENT_REPORT_VERSION = 'learn-v2.measurement-report.v1' as const
+export const LEARN_V2_MEASUREMENT_REPORT_VERSION = 'learn-v2.measurement-report.v2' as const
 export const LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION = 'learn-v2.measurement-report-source.v1' as const
 export const LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION = 'learn-v2.measurement-report-query.v1' as const
 export const VERIFIED_LEARNING_GAIN_VERSION = 'verified_learning_gain.v1' as const
@@ -22,6 +22,9 @@ export const LEARN_V2_REPORT_DISPOSITIONS = [
   'missing_cold', 'missing_delayed', 'abandoned', 'assisted_contaminated', 'invalid_item_novelty', 'evidence_unavailable',
   'pin_flow_treatment_mismatch', 'access_provider_blocked', 'scoring_pending', 'reconciliation_required', 'valid_scored',
 ] as const
+export const LEARN_V2_REPORT_RESPONSE_KINDS = ['keyed', 'numeric', 'ordered', 'bounded_rubric'] as const
+export const LEARN_V2_REPORT_STARTING_BANDS = ['0_40', '40_80', '80_100', 'unknown', 'all'] as const
+export const LEARN_V2_REPORT_SENSITIVITY_POLICY_VERSION = 'learn-v2.exclude-observed-instrumentation-flags.v1' as const
 export const learnReportStatusSchema = z.enum(LEARN_V2_REPORT_STATUSES)
 export const learnReportDispositionSchema = z.enum(LEARN_V2_REPORT_DISPOSITIONS)
 export const learnReportOpportunityStatusSchema = z.union([learnAssessmentPhaseSchema, z.enum(['pending', 'eligible', 'blocked'])])
@@ -124,43 +127,43 @@ export const learnReportProvenanceSchema = z.strictObject({
 }).refine(value => value.extractionStartedAt <= value.extractionEndedAt, 'Invalid extraction range')
 export const learnReportStratumSchema = z.strictObject({
   flow: learnMeasurementFlowSchema, entryPoint: learnVersionSchema, depth: learnMeasurementDepthSchema,
-  startingBand: z.enum(['0_40', '40_80', '80_100', 'unknown']),
+  startingBand: z.enum(LEARN_V2_REPORT_STARTING_BANDS), responseKind: z.enum(LEARN_V2_REPORT_RESPONSE_KINDS),
   scoringKind: z.enum(['deterministic', 'model']), configurationDigest: learnDigestSchema,
   observedModel: z.string().min(1).max(200).nullable(), observedUpstream: z.string().min(1).max(200).nullable(),
   familyValidationStatus: z.union([learnFamilyStatusSchema, z.literal('unknown')]),
 })
-const count = learnSequenceSchema
+const count = z.number().int().min(0).max(LEARN_MEASUREMENT_STORAGE_LIMITS.maxReportEpisodes)
+export const learnReportDispositionCountsSchema = z.strictObject({
+  missing_cold: count, missing_delayed: count, abandoned: count, assisted_contaminated: count,
+  invalid_item_novelty: count, evidence_unavailable: count, pin_flow_treatment_mismatch: count,
+  access_provider_blocked: count, scoring_pending: count, reconciliation_required: count, valid_scored: count,
+})
 export const learnReportPopulationCountsSchema = z.strictObject({
   considered: count, notAdmitted: count, horizonNotAssigned: count, anchorNotStarted: count, notYetDue: count, windowOpen: count,
   maturedEpisodes: count, operationallyEligible: count, acceptedSubmissions: count, validDelayedScores: count, validColdScores: count, comparablePairs: count,
   maturedClaims: count, checkedClaims: count, failedClaims: count,
+  acceptedColdSubmissions: count, acceptedClaims: count, dispositions: learnReportDispositionCountsSchema,
   distinctLearners: z.strictObject({ maturedEpisodes: count, operationallyEligible: count, acceptedSubmissions: count,
     validDelayedScores: count, validColdScores: count, comparablePairs: count, maturedClaims: count, checkedClaims: count, failedClaims: count }),
-}).refine(value => value.operationallyEligible <= value.maturedEpisodes && value.acceptedSubmissions <= value.maturedEpisodes
-  && value.validDelayedScores <= value.acceptedSubmissions && value.validColdScores <= value.maturedEpisodes
+}).refine(value => value.notAdmitted <= value.considered && value.maturedEpisodes + value.notAdmitted <= value.considered
+  && value.operationallyEligible <= value.maturedEpisodes && value.acceptedSubmissions <= value.maturedEpisodes
+  && value.validDelayedScores <= value.acceptedSubmissions && value.validColdScores <= value.acceptedColdSubmissions
+  && value.acceptedColdSubmissions <= value.maturedEpisodes
   && value.comparablePairs <= Math.min(value.validDelayedScores, value.validColdScores)
-  && value.checkedClaims <= value.maturedClaims && value.failedClaims <= value.checkedClaims
+  && value.acceptedClaims <= value.maturedClaims && value.checkedClaims <= value.acceptedClaims && value.failedClaims <= value.checkedClaims
   && Object.entries(value.distinctLearners).every(([key, learners]) => learners <= value[key as keyof typeof value.distinctLearners]), 'Inconsistent report counts')
 const interval = z.strictObject({ lower: z.number().finite(), upper: z.number().finite() }).refine(value => value.lower <= value.upper)
-export const learnReportMetricSchema = z.strictObject({
-  metric: z.enum([VERIFIED_LEARNING_GAIN_VERSION, FALSE_MASTERY_NEXT_DELAYED_VERSION]), horizonDays: learnMeasurementHorizonSchema,
-  weighting: z.enum(['capability_episode', 'learner_sensitivity']), stratum: learnReportStratumSchema,
+const estimateFields = {
   status: learnReportStatusSchema, populationState: z.enum(['known', 'unknown']), sourceCoverage,
   outcomeCoverage: z.enum(['none', 'partial', 'complete', 'unknown']), validity: z.enum(['verified', 'provisional', 'quarantined', 'unknown']),
   precision: z.enum(['available', 'insufficient_clusters', 'insufficient_variation', 'unknown']),
-  counts: learnReportPopulationCountsSchema,
   observedValue: z.number().finite().nullable(), allEligibleValue: z.number().finite().nullable(),
   missingOutcomeBounds: interval.nullable(), confidenceInterval: interval.nullable(), reasonCodes: learnReasonCodesSchema,
-}).superRefine((value, ctx) => {
-  const gain = value.metric === VERIFIED_LEARNING_GAIN_VERSION
-  const population = gain ? value.counts.maturedEpisodes : value.counts.maturedClaims
-  const observed = gain ? value.counts.comparablePairs : value.counts.checkedClaims
-  const learners = gain ? value.counts.distinctLearners.comparablePairs : value.counts.distinctLearners.checkedClaims
-  const minimum = gain ? -100 : 0
-  const maximum = gain ? 100 : 1
-  const numbers = [value.observedValue, value.allEligibleValue, value.missingOutcomeBounds?.lower,
-    value.missingOutcomeBounds?.upper, value.confidenceInterval?.lower, value.confidenceInterval?.upper]
-  if (numbers.some(number => number != null && (number < minimum || number > maximum))
+} as const
+const estimateObject = z.strictObject({ population: count, observed: count, contributingLearners: count, ...estimateFields })
+function refineEstimate(value: z.infer<typeof estimateObject>, ctx: z.RefinementCtx) {
+  const { population, observed, contributingLearners: learners } = value
+  if (observed > population || learners > observed
     || (!observed && value.observedValue !== null)
     || ((!population || observed < population || value.populationState !== 'known' || value.sourceCoverage !== 'complete') && value.allEligibleValue !== null)
     || ((!population || value.populationState !== 'known' || value.sourceCoverage !== 'complete') && value.missingOutcomeBounds !== null)
@@ -170,6 +173,101 @@ export const learnReportMetricSchema = z.strictObject({
     || ((value.precision !== 'available' || learners < 20) && value.confidenceInterval !== null)
     || ((value.observedValue === null || value.allEligibleValue === null || value.confidenceInterval === null) && !value.reasonCodes.length)) {
     ctx.addIssue({ code: 'custom', message: 'Unknown or incomplete measurement must have explicit nulls and reasons' })
+  }
+}
+export const learnReportEstimateSchema = estimateObject.superRefine(refineEstimate)
+export const learnReportReplacementAccountingSchema = z.strictObject({
+  policy: z.discriminatedUnion('kind', [
+    z.strictObject({ kind: z.literal('secondary_only') }),
+    z.strictObject({ kind: z.literal('predeclared'), protocolVersion: learnVersionSchema, ruleVersion: learnVersionSchema, ruleDigest: learnDigestSchema }),
+  ]),
+  originalPopulation: count, withLinkedReplacement: count, withAcceptedReplacement: count, withValidReplacement: count,
+  withComparableReplacement: count, primaryIncludedPairs: count, secondary: learnReportEstimateSchema,
+}).refine(value => value.withLinkedReplacement <= value.originalPopulation
+  && value.withAcceptedReplacement <= value.withLinkedReplacement && value.withValidReplacement <= value.withAcceptedReplacement
+  && value.withComparableReplacement <= value.withValidReplacement && value.primaryIncludedPairs <= value.withComparableReplacement
+  && (value.policy.kind === 'predeclared' || value.primaryIncludedPairs === 0)
+  && value.secondary.population === value.withLinkedReplacement, 'Replacement counts must retain their original population')
+export const learnReportInstrumentationCountsSchema = z.strictObject({
+  pasteFlagged: count, focusFlagged: count, eitherFlagged: count, unknownUnflagged: count, knownUnflagged: count,
+  pasteUnknown: count, focusUnknown: count, unknownInstrumentation: count, flaggedWithUnknownInstrumentation: count,
+}).refine(value => value.eitherFlagged >= Math.max(value.pasteFlagged, value.focusFlagged)
+  && value.eitherFlagged <= value.pasteFlagged + value.focusFlagged
+  && value.unknownInstrumentation >= Math.max(value.pasteUnknown, value.focusUnknown)
+  && value.unknownInstrumentation <= value.pasteUnknown + value.focusUnknown
+  && value.flaggedWithUnknownInstrumentation <= value.eitherFlagged
+  && value.flaggedWithUnknownInstrumentation + value.unknownUnflagged === value.unknownInstrumentation, 'Invalid instrumentation union')
+export const learnReportSensitivitySchema = z.strictObject({
+  policyVersion: z.literal(LEARN_V2_REPORT_SENSITIVITY_POLICY_VERSION), excludingFlagged: learnReportEstimateSchema,
+})
+export const learnReportOrderCountsSchema = z.strictObject({ ABC: count, ACB: count, BAC: count, BCA: count, CAB: count, CBA: count, AB: count, BA: count, unknown: count })
+export const learnReportFormCountsSchema = z.strictObject({ A: count, B: count, C: count, D: count, E: count, F: count, unknown: count })
+export const learnReportAllocationCountsSchema = z.strictObject({
+  assignedOrders: learnReportOrderCountsSchema, observedOrders: learnReportOrderCountsSchema,
+  assignedColdForms: learnReportFormCountsSchema, observedColdForms: learnReportFormCountsSchema,
+  assignedDelayedForms: learnReportFormCountsSchema, observedDelayedForms: learnReportFormCountsSchema,
+}).refine(value => Object.keys(value.assignedOrders).every(key => value.observedOrders[key as keyof typeof value.observedOrders] <= value.assignedOrders[key as keyof typeof value.assignedOrders]), 'Observed orders exceed assignments')
+export const learnReportSourceReasonCountSchema = z.strictObject({ covered: count, affected: count, unknown: count })
+  .refine(value => value.affected <= value.covered, 'Affected rows require source coverage')
+export const learnReportSourceAccountingSchema = z.strictObject({
+  population: count, missingT0: learnReportSourceReasonCountSchema, unknownExposure: learnReportSourceReasonCountSchema,
+  exhaustedInventory: learnReportSourceReasonCountSchema, purgedEvidence: learnReportSourceReasonCountSchema,
+  replacement: learnReportSourceReasonCountSchema, treatmentChange: learnReportSourceReasonCountSchema, outsideHelpUncertainty: learnReportSourceReasonCountSchema,
+}).refine(value => [value.missingT0, value.unknownExposure, value.exhaustedInventory, value.purgedEvidence,
+  value.replacement, value.treatmentChange, value.outsideHelpUncertainty].every(reason => reason.covered + reason.unknown === value.population), 'Source reason coverage must reconcile')
+const bandCounts = z.strictObject({ population: count, accepted: count, validScored: count, paired: count })
+  .refine(value => value.paired <= value.validScored && value.validScored <= value.accepted && value.accepted <= value.population)
+export const learnReportBandAttritionSchema = z.strictObject({ below40: bandCounts, from40To80: bandCounts, from80To100: bandCounts, unknown: bandCounts })
+
+export const learnReportMetricSchema = z.strictObject({
+  metric: z.enum([VERIFIED_LEARNING_GAIN_VERSION, FALSE_MASTERY_NEXT_DELAYED_VERSION]), horizonDays: learnMeasurementHorizonSchema,
+  weighting: z.enum(['capability_episode', 'learner_sensitivity']), stratum: learnReportStratumSchema,
+  ...estimateFields, counts: learnReportPopulationCountsSchema,
+  replacements: learnReportReplacementAccountingSchema, instrumentation: learnReportInstrumentationCountsSchema,
+  sensitivity: learnReportSensitivitySchema, allocations: learnReportAllocationCountsSchema,
+  sourceAccounting: learnReportSourceAccountingSchema, attritionByStartingBand: learnReportBandAttritionSchema,
+}).superRefine((value, ctx) => {
+  const gain = value.metric === VERIFIED_LEARNING_GAIN_VERSION
+  const population = gain ? value.counts.maturedEpisodes : value.counts.maturedClaims
+  const observed = gain ? value.counts.comparablePairs : value.counts.checkedClaims
+  const learners = gain ? value.counts.distinctLearners.comparablePairs : value.counts.distinctLearners.checkedClaims
+  const accepted = gain ? value.counts.acceptedSubmissions : value.counts.acceptedClaims
+  const scored = gain ? value.counts.validDelayedScores : value.counts.checkedClaims
+  refineEstimate({ ...value, population, observed, contributingLearners: learners }, ctx)
+  const estimates = [value, value.replacements.secondary, value.sensitivity.excludingFlagged]
+  const minimum = gain ? -100 : 0
+  const maximum = gain ? 100 : 1
+  if (estimates.some(estimate => [estimate.observedValue, estimate.allEligibleValue, estimate.missingOutcomeBounds?.lower,
+    estimate.missingOutcomeBounds?.upper, estimate.confidenceInterval?.lower, estimate.confidenceInterval?.upper]
+    .some(number => number != null && (number < minimum || number > maximum)))) ctx.addIssue({ code: 'custom', message: 'Estimate exceeds the frozen metric scale' })
+  const sum = (counts: Record<string, number>) => Object.values(counts).reduce((total, number) => total + number, 0)
+  const bands = Object.values(value.attritionByStartingBand)
+  const originalFormsMatch = (assigned: z.infer<typeof learnReportFormCountsSchema>, observed: z.infer<typeof learnReportFormCountsSchema>) =>
+    Object.keys(assigned).every(key => observed[key as keyof typeof observed] <= assigned[key as keyof typeof assigned])
+  const selectedBand = { '0_40': 'below40', '40_80': 'from40To80', '80_100': 'from80To100', unknown: 'unknown' } as const
+  if (sum(value.counts.dispositions) !== population || value.counts.dispositions.valid_scored > scored
+    || value.replacements.originalPopulation !== population || value.replacements.primaryIncludedPairs > observed
+    || (!gain && value.replacements.primaryIncludedPairs !== 0)
+    || value.replacements.secondary.observed !== (gain ? value.replacements.withComparableReplacement : value.replacements.withValidReplacement)
+    || value.instrumentation.eitherFlagged + value.instrumentation.unknownUnflagged + value.instrumentation.knownUnflagged !== population
+    || value.instrumentation.pasteFlagged + value.instrumentation.pasteUnknown > population
+    || value.instrumentation.focusFlagged + value.instrumentation.focusUnknown > population
+    || value.sensitivity.excludingFlagged.population !== population - value.instrumentation.eitherFlagged
+    || value.sensitivity.excludingFlagged.observed > observed || value.sensitivity.excludingFlagged.contributingLearners > learners
+    || sum(value.allocations.assignedOrders) !== population || sum(value.allocations.observedOrders) !== accepted
+    || sum(value.allocations.assignedColdForms) !== value.counts.maturedEpisodes
+    || sum(value.allocations.observedColdForms) !== value.counts.acceptedColdSubmissions
+    || sum(value.allocations.assignedDelayedForms) !== population || sum(value.allocations.observedDelayedForms) !== accepted
+    || (value.replacements.policy.kind === 'secondary_only' && (!originalFormsMatch(value.allocations.assignedColdForms, value.allocations.observedColdForms)
+      || !originalFormsMatch(value.allocations.assignedDelayedForms, value.allocations.observedDelayedForms)))
+    || value.sourceAccounting.population < Math.max(population, value.counts.considered)
+    || value.sourceAccounting.replacement.affected < value.replacements.withLinkedReplacement
+    || bands.reduce((total, band) => total + band.population, 0) !== population
+    || bands.reduce((total, band) => total + band.accepted, 0) !== accepted
+    || bands.reduce((total, band) => total + band.validScored, 0) !== scored
+    || bands.reduce((total, band) => total + band.paired, 0) !== observed
+    || (value.stratum.startingBand !== 'all' && value.attritionByStartingBand[selectedBand[value.stratum.startingBand]].population !== population)) {
+    ctx.addIssue({ code: 'custom', message: 'Aggregate breakdowns do not reconcile with the original population' })
   }
 })
 export const learnMeasurementReportSchema = z.discriminatedUnion('status', [

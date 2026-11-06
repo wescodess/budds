@@ -1,4 +1,6 @@
 import { v } from 'convex/values'
+import { LEARN_V2_MEASUREMENT_REPORT_VERSION } from '../../shared/learn-v2-measurement-report'
+import { learnReportMetricValidator } from './learnV2MeasurementReportContract'
 
 // Storage shapes only. Admission, payload limits and command validators are
 // supplied by the following serial contracts; no current player writes these.
@@ -361,7 +363,7 @@ export const reportWatermarkFields = {
 }
 export const reportRunFields = {
   ...base, cohortVersion: v.string(), epoch: v.string(), protocolVersion: v.string(), baselineSha: v.string(),
-  reportVersion: v.literal('learn-v2.measurement-report.v1'), queryVersion: v.literal('learn-v2.measurement-report-query.v1'),
+  reportVersion: v.literal(LEARN_V2_MEASUREMENT_REPORT_VERSION), queryVersion: v.literal('learn-v2.measurement-report-query.v1'),
   adapterVersion: v.string(), codeVersion: v.string(), rosterDigest: v.string(), cutoff: v.number(),
   enrollmentStartAt: v.number(), enrollmentEndAt: v.number(), status: v.union(v.literal('building'), v.literal('sealed'), v.literal('failed'), v.literal('stale')),
   inputDigest: v.optional(v.string()), extractionStartedAt: v.number(), extractionEndedAt: v.optional(v.number()),
@@ -380,9 +382,7 @@ export const reportRowFields = {
 }
 export const reportCellFields = {
   ...base, reportRunId: v.id('learnMeasurementReportRuns'), cellKey: v.string(), sequence: v.number(),
-  metric: v.union(v.literal('verified_learning_gain.v1'), v.literal('false_mastery_next_delayed.v1')),
-  horizonDays: horizon, stratum: v.string(), count: v.number(), value: v.union(v.number(), v.null()),
-  lowerBound: v.union(v.number(), v.null()), upperBound: v.union(v.number(), v.null()), status: v.string(), reasonCodes: v.array(v.string()),
+  reportVersion: v.literal(LEARN_V2_MEASUREMENT_REPORT_VERSION), ...learnReportMetricValidator.fields,
 }
 export const reportViewerGrantFields = {
   ...base, cohortVersion: v.string(), epoch: v.string(), principalBindingVersion: v.string(),

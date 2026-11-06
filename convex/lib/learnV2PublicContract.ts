@@ -1,5 +1,6 @@
 import { v, type Infer, type Validator } from 'convex/values'
 import { z } from 'zod'
+import { learnReportMetricValidator } from './learnV2MeasurementReportContract'
 import type { learnResponseReceiptSchema} from '../../shared/learn-v2-responses';
 import {
   LEARN_V2_RESPONSE_CONTRACT_VERSION, LEARN_V2_RESPONSE_REJECTION_CODES,
@@ -16,7 +17,7 @@ import {
 } from '../../shared/learn-v2-assessment-disclosure'
 import {
   LEARN_V2_MEASUREMENT_REPORT_VERSION, LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION,
-  LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION, LEARN_V2_REPORT_STATUSES,
+  LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION,
   type learnMeasurementReportSchema, type learnMeasurementReportCellsSchema,
 } from '../../shared/learn-v2-measurement-report'
 
@@ -212,27 +213,9 @@ export const reportValidator = v.union(reportUnavailableValidator, v.object({
 export const requestReportValidator = v.union(reportUnavailableValidator, v.object({
   version: v.literal(LEARN_V2_MEASUREMENT_REPORT_VERSION), status: v.literal('requested'), reportRunId: v.id('learnMeasurementReportRuns'),
 }))
-const distinctCounts = {
-  maturedEpisodes: v.number(), operationallyEligible: v.number(), acceptedSubmissions: v.number(), validDelayedScores: v.number(),
-  validColdScores: v.number(), comparablePairs: v.number(), maturedClaims: v.number(), checkedClaims: v.number(), failedClaims: v.number(),
-}
-const interval = v.union(v.object({ lower: v.number(), upper: v.number() }), v.null())
 const reportCells = v.object({
   version: v.literal(LEARN_V2_MEASUREMENT_REPORT_VERSION), reportRunId: v.id('learnMeasurementReportRuns'),
-  cells: v.array(v.object({
-    metric: literals(['verified_learning_gain.v1', 'false_mastery_next_delayed.v1']), horizonDays: v.union(v.literal(7), v.literal(30)),
-    weighting: literals(['capability_episode', 'learner_sensitivity']), stratum: v.object({
-      flow: literals(['v2_today', 'v2_canvas']), entryPoint: v.string(), depth: literals(['foundational', 'working', 'advanced']),
-      startingBand: literals(['0_40', '40_80', '80_100', 'unknown']), scoringKind: literals(['deterministic', 'model']),
-      configurationDigest: v.string(), observedModel: nullableString, observedUpstream: nullableString,
-      familyValidationStatus: literals(['provisional_equivalent', 'empirically_supported', 'quarantined', 'retired', 'unknown']),
-    }), status: literals(LEARN_V2_REPORT_STATUSES), populationState: literals(['known', 'unknown']), sourceCoverage,
-    outcomeCoverage: literals(['none', 'partial', 'complete', 'unknown']), validity: literals(['verified', 'provisional', 'quarantined', 'unknown']),
-    precision: literals(['available', 'insufficient_clusters', 'insufficient_variation', 'unknown']),
-    counts: v.object({ considered: v.number(), notAdmitted: v.number(), horizonNotAssigned: v.number(), anchorNotStarted: v.number(),
-      notYetDue: v.number(), windowOpen: v.number(), ...distinctCounts, distinctLearners: v.object(distinctCounts) }),
-    observedValue: nullableNumber, allEligibleValue: nullableNumber, missingOutcomeBounds: interval, confidenceInterval: interval, reasonCodes: v.array(v.string()),
-  })), cursor: nullableString, isDone: v.boolean(),
+  cells: v.array(learnReportMetricValidator), cursor: nullableString, isDone: v.boolean(),
 }) satisfies Validator<z.infer<typeof learnMeasurementReportCellsSchema>, 'required', string>
 export const reportCellsValidator = v.union(reportUnavailableValidator, reportCells)
 export const aggregateExportValidator = v.union(reportUnavailableValidator, v.object({

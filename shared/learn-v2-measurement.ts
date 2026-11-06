@@ -242,9 +242,12 @@ export function learnMeasurementCoverage(allocation: z.infer<typeof learnMeasure
     : { kind: 'partial' as const, day7: value.horizonDays === 7, day30: value.horizonDays === 30 }
 }
 
+export const LEARN_V2_SCORER_IDENTITY_POLICY_VERSION = 'learn-v2.scorer-identity-policy.v2' as const
 export const learnScorerIdentityPolicySchema = z.strictObject({
-  version: learnVersionSchema,
-  verifiedModelAliases: z.array(learnTextSchema(200)).max(16),
+  version: z.literal(LEARN_V2_SCORER_IDENTITY_POLICY_VERSION),
+  verifiedModelAliases: z.array(z.strictObject({
+    configurationDigest: learnDigestSchema, requestedModel: learnTextSchema(200), returnedModel: learnTextSchema(200),
+  })).max(16).refine(values => new Set(values.map(value => `${value.configurationDigest}:${value.requestedModel}:${value.returnedModel}`)).size === values.length),
 })
 export function isLearnScoringReceiptCommittable(input: unknown, policy: z.infer<typeof learnScorerIdentityPolicySchema>): boolean {
   const value = parseLearnContract(learnScoringExecutionReceiptSchema, input)
@@ -254,7 +257,9 @@ export function isLearnScoringReceiptCommittable(input: unknown, policy: z.infer
   const observed = value.observedIdentity
   if (binding.kind === 'deterministic') return observed.status === 'deterministic' && observed.engineVersion === binding.engineVersion
   return observed.status === 'verified' && observed.requestedScorerModel === binding.requestedModel
-    && observed.returnedScorerModel !== null && (observed.returnedScorerModel === binding.requestedModel || identityPolicy.verifiedModelAliases.includes(observed.returnedScorerModel))
+    && observed.returnedScorerModel !== null && (observed.returnedScorerModel === binding.requestedModel
+      || identityPolicy.verifiedModelAliases.some(alias => alias.configurationDigest === binding.configurationDigest
+        && alias.requestedModel === binding.requestedModel && alias.returnedModel === observed.returnedScorerModel))
     && observed.generationId !== null && observed.servingProvider !== null
     && (binding.routingMode !== 'strict' || observed.endpoint === binding.endpoint)
 }

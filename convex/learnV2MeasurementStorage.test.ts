@@ -9,6 +9,9 @@ import { readMeasurementSourceDescendants, readMeasurementVoidDescendants } from
 import { initiateAdaptiveThreadDeletion } from './learnAdaptiveCommands'
 import type { Doc } from './_generated/dataModel'
 import { LEARN_V2_CONTRACT } from '../shared/learn-v2-contract'
+import { LEARN_V2_MEASUREMENT_REPORT_VERSION, learnReportMetricSchema } from '../shared/learn-v2-measurement-report'
+import { learnValiditySnapshotSchema } from '../shared/learn-v2-responses'
+import { partialMeasurementReportCell } from '../tests/fixtures/learn-v2-measurement-report'
 
 const modules = import.meta.glob('./**/*.ts')
 const owner = { tokenIdentifier: 'https://auth.example.com|measurement-owner', subject: 'same-subject' }
@@ -33,6 +36,34 @@ async function readAll(t: ReturnType<typeof convexTest>, identity: typeof owner,
 }
 
 describe('inactive Phase C storage boundaries', () => {
+  test('round-trips the complete v2 cell and exports only classified metadata', async () => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => seedMeasurementStorage(ctx, owner.tokenIdentifier))
+    const cell = partialMeasurementReportCell()
+    cell.weighting = 'learner_sensitivity'
+    await t.run(ctx => ctx.db.replace(f.rows.learnMeasurementReportCells, { ...f.base, reportRunId: f.rows.learnMeasurementReportRuns,
+      cellKey: 'vlg7', sequence: 1, reportVersion: LEARN_V2_MEASUREMENT_REPORT_VERSION, ...cell }))
+    const stored = await t.run(ctx => ctx.db.get(f.rows.learnMeasurementReportCells))
+    if (!stored) throw new Error('Missing report cell')
+    const { _id: _id, _creationTime: _creationTime, userId: _owner, createdAt: _createdAt, storageVersion: _storageVersion,
+      reportRunId: _run, reportVersion: _version, cellKey: _key, sequence: _sequence, ...output } = stored
+    expect(learnReportMetricSchema.parse(output)).toEqual(cell)
+    const exported = await readAll(t, owner, 'learnMeasurementReportCells')
+    expect(exported).toMatchObject([{ reportVersion: LEARN_V2_MEASUREMENT_REPORT_VERSION, weighting: 'learner_sensitivity', metric: cell.metric, status: cell.status }])
+    for (const field of ['counts', 'stratum', 'replacements', 'instrumentation', 'sensitivity', 'allocations', 'sourceAccounting', 'attritionByStartingBand']) {
+      expect(exported[0]).not.toHaveProperty(field)
+    }
+  })
+
+  test('stores a valid measurement-only snapshot with the retained-promotion reason', async () => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => seedMeasurementStorage(ctx, owner.tokenIdentifier))
+    const validitySnapshot = learnValiditySnapshotSchema.parse({ ...f.validitySnapshot, exclusionReasons: ['retained_promotion_ineligible'] })
+    await t.run(ctx => ctx.db.patch(f.rows.learnResponses, { validitySnapshot }))
+    expect(await t.run(ctx => ctx.db.get(f.rows.learnResponses))).toMatchObject({ validitySnapshot: {
+      status: 'valid', measurementEligible: true, masteryEligible: false, exclusionReasons: ['retained_promotion_ineligible'],
+    } })
+  })
   test('enumerates every owned collection safely with product flags off and denies another issuer', async () => {
     vi.stubEnv('LEARN_V2_ENABLED', 'false')
     vi.stubEnv('LEARN_ADAPTIVE_EXPERIENCE_ENABLED', 'false')
@@ -274,6 +305,9 @@ describe('inactive Phase C storage boundaries', () => {
       if (!catalog) throw new Error('Missing catalogue')
       const { _id: _id, _creationTime: _creationTime, ...fields } = catalog
       for (let index = 0; index < 9; index++) await ctx.db.insert('learnAssessmentCatalogs', fields)
+      for (let index = 0; index < 9; index++) await ctx.db.insert('learnMeasurementReportCells', { ...a.base,
+        reportRunId: a.rows.learnMeasurementReportRuns, cellKey: `additional-cell-${index}`, sequence: index + 2,
+        reportVersion: LEARN_V2_MEASUREMENT_REPORT_VERSION, ...partialMeasurementReportCell() })
       await ctx.db.insert('accountDeletionJobs', { userId: owner.tokenIdentifier, status: 'active', phase: 'documents', startedAt: Date.now(), updatedAt: Date.now() })
       return cachedRowId
     })

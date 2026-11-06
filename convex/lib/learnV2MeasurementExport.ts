@@ -27,7 +27,7 @@ const metadataFields = {
   learnMeasurementSourceWatermarks: ['sequence', 'sourceVersion', 'historyCoverage', 'updatedAt'],
   learnMeasurementReportRuns: ['reportVersion', 'queryVersion', 'cutoff', 'status', 'sourceCoverage', 'extractionStartedAt', 'extractionEndedAt'],
   learnMeasurementReportRows: ['sequence', 'sourceVersion', 'rowKind', 'invalidatedAt'],
-  learnMeasurementReportCells: ['sequence', 'metric', 'horizonDays', 'status'],
+  learnMeasurementReportCells: ['reportVersion', 'sequence', 'metric', 'horizonDays', 'weighting', 'status'],
   learnMeasurementReportViewerGrants: [],
 } as const satisfies Record<LearnMeasurementCollection, readonly string[]>
 

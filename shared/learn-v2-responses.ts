@@ -5,6 +5,7 @@ import { LEARN_MEASUREMENT_STORAGE_LIMITS } from './learn-v2-measurement-storage
 export const LEARN_V2_RESPONSE_CONTRACT_VERSION = 'learn-v2.responses.v1' as const
 export const LEARN_V2_ASSISTANCE_POLICY_VERSION = 'learn-v2.assistance.session-wide.v1' as const
 export const LEARN_V2_VALIDITY_POLICY_VERSION = 'learn-v2.assessment-validity.v1' as const
+export const LEARN_V2_RETAINED_PROMOTION_INELIGIBLE = 'retained_promotion_ineligible' as const
 export const LEARN_V2_RESPONSE_LIMITS = {
   ...LEARN_MEASUREMENT_STORAGE_LIMITS,
   maxStructuredEntries: 32,
@@ -128,7 +129,8 @@ export const learnValiditySnapshotSchema = z.strictObject({
   status: z.enum(['valid', 'excluded', 'unknown']),
   measurementEligible: z.boolean(), masteryEligible: z.boolean(), exclusionReasons: learnReasonCodesSchema,
 }).refine(value => value.status === 'valid'
-  ? value.exclusionReasons.length === 0
+  ? value.exclusionReasons.length === 0 || (value.measurementEligible && !value.masteryEligible
+    && value.exclusionReasons.length === 1 && value.exclusionReasons[0] === LEARN_V2_RETAINED_PROMOTION_INELIGIBLE)
   : !value.measurementEligible && !value.masteryEligible && value.exclusionReasons.length > 0, 'Inconsistent validity')
 
 export const learnAssistanceDeliverySchema = z.discriminatedUnion('kind', [

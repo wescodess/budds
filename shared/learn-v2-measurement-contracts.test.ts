@@ -1,6 +1,7 @@
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import type { z } from 'zod'
 import type { Doc } from '../convex/_generated/dataModel'
+import { emptyMeasurementReportCell, partialMeasurementReportCell } from '../tests/fixtures/learn-v2-measurement-report'
 import {
   LEARN_V2_RESPONSE_CONTRACT_VERSION, LEARN_V2_ASSISTANCE_POLICY_VERSION, LEARN_V2_VALIDITY_POLICY_VERSION,
   learnIdSchema, learnSerializedBytes, learnResponsePayloadSchema, learnAssistanceSnapshotSchema, learnValiditySnapshotSchema,
@@ -8,7 +9,7 @@ import {
   parseLearnContract, resolveLearnInstrumentation, validateLearnAcceptResponseRequest, type learnResponseDependencySchema,
 } from './learn-v2-responses'
 import {
-  LEARN_V2_MEASUREMENT_VERSION, LEARN_V2_FORM_ORDERS, learnMeasurementItemPinsSchema, learnMeasurementAllocationSchema,
+  LEARN_V2_MEASUREMENT_VERSION, LEARN_V2_FORM_ORDERS, LEARN_V2_SCORER_IDENTITY_POLICY_VERSION, learnMeasurementItemPinsSchema, learnMeasurementAllocationSchema,
   learnScorerBindingSchema, learnObservedScorerIdentitySchema, learnScoringExecutionReceiptSchema, learnPrivateScoringPayloadSchema,
   learnMeasurementFamilyManifestSchema, learnMeasurementPublicationCandidateSchema, learnAssessmentExposureSchema,
   learnMeasurementHistorySchema, learnV2ScopeSchema, learnStandaloneScopeSchema,
@@ -254,7 +255,7 @@ describe('Measurement Item identity and scorer pins', () => {
     observedIdentity: observed, outcome: 'validated', verdict: { criterionResults: [{ key: 'criterion1', awarded: true }], misconceptionTags: [], scorePercent: 80,
       verdictDigest: digest, responseDigest: digest }, usage: null, integrityResult: 'verified' }
   it('commits only a complete verified intended/observed receipt', () => {
-    const policy = { version: 'aliases.v1', verifiedModelAliases: [] }
+    const policy = { version: LEARN_V2_SCORER_IDENTITY_POLICY_VERSION, verifiedModelAliases: [] }
     expect(isLearnScoringReceiptCommittable(receipt, policy)).toBe(true)
     for (const status of ['unknown', 'mismatch', 'unverified_legacy']) {
       expect(isLearnScoringReceiptCommittable({ ...receipt, observedIdentity: { ...observed, status } }, policy)).toBe(false)
@@ -268,13 +269,32 @@ describe('Measurement Item identity and scorer pins', () => {
   })
   it('keeps deterministic execution explicitly model-free', () => {
     expect(isLearnScoringReceiptCommittable({ ...receipt, scoringBinding: deterministic,
-      observedIdentity: { status: 'deterministic', engineVersion: 'keyed-scorer.v1' } }, { version: 'aliases.v1', verifiedModelAliases: [] })).toBe(true)
+      observedIdentity: { status: 'deterministic', engineVersion: 'keyed-scorer.v1' } }, { version: LEARN_V2_SCORER_IDENTITY_POLICY_VERSION, verifiedModelAliases: [] })).toBe(true)
+  })
+  it('binds a verified model alias to both the requested identity and configuration digest', () => {
+    const request = { ...receipt, scoringBinding: { ...model, requestedModel: 'vendor/model-a' },
+      observedIdentity: { ...observed, requestedScorerModel: 'vendor/model-a', returnedScorerModel: 'vendor/model-b-2026' } }
+    const alias = { configurationDigest: digest, requestedModel: 'vendor/model-b', returnedModel: 'vendor/model-b-2026' }
+    const policy = { version: LEARN_V2_SCORER_IDENTITY_POLICY_VERSION, verifiedModelAliases: [alias] }
+    expect(isLearnScoringReceiptCommittable(request, policy)).toBe(false)
+    expect(isLearnScoringReceiptCommittable(request, { ...policy, verifiedModelAliases: [{ ...alias, requestedModel: 'vendor/model-a', configurationDigest: `sha256:${'b'.repeat(64)}` }] })).toBe(false)
+    expect(isLearnScoringReceiptCommittable(request, { ...policy, verifiedModelAliases: [{ ...alias, requestedModel: 'vendor/model-a' }] })).toBe(true)
   })
 })
 
 describe('test-only lifecycle and mastery eligibility', () => {
   it('allows delayed measurement below Independent without awarding mastery', () => {
-    expect(evaluateLearnAssessmentEligibility(eligibility)).toMatchObject({ measurementEligible: true, masteryEligible: false })
+    const result = evaluateLearnAssessmentEligibility(eligibility)
+    expect(result).toMatchObject({ measurementEligible: true, masteryEligible: false })
+    expect(learnValiditySnapshotSchema.parse({ ...validity, exclusionReasons: result.reasonCodes })).toMatchObject({
+      status: 'valid', measurementEligible: true, masteryEligible: false, exclusionReasons: ['retained_promotion_ineligible'],
+    })
+    for (const invalid of [
+      { ...validity, masteryEligible: true, exclusionReasons: result.reasonCodes },
+      { ...validity, measurementEligible: false, exclusionReasons: result.reasonCodes },
+      { ...validity, exclusionReasons: ['assisted'] },
+      { ...validity, exclusionReasons: ['retained_promotion_ineligible', 'evidence_unavailable'] },
+    ]) expect(() => learnValiditySnapshotSchema.parse(invalid)).toThrow()
     expect(deriveEligibleMeasurementMastery({ kind: 'measurement_delayed', scorePercent: 90, measurementEligible: true, masteryEligible: false, previousState: 'learning' })).toBeNull()
     expect(evaluateLearnAssessmentEligibility({ ...eligibility, purpose: { kind: 'measurement_cold', assignmentId: ref<'learnMeasurementAssignments'>('assignment1'), protocolVersion: 'protocol.v1' } })).toMatchObject({ measurementEligible: true, masteryEligible: false })
   })
@@ -289,6 +309,25 @@ describe('test-only lifecycle and mastery eligibility', () => {
     expect(deriveEligibleMeasurementMastery({ ...input, scorePercent: 79 })?.state).toBe('needs_review')
     expect(addCalendarDays('2026-11-01', 7)).toBe('2026-11-08')
     expect(deriveMastery({ kind: 'independent_application', assisted: true, scorePercent: 100 }).state).toBe('guided')
+  })
+  it('rejects retained promotion in-window six local days after Independent attainment', () => {
+    const result = evaluateLearnAssessmentEligibility({ ...eligibility, previousState: 'independent',
+      firstIndependentLocalDate: '2026-11-02', firstIndependentTimezone: 'America/Toronto' })
+    expect(acceptedAt).toBeGreaterThanOrEqual(clock.openAt)
+    expect(acceptedAt).toBeLessThan(clock.closeAt)
+    expect(result).toMatchObject({ measurementEligible: true, masteryEligible: false, reasonCodes: ['retained_promotion_ineligible'] })
+  })
+  it('uses local dates across 167 elapsed hours at spring DST and rejects the adjacent six-day anchor', () => {
+    const firstIndependentAt = Date.parse('2026-03-07T17:00:00Z')
+    const springAcceptedAt = Date.parse('2026-03-14T16:00:00Z')
+    expect((springAcceptedAt - firstIndependentAt) / 3_600_000).toBe(167)
+    const springClock = { ...clock, anchorAt: firstIndependentAt, dueLocalDate: '2026-03-14', dueAt: springAcceptedAt,
+      openAt: Date.parse('2026-03-14T04:00:00Z'), closeAt: Date.parse('2026-03-15T04:00:00Z') }
+    const input = { ...eligibility, acceptedAt: springAcceptedAt, purpose: { ...purpose, clock: springClock },
+      previousState: 'independent' as const, firstIndependentLocalDate: '2026-03-07', firstIndependentTimezone: 'America/Toronto' }
+    expect(evaluateLearnAssessmentEligibility(input)).toMatchObject({ measurementEligible: true, masteryEligible: true })
+    expect(evaluateLearnAssessmentEligibility({ ...input, firstIndependentLocalDate: '2026-03-08' }))
+      .toMatchObject({ measurementEligible: true, masteryEligible: false, reasonCodes: ['retained_promotion_ineligible'] })
   })
   it('never turns unknown history or assistance into clean performance', () => {
     expect(evaluateLearnAssessmentEligibility({ ...eligibility, historyKnown: false }).measurementEligible).toBe(false)
@@ -406,17 +445,7 @@ describe('canonical measurement event v2', () => {
 describe('report source and aggregate boundaries', () => {
   const query = { version: LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION, cohortVersion: 'cohort.v1', epoch: 'epoch.v1', protocolVersion: 'protocol.v1',
     enrollmentStartAt: 0, enrollmentEndAt: 86_400_000, cutoff: acceptedAt }
-  const counts = { considered: 0, notAdmitted: 0, horizonNotAssigned: 0, anchorNotStarted: 0, notYetDue: 0, windowOpen: 0,
-    maturedEpisodes: 0, operationallyEligible: 0, acceptedSubmissions: 0, validDelayedScores: 0, validColdScores: 0, comparablePairs: 0,
-    maturedClaims: 0, checkedClaims: 0, failedClaims: 0,
-    distinctLearners: { maturedEpisodes: 0, operationallyEligible: 0, acceptedSubmissions: 0, validDelayedScores: 0, validColdScores: 0,
-      comparablePairs: 0, maturedClaims: 0, checkedClaims: 0, failedClaims: 0 } }
-  const metric = { metric: 'verified_learning_gain.v1', horizonDays: 7, weighting: 'capability_episode',
-    stratum: { flow: 'v2_today', entryPoint: 'today.v1', depth: 'working', startingBand: 'unknown', scoringKind: 'deterministic',
-      configurationDigest: digest, observedModel: null, observedUpstream: null, familyValidationStatus: 'provisional_equivalent' },
-    status: 'no_eligible_population', populationState: 'known', sourceCoverage: 'complete', outcomeCoverage: 'none', validity: 'provisional',
-    precision: 'insufficient_clusters', counts, observedValue: null, allEligibleValue: null, missingOutcomeBounds: null, confidenceInterval: null,
-    reasonCodes: ['no_eligible_population', 'insufficient_clusters'] }
+  const metric = emptyMeasurementReportCell()
   it('rejects individual filters and oversized enrollment ranges', () => {
     expect(learnReportQuerySchema.parse(query)).toEqual(query)
     expect(() => learnReportQuerySchema.parse({ ...query, learnerId: 'foreign' })).toThrow()
@@ -426,10 +455,7 @@ describe('report source and aggregate boundaries', () => {
     expect(learnReportMetricSchema.parse(metric).observedValue).toBeNull()
     expect(() => learnReportMetricSchema.parse({ ...metric, observedValue: 0 })).toThrow()
     expect(() => learnReportMetricSchema.parse({ ...metric, reasonCodes: [] })).toThrow()
-    const observedCounts = { ...counts, maturedEpisodes: 2, operationallyEligible: 2, acceptedSubmissions: 1, validDelayedScores: 1, validColdScores: 2, comparablePairs: 1,
-      distinctLearners: { ...counts.distinctLearners, maturedEpisodes: 2, operationallyEligible: 2, acceptedSubmissions: 1, validDelayedScores: 1, validColdScores: 2, comparablePairs: 1 } }
-    const partial = { ...metric, counts: observedCounts, observedValue: -20, status: 'partial_observed', outcomeCoverage: 'partial',
-      missingOutcomeBounds: { lower: -60, upper: 40 }, reasonCodes: ['missing_delayed', 'insufficient_clusters'] }
+    const partial = partialMeasurementReportCell()
     expect(learnReportMetricSchema.parse(partial).observedValue).toBe(-20)
     expect(() => learnReportMetricSchema.parse({ ...partial, allEligibleValue: -10 })).toThrow()
     expect(() => learnReportMetricSchema.parse({ ...partial, confidenceInterval: { lower: -21, upper: -19 } })).toThrow()

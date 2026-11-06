@@ -3,7 +3,7 @@ import { addCalendarDays, localDateAt, type MasteryState } from './learn-v2-mast
 import {
   learnIdSchema, learnVersionSchema, learnTimestampSchema, learnLocalDateSchema, learnTimezoneSchema,
   learnRevisionSchema, learnSequenceSchema, learnAssistanceSnapshotSchema, learnReasonCodesSchema,
-  LEARN_V2_ASSISTANCE_POLICY_VERSION, parseLearnContract,
+  LEARN_V2_ASSISTANCE_POLICY_VERSION, LEARN_V2_RETAINED_PROMOTION_INELIGIBLE, parseLearnContract,
 } from './learn-v2-responses'
 import { learnMeasurementHorizonSchema } from './learn-v2-measurement'
 
@@ -149,7 +149,7 @@ export function evaluateLearnAssessmentEligibility(input: z.infer<typeof learnAs
   const clean = reasons.length === 0
   const delayed = value.purpose.kind === 'measurement_delayed' || value.purpose.kind === 'retained_transfer'
   const retained = delayed && isLearnRetainedPromotionTimeEligible(value)
-  if (delayed && !retained) reasons.push('retained_promotion_ineligible')
+  if (delayed && !retained) reasons.push(LEARN_V2_RETAINED_PROMOTION_INELIGIBLE)
   return learnAssessmentEligibilitySchema.parse({
     version: LEARN_V2_DELAYED_CHECK_VERSION,
     measurementEligible: clean && measurement,
