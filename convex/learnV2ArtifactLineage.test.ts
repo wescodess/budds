@@ -1896,7 +1896,7 @@ describe('B1 atomic batch registration', () => {
   })
   test('shares the read budget across otherwise admissible members and exposes failed and repeated lookup charges', async () => {
     const t = convexTest(schema, modules)
-    const fixtures = await prepareQuizBatch(t, 3)
+    const fixtures = await prepareQuizBatch(t, 6)
     for (const f of fixtures) await t.run(ctx => ctx.db.patch(f.documentId, { filename: 'x'.repeat(650_000) }))
     const rollback = 'Probe only'
     for (const f of fixtures) await expect(t.withIdentity(owner).run(async ctx => {
@@ -1967,6 +1967,182 @@ async function replacementLineage(ctx: MutationCtx, f: Fixture, payloadDigest: s
   return { ...f, lineageId, validationId, manifestDigest, reference: { ...f.reference, payloadDigest }, catalogRevision }
 }
 const repinnableKinds = ['document', 'document_chunk', 'session_block', 'flashcard_version', 'learner_artifact', 'measurement_item', 'scoring_spec'] as const
+
+describe('round-3 shared validation exactness', () => {
+  test.each(['short_first', 'long_first'] as const)('shared subtree obeys the depth limit in %s order', async order => {
+    for (const edges of [8, 9]) {
+      const t = convexTest(schema, modules)
+      const fixtures = await t.run(async ctx => {
+        const all: Fixture[] = []
+        for (let i = 0; i < edges + 1; i++) all.push(await prepare(ctx, { classification: 'genuine_personal_work', fingerprint: (i + 1).toString(16) }))
+        const leaf = all[0]!, shared = all[1]!, root = all.at(-1)!
+        const chain = all.slice(2, -1)
+        for (const f of all) {
+          const targets = f === root ? order === 'short_first' ? [shared, chain.at(-1)!] : [chain.at(-1)!, shared]
+            : f === shared ? [leaf] : f === leaf ? [] : [chain[chain.indexOf(f) - 1] ?? shared]
+          const sources = await ctx.db.query('learnArtifactSourceLinks').withIndex('by_userId_and_lineageId', q => q.eq('userId', owner.tokenIdentifier).eq('lineageId', f.lineageId)).take(65)
+          for (const source of sources) await ctx.db.delete(source._id)
+          for (const target of targets) await ctx.db.insert('learnArtifactSourceLinks', { ...f.base, lineageId: f.lineageId, evidenceStatus: 'available', dependency: { kind: 'document', documentId: target.documentId, sourceRevision: 'source.r1' } })
+          if (!targets.length) await ctx.db.insert('learnArtifactSourceLinks', { ...f.base, lineageId: f.lineageId, evidenceStatus: 'available', dependency: { kind: 'folder', folderId: f.folderId } })
+          await ctx.db.patch(f.lineageId, { sourceCount: targets.length || 1 })
+          await resealed(ctx, f)
+        }
+        return all
+      })
+      for (const [index, f] of fixtures.entries()) await t.withIdentity(owner).run(async ctx => {
+        await ctx.db.patch(f.validationId, { comparedCatalogRevision: index })
+        await registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, { ...registration(f), expectedCatalogRevision: index })
+      })
+      const reference = fixtures.at(-1)!.reference
+      expect(await t.withIdentity(owner).run(ctx => admitArtifactInput(ctx, { reference }))).toMatchObject({ status: edges === 8 ? 'admitted_registered' : 'rejected' })
+    }
+  })
+
+  test.each(['document_patch', 'document_table_patch', 'document_replace', 'document_delete', 'folder_owner', 'reserved_case', 'validation', 'source_link', 'source_owner_move', 'extra_source', 'duplicate_case', 'unknown_case_patch', 'known_case_patch', 'origin_transform'] as const)('cached facts reject %s after a write through the original context', async mutation => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(async ctx => {
+      const origin = mutation === 'origin_transform' ? await prepare(ctx, { classification: 'genuine_personal_work', fingerprint: 'a' }) : undefined
+      return { ...await prepare(ctx, { classification: 'genuine_personal_work', origin, transformation: 'summary', fingerprint: 'b' }), origin }
+    })
+    if (f.origin) {
+      await t.withIdentity(owner).run(ctx => registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, registration(f.origin!)))
+      await t.run(ctx => ctx.db.patch(f.validationId, { comparedCatalogRevision: 1 }))
+      f.catalogRevision = 1
+    }
+    await t.withIdentity(owner).run(ctx => registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, registration(f)))
+    await t.withIdentity(owner).run(async raw => {
+      const spare = await raw.db.insert('learnAssessmentCases', { ...f.base, caseKey: 'unread-case', scenarioFingerprint: 'f'.repeat(64), solutionFingerprint: 'f'.repeat(64), identityPolicyVersion: 'identity.v1', usageClass: 'unknown' })
+      const shared = createArtifactLineagePublicationContext(raw)
+      if (mutation === 'known_case_patch') await shared.admission.ctx.db.get(spare)
+      if (mutation === 'folder_owner') {
+        const row = (await raw.db.get(f.lineageId))!
+        const cases = await raw.db.query('learnArtifactCaseBindings').withIndex('by_userId_and_lineageId', q => q.eq('userId', owner.tokenIdentifier).eq('lineageId', f.lineageId)).take(33)
+        const sources = await raw.db.query('learnArtifactSourceLinks').withIndex('by_userId_and_lineageId', q => q.eq('userId', owner.tokenIdentifier).eq('lineageId', f.lineageId)).take(65)
+        await artifactManifestDigest(shared.admission.ctx, row, [], cases, sources)
+      }
+      expect(await admitArtifactInput(shared.admission.ctx, { reference: f.reference })).toMatchObject({ status: 'admitted_registered' })
+      if (mutation === 'document_patch') await raw.db.patch(f.documentId, { status: 'indexing' })
+      if (mutation === 'document_table_patch') {
+        const table = raw.db as unknown as { table(name: 'documents'): { patch(id: Id<'documents'>, fields: { status: 'indexing' }): Promise<void> } }
+        await table.table('documents').patch(f.documentId, { status: 'indexing' })
+      }
+      if (mutation === 'document_replace') {
+        const row = (await raw.db.get(f.documentId))!
+        const { _id: _id, _creationTime: _time, ...fields } = row
+        await raw.db.replace(f.documentId, { ...fields, status: 'failed' })
+      }
+      if (mutation === 'document_delete') await raw.db.delete(f.documentId)
+      if (mutation === 'folder_owner') await raw.db.patch(f.folderId, { userId: foreign.tokenIdentifier })
+      if (mutation === 'reserved_case') await raw.db.patch(f.caseId, { reservedAt: 0 })
+      if (mutation === 'validation') await raw.db.patch(f.validationId, { invalidatedAt: 0 })
+      if (mutation === 'source_link' || mutation === 'source_owner_move') {
+        const source = (await raw.db.query('learnArtifactSourceLinks').withIndex('by_userId_and_lineageId', q => q.eq('userId', owner.tokenIdentifier).eq('lineageId', f.lineageId)).unique())!
+        await raw.db.patch(source._id, mutation === 'source_link' ? { invalidatedAt: 0 } : { userId: foreign.tokenIdentifier })
+      }
+      if (mutation === 'extra_source') await raw.db.insert('learnArtifactSourceLinks', { ...f.base, lineageId: f.lineageId, evidenceStatus: 'available', dependency: { kind: 'folder', folderId: f.folderId } })
+      if (mutation === 'duplicate_case' || mutation === 'unknown_case_patch' || mutation === 'known_case_patch') {
+        const pin = { scenarioFingerprint: 'b'.repeat(64), solutionFingerprint: 'c'.repeat(64) }
+        if (mutation === 'duplicate_case') await raw.db.insert('learnAssessmentCases', { ...f.base, ...pin, caseKey: 'duplicate', identityPolicyVersion: 'identity.v1', usageClass: 'unknown' })
+        else await raw.db.patch(spare, pin)
+      }
+      if (mutation === 'origin_transform') {
+        const edge = (await raw.db.query('learnArtifactLineageOrigins').withIndex('by_userId_and_lineageId', q => q.eq('userId', owner.tokenIdentifier).eq('lineageId', f.lineageId)).unique())!
+        await raw.db.patch(edge._id, { transformation: 'copy' })
+      }
+      expect(await admitArtifactInput(shared.admission.ctx, { reference: f.reference })).toMatchObject({ status: 'rejected' })
+    })
+  })
+
+  test('source and inventory caches recover after rejection and see enrollment changes', async () => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => prepare(ctx, { classification: 'genuine_personal_work' }))
+    await t.withIdentity(owner).run(ctx => registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, registration(f)))
+    await t.withIdentity(owner).run(async raw => {
+      const shared = createArtifactLineagePublicationContext(raw)
+      await raw.db.patch(f.documentId, { status: 'indexing' })
+      expect(await admitArtifactInput(shared.admission.ctx, { reference: f.reference })).toMatchObject({ status: 'rejected' })
+      await raw.db.patch(f.documentId, { status: 'success' })
+      expect(await admitArtifactInput(shared.admission.ctx, { reference: f.reference })).toMatchObject({ status: 'admitted_registered' })
+      await raw.db.delete(f.lineageId)
+      expect(await admitArtifactInput(shared.admission.ctx, { reference: f.reference })).toMatchObject({ status: 'admitted_unregistered' })
+      await raw.db.patch(f.catalogId, { measurementCapability: { enabled: true } })
+      expect(await admitArtifactInput(shared.admission.ctx, { reference: f.reference })).toMatchObject({ status: 'rejected', reasonCode: 'registration_required' })
+    })
+  })
+
+  test('shared lineage nodes, origins and sources are read once per unchanged transaction', async () => {
+    const t = convexTest(schema, modules)
+    const origin = await t.run(ctx => prepare(ctx, { classification: 'genuine_personal_work' }))
+    const copy = await t.run(ctx => prepare(ctx, { origin, transformation: 'summary' }))
+    const unrelated = await t.run(ctx => prepare(ctx, { classification: 'genuine_personal_work', fingerprint: 'f' }))
+    await t.withIdentity(owner).run(async raw => {
+      const reads = new Map<string, number>()
+      const db = new Proxy(raw.db, { get(target, property) {
+        const method: unknown = Reflect.get(target, property)
+        if (property !== 'get' || typeof method !== 'function') return typeof method === 'function' ? method.bind(target) : method
+        return (...args: unknown[]) => {
+          const id = String(args.at(-1))
+          reads.set(id, (reads.get(id) ?? 0) + 1)
+          return Reflect.apply(method, target, args)
+        }
+      } })
+      const budget = createArtifactLineagePublicationContext({ ...raw, db })
+      for (const ctx of [budget.admission.ctx, budget.preparation.ctx]) {
+        for (const f of [origin, copy]) expect(await resolveArtifactLineageForOwner(ctx, owner.tokenIdentifier, { reference: f.reference })).toMatchObject({ status: 'bound' })
+        if (ctx === budget.admission.ctx) {
+          await raw.db.insert('learnArtifactSourceLinks', { ...origin.base, lineageId: unrelated.lineageId, evidenceStatus: 'available', dependency: { kind: 'folder', folderId: unrelated.folderId } })
+          await advanceAssessmentCatalogForOwner(budget.preparation.ctx, owner.tokenIdentifier, 0)
+        }
+      }
+      for (const id of [origin.documentId, origin.validationId, origin.lineageId]) expect(reads.get(id), id).toBe(1)
+    })
+  })
+
+  test('reused node facts still compare against the current catalogue revision', async () => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => prepare(ctx, { classification: 'genuine_personal_work' }))
+    await t.run(async ctx => {
+      await ctx.db.patch(f.catalogId, { catalogRevision: 1 })
+      await ctx.db.patch(f.validationId, { comparedCatalogRevision: 1 })
+    })
+    await t.withIdentity(owner).run(async raw => {
+      const budget = createArtifactLineagePublicationContext(raw)
+      expect(await resolveArtifactLineageForOwner(budget.admission.ctx, owner.tokenIdentifier, { reference: f.reference })).toMatchObject({ status: 'bound' })
+      await raw.db.patch(f.catalogId, { catalogRevision: 0 })
+      expect(await resolveArtifactLineageForOwner(budget.admission.ctx, owner.tokenIdentifier, { reference: f.reference })).toMatchObject({ status: 'unavailable' })
+    })
+  })
+
+  test('projection callers cannot mutate facts retained by the validation cache', async () => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => prepareMatrix(ctx, 'section_block', 'folder'))
+    await t.withIdentity(owner).run(async raw => {
+      const budget = createArtifactLineagePublicationContext(raw)
+      const section = (await raw.db.get(f.sectionId))!
+      const first = await sectionContentProjection(budget.admission.ctx, section)
+      const expected = await artifactPayloadDigest(first)
+      Reflect.set(first, 'payload', {})
+      const second = await sectionContentProjection(budget.admission.ctx, section)
+      expect(await artifactPayloadDigest(second)).toBe(expected)
+      Reflect.set(second, 'payload', {})
+      expect(await artifactPayloadDigest(await sectionContentProjection(budget.admission.ctx, section))).toBe(expected)
+    })
+  })
+
+  test('supersession cannot change an origin transformation', async () => {
+    const t = convexTest(schema, modules)
+    const origin = await t.run(ctx => prepare(ctx, { classification: 'genuine_personal_work' }))
+    const f = await t.run(ctx => prepare(ctx, { origin, transformation: 'summary' }))
+    const next = await t.run(async ctx => {
+      const next = await replacementLineage(ctx, f, f.reference.payloadDigest)
+      const edge = (await ctx.db.query('learnArtifactLineageOrigins').withIndex('by_userId_and_lineageId', q => q.eq('userId', owner.tokenIdentifier).eq('lineageId', next.lineageId)).unique())!
+      await ctx.db.patch(edge._id, { transformation: 'copy' })
+      return resealed(ctx, next)
+    })
+    await expect(t.withIdentity(owner).run(ctx => supersedeArtifactLineageForOwner(ctx, owner.tokenIdentifier, { previousLineageId: f.lineageId, replacementLineageId: next.lineageId }))).rejects.toThrow('unavailable')
+    expect(await t.run(ctx => ctx.db.get(f.lineageId))).not.toHaveProperty('nextId')
+  })
+})
 
 describe('round-2 admission invariants', () => {
   test.each(documentKinds)('%s successor remains admissible after a stale payload and 16 manifest replacements', async kind => {

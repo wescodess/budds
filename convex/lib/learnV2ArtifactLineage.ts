@@ -1,4 +1,4 @@
-import { ConvexError, getDocumentSize, type Infer, type Value } from 'convex/values'
+import { ConvexError, convexToJson, getDocumentSize, type Infer, type Value } from 'convex/values'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { requireAuth } from './auth'
@@ -42,6 +42,44 @@ const MAX_DOCUMENT_READ_BYTES = 1024 * 1024 + 64
 const budgetContext = Symbol('artifactLineageReadBudget')
 const ARTIFACT_CONTENT_BYTES = 500_000
 
+const validationContext = Symbol('artifactLineageValidation')
+type ValidationMemory = {
+  versions: Map<string, number>
+  entries: Map<string, { value: unknown, dependencies: Map<string, number> }>
+  readers: Set<Map<string, number>>
+  queries: Map<string, { table: string, equalities: Array<{ field: string, value: unknown }> }>
+  rows: Map<string, Record<string, unknown>>
+}
+function validationRead(ctx: ReadCtx, identity: string) {
+  const memory = Reflect.get(ctx, validationContext) as ValidationMemory | undefined
+  if (memory) for (const reads of memory.readers) if (!reads.has(identity)) reads.set(identity, memory.versions.get(identity) ?? 0)
+}
+function copyValidation<T>(value: T): T {
+  if (value instanceof ArrayBuffer) return value.slice(0) as T
+  if (Array.isArray(value)) return value.map(copyValidation) as T
+  if (value !== null && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, copyValidation(child)])) as T
+  return value
+}
+async function validated<T>(ctx: ReadCtx, identity: unknown, operation: () => Promise<T>): Promise<T> {
+  const memory = Reflect.get(ctx, validationContext) as ValidationMemory | undefined
+  if (!memory) return operation()
+  const key = canonicalJson(identity)
+  const current = (reads: Map<string, number>) => [...reads].every(([id, version]) => (memory.versions.get(id) ?? 0) === version)
+  const cached = memory.entries.get(key)
+  if (cached && current(cached.dependencies)) {
+    for (const id of cached.dependencies.keys()) validationRead(ctx, id)
+    return copyValidation(cached.value) as T
+  }
+  const dependencies = new Map<string, number>()
+  memory.readers.add(dependencies)
+  try {
+    const value = await operation()
+    if (current(dependencies)) memory.entries.set(key, { value: copyValidation(value), dependencies })
+    return value
+  }
+  finally { memory.readers.delete(dependencies) }
+}
+
 // All reads, including those inside shared authority helpers and indexed
 // queries, use one budget. Reserve a maximum-size document BEFORE each read;
 // charge the SDK's document size plus 64 bytes of conservative overhead.
@@ -52,6 +90,59 @@ export function createArtifactLineageReadContext<T extends ReadCtx>(ctx: T) {
 }
 
 function createReadBudget<T extends ReadCtx>(ctx: T, byteLimit: number, rangeLimit: number) {
+  const memory: ValidationMemory = (Reflect.get(ctx, validationContext) ?? Reflect.get(ctx.db, validationContext)) as ValidationMemory | undefined
+    ?? { versions: new Map(), entries: new Map(), readers: new Set(), queries: new Map(), rows: new Map() }
+  const invalidate = (identity: string) => memory.versions.set(identity, (memory.versions.get(identity) ?? 0) + 1)
+  const track = (identity: string) => {
+    for (const reads of memory.readers) if (!reads.has(identity)) reads.set(identity, memory.versions.get(identity) ?? 0)
+  }
+  const remember = (row: unknown) => {
+    if (row && typeof row === 'object' && '_id' in row) memory.rows.set(String(row._id), row as Record<string, unknown>)
+  }
+  const invalidateQueries = (table: string, rows: Array<Record<string, unknown> | undefined>) => {
+    for (const [identity, query] of memory.queries) {
+      if (query.table !== table) continue
+      const matches = (row: Record<string, unknown> | undefined) => !row || query.equalities.every(({ field, value }) => {
+        const actual = field.split('.').reduce<unknown>((item, key) => item && typeof item === 'object' ? Reflect.get(item, key) : undefined, row)
+        return actual === undefined || value === undefined ? actual === value : canonicalJson(convexToJson(actual as Value)) === canonicalJson(convexToJson(value as Value))
+      })
+      if (rows.some(matches)) invalidate(identity)
+    }
+  }
+  // Observe writes through the original transaction context as well as either phase.
+  if (!Reflect.get(ctx.db, validationContext)) {
+    Reflect.defineProperty(ctx.db, validationContext, { value: memory })
+    for (const property of ['insert', 'patch', 'replace', 'delete']) {
+      const method = Reflect.get(ctx.db, property)
+      if (typeof method !== 'function') continue
+      Reflect.set(ctx.db, property, async (...args: unknown[]) => {
+        const id = property === 'delete' ? args.at(-1) : property === 'insert' ? undefined : args.at(-2)
+        const table = property === 'insert' ? String(args[0]) : [...new Set([...memory.queries.values()].map(query => query.table))].find(name => ctx.db.normalizeId(name as never, String(id)))
+        const previous = memory.rows.get(String(id))
+        const fields = args.at(-1) as Record<string, unknown>
+        const next = property === 'delete' ? undefined : property === 'patch' ? previous ? { ...previous, ...fields } : undefined : fields
+        const changed = () => {
+          if (table) invalidateQueries(table, property === 'insert' ? [next] : property === 'delete' ? [previous] : [previous, next])
+          if (id !== undefined) invalidate(`id:${String(id)}`)
+        }
+        changed()
+        const result: unknown = await Reflect.apply(method, ctx.db, args)
+        changed()
+        if (property === 'delete') memory.rows.delete(String(id))
+        else if (next) memory.rows.set(String(id ?? result), next)
+        return result
+      })
+    }
+    const table = Reflect.get(ctx.db, 'table')
+    if (typeof table === 'function') Reflect.set(ctx.db, 'table', (name: string) => {
+      const writer = Reflect.apply(table, ctx.db, [name]) as object
+      return new Proxy(writer, { get(target, property) {
+        const method: unknown = Reflect.get(target, property)
+        if (['insert', 'patch', 'replace', 'delete'].includes(String(property))) return (...args: unknown[]) => Reflect.apply(Reflect.get(ctx.db, property) as (...values: unknown[]) => unknown, ctx.db, [name, ...args])
+        return typeof method === 'function' ? method.bind(target) : method
+      } })
+    })
+  }
   let bytes = 0
   let documentsRead = 0
   let readRequests = 0
@@ -74,6 +165,7 @@ function createReadBudget<T extends ReadCtx>(ctx: T, byteLimit: number, rangeLim
         if (size > MAX_DOCUMENT_READ_BYTES) throw new ReadBudgetExceeded('Artifact lineage unavailable')
         bytes += size
         documentsRead++
+        remember(result)
       }
       return result
     }
@@ -96,10 +188,19 @@ function createReadBudget<T extends ReadCtx>(ctx: T, byteLimit: number, rangeLim
     }
     finally { await iterator.return?.() }
   }
-  const boundedQuery = <Q extends object>(query: Q): Q => new Proxy(query, {
+  const boundedQuery = <Q extends object>(query: Q, table: string, equalities: Array<{ field: string, value: unknown }> = []): Q => new Proxy(query, {
     get(target, property) {
-      if (property === Symbol.asyncIterator) return () => iterate(target)
+      const trackQuery = () => {
+        const identity = canonicalJson(['query', table, equalities.map(({ field, value }) => ({ field, value: value === undefined ? null : convexToJson(value as Value), absent: value === undefined }))])
+        memory.queries.set(identity, { table, equalities })
+        track(identity)
+      }
+      if (property === Symbol.asyncIterator) return () => {
+        trackQuery()
+        return iterate(target)
+      }
       if (property === 'take' || property === 'first' || property === 'unique') return async (count?: number) => {
+        trackQuery()
         const limit = property === 'take' ? count : property === 'first' ? 1 : 2
         if (limit === undefined || !Number.isSafeInteger(limit) || limit < 0) unavailable()
         const rows: unknown[] = []
@@ -117,7 +218,25 @@ function createReadBudget<T extends ReadCtx>(ctx: T, byteLimit: number, rangeLim
       if (property !== 'withIndex' && property !== 'order') unavailable()
       const method: unknown = Reflect.get(target, property)
       if (typeof method !== 'function') unavailable()
-      return (...args: unknown[]) => boundedQuery(Reflect.apply(method, target, args) as object)
+      return (...args: unknown[]) => {
+        const filters = [...equalities]
+        if (property === 'withIndex' && typeof args[1] === 'function') {
+          const callback = args[1]
+          args[1] = (builder: object) => {
+            const capture = (current: object): object => new Proxy(current, { get(filter, name) {
+              const compare = Reflect.get(filter, name)
+              if (typeof compare !== 'function') return compare
+              if (!['eq', 'gt', 'gte', 'lt', 'lte'].includes(String(name))) return compare.bind(filter)
+              return (...values: unknown[]) => {
+                if (name === 'eq') filters.push({ field: String(values[0]), value: values[1] })
+                return capture(Reflect.apply(compare, filter, values))
+              }
+            } })
+            return callback(capture(builder))
+          }
+        }
+        return boundedQuery(Reflect.apply(method, target, args) as object, table, filters)
+      }
     },
   })
   const db = new Proxy(ctx.db, {
@@ -125,14 +244,15 @@ function createReadBudget<T extends ReadCtx>(ctx: T, byteLimit: number, rangeLim
       const method: unknown = Reflect.get(target, property)
       if (typeof method !== 'function') return method
       if (property === 'get') return async (...args: unknown[]) => {
+        track(`id:${String(args.at(-1))}`)
         range()
         return read(() => Reflect.apply(method, target, args))
       }
-      if (property === 'query') return (...args: unknown[]) => boundedQuery(Reflect.apply(method, target, args) as object)
+      if (property === 'query') return (...args: unknown[]) => boundedQuery(Reflect.apply(method, target, args) as object, String(args[0]))
       return method.bind(target)
     },
   })
-  const budgeted = new Proxy(ctx, { get: (target, property) => property === budgetContext ? state : property === 'db' ? db : Reflect.get(target, property) })
+  const budgeted = new Proxy(ctx, { get: (target, property) => property === budgetContext ? state : property === validationContext ? memory : property === 'db' ? db : Reflect.get(target, property) })
   return { ctx: budgeted, get readUsage() { return state.usage() }, get indexRanges() { return state.indexRanges() } }
 }
 export function createArtifactLineagePublicationContext<T extends ReadCtx>(ctx: T) {
@@ -153,6 +273,7 @@ function preparationSourceSnapshot<T extends ReadCtx>(ctx: T): T {
     if (property !== 'get' || typeof method !== 'function') return typeof method === 'function' ? method.bind(target) : method
     return (...args: unknown[]) => {
       const id = args.at(-1)
+      validationRead(ctx, `id:${String(id)}`)
       if (typeof id !== 'string' || !(['documents', 'folders', 'courses'] as const).some(table => target.normalizeId(table, id))) return Reflect.apply(method, target, args)
       let read = reads.get(id)
       if (!read) { read = Reflect.apply(method, target, args) as Promise<unknown>; reads.set(id, read) }
@@ -333,7 +454,9 @@ async function canonicalDigest(value: unknown, maxBytes: number) {
 export async function artifactPayloadDigest(payload: unknown) { return canonicalDigest(payload, ARTIFACT_CONTENT_BYTES) }
 
 async function liveFolder(ctx: ReadCtx, userId: string, id: Id<'folders'>) {
-  if ((await ctx.db.get(id))?.userId !== userId) unavailable()
+  return validated(ctx, ['folder', userId, id], async () => {
+    if ((await ctx.db.get(id))?.userId !== userId) unavailable()
+  })
 }
 
 // Mirrors learnV2Sources.requireLiveVoid, including revocation before cleanup.
@@ -345,18 +468,22 @@ async function liveVoid(ctx: ReadCtx, userId: string, id: Id<'learningVoids'>) {
 }
 
 async function liveDocument(ctx: ReadCtx, userId: string, id: Id<'documents'>) {
-  const row = await ctx.db.get(id)
-  // Mirrors learnAdaptive.loadContributionSource; content pins are bound below.
-  if (!row || row.userId !== userId || row.status !== 'success') unavailable()
-  await liveFolder(ctx, userId, row.folderId)
-  return row
+  return validated(ctx, ['document', userId, id], async () => {
+    const row = await ctx.db.get(id)
+    // Mirrors learnAdaptive.loadContributionSource; content pins are bound below.
+    if (!row || row.userId !== userId || row.status !== 'success') unavailable()
+    await liveFolder(ctx, userId, row.folderId)
+    return row
+  })
 }
 
 async function liveCourse(ctx: ReadCtx, userId: string, id: Id<'courses'>) {
-  const row = await ctx.db.get(id)
-  if (!row || row.userId !== userId || row.status !== 'ready') unavailable()
-  await liveFolder(ctx, userId, row.folderId)
-  return row
+  return validated(ctx, ['course', userId, id], async () => {
+    const row = await ctx.db.get(id)
+    if (!row || row.userId !== userId || row.status !== 'ready') unavailable()
+    await liveFolder(ctx, userId, row.folderId)
+    return row
+  })
 }
 
 async function pinned(row: ArtifactPin, payload: unknown, revision?: string | number) {
@@ -452,43 +579,45 @@ export async function audioOverviewContentProjection(ctx: ReadCtx, overview: Doc
 }
 
 export async function sectionContentProjection(ctx: ReadCtx, section: Doc<'courseSections'>) {
-  ctx = withReadBudget(ctx)
-  const linked: SectionLinks = []
-  for (const block of section.contentBlocks) {
-    if (!block.entityId || block.type === 'text') { linked.push(null); continue }
-    if (block.type === 'quiz') {
-      const id = ctx.db.normalizeId('quizzes', block.entityId)
-      if (!id) unavailable()
-      const quiz = await ctx.db.get(id)
-      if (!quiz || quiz.userId !== section.userId || quiz.status !== 'ready' || quiz.deletedAt !== undefined) unavailable()
-      await liveFolder(ctx, section.userId, quiz.folderId)
-      if (quiz.courseId) await liveCourse(ctx, section.userId, quiz.courseId)
-      // Online Quiz reads expose up to 200 questions (offline caches take 50).
-      const questions = await boundedRows(ctx.db.query('quizQuestions').withIndex('by_quizId', q => q.eq('quizId', id)).take(201), 200)
-      if (questions.some(q => q.userId !== section.userId)) unavailable()
-      linked.push({ kind: 'quiz', questions })
+  return validated(ctx, ['section-projection', section], async () => {
+    ctx = withReadBudget(ctx)
+    const linked: SectionLinks = []
+    for (const block of section.contentBlocks) {
+      if (!block.entityId || block.type === 'text') { linked.push(null); continue }
+      if (block.type === 'quiz') {
+        const id = ctx.db.normalizeId('quizzes', block.entityId)
+        if (!id) unavailable()
+        const quiz = await ctx.db.get(id)
+        if (!quiz || quiz.userId !== section.userId || quiz.status !== 'ready' || quiz.deletedAt !== undefined) unavailable()
+        await liveFolder(ctx, section.userId, quiz.folderId)
+        if (quiz.courseId) await liveCourse(ctx, section.userId, quiz.courseId)
+        // Online Quiz reads expose up to 200 questions (offline caches take 50).
+        const questions = await boundedRows(ctx.db.query('quizQuestions').withIndex('by_quizId', q => q.eq('quizId', id)).take(201), 200)
+        if (questions.some(q => q.userId !== section.userId)) unavailable()
+        linked.push({ kind: 'quiz', questions })
+      }
+      else if (block.type === 'flashcard') {
+        const id = ctx.db.normalizeId('flashcardRooms', block.entityId)
+        if (!id) unavailable()
+        const room = await ctx.db.get(id)
+        if (!room || room.userId !== section.userId) unavailable()
+        await liveFolder(ctx, section.userId, room.folderId)
+        const cards = await boundedRows(ctx.db.query('flashcardRoomCards').withIndex('by_roomId', q => q.eq('roomId', id)).take(201), 200)
+        if (cards.some(c => c.userId !== section.userId)) unavailable()
+        linked.push({ kind: 'flashcard', cards })
+      }
+      else {
+        const id = ctx.db.normalizeId('audioOverviews', block.entityId)
+        if (!id) unavailable()
+        const overview = await ctx.db.get(id)
+        if (!overview || overview.userId !== section.userId || overview.status !== 'ready') unavailable()
+        await liveAudioScope(ctx, overview)
+        await readAudioMedia(ctx, overview)
+        linked.push({ kind: 'audio', content: sectionAudioContent(overview) })
+      }
     }
-    else if (block.type === 'flashcard') {
-      const id = ctx.db.normalizeId('flashcardRooms', block.entityId)
-      if (!id) unavailable()
-      const room = await ctx.db.get(id)
-      if (!room || room.userId !== section.userId) unavailable()
-      await liveFolder(ctx, section.userId, room.folderId)
-      const cards = await boundedRows(ctx.db.query('flashcardRoomCards').withIndex('by_roomId', q => q.eq('roomId', id)).take(201), 200)
-      if (cards.some(c => c.userId !== section.userId)) unavailable()
-      linked.push({ kind: 'flashcard', cards })
-    }
-    else {
-      const id = ctx.db.normalizeId('audioOverviews', block.entityId)
-      if (!id) unavailable()
-      const overview = await ctx.db.get(id)
-      if (!overview || overview.userId !== section.userId || overview.status !== 'ready') unavailable()
-      await liveAudioScope(ctx, overview)
-      await readAudioMedia(ctx, overview)
-      linked.push({ kind: 'audio', content: sectionAudioContent(overview) })
-    }
-  }
-  return artifactContentProjection({ kind: 'section_block', section, linked })
+    return artifactContentProjection({ kind: 'section_block', section, linked })
+  })
 }
 
 async function liveSessionBlock(ctx: ReadCtx, userId: string, row: ArtifactPin, id: Id<'sessionContentBlocks'>) {
@@ -532,11 +661,13 @@ async function liveDocumentChunk(ctx: ReadCtx, userId: string, row: ArtifactPin,
 async function liveQuizQuestion(ctx: ReadCtx, userId: string, row: ArtifactPin, id: Id<'quizQuestions'>) {
   const question = await ctx.db.get(id)
   if (!question || question.userId !== userId) unavailable()
-  const quiz = await ctx.db.get(question.quizId)
-  // Mirrors learnAdaptive.loadContributionSource, including course deletion.
-  if (!quiz || quiz.userId !== userId || quiz.status !== 'ready' || quiz.deletedAt !== undefined) unavailable()
-  await liveFolder(ctx, userId, quiz.folderId)
-  if (quiz.courseId) await liveCourse(ctx, userId, quiz.courseId)
+  await validated(ctx, ['quiz', userId, question.quizId], async () => {
+    const quiz = await ctx.db.get(question.quizId)
+    // Mirrors learnAdaptive.loadContributionSource, including course deletion.
+    if (!quiz || quiz.userId !== userId || quiz.status !== 'ready' || quiz.deletedAt !== undefined) unavailable()
+    await liveFolder(ctx, userId, quiz.folderId)
+    if (quiz.courseId) await liveCourse(ctx, userId, quiz.courseId)
+  })
   await pinned(row, artifactContentProjection({ kind: 'quiz_question', question }))
 }
 
@@ -628,26 +759,30 @@ async function liveScoringSpec(ctx: ReadCtx, userId: string, row: ArtifactPin, i
 }
 
 async function requireLiveArtifact(ctx: ReadCtx, userId: string, row: ArtifactPin) {
-  const artifact = row.artifact
-  switch (artifact.kind) {
-    case 'session_block': return liveSessionBlock(ctx, userId, row, artifact.id)
-    case 'document': return liveDocumentArtifact(ctx, userId, row, artifact.id)
-    case 'document_chunk': return liveDocumentChunk(ctx, userId, row, artifact.id)
-    case 'quiz_question': return liveQuizQuestion(ctx, userId, row, artifact.id)
-    case 'section_block': return liveSectionBlock(ctx, userId, row, artifact.id)
-    case 'flashcard_version': return liveFlashcardVersion(ctx, userId, row, artifact.id)
-    case 'audio_overview': return liveAudioOverview(ctx, userId, row, artifact.id)
-    case 'learner_artifact': return liveLearnerArtifact(ctx, userId, row, artifact.id)
-    case 'measurement_item': await liveMeasurementItem(ctx, userId, row, artifact.id); return
-    case 'scoring_spec': return liveScoringSpec(ctx, userId, row, artifact.id)
-    default: unavailable()
-  }
+  return validated(ctx, ['artifact', userId, { artifact: row.artifact, key: row.key, revision: row.revision, payloadDigest: row.payloadDigest }], async () => {
+    const artifact = row.artifact
+    switch (artifact.kind) {
+      case 'session_block': return liveSessionBlock(ctx, userId, row, artifact.id)
+      case 'document': return liveDocumentArtifact(ctx, userId, row, artifact.id)
+      case 'document_chunk': return liveDocumentChunk(ctx, userId, row, artifact.id)
+      case 'quiz_question': return liveQuizQuestion(ctx, userId, row, artifact.id)
+      case 'section_block': return liveSectionBlock(ctx, userId, row, artifact.id)
+      case 'flashcard_version': return liveFlashcardVersion(ctx, userId, row, artifact.id)
+      case 'audio_overview': return liveAudioOverview(ctx, userId, row, artifact.id)
+      case 'learner_artifact': return liveLearnerArtifact(ctx, userId, row, artifact.id)
+      case 'measurement_item': await liveMeasurementItem(ctx, userId, row, artifact.id); return
+      case 'scoring_spec': return liveScoringSpec(ctx, userId, row, artifact.id)
+      default: unavailable()
+    }
+  })
 }
 
 async function readCatalog(ctx: ReadCtx, userId: string) {
-  const rows = await ctx.db.query('learnAssessmentCatalogs').withIndex('by_userId', q => q.eq('userId', userId)).take(2)
-  if (rows.length !== 1 || !learnSequenceSchema.safeParse(rows[0]!.catalogRevision).success) unavailable()
-  return rows[0]!
+  return validated(ctx, ['catalogue', userId], async () => {
+    const rows = await ctx.db.query('learnAssessmentCatalogs').withIndex('by_userId', q => q.eq('userId', userId)).take(2)
+    if (rows.length !== 1 || !learnSequenceSchema.safeParse(rows[0]!.catalogRevision).success) unavailable()
+    return rows[0]!
+  })
 }
 
 async function findLineage(ctx: ReadCtx, userId: string, reference: LearnArtifactReference) {
@@ -658,34 +793,36 @@ async function findLineage(ctx: ReadCtx, userId: string, reference: LearnArtifac
 }
 
 async function sourceAvailable(ctx: ReadCtx, userId: string, source: Dependency) {
-  if (source.kind === 'document') {
-    // inspectGraph has already verified this document's hash and object key
-    // through its sealed manifest commitment, using the same read budget.
-    const document = await liveDocument(ctx, userId, source.documentId)
-    return document.sourceRevision === source.sourceRevision
-  }
-  if (source.kind === 'folder') return (await ctx.db.get(source.folderId))?.userId === userId
-  const snapshot = await ctx.db.get(source.sourceSnapshotId)
-  if (!snapshot || snapshot.userId !== userId || snapshot.status !== 'user_accepted' || (snapshot.effectiveStatus ?? snapshot.status) !== 'user_accepted'
-    || snapshot.evidencePurgedAt !== undefined || snapshot.rightsStatus !== 'permitted' || snapshot.conflictStatus !== 'clear'
-    || snapshot.revision !== source.revision || (snapshot.recordRevision ?? 1) !== source.recordRevision || snapshot.contentHash !== source.contentHash) return false
-  await liveVoid(ctx, userId, snapshot.learningVoidId)
-  const identity = await ctx.db.get(snapshot.sourceIdentityId)
-  if (!identity || identity.userId !== userId || identity.learningVoidId !== snapshot.learningVoidId || identity.tombstonedAt !== undefined) return false
-  if (identity.folderDocumentId) {
-    const document = await liveDocument(ctx, userId, identity.folderDocumentId)
-    // Mirrors learnV2Sources.prepareFetchedSourceForReview and learnAdaptive.loadContributionSource. Compare
-    // every current pin, even when the document is still marked successful.
-    if ((!document.sourceRevision && !document.contentHash)
-      || document.sourceRevision?.trim() !== snapshot.sourceRevision
-      || document.contentHash?.trim().toLowerCase() !== snapshot.contentHash
-      || document.r2Key?.trim() !== snapshot.objectKey) return false
-  }
-  else if (identity.origin === 'folder_document') return false
-  if (source.kind === 'snapshot') return true
-  const excerpt = await ctx.db.get(source.sourceExcerptId)
-  return excerpt?.userId === userId && excerpt.sourceSnapshotId === snapshot._id && excerpt.rightsStatus === 'permitted'
-    && excerpt.evidencePurgedAt === undefined && excerpt.excerpt !== undefined
+  return validated(ctx, ['source', userId, source], async () => {
+    if (source.kind === 'document') {
+      // inspectGraph has already verified this document's hash and object key
+      // through its sealed manifest commitment, using the same read budget.
+      const document = await liveDocument(ctx, userId, source.documentId)
+      return document.sourceRevision === source.sourceRevision
+    }
+    if (source.kind === 'folder') return (await ctx.db.get(source.folderId))?.userId === userId
+    const snapshot = await ctx.db.get(source.sourceSnapshotId)
+    if (!snapshot || snapshot.userId !== userId || snapshot.status !== 'user_accepted' || (snapshot.effectiveStatus ?? snapshot.status) !== 'user_accepted'
+      || snapshot.evidencePurgedAt !== undefined || snapshot.rightsStatus !== 'permitted' || snapshot.conflictStatus !== 'clear'
+      || snapshot.revision !== source.revision || (snapshot.recordRevision ?? 1) !== source.recordRevision || snapshot.contentHash !== source.contentHash) return false
+    await liveVoid(ctx, userId, snapshot.learningVoidId)
+    const identity = await ctx.db.get(snapshot.sourceIdentityId)
+    if (!identity || identity.userId !== userId || identity.learningVoidId !== snapshot.learningVoidId || identity.tombstonedAt !== undefined) return false
+    if (identity.folderDocumentId) {
+      const document = await liveDocument(ctx, userId, identity.folderDocumentId)
+      // Mirrors learnV2Sources.prepareFetchedSourceForReview and learnAdaptive.loadContributionSource. Compare
+      // every current pin, even when the document is still marked successful.
+      if ((!document.sourceRevision && !document.contentHash)
+        || document.sourceRevision?.trim() !== snapshot.sourceRevision
+        || document.contentHash?.trim().toLowerCase() !== snapshot.contentHash
+        || document.r2Key?.trim() !== snapshot.objectKey) return false
+    }
+    else if (identity.origin === 'folder_document') return false
+    if (source.kind === 'snapshot') return true
+    const excerpt = await ctx.db.get(source.sourceExcerptId)
+    return excerpt?.userId === userId && excerpt.sourceSnapshotId === snapshot._id && excerpt.rightsStatus === 'permitted'
+      && excerpt.evidencePurgedAt === undefined && excerpt.excerpt !== undefined
+  })
 }
 
 function validationProjection(row: Doc<'learnArtifactValidations'>) {
@@ -724,6 +861,62 @@ export async function artifactManifestDigest(
   return canonicalDigest(manifest, limits.maxLookupBytes)
 }
 
+async function inspectNode(ctx: ReadCtx, userId: string, row: Lineage) {
+  return validated(ctx, ['lineage-node', userId, row], async () => {
+    if (row.userId !== userId || !available(row) || row.nextId !== undefined
+      || row.lineageVersion !== LEARN_ARTIFACT_LINEAGE_VERSION || row.classification === 'unknown'
+      || !learnVersionSchema.safeParse(row.authorityVersion).success) unavailable()
+    if ((row.classification === 'genuine_personal_work' && row.authority !== (row.derivation === 'original' ? 'personal_authorship' : 'server_producer'))
+      || (row.classification === 'legacy_history' && row.authority !== (row.derivation === 'original' ? 'legacy_record' : 'server_producer'))
+      || (row.classification !== 'genuine_personal_work' && row.classification !== 'legacy_history' && row.authority !== 'server_producer')) unavailable()
+    if ((row.artifact.kind === 'measurement_item' && row.classification !== 'measurement')
+      || (row.artifact.kind === 'scoring_spec' && row.classification !== 'private_scoring')) unavailable()
+    if (!learnArtifactReferenceSchema.safeParse({ artifact: row.artifact, key: row.key, revision: row.revision, payloadDigest: row.payloadDigest }).success) unavailable()
+    await requireLiveArtifact(ctx, userId, row)
+    if (!row.validationId) unavailable()
+    const validation = await ctx.db.get(row.validationId)
+    if (!validation || validation.userId !== userId || !available(validation)) unavailable()
+    const parsed = learnArtifactValidationSchema.safeParse(validationProjection(validation))
+    if (!parsed.success || parsed.data.lineageId !== row._id || parsed.data.payloadDigest !== row.payloadDigest || parsed.data.manifestDigest !== row.manifestDigest
+      || parsed.data.decision !== 'pass' || parsed.data.coverage !== 'complete') unavailable()
+    const origins = await ctx.db.query('learnArtifactLineageOrigins').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', row._id)).take(limits.maxOrigins + 1)
+    const bindings = await ctx.db.query('learnArtifactCaseBindings').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', row._id)).take(limits.maxCases + 1)
+    const sources = await ctx.db.query('learnArtifactSourceLinks').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', row._id)).take(limits.maxSources + 1)
+    if (origins.length > limits.maxOrigins || bindings.length > limits.maxCases || sources.length > limits.maxSources
+      || row.originCount !== origins.length || row.caseCount !== bindings.length || row.sourceCount !== sources.length
+      || (row.derivation === 'original' ? origins.length !== 0 : origins.length === 0)
+      || new Set(origins.map(origin => origin.originLineageId)).size !== origins.length
+      || new Set(bindings.map(binding => binding.caseId)).size !== bindings.length) unavailable()
+    try {
+      if (await artifactManifestDigest(ctx, row, origins, bindings, sources) !== row.manifestDigest) unavailable()
+    }
+    catch { unavailable() }
+    const dependencies: Dependency[] = []
+    for (const link of sources) {
+      const dependency = learnArtifactSourceDependencySchema.safeParse(link.dependency)
+      if (!available(link) || !dependency.success || !(await sourceAvailable(ctx, userId, dependency.data))) unavailable()
+      dependencies.push(dependency.data)
+    }
+    const caseFacts = []
+    for (const binding of bindings) {
+      const candidate = await validated(ctx, ['case', userId, binding.caseId, binding.scenarioFingerprint, binding.solutionFingerprint, binding.identityPolicyVersion, parsed.data.identityPolicyVersion], async () => {
+        const pin = learnArtifactCaseSchema.safeParse({ caseId: binding.caseId, scenarioFingerprint: binding.scenarioFingerprint,
+          solutionFingerprint: binding.solutionFingerprint, identityPolicyVersion: binding.identityPolicyVersion })
+        const candidate = await ctx.db.get(binding.caseId)
+        if (!pin.success || !candidate || candidate.userId !== userId || candidate.scenarioFingerprint !== binding.scenarioFingerprint
+          || candidate.solutionFingerprint !== binding.solutionFingerprint || candidate.identityPolicyVersion !== binding.identityPolicyVersion
+          || binding.identityPolicyVersion !== parsed.data.identityPolicyVersion) unavailable()
+        const scenarios = await ctx.db.query('learnAssessmentCases').withIndex('by_userId_and_scenarioFingerprint', q => q.eq('userId', userId).eq('scenarioFingerprint', binding.scenarioFingerprint)).take(2)
+        const solutions = await ctx.db.query('learnAssessmentCases').withIndex('by_userId_and_solutionFingerprint', q => q.eq('userId', userId).eq('solutionFingerprint', binding.solutionFingerprint)).take(2)
+        if (scenarios.length !== 1 || solutions.length !== 1) unavailable()
+        return candidate
+      })
+      caseFacts.push({ binding, candidate })
+    }
+    return { origins, bindings, sources, dependencies, caseFacts, validation: { ...parsed.data, validationId: validation._id } }
+  })
+}
+
 async function inspectGraph(ctx: ReadCtx, userId: string, root: Lineage, catalogRevision: number, requirePublication: boolean) {
   const nodes = new Map<Id<'learnArtifactLineages'>, Lineage>()
   const heights = new Map<Id<'learnArtifactLineages'>, number>()
@@ -742,63 +935,30 @@ async function inspectGraph(ctx: ReadCtx, userId: string, root: Lineage, catalog
       if (depth + cachedHeight > limits.maxDepth) unavailable()
       return cachedHeight
     }
-    if (nodes.size >= limits.maxNodes || row.userId !== userId || !available(row) || row.nextId !== undefined
-      || row.lineageVersion !== LEARN_ARTIFACT_LINEAGE_VERSION || row.classification === 'unknown'
-      || row.classification !== root.classification || !learnVersionSchema.safeParse(row.authorityVersion).success) unavailable()
-    if ((row.classification === 'genuine_personal_work' && row.authority !== (row.derivation === 'original' ? 'personal_authorship' : 'server_producer'))
-      || (row.classification === 'legacy_history' && row.authority !== (row.derivation === 'original' ? 'legacy_record' : 'server_producer'))
-      || (row.classification !== 'genuine_personal_work' && row.classification !== 'legacy_history' && row.authority !== 'server_producer')) unavailable()
-    if ((row.artifact.kind === 'measurement_item' && row.classification !== 'measurement')
-      || (row.artifact.kind === 'scoring_spec' && row.classification !== 'private_scoring')) unavailable()
-    if (!learnArtifactReferenceSchema.safeParse({ artifact: row.artifact, key: row.key, revision: row.revision, payloadDigest: row.payloadDigest }).success) unavailable()
-    await requireLiveArtifact(ctx, userId, row)
-    if (!row.validationId) unavailable()
-    const validation = await ctx.db.get(row.validationId)
-    if (!validation || validation.userId !== userId || !available(validation)) unavailable()
-    const parsed = learnArtifactValidationSchema.safeParse(validationProjection(validation))
-    if (!parsed.success || parsed.data.lineageId !== row._id || parsed.data.payloadDigest !== row.payloadDigest || parsed.data.manifestDigest !== row.manifestDigest
-      || parsed.data.decision !== 'pass' || parsed.data.coverage !== 'complete' || parsed.data.comparedCatalogRevision > catalogRevision) unavailable()
-    validations.set(row._id, { ...parsed.data, validationId: validation._id })
-    const origins = await ctx.db.query('learnArtifactLineageOrigins').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', row._id)).take(limits.maxOrigins + 1)
-    const bindings = await ctx.db.query('learnArtifactCaseBindings').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', row._id)).take(limits.maxCases + 1)
-    const sources = await ctx.db.query('learnArtifactSourceLinks').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', row._id)).take(limits.maxSources + 1)
+    if (nodes.size >= limits.maxNodes || row.classification !== root.classification) unavailable()
+    const fact = await inspectNode(ctx, userId, row)
+    if (fact.validation.comparedCatalogRevision > catalogRevision) unavailable()
+    const { origins, bindings, sources } = fact
     sourceCount += sources.length
     caseCount += bindings.length
-    if (origins.length > limits.maxOrigins || caseCount > limits.maxCases || sourceCount > limits.maxSources
-      || row.originCount !== origins.length || row.caseCount !== bindings.length || row.sourceCount !== sources.length
-      || (row.derivation === 'original' ? origins.length !== 0 : origins.length === 0)
-      || new Set(origins.map(origin => origin.originLineageId)).size !== origins.length
-      || new Set(bindings.map(binding => binding.caseId)).size !== bindings.length) unavailable()
-    try {
-      if (await artifactManifestDigest(ctx, row, origins, bindings, sources) !== row.manifestDigest) unavailable()
-    }
-    catch { unavailable() }
+    if (caseCount > limits.maxCases || sourceCount > limits.maxSources) unavailable()
+    validations.set(row._id, fact.validation)
     nodes.set(row._id, row)
     active.add(row._id)
-    for (const link of sources) {
-      const dependency = learnArtifactSourceDependencySchema.safeParse(link.dependency)
-      if (!available(link) || !dependency.success || !(await sourceAvailable(ctx, userId, dependency.data))) unavailable()
-      dependencies.push(dependency.data)
-    }
-    for (const binding of bindings) {
-      const pin = learnArtifactCaseSchema.safeParse({ caseId: binding.caseId, scenarioFingerprint: binding.scenarioFingerprint,
-        solutionFingerprint: binding.solutionFingerprint, identityPolicyVersion: binding.identityPolicyVersion })
-      const candidate = await ctx.db.get(binding.caseId)
-      if (!pin.success || !candidate || candidate.userId !== userId || candidate.scenarioFingerprint !== binding.scenarioFingerprint
-        || candidate.solutionFingerprint !== binding.solutionFingerprint || candidate.identityPolicyVersion !== binding.identityPolicyVersion
-        || binding.identityPolicyVersion !== parsed.data.identityPolicyVersion) unavailable()
-      const scenarios = await ctx.db.query('learnAssessmentCases').withIndex('by_userId_and_scenarioFingerprint', q => q.eq('userId', userId).eq('scenarioFingerprint', binding.scenarioFingerprint)).take(2)
-      const solutions = await ctx.db.query('learnAssessmentCases').withIndex('by_userId_and_solutionFingerprint', q => q.eq('userId', userId).eq('solutionFingerprint', binding.solutionFingerprint)).take(2)
-      if (scenarios.length !== 1 || solutions.length !== 1) unavailable()
+    dependencies.push(...fact.dependencies)
+    for (const { binding, candidate } of fact.caseFacts) {
       if (!cases.has(binding.caseId)) cases.set(binding.caseId, binding)
       usage.set(binding.caseId, candidate.reservedAt === undefined ? candidate.usageClass : 'measurement_reserved')
       proofs.set(binding.caseId, candidate.artifactIdentityValidationId)
     }
     let height = 0
     for (const origin of origins) {
-      const parent = await ctx.db.get(origin.originLineageId)
-      if (!parent || parent.userId !== userId || parent.revision !== origin.originRevision || parent.payloadDigest !== origin.originPayloadDigest || parent.manifestDigest !== origin.originManifestDigest
-        || parent.classification !== origin.classification) unavailable()
+      const parent = await validated(ctx, ['origin', userId, origin.originLineageId, origin.originRevision, origin.originPayloadDigest, origin.originManifestDigest, origin.classification], async () => {
+        const parent = await ctx.db.get(origin.originLineageId)
+        if (!parent || parent.userId !== userId || parent.revision !== origin.originRevision || parent.payloadDigest !== origin.originPayloadDigest || parent.manifestDigest !== origin.originManifestDigest
+          || parent.classification !== origin.classification) unavailable()
+        return parent
+      })
       height = Math.max(height, 1 + await visit(parent, depth + 1))
     }
     active.delete(row._id)
@@ -962,9 +1122,11 @@ export async function registerInstructionalArtifactForRecord(ctx: MutationCtx, r
 }
 
 async function registrationRequired(ctx: ReadCtx, userId: string) {
-  const catalogs = await ctx.db.query('learnAssessmentCatalogs').withIndex('by_userId', q => q.eq('userId', userId)).take(2)
-  if (catalogs.length > 1) unavailable()
-  return catalogs[0]?.measurementCapability?.enabled === true
+  return validated(ctx, ['enrollment', userId], async () => {
+    const catalogs = await ctx.db.query('learnAssessmentCatalogs').withIndex('by_userId', q => q.eq('userId', userId)).take(2)
+    if (catalogs.length > 1) unavailable()
+    return catalogs[0]?.measurementCapability?.enabled === true
+  })
 }
 
 export async function isArtifactRegistrationRequiredForOwner(ctx: ReadCtx, userId: string) {
@@ -986,40 +1148,46 @@ function restrictedLineage(): never { throw new RestrictedLineage('Artifact line
 type InputBinding = Extract<LearnArtifactLookupResult, { status: 'bound' }> & { dependencies: Dependency[], origins: LearnArtifactReference[] }
 
 async function inspectInputRepresentations(ctx: ReadCtx, userId: string, artifact: LearnArtifactReference['artifact']) {
-  const kinds = artifact.kind === 'document' || artifact.kind === 'document_chunk' ? ['document', 'document_chunk'] as const : [artifact.kind]
-  const bindings: InputBinding[] = []
-  let rowCount = 0
-  for (const kind of kinds) {
-    const rows = await ctx.db.query('learnArtifactLineages')
-      .withIndex('by_artifact_kind_and_artifact_id_and_nextId', q => q.eq('artifact.kind', kind).eq('artifact.id', artifact.id).eq('nextId', undefined)).take(limits.maxNodes + 1)
-    rowCount += rows.length
-    if (rowCount > limits.maxNodes) unavailable()
-    for (const row of rows) {
-      if (row.userId !== userId) unavailable()
-      if (!['teaching', 'genuine_personal_work'].includes(row.classification)) restrictedLineage()
-      const reference = learnArtifactReferenceSchema.safeParse({ artifact: row.artifact, key: row.key, revision: row.revision, payloadDigest: row.payloadDigest })
-      if (!reference.success) unavailable()
-      const dependencies: Dependency[] = []
-      const origins: LearnArtifactReference[] = []
-      const resolved = await resolveForOwner(ctx, userId, { reference: reference.data }, graph => {
-        dependencies.push(...graph.dependencies)
-        for (const node of graph.nodes.values()) origins.push({ artifact: node.artifact, key: node.key, revision: node.revision, payloadDigest: node.payloadDigest })
-      })
-      if (resolved.status !== 'bound') unavailable()
-      if (resolved.cases.some(pin => pin.usageClass === 'measurement_reserved')) restrictedLineage()
-      bindings.push({ ...resolved, dependencies, origins })
+  return validated(ctx, ['representations', userId, artifact], async () => {
+    const kinds = artifact.kind === 'document' || artifact.kind === 'document_chunk' ? ['document', 'document_chunk'] as const : [artifact.kind]
+    const bindings: InputBinding[] = []
+    let rowCount = 0
+    for (const kind of kinds) {
+      const rows = await ctx.db.query('learnArtifactLineages')
+        .withIndex('by_artifact_kind_and_artifact_id_and_nextId', q => q.eq('artifact.kind', kind).eq('artifact.id', artifact.id).eq('nextId', undefined)).take(limits.maxNodes + 1)
+      rowCount += rows.length
+      if (rowCount > limits.maxNodes) unavailable()
+      for (const row of rows) {
+        if (row.userId !== userId) unavailable()
+        if (!['teaching', 'genuine_personal_work'].includes(row.classification)) restrictedLineage()
+        const reference = learnArtifactReferenceSchema.safeParse({ artifact: row.artifact, key: row.key, revision: row.revision, payloadDigest: row.payloadDigest })
+        if (!reference.success) unavailable()
+        const dependencies: Dependency[] = []
+        const origins: LearnArtifactReference[] = []
+        const resolved = await resolveForOwner(ctx, userId, { reference: reference.data }, graph => {
+          dependencies.push(...graph.dependencies)
+          for (const node of graph.nodes.values()) origins.push({ artifact: node.artifact, key: node.key, revision: node.revision, payloadDigest: node.payloadDigest })
+        })
+        if (resolved.status !== 'bound') unavailable()
+        if (resolved.cases.some(pin => pin.usageClass === 'measurement_reserved')) restrictedLineage()
+        bindings.push({ ...resolved, dependencies, origins })
+      }
     }
-  }
-  return bindings
+    return bindings
+  })
 }
 
-type InputAdmissionGraph = { active: Set<string>, admitted: Map<string, LearnArtifactInputAdmissionResult> }
-async function admitInput(ctx: ReadCtx, userId: string, input: unknown, graph: InputAdmissionGraph = { active: new Set(), admitted: new Map() }): Promise<LearnArtifactInputAdmissionResult> {
+type AdmittedInput = { result: LearnArtifactInputAdmissionResult, height: number }
+type InputAdmissionGraph = { active: Set<string>, admitted: Map<string, AdmittedInput> }
+async function admitInput(ctx: ReadCtx, userId: string, input: unknown, graph: InputAdmissionGraph = { active: new Set(), admitted: new Map() }): Promise<AdmittedInput> {
   const { reference } = validateLearnArtifactLookup(input)
   const identity = canonicalJson(reference)
   const cached = graph.admitted.get(identity)
-  if (cached) return cached
   if (graph.active.has(identity) || graph.active.size > limits.maxDepth) unavailable()
+  if (cached) {
+    if (graph.active.size + cached.height > limits.maxDepth) unavailable()
+    return cached
+  }
   graph.active.add(identity)
   try {
     const result = await admitInputGraph(ctx, userId, reference, graph)
@@ -1033,7 +1201,7 @@ async function admitInput(ctx: ReadCtx, userId: string, input: unknown, graph: I
   finally { graph.active.delete(identity) }
 }
 
-async function admitInputGraph(ctx: ReadCtx, userId: string, reference: LearnArtifactReference, graph: InputAdmissionGraph): Promise<LearnArtifactInputAdmissionResult> {
+async function admitInputGraph(ctx: ReadCtx, userId: string, reference: LearnArtifactReference, graph: InputAdmissionGraph): Promise<AdmittedInput> {
   const version = LEARN_ARTIFACT_INPUT_ADMISSION_VERSION
   if (reference.artifact.kind === 'measurement_item' || reference.artifact.kind === 'scoring_spec') restrictedLineage()
   if (reference.artifact.kind === 'session_block') {
@@ -1046,27 +1214,30 @@ async function admitInputGraph(ctx: ReadCtx, userId: string, reference: LearnArt
   const bindings = await inspectInputRepresentations(ctx, userId, reference.artifact)
   let result: LearnArtifactInputAdmissionResult
   if (!bindings.length) {
-    if (enrolled) return { version, status: 'rejected', reasonCode: 'registration_required' }
+    if (enrolled) return { result: { version, status: 'rejected', reasonCode: 'registration_required' }, height: 0 }
     await requireLiveArtifact(ctx, userId, reference)
     result = { version, status: 'admitted_unregistered', reasonCode: 'unregistered_ordinary_input' }
   }
   else {
     const resolved = bindings.find(binding => canonicalJson(binding.reference) === canonicalJson(reference))
     if (!resolved) unavailable()
-    if (!resolved.instructionalRegistered) return { version, status: 'rejected', reasonCode: 'registration_required' }
+    if (!resolved.instructionalRegistered) return { result: { version, status: 'rejected', reasonCode: 'registration_required' }, height: 0 }
     result = { version, status: 'admitted_registered', reasonCode: 'registered_lineage' }
   }
   const nestedInputs = await inputReferences(ctx, userId, reference, bindings)
   if (nestedInputs.ordinaryComponent) {
-    if (enrolled) return { version, status: 'rejected', reasonCode: 'registration_required' }
+    if (enrolled) return { result: { version, status: 'rejected', reasonCode: 'registration_required' }, height: 0 }
     result = { version, status: 'admitted_unregistered', reasonCode: 'unregistered_ordinary_input' }
   }
+  let height = 0
   for (const nested of nestedInputs.references) {
-    const admission = await admitInput(ctx, userId, { reference: nested }, graph)
-    if (admission.status === 'rejected') return admission
+    const child = await admitInput(ctx, userId, { reference: nested }, graph)
+    const admission = child.result
+    height = Math.max(height, 1 + child.height)
+    if (admission.status === 'rejected') return { result: admission, height }
     if (admission.status === 'admitted_unregistered') result = admission
   }
-  return result
+  return { result, height }
 }
 
 async function requireInstructionalSession(ctx: ReadCtx, userId: string, content: Doc<'sessionContent'>) {
@@ -1201,16 +1372,16 @@ export async function admitArtifactInputForOwner(ctx: ReadCtx, userId: string, i
   ctx = withReadBudget(ctx)
   return inputAdmission(async () => {
     if (await requireAuth(ctx) !== userId) throw new Error('Learn access denied')
-    return admitInput(ctx, userId, input)
+    return (await admitInput(ctx, userId, input)).result
   })
 }
 export async function admitArtifactInputForRecord(ctx: ReadCtx, record: LearnArtifactOwnerRecord, input: unknown) {
   ctx = withReadBudget(ctx)
-  return inputAdmission(async () => admitInput(ctx, await requireRecordOwner(ctx, record), input))
+  return inputAdmission(async () => (await admitInput(ctx, await requireRecordOwner(ctx, record), input)).result)
 }
 export async function admitArtifactInput(ctx: ReadCtx, input: unknown) {
   ctx = withReadBudget(ctx)
-  return inputAdmission(async () => admitInput(ctx, await requireAuth(ctx), input))
+  return inputAdmission(async () => (await admitInput(ctx, await requireAuth(ctx), input)).result)
 }
 
 type PreparationMember = LearnArtifactPreparationArgs['artifacts'][number]
@@ -1263,32 +1434,34 @@ function caseTexts(projection: ContentProjection) {
 }
 
 async function preparationContent(ctx: ReadCtx, userId: string, artifact: PreparationMember['artifact']) {
-  const owned = <T extends { userId: string }>(row: T | null): T => {
-    if (!row || row.userId !== userId) unavailable()
-    return row
-  }
-  switch (artifact.kind) {
-    case 'document': case 'document_chunk': {
-      const document = owned(await ctx.db.get(artifact.id))
-      if (!document.sourceRevision?.trim() || !document.contentHash?.trim()) unavailable()
-      return { projection: artifactContentProjection({ kind: artifact.kind, document }), revision: document.sourceRevision }
+  return validated(ctx, ['content', userId, artifact], async () => {
+    const owned = <T extends { userId: string }>(row: T | null): T => {
+      if (!row || row.userId !== userId) unavailable()
+      return row
     }
-    case 'quiz_question': return { projection: artifactContentProjection({ kind: artifact.kind, question: owned(await ctx.db.get(artifact.id)) }) }
-    case 'section_block': return { projection: await sectionContentProjection(ctx, owned(await ctx.db.get(artifact.id))) }
-    case 'flashcard_version': {
-      const version = owned(await ctx.db.get(artifact.id))
-      const cards = await boundedRows(ctx.db.query('flashcardVersionCards').withIndex('by_versionId', q => q.eq('versionId', version._id)).take(201), 200)
-      if (cards.some(card => card.userId !== userId || card.roomId !== version.roomId)) unavailable()
-      return { projection: artifactContentProjection({ kind: artifact.kind, version, cards }), revision: String(version._id) }
+    switch (artifact.kind) {
+      case 'document': case 'document_chunk': {
+        const document = owned(await ctx.db.get(artifact.id))
+        if (!document.sourceRevision?.trim() || !document.contentHash?.trim()) unavailable()
+        return { projection: artifactContentProjection({ kind: artifact.kind, document }), revision: document.sourceRevision }
+      }
+      case 'quiz_question': return { projection: artifactContentProjection({ kind: artifact.kind, question: owned(await ctx.db.get(artifact.id)) }) }
+      case 'section_block': return { projection: await sectionContentProjection(ctx, owned(await ctx.db.get(artifact.id))) }
+      case 'flashcard_version': {
+        const version = owned(await ctx.db.get(artifact.id))
+        const cards = await boundedRows(ctx.db.query('flashcardVersionCards').withIndex('by_versionId', q => q.eq('versionId', version._id)).take(201), 200)
+        if (cards.some(card => card.userId !== userId || card.roomId !== version.roomId)) unavailable()
+        return { projection: artifactContentProjection({ kind: artifact.kind, version, cards }), revision: String(version._id) }
+      }
+      case 'audio_overview': return withinAudioProjection(async () => ({ projection: await audioOverviewContentProjection(ctx, owned(await ctx.db.get(artifact.id))) }))
+      case 'session_block': {
+        const block = owned(await ctx.db.get(artifact.id))
+        const content = owned(await ctx.db.get(block.sessionContentId))
+        await requireInstructionalSession(ctx, userId, content)
+        return { projection: await sessionBlockContentProjection(ctx, block, content), revision: String(content.revision) }
+      }
     }
-    case 'audio_overview': return withinAudioProjection(async () => ({ projection: await audioOverviewContentProjection(ctx, owned(await ctx.db.get(artifact.id))) }))
-    case 'session_block': {
-      const block = owned(await ctx.db.get(artifact.id))
-      const content = owned(await ctx.db.get(block.sessionContentId))
-      await requireInstructionalSession(ctx, userId, content)
-      return { projection: await sessionBlockContentProjection(ctx, block, content), revision: String(content.revision) }
-    }
-  }
+  })
 }
 
 async function preparationSources(ctx: ReadCtx, userId: string, member: PreparationMember, projection: ContentProjection) {

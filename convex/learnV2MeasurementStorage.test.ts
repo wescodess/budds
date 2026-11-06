@@ -230,6 +230,17 @@ describe('inactive Phase C storage boundaries', () => {
     expect(await readAll(t, owner, 'learnResponseCommandReceipts')).toHaveLength(10)
   })
 
+  test('the schema and frozen measurement index inventories agree exactly', () => {
+    for (const entry of LEARN_MEASUREMENT_STORAGE_MANIFEST) {
+      const definition = schema.tables[entry.table] as unknown as { export(): { indexes: Array<{ indexDescriptor: string, fields: string[] }> } }
+      const actual = definition.export().indexes.map(item => ({ name: item.indexDescriptor, fields: item.fields }))
+      const expected = [['userId'], ...entry.indexes].map(fields => ({ name: `by_${fields.map(field => field.replaceAll('.', '_')).join('_and_')}`, fields: [...fields] }))
+      const sort = (indexes: typeof expected) => [...indexes].sort((left, right) => left.name.localeCompare(right.name))
+      expect(sort(actual), entry.table).toEqual(sort(expected))
+      expect(sort(LEARN_V2_CONTRACT.persistence.tables.find(table => table.name === entry.table)!.indexes)).toEqual(sort(expected))
+    }
+  })
+
   test('executes every registered index over seeded rows and retains separate first-check sequences', async () => {
     const t = convexTest(schema, modules)
     const f = await t.run(ctx => seedMeasurementStorage(ctx, owner.tokenIdentifier))

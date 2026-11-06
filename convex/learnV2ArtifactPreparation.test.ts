@@ -476,11 +476,26 @@ describe('round-2 producer budgets', () => {
       if (shape === 'document') artifacts.push(member({ kind: 'document', id: f.documentId }), member({ kind: 'document_chunk', id: f.documentId }, LEARN_ARTIFACT_DOCUMENT_CHUNK_SET_KEY))
       for (const artifact of artifacts) artifact.sources = docs.slice(0, count).map(documentId => ({ kind: 'document', documentId, sourceRevision: 'source.r1' }))
       const published = await prepareAndRegisterInstructionalArtifacts(ctx, { artifacts })
-      return { shape, inputs: refs.length, outputs: published.references.length, admission, preparation: { ...total.preparation.readUsage, ranges: total.preparation.indexRanges }, total: { ...total.readUsage, ranges: total.indexRanges } }
+      const publication = { ...total.readUsage, ranges: total.indexRanges }
+      const preparation = { ...total.preparation.readUsage, ranges: total.preparation.indexRanges }
+      for (const reference of published.references) {
+        const admitted = await admitArtifactInput(total.admission.ctx, { reference })
+        if (admitted.status === 'rejected') console.log(JSON.stringify({ shape, rejected: reference.artifact.kind, admitted, publication, total: total.readUsage, ranges: total.indexRanges, phase: total.preparation.readUsage, phaseRanges: total.preparation.indexRanges }))
+        expect(admitted).toMatchObject({ status: 'admitted_registered' })
+      }
+      return { shape, inputs: refs.length, outputs: published.references.length, references: published.references, admission, preparation, publication, total: { ...total.readUsage, ranges: total.indexRanges } }
     })
     const links = await f.t.run(ctx => ctx.db.query('learnArtifactSourceLinks').withIndex('by_userId', q => q.eq('userId', userId)).take(4000))
     expect(links).toHaveLength(count ? count * (2 + result.outputs) : 2)
-    console.log(JSON.stringify(result))
+    const later = await f.asOwner.run(async raw => {
+      const total = createArtifactLineagePublicationContext(raw)
+      for (const reference of result.references) expect(await admitArtifactInput(total.admission.ctx, { reference })).toMatchObject({ status: 'admitted_registered' })
+      return { ...total.readUsage, ranges: total.indexRanges }
+    })
+    const { references: _references, ...metrics } = result
+    console.log(JSON.stringify({ ...metrics, later }))
+    expect(later.ranges).toBeLessThanOrEqual(3072)
+    expect(later.chargedBytes).toBeLessThan(8 * 1024 * 1024)
     expect(result.total.ranges).toBeLessThanOrEqual(3072)
     expect(result.total.chargedBytes).toBeLessThan(8 * 1024 * 1024)
   })
@@ -501,6 +516,21 @@ describe('round-2 producer budgets', () => {
       return prepareAndRegisterInstructionalArtifacts(total.preparation.ctx, { artifacts: quiz.artifacts })
     })).rejects.toThrow()
     expect(await inventory(f.t)).toEqual(before)
+  })
+
+  test.each(['admission', 'preparation'] as const)('round-3 %s byte exhaustion rolls back producer writes', async name => {
+    const f = await setup()
+    const before = await inventory(f.t)
+    const documentIds = () => f.t.run(async ctx => (await ctx.db.query('documents').withIndex('by_userId', q => q.eq('userId', userId)).take(3)).map(row => row._id))
+    const documents = await documentIds()
+    await expect(f.asOwner.run(async raw => {
+      const total = createArtifactLineagePublicationContext(raw)
+      await writeQuiz(total.preparation.ctx, f)
+      const id = await total.preparation.ctx.db.insert('documents', { userId, folderId: f.folderId, filename: 's'.repeat(500000), fileSize: 1, status: 'success' })
+      for (let i = 0; i < (name === 'admission' ? 8 : 12); i++) await total[name].ctx.db.get(id)
+    })).rejects.toThrow('unavailable')
+    expect(await inventory(f.t)).toEqual(before)
+    expect(await documentIds()).toEqual(documents)
   })
 
   test('publication counters remain live and share both phase charges', async () => {
@@ -527,6 +557,23 @@ describe('round-2 producer budgets', () => {
       for (let i = 0; i < 2046; i++) await total.preparation.ctx.db.query('learnAssessmentCases').withIndex('by_userId', q => q.eq('userId', 'absent')).take(1)
       return prepareAndRegisterInstructionalArtifacts(total.preparation.ctx, { artifacts: [member({ kind: 'document', id: f.documentId })] })
     })).rejects.toMatchObject({ data: { status: 'rejected', reasonCode: 'projection_exceeds_budget' } })
+  })
+
+  test('round-3 preparation reads each source document once', async () => {
+    const f = await setup()
+    await f.asOwner.run(async ctx => {
+      let reads = 0
+      const db = new Proxy(ctx.db, { get(target, property) {
+        const value: unknown = Reflect.get(target, property)
+        if (property !== 'get' || typeof value !== 'function') return typeof value === 'function' ? value.bind(target) : value
+        return (...args: unknown[]) => {
+          if (args.at(-1) === f.documentId) reads++
+          return Reflect.apply(value, target, args)
+        }
+      } })
+      await prepareAndRegisterInstructionalArtifacts({ ...ctx, db }, { artifacts: [member({ kind: 'document', id: f.documentId }), member({ kind: 'document_chunk', id: f.documentId }, LEARN_ARTIFACT_DOCUMENT_CHUNK_SET_KEY)] })
+      expect(reads).toBe(1)
+    })
   })
 
   test('preparation snapshots never survive a producer source edit between calls', async () => {
