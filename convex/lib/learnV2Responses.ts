@@ -3,7 +3,7 @@ import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { requireOwnedResponseTarget } from './learnV2PublicAccess'
 import { getScopedMasteryRecord } from './learnV2MasteryScope'
-import { liveResponseAggregate, sourceBodyAvailable } from './learnV2ResponsePrivacy'
+import { liveResponseAggregate, sourceBodyAvailable, threadSourceAvailable } from './learnV2ResponsePrivacy'
 import {
   acceptResponseCommandSchema, disabledResponseReceipt, disabledLearnV2Result, LEARN_V2_PUBLIC_API_VERSION,
   validateLearnMasterySubmission, parsePublicLearnRequest, terminalizeResponseSchema, authorizeAssistanceSchema,
@@ -121,6 +121,7 @@ async function currentScope(ctx: ReadCtx, userId: string, row: Target) {
       || activity.planVersion !== context.canvas.planVersion || activity.replayVersion !== context.canvas.replayVersion
       || activity.rendererVersion !== context.canvas.rendererVersion || activity.evaluationContract.version !== context.canvas.evaluationVersion
       || ['ended', 'replaced', 'blocked'].includes(activity.status)) reject('pins_mismatch')
+    if (!await threadSourceAvailable(ctx, userId, thread)) reject('evidence_unavailable')
   }
   return { pins, session, content }
 }
@@ -143,24 +144,25 @@ async function snapshotDependency(ctx: ReadCtx, userId: string, learningVoidId: 
     sourceSnapshotRevision: source.revision, sourceRecordRevision: source.recordRevision ?? 1, supportManifestDigest: manifest })
 }
 
+async function threadDependencies(ctx: ReadCtx, userId: string, thread: Doc<'learningThreads'>, threadRevision: number): Promise<Dependency[]> {
+  if (thread.sourceScope.kind === 'none') return []
+  if (thread.sourceScope.kind === 'document') {
+    const id = ctx.db.normalizeId('documents', thread.sourceScope.sourceId)
+    const document = id && await ctx.db.get(id)
+    const folder = document && await ctx.db.get(document.folderId)
+    if (!document || document.userId !== userId || document.status !== 'success' || !folder || folder.userId !== userId || !document.sourceRevision) reject('evidence_unavailable')
+    return [parseLearnContract(learnResponseDependencySchema, { kind: 'document', documentId: document._id, sourceRevision: document.sourceRevision })]
+  }
+  if (thread.sourceScope.kind !== 'folder') return []
+  const id = ctx.db.normalizeId('folders', thread.sourceScope.sourceId)
+  const folder = id && await ctx.db.get(id)
+  if (!folder || folder.userId !== userId) reject('evidence_unavailable')
+  return [parseLearnContract(learnResponseDependencySchema, { kind: 'folder', folderId: folder._id, scopeRevision: `thread:${threadRevision}` })]
+}
+
 async function responseDependencies(ctx: ReadCtx, userId: string, authority: Awaited<ReturnType<typeof currentScope>>, row: Target): Promise<Dependency[]> {
   const { pins, content } = authority
-  if (pins.scopeKind === 'standalone') {
-    const thread = (await ctx.db.get(pins.threadId))!
-    if (thread.sourceScope.kind === 'none') return []
-    if (thread.sourceScope.kind === 'document') {
-      const id = ctx.db.normalizeId('documents', thread.sourceScope.sourceId)
-      const document = id && await ctx.db.get(id)
-      const folder = document && await ctx.db.get(document.folderId)
-      if (!document || document.userId !== userId || document.status !== 'success' || !folder || folder.userId !== userId || !document.sourceRevision) reject('evidence_unavailable')
-      return [parseLearnContract(learnResponseDependencySchema, { kind: 'document', documentId: document._id, sourceRevision: document.sourceRevision })]
-    }
-    if (thread.sourceScope.kind !== 'folder') return []
-    const id = ctx.db.normalizeId('folders', thread.sourceScope.sourceId)
-    const folder = id && await ctx.db.get(id)
-    if (!folder || folder.userId !== userId) reject('evidence_unavailable')
-    return [parseLearnContract(learnResponseDependencySchema, { kind: 'folder', folderId: folder._id, scopeRevision: `thread:${pins.threadRevision}` })]
-  }
+  if (pins.scopeKind === 'standalone') return await threadDependencies(ctx, userId, (await ctx.db.get(pins.threadId))!, pins.threadRevision)
   const sources = new Set<Id<'learnSourceSnapshots'>>()
   const supportPins: unknown[] = []
   const item = 'assessmentPins' in row && row.assessmentPins.kind === 'measurement' ? row.assessmentPins.itemPins : null
@@ -216,6 +218,12 @@ async function responseDependencies(ctx: ReadCtx, userId: string, authority: Awa
     ? row.assessmentPins.supportManifestDigest : await digest(supportPins))
   const result: Dependency[] = []
   for (const id of [...sources].sort()) result.push(await snapshotDependency(ctx, userId, pins.learningVoidId, id, manifest))
+  if (pins.contextPins.kind === 'session' && pins.contextPins.canvas) {
+    const thread = await ctx.db.get(pins.contextPins.canvas.threadId)
+    if (!thread || !await threadSourceAvailable(ctx, userId, thread)) reject('evidence_unavailable')
+    result.push(...await threadDependencies(ctx, userId, thread, pins.contextPins.canvas.threadRevision))
+  }
+  if (result.length > 64) reject('source_scope_too_large')
   return result
 }
 
@@ -517,6 +525,10 @@ async function retainedBody(ctx: ReadCtx, userId: string, response: Doc<'learnRe
   const unavailable = { bodyAvailability: 'unavailable' as const, reasonCode: 'evidence_unavailable' as const }
   if (response.evidenceStatus !== 'available' || response.invalidatedAt !== undefined) return unavailable
   if (!await liveResponseAggregate(ctx, userId, response)) return unavailable
+  if (response.scopeKind === 'v2' && response.contextPins.kind === 'session' && response.contextPins.canvas) {
+    const thread = await ctx.db.get(response.contextPins.canvas.threadId)
+    if (thread && !await threadSourceAvailable(ctx, userId, thread)) return unavailable
+  }
   const links = await ctx.db.query('learnResponseEvidenceLinks')
     .withIndex('by_userId_and_submissionId', q => q.eq('userId', userId).eq('submissionId', response._id)).take(65)
   if (links.length > 64 || (response.scopeKind === 'v2' && !links.length)) return unavailable

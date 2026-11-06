@@ -274,6 +274,12 @@ describe('dataExport paginated queries', () => {
         learningVoidId: null, blueprintRevisionId: null, sessionContentId: null, evidenceReferences: [], generationInputs: plan.generationInputs, decisionInputs: plan.decisionInputs, replacesActivityId: null,
         canonicalInputSnapshot: plan.canonicalInputSnapshot, inputDigest: plan.inputDigest, createdAt: 1, updatedAt: 1,
       })
+      const folderId = await ctx.db.insert('folders', { userId: USER_A.tokenIdentifier, name: 'Live export evidence', documentCount: 0 })
+      const learningVoidId = await ctx.db.insert('learningVoids', { userId: USER_A.tokenIdentifier, folderId, title: 'Export evidence', status: 'active', revision: 1, createdAt: 1, updatedAt: 1 })
+      const sourceIdentityId = await ctx.db.insert('learnSourceIdentities', { userId: USER_A.tokenIdentifier, learningVoidId, origin: 'user_url', externalKey: 'private-snapshot-id' })
+      const sourceSnapshotId = await ctx.db.insert('learnSourceSnapshots', { userId: USER_A.tokenIdentifier, learningVoidId, sourceIdentityId, revision: 1, recordRevision: 7,
+        status: 'user_accepted', effectiveStatus: 'user_accepted', rightsStatus: 'permitted', conflictStatus: 'clear', createdAt: 1 })
+      await ctx.db.insert('learnSourceExcerpts', { userId: USER_A.tokenIdentifier, sourceSnapshotId, rightsStatus: 'permitted', locator: 'page:1', excerpt: 'A supported explanation.' })
       await ctx.db.patch(activityId, {
         activityClass: 'factual',
         submittedResponse: 'private learner response',
@@ -283,10 +289,10 @@ describe('dataExport paginated queries', () => {
           rendererVersion: 'learn-adaptive.renderer.v1',
           type: 'cited_explanation',
           action: 'continue',
-          props: { heading: 'Accepted source', explanation: 'A supported explanation.', sourceRefs: ['private-snapshot-id'] },
+          props: { heading: 'Accepted source', explanation: 'A supported explanation.', sourceRefs: [String(sourceSnapshotId)] },
           testId: 'learn-primitive-cited-explanation',
         }],
-        decisionInputs: { ...plan.decisionInputs, sourceState: 'ready', sourceInputs: [{ sourceSnapshotId: 'private-snapshot-id', effectiveStatus: 'user_accepted', recordRevision: 7 }] },
+        decisionInputs: { ...plan.decisionInputs, sourceState: 'ready', sourceInputs: [{ sourceSnapshotId: String(sourceSnapshotId), effectiveStatus: 'user_accepted', recordRevision: 7 }] },
       })
       const receiptId = await ctx.db.insert('learnActivityCommandReceipts', {
         userId: USER_A.tokenIdentifier, threadId, idempotencyKeyHash: `sha256:${'a'.repeat(64)}`,
@@ -300,7 +306,7 @@ describe('dataExport paginated queries', () => {
         metadata: { activityClass: 'factual', boundaryOrdinal: 1, planRevision: 1 }, dedupeKeyHash: `sha256:${'c'.repeat(64)}`,
       })
       const deletionJobId = await ctx.db.insert('learnAdaptiveThreadDeletionJobs', { userId: USER_A.tokenIdentifier, threadId, phase: 'children', status: 'queued', attempts: 0, createdAt: 1, updatedAt: 1 })
-      return { threadId, activityId, eventId, receiptId, deletionJobId }
+      return { threadId, activityId, eventId, receiptId, deletionJobId, sourceSnapshotId }
     })
 
     const threads = await asUser.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(asUser), collection: 'learningThreads', paginationOpts: { cursor: null, numItems: 100 } })
@@ -318,6 +324,7 @@ describe('dataExport paginated queries', () => {
     expect(activities.page[0]).toHaveProperty('submittedConfidence')
     expect(activities.page[0]).not.toHaveProperty('generationInputs')
     expect(JSON.stringify(activities.page[0])).not.toContain('private-snapshot-id')
+    expect(JSON.stringify(activities.page[0])).not.toContain(String(ids.sourceSnapshotId))
     expect(JSON.stringify(activities.page[0])).toContain('private learner response')
     expect(events.page).toEqual([expect.objectContaining({ _id: ids.eventId, eventType: 'activity_eligible', metadata: { activityClass: 'factual', boundaryOrdinal: 1, planRevision: 1 } })])
     expect(events.page[0]).not.toHaveProperty('dedupeKeyHash')

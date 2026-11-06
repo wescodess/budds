@@ -61,6 +61,44 @@ describe('Adaptive Learn command receipts', () => {
     expect(await t.run(ctx => ctx.db.query('learnActivityCommandReceipts').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).collect())).toHaveLength(1)
   })
 
+  test('source cleanup preserves valid closed rejections while purging unsafe aliases across bounded pages', async () => {
+    vi.setSystemTime(1_800_000_000_000)
+    const { t, threadId, owner } = await setup()
+    const blocked = { kind: 'blocked', code: 'artifact_evidence_unavailable', message: 'This activity evidence is unavailable; the artifact is read-only', retryable: false }
+    const invalid = { kind: 'invalid', code: 'artifact_text_invalid', message: 'Artifact title or summary is invalid', retryable: false }
+    const secret = 'protected-receipt-alias-canary'
+    const rows = await t.run(async ctx => {
+      const base = { userId: OWNER.tokenIdentifier, threadId, requestFingerprint: 'digest', commandName: 'saveArtifact', targetRevision: 1,
+        resultKind: 'blocked' as const, errorReference: secret, createdAt: Date.now(), resultExpiresAt: Date.now() + 1000, redactionStatus: 'pending' as const }
+      const safe = []
+      for (let index = 0; index < 10; index++) safe.push(await ctx.db.insert('learnActivityCommandReceipts', {
+        ...base, idempotencyKeyHash: `safe-${index}`, resultReference: JSON.stringify(index % 2 ? invalid : blocked), resultKind: index % 2 ? 'invalid' : 'blocked',
+      }))
+      const unsafe = []
+      for (const [index, result] of [
+        { ...blocked, message: secret }, { ...blocked, code: secret }, { ...blocked, payload: secret },
+        { ...blocked, kind: 'invalid' }, { ...blocked, retryable: true }, { kind: 'ok', value: { response: secret } },
+      ].entries()) unsafe.push(await ctx.db.insert('learnActivityCommandReceipts', { ...base, idempotencyKeyHash: `unsafe-${index}`, resultReference: JSON.stringify(result) }))
+      unsafe.push(await ctx.db.insert('learnActivityCommandReceipts', { ...base, idempotencyKeyHash: 'expired-safe', resultReference: JSON.stringify(blocked), resultExpiresAt: Date.now() }))
+      unsafe.push(await ctx.db.insert('learnActivityCommandReceipts', { ...base, idempotencyKeyHash: 'duplicate-field-alias', resultReference: `{"message":"${secret}",${JSON.stringify(blocked).slice(1)}` }))
+      unsafe.push(await ctx.db.insert('learnActivityCommandReceipts', { ...base, idempotencyKeyHash: 'already-redacted', resultReference: JSON.stringify(blocked), resultRedactedAt: Date.now(), redactionStatus: 'redacted' }))
+      const foreign = await ctx.db.insert('learnActivityCommandReceipts', { ...base, userId: OTHER.tokenIdentifier, idempotencyKeyHash: 'foreign-safe', resultReference: secret })
+      return { safe, unsafe, foreign }
+    })
+    await t.mutation(internal.learnV2Retention.purgeAdaptiveCopies, { userId: OWNER.tokenIdentifier, threadId, activityId: 'receipt-regression' })
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
+    for (const id of rows.safe) expect(await t.run(ctx => ctx.db.get(id))).toMatchObject({ resultReference: expect.any(String), errorReference: null, redactionStatus: 'pending', resultExpiresAt: 1_800_000_001_000 })
+    for (const id of rows.unsafe) expect(await t.run(ctx => ctx.db.get(id))).toMatchObject({ resultReference: null, errorReference: null, redactionStatus: 'redacted' })
+    expect(await t.run(ctx => ctx.db.get(rows.foreign))).toMatchObject({ resultReference: secret, errorReference: secret })
+    // Kept rejections still expire through the normal receipt retention path.
+    vi.advanceTimersByTime(1001)
+    await t.mutation(internal.learnAdaptiveCommands.redactExpiredReceiptResults, { now: Date.now() })
+    for (const id of rows.safe) expect(await t.run(ctx => ctx.db.get(id))).toMatchObject({ resultReference: null, redactionStatus: 'redacted' })
+    expect(await owner.mutation(api.learnAdaptive.saveArtifact, {
+      threadId, activityId: 'unavailable', artifactKind: 'answer', title: 'New', summary: 'A new saved artifact.', status: 'saved', expectedRevision: 1, idempotencyKey: 'new-after-source-cleanup',
+    })).toMatchObject({ kind: 'blocked', code: 'activity_unavailable' })
+  })
+
   test('rejects a callback that reports a revision not committed to authority', async () => {
     const { t, threadId, owner } = await setup()
     await expect(owner.mutation(ctx => executeAdaptiveThreadCommand(ctx, {

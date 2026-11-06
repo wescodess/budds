@@ -6,6 +6,7 @@ import schema from './schema'
 import { LEARN_V2_RESPONSE_CONTRACT_VERSION, LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION } from '../shared/learn-v2-responses'
 import { seedMeasurementStorage } from '../tests/fixtures/learn-v2-measurement-storage'
 import { LEARN_V2_PUBLIC_API_VERSION } from './lib/learnV2PublicContract'
+import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 
 const policy = vi.hoisted(() => ({ responses: true }))
 vi.mock('../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
@@ -250,6 +251,51 @@ test('an archived Void denies terminalization replay without changing its receip
   await owner.mutation(api.learnV2Lifecycle.transitionLearningVoid, { learningVoidId: f.learningVoidId, status: 'archived', expectedRevision: 1, idempotencyKey: 'archive-terminal-response' })
   expect(await owner.mutation(api.learnV2Responses.terminalizeResponse, request)).toMatchObject({ status: 'unavailable', reasonCodes: ['unavailable'] })
   expect(await t.run(ctx => ctx.db.get(receipt!._id))).toEqual(receipt)
+})
+
+test.each(['before_acceptance', 'after_wrapper_deletion', 'replacement'] as const)('Canvas response freezes its direct document authority through %s', async revocation => {
+  const { t, f, owner, context, submission, target, assessmentTarget } = await fixture()
+  const documentId = await t.run(async ctx => {
+    const activity = (await ctx.db.get(f.activityId))!
+    const id = await ctx.db.insert('documents', { userId: OWNER.tokenIdentifier, folderId: f.folderId, filename: 'direct-scope.txt', fileSize: 1, status: 'success', sourceRevision: 'direct.r1' })
+    const canvas = { threadId: f.threadId, threadRevision: 1, activityId: activity._id, activityRevision: activity.planRevision,
+      planVersion: activity.planVersion, replayVersion: activity.replayVersion, rendererVersion: activity.rendererVersion,
+      evaluationVersion: activity.evaluationContract.version, pilotConfigurationVersion: 'synthetic.v1' }
+    await ctx.db.patch(f.threadId, { authorityKind: 'v2_mission', learningVoidId: f.learningVoidId, currentActivityId: activity._id, sourceScope: { kind: 'document', sourceId: String(id) } })
+    await ctx.db.patch(activity._id, { sessionContentId: context.sessionContentId })
+    for (const id of [target.responseSlotId, assessmentTarget.assessmentOpportunityId]) await ctx.db.patch(id, { contextPins: { ...context, canvas } })
+    return id
+  })
+  const accept = () => owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission })
+  if (revocation === 'before_acceptance') {
+    await owner.mutation(api.documents.deleteDocument, { id: documentId })
+    expect(await accept()).toMatchObject({ kind: 'rejected', reasonCode: 'evidence_unavailable' })
+    return
+  }
+  const accepted = await accept()
+  if (accepted.kind !== 'accepted') throw new Error('Expected acceptance')
+  const links = await t.run(ctx => ctx.db.query('learnResponseEvidenceLinks').withIndex('by_userId_and_submissionId', q => q.eq('userId', OWNER.tokenIdentifier).eq('submissionId', accepted.submissionId)).take(8))
+  expect(links).toEqual(expect.arrayContaining([expect.objectContaining({ dependency: { kind: 'document', documentId, sourceRevision: 'direct.r1' } })]))
+  const query = { version: LEARN_V2_PUBLIC_API_VERSION, target: assessmentTarget }
+  expect(await owner.query(api.learnV2Responses.getResponseState, query)).toMatchObject({ work: { body: { bodyAvailability: 'available' } } })
+  if (revocation === 'after_wrapper_deletion') {
+    await owner.mutation(api.learnAdaptive.requestThreadDeletion, { threadId: f.threadId })
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
+    expect(await t.run(ctx => ctx.db.get(f.threadId))).toBeNull()
+    expect(await owner.query(api.learnV2Responses.getResponseState, query)).toMatchObject({ work: { body: { bodyAvailability: 'available' } } })
+    await owner.mutation(api.documents.deleteDocument, { id: documentId })
+  }
+  else await t.mutation(internal.documents.updateDocumentStatus, { id: documentId, status: 'success', sourceRevision: 'direct.r2' })
+  const revoked = await owner.query(api.learnV2Responses.getResponseState, query)
+  expect(revoked).toMatchObject({ work: { submissionId: accepted.submissionId, body: { bodyAvailability: 'unavailable' } } })
+  expect(JSON.stringify(revoked)).not.toContain(submission.response.payload.text)
+  const authorizationId = await authorizeExport(owner)
+  const page = await owner.query(api.dataExport.getUserDataPage, { authorizationId, collection: 'learnResponseBodies', paginationOpts: { cursor: null, numItems: 8 } })
+  expect(page.page[0]).not.toHaveProperty('payload')
+  if (revocation === 'after_wrapper_deletion') {
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
+    expect((await t.run(ctx => ctx.db.get(accepted.submissionId)))?.bodyAvailability).toBe('purged')
+  }
 })
 
 test('deleting a Canvas thread preserves the Adaptive admission boundary for open work', async () => {

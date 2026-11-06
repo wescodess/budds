@@ -358,7 +358,10 @@ describe('LA2-12 server-scored mastery attempts', () => {
       const beforeReservation = await guardrail()
       expect(beforeReservation).toMatchObject({ dispatches: 1, reservedMicroUsd: 4920, outstanding: 1, ambiguousOutcomes: 0, rollbackLatched: false })
       await first.t.mutation(internal.accountDeletion.beginAccountDeletionForAuthUser, { userId: OWNER.tokenIdentifier })
-      for (let batch = 0; batch < 250; batch++) await first.t.mutation(internal.accountDeletion.runDeletionBatch, { userId: OWNER.tokenIdentifier })
+      for (let batch = 0; batch < 250; batch++) {
+        const progress = await first.t.mutation(internal.accountDeletion.runDeletionBatch, { userId: OWNER.tokenIdentifier })
+        if (progress.state === 'running' && progress.phase === 'waitingExternal') break
+      }
       // The database deletion phases have finished; real external cleanup is
       // outside this local fixture. The account tombstone denies its exports.
       await expect(first.t.query(internal.accountDeletion.getDeletionTombstone, { userId: OWNER.tokenIdentifier })).resolves.toMatchObject({ phase: 'waitingExternal' })
