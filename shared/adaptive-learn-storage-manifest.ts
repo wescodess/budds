@@ -516,3 +516,6 @@ export const commitAdaptiveActivityPlanValidator = v.object({
   decisionInputs: adaptiveDecisionInputArgsValidator,
   replacesActivityId: v.optional(v.string()),
 })
+
+// The shared response ledger owns standalone diagnostics as well as V2 work.
+export { LEARN_MEASUREMENT_STORAGE_MANIFEST, LEARN_MEASUREMENT_COLLECTIONS } from './learn-v2-measurement-storage-manifest'

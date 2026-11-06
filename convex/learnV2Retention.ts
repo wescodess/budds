@@ -1,3 +1,4 @@
+import { deleteMeasurementVoidBatch, invalidateMeasurementSourceBatch } from './lib/learnV2MeasurementRetention'
 import { v } from 'convex/values'
 import { internalMutation, type MutationCtx } from './_generated/server'
 import { internal } from './_generated/api'
@@ -62,6 +63,8 @@ async function removeRows<TableName extends TableNames>(ctx: MutationCtx, rows: 
 }
 
 async function deleteVoidFoundation(ctx: MutationCtx, userId: string, learningVoidId: Id<'learningVoids'>) {
+  if (await deleteMeasurementVoidBatch(ctx, userId, learningVoidId)) return true
+
   const reservations = await ctx.db.query('searchReservations')
     .withIndex('by_userId_and_learningVoidId', q => q
       .eq('userId', userId)
@@ -303,6 +306,8 @@ export const deleteFolderFoundation = internalMutation({
 })
 
 async function purgeExcerpt(ctx: MutationCtx, excerpt: Doc<'learnSourceExcerpts'>) {
+  if (await invalidateMeasurementSourceBatch(ctx, excerpt.userId, { kind: 'excerpt', id: excerpt._id })) return true
+
   const supportsWithoutStatus = await ctx.db.query('learnClaimSupports')
     .withIndex('by_userId_and_sourceExcerptId_and_evidenceStatus', q => q
       .eq('userId', excerpt.userId).eq('sourceExcerptId', excerpt._id).eq('evidenceStatus', undefined))
@@ -384,6 +389,10 @@ export const purgeSourceEvidence = internalMutation({
         .eq('userId', args.userId).eq('sourceIdentityId', args.sourceIdentityId).eq('evidencePurgedAt', undefined))
       .take(BATCH_SIZE)
     for (const snapshot of snapshots) {
+      if (await invalidateMeasurementSourceBatch(ctx, args.userId, { kind: 'snapshot', id: snapshot._id })) {
+        await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeSourceEvidence, args)
+        return { pending: true }
+      }
       const contributions = await ctx.db.query('learningThreadContributions')
         .withIndex('by_userId_and_evidenceSnapshotId', q => q.eq('userId', args.userId).eq('evidenceSnapshotId', snapshot._id))
         .take(BATCH_SIZE)
@@ -452,6 +461,10 @@ export const purgeSourceEvidence = internalMutation({
 export const purgeFolderDocumentSources = internalMutation({
   args: { userId: v.string(), documentId: v.id('documents') },
   handler: async (ctx, args) => {
+    if (await invalidateMeasurementSourceBatch(ctx, args.userId, { kind: 'document', id: args.documentId })) {
+      await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeFolderDocumentSources, args)
+      return { pending: true }
+    }
     const contributions = await ctx.db.query('learningThreadContributions')
       .withIndex('by_userId_and_sourceFeature_and_sourceIdentity_and_sourceStatus', q => q
         .eq('userId', args.userId).eq('sourceFeature', 'documents').eq('sourceIdentity', String(args.documentId)).eq('sourceStatus', 'available'))
@@ -530,6 +543,10 @@ export const purgeFolderDocumentManifestHeaders = internalMutation({
 export const purgeFolderManifestFolder = internalMutation({
   args: { userId: v.string(), folderId: v.id('folders') },
   handler: async (ctx, args) => {
+    if (await invalidateMeasurementSourceBatch(ctx, args.userId, { kind: 'folder', id: args.folderId })) {
+      await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeFolderManifestFolder, args)
+      return { pending: true }
+    }
     const folders = await ctx.db.query('learnFolderSourceManifestFolders')
       .withIndex('by_userId_and_folderId_and_evidencePurgedAt', q => q
         .eq('userId', args.userId).eq('folderId', args.folderId).eq('evidencePurgedAt', undefined))

@@ -1,12 +1,16 @@
 import { ConvexHttpClient } from 'convex/browser'
 import { Zip, ZipDeflate, ZipPassThrough } from 'fflate'
+import { ADAPTIVE_LEARN_EXPORT_COLLECTIONS } from '../../../shared/adaptive-learn-storage-manifest'
+import { LEARN_MEASUREMENT_COLLECTIONS, LEARN_MEASUREMENT_STORAGE_MANIFEST, LEARN_MEASUREMENT_STORAGE_VERSION } from '../../../shared/learn-v2-measurement-storage-manifest'
 import { api } from '../../../convex/_generated/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 import { requireRateLimit } from '../../utils/rate-limit'
 
 const EXPORT_PAGE_SIZE = 8
 
-const EXPORT_COLLECTIONS = [
+export const EXPORT_COLLECTIONS = [
+  ...ADAPTIVE_LEARN_EXPORT_COLLECTIONS,
+  ...LEARN_MEASUREMENT_COLLECTIONS,
   'folders',
   'documents',
   'conversations',
@@ -68,7 +72,8 @@ const EXPORT_COLLECTIONS = [
   'learnPlanAuditEvents',
   'learnSourceFetchLeases',
   'learnSourceFetchRateEvents',
-  'learnSourceCommandReceipts',
+  'learnSourceCommandReceipts', 'learnMasteryScoringRateEvents',
+  'calendarReconciliationProposals', 'calendarWebhookReceipts', 'calendarWatchChannels',
 ] as const
 
 type ExportCollection = typeof EXPORT_COLLECTIONS[number]
@@ -321,7 +326,12 @@ export default defineEventHandler(async (event) => {
       }
 
       await addJsonValue('manifest.json', {
-        schemaVersion: 9,
+        schemaVersion: 10,
+        measurementStorage: {
+          version: LEARN_MEASUREMENT_STORAGE_VERSION,
+          policies: LEARN_MEASUREMENT_STORAGE_MANIFEST.map(entry => ({ collection: entry.table, projection: entry.export })),
+          omitted: ['unseen_prompts', 'keys', 'private_rubrics', 'solutions', 'private_evidence', 'scorer_payloads', 'assignment_seeds', 'viewer_grants'],
+        },
         exportedAt: new Date().toISOString(),
         userId: metadata.userId,
         user: metadata.user,

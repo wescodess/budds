@@ -8,6 +8,8 @@ import { LEARN_V2_MASTERY_SCORING_ADMISSION } from './learnV2Mastery'
 import { ADAPTIVE_V2_PILOT_MANIFEST } from '../shared/adaptive-v2-pilot-policy'
 import { masteryScopeKey } from './lib/learnV2MasteryScope'
 import schema from './schema'
+import { legacyBaselineRequest } from '../tests/fixtures/learn-v2-mastery-baseline'
+import { serializeCompletionRequest } from '../server/utils/ai-gateway'
 
 const modules = import.meta.glob('./**/*.ts')
 const OWNER = { tokenIdentifier: 'https://auth.example.com|mastery-owner', name: 'Mastery Owner' }
@@ -99,6 +101,50 @@ function successfulProviderResponse() {
 }
 
 describe('LA2-12 server-scored mastery attempts', () => {
+  test.each(['today', 'canvas'])('preserves %s compatibility request bytes and idempotent replay', async flow => {
+    const original = structuredClone(ADAPTIVE_V2_PILOT_MANIFEST)
+    vi.useFakeTimers()
+    const provider = vi.fn<typeof fetch>(async () => successfulProviderResponse())
+    vi.stubGlobal('fetch', provider)
+    try {
+      const setup = await fixture()
+      vi.stubEnv('OPENROUTER_API_KEY', 'synthetic-never-sent')
+      vi.stubEnv('CF_ACCOUNT_ID', 'synthetic-account')
+      vi.stubEnv('CLOUDFLARE_AI_GATEWAY_ID', 'synthetic-gateway')
+      const { tokenIdentifier, scorerVerdict: _verdict, ...request } = setup.args(flow === 'today' ? 'legacy:today:key' : 'canvas_request_1234567890', 80)
+      const input = await setup.t.query(internal.learnV2Mastery.getMasteryScoringInput, { tokenIdentifier, ...request })
+      if (input.kind !== 'score') throw new Error('Expected unscored compatibility input')
+      const payload = JSON.stringify({ rubric: input.rubric, challenge: input.challenge,
+        evidence: input.evidence.map(({ alias, claim, excerpt }) => ({ alias, claim, excerpt })), learnerResponse: request.response })
+      const expectedBytes = serializeCompletionRequest(legacyBaselineRequest(input.model, payload, new AbortController().signal))
+      let submit: () => Promise<unknown>
+      if (flow === 'canvas') {
+        await setup.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true })
+        await configureSyntheticPilot([OWNER])
+        const activityId = 'compatibility-canvas'
+        const activity = await addAdaptiveActivity(setup, activityId)
+        await setup.t.run(ctx => ctx.db.patch(activity.activityDocumentId, { submittedResponse: request.response, submittedConfidence: request.confidence }))
+        submit = () => setup.owner.action(api.learnAdaptive.submitResponse, { threadId: activity.threadId, activityId, ...request })
+      }
+      else submit = () => setup.owner.action(api.learnV2Mastery.submitMasteryAttempt, request)
+      const completed = await submit()
+      if (!completed || typeof completed !== 'object') throw new Error('Expected a compatibility result')
+      expect(completed).toMatchObject({ status: 'completed', replayed: false })
+      expect(provider).toHaveBeenCalledTimes(1)
+      expect(new TextEncoder().encode(String(provider.mock.calls[0]![1]?.body))).toEqual(new TextEncoder().encode(expectedBytes))
+      expect(await submit()).toEqual({ ...completed, replayed: true })
+      expect(provider).toHaveBeenCalledTimes(1)
+      const attempts = await setup.t.run(ctx => ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', tokenIdentifier).eq('idempotencyKey', request.idempotencyKey)).take(8))
+      expect(attempts).toHaveLength(1)
+      expect(attempts[0]).toMatchObject({ serverScorePercent: 80, scorerVersion: 'learn-v2.mastery-scorer.v1', idempotencyKey: request.idempotencyKey })
+      await setup.t.finishInProgressScheduledFunctions()
+    }
+    finally {
+      Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, original)
+      vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.useRealTimers()
+    }
+  })
+
   test('keeps a queued retry within the learner concurrency cap while another session is running', async () => {
     const original = structuredClone(ADAPTIVE_V2_PILOT_MANIFEST)
     vi.useFakeTimers()

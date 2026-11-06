@@ -1,4 +1,9 @@
 import { v } from 'convex/values'
+import { z } from 'zod'
+import {
+  learnIdSchema, learnVersionSchema, learnTimestampSchema, learnScoreSchema,
+  learnAssistanceSnapshotSchema, learnValiditySnapshotSchema, parseLearnContract,
+} from './learn-v2-responses'
 import { ADAPTIVE_ACTIVITY_VALIDATION_REASONS, ADAPTIVE_ACTIVITY_VALIDATION_ANALYTICS_VERSION } from './learn-adaptive-activity-registry'
 
 export const LEGACY_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION = 'learn-adaptive.activity-events.v1' as const
@@ -164,4 +169,69 @@ export function validateLearnActivityEventInput<T extends LearnActivityEventInpu
     throw new Error('Adaptive Canvas render failure metadata is invalid')
   }
   return input
+}
+
+export const LEARN_MEASUREMENT_EVENT_TAXONOMY_VERSION = 'learn-v2.measurement-events.v1' as const
+export const LEARN_MEASUREMENT_EVENT_DEFINITION_VERSION = 2 as const
+export const LEARN_MEASUREMENT_EVENT_TYPES = ['delayed_check_eligible', 'delayed_check_attempt', 'representative_pass', 'representative_fail', 'retained'] as const
+export const learnMeasurementEventInputSchema = z.strictObject({
+  taxonomyVersion: z.literal(LEARN_MEASUREMENT_EVENT_TAXONOMY_VERSION),
+  eventType: z.enum(LEARN_MEASUREMENT_EVENT_TYPES),
+  eventVersion: z.enum(['delayed_check_eligible.v2', 'delayed_check_attempt.v2', 'representative_pass.v2', 'representative_fail.v2', 'retained.v2']),
+  sourceVersion: learnVersionSchema, contractVersion: learnVersionSchema, occurredAt: learnTimestampSchema,
+  learningVoidId: learnIdSchema<'learningVoids'>(), blueprintRevisionId: learnIdSchema<'learnBlueprintRevisions'>(), objectiveId: learnIdSchema<'learnObjectives'>(),
+  assessmentOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>(), submissionId: learnIdSchema<'learnResponses'>().optional(),
+  attemptId: learnIdSchema<'masteryAttempts'>().optional(), horizonDays: z.union([z.literal(7), z.literal(30)]).optional(),
+  threadId: learnIdSchema<'learningThreads'>().optional(), activityId: learnIdSchema<'learningThreadActivities'>().optional(),
+  measurementEligible: z.boolean(), masteryEligible: z.boolean(), semanticKey: z.string().min(1).max(512),
+  metadata: z.strictObject({
+    assistanceLevel: z.enum(['none', 'hint', 'reveal']).optional(),
+    masteryState: z.enum(['unseen', 'learning', 'guided', 'independent', 'retained', 'needs_review', 'blocked', 'provisionally_known']).optional(),
+  }),
+}).superRefine((value, ctx) => {
+  const eligibility = value.eventType === 'delayed_check_eligible'
+  const accepted = value.eventType === 'delayed_check_attempt'
+  if (value.eventVersion !== `${value.eventType}.v2`
+    || (value.activityId !== undefined && value.threadId === undefined)
+    || ((eligibility || accepted) && value.horizonDays === undefined)
+    || (eligibility && (value.submissionId !== undefined || value.attemptId !== undefined || (!value.measurementEligible && !value.masteryEligible)))
+    || (!eligibility && value.submissionId === undefined)
+    || (accepted ? value.attemptId !== undefined : !eligibility && value.attemptId === undefined)
+    || (value.eventType === 'retained' && (!value.masteryEligible || value.metadata.masteryState !== 'retained' || value.metadata.assistanceLevel !== 'none'))
+    || value.semanticKey !== learnMeasurementEventSemanticKey(value)) {
+    ctx.addIssue({ code: 'custom', message: 'Invalid canonical measurement event identity' })
+  }
+})
+export type LearnMeasurementEventInput = z.infer<typeof learnMeasurementEventInputSchema>
+
+export function learnMeasurementEventSemanticKey(input: {
+  eventType: typeof LEARN_MEASUREMENT_EVENT_TYPES[number], assessmentOpportunityId: string, submissionId?: string, attemptId?: string,
+}) {
+  if (input.eventType === 'delayed_check_eligible') return `opportunity:${input.assessmentOpportunityId}:eligible`
+  if (input.eventType === 'delayed_check_attempt') return `submission:${input.submissionId}:delayed_attempt`
+  if (input.eventType === 'retained') return `attempt:${input.attemptId}:retained`
+  return `attempt:${input.attemptId}:representative`
+}
+
+export function validateLearnMeasurementEventInput(input: unknown) {
+  return parseLearnContract(learnMeasurementEventInputSchema, input)
+}
+
+export const learnMeasurementOutcomeEventBasisSchema = z.strictObject({
+  kind: z.enum(['calibration', 'independent_application', 'retained_transfer', 'measurement_cold', 'measurement_delayed']),
+  gradingStatus: z.enum(['scored', 'pending', 'unscored']), scorePercent: learnScoreSchema.nullable(),
+  assistanceSnapshot: learnAssistanceSnapshotSchema, validitySnapshot: learnValiditySnapshotSchema,
+  masteryStateBefore: z.enum(['unseen', 'learning', 'guided', 'independent', 'retained', 'needs_review', 'blocked', 'provisionally_known']),
+  masteryStateAfter: z.enum(['unseen', 'learning', 'guided', 'independent', 'retained', 'needs_review', 'blocked', 'provisionally_known']),
+})
+export function canEmitLearnMeasurementOutcomeEvent(event: 'representative_pass' | 'representative_fail' | 'retained', input: z.infer<typeof learnMeasurementOutcomeEventBasisSchema>) {
+  const value = parseLearnContract(learnMeasurementOutcomeEventBasisSchema, input)
+  if (value.gradingStatus !== 'scored' || value.scorePercent === null || value.validitySnapshot.status !== 'valid'
+    || value.kind === 'calibration' || value.kind === 'measurement_cold') return false
+  const delayed = value.kind === 'measurement_delayed' || value.kind === 'retained_transfer'
+  if (delayed && (value.assistanceSnapshot.state !== 'unassisted' || (!value.validitySnapshot.measurementEligible && !value.validitySnapshot.masteryEligible))) return false
+  if (event === 'retained') return delayed && value.scorePercent >= 80 && value.validitySnapshot.masteryEligible
+    && value.masteryStateBefore === 'independent' && value.masteryStateAfter === 'retained'
+  if (event === 'representative_pass') return value.scorePercent >= 80
+  return event === 'representative_fail' && value.scorePercent < 80
 }

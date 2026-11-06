@@ -1,3 +1,4 @@
+import { deleteMeasurementThreadBatch } from './lib/learnV2MeasurementRetention'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
@@ -139,6 +140,7 @@ export async function deleteAdaptiveThreadAuthorityBatch(ctx: MutationCtx, job: 
   if (thread && thread.userId !== userId) throw new Error('Thread deletion authority mismatch')
 
   if (thread && thread.deletionStartedAt === undefined) await ctx.db.patch(threadId, { deletionStartedAt: Date.now() })
+  if (await deleteMeasurementThreadBatch(ctx, userId, threadId)) return { phase: 'responses' as const, deleted: 0, done: false, jobId: job._id }
   const contributions = await ctx.db.query('learningThreadContributions')
     .withIndex('by_userId_and_threadId_and_createdAt', q => q.eq('userId', userId).eq('threadId', threadId))
     .take(THREAD_DELETION_BATCH_SIZE)

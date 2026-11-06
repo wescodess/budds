@@ -1,5 +1,7 @@
 import { paginationOptsValidator } from 'convex/server'
 import { v } from 'convex/values'
+import { LEARN_MEASUREMENT_COLLECTIONS, isLearnMeasurementCollection } from '../shared/learn-v2-measurement-storage-manifest'
+import { exportMeasurementPage } from './lib/learnV2MeasurementExport'
 import { query } from './_generated/server'
 import { requireAuth } from './lib/auth'
 import { ADAPTIVE_LEARN_EXPORT_COLLECTIONS } from '../shared/adaptive-learn-storage-manifest'
@@ -29,6 +31,7 @@ function redactAdaptivePrimitiveSources(primitive: { props: unknown } & Record<s
 }
 
 const exportCollectionValidator = v.union(
+  ...LEARN_MEASUREMENT_COLLECTIONS.map(table => v.literal(table)),
   v.literal('folders'),
   v.literal('documents'),
   v.literal('conversations'),
@@ -137,6 +140,8 @@ export const getUserDataPage = query({
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx)
     const paginationOpts = boundedPaginationOpts(args.paginationOpts)
+
+    if (isLearnMeasurementCollection(args.collection)) return await exportMeasurementPage(ctx, userId, args.collection, paginationOpts)
 
     switch (args.collection) {
       case 'folders':
@@ -343,7 +348,7 @@ export const getUserDataPage = query({
       case 'learnSourceExcerpts': { const result = await ctx.db.query('learnSourceExcerpts').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts); return { ...result, page: result.page.map(({ sourceSnapshotId: _sourceSnapshotId, locator: _locator, privateLocator: _privateLocator, excerpt: _excerpt, ...row }) => row) } }
       case 'learnObjectiveSources': return await ctx.db.query('learnObjectiveSources').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
       case 'learnClaimSupports': { const result = await ctx.db.query('learnClaimSupports').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts); return { ...result, page: result.page.map(({ sessionContentClaimId: _claimId, sourceExcerptId: _excerptId, ...row }) => row) } }
-      case 'masteryAttempts': { const result = await ctx.db.query('masteryAttempts').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts); return { ...result, page: result.page.map(({ idempotencyKey: _idempotencyKey, requestFingerprint: _requestFingerprint, response: _response, criterionResultsJson: _criterionResults, misconceptionTagsJson: _misconceptions, feedbackProjectionJson: _feedbackProjection, rubricSnapshot: _rubricSnapshot, scorerModel: _scorerModel, verifierVersionsJson: _verifierPins, sourceSnapshotIdsJson: _sourcePins, studySessionId: _sessionId, sessionContentId: _contentId, studyPlanRevisionId: _planId, blueprintRevisionId: _blueprintId, objectiveId: _objectiveId, ...row }) => row) } }
+      case 'masteryAttempts': { const result = await ctx.db.query('masteryAttempts').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts); return { ...result, page: result.page.map(({ measurementStorage: _measurementStorage, scoringBinding: _scoringBinding, assessmentPins: _assessmentPins, requestedScorerModel: _requestedScorerModel, returnedScorerModel: _returnedScorerModel, idempotencyKey: _idempotencyKey, requestFingerprint: _requestFingerprint, response: _response, criterionResultsJson: _criterionResults, misconceptionTagsJson: _misconceptions, feedbackProjectionJson: _feedbackProjection, rubricSnapshot: _rubricSnapshot, scorerModel: _scorerModel, verifierVersionsJson: _verifierPins, sourceSnapshotIdsJson: _sourcePins, studySessionId: _sessionId, sessionContentId: _contentId, studyPlanRevisionId: _planId, blueprintRevisionId: _blueprintId, objectiveId: _objectiveId, ...row }) => row) } }
       case 'masteryRecords': return await ctx.db.query('masteryRecords').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
       case 'studyPlans': return await ctx.db.query('studyPlans').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
       case 'studyPlanRevisions': return await ctx.db.query('studyPlanRevisions').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
@@ -427,7 +432,7 @@ export const getUserDataPage = query({
           })),
         }
       }
-      case 'learnJobs': { const result = await ctx.db.query('learnJobs').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts); return { ...result, page: result.page.map(({ idempotencyKey: _idempotencyKey, requestFingerprint: _requestFingerprint, inputDigest: _inputDigest, candidateDigest: _candidateDigest, providerRequestDigest: _providerRequestDigest, expectedVoidRevision: _expectedVoidRevision, expectedBlueprintRecordRevision: _expectedBlueprintRecordRevision, providerResponseId: _providerResponseId, providerAdmissionCountedAttempt: _providerAdmissionCountedAttempt, providerBudgetDeniedAttempt: _providerBudgetDeniedAttempt, adaptiveThreadId: _adaptiveThreadId, adaptiveActivityId: _adaptiveActivityId, leaseToken: _leaseToken, leaseExpiresAt: _leaseExpiresAt, checkpoint: _checkpoint, terminalReason: _terminalReason, ...row }) => row) } }
+      case 'learnJobs': { const result = await ctx.db.query('learnJobs').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts); return { ...result, page: result.page.map(({ scoringBinding: _scoringBinding, idempotencyKey: _idempotencyKey, requestFingerprint: _requestFingerprint, inputDigest: _inputDigest, candidateDigest: _candidateDigest, providerRequestDigest: _providerRequestDigest, expectedVoidRevision: _expectedVoidRevision, expectedBlueprintRecordRevision: _expectedBlueprintRecordRevision, providerResponseId: _providerResponseId, providerAdmissionCountedAttempt: _providerAdmissionCountedAttempt, providerBudgetDeniedAttempt: _providerBudgetDeniedAttempt, adaptiveThreadId: _adaptiveThreadId, adaptiveActivityId: _adaptiveActivityId, leaseToken: _leaseToken, leaseExpiresAt: _leaseExpiresAt, checkpoint: _checkpoint, terminalReason: _terminalReason, ...row }) => row) } }
       case 'learnLifecycleReceipts': { const result = await ctx.db.query('learnLifecycleReceipts').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts); return { ...result, page: result.page.map(({ idempotencyKey: _idempotencyKey, requestFingerprint: _requestFingerprint, ...row }) => row) } }
       case 'learnPlanCommandReceipts': { const result = await ctx.db.query('learnPlanCommandReceipts').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts); return { ...result, page: result.page.map(({ idempotencyKey: _idempotencyKey, requestFingerprint: _requestFingerprint, response: _response, ...row }) => row) } }
       case 'learnPlanAuditEvents': return await ctx.db.query('learnPlanAuditEvents').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
