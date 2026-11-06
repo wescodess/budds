@@ -2,6 +2,8 @@ import type { Infer } from 'convex/values'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { requireAuth } from './auth'
+import { requireActiveBlueprint } from './learnV2BlueprintAuthority'
+import { liveEvidenceState } from '../learnAdaptiveRecovery'
 import type { artifactSourceDependencyValidator } from './learnV2ArtifactLineageContract'
 import {
   LEARN_ARTIFACT_LINEAGE_LIMITS as limits, LEARN_ARTIFACT_LINEAGE_VERSION,
@@ -20,6 +22,221 @@ function available(row: { evidenceStatus: string, invalidatedAt?: number } | nul
   return row?.evidenceStatus === 'available' && row.invalidatedAt === undefined
 }
 
+// Server producers use this same bounded encoding when capturing payload pins.
+// Pin the entire stored record (and version children), including object keys;
+// legacy records without a revision counter use the digest as their revision.
+export async function artifactPayloadDigest(payload: unknown) {
+  const canonical = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonical)
+    if (value !== null && typeof value === 'object') return Object.fromEntries(Object.entries(value)
+      .filter(([, child]) => child !== undefined)
+      .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, child]) => [key, canonical(child)]))
+    return value
+  }
+  const bytes = new TextEncoder().encode(JSON.stringify(canonical(payload)))
+  if (bytes.length > 500_000) unavailable()
+  return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), value => value.toString(16).padStart(2, '0')).join('')
+}
+
+async function liveFolder(ctx: ReadCtx, userId: string, id: Id<'folders'>) {
+  if ((await ctx.db.get(id))?.userId !== userId) unavailable()
+}
+
+// Mirrors learnV2Sources.ts:225-242, including revocation before cleanup.
+async function liveVoid(ctx: ReadCtx, userId: string, id: Id<'learningVoids'>) {
+  const row = await ctx.db.get(id)
+  if (!row || row.userId !== userId || row.status === 'archived') unavailable()
+  await liveFolder(ctx, userId, row.folderId)
+  return row
+}
+
+async function liveDocument(ctx: ReadCtx, userId: string, id: Id<'documents'>) {
+  const row = await ctx.db.get(id)
+  // learnAdaptive.ts:78-82; revision/object pins are additionally bound below.
+  if (!row || row.userId !== userId || row.status !== 'success') unavailable()
+  await liveFolder(ctx, userId, row.folderId)
+  return row
+}
+
+async function liveCourse(ctx: ReadCtx, userId: string, id: Id<'courses'>) {
+  const row = await ctx.db.get(id)
+  if (!row || row.userId !== userId || row.status !== 'ready') unavailable()
+  await liveFolder(ctx, userId, row.folderId)
+  return row
+}
+
+async function pinned(row: Lineage, payload: unknown, revision?: string | number) {
+  if (typeof revision === 'number' && (!Number.isSafeInteger(revision) || revision < 1)) unavailable()
+  const digest = await artifactPayloadDigest(payload)
+  if (row.payloadDigest !== digest || row.revision !== (revision === undefined ? `sha256:${digest}` : String(revision))) unavailable()
+}
+
+async function liveSessionBlock(ctx: ReadCtx, userId: string, row: Lineage, id: Id<'sessionContentBlocks'>) {
+  const block = await ctx.db.get(id)
+  if (!block || block.userId !== userId) unavailable()
+  const content = await ctx.db.get(block.sessionContentId)
+  if (!content || content.userId !== userId || content.status !== 'published') unavailable()
+  const session = await ctx.db.get(content.studySessionId)
+  if (!session || session.userId !== userId || !['ready', 'in_progress', 'completed'].includes(session.status)) unavailable()
+  const plan = await ctx.db.get(session.studyPlanRevisionId)
+  if (!plan || plan.userId !== userId || plan.status !== 'accepted' || !plan.blueprintRevisionId) unavailable()
+  const stable = await ctx.db.get(plan.studyPlanId)
+  const learningVoid = await liveVoid(ctx, userId, plan.learningVoidId)
+  // getSessionContent (learnV2SessionContent.ts:1424-1457) and loadReadyCanvas.
+  if (!stable || stable.userId !== userId || stable.learningVoidId !== learningVoid._id || stable.activeRevisionId !== plan._id
+    || content.studyPlanRevisionId !== plan._id || content.blueprintRevisionId !== plan.blueprintRevisionId
+    || content.objectiveId !== session.primaryObjectiveId
+    || (session.status !== 'ready' && (session.startedSessionContentId !== content._id || session.startedSessionContentRevision !== content.revision))) unavailable()
+  try {
+    const blueprint = await requireActiveBlueprint(ctx, userId, learningVoid, plan.blueprintRevisionId)
+    if (blueprint.recordRevision !== plan.blueprintRecordRevision) unavailable()
+  }
+  catch { unavailable() }
+  await pinned(row, [block, content], content.revision)
+}
+
+async function liveDocumentArtifact(ctx: ReadCtx, userId: string, row: Lineage, id: Id<'documents'>) {
+  const document = await liveDocument(ctx, userId, id)
+  if (!document.sourceRevision?.trim() || !document.contentHash?.trim()) unavailable()
+  await pinned(row, [document], document.sourceRevision)
+}
+
+async function liveDocumentChunk(ctx: ReadCtx, userId: string, row: Lineage, id: Id<'documents'>) {
+  // Chunks have no independent table: any backing revision/object change
+  // revokes every component, without trusting a retrieved snippet as a pin.
+  await liveDocumentArtifact(ctx, userId, row, id)
+}
+
+async function liveQuizQuestion(ctx: ReadCtx, userId: string, row: Lineage, id: Id<'quizQuestions'>) {
+  const question = await ctx.db.get(id)
+  if (!question || question.userId !== userId) unavailable()
+  const quiz = await ctx.db.get(question.quizId)
+  // loadContributionSource, learnAdaptive.ts:65-74 (also course deletion).
+  if (!quiz || quiz.userId !== userId || quiz.status !== 'ready' || quiz.deletedAt !== undefined) unavailable()
+  await liveFolder(ctx, userId, quiz.folderId)
+  if (quiz.courseId) await liveCourse(ctx, userId, quiz.courseId)
+  await pinned(row, [question])
+}
+
+async function liveSectionBlock(ctx: ReadCtx, userId: string, row: Lineage, id: Id<'courseSections'>) {
+  const section = await ctx.db.get(id)
+  if (!section || section.userId !== userId || !['ready', 'completed'].includes(section.status)) unavailable()
+  // courseSections.ts:341 and courses.ts:237 reject a deleting aggregate.
+  await liveCourse(ctx, userId, section.courseId)
+  await pinned(row, [section])
+}
+
+async function liveFlashcardVersion(ctx: ReadCtx, userId: string, row: Lineage, id: Id<'flashcardRoomVersions'>) {
+  const version = await ctx.db.get(id)
+  if (!version || version.userId !== userId) unavailable()
+  const room = await ctx.db.get(version.roomId)
+  // loadContributionSource, learnAdaptive.ts:58-62. Historical versions stay
+  // live; restoring one never replaces its original lineage or case identity.
+  if (!room || room.userId !== userId) unavailable()
+  await liveFolder(ctx, userId, room.folderId)
+  const cards = await ctx.db.query('flashcardVersionCards').withIndex('by_versionId', q => q.eq('versionId', version._id)).take(201)
+  if (cards.length > 200 || cards.some(card => card.userId !== userId || card.roomId !== room._id)) unavailable()
+  await pinned(row, [version, cards], version._id)
+}
+
+async function liveAudioOverview(ctx: ReadCtx, userId: string, row: Lineage, id: Id<'audioOverviews'>) {
+  const overview = await ctx.db.get(id)
+  // loadContributionSource, learnAdaptive.ts:78-82.
+  if (!overview || overview.userId !== userId || overview.status !== 'ready') unavailable()
+  await liveFolder(ctx, userId, overview.folderId)
+  if (overview.roomId) {
+    const room = await ctx.db.get(overview.roomId)
+    if (!room || room.userId !== userId || room.folderId !== overview.folderId) unavailable()
+    if (room.conversationId) {
+      const conversation = await ctx.db.get(room.conversationId)
+      if (!conversation || conversation.userId !== userId || conversation.folderId !== room.folderId || conversation.archivedAt !== undefined) unavailable()
+    }
+  }
+  const episode = overview.episodeId ? await ctx.db.get(overview.episodeId) : null
+  const media = overview.finalArtifactId ? await ctx.db.get(overview.finalArtifactId) : null
+  // loadPlaybackProjection/isPublishedFinalArtifact, audioOverviewV2.ts:687-701,932-936.
+  if (overview.episodeId || overview.finalArtifactId) {
+    if (!episode || episode.userId !== userId || episode.status !== 'ready' || episode.folderId !== overview.folderId
+      || episode.roomId !== overview.roomId || episode.compatibilityOverviewId !== overview._id || episode.finalArtifactId !== media?._id
+      || !media || media.userId !== userId || media.episodeId !== episode._id || media.kind !== 'final'
+      || media.status !== 'published' || media.storageProvider !== 'r2' || media.container !== 'wav') unavailable()
+  }
+  await pinned(row, [overview, episode, media])
+}
+
+async function liveLearnerArtifact(ctx: ReadCtx, userId: string, row: Lineage, id: Id<'learningThreadArtifacts'>) {
+  const artifact = await ctx.db.get(id)
+  if (!artifact || artifact.userId !== userId || !['draft', 'saved'].includes(artifact.status)) unavailable()
+  const thread = await ctx.db.get(artifact.threadId)
+  if (!thread || thread.userId !== userId || thread.deletionStartedAt !== undefined || thread.lifecycle === 'rollback') unavailable()
+  if (thread.learningVoidId) await liveVoid(ctx, userId, thread.learningVoidId)
+  if (['unavailable', 'invalidated', 'stale'].includes(await liveEvidenceState(ctx, thread))) unavailable()
+  const activity = await ctx.db.get(artifact.activityId)
+  if (!activity || activity.userId !== userId || activity.threadId !== thread._id) unavailable()
+  // artifactEvidenceUnavailable/listThreadArtifacts, learnAdaptive.ts:564-570,660-685.
+  if (activity.activityClass === 'factual') {
+    if (activity.status === 'blocked' || await liveEvidenceState(ctx, thread) !== 'ready') unavailable()
+    const invalidated = await ctx.db.query('learnActivityEvidenceLinks')
+      .withIndex('by_userId_and_activityId_and_invalidatedAt', q => q.eq('userId', userId).eq('activityId', activity._id).gt('invalidatedAt', undefined)).first()
+    if (invalidated) unavailable()
+  }
+  await pinned(row, [artifact], artifact.revision)
+}
+
+async function liveMeasurementInventory(ctx: ReadCtx, userId: string, item: Doc<'learnMeasurementItems'> | null) {
+  if (!item || item.userId !== userId || item.status !== 'published' || !available(item) || item.prompt === undefined) unavailable()
+  const learningVoid = await liveVoid(ctx, userId, item.learningVoidId)
+  try {
+    const blueprint = await requireActiveBlueprint(ctx, userId, learningVoid, item.blueprintRevisionId)
+    if (blueprint.recordRevision !== item.blueprintRecordRevision) unavailable()
+  }
+  catch { unavailable() }
+  const objective = await ctx.db.get(item.objectiveId)
+  if (!objective || objective.userId !== userId || objective.blueprintRevisionId !== item.blueprintRevisionId) unavailable()
+  const family = await ctx.db.get(item.familyId)
+  // C1's published-item/evidence union, learnV2MeasurementStorage.ts:157-167.
+  if (!family || family.userId !== userId || !available(family) || !['provisional_equivalent', 'empirically_supported'].includes(family.status)
+    || family.revision !== item.familyRevision || family.learningVoidId !== item.learningVoidId
+    || family.blueprintRevisionId !== item.blueprintRevisionId || family.blueprintRecordRevision !== item.blueprintRecordRevision
+    || family.objectiveId !== item.objectiveId) unavailable()
+  const spec = item.scoringSpecId ? await ctx.db.get(item.scoringSpecId) : null
+  if (!spec || spec.userId !== userId || !available(spec) || spec.itemId !== item._id || spec.learningVoidId !== item.learningVoidId
+    || spec.blueprintRevisionId !== item.blueprintRevisionId || spec.blueprintRecordRevision !== item.blueprintRecordRevision
+    || spec.objectiveId !== item.objectiveId || spec.revision !== item.scoringSpecRevision || spec.digest !== item.scoringSpecDigest
+    || spec.payload === undefined || spec.referenceSolution === undefined) unavailable()
+  return { item, family, spec }
+}
+
+async function liveMeasurementItem(ctx: ReadCtx, userId: string, row: Lineage, id: Id<'learnMeasurementItems'>) {
+  const { item, family, spec } = await liveMeasurementInventory(ctx, userId, await ctx.db.get(id))
+  await pinned(row, [item, family, spec], item.revision)
+}
+
+async function liveScoringSpec(ctx: ReadCtx, userId: string, row: Lineage, id: Id<'learnMeasurementScoringSpecs'>) {
+  const spec = await ctx.db.get(id)
+  if (!spec || spec.userId !== userId || !available(spec) || spec.payload === undefined || spec.referenceSolution === undefined) unavailable()
+  const { item, family } = await liveMeasurementInventory(ctx, userId, await ctx.db.get(spec.itemId))
+  if (item.scoringSpecId !== spec._id) unavailable()
+  await pinned(row, [spec, item, family], spec.revision)
+}
+
+async function requireLiveArtifact(ctx: ReadCtx, userId: string, row: Lineage) {
+  const artifact = row.artifact
+  switch (artifact.kind) {
+    case 'session_block': return liveSessionBlock(ctx, userId, row, artifact.id)
+    case 'document': return liveDocumentArtifact(ctx, userId, row, artifact.id)
+    case 'document_chunk': return liveDocumentChunk(ctx, userId, row, artifact.id)
+    case 'quiz_question': return liveQuizQuestion(ctx, userId, row, artifact.id)
+    case 'section_block': return liveSectionBlock(ctx, userId, row, artifact.id)
+    case 'flashcard_version': return liveFlashcardVersion(ctx, userId, row, artifact.id)
+    case 'audio_overview': return liveAudioOverview(ctx, userId, row, artifact.id)
+    case 'learner_artifact': return liveLearnerArtifact(ctx, userId, row, artifact.id)
+    case 'measurement_item': await liveMeasurementItem(ctx, userId, row, artifact.id); return
+    case 'scoring_spec': return liveScoringSpec(ctx, userId, row, artifact.id)
+    default: unavailable()
+  }
+}
+
 async function readCatalog(ctx: ReadCtx, userId: string) {
   const rows = await ctx.db.query('learnAssessmentCatalogs').withIndex('by_userId', q => q.eq('userId', userId)).take(2)
   if (rows.length !== 1 || !learnSequenceSchema.safeParse(rows[0]!.catalogRevision).success) unavailable()
@@ -36,24 +253,27 @@ async function findLineage(ctx: ReadCtx, userId: string, reference: LearnArtifac
 
 async function sourceAvailable(ctx: ReadCtx, userId: string, source: Dependency) {
   if (source.kind === 'document') {
-    const document = await ctx.db.get(source.documentId)
-    return document?.userId === userId && document.status === 'success' && document.sourceRevision === source.sourceRevision
+    const document = await liveDocument(ctx, userId, source.documentId)
+    return document.sourceRevision === source.sourceRevision
   }
   if (source.kind === 'folder') return (await ctx.db.get(source.folderId))?.userId === userId
   const snapshot = await ctx.db.get(source.sourceSnapshotId)
-  if (!snapshot || snapshot.userId !== userId || (snapshot.effectiveStatus ?? snapshot.status) !== 'user_accepted'
+  if (!snapshot || snapshot.userId !== userId || snapshot.status !== 'user_accepted' || (snapshot.effectiveStatus ?? snapshot.status) !== 'user_accepted'
     || snapshot.evidencePurgedAt !== undefined || snapshot.rightsStatus !== 'permitted' || snapshot.conflictStatus !== 'clear'
     || snapshot.revision !== source.revision || (snapshot.recordRevision ?? 1) !== source.recordRevision || snapshot.contentHash !== source.contentHash) return false
-  const learningVoid = await ctx.db.get(snapshot.learningVoidId)
-  if (!learningVoid || learningVoid.userId !== userId || learningVoid.status === 'archived') return false
-  const folder = await ctx.db.get(learningVoid.folderId)
-  if (!folder || folder.userId !== userId) return false
+  await liveVoid(ctx, userId, snapshot.learningVoidId)
   const identity = await ctx.db.get(snapshot.sourceIdentityId)
-  if (!identity || identity.userId !== userId || identity.tombstonedAt !== undefined) return false
+  if (!identity || identity.userId !== userId || identity.learningVoidId !== snapshot.learningVoidId || identity.tombstonedAt !== undefined) return false
   if (identity.folderDocumentId) {
-    const document = await ctx.db.get(identity.folderDocumentId)
-    if (!document || document.userId !== userId || document.status !== 'success') return false
+    const document = await liveDocument(ctx, userId, identity.folderDocumentId)
+    // learnV2Sources.ts:877-881 and learnAdaptive.ts:133-137. Compare
+    // every current pin, even when the document is still marked successful.
+    if ((!document.sourceRevision && !document.contentHash)
+      || document.sourceRevision?.trim() !== snapshot.sourceRevision
+      || document.contentHash?.trim().toLowerCase() !== snapshot.contentHash
+      || document.r2Key?.trim() !== snapshot.objectKey) return false
   }
+  else if (identity.origin === 'folder_document') return false
   if (source.kind === 'snapshot') return true
   const excerpt = await ctx.db.get(source.sourceExcerptId)
   return excerpt?.userId === userId && excerpt.sourceSnapshotId === snapshot._id && excerpt.rightsStatus === 'permitted'
@@ -113,9 +333,8 @@ async function inspectGraph(ctx: ReadCtx, userId: string, root: Lineage, catalog
       || (row.classification !== 'genuine_personal_work' && row.classification !== 'legacy_history' && row.authority !== 'server_producer')) unavailable()
     if ((row.artifact.kind === 'measurement_item' && row.classification !== 'measurement')
       || (row.artifact.kind === 'scoring_spec' && row.classification !== 'private_scoring')) unavailable()
-    const record = await ctx.db.get(row.artifact.id)
-    if (!record || record.userId !== userId) unavailable()
     if (!learnArtifactReferenceSchema.safeParse({ artifact: row.artifact, key: row.key, revision: row.revision, payloadDigest: row.payloadDigest }).success) unavailable()
+    await requireLiveArtifact(ctx, userId, row)
     if (!row.validationId) unavailable()
     const validation = await ctx.db.get(row.validationId)
     if (!validation || validation.userId !== userId || !available(validation)) unavailable()
