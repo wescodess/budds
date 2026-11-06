@@ -49,7 +49,7 @@ export const create = mutation({
     const courseId = await ctx.db.insert('courses', {
       userId,
       folderId: args.folderId,
-      title: args.title.trim().slice(0, 200) || 'Untitled Void',
+      title: args.title.trim().slice(0, 200) || 'Untitled Course',
       status: 'generating',
       sourceType: args.sourceType,
       sourceConfidence: isWebOnly

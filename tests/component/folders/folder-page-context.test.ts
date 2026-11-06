@@ -59,7 +59,7 @@ mockNuxtImport('useConvexAction', () => {
 })
 
 describe('provideFolderPageContext', () => {
-  it('defaults an untitled V1 creation to Untitled Void', async () => {
+  it('defaults an untitled V1 creation to Untitled Course', async () => {
     mockCreateCourse.mockResolvedValue({ courseId: 'course_1', taskId: 'task_1' })
     let ctx: FolderPageContext | undefined
     const Host = defineComponent({
@@ -72,6 +72,6 @@ describe('provideFolderPageContext', () => {
 
     await ctx!.createCourse()
 
-    expect(mockCreateCourse).toHaveBeenCalledWith(expect.objectContaining({ title: 'Untitled Void' }))
+    expect(mockCreateCourse).toHaveBeenCalledWith(expect.objectContaining({ title: 'Untitled Course' }))
   })
 })

@@ -178,7 +178,7 @@ export function provideFolderPageContext(): FolderPageContext {
   async function createCourse(title?: string, webSearch?: boolean) {
     const hasIndexed = indexedDocumentCount.value > 0
     return (await createCourseMutation.mutate({
-      title: title || 'Untitled Void',
+      title: title || 'Untitled Course',
       sourceType: hasIndexed ? 'folder' : 'web-only',
       folderId: folderId.value,
       webSearchEnabled: webSearch,

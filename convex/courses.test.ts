@@ -229,7 +229,7 @@ describe('courses.create — source doc count cap', () => {
 })
 
 describe('courses.create — web-only source', () => {
-  test('defaults a blank title to Untitled Void', async () => {
+  test('defaults a blank title to Untitled Course', async () => {
     const t = convexTest(schema, modules)
     const { asUser, folderId } = await seedFolder(t, USER_A)
 
@@ -240,7 +240,7 @@ describe('courses.create — web-only source', () => {
     })
 
     const course = await t.run(async (ctx) => ctx.db.get(result.courseId))
-    expect(course!.title).toBe('Untitled Void')
+    expect(course!.title).toBe('Untitled Course')
   })
 
   test('creates web-only course in folder with no docs', async () => {

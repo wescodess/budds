@@ -55,8 +55,6 @@ of learner-titled records is added.
 | `app/components/learn/SectionCompletionCard.vue:63` | Last-section completion title | “Course Complete!” | “Void Complete!” | Resolved in `8f5b70b` |
 | `app/components/learn/SectionCompletionCard.vue:151` | Completion back button | “Back to Course Overview” | “Back to Void Overview” | Resolved in `8f5b70b` |
 | `app/pages/app/folders/[id]/learn/[courseId]/[sectionId].vue:244` | Unavailable-section recovery | “Back to course” | “Back to Void” | Resolved in `8f5b70b` |
-| `app/composables/useFolderPageContext.ts:181` | Client default for a new untitled V1 record | “Untitled Course” | “Untitled Void” | Resolved in `8f5b70b` |
-| `convex/courses.ts:52` | Persisted default for a blank new title | “Untitled Course” | “Untitled Void” | Resolved in `8f5b70b` |
 | `convex/reviewItems.ts:147` | Review fallback when the parent is absent, shown by `ReviewCard.vue:57` | “Unknown Course” | “Unknown Void” | Resolved in `8f5b70b` |
 
 ## Folder-scoped V1 labels deferred to #399
@@ -72,6 +70,15 @@ restored the base `22d323b` text in
 with the mounted assertions pinning the restored text, and left the wording to
 the owner in #399.
 
+The two new-course default titles are deferred for a stronger reason: they are
+written into stored course records rather than rendered at display time. An
+untitled course created with “Untitled Void” would keep the contested noun
+permanently and appear in the folder rail's “Voids” list as “Untitled Void” beside
+a “Course” badge. Stage B restored the base default in
+`fix(learn): keep the base new-course default title for the owner wording decision`,
+with the Convex and component assertions pinning “Untitled Course”, so the
+undecided wording stays out of stored data until #399 is decided.
+
 | File and line | Surface | Current label | Reverted label | Status |
 | --- | --- | --- | --- | --- |
 | `app/pages/app/folders/[id]/learn/index.vue:32` | Folder Learn subheading | “Courses in this folder” | “Voids in this folder” | Restored in Stage B; deferred to #399 |
@@ -81,6 +88,8 @@ the owner in #399.
 | `app/pages/app/folders/[id].vue:140` | Deletion description | “…remove the course.” | “…remove the Void.” | Restored in Stage B; deferred to #399 |
 | `app/pages/app/folders/[id].vue:161` | Deletion toast | “Course deleted” | “Void deleted” | Restored in Stage B; deferred to #399 |
 | `app/components/folder-shell/FolderShellRail.vue:113` | Untitled V1 record fallback | “Course” | “Void” | Restored in Stage B; deferred to #399 |
+| `app/composables/useFolderPageContext.ts:181` | Client default for a new untitled V1 record, stored on create | “Untitled Course” | “Untitled Void” | Restored in Stage B; deferred to #399 |
+| `convex/courses.ts:52` | Persisted default for a blank new title | “Untitled Course” | “Untitled Void” | Restored in Stage B; deferred to #399 |
 
 The rail's compact-touch kind badge at `FolderShellRail.vue:333` still says
 “Course” beside Chat, Flash cards, Audio Overview and Quiz. It names a subtype,
@@ -134,7 +143,7 @@ analytics for this rename.
 
 ## Deferred owner items and verification boundary
 
-- #399: the coexistence sentence, the create dialog Course option/CTA, the rail's Course kind badge, and the folder-scoped V1 labels restored in Stage B (folder Learn subheading, empty state and creation CTA, overview back link, deletion description and toast, untitled rail fallback).
+- #399: the coexistence sentence, the create dialog Course option/CTA, the rail's Course kind badge, and the folder-scoped V1 labels restored in Stage B (folder Learn subheading, empty state and creation CTA, overview back link, deletion description and toast, untitled rail fallback, and the client and persisted “Untitled Course” defaults for new records).
 - #377: signed-out Learn deep-link restoration through authentication.
 - Failed/missing-link terminal recovery UI, including wrong-table V2 links.
 - Historical provider-description repair or any data migration/backfill.
