@@ -1,4 +1,5 @@
 import { v } from 'convex/values'
+import { blueprintSummary, mapSummary, milestoneSummary, projectFields, projectObjective, sourceLinkSummary } from './lib/learnV2AssessmentDisclosure'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import {
@@ -1238,6 +1239,8 @@ export const failBlueprintGeneration = internalMutation({
 
 export const getBlueprintGenerationJob = query({
   args: { jobId: v.id('learnJobs') },
+  returns: v.union(v.object({ _id: v.id('learnJobs'), blueprintRevisionId: v.union(v.id('learnBlueprintRevisions'), v.null()), status: v.string(),
+    revision: v.number(), attempts: v.number(), terminalReason: v.union(v.string(), v.null()), createdAt: v.number(), updatedAt: v.number() }), v.null()),
   handler: async (ctx, args) => {
     const userId = await requireLearnV2QueryAccess(ctx)
     const job = await ctx.db.get(args.jobId)
@@ -1249,6 +1252,7 @@ export const getBlueprintGenerationJob = query({
 
 export const getBlueprintMap = query({
   args: { blueprintRevisionId: v.id('learnBlueprintRevisions') },
+  returns: v.union(mapSummary, v.null()),
   handler: async (ctx, args) => {
     const userId = await requireLearnV2QueryAccess(ctx)
     const blueprint = await ctx.db.get(args.blueprintRevisionId)
@@ -1285,13 +1289,13 @@ export const getBlueprintMap = query({
         const evidenceStatus = sourceAvailability === 'available'
           || (sourceAvailability === 'locator_only' && generatedSupportingSourceIds.has(String(link.sourceSnapshotId)))
           ? 'evidence_available' as const : 'evidence_unavailable' as const
-        projectedLinks.push({ ...link, evidenceStatus })
+        projectedLinks.push({ ...projectFields(sourceLinkSummary.fields, link), evidenceStatus })
       }
       const supportingLinks = projectedLinks.filter(link => link.coverage !== 'gap')
       const evidenceUnavailable = objective.coverage !== 'gap'
         && (supportingLinks.length === 0 || supportingLinks.every(link => link.evidenceStatus === 'evidence_unavailable'))
       objectiveViews.push({
-        ...objective,
+        ...projectObjective(objective, blueprint.recordRevision),
         storedCoverage: objective.coverage,
         coverage: evidenceUnavailable ? 'gap' as const : objective.coverage,
         gapReason: evidenceUnavailable ? 'Accepted evidence is no longer available.' : objective.gapReason,
@@ -1299,6 +1303,6 @@ export const getBlueprintMap = query({
         sourceLinks: projectedLinks,
       })
     }
-    return { blueprint, milestones, objectives: objectiveViews }
+    return { blueprint: projectFields(blueprintSummary.fields, blueprint), milestones: milestones.map(row => projectFields(milestoneSummary.fields, row)), objectives: objectiveViews }
   },
 })

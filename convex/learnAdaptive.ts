@@ -9,15 +9,18 @@ import { isOperableDiagnosticActivity, liveEvidenceState, storedPlan } from './l
 import { composeAdaptiveActivityPlan, replayAdaptiveActivityPlan } from '../shared/learn-adaptive-activity-plan'
 import { loadReadyCanvas } from './learnAdaptiveCanvas'
 import { requireAuth } from './lib/auth'
-import { masteryAttemptArgs, submitMasteryAttemptForOwner, type MasteryAttemptActionResult } from './learnV2Mastery'
+import { masteryAttemptArgs, masteryAttemptReturnValidator, submitMasteryAttemptForOwner, type MasteryAttemptActionResult } from './learnV2Mastery'
 import { needFirstDraftArgsValidator } from '../shared/learn-adaptive-draft'
 import { ADAPTIVE_OVERRIDE_VERSION, adaptiveOverrideOptionValidator, fixedNextPlanForOverride, projectAdaptiveControls, reasonTextForActivity } from '../shared/learn-adaptive-controls'
 import { ADAPTIVE_REPRESENTATIVE_COMPLETION_VERSION, presentNextAction, representativeNextAction } from '../shared/learn-adaptive-completion'
-import { LEARN_V2_MASTERY_THRESHOLD } from '../shared/learn-v2-mastery'
+import { LEARN_V2_MASTERY_THRESHOLD, masteryStateValidator } from '../shared/learn-v2-mastery'
 import { learnActivityEventDedupeHash, writeLearnActivityEvent } from './lib/learnAdaptiveEvents'
 import { adaptiveArtifactKindValidator, adaptiveArtifactStatusValidator, boundedArtifactText } from '../shared/learn-adaptive-artifact'
 import { queueAdaptiveArtifactDeletion } from './lib/learnAdaptiveArtifacts'
 import { prepareAdaptiveCommand } from '../shared/adaptive-command-authority'
+import { adaptiveActivityStatus, adaptiveActivitySummary, adaptiveFallback, adaptiveIntent, adaptiveLifecycle,
+  adaptiveThreadSummary, canReadActivityTeaching, disclosureLiterals, nonFactualPrimitive, pageFields, projectFields,
+  projectNonFactualPayload, projectSourceScope, resolveAssessmentDisclosureContext } from './lib/learnV2AssessmentDisclosure'
 
 const memoryPreferenceKeyValidator = v.union(v.literal('representation'), v.literal('pace'), v.literal('practice_style'))
 const memoryPreferenceOperationValidator = v.union(v.literal('set'), v.literal('disable'), v.literal('clear'))
@@ -34,6 +37,29 @@ const contributionSourceIdValidator = v.union(
 export type ContributionSource = Infer<typeof contributionSourceIdValidator>
 const contributionSubmissionSourceValidator = v.object({ feature: v.string(), id: v.string(), revision: v.string() })
 const CONTRIBUTION_VERSION = 'learn-adaptive.contribution.v1' as const
+const contributionSummary = v.object({ _id: v.id('learningThreadContributions'), _creationTime: v.number(), threadId: v.id('learningThreads'),
+  sourceFeature: disclosureLiterals(['chat', 'quiz', 'flashcards', 'podcast', 'documents']), sourceIdentity: v.string(), sourceRevision: v.string(),
+  contributionKind: disclosureLiterals(['context', 'question', 'result', 'artifact', 'source']), provenanceVersion: v.literal(CONTRIBUTION_VERSION),
+  classification: disclosureLiterals(['accepted_evidence', 'synthesis', 'inference', 'unknown', 'non_factual']),
+  metadata: v.object({ role: v.optional(disclosureLiterals(['background', 'practice', 'review'])) }),
+  sourceStatus: disclosureLiterals(['available', 'source_unavailable']), createdAt: v.number(),
+  evidenceIntegrity: disclosureLiterals(['not_required', 'accepted', 'conflict', 'unavailable']) })
+const proposalSummary = v.object({ _id: v.id('learningThreadPromotionProposals'), threadId: v.id('learningThreads'), kind: disclosureLiterals(['review', 'mastery']),
+  basis: disclosureLiterals(['useful_artifact', 'representative_performance']), proposalVersion: v.string(), threadRevision: v.number(),
+  activityId: v.id('learningThreadActivities'), activityPlanRevision: v.number(), artifactId: v.optional(v.id('learningThreadArtifacts')),
+  artifactRevision: v.optional(v.number()), attemptId: v.optional(v.id('masteryAttempts')), representativeOutcome: v.optional(disclosureLiterals(['passed', 'needs_practice'])),
+  learningVoidId: v.optional(v.id('learningVoids')), blueprintRevisionId: v.optional(v.id('learnBlueprintRevisions')), objectiveId: v.optional(v.id('learnObjectives')),
+  sessionContentId: v.optional(v.id('sessionContent')), createdAt: v.number() })
+const artifactSummary = v.object({ id: v.id('learningThreadArtifacts'), activityId: v.id('learningThreadActivities'), artifactKind: adaptiveArtifactKindValidator,
+  revision: v.number(), title: v.string(), summary: v.string(), status: adaptiveArtifactStatusValidator, createdAt: v.number(), updatedAt: v.number(),
+  historical: v.boolean(), readOnly: v.boolean(), evidenceLabel: v.union(v.literal('evidence_unavailable'), v.null()) })
+const conversionSummary = v.object({ activityDocumentId: v.id('learningThreadActivities'), activityId: v.string(), activityClass: v.literal('non_factual'),
+  boundaryOrdinal: v.number(), planRevision: v.number(), replacesActivityId: v.union(v.string(), v.null()) })
+
+async function canReadActivitySummary(ctx: QueryCtx | MutationCtx, thread: Doc<'learningThreads'>, activity: Doc<'learningThreadActivities'>) {
+  if (!await canReadActivityTeaching(ctx, thread, activity)) return false
+  return (await replayAdaptiveActivityPlan(storedPlan(activity))).ok
+}
 
 function normalizeContributionSource(ctx: QueryCtx | MutationCtx, feature: Doc<'learningThreadContributions'>['sourceFeature'], sourceId: string): ContributionSource | null {
   if (feature === 'chat') { const id = ctx.db.normalizeId('messages', sourceId); return id ? { feature, id } : null }
@@ -85,6 +111,7 @@ export async function loadContributionSource(ctx: QueryCtx | MutationCtx, userId
 
 export const inspectContributionSource = query({
   args: { source: contributionSourceIdValidator },
+  returns: v.object({ status: disclosureLiterals(['available', 'unavailable']), revision: v.union(v.string(), v.null()) }),
   handler: async (ctx, args) => {
     const userId = await requireAdaptiveQueryAccess(ctx)
     const source = await loadContributionSource(ctx, userId, args.source)
@@ -95,6 +122,7 @@ export const inspectContributionSource = query({
 
 export const listThreadContributions = query({
   args: { threadId: v.id('learningThreads'), paginationOpts: paginationOptsValidator },
+  returns: v.object({ page: v.array(contributionSummary), ...pageFields }),
   handler: async (ctx, args) => {
     const userId = await requireAdaptiveQueryAccess(ctx)
     const thread = await ctx.db.get(args.threadId)
@@ -102,11 +130,9 @@ export const listThreadContributions = query({
     const result = await ctx.db.query('learningThreadContributions')
       .withIndex('by_userId_and_threadId_and_createdAt', q => q.eq('userId', userId).eq('threadId', args.threadId))
       .order('desc').paginate({ cursor: args.paginationOpts.cursor, numItems: Math.min(50, Math.max(1, Math.floor(args.paginationOpts.numItems))) })
-    return { ...result, page: await Promise.all(result.page.map(async contribution => {
+    return { isDone: result.isDone, continueCursor: result.continueCursor, page: await Promise.all(result.page.map(async contribution => {
       const evidenceIntegrity = await contributionEvidenceIntegrity(ctx, userId, thread, contribution)
-      const { provenanceKey: _provenanceKey, idempotencyKeyHash: _key, requestFingerprint: _fingerprint,
-        evidenceSnapshotId: _evidence, ...row } = contribution
-      return { ...row, evidenceIntegrity }
+      return { ...projectFields(contributionSummary.fields, { ...contribution, evidenceIntegrity }), metadata: { role: contribution.metadata.role }, evidenceIntegrity }
     })) }
   },
 })
@@ -238,6 +264,9 @@ export const recordContribution = mutation({
 export const convertContributionToActivity = mutation({
   args: { threadId: v.id('learningThreads'), contributionId: v.id('learningThreadContributions'),
     expectedRevision: v.number(), idempotencyKey: v.string() },
+  returns: v.union(v.object({ kind: v.literal('ok'), value: conversionSummary, revision: v.number(), receiptId: v.string() }),
+    v.object({ kind: v.literal('conflict'), code: disclosureLiterals(['stale_revision', 'duplicate_key', 'activity_boundary_changed']), expectedRevision: v.number(), actualRevision: v.number(), authority: v.literal('convex') }),
+    v.object({ kind: disclosureLiterals(['denied', 'blocked', 'invalid']), code: v.string(), message: v.string(), retryable: v.boolean() })),
   handler: async (ctx, args) => await executeAdaptiveThreadCommand(ctx, {
     threadId: args.threadId, expectedRevision: args.expectedRevision, idempotencyKey: args.idempotencyKey,
     commandName: 'convertContributionToActivity', payload: { contributionId: String(args.contributionId) },
@@ -353,13 +382,15 @@ export const convertContributionToActivity = mutation({
 
 export const listPromotionProposals = query({
   args: { threadId: v.id('learningThreads') },
+  returns: v.array(proposalSummary),
   handler: async (ctx, args) => {
     const userId = await requireAdaptiveQueryAccess(ctx)
     const thread = await ctx.db.get(args.threadId)
     if (!thread || thread.userId !== userId || thread.deletionStartedAt !== undefined) return []
-    return await ctx.db.query('learningThreadPromotionProposals')
+    const rows = await ctx.db.query('learningThreadPromotionProposals')
       .withIndex('by_userId_and_threadId_and_createdAt', q => q.eq('userId', userId).eq('threadId', thread._id))
       .order('desc').take(PROMOTION_HISTORY_LIMIT)
+    return rows.map(row => projectFields(proposalSummary.fields, row))
   },
 })
 
@@ -436,20 +467,30 @@ type MemoryProjection = {
   evidenceState: string
   preferences: { key: Doc<'learningThreadPreferences'>['key'], value: string | null, state: 'active' | 'disabled', revision: number }[]
   artifacts: { id: Id<'learningThreadArtifacts'>, kind: Doc<'learningThreadArtifacts'>['artifactKind'], title: string,
-    summary: string, status: Doc<'learningThreadArtifacts'>['status'], revision: number, updatedAt: number,
+    summary: string, status: 'draft' | 'saved', revision: number, updatedAt: number,
     historical: boolean, readOnly: boolean, evidenceLabel: 'evidence_unavailable' | null }[]
   history: { activityId: string, purpose: string, status: Doc<'learningThreadActivities'>['status'],
     activityClass: Doc<'learningThreadActivities'>['activityClass'], updatedAt: number, readOnly: true,
     evidenceStatus: 'ready' | 'unavailable' | 'not_required',
     attempt: { id: Id<'masteryAttempts'>, scorePercent: number, masteryStateAfter: Doc<'masteryRecords'>['state'] | null } | null }[]
   promotionCandidates: { basis: 'useful_artifact' | 'representative_performance', sourceId: string,
-    label: string, allowedKinds: readonly ('review' | 'mastery')[] }[]
+    label: string, allowedKinds: ('review' | 'mastery')[] }[]
   promotionProposals: { id: Id<'learningThreadPromotionProposals'>, kind: 'review' | 'mastery',
     basis: 'useful_artifact' | 'representative_performance', sourceLabel: string }[]
 }
 
 export const getMemory = query({
   args: { threadId: v.id('learningThreads') },
+  returns: v.union(v.object({ ownerId: v.id('users'), threadId: v.id('learningThreads'), threadRevision: v.number(), lifecycle: adaptiveLifecycle,
+    unresolvedPoint: v.union(v.string(), v.null()), nextAction: v.union(v.object({ label: v.string() }), v.null()), evidenceState: v.string(),
+    preferences: v.array(v.object({ key: memoryPreferenceKeyValidator, value: v.union(v.string(), v.null()), state: disclosureLiterals(['active', 'disabled']), revision: v.number() })),
+    artifacts: v.array(v.object({ id: v.id('learningThreadArtifacts'), kind: adaptiveArtifactKindValidator, title: v.string(), summary: v.string(), status: adaptiveArtifactStatusValidator,
+      revision: v.number(), updatedAt: v.number(), historical: v.boolean(), readOnly: v.boolean(), evidenceLabel: v.union(v.literal('evidence_unavailable'), v.null()) })),
+    history: v.array(v.object({ activityId: v.string(), purpose: v.string(), status: adaptiveActivityStatus, activityClass: disclosureLiterals(['factual', 'non_factual']), updatedAt: v.number(), readOnly: v.literal(true),
+      evidenceStatus: disclosureLiterals(['ready', 'unavailable', 'not_required']), attempt: v.union(v.object({ id: v.id('masteryAttempts'), scorePercent: v.number(), masteryStateAfter: v.union(masteryStateValidator, v.null()) }), v.null()) })),
+    promotionCandidates: v.array(v.object({ basis: disclosureLiterals(['useful_artifact', 'representative_performance']), sourceId: v.string(), label: v.string(), allowedKinds: v.array(disclosureLiterals(['review', 'mastery'])) })),
+    promotionProposals: v.array(v.object({ id: v.id('learningThreadPromotionProposals'), kind: disclosureLiterals(['review', 'mastery']), basis: disclosureLiterals(['useful_artifact', 'representative_performance']), sourceLabel: v.string() })),
+  }), v.null()),
   handler: async (ctx, args): Promise<MemoryProjection | null> => {
     const userId = await requireAdaptiveQueryAccess(ctx)
     const thread = await ctx.db.get(args.threadId)
@@ -477,7 +518,7 @@ export const getMemory = query({
         && typeof storedAttempt.serverScorePercent === 'number' && Number.isFinite(storedAttempt.serverScorePercent)
         ? { id: storedAttempt._id, scorePercent: storedAttempt.serverScorePercent,
             masteryStateAfter: storedAttempt.masteryStateAfter ?? null } : null
-      return { activityId: row.activityId, sourceActivityId: row._id, purpose: row.purpose, status: row.status,
+      return { activityId: row.activityId, sourceActivityId: row._id, purpose: await canReadActivitySummary(ctx, thread, row) ? row.purpose : '', status: row.status,
         activityClass: row.activityClass, updatedAt: row.updatedAt, readOnly: true as const,
         evidenceStatus, attempt, completionStatus: completion?.status ?? null }
     }))
@@ -489,14 +530,14 @@ export const getMemory = query({
     const promotionCandidates: MemoryProjection['promotionCandidates'] = [
       ...artifacts.filter(row => row.status === 'saved' && !row.historical && row.title.trim() && row.summary.trim())
         .map(row => ({ basis: 'useful_artifact' as const, sourceId: String(row.id), label: row.title,
-          allowedKinds: ['review', 'mastery'] as const })),
+          allowedKinds: ['review', 'mastery'] as Array<'review' | 'mastery'> })),
       ...(current && currentCompletion ? [{ basis: 'representative_performance' as const,
         sourceId: String(current._id), label: current.purpose,
-        allowedKinds: currentCompletion.status === 'passed' ? ['review', 'mastery'] as const : ['review'] as const }] : []),
+        allowedKinds: currentCompletion.status === 'passed' ? ['review', 'mastery'] as Array<'review' | 'mastery'> : ['review'] as Array<'review' | 'mastery'> }] : []),
       ...history.filter(row => row.completionStatus && row.evidenceStatus === 'ready')
         .map(row => ({ basis: 'representative_performance' as const, sourceId: String(row.sourceActivityId),
           label: row.purpose,
-          allowedKinds: row.completionStatus === 'passed' ? ['review', 'mastery'] as const : ['review'] as const })),
+          allowedKinds: row.completionStatus === 'passed' ? ['review', 'mastery'] as Array<'review' | 'mastery'> : ['review'] as Array<'review' | 'mastery'> })),
     ]
     const artifactLabels = new Map(artifacts.map(row => [String(row.id), row]))
     const activityLabels = new Map([...(current ? [[String(current._id), current.purpose] as const] : []),
@@ -507,13 +548,14 @@ export const getMemory = query({
       threadRevision: thread.revision,
       lifecycle: thread.lifecycle,
       unresolvedPoint: thread.unresolvedPoint?.slice(0, 240) ?? null,
-      nextAction: continuation?.nextAction ?? null,
+      nextAction: continuation?.nextAction ? { label: continuation.nextAction.label } : null,
       evidenceState: await liveEvidenceState(ctx, thread),
       preferences: preferences.map(row => ({ key: row.key, value: row.value, state: row.state, revision: row.revision })),
       artifacts: artifacts.map(row => ({ id: row.id, kind: row.artifactKind, title: row.title, summary: row.summary,
         status: row.status, revision: row.revision, updatedAt: row.updatedAt,
         historical: row.historical, readOnly: row.readOnly, evidenceLabel: row.evidenceLabel })),
-      history,
+      history: history.map(row => ({ activityId: row.activityId, purpose: row.purpose, status: row.status, activityClass: row.activityClass,
+        updatedAt: row.updatedAt, readOnly: row.readOnly, evidenceStatus: row.evidenceStatus, attempt: row.attempt })),
       promotionCandidates,
       promotionProposals: proposalRows.map(row => ({ id: row._id, kind: row.kind, basis: row.basis,
         sourceLabel: row.artifactId ? artifactLabels.get(String(row.artifactId))?.revision === row.artifactRevision
@@ -659,6 +701,7 @@ export const deleteArtifact = mutation({
 
 export const listThreadArtifacts = query({
   args: { threadId: v.id('learningThreads') },
+  returns: v.array(artifactSummary),
   handler: async (ctx, args) => {
     const userId = await requireAdaptiveQueryAccess(ctx)
     const thread = await ctx.db.get(args.threadId)
@@ -674,10 +717,10 @@ export const listThreadArtifacts = query({
     const rows = [...drafts, ...saved].sort((a, b) => b.updatedAt - a.updatedAt || String(b._id).localeCompare(String(a._id))).slice(0, 16)
     return await Promise.all(rows.map(async row => {
       const activity = await ctx.db.get(row.activityId)
-      const evidenceUnavailable = !activity || await artifactEvidenceUnavailable(ctx, thread, activity)
+      const evidenceUnavailable = !activity || !await canReadActivityTeaching(ctx, thread, activity) || await artifactEvidenceUnavailable(ctx, thread, activity)
       return {
         id: row._id, activityId: row.activityId, artifactKind: row.artifactKind, revision: row.revision,
-        title: row.title, summary: row.summary, status: row.status, createdAt: row.createdAt, updatedAt: row.updatedAt,
+        title: row.title, summary: row.summary, status: row.status as 'draft' | 'saved', createdAt: row.createdAt, updatedAt: row.updatedAt,
         historical: evidenceUnavailable, readOnly: evidenceUnavailable || thread.lifecycle === 'ended' || thread.lifecycle === 'rollback',
         evidenceLabel: evidenceUnavailable ? 'evidence_unavailable' as const : null,
       }
@@ -687,6 +730,8 @@ export const listThreadArtifacts = query({
 
 export const getArtifactCanvas = query({
   args: { threadId: v.id('learningThreads') },
+  returns: v.union(v.object({ ownerId: v.id('users'), thread: v.object({ id: v.id('learningThreads'), revision: v.number(), outcome: v.string() }),
+    activity: v.object({ id: v.string(), planRevision: v.number(), status: adaptiveActivityStatus, primitive: v.union(nonFactualPrimitive, v.null()), fallback: adaptiveFallback }), status: adaptiveActivityStatus }), v.null()),
   handler: async (ctx, args) => {
     const userId = await requireAdaptiveQueryAccess(ctx)
     const thread = await ctx.db.get(args.threadId)
@@ -698,7 +743,7 @@ export const getArtifactCanvas = query({
     const owner = await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique()
     if (!owner) return null
     const replay = await replayAdaptiveActivityPlan(storedPlan(activity))
-    const operable = replay.ok && activity.requiredAction.kind === 'save_artifact'
+    const operable = replay.ok && await canReadActivityTeaching(ctx, thread, activity) && activity.requiredAction.kind === 'save_artifact'
       && activity.requiredAction.label === 'Save artifact'
       && activity.primitivePlan[0].action === 'save_artifact'
       && activity.evaluationContract.kind !== 'server_scored'
@@ -708,7 +753,7 @@ export const getArtifactCanvas = query({
       ownerId: owner._id,
       thread: { id: thread._id, revision: thread.revision, outcome: thread.outcome ?? thread.originalNeed },
       activity: { id: activity.activityId, planRevision: activity.planRevision, status: activity.status,
-        primitive: operable ? activity.primitivePlan[0] : null, fallback: activity.fallback },
+        ...projectNonFactualPayload(activity, operable) },
       status: operable ? activity.status : 'blocked' as const,
     }
   },
@@ -773,6 +818,9 @@ async function validPersistedReflectionDecision(ctx: QueryCtx | MutationCtx, thr
 
 export const getReflectionCanvas = query({
   args: { threadId: v.id('learningThreads') },
+  returns: v.union(v.object({ ownerId: v.id('users'), thread: v.object({ id: v.id('learningThreads'), revision: v.number(), outcome: v.string(), lifecycle: adaptiveLifecycle }),
+    activity: v.object({ id: v.string(), planRevision: v.number(), status: adaptiveActivityStatus, purpose: v.string(), reason: v.string(), primitive: v.union(nonFactualPrimitive, v.null()), fallback: adaptiveFallback }),
+    status: v.string(), decision: v.union(v.object({ outcome: disclosureLiterals(['accepted', 'overridden', 'ended']), nextMove: v.string(), decidedAt: v.number() }), v.null()) }), v.null()),
   handler: async (ctx, args) => {
     const userId = await requireAdaptiveQueryAccess(ctx)
     const thread = await ctx.db.get(args.threadId)
@@ -782,7 +830,7 @@ export const getReflectionCanvas = query({
     if (activity.primitivePlan.length !== 1 || activity.primitivePlan[0]?.type !== 'reflection_next_move') return null
     const owner = await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique()
     if (!owner) return null
-    const primitive = await validReflectionActivity(activity)
+    const primitive = await canReadActivityTeaching(ctx, thread, activity) ? await validReflectionActivity(activity) : null
     const decision = activity.reflectionDecision
     const decisionValid = !decision || primitive && await validPersistedReflectionDecision(ctx, thread, activity, primitive)
     const ready = primitive && !decision && ['eligible', 'started'].includes(activity.status)
@@ -793,8 +841,9 @@ export const getReflectionCanvas = query({
       thread: { id: thread._id, revision: thread.revision, outcome: thread.outcome ?? thread.originalNeed, lifecycle: thread.lifecycle },
       activity: {
         id: activity.activityId, planRevision: activity.planRevision, status: activity.status,
-        purpose: activity.purpose, reason: activity.reasonText?.text ?? activity.purpose,
-        primitive: ready || completed ? primitive : null, fallback: activity.fallback,
+        purpose: primitive ? activity.purpose : '', reason: primitive ? reasonTextForActivity({ activityClass: activity.activityClass,
+          purpose: activity.purpose, reasonCode: activity.reasonCode, sourceState: activity.decisionInputs.sourceState }).text : '',
+        ...projectNonFactualPayload(activity, Boolean(ready || completed)),
       },
       status: completed ? 'completed' as const : ready ? activity.status : 'blocked' as const,
       decision: completed ? { outcome: decision.outcome, nextMove: decision.nextMove, decidedAt: decision.decidedAt } : null,
@@ -1028,6 +1077,11 @@ export async function representativeCompletion(ctx: QueryCtx | MutationCtx, user
     || job.learningVoidId !== activity.learningVoidId || job.blueprintRevisionId !== activity.blueprintRevisionId
     || job.checkpoint !== `attempt:${String(attempt._id)}`
     || !Number.isFinite(attempt.serverScorePercent) || Boolean(passedEvent) === Boolean(failedEvent)) return null
+  if (attempt.assessmentOpportunityId) {
+    const context = await resolveAssessmentDisclosureContext(ctx, attempt.assessmentOpportunityId)
+    if (!context || !context.pinsMatch || !context.evidenceAvailable || !context.accessAvailable
+      || context.lifecycle.authoritativeAttemptId !== attempt._id || !['scored_pass', 'scored_fail'].includes(context.lifecycle.phase)) return null
+  }
   const event = passedEvent ?? failedEvent!
   if (event.taxonomyVersion === 'learn-v2.measurement-events.v1') return null
   const passed = attempt.serverScorePercent! >= LEARN_V2_MASTERY_THRESHOLD
@@ -1127,7 +1181,8 @@ async function projectActivityAttribution(ctx: QueryCtx, userId: string, activit
     sourceStatus = !live ? 'source_unavailable'
       : live.revision === contribution.sourceRevision ? 'available' : 'source_revision_changed'
   }
-  return { ...activity.attribution, sourceStatus }
+  return { contributionId: activity.attribution.contributionId, sourceFeature: activity.attribution.sourceFeature,
+    classification: activity.attribution.classification, provenanceVersion: activity.attribution.provenanceVersion, sourceStatus }
 }
 
 async function projectThread(ctx: QueryCtx, userId: string, thread: Doc<'learningThreads'>) {
@@ -1141,7 +1196,9 @@ async function projectThread(ctx: QueryCtx, userId: string, thread: Doc<'learnin
       || activity?.activityClass === 'factual' && activity.learningVoidId !== learningVoid._id) return null
   }
   const sourceEvidenceState = await liveEvidenceState(ctx, thread)
-  const factualCanvas = activity?.activityClass === 'factual' ? await loadReadyCanvas(ctx, userId, thread._id) : null
+  const teachingAllowed = !activity || await canReadActivityTeaching(ctx, thread, activity)
+  const planValid = !activity || (await replayAdaptiveActivityPlan(storedPlan(activity))).ok
+  const factualCanvas = teachingAllowed && activity?.activityClass === 'factual' ? await loadReadyCanvas(ctx, userId, thread._id) : null
   const completion = await representativeCompletion(ctx, userId, activity)
   const reflectionPrimitive = activity ? await validReflectionActivity(activity) : null
   const reflectionDecisionValid = Boolean(activity && reflectionPrimitive
@@ -1162,7 +1219,7 @@ async function projectThread(ctx: QueryCtx, userId: string, thread: Doc<'learnin
   const currentAttribution = activity ? await projectActivityAttribution(ctx, userId, activity) : null
   const history = await Promise.all(recent.filter(row => row._id !== thread.currentActivityId).slice(0, HISTORY_LIMIT).map(async row => ({
     id: row.activityId, status: row.status, activityClass: row.activityClass,
-    purpose: row.purpose, reasonCode: row.reasonCode, boundaryOrdinal: row.boundaryOrdinal,
+    purpose: await canReadActivitySummary(ctx, thread, row) ? row.purpose : '', reasonCode: row.reasonCode, boundaryOrdinal: row.boundaryOrdinal,
     attribution: await projectActivityAttribution(ctx, userId, row),
     planRevision: row.planRevision, replacesActivityId: row.replacesActivityId,
     updatedAt: row.updatedAt,
@@ -1171,13 +1228,13 @@ async function projectThread(ctx: QueryCtx, userId: string, thread: Doc<'learnin
     ownerId: owner._id,
     thread: {
       id: thread._id, goal: thread.originalNeed, outcome: thread.outcome ?? thread.originalNeed, intent: thread.intent,
-      sourceScope: thread.sourceScope, evidenceState, lifecycle: thread.lifecycle, revision: thread.revision,
+      sourceScope: projectSourceScope(thread.sourceScope), evidenceState, lifecycle: thread.lifecycle, revision: thread.revision,
       lifecycleChangedAt: thread.lifecycleChangedAt ?? null,
       authorityKind: thread.authorityKind, learningVoidId: thread.learningVoidId ?? null,
     },
     currentActivity: activity ? {
       id: activity.activityId, status: activity.status, activityClass: activity.activityClass,
-      purpose: activity.purpose, reasonCode: activity.reasonCode, boundaryOrdinal: activity.boundaryOrdinal,
+      purpose: teachingAllowed && planValid ? activity.purpose : '', reasonCode: activity.reasonCode, boundaryOrdinal: activity.boundaryOrdinal,
       attribution: currentAttribution,
       planRevision: activity.planRevision, replacesActivityId: activity.replacesActivityId,
     } : null,
@@ -1185,17 +1242,18 @@ async function projectThread(ctx: QueryCtx, userId: string, thread: Doc<'learnin
       priorOutcome: activity.decisionInputs.priorOutcome,
       assistance: activity.decisionInputs.assistance,
     } : null,
-    artifact: liveArtifact ? { id: liveArtifact._id, title: liveArtifact.title, status: liveArtifact.status,
+    artifact: liveArtifact ? { id: liveArtifact._id, title: liveArtifact.title, status: liveArtifact.status as 'draft' | 'saved',
       activityId: artifactActivity?.activityId ?? null, historical: artifactHistorical } : null,
     unresolvedPoint: thread.unresolvedPoint?.slice(0, 240) ?? null,
     completion,
     history,
-    nextAction: presentNextAction(nextThreadAction(thread, activity, factualCanvas, sourceEvidenceState, completion, reflectionDecisionValid, artifactActionValid)),
+    nextAction: projectFields(adaptiveThreadSummary.fields.nextAction.fields, presentNextAction(nextThreadAction(planValid && (teachingAllowed || sourceEvidenceState !== 'ready') ? thread : { ...thread, lifecycle: 'blocked' }, activity, factualCanvas, sourceEvidenceState, completion, reflectionDecisionValid, artifactActionValid))),
   }
 }
 
 export const getThread = query({
   args: { threadId: v.id('learningThreads') },
+  returns: v.union(adaptiveThreadSummary, v.null()),
   handler: async (ctx, args) => {
     const userId = await requireAdaptiveQueryAccess(ctx)
     const thread = await ctx.db.get(args.threadId)
@@ -1210,6 +1268,10 @@ const RESUME_CANDIDATE_LIMIT = 16
 const RESUME_SIGNAL_LIMIT = 8
 export const listResumeCandidates = query({
   args: {},
+  returns: v.array(v.object({ ownerId: v.id('users'), threadId: v.id('learningThreads'), outcome: v.string(), intent: adaptiveIntent, lifecycle: adaptiveLifecycle,
+    evidenceState: v.string(), unresolvedPoint: v.union(v.string(), v.null()), currentActivity: v.union(adaptiveActivitySummary, v.null()),
+    nextAction: adaptiveThreadSummary.fields.nextAction, reason: disclosureLiterals(['unfinished_activity', 'needs_review', 'source_recovery', 'recent_thread']),
+    reviewCapability: v.union(v.string(), v.null()), updatedAt: v.number() })),
   handler: async (ctx) => {
     const userId = await requireAdaptiveQueryAccess(ctx)
     const recentThreads = await ctx.db.query('learningThreads')
@@ -1284,6 +1346,7 @@ export const listResumeCandidates = query({
 const THREAD_HISTORY_PAGE_SIZE = 8
 export const listThreadHistory = query({
   args: { cursor: v.union(v.string(), v.null()) },
+  returns: v.object({ page: v.array(v.object({ threadId: v.id('learningThreads'), outcome: v.string(), lifecycle: adaptiveLifecycle, updatedAt: v.number() })), ...pageFields }),
   handler: async (ctx, args) => {
     const userId = await requireAdaptiveQueryAccess(ctx)
     const result = await ctx.db.query('learningThreads')
@@ -1333,6 +1396,10 @@ export function toAdaptiveSubmissionAdmission(result: MasteryAttemptActionResult
 // only bounded admission status and an opaque completed-attempt reference.
 export const submitResponse = action({
   args: { threadId: v.id('learningThreads'), activityId: v.string(), ...masteryAttemptArgs },
+  returns: v.union(v.object({ kind: v.literal('accepted'), status: v.literal('completed'), attemptReference: v.string(), replayed: v.boolean() }),
+    v.object({ kind: v.literal('accepted'), status: v.literal('in_progress'), replayed: v.literal(false) }),
+    v.object({ kind: disclosureLiterals(['denied', 'blocked', 'invalid']), code: v.string(), message: v.string(), retryable: v.boolean(),
+      admission: masteryAttemptReturnValidator.members[2].fields.admission, fallbackRoute: v.optional(v.object({ name: disclosureLiterals(['app-learn', 'index']), href: v.string(), label: v.string() })) })),
   handler: async (ctx, args): Promise<ReturnType<typeof toAdaptiveSubmissionAdmission> | {
     kind: 'denied', code: string, message: string, retryable: boolean, fallbackRoute: AdaptiveLearnFallbackRoute
   }> => {

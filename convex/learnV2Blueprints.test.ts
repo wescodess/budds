@@ -441,7 +441,8 @@ describe('Learn V2 evidence-bound Blueprint generation', () => {
     expect(map.milestones).toHaveLength(3)
     expect(map.objectives).toHaveLength(6)
     expect(map.objectives[5]).toMatchObject({ coverage: 'strong', prerequisiteObjectiveIds: [map.objectives[4]?._id] })
-    expect(map.blueprint).toMatchObject({ status: 'map_review', generatorVersion: 'test-generator.v1' })
+    expect(map.blueprint).toMatchObject({ status: 'map_review' })
+    expect(await setupResult.t.run(ctx => ctx.db.get(setupResult.blueprintRevisionId))).toMatchObject({ generatorVersion: 'test-generator.v1' })
     expect(await setupResult.t.run(ctx => ctx.db.get(setupResult.learningVoidId))).toMatchObject({ status: 'map_review', revision: 2 })
     expect(await setupResult.owner.query(api.learnV2Blueprints.getBlueprintGenerationJob, { jobId: started.job._id })).toMatchObject({ status: 'awaiting_approval' })
 
@@ -549,14 +550,15 @@ describe('Learn V2 evidence-bound Blueprint generation', () => {
       })
       await setupResult.t.finishAllScheduledFunctions(() => {})
       expect(await setupResult.owner.query(api.learnV2Blueprints.getBlueprintGenerationJob, { jobId: job._id })).toMatchObject({ status: 'awaiting_approval' })
-      expect(await setupResult.owner.query(api.learnV2Blueprints.getBlueprintMap, { blueprintRevisionId: setupResult.blueprintRevisionId })).toMatchObject({
-        blueprint: {
-          status: 'map_review',
+      const publicMap = await setupResult.owner.query(api.learnV2Blueprints.getBlueprintMap, { blueprintRevisionId: setupResult.blueprintRevisionId })
+      expect(publicMap).toMatchObject({ blueprint: { status: 'map_review' } })
+      expect(publicMap?.blueprint).not.toHaveProperty('generationRequestId')
+      expect(publicMap?.blueprint).not.toHaveProperty('generationModel')
+      expect(await setupResult.t.run(ctx => ctx.db.get(setupResult.blueprintRevisionId))).toMatchObject({
           generatorVersion: 'learn-v2.blueprint-generator.v1',
           generationProvider: 'openrouter_via_cloudflare_ai_gateway',
           generationModel: 'openai/test-blueprint',
           generationRequestId: 'blueprint-response',
-        },
       })
       expect(fetchMock).toHaveBeenCalledTimes(1)
       const request = fetchMock.mock.calls[0]?.[1]
