@@ -225,10 +225,10 @@ export async function acquireCaptureStackLock(lock = join(tmpdir(), `budds-desig
   return release
 }
 
-export async function stopCaptureStack(child, release, timeoutMs) {
+export async function stopCaptureStack(child, release, timeoutMs, releaseTimeoutMs = timeoutMs) {
   release?.readGroups()
   try { await stopChild(child, timeoutMs, release?.stackGroup()) }
-  finally { await release?.(timeoutMs) }
+  finally { await release?.(releaseTimeoutMs) }
 }
 
 // Explicit ports are caller-coordinated; default runs ask the OS for a free port.

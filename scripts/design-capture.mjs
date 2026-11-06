@@ -36,7 +36,7 @@ async function startStack() {
   releaseStackLock.recordStack(stack.pid)
   stack.once('error', error => { stackFailure = message(error) })
   stack.once('exit', (code, signal) => { stackFailure = `Disposable E2E stack exited (${signal || code})` })
-  const deadline = Date.now() + 180_000
+  const deadline = Date.now() + 300_000
   while (Date.now() < deadline) {
     if (interrupted || stackFailure) throw new Error(stackFailure || 'Capture interrupted')
     const ready = await fetch(baseUrl, { signal: AbortSignal.timeout(1000) }).then(response => response.ok).catch(() => false)
@@ -49,7 +49,7 @@ async function startStack() {
 }
 
 async function stopStack() {
-  await stopCaptureStack(stack, releaseStackLock)
+  await stopCaptureStack(stack, releaseStackLock, 120_000, 30_000)
 }
 
 async function capturePage(surface, identity, entry, baseUrl, output) {
