@@ -2,7 +2,7 @@
 import { convexTest } from 'convex-test'
 import { makeFunctionReference } from 'convex/server'
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { internal } from './_generated/api'
+import { api, internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import { internalMutation, type MutationCtx } from './_generated/server'
 import schema from './schema'
@@ -93,11 +93,12 @@ function registration(f: Fixture) { return { reference: f.reference, validationI
 async function prepareSourceDependency(ctx: MutationCtx, kind: 'snapshot' | 'excerpt', withBackingDocument = true) {
   const f = await prepare(ctx, { classification: 'genuine_personal_work' })
   const userId = owner.tokenIdentifier
-  // The source document is distinct from the artifact, so deleting it exercises source access.
+  // Keep the artifact outside the source folder so its own deletion cannot mask access loss.
+  const sourceFolderId = await ctx.db.insert('folders', { userId, name: 'Source owner', documentCount: 0 })
   const sourceDocumentId = withBackingDocument
-    ? await ctx.db.insert('documents', { userId, folderId: f.folderId, filename: 'source.txt', fileSize: 5, status: 'success' })
+    ? await ctx.db.insert('documents', { userId, folderId: sourceFolderId, filename: 'source.txt', fileSize: 5, status: 'success' })
     : undefined
-  const learningVoidId = await ctx.db.insert('learningVoids', { userId, folderId: f.folderId, title: 'Source owner', status: 'active', revision: 1, createdAt: f.base.createdAt, updatedAt: f.base.createdAt })
+  const learningVoidId = await ctx.db.insert('learningVoids', { userId, folderId: sourceFolderId, title: 'Source owner', status: 'active', revision: 1, createdAt: f.base.createdAt, updatedAt: f.base.createdAt })
   const identityId = await ctx.db.insert('learnSourceIdentities', { userId, learningVoidId, origin: withBackingDocument ? 'folder_document' : 'user_url', externalKey: 'source', folderDocumentId: sourceDocumentId })
   const snapshotId = await ctx.db.insert('learnSourceSnapshots', { userId, learningVoidId, sourceIdentityId: identityId,
     revision: 1, recordRevision: 1, status: 'user_accepted', rightsStatus: 'permitted', conflictStatus: 'clear', contentHash: 'f'.repeat(64), createdAt: f.base.createdAt })
@@ -108,7 +109,7 @@ async function prepareSourceDependency(ctx: MutationCtx, kind: 'snapshot' | 'exc
   await ctx.db.patch(link._id, { dependency: kind === 'snapshot' ? { kind, ...pin } : { kind, ...pin, sourceExcerptId: excerptId } })
   const manifestDigest = await sealManifest(ctx, f.lineageId)
   await ctx.db.patch(f.validationId, { manifestDigest })
-  return { ...f, manifestDigest, sourceDocumentId, identityId, snapshotId, excerptId, linkId: link._id }
+  return { ...f, manifestDigest, sourceFolderId, sourceDocumentId, learningVoidId, identityId, snapshotId, excerptId, linkId: link._id }
 }
 
 async function expectSourceRevoked(t: ReturnType<typeof convexTest>, f: Fixture) {
@@ -149,7 +150,12 @@ describe('instructional artifact lineage contract', () => {
     expect(result).toMatchObject({ status: 'bound', classification: 'measurement', instructionalRegistered: false,
       originLineageIds: [original.lineageId], cases: [{ caseId: original.caseId, usageClass: 'measurement_reserved' }] })
     await expect(t.withIdentity(owner).run(ctx => registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, registration(copy)))).rejects.toThrow('unavailable')
-    await t.run(ctx => ctx.db.patch(copy.lineageId, { classification: 'teaching' }))
+    await t.run(async ctx => {
+      // Personal work needs no publication, so only the mixed-classification rule can reject this sealed rewrite.
+      await ctx.db.patch(copy.lineageId, { classification: 'genuine_personal_work' })
+      const manifestDigest = await sealManifest(ctx, copy.lineageId)
+      await ctx.db.patch(copy.validationId, { manifestDigest })
+    })
     expect(await t.withIdentity(owner).query(internal.learnV2ArtifactLineage.resolve, { reference: copy.reference })).toMatchObject({ status: 'unavailable' })
   })
 
@@ -284,6 +290,40 @@ describe('instructional artifact lineage contract', () => {
       expect(await asOwner.query(internal.learnV2ArtifactLineage.resolve, { reference: f.reference })).toMatchObject({ status: 'bound', instructionalRegistered: true })
     })
 
+    test('revokes resolution and registration at real folder deletion before scheduled foundational cleanup', async () => {
+      vi.useFakeTimers()
+      const t = convexTest(schema, modules)
+      const f = await t.run(ctx => prepareSourceDependency(ctx, kind, false))
+      const asOwner = t.withIdentity(owner)
+      expect(await asOwner.query(internal.learnV2ArtifactLineage.resolve, { reference: f.reference })).toMatchObject({ status: 'bound' })
+      await asOwner.mutation(api.folders.deleteFolder, { id: f.sourceFolderId })
+      expect(await t.run(ctx => ctx.db.get(f.sourceFolderId))).toBeNull()
+      expect(await t.run(ctx => ctx.db.get(f.folderId))).not.toBeNull()
+      expect(await t.run(ctx => ctx.db.get(f.documentId))).not.toBeNull()
+      expect(await t.run(ctx => ctx.db.get(f.learningVoidId))).toMatchObject({ status: 'active' })
+      expect(await t.run(ctx => ctx.db.get(f.identityId))).not.toHaveProperty('tombstonedAt')
+      expect(await t.run(ctx => ctx.db.get(f.snapshotId))).not.toHaveProperty('evidencePurgedAt')
+      expect(await t.run(ctx => ctx.db.get(f.excerptId))).toMatchObject({ excerpt: 'Permitted source' })
+      expect(await t.run(ctx => ctx.db.get(f.linkId))).toMatchObject({ evidenceStatus: 'available', dependency: { kind } })
+      expect(await t.run(ctx => ctx.db.system.query('_scheduled_functions').take(20))).toContainEqual(expect.objectContaining({
+        name: 'learnV2Retention:deleteFolderFoundation', state: expect.objectContaining({ kind: 'pending' }),
+      }))
+      await expectSourceRevoked(t, f)
+    })
+
+    test.each(['void_missing', 'void_foreign', 'void_archived', 'folder_foreign'] as const)('denies owning aggregate access loss %s without advancing the catalogue', async (state) => {
+      const t = convexTest(schema, modules)
+      const f = await t.run(ctx => prepareSourceDependency(ctx, kind, false))
+      expect(await t.withIdentity(owner).query(internal.learnV2ArtifactLineage.resolve, { reference: f.reference })).toMatchObject({ status: 'bound' })
+      await t.run(async ctx => {
+        if (state === 'void_missing') await ctx.db.delete(f.learningVoidId)
+        if (state === 'void_foreign') await ctx.db.patch(f.learningVoidId, { userId: foreign.tokenIdentifier })
+        if (state === 'void_archived') await ctx.db.patch(f.learningVoidId, { status: 'archived' })
+        if (state === 'folder_foreign') await ctx.db.patch(f.sourceFolderId, { userId: foreign.tokenIdentifier })
+      })
+      await expectSourceRevoked(t, f)
+    })
+
     test('revokes resolution and registration at the real folder-document tombstone before scheduled evidence purge', async () => {
       vi.useFakeTimers()
       const t = convexTest(schema, modules)
@@ -382,17 +422,97 @@ describe('instructional artifact lineage contract', () => {
     expect(await t.run(ctx => ctx.db.get(f.caseId))).not.toBeNull()
   })
 
-  test('bounds origin depth and rejects duplicate and oversized children', async () => {
+  test('bounds origin depth', async () => {
     const t = convexTest(schema, modules)
     let f = await t.run(ctx => prepare(ctx, { classification: 'measurement' }))
     for (let index = 0; index < LEARN_ARTIFACT_LINEAGE_LIMITS.maxDepth + 1; index++) f = await t.run(ctx => prepare(ctx, { origin: f }))
     expect(await t.withIdentity(owner).query(internal.learnV2ArtifactLineage.resolve, { reference: f.reference })).toMatchObject({ status: 'unavailable' })
+  })
+
+  test.each(['short_first', 'long_first'] as const)('bounds the longest shared-ancestor path with %s traversal', async order => {
+    for (const longBranchLength of [LEARN_ARTIFACT_LINEAGE_LIMITS.maxDepth - 2, LEARN_ARTIFACT_LINEAGE_LIMITS.maxDepth - 1]) {
+      const t = convexTest(schema, modules)
+      const leaf = await t.run(ctx => prepare(ctx, { classification: 'genuine_personal_work' }))
+      const shared = await t.run(ctx => prepare(ctx, { origin: leaf }))
+      let branch = shared
+      for (let index = 0; index < longBranchLength; index++) branch = await t.run(ctx => prepare(ctx, { origin: branch }))
+      const origins = order === 'short_first' ? [shared, branch] : [branch, shared]
+      const root = await t.run(ctx => prepare(ctx, { origin: origins[0] }))
+      await t.run(async ctx => {
+        const other = origins[1]!
+        await ctx.db.insert('learnArtifactLineageOrigins', { ...root.base, lineageId: root.lineageId, originLineageId: other.lineageId,
+          originRevision: other.reference.revision, originPayloadDigest: other.reference.payloadDigest,
+          originManifestDigest: other.manifestDigest, classification: other.classification, transformation: 'copy' })
+        await ctx.db.patch(root.lineageId, { originCount: 2 })
+        const manifestDigest = await sealManifest(ctx, root.lineageId)
+        await ctx.db.patch(root.validationId, { manifestDigest })
+        const stored = await ctx.db.query('learnArtifactLineageOrigins').withIndex('by_userId_and_lineageId', q => q.eq('userId', owner.tokenIdentifier).eq('lineageId', root.lineageId)).take(3)
+        expect(stored.map(origin => origin.originLineageId)).toEqual(origins.map(origin => origin.lineageId))
+        expect(await ctx.db.query('learnArtifactLineages').take(LEARN_ARTIFACT_LINEAGE_LIMITS.maxNodes + 1)).toHaveLength(longBranchLength + 3)
+      })
+      const asOwner = t.withIdentity(owner)
+      const withinLimit = longBranchLength + 2 === LEARN_ARTIFACT_LINEAGE_LIMITS.maxDepth
+      expect(await asOwner.query(internal.learnV2ArtifactLineage.resolve, { reference: root.reference })).toMatchObject({ status: withinLimit ? 'bound' : 'unavailable' })
+      if (withinLimit) expect(await asOwner.mutation(registerInstructional, registration(root))).toMatchObject({ catalogRevision: 1 })
+      else {
+        await expect(asOwner.mutation(registerInstructional, registration(root))).rejects.toThrow('Artifact lineage unavailable')
+        expect(await t.run(ctx => ctx.db.get(root.catalogId))).toMatchObject({ catalogRevision: 0 })
+      }
+    }
+  })
+
+  test('rejects duplicate origins within the depth limit', async () => {
+    const t = convexTest(schema, modules)
+    const leaf = await t.run(ctx => prepare(ctx, { classification: 'genuine_personal_work' }))
+    const f = await t.run(ctx => prepare(ctx, { origin: leaf }))
     await t.run(async ctx => {
       const origin = await ctx.db.query('learnArtifactLineageOrigins').withIndex('by_userId_and_lineageId', q => q.eq('userId', owner.tokenIdentifier).eq('lineageId', f.lineageId)).unique()
       if (!origin) throw new Error('Missing origin')
       const { _id: _id, _creationTime: _time, ...fields } = origin
-      for (let index = 0; index < 8; index++) await ctx.db.insert('learnArtifactLineageOrigins', fields)
+      await ctx.db.insert('learnArtifactLineageOrigins', fields)
+      await ctx.db.patch(f.lineageId, { originCount: 2 })
+      const manifestDigest = await sealManifest(ctx, f.lineageId)
+      await ctx.db.patch(f.validationId, { manifestDigest })
     })
     expect(await t.withIdentity(owner).query(internal.learnV2ArtifactLineage.resolve, { reference: f.reference })).toMatchObject({ status: 'unavailable' })
+  })
+
+  test('rejects oversized origins within the depth and node limits', async () => {
+    const t = convexTest(schema, modules)
+    const origins: Fixture[] = []
+    for (let index = 0; index <= LEARN_ARTIFACT_LINEAGE_LIMITS.maxOrigins; index++) {
+      origins.push(await t.run(ctx => prepare(ctx, { classification: 'genuine_personal_work', fingerprint: index.toString(16) })))
+    }
+    const root = await t.run(ctx => prepare(ctx, { origin: origins[0] }))
+    // An independently encoded canonical manifest permits an oversized stored fixture without bypassing a lookup check.
+    const digestFor = async (row: Doc<'learnArtifactLineages'>, links: Doc<'learnArtifactLineageOrigins'>[]) => {
+      const manifest = { artifact: { id: row.artifact.id, kind: row.artifact.kind }, authority: row.authority, authorityVersion: row.authorityVersion,
+        cases: [], classification: row.classification, derivation: row.derivation, key: row.key,
+        origins: links.map(link => JSON.stringify({ classification: link.classification, lineageId: link.originLineageId,
+          manifestDigest: link.originManifestDigest, payloadDigest: link.originPayloadDigest, revision: link.originRevision, transformation: link.transformation })).sort(),
+        payloadDigest: row.payloadDigest, revision: row.revision, sources: [], userId: row.userId, version: row.lineageVersion }
+      return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(manifest)))), value => value.toString(16).padStart(2, '0')).join('')
+    }
+    for (let index = 1; index < origins.length; index++) {
+      await t.run(async ctx => {
+        const origin = origins[index]!
+        await ctx.db.insert('learnArtifactLineageOrigins', { ...root.base, lineageId: root.lineageId, originLineageId: origin.lineageId,
+          originRevision: origin.reference.revision, originPayloadDigest: origin.reference.payloadDigest,
+          originManifestDigest: origin.manifestDigest, classification: origin.classification, transformation: 'copy' })
+        await ctx.db.patch(root.lineageId, { originCount: index + 1 })
+        const row = await ctx.db.get(root.lineageId)
+        if (!row) throw new Error('Missing lineage')
+        const links = await ctx.db.query('learnArtifactLineageOrigins').withIndex('by_userId_and_lineageId', q => q.eq('userId', owner.tokenIdentifier).eq('lineageId', root.lineageId)).take(LEARN_ARTIFACT_LINEAGE_LIMITS.maxOrigins + 2)
+        const manifestDigest = await digestFor(row, links)
+        if (links.length <= LEARN_ARTIFACT_LINEAGE_LIMITS.maxOrigins) expect(manifestDigest).toBe(await sealManifest(ctx, root.lineageId))
+        await ctx.db.patch(root.lineageId, { manifestDigest })
+        await ctx.db.patch(root.validationId, { manifestDigest })
+      })
+      expect(await t.withIdentity(owner).query(internal.learnV2ArtifactLineage.resolve, { reference: root.reference })).toMatchObject({
+        status: index < LEARN_ARTIFACT_LINEAGE_LIMITS.maxOrigins ? 'bound' : 'unavailable',
+      })
+    }
+    await expect(t.withIdentity(owner).mutation(registerInstructional, registration(root))).rejects.toThrow('Artifact lineage unavailable')
+    expect(await t.run(ctx => ctx.db.get(root.catalogId))).toMatchObject({ catalogRevision: 0 })
   })
 })

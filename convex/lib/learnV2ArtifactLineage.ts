@@ -44,6 +44,10 @@ async function sourceAvailable(ctx: ReadCtx, userId: string, source: Dependency)
   if (!snapshot || snapshot.userId !== userId || (snapshot.effectiveStatus ?? snapshot.status) !== 'user_accepted'
     || snapshot.evidencePurgedAt !== undefined || snapshot.rightsStatus !== 'permitted' || snapshot.conflictStatus !== 'clear'
     || snapshot.revision !== source.revision || (snapshot.recordRevision ?? 1) !== source.recordRevision || snapshot.contentHash !== source.contentHash) return false
+  const learningVoid = await ctx.db.get(snapshot.learningVoidId)
+  if (!learningVoid || learningVoid.userId !== userId || learningVoid.status === 'archived') return false
+  const folder = await ctx.db.get(learningVoid.folderId)
+  if (!folder || folder.userId !== userId) return false
   const identity = await ctx.db.get(snapshot.sourceIdentityId)
   if (!identity || identity.userId !== userId || identity.tombstonedAt !== undefined) return false
   if (identity.folderDocumentId) {
@@ -87,15 +91,20 @@ export async function artifactManifestDigest(
 
 async function inspectGraph(ctx: ReadCtx, userId: string, root: Lineage, catalogRevision: number, requirePublication: boolean) {
   const nodes = new Map<Id<'learnArtifactLineages'>, Lineage>()
+  const heights = new Map<Id<'learnArtifactLineages'>, number>()
   const active = new Set<Id<'learnArtifactLineages'>>()
   const cases = new Map<Id<'learnAssessmentCases'>, Doc<'learnArtifactCaseBindings'>>()
   const usage = new Map<Id<'learnAssessmentCases'>, Doc<'learnAssessmentCases'>['usageClass']>()
   let sourceCount = 0
   let caseCount = 0
   const validations = new Map<Id<'learnArtifactLineages'>, ReturnType<typeof validationProjection> & { validationId: Id<'learnArtifactValidations'> }>()
-  const visit = async (row: Lineage, depth: number): Promise<void> => {
+  const visit = async (row: Lineage, depth: number): Promise<number> => {
     if (depth > limits.maxDepth || active.has(row._id)) unavailable()
-    if (nodes.has(row._id)) return
+    const cachedHeight = heights.get(row._id)
+    if (cachedHeight !== undefined) {
+      if (depth + cachedHeight > limits.maxDepth) unavailable()
+      return cachedHeight
+    }
     if (nodes.size >= limits.maxNodes || row.userId !== userId || !available(row)
       || row.lineageVersion !== LEARN_ARTIFACT_LINEAGE_VERSION || row.classification === 'unknown'
       || row.classification !== root.classification || !learnVersionSchema.safeParse(row.authorityVersion).success) unavailable()
@@ -151,13 +160,16 @@ async function inspectGraph(ctx: ReadCtx, userId: string, root: Lineage, catalog
       cases.set(binding.caseId, binding)
       usage.set(binding.caseId, candidate.reservedAt === undefined ? candidate.usageClass : 'measurement_reserved')
     }
+    let height = 0
     for (const origin of origins) {
       const parent = await ctx.db.get(origin.originLineageId)
       if (!parent || parent.userId !== userId || parent.revision !== origin.originRevision || parent.payloadDigest !== origin.originPayloadDigest || parent.manifestDigest !== origin.originManifestDigest
         || parent.classification !== origin.classification) unavailable()
-      await visit(parent, depth + 1)
+      height = Math.max(height, 1 + await visit(parent, depth + 1))
     }
     active.delete(row._id)
+    heights.set(row._id, height)
+    return height
   }
   await visit(root, 0)
   const rootValidation = validations.get(root._id)
