@@ -93,9 +93,8 @@ async function main() {
   const realFetch = globalThis.fetch
   try {
     const previousEvidence = existsSync(ledgerPath) ? ledgerPath : existsSync(evidencePath) ? evidencePath : null
-    const ledger = previousEvidence ? JSON.parse(readFileSync(previousEvidence, 'utf8')) : {
-      version: 1, requestsUsed: 0, halted: false, requests: [], allowance: [],
-    }
+    requireCondition(previousEvidence !== null, 'Missing smoke ledger. The historical T5 run is halted at 5/8; do not create a fresh request budget.')
+    const ledger = JSON.parse(readFileSync(previousEvidence, 'utf8'))
     requireCondition(ledger.version === 1 && Number.isInteger(ledger.requestsUsed)
       && ledger.requestsUsed === ledger.requests.length && ledger.requestsUsed >= 0 && ledger.requestsUsed <= maximumRequests,
     'Invalid request ledger; do not reset it to obtain more budget.')
