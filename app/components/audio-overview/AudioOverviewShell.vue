@@ -111,10 +111,9 @@ type OverviewSummary = {
   hostNames?: { hostA: string, hostB: string }
 }
 
-const { data: conversationRoomData } = useConvexQuery(
+const { data: conversationRoomData } = useSkippableConvexQuery(
   api.audioOverviewRooms.getForConversation,
-  computed(() => ({ conversationId: props.conversationId! })),
-  { enabled: computed(() => !!props.conversationId && !props.roomId) },
+  () => props.conversationId && !props.roomId ? { conversationId: props.conversationId } : 'skip',
 )
 const locallyCreatedRoomId = ref<Id<'audioOverviewRooms'> | null>(null)
 const resolvedRoomId = computed<Id<'audioOverviewRooms'> | null>(() =>
@@ -123,10 +122,9 @@ const resolvedRoomId = computed<Id<'audioOverviewRooms'> | null>(() =>
   ?? ((conversationRoomData.value as { _id?: Id<'audioOverviewRooms'> } | null | undefined)?._id ?? null),
 )
 
-const { data: overviewsData } = useConvexQuery(
+const { data: overviewsData } = useSkippableConvexQuery(
   api.audioOverviews.listByRoom,
-  computed(() => ({ roomId: resolvedRoomId.value! })),
-  { enabled: computed(() => !!resolvedRoomId.value) },
+  () => resolvedRoomId.value ? { roomId: resolvedRoomId.value } : 'skip',
 )
 const overviews = computed<OverviewSummary[]>(
   () => (overviewsData.value as OverviewSummary[] | null | undefined) ?? [],
