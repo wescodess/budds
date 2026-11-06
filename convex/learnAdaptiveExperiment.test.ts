@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 import { convexTest } from 'convex-test'
 import { afterAll, beforeAll, expect, test } from 'vitest'
 import { api, internal } from './_generated/api'
@@ -86,7 +87,7 @@ test.each([
   }
   expect(await owner.query(api.learnAdaptiveExperiment.getMyStatus, { threadId }))
     .toMatchObject({ exposure: 'off', assignment: null })
-  const events = await owner.query(api.dataExport.getUserDataPage, {
+  const events = await owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(owner),
     collection: 'learnActivityEvents', paginationOpts: { numItems: 8, cursor: null },
   })
   expect(events.page).toEqual([expect.objectContaining({ reasonCode: 'analysis_contract_unsupported' })])
@@ -106,7 +107,7 @@ test('the experiment stays unassigned and unexposed without an approved analysis
   }
   expect(await owner.query(api.learnAdaptiveExperiment.getMyStatus, { threadId }))
     .toEqual({ analysisVersion: 'adaptive-routing-analysis.v1', exposure: 'off', assignment: null })
-  const events = await owner.query(api.dataExport.getUserDataPage, {
+  const events = await owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(owner),
     collection: 'learnActivityEvents', paginationOpts: { numItems: 8, cursor: null },
   })
   expect(events.page).toEqual([])
@@ -136,7 +137,7 @@ test('the enabled assignment path records a bounded exclusion when analysis is u
     if (priorFlag === undefined) delete process.env.ADAPTIVE_ROUTING_EXPERIMENT_ENABLED
     else process.env.ADAPTIVE_ROUTING_EXPERIMENT_ENABLED = priorFlag
   }
-  const events = await owner.query(api.dataExport.getUserDataPage, {
+  const events = await owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(owner),
     collection: 'learnActivityEvents', paginationOpts: { numItems: 8, cursor: null },
   })
   expect(events.page).toEqual([expect.objectContaining({ eventType: 'experiment_assignment',
@@ -162,7 +163,7 @@ test('an approved synthetic analysis yields a stable server-owned assignment', a
     expect(await owner.mutation(api.learnAdaptiveExperiment.assignForThread, { threadId })).toEqual(first)
     expect(await owner.query(api.learnAdaptiveExperiment.getMyStatus, { threadId }))
       .toMatchObject({ analysisVersion: 'adaptive-routing-analysis.v1', exposure: 'off', assignment: first })
-    const events = await owner.query(api.dataExport.getUserDataPage, {
+    const events = await owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(owner),
       collection: 'learnActivityEvents', paginationOpts: { numItems: 8, cursor: null },
     })
     expect(events.page).toEqual([expect.objectContaining({
@@ -200,7 +201,7 @@ test('the public export shows only the owner assignment and account deletion rem
     eligibility: 'eligible', contractVersion: 'learn-adaptive.experiment-assignment.v1', assignedAt: 2,
     eligibilityVersion: 'learn-adaptive.experiment-eligibility.v1', assignmentUnit: 'authenticated_learner',
   }))
-  const ownerPage = await owner.query(api.dataExport.getUserDataPage, {
+  const ownerPage = await owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(owner),
     collection: 'learnAdaptiveExperimentAssignments', paginationOpts: { numItems: 8, cursor: null },
   })
   expect(ownerPage.page).toEqual([expect.objectContaining({ userId: OWNER,
@@ -208,15 +209,19 @@ test('the public export shows only the owner assignment and account deletion rem
     assignmentUnit: 'authenticated_learner', eligibilityVersion: 'learn-adaptive.experiment-eligibility.v1' })])
   expect(JSON.stringify(ownerPage.page)).not.toMatch(/planId|originalNeed|tokenIdentifier/)
   const ownerId = ownerPage.page[0]!._id
-  const otherPage = await t.withIdentity({ tokenIdentifier: otherUser }).query(api.dataExport.getUserDataPage, {
+  const otherPage = await t.withIdentity({ tokenIdentifier: otherUser }).query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(t.withIdentity({ tokenIdentifier: otherUser })),
     collection: 'learnAdaptiveExperimentAssignments', paginationOpts: { numItems: 8, cursor: null },
   })
   expect(otherPage.page.map(row => row._id)).toEqual([otherId])
   await t.run(ctx => ctx.db.insert('accountDeletionJobs', {
     userId: OWNER, status: 'active', phase: 'learnV2', startedAt: 1, updatedAt: 1,
   }))
-  await t.mutation(internal.accountDeletion.runDeletionBatch, { userId: OWNER })
-  expect(await t.run(ctx => ctx.db.get(ownerId))).toBeNull()
+  for (let batch = 0; batch < 20; batch++) {
+    await t.mutation(internal.accountDeletion.runDeletionBatch, { userId: OWNER })
+    const remaining = await t.run(ctx => ctx.db.query('learnAdaptiveExperimentAssignments').withIndex('by_userId', q => q.eq('userId', OWNER)).take(1))
+    if (!remaining.length) break
+  }
+  expect(await t.run(ctx => ctx.db.get('learnAdaptiveExperimentAssignments', ctx.db.normalizeId('learnAdaptiveExperimentAssignments', ownerId)!))).toBeNull()
   expect(await t.run(ctx => ctx.db.get(otherId))).not.toBeNull()
 })
 
@@ -272,7 +277,7 @@ test('an unsafe thread is excluded with bounded, owner-visible telemetry', async
     if (priorFlag === undefined) delete process.env.ADAPTIVE_ROUTING_EXPERIMENT_ENABLED
     else process.env.ADAPTIVE_ROUTING_EXPERIMENT_ENABLED = priorFlag
   }
-  const events = await owner.query(api.dataExport.getUserDataPage, {
+  const events = await owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(owner),
     collection: 'learnActivityEvents', paginationOpts: { numItems: 8, cursor: null },
   })
   expect(events.page).toEqual([expect.objectContaining({ eventType: 'experiment_assignment',
@@ -388,7 +393,7 @@ test('a rollback trigger stops later assignment and cannot be cleared by a passi
   expect(await owner.query(api.learnAdaptiveExperiment.getMyStatus, { threadId }))
     .toMatchObject({ exposure: 'off', assignment: null })
   expect(await owner.query(api.learnAdaptiveExperiment.getGuardrailStatus, { threadId })).toBeNull()
-  const events = await owner.query(api.dataExport.getUserDataPage, {
+  const events = await owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(owner),
     collection: 'learnActivityEvents', paginationOpts: { numItems: 8, cursor: null },
   })
   expect(events.page).toEqual([expect.objectContaining({ eventType: 'experiment_assignment',

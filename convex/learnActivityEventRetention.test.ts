@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 import { convexTest } from 'convex-test'
 import { describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
@@ -27,7 +28,7 @@ async function insertEvent(t: ReturnType<typeof convexTest>, userId: string, occ
 }
 
 async function exportedEvents(t: ReturnType<typeof convexTest>, identity: typeof OWNER_A) {
-  return await t.withIdentity(identity).query(api.dataExport.getUserDataPage, {
+  return await t.withIdentity(identity).query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(t.withIdentity(identity)),
     collection: 'learnActivityEvents', paginationOpts: { cursor: null, numItems: 200 },
   })
 }

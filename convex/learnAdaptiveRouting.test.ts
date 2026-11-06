@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 import { convexTest } from 'convex-test'
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
 import { api, internal } from './_generated/api'
@@ -505,7 +506,7 @@ describe('server-authorized adaptive routing decisions', () => {
       threadId, expectedRevision: 1, idempotencyKey: 'routing-export-delete-0001',
     })
     if (decided.kind !== 'ok') throw new Error('Expected decision')
-    const exported = await owner.query(api.dataExport.getUserDataPage, {
+    const exported = await owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(owner),
       collection: 'learnActivityDecisions', paginationOpts: { cursor: null, numItems: 100 },
     })
     expect(exported.page).toHaveLength(1)

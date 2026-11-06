@@ -165,3 +165,34 @@ test.each(['known_history', 'missing_history', 'hint', 'reveal'] as const)('acce
   expect((await t.run(ctx => ctx.db.get(result.submissionId)))?.assistanceSnapshot.state)
     .toBe(control === 'known_history' ? 'unassisted' : control === 'missing_history' ? 'unknown' : 'assisted')
 })
+
+test.each(['purge_first', 'accept_first', 'concurrent'] as const)('source purge versus acceptance and export: %s', async ordering => {
+  const { t, f, owner, submission } = await fixture()
+  const purge = () => t.mutation(internal.learnV2Retention.purgeSourceEvidence, { userId: OWNER.tokenIdentifier, sourceIdentityId: f.sourceIdentityId })
+  const accept = () => owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission })
+  if (ordering === 'purge_first') { await purge(); expect((await accept()).kind).toBe('rejected') }
+  else if (ordering === 'accept_first') { expect((await accept()).kind).toBe('accepted'); await purge() }
+  else await Promise.all([accept(), purge()])
+  await t.finishAllScheduledFunctions(vi.runAllTimers)
+  expect(await t.run(ctx => ctx.db.query('learnResponseBodies').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(8))).toEqual([])
+  const replay = await accept()
+  expect(['accepted', 'rejected']).toContain(replay.kind)
+  expect(await t.run(ctx => ctx.db.query('learnResponseBodies').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(8))).toEqual([])
+})
+
+test.each(['export_first', 'accept_first', 'concurrent'] as const)('serializes personal export with acceptance: %s', async ordering => {
+  const { t, f, owner, submission } = await fixture()
+  const authorize = () => owner.mutation(api.dataExport.authorizePersonalExport, {})
+  const accept = () => owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission })
+  let expected: 'unassisted' | 'unknown' | null = null
+  if (ordering === 'export_first') { await authorize(); await accept(); expected = 'unknown' }
+  else if (ordering === 'accept_first') { await accept(); await authorize(); expected = 'unassisted' }
+  else await Promise.all([accept(), authorize()])
+  const response = await t.run(ctx => ctx.db.query('learnResponses').withIndex('by_userId_and_assessmentOpportunityId', q => q.eq('userId', OWNER.tokenIdentifier).eq('assessmentOpportunityId', f.rows.learnAssessmentOpportunities)).unique())
+  expect(response).not.toBeNull()
+  if (expected) expect(response?.assistanceSnapshot.state).toBe(expected)
+  else expect(['unknown', 'unassisted']).toContain(response?.assistanceSnapshot.state)
+  const snapshot = response?.assistanceSnapshot
+  await authorize()
+  expect((await t.run(ctx => ctx.db.get(response!._id)))?.assistanceSnapshot).toEqual(snapshot)
+})
