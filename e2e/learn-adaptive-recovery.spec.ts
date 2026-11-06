@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
+import { recordConvexCalls } from './helpers/convex-calls'
 
 const primitives = [
   'cited_explanation',
@@ -320,18 +321,10 @@ test.describe('static Canvas projections in real Chromium', () => {
   }
 })
 
-// The disposable E2E account has local Adaptive access, but this thread link
-// contains an invalid ID. Exercise the real route's unavailable recovery boundary.
-test('an invalid learning thread link offers keyboard-operable recovery at each viewport', async ({ page, request }) => {
-  test.setTimeout(3 * 60_000)
-  const identity = {
-    email: `adaptive-recovery-${Date.now()}@e2e.budds.invalid`,
-    password: 'disposable-e2e-password',
-    name: 'Adaptive Recovery Browser Test',
-  }
+async function signIn(page: Page, request: APIRequestContext, label: string) {
   const bootstrap = await request.post('/api/e2e/session', {
     headers: { 'x-budds-e2e-token': token },
-    data: identity,
+    data: { email: `${label}-${Date.now()}@e2e.budds.invalid`, password: 'disposable-e2e-password', name: 'Adaptive Recovery Browser Test' },
   })
   expect(bootstrap.ok()).toBeTruthy()
   const cookies = bootstrap.headersArray().filter(header => header.name.toLowerCase() === 'set-cookie')
@@ -346,15 +339,22 @@ test('an invalid learning thread link offers keyboard-operable recovery at each 
       url: baseUrl,
     }])
   }
+}
+
+// The disposable E2E account has local Adaptive access, but this Void link
+// contains an invalid ID. Exercise the real route's unavailable recovery boundary.
+test('an invalid learning thread link offers keyboard-operable recovery at each viewport', async ({ page, request }) => {
+  test.setTimeout(3 * 60_000)
+  await signIn(page, request, 'adaptive-recovery')
 
   for (const viewport of viewports) {
     await page.setViewportSize(viewport)
     await page.emulateMedia({ reducedMotion: 'reduce', forcedColors: 'active' })
-    await page.goto('/app/learn/thread/unavailable-e2e-thread')
+    await page.goto('/app/learn/void/unavailable-e2e-thread')
 
     const boundary = page.getByTestId('learn-adaptive-thread-unavailable')
     await expect(boundary, `${viewport.name}: unavailable boundary`).toBeVisible()
-    await expect(boundary.getByRole('status')).toHaveText('This learning thread is unavailable.')
+    await expect(boundary.getByRole('status')).toHaveText('This Void is unavailable.')
     await expect(page.getByTestId('learn-adaptive-canvas-frame')).toHaveCount(0)
 
     const recovery = boundary.getByRole('link', { name: 'Back to Learn' })
@@ -378,4 +378,39 @@ test('an invalid learning thread link offers keyboard-operable recovery at each 
     await expect(page).toHaveURL(/\/app\/learn(?:\?.*)?$/)
     await expect(page.getByTestId('learn-adaptive-thread-unavailable')).toHaveCount(0)
   }
+})
+
+test('a legacy learning thread link redirects once to the canonical Void without probing another table', async ({ page, request }) => {
+  test.setTimeout(3 * 60_000)
+  const query = '?activity=missing&utm_source=mail&empty=&repeat=1&repeat=2&q=a%2Fb%3F%26'
+  for (const method of ['get', 'head'] as const) {
+    const redirect = await request[method](`/app/learn/thread/unavailable-e2e-thread${query}`, { maxRedirects: 0 })
+    expect(redirect.status(), method).toBe(302)
+    expect(redirect.headers()['cache-control'], method).toBe('no-store')
+    expect(redirect.headers().location, method).toBe(`/app/learn/void/unavailable-e2e-thread${query}`)
+  }
+
+  await signIn(page, request, 'adaptive-legacy-link')
+  const calls = recordConvexCalls(page)
+  await page.goto('/app/learn')
+  const navigation = await page.goto(`/app/learn/thread/unavailable-e2e-thread${query}#learn-thread-history-title`)
+  const redirect = navigation?.request().redirectedFrom()
+  expect(redirect?.redirectedFrom()).toBeNull()
+  expect((await redirect!.response())!.status()).toBe(302)
+  const landed = new URL(page.url())
+  expect(landed.pathname).toBe('/app/learn/void/unavailable-e2e-thread')
+  expect([...landed.searchParams]).toEqual([['activity', 'missing'], ['utm_source', 'mail'], ['empty', ''], ['repeat', '1'], ['repeat', '2'], ['q', 'a/b?&']])
+  expect(landed.hash).toBe('#learn-thread-history-title')
+  await expect(page.getByTestId('learn-adaptive-thread-unavailable')).toBeVisible()
+  await expect(page.getByTestId('learn-adaptive-canvas-frame')).toHaveCount(0)
+
+  const probes = calls.filter(call => call.args.includes('unavailable-e2e-thread'))
+  expect(probes.length).toBeGreaterThan(0)
+  expect(probes.filter(call => call.kind !== 'query' || !call.name.startsWith('learnAdaptive'))).toEqual([])
+
+  await page.goBack()
+  await expect(page).toHaveURL(/\/app\/learn$/)
+  await page.goForward()
+  await expect(page).toHaveURL(/\/app\/learn\/void\/unavailable-e2e-thread\?/)
+  await expect(page.getByTestId('learn-adaptive-thread-unavailable')).toBeVisible()
 })

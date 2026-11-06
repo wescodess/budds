@@ -128,7 +128,7 @@ function handleSubmit() {
 
 <template>
   <div class="mx-auto w-full max-w-2xl px-4 py-6" data-testid="source-selector">
-    <h2 class="mb-6 text-2xl font-bold text-foreground">Create a Course</h2>
+    <h2 class="mb-6 text-2xl font-bold text-foreground">Create a Void</h2>
 
     <div
       v-if="showBacklogWarning"
@@ -140,7 +140,7 @@ function handleSubmit() {
       <div>
         <p class="text-sm text-amber-200">
           You have {{ backlogCount }} items due for review.
-          Consider completing reviews before starting new courses.
+          Consider completing reviews before starting new Voids.
         </p>
         <NuxtLink
           to="/app/learn/review"
@@ -198,7 +198,7 @@ function handleSubmit() {
 
     <div v-else class="mb-6 rounded-lg border border-dashed border-border px-4 py-3">
       <p class="text-sm text-muted-foreground">
-        No documents in this folder. The course will be generated from web sources.
+        No documents in this folder. The Void will be generated from web sources.
       </p>
     </div>
 

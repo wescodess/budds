@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 import { convexTest } from 'convex-test'
-import { describe, expect, test, vi } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import schema from './schema'
 
@@ -672,4 +672,125 @@ describe('calendarEvents', () => {
     expect(starts).toHaveLength(2)
     expect(starts[1]! - starts[0]!).toBeGreaterThanOrEqual(25 * 60_000)
   })
+})
+
+describe('owned V1 Calendar destinations', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
+  })
+
+  async function setupWriter(writer: 'sync' | 'missed') {
+    const t = convexTest(schema, modules)
+    const { folderId, courseId, connectionId } = await setupCalendarAndCourse(t)
+    const asAlice = t.withIdentity(USER_A)
+    await asAlice.mutation(api.courses.finalizeOutline, {
+      courseId,
+      outlineSections: [{ title: 'First section', description: 'First', knowledgeType: 'factual', order: 0 }],
+      sourceConfidence: { docCount: 0, webPercent: 100 },
+      totalSectionCount: 1,
+    })
+    await asAlice.mutation(api.calendarConnections.updatePreferences, {
+      morningStart: '09:00', eveningEnd: '17:00', sessionMinutes: 25,
+      preferredDays: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'],
+    })
+    const oldDescription = `Already issued: https://budds-ci.invalid/app/learn/${courseId}`
+    const oldEventId = writer === 'missed' ? await t.mutation(internal.calendarEvents.create, {
+      userId: USER_A.tokenIdentifier, calendarConnectionId: connectionId,
+      calendarEventId: 'already-issued', courseId, scheduledAt: Date.now() - 60_000,
+      sessionType: 'review', description: oldDescription,
+    }) : null
+    const runWriter = () => writer === 'sync'
+      ? asAlice.action(api.calendarEvents.syncCalendar, {})
+      : t.action(internal.calendarEvents.checkMissedSessionsForUser, {
+          userId: USER_A.tokenIdentifier, status: 'scheduled', cursor: null,
+        })
+    return { t, asAlice, folderId, courseId, connectionId, oldEventId, oldDescription, runWriter }
+  }
+
+  test.each(['sync', 'missed'] as const)('%s writes the owned folder overview and preserves issued descriptions and dedupe', async (writer) => {
+    vi.stubEnv('SITE_URL', undefined)
+    vi.stubEnv('NUXT_PUBLIC_SITE_URL', 'https://budds-ci.invalid')
+    const { t, asAlice, folderId, courseId, oldEventId, oldDescription, runWriter } = await setupWriter(writer)
+    const descriptions: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      descriptions.push(JSON.parse(String(init.body)).description)
+      return new Response('{}', { status: 200 })
+    }))
+    await runWriter()
+    await runWriter()
+    expect(descriptions).toHaveLength(1)
+    expect(descriptions[0]).toContain(`https://budds-ci.invalid/app/folders/${folderId}/learn/${courseId}`)
+    expect(descriptions[0]).not.toContain(`/app/learn/${courseId}`)
+    const events = await asAlice.query(api.calendarEvents.listByUser, {})
+    expect(events.find(event => event._id !== oldEventId)?.description).toBe(descriptions[0])
+    if (oldEventId) {
+      expect(events.find(event => event._id === oldEventId)?.description).toBe(oldDescription)
+    }
+    expect((await asAlice.query(api.courses.listByFolder, { folderId })).map(course => course._id)).toContain(courseId)
+    expect(await t.query(internal.courses.getCalendarLinkTarget, { userId: USER_A.tokenIdentifier, courseId }))
+      .toEqual({ courseId, folderId, title: 'Test Course' })
+  })
+
+  test.each(['sync', 'missed'] as const)('%s names the course Void in new descriptions without rewriting issued ones', async (writer) => {
+    const { asAlice, oldEventId, oldDescription, runWriter } = await setupWriter(writer)
+    const descriptions: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      descriptions.push(JSON.parse(String(init.body)).description)
+      return new Response('{}', { status: 200 })
+    }))
+    await runWriter()
+    expect(descriptions).toHaveLength(1)
+    expect(descriptions[0]!.split('\n')[1]).toBe('Void: Test Course')
+    expect(descriptions[0]).not.toContain('Course:')
+    const events = await asAlice.query(api.calendarEvents.listByUser, {})
+    if (oldEventId) expect(events.find(event => event._id === oldEventId)?.description).toBe(oldDescription)
+  })
+
+  test.each(['sync', 'missed'] as const)('%s omits the link when no site origin is configured', async (writer) => {
+    vi.stubEnv('SITE_URL', undefined)
+    vi.stubEnv('NUXT_PUBLIC_SITE_URL', undefined)
+    const { runWriter } = await setupWriter(writer)
+    const descriptions: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      descriptions.push(JSON.parse(String(init.body)).description)
+      return new Response('{}', { status: 200 })
+    }))
+    await runWriter()
+    expect(descriptions).toHaveLength(1)
+    expect(descriptions[0]).not.toContain('/app/')
+  })
+
+  for (const writer of ['sync', 'missed'] as const) {
+    test.each(['foreign folder', 'missing folder', 'foreign course', 'missing course', 'deleting course'] as const)(
+      `${writer} skips %s before reservation, cleanup or provider creation`,
+      async (unavailable) => {
+        const { t, asAlice, folderId, courseId, connectionId, oldEventId, oldDescription, runWriter } = await setupWriter(writer)
+        await t.run(async (ctx) => {
+          if (unavailable === 'foreign folder') await ctx.db.patch(folderId, { userId: USER_B.tokenIdentifier })
+          if (unavailable === 'missing folder') await ctx.db.delete(folderId)
+          if (unavailable === 'foreign course') await ctx.db.patch(courseId, { userId: USER_B.tokenIdentifier })
+          if (unavailable === 'missing course') await ctx.db.delete(courseId)
+          if (unavailable === 'deleting course') await ctx.db.patch(courseId, { status: 'deleting' })
+        })
+        const fetchMock = vi.fn()
+        vi.stubGlobal('fetch', fetchMock)
+        const connectionBefore = await t.query(internal.calendarConnections.getConnectionByUser, { userId: USER_A.tokenIdentifier })
+        const result = await runWriter()
+        if (writer === 'sync' && (unavailable === 'foreign folder' || unavailable === 'missing folder')) {
+          expect(result).toMatchObject({ created: 0, failures: 1 })
+        }
+        expect(await t.query(internal.courses.getCalendarLinkTarget, { userId: USER_A.tokenIdentifier, courseId })).toBeNull()
+        expect(fetchMock).not.toHaveBeenCalled()
+        const connectionAfter = await t.query(internal.calendarConnections.getConnectionByUser, { userId: USER_A.tokenIdentifier })
+        expect(connectionAfter?.calendarSlotWatermark).toBe(connectionBefore?.calendarSlotWatermark)
+        expect(await t.run(async ctx => ctx.db.query('calendarEventCleanupJobs').collect())).toEqual([])
+        const events = await asAlice.query(api.calendarEvents.listByUser, {})
+        expect(events).toHaveLength(oldEventId ? 1 : 0)
+        if (oldEventId) expect(events[0]).toMatchObject({ _id: oldEventId, status: 'scheduled', description: oldDescription })
+        expect(connectionAfter?._id).toBe(connectionId)
+      },
+    )
+  }
+
 })

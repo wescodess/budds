@@ -15,21 +15,41 @@ providers remain unchanged.
 
 ## Route and ownership contract
 
-The adaptive route is the static-segment Nuxt page
-`app/pages/app/learn/thread/[threadId].vue`, URL `/app/learn/thread/:threadId`.
-`app/pages/app/learn/index.vue` owns Home and creates/opens threads. The
-existing `app/pages/app/learn/[learningVoidId]/index.vue` and its
-`calibration.vue` and `sessions/[sessionId].vue` children remain the V2 mission
-routes. A thread ID is never accepted by the V2 page and a learning-void ID is
-never accepted by the adaptive page. Static `thread/` precedence is verified
-by a route test; unknown IDs return the existing not-found/denied state.
+The superseding [Phase B rename resolution](https://github.com/wescodess/budds/issues/358#issuecomment-6651400245)
+and [V1 link resolution](https://github.com/wescodess/budds/issues/378#issuecomment-6652055956)
+set the current route and naming contract. The learner-facing container is a
+Void; Learning Thread remains the internal adaptive record in `CONTEXT.md`.
 
-The folder V1 routes under `app/pages/app/folders/[id]/learn/**` remain first
-class. Adaptive Home may link to them only through an explicit legacy handoff.
-Feature-off, denied, stale, or rollback navigation returns the named V2 route
-(`/app/learn/:learningVoidId`) or the folder V1 route, never a silent route
-rewrite. Browser back/forward restores the URL-selected thread/activity;
-refresh rehydrates from Convex and never treats local state as authority.
+The adaptive detail page is `app/pages/app/learn/void/[threadId].vue`, URL
+`/app/learn/void/:threadId`, named `app-learn-void-threadId`. Home remains
+`app/pages/app/learn/index.vue`. The old `/app/learn/thread/:threadId` entry
+retains `app-learn-thread-threadId` as a redirect-only route, before detail
+subscriptions or commands. New adaptive links use `learnVoidRoute`; legacy
+translation changes only the path prefix. SPA redirects preserve push/replace
+intent, encoded ID identity, repeated/empty/unknown query values and fragments.
+Server GET/HEAD redirects return `302` and `Cache-Control: no-store`, omitting
+the fragment component. Both static entries take precedence over V2's parameter.
+
+The existing `app/pages/app/learn/[learningVoidId]/index.vue`, `calibration.vue`
+and `sessions/[sessionId].vue` remain V2-only. The folder V1 routes under
+`app/pages/app/folders/[id]/learn/**` remain first class. New V1 Calendar and
+Start Learning destinations use `buildV1CoursePath({ folderId, courseId })` with
+the folder resolved from the owned course, opening its existing overview.
+Already-issued ambiguous `/app/learn/:courseId` links remain unchanged; no
+route probes multiple tables. Wrong-table IDs retain the existing unavailable
+or denied treatment. Failed-link recovery UI and signed-out destination
+restoration (#377) remain owner decisions, as does coexistence/picker wording
+(#399).
+
+Both adaptive entries remain installed through cohort rollback. If adaptive
+access is revoked while V2 remains allowed, the server-selected fallback stays
+`app-learn` at `/app/learn?legacy=v2`; if V2/product/auth access is unavailable,
+it stays `index` at `/`. V2-backed recovery keeps its pinned V2 destination;
+standalone recovery returns Home. A rollback artifact lacking the new adaptive
+entry is incompatible after new links have been published. Browser Back/Forward
+restores the URL-selected activity without a second legacy history entry;
+refresh rehydrates from Convex, and activity navigation preserves unrelated
+query/fragment state and existing response draft scopes.
 
 Drafts are stored in `localStorage` under `budds.learn.adaptive-draft.v1` as
 bounded, non-sensitive composer text/context metadata only. A draft is keyed by

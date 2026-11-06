@@ -2,6 +2,7 @@
 import { useLearnV2Journey } from '~/composables/useLearnV2Journey'
 import { useLearnAdaptiveAccess } from '~/composables/useLearnAdaptiveAccess'
 import { LEARN_ADAPTIVE_SURFACE } from '~/utils/learn-adaptive-surface'
+import { learnVoidRoute } from '~/utils/learn-void-routes'
 import { getErrorMessage } from '~~/shared/errors'
 import { api } from '#convex/api'
 import type { NeedFirstDraftInput } from '~~/shared/learn-adaptive-draft'
@@ -95,7 +96,7 @@ async function reconcileClarificationConflict(threadId: string, ownerId: string,
     if (initialDecision.value?.threadId === threadId && initialDecision.value.revision === projection.revision) return false
     initialDecision.value = { threadId, originalNeed: projection.originalNeed, intent: projection.intent, revision: projection.revision, decision: projection }
     clarificationRequestKey.value = null
-    clarificationError.value = 'The thread changed in another session. Your original answer is retained; retry to apply it to the current revision.'
+    clarificationError.value = 'The Void changed in another session. Your original answer is retained; retry to apply it to the current revision.'
     return true
   }
   authorityConflict.value = { projection, keptLocal: false }
@@ -159,7 +160,7 @@ watch(() => userQuery.data.value?._id ? String(userQuery.data.value._id) : null,
 function openMission(id: string) { void router.push(`/app/learn/${id}`) }
 function resumeDraft(id: string) { void router.push(`/app/learn/create?draftId=${encodeURIComponent(id)}`) }
 function openDiagnosticThread(threadId: string) {
-  void router.push(`/app/learn/thread/${encodeURIComponent(threadId)}`)
+  void router.push(learnVoidRoute(threadId))
 }
 watch(() => readySession.value && `${readySession.value.id}:${readySession.value.revision}`, (value, previous) => { if (value !== previous) attachKey.value = null })
 async function continueReadySession() {
@@ -173,8 +174,8 @@ async function continueReadySession() {
   try {
     const result = await attachReadyMutation.mutate({ studySessionId: selected.id as never, expectedSessionRevision: selected.revision, idempotencyKey: attachKey.value }) as { kind: string, threadId?: string }
     if (ownerEpoch.value !== epoch || currentOwnerId.value !== ownerId || readySession.value?.id !== selected.id || readySession.value.revision !== selected.revision) return
-    if (result.kind !== 'attached' || !result.threadId) throw new Error('Could not open the ready learning thread.')
-    await router.push(`/app/learn/thread/${result.threadId}`)
+    if (result.kind !== 'attached' || !result.threadId) throw new Error('Could not open the ready Void.')
+    await router.push(learnVoidRoute(result.threadId))
   }
   catch (cause) { if (ownerEpoch.value === epoch && currentOwnerId.value === ownerId) attachError.value = getErrorMessage(cause, 'Could not open the ready session. Try again.') }
   finally { if (ownerEpoch.value === epoch && currentOwnerId.value === ownerId) attachBusy.value = false }
@@ -263,7 +264,7 @@ async function selectThreadIntent(intent: Intent) {
       if (!isCurrentDispatch()) return
       intentRequestKey.value = null
       pendingIntent.value = null
-      intentError.value = 'The thread changed in another session. Your selected intent is still here. Retry to save it.'
+      intentError.value = 'The Void changed in another session. Your selected intent is still here. Retry to save it.'
       return
     }
     if (result.kind !== 'ok') throw new Error('Could not save the selected intent.')
@@ -272,7 +273,7 @@ async function selectThreadIntent(intent: Intent) {
     intentRequestKey.value = null
     pendingIntent.value = null
     if (authoritative.intent !== intent) {
-      intentError.value = 'The thread changed in another session. Your selected intent is still here. Retry to save it.'
+      intentError.value = 'The Void changed in another session. Your selected intent is still here. Retry to save it.'
       return
     }
     intentSaved.value = true
@@ -293,13 +294,13 @@ async function selectThreadIntent(intent: Intent) {
           <h2 class="font-dm-sans text-lg font-semibold">Ready to continue</h2>
           <p class="text-sm text-muted-foreground">{{ readySession.title }}</p>
           <p v-if="attachError" role="alert" data-testid="learn-adaptive-attach-error" class="text-sm text-destructive">{{ attachError }}</p>
-          <UiButton type="button" class="min-h-11 self-start" data-testid="learn-adaptive-continue-ready" :disabled="attachBusy" @click="continueReadySession">{{ attachBusy ? 'Opening…' : 'Continue in your learning thread' }}</UiButton>
+          <UiButton type="button" class="min-h-11 self-start" data-testid="learn-adaptive-continue-ready" :disabled="attachBusy" @click="continueReadySession">{{ attachBusy ? 'Opening…' : 'Continue in your Void' }}</UiButton>
         </UiCard>
       </section>
       <template v-if="initialDecision">
         <LearnAdaptiveInitialClarification :original-need="initialDecision.originalNeed" :intent="initialDecision.intent" :decision="initialDecision.decision" :busy="clarificationBusy || intentBusy" :intent-saved="intentSaved" :server-error="clarificationError" :intent-error="intentError" :answer-storage-key="currentOwnerId ? decisionAnswerKey(currentOwnerId, initialDecision.threadId) : undefined" :locked-resolution-kind="clarificationResolution?.kind" :authority-conflict="authorityConflict ? { keptLocal: authorityConflict.keptLocal } : null" @resolve="resolveInitialClarification" @select-intent="selectThreadIntent" @use-authority="useAuthoritativeClarification" @keep-local="keepLocalClarification" />
         <div v-if="initialDecision.decision.status !== 'pending'" class="mx-auto max-w-3xl px-4 pb-6 sm:px-6">
-          <UiButton type="button" class="min-h-11" data-testid="learn-adaptive-open-diagnostic" @click="openDiagnosticThread(initialDecision.threadId)">Open your learning thread</UiButton>
+          <UiButton type="button" class="min-h-11" data-testid="learn-adaptive-open-diagnostic" @click="openDiagnosticThread(initialDecision.threadId)">Open your Void</UiButton>
         </div>
       </template>
       <section v-else-if="decisionHydrating || decisionLoadError" class="mx-auto max-w-2xl p-6" aria-live="polite" data-testid="learn-clarification-restore"><p>{{ decisionHydrating ? 'Restoring your saved clarification…' : decisionLoadError }}</p><UiButton v-if="decisionLoadError" type="button" class="mt-3 min-h-11" data-testid="learn-clarification-restore-retry" @click="restoreInitialDecision">Retry</UiButton></section>
@@ -316,8 +317,8 @@ async function selectThreadIntent(intent: Intent) {
         <NuxtLink to="/app/learn/review" data-testid="learn-legacy-v2-review" class="min-h-11 content-center text-[var(--learn-action)] underline">Open review</NuxtLink>
         <NuxtLink to="/app/learn/create" data-testid="learn-legacy-v2-create" class="min-h-11 content-center text-[var(--learn-action)] underline">Create a V2 learning plan</NuxtLink>
       </div>
-      <p class="mt-3 text-sm text-muted-foreground">Classic courses remain in each folder's Learn tab.</p>
-      <NuxtLink to="/" data-testid="learn-legacy-v1-home" class="min-h-11 content-center text-sm text-[var(--learn-action)] underline">Open your folders for classic courses</NuxtLink>
+      <p class="mt-3 text-sm text-muted-foreground">Classic Voids remain in each folder's Learn tab.</p>
+      <NuxtLink to="/" data-testid="learn-legacy-v1-home" class="min-h-11 content-center text-sm text-[var(--learn-action)] underline">Open your folders for classic Voids</NuxtLink>
     </nav>
   </div>
 </template>

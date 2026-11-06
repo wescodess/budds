@@ -40,7 +40,7 @@ describe('SectionVoidTopBar', () => {
   it('emits back event when back button clicked', async () => {
     const Comp = await import(componentPath)
     const wrapper = await mountSuspended(Comp.default, { props: baseProps })
-    const backBtn = wrapper.find('[aria-label="Back to course"]')
+    const backBtn = wrapper.find('[aria-label="Back to Void"]')
     expect(backBtn.exists()).toBe(true)
     await backBtn.trigger('click')
     expect(wrapper.emitted('back')).toHaveLength(1)

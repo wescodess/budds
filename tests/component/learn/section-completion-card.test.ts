@@ -67,12 +67,12 @@ describe('SectionCompletionCard', () => {
     expect(btn.exists()).toBe(false)
   })
 
-  it('shows Course Complete title for last section', async () => {
+  it('shows Void Complete title for last section', async () => {
     const Comp = await import(componentPath)
     const wrapper = await mountSuspended(Comp.default, {
       props: { ...baseProps, isLastSection: true, hasNextSection: false },
     })
-    expect(wrapper.text()).toContain('Course Complete!')
+    expect(wrapper.text()).toContain('Void Complete!')
   })
 
   it('shows Section Complete title for non-last section', async () => {
@@ -86,7 +86,7 @@ describe('SectionCompletionCard', () => {
     const wrapper = await mountSuspended(Comp.default, { props: baseProps })
     const btn = wrapper.find('[data-testid="back-button"]')
     expect(btn.exists()).toBe(true)
-    expect(btn.text()).toContain('Back to Course Overview')
+    expect(btn.text()).toContain('Back to Void Overview')
   })
 
   it('emits continueToNext on continue click', async () => {

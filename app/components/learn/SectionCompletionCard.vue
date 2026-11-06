@@ -60,7 +60,7 @@ const strokeColor = computed(() => {
     <div class="mb-6 flex flex-col items-center">
       <Trophy class="mb-3 h-8 w-8 text-amber-500" />
       <h2 class="text-lg font-semibold text-stone-100">
-        {{ isLastSection ? 'Course Complete!' : 'Section Complete' }}
+        {{ isLastSection ? 'Void Complete!' : 'Section Complete' }}
       </h2>
     </div>
 
@@ -148,7 +148,7 @@ const strokeColor = computed(() => {
         @click="emit('backToCourse')"
       >
         <ChevronLeft class="h-4 w-4" />
-        Back to Course Overview
+        Back to Void Overview
       </button>
     </div>
   </div>

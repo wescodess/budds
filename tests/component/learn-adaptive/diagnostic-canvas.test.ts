@@ -234,4 +234,14 @@ describe('standalone diagnostic Canvas', () => {
     await vi.waitFor(() => expect(submit).toHaveBeenCalledTimes(2))
     expect(submit.mock.calls[0]![0].idempotencyKey).not.toBe(submit.mock.calls[1]![0].idempotencyKey)
   })
+
+  it('names its container Void in the header and the conflict recovery', async () => {
+    continueDraft.mockResolvedValueOnce({ kind: 'conflict' })
+    const Comp = await import('~/components/learn-adaptive/DiagnosticCanvas.vue')
+    const wrapper = await mountSuspended(Comp.default, { props: { canvas: { ...base, status: 'draft', activity: null } } })
+    expect(wrapper.text()).toContain('Void · refresh')
+    await wrapper.get('[data-testid="learn-diagnostic-start"]').trigger('click')
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="learn-diagnostic-error"]').text()).toBe('This Void changed. Reload it to continue.'))
+    expect(wrapper.text()).not.toMatch(/\b(thread|mission)s?\b/i)
+  })
 })

@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { getErrorMessage } from '~~/shared/errors'
+import { buildV1CoursePath } from '~~/shared/learn-v1-routes'
 import type { Id } from '../../../convex/_generated/dataModel'
 import { api } from '#convex/api'
 import { toast } from 'vue-sonner'
 import { createSsrMutationStub } from '~/utils/convexSsrMutation'
+
+const START_FAILED_MESSAGE = 'Failed to start Void'
 
 const props = defineProps<{
   courseId: Id<'courses'>
@@ -21,30 +24,27 @@ async function handleStart() {
   loading.value = true
   try {
     const result = await startCourseMutation.mutate({ courseId: props.courseId })
-    const res = result as unknown as { courseId: string; sectionId: string; taskId: string } | string
-    const courseId = typeof res === 'string' ? res : res?.courseId
 
-    if (courseId) {
-      if (typeof res === 'object' && res.sectionId && res.taskId) {
-        $fetch('/api/course/generate-section', {
-          method: 'POST',
-          body: {
-            courseId: props.courseId,
-            sectionId: res.sectionId,
-            taskId: res.taskId,
-          },
-        }).catch((err: unknown) => {
-          console.error('[StartLearningButton] Section generation failed:', getErrorMessage(err, 'Unknown error'))
-        })
-      }
+    if (result?.courseId && result.sectionId && result.taskId) {
+      $fetch('/api/course/generate-section', {
+        method: 'POST',
+        body: {
+          courseId: props.courseId,
+          sectionId: result.sectionId,
+          taskId: result.taskId,
+        },
+      }).catch((err: unknown) => {
+        console.error('[StartLearningButton] Section generation failed:', getErrorMessage(err, 'Unknown error'))
+      })
+    }
 
-      const target = props.folderId
-        ? `/app/folders/${props.folderId}/learn/${courseId}`
-        : `/app/learn/${courseId}`
-      await navigateTo(target)
+    if (result?.courseId && result.folderId) {
+      await navigateTo(buildV1CoursePath({ folderId: result.folderId, courseId: result.courseId }))
+    } else {
+      toast.error(START_FAILED_MESSAGE)
     }
   } catch (e) {
-    toast.error(getErrorMessage(e, 'Failed to start course'))
+    toast.error(getErrorMessage(e, START_FAILED_MESSAGE))
   } finally {
     loading.value = false
   }

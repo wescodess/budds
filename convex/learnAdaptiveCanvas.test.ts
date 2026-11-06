@@ -225,7 +225,7 @@ describe('ready V2 adaptive Canvas', () => {
 
     await t.run(ctx => ctx.db.patch(ids.folderId, { userId: OTHER.tokenIdentifier }))
     expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'ready' })
-    expect(await read()).toMatchObject({ thread: { evidenceState: 'unavailable' }, nextAction: { kind: 'recover', activityId: attached.activityId } })
+    expect(await read()).toMatchObject({ thread: { evidenceState: 'unavailable' }, nextAction: { kind: 'recover', label: 'Review your Void', activityId: attached.activityId } })
 
     await t.run(ctx => ctx.db.patch(ids.folderId, { userId: OWNER.tokenIdentifier }))
     expect(await read()).toMatchObject({ thread: { evidenceState: 'ready' }, nextAction: { kind: 'continue' } })
@@ -532,8 +532,16 @@ describe('ready V2 adaptive Canvas', () => {
       expect(await owner.query(api.learnAdaptive.getThread, { threadId: attached.threadId })).toMatchObject({
         thread: { authorityKind: 'v2_mission', learningVoidId: ids.learningVoidId, evidenceState: 'ready' },
         completion: { status: 'passed', basis: 'server_scored_representative_task', activityId: attached.activityId },
-        nextAction: { kind: 'open_v2_mission', reasonCode: 'representative_pass', activityId: attached.activityId },
+        nextAction: { kind: 'open_v2_mission', label: 'Choose your next move in your Void', reasonCode: 'representative_pass', activityId: attached.activityId },
       })
+      const persistedAction = { kind: 'open_v2_mission', reasonCode: 'representative_pass', activityId: attached.activityId }
+      const persistLabel = (label: string) => t.run(ctx => ctx.db.patch(attached.threadId, { nextAction: { ...persistedAction, label } }))
+      await persistLabel('Choose your next move in your learning mission')
+      expect((await owner.query(api.learnAdaptive.getThread, { threadId: attached.threadId }))?.nextAction).toEqual({ ...persistedAction, label: 'Choose your next move in your Void' })
+      expect((await t.run(ctx => ctx.db.get(attached.threadId)))?.nextAction?.label).toBe('Choose your next move in your learning mission')
+      await persistLabel('Review your learning mission')
+      expect((await owner.query(api.learnAdaptive.getThread, { threadId: attached.threadId }))?.nextAction).toEqual({ ...persistedAction, label: 'Review your learning mission' })
+      await persistLabel('Choose your next move in your Void')
       expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'feedback' })
       await t.run(ctx => ctx.db.patch(ids.studySessionId, { startedSessionContentRevision: 2 }))
       expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'blocked' })

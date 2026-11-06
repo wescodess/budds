@@ -59,9 +59,9 @@ it('renders persisted reflection content and bounded keyboard actions without a 
   expect(region.text()).toContain('does not record mastery')
   expect(wrapper.get('[data-testid="learn-reflection-accept"]').classes()).toContain('min-h-11')
   expect(wrapper.get('[data-testid="learn-reflection-override"]').element).toBeInstanceOf(HTMLButtonElement)
-  expect(wrapper.get('[data-testid="learn-reflection-end"]').text()).toContain('End this thread')
+  expect(wrapper.get('[data-testid="learn-reflection-end"]').text()).toContain('End this Void')
   const actions = [...region.element.querySelectorAll('button')]
-  expect(actions.map(button => button.textContent?.trim())).toEqual(['Accept next move', 'Choose another', 'End this thread'])
+  expect(actions.map(button => button.textContent?.trim())).toEqual(['Accept next move', 'Choose another', 'End this Void'])
   expect(actions.every(button => button.className.includes('min-h-11'))).toBe(true)
   expect(actions.every(button => button.className.includes('focus-visible:ring-2'))).toBe(true)
   expect(actions.every(button => button.className.includes('w-full'))).toBe(true)
@@ -87,7 +87,7 @@ it('submits only the selected closed decision and waits for authoritative comple
 
 it.each([
   ['overridden', 'You chose a different next move.'],
-  ['ended', 'Thread ended.'],
+  ['ended', 'Void ended.'],
 ] as const)('renders the authoritative %s completed state with a text label', async (outcome, label) => {
   const Component = await import('~/components/learn-adaptive/ReflectionNextMove.vue')
   const completed = { ...canvas, status: 'completed', decision: { outcome, nextMove: 'Try one independent example.', decidedAt: 2 },

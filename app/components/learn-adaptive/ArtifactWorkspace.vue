@@ -202,7 +202,7 @@ async function save(status: 'draft' | 'saved') {
     const result = await saveMutation.mutate({ threadId: props.canvas.thread.id as never, activityId: props.canvas.activity.id,
       artifactId: snapshot.artifactId as never, artifactKind: snapshot.artifactKind,
       title: snapshot.title, summary: snapshot.summary, status: snapshot.status, expectedRevision: snapshot.expectedRevision, idempotencyKey: snapshot.idempotencyKey }) as { kind: string, revision?: number, value?: { artifactId?: string } }
-    if (result.kind !== 'ok') { clearStored(pendingCreateKey.value); saveKey.value = null; pendingSave.value = null; saveUnconfirmed.value = false; error.value = result.kind === 'conflict' ? 'This thread changed. Refresh before saving again; your draft remains here.' : 'The artifact could not be saved. Your draft remains here.'; return }
+    if (result.kind !== 'ok') { clearStored(pendingCreateKey.value); saveKey.value = null; pendingSave.value = null; saveUnconfirmed.value = false; error.value = result.kind === 'conflict' ? 'This Void changed. Refresh before saving again; your draft remains here.' : 'The artifact could not be saved. Your draft remains here.'; return }
     const returnedArtifactId = result.value?.artifactId ?? snapshot.artifactId
     if (!returnedArtifactId) {
       pendingSave.value = snapshot

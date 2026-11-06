@@ -39,6 +39,7 @@ describe('SourceSelector', () => {
     })
     expect(wrapper.find('[data-testid="topic-input"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="source-selector"]').exists()).toBe(true)
+    expect(wrapper.find('h2').text()).toBe('Create a Void')
     expect(wrapper.find('[data-testid="directory-picker"]').exists()).toBe(true)
   })
 
@@ -49,6 +50,7 @@ describe('SourceSelector', () => {
       props: { folderId: 'folder_1' as any },
     })
     expect(wrapper.text()).toContain('No documents')
+    expect(wrapper.text()).toContain('The Void will be generated from web sources.')
     expect(wrapper.text()).toContain('web sources')
     expect(wrapper.find('[data-testid="directory-picker"]').exists()).toBe(false)
   })
@@ -155,6 +157,7 @@ describe('SourceSelector', () => {
     })
     expect(wrapper.find('[data-testid="backlog-warning"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('120 items due for review')
+    expect(wrapper.text()).toContain('Consider completing reviews before starting new Voids.')
   })
 
   it('does not show backlog warning when due count is within threshold', async () => {

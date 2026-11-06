@@ -199,7 +199,7 @@ function onDragEnd() {
     </div>
 
     <div class="mb-6 flex items-center justify-between">
-      <h2 class="text-2xl font-bold text-stone-100">Course Outline</h2>
+      <h2 class="text-2xl font-bold text-stone-100">Void Outline</h2>
       <span
         class="rounded-md bg-stone-800 px-2.5 py-1 text-xs font-medium text-stone-400"
         data-testid="section-count-badge"
