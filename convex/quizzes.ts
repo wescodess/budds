@@ -1,6 +1,5 @@
 import { v } from 'convex/values'
 import { mutation, query, internalMutation } from './_generated/server'
-import { internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import type { MutationCtx, QueryCtx } from './_generated/server'
 import { getOptionalAuthUserId, requireAuth } from './lib/auth'
@@ -12,7 +11,6 @@ import { getQuizAttemptAnswers, getQuizAttemptAssessments, getQuizGradingState, 
 const MAX_QUIZ_QUESTIONS = 200
 const MAX_QUIZZES_PER_FOLDER = 100
 const MAX_ATTEMPTS_PER_QUIZ = 100
-const DELETE_BATCH_SIZE = 50
 
 const questionTypeValidator = v.union(
   v.literal('multiple-choice'),

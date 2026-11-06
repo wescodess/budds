@@ -63,6 +63,7 @@ const TEST_EXPORT_COLLECTIONS = [
   'quizzes',
   'quizQuestions',
   'quizAttempts',
+  'quizAnswerAssessments',
   'flashcardSets',
   'flashcards',
   'flashcardRooms',
@@ -596,29 +597,15 @@ describe('dataExport paginated queries', () => {
       quizId: bQuiz.quizId,
       answers: [{ questionId: bQs[0]!._id, response: 'A1' }],
     })
-    await t.run(async (ctx) => {
-      await ctx.db.insert('attemptAnswers', {
-        attemptId: aAttempt.attemptId,
-        questionId: aQs[0]!._id,
-        userAnswer: 'A1',
-        isCorrect: true,
-        answeredAt: Date.now(),
-      })
-      await ctx.db.insert('attemptAnswers', {
-        attemptId: bAttempt.attemptId,
-        questionId: bQs[0]!._id,
-        userAnswer: 'A1',
-        isCorrect: true,
-        answeredAt: Date.now(),
-      })
-    })
-
     const result = await collectUserDataForTest(a.asUser)
 
     expect(result.quizAttempts).toHaveLength(1)
     expect(result.quizAttempts.every((a: any) => a.userId === USER_A.tokenIdentifier)).toBe(true)
     expect(result.attemptAnswers).toHaveLength(1)
     expect(result.attemptAnswers[0]!.attemptId).toBe(aAttempt.attemptId)
+    expect(result.attemptAnswers.some(answer => answer.attemptId === bAttempt.attemptId)).toBe(false)
+    expect(result.quizAnswerAssessments).toHaveLength(1)
+    expect(result.quizAnswerAssessments[0]!.userId).toBe(USER_A.tokenIdentifier)
   })
 
   test('exports calendar metadata for the caller without OAuth credentials', async () => {

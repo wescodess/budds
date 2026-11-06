@@ -16,7 +16,7 @@ Keep the additive schema fields/indexes and the grading functions deployed until
 
 ## Validation boundary
 
-Local tests use a mocked gateway and synthetic answers. They establish request construction, key validation, score arithmetic, retry limits, leases and deletion fencing. The [T5 credentialed smoke results](quiz-grading-smoke-results.md) record the real run and authorized spaced retries on 2026-11-05. A single-answer probe graded a paraphrase with the requested `:free` model ID, schema-compliant output and reported cost zero under the unchanged restrictions, alongside repeated HTTP 429 responses. Its feedback exceeded the one-sentence instruction. See the report for batch outcomes, latency and the exact number of evaluable fixtures; unavailable responses establish no grading-quality or injection-resistance result. Actual upstream retention behavior and reliable batch availability remain unproven. This small smoke test does not support production activation.
+Local tests use a mocked gateway and synthetic answers. They establish request construction, key validation, score arithmetic, retry limits, leases and deletion fencing. These checks do not establish live provider availability, grading quality, injection resistance or upstream retention behavior. Production release requires the repository checks and review gate at the final release commit.
 
 ## 2026-11-05: bounded inputs, admission and prompt revision
 
@@ -26,4 +26,4 @@ Convex admits at most three new attempts requiring model work per learner in eac
 
 The current prompt is `quiz-rubric-judge.v2`. Ordinary omissions, irrelevance and explicitly wrong content are `not_met`. `uncertain` is reserved for a substantive answer or evidence that is genuinely ambiguous, conflicting or cannot be judged. Credit arithmetic is unchanged: met ideas still count, and a learner decision replaces credit with 0, 0.5 or 1. Offline fixture expectations now follow this policy and retain the genuinely ambiguous gas-exchange example. Feedback containing internal criterion keys or verdict codes uses the neutral fallback sentence.
 
-The credentialed T5 observations and smoke-results report describe historical **v1** behavior and remain unchanged. T5 is **HALTED at 5/8 requests**. No v2 prompt or revised fixture expectations have been tested live, and no further provider request is authorized. Offline regression tests and script guards establish implementation behavior only; grading quality and injection resistance remain unproven, and production activation remains off.
+The earlier credentialed smoke observations describe historical v1 behavior. The v2 prompt and revised fixture expectations have not been tested live. Offline regression tests and script guards establish implementation behavior only. Activation remains off by default and is controlled on Convex after release.

@@ -105,6 +105,7 @@ describe('GET /api/export/me', () => {
       ],
       conversations: [{ _id: 'c1', title: 'chat', userId: 'tok|user1', folderId: 'f1' }],
       messages: [{ _id: 'm1', role: 'user', content: 'hi', userId: 'tok|user1', conversationId: 'c1' }],
+      quizAnswerAssessments: [{ _id: 'qa1', userId: 'tok|user1', status: 'available', label: 'fully_correct' }],
       learnFolderSourceManifests: [{ _id: 'fm1', status: 'frozen', userId: 'tok|user1' }],
       learnFolderSourceManifestFolders: [{ _id: 'ff1', manifestId: 'fm1', userId: 'tok|user1' }],
       learnFolderSourceManifestEntries: [{ _id: 'fe1', manifestId: 'fm1', userId: 'tok|user1' }],
@@ -132,6 +133,9 @@ describe('GET /api/export/me', () => {
     expect(zipBytes.byteLength).toBeGreaterThan(100)
 
     const entries = unzipSync(zipBytes)
+    expect(JSON.parse(strFromU8(entries['quizAnswerAssessments.json']!))).toEqual([
+      { _id: 'qa1', userId: 'tok|user1', status: 'available', label: 'fully_correct' },
+    ])
     expect(Object.keys(entries).sort()).toEqual(
       [
         'attemptAnswers.json',
@@ -202,6 +206,7 @@ describe('GET /api/export/me', () => {
         'masteryRecords.json',
         'messages.json',
         'quizAttempts.json',
+        'quizAnswerAssessments.json',
         'quizQuestions.json',
         'quizzes.json',
         'reminderPolicies.json',

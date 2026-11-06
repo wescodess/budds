@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 import { convexTest } from 'convex-test'
 import { describe, expect, test } from 'vitest'
-import { api } from './_generated/api'
+import { api, internal } from './_generated/api'
 import schema from './schema'
 
 const modules = import.meta.glob('./**/*.ts')
@@ -357,7 +357,11 @@ describe('quizzes.submitAttempt', () => {
       ctx.db.query('quizAttempts').withIndex('by_quizId', (q) => q.eq('quizId', quizId)).collect(),
     )
     expect(attempts).toHaveLength(1)
-    expect(attempts[0]!.answers!.every((a) => a.isCorrect)).toBe(true)
+    const storedAnswers = await t.run(ctx => ctx.db.query('attemptAnswers')
+      .withIndex('by_attemptId', q => q.eq('attemptId', attempts[0]!._id)).collect())
+    expect(storedAnswers).toHaveLength(2)
+    expect(storedAnswers.every(answer => answer.isCorrect)).toBe(true)
+    expect((await asA.query(api.quizzes.listAttempts, { quizId }))[0]!.answers?.every(answer => answer.isCorrect)).toBe(true)
   })
 
   test('[P0] updates parent quizzes.score as rounded percentage + completedAt', async () => {
