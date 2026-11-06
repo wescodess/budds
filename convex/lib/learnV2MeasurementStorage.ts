@@ -1,6 +1,7 @@
 import { v } from 'convex/values'
 import { LEARN_V2_MEASUREMENT_REPORT_VERSION, LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION } from '../../shared/learn-v2-measurement-report'
 import { learnReportMetricValidator } from './learnV2MeasurementReportContract'
+import { LEARN_V2_RESPONSE_CONTEXT_VERSION, LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION, LEARN_V2_RESPONSE_TERMINALIZATION_VERSION } from '../../shared/learn-v2-responses'
 
 // Storage shapes only. Admission, payload limits and command validators are
 // supplied by the following serial contracts; no current player writes these.
@@ -30,7 +31,7 @@ const canvasPins = v.object({
   rendererVersion: v.string(), evaluationVersion: v.string(), pilotConfigurationVersion: v.string(),
 })
 const contextPins = v.union(
-  v.object({ kind: v.literal('calibration') }),
+  v.object({ kind: v.literal('calibration'), origin: v.optional(v.union(v.literal('today'), v.literal('canvas'))) }),
   v.object({ kind: v.literal('planned_measurement'), ...planPins }),
   v.object({ kind: v.literal('session'), ...planPins, ...sessionPins, canvas: v.optional(canvasPins) }),
 )
@@ -226,6 +227,7 @@ export const assessmentOpportunityFields = {
   scoringJobId: v.optional(v.id('learnJobs')), authoritativeAttemptId: v.optional(v.id('masteryAttempts')),
   replacesOpportunityId: v.optional(v.id('learnAssessmentOpportunities')), replacementReason: v.optional(v.string()),
   firstCheckClaim: v.optional(firstCheckClaim), checkSequence: v.number(), originalSlot: v.boolean(),
+  deliveryPins: v.optional(v.object({ version: v.literal(LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION), confidenceRequested: v.boolean() })),
 }
 export const assessmentExposureFields = {
   ...base, caseId: v.optional(v.id('learnAssessmentCases')), itemId: v.optional(v.id('learnMeasurementItems')),
@@ -244,6 +246,7 @@ const slotBase = {
   slotKey: v.string(), blockId: v.string(), promptDigest: v.string(), promptRevision: v.number(), responseFormatVersion: v.string(),
   deliveryExposureId: v.id('learnAssessmentExposures'), revision: v.number(),
   status: v.union(v.literal('open'), v.literal('accepted'), v.literal('terminal')),
+  confidenceRequested: v.optional(v.boolean()),
   terminalReason: v.optional(v.string()), submissionId: v.optional(v.id('learnResponses')),
 }
 export const responseSlotValidator = v.union(v.object({ ...slotBase, ...v2Scope }), v.object({ ...slotBase, ...standaloneScope, stage: v.literal('diagnostic') }))
@@ -252,8 +255,18 @@ const responseBase = {
   assistanceSnapshot, validitySnapshot, ...currentResponseState,
   responseContractVersion: v.string(), disclosurePolicyVersion: v.string(), receiptId: v.id('learnResponseCommandReceipts'),
 }
+const assessmentResponseFields = {
+  ...responseBase, ...v2Scope, assessmentOpportunityId: v.id('learnAssessmentOpportunities'), assessmentPins, scoringBinding, deliveryGrantId: v.id('learnAssessmentExposures'),
+}
+const currentAssessmentResponseFields = { ...assessmentResponseFields,
+  responseContextVersion: v.literal(LEARN_V2_RESPONSE_CONTEXT_VERSION), flow: v.union(v.literal('today'), v.literal('canvas')) }
+const admittedResponseContext = v.object({ status: v.literal('admitted'), assignmentId: v.id('learnMeasurementAssignments'), baselineEpoch: v.string() })
 export const responseValidator = v.union(
-  v.object({ ...responseBase, ...v2Scope, assessmentOpportunityId: v.id('learnAssessmentOpportunities'), assessmentPins, scoringBinding, deliveryGrantId: v.id('learnAssessmentExposures'), baselineEpoch: v.string(), flow: v.union(v.literal('v2_today'), v.literal('v2_canvas')) }),
+  v.object({ ...assessmentResponseFields, baselineEpoch: v.string(), flow: v.union(v.literal('v2_today'), v.literal('v2_canvas')) }),
+  v.object({ ...currentAssessmentResponseFields, contextPins: v.union(
+    v.object({ kind: v.literal('calibration'), origin: v.union(v.literal('today'), v.literal('canvas')) }), contextPins.members[2]),
+  measurementContext: v.union(v.object({ status: v.literal('not_enrolled') }), admittedResponseContext) }),
+  v.object({ ...currentAssessmentResponseFields, contextPins: contextPins.members[1], measurementContext: admittedResponseContext }),
   v.object({ ...responseBase, ...v2Scope, responseSlotId: v.id('learnResponseSlots') }),
   v.object({ ...responseBase, ...standaloneScope, responseSlotId: v.id('learnResponseSlots') }),
 )
@@ -280,15 +293,21 @@ export const responseIntegrityFields = {
   sequence: v.number(), kind: v.union(v.literal('evidence_unavailable'), v.literal('pre_seal_contamination'), v.literal('body_purged')),
   reasonCode: v.string(), effectiveAt: v.number(), policyVersion: v.string(), sourceFactSequence: v.number(),
 }
-export const responseReceiptFields = {
+const receiptBase = {
   ...base, learningVoidId: v.optional(v.id('learningVoids')), threadId: v.optional(v.id('learningThreads')),
   idempotencyKeyHash: v.string(), requestDigest: v.string(), commandVersion: v.string(), target: v.optional(target),
-  result: v.union(v.object({ kind: v.literal('accepted'), submissionId: v.id('learnResponses'), acceptedAt: v.number() }), v.object({ kind: v.literal('rejected'), reasonCode: v.string() })),
+}
+const terminalizedResult = v.object({ kind: v.literal('terminalized'), target, revision: v.number(),
+  reasonCode: v.union(v.literal('cancelled'), v.literal('abandoned')), terminalizedAt: v.number() })
+export const responseReceiptFields = {
+  ...receiptBase,
+  result: v.union(v.object({ kind: v.literal('accepted'), submissionId: v.id('learnResponses'), acceptedAt: v.number() }), v.object({ kind: v.literal('rejected'), reasonCode: v.string() }), terminalizedResult),
   expiresAt: v.optional(v.number()),
 }
 export const responseReceiptValidator = v.union(
   v.object({ ...responseReceiptFields, result: v.object({ kind: v.literal('accepted'), submissionId: v.id('learnResponses'), acceptedAt: v.number() }) }),
   v.object({ ...responseReceiptFields, result: v.object({ kind: v.literal('rejected'), reasonCode: v.string() }), expiresAt: v.number() }),
+  v.object({ ...receiptBase, commandVersion: v.literal(LEARN_V2_RESPONSE_TERMINALIZATION_VERSION), target, result: terminalizedResult }),
 )
 export const scoringExecutionFields = {
   ...base, ...capability, ...evidenceState, assessmentOpportunityId: v.id('learnAssessmentOpportunities'), submissionId: v.id('learnResponses'),

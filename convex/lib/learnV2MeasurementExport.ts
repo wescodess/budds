@@ -14,10 +14,10 @@ const metadataFields = {
   learnMeasurementSupports: ['supportRevision', 'evidenceStatus'],
   learnMeasurementValidations: ['check', 'decision', 'evidenceStatus'],
   learnMeasurementAssignments: ['learningVoidId', 'epoch', 'flow', 'entryPoint', 'status', 'protocolStatus', 'historyStatus', 'enrollmentAt', 'evidenceStatus'],
-  learnAssessmentOpportunities: ['learningVoidId', 'assignmentId', 'horizonDays', 'phase', 'revision', 'operationalEligibility', 'dueAt', 'openAt', 'closeAt', 'eligibleAt', 'submissionId', 'authoritativeAttemptId', 'checkSequence', 'originalSlot', 'evidenceStatus'],
+  learnAssessmentOpportunities: ['learningVoidId', 'assignmentId', 'horizonDays', 'phase', 'revision', 'operationalEligibility', 'dueAt', 'openAt', 'closeAt', 'eligibleAt', 'submissionId', 'authoritativeAttemptId', 'checkSequence', 'originalSlot', 'deliveryPins', 'evidenceStatus'],
   learnAssessmentExposures: ['purpose', 'status', 'serverTime', 'observedAt', 'assessmentOpportunityId', 'policyVersion'],
-  learnResponseSlots: ['learningVoidId', 'threadId', 'stage', 'revision', 'status', 'submissionId', 'evidenceStatus'],
-  learnResponses: ['learningVoidId', 'threadId', 'assessmentOpportunityId', 'responseSlotId', 'acceptedAt', 'confidence', 'responseContractVersion', 'disclosurePolicyVersion', 'bodyAvailability', 'bodyUnavailableReason', 'bodyPurgedAt', 'currentEligibility', 'evidenceStatus'],
+  learnResponseSlots: ['learningVoidId', 'threadId', 'stage', 'revision', 'status', 'submissionId', 'confidenceRequested', 'evidenceStatus'],
+  learnResponses: ['learningVoidId', 'threadId', 'assessmentOpportunityId', 'responseSlotId', 'acceptedAt', 'confidence', 'responseContractVersion', 'responseContextVersion', 'flow', 'baselineEpoch', 'measurementContext', 'disclosurePolicyVersion', 'bodyAvailability', 'bodyUnavailableReason', 'bodyPurgedAt', 'currentEligibility', 'evidenceStatus'],
   learnResponseBodies: [],
   learnResponseEvidenceLinks: ['submissionId', 'evidenceStatus', 'invalidatedAt'],
   learnResponseIntegrityEvents: ['submissionId', 'sequence', 'kind', 'effectiveAt', 'policyVersion'],
@@ -113,6 +113,13 @@ export async function exportMeasurementPage(
     const record = row as unknown as Record<string, unknown>
     for (const field of metadataFields[collection]) if (record[field] !== undefined) projected[field] = record[field]
     if (collection === 'learnResponses') Object.assign(projected, projectResponseMetadata(row as Doc<'learnResponses'>))
+    if (collection === 'learnResponseCommandReceipts') {
+      const receipt = row as Doc<'learnResponseCommandReceipts'>
+      if (receipt.result.kind === 'terminalized') projected.result = {
+        kind: receipt.result.kind, target: receipt.result.target, revision: receipt.result.revision,
+        reasonCode: receipt.result.reasonCode, terminalizedAt: receipt.result.terminalizedAt,
+      }
+    }
     if (collection === 'learnResponseBodies') {
       const body = row as Doc<'learnResponseBodies'>
       projected.submissionId = body.submissionId

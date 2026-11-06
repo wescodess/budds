@@ -3,6 +3,7 @@ import {
   learnCodeSchema, learnDigestSchema, learnIdSchema, learnRevisionSchema, learnSequenceSchema,
   learnTimestampSchema, learnScoreSchema, learnTextSchema, learnVersionSchema,
   parseLearnContract,
+  LEARN_V2_RESPONSE_CONTEXT_VERSION, learnAssessmentResponseContextSchema,
 } from './learn-v2-responses'
 import { LEARN_MEASUREMENT_STORAGE_LIMITS } from './learn-v2-measurement-storage-manifest'
 
@@ -33,7 +34,7 @@ const planFields = {
   planRevision: learnRevisionSchema, planRecordRevision: learnRevisionSchema,
 }
 export const learnContextPinsSchema = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('calibration') }),
+  z.strictObject({ kind: z.literal('calibration'), origin: z.enum(['today', 'canvas']).optional() }),
   z.strictObject({ kind: z.literal('planned_measurement'), ...planFields }),
   z.strictObject({ kind: z.literal('session'), ...planFields,
     studySessionId: learnIdSchema<'studySessions'>(), sessionRevision: learnRevisionSchema,
@@ -41,6 +42,32 @@ export const learnContextPinsSchema = z.discriminatedUnion('kind', [
     contentInputDigest: learnDigestSchema, generatorVersion: learnVersionSchema, canvas: learnCanvasPinsSchema.optional() }),
 ])
 export const learnV2ScopeSchema = z.strictObject({ scopeKind: z.literal('v2'), ...learnCapabilityFields, contextPins: learnContextPinsSchema })
+const assessmentResponseContextSourceSchema = z.strictObject({
+  contextPins: learnContextPinsSchema,
+  assignment: z.discriminatedUnion('status', [
+    z.strictObject({ status: z.literal('admitted'), assignmentId: learnIdSchema<'learnMeasurementAssignments'>(), epoch: learnVersionSchema, flow: learnMeasurementFlowSchema }),
+    z.strictObject({ status: z.enum(['considered', 'not_admitted']) }),
+  ]).nullable(),
+})
+export function deriveLearnAssessmentResponseContext(input: unknown) {
+  const { contextPins, assignment } = parseLearnContract(assessmentResponseContextSourceSchema, input)
+  const admitted = assignment?.status === 'admitted' ? assignment : null
+  const assignmentFlow = admitted ? (admitted.flow === 'v2_today' ? 'today' : 'canvas') : null
+  let flow: 'today' | 'canvas'
+  switch (contextPins.kind) {
+    case 'session': flow = contextPins.canvas ? 'canvas' : 'today'; break
+    case 'calibration':
+      if (!contextPins.origin) throw new Error('Calibration origin is unavailable')
+      flow = contextPins.origin
+      break
+    case 'planned_measurement':
+      if (!assignmentFlow) throw new Error('Planned measurement requires an admitted assignment')
+      flow = assignmentFlow
+  }
+  if (assignmentFlow && assignmentFlow !== flow) throw new Error('Assessment and assignment flows do not match')
+  return learnAssessmentResponseContextSchema.parse({ responseContextVersion: LEARN_V2_RESPONSE_CONTEXT_VERSION, flow,
+    measurementContext: admitted ? { status: 'admitted', assignmentId: admitted.assignmentId, baselineEpoch: admitted.epoch } : { status: 'not_enrolled' } })
+}
 export const learnStandaloneScopeSchema = z.strictObject({
   scopeKind: z.literal('standalone'), threadId: learnIdSchema<'learningThreads'>(), activityId: learnIdSchema<'learningThreadActivities'>(),
   threadRevision: learnRevisionSchema, activityRevision: learnRevisionSchema, activityContractVersion: learnVersionSchema,

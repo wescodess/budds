@@ -102,7 +102,7 @@ describe('registered inactive measurement API', () => {
     await expect(f.t.query(api.learnV2Assessments.getFeatureReadiness, {})).rejects.toThrow('Unauthenticated')
   })
 
-  test.each(['userId', 'cohortVersion', 'scorer', 'phase', 'draft'])('rejects client authority field %s at the registered boundary', async field => {
+  test.each(['userId', 'cohortVersion', 'scorer', 'phase', 'draft', 'flow', 'baselineEpoch', 'measurementContext', 'origin', 'confidenceRequested', 'deliveryPins'])('rejects client authority field %s at the registered boundary', async field => {
     const f = await fixture()
     await expect(f.t.withIdentity(OWNER).mutation(api.learnV2Responses.acceptResponse, { ...f.responseRequest, [field]: 'forged' } as never)).rejects.toThrow()
     await expect(f.t.withIdentity(OWNER).mutation(api.learnV2Mastery.acceptMasterySubmission, {

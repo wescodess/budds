@@ -117,6 +117,7 @@ export const terminalizeResponseSchema = responseStateSchema.extend({
 export const terminalizeResponseValidator = v.union(unavailableValidator, v.object({
   version: v.literal(LEARN_V2_PUBLIC_API_VERSION), status: v.literal('terminal'), target: responseTargetValidator,
   revision: v.number(), reason: literals(['cancelled', 'abandoned']),
+  terminalizedAt: v.number(),
 }))
 
 export const assessmentReferenceArgs = {

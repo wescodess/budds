@@ -82,6 +82,26 @@ The collection remains metadata-only for personal export: explicit safe fields a
 
 ## Compatibility and cleanup boundaries
 
+### #512 response pins
+
+[#512](https://github.com/wescodess/budds/issues/512) applies [#363 §§1–3](https://github.com/wescodess/budds/issues/363#issuecomment-6651831618) without a writer, migration or flag. Existing `learn-v2.responses.v1` commands, stored legacy assessment responses (`flow = v2_today | v2_canvas` with their historical `baselineEpoch`) and formative/diagnostic branches retain their shapes and meaning. New assessment response storage uses `responseContextVersion = learn-v2.response-context.v1`, `flow = today | canvas`, and a required `measurementContext`: either `{ status: not_enrolled }` with no epoch, or `{ status: admitted, assignmentId, baselineEpoch }`. Only an admitted assignment supplies that epoch; considered/not-admitted assignments never fabricate one.
+
+The frozen pure function `shared/learn-v2-measurement.ts::deriveLearnAssessmentResponseContext` consumes projected, server-read opportunity context and assignment pins. It has no client-authority input or I/O. The parent's clarified rules are:
+
+| Context | Server authority for response flow | Fail-closed cases |
+| --- | --- | --- |
+| `session` | Session without Canvas attribution is Today; complete Canvas attribution is Canvas. | Malformed session/Canvas pins or a conflicting admitted assignment flow. |
+| `planned_measurement` | Admitted measurement assignment's frozen `v2_today` / `v2_canvas` flow, mapped to `today` / `canvas`. | Missing, considered or not-admitted assignment, missing epoch/identity, or unknown flow. New stored planned responses also require admitted measurement context. |
+| `calibration` | Explicit `contextPins.origin = today | canvas`, set by the future server creator: V2 calibration route is Today; Adaptive Canvas is Canvas. | Missing/unknown origin or a conflicting admitted assignment flow. Calibration is never defaulted to Today. |
+
+Calibration `origin` is optional only in legacy opportunity/scope shapes so old rows still read; the derivation and new accepted-response storage require it. This clarification is prospective and supplies no calibration writer or backfill. Request schemas reject client `flow`, epoch, measurement context, origin and confidence policy.
+
+`learn-v2.response-delivery-pins.v1` pins `confidenceRequested: boolean` on an opportunity's optional `deliveryPins`; response slots store `confidenceRequested` directly. Future creators/granters must set these from the actual delivered prompt contract, including explicit false. Legacy missing pins resolve to false; the shared slot parser materializes that false. `validateLearnAcceptResponseRequest` compares confidence presence against the owned slot or validated assessment delivery pins, preserving the integer 1–5 range. It rejects missing requested confidence and unsolicited confidence without adding a learner interaction.
+
+Receipts add `result.kind = terminalized` under `commandVersion = learn-v2.response-terminalization.v1`. The result retains the exact `target`, resulting `revision`, `reasonCode = cancelled | abandoned`, and server `terminalizedAt`. The terminalized branch requires the target and forbids `expiresAt`; it follows owning aggregate/account history and the existing command-key index, so C2.1 can replay that same result. A browser close creates no receipt or abandonment fact. Rejections still require their 90-day expiry. The disabled public terminalization success shape reserves `terminalizedAt` alongside its existing target/revision/reason.
+
+Direct and ZIP owner exports allowlist response flow/context/epoch, confidence pins and the safe terminalized result, withholding command-key/request digests, protected prompt/scorer pins and raw input. Existing source invalidation, Void/thread cleanup and account deletion registrations cover these fields and terminalized receipts. Regressions cover all flow kinds, rejected provenance, explicit non-enrollment, legacy round trips, confidence requested/false/absent, receipt replay by saved key, forbidden expiry/private payloads, direct/ZIP exports, and Void/account deletion. These are fixture and contract checks, not completed terminalization or acceptance writers.
+
 Legacy `masteryAttempts.kind` remains optional and keeps `calibration`, `independent_application`, and `retained_transfer` meanings. The new `measurement_cold` and `measurement_delayed` branches require complete measurement pins; delayed scores require horizon 7 or 30. Optional ordinary-attempt additions include canonical response/execution references, requested/returned identities, frozen assistance/validity and separate first-claim/check sequences. `scorerModel` keeps its historical meaning. No old score or absent field is rewritten.
 
 Sessions/content/jobs gain optional assessment references; jobs can pin family/item/validation/scorer bindings. Canonical V2 measurement events have a separate taxonomy/version and optional Canvas attribution. The old representative-completion reader rejects that taxonomy until its later adapter exists, preserving old event/hash semantics. No event writer is enabled.
