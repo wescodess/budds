@@ -1139,9 +1139,12 @@ export const deleteQuiz = mutation({
       .collect()
 
     for (const a of attempts) {
-      const assessments = await ctx.db.query('quizAnswerAssessments')
-        .withIndex('by_attemptId', q => q.eq('attemptId', a._id)).take(MAX_QUIZ_QUESTIONS)
-      for (const assessment of assessments) await ctx.db.delete(assessment._id)
+      // Edited attempts can retain snapshots for more than the current question
+      // limit. Delete every snapshot before removing the parent attempt.
+      for await (const assessment of ctx.db.query('quizAnswerAssessments')
+        .withIndex('by_attemptId', q => q.eq('attemptId', a._id))) {
+        await ctx.db.delete(assessment._id)
+      }
       const answers = await ctx.db
         .query('attemptAnswers')
         .withIndex('by_attemptId', q => q.eq('attemptId', a._id))

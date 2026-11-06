@@ -62,6 +62,30 @@ test('production account deletion removes grading snapshots before their answer 
   await t.finishInProgressScheduledFunctions()
 })
 
+test('production quiz deletion also removes snapshots retained from replaced questions', async () => {
+  const { t, owner, other } = await fixture()
+  await t.run(async (ctx) => {
+    const { _id: _assessmentId, _creationTime: _createdAt, ...snapshot } = owner.assessment
+    // Emulate successive edits during an attempt: only one current question,
+    // with additional immutable snapshots for questions that were removed.
+    for (let index = 0; index < 200; index++) {
+      const questionId = await ctx.db.insert('quizQuestions', {
+        quizId: owner.quizId, userId: OWNER.tokenIdentifier, order: 1,
+        type: 'free-response', question: `Replaced question ${index}`, correctAnswer: 'Answer',
+      })
+      const attemptAnswerId = await ctx.db.insert('attemptAnswers', {
+        attemptId: owner.attemptId, questionId, userAnswer: 'Answer', isCorrect: true, answeredAt: Date.now(),
+      })
+      await ctx.db.insert('quizAnswerAssessments', { ...snapshot, questionId, attemptAnswerId })
+      await ctx.db.delete(questionId)
+    }
+  })
+  expect(await owner.user.mutation(api.quizzes.deleteQuiz, { quizId: owner.quizId })).toEqual({ deletedAttempts: 1, deletedQuestions: 1 })
+  expect(await t.run(ctx => ctx.db.query('quizAnswerAssessments')
+    .withIndex('by_attemptId', q => q.eq('attemptId', owner.attemptId)).take(1))).toEqual([])
+  expect(await t.run(ctx => ctx.db.get(other.assessment._id))).toEqual(other.assessment)
+})
+
 test('production export includes full owned grading data and rejects foreign attempt answers', async () => {
   const { owner, other } = await fixture()
   const exported = await owner.user.query(api.dataExport.getUserDataPage, {
