@@ -154,8 +154,12 @@ export async function openRun(path, { sealedOnly = false, expectedPinsDigest } =
       assert.equal(cancellation.payload.intentDigest, intent.digest)
       const expiredAt = cancellation.payload.reason === 'lease_expired_before_transport' ? intent.payload.deadline
         : cancellation.payload.reason === 'approval_expired_before_transport' ? intent.payload.approval?.validUntil : null
+      const validCancellation = cancellation.payload.reason === 'transport_rejected_before_send'
+        ? cancellation.payload.checkedAt >= intent.payload.startedAt
+          && cancellation.payload.checkedAt < Math.min(intent.payload.deadline, intent.payload.approval.validUntil)
+        : int(expiredAt) && cancellation.payload.checkedAt >= expiredAt
       assert.ok(pins.mode === 'live' && intent.payload.dispatched && int(cancellation.payload.checkedAt)
-        && int(expiredAt) && cancellation.payload.checkedAt >= expiredAt, 'Invalid not-dispatched expiry record')
+        && validCancellation, 'Invalid not-dispatched record')
       for (const kind of ['observation', 'metadata-intent', 'metadata-observation']) assert.ok(!exists(join(directory, artifactName(item.blind.id, kind))), 'Not-dispatched intent has transport evidence')
       assert.equal(history.length, 0, 'Not-dispatched intent has reconciliation history')
       state.notDispatched.set(item.blind.id, cancellation)
@@ -255,7 +259,7 @@ export async function evaluate(state, item, intent, raw, terminalAt) {
     result = await baselineExecution({ adapter, blind: item.blind, saved, registry: state.registry, startedAt: intent.startedAt, terminalAt, raw })
   }
   else result = parseIndependent(adapter, item.blind, raw)
-  if (terminalAt >= intent.deadline) result = { ...result, status: 'ambiguous', scorePercent: null, criteria: null }
+  if (terminalAt >= intent.deadline && result.status !== 'definitive_failure') result = { ...result, status: 'ambiguous', scorePercent: null, criteria: null }
   return { ...result, weights: item.blind.scoringInput.rubric.criteria.map(row => row.weightPercent) }
 }
 

@@ -6,6 +6,7 @@ import { requestFor, fixtureEnvelope, baselineExecution, liveMetadata, liveInfer
 import { buildReport, fitThresholds } from './report.mjs'
 import { admitLive, verifySavedApproval } from './live-approval.mjs'
 import { openLiveLedger, verifyLiveRun, reserveLiveDispatch, recordLiveResolution, unresolvedLiveDispatches } from './live-ledger.mjs'
+import { classifyAiGatewayFailure } from '../../../server/utils/ai-gateway.ts'
 import { artifactName, reconciliationName, assertCurrent, openRun, evaluate, recordReconciliation, recordTerminal, liveOutcome, metadataOutcome, validateFixture, openRecoveryRun, verifyIntent, replayMetadata, reconcileObservation } from './run-state.mjs'
 
 const emptyAnchors = { version: 'learn-v2.synthetic-anchor-checks.v1', evidenceStatus: 'synthetic_contract_only', canvasAdmitted: false, rows: [] }
@@ -132,13 +133,12 @@ async function dispatch(state, item, options) {
             ? baselineExecution({ adapter, blind: item.blind, saved: state.pins.bindings.find(binding => binding.binding.configurationDigest === adapter.configuration),
                 registry: state.registry, startedAt, clock: Date.now, infer }).then(value => value.raw)
             : Promise.resolve(infer())
-          raw = await Promise.race([operation.catch(() => ({ failure: 'outcome_unknown' })), deadline])
+          raw = await Promise.race([operation.catch(error => ({ failure: classifyAiGatewayFailure(error) })), deadline])
           // The baseline service can translate an inference rejection into a
           // transport result. A ledger gap must still abort this invocation.
           if (consistencyFailure) throw consistencyFailure
         }
-        if (!transportStarted && (Date.now() >= intent.payload.deadline || Date.now() >= approval.validUntil)) raw = { failure: 'not_dispatched' }
-        else if (transportStarted && raw.failure === 'not_dispatched') raw = { failure: 'definitive_failure' }
+        if (!transportStarted) raw = { failure: 'not_dispatched' }
       }
       finally { clearTimeout(timer) }
       terminalAt = Date.now()
@@ -146,12 +146,12 @@ async function dispatch(state, item, options) {
   }
   let cancellation
   if (state.pins.mode === 'live' && dispatchAllowed && raw.failure === 'not_dispatched') {
-    // This record is emitted only when an expiry guard prevented transport.
-    // Missing provider credentials/other transport failures retain their charge.
-    assert.ok(terminalAt >= intent.payload.deadline || terminalAt >= approval.validUntil)
+    // Expiry, preparation rejection or an adapter's explicit pre-send failure
+    // proves no transport was sent. Definitive HTTP rejections stay charged.
     cancellation = seal(state.directory, artifactName(item.blind.id, 'not-dispatched'), 'dispatch_not_sent', state.pinsDigest,
       { intentDigest: intent.digest, checkedAt: terminalAt,
-        reason: terminalAt >= intent.payload.deadline ? 'lease_expired_before_transport' : 'approval_expired_before_transport' })
+        reason: terminalAt >= intent.payload.deadline ? 'lease_expired_before_transport'
+          : terminalAt >= approval.validUntil ? 'approval_expired_before_transport' : 'transport_rejected_before_send' })
     state.notDispatched.set(item.blind.id, cancellation)
     state.artifacts.push(cancellation.digest)
     if (item.phase === 'fit') state.fitDigests.push(cancellation.digest)

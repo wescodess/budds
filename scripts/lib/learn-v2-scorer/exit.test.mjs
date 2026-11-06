@@ -360,6 +360,26 @@ test('delayed failures survive claim quarantine; clock, assistance, novelty and 
   assert.equal(report.realAnchorValidity, 'pending_real_delayed_evidence')
 })
 
+test('A8 anchor identities: missing, empty and non-string case identities invalidate the synthetic join', () => {
+  for (const horizon of [7, 30]) {
+    const row = { ...anchors().rows[0], horizon, delayedCase: horizon === 30 ? 'synthetic_case_c' : 'synthetic_case_b' }
+    const snapshot = { ...anchors(), rows: [row] }
+    assert.equal(anchorReport(snapshot).byFlowHorizon[`v2_today/day${horizon}`].valid, 1)
+    for (const field of ['coldCase', 'delayedCase', ...(horizon === 30 ? ['day7Case'] : [])]) {
+      for (const value of [undefined, null, 0, '', ' \t']) {
+        const changed = { ...row, [field]: value }
+        if (value === undefined) Reflect.deleteProperty(changed, field)
+        const report = anchorReport({ ...snapshot, rows: [changed] })
+        const stats = report.byFlowHorizon[`v2_today/day${horizon}`]
+        assert.equal(stats.invalid, 1, `${horizon}/${field}/${String(value)}`)
+        assert.equal(stats.valid, 0)
+        assert.equal(stats.observedFailures, 0)
+        assert.deepEqual(report.observations, [])
+      }
+    }
+  }
+})
+
 test('live admission verifies separate owner signatures, finite reservation evidence and freshness, without inference', t => {
   const directory = workspace(t)
   const { publicKey, privateKey } = generateKeyPairSync('ed25519')

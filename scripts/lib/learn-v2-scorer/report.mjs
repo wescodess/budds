@@ -97,10 +97,11 @@ export function anchorReport(anchors) {
     if (row.assisted !== false) { stats.assisted++; continue }
     if (row.scorePercent === null) { stats.unscored++; continue }
     assert.ok(Number.isFinite(row.scorePercent) && row.scorePercent >= 0 && row.scorePercent <= 100)
+    const cases = [row.coldCase, row.delayedCase, ...(row.horizon === 30 ? [row.day7Case] : [])]
     const validJoin = row.acceptedAt === row.submittedAt && row.sourceAvailable === true && row.novel === true
       && row.exposedBeforeAcceptance === false && row.pinsMatch === true
       && row.submittedAt >= row.windowStart && row.submittedAt <= row.windowEnd
-      && row.coldCase !== row.delayedCase && (row.horizon !== 30 || (row.day7Case !== row.delayedCase && row.day7Case !== row.coldCase))
+      && cases.every(value => typeof value === 'string' && value.trim().length > 0) && new Set(cases).size === cases.length
     if (!validJoin) { stats.invalid++; continue }
     stats.valid++
     if (row.scorePercent < 80) stats.observedFailures++

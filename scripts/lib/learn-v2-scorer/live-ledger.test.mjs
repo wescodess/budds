@@ -45,6 +45,8 @@ let markerRemovalFailure = null
 let revision = null
 let afterIntent = null
 let beforeBaselineTransport = null
+let realAdapters = false
+let preparationFailure = null
 
 // Keep the production CLI's fixed global path and transport unchanged. Native
 // module mocks isolate this test process and deny every real network entry.
@@ -100,12 +102,14 @@ mock.module(new URL('./adapters.mjs', import.meta.url).href, { namedExports: { .
     return cache.get(blind)
   },
   baselineExecution(options) {
+    if (options.infer && preparationFailure) return Promise.reject(preparationFailure)
     return adapters.baselineExecution({ ...options, ...(options.infer ? { infer: (...args) => {
       beforeBaselineTransport?.()
       return options.infer(...args)
     } } : {}) })
   },
-  async liveInfer(adapter, request) {
+  async liveInfer(adapter, request, signal, baselineRequest) {
+    if (realAdapters) return adapters.liveInfer(adapter, request, signal, baselineRequest)
     calls.push({ adapter: adapter.id, requestDigest: artifacts.hash(request) })
     const body = JSON.parse(request.body)
     const payload = adapter.role === 'gemini' ? body.input[0].content[0].text : body.messages.find(row => row.role === 'user').content
@@ -156,6 +160,8 @@ async function workspace(t, approvalDurationMs = 600000) {
   revision = null
   afterIntent = null
   beforeBaselineTransport = null
+  realAdapters = false
+  preparationFailure = null
   const inventory = readJson(join(artifacts.ROOT, 'tests/fixtures/learn-v2-scorer-harness/inventory.json'))
   inventory.scope = 'reviewed_published_inventory'
   inventory.epoch = 'approval-contract.v1'
@@ -208,6 +214,163 @@ async function workspace(t, approvalDurationMs = 600000) {
   }
   return { createRun, approve, clock, setClock: value => { now = value } }
 }
+
+function syntheticHttp(t, setup, mode) {
+  let responseMode = mode
+  const keys = ['ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'NUXT_OPENROUTER_API_KEY']
+  const previous = keys.map(key => [key, process.env[key]])
+  for (const key of keys) process.env[key] = 'local-synthetic-only'
+  t.after(() => {
+    for (const [key, value] of previous) {
+      if (value === undefined) Reflect.deleteProperty(process.env, key)
+      else process.env[key] = value
+    }
+  })
+  realAdapters = true
+  const timeouts = []
+  const setTimer = globalThis.setTimeout
+  if (mode === 'timeout') {
+    const timerMock = mock.method(globalThis, 'setTimeout', (callback, delay, ...args) => {
+      if (delay > 0 && delay <= 90_000) timeouts.push(() => callback(...args))
+      return setTimer(callback, delay, ...args)
+    })
+    t.after(() => timerMock.mock.restore())
+  }
+  const fetchMock = mock.method(globalThis, 'fetch', async (url, request) => {
+    assert.ok(setup.state.pins.adapters.some(adapter => adapter.endpoint === url), 'Only pinned synthetic HTTP requests are accepted')
+    assert.equal(request.method, 'POST')
+    assert.equal(request.signal.aborted, false)
+    calls.push({ url })
+    if (responseMode === 'network-loss') throw new TypeError('Synthetic connection lost after send')
+    if (responseMode === 'abort') throw new DOMException('Synthetic abort after send', 'AbortError')
+    if (responseMode === 'classified-rejection') throw Object.assign(new Error('Synthetic classified rejection'), { aiGatewayFailureKind: 'definitive_failure' })
+    const intent = readJson(join(setup.state.directory, `${setup.id}.intent.json`)).payload
+    if (responseMode === 'late-400') setup.setClock(intent.deadline + 1)
+    if (responseMode === 'timeout') return new Promise((_resolve, reject) => {
+      request.signal.addEventListener('abort', () => reject(new DOMException('Synthetic timeout after send', 'AbortError')), { once: true })
+      setTimer(() => {
+        setup.setClock(intent.deadline)
+        assert.ok(timeouts.length > 0)
+        for (const timeout of timeouts) timeout()
+      }, 0)
+    })
+    return new Response('Synthetic HTTP rejection', { status: 400 })
+  })
+  t.after(() => fetchMock.mock.restore())
+  return () => {
+    responseMode = '400'
+    for (const key of keys) process.env[key] = 'local-synthetic-only'
+  }
+}
+
+for (const mode of ['400', 'late-400', 'classified-rejection', 'network-loss', 'timeout', 'abort', 'missing-key']) {
+  test(`A8 real transport ${mode}: classification, replay and admission`, async t => {
+    for (const role of ['baseline', 'claude', 'gemini']) await t.test(role, async t => {
+      const setup = await canary(t, role)
+      const { state, approval, id, createRun, approve } = setup
+      const before = calls.length
+      const rejectNextRequest = syntheticHttp(t, setup, mode)
+      if (mode === 'missing-key') {
+        if (role === 'baseline') process.env.OPENROUTER_API_KEY = process.env.NUXT_OPENROUTER_API_KEY = ''
+        else process.env[role === 'claude' ? 'ANTHROPIC_API_KEY' : 'GEMINI_API_KEY'] = ''
+      }
+      const summary = await dispatchLive(state.directory, id, approval)
+      const terminal = readJson(join(state.directory, `${id}.terminal.json`))
+      const unknown = ['network-loss', 'timeout', 'abort'].includes(mode)
+      const notSent = mode === 'missing-key'
+      assert.deepEqual(terminal.payload.raw, { failure: notSent ? 'not_dispatched' : unknown ? 'outcome_unknown' : 'definitive_failure' })
+      assert.equal(terminal.payload.result.status, notSent ? 'not_dispatched' : unknown ? 'ambiguous' : 'definitive_failure')
+      assert.equal(summary.ambiguous, Number(unknown))
+      assert.equal(calls.length, before + Number(!notSent))
+      assert.equal(readJson(summary.report).payload.reservations.retainedMicroUsd, (before + Number(!notSent)) * 100)
+      const ledger = await openLiveLedger(globalDirectory)
+      assert.equal(unresolvedLiveDispatches(ledger).length, Number(unknown))
+      if (!unknown) assert.equal([...ledger.resolutions.values()].find(row => row.intentDigest === terminal.payload.intentDigest).status, notSent ? 'not_dispatched' : 'failed')
+      assert.equal((await replay(state.directory)).digest, summary.digest, 'Sealed classification must reproduce exactly')
+      assert.equal((await reconcileLive(state.directory, id, approval)).reconciliation, notSent ? 'not_dispatched' : unknown ? 'still_unknown' : 'failed')
+      assert.equal(calls.length, before + Number(!notSent), 'Replay and reconciliation never retry inference')
+      assert.equal(metadataCalls.length, 0)
+      const next = await createRun('separately-approved')
+      const nextApproval = approve(next, 'separate')
+      if (unknown) await assert.rejects(dispatchLive(next.directory, next.plan[0].id, nextApproval), /requires reconciliation/)
+      else {
+        // A separate synthetic 400 proves admission without depending on a valid grade.
+        rejectNextRequest()
+        await dispatchLive(next.directory, next.plan[0].id, nextApproval)
+      }
+      assert.equal(calls.length, before + Number(!notSent) + Number(!unknown))
+      await dispatchLive(state.directory, id, approval).then(() => assert.ok(!unknown), () => assert.ok(unknown))
+      assert.equal(calls.length, before + Number(!notSent) + Number(!unknown), 'Original intent cannot be redispatched or refunded')
+    })
+  })
+}
+
+test('A8 pre-send preparation rejections remain not dispatched', async t => {
+  for (const point of ['prepare', 'infer-wrapper']) await t.test(point, async t => {
+    const setup = await canary(t, 'baseline')
+    const { state, approval, id } = setup
+    syntheticHttp(t, setup, '400')
+    const error = Object.assign(new Error('Synthetic rejection before transport'), { aiGatewayFailureKind: 'definitive_failure' })
+    if (point === 'prepare') preparationFailure = error
+    else beforeBaselineTransport = () => { throw error }
+    const before = calls.length
+    const summary = await dispatchLive(state.directory, id, approval)
+    preparationFailure = null
+    beforeBaselineTransport = null
+    assert.equal(calls.length, before)
+    assert.equal(readJson(join(state.directory, `${id}.terminal.json`)).payload.result.status, 'not_dispatched')
+    assert.equal(readJson(join(state.directory, `${id}.not-dispatched.json`)).payload.reason, 'transport_rejected_before_send')
+    assert.equal(summary.ambiguous, 0)
+    assert.equal(readJson(summary.report).payload.reservations.retainedMicroUsd, before * 100)
+    assert.equal((await replay(state.directory)).digest, summary.digest)
+    assert.equal((await reconcileLive(state.directory, id, approval)).reconciliation, 'not_dispatched')
+    assert.equal(unresolvedLiveDispatches(await openLiveLedger(globalDirectory)).length, 0)
+  })
+})
+
+test('A8 real transport: definitive rejection survives interrupted terminal publication', async t => {
+  for (const role of ['baseline', 'claude', 'gemini']) await t.test(role, async t => {
+    const setup = await canary(t, role)
+    const { state, approval, id } = setup
+    const before = calls.length
+    syntheticHttp(t, setup, '400')
+    publicationFailures.add('sealed_verdict')
+    await assert.rejects(dispatchLive(state.directory, id, approval), /Simulated/)
+    publicationFailures.clear()
+    assert.deepEqual(readJson(join(state.directory, `${id}.observation.json`)).payload.raw, { failure: 'definitive_failure' })
+    const summary = await reconcileLive(state.directory, id, approval)
+    assert.equal(summary.reconciliation, 'failed')
+    assert.equal(summary.ambiguous, 0)
+    assert.equal(readJson(summary.report).payload.reservations.retainedMicroUsd, (before + 1) * 100)
+    assert.equal((await replay(state.directory)).digest, summary.digest)
+    assert.equal(unresolvedLiveDispatches(await openLiveLedger(globalDirectory)).length, 0)
+    assert.equal(calls.length, before + 1)
+    assert.equal(metadataCalls.length, 0)
+  })
+})
+
+test('A8 pre-send records reject impossible timestamps and unknown reasons before terminal publication', async t => {
+  for (const change of ['before-intent', 'expired-rejection', 'unknown-reason']) await t.test(change, async t => {
+    const setup = await canary(t, 'baseline')
+    const { state, approval, id } = setup
+    syntheticHttp(t, setup, '400')
+    process.env.OPENROUTER_API_KEY = process.env.NUXT_OPENROUTER_API_KEY = ''
+    earlyFailures.add('sealed_verdict')
+    await assert.rejects(dispatchLive(state.directory, id, approval), /Simulated/)
+    earlyFailures.clear()
+    assert.ok(!artifacts.exists(join(state.directory, `${id}.terminal.json`)))
+    const intent = readJson(join(state.directory, `${id}.intent.json`)).payload
+    rewrite(join(state.directory, `${id}.not-dispatched.json`), value => {
+      if (change === 'before-intent') value.payload.checkedAt = intent.startedAt - 1
+      if (change === 'expired-rejection') value.payload.checkedAt = intent.deadline
+      if (change === 'unknown-reason') value.payload.reason = 'unknown'
+    })
+    await assert.rejects(openLiveLedger(globalDirectory), /Invalid not-dispatched record/)
+    await assert.rejects(replay(state.directory), /Invalid not-dispatched record/)
+    await assert.rejects(reconcileLive(state.directory, id, approval), /Invalid not-dispatched record/)
+    assert.equal(calls.length, 0)
+  })
+})
 
 function advanceRevision() {
   const implementation = artifacts.implementationPins()

@@ -85,16 +85,15 @@ async function baselineSession({ blind, saved, registry, startedAt, transport, c
 }
 
 async function baselineResult(adapter, service, prepared, execution, captured, terminalAt) {
+  const raw = captured ?? { failure: execution.terminal.failure ?? 'outcome_unknown' }
   const consumable = await service.isConsumable(prepared, execution)
   let status = consumable ? 'valid' : execution.receipt.integrityResult
   if (execution.receipt.observedIdentity.servingProvider !== null && execution.receipt.observedIdentity.servingProvider !== adapter.upstream) status = 'upstream_mismatch'
-  if (captured?.failure === 'outcome_unknown' || !captured) status = 'ambiguous'
-  if (captured?.failure === 'budget_exhausted') status = 'budget_exhausted'
-  if (captured?.failure === 'invalid_response') status = 'malformed'
+  if (raw.failure) status = raw.failure === 'outcome_unknown' ? 'ambiguous' : raw.failure === 'invalid_response' ? 'malformed' : raw.failure
   const valid = status === 'valid'
   return { status, scorePercent: valid ? execution.receipt.verdict.scorePercent : null,
     criteria: valid ? execution.receipt.verdict.criterionResults : null,
-    identity: execution.receipt.observedIdentity, usage: execution.receipt.usage, execution, raw: captured ?? { failure: 'outcome_unknown' }, terminalAt }
+    identity: execution.receipt.observedIdentity, usage: execution.receipt.usage, execution, raw, terminalAt }
 }
 
 export async function baselineExecution({ adapter, blind, saved, registry, startedAt, terminalAt, raw, infer, clock }) {
