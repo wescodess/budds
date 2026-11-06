@@ -1,4 +1,4 @@
-import type { Infer } from 'convex/values'
+import { getDocumentSize, type Infer, type Value } from 'convex/values'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { requireAuth } from './auth'
@@ -22,9 +22,177 @@ function available(row: { evidenceStatus: string, invalidatedAt?: number } | nul
   return row?.evidenceStatus === 'available' && row.invalidatedAt === undefined
 }
 
+// Keep three quarters of the transaction's 16 MiB read allowance for C4.3.
+export const ARTIFACT_LINEAGE_READ_BYTES = 4 * 1024 * 1024
+const MAX_DOCUMENT_READ_BYTES = 1024 * 1024 + 64
+const budgetContext = Symbol('artifactLineageReadBudget')
+
+// All reads, including those inside shared authority helpers and indexed
+// queries, use one budget. Reserve a maximum-size document BEFORE each read;
+// charge the SDK's document size plus 64 bytes of conservative overhead.
+function withReadBudget<T extends ReadCtx>(ctx: T): T {
+  if (Reflect.get(ctx, budgetContext)) return ctx
+  let bytes = 0
+  let reserved = 0
+  const read = async <R>(operation: () => Promise<R>): Promise<R> => {
+    if (bytes + reserved + MAX_DOCUMENT_READ_BYTES > ARTIFACT_LINEAGE_READ_BYTES) unavailable()
+    reserved += MAX_DOCUMENT_READ_BYTES
+    try {
+      const result = await operation()
+      if (result !== null && result !== undefined) {
+        // Iterator results are unwrapped before reaching this function.
+        const size = getDocumentSize(result as Record<string, Value>) + 64
+        if (size > MAX_DOCUMENT_READ_BYTES) unavailable()
+        bytes += size
+      }
+      return result
+    }
+    finally { reserved -= MAX_DOCUMENT_READ_BYTES }
+  }
+  const iterate = async function* (query: object) {
+    const iterator = (query as AsyncIterable<unknown>)[Symbol.asyncIterator]()
+    try {
+      while (true) {
+        let done = false
+        const row = await read(async () => {
+          const next = await iterator.next()
+          done = next.done === true
+          return done ? null : next.value
+        })
+        if (done) return
+        yield row
+      }
+    }
+    finally { await iterator.return?.() }
+  }
+  const boundedQuery = <Q extends object>(query: Q): Q => new Proxy(query, {
+    get(target, property) {
+      if (property === Symbol.asyncIterator) return () => iterate(target)
+      if (property === 'take' || property === 'first' || property === 'unique') return async (count?: number) => {
+        const limit = property === 'take' ? count : property === 'first' ? 1 : 2
+        if (limit === undefined || !Number.isSafeInteger(limit) || limit < 0) unavailable()
+        const rows: unknown[] = []
+        if (limit > 0) {
+          for await (const row of iterate(target)) {
+            rows.push(row)
+            if (rows.length === limit) break
+          }
+        }
+        if (property === 'take') return rows
+        if (property === 'unique' && rows.length > 1) unavailable()
+        return rows[0] ?? null
+      }
+      // No batch terminal can bypass per-document reservation.
+      if (property !== 'withIndex' && property !== 'order') unavailable()
+      const method: unknown = Reflect.get(target, property)
+      if (typeof method !== 'function') unavailable()
+      return (...args: unknown[]) => boundedQuery(Reflect.apply(method, target, args) as object)
+    },
+  })
+  const db = new Proxy(ctx.db, {
+    get(target, property) {
+      const method: unknown = Reflect.get(target, property)
+      if (typeof method !== 'function') return method
+      if (property === 'get') return (...args: unknown[]) => read(() => Reflect.apply(method, target, args))
+      if (property === 'query') return (...args: unknown[]) => boundedQuery(Reflect.apply(method, target, args) as object)
+      return method.bind(target)
+    },
+  })
+  return new Proxy(ctx, { get: (target, property) => property === budgetContext ? true : property === 'db' ? db : Reflect.get(target, property) })
+}
+
+type ArtifactContent =
+  | { kind: 'session_block', block: Doc<'sessionContentBlocks'>, content: Doc<'sessionContent'> }
+  | { kind: 'document' | 'document_chunk', document: Doc<'documents'> }
+  | { kind: 'quiz_question', question: Doc<'quizQuestions'> }
+  | { kind: 'section_block', section: Doc<'courseSections'> }
+  | { kind: 'flashcard_version', version: Doc<'flashcardRoomVersions'>, cards: Doc<'flashcardVersionCards'>[] }
+  | { kind: 'audio_overview', overview: Doc<'audioOverviews'>, episode: Doc<'audioOverviewEpisodes'> | null, media: Doc<'audioOverviewAudioArtifacts'> | null }
+  | { kind: 'learner_artifact', artifact: Doc<'learningThreadArtifacts'> }
+  | { kind: 'measurement_item' | 'scoring_spec', item: Doc<'learnMeasurementItems'>, family: Doc<'learnMeasurementFamilies'>, spec: Doc<'learnMeasurementScoringSpecs'> }
+
+function objectIdentity(row: { _id: string, userId: string }) { return { id: row._id, userId: row.userId } }
+function capability(row: Doc<'learnMeasurementItems'> | Doc<'learnMeasurementFamilies'> | Doc<'learnMeasurementScoringSpecs'>) {
+  return { learningVoidId: row.learningVoidId, blueprintRevisionId: row.blueprintRevisionId, blueprintRecordRevision: row.blueprintRecordRevision,
+    objectiveId: row.objectiveId, assessmentContractVersion: row.assessmentContractVersion, assessmentContractDigest: row.assessmentContractDigest, depth: row.depth }
+}
+
+// Explicit allowlists: new operational fields never silently enter a content
+// pin. Section/audio titles are instructional headings; room/version labels
+// and document filenames are organizational metadata. Liveness is separate.
+export function artifactContentProjection(input: ArtifactContent) {
+  const payload = (() => {
+    switch (input.kind) {
+      case 'session_block': {
+        const { block: b, content: c } = input
+        return { block: { ...objectIdentity(b), sessionContentId: b.sessionContentId, order: b.order, kind: b.kind, content: b.content, claimOrdersJson: b.claimOrdersJson },
+          content: { ...objectIdentity(c), studySessionId: c.studySessionId, studyPlanRevisionId: c.studyPlanRevisionId, blueprintRevisionId: c.blueprintRevisionId,
+            objectiveId: c.objectiveId, revision: c.revision, inputDigest: c.inputDigest, candidateDigest: c.candidateDigest,
+            assessmentRubricSnapshot: c.assessmentRubricSnapshot, generatorVersion: c.generatorVersion,
+            assessmentOpportunityId: c.assessmentOpportunityId, assessmentPurpose: c.assessmentPurpose } }
+      }
+      case 'document': case 'document_chunk': {
+        const d = input.document
+        return { ...objectIdentity(d), folderId: d.folderId, sourceRevision: d.sourceRevision, contentHash: d.contentHash, r2Key: d.r2Key, fileId: d.fileId,
+          fileSize: d.fileSize, sourceType: d.sourceType, sourceUrl: d.sourceUrl, mimeType: d.mimeType }
+      }
+      case 'quiz_question': {
+        const q = input.question
+        return { ...objectIdentity(q), quizId: q.quizId, order: q.order, question: q.question, type: q.type, options: q.options, correctAnswer: q.correctAnswer,
+          gradingCriteria: q.gradingCriteria, explanation: q.explanation, correctedAnswer: q.correctedAnswer, correctedExplanation: q.correctedExplanation,
+          sourceDocumentId: q.sourceDocumentId, sourceChunkContent: q.sourceChunkContent }
+      }
+      case 'section_block': {
+        const s = input.section
+        return { ...objectIdentity(s), courseId: s.courseId, order: s.order, title: s.title, knowledgeType: s.knowledgeType, contentBlocks: s.contentBlocks }
+      }
+      case 'flashcard_version': {
+        const v = input.version
+        return { version: { ...objectIdentity(v), roomId: v.roomId, prompt: v.prompt }, cards: input.cards.map(c => ({ ...objectIdentity(c), versionId: c.versionId,
+          roomId: c.roomId, displayOrder: c.displayOrder, term: c.term, definition: c.definition,
+          sourceDocumentId: c.sourceDocumentId, sourceChunkContent: c.sourceChunkContent,
+          source: c.metadata?.source ? { documentId: c.metadata.source.documentId, chunkContent: c.metadata.source.chunkContent } : undefined })) }
+      }
+      case 'audio_overview': {
+        const { overview: o, episode: e, media: m } = input
+        return { overview: { ...objectIdentity(o), folderId: o.folderId, roomId: o.roomId, episodeId: o.episodeId, finalArtifactId: o.finalArtifactId,
+          title: o.title, turns: o.turns, voiceProfile: o.voiceProfile, hostNames: o.hostNames, preferences: o.preferences, totalDurationMs: o.totalDurationMs,
+          sourceDocumentIds: o.sourceDocumentIds, scopeDocIds: o.scopeDocIds, courseScoped: o.courseScoped },
+        episode: e ? { ...objectIdentity(e), folderId: e.folderId, roomId: e.roomId, sourceManifestId: e.sourceManifestId, outlineId: e.outlineId, claimLedgerId: e.claimLedgerId,
+          schemaVersion: e.schemaVersion, title: e.title, audioProfileId: e.audioProfileId, audioProfileVersion: e.audioProfileVersion, renderer: e.renderer,
+          hostAVoice: e.hostAVoice, hostBVoice: e.hostBVoice, hostAName: e.hostAName, hostBName: e.hostBName,
+          requestedLengthMinutes: e.requestedLengthMinutes, complexity: e.complexity, finalArtifactId: e.finalArtifactId,
+          alignmentId: e.alignmentId, compatibilityOverviewId: e.compatibilityOverviewId } : null,
+        media: m ? { ...objectIdentity(m), episodeId: m.episodeId, sceneId: m.sceneId, interjectionId: m.interjectionId, kind: m.kind,
+          storageProvider: m.storageProvider, objectKey: m.objectKey, etag: m.etag, checksumSha256: m.checksumSha256, byteLength: m.byteLength,
+          contentType: m.contentType, container: m.container, sampleRateHz: m.sampleRateHz, channelCount: m.channelCount, bitsPerSample: m.bitsPerSample, durationMs: m.durationMs } : null }
+      }
+      case 'learner_artifact': {
+        const a = input.artifact
+        return { ...objectIdentity(a), threadId: a.threadId, activityId: a.activityId, artifactKind: a.artifactKind, revision: a.revision,
+          title: a.title, summary: a.summary, r2ObjectKey: a.r2ObjectKey }
+      }
+      case 'measurement_item': case 'scoring_spec': {
+        const { item: i, family: f, spec: s } = input
+        return { item: { ...objectIdentity(i), ...capability(i), itemKey: i.itemKey, revision: i.revision, familyId: i.familyId, familyRevision: i.familyRevision,
+          caseId: i.caseId, formLabel: i.formLabel, reserve: i.reserve, prompt: i.prompt, declaredStimulus: i.declaredStimulus, promptDigest: i.promptDigest,
+          responseSpec: i.responseSpec, scoringSpecId: i.scoringSpecId, scoringSpecRevision: i.scoringSpecRevision, scoringSpecDigest: i.scoringSpecDigest,
+          generatorVersion: i.generatorVersion, generationJobId: i.generationJobId, inputDigest: i.inputDigest, supportManifestDigest: i.supportManifestDigest,
+          publicationValidationId: i.publicationValidationId },
+        family: { ...objectIdentity(f), ...capability(f), familyKey: f.familyKey, revision: f.revision, recordRevision: f.recordRevision,
+          equivalenceVersion: f.equivalenceVersion, equivalenceDescriptor: f.equivalenceDescriptor, coreFormCount: f.coreFormCount,
+          totalFormCount: f.totalFormCount, validationId: f.validationId, validationArtifactDigest: f.validationArtifactDigest },
+        spec: { ...objectIdentity(s), ...capability(s), itemId: s.itemId, revision: s.revision, digest: s.digest, payload: s.payload,
+          referenceSolution: s.referenceSolution, derivation: s.derivation, scoringBinding: s.scoringBinding } }
+      }
+    }
+  })()
+  return { version: 'learn-v2.artifact-content.v1', kind: input.kind, payload }
+}
+
 // Server producers use this same bounded encoding when capturing payload pins.
-// Pin the entire stored record (and version children), including object keys;
-// legacy records without a revision counter use the digest as their revision.
+// Hash artifactContentProjection, never a whole operational record. Legacy
+// records without a revision counter use this content digest as their revision.
 export async function artifactPayloadDigest(payload: unknown) {
   const canonical = (value: unknown): unknown => {
     if (Array.isArray(value)) return value.map(canonical)
@@ -92,13 +260,13 @@ async function liveSessionBlock(ctx: ReadCtx, userId: string, row: Lineage, id: 
     if (blueprint.recordRevision !== plan.blueprintRecordRevision) unavailable()
   }
   catch { unavailable() }
-  await pinned(row, [block, content], content.revision)
+  await pinned(row, artifactContentProjection({ kind: 'session_block', block, content }), content.revision)
 }
 
 async function liveDocumentArtifact(ctx: ReadCtx, userId: string, row: Lineage, id: Id<'documents'>) {
   const document = await liveDocument(ctx, userId, id)
   if (!document.sourceRevision?.trim() || !document.contentHash?.trim()) unavailable()
-  await pinned(row, [document], document.sourceRevision)
+  await pinned(row, artifactContentProjection({ kind: row.artifact.kind === 'document_chunk' ? 'document_chunk' : 'document', document }), document.sourceRevision)
 }
 
 async function liveDocumentChunk(ctx: ReadCtx, userId: string, row: Lineage, id: Id<'documents'>) {
@@ -115,7 +283,7 @@ async function liveQuizQuestion(ctx: ReadCtx, userId: string, row: Lineage, id: 
   if (!quiz || quiz.userId !== userId || quiz.status !== 'ready' || quiz.deletedAt !== undefined) unavailable()
   await liveFolder(ctx, userId, quiz.folderId)
   if (quiz.courseId) await liveCourse(ctx, userId, quiz.courseId)
-  await pinned(row, [question])
+  await pinned(row, artifactContentProjection({ kind: 'quiz_question', question }))
 }
 
 async function liveSectionBlock(ctx: ReadCtx, userId: string, row: Lineage, id: Id<'courseSections'>) {
@@ -123,7 +291,7 @@ async function liveSectionBlock(ctx: ReadCtx, userId: string, row: Lineage, id: 
   if (!section || section.userId !== userId || !['ready', 'completed'].includes(section.status)) unavailable()
   // courseSections.ts:341 and courses.ts:237 reject a deleting aggregate.
   await liveCourse(ctx, userId, section.courseId)
-  await pinned(row, [section])
+  await pinned(row, artifactContentProjection({ kind: 'section_block', section }))
 }
 
 async function liveFlashcardVersion(ctx: ReadCtx, userId: string, row: Lineage, id: Id<'flashcardRoomVersions'>) {
@@ -136,7 +304,7 @@ async function liveFlashcardVersion(ctx: ReadCtx, userId: string, row: Lineage, 
   await liveFolder(ctx, userId, room.folderId)
   const cards = await ctx.db.query('flashcardVersionCards').withIndex('by_versionId', q => q.eq('versionId', version._id)).take(201)
   if (cards.length > 200 || cards.some(card => card.userId !== userId || card.roomId !== room._id)) unavailable()
-  await pinned(row, [version, cards], version._id)
+  await pinned(row, artifactContentProjection({ kind: 'flashcard_version', version, cards }), version._id)
 }
 
 async function liveAudioOverview(ctx: ReadCtx, userId: string, row: Lineage, id: Id<'audioOverviews'>) {
@@ -161,7 +329,7 @@ async function liveAudioOverview(ctx: ReadCtx, userId: string, row: Lineage, id:
       || !media || media.userId !== userId || media.episodeId !== episode._id || media.kind !== 'final'
       || media.status !== 'published' || media.storageProvider !== 'r2' || media.container !== 'wav') unavailable()
   }
-  await pinned(row, [overview, episode, media])
+  await pinned(row, artifactContentProjection({ kind: 'audio_overview', overview, episode, media }))
 }
 
 async function liveLearnerArtifact(ctx: ReadCtx, userId: string, row: Lineage, id: Id<'learningThreadArtifacts'>) {
@@ -180,7 +348,7 @@ async function liveLearnerArtifact(ctx: ReadCtx, userId: string, row: Lineage, i
       .withIndex('by_userId_and_activityId_and_invalidatedAt', q => q.eq('userId', userId).eq('activityId', activity._id).gt('invalidatedAt', undefined)).first()
     if (invalidated) unavailable()
   }
-  await pinned(row, [artifact], artifact.revision)
+  await pinned(row, artifactContentProjection({ kind: 'learner_artifact', artifact }), artifact.revision)
 }
 
 async function liveMeasurementInventory(ctx: ReadCtx, userId: string, item: Doc<'learnMeasurementItems'> | null) {
@@ -209,7 +377,7 @@ async function liveMeasurementInventory(ctx: ReadCtx, userId: string, item: Doc<
 
 async function liveMeasurementItem(ctx: ReadCtx, userId: string, row: Lineage, id: Id<'learnMeasurementItems'>) {
   const { item, family, spec } = await liveMeasurementInventory(ctx, userId, await ctx.db.get(id))
-  await pinned(row, [item, family, spec], item.revision)
+  await pinned(row, artifactContentProjection({ kind: 'measurement_item', item, family, spec }), item.revision)
 }
 
 async function liveScoringSpec(ctx: ReadCtx, userId: string, row: Lineage, id: Id<'learnMeasurementScoringSpecs'>) {
@@ -217,7 +385,7 @@ async function liveScoringSpec(ctx: ReadCtx, userId: string, row: Lineage, id: I
   if (!spec || spec.userId !== userId || !available(spec) || spec.payload === undefined || spec.referenceSolution === undefined) unavailable()
   const { item, family } = await liveMeasurementInventory(ctx, userId, await ctx.db.get(spec.itemId))
   if (item.scoringSpecId !== spec._id) unavailable()
-  await pinned(row, [spec, item, family], spec.revision)
+  await pinned(row, artifactContentProjection({ kind: 'scoring_spec', item, family, spec }), spec.revision)
 }
 
 async function requireLiveArtifact(ctx: ReadCtx, userId: string, row: Lineage) {
@@ -342,11 +510,9 @@ async function inspectGraph(ctx: ReadCtx, userId: string, root: Lineage, catalog
     if (!parsed.success || parsed.data.lineageId !== row._id || parsed.data.payloadDigest !== row.payloadDigest || parsed.data.manifestDigest !== row.manifestDigest
       || parsed.data.decision !== 'pass' || parsed.data.coverage !== 'complete' || parsed.data.comparedCatalogRevision > catalogRevision) unavailable()
     validations.set(row._id, { ...parsed.data, validationId: validation._id })
-    const [origins, bindings, sources] = await Promise.all([
-      ctx.db.query('learnArtifactLineageOrigins').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', row._id)).take(limits.maxOrigins + 1),
-      ctx.db.query('learnArtifactCaseBindings').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', row._id)).take(limits.maxCases + 1),
-      ctx.db.query('learnArtifactSourceLinks').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', row._id)).take(limits.maxSources + 1),
-    ])
+    const origins = await ctx.db.query('learnArtifactLineageOrigins').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', row._id)).take(limits.maxOrigins + 1)
+    const bindings = await ctx.db.query('learnArtifactCaseBindings').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', row._id)).take(limits.maxCases + 1)
+    const sources = await ctx.db.query('learnArtifactSourceLinks').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', row._id)).take(limits.maxSources + 1)
     sourceCount += sources.length
     caseCount += bindings.length
     if (origins.length > limits.maxOrigins || caseCount > limits.maxCases || sourceCount > limits.maxSources
@@ -371,10 +537,8 @@ async function inspectGraph(ctx: ReadCtx, userId: string, root: Lineage, catalog
       if (!pin.success || !candidate || candidate.userId !== userId || candidate.scenarioFingerprint !== binding.scenarioFingerprint
         || candidate.solutionFingerprint !== binding.solutionFingerprint || candidate.identityPolicyVersion !== binding.identityPolicyVersion
         || binding.identityPolicyVersion !== parsed.data.identityPolicyVersion) unavailable()
-      const [scenarios, solutions] = await Promise.all([
-        ctx.db.query('learnAssessmentCases').withIndex('by_userId_and_scenarioFingerprint', q => q.eq('userId', userId).eq('scenarioFingerprint', binding.scenarioFingerprint)).take(2),
-        ctx.db.query('learnAssessmentCases').withIndex('by_userId_and_solutionFingerprint', q => q.eq('userId', userId).eq('solutionFingerprint', binding.solutionFingerprint)).take(2),
-      ])
+      const scenarios = await ctx.db.query('learnAssessmentCases').withIndex('by_userId_and_scenarioFingerprint', q => q.eq('userId', userId).eq('scenarioFingerprint', binding.scenarioFingerprint)).take(2)
+      const solutions = await ctx.db.query('learnAssessmentCases').withIndex('by_userId_and_solutionFingerprint', q => q.eq('userId', userId).eq('solutionFingerprint', binding.solutionFingerprint)).take(2)
       if (scenarios.length !== 1 || solutions.length !== 1) unavailable()
       cases.set(binding.caseId, binding)
       usage.set(binding.caseId, candidate.reservedAt === undefined ? candidate.usageClass : 'measurement_reserved')
@@ -402,9 +566,10 @@ async function inspectGraph(ctx: ReadCtx, userId: string, root: Lineage, catalog
 }
 
 export async function resolveArtifactLineageForOwner(ctx: ReadCtx, userId: string, input: unknown): Promise<LearnArtifactLookupResult> {
-  if (await requireAuth(ctx) !== userId) throw new Error('Learn access denied')
-  const { reference } = validateLearnArtifactLookup(input)
+  ctx = withReadBudget(ctx)
   try {
+    if (await requireAuth(ctx) !== userId) throw new Error('Learn access denied')
+    const { reference } = validateLearnArtifactLookup(input)
     const catalog = await readCatalog(ctx, userId)
     const root = await findLineage(ctx, userId, reference)
     const graph = await inspectGraph(ctx, userId, root, catalog.catalogRevision, true)
@@ -422,6 +587,7 @@ export async function resolveArtifactLineageForOwner(ctx: ReadCtx, userId: strin
 }
 
 export async function advanceAssessmentCatalogForOwner(ctx: MutationCtx, userId: string, expectedRevision: number) {
+  ctx = withReadBudget(ctx)
   if (await requireAuth(ctx) !== userId) throw new Error('Learn access denied')
   const catalog = await readCatalog(ctx, userId)
   if (!learnSequenceSchema.safeParse(expectedRevision).success || catalog.catalogRevision !== expectedRevision
@@ -432,6 +598,7 @@ export async function advanceAssessmentCatalogForOwner(ctx: MutationCtx, userId:
 
 // Dormant transaction seam; callers must write their artifact in this mutation.
 export async function registerInstructionalArtifactForOwner(ctx: MutationCtx, userId: string, input: unknown) {
+  ctx = withReadBudget(ctx)
   if (await requireAuth(ctx) !== userId) throw new Error('Learn access denied')
   const args = parseLearnContract(learnArtifactRegistrationArgsSchema, input)
   const catalog = await readCatalog(ctx, userId)

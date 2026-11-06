@@ -1,12 +1,13 @@
 /// <reference types="vite/client" />
 import { convexTest } from 'convex-test'
 import { makeFunctionReference } from 'convex/server'
+import { getDocumentSize, type Value } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import { internalMutation, type MutationCtx } from './_generated/server'
 import schema from './schema'
-import { artifactManifestDigest, artifactPayloadDigest, advanceAssessmentCatalogForOwner, registerInstructionalArtifactForOwner } from './lib/learnV2ArtifactLineage'
+import { ARTIFACT_LINEAGE_READ_BYTES, artifactContentProjection, artifactManifestDigest, artifactPayloadDigest, advanceAssessmentCatalogForOwner, registerInstructionalArtifactForOwner, resolveArtifactLineageForOwner } from './lib/learnV2ArtifactLineage'
 import { artifactRegistrationArgs, artifactRegistrationResultValidator } from './lib/learnV2ArtifactLineageContract'
 import { invalidateMeasurementSourceBatch } from './lib/learnV2MeasurementRetention'
 import { LEARN_ARTIFACT_LINEAGE_VERSION, LEARN_ARTIFACT_LINEAGE_LIMITS, type LearnArtifactReference } from '../shared/learn-v2-artifact-lineage'
@@ -49,7 +50,7 @@ async function prepare(ctx: MutationCtx, options: {
   const folderId = await ctx.db.insert('folders', { userId, name: 'Owned teaching', documentCount: 0 })
   const documentId = await ctx.db.insert('documents', { userId, folderId, filename: 'owned.txt', fileSize: 5, status: 'success', sourceRevision: 'source.r1', contentHash: 'f'.repeat(64), r2Key: 'owned/source.r1' })
   const classification = options.classification ?? options.origin?.classification ?? 'teaching'
-  const reference: LearnArtifactReference = { artifact: { kind: 'document', id: documentId }, key: options.key ?? 'whole', revision: 'source.r1', payloadDigest: await artifactPayloadDigest([await ctx.db.get(documentId)]) }
+  const reference: LearnArtifactReference = { artifact: { kind: 'document', id: documentId }, key: options.key ?? 'whole', revision: 'source.r1', payloadDigest: await artifactPayloadDigest(artifactContentProjection({ kind: 'document', document: (await ctx.db.get(documentId))! })) }
   const lineageId = await ctx.db.insert('learnArtifactLineages', { ...base, ...reference, lineageVersion: LEARN_ARTIFACT_LINEAGE_VERSION,
     manifestDigest: '0'.repeat(64), evidenceStatus: 'available', classification,
     authority: options.origin ? 'server_producer' : classification === 'genuine_personal_work' ? 'personal_authorship' : classification === 'legacy_history' ? 'legacy_record' : 'server_producer',
@@ -618,11 +619,14 @@ async function prepareMatrix(ctx: MutationCtx, kind: ArtifactKind, sourceKind: S
     audio_overview: { kind: 'audio_overview', id: overviewId }, learner_artifact: { kind: 'learner_artifact', id: learnerArtifactId }, measurement_item: { kind: 'measurement_item', id: itemId }, scoring_spec: { kind: 'scoring_spec', id: specId },
   } as const satisfies Record<ArtifactKind, LearnArtifactReference['artifact']>
   const artifact = artifactByKind[kind]
-  const record = await ctx.db.get(artifact.id)
-  const payload = kind === 'session_block' ? [record, await ctx.db.get(contentId)]
-    : kind === 'flashcard_version' ? [record, [await ctx.db.get(cardId)]] : kind === 'audio_overview' ? [record, null, null]
-      : kind === 'measurement_item' ? [record, await ctx.db.get(familyId), await ctx.db.get(specId)]
-        : kind === 'scoring_spec' ? [record, await ctx.db.get(itemId), await ctx.db.get(familyId)] : [record]
+  const payload = kind === 'session_block' ? artifactContentProjection({ kind, block: (await ctx.db.get(blockId))!, content: (await ctx.db.get(contentId))! })
+    : kind === 'flashcard_version' ? artifactContentProjection({ kind, version: (await ctx.db.get(versionId))!, cards: [(await ctx.db.get(cardId))!] })
+      : kind === 'audio_overview' ? artifactContentProjection({ kind, overview: (await ctx.db.get(overviewId))!, episode: null, media: null })
+        : kind === 'measurement_item' || kind === 'scoring_spec' ? artifactContentProjection({ kind, item: (await ctx.db.get(itemId))!, family: (await ctx.db.get(familyId))!, spec: (await ctx.db.get(specId))! })
+          : kind === 'quiz_question' ? artifactContentProjection({ kind, question: (await ctx.db.get(questionId))! })
+            : kind === 'section_block' ? artifactContentProjection({ kind, section: (await ctx.db.get(sectionId))! })
+              : kind === 'learner_artifact' ? artifactContentProjection({ kind, artifact: (await ctx.db.get(learnerArtifactId))! })
+                : artifactContentProjection({ kind, document: (await ctx.db.get(f.documentId))! })
   const payloadDigest = await artifactPayloadDigest(payload)
   const revision = kind === 'document' || kind === 'document_chunk' ? 'source.r1' : kind === 'flashcard_version' ? String(versionId)
     : ['session_block', 'learner_artifact', 'measurement_item', 'scoring_spec'].includes(kind) ? '1' : `sha256:${payloadDigest}`
@@ -641,6 +645,32 @@ type Revocation = { name: string, kinds?: readonly ArtifactKind[], apply: (t: Te
 const documentKinds = ['document', 'document_chunk'] as const
 const voidKinds = ['session_block', 'learner_artifact', 'measurement_item', 'scoring_spec'] as const
 const measurementKinds = ['measurement_item', 'scoring_spec'] as const
+
+const benignUpdates: Revocation[] = [
+  { name: 'document indexJobId only (real)', kinds: documentKinds, apply: (t, f) => t.mutation(internal.documents.updateDocumentStatus, { id: f.documentId, status: 'success', indexJobId: 'new-index-job' }) },
+  { name: 'document filename (real)', kinds: documentKinds, apply: (t, f) => t.mutation(internal.documents.updateDocumentFilename, { id: f.documentId, filename: 'renamed.txt' }) },
+  { name: 'section completion (real)', kinds: ['section_block'], apply: (t, f) => t.withIdentity(owner).mutation(api.courseSections.completeSection, { sectionId: f.sectionId, practiceScore: 80, quizCorrect: 4, quizTotal: 5 }) },
+  { name: 'section offline availability (real)', kinds: ['section_block'], apply: (t, f) => t.withIdentity(owner).mutation(api.courseSections.setOfflineAvailable, { sectionId: f.sectionId, offlineAvailable: true }) },
+  { name: 'Audio Overview publication (real)', kinds: ['audio_overview'], apply: (t, f) => t.withIdentity(owner).mutation(api.audioOverviews.publishOverview, { id: f.overviewId }) },
+  { name: 'flashcard room rename (real)', kinds: ['flashcard_version'], apply: (t, f) => t.withIdentity(owner).mutation(api.flashcardRooms.renameRoom, { roomId: f.flashcardRoomId, title: 'Renamed room' }) },
+  { name: 'quiz rename (real)', kinds: ['quiz_question'], apply: (t, f) => t.withIdentity(owner).mutation(api.quizzes.updateQuiz, { quizId: f.quizId, title: 'Renamed quiz' }) },
+  { name: 'session start (real)', kinds: ['session_block'], apply: (t, f) => t.withIdentity(owner).mutation(api.learnV2SessionContent.startStudySession, { studySessionId: f.sessionId, expectedSessionRevision: 1, expectedContentRevision: 1, idempotencyKey: 'lineage-benign-start' }) },
+  { name: 'thread pause (real)', kinds: ['learner_artifact'], apply: (t, f) => t.withIdentity(owner).mutation(api.learnAdaptive.leaveThread, { threadId: f.threadId, expectedRevision: 1, idempotencyKey: 'lineage-benign-pause' }) },
+  // These immutable/dormant records have no operational-update command.
+  { name: 'content publication timestamp (injected)', kinds: ['session_block'], apply: (t, f) => t.run(ctx => ctx.db.patch(f.contentId, { publishedAt: 123 })) },
+  { name: 'question moderation timestamp (injected)', kinds: ['quiz_question'], apply: (t, f) => t.run(ctx => ctx.db.patch(f.questionId, { flaggedAt: 123 })) },
+  { name: 'version card timestamp and label (injected)', kinds: ['flashcard_version'], apply: (t, f) => t.run(async ctx => {
+    await ctx.db.patch(f.versionId, { title: 'Organizational label', createdAt: 123 })
+    await ctx.db.patch(f.cardId, { updatedAt: 123, sourceFilename: 'renamed.txt' })
+  }) },
+  { name: 'artifact save timestamps (injected)', kinds: ['learner_artifact'], apply: (t, f) => t.run(ctx => ctx.db.patch(f.learnerArtifactId, { createdAt: 123, updatedAt: 124 })) },
+  { name: 'measurement operational metadata (injected)', kinds: measurementKinds, apply: (t, f) => t.run(async ctx => {
+    await ctx.db.patch(f.itemId, { createdAt: 123, catalogRevision: 1 })
+    await ctx.db.patch(f.specId, { createdAt: 123 })
+    await ctx.db.patch(f.familyId, { createdAt: 123, reasonCode: 'operational_note', status: 'empirically_supported' })
+  }) },
+  { name: 'owning folder rename (real)', kinds: measurementKinds, apply: (t, f) => t.withIdentity(owner).mutation(api.folders.renameFolder, { id: f.folderId, name: 'Renamed measurement folder' }) },
+]
 
 const artifactRevocations: Revocation[] = [
   { name: 'record_deleted', apply: (t, f) => t.run(ctx => ctx.db.delete(f.reference.artifact.id)) },
@@ -664,6 +694,7 @@ const artifactRevocations: Revocation[] = [
   { name: 'content_deleted', kinds: ['session_block'], apply: (t, f) => t.run(ctx => ctx.db.delete(f.contentId)) },
   { name: 'content_revision_changed', kinds: ['session_block'], apply: (t, f) => t.run(ctx => ctx.db.patch(f.contentId, { revision: 2 })) },
   { name: 'block_payload_changed', kinds: ['session_block'], apply: (t, f) => t.run(ctx => ctx.db.patch(f.blockId, { content: 'Replaced block' })) },
+  { name: 'content_rubric_changed', kinds: ['session_block'], apply: (t, f) => t.run(ctx => ctx.db.patch(f.contentId, { assessmentRubricSnapshot: 'Replaced rubric' })) },
   { name: 'session_cancelled', kinds: ['session_block'], apply: (t, f) => t.run(ctx => ctx.db.patch(f.sessionId, { status: 'cancelled' })) },
   { name: 'plan_superseded', kinds: ['session_block'], apply: (t, f) => t.run(ctx => ctx.db.patch(f.planId, { status: 'superseded' })) },
   { name: 'plan_pointer_replaced', kinds: ['session_block'], apply: (t, f) => t.run(ctx => ctx.db.patch(f.studyPlanId, { activeRevisionId: undefined })) },
@@ -671,15 +702,19 @@ const artifactRevocations: Revocation[] = [
   { name: 'quiz_deleted_real', kinds: ['quiz_question'], apply: (t, f) => t.withIdentity(owner).mutation(api.quizzes.deleteQuiz, { quizId: f.quizId }) },
   { name: 'question_deleted_real', kinds: ['quiz_question'], apply: (t, f) => t.withIdentity(owner).mutation(api.quizzes.deleteQuestion, { questionId: f.questionId }) },
   { name: 'question_payload_changed_real', kinds: ['quiz_question'], apply: (t, f) => t.withIdentity(owner).mutation(api.quizzes.updateQuestion, { questionId: f.questionId, question: 'A different question?' }) },
+  { name: 'question_answer_changed_real', kinds: ['quiz_question'], apply: (t, f) => t.withIdentity(owner).mutation(api.quizzes.updateQuestion, { questionId: f.questionId, correctAnswer: 'Three' }) },
+  { name: 'question_correction_changed_real', kinds: ['quiz_question'], apply: (t, f) => t.withIdentity(owner).mutation(api.contentFlags.flagQuizQuestion, { questionId: f.questionId, correctedAnswer: 'Three', correctedExplanation: 'Revised explanation' }) },
   { name: 'quiz_failed', kinds: ['quiz_question'], apply: (t, f) => t.run(ctx => ctx.db.patch(f.quizId, { status: 'failed' })) },
   { name: 'quiz_tombstone_zero', kinds: ['quiz_question'], apply: (t, f) => t.run(ctx => ctx.db.patch(f.quizId, { deletedAt: 0 })) },
   { name: 'course_deleting_real', kinds: ['quiz_question', 'section_block'], apply: (t, f) => t.mutation(internal.courseDeletion.start, { courseId: f.courseId, userId: owner.tokenIdentifier }) },
   { name: 'course_failed_real', kinds: ['quiz_question', 'section_block'], apply: (t, f) => t.withIdentity(owner).mutation(api.courses.markFailed, { courseId: f.courseId }) },
   { name: 'section_failed_real', kinds: ['section_block'], apply: (t, f) => t.mutation(internal.courseSections.markSectionFailed, { sectionId: f.sectionId }) },
   { name: 'section_payload_changed_real', kinds: ['section_block'], apply: (t, f) => t.withIdentity(owner).mutation(api.courseSections.updateTitle, { sectionId: f.sectionId, title: 'Changed section' }) },
+  { name: 'section_blocks_changed', kinds: ['section_block'], apply: (t, f) => t.run(ctx => ctx.db.patch(f.sectionId, { contentBlocks: [{ type: 'text', content: 'Revised teaching body', order: 0 }] })) },
   { name: 'flashcard_room_deleted_real', kinds: ['flashcard_version'], apply: (t, f) => t.withIdentity(owner).mutation(api.flashcardRooms.deleteRoom, { roomId: f.flashcardRoomId }) },
   { name: 'flashcard_room_missing', kinds: ['flashcard_version'], apply: (t, f) => t.run(ctx => ctx.db.delete(f.flashcardRoomId)) },
   { name: 'flashcard_payload_changed', kinds: ['flashcard_version'], apply: (t, f) => t.run(ctx => ctx.db.patch(f.cardId, { definition: 'Replaced version content' })) },
+  { name: 'flashcard_prompt_changed', kinds: ['flashcard_version'], apply: (t, f) => t.run(ctx => ctx.db.patch(f.versionId, { prompt: 'Revised prompt' })) },
   { name: 'audio_deleting_real', kinds: ['audio_overview'], apply: (t, f) => t.withIdentity(owner).mutation(api.audioOverviews.deleteOverview, { id: f.overviewId }) },
   { name: 'audio_failed', kinds: ['audio_overview'], apply: (t, f) => t.run(ctx => ctx.db.patch(f.overviewId, { status: 'failed' })) },
   { name: 'audio_room_deleted_real', kinds: ['audio_overview'], apply: (t, f) => t.withIdentity(owner).mutation(api.audioOverviewRooms.remove, { roomId: f.audioRoomId }) },
@@ -690,6 +725,7 @@ const artifactRevocations: Revocation[] = [
   { name: 'learner_artifact_deleted_real', kinds: ['learner_artifact'], apply: (t, f) => t.withIdentity(owner).mutation(api.learnAdaptive.deleteArtifact, { threadId: f.threadId, artifactId: f.learnerArtifactId, expectedRevision: 1, idempotencyKey: 'lineage-delete-artifact' }) },
   { name: 'learner_payload_changed_real', kinds: ['learner_artifact'], apply: (t, f) => t.withIdentity(owner).mutation(api.learnAdaptive.saveArtifact, { threadId: f.threadId, activityId: 'lineage-artifact-activity', artifactId: f.learnerArtifactId,
     artifactKind: 'plan', title: 'Revised plan', summary: 'Revised personal work', status: 'saved', expectedRevision: 1, idempotencyKey: 'lineage-edit-artifact' }) },
+  { name: 'learner_object_changed', kinds: ['learner_artifact'], apply: (t, f) => t.run(ctx => ctx.db.patch(f.learnerArtifactId, { r2ObjectKey: 'replaced/artifact' })) },
   { name: 'thread_deleting_real', kinds: ['learner_artifact'], apply: (t, f) => t.run(ctx => initiateAdaptiveThreadDeletion(ctx, owner.tokenIdentifier, f.threadId)) },
   { name: 'thread_missing', kinds: ['learner_artifact'], apply: (t, f) => t.run(ctx => ctx.db.delete(f.threadId)) },
   { name: 'thread_rollback', kinds: ['learner_artifact'], apply: (t, f) => t.run(ctx => ctx.db.patch(f.threadId, { lifecycle: 'rollback' })) },
@@ -704,6 +740,11 @@ const artifactRevocations: Revocation[] = [
   { name: 'spec_invalidated_zero', kinds: measurementKinds, apply: (t, f) => t.run(ctx => ctx.db.patch(f.specId, { invalidatedAt: 0 })) },
   { name: 'spec_purged', kinds: measurementKinds, apply: (t, f) => t.run(ctx => ctx.db.patch(f.specId, { evidenceStatus: 'evidence_unavailable', payload: undefined, referenceSolution: undefined })) },
   { name: 'spec_payload_changed', kinds: measurementKinds, apply: (t, f) => t.run(ctx => ctx.db.patch(f.specId, { referenceSolution: 'Replaced private solution' })) },
+  { name: 'spec_key_changed', kinds: measurementKinds, apply: (t, f) => t.run(ctx => ctx.db.patch(f.specId, { payload: { kind: 'keyed', acceptedSets: [['replaced-key']], normalizationVersion: 'normalization.v1' } })) },
+  { name: 'family_equivalence_changed', kinds: measurementKinds, apply: (t, f) => t.run(async ctx => {
+    const family = (await ctx.db.get(f.familyId))!
+    await ctx.db.patch(f.familyId, { equivalenceDescriptor: { ...family.equivalenceDescriptor, contentCoverage: 'Replaced coverage' } })
+  }) },
 ]
 
 // Real production commands carry the _real suffix. The remaining rows inject
@@ -762,6 +803,27 @@ async function matrixControl(t: TestStore, f: MatrixFixture) {
 describe.each(artifactKinds)('A3 revocation matrix: %s', (kind) => {
   beforeEach(() => { vi.stubEnv('LEARN_V2_ENABLED', 'true') })
   afterEach(() => { vi.unstubAllEnvs() })
+  test.each(benignUpdates.filter(row => row.kinds?.includes(kind)).flatMap(update => (['root', 'summary', 'rewrite'] as const).map(target => ({ ...update, target }))))('A4 benign update: $name keeps $target live and preserves registration', async ({ apply, target: targetName }) => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_800_000_000_000)
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => prepareMatrix(ctx, kind))
+    const summary = await t.run(ctx => prepare(ctx, { origin: f, transformation: 'summary' }))
+    const rewrite = await t.run(ctx => prepare(ctx, { origin: summary, transformation: 'rewrite' }))
+    const asOwner = t.withIdentity(owner)
+    for (const target of [f, summary, rewrite]) expect(await asOwner.query(internal.learnV2ArtifactLineage.resolve, { reference: target.reference })).toMatchObject({ status: 'bound' })
+    await apply(t, f)
+    for (const target of [f, summary, rewrite]) expect.soft(await asOwner.query(internal.learnV2ArtifactLineage.resolve, { reference: target.reference })).toMatchObject({ status: 'bound' })
+    const target = targetName === 'root' ? f : targetName === 'summary' ? summary : rewrite
+    if (measurementKinds.some(value => value === kind)) {
+      await expect(asOwner.mutation(registerInstructional, registration(target))).rejects.toThrow('Artifact lineage unavailable')
+      expect(await t.run(ctx => ctx.db.get(f.catalogId))).toMatchObject({ catalogRevision: 0 })
+    }
+    else {
+      await expect.soft(asOwner.mutation(registerInstructional, registration(target))).resolves.toMatchObject({ catalogRevision: 1 })
+      expect.soft(await asOwner.query(internal.learnV2ArtifactLineage.resolve, { reference: target.reference })).toMatchObject({ status: 'bound', instructionalRegistered: true })
+    }
+  })
   test('live control: root and summary preserve their classification and registration policy', async () => {
     const t = convexTest(schema, modules)
     const f = await t.run(ctx => prepareMatrix(ctx, kind))
@@ -891,7 +953,7 @@ async function prepareV2Audio(ctx: MutationCtx) {
     channelCount: 1, bitsPerSample: 16, durationMs: 10, createdAt: now, publishedAt: now })
   await ctx.db.patch(episodeId, { finalArtifactId: mediaId })
   await ctx.db.patch(f.overviewId, { episodeId, finalArtifactId: mediaId })
-  const payloadDigest = await artifactPayloadDigest([await ctx.db.get(f.overviewId), await ctx.db.get(episodeId), await ctx.db.get(mediaId)])
+  const payloadDigest = await artifactPayloadDigest(artifactContentProjection({ kind: 'audio_overview', overview: (await ctx.db.get(f.overviewId))!, episode: (await ctx.db.get(episodeId))!, media: (await ctx.db.get(mediaId))! }))
   const reference = { ...f.reference, revision: `sha256:${payloadDigest}`, payloadDigest }
   await ctx.db.patch(f.lineageId, reference)
   const manifestDigest = await sealManifest(ctx, f.lineageId)
@@ -913,6 +975,18 @@ const v2AudioRevocations: { name: string, apply: (t: TestStore, f: AudioFixture)
 ]
 
 describe('A3 revocation matrix: V2 Audio Overview backing episode and media', () => {
+  test('A4 benign V2 publication preserves episode/media pins and its derived chain', async () => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => prepareV2Audio(ctx))
+    const copy = await matrixControl(t, f)
+    await t.withIdentity(owner).mutation(api.audioOverviews.publishOverview, { id: f.overviewId })
+    await t.run(async ctx => {
+      await ctx.db.patch(f.episodeId, { updatedAt: 123, publishedAt: 124 })
+      await ctx.db.patch(f.mediaId, { createdAt: 123, publishedAt: 124 })
+    })
+    for (const target of [f, copy]) expect(await t.withIdentity(owner).query(internal.learnV2ArtifactLineage.resolve, { reference: target.reference })).toMatchObject({ status: 'bound' })
+    expect(await t.withIdentity(owner).mutation(registerInstructional, registration(copy))).toMatchObject({ catalogRevision: 1 })
+  })
   test('live control resolves and registers an owned ready episode and published final media', async () => {
     const t = convexTest(schema, modules)
     const f = await t.run(ctx => prepareV2Audio(ctx))
@@ -946,5 +1020,172 @@ describe('A3 revocation matrix: learner artifact factual evidence', () => {
         threadId: f.threadId, activityId: f.activityId, sourceSnapshotId: f.snapshotId, boundaryOrdinal: 1, invalidatedAt: state.endsWith('zero') ? 0 : 1, createdAt: f.base.createdAt })
     })
     await expectMatrixRevoked(t, f, copy)
+  })
+})
+
+// Observe actual reader calls underneath the production budget. In particular,
+// indexed iteration must stop before fetching another maximum-size document.
+function traceLineageReads(ctx: MutationCtx) {
+  const stats = { bytes: 0, charged: 0, documents: 0, requests: 0 }
+  const record = (row: unknown) => {
+    if (row === null || row === undefined) return
+    const bytes = getDocumentSize(row as Record<string, Value>)
+    expect(bytes).toBeLessThanOrEqual(1024 * 1024)
+    stats.bytes += bytes
+    stats.charged += bytes + 64
+    stats.documents++
+  }
+  const query = <Q extends object>(original: Q): Q => new Proxy(original, {
+    get(target, property) {
+      if (property === Symbol.asyncIterator) return async function* () {
+        const iterator = (target as AsyncIterable<unknown>)[Symbol.asyncIterator]()
+        try {
+          while (true) {
+            stats.requests++
+            const next = await iterator.next()
+            if (next.done) return
+            record(next.value)
+            yield next.value
+          }
+        }
+        finally { await iterator.return?.() }
+      }
+      const method: unknown = Reflect.get(target, property)
+      if (typeof method !== 'function') throw new Error('Unexpected query operation')
+      return (...args: unknown[]) => query(Reflect.apply(method, target, args) as object)
+    },
+  })
+  const db = new Proxy(ctx.db, {
+    get(target, property) {
+      const method: unknown = Reflect.get(target, property)
+      if (typeof method !== 'function') return method
+      if (property === 'get') return async (...args: unknown[]) => {
+        stats.requests++
+        const row: unknown = await Reflect.apply(method, target, args)
+        record(row)
+        return row
+      }
+      if (property === 'query') return (...args: unknown[]) => query(Reflect.apply(method, target, args) as object)
+      return method.bind(target)
+    },
+  })
+  return { ctx: { ...ctx, db }, stats }
+}
+
+async function tracedLookup(t: TestStore, f: Fixture, mode: 'resolve' | 'register') {
+  let stats = { bytes: 0, charged: 0, documents: 0, requests: 0 }
+  let status: 'bound' | 'unavailable' = 'unavailable'
+  const rollback = 'Rollback successful budget probe'
+  try {
+    await t.withIdentity(owner).run(async ctx => {
+      const traced = traceLineageReads(ctx)
+      stats = traced.stats
+      if (mode === 'resolve') status = (await resolveArtifactLineageForOwner(traced.ctx, owner.tokenIdentifier, { reference: f.reference })).status
+      else {
+        await registerInstructionalArtifactForOwner(traced.ctx, owner.tokenIdentifier, registration(f))
+        status = 'bound'
+        // Measure registration's extra auth/catalogue reads without persisting
+        // its publication or changing the validation used by the next probe.
+        throw new Error(rollback)
+      }
+    })
+  }
+  catch (error) {
+    if (!(error instanceof Error) || ![rollback, 'Artifact lineage unavailable'].includes(error.message)) throw error
+  }
+  return { status, ...stats }
+}
+
+async function setCoursePadding(t: TestStore, f: MatrixFixture, bytes: number) {
+  await t.withIdentity(owner).mutation(api.courses.updateOutline, { courseId: f.courseId,
+    outlineSections: [{ title: 'Instructional outline', description: 'x'.repeat(bytes), knowledgeType: 'factual', order: 0 }], totalSectionCount: 1 })
+}
+
+async function prepareBudgetGraph(t: TestStore, count: 4 | 16, sectionBytes = 0) {
+  const fixtures: MatrixFixture[] = []
+  for (let index = 0; index < count; index++) {
+    const f = await t.run(async (ctx: MutationCtx) => {
+      const f = await prepareMatrix(ctx, 'section_block')
+      const scenarioFingerprint = index.toString(16).padStart(64, '0')
+      const solutionFingerprint = (index + 32).toString(16).padStart(64, '0')
+      await ctx.db.patch(f.caseId, { scenarioFingerprint, solutionFingerprint })
+      const binding = await ctx.db.query('learnArtifactCaseBindings').withIndex('by_userId_and_lineageId', q => q.eq('userId', owner.tokenIdentifier).eq('lineageId', f.lineageId)).unique()
+      await ctx.db.patch(binding!._id, { scenarioFingerprint, solutionFingerprint })
+      if (sectionBytes) {
+        await ctx.db.patch(f.sectionId, { contentBlocks: [{ type: 'text', content: 's'.repeat(sectionBytes), order: 0 }] })
+        const payloadDigest = await artifactPayloadDigest(artifactContentProjection({ kind: 'section_block', section: (await ctx.db.get(f.sectionId))! }))
+        f.reference = { ...f.reference, payloadDigest, revision: `sha256:${payloadDigest}` }
+        await ctx.db.patch(f.lineageId, f.reference)
+        await ctx.db.patch(f.validationId, { payloadDigest })
+      }
+      return f
+    })
+    await setCoursePadding(t, f, 0)
+    fixtures.push(f)
+  }
+  for (let index = count - 1; index >= 0; index--) {
+    const f = fixtures[index]!
+    // Exactly sixteen nodes, eight root origins, and a longest path of two.
+    const origins = index === 0 ? fixtures.slice(1, 9) : count === 16 && index <= 7 ? [fixtures[index + 8]!] : []
+    await t.run(async ctx => {
+      for (const origin of origins) await ctx.db.insert('learnArtifactLineageOrigins', { ...f.base, lineageId: f.lineageId,
+        originLineageId: origin.lineageId, originRevision: origin.reference.revision, originPayloadDigest: origin.reference.payloadDigest,
+        originManifestDigest: origin.manifestDigest, classification: origin.classification, transformation: 'summary' })
+      if (origins.length) await ctx.db.patch(f.lineageId, { originCount: origins.length, derivation: 'derived', authority: 'server_producer' })
+      f.manifestDigest = await sealManifest(ctx, f.lineageId)
+      await ctx.db.patch(f.validationId, { manifestDigest: f.manifestDigest })
+    })
+  }
+  return fixtures
+}
+
+describe('A4 graph-wide read budget', () => {
+  test('a realistic sixteen-course graph resolves and registers below budget', async () => {
+    const t = convexTest(schema, modules)
+    const graph = await prepareBudgetGraph(t, 16, 12_000)
+    for (const f of graph) await setCoursePadding(t, f, 8_000)
+    for (const mode of ['resolve', 'register'] as const) {
+      const result = await tracedLookup(t, graph[0]!, mode)
+      expect(result).toMatchObject({ status: 'bound' })
+      expect(result.bytes).toBeGreaterThan(300_000)
+      expect(result.charged).toBeLessThan(ARTIFACT_LINEAGE_READ_BYTES - 1024 * 1024)
+    }
+    expect(await t.withIdentity(owner).query(internal.learnV2ArtifactLineage.resolve, { reference: graph[0]!.reference })).toMatchObject({ status: 'bound' })
+    expect(await t.withIdentity(owner).mutation(registerInstructional, registration(graph[0]!))).toMatchObject({ catalogRevision: 1 })
+  })
+
+  test('the A4 depth-two, eight-origin, sixteen-course graph fails closed before 4 MiB', async () => {
+    const t = convexTest(schema, modules)
+    const graph = await prepareBudgetGraph(t, 16, 200_000)
+    for (const f of graph) await setCoursePadding(t, f, 940_000)
+    for (const mode of ['resolve', 'register'] as const) {
+      const result = await tracedLookup(t, graph[0]!, mode)
+      expect.soft(result).toMatchObject({ status: 'unavailable' })
+      expect.soft(result.bytes).toBeLessThan(ARTIFACT_LINEAGE_READ_BYTES)
+      expect.soft(result.documents).toBeLessThan(100)
+    }
+    await expectSourceRevoked(t, graph[0]!)
+  })
+
+  test.each(['resolve', 'register'] as const)('%s admits the exact reservation boundary and denies one extra byte', async mode => {
+    const t = convexTest(schema, modules)
+    const graph = await prepareBudgetGraph(t, 4)
+    const root = graph[0]!
+    const baseline = await tracedLookup(t, root, mode)
+    expect(baseline.status).toBe('bound')
+    const boundary = ARTIFACT_LINEAGE_READ_BYTES - (1024 * 1024 + 64)
+    const padding = boundary - baseline.charged
+    const perCourse = Math.floor(padding / graph.length)
+    for (const [index, f] of graph.entries()) await setCoursePadding(t, f, perCourse + (index === 0 ? padding % graph.length : 0))
+    const exact = await tracedLookup(t, root, mode)
+    expect(exact).toMatchObject({ status: 'bound', charged: boundary, documents: baseline.documents, requests: baseline.requests })
+    await setCoursePadding(t, root, perCourse + padding % graph.length + 1)
+    const over = await tracedLookup(t, root, mode)
+    expect.soft(over.status).toBe('unavailable')
+    expect.soft(over.requests).toBeLessThan(exact.requests)
+    expect.soft(over.bytes).toBeLessThan(ARTIFACT_LINEAGE_READ_BYTES)
+    expect(await t.run(ctx => ctx.db.get(root.catalogId))).toMatchObject({ catalogRevision: 0 })
+    expect(await t.run(ctx => ctx.db.get(root.lineageId))).not.toHaveProperty('publication')
+    expect(await t.run(ctx => ctx.db.get(root.caseId))).toMatchObject({ usageClass: 'unknown' })
   })
 })
