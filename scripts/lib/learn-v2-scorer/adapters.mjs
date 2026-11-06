@@ -97,10 +97,10 @@ async function baselineResult(adapter, service, prepared, execution, captured, t
     identity: execution.receipt.observedIdentity, usage: execution.receipt.usage, execution, raw: captured ?? { failure: 'outcome_unknown' }, terminalAt }
 }
 
-export async function baselineExecution({ adapter, blind, saved, registry, startedAt, terminalAt, raw, infer }) {
+export async function baselineExecution({ adapter, blind, saved, registry, startedAt, terminalAt, raw, infer, clock }) {
   let now = startedAt
   let captured
-  const { service, prepared } = await baselineSession({ blind, saved, registry, startedAt, clock: () => now, transport: {
+  const { service, prepared } = await baselineSession({ blind, saved, registry, startedAt, clock: clock ?? (() => now), transport: {
     async infer(request) {
       const value = infer ? await infer(request) : raw
       captured = value

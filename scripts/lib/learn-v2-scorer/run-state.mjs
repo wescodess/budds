@@ -22,6 +22,7 @@ export function validateFixture(fixture) {
 }
 
 export function liveOutcome(result) {
+  if (result.status === 'not_dispatched') return 'not_dispatched'
   if (['ambiguous', 'outcome_unknown', 'identity_unavailable', 'identity_mismatch', 'upstream_mismatch', 'unexpected_routing', 'nonterminal_output', 'lease_expired'].includes(result.status)) return 'still_unknown'
   return result.status === 'valid' ? 'resolved' : 'failed'
 }
@@ -63,7 +64,7 @@ export async function openRun(path) {
   const plan = schedule(corpus.corpus, corpus.sources, pins.seed, pins.adapters)
   const results = new Map(pins.adapters.map(adapter => [adapter.id, new Map()]))
   const state = { directory, pins, pinsDigest: manifest.pinsDigest, registry, corpus, plan, results,
-    intents: new Map(), terminals: new Map(), observations: new Map(), metadataIntents: new Map(), reconciliations: new Map(),
+    intents: new Map(), terminals: new Map(), observations: new Map(), metadataIntents: new Map(), reconciliations: new Map(), notDispatched: new Map(),
     verifiedRecords: new Map(), reconciliationNames: new Map(), metadataObservations: new Map(),
     artifacts: [], fitDigests: [], reserved: 0, dispatchCounts: new Map() }
   const names = readdirSync(directory)
@@ -74,22 +75,38 @@ export async function openRun(path) {
       || new RegExp(`^${item.blind.id}\\.reconciled-[1-9][0-9]*\\.json$`).test(name))
       .sort((a, b) => (Number(a.match(/reconciled-(\d+)/)?.[1]) || 0) - (Number(b.match(/reconciled-(\d+)/)?.[1]) || 0))
     if (pins.mode === 'live') {
-      for (const kind of ['observation', 'metadata-intent', 'metadata-observation']) allowed.add(artifactName(item.blind.id, kind))
+      for (const kind of ['observation', 'metadata-intent', 'metadata-observation', 'not-dispatched']) allowed.add(artifactName(item.blind.id, kind))
       for (const name of history) allowed.add(name)
     }
     const intentName = artifactName(item.blind.id, 'intent')
     const terminalName = artifactName(item.blind.id, 'terminal')
     if (!exists(join(directory, intentName))) {
-      for (const kind of ['terminal', 'observation', 'metadata-intent', 'metadata-observation']) assert.ok(!exists(join(directory, artifactName(item.blind.id, kind))), 'Orphan dispatch artifact')
+      for (const kind of ['terminal', 'observation', 'metadata-intent', 'metadata-observation', 'not-dispatched']) assert.ok(!exists(join(directory, artifactName(item.blind.id, kind))), 'Orphan dispatch artifact')
       assert.equal(history.length, 0, 'Orphan reconciliation history')
       continue
     }
     const intent = unseal(directory, intentName, 'dispatch_intent', state.pinsDigest)
     verifyIntent(state, item, intent.payload)
     state.intents.set(item.blind.id, intent)
-    state.reserved += intent.payload.reservationMicroUsd
+    const cancellationName = artifactName(item.blind.id, 'not-dispatched')
+    if (exists(join(directory, cancellationName))) {
+      const cancellation = unseal(directory, cancellationName, 'dispatch_not_sent', state.pinsDigest)
+      exactKeys(cancellation.payload, ['intentDigest', 'checkedAt', 'reason'])
+      assert.equal(cancellation.payload.intentDigest, intent.digest)
+      assert.equal(cancellation.payload.reason, 'lease_expired_before_transport')
+      assert.ok(pins.mode === 'live' && intent.payload.dispatched && int(cancellation.payload.checkedAt)
+        && cancellation.payload.checkedAt >= intent.payload.deadline, 'Invalid not-dispatched lease record')
+      for (const kind of ['observation', 'metadata-intent', 'metadata-observation']) assert.ok(!exists(join(directory, artifactName(item.blind.id, kind))), 'Not-dispatched intent has transport evidence')
+      assert.equal(history.length, 0, 'Not-dispatched intent has reconciliation history')
+      state.notDispatched.set(item.blind.id, cancellation)
+      state.verifiedRecords.set(cancellation.digest, { name: cancellationName, intentDigest: intent.digest, status: 'not_dispatched' })
+      state.artifacts.push(cancellation.digest)
+      if (item.phase === 'fit') state.fitDigests.push(cancellation.digest)
+    }
+    const dispatched = intent.payload.dispatched && !state.notDispatched.has(item.blind.id)
+    state.reserved += dispatched ? intent.payload.reservationMicroUsd : 0
     const adapter = pins.adapters.find(adapter => adapter.id === item.adapter)
-    state.dispatchCounts.set(adapter.model, (state.dispatchCounts.get(adapter.model) ?? 0) + Number(intent.payload.dispatched))
+    state.dispatchCounts.set(adapter.model, (state.dispatchCounts.get(adapter.model) ?? 0) + Number(dispatched))
     const observationName = artifactName(item.blind.id, 'observation')
     if (exists(join(directory, observationName))) {
       const observation = unseal(directory, observationName, 'dispatch_observation', state.pinsDigest)
@@ -102,7 +119,7 @@ export async function openRun(path) {
       const terminal = unseal(directory, terminalName, 'sealed_verdict', state.pinsDigest)
       exactKeys(terminal.payload, ['intentDigest', 'raw', 'terminalAt', 'result'])
       assert.equal(terminal.payload.intentDigest, intent.digest)
-      if (pins.mode === 'live' && intent.payload.dispatched) assert.deepEqual(state.observations.get(item.blind.id)?.payload,
+      if (pins.mode === 'live' && dispatched) assert.deepEqual(state.observations.get(item.blind.id)?.payload,
         { intentDigest: intent.digest, raw: terminal.payload.raw, terminalAt: terminal.payload.terminalAt }, 'Terminal differs from saved observation')
       const reproduced = await evaluate(state, item, intent.payload, terminal.payload.raw, terminal.payload.terminalAt)
       assert.deepEqual(reproduced, terminal.payload.result, 'Sealed verdict replay changed')
@@ -149,6 +166,13 @@ export function verifyIntent(state, item, intent) {
 export async function evaluate(state, item, intent, raw, terminalAt) {
   const adapter = state.pins.adapters.find(adapter => adapter.id === item.adapter)
   assert.ok(int(terminalAt) && terminalAt >= intent.startedAt)
+  const cancellation = state.notDispatched?.get(item.blind.id)
+  if (cancellation) {
+    assert.equal(terminalAt, cancellation.payload.checkedAt)
+    assert.deepEqual(raw, { failure: 'not_dispatched' })
+    return { status: 'not_dispatched', scorePercent: null, criteria: null, identity: null, usage: null,
+      weights: item.blind.scoringInput.rubric.criteria.map(row => row.weightPercent) }
+  }
   let result
   if (!intent.dispatched) result = { status: 'budget_exhausted', scorePercent: null, criteria: null, identity: null, usage: null }
   else if (adapter.role === 'baseline') {

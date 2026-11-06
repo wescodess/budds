@@ -11,6 +11,7 @@ import { registerScorerImports, forbidNetwork } from './runtime.mjs'
 registerScorerImports()
 forbidNetwork()
 const adapters = await import('./adapters.mjs')
+const contract = await import('./contract.mjs')
 let globalDirectory
 let interruptIntent = false
 let outcome = 'valid'
@@ -24,16 +25,20 @@ let earlyFailures = new Set()
 let earlyFailuresAfterWrite = new Set()
 let lockReleaseFailure = false
 let markerRemovalFailure = null
+let revision = null
+let afterIntent = null
 
 // Keep the production CLI's fixed global path and transport unchanged. Native
 // module mocks isolate this test process and deny every real network entry.
 mock.module(new URL('./artifacts.mjs', import.meta.url).href, { namedExports: { ...artifacts,
+  implementationPins: () => ({ ...artifacts.implementationPins(), ...revision }),
   outputDirectory: path => artifacts.outputDirectory(path === '/tmp/budds-learn-v2-scorer-live' ? globalDirectory : path),
   seal(...args) {
     if (interruptIntent && args[2] === 'dispatch_intent') throw new Error('Simulated interruption before local intent')
     if (earlyFailures.has(args[2])) throw new Error(`Simulated early publication failure: ${args[2]}`)
     if (calls.length && publicationFailures.has(args[2])) throw new Error(`Simulated publication failure: ${args[2]}`)
     const value = artifacts.seal(...args)
+    if (args[2] === 'dispatch_intent') afterIntent?.(value.payload)
     if (earlyFailuresAfterWrite.has(args[2])) throw new Error(`Simulated early interrupted publication: ${args[2]}`)
     if (calls.length && failuresAfterWrite.has(args[2])) throw new Error(`Simulated interrupted publication: ${args[2]}`)
     return value
@@ -51,6 +56,9 @@ mock.module(new URL('./artifacts.mjs', import.meta.url).href, { namedExports: { 
     artifacts.removeSealed(...args)
     if (markerRemovalFailure === 'after') throw new Error('Simulated interrupted marker removal')
   },
+} })
+mock.module(new URL('./contract.mjs', import.meta.url).href, { namedExports: { ...contract,
+  runPins: options => ({ ...contract.runPins(options), implementation: { ...artifacts.implementationPins(), ...revision } }),
 } })
 mock.module(new URL('./adapters.mjs', import.meta.url).href, { namedExports: { ...adapters,
   async liveInfer(adapter, request) {
@@ -101,6 +109,8 @@ async function workspace(t, approvalDurationMs = 600000) {
   earlyFailuresAfterWrite = new Set()
   lockReleaseFailure = false
   markerRemovalFailure = null
+  revision = null
+  afterIntent = null
   const inventory = readJson(join(artifacts.ROOT, 'tests/fixtures/learn-v2-scorer-harness/inventory.json'))
   inventory.scope = 'reviewed_published_inventory'
   inventory.epoch = 'approval-contract.v1'
@@ -113,7 +123,8 @@ async function workspace(t, approvalDurationMs = 600000) {
   entry.transportEndpoint = 'https://gateway.ai.cloudflare.com/v1/approval-contract-account/approval-contract-gateway/openrouter/v1/chat/completions'
   entry.inventoryEvidence = 'owner-recorded-inventory'
   const clock = Date.now()
-  const clockMock = mock.method(Date, 'now', () => clock)
+  let now = clock
+  const clockMock = mock.method(Date, 'now', () => now)
   t.after(() => clockMock.mock.restore())
   const options = { mode: 'live', fixture: null, inventory, clock, seed: 'approval-contract-shuffle-v1',
     budgetMicroUsd: 100000, priceAccessDate: new Date(clock).toISOString().slice(0, 10) }
@@ -145,8 +156,222 @@ async function workspace(t, approvalDurationMs = 600000) {
     return { approvalFile: signed(`${name}-approval.json`, approval), costFile: signed(`${name}-cost.json`, cost), trustKey,
       record: { approvalDigest: hash(approval), costDigest: hash(cost) } }
   }
-  return { createRun, approve, clock }
+  return { createRun, approve, clock, setClock: value => { now = value } }
 }
+
+function advanceRevision() {
+  const implementation = artifacts.implementationPins()
+  revision = { repositoryCommit: '1'.repeat(40), files: { ...implementation.files,
+    'pnpm-lock.yaml': hash('next lockfile'), 'scripts/lib/learn-v2-scorer/adapters.mjs': hash('next adapter implementation') } }
+}
+
+test('A4 historical pins: a separately approved fresh run dispatches after commit, source and lockfile changes', async t => {
+  const { createRun, approve } = await workspace(t)
+  const historical = await createRun('historical')
+  await dispatchLive(historical.directory, historical.plan[0].id, approve(historical, 'historical'))
+  advanceRevision()
+  await assert.rejects(dispatchLive(historical.directory, historical.plan[1].id, approve(historical, 'historical')), /pins are stale/)
+  const fresh = await createRun('fresh')
+  assert.notEqual(fresh.pinsDigest, historical.pinsDigest)
+  await dispatchLive(fresh.directory, fresh.plan[0].id, approve(fresh, 'fresh'))
+  assert.equal(calls.length, 2)
+  assert.equal(unresolvedLiveDispatches(await openLiveLedger(globalDirectory)).length, 0)
+})
+
+test('A4 historical pins: altered historical seals and rehashed verdicts still block fresh dispatch', async t => {
+  for (const kind of ['manifest', 'approval', 'intent', 'observation', 'terminal', 'resolution', 'rehashed-verdict']) await t.test(kind, async t => {
+    const { createRun, approve } = await workspace(t)
+    const historical = await createRun('historical')
+    const id = historical.plan[0].id
+    await dispatchLive(historical.directory, id, approve(historical, 'historical'))
+    advanceRevision()
+    const fresh = await createRun('fresh')
+    const approval = approve(fresh, 'fresh')
+    const ledgerName = readdirSync(globalDirectory).find(name => name.startsWith(`${kind}-`))
+    const path = kind === 'manifest' ? join(historical.directory, 'manifest.json')
+      : ['approval', 'resolution'].includes(kind) ? join(globalDirectory, ledgerName)
+        : join(historical.directory, `${id}.${kind === 'rehashed-verdict' ? 'terminal' : kind}.json`)
+    if (kind === 'rehashed-verdict') {
+      const terminal = rewrite(path, value => { value.payload.result.scorePercent = 13 })
+      const name = readdirSync(globalDirectory).find(name => name.startsWith('resolution-'))
+      rewrite(join(globalDirectory, name), value => { value.payload.recordDigest = terminal.digest })
+    }
+    else {
+      const value = readJson(path)
+      value.payload.altered = true
+      writeFileSync(path, `${canonical(value)}\n`)
+    }
+    await assert.rejects(dispatchLive(fresh.directory, fresh.plan[0].id, approval))
+    assert.equal(calls.length, 1)
+    assert.equal(metadataCalls.length, 0)
+  })
+})
+
+test('A4 historical pins: saved observations and metadata reconcile across a revision change', async t => {
+  for (const evidence of ['observation', 'metadata']) await t.test(evidence, async t => {
+    const setup = evidence === 'metadata' ? await pendingBaseline(t) : await canary(t, 'baseline')
+    const { state, approval, id, createRun, approve } = setup
+    if (evidence === 'observation') {
+      publicationFailures.add('sealed_verdict')
+      await assert.rejects(dispatchLive(state.directory, id, approval), /Simulated/)
+      publicationFailures.clear()
+    }
+    const before = calls.length
+    advanceRevision()
+    const summary = await reconcileLive(state.directory, id, approval)
+    assert.equal(summary.reconciliation, 'resolved')
+    assert.equal(summary.ambiguous, 0)
+    assert.equal(calls.length, before)
+    assert.equal(metadataCalls.length, evidence === 'metadata' ? 1 : 0)
+    const fresh = await createRun('fresh')
+    await dispatchLive(fresh.directory, fresh.plan[0].id, approve(fresh, 'fresh'))
+    assert.equal(calls.length, before + 1)
+  })
+})
+
+test('A4 lease: expiry after intent publication prevents all three transports and releases only the cancelled reservation', async t => {
+  for (const role of ['baseline', 'claude', 'gemini']) await t.test(role, async t => {
+    const { state, approval, id, setClock, createRun, approve } = await canary(t, role)
+    const before = calls.length
+    afterIntent = intent => setClock(intent.deadline + 1)
+    const summary = await dispatchLive(state.directory, id, approval)
+    afterIntent = null
+    assert.equal(calls.length, before)
+    assert.equal(summary.dispatched, before)
+    assert.equal(summary.ambiguous, 0)
+    const terminal = readJson(join(state.directory, `${id}.terminal.json`))
+    assert.equal(terminal.payload.result.status, 'not_dispatched')
+    const cancellation = readJson(join(state.directory, `${id}.not-dispatched.json`))
+    assert.equal(cancellation.payload.checkedAt, readJson(join(state.directory, `${id}.intent.json`)).payload.deadline + 1)
+    assert.ok(!artifacts.exists(join(state.directory, `${id}.observation.json`)))
+    assert.equal(readJson(summary.report).payload.reservations.retainedMicroUsd, before * 100)
+    const ledger = await openLiveLedger(globalDirectory)
+    assert.equal(unresolvedLiveDispatches(ledger).length, 0)
+    assert.equal([...ledger.resolutions.values()].find(row => row.id === id).status, 'not_dispatched')
+    assert.equal((await replay(state.directory)).digest, summary.digest)
+    const nextRun = await createRun('later')
+    const next = nextRun.plan[0]
+    await dispatchLive(nextRun.directory, next.id, approve(nextRun, 'later'))
+    assert.equal(calls.length, before + 1, 'A cancelled lease leaves later dispatch available')
+    // Fill the remaining cap through the ledger seam. Including the cancelled
+    // reservation in global usage would reject this exact boundary.
+    const adapter = state.pins.adapters.find(row => row.id === next.adapter)
+    assert.equal(reserveLiveDispatch(await openLiveLedger(globalDirectory), state, adapter,
+      { id: `item_${'a'.repeat(32)}`, approval: approval.record, dispatched: true,
+        reservationMicroUsd: state.pins.budgetMicroUsd - before * 100 }), true)
+  })
+})
+
+test('A4 lease: all three transports use the remaining timeout and the baseline reads the dispatch clock', async t => {
+  for (const role of ['baseline', 'claude', 'gemini']) await t.test(role, async t => {
+    const { state, approval, id, setClock } = await canary(t, role)
+    const remaining = 137
+    let watching = false
+    const expected = role === 'baseline' ? 2 : 1
+    afterIntent = intent => { setClock(intent.deadline - remaining); watching = true }
+    const timers = []
+    const original = globalThis.setTimeout
+    const timerMock = mock.method(globalThis, 'setTimeout', (callback, delay, ...args) => {
+      if (watching && timers.length < expected) timers.push(delay)
+      return original(callback, delay, ...args)
+    })
+    t.after(() => timerMock.mock.restore())
+    const before = calls.length
+    await dispatchLive(state.directory, id, approval)
+    assert.equal(calls.length, before + 1)
+    assert.equal(timers.length, expected)
+    assert.ok(timers.every(delay => delay === remaining), `Remaining lease timers: ${timers}`)
+    assert.equal(readJson(join(state.directory, `${id}.terminal.json`)).payload.result.status, 'valid')
+  })
+})
+
+test('A4 survivor: a rehashed reconciliation successor cannot predate its predecessor', async t => {
+  const { state, approval, id, clock, setClock } = await pendingBaseline(t)
+  failuresAfterWrite.add('metadata_lookup_intent')
+  await assert.rejects(reconcileLive(state.directory, id, approval), /Simulated/)
+  failuresAfterWrite.clear()
+  setClock(clock + 10)
+  await reconcileLive(state.directory, id, approval)
+  const first = readJson(join(state.directory, `${id}.reconciled.json`))
+  assert.equal(first.payload.status, 'still_unknown')
+  artifacts.seal(state.directory, `${id}.reconciled-1.json`, 'reconciled_verdict', state.pinsDigest,
+    { ...first.payload, previousDigest: first.digest, reconciledAt: first.payload.reconciledAt - 1 })
+  await assert.rejects(replay(state.directory))
+  await assert.rejects(reconcileLive(state.directory, id, approval))
+})
+
+test('A4 crash table: not-dispatched publication, terminal and resolution recover on both sides of each write', async t => {
+  for (const kind of ['dispatch_not_sent', 'sealed_verdict', 'live_dispatch_resolution']) for (const durable of [false, true]) {
+    await t.test(`${kind}/${durable}`, async t => {
+      const { createRun, approve, setClock } = await workspace(t)
+      const state = await createRun('cancelled')
+      const approval = approve(state, 'cancelled')
+      const id = state.plan[0].id
+      afterIntent = intent => setClock(intent.deadline + 1)
+      const failures = durable ? earlyFailuresAfterWrite : earlyFailures
+      failures.add(kind)
+      await assert.rejects(dispatchLive(state.directory, id, approval), /Simulated early/)
+      failures.clear()
+      afterIntent = null
+      const cancelled = kind !== 'dispatch_not_sent' || durable
+      const summary = await reconcileLive(state.directory, id, approval)
+      assert.equal(summary.reconciliation, cancelled ? 'not_dispatched' : 'still_unknown')
+      assert.equal(readJson(summary.report).payload.reservations.retainedMicroUsd, cancelled ? 0 : 100)
+      assert.equal(unresolvedLiveDispatches(await openLiveLedger(globalDirectory)).length, cancelled ? 0 : 1)
+      assert.equal(calls.length, 0)
+      assert.equal(metadataCalls.length, 0)
+      if (cancelled) assert.equal((await reconcileLive(state.directory, id, approval)).digest, summary.digest)
+    })
+  }
+})
+
+test('A4 cancellation integrity: rehashed cancellation cannot contradict expiry or transport evidence', async t => {
+  for (const change of ['expiry', 'transport']) await t.test(change, async t => {
+    const { createRun, approve, setClock } = await workspace(t)
+    const state = await createRun('cancellation')
+    const approval = approve(state, 'cancellation')
+    const id = state.plan[0].id
+    afterIntent = intent => setClock(intent.deadline + 1)
+    await dispatchLive(state.directory, id, approval)
+    afterIntent = null
+    const intent = readJson(join(state.directory, `${id}.intent.json`))
+    if (change === 'expiry') {
+      const cancellation = rewrite(join(state.directory, `${id}.not-dispatched.json`), value => { value.payload.checkedAt = intent.payload.deadline - 1 })
+      rewrite(join(state.directory, `${id}.terminal.json`), value => { value.payload.terminalAt = cancellation.payload.checkedAt })
+      const name = readdirSync(globalDirectory).find(name => name.startsWith('resolution-'))
+      rewrite(join(globalDirectory, name), value => { value.payload.recordDigest = cancellation.digest })
+    }
+    else artifacts.seal(state.directory, `${id}.observation.json`, 'dispatch_observation', state.pinsDigest,
+      { intentDigest: intent.digest, raw: { failure: 'outcome_unknown' }, terminalAt: intent.payload.deadline })
+    await assert.rejects(openLiveLedger(globalDirectory))
+    await assert.rejects(reconcileLive(state.directory, id, approval))
+    assert.equal(calls.length, 0)
+  })
+})
+
+test('A4 cancellation integrity: a terminal failure cannot act as a reservation release', async t => {
+  const { createRun, approve } = await workspace(t)
+  const state = await createRun('terminal-release')
+  const approval = approve(state, 'terminal-release')
+  const selected = state.plan.find(row => row.adapter.startsWith('claude_'))
+  for (const row of state.plan.slice(0, state.plan.indexOf(selected))) await dispatchLive(state.directory, row.id, approval)
+  const before = calls.length
+  const id = selected.id
+  await dispatchLive(state.directory, id, approval)
+  const { openRun, evaluate } = await import('./run-state.mjs')
+  const opened = await openRun(state.directory)
+  const item = opened.plan.find(row => row.blind.id === id)
+  const intent = opened.intents.get(id)
+  const raw = { failure: 'not_dispatched' }
+  const terminalAt = intent.payload.startedAt
+  const result = await evaluate(opened, item, intent.payload, raw, terminalAt)
+  rewrite(join(state.directory, `${id}.observation.json`), value => { value.payload.raw = raw })
+  const terminal = rewrite(join(state.directory, `${id}.terminal.json`), value => { Object.assign(value.payload, { raw, terminalAt, result }) })
+  const name = readdirSync(globalDirectory).find(name => name.startsWith('resolution-') && readJson(join(globalDirectory, name)).payload.id === id)
+  rewrite(join(globalDirectory, name), value => { Object.assign(value.payload, { status: 'not_dispatched', recordDigest: terminal.digest }) })
+  await assert.rejects(openLiveLedger(globalDirectory))
+  assert.equal(calls.length, before + 1)
+})
 
 test('one signed approval cannot dispatch in two directories; the original run restarts without redispatch', async t => {
   const { createRun, approve } = await workspace(t)

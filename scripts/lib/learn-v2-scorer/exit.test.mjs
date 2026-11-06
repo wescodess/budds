@@ -418,7 +418,7 @@ test('the global approval ledger exit regressions use isolated mock adapters wit
   const result = spawnSync(process.execPath, ['--experimental-test-module-mocks', '--import', join(fixtures, 'network-deny.mjs'),
     '--test', '--test-concurrency=1', join(ROOT, 'scripts/lib/learn-v2-scorer/live-ledger.test.mjs')], {
     cwd: ROOT, env: Object.fromEntries(Object.entries(env).filter(([key]) => key !== 'NODE_TEST_CONTEXT')),
-    encoding: 'utf8', timeout: 240_000, maxBuffer: 2_000_000,
+    encoding: 'utf8', timeout: 360_000, maxBuffer: 2_000_000,
   })
   assert.equal(result.error, undefined, result.error?.message)
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)

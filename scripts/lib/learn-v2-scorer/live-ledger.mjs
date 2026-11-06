@@ -3,7 +3,8 @@ import { readdirSync } from 'node:fs'
 import { isAbsolute, join, resolve } from 'node:path'
 import { exactKeys, hash, readJson, seal, unseal, exists, VERSION } from './artifacts.mjs'
 import { LIMITS } from './contract.mjs'
-import { openRun, liveOutcome, metadataOutcome } from './run-state.mjs'
+import { liveOutcome, metadataOutcome } from './run-state.mjs'
+import { openHistoricalRun } from './historical-run.mjs'
 
 const digest = value => typeof value === 'string' && /^sha256:[a-f0-9]{64}$/.test(value)
 const integer = value => Number.isSafeInteger(value) && value >= 0
@@ -16,7 +17,8 @@ function usage(ledger, state, approvalDigest, adapter) {
   let approved = 0
   let run = 0
   let dispatches = 0
-  for (const reservation of ledger.reservations.values()) {
+  for (const [name, reservation] of ledger.reservations) {
+    if (ledger.resolutions.get(name)?.status === 'not_dispatched') continue
     const claim = ledger.approvals.get(reservation.approvalDigest)
     if (reservation.approvalDigest === approvalDigest) approved += reservation.reservationMicroUsd
     if (sameRun(claim, state)) run += reservation.reservationMicroUsd
@@ -80,7 +82,11 @@ export async function openLiveLedger(directory) {
     assert.equal(entry.pinsDigest, claim.pinsDigest)
     assert.equal(resolution.intentDigest, reservation.intentDigest)
     assert.ok(name === resolutionName(reservation) || name === resolutionName(reservation).replace('.json', `-${resolution.recordDigest.slice(7)}.json`))
-    if (!runs.has(claim.directory)) runs.set(claim.directory, await openRun(claim.directory))
+    if (!runs.has(claim.directory)) {
+      const state = await openHistoricalRun(claim.directory, claim.pinsDigest)
+      verifyLiveRun(ledger, state)
+      runs.set(claim.directory, state)
+    }
     verifyResolution(runs.get(claim.directory), claim.pinsDigest, resolution)
     const previous = ledger.resolutions.get(reservationName(reservation))
     if (previous && previous.status !== 'still_unknown' && resolution.status !== 'still_unknown') assert.deepEqual(previous, resolution, 'Conflicting global resolutions')
@@ -99,11 +105,13 @@ export async function openLiveLedger(directory) {
 }
 
 function verifyResolution(state, pinsDigest, resolution) {
-  assert.ok(['resolved', 'failed', 'still_unknown'].includes(resolution.status))
+  assert.ok(['resolved', 'failed', 'still_unknown', 'not_dispatched'].includes(resolution.status))
   assert.equal(state.pinsDigest, pinsDigest)
   const reconciled = new RegExp(`^${resolution.id}\\.reconciled(?:-[1-9][0-9]*)?\\.json$`).test(resolution.recordName)
-  assert.ok(reconciled || resolution.recordName === `${resolution.id}.terminal.json`)
-  const record = unseal(state.directory, resolution.recordName, reconciled ? 'reconciled_verdict' : 'sealed_verdict', pinsDigest)
+  const notDispatched = resolution.recordName === `${resolution.id}.not-dispatched.json`
+  assert.equal(notDispatched, resolution.status === 'not_dispatched', 'Charge release requires a not-dispatched record')
+  assert.ok(reconciled || notDispatched || resolution.recordName === `${resolution.id}.terminal.json`)
+  const record = unseal(state.directory, resolution.recordName, reconciled ? 'reconciled_verdict' : notDispatched ? 'dispatch_not_sent' : 'sealed_verdict', pinsDigest)
   assert.equal(record.digest, resolution.recordDigest)
   assert.equal(record.payload.intentDigest, resolution.intentDigest)
   const replayed = state.verifiedRecords.get(record.digest)
@@ -113,7 +121,7 @@ function verifyResolution(state, pinsDigest, resolution) {
 export function unresolvedLiveDispatches(ledger) {
   // A reservation is also the durable global dispatch intent. Absence of a
   // matching durable resolution blocks every run, including distinct approvals.
-  return [...ledger.reservations].filter(([name]) => !['resolved', 'failed'].includes(ledger.resolutions.get(name)?.status)).map(([, reservation]) => reservation)
+  return [...ledger.reservations].filter(([name]) => !['resolved', 'failed', 'not_dispatched'].includes(ledger.resolutions.get(name)?.status)).map(([, reservation]) => reservation)
 }
 
 export async function recordLiveResolution(ledger, state, intent, record, recordName = `${intent.payload.id}.terminal.json`) {
@@ -121,8 +129,10 @@ export async function recordLiveResolution(ledger, state, intent, record, record
   assert.ok(reservation && sameRun(ledger.approvals.get(reservation.approvalDigest), state))
   const resolution = { approvalDigest: reservation.approvalDigest, id: reservation.id, intentDigest: intent.digest,
     recordName, recordDigest: record.digest,
-    status: record.kind === 'reconciled_verdict' ? metadataOutcome(record.payload.result) : liveOutcome(record.payload.result) }
-  verifyResolution(await openRun(state.directory), state.pinsDigest, resolution)
+    status: record.kind === 'dispatch_not_sent' ? 'not_dispatched'
+      : record.kind === 'reconciled_verdict' ? (state.replay?.metadataOutcome ?? metadataOutcome)(record.payload.result)
+        : (state.replay?.liveOutcome ?? liveOutcome)(record.payload.result) }
+  verifyResolution(await openHistoricalRun(state.directory, state.pinsDigest), state.pinsDigest, resolution)
   if (resolution.status === 'still_unknown') return
   const base = resolutionName(reservation)
   const name = exists(join(ledger.directory, base)) && readJson(join(ledger.directory, base)).payload.status === 'still_unknown'
