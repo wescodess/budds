@@ -135,6 +135,7 @@ describe('GET /api/export/me', () => {
       if (entry.export === 'withheld') expect(rows).toEqual([])
       else expect(rows.map((row: { _id: string }) => row._id)).toContain(f.rows[entry.table])
       const serialized = JSON.stringify(rows)
+      for (const key of [...Object.values(f.reportKeys), ...Object.values(other.reportKeys)]) expect(serialized).not.toContain(key)
       expect(serialized).not.toContain(other.rows[entry.table])
       for (const [name, canary] of Object.entries(STORAGE_CANARIES)) {
         if (name === 'answer' && entry.export === 'owner_response') expect(serialized).toContain(canary)

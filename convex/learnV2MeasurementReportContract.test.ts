@@ -6,19 +6,90 @@ import { expect, expectTypeOf, test } from 'vitest'
 import type { Doc } from './_generated/dataModel'
 import schema from './schema'
 import { reportCellsValidator, aggregateExportValidator } from './lib/learnV2PublicContract'
-import type { learnReportMetricValidator } from './lib/learnV2MeasurementReportContract'
+import type { learnReportMetricValidator, learnReportInputSnapshotValidator, learnReportAssignmentSnapshotValidator, learnReportResultSnapshotValidator } from './lib/learnV2MeasurementReportContract'
 import {
   LEARN_V2_MEASUREMENT_REPORT_VERSION, LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION, LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION,
-  validateLearnMeasurementReportCells, type LearnReportMetric,
+  validateLearnMeasurementReportCells, learnReportInputSnapshotSchema, type LearnReportMetric,
+  type learnReportAssignmentSnapshotSchema, type learnReportResultSnapshotSchema,
 } from '../shared/learn-v2-measurement-report'
+import type { z } from 'zod'
 import { seedMeasurementStorage } from '../tests/fixtures/learn-v2-measurement-storage'
-import { partialMeasurementReportCell } from '../tests/fixtures/learn-v2-measurement-report'
+import { partialMeasurementReportCell, measurementReportIdentityFixture, measurementReportNonAdmittedFixture } from '../tests/fixtures/learn-v2-measurement-report'
 
 const modules = import.meta.glob('./**/*.ts')
 
 test('stored, public and exported cells have exactly the same frozen fields', () => {
   expectTypeOf<Infer<typeof learnReportMetricValidator>>().toEqualTypeOf<LearnReportMetric>()
   expectTypeOf<Pick<Doc<'learnMeasurementReportCells'>, keyof LearnReportMetric>>().toEqualTypeOf<LearnReportMetric>()
+  expectTypeOf<Infer<typeof learnReportInputSnapshotValidator>>().toEqualTypeOf<z.infer<typeof learnReportInputSnapshotSchema>>()
+  expectTypeOf<Doc<'learnMeasurementReportRows'>['snapshot']>().toEqualTypeOf<z.infer<typeof learnReportInputSnapshotSchema>>()
+  expectTypeOf<Infer<typeof learnReportAssignmentSnapshotValidator>>().toEqualTypeOf<z.infer<typeof learnReportAssignmentSnapshotSchema>>()
+  expectTypeOf<Infer<typeof learnReportResultSnapshotValidator>>().toEqualTypeOf<z.infer<typeof learnReportResultSnapshotSchema>>()
+})
+
+test('requires and round-trips assignment admission fields in report rows and enrollment facts', async () => {
+  const t = convexTest(schema, modules)
+  const f = await t.run(ctx => seedMeasurementStorage(ctx, 'https://contract.example|owner'))
+  const row = await t.run(ctx => ctx.db.get(f.rows.learnMeasurementReportRows))
+  const fact = await t.run(ctx => ctx.db.get(f.rows.learnMeasurementReportFacts))
+  if (!row || row.snapshot.kind !== 'episode' || !fact || fact.fact.kind !== 'enrollment') throw new Error('Missing report fixture')
+  const episodeSnapshot = row.snapshot
+  const enrollmentFact = fact.fact
+  expect(episodeSnapshot.assignment.status).toBe('admitted')
+  expect(episodeSnapshot.assignment.protocolStatus).toBe('frozen')
+  for (const field of ['status', 'protocolStatus'] as const) {
+    for (const value of [undefined, 'unknown']) {
+      const assignment = { ...episodeSnapshot.assignment }
+      Reflect.set(assignment, field, value)
+      if (value === undefined) Reflect.deleteProperty(assignment, field)
+      await expect(t.run(ctx => ctx.db.patch(row._id, { snapshot: { ...episodeSnapshot, assignment } }))).rejects.toThrow()
+      await expect(t.run(ctx => ctx.db.patch(fact._id, { fact: { ...enrollmentFact, snapshot: assignment } }))).rejects.toThrow()
+    }
+  }
+  for (const status of ['considered', 'not_admitted'] as const) for (const protocolStatus of ['protocol_not_frozen', 'blocked'] as const) {
+    const { episode } = await measurementReportNonAdmittedFixture(status, protocolStatus)
+    const snapshot = learnReportInputSnapshotSchema.parse({ ...episodeSnapshot, ...episode, assignmentId: episodeSnapshot.assignmentId,
+      learningVoidId: episodeSnapshot.learningVoidId, blueprintRevisionId: episodeSnapshot.blueprintRevisionId, objectiveId: episodeSnapshot.objectiveId })
+    await t.run(ctx => ctx.db.patch(row._id, { snapshot }))
+    await t.run(ctx => ctx.db.patch(fact._id, { fact: { ...enrollmentFact, status, snapshot: episode.assignment } }))
+    expect((await t.run(ctx => ctx.db.get(row._id)))?.snapshot).toEqual(snapshot)
+    const savedFact = await t.run(ctx => ctx.db.get(fact._id))
+    expect(savedFact?.fact).toEqual({ ...enrollmentFact, status, snapshot: episode.assignment })
+  }
+})
+
+test('round-trips null and linked replacement clocks through the Convex snapshot validator', async () => {
+  const t = convexTest(schema, modules)
+  const f = await t.run(ctx => seedMeasurementStorage(ctx, 'https://contract.example|owner'))
+  const row = await t.run(ctx => ctx.db.get(f.rows.learnMeasurementReportRows))
+  if (!row || row.snapshot.kind !== 'episode') throw new Error('Missing episode fixture')
+  expect(learnReportInputSnapshotSchema.parse(row.snapshot)).toEqual(row.snapshot)
+  expect(row.snapshot.replacementClock).toBeNull()
+  const omitted = { ...row.snapshot }
+  Reflect.deleteProperty(omitted, 'replacementClock')
+  await expect(t.run(ctx => ctx.db.patch(row._id, { snapshot: omitted }))).rejects.toThrow()
+
+  const { episode } = await measurementReportIdentityFixture()
+  const snapshot = await t.run(async ctx => {
+    const opportunity = await ctx.db.get(f.rows.learnAssessmentOpportunities)
+    if (!opportunity) throw new Error('Missing opportunity fixture')
+    const { _id: _opportunityId, _creationTime: _createdAt, ...fields } = opportunity
+    const originalOpportunityId = await ctx.db.insert('learnAssessmentOpportunities', fields)
+    const replacementOpportunityId = await ctx.db.insert('learnAssessmentOpportunities', fields)
+    const snapshot = learnReportInputSnapshotSchema.parse({ ...row.snapshot, clock: episode.clock,
+      originalOpportunityId, replacementOpportunityId, replacementClock: episode.replacementClock })
+    await ctx.db.patch(row._id, { snapshot })
+    return snapshot
+  })
+  expect((await t.run(ctx => ctx.db.get(row._id)))?.snapshot).toEqual(snapshot)
+  if (snapshot.kind !== 'episode') throw new Error('Expected episode snapshot')
+  expect(snapshot.replacementClock).not.toEqual(snapshot.clock)
+  for (const field of Object.keys(snapshot.replacementClock!)) {
+    const replacementClock = { ...snapshot.replacementClock! }
+    Reflect.deleteProperty(replacementClock, field)
+    await expect(t.run(ctx => ctx.db.patch(row._id, { snapshot: { ...snapshot, replacementClock } }))).rejects.toThrow()
+  }
+  expect((await t.run(ctx => ctx.db.get(row._id)))?.snapshot).toEqual(snapshot)
 })
 
 test('public page and aggregate-export return validation preserve all aggregate breakdowns and reject private additions', async () => {
@@ -43,6 +114,20 @@ test('public page and aggregate-export return validation preserve all aggregate 
   const readExport = makeFunctionReference<'query'>('reportContractFixture:exported')
   expect(validateLearnMeasurementReportCells(await t.query(readPage, {}))).toEqual(page)
   expect(await t.query(readExport, {})).toEqual(exported)
+  for (const key of Object.values(f.reportKeys)) {
+    expect(JSON.stringify(await t.query(readPage, {}))).not.toContain(key)
+    expect(JSON.stringify(await t.query(readExport, {}))).not.toContain(key)
+  }
+  for (const [field, key] of Object.entries(f.reportKeys)) {
+    Reflect.set(cell, field, key)
+    await expect(t.query(readPage, {})).rejects.toThrow()
+    await expect(t.query(readExport, {})).rejects.toThrow()
+    Reflect.deleteProperty(cell, field)
+    Reflect.set(cell.stratum, field, key)
+    await expect(t.query(readPage, {})).rejects.toThrow()
+    await expect(t.query(readExport, {})).rejects.toThrow()
+    Reflect.deleteProperty(cell.stratum, field)
+  }
   expect(cell.legacyIndependentAudit).toEqual({ unknownCount: 3, sourceCoverage: 'complete' })
   Reflect.deleteProperty(cell, 'legacyIndependentAudit')
   await expect(t.query(readPage, {})).rejects.toThrow()

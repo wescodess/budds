@@ -30,7 +30,7 @@ describe('frozen aggregate report v3', () => {
   })
 
   it('pins the aggregate legacy audit input to its owner watermark in source v2', () => {
-    const row = { kind: 'owner_watermark', sequence: 1, dueWorkThrough: null, historyCoverage: 'complete',
+    const row = { kind: 'owner_watermark', learnerKey: `sha256:${'a'.repeat(64)}`, sequence: 1, dueWorkThrough: null, historyCoverage: 'complete',
       legacyIndependentAudit: { unknownCount: 3, sourceCoverage: 'complete' } }
     const page = { version: LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION, reportRunId: 'run1', sequence: 0, sourceWatermark: 1,
       rows: [row], cursor: null, isDone: true }
@@ -45,7 +45,7 @@ describe('frozen aggregate report v3', () => {
     ['unknown', 'complete', 3, false], ['unknown', 'unknown', null, true],
     ['complete', 'unknown', null, true], ['complete', 'complete', 3, true],
   ])('constrains history %s and legacy audit %s coverage', (historyCoverage, sourceCoverage, unknownCount, valid) => {
-    const row = { kind: 'owner_watermark', sequence: 1, dueWorkThrough: null, historyCoverage,
+    const row = { kind: 'owner_watermark', learnerKey: `sha256:${'a'.repeat(64)}`, sequence: 1, dueWorkThrough: null, historyCoverage,
       legacyIndependentAudit: { unknownCount, sourceCoverage } }
     const page = { version: LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION, reportRunId: 'run1', sequence: 0, sourceWatermark: 1,
       rows: [row], cursor: null, isDone: true }

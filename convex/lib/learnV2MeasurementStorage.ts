@@ -1,6 +1,10 @@
 import { v } from 'convex/values'
 import { LEARN_V2_MEASUREMENT_REPORT_VERSION, LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION } from '../../shared/learn-v2-measurement-report'
-import { learnReportMetricValidator } from './learnV2MeasurementReportContract'
+import {
+  learnReportMetricValidator, learnReportAssignmentSnapshotValidator as reportAssignmentSnapshot,
+  learnReportResultSnapshotValidator as reportResultSnapshot, learnReportInputSnapshotValidator as reportInputSnapshot,
+  learnReportFirstSlotStratumValidator,
+} from './learnV2MeasurementReportContract'
 import { LEARN_V2_RESPONSE_CONTEXT_VERSION, LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION, LEARN_V2_RESPONSE_TERMINALIZATION_VERSION } from '../../shared/learn-v2-responses'
 
 // Storage shapes only. Admission, payload limits and command validators are
@@ -325,46 +329,6 @@ export const scoringExecutionFields = {
   authoritativeAttemptId: v.optional(v.id('masteryAttempts')), committedAt: v.optional(v.number()), integrityResult: v.string(),
 }
 
-const reportAssignmentSnapshot = v.object({
-  epoch: v.string(), baselineSha: v.string(), cohortVersion: v.string(), flow: v.union(v.literal('v2_today'), v.literal('v2_canvas')),
-  entryPoint: v.string(), depth: capability.depth, protocolVersion: v.union(v.string(), v.null()),
-  enrollmentAt: v.union(v.number(), v.null()), timezone: v.union(v.string(), v.null()),
-  anchorAt: v.union(v.number(), v.null()), anchorKind: v.union(v.string(), v.null()),
-  historyStatus: v.union(v.literal('prospectively_unexposed'), v.literal('returning'), v.literal('unknown')),
-  familyId: v.union(v.id('learnMeasurementFamilies'), v.null()), familyRevision: v.union(v.number(), v.null()),
-  familyValidationStatus: v.string(), equivalenceVersion: v.union(v.string(), v.null()), allocationOrder: v.union(v.string(), v.null()),
-  assignedDay7: v.boolean(), assignedDay30: v.boolean(), sourceCoverage: v.union(v.literal('complete'), v.literal('unknown')),
-})
-const reportResultSnapshot = v.object({
-  submissionId: v.id('learnResponses'), attemptId: v.id('masteryAttempts'), executionId: v.id('learnScoringExecutions'),
-  kind: v.union(v.literal('measurement_cold'), v.literal('measurement_delayed'), v.literal('independent_application'), v.literal('retained_transfer')),
-  acceptedAt: v.number(), scoreCommittedAt: v.number(), scorePercent: v.number(), thresholdPercent: v.literal(80),
-  caseId: v.id('learnAssessmentCases'), itemId: v.union(v.id('learnMeasurementItems'), v.null()),
-  familyRevision: v.union(v.number(), v.null()), formLabel: v.union(v.string(), v.null()),
-  scoringKind: v.union(v.literal('deterministic'), v.literal('model')), configurationDigest: v.string(), scorerVersion: v.string(),
-  observedModel: v.union(v.string(), v.null()), observedUpstream: v.union(v.string(), v.null()), identityVersion: v.string(),
-  identityStatus: v.union(v.literal('verified'), v.literal('unknown'), v.literal('mismatch'), v.literal('deterministic'), v.literal('unverified_legacy')),
-  comparisonContractDigest: v.string(), supportManifestDigest: v.string(),
-  assistanceState: v.union(v.literal('unassisted'), v.literal('assisted'), v.literal('unknown')), assistancePolicyVersion: v.string(),
-  validityStatus: v.union(v.literal('valid'), v.literal('excluded'), v.literal('unknown')), exclusionReasons: v.array(v.string()),
-  measurementEligible: v.boolean(), masteryEligible: v.boolean(), evidenceAvailable: v.boolean(),
-  pasteObserved: observation, focusLossObserved: observation, instrumentationVersion: v.string(),
-  masteryStateBefore: v.string(), masteryStateAfter: v.string(),
-})
-const reportInputSnapshot = v.union(
-  v.object({ kind: v.literal('owner_watermark'), sequence: v.number(), dueWorkThrough: v.union(v.number(), v.null()), historyCoverage: v.union(v.literal('complete'), v.literal('unknown')),
-    legacyIndependentAudit: learnReportMetricValidator.fields.legacyIndependentAudit }),
-  v.object({ kind: v.literal('episode'), assignment: reportAssignmentSnapshot, clock: v.union(clock, v.null()),
-    originalOpportunityId: v.union(v.id('learnAssessmentOpportunities'), v.null()), replacementOpportunityId: v.union(v.id('learnAssessmentOpportunities'), v.null()),
-    cold: v.union(reportResultSnapshot, v.null()), delayed: v.union(reportResultSnapshot, v.null()),
-    operationalEligibility: v.string(), responseAcceptedAt: v.union(v.number(), v.null()), disposition: v.string(), reasonCodes: v.array(v.string()),
-    mixedFlow: v.boolean(), treatmentEpochChanged: v.boolean(),
-  }),
-  v.object({ kind: v.literal('first_check_claim'), claim: firstCheckClaim, firstCheckOpportunityId: v.id('learnAssessmentOpportunities'),
-    checkSequence: v.number(), clock, stateAtEligibility: v.string(), stateAtAcceptance: v.union(v.string(), v.null()),
-    result: v.union(reportResultSnapshot, v.null()), unresolvedReason: v.union(v.string(), v.null()),
-  }),
-)
 export const reportFactFields = {
   ...base, learningVoidId: v.optional(v.id('learningVoids')), sequence: v.number(), epoch: v.string(),
   factVersion: v.literal(LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION), occurredAt: v.number(),
@@ -373,7 +337,7 @@ export const reportFactFields = {
     v.object({ kind: v.literal('opportunity'), assessmentOpportunityId: v.id('learnAssessmentOpportunities'), recordRevision: v.number(), status: v.string(), dueAt: v.union(v.number(), v.null()), closeAt: v.number(), clock: v.union(clock, v.null()), originalSlot: v.boolean() }),
     v.object({ kind: v.literal('response'), submissionId: v.id('learnResponses'), acceptedAt: v.number(), measurementEligible: v.boolean(), masteryEligible: v.boolean(), assistanceSnapshot, validitySnapshot }),
     v.object({ kind: v.literal('score'), submissionId: v.id('learnResponses'), attemptId: v.id('masteryAttempts'), executionId: v.id('learnScoringExecutions'), scorePercent: v.number(), scoreCommittedAt: v.number(), snapshot: reportResultSnapshot }),
-    v.object({ kind: v.literal('independent_claim'), ...firstCheckClaim.fields, firstCheckOpportunityId: v.id('learnAssessmentOpportunities'), checkSequence: v.number() }),
+    v.object({ kind: v.literal('independent_claim'), ...firstCheckClaim.fields, firstCheckOpportunityId: v.id('learnAssessmentOpportunities'), checkSequence: v.number(), stratum: learnReportFirstSlotStratumValidator }),
     v.object({ kind: v.literal('integrity'), submissionId: v.id('learnResponses'), integrityEventId: v.id('learnResponseIntegrityEvents'), currentEligibility: v.string(), evidenceAvailable: v.boolean(), bodyAvailability: v.union(v.literal('available'), v.literal('purged')) }),
   ),
 }
