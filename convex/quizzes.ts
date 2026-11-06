@@ -1,6 +1,6 @@
 import { v } from 'convex/values'
 import { mutation, query, internalMutation } from './_generated/server'
-import type { Id } from './_generated/dataModel'
+import type { Doc, Id } from './_generated/dataModel'
 import type { MutationCtx, QueryCtx } from './_generated/server'
 import { getOptionalAuthUserId, requireAuth } from './lib/auth'
 import { QUIZ_RUBRIC_GRADE_VERSION, quizGradingCriterionValidator } from '../shared/quiz-grading'
@@ -851,14 +851,15 @@ export const getAttemptResults = query({
     if (!quiz || quiz.deletedAt !== undefined) return null
     const eligibleQuestionIds = attempt.gradingQuestionIds ? new Set(attempt.gradingQuestionIds) : undefined
 
-    const questions = await ctx.db
-      .query('quizQuestions')
-      .withIndex('by_quizId', q => q.eq('quizId', attempt.quizId))
-      .take(MAX_QUIZ_QUESTIONS)
-
-    const questionMap = new Map(questions.map(q => [q._id as string, q]))
-
     const attemptAnswers = await getQuizAttemptAnswers(ctx, attempt)
+    const savedQuestionIds = attemptAnswers.length > 0
+      ? attemptAnswers.map(answer => answer.questionId)
+      : (attempt.answers ?? []).map(answer => answer.questionId)
+    const questions = await Promise.all([...new Set(savedQuestionIds)].map(id => ctx.db.get(id)))
+    const questionMap = new Map<string, Doc<'quizQuestions'>>()
+    for (const question of questions) {
+      if (question && question.quizId === attempt.quizId && question.userId === userId) questionMap.set(question._id, question)
+    }
     const assessments = await getQuizAttemptAssessments(ctx, attempt, attemptAnswers)
     const assessmentMap = new Map(assessments.map(row => [row.attemptAnswerId as string, row]))
     const rubricRows = assessments.filter(isRubricAssessment)

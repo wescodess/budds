@@ -19,7 +19,11 @@ export function getQuizGradingState(rows: Doc<'quizAnswerAssessments'>[]) {
 
 export async function getQuizAttemptAnswers(ctx: QueryCtx | MutationCtx, attempt: Doc<'quizAttempts'>) {
   if (!attempt.gradingQuestionIds) {
-    return await ctx.db.query('attemptAnswers').withIndex('by_attemptId', q => q.eq('attemptId', attempt._id)).take(MAX_QUIZ_GRADING_ROWS)
+    // Historical attempts predate the grading admission cap. Stream the indexed
+    // rows so their existing review remains complete.
+    const answers: Doc<'attemptAnswers'>[] = []
+    for await (const answer of ctx.db.query('attemptAnswers').withIndex('by_attemptId', q => q.eq('attemptId', attempt._id))) answers.push(answer)
+    return answers
   }
   const questionIds = [...new Set(attempt.gradingQuestionIds)]
   if (questionIds.length > MAX_QUIZ_GRADING_ROWS) throw new Error('Quiz question limit exceeded')
@@ -39,8 +43,10 @@ export async function getQuizAttemptAnswers(ctx: QueryCtx | MutationCtx, attempt
 
 export async function getQuizAttemptAssessments(ctx: QueryCtx | MutationCtx, attempt: Doc<'quizAttempts'>, answers: Doc<'attemptAnswers'>[]) {
   if (!attempt.gradingQuestionIds) {
-    return await ctx.db.query('quizAnswerAssessments')
-      .withIndex('by_userId_and_attemptId', q => q.eq('userId', attempt.userId).eq('attemptId', attempt._id)).take(MAX_QUIZ_GRADING_ROWS)
+    const rows: Doc<'quizAnswerAssessments'>[] = []
+    for await (const row of ctx.db.query('quizAnswerAssessments')
+      .withIndex('by_userId_and_attemptId', q => q.eq('userId', attempt.userId).eq('attemptId', attempt._id))) rows.push(row)
+    return rows
   }
   const stored = await ctx.db.query('quizAnswerAssessments')
     .withIndex('by_userId_and_attemptId', q => q.eq('userId', attempt.userId).eq('attemptId', attempt._id)).take(MAX_QUIZ_GRADING_ROWS + 1)

@@ -3,6 +3,7 @@ import { convexTest } from 'convex-test'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import schema from './schema'
+import type { Id } from './_generated/dataModel'
 
 const modules = import.meta.glob('./**/*.ts')
 const OWNER = { tokenIdentifier: 'https://auth.example.com|quiz_release_owner', name: 'Owner' }
@@ -177,4 +178,54 @@ test('account deletion drains owned orphaned grading snapshots in bounded batche
   expect(await t.run(ctx => ctx.db.query('quizAnswerAssessments')
     .withIndex('by_userId_and_attemptId', q => q.eq('userId', OWNER.tokenIdentifier)).take(1))).toEqual([])
   expect(await t.run(ctx => ctx.db.get(other.assessment._id))).toEqual(other.assessment)
+})
+
+test.each(['normalized', 'embedded'])('historical 201-answer review stays complete (%s)', async (storage) => {
+  const t = convexTest(schema, modules)
+  const user = t.withIdentity(OWNER)
+  const folderId = await user.mutation(api.folders.createFolder, { name: 'Historical quiz' })
+  const attemptId = await t.run(async (ctx) => {
+    const quizId = await ctx.db.insert('quizzes', {
+      userId: OWNER.tokenIdentifier, folderId, title: 'Pre-release quiz', status: 'ready', questionCount: 201,
+    })
+    const answers: { questionId: Id<'quizQuestions'>, response: string, isCorrect: boolean }[] = []
+    for (let index = 0; index < 201; index++) {
+      const questionId = await ctx.db.insert('quizQuestions', {
+        quizId, userId: OWNER.tokenIdentifier, order: index, type: 'free-response',
+        question: `Historical question ${index}`, correctAnswer: `Reference ${index}`, explanation: `Explanation ${index}`,
+      })
+      answers.push({ questionId, response: `Saved response ${index}`, isCorrect: true })
+    }
+    const id = await ctx.db.insert('quizAttempts', {
+      userId: OWNER.tokenIdentifier, quizId, score: 201, total: 201, completedAt: Date.now(),
+      ...(storage === 'embedded' ? { answers } : { status: 'completed' as const }),
+    })
+    if (storage === 'normalized') {
+      for (const answer of answers) await ctx.db.insert('attemptAnswers', {
+        attemptId: id, questionId: answer.questionId, userAnswer: answer.response, isCorrect: true, answeredAt: Date.now(),
+      })
+    }
+    return id
+  })
+  const result = (await user.query(api.quizzes.getAttemptResults, { attemptId }))!
+  expect(result).toMatchObject({ score: 201, total: 201, status: 'completed' })
+  expect(result.results).toHaveLength(201)
+  for (let index = 0; index < 201; index++) expect(result.results[index]).toMatchObject({
+    questionText: `Historical question ${index}`, correctAnswer: `Reference ${index}`, explanation: `Explanation ${index}`,
+    userAnswer: `Saved response ${index}`, questionType: 'free-response',
+  })
+  expect(await t.withIdentity(OTHER).query(api.quizzes.getAttemptResults, { attemptId })).toBeNull()
+})
+
+test('historical question lookup cannot expose another quiz through a saved question ID', async () => {
+  const { t, owner, other } = await fixture()
+  await t.run(async (ctx) => {
+    await ctx.db.patch(owner.attemptId, { gradingQuestionIds: undefined })
+    await ctx.db.delete(owner.assessment._id)
+    await ctx.db.patch(owner.assessment.attemptAnswerId, { questionId: other.assessment.questionId })
+    await ctx.db.patch(other.assessment.questionId, { question: 'Private other quiz question', correctAnswer: 'Private reference' })
+  })
+  const result = (await owner.user.query(api.quizzes.getAttemptResults, { attemptId: owner.attemptId }))!
+  expect(result.results).toHaveLength(1)
+  expect(result.results[0]).toMatchObject({ questionText: '', correctAnswer: '' })
 })
