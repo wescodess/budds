@@ -2,14 +2,16 @@ import { getDocumentSize, type Infer, type Value } from 'convex/values'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { requireAuth } from './auth'
+import { rejectAccountDeletion } from './accountDeletionTombstone'
 import { requireActiveBlueprint } from './learnV2BlueprintAuthority'
 import { liveEvidenceState } from '../learnAdaptiveRecovery'
 import type { artifactSourceDependencyValidator } from './learnV2ArtifactLineageContract'
 import {
-  LEARN_ARTIFACT_LINEAGE_LIMITS as limits, LEARN_ARTIFACT_LINEAGE_VERSION,
+  LEARN_ARTIFACT_LINEAGE_LIMITS as limits, LEARN_ARTIFACT_LINEAGE_VERSION, LEARN_ARTIFACT_CONTENT_VERSION,
   learnArtifactCaseSchema, learnArtifactRegistrationArgsSchema, learnArtifactRegistrationResultSchema,
+  learnArtifactBatchRegistrationArgsSchema, learnArtifactBatchRegistrationResultSchema, learnArtifactOwnerRecordSchema, learnArtifactSupersessionArgsSchema,
   learnArtifactReferenceSchema, learnArtifactSourceDependencySchema, learnArtifactValidationSchema, validateLearnArtifactLookup, validateLearnArtifactLookupResult,
-  type LearnArtifactReference, type LearnArtifactLookupResult,
+  type LearnArtifactReference, type LearnArtifactLookupResult, type LearnArtifactOwnerRecord,
 } from '../../shared/learn-v2-artifact-lineage'
 import { learnSequenceSchema, learnVersionSchema, learnSerializedBytes, parseLearnContract } from '../../shared/learn-v2-responses'
 
@@ -30,13 +32,18 @@ const budgetContext = Symbol('artifactLineageReadBudget')
 // All reads, including those inside shared authority helpers and indexed
 // queries, use one budget. Reserve a maximum-size document BEFORE each read;
 // charge the SDK's document size plus 64 bytes of conservative overhead.
-function withReadBudget<T extends ReadCtx>(ctx: T): T {
-  if (Reflect.get(ctx, budgetContext)) return ctx
+export function createArtifactLineageReadContext<T extends ReadCtx>(ctx: T) {
+  const existing = Reflect.get(ctx, budgetContext) as { usage: () => ArtifactLineageReadUsage } | undefined
+  if (existing) return { ctx, get readUsage() { return existing.usage() } }
   let bytes = 0
+  let documentsRead = 0
+  let readRequests = 0
+  const state = { usage: () => ({ chargedBytes: bytes, documentsRead, readRequests, limitBytes: ARTIFACT_LINEAGE_READ_BYTES }) }
   let reserved = 0
   const read = async <R>(operation: () => Promise<R>): Promise<R> => {
     if (bytes + reserved + MAX_DOCUMENT_READ_BYTES > ARTIFACT_LINEAGE_READ_BYTES) unavailable()
     reserved += MAX_DOCUMENT_READ_BYTES
+    readRequests++
     try {
       const result = await operation()
       if (result !== null && result !== undefined) {
@@ -44,6 +51,7 @@ function withReadBudget<T extends ReadCtx>(ctx: T): T {
         const size = getDocumentSize(result as Record<string, Value>) + 64
         if (size > MAX_DOCUMENT_READ_BYTES) unavailable()
         bytes += size
+        documentsRead++
       }
       return result
     }
@@ -98,8 +106,11 @@ function withReadBudget<T extends ReadCtx>(ctx: T): T {
       return method.bind(target)
     },
   })
-  return new Proxy(ctx, { get: (target, property) => property === budgetContext ? true : property === 'db' ? db : Reflect.get(target, property) })
+  const budgeted = new Proxy(ctx, { get: (target, property) => property === budgetContext ? state : property === 'db' ? db : Reflect.get(target, property) })
+  return { ctx: budgeted, get readUsage() { return state.usage() } }
 }
+export type ArtifactLineageReadUsage = { chargedBytes: number, documentsRead: number, readRequests: number, limitBytes: number }
+function withReadBudget<T extends ReadCtx>(ctx: T): T { return createArtifactLineageReadContext(ctx).ctx }
 
 type SessionEvidence = { claims: Doc<'sessionContentClaims'>[], supports: Doc<'learnClaimSupports'>[] }
 type AudioPlayback = {
@@ -208,7 +219,7 @@ export function artifactContentProjection(input: ArtifactContent) {
       }
       case 'document': case 'document_chunk': {
         const d = input.document
-        return { ...objectIdentity(d), folderId: d.folderId, sourceRevision: d.sourceRevision, contentHash: d.contentHash, r2Key: d.r2Key, fileId: d.fileId,
+        return { ...objectIdentity(d), sourceRevision: d.sourceRevision, contentHash: d.contentHash, r2Key: d.r2Key, fileId: d.fileId,
           fileSize: d.fileSize, sourceType: d.sourceType, sourceUrl: d.sourceUrl, mimeType: d.mimeType }
       }
       case 'quiz_question': {
@@ -248,30 +259,34 @@ export function artifactContentProjection(input: ArtifactContent) {
       }
     }
   })()
-  return { version: 'learn-v2.artifact-content.v1', kind: input.kind, payload }
+  return { version: LEARN_ARTIFACT_CONTENT_VERSION, kind: input.kind, payload }
 }
 
 // Server producers use this same bounded encoding when capturing payload pins.
 // Hash artifactContentProjection, never a whole operational record. Legacy
 // records without a revision counter use this content digest as their revision.
-export async function artifactPayloadDigest(payload: unknown) {
-  const canonical = (value: unknown): unknown => {
-    if (Array.isArray(value)) return value.map(canonical)
-    if (value !== null && typeof value === 'object') return Object.fromEntries(Object.entries(value)
-      .filter(([, child]) => child !== undefined)
-      .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, child]) => [key, canonical(child)]))
-    return value
+function canonicalJson(value: unknown): string {
+  const canonical = (child: unknown): unknown => {
+    if (Array.isArray(child)) return child.map(canonical)
+    if (child !== null && typeof child === 'object') return Object.fromEntries(Object.entries(child)
+      .filter(([, entry]) => entry !== undefined)
+      .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, entry]) => [key, canonical(entry)]))
+    return child
   }
-  const bytes = new TextEncoder().encode(JSON.stringify(canonical(payload)))
-  if (bytes.length > 500_000) unavailable()
-  return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), value => value.toString(16).padStart(2, '0')).join('')
+  return JSON.stringify(canonical(value))
 }
+async function canonicalDigest(value: unknown, maxBytes: number) {
+  const bytes = new TextEncoder().encode(canonicalJson(value))
+  if (bytes.length > maxBytes) unavailable()
+  return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), byte => byte.toString(16).padStart(2, '0')).join('')
+}
+export async function artifactPayloadDigest(payload: unknown) { return canonicalDigest(payload, 500_000) }
 
 async function liveFolder(ctx: ReadCtx, userId: string, id: Id<'folders'>) {
   if ((await ctx.db.get(id))?.userId !== userId) unavailable()
 }
 
-// Mirrors learnV2Sources.ts:225-242, including revocation before cleanup.
+// Mirrors learnV2Sources.requireLiveVoid, including revocation before cleanup.
 async function liveVoid(ctx: ReadCtx, userId: string, id: Id<'learningVoids'>) {
   const row = await ctx.db.get(id)
   if (!row || row.userId !== userId || row.status === 'archived') unavailable()
@@ -281,7 +296,7 @@ async function liveVoid(ctx: ReadCtx, userId: string, id: Id<'learningVoids'>) {
 
 async function liveDocument(ctx: ReadCtx, userId: string, id: Id<'documents'>) {
   const row = await ctx.db.get(id)
-  // learnAdaptive.ts:78-82; revision/object pins are additionally bound below.
+  // Mirrors learnAdaptive.loadContributionSource; content pins are bound below.
   if (!row || row.userId !== userId || row.status !== 'success') unavailable()
   await liveFolder(ctx, userId, row.folderId)
   return row
@@ -425,7 +440,7 @@ async function liveSessionBlock(ctx: ReadCtx, userId: string, row: Lineage, id: 
   if (!plan || plan.userId !== userId || plan.status !== 'accepted' || !plan.blueprintRevisionId) unavailable()
   const stable = await ctx.db.get(plan.studyPlanId)
   const learningVoid = await liveVoid(ctx, userId, plan.learningVoidId)
-  // getSessionContent (learnV2SessionContent.ts:1424-1457) and loadReadyCanvas.
+  // Mirrors learnV2SessionContent.getSessionContent and learnAdaptiveCanvas.loadReadyCanvas.
   if (!stable || stable.userId !== userId || stable.learningVoidId !== learningVoid._id || stable.activeRevisionId !== plan._id
     || content.studyPlanRevisionId !== plan._id || content.blueprintRevisionId !== plan.blueprintRevisionId
     || content.objectiveId !== session.primaryObjectiveId
@@ -454,7 +469,7 @@ async function liveQuizQuestion(ctx: ReadCtx, userId: string, row: Lineage, id: 
   const question = await ctx.db.get(id)
   if (!question || question.userId !== userId) unavailable()
   const quiz = await ctx.db.get(question.quizId)
-  // loadContributionSource, learnAdaptive.ts:65-74 (also course deletion).
+  // Mirrors learnAdaptive.loadContributionSource, including course deletion.
   if (!quiz || quiz.userId !== userId || quiz.status !== 'ready' || quiz.deletedAt !== undefined) unavailable()
   await liveFolder(ctx, userId, quiz.folderId)
   if (quiz.courseId) await liveCourse(ctx, userId, quiz.courseId)
@@ -464,7 +479,7 @@ async function liveQuizQuestion(ctx: ReadCtx, userId: string, row: Lineage, id: 
 async function liveSectionBlock(ctx: ReadCtx, userId: string, row: Lineage, id: Id<'courseSections'>) {
   const section = await ctx.db.get(id)
   if (!section || section.userId !== userId || !['ready', 'completed'].includes(section.status)) unavailable()
-  // courseSections.ts:341 and courses.ts:237 reject a deleting aggregate.
+  // Mirrors courseSections.get and courses.get: a deleting aggregate is unavailable.
   await liveCourse(ctx, userId, section.courseId)
   await pinned(row, await sectionContentProjection(ctx, section))
 }
@@ -473,7 +488,7 @@ async function liveFlashcardVersion(ctx: ReadCtx, userId: string, row: Lineage, 
   const version = await ctx.db.get(id)
   if (!version || version.userId !== userId) unavailable()
   const room = await ctx.db.get(version.roomId)
-  // loadContributionSource, learnAdaptive.ts:58-62. Historical versions stay
+  // Mirrors learnAdaptive.loadContributionSource. Historical versions stay
   // live; restoring one never replaces its original lineage or case identity.
   if (!room || room.userId !== userId) unavailable()
   await liveFolder(ctx, userId, room.folderId)
@@ -484,7 +499,7 @@ async function liveFlashcardVersion(ctx: ReadCtx, userId: string, row: Lineage, 
 
 async function liveAudioOverview(ctx: ReadCtx, userId: string, row: Lineage, id: Id<'audioOverviews'>) {
   const overview = await ctx.db.get(id)
-  // loadContributionSource, learnAdaptive.ts:78-82.
+  // Mirrors learnAdaptive.loadContributionSource.
   if (!overview || overview.userId !== userId || overview.status !== 'ready') unavailable()
   await liveAudioScope(ctx, overview)
   await pinned(row, await audioOverviewContentProjection(ctx, overview))
@@ -499,7 +514,7 @@ async function liveLearnerArtifact(ctx: ReadCtx, userId: string, row: Lineage, i
   if (['unavailable', 'invalidated', 'stale'].includes(await liveEvidenceState(ctx, thread))) unavailable()
   const activity = await ctx.db.get(artifact.activityId)
   if (!activity || activity.userId !== userId || activity.threadId !== thread._id) unavailable()
-  // artifactEvidenceUnavailable/listThreadArtifacts, learnAdaptive.ts:564-570,660-685.
+  // Mirrors learnAdaptive.artifactEvidenceUnavailable and listThreadArtifacts.
   if (activity.activityClass === 'factual') {
     if (activity.status === 'blocked' || await liveEvidenceState(ctx, thread) !== 'ready') unavailable()
     const invalidated = await ctx.db.query('learnActivityEvidenceLinks')
@@ -520,7 +535,7 @@ async function liveMeasurementInventory(ctx: ReadCtx, userId: string, item: Doc<
   const objective = await ctx.db.get(item.objectiveId)
   if (!objective || objective.userId !== userId || objective.blueprintRevisionId !== item.blueprintRevisionId) unavailable()
   const family = await ctx.db.get(item.familyId)
-  // C1's published-item/evidence union, learnV2MeasurementStorage.ts:157-167.
+  // Mirrors learnV2MeasurementStorage.measurementItemValidator's published branch.
   if (!family || family.userId !== userId || !available(family) || !['provisional_equivalent', 'empirically_supported'].includes(family.status)
     || family.revision !== item.familyRevision || family.learningVoidId !== item.learningVoidId
     || family.blueprintRevisionId !== item.blueprintRevisionId || family.blueprintRecordRevision !== item.blueprintRecordRevision
@@ -571,9 +586,8 @@ async function readCatalog(ctx: ReadCtx, userId: string) {
 
 async function findLineage(ctx: ReadCtx, userId: string, reference: LearnArtifactReference) {
   const rows = await ctx.db.query('learnArtifactLineages')
-    .withIndex('by_userId_and_artifact_kind_and_artifact_id_and_key_and_revision', q => q.eq('userId', userId)
-      .eq('artifact.kind', reference.artifact.kind).eq('artifact.id', reference.artifact.id).eq('key', reference.key).eq('revision', reference.revision)).take(2)
-  if (rows.length !== 1 || rows[0]!.payloadDigest !== reference.payloadDigest) unavailable()
+    .withIndex('by_artifact_kind_and_artifact_id_and_key_and_revision_and_nextId', q => q.eq('artifact.kind', reference.artifact.kind).eq('artifact.id', reference.artifact.id).eq('key', reference.key).eq('revision', reference.revision).eq('nextId', undefined)).take(2)
+  if (rows.length !== 1 || rows[0]!.userId !== userId || rows[0]!.payloadDigest !== reference.payloadDigest) unavailable()
   return rows[0]!
 }
 
@@ -594,7 +608,7 @@ async function sourceAvailable(ctx: ReadCtx, userId: string, source: Dependency)
   if (!identity || identity.userId !== userId || identity.learningVoidId !== snapshot.learningVoidId || identity.tombstonedAt !== undefined) return false
   if (identity.folderDocumentId) {
     const document = await liveDocument(ctx, userId, identity.folderDocumentId)
-    // learnV2Sources.ts:877-881 and learnAdaptive.ts:133-137. Compare
+    // Mirrors learnV2Sources.prepareFetchedSourceForReview and learnAdaptive.loadContributionSource. Compare
     // every current pin, even when the document is still marked successful.
     if ((!document.sourceRevision && !document.contentHash)
       || document.sourceRevision?.trim() !== snapshot.sourceRevision
@@ -631,12 +645,7 @@ export async function artifactManifestDigest(
     if (document.sourceRevision !== source.sourceRevision || !document.contentHash?.trim()) unavailable()
     sourcePins.push({ ...source, contentHash: document.contentHash, objectKey: document.r2Key ?? null })
   }
-  const canonical = (value: unknown): unknown => {
-    if (Array.isArray(value)) return value.map(canonical)
-    if (value !== null && typeof value === 'object') return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0).map(([key, child]) => [key, canonical(child)]))
-    return value
-  }
-  const sorted = (values: unknown[]) => values.map(value => JSON.stringify(canonical(value))).sort()
+  const sorted = (values: unknown[]) => values.map(canonicalJson).sort()
   const manifest = { version: row.lineageVersion, userId: row.userId, artifact: row.artifact, key: row.key, revision: row.revision,
     payloadDigest: row.payloadDigest, classification: row.classification, authority: row.authority, authorityVersion: row.authorityVersion, derivation: row.derivation,
     origins: sorted(origins.map(origin => ({ lineageId: origin.originLineageId, revision: origin.originRevision, payloadDigest: origin.originPayloadDigest,
@@ -645,8 +654,7 @@ export async function artifactManifestDigest(
       solutionFingerprint: binding.solutionFingerprint, identityPolicyVersion: binding.identityPolicyVersion }))),
     sources: sorted(sourcePins) }
   learnSerializedBytes(manifest, limits.maxLookupBytes)
-  const bytes = new TextEncoder().encode(JSON.stringify(canonical(manifest)))
-  return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), value => value.toString(16).padStart(2, '0')).join('')
+  return canonicalDigest(manifest, limits.maxLookupBytes)
 }
 
 async function inspectGraph(ctx: ReadCtx, userId: string, root: Lineage, catalogRevision: number, requirePublication: boolean) {
@@ -665,7 +673,7 @@ async function inspectGraph(ctx: ReadCtx, userId: string, root: Lineage, catalog
       if (depth + cachedHeight > limits.maxDepth) unavailable()
       return cachedHeight
     }
-    if (nodes.size >= limits.maxNodes || row.userId !== userId || !available(row)
+    if (nodes.size >= limits.maxNodes || row.userId !== userId || !available(row) || row.nextId !== undefined
       || row.lineageVersion !== LEARN_ARTIFACT_LINEAGE_VERSION || row.classification === 'unknown'
       || row.classification !== root.classification || !learnVersionSchema.safeParse(row.authorityVersion).success) unavailable()
     if ((row.classification === 'genuine_personal_work' && row.authority !== (row.derivation === 'original' ? 'personal_authorship' : 'server_producer'))
@@ -737,30 +745,70 @@ async function inspectGraph(ctx: ReadCtx, userId: string, root: Lineage, catalog
   return { nodes, cases, usage, validation: rootValidation }
 }
 
-export async function resolveArtifactLineageForOwner(ctx: ReadCtx, userId: string, input: unknown): Promise<LearnArtifactLookupResult> {
-  ctx = withReadBudget(ctx)
-  try {
-    if (await requireAuth(ctx) !== userId) throw new Error('Learn access denied')
-    const { reference } = validateLearnArtifactLookup(input)
-    const catalog = await readCatalog(ctx, userId)
-    const root = await findLineage(ctx, userId, reference)
-    const graph = await inspectGraph(ctx, userId, root, catalog.catalogRevision, true)
-    return validateLearnArtifactLookupResult({ status: 'bound', version: LEARN_ARTIFACT_LINEAGE_VERSION,
-      lineageId: root._id, reference, classification: root.classification, instructionalRegistered: root.publication !== undefined,
-      catalogRevision: catalog.catalogRevision, originLineageIds: [...graph.nodes.keys()].filter(id => id !== root._id),
-      cases: [...graph.cases.values()].map(binding => ({ caseId: binding.caseId, scenarioFingerprint: binding.scenarioFingerprint,
-        solutionFingerprint: binding.solutionFingerprint, identityPolicyVersion: binding.identityPolicyVersion, usageClass: graph.usage.get(binding.caseId)! })),
-      validation: graph.validation })
+// Only server-owned record references cross an identity-less seam. Public
+// capability handlers must validate the capability before calling this helper.
+async function requireRecordOwner(ctx: ReadCtx, input: LearnArtifactOwnerRecord) {
+  const record = parseLearnContract(learnArtifactOwnerRecordSchema, input)
+  if (record.kind === 'document') {
+    const document = await ctx.db.get(record.id)
+    if (!document || !['success', 'indexing'].includes(document.status)) unavailable()
+    await rejectAccountDeletion(ctx, document.userId)
+    await liveFolder(ctx, document.userId, document.folderId)
+    return document.userId
   }
+  const job = await ctx.db.get(record.id)
+  if (!job || ['failed', 'cancelled'].includes(job.status)) unavailable()
+  await rejectAccountDeletion(ctx, job.userId)
+  await liveFolder(ctx, job.userId, job.folderId)
+  const task = await ctx.db.get(job.taskId)
+  if (!task || task.userId !== job.userId || task.folderId !== job.folderId || task.type !== 'audio-overview-generation'
+    || !task.audioOverviewRequest || ['failed', 'cancelled'].includes(task.status)) unavailable()
+  if (job.roomId) {
+    const room = await ctx.db.get(job.roomId)
+    if (!room || room.userId !== job.userId || room.folderId !== job.folderId) unavailable()
+    if (room.conversationId) {
+      const conversation = await ctx.db.get(room.conversationId)
+      if (!conversation || conversation.userId !== job.userId || conversation.folderId !== job.folderId || conversation.archivedAt !== undefined) unavailable()
+    }
+  }
+  return job.userId
+}
+
+async function resolveForOwner(ctx: ReadCtx, userId: string, input: unknown): Promise<LearnArtifactLookupResult> {
+  const { reference } = validateLearnArtifactLookup(input)
+  const catalog = await readCatalog(ctx, userId)
+  const root = await findLineage(ctx, userId, reference)
+  const graph = await inspectGraph(ctx, userId, root, catalog.catalogRevision, true)
+  return validateLearnArtifactLookupResult({ status: 'bound', version: LEARN_ARTIFACT_LINEAGE_VERSION,
+    lineageId: root._id, reference, classification: root.classification, instructionalRegistered: root.publication !== undefined,
+    catalogRevision: catalog.catalogRevision, originLineageIds: [...graph.nodes.keys()].filter(id => id !== root._id),
+    cases: [...graph.cases.values()].map(binding => ({ caseId: binding.caseId, scenarioFingerprint: binding.scenarioFingerprint,
+      solutionFingerprint: binding.solutionFingerprint, identityPolicyVersion: binding.identityPolicyVersion, usageClass: graph.usage.get(binding.caseId)! })),
+    validation: graph.validation })
+}
+
+async function lookup(operation: () => Promise<LearnArtifactLookupResult>): Promise<LearnArtifactLookupResult> {
+  try { return await operation() }
   catch (error) {
     if (!(error instanceof Unavailable)) throw error
     return { status: 'unavailable', version: LEARN_ARTIFACT_LINEAGE_VERSION }
   }
 }
 
-export async function advanceAssessmentCatalogForOwner(ctx: MutationCtx, userId: string, expectedRevision: number) {
+export async function resolveArtifactLineageForOwner(ctx: ReadCtx, userId: string, input: unknown): Promise<LearnArtifactLookupResult> {
   ctx = withReadBudget(ctx)
-  if (await requireAuth(ctx) !== userId) throw new Error('Learn access denied')
+  return lookup(async () => {
+    if (await requireAuth(ctx) !== userId) throw new Error('Learn access denied')
+    return resolveForOwner(ctx, userId, input)
+  })
+}
+
+export async function resolveArtifactLineageForRecord(ctx: ReadCtx, record: LearnArtifactOwnerRecord, input: unknown): Promise<LearnArtifactLookupResult> {
+  ctx = withReadBudget(ctx)
+  return lookup(async () => resolveForOwner(ctx, await requireRecordOwner(ctx, record), input))
+}
+
+async function advanceCatalog(ctx: MutationCtx, userId: string, expectedRevision: number) {
   const catalog = await readCatalog(ctx, userId)
   if (!learnSequenceSchema.safeParse(expectedRevision).success || catalog.catalogRevision !== expectedRevision
     || !Number.isSafeInteger(expectedRevision + 1)) unavailable()
@@ -768,23 +816,139 @@ export async function advanceAssessmentCatalogForOwner(ctx: MutationCtx, userId:
   return expectedRevision + 1
 }
 
-// Dormant transaction seam; callers must write their artifact in this mutation.
+export async function advanceAssessmentCatalogForOwner(ctx: MutationCtx, userId: string, expectedRevision: number) {
+  ctx = withReadBudget(ctx)
+  if (await requireAuth(ctx) !== userId) throw new Error('Learn access denied')
+  return advanceCatalog(ctx, userId, expectedRevision)
+}
+
+async function registerBatch(ctx: MutationCtx, userId: string, input: unknown) {
+  const budget = createArtifactLineageReadContext(ctx)
+  ctx = budget.ctx
+  const args = parseLearnContract(learnArtifactBatchRegistrationArgsSchema, input)
+  const catalog = await readCatalog(ctx, userId)
+  if (catalog.catalogRevision !== args.expectedCatalogRevision || catalog.historyCompleteness !== 'prospective_complete') unavailable()
+  const pending = []
+  const ids = new Set<Id<'learnArtifactLineages'>>()
+  for (const artifact of args.artifacts) {
+    const root = await findLineage(ctx, userId, artifact.reference)
+    if (ids.has(root._id) || (root.classification !== 'teaching' && root.classification !== 'genuine_personal_work')
+      || root.publication || root.validationId !== artifact.validationId) unavailable()
+    ids.add(root._id)
+    const graph = await inspectGraph(ctx, userId, root, catalog.catalogRevision, false)
+    if (graph.validation.comparedCatalogRevision !== catalog.catalogRevision
+      || graph.validation.coverageWatermark !== catalog.historyCoverageWatermark
+      || [...graph.usage.values()].some(value => value === 'measurement_reserved')) unavailable()
+    pending.push({ root, graph, validationId: artifact.validationId })
+  }
+  // Nothing is written until every member passes against the same catalogue.
+  // No reads follow this guard advance: even a budget denial leaves no receipts.
+  const catalogRevision = await advanceCatalog(ctx, userId, args.expectedCatalogRevision)
+  const publishedAt = Date.now()
+  for (const { root, graph, validationId } of pending) {
+    for (const binding of graph.cases.values()) {
+      await ctx.db.patch(binding.caseId, { usageClass: 'instructional', artifactIdentityValidationId: validationId })
+    }
+    await ctx.db.patch(root._id, { publication: { validationId, catalogRevision, publishedAt } })
+  }
+  return parseLearnContract(learnArtifactBatchRegistrationResultSchema, {
+    version: LEARN_ARTIFACT_LINEAGE_VERSION, lineageIds: [...ids], catalogRevision, readUsage: budget.readUsage,
+  })
+}
+
+export async function registerInstructionalArtifactsForOwner(ctx: MutationCtx, userId: string, input: unknown) {
+  ctx = withReadBudget(ctx)
+  if (await requireAuth(ctx) !== userId) throw new Error('Learn access denied')
+  return registerBatch(ctx, userId, input)
+}
+export async function registerInstructionalArtifactsForRecord(ctx: MutationCtx, record: LearnArtifactOwnerRecord, input: unknown) {
+  ctx = withReadBudget(ctx)
+  return registerBatch(ctx, await requireRecordOwner(ctx, record), input)
+}
+
+async function registerOne(ctx: MutationCtx, userId: string, input: unknown) {
+  const { reference, validationId, expectedCatalogRevision } = parseLearnContract(learnArtifactRegistrationArgsSchema, input)
+  const result = await registerBatch(ctx, userId, { artifacts: [{ reference, validationId }], expectedCatalogRevision })
+  return parseLearnContract(learnArtifactRegistrationResultSchema, { version: result.version, lineageId: result.lineageIds[0], catalogRevision: result.catalogRevision })
+}
+
+// Dormant transaction seams; callers write their artifacts in this mutation.
 export async function registerInstructionalArtifactForOwner(ctx: MutationCtx, userId: string, input: unknown) {
   ctx = withReadBudget(ctx)
   if (await requireAuth(ctx) !== userId) throw new Error('Learn access denied')
-  const args = parseLearnContract(learnArtifactRegistrationArgsSchema, input)
-  const catalog = await readCatalog(ctx, userId)
-  const root = await findLineage(ctx, userId, args.reference)
-  if (root.classification !== 'teaching' && root.classification !== 'genuine_personal_work') unavailable()
-  if (root.publication || root.validationId !== args.validationId || catalog.catalogRevision !== args.expectedCatalogRevision) unavailable()
-  const graph = await inspectGraph(ctx, userId, root, catalog.catalogRevision, false)
-  if (graph.validation.comparedCatalogRevision !== catalog.catalogRevision || catalog.historyCompleteness !== 'prospective_complete'
-    || graph.validation.coverageWatermark !== catalog.historyCoverageWatermark) unavailable()
-  for (const binding of graph.cases.values()) {
-    if (graph.usage.get(binding.caseId) === 'measurement_reserved') unavailable()
-    await ctx.db.patch(binding.caseId, { usageClass: 'instructional', artifactIdentityValidationId: args.validationId })
+  return registerOne(ctx, userId, input)
+}
+export async function registerInstructionalArtifactForRecord(ctx: MutationCtx, record: LearnArtifactOwnerRecord, input: unknown) {
+  ctx = withReadBudget(ctx)
+  return registerOne(ctx, await requireRecordOwner(ctx, record), input)
+}
+
+async function supersede(ctx: MutationCtx, userId: string, input: unknown) {
+  const args = parseLearnContract(learnArtifactSupersessionArgsSchema, input)
+  const previous = await ctx.db.get(args.previousLineageId)
+  const replacement = await ctx.db.get(args.replacementLineageId)
+  // Content-addressed kinds already receive a fresh revision when pins change.
+  const repinnable = ['document', 'document_chunk', 'session_block', 'flashcard_version', 'learner_artifact', 'measurement_item', 'scoring_spec']
+  if (!previous || !replacement || previous._id === replacement._id || previous.userId !== userId || replacement.userId !== userId
+    || !available(previous) || previous.nextId !== undefined || replacement.nextId !== undefined || replacement.publication
+    || !repinnable.includes(previous.artifact.kind) || canonicalJson(previous.artifact) !== canonicalJson(replacement.artifact)
+    || previous.key !== replacement.key || previous.revision !== replacement.revision
+    || (previous.payloadDigest === replacement.payloadDigest && previous.manifestDigest === replacement.manifestDigest)
+    || previous.classification !== replacement.classification || previous.authority !== replacement.authority || previous.derivation !== replacement.derivation) unavailable()
+  const active = await ctx.db.query('learnArtifactLineages')
+    .withIndex('by_artifact_kind_and_artifact_id_and_key_and_revision_and_nextId', q => q.eq('artifact.kind', previous.artifact.kind).eq('artifact.id', previous.artifact.id).eq('key', previous.key).eq('revision', previous.revision).eq('nextId', undefined)).take(3)
+  if (active.length !== 2 || !active.some(row => row._id === previous._id) || !active.some(row => row._id === replacement._id)) unavailable()
+  // A descendant can explicitly re-pin to an origin's recorded successor.
+  // The old edge stays immutable; unrelated origins cannot replace it.
+  const currentOrigin = async (edge: Doc<'learnArtifactLineageOrigins'>) => {
+    const initial = await ctx.db.get(edge.originLineageId)
+    if (!initial || initial.userId !== userId || initial.revision !== edge.originRevision || initial.payloadDigest !== edge.originPayloadDigest
+      || initial.manifestDigest !== edge.originManifestDigest || initial.classification !== edge.classification) unavailable()
+    let row: Lineage = initial
+    const visited = new Set<Id<'learnArtifactLineages'>>()
+    while (row.nextId !== undefined) {
+      if (visited.has(row._id) || visited.size >= limits.maxNodes) unavailable()
+      visited.add(row._id)
+      const next: Lineage | null = await ctx.db.get(row.nextId)
+      if (!next || next.userId !== userId || canonicalJson(next.artifact) !== canonicalJson(row.artifact)
+        || next.key !== row.key || next.revision !== row.revision || next.classification !== row.classification) unavailable()
+      row = next
+    }
+    return { id: row._id, revision: row.revision, payloadDigest: row.payloadDigest, manifestDigest: row.manifestDigest,
+      classification: row.classification, transformation: edge.transformation }
   }
-  const catalogRevision = await advanceAssessmentCatalogForOwner(ctx, userId, args.expectedCatalogRevision)
-  await ctx.db.patch(root._id, { publication: { validationId: args.validationId, catalogRevision, publishedAt: Date.now() } })
-  return parseLearnContract(learnArtifactRegistrationResultSchema, { version: LEARN_ARTIFACT_LINEAGE_VERSION, lineageId: root._id, catalogRevision })
+  const components = async (row: Lineage) => {
+    const origins = await ctx.db.query('learnArtifactLineageOrigins').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', row._id)).take(limits.maxOrigins + 1)
+    const cases = await ctx.db.query('learnArtifactCaseBindings').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', row._id)).take(limits.maxCases + 1)
+    const sources = await ctx.db.query('learnArtifactSourceLinks').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', row._id)).take(limits.maxSources + 1)
+    if (origins.length > limits.maxOrigins || cases.length > limits.maxCases || sources.length > limits.maxSources
+      || origins.length !== row.originCount || cases.length !== row.caseCount || sources.length !== row.sourceCount || sources.some(source => !available(source))) unavailable()
+    const sorted = (values: unknown[]) => values.map(canonicalJson).sort()
+    const currentOrigins = []
+    for (const origin of origins) currentOrigins.push(await currentOrigin(origin))
+    return canonicalJson({
+      origins: sorted(currentOrigins),
+      cases: sorted(cases.map(binding => ({ caseId: binding.caseId, scenarioFingerprint: binding.scenarioFingerprint,
+        solutionFingerprint: binding.solutionFingerprint, identityPolicyVersion: binding.identityPolicyVersion }))),
+      sources: sorted(sources.map(source => source.dependency)),
+    })
+  }
+  if (await components(previous) !== await components(replacement)) unavailable()
+  const catalog = await readCatalog(ctx, userId)
+  const graph = await inspectGraph(ctx, userId, replacement, catalog.catalogRevision, false)
+  if (graph.validation.comparedCatalogRevision !== catalog.catalogRevision || graph.validation.coverageWatermark !== catalog.historyCoverageWatermark) unavailable()
+  // Existing reservations and publication history live on their original rows.
+  // A teaching successor needs fresh registration in this same transaction.
+  await ctx.db.patch(previous._id, { nextId: replacement._id })
+  return replacement._id
+}
+
+export async function supersedeArtifactLineageForOwner(ctx: MutationCtx, userId: string, input: unknown) {
+  ctx = withReadBudget(ctx)
+  if (await requireAuth(ctx) !== userId) throw new Error('Learn access denied')
+  return supersede(ctx, userId, input)
+}
+export async function supersedeArtifactLineageForRecord(ctx: MutationCtx, record: LearnArtifactOwnerRecord, input: unknown) {
+  ctx = withReadBudget(ctx)
+  return supersede(ctx, await requireRecordOwner(ctx, record), input)
 }

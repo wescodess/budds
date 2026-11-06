@@ -1914,7 +1914,8 @@ export default defineSchema({
     .index('by_userId_and_lineageId', ['userId', 'lineageId']),
   learnArtifactLineages: defineTable(artifactLineage.artifactLineageFields)
     .index('by_userId', ['userId'])
-    .index('by_userId_and_artifact_kind_and_artifact_id_and_key_and_revision', ['userId', 'artifact.kind', 'artifact.id', 'key', 'revision']),
+    .index('by_userId_and_artifact_kind_and_artifact_id_and_key_and_revision', ['userId', 'artifact.kind', 'artifact.id', 'key', 'revision'])
+    .index('by_artifact_kind_and_artifact_id_and_key_and_revision_and_nextId', ['artifact.kind', 'artifact.id', 'key', 'revision', 'nextId']),
   learnAssessmentCases: defineTable(measurementStorage.assessmentCaseValidator)
     .index('by_userId', ['userId'])
     .index('by_userId_and_caseKey', ['userId', 'caseKey'])

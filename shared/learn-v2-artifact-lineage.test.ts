@@ -3,6 +3,7 @@ import type { Doc } from '../convex/_generated/dataModel'
 import {
   LEARN_ARTIFACT_LINEAGE_VERSION, LEARN_ARTIFACT_LINEAGE_LIMITS, learnArtifactLookupResultSchema,
   learnArtifactValidationSchema, learnArtifactRegistrationArgsSchema, learnArtifactRegistrationResultSchema,
+  learnArtifactBatchRegistrationArgsSchema, learnArtifactBatchRegistrationResultSchema, learnArtifactOwnerRecordSchema,
   validateLearnArtifactLookup, validateLearnArtifactLookupResult,
 } from './learn-v2-artifact-lineage'
 import { learnIdSchema } from './learn-v2-responses'
@@ -41,5 +42,24 @@ describe('artifact lineage wire validators', () => {
     expect(learnArtifactLookupResultSchema.safeParse({ ...result, originLineageIds: Array.from({ length: LEARN_ARTIFACT_LINEAGE_LIMITS.maxNodes + 1 }, () => id('learnArtifactLineages')) }).success).toBe(false)
     expect(() => validateLearnArtifactLookupResult({ ...result, prompt: 'private-key' })).toThrow()
     expect(() => validateLearnArtifactLookupResult({ ...result, reference: { ...reference, key: '💥'.repeat(40_000) } })).toThrow()
+  })
+})
+
+
+describe('B1 owner-record and batch wire validators', () => {
+  test('accepts record identities and bounded batch receipts without caller authority', () => {
+    expect(learnArtifactOwnerRecordSchema.parse({ kind: 'document', id: id('documents') })).toHaveProperty('kind', 'document')
+    expect(learnArtifactOwnerRecordSchema.parse({ kind: 'audio_job', id: id('audioOverviewJobs') })).toHaveProperty('kind', 'audio_job')
+    const artifact = { reference, validationId: id('learnArtifactValidations') }
+    const args = { artifacts: [artifact], expectedCatalogRevision: 1 }
+    expect(learnArtifactBatchRegistrationArgsSchema.parse(args)).toEqual(args)
+    const receipt = { version: LEARN_ARTIFACT_LINEAGE_VERSION, lineageIds: [id('learnArtifactLineages')], catalogRevision: 2,
+      readUsage: { chargedBytes: 20_000, documentsRead: 20, readRequests: 30, limitBytes: 4 * 1024 * 1024 } }
+    expect(learnArtifactBatchRegistrationResultSchema.parse(receipt)).toEqual(receipt)
+    for (const input of [{ ...args, userId: 'caller' }, { ...args, artifacts: [] }, { ...args, artifacts: Array.from({ length: 33 }, () => artifact) }, { ...args, expectedCatalogRevision: -1 }]) {
+      expect(learnArtifactBatchRegistrationArgsSchema.safeParse(input).success).toBe(false)
+    }
+    expect(learnArtifactOwnerRecordSchema.safeParse({ kind: 'document', id: id('documents'), userId: 'caller' }).success).toBe(false)
+    expect(learnArtifactBatchRegistrationResultSchema.safeParse({ ...receipt, readUsage: { ...receipt.readUsage, chargedBytes: -1 } }).success).toBe(false)
   })
 })

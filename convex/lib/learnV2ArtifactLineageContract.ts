@@ -21,6 +21,10 @@ export const artifactReferenceFields = {
 }
 export const artifactReferenceValidator = v.object(artifactReferenceFields)
 export const artifactLookupArgs = { reference: artifactReferenceValidator }
+export const artifactOwnerRecordValidator = v.union(
+  v.object({ kind: v.literal('document'), id: v.id('documents') }),
+  v.object({ kind: v.literal('audio_job'), id: v.id('audioOverviewJobs') }),
+)
 export const artifactCaseFields = { caseId: v.id('learnAssessmentCases'), scenarioFingerprint: v.string(), solutionFingerprint: v.string(), identityPolicyVersion: v.string() }
 export const artifactValidationFields = {
   lineageId: v.id('learnArtifactLineages'), payloadDigest: v.string(), manifestDigest: v.string(),
@@ -34,6 +38,7 @@ export const artifactLineageFields = {
   authority: v.union(v.literal('server_producer'), v.literal('personal_authorship'), v.literal('legacy_record')), authorityVersion: v.string(),
   derivation: v.union(v.literal('original'), v.literal('derived')), originCount: v.number(), caseCount: v.number(), sourceCount: v.number(),
   validationId: v.optional(v.id('learnArtifactValidations')),
+  nextId: v.optional(v.id('learnArtifactLineages')),
   publication: v.optional(v.object({ validationId: v.id('learnArtifactValidations'), catalogRevision: v.number(), publishedAt: v.number() })),
 }
 export const artifactOriginFields = {
@@ -60,3 +65,10 @@ export const artifactLookupResultValidator = v.union(
 )
 export const artifactRegistrationArgs = { reference: artifactReferenceValidator, validationId: v.id('learnArtifactValidations'), expectedCatalogRevision: v.number() }
 export const artifactRegistrationResultValidator = v.object({ version: v.literal(LEARN_ARTIFACT_LINEAGE_VERSION), lineageId: v.id('learnArtifactLineages'), catalogRevision: v.number() })
+export const artifactReadUsageValidator = v.object({ chargedBytes: v.number(), documentsRead: v.number(), readRequests: v.number(), limitBytes: v.number() })
+export const artifactBatchRegistrationArgs = {
+  artifacts: v.array(v.object({ reference: artifactReferenceValidator, validationId: v.id('learnArtifactValidations') })), expectedCatalogRevision: v.number(),
+}
+export const artifactBatchRegistrationResultValidator = v.object({
+  version: v.literal(LEARN_ARTIFACT_LINEAGE_VERSION), lineageIds: v.array(v.id('learnArtifactLineages')), catalogRevision: v.number(), readUsage: artifactReadUsageValidator,
+})

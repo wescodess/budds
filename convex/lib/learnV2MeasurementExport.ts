@@ -5,6 +5,7 @@ import { LEARN_MEASUREMENT_STORAGE_LIMITS, type LearnMeasurementCollection } fro
 type ExportRow = Record<string, unknown> & { _id: Id<LearnMeasurementCollection>, _creationTime: number }
 
 const metadataFields = {
+  // nextId is private lineage linkage and is intentionally withheld.
   learnArtifactLineages: ['lineageVersion', 'classification', 'derivation', 'evidenceStatus', 'invalidatedAt'],
   learnArtifactLineageOrigins: ['transformation'],
   learnArtifactCaseBindings: [],
