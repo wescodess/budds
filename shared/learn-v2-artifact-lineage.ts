@@ -7,6 +7,7 @@ export const LEARN_ARTIFACT_PREPARATION_VERSION = 'learn-v2.artifact-preparation
 export const LEARN_ARTIFACT_CASE_IDENTITY_VERSION = 'learn-v2.instructional-case.v1' as const
 export const LEARN_ARTIFACT_RESERVATION_VERSION = 'learn-v2.instructional-reservation.v1' as const
 export const LEARN_ARTIFACT_SEMANTIC_VERSION = 'learn-v2.reservation-semantic.unavailable.v1' as const
+export const LEARN_ARTIFACT_INPUT_ADMISSION_VERSION = 'learn-v2.artifact-input-admission.v1' as const
 // maxBatch is the largest single-write instructional publication: a generated
 // Quiz requests at most 50 questions. A document's chunks register as one set.
 export const LEARN_ARTIFACT_LINEAGE_LIMITS = { maxNodes: 16, maxDepth: 8, maxOrigins: 8, maxCases: 32, maxSources: 64, maxBatch: 50, maxReservedCases: 256, maxLookupBytes: 64 * 1024 } as const
@@ -29,6 +30,11 @@ export const learnArtifactReferenceSchema = z.strictObject({
   key: learnVersionSchema, revision: learnVersionSchema, payloadDigest: learnDigestSchema,
 })
 export const learnArtifactLookupArgsSchema = z.strictObject({ reference: learnArtifactReferenceSchema })
+export const learnArtifactInputAdmissionResultSchema = z.discriminatedUnion('status', [
+  z.strictObject({ status: z.literal('admitted_registered'), version: z.literal(LEARN_ARTIFACT_INPUT_ADMISSION_VERSION), reasonCode: z.literal('registered_lineage') }),
+  z.strictObject({ status: z.literal('admitted_unregistered'), version: z.literal(LEARN_ARTIFACT_INPUT_ADMISSION_VERSION), reasonCode: z.literal('unregistered_ordinary_input') }),
+  z.strictObject({ status: z.literal('rejected'), version: z.literal(LEARN_ARTIFACT_INPUT_ADMISSION_VERSION), reasonCode: z.enum(['registration_required', 'restricted_lineage', 'lineage_unavailable']) }),
+])
 // Internal authority references only. A producer rereads the record; neither
 // an owner string nor a caller's copy of a record can authorize a lookup.
 export const learnArtifactOwnerRecordSchema = z.discriminatedUnion('kind', [
@@ -102,6 +108,7 @@ export const learnArtifactSupersessionArgsSchema = z.strictObject({ previousLine
 export type LearnArtifactOwnerRecord = z.infer<typeof learnArtifactOwnerRecordSchema>
 export type LearnArtifactReference = z.infer<typeof learnArtifactReferenceSchema>
 export type LearnArtifactLookupResult = z.infer<typeof learnArtifactLookupResultSchema>
+export type LearnArtifactInputAdmissionResult = z.infer<typeof learnArtifactInputAdmissionResultSchema>
 export type LearnArtifactPreparationArgs = z.infer<typeof learnArtifactPreparationArgsSchema>
 export function validateLearnArtifactLookup(input: unknown) { return parseLearnContract(learnArtifactLookupArgsSchema, input) }
 export function validateLearnArtifactLookupResult(input: unknown) { return parseLearnContract(learnArtifactLookupResultSchema, input, LEARN_ARTIFACT_LINEAGE_LIMITS.maxLookupBytes) }

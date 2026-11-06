@@ -1,5 +1,5 @@
 import { v } from 'convex/values'
-import { LEARN_ARTIFACT_CLASSIFICATIONS, LEARN_ARTIFACT_LINEAGE_VERSION, LEARN_ARTIFACT_PREPARATION_VERSION } from '../../shared/learn-v2-artifact-lineage'
+import { LEARN_ARTIFACT_CLASSIFICATIONS, LEARN_ARTIFACT_LINEAGE_VERSION, LEARN_ARTIFACT_PREPARATION_VERSION, LEARN_ARTIFACT_INPUT_ADMISSION_VERSION } from '../../shared/learn-v2-artifact-lineage'
 
 const base = { userId: v.string(), storageVersion: v.literal('learn-v2.measurement-storage.v1'), createdAt: v.number() }
 const evidence = { evidenceStatus: v.union(v.literal('available'), v.literal('evidence_unavailable')), invalidatedAt: v.optional(v.number()) }
@@ -21,6 +21,11 @@ export const artifactReferenceFields = {
 }
 export const artifactReferenceValidator = v.object(artifactReferenceFields)
 export const artifactLookupArgs = { reference: artifactReferenceValidator }
+export const artifactInputAdmissionResultValidator = v.union(
+  v.object({ status: v.literal('admitted_registered'), version: v.literal(LEARN_ARTIFACT_INPUT_ADMISSION_VERSION), reasonCode: v.literal('registered_lineage') }),
+  v.object({ status: v.literal('admitted_unregistered'), version: v.literal(LEARN_ARTIFACT_INPUT_ADMISSION_VERSION), reasonCode: v.literal('unregistered_ordinary_input') }),
+  v.object({ status: v.literal('rejected'), version: v.literal(LEARN_ARTIFACT_INPUT_ADMISSION_VERSION), reasonCode: v.union(v.literal('registration_required'), v.literal('restricted_lineage'), v.literal('lineage_unavailable')) }),
+)
 export const artifactOwnerRecordValidator = v.union(
   v.object({ kind: v.literal('document'), id: v.id('documents') }),
   v.object({ kind: v.literal('audio_job'), id: v.id('audioOverviewJobs') }),

@@ -9,16 +9,18 @@ import type { artifactSourceDependencyValidator } from './learnV2ArtifactLineage
 import {
   LEARN_ARTIFACT_LINEAGE_LIMITS as limits, LEARN_ARTIFACT_LINEAGE_VERSION, LEARN_ARTIFACT_CONTENT_VERSION, LEARN_ARTIFACT_DOCUMENT_CHUNK_SET_KEY,
   LEARN_ARTIFACT_PREPARATION_VERSION, LEARN_ARTIFACT_CASE_IDENTITY_VERSION, LEARN_ARTIFACT_RESERVATION_VERSION, LEARN_ARTIFACT_SEMANTIC_VERSION,
+  LEARN_ARTIFACT_INPUT_ADMISSION_VERSION,
   learnArtifactCaseSchema, learnArtifactRegistrationArgsSchema, learnArtifactRegistrationResultSchema,
   learnArtifactBatchRegistrationArgsSchema, learnArtifactBatchRegistrationResultSchema, learnArtifactOwnerRecordSchema, learnArtifactSupersessionArgsSchema,
   learnArtifactReferenceSchema, learnArtifactSourceDependencySchema, learnArtifactValidationSchema, validateLearnArtifactLookup, validateLearnArtifactLookupResult,
   learnArtifactPreparationArgsSchema, learnArtifactPreparationResultSchema,
-  type LearnArtifactReference, type LearnArtifactLookupResult, type LearnArtifactOwnerRecord, type LearnArtifactPreparationArgs,
+  type LearnArtifactReference, type LearnArtifactLookupResult, type LearnArtifactOwnerRecord, type LearnArtifactPreparationArgs, type LearnArtifactInputAdmissionResult,
 } from '../../shared/learn-v2-artifact-lineage'
 import { learnSequenceSchema, learnVersionSchema, learnSerializedBytes, parseLearnContract } from '../../shared/learn-v2-responses'
 
 type ReadCtx = QueryCtx | MutationCtx
 type Lineage = Doc<'learnArtifactLineages'>
+type ArtifactPin = Pick<Lineage, 'artifact' | 'key' | 'revision' | 'payloadDigest'>
 type Dependency = Infer<typeof artifactSourceDependencyValidator>
 class Unavailable extends Error {}
 function unavailable(): never { throw new Unavailable('Artifact lineage unavailable') }
@@ -322,7 +324,7 @@ async function liveCourse(ctx: ReadCtx, userId: string, id: Id<'courses'>) {
   return row
 }
 
-async function pinned(row: Lineage, payload: unknown, revision?: string | number) {
+async function pinned(row: ArtifactPin, payload: unknown, revision?: string | number) {
   if (typeof revision === 'number' && (!Number.isSafeInteger(revision) || revision < 1)) unavailable()
   const digest = await artifactPayloadDigest(payload)
   if (row.payloadDigest !== digest || row.revision !== (revision === undefined ? `sha256:${digest}` : String(revision))) unavailable()
@@ -442,7 +444,7 @@ export async function sectionContentProjection(ctx: ReadCtx, section: Doc<'cours
   return artifactContentProjection({ kind: 'section_block', section, linked })
 }
 
-async function liveSessionBlock(ctx: ReadCtx, userId: string, row: Lineage, id: Id<'sessionContentBlocks'>) {
+async function liveSessionBlock(ctx: ReadCtx, userId: string, row: ArtifactPin, id: Id<'sessionContentBlocks'>) {
   const block = await ctx.db.get(id)
   if (!block || block.userId !== userId) unavailable()
   const content = await ctx.db.get(block.sessionContentId)
@@ -466,13 +468,13 @@ async function liveSessionBlock(ctx: ReadCtx, userId: string, row: Lineage, id: 
   await pinned(row, await sessionBlockContentProjection(ctx, block, content), content.revision)
 }
 
-async function liveDocumentArtifact(ctx: ReadCtx, userId: string, row: Lineage, id: Id<'documents'>) {
+async function liveDocumentArtifact(ctx: ReadCtx, userId: string, row: ArtifactPin, id: Id<'documents'>) {
   const document = await liveDocument(ctx, userId, id)
   if (!document.sourceRevision?.trim() || !document.contentHash?.trim()) unavailable()
   await pinned(row, artifactContentProjection({ kind: row.artifact.kind === 'document_chunk' ? 'document_chunk' : 'document', document }), document.sourceRevision)
 }
 
-async function liveDocumentChunk(ctx: ReadCtx, userId: string, row: Lineage, id: Id<'documents'>) {
+async function liveDocumentChunk(ctx: ReadCtx, userId: string, row: ArtifactPin, id: Id<'documents'>) {
   // Chunks have no independent table: any backing revision/object change
   // revokes every component, without trusting a retrieved snippet as a pin.
   // One chunk-set row covers them all, so chunk count never sizes a batch.
@@ -480,7 +482,7 @@ async function liveDocumentChunk(ctx: ReadCtx, userId: string, row: Lineage, id:
   await liveDocumentArtifact(ctx, userId, row, id)
 }
 
-async function liveQuizQuestion(ctx: ReadCtx, userId: string, row: Lineage, id: Id<'quizQuestions'>) {
+async function liveQuizQuestion(ctx: ReadCtx, userId: string, row: ArtifactPin, id: Id<'quizQuestions'>) {
   const question = await ctx.db.get(id)
   if (!question || question.userId !== userId) unavailable()
   const quiz = await ctx.db.get(question.quizId)
@@ -491,7 +493,7 @@ async function liveQuizQuestion(ctx: ReadCtx, userId: string, row: Lineage, id: 
   await pinned(row, artifactContentProjection({ kind: 'quiz_question', question }))
 }
 
-async function liveSectionBlock(ctx: ReadCtx, userId: string, row: Lineage, id: Id<'courseSections'>) {
+async function liveSectionBlock(ctx: ReadCtx, userId: string, row: ArtifactPin, id: Id<'courseSections'>) {
   const section = await ctx.db.get(id)
   if (!section || section.userId !== userId || !['ready', 'completed'].includes(section.status)) unavailable()
   // Mirrors courseSections.get and courses.get: a deleting aggregate is unavailable.
@@ -499,7 +501,7 @@ async function liveSectionBlock(ctx: ReadCtx, userId: string, row: Lineage, id: 
   await pinned(row, await sectionContentProjection(ctx, section))
 }
 
-async function liveFlashcardVersion(ctx: ReadCtx, userId: string, row: Lineage, id: Id<'flashcardRoomVersions'>) {
+async function liveFlashcardVersion(ctx: ReadCtx, userId: string, row: ArtifactPin, id: Id<'flashcardRoomVersions'>) {
   const version = await ctx.db.get(id)
   if (!version || version.userId !== userId) unavailable()
   const room = await ctx.db.get(version.roomId)
@@ -512,7 +514,7 @@ async function liveFlashcardVersion(ctx: ReadCtx, userId: string, row: Lineage, 
   await pinned(row, artifactContentProjection({ kind: 'flashcard_version', version, cards }), version._id)
 }
 
-async function liveAudioOverview(ctx: ReadCtx, userId: string, row: Lineage, id: Id<'audioOverviews'>) {
+async function liveAudioOverview(ctx: ReadCtx, userId: string, row: ArtifactPin, id: Id<'audioOverviews'>) {
   const overview = await ctx.db.get(id)
   // Mirrors learnAdaptive.loadContributionSource.
   if (!overview || overview.userId !== userId || overview.status !== 'ready') unavailable()
@@ -520,7 +522,7 @@ async function liveAudioOverview(ctx: ReadCtx, userId: string, row: Lineage, id:
   await pinned(row, await audioOverviewContentProjection(ctx, overview))
 }
 
-async function liveLearnerArtifact(ctx: ReadCtx, userId: string, row: Lineage, id: Id<'learningThreadArtifacts'>) {
+async function liveLearnerArtifact(ctx: ReadCtx, userId: string, row: ArtifactPin, id: Id<'learningThreadArtifacts'>) {
   const artifact = await ctx.db.get(id)
   if (!artifact || artifact.userId !== userId || !['draft', 'saved'].includes(artifact.status)) unavailable()
   const thread = await ctx.db.get(artifact.threadId)
@@ -563,12 +565,12 @@ async function liveMeasurementInventory(ctx: ReadCtx, userId: string, item: Doc<
   return { item, family, spec }
 }
 
-async function liveMeasurementItem(ctx: ReadCtx, userId: string, row: Lineage, id: Id<'learnMeasurementItems'>) {
+async function liveMeasurementItem(ctx: ReadCtx, userId: string, row: ArtifactPin, id: Id<'learnMeasurementItems'>) {
   const { item, family, spec } = await liveMeasurementInventory(ctx, userId, await ctx.db.get(id))
   await pinned(row, artifactContentProjection({ kind: 'measurement_item', item, family, spec }), item.revision)
 }
 
-async function liveScoringSpec(ctx: ReadCtx, userId: string, row: Lineage, id: Id<'learnMeasurementScoringSpecs'>) {
+async function liveScoringSpec(ctx: ReadCtx, userId: string, row: ArtifactPin, id: Id<'learnMeasurementScoringSpecs'>) {
   const spec = await ctx.db.get(id)
   if (!spec || spec.userId !== userId || !available(spec) || spec.payload === undefined || spec.referenceSolution === undefined) unavailable()
   const { item, family } = await liveMeasurementInventory(ctx, userId, await ctx.db.get(spec.itemId))
@@ -576,7 +578,7 @@ async function liveScoringSpec(ctx: ReadCtx, userId: string, row: Lineage, id: I
   await pinned(row, artifactContentProjection({ kind: 'scoring_spec', item, family, spec }), spec.revision)
 }
 
-async function requireLiveArtifact(ctx: ReadCtx, userId: string, row: Lineage) {
+async function requireLiveArtifact(ctx: ReadCtx, userId: string, row: ArtifactPin) {
   const artifact = row.artifact
   switch (artifact.kind) {
     case 'session_block': return liveSessionBlock(ctx, userId, row, artifact.id)
@@ -927,6 +929,79 @@ export async function isArtifactRegistrationRequired(ctx: ReadCtx) {
   return registrationRequired(ctx, await requireAuth(ctx))
 }
 
+class RestrictedLineage extends Unavailable {}
+function restrictedLineage(): never { throw new RestrictedLineage('Artifact lineage unavailable') }
+
+async function inspectInputRepresentations(ctx: ReadCtx, userId: string, artifact: LearnArtifactReference['artifact']) {
+  const kinds = artifact.kind === 'document' || artifact.kind === 'document_chunk' ? ['document', 'document_chunk'] as const : [artifact.kind]
+  const bindings: Array<Extract<LearnArtifactLookupResult, { status: 'bound' }>> = []
+  let rowCount = 0
+  for (const kind of kinds) {
+    const rows = await ctx.db.query('learnArtifactLineages')
+      .withIndex('by_artifact_kind_and_artifact_id_and_key_and_revision_and_nextId', q => q.eq('artifact.kind', kind).eq('artifact.id', artifact.id)).take(limits.maxNodes + 1)
+    rowCount += rows.length
+    if (rowCount > limits.maxNodes) unavailable()
+    for (const row of rows) {
+      if (row.userId !== userId) unavailable()
+      if (!['teaching', 'genuine_personal_work'].includes(row.classification)) restrictedLineage()
+      const reference = learnArtifactReferenceSchema.safeParse({ artifact: row.artifact, key: row.key, revision: row.revision, payloadDigest: row.payloadDigest })
+      if (!reference.success) unavailable()
+      const resolved = await resolveForOwner(ctx, userId, { reference: reference.data })
+      if (resolved.status !== 'bound') unavailable()
+      if (resolved.cases.some(pin => pin.usageClass === 'measurement_reserved')) restrictedLineage()
+      bindings.push(resolved)
+    }
+  }
+  return bindings
+}
+
+async function admitInput(ctx: ReadCtx, userId: string, input: unknown): Promise<LearnArtifactInputAdmissionResult> {
+  const { reference } = validateLearnArtifactLookup(input)
+  const version = LEARN_ARTIFACT_INPUT_ADMISSION_VERSION
+  if (reference.artifact.kind === 'measurement_item' || reference.artifact.kind === 'scoring_spec') restrictedLineage()
+  const enrolled = await registrationRequired(ctx, userId)
+  const bindings = await inspectInputRepresentations(ctx, userId, reference.artifact)
+  if (!bindings.length) {
+    if (enrolled) return { version, status: 'rejected', reasonCode: 'registration_required' }
+    if (reference.artifact.kind === 'session_block') {
+      const block = await ctx.db.get(reference.artifact.id)
+      const content = block ? await ctx.db.get(block.sessionContentId) : null
+      if (!block || block.userId !== userId || !content || content.userId !== userId) unavailable()
+      if (content.assessmentPurpose !== undefined || content.assessmentOpportunityId !== undefined) restrictedLineage()
+    }
+    await requireLiveArtifact(ctx, userId, reference)
+    return { version, status: 'admitted_unregistered', reasonCode: 'unregistered_ordinary_input' }
+  }
+  const resolved = await resolveForOwner(ctx, userId, { reference })
+  if (resolved.status !== 'bound') unavailable()
+  if (!resolved.instructionalRegistered) return { version, status: 'rejected', reasonCode: 'registration_required' }
+  return { version, status: 'admitted_registered', reasonCode: 'registered_lineage' }
+}
+
+async function inputAdmission(operation: () => Promise<LearnArtifactInputAdmissionResult>): Promise<LearnArtifactInputAdmissionResult> {
+  try { return await operation() }
+  catch (error) {
+    if (!(error instanceof Unavailable)) throw error
+    return { version: LEARN_ARTIFACT_INPUT_ADMISSION_VERSION, status: 'rejected', reasonCode: error instanceof RestrictedLineage ? 'restricted_lineage' : 'lineage_unavailable' }
+  }
+}
+
+export async function admitArtifactInputForOwner(ctx: ReadCtx, userId: string, input: unknown) {
+  ctx = withReadBudget(ctx)
+  return inputAdmission(async () => {
+    if (await requireAuth(ctx) !== userId) throw new Error('Learn access denied')
+    return admitInput(ctx, userId, input)
+  })
+}
+export async function admitArtifactInputForRecord(ctx: ReadCtx, record: LearnArtifactOwnerRecord, input: unknown) {
+  ctx = withReadBudget(ctx)
+  return inputAdmission(async () => admitInput(ctx, await requireRecordOwner(ctx, record), input))
+}
+export async function admitArtifactInput(ctx: ReadCtx, input: unknown) {
+  ctx = withReadBudget(ctx)
+  return inputAdmission(async () => admitInput(ctx, await requireAuth(ctx), input))
+}
+
 type PreparationMember = LearnArtifactPreparationArgs['artifacts'][number]
 type CaseFingerprints = Pick<Doc<'learnAssessmentCases'>, 'scenarioFingerprint' | 'solutionFingerprint'>
 type ContentProjection = ReturnType<typeof artifactContentProjection>
@@ -1086,6 +1161,7 @@ async function prepareAndRegister(ctx: MutationCtx, userId: string, input: unkno
   for (const member of args.artifacts) {
     const personal = member.artifact.kind === 'document' || member.artifact.kind === 'document_chunk'
     if (personal && member.origins.length) unavailable()
+    if (member.artifact.kind === 'document' || member.artifact.kind === 'document_chunk') await personalWorkDocument(ctx, userId, member.artifact.id)
     if (member.artifact.kind === 'document_chunk' && member.key !== LEARN_ARTIFACT_DOCUMENT_CHUNK_SET_KEY) unavailable()
     const content = await preparationContent(ctx, userId, member.artifact)
     const payloadDigest = await artifactPayloadDigest(content.projection)
@@ -1198,6 +1274,8 @@ async function personalWorkDocument(ctx: ReadCtx, userId: string, documentId: Id
   if (!document || document.userId !== userId || !['indexing', 'success'].includes(document.status)
     || !document.sourceRevision?.trim() || !document.contentHash?.trim()) unavailable()
   await liveFolder(ctx, userId, document.folderId)
+  const bindings = await inspectInputRepresentations(ctx, userId, { kind: 'document', id: documentId })
+  if (bindings.some(binding => binding.classification !== 'genuine_personal_work')) restrictedLineage()
   return { classification: 'genuine_personal_work' as const, reference: { artifact: { kind: 'document' as const, id: documentId }, key: 'whole', revision: document.sourceRevision,
     payloadDigest: await artifactPayloadDigest(artifactContentProjection({ kind: 'document', document })) } }
 }

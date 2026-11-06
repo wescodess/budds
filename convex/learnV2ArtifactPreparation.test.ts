@@ -11,6 +11,7 @@ import {
   isArtifactRegistrationRequiredForOwner, isArtifactRegistrationRequiredForRecord, normalizedInstructionalCaseFingerprints,
   prepareAndRegisterInstructionalArtifacts, prepareAndRegisterInstructionalArtifactsForOwner, prepareAndRegisterInstructionalArtifactsForRecord,
   resolveArtifactLineageForOwner,
+  admitArtifactInput, artifactContentProjection, artifactPayloadDigest,
 } from './lib/learnV2ArtifactLineage'
 import { LEARN_ARTIFACT_CASE_IDENTITY_VERSION, LEARN_ARTIFACT_DOCUMENT_CHUNK_SET_KEY, LEARN_ARTIFACT_LINEAGE_LIMITS, type LearnArtifactPreparationArgs } from '../shared/learn-v2-artifact-lineage'
 
@@ -132,6 +133,40 @@ describe('in-transaction artifact preparation', () => {
     expect(state.cases[0]!.artifactIdentityValidationId).toBe(original.validations[0]!._id)
     expect(second.references[0]!.payloadDigest).not.toBe(first.references[0]!.payloadDigest)
     expect(state.validations.map(row => row.comparedCatalogRevision)).toEqual([0, 1])
+  })
+
+  test('reuses a solution-only identity when the new scenario fingerprint differs', async () => {
+    const f = await setup()
+    await publishQuiz(f, [{ question: 'Original scenario', answer: 'Shared solution' }])
+    const before = await inventory(f.t)
+    await publishQuiz(f, [{ question: 'A different scenario', answer: '  SHARED\nsolution ' }])
+    const after = await inventory(f.t)
+    expect(after.cases).toEqual(before.cases)
+    expect(after.bindings.map(binding => binding.caseId)).toEqual([before.cases[0]!._id, before.cases[0]!._id])
+    expect(after.validations.map(validation => validation.comparedCatalogRevision)).toEqual([0, 1])
+  })
+
+  test('semantic pass with unknown comparison coverage still rolls back publication', async () => {
+    const f = await setup()
+    await f.t.run(ctx => reserve(ctx))
+    const before = await inventory(f.t)
+    const semantic = vi.spyOn(instructionalReservationSemanticAdapter, 'compare').mockResolvedValue({ decision: 'pass', coverage: 'unknown' })
+    await expect(publishQuiz(f)).rejects.toThrow('Instructional reservation check unknown')
+    expect(semantic).toHaveBeenCalledOnce()
+    expect(await inventory(f.t)).toEqual(before)
+  })
+
+  test.each([false, true])('fresh Quiz input admission follows enrollment: %s', async enrolled => {
+    const f = await setup(enrolled)
+    const ref = await f.t.run(async ctx => {
+      const quiz = await writeQuiz(ctx, f)
+      const artifact = quiz.artifacts[0]!.artifact
+      if (artifact.kind !== 'quiz_question') throw new Error('Expected question')
+      const question = (await ctx.db.get(artifact.id))!
+      const payloadDigest = await artifactPayloadDigest(artifactContentProjection({ kind: 'quiz_question', question }))
+      return { artifact, key: 'whole', revision: `sha256:${payloadDigest}`, payloadDigest }
+    })
+    expect(await f.asOwner.run(ctx => admitArtifactInput(ctx, { reference: ref }))).toMatchObject({ status: enrolled ? 'rejected' : 'admitted_unregistered' })
   })
 
   test.each(['scenario', 'solution', 'cross_role', 'usage_class'] as const)('rejects a normalized reserved %s collision and rolls back the entire producer', async kind => {
