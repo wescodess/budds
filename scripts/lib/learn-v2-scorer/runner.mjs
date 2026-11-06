@@ -6,6 +6,7 @@ import { corpusInputs, bindInventory, runPins, schedule, LIMITS } from './contra
 import { requestFor, fixtureEnvelope, baselineExecution, parseIndependent, liveInfer, GRADER_PROMPT, GRADER_SCHEMA } from './adapters.mjs'
 import { buildReport, fitThresholds } from './report.mjs'
 import { admitLive } from './live-approval.mjs'
+import { openLiveLedger, verifyLiveRun, reserveLiveDispatch } from './live-ledger.mjs'
 
 const emptyAnchors = { version: 'learn-v2.synthetic-anchor-checks.v1', evidenceStatus: 'synthetic_contract_only', canvasAdmitted: false, rows: [] }
 const int = value => Number.isSafeInteger(value) && value >= 0
@@ -185,13 +186,21 @@ async function dispatch(state, item, options) {
       ...options })
   }
   const reservationMicroUsd = approval?.reservationMicroUsd ?? state.pins.fixture.reservationMicroUsd
-  const dispatchAllowed = outcome !== 'budget_exhausted' && state.reserved + reservationMicroUsd <= state.pins.budgetMicroUsd
-  assert.ok((state.dispatchCounts.get(adapter.model) ?? 0) < LIMITS.dispatchesPerModelOrConfiguration, 'Per-model dispatch ceiling reached')
-  const intent = seal(state.directory, artifactName(item.blind.id, 'intent'), 'dispatch_intent', state.pinsDigest, {
+  let dispatchAllowed = true
+  if (state.pins.mode === 'offline') {
+    dispatchAllowed = outcome !== 'budget_exhausted' && state.reserved + reservationMicroUsd <= state.pins.budgetMicroUsd
+    assert.ok((state.dispatchCounts.get(adapter.model) ?? 0) < LIMITS.dispatchesPerModelOrConfiguration, 'Per-model dispatch ceiling reached')
+  }
+  const payload = {
     id: item.blind.id, adapter: item.adapter, request, requestDigest: hash(request), startedAt, deadline: startedAt + LIMITS.timeoutMs,
     responseDigest: hash(item.blind.scoringInput.learnerResponse), reservationMicroUsd: dispatchAllowed ? reservationMicroUsd : 0,
     dispatched: dispatchAllowed, thresholdDigest: state.thresholds?.digest ?? null, approval,
-  })
+  }
+  if (state.pins.mode === 'live') {
+    dispatchAllowed = reserveLiveDispatch(state.liveLedger, state, adapter, payload)
+    if (!dispatchAllowed) Object.assign(payload, { dispatched: false, reservationMicroUsd: 0 })
+  }
+  const intent = seal(state.directory, artifactName(item.blind.id, 'intent'), 'dispatch_intent', state.pinsDigest, payload)
   state.intents.set(item.blind.id, intent)
   state.reserved += intent.payload.reservationMicroUsd
   if (dispatchAllowed) state.dispatchCounts.set(adapter.model, (state.dispatchCounts.get(adapter.model) ?? 0) + 1)
@@ -268,8 +277,11 @@ export async function dispatchLive(path, id, options) {
     assert.ok(!exists(join(global, 'unresolved.json')), 'Global dispatch outcome requires reconciliation')
     const state = await openRun(path)
     assert.equal(state.pins.mode, 'live')
+    state.liveLedger = openLiveLedger(global)
+    verifyLiveRun(state.liveLedger, state)
     const item = state.plan.find(item => item.blind.id === id)
     assert.ok(item, 'Unknown opaque dispatch ID')
+    if (state.intents.has(id)) return report(state)
     const next = state.plan.find(item => !state.intents.has(item.blind.id) && !stopped(state, item.adapter))
     assert.equal(item, next, 'Single dispatch must follow the frozen blind schedule')
     if (!item.canary) assert.ok(state.plan.filter(row => row.canary).every(row => state.terminals.get(row.blind.id)?.payload.result.status === 'valid'),

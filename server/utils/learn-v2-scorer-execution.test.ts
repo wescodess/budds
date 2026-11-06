@@ -157,6 +157,40 @@ describe('recorded execution verification', () => {
       .toBe(scorePercent >= 80 ? 'independent' : 'needs_review')
   })
 
+  test.each([
+    ['selected provider differs from successful attempt', 'Fixture Provider', [{ provider: 'Another Provider', model: 'fixture/old-model', status: 200 }], 'mismatch'],
+    ['successful attempts disagree on provider', 'Fixture Provider', [
+      { provider: 'Fixture Provider', model: 'fixture/old-model', status: 200 },
+      { provider: 'Another Provider', model: 'fixture/old-model', status: 200 },
+    ], 'mismatch'],
+    ['successful attempt provider is missing', 'Fixture Provider', [{ model: 'fixture/old-model', status: 200 }], 'unknown'],
+    ['selected provider is missing', undefined, [{ provider: 'Fixture Provider', model: 'fixture/old-model', status: 200 }], 'unknown'],
+  ])('%s cannot be consumed', async (_name, provider, attempts, status) => {
+    const response = completion({ openrouter_metadata: { requested: 'fixture/old-model', strategy: 'direct', attempt: attempts.length,
+      ...(provider ? { endpoints: { available: [{ provider, model: 'fixture/old-model', selected: true }] } } : {}), attempts, pipeline: [] } })
+    const { service, prepared, registry, infer, lookup } = await setup({ response })
+    const result = await service.dispatch(prepared)
+    expect(result.receipt.observedIdentity.status).toBe(status)
+    expect(result.receipt.outcome).toBe('reconciliation_required')
+    expect(result.receipt.verdict).toBeUndefined()
+    expect(isLearnScoringReceiptCommittable(result.receipt, registry.identityPolicy)).toBe(false)
+    expect(await service.isConsumable(prepared, result)).toBe(false)
+    expect(infer).toHaveBeenCalledTimes(1)
+    expect(lookup).not.toHaveBeenCalled()
+  })
+
+  test('consistent selected and successful attempt providers remain consumable', async () => {
+    const response = completion()
+    const { service, prepared, registry } = await setup({ response: completion({ openrouter_metadata: {
+      ...response.openrouter_metadata, attempts: [{ provider: 'Fixture Provider', model: 'fixture/old-model', status: 200 }],
+    } }) })
+    const result = await service.dispatch(prepared)
+    expect(result.receipt.observedIdentity.status).toBe('verified')
+    expect(result.receipt.outcome).toBe('validated')
+    expect(isLearnScoringReceiptCommittable(result.receipt, registry.identityPolicy)).toBe(true)
+    expect(await service.isConsumable(prepared, result)).toBe(true)
+  })
+
   test('strict routing sends one exact selector, but the selector/provider/request ID never attest the endpoint', async () => {
     const { prepared, service, infer, registry } = await setup({ definitions: [strict()] })
     const result = await service.dispatch(prepared)

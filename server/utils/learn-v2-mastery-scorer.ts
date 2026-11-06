@@ -197,7 +197,12 @@ export function createLearnMasteryScorerService(registry: LearnScorerRegistry, t
     const modelMatches = (model: string | null) => model !== null && (model === binding.requestedModel
       || registry.identityPolicy.verifiedModelAliases.some(alias => alias.configurationDigest === binding.configurationDigest
         && alias.requestedModel === binding.requestedModel && alias.returnedModel === model))
-    const mismatch = (terminal.returnedModel !== null && !modelMatches(terminal.returnedModel))
+    const successfulAttempts = provenance?.attempts?.filter(row => row.status === 200) ?? []
+    const providerObserved = (provider: unknown): provider is string => typeof provider === 'string' && provider.trim().length > 0
+    const providers = [provenance?.servingProvider, metadata?.servingProvider, ...successfulAttempts.map(row => row.provider)].filter(providerObserved)
+    const missingAttemptProvider = successfulAttempts.some(row => !providerObserved(row.provider))
+    const mismatch = new Set(providers).size > 1
+      || (terminal.returnedModel !== null && !modelMatches(terminal.returnedModel))
       || (metadata?.returnedModel != null && !modelMatches(metadata.returnedModel))
       || (provenance?.selectedModel != null && !modelMatches(provenance.selectedModel))
       || (provenance?.requestedModel != null && provenance.requestedModel !== binding.requestedModel)
@@ -207,7 +212,8 @@ export function createLearnMasteryScorerService(registry: LearnScorerRegistry, t
       || (provenance?.attempts != null && (provenance.attempts.length !== 1 || provenance.attempts.some(row => row.status !== 200 || !modelMatches(row.model))))
       || (provenance?.pipelineTypes != null && provenance.pipelineTypes.length !== 0)
       || (provenance?.strategy != null && !['direct', 'alias'].includes(provenance.strategy))
-    const completeIdentity = modelMatches(observed.returnedScorerModel) && observed.generationId !== null && observed.servingProvider !== null
+    const completeIdentity = modelMatches(observed.returnedScorerModel) && observed.generationId !== null && providerObserved(observed.servingProvider)
+      && !missingAttemptProvider
       && (binding.routingMode !== 'strict' || observed.endpoint === binding.endpoint)
     observed.status = mismatch ? 'mismatch' : completeIdentity && !routeUnsafe ? 'verified' : 'unknown'
     const finishReason = provenance?.finishReason

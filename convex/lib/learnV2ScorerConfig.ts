@@ -31,7 +31,7 @@ export const LEARN_MASTERY_IMPLEMENTATION_PINS = {
   requestBuilder: 'sha256:22e64ce3f359375e689e8bf5affa65d1005be79c3a4e5a1e4b0ea18c20517fbe',
   parser: 'sha256:7d09b0e42c32c0ea6945535bd086c1e322c16094111032670751221081120283',
   arithmeticAndTransition: 'sha256:2a4f659d03832281753f0ccab5fc3b0f6136745c733f437ecc0c6e05ad6505aa',
-  executionGuard: 'sha256:cc18b8084c82db662ad6a497a598e069b8512dcacd6ef6b1c3d9c817ac1c01b9',
+  executionGuard: 'sha256:f04b087c8b5507aa99506952024ac1eaa02546d558adbfb40892c9985a766f18',
   gatewaySerializer: 'sha256:d88eb19ad882397b5263e9d2404934385586b513809010ac08aa5fc60e198583',
   gatewayProvenance: 'sha256:246a1980938330f4047f0537dc566b4c340aacbd15878d107c2b24abb2c81356',
   gatewayTransport: 'sha256:b15424d3f6b52b2c3754e1b53950e8c20ed1178be44dc4634ac5aaac2c3dd0ce',
@@ -53,7 +53,7 @@ export async function sealLearnScorerConfiguration(input: LearnScorerConfigurati
     transportVersion: 'openrouter-via-cloudflare-ai-gateway.v1', apiVersion: 'openrouter.chat-completions.v1',
     routing: { mode: definition.kind === 'legacy_baseline' ? 'legacy_auto' : 'strict', endpoint: definition.endpoint, allowFallbacks: false },
     components: { ...artifacts, implementation: LEARN_MASTERY_IMPLEMENTATION_PINS,
-      scorerVersion: 'learn-v2.mastery-scorer.v1', parserVersion: 'learn-v2.mastery-parser.v1', guardVersion: 'learn-v2.scoring-receipt-guard.v1' },
+      scorerVersion: 'learn-v2.mastery-scorer.v1', parserVersion: 'learn-v2.mastery-parser.v1', guardVersion: 'learn-v2.scoring-receipt-guard.v2' },
     threshold: { version: 'learn-v2.mastery-threshold.v1', percent: 80, comparator: 'gte', transitionVersion: 'learn-v2.mastery-transition.v1' },
     limits: ADAPTIVE_V2_PILOT_MANIFEST.limits,
     metadata: { version: 'learn-v2.scoring-provenance.v1', enabled: true, maxLookups: 1, timeoutMs: 10_000 },
@@ -65,7 +65,7 @@ export async function sealLearnScorerConfiguration(input: LearnScorerConfigurati
     routingMode: definition.kind === 'legacy_baseline' ? 'legacy_auto' : 'strict', endpoint: definition.endpoint,
     scorerVersion: 'learn-v2.mastery-scorer.v1', promptVersion: artifacts.promptVersion,
     responseSchemaVersion: artifacts.responseSchemaVersion, parserVersion: 'learn-v2.mastery-parser.v1',
-    guardVersion: 'learn-v2.scoring-receipt-guard.v1', thresholdVersion: 'learn-v2.mastery-threshold.v1',
+    guardVersion: 'learn-v2.scoring-receipt-guard.v2', thresholdVersion: 'learn-v2.mastery-threshold.v1',
     thresholdPercent: 80, transitionVersion: 'learn-v2.mastery-transition.v1',
   }) as ModelLearnScorerBinding
   return freeze({ binding, frozenConfiguration: { digest, snapshot } })
