@@ -217,6 +217,17 @@ export function validateLearnAcceptResponseRequest(input: unknown, slot: {
   return request
 }
 
+export function validateLearnFinalResponseBundle(input: unknown, pins: {
+  teachBack: { confidenceRequested?: boolean },
+  application: { deliveryPins?: z.infer<typeof learnResponseDeliveryPinsSchema> },
+}) {
+  const request = parseLearnContract(learnFinalResponseBundleSchema, input)
+  for (const [entry, pin] of [[request.teachBack, pins.teachBack], [request.application, pins.application]] as const) {
+    if (resolveLearnResponseConfidenceRequested(pin) !== (entry.confidence !== undefined)) throw new Error('Confidence does not match the owned slot')
+  }
+  return request
+}
+
 export function resolveLearnInstrumentation(input: z.infer<typeof learnAcceptResponseEntrySchema>['instrumentation']) {
   return input ?? { pasteObserved: 'unknown' as const, focusLossObserved: 'unknown' as const, version: 'learn-v2.instrumentation.unknown.v1' }
 }

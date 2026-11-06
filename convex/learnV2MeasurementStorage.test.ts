@@ -110,6 +110,8 @@ describe('inactive Phase C storage boundaries', () => {
     const { _id: _id, _creationTime: _creationTime, ...fields } = first
     await expect(t.run(ctx => ctx.db.insert('learnResponseCommandReceipts', { ...fields, expiresAt: f.base.createdAt + 1000 } as never))).rejects.toThrow()
     await expect(t.run(ctx => ctx.db.insert('learnResponseCommandReceipts', { ...fields, result: { ...fields.result, payload: 'private' } } as never))).rejects.toThrow()
+    await expect(t.run(ctx => ctx.db.insert('learnResponseCommandReceipts', { ...fields, result: { ...fields.result, submissionId: f.rows.learnResponses } } as never))).rejects.toThrow()
+    await expect(t.run(ctx => ctx.db.insert('learnResponseCommandReceipts', { ...fields, commandVersion: 'learn-v2.response-terminalization.v0' } as never))).rejects.toThrow()
   })
 
   test('round-trips the complete v3 cell and exports only classified metadata', async () => {
@@ -136,7 +138,8 @@ describe('inactive Phase C storage boundaries', () => {
     const t = convexTest(schema, modules)
     const f = await t.run(ctx => seedMeasurementStorage(ctx, owner.tokenIdentifier))
     const snapshot = learnReportInputSnapshotSchema.parse({ kind: 'owner_watermark', sequence: 1, dueWorkThrough: null, historyCoverage: 'unknown',
-      legacyIndependentAudit: { unknownCount: 3, sourceCoverage: 'complete' } })
+      legacyIndependentAudit: { unknownCount: null, sourceCoverage: 'unknown' } })
+    expect(() => learnReportInputSnapshotSchema.parse({ ...snapshot, legacyIndependentAudit: { unknownCount: 3, sourceCoverage: 'complete' } })).toThrow()
     await t.run(ctx => ctx.db.patch(f.rows.learnMeasurementReportRows, { rowKind: 'owner_watermark', snapshot,
       learningVoidId: undefined, assignmentId: undefined,
       facts: { disposition: 'reconciliation_required', coldScorePercent: null, delayedScorePercent: null, claimKey: null,

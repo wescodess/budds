@@ -1,17 +1,18 @@
 /// <reference types="vite/client" />
 import { convexTest, type TestConvex } from 'convex-test'
-import { getFunctionName, type FunctionArgs, type FunctionReturnType } from 'convex/server'
+import { getFunctionName, makeFunctionReference, queryGeneric, type FunctionArgs, type FunctionReturnType } from 'convex/server'
+import type { Infer } from 'convex/values'
 import { afterEach, describe, expect, expectTypeOf, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import schema from './schema'
 import { learnV2TodayMeasurementApi, learnV2CanvasMeasurementApi } from './learnV2ApiAdapters'
 import { seedMeasurementStorage, STORAGE_CANARIES } from '../tests/fixtures/learn-v2-measurement-storage'
 import { LEARN_MEASUREMENT_COLLECTIONS } from '../shared/learn-v2-measurement-storage-manifest'
-import { LEARN_V2_RESPONSE_CONTRACT_VERSION, type learnAcceptResponseRequestSchema } from '../shared/learn-v2-responses'
+import { LEARN_V2_RESPONSE_CONTRACT_VERSION, LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION, type learnAcceptResponseRequestSchema } from '../shared/learn-v2-responses'
 import { LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION, LEARN_V2_MEASUREMENT_REPORT_VERSION } from '../shared/learn-v2-measurement-report'
 import {
   LEARN_V2_PUBLIC_API_VERSION, type LearnV2SubmissionScore, type LearnV2ResponseState, type LearnV2AggregateExport,
-  type LearnV2AcceptMasterySubmission,
+  terminalizeResponseValidator, validateLearnMasterySubmission, type LearnV2AcceptMasterySubmission,
 } from './lib/learnV2PublicContract'
 import type { z } from 'zod'
 
@@ -74,6 +75,45 @@ async function snapshot(t: Actor) {
     return await Promise.all(tables.map(table => ctx.db.query(table).take(8)))
   })
 }
+
+describe('reserved response acceptance and terminalization contracts', () => {
+  test.each([undefined, false, true])('validates single mastery confidence against delivery pins: %s', async confidenceRequested => {
+    const f = await fixture()
+    const response = { ...f.response, target: f.assessmentTarget }
+    const pins = { teachBack: {}, application: confidenceRequested === undefined ? {}
+      : { deliveryPins: { version: LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION, confidenceRequested } } }
+    const request = { submission: { ...f.responseRequest, response: confidenceRequested ? { ...response, confidence: 3 } : response } }
+    expect(validateLearnMasterySubmission(request, pins)).toEqual(request)
+    expect(() => validateLearnMasterySubmission({ submission: { ...request.submission,
+      response: confidenceRequested ? response : { ...response, confidence: 3 } } }, pins)).toThrow()
+    expect(() => validateLearnMasterySubmission({ submission: f.responseRequest }, pins)).toThrow()
+  })
+
+  test('validates the final mastery bundle against separate slot and opportunity pins', async () => {
+    const f = await fixture()
+    const pins = { teachBack: { confidenceRequested: false },
+      application: { deliveryPins: { version: LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION, confidenceRequested: true } } }
+    const submission = { version: LEARN_V2_RESPONSE_CONTRACT_VERSION, idempotencyKey: key,
+      teachBack: f.response, application: { ...f.response, target: f.assessmentTarget, confidence: 3 } }
+    expect(validateLearnMasterySubmission({ submission }, pins)).toEqual({ submission })
+    expect(() => validateLearnMasterySubmission({ submission: { ...submission, teachBack: { ...f.response, confidence: 3 } } }, pins)).toThrow()
+    expect(() => validateLearnMasterySubmission({ submission: { ...submission, application: { ...f.response, target: f.assessmentTarget } } }, pins)).toThrow()
+  })
+
+  test('requires terminalizedAt on a successful public terminalization result', async () => {
+    let result: Infer<typeof terminalizeResponseValidator> = { version: LEARN_V2_PUBLIC_API_VERSION, status: 'disabled', reasonCodes: ['disabled'] }
+    const t = convexTest(schema, { ...modules, './terminalizationContractFixture.ts': async () => ({
+      result: queryGeneric({ args: {}, returns: terminalizeResponseValidator, handler: () => result }),
+    }) })
+    const f = await t.run(ctx => seedMeasurementStorage(ctx, OWNER.tokenIdentifier))
+    result = { version: LEARN_V2_PUBLIC_API_VERSION, status: 'terminal', target: { responseSlotId: f.rows.learnResponseSlots },
+      revision: 2, reason: 'abandoned', terminalizedAt: f.base.createdAt }
+    const read = makeFunctionReference<'query'>('terminalizationContractFixture:result')
+    expect(await t.query(read, {})).toEqual(result)
+    Reflect.deleteProperty(result, 'terminalizedAt')
+    await expect(t.query(read, {})).rejects.toThrow()
+  })
+})
 
 describe('registered inactive measurement API', () => {
   test.each(cases)('$name validates returns, denies foreign issuers and saves nothing', async ({ call, expected }) => {

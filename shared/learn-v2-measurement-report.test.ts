@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   LEARN_V2_MEASUREMENT_REPORT_VERSION, LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION, LEARN_V2_REPORT_DISPOSITIONS, learnReportMetricSchema,
-  learnReportLegacyIndependentAuditSchema, validateLearnReportSourcePage, validateLearnMeasurementReportCells, type LearnReportMetric,
+  learnReportLegacyIndependentAuditSchema, learnReportWatermarkSnapshotSchema, validateLearnReportSourcePage, validateLearnMeasurementReportCells, type LearnReportMetric,
 } from './learn-v2-measurement-report'
 import { emptyMeasurementEstimate, emptyMeasurementReportCell, partialMeasurementReportCell } from '../tests/fixtures/learn-v2-measurement-report'
 
@@ -30,7 +30,7 @@ describe('frozen aggregate report v3', () => {
   })
 
   it('pins the aggregate legacy audit input to its owner watermark in source v2', () => {
-    const row = { kind: 'owner_watermark', sequence: 1, dueWorkThrough: null, historyCoverage: 'unknown',
+    const row = { kind: 'owner_watermark', sequence: 1, dueWorkThrough: null, historyCoverage: 'complete',
       legacyIndependentAudit: { unknownCount: 3, sourceCoverage: 'complete' } }
     const page = { version: LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION, reportRunId: 'run1', sequence: 0, sourceWatermark: 1,
       rows: [row], cursor: null, isDone: true }
@@ -39,6 +39,19 @@ describe('frozen aggregate report v3', () => {
     expect(() => validateLearnReportSourcePage({ ...page, rows: [oldRow] })).toThrow()
     expect(() => validateLearnReportSourcePage({ ...page, version: 'learn-v2.measurement-report-source.v1' })).toThrow()
     expect(() => validateLearnReportSourcePage({ ...page, rows: [{ ...row, legacyIndependentAudit: { ...row.legacyIndependentAudit, learnerRows: [] } }] })).toThrow()
+  })
+
+  it.each([
+    ['unknown', 'complete', 3, false], ['unknown', 'unknown', null, true],
+    ['complete', 'unknown', null, true], ['complete', 'complete', 3, true],
+  ])('constrains history %s and legacy audit %s coverage', (historyCoverage, sourceCoverage, unknownCount, valid) => {
+    const row = { kind: 'owner_watermark', sequence: 1, dueWorkThrough: null, historyCoverage,
+      legacyIndependentAudit: { unknownCount, sourceCoverage } }
+    const page = { version: LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION, reportRunId: 'run1', sequence: 0, sourceWatermark: 1,
+      rows: [row], cursor: null, isDone: true }
+    expect(learnReportWatermarkSnapshotSchema.safeParse(row).success).toBe(valid)
+    if (valid) expect(validateLearnReportSourcePage(page).rows).toEqual([row])
+    else expect(() => validateLearnReportSourcePage(page)).toThrow()
   })
 
   it('uses cold-conditioned missing-outcome bounds in the partial fixture', () => {
@@ -245,5 +258,18 @@ describe('frozen aggregate report v3', () => {
     expect(() => validateLearnMeasurementReportCells({ ...page, version: 'learn-v2.measurement-report.v2' })).toThrow()
     expect(() => validateLearnMeasurementReportCells({ ...page, cells: [{ ...page.cells[0], learnerRows: [{ response: 'private' }] }] })).toThrow()
     expect(() => validateLearnMeasurementReportCells({ ...page, cells: Array.from({ length: 9 }, () => page.cells[0]) })).toThrow()
+  })
+
+  it.each([
+    { unknownCount: 7, sourceCoverage: 'complete' }, { unknownCount: null, sourceCoverage: 'unknown' },
+  ])('requires the same cohort legacy audit across a page: %j', legacyIndependentAudit => {
+    const cell = partialMeasurementReportCell()
+    const page = { version: LEARN_V2_MEASUREMENT_REPORT_VERSION, reportRunId: 'run1',
+      cells: [cell, partialMeasurementReportCell()], cursor: null, isDone: true }
+    expect(validateLearnMeasurementReportCells(page)).toEqual(page)
+    expect(() => validateLearnMeasurementReportCells({ ...page, cells: [cell, { ...cell, legacyIndependentAudit }] })).toThrow()
+    const uniform = { ...page, cells: page.cells.map(value => ({ ...value, legacyIndependentAudit })) }
+    expect(validateLearnMeasurementReportCells(uniform)).toEqual(uniform)
+    expect(validateLearnMeasurementReportCells({ ...page, cells: [] }).cells).toEqual([])
   })
 })

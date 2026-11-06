@@ -3,7 +3,8 @@ import { deriveLearnAssessmentResponseContext } from './learn-v2-measurement'
 import {
   LEARN_V2_RESPONSE_CONTRACT_VERSION, LEARN_V2_RESPONSE_CONTEXT_VERSION, LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION,
   learnAssessmentResponseContextSchema, learnResponseDeliveryPinsSchema, learnResponseSlotPinsSchema,
-  learnResponseTerminalizedResultSchema, resolveLearnResponseConfidenceRequested, validateLearnAcceptResponseRequest,
+  learnResponseTerminalizedResultSchema, learnResponseReceiptSchema, resolveLearnResponseConfidenceRequested,
+  validateLearnAcceptResponseRequest, validateLearnFinalResponseBundle,
 } from './learn-v2-responses'
 
 const plan = { studyPlanId: 'plan1', studyPlanRevisionId: 'planRevision1', planRevision: 1, planRecordRevision: 1 }
@@ -81,6 +82,36 @@ describe('server-pinned confidence', () => {
     expect(() => validateLearnAcceptResponseRequest({ ...request, response: { ...request.response, confidenceRequested: true } }, { diagnostic: false })).toThrow()
     expect(() => learnResponseDeliveryPinsSchema.parse({ version: 'unknown.v1', confidenceRequested: false })).toThrow()
   })
+
+  it.each([undefined, false, true].flatMap(teachBackRequested => [undefined, false, true].map(applicationRequested => ({ teachBackRequested, applicationRequested }))))(
+    'checks final entries against their own pins: teach-back=$teachBackRequested, application=$applicationRequested', ({ teachBackRequested, applicationRequested }) => {
+      const teachBack = request.response
+      const application = { ...request.response, target: { assessmentOpportunityId: 'opportunity1' } }
+      const bundle = { version: request.version, idempotencyKey: request.idempotencyKey,
+        teachBack: teachBackRequested ? { ...teachBack, confidence: 3 } : teachBack,
+        application: applicationRequested ? { ...application, confidence: 4 } : application }
+      const pins = {
+        teachBack: teachBackRequested === undefined ? {} : { confidenceRequested: teachBackRequested },
+        application: applicationRequested === undefined ? {} : { deliveryPins: { version: LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION, confidenceRequested: applicationRequested } },
+      }
+      expect(validateLearnFinalResponseBundle(bundle, pins)).toEqual(bundle)
+      expect(() => validateLearnFinalResponseBundle({ ...bundle,
+        teachBack: teachBackRequested ? teachBack : { ...teachBack, confidence: 3 } }, pins)).toThrow('Confidence does not match the owned slot')
+      expect(() => validateLearnFinalResponseBundle({ ...bundle,
+        application: applicationRequested ? application : { ...application, confidence: 4 } }, pins)).toThrow('Confidence does not match the owned slot')
+    },
+  )
+
+  it.each([0, 1.5, 6])('requires integer confidence from 1 through 5 in either final entry: %s', confidence => {
+    const pins = { teachBack: { confidenceRequested: true },
+      application: { deliveryPins: { version: LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION, confidenceRequested: true } } }
+    const bundle = { version: request.version, idempotencyKey: request.idempotencyKey,
+      teachBack: { ...request.response, confidence: 3 },
+      application: { ...request.response, target: { assessmentOpportunityId: 'opportunity1' }, confidence: 4 } }
+    for (const entry of ['teachBack', 'application'] as const) {
+      expect(() => validateLearnFinalResponseBundle({ ...bundle, [entry]: { ...bundle[entry], confidence } }, pins)).toThrow()
+    }
+  })
 })
 
 describe('terminalized receipt result', () => {
@@ -88,8 +119,15 @@ describe('terminalized receipt result', () => {
     for (const reasonCode of ['cancelled', 'abandoned']) {
       const result = { kind: 'terminalized', target, revision: 2, reasonCode, terminalizedAt: 1000 }
       expect(learnResponseTerminalizedResultSchema.parse(result)).toEqual(result)
+      const accepted = { kind: 'accepted', version: LEARN_V2_RESPONSE_CONTRACT_VERSION, target,
+        submissionId: 'submission1', acceptedAt: 900, revision: 2, phase: 'accepted', bodyAvailability: 'available' }
+      expect(learnResponseReceiptSchema.parse(accepted)).toEqual(accepted)
+      expect(learnResponseReceiptSchema.safeParse(result).success).toBe(false)
+      expect(learnResponseTerminalizedResultSchema.safeParse(accepted).success).toBe(false)
       for (const invalid of [{ ...result, revision: 0 }, { ...result, revision: 1.5 }, { ...result, terminalizedAt: -1 },
-        { ...result, reasonCode: 'browser_closed' }, { ...result, expiresAt: 2000 }, { ...result, payload: 'private' }]) {
+        { ...result, reasonCode: 'browser_closed' }, { ...result, expiresAt: 2000 }, { ...result, payload: 'private' },
+        { ...result, submissionId: 'submission1' }, { ...result, acceptedAt: 900 },
+        { ...result, phase: 'accepted' }, { ...result, bodyAvailability: 'available' }]) {
         expect(() => learnResponseTerminalizedResultSchema.parse(invalid)).toThrow()
       }
     }

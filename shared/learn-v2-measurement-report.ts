@@ -67,7 +67,7 @@ export const learnReportResultSnapshotSchema = z.strictObject({
 export const learnReportWatermarkSnapshotSchema = z.strictObject({
   kind: z.literal('owner_watermark'), sequence: learnSequenceSchema, dueWorkThrough: learnTimestampSchema.nullable(), historyCoverage: sourceCoverage,
   legacyIndependentAudit: learnReportLegacyIndependentAuditSchema,
-})
+}).refine(value => value.historyCoverage !== 'unknown' || value.legacyIndependentAudit.sourceCoverage === 'unknown', 'Unknown history requires unknown legacy audit coverage')
 export const learnReportEpisodeSnapshotSchema = z.strictObject({
   kind: z.literal('episode'), assignment: learnReportAssignmentSnapshotSchema, clock: learnAssessmentClockSchema.nullable(),
   originalOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>().nullable(), replacementOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>().nullable(),
@@ -296,7 +296,11 @@ export const learnMeasurementReportSchema = z.discriminatedUnion('status', [
 export const learnMeasurementReportCellsSchema = z.strictObject({
   version: z.literal(LEARN_V2_MEASUREMENT_REPORT_VERSION), reportRunId: learnIdSchema<'learnMeasurementReportRuns'>(),
   cells: z.array(learnReportMetricSchema).max(8), cursor: z.string().min(1).max(2000).nullable(), isDone: z.boolean(),
-}).refine(value => value.isDone === (value.cursor === null))
+}).refine(value => value.isDone === (value.cursor === null)).refine(value => {
+  const audit = value.cells[0]?.legacyIndependentAudit
+  return value.cells.every(cell => cell.legacyIndependentAudit.unknownCount === audit?.unknownCount
+    && cell.legacyIndependentAudit.sourceCoverage === audit?.sourceCoverage)
+}, 'Cells must repeat the same cohort legacy audit')
 export function validateLearnMeasurementReportCells(input: unknown) {
   return parseLearnContract(learnMeasurementReportCellsSchema, input, LEARN_MEASUREMENT_STORAGE_LIMITS.maxReportPageBytes)
 }
