@@ -42,12 +42,12 @@ vi.mock('~/composables/useFolderPageContext', () => ({
 const pagePath = ['~', 'pages', 'app', 'folders', '[id]', 'learn', '[courseId]', 'index.vue'].join('/')
 
 describe('V1 folder Void overview page', () => {
-  it('names the folder Voids in the back link', async () => {
+  it('names the folder courses in the back link', async () => {
     const Comp = await import(pagePath)
     const wrapper = await mountSuspended(Comp.default)
 
     const back = wrapper.find('a[href="/app/folders/folder_1/learn/"]')
     expect(back.exists()).toBe(true)
-    expect(back.text()).toBe('Back to folder Voids')
+    expect(back.text()).toBe('Back to folder courses')
   })
 })

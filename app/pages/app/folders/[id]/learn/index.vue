@@ -29,7 +29,7 @@ function goToCreate() {
     <div class="mx-auto max-w-5xl">
       <div class="mb-8">
         <h1 class="text-2xl font-bold text-foreground">Learn</h1>
-        <p class="mt-1 text-sm text-muted-foreground">Voids in this folder</p>
+        <p class="mt-1 text-sm text-muted-foreground">Courses in this folder</p>
       </div>
 
       <LearnDailyReviewCTA
@@ -41,14 +41,14 @@ function goToCreate() {
 
       <div v-if="!hasCourses" class="flex min-h-[40vh] items-center justify-center" data-testid="folder-learn-empty">
         <div class="text-center">
-          <p class="mb-4 text-lg text-muted-foreground">No Voids in this folder yet.</p>
+          <p class="mb-4 text-lg text-muted-foreground">No courses in this folder yet.</p>
           <button
             type="button"
             class="text-sm text-primary hover:text-primary/80"
             data-testid="folder-learn-create-link"
             @click="goToCreate"
           >
-            Create a Void from this folder
+            Create a course from this folder
           </button>
         </div>
       </div>

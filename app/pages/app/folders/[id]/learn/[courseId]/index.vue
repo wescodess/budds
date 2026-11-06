@@ -43,7 +43,7 @@ function handleDeleted() {
       :course-id="courseId"
       :folder-id="folderId"
       :back-url="backUrl"
-      back-label="Back to folder Voids"
+      back-label="Back to folder courses"
       :section-url-prefix="sectionUrlPrefix"
       :needs-start="needsStart"
       @deleted="handleDeleted"

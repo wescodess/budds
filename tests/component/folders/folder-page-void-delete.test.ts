@@ -56,7 +56,7 @@ const FolderShellStub = defineComponent({
 const pagePath = ['~', 'pages', 'app', 'folders', '[id].vue'].join('/')
 
 describe('folder page Void deletion', () => {
-  it('names a V1 record Void in the deletion description and toast', async () => {
+  it('names a V1 record course in the deletion description and toast', async () => {
     mockDeleteCourse.mockResolvedValue(undefined)
     const Comp = await import(pagePath)
     const wrapper = await mountSuspended(Comp.default, {
@@ -81,7 +81,7 @@ describe('folder page Void deletion', () => {
 
     await vi.waitFor(() => {
       expect(document.body.textContent).toContain(
-        'Delete "Organic Chemistry"? This will permanently remove the Void.',
+        'Delete "Organic Chemistry"? This will permanently remove the course.',
       )
     })
 
@@ -91,7 +91,7 @@ describe('folder page Void deletion', () => {
 
     await vi.waitFor(() => {
       expect(mockDeleteCourse).toHaveBeenCalledWith('course_1')
-      expect(mockToast.success).toHaveBeenCalledWith('Void deleted')
+      expect(mockToast.success).toHaveBeenCalledWith('Course deleted')
     })
     wrapper.unmount()
   })

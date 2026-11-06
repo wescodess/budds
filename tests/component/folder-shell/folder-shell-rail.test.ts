@@ -57,7 +57,7 @@ describe('FolderShellRail', () => {
     expect(wrapper.get('[data-testid="rail-item-knowledge"]').exists()).toBe(true)
   })
 
-  it('[P2] names an untitled V1 record Void', async () => {
+  it('[P2] names an untitled V1 record Course', async () => {
     mockMatchMedia({ mobile: false, touch: false })
     mockCourses.value = [{ _id: 'course-1', title: '  ', createdAt: 1 }]
     const Rail = (await import('~/components/folder-shell/FolderShellRail.vue')).default
@@ -80,7 +80,7 @@ describe('FolderShellRail', () => {
       },
     })
 
-    expect(wrapper.get('[data-testid="rail-void-course-course-1"]').text()).toBe('Void')
+    expect(wrapper.get('[data-testid="rail-void-course-course-1"]').text()).toBe('Course')
     mockCourses.value = []
   })
 })

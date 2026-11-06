@@ -40,8 +40,9 @@ and the “classic Voids” fallback.
 
 B5 found these labels at `42e2f65` and left them unchanged. The B4 follow-up
 renamed each in `8f5b70b` (`fix(learn): name the remaining fixed V1 labels Void`),
-with mounted, route or Convex assertions on the new text. Line numbers are
-unchanged. Existing stored titles are not rewritten and no display-time mapping
+with mounted, route or Convex assertions on the new text. These labels name the
+V1 container inside its own flow, where no other study item is called a Void.
+Line numbers are unchanged. Existing stored titles are not rewritten and no display-time mapping
 of learner-titled records is added.
 
 | File and line | Surface | Old label | New label | Status |
@@ -53,24 +54,38 @@ of learner-titled records is added.
 | `app/components/learn/SectionVoidTopBar.vue:28` | Section back button accessible name | “Back to course” | “Back to Void” | Resolved in `8f5b70b` |
 | `app/components/learn/SectionCompletionCard.vue:63` | Last-section completion title | “Course Complete!” | “Void Complete!” | Resolved in `8f5b70b` |
 | `app/components/learn/SectionCompletionCard.vue:151` | Completion back button | “Back to Course Overview” | “Back to Void Overview” | Resolved in `8f5b70b` |
-| `app/pages/app/folders/[id]/learn/index.vue:32` | Folder Learn subheading | “Courses in this folder” | “Voids in this folder” | Resolved in `8f5b70b` |
-| `app/pages/app/folders/[id]/learn/index.vue:44` | Folder Learn empty state | “No courses in this folder yet.” | “No Voids in this folder yet.” | Resolved in `8f5b70b` |
-| `app/pages/app/folders/[id]/learn/index.vue:51` | Folder Learn creation CTA | “Create a course from this folder” | “Create a Void from this folder” | Resolved in `8f5b70b` |
-| `app/pages/app/folders/[id]/learn/[courseId]/index.vue:46` | V1 overview back link | “Back to folder courses” | “Back to folder Voids” | Resolved in `8f5b70b` |
 | `app/pages/app/folders/[id]/learn/[courseId]/[sectionId].vue:244` | Unavailable-section recovery | “Back to course” | “Back to Void” | Resolved in `8f5b70b` |
-| `app/pages/app/folders/[id].vue:140` | Deletion description | “…remove the course.” | “…remove the Void.” | Resolved in `8f5b70b` |
-| `app/pages/app/folders/[id].vue:161` | Deletion toast | “Course deleted” | “Void deleted” | Resolved in `8f5b70b` |
-| `app/components/folder-shell/FolderShellRail.vue:113` | Untitled V1 record fallback | “Course” | “Void” | Resolved in `8f5b70b` |
 | `app/composables/useFolderPageContext.ts:181` | Client default for a new untitled V1 record | “Untitled Course” | “Untitled Void” | Resolved in `8f5b70b` |
 | `convex/courses.ts:52` | Persisted default for a blank new title | “Untitled Course” | “Untitled Void” | Resolved in `8f5b70b` |
 | `convex/reviewItems.ts:147` | Review fallback when the parent is absent, shown by `ReviewCard.vue:57` | “Unknown Course” | “Unknown Void” | Resolved in `8f5b70b` |
 
-The deletion dialog keeps its title, destructive wording and strength; only the
-object noun changed, matching `DeleteCourseDialog.vue`. The rail's compact-touch
-kind badge at `FolderShellRail.vue:333` still says “Course” beside Chat, Flash
-cards, Audio Overview and Quiz. It names a subtype, like the create dialog's
-Course option, so a literal swap would lose the distinction; it is deferred with
-#399 rather than renamed here.
+## Folder-scoped V1 labels deferred to #399
+
+`8f5b70b` also renamed the labels below, but in folders “Void” already names
+every study item: the rail's “Voids” section lists chats, flash cards, audio
+overviews, quizzes and courses, and the create dialog offers “Create chat void”
+through “Create course void”. Calling a course “Void” on the same screen is a
+subtype collision, for example “No Voids in this folder yet.” beside a rail that
+lists three Voids, or a “Void deleted” toast for a record badged “Course”. Stage B
+restored the base `22d323b` text in
+`fix(learn): keep folder-scoped course labels for the owner wording decision`,
+with the mounted assertions pinning the restored text, and left the wording to
+the owner in #399.
+
+| File and line | Surface | Current label | Reverted label | Status |
+| --- | --- | --- | --- | --- |
+| `app/pages/app/folders/[id]/learn/index.vue:32` | Folder Learn subheading | “Courses in this folder” | “Voids in this folder” | Restored in Stage B; deferred to #399 |
+| `app/pages/app/folders/[id]/learn/index.vue:44` | Folder Learn empty state | “No courses in this folder yet.” | “No Voids in this folder yet.” | Restored in Stage B; deferred to #399 |
+| `app/pages/app/folders/[id]/learn/index.vue:51` | Folder Learn creation CTA | “Create a course from this folder” | “Create a Void from this folder” | Restored in Stage B; deferred to #399 |
+| `app/pages/app/folders/[id]/learn/[courseId]/index.vue:46` | V1 overview back link | “Back to folder courses” | “Back to folder Voids” | Restored in Stage B; deferred to #399 |
+| `app/pages/app/folders/[id].vue:140` | Deletion description | “…remove the course.” | “…remove the Void.” | Restored in Stage B; deferred to #399 |
+| `app/pages/app/folders/[id].vue:161` | Deletion toast | “Course deleted” | “Void deleted” | Restored in Stage B; deferred to #399 |
+| `app/components/folder-shell/FolderShellRail.vue:113` | Untitled V1 record fallback | “Course” | “Void” | Restored in Stage B; deferred to #399 |
+
+The rail's compact-touch kind badge at `FolderShellRail.vue:333` still says
+“Course” beside Chat, Flash cards, Audio Overview and Quiz. It names a subtype,
+like the create dialog's Course option, so a literal swap would lose the
+distinction; it is deferred with #399 rather than renamed here.
 
 Dashboard “Your Courses,” course folders, general course-material prose and
 “course corrections” refer to folders, educational material or ordinary language,
@@ -119,7 +134,7 @@ analytics for this rename.
 
 ## Deferred owner items and verification boundary
 
-- #399: the coexistence sentence, the create dialog Course option/CTA and the rail's Course kind badge.
+- #399: the coexistence sentence, the create dialog Course option/CTA, the rail's Course kind badge, and the folder-scoped V1 labels restored in Stage B (folder Learn subheading, empty state and creation CTA, overview back link, deletion description and toast, untitled rail fallback).
 - #377: signed-out Learn deep-link restoration through authentication.
 - Failed/missing-link terminal recovery UI, including wrong-table V2 links.
 - Historical provider-description repair or any data migration/backfill.

@@ -137,7 +137,7 @@ const showDeleteVoidDialog = computed({
 const deleteVoidDescription = computed(() => {
   if (!voidDeleteTarget.value) return ''
   const label = voidDeleteTarget.value.title || 'this void'
-  const kindMap: Record<string, string> = { flashcards: 'flash card set', 'audio-overview': 'audio overview', quiz: 'quiz', chat: 'chat', course: 'Void' }
+  const kindMap: Record<string, string> = { flashcards: 'flash card set', 'audio-overview': 'audio overview', quiz: 'quiz', chat: 'chat', course: 'course' }
   const kind = kindMap[voidDeleteTarget.value.type] ?? 'void'
   return `Delete "${label}"? This will permanently remove the ${kind}.`
 })
@@ -158,7 +158,7 @@ async function confirmDeleteVoid() {
       await navigateTo(`/app/folders/${folderId.value}/chat`)
     }
     voidDeleteTarget.value = null
-    const kindLabels: Record<string, string> = { flashcards: 'Flash card set', 'audio-overview': 'Audio Overview', quiz: 'Quiz', chat: 'Chat', course: 'Void' }
+    const kindLabels: Record<string, string> = { flashcards: 'Flash card set', 'audio-overview': 'Audio Overview', quiz: 'Quiz', chat: 'Chat', course: 'Course' }
     const kind = kindLabels[target.type] ?? 'Void'
     toast.success(`${kind} deleted`)
   } catch (e) {
