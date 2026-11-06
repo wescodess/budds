@@ -263,6 +263,7 @@ jobs:
         with: { node-version: '24', cache: pnpm }
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:design-capture
       - run: pnpm test:e2e:learn
       - run: pnpm test:e2e:learn:authority
       - if: always()

@@ -1,5 +1,6 @@
 import { spawn, execFile } from 'node:child_process'
 import { EventEmitter, once } from 'node:events'
+import { readFileSync, readdirSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -8,6 +9,61 @@ import { promisify } from 'node:util'
 import { PassThrough } from 'node:stream'
 import { expect, test, vi } from 'vitest'
 import { cleanupStack, createStartupOutput, ensureDisposableLearner, forwardChildOutput, redactStartupOutput, spawnOwnedChild, stopChild, supportsProcessGroups, waitForConvexReady, waitForPortsClosed } from '../scripts/e2e-stack-runtime.mjs'
+
+test.skipIf(!supportsProcessGroups).each([false, true])('owned group registration is synchronous and opt-in: %s', async enabled => {
+  const directory = await mkdtemp(join(tmpdir(), 'budds-owned-registration-'))
+  const groupsFile = join(directory, 'groups.jsonl')
+  const env = { ...process.env }
+  delete env.BUDDS_E2E_OWNED_GROUPS_FILE
+  if (enabled) env.BUDDS_E2E_OWNED_GROUPS_FILE = groupsFile
+  const child = spawnOwnedChild(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { env })
+  try {
+    if (enabled) expect(JSON.parse(readFileSync(groupsFile, 'utf8'))).toEqual({ pid: child.pid })
+    else expect(readdirSync(directory)).toEqual([])
+  }
+  finally {
+    await stopChild(child)
+    await rm(directory, { recursive: true, force: true })
+  }
+}, 60_000)
+
+test.skipIf(!supportsProcessGroups)('registration write failure kills the spawned group and rethrows', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'budds-owned-registration-failure-'))
+  try {
+    const { stdout } = await promisify(execFile)(process.execPath, ['--input-type=module', '-e', `
+      import childProcess from 'node:child_process'
+      import { once } from 'node:events'
+      import { syncBuiltinESMExports } from 'node:module'
+      import { setTimeout } from 'node:timers/promises'
+      const spawn = childProcess.spawn
+      let child
+      let closed
+      childProcess.spawn = (...args) => {
+        child = spawn(...args)
+        closed = once(child, 'close')
+        child.stdout.resume()
+        child.stderr.resume()
+        return child
+      }
+      syncBuiltinESMExports()
+      const { spawnOwnedChild } = await import(${JSON.stringify(new URL('../scripts/e2e-stack-runtime.mjs', import.meta.url).href)})
+      let error
+      try { spawnOwnedChild(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { env: { ...process.env, BUDDS_E2E_OWNED_GROUPS_FILE: ${JSON.stringify(directory)} } }) }
+      catch (caught) { error = caught.code }
+      try {
+        await setTimeout(250)
+        let alive = true
+        try { process.kill(-child.pid, 0) } catch (error) { if (error.code === 'ESRCH') alive = false; else throw error }
+        console.log(JSON.stringify({ error, alive, pid: child.pid }))
+      } finally {
+        try { process.kill(-child.pid, 'SIGKILL') } catch (error) { if (error.code !== 'ESRCH') throw error }
+        await closed
+      }
+    `], { timeout: 10_000 })
+    expect(JSON.parse(stdout)).toEqual({ error: 'EISDIR', alive: false, pid: expect.any(Number) })
+  }
+  finally { await rm(directory, { recursive: true, force: true }) }
+}, 15_000)
 
 test('startup redaction does not release a credential split across adjacent chunks', () => {
   const secret = 'synthetic-boundary-credential'
