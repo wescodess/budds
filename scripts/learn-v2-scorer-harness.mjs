@@ -6,7 +6,7 @@ import { registerScorerImports, forbidNetwork } from './lib/learn-v2-scorer/runt
 export async function main(argv = process.argv.slice(2)) {
   registerScorerImports()
   const [command, ...args] = argv
-  assert.ok(['init', 'run', 'replay', 'plan', 'dispatch'].includes(command), 'Usage: node scripts/learn-v2-scorer-harness.mjs init|run|replay|plan|dispatch --output DIRECTORY [options]')
+  assert.ok(['init', 'run', 'replay', 'plan', 'dispatch', 'reconcile'].includes(command), 'Usage: node scripts/learn-v2-scorer-harness.mjs init|run|replay|plan|dispatch|reconcile --output DIRECTORY [options]')
   const options = {}
   const allowed = ['output', 'inventory', 'fixture', 'clock', 'seed', 'budget-micro-usd', 'price-access-date', 'mode', 'configuration', 'anchors',
     'stop-after', 'crash-after-intent', 'expected-report', 'id', 'approval', 'cost-evidence', 'owner-public-key']
@@ -16,8 +16,8 @@ export async function main(argv = process.argv.slice(2)) {
     options[key] = args[index + 1]
   }
   assert.ok(options.output, 'Artifact directory required')
-  if (command !== 'dispatch') forbidNetwork()
-  const { initialize, runOffline, replay, dispatchLive, planRun } = await import('./lib/learn-v2-scorer/runner.mjs')
+  if (!['dispatch', 'reconcile'].includes(command)) forbidNetwork()
+  const { initialize, runOffline, replay, dispatchLive, reconcileLive, planRun } = await import('./lib/learn-v2-scorer/runner.mjs')
   const { readJson } = await import('./lib/learn-v2-scorer/artifacts.mjs')
   if (command === 'init') {
     assert.ok(options.inventory && options.clock && options.seed && options['budget-micro-usd'] && options['price-access-date'], 'Complete explicit run pins required')
@@ -35,7 +35,8 @@ export async function main(argv = process.argv.slice(2)) {
   }
   if (command === 'replay') return replay(options.output, options['expected-report'])
   if (command === 'plan') return planRun(options.output)
-  return dispatchLive(options.output, options.id, { approvalFile: options.approval, costFile: options['cost-evidence'], trustKey: options['owner-public-key'] })
+  const live = command === 'reconcile' ? reconcileLive : dispatchLive
+  return live(options.output, options.id, { approvalFile: options.approval, costFile: options['cost-evidence'], trustKey: options['owner-public-key'] })
 }
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {

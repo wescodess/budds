@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { hash, seal, unseal, exists, implementationPins, exclusiveLock, outputDirectory, FIXTURES, exactKeys, readJson } from './artifacts.mjs'
+import { hash, seal, unseal, removeSealed, exists, implementationPins, exclusiveLock, outputDirectory, FIXTURES, exactKeys, readJson } from './artifacts.mjs'
 import { corpusInputs, bindInventory, runPins, schedule, LIMITS } from './contract.mjs'
-import { requestFor, fixtureEnvelope, baselineExecution, parseIndependent, liveInfer, GRADER_PROMPT, GRADER_SCHEMA } from './adapters.mjs'
+import { requestFor, fixtureEnvelope, baselineExecution, reconcileBaselineExecution, liveMetadata, parseIndependent, liveInfer, GRADER_PROMPT, GRADER_SCHEMA } from './adapters.mjs'
 import { buildReport, fitThresholds } from './report.mjs'
 import { admitLive } from './live-approval.mjs'
-import { openLiveLedger, verifyLiveRun, reserveLiveDispatch } from './live-ledger.mjs'
+import { openLiveLedger, verifyLiveRun, reserveLiveDispatch, recordLiveResolution, unresolvedLiveDispatches, liveOutcome, metadataOutcome } from './live-ledger.mjs'
 
 const emptyAnchors = { version: 'learn-v2.synthetic-anchor-checks.v1', evidenceStatus: 'synthetic_contract_only', canvasAdmitted: false, rows: [] }
 const int = value => Number.isSafeInteger(value) && value >= 0
@@ -76,14 +76,16 @@ async function openRun(path) {
   const plan = schedule(corpus.corpus, corpus.sources, pins.seed, pins.adapters)
   const results = new Map(pins.adapters.map(adapter => [adapter.id, new Map()]))
   const state = { directory, pins, pinsDigest: manifest.pinsDigest, registry, corpus, plan, results,
-    intents: new Map(), terminals: new Map(), artifacts: [], fitDigests: [], reserved: 0, dispatchCounts: new Map() }
+    intents: new Map(), terminals: new Map(), observations: new Map(), metadataIntents: new Map(), reconciliations: new Map(),
+    artifacts: [], fitDigests: [], reserved: 0, dispatchCounts: new Map() }
   const allowed = new Set(['manifest.json', 'thresholds.json', '.run.lock'])
   for (const item of plan) {
     for (const kind of ['intent', 'terminal']) allowed.add(artifactName(item.blind.id, kind))
+    if (pins.mode === 'live') for (const kind of ['observation', 'metadata-intent', 'reconciled']) allowed.add(artifactName(item.blind.id, kind))
     const intentName = artifactName(item.blind.id, 'intent')
     const terminalName = artifactName(item.blind.id, 'terminal')
     if (!exists(join(directory, intentName))) {
-      assert.ok(!exists(join(directory, terminalName)), 'Orphan terminal artifact')
+      for (const kind of ['terminal', 'observation', 'metadata-intent', 'reconciled']) assert.ok(!exists(join(directory, artifactName(item.blind.id, kind))), 'Orphan dispatch artifact')
       continue
     }
     const intent = unseal(directory, intentName, 'dispatch_intent', state.pinsDigest)
@@ -92,12 +94,24 @@ async function openRun(path) {
     state.reserved += intent.payload.reservationMicroUsd
     const adapter = pins.adapters.find(adapter => adapter.id === item.adapter)
     state.dispatchCounts.set(adapter.model, (state.dispatchCounts.get(adapter.model) ?? 0) + Number(intent.payload.dispatched))
-    if (!exists(join(directory, terminalName))) continue
-    const terminal = unseal(directory, terminalName, 'sealed_verdict', state.pinsDigest)
-    assert.equal(terminal.payload.intentDigest, intent.digest)
-    const reproduced = await evaluate(state, item, intent.payload, terminal.payload.raw, terminal.payload.terminalAt)
-    assert.deepEqual(reproduced, terminal.payload.result, 'Sealed verdict replay changed')
-    recordTerminal(state, item, terminal)
+    const observationName = artifactName(item.blind.id, 'observation')
+    if (exists(join(directory, observationName))) {
+      const observation = unseal(directory, observationName, 'dispatch_observation', state.pinsDigest)
+      exactKeys(observation.payload, ['intentDigest', 'raw', 'terminalAt'])
+      assert.equal(observation.payload.intentDigest, intent.digest)
+      assert.ok(int(observation.payload.terminalAt) && observation.payload.terminalAt >= intent.payload.startedAt)
+      state.observations.set(item.blind.id, observation)
+    }
+    if (exists(join(directory, terminalName))) {
+      const terminal = unseal(directory, terminalName, 'sealed_verdict', state.pinsDigest)
+      assert.equal(terminal.payload.intentDigest, intent.digest)
+      if (pins.mode === 'live' && intent.payload.dispatched) assert.deepEqual(state.observations.get(item.blind.id)?.payload,
+        { intentDigest: intent.digest, raw: terminal.payload.raw, terminalAt: terminal.payload.terminalAt }, 'Terminal differs from saved observation')
+      const reproduced = await evaluate(state, item, intent.payload, terminal.payload.raw, terminal.payload.terminalAt)
+      assert.deepEqual(reproduced, terminal.payload.result, 'Sealed verdict replay changed')
+      recordTerminal(state, item, terminal)
+    }
+    await openReconciliation(state, item, intent)
   }
   for (const name of readdirSync(directory)) {
     if (/^report-[a-f0-9]{24}\.json$/.test(name)) continue
@@ -148,6 +162,60 @@ async function evaluate(state, item, intent, raw, terminalAt) {
   return { ...result, weights: item.blind.scoringInput.rubric.criteria.map(row => row.weightPercent) }
 }
 
+async function reconcileObservation(state, item, intent, observation, lookup, clock) {
+  const adapter = state.pins.adapters.find(adapter => adapter.id === item.adapter)
+  const original = await evaluate(state, item, intent.payload, observation.payload.raw, observation.payload.terminalAt)
+  const saved = state.pins.bindings.find(binding => binding.binding.configurationDigest === adapter.configuration)
+  const result = await reconcileBaselineExecution({ adapter, blind: item.blind, saved, registry: state.registry,
+    startedAt: intent.payload.startedAt, raw: observation.payload.raw, execution: original.execution, lookup, clock })
+  return { ...result, weights: original.weights }
+}
+
+async function openReconciliation(state, item, intent) {
+  const lookupName = artifactName(item.blind.id, 'metadata-intent')
+  const name = artifactName(item.blind.id, 'reconciled')
+  const observation = state.observations.get(item.blind.id)
+  if (exists(join(state.directory, lookupName))) {
+    const lookup = unseal(state.directory, lookupName, 'metadata_lookup_intent', state.pinsDigest)
+    exactKeys(lookup.payload, ['intentDigest', 'generationId', 'startedAt', 'deadline'])
+    assert.equal(lookup.payload.intentDigest, intent.digest)
+    assert.equal(lookup.payload.generationId, observation?.payload.raw.id)
+    assert.ok(typeof lookup.payload.generationId === 'string' && lookup.payload.generationId.length > 0)
+    assert.ok(int(lookup.payload.startedAt) && lookup.payload.startedAt >= intent.payload.startedAt)
+    assert.equal(lookup.payload.deadline, Math.min(lookup.payload.startedAt + 10_000, intent.payload.deadline))
+    state.metadataIntents.set(item.blind.id, lookup)
+  }
+  if (!exists(join(state.directory, name))) return
+  const record = unseal(state.directory, name, 'reconciled_verdict', state.pinsDigest)
+  const payload = record.payload
+  exactKeys(payload, ['intentDigest', 'observationDigest', 'lookupDigest', 'reconciledAt', 'status', 'result'])
+  assert.equal(payload.intentDigest, intent.digest)
+  assert.equal(payload.observationDigest, observation?.digest ?? null)
+  const lookup = state.metadataIntents.get(item.blind.id)
+  assert.equal(payload.lookupDigest, lookup?.digest ?? null)
+  assert.ok(int(payload.reconciledAt) && payload.reconciledAt >= (lookup?.payload.startedAt ?? intent.payload.startedAt))
+  assert.equal(payload.status, metadataOutcome(payload.result))
+  if (payload.result !== null) {
+    assert.ok(lookup && observation, 'Reconciled execution requires saved observation and metadata intent')
+    let lookedUp = false
+    const reproduced = await reconcileObservation(state, item, intent, observation, async generationId => {
+      assert.equal(generationId, lookup.payload.generationId)
+      lookedUp = true
+      if (payload.result.execution.metadata === null) throw new Error('Saved metadata unavailable')
+      return payload.result.execution.metadata
+    }, () => lookedUp ? payload.reconciledAt : lookup.payload.startedAt)
+    assert.deepEqual(reproduced, payload.result, 'Reconciled verdict replay changed')
+  }
+  recordReconciliation(state, item, record)
+}
+
+function recordReconciliation(state, item, record) {
+  state.reconciliations.set(item.blind.id, record)
+  if (record.payload.result) state.results.get(item.adapter).set(item.rowId, record.payload.result)
+  state.artifacts.push(record.digest)
+  if (item.phase === 'fit') state.fitDigests.push(record.digest)
+}
+
 function recordTerminal(state, item, terminal) {
   state.terminals.set(item.blind.id, terminal)
   state.results.get(item.adapter).set(item.rowId, terminal.payload.result)
@@ -163,9 +231,24 @@ function freezeThresholds(state) {
   state.thresholds = seal(state.directory, 'thresholds.json', 'frozen_thresholds', state.pinsDigest, payload)
 }
 
+function unresolvedItem(state, id) {
+  if (state.reconciliations.has(id)) return state.reconciliations.get(id).payload.status === 'still_unknown'
+  const terminal = state.terminals.get(id)
+  return !terminal || (state.pins.mode === 'live' ? liveOutcome(terminal.payload.result) === 'still_unknown'
+    : ['ambiguous', 'outcome_unknown'].includes(terminal.payload.result.status))
+}
+
 function stopped(state, adapterId) {
-  return state.plan.some(item => item.adapter === adapterId && state.intents.has(item.blind.id)
-    && (!state.terminals.has(item.blind.id) || ['ambiguous', 'outcome_unknown'].includes(state.terminals.get(item.blind.id).payload.result.status)))
+  return state.plan.some(item => item.adapter === adapterId && state.intents.has(item.blind.id) && unresolvedItem(state, item.blind.id))
+}
+
+function approveLive(state, item, options, now) {
+  assert.ok(now - state.pins.clock >= 0 && now - state.pins.clock < 86_400_000, 'Run clock is stale')
+  assert.equal(state.pins.priceAccessDate, new Date(now).toISOString().slice(0, 10), 'Price access must be refreshed on dispatch day')
+  const request = requestFor(state.pins.adapters.find(adapter => adapter.id === item.adapter), item.blind)
+  return admitLive({ pins: state.pins, pinsDigest: state.pinsDigest, item, request, now,
+    requestPins: state.plan.map(row => ({ id: row.blind.id, requestDigest: hash(requestFor(state.pins.adapters.find(adapter => adapter.id === row.adapter), row.blind)) })),
+    ...options })
 }
 
 async function dispatch(state, item, options) {
@@ -179,11 +262,7 @@ async function dispatch(state, item, options) {
   const outcome = state.pins.mode === 'offline' ? state.pins.fixture.outcomes[adapter.role]?.[ordinal] ?? state.pins.fixture.default : null
   let approval = null
   if (state.pins.mode === 'live') {
-    assert.ok(Date.now() - state.pins.clock >= 0 && Date.now() - state.pins.clock < 86_400_000, 'Run clock is stale')
-    assert.equal(state.pins.priceAccessDate, new Date().toISOString().slice(0, 10), 'Price access must be refreshed on dispatch day')
-    approval = admitLive({ pins: state.pins, pinsDigest: state.pinsDigest, item, request, now: startedAt,
-      requestPins: state.plan.map(row => ({ id: row.blind.id, requestDigest: hash(requestFor(state.pins.adapters.find(adapter => adapter.id === row.adapter), row.blind)) })),
-      ...options })
+    approval = approveLive(state, item, options, startedAt)
   }
   const reservationMicroUsd = approval?.reservationMicroUsd ?? state.pins.fixture.reservationMicroUsd
   let dispatchAllowed = true
@@ -229,16 +308,22 @@ async function dispatch(state, item, options) {
       terminalAt = Date.now()
     }
   }
+  if (state.pins.mode === 'live' && dispatchAllowed) {
+    const observation = seal(state.directory, artifactName(item.blind.id, 'observation'), 'dispatch_observation', state.pinsDigest,
+      { intentDigest: intent.digest, raw, terminalAt })
+    state.observations.set(item.blind.id, observation)
+  }
   const result = await evaluate(state, item, intent.payload, raw, terminalAt)
   const terminal = seal(state.directory, artifactName(item.blind.id, 'terminal'), 'sealed_verdict', state.pinsDigest,
     { intentDigest: intent.digest, raw, terminalAt, result })
   recordTerminal(state, item, terminal)
+  if (state.pins.mode === 'live' && dispatchAllowed) recordLiveResolution(state.liveLedger, state, intent, terminal)
   return true
 }
 
 function report(state) {
   const thresholds = state.thresholds?.payload ?? { ...fitThresholds(state.corpus.corpus, state.pins.adapters, state.results, state.fitDigests), phase: 'diagnostic_fit_not_frozen' }
-  const ambiguous = [...state.intents].filter(([id]) => !state.terminals.has(id) || state.terminals.get(id).payload.result.status === 'ambiguous')
+  const ambiguous = [...state.intents].filter(([id]) => unresolvedItem(state, id))
   const payload = buildReport({ pins: state.pins, pinsDigest: state.pinsDigest, corpus: state.corpus.corpus, schedule: state.plan,
     results: state.results, thresholds, artifacts: state.artifacts,
     reservations: { capMicroUsd: state.pins.budgetMicroUsd, retainedMicroUsd: state.reserved,
@@ -278,22 +363,85 @@ export async function dispatchLive(path, id, options) {
     const state = await openRun(path)
     assert.equal(state.pins.mode, 'live')
     state.liveLedger = openLiveLedger(global)
+    assert.equal(unresolvedLiveDispatches(state.liveLedger).length, 0, 'Global dispatch outcome requires reconciliation')
     verifyLiveRun(state.liveLedger, state)
     const item = state.plan.find(item => item.blind.id === id)
     assert.ok(item, 'Unknown opaque dispatch ID')
     if (state.intents.has(id)) return report(state)
     const next = state.plan.find(item => !state.intents.has(item.blind.id) && !stopped(state, item.adapter))
     assert.equal(item, next, 'Single dispatch must follow the frozen blind schedule')
-    if (!item.canary) assert.ok(state.plan.filter(row => row.canary).every(row => state.terminals.get(row.blind.id)?.payload.result.status === 'valid'),
+    if (!item.canary) assert.ok(state.plan.filter(row => row.canary).every(row => state.results.get(row.adapter).get(row.rowId)?.status === 'valid'),
       'All three authorized canaries must validate before core live dispatch')
     if (item.phase === 'heldout') freezeThresholds(state)
-    // The global lock itself remains after process death. For a normal return
-    // with an unknown outcome, retain a separate immutable reconciliation marker.
+    // The reservation already blocks globally before transport. This marker is
+    // supplemental; failures publishing it cannot release the durable block.
     await dispatch(state, item, options)
     if (stopped(state, item.adapter)) seal(global, 'unresolved.json', 'global_reconciliation_required', state.pinsDigest,
       { directory: state.directory, id: item.blind.id })
     return report(state)
   }))
+}
+
+export async function reconcileLive(path, id, options) {
+  const global = outputDirectory('/tmp/budds-learn-v2-scorer-live')
+  return exclusiveLock(global, '.learn-v2-scorer-global.lock', () => exclusiveLock(outputDirectory(path), '.run.lock', async () => {
+    const state = await openRun(path)
+    assert.equal(state.pins.mode, 'live')
+    const ledger = openLiveLedger(global)
+    verifyLiveRun(ledger, state)
+    const item = state.plan.find(item => item.blind.id === id)
+    const intent = state.intents.get(id)
+    assert.ok(item && intent?.payload.dispatched, 'Reconciliation requires a recorded dispatched intent')
+    const marker = exists(join(global, 'unresolved.json')) ? readJson(join(global, 'unresolved.json')) : null
+    const ownsMarker = marker?.pinsDigest === state.pinsDigest && marker?.payload.directory === state.directory && marker?.payload.id === id
+    assert.ok(unresolvedLiveDispatches(ledger).some(reservation => reservation.id === id && reservation.intentDigest === intent.digest) || ownsMarker,
+      'Only unresolved global intents can be reconciled')
+    assert.deepEqual(approveLive(state, item, options, Date.now()), intent.payload.approval, 'Reconciliation requires the original signed approval and pins')
+    // A known result may already be durable when only its ledger publication
+    // failed. Finish that publication without consuming a metadata lookup.
+    const terminal = state.terminals.get(id)
+    if (!state.reconciliations.has(id) && terminal && liveOutcome(terminal.payload.result) !== 'still_unknown') {
+      recordLiveResolution(ledger, state, intent, terminal)
+      clearResolvedMarker(global, ledger, state, id)
+      return { ...report(state), reconciliation: liveOutcome(terminal.payload.result) }
+    }
+    let record = state.reconciliations.get(id)
+    if (!record) {
+      const observation = state.observations.get(id)
+      let lookup = state.metadataIntents.get(id)
+      let result = null
+      const adapter = state.pins.adapters.find(adapter => adapter.id === item.adapter)
+      if (!lookup && observation && adapter.role === 'baseline') {
+        const original = await evaluate(state, item, intent.payload, observation.payload.raw, observation.payload.terminalAt)
+        const generationId = original.execution?.terminal.generationId
+        const now = Date.now()
+        if (generationId && original.execution.receipt.integrityResult === 'identity_unavailable' && now < intent.payload.deadline) {
+          // Persist the one lookup allowance before metadata I/O. A crash after
+          // this point cannot authorize another lookup, even on another process.
+          lookup = seal(state.directory, artifactName(id, 'metadata-intent'), 'metadata_lookup_intent', state.pinsDigest,
+            { intentDigest: intent.digest, generationId, startedAt: now, deadline: Math.min(now + 10_000, intent.payload.deadline) })
+          state.metadataIntents.set(id, lookup)
+          try { result = await reconcileObservation(state, item, intent, observation, liveMetadata, Date.now) }
+          catch { /* Keep the global intent unresolved; never fall back to inference. */ }
+        }
+      }
+      const payload = { intentDigest: intent.digest, observationDigest: observation?.digest ?? null, lookupDigest: lookup?.digest ?? null,
+        reconciledAt: result?.execution.metadata ? result.identity.observedAt : Date.now(), status: metadataOutcome(result), result }
+      record = seal(state.directory, artifactName(id, 'reconciled'), 'reconciled_verdict', state.pinsDigest, payload)
+      recordReconciliation(state, item, record)
+    }
+    recordLiveResolution(ledger, state, intent, record, true)
+    clearResolvedMarker(global, ledger, state, id)
+    return { ...report(state), reconciliation: record.payload.status }
+  }))
+}
+
+function clearResolvedMarker(global, ledger, state, id) {
+  if (unresolvedLiveDispatches(ledger).length !== 0 || !exists(join(global, 'unresolved.json'))) return
+  const marker = readJson(join(global, 'unresolved.json'))
+  assert.equal(marker.pinsDigest, state.pinsDigest)
+  assert.deepEqual(marker.payload, { directory: state.directory, id })
+  removeSealed(global, 'unresolved.json', 'global_reconciliation_required', state.pinsDigest)
 }
 
 export async function replay(path, expectedReport) {

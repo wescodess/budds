@@ -14,6 +14,11 @@ let globalDirectory
 let interruptIntent = false
 let outcome = 'valid'
 const calls = []
+const metadataCalls = []
+let metadataOutcome = 'resolved'
+let omitProvider = false
+let publicationFailures = new Set()
+let failuresAfterWrite = new Set()
 
 // Keep the production CLI's fixed global path and transport unchanged. Native
 // module mocks isolate this test process and deny every real network entry.
@@ -21,7 +26,10 @@ mock.module(new URL('./artifacts.mjs', import.meta.url).href, { namedExports: { 
   outputDirectory: path => artifacts.outputDirectory(path === '/tmp/budds-learn-v2-scorer-live' ? globalDirectory : path),
   seal(...args) {
     if (interruptIntent && args[2] === 'dispatch_intent') throw new Error('Simulated interruption before local intent')
-    return artifacts.seal(...args)
+    if (calls.length && publicationFailures.has(args[2])) throw new Error(`Simulated publication failure: ${args[2]}`)
+    const value = artifacts.seal(...args)
+    if (calls.length && failuresAfterWrite.has(args[2])) throw new Error(`Simulated interrupted publication: ${args[2]}`)
+    return value
   },
 } })
 mock.module(new URL('./adapters.mjs', import.meta.url).href, { namedExports: { ...adapters,
@@ -30,11 +38,26 @@ mock.module(new URL('./adapters.mjs', import.meta.url).href, { namedExports: { .
     const body = JSON.parse(request.body)
     const payload = adapter.role === 'gemini' ? body.input[0].content[0].text : body.messages.find(row => row.role === 'user').content
     const scoringInput = JSON.parse(payload)
-    return adapters.fixtureEnvelope(adapter, { id: scoringInput.evidence[0].alias, payload, scoringInput }, outcome)
+    const raw = adapters.fixtureEnvelope(adapter, { id: scoringInput.evidence[0].alias, payload, scoringInput }, outcome)
+    if (omitProvider && adapter.role === 'baseline') {
+      delete raw.provider
+      delete raw.openrouter_metadata
+    }
+    return raw
+  },
+  async liveMetadata(generationId, signal) {
+    metadataCalls.push(generationId)
+    assert.equal(signal.aborted, false)
+    if (metadataOutcome === 'unavailable') throw new Error('Synthetic metadata unavailable')
+    return { generationId: metadataOutcome === 'contradictory' ? 'other-generation' : generationId,
+      returnedModel: metadataOutcome === 'wrong-model' ? 'openai/gpt-other' : metadataOutcome === 'missing-model' ? null : 'openai/gpt-4.1',
+      servingProvider: metadataOutcome === 'wrong-provider' ? 'Other' : metadataOutcome === 'missing-provider' ? null : 'OpenAI', upstreamRequestId: null,
+      finishReason: 'stop', nativeFinishReason: 'stop', cancelled: metadataOutcome === 'failed', usage: null }
   },
 } })
-const { initialize, planRun, dispatchLive } = await import('./runner.mjs')
-const { openLiveLedger, reserveLiveDispatch } = await import('./live-ledger.mjs')
+const { initialize, planRun, dispatchLive, reconcileLive, replay } = await import('./runner.mjs')
+const { main } = await import('../../learn-v2-scorer-harness.mjs')
+const { openLiveLedger, reserveLiveDispatch, unresolvedLiveDispatches } = await import('./live-ledger.mjs')
 const { sealLearnScorerConfiguration } = await import('../../../convex/lib/learnV2ScorerConfig.ts')
 const { canonical, hash, readJson, outputDirectory } = artifacts
 
@@ -46,7 +69,12 @@ async function workspace(t) {
   t.after(() => rmSync(parent, { recursive: true, force: true }))
   globalDirectory = outputDirectory(join(parent, 'global'))
   calls.length = 0
+  metadataCalls.length = 0
   outcome = 'valid'
+  metadataOutcome = 'resolved'
+  omitProvider = false
+  publicationFailures = new Set()
+  failuresAfterWrite = new Set()
   interruptIntent = false
   const inventory = readJson(join(artifacts.ROOT, 'tests/fixtures/learn-v2-scorer-harness/inventory.json'))
   inventory.scope = 'reviewed_published_inventory'
@@ -132,7 +160,10 @@ test('256 model/configuration reservations accumulate across runs and distinct a
     }
   }
   assert.equal(openLiveLedger(globalDirectory).reservations.size, 256)
-  await assert.rejects(dispatchLive(next.directory, next.plan[0].id, approve(next, 'cap-next')), /Global per-model\/configuration dispatch ceiling/)
+  const nextApproval = approve(next, 'cap-next')
+  assert.throws(() => reserveLiveDispatch(openLiveLedger(globalDirectory), next, adapter,
+    { id: next.plan[0].id, approval: nextApproval.record, dispatched: true, reservationMicroUsd: 100 }), /Global per-model\/configuration dispatch ceiling/)
+  await assert.rejects(dispatchLive(next.directory, next.plan[0].id, nextApproval), /requires reconciliation/)
   assert.equal(calls.length, 0)
   assert.equal(openLiveLedger(globalDirectory).reservations.size, 256)
 })
@@ -175,7 +206,7 @@ test('an interruption between global charging and the local intent fails closed 
   await assert.rejects(dispatchLive(state.directory, state.plan[0].id, approval), /Simulated interruption/)
   interruptIntent = false
   assert.equal(openLiveLedger(globalDirectory).reservations.size, 1)
-  await assert.rejects(dispatchLive(state.directory, state.plan[0].id, approval), /discrepancy requires reconciliation/)
+  await assert.rejects(dispatchLive(state.directory, state.plan[0].id, approval), /requires reconciliation/)
   assert.equal(calls.length, 0)
 })
 
@@ -207,6 +238,181 @@ test('removing a global reservation cannot reset an original run to an uncharged
   await dispatchLive(state.directory, state.plan[0].id, approval)
   const name = readdirSync(globalDirectory).find(name => name.startsWith('reservation-'))
   rmSync(join(globalDirectory, name))
-  await assert.rejects(dispatchLive(state.directory, state.plan[1].id, approval), /discrepancy requires reconciliation/)
+  await assert.rejects(dispatchLive(state.directory, state.plan[1].id, approval), /Global resolution has no dispatch reservation/)
   assert.equal(calls.length, 1)
+})
+
+test('post-dispatch publication failures retain global uncertainty across directories and distinct approvals', async t => {
+  for (const [name, transportOutcome, kinds] of [
+    ['unknown-terminal', 'ambiguous', ['sealed_verdict']],
+    ['unknown-terminal-and-marker', 'ambiguous', ['sealed_verdict', 'global_reconciliation_required']],
+    ['unknown-marker', 'ambiguous', ['global_reconciliation_required']],
+    ['known-terminal', 'valid', ['sealed_verdict']],
+    ['observation', 'ambiguous', ['dispatch_observation']],
+    ['resolution-ledger', 'valid', ['live_dispatch_resolution']],
+  ]) await t.test(name, async t => {
+    const { createRun, approve } = await workspace(t)
+    const first = await createRun('first')
+    const second = await createRun('second')
+    outcome = transportOutcome
+    publicationFailures = new Set(kinds)
+    await assert.rejects(dispatchLive(first.directory, first.plan[0].id, approve(first, 'first')), /Simulated publication failure/)
+    assert.equal(calls.length, 1)
+    assert.equal(unresolvedLiveDispatches(openLiveLedger(globalDirectory)).length, 1)
+    assert.ok(!artifacts.exists(join(globalDirectory, '.learn-v2-scorer-global.lock')), 'Transient lock cleanup must leave the durable global block')
+    publicationFailures.clear()
+    await assert.rejects(dispatchLive(second.directory, second.plan[0].id, approve(second, 'distinct')), /requires reconciliation/)
+    assert.equal(calls.length, 1)
+  })
+})
+
+async function pendingBaseline(t) {
+  const workspaceState = await workspace(t)
+  const state = await workspaceState.createRun('pending')
+  const approval = workspaceState.approve(state, 'original')
+  const item = state.plan.find(row => row.adapter.startsWith('baseline_'))
+  for (const preceding of state.plan.slice(0, state.plan.indexOf(item))) await dispatchLive(state.directory, preceding.id, approval)
+  omitProvider = true
+  const summary = await dispatchLive(state.directory, item.id, approval)
+  assert.equal(summary.ambiguous, 1)
+  omitProvider = false
+  return { ...workspaceState, state, approval, id: item.id, inferenceCalls: calls.length }
+}
+
+test('the explicit CLI reconciles saved generation metadata as resolved or failed without new inference', async t => {
+  for (const status of ['resolved', 'failed']) await t.test(status, async t => {
+    const { state, approval, id, inferenceCalls, createRun, approve } = await pendingBaseline(t)
+    metadataOutcome = status
+    const summary = await main(['reconcile', '--output', state.directory, '--id', id,
+      '--approval', approval.approvalFile, '--cost-evidence', approval.costFile, '--owner-public-key', approval.trustKey])
+    assert.equal(summary.reconciliation, status)
+    assert.equal(summary.ambiguous, 0)
+    assert.equal(calls.length, inferenceCalls)
+    assert.deepEqual(metadataCalls, [readJson(join(state.directory, `${id}.observation.json`)).payload.raw.id])
+    const ledger = openLiveLedger(globalDirectory)
+    assert.equal(unresolvedLiveDispatches(ledger).length, 0)
+    assert.equal([...ledger.reservations.values()].reduce((sum, row) => sum + row.reservationMicroUsd, 0), inferenceCalls * 100)
+    assert.ok(!artifacts.exists(join(globalDirectory, 'unresolved.json')))
+    assert.equal((await replay(state.directory)).digest, summary.digest)
+    const second = await createRun('second')
+    await dispatchLive(second.directory, second.plan[0].id, approve(second, 'distinct'))
+    assert.equal(calls.length, inferenceCalls + 1)
+    assert.equal(metadataCalls.length, 1)
+  })
+})
+
+test('missing or contradictory metadata stays globally unresolved and consumes at most one lookup across restarts', async t => {
+  for (const status of ['unavailable', 'contradictory', 'wrong-model', 'wrong-provider', 'missing-model', 'missing-provider']) await t.test(status, async t => {
+    const { state, approval, id, inferenceCalls, createRun, approve } = await pendingBaseline(t)
+    metadataOutcome = status
+    const summary = await reconcileLive(state.directory, id, approval)
+    assert.equal(summary.reconciliation, 'still_unknown')
+    assert.equal(summary.ambiguous, 1)
+    assert.equal((await replay(state.directory)).digest, summary.digest)
+    assert.equal((await reconcileLive(state.directory, id, approval)).digest, summary.digest)
+    assert.equal(metadataCalls.length, 1)
+    const second = await createRun('second')
+    await assert.rejects(dispatchLive(second.directory, second.plan[0].id, approve(second, 'distinct')), /requires reconciliation/)
+    assert.equal(calls.length, inferenceCalls)
+  })
+})
+
+test('a resolved canary permits the original run to continue its frozen schedule', async t => {
+  const { state, approval, id, inferenceCalls } = await pendingBaseline(t)
+  await reconcileLive(state.directory, id, approval)
+  assert.equal(calls.length, inferenceCalls)
+  for (const item of state.plan.slice(inferenceCalls, 4)) await dispatchLive(state.directory, item.id, approval)
+  assert.equal(calls.length, 4, 'All three canaries and the first core dispatch completed')
+  assert.equal(metadataCalls.length, 1)
+})
+
+test('reconciliation refuses unrecorded intents, other approvals and changed pins before metadata I/O', async t => {
+  const { state, approval, id, inferenceCalls, approve } = await pendingBaseline(t)
+  await assert.rejects(reconcileLive(state.directory, id, {}))
+  await assert.rejects(reconcileLive(state.directory, id, approve(state, 'other')), /original signed approval/)
+  await assert.rejects(reconcileLive(state.directory, state.plan.find(item => item.id !== id && item.adapter === 'baseline_1').id, approval), /recorded dispatched intent/)
+  const manifestPath = join(state.directory, 'manifest.json')
+  const original = readFileSync(manifestPath)
+  writeFileSync(manifestPath, '{}')
+  await assert.rejects(reconcileLive(state.directory, id, approval))
+  writeFileSync(manifestPath, original)
+  assert.equal(metadataCalls.length, 0)
+  assert.equal(calls.length, inferenceCalls)
+})
+
+test('missing saved generation IDs remain unknown without metadata lookup or new inference', async t => {
+  const { createRun, approve } = await workspace(t)
+  const state = await createRun('unknown')
+  const approval = approve(state, 'unknown')
+  outcome = 'ambiguous'
+  await dispatchLive(state.directory, state.plan[0].id, approval)
+  const summary = await reconcileLive(state.directory, state.plan[0].id, approval)
+  assert.equal(summary.reconciliation, 'still_unknown')
+  assert.equal(summary.ambiguous, 1)
+  assert.equal(metadataCalls.length, 0)
+  assert.equal(calls.length, 1)
+})
+
+test('a crash publishing reconciliation or its lookup intent fails closed without a second lookup', async t => {
+  for (const [kind, afterWrite] of [['reconciled_verdict', false], ['metadata_lookup_intent', true]]) await t.test(kind, async t => {
+    const { state, approval, id, inferenceCalls, createRun, approve } = await pendingBaseline(t)
+    const failures = afterWrite ? failuresAfterWrite : publicationFailures
+    failures.add(kind)
+    await assert.rejects(reconcileLive(state.directory, id, approval), /Simulated/)
+    const lookups = metadataCalls.length
+    assert.equal(lookups, kind === 'reconciled_verdict' ? 1 : 0)
+    publicationFailures.clear()
+    failuresAfterWrite.clear()
+    const second = await createRun('second')
+    await assert.rejects(dispatchLive(second.directory, second.plan[0].id, approve(second, 'distinct')), /requires reconciliation/)
+    assert.equal((await reconcileLive(state.directory, id, approval)).reconciliation, 'still_unknown')
+    assert.equal(metadataCalls.length, lookups)
+    assert.equal(calls.length, inferenceCalls)
+  })
+})
+
+test('interrupted global resolution publication resumes from the durable reconciliation without another lookup', async t => {
+  for (const afterWrite of [false, true]) await t.test(`after durable publication: ${afterWrite}`, async t => {
+    const { state, approval, id, inferenceCalls } = await pendingBaseline(t)
+    const failures = afterWrite ? failuresAfterWrite : publicationFailures
+    failures.add('live_dispatch_resolution')
+    await assert.rejects(reconcileLive(state.directory, id, approval), /Simulated/)
+    assert.equal(metadataCalls.length, 1)
+    assert.equal(unresolvedLiveDispatches(openLiveLedger(globalDirectory)).length, afterWrite ? 0 : 1)
+    assert.ok(artifacts.exists(join(globalDirectory, 'unresolved.json')))
+    failures.clear()
+    assert.equal((await reconcileLive(state.directory, id, approval)).reconciliation, 'resolved')
+    assert.equal(metadataCalls.length, 1)
+    assert.equal(calls.length, inferenceCalls)
+  })
+})
+
+test('a known durable terminal finishes its global ledger publication without metadata or inference', async t => {
+  const { createRun, approve } = await workspace(t)
+  const state = await createRun('known')
+  const approval = approve(state, 'known')
+  publicationFailures.add('live_dispatch_resolution')
+  await assert.rejects(dispatchLive(state.directory, state.plan[0].id, approval), /Simulated publication failure/)
+  publicationFailures.clear()
+  assert.equal((await reconcileLive(state.directory, state.plan[0].id, approval)).reconciliation, 'resolved')
+  assert.equal(unresolvedLiveDispatches(openLiveLedger(globalDirectory)).length, 0)
+  assert.equal(metadataCalls.length, 0)
+  assert.equal(calls.length, 1)
+})
+
+test('a terminal seal failure preserves the saved generation for metadata-only reconciliation', async t => {
+  const { createRun, approve } = await workspace(t)
+  const state = await createRun('terminal-interrupted')
+  const approval = approve(state, 'terminal-interrupted')
+  const item = state.plan.find(row => row.adapter.startsWith('baseline_'))
+  for (const preceding of state.plan.slice(0, state.plan.indexOf(item))) await dispatchLive(state.directory, preceding.id, approval)
+  omitProvider = true
+  publicationFailures.add('sealed_verdict')
+  await assert.rejects(dispatchLive(state.directory, item.id, approval), /Simulated publication failure/)
+  const before = calls.length
+  publicationFailures.clear()
+  assert.equal((await reconcileLive(state.directory, item.id, approval)).reconciliation, 'resolved')
+  assert.equal(metadataCalls.length, 1)
+  assert.equal(calls.length, before)
+  assert.equal(unresolvedLiveDispatches(openLiveLedger(globalDirectory)).length, 0)
 })

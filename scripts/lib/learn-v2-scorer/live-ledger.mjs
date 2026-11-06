@@ -8,7 +8,22 @@ const digest = value => typeof value === 'string' && /^sha256:[a-f0-9]{64}$/.tes
 const integer = value => Number.isSafeInteger(value) && value >= 0
 const approvalName = value => `approval-${value.slice(7)}.json`
 const reservationName = value => `reservation-${hash({ approvalDigest: value.approvalDigest, id: value.id }).slice(7)}.json`
+const resolutionName = value => reservationName(value).replace('reservation-', 'resolution-')
 const sameRun = (claim, state) => claim.directory === state.directory && claim.pinsDigest === state.pinsDigest
+
+export function liveOutcome(result) {
+  if (['ambiguous', 'outcome_unknown', 'identity_unavailable', 'identity_mismatch', 'upstream_mismatch', 'unexpected_routing', 'nonterminal_output', 'lease_expired'].includes(result.status)) return 'still_unknown'
+  return result.status === 'valid' ? 'resolved' : 'failed'
+}
+
+export function metadataOutcome(result) {
+  const execution = result?.execution
+  const metadata = execution?.metadata
+  if (!metadata || execution.receipt.observedIdentity.status !== 'verified' || result.status === 'upstream_mismatch'
+    || metadata.generationId !== execution.terminal.generationId || metadata.returnedModel === null || metadata.servingProvider === null) return 'still_unknown'
+  if (metadata.cancelled === true || ['content_filter', 'length', 'error'].includes(metadata.finishReason)) return 'failed'
+  return result.status === 'valid' && metadata.finishReason === 'stop' && metadata.cancelled === false ? 'resolved' : 'still_unknown'
+}
 
 function usage(ledger, state, approvalDigest, adapter) {
   let approved = 0
@@ -28,9 +43,9 @@ function usage(ledger, state, approvalDigest, adapter) {
 // transport. Entries are immutable, fsynced, exclusively published artifacts;
 // every reservation remains charged, including unknown post-dispatch outcomes.
 export function openLiveLedger(directory) {
-  const ledger = { directory, approvals: new Map(), reservations: new Map() }
+  const ledger = { directory, approvals: new Map(), reservations: new Map(), resolutions: new Map() }
   const names = readdirSync(directory).filter(name => !['.learn-v2-scorer-global.lock', 'unresolved.json'].includes(name))
-  for (const name of names) assert.match(name, /^(?:approval|reservation)-[a-f0-9]{64}\.json$/, 'Interrupted or unknown global ledger entry requires reconciliation')
+  for (const name of names) assert.match(name, /^(?:approval|reservation|resolution)-[a-f0-9]{64}\.json$/, 'Interrupted or unknown global ledger entry requires reconciliation')
   for (const name of names.filter(name => name.startsWith('approval-'))) {
     const raw = readJson(join(directory, name))
     const entry = unseal(directory, name, 'live_approval_consumption', raw.pinsDigest)
@@ -61,6 +76,20 @@ export function openLiveLedger(directory) {
     ownedIds.add(ownedId)
     ledger.reservations.set(name, reservation)
   }
+  for (const name of names.filter(name => name.startsWith('resolution-'))) {
+    const raw = readJson(join(directory, name))
+    const entry = unseal(directory, name, 'live_dispatch_resolution', raw.pinsDigest)
+    const resolution = entry.payload
+    exactKeys(resolution, ['approvalDigest', 'id', 'intentDigest', 'recordName', 'recordDigest', 'status'])
+    const reservation = ledger.reservations.get(reservationName(resolution))
+    assert.ok(reservation, 'Global resolution has no dispatch reservation')
+    const claim = ledger.approvals.get(reservation.approvalDigest)
+    assert.equal(entry.pinsDigest, claim.pinsDigest)
+    assert.equal(resolution.intentDigest, reservation.intentDigest)
+    assert.equal(name, resolutionName(reservation))
+    verifyResolution(claim.directory, claim.pinsDigest, resolution)
+    ledger.resolutions.set(reservationName(reservation), resolution)
+  }
   for (const claim of ledger.approvals.values()) {
     const siblings = [...ledger.approvals.values()].filter(other => other.directory === claim.directory)
     assert.ok(siblings.every(other => other.pinsDigest === claim.pinsDigest && other.budgetMicroUsd === claim.budgetMicroUsd), 'Global run pins changed')
@@ -71,6 +100,36 @@ export function openLiveLedger(directory) {
     usage(ledger, ledger.approvals.get(reservation.approvalDigest), reservation.approvalDigest, reservation).dispatches <= LIMITS.dispatchesPerModelOrConfiguration,
     'Global per-model/configuration dispatch ceiling exceeded')
   return ledger
+}
+
+function verifyResolution(directory, pinsDigest, resolution) {
+  assert.ok(['resolved', 'failed', 'still_unknown'].includes(resolution.status))
+  const reconciled = resolution.recordName === `${resolution.id}.reconciled.json`
+  assert.ok(reconciled || resolution.recordName === `${resolution.id}.terminal.json`)
+  const record = unseal(directory, resolution.recordName, reconciled ? 'reconciled_verdict' : 'sealed_verdict', pinsDigest)
+  assert.equal(record.digest, resolution.recordDigest)
+  assert.equal(record.payload.intentDigest, resolution.intentDigest)
+  const status = reconciled ? metadataOutcome(record.payload.result) : liveOutcome(record.payload.result)
+  assert.equal(resolution.status, status, 'Global resolution differs from its durable terminal record')
+  if (reconciled) assert.equal(record.payload.status, status)
+}
+
+export function unresolvedLiveDispatches(ledger) {
+  // A reservation is also the durable global dispatch intent. Absence of a
+  // matching durable resolution blocks every run, including distinct approvals.
+  return [...ledger.reservations].filter(([name]) => !['resolved', 'failed'].includes(ledger.resolutions.get(name)?.status)).map(([, reservation]) => reservation)
+}
+
+export function recordLiveResolution(ledger, state, intent, record, reconciled = false) {
+  const reservation = ledger.reservations.get(reservationName({ approvalDigest: intent.payload.approval.approvalDigest, id: intent.payload.id }))
+  assert.ok(reservation && sameRun(ledger.approvals.get(reservation.approvalDigest), state))
+  const resolution = { approvalDigest: reservation.approvalDigest, id: reservation.id, intentDigest: intent.digest,
+    recordName: `${reservation.id}.${reconciled ? 'reconciled' : 'terminal'}.json`, recordDigest: record.digest,
+    status: reconciled ? metadataOutcome(record.payload.result) : liveOutcome(record.payload.result) }
+  verifyResolution(state.directory, state.pinsDigest, resolution)
+  if (!reconciled && resolution.status === 'still_unknown') return
+  seal(ledger.directory, resolutionName(reservation), 'live_dispatch_resolution', state.pinsDigest, resolution)
+  ledger.resolutions.set(reservationName(reservation), resolution)
 }
 
 export function claimLiveApproval(ledger, state, approval) {
@@ -120,8 +179,8 @@ export function reserveLiveDispatch(ledger, state, adapter, intent) {
     && reservation.id === intent.id), 'Global reservation forbids redispatch')
   const reservation = reservationFor(state, adapter, intent)
   const name = reservationName(reservation)
-  // Charge before the local intent and before transport. A crash between the
-  // two records fails verification on restart; it can never authorize a retry.
+  // Charge and record global uncertainty before the local intent or transport.
+  // Only a durable terminal/resolution clears this intent; lock cleanup cannot.
   seal(ledger.directory, name, 'live_dispatch_reservation', state.pinsDigest, reservation)
   ledger.reservations.set(name, reservation)
   return true

@@ -96,12 +96,50 @@ test('full CLI capture: 768 blind dispatches, complete core denominators, exact 
     assert.equal(value.criterionDisagreements, 0)
   }
   const corpus = await corpusInputs()
+  const manifest = readJson(join(directory, 'manifest.json')).payload
+  const rows = [...corpus.corpus.core, ...corpus.corpus.controls, ...corpus.corpus.repeats, ...corpus.corpus.diagnostics]
+  const projections = new Map(manifest.adapters.flatMap(adapter => rows.map(row => {
+    const packet = corpus.sources.packets.find(packet => packet.id === row.packetId)
+    const form = packet.forms.find(form => form.id === row.formId)
+    const id = `item_${hash(`${seed}/${adapter.id}/${row.id}`).slice(7, 39)}`
+    const atoms = packet.atoms.map((atom, index) => ({ id: `k${index + 1}`, sourceClaimId: `c${index + 1}`,
+      description: atom.description, kind: atom.kind, query: atom.query,
+      ...(atom.unit ? { unit: atom.unit, unitAliases: atom.unitAliases } : {}) }))
+    const excerpt = { source: { context: packet.source.context, records: packet.source.records,
+      claims: Object.fromEntries(atoms.map(atom => [atom.sourceClaimId, { description: atom.description, kind: atom.kind, query: atom.query }])) },
+    key: { version: packet.keyVersion, atoms } }
+    return [id, { role: adapter.role, excerpt, input: {
+      rubric: { version: packet.rubricVersion, criteria: packet.atoms.map((atom, index) => ({
+        key: `k${index + 1}`, description: atom.description, weightPercent: atom.weight })) },
+      challenge: form.question,
+      evidence: [{ alias: id, claim: 'Use only this public synthetic source and executable answer key.', excerpt: canonical(excerpt) }],
+      learnerResponse: row.response,
+    } }]
+  })))
   const ids = new Set()
   const threshold = readJson(join(directory, 'thresholds.json'))
   for (const name of names(directory, '.intent.json')) {
     const { payload } = readJson(join(directory, name))
     ids.add(payload.id)
     const body = payload.request.body
+    const request = JSON.parse(body)
+    const expected = projections.get(payload.id)
+    assert.ok(expected, 'Every dispatch must map to one permitted source projection')
+    let content
+    if (expected.role === 'gemini') {
+      assert.deepEqual(request.input.map(message => message.role), ['user'])
+      assert.equal(request.input[0].content.length, 1)
+      assert.equal(request.input[0].content[0].type, 'text')
+      content = request.input[0].content[0].text
+    }
+    else {
+      assert.deepEqual(request.messages.map(message => message.role), expected.role === 'baseline' ? ['system', 'user'] : ['user'])
+      content = request.messages.find(message => message.role === 'user').content
+    }
+    const decoded = JSON.parse(content)
+    assert.deepEqual(decoded, expected.input, `${expected.role}: decoded message must contain exactly the permitted projection`)
+    assert.deepEqual(JSON.parse(decoded.evidence[0].excerpt), expected.excerpt, 'Decode the nested source/key payload too')
+    assert.doesNotMatch(canonical(decoded), /"(?:seedClass|split|expected|referencePass|essential|packetId|formId|learnerId|condition|timestamp|scorePercent|repeatOf|proof)"\s*:/)
     assert.doesNotMatch(body, /"(?:seedClass|split|expected|referencePass|essential|packetId|formId|learnerId|condition|timestamp|scorePercent|repeatOf|proof)"\s*:/)
     for (const row of corpus.corpus.core) assert.ok(!body.includes(row.id))
     assert.doesNotMatch(body, /public-synthetic:|source\.v1|sourceSha256/)
@@ -366,6 +404,14 @@ test('exclusive locks refuse overlapping dispatchers and preserve an unknown cra
   await first
   writeFileSync(join(directory, 'global.lock'), 'unknown old process\n')
   assert.throws(() => exclusiveLock(directory, 'global.lock', () => {}), /reconciliation/)
+})
+
+test('the reconcile CLI refuses an offline run without inference or metadata access', t => {
+  const directory = join(workspace(t), 'run')
+  init(directory)
+  cli('reconcile', directory, ['--id', 'item_unrecorded'], 1)
+  assert.equal(names(directory, '.intent.json').length, 0)
+  assert.equal(names(directory, '.reconciled.json').length, 0)
 })
 
 test('the global approval ledger exit regressions use isolated mock adapters with network denied', () => {

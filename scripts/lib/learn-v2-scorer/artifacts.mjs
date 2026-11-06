@@ -81,6 +81,13 @@ export function unseal(directory, name, kind, pinsDigest) {
   return value
 }
 
+export function removeSealed(directory, name, kind, pinsDigest) {
+  assert.match(name, /^[a-zA-Z0-9._-]+\.json$/)
+  unseal(directory, name, kind, pinsDigest)
+  unlinkSync(join(directory, name))
+  syncDirectory(directory)
+}
+
 export function exclusiveLock(directory, name, operation) {
   const file = join(directory, name)
   let fd
@@ -88,6 +95,8 @@ export function exclusiveLock(directory, name, operation) {
   catch (error) { if (error.code === 'EEXIST') throw new Error('Harness lock requires owner reconciliation; never steal a lock', { cause: error }); throw error }
   writeFileSync(fd, `${process.pid}\n`)
   fsyncSync(fd)
+  // This releases only the transient mutex. Global reservation intents persist
+  // independently until their terminal/resolution records are durably sealed.
   return Promise.resolve().then(operation).finally(() => { closeSync(fd); unlinkSync(file); syncDirectory(directory) })
 }
 
