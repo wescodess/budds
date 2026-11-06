@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 import { convexTest } from 'convex-test'
 import { afterAll, beforeAll, expect, test } from 'vitest'
 import { api, internal } from './_generated/api'
@@ -146,7 +147,7 @@ test.each(['revised', 'purged'] as const)(
     const { t, owner, ids, threadId } = await readyMissionFixture()
     const first = await owner.mutation(api.learnAdaptiveExperiment.assignForThread, { threadId })
     expect(first).toMatchObject({ kind: 'assigned', eligibility: 'eligible', cohort: expect.stringMatching(/^(adaptive|fixed)$/) })
-    const originalAssignments = await owner.query(api.dataExport.getUserDataPage, {
+    const originalAssignments = await owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(owner),
       collection: 'learnAdaptiveExperimentAssignments', paginationOpts: { numItems: 8, cursor: null },
     })
     expect(originalAssignments.page).toHaveLength(1)
@@ -157,7 +158,7 @@ test.each(['revised', 'purged'] as const)(
         ? { recordRevision: 2 }
         : { evidencePurgedAt: Date.now() })
     })
-    const threadExport = await owner.query(api.dataExport.getUserDataPage, {
+    const threadExport = await owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(owner),
       collection: 'learningThreads', paginationOpts: { numItems: 8, cursor: null },
     })
     expect(threadExport.page).toEqual([expect.objectContaining({
@@ -169,14 +170,14 @@ test.each(['revised', 'purged'] as const)(
     }
     expect(await owner.mutation(api.learnAdaptiveExperiment.assignForThread, { threadId })).toEqual(excluded)
     expect(await owner.mutation(api.learnAdaptiveExperiment.assignForThread, { threadId })).toEqual(excluded)
-    const assignmentsAfter = await owner.query(api.dataExport.getUserDataPage, {
+    const assignmentsAfter = await owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(owner),
       collection: 'learnAdaptiveExperimentAssignments', paginationOpts: { numItems: 8, cursor: null },
     })
     expect(assignmentsAfter.page).toEqual(originalAssignments.page)
     expect(await owner.query(api.learnAdaptiveExperiment.getMyStatus, { threadId }))
       .toMatchObject({ exposure: 'off', assignment: first })
 
-    const events = await owner.query(api.dataExport.getUserDataPage, {
+    const events = await owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(owner),
       collection: 'learnActivityEvents', paginationOpts: { numItems: 8, cursor: null },
     })
     expect(events.isDone).toBe(true)
@@ -196,7 +197,7 @@ test.each(['revised', 'purged'] as const)(
       }),
     ])
     expect(JSON.stringify(events.page)).not.toMatch(/semanticKey|dedupeKeyHash|tokenIdentifier|sourcePayload|providerPayload|Gravity attracts masses/)
-    const otherEvents = await t.withIdentity({ tokenIdentifier: OTHER }).query(api.dataExport.getUserDataPage, {
+    const otherEvents = await t.withIdentity({ tokenIdentifier: OTHER }).query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(t.withIdentity({ tokenIdentifier: OTHER })),
       collection: 'learnActivityEvents', paginationOpts: { numItems: 8, cursor: null },
     })
     expect(otherEvents.page).toEqual([])

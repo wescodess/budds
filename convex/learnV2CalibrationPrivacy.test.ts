@@ -132,3 +132,37 @@ test('writes only canonical digests and compares legacy command fingerprints in 
   await t.run(ctx => ctx.db.patch(saved.attemptId, { requestFingerprint: JSON.stringify({ command: 'recordCalibrationAttempt', ...commit }) }))
   await expect(t.mutation(internal.learnV2MapCalibration.recordCalibrationAttempt, commit)).resolves.toMatchObject({ attemptId: saved.attemptId, replayed: true })
 })
+
+test.each(['purge_first', 'score_first', 'concurrent'] as const)('source purge versus score commit: %s', async ordering => {
+  const { t, f, userId, request } = await calibrationFixture()
+  const commit = { ...request, serverScorePercent: 80, rubricVersion: 'rubric.v1', rubricSnapshot: 'private-score-rubric' }
+  const score = () => t.mutation(internal.learnV2MapCalibration.recordCalibrationAttempt, commit)
+  const purge = () => t.mutation(internal.learnV2Retention.purgeSourceEvidence, { userId, sourceIdentityId: f.sourceIdentityId })
+  let scored = false
+  if (ordering === 'purge_first') {
+    await purge()
+    await expect(score()).rejects.toThrow(/evidence.*unavailable/i)
+  }
+  else if (ordering === 'score_first') {
+    await score()
+    scored = true
+    await purge()
+  }
+  else {
+    const [result, revocation] = await Promise.allSettled([score(), purge()])
+    expect(revocation.status).toBe('fulfilled')
+    scored = result.status === 'fulfilled'
+    if (result.status === 'rejected') expect(String(result.reason)).toMatch(/evidence.*unavailable/i)
+  }
+  await t.finishAllScheduledFunctions(vi.runAllTimers)
+  const attempts = await t.run(ctx => ctx.db.query('masteryAttempts')
+    .withIndex('by_userId_and_objectiveId_and_attemptedAt', q => q.eq('userId', userId).eq('objectiveId', request.objectiveId)).take(8))
+  expect(attempts).toHaveLength(scored ? 1 : 0)
+  if (scored) {
+    expect(attempts[0]).toMatchObject({ serverScorePercent: 80, confidence: 3, usedHint: false, usedReveal: false, attemptedAt: expect.any(Number) })
+    expect(attempts[0]?.requestFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/)
+    expect(attempts[0]).not.toHaveProperty('response')
+    expect(attempts[0]).not.toHaveProperty('rubricSnapshot')
+  }
+  await expect(score()).rejects.toThrow(/evidence.*unavailable/i)
+})

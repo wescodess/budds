@@ -129,6 +129,16 @@ export default defineEventHandler(async (event) => {
   const client = new ConvexHttpClient(convexUrl)
   client.setAuth(token)
 
+  let authorization = await client.mutation(api.dataExport.authorizePersonalExport, {})
+  while (!authorization.done) {
+    const next = await client.mutation(api.dataExport.authorizePersonalExport, {
+      authorizationId: authorization.authorizationId, cursor: authorization.cursor ?? undefined,
+    })
+    if (!next.done && next.cursor === authorization.cursor) throw new Error('Export authorization did not advance')
+    authorization = next
+  }
+  const authorizationId = authorization.authorizationId
+
   let metadata
   try {
     metadata = await client.query(api.dataExport.getExportMetadata, {})
@@ -178,6 +188,7 @@ export default defineEventHandler(async (event) => {
     while (true) {
       const result = await client.query(api.dataExport.getUserDataPage, {
         collection,
+        authorizationId,
         paginationOpts: { cursor, numItems: EXPORT_PAGE_SIZE },
       }) as ExportPage
 
@@ -196,6 +207,7 @@ export default defineEventHandler(async (event) => {
       while (true) {
         const result = await client.query(api.dataExport.getAttemptAnswersPage, {
           attemptId: attempt._id as Id<'quizAttempts'>,
+          authorizationId,
           paginationOpts: { cursor, numItems: EXPORT_PAGE_SIZE },
         }) as ExportPage | null
         if (!result) break
@@ -216,6 +228,7 @@ export default defineEventHandler(async (event) => {
       while (true) {
         const result = await client.query(api.dataExport.getCourseSourceDocsPage, {
           courseId: course._id as Id<'courses'>,
+          authorizationId,
           paginationOpts: { cursor, numItems: EXPORT_PAGE_SIZE },
         }) as ExportPage | null
         if (!result) break
@@ -267,7 +280,7 @@ export default defineEventHandler(async (event) => {
     let urlInfo: { url: string | null, filename: string } | null
 
     try {
-      urlInfo = await client.query(api.dataExport.getDocumentDownloadUrl, { documentId })
+      urlInfo = await client.query(api.dataExport.getDocumentDownloadUrl, { documentId, authorizationId })
     }
     catch {
       unresolvedDocuments.push(String(documentId))
@@ -326,7 +339,11 @@ export default defineEventHandler(async (event) => {
       }
 
       await addJsonValue('manifest.json', {
-        schemaVersion: 10,
+        schemaVersion: 11,
+        assessmentDisclosure: {
+          version: 'learn-v2.assessment-disclosure.v1',
+          omittedCategories: ['private_scoring', 'unseen_forms', 'private_evidence', 'provider_payloads'],
+        },
         measurementStorage: {
           version: LEARN_MEASUREMENT_STORAGE_VERSION,
           policies: LEARN_MEASUREMENT_STORAGE_MANIFEST.map(entry => ({ collection: entry.table, projection: entry.export })),

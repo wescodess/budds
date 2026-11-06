@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 import { convexTest } from 'convex-test'
 import { afterAll, beforeEach, expect, test } from 'vitest'
 import { api, internal } from './_generated/api'
@@ -87,8 +88,8 @@ test.each(['adaptive', 'v2', 'product', 'anonymous'] as const)('%s denial return
   })
   const args = { ...ids, activityId: 'original-scoring-activity', expectedSessionRevision: 1, expectedContentRevision: 1,
     expectedPlanRecordRevision: 1, expectedBlueprintRecordRevision: 1, response: 'Preserve my answer', confidence: 4, idempotencyKey: 'rollback-scoring-original' }
-  const exportedJobs = () => owner.query(api.dataExport.getUserDataPage, { collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })
-  const exportedAttempts = () => owner.query(api.dataExport.getUserDataPage, { collection: 'masteryAttempts', paginationOpts: { cursor: null, numItems: 8 } })
+  const exportedJobs = async () => owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(owner), collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })
+  const exportedAttempts = async () => owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(owner), collection: 'masteryAttempts', paginationOpts: { cursor: null, numItems: 8 } })
   const beforeJobs = await exportedJobs()
   const beforeAttempts = await exportedAttempts()
   if (gate === 'adaptive') await owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: false })
@@ -151,7 +152,7 @@ test.each(['adaptive', 'v2', 'product'] as const)('%s rollback preserves saved w
       const rows: unknown[] = []
       let cursor: string | null = null
       for (;;) {
-        const result: { page: unknown[], isDone: boolean, continueCursor: string } = await actor.query(api.dataExport.getUserDataPage, { collection, paginationOpts: { cursor, numItems: 8 } })
+        const result: { page: unknown[], isDone: boolean, continueCursor: string } = await actor.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(actor), collection, paginationOpts: { cursor, numItems: 8 } })
         rows.push(...result.page)
         if (result.isDone) return { collection, rows }
         cursor = result.continueCursor

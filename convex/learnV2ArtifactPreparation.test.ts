@@ -6,6 +6,7 @@ import { api, internal } from './_generated/api'
 import type { Doc } from './_generated/dataModel'
 import type { MutationCtx } from './_generated/server'
 import schema from './schema'
+import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 import {
   advanceAssessmentCatalogForOwner, classifyPersonalWorkDocumentForOwner, classifyPersonalWorkDocumentForRecord,
   createArtifactLineageReadContext, createArtifactLineagePublicationContext, instructionalReservationSemanticAdapter, isArtifactRegistrationRequired,
@@ -129,8 +130,9 @@ describe('in-transaction artifact preparation', () => {
     expect(state.exposures).toEqual([])
     const resolved = await f.asOwner.run(ctx => resolveArtifactLineageForOwner(ctx, userId, { reference: result.references[0] }))
     expect(resolved).toMatchObject({ status: 'bound', instructionalRegistered: true })
+    const authorizationId = await authorizeExport(f.asOwner)
     for (const collection of ['learnArtifactValidations', 'learnAssessmentCatalogs'] as const) {
-      const exported = await f.asOwner.query(api.dataExport.getUserDataPage, { collection, paginationOpts: { cursor: null, numItems: 8 } })
+      const exported = await f.asOwner.query(api.dataExport.getUserDataPage, { authorizationId, collection, paginationOpts: { cursor: null, numItems: 8 } })
       expect(exported.page).toHaveLength(collection === 'learnArtifactValidations' ? 2 : 1)
       expect(exported.page[0]).not.toHaveProperty('preparation')
       expect(exported.page[0]).not.toHaveProperty('measurementCapability')

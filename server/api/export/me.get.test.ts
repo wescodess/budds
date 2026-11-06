@@ -1,3 +1,4 @@
+import { privacyDigest } from '../../../convex/lib/learnV2ResponsePrivacy'
 import { vi, describe, test, expect, beforeEach } from 'vitest'
 import { unzipSync, strFromU8 } from 'fflate'
 import { convexTest } from 'convex-test'
@@ -39,6 +40,7 @@ vi.stubGlobal('sendStream', async (_event: any, stream: ReadableStream) => {
 })
 vi.stubGlobal('defineEventHandler', (handler: (...args: never[]) => unknown) => handler)
 
+const authorizeExportMock = vi.fn()
 const getExportMetadataMock = vi.fn()
 const getUserDataPageMock = vi.fn()
 const getAttemptAnswersPageMock = vi.fn()
@@ -48,6 +50,7 @@ const getDocumentDownloadUrlMock = vi.fn()
 vi.mock('convex/browser', () => ({
   ConvexHttpClient: class {
     setAuth(_token: string) {}
+    mutation(_fnRef: unknown, args: unknown) { return authorizeExportMock(args) }
     query(_fnRef: unknown, args: unknown) {
       const queryArgs = args as Record<string, unknown>
       if ('collection' in queryArgs) return getUserDataPageMock(queryArgs)
@@ -89,6 +92,7 @@ function makeEvent(token: string | undefined) {
 
 describe('GET /api/export/me', () => {
   beforeEach(() => {
+    authorizeExportMock.mockReset().mockResolvedValue({ authorizationId: 'fixture-export-authorization', done: true, cursor: null })
     getExportMetadataMock.mockReset()
     getUserDataPageMock.mockReset()
     getAttemptAnswersPageMock.mockReset()
@@ -117,6 +121,21 @@ describe('GET /api/export/me', () => {
       const context = deriveLearnAssessmentResponseContext({ contextPins: { ...f.scope.contextPins, contentInputDigest: 'a'.repeat(64) },
         assignment: { status: 'admitted', assignmentId: f.rows.learnMeasurementAssignments, epoch: 'fixture-epoch', flow: 'v2_today' } })
       await ctx.db.replace(f.rows.learnResponses, { ...fields, ...context })
+      const { assessmentOpportunityId: _opportunity, assessmentPins: _pins, scoringBinding: _binding, deliveryGrantId: _grant, ...formativeFields } = fields
+      const payload = { kind: 'text' as const, text: 'retained formative answer' }
+      const payloadDigest = await privacyDigest(payload)
+      const formativeId = await ctx.db.insert('learnResponses', { ...formativeFields, responseSlotId: f.rows.learnResponseSlots, payloadDigest,
+        currentEligibility: 'excluded', validitySnapshot: { ...formativeFields.validitySnapshot, status: 'excluded', measurementEligible: false, masteryEligible: false, exclusionReasons: ['formative'] } })
+      await ctx.db.insert('learnResponseBodies', { ...f.base, learningVoidId: f.learningVoidId, submissionId: formativeId,
+        payload, payloadDigest, payloadBytes: new TextEncoder().encode(JSON.stringify(payload)).byteLength })
+      const evidence = (await ctx.db.get(f.rows.learnResponseEvidenceLinks))!
+      const { _id: _linkId, _creationTime: _linkTime, ...linkFields } = evidence
+      await ctx.db.insert('learnResponseEvidenceLinks', { ...linkFields, submissionId: formativeId })
+      await ctx.db.patch(f.rows.learnResponseSlots, { status: 'accepted', submissionId: formativeId })
+      await ctx.db.insert('masteryAttempts', { userId: identity.tokenIdentifier, objectiveId: f.scope.objectiveId, attemptedAt: 123,
+        idempotencyKey: 'legacy-export-answer', response: 'retained legacy answer', confidence: 4, usedHint: true, usedReveal: false,
+        serverScorePercent: 80, result: 'passed', sourceSnapshotIdsJson: JSON.stringify([f.sourceSnapshotId]),
+        rubricSnapshot: STORAGE_CANARIES.rubric, feedbackProjectionJson: STORAGE_CANARIES.key, contentRevisionPinsJson: STORAGE_CANARIES.locator })
       await ctx.db.patch(f.rows.learnResponseSlots, { confidenceRequested: false })
       await ctx.db.patch(f.rows.learnAssessmentOpportunities, { deliveryPins: { version: LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION, confidenceRequested: true } })
       const target = { responseSlotId: f.rows.learnResponseSlots }
@@ -125,6 +144,7 @@ describe('GET /api/export/me', () => {
         result: { kind: 'terminalized', target, revision: 2, reasonCode: 'cancelled', terminalizedAt: f.base.createdAt } })
     })
     const asUser = t.withIdentity(identity)
+    authorizeExportMock.mockImplementation(args => asUser.mutation(api.dataExport.authorizePersonalExport, args))
     getExportMetadataMock.mockImplementation(() => asUser.query(api.dataExport.getExportMetadata, {}))
     getUserDataPageMock.mockImplementation(args => asUser.query(api.dataExport.getUserDataPage, args))
     getAttemptAnswersPageMock.mockImplementation(args => asUser.query(api.dataExport.getAttemptAnswersPage, args))
@@ -148,14 +168,20 @@ describe('GET /api/export/me', () => {
         else expect(serialized).not.toContain(canary)
       }
     }
+    const answers = strFromU8(entries['learnResponseBodies.json']!)
+    expect(answers).toContain(STORAGE_CANARIES.answer)
+    expect(answers).toContain('retained formative answer')
+    expect(strFromU8(entries['masteryAttempts.json']!)).toContain('retained legacy answer')
     const cells = JSON.parse(strFromU8(entries['learnMeasurementReportCells.json']!))
     expect(cells).toMatchObject([{ reportVersion: LEARN_V2_MEASUREMENT_REPORT_VERSION }])
     expect(cells[0]).not.toHaveProperty('legacyIndependentAudit')
     const reportRows = JSON.parse(strFromU8(entries['learnMeasurementReportRows.json']!))
     expect(reportRows).toMatchObject([{ sourceVersion: LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION }])
     expect(reportRows[0]).not.toHaveProperty('snapshot')
-    expect(JSON.parse(strFromU8(entries['learnResponses.json']!))).toMatchObject([{ flow: 'today',
-      measurementContext: { status: 'admitted', assignmentId: f.rows.learnMeasurementAssignments, baselineEpoch: 'fixture-epoch' } }])
+    const responseRows = JSON.parse(strFromU8(entries['learnResponses.json']!)) as Array<Record<string, unknown>>
+    expect(responseRows.find(row => row._id === f.rows.learnResponses)).toMatchObject({ flow: 'today',
+      measurementContext: { status: 'admitted', assignmentId: f.rows.learnMeasurementAssignments, baselineEpoch: 'fixture-epoch' } })
+    expect(responseRows.find(row => row.responseSlotId === f.rows.learnResponseSlots)).toMatchObject({ currentEligibility: 'excluded', validity: { measurementEligible: false, exclusionReasons: ['formative'] } })
     expect(JSON.parse(strFromU8(entries['learnResponseSlots.json']!))).toMatchObject([{ confidenceRequested: false }])
     expect(JSON.parse(strFromU8(entries['learnAssessmentOpportunities.json']!))).toMatchObject([{ deliveryPins: { confidenceRequested: true } }])
     const terminalized = JSON.parse(strFromU8(entries['learnResponseCommandReceipts.json']!)).find((row: { commandVersion: string }) => row.commandVersion === LEARN_V2_RESPONSE_TERMINALIZATION_VERSION)
@@ -302,7 +328,7 @@ describe('GET /api/export/me', () => {
     )
 
     const manifest = JSON.parse(strFromU8(entries['manifest.json']!))
-    expect(manifest.schemaVersion).toBe(10)
+    expect(manifest.schemaVersion).toBe(11)
     expect(manifest.userId).toBe('tok|user1')
     expect(manifest.counts.documents).toBe(1)
     expect(manifest.counts.learnFolderSourceManifests).toBe(1)
