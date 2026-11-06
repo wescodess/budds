@@ -16,7 +16,7 @@ type Entry = {
   table: string
   parentField?: string
   parentIndex?: string
-  retention: 'owner_inventory' | 'assessment_bank' | 'response_history' | 'response_body' | 'response_receipt' | 'report_source' | 'report_snapshot' | 'viewer_grant'
+  retention: 'artifact_lineage' | 'owner_inventory' | 'assessment_bank' | 'response_history' | 'response_body' | 'response_receipt' | 'report_source' | 'report_snapshot' | 'viewer_grant'
   export: 'metadata_only' | 'owner_response' | 'withheld'
   voidDeletion: 'delete' | 'detach' | 'preserve'
   threadDeletion: 'delete_standalone' | 'detach' | 'preserve'
@@ -26,6 +26,11 @@ type Entry = {
 // Child-first order also defines bounded account deletion. Exposure and case
 // identities survive aggregate deletion so deleting a Void cannot reset novelty.
 export const LEARN_MEASUREMENT_STORAGE_MANIFEST = [
+  { table: 'learnArtifactSourceLinks', parentField: 'lineageId', parentIndex: 'by_userId_and_lineageId', retention: 'artifact_lineage', export: 'metadata_only', voidDeletion: 'preserve', threadDeletion: 'preserve', indexes: [['userId', 'lineageId'], ['userId', 'dependency.sourceSnapshotId', 'invalidatedAt'], ['userId', 'dependency.sourceExcerptId', 'invalidatedAt'], ['userId', 'dependency.documentId', 'invalidatedAt'], ['userId', 'dependency.folderId', 'invalidatedAt']] },
+  { table: 'learnArtifactCaseBindings', parentField: 'lineageId', parentIndex: 'by_userId_and_lineageId', retention: 'artifact_lineage', export: 'metadata_only', voidDeletion: 'preserve', threadDeletion: 'preserve', indexes: [['userId', 'lineageId'], ['userId', 'caseId']] },
+  { table: 'learnArtifactLineageOrigins', parentField: 'lineageId', parentIndex: 'by_userId_and_lineageId', retention: 'artifact_lineage', export: 'metadata_only', voidDeletion: 'preserve', threadDeletion: 'preserve', indexes: [['userId', 'lineageId'], ['userId', 'originLineageId']] },
+  { table: 'learnArtifactValidations', parentField: 'lineageId', parentIndex: 'by_userId_and_lineageId', retention: 'artifact_lineage', export: 'metadata_only', voidDeletion: 'preserve', threadDeletion: 'preserve', indexes: [['userId', 'lineageId']] },
+  { table: 'learnArtifactLineages', retention: 'artifact_lineage', export: 'metadata_only', voidDeletion: 'preserve', threadDeletion: 'preserve', indexes: [['userId', 'artifact.kind', 'artifact.id', 'key', 'revision'], ['artifact.kind', 'artifact.id', 'key', 'revision', 'nextId']] },
   { table: 'learnMeasurementReportCells', parentField: 'reportRunId', parentIndex: 'by_userId_and_reportRunId_and_sequence', retention: 'report_snapshot', export: 'metadata_only', voidDeletion: 'preserve', threadDeletion: 'preserve', indexes: [['userId', 'reportRunId', 'sequence'], ['reportRunId', 'sequence'], ['userId', 'reportRunId', 'cellKey']] },
   { table: 'learnMeasurementReportRows', parentField: 'reportRunId', parentIndex: 'by_reportRunId_and_sequence', retention: 'report_snapshot', export: 'metadata_only', voidDeletion: 'delete', threadDeletion: 'preserve', indexes: [['reportRunId', 'sequence'], ['userId', 'reportRunId', 'sequence'], ['userId', 'learningVoidId'], ['userId', 'assignmentId', 'horizonDays'], ['userId', 'invalidatedAt']] },
   { table: 'learnMeasurementReportRuns', retention: 'report_snapshot', export: 'metadata_only', voidDeletion: 'preserve', threadDeletion: 'preserve', indexes: [['userId', 'status', 'createdAt'], ['userId', 'epoch', 'cutoff']] },
@@ -59,6 +64,10 @@ export function isLearnMeasurementCollection(value: string): value is LearnMeasu
 }
 
 export const LEARN_MEASUREMENT_SOURCE_REGISTRATIONS = [
+  { table: 'learnArtifactSourceLinks', field: 'dependency.sourceSnapshotId', index: 'by_userId_and_dependency_sourceSnapshotId_and_invalidatedAt' },
+  { table: 'learnArtifactSourceLinks', field: 'dependency.sourceExcerptId', index: 'by_userId_and_dependency_sourceExcerptId_and_invalidatedAt' },
+  { table: 'learnArtifactSourceLinks', field: 'dependency.documentId', index: 'by_userId_and_dependency_documentId_and_invalidatedAt' },
+  { table: 'learnArtifactSourceLinks', field: 'dependency.folderId', index: 'by_userId_and_dependency_folderId_and_invalidatedAt' },
   { table: 'learnMeasurementSupports', field: 'sourceSnapshotId', index: 'by_userId_and_sourceSnapshotId_and_invalidatedAt' },
   { table: 'learnMeasurementSupports', field: 'sourceExcerptId', index: 'by_userId_and_sourceExcerptId_and_invalidatedAt' },
   { table: 'learnResponseEvidenceLinks', field: 'dependency.sourceSnapshotId', index: 'by_userId_and_dependency_sourceSnapshotId_and_invalidatedAt' },

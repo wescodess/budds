@@ -118,6 +118,7 @@ export const assessmentCatalogFields = {
 export const assessmentCaseFields = {
   ...base, caseKey: v.string(), scenarioFingerprint: v.string(), solutionFingerprint: v.string(),
   identityPolicyVersion: v.string(), identityValidationId: v.optional(v.id('learnMeasurementValidations')),
+  artifactIdentityValidationId: v.optional(v.id('learnArtifactValidations')),
   usageClass: v.union(v.literal('instructional'), v.literal('measurement_reserved'), v.literal('unknown')),
   reservedAt: v.optional(v.number()),
 }
@@ -154,6 +155,7 @@ export const measurementScoringSpecFields = {
 export const assessmentCaseValidator = v.union(
   v.object({ ...assessmentCaseFields, usageClass: v.literal('unknown') }),
   v.object({ ...assessmentCaseFields, usageClass: v.union(v.literal('instructional'), v.literal('measurement_reserved')), identityValidationId: v.id('learnMeasurementValidations') }),
+  v.object({ ...assessmentCaseFields, usageClass: v.literal('instructional'), artifactIdentityValidationId: v.id('learnArtifactValidations') }),
 )
 export const measurementFamilyValidator = v.union(
   v.object({ ...measurementFamilyFields, status: v.union(v.literal('quarantined'), v.literal('retired')) }),

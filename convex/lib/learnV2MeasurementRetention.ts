@@ -14,6 +14,14 @@ type Source = import('convex/values').Infer<typeof measurementSourceValidator>
 type Reference = { collection: LearnMeasurementCollection, id: Id<LearnMeasurementCollection> }
 
 export async function readMeasurementSourceDescendants(ctx: QueryCtx | MutationCtx, userId: string, source: Source): Promise<Reference[]> {
+  const artifacts = source.kind === 'snapshot'
+    ? await ctx.db.query('learnArtifactSourceLinks').withIndex('by_userId_and_dependency_sourceSnapshotId_and_invalidatedAt', q => q.eq('userId', userId).eq('dependency.sourceSnapshotId', source.id).eq('invalidatedAt', undefined)).take(BATCH_SIZE)
+    : source.kind === 'excerpt'
+      ? await ctx.db.query('learnArtifactSourceLinks').withIndex('by_userId_and_dependency_sourceExcerptId_and_invalidatedAt', q => q.eq('userId', userId).eq('dependency.sourceExcerptId', source.id).eq('invalidatedAt', undefined)).take(BATCH_SIZE)
+      : source.kind === 'document'
+        ? await ctx.db.query('learnArtifactSourceLinks').withIndex('by_userId_and_dependency_documentId_and_invalidatedAt', q => q.eq('userId', userId).eq('dependency.documentId', source.id).eq('invalidatedAt', undefined)).take(BATCH_SIZE)
+        : await ctx.db.query('learnArtifactSourceLinks').withIndex('by_userId_and_dependency_folderId_and_invalidatedAt', q => q.eq('userId', userId).eq('dependency.folderId', source.id).eq('invalidatedAt', undefined)).take(BATCH_SIZE)
+  if (artifacts.length) return artifacts.map(row => ({ collection: 'learnArtifactSourceLinks', id: row._id }))
   const supports = source.kind === 'snapshot'
     ? await ctx.db.query('learnMeasurementSupports').withIndex('by_userId_and_sourceSnapshotId_and_invalidatedAt', q => q.eq('userId', userId).eq('sourceSnapshotId', source.id).eq('invalidatedAt', undefined)).take(BATCH_SIZE)
     : source.kind === 'excerpt'
@@ -64,7 +72,14 @@ export async function invalidateMeasurementSourceBatch(ctx: MutationCtx, userId:
   if (await invalidateMeasurementReportRowsBatch(ctx, userId)) return true
   const references = await readMeasurementSourceDescendants(ctx, userId, source)
   for (const reference of references) {
-    if (reference.collection === 'learnMeasurementSupports') {
+    if (reference.collection === 'learnArtifactSourceLinks') {
+      const link = await ctx.db.get(reference.id as Id<'learnArtifactSourceLinks'>)
+      if (!link || link.userId !== userId) continue
+      const lineage = await ctx.db.get(link.lineageId)
+      if (lineage?.userId === userId) await ctx.db.patch(lineage._id, { evidenceStatus: 'evidence_unavailable', invalidatedAt: Date.now() })
+      await ctx.db.patch(link._id, { evidenceStatus: 'evidence_unavailable', invalidatedAt: Date.now(), dependency: undefined })
+    }
+    else if (reference.collection === 'learnMeasurementSupports') {
       const support = await ctx.db.get(reference.id as Id<'learnMeasurementSupports'>)
       if (!support || support.userId !== userId) continue
       const [item, spec, claim] = await Promise.all([ctx.db.get(support.itemId), ctx.db.get(support.scoringSpecId), ctx.db.get(support.claimId)])

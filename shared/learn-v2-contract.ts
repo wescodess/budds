@@ -7,6 +7,7 @@ export type ContractIndex = {
 }
 
 export type RetentionClassName =
+  | 'artifact_lineage'
   | 'stable_aggregate'
   | 'immutable_revision'
   | 'ordered_child'
@@ -365,6 +366,7 @@ export const LEARN_V2_CONTRACT: LearnV2Contract = {
   },
   persistence: {
     retentionClasses: {
+      artifact_lineage: { export: 'metadata_only', accountDeletion: 'delete', folderDeletion: 'evidence_tombstone', folderMove: 'preserve_history_revalidate_access', sourceDeletion: 'evidence_tombstone' },
       owner_inventory: { export: 'metadata_only', accountDeletion: 'delete', folderDeletion: 'detach', folderMove: 'preserve_history_revalidate_access', sourceDeletion: 'preserve' },
       assessment_bank: { export: 'metadata_only', accountDeletion: 'delete', folderDeletion: 'cascade', folderMove: 'preserve_revision_revalidate_access', sourceDeletion: 'evidence_tombstone' },
       response_history: { export: 'redacted', accountDeletion: 'delete', folderDeletion: 'cascade', folderMove: 'preserve_history_revalidate_access', sourceDeletion: 'evidence_tombstone' },

@@ -54,6 +54,7 @@ import type * as learnAdaptiveRecovery from "../learnAdaptiveRecovery.js";
 import type * as learnAdaptiveRouting from "../learnAdaptiveRouting.js";
 import type * as learnProfile from "../learnProfile.js";
 import type * as learnV2Assessments from "../learnV2Assessments.js";
+import type * as learnV2ArtifactLineage from "../learnV2ArtifactLineage.js";
 import type * as learnV2Assistance from "../learnV2Assistance.js";
 import type * as learnV2MeasurementReports from "../learnV2MeasurementReports.js";
 import type * as learnV2Responses from "../learnV2Responses.js";
@@ -161,6 +162,7 @@ declare const fullApi: ApiFromModules<{
   learnAdaptiveRouting: typeof learnAdaptiveRouting;
   learnProfile: typeof learnProfile;
   learnV2Assessments: typeof learnV2Assessments;
+  learnV2ArtifactLineage: typeof learnV2ArtifactLineage;
   learnV2Assistance: typeof learnV2Assistance;
   learnV2MeasurementReports: typeof learnV2MeasurementReports;
   learnV2Responses: typeof learnV2Responses;

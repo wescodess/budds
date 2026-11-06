@@ -4,6 +4,7 @@ import type { Id } from '../../convex/_generated/dataModel'
 import type { LearnMeasurementCollection } from '../../shared/learn-v2-measurement-storage-manifest'
 import { LEARN_V2_MEASUREMENT_REPORT_VERSION, LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION, deriveLearnReportComputationKeys } from '../../shared/learn-v2-measurement-report'
 import { emptyMeasurementReportCell } from './learn-v2-measurement-report'
+import { LEARN_ARTIFACT_LINEAGE_VERSION } from '../../shared/learn-v2-artifact-lineage'
 
 export const STORAGE_CANARIES = {
   prompt: 'private-unseen-item-prompt', key: 'private-answer-key', solution: 'private-reference-solution',
@@ -99,7 +100,24 @@ export async function seedMeasurementStorage(ctx: Pick<MutationCtx, 'db'>, userI
   const cellId = await ctx.db.insert('learnMeasurementReportCells', { ...base, reportRunId: runId, cellKey: 'vlg7', sequence: 1,
     reportVersion: LEARN_V2_MEASUREMENT_REPORT_VERSION, ...emptyMeasurementReportCell() })
   const viewerGrantId = await ctx.db.insert('learnMeasurementReportViewerGrants', { ...base, cohortVersion: 'cohort.v1', epoch: 'fixture-epoch', principalBindingVersion: 'binding.fixture', grantVersion: 'grant.v1', status: 'active', grantedAt: now, expiresAt: now + 1000 })
+  const lineageFields = { ...base, evidenceStatus, lineageVersion: LEARN_ARTIFACT_LINEAGE_VERSION, classification: 'measurement' as const,
+    authority: 'server_producer' as const, authorityVersion: 'producer.v1', revision: '1', payloadDigest: 'a'.repeat(64), manifestDigest: 'f'.repeat(64),
+    artifact: { kind: 'measurement_item' as const, id: itemId }, originCount: 0, caseCount: 0, sourceCount: 0 }
+  const originalLineageId = await ctx.db.insert('learnArtifactLineages', { ...lineageFields, key: 'whole', derivation: 'original' })
+  const lineageId = await ctx.db.insert('learnArtifactLineages', { ...lineageFields, key: 'summary', derivation: 'derived', originCount: 1, caseCount: 1, sourceCount: 1 })
+  const originId = await ctx.db.insert('learnArtifactLineageOrigins', { ...base, lineageId, originLineageId: originalLineageId,
+    originRevision: '1', originPayloadDigest: 'a'.repeat(64), originManifestDigest: 'f'.repeat(64), classification: 'measurement', transformation: 'summary' })
+  const artifactCaseId = await ctx.db.insert('learnArtifactCaseBindings', { ...base, lineageId, caseId,
+    scenarioFingerprint: 'b'.repeat(64), solutionFingerprint: 'c'.repeat(64), identityPolicyVersion: 'identity.v1' })
+  const artifactValidationId = await ctx.db.insert('learnArtifactValidations', { ...base, evidenceStatus, lineageId, payloadDigest: 'a'.repeat(64), manifestDigest: 'f'.repeat(64),
+    decision: 'pass', comparedCatalogRevision: 1, coverage: 'complete', coverageWatermark: 'coverage', corpusDigest: 'd'.repeat(64),
+    identityPolicyVersion: 'identity.v1', noveltyPolicyVersion: 'novelty.v1', validatorVersion: 'validator.v1', validatorModel: null, harnessArtifactDigest: 'e'.repeat(64) })
+  await ctx.db.patch(lineageId, { validationId: artifactValidationId })
+  const artifactSourceId = await ctx.db.insert('learnArtifactSourceLinks', { ...base, evidenceStatus, lineageId,
+    dependency: { kind: 'snapshot', sourceSnapshotId, revision: 1, recordRevision: 1, contentHash: 'source-hash' } })
   const rows = {
+    learnArtifactLineages: lineageId, learnArtifactLineageOrigins: originId, learnArtifactCaseBindings: artifactCaseId,
+    learnArtifactValidations: artifactValidationId, learnArtifactSourceLinks: artifactSourceId,
     learnAssessmentCatalogs: catalogId, learnAssessmentCases: caseId, learnMeasurementFamilies: familyId, learnMeasurementItems: itemId,
     learnMeasurementScoringSpecs: scoringSpecId, learnMeasurementClaims: claimId, learnMeasurementSupports: supportId,
     learnMeasurementValidations: validationId, learnMeasurementAssignments: assignmentId, learnAssessmentOpportunities: opportunityId,

@@ -1,6 +1,7 @@
 import { defineSchema, defineTable } from 'convex/server'
 import { v } from 'convex/values'
 import * as measurementStorage from './lib/learnV2MeasurementStorage'
+import * as artifactLineage from './lib/learnV2ArtifactLineageContract'
 import { adaptiveProviderJobFields, learnActivityCommandReceiptFields, learnActivityDecisionFields, learnActivityEvidenceLinkFields, learnActivityOverrideFields, learnAdaptiveThreadDeletionJobFields, learningThreadActivityFields, learningThreadArtifactFields, learningThreadContributionFields, learningThreadFields, learningThreadPreferenceFields } from '../shared/adaptive-learn-storage-manifest'
 import { learnActivityEventFields } from '../shared/learn-adaptive-events'
 import { adaptiveRoutingAnalysisPlanValidator } from '../shared/learn-adaptive-experiment'
@@ -1893,6 +1894,28 @@ export default defineSchema({
     .index('by_userId_and_deliveryReceiptHash', ['userId', 'deliveryReceiptHash'])
     .index('by_userId_and_learningVoidId', ['userId', 'learningVoidId'])
     .index('by_userId_and_threadId', ['userId', 'threadId']),
+  learnArtifactSourceLinks: defineTable(artifactLineage.artifactSourceLinkFields)
+    .index('by_userId', ['userId'])
+    .index('by_userId_and_lineageId', ['userId', 'lineageId'])
+    .index('by_userId_and_dependency_sourceSnapshotId_and_invalidatedAt', ['userId', 'dependency.sourceSnapshotId', 'invalidatedAt'])
+    .index('by_userId_and_dependency_sourceExcerptId_and_invalidatedAt', ['userId', 'dependency.sourceExcerptId', 'invalidatedAt'])
+    .index('by_userId_and_dependency_documentId_and_invalidatedAt', ['userId', 'dependency.documentId', 'invalidatedAt'])
+    .index('by_userId_and_dependency_folderId_and_invalidatedAt', ['userId', 'dependency.folderId', 'invalidatedAt']),
+  learnArtifactCaseBindings: defineTable(artifactLineage.artifactCaseBindingFields)
+    .index('by_userId', ['userId'])
+    .index('by_userId_and_lineageId', ['userId', 'lineageId'])
+    .index('by_userId_and_caseId', ['userId', 'caseId']),
+  learnArtifactLineageOrigins: defineTable(artifactLineage.artifactOriginFields)
+    .index('by_userId', ['userId'])
+    .index('by_userId_and_lineageId', ['userId', 'lineageId'])
+    .index('by_userId_and_originLineageId', ['userId', 'originLineageId']),
+  learnArtifactValidations: defineTable(artifactLineage.artifactValidationStorageFields)
+    .index('by_userId', ['userId'])
+    .index('by_userId_and_lineageId', ['userId', 'lineageId']),
+  learnArtifactLineages: defineTable(artifactLineage.artifactLineageFields)
+    .index('by_userId', ['userId'])
+    .index('by_userId_and_artifact_kind_and_artifact_id_and_key_and_revision', ['userId', 'artifact.kind', 'artifact.id', 'key', 'revision'])
+    .index('by_artifact_kind_and_artifact_id_and_key_and_revision_and_nextId', ['artifact.kind', 'artifact.id', 'key', 'revision', 'nextId']),
   learnAssessmentCases: defineTable(measurementStorage.assessmentCaseValidator)
     .index('by_userId', ['userId'])
     .index('by_userId_and_caseKey', ['userId', 'caseKey'])

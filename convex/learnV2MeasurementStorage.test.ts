@@ -190,6 +190,7 @@ describe('inactive Phase C storage boundaries', () => {
     const t = convexTest(schema, modules)
     const a = await t.run(ctx => seedMeasurementStorage(ctx, owner.tokenIdentifier))
     const b = await t.run(ctx => seedMeasurementStorage(ctx, foreign.tokenIdentifier))
+    await t.run(ctx => ctx.db.patch(a.rows.learnArtifactLineages, { nextId: a.rows.learnArtifactLineages }))
     expect(Object.keys(a.rows).sort()).toEqual([...LEARN_MEASUREMENT_COLLECTIONS].sort())
     expect(Object.values(LEARN_MEASUREMENT_CAPABILITIES).every(value => value === false)).toBe(true)
     for (const entry of LEARN_MEASUREMENT_STORAGE_MANIFEST) {
@@ -197,6 +198,11 @@ describe('inactive Phase C storage boundaries', () => {
       if (entry.export === 'withheld') expect(rows).toEqual([])
       else expect(rows.map(row => row._id)).toContain(a.rows[entry.table])
       expect(JSON.stringify(rows)).not.toContain(b.rows[entry.table])
+      if (entry.table.startsWith('learnArtifact')) {
+        for (const field of ['artifact', 'payloadDigest', 'manifestDigest', 'lineageId', 'originLineageId', 'caseId', 'validationId', 'dependency', 'authorityVersion', 'nextId']) {
+          expect(rows.every(row => !Object.hasOwn(row, field))).toBe(true)
+        }
+      }
       for (const [name, canary] of Object.entries(STORAGE_CANARIES)) {
         if (name === 'answer' && entry.export === 'owner_response') expect(JSON.stringify(rows)).toContain(canary)
         else expect(JSON.stringify(rows)).not.toContain(canary)
@@ -301,8 +307,7 @@ describe('inactive Phase C storage boundaries', () => {
     const f = await t.run(ctx => seedMeasurementStorage(ctx, owner.tokenIdentifier))
     await t.run(ctx => seedMeasurementStorage(ctx, foreign.tokenIdentifier))
     const sourceRows = await t.run(ctx => readMeasurementSourceDescendants(ctx, owner.tokenIdentifier, { kind: 'snapshot', id: f.sourceSnapshotId }))
-    expect(sourceRows).toHaveLength(3)
-    expect(sourceRows).toContainEqual({ collection: 'learnMeasurementSupports', id: f.rows.learnMeasurementSupports })
+    expect(sourceRows).toEqual([{ collection: 'learnArtifactSourceLinks', id: f.rows.learnArtifactSourceLinks }])
     expect(await t.run(ctx => readMeasurementSourceDescendants(ctx, foreign.tokenIdentifier, { kind: 'snapshot', id: f.sourceSnapshotId }))).toEqual([])
     for (const entry of LEARN_MEASUREMENT_STORAGE_MANIFEST) {
       if (entry.voidDeletion !== 'delete') continue
@@ -319,6 +324,7 @@ describe('inactive Phase C storage boundaries', () => {
     const t = convexTest(schema, modules)
     const a = await t.run(ctx => seedMeasurementStorage(ctx, owner.tokenIdentifier))
     const b = await t.run(ctx => seedMeasurementStorage(ctx, foreign.tokenIdentifier))
+    await t.run(ctx => ctx.db.patch(a.rows.learnArtifactLineages, { nextId: a.rows.learnArtifactLineages }))
     await t.run(ctx => ctx.db.patch(a.sourceSnapshotId, { effectiveStatus: 'unavailable', unavailableReason: 'source_deleted' }))
     expect(await readAll(t, owner, 'learnResponseBodies')).toMatchObject([{ bodyAvailability: 'unavailable' }])
     for (let batch = 0; batch < 20; batch++) {
@@ -365,6 +371,7 @@ describe('inactive Phase C storage boundaries', () => {
     const t = convexTest(schema, modules)
     const a = await t.run(ctx => seedMeasurementStorage(ctx, owner.tokenIdentifier))
     const b = await t.run(ctx => seedMeasurementStorage(ctx, foreign.tokenIdentifier))
+    await t.run(ctx => ctx.db.patch(a.rows.learnArtifactLineages, { nextId: a.rows.learnArtifactLineages }))
     const terminalizationId = await insertTerminalizationFixture(t, a)
     for (let batch = 0; batch < 70; batch++) {
       const result = await t.mutation(internal.learnV2Retention.deleteFolderFoundation, { userId: owner.tokenIdentifier, folderId: a.folderId })
@@ -417,6 +424,7 @@ describe('inactive Phase C storage boundaries', () => {
     const t = convexTest(schema, modules)
     const a = await t.run(ctx => seedMeasurementStorage(ctx, owner.tokenIdentifier))
     const b = await t.run(ctx => seedMeasurementStorage(ctx, foreign.tokenIdentifier))
+    await t.run(ctx => ctx.db.patch(a.rows.learnArtifactLineages, { nextId: a.rows.learnArtifactLineages }))
     const terminalizationId = await insertTerminalizationFixture(t, a)
     const cachedRowId = await t.run(async (ctx) => {
       const otherRow = await ctx.db.get(b.rows.learnMeasurementReportRows)

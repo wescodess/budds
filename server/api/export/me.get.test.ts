@@ -110,6 +110,7 @@ describe('GET /api/export/me', () => {
     const f = await t.run(ctx => seedMeasurementStorage(ctx, identity.tokenIdentifier))
     const other = await t.run(ctx => seedMeasurementStorage(ctx, 'https://other.example.com|zip-owner'))
     await t.run(async ctx => {
+      await ctx.db.patch(f.rows.learnArtifactLineages, { nextId: f.rows.learnArtifactLineages })
       const legacy = await ctx.db.get(f.rows.learnResponses)
       if (!legacy || !('baselineEpoch' in legacy)) throw new Error('Missing fixture response')
       const { _id: _id, _creationTime: _creationTime, baselineEpoch: _epoch, flow: _flow, ...fields } = legacy
@@ -137,6 +138,11 @@ describe('GET /api/export/me', () => {
       const serialized = JSON.stringify(rows)
       for (const key of [...Object.values(f.reportKeys), ...Object.values(other.reportKeys)]) expect(serialized).not.toContain(key)
       expect(serialized).not.toContain(other.rows[entry.table])
+      if (entry.table.startsWith('learnArtifact')) {
+        for (const field of ['artifact', 'payloadDigest', 'manifestDigest', 'lineageId', 'originLineageId', 'caseId', 'validationId', 'dependency', 'authorityVersion', 'nextId']) {
+          expect(rows.every((row: Record<string, unknown>) => !Object.hasOwn(row, field))).toBe(true)
+        }
+      }
       for (const [name, canary] of Object.entries(STORAGE_CANARIES)) {
         if (name === 'answer' && entry.export === 'owner_response') expect(serialized).toContain(canary)
         else expect(serialized).not.toContain(canary)
