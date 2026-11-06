@@ -117,7 +117,7 @@ export const learnReportInputSnapshotValidator = v.union(
     coldOpportunityId: v.union(v.id('learnAssessmentOpportunities'), v.null()),
     originalOpportunityId: v.union(v.id('learnAssessmentOpportunities'), v.null()), replacementOpportunityId: v.union(v.id('learnAssessmentOpportunities'), v.null()),
     coldAcceptance: nullableAcceptance, delayedAcceptance: nullableAcceptance, cold: nullableResult, delayed: nullableResult,
-    replacementAcceptance: nullableAcceptance, replacement: nullableResult, replacementPolicy: v.union(replacementPolicy, v.null()),
+    replacementClock: v.union(reportClock, v.null()), replacementAcceptance: nullableAcceptance, replacement: nullableResult, replacementPolicy: v.union(replacementPolicy, v.null()),
     operationalEligibility: literals(['pending', 'eligible', 'blocked']), disposition: literals(LEARN_V2_REPORT_DISPOSITIONS), reasonCodes: v.array(v.string()),
     mixedFlow: v.boolean(), treatmentEpochChanged: v.boolean(),
   }),

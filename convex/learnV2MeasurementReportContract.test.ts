@@ -9,12 +9,12 @@ import { reportCellsValidator, aggregateExportValidator } from './lib/learnV2Pub
 import type { learnReportMetricValidator, learnReportInputSnapshotValidator, learnReportAssignmentSnapshotValidator, learnReportResultSnapshotValidator } from './lib/learnV2MeasurementReportContract'
 import {
   LEARN_V2_MEASUREMENT_REPORT_VERSION, LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION, LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION,
-  validateLearnMeasurementReportCells, type LearnReportMetric,
-  type learnReportInputSnapshotSchema, type learnReportAssignmentSnapshotSchema, type learnReportResultSnapshotSchema,
+  validateLearnMeasurementReportCells, learnReportInputSnapshotSchema, type LearnReportMetric,
+  type learnReportAssignmentSnapshotSchema, type learnReportResultSnapshotSchema,
 } from '../shared/learn-v2-measurement-report'
 import type { z } from 'zod'
 import { seedMeasurementStorage } from '../tests/fixtures/learn-v2-measurement-storage'
-import { partialMeasurementReportCell } from '../tests/fixtures/learn-v2-measurement-report'
+import { partialMeasurementReportCell, measurementReportIdentityFixture } from '../tests/fixtures/learn-v2-measurement-report'
 
 const modules = import.meta.glob('./**/*.ts')
 
@@ -25,6 +25,40 @@ test('stored, public and exported cells have exactly the same frozen fields', ()
   expectTypeOf<Doc<'learnMeasurementReportRows'>['snapshot']>().toEqualTypeOf<z.infer<typeof learnReportInputSnapshotSchema>>()
   expectTypeOf<Infer<typeof learnReportAssignmentSnapshotValidator>>().toEqualTypeOf<z.infer<typeof learnReportAssignmentSnapshotSchema>>()
   expectTypeOf<Infer<typeof learnReportResultSnapshotValidator>>().toEqualTypeOf<z.infer<typeof learnReportResultSnapshotSchema>>()
+})
+
+test('round-trips null and linked replacement clocks through the Convex snapshot validator', async () => {
+  const t = convexTest(schema, modules)
+  const f = await t.run(ctx => seedMeasurementStorage(ctx, 'https://contract.example|owner'))
+  const row = await t.run(ctx => ctx.db.get(f.rows.learnMeasurementReportRows))
+  if (!row || row.snapshot.kind !== 'episode') throw new Error('Missing episode fixture')
+  expect(learnReportInputSnapshotSchema.parse(row.snapshot)).toEqual(row.snapshot)
+  expect(row.snapshot.replacementClock).toBeNull()
+  const omitted = { ...row.snapshot }
+  Reflect.deleteProperty(omitted, 'replacementClock')
+  await expect(t.run(ctx => ctx.db.patch(row._id, { snapshot: omitted }))).rejects.toThrow()
+
+  const { episode } = await measurementReportIdentityFixture()
+  const snapshot = await t.run(async ctx => {
+    const opportunity = await ctx.db.get(f.rows.learnAssessmentOpportunities)
+    if (!opportunity) throw new Error('Missing opportunity fixture')
+    const { _id: _opportunityId, _creationTime: _createdAt, ...fields } = opportunity
+    const originalOpportunityId = await ctx.db.insert('learnAssessmentOpportunities', fields)
+    const replacementOpportunityId = await ctx.db.insert('learnAssessmentOpportunities', fields)
+    const snapshot = learnReportInputSnapshotSchema.parse({ ...row.snapshot, clock: episode.clock,
+      originalOpportunityId, replacementOpportunityId, replacementClock: episode.replacementClock })
+    await ctx.db.patch(row._id, { snapshot })
+    return snapshot
+  })
+  expect((await t.run(ctx => ctx.db.get(row._id)))?.snapshot).toEqual(snapshot)
+  if (snapshot.kind !== 'episode') throw new Error('Expected episode snapshot')
+  expect(snapshot.replacementClock).not.toEqual(snapshot.clock)
+  for (const field of Object.keys(snapshot.replacementClock!)) {
+    const replacementClock = { ...snapshot.replacementClock! }
+    Reflect.deleteProperty(replacementClock, field)
+    await expect(t.run(ctx => ctx.db.patch(row._id, { snapshot: { ...snapshot, replacementClock } }))).rejects.toThrow()
+  }
+  expect((await t.run(ctx => ctx.db.get(row._id)))?.snapshot).toEqual(snapshot)
 })
 
 test('public page and aggregate-export return validation preserve all aggregate breakdowns and reject private additions', async () => {

@@ -110,6 +110,7 @@ export const learnReportEpisodeSnapshotSchema = z.strictObject({
   originalOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>().nullable(), replacementOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>().nullable(),
   coldAcceptance: learnReportAcceptanceSnapshotSchema.nullable(), delayedAcceptance: learnReportAcceptanceSnapshotSchema.nullable(),
   cold: learnReportResultSnapshotSchema.nullable(), delayed: learnReportResultSnapshotSchema.nullable(),
+  replacementClock: learnAssessmentClockSchema.nullable(),
   replacementAcceptance: learnReportAcceptanceSnapshotSchema.nullable(), replacement: learnReportResultSnapshotSchema.nullable(),
   replacementPolicy: learnReportReplacementPolicySchema.nullable(), operationalEligibility: z.enum(['pending', 'eligible', 'blocked']),
   disposition: learnReportDispositionSchema, reasonCodes: learnReasonCodesSchema, mixedFlow: z.boolean(), treatmentEpochChanged: z.boolean(),
@@ -118,6 +119,9 @@ export const learnReportEpisodeSnapshotSchema = z.strictObject({
   && (value.replacement === null || value.replacement.kind === 'measurement_delayed'), 'Incorrect measurement endpoint kind')
   .refine(value => acceptedResultMatches(value.coldAcceptance, value.cold) && acceptedResultMatches(value.delayedAcceptance, value.delayed)
     && acceptedResultMatches(value.replacementAcceptance, value.replacement), 'Results require their accepted submission and performance time')
+  // #364 §4 freezes each opportunity's own clock; #366 §3 matures it at its own closeAt.
+  .refine(value => (value.replacementOpportunityId === null) === (value.replacementClock === null), 'Replacement opportunities require their own clock')
+  .refine(value => value.replacementClock === null || value.replacementClock.horizonDays === value.horizonDays, 'Replacement clock must match the episode horizon')
   .refine(value => (value.clock === null || value.clock.horizonDays === value.horizonDays)
     && (value.coldAcceptance === null || value.coldOpportunityId !== null)
     && (value.delayedAcceptance === null || value.originalOpportunityId !== null)
@@ -210,7 +214,7 @@ export function reconcileLearnReportSourceRows(roster: readonly string[], rows: 
       reconcileOutcome({ ...binding, owner: JSON.stringify(['cold', row.assignmentId]), role: 'cold' }, row.coldOpportunityId, row.coldAcceptance, row.cold)
       const episode = JSON.stringify(['episode', row.assignmentId, row.horizonDays])
       reconcileOutcome({ ...binding, owner: episode, role: 'delayed' }, row.originalOpportunityId, row.delayedAcceptance, row.delayed, row.clock)
-      reconcileOutcome({ ...binding, owner: episode, role: 'replacement' }, row.replacementOpportunityId, row.replacementAcceptance, row.replacement)
+      reconcileOutcome({ ...binding, owner: episode, role: 'replacement' }, row.replacementOpportunityId, row.replacementAcceptance, row.replacement, row.replacementClock)
     }
     if (row.kind === 'first_check_claim') {
       for (const [kind, value, reason] of [
@@ -236,9 +240,8 @@ export function reconcileLearnReportSourceRows(roster: readonly string[], rows: 
       if (group.some(outcome => outcome.learnerKey !== slots[0]!.learnerKey)) reasons.add('claim_learner_mismatch')
       if (group.some(outcome => outcome.capabilityKey !== slots[0]!.capabilityKey)) reasons.add('claim_capability_mismatch')
       if (slots.some(slot => slot.role === 'cold')) reasons.add('claim_shared_cold_slot')
-      // Only originals carry an episode clock. Replacement sharing still requires identical outcome snapshots.
-      const originals = slots.filter(slot => slot.role === 'delayed')
-      if (originals.length && new Set([...originals, ...claims].map(outcome => outcome.slotWindow)).size > 1) reasons.add('conflicting_slot_window')
+      const delayedSlots = slots.filter(slot => slot.role === 'delayed' || slot.role === 'replacement')
+      if (delayedSlots.length && new Set([...delayedSlots, ...claims].map(outcome => outcome.slotWindow)).size > 1) reasons.add('conflicting_slot_window')
     }
   }
   if (roster.some(owner => !watermarks.has(owner))) reasons.add('missing_owner_watermark')

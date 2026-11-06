@@ -105,7 +105,8 @@ describe('report source v3 computation contract', () => {
     const result = endpoint === 'cold' ? cold : delayed
     const acceptanceKey = endpoint === 'cold' ? 'coldAcceptance' : endpoint === 'delayed' ? 'delayedAcceptance' : 'replacementAcceptance'
     const scored = endpoint === 'replacement'
-      ? { ...episode, delayedAcceptance: null, replacementOpportunityId: 'replacementOpportunity1', replacementAcceptance: episode.delayedAcceptance, replacement: result }
+      ? { ...episode, delayedAcceptance: null, replacementOpportunityId: 'replacementOpportunity1', replacementClock: episode.clock,
+          replacementAcceptance: episode.delayedAcceptance, replacement: result }
       : { ...episode, [endpoint]: result }
     expect(learnReportEpisodeSnapshotSchema.parse(scored)[endpoint]).toEqual(result)
     for (const acceptance of [null, { submissionId: 'differentSubmission', acceptedAt: result.acceptedAt }, { submissionId: result.submissionId, acceptedAt: result.acceptedAt + 1 }]) {
@@ -130,7 +131,7 @@ describe('report source v3 computation contract', () => {
     const replacementAcceptance = { submissionId: 'replacementSubmission1', acceptedAt: delayed.acceptedAt + 1 }
     const replacement = { ...delayed, ...replacementAcceptance, attemptId: 'replacementAttempt1', executionId: 'replacementExecution1',
       scorePercent: 100, caseId: 'caseD', itemId: 'itemD', formLabel: 'D' }
-    const linked = { ...episode, cold, delayed, replacementOpportunityId: 'replacementOpportunity1', replacementAcceptance, replacement }
+    const linked = { ...episode, cold, delayed, replacementOpportunityId: 'replacementOpportunity1', replacementClock: episode.clock, replacementAcceptance, replacement }
     const parsed = learnReportEpisodeSnapshotSchema.parse(linked)
     expect(parsed.delayed!.scorePercent).toBe(40)
     expect(parsed.replacement!.scorePercent).toBe(100)
@@ -155,6 +156,45 @@ describe('report source v3 computation contract', () => {
     if (!parsed.success) expect(parsed.error.issues).toEqual([
       { code: 'custom', path: [], message: 'Inconsistent original or replacement slot pins' },
     ])
+  })
+
+  it.each(['missing', 'null'] as const)('rejects a linked replacement with a %s clock before acceptance', async absent => {
+    const { episode } = await measurementReportIdentityFixture()
+    const linked = { ...episode, replacementAcceptance: null, replacement: null }
+    expect(learnReportEpisodeSnapshotSchema.safeParse(linked).success).toBe(true)
+    const row = { ...linked, replacementClock: null }
+    if (absent === 'missing') Reflect.deleteProperty(row, 'replacementClock')
+    expect(learnReportEpisodeSnapshotSchema.safeParse(row).success).toBe(false)
+  })
+
+  it('rejects a replacement clock without a linked replacement opportunity', async () => {
+    const { episode } = await measurementReportSourceFixture()
+    expect(learnReportEpisodeSnapshotSchema.safeParse(episode).success).toBe(true)
+    const parsed = learnReportEpisodeSnapshotSchema.safeParse({ ...episode, replacementClock: episode.clock })
+    expect(parsed.success).toBe(false)
+    if (!parsed.success) expect(parsed.error.issues).toEqual([
+      { code: 'custom', path: [], message: 'Replacement opportunities require their own clock' },
+    ])
+  })
+
+  it('requires the replacement clock to match the episode horizon independently of the original clock', async () => {
+    const { episode } = await measurementReportIdentityFixture()
+    const linked = { ...episode, clock: null, replacementAcceptance: null, replacement: null }
+    expect(learnReportEpisodeSnapshotSchema.safeParse(linked).success).toBe(true)
+    const parsed = learnReportEpisodeSnapshotSchema.safeParse({ ...linked, replacementClock: { ...episode.replacementClock!, horizonDays: 30 } })
+    expect(parsed.success).toBe(false)
+    if (!parsed.success) expect(parsed.error.issues).toEqual([
+      { code: 'custom', path: [], message: 'Replacement clock must match the episode horizon' },
+    ])
+  })
+
+  it.each([-1000, 0, 1000])('accepts an independently frozen replacement opening %s ms from the original', async offset => {
+    const { episode } = await measurementReportIdentityFixture()
+    const replacementClock = { ...episode.clock!, openAt: episode.clock!.openAt + offset,
+      dueAt: episode.clock!.dueAt + Math.max(0, offset) }
+    const parsed = learnReportEpisodeSnapshotSchema.parse({ ...episode, replacementClock, replacementAcceptance: null, replacement: null })
+    expect(parsed.replacementClock).toEqual(replacementClock)
+    expect(parsed.clock).toEqual(episode.clock)
   })
 
   it.each(['submission', 'attempt'] as const)('rejects a duplicate %s with every other endpoint identity distinct', async identity => {
@@ -396,6 +436,8 @@ describe('report source v3 computation contract', () => {
       const result = state === 'scored' ? episode[slot] : null
       const firstCheckOpportunityId = slot === 'delayed' ? episode.originalOpportunityId : episode.replacementOpportunityId
       const shared = learnReportFirstClaimSnapshotSchema.parse({ ...claim, firstCheckOpportunityId, acceptance, result,
+        clock: { ...(slot === 'delayed' ? episode.clock! : episode.replacementClock!),
+          anchorKind: claim.clock.anchorKind, anchorEventId: claim.clock.anchorEventId, anchorAt: claim.clock.anchorAt },
         stateAtAcceptance: acceptance ? claim.stateAtAcceptance : null })
       const rows = [watermark, { ...episode, [acceptanceKey]: acceptance, [slot]: result }, shared]
       const saved = structuredClone(rows)
@@ -462,7 +504,14 @@ describe('report source v3 computation contract', () => {
   it('keeps a shared replacement window separate from the original while still requiring identical outcome snapshots', async () => {
     const { episode, claim, watermark } = await measurementReportIdentityFixture()
     const shared = learnReportFirstClaimSnapshotSchema.parse({ ...claim, firstCheckOpportunityId: episode.replacementOpportunityId,
-      acceptance: episode.replacementAcceptance, result: episode.replacement, clock: { ...claim.clock, closeAt: claim.clock.closeAt + 86_400_000 } })
+      acceptance: episode.replacementAcceptance, result: episode.replacement, clock: { ...episode.replacementClock!,
+        anchorKind: claim.clock.anchorKind, anchorEventId: claim.clock.anchorEventId, anchorAt: claim.clock.anchorAt - 1000 },
+      claim: { ...claim.claim, firstIndependentAt: claim.clock.anchorAt - 1000, firstIndependentLocalDate: '2026-09-30' } })
+    for (const field of ['dueAt', 'openAt', 'closeAt'] as const) expect(shared.clock[field]).not.toBe(episode.clock![field])
+    for (const field of ['anchorKind', 'anchorEventId', 'anchorAt'] as const) expect(shared.clock[field]).not.toBe(episode.replacementClock![field])
+    const cutoff = episode.clock!.closeAt
+    expect(episode.clock!.closeAt <= cutoff).toBe(true)
+    expect(episode.replacementClock!.closeAt <= cutoff).toBe(false)
     for (const rows of [[watermark, episode, shared], [shared, episode, watermark]]) {
       expect(reconcileLearnReportSourceRows([watermark.learnerKey], rows)).toEqual({ status: 'complete', reasonCodes: [] })
     }
@@ -471,6 +520,44 @@ describe('report source v3 computation contract', () => {
       status: 'incomplete', reasonCodes: ['conflicting_outcome_snapshot'],
     })
   })
+
+  it.each(['protocolVersion', 'schedulingPolicyVersion', 'horizonDays', 'timezone', 'dueLocalDate', 'dueAt', 'openAt', 'closeAt'] as const)(
+    'rejects a conflicting shared replacement slot %s before and after scoring, independently of row order', async field => {
+      const { episode, claim, watermark } = await measurementReportIdentityFixture()
+      const clock = episode.replacementClock!
+      const changes = {
+        protocolVersion: { protocolVersion: 'protocol.v2' }, schedulingPolicyVersion: { schedulingPolicyVersion: 'schedule.v2' },
+        horizonDays: { horizonDays: 30 }, timezone: { timezone: 'Etc/UTC' },
+        dueLocalDate: { dueLocalDate: '2026-10-09', dueAt: clock.dueAt + 86_400_000 }, dueAt: { dueAt: clock.dueAt + 1 },
+        openAt: { openAt: clock.openAt - 1 }, closeAt: { closeAt: clock.closeAt + 86_400_000 },
+      }[field]
+      for (const state of ['unanswered', 'unscored', 'scored']) {
+        const acceptance = state === 'unanswered' ? null : episode.replacementAcceptance
+        const result = state === 'scored' ? episode.replacement : null
+        const linked = learnReportEpisodeSnapshotSchema.parse({ ...episode, replacementAcceptance: acceptance, replacement: result })
+        const shared = learnReportFirstClaimSnapshotSchema.parse({ ...claim, firstCheckOpportunityId: episode.replacementOpportunityId,
+          clock: { ...clock, anchorKind: claim.clock.anchorKind, anchorEventId: claim.clock.anchorEventId, anchorAt: claim.clock.anchorAt },
+          acceptance, result, stateAtAcceptance: acceptance ? claim.stateAtAcceptance : null })
+        expect(reconcileLearnReportSourceRows([watermark.learnerKey], [watermark, linked, shared])).toEqual({ status: 'complete', reasonCodes: [] })
+        const row = learnReportFirstClaimSnapshotSchema.parse({ ...shared, clock: { ...shared.clock, ...changes } })
+        if (field === 'horizonDays') {
+          expect(linked.horizonDays).toBe(7)
+          expect(row.clock.horizonDays).toBe(30)
+        }
+        if (field === 'closeAt') {
+          const cutoff = linked.replacementClock!.closeAt
+          expect(linked.replacementClock!.closeAt <= cutoff).toBe(true)
+          expect(row.clock.closeAt <= cutoff).toBe(false)
+        }
+        for (const rows of [[watermark, linked, row], [watermark, row, linked], [linked, watermark, row],
+          [linked, row, watermark], [row, watermark, linked], [row, linked, watermark]]) {
+          expect(reconcileLearnReportSourceRows([watermark.learnerKey], rows)).toEqual({
+            status: 'incomplete', reasonCodes: ['conflicting_slot_window'],
+          })
+        }
+      }
+    },
+  )
 
   it.each(['acceptance', 'submission', 'unanswered', 'unscored'] as const)('requires a shared first opportunity to agree on its %s snapshot', async changed => {
     const { episode, claim, delayed, watermark } = await measurementReportIdentityFixture()

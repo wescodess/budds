@@ -21,7 +21,7 @@ export async function measurementReportSourceFixture() {
       historyStatus: 'prospectively_unexposed', allocationOrder: 'ABC', assignedDay7: true, assignedDay30: true, sourceCoverage: 'complete' },
     clock, coldOpportunityId: 'coldOpportunity1', originalOpportunityId: 'delayedOpportunity1', replacementOpportunityId: null,
     coldAcceptance: { submissionId: 'coldSubmission1', acceptedAt: anchorAt }, delayedAcceptance: { submissionId: 'delayedSubmission1', acceptedAt: openAt },
-    cold: null, delayed: null, replacementAcceptance: null, replacement: null, replacementPolicy: { kind: 'secondary_only' },
+    cold: null, delayed: null, replacementClock: null, replacementAcceptance: null, replacement: null, replacementPolicy: { kind: 'secondary_only' },
     operationalEligibility: 'eligible', disposition: 'scoring_pending', reasonCodes: ['scoring_pending'], mixedFlow: false, treatmentEpochChanged: false })
   const claim = learnReportFirstClaimSnapshotSchema.parse({ kind: 'first_check_claim', ...keys, stratum,
     claim: { claimKey: 'claim1', claimSequence: 1, basisAttemptId: 'basisAttempt1', masteryRecordRevision: 1,
@@ -46,18 +46,25 @@ export async function measurementReportSourceFixture() {
 export async function measurementReportIdentityFixture() {
   const source = await measurementReportSourceFixture()
   const { cold, delayed, claim } = source
+  const replacementClock = { ...source.episode.clock!, dueAt: claim.clock.dueAt + 3_600_000,
+    openAt: claim.clock.openAt + 3_600_000, closeAt: claim.clock.closeAt + 86_400_000 }
   const replacement = learnReportResultSnapshotSchema.parse({ ...delayed, submissionId: 'replacementSubmission1',
+    acceptedAt: replacementClock.openAt, scoreCommittedAt: replacementClock.openAt + 1000,
     attemptId: 'replacementAttempt1', executionId: 'replacementExecution1', caseId: 'caseD', itemId: 'itemD', formLabel: 'D' })
   const episode = learnReportEpisodeSnapshotSchema.parse({ ...source.episode, cold, delayed,
-    replacementOpportunityId: 'replacementOpportunity1', replacementAcceptance: { submissionId: replacement.submissionId, acceptedAt: replacement.acceptedAt }, replacement })
+    replacementOpportunityId: 'replacementOpportunity1', replacementClock,
+    replacementAcceptance: { submissionId: replacement.submissionId, acceptedAt: replacement.acceptedAt }, replacement })
   const openAt = claim.clock.anchorAt + 30 * 86_400_000
   const day30Delayed = learnReportResultSnapshotSchema.parse({ ...delayed, submissionId: 'day30Submission',
     attemptId: 'day30Attempt', executionId: 'day30Execution', acceptedAt: openAt, scoreCommittedAt: openAt + 1000,
     caseId: 'caseC', itemId: 'itemC', formLabel: 'C' })
   const day30Replacement = learnReportResultSnapshotSchema.parse({ ...day30Delayed, submissionId: 'day30ReplacementSubmission',
+    acceptedAt: openAt + 3_600_000, scoreCommittedAt: openAt + 3_600_000 + 1000,
     attemptId: 'day30ReplacementAttempt', executionId: 'day30ReplacementExecution', caseId: 'caseE', itemId: 'itemE', formLabel: 'E' })
   const day30 = learnReportEpisodeSnapshotSchema.parse({ ...episode, horizonDays: 30,
     clock: { ...claim.clock, horizonDays: 30, dueLocalDate: '2026-10-31', dueAt: openAt, openAt, closeAt: openAt + 86_400_000 },
+    replacementClock: { ...replacementClock, horizonDays: 30, dueLocalDate: '2026-10-31', dueAt: openAt + 3_600_000,
+      openAt: openAt + 3_600_000, closeAt: openAt + 2 * 86_400_000 },
     originalOpportunityId: 'day30Opportunity', delayedAcceptance: { submissionId: day30Delayed.submissionId, acceptedAt: day30Delayed.acceptedAt }, delayed: day30Delayed,
     replacementOpportunityId: 'day30ReplacementOpportunity', replacementAcceptance: { submissionId: day30Replacement.submissionId, acceptedAt: day30Replacement.acceptedAt }, replacement: day30Replacement })
   const otherAssignment = learnReportEpisodeSnapshotSchema.parse({ ...episode, assignmentId: 'assignment2', coldOpportunityId: 'otherColdOpportunity',
