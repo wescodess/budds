@@ -14,6 +14,7 @@ const EXPORT_COLLECTIONS = [
   'quizzes',
   'quizQuestions',
   'quizAttempts',
+  'quizAnswerAssessments',
   'flashcardSets',
   'flashcards',
   'flashcardRooms',

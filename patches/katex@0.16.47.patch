@@ -1,0 +1,147 @@
+diff --git a/dist/katex.js b/dist/katex.js
+index 2de2003251a8e5dda149c3b707eaf28f42b459f2..d55fab334f7f6977a7242e4fcecb7970cb437258 100644
+--- a/dist/katex.js
++++ b/dist/katex.js
+@@ -315,15 +315,16 @@ function getImplicitDefault(type) {
+   }
+ }
+ function getDefaultValue(schema) {
+-  if (schema.default !== undefined) {
++  if (Object.prototype.hasOwnProperty.call(schema, "default") && schema.default !== undefined) {
+     return schema.default;
+   }
+   const type = Array.isArray(schema.type) ? schema.type[0] : schema.type;
+   return getImplicitDefault(type);
+ }
+ function applySetting(target, prop, options, schema) {
+-  const optionValue = options[prop];
+-  target[prop] = optionValue !== undefined ? schema.processor ? schema.processor(optionValue) : optionValue : getDefaultValue(schema);
++  const optionValue = Object.prototype.hasOwnProperty.call(options, prop) ? options[prop] : undefined;
++  const processor = Object.prototype.hasOwnProperty.call(schema, "processor") ? schema.processor : undefined;
++  target[prop] = optionValue !== undefined ? processor ? processor(optionValue) : optionValue : getDefaultValue(schema);
+ }
+ 
+ /**
+@@ -14782,8 +14783,10 @@ class Namespace {
+   get(name) {
+     if (this.current.hasOwnProperty(name)) {
+       return this.current[name];
+-    } else {
++    } else if (Object.prototype.hasOwnProperty.call(this.builtins, name)) {
+       return this.builtins[name];
++    } else {
++      return undefined;
+     }
+   }
+ 
+@@ -14815,7 +14818,7 @@ class Namespace {
+       // value is the correct one.
+       const top = this.undefStack[this.undefStack.length - 1];
+       if (top && !top.hasOwnProperty(name)) {
+-        top[name] = this.current[name];
++        top[name] = Object.prototype.hasOwnProperty.call(this.current, name) ? this.current[name] : undefined;
+       }
+     }
+     if (value == null) {
+diff --git a/dist/katex.mjs b/dist/katex.mjs
+index b4a83b4b7b9b31064413fa7eb5447823110d7305..eefd0dde4453c7deae21771b7c57219e1ce5f35b 100644
+--- a/dist/katex.mjs
++++ b/dist/katex.mjs
+@@ -248,15 +248,16 @@ function getImplicitDefault(type) {
+   }
+ }
+ function getDefaultValue(schema) {
+-  if (schema.default !== undefined) {
++  if (Object.prototype.hasOwnProperty.call(schema, "default") && schema.default !== undefined) {
+     return schema.default;
+   }
+   var type = Array.isArray(schema.type) ? schema.type[0] : schema.type;
+   return getImplicitDefault(type);
+ }
+ function applySetting(target, prop, options, schema) {
+-  var optionValue = options[prop];
+-  target[prop] = optionValue !== undefined ? schema.processor ? schema.processor(optionValue) : optionValue : getDefaultValue(schema);
++  var optionValue = Object.prototype.hasOwnProperty.call(options, prop) ? options[prop] : undefined;
++  var processor = Object.prototype.hasOwnProperty.call(schema, "processor") ? schema.processor : undefined;
++  target[prop] = optionValue !== undefined ? processor ? processor(optionValue) : optionValue : getDefaultValue(schema);
+ }
+ /**
+  * The main Settings object
+@@ -13661,8 +13662,10 @@ class Namespace {
+   get(name) {
+     if (this.current.hasOwnProperty(name)) {
+       return this.current[name];
+-    } else {
++    } else if (Object.prototype.hasOwnProperty.call(this.builtins, name)) {
+       return this.builtins[name];
++    } else {
++      return undefined;
+     }
+   }
+   /**
+@@ -13693,7 +13696,7 @@ class Namespace {
+       // value is the correct one.
+       var top = this.undefStack[this.undefStack.length - 1];
+       if (top && !top.hasOwnProperty(name)) {
+-        top[name] = this.current[name];
++        top[name] = Object.prototype.hasOwnProperty.call(this.current, name) ? this.current[name] : undefined;
+       }
+     }
+     if (value == null) {
+diff --git a/src/Namespace.ts b/src/Namespace.ts
+index 523fa329af33bb02d68b72d3a9f944790dddab68..3a8bf5d87e063aefbabbde71411e8983598e7adc 100644
+--- a/src/Namespace.ts
++++ b/src/Namespace.ts
+@@ -85,8 +85,10 @@ export default class Namespace<Value> {
+     get(name: string): Value | null | undefined {
+         if (this.current.hasOwnProperty(name)) {
+             return this.current[name];
+-        } else {
++        } else if (Object.prototype.hasOwnProperty.call(this.builtins, name)) {
+             return this.builtins[name];
++        } else {
++            return undefined;
+         }
+     }
+ 
+@@ -115,7 +117,8 @@ export default class Namespace<Value> {
+             // value is the correct one.
+             const top = this.undefStack[this.undefStack.length - 1];
+             if (top && !top.hasOwnProperty(name)) {
+-                top[name] = this.current[name];
++                top[name] = Object.prototype.hasOwnProperty.call(
++                    this.current, name) ? this.current[name] : undefined;
+             }
+         }
+         if (value == null) {
+diff --git a/src/Settings.ts b/src/Settings.ts
+index aa5d4114496241ae6dc559dc24ae15f872c77aa7..9d9455db4f153ac55baaeebcac70bf2387139052 100644
+--- a/src/Settings.ts
++++ b/src/Settings.ts
+@@ -326,7 +326,8 @@ function getDefaultValue<K extends keyof SettingsOptions>(
+     schema: SchemaEntry<K>,
+ ): Settings[K];
+ function getDefaultValue(schema: SchemaEntry<keyof SettingsOptions>): DefaultValue {
+-    if (schema.default !== undefined) {
++    if (Object.prototype.hasOwnProperty.call(schema, "default") &&
++        schema.default !== undefined) {
+         return schema.default;
+     }
+     const type = Array.isArray(schema.type) ? schema.type[0] : schema.type;
+@@ -339,10 +340,13 @@ function applySetting<K extends keyof SettingsOptions>(
+     options: SettingsOptions,
+     schema: SchemaEntry<K>,
+ ) {
+-    const optionValue = options[prop];
++    const optionValue = Object.prototype.hasOwnProperty.call(options, prop)
++        ? options[prop] : undefined;
++    const processor = Object.prototype.hasOwnProperty.call(schema, "processor")
++        ? schema.processor : undefined;
+     target[prop] = optionValue !== undefined
+-        ? (schema.processor
+-            ? schema.processor(optionValue)
++        ? (processor
++            ? processor(optionValue)
+             : optionValue)
+         : getDefaultValue(schema);
+ }

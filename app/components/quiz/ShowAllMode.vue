@@ -4,6 +4,7 @@ import type { AttemptQuestion } from '~/composables/useQuizAttempt'
 const props = defineProps<{
   questions: AttemptQuestion[]
   submitting: boolean
+  submitFailed?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -86,6 +87,7 @@ function handleSubmit() {
     </div>
 
     <div class="sticky bottom-0 border-t bg-background p-4">
+      <p v-if="submitFailed" role="alert" class="mb-2 text-xs text-destructive">We couldn't submit your quiz. Try again.</p>
       <div class="flex items-center justify-between">
         <span class="text-sm text-muted-foreground">{{ answeredCount }} of {{ questions.length }} answered</span>
         <div class="flex-1 mx-4">
@@ -98,7 +100,7 @@ function handleSubmit() {
         </div>
         <div class="flex gap-2">
           <UiButton v-if="!allAnswered" variant="outline" @click="scrollToNextUnanswered">Next</UiButton>
-          <UiButton :disabled="!allAnswered || submitting" @click="handleSubmit">
+          <UiButton data-quiz-submit :disabled="!allAnswered || submitting" @click="handleSubmit">
             {{ submitting ? 'Submitting...' : 'Submit' }}
           </UiButton>
         </div>

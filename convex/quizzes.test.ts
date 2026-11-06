@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 import { convexTest } from 'convex-test'
 import { describe, expect, test } from 'vitest'
-import { api } from './_generated/api'
+import { api, internal } from './_generated/api'
 import schema from './schema'
 
 const modules = import.meta.glob('./**/*.ts')
@@ -135,7 +135,91 @@ describe('quizzes.createWithQuestions', () => {
   })
 })
 
+describe('quizzes.addQuestion', () => {
+  test('[P0] rejects insertion when the quiz already has the bounded maximum of 200 questions', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Large quiz' })
+    const { quizId } = await asUser.mutation(api.quizzes.createWithQuestions, {
+      folderId,
+      title: 'At capacity',
+      questions: Array.from({ length: 200 }, (_, order) => ({
+        order,
+        question: `Question ${order}`,
+        type: 'free-response' as const,
+        correctAnswer: `Answer ${order}`,
+      })),
+    })
+
+    await expect(asUser.mutation(api.quizzes.addQuestion, {
+      quizId,
+      type: 'free-response',
+      questionText: 'Question 201',
+      correctAnswer: 'Answer 201',
+    })).rejects.toThrow(/maximum of 200 questions/i)
+
+    const rows = await t.run(ctx => ctx.db.query('quizQuestions').withIndex('by_quizId', q => q.eq('quizId', quizId)).collect())
+    expect(rows).toHaveLength(200)
+  })
+})
+
+describe('quiz creation bounds', () => {
+  const oversizedQuestions = () => Array.from({ length: 201 }, (_, order) => ({
+    order, question: `Question ${order}`, type: 'free-response' as const, correctAnswer: `Answer ${order}`,
+  }))
+
+  test('[P0] rejects oversized user and course-scoped creation before inserting a quiz', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bounded' })
+    const { courseId } = await asUser.mutation(api.courses.create, { title: 'Bounded course', sourceType: 'web-only', folderId })
+
+    await expect(asUser.mutation(api.quizzes.createWithQuestions, {
+      folderId, title: 'Too large', questions: oversizedQuestions(),
+    })).rejects.toThrow(/cannot exceed 200 questions/i)
+    await expect(t.mutation(internal.quizzes.createCourseScopedQuiz, {
+      courseId, userId: USER_A.tokenIdentifier, folderId, title: 'Too large course quiz', questions: oversizedQuestions(),
+    })).rejects.toThrow(/cannot exceed 200 questions/i)
+
+    expect(await t.run(ctx => ctx.db.query('quizzes').withIndex('by_folderId', q => q.eq('folderId', folderId)).collect())).toEqual([])
+  })
+})
+
+
 describe('quizzes.listByFolder', () => {
+  test.each([undefined, false])('[P1] keeps more than 100 ordinary quizzes discoverable (courseScoped=%s)', async (courseScoped) => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Quiz archive' })
+    const quizIds = []
+    for (let index = 0; index < 101; index++) {
+      const { quizId } = await asUser.mutation(api.quizzes.createWithQuestions, {
+        folderId, title: `Quiz ${index}`, questions: [sampleQuestions()[0]!], courseScoped,
+      })
+      quizIds.push(quizId)
+    }
+    const { quizId: mixedQuizId } = await asUser.mutation(api.quizzes.createWithQuestions, {
+      folderId, title: 'Other ordinary scope', questions: [sampleQuestions()[0]!],
+      courseScoped: courseScoped === false ? undefined : false,
+    })
+    await t.run(async (ctx) => {
+      await ctx.db.insert('quizzes', { userId: USER_A.tokenIdentifier, folderId, title: 'Course only', status: 'ready', courseScoped: true })
+      await ctx.db.insert('quizzes', { userId: USER_A.tokenIdentifier, folderId, title: 'Deleted', status: 'ready', deletedAt: Date.now() })
+      await ctx.db.insert('quizzes', { userId: USER_B.tokenIdentifier, folderId, title: 'Foreign owner', status: 'ready' })
+    })
+
+    const listed = await asUser.query(api.quizzes.listByFolder, { folderId })
+    expect(listed).toHaveLength(102)
+    expect(new Set(listed.map(quiz => quiz._id))).toEqual(new Set([...quizIds, mixedQuizId]))
+    expect(listed.every(quiz => quiz.questionCount === 1)).toBe(true)
+    expect(listed.map(quiz => quiz._creationTime)).toEqual(listed.map(quiz => quiz._creationTime).sort((a, b) => b - a))
+    const oldest = await asUser.query(api.quizzes.getWithQuestions, { id: quizIds[0]! })
+    expect(oldest?.quiz.title).toBe('Quiz 0')
+    expect(oldest?.questions).toHaveLength(1)
+    expect(await t.query(api.quizzes.listByFolder, { folderId })).toEqual([])
+    expect(await t.withIdentity(USER_B).query(api.quizzes.listByFolder, { folderId })).toEqual([])
+  })
+
   test('[P0] returns only caller\'s quizzes for that folder', async () => {
     const t = convexTest(schema, modules)
     const asUserA = t.withIdentity(USER_A)
@@ -306,7 +390,11 @@ describe('quizzes.submitAttempt', () => {
       ctx.db.query('quizAttempts').withIndex('by_quizId', (q) => q.eq('quizId', quizId)).collect(),
     )
     expect(attempts).toHaveLength(1)
-    expect(attempts[0]!.answers!.every((a) => a.isCorrect)).toBe(true)
+    const storedAnswers = await t.run(ctx => ctx.db.query('attemptAnswers')
+      .withIndex('by_attemptId', q => q.eq('attemptId', attempts[0]!._id)).collect())
+    expect(storedAnswers).toHaveLength(2)
+    expect(storedAnswers.every(answer => answer.isCorrect)).toBe(true)
+    expect((await asA.query(api.quizzes.listAttempts, { quizId }))[0]!.answers?.every(answer => answer.isCorrect)).toBe(true)
   })
 
   test('[P0] updates parent quizzes.score as rounded percentage + completedAt', async () => {

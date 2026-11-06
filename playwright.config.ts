@@ -7,8 +7,9 @@ export default defineConfig({
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
-  reporter: process.env.CI ? [['list'], ['html', { outputFolder: 'playwright-report', open: 'never' }]] : 'list',
+  reporter: process.env.CI ? [['list'], ['html', { outputFolder: 'playwright-report', open: 'never' }], ['json', { outputFile: 'test-results/results.json' }]] : 'list',
   use: { baseURL: process.env.BUDDS_E2E_BASE_URL ?? 'http://127.0.0.1:3102', trace: 'retain-on-failure', screenshot: 'only-on-failure', video: 'retain-on-failure' },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
-  webServer: { command: 'pnpm e2e:stack', url: 'http://127.0.0.1:3102', timeout: 120_000, reuseExistingServer: false },
+  // Startup includes a complete disposable application build.
+  webServer: { command: 'pnpm e2e:stack', url: 'http://127.0.0.1:3102', timeout: 300_000, reuseExistingServer: false },
 })

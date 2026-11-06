@@ -7,6 +7,7 @@ const props = defineProps<{
   currentIndex: number
   immediateFeedback: boolean
   submitting: boolean
+  submitFailed?: boolean
   answeredIds: Set<string>
 }>()
 
@@ -43,6 +44,9 @@ const isLast = computed(() => props.currentIndex >= props.questions.length - 1)
 const currentAnswer = computed(() => localAnswers.value[currentQuestion.value?._id as string] ?? '')
 const currentFeedback = computed(() => feedbackMap.value[currentQuestion.value?._id as string] ?? null)
 const hasAnswered = computed(() => currentAnswer.value.trim().length > 0)
+const currentQuestionIsFreeForm = computed(() =>
+  currentQuestion.value?.type === 'free-response' || currentQuestion.value?.type === 'fill_in_the_blank',
+)
 
 function setAnswer(value: string) {
   if (!currentQuestion.value || currentFeedback.value) return
@@ -87,7 +91,10 @@ defineExpose({ receiveFeedback })
       :transition="springSnappy"
       class="flex-1 space-y-6 p-6"
     >
-      <div v-if="currentFeedback && immediateFeedback" class="rounded-lg p-3">
+      <div
+        v-if="currentFeedback && immediateFeedback && (currentFeedback.isCorrect || !currentQuestionIsFreeForm)"
+        class="rounded-lg p-3"
+      >
         <div
           v-if="currentFeedback.isCorrect"
           class="flex items-center gap-2 rounded-lg bg-green-500/10 px-4 py-3 text-green-500"
@@ -130,7 +137,7 @@ defineExpose({ receiveFeedback })
         <QuizInputsFillInBlank
           :model-value="currentAnswer"
           :disabled="submitting"
-          :feedback="currentFeedback ? { isCorrect: currentFeedback.isCorrect, correctAnswer: currentFeedback.correctAnswer } : null"
+          :feedback="currentFeedback ? { isCorrect: currentFeedback.isCorrect, correctAnswer: currentFeedback.correctAnswer, gradingPending: currentFeedback.gradingPending } : null"
           @update:model-value="setAnswer"
         />
       </div>
@@ -138,15 +145,14 @@ defineExpose({ receiveFeedback })
         <QuizInputsShortResponse
           :model-value="currentAnswer"
           :disabled="submitting"
-          :feedback="currentFeedback ? { isCorrect: currentFeedback.isCorrect, correctAnswer: currentFeedback.correctAnswer } : null"
+          :feedback="currentFeedback ? { isCorrect: currentFeedback.isCorrect, correctAnswer: currentFeedback.correctAnswer, gradingPending: currentFeedback.gradingPending } : null"
           @update:model-value="setAnswer"
         />
       </div>
 
       <div v-if="currentFeedback && immediateFeedback && !currentFeedback.isCorrect && currentQuestion.explanation" class="rounded-lg bg-muted/50 p-4 text-sm">
-        <p class="mb-1 text-xs font-medium text-muted-foreground">Correct answer:</p>
-        <p class="text-green-500">{{ currentFeedback.correctAnswer }}</p>
-        <p class="mt-2 text-muted-foreground">{{ currentQuestion.explanation }}</p>
+        <p class="mb-1 text-xs font-medium text-muted-foreground">Explanation</p>
+        <p class="text-muted-foreground">{{ currentQuestion.explanation }}</p>
       </div>
 
       <button
@@ -165,6 +171,7 @@ defineExpose({ receiveFeedback })
     </Motion>
 
     <div class="sticky bottom-0 border-t bg-background p-4">
+      <p v-if="submitFailed" role="alert" class="mb-2 text-xs text-destructive">We couldn't submit your quiz. Try again.</p>
       <div class="flex items-center justify-between">
         <span class="text-sm text-muted-foreground">{{ currentIndex + 1 }} of {{ questions.length }}</span>
         <div class="flex-1 mx-4">
@@ -176,6 +183,7 @@ defineExpose({ receiveFeedback })
           </div>
         </div>
         <UiButton
+          data-quiz-submit
           :disabled="(!hasAnswered && !currentFeedback) || (awaitingFeedback && immediateFeedback) || submitting"
           @click="handleNext"
         >

@@ -70,10 +70,16 @@ import type * as lib_learnV2BlueprintClone from "../lib/learnV2BlueprintClone.js
 import type * as lib_learnV2E2e from "../lib/learnV2E2e.js";
 import type * as lib_learnV2SourceSanitization from "../lib/learnV2SourceSanitization.js";
 import type * as lib_masteryStateMachine from "../lib/masteryStateMachine.js";
+import type * as lib_quizAnswerAssessment from "../lib/quizAnswerAssessment.js";
+import type * as lib_quizGrading from "../lib/quizGrading.js";
+import type * as lib_quizGradingLimits from "../lib/quizGradingLimits.js";
+
 import type * as lib_sm2 from "../lib/sm2.js";
 import type * as lib_streak from "../lib/streak.js";
 import type * as messages from "../messages.js";
 import type * as migrations from "../migrations.js";
+import type * as quizAnswerAssessments from "../quizAnswerAssessments.js";
+import type * as quizGrading from "../quizGrading.js";
 import type * as quizzes from "../quizzes.js";
 import type * as rateLimits from "../rateLimits.js";
 import type * as reviewItems from "../reviewItems.js";
@@ -150,10 +156,16 @@ declare const fullApi: ApiFromModules<{
   "lib/learnV2E2e": typeof lib_learnV2E2e;
   "lib/learnV2SourceSanitization": typeof lib_learnV2SourceSanitization;
   "lib/masteryStateMachine": typeof lib_masteryStateMachine;
+  "lib/quizAnswerAssessment": typeof lib_quizAnswerAssessment;
+  "lib/quizGrading": typeof lib_quizGrading;
+  "lib/quizGradingLimits": typeof lib_quizGradingLimits;
+
   "lib/sm2": typeof lib_sm2;
   "lib/streak": typeof lib_streak;
   messages: typeof messages;
   migrations: typeof migrations;
+  quizAnswerAssessments: typeof quizAnswerAssessments;
+  quizGrading: typeof quizGrading;
   quizzes: typeof quizzes;
   rateLimits: typeof rateLimits;
   reviewItems: typeof reviewItems;

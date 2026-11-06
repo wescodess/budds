@@ -1,4 +1,7 @@
 import { describe, test, expect } from 'vitest'
+import { convexTest } from 'convex-test'
+import { api } from '../../convex/_generated/api'
+import schema from '../../convex/schema'
 import type { AISearchChunk } from './ai-search'
 import { buildQuizPrompt, parseQuizResponse } from './quiz-prompt'
 
@@ -23,6 +26,21 @@ const chunks: AISearchChunk[] = [
   },
 ]
 
+test('generated free-response criteria survive parsing and persistence', async () => {
+  const t = convexTest(schema, import.meta.glob('../../convex/**/*.ts'))
+  const user = t.withIdentity({ tokenIdentifier: 'https://auth.example.com|generated-rubrics' })
+  const folderId = await user.mutation(api.folders.createFolder, { name: 'Biology' })
+  const gradingCriteria = [{ key: 'conversion', description: 'Describes light becoming chemical energy.', weightPercent: 100 }]
+  const parsed = parseQuizResponse(JSON.stringify({ title: 'Generated', questions: [{
+    order: 0, question: 'Define photosynthesis.', type: 'free-response', correctAnswer: 'Light becomes chemical energy.', sourceIndex: 0, gradingCriteria,
+  }] }))
+  const { quizId } = await user.mutation(api.quizzes.createWithQuestions, {
+    folderId, title: parsed.title, questions: parsed.questions.map(({ sourceIndex, ...q }) => ({ ...q, sourceChunkContent: chunks[sourceIndex]?.content })),
+  })
+  const row = await t.run(ctx => ctx.db.query('quizQuestions').withIndex('by_quizId', q => q.eq('quizId', quizId)).unique())
+  expect(row?.gradingCriteria).toEqual(gradingCriteria)
+})
+
 describe('buildQuizPrompt', () => {
   test('emits system + user messages referencing each source index', () => {
     const messages = buildQuizPrompt(chunks, { questionCount: 5 })
@@ -32,6 +50,9 @@ describe('buildQuizPrompt', () => {
     expect(messages[1]!.role).toBe('user')
     expect(messages[1]!.content).toContain('[Source 0: biology-ch3.pdf]')
     expect(messages[1]!.content).toContain('[Source 2: biology-ch4.pdf]')
+    expect(messages[0]!.content).toContain('Only free-response items include "gradingCriteria"')
+    expect(messages[0]!.content).toContain('judging meaning, not wording')
+    expect(messages[0]!.content).toContain('supported by the cited source passage')
   })
 
   test('clamps questionCount into 3..8', () => {
@@ -41,6 +62,43 @@ describe('buildQuizPrompt', () => {
 })
 
 describe('parseQuizResponse', () => {
+  const criterion = { key: 'light_energy', description: 'Identifies light as the energy input.', weightPercent: 100 }
+  const freeResponse = { order: 0, question: 'Define photosynthesis.', type: 'free-response', correctAnswer: 'Light becomes chemical energy.', sourceIndex: 0 }
+
+  test('preserves valid free-response criteria', () => {
+    const result = parseQuizResponse(JSON.stringify({ questions: [{ ...freeResponse, gradingCriteria: [criterion] }] }))
+    expect(result.questions[0]?.gradingCriteria).toEqual([criterion])
+  })
+
+  test.each([
+    ['bad weights', [{ ...criterion, weightPercent: 99 }]],
+    ['fractional weights', [{ ...criterion, weightPercent: 100.5 }]],
+    ['zero weight', [{ ...criterion, weightPercent: 0 }, { ...criterion, key: 'other' }]],
+    ['duplicate keys', [{ ...criterion, weightPercent: 50 }, { ...criterion, weightPercent: 50 }]],
+    ['too many', Array.from({ length: 5 }, (_, i) => ({ ...criterion, key: `key_${i}`, weightPercent: 20 }))],
+    ['overlong description', [{ ...criterion, description: 'x'.repeat(301) }]],
+    ['uppercase key', [{ ...criterion, key: 'Light' }]],
+    ['malformed entry', [null]],
+    ['malformed field', 'not an array'],
+    ['missing description', [{ key: 'light_energy', weightPercent: 100 }]],
+    ['null', null],
+    ['empty', []],
+  ])('drops only criteria for %s', (_label, gradingCriteria) => {
+    const result = parseQuizResponse(JSON.stringify({ questions: [{ ...freeResponse, gradingCriteria }] }))
+    expect(result.questions).toEqual([freeResponse])
+    expect(result.questions[0]).not.toHaveProperty('gradingCriteria')
+  })
+
+  test.each([
+    { type: 'multiple-choice', options: ['A', 'B', 'C', 'D'], correctAnswer: 'A' },
+    { type: 'true_false', options: ['True', 'False'], correctAnswer: 'True' },
+    { type: 'fill_in_the_blank', correctAnswer: 'light' },
+  ])('omits criteria on $type', (question) => {
+    const result = parseQuizResponse(JSON.stringify({ questions: [{ ...freeResponse, ...question, gradingCriteria: [criterion] }] }))
+    expect(result.questions).toHaveLength(1)
+    expect(result.questions[0]).not.toHaveProperty('gradingCriteria')
+  })
+
   test('parses happy-path JSON with valid MC + free-response questions', () => {
     const raw = JSON.stringify({
       title: 'Cellular Biology Quiz',

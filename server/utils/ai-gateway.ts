@@ -14,9 +14,18 @@ export interface GenerateParams {
   stream?: boolean
   maxAttempts?: number
   allowProviderFallbacks?: boolean
+  collectLogPayload?: boolean
+  requireZeroDataRetention?: boolean
+  denyProviderDataCollection?: boolean
+  skipGatewayCache?: boolean
+  providerOrder?: string[]
+  maxPrice?: { prompt: number, completion: number }
+  reasoning?: { enabled: boolean }
   jsonMode?: boolean
   signal?: AbortSignal
   maxResponseBytes?: number
+  maxRequestBytes?: number
+  redactUpstreamErrorBody?: boolean
   jsonSchema?: {
     name: string
     strict?: boolean
@@ -170,49 +179,74 @@ function getGatewayConfig() {
   return { baseUrl, headers }
 }
 
+export function serializeCompletionRequest(params: GenerateParams): string {
+  return JSON.stringify({
+    model: params.model,
+    messages: params.messages,
+    temperature: params.temperature ?? 0.7,
+    max_tokens: params.max_tokens ?? 2048,
+    stream: false,
+    ...(params.reasoning ? { reasoning: params.reasoning } : {}),
+    ...(params.jsonSchema
+      ? {
+          response_format: {
+            type: 'json_schema',
+            json_schema: params.jsonSchema,
+          },
+          provider: {
+            require_parameters: true,
+            ...(params.allowProviderFallbacks === false ? { allow_fallbacks: false } : {}),
+            ...(params.requireZeroDataRetention ? { zdr: true } : {}),
+            ...(params.denyProviderDataCollection ? { data_collection: 'deny' } : {}),
+            ...(params.providerOrder?.length ? { order: params.providerOrder, only: params.providerOrder } : {}),
+            ...(params.maxPrice ? { max_price: params.maxPrice } : {}),
+          },
+        }
+      : params.jsonMode
+      ? {
+          response_format: { type: 'json_object' },
+          provider: {
+            require_parameters: true,
+            ...(params.allowProviderFallbacks === false ? { allow_fallbacks: false } : {}),
+            ...(params.requireZeroDataRetention ? { zdr: true } : {}),
+            ...(params.denyProviderDataCollection ? { data_collection: 'deny' } : {}),
+            ...(params.providerOrder?.length ? { order: params.providerOrder, only: params.providerOrder } : {}),
+            ...(params.maxPrice ? { max_price: params.maxPrice } : {}),
+          },
+        }
+      : params.maxPrice ? { provider: { max_price: params.maxPrice } } : {}),
+  })
+}
+
 export async function generateCompletion(params: GenerateParams): Promise<GenerateResponse> {
   const deterministic = deterministicLearnV2Completion(params)
   if (deterministic) return deterministic
   const { baseUrl, headers: baseHeaders } = getGatewayConfig()
   const headers = { ...baseHeaders }
   if (params.maxAttempts !== undefined) headers['cf-aig-max-attempts'] = String(params.maxAttempts)
+  if (params.collectLogPayload !== undefined) headers['cf-aig-collect-log-payload'] = String(params.collectLogPayload)
+  if (params.skipGatewayCache !== undefined) headers['cf-aig-skip-cache'] = String(params.skipGatewayCache)
   const url = `${baseUrl}/openrouter/v1/chat/completions`
 
+  const requestBody = serializeCompletionRequest(params)
+  if (params.maxRequestBytes !== undefined && new TextEncoder().encode(requestBody).byteLength > params.maxRequestBytes) {
+    throw providerError({ statusCode: 413, message: 'AI Gateway request exceeded the byte limit' }, 'not_dispatched')
+  }
   const response = await fetch(url, {
     method: 'POST',
     headers,
     signal: params.signal,
-    body: JSON.stringify({
-      model: params.model,
-      messages: params.messages,
-      temperature: params.temperature ?? 0.7,
-      max_tokens: params.max_tokens ?? 2048,
-      stream: false,
-      ...(params.jsonSchema
-        ? {
-            response_format: {
-              type: 'json_schema',
-              json_schema: params.jsonSchema,
-            },
-            provider: {
-              require_parameters: true,
-              ...(params.allowProviderFallbacks === false ? { allow_fallbacks: false } : {}),
-            },
-          }
-        : params.jsonMode
-        ? {
-            response_format: { type: 'json_object' },
-            provider: { require_parameters: true },
-          }
-        : {}),
-    }),
+    body: requestBody,
   })
 
   const responseText = await readBoundedResponseText(response, params.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES)
   if (!response.ok) {
-    const error = responseText
+    const error = params.redactUpstreamErrorBody ? 'Upstream provider request failed' : responseText
     const options = { statusCode: response.status, message: `AI Gateway error: ${error}` }
-    throw providerError(options, response.status >= 500 ? 'outcome_unknown' : 'definitive_failure')
+    const retryAfter = response.headers?.get?.('retry-after')
+    const delay = retryAfter ? (/^\d+(?:\.\d+)?$/.test(retryAfter.trim()) ? Number(retryAfter) * 1_000 : Date.parse(retryAfter) - Date.now()) : NaN
+    throw Object.assign(providerError(options, response.status >= 500 ? 'outcome_unknown' : 'definitive_failure'),
+      Number.isFinite(delay) ? { retryAfterMs: Math.max(0, delay) } : {})
   }
 
   let parsed: unknown
