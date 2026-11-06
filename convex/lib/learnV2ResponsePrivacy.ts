@@ -140,6 +140,11 @@ export function legacySourceIds(ctx: QueryCtx | MutationCtx, json: string | unde
 }
 
 export async function retainedResponsePayload(ctx: QueryCtx | MutationCtx, userId: string, response: Doc<'learnResponses'>) {
+  if (!await responseActivityWithinBound(ctx, userId, response)) return null
+  return await retainedResponseBody(ctx, userId, response)
+}
+
+async function retainedResponseBody(ctx: QueryCtx | MutationCtx, userId: string, response: Doc<'learnResponses'>) {
   if (response.userId !== userId || response.bodyAvailability !== 'available' || response.evidenceStatus !== 'available' || response.invalidatedAt !== undefined) return null
   const target = 'assessmentOpportunityId' in response
     ? await ctx.db.get(response.assessmentOpportunityId) : await ctx.db.get(response.responseSlotId)
@@ -242,24 +247,46 @@ export async function activityResponseAvailable(ctx: QueryCtx | MutationCtx, use
   for (const target of targets) {
     if (!target.submissionId) continue
     const response = await ctx.db.get(target.submissionId)
-    if (!response || !await retainedResponsePayload(ctx, userId, response)) return false
+    if (!response || !await retainedResponseBody(ctx, userId, response)) return false
   }
   return true
 }
 
+const MAX_ACTIVITY_RESPONSE_TARGETS = 64
+
+export async function responseActivityWithinBound(ctx: QueryCtx | MutationCtx, userId: string, response: Doc<'learnResponses'>) {
+  if (response.userId !== userId) return false
+  const canvas = response.scopeKind === 'v2' && response.contextPins.kind === 'session' ? response.contextPins.canvas : undefined
+  if (response.scopeKind === 'v2' && !canvas) return true
+  const activityId = response.scopeKind === 'standalone' ? response.activityId : canvas!.activityId
+  const threadId = response.scopeKind === 'standalone' ? response.threadId : canvas!.threadId
+  const activity = await ctx.db.get(activityId)
+  // A removed optional wrapper does not revoke V2-owned retained history.
+  if (!activity) return response.scopeKind === 'v2' && !await ctx.db.get(threadId)
+  if (activity.userId !== userId || activity.threadId !== threadId) return false
+  return await activityResponseTargets(ctx, userId, activity) !== null
+}
+
 export async function activityResponseTargets(ctx: QueryCtx | MutationCtx, userId: string, activity: Doc<'learningThreadActivities'>) {
   if (activity.userId !== userId) return null
-  const slots = await ctx.db.query('learnResponseSlots').withIndex('by_userId_and_threadId', q => q.eq('userId', userId).eq('threadId', activity.threadId)).take(65)
-  if (slots.length > 64) return null
-  const targets: Array<Doc<'learnResponseSlots'> | Doc<'learnAssessmentOpportunities'>> = slots.filter(slot => slot.scopeKind === 'standalone' && slot.activityId === activity._id)
-  if (activity.sessionContentId) {
-    const content = await ctx.db.get(activity.sessionContentId)
-    if (!content || content.userId !== userId) return null
-    const sessionSlots = await ctx.db.query('learnResponseSlots').withIndex('by_userId_and_contextPins_studySessionId', q => q.eq('userId', userId).eq('contextPins.studySessionId', content.studySessionId)).take(65)
-    const opportunities = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_contextPins_studySessionId', q => q.eq('userId', userId).eq('contextPins.studySessionId', content.studySessionId)).take(65)
-    if (sessionSlots.length > 64 || opportunities.length > 64) return null
-    targets.push(...[...sessionSlots, ...opportunities].filter(row => row.scopeKind === 'v2' && row.contextPins.kind === 'session'
-      && row.contextPins.canvas?.threadId === activity.threadId && row.contextPins.canvas.activityId === activity._id))
+  const targets: Array<Doc<'learnResponseSlots'> | Doc<'learnAssessmentOpportunities'>> = await ctx.db.query('learnResponseSlots')
+    .withIndex('by_userId_and_activityId', q => q.eq('userId', userId).eq('activityId', activity._id)).take(MAX_ACTIVITY_RESPONSE_TARGETS + 1)
+  if (targets.length > MAX_ACTIVITY_RESPONSE_TARGETS || targets.some(row => row.scopeKind !== 'standalone' || row.threadId !== activity.threadId)) return null
+  const sessionSlots = await ctx.db.query('learnResponseSlots')
+    .withIndex('by_userId_and_contextPins_canvas_activityId', q => q.eq('userId', userId).eq('contextPins.canvas.activityId', activity._id))
+    .take(MAX_ACTIVITY_RESPONSE_TARGETS - targets.length + 1)
+  targets.push(...sessionSlots)
+  if (targets.length > MAX_ACTIVITY_RESPONSE_TARGETS) return null
+  const opportunities = await ctx.db.query('learnAssessmentOpportunities')
+    .withIndex('by_userId_and_contextPins_canvas_activityId', q => q.eq('userId', userId).eq('contextPins.canvas.activityId', activity._id))
+    .take(MAX_ACTIVITY_RESPONSE_TARGETS - targets.length + 1)
+  targets.push(...opportunities)
+  if (targets.length > MAX_ACTIVITY_RESPONSE_TARGETS) return null
+  const content = activity.sessionContentId && await ctx.db.get(activity.sessionContentId)
+  if (activity.sessionContentId && (!content || content.userId !== userId)) return null
+  for (const row of [...sessionSlots, ...opportunities]) {
+    if (!content || row.scopeKind !== 'v2' || row.contextPins.kind !== 'session'
+      || row.contextPins.studySessionId !== content.studySessionId || row.contextPins.canvas?.threadId !== activity.threadId) return null
   }
   return targets
 }

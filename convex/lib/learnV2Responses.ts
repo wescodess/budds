@@ -3,7 +3,7 @@ import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { requireOwnedResponseTarget } from './learnV2PublicAccess'
 import { getScopedMasteryRecord } from './learnV2MasteryScope'
-import { liveResponseAggregate, sourceBodyAvailable, threadSourceAvailable } from './learnV2ResponsePrivacy'
+import { liveResponseAggregate, responseActivityWithinBound, sourceBodyAvailable, threadSourceAvailable } from './learnV2ResponsePrivacy'
 import { documentHasCurrentRevision, documentMatchesSnapshot } from './learnV2BackingSource'
 import {
   acceptResponseCommandSchema, disabledResponseReceipt, disabledLearnV2Result, LEARN_V2_PUBLIC_API_VERSION,
@@ -526,6 +526,7 @@ async function retainedBody(ctx: ReadCtx, userId: string, response: Doc<'learnRe
   if (response.bodyAvailability === 'purged') return { bodyAvailability: 'purged' as const, reasonCode: 'evidence_unavailable' as const, purgedAt: response.bodyPurgedAt ?? response.invalidatedAt ?? response.acceptedAt }
   const unavailable = { bodyAvailability: 'unavailable' as const, reasonCode: 'evidence_unavailable' as const }
   if (response.evidenceStatus !== 'available' || response.invalidatedAt !== undefined) return unavailable
+  if (!await responseActivityWithinBound(ctx, userId, response)) return unavailable
   if (!await liveResponseAggregate(ctx, userId, response)) return unavailable
   if (response.scopeKind === 'v2' && response.contextPins.kind === 'session' && response.contextPins.canvas) {
     const thread = await ctx.db.get(response.contextPins.canvas.threadId)

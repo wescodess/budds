@@ -7,6 +7,7 @@ import { composeAdaptiveActivityPlan } from '../shared/learn-adaptive-activity-p
 import { ADAPTIVE_V2_PILOT_MANIFEST } from '../shared/adaptive-v2-pilot-policy'
 import { seedMeasurementStorage, STORAGE_CANARIES } from '../tests/fixtures/learn-v2-measurement-storage'
 import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
+import { appendActivityResponseTargets } from '../tests/fixtures/learn-v2-activity-responses'
 
 const modules = import.meta.glob('./**/*.ts')
 const OWNER = { tokenIdentifier: 'https://auth.example.com|canvas-owner' }
@@ -76,7 +77,7 @@ async function fixture() {
 }
 
 describe('ready V2 adaptive Canvas', () => {
-  test.each(['body_purged', 'direct_document_deleted'] as const)('Canvas and Journey withhold retained aliases after %s while source review keeps independent evidence', async revocation => {
+  test.each(['body_purged', 'direct_document_deleted', 'unrelated_slots', 'unrelated_canvas_slots', 'unrelated_opportunities', 'activity_overflow'] as const)('Canvas and Journey preserve retained body authority through %s', async revocation => {
     vi.useFakeTimers()
     const { t, owner, ids } = await fixture()
     const attached = await owner.mutation(api.learnAdaptiveCanvas.attachReadySession, { studySessionId: ids.studySessionId, expectedSessionRevision: 2, idempotencyKey: 'canonical-copy-attach' })
@@ -108,6 +109,25 @@ describe('ready V2 adaptive Canvas', () => {
     const canvasArgs = { threadId: attached.threadId }
     expect((await owner.query(api.learnAdaptiveCanvas.getCanvas, canvasArgs))?.savedResponse).toMatchObject({ response: STORAGE_CANARIES.answer })
     expect((await owner.query(api.learnV2Journey.getMission, { learningVoidId: ids.learningVoidId }))?.mastery[0]?.attempts[0]).toMatchObject({ response: STORAGE_CANARIES.answer })
+    if (revocation.startsWith('unrelated') || revocation === 'activity_overflow') {
+      const targetFixture = { t, userId: OWNER.tokenIdentifier, threadId: attached.threadId, activityId: prepared.activityId, submissionId: f.rows.learnResponses }
+      const kind = revocation === 'unrelated_slots' ? 'standalone' : revocation === 'unrelated_opportunities' ? 'opportunity' : 'canvas_slot'
+      await appendActivityResponseTargets(targetFixture, 63, revocation === 'activity_overflow', kind)
+      expect((await owner.query(api.learnAdaptiveCanvas.getCanvas, canvasArgs))?.savedResponse).toMatchObject({ response: STORAGE_CANARIES.answer })
+      await appendActivityResponseTargets(targetFixture, 1, revocation === 'activity_overflow', kind)
+      const canvas = await owner.query(api.learnAdaptiveCanvas.getCanvas, canvasArgs)
+      expect(canvas).toMatchObject({ thread: { id: attached.threadId }, session: { studySessionId: ids.studySessionId }, activity: { planRevision: 1 } })
+      const attempt = (await owner.query(api.learnV2Journey.getMission, { learningVoidId: ids.learningVoidId }))?.mastery[0]?.attempts[0]
+      if (revocation === 'activity_overflow') {
+        expect(canvas?.savedResponse).toBeNull()
+        expect(attempt).toMatchObject({ serverScorePercent: 80, confidence: 4, bodyAvailability: 'unavailable' })
+        expect(attempt).not.toHaveProperty('response')
+      } else {
+        expect(canvas?.savedResponse).toMatchObject({ response: STORAGE_CANARIES.answer })
+        expect(attempt).toMatchObject({ response: STORAGE_CANARIES.answer })
+      }
+      return
+    }
     if (revocation === 'body_purged') await t.mutation(internal.learnV2Retention.purgeResponseCopies, { userId: OWNER.tokenIdentifier, submissionId: f.rows.learnResponses })
     else await owner.mutation(api.documents.deleteDocument, { id: prepared.documentId })
     expect((await t.run(ctx => ctx.db.get(prepared.activityId)))?.submittedResponse).toBe(STORAGE_CANARIES.answer)
