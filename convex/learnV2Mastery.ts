@@ -1005,7 +1005,7 @@ export async function acceptMasterySubmissionForOwner(
   ctx: MutationCtx, tokenIdentifier: string, input: LearnV2AcceptMasterySubmission,
 ): Promise<LearnResponseReceipt> {
   const request = parsePublicLearnRequest(acceptMasterySubmissionSchema, input)
-  return await acceptResponseForOwner(ctx, tokenIdentifier, request)
+  return await acceptResponseForOwner(ctx, tokenIdentifier, request.submission)
 }
 
 export const acceptMasterySubmission = mutation({

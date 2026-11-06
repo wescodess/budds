@@ -11,6 +11,7 @@ import { LEARN_V2_RESPONSE_CONTRACT_VERSION, type learnAcceptResponseRequestSche
 import { LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION, LEARN_V2_MEASUREMENT_REPORT_VERSION } from '../shared/learn-v2-measurement-report'
 import {
   LEARN_V2_PUBLIC_API_VERSION, type LearnV2SubmissionScore, type LearnV2ResponseState, type LearnV2AggregateExport,
+  type LearnV2AcceptMasterySubmission,
 } from './lib/learnV2PublicContract'
 import type { z } from 'zod'
 
@@ -57,8 +58,8 @@ const cases: Array<{ name: string, call: (actor: Actor, f: Fixture) => Promise<u
   { name: 'grantAssessmentDelivery', call: (actor, f) => actor.mutation(api.learnV2Assessments.grantAssessmentDelivery, { ...f.assessmentReference, expectedRevision: 1, idempotencyKey: key }), expected: disabled },
   { name: 'getAssessment', call: (actor, f) => actor.query(api.learnV2Assessments.getAssessment, f.assessmentReference), expected: disabled },
   { name: 'getAssessmentState', call: (actor, f) => actor.query(api.learnV2Assessments.getAssessmentState, f.assessmentReference), expected: disabled },
-  { name: 'acceptMasterySubmission', call: (actor, f) => actor.mutation(api.learnV2Mastery.acceptMasterySubmission, { ...f.responseRequest, response: { ...f.response, target: f.assessmentTarget } }), expected: rejected },
-  { name: 'acceptMasterySubmission bundle', call: (actor, f) => actor.mutation(api.learnV2Mastery.acceptMasterySubmission, { version: LEARN_V2_RESPONSE_CONTRACT_VERSION, idempotencyKey: key, teachBack: f.response, application: { ...f.response, target: f.assessmentTarget, confidence: 3 } }), expected: rejected },
+  { name: 'acceptMasterySubmission', call: (actor, f) => actor.mutation(learnV2TodayMeasurementApi.acceptMasterySubmission, learnV2TodayMeasurementApi.masterySubmissionArgs({ ...f.responseRequest, response: { ...f.response, target: f.assessmentTarget } })), expected: rejected },
+  { name: 'acceptMasterySubmission bundle', call: (actor, f) => actor.mutation(learnV2CanvasMeasurementApi.acceptMasterySubmission, learnV2CanvasMeasurementApi.masterySubmissionArgs({ version: LEARN_V2_RESPONSE_CONTRACT_VERSION, idempotencyKey: key, teachBack: f.response, application: { ...f.response, target: f.assessmentTarget, confidence: 3 } })), expected: rejected },
   { name: 'scoreMasterySubmission', call: (actor, f) => actor.action(api.learnV2Mastery.scoreMasterySubmission, { version: LEARN_V2_PUBLIC_API_VERSION, submissionId: f.f.rows.learnResponses, idempotencyKey: key }), expected: disabled },
   { name: 'authorizeAssistance', call: (actor, f) => actor.mutation(api.learnV2Assistance.authorizeAssistance, { ...f.assessmentReference, kind: 'hint', idempotencyKey: key }), expected: { version: LEARN_V2_PUBLIC_API_VERSION, status: 'denied', reasonCode: 'disabled' } },
   { name: 'requestReport', call: (actor, f) => actor.mutation(api.learnV2MeasurementReports.requestReport, { version: LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION, viewerGrantId: f.f.rows.learnMeasurementReportViewerGrants, enrollmentStartAt: f.f.base.createdAt - 1000, enrollmentEndAt: f.f.base.createdAt, cutoff: f.f.base.createdAt, idempotencyKey: key }), expected: reportDisabled },
@@ -105,8 +106,40 @@ describe('registered inactive measurement API', () => {
     const f = await fixture()
     await expect(f.t.withIdentity(OWNER).mutation(api.learnV2Responses.acceptResponse, { ...f.responseRequest, [field]: 'forged' } as never)).rejects.toThrow()
     await expect(f.t.withIdentity(OWNER).mutation(api.learnV2Mastery.acceptMasterySubmission, {
-      ...f.responseRequest, response: { ...f.response, target: f.assessmentTarget }, [field]: 'forged',
+      submission: { ...f.responseRequest, response: { ...f.response, target: f.assessmentTarget } }, [field]: 'forged',
     } as never)).rejects.toThrow()
+    await expect(f.t.withIdentity(OWNER).mutation(api.learnV2Mastery.acceptMasterySubmission, {
+      submission: { ...f.responseRequest, response: { ...f.response, target: f.assessmentTarget }, [field]: 'forged' },
+    } as never)).rejects.toThrow()
+  })
+
+  test.each(['version', 'idempotencyKey', 'response', 'target', 'expectedRevision', 'payload'])('the single assessment still requires %s', async field => {
+    const f = await fixture()
+    const response = { ...f.response, target: f.assessmentTarget }
+    const submission = { ...f.responseRequest, response }
+    const omit = (value: object) => Object.fromEntries(Object.entries(value).filter(([key]) => key !== field))
+    const request = ['target', 'expectedRevision', 'payload'].includes(field)
+      ? { ...submission, response: omit(response) } : omit(submission)
+    await expect(f.t.withIdentity(OWNER).mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: request } as never)).rejects.toThrow()
+  })
+
+  test.each(['version', 'idempotencyKey', 'teachBack', 'application'])('the final bundle still requires %s', async field => {
+    const f = await fixture()
+    const submission = { version: LEARN_V2_RESPONSE_CONTRACT_VERSION, idempotencyKey: key, teachBack: f.response, application: { ...f.response, target: f.assessmentTarget } }
+    const request = Object.fromEntries(Object.entries(submission).filter(([key]) => key !== field))
+    await expect(f.t.withIdentity(OWNER).mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: request } as never)).rejects.toThrow()
+  })
+
+  test('rejects missing, flat, mixed and formative mastery envelopes without saving anything', async () => {
+    const f = await fixture()
+    const single = { ...f.responseRequest, response: { ...f.response, target: f.assessmentTarget } }
+    const before = await snapshot(f.t)
+    for (const request of [
+      {}, single, { submission: {} }, { submission: f.responseRequest },
+      { submission: { ...single, teachBack: f.response, application: single.response } },
+      { submission: { ...single, response: { ...single.response, extra: 'forged' } } },
+    ]) await expect(f.t.withIdentity(OWNER).mutation(api.learnV2Mastery.acceptMasterySubmission, request as never)).rejects.toThrow()
+    expect(await snapshot(f.t)).toEqual(before)
   })
 
   test.each(['bad:key', 'short', 'x'.repeat(129)])('keeps the new URL-safe key boundary: %s', async idempotencyKey => {
@@ -198,6 +231,7 @@ describe('registered inactive measurement API', () => {
       expect(getFunctionName(learnV2TodayMeasurementApi[name])).toBe(getFunctionName(learnV2CanvasMeasurementApi[name]))
     }
     expectTypeOf<FunctionArgs<typeof learnV2TodayMeasurementApi.acceptResponse>>().toEqualTypeOf<z.infer<typeof learnAcceptResponseRequestSchema>>()
+    expectTypeOf<FunctionArgs<typeof learnV2TodayMeasurementApi.acceptMasterySubmission>>().toEqualTypeOf<LearnV2AcceptMasterySubmission>()
     expectTypeOf<FunctionReturnType<typeof learnV2TodayMeasurementApi.scoreMasterySubmission>>().toEqualTypeOf<LearnV2SubmissionScore>()
     expectTypeOf<FunctionReturnType<typeof learnV2CanvasMeasurementApi.getResponseState>>().toEqualTypeOf<LearnV2ResponseState>()
     expectTypeOf<FunctionReturnType<typeof api.learnV2MeasurementReports.exportAggregateReport>>().toEqualTypeOf<LearnV2AggregateExport>()

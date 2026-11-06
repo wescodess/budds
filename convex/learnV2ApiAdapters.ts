@@ -1,4 +1,11 @@
 import { api } from './_generated/api'
+import type { FunctionArgs } from 'convex/server'
+
+export type LearnV2MasterySubmissionArgs = FunctionArgs<typeof api.learnV2Mastery.acceptMasterySubmission>
+
+export function masterySubmissionArgs(submission: LearnV2MasterySubmissionArgs['submission']): LearnV2MasterySubmissionArgs {
+  return { submission }
+}
 
 const canonical = {
   readiness: api.learnV2Assessments.getFeatureReadiness,
@@ -9,6 +16,7 @@ const canonical = {
   getAssessment: api.learnV2Assessments.getAssessment,
   getAssessmentState: api.learnV2Assessments.getAssessmentState,
   acceptMasterySubmission: api.learnV2Mastery.acceptMasterySubmission,
+  masterySubmissionArgs,
   scoreMasterySubmission: api.learnV2Mastery.scoreMasterySubmission,
   authorizeAssistance: api.learnV2Assistance.authorizeAssistance,
 } as const

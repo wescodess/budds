@@ -44,15 +44,19 @@ const responseEntry = v.object({
 export const acceptResponseArgs = v.object({
   version: v.literal(LEARN_V2_RESPONSE_CONTRACT_VERSION), idempotencyKey: v.string(), response: responseEntry,
 })
-export const acceptMasterySubmissionArgs = v.union(acceptResponseArgs, v.object({
-  version: v.literal(LEARN_V2_RESPONSE_CONTRACT_VERSION), idempotencyKey: v.string(),
-  teachBack: responseEntry, application: responseEntry,
-}))
+export const acceptMasterySubmissionArgs = v.object({
+  submission: v.union(acceptResponseArgs, v.object({
+    version: v.literal(LEARN_V2_RESPONSE_CONTRACT_VERSION), idempotencyKey: v.string(),
+    teachBack: responseEntry, application: responseEntry,
+  })),
+})
 export const acceptResponseCommandSchema = z.union([learnAcceptResponseRequestSchema, learnFinalResponseBundleSchema])
-export const acceptMasterySubmissionSchema = z.union([
-  learnAcceptResponseRequestSchema.refine(value => 'assessmentOpportunityId' in value.response.target),
-  learnFinalResponseBundleSchema,
-])
+export const acceptMasterySubmissionSchema = z.strictObject({
+  submission: z.union([
+    learnAcceptResponseRequestSchema.refine(value => 'assessmentOpportunityId' in value.response.target),
+    learnFinalResponseBundleSchema,
+  ]),
+})
 export const responseReceiptValidator = v.union(
   v.object({ kind: v.literal('rejected'), version: v.literal(LEARN_V2_RESPONSE_CONTRACT_VERSION), reasonCode: literals(LEARN_V2_RESPONSE_REJECTION_CODES) }),
   v.object({ kind: v.literal('accepted'), version: v.literal(LEARN_V2_RESPONSE_CONTRACT_VERSION), target: responseTargetValidator,
