@@ -14,6 +14,8 @@ export const BACKING_SOURCE_CASES = [
   ['hash_absent', false, false, false],
   ['revision_absent', false, false, false],
   ['both_absent', false, false, true],
+  ['empty_hash', false, false, false],
+  ['whitespace_hash', false, false, false],
 ] as const
 export const BACKING_SOURCE_KINDS = ['snapshot', 'direct', 'legacy'] as const
 type Kind = typeof BACKING_SOURCE_KINDS[number]
@@ -69,7 +71,9 @@ export async function replaceBackingDocument(f: BackingResponseFixture, change: 
     })
     return
   }
-  const patch = change === 'normalized'
+  const patch = change === 'empty_hash' || change === 'whitespace_hash'
+    ? { contentHash: change === 'empty_hash' ? '' : ' \t ', sourceRevision: 'sha256:' }
+    : change === 'normalized'
     ? { sourceRevision: `  sha256:${'a'.repeat(64)}  `, contentHash: `  ${'A'.repeat(64)}  `,
         r2Key: f.kind === 'snapshot' ? '  snapshot/original.txt  ' : '  standalone/original.txt  ' }
     : change === 'hash_replaced' ? { contentHash: 'b'.repeat(64) }
