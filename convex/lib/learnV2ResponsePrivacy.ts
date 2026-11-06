@@ -23,6 +23,17 @@ export async function digestLegacyFingerprint(value: string) {
   catch { return await privacyDigest(value) }
 }
 
+export async function liveResponseAggregate(ctx: QueryCtx | MutationCtx, userId: string,
+  row: { scopeKind: 'v2', learningVoidId: Id<'learningVoids'> } | { scopeKind: 'standalone', threadId: Id<'learningThreads'> }) {
+  if (row.scopeKind === 'standalone') {
+    const thread = await ctx.db.get(row.threadId)
+    return !!thread && thread.userId === userId && thread.deletionStartedAt === undefined
+  }
+  const aggregate = await ctx.db.get(row.learningVoidId)
+  const folder = aggregate && await ctx.db.get(aggregate.folderId)
+  return !!aggregate && aggregate.userId === userId && aggregate.status !== 'archived' && !!folder && folder.userId === userId
+}
+
 // This is a retention/access predicate, independent of product flags. A
 // tombstone revokes every revision before its bounded byte purge completes.
 export async function sourceBodyAvailable(ctx: QueryCtx | MutationCtx, userId: string, id: Id<'learnSourceSnapshots'>, options: { allowUnaccepted?: boolean } = {}) {
@@ -34,9 +45,7 @@ export async function sourceBodyAvailable(ctx: QueryCtx | MutationCtx, userId: s
   const identity = await ctx.db.get(source.sourceIdentityId)
   if (!identity || identity.userId !== userId || identity.learningVoidId !== source.learningVoidId
     || identity.tombstonedAt !== undefined) return false
-  const aggregate = await ctx.db.get(source.learningVoidId)
-  const folder = aggregate && await ctx.db.get(aggregate.folderId)
-  if (!aggregate || aggregate.userId !== userId || aggregate.status === 'archived' || !folder || folder.userId !== userId) return false
+  if (!await liveResponseAggregate(ctx, userId, { scopeKind: 'v2', learningVoidId: source.learningVoidId })) return false
   if (identity.origin === 'folder_document' && !identity.folderDocumentId) return false
   if (identity.folderDocumentId) {
     const document = await ctx.db.get(identity.folderDocumentId)
@@ -112,15 +121,7 @@ export async function retainedResponsePayload(ctx: QueryCtx | MutationCtx, userI
   const target = 'assessmentOpportunityId' in response
     ? await ctx.db.get(response.assessmentOpportunityId) : await ctx.db.get(response.responseSlotId)
   if (!target || target.userId !== userId || target.submissionId !== response._id) return null
-  if (response.scopeKind === 'v2') {
-    const aggregate = await ctx.db.get(response.learningVoidId)
-    const folder = aggregate && await ctx.db.get(aggregate.folderId)
-    if (!aggregate || aggregate.userId !== userId || aggregate.status === 'archived' || !folder || folder.userId !== userId) return null
-  }
-  else {
-    const thread = await ctx.db.get(response.threadId)
-    if (!thread || thread.userId !== userId || thread.deletionStartedAt !== undefined) return null
-  }
+  if (!await liveResponseAggregate(ctx, userId, response)) return null
   const links = await ctx.db.query('learnResponseEvidenceLinks').withIndex('by_userId_and_submissionId', q => q.eq('userId', userId).eq('submissionId', response._id)).take(65)
   if (links.length > 64 || (response.scopeKind === 'v2' && links.length === 0)) return null
   for (const link of links) {

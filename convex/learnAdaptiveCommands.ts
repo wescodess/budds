@@ -20,6 +20,11 @@ export const detachV2CanvasHistory = internalMutation({
     if (!thread || thread.userId !== args.userId || !thread.learningVoidId || thread.deletionStartedAt === undefined) return false
     const page = await ctx.db.query(args.table).withIndex('by_userId_and_learningVoidId', q => q.eq('userId', args.userId).eq('learningVoidId', thread.learningVoidId)).paginate({ cursor: args.cursor ?? null, numItems: THREAD_DELETION_BATCH_SIZE })
     for (const row of page.page) {
+      // Unfinished work retains its Canvas admission pins. Wrapper deletion
+      // cannot turn it into a response admitted through Today instead.
+      const retainedHistory = 'payloadDigest' in row || ('status' in row ? row.status !== 'open'
+        : !['preparing', 'ready', 'test_open'].includes(row.phase))
+      if (!retainedHistory) continue
       if (row.scopeKind === 'v2' && row.contextPins.kind === 'session' && row.contextPins.canvas?.threadId === thread._id) {
         await ctx.db.patch(row._id, { contextPins: { ...row.contextPins, canvas: undefined } })
       }

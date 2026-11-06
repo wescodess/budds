@@ -401,6 +401,19 @@ describe('terminalization and receipt replay', () => {
 })
 
 describe('help and acceptance serialization', () => {
+  test.each(['open', 'sealed'] as const)('an archived Void denies %s assistance authorization and replay', async phase => {
+    const f = await fixture()
+    if (phase === 'sealed') accepted(await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: f.submission }))
+    const request = { version: LEARN_V2_PUBLIC_API_VERSION, ...f.assessmentTarget, kind: 'hint' as const, idempotencyKey: KEY + '_help' }
+    expect(await f.owner.mutation(help, request)).toMatchObject({ status: 'authorized' })
+    const before = await ledger(f.t)
+    await f.owner.mutation(api.learnV2Lifecycle.transitionLearningVoid, { learningVoidId: f.f.learningVoidId,
+      status: 'archived', expectedRevision: 1, idempotencyKey: 'archive-assistance' })
+    expect(await f.owner.mutation(help, request)).toMatchObject({ status: 'denied', reasonCode: 'unavailable' })
+    expect(await f.owner.mutation(help, { ...request, idempotencyKey: KEY + '_new_help' })).toMatchObject({ status: 'denied', reasonCode: 'unavailable' })
+    expect(await ledger(f.t)).toEqual(before)
+  })
+
   test('paste and focus observations alone do not remove measurement eligibility', async () => {
     const f = await fixture('measurement')
     accepted(await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: { ...f.submission,
@@ -444,6 +457,19 @@ describe('help and acceptance serialization', () => {
 })
 
 describe('atomic scalar report facts', () => {
+  test('an archived Void denies integrity writes and replay without changing saved facts', async () => {
+    const f = await fixture('measurement')
+    const result = accepted(await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: f.submission }))
+    const request = { submissionId: result.submissionId, kind: 'pre_seal_contamination' as const, effectiveAt: NOW }
+    expect(await f.owner.mutation(integrity, request)).toBeTypeOf('string')
+    const before = await ledger(f.t)
+    await f.owner.mutation(api.learnV2Lifecycle.transitionLearningVoid, { learningVoidId: f.f.learningVoidId,
+      status: 'archived', expectedRevision: 1, idempotencyKey: 'archive-integrity' })
+    await expect(f.owner.mutation(integrity, request)).rejects.toThrow('Learn access denied')
+    await expect(f.owner.mutation(integrity, { ...request, kind: 'body_purged' })).rejects.toThrow('Learn access denied')
+    expect(await ledger(f.t)).toEqual(before)
+  })
+
   test('retains pending work across a scoring action failure after the acceptance commit', async () => {
     const f = await fixture('measurement')
     await expect(f.owner.action(failedScoring, { submission: f.submission })).rejects.toThrow('injected provider failure after acceptance')
