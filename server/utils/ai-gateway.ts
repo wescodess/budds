@@ -1,5 +1,6 @@
 import { readConfiguredRuntimeValue } from './runtime-config'
 import { deterministicLearnV2Completion } from './learn-v2-e2e-fixtures'
+import { z } from 'zod'
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant'
@@ -26,6 +27,7 @@ export interface GenerateParams {
   maxResponseBytes?: number
   maxRequestBytes?: number
   redactUpstreamErrorBody?: boolean
+  captureScoringProvenance?: boolean
   jsonSchema?: {
     name: string
     strict?: boolean
@@ -83,6 +85,7 @@ export interface GenerateResponse {
     native_finish_reason?: string
   }[]
   model: string
+  scoringProvenance?: GatewayScoringProvenance
   usage: {
     prompt_tokens: number
     completion_tokens: number
@@ -91,10 +94,29 @@ export interface GenerateResponse {
   }
 }
 
-function validateGenerateResponse(value: unknown): GenerateResponse {
+export type ScoringGenerateResponse = Omit<GenerateResponse, 'id' | 'model' | 'usage' | 'scoringProvenance'> & {
+  id: string | null, model: string | null, usage?: GenerateResponse['usage'], scoringProvenance: GatewayScoringProvenance
+}
+
+export function validateGenerateResponse(value: unknown, captureScoringProvenance?: false): GenerateResponse
+export function validateGenerateResponse(value: unknown, captureScoringProvenance: true): ScoringGenerateResponse
+export function validateGenerateResponse(value: unknown, captureScoringProvenance: boolean): GenerateResponse | ScoringGenerateResponse
+export function validateGenerateResponse(value: unknown, captureScoringProvenance = false): GenerateResponse | ScoringGenerateResponse {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw providerError({ statusCode: 502, message: 'AI Gateway returned an invalid completion envelope' }, 'invalid_response')
   const response = value as Partial<GenerateResponse>
   const firstChoice = Array.isArray(response.choices) ? response.choices[0] : undefined
+  if (captureScoringProvenance) {
+    const provenance = observeScoringProvenance(value)
+    if (response.choices?.length !== 1 || firstChoice?.message?.role !== 'assistant') provenance.metadataValid = false
+    return {
+      id: optionalObservation(response.id), model: optionalObservation(response.model),
+      choices: [{ index: 0, message: { role: 'assistant', content: typeof firstChoice?.message?.content === 'string' ? firstChoice.message.content : '' },
+        finish_reason: provenance.finishReason ?? 'unknown', ...(provenance.nativeFinishReason ? { native_finish_reason: provenance.nativeFinishReason } : {}) }],
+      ...(provenance.usage ? { usage: { prompt_tokens: provenance.usage.inputTokens, completion_tokens: provenance.usage.outputTokens,
+        total_tokens: provenance.usage.inputTokens + provenance.usage.outputTokens } } : {}),
+      scoringProvenance: provenance,
+    }
+  }
   if (typeof response.id !== 'string' || !response.id.trim()
     || typeof response.model !== 'string' || !response.model.trim()
     || !firstChoice || typeof firstChoice.message !== 'object' || firstChoice.message === null
@@ -102,6 +124,116 @@ function validateGenerateResponse(value: unknown): GenerateResponse {
     throw providerError({ statusCode: 502, message: 'AI Gateway returned an invalid completion envelope' }, 'invalid_response')
   }
   return response as GenerateResponse
+}
+
+const observedLabel = z.string().min(1).max(200).regex(/^[\x20-\x7e]+$/)
+const observedCount = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER)
+const usageSchema = z.object({ prompt_tokens: observedCount, completion_tokens: observedCount,
+  cost: z.number().finite().min(0).optional() })
+const routerMetadataSchema = z.object({
+  requested: observedLabel.optional(), strategy: observedLabel.optional(), attempt: observedCount.optional(),
+  endpoints: z.object({ available: z.array(z.object({ provider: observedLabel, model: observedLabel, selected: z.boolean() })).max(32) }).optional(),
+  attempts: z.array(z.object({ provider: observedLabel, model: observedLabel, status: z.number().int().min(100).max(599) })).max(8).optional(),
+  pipeline: z.array(z.object({ type: observedLabel })).max(16).optional(),
+})
+export type GatewayScoringUsage = { inputTokens: number, outputTokens: number, costMicroUsd: number | null }
+export type GatewayScoringProvenance = {
+  version: 'learn-v2.scoring-provenance.v1'
+  metadataValid: boolean
+  requestedModel: string | null
+  selectedModel: string | null
+  servingProvider: string | null
+  upstreamRequestId: string | null
+  endpoint: null
+  revision: null
+  fingerprint: string | null
+  strategy: string | null
+  attemptCount: number | null
+  attempts: Array<{ provider: string, model: string, status: number }> | null
+  pipelineTypes: string[] | null
+  finishReason: string | null
+  nativeFinishReason: string | null
+  refused: boolean
+  errored: boolean
+  usage: GatewayScoringUsage | null
+}
+
+function optionalObservation(value: unknown): string | null {
+  const parsed = observedLabel.safeParse(value)
+  return parsed.success ? parsed.data : null
+}
+
+function scoringUsage(value: unknown): GatewayScoringUsage | null {
+  const parsed = usageSchema.safeParse(value)
+  if (!parsed.success) return null
+  const cost = parsed.data.cost === undefined ? null : Math.round(parsed.data.cost * 1_000_000)
+  if (cost !== null && !Number.isSafeInteger(cost)) return null
+  return { inputTokens: parsed.data.prompt_tokens, outputTokens: parsed.data.completion_tokens, costMicroUsd: cost }
+}
+
+// Only explicit provider observations enter this vocabulary. Router region,
+// requested selectors, summary text and free-form pipeline data are excluded.
+export function observeScoringProvenance(value: unknown): GatewayScoringProvenance {
+  const root = (value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}) as Record<string, unknown>
+  const metadata = routerMetadataSchema.safeParse(root.openrouter_metadata)
+  const router = metadata.success ? metadata.data : null
+  const selected = router?.endpoints?.available.filter(row => row.selected) ?? []
+  const choice = (Array.isArray(root.choices) ? root.choices[0] : null) as Record<string, unknown> | null
+  const message = choice?.message as Record<string, unknown> | undefined
+  const provider = optionalObservation(root.provider)
+  const chosen = selected.length === 1 ? selected[0]! : null
+  return {
+    version: 'learn-v2.scoring-provenance.v1',
+    metadataValid: (root.openrouter_metadata === undefined || metadata.success) && selected.length <= 1
+      && (root.provider === undefined || provider !== null) && !(provider && chosen && provider !== chosen.provider),
+    requestedModel: router?.requested ?? null, selectedModel: chosen?.model ?? null,
+    servingProvider: chosen?.provider ?? provider, upstreamRequestId: optionalObservation(root.upstream_id),
+    // Neither documented metadata endpoint attests an inference endpoint/revision.
+    endpoint: null, revision: null, fingerprint: optionalObservation(root.system_fingerprint),
+    strategy: router?.strategy ?? null, attemptCount: router?.attempt ?? null,
+    attempts: router?.attempts ?? null,
+    pipelineTypes: router ? (router.pipeline ?? []).map(row => ['guardrail', 'plugin', 'server_tools', 'response_healing', 'context_compression'].includes(row.type) ? row.type : 'unknown') : null,
+    finishReason: optionalObservation(choice?.finish_reason), nativeFinishReason: optionalObservation(choice?.native_finish_reason),
+    refused: message?.refusal !== undefined && message.refusal !== null && message.refusal !== '',
+    errored: root.error !== undefined || choice?.error !== undefined,
+    usage: scoringUsage(root.usage),
+  }
+}
+
+export type GatewayGenerationMetadata = {
+  generationId: string, returnedModel: string | null, servingProvider: string | null, upstreamRequestId: string | null,
+  finishReason: string | null, nativeFinishReason: string | null, cancelled: boolean | null, usage: GatewayScoringUsage | null,
+}
+
+export function validateGenerationMetadata(value: unknown): GatewayGenerationMetadata {
+  const parsed = z.object({ data: z.object({ id: observedLabel, model: observedLabel.nullish(), provider_name: observedLabel.nullish(),
+    upstream_id: observedLabel.nullish(), finish_reason: observedLabel.nullish(), native_finish_reason: observedLabel.nullish(),
+    cancelled: z.boolean().nullish(), tokens_prompt: observedCount.nullish(), tokens_completion: observedCount.nullish(),
+    total_cost: z.number().finite().min(0).nullish() }) }).safeParse(value)
+  if (!parsed.success) throw providerError({ statusCode: 502, message: 'Invalid scoring generation metadata' }, 'invalid_response')
+  const data = parsed.data.data
+  return { generationId: data.id, returnedModel: data.model ?? null, servingProvider: data.provider_name ?? null,
+    upstreamRequestId: data.upstream_id ?? null, finishReason: data.finish_reason ?? null,
+    nativeFinishReason: data.native_finish_reason ?? null, cancelled: data.cancelled ?? null,
+    usage: scoringUsage({ prompt_tokens: data.tokens_prompt, completion_tokens: data.tokens_completion, ...(data.total_cost == null ? {} : { cost: data.total_cost }) }),
+  }
+}
+
+/** Metadata only: one GET for a saved generation, never stored prompts or inference. */
+export async function lookupScoringGeneration(generationId: string, signal: AbortSignal): Promise<GatewayGenerationMetadata> {
+  if (!observedLabel.safeParse(generationId).success || signal.aborted) throw providerError({ statusCode: 400, message: 'Invalid scoring metadata lookup' }, 'not_dispatched')
+  const { headers } = getGatewayConfig()
+  const response = await fetch(`https://openrouter.ai/api/v1/generation?id=${encodeURIComponent(generationId)}`, {
+    method: 'GET', headers: { Authorization: headers.Authorization! }, signal, redirect: 'error',
+  })
+  const body = await readBoundedResponseText(response, 32_000)
+  if (!response.ok) throw providerError({ statusCode: response.status, message: 'Scoring metadata is unavailable' })
+  let parsed: unknown
+  try { parsed = JSON.parse(body) }
+  catch { throw providerError({ statusCode: 502, message: 'Invalid scoring generation metadata' }, 'invalid_response') }
+  const metadata = validateGenerationMetadata(parsed)
+  if (metadata.generationId !== generationId) throw providerError({ statusCode: 502, message: 'Scoring generation ID mismatch' }, 'invalid_response')
+  return metadata
 }
 
 type GatewayRuntimeConfig = {
@@ -218,14 +350,17 @@ export function serializeCompletionRequest(params: GenerateParams): string {
   })
 }
 
-export async function generateCompletion(params: GenerateParams): Promise<GenerateResponse> {
+export function generateCompletion(params: GenerateParams & { captureScoringProvenance: true }): Promise<ScoringGenerateResponse>
+export function generateCompletion(params: GenerateParams): Promise<GenerateResponse>
+export async function generateCompletion(params: GenerateParams): Promise<GenerateResponse | ScoringGenerateResponse> {
   const deterministic = deterministicLearnV2Completion(params)
-  if (deterministic) return deterministic
+  if (deterministic) return params.captureScoringProvenance ? validateGenerateResponse(deterministic, true) : deterministic
   const { baseUrl, headers: baseHeaders } = getGatewayConfig()
   const headers = { ...baseHeaders }
   if (params.maxAttempts !== undefined) headers['cf-aig-max-attempts'] = String(params.maxAttempts)
   if (params.collectLogPayload !== undefined) headers['cf-aig-collect-log-payload'] = String(params.collectLogPayload)
   if (params.skipGatewayCache !== undefined) headers['cf-aig-skip-cache'] = String(params.skipGatewayCache)
+  if (params.captureScoringProvenance) headers['X-OpenRouter-Metadata'] = 'enabled'
   const url = `${baseUrl}/openrouter/v1/chat/completions`
 
   const requestBody = serializeCompletionRequest(params)
@@ -256,7 +391,7 @@ export async function generateCompletion(params: GenerateParams): Promise<Genera
   catch {
     throw providerError({ statusCode: 502, message: 'AI Gateway returned invalid JSON' }, 'invalid_response')
   }
-  return validateGenerateResponse(parsed)
+  return validateGenerateResponse(parsed, params.captureScoringProvenance === true)
 }
 
 export async function generateCompletionStream(params: GenerateParams): Promise<ReadableStream> {
