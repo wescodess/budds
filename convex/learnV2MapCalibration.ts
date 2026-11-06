@@ -9,6 +9,7 @@ import { LEARN_V2_BLUEPRINT_LIMITS, validateLearnV2BlueprintCandidate } from '..
 import { deriveMastery } from '../shared/learn-v2-mastery'
 import { requireActiveBlueprint } from './lib/learnV2BlueprintAuthority'
 import { getScopedMasteryRecord, transitionScopedMasteryRecord } from './lib/learnV2MasteryScope'
+import { digestLegacyFingerprint, sourceBodyAvailable } from './lib/learnV2ResponsePrivacy'
 
 const MAX_IDEMPOTENCY_KEY_LENGTH = 128
 const MIN_CALIBRATION_ITEMS = 3
@@ -71,8 +72,29 @@ function fingerprint(command: string, args: Record<string, unknown>) {
   return JSON.stringify({ command, ...args })
 }
 
-function calibrationRequestFingerprint(args: { blueprintRevisionId: Id<'learnBlueprintRevisions'>, objectiveId: Id<'learnObjectives'>, expectedBlueprintRecordRevision: number, expectedVoidRevision: number, response: string, confidence: number, usedHint: boolean, usedReveal: boolean, idempotencyKey: string }) {
-  return fingerprint('submitCalibrationAttempt', { blueprintRevisionId: String(args.blueprintRevisionId), objectiveId: String(args.objectiveId), expectedBlueprintRecordRevision: args.expectedBlueprintRecordRevision, expectedVoidRevision: args.expectedVoidRevision, response: args.response, confidence: args.confidence, usedHint: args.usedHint, usedReveal: args.usedReveal, idempotencyKey: args.idempotencyKey })
+async function calibrationRequestFingerprint(args: { blueprintRevisionId: Id<'learnBlueprintRevisions'>, objectiveId: Id<'learnObjectives'>, expectedBlueprintRecordRevision: number, expectedVoidRevision: number, response: string, confidence: number, usedHint: boolean, usedReveal: boolean, idempotencyKey: string }) {
+  const legacy = fingerprint('submitCalibrationAttempt', { blueprintRevisionId: String(args.blueprintRevisionId), objectiveId: String(args.objectiveId), expectedBlueprintRecordRevision: args.expectedBlueprintRecordRevision, expectedVoidRevision: args.expectedVoidRevision, response: args.response, confidence: args.confidence, usedHint: args.usedHint, usedReveal: args.usedReveal, idempotencyKey: args.idempotencyKey })
+  return { legacy, digest: await digestLegacyFingerprint(legacy) }
+}
+
+async function matchesCalibrationFingerprint(stored: string | undefined, expected: { legacy: string, digest: string }) {
+  return stored !== undefined && (stored === expected.digest || stored === expected.legacy
+    || await digestLegacyFingerprint(stored) === expected.digest)
+}
+
+function calibrationJobObjective(ctx: MutationCtx, job: Doc<'learnJobs'>) {
+  for (const encoded of [job.checkpoint, job.requestFingerprint]) {
+    if (!encoded) continue
+    try {
+      const value: unknown = JSON.parse(encoded)
+      if (value && typeof value === 'object' && 'objectiveId' in value && typeof value.objectiveId === 'string') {
+        const id = ctx.db.normalizeId('learnObjectives', value.objectiveId)
+        if (id) return id
+      }
+    }
+    catch { /* Digests contain no recoverable authority. */ }
+  }
+  throw new Error('Calibration scoring authority is unavailable')
 }
 
 async function requireLiveVoid(ctx: MutationCtx | QueryCtx, userId: string, learningVoidId: Id<'learningVoids'>) {
@@ -297,16 +319,21 @@ export const reserveCalibrationScoring = internalMutation({
   },
   handler: async (ctx, args) => {
     if (!(await hasLearnV2Access(ctx, args.tokenIdentifier))) throw new Error('Learn V2 access denied')
-    const requestFingerprint = calibrationRequestFingerprint(args)
+    const authority = await requireCurrentBlueprint(ctx, args.tokenIdentifier, args.blueprintRevisionId)
+    const objective = await ctx.db.get(args.objectiveId)
+    if (!objective || objective.userId !== args.tokenIdentifier || objective.blueprintRevisionId !== authority._id) throw new Error('Calibration objective not found')
+    await calibrationEvidence(ctx, args.tokenIdentifier, args.objectiveId)
+    const fingerprints = await calibrationRequestFingerprint(args)
+    const requestFingerprint = fingerprints.digest
     const prior = await ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', args.tokenIdentifier).eq('idempotencyKey', args.idempotencyKey)).unique()
     if (prior) {
-      if (prior.requestFingerprint !== requestFingerprint) throw new Error('Idempotency key was already used for a different request')
+      if (!await matchesCalibrationFingerprint(prior.requestFingerprint, fingerprints)) throw new Error('Idempotency key was already used for a different request')
       return { kind: 'replay' as const, attemptId: prior._id, result: prior.result }
     }
     const existing = await ctx.db.query('learnJobs').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', args.tokenIdentifier).eq('idempotencyKey', args.idempotencyKey)).unique()
     const now = Date.now()
     if (existing) {
-      if (existing.type !== CALIBRATION_JOB_TYPE || existing.requestFingerprint !== requestFingerprint) throw new Error('Idempotency key was already used for a different request')
+      if (existing.type !== CALIBRATION_JOB_TYPE || !await matchesCalibrationFingerprint(existing.requestFingerprint, fingerprints)) throw new Error('Idempotency key was already used for a different request')
       if (existing.status === 'blocked') return { kind: 'pending' as const, status: 'blocked' as const }
       if ((existing.status === 'running' || existing.status === 'leased' || existing.status === 'queued') && (existing.leaseExpiresAt ?? 0) > now) return { kind: 'pending' as const, status: 'in_progress' as const }
       if (existing.status === 'running') {
@@ -314,12 +341,12 @@ export const reserveCalibrationScoring = internalMutation({
         return { kind: 'pending' as const, status: 'blocked' as const }
       }
       const leaseToken = crypto.randomUUID()
-      await ctx.db.patch(existing._id, { status: 'leased', leaseToken, leaseExpiresAt: now + CALIBRATION_LEASE_MS, revision: existing.revision + 1, updatedAt: now })
+      await ctx.db.patch(existing._id, { status: 'leased', requestFingerprint, checkpoint: JSON.stringify({ objectiveId: args.objectiveId }), leaseToken, leaseExpiresAt: now + CALIBRATION_LEASE_MS, revision: existing.revision + 1, updatedAt: now })
       return { kind: 'acquired' as const, jobId: existing._id, leaseToken, revision: existing.revision + 1 }
     }
     const blueprint = await requireCurrentBlueprint(ctx, args.tokenIdentifier, args.blueprintRevisionId)
     const learningVoid = await requireLiveVoid(ctx, args.tokenIdentifier, blueprint.learningVoidId)
-    const jobId = await ctx.db.insert('learnJobs', { userId: args.tokenIdentifier, learningVoidId: learningVoid._id, blueprintRevisionId: blueprint._id, type: CALIBRATION_JOB_TYPE, status: 'leased', revision: 1, idempotencyKey: args.idempotencyKey, requestFingerprint, expectedVoidRevision: args.expectedVoidRevision, expectedBlueprintRecordRevision: args.expectedBlueprintRecordRevision, attempts: 0, providerEnabled: true, providerModel: process.env.LEARN_V2_CALIBRATION_MODEL?.trim() || process.env.LEARN_V2_MASTERY_MODEL?.trim() || undefined, providerPolicyVersion: 'learn-v2.calibration-provider.v1', leaseToken: crypto.randomUUID(), leaseExpiresAt: now + CALIBRATION_LEASE_MS, createdAt: now, updatedAt: now })
+    const jobId = await ctx.db.insert('learnJobs', { userId: args.tokenIdentifier, learningVoidId: learningVoid._id, blueprintRevisionId: blueprint._id, type: CALIBRATION_JOB_TYPE, status: 'leased', revision: 1, checkpoint: JSON.stringify({ objectiveId: args.objectiveId }), idempotencyKey: args.idempotencyKey, requestFingerprint, expectedVoidRevision: args.expectedVoidRevision, expectedBlueprintRecordRevision: args.expectedBlueprintRecordRevision, attempts: 0, providerEnabled: true, providerModel: process.env.LEARN_V2_CALIBRATION_MODEL?.trim() || process.env.LEARN_V2_MASTERY_MODEL?.trim() || undefined, providerPolicyVersion: 'learn-v2.calibration-provider.v1', leaseToken: crypto.randomUUID(), leaseExpiresAt: now + CALIBRATION_LEASE_MS, createdAt: now, updatedAt: now })
     const job = await ctx.db.get(jobId)
     if (!job || !job.leaseToken) throw new Error('Unable to reserve calibration scoring')
     return { kind: 'acquired' as const, jobId, leaseToken: job.leaseToken, revision: job.revision }
@@ -335,7 +362,11 @@ export const markCalibrationScoringDispatched = internalMutation({
     const blueprint = await requireCurrentBlueprint(ctx, args.tokenIdentifier, job.blueprintRevisionId)
     const learningVoid = await requireLiveVoid(ctx, args.tokenIdentifier, blueprint.learningVoidId)
     if (blueprint.recordRevision !== job.expectedBlueprintRecordRevision || learningVoid.revision !== job.expectedVoidRevision) throw new Error('Calibration revision conflict')
-    await ctx.db.patch(job._id, { status: 'running', checkpoint: 'provider_dispatched', attempts: (job.attempts ?? 0) + 1, revision: job.revision + 1, updatedAt: Date.now() })
+    if (!(await hasLearnV2Access(ctx, args.tokenIdentifier))) throw new Error('Learn V2 access denied')
+    const objective = await ctx.db.get(calibrationJobObjective(ctx, job))
+    if (!objective || objective.userId !== args.tokenIdentifier || objective.blueprintRevisionId !== blueprint._id) throw new Error('Calibration objective not found')
+    await calibrationEvidence(ctx, args.tokenIdentifier, objective._id)
+    await ctx.db.patch(job._id, { status: 'running', checkpoint: JSON.stringify({ objectiveId: objective._id, phase: 'provider_dispatched' }), attempts: (job.attempts ?? 0) + 1, revision: job.revision + 1, updatedAt: Date.now() })
     return { revision: job.revision + 1 }
   },
 })
@@ -364,7 +395,8 @@ async function calibrationEvidence(ctx: MutationCtx | QueryCtx, userId: string, 
     if (link.coverage === 'gap') continue
     const source = await ctx.db.get(link.sourceSnapshotId)
     const excerpt = await ctx.db.query('learnSourceExcerpts').withIndex('by_userId_and_sourceSnapshotId_and_evidencePurgedAt', q => q.eq('userId', userId).eq('sourceSnapshotId', link.sourceSnapshotId).eq('evidencePurgedAt', undefined)).first()
-    if (!source || source.userId !== userId || source.status !== 'user_accepted' || source.effectiveStatus !== 'user_accepted' || source.conflictStatus !== 'clear' || source.evidencePurgedAt !== undefined || !excerpt) continue
+    if (!source || !await sourceBodyAvailable(ctx, userId, source._id) || !excerpt
+      || excerpt.userId !== userId || excerpt.evidencePurgedAt !== undefined || excerpt.rightsStatus === 'prohibited') throw new Error('Calibration evidence is unavailable')
     const alias = `source-${String(evidence.length + 1).padStart(3, '0')}`
     let evidenceContentHash: string
     if (source.rightsStatus === 'permitted' && excerpt.rightsStatus === 'permitted' && excerpt.excerpt?.trim()) {
@@ -400,12 +432,14 @@ export const recordCalibrationAttempt = internalMutation({
     if (!Number.isFinite(args.serverScorePercent) || args.serverScorePercent < 0 || args.serverScorePercent > 100) throw new Error('Server score must be between 0 and 100')
     if (!Number.isSafeInteger(args.confidence) || args.confidence < 1 || args.confidence > 5) throw new Error('Confidence must be an integer from 1 to 5')
     if (!args.rubricVersion.trim() || args.rubricVersion.length > 96) throw new Error('Rubric version is invalid')
-    const requestFingerprint = args.scoringJobId
-      ? calibrationRequestFingerprint({ blueprintRevisionId: args.blueprintRevisionId, objectiveId: args.objectiveId, expectedBlueprintRecordRevision: args.expectedBlueprintRecordRevision, expectedVoidRevision: args.expectedVoidRevision, response: args.response ?? '', confidence: args.confidence, usedHint: args.usedHint, usedReveal: args.usedReveal, idempotencyKey: args.idempotencyKey })
-      : fingerprint('recordCalibrationAttempt', args)
+    const fingerprints = args.scoringJobId
+      ? await calibrationRequestFingerprint({ blueprintRevisionId: args.blueprintRevisionId, objectiveId: args.objectiveId, expectedBlueprintRecordRevision: args.expectedBlueprintRecordRevision, expectedVoidRevision: args.expectedVoidRevision, response: args.response ?? '', confidence: args.confidence, usedHint: args.usedHint, usedReveal: args.usedReveal, idempotencyKey: args.idempotencyKey })
+      : await (async () => { const legacy = fingerprint('recordCalibrationAttempt', args); return { legacy, digest: await digestLegacyFingerprint(legacy) } })()
+    const requestFingerprint = fingerprints.digest
+    await calibrationEvidence(ctx, args.tokenIdentifier, args.objectiveId)
     const prior = await ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', args.tokenIdentifier).eq('idempotencyKey', args.idempotencyKey)).unique()
     if (prior) {
-      if (prior.requestFingerprint !== requestFingerprint) throw new Error('Idempotency key was already used for a different request')
+      if (!await matchesCalibrationFingerprint(prior.requestFingerprint, fingerprints)) throw new Error('Idempotency key was already used for a different request')
       return { attemptId: prior._id, result: prior.result, replayed: true }
     }
     const blueprint = await requireCurrentBlueprint(ctx, args.tokenIdentifier, args.blueprintRevisionId)
@@ -415,7 +449,7 @@ export const recordCalibrationAttempt = internalMutation({
     const objective = await ctx.db.get(args.objectiveId)
     if (!objective || objective.userId !== args.tokenIdentifier || objective.blueprintRevisionId !== blueprint._id) throw new Error('Calibration objective not found')
     const scoringJob = args.scoringJobId && await ctx.db.get(args.scoringJobId)
-    if (args.scoringJobId && (!scoringJob || scoringJob.userId !== args.tokenIdentifier || scoringJob.type !== CALIBRATION_JOB_TYPE || scoringJob.status !== 'running' || scoringJob.leaseToken !== args.scoringLeaseToken || scoringJob.requestFingerprint !== requestFingerprint)) throw new Error('Calibration scoring command is invalid')
+    if (args.scoringJobId && (!scoringJob || scoringJob.userId !== args.tokenIdentifier || scoringJob.type !== CALIBRATION_JOB_TYPE || scoringJob.status !== 'running' || scoringJob.leaseToken !== args.scoringLeaseToken || !await matchesCalibrationFingerprint(scoringJob.requestFingerprint, fingerprints))) throw new Error('Calibration scoring command is invalid')
     if (scoringJob && (!args.scoredSourceSnapshotIds?.length || !args.scoredContentRevisionPins?.length || !args.scoredVerifierVersions?.length)) throw new Error('Calibration scoring evidence pins are unavailable')
     const existing = await ctx.db.query('masteryAttempts').withIndex('by_userId_and_blueprintRevisionId_and_kind', q => q.eq('userId', args.tokenIdentifier).eq('blueprintRevisionId', blueprint._id).eq('kind', 'calibration')).take(MAX_CALIBRATION_ITEMS + 1)
     if (existing.length >= MAX_CALIBRATION_ITEMS) throw new Error('Calibration already has seven items')
