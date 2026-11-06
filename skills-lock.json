@@ -313,7 +313,7 @@
     "ui-design-gate": {
       "source": "./.agents/skills/ui-design-gate",
       "sourceType": "local",
-      "computedHash": "5e4684641a741ae62a91bcc8dba5c83d35a8976d68b60bc7a76890ebedf35fe1"
+      "computedHash": "1a5f2a2b5e96278aa521f4396ed035a22336bd763a2097a370f1801a2e73bdf2"
     },
     "user-research": {
       "source": "anthropics/knowledge-work-plugins",
