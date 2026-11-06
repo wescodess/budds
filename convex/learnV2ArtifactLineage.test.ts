@@ -361,7 +361,10 @@ describe('instructional artifact lineage contract', () => {
       const excerpt = await t.run(ctx => ctx.db.get(f.excerptId))
       expect(excerpt).toMatchObject({ excerpt: 'Permitted source' })
       expect(excerpt).not.toHaveProperty('evidencePurgedAt')
-      expect(await t.run(ctx => ctx.db.system.query('_scheduled_functions').take(2))).toMatchObject([{ name: 'learnV2Retention:purgeSourceEvidence', state: { kind: 'pending' } }])
+      expect(await t.run(ctx => ctx.db.system.query('_scheduled_functions').take(8))).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'learnV2Retention:purgeSourceEvidence', state: { kind: 'pending' } }),
+        expect.objectContaining({ name: 'learnV2Retention:purgeScopedActivityCopies', state: { kind: 'pending' } }),
+      ]))
       await expectSourceRevoked(t, f)
     })
 

@@ -2,10 +2,13 @@
 import { convexTest } from 'convex-test'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { api } from './_generated/api'
+import type { GenericValidator } from 'convex/values'
 import schema from './schema'
-import { PERSONAL_EXPORT_COLLECTIONS, PERSONAL_EXPORT_CONTENT_COLLECTIONS, PERSONAL_EXPORT_CHILD_CONTENT_PARENTS } from './lib/learnV2PersonalExportCollections'
+import { PERSONAL_EXPORT_COLLECTIONS, PERSONAL_EXPORT_CONTENT_COLLECTIONS, PERSONAL_EXPORT_CHILD_CONTENT_PARENTS, PERSONAL_EXPORT_COLLECTION_POLICY } from './lib/learnV2PersonalExportCollections'
 import { PERSONAL_EXPORT_CONTENT_CASES, measurementExportFixture, seedExportContent } from '../tests/fixtures/learn-v2-export-content'
 import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
+import { LINEAGE_EXPORT_FIELDS, seedMeasurementStorage } from '../tests/fixtures/learn-v2-measurement-storage'
+import { LEARN_MEASUREMENT_COLLECTIONS } from '../shared/learn-v2-measurement-storage-manifest'
 
 vi.mock('../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
   const original = await importOriginal<typeof import('../shared/learn-v2-measurement-storage-manifest')>()
@@ -14,6 +17,7 @@ vi.mock('../shared/learn-v2-measurement-storage-manifest', async importOriginal 
 
 const modules = import.meta.glob('./**/*.ts')
 const identity = { tokenIdentifier: 'https://owner.example|export-exposure' }
+type ExportPage = { page: Array<Record<string, unknown>>, isDone: boolean, continueCursor: string }
 beforeEach(() => {
   vi.stubEnv('LEARN_V2_ENABLED', 'true')
   vi.useFakeTimers()
@@ -22,6 +26,9 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs() })
 
 test('every audited content projection is in the inventory and every classified collection has a direct page', async () => {
+  expect(PERSONAL_EXPORT_COLLECTIONS).toHaveLength(126)
+  expect(PERSONAL_EXPORT_CONTENT_COLLECTIONS).toHaveLength(39)
+  expect(LEARN_MEASUREMENT_COLLECTIONS).toHaveLength(29)
   expect(new Set(PERSONAL_EXPORT_CONTENT_CASES.map(([collection]) => collection))).toEqual(new Set(PERSONAL_EXPORT_CONTENT_COLLECTIONS))
   expect(PERSONAL_EXPORT_CHILD_CONTENT_PARENTS).toEqual({ attemptAnswers: 'quizAttempts' })
   expect(PERSONAL_EXPORT_CONTENT_COLLECTIONS).toContain(PERSONAL_EXPORT_CHILD_CONTENT_PARENTS.attemptAnswers)
@@ -32,6 +39,65 @@ test('every audited content projection is in the inventory and every classified 
   for (const collection of PERSONAL_EXPORT_COLLECTIONS) {
     expect(await owner.query(api.dataExport.getUserDataPage, { authorizationId, collection,
       paginationOpts: { cursor: null, numItems: 1 } })).toMatchObject({ page: [], isDone: true })
+  }
+})
+
+test.each(Object.keys(LINEAGE_EXPORT_FIELDS) as Array<keyof typeof LINEAGE_EXPORT_FIELDS>)('%s exports only audited metadata through owned pages with flags off', async collection => {
+  vi.stubEnv('LEARN_V2_ENABLED', 'false')
+  expect(PERSONAL_EXPORT_COLLECTION_POLICY[collection]).toBe('metadata')
+  expect(PERSONAL_EXPORT_CONTENT_COLLECTIONS).not.toContain(collection)
+  const fields: Record<string, GenericValidator> = schema.tables[collection].validator.fields
+  for (const name of LINEAGE_EXPORT_FIELDS[collection]) {
+    const field = fields[name]!
+    expect(field.kind === 'float64' || field.kind === 'literal' || field.kind === 'union' && field.members.every(member => member.kind === 'literal')).toBe(true)
+  }
+  const t = convexTest(schema, modules)
+  const f = await t.run(ctx => seedMeasurementStorage(ctx, identity.tokenIdentifier))
+  const foreign = await t.run(ctx => seedMeasurementStorage(ctx, 'https://foreign.example|lineage-export'))
+  await t.run(async ctx => {
+    await ctx.db.patch(f.rows.learnArtifactLineages, { nextId: f.rows.learnArtifactLineages, invalidatedAt: 0 })
+    await ctx.db.patch(f.rows.learnArtifactValidations, { invalidatedAt: 0 })
+    await ctx.db.patch(f.rows.learnArtifactSourceLinks, { invalidatedAt: 0 })
+  })
+  const owner = t.withIdentity(identity)
+  await expect(owner.query(api.dataExport.getUserDataPage, { collection, paginationOpts: { cursor: null, numItems: 1 } })).rejects.toThrow('Export authorization unavailable')
+  const authorizationId = await authorizeExport(owner)
+  const rows: Array<Record<string, unknown>> = []
+  let cursor: string | null = null
+  for (let page = 0; page < 8; page++) {
+    const result: ExportPage = await owner.query(api.dataExport.getUserDataPage, { authorizationId, collection, paginationOpts: { cursor, numItems: 1 } })
+    expect(result.page.length).toBeLessThanOrEqual(1)
+    rows.push(...result.page)
+    if (result.isDone) break
+    cursor = result.continueCursor
+    expect(page).toBeLessThan(7)
+  }
+  const stored = await t.run(ctx => ctx.db.query(collection).withIndex('by_userId', q => q.eq('userId', identity.tokenIdentifier)).take(8))
+  const allowed = ['_id', '_creationTime', 'createdAt', ...LINEAGE_EXPORT_FIELDS[collection]]
+  expect(rows).toEqual(stored.map(row => Object.fromEntries(allowed.flatMap(name => {
+    const value = (row as unknown as Record<string, unknown>)[name]
+    return value === undefined ? [] : [[name, value]]
+  }))))
+  expect(JSON.stringify(rows)).not.toContain(foreign.rows[collection])
+  expect(rows.some(row => row._id === f.rows[collection])).toBe(true)
+})
+
+test('lineage metadata changes do not change the reusable content inventory or add assistance exposures', async () => {
+  const t = convexTest(schema, modules)
+  const f = await t.run(ctx => seedMeasurementStorage(ctx, identity.tokenIdentifier))
+  const owner = t.withIdentity(identity)
+  const authorizationId = await authorizeExport(owner)
+  const before = await t.run(ctx => ctx.db.query('learnAssessmentExposures').withIndex('by_userId', q => q.eq('userId', identity.tokenIdentifier)).take(16))
+  await t.run(async ctx => {
+    const row = (await ctx.db.get(f.rows.learnArtifactLineages))!
+    const { _id: _id, _creationTime: _time, ...fields } = row
+    await ctx.db.insert('learnArtifactLineages', fields)
+    await ctx.db.patch(f.rows.learnArtifactValidations, { decision: 'reject', invalidatedAt: Date.now() })
+  })
+  expect(await authorizeExport(owner)).toBe(authorizationId)
+  expect(await t.run(ctx => ctx.db.query('learnAssessmentExposures').withIndex('by_userId', q => q.eq('userId', identity.tokenIdentifier)).take(16))).toEqual(before)
+  for (const collection of Object.keys(LINEAGE_EXPORT_FIELDS) as Array<keyof typeof LINEAGE_EXPORT_FIELDS>) {
+    await expect(owner.query(api.dataExport.getUserDataPage, { authorizationId, collection, paginationOpts: { cursor: null, numItems: 8 } })).resolves.toHaveProperty('page')
   }
 })
 

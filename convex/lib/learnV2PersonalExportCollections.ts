@@ -23,6 +23,12 @@ export const PERSONAL_EXPORT_COLLECTION_POLICY = {
   learningThreadPreferences: 'content',
   learningThreadPromotionProposals: 'metadata',
   learnAdaptiveExperimentAssignments: 'metadata',
+  // #516 lineage exports contain only closed states and timing metadata.
+  learnArtifactLineages: 'metadata',
+  learnArtifactLineageOrigins: 'metadata',
+  learnArtifactCaseBindings: 'metadata',
+  learnArtifactValidations: 'metadata',
+  learnArtifactSourceLinks: 'metadata',
   learnMeasurementReportCells: 'metadata',
   learnMeasurementReportRows: 'metadata',
   learnMeasurementReportRuns: 'metadata',

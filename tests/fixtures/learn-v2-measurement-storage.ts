@@ -136,3 +136,13 @@ export async function seedMeasurementStorage(ctx: Pick<MutationCtx, 'db'>, userI
   } satisfies { [Table in LearnMeasurementCollection]: Id<Table> }
   return { rows, folderId, documentId, learningVoidId, sourceIdentityId, sourceSnapshotId, sourceExcerptId, threadId, activityId, studySessionId, scope, itemPins, scoringBinding, assistanceSnapshot, validitySnapshot, base, reportKeys }
 }
+
+// Independently audited personal-export contract for #516. The direct-page
+// and decoded-ZIP tests assert exact fields against these metadata projections.
+export const LINEAGE_EXPORT_FIELDS = {
+  learnArtifactLineages: ['lineageVersion', 'classification', 'derivation', 'evidenceStatus', 'invalidatedAt'],
+  learnArtifactLineageOrigins: ['transformation'],
+  learnArtifactCaseBindings: [],
+  learnArtifactValidations: ['decision', 'coverage', 'evidenceStatus', 'invalidatedAt'],
+  learnArtifactSourceLinks: ['evidenceStatus', 'invalidatedAt'],
+} as const
