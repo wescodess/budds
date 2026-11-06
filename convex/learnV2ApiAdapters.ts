@@ -1,0 +1,24 @@
+import { api } from './_generated/api'
+
+const canonical = {
+  readiness: api.learnV2Assessments.getFeatureReadiness,
+  acceptResponse: api.learnV2Responses.acceptResponse,
+  getResponseState: api.learnV2Responses.getResponseState,
+  terminalizeResponse: api.learnV2Responses.terminalizeResponse,
+  grantAssessmentDelivery: api.learnV2Assessments.grantAssessmentDelivery,
+  getAssessment: api.learnV2Assessments.getAssessment,
+  getAssessmentState: api.learnV2Assessments.getAssessmentState,
+  acceptMasterySubmission: api.learnV2Mastery.acceptMasterySubmission,
+  scoreMasterySubmission: api.learnV2Mastery.scoreMasterySubmission,
+  authorizeAssistance: api.learnV2Assistance.authorizeAssistance,
+} as const
+
+export const learnV2TodayMeasurementApi = {
+  ...canonical,
+  compatibility: { submitMasteryAttempt: api.learnV2Mastery.submitMasteryAttempt },
+} as const
+
+export const learnV2CanvasMeasurementApi = {
+  ...canonical,
+  compatibility: { stageResponse: api.learnAdaptiveCanvas.submitCanvasResponse, submitResponse: api.learnAdaptive.submitResponse },
+} as const
