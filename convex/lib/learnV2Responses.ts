@@ -348,14 +348,17 @@ async function prepareResponse(ctx: ReadCtx, userId: string, entry: Entry, row: 
   const exposures = 'assessmentPins' in row ? await ctx.db.query('learnAssessmentExposures')
     .withIndex('by_userId_and_assessmentOpportunityId', q => q.eq('userId', userId).eq('assessmentOpportunityId', row._id)).take(65) : []
   if (exposures.length > 64) reject('unavailable')
-  const actualHelp = exposures.some(value => value._id !== ('deliveryGrantId' in row ? row.deliveryGrantId : undefined)
-    && value.serverTime <= now && value.status !== 'requested_denied' && ['teaching', 'practice', 'feedback'].includes(value.purpose))
+  const priorExposures = exposures.filter(value => value._id !== ('deliveryGrantId' in row ? row.deliveryGrantId : undefined)
+    && value.serverTime <= now && value.status !== 'requested_denied' && value.purpose !== 'assistance_requested_denied')
+  const actualHelp = priorExposures.some(value => ['granted', 'acknowledged', 'known'].includes(value.status)
+    && ['teaching', 'practice', 'feedback'].includes(value.purpose))
+  const unresolvedExposure = priorExposures.some(value => value.status === 'possible' || value.status === 'unknown')
   const session = authority.session
   const hint = session?.substantiveHintUsedAt ?? null
   const reveal = session?.answerRevealedAt ?? null
   const assistance = parseLearnContract(learnAssistanceSnapshotSchema, {
     policyVersion: LEARN_V2_ASSISTANCE_POLICY_VERSION, state: actualHelp || hint !== null || reveal !== null ? 'assisted'
-      : session?.assistanceRevision !== undefined ? 'unassisted' : 'unknown',
+      : unresolvedExposure || session?.assistanceRevision === undefined ? 'unknown' : 'unassisted',
     assistanceRevision: session?.assistanceRevision ?? 0, substantiveHintUsedAt: hint, answerRevealedAt: reveal,
     priorExposure: 'unknown', outsideHelp: 'unknown', pasteObserved: observation.pasteObserved, focusLossObserved: observation.focusLossObserved,
     instrumentationVersion: observation.version, instrumentationProvenance: entry.instrumentation ? 'client_observation.v1' : 'missing_instrumentation.v1',
