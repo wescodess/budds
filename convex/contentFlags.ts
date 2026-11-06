@@ -19,6 +19,9 @@ export const flagQuizQuestion = mutation({
 
     await ctx.db.patch(args.questionId, {
       flagged: true,
+      ...((question.flagged ? question.correctedAnswer : question.correctAnswer) !== trimmedAnswer
+        ? { gradingCriteria: undefined }
+        : {}),
       correctedAnswer: trimmedAnswer,
       correctedExplanation: args.correctedExplanation?.trim() || undefined,
       flaggedAt: Date.now(),

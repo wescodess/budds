@@ -31,10 +31,6 @@ export function useQuizzes(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
 
   const quizzes = computed<QuizSummary[]>(() => (quizzesData.value as QuizSummary[] | undefined) ?? [])
 
-  const createQuizMutation = import.meta.client
-    ? useConvexMutation(api.quizzes.createWithQuestions)
-    : createSsrMutationStub<typeof api.quizzes.createWithQuestions>()
-
   const updateQuizMutation = import.meta.client
     ? useConvexMutation(api.quizzes.updateQuiz)
     : createSsrMutationStub<typeof api.quizzes.updateQuiz>()
@@ -58,33 +54,13 @@ export function useQuizzes(folderId: Ref<Id<'folders'>> | Id<'folders'>) {
     lastError.value = null
     try {
       const generated = await $fetch<{
-        title: string
-        model: string
-        questionCount: number
-        questions: Array<{
-          order: number
-          question: string
-          type: 'multiple-choice' | 'free-response' | 'true_false' | 'fill_in_the_blank'
-          options?: string[]
-          correctAnswer: string
-          explanation?: string
-          sourceDocumentId?: string
-          sourceChunkContent?: string
-          sourceFilename?: string
-        }>
+        quizId: Id<'quizzes'>
       }>('/api/quiz/generate', {
         method: 'POST',
-        body: { folderId: id.value, ...options },
+        body: { folderId: id.value, ...options, language: 'en' },
       })
 
-      await createQuizMutation.mutate({
-        folderId: id.value,
-        title: generated.title,
-        model: generated.model,
-        creationMethod: 'auto_generated' as const,
-        difficulty: options.difficulty,
-        questions: generated.questions,
-      })
+      return generated.quizId
     }
     catch (e) {
       const message = getErrorMessage(e, 'Quiz generation failed')
