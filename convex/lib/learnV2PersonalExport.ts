@@ -159,7 +159,7 @@ export async function exportLegacyAttempt(ctx: QueryCtx, userId: string, attempt
   const assistance = learnAssistanceSnapshotSchema.safeParse(attempt.assistanceSnapshot)
   const validity = learnValiditySnapshotSchema.safeParse(attempt.validitySnapshot)
   return { ...privateFields(attempt, ['objectiveId', 'blueprintRevisionId', 'studySessionId', 'sessionContentId', 'studyPlanRevisionId', 'submissionId', 'assessmentOpportunityId',
-    'kind', 'attemptedAt', 'attemptLocalDate', 'attemptTimezone', 'acceptedAt', 'scoreCommittedAt', 'serverScorePercent', 'confidence', 'usedHint', 'usedReveal',
+    'kind', 'activityContractVersion', 'attemptedAt', 'attemptLocalDate', 'attemptTimezone', 'acceptedAt', 'scoreCommittedAt', 'serverScorePercent', 'confidence', 'usedHint', 'usedReveal',
     'masteryStateBefore', 'masteryStateAfter', 'masteryTransitionReason', 'masteryTransitionVersion', 'result']),
   ...(assistance.success ? { assistance: assistance.data } : {}),
   ...(validity.success ? { validity: validity.data } : {}),

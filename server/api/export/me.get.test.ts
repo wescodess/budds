@@ -133,7 +133,7 @@ describe('GET /api/export/me', () => {
       await ctx.db.insert('learnResponseEvidenceLinks', { ...linkFields, submissionId: formativeId })
       await ctx.db.patch(f.rows.learnResponseSlots, { status: 'accepted', submissionId: formativeId })
       await ctx.db.insert('masteryAttempts', { userId: identity.tokenIdentifier, objectiveId: f.scope.objectiveId, attemptedAt: 123,
-        idempotencyKey: 'legacy-export-answer', response: 'retained legacy answer', confidence: 4, usedHint: true, usedReveal: false,
+        idempotencyKey: 'legacy-export-answer', activityContractVersion: 'learn-v2.mastery-attempt.v1', response: 'retained legacy answer', confidence: 4, usedHint: true, usedReveal: false,
         serverScorePercent: 80, result: 'passed', sourceSnapshotIdsJson: JSON.stringify([f.sourceSnapshotId]),
         rubricSnapshot: STORAGE_CANARIES.rubric, feedbackProjectionJson: STORAGE_CANARIES.key, contentRevisionPinsJson: STORAGE_CANARIES.locator })
       await ctx.db.patch(f.rows.learnResponseSlots, { confidenceRequested: false })
@@ -172,6 +172,9 @@ describe('GET /api/export/me', () => {
     expect(answers).toContain(STORAGE_CANARIES.answer)
     expect(answers).toContain('retained formative answer')
     expect(strFromU8(entries['masteryAttempts.json']!)).toContain('retained legacy answer')
+    expect(JSON.parse(strFromU8(entries['masteryAttempts.json']!))).toEqual(expect.arrayContaining([
+      expect.objectContaining({ response: 'retained legacy answer', activityContractVersion: 'learn-v2.mastery-attempt.v1' }),
+    ]))
     const cells = JSON.parse(strFromU8(entries['learnMeasurementReportCells.json']!))
     expect(cells).toMatchObject([{ reportVersion: LEARN_V2_MEASUREMENT_REPORT_VERSION }])
     expect(cells[0]).not.toHaveProperty('legacyIndependentAudit')
