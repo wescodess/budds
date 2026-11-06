@@ -1,81 +1,18 @@
 import { paginationOptsValidator } from 'convex/server'
 import { v } from 'convex/values'
-import { LEARN_MEASUREMENT_COLLECTIONS, isLearnMeasurementCollection } from '../shared/learn-v2-measurement-storage-manifest'
+import { isLearnMeasurementCollection } from '../shared/learn-v2-measurement-storage-manifest'
 import { exportMeasurementPage } from './lib/learnV2MeasurementExport'
 import { mutation, query } from './_generated/server'
 import { authorizePersonalExportPage, requirePersonalExportAuthorization, PERSONAL_METADATA, exportPersonalResponse, exportLegacyAttempt, exportActivity, exportThread, exportDecision } from './lib/learnV2PersonalExport'
 import { privateFields, retainedResponsePayload } from './lib/learnV2ResponsePrivacy'
 import { requireAuth } from './lib/auth'
-import { ADAPTIVE_LEARN_EXPORT_COLLECTIONS } from '../shared/adaptive-learn-storage-manifest'
+import { PERSONAL_EXPORT_COLLECTIONS } from './lib/learnV2PersonalExportCollections'
 
 // A single Convex document can approach 1 MiB. Keep pages comfortably below
 // the 16 MiB transaction and return-value ceilings even at the per-row limit.
 const MAX_EXPORT_PAGE_SIZE = 8
-const [learningThreadContributionsCollection, learningThreadsCollection, learningThreadActivitiesCollection, learningThreadArtifactsCollection, learnActivityEvidenceLinksCollection, learnActivityDecisionsCollection, learnActivityEventsCollection, learnActivityCommandReceiptsCollection, learnAdaptiveThreadDeletionJobsCollection, learnActivityOverridesCollection, learningThreadPreferencesCollection, learningThreadPromotionProposalsCollection, learnAdaptiveExperimentAssignmentsCollection] = ADAPTIVE_LEARN_EXPORT_COLLECTIONS
 
-const exportCollectionValidator = v.union(
-  ...LEARN_MEASUREMENT_COLLECTIONS.map(table => v.literal(table)),
-  v.literal('folders'),
-  v.literal('documents'),
-  v.literal('conversations'),
-  v.literal('messages'),
-  v.literal('quizzes'),
-  v.literal('quizQuestions'),
-  v.literal('quizAttempts'),
-  v.literal('quizAnswerAssessments'),
-  v.literal('flashcardSets'),
-  v.literal('flashcards'),
-  v.literal('flashcardRooms'),
-  v.literal('flashcardRoomCards'),
-  v.literal('flashcardRoomVersions'),
-  v.literal('flashcardVersionCards'),
-  v.literal('courses'),
-  v.literal('courseSections'),
-  v.literal('learnProfile'),
-  v.literal('tasks'),
-  v.literal('reviewItems'),
-  v.literal('reviewSessions'),
-  v.literal('calendarConnections'),
-  v.literal('calendarEvents'),
-  v.literal('audioOverviewJobs'),
-  v.literal('audioOverviewSourceManifests'),
-  v.literal('audioOverviewSourceManifestEntries'),
-  v.literal('audioOverviewOutlines'),
-  v.literal('audioOverviewLearningObjectives'),
-  v.literal('audioOverviewOutlineSources'),
-  v.literal('audioOverviewClaimLedgers'),
-  v.literal('audioOverviewClaims'),
-  v.literal('audioOverviewClaimSources'),
-  v.literal('audioOverviewEpisodes'),
-  v.literal('audioOverviewScenes'),
-  v.literal('audioOverviewUtterances'),
-  v.literal('audioOverviewUtteranceSources'),
-  v.literal('audioOverviewUtteranceClaims'),
-  v.literal('audioOverviewAudioArtifacts'),
-  v.literal('audioOverviewSceneQualityGates'),
-  v.literal('audioOverviewAlignments'),
-  v.literal('audioOverviewAlignmentSegments'),
-  v.literal('audioOverviewJobTurns'),
-  v.literal('audioOverviews'),
-  v.literal('audioOverviewInterjections'),
-  v.literal('audioOverviewInterjectionsV2'),
-  v.literal('audioOverviewInterjectionUtterances'),
-  v.literal('audioOverviewInterjectionSources'),
-  v.literal(learningThreadsCollection),
-  v.literal(learningThreadContributionsCollection),
-  v.literal(learningThreadActivitiesCollection),
-  v.literal(learningThreadArtifactsCollection),
-  v.literal(learnActivityEvidenceLinksCollection),
-  v.literal(learnActivityDecisionsCollection),
-  v.literal(learnActivityEventsCollection),
-  v.literal(learnActivityCommandReceiptsCollection),
-  v.literal(learnAdaptiveThreadDeletionJobsCollection),
-  v.literal(learnActivityOverridesCollection),
-  v.literal(learningThreadPreferencesCollection),
-  v.literal(learningThreadPromotionProposalsCollection),
-  v.literal(learnAdaptiveExperimentAssignmentsCollection),
-  v.literal('learningVoids'), v.literal('learnBlueprints'), v.literal('learnBlueprintRevisions'), v.literal('learnMilestones'), v.literal('learnObjectives'), v.literal('learnObjectivePrerequisites'), v.literal('learnSourceIdentities'), v.literal('learnSourceSnapshots'), v.literal('learnSourceFetchLeases'), v.literal('learnSourceFetchRateEvents'), v.literal('learnMasteryScoringRateEvents'), v.literal('learnSourceCommandReceipts'), v.literal('learnFolderSourceManifests'), v.literal('learnFolderSourceManifestFolders'), v.literal('learnFolderSourceManifestEntries'), v.literal('learnSourceExcerpts'), v.literal('learnObjectiveSources'), v.literal('learnClaimSupports'), v.literal('masteryAttempts'), v.literal('masteryRecords'), v.literal('studyPlans'), v.literal('studyPlanRevisions'), v.literal('studySessions'), v.literal('studySessionRetrievalObjectives'), v.literal('sessionContent'), v.literal('sessionContentBlocks'), v.literal('sessionContentClaims'), v.literal('calendarProjections'), v.literal('calendarReconciliationProposals'), v.literal('calendarWebhookReceipts'), v.literal('calendarWatchChannels'), v.literal('reminderPolicies'), v.literal('searchQuotaBuckets'), v.literal('searchReservations'), v.literal('learnJobs'), v.literal('learnLifecycleReceipts'), v.literal('learnPlanCommandReceipts'), v.literal('learnPlanAuditEvents'),
-)
+const exportCollectionValidator = v.union(...PERSONAL_EXPORT_COLLECTIONS.map(table => v.literal(table)))
 
 function boundedPaginationOpts(paginationOpts: { numItems: number, cursor: string | null }) {
   return {

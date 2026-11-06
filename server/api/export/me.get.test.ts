@@ -10,6 +10,8 @@ import { LEARN_MEASUREMENT_STORAGE_MANIFEST, LEARN_MEASUREMENT_COLLECTIONS } fro
 import { LEARN_V2_MEASUREMENT_REPORT_VERSION, LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION } from '../../../shared/learn-v2-measurement-report'
 import { LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION, LEARN_V2_RESPONSE_TERMINALIZATION_VERSION } from '../../../shared/learn-v2-responses'
 import { deriveLearnAssessmentResponseContext } from '../../../shared/learn-v2-measurement'
+import { PERSONAL_EXPORT_COLLECTIONS, PERSONAL_EXPORT_CONTENT_COLLECTIONS } from '../../../convex/lib/learnV2PersonalExportCollections'
+import { PERSONAL_EXPORT_CONTENT_CASES, measurementExportFixture, seedExportContent } from '../../../tests/fixtures/learn-v2-export-content'
 
 const recordedHeaders: Record<string, string> = {}
 
@@ -65,7 +67,7 @@ vi.mock('convex/browser', () => ({
 const fetchMock = vi.fn()
 vi.stubGlobal('fetch', fetchMock)
 
-const handler = (await import('./me.get')).default
+const { default: handler, EXPORT_COLLECTIONS } = await import('./me.get')
 
 function mockExportData(data: Record<string, any>) {
   getExportMetadataMock.mockResolvedValue({ userId: data.userId, user: data.user })
@@ -106,6 +108,37 @@ describe('GET /api/export/me', () => {
   test('returns 401 when no Convex token is present on the event', async () => {
     const err = await handler(makeEvent(undefined)).catch((e: any) => e)
     expect(err.statusCode).toBe(401)
+  })
+
+  test('ZIP and Convex share the classified collection inventory and preserve every audited content projection', async () => {
+    expect(EXPORT_COLLECTIONS).toBe(PERSONAL_EXPORT_COLLECTIONS)
+    expect(new Set(PERSONAL_EXPORT_CONTENT_CASES.map(([collection]) => collection))).toEqual(new Set(PERSONAL_EXPORT_CONTENT_COLLECTIONS))
+    vi.stubEnv('LEARN_V2_ENABLED', 'false')
+    const t = convexTest(schema, import.meta.glob('../../../convex/**/*.ts'))
+    const fixture = await measurementExportFixture(t, 'https://owner.example|zip-content-inventory')
+    const contents = []
+    for (const entry of PERSONAL_EXPORT_CONTENT_CASES) contents.push(await seedExportContent(fixture, entry))
+    const foreign = await t.run(ctx => ctx.db.insert('messages', { userId: 'https://foreign.example|zip-content-inventory',
+      conversationId: '0conversations' as never, role: 'user', content: 'foreign-export-content-canary' }))
+    const owner = fixture.owner
+    authorizeExportMock.mockImplementation(args => owner.mutation(api.dataExport.authorizePersonalExport, args))
+    getExportMetadataMock.mockImplementation(() => owner.query(api.dataExport.getExportMetadata, {}))
+    getUserDataPageMock.mockImplementation(args => owner.query(api.dataExport.getUserDataPage, args))
+    getAttemptAnswersPageMock.mockImplementation(args => owner.query(api.dataExport.getAttemptAnswersPage, args))
+    getCourseSourceDocsPageMock.mockImplementation(args => owner.query(api.dataExport.getCourseSourceDocsPage, args))
+    getDocumentDownloadUrlMock.mockResolvedValue(null)
+    const entries = unzipSync(await handler(makeEvent('fixture-jwt')))
+    for (const content of contents) {
+      const rows = JSON.parse(strFromU8(entries[`${content.collection}.json`]!)) as Array<Record<string, unknown>>
+      const row = rows.find(row => row._id === content.id)
+      expect(JSON.stringify(row?.[content.field])).toContain(content.canary)
+    }
+    expect(strFromU8(entries['messages.json']!)).not.toContain(foreign)
+    expect(strFromU8(entries['messages.json']!)).not.toContain('foreign-export-content-canary')
+    const exposure = await t.run(ctx => ctx.db.query('learnAssessmentExposures')
+      .withIndex('by_userId_and_assessmentOpportunityId', q => q.eq('userId', fixture.tokenIdentifier).eq('assessmentOpportunityId', fixture.assessmentOpportunityId)).take(8))
+    expect(exposure).toEqual(expect.arrayContaining([expect.objectContaining({ purpose: 'imported', status: 'unknown' })]))
+    vi.unstubAllEnvs()
   })
 
   test('pages the real owned Phase C records through ZIP with the same safe projections', async () => {

@@ -4,15 +4,23 @@ import { LEARN_MEASUREMENT_STORAGE_VERSION } from '../../shared/learn-v2-measure
 import { LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION, projectAttemptHistory } from '../../shared/learn-v2-assessment-disclosure'
 import { learnAssistanceSnapshotSchema, learnValiditySnapshotSchema } from '../../shared/learn-v2-responses'
 import { legacyResponseAvailable, privacyDigest, privateFields, retainedResponsePayload, sourceBodyAvailable } from './learnV2ResponsePrivacy'
+import { PERSONAL_EXPORT_COLLECTION_POLICY, PERSONAL_EXPORT_CONTENT_COLLECTIONS, type PersonalExportContentCollection } from './learnV2PersonalExportCollections'
 
 export const PERSONAL_EXPORT_POLICY = 'learn-v2.personal-export.v1'
 const PENDING = 'learn-v2.personal-export-pending.v1'
 
+async function latestInventoryRow(ctx: QueryCtx | MutationCtx, userId: string, table: PersonalExportContentCollection | 'learnAssessmentOpportunities') {
+  if (table === 'quizAnswerAssessments') return await ctx.db.query(table).withIndex('by_userId_and_attemptId', q => q.eq('userId', userId)).order('desc').first()
+  if (table === 'audioOverviewEpisodes' || table === 'audioOverviewAlignments') return await ctx.db.query(table).withIndex('by_userId_and_status', q => q.eq('userId', userId)).order('desc').first()
+  return await ctx.db.query(table).withIndex('by_userId', q => q.eq('userId', userId)).order('desc').first()
+}
+
 async function inventoryDigest(ctx: QueryCtx | MutationCtx, userId: string, documentId?: Id<'documents'>) {
-  const tables = ['learnAssessmentOpportunities', 'documents', 'messages', 'courses', 'courseSections', 'quizQuestions',
-    'flashcards', 'flashcardRoomCards', 'learningThreadArtifacts', 'learnResponses', 'masteryAttempts'] as const
-  const latest = await Promise.all(tables.map(table => ctx.db.query(table).withIndex('by_userId', q => q.eq('userId', userId)).order('desc').first()))
-  return await privacyDigest([latest.map(row => row?._id ?? null), documentId ?? null])
+  const tables = ['learnAssessmentOpportunities', ...PERSONAL_EXPORT_CONTENT_COLLECTIONS] as const
+  const latest = await Promise.all(tables.map(table => latestInventoryRow(ctx, userId, table)))
+  return { digest: await privacyDigest([tables.map((table, index) => [table,
+    table === 'learnAssessmentOpportunities' ? 'authority' : PERSONAL_EXPORT_COLLECTION_POLICY[table], latest[index]?._id ?? null]), documentId ?? null]),
+  mayHelp: PERSONAL_EXPORT_CONTENT_COLLECTIONS.some((table, index) => PERSONAL_EXPORT_COLLECTION_POLICY[table] === 'content' && latest[index + 1] !== null) }
 }
 
 export async function authorizePersonalExportPage(ctx: MutationCtx, userId: string, args: {
@@ -30,37 +38,28 @@ export async function authorizePersonalExportPage(ctx: MutationCtx, userId: stri
     if (args.cursor !== undefined) throw new Error('Export authorization unavailable')
     const previous = await ctx.db.query('learnAssessmentExposures').withIndex('by_userId_and_deliveryReceiptHash', q => q.eq('userId', userId).eq('deliveryReceiptHash', completeReceiptHash)).order('desc').take(8)
     const reusable = previous.find(row => row.policyVersion === PERSONAL_EXPORT_POLICY && row.provenanceVersion === PERSONAL_EXPORT_POLICY
-      && row.status === 'granted' && row.projectionDigest === inventory)
+      && row.status === 'granted' && row.projectionDigest === inventory.digest)
     if (reusable) return { authorizationId: reusable._id, cursor: null, done: true }
     authorizationId = await ctx.db.insert('learnAssessmentExposures', { userId, storageVersion: LEARN_MEASUREMENT_STORAGE_VERSION,
-      createdAt: Date.now(), purpose: 'imported', status: 'possible', projectionDigest: inventory,
+      createdAt: Date.now(), purpose: 'imported', status: 'possible', projectionDigest: inventory.digest,
       deliveryReceiptHash: await privacyDigest(null), serverTime: Date.now(), policyVersion: PERSONAL_EXPORT_POLICY, provenanceVersion: PENDING })
   }
   const authorization = await ctx.db.get(authorizationId)
   if (!authorization || authorization.userId !== userId || authorization.policyVersion !== PERSONAL_EXPORT_POLICY
-    || authorization.provenanceVersion !== PENDING || authorization.status !== 'possible' || authorization.projectionDigest !== inventory
+    || authorization.provenanceVersion !== PENDING || authorization.status !== 'possible' || authorization.projectionDigest !== inventory.digest
     || authorization.deliveryReceiptHash !== await privacyDigest(args.cursor ?? null)) throw new Error('Export authorization unavailable')
   const page = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId', q => q.eq('userId', userId))
     .paginate({ cursor: args.cursor ?? null, numItems: 8 })
   // An export of only the current own response has no help exposure. A full
   // archive that also releases prior records or original material is unknown
   // support unless a later purpose-specific authority establishes relevance.
-  const content = await Promise.all([
-    ctx.db.query('documents').withIndex('by_userId', q => q.eq('userId', userId)).first(),
-    ctx.db.query('messages').withIndex('by_userId', q => q.eq('userId', userId)).first(),
-    ctx.db.query('courses').withIndex('by_userId', q => q.eq('userId', userId)).first(),
-    ctx.db.query('flashcards').withIndex('by_userId', q => q.eq('userId', userId)).first(),
-    ctx.db.query('learningThreadArtifacts').withIndex('by_userId', q => q.eq('userId', userId)).first(),
-    ctx.db.query('quizQuestions').withIndex('by_userId', q => q.eq('userId', userId)).first(),
-    ctx.db.query('courseSections').withIndex('by_userId', q => q.eq('userId', userId)).first(),
-    ctx.db.query('flashcardRoomCards').withIndex('by_userId', q => q.eq('userId', userId)).first(),
-  ])
-  const responses = await ctx.db.query('learnResponses').withIndex('by_userId', q => q.eq('userId', userId)).take(2)
+  const bodies = await ctx.db.query('learnResponseBodies').withIndex('by_userId', q => q.eq('userId', userId)).take(2)
+  const responses = await Promise.all(bodies.map(body => ctx.db.get(body.submissionId)))
   const legacy = await ctx.db.query('masteryAttempts').withIndex('by_userId', q => q.eq('userId', userId)).take(2)
   for (const opportunity of page.page) {
     if (opportunity.submissionId || ['submitted_sealed', 'scoring_pending', 'scored_pass', 'scored_fail', 'cancelled', 'abandoned', 'invalid'].includes(opportunity.phase)) continue
-    const mayHelp = !!args.documentId || content.some(Boolean)
-      || responses.some(row => !('assessmentOpportunityId' in row) || row.assessmentOpportunityId !== opportunity._id)
+    const mayHelp = !!args.documentId || inventory.mayHelp
+      || responses.some(row => !row || row.userId !== userId || !('assessmentOpportunityId' in row) || row.assessmentOpportunityId !== opportunity._id)
       || legacy.some(row => row.assessmentOpportunityId !== opportunity._id)
     if (!mayHelp) continue
     const receiptHash = await privacyDigest(['personal-export', opportunity._id])
@@ -83,7 +82,7 @@ export async function requirePersonalExportAuthorization(ctx: QueryCtx, userId: 
   if (!authorization || authorization.userId !== userId || authorization.policyVersion !== PERSONAL_EXPORT_POLICY
     || authorization.provenanceVersion !== PERSONAL_EXPORT_POLICY || authorization.status !== 'granted') throw new Error('Export authorization unavailable')
   const full = await inventoryDigest(ctx, userId)
-  if (authorization.projectionDigest !== full && (!documentId || authorization.projectionDigest !== await inventoryDigest(ctx, userId, documentId))) throw new Error('Export authorization unavailable')
+  if (authorization.projectionDigest !== full.digest && (!documentId || authorization.projectionDigest !== (await inventoryDigest(ctx, userId, documentId)).digest)) throw new Error('Export authorization unavailable')
 }
 
 export const PERSONAL_METADATA = {
