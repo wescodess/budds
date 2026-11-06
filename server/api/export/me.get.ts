@@ -1,80 +1,14 @@
 import { ConvexHttpClient } from 'convex/browser'
 import { Zip, ZipDeflate, ZipPassThrough } from 'fflate'
-import { ADAPTIVE_LEARN_EXPORT_COLLECTIONS } from '../../../shared/adaptive-learn-storage-manifest'
-import { LEARN_MEASUREMENT_COLLECTIONS, LEARN_MEASUREMENT_STORAGE_MANIFEST, LEARN_MEASUREMENT_STORAGE_VERSION } from '../../../shared/learn-v2-measurement-storage-manifest'
+import { PERSONAL_EXPORT_COLLECTIONS } from '../../../convex/lib/learnV2PersonalExportCollections'
+import { LEARN_MEASUREMENT_STORAGE_MANIFEST, LEARN_MEASUREMENT_STORAGE_VERSION } from '../../../shared/learn-v2-measurement-storage-manifest'
 import { api } from '../../../convex/_generated/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 import { requireRateLimit } from '../../utils/rate-limit'
 
 const EXPORT_PAGE_SIZE = 8
 
-export const EXPORT_COLLECTIONS = [
-  ...ADAPTIVE_LEARN_EXPORT_COLLECTIONS,
-  ...LEARN_MEASUREMENT_COLLECTIONS,
-  'folders',
-  'documents',
-  'conversations',
-  'messages',
-  'quizzes',
-  'quizQuestions',
-  'quizAttempts',
-  'quizAnswerAssessments',
-  'flashcardSets',
-  'flashcards',
-  'flashcardRooms',
-  'flashcardRoomCards',
-  'flashcardRoomVersions',
-  'flashcardVersionCards',
-  'courses',
-  'courseSections',
-  'learnProfile',
-  'tasks',
-  'reviewItems',
-  'reviewSessions',
-  'calendarConnections',
-  'calendarEvents',
-  'audioOverviewJobs',
-  'audioOverviewSourceManifests',
-  'audioOverviewSourceManifestEntries',
-  'audioOverviewOutlines',
-  'audioOverviewLearningObjectives',
-  'audioOverviewOutlineSources',
-  'audioOverviewClaimLedgers',
-  'audioOverviewClaims',
-  'audioOverviewClaimSources',
-  'audioOverviewEpisodes',
-  'audioOverviewScenes',
-  'audioOverviewUtterances',
-  'audioOverviewUtteranceSources',
-  'audioOverviewUtteranceClaims',
-  'audioOverviewAudioArtifacts',
-  'audioOverviewSceneQualityGates',
-  'audioOverviewAlignments',
-  'audioOverviewAlignmentSegments',
-  'audioOverviewJobTurns',
-  'audioOverviews',
-  'audioOverviewInterjections',
-  'audioOverviewInterjectionsV2',
-  'audioOverviewInterjectionUtterances',
-  'audioOverviewInterjectionSources',
-  'learningVoids', 'learnBlueprints', 'learnBlueprintRevisions',
-  'learnMilestones', 'learnObjectives', 'learnObjectivePrerequisites',
-  'learnSourceIdentities', 'learnSourceSnapshots',
-  'learnFolderSourceManifests', 'learnFolderSourceManifestFolders',
-  'learnFolderSourceManifestEntries', 'learnSourceExcerpts',
-  'learnObjectiveSources', 'learnClaimSupports', 'masteryAttempts',
-  'masteryRecords', 'studyPlans', 'studyPlanRevisions', 'studySessions',
-  'studySessionRetrievalObjectives', 'sessionContent', 'sessionContentBlocks',
-  'sessionContentClaims', 'calendarProjections', 'reminderPolicies',
-  'searchQuotaBuckets', 'searchReservations', 'learnJobs',
-  'learnLifecycleReceipts',
-  'learnPlanCommandReceipts',
-  'learnPlanAuditEvents',
-  'learnSourceFetchLeases',
-  'learnSourceFetchRateEvents',
-  'learnSourceCommandReceipts', 'learnMasteryScoringRateEvents',
-  'calendarReconciliationProposals', 'calendarWebhookReceipts', 'calendarWatchChannels',
-] as const
+export const EXPORT_COLLECTIONS = PERSONAL_EXPORT_COLLECTIONS
 
 type ExportCollection = typeof EXPORT_COLLECTIONS[number]
 type ExportRow = Record<string, unknown> & { _id: string }
