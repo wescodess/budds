@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 import { convexTest } from 'convex-test'
 import { afterAll, beforeEach, describe, expect, test } from 'vitest'
 import { api, internal } from './_generated/api'
@@ -71,12 +72,12 @@ describe('bounded learner controls', () => {
       .toBe('A saved response about orbital motion.')
     expect(await owner.query(api.learnAdaptiveRouting.replayDecision, { decisionId: decided.value.decisionId as never }))
       .toMatchObject({ status: 'replayed', value: decided.value })
-    const exported = (await owner.query(api.dataExport.getUserDataPage, {
+    const exported = (await owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(owner),
       collection: 'learnActivityDecisions', paginationOpts: { cursor: null, numItems: 10 },
     })).page.find(row => row._id === decided.value.decisionId) as { overrideApplication?: unknown } | undefined
     expect(exported?.overrideApplication).toEqual({ version: 'learn-adaptive.override-application.v1',
       option: 'time_45', outcome: 'applied', applicationReason: 'applied', effectiveAvailableTime: '45' })
-    const exportedOverrides = (await owner.query(api.dataExport.getUserDataPage, {
+    const exportedOverrides = (await owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(owner),
       collection: 'learnActivityOverrides', paginationOpts: { cursor: null, numItems: 10 },
     })).page
     expect(exportedOverrides[0]).not.toHaveProperty('consumedDecisionId')
@@ -163,7 +164,7 @@ describe('bounded learner controls', () => {
     expect(after?.activity?.id).toBe(before?.activity?.id)
     expect(after?.activity?.controls?.selected).toEqual('time_45')
     expect(after?.activity?.controls?.fixedNextPlan).toEqual(result.kind === 'ok' ? result.value.fixedNextPlan : null)
-    const exportedPlan = (await owner.query(api.dataExport.getUserDataPage, { collection: 'learnActivityOverrides', paginationOpts: { cursor: null, numItems: 10 } })).page[0]
+    const exportedPlan = (await owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(owner), collection: 'learnActivityOverrides', paginationOpts: { cursor: null, numItems: 10 } })).page[0]
     expect(exportedPlan).toMatchObject({ fixedNextPlan: result.kind === 'ok' ? result.value.fixedNextPlan : null })
     expect((await owner.query(api.learnAdaptive.getThread, { threadId }))?.thread.revision).toBe(4)
   })
@@ -213,13 +214,13 @@ describe('bounded learner controls', () => {
     await expect(owner.mutation(api.learnAdaptive.applyOverride, { threadId, activityId, option: 'time_45', expectedRevision: 3,
       idempotencyKey: 'controls-corrupt-0001' })).rejects.toThrow('Override unavailable: state')
     expect((await owner.query(api.learnAdaptive.getThread, { threadId }))?.thread.revision).toBe(3)
-    expect((await owner.query(api.dataExport.getUserDataPage, { collection: 'learnActivityOverrides', paginationOpts: { cursor: null, numItems: 10 } })).page).toEqual([])
+    expect((await owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(owner), collection: 'learnActivityOverrides', paginationOpts: { cursor: null, numItems: 10 } })).page).toEqual([])
   })
 
   test('exports learner-only preference metadata and removes it with the thread', async () => {
     const { t, owner, threadId, activityId } = await fixture()
     await owner.mutation(api.learnAdaptive.applyOverride, { threadId, activityId, option: 'time_45', expectedRevision: 3, idempotencyKey: 'controls-export-0001' })
-    const exported = await owner.query(api.dataExport.getUserDataPage, { collection: 'learnActivityOverrides', paginationOpts: { cursor: null, numItems: 10 } })
+    const exported = await owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(owner), collection: 'learnActivityOverrides', paginationOpts: { cursor: null, numItems: 10 } })
     expect(exported.page).toMatchObject([{ option: 'time_45', source: 'learner', version: 'learn-adaptive.override.v1', threadId }])
     expect(JSON.stringify(exported.page)).not.toMatch(/tokenIdentifier|response|provider|score/i)
     await owner.mutation(api.learnAdaptive.requestThreadDeletion, { threadId })
@@ -230,6 +231,6 @@ describe('bounded learner controls', () => {
       if (!current) break
       await t.mutation(internal.learnAdaptiveCommands.runThreadDeletionJob, { jobId: job!._id })
     }
-    expect((await owner.query(api.dataExport.getUserDataPage, { collection: 'learnActivityOverrides', paginationOpts: { cursor: null, numItems: 10 } })).page).toEqual([])
+    expect((await owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(owner), collection: 'learnActivityOverrides', paginationOpts: { cursor: null, numItems: 10 } })).page).toEqual([])
   })
 })

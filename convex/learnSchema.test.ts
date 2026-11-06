@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 import { convexTest } from 'convex-test'
 import { describe, expect, test } from 'vitest'
 import { api, internal } from './_generated/api'
@@ -111,7 +112,7 @@ async function readLearnExportPages(
   let cursor: string | null = null
 
   while (true) {
-    const result: ExportPage = await asUser.query(api.dataExport.getUserDataPage, {
+    const result: ExportPage = await asUser.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(asUser),
       collection,
       paginationOpts: { cursor, numItems: 1 },
     })
@@ -130,7 +131,7 @@ async function collectLearnDataForTest(asUser: TestClient) {
   for (const course of courses) {
     let cursor: string | null = null
     while (true) {
-      const result: ExportPage | null = await asUser.query(api.dataExport.getCourseSourceDocsPage, {
+      const result: ExportPage | null = await asUser.query(api.dataExport.getCourseSourceDocsPage, { authorizationId: await authorizeExport(asUser),
         courseId: course._id as Id<'courses'>,
         paginationOpts: { cursor, numItems: 1 },
       })

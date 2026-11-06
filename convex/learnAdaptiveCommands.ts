@@ -1,4 +1,4 @@
-import { deleteMeasurementThreadBatch } from './lib/learnV2MeasurementRetention'
+import { readMeasurementThreadDescendants } from './lib/learnV2MeasurementRetention'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
@@ -11,6 +11,53 @@ const RECEIPT_DETAIL_TTL_MS = 30 * 24 * 60 * 60 * 1000
 const THREAD_DELETION_BATCH_SIZE = 8
 const THREAD_DELETION_MAX_ATTEMPTS = 3
 const THREAD_DELETION_RETRY_DELAYS_MS = [1_000, 5_000] as const
+
+export const detachV2CanvasHistory = internalMutation({
+  args: { userId: v.string(), threadId: v.id('learningThreads'), table: v.union(v.literal('learnResponses'), v.literal('learnResponseSlots'), v.literal('learnAssessmentOpportunities')), cursor: v.optional(v.string()) },
+  returns: v.boolean(),
+  handler: async (ctx, args): Promise<boolean> => {
+    const thread = await ctx.db.get(args.threadId)
+    if (!thread || thread.userId !== args.userId || !thread.learningVoidId || thread.deletionStartedAt === undefined) return false
+    const page = await ctx.db.query(args.table).withIndex('by_userId_and_learningVoidId', q => q.eq('userId', args.userId).eq('learningVoidId', thread.learningVoidId)).paginate({ cursor: args.cursor ?? null, numItems: THREAD_DELETION_BATCH_SIZE })
+    for (const row of page.page) {
+      // Unfinished work retains its Canvas admission pins. Wrapper deletion
+      // cannot turn it into a response admitted through Today instead.
+      const retainedHistory = 'payloadDigest' in row || ('status' in row ? row.status !== 'open'
+        : !['preparing', 'ready', 'test_open'].includes(row.phase))
+      if (!retainedHistory) continue
+      if (row.scopeKind === 'v2' && row.contextPins.kind === 'session' && row.contextPins.canvas?.threadId === thread._id) {
+        await ctx.db.patch(row._id, { contextPins: { ...row.contextPins, canvas: undefined } })
+      }
+    }
+    const nextTable = args.table === 'learnResponses' ? 'learnResponseSlots' : args.table === 'learnResponseSlots' ? 'learnAssessmentOpportunities' : null
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.learnAdaptiveCommands.detachV2CanvasHistory, { ...args, cursor: page.continueCursor })
+      return false
+    }
+    if (nextTable) {
+      const done: boolean = await ctx.runMutation(internal.learnAdaptiveCommands.detachV2CanvasHistory, { ...args, table: nextTable, cursor: undefined })
+      return done
+    }
+    await ctx.db.patch(thread._id, { nextAction: { kind: 'deleted', label: '', reasonCode: 'canvas_history_detached', activityId: '' } })
+    return true
+  },
+})
+
+async function deleteOwnedThreadResponses(ctx: MutationCtx, userId: string, threadId: Id<'learningThreads'>) {
+  for (const table of ['learnResponseBodies', 'learnResponseEvidenceLinks', 'learnResponseIntegrityEvents', 'learnResponseCommandReceipts', 'learnResponses', 'learnResponseSlots'] as const) {
+    const references = await readMeasurementThreadDescendants(ctx, userId, threadId, table)
+    for (const reference of references) {
+      const row = await ctx.db.get(reference.id)
+      if (!row || row.userId !== userId) continue
+      if ('learningVoidId' in row && row.learningVoidId !== undefined) await ctx.db.patch(row._id, { threadId: undefined })
+      else await ctx.db.delete(row._id)
+    }
+    if (references.length) return true
+  }
+  const exposures = await ctx.db.query('learnAssessmentExposures').withIndex('by_userId_and_threadId', q => q.eq('userId', userId).eq('threadId', threadId)).take(THREAD_DELETION_BATCH_SIZE)
+  for (const exposure of exposures) await ctx.db.patch(exposure._id, { threadId: undefined, activityId: undefined })
+  return exposures.length > 0
+}
 
 export type AdaptiveResult<T> =
   | { kind: 'ok', value: T, revision: number, receiptId: string }
@@ -140,7 +187,11 @@ export async function deleteAdaptiveThreadAuthorityBatch(ctx: MutationCtx, job: 
   if (thread && thread.userId !== userId) throw new Error('Thread deletion authority mismatch')
 
   if (thread && thread.deletionStartedAt === undefined) await ctx.db.patch(threadId, { deletionStartedAt: Date.now() })
-  if (await deleteMeasurementThreadBatch(ctx, userId, threadId)) return { phase: 'responses' as const, deleted: 0, done: false, jobId: job._id }
+  if (thread?.authorityKind === 'v2_mission' && thread.nextAction?.reasonCode !== 'canvas_history_detached') {
+    const detached: boolean = await ctx.runMutation(internal.learnAdaptiveCommands.detachV2CanvasHistory, { userId, threadId, table: 'learnResponses' })
+    if (!detached) return { phase: 'responses' as const, deleted: 0, done: false, waitingExternal: true, jobId: job._id }
+  }
+  if (await deleteOwnedThreadResponses(ctx, userId, threadId)) return { phase: 'responses' as const, deleted: 0, done: false, jobId: job._id }
   const contributions = await ctx.db.query('learningThreadContributions')
     .withIndex('by_userId_and_threadId_and_createdAt', q => q.eq('userId', userId).eq('threadId', threadId))
     .take(THREAD_DELETION_BATCH_SIZE)

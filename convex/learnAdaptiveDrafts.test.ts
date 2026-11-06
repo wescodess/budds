@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 import { convexTest } from 'convex-test'
 import { afterAll, beforeEach, describe, expect, test } from 'vitest'
 import { api, internal } from './_generated/api'
@@ -55,7 +56,7 @@ describe('need-first thread draft authority', () => {
     expect(await t.run(ctx => ctx.db.query('learnActivityEvents').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(2))).toHaveLength(1)
     await expect(owner.query(api.learnAdaptiveDrafts.getThreadDraft, { threadId: created.thread.id })).resolves.toMatchObject({ id: created.thread.id, outcome: args.outcome, lifecycle: 'ready', revision: 2 })
     await expect(other.query(api.learnAdaptiveDrafts.getThreadDraft, { threadId: created.thread.id })).resolves.toBeNull()
-    await expect(owner.query(api.dataExport.getUserDataPage, { collection: 'learningThreads', paginationOpts: { cursor: null, numItems: 8 } })).resolves.toMatchObject({ page: [expect.objectContaining({ originalNeed: args.need, outcome: args.outcome })] })
+    await expect(owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(owner), collection: 'learningThreads', paginationOpts: { cursor: null, numItems: 8 } })).resolves.toMatchObject({ page: [expect.objectContaining({ originalNeed: args.need, outcome: args.outcome })] })
   })
 
   test('creates from a goal alone and defaults the distinct outcome projection to the exact need', async () => {

@@ -5,6 +5,9 @@ import { api, internal } from './_generated/api'
 import schema from './schema'
 import { composeAdaptiveActivityPlan } from '../shared/learn-adaptive-activity-plan'
 import { ADAPTIVE_V2_PILOT_MANIFEST } from '../shared/adaptive-v2-pilot-policy'
+import { seedMeasurementStorage, STORAGE_CANARIES } from '../tests/fixtures/learn-v2-measurement-storage'
+import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
+import { appendActivityResponseTargets } from '../tests/fixtures/learn-v2-activity-responses'
 
 const modules = import.meta.glob('./**/*.ts')
 const OWNER = { tokenIdentifier: 'https://auth.example.com|canvas-owner' }
@@ -13,7 +16,7 @@ const originalFlag = process.env.LEARN_V2_ENABLED
 const originalManifest = structuredClone(ADAPTIVE_V2_PILOT_MANIFEST)
 
 beforeEach(() => { process.env.LEARN_V2_ENABLED = 'true' })
-afterEach(() => { Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, originalManifest) })
+afterEach(() => { Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, originalManifest); vi.useRealTimers() })
 afterAll(() => { if (originalFlag === undefined) delete process.env.LEARN_V2_ENABLED; else process.env.LEARN_V2_ENABLED = originalFlag })
 
 async function approveSyntheticPilot() {
@@ -74,6 +77,175 @@ async function fixture() {
 }
 
 describe('ready V2 adaptive Canvas', () => {
+  test.each(['body_purged', 'direct_document_deleted', 'unrelated_slots', 'unrelated_canvas_slots', 'unrelated_opportunities', 'activity_overflow'] as const)('Canvas and Journey preserve retained body authority through %s', async revocation => {
+    vi.useFakeTimers()
+    const { t, owner, ids } = await fixture()
+    const attached = await owner.mutation(api.learnAdaptiveCanvas.attachReadySession, { studySessionId: ids.studySessionId, expectedSessionRevision: 2, idempotencyKey: 'canonical-copy-attach' })
+    const f = await t.run(ctx => seedMeasurementStorage(ctx, OWNER.tokenIdentifier))
+    const prepared = await t.run(async ctx => {
+      const thread = (await ctx.db.get(attached.threadId))!
+      const content = (await ctx.db.get(ids.sessionContentId))!
+      const plan = (await ctx.db.get(content.studyPlanRevisionId!))!
+      const canvas = { threadId: thread._id, threadRevision: thread.revision, activityId: thread.currentActivityId!, activityRevision: 1,
+        planVersion: 'learn-adaptive.activity-plan.v1', replayVersion: 'learn-adaptive.activity-replay.v1', rendererVersion: 'learn-adaptive.renderer.v1',
+        evaluationVersion: 'learn-adaptive.evaluation.v1', pilotConfigurationVersion: 'pilot.v1' }
+      const pins = { ...f.scope, learningVoidId: ids.learningVoidId, blueprintRevisionId: content.blueprintRevisionId!, objectiveId: content.objectiveId!,
+        blueprintRecordRevision: 3, contextPins: { ...f.scope.contextPins, studyPlanId: plan.studyPlanId, studyPlanRevisionId: plan._id,
+          studySessionId: ids.studySessionId, sessionContentId: content._id, canvas } }
+      await ctx.db.patch(f.rows.learnResponses, pins)
+      await ctx.db.patch(f.rows.learnAssessmentOpportunities, pins)
+      await ctx.db.patch(f.rows.learnResponseBodies, { learningVoidId: ids.learningVoidId })
+      await ctx.db.patch(f.rows.learnResponseEvidenceLinks, { learningVoidId: ids.learningVoidId, aggregate: { learningVoidId: ids.learningVoidId },
+        dependency: { kind: 'snapshot', sourceSnapshotId: ids.sourceSnapshotId, sourceSnapshotRevision: 1, sourceRecordRevision: 1, supportManifestDigest: 'support-hash' } })
+      const attemptId = await ctx.db.insert('masteryAttempts', { userId: OWNER.tokenIdentifier, blueprintRevisionId: pins.blueprintRevisionId,
+        objectiveId: pins.objectiveId, sessionContentId: content._id, submissionId: f.rows.learnResponses, attemptedAt: 123,
+        idempotencyKey: 'canonical-copy-attempt', response: STORAGE_CANARIES.answer, confidence: 4, serverScorePercent: 80 })
+      await ctx.db.patch(thread.currentActivityId!, { submittedResponse: STORAGE_CANARIES.answer, submittedConfidence: 4, masteryAttemptId: attemptId })
+      const documentId = await ctx.db.insert('documents', { userId: OWNER.tokenIdentifier, folderId: ids.folderId, filename: 'direct.txt', fileSize: 1,
+        status: 'success', sourceRevision: `sha256:${'a'.repeat(64)}`, contentHash: 'a'.repeat(64) })
+      await ctx.db.patch(thread._id, { sourceScope: { kind: 'document', sourceId: String(documentId) } })
+      return { activityId: thread.currentActivityId!, documentId, blueprintRevisionId: pins.blueprintRevisionId }
+    })
+    const canvasArgs = { threadId: attached.threadId }
+    expect((await owner.query(api.learnAdaptiveCanvas.getCanvas, canvasArgs))?.savedResponse).toMatchObject({ response: STORAGE_CANARIES.answer })
+    expect((await owner.query(api.learnV2Journey.getMission, { learningVoidId: ids.learningVoidId }))?.mastery[0]?.attempts[0]).toMatchObject({ response: STORAGE_CANARIES.answer })
+    if (revocation.startsWith('unrelated') || revocation === 'activity_overflow') {
+      const targetFixture = { t, userId: OWNER.tokenIdentifier, threadId: attached.threadId, activityId: prepared.activityId, submissionId: f.rows.learnResponses }
+      const kind = revocation === 'unrelated_slots' ? 'standalone' : revocation === 'unrelated_opportunities' ? 'opportunity' : 'canvas_slot'
+      await appendActivityResponseTargets(targetFixture, 63, revocation === 'activity_overflow', kind)
+      expect((await owner.query(api.learnAdaptiveCanvas.getCanvas, canvasArgs))?.savedResponse).toMatchObject({ response: STORAGE_CANARIES.answer })
+      await appendActivityResponseTargets(targetFixture, 1, revocation === 'activity_overflow', kind)
+      const canvas = await owner.query(api.learnAdaptiveCanvas.getCanvas, canvasArgs)
+      expect(canvas).toMatchObject({ thread: { id: attached.threadId }, session: { studySessionId: ids.studySessionId }, activity: { planRevision: 1 } })
+      const attempt = (await owner.query(api.learnV2Journey.getMission, { learningVoidId: ids.learningVoidId }))?.mastery[0]?.attempts[0]
+      if (revocation === 'activity_overflow') {
+        expect(canvas?.savedResponse).toBeNull()
+        expect(attempt).toMatchObject({ serverScorePercent: 80, confidence: 4, bodyAvailability: 'unavailable' })
+        expect(attempt).not.toHaveProperty('response')
+      } else {
+        expect(canvas?.savedResponse).toMatchObject({ response: STORAGE_CANARIES.answer })
+        expect(attempt).toMatchObject({ response: STORAGE_CANARIES.answer })
+      }
+      return
+    }
+    if (revocation === 'body_purged') await t.mutation(internal.learnV2Retention.purgeResponseCopies, { userId: OWNER.tokenIdentifier, submissionId: f.rows.learnResponses })
+    else await owner.mutation(api.documents.deleteDocument, { id: prepared.documentId })
+    expect((await t.run(ctx => ctx.db.get(prepared.activityId)))?.submittedResponse).toBe(STORAGE_CANARIES.answer)
+    for (const cleanup of [false, true]) {
+      if (cleanup) await t.finishAllScheduledFunctions(vi.runAllTimers)
+      expect((await owner.query(api.learnAdaptiveCanvas.getCanvas, canvasArgs))?.savedResponse).toBeNull()
+      const journey = await owner.query(api.learnV2Journey.getMission, { learningVoidId: ids.learningVoidId })
+      expect(journey?.mastery[0]?.attempts[0]).toMatchObject({ serverScorePercent: 80, confidence: 4, bodyAvailability: 'unavailable' })
+      expect(journey?.mastery[0]?.attempts[0]).not.toHaveProperty('response')
+      const authorizationId = await authorizeExport(owner)
+      const page = await owner.query(api.dataExport.getUserDataPage, { authorizationId, collection: 'learningThreadActivities', paginationOpts: { cursor: null, numItems: 16 } })
+      expect(page.page.find(row => row._id === prepared.activityId)).not.toHaveProperty('submittedResponse')
+      const review = await owner.query(api.learnV2Sources.listSourceReview, { blueprintRevisionId: prepared.blueprintRevisionId, paginationOpts: { cursor: null, numItems: 8 } })
+      expect(review.page.find(row => row._id === ids.sourceSnapshotId)?.excerpt).toBe('Gravity attracts masses.')
+      expect(JSON.stringify(review)).not.toContain(STORAGE_CANARIES.answer)
+    }
+    expect((await t.run(ctx => ctx.db.get(prepared.activityId)))?.submittedResponse).toBeUndefined()
+  })
+
+  test.each(['tombstone', 'source_unavailable', 'document_deleted', 'document_replaced', 'document_hash_replaced', 'document_object_replaced', 'folder_deleted', 'archived', 'evidence_purged'] as const)('Canvas, journey and source review deny %s before scheduled cleanup', async revocation => {
+    vi.useFakeTimers()
+    const { t, owner, ids } = await fixture()
+    const privateText = 'private-response-rubric-cache-canary'
+    const publicCriterion = 'Explain the capability accurately using the accepted evidence.'
+    const response = 'My retained answer about gravity.'
+    const prepared = await t.run(async ctx => {
+      const content = (await ctx.db.get(ids.sessionContentId))!
+      const source = (await ctx.db.get(ids.sourceSnapshotId))!
+      const documentId = await ctx.db.insert('documents', { userId: OWNER.tokenIdentifier, folderId: ids.folderId,
+        filename: 'gravity.txt', fileSize: 1, status: 'success', contentHash: 'a'.repeat(64), sourceRevision: `sha256:${'a'.repeat(64)}`, r2Key: 'canvas/gravity.txt' })
+      await ctx.db.patch(source.sourceIdentityId, { origin: 'folder_document', folderDocumentId: documentId })
+      await ctx.db.patch(source._id, { blueprintRevisionId: content.blueprintRevisionId, contentHash: 'a'.repeat(64), sourceRevision: `sha256:${'a'.repeat(64)}`, objectKey: 'canvas/gravity.txt' })
+      await ctx.db.patch(ids.laterSourceSnapshotId, { blueprintRevisionId: content.blueprintRevisionId })
+      await ctx.db.patch(content.objectiveId!, { assessmentContract: { version: 'learn-v2.assessment.v1', kind: 'bounded_rubric', responseFormat: 'short_text',
+        instructions: 'Explain from the evidence.', passingScorePercent: 80, criteria: [{ key: 'correct', description: publicCriterion, weightPercent: 100 }] } })
+      await ctx.db.patch(content.studyPlanRevisionId!, {
+        inputSnapshot: JSON.stringify({ version: 'learn-v2.schedule-input.v1', timezone: 'UTC', startLocalDate: '2026-11-06', targetLocalDate: null,
+          sessionMinutes: 25, minRestMinutes: 720, availability: [{ weekday: 1, start: '18:00', end: '20:00' }], blackoutDates: [], reviewIntervalsDays: [1, 3], privateRubric: privateText }),
+        resultSnapshot: JSON.stringify({ version: 'learn-v2.scheduler.v1', status: 'feasible', reasonCodes: ['capacity_available'], alternatives: [], privateCache: privateText }),
+      })
+      const attemptId = await ctx.db.insert('masteryAttempts', { userId: OWNER.tokenIdentifier, blueprintRevisionId: content.blueprintRevisionId,
+        objectiveId: content.objectiveId!, kind: 'calibration', attemptedAt: 123, serverScorePercent: 80, confidence: 4, usedHint: false, usedReveal: false,
+        idempotencyKey: 'read-privacy-calibration', activityContractVersion: 'learn-v2.calibration-attempt.v1', rubricVersion: 'rubric.v1', scorerVersion: 'scorer.v1',
+        response, sourceSnapshotIdsJson: JSON.stringify([source._id]),
+        requestFingerprint: JSON.stringify({ response: privateText }), rubricSnapshot: privateText, criterionResultsJson: privateText,
+        feedbackProjectionJson: privateText, contentRevisionPinsJson: privateText })
+      return { documentId, sourceIdentityId: source.sourceIdentityId, objectiveId: content.objectiveId!, blueprintRevisionId: content.blueprintRevisionId!, attemptId }
+    })
+    const attached = await owner.mutation(api.learnAdaptiveCanvas.attachReadySession, { studySessionId: ids.studySessionId, expectedSessionRevision: 2, idempotencyKey: 'read-privacy-attach' })
+    const activityId = await t.run(async ctx => {
+      const thread = (await ctx.db.get(attached.threadId))!
+      await ctx.db.patch(thread.currentActivityId!, { submittedResponse: response, submittedConfidence: 4 })
+      return thread.currentActivityId!
+    })
+    const canvasArgs = { threadId: attached.threadId }
+    const journeyArgs = { learningVoidId: ids.learningVoidId }
+    const reviewArgs = { blueprintRevisionId: prepared.blueprintRevisionId, paginationOpts: { cursor: null, numItems: 8 } }
+    const liveCanvas = await owner.query(api.learnAdaptiveCanvas.getCanvas, canvasArgs)
+    expect(liveCanvas).toMatchObject({ status: 'ready', savedResponse: { response, confidence: 4 } })
+    expect(liveCanvas?.activity.fallback.body).not.toBe('')
+    const liveJourney = await owner.query(api.learnV2Journey.getMission, journeyArgs)
+    expect(liveJourney?.sources.items.find(row => row._id === ids.sourceSnapshotId)?.excerpt?.text).toBe('Gravity attracts masses.')
+    expect(liveJourney?.calibration.attempts[0]).toMatchObject({ response, serverScorePercent: 80, confidence: 4 })
+    expect(liveJourney?.calibration.items[0]?.prompt).toBe('Explain from the evidence.')
+    const storedObjective = (await t.run(ctx => ctx.db.get(prepared.objectiveId)))!
+    expect(liveJourney?.map?.objectives[0]).toEqual({ ...storedObjective, sourceLinks: expect.any(Array), prerequisiteObjectiveIds: [] })
+    expect(liveJourney?.calibration.items[0]?.rubric).toEqual(storedObjective.assessmentContract)
+    expect(liveJourney?.calibration.attempts[0]).toMatchObject({ userId: OWNER.tokenIdentifier, rubricVersion: 'rubric.v1', scorerVersion: 'scorer.v1', activityContractVersion: 'learn-v2.calibration-attempt.v1' })
+    expect(liveJourney?.mastery[0]?.attempts[0]).toEqual(liveJourney?.calibration.attempts[0])
+    expect(liveJourney?.plan.accepted).toMatchObject({ inputSnapshot: expect.stringContaining('UTC'), resultSnapshot: expect.stringContaining('capacity_available') })
+    expect(JSON.stringify(liveJourney)).not.toContain(privateText)
+    expect((await owner.query(api.learnV2Sources.listSourceReview, reviewArgs)).page.find(row => row._id === ids.sourceSnapshotId)).toMatchObject({ excerpt: 'Gravity attracts masses.', rights: { access: 'available' } })
+    // A stale legacy fallback remains stored until the continuation runs.
+    await t.run(async ctx => { const activity = (await ctx.db.get(activityId))!; await ctx.db.patch(activityId, { fallback: { ...activity.fallback, body: privateText } }) })
+    if (revocation === 'source_unavailable') await owner.mutation(api.learnV2Sources.markUnavailable, { sourceSnapshotId: ids.sourceSnapshotId, expectedRevision: 1, idempotencyKey: 'read-privacy-revoke', reason: 'access_lost' })
+    if (revocation === 'document_deleted') await owner.mutation(api.documents.deleteDocument, { id: prepared.documentId })
+    if (revocation === 'document_replaced') await t.mutation(internal.documents.updateDocumentStatus, { id: prepared.documentId, status: 'success', sourceRevision: 'document.r2' })
+    if (revocation === 'document_hash_replaced') await t.mutation(internal.documents.updateDocumentStatus, { id: prepared.documentId, status: 'success', contentHash: 'b'.repeat(64) })
+    if (revocation === 'document_object_replaced') await t.mutation(internal.documents.updateDocumentStatus, { id: prepared.documentId, status: 'success', r2Key: 'read-privacy/relocated.txt' })
+    if (revocation === 'folder_deleted') await owner.mutation(api.folders.deleteFolder, { id: ids.folderId })
+    if (revocation === 'archived') await owner.mutation(api.learnV2Lifecycle.transitionLearningVoid, { learningVoidId: ids.learningVoidId, expectedRevision: 1, status: 'archived', idempotencyKey: 'read-privacy-archive' })
+    if (revocation === 'tombstone' || revocation === 'evidence_purged') {
+      await t.mutation(internal.learnV2Retention.purgeSourceEvidence, { userId: OWNER.tokenIdentifier, sourceIdentityId: prepared.sourceIdentityId })
+      if (revocation === 'tombstone') {
+        expect(await t.run(ctx => ctx.db.get(ids.sourceSnapshotId))).toMatchObject({ effectiveStatus: 'user_accepted' })
+        expect(await t.run(ctx => ctx.db.get(ids.sourceSnapshotId))).not.toHaveProperty('evidencePurgedAt')
+      }
+      else {
+        // Finish only the source's bounded mutation. Dependent body/cache
+        // continuations remain scheduled and never run in this regression.
+        for (let batch = 0; batch < 8 && (await t.run(ctx => ctx.db.get(ids.sourceSnapshotId)))?.evidencePurgedAt === undefined; batch++) {
+          await t.mutation(internal.learnV2Retention.purgeSourceEvidence, { userId: OWNER.tokenIdentifier, sourceIdentityId: prepared.sourceIdentityId })
+        }
+        expect(await t.run(ctx => ctx.db.get(ids.sourceSnapshotId))).toHaveProperty('evidencePurgedAt')
+      }
+    }
+    const canvas = await owner.query(api.learnAdaptiveCanvas.getCanvas, canvasArgs)
+    expect(canvas).toMatchObject({ status: 'blocked', thread: { id: attached.threadId }, savedResponse: null, responsePrompt: null,
+      activity: { primitive: null, fallback: { body: '' } } })
+    expect(JSON.stringify(canvas)).not.toContain(privateText)
+    const mission = await owner.query(api.learnV2Journey.getMission, journeyArgs)
+    if (revocation === 'folder_deleted') expect(mission).toBeNull()
+    else {
+      expect(mission).toMatchObject({ learningVoid: { _id: ids.learningVoidId }, calibration: { attempts: [{ serverScorePercent: 80, confidence: 4, bodyAvailability: 'unavailable' }] } })
+      expect(mission?.sources.items.find(row => row._id === ids.sourceSnapshotId)?.excerpt).toBeNull()
+      expect(mission?.calibration.items[0]?.prompt).toBeNull()
+      expect(mission?.calibration.items[0]?.rubric).toBeNull()
+      expect(mission?.map?.objectives[0]).toHaveProperty('assessmentContract', storedObjective.assessmentContract)
+      expect(JSON.stringify(mission)).not.toContain(response)
+      expect(JSON.stringify(mission)).not.toContain(privateText)
+      expect(mission?.mastery[0]?.attempts[0]).not.toHaveProperty('response')
+    }
+    if (revocation === 'folder_deleted' || revocation === 'archived') await expect(owner.query(api.learnV2Sources.listSourceReview, reviewArgs)).rejects.toThrow('Learning Void not found')
+    else expect((await owner.query(api.learnV2Sources.listSourceReview, reviewArgs)).page.find(row => row._id === ids.sourceSnapshotId))
+      .toMatchObject({ _id: ids.sourceSnapshotId, excerpt: null, rights: { access: 'evidence_unavailable' } })
+    expect(await t.run(ctx => ctx.db.get(prepared.attemptId))).toMatchObject({ response, serverScorePercent: 80, attemptedAt: 123, confidence: 4 })
+  })
+
   test('a stale or blocked stage receipt pins its key while a fresh key commits exactly once', async () => {
     const { owner, ids } = await fixture()
     const attached = await owner.mutation(api.learnAdaptiveCanvas.attachReadySession, { studySessionId: ids.studySessionId, expectedSessionRevision: 2, idempotencyKey: 'canvas-receipt-attach-0001' })
@@ -224,13 +396,13 @@ describe('ready V2 adaptive Canvas', () => {
     expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'ready' })
 
     await t.run(ctx => ctx.db.patch(ids.folderId, { userId: OTHER.tokenIdentifier }))
-    expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'ready' })
+    expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'blocked', savedResponse: null, responsePrompt: null, activity: { primitive: null, fallback: { body: '' } } })
     expect(await read()).toMatchObject({ thread: { evidenceState: 'unavailable' }, nextAction: { kind: 'recover', label: 'Review your Void', activityId: attached.activityId } })
 
     await t.run(ctx => ctx.db.patch(ids.folderId, { userId: OWNER.tokenIdentifier }))
     expect(await read()).toMatchObject({ thread: { evidenceState: 'ready' }, nextAction: { kind: 'continue' } })
     await t.run(ctx => ctx.db.delete(ids.folderId))
-    expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'ready' })
+    expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'blocked', savedResponse: null, responsePrompt: null, activity: { primitive: null, fallback: { body: '' } } })
     expect(await read()).toMatchObject({ thread: { evidenceState: 'unavailable' }, nextAction: { kind: 'recover', activityId: attached.activityId } })
   })
 
@@ -249,12 +421,12 @@ describe('ready V2 adaptive Canvas', () => {
     expect(await read()).toMatchObject({ thread: { evidenceState: 'ready' }, nextAction: { kind: 'continue' } })
 
     await t.run(ctx => ctx.db.patch(documentId, { userId: OTHER.tokenIdentifier }))
-    expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'ready' })
+    expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'blocked', savedResponse: null, responsePrompt: null, activity: { primitive: null, fallback: { body: '' } } })
     expect(await read()).toMatchObject({ thread: { evidenceState: 'unavailable' }, nextAction: { kind: 'recover', activityId: attached.activityId } })
 
     await t.run(ctx => ctx.db.patch(documentId, { userId: OWNER.tokenIdentifier }))
     await t.run(ctx => ctx.db.delete(documentId))
-    expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'ready' })
+    expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'blocked', savedResponse: null, responsePrompt: null, activity: { primitive: null, fallback: { body: '' } } })
     expect(await read()).toMatchObject({ thread: { evidenceState: 'unavailable' }, nextAction: { kind: 'recover', activityId: attached.activityId } })
   })
 

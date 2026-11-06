@@ -1,80 +1,14 @@
 import { ConvexHttpClient } from 'convex/browser'
 import { Zip, ZipDeflate, ZipPassThrough } from 'fflate'
-import { ADAPTIVE_LEARN_EXPORT_COLLECTIONS } from '../../../shared/adaptive-learn-storage-manifest'
-import { LEARN_MEASUREMENT_COLLECTIONS, LEARN_MEASUREMENT_STORAGE_MANIFEST, LEARN_MEASUREMENT_STORAGE_VERSION } from '../../../shared/learn-v2-measurement-storage-manifest'
+import { PERSONAL_EXPORT_COLLECTIONS } from '../../../convex/lib/learnV2PersonalExportCollections'
+import { LEARN_MEASUREMENT_STORAGE_MANIFEST, LEARN_MEASUREMENT_STORAGE_VERSION } from '../../../shared/learn-v2-measurement-storage-manifest'
 import { api } from '../../../convex/_generated/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 import { requireRateLimit } from '../../utils/rate-limit'
 
 const EXPORT_PAGE_SIZE = 8
 
-export const EXPORT_COLLECTIONS = [
-  ...ADAPTIVE_LEARN_EXPORT_COLLECTIONS,
-  ...LEARN_MEASUREMENT_COLLECTIONS,
-  'folders',
-  'documents',
-  'conversations',
-  'messages',
-  'quizzes',
-  'quizQuestions',
-  'quizAttempts',
-  'quizAnswerAssessments',
-  'flashcardSets',
-  'flashcards',
-  'flashcardRooms',
-  'flashcardRoomCards',
-  'flashcardRoomVersions',
-  'flashcardVersionCards',
-  'courses',
-  'courseSections',
-  'learnProfile',
-  'tasks',
-  'reviewItems',
-  'reviewSessions',
-  'calendarConnections',
-  'calendarEvents',
-  'audioOverviewJobs',
-  'audioOverviewSourceManifests',
-  'audioOverviewSourceManifestEntries',
-  'audioOverviewOutlines',
-  'audioOverviewLearningObjectives',
-  'audioOverviewOutlineSources',
-  'audioOverviewClaimLedgers',
-  'audioOverviewClaims',
-  'audioOverviewClaimSources',
-  'audioOverviewEpisodes',
-  'audioOverviewScenes',
-  'audioOverviewUtterances',
-  'audioOverviewUtteranceSources',
-  'audioOverviewUtteranceClaims',
-  'audioOverviewAudioArtifacts',
-  'audioOverviewSceneQualityGates',
-  'audioOverviewAlignments',
-  'audioOverviewAlignmentSegments',
-  'audioOverviewJobTurns',
-  'audioOverviews',
-  'audioOverviewInterjections',
-  'audioOverviewInterjectionsV2',
-  'audioOverviewInterjectionUtterances',
-  'audioOverviewInterjectionSources',
-  'learningVoids', 'learnBlueprints', 'learnBlueprintRevisions',
-  'learnMilestones', 'learnObjectives', 'learnObjectivePrerequisites',
-  'learnSourceIdentities', 'learnSourceSnapshots',
-  'learnFolderSourceManifests', 'learnFolderSourceManifestFolders',
-  'learnFolderSourceManifestEntries', 'learnSourceExcerpts',
-  'learnObjectiveSources', 'learnClaimSupports', 'masteryAttempts',
-  'masteryRecords', 'studyPlans', 'studyPlanRevisions', 'studySessions',
-  'studySessionRetrievalObjectives', 'sessionContent', 'sessionContentBlocks',
-  'sessionContentClaims', 'calendarProjections', 'reminderPolicies',
-  'searchQuotaBuckets', 'searchReservations', 'learnJobs',
-  'learnLifecycleReceipts',
-  'learnPlanCommandReceipts',
-  'learnPlanAuditEvents',
-  'learnSourceFetchLeases',
-  'learnSourceFetchRateEvents',
-  'learnSourceCommandReceipts', 'learnMasteryScoringRateEvents',
-  'calendarReconciliationProposals', 'calendarWebhookReceipts', 'calendarWatchChannels',
-] as const
+export const EXPORT_COLLECTIONS = PERSONAL_EXPORT_COLLECTIONS
 
 type ExportCollection = typeof EXPORT_COLLECTIONS[number]
 type ExportRow = Record<string, unknown> & { _id: string }
@@ -129,6 +63,16 @@ export default defineEventHandler(async (event) => {
   const client = new ConvexHttpClient(convexUrl)
   client.setAuth(token)
 
+  let authorization = await client.mutation(api.dataExport.authorizePersonalExport, {})
+  while (!authorization.done) {
+    const next = await client.mutation(api.dataExport.authorizePersonalExport, {
+      authorizationId: authorization.authorizationId, cursor: authorization.cursor ?? undefined,
+    })
+    if (!next.done && next.cursor === authorization.cursor) throw new Error('Export authorization did not advance')
+    authorization = next
+  }
+  const authorizationId = authorization.authorizationId
+
   let metadata
   try {
     metadata = await client.query(api.dataExport.getExportMetadata, {})
@@ -178,6 +122,7 @@ export default defineEventHandler(async (event) => {
     while (true) {
       const result = await client.query(api.dataExport.getUserDataPage, {
         collection,
+        authorizationId,
         paginationOpts: { cursor, numItems: EXPORT_PAGE_SIZE },
       }) as ExportPage
 
@@ -196,6 +141,7 @@ export default defineEventHandler(async (event) => {
       while (true) {
         const result = await client.query(api.dataExport.getAttemptAnswersPage, {
           attemptId: attempt._id as Id<'quizAttempts'>,
+          authorizationId,
           paginationOpts: { cursor, numItems: EXPORT_PAGE_SIZE },
         }) as ExportPage | null
         if (!result) break
@@ -216,6 +162,7 @@ export default defineEventHandler(async (event) => {
       while (true) {
         const result = await client.query(api.dataExport.getCourseSourceDocsPage, {
           courseId: course._id as Id<'courses'>,
+          authorizationId,
           paginationOpts: { cursor, numItems: EXPORT_PAGE_SIZE },
         }) as ExportPage | null
         if (!result) break
@@ -267,7 +214,7 @@ export default defineEventHandler(async (event) => {
     let urlInfo: { url: string | null, filename: string } | null
 
     try {
-      urlInfo = await client.query(api.dataExport.getDocumentDownloadUrl, { documentId })
+      urlInfo = await client.query(api.dataExport.getDocumentDownloadUrl, { documentId, authorizationId })
     }
     catch {
       unresolvedDocuments.push(String(documentId))
@@ -326,7 +273,11 @@ export default defineEventHandler(async (event) => {
       }
 
       await addJsonValue('manifest.json', {
-        schemaVersion: 10,
+        schemaVersion: 11,
+        assessmentDisclosure: {
+          version: 'learn-v2.assessment-disclosure.v1',
+          omittedCategories: ['private_scoring', 'unseen_forms', 'private_evidence', 'provider_payloads'],
+        },
         measurementStorage: {
           version: LEARN_MEASUREMENT_STORAGE_VERSION,
           policies: LEARN_MEASUREMENT_STORAGE_MANIFEST.map(entry => ({ collection: entry.table, projection: entry.export })),

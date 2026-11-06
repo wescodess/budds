@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 import { convexTest } from 'convex-test'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
@@ -143,7 +144,7 @@ describe('Learn V2 calendar reconciliation webhook receipts', () => {
     const setup = await connectionWithProjection()
     const [listed, exported] = await Promise.all([
       setup.owner.query(api.learnV2Calendar.listProjections, {}),
-      setup.owner.query(api.dataExport.getUserDataPage, { collection: 'calendarProjections', paginationOpts: { cursor: null, numItems: 8 } }),
+      setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(setup.owner), collection: 'calendarProjections', paginationOpts: { cursor: null, numItems: 8 } }),
     ])
     const serialized = JSON.stringify({ listed, exported })
     for (const sentinel of ['PRIVATE_TITLE_SENTINEL', 'PRIVATE_FILENAME_SENTINEL', 'PRIVATE_EXCERPT_SENTINEL', 'https://private.example/sentinel']) expect(serialized).not.toContain(sentinel)

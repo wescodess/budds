@@ -15,6 +15,7 @@ import { liveEvidenceState } from './learnAdaptiveRecovery'
 import { projectAdaptiveControls, reasonTextForActivity } from '../shared/learn-adaptive-controls'
 import { ADAPTIVE_ACTIVITY_VALIDATION_ANALYTICS_VERSION, validateAdaptiveActivityPrimitive } from '../shared/learn-adaptive-activity-registry'
 import { decodeSourceComparisonResponse } from '../shared/learn-adaptive-source-comparison-response'
+import { activityResponseAvailable, retainedSourceExcerpt } from './lib/learnV2ResponsePrivacy'
 
 const RECEIPT_TTL_MS = 30 * 24 * 60 * 60_000
 
@@ -245,14 +246,22 @@ export async function loadReadyCanvas(ctx: QueryCtx | MutationCtx, userId: strin
       ? await loadAdaptiveClaimProjection(ctx, { userId, historical: false, sessionContentId: content._id, sessionContentRevision: activity.generationInputs.sessionContentRevision, evidenceReferences: activity.evidenceReferences })
       : null
     const contentEvidenceReady = await isLearnV2ContentEvidenceReady(ctx, userId, content, learningVoid._id)
+    const folder = await ctx.db.get(learningVoid.folderId)
+    const sourceReady = (await liveEvidenceState(ctx, thread)) === 'ready'
+    let bodyAuthority = sourceReady && learningVoid.status !== 'archived' && folder?.userId === userId
+      && contentEvidenceReady && activity.evidenceReferences.length > 0 && activity.evidenceReferences.length <= 64
+    if (bodyAuthority) for (const reference of activity.evidenceReferences) {
+      if (!await retainedSourceExcerpt(ctx, userId, reference.sourceSnapshotId)) { bodyAuthority = false; break }
+    }
     const scoredAttempt = activity.masteryAttemptId && await ctx.db.get(activity.masteryAttemptId)
+    const savedBodyAvailable = bodyAuthority && await activityResponseAvailable(ctx, userId, activity)
     const completedFeedback = activity.status === 'feedback' && session.status === 'completed' && scoredAttempt
       && scoredAttempt.userId === userId && scoredAttempt.studySessionId === session._id
       && scoredAttempt.sessionContentId === content._id && scoredAttempt.blueprintRevisionId === blueprint._id
       && scoredAttempt.objectiveId === objective._id && scoredAttempt.contentRevision === content.revision
       && session.startedSessionContentId === content._id && session.startedSessionContentRevision === content.revision
     const current = plan.status === 'accepted' && stablePlan.activeRevisionId === plan._id && blueprint.status === 'accepted' && content.status === 'published'
-      && contentEvidenceReady
+      && bodyAuthority
       && activity.sessionContentId === content._id && activity.objectiveId === objective._id
       && activity.blueprintRevisionId === blueprint._id && plan.blueprintRecordRevision === blueprint.recordRevision
       && session.studyPlanRevisionId === plan._id && content.studyPlanRevisionId === plan._id
@@ -276,7 +285,6 @@ export async function loadReadyCanvas(ctx: QueryCtx | MutationCtx, userId: strin
     const selectedOverride = await ctx.db.query('learnActivityOverrides')
       .withIndex('by_userId_and_activityId_and_createdAt', q => q.eq('userId', userId).eq('activityId', activity._id))
       .order('desc').first()
-    const sourceReady = (await liveEvidenceState(ctx, thread)) === 'ready'
     return {
       status, ownerId: owner._id, thread: { id: thread._id, outcome: thread.outcome ?? thread.originalNeed, intent: thread.intent, revision: thread.revision },
       recoveryState: status === 'blocked' ? recoveryState : null,
@@ -295,13 +303,13 @@ export async function loadReadyCanvas(ctx: QueryCtx | MutationCtx, userId: strin
           selected: selectedOverride?.option, fixedNextPlan: selectedOverride?.fixedNextPlan, reasonText: activity.reasonText,
           purpose: activity.purpose, reasonCode: activity.reasonCode, sourceState: activity.decisionInputs.sourceState }),
         primitive: status !== 'blocked' && replay.ok ? activity.primitivePlan[0] : null,
-        fallback: activity.fallback, requiredAction: activity.requiredAction },
+        fallback: bodyAuthority ? activity.fallback : { ...activity.fallback, title: 'Evidence unavailable', body: '', primaryAction: { type: 'continue_safe' as const, label: 'Continue' } }, requiredAction: activity.requiredAction },
       session: { studySessionId: session._id, revision: session.revision, contentRevision: content.revision,
         planRecordRevision: plan.recordRevision, blueprintRecordRevision: blueprint.recordRevision,
         scheduledStartAt: session.scheduledStartAt, scheduledEndAt: session.scheduledEndAt ?? null,
         timezone: session.timezone ?? plan.timezone ?? 'UTC' },
       responsePrompt: status === 'blocked' ? null : prompt ?? null,
-      savedResponse: activity.submittedResponse !== undefined && activity.submittedConfidence !== undefined
+      savedResponse: savedBodyAvailable && activity.submittedResponse !== undefined && activity.submittedConfidence !== undefined
         ? { response: activity.submittedResponse, confidence: activity.submittedConfidence }
         : null,
     }

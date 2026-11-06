@@ -1,14 +1,27 @@
-import { vi, describe, test, expect, beforeEach } from 'vitest'
+import { privacyDigest } from '../../../convex/lib/learnV2ResponsePrivacy'
+import { vi, describe, test, expect, beforeEach, afterEach } from 'vitest'
 import { unzipSync, strFromU8 } from 'fflate'
 import { convexTest } from 'convex-test'
-import { api } from '../../../convex/_generated/api'
+import { api, internal } from '../../../convex/_generated/api'
 import schema from '../../../convex/schema'
-import { seedMeasurementStorage, STORAGE_CANARIES } from '../../../tests/fixtures/learn-v2-measurement-storage'
+import { LINEAGE_EXPORT_FIELDS, seedMeasurementStorage, STORAGE_CANARIES } from '../../../tests/fixtures/learn-v2-measurement-storage'
+import { authorizeExport } from '../../../tests/fixtures/learn-v2-personal-export'
 import { ADAPTIVE_LEARN_EXPORT_COLLECTIONS } from '../../../shared/adaptive-learn-storage-manifest'
 import { LEARN_MEASUREMENT_STORAGE_MANIFEST, LEARN_MEASUREMENT_COLLECTIONS } from '../../../shared/learn-v2-measurement-storage-manifest'
 import { LEARN_V2_MEASUREMENT_REPORT_VERSION, LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION } from '../../../shared/learn-v2-measurement-report'
 import { LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION, LEARN_V2_RESPONSE_TERMINALIZATION_VERSION } from '../../../shared/learn-v2-responses'
 import { deriveLearnAssessmentResponseContext } from '../../../shared/learn-v2-measurement'
+import { PERSONAL_EXPORT_COLLECTIONS, PERSONAL_EXPORT_CONTENT_COLLECTIONS } from '../../../convex/lib/learnV2PersonalExportCollections'
+import { PERSONAL_EXPORT_CONTENT_CASES, measurementExportFixture, seedExportContent } from '../../../tests/fixtures/learn-v2-export-content'
+import { standaloneResponseFixture } from '../../../tests/fixtures/learn-v2-standalone-response'
+import { BACKING_SOURCE_CASES, BACKING_SOURCE_KINDS, backingResponseFixture, replaceBackingDocument, purgeBackingResponse } from '../../../tests/fixtures/learn-v2-backing-response'
+import { ACTIVITY_RESPONSE_CASES, activityResponseFixture, exerciseActivityResponseLimit } from '../../../tests/fixtures/learn-v2-activity-responses'
+
+vi.mock('../../../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
+  const original = await importOriginal<typeof import('../../../shared/learn-v2-measurement-storage-manifest')>()
+  return { ...original, LEARN_MEASUREMENT_CAPABILITIES: { ...original.LEARN_MEASUREMENT_CAPABILITIES, responses: true } }
+})
+afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs() })
 
 const recordedHeaders: Record<string, string> = {}
 
@@ -39,6 +52,7 @@ vi.stubGlobal('sendStream', async (_event: any, stream: ReadableStream) => {
 })
 vi.stubGlobal('defineEventHandler', (handler: (...args: never[]) => unknown) => handler)
 
+const authorizeExportMock = vi.fn()
 const getExportMetadataMock = vi.fn()
 const getUserDataPageMock = vi.fn()
 const getAttemptAnswersPageMock = vi.fn()
@@ -48,6 +62,7 @@ const getDocumentDownloadUrlMock = vi.fn()
 vi.mock('convex/browser', () => ({
   ConvexHttpClient: class {
     setAuth(_token: string) {}
+    mutation(_fnRef: unknown, args: unknown) { return authorizeExportMock(args) }
     query(_fnRef: unknown, args: unknown) {
       const queryArgs = args as Record<string, unknown>
       if ('collection' in queryArgs) return getUserDataPageMock(queryArgs)
@@ -62,7 +77,7 @@ vi.mock('convex/browser', () => ({
 const fetchMock = vi.fn()
 vi.stubGlobal('fetch', fetchMock)
 
-const handler = (await import('./me.get')).default
+const { default: handler, EXPORT_COLLECTIONS } = await import('./me.get')
 
 function mockExportData(data: Record<string, any>) {
   getExportMetadataMock.mockResolvedValue({ userId: data.userId, user: data.user })
@@ -89,6 +104,7 @@ function makeEvent(token: string | undefined) {
 
 describe('GET /api/export/me', () => {
   beforeEach(() => {
+    authorizeExportMock.mockReset().mockResolvedValue({ authorizationId: 'fixture-export-authorization', done: true, cursor: null })
     getExportMetadataMock.mockReset()
     getUserDataPageMock.mockReset()
     getAttemptAnswersPageMock.mockReset()
@@ -99,24 +115,189 @@ describe('GET /api/export/me', () => {
     process.env.CONVEX_URL = 'https://test.convex.cloud'
   })
 
+  test.each(ACTIVITY_RESPONSE_CASES)('decoded ZIP keeps %s activity bounds local through %s', async (kind, scenario) => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_800_000_000_001)
+    vi.stubEnv('LEARN_V2_ENABLED', 'true')
+    const f = await activityResponseFixture(convexTest(schema, import.meta.glob('../../../convex/**/*.ts')), 'https://owner.example|zip-activity-limit', kind)
+    authorizeExportMock.mockImplementation(args => f.owner.mutation(api.dataExport.authorizePersonalExport, args))
+    getExportMetadataMock.mockImplementation(() => f.owner.query(api.dataExport.getExportMetadata, {}))
+    getUserDataPageMock.mockImplementation(args => f.owner.query(api.dataExport.getUserDataPage, args))
+    getAttemptAnswersPageMock.mockImplementation(args => f.owner.query(api.dataExport.getAttemptAnswersPage, args))
+    getCourseSourceDocsPageMock.mockImplementation(args => f.owner.query(api.dataExport.getCourseSourceDocsPage, args))
+    getDocumentDownloadUrlMock.mockResolvedValue(null)
+    await exerciseActivityResponseLimit(f, scenario, async disclosed => {
+      vi.stubEnv('LEARN_V2_ENABLED', 'false')
+      const entries = unzipSync(await handler(makeEvent('fixture-jwt')))
+      const activities = JSON.parse(strFromU8(entries['learningThreadActivities.json']!)) as Array<Record<string, unknown>>
+      const activity = activities.find(row => row._id === f.activityId)
+      expect(activity).toMatchObject({ threadId: f.threadId, status: 'submitted', updatedAt: expect.any(Number) })
+      if (disclosed) expect(activity).toMatchObject({ submittedResponse: f.answer, diagnosticResponse: f.answer })
+      else {
+        expect(activity).toMatchObject({ bodyAvailability: 'unavailable' })
+        expect(activity).not.toHaveProperty('submittedResponse')
+        expect(activity).not.toHaveProperty('diagnosticResponse')
+        for (const [name, bytes] of Object.entries(entries)) if (name.endsWith('.json')) expect(strFromU8(bytes)).not.toContain(f.answer)
+      }
+      if (f.submissionId) {
+        const bodies = JSON.parse(strFromU8(entries['learnResponseBodies.json']!)) as Array<Record<string, unknown>>
+        const body = bodies.find(row => row.submissionId === f.submissionId)
+        expect(body).toMatchObject({ bodyAvailability: disclosed ? 'available' : 'unavailable' })
+        if (disclosed) expect(body).toMatchObject({ payload: { text: f.answer } })
+        else expect(body).not.toHaveProperty('payload')
+        const responses = JSON.parse(strFromU8(entries['learnResponses.json']!)) as Array<Record<string, unknown>>
+        expect(responses.find(row => row._id === f.submissionId)).toMatchObject({ acceptedAt: expect.any(Number), assistance: expect.any(Object) })
+      }
+    })
+  })
+
+  test.each(BACKING_SOURCE_KINDS.flatMap((kind, index) => BACKING_SOURCE_CASES.map(([change, ...allowed]) => [kind, change, allowed[index]!] as const)))(
+    'decoded ZIP uses %s backing authority after %s with disclosure=%s', async (kind, change, allowed) => {
+      vi.useFakeTimers()
+      vi.setSystemTime(1_800_000_000_001)
+      vi.stubEnv('LEARN_V2_ENABLED', 'true')
+      const f = await backingResponseFixture(convexTest(schema, import.meta.glob('../../../convex/**/*.ts')), 'https://owner.example|zip-backing-response', kind)
+      authorizeExportMock.mockImplementation(args => f.owner.mutation(api.dataExport.authorizePersonalExport, args))
+      getExportMetadataMock.mockImplementation(() => f.owner.query(api.dataExport.getExportMetadata, {}))
+      getUserDataPageMock.mockImplementation(args => f.owner.query(api.dataExport.getUserDataPage, args))
+      getAttemptAnswersPageMock.mockImplementation(args => f.owner.query(api.dataExport.getAttemptAnswersPage, args))
+      getCourseSourceDocsPageMock.mockImplementation(args => f.owner.query(api.dataExport.getCourseSourceDocsPage, args))
+      getDocumentDownloadUrlMock.mockResolvedValue(null)
+      vi.stubEnv('LEARN_V2_ENABLED', 'false')
+      const assertDisclosure = async (disclosed: boolean, purged = false) => {
+        const entries = unzipSync(await handler(makeEvent('fixture-jwt')))
+        const activities = JSON.parse(strFromU8(entries['learningThreadActivities.json']!)) as Array<Record<string, unknown>>
+        const activity = activities.find(row => row._id === f.activityId)
+        expect(activity).toMatchObject({ threadId: f.threadId, updatedAt: expect.any(Number), status: purged && kind === 'snapshot' ? 'blocked' : 'submitted' })
+        if (disclosed) expect(activity).toMatchObject({ submittedResponse: f.answer, diagnosticResponse: f.answer })
+        else {
+          expect(activity).toMatchObject({ bodyAvailability: 'unavailable' })
+          expect(activity).not.toHaveProperty('submittedResponse')
+          expect(activity).not.toHaveProperty('diagnosticResponse')
+          for (const [name, bytes] of Object.entries(entries)) if (name.endsWith('.json')) expect(strFromU8(bytes)).not.toContain(f.answer)
+        }
+        if (f.submissionId) {
+          const bodies = JSON.parse(strFromU8(entries['learnResponseBodies.json']!)) as Array<Record<string, unknown>>
+          const body = bodies.find(row => row.submissionId === f.submissionId)
+          if (disclosed) expect(body).toMatchObject({ bodyAvailability: 'available', payload: { kind: 'text', text: f.answer } })
+          else if (body) { expect(body).toMatchObject({ bodyAvailability: 'unavailable' }); expect(body).not.toHaveProperty('payload') }
+          const responses = JSON.parse(strFromU8(entries['learnResponses.json']!)) as Array<Record<string, unknown>>
+          expect(responses.find(row => row._id === f.submissionId)).toMatchObject({ acceptedAt: expect.any(Number), assistance: expect.any(Object) })
+        }
+      }
+      await assertDisclosure(true)
+      await replaceBackingDocument(f, change)
+      await assertDisclosure(allowed)
+      if (!allowed) {
+        await purgeBackingResponse(f)
+        await f.t.finishAllScheduledFunctions(vi.runAllTimers)
+        await assertDisclosure(false, true)
+        expect((await f.t.run(ctx => ctx.db.get(f.activityId)))?.submittedResponse).toBeUndefined()
+        if (f.submissionId) expect(await f.t.run(ctx => ctx.db.get(f.submissionId!))).toMatchObject({ bodyAvailability: 'purged' })
+      }
+    },
+  )
+
+  test.each([[false, 'document_deleted'], [true, 'document_deleted'], [false, 'folder_deleted'], [true, 'body_purged']] as const)(
+    'decoded ZIP withholds standalone aliases with canonical=%s after %s, before and after cleanup', async (canonical, revocation) => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_800_000_000_000)
+    vi.stubEnv('LEARN_V2_ENABLED', 'true')
+    const t = convexTest(schema, import.meta.glob('../../../convex/**/*.ts'))
+    const f = await standaloneResponseFixture(t, 'https://owner.example|zip-standalone-privacy', revocation === 'folder_deleted' ? 'folder' : 'document', canonical)
+    authorizeExportMock.mockImplementation(args => f.owner.mutation(api.dataExport.authorizePersonalExport, args))
+    getExportMetadataMock.mockImplementation(() => f.owner.query(api.dataExport.getExportMetadata, {}))
+    getUserDataPageMock.mockImplementation(args => f.owner.query(api.dataExport.getUserDataPage, args))
+    getAttemptAnswersPageMock.mockImplementation(args => f.owner.query(api.dataExport.getAttemptAnswersPage, args))
+    getCourseSourceDocsPageMock.mockImplementation(args => f.owner.query(api.dataExport.getCourseSourceDocsPage, args))
+    getDocumentDownloadUrlMock.mockResolvedValue(null)
+    vi.stubEnv('LEARN_V2_ENABLED', 'false')
+    const live = unzipSync(await handler(makeEvent('fixture-jwt')))
+    expect(JSON.parse(strFromU8(live['learningThreadActivities.json']!))).toMatchObject([{ submittedResponse: f.answer, diagnosticResponse: f.answer }])
+    if (revocation === 'document_deleted') await f.owner.mutation(api.documents.deleteDocument, { id: f.documentId })
+    if (revocation === 'folder_deleted') await f.owner.mutation(api.folders.deleteFolder, { id: f.folderId })
+    if (revocation === 'body_purged') await t.mutation(internal.learnV2Retention.purgeResponseCopies, { userId: f.userId, submissionId: f.submissionId! })
+    expect((await t.run(ctx => ctx.db.get(f.activityId)))?.submittedResponse).toBe(f.answer)
+    for (const cleanup of [false, true]) {
+      if (cleanup) await t.finishAllScheduledFunctions(vi.runAllTimers)
+      const entries = unzipSync(await handler(makeEvent('fixture-jwt')))
+      const rows = JSON.parse(strFromU8(entries['learningThreadActivities.json']!))
+      expect(rows).toMatchObject([{ _id: f.activityId, status: 'submitted', bodyAvailability: 'unavailable' }])
+      expect(rows[0]).not.toHaveProperty('submittedResponse')
+      expect(rows[0]).not.toHaveProperty('diagnosticResponse')
+      for (const [name, bytes] of Object.entries(entries)) if (name.endsWith('.json')) expect(strFromU8(bytes)).not.toContain(f.answer)
+    }
+  })
+
   test('returns 401 when no Convex token is present on the event', async () => {
     const err = await handler(makeEvent(undefined)).catch((e: any) => e)
     expect(err.statusCode).toBe(401)
   })
 
+  test('ZIP and Convex share the classified collection inventory and preserve every audited content projection', async () => {
+    expect(EXPORT_COLLECTIONS).toBe(PERSONAL_EXPORT_COLLECTIONS)
+    expect(EXPORT_COLLECTIONS).toHaveLength(126)
+    expect(PERSONAL_EXPORT_CONTENT_COLLECTIONS).toHaveLength(39)
+    expect(new Set(PERSONAL_EXPORT_CONTENT_CASES.map(([collection]) => collection))).toEqual(new Set(PERSONAL_EXPORT_CONTENT_COLLECTIONS))
+    vi.stubEnv('LEARN_V2_ENABLED', 'false')
+    const t = convexTest(schema, import.meta.glob('../../../convex/**/*.ts'))
+    const fixture = await measurementExportFixture(t, 'https://owner.example|zip-content-inventory')
+    const contents = []
+    for (const entry of PERSONAL_EXPORT_CONTENT_CASES) contents.push(await seedExportContent(fixture, entry))
+    const foreign = await t.run(ctx => ctx.db.insert('messages', { userId: 'https://foreign.example|zip-content-inventory',
+      conversationId: '0conversations' as never, role: 'user', content: 'foreign-export-content-canary' }))
+    const owner = fixture.owner
+    authorizeExportMock.mockImplementation(args => owner.mutation(api.dataExport.authorizePersonalExport, args))
+    getExportMetadataMock.mockImplementation(() => owner.query(api.dataExport.getExportMetadata, {}))
+    getUserDataPageMock.mockImplementation(args => owner.query(api.dataExport.getUserDataPage, args))
+    getAttemptAnswersPageMock.mockImplementation(args => owner.query(api.dataExport.getAttemptAnswersPage, args))
+    getCourseSourceDocsPageMock.mockImplementation(args => owner.query(api.dataExport.getCourseSourceDocsPage, args))
+    getDocumentDownloadUrlMock.mockResolvedValue(null)
+    const entries = unzipSync(await handler(makeEvent('fixture-jwt')))
+    for (const content of contents) {
+      const rows = JSON.parse(strFromU8(entries[`${content.collection}.json`]!)) as Array<Record<string, unknown>>
+      const row = rows.find(row => row._id === content.id)
+      expect(JSON.stringify(row?.[content.field])).toContain(content.canary)
+    }
+    expect(strFromU8(entries['messages.json']!)).not.toContain(foreign)
+    expect(strFromU8(entries['messages.json']!)).not.toContain('foreign-export-content-canary')
+    const exposure = await t.run(ctx => ctx.db.query('learnAssessmentExposures')
+      .withIndex('by_userId_and_assessmentOpportunityId', q => q.eq('userId', fixture.tokenIdentifier).eq('assessmentOpportunityId', fixture.assessmentOpportunityId)).take(8))
+    expect(exposure).toEqual(expect.arrayContaining([expect.objectContaining({ purpose: 'imported', status: 'unknown' })]))
+    vi.unstubAllEnvs()
+  })
+
   test('pages the real owned Phase C records through ZIP with the same safe projections', async () => {
+    vi.stubEnv('LEARN_V2_ENABLED', 'false')
     const identity = { tokenIdentifier: 'https://auth.example.com|zip-owner' }
     const t = convexTest(schema, import.meta.glob('../../../convex/**/*.ts'))
     const f = await t.run(ctx => seedMeasurementStorage(ctx, identity.tokenIdentifier))
     const other = await t.run(ctx => seedMeasurementStorage(ctx, 'https://other.example.com|zip-owner'))
     await t.run(async ctx => {
-      await ctx.db.patch(f.rows.learnArtifactLineages, { nextId: f.rows.learnArtifactLineages })
+      await ctx.db.patch(f.rows.learnArtifactLineages, { nextId: f.rows.learnArtifactLineages, invalidatedAt: 0 })
+      await ctx.db.patch(f.rows.learnArtifactValidations, { invalidatedAt: 0 })
+      await ctx.db.patch(f.rows.learnArtifactSourceLinks, { invalidatedAt: 0 })
       const legacy = await ctx.db.get(f.rows.learnResponses)
       if (!legacy || !('baselineEpoch' in legacy)) throw new Error('Missing fixture response')
       const { _id: _id, _creationTime: _creationTime, baselineEpoch: _epoch, flow: _flow, ...fields } = legacy
       const context = deriveLearnAssessmentResponseContext({ contextPins: { ...f.scope.contextPins, contentInputDigest: 'a'.repeat(64) },
         assignment: { status: 'admitted', assignmentId: f.rows.learnMeasurementAssignments, epoch: 'fixture-epoch', flow: 'v2_today' } })
       await ctx.db.replace(f.rows.learnResponses, { ...fields, ...context })
+      const { assessmentOpportunityId: _opportunity, assessmentPins: _pins, scoringBinding: _binding, deliveryGrantId: _grant, ...formativeFields } = fields
+      const payload = { kind: 'text' as const, text: 'retained formative answer' }
+      const payloadDigest = await privacyDigest(payload)
+      const formativeId = await ctx.db.insert('learnResponses', { ...formativeFields, responseSlotId: f.rows.learnResponseSlots, payloadDigest,
+        currentEligibility: 'excluded', validitySnapshot: { ...formativeFields.validitySnapshot, status: 'excluded', measurementEligible: false, masteryEligible: false, exclusionReasons: ['formative'] } })
+      await ctx.db.insert('learnResponseBodies', { ...f.base, learningVoidId: f.learningVoidId, submissionId: formativeId,
+        payload, payloadDigest, payloadBytes: new TextEncoder().encode(JSON.stringify(payload)).byteLength })
+      const evidence = (await ctx.db.get(f.rows.learnResponseEvidenceLinks))!
+      const { _id: _linkId, _creationTime: _linkTime, ...linkFields } = evidence
+      await ctx.db.insert('learnResponseEvidenceLinks', { ...linkFields, submissionId: formativeId })
+      await ctx.db.patch(f.rows.learnResponseSlots, { status: 'accepted', submissionId: formativeId })
+      await ctx.db.insert('masteryAttempts', { userId: identity.tokenIdentifier, objectiveId: f.scope.objectiveId, attemptedAt: 123,
+        idempotencyKey: 'legacy-export-answer', activityContractVersion: 'learn-v2.mastery-attempt.v1', response: 'retained legacy answer', confidence: 4, usedHint: true, usedReveal: false,
+        serverScorePercent: 80, result: 'passed', sourceSnapshotIdsJson: JSON.stringify([f.sourceSnapshotId]),
+        rubricSnapshot: STORAGE_CANARIES.rubric, feedbackProjectionJson: STORAGE_CANARIES.key, contentRevisionPinsJson: STORAGE_CANARIES.locator })
       await ctx.db.patch(f.rows.learnResponseSlots, { confidenceRequested: false })
       await ctx.db.patch(f.rows.learnAssessmentOpportunities, { deliveryPins: { version: LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION, confidenceRequested: true } })
       const target = { responseSlotId: f.rows.learnResponseSlots }
@@ -125,12 +306,14 @@ describe('GET /api/export/me', () => {
         result: { kind: 'terminalized', target, revision: 2, reasonCode: 'cancelled', terminalizedAt: f.base.createdAt } })
     })
     const asUser = t.withIdentity(identity)
+    authorizeExportMock.mockImplementation(args => asUser.mutation(api.dataExport.authorizePersonalExport, args))
     getExportMetadataMock.mockImplementation(() => asUser.query(api.dataExport.getExportMetadata, {}))
     getUserDataPageMock.mockImplementation(args => asUser.query(api.dataExport.getUserDataPage, args))
     getAttemptAnswersPageMock.mockImplementation(args => asUser.query(api.dataExport.getAttemptAnswersPage, args))
     getCourseSourceDocsPageMock.mockImplementation(args => asUser.query(api.dataExport.getCourseSourceDocsPage, args))
     getDocumentDownloadUrlMock.mockResolvedValue(null)
     const entries = unzipSync(await handler(makeEvent('fixture-jwt')))
+    const authorizationId = await authorizeExport(asUser)
     for (const entry of LEARN_MEASUREMENT_STORAGE_MANIFEST) {
       const rows = JSON.parse(strFromU8(entries[`${entry.table}.json`]!))
       if (entry.export === 'withheld') expect(rows).toEqual([])
@@ -139,6 +322,15 @@ describe('GET /api/export/me', () => {
       for (const key of [...Object.values(f.reportKeys), ...Object.values(other.reportKeys)]) expect(serialized).not.toContain(key)
       expect(serialized).not.toContain(other.rows[entry.table])
       if (entry.table.startsWith('learnArtifact')) {
+        const collection = entry.table as keyof typeof LINEAGE_EXPORT_FIELDS
+        const allowed = ['_id', '_creationTime', 'createdAt', ...LINEAGE_EXPORT_FIELDS[collection]]
+        const stored = await t.run(ctx => ctx.db.query(collection).withIndex('by_userId', q => q.eq('userId', identity.tokenIdentifier)).take(8))
+        expect(rows).toEqual(stored.map(row => Object.fromEntries(allowed.flatMap(name => {
+          const value = (row as unknown as Record<string, unknown>)[name]
+          return value === undefined ? [] : [[name, value]]
+        }))))
+        const direct = await asUser.query(api.dataExport.getUserDataPage, { authorizationId, collection, paginationOpts: { cursor: null, numItems: 8 } })
+        expect(rows).toEqual(direct.page)
         for (const field of ['artifact', 'payloadDigest', 'manifestDigest', 'lineageId', 'originLineageId', 'caseId', 'validationId', 'dependency', 'authorityVersion', 'nextId']) {
           expect(rows.every((row: Record<string, unknown>) => !Object.hasOwn(row, field))).toBe(true)
         }
@@ -148,14 +340,23 @@ describe('GET /api/export/me', () => {
         else expect(serialized).not.toContain(canary)
       }
     }
+    const answers = strFromU8(entries['learnResponseBodies.json']!)
+    expect(answers).toContain(STORAGE_CANARIES.answer)
+    expect(answers).toContain('retained formative answer')
+    expect(strFromU8(entries['masteryAttempts.json']!)).toContain('retained legacy answer')
+    expect(JSON.parse(strFromU8(entries['masteryAttempts.json']!))).toEqual(expect.arrayContaining([
+      expect.objectContaining({ response: 'retained legacy answer', activityContractVersion: 'learn-v2.mastery-attempt.v1' }),
+    ]))
     const cells = JSON.parse(strFromU8(entries['learnMeasurementReportCells.json']!))
     expect(cells).toMatchObject([{ reportVersion: LEARN_V2_MEASUREMENT_REPORT_VERSION }])
     expect(cells[0]).not.toHaveProperty('legacyIndependentAudit')
     const reportRows = JSON.parse(strFromU8(entries['learnMeasurementReportRows.json']!))
     expect(reportRows).toMatchObject([{ sourceVersion: LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION }])
     expect(reportRows[0]).not.toHaveProperty('snapshot')
-    expect(JSON.parse(strFromU8(entries['learnResponses.json']!))).toMatchObject([{ flow: 'today',
-      measurementContext: { status: 'admitted', assignmentId: f.rows.learnMeasurementAssignments, baselineEpoch: 'fixture-epoch' } }])
+    const responseRows = JSON.parse(strFromU8(entries['learnResponses.json']!)) as Array<Record<string, unknown>>
+    expect(responseRows.find(row => row._id === f.rows.learnResponses)).toMatchObject({ flow: 'today',
+      measurementContext: { status: 'admitted', assignmentId: f.rows.learnMeasurementAssignments, baselineEpoch: 'fixture-epoch' } })
+    expect(responseRows.find(row => row.responseSlotId === f.rows.learnResponseSlots)).toMatchObject({ currentEligibility: 'excluded', validity: { measurementEligible: false, exclusionReasons: ['formative'] } })
     expect(JSON.parse(strFromU8(entries['learnResponseSlots.json']!))).toMatchObject([{ confidenceRequested: false }])
     expect(JSON.parse(strFromU8(entries['learnAssessmentOpportunities.json']!))).toMatchObject([{ deliveryPins: { confidenceRequested: true } }])
     const terminalized = JSON.parse(strFromU8(entries['learnResponseCommandReceipts.json']!)).find((row: { commandVersion: string }) => row.commandVersion === LEARN_V2_RESPONSE_TERMINALIZATION_VERSION)
@@ -302,7 +503,7 @@ describe('GET /api/export/me', () => {
     )
 
     const manifest = JSON.parse(strFromU8(entries['manifest.json']!))
-    expect(manifest.schemaVersion).toBe(10)
+    expect(manifest.schemaVersion).toBe(11)
     expect(manifest.userId).toBe('tok|user1')
     expect(manifest.counts.documents).toBe(1)
     expect(manifest.counts.learnFolderSourceManifests).toBe(1)

@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 import { convexTest } from 'convex-test'
 import type { FunctionArgs, FunctionReturnType } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
@@ -319,11 +320,11 @@ test('exports complete question criteria, assessment snapshots and criterion ver
   const question = await t.run(ctx => ctx.db.get(questionId))
   const row = (await t.run(ctx => ctx.db.query('quizAnswerAssessments').withIndex('by_attemptId', q => q.eq('attemptId', attemptId)).unique()))!
   const paginationOpts = { cursor: null, numItems: 8 }
-  const exportedQuestions = await user.query(api.dataExport.getUserDataPage, { collection: 'quizQuestions', paginationOpts })
+  const exportedQuestions = await user.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(user), collection: 'quizQuestions', paginationOpts })
   const exportedQuestion = exportedQuestions.page.find(row => row._id === questionId)
   expect(exportedQuestion).toStrictEqual(question)
   expect(exportedQuestion).toMatchObject({ gradingCriteria: rubric })
-  const exported = await user.query(api.dataExport.getUserDataPage, { collection: 'quizAnswerAssessments', paginationOpts })
+  const exported = await user.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(user), collection: 'quizAnswerAssessments', paginationOpts })
   expect(exported.page).toStrictEqual([row])
   expect(exported.page[0]).toMatchObject({
     criteriaSnapshot: rubric,

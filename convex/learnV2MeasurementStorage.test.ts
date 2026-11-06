@@ -1,4 +1,6 @@
 /// <reference types="vite/client" />
+import { privacyDigest } from './lib/learnV2ResponsePrivacy'
+import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 import { convexTest } from 'convex-test'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
@@ -32,9 +34,10 @@ afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs() })
 
 async function readAll(t: ReturnType<typeof convexTest>, identity: typeof owner, collection: LearnMeasurementCollection) {
   const rows: Array<Record<string, unknown>> = []
+  const authorizationId = await authorizeExport(t.withIdentity(identity))
   let cursor: string | null = null
   for (let page = 0; page < 20; page++) {
-    const result: Page = await t.withIdentity(identity).query(api.dataExport.getUserDataPage, { collection, paginationOpts: { cursor, numItems: 1 } })
+    const result: Page = await t.withIdentity(identity).query(api.dataExport.getUserDataPage, { authorizationId, collection, paginationOpts: { cursor, numItems: 1 } })
     expect(result.page.length).toBeLessThanOrEqual(1)
     rows.push(...result.page)
     if (result.isDone) return rows
@@ -164,7 +167,7 @@ describe('inactive Phase C storage boundaries', () => {
       learningVoidId: f.learningVoidId, blueprintRevisionId: f.scope.blueprintRevisionId, objectiveId: f.scope.objectiveId, horizonDays: 7,
       coldAcceptance: { submissionId: f.rows.learnResponses, acceptedAt: f.base.createdAt }, cold: null,
       delayedAcceptance: null, delayed: null, replacementAcceptance: null, replacement: null, replacementPolicy: { kind: 'secondary_only' },
-      assignment: { responseKind: 'bounded_rubric', scorerConfiguration: { scoringKind: 'model', configurationDigest: 'a'.repeat(64), scorerVersion: 'scorer.v1' } } })
+      assignment: { responseKind: 'bounded_rubric', scorerConfiguration: { scoringKind: 'model', configurationDigest: 'a'.repeat(64), scorerVersion: 'learn-v2.mastery-scorer.v1' } } })
     for (const sourceVersion of ['learn-v2.measurement-report-source.v1', 'learn-v2.measurement-report-source.v2']) {
       await expect(t.run(ctx => ctx.db.patch(row._id, { sourceVersion } as never))).rejects.toThrow()
     }
@@ -224,7 +227,7 @@ describe('inactive Phase C storage boundaries', () => {
       const { _id: _id, _creationTime: _creationTime, ...fields } = original
       for (let index = 0; index < 9; index++) await ctx.db.insert('learnResponseCommandReceipts', { ...fields, idempotencyKeyHash: `rejection-${index}`, result: { kind: 'rejected', reasonCode: 'oversized' }, expiresAt: fixture.base.createdAt + 90 * 86_400_000 })
     })
-    const result: Page = await t.withIdentity(owner).query(api.dataExport.getUserDataPage, { collection: 'learnResponseCommandReceipts', paginationOpts: { cursor: null, numItems: 10_000 } })
+    const result: Page = await t.withIdentity(owner).query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(t.withIdentity(owner)), collection: 'learnResponseCommandReceipts', paginationOpts: { cursor: null, numItems: 10_000 } })
     expect(result.page).toHaveLength(8)
     expect(result.isDone).toBe(false)
     expect(await readAll(t, owner, 'learnResponseCommandReceipts')).toHaveLength(10)
@@ -256,7 +259,12 @@ describe('inactive Phase C storage boundaries', () => {
   test('preserves independently written correct work without releasing a stored key', async () => {
     const t = convexTest(schema, modules)
     const f = await t.run(ctx => seedMeasurementStorage(ctx, owner.tokenIdentifier))
-    await t.run(ctx => ctx.db.patch(f.rows.learnResponseBodies, { payload: { kind: 'text', text: STORAGE_CANARIES.key } }))
+    await t.run(async ctx => {
+      const payload = { kind: 'text' as const, text: STORAGE_CANARIES.key }
+      const payloadDigest = await privacyDigest(payload)
+      await ctx.db.patch(f.rows.learnResponseBodies, { payload, payloadDigest, payloadBytes: new TextEncoder().encode(JSON.stringify(payload)).byteLength })
+      await ctx.db.patch(f.rows.learnResponses, { payloadDigest })
+    })
     expect(await readAll(t, owner, 'learnResponseBodies')).toMatchObject([{ payload: { kind: 'text', text: STORAGE_CANARIES.key } }])
     expect(JSON.stringify(await readAll(t, owner, 'learnMeasurementScoringSpecs'))).not.toContain(STORAGE_CANARIES.key)
   })
@@ -276,7 +284,7 @@ describe('inactive Phase C storage boundaries', () => {
     const attemptId = await t.run(ctx => ctx.db.insert('masteryAttempts', { ...legacy, blueprintRevisionId: f.scope.blueprintRevisionId, idempotencyKey: 'measurement', kind: 'measurement_delayed', horizonDays: 30, submissionId: f.rows.learnResponses, assessmentOpportunityId: f.rows.learnAssessmentOpportunities, measurementStorage: pins }))
     const result = await t.run(ctx => ctx.db.get(attemptId))
     expect(result).toMatchObject({ kind: 'measurement_delayed', horizonDays: 30, measurementStorage: { acceptedAt: f.base.createdAt, returnedScorerModel: null } })
-    const exported: Page = await t.withIdentity(owner).query(api.dataExport.getUserDataPage, { collection: 'masteryAttempts', paginationOpts: { cursor: null, numItems: 8 } })
+    const exported: Page = await t.withIdentity(owner).query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(t.withIdentity(owner)), collection: 'masteryAttempts', paginationOpts: { cursor: null, numItems: 8 } })
     expect(JSON.stringify(exported)).not.toContain('measurementStorage')
     expect(JSON.stringify(exported)).not.toContain('fixture-model')
   })
@@ -300,6 +308,26 @@ describe('inactive Phase C storage boundaries', () => {
     }))
     expect(await t.run(ctx => ctx.db.get(ordinaryId))).toMatchObject({ purpose: { kind: 'independent_application' }, assessmentPins: { kind: 'session_application' } })
     expect(await t.run(ctx => ctx.db.get(ordinaryId))).not.toHaveProperty('itemPins')
+  })
+
+  test.each(['keyed', 'numeric', 'ordered', 'bounded_rubric'] as const)('requires the frozen %s response kind only for admitted assignments', async responseKind => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => seedMeasurementStorage(ctx, owner.tokenIdentifier))
+    const assignment = await t.run(ctx => ctx.db.get(f.rows.learnMeasurementAssignments))
+    if (!assignment || assignment.status !== 'admitted') throw new Error('Missing admitted fixture')
+    const { _id, _creationTime: _time, responseKind: _kind, ...fields } = assignment
+    await expect(t.run(ctx => ctx.db.insert('learnMeasurementAssignments', fields as never))).rejects.toThrow()
+    await t.run(ctx => ctx.db.patch(_id, { responseKind }))
+    expect(await t.run(ctx => ctx.db.get(_id))).toMatchObject({ responseKind })
+    await expect(t.run(ctx => ctx.db.patch(_id, { responseKind: 'text' } as never))).rejects.toThrow()
+    const candidate = { ...f.base, ...f.scope, evidenceStatus: 'available' as const, assignmentKey: 'candidate', epoch: 'fixture-epoch',
+      baselineSha: 'a'.repeat(40), flow: 'v2_today' as const, entryPoint: 'today', cohortVersion: 'cohort.v1', historyStatus: 'unknown' as const,
+      historyBasisVersion: 'history.v1', instrumentationEpoch: 'fixture-epoch', exclusionReasons: [], status: 'considered' as const,
+      protocolStatus: 'protocol_not_frozen' as const, reasonCode: 'protocol_not_frozen' }
+    const { scopeKind: _scope, contextPins: _context, ...candidateFields } = candidate
+    const id = await t.run(ctx => ctx.db.insert('learnMeasurementAssignments', candidateFields))
+    expect(await t.run(ctx => ctx.db.get(id))).not.toHaveProperty('responseKind')
+    await expect(t.run(ctx => ctx.db.patch(id, { responseKind } as never))).rejects.toThrow()
   })
 
   test('discovers exact source and Void descendants without returning foreign rows', async () => {
@@ -441,6 +469,7 @@ describe('inactive Phase C storage boundaries', () => {
       for (let index = 0; index < 9; index++) await ctx.db.insert('learnMeasurementReportCells', { ...a.base,
         reportRunId: a.rows.learnMeasurementReportRuns, cellKey: `additional-cell-${index}`, sequence: index + 2,
         reportVersion: LEARN_V2_MEASUREMENT_REPORT_VERSION, ...partialMeasurementReportCell() })
+      await ctx.db.patch(a.documentId, { status: 'processing' })
       await ctx.db.insert('accountDeletionJobs', { userId: owner.tokenIdentifier, status: 'active', phase: 'documents', startedAt: Date.now(), updatedAt: Date.now() })
       return cachedRowId
     })

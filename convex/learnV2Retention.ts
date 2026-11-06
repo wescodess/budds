@@ -1,4 +1,4 @@
-import { deleteMeasurementVoidBatch, invalidateMeasurementSourceBatch } from './lib/learnV2MeasurementRetention'
+import { deleteMeasurementVoidBatch, invalidateMeasurementSourceBatch, invalidateMeasurementReportRowsBatch, readMeasurementSourceDescendants, type measurementSourceValidator } from './lib/learnV2MeasurementRetention'
 import { v } from 'convex/values'
 import { internalMutation, type MutationCtx } from './_generated/server'
 import { internal } from './_generated/api'
@@ -11,11 +11,229 @@ import {
 import { releaseSearchReservationClaims } from './learnV2Search'
 import { writeLearnActivityEvent } from './lib/learnAdaptiveEvents'
 import { initiateAdaptiveThreadDeletion } from './learnAdaptiveCommands'
+import { retainsSafeAdaptiveRejection } from './lib/learnAdaptiveReceiptPrivacy'
+import { activityResponseTargets, digestLegacyFingerprint, legacySourceIds, privacyDigest } from './lib/learnV2ResponsePrivacy'
+import { appendLearnMeasurementFact, nextLearnMeasurementSourceSequence } from './lib/learnV2MeasurementFacts'
+import { LEARN_MEASUREMENT_STORAGE_VERSION } from '../shared/learn-v2-measurement-storage-manifest'
 
 // This deliberately stays below the account-deletion batch. Folder deletion
 // only has live lifecycle producers today; later producers must add their
 // child-before-parent rows here in the ticket that introduces them.
 const BATCH_SIZE = 8
+
+async function redactLegacyAttempt(ctx: MutationCtx, attempt: Doc<'masteryAttempts'>) {
+  await ctx.db.patch(attempt._id, { response: undefined, rubricSnapshot: undefined, criterionResultsJson: undefined,
+    misconceptionTagsJson: undefined, feedbackProjectionJson: undefined, contentRevisionPinsJson: undefined,
+    verifierVersionsJson: undefined, sourceSnapshotIdsJson: '[]',
+    ...(attempt.requestFingerprint ? { requestFingerprint: await digestLegacyFingerprint(attempt.requestFingerprint) } : {}) })
+}
+
+export const purgeResponseCopies = internalMutation({
+  args: { userId: v.string(), submissionId: v.id('learnResponses'), phase: v.optional(v.union(v.literal('executions'), v.literal('attempts'), v.literal('activities'))), cursor: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const response = await ctx.db.get(args.submissionId)
+    if (!response || response.userId !== args.userId) return
+    const now = Date.now()
+    if (!args.phase) {
+      const bodies = await ctx.db.query('learnResponseBodies').withIndex('by_userId_and_submissionId', q => q.eq('userId', args.userId).eq('submissionId', response._id)).take(BATCH_SIZE)
+      await removeRows(ctx, bodies)
+      if (response.bodyAvailability !== 'purged') {
+        const previous = await ctx.db.query('learnResponseIntegrityEvents').withIndex('by_userId_and_submissionId_and_sequence', q => q.eq('userId', args.userId).eq('submissionId', response._id)).order('desc').first()
+        const epoch = 'measurementContext' in response && response.measurementContext.status === 'admitted' ? response.measurementContext.baselineEpoch : null
+        const sourceFactSequence = epoch ? (await nextLearnMeasurementSourceSequence(ctx, args.userId)).sequence : 0
+        const sequence = (previous?.sequence ?? 0) + 1
+        if (!Number.isSafeInteger(sequence)) throw new Error('Learn integrity sequence exhausted')
+        const integrityEventId = await ctx.db.insert('learnResponseIntegrityEvents', { userId: args.userId, storageVersion: LEARN_MEASUREMENT_STORAGE_VERSION,
+          createdAt: now, submissionId: response._id, ...(response.scopeKind === 'v2' ? { learningVoidId: response.learningVoidId } : { threadId: response.threadId }),
+          sequence, kind: 'body_purged', reasonCode: 'evidence_unavailable', effectiveAt: now, policyVersion: 'learn-v2.response-purge.v1', sourceFactSequence })
+        if (epoch) await appendLearnMeasurementFact(ctx, args.userId, { epoch, learningVoidId: response.scopeKind === 'v2' ? response.learningVoidId : undefined,
+          occurredAt: now, expectedSequence: sourceFactSequence, fact: { kind: 'integrity', submissionId: response._id, integrityEventId,
+            currentEligibility: 'excluded', evidenceAvailable: false, bodyAvailability: 'purged' } })
+      }
+      await ctx.db.patch(response._id, { evidenceStatus: 'evidence_unavailable', invalidatedAt: response.invalidatedAt ?? now,
+        bodyAvailability: 'purged', bodyUnavailableReason: 'evidence_unavailable', bodyPurgedAt: response.bodyPurgedAt ?? now, currentEligibility: 'excluded' })
+      await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeResponseCopies, { ...args, ...(bodies.length < BATCH_SIZE ? { phase: 'executions' as const } : {}) })
+      return
+    }
+    if (args.phase === 'activities') {
+      const activityId = response.scopeKind === 'standalone' ? response.activityId
+        : response.contextPins.kind === 'session' ? response.contextPins.canvas?.activityId : undefined
+      const activity = activityId && await ctx.db.get(activityId)
+      if (activity?.userId === args.userId) await redactActivityCopies(ctx, activity)
+      return
+    }
+    if (args.phase === 'executions') {
+      const page = await ctx.db.query('learnScoringExecutions').withIndex('by_userId_and_submissionId', q => q.eq('userId', args.userId).eq('submissionId', response._id)).paginate({ cursor: args.cursor ?? null, numItems: BATCH_SIZE })
+      for (const execution of page.page) await ctx.db.patch(execution._id, { evidenceStatus: 'evidence_unavailable', invalidatedAt: now,
+        frozenConfiguration: { digest: execution.frozenConfiguration.digest, snapshot: '[purged]' }, verdict: undefined, integrityResult: 'evidence_unavailable' })
+      await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeResponseCopies, { ...args,
+        phase: page.isDone ? 'attempts' : 'executions', cursor: page.isDone ? undefined : page.continueCursor })
+      return
+    }
+    const page = await ctx.db.query('masteryAttempts').withIndex('by_userId_and_submissionId', q => q.eq('userId', args.userId).eq('submissionId', response._id)).paginate({ cursor: args.cursor ?? null, numItems: BATCH_SIZE })
+    for (const attempt of page.page) await redactLegacyAttempt(ctx, attempt)
+    await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeResponseCopies, { ...args, phase: page.isDone ? 'activities' : 'attempts', cursor: page.isDone ? undefined : page.continueCursor })
+  },
+})
+
+async function purgeResponseSourceBatch(ctx: MutationCtx, userId: string, source: import('convex/values').Infer<typeof measurementSourceValidator>) {
+  if (await invalidateMeasurementReportRowsBatch(ctx, userId)) return true
+  const references = await readMeasurementSourceDescendants(ctx, userId, source)
+  for (const reference of references) {
+    if (reference.collection === 'learnMeasurementSupports') {
+      const support = await ctx.db.get(reference.id as Id<'learnMeasurementSupports'>)
+      if (support?.userId === userId) await ctx.db.patch(support._id, { locatorDigest: await privacyDigest(support.locatorDigest) })
+    }
+    if (reference.collection !== 'learnResponseEvidenceLinks') continue
+    const link = await ctx.db.get(reference.id as Id<'learnResponseEvidenceLinks'>)
+    if (!link || link.userId !== userId) continue
+    // Start descendant cleanup before consuming its reverse link.
+    await ctx.runMutation(internal.learnV2Retention.purgeResponseCopies, { userId, submissionId: link.submissionId })
+    await ctx.db.patch(link._id, { evidenceStatus: 'evidence_unavailable', invalidatedAt: Date.now() })
+  }
+  if (references.some(reference => reference.collection === 'learnResponseEvidenceLinks')) return true
+  return await invalidateMeasurementSourceBatch(ctx, userId, source)
+}
+
+export const purgeLegacyObjectiveCopies = internalMutation({
+  args: { userId: v.string(), sourceSnapshotId: v.id('learnSourceSnapshots'), objectiveId: v.id('learnObjectives'), cursor: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const objective = await ctx.db.get(args.objectiveId)
+    if (objective?.userId === args.userId) await ctx.db.patch(objective._id, { assessmentContract: undefined })
+    const page = await ctx.db.query('masteryAttempts').withIndex('by_userId_and_objectiveId_and_attemptedAt', q => q.eq('userId', args.userId).eq('objectiveId', args.objectiveId)).paginate({ cursor: args.cursor ?? null, numItems: BATCH_SIZE })
+    for (const attempt of page.page) {
+      const ids = legacySourceIds(ctx, attempt.sourceSnapshotIdsJson)
+      if (!ids || ids.length === 0 || ids.includes(args.sourceSnapshotId)) await redactLegacyAttempt(ctx, attempt)
+    }
+    if (!page.isDone) await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeLegacyObjectiveCopies, { ...args, cursor: page.continueCursor })
+  },
+})
+
+async function jobDependsOnSource(ctx: MutationCtx, job: Doc<'learnJobs'>, sourceSnapshotId: Id<'learnSourceSnapshots'>) {
+  if (job.dispatchSupportingSourceSnapshotIds !== undefined) return job.dispatchSupportingSourceSnapshotIds.includes(sourceSnapshotId)
+  if (job.submissionId) {
+    const links = await ctx.db.query('learnResponseEvidenceLinks').withIndex('by_userId_and_submissionId', q => q.eq('userId', job.userId).eq('submissionId', job.submissionId!)).take(65)
+    return links.length > 64 || links.some(link => link.dependency.kind === 'snapshot' && link.dependency.sourceSnapshotId === sourceSnapshotId)
+  }
+  let objectiveId: Id<'learnObjectives'> | null = null
+  if (job.studySessionId) {
+    const session = await ctx.db.get(job.studySessionId)
+    if (session?.userId === job.userId) objectiveId = session.primaryObjectiveId
+  }
+  for (const encoded of [job.checkpoint, job.requestFingerprint]) {
+    if (objectiveId || !encoded) continue
+    try {
+      const value: unknown = JSON.parse(encoded)
+      if (value && typeof value === 'object' && 'objectiveId' in value && typeof value.objectiveId === 'string') {
+        objectiveId = ctx.db.normalizeId('learnObjectives', value.objectiveId)
+      }
+    }
+    catch { /* Legacy jobs may not have a recoverable objective pin. */ }
+  }
+  if (!objectiveId) return true
+  return !!await ctx.db.query('learnObjectiveSources')
+    .withIndex('by_userId_and_objectiveId_and_sourceSnapshotId', q => q.eq('userId', job.userId).eq('objectiveId', objectiveId!).eq('sourceSnapshotId', sourceSnapshotId)).first()
+}
+
+export const purgeLegacySourceCopies = internalMutation({
+  args: { userId: v.string(), sourceSnapshotId: v.id('learnSourceSnapshots'), phase: v.optional(v.union(v.literal('jobs'), v.literal('lifecycle'), v.literal('plans'), v.literal('plan_receipts'))), cursor: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const snapshot = await ctx.db.get(args.sourceSnapshotId)
+    if (!snapshot || snapshot.userId !== args.userId) return
+    if (!args.phase) {
+      const page = await ctx.db.query('learnObjectiveSources').withIndex('by_userId_and_sourceSnapshotId', q => q.eq('userId', args.userId).eq('sourceSnapshotId', snapshot._id)).paginate({ cursor: args.cursor ?? null, numItems: BATCH_SIZE })
+      for (const link of page.page) await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeLegacyObjectiveCopies, { userId: args.userId, sourceSnapshotId: snapshot._id, objectiveId: link.objectiveId })
+      await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeLegacySourceCopies, { ...args, phase: page.isDone ? 'jobs' : undefined, cursor: page.isDone ? undefined : page.continueCursor })
+      return
+    }
+    if (args.phase === 'jobs') {
+      const page = await ctx.db.query('learnJobs').withIndex('by_userId_and_learningVoidId_and_type', q => q.eq('userId', args.userId).eq('learningVoidId', snapshot.learningVoidId)).paginate({ cursor: args.cursor ?? null, numItems: BATCH_SIZE })
+      for (const job of page.page) if (await jobDependsOnSource(ctx, job, snapshot._id)) await ctx.db.patch(job._id, {
+        ...(job.requestFingerprint ? { requestFingerprint: await digestLegacyFingerprint(job.requestFingerprint) } : {}),
+        checkpoint: undefined,
+        ...(['succeeded', 'failed', 'cancelled'].includes(job.status) ? {} : { status: 'blocked' as const, leaseToken: undefined, leaseExpiresAt: undefined, terminalReason: 'evidence_unavailable' }),
+      })
+      await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeLegacySourceCopies, { ...args, phase: page.isDone ? 'lifecycle' : 'jobs', cursor: page.isDone ? undefined : page.continueCursor })
+      return
+    }
+    if (args.phase === 'lifecycle') {
+      const page = await ctx.db.query('learnLifecycleReceipts').withIndex('by_userId_and_learningVoidId', q => q.eq('userId', args.userId).eq('learningVoidId', snapshot.learningVoidId)).paginate({ cursor: args.cursor ?? null, numItems: BATCH_SIZE })
+      for (const receipt of page.page) await ctx.db.patch(receipt._id, { requestFingerprint: await digestLegacyFingerprint(receipt.requestFingerprint) })
+      await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeLegacySourceCopies, { ...args, phase: page.isDone ? 'plans' : 'lifecycle', cursor: page.isDone ? undefined : page.continueCursor })
+      return
+    }
+    if (args.phase === 'plans') {
+      const page = await ctx.db.query('studyPlanRevisions').withIndex('by_userId_and_learningVoidId_and_status', q => q.eq('userId', args.userId).eq('learningVoidId', snapshot.learningVoidId)).paginate({ cursor: args.cursor ?? null, numItems: BATCH_SIZE })
+      for (const plan of page.page) await ctx.db.patch(plan._id, { inputSnapshot: undefined, resultSnapshot: undefined })
+      await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeLegacySourceCopies, { ...args, phase: page.isDone ? 'plan_receipts' : 'plans', cursor: page.isDone ? undefined : page.continueCursor })
+      return
+    }
+    const page = await ctx.db.query('learnPlanCommandReceipts').withIndex('by_userId_and_learningVoidId', q => q.eq('userId', args.userId).eq('learningVoidId', snapshot.learningVoidId)).paginate({ cursor: args.cursor ?? null, numItems: BATCH_SIZE })
+    for (const receipt of page.page) await ctx.db.patch(receipt._id, { requestFingerprint: await digestLegacyFingerprint(receipt.requestFingerprint), response: JSON.stringify({ status: 'unavailable', reasonCode: 'evidence_unavailable' }) })
+    if (!page.isDone) await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeLegacySourceCopies, { ...args, cursor: page.continueCursor })
+  },
+})
+
+export const purgeContentCopies = internalMutation({
+  args: { userId: v.string(), sessionContentId: v.id('sessionContent'), phase: v.optional(v.literal('activities')), cursor: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const content = await ctx.db.get(args.sessionContentId)
+    if (!content || content.userId !== args.userId) return
+    await ctx.db.patch(content._id, { assessmentRubricSnapshot: undefined })
+    if (args.phase === 'activities') {
+      const page = await ctx.db.query('learningThreadActivities').withIndex('by_userId_and_sessionContentId_and_updatedAt', q => q.eq('userId', args.userId).eq('sessionContentId', content._id)).paginate({ cursor: args.cursor ?? null, numItems: BATCH_SIZE })
+      for (const activity of page.page) await redactActivityCopies(ctx, activity)
+      if (!page.isDone) await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeContentCopies, { ...args, cursor: page.continueCursor })
+      return
+    }
+    const page = await ctx.db.query('sessionContentBlocks').withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', args.userId).eq('sessionContentId', content._id)).paginate({ cursor: args.cursor ?? null, numItems: BATCH_SIZE })
+    for (const block of page.page) await ctx.db.patch(block._id, { content: undefined, claimOrdersJson: undefined })
+    await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeContentCopies, { ...args, phase: page.isDone ? 'activities' : undefined, cursor: page.isDone ? undefined : page.continueCursor })
+  },
+})
+
+async function redactActivityCopies(ctx: MutationCtx, activity: Doc<'learningThreadActivities'>) {
+  await ctx.db.patch(activity._id, { submittedResponse: undefined, canonicalInputSnapshot: '[purged]', primitivePlan: [],
+    purpose: 'Evidence unavailable', reasonText: undefined, feedbackProjection: undefined, recoveryFeedback: undefined,
+    fallback: { ...activity.fallback, title: 'Evidence unavailable', body: '' },
+    accessibilityMetadata: { ...activity.accessibilityMetadata, heading: 'Evidence unavailable', instructions: '' },
+    decisionInputs: { ...activity.decisionInputs, sourceInputs: [] } })
+  await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeAdaptiveCopies, { userId: activity.userId, threadId: activity.threadId, activityId: activity.activityId })
+}
+
+// Legacy diagnostics predate canonical reverse dependencies. Traverse exact
+// owner pages, then exact thread pages, to erase their direct-scope copies.
+export const purgeScopedActivityCopies = internalMutation({
+  args: { userId: v.string(), source: v.union(v.object({ kind: v.literal('document'), id: v.id('documents') }), v.object({ kind: v.literal('folder'), id: v.id('folders') })),
+    threadId: v.optional(v.id('learningThreads')), cursor: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    if (args.threadId) {
+      const thread = await ctx.db.get(args.threadId)
+      if (!thread || thread.userId !== args.userId) return
+      const page = await ctx.db.query('learningThreadActivities').withIndex('by_userId_and_threadId_and_boundaryOrdinal', q => q.eq('userId', args.userId).eq('threadId', thread._id)).paginate({ cursor: args.cursor ?? null, numItems: BATCH_SIZE })
+      for (const activity of page.page) {
+        if (activity.masteryAttemptId) {
+          const attempt = await ctx.db.get(activity.masteryAttemptId)
+          if (attempt?.userId === args.userId) await redactLegacyAttempt(ctx, attempt)
+        }
+        for (const target of await activityResponseTargets(ctx, args.userId, activity) ?? []) {
+          const response = target.submissionId && await ctx.db.get(target.submissionId)
+          if (response?.userId === args.userId && response.bodyAvailability !== 'purged') {
+            await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeResponseCopies, { userId: args.userId, submissionId: response._id })
+          }
+        }
+        await redactActivityCopies(ctx, activity)
+      }
+      if (!page.isDone) await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeScopedActivityCopies, { ...args, cursor: page.continueCursor })
+      return
+    }
+    const page = await ctx.db.query('learningThreads').withIndex('by_userId', q => q.eq('userId', args.userId)).paginate({ cursor: args.cursor ?? null, numItems: BATCH_SIZE })
+    for (const thread of page.page) if (thread.sourceScope.kind === args.source.kind && thread.sourceScope.sourceId === args.source.id) {
+      await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeScopedActivityCopies, { ...args, threadId: thread._id, cursor: undefined })
+    }
+    if (!page.isDone) await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeScopedActivityCopies, { ...args, cursor: page.continueCursor })
+  },
+})
 
 async function invalidateLinkedAdaptiveActivities(
   ctx: MutationCtx,
@@ -30,6 +248,7 @@ async function invalidateLinkedAdaptiveActivities(
   for (const link of links) {
     const [activity, thread] = await Promise.all([ctx.db.get(link.activityId), ctx.db.get(link.threadId)])
     if (activity && thread && activity.userId === userId && activity.threadId === thread._id && thread.userId === userId) {
+      await redactActivityCopies(ctx, activity)
       const current = thread.currentActivityId === activity._id && activity.status !== 'ended' && activity.status !== 'replaced'
       const common = {
         userId,
@@ -56,6 +275,28 @@ async function invalidateLinkedAdaptiveActivities(
   }
   return links.length > 0
 }
+
+export const purgeAdaptiveCopies = internalMutation({
+  args: { userId: v.string(), threadId: v.id('learningThreads'), activityId: v.string(), phase: v.optional(v.literal('receipts')), cursor: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    if (!args.phase) {
+      const page = await ctx.db.query('learnActivityDecisions').withIndex('by_userId_and_activityId_and_createdAt', q => q.eq('userId', args.userId).eq('activityId', args.activityId)).paginate({ cursor: args.cursor ?? null, numItems: BATCH_SIZE })
+      for (const decision of page.page) await ctx.db.patch(decision._id, { inputSnapshot: '[purged]' })
+      await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeAdaptiveCopies, { ...args, phase: page.isDone ? 'receipts' : undefined, cursor: page.isDone ? undefined : page.continueCursor })
+      return
+    }
+    const page = await ctx.db.query('learnActivityCommandReceipts').withIndex('by_userId_and_threadId', q => q.eq('userId', args.userId).eq('threadId', args.threadId)).paginate({ cursor: args.cursor ?? null, numItems: BATCH_SIZE })
+    for (const receipt of page.page) {
+      // A body-free denial remains the command's result until its original
+      // deadline. Clear arbitrary cached results and every error alias.
+      const now = Date.now()
+      await ctx.db.patch(receipt._id, retainsSafeAdaptiveRejection(receipt, now)
+        ? { errorReference: null }
+        : { resultReference: null, errorReference: null, resultRedactedAt: now, redactionStatus: 'redacted' })
+    }
+    if (!page.isDone) await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeAdaptiveCopies, { ...args, cursor: page.continueCursor })
+  },
+})
 
 async function removeRows<TableName extends TableNames>(ctx: MutationCtx, rows: Doc<TableName>[]) {
   for (const row of rows) await ctx.db.delete(row._id)
@@ -301,12 +542,13 @@ export const deleteFolderFoundation = internalMutation({
       await ctx.scheduler.runAfter(0, internal.learnV2Retention.deleteFolderFoundation, args)
       return { deleted: 1, hasMore: true }
     }
+    await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeScopedActivityCopies, { userId: args.userId, source: { kind: 'folder', id: args.folderId } })
     return { deleted: 0, hasMore: false }
   },
 })
 
 async function purgeExcerpt(ctx: MutationCtx, excerpt: Doc<'learnSourceExcerpts'>) {
-  if (await invalidateMeasurementSourceBatch(ctx, excerpt.userId, { kind: 'excerpt', id: excerpt._id })) return true
+  if (await purgeResponseSourceBatch(ctx, excerpt.userId, { kind: 'excerpt', id: excerpt._id })) return true
 
   const supportsWithoutStatus = await ctx.db.query('learnClaimSupports')
     .withIndex('by_userId_and_sourceExcerptId_and_evidenceStatus', q => q
@@ -319,7 +561,14 @@ async function purgeExcerpt(ctx: MutationCtx, excerpt: Doc<'learnSourceExcerpts'
         .eq('userId', excerpt.userId).eq('sourceExcerptId', excerpt._id).eq('evidenceStatus', 'evidence_available'))
       .take(BATCH_SIZE - supportsWithoutStatus.length)
   const supports = [...supportsWithoutStatus, ...availableSupports]
-  for (const support of supports) await ctx.db.patch(support._id, { evidenceStatus: 'evidence_unavailable' })
+  for (const support of supports) {
+    const claim = await ctx.db.get(support.sessionContentClaimId)
+    if (claim?.userId === excerpt.userId) {
+      await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeContentCopies, { userId: excerpt.userId, sessionContentId: claim.sessionContentId })
+      await ctx.db.patch(claim._id, { claim: '[purged]' })
+    }
+    await ctx.db.patch(support._id, { evidenceStatus: 'evidence_unavailable' })
+  }
   if (supports.length === BATCH_SIZE) return true
   const locator = sanitizePublicSourceLocator(excerpt.locator) ?? 'source-unavailable'
   await ctx.db.patch(excerpt._id, { locator, excerpt: undefined, privateLocator: undefined, evidencePurgedAt: Date.now() })
@@ -346,6 +595,7 @@ export const purgeSourceEvidence = internalMutation({
           ? { externalKey: await tombstonedSourceExternalKey(String(identity._id)) }
           : {}),
         canonicalUrl: undefined,
+        title: undefined,
         publicLocator: undefined,
         privateLocator: undefined,
         tombstonedAt: Date.now(),
@@ -389,7 +639,7 @@ export const purgeSourceEvidence = internalMutation({
         .eq('userId', args.userId).eq('sourceIdentityId', args.sourceIdentityId).eq('evidencePurgedAt', undefined))
       .take(BATCH_SIZE)
     for (const snapshot of snapshots) {
-      if (await invalidateMeasurementSourceBatch(ctx, args.userId, { kind: 'snapshot', id: snapshot._id })) {
+      if (await purgeResponseSourceBatch(ctx, args.userId, { kind: 'snapshot', id: snapshot._id })) {
         await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeSourceEvidence, args)
         return { pending: true }
       }
@@ -416,6 +666,7 @@ export const purgeSourceEvidence = internalMutation({
         await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeSourceEvidence, args)
         return { pending: true }
       }
+      await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeLegacySourceCopies, { userId: args.userId, sourceSnapshotId: snapshot._id })
       // Owner rate history deliberately survives source tombstoning. Otherwise
       // deleting and re-registering the same URL would reset admission limits.
       const excerpts = await ctx.db.query('learnSourceExcerpts')
@@ -461,7 +712,7 @@ export const purgeSourceEvidence = internalMutation({
 export const purgeFolderDocumentSources = internalMutation({
   args: { userId: v.string(), documentId: v.id('documents') },
   handler: async (ctx, args) => {
-    if (await invalidateMeasurementSourceBatch(ctx, args.userId, { kind: 'document', id: args.documentId })) {
+    if (await purgeResponseSourceBatch(ctx, args.userId, { kind: 'document', id: args.documentId })) {
       await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeFolderDocumentSources, args)
       return { pending: true }
     }
@@ -500,6 +751,7 @@ export const purgeFolderDocumentSources = internalMutation({
       await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeFolderDocumentSources, args)
       return { pending: true }
     }
+    await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeScopedActivityCopies, { userId: args.userId, source: { kind: 'document', id: args.documentId } })
     return { pending: identities.length > 0 }
   },
 })
@@ -543,7 +795,7 @@ export const purgeFolderDocumentManifestHeaders = internalMutation({
 export const purgeFolderManifestFolder = internalMutation({
   args: { userId: v.string(), folderId: v.id('folders') },
   handler: async (ctx, args) => {
-    if (await invalidateMeasurementSourceBatch(ctx, args.userId, { kind: 'folder', id: args.folderId })) {
+    if (await purgeResponseSourceBatch(ctx, args.userId, { kind: 'folder', id: args.folderId })) {
       await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeFolderManifestFolder, args)
       return { pending: true }
     }

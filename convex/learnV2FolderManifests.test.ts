@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { api, internal } from "./_generated/api";
@@ -244,7 +245,7 @@ describe("Learn V2 folder source manifests", () => {
       sourceRevision: `sha256:${hash("a")}`,
     });
     const exportedIdentity = (
-      await asOwner.query(api.dataExport.getUserDataPage, {
+      await asOwner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(asOwner),
         collection: "learnSourceIdentities",
         paginationOpts: { cursor: null, numItems: 8 },
       })

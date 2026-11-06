@@ -4,6 +4,7 @@ import type { Doc, Id } from './_generated/dataModel'
 import { requireLearnV2QueryAccess } from './lib/learnV2Access'
 import { requireActiveBlueprint } from './lib/learnV2BlueprintAuthority'
 import { getScopedMasteryRecord } from './lib/learnV2MasteryScope'
+import { legacyResponseAvailable, retainedPlanCache, retainedSourceExcerpt } from './lib/learnV2ResponsePrivacy'
 
 const MAX_VOIDS = 32
 const MAX_SOURCES = 64
@@ -89,9 +90,7 @@ async function sourceProjection(ctx: Parameters<typeof requireLearnV2QueryAccess
     else if (status === 'unavailable') counts.unavailable += 1
     else counts.pending += 1
     const identity = await ctx.db.get(source.sourceIdentityId)
-    const excerpt = status === 'user_accepted' && source.rightsStatus === 'permitted' && source.evidencePurgedAt === undefined
-      ? await ctx.db.query('learnSourceExcerpts').withIndex('by_userId_and_sourceSnapshotId_and_evidencePurgedAt', q => q.eq('userId', userId).eq('sourceSnapshotId', source._id).eq('evidencePurgedAt', undefined)).first()
-      : null
+    const excerpt = await retainedSourceExcerpt(ctx, userId, source._id)
     items.push({
       _id: source._id,
       sourceIdentityId: source.sourceIdentityId,
@@ -154,6 +153,18 @@ function nextAction(voidRow: VoidRow, blueprint: BlueprintRow | null, sourceCoun
   return voidRow.status
 }
 
+async function retainedAttempt(ctx: Parameters<typeof requireLearnV2QueryAccess>[0], userId: string, attempt: Doc<'masteryAttempts'>) {
+  const available = await legacyResponseAvailable(ctx, userId, attempt)
+  // Preserve the Journey history contract. These unread caches can contain
+  // private locators, scorer inputs or copies of a revoked response body.
+  const { response: _response, requestFingerprint: _requestFingerprint, rubricSnapshot: _rubricSnapshot,
+    criterionResultsJson: _criterionResultsJson, misconceptionTagsJson: _misconceptionTagsJson,
+    feedbackProjectionJson: _feedbackProjectionJson, contentRevisionPinsJson: _contentRevisionPinsJson,
+    sourceSnapshotIdsJson: _sourceSnapshotIdsJson, verifierVersionsJson: _verifierVersionsJson, ...metadata } = attempt
+  return { ...metadata, ...(available ? { response: attempt.response, bodyAvailability: 'available' as const }
+    : { bodyAvailability: 'unavailable' as const, bodyUnavailableReason: 'evidence_unavailable' as const }) }
+}
+
 async function journey(ctx: Parameters<typeof requireLearnV2QueryAccess>[0], userId: string, voidRow: VoidRow, folder: Doc<'folders'>) {
   const blueprint = await currentBlueprint(ctx, userId, voidRow)
   const sources = await sourceProjection(ctx, userId, blueprint)
@@ -165,13 +176,21 @@ async function journey(ctx: Parameters<typeof requireLearnV2QueryAccess>[0], use
   for (const objective of map?.objectives ?? []) {
     const record = (await getScopedMasteryRecord(ctx, userId, blueprint!._id, objective._id)).record
     const attempts = await ctx.db.query('masteryAttempts').withIndex('by_userId_blueprintRevisionId_objectiveId_attemptedAt', q => q.eq('userId', userId).eq('blueprintRevisionId', blueprint!._id).eq('objectiveId', objective._id)).order('desc').take(MAX_ATTEMPTS_PER_OBJECTIVE)
-    mastery.push({ objectiveId: objective._id, record, attempts })
+    mastery.push({ objectiveId: objective._id, record, attempts: await Promise.all(attempts.map(attempt => retainedAttempt(ctx, userId, attempt))) })
   }
+  const availableSources = new Set(sources.items.filter(source => source.excerpt !== null).map(source => source._id))
   const calibrationItems = (map?.objectives ?? []).map(objective => {
-    const rubric = objective.assessmentContract && typeof objective.assessmentContract === 'object' ? objective.assessmentContract : null
-    return { objectiveId: objective._id, title: objective.title, capability: objective.capability, prompt: rubric && 'instructions' in rubric && typeof rubric.instructions === 'string' ? rubric.instructions : null, rubric }
+    const supported = objective.sourceLinks.filter(link => link.coverage !== 'gap')
+    const available = supported.every(link => availableSources.has(link.sourceSnapshotId))
+    const rubric = available && objective.assessmentContract && typeof objective.assessmentContract === 'object' ? objective.assessmentContract : null
+    return { objectiveId: objective._id, title: objective.title, capability: objective.capability, prompt: rubric?.instructions ?? null, rubric }
   })
-  return { folder, learningVoid: voidRow, currentBlueprint: blueprint, generation, nextAction: nextAction(voidRow, blueprint, sources, plan), sources, map, calibration: { attempts: calibrationAttempts, items: calibrationItems, completed: voidRow.status !== 'calibration' && calibrationAttempts.length >= 3 }, plan, mastery }
+  const safePlanRevision = (revision: Doc<'studyPlanRevisions'> | null) => revision && {
+    ...revision, inputSnapshot: retainedPlanCache(revision.inputSnapshot, 'input'), resultSnapshot: retainedPlanCache(revision.resultSnapshot, 'result'),
+  }
+  return { folder, learningVoid: voidRow, currentBlueprint: blueprint, generation, nextAction: nextAction(voidRow, blueprint, sources, plan), sources, map,
+    calibration: { attempts: await Promise.all(calibrationAttempts.map(attempt => retainedAttempt(ctx, userId, attempt))), items: calibrationItems, completed: voidRow.status !== 'calibration' && calibrationAttempts.length >= 3 },
+    plan: { ...plan, preview: safePlanRevision(plan.preview), accepted: safePlanRevision(plan.accepted) }, mastery }
 }
 
 export const listHub = query({

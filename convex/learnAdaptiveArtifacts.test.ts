@@ -1,17 +1,19 @@
 /// <reference types="vite/client" />
 import { convexTest } from 'convex-test'
-import { afterAll, beforeEach, describe, expect, test } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import schema from './schema'
 import { privateAdaptiveArtifactR2Key } from './lib/learnAdaptiveArtifacts'
 import { composeAdaptiveActivityPlan } from '../shared/learn-adaptive-activity-plan'
 import { storedPlan } from './learnAdaptiveRecovery'
+import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 
 const modules = import.meta.glob('./**/*.ts')
 const OWNER = { tokenIdentifier: 'https://auth.example.com|artifact-owner' }
 const OTHER = { tokenIdentifier: 'https://auth.example.com|artifact-other' }
 const originalFlag = process.env.LEARN_V2_ENABLED
 beforeEach(() => { process.env.LEARN_V2_ENABLED = 'true' })
+afterEach(() => { vi.useRealTimers() })
 afterAll(() => { if (originalFlag === undefined) delete process.env.LEARN_V2_ENABLED; else process.env.LEARN_V2_ENABLED = originalFlag })
 
 async function fixture() {
@@ -216,12 +218,12 @@ describe('adaptive thread artifacts', () => {
     const privateKey = await privateAdaptiveArtifactR2Key(OWNER.tokenIdentifier, saved.value.artifactId)
     await t.run(ctx => ctx.db.patch(saved.value.artifactId, { r2ObjectKey: privateKey }))
     const input = { collection: 'learningThreadArtifacts' as const, paginationOpts: { cursor: null, numItems: 100 } }
-    const exported = await owner.query(api.dataExport.getUserDataPage, input)
+    const exported = await owner.query(api.dataExport.getUserDataPage, { ...input, authorizationId: await authorizeExport(owner) })
     expect(exported.page).toHaveLength(1)
     expect(exported.page[0]).toMatchObject({ title: 'Export note', summary: 'I understand this part.' })
     expect(exported.page[0]).not.toHaveProperty('r2ObjectKey')
     expect(JSON.stringify(exported)).not.toContain(privateKey)
-    expect((await other.query(api.dataExport.getUserDataPage, input)).page).toEqual([])
+    expect((await other.query(api.dataExport.getUserDataPage, { ...input, authorizationId: await authorizeExport(other) })).page).toEqual([])
   })
 
   test('pending deleted artifacts cannot hide an older saved artifact from the bounded read', async () => {
@@ -261,7 +263,9 @@ describe('adaptive thread artifacts', () => {
     expect(await owner.query(api.learnAdaptive.listThreadArtifacts, { threadId })).toMatchObject([{ title: 'My answer' }])
   })
 
-  test('invalidated factual evidence leaves a historical read-only artifact and rejects edits', async () => {
+  test.each(['before_rejection', 'after_rejection'] as const)('invalidated factual evidence leaves a historical read-only artifact and rejects edits with cleanup %s', async cleanup => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_800_000_000_000)
     const { t, owner, threadId, activityId } = await fixture()
     const saved = await owner.mutation(api.learnAdaptive.saveArtifact, { threadId, activityId, artifactKind: 'answer', title: 'Evidence note', summary: 'My retained explanation.', status: 'saved', expectedRevision: 3, idempotencyKey: 'artifact-invalidated-save-0001' })
     if (saved.kind !== 'ok') throw new Error('Expected save')
@@ -287,9 +291,16 @@ describe('adaptive thread artifacts', () => {
     })
     const revisionAfterInvalidation = (await t.run(ctx => ctx.db.get(threadId)))!.revision
     const edit = { threadId, activityId, artifactId: saved.value.artifactId, artifactKind: 'answer' as const, title: 'Revised', summary: 'Should not write.', status: 'saved' as const, expectedRevision: revisionAfterInvalidation, idempotencyKey: 'artifact-invalidated-edit-0001' }
+    if (cleanup === 'before_rejection') await t.finishAllScheduledFunctions(vi.runAllTimers)
     const rejected = await owner.mutation(api.learnAdaptive.saveArtifact, edit)
     expect(rejected).toMatchObject({ kind: 'blocked', code: 'artifact_evidence_unavailable' })
+    const receipt = await t.run(async ctx => (await ctx.db.query('learnActivityCommandReceipts')
+      .withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(16)).find(row => row.resultKind === 'blocked'))
+    expect(receipt?.resultExpiresAt).toBeGreaterThan(Date.now())
+    if (cleanup === 'after_rejection') await t.finishAllScheduledFunctions(vi.runAllTimers)
+    expect((await t.run(ctx => ctx.db.get(receipt!._id)))?.resultExpiresAt).toBeGreaterThan(Date.now())
     expect(await owner.mutation(api.learnAdaptive.saveArtifact, edit)).toEqual(rejected)
+    expect(await owner.mutation(api.learnAdaptive.saveArtifact, { ...edit, idempotencyKey: 'artifact-invalidated-new-edit' })).toEqual(rejected)
     expect((await t.run(ctx => ctx.db.get(threadId)))?.revision).toBe(revisionAfterInvalidation)
     expect(await t.run(ctx => ctx.db.get(saved.value.artifactId))).toMatchObject({ title: 'Evidence note', revision: 1 })
   })
@@ -318,6 +329,10 @@ describe('adaptive thread artifacts', () => {
     await t.mutation(internal.learnAdaptiveCommands.runThreadDeletionJob, { jobId: job!._id })
     const cleanup = await t.run(ctx => ctx.db.query('pendingCleanup').withIndex('by_learningThreadArtifactId', q => q.eq('learningThreadArtifactId', saved.value.artifactId)).unique())
     expect(cleanup).toMatchObject({ r2Key: privateKey })
+    expect(await t.run(ctx => ctx.db.get(saved.value.artifactId))).toMatchObject({ status: 'deleted', r2ObjectKey: privateKey })
+    await t.mutation(internal.learnAdaptiveCommands.runThreadDeletionJob, { jobId: job!._id })
+    expect(await t.run(ctx => ctx.db.get(saved.value.artifactId))).toMatchObject({ r2ObjectKey: privateKey })
+    expect(await t.run(ctx => ctx.db.get(cleanup!._id))).toMatchObject({ r2Key: privateKey })
     expect(await t.run(ctx => ctx.db.get(ids.learningVoidId))).not.toBeNull()
     await t.mutation(internal.accountDeletion.removePendingCleanup, { id: cleanup!._id })
     for (let index = 0; index < 15 && await t.run(ctx => ctx.db.get(job!._id)); index++) await t.mutation(internal.learnAdaptiveCommands.runThreadDeletionJob, { jobId: job!._id })

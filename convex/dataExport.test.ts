@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 import { convexTest } from 'convex-test'
 import { describe, expect, test } from 'vitest'
 import { api } from './_generated/api'
@@ -104,7 +105,7 @@ async function readAllPages(
   while (true) {
     // An explicit structural type prevents TypeScript from recursively expanding
     // every collection-specific branch of this polymorphic FunctionReference.
-    const result: ExportPage = await asUser.query(api.dataExport.getUserDataPage, {
+    const result: ExportPage = await asUser.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(asUser),
       collection,
       paginationOpts: { cursor, numItems: 1 },
     })
@@ -126,7 +127,7 @@ async function collectUserDataForTest(asUser: TestClient): Promise<TestUserDataE
   for (const attempt of collections.quizAttempts ?? []) {
     let cursor: string | null = null
     while (true) {
-      const result: ExportPage | null = await asUser.query(api.dataExport.getAttemptAnswersPage, {
+      const result: ExportPage | null = await asUser.query(api.dataExport.getAttemptAnswersPage, { authorizationId: await authorizeExport(asUser),
         attemptId: attempt._id as Id<'quizAttempts'>,
         paginationOpts: { cursor, numItems: 1 },
       })
@@ -169,7 +170,7 @@ describe('dataExport paginated queries', () => {
       }
     })
     const owner = t.withIdentity(USER_A)
-    const firstPage = await owner.query(api.dataExport.getUserDataPage, {
+    const firstPage = await owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(owner),
       collection: 'learnActivityEvents', paginationOpts: { cursor: null, numItems: 2 },
     })
 
@@ -177,7 +178,7 @@ describe('dataExport paginated queries', () => {
     expect(firstPage.isDone).toBe(false)
     expect(firstPage.page.map(event => event._id)).toHaveLength(2)
 
-    const secondPage = await owner.query(api.dataExport.getUserDataPage, {
+    const secondPage = await owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(owner),
       collection: 'learnActivityEvents', paginationOpts: { cursor: firstPage.continueCursor, numItems: 2 },
     })
     expect(secondPage.page).toHaveLength(1)
@@ -185,7 +186,7 @@ describe('dataExport paginated queries', () => {
     const returnedIds = [...firstPage.page, ...secondPage.page].map(event => event._id)
     expect(new Set(returnedIds).size).toBe(3)
     expect(returnedIds.sort()).toEqual(eventIds.owner.sort())
-    const otherOwnerPage = await t.withIdentity(USER_B).query(api.dataExport.getUserDataPage, {
+    const otherOwnerPage = await t.withIdentity(USER_B).query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(t.withIdentity(USER_B)),
       collection: 'learnActivityEvents', paginationOpts: { cursor: null, numItems: 2 },
     })
     expect(otherOwnerPage.page.map(event => event._id)).toEqual(eventIds.other)
@@ -222,19 +223,19 @@ describe('dataExport paginated queries', () => {
         canonicalInputSnapshot: plan.canonicalInputSnapshot, inputDigest: plan.inputDigest,
         submittedResponse: 'My saved diagnostic answer.', createdAt: 1, updatedAt: 1 })
     })
-    const owner = await t.withIdentity(USER_A).query(api.dataExport.getUserDataPage, { collection: 'learningThreadActivities', paginationOpts: { cursor: null, numItems: 8 } })
+    const owner = await t.withIdentity(USER_A).query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(t.withIdentity(USER_A)), collection: 'learningThreadActivities', paginationOpts: { cursor: null, numItems: 8 } })
     expect(owner.page).toEqual([expect.objectContaining({ _id: activityId, diagnosticResponse: 'My saved diagnostic answer.' })])
-    expect(owner.page[0]).not.toHaveProperty('submittedResponse')
+    expect(owner.page[0]).toHaveProperty('submittedResponse')
     await t.run(ctx => ctx.db.patch(activityId, { status: 'replaced' }))
-    const historical = await t.withIdentity(USER_A).query(api.dataExport.getUserDataPage, { collection: 'learningThreadActivities', paginationOpts: { cursor: null, numItems: 8 } })
+    const historical = await t.withIdentity(USER_A).query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(t.withIdentity(USER_A)), collection: 'learningThreadActivities', paginationOpts: { cursor: null, numItems: 8 } })
     expect(historical.page[0]).toMatchObject({ status: 'replaced', diagnosticResponse: 'My saved diagnostic answer.' })
     await t.run(async ctx => {
       const activity = (await ctx.db.get(activityId))!
       await ctx.db.patch(activityId, { decisionInputs: { ...activity.decisionInputs, routerVersion: 'learn-adaptive.other-router.v1' } })
     })
-    const otherRouter = await t.withIdentity(USER_A).query(api.dataExport.getUserDataPage, { collection: 'learningThreadActivities', paginationOpts: { cursor: null, numItems: 8 } })
+    const otherRouter = await t.withIdentity(USER_A).query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(t.withIdentity(USER_A)), collection: 'learningThreadActivities', paginationOpts: { cursor: null, numItems: 8 } })
     expect(otherRouter.page[0]).not.toHaveProperty('diagnosticResponse')
-    const other = await t.withIdentity(USER_B).query(api.dataExport.getUserDataPage, { collection: 'learningThreadActivities', paginationOpts: { cursor: null, numItems: 8 } })
+    const other = await t.withIdentity(USER_B).query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(t.withIdentity(USER_B)), collection: 'learningThreadActivities', paginationOpts: { cursor: null, numItems: 8 } })
     expect(other.page).toEqual([])
   })
 
@@ -273,6 +274,12 @@ describe('dataExport paginated queries', () => {
         learningVoidId: null, blueprintRevisionId: null, sessionContentId: null, evidenceReferences: [], generationInputs: plan.generationInputs, decisionInputs: plan.decisionInputs, replacesActivityId: null,
         canonicalInputSnapshot: plan.canonicalInputSnapshot, inputDigest: plan.inputDigest, createdAt: 1, updatedAt: 1,
       })
+      const folderId = await ctx.db.insert('folders', { userId: USER_A.tokenIdentifier, name: 'Live export evidence', documentCount: 0 })
+      const learningVoidId = await ctx.db.insert('learningVoids', { userId: USER_A.tokenIdentifier, folderId, title: 'Export evidence', status: 'active', revision: 1, createdAt: 1, updatedAt: 1 })
+      const sourceIdentityId = await ctx.db.insert('learnSourceIdentities', { userId: USER_A.tokenIdentifier, learningVoidId, origin: 'user_url', externalKey: 'private-snapshot-id' })
+      const sourceSnapshotId = await ctx.db.insert('learnSourceSnapshots', { userId: USER_A.tokenIdentifier, learningVoidId, sourceIdentityId, revision: 1, recordRevision: 7,
+        status: 'user_accepted', effectiveStatus: 'user_accepted', rightsStatus: 'permitted', conflictStatus: 'clear', createdAt: 1 })
+      await ctx.db.insert('learnSourceExcerpts', { userId: USER_A.tokenIdentifier, sourceSnapshotId, rightsStatus: 'permitted', locator: 'page:1', excerpt: 'A supported explanation.' })
       await ctx.db.patch(activityId, {
         activityClass: 'factual',
         submittedResponse: 'private learner response',
@@ -282,10 +289,10 @@ describe('dataExport paginated queries', () => {
           rendererVersion: 'learn-adaptive.renderer.v1',
           type: 'cited_explanation',
           action: 'continue',
-          props: { heading: 'Accepted source', explanation: 'A supported explanation.', sourceRefs: ['private-snapshot-id'] },
+          props: { heading: 'Accepted source', explanation: 'A supported explanation.', sourceRefs: [String(sourceSnapshotId)] },
           testId: 'learn-primitive-cited-explanation',
         }],
-        decisionInputs: { ...plan.decisionInputs, sourceState: 'ready', sourceInputs: [{ sourceSnapshotId: 'private-snapshot-id', effectiveStatus: 'user_accepted', recordRevision: 7 }] },
+        decisionInputs: { ...plan.decisionInputs, sourceState: 'ready', sourceInputs: [{ sourceSnapshotId: String(sourceSnapshotId), effectiveStatus: 'user_accepted', recordRevision: 7 }] },
       })
       const receiptId = await ctx.db.insert('learnActivityCommandReceipts', {
         userId: USER_A.tokenIdentifier, threadId, idempotencyKeyHash: `sha256:${'a'.repeat(64)}`,
@@ -299,25 +306,26 @@ describe('dataExport paginated queries', () => {
         metadata: { activityClass: 'factual', boundaryOrdinal: 1, planRevision: 1 }, dedupeKeyHash: `sha256:${'c'.repeat(64)}`,
       })
       const deletionJobId = await ctx.db.insert('learnAdaptiveThreadDeletionJobs', { userId: USER_A.tokenIdentifier, threadId, phase: 'children', status: 'queued', attempts: 0, createdAt: 1, updatedAt: 1 })
-      return { threadId, activityId, eventId, receiptId, deletionJobId }
+      return { threadId, activityId, eventId, receiptId, deletionJobId, sourceSnapshotId }
     })
 
-    const threads = await asUser.query(api.dataExport.getUserDataPage, { collection: 'learningThreads', paginationOpts: { cursor: null, numItems: 100 } })
-    const activities = await asUser.query(api.dataExport.getUserDataPage, { collection: 'learningThreadActivities', paginationOpts: { cursor: null, numItems: 100 } })
-    const events = await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnActivityEvents', paginationOpts: { cursor: null, numItems: 100 } })
-    const receipts = await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnActivityCommandReceipts', paginationOpts: { cursor: null, numItems: 100 } })
-    const deletionJobs = await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnAdaptiveThreadDeletionJobs', paginationOpts: { cursor: null, numItems: 100 } })
+    const threads = await asUser.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(asUser), collection: 'learningThreads', paginationOpts: { cursor: null, numItems: 100 } })
+    const activities = await asUser.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(asUser), collection: 'learningThreadActivities', paginationOpts: { cursor: null, numItems: 100 } })
+    const events = await asUser.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(asUser), collection: 'learnActivityEvents', paginationOpts: { cursor: null, numItems: 100 } })
+    const receipts = await asUser.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(asUser), collection: 'learnActivityCommandReceipts', paginationOpts: { cursor: null, numItems: 100 } })
+    const deletionJobs = await asUser.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(asUser), collection: 'learnAdaptiveThreadDeletionJobs', paginationOpts: { cursor: null, numItems: 100 } })
     expect(threads.page).toHaveLength(1)
     expect(activities.page).toHaveLength(1)
     expect(threads.page[0]).toMatchObject({ _id: ids.threadId, originalNeed: 'Shape a learning goal.' })
-    expect(activities.page[0]).toMatchObject({ _id: ids.activityId, activityId: 'export-activity', activityClass: 'factual', primitivePlan: [{ type: 'cited_explanation', props: { sourceRefs: ['[redacted]'] } }] })
+    expect(activities.page[0]).toMatchObject({ _id: ids.activityId, activityId: 'export-activity', activityClass: 'factual' })
     expect(activities.page[0]).not.toHaveProperty('canonicalInputSnapshot')
     expect(activities.page[0]).not.toHaveProperty('inputDigest')
-    expect(activities.page[0]).not.toHaveProperty('submittedResponse')
-    expect(activities.page[0]).not.toHaveProperty('submittedConfidence')
-    expect((activities.page[0] as { generationInputs: Record<string, unknown> }).generationInputs).not.toHaveProperty('sessionContentInputDigest')
+    expect(activities.page[0]).toHaveProperty('submittedResponse')
+    expect(activities.page[0]).toHaveProperty('submittedConfidence')
+    expect(activities.page[0]).not.toHaveProperty('generationInputs')
     expect(JSON.stringify(activities.page[0])).not.toContain('private-snapshot-id')
-    expect(JSON.stringify(activities.page[0])).not.toContain('private learner response')
+    expect(JSON.stringify(activities.page[0])).not.toContain(String(ids.sourceSnapshotId))
+    expect(JSON.stringify(activities.page[0])).toContain('private learner response')
     expect(events.page).toEqual([expect.objectContaining({ _id: ids.eventId, eventType: 'activity_eligible', metadata: { activityClass: 'factual', boundaryOrdinal: 1, planRevision: 1 } })])
     expect(events.page[0]).not.toHaveProperty('dedupeKeyHash')
     expect(receipts.page).toHaveLength(1)
@@ -334,8 +342,8 @@ describe('dataExport paginated queries', () => {
       await ctx.db.insert('calendarWebhookReceipts', { userId: USER_A.tokenIdentifier, calendarConnectionId: connectionId, channelId: 'private-channel', messageNumber: '99999999999999999999', messageNumberOrder: '99999999999999999999', receivedAt: 2 })
       await ctx.db.insert('calendarWatchChannels', { userId: USER_A.tokenIdentifier, calendarConnectionId: connectionId, channelId: 'private-channel', resourceId: 'private-resource', tokenHash: 'private-hash', expiresAt: 3, status: 'current', createdAt: 2, updatedAt: 2 })
     })
-    const receipt = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'calendarWebhookReceipts', paginationOpts: { cursor: null, numItems: 10 } })).page[0]!
-    const watch = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'calendarWatchChannels', paginationOpts: { cursor: null, numItems: 10 } })).page[0]!
+    const receipt = (await asUser.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(asUser), collection: 'calendarWebhookReceipts', paginationOpts: { cursor: null, numItems: 10 } })).page[0]!
+    const watch = (await asUser.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(asUser), collection: 'calendarWatchChannels', paginationOpts: { cursor: null, numItems: 10 } })).page[0]!
     expect(receipt).toMatchObject({ userId: USER_A.tokenIdentifier, receivedAt: 2 })
     expect(watch).toMatchObject({ userId: USER_A.tokenIdentifier, status: 'current', expiresAt: 3 })
     expect(JSON.stringify({ receipt, watch })).not.toContain('private-channel')
@@ -421,71 +429,71 @@ describe('dataExport paginated queries', () => {
         await ctx.db.insert('learnPlanCommandReceipts', { userId: USER_A.tokenIdentifier, learningVoidId: ids.voidId, idempotencyKey: 'plan-receipt', command: 'plan', requestFingerprint: 'private', response: '{"private":true}', createdAt: 1 })
         await ctx.db.insert('learnPlanAuditEvents', { userId: USER_A.tokenIdentifier, learningVoidId: ids.voidId, reasonCode: 'preview_feasible', details: '{"pinned":true}', createdAt: 1 })
       })
-      for (const collection of collections) expect((await asUser.query(api.dataExport.getUserDataPage, { collection, paginationOpts: { cursor: null, numItems: 8 } })).page).toHaveLength(1)
-      expect((await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnSourceExcerpts', paginationOpts: { cursor: null, numItems: 8 } })).page[0]).not.toHaveProperty('excerpt')
-      expect((await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnSourceExcerpts', paginationOpts: { cursor: null, numItems: 8 } })).page[0]).not.toHaveProperty('privateLocator')
-      const blueprintRevision = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnBlueprintRevisions', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
+      for (const collection of collections) expect((await asUser.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(asUser), collection, paginationOpts: { cursor: null, numItems: 8 } })).page).toHaveLength(1)
+      expect((await asUser.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(asUser), collection: 'learnSourceExcerpts', paginationOpts: { cursor: null, numItems: 8 } })).page[0]).not.toHaveProperty('excerpt')
+      expect((await asUser.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(asUser), collection: 'learnSourceExcerpts', paginationOpts: { cursor: null, numItems: 8 } })).page[0]).not.toHaveProperty('privateLocator')
+      const blueprintRevision = (await asUser.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(asUser), collection: 'learnBlueprintRevisions', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
       expect(blueprintRevision).not.toHaveProperty('generationInputDigest')
       expect(blueprintRevision).not.toHaveProperty('generationRequestId')
-      const masteryAttempt = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'masteryAttempts', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
+      const masteryAttempt = (await asUser.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(asUser), collection: 'masteryAttempts', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
       expect(masteryAttempt).not.toHaveProperty('idempotencyKey')
       expect(masteryAttempt).not.toHaveProperty('requestFingerprint')
-      for (const key of ['response', 'criterionResultsJson', 'misconceptionTagsJson', 'rubricSnapshot', 'scorerModel', 'verifierVersionsJson', 'sourceSnapshotIdsJson', 'studySessionId', 'sessionContentId', 'studyPlanRevisionId', 'blueprintRevisionId', 'objectiveId']) expect(masteryAttempt).not.toHaveProperty(key)
-      const sourceIdentity = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnSourceIdentities', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
+      for (const key of ['response', 'criterionResultsJson', 'misconceptionTagsJson', 'rubricSnapshot', 'scorerModel', 'verifierVersionsJson', 'sourceSnapshotIdsJson', 'contentRevisionPinsJson']) expect(masteryAttempt).not.toHaveProperty(key)
+      const sourceIdentity = (await asUser.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(asUser), collection: 'learnSourceIdentities', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
       expect(sourceIdentity).not.toHaveProperty('externalKey')
       expect(sourceIdentity).not.toHaveProperty('canonicalUrl')
       expect(sourceIdentity).not.toHaveProperty('privateLocator')
       expect(sourceIdentity).not.toHaveProperty('folderDocumentId')
       expect(sourceIdentity).not.toHaveProperty('title')
-      expect(sourceIdentity).toMatchObject({ publicLocator: 'https://example.com/' })
+      expect(sourceIdentity).not.toHaveProperty('publicLocator')
       expect(JSON.stringify(sourceIdentity)).not.toContain('identity-secret')
-      const sourceSnapshot = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnSourceSnapshots', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
+      const sourceSnapshot = (await asUser.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(asUser), collection: 'learnSourceSnapshots', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
       expect(sourceSnapshot).not.toHaveProperty('sourceIdentityId')
       expect(sourceSnapshot).not.toHaveProperty('folderManifestId')
       expect(sourceSnapshot).not.toHaveProperty('objectKey')
       expect(sourceSnapshot).not.toHaveProperty('folderId')
       expect(sourceSnapshot).not.toHaveProperty('filename')
       expect(sourceSnapshot).not.toHaveProperty('privateLocator')
-      expect(sourceSnapshot).toMatchObject({ publicLocator: 'https://example.com/' })
+      expect(sourceSnapshot).not.toHaveProperty('publicLocator')
       expect(JSON.stringify(sourceSnapshot)).not.toContain('snapshot-secret')
-      const lease = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnSourceFetchLeases', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
+      const lease = (await asUser.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(asUser), collection: 'learnSourceFetchLeases', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
       expect(lease).not.toHaveProperty('leaseToken')
       expect(lease).not.toHaveProperty('requestFingerprint')
       expect(lease).not.toHaveProperty('idempotencyKey')
       expect(lease).not.toHaveProperty('idempotencyKeyHash')
       expect(JSON.stringify(lease)).not.toContain('private-fetch-key')
-      const sourceReceipt = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnSourceCommandReceipts', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
+      const sourceReceipt = (await asUser.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(asUser), collection: 'learnSourceCommandReceipts', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
       expect(sourceReceipt).not.toHaveProperty('response')
       expect(sourceReceipt).not.toHaveProperty('requestFingerprint')
       expect(sourceReceipt).not.toHaveProperty('idempotencyKey')
       expect(sourceReceipt).not.toHaveProperty('idempotencyKeyHash')
       expect(JSON.stringify(sourceReceipt)).not.toContain('private-command-key')
-      const manifest = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnFolderSourceManifests', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
+      const manifest = (await asUser.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(asUser), collection: 'learnFolderSourceManifests', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
       expect(manifest).not.toHaveProperty('idempotencyKey')
       expect(manifest).not.toHaveProperty('requestFingerprint')
       expect(manifest).not.toHaveProperty('explicitDocumentIds')
       expect(manifest).not.toHaveProperty('rootFolderId')
-      const manifestFolder = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnFolderSourceManifestFolders', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
+      const manifestFolder = (await asUser.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(asUser), collection: 'learnFolderSourceManifestFolders', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
       expect(manifestFolder).not.toHaveProperty('folderId')
       expect(manifestFolder).not.toHaveProperty('name')
       expect(manifestFolder).not.toHaveProperty('childCursor')
-      const manifestEntry = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnFolderSourceManifestEntries', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
+      const manifestEntry = (await asUser.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(asUser), collection: 'learnFolderSourceManifestEntries', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
       expect(manifestEntry).not.toHaveProperty('documentId')
       expect(manifestEntry).not.toHaveProperty('folderId')
       expect(manifestEntry).not.toHaveProperty('sourceIdentityId')
       expect(manifestEntry).not.toHaveProperty('sourceSnapshotId')
-      const claimSupport = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnClaimSupports', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
+      const claimSupport = (await asUser.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(asUser), collection: 'learnClaimSupports', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
       expect(claimSupport).not.toHaveProperty('sourceExcerptId')
       expect(claimSupport).not.toHaveProperty('sessionContentClaimId')
-      const calendarProjection = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'calendarProjections', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
+      const calendarProjection = (await asUser.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(asUser), collection: 'calendarProjections', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
       for (const key of ['calendarConnectionId', 'provider', 'externalEventId', 'privateMetadata', 'providerEtag', 'providerVersion', 'providerCreateLeaseToken']) expect(calendarProjection).not.toHaveProperty(key)
       expect(JSON.stringify(calendarProjection)).not.toContain('private-')
-      expect((await asUser.query(api.dataExport.getUserDataPage, { collection: 'searchQuotaBuckets', paginationOpts: { cursor: null, numItems: 8 } })).page[0]).not.toHaveProperty('count')
-      expect((await asUser.query(api.dataExport.getUserDataPage, { collection: 'searchQuotaBuckets', paginationOpts: { cursor: null, numItems: 8 } })).page[0]).not.toHaveProperty('providerUsageBaseline')
-      expect((await asUser.query(api.dataExport.getUserDataPage, { collection: 'searchQuotaBuckets', paginationOpts: { cursor: null, numItems: 8 } })).page[0]).not.toHaveProperty('providerReportedUsageObservedAt')
-      expect((await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })).page[0]).not.toHaveProperty('checkpoint')
-      expect((await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })).page[0]).not.toHaveProperty('providerRequestDigest')
-      const reservation = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'searchReservations', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
+      expect((await asUser.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(asUser), collection: 'searchQuotaBuckets', paginationOpts: { cursor: null, numItems: 8 } })).page[0]).not.toHaveProperty('count')
+      expect((await asUser.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(asUser), collection: 'searchQuotaBuckets', paginationOpts: { cursor: null, numItems: 8 } })).page[0]).not.toHaveProperty('providerUsageBaseline')
+      expect((await asUser.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(asUser), collection: 'searchQuotaBuckets', paginationOpts: { cursor: null, numItems: 8 } })).page[0]).not.toHaveProperty('providerReportedUsageObservedAt')
+      expect((await asUser.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(asUser), collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })).page[0]).not.toHaveProperty('checkpoint')
+      expect((await asUser.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(asUser), collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })).page[0]).not.toHaveProperty('providerRequestDigest')
+      const reservation = (await asUser.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(asUser), collection: 'searchReservations', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
       expect(reservation).not.toHaveProperty('idempotencyKey')
       expect(reservation).not.toHaveProperty('idempotencyKeyHash')
       expect(reservation).not.toHaveProperty('requestFingerprint')
@@ -502,7 +510,7 @@ describe('dataExport paginated queries', () => {
         '_creationTime', '_id', 'blueprintRevisionId', 'createdAt', 'dispatchState', 'dispatchedAt', 'expiresAt',
         'learningVoidId', 'outcomeCode', 'reconciliationRequired', 'revision', 'searchClass', 'status', 'updatedAt', 'userId',
       ].sort())
-      const job = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
+      const job = (await asUser.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(asUser), collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
       expect(job).not.toHaveProperty('idempotencyKey')
       expect(job).not.toHaveProperty('requestFingerprint')
       expect(job).not.toHaveProperty('inputDigest')
@@ -514,7 +522,7 @@ describe('dataExport paginated queries', () => {
       expect(job).not.toHaveProperty('leaseExpiresAt')
       expect(job).not.toHaveProperty('checkpoint')
       expect(job).not.toHaveProperty('terminalReason')
-      const receipt = (await asUser.query(api.dataExport.getUserDataPage, { collection: 'learnLifecycleReceipts', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
+      const receipt = (await asUser.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(asUser), collection: 'learnLifecycleReceipts', paginationOpts: { cursor: null, numItems: 8 } })).page[0]
       expect(receipt).not.toHaveProperty('idempotencyKey')
       expect(receipt).not.toHaveProperty('requestFingerprint')
       expect(receipt).not.toHaveProperty('entityId')
@@ -545,7 +553,7 @@ describe('dataExport paginated queries', () => {
       })
     })
 
-    const first = await asUser.query(api.dataExport.getUserDataPage, {
+    const first = await asUser.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(asUser),
       collection: 'tasks',
       paginationOpts: { cursor: null, numItems: 1_000 },
     })
@@ -553,7 +561,7 @@ describe('dataExport paginated queries', () => {
     expect(first.isDone).toBe(false)
     expect(first.page.every(row => row.userId === USER_A.tokenIdentifier)).toBe(true)
 
-    const second = await asUser.query(api.dataExport.getUserDataPage, {
+    const second = await asUser.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(asUser),
       collection: 'tasks',
       paginationOpts: { cursor: first.continueCursor, numItems: 1_000 },
     })
@@ -561,7 +569,7 @@ describe('dataExport paginated queries', () => {
     expect(second.isDone).toBe(false)
     expect(second.page.every(row => row.userId === USER_A.tokenIdentifier)).toBe(true)
 
-    const third = await asUser.query(api.dataExport.getUserDataPage, {
+    const third = await asUser.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(asUser),
       collection: 'tasks',
       paginationOpts: { cursor: second.continueCursor, numItems: 1_000 },
     })
@@ -626,7 +634,7 @@ describe('dataExport paginated queries', () => {
       answers: [{ questionId: question!._id, response: 'A1' }],
     })
 
-    expect(await b.asUser.query(api.dataExport.getAttemptAnswersPage, {
+    expect(await b.asUser.query(api.dataExport.getAttemptAnswersPage, { authorizationId: await authorizeExport(b.asUser),
       attemptId: attempt.attemptId,
       paginationOpts: { cursor: null, numItems: 10 },
     })).toBeNull()
@@ -637,7 +645,7 @@ describe('dataExport paginated queries', () => {
       sourceType: 'folder',
       documentIds: [],
     })
-    expect(await b.asUser.query(api.dataExport.getCourseSourceDocsPage, {
+    expect(await b.asUser.query(api.dataExport.getCourseSourceDocsPage, { authorizationId: await authorizeExport(b.asUser),
       courseId: course.courseId,
       paginationOpts: { cursor: null, numItems: 10 },
     })).toBeNull()
@@ -896,7 +904,7 @@ describe('dataExport.getDocumentDownloadUrl', () => {
     const t = convexTest(schema, modules)
     const a = await seedUser(t, USER_A)
 
-    const result = await a.asUser.query(api.dataExport.getDocumentDownloadUrl, {
+    const result = await a.asUser.query(api.dataExport.getDocumentDownloadUrl, { authorizationId: await authorizeExport(a.asUser),
       documentId: a.docId,
     })
 
@@ -910,7 +918,7 @@ describe('dataExport.getDocumentDownloadUrl', () => {
     const a = await seedUser(t, USER_A)
     const bAsUser = t.withIdentity(USER_B)
 
-    const result = await bAsUser.query(api.dataExport.getDocumentDownloadUrl, {
+    const result = await bAsUser.query(api.dataExport.getDocumentDownloadUrl, { authorizationId: await authorizeExport(bAsUser),
       documentId: a.docId,
     })
 
