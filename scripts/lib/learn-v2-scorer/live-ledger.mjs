@@ -30,7 +30,7 @@ function usage(ledger, state, approvalDigest, adapter) {
 // The caller holds the fixed global dispatch lock throughout read, charge and
 // transport. Entries are immutable, fsynced, exclusively published artifacts;
 // every reservation remains charged, including unknown post-dispatch outcomes.
-export async function openLiveLedger(directory) {
+export async function openLiveLedger(directory, { recoveringDirectory } = {}) {
   const ledger = { directory, approvals: new Map(), reservations: new Map(), resolutions: new Map() }
   const names = readdirSync(directory).filter(name => !['.learn-v2-scorer-global.lock', 'unresolved.json'].includes(name))
   for (const name of names) assert.match(name, /^(?:(?:approval|reservation)-[a-f0-9]{64}|resolution-[a-f0-9]{64}(?:-[a-f0-9]{64})?)\.json$/, 'Interrupted or unknown global ledger entry requires reconciliation')
@@ -70,6 +70,22 @@ export async function openLiveLedger(directory) {
     ledger.reservations.set(name, reservation)
   }
   const runs = new Map()
+  // Approval consumption is the durable directory index, even if a reservation
+  // is lost before an observation or resolution can be published.
+  for (const claim of ledger.approvals.values()) {
+    if (!runs.has(claim.directory)) {
+      assert.ok(exists(claim.directory), 'Consumed approval run directory requires reconciliation')
+      const state = await openRun(claim.directory, { sealedOnly: true, expectedPinsDigest: claim.pinsDigest })
+      assert.equal(state.pins.mode, 'live')
+      assert.equal(state.directory, claim.directory, 'Consumed approval run directory changed')
+      runs.set(claim.directory, state)
+    }
+    const state = runs.get(claim.directory)
+    assert.equal(state.pins.budgetMicroUsd, claim.budgetMicroUsd, 'Consumed approval run budget changed')
+    // Only explicit recovery may read a reservation whose local intent has not
+    // yet been published. It restores that exact intent before verifying again.
+    verifyLiveRun(ledger, state, { allowMissingIntents: claim.directory === recoveringDirectory })
+  }
   for (const name of names.filter(name => name.startsWith('resolution-')).sort()) {
     const raw = readJson(join(directory, name))
     const entry = unseal(directory, name, 'live_dispatch_resolution', raw.pinsDigest)
@@ -81,11 +97,6 @@ export async function openLiveLedger(directory) {
     assert.equal(entry.pinsDigest, claim.pinsDigest)
     assert.equal(resolution.intentDigest, reservation.intentDigest)
     assert.ok(name === resolutionName(reservation) || name === resolutionName(reservation).replace('.json', `-${resolution.recordDigest.slice(7)}.json`))
-    if (!runs.has(claim.directory)) {
-      const state = await openRun(claim.directory, { sealedOnly: true, expectedPinsDigest: claim.pinsDigest })
-      verifyLiveRun(ledger, state)
-      runs.set(claim.directory, state)
-    }
     verifyResolution(runs.get(claim.directory), claim.pinsDigest, resolution)
     const previous = ledger.resolutions.get(reservationName(reservation))
     if (previous && previous.status !== 'still_unknown' && resolution.status !== 'still_unknown') assert.deepEqual(previous, resolution, 'Conflicting global resolutions')
@@ -158,10 +169,10 @@ function reservationFor(state, adapter, intent) {
     intent, reservationMicroUsd: intent.reservationMicroUsd }
 }
 
-export function verifyLiveRun(ledger, state) {
+export function verifyLiveRun(ledger, state, { allowMissingIntents = false } = {}) {
   const owned = [...ledger.reservations.values()].filter(reservation => sameRun(ledger.approvals.get(reservation.approvalDigest), state))
   const dispatched = [...state.intents.values()].filter(intent => intent.payload.dispatched)
-  assert.equal(owned.length, dispatched.length, 'Global reservation/local intent discrepancy requires reconciliation')
+  if (!allowMissingIntents) assert.equal(owned.length, dispatched.length, 'Global reservation/local intent discrepancy requires reconciliation')
   for (const intent of state.intents.values()) {
     assert.ok(intent.payload.approval, 'Live intent has no signed approval record')
     const claim = ledger.approvals.get(intent.payload.approval.approvalDigest)

@@ -109,13 +109,20 @@ async function dispatch(state, item, options) {
       const controller = new AbortController()
       let timer
       let transportStarted = false
+      let consistencyFailure
       try {
         const remaining = intent.payload.deadline - Date.now()
         if (remaining <= 0 || Date.now() >= approval.validUntil) raw = { failure: 'not_dispatched' }
         else {
           // Approval, publication and baseline preparation consume this same
           // lease. Recheck at the actual transport boundary after every await.
-          const infer = baselineRequest => {
+          const infer = async baselineRequest => {
+            try {
+              const ledger = await openLiveLedger(state.liveLedger.directory)
+              assert.deepEqual(unresolvedLiveDispatches(ledger).map(row => row.intentDigest), [intent.digest],
+                'Global dispatch outcome requires reconciliation')
+            }
+            catch (error) { consistencyFailure = error; throw error }
             if (controller.signal.aborted || Date.now() >= intent.payload.deadline || Date.now() >= approval.validUntil) return { failure: 'not_dispatched' }
             transportStarted = true
             return liveInfer(adapter, intent.payload.request, controller.signal, baselineRequest)
@@ -126,6 +133,9 @@ async function dispatch(state, item, options) {
                 registry: state.registry, startedAt, clock: Date.now, infer }).then(value => value.raw)
             : Promise.resolve(infer())
           raw = await Promise.race([operation.catch(() => ({ failure: 'outcome_unknown' })), deadline])
+          // The baseline service can translate an inference rejection into a
+          // transport result. A ledger gap must still abort this invocation.
+          if (consistencyFailure) throw consistencyFailure
         }
         if (!transportStarted && (Date.now() >= intent.payload.deadline || Date.now() >= approval.validUntil)) raw = { failure: 'not_dispatched' }
         else if (transportStarted && raw.failure === 'not_dispatched') raw = { failure: 'definitive_failure' }
@@ -234,7 +244,7 @@ export async function reconcileLive(path, id, options) {
   return exclusiveLock(global, '.learn-v2-scorer-global.lock', () => exclusiveLock(outputDirectory(path), '.run.lock', async () => {
     let state = await openRecoveryRun(path)
     assert.equal(state.pins.mode, 'live')
-    const ledger = await openLiveLedger(global)
+    const ledger = await openLiveLedger(global, { recoveringDirectory: state.directory })
     if (state.sealedOnly) {
       verifyLiveRun(ledger, state)
       const intent = state.intents.get(id)

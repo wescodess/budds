@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { generateKeyPairSync, sign } from 'node:crypto'
-import fs, { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import fs, { chmodSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { mock, test } from 'node:test'
@@ -12,9 +12,23 @@ registerScorerImports()
 forbidNetwork()
 const adapters = await import('./adapters.mjs')
 const contract = await import('./contract.mjs')
-// Regenerate and verify the fixed corpus once per subprocess. Each consumer
-// gets an isolated clone; the CLI/corpus suites also regenerate independently.
-const verifiedCorpus = await contract.corpusInputs()
+function immutable(value) {
+  if (value && typeof value === 'object') {
+    for (const child of Object.values(value)) immutable(child)
+    Object.freeze(value)
+  }
+  return value
+}
+
+// Compute fixture inputs with the real functions once, then share only frozen
+// values. Mutable manifests/maps/files stay isolated. CLI coverage is uncached.
+const verifiedCorpus = immutable(await contract.corpusInputs())
+const verifiedImplementation = immutable(artifacts.implementationPins())
+const fixtureClock = Date.now()
+const runFixtures = new Map()
+const schedules = new Map()
+const requests = new Map()
+const requestDigests = new WeakMap()
 let globalDirectory
 let interruptIntent = false
 let outcome = 'valid'
@@ -35,7 +49,8 @@ let beforeBaselineTransport = null
 // Keep the production CLI's fixed global path and transport unchanged. Native
 // module mocks isolate this test process and deny every real network entry.
 mock.module(new URL('./artifacts.mjs', import.meta.url).href, { namedExports: { ...artifacts,
-  implementationPins: () => ({ ...artifacts.implementationPins(), ...revision }),
+  hash: value => requestDigests.get(value) ?? artifacts.hash(value),
+  implementationPins: () => ({ ...verifiedImplementation, ...revision }),
   outputDirectory: path => artifacts.outputDirectory(path === '/tmp/budds-learn-v2-scorer-live' ? globalDirectory : path),
   seal(...args) {
     if (interruptIntent && args[2] === 'dispatch_intent') throw new Error('Simulated interruption before local intent')
@@ -62,10 +77,28 @@ mock.module(new URL('./artifacts.mjs', import.meta.url).href, { namedExports: { 
   },
 } })
 mock.module(new URL('./contract.mjs', import.meta.url).href, { namedExports: { ...contract,
-  corpusInputs: async () => structuredClone(verifiedCorpus),
-  runPins: options => ({ ...contract.runPins(options), implementation: { ...artifacts.implementationPins(), ...revision } }),
+  corpusInputs: async () => verifiedCorpus,
+  runPins: options => ({ ...contract.runPins(options), implementation: { ...verifiedImplementation, ...revision } }),
+  schedule(corpus, sources, seed, adapters) {
+    // The corpus mock fixes both corpus and sources. Reuse the real schedule
+    // for each seed/adapter combination; callers cannot mutate this input.
+    const key = artifacts.hash([seed, adapters])
+    if (!schedules.has(key)) schedules.set(key, immutable(contract.schedule(corpus, sources, seed, adapters)))
+    return schedules.get(key)
+  },
 } })
 mock.module(new URL('./adapters.mjs', import.meta.url).href, { namedExports: { ...adapters,
+  requestFor(adapter, blind) {
+    const key = artifacts.canonical(adapter)
+    if (!requests.has(key)) requests.set(key, new WeakMap())
+    const cache = requests.get(key)
+    if (!cache.has(blind)) {
+      const request = immutable(adapters.requestFor(adapter, blind))
+      cache.set(blind, request)
+      requestDigests.set(request, artifacts.hash(request))
+    }
+    return cache.get(blind)
+  },
   baselineExecution(options) {
     return adapters.baselineExecution({ ...options, ...(options.infer ? { infer: (...args) => {
       beforeBaselineTransport?.()
@@ -134,16 +167,21 @@ async function workspace(t, approvalDurationMs = 600000) {
   entry.upstream = 'OpenAI'
   entry.transportEndpoint = 'https://gateway.ai.cloudflare.com/v1/approval-contract-account/approval-contract-gateway/openrouter/v1/chat/completions'
   entry.inventoryEvidence = 'owner-recorded-inventory'
-  const clock = Date.now()
+  const clock = fixtureClock
   let now = clock
   const clockMock = mock.method(Date, 'now', () => now)
   t.after(() => clockMock.mock.restore())
   const options = { mode: 'live', fixture: null, inventory, clock, seed: 'approval-contract-shuffle-v1',
     budgetMicroUsd: 100000, priceAccessDate: new Date(clock).toISOString().slice(0, 10) }
   const createRun = async name => {
-    const directory = await initialize({ ...options, output: join(parent, name) })
-    const manifest = readJson(join(directory, 'manifest.json'))
-    const plan = await planRun(directory)
+    const directory = outputDirectory(join(parent, name))
+    const key = hash([options, revision])
+    if (!runFixtures.has(key)) {
+      await initialize({ ...options, output: directory })
+      runFixtures.set(key, { manifest: readJson(join(directory, 'manifest.json')), plan: await planRun(directory) })
+    }
+    const { manifest, plan } = structuredClone(runFixtures.get(key))
+    artifacts.seal(directory, 'manifest.json', 'manifest', manifest.pinsDigest, manifest.payload)
     return { directory, pins: manifest.payload, pinsDigest: plan.pinsDigest, plan: plan.requests, intents: new Map() }
   }
   const { publicKey, privateKey } = generateKeyPairSync('ed25519')
@@ -176,6 +214,121 @@ function advanceRevision() {
   revision = { repositoryCommit: '1'.repeat(40), files: { ...implementation.files,
     'pnpm-lock.yaml': hash('next lockfile'), 'scripts/lib/learn-v2-scorer/adapters.mjs': hash('next adapter implementation') } }
 }
+
+function lossPath(state, id, kind) {
+  if (kind === 'run-directory') return state.directory
+  if (kind === 'local-intent') return join(state.directory, `${id}.intent.json`)
+  const prefix = kind === 'consumption' ? 'approval-' : 'reservation-'
+  return join(globalDirectory, readdirSync(globalDirectory).find(name => name.startsWith(prefix)
+    && (kind === 'consumption' || readJson(join(globalDirectory, name)).payload.id === id)))
+}
+
+for (const kind of ['reservation', 'local-intent', 'consumption', 'run-directory']) {
+  test(`A6 consumed run: lost ${kind} blocks a separately approved run`, async t => {
+    for (const gap of ['missing', 'unreadable', 'mismatched']) await t.test(gap, async t => {
+      const { createRun, approve } = await workspace(t)
+      const first = await createRun('unresolved')
+      const second = await createRun('separately-approved')
+      const nextApproval = approve(second, 'distinct')
+      const id = first.plan[0].id
+      publicationFailures.add('dispatch_observation')
+      await assert.rejects(dispatchLive(first.directory, id, approve(first, 'original')), /Simulated/)
+      publicationFailures.clear()
+      assert.equal(calls.length, 1)
+      assert.ok(!artifacts.exists(join(globalDirectory, 'unresolved.json')))
+      assert.ok(!readdirSync(globalDirectory).some(name => name.startsWith('resolution-')))
+      const path = lossPath(first, id, kind)
+      const evidence = kind === 'run-directory' ? join(path, 'manifest.json') : path
+      if (gap === 'missing') rmSync(path, { recursive: true })
+      if (gap === 'unreadable') chmodSync(evidence, 0o000)
+      if (gap === 'mismatched') {
+        const value = readJson(evidence)
+        value.payload.changed = true
+        writeFileSync(evidence, `${canonical(value)}\n`)
+      }
+      calls.length = 0
+      try {
+        await assert.rejects(openLiveLedger(globalDirectory), undefined, 'Admission must detect the gap, even without a resolution or marker')
+        await assert.rejects(dispatchLive(second.directory, second.plan[0].id, nextApproval))
+        assert.equal(calls.length, 0)
+        assert.equal(metadataCalls.length, 0)
+        if (kind === 'run-directory' && gap === 'missing') assert.ok(!artifacts.exists(path), 'Admission cannot recreate a lost run directory')
+      }
+      finally { if (gap === 'unreadable') chmodSync(evidence, 0o600) }
+    })
+  })
+}
+
+test('A6 control: a fully resolved consumed run with intact files permits a separate approval', async t => {
+  const { createRun, approve } = await workspace(t)
+  const first = await createRun('resolved')
+  await dispatchLive(first.directory, first.plan[0].id, approve(first, 'original'))
+  const consumption = readJson(lossPath(first, first.plan[0].id, 'consumption'))
+  assert.equal(consumption.payload.directory, first.directory, 'Consumption durably indexes its run directory')
+  const second = await createRun('separately-approved')
+  calls.length = 0
+  await dispatchLive(second.directory, second.plan[0].id, approve(second, 'distinct'))
+  assert.equal(calls.length, 1)
+  assert.equal(metadataCalls.length, 0)
+  assert.equal(unresolvedLiveDispatches(await openLiveLedger(globalDirectory)).length, 0)
+})
+
+test('A6 consumption: a claim without a reservation still requires its matching local manifest', async t => {
+  for (const change of ['budget', 'mode', 'directory']) await t.test(change, async t => {
+    const { createRun, approve } = await workspace(t)
+    const first = await createRun('consumed-only')
+    earlyFailures.add('live_dispatch_reservation')
+    await assert.rejects(dispatchLive(first.directory, first.plan[0].id, approve(first, 'original')), /Simulated/)
+    earlyFailures.clear()
+    const path = lossPath(first, first.plan[0].id, 'consumption')
+    if (change === 'budget') rewrite(path, value => { value.payload.budgetMicroUsd++ })
+    if (change === 'mode') {
+      const manifest = rewrite(join(first.directory, 'manifest.json'), value => {
+        value.payload.mode = 'offline'
+        value.pinsDigest = hash(value.payload)
+      })
+      rewrite(path, value => { value.pinsDigest = value.payload.pinsDigest = manifest.pinsDigest })
+    }
+    if (change === 'directory') {
+      renameSync(first.directory, `${first.directory}-moved`)
+      symlinkSync(`${first.directory}-moved`, first.directory, 'dir')
+    }
+    const second = await createRun('separately-approved')
+    await assert.rejects(openLiveLedger(globalDirectory))
+    await assert.rejects(dispatchLive(second.directory, second.plan[0].id, approve(second, 'distinct')))
+    assert.equal(calls.length, 0)
+  })
+})
+
+test('A6 dispatch boundary: file loss after admission prevents every transport', async t => {
+  for (const role of ['baseline', 'claude', 'gemini', 'baseline-preparation']) {
+    for (const kind of ['reservation', 'local-intent', 'consumption', 'run-directory']) await t.test(`${role}/${kind}`, async t => {
+      const { state, approval, id } = await canary(t, role === 'baseline-preparation' ? 'baseline' : role)
+      calls.length = 0
+      const lose = () => rmSync(lossPath(state, id, kind), { recursive: true })
+      if (role === 'baseline-preparation') beforeBaselineTransport = lose
+      else afterIntent = lose
+      await assert.rejects(dispatchLive(state.directory, id, approval))
+      afterIntent = null
+      beforeBaselineTransport = null
+      assert.equal(calls.length, 0, 'The final consistency check must precede transport')
+      assert.equal(metadataCalls.length, 0)
+    })
+  }
+})
+
+test('A6 dispatch boundary: a newly lost historical resolution blocks the pending dispatch', async t => {
+  const { createRun, approve } = await workspace(t)
+  const first = await createRun('resolved')
+  await dispatchLive(first.directory, first.plan[0].id, approve(first, 'original'))
+  const second = await createRun('pending')
+  const path = join(globalDirectory, readdirSync(globalDirectory).find(name => name.startsWith('resolution-')))
+  afterIntent = () => rmSync(path)
+  calls.length = 0
+  await assert.rejects(dispatchLive(second.directory, second.plan[0].id, approve(second, 'distinct')), /requires reconciliation/)
+  afterIntent = null
+  assert.equal(calls.length, 0)
+})
 
 test('A4 historical pins: a separately approved fresh run dispatches after commit, source and lockfile changes', async t => {
   const { createRun, approve } = await workspace(t)
@@ -291,7 +444,7 @@ test('A5 own recovery: an older reservation without a local intent never auto-re
   await assert.rejects(reconcileLive(old.directory, old.plan[0].id, approval))
   const fresh = await createRun('fresh')
   await assert.rejects(dispatchLive(fresh.directory, fresh.plan[0].id, approve(fresh, 'fresh')), /requires reconciliation/)
-  assert.equal(unresolvedLiveDispatches(await openLiveLedger(globalDirectory)).length, 1)
+  await assert.rejects(openLiveLedger(globalDirectory), /discrepancy requires reconciliation/)
   assert.equal(calls.length, 0)
   assert.equal(metadataCalls.length, 0)
 })
@@ -564,13 +717,13 @@ test('256 model/configuration reservations accumulate across runs and distinct a
     const approval = approve(state, `cap-${index}`).record
     for (let ordinal = 0; ordinal < 128; ordinal++) {
       const intent = { id: `item_${hash([index, ordinal]).slice(7, 39)}`, approval, dispatched: true, reservationMicroUsd: 100 }
-      assert.equal(reserveLiveDispatch(ledger, state, adapter, intent), true)
+      assert.equal(reserveFixture(ledger, state, adapter, intent), true)
     }
   }
   assert.equal((await openLiveLedger(globalDirectory)).reservations.size, 256)
   const nextApproval = approve(next, 'cap-next')
   const reopened = await openLiveLedger(globalDirectory)
-  assert.throws(() => reserveLiveDispatch(reopened, next, adapter,
+  assert.throws(() => reserveFixture(reopened, next, adapter,
     { id: next.plan[0].id, approval: nextApproval.record, dispatched: true, reservationMicroUsd: 100 }), /Global per-model\/configuration dispatch ceiling/)
   await assert.rejects(dispatchLive(next.directory, next.plan[0].id, nextApproval), /requires reconciliation/)
   assert.equal(calls.length, 0)
@@ -584,10 +737,15 @@ test('the global budget survives reopening and a new approval for the original r
   // Exercise the ledger's finite boundary independently of admission's stricter
   // full-schedule cost check. No provider dispatch is authorized by this probe.
   state.pins.budgetMicroUsd = 150
+  state.pinsDigest = hash(state.pins)
+  rewrite(join(state.directory, 'manifest.json'), value => {
+    value.payload = state.pins
+    value.pinsDigest = state.pinsDigest
+  })
   const first = { id: `item_${'1'.repeat(32)}`, approval: approve(state, 'budget-first').record, dispatched: true, reservationMicroUsd: 100 }
-  assert.equal(reserveLiveDispatch((await openLiveLedger(globalDirectory)), state, adapter, first), true)
+  assert.equal(reserveFixture((await openLiveLedger(globalDirectory)), state, adapter, first), true)
   const next = { ...first, id: `item_${'2'.repeat(32)}`, approval: approve(state, 'budget-next').record }
-  assert.equal(reserveLiveDispatch((await openLiveLedger(globalDirectory)), state, adapter, next), false)
+  assert.equal(reserveFixture((await openLiveLedger(globalDirectory)), state, adapter, next), false)
   const ledger = (await openLiveLedger(globalDirectory))
   assert.equal(ledger.reservations.size, 1)
   assert.equal([...ledger.reservations.values()][0].reservationMicroUsd, 100)
@@ -614,7 +772,7 @@ test('an interruption between global charging and the local intent fails closed 
   interruptIntent = true
   await assert.rejects(dispatchLive(state.directory, state.plan[0].id, approval), /Simulated interruption/)
   interruptIntent = false
-  assert.equal((await openLiveLedger(globalDirectory)).reservations.size, 1)
+  await assert.rejects(openLiveLedger(globalDirectory), /discrepancy requires reconciliation/)
   await assert.rejects(dispatchLive(state.directory, state.plan[0].id, approval), /requires reconciliation/)
   assert.equal(calls.length, 0)
 })
@@ -647,7 +805,7 @@ test('removing a global reservation cannot reset an original run to an uncharged
   await dispatchLive(state.directory, state.plan[0].id, approval)
   const name = readdirSync(globalDirectory).find(name => name.startsWith('reservation-'))
   rmSync(join(globalDirectory, name))
-  await assert.rejects(dispatchLive(state.directory, state.plan[1].id, approval), /Global resolution has no dispatch reservation/)
+  await assert.rejects(dispatchLive(state.directory, state.plan[1].id, approval), /discrepancy requires reconciliation/)
   assert.equal(calls.length, 1)
 })
 
@@ -843,6 +1001,17 @@ function rewrite(path, mutate) {
   return value
 }
 
+function reserveFixture(ledger, state, adapter, intent) {
+  const request = { body: '{}' }
+  const payload = { ...intent, adapter: adapter.id, request, requestDigest: hash(request), responseDigest: hash('synthetic'),
+    startedAt: state.pins.clock, deadline: state.pins.clock + 90_000, thresholdDigest: null,
+    approval: { ...intent.approval, reservationMicroUsd: intent.reservationMicroUsd, validUntil: state.pins.clock + 600_000,
+      quote: { id: intent.id, requestDigest: hash(request), maximumMicroUsd: intent.reservationMicroUsd } } }
+  const reserved = reserveLiveDispatch(ledger, state, adapter, payload)
+  if (reserved) artifacts.seal(state.directory, `${intent.id}.intent.json`, 'dispatch_intent', state.pinsDigest, payload)
+  return reserved
+}
+
 async function assertBlocked(setup, inferenceCalls) {
   const second = await setup.createRun(`blocked-${inferenceCalls}`)
   await assert.rejects(dispatchLive(second.directory, second.plan[0].id, setup.approve(second, 'distinct')))
@@ -865,7 +1034,7 @@ test('crash table: approval and reservation publication before transport retain 
     await assert.rejects(dispatchLive(state.directory, state.plan[0].id, approval), /Simulated early/)
     failures.clear()
     assert.equal(calls.length, before)
-    const ledger = await openLiveLedger(globalDirectory)
+    const ledger = await openLiveLedger(globalDirectory, { recoveringDirectory: state.directory })
     if (kind === 'live_dispatch_reservation' && afterWrite) {
       assert.equal(unresolvedLiveDispatches(ledger).length, 1)
       await assert.rejects(dispatchLive(state.directory, state.plan[0].id, approval), /requires reconciliation/)
@@ -1222,7 +1391,7 @@ test('crash table: recovery publication can fail again without losing the origin
     await assert.rejects(reconcileLive(state.directory, id, approval), /Simulated/)
     interruptIntent = false
     publicationFailures.clear()
-    assert.equal([...((await openLiveLedger(globalDirectory)).reservations.values())][0].reservationMicroUsd, 100)
+    assert.equal([...((await openLiveLedger(globalDirectory, { recoveringDirectory: state.directory })).reservations.values())][0].reservationMicroUsd, 100)
     const summary = await reconcileLive(state.directory, id, approval)
     assert.equal(summary.reconciliation, point === 'restore-intent' ? 'still_unknown' : 'resolved')
     assert.equal(calls.length, point === 'restore-intent' ? 0 : 1)

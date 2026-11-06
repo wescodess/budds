@@ -7,6 +7,7 @@ import { basename, join } from 'node:path'
 import { test } from 'node:test'
 import { ROOT, canonical, hash, readJson, exclusiveLock } from './artifacts.mjs'
 import { registerScorerImports } from './runtime.mjs'
+import { LEDGER_EXIT_TEST_NAME, ledgerPartitions, runLedgerPartition } from './ledger-exit.mjs'
 
 registerScorerImports()
 const { blindRow, corpusInputs, THRESHOLD_POLICY } = await import('./contract.mjs')
@@ -414,22 +415,6 @@ test('the reconcile CLI refuses an offline run without inference or metadata acc
   assert.equal(names(directory, '.reconciled.json').length, 0)
 })
 
-test('the global approval ledger exit regressions use isolated mock adapters with network denied', t => {
-  // Complementary filters keep every case while bounding each serial child
-  // below the existing timeout, including on slower CI/extracted checkouts.
-  const partition = '^(?:A3 M1 and crash table|A5)'
-  for (const [index, filter] of ['--test-name-pattern', '--test-skip-pattern'].entries()) {
-    const started = performance.now()
-    const result = spawnSync(process.execPath, ['--experimental-test-module-mocks', '--import', join(fixtures, 'network-deny.mjs'),
-      '--test', '--test-reporter=tap', '--test-concurrency=1', `${filter}=${partition}`, join(ROOT, 'scripts/lib/learn-v2-scorer/live-ledger.test.mjs')], {
-      cwd: ROOT, env: Object.fromEntries(Object.entries(env).filter(([key]) => key !== 'NODE_TEST_CONTEXT')),
-      encoding: 'utf8', timeout: 360_000, maxBuffer: 2_000_000,
-    })
-    assert.equal(result.error, undefined, `${result.error?.message}\n${result.stdout}\n${result.stderr}`)
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
-    assert.match(result.stdout, index === 0 ? /A3 M1 and crash table/ : /one signed approval cannot dispatch in two directories/)
-    const count = result.stdout.match(/^# tests (\d+)$/m)?.[1]
-    assert.ok(Number(count) > 0, 'Each ledger partition must run tests')
-    t.diagnostic(`Ledger partition ${index + 1}: ${count} tests in ${(performance.now() - started).toFixed(0)} ms`)
-  }
+test(LEDGER_EXIT_TEST_NAME, t => {
+  for (const partition of ledgerPartitions) t.diagnostic(runLedgerPartition(partition))
 })
