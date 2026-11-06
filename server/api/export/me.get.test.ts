@@ -4,7 +4,8 @@ import { unzipSync, strFromU8 } from 'fflate'
 import { convexTest } from 'convex-test'
 import { api, internal } from '../../../convex/_generated/api'
 import schema from '../../../convex/schema'
-import { seedMeasurementStorage, STORAGE_CANARIES } from '../../../tests/fixtures/learn-v2-measurement-storage'
+import { LINEAGE_EXPORT_FIELDS, seedMeasurementStorage, STORAGE_CANARIES } from '../../../tests/fixtures/learn-v2-measurement-storage'
+import { authorizeExport } from '../../../tests/fixtures/learn-v2-personal-export'
 import { ADAPTIVE_LEARN_EXPORT_COLLECTIONS } from '../../../shared/adaptive-learn-storage-manifest'
 import { LEARN_MEASUREMENT_STORAGE_MANIFEST, LEARN_MEASUREMENT_COLLECTIONS } from '../../../shared/learn-v2-measurement-storage-manifest'
 import { LEARN_V2_MEASUREMENT_REPORT_VERSION, LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION } from '../../../shared/learn-v2-measurement-report'
@@ -150,6 +151,8 @@ describe('GET /api/export/me', () => {
 
   test('ZIP and Convex share the classified collection inventory and preserve every audited content projection', async () => {
     expect(EXPORT_COLLECTIONS).toBe(PERSONAL_EXPORT_COLLECTIONS)
+    expect(EXPORT_COLLECTIONS).toHaveLength(126)
+    expect(PERSONAL_EXPORT_CONTENT_COLLECTIONS).toHaveLength(39)
     expect(new Set(PERSONAL_EXPORT_CONTENT_CASES.map(([collection]) => collection))).toEqual(new Set(PERSONAL_EXPORT_CONTENT_COLLECTIONS))
     vi.stubEnv('LEARN_V2_ENABLED', 'false')
     const t = convexTest(schema, import.meta.glob('../../../convex/**/*.ts'))
@@ -180,12 +183,15 @@ describe('GET /api/export/me', () => {
   })
 
   test('pages the real owned Phase C records through ZIP with the same safe projections', async () => {
+    vi.stubEnv('LEARN_V2_ENABLED', 'false')
     const identity = { tokenIdentifier: 'https://auth.example.com|zip-owner' }
     const t = convexTest(schema, import.meta.glob('../../../convex/**/*.ts'))
     const f = await t.run(ctx => seedMeasurementStorage(ctx, identity.tokenIdentifier))
     const other = await t.run(ctx => seedMeasurementStorage(ctx, 'https://other.example.com|zip-owner'))
     await t.run(async ctx => {
-      await ctx.db.patch(f.rows.learnArtifactLineages, { nextId: f.rows.learnArtifactLineages })
+      await ctx.db.patch(f.rows.learnArtifactLineages, { nextId: f.rows.learnArtifactLineages, invalidatedAt: 0 })
+      await ctx.db.patch(f.rows.learnArtifactValidations, { invalidatedAt: 0 })
+      await ctx.db.patch(f.rows.learnArtifactSourceLinks, { invalidatedAt: 0 })
       const legacy = await ctx.db.get(f.rows.learnResponses)
       if (!legacy || !('baselineEpoch' in legacy)) throw new Error('Missing fixture response')
       const { _id: _id, _creationTime: _creationTime, baselineEpoch: _epoch, flow: _flow, ...fields } = legacy
@@ -222,6 +228,7 @@ describe('GET /api/export/me', () => {
     getCourseSourceDocsPageMock.mockImplementation(args => asUser.query(api.dataExport.getCourseSourceDocsPage, args))
     getDocumentDownloadUrlMock.mockResolvedValue(null)
     const entries = unzipSync(await handler(makeEvent('fixture-jwt')))
+    const authorizationId = await authorizeExport(asUser)
     for (const entry of LEARN_MEASUREMENT_STORAGE_MANIFEST) {
       const rows = JSON.parse(strFromU8(entries[`${entry.table}.json`]!))
       if (entry.export === 'withheld') expect(rows).toEqual([])
@@ -230,6 +237,15 @@ describe('GET /api/export/me', () => {
       for (const key of [...Object.values(f.reportKeys), ...Object.values(other.reportKeys)]) expect(serialized).not.toContain(key)
       expect(serialized).not.toContain(other.rows[entry.table])
       if (entry.table.startsWith('learnArtifact')) {
+        const collection = entry.table as keyof typeof LINEAGE_EXPORT_FIELDS
+        const allowed = ['_id', '_creationTime', 'createdAt', ...LINEAGE_EXPORT_FIELDS[collection]]
+        const stored = await t.run(ctx => ctx.db.query(collection).withIndex('by_userId', q => q.eq('userId', identity.tokenIdentifier)).take(8))
+        expect(rows).toEqual(stored.map(row => Object.fromEntries(allowed.flatMap(name => {
+          const value = (row as unknown as Record<string, unknown>)[name]
+          return value === undefined ? [] : [[name, value]]
+        }))))
+        const direct = await asUser.query(api.dataExport.getUserDataPage, { authorizationId, collection, paginationOpts: { cursor: null, numItems: 8 } })
+        expect(rows).toEqual(direct.page)
         for (const field of ['artifact', 'payloadDigest', 'manifestDigest', 'lineageId', 'originLineageId', 'caseId', 'validationId', 'dependency', 'authorityVersion', 'nextId']) {
           expect(rows.every((row: Record<string, unknown>) => !Object.hasOwn(row, field))).toBe(true)
         }
