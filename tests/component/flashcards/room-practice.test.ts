@@ -4,6 +4,7 @@ import { flushPromises } from '@vue/test-utils'
 import { mockMatchMedia } from '../../support/match-media'
 
 const practicePath = ['~', 'components', 'flashcards', 'RoomPractice.vue'].join('/')
+const stubs = { Motion: { template: '<div><slot /></div>' } }
 
 function sampleCards() {
   return [
@@ -38,6 +39,7 @@ describe('RoomPractice', () => {
   it('[P0] renders first card front with progress 1 / N', async () => {
     const RoomPractice = await import(practicePath)
     const wrapper = await mountSuspended(RoomPractice.default, {
+      global: { stubs },
       props: { cards: sampleCards() },
     })
     await flushPromises()
@@ -49,6 +51,7 @@ describe('RoomPractice', () => {
   it('[P0] clicking viewer flips to definition', async () => {
     const RoomPractice = await import(practicePath)
     const wrapper = await mountSuspended(RoomPractice.default, {
+      global: { stubs },
       props: { cards: sampleCards() },
     })
     await flushPromises()
@@ -64,6 +67,7 @@ describe('RoomPractice', () => {
   it('[P0] Next advances, Previous retreats; Previous disabled at index 0', async () => {
     const RoomPractice = await import(practicePath)
     const wrapper = await mountSuspended(RoomPractice.default, {
+      global: { stubs },
       props: { cards: sampleCards() },
     })
     await flushPromises()
@@ -83,6 +87,7 @@ describe('RoomPractice', () => {
   it('[P0] advancing past last card shows completion', async () => {
     const RoomPractice = await import(practicePath)
     const wrapper = await mountSuspended(RoomPractice.default, {
+      global: { stubs },
       props: { cards: sampleCards() },
     })
     await flushPromises()
@@ -98,6 +103,7 @@ describe('RoomPractice', () => {
   it('[P0] Reset returns to card 0, front-side', async () => {
     const RoomPractice = await import(practicePath)
     const wrapper = await mountSuspended(RoomPractice.default, {
+      global: { stubs },
       props: { cards: sampleCards() },
     })
     await flushPromises()
@@ -117,6 +123,7 @@ describe('RoomPractice', () => {
 
     // Run 1
     const wrapper1 = await mountSuspended(RoomPractice.default, {
+      global: { stubs },
       props: { cards: sampleCards(), seedForTests: 42 },
     })
     await flushPromises()
@@ -126,6 +133,7 @@ describe('RoomPractice', () => {
 
     // Run 2
     const wrapper2 = await mountSuspended(RoomPractice.default, {
+      global: { stubs },
       props: { cards: sampleCards(), seedForTests: 42 },
     })
     await flushPromises()

@@ -2,6 +2,7 @@
 import { History } from '@lucide/vue'
 import type { Id } from '../../../convex/_generated/dataModel'
 import type { AttemptHistoryItem } from '~/composables/useQuizHistory'
+import { QUIZ_RESULT_LABELS } from '~/utils/quiz-results'
 
 defineProps<{
   attempts: AttemptHistoryItem[]
@@ -12,6 +13,13 @@ const emit = defineEmits<{
 }>()
 
 const open = ref(false)
+
+function provisionalLabel({ status, gradingStatus, gradingNeedsAttention }: AttemptHistoryItem) {
+  if (status !== 'completed') return null
+  if (gradingStatus === 'grading') return QUIZ_RESULT_LABELS.checking
+  if (gradingStatus === 'settled' && gradingNeedsAttention) return QUIZ_RESULT_LABELS.your_call
+  return null
+}
 
 function scoreColor(percentage: number) {
   if (percentage >= 80) return 'bg-green-500/20 text-green-500'
@@ -50,9 +58,16 @@ function formatTime(ts: number) {
         >
           <div class="flex flex-col gap-0.5">
             <span class="text-xs text-muted-foreground">{{ formatDate(attempt.startedAt) }} at {{ formatTime(attempt.startedAt) }}</span>
-            <span class="text-xs text-muted-foreground">{{ attempt.score }}/{{ attempt.total }}</span>
+            <span class="text-xs text-muted-foreground">{{ attempt.score }}/{{ attempt.total }}<template v-if="provisionalLabel(attempt)"> so far</template></span>
           </div>
           <span
+            v-if="provisionalLabel(attempt)"
+            class="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground"
+          >
+            {{ provisionalLabel(attempt) }}
+          </span>
+          <span
+            v-else
             class="rounded-full px-2 py-0.5 text-xs font-medium"
             :class="scoreColor(attempt.percentage)"
           >

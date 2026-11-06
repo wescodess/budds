@@ -4,7 +4,10 @@ import { internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import type { MutationCtx, QueryCtx } from './_generated/server'
 import { getOptionalAuthUserId, requireAuth } from './lib/auth'
-import { createPendingAnswerAssessment } from './lib/quizAnswerAssessment'
+import { QUIZ_RUBRIC_GRADE_VERSION, quizGradingCriterionValidator } from '../shared/quiz-grading'
+import { validatedQuestionGradingCriteria } from './lib/quizQuestionGrading'
+import { createPendingAnswerAssessment, isQuizGradingEnabled, isRubricAssessment, projectLearnerQuizQuestion, projectQuizGrade } from './lib/quizAnswerAssessment'
+import { getQuizAttemptAnswers, getQuizAttemptAssessments, getQuizGradingState, isQuizGradingParentEligible, scheduleQuizGrading } from './lib/quizGrading'
 
 const MAX_QUIZ_QUESTIONS = 200
 const MAX_QUIZZES_PER_FOLDER = 100
@@ -24,6 +27,7 @@ const questionInput = v.object({
   type: questionTypeValidator,
   options: v.optional(v.array(v.string())),
   correctAnswer: v.string(),
+  gradingCriteria: v.optional(v.array(quizGradingCriterionValidator)),
   explanation: v.optional(v.string()),
   sourceDocumentId: v.optional(v.string()),
   sourceChunkContent: v.optional(v.string()),
@@ -40,6 +44,42 @@ async function requireQuiz(ctx: QueryCtx | MutationCtx, quizId: Id<'quizzes'>, u
   const quiz = await ctx.db.get(quizId)
   if (!quiz || quiz.userId !== userId || quiz.deletedAt !== undefined) throw new Error('Quiz not found')
   return quiz
+}
+
+async function requireQuizForSubmission(ctx: MutationCtx, quizId: Id<'quizzes'>, userId: string, attemptId?: Id<'quizAttempts'>) {
+  const quiz = await requireQuiz(ctx, quizId, userId)
+  const gradingEnabled = isQuizGradingEnabled()
+  // Stored rubric work keeps its parent fence when new grading is switched off.
+  const storedRubric = !gradingEnabled && attemptId
+    ? await ctx.db.query('quizAnswerAssessments')
+      .withIndex('by_attemptId_and_rubricVersion_and_status', q => q.eq('attemptId', attemptId).eq('rubricVersion', QUIZ_RUBRIC_GRADE_VERSION)).first()
+    : null
+  if ((gradingEnabled || storedRubric) && !await isQuizGradingParentEligible(ctx, quiz)) {
+    throw new Error('Course quiz is unavailable for grading')
+  }
+  return quiz
+}
+
+async function getAnswerGradingPending(ctx: MutationCtx, attemptAnswerId: Id<'attemptAnswers'>) {
+  const row = await ctx.db.query('quizAnswerAssessments')
+    .withIndex('by_attemptAnswerId', q => q.eq('attemptAnswerId', attemptAnswerId)).unique()
+  return isRubricAssessment(row) || isQuizGradingEnabled()
+    ? { gradingPending: isRubricAssessment(row) && row?.status === 'pending' }
+    : {}
+}
+
+async function getAttemptGradingState(ctx: MutationCtx, attemptId: Id<'quizAttempts'>, gradingQuestionIds: Id<'quizQuestions'>[]) {
+  const attempt = await ctx.db.get(attemptId)
+  if (!attempt) return undefined
+  if (!isQuizGradingEnabled()) {
+    const storedRubric = await ctx.db.query('quizAnswerAssessments')
+      .withIndex('by_attemptId_and_rubricVersion_and_status', q => q.eq('attemptId', attemptId).eq('rubricVersion', QUIZ_RUBRIC_GRADE_VERSION)).first()
+    if (!storedRubric) return undefined
+  }
+  const frozen = { ...attempt, gradingQuestionIds }
+  const answers = await getQuizAttemptAnswers(ctx, frozen)
+  const rows = await getQuizAttemptAssessments(ctx, frozen, answers)
+  return getQuizGradingState(rows)
 }
 
 function normalizeForCompare(value: string): string {
@@ -188,6 +228,7 @@ export const createWithQuestions = mutation({
         type: q.type,
         options: q.options,
         correctAnswer: q.correctAnswer,
+        gradingCriteria: validatedQuestionGradingCriteria(q.type, q.gradingCriteria),
         explanation: q.explanation,
         sourceDocumentId: resolvedDocId,
         sourceChunkContent: q.sourceChunkContent,
@@ -201,6 +242,7 @@ export const createWithQuestions = mutation({
 
 export const createCourseScopedQuiz = internalMutation({
   args: {
+    courseId: v.id('courses'),
     userId: v.string(),
     folderId: v.id('folders'),
     title: v.string(),
@@ -210,9 +252,11 @@ export const createCourseScopedQuiz = internalMutation({
   },
   handler: async (ctx, args) => {
     if (args.questions.length > MAX_QUIZ_QUESTIONS) throw new Error(`Quiz cannot exceed ${MAX_QUIZ_QUESTIONS} questions`)
+    const course = await ctx.db.get(args.courseId)
+    if (!course || course.userId !== args.userId || course.folderId !== args.folderId || course.status === 'deleting') throw new Error('Course not found')
     const quizId = await ctx.db.insert('quizzes', {
-      userId: args.userId,
-      folderId: args.folderId,
+      userId: course.userId,
+      folderId: course.folderId,
       title: args.title.trim().slice(0, 120) || 'Section Quiz',
       status: 'ready',
       model: args.model,
@@ -220,6 +264,7 @@ export const createCourseScopedQuiz = internalMutation({
       difficulty: args.difficulty,
       questionCount: args.questions.length,
       courseScoped: true,
+      courseId: course._id,
     })
 
     for (const q of args.questions) {
@@ -231,12 +276,13 @@ export const createCourseScopedQuiz = internalMutation({
 
       await ctx.db.insert('quizQuestions', {
         quizId,
-        userId: args.userId,
+        userId: course.userId,
         order: q.order,
         question: q.question,
         type: q.type,
         options: q.options,
         correctAnswer: q.correctAnswer,
+        gradingCriteria: validatedQuestionGradingCriteria(q.type, q.gradingCriteria),
         explanation: q.explanation,
         sourceDocumentId: resolvedDocId,
         sourceChunkContent: q.sourceChunkContent,
@@ -310,7 +356,7 @@ export const getWithQuestions = query({
 
     questions.sort((a, b) => a.order - b.order)
 
-    return { quiz, questions }
+    return { quiz, questions: questions.map(projectLearnerQuizQuestion) }
   },
 })
 
@@ -450,8 +496,14 @@ export const updateQuestion = mutation({
       patch.explanation = args.explanation.trim() || undefined
     }
 
+    if ((patch.question !== undefined && patch.question !== existing.question)
+      || (patch.type !== undefined && patch.type !== existing.type)
+      || (patch.correctAnswer !== undefined && patch.correctAnswer !== existing.correctAnswer)) {
+      patch.gradingCriteria = undefined
+    }
+
     await ctx.db.patch(args.questionId, patch)
-    return await ctx.db.get(args.questionId)
+    return projectLearnerQuizQuestion((await ctx.db.get(args.questionId))!)
   },
 })
 
@@ -522,7 +574,7 @@ export const startAttempt = mutation({
         : [...questions].sort((a, b) => a.order - b.order)
 
       const safeQuestions = orderedQuestions.map(q => ({
-        ...q,
+        ...projectLearnerQuizQuestion(q),
         correctAnswer: answeredIds.has(q._id as string) ? q.correctAnswer : '',
         explanation: answeredIds.has(q._id as string) ? q.explanation : undefined,
       }))
@@ -565,7 +617,7 @@ export const startAttempt = mutation({
       attemptId,
       settings: args.settings,
       currentQuestionIndex: 0,
-      questions: ordered,
+      questions: ordered.map(projectLearnerQuizQuestion),
       answeredQuestionIds: [],
       answers: [],
     }
@@ -584,7 +636,7 @@ export const submitAnswer = mutation({
     const attempt = await ctx.db.get(args.attemptId)
     if (!attempt || attempt.userId !== userId) throw new Error('Attempt not found')
     if (attempt.status !== 'in_progress') throw new Error('Attempt is not in progress')
-    await requireQuiz(ctx, attempt.quizId, userId)
+    await requireQuizForSubmission(ctx, attempt.quizId, userId, attempt._id)
 
     const question = await ctx.db.get(args.questionId)
     if (!question) throw new Error('Question not found')
@@ -603,6 +655,7 @@ export const submitAnswer = mutation({
         correctAnswer: question.correctAnswer,
         explanation: question.explanation,
         alreadyAnswered: true,
+        ...await getAnswerGradingPending(ctx, existingAnswer[0]!._id),
       }
     }
 
@@ -637,6 +690,7 @@ export const submitAnswer = mutation({
       correctAnswer: question.correctAnswer,
       explanation: question.explanation,
       alreadyAnswered: false,
+      ...await getAnswerGradingPending(ctx, attemptAnswerId),
     }
   },
 })
@@ -655,7 +709,7 @@ export const submitAllAnswers = mutation({
     const attempt = await ctx.db.get(args.attemptId)
     if (!attempt || attempt.userId !== userId) throw new Error('Attempt not found')
     if (attempt.status !== 'in_progress') throw new Error('Attempt is not in progress')
-    await requireQuiz(ctx, attempt.quizId, userId)
+    await requireQuizForSubmission(ctx, attempt.quizId, userId, attempt._id)
 
     const questions = await ctx.db
       .query('quizQuestions')
@@ -664,10 +718,7 @@ export const submitAllAnswers = mutation({
 
     const questionMap = new Map(questions.map(q => [q._id as string, q]))
 
-    const existingAnswers = await ctx.db
-      .query('attemptAnswers')
-      .withIndex('by_attemptId', q => q.eq('attemptId', args.attemptId))
-      .take(MAX_QUIZ_QUESTIONS)
+    const existingAnswers = await getQuizAttemptAnswers(ctx, { ...attempt, gradingQuestionIds: questions.map(question => question._id) })
     const alreadyAnswered = new Set(existingAnswers.map(a => a.questionId as string))
 
     const results = []
@@ -711,11 +762,14 @@ export const submitAllAnswers = mutation({
     const percentage = total > 0 ? Math.round((correctCount / total) * 100) : 0
     const now = Date.now()
 
+    const gradingQuestionIds = questions.map(question => question._id)
+    const gradingState = await getAttemptGradingState(ctx, args.attemptId, gradingQuestionIds)
     await ctx.db.patch(args.attemptId, {
       status: 'completed',
       score: correctCount,
       total,
       completedAt: now,
+      ...(gradingState ? { ...gradingState, gradingQuestionIds } : {}),
     })
 
     await ctx.db.patch(attempt.quizId, {
@@ -724,7 +778,8 @@ export const submitAllAnswers = mutation({
       latestAttemptStatus: 'completed',
     })
 
-    return { score: correctCount, total, percentage, results }
+    if (gradingState?.gradingStatus === 'grading') await scheduleQuizGrading(ctx, args.attemptId)
+    return { score: correctCount, total, percentage, results, ...(gradingState ? { gradingPending: gradingState.gradingStatus === 'grading' } : {}) }
   },
 })
 
@@ -736,17 +791,13 @@ export const completeAttempt = mutation({
     const attempt = await ctx.db.get(args.attemptId)
     if (!attempt || attempt.userId !== userId) throw new Error('Attempt not found')
     if (attempt.status !== 'in_progress') throw new Error('Attempt is not in progress')
-    await requireQuiz(ctx, attempt.quizId, userId)
-
-    const answers = await ctx.db
-      .query('attemptAnswers')
-      .withIndex('by_attemptId', q => q.eq('attemptId', args.attemptId))
-      .take(MAX_QUIZ_QUESTIONS)
+    await requireQuizForSubmission(ctx, attempt.quizId, userId, attempt._id)
 
     const questions = await ctx.db
       .query('quizQuestions')
       .withIndex('by_quizId', q => q.eq('quizId', attempt.quizId))
       .take(MAX_QUIZ_QUESTIONS)
+    const answers = await getQuizAttemptAnswers(ctx, { ...attempt, gradingQuestionIds: questions.map(question => question._id) })
     const questionIds = new Set(questions.map(question => String(question._id)))
     const correctCount = answers.filter(answer => answer.isCorrect && questionIds.has(String(answer.questionId))).length
 
@@ -754,11 +805,14 @@ export const completeAttempt = mutation({
     const percentage = total > 0 ? Math.round((correctCount / total) * 100) : 0
     const now = Date.now()
 
+    const gradingQuestionIds = questions.map(question => question._id)
+    const gradingState = await getAttemptGradingState(ctx, args.attemptId, gradingQuestionIds)
     await ctx.db.patch(args.attemptId, {
       status: 'completed',
       score: correctCount,
       total,
       completedAt: now,
+      ...(gradingState ? { ...gradingState, gradingQuestionIds } : {}),
     })
 
     await ctx.db.patch(attempt.quizId, {
@@ -767,6 +821,7 @@ export const completeAttempt = mutation({
       latestAttemptStatus: 'completed',
     })
 
+    if (gradingState?.gradingStatus === 'grading') await scheduleQuizGrading(ctx, args.attemptId)
     return { score: correctCount, total, percentage }
   },
 })
@@ -796,6 +851,7 @@ export const getAttemptResults = query({
 
     const quiz = await ctx.db.get(attempt.quizId)
     if (!quiz || quiz.deletedAt !== undefined) return null
+    const eligibleQuestionIds = attempt.gradingQuestionIds ? new Set(attempt.gradingQuestionIds) : undefined
 
     const questions = await ctx.db
       .query('quizQuestions')
@@ -804,16 +860,17 @@ export const getAttemptResults = query({
 
     const questionMap = new Map(questions.map(q => [q._id as string, q]))
 
-    const attemptAnswers = await ctx.db
-      .query('attemptAnswers')
-      .withIndex('by_attemptId', q => q.eq('attemptId', args.attemptId))
-      .take(MAX_QUIZ_QUESTIONS)
-
-    const assessments = await ctx.db
-      .query('quizAnswerAssessments')
-      .withIndex('by_userId_and_attemptId', q => q.eq('userId', userId).eq('attemptId', args.attemptId))
-      .take(MAX_QUIZ_QUESTIONS)
+    const attemptAnswers = await getQuizAttemptAnswers(ctx, attempt)
+    const assessments = await getQuizAttemptAssessments(ctx, attempt, attemptAnswers)
     const assessmentMap = new Map(assessments.map(row => [row.attemptAnswerId as string, row]))
+    const rubricRows = assessments.filter(isRubricAssessment)
+    const grading = rubricRows.length > 0 ? {
+      grading: {
+        pending: rubricRows.filter(row => row.status === 'pending').length,
+        needsReview: rubricRows.filter(row => row.status === 'available' && row.label === 'uncertain').length,
+        unavailable: rubricRows.filter(row => row.status === 'unavailable').length,
+      },
+    } : {}
 
     if (attemptAnswers.length > 0) {
       const results = attemptAnswers.map(a => {
@@ -829,7 +886,8 @@ export const getAttemptResults = query({
           correctAnswer: assessment?.questionSnapshot.expectedAnswer ?? q?.correctAnswer ?? '',
           explanation: assessment?.questionSnapshot.explanation ?? q?.explanation,
           feedback: a.feedback,
-          semanticAssessment: assessment ? {
+          ...(assessment && isRubricAssessment(assessment) ? { attemptAnswerId: a._id, grade: projectQuizGrade(assessment) } : {}),
+          semanticAssessment: assessment && !isRubricAssessment(assessment) ? {
             status: assessment.status,
             label: assessment.label,
             confidence: assessment.confidence,
@@ -854,12 +912,13 @@ export const getAttemptResults = query({
         startedAt: attempt.startedAt ?? attempt._creationTime,
         completedAt: attempt.completedAt,
         status: attempt.status ?? 'completed',
+        ...grading,
         results,
       }
     }
 
     if (attempt.answers) {
-      const results = attempt.answers.map(a => {
+      const results = attempt.answers.filter(answer => !eligibleQuestionIds || eligibleQuestionIds.has(answer.questionId)).map(a => {
         const q = questionMap.get(a.questionId as string)
         return {
           questionId: a.questionId,
@@ -872,6 +931,7 @@ export const getAttemptResults = query({
           explanation: q?.explanation,
           feedback: undefined,
           semanticAssessment: undefined,
+          grade: undefined,
         }
       })
 
@@ -885,6 +945,7 @@ export const getAttemptResults = query({
         startedAt: attempt._creationTime,
         completedAt: attempt.completedAt,
         status: attempt.status ?? 'completed',
+        ...grading,
         results,
       }
     }
@@ -899,6 +960,7 @@ export const getAttemptResults = query({
       startedAt: attempt.startedAt ?? attempt._creationTime,
       completedAt: attempt.completedAt,
       status: attempt.status ?? 'completed',
+      ...grading,
       results: [],
     }
   },
@@ -934,6 +996,8 @@ export const getQuizHistory = query({
       startedAt: a.startedAt ?? a._creationTime,
       currentQuestionIndex: a.currentQuestionIndex ?? 0,
       completedAt: a.completedAt,
+      ...(a.gradingStatus ? { gradingStatus: a.gradingStatus } : {}),
+      ...(a.gradingNeedsAttention !== undefined ? { gradingNeedsAttention: a.gradingNeedsAttention } : {}),
     }))
   },
 })
@@ -950,7 +1014,7 @@ export const submitAttempt = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx)
-    await requireQuiz(ctx, args.quizId, userId)
+    await requireQuizForSubmission(ctx, args.quizId, userId)
 
     const questions = await ctx.db
       .query('quizQuestions')
@@ -1010,6 +1074,10 @@ export const submitAttempt = mutation({
       })
     }
 
+    const gradingQuestionIds = questions.map(question => question._id)
+    const gradingState = await getAttemptGradingState(ctx, attemptId, gradingQuestionIds)
+    if (gradingState) await ctx.db.patch(attemptId, { ...gradingState, gradingQuestionIds })
+
     await ctx.db.patch(args.quizId, {
       score: percentage,
       completedAt,
@@ -1026,6 +1094,7 @@ export const submitAttempt = mutation({
       }
     })
 
+    if (gradingState?.gradingStatus === 'grading') await scheduleQuizGrading(ctx, attemptId)
     return { attemptId, score: correctCount, total, correctCount, results }
   },
 })

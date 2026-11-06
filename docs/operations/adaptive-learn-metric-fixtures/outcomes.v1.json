@@ -1,0 +1,55 @@
+{
+  "version": "adaptive_learn_outcome_fixture.v1",
+  "fixtureId": "outcomes.v1",
+  "synthetic": true,
+  "windowStart": 1772380800000,
+  "windowEnd": 1773590400000,
+  "sourceVersions": { "retention": "capability_attempt_fixture.v1", "experiment": "experiment_outcome_fixture.v1", "crossFeature": "contribution_lineage_fixture.v1", "accessibility": "accessibility_task_fixture.v1", "cost": "recorded_request_cost_fixture.v1", "support": "support_contact_fixture.v1", "supportDenominator": "support_denominator_fixture.v1" },
+  "coverage": { "capabilities": true, "attempts": true, "experiment": true, "crossFeature": true, "accessibility": true, "requests": true, "supportContacts": true, "supportDenominators": true },
+  "supportContacts": [
+    { "contactId": "contact1", "cohort": "pilot", "occurredAt": 1772380800000, "category": "recovery", "eligible": true, "exclusionCode": null },
+    { "contactId": "contact-excluded", "cohort": "pilot", "occurredAt": 1772380800000, "category": "other", "eligible": false, "exclusionCode": "ineligible" }
+  ],
+  "supportDenominators": [{ "denominatorId": "population1", "cohort": "pilot", "eligibleLearnerCount": 10 }],
+  "requests": [
+    { "requestId": "request1", "occurredAt": 1772380800000, "dispatchState": "dispatched", "actualCostUsdMicros": 1000, "eligible": true, "exclusionCode": null },
+    { "requestId": "request2", "occurredAt": 1772380800000, "dispatchState": "dispatched", "actualCostUsdMicros": 3000, "eligible": true, "exclusionCode": null },
+    { "requestId": "request3", "occurredAt": 1772380800000, "dispatchState": "not_dispatched", "actualCostUsdMicros": null, "eligible": true, "exclusionCode": null }
+  ],
+  "accessibilityProtocol": { "version": "accessibility_protocol.v1", "testedSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "taskVersion": "task.v1", "baselineVersion": "fixed.v1", "treatmentVersion": "adaptive.v1", "verifierSourceVersion": "synthetic_verifier.v1", "evidenceDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" },
+  "accessibilityRuns": [
+    { "runId": "run1", "taskId": "task1", "arm": "fixed", "occurredAt": 1772380800000, "eligible": true, "exclusionCode": null, "completed": true, "recovered": false, "evidenceDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "verifierSourceVersion": "synthetic_verifier.v1" },
+    { "runId": "run2", "taskId": "task1", "arm": "adaptive", "occurredAt": 1772380800000, "eligible": true, "exclusionCode": null, "completed": true, "recovered": true, "evidenceDigest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "verifierSourceVersion": "synthetic_verifier.v1" }
+  ],
+  "contributions": [
+    { "contributionId": "contribution1", "contributionRevision": 1, "authoritativeAttemptId": "delayed1", "lineageId": "lineage1", "producerProofVersion": "synthetic_producer_proof.v1", "producerVerified": true, "originVisible": true, "silentMastery": false, "nextActionImproved": true, "origins": [
+      { "originId": "origin0", "sourceFeature": "chat", "sourceIdentity": "source0", "sourceRevision": "revision1", "provenanceKey": "provenance0" },
+      { "originId": "origin1", "sourceFeature": "quiz", "sourceIdentity": "source1", "sourceRevision": "revision1", "provenanceKey": "provenance1" },
+      { "originId": "origin2", "sourceFeature": "flashcards", "sourceIdentity": "source2", "sourceRevision": "revision1", "provenanceKey": "provenance2" },
+      { "originId": "origin3", "sourceFeature": "podcast", "sourceIdentity": "source3", "sourceRevision": "revision1", "provenanceKey": "provenance3" },
+      { "originId": "origin4", "sourceFeature": "documents", "sourceIdentity": "source4", "sourceRevision": "revision1", "provenanceKey": "provenance4" }
+    ] }
+  ],
+  "plans": [{ "planId": "plan1", "version": "adaptive-routing-analysis.v1", "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "assignmentUnit": "authenticated_learner", "eligibilityVersion": "learn-adaptive.experiment-eligibility.v1", "exclusionVersion": "learn-adaptive.experiment-exclusion.v1", "denominatorVersion": "denominator.v1", "outcomeVersion": "representative.v1", "fixedContinuationVersion": "fixed.v1" }],
+  "assignments": [
+    { "assignmentId": "assignment1", "planId": "plan1", "planDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "learnerId": "synthetic-learner-1", "cohort": "pilot", "arm": "adaptive", "assignedAt": 1772380800000, "eligible": true, "exclusionCode": null, "assignmentVersion": "learn-adaptive.experiment-assignment.v1" },
+    { "assignmentId": "assignment2", "planId": "plan1", "planDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "learnerId": "synthetic-learner-2", "cohort": "pilot", "arm": "fixed", "assignedAt": 1772380800000, "eligible": true, "exclusionCode": null, "assignmentVersion": "learn-adaptive.experiment-assignment.v1" }
+  ],
+  "experimentOutcomes": [
+    { "assignmentId": "assignment1", "attemptId": "delayed1", "outcomeVersion": "representative.v1", "occurredAt": 1772985600000, "performancePassed": true, "completed": true, "usefulnessRating": 2 },
+    { "assignmentId": "assignment2", "attemptId": "early1", "outcomeVersion": "representative.v1", "occurredAt": 1772902800000, "performancePassed": true, "completed": true, "usefulnessRating": 5 }
+  ],
+  "capabilities": [
+    { "capabilityId": "cap-dst", "learnerId": "synthetic-learner-1", "blueprintRevision": "bp1", "objectiveId": "obj1", "rubricVersion": "rubric.v1", "sourceRevision": "source1", "firstIndependentAttemptId": "first1", "firstIndependentAt": 1772384400000, "timeZone": "America/Toronto" },
+    { "capabilityId": "cap-missing", "learnerId": "synthetic-learner-2", "blueprintRevision": "bp1", "objectiveId": "obj2", "rubricVersion": "rubric.v1", "sourceRevision": "source1", "firstIndependentAttemptId": "first2", "firstIndependentAt": 1772384400000, "timeZone": "America/Toronto" },
+    { "capabilityId": "cap-not-due", "learnerId": "synthetic-learner-3", "blueprintRevision": "bp1", "objectiveId": "obj3", "rubricVersion": "rubric.v1", "sourceRevision": "source1", "firstIndependentAttemptId": "first3", "firstIndependentAt": 1773504000000, "timeZone": "America/Toronto" }
+  ],
+  "attempts": [
+    { "attemptId": "first1", "capabilityId": "cap-dst", "occurredAt": 1772384400000, "kind": "independent_application", "assisted": false, "scorePercent": 80, "blueprintRevision": "bp1", "objectiveId": "obj1", "rubricVersion": "rubric.v1", "sourceRevision": "source1" },
+    { "attemptId": "first2", "capabilityId": "cap-missing", "occurredAt": 1772384400000, "kind": "independent_application", "assisted": false, "scorePercent": 90, "blueprintRevision": "bp1", "objectiveId": "obj2", "rubricVersion": "rubric.v1", "sourceRevision": "source1" },
+    { "attemptId": "first3", "capabilityId": "cap-not-due", "occurredAt": 1773504000000, "kind": "independent_application", "assisted": false, "scorePercent": 80, "blueprintRevision": "bp1", "objectiveId": "obj3", "rubricVersion": "rubric.v1", "sourceRevision": "source1" },
+    { "attemptId": "delayed1", "capabilityId": "cap-dst", "occurredAt": 1772985600000, "kind": "retained_transfer", "assisted": false, "scorePercent": 80, "blueprintRevision": "bp1", "objectiveId": "obj1", "rubricVersion": "rubric.v1", "sourceRevision": "source1" },
+    { "attemptId": "early1", "capabilityId": "cap-missing", "occurredAt": 1772902800000, "kind": "retained_transfer", "assisted": false, "scorePercent": 100, "blueprintRevision": "bp1", "objectiveId": "obj2", "rubricVersion": "rubric.v1", "sourceRevision": "source1" },
+    { "attemptId": "assisted1", "capabilityId": "cap-missing", "occurredAt": 1772985600000, "kind": "retained_transfer", "assisted": true, "scorePercent": 100, "blueprintRevision": "bp1", "objectiveId": "obj2", "rubricVersion": "rubric.v1", "sourceRevision": "source1" }
+  ]
+}

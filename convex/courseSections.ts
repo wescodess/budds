@@ -1,4 +1,6 @@
 import { v } from 'convex/values'
+import { quizGradingCriterionValidator } from '../shared/quiz-grading'
+import { validatedQuestionGradingCriteria } from './lib/quizQuestionGrading'
 import { mutation, query, internalMutation, internalQuery } from './_generated/server'
 import type { Doc, Id } from './_generated/dataModel'
 import { internal } from './_generated/api'
@@ -310,6 +312,7 @@ export const finalizeSectionGeneration = mutation({
         ),
         options: v.optional(v.array(v.string())),
         correctAnswer: v.string(),
+        gradingCriteria: v.optional(v.array(quizGradingCriterionValidator)),
         explanation: v.optional(v.string()),
         sourceDocumentId: v.optional(v.string()),
         sourceChunkContent: v.optional(v.string()),
@@ -335,7 +338,7 @@ export const finalizeSectionGeneration = mutation({
     if (!section || section.userId !== userId) throw new Error('Section not found')
 
     const course = await ctx.db.get(section.courseId)
-    if (!course) throw new Error('Course not found')
+    if (!course || course.userId !== userId || course.status === 'deleting') throw new Error('Course not found')
 
     const contentBlocks: Array<{
       type: 'text' | 'quiz' | 'flashcard' | 'audio'
@@ -375,6 +378,7 @@ export const finalizeSectionGeneration = mutation({
         creationMethod: 'auto_generated',
         questionCount: args.quizData.questions.length,
         courseScoped: true,
+        courseId: course._id,
       })
 
       for (const q of args.quizData.questions) {
@@ -392,6 +396,7 @@ export const finalizeSectionGeneration = mutation({
           type: q.type,
           options: q.options,
           correctAnswer: q.correctAnswer,
+          gradingCriteria: validatedQuestionGradingCriteria(q.type, q.gradingCriteria),
           explanation: q.explanation,
           sourceDocumentId: resolvedDocId,
           sourceChunkContent: q.sourceChunkContent,

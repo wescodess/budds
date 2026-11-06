@@ -172,12 +172,13 @@ describe('quiz creation bounds', () => {
     const t = convexTest(schema, modules)
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bounded' })
+    const { courseId } = await asUser.mutation(api.courses.create, { title: 'Bounded course', sourceType: 'web-only', folderId })
 
     await expect(asUser.mutation(api.quizzes.createWithQuestions, {
       folderId, title: 'Too large', questions: oversizedQuestions(),
     })).rejects.toThrow(/cannot exceed 200 questions/i)
     await expect(t.mutation(internal.quizzes.createCourseScopedQuiz, {
-      userId: USER_A.tokenIdentifier, folderId, title: 'Too large course quiz', questions: oversizedQuestions(),
+      courseId, userId: USER_A.tokenIdentifier, folderId, title: 'Too large course quiz', questions: oversizedQuestions(),
     })).rejects.toThrow(/cannot exceed 200 questions/i)
 
     expect(await t.run(ctx => ctx.db.query('quizzes').withIndex('by_folderId', q => q.eq('folderId', folderId)).collect())).toEqual([])

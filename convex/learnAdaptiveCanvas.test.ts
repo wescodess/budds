@@ -1,27 +1,31 @@
 /// <reference types="vite/client" />
 import { convexTest } from 'convex-test'
-import { afterAll, beforeEach, describe, expect, test, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import schema from './schema'
 import { composeAdaptiveActivityPlan } from '../shared/learn-adaptive-activity-plan'
-
-const pilotFixture = vi.hoisted(() => ({ approved: false }))
-vi.mock('../shared/adaptive-v2-pilot-policy', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../shared/adaptive-v2-pilot-policy')>()
-  const approved = { ...actual.ADAPTIVE_V2_PILOT_MANIFEST, pilotApproved: true,
-    cohort: { ...actual.ADAPTIVE_V2_PILOT_MANIFEST.cohort, subjectHashes: ['sha256:3dcadcd97535d79753fb6bb2909f96bdd4588933bc9faadea9992b691233cfa2'] },
-    modelPolicies: [{ model: 'test/mastery-model', inputUsdPerMillionTokens: 0.1, outputUsdPerMillionTokens: 0.1 }] }
-  return { ...actual, adaptiveV2PilotDecision: (configuredVersion: unknown, input: Parameters<typeof actual.adaptiveV2PilotDecision>[1]) =>
-    actual.adaptiveV2PilotDecision(configuredVersion, input, pilotFixture.approved ? approved : actual.ADAPTIVE_V2_PILOT_MANIFEST) }
-})
+import { ADAPTIVE_V2_PILOT_MANIFEST } from '../shared/adaptive-v2-pilot-policy'
 
 const modules = import.meta.glob('./**/*.ts')
 const OWNER = { tokenIdentifier: 'https://auth.example.com|canvas-owner' }
 const OTHER = { tokenIdentifier: 'https://auth.example.com|canvas-other' }
 const originalFlag = process.env.LEARN_V2_ENABLED
+const originalManifest = structuredClone(ADAPTIVE_V2_PILOT_MANIFEST)
 
-beforeEach(() => { process.env.LEARN_V2_ENABLED = 'true'; pilotFixture.approved = false })
+beforeEach(() => { process.env.LEARN_V2_ENABLED = 'true' })
+afterEach(() => { Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, originalManifest) })
 afterAll(() => { if (originalFlag === undefined) delete process.env.LEARN_V2_ENABLED; else process.env.LEARN_V2_ENABLED = originalFlag })
+
+async function approveSyntheticPilot() {
+  const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(['adaptive-v2-rollback-owner.tokenIdentifier-sha256.v1', OWNER.tokenIdentifier]))))
+  Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, {
+    pilotApproved: true,
+    cohort: { ...originalManifest.cohort, subjectHashes: ['sha256:3dcadcd97535d79753fb6bb2909f96bdd4588933bc9faadea9992b691233cfa2'] },
+    modelPolicies: [{ model: 'test/mastery-model', inputUsdPerMillionTokens: 0.1, outputUsdPerMillionTokens: 0.1 }],
+    productControls: { ...originalManifest.productControls, maxDispatchesPerHour: 4, maxDispatchesPerDay: 8, maxConcurrent: 2, maxReservedMicroUsdPerDay: 100_000 },
+    rollback: { ...originalManifest.rollback, ownerSubjectHash: `sha256:${Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')}` },
+  })
+}
 
 async function fixture() {
   const t = convexTest(schema, modules)
@@ -70,6 +74,27 @@ async function fixture() {
 }
 
 describe('ready V2 adaptive Canvas', () => {
+  test('a stale or blocked stage receipt pins its key while a fresh key commits exactly once', async () => {
+    const { owner, ids } = await fixture()
+    const attached = await owner.mutation(api.learnAdaptiveCanvas.attachReadySession, { studySessionId: ids.studySessionId, expectedSessionRevision: 2, idempotencyKey: 'canvas-receipt-attach-0001' })
+    await owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: ids.studySessionId, expectedSessionRevision: 2, expectedContentRevision: 1, idempotencyKey: 'canvas-receipt-start-0001' })
+    const stage = (idempotencyKey: string, expectedRevision: number) => owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, {
+      threadId: attached.threadId, activityId: attached.activityId, studySessionId: ids.studySessionId,
+      expectedSessionRevision: 3, expectedRevision, response: 'Earth attracts the apple.', confidence: 4, idempotencyKey,
+    })
+    await owner.mutation(api.learnAdaptive.leaveThread, { threadId: attached.threadId, expectedRevision: 2, idempotencyKey: 'canvas-receipt-leave-0001' })
+    expect(await stage('canvas-receipt-stale-0001', 2)).toMatchObject({ kind: 'conflict', code: 'stale_revision', actualRevision: 3 })
+    expect(await stage('canvas-receipt-stale-0001', 3)).toMatchObject({ kind: 'conflict', code: 'duplicate_key' })
+    expect(await stage('canvas-receipt-paused-0001', 3)).toMatchObject({ kind: 'blocked', code: 'thread_not_active', retryable: false })
+    await owner.mutation(api.learnAdaptive.resumeThread, { threadId: attached.threadId, expectedRevision: 3, idempotencyKey: 'canvas-receipt-resume-0001' })
+    expect(await stage('canvas-receipt-paused-0001', 3)).toMatchObject({ kind: 'blocked', code: 'thread_not_active' })
+    expect(await stage('canvas-receipt-paused-0001', 4)).toMatchObject({ kind: 'conflict', code: 'duplicate_key' })
+    const committed = await stage('canvas-receipt-fresh-0001', 4)
+    expect(committed).toMatchObject({ kind: 'ok', revision: 5 })
+    expect(await stage('canvas-receipt-fresh-0001', 4)).toEqual(committed)
+    await expect(stage('canvas-receipt-after-ack-0001', 5)).rejects.toThrow(/Started Canvas activity is unavailable/)
+  })
+
   test('lifecycle transitions preserve the attached session pins and V2 authority', async () => {
     const { t, owner, ids } = await fixture()
     const attached = await owner.mutation(api.learnAdaptiveCanvas.attachReadySession, {
@@ -313,7 +338,7 @@ describe('ready V2 adaptive Canvas', () => {
   })
 
   test('rejects scoring input that differs from the atomically staged response', async () => {
-    pilotFixture.approved = true
+    await approveSyntheticPilot()
     process.env.LEARN_ADAPTIVE_V2_PILOT_MANIFEST = 'adaptive-v2-pilot.v1'
     try {
       const { t, owner, ids } = await fixture()
@@ -328,7 +353,7 @@ describe('ready V2 adaptive Canvas', () => {
       expect(await t.run(ctx => ctx.db.query('learnJobs').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(1))).toEqual([])
     }
     finally {
-      pilotFixture.approved = false
+      Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, originalManifest)
       delete process.env.LEARN_ADAPTIVE_V2_PILOT_MANIFEST
     }
   })
@@ -472,7 +497,7 @@ describe('ready V2 adaptive Canvas', () => {
   })
 
   test('approved pilot admits staged response only through existing V2 job and attempt authority', async () => {
-    pilotFixture.approved = true
+    await approveSyntheticPilot()
     process.env.LEARN_ADAPTIVE_V2_PILOT_MANIFEST = 'adaptive-v2-pilot.v1'
     process.env.OPENROUTER_API_KEY = 'test-key'
     process.env.CF_ACCOUNT_ID = 'test-account'
@@ -526,7 +551,7 @@ describe('ready V2 adaptive Canvas', () => {
       })
     }
     finally {
-      pilotFixture.approved = false
+      Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, originalManifest)
       delete process.env.LEARN_ADAPTIVE_V2_PILOT_MANIFEST
       delete process.env.OPENROUTER_API_KEY
       delete process.env.CF_ACCOUNT_ID

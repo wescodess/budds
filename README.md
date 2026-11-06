@@ -18,7 +18,7 @@ See [`docs/architecture.md`](./docs/architecture.md) for the system design and [
 
 ## Requirements
 
-- Node.js 22.19 or 24.11 and newer compatible releases
+- Node.js `^22.22.3 || ^24.15.0 || >=26.0.0` (`.node-version` selects 24.20.0)
 - pnpm 9.12.3
 - A Convex deployment
 - Cloudflare and model-provider credentials for the features you run

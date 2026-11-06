@@ -22,7 +22,7 @@ const mutationCalls = vi.fn().mockResolvedValue({ kind: 'ok' })
 const memoryMutationCalls = vi.fn().mockResolvedValue({ kind: 'ok', revision: 4 })
 const isOnline = ref(true)
 
-mockNuxtImport('useLearnAdaptiveAccess', () => () => ({ allowed, checkingAccess: ref(false) }))
+mockNuxtImport('useLearnAdaptiveAccess', () => () => ({ allowed, checkingAccess: ref(false), fallbackRoute: ref({ name: 'app-learn', href: '/app/learn?legacy=v2', label: 'Open V2 learning plans' }) }))
 mockNuxtImport('useRoute', () => () => requestedRoute)
 mockNuxtImport('useOnlineStatus', () => () => ({ isOnline }))
 mockNuxtImport('useConvex', () => () => ({ query: vi.fn(), onUpdate: documentSubscriptions }))
@@ -531,7 +531,8 @@ describe('adaptive thread route isolation', () => {
       currentActivity: null, history: [], nextAction: { kind: 'continue', label: 'Continue', activityId: null } }
     const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
     expect(wrapper.get('[data-testid="learn-adaptive-thread-denied"]').text()).toContain('not available')
-    expect(wrapper.get('[data-testid="learn-adaptive-safe-destination"]').attributes('href')).toBe('/app/learn')
+    expect(wrapper.get('[data-testid="learn-adaptive-safe-destination"]').attributes('href')).toBe('/app/learn?legacy=v2')
+    expect(wrapper.get('[data-testid="learn-adaptive-safe-destination"]').text()).toBe('Open V2 learning plans')
     expect(wrapper.html()).not.toContain('void_1')
     allowed.value = true
     projection.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Gravity', intent: 'understand', evidenceState: 'ready', lifecycle: 'rollback', revision: 3, authorityKind: 'v2_mission', learningVoidId: 'void_1' },

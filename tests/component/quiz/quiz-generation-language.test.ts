@@ -33,25 +33,19 @@ describe('English quiz generation boundary', () => {
     }))
   })
 
-  it('preserves explicit English metadata through client-side quiz persistence', async () => {
-    const createQuiz = vi.fn().mockResolvedValue({ quizId: 'quiz_1' })
-    useConvexMutationMock
-      .mockReturnValueOnce({ mutate: createQuiz })
-      .mockReturnValue({ mutate: vi.fn() })
-    fetchMock.mockResolvedValue({
-      title: 'English quiz',
-      model: 'openai/gpt-4o-mini',
-      questionCount: 1,
-      questions: [{ order: 0, question: 'What is ATP?', type: 'free-response', correctAnswer: 'Energy currency' }],
-    })
+  it('sends English metadata and uses the saved quiz without a duplicate client write', async () => {
+    const mutate = vi.fn()
+    useConvexMutationMock.mockReturnValue({ mutate })
+    fetchMock.mockResolvedValue({ quizId: 'quiz_1' })
     const quizzes = useQuizzes(ref('folder_1' as never))
 
-    await quizzes.generate()
+    expect(await quizzes.generate()).toBe('quiz_1')
 
     expect(fetchMock).toHaveBeenCalledWith('/api/quiz/generate', {
       method: 'POST',
       body: { folderId: 'folder_1', language: 'en' },
     })
-    expect(createQuiz).toHaveBeenCalledWith(expect.objectContaining({ language: 'en' }))
+    expect(mutate).not.toHaveBeenCalled()
+    expect(quizzes.generating.value).toBe(false)
   })
 })

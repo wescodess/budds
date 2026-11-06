@@ -12,8 +12,12 @@ describe('FoldersIconSelect', () => {
     mockMatchMedia()
   })
 
-  afterEach(() => {
+  afterEach(async () => {
     for (const wrapper of mountedWrappers.splice(0)) wrapper.unmount()
+    await flushPromises()
+    // vaul-vue does not cancel its 200ms body-style reset on unmount.
+    // Keep document alive through that reset and its 500ms animation timers.
+    await new Promise(resolve => setTimeout(resolve, 500))
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
     document.body.innerHTML = ''

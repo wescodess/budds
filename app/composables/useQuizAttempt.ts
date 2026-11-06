@@ -24,6 +24,7 @@ export interface AnswerFeedback {
   correctAnswer: string
   explanation?: string
   alreadyAnswered: boolean
+  gradingPending?: boolean
 }
 
 export function useQuizAttempt(quizId: Ref<Id<'quizzes'> | null>) {
@@ -114,7 +115,7 @@ export function useQuizAttempt(quizId: Ref<Id<'quizzes'> | null>) {
       return await submitAllMutation.mutate({
         attemptId: attemptId.value,
         answers,
-      }) as { score: number; total: number; percentage: number; results: Array<{ questionId: Id<'quizQuestions'>; isCorrect: boolean; correctAnswer: string; explanation?: string; userAnswer: string }> }
+      }) as { score: number; total: number; percentage: number; results: Array<{ questionId: Id<'quizQuestions'>; isCorrect: boolean; correctAnswer: string; explanation?: string; userAnswer: string }>; gradingPending?: boolean }
     }
     finally {
       submitting.value = false

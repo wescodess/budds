@@ -1,0 +1,12 @@
+{
+  "version": "adaptive-activation-approval.v1",
+  "scope": "adaptive_cohort_entitlement",
+  "decision": "pending",
+  "testedSha": null,
+  "owners": {
+    "accessibility": null,
+    "security": null,
+    "operations": null,
+    "rollback": null
+  }
+}

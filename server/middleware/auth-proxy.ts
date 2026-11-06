@@ -101,6 +101,10 @@ export default defineEventHandler(async (event) => {
   headers.set('x-forwarded-host', requestUrl.host)
   headers.set('x-forwarded-proto', requestUrl.protocol.replace(/:$/, ''))
   headers.set('x-forwarded-port', requestUrl.port || (requestUrl.protocol === 'https:' ? '443' : '80'))
+  // The Convex adapter accepts the public origin only through these headers
+  // and checks it against exact trusted origins. Replace client-supplied values.
+  headers.set('x-better-auth-forwarded-host', requestUrl.host)
+  headers.set('x-better-auth-forwarded-proto', requestUrl.protocol.replace(/:$/, ''))
   if (!headers.has('origin') && requestOrigin) headers.set('origin', requestOrigin)
   headers.set('host', new URL(convexSiteUrl).host)
 

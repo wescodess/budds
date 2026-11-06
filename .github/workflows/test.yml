@@ -46,6 +46,7 @@ jobs:
       - name: Scan repository and history for secrets
         uses: gitleaks/gitleaks-action@v3
         env:
+          GITLEAKS_VERSION: '8.30.1'
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   quality:
@@ -69,6 +70,10 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Enforce a single Vue runtime
+        run: node --test scripts/check-vue-runtime.test.mjs && node scripts/check-vue-runtime.mjs
+      - name: Test production smoke fixtures
+        run: node --test scripts/smoke-production.test.mjs
       - name: Enforce lint warning baseline
         run: pnpm lint:ci
       - name: Typecheck application
@@ -179,6 +184,9 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=4096
         run: pnpm build
+      - name: Smoke render production Pages output
+        timeout-minutes: 5
+        run: node scripts/smoke-production.mjs
       - name: Upload Pages build
         uses: actions/upload-artifact@v7
         with:
@@ -255,12 +263,13 @@ jobs:
         with: { node-version: '24', cache: pnpm }
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:design-capture
       - run: pnpm test:e2e:learn
       - run: pnpm test:e2e:learn:authority
       - if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: learn-browser-artifacts
+          name: learn-browser-artifacts-${{ github.run_attempt }}
           path: |
             playwright-report/
             test-results/

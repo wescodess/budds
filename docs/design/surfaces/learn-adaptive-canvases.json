@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "kind": "routes",
+  "notes": "Six static fixture cases cover all four renderer families: ready explanation, active diagnostic and artifact forms, completed reflection, safe fallback, and stale evidence recovery. This samples 4 of 7 kinds and 5 of 9 states in 36 captures rather than the full 378-case matrix. Worked examples, source comparison, and independent application share ReadySessionCanvas; blocked/preparing/invalidated overlap the sampled recovery layouts. Offline requires a network transition rather than just the harness query state. These are synthetic projections, not persisted learner outcomes. Fill separation guards against regression from the current frame; it is not a claim about design quality.",
+  "themes": ["dark", "light"],
+  "viewports": [
+    { "width": 1280, "height": 832 },
+    { "width": 390, "height": 844 },
+    { "width": 320, "height": 640 }
+  ],
+  "contentSelector": "[data-testid=learn-adaptive-canvas-frame]",
+  "readySelector": "[data-testid=canvas-browser-harness][data-hydrated=true][data-projection-only=true]",
+  "requiredFonts": ["DM Sans", "Inter"],
+  "surfaceSeparation": [
+    {
+      "selectors": ["[data-testid=learn-adaptive-canvas-frame]", "body"],
+      "minContrast": 1.06
+    }
+  ],
+  "cases": [
+    { "kind": "cited_explanation", "state": "ready", "path": "/__e2e/canvas-browser-harness?kind=cited_explanation&state=ready" },
+    { "kind": "diagnostic_prompt", "state": "active", "path": "/__e2e/canvas-browser-harness?kind=diagnostic_prompt&state=active" },
+    { "kind": "artifact_workspace", "state": "active", "path": "/__e2e/canvas-browser-harness?kind=artifact_workspace&state=active" },
+    { "kind": "reflection_next_move", "state": "completed", "path": "/__e2e/canvas-browser-harness?kind=reflection_next_move&state=completed" },
+    { "kind": "cited_explanation", "state": "fallback", "path": "/__e2e/canvas-browser-harness?kind=cited_explanation&state=fallback" },
+    { "kind": "cited_explanation", "state": "stale", "path": "/__e2e/canvas-browser-harness?kind=cited_explanation&state=stale" }
+  ]
+}
