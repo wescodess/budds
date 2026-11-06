@@ -8,10 +8,12 @@ import { liveEvidenceState } from '../learnAdaptiveRecovery'
 import type { artifactSourceDependencyValidator } from './learnV2ArtifactLineageContract'
 import {
   LEARN_ARTIFACT_LINEAGE_LIMITS as limits, LEARN_ARTIFACT_LINEAGE_VERSION, LEARN_ARTIFACT_CONTENT_VERSION, LEARN_ARTIFACT_DOCUMENT_CHUNK_SET_KEY,
+  LEARN_ARTIFACT_PREPARATION_VERSION, LEARN_ARTIFACT_CASE_IDENTITY_VERSION, LEARN_ARTIFACT_RESERVATION_VERSION, LEARN_ARTIFACT_SEMANTIC_VERSION,
   learnArtifactCaseSchema, learnArtifactRegistrationArgsSchema, learnArtifactRegistrationResultSchema,
   learnArtifactBatchRegistrationArgsSchema, learnArtifactBatchRegistrationResultSchema, learnArtifactOwnerRecordSchema, learnArtifactSupersessionArgsSchema,
   learnArtifactReferenceSchema, learnArtifactSourceDependencySchema, learnArtifactValidationSchema, validateLearnArtifactLookup, validateLearnArtifactLookupResult,
-  type LearnArtifactReference, type LearnArtifactLookupResult, type LearnArtifactOwnerRecord,
+  learnArtifactPreparationArgsSchema, learnArtifactPreparationResultSchema,
+  type LearnArtifactReference, type LearnArtifactLookupResult, type LearnArtifactOwnerRecord, type LearnArtifactPreparationArgs,
 } from '../../shared/learn-v2-artifact-lineage'
 import { learnSequenceSchema, learnVersionSchema, learnSerializedBytes, parseLearnContract } from '../../shared/learn-v2-responses'
 
@@ -639,7 +641,8 @@ function validationProjection(row: Doc<'learnArtifactValidations'>) {
   return { lineageId: row.lineageId, payloadDigest: row.payloadDigest, manifestDigest: row.manifestDigest, decision: row.decision,
     comparedCatalogRevision: row.comparedCatalogRevision, coverage: row.coverage, coverageWatermark: row.coverageWatermark,
     corpusDigest: row.corpusDigest, identityPolicyVersion: row.identityPolicyVersion, noveltyPolicyVersion: row.noveltyPolicyVersion,
-    validatorVersion: row.validatorVersion, validatorModel: row.validatorModel, harnessArtifactDigest: row.harnessArtifactDigest }
+    validatorVersion: row.validatorVersion, validatorModel: row.validatorModel, harnessArtifactDigest: row.harnessArtifactDigest,
+    ...(row.preparation ? { preparation: row.preparation } : {}) }
 }
 
 export async function artifactManifestDigest(
@@ -902,6 +905,312 @@ export async function registerInstructionalArtifactForOwner(ctx: MutationCtx, us
 export async function registerInstructionalArtifactForRecord(ctx: MutationCtx, record: LearnArtifactOwnerRecord, input: unknown) {
   ctx = withReadBudget(ctx)
   return registerOne(ctx, await requireRecordOwner(ctx, record), input)
+}
+
+async function registrationRequired(ctx: ReadCtx, userId: string) {
+  const catalogs = await ctx.db.query('learnAssessmentCatalogs').withIndex('by_userId', q => q.eq('userId', userId)).take(2)
+  if (catalogs.length > 1) unavailable()
+  return catalogs[0]?.measurementCapability?.enabled === true
+}
+
+export async function isArtifactRegistrationRequiredForOwner(ctx: ReadCtx, userId: string) {
+  ctx = withReadBudget(ctx)
+  if (await requireAuth(ctx) !== userId) throw new Error('Learn access denied')
+  return registrationRequired(ctx, userId)
+}
+export async function isArtifactRegistrationRequiredForRecord(ctx: ReadCtx, record: LearnArtifactOwnerRecord) {
+  ctx = withReadBudget(ctx)
+  return registrationRequired(ctx, await requireRecordOwner(ctx, record))
+}
+export async function isArtifactRegistrationRequired(ctx: ReadCtx) {
+  ctx = withReadBudget(ctx)
+  return registrationRequired(ctx, await requireAuth(ctx))
+}
+
+type PreparationMember = LearnArtifactPreparationArgs['artifacts'][number]
+type CaseFingerprints = Pick<Doc<'learnAssessmentCases'>, 'scenarioFingerprint' | 'solutionFingerprint'>
+type ContentProjection = ReturnType<typeof artifactContentProjection>
+export type InstructionalReservationSemanticAdapter = {
+  version: string
+  compare: (input: {
+    ctx: ReadCtx, projection: ContentProjection, fingerprints: CaseFingerprints[],
+    reservedCases: ReadonlyArray<Doc<'learnAssessmentCases'>>, catalog: Readonly<Doc<'learnAssessmentCatalogs'>>,
+  }) => Promise<{ decision: 'pass' | 'reject' | 'unknown', coverage: 'complete' | 'unknown' }>
+}
+
+// C5.1 replaces this implementation with the shared validator. It is never a
+// producer argument, and no generator verdict can substitute for its result.
+export const instructionalReservationSemanticAdapter: InstructionalReservationSemanticAdapter = {
+  version: LEARN_ARTIFACT_SEMANTIC_VERSION,
+  async compare() { return { decision: 'unknown', coverage: 'unknown' } },
+}
+
+export async function normalizedInstructionalCaseFingerprints(scenario: string, solution: string): Promise<CaseFingerprints> {
+  const fingerprint = (text: string) => canonicalDigest({ version: LEARN_ARTIFACT_CASE_IDENTITY_VERSION,
+    text: text.normalize('NFKC').toLowerCase().replace(/\s+/gu, ' ').trim() }, 500_000)
+  return { scenarioFingerprint: await fingerprint(scenario), solutionFingerprint: await fingerprint(solution) }
+}
+
+function caseTexts(projection: ContentProjection) {
+  const cases: Array<{ scenario: string, solution: string }> = []
+  const prose: string[] = []
+  const proseFields = new Set(['content', 'claim', 'text', 'title', 'summary', 'prompt', 'narrativeArc', 'narrativePurpose', 'explanation', 'correctedExplanation', 'sourceChunkContent', 'chunkContent', 'assessmentRubricSnapshot'])
+  const visit = (value: unknown, key = ''): void => {
+    if (typeof value === 'string') { if (proseFields.has(key) && value.trim()) prose.push(value); return }
+    if (Array.isArray(value)) { for (const child of value) visit(child, key); return }
+    if (value === null || typeof value !== 'object') return
+    const row = value as Record<string, unknown>
+    if (typeof row.question === 'string' && typeof row.correctAnswer === 'string') {
+      cases.push({ scenario: row.question, solution: typeof row.correctedAnswer === 'string' ? row.correctedAnswer : row.correctAnswer })
+      return
+    }
+    if (typeof row.term === 'string' && typeof row.definition === 'string') {
+      cases.push({ scenario: row.term, solution: typeof row.correctedDefinition === 'string' ? row.correctedDefinition : row.definition })
+      return
+    }
+    for (const [field, child] of Object.entries(row)) visit(child, field)
+  }
+  visit(projection.payload)
+  if (prose.length) cases.push({ scenario: prose.join('\n'), solution: prose.join('\n') })
+  if (!cases.length) unavailable()
+  return cases
+}
+
+async function preparationContent(ctx: ReadCtx, userId: string, artifact: PreparationMember['artifact']) {
+  const owned = <T extends { userId: string }>(row: T | null): T => {
+    if (!row || row.userId !== userId) unavailable()
+    return row
+  }
+  switch (artifact.kind) {
+    case 'document': case 'document_chunk': {
+      const document = owned(await ctx.db.get(artifact.id))
+      if (!document.sourceRevision?.trim() || !document.contentHash?.trim()) unavailable()
+      return { projection: artifactContentProjection({ kind: artifact.kind, document }), revision: document.sourceRevision }
+    }
+    case 'quiz_question': return { projection: artifactContentProjection({ kind: artifact.kind, question: owned(await ctx.db.get(artifact.id)) }) }
+    case 'section_block': return { projection: await sectionContentProjection(ctx, owned(await ctx.db.get(artifact.id))) }
+    case 'flashcard_version': {
+      const version = owned(await ctx.db.get(artifact.id))
+      const cards = await boundedRows(ctx.db.query('flashcardVersionCards').withIndex('by_versionId', q => q.eq('versionId', version._id)).take(201), 200)
+      if (cards.some(card => card.userId !== userId || card.roomId !== version.roomId)) unavailable()
+      return { projection: artifactContentProjection({ kind: artifact.kind, version, cards }), revision: String(version._id) }
+    }
+    case 'audio_overview': return { projection: await audioOverviewContentProjection(ctx, owned(await ctx.db.get(artifact.id))) }
+    case 'session_block': {
+      const block = owned(await ctx.db.get(artifact.id))
+      const content = owned(await ctx.db.get(block.sessionContentId))
+      if (content.assessmentPurpose !== undefined || content.assessmentOpportunityId !== undefined) unavailable()
+      return { projection: await sessionBlockContentProjection(ctx, block, content), revision: String(content.revision) }
+    }
+  }
+}
+
+async function preparationSources(ctx: ReadCtx, userId: string, member: PreparationMember, projection: ContentProjection) {
+  const documents = new Set<Id<'documents'>>()
+  const snapshots = new Set<Id<'learnSourceSnapshots'>>()
+  const visit = (value: unknown, key = ''): void => {
+    if (typeof value === 'string') {
+      if (['documentId', 'sourceDocumentId', 'sourceDocumentIds', 'scopeDocIds'].includes(key)) {
+        const id = ctx.db.normalizeId('documents', value)
+        if (!id) unavailable()
+        documents.add(id)
+      }
+      if (key === 'sourceSnapshotId') {
+        const id = ctx.db.normalizeId('learnSourceSnapshots', value)
+        if (!id) unavailable()
+        snapshots.add(id)
+      }
+      return
+    }
+    if (Array.isArray(value)) { for (const child of value) visit(child, key); return }
+    if (value !== null && typeof value === 'object') for (const [field, child] of Object.entries(value)) visit(child, field)
+  }
+  visit(projection.payload)
+  if (member.artifact.kind === 'document' || member.artifact.kind === 'document_chunk') documents.add(member.artifact.id)
+  const sources: Dependency[] = [...member.sources]
+  for (const documentId of documents) {
+    const document = await liveDocument(ctx, userId, documentId)
+    if (!document.sourceRevision?.trim()) unavailable()
+    sources.push({ kind: 'document', documentId, sourceRevision: document.sourceRevision })
+  }
+  for (const sourceSnapshotId of snapshots) {
+    const snapshot = await ctx.db.get(sourceSnapshotId)
+    if (!snapshot || snapshot.userId !== userId || !snapshot.contentHash) unavailable()
+    sources.push({ kind: 'snapshot', sourceSnapshotId, revision: snapshot.revision, recordRevision: snapshot.recordRevision ?? 1, contentHash: snapshot.contentHash })
+  }
+  const unique = [...new Map(sources.map(source => [canonicalJson(source), source])).values()]
+  if (unique.length > limits.maxSources) unavailable()
+  for (const source of unique) if (!await sourceAvailable(ctx, userId, source)) unavailable()
+  return unique
+}
+
+async function reservedCases(ctx: ReadCtx, userId: string) {
+  const byClass = await ctx.db.query('learnAssessmentCases').withIndex('by_userId_and_usageClass', q => q.eq('userId', userId).eq('usageClass', 'measurement_reserved')).take(limits.maxReservedCases + 1)
+  const byReservation = await ctx.db.query('learnAssessmentCases').withIndex('by_userId_and_reservedAt', q => q.eq('userId', userId).gt('reservedAt', undefined)).take(limits.maxReservedCases + 1)
+  const rows = [...new Map([...byClass, ...byReservation].map(row => [row._id, row])).values()]
+  if (rows.length > limits.maxReservedCases) unavailable()
+  return rows
+}
+
+async function instructionalCase(ctx: ReadCtx, userId: string, fingerprints: CaseFingerprints) {
+  const scenarios = await ctx.db.query('learnAssessmentCases').withIndex('by_userId_and_scenarioFingerprint', q => q.eq('userId', userId).eq('scenarioFingerprint', fingerprints.scenarioFingerprint)).take(2)
+  const solutions = await ctx.db.query('learnAssessmentCases').withIndex('by_userId_and_solutionFingerprint', q => q.eq('userId', userId).eq('solutionFingerprint', fingerprints.solutionFingerprint)).take(2)
+  const matches = [...new Map([...scenarios, ...solutions].map(row => [row._id, row])).values()]
+  if (scenarios.length > 1 || solutions.length > 1 || matches.length > 1) unavailable()
+  const existing = matches[0]
+  if (existing && (existing.identityPolicyVersion !== LEARN_ARTIFACT_CASE_IDENTITY_VERSION || existing.usageClass === 'measurement_reserved' || existing.reservedAt !== undefined)) {
+    throw new Error('Instructional reservation check rejected')
+  }
+  return existing
+}
+
+async function prepareAndRegister(ctx: MutationCtx, userId: string, input: unknown) {
+  const budget = createArtifactLineageReadContext(ctx)
+  ctx = budget.ctx
+  const args = parseLearnContract(learnArtifactPreparationArgsSchema, input)
+  const catalog = await readCatalog(ctx, userId)
+  if (catalog.measurementCapability?.enabled !== true || catalog.historyCompleteness !== 'prospective_complete'
+    || ![catalog.instrumentationEpoch, catalog.historyBasisVersion, catalog.historyCoverageWatermark].every(value => learnVersionSchema.safeParse(value).success)) unavailable()
+  const reservations = args.artifacts.some(member => member.artifact.kind !== 'document' && member.artifact.kind !== 'document_chunk') ? await reservedCases(ctx, userId) : []
+  const reservedFingerprints = new Set(reservations.flatMap(row => [row.scenarioFingerprint, row.solutionFingerprint]))
+  const corpusDigest = await artifactPayloadDigest({ version: LEARN_ARTIFACT_RESERVATION_VERSION, catalogRevision: catalog.catalogRevision,
+    instrumentationEpoch: catalog.instrumentationEpoch, historyCompleteness: catalog.historyCompleteness, historyBasisVersion: catalog.historyBasisVersion,
+    coverageWatermark: catalog.historyCoverageWatermark, reservations: reservations.map(row => ({ id: row._id, scenarioFingerprint: row.scenarioFingerprint,
+      solutionFingerprint: row.solutionFingerprint, identityPolicyVersion: row.identityPolicyVersion, usageClass: row.usageClass, reservedAt: row.reservedAt })).sort((a, b) => String(a.id).localeCompare(String(b.id))) })
+  const history = { instrumentationEpoch: catalog.instrumentationEpoch, historyCompleteness: catalog.historyCompleteness, historyBasisVersion: catalog.historyBasisVersion }
+  const pending = []
+  const distinct = new Set<string>()
+  type CasePlan = { pin: CaseFingerprints, existing: Doc<'learnAssessmentCases'> | undefined }
+  const plannedFingerprints = new Map<string, CasePlan>()
+  const plannedIdentities = new Map<Id<'learnAssessmentCases'>, CasePlan>()
+  for (const member of args.artifacts) {
+    const personal = member.artifact.kind === 'document' || member.artifact.kind === 'document_chunk'
+    if (personal && member.origins.length) unavailable()
+    if (member.artifact.kind === 'document_chunk' && member.key !== LEARN_ARTIFACT_DOCUMENT_CHUNK_SET_KEY) unavailable()
+    const content = await preparationContent(ctx, userId, member.artifact)
+    const payloadDigest = await artifactPayloadDigest(content.projection)
+    const reference = { artifact: member.artifact, key: member.key, revision: content.revision ?? `sha256:${payloadDigest}`, payloadDigest }
+    const identity = canonicalJson({ artifact: reference.artifact, key: reference.key, revision: reference.revision })
+    if (distinct.has(identity)) unavailable()
+    distinct.add(identity)
+    const active = await ctx.db.query('learnArtifactLineages').withIndex('by_artifact_kind_and_artifact_id_and_key_and_revision_and_nextId', q => q.eq('artifact.kind', reference.artifact.kind).eq('artifact.id', reference.artifact.id).eq('key', reference.key).eq('revision', reference.revision).eq('nextId', undefined)).take(1)
+    if (active.length) unavailable()
+    const fingerprints: CaseFingerprints[] = []
+    if (!personal) {
+      for (const text of caseTexts(content.projection)) fingerprints.push(await normalizedInstructionalCaseFingerprints(text.scenario, text.solution))
+      if (fingerprints.some(pin => reservedFingerprints.has(pin.scenarioFingerprint) || reservedFingerprints.has(pin.solutionFingerprint))) throw new Error('Instructional reservation check rejected')
+    }
+    const cases: CasePlan[] = []
+    for (const pin of new Map(fingerprints.map(pin => [canonicalJson(pin), pin])).values()) {
+      const existing = await instructionalCase(ctx, userId, pin)
+      const scenario = plannedFingerprints.get(`scenario:${pin.scenarioFingerprint}`)
+      const solution = plannedFingerprints.get(`solution:${pin.solutionFingerprint}`)
+      const identity = existing ? plannedIdentities.get(existing._id) : undefined
+      const matches = new Set([scenario, solution, identity].filter((plan): plan is CasePlan => plan !== undefined))
+      if (matches.size > 1) unavailable()
+      const plan = scenario ?? solution ?? identity ?? { pin, existing }
+      if (existing && plan.existing?._id !== existing._id) unavailable()
+      plannedFingerprints.set(`scenario:${pin.scenarioFingerprint}`, plan)
+      plannedFingerprints.set(`solution:${pin.solutionFingerprint}`, plan)
+      if (existing) plannedIdentities.set(existing._id, plan)
+      cases.push(plan)
+    }
+    if (cases.length > limits.maxCases) unavailable()
+    const origins = []
+    for (const origin of member.origins) {
+      const row = await findLineage(ctx, userId, origin.reference)
+      if (row.classification !== 'teaching') throw new Error('Instructional reservation check rejected')
+      const graph = await inspectGraph(ctx, userId, row, catalog.catalogRevision, true)
+      if ([...graph.usage.values()].some(usage => usage === 'measurement_reserved')) throw new Error('Instructional reservation check rejected')
+      origins.push({ row, transformation: origin.transformation })
+    }
+    let semanticDecision: 'not_required' | 'pass' | 'reject' | 'unknown' = 'not_required'
+    if (!personal && reservations.length) {
+      const semantic = await instructionalReservationSemanticAdapter.compare({ ctx, projection: content.projection, fingerprints, reservedCases: reservations, catalog })
+      semanticDecision = semantic.decision
+      if (semantic.decision !== 'pass' || semantic.coverage !== 'complete') throw new Error('Instructional reservation check unknown')
+    }
+    const sources = await preparationSources(ctx, userId, member, content.projection)
+    const preparation = personal ? { kind: 'personal_work' as const, version: LEARN_ARTIFACT_PREPARATION_VERSION, ...history }
+      : { kind: 'instructional_reservation' as const, version: LEARN_ARTIFACT_PREPARATION_VERSION, ...history, reservedCaseCount: reservations.length,
+          deterministicDecision: 'pass' as const, semanticDecision, semanticVersion: instructionalReservationSemanticAdapter.version }
+    pending.push({ reference, personal, cases, origins, sources, preparation })
+  }
+  const base = { userId, storageVersion: 'learn-v2.measurement-storage.v1' as const, createdAt: Date.now() }
+  const harnessArtifactDigest = await artifactPayloadDigest({ version: LEARN_ARTIFACT_PREPARATION_VERSION, identity: LEARN_ARTIFACT_CASE_IDENTITY_VERSION,
+    reservation: LEARN_ARTIFACT_RESERVATION_VERSION, semantic: instructionalReservationSemanticAdapter.version })
+  const registeredCases = new Map<CasePlan, Doc<'learnAssessmentCases'>>()
+  const artifacts = []
+  for (const member of pending) {
+    const bindings = []
+    for (const plan of member.cases) {
+      const { pin, existing } = plan
+      let row = existing ?? registeredCases.get(plan)
+      if (!row) {
+        const caseId = await ctx.db.insert('learnAssessmentCases', { ...base, ...pin, caseKey: `instructional:${await artifactPayloadDigest(pin)}`,
+          identityPolicyVersion: LEARN_ARTIFACT_CASE_IDENTITY_VERSION, usageClass: 'unknown' })
+        row = (await ctx.db.get(caseId))!
+      }
+      registeredCases.set(plan, row)
+      bindings.push({ caseId: row._id, scenarioFingerprint: row.scenarioFingerprint, solutionFingerprint: row.solutionFingerprint, identityPolicyVersion: row.identityPolicyVersion })
+    }
+    const uniqueBindings = [...new Map(bindings.map(binding => [binding.caseId, binding])).values()]
+    const lineageId = await ctx.db.insert('learnArtifactLineages', { ...base, ...member.reference, lineageVersion: LEARN_ARTIFACT_LINEAGE_VERSION,
+      manifestDigest: '0'.repeat(64), classification: member.personal ? 'genuine_personal_work' : 'teaching', evidenceStatus: 'available',
+      authority: member.personal ? 'personal_authorship' : 'server_producer', authorityVersion: LEARN_ARTIFACT_PREPARATION_VERSION,
+      derivation: member.origins.length ? 'derived' : 'original', originCount: member.origins.length, caseCount: uniqueBindings.length, sourceCount: member.sources.length })
+    for (const binding of uniqueBindings) await ctx.db.insert('learnArtifactCaseBindings', { ...base, lineageId, ...binding })
+    for (const { row, transformation } of member.origins) await ctx.db.insert('learnArtifactLineageOrigins', { ...base, lineageId, originLineageId: row._id,
+      originRevision: row.revision, originPayloadDigest: row.payloadDigest, originManifestDigest: row.manifestDigest, classification: row.classification, transformation })
+    for (const dependency of member.sources) await ctx.db.insert('learnArtifactSourceLinks', { ...base, lineageId, evidenceStatus: 'available', dependency })
+    const row = (await ctx.db.get(lineageId))!
+    const originRows = await ctx.db.query('learnArtifactLineageOrigins').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', lineageId)).take(limits.maxOrigins + 1)
+    const caseRows = await ctx.db.query('learnArtifactCaseBindings').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', lineageId)).take(limits.maxCases + 1)
+    const sourceRows = await ctx.db.query('learnArtifactSourceLinks').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', lineageId)).take(limits.maxSources + 1)
+    const manifestDigest = await artifactManifestDigest(ctx, row, originRows, caseRows, sourceRows)
+    const validationId = await ctx.db.insert('learnArtifactValidations', { ...base, lineageId, payloadDigest: row.payloadDigest, manifestDigest,
+      evidenceStatus: 'available', decision: 'pass', comparedCatalogRevision: catalog.catalogRevision, coverage: 'complete', coverageWatermark: catalog.historyCoverageWatermark,
+      corpusDigest, identityPolicyVersion: LEARN_ARTIFACT_CASE_IDENTITY_VERSION, noveltyPolicyVersion: member.personal ? LEARN_ARTIFACT_PREPARATION_VERSION : LEARN_ARTIFACT_RESERVATION_VERSION,
+      validatorVersion: LEARN_ARTIFACT_PREPARATION_VERSION, validatorModel: null, harnessArtifactDigest, preparation: member.preparation })
+    await ctx.db.patch(lineageId, { manifestDigest, validationId })
+    artifacts.push({ reference: member.reference, validationId })
+  }
+  const result = await registerBatch(ctx, userId, { artifacts, expectedCatalogRevision: catalog.catalogRevision })
+  return parseLearnContract(learnArtifactPreparationResultSchema, { ...result, references: artifacts.map(member => member.reference) })
+}
+
+export async function prepareAndRegisterInstructionalArtifactsForOwner(ctx: MutationCtx, userId: string, input: unknown) {
+  ctx = withReadBudget(ctx)
+  if (await requireAuth(ctx) !== userId) throw new Error('Learn access denied')
+  return prepareAndRegister(ctx, userId, input)
+}
+export async function prepareAndRegisterInstructionalArtifactsForRecord(ctx: MutationCtx, record: LearnArtifactOwnerRecord, input: unknown) {
+  ctx = withReadBudget(ctx)
+  return prepareAndRegister(ctx, await requireRecordOwner(ctx, record), input)
+}
+export async function prepareAndRegisterInstructionalArtifacts(ctx: MutationCtx, input: unknown) {
+  ctx = withReadBudget(ctx)
+  return prepareAndRegister(ctx, await requireAuth(ctx), input)
+}
+
+async function personalWorkDocument(ctx: ReadCtx, userId: string, documentId: Id<'documents'>) {
+  const document = await ctx.db.get(documentId)
+  if (!document || document.userId !== userId || !['indexing', 'success'].includes(document.status)
+    || !document.sourceRevision?.trim() || !document.contentHash?.trim()) unavailable()
+  await liveFolder(ctx, userId, document.folderId)
+  return { classification: 'genuine_personal_work' as const, reference: { artifact: { kind: 'document' as const, id: documentId }, key: 'whole', revision: document.sourceRevision,
+    payloadDigest: await artifactPayloadDigest(artifactContentProjection({ kind: 'document', document })) } }
+}
+export async function classifyPersonalWorkDocumentForOwner(ctx: ReadCtx, userId: string, documentId: Id<'documents'>) {
+  ctx = withReadBudget(ctx)
+  if (await requireAuth(ctx) !== userId) throw new Error('Learn access denied')
+  return personalWorkDocument(ctx, userId, documentId)
+}
+export async function classifyPersonalWorkDocumentForRecord(ctx: ReadCtx, record: Extract<LearnArtifactOwnerRecord, { kind: 'document' }>) {
+  ctx = withReadBudget(ctx)
+  const userId = await requireRecordOwner(ctx, record)
+  if (record.kind !== 'document') unavailable()
+  return personalWorkDocument(ctx, userId, record.id)
 }
 
 async function supersede(ctx: MutationCtx, userId: string, input: unknown) {

@@ -4,6 +4,7 @@ import {
   LEARN_ARTIFACT_LINEAGE_VERSION, LEARN_ARTIFACT_LINEAGE_LIMITS, learnArtifactLookupResultSchema,
   learnArtifactValidationSchema, learnArtifactRegistrationArgsSchema, learnArtifactRegistrationResultSchema,
   learnArtifactBatchRegistrationArgsSchema, learnArtifactBatchRegistrationResultSchema, learnArtifactOwnerRecordSchema,
+  learnArtifactPreparationArgsSchema, learnArtifactPreparationResultSchema, LEARN_ARTIFACT_PREPARATION_VERSION,
   validateLearnArtifactLookup, validateLearnArtifactLookupResult,
 } from './learn-v2-artifact-lineage'
 import { learnIdSchema } from './learn-v2-responses'
@@ -62,5 +63,33 @@ describe('B1 owner-record and batch wire validators', () => {
     }
     expect(learnArtifactOwnerRecordSchema.safeParse({ kind: 'document', id: id('documents'), userId: 'caller' }).success).toBe(false)
     expect(learnArtifactBatchRegistrationResultSchema.safeParse({ ...receipt, readUsage: { ...receipt.readUsage, chargedBytes: -1 } }).success).toBe(false)
+  })
+})
+
+describe('server preparation contract', () => {
+  const artifact = { artifact: { kind: 'quiz_question', id: id('quizQuestions') }, key: 'whole', origins: [], sources: [] }
+  test('accepts only bounded identities and server-built provenance, with computed references in the receipt', () => {
+    expect(learnArtifactPreparationArgsSchema.parse({ artifacts: [artifact] })).toEqual({ artifacts: [artifact] })
+    expect(learnArtifactPreparationArgsSchema.safeParse({ artifacts: Array.from({ length: 50 }, () => artifact) }).success).toBe(true)
+    expect(learnArtifactPreparationArgsSchema.safeParse({ artifacts: Array.from({ length: 51 }, () => artifact) }).success).toBe(false)
+    const receipt = { version: LEARN_ARTIFACT_LINEAGE_VERSION, lineageIds: [id('learnArtifactLineages')], catalogRevision: 1,
+      references: [reference], readUsage: { chargedBytes: 100, documentsRead: 1, readRequests: 2, limitBytes: 4 * 1024 * 1024 } }
+    expect(learnArtifactPreparationResultSchema.parse(receipt)).toEqual(receipt)
+    expect(learnArtifactPreparationResultSchema.safeParse({ ...receipt, decision: 'pass' }).success).toBe(false)
+  })
+  test.each(['classification', 'caseId', 'validationId', 'decision', 'payloadDigest', 'revision', 'semanticAdapter', 'expectedCatalogRevision'])('rejects %s at both envelope levels', field => {
+    expect(learnArtifactPreparationArgsSchema.safeParse({ artifacts: [artifact], [field]: 'asserted' }).success).toBe(false)
+    expect(learnArtifactPreparationArgsSchema.safeParse({ artifacts: [{ ...artifact, [field]: 'asserted' }] }).success).toBe(false)
+  })
+  test('keeps preparation evidence private, versioned and compatible with old decisions', () => {
+    const preparation = { version: LEARN_ARTIFACT_PREPARATION_VERSION, kind: 'instructional_reservation' as const, instrumentationEpoch: 'epoch.v1',
+      historyCompleteness: 'prospective_complete' as const, historyBasisVersion: 'history.v1', reservedCaseCount: 0, deterministicDecision: 'pass' as const,
+      semanticDecision: 'not_required' as const, semanticVersion: 'semantic.unavailable.v1' }
+    const decision = { ...validation, preparation }
+    expect(learnArtifactValidationSchema.parse(decision)).toEqual(decision)
+    expect(learnArtifactValidationSchema.parse(validation)).toEqual(validation)
+    expectTypeOf<typeof decision>().toExtend<Pick<Doc<'learnArtifactValidations'>, keyof typeof decision>>()
+    expect(learnArtifactValidationSchema.safeParse({ ...decision, preparation: { ...preparation, reservedCaseCount: -1 } }).success).toBe(false)
+    expect(learnArtifactValidationSchema.safeParse({ ...decision, preparation: { ...preparation, kind: 'personal_work' } }).success).toBe(false)
   })
 })

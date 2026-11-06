@@ -1918,6 +1918,8 @@ export default defineSchema({
     .index('by_artifact_kind_and_artifact_id_and_key_and_revision_and_nextId', ['artifact.kind', 'artifact.id', 'key', 'revision', 'nextId']),
   learnAssessmentCases: defineTable(measurementStorage.assessmentCaseValidator)
     .index('by_userId', ['userId'])
+    .index('by_userId_and_usageClass', ['userId', 'usageClass'])
+    .index('by_userId_and_reservedAt', ['userId', 'reservedAt'])
     .index('by_userId_and_caseKey', ['userId', 'caseKey'])
     .index('by_userId_and_scenarioFingerprint', ['userId', 'scenarioFingerprint'])
     .index('by_userId_and_solutionFingerprint', ['userId', 'solutionFingerprint']),

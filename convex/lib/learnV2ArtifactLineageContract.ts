@@ -1,5 +1,5 @@
 import { v } from 'convex/values'
-import { LEARN_ARTIFACT_CLASSIFICATIONS, LEARN_ARTIFACT_LINEAGE_VERSION } from '../../shared/learn-v2-artifact-lineage'
+import { LEARN_ARTIFACT_CLASSIFICATIONS, LEARN_ARTIFACT_LINEAGE_VERSION, LEARN_ARTIFACT_PREPARATION_VERSION } from '../../shared/learn-v2-artifact-lineage'
 
 const base = { userId: v.string(), storageVersion: v.literal('learn-v2.measurement-storage.v1'), createdAt: v.number() }
 const evidence = { evidenceStatus: v.union(v.literal('available'), v.literal('evidence_unavailable')), invalidatedAt: v.optional(v.number()) }
@@ -26,12 +26,20 @@ export const artifactOwnerRecordValidator = v.union(
   v.object({ kind: v.literal('audio_job'), id: v.id('audioOverviewJobs') }),
 )
 export const artifactCaseFields = { caseId: v.id('learnAssessmentCases'), scenarioFingerprint: v.string(), solutionFingerprint: v.string(), identityPolicyVersion: v.string() }
+const preparationHistory = { instrumentationEpoch: v.string(), historyCompleteness: v.union(v.literal('unknown'), v.literal('prospective_complete')), historyBasisVersion: v.string() }
+const preparationEvidence = v.union(
+  v.object({ kind: v.literal('instructional_reservation'), version: v.literal(LEARN_ARTIFACT_PREPARATION_VERSION), ...preparationHistory,
+    reservedCaseCount: v.number(), deterministicDecision: v.union(v.literal('pass'), v.literal('reject')),
+    semanticDecision: v.union(v.literal('not_required'), v.literal('pass'), v.literal('reject'), v.literal('unknown')), semanticVersion: v.string() }),
+  v.object({ kind: v.literal('personal_work'), version: v.literal(LEARN_ARTIFACT_PREPARATION_VERSION), ...preparationHistory }),
+)
 export const artifactValidationFields = {
   lineageId: v.id('learnArtifactLineages'), payloadDigest: v.string(), manifestDigest: v.string(),
   decision: v.union(v.literal('pass'), v.literal('reject'), v.literal('unknown')), comparedCatalogRevision: v.number(),
   coverage: v.union(v.literal('complete'), v.literal('unknown')), coverageWatermark: v.string(), corpusDigest: v.string(),
   identityPolicyVersion: v.string(), noveltyPolicyVersion: v.string(), validatorVersion: v.string(),
   validatorModel: v.union(v.string(), v.null()), harnessArtifactDigest: v.string(),
+  preparation: v.optional(preparationEvidence),
 }
 export const artifactLineageFields = {
   ...base, ...evidence, ...artifactReferenceFields, lineageVersion: v.literal(LEARN_ARTIFACT_LINEAGE_VERSION), manifestDigest: v.string(), classification: artifactClassificationValidator,
