@@ -105,7 +105,7 @@ describe('report source v4 computation contract', () => {
 
   it.each(['protocolVersion', 'enrollmentAt', 'timezone', 'anchorKind', 'allocationOrder', 'responseKind', 'scorerConfiguration', 'anchorAt', 'assignedDay7', 'assignedDay30'] as const)(
     'forbids the non-admitted storage pin %s', async field => {
-      const { episode: admitted } = await measurementReportSourceFixture()
+      const { episode: admitted } = await measurementReportSourceFixture(true)
       const { episode } = await measurementReportNonAdmittedFixture('not_admitted', 'blocked')
       // Response/scorer pairing remains consistent, isolating the admission rule.
       const pins = field === 'responseKind' || field === 'scorerConfiguration'
@@ -384,9 +384,10 @@ describe('report source v4 computation contract', () => {
       { ...claim, claim: { ...claim.claim, claimKey: 'laterClaim', claimSequence: 2 } }]) {
       expect(reconcileLearnReportSourceRows(roster, [watermark, episode, claim, row]).reasonCodes).toContain('conflicting_source_row')
     }
-    const day30 = { ...episode, horizonDays: 30 as const, clock: { ...episode.clock!, horizonDays: 30 as const },
+    const both = { ...episode, assignment: { ...episode.assignment, allocationOrder: 'ABC' as const, assignedDay30: true } }
+    const day30 = { ...both, horizonDays: 30 as const, clock: { ...episode.clock!, horizonDays: 30 as const },
       originalOpportunityId: 'day30Opportunity' as typeof episode.originalOpportunityId, delayedAcceptance: null }
-    expect(reconcileLearnReportSourceRows(roster, [watermark, episode, claim, day30])).toEqual({ status: 'complete', reasonCodes: [] })
+    expect(reconcileLearnReportSourceRows(roster, [watermark, both, claim, day30])).toEqual({ status: 'complete', reasonCodes: [] })
   })
 
   it('reports duplicate and conflicting source rows identically for every row order', async () => {
@@ -415,12 +416,12 @@ describe('report source v4 computation contract', () => {
       capabilityKey: `sha256:${'b'.repeat(64)}` })
     expect(reconcileLearnReportSourceRows([watermark.learnerKey], [watermark, episode, otherEpisode]).reasonCodes).toContain('conflicting_capability_key')
     const day30 = learnReportEpisodeSnapshotSchema.parse({ ...episode, horizonDays: 30, clock: null,
-      assignment: { ...episode.assignment, depth: 'advanced' } })
+      assignment: { ...episode.assignment, allocationOrder: 'ABC', assignedDay30: true, depth: 'advanced' } })
     expect(reconcileLearnReportSourceRows([watermark.learnerKey], [watermark, episode, day30]).reasonCodes).toContain('conflicting_assignment_snapshot')
   })
 
   it('rejects the same original delayed outcome in both the 7- and 30-day episodes', async () => {
-    const { episode, day30, watermark } = await measurementReportIdentityFixture()
+    const { episode, day30, watermark } = await measurementReportIdentityFixture(true)
     const reused = { ...day30, originalOpportunityId: episode.originalOpportunityId, delayedAcceptance: episode.delayedAcceptance, delayed: episode.delayed }
     expect(reconcileLearnReportSourceRows([watermark.learnerKey], [watermark, episode, reused])).toEqual({
       status: 'incomplete', reasonCodes: ['reused_outcome_identity'],
@@ -428,7 +429,7 @@ describe('report source v4 computation contract', () => {
   })
 
   it.each(['horizon', 'assignment'] as const)('owns every delayed and replacement identity within one episode across %s rows', async scope => {
-    const { episode, day30, otherAssignment, watermark } = await measurementReportIdentityFixture()
+    const { episode, day30, otherAssignment, watermark } = await measurementReportIdentityFixture(scope === 'horizon')
     const other = scope === 'horizon' ? day30 : otherAssignment
     const slots = [
       { opportunity: 'originalOpportunityId', acceptance: 'delayedAcceptance', result: 'delayed' },
@@ -478,13 +479,13 @@ describe('report source v4 computation contract', () => {
   })
 
   it.each([false, true])('allows identical cold snapshots across horizons, scored=%s', async scored => {
-    const { episode, day30, watermark } = await measurementReportIdentityFixture()
+    const { episode, day30, watermark } = await measurementReportIdentityFixture(true)
     const rows = [watermark, { ...episode, cold: scored ? episode.cold : null }, { ...day30, cold: scored ? day30.cold : null }]
     expect(reconcileLearnReportSourceRows([watermark.learnerKey], rows)).toEqual({ status: 'complete', reasonCodes: [] })
   })
 
   it.each(['opportunity', 'acceptance', 'result', 'unscored'] as const)('rejects conflicting cross-horizon cold %s snapshots', async changed => {
-    const { episode, day30, watermark } = await measurementReportIdentityFixture()
+    const { episode, day30, watermark } = await measurementReportIdentityFixture(true)
     const row = structuredClone(day30)
     if (changed === 'opportunity') row.coldOpportunityId = 'anotherColdOpportunity' as typeof row.coldOpportunityId
     if (changed === 'acceptance') {
