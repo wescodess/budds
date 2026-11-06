@@ -42,6 +42,33 @@ export async function measurementReportSourceFixture() {
   return { keys, episode, claim, watermark, cold, delayed }
 }
 
+export async function measurementReportIdentityFixture() {
+  const source = await measurementReportSourceFixture()
+  const { cold, delayed, claim } = source
+  const replacement = learnReportResultSnapshotSchema.parse({ ...delayed, submissionId: 'replacementSubmission1',
+    attemptId: 'replacementAttempt1', executionId: 'replacementExecution1', caseId: 'caseD', itemId: 'itemD', formLabel: 'D' })
+  const episode = learnReportEpisodeSnapshotSchema.parse({ ...source.episode, cold, delayed,
+    replacementOpportunityId: 'replacementOpportunity1', replacementAcceptance: { submissionId: replacement.submissionId, acceptedAt: replacement.acceptedAt }, replacement })
+  const openAt = claim.clock.anchorAt + 30 * 86_400_000
+  const day30Delayed = learnReportResultSnapshotSchema.parse({ ...delayed, submissionId: 'day30Submission',
+    attemptId: 'day30Attempt', executionId: 'day30Execution', acceptedAt: openAt, scoreCommittedAt: openAt + 1000,
+    caseId: 'caseC', itemId: 'itemC', formLabel: 'C' })
+  const day30Replacement = learnReportResultSnapshotSchema.parse({ ...day30Delayed, submissionId: 'day30ReplacementSubmission',
+    attemptId: 'day30ReplacementAttempt', executionId: 'day30ReplacementExecution', caseId: 'caseE', itemId: 'itemE', formLabel: 'E' })
+  const day30 = learnReportEpisodeSnapshotSchema.parse({ ...episode, horizonDays: 30,
+    clock: { ...claim.clock, horizonDays: 30, dueLocalDate: '2026-10-31', dueAt: openAt, openAt, closeAt: openAt + 86_400_000 },
+    originalOpportunityId: 'day30Opportunity', delayedAcceptance: { submissionId: day30Delayed.submissionId, acceptedAt: day30Delayed.acceptedAt }, delayed: day30Delayed,
+    replacementOpportunityId: 'day30ReplacementOpportunity', replacementAcceptance: { submissionId: day30Replacement.submissionId, acceptedAt: day30Replacement.acceptedAt }, replacement: day30Replacement })
+  const otherAssignment = learnReportEpisodeSnapshotSchema.parse({ ...episode, assignmentId: 'assignment2', coldOpportunityId: 'otherColdOpportunity',
+    coldAcceptance: { ...episode.coldAcceptance, submissionId: 'otherColdSubmission' },
+    cold: { ...cold, submissionId: 'otherColdSubmission', attemptId: 'otherColdAttempt', executionId: 'otherColdExecution' },
+    originalOpportunityId: 'otherDelayedOpportunity', delayedAcceptance: { ...episode.delayedAcceptance, submissionId: 'otherDelayedSubmission' },
+    delayed: { ...delayed, submissionId: 'otherDelayedSubmission', attemptId: 'otherDelayedAttempt', executionId: 'otherDelayedExecution' },
+    replacementOpportunityId: 'otherReplacementOpportunity', replacementAcceptance: { ...episode.replacementAcceptance, submissionId: 'otherReplacementSubmission' },
+    replacement: { ...replacement, submissionId: 'otherReplacementSubmission', attemptId: 'otherReplacementAttempt', executionId: 'otherReplacementExecution' } })
+  return { ...source, episode, day30, otherAssignment }
+}
+
 export function emptyMeasurementEstimate() {
   return learnReportEstimateSchema.parse({ population: 0, observed: 0, contributingLearners: 0,
     status: 'no_eligible_population', populationState: 'known', sourceCoverage: 'complete', outcomeCoverage: 'none', validity: 'provisional',

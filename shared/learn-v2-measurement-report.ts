@@ -154,6 +154,26 @@ export function reconcileLearnReportSourceRows(roster: readonly string[], rows: 
   const assignments = new Map<string, string>()
   const capabilityKeys = new Map<string, string>()
   const capabilityScopes = new Map<string, string>()
+  const outcomeOwners = new Map<string, string>()
+  const outcomeSnapshots = new Map<string, string>()
+  const claimIdentities = new Set<string>()
+  function reconcileOutcome(slotOwner: string | null, opportunityId: string | null,
+    acceptance: z.infer<typeof learnReportAcceptanceSnapshotSchema> | null, result: z.infer<typeof learnReportResultSnapshotSchema> | null) {
+    const keys = [
+      ...(opportunityId === null ? [] : [JSON.stringify(['opportunity', opportunityId])]),
+      ...(acceptance === null ? [] : [JSON.stringify(['submission', acceptance.submissionId])]),
+      ...(result === null ? [] : [JSON.stringify(['attempt', result.attemptId]), JSON.stringify(['execution', result.executionId])]),
+    ]
+    const snapshot = JSON.stringify([opportunityId, acceptance, result])
+    for (const key of keys) {
+      if (slotOwner !== null) {
+        if (outcomeOwners.has(key) && outcomeOwners.get(key) !== slotOwner) reasons.add('reused_outcome_identity')
+        else outcomeOwners.set(key, slotOwner)
+      }
+      if (outcomeSnapshots.has(key) && outcomeSnapshots.get(key) !== snapshot) reasons.add('conflicting_outcome_snapshot')
+      else outcomeSnapshots.set(key, snapshot)
+    }
+  }
   if (owners.size !== roster.length) reasons.add('duplicate_roster_owner')
   for (const input of rows) {
     const row = learnReportInputSnapshotSchema.parse(input)
@@ -177,6 +197,23 @@ export function reconcileLearnReportSourceRows(roster: readonly string[], rows: 
         row.assignment, row.coldOpportunityId, row.coldAcceptance, row.cold, row.replacementPolicy])
       if (assignments.has(row.assignmentId) && assignments.get(row.assignmentId) !== frozen) reasons.add('conflicting_assignment_snapshot')
       assignments.set(row.assignmentId, frozen)
+      reconcileOutcome(JSON.stringify(['cold', row.assignmentId]), row.coldOpportunityId, row.coldAcceptance, row.cold)
+      const episode = JSON.stringify(['episode', row.assignmentId, row.horizonDays])
+      reconcileOutcome(episode, row.originalOpportunityId, row.delayedAcceptance, row.delayed)
+      reconcileOutcome(episode, row.replacementOpportunityId, row.replacementAcceptance, row.replacement)
+    }
+    if (row.kind === 'first_check_claim') {
+      for (const [kind, value, reason] of [
+        ['claim', row.claim.claimKey, 'duplicate_claim_key'],
+        ['basis_attempt', row.claim.basisAttemptId, 'reused_claim_basis_attempt'],
+        ['first_opportunity', row.firstCheckOpportunityId, 'reused_first_check_opportunity'],
+      ] as const) {
+        const key = JSON.stringify([kind, value])
+        if (claimIdentities.has(key)) reasons.add(reason)
+        else claimIdentities.add(key)
+      }
+      // A claim may reference a measurement slot, but must preserve its authoritative snapshot.
+      reconcileOutcome(null, row.firstCheckOpportunityId, row.acceptance, row.result)
     }
   }
   if (roster.some(owner => !watermarks.has(owner))) reasons.add('missing_owner_watermark')

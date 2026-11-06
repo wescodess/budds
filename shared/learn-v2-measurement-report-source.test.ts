@@ -5,7 +5,7 @@ import {
   learnReportEpisodeSnapshotSchema, learnReportFirstClaimSnapshotSchema, learnReportMetricSchema, learnReportProvenanceSchema,
   reconcileLearnReportSourceRows, validateLearnReportSourcePage, validateLearnMeasurementReportCells,
 } from './learn-v2-measurement-report'
-import { emptyMeasurementReportCell, measurementReportSourceFixture } from '../tests/fixtures/learn-v2-measurement-report'
+import { emptyMeasurementReportCell, measurementReportIdentityFixture, measurementReportSourceFixture } from '../tests/fixtures/learn-v2-measurement-report'
 
 describe('report source v3 computation contract', () => {
   it('changes only the source version and rejects prior envelopes', async () => {
@@ -165,7 +165,9 @@ describe('report source v3 computation contract', () => {
     const { episode, claim, watermark, delayed } = await measurementReportSourceFixture()
     const roster = [watermark.learnerKey]
     for (const row of [watermark, episode, claim]) {
-      expect(reconcileLearnReportSourceRows(roster, [watermark, episode, claim, row])).toEqual({ status: 'incomplete', reasonCodes: ['duplicate_source_row'] })
+      const reasonCodes = row.kind === 'first_check_claim'
+        ? ['duplicate_claim_key', 'duplicate_source_row', 'reused_claim_basis_attempt', 'reused_first_check_opportunity'] : ['duplicate_source_row']
+      expect(reconcileLearnReportSourceRows(roster, [watermark, episode, claim, row])).toEqual({ status: 'incomplete', reasonCodes })
     }
     for (const row of [{ ...watermark, sequence: 2 }, { ...episode, delayed }, { ...episode, capabilityKey: `sha256:${'b'.repeat(64)}` },
       { ...claim, claim: { ...claim.claim, claimKey: 'laterClaim', claimSequence: 2 } }]) {
@@ -184,6 +186,173 @@ describe('report source v3 computation contract', () => {
     const day30 = learnReportEpisodeSnapshotSchema.parse({ ...episode, horizonDays: 30, clock: null,
       assignment: { ...episode.assignment, depth: 'advanced' } })
     expect(reconcileLearnReportSourceRows([watermark.learnerKey], [watermark, episode, day30]).reasonCodes).toContain('conflicting_assignment_snapshot')
+  })
+
+  it('rejects the same original delayed outcome in both the 7- and 30-day episodes', async () => {
+    const { episode, day30, watermark } = await measurementReportIdentityFixture()
+    const reused = { ...day30, originalOpportunityId: episode.originalOpportunityId, delayedAcceptance: episode.delayedAcceptance, delayed: episode.delayed }
+    expect(reconcileLearnReportSourceRows([watermark.learnerKey], [watermark, episode, reused])).toEqual({
+      status: 'incomplete', reasonCodes: ['reused_outcome_identity'],
+    })
+  })
+
+  it.each(['horizon', 'assignment'] as const)('owns every delayed and replacement identity within one episode across %s rows', async scope => {
+    const { episode, day30, otherAssignment, watermark } = await measurementReportIdentityFixture()
+    const other = scope === 'horizon' ? day30 : otherAssignment
+    const slots = [
+      { opportunity: 'originalOpportunityId', acceptance: 'delayedAcceptance', result: 'delayed' },
+      { opportunity: 'replacementOpportunityId', acceptance: 'replacementAcceptance', result: 'replacement' },
+    ] as const
+    expect(reconcileLearnReportSourceRows([watermark.learnerKey], [watermark, episode, other]).status).toBe('complete')
+    for (const source of slots) {
+      for (const target of slots) {
+        for (const identity of ['opportunity', 'submissionId', 'attemptId', 'executionId'] as const) {
+          const row = structuredClone(other)
+          if (identity === 'opportunity') row[target.opportunity] = episode[source.opportunity]
+          else if (identity === 'submissionId') {
+            row[target.acceptance]!.submissionId = episode[source.acceptance]!.submissionId
+            row[target.result]!.submissionId = episode[source.result]!.submissionId
+          }
+          else if (identity === 'attemptId') row[target.result]!.attemptId = episode[source.result]!.attemptId
+          else row[target.result]!.executionId = episode[source.result]!.executionId
+          for (const rows of [[watermark, episode, row], [row, episode, watermark]]) {
+            const reconciled = reconcileLearnReportSourceRows([watermark.learnerKey], rows)
+            expect(reconciled.status, `${source.result}/${target.result}/${identity}`).toBe('incomplete')
+            expect(reconciled.reasonCodes, `${source.result}/${target.result}/${identity}`).toContain('reused_outcome_identity')
+          }
+        }
+      }
+    }
+  })
+
+  it.each(['opportunity', 'submissionId', 'attemptId', 'executionId'] as const)('owns a cold %s within one assignment', async identity => {
+    const { episode, otherAssignment, watermark } = await measurementReportIdentityFixture()
+    const row = structuredClone(otherAssignment)
+    if (identity === 'opportunity') row.coldOpportunityId = episode.coldOpportunityId
+    else if (identity === 'submissionId') {
+      row.coldAcceptance!.submissionId = episode.coldAcceptance!.submissionId
+      row.cold!.submissionId = episode.cold!.submissionId
+    }
+    else if (identity === 'attemptId') row.cold!.attemptId = episode.cold!.attemptId
+    else row.cold!.executionId = episode.cold!.executionId
+    expect(reconcileLearnReportSourceRows([watermark.learnerKey], [watermark, episode, row]).reasonCodes).toContain('reused_outcome_identity')
+  })
+
+  it('rejects even identical cold snapshots under another assignment', async () => {
+    const { episode, otherAssignment, watermark } = await measurementReportIdentityFixture()
+    const row = { ...otherAssignment, coldOpportunityId: episode.coldOpportunityId, coldAcceptance: episode.coldAcceptance, cold: episode.cold }
+    expect(reconcileLearnReportSourceRows([watermark.learnerKey], [watermark, episode, row])).toEqual({
+      status: 'incomplete', reasonCodes: ['reused_outcome_identity'],
+    })
+  })
+
+  it.each([false, true])('allows identical cold snapshots across horizons, scored=%s', async scored => {
+    const { episode, day30, watermark } = await measurementReportIdentityFixture()
+    const rows = [watermark, { ...episode, cold: scored ? episode.cold : null }, { ...day30, cold: scored ? day30.cold : null }]
+    expect(reconcileLearnReportSourceRows([watermark.learnerKey], rows)).toEqual({ status: 'complete', reasonCodes: [] })
+  })
+
+  it.each(['opportunity', 'acceptance', 'result', 'unscored'] as const)('rejects conflicting cross-horizon cold %s snapshots', async changed => {
+    const { episode, day30, watermark } = await measurementReportIdentityFixture()
+    const row = structuredClone(day30)
+    if (changed === 'opportunity') row.coldOpportunityId = 'anotherColdOpportunity' as typeof row.coldOpportunityId
+    if (changed === 'acceptance') {
+      row.coldAcceptance!.acceptedAt += 1
+      row.cold!.acceptedAt += 1
+    }
+    if (changed === 'result') row.cold!.scorePercent = 100
+    if (changed === 'unscored') row.cold = null
+    expect(reconcileLearnReportSourceRows([watermark.learnerKey], [watermark, episode, row])).toEqual({
+      status: 'incomplete', reasonCodes: ['conflicting_assignment_snapshot', 'conflicting_outcome_snapshot'],
+    })
+  })
+
+  it('rejects an episode score of 40 and first-check claim score of 100 for the same outcome', async () => {
+    const { episode, claim, delayed, watermark } = await measurementReportIdentityFixture()
+    const conflicting = { ...claim, result: { ...delayed, scorePercent: 100 } }
+    for (const rows of [[watermark, episode, conflicting], [conflicting, episode, watermark]]) {
+      expect(reconcileLearnReportSourceRows([watermark.learnerKey], rows)).toEqual({
+        status: 'incomplete', reasonCodes: ['conflicting_outcome_snapshot'],
+      })
+    }
+  })
+
+  it.each(['submissionId', 'attemptId', 'executionId'] as const)('reconciles shared %s snapshots independently of the opportunity identity', async identity => {
+    const { episode, claim, delayed, watermark } = await measurementReportIdentityFixture()
+    const result = { ...delayed, submissionId: 'claimSubmission', attemptId: 'claimAttempt', executionId: 'claimExecution', scorePercent: 100 }
+    result[identity] = delayed[identity]
+    const row = learnReportFirstClaimSnapshotSchema.parse({ ...claim, firstCheckOpportunityId: 'claimOpportunity', result,
+      acceptance: { submissionId: result.submissionId, acceptedAt: result.acceptedAt } })
+    expect(reconcileLearnReportSourceRows([watermark.learnerKey], [watermark, episode, row])).toEqual({
+      status: 'incomplete', reasonCodes: ['conflicting_outcome_snapshot'],
+    })
+  })
+
+  it.each(['unanswered', 'unscored', 'scored'] as const)('allows a first check to share the original delayed slot with identical %s snapshots', async state => {
+    const { episode, claim, watermark } = await measurementReportIdentityFixture()
+    const acceptance = state === 'unanswered' ? null : episode.delayedAcceptance
+    const result = state === 'scored' ? episode.delayed : null
+    const shared = { ...claim, acceptance, result, stateAtAcceptance: acceptance ? claim.stateAtAcceptance : null }
+    const rows = [watermark, { ...episode, delayedAcceptance: acceptance, delayed: result }, shared]
+    const saved = structuredClone(rows)
+    for (const order of [rows, [...rows].reverse()]) {
+      expect(reconcileLearnReportSourceRows([watermark.learnerKey], order)).toEqual({ status: 'complete', reasonCodes: [] })
+    }
+    expect(rows).toEqual(saved)
+  })
+
+  it.each(['acceptance', 'submission', 'unanswered', 'unscored'] as const)('requires a shared first opportunity to agree on its %s snapshot', async changed => {
+    const { episode, claim, delayed, watermark } = await measurementReportIdentityFixture()
+    const row = learnReportFirstClaimSnapshotSchema.parse({ ...claim, result: delayed })
+    if (changed === 'acceptance') {
+      row.acceptance!.acceptedAt += 1
+      row.result!.acceptedAt += 1
+    }
+    if (changed === 'submission') {
+      row.acceptance!.submissionId = 'anotherSubmission' as typeof delayed.submissionId
+      row.result!.submissionId = row.acceptance!.submissionId
+      row.result!.attemptId = 'anotherAttempt' as typeof delayed.attemptId
+      row.result!.executionId = 'anotherExecution' as typeof delayed.executionId
+    }
+    if (changed === 'unscored' || changed === 'unanswered') row.result = null
+    if (changed === 'unanswered') { row.acceptance = null; row.stateAtAcceptance = null }
+    expect(reconcileLearnReportSourceRows([watermark.learnerKey], [watermark, episode, row])).toEqual({
+      status: 'incomplete', reasonCodes: ['conflicting_outcome_snapshot'],
+    })
+  })
+
+  it('rejects a claim repeated under a key derived for another capability', async () => {
+    const { claim, watermark } = await measurementReportSourceFixture()
+    const keys = await deriveLearnReportComputationKeys({ reportRunId: 'run1', ownerTokenIdentifier: 'https://fixture.example|owner',
+      blueprintRevisionId: 'blueprint1', objectiveId: 'objective2' })
+    expect(keys.capabilityKey).not.toBe(claim.capabilityKey)
+    expect(reconcileLearnReportSourceRows([watermark.learnerKey], [watermark, claim, { ...claim, ...keys }])).toEqual({
+      status: 'incomplete', reasonCodes: ['duplicate_claim_key', 'reused_claim_basis_attempt', 'reused_first_check_opportunity'],
+    })
+  })
+
+  it.each(['claimKey', 'basisAttemptId', 'firstCheckOpportunityId'] as const)('enforces run-wide %s uniqueness independently of capability, owner and epoch', async identity => {
+    const { claim, watermark } = await measurementReportSourceFixture()
+    const reason = { claimKey: 'duplicate_claim_key', basisAttemptId: 'reused_claim_basis_attempt', firstCheckOpportunityId: 'reused_first_check_opportunity' }[identity]
+    for (const ownerTokenIdentifier of ['https://fixture.example|owner', 'https://fixture.example|other-owner']) {
+      const keys = await deriveLearnReportComputationKeys({ reportRunId: 'run1', ownerTokenIdentifier, blueprintRevisionId: 'blueprint1', objectiveId: 'objective2' })
+      const row = learnReportFirstClaimSnapshotSchema.parse({ ...claim, ...keys, stratum: { ...claim.stratum, epoch: 'epoch.v2' },
+        claim: { ...claim.claim, claimKey: 'anotherClaim', basisAttemptId: 'anotherBasisAttempt' },
+        firstCheckOpportunityId: 'anotherFirstOpportunity', acceptance: null, stateAtAcceptance: null })
+      const roster = [...new Set([watermark.learnerKey, keys.learnerKey])]
+      const rows = roster.map(learnerKey => ({ ...watermark, learnerKey }))
+      expect(reconcileLearnReportSourceRows(roster, [...rows, claim, row])).toEqual({ status: 'complete', reasonCodes: [] })
+      if (identity === 'firstCheckOpportunityId') {
+        row.firstCheckOpportunityId = claim.firstCheckOpportunityId
+        row.acceptance = claim.acceptance
+        row.stateAtAcceptance = claim.stateAtAcceptance
+      }
+      else if (identity === 'claimKey') row.claim.claimKey = claim.claim.claimKey
+      else row.claim.basisAttemptId = claim.claim.basisAttemptId
+      for (const order of [[...rows, claim, row], [...rows, row, claim]]) {
+        expect(reconcileLearnReportSourceRows(roster, order)).toEqual({ status: 'incomplete', reasonCodes: [reason] })
+      }
+    }
   })
 
   it('keeps computation keys out of cells, safe manifests, validation logs and reconciliation diagnostics', async () => {
