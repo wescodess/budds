@@ -1,0 +1,27 @@
+{
+  "version": "learn-v2.harness-inventory.v1",
+  "scope": "synthetic_only",
+  "epoch": "synthetic-scorer-harness.v1",
+  "configurations": [
+    {
+      "definition": {
+        "configurationId": "synthetic-baseline.v1",
+        "configurationVersion": "synthetic-baseline-definition.v1",
+        "kind": "legacy_baseline",
+        "requestedModel": "openai/gpt-fixture-scorer",
+        "endpoint": null,
+        "identity": {
+          "mappingVersion": "synthetic-family-map.v1",
+          "canonicalModel": "openai/gpt-fixture-scorer",
+          "family": "openai-gpt",
+          "snapshotAssurance": "unknown",
+          "verifiedReturnedModels": []
+        }
+      },
+      "expectedDigest": null,
+      "upstream": "synthetic-provider",
+      "transportEndpoint": "https://gateway.ai.cloudflare.com/v1/synthetic-account/synthetic-gateway/openrouter/v1/chat/completions",
+      "inventoryEvidence": "public-synthetic-fixture-only"
+    }
+  ]
+}
