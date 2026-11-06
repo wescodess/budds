@@ -45,10 +45,10 @@ async function sourceAvailable(ctx: ReadCtx, userId: string, source: Dependency)
     || snapshot.evidencePurgedAt !== undefined || snapshot.rightsStatus !== 'permitted' || snapshot.conflictStatus !== 'clear'
     || snapshot.revision !== source.revision || (snapshot.recordRevision ?? 1) !== source.recordRevision || snapshot.contentHash !== source.contentHash) return false
   const identity = await ctx.db.get(snapshot.sourceIdentityId)
-  if (!identity || identity.userId !== userId) return false
+  if (!identity || identity.userId !== userId || identity.tombstonedAt !== undefined) return false
   if (identity.folderDocumentId) {
     const document = await ctx.db.get(identity.folderDocumentId)
-    if (!document || document.userId !== userId) return false
+    if (!document || document.userId !== userId || document.status !== 'success') return false
   }
   if (source.kind === 'snapshot') return true
   const excerpt = await ctx.db.get(source.sourceExcerptId)

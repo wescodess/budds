@@ -1,19 +1,34 @@
 /// <reference types="vite/client" />
 import { convexTest } from 'convex-test'
-import { describe, expect, test } from 'vitest'
+import { makeFunctionReference } from 'convex/server'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
-import type { MutationCtx } from './_generated/server'
+import { internalMutation, type MutationCtx } from './_generated/server'
 import schema from './schema'
 import { artifactManifestDigest, advanceAssessmentCatalogForOwner, registerInstructionalArtifactForOwner } from './lib/learnV2ArtifactLineage'
+import { artifactRegistrationArgs, artifactRegistrationResultValidator } from './lib/learnV2ArtifactLineageContract'
 import { invalidateMeasurementSourceBatch } from './lib/learnV2MeasurementRetention'
 import { LEARN_ARTIFACT_LINEAGE_VERSION, LEARN_ARTIFACT_LINEAGE_LIMITS, type LearnArtifactReference } from '../shared/learn-v2-artifact-lineage'
 
-const modules = import.meta.glob('./**/*.ts')
 const owner = { tokenIdentifier: 'https://auth.example.com|lineage-owner', subject: 'same-subject' }
 const foreign = { tokenIdentifier: 'https://other.example.com|lineage-owner', subject: 'same-subject' }
+// Exercise the dormant registration seam as an internal mutation without adding a production endpoint.
+const modules = {
+  ...import.meta.glob('./**/*.ts'),
+  './artifactLineageTest.ts': async () => ({
+    registerInstructional: internalMutation({
+      args: artifactRegistrationArgs,
+      returns: artifactRegistrationResultValidator,
+      handler: (ctx, args) => registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, args),
+    }),
+  }),
+}
+const registerInstructional = makeFunctionReference<'mutation', ReturnType<typeof registration>, Awaited<ReturnType<typeof registerInstructionalArtifactForOwner>>>('artifactLineageTest:registerInstructional')
 type Fixture = Awaited<ReturnType<typeof prepare>>
 type Origin = Pick<Doc<'learnArtifactLineages'>, 'classification' | 'manifestDigest'> & { lineageId: Id<'learnArtifactLineages'>, caseId: Id<'learnAssessmentCases'>, reference: LearnArtifactReference }
+
+afterEach(() => { vi.useRealTimers() })
 
 async function prepare(ctx: MutationCtx, options: {
   classification?: Doc<'learnArtifactLineages'>['classification'], origin?: Origin, transformation?: Doc<'learnArtifactLineageOrigins'>['transformation'],
@@ -74,6 +89,36 @@ async function sealManifest(ctx: MutationCtx, lineageId: Id<'learnArtifactLineag
 }
 
 function registration(f: Fixture) { return { reference: f.reference, validationId: f.validationId, expectedCatalogRevision: f.catalogRevision } }
+
+async function prepareSourceDependency(ctx: MutationCtx, kind: 'snapshot' | 'excerpt', withBackingDocument = true) {
+  const f = await prepare(ctx, { classification: 'genuine_personal_work' })
+  const userId = owner.tokenIdentifier
+  // The source document is distinct from the artifact, so deleting it exercises source access.
+  const sourceDocumentId = withBackingDocument
+    ? await ctx.db.insert('documents', { userId, folderId: f.folderId, filename: 'source.txt', fileSize: 5, status: 'success' })
+    : undefined
+  const learningVoidId = await ctx.db.insert('learningVoids', { userId, folderId: f.folderId, title: 'Source owner', status: 'active', revision: 1, createdAt: f.base.createdAt, updatedAt: f.base.createdAt })
+  const identityId = await ctx.db.insert('learnSourceIdentities', { userId, learningVoidId, origin: withBackingDocument ? 'folder_document' : 'user_url', externalKey: 'source', folderDocumentId: sourceDocumentId })
+  const snapshotId = await ctx.db.insert('learnSourceSnapshots', { userId, learningVoidId, sourceIdentityId: identityId,
+    revision: 1, recordRevision: 1, status: 'user_accepted', rightsStatus: 'permitted', conflictStatus: 'clear', contentHash: 'f'.repeat(64), createdAt: f.base.createdAt })
+  const excerptId = await ctx.db.insert('learnSourceExcerpts', { userId, sourceSnapshotId: snapshotId, locator: 'https://example.com/', excerpt: 'Permitted source', rightsStatus: 'permitted' })
+  const link = await ctx.db.query('learnArtifactSourceLinks').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', f.lineageId)).unique()
+  if (!link) throw new Error('Missing source link')
+  const pin = { sourceSnapshotId: snapshotId, revision: 1, recordRevision: 1, contentHash: 'f'.repeat(64) }
+  await ctx.db.patch(link._id, { dependency: kind === 'snapshot' ? { kind, ...pin } : { kind, ...pin, sourceExcerptId: excerptId } })
+  const manifestDigest = await sealManifest(ctx, f.lineageId)
+  await ctx.db.patch(f.validationId, { manifestDigest })
+  return { ...f, manifestDigest, sourceDocumentId, identityId, snapshotId, excerptId, linkId: link._id }
+}
+
+async function expectSourceRevoked(t: ReturnType<typeof convexTest>, f: Fixture) {
+  const asOwner = t.withIdentity(owner)
+  expect.soft(await asOwner.query(internal.learnV2ArtifactLineage.resolve, { reference: f.reference })).toEqual({ status: 'unavailable', version: LEARN_ARTIFACT_LINEAGE_VERSION })
+  await expect.soft(asOwner.mutation(registerInstructional, registration(f))).rejects.toThrow('Artifact lineage unavailable')
+  expect(await t.run(ctx => ctx.db.get(f.catalogId))).toMatchObject({ catalogRevision: f.catalogRevision })
+  expect(await t.run(ctx => ctx.db.get(f.lineageId))).not.toHaveProperty('publication')
+  expect(await t.run(ctx => ctx.db.get(f.caseId))).toMatchObject({ usageClass: 'unknown' })
+}
 
 describe('instructional artifact lineage contract', () => {
   test('registers identity and publication in the owner catalogue transaction without an exposure', async () => {
@@ -227,6 +272,73 @@ describe('instructional artifact lineage contract', () => {
     expect(await t.run(ctx => invalidateMeasurementSourceBatch(ctx, owner.tokenIdentifier, source))).toBe(true)
     expect(await asOwner.query(internal.learnV2ArtifactLineage.resolve, { reference: f.reference })).toMatchObject({ status: 'unavailable' })
     expect(await t.run(ctx => ctx.db.get(f.caseId))).not.toBeNull()
+  })
+
+  describe.each(['snapshot', 'excerpt'] as const)('%s source revocation', (kind) => {
+    test.each([true, false])('resolves and registers an untombstoned owned permitted source (backing document: %s)', async (withBackingDocument) => {
+      const t = convexTest(schema, modules)
+      const f = await t.run(ctx => prepareSourceDependency(ctx, kind, withBackingDocument))
+      const asOwner = t.withIdentity(owner)
+      expect(await asOwner.query(internal.learnV2ArtifactLineage.resolve, { reference: f.reference })).toMatchObject({ status: 'bound' })
+      expect(await asOwner.mutation(registerInstructional, registration(f))).toMatchObject({ catalogRevision: 1 })
+      expect(await asOwner.query(internal.learnV2ArtifactLineage.resolve, { reference: f.reference })).toMatchObject({ status: 'bound', instructionalRegistered: true })
+    })
+
+    test('revokes resolution and registration at the real folder-document tombstone before scheduled evidence purge', async () => {
+      vi.useFakeTimers()
+      const t = convexTest(schema, modules)
+      const f = await t.run(ctx => prepareSourceDependency(ctx, kind))
+      if (!f.sourceDocumentId) throw new Error('Missing source document')
+      expect(await t.withIdentity(owner).query(internal.learnV2ArtifactLineage.resolve, { reference: f.reference })).toMatchObject({ status: 'bound' })
+      expect(await t.mutation(internal.learnV2Retention.purgeFolderDocumentSources, { userId: owner.tokenIdentifier, documentId: f.sourceDocumentId })).toEqual({ pending: true })
+      const identity = await t.run(ctx => ctx.db.get(f.identityId))
+      expect(identity).toHaveProperty('tombstonedAt')
+      expect(identity).not.toHaveProperty('folderDocumentId')
+      expect(await t.run(ctx => ctx.db.get(f.linkId))).toMatchObject({ evidenceStatus: 'available', dependency: { kind } })
+      const snapshot = await t.run(ctx => ctx.db.get(f.snapshotId))
+      expect(snapshot).toMatchObject({ status: 'user_accepted' })
+      expect(snapshot).not.toHaveProperty('evidencePurgedAt')
+      const excerpt = await t.run(ctx => ctx.db.get(f.excerptId))
+      expect(excerpt).toMatchObject({ excerpt: 'Permitted source' })
+      expect(excerpt).not.toHaveProperty('evidencePurgedAt')
+      expect(await t.run(ctx => ctx.db.system.query('_scheduled_functions').take(2))).toMatchObject([{ name: 'learnV2Retention:purgeSourceEvidence', state: { kind: 'pending' } }])
+      await expectSourceRevoked(t, f)
+    })
+
+    test('denies a tombstoned identity that never had a folder document', async () => {
+      const t = convexTest(schema, modules)
+      const f = await t.run(ctx => prepareSourceDependency(ctx, kind, false))
+      expect(await t.run(ctx => ctx.db.get(f.identityId))).not.toHaveProperty('folderDocumentId')
+      expect(await t.withIdentity(owner).query(internal.learnV2ArtifactLineage.resolve, { reference: f.reference })).toMatchObject({ status: 'bound' })
+      await t.run(ctx => ctx.db.patch(f.identityId, { tombstonedAt: 0 }))
+      await expectSourceRevoked(t, f)
+    })
+
+    test.each(['link_invalidated', 'link_unavailable', 'snapshot_purged', 'snapshot_unavailable', 'snapshot_rejected', 'effective_status_unavailable', 'document_deleted', 'document_failed'] as const)('denies existing revocation state %s without advancing the catalogue', async (state) => {
+      const t = convexTest(schema, modules)
+      const f = await t.run(ctx => prepareSourceDependency(ctx, kind))
+      expect(await t.withIdentity(owner).query(internal.learnV2ArtifactLineage.resolve, { reference: f.reference })).toMatchObject({ status: 'bound' })
+      await t.run(async (ctx) => {
+        if (state === 'link_invalidated') await ctx.db.patch(f.linkId, { invalidatedAt: 0 })
+        if (state === 'link_unavailable') await ctx.db.patch(f.linkId, { evidenceStatus: 'evidence_unavailable' })
+        if (state === 'snapshot_purged') await ctx.db.patch(f.snapshotId, { evidencePurgedAt: 0 })
+        if (state === 'snapshot_unavailable') await ctx.db.patch(f.snapshotId, { status: 'unavailable' })
+        if (state === 'snapshot_rejected') await ctx.db.patch(f.snapshotId, { status: 'rejected' })
+        if (state === 'effective_status_unavailable') await ctx.db.patch(f.snapshotId, { effectiveStatus: 'unavailable' })
+        if (!f.sourceDocumentId) throw new Error('Missing source document')
+        if (state === 'document_deleted') await ctx.db.delete(f.sourceDocumentId)
+        if (state === 'document_failed') await ctx.db.patch(f.sourceDocumentId, { status: 'failed' })
+      })
+      await expectSourceRevoked(t, f)
+    })
+  })
+
+  test('denies a purged excerpt while the snapshot and source remain available', async () => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => prepareSourceDependency(ctx, 'excerpt'))
+    expect(await t.withIdentity(owner).query(internal.learnV2ArtifactLineage.resolve, { reference: f.reference })).toMatchObject({ status: 'bound' })
+    await t.run(ctx => ctx.db.patch(f.excerptId, { evidencePurgedAt: 0 }))
+    await expectSourceRevoked(t, f)
   })
 
   test.each(['catalogue', 'coverage', 'validation', 'manifest', 'source', 'owner'] as const)('missing or stale %s is unavailable and cannot publish', async failure => {
