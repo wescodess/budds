@@ -1,6 +1,46 @@
 import {
   LEARN_V2_REPORT_SENSITIVITY_POLICY_VERSION, learnReportEstimateSchema, learnReportMetricSchema,
+  deriveLearnReportComputationKeys, learnReportEpisodeSnapshotSchema, learnReportFirstClaimSnapshotSchema,
+  learnReportResultSnapshotSchema, learnReportWatermarkSnapshotSchema,
 } from '../../shared/learn-v2-measurement-report'
+
+export async function measurementReportSourceFixture() {
+  const keys = await deriveLearnReportComputationKeys({ reportRunId: 'run1', ownerTokenIdentifier: 'https://fixture.example|owner',
+    blueprintRevisionId: 'blueprint1', objectiveId: 'objective1' })
+  const anchorAt = Date.UTC(2026, 9, 1)
+  const openAt = Date.UTC(2026, 9, 8)
+  const digest = `sha256:${'a'.repeat(64)}`
+  const scorerConfiguration = { scoringKind: 'deterministic', configurationDigest: digest, scorerVersion: 'scorer.v1' }
+  const stratum = { epoch: 'epoch.v1', baselineSha: 'a'.repeat(40), cohortVersion: 'cohort.v1', flow: 'v2_today', entryPoint: 'today.v1', depth: 'working',
+    familyId: 'family1', familyRevision: 1, familyValidationStatus: 'provisional_equivalent', equivalenceVersion: 'equivalence.v1', responseKind: 'keyed', scorerConfiguration }
+  const clock = { protocolVersion: 'protocol.v1', schedulingPolicyVersion: 'schedule.v1', anchorKind: 'sealed_cold', anchorEventId: 'cold1', anchorAt,
+    horizonDays: 7, timezone: 'UTC', dueLocalDate: '2026-10-08', dueAt: openAt, openAt, closeAt: openAt + 86_400_000 }
+  const episode = learnReportEpisodeSnapshotSchema.parse({ kind: 'episode', ...keys, assignmentId: 'assignment1',
+    learningVoidId: 'void1', blueprintRevisionId: 'blueprint1', objectiveId: 'objective1', horizonDays: 7,
+    assignment: { ...stratum, protocolVersion: 'protocol.v1', enrollmentAt: anchorAt - 1, timezone: 'UTC', anchorAt, anchorKind: 'sealed_cold',
+      historyStatus: 'prospectively_unexposed', allocationOrder: 'ABC', assignedDay7: true, assignedDay30: true, sourceCoverage: 'complete' },
+    clock, coldOpportunityId: 'coldOpportunity1', originalOpportunityId: 'delayedOpportunity1', replacementOpportunityId: null,
+    coldAcceptance: { submissionId: 'coldSubmission1', acceptedAt: anchorAt }, delayedAcceptance: { submissionId: 'delayedSubmission1', acceptedAt: openAt },
+    cold: null, delayed: null, replacementAcceptance: null, replacement: null, replacementPolicy: { kind: 'secondary_only' },
+    operationalEligibility: 'eligible', disposition: 'scoring_pending', reasonCodes: ['scoring_pending'], mixedFlow: false, treatmentEpochChanged: false })
+  const claim = learnReportFirstClaimSnapshotSchema.parse({ kind: 'first_check_claim', ...keys, stratum,
+    claim: { claimKey: 'claim1', claimSequence: 1, basisAttemptId: 'basisAttempt1', masteryRecordRevision: 1,
+      firstIndependentAt: anchorAt, firstIndependentLocalDate: '2026-10-01', firstIndependentTimezone: 'UTC',
+      transitionVersion: 'learn-v2.mastery-transition.v1', claimFactSequence: 1 },
+    firstCheckOpportunityId: 'delayedOpportunity1', checkSequence: 1, clock, stateAtEligibility: 'independent', stateAtAcceptance: 'independent',
+    acceptance: episode.delayedAcceptance, result: null, unresolvedReason: 'scoring_pending' })
+  const watermark = learnReportWatermarkSnapshotSchema.parse({ kind: 'owner_watermark', learnerKey: keys.learnerKey,
+    sequence: 1, dueWorkThrough: clock.closeAt, historyCoverage: 'complete', legacyIndependentAudit: { unknownCount: 0, sourceCoverage: 'complete' } })
+  const cold = learnReportResultSnapshotSchema.parse({ ...episode.coldAcceptance, attemptId: 'coldAttempt1', executionId: 'coldExecution1', kind: 'measurement_cold',
+    scoreCommittedAt: clock.closeAt + 1000, scorePercent: 60, thresholdPercent: 80, caseId: 'caseA', itemId: 'itemA', familyRevision: 1, formLabel: 'A',
+    ...scorerConfiguration, observedModel: null, observedUpstream: null, identityVersion: 'identity.v1', identityStatus: 'deterministic',
+    comparisonContractDigest: digest, supportManifestDigest: digest, assistanceState: 'unassisted', assistancePolicyVersion: 'assistance.v1',
+    validityStatus: 'valid', exclusionReasons: [], measurementEligible: true, masteryEligible: false, evidenceAvailable: true,
+    pasteObserved: 'unknown', focusLossObserved: 'unknown', instrumentationVersion: 'instrumentation.v1', masteryStateBefore: 'unseen', masteryStateAfter: 'unseen' })
+  const delayed = learnReportResultSnapshotSchema.parse({ ...cold, ...episode.delayedAcceptance, attemptId: 'delayedAttempt1', executionId: 'delayedExecution1',
+    kind: 'measurement_delayed', scorePercent: 40, caseId: 'caseB', itemId: 'itemB', formLabel: 'B' })
+  return { keys, episode, claim, watermark, cold, delayed }
+}
 
 export function emptyMeasurementEstimate() {
   return learnReportEstimateSchema.parse({ population: 0, observed: 0, contributingLearners: 0,

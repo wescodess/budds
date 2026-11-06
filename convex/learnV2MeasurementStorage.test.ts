@@ -13,7 +13,7 @@ import { LEARN_V2_MEASUREMENT_REPORT_VERSION, LEARN_V2_MEASUREMENT_REPORT_SOURCE
 import { LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION, LEARN_V2_RESPONSE_TERMINALIZATION_VERSION,
   learnValiditySnapshotSchema, learnResponseTerminalizedResultSchema, resolveLearnResponseConfidenceRequested } from '../shared/learn-v2-responses'
 import { deriveLearnAssessmentResponseContext } from '../shared/learn-v2-measurement'
-import { partialMeasurementReportCell } from '../tests/fixtures/learn-v2-measurement-report'
+import { partialMeasurementReportCell, measurementReportSourceFixture } from '../tests/fixtures/learn-v2-measurement-report'
 
 const modules = import.meta.glob('./**/*.ts')
 const owner = { tokenIdentifier: 'https://auth.example.com|measurement-owner', subject: 'same-subject' }
@@ -137,7 +137,7 @@ describe('inactive Phase C storage boundaries', () => {
   test('round-trips the aggregate legacy audit source snapshot without widening owner export', async () => {
     const t = convexTest(schema, modules)
     const f = await t.run(ctx => seedMeasurementStorage(ctx, owner.tokenIdentifier))
-    const snapshot = learnReportInputSnapshotSchema.parse({ kind: 'owner_watermark', sequence: 1, dueWorkThrough: null, historyCoverage: 'unknown',
+    const snapshot = learnReportInputSnapshotSchema.parse({ kind: 'owner_watermark', learnerKey: f.reportKeys.learnerKey, sequence: 1, dueWorkThrough: null, historyCoverage: 'unknown',
       legacyIndependentAudit: { unknownCount: null, sourceCoverage: 'unknown' } })
     expect(() => learnReportInputSnapshotSchema.parse({ ...snapshot, legacyIndependentAudit: { unknownCount: 3, sourceCoverage: 'complete' } })).toThrow()
     await t.run(ctx => ctx.db.patch(f.rows.learnMeasurementReportRows, { rowKind: 'owner_watermark', snapshot,
@@ -151,6 +151,28 @@ describe('inactive Phase C storage boundaries', () => {
     expect(exported).toMatchObject([{ sourceVersion: LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION, rowKind: 'owner_watermark' }])
     expect(exported[0]).not.toHaveProperty('snapshot')
     expect(exported[0]).not.toHaveProperty('legacyIndependentAudit')
+  })
+
+  test('persists source v3 identities, frozen strata and unscored acceptance and rejects old source envelopes', async () => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => seedMeasurementStorage(ctx, owner.tokenIdentifier))
+    const row = await t.run(ctx => ctx.db.get(f.rows.learnMeasurementReportRows))
+    if (!row) throw new Error('Missing report source fixture')
+    const snapshot = learnReportInputSnapshotSchema.parse(row.snapshot)
+    if (snapshot.kind !== 'episode') throw new Error('Expected episode fixture')
+    expect(snapshot).toMatchObject({ ...f.reportKeys, assignmentId: f.rows.learnMeasurementAssignments,
+      learningVoidId: f.learningVoidId, blueprintRevisionId: f.scope.blueprintRevisionId, objectiveId: f.scope.objectiveId, horizonDays: 7,
+      coldAcceptance: { submissionId: f.rows.learnResponses, acceptedAt: f.base.createdAt }, cold: null,
+      delayedAcceptance: null, delayed: null, replacementAcceptance: null, replacement: null, replacementPolicy: { kind: 'secondary_only' },
+      assignment: { responseKind: 'bounded_rubric', scorerConfiguration: { scoringKind: 'model', configurationDigest: 'a'.repeat(64), scorerVersion: 'scorer.v1' } } })
+    for (const sourceVersion of ['learn-v2.measurement-report-source.v1', 'learn-v2.measurement-report-source.v2']) {
+      await expect(t.run(ctx => ctx.db.patch(row._id, { sourceVersion } as never))).rejects.toThrow()
+    }
+    const oldSnapshot = { ...snapshot }
+    Reflect.deleteProperty(oldSnapshot, 'coldAcceptance')
+    await expect(t.run(ctx => ctx.db.patch(row._id, { snapshot: oldSnapshot } as never))).rejects.toThrow()
+    await expect(t.run(ctx => ctx.db.patch(row._id, { snapshot: { ...snapshot, responseAcceptedAt: f.base.createdAt } } as never))).rejects.toThrow()
+    expect(await t.run(ctx => ctx.db.get(row._id))).toEqual(row)
   })
 
   test('stores a valid measurement-only snapshot with the retained-promotion reason', async () => {
@@ -179,6 +201,7 @@ describe('inactive Phase C storage boundaries', () => {
         if (name === 'answer' && entry.export === 'owner_response') expect(JSON.stringify(rows)).toContain(canary)
         else expect(JSON.stringify(rows)).not.toContain(canary)
       }
+      for (const key of [...Object.values(a.reportKeys), ...Object.values(b.reportKeys)]) expect(JSON.stringify(rows)).not.toContain(key)
       const otherRows = await readAll(t, foreign, entry.table)
       expect(JSON.stringify(otherRows)).not.toContain(a.rows[entry.table])
       await expect(t.query(api.dataExport.getUserDataPage, { collection: entry.table, paginationOpts: { cursor: null, numItems: 8 } })).rejects.toThrow('Unauthenticated')
@@ -215,9 +238,10 @@ describe('inactive Phase C storage boundaries', () => {
     }
     const legacyBasisId = await t.run(ctx => ctx.db.insert('masteryAttempts', { userId: owner.tokenIdentifier, objectiveId: f.scope.objectiveId, attemptedAt: f.base.createdAt, idempotencyKey: 'basis', kind: 'independent_application', serverScorePercent: 80 }))
     const claim = { claimKey: 'first-independent-claim', claimSequence: 1, basisAttemptId: legacyBasisId, masteryRecordRevision: 4, firstIndependentAt: f.base.createdAt, firstIndependentLocalDate: '2027-01-15', firstIndependentTimezone: 'America/Toronto', transitionVersion: 'learn-v2.mastery-transition.v1' as const, claimFactSequence: 2 }
+    const { claim: { stratum } } = await measurementReportSourceFixture()
     await t.run(async (ctx) => {
       await ctx.db.patch(f.rows.learnAssessmentOpportunities, { firstCheckClaim: claim, checkSequence: 1 })
-      await ctx.db.insert('learnMeasurementReportFacts', { ...f.base, learningVoidId: f.learningVoidId, sequence: 2, epoch: 'fixture-epoch', factVersion: LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION, occurredAt: f.base.createdAt, fact: { kind: 'independent_claim', ...claim, firstCheckOpportunityId: f.rows.learnAssessmentOpportunities, checkSequence: 1 } })
+      await ctx.db.insert('learnMeasurementReportFacts', { ...f.base, learningVoidId: f.learningVoidId, sequence: 2, epoch: 'fixture-epoch', factVersion: LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION, occurredAt: f.base.createdAt, fact: { kind: 'independent_claim', ...claim, firstCheckOpportunityId: f.rows.learnAssessmentOpportunities, checkSequence: 1, stratum: { ...stratum, epoch: 'fixture-epoch', familyId: f.rows.learnMeasurementFamilies } } })
     })
     expect(await t.run(ctx => ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_firstCheckClaim_claimKey_and_checkSequence', q => q.eq('userId', owner.tokenIdentifier).eq('firstCheckClaim.claimKey', claim.claimKey).eq('checkSequence', 1)).unique())).toMatchObject({ firstCheckClaim: { claimSequence: 1 }, checkSequence: 1 })
     expect(await t.run(ctx => ctx.db.query('learnMeasurementReportFacts').withIndex('by_userId_and_fact_claimKey_and_fact_claimSequence', q => q.eq('userId', owner.tokenIdentifier).eq('fact.claimKey', claim.claimKey).eq('fact.claimSequence', 1)).unique())).toMatchObject({ sequence: 2, fact: { claimSequence: 1, checkSequence: 1 } })

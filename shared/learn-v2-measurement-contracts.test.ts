@@ -461,7 +461,7 @@ describe('report source and aggregate boundaries', () => {
     expect(() => learnReportMetricSchema.parse({ ...partial, confidenceInterval: { lower: -21, upper: -19 } })).toThrow()
   })
   it('bounds source pages without truncating or copying answer/item/scoring payloads', () => {
-    const row = { kind: 'owner_watermark', sequence: 1, dueWorkThrough: null, historyCoverage: 'unknown', legacyIndependentAudit: { unknownCount: null, sourceCoverage: 'unknown' } }
+    const row = { kind: 'owner_watermark', learnerKey: `sha256:${'a'.repeat(64)}`, sequence: 1, dueWorkThrough: null, historyCoverage: 'unknown', legacyIndependentAudit: { unknownCount: null, sourceCoverage: 'unknown' } }
     const page = { version: LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION, reportRunId: 'run1', sequence: 0, sourceWatermark: 1,
       rows: [row], cursor: null, isDone: true }
     expect(validateLearnReportSourcePage(page).rows).toHaveLength(1)

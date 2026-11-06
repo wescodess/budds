@@ -9,7 +9,7 @@ import { learnMeasurementFlowSchema, learnMeasurementDepthSchema, learnHistorySt
 import { LEARN_MEASUREMENT_STORAGE_LIMITS } from './learn-v2-measurement-storage-manifest'
 
 export const LEARN_V2_MEASUREMENT_REPORT_VERSION = 'learn-v2.measurement-report.v3' as const
-export const LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION = 'learn-v2.measurement-report-source.v2' as const
+export const LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION = 'learn-v2.measurement-report-source.v3' as const
 export const LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION = 'learn-v2.measurement-report-query.v1' as const
 export const VERIFIED_LEARNING_GAIN_VERSION = 'verified_learning_gain.v1' as const
 export const FALSE_MASTERY_NEXT_DELAYED_VERSION = 'false_mastery_next_delayed.v1' as const
@@ -35,16 +35,49 @@ export const learnReportLegacyIndependentAuditSchema = z.strictObject({
   unknownCount: count.nullable(), sourceCoverage,
 }).refine(value => (value.sourceCoverage === 'complete') === (value.unknownCount !== null), 'Legacy audit counts require complete enumeration')
 
-export const learnReportAssignmentSnapshotSchema = z.strictObject({
+export const learnReportOpaqueKeySchema = z.string().regex(/^sha256:[a-f0-9]{64}$/)
+const computationKeys = { learnerKey: learnReportOpaqueKeySchema, capabilityKey: learnReportOpaqueKeySchema }
+export async function deriveLearnReportLearnerKey(reportRunId: string, ownerTokenIdentifier: string) {
+  return reportKeyDigest(['learn-v2.measurement-report-keys.v1', 'learner', reportRunId, ownerTokenIdentifier])
+}
+export async function deriveLearnReportComputationKeys(input: {
+  reportRunId: string, ownerTokenIdentifier: string, blueprintRevisionId: string, objectiveId: string,
+}) {
+  const scopeKey = await reportKeyDigest(['learn-v2-mastery-scope.v1', input.ownerTokenIdentifier, input.blueprintRevisionId, input.objectiveId])
+  return { learnerKey: await deriveLearnReportLearnerKey(input.reportRunId, input.ownerTokenIdentifier),
+    capabilityKey: await reportKeyDigest(['learn-v2.measurement-report-keys.v1', 'capability', input.reportRunId, scopeKey]) }
+}
+async function reportKeyDigest(parts: string[]) {
+  const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(parts))))
+  return `sha256:${Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')}`
+}
+export const learnReportScorerConfigurationSchema = z.strictObject({
+  scoringKind: z.enum(['deterministic', 'model']), configurationDigest: learnDigestSchema, scorerVersion: learnVersionSchema,
+})
+export const learnReportReplacementPolicySchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('secondary_only') }),
+  z.strictObject({ kind: z.literal('predeclared'), protocolVersion: learnVersionSchema, ruleVersion: learnVersionSchema, ruleDigest: learnDigestSchema }),
+])
+export const learnReportAcceptanceSnapshotSchema = z.strictObject({
+  submissionId: learnIdSchema<'learnResponses'>(), acceptedAt: learnTimestampSchema,
+})
+const frozenStratum = {
   epoch: learnVersionSchema, baselineSha: z.string().regex(/^[a-f0-9]{40}$/), cohortVersion: learnVersionSchema,
   flow: learnMeasurementFlowSchema, entryPoint: learnVersionSchema, depth: learnMeasurementDepthSchema,
-  protocolVersion: learnVersionSchema.nullable(), enrollmentAt: learnTimestampSchema.nullable(), timezone: learnTimezoneSchema.nullable(),
-  anchorAt: learnTimestampSchema.nullable(), anchorKind: learnVersionSchema.nullable(), historyStatus: learnHistoryStatusSchema,
   familyId: learnIdSchema<'learnMeasurementFamilies'>().nullable(), familyRevision: learnRevisionSchema.nullable(),
   familyValidationStatus: z.union([learnFamilyStatusSchema, z.literal('unknown')]), equivalenceVersion: learnVersionSchema.nullable(),
+}
+export const learnReportFirstSlotStratumSchema = z.strictObject({
+  ...frozenStratum, responseKind: z.enum(LEARN_V2_REPORT_RESPONSE_KINDS), scorerConfiguration: learnReportScorerConfigurationSchema,
+})
+export const learnReportAssignmentSnapshotSchema = z.strictObject({
+  ...frozenStratum, responseKind: z.enum(LEARN_V2_REPORT_RESPONSE_KINDS).nullable(), scorerConfiguration: learnReportScorerConfigurationSchema.nullable(),
+  protocolVersion: learnVersionSchema.nullable(), enrollmentAt: learnTimestampSchema.nullable(), timezone: learnTimezoneSchema.nullable(),
+  anchorAt: learnTimestampSchema.nullable(), anchorKind: learnVersionSchema.nullable(), historyStatus: learnHistoryStatusSchema,
   allocationOrder: z.enum([...LEARN_V2_FORM_ORDERS, 'AB', 'BA']).nullable(),
   assignedDay7: z.boolean(), assignedDay30: z.boolean(), sourceCoverage,
-})
+}).refine(value => (value.responseKind === null) === (value.scorerConfiguration === null)
+  && (value.protocolVersion === null || value.scorerConfiguration !== null), 'Frozen assignments require response and scorer strata')
 export const learnReportResultSnapshotSchema = z.strictObject({
   submissionId: learnIdSchema<'learnResponses'>(), attemptId: learnIdSchema<'masteryAttempts'>(), executionId: learnIdSchema<'learnScoringExecutions'>(),
   kind: z.enum(['measurement_cold', 'measurement_delayed', 'independent_application', 'retained_transfer']),
@@ -65,24 +98,90 @@ export const learnReportResultSnapshotSchema = z.strictObject({
   && (!value.kind.startsWith('measurement_') || (value.itemId !== null && value.familyRevision !== null && value.formLabel !== null)), 'Inconsistent scalar result')
 
 export const learnReportWatermarkSnapshotSchema = z.strictObject({
-  kind: z.literal('owner_watermark'), sequence: learnSequenceSchema, dueWorkThrough: learnTimestampSchema.nullable(), historyCoverage: sourceCoverage,
+  kind: z.literal('owner_watermark'), learnerKey: learnReportOpaqueKeySchema,
+  sequence: learnSequenceSchema, dueWorkThrough: learnTimestampSchema.nullable(), historyCoverage: sourceCoverage,
   legacyIndependentAudit: learnReportLegacyIndependentAuditSchema,
 }).refine(value => value.historyCoverage !== 'unknown' || value.legacyIndependentAudit.sourceCoverage === 'unknown', 'Unknown history requires unknown legacy audit coverage')
 export const learnReportEpisodeSnapshotSchema = z.strictObject({
-  kind: z.literal('episode'), assignment: learnReportAssignmentSnapshotSchema, clock: learnAssessmentClockSchema.nullable(),
+  kind: z.literal('episode'), ...computationKeys, assignmentId: learnIdSchema<'learnMeasurementAssignments'>(),
+  learningVoidId: learnIdSchema<'learningVoids'>(), blueprintRevisionId: learnIdSchema<'learnBlueprintRevisions'>(), objectiveId: learnIdSchema<'learnObjectives'>(),
+  horizonDays: learnMeasurementHorizonSchema, assignment: learnReportAssignmentSnapshotSchema, clock: learnAssessmentClockSchema.nullable(),
+  coldOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>().nullable(),
   originalOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>().nullable(), replacementOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>().nullable(),
+  coldAcceptance: learnReportAcceptanceSnapshotSchema.nullable(), delayedAcceptance: learnReportAcceptanceSnapshotSchema.nullable(),
   cold: learnReportResultSnapshotSchema.nullable(), delayed: learnReportResultSnapshotSchema.nullable(),
-  operationalEligibility: z.enum(['pending', 'eligible', 'blocked']), responseAcceptedAt: learnTimestampSchema.nullable(),
+  replacementAcceptance: learnReportAcceptanceSnapshotSchema.nullable(), replacement: learnReportResultSnapshotSchema.nullable(),
+  replacementPolicy: learnReportReplacementPolicySchema.nullable(), operationalEligibility: z.enum(['pending', 'eligible', 'blocked']),
   disposition: learnReportDispositionSchema, reasonCodes: learnReasonCodesSchema, mixedFlow: z.boolean(), treatmentEpochChanged: z.boolean(),
 }).refine(value => (value.cold === null || value.cold.kind === 'measurement_cold')
-  && (value.delayed === null || value.delayed.kind === 'measurement_delayed'), 'Incorrect measurement endpoint kind')
+  && (value.delayed === null || value.delayed.kind === 'measurement_delayed')
+  && (value.replacement === null || value.replacement.kind === 'measurement_delayed'), 'Incorrect measurement endpoint kind')
+  .refine(value => acceptedResultMatches(value.coldAcceptance, value.cold) && acceptedResultMatches(value.delayedAcceptance, value.delayed)
+    && acceptedResultMatches(value.replacementAcceptance, value.replacement), 'Results require their accepted submission and performance time')
+  .refine(value => (value.clock === null || value.clock.horizonDays === value.horizonDays)
+    && (value.coldAcceptance === null || value.coldOpportunityId !== null)
+    && (value.delayedAcceptance === null || value.originalOpportunityId !== null)
+    && (value.replacementOpportunityId === null ? value.replacementAcceptance === null && value.replacement === null
+      : value.originalOpportunityId !== null && value.replacementOpportunityId !== value.originalOpportunityId)
+    && (value.coldOpportunityId === null || ![value.originalOpportunityId, value.replacementOpportunityId].includes(value.coldOpportunityId))
+    && ((value.assignment.protocolVersion === null) === (value.replacementPolicy === null))
+    && (value.replacementPolicy?.kind !== 'predeclared' || value.replacementPolicy.protocolVersion === value.assignment.protocolVersion), 'Inconsistent original or replacement slot pins')
+  .refine(value => {
+    const submissions = [value.coldAcceptance, value.delayedAcceptance, value.replacementAcceptance].flatMap(acceptance => acceptance ? [acceptance.submissionId] : [])
+    const attempts = [value.cold, value.delayed, value.replacement].flatMap(result => result ? [result.attemptId] : [])
+    return new Set(submissions).size === submissions.length && new Set(attempts).size === attempts.length
+  }, 'Distinct slots require distinct submissions and attempts')
 export const learnReportFirstClaimSnapshotSchema = z.strictObject({
-  kind: z.literal('first_check_claim'), claim: learnFirstCheckClaimSchema, firstCheckOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>(),
+  kind: z.literal('first_check_claim'), ...computationKeys, stratum: learnReportFirstSlotStratumSchema,
+  claim: learnFirstCheckClaimSchema, firstCheckOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>(),
   checkSequence: learnRevisionSchema, clock: learnAssessmentClockSchema,
-  stateAtEligibility: masteryState, stateAtAcceptance: masteryState.nullable(), result: learnReportResultSnapshotSchema.nullable(),
+  stateAtEligibility: masteryState, stateAtAcceptance: masteryState.nullable(), acceptance: learnReportAcceptanceSnapshotSchema.nullable(),
+  result: learnReportResultSnapshotSchema.nullable(),
   unresolvedReason: learnCodeSchema.nullable(),
-})
+}).refine(value => acceptedResultMatches(value.acceptance, value.result)
+  && ((value.acceptance === null) === (value.stateAtAcceptance === null)), 'First-slot results and state require their accepted submission')
+  .refine(value => value.result === null || ['measurement_delayed', 'retained_transfer'].includes(value.result.kind), 'Incorrect first-check endpoint kind')
+function acceptedResultMatches(acceptance: z.infer<typeof learnReportAcceptanceSnapshotSchema> | null, result: z.infer<typeof learnReportResultSnapshotSchema> | null) {
+  return result === null || (acceptance !== null && result.submissionId === acceptance.submissionId && result.acceptedAt === acceptance.acceptedAt)
+}
 export const learnReportInputSnapshotSchema = z.discriminatedUnion('kind', [learnReportWatermarkSnapshotSchema, learnReportEpisodeSnapshotSchema, learnReportFirstClaimSnapshotSchema])
+
+export function reconcileLearnReportSourceRows(roster: readonly string[], rows: readonly z.infer<typeof learnReportInputSnapshotSchema>[]) {
+  const reasons = new Set<string>()
+  const owners = new Set(roster)
+  const watermarks = new Set<string>()
+  const identities = new Map<string, string>()
+  const assignments = new Map<string, string>()
+  const capabilityKeys = new Map<string, string>()
+  const capabilityScopes = new Map<string, string>()
+  if (owners.size !== roster.length) reasons.add('duplicate_roster_owner')
+  for (const input of rows) {
+    const row = learnReportInputSnapshotSchema.parse(input)
+    if (!owners.has(row.learnerKey)) reasons.add('owner_outside_roster')
+    const identity = JSON.stringify(row.kind === 'owner_watermark' ? [row.kind, row.learnerKey]
+      : row.kind === 'first_check_claim' ? [row.kind, row.learnerKey, row.capabilityKey, row.stratum.epoch]
+        : [row.kind, row.assignmentId, row.horizonDays])
+    const canonical = JSON.stringify(row)
+    const prior = identities.get(identity)
+    if (prior !== undefined) reasons.add(prior === canonical ? 'duplicate_source_row' : 'conflicting_source_row')
+    else identities.set(identity, canonical)
+    if (row.kind === 'owner_watermark') watermarks.add(row.learnerKey)
+    if (row.kind === 'episode') {
+      const scope = JSON.stringify([row.learnerKey, row.blueprintRevisionId, row.objectiveId])
+      const capability = JSON.stringify([row.learnerKey, row.capabilityKey])
+      if ((capabilityKeys.has(scope) && capabilityKeys.get(scope) !== row.capabilityKey)
+        || (capabilityScopes.has(capability) && capabilityScopes.get(capability) !== scope)) reasons.add('conflicting_capability_key')
+      capabilityKeys.set(scope, row.capabilityKey)
+      capabilityScopes.set(capability, scope)
+      const frozen = JSON.stringify([row.learnerKey, row.capabilityKey, row.learningVoidId, row.blueprintRevisionId, row.objectiveId,
+        row.assignment, row.coldOpportunityId, row.coldAcceptance, row.cold, row.replacementPolicy])
+      if (assignments.has(row.assignmentId) && assignments.get(row.assignmentId) !== frozen) reasons.add('conflicting_assignment_snapshot')
+      assignments.set(row.assignmentId, frozen)
+    }
+  }
+  if (roster.some(owner => !watermarks.has(owner))) reasons.add('missing_owner_watermark')
+  return { status: reasons.size ? 'incomplete' as const : 'complete' as const, reasonCodes: [...reasons].sort() }
+}
 export const learnReportFactPayloadSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('enrollment'), assignmentId: learnIdSchema<'learnMeasurementAssignments'>(), recordRevision: learnRevisionSchema,
     status: z.enum(['considered', 'not_admitted', 'admitted']), snapshot: learnReportAssignmentSnapshotSchema }),
@@ -93,7 +192,7 @@ export const learnReportFactPayloadSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('score'), submissionId: learnIdSchema<'learnResponses'>(), attemptId: learnIdSchema<'masteryAttempts'>(),
     executionId: learnIdSchema<'learnScoringExecutions'>(), scorePercent: learnScoreSchema, scoreCommittedAt: learnTimestampSchema, snapshot: learnReportResultSnapshotSchema }),
   z.strictObject({ kind: z.literal('independent_claim'), ...learnFirstCheckClaimSchema.shape,
-    firstCheckOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>(), checkSequence: learnRevisionSchema }),
+    firstCheckOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>(), checkSequence: learnRevisionSchema, stratum: learnReportFirstSlotStratumSchema }),
   z.strictObject({ kind: z.literal('integrity'), submissionId: learnIdSchema<'learnResponses'>(), integrityEventId: learnIdSchema<'learnResponseIntegrityEvents'>(),
     currentEligibility: z.enum(['eligible', 'excluded', 'unknown']), evidenceAvailable: z.boolean(), bodyAvailability: z.enum(['available', 'purged']) }),
 ])
@@ -181,10 +280,7 @@ function refineEstimate(value: z.infer<typeof estimateObject>, ctx: z.Refinement
 }
 export const learnReportEstimateSchema = estimateObject.superRefine(refineEstimate)
 export const learnReportReplacementAccountingSchema = z.strictObject({
-  policy: z.discriminatedUnion('kind', [
-    z.strictObject({ kind: z.literal('secondary_only') }),
-    z.strictObject({ kind: z.literal('predeclared'), protocolVersion: learnVersionSchema, ruleVersion: learnVersionSchema, ruleDigest: learnDigestSchema }),
-  ]),
+  policy: learnReportReplacementPolicySchema,
   originalPopulation: count, withLinkedReplacement: count, withAcceptedReplacement: count, withValidReplacement: count,
   withComparableReplacement: count, primaryIncludedPairs: count, secondary: learnReportEstimateSchema,
 }).refine(value => value.withLinkedReplacement <= value.originalPopulation

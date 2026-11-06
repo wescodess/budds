@@ -6,11 +6,13 @@ import { expect, expectTypeOf, test } from 'vitest'
 import type { Doc } from './_generated/dataModel'
 import schema from './schema'
 import { reportCellsValidator, aggregateExportValidator } from './lib/learnV2PublicContract'
-import type { learnReportMetricValidator } from './lib/learnV2MeasurementReportContract'
+import type { learnReportMetricValidator, learnReportInputSnapshotValidator, learnReportAssignmentSnapshotValidator, learnReportResultSnapshotValidator } from './lib/learnV2MeasurementReportContract'
 import {
   LEARN_V2_MEASUREMENT_REPORT_VERSION, LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION, LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION,
   validateLearnMeasurementReportCells, type LearnReportMetric,
+  type learnReportInputSnapshotSchema, type learnReportAssignmentSnapshotSchema, type learnReportResultSnapshotSchema,
 } from '../shared/learn-v2-measurement-report'
+import type { z } from 'zod'
 import { seedMeasurementStorage } from '../tests/fixtures/learn-v2-measurement-storage'
 import { partialMeasurementReportCell } from '../tests/fixtures/learn-v2-measurement-report'
 
@@ -19,6 +21,10 @@ const modules = import.meta.glob('./**/*.ts')
 test('stored, public and exported cells have exactly the same frozen fields', () => {
   expectTypeOf<Infer<typeof learnReportMetricValidator>>().toEqualTypeOf<LearnReportMetric>()
   expectTypeOf<Pick<Doc<'learnMeasurementReportCells'>, keyof LearnReportMetric>>().toEqualTypeOf<LearnReportMetric>()
+  expectTypeOf<Infer<typeof learnReportInputSnapshotValidator>>().toEqualTypeOf<z.infer<typeof learnReportInputSnapshotSchema>>()
+  expectTypeOf<Doc<'learnMeasurementReportRows'>['snapshot']>().toEqualTypeOf<z.infer<typeof learnReportInputSnapshotSchema>>()
+  expectTypeOf<Infer<typeof learnReportAssignmentSnapshotValidator>>().toEqualTypeOf<z.infer<typeof learnReportAssignmentSnapshotSchema>>()
+  expectTypeOf<Infer<typeof learnReportResultSnapshotValidator>>().toEqualTypeOf<z.infer<typeof learnReportResultSnapshotSchema>>()
 })
 
 test('public page and aggregate-export return validation preserve all aggregate breakdowns and reject private additions', async () => {
@@ -43,6 +49,20 @@ test('public page and aggregate-export return validation preserve all aggregate 
   const readExport = makeFunctionReference<'query'>('reportContractFixture:exported')
   expect(validateLearnMeasurementReportCells(await t.query(readPage, {}))).toEqual(page)
   expect(await t.query(readExport, {})).toEqual(exported)
+  for (const key of Object.values(f.reportKeys)) {
+    expect(JSON.stringify(await t.query(readPage, {}))).not.toContain(key)
+    expect(JSON.stringify(await t.query(readExport, {}))).not.toContain(key)
+  }
+  for (const [field, key] of Object.entries(f.reportKeys)) {
+    Reflect.set(cell, field, key)
+    await expect(t.query(readPage, {})).rejects.toThrow()
+    await expect(t.query(readExport, {})).rejects.toThrow()
+    Reflect.deleteProperty(cell, field)
+    Reflect.set(cell.stratum, field, key)
+    await expect(t.query(readPage, {})).rejects.toThrow()
+    await expect(t.query(readExport, {})).rejects.toThrow()
+    Reflect.deleteProperty(cell.stratum, field)
+  }
   expect(cell.legacyIndependentAudit).toEqual({ unknownCount: 3, sourceCoverage: 'complete' })
   Reflect.deleteProperty(cell, 'legacyIndependentAudit')
   await expect(t.query(readPage, {})).rejects.toThrow()
