@@ -11,7 +11,7 @@ The orchestrator runs the climb, triages findings and talks to the human dev. An
 - `DESIGN.md` wins. Palette and fonts are locked. A finding that needs a new token or rule goes to the human dev, never into code.
 - Opus 5.5 does all UI design, implementation and fixes. Sol 6.1 only judges screenshots, read-only.
 - Judge output is never approval, whatever it scores.
-- Reference screenshots of NotebookLM and ChatGPT study mode live in `~/.budds/design-anchors/<product>/`. This repository is public, so they stay out of git, PRs, issues, candidates and taste cases.
+- Reference screenshots of NotebookLM and ChatGPT study mode live in the private Cloudflare R2 bucket `budds-design-anchors`, under `<product>/`, with a README per product. They are kept only while a run needs them and deleted when it ends; capture them again for the next run. Judges download them with `wrangler r2 object get --remote` to a temporary folder and delete it after their round. They never stay on a local disk. This repository is public, so they stay out of git, PRs, issues, candidates and taste cases.
 
 ## Modes
 
@@ -51,7 +51,7 @@ Fix red checks with Opus before spending judges. This does not use a round. If t
 1. **Surface.** Use the existing definition, or add `docs/design/surfaces/<surface>.json` modelled on one already there. Cover every state the change touches, including loading, empty, error, both themes, mobile and worst-case data from `break-ui`. Each HTML option is its own surface, `<slug>-<name>`.
 2. **HTML.** Keep options self-contained in `docs/design/<slug>/`, committed on the working branch, with no reference images embedded. When the decision is recorded, delete the surface definitions of options that were not chosen.
 3. **Baseline.** Revamp: capture the current surface. Fidelity: capture the first build, and capture `approved.html` as the target.
-4. **References, revamp only.** Choose the screens in `~/.budds/design-anchors/` closest to this surface's job. If there are none, ask the human dev for them or run without them and say so in the ledger. Fidelity runs use none.
+4. **References, revamp only.** Choose the screens in `budds-design-anchors` closest to this surface's job. If there are none, ask the human dev for them or run without them and say so in the ledger. Fidelity runs use none.
 5. **Freeze** judges, efforts, rubric and references, and record them in the [ledger](#ledger). Rubric changes move scores: t3code judges fell from 10/10 to 9/9/9.5 when [#25251](https://github.com/pingdotgg/t3code/pull/25251) added four categories and two deferred items. Changing any of these starts a new run.
 
 ## Judge setup
