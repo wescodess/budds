@@ -5,6 +5,11 @@ import { LEARN_MEASUREMENT_STORAGE_LIMITS, type LearnMeasurementCollection } fro
 type ExportRow = Record<string, unknown> & { _id: Id<LearnMeasurementCollection>, _creationTime: number }
 
 const metadataFields = {
+  learnArtifactLineages: ['lineageVersion', 'classification', 'derivation', 'evidenceStatus', 'invalidatedAt'],
+  learnArtifactLineageOrigins: ['transformation'],
+  learnArtifactCaseBindings: [],
+  learnArtifactValidations: ['decision', 'coverage', 'evidenceStatus', 'invalidatedAt'],
+  learnArtifactSourceLinks: ['evidenceStatus', 'invalidatedAt'],
   learnAssessmentCatalogs: ['catalogRevision', 'instrumentationEpoch', 'historyCompleteness'],
   learnAssessmentCases: ['usageClass', 'reservedAt'],
   learnMeasurementFamilies: ['revision', 'recordRevision', 'status', 'evidenceStatus'],

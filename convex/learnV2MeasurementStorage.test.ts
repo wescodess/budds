@@ -197,6 +197,11 @@ describe('inactive Phase C storage boundaries', () => {
       if (entry.export === 'withheld') expect(rows).toEqual([])
       else expect(rows.map(row => row._id)).toContain(a.rows[entry.table])
       expect(JSON.stringify(rows)).not.toContain(b.rows[entry.table])
+      if (entry.table.startsWith('learnArtifact')) {
+        for (const field of ['artifact', 'payloadDigest', 'manifestDigest', 'lineageId', 'originLineageId', 'caseId', 'validationId', 'dependency', 'authorityVersion']) {
+          expect(rows.every(row => !Object.hasOwn(row, field))).toBe(true)
+        }
+      }
       for (const [name, canary] of Object.entries(STORAGE_CANARIES)) {
         if (name === 'answer' && entry.export === 'owner_response') expect(JSON.stringify(rows)).toContain(canary)
         else expect(JSON.stringify(rows)).not.toContain(canary)
@@ -301,8 +306,7 @@ describe('inactive Phase C storage boundaries', () => {
     const f = await t.run(ctx => seedMeasurementStorage(ctx, owner.tokenIdentifier))
     await t.run(ctx => seedMeasurementStorage(ctx, foreign.tokenIdentifier))
     const sourceRows = await t.run(ctx => readMeasurementSourceDescendants(ctx, owner.tokenIdentifier, { kind: 'snapshot', id: f.sourceSnapshotId }))
-    expect(sourceRows).toHaveLength(3)
-    expect(sourceRows).toContainEqual({ collection: 'learnMeasurementSupports', id: f.rows.learnMeasurementSupports })
+    expect(sourceRows).toEqual([{ collection: 'learnArtifactSourceLinks', id: f.rows.learnArtifactSourceLinks }])
     expect(await t.run(ctx => readMeasurementSourceDescendants(ctx, foreign.tokenIdentifier, { kind: 'snapshot', id: f.sourceSnapshotId }))).toEqual([])
     for (const entry of LEARN_MEASUREMENT_STORAGE_MANIFEST) {
       if (entry.voidDeletion !== 'delete') continue
