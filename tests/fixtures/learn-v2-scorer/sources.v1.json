@@ -1,0 +1,2385 @@
+{
+  "schemaVersion": "learn-v2.scorer-sources.v1",
+  "evidenceStatus": "offline_contract_only",
+  "language": "en",
+  "rights": {
+    "status": "permitted_public_synthetic",
+    "basis": "Original repository-authored closed synthetic test cases; no third-party excerpts or learner data.",
+    "retention": "permitted",
+    "externalSyntheticReplay": "permitted"
+  },
+  "acceptance": {
+    "status": "accepted_for_test_only",
+    "scope": "offline_contract_only",
+    "realLearnerSourceAcceptance": false,
+    "realLearningEvidence": false
+  },
+  "grammarVersion": "closed-answer-grammar.v1",
+  "packets": [
+    {
+      "id": "linear-balance",
+      "domain": "arithmetic_algebra",
+      "sourceFamilyId": "linear-balance.source.v1",
+      "claimFamilyIds": [
+        "linear-balance.solution.v1",
+        "linear-balance.scaled.v1",
+        "linear-balance.quotient.v1"
+      ],
+      "source": {
+        "locator": "public-synthetic:linear-balance:v1",
+        "context": "An algebra worksheet defines x + offset = total and a separate scaling task. This is a closed synthetic test case; only the supplied records are authoritative.",
+        "records": {
+          "offset": 7,
+          "total": 19,
+          "factor": 3,
+          "numerator": 36
+        },
+        "claims": {
+          "solution": {
+            "description": "isolated x",
+            "kind": "numeric",
+            "query": {
+              "op": "subtract",
+              "args": [
+                {
+                  "field": "total"
+                },
+                {
+                  "field": "offset"
+                }
+              ]
+            }
+          },
+          "scaled": {
+            "description": "scaled offset",
+            "kind": "numeric",
+            "query": {
+              "op": "multiply",
+              "args": [
+                {
+                  "field": "offset"
+                },
+                {
+                  "field": "factor"
+                }
+              ]
+            }
+          },
+          "quotient": {
+            "description": "division result",
+            "kind": "numeric",
+            "query": {
+              "op": "divide",
+              "args": [
+                {
+                  "field": "numerator"
+                },
+                {
+                  "field": "factor"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "keyVersion": "key.v1",
+      "rubricVersion": "rubric.v1",
+      "atoms": [
+        {
+          "id": "solution",
+          "description": "isolated x",
+          "kind": "numeric",
+          "query": {
+            "op": "subtract",
+            "args": [
+              {
+                "field": "total"
+              },
+              {
+                "field": "offset"
+              }
+            ]
+          },
+          "weight": 79,
+          "essential": true,
+          "sourceClaimId": "solution"
+        },
+        {
+          "id": "scaled",
+          "description": "scaled offset",
+          "kind": "numeric",
+          "query": {
+            "op": "multiply",
+            "args": [
+              {
+                "field": "offset"
+              },
+              {
+                "field": "factor"
+              }
+            ]
+          },
+          "weight": 1,
+          "essential": true,
+          "sourceClaimId": "scaled"
+        },
+        {
+          "id": "quotient",
+          "description": "division result",
+          "kind": "numeric",
+          "query": {
+            "op": "divide",
+            "args": [
+              {
+                "field": "numerator"
+              },
+              {
+                "field": "factor"
+              }
+            ]
+          },
+          "weight": 20,
+          "essential": false,
+          "sourceClaimId": "quotient"
+        }
+      ],
+      "forms": [
+        {
+          "id": "A",
+          "version": "form.v1",
+          "question": "Using the source records, report isolated x, scaled offset, division result.",
+          "grammar": 0,
+          "distractor": "My imaginary linear balance notebook describes a violet kite and a paper lantern."
+        },
+        {
+          "id": "B",
+          "version": "form.v1",
+          "question": "For this new presentation of the source case, identify isolated x, scaled offset, division result. Give each result explicitly.",
+          "grammar": 2,
+          "distractor": "A fictional linear balance postcard describes an amber boat beside a glass sculpture."
+        }
+      ]
+    },
+    {
+      "id": "rectangle-layout",
+      "domain": "arithmetic_algebra",
+      "sourceFamilyId": "rectangle-layout.source.v1",
+      "claimFamilyIds": [
+        "rectangle-layout.area.v1",
+        "rectangle-layout.boundary.v1",
+        "rectangle-layout.shape.v1"
+      ],
+      "source": {
+        "locator": "public-synthetic:rectangle-layout:v1",
+        "context": "A geometry worksheet defines rectangular area as length times width and boundary length as twice their sum. This is a closed synthetic test case; only the supplied records are authoritative.",
+        "records": {
+          "length": 9,
+          "width": 4,
+          "shape": "rectangle"
+        },
+        "claims": {
+          "area": {
+            "description": "rectangle area",
+            "kind": "numeric",
+            "query": {
+              "op": "multiply",
+              "args": [
+                {
+                  "field": "length"
+                },
+                {
+                  "field": "width"
+                }
+              ]
+            },
+            "unit": "square metres",
+            "unitAliases": [
+              "square metres",
+              "m2"
+            ]
+          },
+          "boundary": {
+            "description": "rectangle boundary",
+            "kind": "numeric",
+            "query": {
+              "op": "multiply",
+              "args": [
+                2,
+                {
+                  "op": "add",
+                  "args": [
+                    {
+                      "field": "length"
+                    },
+                    {
+                      "field": "width"
+                    }
+                  ]
+                }
+              ]
+            },
+            "unit": "metres",
+            "unitAliases": [
+              "metres",
+              "m"
+            ]
+          },
+          "shape": {
+            "description": "layout shape",
+            "kind": "keyed",
+            "query": {
+              "field": "shape"
+            }
+          }
+        }
+      },
+      "keyVersion": "key.v1",
+      "rubricVersion": "rubric.v1",
+      "atoms": [
+        {
+          "id": "area",
+          "description": "rectangle area",
+          "kind": "numeric",
+          "query": {
+            "op": "multiply",
+            "args": [
+              {
+                "field": "length"
+              },
+              {
+                "field": "width"
+              }
+            ]
+          },
+          "unit": "square metres",
+          "unitAliases": [
+            "square metres",
+            "m2"
+          ],
+          "weight": 60,
+          "essential": true,
+          "sourceClaimId": "area"
+        },
+        {
+          "id": "boundary",
+          "description": "rectangle boundary",
+          "kind": "numeric",
+          "query": {
+            "op": "multiply",
+            "args": [
+              2,
+              {
+                "op": "add",
+                "args": [
+                  {
+                    "field": "length"
+                  },
+                  {
+                    "field": "width"
+                  }
+                ]
+              }
+            ]
+          },
+          "unit": "metres",
+          "unitAliases": [
+            "metres",
+            "m"
+          ],
+          "weight": 20,
+          "essential": true,
+          "sourceClaimId": "boundary"
+        },
+        {
+          "id": "shape",
+          "description": "layout shape",
+          "kind": "keyed",
+          "query": {
+            "field": "shape"
+          },
+          "weight": 20,
+          "essential": false,
+          "sourceClaimId": "shape"
+        }
+      ],
+      "forms": [
+        {
+          "id": "A",
+          "version": "form.v1",
+          "question": "Using the source records, report rectangle area, rectangle boundary, layout shape.",
+          "grammar": 0,
+          "distractor": "My imaginary rectangle layout notebook describes a violet kite and a paper lantern."
+        },
+        {
+          "id": "B",
+          "version": "form.v1",
+          "question": "For this new presentation of the source case, identify rectangle area, rectangle boundary, layout shape. Give each result explicitly.",
+          "grammar": 2,
+          "distractor": "A fictional rectangle layout postcard describes an amber boat beside a glass sculpture."
+        }
+      ]
+    },
+    {
+      "id": "urn-draw",
+      "domain": "probability_statistics",
+      "sourceFamilyId": "urn-draw.source.v1",
+      "claimFamilyIds": [
+        "urn-draw.target.v1",
+        "urn-draw.other.v1",
+        "urn-draw.colour.v1"
+      ],
+      "source": {
+        "locator": "public-synthetic:urn-draw:v1",
+        "context": "A finite probability exercise uses one uniformly selected token from a bag; colour counts are exhaustive. This is a closed synthetic test case; only the supplied records are authoritative.",
+        "records": {
+          "red": 3,
+          "blue": 5,
+          "target": "red"
+        },
+        "claims": {
+          "target": {
+            "description": "target probability",
+            "kind": "numeric",
+            "query": {
+              "op": "divide",
+              "args": [
+                {
+                  "field": "red"
+                },
+                {
+                  "op": "add",
+                  "args": [
+                    {
+                      "field": "red"
+                    },
+                    {
+                      "field": "blue"
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          "other": {
+            "description": "complement probability",
+            "kind": "numeric",
+            "query": {
+              "op": "divide",
+              "args": [
+                {
+                  "field": "blue"
+                },
+                {
+                  "op": "add",
+                  "args": [
+                    {
+                      "field": "red"
+                    },
+                    {
+                      "field": "blue"
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          "colour": {
+            "description": "target colour",
+            "kind": "keyed",
+            "query": {
+              "field": "target"
+            }
+          }
+        }
+      },
+      "keyVersion": "key.v1",
+      "rubricVersion": "rubric.v1",
+      "atoms": [
+        {
+          "id": "target",
+          "description": "target probability",
+          "kind": "numeric",
+          "query": {
+            "op": "divide",
+            "args": [
+              {
+                "field": "red"
+              },
+              {
+                "op": "add",
+                "args": [
+                  {
+                    "field": "red"
+                  },
+                  {
+                    "field": "blue"
+                  }
+                ]
+              }
+            ]
+          },
+          "weight": 50,
+          "essential": true,
+          "sourceClaimId": "target"
+        },
+        {
+          "id": "other",
+          "description": "complement probability",
+          "kind": "numeric",
+          "query": {
+            "op": "divide",
+            "args": [
+              {
+                "field": "blue"
+              },
+              {
+                "op": "add",
+                "args": [
+                  {
+                    "field": "red"
+                  },
+                  {
+                    "field": "blue"
+                  }
+                ]
+              }
+            ]
+          },
+          "weight": 30,
+          "essential": true,
+          "sourceClaimId": "other"
+        },
+        {
+          "id": "colour",
+          "description": "target colour",
+          "kind": "keyed",
+          "query": {
+            "field": "target"
+          },
+          "weight": 20,
+          "essential": false,
+          "sourceClaimId": "colour"
+        }
+      ],
+      "forms": [
+        {
+          "id": "A",
+          "version": "form.v1",
+          "question": "Using the source records, report target probability, complement probability, target colour.",
+          "grammar": 0,
+          "distractor": "My imaginary urn draw notebook describes a violet kite and a paper lantern."
+        },
+        {
+          "id": "B",
+          "version": "form.v1",
+          "question": "For this new presentation of the source case, identify target probability, complement probability, target colour. Give each result explicitly.",
+          "grammar": 2,
+          "distractor": "A fictional urn draw postcard describes an amber boat beside a glass sculpture."
+        }
+      ]
+    },
+    {
+      "id": "sample-summary",
+      "domain": "probability_statistics",
+      "sourceFamilyId": "sample-summary.source.v1",
+      "claimFamilyIds": [
+        "sample-summary.mean.v1",
+        "sample-summary.total.v1",
+        "sample-summary.rank.v1"
+      ],
+      "source": {
+        "locator": "public-synthetic:sample-summary:v1",
+        "context": "A statistics worksheet defines the arithmetic mean of these three observations; labels order by observed value. This is a closed synthetic test case; only the supplied records are authoritative.",
+        "records": {
+          "values": [
+            2,
+            4,
+            9
+          ],
+          "observations": [
+            [
+              "low",
+              2
+            ],
+            [
+              "middle",
+              4
+            ],
+            [
+              "high",
+              9
+            ]
+          ]
+        },
+        "claims": {
+          "mean": {
+            "description": "sample mean",
+            "kind": "numeric",
+            "query": {
+              "op": "mean",
+              "args": [
+                {
+                  "field": "values"
+                }
+              ]
+            }
+          },
+          "total": {
+            "description": "sample total",
+            "kind": "numeric",
+            "query": {
+              "op": "sum",
+              "args": [
+                {
+                  "field": "values"
+                }
+              ]
+            }
+          },
+          "rank": {
+            "description": "observation order",
+            "kind": "order",
+            "query": {
+              "op": "ordered",
+              "args": [
+                {
+                  "field": "observations"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "keyVersion": "key.v1",
+      "rubricVersion": "rubric.v1",
+      "atoms": [
+        {
+          "id": "mean",
+          "description": "sample mean",
+          "kind": "numeric",
+          "query": {
+            "op": "mean",
+            "args": [
+              {
+                "field": "values"
+              }
+            ]
+          },
+          "weight": 80,
+          "essential": true,
+          "sourceClaimId": "mean"
+        },
+        {
+          "id": "total",
+          "description": "sample total",
+          "kind": "numeric",
+          "query": {
+            "op": "sum",
+            "args": [
+              {
+                "field": "values"
+              }
+            ]
+          },
+          "weight": 10,
+          "essential": true,
+          "sourceClaimId": "total"
+        },
+        {
+          "id": "rank",
+          "description": "observation order",
+          "kind": "order",
+          "query": {
+            "op": "ordered",
+            "args": [
+              {
+                "field": "observations"
+              }
+            ]
+          },
+          "weight": 10,
+          "essential": false,
+          "sourceClaimId": "rank"
+        }
+      ],
+      "forms": [
+        {
+          "id": "A",
+          "version": "form.v1",
+          "question": "Using the source records, report sample mean, sample total, observation order.",
+          "grammar": 0,
+          "distractor": "My imaginary sample summary notebook describes a violet kite and a paper lantern."
+        },
+        {
+          "id": "B",
+          "version": "form.v1",
+          "question": "For this new presentation of the source case, identify sample mean, sample total, observation order. Give each result explicitly.",
+          "grammar": 2,
+          "distractor": "A fictional sample summary postcard describes an amber boat beside a glass sculpture."
+        }
+      ]
+    },
+    {
+      "id": "stable-unique",
+      "domain": "programming_data",
+      "sourceFamilyId": "stable-unique.source.v1",
+      "claimFamilyIds": [
+        "stable-unique.count.v1",
+        "stable-unique.steps.v1",
+        "stable-unique.stable.v1"
+      ],
+      "source": {
+        "locator": "public-synthetic:stable-unique:v1",
+        "context": "A function specification removes later duplicates, preserving first-occurrence order. Its steps are ranked explicitly. This is a closed synthetic test case; only the supplied records are authoritative.",
+        "records": {
+          "input": [
+            2,
+            5,
+            2
+          ],
+          "steps": [
+            [
+              "read input",
+              1
+            ],
+            [
+              "remove duplicates",
+              2
+            ],
+            [
+              "return values",
+              3
+            ]
+          ],
+          "preservesOrder": true
+        },
+        "claims": {
+          "count": {
+            "description": "distinct output count",
+            "kind": "numeric",
+            "query": {
+              "op": "unique_count",
+              "args": [
+                {
+                  "field": "input"
+                }
+              ]
+            }
+          },
+          "steps": {
+            "description": "function step order",
+            "kind": "order",
+            "query": {
+              "op": "ordered",
+              "args": [
+                {
+                  "field": "steps"
+                }
+              ]
+            }
+          },
+          "stable": {
+            "description": "order preservation",
+            "kind": "proposition",
+            "query": {
+              "field": "preservesOrder"
+            }
+          }
+        }
+      },
+      "keyVersion": "key.v1",
+      "rubricVersion": "rubric.v1",
+      "atoms": [
+        {
+          "id": "count",
+          "description": "distinct output count",
+          "kind": "numeric",
+          "query": {
+            "op": "unique_count",
+            "args": [
+              {
+                "field": "input"
+              }
+            ]
+          },
+          "weight": 79,
+          "essential": true,
+          "sourceClaimId": "count"
+        },
+        {
+          "id": "steps",
+          "description": "function step order",
+          "kind": "order",
+          "query": {
+            "op": "ordered",
+            "args": [
+              {
+                "field": "steps"
+              }
+            ]
+          },
+          "weight": 1,
+          "essential": true,
+          "sourceClaimId": "steps"
+        },
+        {
+          "id": "stable",
+          "description": "order preservation",
+          "kind": "proposition",
+          "query": {
+            "field": "preservesOrder"
+          },
+          "weight": 20,
+          "essential": false,
+          "sourceClaimId": "stable"
+        }
+      ],
+      "forms": [
+        {
+          "id": "A",
+          "version": "form.v1",
+          "question": "Using the source records, report distinct output count, function step order, order preservation.",
+          "grammar": 0,
+          "distractor": "My imaginary stable unique notebook describes a violet kite and a paper lantern."
+        },
+        {
+          "id": "B",
+          "version": "form.v1",
+          "question": "For this new presentation of the source case, identify distinct output count, function step order, order preservation. Give each result explicitly.",
+          "grammar": 2,
+          "distractor": "A fictional stable unique postcard describes an amber boat beside a glass sculpture."
+        }
+      ]
+    },
+    {
+      "id": "lookup-table",
+      "domain": "programming_data",
+      "sourceFamilyId": "lookup-table.source.v1",
+      "claimFamilyIds": [
+        "lookup-table.lookup.v1",
+        "lookup-table.total.v1",
+        "lookup-table.match.v1"
+      ],
+      "source": {
+        "locator": "public-synthetic:lookup-table:v1",
+        "context": "A lookup specification uses exact string keys in a finite table and sums a separate input vector. This is a closed synthetic test case; only the supplied records are authoritative.",
+        "records": {
+          "table": [
+            [
+              "alpha",
+              "blue"
+            ],
+            [
+              "beta",
+              "green"
+            ]
+          ],
+          "lookup": "beta",
+          "values": [
+            4,
+            6,
+            8
+          ],
+          "matching": "exact key"
+        },
+        "claims": {
+          "lookup": {
+            "description": "lookup result",
+            "kind": "relation",
+            "query": {
+              "op": "lookup",
+              "args": [
+                {
+                  "field": "table"
+                },
+                {
+                  "field": "lookup"
+                }
+              ]
+            }
+          },
+          "total": {
+            "description": "vector sum",
+            "kind": "numeric",
+            "query": {
+              "op": "sum",
+              "args": [
+                {
+                  "field": "values"
+                }
+              ]
+            }
+          },
+          "match": {
+            "description": "matching rule",
+            "kind": "keyed",
+            "query": {
+              "field": "matching"
+            }
+          }
+        }
+      },
+      "keyVersion": "key.v1",
+      "rubricVersion": "rubric.v1",
+      "atoms": [
+        {
+          "id": "lookup",
+          "description": "lookup result",
+          "kind": "relation",
+          "query": {
+            "op": "lookup",
+            "args": [
+              {
+                "field": "table"
+              },
+              {
+                "field": "lookup"
+              }
+            ]
+          },
+          "weight": 60,
+          "essential": true,
+          "sourceClaimId": "lookup"
+        },
+        {
+          "id": "total",
+          "description": "vector sum",
+          "kind": "numeric",
+          "query": {
+            "op": "sum",
+            "args": [
+              {
+                "field": "values"
+              }
+            ]
+          },
+          "weight": 20,
+          "essential": true,
+          "sourceClaimId": "total"
+        },
+        {
+          "id": "match",
+          "description": "matching rule",
+          "kind": "keyed",
+          "query": {
+            "field": "matching"
+          },
+          "weight": 20,
+          "essential": false,
+          "sourceClaimId": "match"
+        }
+      ],
+      "forms": [
+        {
+          "id": "A",
+          "version": "form.v1",
+          "question": "Using the source records, report lookup result, vector sum, matching rule.",
+          "grammar": 0,
+          "distractor": "My imaginary lookup table notebook describes a violet kite and a paper lantern."
+        },
+        {
+          "id": "B",
+          "version": "form.v1",
+          "question": "For this new presentation of the source case, identify lookup result, vector sum, matching rule. Give each result explicitly.",
+          "grammar": 2,
+          "distractor": "A fictional lookup table postcard describes an amber boat beside a glass sculpture."
+        }
+      ]
+    },
+    {
+      "id": "motion-case",
+      "domain": "physical_science",
+      "sourceFamilyId": "motion-case.source.v1",
+      "claimFamilyIds": [
+        "motion-case.speed.v1",
+        "motion-case.momentum.v1",
+        "motion-case.direction.v1"
+      ],
+      "source": {
+        "locator": "public-synthetic:motion-case:v1",
+        "context": "A mechanics worksheet defines constant speed as distance divided by time, and momentum as mass times speed. This is a closed synthetic test case; only the supplied records are authoritative.",
+        "records": {
+          "distance": 24,
+          "time": 6,
+          "mass": 5,
+          "direction": "east"
+        },
+        "claims": {
+          "speed": {
+            "description": "constant speed",
+            "kind": "numeric",
+            "query": {
+              "op": "divide",
+              "args": [
+                {
+                  "field": "distance"
+                },
+                {
+                  "field": "time"
+                }
+              ]
+            },
+            "unit": "metres per second",
+            "unitAliases": [
+              "metres per second",
+              "m/s"
+            ]
+          },
+          "momentum": {
+            "description": "momentum magnitude",
+            "kind": "numeric",
+            "query": {
+              "op": "multiply",
+              "args": [
+                {
+                  "field": "mass"
+                },
+                {
+                  "op": "divide",
+                  "args": [
+                    {
+                      "field": "distance"
+                    },
+                    {
+                      "field": "time"
+                    }
+                  ]
+                }
+              ]
+            },
+            "unit": "kilogram metres per second",
+            "unitAliases": [
+              "kilogram metres per second",
+              "kg m/s"
+            ]
+          },
+          "direction": {
+            "description": "motion direction",
+            "kind": "keyed",
+            "query": {
+              "field": "direction"
+            }
+          }
+        }
+      },
+      "keyVersion": "key.v1",
+      "rubricVersion": "rubric.v1",
+      "atoms": [
+        {
+          "id": "speed",
+          "description": "constant speed",
+          "kind": "numeric",
+          "query": {
+            "op": "divide",
+            "args": [
+              {
+                "field": "distance"
+              },
+              {
+                "field": "time"
+              }
+            ]
+          },
+          "unit": "metres per second",
+          "unitAliases": [
+            "metres per second",
+            "m/s"
+          ],
+          "weight": 50,
+          "essential": true,
+          "sourceClaimId": "speed"
+        },
+        {
+          "id": "momentum",
+          "description": "momentum magnitude",
+          "kind": "numeric",
+          "query": {
+            "op": "multiply",
+            "args": [
+              {
+                "field": "mass"
+              },
+              {
+                "op": "divide",
+                "args": [
+                  {
+                    "field": "distance"
+                  },
+                  {
+                    "field": "time"
+                  }
+                ]
+              }
+            ]
+          },
+          "weight": 30,
+          "essential": true,
+          "unit": "kilogram metres per second",
+          "unitAliases": [
+            "kilogram metres per second",
+            "kg m/s"
+          ],
+          "sourceClaimId": "momentum"
+        },
+        {
+          "id": "direction",
+          "description": "motion direction",
+          "kind": "keyed",
+          "query": {
+            "field": "direction"
+          },
+          "weight": 20,
+          "essential": false,
+          "sourceClaimId": "direction"
+        }
+      ],
+      "forms": [
+        {
+          "id": "A",
+          "version": "form.v1",
+          "question": "Using the source records, report constant speed, momentum magnitude, motion direction.",
+          "grammar": 0,
+          "distractor": "My imaginary motion case notebook describes a violet kite and a paper lantern."
+        },
+        {
+          "id": "B",
+          "version": "form.v1",
+          "question": "For this new presentation of the source case, identify constant speed, momentum magnitude, motion direction. Give each result explicitly.",
+          "grammar": 2,
+          "distractor": "A fictional motion case postcard describes an amber boat beside a glass sculpture."
+        }
+      ]
+    },
+    {
+      "id": "circuit-case",
+      "domain": "physical_science",
+      "sourceFamilyId": "circuit-case.source.v1",
+      "claimFamilyIds": [
+        "circuit-case.current.v1",
+        "circuit-case.power.v1",
+        "circuit-case.conducts.v1"
+      ],
+      "source": {
+        "locator": "public-synthetic:circuit-case:v1",
+        "context": "A circuit worksheet defines current as voltage divided by resistance and power as voltage times current. This is a closed synthetic test case; only the supplied records are authoritative.",
+        "records": {
+          "voltage": 18,
+          "resistance": 6,
+          "closed": true,
+          "powered": true
+        },
+        "claims": {
+          "current": {
+            "description": "circuit current",
+            "kind": "numeric",
+            "query": {
+              "op": "divide",
+              "args": [
+                {
+                  "field": "voltage"
+                },
+                {
+                  "field": "resistance"
+                }
+              ]
+            },
+            "unit": "amperes",
+            "unitAliases": [
+              "amperes",
+              "A"
+            ]
+          },
+          "power": {
+            "description": "circuit power",
+            "kind": "numeric",
+            "query": {
+              "op": "multiply",
+              "args": [
+                {
+                  "field": "voltage"
+                },
+                {
+                  "op": "divide",
+                  "args": [
+                    {
+                      "field": "voltage"
+                    },
+                    {
+                      "field": "resistance"
+                    }
+                  ]
+                }
+              ]
+            },
+            "unit": "watts",
+            "unitAliases": [
+              "watts",
+              "W"
+            ]
+          },
+          "conducts": {
+            "description": "closed powered circuit",
+            "kind": "proposition",
+            "query": {
+              "op": "all",
+              "args": [
+                {
+                  "field": "closed"
+                },
+                {
+                  "field": "powered"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "keyVersion": "key.v1",
+      "rubricVersion": "rubric.v1",
+      "atoms": [
+        {
+          "id": "current",
+          "description": "circuit current",
+          "kind": "numeric",
+          "query": {
+            "op": "divide",
+            "args": [
+              {
+                "field": "voltage"
+              },
+              {
+                "field": "resistance"
+              }
+            ]
+          },
+          "weight": 80,
+          "essential": true,
+          "unit": "amperes",
+          "unitAliases": [
+            "amperes",
+            "A"
+          ],
+          "sourceClaimId": "current"
+        },
+        {
+          "id": "power",
+          "description": "circuit power",
+          "kind": "numeric",
+          "query": {
+            "op": "multiply",
+            "args": [
+              {
+                "field": "voltage"
+              },
+              {
+                "op": "divide",
+                "args": [
+                  {
+                    "field": "voltage"
+                  },
+                  {
+                    "field": "resistance"
+                  }
+                ]
+              }
+            ]
+          },
+          "weight": 10,
+          "essential": true,
+          "unit": "watts",
+          "unitAliases": [
+            "watts",
+            "W"
+          ],
+          "sourceClaimId": "power"
+        },
+        {
+          "id": "conducts",
+          "description": "closed powered circuit",
+          "kind": "proposition",
+          "query": {
+            "op": "all",
+            "args": [
+              {
+                "field": "closed"
+              },
+              {
+                "field": "powered"
+              }
+            ]
+          },
+          "weight": 10,
+          "essential": false,
+          "sourceClaimId": "conducts"
+        }
+      ],
+      "forms": [
+        {
+          "id": "A",
+          "version": "form.v1",
+          "question": "Using the source records, report circuit current, circuit power, closed powered circuit.",
+          "grammar": 0,
+          "distractor": "My imaginary circuit case notebook describes a violet kite and a paper lantern."
+        },
+        {
+          "id": "B",
+          "version": "form.v1",
+          "question": "For this new presentation of the source case, identify circuit current, circuit power, closed powered circuit. Give each result explicitly.",
+          "grammar": 2,
+          "distractor": "A fictional circuit case postcard describes an amber boat beside a glass sculpture."
+        }
+      ]
+    },
+    {
+      "id": "cell-culture",
+      "domain": "biology",
+      "sourceFamilyId": "cell-culture.source.v1",
+      "claimFamilyIds": [
+        "cell-culture.count.v1",
+        "cell-culture.nutrient.v1",
+        "cell-culture.sterile.v1"
+      ],
+      "source": {
+        "locator": "public-synthetic:cell-culture:v1",
+        "context": "A toy culture model doubles its initial cell count once. These labels describe this model only. This is a closed synthetic test case; only the supplied records are authoritative.",
+        "records": {
+          "initial": 6,
+          "factor": 2,
+          "relations": [
+            [
+              "culture one",
+              "nutrient A"
+            ],
+            [
+              "culture two",
+              "nutrient B"
+            ]
+          ],
+          "culture": "culture one",
+          "sterile": false
+        },
+        "claims": {
+          "count": {
+            "description": "post-division count",
+            "kind": "numeric",
+            "query": {
+              "op": "multiply",
+              "args": [
+                {
+                  "field": "initial"
+                },
+                {
+                  "field": "factor"
+                }
+              ]
+            },
+            "unit": "cells",
+            "unitAliases": [
+              "cells",
+              "cell units"
+            ]
+          },
+          "nutrient": {
+            "description": "culture nutrient",
+            "kind": "relation",
+            "query": {
+              "op": "lookup",
+              "args": [
+                {
+                  "field": "relations"
+                },
+                {
+                  "field": "culture"
+                }
+              ]
+            }
+          },
+          "sterile": {
+            "description": "sterility assertion",
+            "kind": "proposition",
+            "query": {
+              "field": "sterile"
+            }
+          }
+        }
+      },
+      "keyVersion": "key.v1",
+      "rubricVersion": "rubric.v1",
+      "atoms": [
+        {
+          "id": "count",
+          "description": "post-division count",
+          "kind": "numeric",
+          "query": {
+            "op": "multiply",
+            "args": [
+              {
+                "field": "initial"
+              },
+              {
+                "field": "factor"
+              }
+            ]
+          },
+          "unit": "cells",
+          "unitAliases": [
+            "cells",
+            "cell units"
+          ],
+          "weight": 79,
+          "essential": true,
+          "sourceClaimId": "count"
+        },
+        {
+          "id": "nutrient",
+          "description": "culture nutrient",
+          "kind": "relation",
+          "query": {
+            "op": "lookup",
+            "args": [
+              {
+                "field": "relations"
+              },
+              {
+                "field": "culture"
+              }
+            ]
+          },
+          "weight": 1,
+          "essential": true,
+          "sourceClaimId": "nutrient"
+        },
+        {
+          "id": "sterile",
+          "description": "sterility assertion",
+          "kind": "proposition",
+          "query": {
+            "field": "sterile"
+          },
+          "weight": 20,
+          "essential": false,
+          "sourceClaimId": "sterile"
+        }
+      ],
+      "forms": [
+        {
+          "id": "A",
+          "version": "form.v1",
+          "question": "Using the source records, report post-division count, culture nutrient, sterility assertion.",
+          "grammar": 0,
+          "distractor": "My imaginary cell culture notebook describes a violet kite and a paper lantern."
+        },
+        {
+          "id": "B",
+          "version": "form.v1",
+          "question": "For this new presentation of the source case, identify post-division count, culture nutrient, sterility assertion. Give each result explicitly.",
+          "grammar": 2,
+          "distractor": "A fictional cell culture postcard describes an amber boat beside a glass sculpture."
+        }
+      ]
+    },
+    {
+      "id": "food-model",
+      "domain": "biology",
+      "sourceFamilyId": "food-model.source.v1",
+      "claimFamilyIds": [
+        "food-model.food.v1",
+        "food-model.stages.v1",
+        "food-model.consumer.v1"
+      ],
+      "source": {
+        "locator": "public-synthetic:food-model:v1",
+        "context": "A toy ecosystem records a finite feeding relation and an ordered life-cycle model. It asserts no general biological law. This is a closed synthetic test case; only the supplied records are authoritative.",
+        "records": {
+          "feeding": [
+            [
+              "grazer",
+              "leaf"
+            ],
+            [
+              "hunter",
+              "grazer"
+            ]
+          ],
+          "organism": "hunter",
+          "stages": [
+            [
+              "egg",
+              1
+            ],
+            [
+              "juvenile",
+              2
+            ],
+            [
+              "adult",
+              3
+            ]
+          ],
+          "consumer": true
+        },
+        "claims": {
+          "food": {
+            "description": "hunter food",
+            "kind": "relation",
+            "query": {
+              "op": "lookup",
+              "args": [
+                {
+                  "field": "feeding"
+                },
+                {
+                  "field": "organism"
+                }
+              ]
+            }
+          },
+          "stages": {
+            "description": "model life cycle",
+            "kind": "order",
+            "query": {
+              "op": "ordered",
+              "args": [
+                {
+                  "field": "stages"
+                }
+              ]
+            }
+          },
+          "consumer": {
+            "description": "consumer assertion",
+            "kind": "proposition",
+            "query": {
+              "field": "consumer"
+            }
+          }
+        }
+      },
+      "keyVersion": "key.v1",
+      "rubricVersion": "rubric.v1",
+      "atoms": [
+        {
+          "id": "food",
+          "description": "hunter food",
+          "kind": "relation",
+          "query": {
+            "op": "lookup",
+            "args": [
+              {
+                "field": "feeding"
+              },
+              {
+                "field": "organism"
+              }
+            ]
+          },
+          "weight": 60,
+          "essential": true,
+          "sourceClaimId": "food"
+        },
+        {
+          "id": "stages",
+          "description": "model life cycle",
+          "kind": "order",
+          "query": {
+            "op": "ordered",
+            "args": [
+              {
+                "field": "stages"
+              }
+            ]
+          },
+          "weight": 20,
+          "essential": true,
+          "sourceClaimId": "stages"
+        },
+        {
+          "id": "consumer",
+          "description": "consumer assertion",
+          "kind": "proposition",
+          "query": {
+            "field": "consumer"
+          },
+          "weight": 20,
+          "essential": false,
+          "sourceClaimId": "consumer"
+        }
+      ],
+      "forms": [
+        {
+          "id": "A",
+          "version": "form.v1",
+          "question": "Using the source records, report hunter food, model life cycle, consumer assertion.",
+          "grammar": 0,
+          "distractor": "My imaginary food model notebook describes a violet kite and a paper lantern."
+        },
+        {
+          "id": "B",
+          "version": "form.v1",
+          "question": "For this new presentation of the source case, identify hunter food, model life cycle, consumer assertion. Give each result explicitly.",
+          "grammar": 2,
+          "distractor": "A fictional food model postcard describes an amber boat beside a glass sculpture."
+        }
+      ]
+    },
+    {
+      "id": "archive-chronology",
+      "domain": "history",
+      "sourceFamilyId": "archive-chronology.source.v1",
+      "claimFamilyIds": [
+        "archive-chronology.sequence.v1",
+        "archive-chronology.gap.v1",
+        "archive-chronology.author.v1"
+      ],
+      "source": {
+        "locator": "public-synthetic:archive-chronology:v1",
+        "context": "A fictional local archive records the following events. Dates and attributions apply only to this invented archive. This is a closed synthetic test case; only the supplied records are authoritative.",
+        "records": {
+          "events": [
+            [
+              "charter signed",
+              1812
+            ],
+            [
+              "bridge opened",
+              1841
+            ],
+            [
+              "library founded",
+              1860
+            ]
+          ],
+          "start": 1812,
+          "end": 1860,
+          "author": "Ada North"
+        },
+        "claims": {
+          "sequence": {
+            "description": "archive chronology",
+            "kind": "order",
+            "query": {
+              "op": "ordered",
+              "args": [
+                {
+                  "field": "events"
+                }
+              ]
+            }
+          },
+          "gap": {
+            "description": "archive year span",
+            "kind": "numeric",
+            "query": {
+              "op": "subtract",
+              "args": [
+                {
+                  "field": "end"
+                },
+                {
+                  "field": "start"
+                }
+              ]
+            },
+            "unit": "years",
+            "unitAliases": [
+              "years",
+              "year units"
+            ]
+          },
+          "author": {
+            "description": "charter author",
+            "kind": "keyed",
+            "query": {
+              "field": "author"
+            }
+          }
+        }
+      },
+      "keyVersion": "key.v1",
+      "rubricVersion": "rubric.v1",
+      "atoms": [
+        {
+          "id": "sequence",
+          "description": "archive chronology",
+          "kind": "order",
+          "query": {
+            "op": "ordered",
+            "args": [
+              {
+                "field": "events"
+              }
+            ]
+          },
+          "weight": 50,
+          "essential": true,
+          "sourceClaimId": "sequence"
+        },
+        {
+          "id": "gap",
+          "description": "archive year span",
+          "kind": "numeric",
+          "query": {
+            "op": "subtract",
+            "args": [
+              {
+                "field": "end"
+              },
+              {
+                "field": "start"
+              }
+            ]
+          },
+          "unit": "years",
+          "unitAliases": [
+            "years",
+            "year units"
+          ],
+          "weight": 30,
+          "essential": true,
+          "sourceClaimId": "gap"
+        },
+        {
+          "id": "author",
+          "description": "charter author",
+          "kind": "keyed",
+          "query": {
+            "field": "author"
+          },
+          "weight": 20,
+          "essential": false,
+          "sourceClaimId": "author"
+        }
+      ],
+      "forms": [
+        {
+          "id": "A",
+          "version": "form.v1",
+          "question": "Using the source records, report archive chronology, archive year span, charter author.",
+          "grammar": 0,
+          "distractor": "My imaginary archive chronology notebook describes a violet kite and a paper lantern."
+        },
+        {
+          "id": "B",
+          "version": "form.v1",
+          "question": "For this new presentation of the source case, identify archive chronology, archive year span, charter author. Give each result explicitly.",
+          "grammar": 2,
+          "distractor": "A fictional archive chronology postcard describes an amber boat beside a glass sculpture."
+        }
+      ]
+    },
+    {
+      "id": "expedition-ledger",
+      "domain": "history",
+      "sourceFamilyId": "expedition-ledger.source.v1",
+      "claimFamilyIds": [
+        "expedition-ledger.route.v1",
+        "expedition-ledger.keeper.v1",
+        "expedition-ledger.duration.v1"
+      ],
+      "source": {
+        "locator": "public-synthetic:expedition-ledger:v1",
+        "context": "A separate fictional expedition ledger records dated stops and the custodian responsible for each log. This is a closed synthetic test case; only the supplied records are authoritative.",
+        "records": {
+          "stops": [
+            [
+              "harbour departure",
+              1903
+            ],
+            [
+              "ridge camp",
+              1905
+            ],
+            [
+              "return home",
+              1908
+            ]
+          ],
+          "custodians": [
+            [
+              "north log",
+              "Ivo Reed"
+            ],
+            [
+              "south log",
+              "Mira Lake"
+            ]
+          ],
+          "log": "south log",
+          "start": 1903,
+          "end": 1908
+        },
+        "claims": {
+          "route": {
+            "description": "expedition chronology",
+            "kind": "order",
+            "query": {
+              "op": "ordered",
+              "args": [
+                {
+                  "field": "stops"
+                }
+              ]
+            }
+          },
+          "keeper": {
+            "description": "south log custodian",
+            "kind": "relation",
+            "query": {
+              "op": "lookup",
+              "args": [
+                {
+                  "field": "custodians"
+                },
+                {
+                  "field": "log"
+                }
+              ]
+            }
+          },
+          "duration": {
+            "description": "expedition year span",
+            "kind": "numeric",
+            "query": {
+              "op": "subtract",
+              "args": [
+                {
+                  "field": "end"
+                },
+                {
+                  "field": "start"
+                }
+              ]
+            },
+            "unit": "years",
+            "unitAliases": [
+              "years",
+              "year units"
+            ]
+          }
+        }
+      },
+      "keyVersion": "key.v1",
+      "rubricVersion": "rubric.v1",
+      "atoms": [
+        {
+          "id": "route",
+          "description": "expedition chronology",
+          "kind": "order",
+          "query": {
+            "op": "ordered",
+            "args": [
+              {
+                "field": "stops"
+              }
+            ]
+          },
+          "weight": 80,
+          "essential": true,
+          "sourceClaimId": "route"
+        },
+        {
+          "id": "keeper",
+          "description": "south log custodian",
+          "kind": "relation",
+          "query": {
+            "op": "lookup",
+            "args": [
+              {
+                "field": "custodians"
+              },
+              {
+                "field": "log"
+              }
+            ]
+          },
+          "weight": 10,
+          "essential": true,
+          "sourceClaimId": "keeper"
+        },
+        {
+          "id": "duration",
+          "description": "expedition year span",
+          "kind": "numeric",
+          "query": {
+            "op": "subtract",
+            "args": [
+              {
+                "field": "end"
+              },
+              {
+                "field": "start"
+              }
+            ]
+          },
+          "unit": "years",
+          "unitAliases": [
+            "years",
+            "year units"
+          ],
+          "weight": 10,
+          "essential": false,
+          "sourceClaimId": "duration"
+        }
+      ],
+      "forms": [
+        {
+          "id": "A",
+          "version": "form.v1",
+          "question": "Using the source records, report expedition chronology, south log custodian, expedition year span.",
+          "grammar": 0,
+          "distractor": "My imaginary expedition ledger notebook describes a violet kite and a paper lantern."
+        },
+        {
+          "id": "B",
+          "version": "form.v1",
+          "question": "For this new presentation of the source case, identify expedition chronology, south log custodian, expedition year span. Give each result explicitly.",
+          "grammar": 2,
+          "distractor": "A fictional expedition ledger postcard describes an amber boat beside a glass sculpture."
+        }
+      ]
+    },
+    {
+      "id": "garden-argument",
+      "domain": "reading_argument",
+      "sourceFamilyId": "garden-argument.source.v1",
+      "claimFamilyIds": [
+        "garden-argument.open.v1",
+        "garden-argument.speaker.v1",
+        "garden-argument.proposal.v1"
+      ],
+      "source": {
+        "locator": "public-synthetic:garden-argument:v1",
+        "context": "A fictional argument says the garden is open only if both the gate is unlocked and the keeper is present. Read only this stipulated proposition. This is a closed synthetic test case; only the supplied records are authoritative.",
+        "records": {
+          "unlocked": true,
+          "keeperPresent": false,
+          "speaker": "Neri",
+          "proposal": "extend opening hours"
+        },
+        "claims": {
+          "open": {
+            "description": "garden open assertion",
+            "kind": "proposition",
+            "query": {
+              "op": "all",
+              "args": [
+                {
+                  "field": "unlocked"
+                },
+                {
+                  "field": "keeperPresent"
+                }
+              ]
+            }
+          },
+          "speaker": {
+            "description": "argument speaker",
+            "kind": "keyed",
+            "query": {
+              "field": "speaker"
+            }
+          },
+          "proposal": {
+            "description": "proposed change",
+            "kind": "keyed",
+            "query": {
+              "field": "proposal"
+            }
+          }
+        }
+      },
+      "keyVersion": "key.v1",
+      "rubricVersion": "rubric.v1",
+      "atoms": [
+        {
+          "id": "open",
+          "description": "garden open assertion",
+          "kind": "proposition",
+          "query": {
+            "op": "all",
+            "args": [
+              {
+                "field": "unlocked"
+              },
+              {
+                "field": "keeperPresent"
+              }
+            ]
+          },
+          "weight": 79,
+          "essential": true,
+          "sourceClaimId": "open"
+        },
+        {
+          "id": "speaker",
+          "description": "argument speaker",
+          "kind": "keyed",
+          "query": {
+            "field": "speaker"
+          },
+          "weight": 1,
+          "essential": true,
+          "sourceClaimId": "speaker"
+        },
+        {
+          "id": "proposal",
+          "description": "proposed change",
+          "kind": "keyed",
+          "query": {
+            "field": "proposal"
+          },
+          "weight": 20,
+          "essential": false,
+          "sourceClaimId": "proposal"
+        }
+      ],
+      "forms": [
+        {
+          "id": "A",
+          "version": "form.v1",
+          "question": "Using the source records, report garden open assertion, argument speaker, proposed change.",
+          "grammar": 0,
+          "distractor": "My imaginary garden argument notebook describes a violet kite and a paper lantern."
+        },
+        {
+          "id": "B",
+          "version": "form.v1",
+          "question": "For this new presentation of the source case, identify garden open assertion, argument speaker, proposed change. Give each result explicitly.",
+          "grammar": 2,
+          "distractor": "A fictional garden argument postcard describes an amber boat beside a glass sculpture."
+        }
+      ]
+    },
+    {
+      "id": "museum-notice",
+      "domain": "reading_argument",
+      "sourceFamilyId": "museum-notice.source.v1",
+      "claimFamilyIds": [
+        "museum-notice.entry.v1",
+        "museum-notice.writer.v1",
+        "museum-notice.sequence.v1"
+      ],
+      "source": {
+        "locator": "public-synthetic:museum-notice:v1",
+        "context": "A fictional notice says entry is permitted when a pass is valid or admission is free; the quotation attribution is given separately. This is a closed synthetic test case; only the supplied records are authoritative.",
+        "records": {
+          "validPass": false,
+          "freeAdmission": false,
+          "attribution": [
+            [
+              "notice",
+              "Ola Finch"
+            ],
+            [
+              "reply",
+              "Paz Stone"
+            ]
+          ],
+          "text": "notice",
+          "objects": [
+            [
+              "notice",
+              1
+            ],
+            [
+              "reply",
+              2
+            ],
+            [
+              "correction",
+              3
+            ]
+          ]
+        },
+        "claims": {
+          "entry": {
+            "description": "entry permitted assertion",
+            "kind": "proposition",
+            "query": {
+              "op": "any",
+              "args": [
+                {
+                  "field": "validPass"
+                },
+                {
+                  "field": "freeAdmission"
+                }
+              ]
+            }
+          },
+          "writer": {
+            "description": "notice writer",
+            "kind": "relation",
+            "query": {
+              "op": "lookup",
+              "args": [
+                {
+                  "field": "attribution"
+                },
+                {
+                  "field": "text"
+                }
+              ]
+            }
+          },
+          "sequence": {
+            "description": "document sequence",
+            "kind": "order",
+            "query": {
+              "op": "ordered",
+              "args": [
+                {
+                  "field": "objects"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "keyVersion": "key.v1",
+      "rubricVersion": "rubric.v1",
+      "atoms": [
+        {
+          "id": "entry",
+          "description": "entry permitted assertion",
+          "kind": "proposition",
+          "query": {
+            "op": "any",
+            "args": [
+              {
+                "field": "validPass"
+              },
+              {
+                "field": "freeAdmission"
+              }
+            ]
+          },
+          "weight": 60,
+          "essential": true,
+          "sourceClaimId": "entry"
+        },
+        {
+          "id": "writer",
+          "description": "notice writer",
+          "kind": "relation",
+          "query": {
+            "op": "lookup",
+            "args": [
+              {
+                "field": "attribution"
+              },
+              {
+                "field": "text"
+              }
+            ]
+          },
+          "weight": 20,
+          "essential": true,
+          "sourceClaimId": "writer"
+        },
+        {
+          "id": "sequence",
+          "description": "document sequence",
+          "kind": "order",
+          "query": {
+            "op": "ordered",
+            "args": [
+              {
+                "field": "objects"
+              }
+            ]
+          },
+          "weight": 20,
+          "essential": false,
+          "sourceClaimId": "sequence"
+        }
+      ],
+      "forms": [
+        {
+          "id": "A",
+          "version": "form.v1",
+          "question": "Using the source records, report entry permitted assertion, notice writer, document sequence.",
+          "grammar": 0,
+          "distractor": "My imaginary museum notice notebook describes a violet kite and a paper lantern."
+        },
+        {
+          "id": "B",
+          "version": "form.v1",
+          "question": "For this new presentation of the source case, identify entry permitted assertion, notice writer, document sequence. Give each result explicitly.",
+          "grammar": 2,
+          "distractor": "A fictional museum notice postcard describes an amber boat beside a glass sculpture."
+        }
+      ]
+    },
+    {
+      "id": "paper-assembly",
+      "domain": "practical_procedures",
+      "sourceFamilyId": "paper-assembly.source.v1",
+      "claimFamilyIds": [
+        "paper-assembly.steps.v1",
+        "paper-assembly.sheets.v1",
+        "paper-assembly.adhesive.v1"
+      ],
+      "source": {
+        "locator": "public-synthetic:paper-assembly:v1",
+        "context": "A harmless paper-model instruction card fixes an assembly sequence, sheet count and required adhesive. This is a closed synthetic test case; only the supplied records are authoritative.",
+        "records": {
+          "steps": [
+            [
+              "fold sheet",
+              1
+            ],
+            [
+              "join tabs",
+              2
+            ],
+            [
+              "attach base",
+              3
+            ]
+          ],
+          "sheets": 4,
+          "extraSheets": 2,
+          "adhesive": "paste"
+        },
+        "claims": {
+          "steps": {
+            "description": "paper assembly order",
+            "kind": "order",
+            "query": {
+              "op": "ordered",
+              "args": [
+                {
+                  "field": "steps"
+                }
+              ]
+            }
+          },
+          "sheets": {
+            "description": "total sheet count",
+            "kind": "numeric",
+            "query": {
+              "op": "add",
+              "args": [
+                {
+                  "field": "sheets"
+                },
+                {
+                  "field": "extraSheets"
+                }
+              ]
+            }
+          },
+          "adhesive": {
+            "description": "required adhesive",
+            "kind": "keyed",
+            "query": {
+              "field": "adhesive"
+            }
+          }
+        }
+      },
+      "keyVersion": "key.v1",
+      "rubricVersion": "rubric.v1",
+      "atoms": [
+        {
+          "id": "steps",
+          "description": "paper assembly order",
+          "kind": "order",
+          "query": {
+            "op": "ordered",
+            "args": [
+              {
+                "field": "steps"
+              }
+            ]
+          },
+          "weight": 50,
+          "essential": true,
+          "sourceClaimId": "steps"
+        },
+        {
+          "id": "sheets",
+          "description": "total sheet count",
+          "kind": "numeric",
+          "query": {
+            "op": "add",
+            "args": [
+              {
+                "field": "sheets"
+              },
+              {
+                "field": "extraSheets"
+              }
+            ]
+          },
+          "weight": 30,
+          "essential": true,
+          "sourceClaimId": "sheets"
+        },
+        {
+          "id": "adhesive",
+          "description": "required adhesive",
+          "kind": "keyed",
+          "query": {
+            "field": "adhesive"
+          },
+          "weight": 20,
+          "essential": false,
+          "sourceClaimId": "adhesive"
+        }
+      ],
+      "forms": [
+        {
+          "id": "A",
+          "version": "form.v1",
+          "question": "Using the source records, report paper assembly order, total sheet count, required adhesive.",
+          "grammar": 0,
+          "distractor": "My imaginary paper assembly notebook describes a violet kite and a paper lantern."
+        },
+        {
+          "id": "B",
+          "version": "form.v1",
+          "question": "For this new presentation of the source case, identify paper assembly order, total sheet count, required adhesive. Give each result explicitly.",
+          "grammar": 2,
+          "distractor": "A fictional paper assembly postcard describes an amber boat beside a glass sculpture."
+        }
+      ]
+    },
+    {
+      "id": "bead-pattern",
+      "domain": "practical_procedures",
+      "sourceFamilyId": "bead-pattern.source.v1",
+      "claimFamilyIds": [
+        "bead-pattern.steps.v1",
+        "bead-pattern.count.v1",
+        "bead-pattern.varnish.v1"
+      ],
+      "source": {
+        "locator": "public-synthetic:bead-pattern:v1",
+        "context": "A harmless bead-pattern instruction card fixes an order, the number of repeated groups, and whether varnish is required. This is a closed synthetic test case; only the supplied records are authoritative.",
+        "records": {
+          "steps": [
+            [
+              "sort beads",
+              1
+            ],
+            [
+              "thread groups",
+              2
+            ],
+            [
+              "tie loop",
+              3
+            ]
+          ],
+          "groups": 5,
+          "perGroup": 3,
+          "varnishRequired": false
+        },
+        "claims": {
+          "steps": {
+            "description": "bead assembly order",
+            "kind": "order",
+            "query": {
+              "op": "ordered",
+              "args": [
+                {
+                  "field": "steps"
+                }
+              ]
+            }
+          },
+          "count": {
+            "description": "required bead count",
+            "kind": "numeric",
+            "query": {
+              "op": "multiply",
+              "args": [
+                {
+                  "field": "groups"
+                },
+                {
+                  "field": "perGroup"
+                }
+              ]
+            }
+          },
+          "varnish": {
+            "description": "varnish required assertion",
+            "kind": "proposition",
+            "query": {
+              "field": "varnishRequired"
+            }
+          }
+        }
+      },
+      "keyVersion": "key.v1",
+      "rubricVersion": "rubric.v1",
+      "atoms": [
+        {
+          "id": "steps",
+          "description": "bead assembly order",
+          "kind": "order",
+          "query": {
+            "op": "ordered",
+            "args": [
+              {
+                "field": "steps"
+              }
+            ]
+          },
+          "weight": 80,
+          "essential": true,
+          "sourceClaimId": "steps"
+        },
+        {
+          "id": "count",
+          "description": "required bead count",
+          "kind": "numeric",
+          "query": {
+            "op": "multiply",
+            "args": [
+              {
+                "field": "groups"
+              },
+              {
+                "field": "perGroup"
+              }
+            ]
+          },
+          "weight": 10,
+          "essential": true,
+          "sourceClaimId": "count"
+        },
+        {
+          "id": "varnish",
+          "description": "varnish required assertion",
+          "kind": "proposition",
+          "query": {
+            "field": "varnishRequired"
+          },
+          "weight": 10,
+          "essential": false,
+          "sourceClaimId": "varnish"
+        }
+      ],
+      "forms": [
+        {
+          "id": "A",
+          "version": "form.v1",
+          "question": "Using the source records, report bead assembly order, required bead count, varnish required assertion.",
+          "grammar": 0,
+          "distractor": "My imaginary bead pattern notebook describes a violet kite and a paper lantern."
+        },
+        {
+          "id": "B",
+          "version": "form.v1",
+          "question": "For this new presentation of the source case, identify bead assembly order, required bead count, varnish required assertion. Give each result explicitly.",
+          "grammar": 2,
+          "distractor": "A fictional bead pattern postcard describes an amber boat beside a glass sculpture."
+        }
+      ]
+    }
+  ]
+}

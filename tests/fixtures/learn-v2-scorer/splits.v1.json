@@ -1,0 +1,72 @@
+{
+  "schemaVersion": "learn-v2.scorer-splits.v1",
+  "seed": "budds-source-proven-scorer-2026-11-05-v1",
+  "shuffle": "sha256-sort.v1",
+  "assignmentPolicy": "Source and claim families assigned before response generation; sibling forms and transformations never cross splits.",
+  "families": [
+    {
+      "sourceFamilyId": "linear-balance.source.v1",
+      "split": "fit"
+    },
+    {
+      "sourceFamilyId": "rectangle-layout.source.v1",
+      "split": "heldout"
+    },
+    {
+      "sourceFamilyId": "urn-draw.source.v1",
+      "split": "fit"
+    },
+    {
+      "sourceFamilyId": "sample-summary.source.v1",
+      "split": "heldout"
+    },
+    {
+      "sourceFamilyId": "stable-unique.source.v1",
+      "split": "fit"
+    },
+    {
+      "sourceFamilyId": "lookup-table.source.v1",
+      "split": "heldout"
+    },
+    {
+      "sourceFamilyId": "motion-case.source.v1",
+      "split": "fit"
+    },
+    {
+      "sourceFamilyId": "circuit-case.source.v1",
+      "split": "heldout"
+    },
+    {
+      "sourceFamilyId": "cell-culture.source.v1",
+      "split": "fit"
+    },
+    {
+      "sourceFamilyId": "food-model.source.v1",
+      "split": "heldout"
+    },
+    {
+      "sourceFamilyId": "archive-chronology.source.v1",
+      "split": "fit"
+    },
+    {
+      "sourceFamilyId": "expedition-ledger.source.v1",
+      "split": "heldout"
+    },
+    {
+      "sourceFamilyId": "garden-argument.source.v1",
+      "split": "fit"
+    },
+    {
+      "sourceFamilyId": "museum-notice.source.v1",
+      "split": "heldout"
+    },
+    {
+      "sourceFamilyId": "paper-assembly.source.v1",
+      "split": "fit"
+    },
+    {
+      "sourceFamilyId": "bead-pattern.source.v1",
+      "split": "heldout"
+    }
+  ]
+}
