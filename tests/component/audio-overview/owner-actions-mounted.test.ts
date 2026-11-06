@@ -160,13 +160,15 @@ describe('mounted Audio Overview owner actions', () => {
     const remove = vi.fn().mockResolvedValue({ scheduled: true })
     vi.stubGlobal('useTasks', () => ({ tasks: ref([]), cancel: vi.fn() }))
     vi.stubGlobal('useDocuments', () => ({ documents: ref([{ _id: 'document-1', status: 'success' }]) }))
-    vi.stubGlobal('useConvexQuery', (reference: unknown) => {
+    const queryStub = (reference: unknown) => {
       const name = getFunctionName(reference as never)
       if (name === 'audioOverviews:listByRoom') return { data: liveOverviews }
       if (name === 'users:getDailyQuota') return { data: ref({ used: 0, cap: 10, date: '2026-09-03' }) }
       if (name === 'folders:resolveScope') return { data: ref({ documentIds: [] }) }
       return { data: ref(null) }
-    })
+    }
+    vi.stubGlobal('useConvexQuery', queryStub)
+    vi.stubGlobal('useSkippableConvexQuery', queryStub)
     vi.stubGlobal('useConvexMutation', (reference: unknown) => {
       const name = getFunctionName(reference as never)
       if (name === 'audioOverviews:deleteOverview') return { mutate: remove }
