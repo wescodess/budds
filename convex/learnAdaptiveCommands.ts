@@ -14,9 +14,10 @@ const THREAD_DELETION_RETRY_DELAYS_MS = [1_000, 5_000] as const
 
 export const detachV2CanvasHistory = internalMutation({
   args: { userId: v.string(), threadId: v.id('learningThreads'), table: v.union(v.literal('learnResponses'), v.literal('learnResponseSlots'), v.literal('learnAssessmentOpportunities')), cursor: v.optional(v.string()) },
-  handler: async (ctx, args) => {
+  returns: v.boolean(),
+  handler: async (ctx, args): Promise<boolean> => {
     const thread = await ctx.db.get(args.threadId)
-    if (!thread || thread.userId !== args.userId || !thread.learningVoidId || thread.deletionStartedAt === undefined) return
+    if (!thread || thread.userId !== args.userId || !thread.learningVoidId || thread.deletionStartedAt === undefined) return false
     const page = await ctx.db.query(args.table).withIndex('by_userId_and_learningVoidId', q => q.eq('userId', args.userId).eq('learningVoidId', thread.learningVoidId)).paginate({ cursor: args.cursor ?? null, numItems: THREAD_DELETION_BATCH_SIZE })
     for (const row of page.page) {
       if (row.scopeKind === 'v2' && row.contextPins.kind === 'session' && row.contextPins.canvas?.threadId === thread._id) {
@@ -24,9 +25,16 @@ export const detachV2CanvasHistory = internalMutation({
       }
     }
     const nextTable = args.table === 'learnResponses' ? 'learnResponseSlots' : args.table === 'learnResponseSlots' ? 'learnAssessmentOpportunities' : null
-    if (!page.isDone || nextTable) await ctx.scheduler.runAfter(0, internal.learnAdaptiveCommands.detachV2CanvasHistory,
-      { ...args, table: page.isDone ? nextTable! : args.table, cursor: page.isDone ? undefined : page.continueCursor })
-    else await ctx.db.patch(thread._id, { nextAction: { kind: 'deleted', label: '', reasonCode: 'canvas_history_detached', activityId: '' } })
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.learnAdaptiveCommands.detachV2CanvasHistory, { ...args, cursor: page.continueCursor })
+      return false
+    }
+    if (nextTable) {
+      const done: boolean = await ctx.runMutation(internal.learnAdaptiveCommands.detachV2CanvasHistory, { ...args, table: nextTable, cursor: undefined })
+      return done
+    }
+    await ctx.db.patch(thread._id, { nextAction: { kind: 'deleted', label: '', reasonCode: 'canvas_history_detached', activityId: '' } })
+    return true
   },
 })
 
@@ -175,8 +183,8 @@ export async function deleteAdaptiveThreadAuthorityBatch(ctx: MutationCtx, job: 
 
   if (thread && thread.deletionStartedAt === undefined) await ctx.db.patch(threadId, { deletionStartedAt: Date.now() })
   if (thread?.authorityKind === 'v2_mission' && thread.nextAction?.reasonCode !== 'canvas_history_detached') {
-    await ctx.scheduler.runAfter(0, internal.learnAdaptiveCommands.detachV2CanvasHistory, { userId, threadId, table: 'learnResponses' })
-    return { phase: 'responses' as const, deleted: 0, done: false, waitingExternal: true, jobId: job._id }
+    const detached: boolean = await ctx.runMutation(internal.learnAdaptiveCommands.detachV2CanvasHistory, { userId, threadId, table: 'learnResponses' })
+    if (!detached) return { phase: 'responses' as const, deleted: 0, done: false, waitingExternal: true, jobId: job._id }
   }
   if (await deleteOwnedThreadResponses(ctx, userId, threadId)) return { phase: 'responses' as const, deleted: 0, done: false, jobId: job._id }
   const contributions = await ctx.db.query('learningThreadContributions')

@@ -28,12 +28,20 @@ async function captureAuthority() {
   busy.value = true
   error.value = ''
   try {
+    let authorization = await client.mutation(api.dataExport.authorizePersonalExport, {})
+    while (!authorization.done) {
+      const next = await client.mutation(api.dataExport.authorizePersonalExport, {
+        authorizationId: authorization.authorizationId, cursor: authorization.cursor ?? undefined,
+      })
+      if (!next.done && next.cursor === authorization.cursor) throw new Error('Export authorization did not advance')
+      authorization = next
+    }
     const collections = ['masteryAttempts', 'masteryRecords', 'learnJobs', 'learnActivityEvents'] as const
     const rows = await Promise.all(collections.map(async collection => {
       const records: Array<Record<string, unknown>> = []
       let cursor: string | null = null
       for (let pageNumber = 0; pageNumber < 32; pageNumber++) {
-        const page = await client.query(api.dataExport.getUserDataPage, { collection, paginationOpts: { cursor, numItems: 8 } })
+        const page = await client.query(api.dataExport.getUserDataPage, { collection, authorizationId: authorization.authorizationId, paginationOpts: { cursor, numItems: 8 } })
         records.push(...page.page as Array<Record<string, unknown>>)
         if (page.isDone) return records
         cursor = page.continueCursor

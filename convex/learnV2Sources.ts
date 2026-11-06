@@ -4,6 +4,7 @@ import { isLearnV2TransitionAllowed, type SourceState } from '../shared/learn-v2
 import { LEARN_V2_BLUEPRINT_LIMITS } from '../shared/learn-v2-blueprint'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
+import { retainedSourceExcerpt, sourceBodyAvailable } from './lib/learnV2ResponsePrivacy'
 import {
   internalMutation,
   mutation,
@@ -474,9 +475,8 @@ export const listSourceReview = query({
       if (!identity || identity.userId !== userId || identity.learningVoidId !== blueprint.learningVoidId) {
         throw new Error('Source review identity mismatch')
       }
-      const excerpt = await ctx.db.query('learnSourceExcerpts')
-        .withIndex('by_userId_and_sourceSnapshotId', q => q.eq('userId', userId).eq('sourceSnapshotId', source._id))
-        .unique()
+      const authority = await sourceBodyAvailable(ctx, userId, source._id, { allowUnaccepted: true })
+      const excerpt = authority ? await retainedSourceExcerpt(ctx, userId, source._id, { allowUnaccepted: true }) : null
       const hasContent = source.rightsStatus === 'permitted' && excerpt?.rightsStatus === 'permitted'
         && excerpt.evidencePurgedAt === undefined && Boolean(excerpt.excerpt?.trim())
       const hasLocator = Boolean(sanitizePublicSourceLocator(source.publicLocator)
@@ -508,7 +508,7 @@ export const listSourceReview = query({
           status: source.rightsStatus ?? 'unknown',
           provenance: source.rightsProvenance ?? 'none',
           policyVersion: source.rightsPolicyVersion ?? null,
-          access: effectiveStatus(source) === 'unavailable' || source.evidencePurgedAt !== undefined
+          access: !authority
             ? 'evidence_unavailable'
             : hasContent ? 'available' : hasLocator ? 'locator_only' : 'evidence_unavailable',
         },
