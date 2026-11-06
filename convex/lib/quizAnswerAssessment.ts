@@ -1,5 +1,7 @@
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
+import { boundQuizGradingEvidence } from '../../server/utils/quiz-grading'
+import { admitQuizGradingAttempt } from './quizGradingLimits'
 import manifest from '../../workers/laya-evaluator/learningDecisionManifest.json'
 import { QUIZ_RUBRIC_GRADE_VERSION, defaultQuizGradingCriteria, validateQuizGradingCriteria, type QuizGrade, type QuizGradingCriterion } from '../../shared/quiz-grading'
 
@@ -63,6 +65,7 @@ export async function createPendingAnswerAssessment(
   const grade = criteria && (input.deterministicIsCorrect || isEmpty)
     ? { credit: isEmpty ? 0 : 1, label: isEmpty ? 'incorrect' as const : 'fully_correct' as const }
     : null
+  const admissionRetryAt = criteria && !grade ? await admitQuizGradingAttempt(ctx, input.attemptId, input.userId) : 0
   return await ctx.db.insert('quizAnswerAssessments', {
     userId: input.userId,
     attemptId: input.attemptId,
@@ -77,7 +80,7 @@ export async function createPendingAnswerAssessment(
       question: input.question.question,
       questionType: input.question.type,
       expectedAnswer: input.question.correctAnswer,
-      evidenceExcerpt: input.question.sourceChunkContent ?? '',
+      evidenceExcerpt: criteria ? boundQuizGradingEvidence(input.question.sourceChunkContent ?? '') : input.question.sourceChunkContent ?? '',
       sourceFilename: input.question.sourceFilename,
       explanation: input.question.explanation,
     },
@@ -91,6 +94,7 @@ export async function createPendingAnswerAssessment(
     ...(criteria ? {
       rubricVersion: QUIZ_RUBRIC_GRADE_VERSION,
       criteriaSnapshot: criteria,
+      ...(admissionRetryAt ? { status: 'unavailable' as const, unavailableReason: 'over_budget' as const, retryable: true, nextAttemptAt: admissionRetryAt, completedAt: now } : {}),
       ...(grade ? {
         status: 'available' as const,
         credit: grade.credit,

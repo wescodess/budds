@@ -135,6 +135,57 @@ describe('quizzes.createWithQuestions', () => {
   })
 })
 
+describe('quizzes.addQuestion', () => {
+  test('[P0] rejects insertion when the quiz already has the bounded maximum of 200 questions', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Large quiz' })
+    const { quizId } = await asUser.mutation(api.quizzes.createWithQuestions, {
+      folderId,
+      title: 'At capacity',
+      questions: Array.from({ length: 200 }, (_, order) => ({
+        order,
+        question: `Question ${order}`,
+        type: 'free-response' as const,
+        correctAnswer: `Answer ${order}`,
+      })),
+    })
+
+    await expect(asUser.mutation(api.quizzes.addQuestion, {
+      quizId,
+      type: 'free-response',
+      questionText: 'Question 201',
+      correctAnswer: 'Answer 201',
+    })).rejects.toThrow(/maximum of 200 questions/i)
+
+    const rows = await t.run(ctx => ctx.db.query('quizQuestions').withIndex('by_quizId', q => q.eq('quizId', quizId)).collect())
+    expect(rows).toHaveLength(200)
+  })
+})
+
+describe('quiz creation bounds', () => {
+  const oversizedQuestions = () => Array.from({ length: 201 }, (_, order) => ({
+    order, question: `Question ${order}`, type: 'free-response' as const, correctAnswer: `Answer ${order}`,
+  }))
+
+  test('[P0] rejects oversized user and course-scoped creation before inserting a quiz', async () => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bounded' })
+    const { courseId } = await asUser.mutation(api.courses.create, { title: 'Bounded course', sourceType: 'web-only', folderId })
+
+    await expect(asUser.mutation(api.quizzes.createWithQuestions, {
+      folderId, title: 'Too large', questions: oversizedQuestions(),
+    })).rejects.toThrow(/cannot exceed 200 questions/i)
+    await expect(t.mutation(internal.quizzes.createCourseScopedQuiz, {
+      courseId, userId: USER_A.tokenIdentifier, folderId, title: 'Too large course quiz', questions: oversizedQuestions(),
+    })).rejects.toThrow(/cannot exceed 200 questions/i)
+
+    expect(await t.run(ctx => ctx.db.query('quizzes').withIndex('by_folderId', q => q.eq('folderId', folderId)).collect())).toEqual([])
+  })
+})
+
+
 describe('quizzes.listByFolder', () => {
   test('[P0] returns only caller\'s quizzes for that folder', async () => {
     const t = convexTest(schema, modules)
