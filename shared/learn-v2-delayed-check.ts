@@ -4,6 +4,7 @@ import {
   learnIdSchema, learnVersionSchema, learnTimestampSchema, learnLocalDateSchema, learnTimezoneSchema,
   learnRevisionSchema, learnSequenceSchema, learnAssistanceSnapshotSchema, learnReasonCodesSchema,
   LEARN_V2_ASSISTANCE_POLICY_VERSION, LEARN_V2_RETAINED_PROMOTION_INELIGIBLE, parseLearnContract,
+  learnResponseDeliveryPinsSchema,
 } from './learn-v2-responses'
 import { learnMeasurementHorizonSchema } from './learn-v2-measurement'
 
@@ -45,6 +46,7 @@ export const learnAssessmentLifecycleSchema = z.strictObject({
   deliveryGrantId: learnIdSchema<'learnAssessmentExposures'>().nullable(), submissionId: learnIdSchema<'learnResponses'>().nullable(),
   authoritativeAttemptId: learnIdSchema<'masteryAttempts'>().nullable(), acceptedAt: learnTimestampSchema.nullable(),
   checkSequence: learnSequenceSchema,
+  deliveryPins: learnResponseDeliveryPinsSchema.optional(),
 }).superRefine((value, ctx) => {
   const sealedPhase = ['submitted_sealed', 'scoring_pending', 'scored_pass', 'scored_fail', 'retryable_failure', 'reconciliation_required'].includes(value.phase)
   const beforeSeal = ['preparing', 'ready', 'test_open', 'cancelled', 'abandoned'].includes(value.phase)

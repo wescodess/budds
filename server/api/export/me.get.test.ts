@@ -6,6 +6,9 @@ import schema from '../../../convex/schema'
 import { seedMeasurementStorage, STORAGE_CANARIES } from '../../../tests/fixtures/learn-v2-measurement-storage'
 import { ADAPTIVE_LEARN_EXPORT_COLLECTIONS } from '../../../shared/adaptive-learn-storage-manifest'
 import { LEARN_MEASUREMENT_STORAGE_MANIFEST, LEARN_MEASUREMENT_COLLECTIONS } from '../../../shared/learn-v2-measurement-storage-manifest'
+import { LEARN_V2_MEASUREMENT_REPORT_VERSION, LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION } from '../../../shared/learn-v2-measurement-report'
+import { LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION, LEARN_V2_RESPONSE_TERMINALIZATION_VERSION } from '../../../shared/learn-v2-responses'
+import { deriveLearnAssessmentResponseContext } from '../../../shared/learn-v2-measurement'
 
 const recordedHeaders: Record<string, string> = {}
 
@@ -106,6 +109,20 @@ describe('GET /api/export/me', () => {
     const t = convexTest(schema, import.meta.glob('../../../convex/**/*.ts'))
     const f = await t.run(ctx => seedMeasurementStorage(ctx, identity.tokenIdentifier))
     const other = await t.run(ctx => seedMeasurementStorage(ctx, 'https://other.example.com|zip-owner'))
+    await t.run(async ctx => {
+      const legacy = await ctx.db.get(f.rows.learnResponses)
+      if (!legacy || !('baselineEpoch' in legacy)) throw new Error('Missing fixture response')
+      const { _id: _id, _creationTime: _creationTime, baselineEpoch: _epoch, flow: _flow, ...fields } = legacy
+      const context = deriveLearnAssessmentResponseContext({ contextPins: { ...f.scope.contextPins, contentInputDigest: 'a'.repeat(64) },
+        assignment: { status: 'admitted', assignmentId: f.rows.learnMeasurementAssignments, epoch: 'fixture-epoch', flow: 'v2_today' } })
+      await ctx.db.replace(f.rows.learnResponses, { ...fields, ...context })
+      await ctx.db.patch(f.rows.learnResponseSlots, { confidenceRequested: false })
+      await ctx.db.patch(f.rows.learnAssessmentOpportunities, { deliveryPins: { version: LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION, confidenceRequested: true } })
+      const target = { responseSlotId: f.rows.learnResponseSlots }
+      await ctx.db.insert('learnResponseCommandReceipts', { ...f.base, learningVoidId: f.learningVoidId,
+        idempotencyKeyHash: 'terminalization-hash', requestDigest: 'terminalization-digest', commandVersion: LEARN_V2_RESPONSE_TERMINALIZATION_VERSION, target,
+        result: { kind: 'terminalized', target, revision: 2, reasonCode: 'cancelled', terminalizedAt: f.base.createdAt } })
+    })
     const asUser = t.withIdentity(identity)
     getExportMetadataMock.mockImplementation(() => asUser.query(api.dataExport.getExportMetadata, {}))
     getUserDataPageMock.mockImplementation(args => asUser.query(api.dataExport.getUserDataPage, args))
@@ -124,6 +141,21 @@ describe('GET /api/export/me', () => {
         else expect(serialized).not.toContain(canary)
       }
     }
+    const cells = JSON.parse(strFromU8(entries['learnMeasurementReportCells.json']!))
+    expect(cells).toMatchObject([{ reportVersion: LEARN_V2_MEASUREMENT_REPORT_VERSION }])
+    expect(cells[0]).not.toHaveProperty('legacyIndependentAudit')
+    const reportRows = JSON.parse(strFromU8(entries['learnMeasurementReportRows.json']!))
+    expect(reportRows).toMatchObject([{ sourceVersion: LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION }])
+    expect(reportRows[0]).not.toHaveProperty('snapshot')
+    expect(JSON.parse(strFromU8(entries['learnResponses.json']!))).toMatchObject([{ flow: 'today',
+      measurementContext: { status: 'admitted', assignmentId: f.rows.learnMeasurementAssignments, baselineEpoch: 'fixture-epoch' } }])
+    expect(JSON.parse(strFromU8(entries['learnResponseSlots.json']!))).toMatchObject([{ confidenceRequested: false }])
+    expect(JSON.parse(strFromU8(entries['learnAssessmentOpportunities.json']!))).toMatchObject([{ deliveryPins: { confidenceRequested: true } }])
+    const terminalized = JSON.parse(strFromU8(entries['learnResponseCommandReceipts.json']!)).find((row: { commandVersion: string }) => row.commandVersion === LEARN_V2_RESPONSE_TERMINALIZATION_VERSION)
+    expect(terminalized.result).toEqual({ kind: 'terminalized', target: { responseSlotId: f.rows.learnResponseSlots }, revision: 2, reasonCode: 'cancelled', terminalizedAt: f.base.createdAt })
+    expect(terminalized).not.toHaveProperty('expiresAt')
+    expect(terminalized).not.toHaveProperty('idempotencyKeyHash')
+    expect(terminalized).not.toHaveProperty('requestDigest')
     const manifest = JSON.parse(strFromU8(entries['manifest.json']!))
     expect(manifest.measurementStorage.version).toBe('learn-v2.measurement-storage.v1')
     expect(manifest.measurementStorage.omitted).toContain('unseen_prompts')

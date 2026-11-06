@@ -19,6 +19,7 @@ export function emptyMeasurementReportCell() {
     stratum: { flow: 'v2_today', entryPoint: 'today.v1', depth: 'working', startingBand: 'all', responseKind: 'keyed',
       scoringKind: 'deterministic', configurationDigest: `sha256:${'a'.repeat(64)}`, observedModel: null, observedUpstream: null, familyValidationStatus: 'provisional_equivalent' },
     ...estimate,
+    legacyIndependentAudit: { unknownCount: 0, sourceCoverage: 'complete' },
     counts: { considered: 0, notAdmitted: 0, horizonNotAssigned: 0, anchorNotStarted: 0, notYetDue: 0, windowOpen: 0,
       maturedEpisodes: 0, operationallyEligible: 0, acceptedSubmissions: 0, validDelayedScores: 0, validColdScores: 0, comparablePairs: 0,
       maturedClaims: 0, checkedClaims: 0, failedClaims: 0, acceptedColdSubmissions: 0, acceptedClaims: 0,
@@ -44,7 +45,8 @@ export function partialMeasurementReportCell() {
   cell.status = 'partial_observed'
   cell.outcomeCoverage = 'partial'
   cell.observedValue = -20
-  cell.missingOutcomeBounds = { lower: -60, upper: 40 }
+  cell.missingOutcomeBounds = { lower: -30, upper: 20 }
+  cell.legacyIndependentAudit.unknownCount = 3
   cell.reasonCodes = ['missing_delayed', 'insufficient_clusters']
   Object.assign(cell.counts, { considered: 3, notAdmitted: 1, maturedEpisodes: 2, operationallyEligible: 2,
     acceptedSubmissions: 1, validDelayedScores: 1, validColdScores: 2, comparablePairs: 1, acceptedColdSubmissions: 2 })
@@ -52,11 +54,11 @@ export function partialMeasurementReportCell() {
   cell.counts.dispositions.valid_scored = 1
   Object.assign(cell.counts.distinctLearners, { maturedEpisodes: 2, operationallyEligible: 2, acceptedSubmissions: 1, validDelayedScores: 1, validColdScores: 2, comparablePairs: 1 })
   Object.assign(cell.replacements, { originalPopulation: 2, withLinkedReplacement: 1,
-    secondary: { ...emptyMeasurementEstimate(), population: 1, status: 'insufficient_data', missingOutcomeBounds: { lower: -100, upper: 100 }, reasonCodes: ['scoring_pending', 'insufficient_clusters'] } })
+    secondary: { ...emptyMeasurementEstimate(), population: 1, status: 'insufficient_data', missingOutcomeBounds: { lower: -40, upper: 60 }, reasonCodes: ['scoring_pending', 'insufficient_clusters'] } })
   cell.instrumentation = { pasteFlagged: 1, focusFlagged: 1, eitherFlagged: 1, unknownUnflagged: 1, knownUnflagged: 0,
     pasteUnknown: 1, focusUnknown: 1, unknownInstrumentation: 1, flaggedWithUnknownInstrumentation: 0 }
   cell.sensitivity.excludingFlagged = { ...emptyMeasurementEstimate(), population: 1, status: 'insufficient_data',
-    missingOutcomeBounds: { lower: -100, upper: 100 }, reasonCodes: ['missing_delayed', 'insufficient_clusters'] }
+    missingOutcomeBounds: { lower: -40, upper: 60 }, reasonCodes: ['missing_delayed', 'insufficient_clusters'] }
   cell.allocations.assignedOrders.ABC = 2
   cell.allocations.observedOrders.ABC = 1
   cell.allocations.assignedColdForms.A = 2
@@ -70,7 +72,6 @@ export function partialMeasurementReportCell() {
   cell.sourceAccounting.unknownExposure.affected = 1
   cell.sourceAccounting.replacement.affected = 1
   cell.sourceAccounting.outsideHelpUncertainty.affected = 3
-  cell.attritionByStartingBand.from40To80 = { population: 1, accepted: 1, validScored: 1, paired: 1 }
-  cell.attritionByStartingBand.unknown.population = 1
+  cell.attritionByStartingBand.from40To80 = { population: 2, accepted: 1, validScored: 1, paired: 1 }
   return learnReportMetricSchema.parse(cell)
 }

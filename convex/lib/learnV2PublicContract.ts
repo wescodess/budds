@@ -6,7 +6,7 @@ import {
   LEARN_V2_RESPONSE_CONTRACT_VERSION, LEARN_V2_RESPONSE_REJECTION_CODES,
   learnAcceptResponseRequestSchema, learnFinalResponseBundleSchema,
   learnResponseTargetSchema, learnResponseIdempotencyKeySchema, learnRevisionSchema, learnIdSchema,
-  learnTimestampSchema, parseLearnContract,
+  learnTimestampSchema, parseLearnContract, validateLearnAcceptResponseRequest, validateLearnFinalResponseBundle,
 } from '../../shared/learn-v2-responses'
 import {
   LEARN_V2_ASSESSMENT_CAPABILITIES_VERSION, LEARN_V2_ASSESSMENT_PHASES,
@@ -117,6 +117,7 @@ export const terminalizeResponseSchema = responseStateSchema.extend({
 export const terminalizeResponseValidator = v.union(unavailableValidator, v.object({
   version: v.literal(LEARN_V2_PUBLIC_API_VERSION), status: v.literal('terminal'), target: responseTargetValidator,
   revision: v.number(), reason: literals(['cancelled', 'abandoned']),
+  terminalizedAt: v.number(),
 }))
 
 export const assessmentReferenceArgs = {
@@ -250,4 +251,11 @@ export type LearnV2AggregateExport = Infer<typeof aggregateExportValidator>
 export function parsePublicLearnRequest<S extends z.ZodType>(schema: S, input: unknown): z.output<S> {
   try { return parseLearnContract(schema, input) }
   catch { throw new Error('Invalid Learn request') }
+}
+
+export function validateLearnMasterySubmission(input: unknown, pins: Parameters<typeof validateLearnFinalResponseBundle>[1]) {
+  const request = parsePublicLearnRequest(acceptMasterySubmissionSchema, input)
+  if ('response' in request.submission) validateLearnAcceptResponseRequest(request.submission, { ...pins.application, diagnostic: false })
+  else validateLearnFinalResponseBundle(request.submission, pins)
+  return request
 }

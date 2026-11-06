@@ -3,6 +3,9 @@ import type { GenericId } from 'convex/values'
 import { LEARN_MEASUREMENT_STORAGE_LIMITS } from './learn-v2-measurement-storage-manifest'
 
 export const LEARN_V2_RESPONSE_CONTRACT_VERSION = 'learn-v2.responses.v1' as const
+export const LEARN_V2_RESPONSE_CONTEXT_VERSION = 'learn-v2.response-context.v1' as const
+export const LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION = 'learn-v2.response-delivery-pins.v1' as const
+export const LEARN_V2_RESPONSE_TERMINALIZATION_VERSION = 'learn-v2.response-terminalization.v1' as const
 export const LEARN_V2_ASSISTANCE_POLICY_VERSION = 'learn-v2.assistance.session-wide.v1' as const
 export const LEARN_V2_VALIDITY_POLICY_VERSION = 'learn-v2.assessment-validity.v1' as const
 export const LEARN_V2_RETAINED_PROMOTION_INELIGIBLE = 'retained_promotion_ineligible' as const
@@ -94,10 +97,24 @@ export const learnResponseTargetSchema = z.union([
   z.strictObject({ responseSlotId: learnIdSchema<'learnResponseSlots'>() }),
 ])
 export const learnResponseStageSchema = z.enum(['retrieval', 'prediction', 'practice', 'teach_back', 'diagnostic'])
+export const learnResponseDeliveryPinsSchema = z.strictObject({
+  version: z.literal(LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION), confidenceRequested: z.boolean(),
+})
+export const learnAssessmentResponseContextSchema = z.strictObject({
+  responseContextVersion: z.literal(LEARN_V2_RESPONSE_CONTEXT_VERSION), flow: z.enum(['today', 'canvas']),
+  measurementContext: z.discriminatedUnion('status', [
+    z.strictObject({ status: z.literal('not_enrolled') }),
+    z.strictObject({ status: z.literal('admitted'), assignmentId: learnIdSchema<'learnMeasurementAssignments'>(), baselineEpoch: learnVersionSchema }),
+  ]),
+})
+export const learnResponseTerminalizedResultSchema = z.strictObject({
+  kind: z.literal('terminalized'), target: learnResponseTargetSchema, revision: learnRevisionSchema,
+  reasonCode: z.enum(['cancelled', 'abandoned']), terminalizedAt: learnTimestampSchema,
+})
 export const learnResponseSlotPinsSchema = z.strictObject({
   stage: learnResponseStageSchema, slotKey: learnVersionSchema, blockId: learnVersionSchema,
   promptDigest: learnDigestSchema, promptRevision: learnRevisionSchema, responseFormatVersion: learnVersionSchema,
-  deliveryExposureId: learnIdSchema<'learnAssessmentExposures'>(), revision: learnRevisionSchema,
+  deliveryExposureId: learnIdSchema<'learnAssessmentExposures'>(), revision: learnRevisionSchema, confidenceRequested: z.boolean().default(false),
 })
 export const learnResponsePayloadSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('text'), text: learnTextSchema() }),
@@ -184,10 +201,30 @@ export type LearnAssistanceSnapshot = z.infer<typeof learnAssistanceSnapshotSche
 export type LearnValiditySnapshot = z.infer<typeof learnValiditySnapshotSchema>
 export type LearnResponseReceipt = z.infer<typeof learnResponseReceiptSchema>
 
-export function validateLearnAcceptResponseRequest(input: unknown, slot: { confidenceRequested: boolean, diagnostic: boolean }) {
+export function resolveLearnResponseConfidenceRequested(target: {
+  confidenceRequested?: boolean, deliveryPins?: z.infer<typeof learnResponseDeliveryPinsSchema>,
+}) {
+  if (target.deliveryPins !== undefined) return parseLearnContract(learnResponseDeliveryPinsSchema, target.deliveryPins).confidenceRequested
+  return z.boolean().parse(target.confidenceRequested === undefined ? false : target.confidenceRequested)
+}
+
+export function validateLearnAcceptResponseRequest(input: unknown, slot: {
+  confidenceRequested?: boolean, deliveryPins?: z.infer<typeof learnResponseDeliveryPinsSchema>, diagnostic: boolean,
+}) {
   const request = parseLearnContract(learnAcceptResponseRequestSchema, input)
-  if (slot.confidenceRequested !== (request.response.confidence !== undefined)) throw new Error('Confidence does not match the owned slot')
+  if (resolveLearnResponseConfidenceRequested(slot) !== (request.response.confidence !== undefined)) throw new Error('Confidence does not match the owned slot')
   if (slot.diagnostic) learnSerializedBytes(request.response.payload, LEARN_V2_RESPONSE_LIMITS.maxDiagnosticBytes)
+  return request
+}
+
+export function validateLearnFinalResponseBundle(input: unknown, pins: {
+  teachBack: { confidenceRequested?: boolean },
+  application: { deliveryPins?: z.infer<typeof learnResponseDeliveryPinsSchema> },
+}) {
+  const request = parseLearnContract(learnFinalResponseBundleSchema, input)
+  for (const [entry, pin] of [[request.teachBack, pins.teachBack], [request.application, pins.application]] as const) {
+    if (resolveLearnResponseConfidenceRequested(pin) !== (entry.confidence !== undefined)) throw new Error('Confidence does not match the owned slot')
+  }
   return request
 }
 

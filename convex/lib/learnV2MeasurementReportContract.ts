@@ -35,6 +35,7 @@ export const learnReportMetricValidator = v.object({
     configurationDigest: v.string(), observedModel: nullableString, observedUpstream: nullableString,
     familyValidationStatus: literals(['provisional_equivalent', 'empirically_supported', 'quarantined', 'retired', 'unknown']),
   }), ...estimateFields,
+  legacyIndependentAudit: v.object({ unknownCount: nullableNumber, sourceCoverage }),
   counts: v.object({
     considered: v.number(), notAdmitted: v.number(), horizonNotAssigned: v.number(), anchorNotStarted: v.number(), notYetDue: v.number(), windowOpen: v.number(),
     ...distinctCounts, distinctLearners: v.object(distinctCounts), acceptedColdSubmissions: v.number(), acceptedClaims: v.number(),

@@ -8,8 +8,8 @@ import { learnAssessmentClockSchema, learnFirstCheckClaimSchema, learnAssessment
 import { learnMeasurementFlowSchema, learnMeasurementDepthSchema, learnHistoryStatusSchema, learnFamilyStatusSchema, learnMeasurementHorizonSchema, LEARN_V2_FORM_ORDERS } from './learn-v2-measurement'
 import { LEARN_MEASUREMENT_STORAGE_LIMITS } from './learn-v2-measurement-storage-manifest'
 
-export const LEARN_V2_MEASUREMENT_REPORT_VERSION = 'learn-v2.measurement-report.v2' as const
-export const LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION = 'learn-v2.measurement-report-source.v1' as const
+export const LEARN_V2_MEASUREMENT_REPORT_VERSION = 'learn-v2.measurement-report.v3' as const
+export const LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION = 'learn-v2.measurement-report-source.v2' as const
 export const LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION = 'learn-v2.measurement-report-query.v1' as const
 export const VERIFIED_LEARNING_GAIN_VERSION = 'verified_learning_gain.v1' as const
 export const FALSE_MASTERY_NEXT_DELAYED_VERSION = 'false_mastery_next_delayed.v1' as const
@@ -29,7 +29,11 @@ export const learnReportStatusSchema = z.enum(LEARN_V2_REPORT_STATUSES)
 export const learnReportDispositionSchema = z.enum(LEARN_V2_REPORT_DISPOSITIONS)
 export const learnReportOpportunityStatusSchema = z.union([learnAssessmentPhaseSchema, z.enum(['pending', 'eligible', 'blocked'])])
 const sourceCoverage = z.enum(['complete', 'unknown'])
+const count = z.number().int().min(0).max(LEARN_MEASUREMENT_STORAGE_LIMITS.maxReportEpisodes)
 const masteryState = z.enum(['unseen', 'learning', 'guided', 'independent', 'retained', 'needs_review', 'blocked', 'provisionally_known'])
+export const learnReportLegacyIndependentAuditSchema = z.strictObject({
+  unknownCount: count.nullable(), sourceCoverage,
+}).refine(value => (value.sourceCoverage === 'complete') === (value.unknownCount !== null), 'Legacy audit counts require complete enumeration')
 
 export const learnReportAssignmentSnapshotSchema = z.strictObject({
   epoch: learnVersionSchema, baselineSha: z.string().regex(/^[a-f0-9]{40}$/), cohortVersion: learnVersionSchema,
@@ -62,7 +66,8 @@ export const learnReportResultSnapshotSchema = z.strictObject({
 
 export const learnReportWatermarkSnapshotSchema = z.strictObject({
   kind: z.literal('owner_watermark'), sequence: learnSequenceSchema, dueWorkThrough: learnTimestampSchema.nullable(), historyCoverage: sourceCoverage,
-})
+  legacyIndependentAudit: learnReportLegacyIndependentAuditSchema,
+}).refine(value => value.historyCoverage !== 'unknown' || value.legacyIndependentAudit.sourceCoverage === 'unknown', 'Unknown history requires unknown legacy audit coverage')
 export const learnReportEpisodeSnapshotSchema = z.strictObject({
   kind: z.literal('episode'), assignment: learnReportAssignmentSnapshotSchema, clock: learnAssessmentClockSchema.nullable(),
   originalOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>().nullable(), replacementOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>().nullable(),
@@ -132,7 +137,6 @@ export const learnReportStratumSchema = z.strictObject({
   observedModel: z.string().min(1).max(200).nullable(), observedUpstream: z.string().min(1).max(200).nullable(),
   familyValidationStatus: z.union([learnFamilyStatusSchema, z.literal('unknown')]),
 })
-const count = z.number().int().min(0).max(LEARN_MEASUREMENT_STORAGE_LIMITS.maxReportEpisodes)
 export const learnReportDispositionCountsSchema = z.strictObject({
   missing_cold: count, missing_delayed: count, abandoned: count, assisted_contaminated: count,
   invalid_item_novelty: count, evidence_unavailable: count, pin_flow_treatment_mismatch: count,
@@ -223,6 +227,7 @@ export const learnReportMetricSchema = z.strictObject({
   metric: z.enum([VERIFIED_LEARNING_GAIN_VERSION, FALSE_MASTERY_NEXT_DELAYED_VERSION]), horizonDays: learnMeasurementHorizonSchema,
   weighting: z.enum(['capability_episode', 'learner_sensitivity']), stratum: learnReportStratumSchema,
   ...estimateFields, counts: learnReportPopulationCountsSchema,
+  legacyIndependentAudit: learnReportLegacyIndependentAuditSchema,
   replacements: learnReportReplacementAccountingSchema, instrumentation: learnReportInstrumentationCountsSchema,
   sensitivity: learnReportSensitivitySchema, allocations: learnReportAllocationCountsSchema,
   sourceAccounting: learnReportSourceAccountingSchema, attritionByStartingBand: learnReportBandAttritionSchema,
@@ -235,6 +240,16 @@ export const learnReportMetricSchema = z.strictObject({
   const scored = gain ? value.counts.validDelayedScores : value.counts.checkedClaims
   refineEstimate({ ...value, population, observed, contributingLearners: learners }, ctx)
   const estimates = [value, value.replacements.secondary, value.sensitivity.excludingFlagged]
+  const validityStates = {
+    verified: ['verified', 'provisional', 'unknown', 'quarantined'], provisional: ['provisional', 'unknown', 'quarantined'],
+    unknown: ['unknown', 'quarantined'], quarantined: ['quarantined'],
+  }
+  const parentValidity = value.status === 'quarantined' ? 'quarantined' : value.validity
+  if (estimates.slice(1).some(estimate => (value.populationState === 'unknown' && estimate.populationState !== 'unknown')
+    || ((value.sourceCoverage === 'unknown' || value.status === 'unknown_source_coverage') && estimate.sourceCoverage !== 'unknown')
+    || !validityStates[parentValidity].includes(estimate.validity))) {
+    ctx.addIssue({ code: 'custom', message: 'Sub-estimates cannot claim stronger population, source coverage or validity than their parent cell' })
+  }
   const minimum = gain ? -100 : 0
   const maximum = gain ? 100 : 1
   if (estimates.some(estimate => [estimate.observedValue, estimate.allEligibleValue, estimate.missingOutcomeBounds?.lower,
@@ -254,6 +269,8 @@ export const learnReportMetricSchema = z.strictObject({
     || value.instrumentation.focusFlagged + value.instrumentation.focusUnknown > population
     || value.sensitivity.excludingFlagged.population !== population - value.instrumentation.eitherFlagged
     || value.sensitivity.excludingFlagged.observed > observed || value.sensitivity.excludingFlagged.contributingLearners > learners
+    || value.sensitivity.excludingFlagged.observed < Math.max(0, observed - value.instrumentation.eitherFlagged)
+    || value.sensitivity.excludingFlagged.contributingLearners < Math.max(0, learners - (observed - value.sensitivity.excludingFlagged.observed))
     || sum(value.allocations.assignedOrders) !== population || sum(value.allocations.observedOrders) !== accepted
     || sum(value.allocations.assignedColdForms) !== value.counts.maturedEpisodes
     || sum(value.allocations.observedColdForms) !== value.counts.acceptedColdSubmissions
@@ -279,7 +296,11 @@ export const learnMeasurementReportSchema = z.discriminatedUnion('status', [
 export const learnMeasurementReportCellsSchema = z.strictObject({
   version: z.literal(LEARN_V2_MEASUREMENT_REPORT_VERSION), reportRunId: learnIdSchema<'learnMeasurementReportRuns'>(),
   cells: z.array(learnReportMetricSchema).max(8), cursor: z.string().min(1).max(2000).nullable(), isDone: z.boolean(),
-}).refine(value => value.isDone === (value.cursor === null))
+}).refine(value => value.isDone === (value.cursor === null)).refine(value => {
+  const audit = value.cells[0]?.legacyIndependentAudit
+  return value.cells.every(cell => cell.legacyIndependentAudit.unknownCount === audit?.unknownCount
+    && cell.legacyIndependentAudit.sourceCoverage === audit?.sourceCoverage)
+}, 'Cells must repeat the same cohort legacy audit')
 export function validateLearnMeasurementReportCells(input: unknown) {
   return parseLearnContract(learnMeasurementReportCellsSchema, input, LEARN_MEASUREMENT_STORAGE_LIMITS.maxReportPageBytes)
 }
