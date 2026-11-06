@@ -1,5 +1,6 @@
 import { defineSchema, defineTable } from 'convex/server'
 import { v } from 'convex/values'
+import { QUIZ_RUBRIC_GRADE_VERSION, quizGradingCriterionValidator, quizCriterionResultValidator, quizGradeSourceValidator } from '../shared/quiz-grading'
 
 export default defineSchema({
   users: defineTable({
@@ -147,6 +148,7 @@ export default defineSchema({
     ),
     options: v.optional(v.array(v.string())),
     correctAnswer: v.string(),
+    gradingCriteria: v.optional(v.array(quizGradingCriterionValidator)),
     explanation: v.optional(v.string()),
     sourceDocumentId: v.optional(v.id('documents')),
     sourceChunkContent: v.optional(v.string()),
@@ -290,6 +292,7 @@ export default defineSchema({
     total: v.number(),
     completedAt: v.optional(v.number()),
     status: v.optional(v.union(v.literal('in_progress'), v.literal('completed'), v.literal('abandoned'))),
+    gradingStatus: v.optional(v.union(v.literal('grading'), v.literal('settled'))),
     settingsSnapshot: v.optional(v.object({
       shuffleQuestions: v.boolean(),
       showAllQuestions: v.boolean(),
@@ -341,8 +344,14 @@ export default defineSchema({
     }),
     learnerAnswerSnapshot: v.string(),
     deterministicIsCorrect: v.boolean(),
-    rubricVersion: v.literal('quiz.free_response_assessment.v1'),
+    rubricVersion: v.union(v.literal('quiz.free_response_assessment.v1'), v.literal(QUIZ_RUBRIC_GRADE_VERSION)),
     rubricSnapshot: v.array(v.object({ label: v.string(), description: v.string() })),
+    criteriaSnapshot: v.optional(v.array(quizGradingCriterionValidator)),
+    criterionResults: v.optional(v.array(quizCriterionResultValidator)),
+    credit: v.optional(v.number()),
+    gradeSource: v.optional(quizGradeSourceValidator),
+    feedback: v.optional(v.string()),
+    selfAssessedAt: v.optional(v.number()),
     label: v.optional(v.union(
       v.literal('fully_correct'),
       v.literal('partially_correct'),

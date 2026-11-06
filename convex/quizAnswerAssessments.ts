@@ -1,6 +1,7 @@
 import { v } from 'convex/values'
 import { mutation, query } from './_generated/server'
 import { requireAuth } from './lib/auth'
+import { isRubricAssessment } from './lib/quizAnswerAssessment'
 import manifest from '../workers/laya-evaluator/learningDecisionManifest.json'
 
 const labelValidator = v.union(
@@ -74,6 +75,7 @@ export const listPendingForAttempt = query({
         .eq('userId', userId).eq('attemptId', args.attemptId).eq('status', 'pending').eq('nextAttemptAt', undefined))
       .take(PENDING_SCAN_LIMIT)
     const rows = [...indexedRows, ...legacyRows]
+      .filter(row => !isRubricAssessment(row))
       .filter((row, index, all) => all.findIndex(candidate => candidate._id === row._id) === index)
     return rows.filter(row => row.inputDigest === undefined || (row.leaseExpiresAt ?? ((row.claimedAt ?? 0) + CLAIM_LEASE_MS)) <= now)
       .slice(0, MAX_BATCH).map(row => ({
@@ -109,7 +111,8 @@ export const listPendingForShadowAttempt = query({
         .eq('shadowStatus', undefined)
         .eq('deterministicIsCorrect', false))
       .take(PENDING_SCAN_LIMIT)
-    return rows.filter(row => row.shadowInputDigest === undefined || (row.shadowLeaseExpiresAt ?? 0) <= now)
+    return rows.filter(row => !isRubricAssessment(row)
+      && (row.shadowInputDigest === undefined || (row.shadowLeaseExpiresAt ?? 0) <= now))
       .slice(0, MAX_BATCH).map(row => ({
         assessmentId: row._id,
         kind: row.kind,
@@ -145,7 +148,7 @@ export const claimShadowBatch = mutation({
     for (const assessmentId of args.assessmentIds) {
       const row = await ctx.db.get(assessmentId)
       const activeClaim = row?.shadowInputDigest !== undefined && (row.shadowLeaseExpiresAt ?? 0) > now
-      if (!row || row.userId !== userId || row.attemptId !== args.attemptId || row.status !== 'pending'
+      if (!row || isRubricAssessment(row) || row.userId !== userId || row.attemptId !== args.attemptId || row.status !== 'pending'
         || row.shadowStatus !== undefined || activeClaim) return []
       rows.push(row)
     }
@@ -185,7 +188,7 @@ export const recordShadowAvailable = mutation({
       requireProbability(result.confidence)
       requireProbabilityDistribution(result.label, result.probabilities)
       const row = await ctx.db.get(result.assessmentId)
-      if (!row || row.userId !== userId || row.attemptId !== args.attemptId || row.status !== 'pending'
+      if (!row || isRubricAssessment(row) || row.userId !== userId || row.attemptId !== args.attemptId || row.status !== 'pending'
         || row.shadowStatus !== undefined || row.shadowInputDigest !== result.inputDigest || row.shadowClaimId !== result.claimId) throw new Error('Shadow assessment not found')
       await ctx.db.patch(result.assessmentId, {
         shadowStatus: 'available',
@@ -221,7 +224,7 @@ export const recordShadowUnavailable = mutation({
     if (args.assessmentIds.length < 1 || args.assessmentIds.length > MAX_BATCH) throw new Error('Invalid shadow assessment result')
     for (const assessmentId of args.assessmentIds) {
       const row = await ctx.db.get(assessmentId)
-      if (!row || row.userId !== userId || row.attemptId !== args.attemptId || row.status !== 'pending'
+      if (!row || isRubricAssessment(row) || row.userId !== userId || row.attemptId !== args.attemptId || row.status !== 'pending'
         || row.shadowStatus !== undefined || row.shadowInputDigest !== args.inputDigest || row.shadowClaimId !== args.claimId) throw new Error('Shadow assessment not found')
       await ctx.db.patch(assessmentId, {
         shadowStatus: 'unavailable',
@@ -255,7 +258,7 @@ export const claimBatch = mutation({
     for (const assessmentId of args.assessmentIds) {
       const row = await ctx.db.get(assessmentId)
       const hasActiveClaim = row?.inputDigest !== undefined && (row.leaseExpiresAt ?? ((row.claimedAt ?? 0) + CLAIM_LEASE_MS)) > now
-      if (!row || row.userId !== userId || row.attemptId !== args.attemptId || row.status !== 'pending'
+      if (!row || isRubricAssessment(row) || row.userId !== userId || row.attemptId !== args.attemptId || row.status !== 'pending'
         || hasActiveClaim || (row.nextAttemptAt ?? row.requestedAt) > now) return []
       rows.push(row)
     }
@@ -311,7 +314,7 @@ export const recordAvailable = mutation({
       requireProbability(result.confidence)
       requireProbabilityDistribution(result.label, result.probabilities)
       const row = await ctx.db.get(result.assessmentId)
-      if (!row || row.userId !== userId || row.attemptId !== args.attemptId || row.status !== 'pending'
+      if (!row || isRubricAssessment(row) || row.userId !== userId || row.attemptId !== args.attemptId || row.status !== 'pending'
         || row.inputDigest !== result.inputDigest || row.claimId !== result.claimId) throw new Error('Assessment not found')
       await ctx.db.patch(result.assessmentId, {
         status: 'available',
@@ -352,7 +355,7 @@ export const recordUnavailable = mutation({
     const now = Date.now()
     for (const assessmentId of args.assessmentIds) {
       const row = await ctx.db.get(assessmentId)
-      if (!row || row.userId !== userId || row.attemptId !== args.attemptId || row.status !== 'pending'
+      if (!row || isRubricAssessment(row) || row.userId !== userId || row.attemptId !== args.attemptId || row.status !== 'pending'
         || row.inputDigest !== args.inputDigest || row.claimId !== args.claimId) throw new Error('Assessment not found')
       const attemptCount = row.attemptCount ?? 1
       const shouldRetry = args.retryable && attemptCount < MAX_ATTEMPTS
