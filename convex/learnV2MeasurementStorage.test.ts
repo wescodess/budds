@@ -167,7 +167,7 @@ describe('inactive Phase C storage boundaries', () => {
       learningVoidId: f.learningVoidId, blueprintRevisionId: f.scope.blueprintRevisionId, objectiveId: f.scope.objectiveId, horizonDays: 7,
       coldAcceptance: { submissionId: f.rows.learnResponses, acceptedAt: f.base.createdAt }, cold: null,
       delayedAcceptance: null, delayed: null, replacementAcceptance: null, replacement: null, replacementPolicy: { kind: 'secondary_only' },
-      assignment: { responseKind: 'bounded_rubric', scorerConfiguration: { scoringKind: 'model', configurationDigest: 'a'.repeat(64), scorerVersion: 'scorer.v1' } } })
+      assignment: { responseKind: 'bounded_rubric', scorerConfiguration: { scoringKind: 'model', configurationDigest: 'a'.repeat(64), scorerVersion: 'learn-v2.mastery-scorer.v1' } } })
     for (const sourceVersion of ['learn-v2.measurement-report-source.v1', 'learn-v2.measurement-report-source.v2']) {
       await expect(t.run(ctx => ctx.db.patch(row._id, { sourceVersion } as never))).rejects.toThrow()
     }
@@ -319,6 +319,26 @@ describe('inactive Phase C storage boundaries', () => {
     }))
     expect(await t.run(ctx => ctx.db.get(ordinaryId))).toMatchObject({ purpose: { kind: 'independent_application' }, assessmentPins: { kind: 'session_application' } })
     expect(await t.run(ctx => ctx.db.get(ordinaryId))).not.toHaveProperty('itemPins')
+  })
+
+  test.each(['keyed', 'numeric', 'ordered', 'bounded_rubric'] as const)('requires the frozen %s response kind only for admitted assignments', async responseKind => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => seedMeasurementStorage(ctx, owner.tokenIdentifier))
+    const assignment = await t.run(ctx => ctx.db.get(f.rows.learnMeasurementAssignments))
+    if (!assignment || assignment.status !== 'admitted') throw new Error('Missing admitted fixture')
+    const { _id, _creationTime: _time, responseKind: _kind, ...fields } = assignment
+    await expect(t.run(ctx => ctx.db.insert('learnMeasurementAssignments', fields as never))).rejects.toThrow()
+    await t.run(ctx => ctx.db.patch(_id, { responseKind }))
+    expect(await t.run(ctx => ctx.db.get(_id))).toMatchObject({ responseKind })
+    await expect(t.run(ctx => ctx.db.patch(_id, { responseKind: 'text' } as never))).rejects.toThrow()
+    const candidate = { ...f.base, ...f.scope, evidenceStatus: 'available' as const, assignmentKey: 'candidate', epoch: 'fixture-epoch',
+      baselineSha: 'a'.repeat(40), flow: 'v2_today' as const, entryPoint: 'today', cohortVersion: 'cohort.v1', historyStatus: 'unknown' as const,
+      historyBasisVersion: 'history.v1', instrumentationEpoch: 'fixture-epoch', exclusionReasons: [], status: 'considered' as const,
+      protocolStatus: 'protocol_not_frozen' as const, reasonCode: 'protocol_not_frozen' }
+    const { scopeKind: _scope, contextPins: _context, ...candidateFields } = candidate
+    const id = await t.run(ctx => ctx.db.insert('learnMeasurementAssignments', candidateFields))
+    expect(await t.run(ctx => ctx.db.get(id))).not.toHaveProperty('responseKind')
+    await expect(t.run(ctx => ctx.db.patch(id, { responseKind } as never))).rejects.toThrow()
   })
 
   test('discovers exact source and Void descendants without returning foreign rows', async () => {

@@ -98,6 +98,24 @@ export const learnScorerBindingSchema = z.discriminatedUnion('kind', [
     responseSchemaVersion: learnVersionSchema, parserVersion: learnVersionSchema, guardVersion: learnVersionSchema, ...thresholdFields,
   }).refine(value => value.routingMode !== 'strict' || value.endpoint !== null, 'Strict scoring requires an endpoint'),
 ])
+
+// #523: a report stratum is derived only from the immutable stored binding.
+export async function deriveLearnScorerConfiguration(input: LearnScorerBinding) {
+  const binding = parseLearnContract(learnScorerBindingSchema, input)
+  if (binding.kind === 'model') return { scoringKind: binding.kind,
+    configurationDigest: binding.configurationDigest, scorerVersion: binding.scorerVersion }
+  function canonical(value: unknown): string {
+    if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`
+    if (value !== null && typeof value === 'object') {
+      const record = value as Record<string, unknown>
+      return `{${Object.keys(record).sort().map(key => `${JSON.stringify(key)}:${canonical(record[key])}`).join(',')}}`
+    }
+    return JSON.stringify(value)
+  }
+  const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical(binding))))
+  return { scoringKind: binding.kind, configurationDigest: `sha256:${[...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('')}`,
+    scorerVersion: binding.engineVersion }
+}
 export const learnObservedScorerIdentitySchema = z.union([
   z.strictObject({ status: z.literal('deterministic'), engineVersion: learnVersionSchema }),
   z.strictObject({ status: z.enum(['verified', 'unknown', 'mismatch', 'unverified_legacy']), requestedScorerModel: learnTextSchema(200),

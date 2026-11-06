@@ -19,6 +19,9 @@ import {
   type LearnResponseReceipt,
 } from '../shared/learn-v2-responses'
 import { seedMeasurementStorage } from '../tests/fixtures/learn-v2-measurement-storage'
+import { LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION, deriveLearnReportLearnerKey,
+  learnReportFactSchema, learnReportSourceWatermarkSchema, learnReportWatermarkSnapshotSchema } from '../shared/learn-v2-measurement-report'
+import { deriveLearnScorerConfiguration } from '../shared/learn-v2-measurement'
 
 const policy = vi.hoisted(() => ({ responses: true }))
 vi.mock('../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
@@ -38,6 +41,7 @@ const integrity = makeFunctionReference<'mutation', { submissionId: string, kind
 const watermark = makeFunctionReference<'query'>('responseFixture:watermark')
 const badFact = makeFunctionReference<'mutation', { assignmentId: string }, null>('responseFixture:badFact')
 const failedScoring = makeFunctionReference<'action', FunctionArgs<typeof api.learnV2Mastery.acceptMasterySubmission>, null>('responseFixture:failedScoring')
+const enrollment = makeFunctionReference<'mutation', { assignmentId: string }, number>('responseFixture:enrollment')
 
 beforeEach(() => {
   policy.responses = true
@@ -70,15 +74,19 @@ async function fixture(kind: 'ordinary' | 'measurement' = 'ordinary') {
       handler: async (ctx, args) => await authorizeLearnResponseAssistanceForOwner(ctx, await requireAuth(ctx), args) }),
     integrity: mutation({ args: { submissionId: v.id('learnResponses'), kind: v.union(v.literal('evidence_unavailable'), v.literal('pre_seal_contamination'), v.literal('body_purged')), effectiveAt: v.number() },
       returns: v.union(v.id('learnResponseIntegrityEvents'), v.null()), handler: async (ctx, args) => await recordLearnResponseIntegrityForOwner(ctx, await requireAuth(ctx), { ...args, reasonCode: 'test_integrity', policyVersion: 'integrity.v1' }) }),
-    watermark: query({ args: {}, handler: async ctx => await facts.readLearnMeasurementWatermarkSnapshot(ctx, await requireAuth(ctx)) }),
+    watermark: query({ args: { reportRunId: v.id('learnMeasurementReportRuns') }, handler: async (ctx, args) => await facts.readLearnMeasurementWatermarkSnapshot(ctx, await requireAuth(ctx), args.reportRunId) }),
+    enrollment: mutation({ args: { assignmentId: v.id('learnMeasurementAssignments') }, returns: v.number(), handler: async (ctx, args) => {
+      const assignment = (await ctx.db.get(args.assignmentId))!
+      return await facts.writeLearnMeasurementEnrollmentFact(ctx, await requireAuth(ctx), assignment)
+    } }),
     badFact: mutation({ args: { assignmentId: v.id('learnMeasurementAssignments') }, returns: v.null(), handler: async (ctx, args) => {
       const assignment = (await ctx.db.get(args.assignmentId))!
       await ctx.db.patch(assignment._id, { exclusionReasons: ['should_roll_back'] })
+      await facts.writeLearnMeasurementEnrollmentFact(ctx, await requireAuth(ctx), assignment)
+      const valid = await ctx.db.query('learnMeasurementReportFacts').unique()
+      if (valid?.fact.kind !== 'enrollment') throw new Error('Missing valid enrollment fact')
       await facts.appendLearnMeasurementFact(ctx, await requireAuth(ctx), { epoch: assignment.epoch, learningVoidId: assignment.learningVoidId,
-        occurredAt: NOW, fact: { kind: 'enrollment', assignmentId: assignment._id, recordRevision: NaN, status: assignment.status,
-          snapshot: { epoch: assignment.epoch, baselineSha: 'a'.repeat(40), cohortVersion: 'cohort.v1', flow: 'v2_today', entryPoint: 'today', depth: 'working',
-            protocolVersion: null, enrollmentAt: null, timezone: null, anchorAt: null, anchorKind: null, historyStatus: 'unknown', familyId: null, familyRevision: null,
-            familyValidationStatus: 'unknown', equivalenceVersion: null, allocationOrder: null, assignedDay7: false, assignedDay30: false, sourceCoverage: 'unknown' } } })
+        occurredAt: NOW, fact: { ...valid.fact, recordRevision: NaN } })
       return null
     } }),
   }) })
@@ -457,6 +465,65 @@ describe('help and acceptance serialization', () => {
 })
 
 describe('atomic scalar report facts', () => {
+  test.each(['model', 'deterministic'] as const)('writes %s enrollment, acceptance, integrity and watermark data that parse under source v3', async kind => {
+    const f = await fixture('measurement')
+    const assignment = await f.t.run(ctx => ctx.db.get(f.f.rows.learnMeasurementAssignments))
+    if (!assignment || assignment.status !== 'admitted') throw new Error('Missing admitted assignment')
+    const binding = kind === 'model' ? assignment.scoringBinding : { kind: 'deterministic' as const, engineVersion: 'fixture-engine.v1',
+      thresholdVersion: 'threshold.v1', thresholdPercent: 80 as const, transitionVersion: 'learn-v2.mastery-transition.v1' as const }
+    if (kind === 'deterministic') await f.t.run(async ctx => {
+      await ctx.db.patch(assignment._id, { scoringBinding: binding })
+      await ctx.db.patch(f.assessmentTarget.assessmentOpportunityId, { scoringBinding: binding })
+      const allocation = assignment.allocation
+      const pins = allocation.kind === 'three_case' ? [allocation.cold, allocation.day7, allocation.day30] : [allocation.cold, allocation.delayed]
+      for (const pin of pins) await ctx.db.patch(pin.scoringSpecId, { scoringBinding: binding })
+    })
+    const result = accepted(await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: f.submission }))
+    await f.owner.mutation(integrity, { submissionId: result.submissionId, kind: 'pre_seal_contamination', effectiveAt: NOW })
+    const state = await ledger(f.t)
+    expect(state.facts.map(row => row.fact.kind)).toEqual(['enrollment', 'response', 'integrity'])
+    for (const row of state.facts) expect(learnReportFactSchema.parse({ factVersion: row.factVersion, sequence: row.sequence,
+      epoch: row.epoch, occurredAt: row.occurredAt, fact: row.fact }).fact).toEqual(row.fact)
+    expect(state.facts[0]?.fact).toMatchObject({ kind: 'enrollment', status: assignment.status,
+      snapshot: { status: assignment.status, protocolStatus: assignment.protocolStatus, responseKind: assignment.responseKind,
+        scorerConfiguration: await deriveLearnScorerConfiguration(binding) } })
+    const mark = state.watermark!
+    expect(learnReportSourceWatermarkSchema.parse({ sourceVersion: mark.sourceVersion, sequence: mark.sequence,
+      dueWorkThrough: mark.dueWorkThrough, historyCoverage: mark.historyCoverage, updatedAt: mark.updatedAt }).sourceVersion).toBe(LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION)
+    const snapshot = await f.owner.query(watermark, { reportRunId: f.f.rows.learnMeasurementReportRuns })
+    expect(learnReportWatermarkSnapshotSchema.parse(snapshot)).toEqual(snapshot)
+    expect(snapshot.learnerKey).toBe(await deriveLearnReportLearnerKey(f.f.rows.learnMeasurementReportRuns, OWNER.tokenIdentifier))
+    expect(JSON.stringify(snapshot)).not.toContain(OWNER.tokenIdentifier)
+  })
+
+  test('enrollment uses the admitted response kind after current items change', async () => {
+    const f = await fixture('measurement')
+    const assignment = await f.t.run(ctx => ctx.db.get(f.f.rows.learnMeasurementAssignments))
+    if (!assignment || assignment.status !== 'admitted') throw new Error('Missing admitted assignment')
+    expect(assignment.responseKind).toBe('bounded_rubric')
+    await f.t.run(ctx => ctx.db.patch(assignment.allocation.cold.itemId, { responseSpec: { kind: 'numeric', version: 'response.v2', unit: 'units' } }))
+    await f.owner.mutation(enrollment, { assignmentId: assignment._id })
+    expect((await ledger(f.t)).facts[0]?.fact).toMatchObject({ kind: 'enrollment', snapshot: { responseKind: 'bounded_rubric' } })
+  })
+
+  test.each([['considered', 'protocol_not_frozen'], ['not_admitted', 'blocked']] as const)('keeps %s/%s enrollment inventory without frozen strata', async (status, protocolStatus) => {
+    const f = await fixture('measurement')
+    await f.t.run(ctx => ctx.db.replace(f.f.rows.learnMeasurementAssignments, { ...f.f.base, ...f.capability,
+      evidenceStatus: 'available', assignmentKey: 'candidate', epoch: 'fixture-epoch', baselineSha: 'a'.repeat(40),
+      flow: 'v2_today', entryPoint: 'today', cohortVersion: 'cohort.v1', historyStatus: 'unknown',
+      historyBasisVersion: 'history.v1', instrumentationEpoch: 'fixture-epoch', exclusionReasons: [], status, protocolStatus, reasonCode: 'not_admitted' }))
+    const args = { assignmentId: f.f.rows.learnMeasurementAssignments }
+    expect(await f.owner.mutation(enrollment, args)).toBe(1)
+    expect(await f.owner.mutation(enrollment, args)).toBe(1)
+    const state = await ledger(f.t)
+    expect(state.facts).toHaveLength(1)
+    const row = state.facts[0]!
+    expect(learnReportFactSchema.parse({ factVersion: row.factVersion, sequence: row.sequence, epoch: row.epoch,
+      occurredAt: row.occurredAt, fact: row.fact }).fact).toMatchObject({ kind: 'enrollment', status,
+      snapshot: { status, protocolStatus, responseKind: null, scorerConfiguration: null, protocolVersion: null,
+        allocationOrder: null, assignedDay7: false, assignedDay30: false } })
+  })
+
   test('an archived Void denies integrity writes and replay without changing saved facts', async () => {
     const f = await fixture('measurement')
     const result = accepted(await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: f.submission }))
@@ -488,8 +555,10 @@ describe('atomic scalar report facts', () => {
     const state = await ledger(f.t)
     expect(state.facts.map(row => row.sequence)).toEqual([1, 2])
     expect(state.facts.map(row => row.fact.kind)).toEqual(['enrollment', 'response'])
-    expect(state.watermark).toMatchObject({ sequence: 2, historyCoverage: 'unknown', dueWorkThrough: null, sourceVersion: 'learn-v2.measurement-report-source.v2' })
-    expect(await f.owner.query(watermark, {})).toMatchObject({ sequence: 2, historyCoverage: 'unknown', legacyIndependentAudit: { sourceCoverage: 'unknown', unknownCount: null } })
+    expect(state.watermark).toMatchObject({ sequence: 2, historyCoverage: 'unknown', dueWorkThrough: null, sourceVersion: LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION })
+    expect(await f.owner.query(watermark, { reportRunId: f.f.rows.learnMeasurementReportRuns })).toMatchObject({
+      learnerKey: await deriveLearnReportLearnerKey(f.f.rows.learnMeasurementReportRuns, OWNER.tokenIdentifier),
+      sequence: 2, historyCoverage: 'unknown', legacyIndependentAudit: { sourceCoverage: 'unknown', unknownCount: null } })
     expect(JSON.stringify(state.facts)).not.toContain(f.response.payload.text)
   })
 
