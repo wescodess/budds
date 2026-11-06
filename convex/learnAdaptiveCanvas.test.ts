@@ -5,6 +5,8 @@ import { api, internal } from './_generated/api'
 import schema from './schema'
 import { composeAdaptiveActivityPlan } from '../shared/learn-adaptive-activity-plan'
 import { ADAPTIVE_V2_PILOT_MANIFEST } from '../shared/adaptive-v2-pilot-policy'
+import { seedMeasurementStorage, STORAGE_CANARIES } from '../tests/fixtures/learn-v2-measurement-storage'
+import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 
 const modules = import.meta.glob('./**/*.ts')
 const OWNER = { tokenIdentifier: 'https://auth.example.com|canvas-owner' }
@@ -74,6 +76,56 @@ async function fixture() {
 }
 
 describe('ready V2 adaptive Canvas', () => {
+  test.each(['body_purged', 'direct_document_deleted'] as const)('Canvas and Journey withhold retained aliases after %s while source review keeps independent evidence', async revocation => {
+    vi.useFakeTimers()
+    const { t, owner, ids } = await fixture()
+    const attached = await owner.mutation(api.learnAdaptiveCanvas.attachReadySession, { studySessionId: ids.studySessionId, expectedSessionRevision: 2, idempotencyKey: 'canonical-copy-attach' })
+    const f = await t.run(ctx => seedMeasurementStorage(ctx, OWNER.tokenIdentifier))
+    const prepared = await t.run(async ctx => {
+      const thread = (await ctx.db.get(attached.threadId))!
+      const content = (await ctx.db.get(ids.sessionContentId))!
+      const plan = (await ctx.db.get(content.studyPlanRevisionId!))!
+      const canvas = { threadId: thread._id, threadRevision: thread.revision, activityId: thread.currentActivityId!, activityRevision: 1,
+        planVersion: 'learn-adaptive.activity-plan.v1', replayVersion: 'learn-adaptive.activity-replay.v1', rendererVersion: 'learn-adaptive.renderer.v1',
+        evaluationVersion: 'learn-adaptive.evaluation.v1', pilotConfigurationVersion: 'pilot.v1' }
+      const pins = { ...f.scope, learningVoidId: ids.learningVoidId, blueprintRevisionId: content.blueprintRevisionId!, objectiveId: content.objectiveId!,
+        blueprintRecordRevision: 3, contextPins: { ...f.scope.contextPins, studyPlanId: plan.studyPlanId, studyPlanRevisionId: plan._id,
+          studySessionId: ids.studySessionId, sessionContentId: content._id, canvas } }
+      await ctx.db.patch(f.rows.learnResponses, pins)
+      await ctx.db.patch(f.rows.learnAssessmentOpportunities, pins)
+      await ctx.db.patch(f.rows.learnResponseBodies, { learningVoidId: ids.learningVoidId })
+      await ctx.db.patch(f.rows.learnResponseEvidenceLinks, { learningVoidId: ids.learningVoidId, aggregate: { learningVoidId: ids.learningVoidId },
+        dependency: { kind: 'snapshot', sourceSnapshotId: ids.sourceSnapshotId, sourceSnapshotRevision: 1, sourceRecordRevision: 1, supportManifestDigest: 'support-hash' } })
+      const attemptId = await ctx.db.insert('masteryAttempts', { userId: OWNER.tokenIdentifier, blueprintRevisionId: pins.blueprintRevisionId,
+        objectiveId: pins.objectiveId, sessionContentId: content._id, submissionId: f.rows.learnResponses, attemptedAt: 123,
+        idempotencyKey: 'canonical-copy-attempt', response: STORAGE_CANARIES.answer, confidence: 4, serverScorePercent: 80 })
+      await ctx.db.patch(thread.currentActivityId!, { submittedResponse: STORAGE_CANARIES.answer, submittedConfidence: 4, masteryAttemptId: attemptId })
+      const documentId = await ctx.db.insert('documents', { userId: OWNER.tokenIdentifier, folderId: ids.folderId, filename: 'direct.txt', fileSize: 1, status: 'success', sourceRevision: 'direct.r1' })
+      await ctx.db.patch(thread._id, { sourceScope: { kind: 'document', sourceId: String(documentId) } })
+      return { activityId: thread.currentActivityId!, documentId, blueprintRevisionId: pins.blueprintRevisionId }
+    })
+    const canvasArgs = { threadId: attached.threadId }
+    expect((await owner.query(api.learnAdaptiveCanvas.getCanvas, canvasArgs))?.savedResponse).toMatchObject({ response: STORAGE_CANARIES.answer })
+    expect((await owner.query(api.learnV2Journey.getMission, { learningVoidId: ids.learningVoidId }))?.mastery[0]?.attempts[0]).toMatchObject({ response: STORAGE_CANARIES.answer })
+    if (revocation === 'body_purged') await t.mutation(internal.learnV2Retention.purgeResponseCopies, { userId: OWNER.tokenIdentifier, submissionId: f.rows.learnResponses })
+    else await owner.mutation(api.documents.deleteDocument, { id: prepared.documentId })
+    expect((await t.run(ctx => ctx.db.get(prepared.activityId)))?.submittedResponse).toBe(STORAGE_CANARIES.answer)
+    for (const cleanup of [false, true]) {
+      if (cleanup) await t.finishAllScheduledFunctions(vi.runAllTimers)
+      expect((await owner.query(api.learnAdaptiveCanvas.getCanvas, canvasArgs))?.savedResponse).toBeNull()
+      const journey = await owner.query(api.learnV2Journey.getMission, { learningVoidId: ids.learningVoidId })
+      expect(journey?.mastery[0]?.attempts[0]).toMatchObject({ serverScorePercent: 80, confidence: 4, bodyAvailability: 'unavailable' })
+      expect(journey?.mastery[0]?.attempts[0]).not.toHaveProperty('response')
+      const authorizationId = await authorizeExport(owner)
+      const page = await owner.query(api.dataExport.getUserDataPage, { authorizationId, collection: 'learningThreadActivities', paginationOpts: { cursor: null, numItems: 16 } })
+      expect(page.page.find(row => row._id === prepared.activityId)).not.toHaveProperty('submittedResponse')
+      const review = await owner.query(api.learnV2Sources.listSourceReview, { blueprintRevisionId: prepared.blueprintRevisionId, paginationOpts: { cursor: null, numItems: 8 } })
+      expect(review.page.find(row => row._id === ids.sourceSnapshotId)?.excerpt).toBe('Gravity attracts masses.')
+      expect(JSON.stringify(review)).not.toContain(STORAGE_CANARIES.answer)
+    }
+    expect((await t.run(ctx => ctx.db.get(prepared.activityId)))?.submittedResponse).toBeUndefined()
+  })
+
   test.each(['tombstone', 'source_unavailable', 'document_deleted', 'document_replaced', 'folder_deleted', 'archived', 'evidence_purged'] as const)('Canvas, journey and source review deny %s before scheduled cleanup', async revocation => {
     vi.useFakeTimers()
     const { t, owner, ids } = await fixture()

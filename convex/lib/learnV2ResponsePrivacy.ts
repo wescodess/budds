@@ -28,10 +28,29 @@ export async function liveResponseAggregate(ctx: QueryCtx | MutationCtx, userId:
   if (row.scopeKind === 'standalone') {
     const thread = await ctx.db.get(row.threadId)
     return !!thread && thread.userId === userId && thread.deletionStartedAt === undefined
+      && await threadSourceAvailable(ctx, userId, thread)
   }
   const aggregate = await ctx.db.get(row.learningVoidId)
   const folder = aggregate && await ctx.db.get(aggregate.folderId)
   return !!aggregate && aggregate.userId === userId && aggregate.status !== 'archived' && !!folder && folder.userId === userId
+}
+
+export async function threadSourceAvailable(ctx: QueryCtx | MutationCtx, userId: string, thread: Doc<'learningThreads'>) {
+  if (thread.userId !== userId) return false
+  if (thread.sourceScope.kind === 'folder') {
+    const id = ctx.db.normalizeId('folders', thread.sourceScope.sourceId)
+    const folder = id && await ctx.db.get(id)
+    return !!folder && folder.userId === userId
+  }
+  if (thread.sourceScope.kind === 'document') {
+    const id = ctx.db.normalizeId('documents', thread.sourceScope.sourceId)
+    const document = id && await ctx.db.get(id)
+    const folder = document && await ctx.db.get(document.folderId)
+    return !!document && document.userId === userId && document.status === 'success' && !!folder && folder.userId === userId
+  }
+  // URL and pasted scopes retain only a digest; snapshot dependencies, when
+  // present, carry the revocable source identity and revision authority.
+  return true
 }
 
 // This is a retention/access predicate, independent of product flags. A
@@ -53,6 +72,8 @@ export async function sourceBodyAvailable(ctx: QueryCtx | MutationCtx, userId: s
     if (!document || document.userId !== userId || document.status !== 'success'
       || document.sourceRevision !== source.sourceRevision || !documentFolder || documentFolder.userId !== userId) return false
   }
+  const excerpt = await ctx.db.query('learnSourceExcerpts').withIndex('by_userId_and_sourceSnapshotId', q => q.eq('userId', userId).eq('sourceSnapshotId', id)).unique()
+  if (excerpt?.evidencePurgedAt !== undefined) return false
   return true
 }
 
@@ -122,6 +143,12 @@ export async function retainedResponsePayload(ctx: QueryCtx | MutationCtx, userI
     ? await ctx.db.get(response.assessmentOpportunityId) : await ctx.db.get(response.responseSlotId)
   if (!target || target.userId !== userId || target.submissionId !== response._id) return null
   if (!await liveResponseAggregate(ctx, userId, response)) return null
+  if (response.scopeKind === 'v2' && response.contextPins.kind === 'session' && response.contextPins.canvas) {
+    const thread = await ctx.db.get(response.contextPins.canvas.threadId)
+    // Deleting an optional wrapper preserves V2-owned history. A retained
+    // wrapper's direct scope remains a source dependency while it exists.
+    if (thread && !await threadSourceAvailable(ctx, userId, thread)) return null
+  }
   const links = await ctx.db.query('learnResponseEvidenceLinks').withIndex('by_userId_and_submissionId', q => q.eq('userId', userId).eq('submissionId', response._id)).take(65)
   if (links.length > 64 || (response.scopeKind === 'v2' && links.length === 0)) return null
   for (const link of links) {
@@ -153,13 +180,18 @@ export async function retainedResponsePayload(ctx: QueryCtx | MutationCtx, userI
   return parsed.data
 }
 
-export async function legacyResponseAvailable(ctx: QueryCtx, userId: string, attempt: Doc<'masteryAttempts'>) {
+export async function legacyResponseAvailable(ctx: QueryCtx | MutationCtx, userId: string, attempt: Doc<'masteryAttempts'>) {
   if (attempt.userId !== userId) return false
   if (attempt.submissionId) {
     const response = await ctx.db.get(attempt.submissionId)
     return !!response && !!await retainedResponsePayload(ctx, userId, response)
   }
   if (!attempt.response) return false
+  if (attempt.sessionContentId) {
+    const activities = await ctx.db.query('learningThreadActivities').withIndex('by_userId_and_sessionContentId_and_updatedAt', q => q.eq('userId', userId).eq('sessionContentId', attempt.sessionContentId!)).take(65)
+    if (activities.length > 64) return false
+    for (const activity of activities) if (!await activitySourceAvailable(ctx, userId, activity)) return false
+  }
   let ids = legacySourceIds(ctx, attempt.sourceSnapshotIdsJson)
   if (!ids) return false
   if (!ids.length) {
@@ -170,4 +202,61 @@ export async function legacyResponseAvailable(ctx: QueryCtx, userId: string, att
   }
   for (const id of ids) if (!await retainedSourceExcerpt(ctx, userId, id)) return false
   return true
+}
+
+// Every saved activity alias uses the same current source and canonical-body
+// authority. Empty snapshot references on diagnostics do not mean no source.
+async function activitySourceAvailable(ctx: QueryCtx | MutationCtx, userId: string, activity: Doc<'learningThreadActivities'>) {
+  if (activity.userId !== userId || activity.canonicalInputSnapshot === '[purged]') return false
+  const thread = await ctx.db.get(activity.threadId)
+  if (!thread || thread.userId !== userId || thread.deletionStartedAt !== undefined || !await threadSourceAvailable(ctx, userId, thread)) return false
+  if (activity.learningVoidId && !await liveResponseAggregate(ctx, userId, { scopeKind: 'v2', learningVoidId: activity.learningVoidId })) return false
+  if (thread.learningVoidId && !await liveResponseAggregate(ctx, userId, { scopeKind: 'v2', learningVoidId: thread.learningVoidId })) return false
+  if (activity.evidenceReferences.length > 64 || activity.decisionInputs.sourceInputs.length > 64) return false
+  for (const reference of activity.evidenceReferences) {
+    if (!await retainedSourceExcerpt(ctx, userId, reference.sourceSnapshotId)) return false
+    const snapshot = (await ctx.db.get(reference.sourceSnapshotId))!
+    if (snapshot.revision !== reference.sourceSnapshotRevision || (snapshot.recordRevision ?? 1) !== reference.sourceRecordRevision) return false
+  }
+  for (const input of activity.decisionInputs.sourceInputs) {
+    const id = ctx.db.normalizeId('learnSourceSnapshots', input.sourceSnapshotId)
+    if (!id || !await sourceBodyAvailable(ctx, userId, id) || ((await ctx.db.get(id))!.recordRevision ?? 1) !== input.recordRevision) return false
+  }
+  const links = await ctx.db.query('learnActivityEvidenceLinks').withIndex('by_userId_and_activityId', q => q.eq('userId', userId).eq('activityId', activity._id)).take(65)
+  if (links.length > 64) return false
+  for (const link of links) if (link.threadId !== thread._id || link.invalidatedAt !== undefined || !await sourceBodyAvailable(ctx, userId, link.sourceSnapshotId)) return false
+  return true
+}
+
+export async function activityResponseAvailable(ctx: QueryCtx | MutationCtx, userId: string, activity: Doc<'learningThreadActivities'>) {
+  if (!await activitySourceAvailable(ctx, userId, activity)) return false
+  if (activity.masteryAttemptId) {
+    const attempt = await ctx.db.get(activity.masteryAttemptId)
+    if (!attempt || !await legacyResponseAvailable(ctx, userId, attempt)) return false
+  }
+  const targets = await activityResponseTargets(ctx, userId, activity)
+  if (!targets) return false
+  for (const target of targets) {
+    if (!target.submissionId) continue
+    const response = await ctx.db.get(target.submissionId)
+    if (!response || !await retainedResponsePayload(ctx, userId, response)) return false
+  }
+  return true
+}
+
+export async function activityResponseTargets(ctx: QueryCtx | MutationCtx, userId: string, activity: Doc<'learningThreadActivities'>) {
+  if (activity.userId !== userId) return null
+  const slots = await ctx.db.query('learnResponseSlots').withIndex('by_userId_and_threadId', q => q.eq('userId', userId).eq('threadId', activity.threadId)).take(65)
+  if (slots.length > 64) return null
+  const targets: Array<Doc<'learnResponseSlots'> | Doc<'learnAssessmentOpportunities'>> = slots.filter(slot => slot.scopeKind === 'standalone' && slot.activityId === activity._id)
+  if (activity.sessionContentId) {
+    const content = await ctx.db.get(activity.sessionContentId)
+    if (!content || content.userId !== userId) return null
+    const sessionSlots = await ctx.db.query('learnResponseSlots').withIndex('by_userId_and_contextPins_studySessionId', q => q.eq('userId', userId).eq('contextPins.studySessionId', content.studySessionId)).take(65)
+    const opportunities = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_contextPins_studySessionId', q => q.eq('userId', userId).eq('contextPins.studySessionId', content.studySessionId)).take(65)
+    if (sessionSlots.length > 64 || opportunities.length > 64) return null
+    targets.push(...[...sessionSlots, ...opportunities].filter(row => row.scopeKind === 'v2' && row.contextPins.kind === 'session'
+      && row.contextPins.canvas?.threadId === activity.threadId && row.contextPins.canvas.activityId === activity._id))
+  }
+  return targets
 }

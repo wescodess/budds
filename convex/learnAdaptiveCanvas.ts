@@ -15,7 +15,7 @@ import { liveEvidenceState } from './learnAdaptiveRecovery'
 import { projectAdaptiveControls, reasonTextForActivity } from '../shared/learn-adaptive-controls'
 import { ADAPTIVE_ACTIVITY_VALIDATION_ANALYTICS_VERSION, validateAdaptiveActivityPrimitive } from '../shared/learn-adaptive-activity-registry'
 import { decodeSourceComparisonResponse } from '../shared/learn-adaptive-source-comparison-response'
-import { legacyResponseAvailable, retainedSourceExcerpt } from './lib/learnV2ResponsePrivacy'
+import { activityResponseAvailable, retainedSourceExcerpt } from './lib/learnV2ResponsePrivacy'
 
 const RECEIPT_TTL_MS = 30 * 24 * 60 * 60_000
 
@@ -254,7 +254,7 @@ export async function loadReadyCanvas(ctx: QueryCtx | MutationCtx, userId: strin
       if (!await retainedSourceExcerpt(ctx, userId, reference.sourceSnapshotId)) { bodyAuthority = false; break }
     }
     const scoredAttempt = activity.masteryAttemptId && await ctx.db.get(activity.masteryAttemptId)
-    const savedBodyAvailable = bodyAuthority && (!activity.masteryAttemptId || !!scoredAttempt && await legacyResponseAvailable(ctx, userId, scoredAttempt))
+    const savedBodyAvailable = bodyAuthority && await activityResponseAvailable(ctx, userId, activity)
     const completedFeedback = activity.status === 'feedback' && session.status === 'completed' && scoredAttempt
       && scoredAttempt.userId === userId && scoredAttempt.studySessionId === session._id
       && scoredAttempt.sessionContentId === content._id && scoredAttempt.blueprintRevisionId === blueprint._id

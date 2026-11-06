@@ -1,8 +1,8 @@
 import { privacyDigest } from '../../../convex/lib/learnV2ResponsePrivacy'
-import { vi, describe, test, expect, beforeEach } from 'vitest'
+import { vi, describe, test, expect, beforeEach, afterEach } from 'vitest'
 import { unzipSync, strFromU8 } from 'fflate'
 import { convexTest } from 'convex-test'
-import { api } from '../../../convex/_generated/api'
+import { api, internal } from '../../../convex/_generated/api'
 import schema from '../../../convex/schema'
 import { seedMeasurementStorage, STORAGE_CANARIES } from '../../../tests/fixtures/learn-v2-measurement-storage'
 import { ADAPTIVE_LEARN_EXPORT_COLLECTIONS } from '../../../shared/adaptive-learn-storage-manifest'
@@ -12,6 +12,13 @@ import { LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION, LEARN_V2_RESPONSE_TERMINALIZAT
 import { deriveLearnAssessmentResponseContext } from '../../../shared/learn-v2-measurement'
 import { PERSONAL_EXPORT_COLLECTIONS, PERSONAL_EXPORT_CONTENT_COLLECTIONS } from '../../../convex/lib/learnV2PersonalExportCollections'
 import { PERSONAL_EXPORT_CONTENT_CASES, measurementExportFixture, seedExportContent } from '../../../tests/fixtures/learn-v2-export-content'
+import { standaloneResponseFixture } from '../../../tests/fixtures/learn-v2-standalone-response'
+
+vi.mock('../../../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
+  const original = await importOriginal<typeof import('../../../shared/learn-v2-measurement-storage-manifest')>()
+  return { ...original, LEARN_MEASUREMENT_CAPABILITIES: { ...original.LEARN_MEASUREMENT_CAPABILITIES, responses: true } }
+})
+afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs() })
 
 const recordedHeaders: Record<string, string> = {}
 
@@ -103,6 +110,37 @@ describe('GET /api/export/me', () => {
     fetchMock.mockReset()
     for (const key of Object.keys(recordedHeaders)) Reflect.deleteProperty(recordedHeaders, key)
     process.env.CONVEX_URL = 'https://test.convex.cloud'
+  })
+
+  test.each([[false, 'document_deleted'], [true, 'document_deleted'], [false, 'folder_deleted'], [true, 'body_purged']] as const)(
+    'decoded ZIP withholds standalone aliases with canonical=%s after %s, before and after cleanup', async (canonical, revocation) => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_800_000_000_000)
+    vi.stubEnv('LEARN_V2_ENABLED', 'true')
+    const t = convexTest(schema, import.meta.glob('../../../convex/**/*.ts'))
+    const f = await standaloneResponseFixture(t, 'https://owner.example|zip-standalone-privacy', revocation === 'folder_deleted' ? 'folder' : 'document', canonical)
+    authorizeExportMock.mockImplementation(args => f.owner.mutation(api.dataExport.authorizePersonalExport, args))
+    getExportMetadataMock.mockImplementation(() => f.owner.query(api.dataExport.getExportMetadata, {}))
+    getUserDataPageMock.mockImplementation(args => f.owner.query(api.dataExport.getUserDataPage, args))
+    getAttemptAnswersPageMock.mockImplementation(args => f.owner.query(api.dataExport.getAttemptAnswersPage, args))
+    getCourseSourceDocsPageMock.mockImplementation(args => f.owner.query(api.dataExport.getCourseSourceDocsPage, args))
+    getDocumentDownloadUrlMock.mockResolvedValue(null)
+    vi.stubEnv('LEARN_V2_ENABLED', 'false')
+    const live = unzipSync(await handler(makeEvent('fixture-jwt')))
+    expect(JSON.parse(strFromU8(live['learningThreadActivities.json']!))).toMatchObject([{ submittedResponse: f.answer, diagnosticResponse: f.answer }])
+    if (revocation === 'document_deleted') await f.owner.mutation(api.documents.deleteDocument, { id: f.documentId })
+    if (revocation === 'folder_deleted') await f.owner.mutation(api.folders.deleteFolder, { id: f.folderId })
+    if (revocation === 'body_purged') await t.mutation(internal.learnV2Retention.purgeResponseCopies, { userId: f.userId, submissionId: f.submissionId! })
+    expect((await t.run(ctx => ctx.db.get(f.activityId)))?.submittedResponse).toBe(f.answer)
+    for (const cleanup of [false, true]) {
+      if (cleanup) await t.finishAllScheduledFunctions(vi.runAllTimers)
+      const entries = unzipSync(await handler(makeEvent('fixture-jwt')))
+      const rows = JSON.parse(strFromU8(entries['learningThreadActivities.json']!))
+      expect(rows).toMatchObject([{ _id: f.activityId, status: 'submitted', bodyAvailability: 'unavailable' }])
+      expect(rows[0]).not.toHaveProperty('submittedResponse')
+      expect(rows[0]).not.toHaveProperty('diagnosticResponse')
+      for (const [name, bytes] of Object.entries(entries)) if (name.endsWith('.json')) expect(strFromU8(bytes)).not.toContain(f.answer)
+    }
   })
 
   test('returns 401 when no Convex token is present on the event', async () => {

@@ -3,7 +3,7 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { LEARN_MEASUREMENT_STORAGE_VERSION } from '../../shared/learn-v2-measurement-storage-manifest'
 import { LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION, projectAttemptHistory } from '../../shared/learn-v2-assessment-disclosure'
 import { learnAssistanceSnapshotSchema, learnValiditySnapshotSchema } from '../../shared/learn-v2-responses'
-import { legacyResponseAvailable, privacyDigest, privateFields, retainedResponsePayload, sourceBodyAvailable } from './learnV2ResponsePrivacy'
+import { activityResponseAvailable, legacyResponseAvailable, privacyDigest, privateFields, retainedResponsePayload } from './learnV2ResponsePrivacy'
 import { PERSONAL_EXPORT_COLLECTION_POLICY, PERSONAL_EXPORT_CONTENT_COLLECTIONS, type PersonalExportContentCollection } from './learnV2PersonalExportCollections'
 
 export const PERSONAL_EXPORT_POLICY = 'learn-v2.personal-export.v1'
@@ -170,19 +170,11 @@ export async function exportLegacyAttempt(ctx: QueryCtx, userId: string, attempt
 export async function exportActivity(ctx: QueryCtx, userId: string, activity: Doc<'learningThreadActivities'>) {
   const result = privateFields(activity, ['threadId', 'activityId', 'learningVoidId', 'blueprintRevisionId', 'objectiveId', 'sessionContentId', 'boundaryOrdinal', 'planRevision',
     'activityClass', 'status', 'submittedAt', 'submittedConfidence', 'masteryAttemptId', 'createdAt', 'updatedAt'])
-  const thread = await ctx.db.get(activity.threadId)
-  let available = !!thread && thread.userId === userId && thread.deletionStartedAt === undefined
-  for (const reference of activity.evidenceReferences) if (!await sourceBodyAvailable(ctx, userId, reference.sourceSnapshotId)) available = false
-  const links = await ctx.db.query('learnActivityEvidenceLinks').withIndex('by_userId_and_activityId', q => q.eq('userId', userId).eq('activityId', activity._id)).take(65)
-  if (links.length > 64 || links.some(link => link.invalidatedAt !== undefined)) available = false
-  if (activity.masteryAttemptId) {
-    const attempt = await ctx.db.get(activity.masteryAttemptId)
-    if (!attempt || !await legacyResponseAvailable(ctx, userId, attempt)) available = false
-  }
+  const available = await activityResponseAvailable(ctx, userId, activity)
   if (available && activity.submittedResponse) {
     result.submittedResponse = activity.submittedResponse
     if (activity.activityClass === 'non_factual' && activity.decisionInputs.routerVersion === 'learn-adaptive.preparing-diagnostic.v1') result.diagnosticResponse = activity.submittedResponse
   }
-  else if (activity.submittedResponse || activity.submittedConfidence) Object.assign(result, { bodyAvailability: 'unavailable', bodyUnavailableReason: 'evidence_unavailable' })
+  else if (!available) Object.assign(result, { bodyAvailability: 'unavailable', bodyUnavailableReason: 'evidence_unavailable' })
   return result
 }
