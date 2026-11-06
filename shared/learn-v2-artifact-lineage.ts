@@ -3,7 +3,10 @@ import { learnDigestSchema, learnIdSchema, learnRevisionSchema, learnSequenceSch
 
 export const LEARN_ARTIFACT_LINEAGE_VERSION = 'learn-v2.artifact-lineage.v1' as const
 export const LEARN_ARTIFACT_CONTENT_VERSION = 'learn-v2.artifact-content.v1' as const
-export const LEARN_ARTIFACT_LINEAGE_LIMITS = { maxNodes: 16, maxDepth: 8, maxOrigins: 8, maxCases: 32, maxSources: 64, maxBatch: 32, maxLookupBytes: 64 * 1024 } as const
+// maxBatch is the largest single-write instructional publication: a generated
+// Quiz requests at most 50 questions. A document's chunks register as one set.
+export const LEARN_ARTIFACT_LINEAGE_LIMITS = { maxNodes: 16, maxDepth: 8, maxOrigins: 8, maxCases: 32, maxSources: 64, maxBatch: 50, maxLookupBytes: 64 * 1024 } as const
+export const LEARN_ARTIFACT_DOCUMENT_CHUNK_SET_KEY = 'chunk-set' as const
 export const LEARN_ARTIFACT_CLASSIFICATIONS = ['teaching', 'genuine_personal_work', 'legacy_history', 'measurement', 'private_scoring', 'unknown'] as const
 export const learnArtifactClassificationSchema = z.enum(LEARN_ARTIFACT_CLASSIFICATIONS)
 export const learnArtifactReferenceSchema = z.strictObject({

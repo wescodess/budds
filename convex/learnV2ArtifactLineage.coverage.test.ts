@@ -1,5 +1,8 @@
+/// <reference types="vite/client" />
 import { describe, expect, test } from 'vitest'
 import schema from './schema'
+import { artifactContentProjection } from './lib/learnV2ArtifactLineage'
+import lineageSource from './lib/learnV2ArtifactLineage.ts?raw'
 
 // Every producer field must be deliberately classified. A newly added field
 // fails this guard until its content or exclusion policy is recorded here.
@@ -407,5 +410,64 @@ describe.each(['flashcardVersionCards', 'flashcardRoomCards'] as const)('B1 part
     expect(fieldNames(metadata.fields.source).sort()).toEqual(['chunkContent', 'documentId', 'filename'])
     const excluded = { model: 'Generation diagnostics are not teaching content.', origin: 'Editor metadata is not original disclosure lineage.', filename: 'Organizational source label; source identity and chunk content are projected.' }
     for (const reason of Object.values(excluded)) expect(reason.length).toBeGreaterThan(15)
+  })
+})
+
+type CoveredTable = keyof typeof coverage
+// Rows record every field the pure projection reads, including joins, filters and sort keys.
+function projectionReads() {
+  const reads = Object.fromEntries(Object.keys(coverage).map(table => [table, new Set<string>()])) as Record<CoveredTable, Set<string>>
+  const row = (table: CoveredTable, fields: Record<string, unknown> = {}): never => new Proxy({ _id: `${table}-id`, userId: 'owner', ...fields }, {
+    get(target, property, receiver) {
+      if (typeof property === 'string') reads[table].add(property)
+      return Reflect.get(target, property, receiver)
+    },
+    has(target, property) {
+      if (typeof property === 'string') reads[table].add(property)
+      return Reflect.has(target, property)
+    },
+  }) as never
+  const cards = (table: 'flashcardVersionCards' | 'flashcardRoomCards') => [row(table, { displayOrder: 1, metadata: { source: { documentId: 'd', chunkContent: 'c' } } }), row(table, { displayOrder: 0 })]
+  artifactContentProjection({ kind: 'session_block', block: row('sessionContentBlocks'), content: row('sessionContent'),
+    evidence: { claims: [row('sessionContentClaims')], supports: [row('learnClaimSupports')] } })
+  artifactContentProjection({ kind: 'document', document: row('documents') })
+  artifactContentProjection({ kind: 'quiz_question', question: row('quizQuestions') })
+  artifactContentProjection({ kind: 'section_block', section: row('courseSections'),
+    linked: [{ kind: 'quiz', questions: [row('quizQuestions')] }, { kind: 'flashcard', cards: cards('flashcardRoomCards') }, null] })
+  artifactContentProjection({ kind: 'flashcard_version', version: row('flashcardRoomVersions'), cards: cards('flashcardVersionCards') })
+  artifactContentProjection({ kind: 'audio_overview', overview: row('audioOverviews'), playback: null })
+  artifactContentProjection({ kind: 'audio_overview', overview: row('audioOverviews'), playback: {
+    episode: row('audioOverviewEpisodes'), media: row('audioOverviewAudioArtifacts'), manifest: row('audioOverviewSourceManifests'),
+    entries: [row('audioOverviewSourceManifestEntries', { _id: 'entry' })], outline: row('audioOverviewOutlines'), objectives: [row('audioOverviewLearningObjectives')],
+    outlineSources: [row('audioOverviewOutlineSources', { manifestEntryId: 'entry' })], claims: [row('audioOverviewClaims', { _id: 'claim', status: 'supported' })],
+    claimSources: [row('audioOverviewClaimSources', { claimRecordId: 'claim', manifestEntryId: 'entry' })], scenes: [row('audioOverviewScenes')],
+    utterances: [row('audioOverviewUtterances', { _id: 'utterance' })], utteranceSources: [row('audioOverviewUtteranceSources', { utteranceId: 'utterance', manifestEntryId: 'entry' })],
+    utteranceClaims: [row('audioOverviewUtteranceClaims', { utteranceId: 'utterance', claimRecordId: 'claim' })],
+    segments: [1, 0].map(wordIndex => row('audioOverviewAlignmentSegments', { utteranceId: 'utterance', wordIndex, startMs: 0, endMs: 1 })) } })
+  artifactContentProjection({ kind: 'learner_artifact', artifact: row('learningThreadArtifacts') })
+  artifactContentProjection({ kind: 'measurement_item', item: row('learnMeasurementItems'), family: row('learnMeasurementFamilies'), spec: row('learnMeasurementScoringSpecs') })
+  return reads
+}
+
+// Projected fields the bounded readers consume as joins, index order or a
+// readiness gate before the pure projection runs.
+const readerFields: Partial<Record<CoveredTable, readonly string[]>> = {
+  audioOverviews: ['episodeId', 'finalArtifactId'],
+  audioOverviewEpisodes: ['sourceManifestId', 'outlineId', 'claimLedgerId', 'finalArtifactId', 'alignmentId'],
+  audioOverviewSourceManifestEntries: ['order'],
+  audioOverviewLearningObjectives: ['order'],
+  audioOverviewOutlineSources: ['order'],
+  audioOverviewAlignments: ['status'],
+}
+
+describe('B2 projected fields are read', () => {
+  const reads = projectionReads()
+  test.each(Object.keys(coverage) as CoveredTable[])('%s: every projected field is read and no excluded field is', table => {
+    const projected: readonly string[] = coverage[table].projected
+    const readers = readerFields[table] ?? []
+    const schemaFields = [...fieldNames(schema.tables[table].validator), '_id', '_creationTime']
+    expect(projected.filter(field => !reads[table].has(field)).sort()).toEqual([...readers].sort())
+    expect([...reads[table]].filter(field => schemaFields.includes(field) && !projected.includes(field))).toEqual([])
+    for (const field of readers) expect(lineageSource).toMatch(new RegExp(`\\.${field}\\b|_and_${field}'`))
   })
 })

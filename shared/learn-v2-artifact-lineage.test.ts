@@ -53,10 +53,11 @@ describe('B1 owner-record and batch wire validators', () => {
     const artifact = { reference, validationId: id('learnArtifactValidations') }
     const args = { artifacts: [artifact], expectedCatalogRevision: 1 }
     expect(learnArtifactBatchRegistrationArgsSchema.parse(args)).toEqual(args)
+    expect(learnArtifactBatchRegistrationArgsSchema.safeParse({ ...args, artifacts: Array.from({ length: 50 }, () => artifact) }).success).toBe(true)
     const receipt = { version: LEARN_ARTIFACT_LINEAGE_VERSION, lineageIds: [id('learnArtifactLineages')], catalogRevision: 2,
       readUsage: { chargedBytes: 20_000, documentsRead: 20, readRequests: 30, limitBytes: 4 * 1024 * 1024 } }
     expect(learnArtifactBatchRegistrationResultSchema.parse(receipt)).toEqual(receipt)
-    for (const input of [{ ...args, userId: 'caller' }, { ...args, artifacts: [] }, { ...args, artifacts: Array.from({ length: 33 }, () => artifact) }, { ...args, expectedCatalogRevision: -1 }]) {
+    for (const input of [{ ...args, userId: 'caller' }, { ...args, artifacts: [] }, { ...args, artifacts: Array.from({ length: 51 }, () => artifact) }, { ...args, expectedCatalogRevision: -1 }]) {
       expect(learnArtifactBatchRegistrationArgsSchema.safeParse(input).success).toBe(false)
     }
     expect(learnArtifactOwnerRecordSchema.safeParse({ kind: 'document', id: id('documents'), userId: 'caller' }).success).toBe(false)

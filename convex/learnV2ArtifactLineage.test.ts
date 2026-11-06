@@ -7,10 +7,10 @@ import { api, internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import { internalMutation, type MutationCtx } from './_generated/server'
 import schema from './schema'
-import { ARTIFACT_LINEAGE_READ_BYTES, createArtifactLineageReadContext, registerInstructionalArtifactsForOwner, registerInstructionalArtifactsForRecord, registerInstructionalArtifactForRecord, resolveArtifactLineageForRecord, supersedeArtifactLineageForOwner, supersedeArtifactLineageForRecord, sessionBlockContentProjection, sectionContentProjection, audioOverviewContentProjection, artifactContentProjection, artifactManifestDigest, artifactPayloadDigest, advanceAssessmentCatalogForOwner, registerInstructionalArtifactForOwner, resolveArtifactLineageForOwner } from './lib/learnV2ArtifactLineage'
+import { ARTIFACT_LINEAGE_INDEX_RANGES, ARTIFACT_LINEAGE_READ_BYTES, createArtifactLineageReadContext, registerInstructionalArtifactsForOwner, registerInstructionalArtifactsForRecord, registerInstructionalArtifactForRecord, resolveArtifactLineageForRecord, supersedeArtifactLineageForOwner, supersedeArtifactLineageForRecord, sessionBlockContentProjection, sectionContentProjection, audioOverviewContentProjection, artifactContentProjection, artifactManifestDigest, artifactPayloadDigest, advanceAssessmentCatalogForOwner, registerInstructionalArtifactForOwner, resolveArtifactLineageForOwner } from './lib/learnV2ArtifactLineage'
 import { artifactRegistrationArgs, artifactRegistrationResultValidator } from './lib/learnV2ArtifactLineageContract'
 import { invalidateMeasurementSourceBatch } from './lib/learnV2MeasurementRetention'
-import { LEARN_ARTIFACT_LINEAGE_VERSION, LEARN_ARTIFACT_LINEAGE_LIMITS, type LearnArtifactReference, type LearnArtifactOwnerRecord } from '../shared/learn-v2-artifact-lineage'
+import { LEARN_ARTIFACT_DOCUMENT_CHUNK_SET_KEY, LEARN_ARTIFACT_LINEAGE_VERSION, LEARN_ARTIFACT_LINEAGE_LIMITS, type LearnArtifactReference, type LearnArtifactOwnerRecord } from '../shared/learn-v2-artifact-lineage'
 import { composeAdaptiveActivityPlan } from '../shared/learn-adaptive-activity-plan'
 import { initiateAdaptiveThreadDeletion } from './learnAdaptiveCommands'
 import { privateAdaptiveArtifactR2Key } from './lib/learnAdaptiveArtifacts'
@@ -634,7 +634,7 @@ async function prepareMatrix(ctx: MutationCtx, kind: ArtifactKind, sourceKind: S
   const payloadDigest = await artifactPayloadDigest(payload)
   const revision = kind === 'document' || kind === 'document_chunk' ? 'source.r1' : kind === 'flashcard_version' ? String(versionId)
     : ['session_block', 'learner_artifact', 'measurement_item', 'scoring_spec'].includes(kind) ? '1' : `sha256:${payloadDigest}`
-  const reference: LearnArtifactReference = { artifact, key: kind === 'document_chunk' || kind === 'section_block' ? 'component-0' : 'whole', revision, payloadDigest }
+  const reference: LearnArtifactReference = { artifact, key: kind === 'document_chunk' ? LEARN_ARTIFACT_DOCUMENT_CHUNK_SET_KEY : kind === 'section_block' ? 'component-0' : 'whole', revision, payloadDigest }
   const classification: Doc<'learnArtifactLineages'>['classification'] = kind === 'measurement_item' ? 'measurement' : kind === 'scoring_spec' ? 'private_scoring' : 'genuine_personal_work'
   await ctx.db.patch(f.lineageId, { ...reference, classification, authority: classification === 'genuine_personal_work' ? 'personal_authorship' : 'server_producer' })
   const manifestDigest = await sealManifest(ctx, f.lineageId)
@@ -1030,7 +1030,7 @@ describe('A3 revocation matrix: learner artifact factual evidence', () => {
 // Observe actual reader calls underneath the production budget. In particular,
 // indexed iteration must stop before fetching another maximum-size document.
 function traceLineageReads(ctx: MutationCtx) {
-  const stats = { bytes: 0, charged: 0, documents: 0, requests: 0 }
+  const stats = { bytes: 0, charged: 0, documents: 0, requests: 0, ranges: 0 }
   const record = (row: unknown) => {
     if (row === null || row === undefined) return
     const bytes = getDocumentSize(row as Record<string, Value>)
@@ -1065,11 +1065,15 @@ function traceLineageReads(ctx: MutationCtx) {
       if (typeof method !== 'function') return method
       if (property === 'get') return async (...args: unknown[]) => {
         stats.requests++
+        stats.ranges++
         const row: unknown = await Reflect.apply(method, target, args)
         record(row)
         return row
       }
-      if (property === 'query') return (...args: unknown[]) => query(Reflect.apply(method, target, args) as object)
+      if (property === 'query') return (...args: unknown[]) => {
+        stats.ranges++
+        return query(Reflect.apply(method, target, args) as object)
+      }
       return method.bind(target)
     },
   })
@@ -1077,7 +1081,7 @@ function traceLineageReads(ctx: MutationCtx) {
 }
 
 async function tracedLookup(t: TestStore, f: Fixture, mode: 'resolve' | 'register') {
-  let stats = { bytes: 0, charged: 0, documents: 0, requests: 0 }
+  let stats = { bytes: 0, charged: 0, documents: 0, requests: 0, ranges: 0 }
   let status: 'bound' | 'unavailable' = 'unavailable'
   const rollback = 'Rollback successful budget probe'
   try {
@@ -1787,30 +1791,38 @@ describe('B1 audio job authority access', () => {
   })
 })
 
-async function prepareQuizBatch(t: TestStore, count: number) {
-  return t.run(async (ctx: MutationCtx) => {
-    const folderId = await ctx.db.insert('folders', { userId: owner.tokenIdentifier, name: 'Quiz batch', documentCount: 0 })
-    const quizId = await ctx.db.insert('quizzes', { userId: owner.tokenIdentifier, folderId, title: 'Ten questions', status: 'ready' })
-    const fixtures: Fixture[] = []
-    for (let i = 0; i < count; i++) {
-      const f = await prepare(ctx, { fingerprint: (i % 16).toString(16) })
-      // Each question has a distinct stable case, not ten prompt aliases.
-      const candidate = (await ctx.db.get(f.caseId))!
-      const fingerprint = await artifactPayloadDigest({ question: i })
-      await ctx.db.patch(f.caseId, { scenarioFingerprint: fingerprint, solutionFingerprint: fingerprint })
-      const binding = (await ctx.db.query('learnArtifactCaseBindings').withIndex('by_userId_and_lineageId', q => q.eq('userId', owner.tokenIdentifier).eq('lineageId', f.lineageId)).unique())!
-      await ctx.db.patch(binding._id, { scenarioFingerprint: fingerprint, solutionFingerprint: fingerprint })
-      expect(candidate.usageClass).toBe('unknown')
-      const questionId = await ctx.db.insert('quizQuestions', { userId: owner.tokenIdentifier, quizId, order: i, question: `Question ${i}?`, type: 'free-response', correctAnswer: `Answer ${i}` })
-      const payloadDigest = await artifactPayloadDigest(artifactContentProjection({ kind: 'quiz_question', question: (await ctx.db.get(questionId))! }))
-      const reference: LearnArtifactReference = { artifact: { kind: 'quiz_question', id: questionId }, key: 'whole', revision: `sha256:${payloadDigest}`, payloadDigest }
-      await ctx.db.patch(f.lineageId, reference)
-      const manifestDigest = await sealManifest(ctx, f.lineageId)
-      await ctx.db.patch(f.validationId, { payloadDigest, manifestDigest })
-      fixtures.push({ ...f, reference, manifestDigest })
-    }
-    return fixtures
-  })
+// Generation persists at most 600 output tokens per question plus its
+// retrieved chunk; these sizes exceed both to measure a worst-case batch.
+function generatedQuestion(i: number) {
+  return { question: `Question ${i}? ${'q'.repeat(600)}`, type: 'multiple-choice' as const, options: ['a', 'b', 'c', 'd'].map(option => option.repeat(300)),
+    correctAnswer: 'a'.repeat(300), explanation: 'e'.repeat(1200), sourceChunkContent: 's'.repeat(8 * 1024) }
+}
+async function prepareQuizBatch(t: TestStore, count: number, generated = false) {
+  return t.run(ctx => seedQuizBatch(ctx, count, generated))
+}
+async function seedQuizBatch(ctx: MutationCtx, count: number, generated = false) {
+  const folderId = await ctx.db.insert('folders', { userId: owner.tokenIdentifier, name: 'Quiz batch', documentCount: 0 })
+  const quizId = await ctx.db.insert('quizzes', { userId: owner.tokenIdentifier, folderId, title: 'Ten questions', status: 'ready' })
+  const fixtures: Fixture[] = []
+  for (let i = 0; i < count; i++) {
+    const f = await prepare(ctx, { fingerprint: (i % 16).toString(16) })
+    // Each question has a distinct stable case, not ten prompt aliases.
+    const candidate = (await ctx.db.get(f.caseId))!
+    const fingerprint = await artifactPayloadDigest({ question: i })
+    await ctx.db.patch(f.caseId, { scenarioFingerprint: fingerprint, solutionFingerprint: fingerprint })
+    const binding = (await ctx.db.query('learnArtifactCaseBindings').withIndex('by_userId_and_lineageId', q => q.eq('userId', owner.tokenIdentifier).eq('lineageId', f.lineageId)).unique())!
+    await ctx.db.patch(binding._id, { scenarioFingerprint: fingerprint, solutionFingerprint: fingerprint })
+    expect(candidate.usageClass).toBe('unknown')
+    const questionId = await ctx.db.insert('quizQuestions', generated ? { userId: owner.tokenIdentifier, quizId, order: i, ...generatedQuestion(i), sourceDocumentId: f.documentId }
+      : { userId: owner.tokenIdentifier, quizId, order: i, question: `Question ${i}?`, type: 'free-response', correctAnswer: `Answer ${i}` })
+    const payloadDigest = await artifactPayloadDigest(artifactContentProjection({ kind: 'quiz_question', question: (await ctx.db.get(questionId))! }))
+    const reference: LearnArtifactReference = { artifact: { kind: 'quiz_question', id: questionId }, key: 'whole', revision: `sha256:${payloadDigest}`, payloadDigest }
+    await ctx.db.patch(f.lineageId, reference)
+    const manifestDigest = await sealManifest(ctx, f.lineageId)
+    await ctx.db.patch(f.validationId, { payloadDigest, manifestDigest })
+    fixtures.push({ ...f, reference, manifestDigest })
+  }
+  return fixtures
 }
 function batchRegistration(fixtures: Fixture[]) { return { artifacts: fixtures.map(f => ({ reference: f.reference, validationId: f.validationId })), expectedCatalogRevision: fixtures[0]?.catalogRevision ?? 0 } }
 async function expectUnpublished(t: TestStore, fixtures: Fixture[]) {
@@ -2157,5 +2169,206 @@ describe('B1 recorded origin successor bounds', () => {
       await operation()
       expect(await t.withIdentity(owner).query(internal.learnV2ArtifactLineage.resolve, { reference: summary.reference })).toMatchObject({ status: 'bound', lineageId: nextSummary.lineageId, originLineageIds: [terminal.lineageId] })
     }
+  })
+})
+
+async function resealed<F extends { lineageId: Id<'learnArtifactLineages'>, validationId: Id<'learnArtifactValidations'> }>(ctx: MutationCtx, f: F) {
+  const manifestDigest = await sealManifest(ctx, f.lineageId)
+  await ctx.db.patch(f.validationId, { manifestDigest })
+  return { ...f, manifestDigest }
+}
+async function supersedeOriginPin(t: TestStore, origin: Fixture) {
+  await t.run(ctx => ctx.db.patch(origin.documentId, { fileSize: 6 }))
+  const digest = await t.run(async ctx => artifactPayloadDigest(artifactContentProjection({ kind: 'document', document: (await ctx.db.get(origin.documentId))! })))
+  const next = await t.run(ctx => replacementLineage(ctx, origin, digest))
+  await t.withIdentity(owner).run(ctx => supersedeArtifactLineageForOwner(ctx, owner.tokenIdentifier, { previousLineageId: origin.lineageId, replacementLineageId: next.lineageId }))
+  return next
+}
+const resolveOwned = (t: TestStore, reference: LearnArtifactReference) => t.withIdentity(owner).query(internal.learnV2ArtifactLineage.resolve, { reference })
+const contentAddressedKinds = ['quiz_question', 'section_block', 'audio_overview'] as const
+
+describe.each(contentAddressedKinds)('B2 content-addressed re-pin: %s', kind => {
+  test('P1: a summary of a re-pinned origin re-pins at its unchanged content revision', async () => {
+    const t = convexTest(schema, modules)
+    const { origin, summary } = await t.run(async ctx => {
+      const content = await prepareMatrix(ctx, kind)
+      await ctx.db.patch(content.lineageId, { key: 'unrelated-fixture-row' })
+      const origin = await prepare(ctx, { classification: 'genuine_personal_work', fingerprint: 'd' })
+      const derived = await prepare(ctx, { origin, transformation: 'summary' })
+      await ctx.db.patch(derived.lineageId, content.reference)
+      await ctx.db.patch(derived.validationId, { payloadDigest: content.reference.payloadDigest })
+      return { origin, summary: await resealed(ctx, { ...derived, reference: content.reference }) }
+    })
+    expect(await resolveOwned(t, summary.reference)).toMatchObject({ status: 'bound', originLineageIds: [origin.lineageId] })
+    const nextOrigin = await supersedeOriginPin(t, origin)
+    expect(await resolveOwned(t, summary.reference)).toMatchObject({ status: 'unavailable' })
+    const next = await t.run(async ctx => {
+      const next = await replacementLineage(ctx, summary, summary.reference.payloadDigest)
+      const edge = (await ctx.db.query('learnArtifactLineageOrigins').withIndex('by_userId_and_lineageId', q => q.eq('userId', owner.tokenIdentifier).eq('lineageId', next.lineageId)).unique())!
+      await ctx.db.patch(edge._id, { originLineageId: nextOrigin.lineageId, originRevision: nextOrigin.reference.revision, originPayloadDigest: nextOrigin.reference.payloadDigest, originManifestDigest: nextOrigin.manifestDigest })
+      return resealed(ctx, next)
+    })
+    expect(next.reference).toEqual(summary.reference)
+    expect(next.manifestDigest).not.toBe(summary.manifestDigest)
+    expect(await resolveOwned(t, next.reference)).toMatchObject({ status: 'unavailable' })
+    await t.withIdentity(owner).run(async ctx => {
+      const budget = createArtifactLineageReadContext(ctx)
+      await supersedeArtifactLineageForOwner(budget.ctx, owner.tokenIdentifier, { previousLineageId: summary.lineageId, replacementLineageId: next.lineageId })
+      await registerInstructionalArtifactForOwner(budget.ctx, owner.tokenIdentifier, registration(next))
+    })
+    expect(await t.run(ctx => ctx.db.get(summary.lineageId))).toHaveProperty('nextId', next.lineageId)
+    expect(await resolveOwned(t, next.reference)).toMatchObject({ status: 'bound', lineageId: next.lineageId, instructionalRegistered: true, classification: 'genuine_personal_work',
+      originLineageIds: [nextOrigin.lineageId], cases: [{ caseId: origin.caseId, usageClass: 'instructional' }] })
+  })
+  test.each(['unreserved', 'reserved'] as const)('P2: a real same-revision content-hash change re-pins an %s artifact', async state => {
+    vi.useFakeTimers()
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => prepareMatrix(ctx, kind, 'document'))
+    if (state === 'reserved') await t.run(ctx => ctx.db.patch(f.caseId, { reservedAt: f.base.createdAt }))
+    await t.mutation(internal.documents.updateDocumentStatus, { id: f.sourceDocumentId!, status: 'success', contentHash: 'a'.repeat(64) })
+    expect(await t.run(ctx => ctx.db.get(f.sourceDocumentId!))).toMatchObject({ sourceRevision: 'source.r1', contentHash: 'a'.repeat(64) })
+    expect(await resolveOwned(t, f.reference)).toMatchObject({ status: 'unavailable' })
+    expect(await t.run(async ctx => artifactPayloadDigest(await currentContent(ctx, f)))).toBe(f.reference.payloadDigest)
+    const next = await t.run(ctx => replacementLineage(ctx, f, f.reference.payloadDigest))
+    expect(next.reference).toEqual(f.reference)
+    expect(next.manifestDigest).not.toBe(f.manifestDigest)
+    expect(await resolveOwned(t, next.reference)).toMatchObject({ status: 'unavailable' })
+    await t.run(ctx => supersedeArtifactLineageForRecord(ctx, { kind: 'document', id: f.sourceDocumentId! }, { previousLineageId: f.lineageId, replacementLineageId: next.lineageId }))
+    expect(await resolveOwned(t, next.reference)).toMatchObject({ status: 'bound', lineageId: next.lineageId,
+      cases: [{ caseId: f.caseId, usageClass: state === 'reserved' ? 'measurement_reserved' : 'unknown' }] })
+    if (state === 'reserved') await expect(t.withIdentity(owner).mutation(registerInstructional, registration(next))).rejects.toThrow('unavailable')
+    expect((await t.run(ctx => ctx.db.get(f.caseId)))?.reservedAt).toBe(state === 'reserved' ? f.base.createdAt : undefined)
+  })
+  test.each(['payload', 'classification', 'cases', 'sources', 'fork', 'published', 'source_loss'] as const)('rejects a same-revision successor with changed %s', async state => {
+    vi.useFakeTimers()
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => prepareMatrix(ctx, kind, 'document'))
+    await t.mutation(internal.documents.updateDocumentStatus, { id: f.sourceDocumentId!, status: 'success', contentHash: 'a'.repeat(64) })
+    const changed = await artifactPayloadDigest({ changed: true })
+    const next = await t.run(ctx => replacementLineage(ctx, f, state === 'payload' ? changed : f.reference.payloadDigest))
+    await t.run(async ctx => {
+      if (state === 'classification') await ctx.db.patch(next.lineageId, { classification: 'teaching', authority: 'server_producer' })
+      if (state === 'cases') {
+        const extra = await prepare(ctx, { fingerprint: 'd' })
+        const candidate = (await ctx.db.get(extra.caseId))!
+        const binding = (await ctx.db.query('learnArtifactCaseBindings').withIndex('by_userId_and_lineageId', q => q.eq('userId', owner.tokenIdentifier).eq('lineageId', next.lineageId)).unique())!
+        await ctx.db.patch(binding._id, { caseId: extra.caseId, scenarioFingerprint: candidate.scenarioFingerprint, solutionFingerprint: candidate.solutionFingerprint })
+      }
+      if (state === 'sources') {
+        const link = (await ctx.db.query('learnArtifactSourceLinks').withIndex('by_userId_and_lineageId', q => q.eq('userId', owner.tokenIdentifier).eq('lineageId', next.lineageId)).unique())!
+        await ctx.db.patch(link._id, { dependency: { kind: 'folder', folderId: f.folderId } })
+      }
+      if (state === 'fork') await replacementLineage(ctx, f, f.reference.payloadDigest)
+      if (state === 'published') await ctx.db.patch(next.lineageId, { publication: { validationId: next.validationId, catalogRevision: 1, publishedAt: 1 } })
+      if (['classification', 'cases', 'sources'].includes(state)) await resealed(ctx, next)
+      if (state === 'source_loss') await ctx.db.patch(f.sourceDocumentId!, { status: 'failed' })
+    })
+    await expect(t.withIdentity(owner).run(ctx => supersedeArtifactLineageForOwner(ctx, owner.tokenIdentifier, { previousLineageId: f.lineageId, replacementLineageId: next.lineageId }))).rejects.toThrow('unavailable')
+    expect(await t.run(ctx => ctx.db.get(f.lineageId))).not.toHaveProperty('nextId')
+  })
+})
+
+describe('B2 publication-sized batches', () => {
+  test('publishes a generated 50-question Quiz with its writes in one transaction within the measured limits', async () => {
+    const t = convexTest(schema, modules)
+    const measured = await t.withIdentity(owner).run(async ctx => {
+      const fixtures = await seedQuizBatch(ctx, LEARN_ARTIFACT_LINEAGE_LIMITS.maxBatch, true)
+      const traced = traceLineageReads(ctx)
+      const budget = createArtifactLineageReadContext(traced.ctx)
+      const result = await registerInstructionalArtifactsForOwner(budget.ctx, owner.tokenIdentifier, batchRegistration(fixtures))
+      expect(result).toMatchObject({ catalogRevision: 1, lineageIds: fixtures.map(f => f.lineageId) })
+      expect(result.readUsage).toEqual({ chargedBytes: traced.stats.charged, documentsRead: traced.stats.documents, readRequests: traced.stats.requests, limitBytes: ARTIFACT_LINEAGE_READ_BYTES })
+      return { fixtures, ...result.readUsage, ranges: traced.stats.ranges }
+    })
+    expect(measured.fixtures).toHaveLength(50)
+    // Convex allows 16 MiB read, 32,000 scanned documents and 4,096 index ranges per transaction.
+    expect(measured.chargedBytes).toBeLessThan(ARTIFACT_LINEAGE_READ_BYTES / 4)
+    expect(measured.documentsRead).toBeLessThan(32_000 / 20)
+    expect(measured.ranges).toBeLessThanOrEqual(measured.readRequests)
+    expect(measured.ranges).toBeLessThan(4_096 / 3)
+    expect(measured.ranges).toBeLessThan(ARTIFACT_LINEAGE_INDEX_RANGES / 2)
+    for (const f of measured.fixtures) expect(await resolveOwned(t, f.reference)).toMatchObject({ status: 'bound', instructionalRegistered: true, cases: [{ caseId: f.caseId, usageClass: 'instructional' }] })
+  })
+  test.each([100, 0])('empty index ranges share a 2,048-range ceiling with %i ranges left', async left => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => prepare(ctx, { classification: 'genuine_personal_work' }))
+    const missing = await t.run(async ctx => {
+      const id = await ctx.db.insert('learnAssessmentCases', { ...f.base, caseKey: 'deleted', scenarioFingerprint: 'e'.repeat(64), solutionFingerprint: 'e'.repeat(64), identityPolicyVersion: 'identity.v1', usageClass: 'unknown' })
+      await ctx.db.delete(id)
+      return id
+    })
+    await t.withIdentity(owner).run(async ctx => {
+      const budget = createArtifactLineageReadContext(ctx)
+      for (let i = 0; i < ARTIFACT_LINEAGE_INDEX_RANGES - left; i++) expect(await budget.ctx.db.get(missing)).toBeNull()
+      expect(budget.readUsage).toMatchObject({ chargedBytes: 0, documentsRead: 0 })
+      expect(await resolveArtifactLineageForOwner(budget.ctx, owner.tokenIdentifier, { reference: f.reference })).toMatchObject({ status: left ? 'bound' : 'unavailable' })
+    })
+  })
+  test('rejects 51 distinct members without writes and publishes the first 50', async () => {
+    const t = convexTest(schema, modules)
+    const fixtures = await prepareQuizBatch(t, LEARN_ARTIFACT_LINEAGE_LIMITS.maxBatch + 1)
+    await expect(t.withIdentity(owner).run(ctx => registerInstructionalArtifactsForOwner(ctx, owner.tokenIdentifier, batchRegistration(fixtures)))).rejects.toThrow()
+    await expectUnpublished(t, fixtures)
+    const admitted = fixtures.slice(0, LEARN_ARTIFACT_LINEAGE_LIMITS.maxBatch)
+    expect(await t.withIdentity(owner).run(ctx => registerInstructionalArtifactsForOwner(ctx, owner.tokenIdentifier, batchRegistration(admitted)))).toHaveProperty('lineageIds', admitted.map(f => f.lineageId))
+    await expectUnpublished(t, fixtures.slice(LEARN_ARTIFACT_LINEAGE_LIMITS.maxBatch).map(f => ({ ...f, catalogRevision: 1 })))
+  })
+  test('a document publishes as two members, its document and one chunk set, and per-chunk rows stay unavailable', async () => {
+    const t = convexTest(schema, modules)
+    const { whole, chunkSet, perChunk } = await t.run(async ctx => {
+      const whole = await prepare(ctx, { classification: 'genuine_personal_work' })
+      const component = async (key: string, fingerprint: string) => {
+        const f = await prepare(ctx, { classification: 'genuine_personal_work', fingerprint })
+        const payloadDigest = await artifactPayloadDigest(artifactContentProjection({ kind: 'document_chunk', document: (await ctx.db.get(whole.documentId))! }))
+        const reference: LearnArtifactReference = { artifact: { kind: 'document_chunk', id: whole.documentId }, key, revision: 'source.r1', payloadDigest }
+        await ctx.db.patch(f.lineageId, reference)
+        await ctx.db.patch(f.validationId, { payloadDigest })
+        return resealed(ctx, { ...f, reference })
+      }
+      return { whole, chunkSet: await component(LEARN_ARTIFACT_DOCUMENT_CHUNK_SET_KEY, 'd'), perChunk: await component('chunk-0', 'e') }
+    })
+    const record = { kind: 'document', id: whole.documentId } as const
+    expect(await t.query(internal.learnV2ArtifactLineage.resolveForRecord, { ownerRecord: record, reference: perChunk.reference })).toMatchObject({ status: 'unavailable' })
+    await expect(t.run(ctx => registerInstructionalArtifactsForRecord(ctx, record, batchRegistration([whole, perChunk])))).rejects.toThrow('unavailable')
+    await expectUnpublished(t, [whole, perChunk])
+    expect(await t.run(ctx => registerInstructionalArtifactsForRecord(ctx, record, batchRegistration([whole, chunkSet])))).toMatchObject({ catalogRevision: 1, lineageIds: [whole.lineageId, chunkSet.lineageId] })
+    expect(await t.query(internal.learnV2ArtifactLineage.resolveForRecord, { ownerRecord: record, reference: chunkSet.reference })).toMatchObject({ status: 'bound', instructionalRegistered: true })
+  })
+})
+
+describe('B2 shared case proofs', () => {
+  test.each(['origin_first', 'summary_first'] as const)('a shared case records its binding member validation with %s', async order => {
+    const t = convexTest(schema, modules)
+    const { origin, summary } = await t.run(async ctx => {
+      const origin = await prepare(ctx, { classification: 'genuine_personal_work' })
+      return { origin, summary: await prepare(ctx, { origin, transformation: 'summary' }) }
+    })
+    const members = order === 'origin_first' ? [origin, summary] : [summary, origin]
+    await t.withIdentity(owner).run(ctx => registerInstructionalArtifactsForOwner(ctx, owner.tokenIdentifier, batchRegistration(members)))
+    expect(await t.run(ctx => ctx.db.get(origin.caseId))).toMatchObject({ usageClass: 'instructional', artifactIdentityValidationId: origin.validationId })
+  })
+  test('a member that rebinds a shared case keeps its own binding ahead of the origin it copies', async () => {
+    const t = convexTest(schema, modules)
+    const { origin, copy } = await t.run(async ctx => {
+      const origin = await prepare(ctx, { classification: 'genuine_personal_work' })
+      const copy = await prepare(ctx, { origin, transformation: 'copy' })
+      const candidate = (await ctx.db.get(origin.caseId))!
+      await ctx.db.insert('learnArtifactCaseBindings', { ...copy.base, lineageId: copy.lineageId, caseId: origin.caseId,
+        scenarioFingerprint: candidate.scenarioFingerprint, solutionFingerprint: candidate.solutionFingerprint, identityPolicyVersion: candidate.identityPolicyVersion })
+      await ctx.db.patch(copy.lineageId, { caseCount: 1 })
+      return { origin, copy: await resealed(ctx, copy) }
+    })
+    await t.withIdentity(owner).run(ctx => registerInstructionalArtifactsForOwner(ctx, owner.tokenIdentifier, batchRegistration([copy, origin])))
+    expect(await t.run(ctx => ctx.db.get(origin.caseId))).toMatchObject({ usageClass: 'instructional', artifactIdentityValidationId: copy.validationId })
+  })
+  test('a later derived registration keeps the recorded case proof', async () => {
+    const t = convexTest(schema, modules)
+    const origin = await t.run(ctx => prepare(ctx, { classification: 'genuine_personal_work' }))
+    await t.withIdentity(owner).mutation(registerInstructional, registration(origin))
+    const summary = await t.run(ctx => prepare(ctx, { origin, transformation: 'summary' }))
+    expect(summary.catalogRevision).toBe(1)
+    await t.withIdentity(owner).mutation(registerInstructional, registration(summary))
+    expect(await t.run(ctx => ctx.db.get(summary.lineageId))).toHaveProperty('publication.catalogRevision', 2)
+    expect(await t.run(ctx => ctx.db.get(origin.caseId))).toMatchObject({ usageClass: 'instructional', artifactIdentityValidationId: origin.validationId })
   })
 })
