@@ -159,7 +159,9 @@ export function reconcileLearnReportSourceRows(roster: readonly string[], rows: 
   const capabilityKeys = new Map<string, string>()
   const capabilityScopes = new Map<string, string>()
   type OutcomeBinding = { learnerKey: string, capabilityKey: string, owner: string | null, role: 'cold' | 'delayed' | 'replacement' | 'claim' }
-  const outcomes = new Map<string, (OutcomeBinding & { snapshot: string, slotWindow: string | null })[]>()
+  const outcomes = new Map<string, (OutcomeBinding & {
+    snapshot: string, slotWindow: string | null, result: z.infer<typeof learnReportResultSnapshotSchema> | null,
+  })[]>()
   const claimIdentities = new Set<string>()
   function reconcileOutcome(binding: OutcomeBinding, opportunityId: string | null,
     acceptance: z.infer<typeof learnReportAcceptanceSnapshotSchema> | null, result: z.infer<typeof learnReportResultSnapshotSchema> | null,
@@ -174,7 +176,7 @@ export function reconcileLearnReportSourceRows(roster: readonly string[], rows: 
       clock.protocolVersion, clock.schedulingPolicyVersion, clock.horizonDays, clock.timezone,
       clock.dueLocalDate, clock.dueAt, clock.openAt, clock.closeAt,
     ])
-    const outcome = { ...binding, snapshot: JSON.stringify([opportunityId, acceptance, result]), slotWindow }
+    const outcome = { ...binding, snapshot: JSON.stringify([opportunityId, acceptance, result]), slotWindow, result }
     for (const key of keys) {
       const group = outcomes.get(key) ?? []
       group.push(outcome)
@@ -243,6 +245,19 @@ export function reconcileLearnReportSourceRows(roster: readonly string[], rows: 
       const delayedSlots = slots.filter(slot => slot.role === 'delayed' || slot.role === 'replacement')
       if (delayedSlots.length && new Set([...delayedSlots, ...claims].map(outcome => outcome.slotWindow)).size > 1) reasons.add('conflicting_slot_window')
     }
+  }
+  // Basis attempts share the result-attempt namespace, across every endpoint and row kind.
+  // Ordinary V2 bases can be absent from this run; their canonical validity remains a writer obligation.
+  for (const row of validatedRows) {
+    if (row.kind !== 'first_check_claim') continue
+    const basisResults = outcomes.get(JSON.stringify(['attempt', row.claim.basisAttemptId])) ?? []
+    if (row.result?.attemptId === row.claim.basisAttemptId || basisResults.some(outcome => {
+      const result = outcome.result
+      return result === null || outcome.learnerKey !== row.learnerKey || outcome.capabilityKey !== row.capabilityKey
+        || result.validityStatus !== 'valid' || result.assistanceState !== 'unassisted' || !result.masteryEligible
+        || result.scorePercent < result.thresholdPercent || result.masteryStateAfter !== 'independent' || result.masteryStateBefore === 'independent'
+        || row.claim.firstIndependentAt < result.acceptedAt || row.claim.firstIndependentAt > result.scoreCommittedAt
+    })) reasons.add('invalid_claim_basis')
   }
   if (roster.some(owner => !watermarks.has(owner))) reasons.add('missing_owner_watermark')
   return { status: reasons.size ? 'incomplete' as const : 'complete' as const, reasonCodes: [...reasons].sort() }

@@ -77,6 +77,26 @@ export async function measurementReportIdentityFixture() {
   return { ...source, episode, day30, otherAssignment }
 }
 
+// Scalar snapshots isolate each basis-join predicate; canonical transition provenance still belongs to the writer.
+export async function measurementReportBasisFixture(endpoint: 'cold' | 'delayed' | 'replacement' | 'claim') {
+  const source = await measurementReportIdentityFixture()
+  const original = endpoint === 'claim' ? source.delayed : source.episode[endpoint]!
+  const basis = learnReportResultSnapshotSchema.parse({ ...original, scorePercent: 80, masteryEligible: true,
+    masteryStateBefore: 'guided', masteryStateAfter: 'independent' })
+  const firstIndependentAt = basis.acceptedAt
+  const openAt = firstIndependentAt + 7 * 86_400_000
+  const claim = learnReportFirstClaimSnapshotSchema.parse({ ...source.claim,
+    claim: { ...source.claim.claim, claimKey: 'basisJoinClaim', basisAttemptId: basis.attemptId,
+      firstIndependentAt, firstIndependentLocalDate: new Date(firstIndependentAt).toISOString().slice(0, 10) },
+    firstCheckOpportunityId: 'basisJoinFirstOpportunity', acceptance: null, stateAtAcceptance: null,
+    clock: { ...source.claim.clock, anchorEventId: basis.attemptId, anchorAt: firstIndependentAt,
+      dueLocalDate: new Date(openAt).toISOString().slice(0, 10), dueAt: openAt, openAt, closeAt: openAt + 86_400_000 } })
+  const basisRow = endpoint === 'claim'
+    ? learnReportFirstClaimSnapshotSchema.parse({ ...source.claim, stratum: { ...source.claim.stratum, epoch: 'previous.epoch' }, result: basis })
+    : learnReportEpisodeSnapshotSchema.parse({ ...source.episode, [endpoint]: basis })
+  return { ...source, claim, basis, basisRow }
+}
+
 export function emptyMeasurementEstimate() {
   return learnReportEstimateSchema.parse({ population: 0, observed: 0, contributingLearners: 0,
     status: 'no_eligible_population', populationState: 'known', sourceCoverage: 'complete', outcomeCoverage: 'none', validity: 'provisional',

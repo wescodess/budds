@@ -5,7 +5,7 @@ import {
   learnReportEpisodeSnapshotSchema, learnReportFirstClaimSnapshotSchema, learnReportMetricSchema, learnReportOpaqueKeySchema, learnReportProvenanceSchema,
   reconcileLearnReportSourceRows, validateLearnReportSourcePage, validateLearnMeasurementReportCells,
 } from './learn-v2-measurement-report'
-import { emptyMeasurementReportCell, measurementReportIdentityFixture, measurementReportSourceFixture } from '../tests/fixtures/learn-v2-measurement-report'
+import { emptyMeasurementReportCell, measurementReportBasisFixture, measurementReportIdentityFixture, measurementReportSourceFixture } from '../tests/fixtures/learn-v2-measurement-report'
 
 describe('report source v3 computation contract', () => {
   it('changes only the source version and rejects prior envelopes', async () => {
@@ -275,6 +275,16 @@ describe('report source v3 computation contract', () => {
     }
   })
 
+  it('reports only a conflict for two distinct snapshots in either row order', async () => {
+    const { watermark } = await measurementReportSourceFixture()
+    const conflict = { ...watermark, sequence: watermark.sequence + 1 }
+    for (const rows of [[watermark, conflict], [conflict, watermark]]) {
+      expect(reconcileLearnReportSourceRows([watermark.learnerKey], rows)).toEqual({
+        status: 'incomplete', reasonCodes: ['conflicting_source_row'],
+      })
+    }
+  })
+
   it('rejects varying capability keys within a run and conflicting assignment pins across horizons', async () => {
     const { episode, watermark } = await measurementReportSourceFixture()
     const otherEpisode = learnReportEpisodeSnapshotSchema.parse({ ...episode, assignmentId: 'assignment2',
@@ -396,6 +406,30 @@ describe('report source v3 computation contract', () => {
     for (const rows of [[...watermarks, episode, row], [row, episode, ...watermarks]]) {
       expect(reconcileLearnReportSourceRows(roster, rows)).toEqual({ status: 'incomplete', reasonCodes: changed === 'learner'
         ? ['claim_capability_mismatch', 'claim_learner_mismatch'] : ['claim_capability_mismatch'] })
+    }
+  })
+
+  it.each((['delayed', 'replacement'] as const).flatMap(slot =>
+    (['unanswered', 'unscored', 'scored'] as const).flatMap(state =>
+      (['learnerKey', 'capabilityKey'] as const).map(field => ({ slot, state, field }))),
+  ))('binds the shared $slot/$state/$field slot independently', async ({ slot, state, field }) => {
+    const { episode, claim, watermark } = await measurementReportIdentityFixture()
+    const acceptanceKey = slot === 'delayed' ? 'delayedAcceptance' : 'replacementAcceptance'
+    const firstCheckOpportunityId = slot === 'delayed' ? episode.originalOpportunityId : episode.replacementOpportunityId
+    const acceptance = state === 'unanswered' ? null : episode[acceptanceKey]
+    const result = state === 'scored' ? episode[slot] : null
+    const shared = learnReportFirstClaimSnapshotSchema.parse({ ...claim, firstCheckOpportunityId, acceptance, result,
+      clock: slot === 'delayed' ? episode.clock : episode.replacementClock,
+      stateAtAcceptance: acceptance ? claim.stateAtAcceptance : null })
+    const original = learnReportEpisodeSnapshotSchema.parse({ ...episode, [acceptanceKey]: acceptance, [slot]: result })
+    expect(reconcileLearnReportSourceRows([watermark.learnerKey], [watermark, original, shared])).toEqual({ status: 'complete', reasonCodes: [] })
+    // Change only one key so the other binding cannot mask a missing check.
+    const mismatched = { ...shared, [field]: `sha256:${'b'.repeat(64)}` }
+    const roster = [...new Set([watermark.learnerKey, mismatched.learnerKey])]
+    const watermarks = roster.map(learnerKey => ({ ...watermark, learnerKey }))
+    for (const rows of [[...watermarks, original, mismatched], [mismatched, original, ...watermarks]]) {
+      expect(reconcileLearnReportSourceRows(roster, rows)).toEqual({ status: 'incomplete',
+        reasonCodes: [field === 'learnerKey' ? 'claim_learner_mismatch' : 'claim_capability_mismatch'] })
     }
   })
 
@@ -587,6 +621,83 @@ describe('report source v3 computation contract', () => {
     expect(reconcileLearnReportSourceRows([watermark.learnerKey], [watermark, claim, { ...claim, ...keys }])).toEqual({
       status: 'incomplete', reasonCodes: ['duplicate_claim_key', 'reused_claim_basis_attempt', 'reused_first_check_opportunity'],
     })
+  })
+
+  it.each(['cold', 'delayed', 'replacement', 'claim'] as const)('rejects a failing %s result named as an Independent basis in either row order', async endpoint => {
+    const { claim, basisRow, watermark } = await measurementReportBasisFixture(endpoint)
+    const row = structuredClone(basisRow)
+    const basis = row.kind === 'episode' ? row[endpoint as 'cold' | 'delayed' | 'replacement']! : row.result!
+    basis.scorePercent = 40
+    basis.masteryStateBefore = 'unseen'
+    basis.masteryStateAfter = 'unseen'
+    for (const rows of [[watermark, row, claim], [claim, row, watermark]]) {
+      expect(reconcileLearnReportSourceRows([watermark.learnerKey], rows)).toEqual({ status: 'incomplete', reasonCodes: ['invalid_claim_basis'] })
+    }
+  })
+
+  it.each([
+    ['score below threshold', { scorePercent: 79.99 }],
+    ['excluded validity', { validityStatus: 'excluded' }], ['unknown validity', { validityStatus: 'unknown' }],
+    ['assisted', { assistanceState: 'assisted' }], ['unknown assistance', { assistanceState: 'unknown' }],
+    ['ineligible for mastery', { masteryEligible: false }],
+    ['preserved Independent', { masteryStateBefore: 'independent' }], ['did not establish Independent', { masteryStateAfter: 'unseen' }],
+  ])('isolates an invalid visible basis: %s', async (_label, change) => {
+    const { claim, basisRow, basis, watermark } = await measurementReportBasisFixture('delayed')
+    expect(reconcileLearnReportSourceRows([watermark.learnerKey], [watermark, basisRow, claim])).toEqual({ status: 'complete', reasonCodes: [] })
+    const row = learnReportEpisodeSnapshotSchema.parse({ ...basisRow, delayed: { ...basis, ...change } })
+    for (const rows of [[watermark, row, claim], [claim, row, watermark]]) {
+      expect(reconcileLearnReportSourceRows([watermark.learnerKey], rows)).toEqual({ status: 'incomplete', reasonCodes: ['invalid_claim_basis'] })
+    }
+  })
+
+  it.each(['learnerKey', 'capabilityKey'] as const)('binds a visible basis to the claim %s independently', async field => {
+    const { claim, basisRow, watermark } = await measurementReportBasisFixture('delayed')
+    const row = { ...claim, [field]: `sha256:${'b'.repeat(64)}` }
+    const roster = [...new Set([watermark.learnerKey, row.learnerKey])]
+    const watermarks = roster.map(learnerKey => ({ ...watermark, learnerKey }))
+    expect(reconcileLearnReportSourceRows(roster, [...watermarks, basisRow, claim])).toEqual({ status: 'complete', reasonCodes: [] })
+    for (const rows of [[...watermarks, basisRow, row], [row, basisRow, ...watermarks]]) {
+      expect(reconcileLearnReportSourceRows(roster, rows)).toEqual({ status: 'incomplete', reasonCodes: ['invalid_claim_basis'] })
+    }
+  })
+
+  it('bounds a visible basis attainment by acceptance and commit times, including both endpoints', async () => {
+    const { claim, basisRow, basis, watermark } = await measurementReportBasisFixture('delayed')
+    for (const firstIndependentAt of [basis.acceptedAt - 1, basis.acceptedAt, basis.scoreCommittedAt, basis.scoreCommittedAt + 1]) {
+      const row = learnReportFirstClaimSnapshotSchema.parse({ ...claim, claim: { ...claim.claim, firstIndependentAt,
+        firstIndependentLocalDate: new Date(firstIndependentAt).toISOString().slice(0, 10) } })
+      const valid = firstIndependentAt >= basis.acceptedAt && firstIndependentAt <= basis.scoreCommittedAt
+      for (const rows of [[watermark, basisRow, row], [row, basisRow, watermark]]) {
+        expect(reconcileLearnReportSourceRows([watermark.learnerKey], rows)).toEqual({
+          status: valid ? 'complete' : 'incomplete', reasonCodes: valid ? [] : ['invalid_claim_basis'],
+        })
+      }
+    }
+  })
+
+  it('rejects the claim own first-check result as its basis even when all basis scalars qualify', async () => {
+    const { claim: source, delayed, watermark } = await measurementReportSourceFixture()
+    const result = { ...delayed, scorePercent: 80, masteryEligible: true, masteryStateBefore: 'guided', masteryStateAfter: 'independent' }
+    const claim = learnReportFirstClaimSnapshotSchema.parse({ ...source, result,
+      claim: { ...source.claim, basisAttemptId: result.attemptId, firstIndependentAt: result.acceptedAt, firstIndependentLocalDate: '2026-10-08' } })
+    for (const rows of [[watermark, claim], [claim, watermark]]) {
+      expect(reconcileLearnReportSourceRows([watermark.learnerKey], rows)).toEqual({ status: 'incomplete', reasonCodes: ['invalid_claim_basis'] })
+    }
+  })
+
+  it('checks every occurrence of a visible basis instead of selecting the first result', async () => {
+    const { claim, basisRow, watermark } = await measurementReportBasisFixture('delayed')
+    const row = learnReportEpisodeSnapshotSchema.parse(basisRow)
+    const conflict = { ...row, delayed: { ...row.delayed!, scorePercent: 40 } }
+    for (const rows of [[watermark, row, conflict, claim], [claim, conflict, row, watermark]]) {
+      expect(reconcileLearnReportSourceRows([watermark.learnerKey], rows)).toEqual({ status: 'incomplete',
+        reasonCodes: ['conflicting_outcome_snapshot', 'conflicting_source_row', 'invalid_claim_basis'] })
+    }
+  })
+
+  it('allows an external ordinary V2 basis without inventing an unavailable result check', async () => {
+    const { claim, watermark } = await measurementReportSourceFixture()
+    expect(reconcileLearnReportSourceRows([watermark.learnerKey], [watermark, claim])).toEqual({ status: 'complete', reasonCodes: [] })
   })
 
   it.each(['claimKey', 'basisAttemptId', 'firstCheckOpportunityId'] as const)('enforces run-wide %s uniqueness independently of capability, owner and epoch', async identity => {
