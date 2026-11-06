@@ -155,16 +155,22 @@ export function reconcileLearnReportSourceRows(roster: readonly string[], rows: 
   const capabilityKeys = new Map<string, string>()
   const capabilityScopes = new Map<string, string>()
   type OutcomeBinding = { learnerKey: string, capabilityKey: string, owner: string | null, role: 'cold' | 'delayed' | 'replacement' | 'claim' }
-  const outcomes = new Map<string, (OutcomeBinding & { snapshot: string })[]>()
+  const outcomes = new Map<string, (OutcomeBinding & { snapshot: string, slotWindow: string | null })[]>()
   const claimIdentities = new Set<string>()
   function reconcileOutcome(binding: OutcomeBinding, opportunityId: string | null,
-    acceptance: z.infer<typeof learnReportAcceptanceSnapshotSchema> | null, result: z.infer<typeof learnReportResultSnapshotSchema> | null) {
+    acceptance: z.infer<typeof learnReportAcceptanceSnapshotSchema> | null, result: z.infer<typeof learnReportResultSnapshotSchema> | null,
+    clock: z.infer<typeof learnAssessmentClockSchema> | null = null) {
     const keys = [
       ...(opportunityId === null ? [] : [JSON.stringify(['opportunity', opportunityId])]),
       ...(acceptance === null ? [] : [JSON.stringify(['submission', acceptance.submissionId])]),
       ...(result === null ? [] : [JSON.stringify(['attempt', result.attemptId]), JSON.stringify(['execution', result.executionId])]),
     ]
-    const outcome = { ...binding, snapshot: JSON.stringify([opportunityId, acceptance, result]) }
+    // The opportunity freezes its window/policy; the episode's protocol and claim's Independent anchors may differ.
+    const slotWindow = clock === null ? null : JSON.stringify([
+      clock.protocolVersion, clock.schedulingPolicyVersion, clock.horizonDays, clock.timezone,
+      clock.dueLocalDate, clock.dueAt, clock.openAt, clock.closeAt,
+    ])
+    const outcome = { ...binding, snapshot: JSON.stringify([opportunityId, acceptance, result]), slotWindow }
     for (const key of keys) {
       const group = outcomes.get(key) ?? []
       group.push(outcome)
@@ -203,7 +209,7 @@ export function reconcileLearnReportSourceRows(roster: readonly string[], rows: 
       const binding = { learnerKey: row.learnerKey, capabilityKey: row.capabilityKey }
       reconcileOutcome({ ...binding, owner: JSON.stringify(['cold', row.assignmentId]), role: 'cold' }, row.coldOpportunityId, row.coldAcceptance, row.cold)
       const episode = JSON.stringify(['episode', row.assignmentId, row.horizonDays])
-      reconcileOutcome({ ...binding, owner: episode, role: 'delayed' }, row.originalOpportunityId, row.delayedAcceptance, row.delayed)
+      reconcileOutcome({ ...binding, owner: episode, role: 'delayed' }, row.originalOpportunityId, row.delayedAcceptance, row.delayed, row.clock)
       reconcileOutcome({ ...binding, owner: episode, role: 'replacement' }, row.replacementOpportunityId, row.replacementAcceptance, row.replacement)
     }
     if (row.kind === 'first_check_claim') {
@@ -217,7 +223,7 @@ export function reconcileLearnReportSourceRows(roster: readonly string[], rows: 
         else claimIdentities.add(key)
       }
       reconcileOutcome({ learnerKey: row.learnerKey, capabilityKey: row.capabilityKey, owner: null, role: 'claim' },
-        row.firstCheckOpportunityId, row.acceptance, row.result)
+        row.firstCheckOpportunityId, row.acceptance, row.result, row.clock)
     }
   }
   for (const group of outcomes.values()) {
@@ -225,10 +231,14 @@ export function reconcileLearnReportSourceRows(roster: readonly string[], rows: 
     if (new Set(slots.map(slot => slot.owner)).size > 1) reasons.add('reused_outcome_identity')
     if (new Set(group.map(outcome => outcome.snapshot)).size > 1) reasons.add('conflicting_outcome_snapshot')
     // A shared measurement outcome must independently qualify for this owner's capability and delayed check.
-    if (slots.length && group.some(outcome => outcome.role === 'claim')) {
+    const claims = group.filter(outcome => outcome.role === 'claim')
+    if (slots.length && claims.length) {
       if (group.some(outcome => outcome.learnerKey !== slots[0]!.learnerKey)) reasons.add('claim_learner_mismatch')
       if (group.some(outcome => outcome.capabilityKey !== slots[0]!.capabilityKey)) reasons.add('claim_capability_mismatch')
       if (slots.some(slot => slot.role === 'cold')) reasons.add('claim_shared_cold_slot')
+      // Only originals carry an episode clock. Replacement sharing still requires identical outcome snapshots.
+      const originals = slots.filter(slot => slot.role === 'delayed')
+      if (originals.length && new Set([...originals, ...claims].map(outcome => outcome.slotWindow)).size > 1) reasons.add('conflicting_slot_window')
     }
   }
   if (roster.some(owner => !watermarks.has(owner))) reasons.add('missing_owner_watermark')

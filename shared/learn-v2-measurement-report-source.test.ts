@@ -406,6 +406,72 @@ describe('report source v3 computation contract', () => {
     }
   })
 
+  it.each(['protocolVersion', 'schedulingPolicyVersion', 'horizonDays', 'timezone', 'dueLocalDate', 'dueAt', 'openAt', 'closeAt'] as const)(
+    'rejects a conflicting shared original slot %s before and after scoring, independently of row order', async field => {
+      const { episode, claim, watermark, delayed } = await measurementReportSourceFixture()
+      const day = 86_400_000
+      // Two days let a changed local due date retain a valid clock, with its matching dueAt.
+      const clock = { ...episode.clock!, closeAt: episode.clock!.closeAt + day }
+      const changes = {
+        protocolVersion: { protocolVersion: 'protocol.v2' }, schedulingPolicyVersion: { schedulingPolicyVersion: 'schedule.v2' },
+        horizonDays: { horizonDays: 30 }, timezone: { timezone: 'Etc/UTC' },
+        dueLocalDate: { dueLocalDate: '2026-10-09', dueAt: clock.dueAt + day }, dueAt: { dueAt: clock.dueAt + 1 },
+        openAt: { openAt: clock.openAt - 1 }, closeAt: { closeAt: clock.closeAt + day },
+      }[field]
+      for (const state of ['unanswered', 'unscored', 'scored']) {
+        const acceptance = state === 'unanswered' ? null : episode.delayedAcceptance
+        const result = state === 'scored' ? delayed : null
+        const original = learnReportEpisodeSnapshotSchema.parse({ ...episode, clock, delayedAcceptance: acceptance, delayed: result })
+        const shared = learnReportFirstClaimSnapshotSchema.parse({ ...claim, clock: { ...claim.clock, closeAt: clock.closeAt },
+          acceptance, result, stateAtAcceptance: acceptance ? claim.stateAtAcceptance : null })
+        expect(reconcileLearnReportSourceRows([watermark.learnerKey], [watermark, original, shared])).toEqual({ status: 'complete', reasonCodes: [] })
+        const row = learnReportFirstClaimSnapshotSchema.parse({ ...shared, clock: { ...shared.clock, ...changes } })
+        if (field === 'closeAt') {
+          const cutoff = original.clock!.closeAt
+          expect(original.clock!.closeAt <= cutoff).toBe(true)
+          expect(row.clock.closeAt <= cutoff).toBe(false)
+        }
+        for (const rows of [[watermark, original, row], [watermark, row, original], [original, watermark, row],
+          [original, row, watermark], [row, watermark, original], [row, original, watermark]]) {
+          expect(reconcileLearnReportSourceRows([watermark.learnerKey], rows)).toEqual({
+            status: 'incomplete', reasonCodes: ['conflicting_slot_window'],
+          })
+        }
+      }
+    },
+  )
+
+  it('allows distinct protocol and Independent anchors on an identical shared original slot window', async () => {
+    const { episode, claim, watermark } = await measurementReportSourceFixture()
+    const anchorAt = claim.clock.anchorAt - 1000
+    const row = learnReportFirstClaimSnapshotSchema.parse({ ...claim, clock: { ...claim.clock, anchorAt },
+      claim: { ...claim.claim, firstIndependentAt: anchorAt, firstIndependentLocalDate: '2026-09-30' } })
+    for (const field of ['anchorKind', 'anchorEventId', 'anchorAt'] as const) expect(row.clock[field]).not.toBe(episode.clock![field])
+    for (const rows of [[watermark, episode, row], [row, episode, watermark]]) {
+      expect(reconcileLearnReportSourceRows([watermark.learnerKey], rows)).toEqual({ status: 'complete', reasonCodes: [] })
+    }
+  })
+
+  it('requires the original window to be present when a claim shares the original slot', async () => {
+    const { episode, claim, watermark } = await measurementReportSourceFixture()
+    expect(reconcileLearnReportSourceRows([watermark.learnerKey], [watermark, { ...episode, clock: null }, claim])).toEqual({
+      status: 'incomplete', reasonCodes: ['conflicting_slot_window'],
+    })
+  })
+
+  it('keeps a shared replacement window separate from the original while still requiring identical outcome snapshots', async () => {
+    const { episode, claim, watermark } = await measurementReportIdentityFixture()
+    const shared = learnReportFirstClaimSnapshotSchema.parse({ ...claim, firstCheckOpportunityId: episode.replacementOpportunityId,
+      acceptance: episode.replacementAcceptance, result: episode.replacement, clock: { ...claim.clock, closeAt: claim.clock.closeAt + 86_400_000 } })
+    for (const rows of [[watermark, episode, shared], [shared, episode, watermark]]) {
+      expect(reconcileLearnReportSourceRows([watermark.learnerKey], rows)).toEqual({ status: 'complete', reasonCodes: [] })
+    }
+    const conflicting = { ...shared, result: { ...shared.result!, scorePercent: 100 } }
+    expect(reconcileLearnReportSourceRows([watermark.learnerKey], [watermark, episode, conflicting])).toEqual({
+      status: 'incomplete', reasonCodes: ['conflicting_outcome_snapshot'],
+    })
+  })
+
   it.each(['acceptance', 'submission', 'unanswered', 'unscored'] as const)('requires a shared first opportunity to agree on its %s snapshot', async changed => {
     const { episode, claim, delayed, watermark } = await measurementReportIdentityFixture()
     const row = learnReportFirstClaimSnapshotSchema.parse({ ...claim, result: delayed })

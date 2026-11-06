@@ -27,7 +27,8 @@ export async function measurementReportSourceFixture() {
     claim: { claimKey: 'claim1', claimSequence: 1, basisAttemptId: 'basisAttempt1', masteryRecordRevision: 1,
       firstIndependentAt: anchorAt, firstIndependentLocalDate: '2026-10-01', firstIndependentTimezone: 'UTC',
       transitionVersion: 'learn-v2.mastery-transition.v1', claimFactSequence: 1 },
-    firstCheckOpportunityId: 'delayedOpportunity1', checkSequence: 1, clock, stateAtEligibility: 'independent', stateAtAcceptance: 'independent',
+    firstCheckOpportunityId: 'delayedOpportunity1', checkSequence: 1,
+    clock: { ...clock, anchorKind: 'first_independent', anchorEventId: 'basisAttempt1' }, stateAtEligibility: 'independent', stateAtAcceptance: 'independent',
     acceptance: episode.delayedAcceptance, result: null, unresolvedReason: 'scoring_pending' })
   const watermark = learnReportWatermarkSnapshotSchema.parse({ kind: 'owner_watermark', learnerKey: keys.learnerKey,
     sequence: 1, dueWorkThrough: clock.closeAt, historyCoverage: 'complete', legacyIndependentAudit: { unknownCount: 0, sourceCoverage: 'complete' } })
