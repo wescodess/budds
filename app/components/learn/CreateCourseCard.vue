@@ -11,7 +11,7 @@ defineEmits<{ create: [] }>()
   >
     <div class="text-center">
       <div class="mb-1 text-2xl text-stone-500">+</div>
-      <span class="text-sm font-medium text-stone-400">Create Void</span>
+      <span class="text-sm font-medium text-stone-400">Create Course</span>
     </div>
   </button>
 </template>

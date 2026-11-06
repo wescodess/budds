@@ -83,10 +83,10 @@ describe('CourseCard', () => {
     expect(route.params).toEqual({ id: 'folder_456', courseId: 'course_123' })
   })
 
-  it('names the Void in its progress label', async () => {
+  it('names the course in its progress label', async () => {
     const Comp = await import(componentPath)
     const wrapper = await mountSuspended(Comp.default, { props: { course: baseCourse } })
-    expect(wrapper.find('[role="progressbar"]').attributes('aria-label')).toBe('Void progress: 42%')
+    expect(wrapper.find('[role="progressbar"]').attributes('aria-label')).toBe('Course progress: 42%')
   })
 
   it('shows no status badge for ready courses', async () => {

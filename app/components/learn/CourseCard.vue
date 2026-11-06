@@ -85,7 +85,7 @@ const courseUrl = computed(() => {
         :aria-valuenow="progress"
         aria-valuemin="0"
         aria-valuemax="100"
-        :aria-label="`Void progress: ${progress}%`"
+        :aria-label="`Course progress: ${progress}%`"
       />
     </div>
 

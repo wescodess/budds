@@ -7,7 +7,7 @@ describe('CreateCourseCard', () => {
   it('renders create course text', async () => {
     const Comp = await import(componentPath)
     const wrapper = await mountSuspended(Comp.default)
-    expect(wrapper.text()).toContain('Create Void')
+    expect(wrapper.text()).toContain('Create Course')
   })
 
   it('renders plus icon', async () => {

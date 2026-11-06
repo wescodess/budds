@@ -96,22 +96,22 @@ describe('DeleteCourseDialog — AC1, AC2', () => {
     confirm.click()
     await flushPromises()
 
-    expect(mockToast).toHaveBeenCalledWith('Void deletion started')
+    expect(mockToast).toHaveBeenCalledWith('Course deletion started')
     expect(wrapper.emitted('deleted')).toHaveLength(1)
   })
 
-  it('names the Void while keeping the destructive warning', async () => {
+  it('names the course while keeping the destructive warning', async () => {
     const Comp = await import(componentPath)
     const wrapper = await mountSuspended(Comp.default, {
       props: { courseId: 'course_123' as Id<'courses'>, courseTitle: 'Test Course' },
     })
-    expect(wrapper.find('[data-testid="delete-course-trigger"]').text()).toBe('Delete Void')
+    expect(wrapper.find('[data-testid="delete-course-trigger"]').text()).toBe('Delete Course')
     await wrapper.find('[data-testid="delete-course-trigger"]').trigger('click')
     await flushPromises()
     await nextTick()
 
     const dialog = document.querySelector('[data-testid="delete-course-dialog"]')!
-    expect(dialog.querySelector('h2')?.textContent).toBe('Delete Void')
+    expect(dialog.querySelector('h2')?.textContent).toBe('Delete Course')
     expect(dialog.textContent).toContain('This will permanently delete "Test Course" and all its sections, quizzes, flashcards, and audio. This action cannot be undone.')
   })
 
@@ -127,10 +127,10 @@ describe('DeleteCourseDialog — AC1, AC2', () => {
     ;(document.querySelector('[data-testid="delete-course-confirm"]') as HTMLElement).click()
     await flushPromises()
 
-    expect(mockToast).toHaveBeenCalledWith('Void deleted')
+    expect(mockToast).toHaveBeenCalledWith('Course deleted')
   })
 
-  it('names the Void when deletion fails', async () => {
+  it('names the course when deletion fails', async () => {
     mockMutate.mockRejectedValue(new Error('nope'))
     const Comp = await import(componentPath)
     const wrapper = await mountSuspended(Comp.default, {
@@ -142,6 +142,6 @@ describe('DeleteCourseDialog — AC1, AC2', () => {
     ;(document.querySelector('[data-testid="delete-course-confirm"]') as HTMLElement).click()
     await flushPromises()
 
-    expect(mockToastError).toHaveBeenCalledWith('Failed to delete Void')
+    expect(mockToastError).toHaveBeenCalledWith('Failed to delete course')
   })
 })
