@@ -101,13 +101,28 @@ function withReadBudget<T extends ReadCtx>(ctx: T): T {
   return new Proxy(ctx, { get: (target, property) => property === budgetContext ? true : property === 'db' ? db : Reflect.get(target, property) })
 }
 
+type SessionEvidence = { claims: Doc<'sessionContentClaims'>[], supports: Doc<'learnClaimSupports'>[] }
+type AudioPlayback = {
+  episode: Doc<'audioOverviewEpisodes'>, media: Doc<'audioOverviewAudioArtifacts'>,
+  manifest: Doc<'audioOverviewSourceManifests'>, entries: Doc<'audioOverviewSourceManifestEntries'>[],
+  outline: Doc<'audioOverviewOutlines'>, objectives: Doc<'audioOverviewLearningObjectives'>[], outlineSources: Doc<'audioOverviewOutlineSources'>[],
+  claims: Doc<'audioOverviewClaims'>[], claimSources: Doc<'audioOverviewClaimSources'>[], scenes: Doc<'audioOverviewScenes'>[],
+  utterances: Doc<'audioOverviewUtterances'>[], utteranceSources: Doc<'audioOverviewUtteranceSources'>[], utteranceClaims: Doc<'audioOverviewUtteranceClaims'>[],
+  segments: Doc<'audioOverviewAlignmentSegments'>[],
+}
+type SectionLinks = Array<
+  | { kind: 'quiz', questions: Doc<'quizQuestions'>[] }
+  | { kind: 'flashcard', cards: Doc<'flashcardRoomCards'>[] }
+  | { kind: 'audio', content: ReturnType<typeof sectionAudioContent> }
+  | null
+>
 type ArtifactContent =
-  | { kind: 'session_block', block: Doc<'sessionContentBlocks'>, content: Doc<'sessionContent'> }
+  | { kind: 'session_block', block: Doc<'sessionContentBlocks'>, content: Doc<'sessionContent'>, evidence: SessionEvidence }
   | { kind: 'document' | 'document_chunk', document: Doc<'documents'> }
   | { kind: 'quiz_question', question: Doc<'quizQuestions'> }
-  | { kind: 'section_block', section: Doc<'courseSections'> }
+  | { kind: 'section_block', section: Doc<'courseSections'>, linked: SectionLinks }
   | { kind: 'flashcard_version', version: Doc<'flashcardRoomVersions'>, cards: Doc<'flashcardVersionCards'>[] }
-  | { kind: 'audio_overview', overview: Doc<'audioOverviews'>, episode: Doc<'audioOverviewEpisodes'> | null, media: Doc<'audioOverviewAudioArtifacts'> | null }
+  | { kind: 'audio_overview', overview: Doc<'audioOverviews'>, playback: AudioPlayback | null }
   | { kind: 'learner_artifact', artifact: Doc<'learningThreadArtifacts'> }
   | { kind: 'measurement_item' | 'scoring_spec', item: Doc<'learnMeasurementItems'>, family: Doc<'learnMeasurementFamilies'>, spec: Doc<'learnMeasurementScoringSpecs'> }
 
@@ -115,6 +130,63 @@ function objectIdentity(row: { _id: string, userId: string }) { return { id: row
 function capability(row: Doc<'learnMeasurementItems'> | Doc<'learnMeasurementFamilies'> | Doc<'learnMeasurementScoringSpecs'>) {
   return { learningVoidId: row.learningVoidId, blueprintRevisionId: row.blueprintRevisionId, blueprintRecordRevision: row.blueprintRecordRevision,
     objectiveId: row.objectiveId, assessmentContractVersion: row.assessmentContractVersion, assessmentContractDigest: row.assessmentContractDigest, depth: row.depth }
+}
+
+function questionContent(q: Doc<'quizQuestions'>) {
+  return { ...objectIdentity(q), quizId: q.quizId, order: q.order, question: q.question, type: q.type, options: q.options, correctAnswer: q.correctAnswer,
+    gradingCriteria: q.gradingCriteria, explanation: q.explanation, correctedAnswer: q.correctedAnswer, correctedExplanation: q.correctedExplanation,
+    sourceDocumentId: q.sourceDocumentId, sourceChunkContent: q.sourceChunkContent }
+}
+
+function cardContent(c: Doc<'flashcardVersionCards'> | Doc<'flashcardRoomCards'>) {
+  return { ...objectIdentity(c), roomId: c.roomId, displayOrder: c.displayOrder, term: c.term, definition: c.definition,
+    sourceDocumentId: c.sourceDocumentId, sourceChunkContent: c.sourceChunkContent,
+    source: c.metadata?.source ? { documentId: c.metadata.source.documentId, chunkContent: c.metadata.source.chunkContent } : undefined,
+    ...('correctedDefinition' in c ? { correctedDefinition: c.correctedDefinition } : {}) }
+}
+
+// AudioBlock reads getCourseScopedOverview, including compatibility turns for
+// V2. Its content surface is smaller than the standalone V2 playback player.
+function sectionAudioContent(o: Doc<'audioOverviews'>) {
+  return { ...objectIdentity(o), title: o.title, turns: o.turns, voiceProfile: o.voiceProfile,
+    hostNames: o.hostNames, totalDurationMs: o.totalDurationMs, sourceDocumentIds: o.sourceDocumentIds ?? [] }
+}
+
+// Mirrors loadPlaybackProjection's teaching fields, including its joins and
+// ordering. Share state, provider/model diagnostics and alignment progress are
+// operational; only timing/words visible after alignment completion are content.
+function audioContent(o: Doc<'audioOverviews'>, p: AudioPlayback | null) {
+  if (!p) return { ...objectIdentity(o), folderId: o.folderId, roomId: o.roomId, title: o.title, turns: o.turns,
+    voiceProfile: o.voiceProfile, hostNames: o.hostNames, preferences: o.preferences, totalDurationMs: o.totalDurationMs,
+    sourceDocumentIds: o.sourceDocumentIds, scopeDocIds: o.scopeDocIds, courseScoped: o.courseScoped }
+  const { episode: e, media: m } = p
+  const entryById = new Map(p.entries.map(entry => [String(entry._id), entry]))
+  const claimById = new Map(p.claims.map(claim => [String(claim._id), claim]))
+  const sourceId = (id: Id<'audioOverviewSourceManifestEntries'>) => entryById.get(String(id))?.sourceId
+  const sources = (links: Array<{ manifestEntryId: Id<'audioOverviewSourceManifestEntries'> }>) => links.map(link => sourceId(link.manifestEntryId)).filter((id): id is string => id !== undefined)
+  return { ...objectIdentity(o), episodeId: e._id, schemaVersion: 2, title: e.title,
+    voiceProfile: { hostA: e.hostAVoice, hostB: e.hostBVoice }, hostNames: { hostA: e.hostAName ?? 'Host A', hostB: e.hostBName ?? 'Host B' },
+    preferences: { lengthMinutes: e.requestedLengthMinutes, complexity: e.complexity }, totalDurationMs: m.durationMs,
+    sourceManifest: { revision: p.manifest.revision, contentHash: p.manifest.contentHash, sources: p.entries.map(entry => ({ sourceId: entry.sourceId,
+      documentId: entry.documentId, revision: entry.revision, contentHash: entry.contentHash, displayReference: entry.displayReference })) },
+    outline: { narrativeArc: p.outline.narrativeArc, learningObjectives: p.objectives.map(objective => objective.text), plannedSourceIds: sources(p.outlineSources) },
+    claims: p.claims.filter(claim => claim.status === 'supported').map(claim => ({ claimId: claim.claimId, text: claim.text,
+      sourceIds: sources(p.claimSources.filter(link => link.claimRecordId === claim._id)) })),
+    scenes: p.scenes.map(scene => ({ sceneId: scene._id, order: scene.order, title: scene.title, narrativePurpose: scene.narrativePurpose, durationMs: scene.durationMs ?? scene.targetDurationMs })),
+    utterances: p.utterances.map((u) => {
+      const timings = p.segments.filter(segment => segment.utteranceId === u._id).sort((a, b) => a.wordIndex - b.wordIndex)
+      return { utteranceId: u._id, sceneId: u.sceneId, order: u.order, sceneOrder: u.sceneOrder, speaker: u.speaker, text: u.text,
+        emotionalIntent: u.emotionalIntent, deliveryIntent: u.deliveryIntent, pauseAfterMs: u.pauseAfterMs,
+        sourceIds: sources(p.utteranceSources.filter(link => link.utteranceId === u._id)),
+        claimIds: p.utteranceClaims.filter(link => link.utteranceId === u._id).flatMap((link) => {
+          const claim = claimById.get(String(link.claimRecordId))
+          return claim?.status === 'supported' ? [claim.claimId] : []
+        }),
+        alignmentStartMs: timings[0]?.startMs,
+        wordTimings: timings.length ? timings.map(t => ({ word: t.word, start: t.startMs / 1000, end: t.endMs / 1000 })) : undefined }
+    }),
+    finalArtifact: { artifactId: m._id, storageProvider: m.storageProvider, objectKey: m.objectKey, checksumSha256: m.checksumSha256, byteLength: m.byteLength,
+      contentType: m.contentType, container: m.container, sampleRateHz: m.sampleRateHz, channelCount: m.channelCount, bitsPerSample: m.bitsPerSample, durationMs: m.durationMs } }
 }
 
 // Explicit allowlists: new operational fields never silently enter a content
@@ -129,7 +201,10 @@ export function artifactContentProjection(input: ArtifactContent) {
           content: { ...objectIdentity(c), studySessionId: c.studySessionId, studyPlanRevisionId: c.studyPlanRevisionId, blueprintRevisionId: c.blueprintRevisionId,
             objectiveId: c.objectiveId, revision: c.revision, inputDigest: c.inputDigest, candidateDigest: c.candidateDigest,
             assessmentRubricSnapshot: c.assessmentRubricSnapshot, generatorVersion: c.generatorVersion,
-            assessmentOpportunityId: c.assessmentOpportunityId, assessmentPurpose: c.assessmentPurpose } }
+            assessmentOpportunityId: c.assessmentOpportunityId, assessmentPurpose: c.assessmentPurpose },
+          claims: input.evidence.claims.map(c => ({ ...objectIdentity(c), sessionContentId: c.sessionContentId, order: c.order, claim: c.claim, verifierVersion: c.verifierVersion, confidence: c.confidence })),
+          supports: input.evidence.supports.map(s => ({ ...objectIdentity(s), sessionContentClaimId: s.sessionContentClaimId, sourceSnapshotId: s.sourceSnapshotId,
+            entailment: s.entailment, verifierVersion: s.verifierVersion, confidence: s.confidence, conflictStatus: s.conflictStatus })) }
       }
       case 'document': case 'document_chunk': {
         const d = input.document
@@ -137,35 +212,21 @@ export function artifactContentProjection(input: ArtifactContent) {
           fileSize: d.fileSize, sourceType: d.sourceType, sourceUrl: d.sourceUrl, mimeType: d.mimeType }
       }
       case 'quiz_question': {
-        const q = input.question
-        return { ...objectIdentity(q), quizId: q.quizId, order: q.order, question: q.question, type: q.type, options: q.options, correctAnswer: q.correctAnswer,
-          gradingCriteria: q.gradingCriteria, explanation: q.explanation, correctedAnswer: q.correctedAnswer, correctedExplanation: q.correctedExplanation,
-          sourceDocumentId: q.sourceDocumentId, sourceChunkContent: q.sourceChunkContent }
+        return questionContent(input.question)
       }
       case 'section_block': {
         const s = input.section
-        return { ...objectIdentity(s), courseId: s.courseId, order: s.order, title: s.title, knowledgeType: s.knowledgeType, contentBlocks: s.contentBlocks }
+        return { ...objectIdentity(s), courseId: s.courseId, order: s.order, title: s.title, knowledgeType: s.knowledgeType, contentBlocks: s.contentBlocks,
+          linked: input.linked.map(link => !link ? null : link.kind === 'quiz' ? { kind: link.kind, questions: link.questions.map(questionContent) }
+            : link.kind === 'flashcard' ? { kind: link.kind, cards: link.cards.map(cardContent) } : link) }
       }
       case 'flashcard_version': {
         const v = input.version
-        return { version: { ...objectIdentity(v), roomId: v.roomId, prompt: v.prompt }, cards: input.cards.map(c => ({ ...objectIdentity(c), versionId: c.versionId,
-          roomId: c.roomId, displayOrder: c.displayOrder, term: c.term, definition: c.definition,
-          sourceDocumentId: c.sourceDocumentId, sourceChunkContent: c.sourceChunkContent,
-          source: c.metadata?.source ? { documentId: c.metadata.source.documentId, chunkContent: c.metadata.source.chunkContent } : undefined })) }
+        return { version: { ...objectIdentity(v), roomId: v.roomId, prompt: v.prompt }, cards: [...input.cards].sort((a, b) => a.displayOrder - b.displayOrder)
+          .map(c => ({ ...cardContent(c), versionId: c.versionId })) }
       }
       case 'audio_overview': {
-        const { overview: o, episode: e, media: m } = input
-        return { overview: { ...objectIdentity(o), folderId: o.folderId, roomId: o.roomId, episodeId: o.episodeId, finalArtifactId: o.finalArtifactId,
-          title: o.title, turns: o.turns, voiceProfile: o.voiceProfile, hostNames: o.hostNames, preferences: o.preferences, totalDurationMs: o.totalDurationMs,
-          sourceDocumentIds: o.sourceDocumentIds, scopeDocIds: o.scopeDocIds, courseScoped: o.courseScoped },
-        episode: e ? { ...objectIdentity(e), folderId: e.folderId, roomId: e.roomId, sourceManifestId: e.sourceManifestId, outlineId: e.outlineId, claimLedgerId: e.claimLedgerId,
-          schemaVersion: e.schemaVersion, title: e.title, audioProfileId: e.audioProfileId, audioProfileVersion: e.audioProfileVersion, renderer: e.renderer,
-          hostAVoice: e.hostAVoice, hostBVoice: e.hostBVoice, hostAName: e.hostAName, hostBName: e.hostBName,
-          requestedLengthMinutes: e.requestedLengthMinutes, complexity: e.complexity, finalArtifactId: e.finalArtifactId,
-          alignmentId: e.alignmentId, compatibilityOverviewId: e.compatibilityOverviewId } : null,
-        media: m ? { ...objectIdentity(m), episodeId: m.episodeId, sceneId: m.sceneId, interjectionId: m.interjectionId, kind: m.kind,
-          storageProvider: m.storageProvider, objectKey: m.objectKey, etag: m.etag, checksumSha256: m.checksumSha256, byteLength: m.byteLength,
-          contentType: m.contentType, container: m.container, sampleRateHz: m.sampleRateHz, channelCount: m.channelCount, bitsPerSample: m.bitsPerSample, durationMs: m.durationMs } : null }
+        return audioContent(input.overview, input.playback)
       }
       case 'learner_artifact': {
         const a = input.artifact
@@ -239,6 +300,120 @@ async function pinned(row: Lineage, payload: unknown, revision?: string | number
   if (row.payloadDigest !== digest || row.revision !== (revision === undefined ? `sha256:${digest}` : String(revision))) unavailable()
 }
 
+async function boundedRows<T>(rows: Promise<T[]>, maximum: number) {
+  const result = await rows
+  if (result.length > maximum) unavailable()
+  return result
+}
+
+// These producer-facing readers use the very same budget as graph inspection.
+// They return content only; access/lifecycle admission remains below.
+export async function sessionBlockContentProjection(ctx: ReadCtx, block: Doc<'sessionContentBlocks'>, content: Doc<'sessionContent'>) {
+  ctx = withReadBudget(ctx)
+  const claims = await boundedRows(ctx.db.query('sessionContentClaims').withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', content.userId).eq('sessionContentId', content._id)).take(33), 32)
+  const supports: Doc<'learnClaimSupports'>[] = []
+  for (const claim of claims) {
+    const rows = await boundedRows(ctx.db.query('learnClaimSupports').withIndex('by_userId_and_sessionContentClaimId', q => q.eq('userId', content.userId).eq('sessionContentClaimId', claim._id)).take(9), 8)
+    if (!rows.length || rows.some(row => row.evidenceStatus === 'evidence_unavailable')) unavailable()
+    supports.push(...rows)
+  }
+  return artifactContentProjection({ kind: 'session_block', block, content, evidence: { claims, supports } })
+}
+
+async function liveAudioScope(ctx: ReadCtx, overview: Doc<'audioOverviews'>) {
+  await liveFolder(ctx, overview.userId, overview.folderId)
+  if (overview.roomId) {
+    const room = await ctx.db.get(overview.roomId)
+    if (!room || room.userId !== overview.userId || room.folderId !== overview.folderId) unavailable()
+    if (room.conversationId) {
+      const conversation = await ctx.db.get(room.conversationId)
+      if (!conversation || conversation.userId !== overview.userId || conversation.folderId !== room.folderId || conversation.archivedAt !== undefined) unavailable()
+    }
+  }
+}
+
+async function readAudioMedia(ctx: ReadCtx, overview: Doc<'audioOverviews'>) {
+  if (!overview.episodeId && !overview.finalArtifactId) return null
+  const episode = overview.episodeId ? await ctx.db.get(overview.episodeId) : null
+  const media = overview.finalArtifactId ? await ctx.db.get(overview.finalArtifactId) : null
+  if (!episode || !media || episode.userId !== overview.userId || media.userId !== overview.userId
+    || episode.status !== 'ready' || episode.folderId !== overview.folderId || episode.roomId !== overview.roomId
+    || episode.compatibilityOverviewId !== overview._id || episode.finalArtifactId !== media._id || media.episodeId !== episode._id
+    || media.kind !== 'final' || media.status !== 'published' || media.storageProvider !== 'r2' || media.container !== 'wav') unavailable()
+  return { episode, media }
+}
+
+async function readAudioPlayback(ctx: ReadCtx, overview: Doc<'audioOverviews'>): Promise<AudioPlayback | null> {
+  const current = await readAudioMedia(ctx, overview)
+  if (!current) return null
+  const { episode, media } = current
+  const manifest = await ctx.db.get(episode.sourceManifestId)
+  const outline = await ctx.db.get(episode.outlineId)
+  const ledger = await ctx.db.get(episode.claimLedgerId)
+  if (!manifest || !outline || !ledger || [manifest, outline, ledger].some(row => row.userId !== overview.userId)) unavailable()
+  // Limits and index orders mirror audioOverviewV2.loadPlaybackProjection.
+  const entries = await boundedRows(ctx.db.query('audioOverviewSourceManifestEntries').withIndex('by_manifestId_and_order', q => q.eq('manifestId', manifest._id)).take(51), 50)
+  const objectives = await boundedRows(ctx.db.query('audioOverviewLearningObjectives').withIndex('by_outlineId_and_order', q => q.eq('outlineId', outline._id)).take(13), 12)
+  const outlineSources = await boundedRows(ctx.db.query('audioOverviewOutlineSources').withIndex('by_outlineId_and_order', q => q.eq('outlineId', outline._id)).take(51), 50)
+  const claims = await boundedRows(ctx.db.query('audioOverviewClaims').withIndex('by_ledgerId_and_order', q => q.eq('ledgerId', ledger._id)).take(501), 500)
+  const claimSources = await boundedRows(ctx.db.query('audioOverviewClaimSources').withIndex('by_ledgerId', q => q.eq('ledgerId', ledger._id)).take(6001), 6000)
+  const scenes = await boundedRows(ctx.db.query('audioOverviewScenes').withIndex('by_episodeId_and_order', q => q.eq('episodeId', episode._id)).take(25), 24)
+  const utterances = await boundedRows(ctx.db.query('audioOverviewUtterances').withIndex('by_episodeId_and_order', q => q.eq('episodeId', episode._id)).take(401), 400)
+  const utteranceSources = await boundedRows(ctx.db.query('audioOverviewUtteranceSources').withIndex('by_episodeId', q => q.eq('episodeId', episode._id)).take(4801), 4800)
+  const utteranceClaims = await boundedRows(ctx.db.query('audioOverviewUtteranceClaims').withIndex('by_episodeId', q => q.eq('episodeId', episode._id)).take(8001), 8000)
+  const alignment = episode.alignmentId ? await ctx.db.get(episode.alignmentId) : null
+  const segments = alignment?.status === 'ready'
+    ? await boundedRows(ctx.db.query('audioOverviewAlignmentSegments').withIndex('by_alignmentId_and_utteranceId_and_wordIndex', q => q.eq('alignmentId', alignment._id)).take(10001), 10000) : []
+  if ([...entries, ...objectives, ...outlineSources, ...claims, ...claimSources, ...scenes, ...utterances, ...utteranceSources, ...utteranceClaims, ...segments].some(row => row.userId !== overview.userId)
+    || (alignment && (alignment.userId !== overview.userId || alignment.episodeId !== episode._id || alignment.artifactId !== media._id))) unavailable()
+  return { episode, media, manifest, entries, outline, objectives, outlineSources, claims, claimSources, scenes, utterances, utteranceSources, utteranceClaims, segments }
+}
+
+export async function audioOverviewContentProjection(ctx: ReadCtx, overview: Doc<'audioOverviews'>) {
+  ctx = withReadBudget(ctx)
+  return artifactContentProjection({ kind: 'audio_overview', overview, playback: await readAudioPlayback(ctx, overview) })
+}
+
+export async function sectionContentProjection(ctx: ReadCtx, section: Doc<'courseSections'>) {
+  ctx = withReadBudget(ctx)
+  const linked: SectionLinks = []
+  for (const block of section.contentBlocks) {
+    if (!block.entityId || block.type === 'text') { linked.push(null); continue }
+    if (block.type === 'quiz') {
+      const id = ctx.db.normalizeId('quizzes', block.entityId)
+      if (!id) unavailable()
+      const quiz = await ctx.db.get(id)
+      if (!quiz || quiz.userId !== section.userId || quiz.status !== 'ready' || quiz.deletedAt !== undefined) unavailable()
+      await liveFolder(ctx, section.userId, quiz.folderId)
+      if (quiz.courseId) await liveCourse(ctx, section.userId, quiz.courseId)
+      // Online Quiz reads expose up to 200 questions (offline caches take 50).
+      const questions = await boundedRows(ctx.db.query('quizQuestions').withIndex('by_quizId', q => q.eq('quizId', id)).take(201), 200)
+      if (questions.some(q => q.userId !== section.userId)) unavailable()
+      linked.push({ kind: 'quiz', questions })
+    }
+    else if (block.type === 'flashcard') {
+      const id = ctx.db.normalizeId('flashcardRooms', block.entityId)
+      if (!id) unavailable()
+      const room = await ctx.db.get(id)
+      if (!room || room.userId !== section.userId) unavailable()
+      await liveFolder(ctx, section.userId, room.folderId)
+      const cards = await boundedRows(ctx.db.query('flashcardRoomCards').withIndex('by_roomId', q => q.eq('roomId', id)).take(201), 200)
+      if (cards.some(c => c.userId !== section.userId)) unavailable()
+      linked.push({ kind: 'flashcard', cards })
+    }
+    else {
+      const id = ctx.db.normalizeId('audioOverviews', block.entityId)
+      if (!id) unavailable()
+      const overview = await ctx.db.get(id)
+      if (!overview || overview.userId !== section.userId || overview.status !== 'ready') unavailable()
+      await liveAudioScope(ctx, overview)
+      await readAudioMedia(ctx, overview)
+      linked.push({ kind: 'audio', content: sectionAudioContent(overview) })
+    }
+  }
+  return artifactContentProjection({ kind: 'section_block', section, linked })
+}
+
 async function liveSessionBlock(ctx: ReadCtx, userId: string, row: Lineage, id: Id<'sessionContentBlocks'>) {
   const block = await ctx.db.get(id)
   if (!block || block.userId !== userId) unavailable()
@@ -260,7 +435,7 @@ async function liveSessionBlock(ctx: ReadCtx, userId: string, row: Lineage, id: 
     if (blueprint.recordRevision !== plan.blueprintRecordRevision) unavailable()
   }
   catch { unavailable() }
-  await pinned(row, artifactContentProjection({ kind: 'session_block', block, content }), content.revision)
+  await pinned(row, await sessionBlockContentProjection(ctx, block, content), content.revision)
 }
 
 async function liveDocumentArtifact(ctx: ReadCtx, userId: string, row: Lineage, id: Id<'documents'>) {
@@ -291,7 +466,7 @@ async function liveSectionBlock(ctx: ReadCtx, userId: string, row: Lineage, id: 
   if (!section || section.userId !== userId || !['ready', 'completed'].includes(section.status)) unavailable()
   // courseSections.ts:341 and courses.ts:237 reject a deleting aggregate.
   await liveCourse(ctx, userId, section.courseId)
-  await pinned(row, artifactContentProjection({ kind: 'section_block', section }))
+  await pinned(row, await sectionContentProjection(ctx, section))
 }
 
 async function liveFlashcardVersion(ctx: ReadCtx, userId: string, row: Lineage, id: Id<'flashcardRoomVersions'>) {
@@ -311,25 +486,8 @@ async function liveAudioOverview(ctx: ReadCtx, userId: string, row: Lineage, id:
   const overview = await ctx.db.get(id)
   // loadContributionSource, learnAdaptive.ts:78-82.
   if (!overview || overview.userId !== userId || overview.status !== 'ready') unavailable()
-  await liveFolder(ctx, userId, overview.folderId)
-  if (overview.roomId) {
-    const room = await ctx.db.get(overview.roomId)
-    if (!room || room.userId !== userId || room.folderId !== overview.folderId) unavailable()
-    if (room.conversationId) {
-      const conversation = await ctx.db.get(room.conversationId)
-      if (!conversation || conversation.userId !== userId || conversation.folderId !== room.folderId || conversation.archivedAt !== undefined) unavailable()
-    }
-  }
-  const episode = overview.episodeId ? await ctx.db.get(overview.episodeId) : null
-  const media = overview.finalArtifactId ? await ctx.db.get(overview.finalArtifactId) : null
-  // loadPlaybackProjection/isPublishedFinalArtifact, audioOverviewV2.ts:687-701,932-936.
-  if (overview.episodeId || overview.finalArtifactId) {
-    if (!episode || episode.userId !== userId || episode.status !== 'ready' || episode.folderId !== overview.folderId
-      || episode.roomId !== overview.roomId || episode.compatibilityOverviewId !== overview._id || episode.finalArtifactId !== media?._id
-      || !media || media.userId !== userId || media.episodeId !== episode._id || media.kind !== 'final'
-      || media.status !== 'published' || media.storageProvider !== 'r2' || media.container !== 'wav') unavailable()
-  }
-  await pinned(row, artifactContentProjection({ kind: 'audio_overview', overview, episode, media }))
+  await liveAudioScope(ctx, overview)
+  await pinned(row, await audioOverviewContentProjection(ctx, overview))
 }
 
 async function liveLearnerArtifact(ctx: ReadCtx, userId: string, row: Lineage, id: Id<'learningThreadArtifacts'>) {
@@ -421,6 +579,8 @@ async function findLineage(ctx: ReadCtx, userId: string, reference: LearnArtifac
 
 async function sourceAvailable(ctx: ReadCtx, userId: string, source: Dependency) {
   if (source.kind === 'document') {
+    // inspectGraph has already verified this document's hash and object key
+    // through its sealed manifest commitment, using the same read budget.
     const document = await liveDocument(ctx, userId, source.documentId)
     return document.sourceRevision === source.sourceRevision
   }
@@ -456,9 +616,21 @@ function validationProjection(row: Doc<'learnArtifactValidations'>) {
 }
 
 export async function artifactManifestDigest(
-  row: Lineage, origins: Doc<'learnArtifactLineageOrigins'>[], cases: Doc<'learnArtifactCaseBindings'>[], sources: Doc<'learnArtifactSourceLinks'>[],
+  ctx: ReadCtx, row: Lineage, origins: Doc<'learnArtifactLineageOrigins'>[], cases: Doc<'learnArtifactCaseBindings'>[], sources: Doc<'learnArtifactSourceLinks'>[],
 ) {
+  ctx = withReadBudget(ctx)
   if (origins.length > limits.maxOrigins || cases.length > limits.maxCases || sources.length > limits.maxSources) unavailable()
+  const sourcePins = []
+  for (const link of sources) {
+    const source = link.dependency
+    if (source?.kind !== 'document') { sourcePins.push(source ?? null); continue }
+    // The existing sealed manifest stores the commitment, so no new schema
+    // fields are necessary. Every direct document link captures all three
+    // identity pins at seal time and recomputes them at both admission seams.
+    const document = await liveDocument(ctx, row.userId, source.documentId)
+    if (document.sourceRevision !== source.sourceRevision || !document.contentHash?.trim()) unavailable()
+    sourcePins.push({ ...source, contentHash: document.contentHash, objectKey: document.r2Key ?? null })
+  }
   const canonical = (value: unknown): unknown => {
     if (Array.isArray(value)) return value.map(canonical)
     if (value !== null && typeof value === 'object') return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0).map(([key, child]) => [key, canonical(child)]))
@@ -471,7 +643,7 @@ export async function artifactManifestDigest(
       manifestDigest: origin.originManifestDigest, classification: origin.classification, transformation: origin.transformation }))),
     cases: sorted(cases.map(binding => ({ caseId: binding.caseId, scenarioFingerprint: binding.scenarioFingerprint,
       solutionFingerprint: binding.solutionFingerprint, identityPolicyVersion: binding.identityPolicyVersion }))),
-    sources: sorted(sources.map(link => link.dependency ?? null)) }
+    sources: sorted(sourcePins) }
   learnSerializedBytes(manifest, limits.maxLookupBytes)
   const bytes = new TextEncoder().encode(JSON.stringify(canonical(manifest)))
   return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), value => value.toString(16).padStart(2, '0')).join('')
@@ -521,7 +693,7 @@ async function inspectGraph(ctx: ReadCtx, userId: string, root: Lineage, catalog
       || new Set(origins.map(origin => origin.originLineageId)).size !== origins.length
       || new Set(bindings.map(binding => binding.caseId)).size !== bindings.length) unavailable()
     try {
-      if (await artifactManifestDigest(row, origins, bindings, sources) !== row.manifestDigest) unavailable()
+      if (await artifactManifestDigest(ctx, row, origins, bindings, sources) !== row.manifestDigest) unavailable()
     }
     catch { unavailable() }
     nodes.set(row._id, row)

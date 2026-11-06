@@ -7,7 +7,7 @@ import { api, internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import { internalMutation, type MutationCtx } from './_generated/server'
 import schema from './schema'
-import { ARTIFACT_LINEAGE_READ_BYTES, artifactContentProjection, artifactManifestDigest, artifactPayloadDigest, advanceAssessmentCatalogForOwner, registerInstructionalArtifactForOwner, resolveArtifactLineageForOwner } from './lib/learnV2ArtifactLineage'
+import { ARTIFACT_LINEAGE_READ_BYTES, sessionBlockContentProjection, sectionContentProjection, audioOverviewContentProjection, artifactContentProjection, artifactManifestDigest, artifactPayloadDigest, advanceAssessmentCatalogForOwner, registerInstructionalArtifactForOwner, resolveArtifactLineageForOwner } from './lib/learnV2ArtifactLineage'
 import { artifactRegistrationArgs, artifactRegistrationResultValidator } from './lib/learnV2ArtifactLineageContract'
 import { invalidateMeasurementSourceBatch } from './lib/learnV2MeasurementRetention'
 import { LEARN_ARTIFACT_LINEAGE_VERSION, LEARN_ARTIFACT_LINEAGE_LIMITS, type LearnArtifactReference } from '../shared/learn-v2-artifact-lineage'
@@ -79,7 +79,7 @@ async function prepare(ctx: MutationCtx, options: {
   return { reference, lineageId, caseId, validationId, manifestDigest, classification, documentId, folderId, base, catalogId: catalog._id, catalogRevision: catalog.catalogRevision }
 }
 
-async function sealManifest(ctx: MutationCtx, lineageId: Id<'learnArtifactLineages'>) {
+async function currentManifestDigest(ctx: MutationCtx, lineageId: Id<'learnArtifactLineages'>) {
   const row = await ctx.db.get(lineageId)
   if (!row) throw new Error('Missing lineage')
   const [origins, cases, sources] = await Promise.all([
@@ -87,7 +87,11 @@ async function sealManifest(ctx: MutationCtx, lineageId: Id<'learnArtifactLineag
     ctx.db.query('learnArtifactCaseBindings').withIndex('by_userId_and_lineageId', q => q.eq('userId', owner.tokenIdentifier).eq('lineageId', lineageId)).take(33),
     ctx.db.query('learnArtifactSourceLinks').withIndex('by_userId_and_lineageId', q => q.eq('userId', owner.tokenIdentifier).eq('lineageId', lineageId)).take(65),
   ])
-  const digest = await artifactManifestDigest(row, origins, cases, sources)
+  return artifactManifestDigest(ctx, row, origins, cases, sources)
+}
+
+async function sealManifest(ctx: MutationCtx, lineageId: Id<'learnArtifactLineages'>) {
+  const digest = await currentManifestDigest(ctx, lineageId)
   await ctx.db.patch(lineageId, { manifestDigest: digest })
   return digest
 }
@@ -619,12 +623,12 @@ async function prepareMatrix(ctx: MutationCtx, kind: ArtifactKind, sourceKind: S
     audio_overview: { kind: 'audio_overview', id: overviewId }, learner_artifact: { kind: 'learner_artifact', id: learnerArtifactId }, measurement_item: { kind: 'measurement_item', id: itemId }, scoring_spec: { kind: 'scoring_spec', id: specId },
   } as const satisfies Record<ArtifactKind, LearnArtifactReference['artifact']>
   const artifact = artifactByKind[kind]
-  const payload = kind === 'session_block' ? artifactContentProjection({ kind, block: (await ctx.db.get(blockId))!, content: (await ctx.db.get(contentId))! })
+  const payload = kind === 'session_block' ? await sessionBlockContentProjection(ctx, (await ctx.db.get(blockId))!, (await ctx.db.get(contentId))!)
     : kind === 'flashcard_version' ? artifactContentProjection({ kind, version: (await ctx.db.get(versionId))!, cards: [(await ctx.db.get(cardId))!] })
-      : kind === 'audio_overview' ? artifactContentProjection({ kind, overview: (await ctx.db.get(overviewId))!, episode: null, media: null })
+      : kind === 'audio_overview' ? await audioOverviewContentProjection(ctx, (await ctx.db.get(overviewId))!)
         : kind === 'measurement_item' || kind === 'scoring_spec' ? artifactContentProjection({ kind, item: (await ctx.db.get(itemId))!, family: (await ctx.db.get(familyId))!, spec: (await ctx.db.get(specId))! })
           : kind === 'quiz_question' ? artifactContentProjection({ kind, question: (await ctx.db.get(questionId))! })
-            : kind === 'section_block' ? artifactContentProjection({ kind, section: (await ctx.db.get(sectionId))! })
+            : kind === 'section_block' ? await sectionContentProjection(ctx, (await ctx.db.get(sectionId))!)
               : kind === 'learner_artifact' ? artifactContentProjection({ kind, artifact: (await ctx.db.get(learnerArtifactId))! })
                 : artifactContentProjection({ kind, document: (await ctx.db.get(f.documentId))! })
   const payloadDigest = await artifactPayloadDigest(payload)
@@ -953,7 +957,7 @@ async function prepareV2Audio(ctx: MutationCtx) {
     channelCount: 1, bitsPerSample: 16, durationMs: 10, createdAt: now, publishedAt: now })
   await ctx.db.patch(episodeId, { finalArtifactId: mediaId })
   await ctx.db.patch(f.overviewId, { episodeId, finalArtifactId: mediaId })
-  const payloadDigest = await artifactPayloadDigest(artifactContentProjection({ kind: 'audio_overview', overview: (await ctx.db.get(f.overviewId))!, episode: (await ctx.db.get(episodeId))!, media: (await ctx.db.get(mediaId))! }))
+  const payloadDigest = await artifactPayloadDigest(await audioOverviewContentProjection(ctx, (await ctx.db.get(f.overviewId))!))
   const reference = { ...f.reference, revision: `sha256:${payloadDigest}`, payloadDigest }
   await ctx.db.patch(f.lineageId, reference)
   const manifestDigest = await sealManifest(ctx, f.lineageId)
@@ -1113,7 +1117,7 @@ async function prepareBudgetGraph(t: TestStore, count: 4 | 16, sectionBytes = 0)
       await ctx.db.patch(binding!._id, { scenarioFingerprint, solutionFingerprint })
       if (sectionBytes) {
         await ctx.db.patch(f.sectionId, { contentBlocks: [{ type: 'text', content: 's'.repeat(sectionBytes), order: 0 }] })
-        const payloadDigest = await artifactPayloadDigest(artifactContentProjection({ kind: 'section_block', section: (await ctx.db.get(f.sectionId))! }))
+        const payloadDigest = await artifactPayloadDigest(await sectionContentProjection(ctx, (await ctx.db.get(f.sectionId))!))
         f.reference = { ...f.reference, payloadDigest, revision: `sha256:${payloadDigest}` }
         await ctx.db.patch(f.lineageId, f.reference)
         await ctx.db.patch(f.validationId, { payloadDigest })
@@ -1187,5 +1191,510 @@ describe('A4 graph-wide read budget', () => {
     expect(await t.run(ctx => ctx.db.get(root.catalogId))).toMatchObject({ catalogRevision: 0 })
     expect(await t.run(ctx => ctx.db.get(root.lineageId))).not.toHaveProperty('publication')
     expect(await t.run(ctx => ctx.db.get(root.caseId))).toMatchObject({ usageClass: 'unknown' })
+  })
+})
+
+// A5: compare real consumer payloads independently of the pin implementation.
+// Historical version rows and dormant measurement inventory have no edit API;
+// their content edits are explicitly injected, never described as commands.
+const operationalFields = new Set(['_creationTime', 'createdAt', 'updatedAt', 'publishedAt', 'completedAt', 'flaggedAt', 'flagged',
+  'status', 'evidenceStatus', 'reasonCode', 'catalogRevision', 'filename', 'sourceFilename', 'sourceFilenames', 'indexJobId', 'taskId',
+  'failureReason', 'providerModel', 'providerRequestId', 'model', 'origin', 'cardCount', 'requestedCardCount',
+  'offlineAvailable', 'masteryLevel', 'practiceScore', 'consecutiveReviewPasses', 'reviewHistory', 'shareToken', 'isPublic'])
+function consumerContent(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(consumerContent)
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value)
+    .filter(([key, child]) => !operationalFields.has(key) && child !== undefined).map(([key, child]) => [key, consumerContent(child)]))
+  return value
+}
+function withoutLabels<T extends { title: string }>(record: T) {
+  const { title: _label, ...content } = record
+  return content
+}
+async function currentContent(ctx: MutationCtx, f: MatrixFixture) {
+  switch (f.reference.artifact.kind) {
+    case 'session_block': return sessionBlockContentProjection(ctx, (await ctx.db.get(f.blockId))!, (await ctx.db.get(f.contentId))!)
+    case 'document': case 'document_chunk': return artifactContentProjection({ kind: f.reference.artifact.kind, document: (await ctx.db.get(f.documentId))! })
+    case 'quiz_question': return artifactContentProjection({ kind: 'quiz_question', question: (await ctx.db.get(f.questionId))! })
+    case 'section_block': return sectionContentProjection(ctx, (await ctx.db.get(f.sectionId))!)
+    case 'flashcard_version': return artifactContentProjection({ kind: 'flashcard_version', version: (await ctx.db.get(f.versionId))!,
+      cards: await ctx.db.query('flashcardVersionCards').withIndex('by_versionId', q => q.eq('versionId', f.versionId)).take(201) })
+    case 'audio_overview': return audioOverviewContentProjection(ctx, (await ctx.db.get(f.overviewId))!)
+    case 'learner_artifact': return artifactContentProjection({ kind: 'learner_artifact', artifact: (await ctx.db.get(f.learnerArtifactId))! })
+    case 'measurement_item': case 'scoring_spec': return artifactContentProjection({ kind: f.reference.artifact.kind,
+      item: (await ctx.db.get(f.itemId))!, family: (await ctx.db.get(f.familyId))!, spec: (await ctx.db.get(f.specId))! })
+  }
+}
+async function repinContent<F extends MatrixFixture>(t: TestStore, f: F): Promise<F> {
+  return t.run(async ctx => {
+    const payloadDigest = await artifactPayloadDigest(await currentContent(ctx, f))
+    const reference = { ...f.reference, payloadDigest, revision: f.reference.revision.startsWith('sha256:') ? `sha256:${payloadDigest}` : f.reference.revision }
+    await ctx.db.patch(f.lineageId, reference)
+    const manifestDigest = await sealManifest(ctx, f.lineageId)
+    await ctx.db.patch(f.validationId, { payloadDigest, manifestDigest })
+    return { ...f, reference, manifestDigest }
+  })
+}
+async function readConsumerContent(t: TestStore, f: MatrixFixture) {
+  const asOwner = t.withIdentity(owner)
+  switch (f.reference.artifact.kind) {
+    case 'session_block': {
+      const result = await asOwner.query(api.learnV2SessionContent.getSessionContent, { studySessionId: f.sessionId })
+      expect(result).not.toBeNull()
+      return consumerContent(result)
+    }
+    case 'document': case 'document_chunk': return consumerContent(await t.query(internal.documents.getDocument, { id: f.documentId }))
+    case 'quiz_question': {
+      const result = await asOwner.query(api.quizzes.getWithQuestions, { id: f.quizId })
+      expect(result).not.toBeNull()
+      return consumerContent(result!.questions.find(q => q._id === f.questionId))
+    }
+    case 'section_block': {
+      const section = await asOwner.query(api.courseSections.get, { id: f.sectionId })
+      expect(section).not.toBeNull()
+      expect(await asOwner.query(api.courses.get, { id: f.courseId })).not.toBeNull()
+      const links = []
+      for (const block of section!.contentBlocks) {
+        if (!block.entityId || block.type === 'text') continue
+        if (block.type === 'quiz') {
+          const data = await asOwner.query(api.quizzes.getWithQuestions, { id: block.entityId as Id<'quizzes'> })
+          links.push(data?.questions)
+        }
+        else if (block.type === 'flashcard') {
+          const data = await asOwner.query(api.flashcardRooms.getRoom, { roomId: block.entityId as Id<'flashcardRooms'> })
+          links.push(data?.cards)
+        }
+        else links.push(await asOwner.query(api.audioOverviews.getCourseScopedOverview, { id: block.entityId as Id<'audioOverviews'> }))
+      }
+      return consumerContent({ section, links })
+    }
+    case 'flashcard_version': {
+      const data = await asOwner.query(api.flashcardRooms.getRoomVersion, { versionId: f.versionId })
+      expect(data).not.toBeNull()
+      return consumerContent({ version: withoutLabels(data!.version), cards: data!.cards })
+    }
+    case 'audio_overview': return consumerContent(await asOwner.query(api.audioOverviews.getWithTurns, { id: f.overviewId }))
+    case 'learner_artifact': {
+      const data = await asOwner.query(api.learnAdaptive.listThreadArtifacts, { threadId: f.threadId })
+      const artifact = data.find(a => a.id === f.learnerArtifactId)
+      expect(artifact).toBeDefined()
+      const { historical: _historical, readOnly: _readOnly, evidenceLabel: _evidenceLabel, ...content } = artifact!
+      return consumerContent(content)
+    }
+    case 'measurement_item': case 'scoring_spec':
+      // No measurement/scoring reader is enabled. Inspect the actual C1 stored
+      // union consumed by the future internal reader, without a public facade.
+      return consumerContent(await t.run(async ctx => ({ item: await ctx.db.get(f.itemId), family: await ctx.db.get(f.familyId), spec: await ctx.db.get(f.specId) })))
+  }
+}
+async function expectDifferential(t: TestStore, f: MatrixFixture, apply: () => Promise<unknown>, changes: boolean,
+  read = () => readConsumerContent(t, f)) {
+  const before = await read()
+  const digest = await t.run(async ctx => artifactPayloadDigest(await currentContent(ctx, f)))
+  expect(digest).toBe(f.reference.payloadDigest)
+  const summary = await t.run(ctx => prepare(ctx, { origin: f, transformation: 'summary' }))
+  const rewrite = await t.run(ctx => prepare(ctx, { origin: summary, transformation: 'rewrite' }))
+  for (const target of [f, summary, rewrite]) expect(await t.withIdentity(owner).query(internal.learnV2ArtifactLineage.resolve, { reference: target.reference })).toMatchObject({ status: 'bound' })
+  await apply()
+  const after = await read()
+  const nextDigest = await t.run(async ctx => artifactPayloadDigest(await currentContent(ctx, f)))
+  expect(JSON.stringify(after) !== JSON.stringify(before)).toBe(changes)
+  expect(nextDigest !== digest).toBe(changes)
+  for (const target of [f, summary, rewrite]) expect(await t.withIdentity(owner).query(internal.learnV2ArtifactLineage.resolve, { reference: target.reference })).toMatchObject({ status: changes ? 'unavailable' : 'bound' })
+  if (changes) await expectSourceRevoked(t, rewrite)
+}
+
+const differentialEdits: Revocation[] = [
+  { name: 'document revision (real)', kinds: documentKinds, apply: (t, f) => t.mutation(internal.documents.updateDocumentStatus, { id: f.documentId, status: 'success', sourceRevision: 'source.r2' }) },
+  { name: 'document hash (real)', kinds: documentKinds, apply: (t, f) => t.mutation(internal.documents.updateDocumentStatus, { id: f.documentId, status: 'success', contentHash: 'a'.repeat(64) }) },
+  { name: 'document object (real)', kinds: documentKinds, apply: (t, f) => t.mutation(internal.documents.updateDocumentStatus, { id: f.documentId, status: 'success', r2Key: 'replaced/document' }) },
+  { name: 'question edit (real)', kinds: ['quiz_question'], apply: (t, f) => t.withIdentity(owner).mutation(api.quizzes.updateQuestion, { questionId: f.questionId, question: 'Two plus two?', correctAnswer: 'Four', explanation: 'Addition' }) },
+  { name: 'question correction (real)', kinds: ['quiz_question'], apply: (t, f) => t.withIdentity(owner).mutation(api.contentFlags.flagQuizQuestion, { questionId: f.questionId, correctedAnswer: 'Corrected answer', correctedExplanation: 'Corrected explanation' }) },
+  { name: 'section blocks (real)', kinds: ['section_block'], apply: (t, f) => t.mutation(internal.courseSections.markReady, { sectionId: f.sectionId, contentBlocks: [{ type: 'text', order: 0, content: 'Replacement teaching' }] }) },
+  { name: 'section generation (real)', kinds: ['section_block'], apply: (t, f) => t.withIdentity(owner).mutation(api.courseSections.finalizeSectionGeneration, { sectionId: f.sectionId, textContent: 'New generated section', quizData: { title: 'Embedded Quiz', questions: [{ order: 0, type: 'free-response', question: 'Generated question', correctAnswer: 'Generated answer' }] }, flashcardData: { title: 'Embedded cards', cards: [{ term: 'Generated term', definition: 'Generated definition' }] } }) },
+  { name: 'section title (real)', kinds: ['section_block'], apply: (t, f) => t.withIdentity(owner).mutation(api.courseSections.updateTitle, { sectionId: f.sectionId, title: 'New instructional heading' }) },
+  { name: 'section knowledge type (real)', kinds: ['section_block'], apply: (t, f) => t.withIdentity(owner).mutation(api.courseSections.updateKnowledgeType, { sectionId: f.sectionId, knowledgeType: 'conceptual' }) },
+  { name: 'block edit (injected immutable row)', kinds: ['session_block'], apply: (t, f) => t.run(ctx => ctx.db.patch(f.blockId, { content: 'A different explanation' })) },
+  { name: 'version card edit (injected immutable row)', kinds: ['flashcard_version'], apply: (t, f) => t.run(ctx => ctx.db.patch(f.cardId, { term: 'New term', definition: 'New definition' })) },
+  { name: 'version card addition (injected immutable row)', kinds: ['flashcard_version'], apply: (t, f) => t.run(ctx => ctx.db.insert('flashcardVersionCards', { userId: owner.tokenIdentifier, versionId: f.versionId, roomId: f.flashcardRoomId, displayOrder: 1, term: 'Second', definition: 'Card' })) },
+  { name: 'legacy audio text (injected retired writer)', kinds: ['audio_overview'], apply: (t, f) => t.run(ctx => ctx.db.patch(f.overviewId, { title: 'A different instructional title' })) },
+  { name: 'artifact edit (real)', kinds: ['learner_artifact'], apply: (t, f) => t.withIdentity(owner).mutation(api.learnAdaptive.saveArtifact, { threadId: f.threadId, activityId: 'lineage-artifact-activity', artifactId: f.learnerArtifactId,
+    artifactKind: 'plan', title: 'Revised plan', summary: 'A revised learner plan', status: 'saved', expectedRevision: 1, idempotencyKey: 'lineage-differential-edit' }) },
+  { name: 'item prompt (injected dormant writer)', kinds: measurementKinds, apply: (t, f) => t.run(ctx => ctx.db.patch(f.itemId, { prompt: 'A different held-out prompt' })) },
+  { name: 'scoring solution (injected dormant writer)', kinds: measurementKinds, apply: (t, f) => t.run(ctx => ctx.db.patch(f.specId, { referenceSolution: 'A different private solution' })) },
+  { name: 'scoring payload (injected dormant writer)', kinds: measurementKinds, apply: (t, f) => t.run(ctx => ctx.db.patch(f.specId, { payload: { kind: 'keyed', acceptedSets: [['new answer']], normalizationVersion: 'normalization.v1' } })) },
+  { name: 'family equivalence (injected dormant writer)', kinds: measurementKinds, apply: (t, f) => t.run(async ctx => {
+    const family = (await ctx.db.get(f.familyId))!
+    await ctx.db.patch(f.familyId, { equivalenceDescriptor: { ...family.equivalenceDescriptor, rationale: 'Different equivalence rationale' } })
+  }) },
+]
+
+describe.each(artifactKinds)('A5 consumer differential: %s', (kind) => {
+  beforeEach(() => { vi.stubEnv('LEARN_V2_ENABLED', 'true'); vi.useFakeTimers(); vi.setSystemTime(1_800_000_000_000) })
+  afterEach(() => { vi.unstubAllEnvs() })
+  test.each(differentialEdits.filter(row => row.kinds?.includes(kind)))('$name changes content and pin and denies the chain', async ({ apply }) => {
+    vi.useFakeTimers()
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => prepareMatrix(ctx, kind))
+    await expectDifferential(t, f, () => apply(t, f), true)
+  })
+  test.each(benignUpdates.filter(row => !row.kinds || row.kinds.includes(kind)))('$name preserves consumer content, pin and binding', async ({ apply }) => {
+    vi.useFakeTimers()
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => prepareMatrix(ctx, kind))
+    await expectDifferential(t, f, () => apply(t, f), false)
+  })
+})
+
+async function prepareLinkedSection(t: TestStore, corrected = false) {
+  const f = await t.run(async ctx => {
+    const f = await prepareMatrix(ctx, 'section_block')
+    const activeCardId = await ctx.db.insert('flashcardRoomCards', { userId: owner.tokenIdentifier, roomId: f.flashcardRoomId, displayOrder: 0, term: 'First term', definition: 'First definition' })
+    await ctx.db.patch(f.sectionId, { status: 'completed', contentBlocks: [
+      { type: 'text', content: 'Section teaching', order: 0 }, { type: 'quiz', entityId: f.quizId, entityType: 'quiz', order: 1 },
+      { type: 'flashcard', entityId: f.flashcardRoomId, entityType: 'flashcard', order: 2 }, { type: 'audio', entityId: f.overviewId, entityType: 'audio', order: 3 },
+    ] })
+    return { ...f, activeCardId }
+  })
+  if (corrected) {
+    await t.withIdentity(owner).mutation(api.contentFlags.flagQuizQuestion, { questionId: f.questionId, correctedAnswer: 'Correction' })
+    await t.withIdentity(owner).mutation(api.contentFlags.flagFlashcard, { cardId: f.activeCardId, correctedDefinition: 'Correction' })
+  }
+  return repinContent(t, f)
+}
+type LinkedSection = Awaited<ReturnType<typeof prepareLinkedSection>>
+const linkedSectionChanges: Array<{ name: string, corrected?: boolean, changes: boolean, apply: (t: TestStore, f: LinkedSection) => Promise<unknown> }> = [
+  { name: 'Quiz addition', changes: true, apply: (t, f) => t.withIdentity(owner).mutation(api.quizzes.addQuestion, { quizId: f.quizId, type: 'free-response', questionText: 'New embedded question?', correctAnswer: 'New answer' }) },
+  { name: 'Quiz edit', changes: true, apply: (t, f) => t.withIdentity(owner).mutation(api.quizzes.updateQuestion, { questionId: f.questionId, question: 'Changed question', correctAnswer: 'Changed answer' }) },
+  { name: 'Quiz correction', changes: true, apply: (t, f) => t.withIdentity(owner).mutation(api.contentFlags.flagQuizQuestion, { questionId: f.questionId, correctedAnswer: 'Corrected', correctedExplanation: 'Corrected reasoning' }) },
+  { name: 'Quiz uncorrection', corrected: true, changes: true, apply: (t, f) => t.withIdentity(owner).mutation(api.contentFlags.unflagQuizQuestion, { questionId: f.questionId }) },
+  { name: 'Quiz removal', changes: true, apply: (t, f) => t.withIdentity(owner).mutation(api.quizzes.deleteQuestion, { questionId: f.questionId }) },
+  { name: 'card addition', changes: true, apply: (t, f) => t.withIdentity(owner).mutation(api.flashcardRooms.createCard, { roomId: f.flashcardRoomId, term: 'Second', definition: 'Another card' }) },
+  { name: 'card edit', changes: true, apply: (t, f) => t.withIdentity(owner).mutation(api.flashcardRooms.updateCard, { cardId: f.activeCardId, term: 'Changed term', definition: 'Changed definition' }) },
+  { name: 'card correction', changes: true, apply: (t, f) => t.withIdentity(owner).mutation(api.contentFlags.flagFlashcard, { cardId: f.activeCardId, correctedDefinition: 'Corrected definition' }) },
+  { name: 'card uncorrection', corrected: true, changes: true, apply: (t, f) => t.withIdentity(owner).mutation(api.contentFlags.unflagFlashcard, { cardId: f.activeCardId }) },
+  { name: 'card removal', changes: true, apply: (t, f) => t.withIdentity(owner).mutation(api.flashcardRooms.deleteCard, { cardId: f.activeCardId }) },
+  { name: 'card generation', changes: true, apply: (t, f) => t.withIdentity(owner).mutation(api.flashcardRooms.generateRoomCards, { roomId: f.flashcardRoomId, origin: 'manual', cards: [{ term: 'Generated', definition: 'Generated definition' }] }) },
+  { name: 'version restore', changes: true, apply: async (t, f) => {
+    await t.run(ctx => ctx.db.patch(f.flashcardRoomId, { activeVersionId: undefined }))
+    return t.withIdentity(owner).mutation(api.flashcardRooms.restoreRoomVersion, { roomId: f.flashcardRoomId, versionId: f.versionId })
+  } },
+  { name: 'Quiz rename', changes: false, apply: (t, f) => t.withIdentity(owner).mutation(api.quizzes.updateQuiz, { quizId: f.quizId, title: 'Organizational label' }) },
+  { name: 'room rename', changes: false, apply: (t, f) => t.withIdentity(owner).mutation(api.flashcardRooms.renameRoom, { roomId: f.flashcardRoomId, title: 'Organizational label' }) },
+  { name: 'share publication', changes: false, apply: (t, f) => t.withIdentity(owner).mutation(api.audioOverviews.publishOverview, { id: f.overviewId }) },
+  { name: 'section review', changes: false, apply: (t, f) => t.withIdentity(owner).mutation(api.courseSections.reviewSection, { sectionId: f.sectionId, practiceScore: 80, quizCorrect: 1, quizTotal: 1 }) },
+  { name: 'course pace', changes: false, apply: (t, f) => t.withIdentity(owner).mutation(api.courses.updatePace, { courseId: f.courseId, pace: 'relaxed' }) },
+  { name: 'offline availability', changes: false, apply: (t, f) => t.withIdentity(owner).mutation(api.courseSections.setOfflineAvailable, { sectionId: f.sectionId, offlineAvailable: true }) },
+  { name: 'linked audio content (retired writer injected)', changes: true, apply: (t, f) => t.run(ctx => ctx.db.patch(f.overviewId, { title: 'New audio teaching' })) },
+]
+describe('A5 linked section consumer differential', () => {
+  test.each(linkedSectionChanges)('$name changes the pin iff consumer teaching changes', async ({ corrected, changes, apply }) => {
+    vi.useFakeTimers()
+    const t = convexTest(schema, modules)
+    const f = await prepareLinkedSection(t, corrected)
+    await expectDifferential(t, f, () => apply(t, f), changes)
+  })
+  test('card reorder follows both online display order and offline payload', async () => {
+    const t = convexTest(schema, modules)
+    let f = await prepareLinkedSection(t)
+    const { cardId } = await t.withIdentity(owner).mutation(api.flashcardRooms.createCard, { roomId: f.flashcardRoomId, term: 'Second', definition: 'Another card' })
+    f = await repinContent(t, f)
+    await expectDifferential(t, f, () => t.withIdentity(owner).mutation(api.flashcardRooms.reorderCards, { roomId: f.flashcardRoomId,
+      order: [{ cardId: f.activeCardId, displayOrder: 1 }, { cardId, displayOrder: 0 }] }), true)
+  })
+})
+
+const alignmentCapability = 'c'.repeat(43)
+async function preparePlaybackDifferential(t: TestStore, ready = true) {
+  const f = await t.run(async ctx => {
+    const f = await prepareV2Audio(ctx)
+    const e = (await ctx.db.get(f.episodeId))!
+    const base = { userId: owner.tokenIdentifier, jobId: e.jobId, createdAt: f.base.createdAt }
+    const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(alignmentCapability)))
+    const capabilityHash = btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
+    await ctx.db.patch(e.jobId, { capabilityHash })
+    const entryId = await ctx.db.insert('audioOverviewSourceManifestEntries', { ...base, manifestId: e.sourceManifestId, order: 0,
+      sourceId: 'source-one', documentId: f.documentId, revision: 'source.r1', contentHash: 'f'.repeat(64), objectKey: 'owned/source.r1', displayReference: 'Source One' })
+    const objectiveId = await ctx.db.insert('audioOverviewLearningObjectives', { ...base, outlineId: e.outlineId, order: 0, text: 'Learn one idea' })
+    const outlineSourceId = await ctx.db.insert('audioOverviewOutlineSources', { ...base, outlineId: e.outlineId, order: 0, manifestEntryId: entryId })
+    const claimId = await ctx.db.insert('audioOverviewClaims', { ...base, ledgerId: e.claimLedgerId, order: 0, claimId: 'claim-one', text: 'A supported claim', status: 'supported' })
+    const claimSourceId = await ctx.db.insert('audioOverviewClaimSources', { ...base, ledgerId: e.claimLedgerId, claimRecordId: claimId, manifestEntryId: entryId })
+    const sceneId = await ctx.db.insert('audioOverviewScenes', { episodeId: e._id, jobId: e.jobId, userId: e.userId,
+      order: 0, title: 'Opening', narrativePurpose: 'Introduce the idea', targetDurationMs: 10, status: 'ready', currentAttempt: 1, updatedAt: base.createdAt })
+    const utteranceId = await ctx.db.insert('audioOverviewUtterances', { ...base, episodeId: e._id, sceneId,
+      order: 0, sceneOrder: 0, speaker: 'host_a', text: 'One', emotionalIntent: 'curious', deliveryIntent: 'clear', pauseAfterMs: 1 })
+    const utteranceSourceId = await ctx.db.insert('audioOverviewUtteranceSources', { ...base, episodeId: e._id, utteranceId, manifestEntryId: entryId })
+    const utteranceClaimId = await ctx.db.insert('audioOverviewUtteranceClaims', { ...base, episodeId: e._id, utteranceId, claimRecordId: claimId })
+    const alignmentId = await ctx.db.insert('audioOverviewAlignments', { ...base, episodeId: e._id, artifactId: f.mediaId,
+      status: 'pending', segmentCount: 0, updatedAt: base.createdAt })
+    await ctx.db.patch(e._id, { alignmentId })
+    return { ...f, jobId: e.jobId, sourceManifestId: e.sourceManifestId, outlineId: e.outlineId, claimLedgerId: e.claimLedgerId,
+      entryId, objectiveId, outlineSourceId, claimId, claimSourceId, sceneId, utteranceId, utteranceSourceId, utteranceClaimId, alignmentId }
+  })
+  await t.mutation(api.audioOverviewV2.appendAlignmentSegments, { jobId: f.jobId, capability: alignmentCapability, alignmentId: f.alignmentId,
+    segments: [{ utteranceId: f.utteranceId, wordIndex: 0, word: 'One', startMs: 0, endMs: 4 }] })
+  if (ready) await t.mutation(api.audioOverviewV2.completeAlignment, { jobId: f.jobId, capability: alignmentCapability, alignmentId: f.alignmentId })
+  return repinContent(t, f)
+}
+type PlaybackFixture = Awaited<ReturnType<typeof preparePlaybackDifferential>>
+async function readPlaybackContent(t: TestStore, f: PlaybackFixture) {
+  const playback = await t.withIdentity(owner).query(api.audioOverviewV2.getPlaybackForOwner, { overviewId: f.overviewId })
+  expect(playback).not.toBeNull()
+  // Alignment status/count and publication/model diagnostics are not teaching.
+  const { alignment: _alignment, ...content } = playback!
+  return consumerContent(content)
+}
+const playbackEdits: Array<{ name: string, changes?: boolean, pending?: boolean, apply: (t: TestStore, f: PlaybackFixture) => Promise<unknown> }> = [
+  { name: 'utterance text', apply: (t, f) => t.run(ctx => ctx.db.patch(f.utteranceId, { text: 'Changed spoken teaching' })) },
+  { name: 'utterance speaker', apply: (t, f) => t.run(ctx => ctx.db.patch(f.utteranceId, { speaker: 'host_b' })) },
+  { name: 'utterance delivery', apply: (t, f) => t.run(ctx => ctx.db.patch(f.utteranceId, { emotionalIntent: 'reflective', deliveryIntent: 'slow', pauseAfterMs: 2 })) },
+  { name: 'outline narrative', apply: (t, f) => t.run(ctx => ctx.db.patch(f.outlineId, { narrativeArc: 'Different narrative' })) },
+  { name: 'outline objective', apply: (t, f) => t.run(ctx => ctx.db.patch(f.objectiveId, { text: 'Learn a second idea' })) },
+  { name: 'outline source link', apply: (t, f) => t.run(ctx => ctx.db.delete(f.outlineSourceId)) },
+  { name: 'supported claim text', apply: (t, f) => t.run(ctx => ctx.db.patch(f.claimId, { text: 'Different supported claim' })) },
+  { name: 'supported claim removal', apply: (t, f) => t.run(ctx => ctx.db.patch(f.claimId, { status: 'unsupported' })) },
+  { name: 'claim source link', apply: (t, f) => t.run(ctx => ctx.db.delete(f.claimSourceId)) },
+  { name: 'source manifest revision', apply: (t, f) => t.run(ctx => ctx.db.patch(f.sourceManifestId, { revision: 'manifest.r2' })) },
+  { name: 'source manifest hash', apply: (t, f) => t.run(ctx => ctx.db.patch(f.sourceManifestId, { contentHash: 'b'.repeat(64) })) },
+  { name: 'source entry content', apply: (t, f) => t.run(ctx => ctx.db.patch(f.entryId, { displayReference: 'Revised source reference', revision: 'source.r2', contentHash: 'b'.repeat(64) })) },
+  { name: 'scene teaching', apply: (t, f) => t.run(ctx => ctx.db.patch(f.sceneId, { title: 'Second scene', narrativePurpose: 'Apply the rule', durationMs: 9 })) },
+  { name: 'utterance source link', apply: (t, f) => t.run(ctx => ctx.db.delete(f.utteranceSourceId)) },
+  { name: 'utterance claim link', apply: (t, f) => t.run(ctx => ctx.db.delete(f.utteranceClaimId)) },
+  { name: 'alignment word', apply: (t, f) => t.run(async (ctx: MutationCtx) => {
+    const segment = (await ctx.db.query('audioOverviewAlignmentSegments').withIndex('by_alignmentId_and_utteranceId_and_wordIndex', q => q.eq('alignmentId', f.alignmentId)).first())!
+    await ctx.db.patch(segment._id, { word: 'Changed' })
+  }) },
+  { name: 'alignment timing', apply: (t, f) => t.run(async (ctx: MutationCtx) => {
+    const segment = (await ctx.db.query('audioOverviewAlignmentSegments').withIndex('by_alignmentId_and_utteranceId_and_wordIndex', q => q.eq('alignmentId', f.alignmentId)).first())!
+    await ctx.db.patch(segment._id, { startMs: 1, endMs: 5 })
+  }) },
+  { name: 'final media object', apply: (t, f) => t.run(ctx => ctx.db.patch(f.mediaId, { objectKey: 'audio/replaced.wav' })) },
+  { name: 'final media content', apply: (t, f) => t.run(ctx => ctx.db.patch(f.mediaId, { checksumSha256: 'b'.repeat(64), durationMs: 9 })) },
+  { name: 'episode teaching', apply: (t, f) => t.run(ctx => ctx.db.patch(f.episodeId, { title: 'Different episode heading', hostAName: 'Ada' })) },
+  { name: 'completeAlignment (real)', pending: true, apply: (t, f) => t.mutation(api.audioOverviewV2.completeAlignment, { jobId: f.jobId, capability: alignmentCapability, alignmentId: f.alignmentId }) },
+  { name: 'append and completeAlignment (real)', pending: true, apply: async (t, f) => {
+    await t.mutation(api.audioOverviewV2.appendAlignmentSegments, { jobId: f.jobId, capability: alignmentCapability, alignmentId: f.alignmentId,
+      segments: [{ utteranceId: f.utteranceId, wordIndex: 1, word: 'Two', startMs: 5, endMs: 9 }] })
+    return t.mutation(api.audioOverviewV2.completeAlignment, { jobId: f.jobId, capability: alignmentCapability, alignmentId: f.alignmentId })
+  } },
+  { name: 'pending alignment append (real)', pending: true, changes: false, apply: (t, f) => t.mutation(api.audioOverviewV2.appendAlignmentSegments, { jobId: f.jobId, capability: alignmentCapability, alignmentId: f.alignmentId,
+    segments: [{ utteranceId: f.utteranceId, wordIndex: 1, word: 'Two', startMs: 5, endMs: 9 }] }) },
+  { name: 'pending alignment failure (real)', pending: true, changes: false, apply: (t, f) => t.mutation(api.audioOverviewV2.failAlignment, { jobId: f.jobId, capability: alignmentCapability, alignmentId: f.alignmentId, error: 'Alignment unavailable' }) },
+  { name: 'publishOverview (real)', changes: false, apply: (t, f) => t.withIdentity(owner).mutation(api.audioOverviews.publishOverview, { id: f.overviewId }) },
+  { name: 'publish and unpublish (real)', changes: false, apply: async (t, f) => {
+    await t.withIdentity(owner).mutation(api.audioOverviews.publishOverview, { id: f.overviewId })
+    return t.withIdentity(owner).mutation(api.audioOverviews.unpublishOverview, { id: f.overviewId })
+  } },
+  { name: 'alignment confidence and diagnostics', changes: false, apply: (t, f) => t.run(async (ctx: MutationCtx) => {
+    const segment = (await ctx.db.query('audioOverviewAlignmentSegments').withIndex('by_alignmentId_and_utteranceId_and_wordIndex', q => q.eq('alignmentId', f.alignmentId)).first())!
+    await ctx.db.patch(segment._id, { confidence: 0.5, createdAt: 12 })
+    await ctx.db.patch(f.alignmentId, { aligner: 'another-aligner', alignerVersion: 'v2', updatedAt: 123 })
+  }) },
+  { name: 'episode generation diagnostics', changes: false, apply: (t, f) => t.run(ctx => ctx.db.patch(f.episodeId, { model: 'new-model', renderer: 'new-renderer', sceneCount: 2, utteranceCount: 2, updatedAt: 123 })) },
+  { name: 'planning diagnostics', changes: false, apply: (t, f) => t.run(async ctx => {
+    await ctx.db.patch(f.sourceManifestId, { entryCount: 2, frozenAt: 123 })
+    await ctx.db.patch(f.outlineId, { createdAt: 123, learningObjectiveCount: 2 })
+    await ctx.db.patch(f.claimId, { verificationModel: 'another-model', entailmentReason: 'Reverified', createdAt: 123 })
+    await ctx.db.patch(f.sceneId, { currentAttempt: 2, updatedAt: 123 })
+    await ctx.db.patch(f.mediaId, { etag: 'transport-tag', rendererRequestId: 'request-2', publishedAt: 123 })
+  }) },
+]
+describe('A5 V2 playback consumer differential', () => {
+  test.each(playbackEdits)('$name changes the pin iff playback teaching changes', async ({ pending, changes = true, apply }) => {
+    vi.useFakeTimers()
+    const t = convexTest(schema, modules)
+    const f = await preparePlaybackDifferential(t, !pending)
+    await expectDifferential(t, f, () => apply(t, f), changes, () => readPlaybackContent(t, f))
+  })
+})
+
+describe('A5 direct-document full identity commitment', () => {
+  test.each(artifactKinds.flatMap(kind => ['sourceRevision', 'contentHash', 'r2Key', 'indexJobId', 'filename'].map(field => ({ kind, field }))))('$kind / $field (real)', async ({ kind, field }) => {
+    vi.useFakeTimers()
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => prepareMatrix(ctx, kind, 'document'))
+    const copy = await matrixControl(t, f)
+    const manifest = await t.run(ctx => currentManifestDigest(ctx, f.lineageId))
+    const before = consumerContent(await t.query(internal.documents.getDocument, { id: f.sourceDocumentId! }))
+    const changes = !['indexJobId', 'filename'].includes(field)
+    if (field === 'filename') await t.mutation(internal.documents.updateDocumentFilename, { id: f.sourceDocumentId!, filename: 'renamed.txt' })
+    else await t.mutation(internal.documents.updateDocumentStatus, { id: f.sourceDocumentId!, status: 'success', [field]: field === 'contentHash' ? 'a'.repeat(64) : `replacement-${field}` })
+    const after = consumerContent(await t.query(internal.documents.getDocument, { id: f.sourceDocumentId! }))
+    expect(JSON.stringify(after) !== JSON.stringify(before)).toBe(changes)
+    if (field === 'sourceRevision') await expect(t.run(ctx => currentManifestDigest(ctx, f.lineageId))).rejects.toThrow('Artifact lineage unavailable')
+    else expect(await t.run(ctx => currentManifestDigest(ctx, f.lineageId)) !== manifest).toBe(changes)
+    for (const target of [f, copy]) expect(await t.withIdentity(owner).query(internal.learnV2ArtifactLineage.resolve, { reference: target.reference })).toMatchObject({ status: changes ? 'unavailable' : 'bound' })
+    if (changes) await expectMatrixRevoked(t, f, copy)
+  })
+})
+
+describe('A5 session claim and support consumer differential', () => {
+  beforeEach(() => { vi.stubEnv('LEARN_V2_ENABLED', 'true') })
+  afterEach(() => { vi.unstubAllEnvs() })
+  test.each(['claim text', 'claim addition', 'claim removal', 'support verification', 'support source'] as const)('%s (injected immutable content)', async field => {
+    const t = convexTest(schema, modules)
+    const seeded = await t.run(async ctx => {
+      const f = await prepareMatrix(ctx, 'session_block')
+      const claimId = await ctx.db.insert('sessionContentClaims', { userId: owner.tokenIdentifier, sessionContentId: f.contentId, order: 0, claim: 'A supported instructional claim' })
+      const supportId = await ctx.db.insert('learnClaimSupports', { userId: owner.tokenIdentifier, sessionContentClaimId: claimId,
+        sourceExcerptId: f.excerptId, sourceSnapshotId: f.snapshotId, entailment: 'entailed', conflictStatus: 'clear', evidenceStatus: 'evidence_available', verifierVersion: 'verifier.v1' })
+      return { ...f, claimId, supportId }
+    })
+    const f = await repinContent(t, seeded)
+    await expectDifferential(t, f, () => t.run(async ctx => {
+      if (field === 'claim text') await ctx.db.patch(f.claimId, { claim: 'Revised instructional claim' })
+      if (field === 'claim addition') {
+        const claimId = await ctx.db.insert('sessionContentClaims', { userId: owner.tokenIdentifier, sessionContentId: f.contentId, order: 1, claim: 'Another claim' })
+        await ctx.db.insert('learnClaimSupports', { userId: owner.tokenIdentifier, sessionContentClaimId: claimId,
+          sourceExcerptId: f.excerptId, sourceSnapshotId: f.snapshotId, entailment: 'entailed', conflictStatus: 'clear' })
+      }
+      if (field === 'claim removal') { await ctx.db.delete(f.claimId); await ctx.db.delete(f.supportId) }
+      if (field === 'support verification') await ctx.db.patch(f.supportId, { verifierVersion: 'verifier.v2', confidence: 0.5 })
+      if (field === 'support source') await ctx.db.patch(f.supportId, { sourceSnapshotId: undefined })
+    }), true)
+  })
+})
+
+describe('A5 historical flashcard version consumer differential', () => {
+  test.each(['createCard', 'updateCard', 'deleteCard', 'reorderCards', 'generateRoomCards', 'restoreRoomVersion'] as const)('%s (real) leaves the historical payload bound', async command => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => prepareMatrix(ctx, 'flashcard_version'))
+    const asOwner = t.withIdentity(owner)
+    const { cardId } = await asOwner.mutation(api.flashcardRooms.createCard, { roomId: f.flashcardRoomId, term: 'Active term', definition: 'Active definition' })
+    await expectDifferential(t, f, async () => {
+      if (command === 'createCard') return asOwner.mutation(api.flashcardRooms.createCard, { roomId: f.flashcardRoomId, term: 'Another', definition: 'Another definition' })
+      if (command === 'updateCard') return asOwner.mutation(api.flashcardRooms.updateCard, { cardId, term: 'Edited', definition: 'Edited definition' })
+      if (command === 'deleteCard') return asOwner.mutation(api.flashcardRooms.deleteCard, { cardId })
+      if (command === 'reorderCards') return asOwner.mutation(api.flashcardRooms.reorderCards, { roomId: f.flashcardRoomId, order: [{ cardId, displayOrder: 0 }] })
+      if (command === 'generateRoomCards') return asOwner.mutation(api.flashcardRooms.generateRoomCards, { roomId: f.flashcardRoomId, origin: 'manual', cards: [{ term: 'Generated', definition: 'New version' }] })
+      return asOwner.mutation(api.flashcardRooms.restoreRoomVersion, { roomId: f.flashcardRoomId, versionId: f.versionId })
+    }, false)
+  })
+})
+
+describe('A5 linked-content read budget', () => {
+  test('oversized embedded Quiz reads fail closed before exhausting 4 MiB', async () => {
+    const t = convexTest(schema, modules)
+    const f = await prepareLinkedSection(t)
+    for (let i = 0; i < 5; i++) await t.withIdentity(owner).mutation(api.quizzes.addQuestion, { quizId: f.quizId,
+      type: 'free-response', questionText: `${i}${'x'.repeat(850_000)}`, correctAnswer: 'Answer' })
+    for (const mode of ['resolve', 'register'] as const) {
+      const result = await tracedLookup(t, f, mode)
+      expect(result.status).toBe('unavailable')
+      expect(result.charged).toBeLessThanOrEqual(ARTIFACT_LINEAGE_READ_BYTES)
+      expect(result.bytes).toBeGreaterThan(2_500_000)
+    }
+    expect(await t.run(ctx => ctx.db.get(f.catalogId))).toMatchObject({ catalogRevision: 0 })
+  })
+  test('V2 playback parents and linked rows share the graph budget', async () => {
+    const t = convexTest(schema, modules)
+    const f = await preparePlaybackDifferential(t)
+    await t.run(async ctx => {
+      await ctx.db.patch(f.episodeId, { renderer: 'x'.repeat(850_000) })
+      await ctx.db.patch(f.mediaId, { rendererRequestId: 'x'.repeat(850_000) })
+      await ctx.db.patch(f.sourceManifestId, { planFingerprint: 'x'.repeat(850_000) })
+      await ctx.db.patch(f.outlineId, { narrativeArc: 'x'.repeat(850_000) })
+    })
+    for (const mode of ['resolve', 'register'] as const) {
+      const result = await tracedLookup(t, f, mode)
+      expect(result.status).toBe('unavailable')
+      expect(result.charged).toBeLessThanOrEqual(ARTIFACT_LINEAGE_READ_BYTES)
+      expect(result.bytes).toBeGreaterThan(2_500_000)
+    }
+    expect(await t.run(ctx => ctx.db.get(f.catalogId))).toMatchObject({ catalogRevision: 0 })
+  })
+})
+
+describe('A5 consumer payload equivalence and read limits', () => {
+  test('V2 pin equals the owner playback teaching payload with its ownership identity', async () => {
+    const t = convexTest(schema, modules)
+    const f = await preparePlaybackDifferential(t)
+    const playback = (await t.withIdentity(owner).query(api.audioOverviewV2.getPlaybackForOwner, { overviewId: f.overviewId }))!
+    const { overviewId, model: _model, publishedAt: _publishedAt, alignment: _alignment, ...teaching } = playback
+    const projection = await t.run(async ctx => audioOverviewContentProjection(ctx, (await ctx.db.get(f.overviewId))!))
+    expect(projection.payload).toEqual({ id: overviewId, userId: owner.tokenIdentifier, ...teaching })
+  })
+  test('real Quiz addition changes offline teaching, including at the 50-question cache boundary', async () => {
+    const t = convexTest(schema, modules)
+    let f = await prepareLinkedSection(t)
+    const asOwner = t.withIdentity(owner)
+    const before = await asOwner.query(api.courseSections.getOfflineCachePayload, { sectionId: f.sectionId })
+    await asOwner.mutation(api.quizzes.addQuestion, { quizId: f.quizId, type: 'free-response', questionText: 'Second question', correctAnswer: 'Second answer' })
+    const after = await asOwner.query(api.courseSections.getOfflineCachePayload, { sectionId: f.sectionId })
+    expect(after).not.toEqual(before)
+    expect(after!.contentBlocks.find(b => b.type === 'quiz')!.quizData!.questions).toHaveLength(2)
+    for (let i = 2; i < 50; i++) await asOwner.mutation(api.quizzes.addQuestion, { quizId: f.quizId, type: 'free-response', questionText: `Question ${i}`, correctAnswer: `Answer ${i}` })
+    f = await repinContent(t, f)
+    const fullCache = await asOwner.query(api.courseSections.getOfflineCachePayload, { sectionId: f.sectionId })
+    await expectDifferential(t, f, () => asOwner.mutation(api.quizzes.addQuestion, { quizId: f.quizId, type: 'free-response', questionText: 'Online question 51', correctAnswer: 'Online answer 51' }), true)
+    expect(await asOwner.query(api.courseSections.getOfflineCachePayload, { sectionId: f.sectionId })).toEqual(fullCache)
+  })
+  test.each(['Quiz', 'flashcard room'] as const)('%s child overflow stays unavailable', async aggregate => {
+    const t = convexTest(schema, modules)
+    const f = await prepareLinkedSection(t)
+    await t.run(async ctx => {
+      for (let i = 1; i < 201; i++) {
+        if (aggregate === 'Quiz') await ctx.db.insert('quizQuestions', { userId: owner.tokenIdentifier, quizId: f.quizId, order: i, type: 'free-response', question: `Question ${i}`, correctAnswer: 'Answer' })
+        else await ctx.db.insert('flashcardRoomCards', { userId: owner.tokenIdentifier, roomId: f.flashcardRoomId, displayOrder: i, term: `Term ${i}`, definition: 'Definition' })
+      }
+    })
+    const copy = await t.run(ctx => prepare(ctx, { origin: f, transformation: 'rewrite' }))
+    await expectMatrixRevoked(t, f, copy)
+  })
+})
+
+describe('A5 section audio consumer boundary', () => {
+  test('V2 alignment changes standalone playback while the section compatibility payload stays bound', async () => {
+    const t = convexTest(schema, modules)
+    const audio = await preparePlaybackDifferential(t, false)
+    await t.run(async ctx => {
+      const fingerprints = { scenarioFingerprint: 'd'.repeat(64), solutionFingerprint: 'e'.repeat(64) }
+      await ctx.db.patch(audio.caseId, fingerprints)
+      const binding = (await ctx.db.query('learnArtifactCaseBindings').withIndex('by_userId_and_lineageId', q => q.eq('userId', owner.tokenIdentifier).eq('lineageId', audio.lineageId)).unique())!
+      await ctx.db.patch(binding._id, fingerprints)
+      await ctx.db.patch(audio.validationId, { manifestDigest: await sealManifest(ctx, audio.lineageId) })
+    })
+    let section = await prepareLinkedSection(t)
+    await t.run(async ctx => {
+      const row = (await ctx.db.get(section.sectionId))!
+      await ctx.db.patch(row._id, { contentBlocks: row.contentBlocks.map(block => block.type === 'audio' ? { ...block, entityId: audio.overviewId } : block) })
+    })
+    section = await repinContent(t, section)
+    const before = await t.withIdentity(owner).query(api.courseSections.getOfflineCachePayload, { sectionId: section.sectionId })
+    await expectDifferential(t, section, () => t.mutation(api.audioOverviewV2.completeAlignment, { jobId: audio.jobId, capability: alignmentCapability, alignmentId: audio.alignmentId }), false)
+    expect(await t.withIdentity(owner).query(api.courseSections.getOfflineCachePayload, { sectionId: section.sectionId })).toEqual(before)
+    expect(await t.withIdentity(owner).query(internal.learnV2ArtifactLineage.resolve, { reference: audio.reference })).toMatchObject({ status: 'unavailable' })
+  })
+})
+
+describe.each(['quiz_question', 'section_block'] as const)('A5 %s Quiz operational commands', kind => {
+  test.each(['startAttempt', 'completeAttempt', 'abandonAttempt', 'submitAllAnswers', 'submitAttempt'] as const)('%s preserves teaching and binding', async command => {
+    vi.useFakeTimers()
+    const t = convexTest(schema, modules)
+    const f = kind === 'section_block' ? await prepareLinkedSection(t) : await t.run(ctx => prepareMatrix(ctx, kind))
+    const asOwner = t.withIdentity(owner)
+    await expectDifferential(t, f, async () => {
+      if (command === 'submitAttempt') return asOwner.mutation(api.quizzes.submitAttempt, { quizId: f.quizId, answers: [{ questionId: f.questionId, response: 'Two' }] })
+      const started = await asOwner.mutation(api.quizzes.startAttempt, { quizId: f.quizId, settings: { shuffleQuestions: false, showAllQuestions: true, immediateFeedback: true } })
+      if (command === 'startAttempt') return started
+      if (command === 'completeAttempt') return asOwner.mutation(api.quizzes.completeAttempt, { attemptId: started.attemptId })
+      if (command === 'abandonAttempt') return asOwner.mutation(api.quizzes.abandonAttempt, { attemptId: started.attemptId })
+      return asOwner.mutation(api.quizzes.submitAllAnswers, { attemptId: started.attemptId, answers: [{ questionId: f.questionId, userAnswer: 'Two' }] })
+    }, false)
+  })
+})
+
+describe('A5 linked aggregate revocation', () => {
+  test.each(['Quiz tombstone', 'card room deletion', 'Audio Overview deletion', 'audio room deletion', 'audio conversation archive (injected marker)'] as const)('%s denies the section before scheduled cleanup', async change => {
+    vi.useFakeTimers()
+    const t = convexTest(schema, modules)
+    const f = await prepareLinkedSection(t)
+    const copy = await matrixControl(t, f)
+    if (change === 'Quiz tombstone') await t.withIdentity(owner).mutation(api.quizzes.deleteQuiz, { quizId: f.quizId })
+    if (change === 'card room deletion') await t.withIdentity(owner).mutation(api.flashcardRooms.deleteRoom, { roomId: f.flashcardRoomId })
+    if (change === 'Audio Overview deletion') await t.withIdentity(owner).mutation(api.audioOverviews.deleteOverview, { id: f.overviewId })
+    if (change === 'audio room deletion') await t.run(ctx => ctx.db.delete(f.audioRoomId))
+    if (change === 'audio conversation archive (injected marker)') await t.run(ctx => ctx.db.patch(f.conversationId, { archivedAt: 0 }))
+    await expectMatrixRevoked(t, f, copy)
   })
 })
