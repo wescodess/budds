@@ -14,7 +14,7 @@ import {
 } from '../shared/learn-v2-measurement-report'
 import type { z } from 'zod'
 import { seedMeasurementStorage } from '../tests/fixtures/learn-v2-measurement-storage'
-import { partialMeasurementReportCell, measurementReportIdentityFixture } from '../tests/fixtures/learn-v2-measurement-report'
+import { partialMeasurementReportCell, measurementReportIdentityFixture, measurementReportNonAdmittedFixture } from '../tests/fixtures/learn-v2-measurement-report'
 
 const modules = import.meta.glob('./**/*.ts')
 
@@ -25,6 +25,37 @@ test('stored, public and exported cells have exactly the same frozen fields', ()
   expectTypeOf<Doc<'learnMeasurementReportRows'>['snapshot']>().toEqualTypeOf<z.infer<typeof learnReportInputSnapshotSchema>>()
   expectTypeOf<Infer<typeof learnReportAssignmentSnapshotValidator>>().toEqualTypeOf<z.infer<typeof learnReportAssignmentSnapshotSchema>>()
   expectTypeOf<Infer<typeof learnReportResultSnapshotValidator>>().toEqualTypeOf<z.infer<typeof learnReportResultSnapshotSchema>>()
+})
+
+test('requires and round-trips assignment admission fields in report rows and enrollment facts', async () => {
+  const t = convexTest(schema, modules)
+  const f = await t.run(ctx => seedMeasurementStorage(ctx, 'https://contract.example|owner'))
+  const row = await t.run(ctx => ctx.db.get(f.rows.learnMeasurementReportRows))
+  const fact = await t.run(ctx => ctx.db.get(f.rows.learnMeasurementReportFacts))
+  if (!row || row.snapshot.kind !== 'episode' || !fact || fact.fact.kind !== 'enrollment') throw new Error('Missing report fixture')
+  const episodeSnapshot = row.snapshot
+  const enrollmentFact = fact.fact
+  expect(episodeSnapshot.assignment.status).toBe('admitted')
+  expect(episodeSnapshot.assignment.protocolStatus).toBe('frozen')
+  for (const field of ['status', 'protocolStatus'] as const) {
+    for (const value of [undefined, 'unknown']) {
+      const assignment = { ...episodeSnapshot.assignment }
+      Reflect.set(assignment, field, value)
+      if (value === undefined) Reflect.deleteProperty(assignment, field)
+      await expect(t.run(ctx => ctx.db.patch(row._id, { snapshot: { ...episodeSnapshot, assignment } }))).rejects.toThrow()
+      await expect(t.run(ctx => ctx.db.patch(fact._id, { fact: { ...enrollmentFact, snapshot: assignment } }))).rejects.toThrow()
+    }
+  }
+  for (const status of ['considered', 'not_admitted'] as const) for (const protocolStatus of ['protocol_not_frozen', 'blocked'] as const) {
+    const { episode } = await measurementReportNonAdmittedFixture(status, protocolStatus)
+    const snapshot = learnReportInputSnapshotSchema.parse({ ...episodeSnapshot, ...episode, assignmentId: episodeSnapshot.assignmentId,
+      learningVoidId: episodeSnapshot.learningVoidId, blueprintRevisionId: episodeSnapshot.blueprintRevisionId, objectiveId: episodeSnapshot.objectiveId })
+    await t.run(ctx => ctx.db.patch(row._id, { snapshot }))
+    await t.run(ctx => ctx.db.patch(fact._id, { fact: { ...enrollmentFact, status, snapshot: episode.assignment } }))
+    expect((await t.run(ctx => ctx.db.get(row._id)))?.snapshot).toEqual(snapshot)
+    const savedFact = await t.run(ctx => ctx.db.get(fact._id))
+    expect(savedFact?.fact).toEqual({ ...enrollmentFact, status, snapshot: episode.assignment })
+  }
 })
 
 test('round-trips null and linked replacement clocks through the Convex snapshot validator', async () => {

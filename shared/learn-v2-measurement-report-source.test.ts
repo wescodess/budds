@@ -2,10 +2,10 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION, LEARN_V2_MEASUREMENT_REPORT_VERSION, LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION,
   deriveLearnReportComputationKeys, deriveLearnReportLearnerKey, learnReportAssignmentSnapshotSchema,
-  learnReportEpisodeSnapshotSchema, learnReportFirstClaimSnapshotSchema, learnReportMetricSchema, learnReportOpaqueKeySchema, learnReportProvenanceSchema,
+  learnReportEpisodeSnapshotSchema, learnReportFactPayloadSchema, learnReportFirstClaimSnapshotSchema, learnReportMetricSchema, learnReportOpaqueKeySchema, learnReportProvenanceSchema,
   reconcileLearnReportSourceRows, validateLearnReportSourcePage, validateLearnMeasurementReportCells,
 } from './learn-v2-measurement-report'
-import { emptyMeasurementReportCell, measurementReportBasisFixture, measurementReportIdentityFixture, measurementReportSourceFixture } from '../tests/fixtures/learn-v2-measurement-report'
+import { emptyMeasurementReportCell, measurementReportBasisFixture, measurementReportIdentityFixture, measurementReportNonAdmittedFixture, measurementReportSourceFixture } from '../tests/fixtures/learn-v2-measurement-report'
 
 describe('report source v3 computation contract', () => {
   it('changes only the source version and rejects prior envelopes', async () => {
@@ -68,9 +68,133 @@ describe('report source v3 computation contract', () => {
     expect(learnReportAssignmentSnapshotSchema.safeParse({ ...episode.assignment, responseKind: null, scorerConfiguration: null }).success).toBe(false)
     expect(learnReportAssignmentSnapshotSchema.safeParse({ ...episode.assignment, responseKind: null }).success).toBe(false)
     expect(learnReportAssignmentSnapshotSchema.safeParse({ ...episode.assignment, scorerConfiguration: null }).success).toBe(false)
-    const unfrozen = { ...episode, assignment: { ...episode.assignment, protocolVersion: null, responseKind: null, scorerConfiguration: null }, replacementPolicy: null }
+    const { episode: unfrozen } = await measurementReportNonAdmittedFixture('considered', 'protocol_not_frozen')
     expect(learnReportEpisodeSnapshotSchema.parse(unfrozen).assignment.scorerConfiguration).toBeNull()
     expect(episode.assignment).not.toHaveProperty('startingBand')
+  })
+
+  it.each(['status', 'protocolStatus'] as const)('requires the closed assignment %s', async field => {
+    const { episode } = await measurementReportSourceFixture()
+    const { episode: candidate } = await measurementReportNonAdmittedFixture('considered', 'protocol_not_frozen')
+    for (const source of [episode, candidate]) {
+      const assignment = { ...source.assignment }
+      Reflect.deleteProperty(assignment, field)
+      expect(learnReportAssignmentSnapshotSchema.safeParse(assignment).success).toBe(false)
+      expect(learnReportAssignmentSnapshotSchema.safeParse({ ...source.assignment, [field]: 'unknown' }).success).toBe(false)
+    }
+  })
+
+  it.each(['considered', 'not_admitted', 'admitted'] as const)('matches storage protocol statuses exactly for %s', async status => {
+    const { episode } = status === 'admitted' ? await measurementReportSourceFixture()
+      : await measurementReportNonAdmittedFixture(status, 'protocol_not_frozen')
+    for (const protocolStatus of ['protocol_not_frozen', 'blocked', 'frozen']) {
+      expect(learnReportAssignmentSnapshotSchema.safeParse({ ...episode.assignment, protocolStatus }).success)
+        .toBe((status === 'admitted') === (protocolStatus === 'frozen'))
+    }
+  })
+
+  it.each(['protocolVersion', 'enrollmentAt', 'timezone', 'anchorKind', 'allocationOrder', 'responseKind', 'scorerConfiguration', 'familyId', 'familyRevision'] as const)(
+    'requires the admitted storage pin %s', async field => {
+      const { episode } = await measurementReportSourceFixture()
+      expect(learnReportAssignmentSnapshotSchema.safeParse(episode.assignment).success).toBe(true)
+      const parsed = learnReportAssignmentSnapshotSchema.safeParse({ ...episode.assignment, [field]: null })
+      expect(parsed.success).toBe(false)
+      if (!parsed.success) expect(parsed.error.issues).toContainEqual({ code: 'custom', path: [], message: 'Assignment pins must match storage admission state' })
+    },
+  )
+
+  it.each(['protocolVersion', 'enrollmentAt', 'timezone', 'anchorKind', 'allocationOrder', 'responseKind', 'scorerConfiguration', 'anchorAt', 'assignedDay7', 'assignedDay30'] as const)(
+    'forbids the non-admitted storage pin %s', async field => {
+      const { episode: admitted } = await measurementReportSourceFixture()
+      const { episode } = await measurementReportNonAdmittedFixture('not_admitted', 'blocked')
+      // Response/scorer pairing remains consistent, isolating the admission rule.
+      const pins = field === 'responseKind' || field === 'scorerConfiguration'
+        ? { responseKind: admitted.assignment.responseKind, scorerConfiguration: admitted.assignment.scorerConfiguration }
+        : { [field]: admitted.assignment[field] }
+      expect(learnReportAssignmentSnapshotSchema.safeParse({ ...episode.assignment, ...pins }).success).toBe(false)
+    },
+  )
+
+  it('preserves optional candidate families and admitted enrollments whose anchor has not started', async () => {
+    const { episode: candidate } = await measurementReportNonAdmittedFixture('considered', 'blocked')
+    const { episode } = await measurementReportSourceFixture()
+    expect(learnReportAssignmentSnapshotSchema.parse({ ...candidate.assignment,
+      familyId: episode.assignment.familyId, familyRevision: episode.assignment.familyRevision }).status).toBe('considered')
+    expect(learnReportEpisodeSnapshotSchema.parse({ ...episode, clock: null, coldOpportunityId: null, originalOpportunityId: null,
+      coldAcceptance: null, delayedAcceptance: null, assignment: { ...episode.assignment, anchorAt: null } }).assignment.status).toBe('admitted')
+  })
+
+  it.each(['ABC', 'AB', 'BA'] as const)('matches assigned horizons to the %s allocation', async allocationOrder => {
+    const { episode } = await measurementReportSourceFixture()
+    for (const assignedDay7 of [false, true]) for (const assignedDay30 of [false, true]) {
+      expect(learnReportAssignmentSnapshotSchema.safeParse({ ...episode.assignment, allocationOrder, assignedDay7, assignedDay30 }).success)
+        .toBe(allocationOrder === 'ABC' ? assignedDay7 && assignedDay30 : assignedDay7 !== assignedDay30)
+    }
+  })
+
+  it.each([7, 30] as const)('requires an admitted day-%s episode to have that horizon assigned', async horizon => {
+    const source = await measurementReportIdentityFixture()
+    const episode = horizon === 7 ? source.episode : source.day30
+    const assignment = { ...episode.assignment, allocationOrder: 'AB', assignedDay7: horizon === 30, assignedDay30: horizon === 7 }
+    expect(learnReportAssignmentSnapshotSchema.safeParse(assignment).success).toBe(true)
+    const parsed = learnReportEpisodeSnapshotSchema.safeParse({ ...episode, assignment })
+    expect(parsed.success).toBe(false)
+    if (!parsed.success) expect(parsed.error.issues).toEqual([{ code: 'custom', path: [], message: 'Episode horizon must be assigned' }])
+    expect(learnReportEpisodeSnapshotSchema.parse({ ...episode,
+      assignment: { ...assignment, assignedDay7: horizon === 7, assignedDay30: horizon === 30 } }).horizonDays).toBe(horizon)
+  })
+
+  it('distinguishes complete considered and blocked not-admitted inventory assignments', async () => {
+    const { episode: considered, watermark } = await measurementReportNonAdmittedFixture('considered', 'protocol_not_frozen')
+    const { episode: blocked } = await measurementReportNonAdmittedFixture('not_admitted', 'blocked')
+    const notAdmitted = learnReportEpisodeSnapshotSchema.parse({ ...blocked, assignmentId: 'blockedAssignment' })
+    expect([considered, notAdmitted].map(row => [row.assignment.status, row.assignment.protocolStatus, row.horizonDays,
+      row.assignment.assignedDay7, row.assignment.assignedDay30])).toEqual([
+      ['considered', 'protocol_not_frozen', 7, false, false], ['not_admitted', 'blocked', 7, false, false],
+    ])
+    for (const rows of [[considered], [notAdmitted], [considered, notAdmitted], [notAdmitted, considered]]) {
+      expect(reconcileLearnReportSourceRows([watermark.learnerKey], [watermark, ...rows])).toEqual({ status: 'complete', reasonCodes: [] })
+    }
+    expect(reconcileLearnReportSourceRows([watermark.learnerKey], [watermark, considered, considered])).toEqual({
+      status: 'incomplete', reasonCodes: ['duplicate_source_row'],
+    })
+    expect(learnReportEpisodeSnapshotSchema.safeParse({ ...considered, horizonDays: 30 }).success).toBe(false)
+  })
+
+  it.each(['status', 'protocolStatus'] as const)('reconciles conflicting non-admitted %s across all rows of one assignment', async field => {
+    const { episode, watermark } = await measurementReportNonAdmittedFixture('considered', 'protocol_not_frozen')
+    const conflict = learnReportEpisodeSnapshotSchema.parse({ ...episode,
+      assignment: { ...episode.assignment, [field]: field === 'status' ? 'not_admitted' : 'blocked' } })
+    for (const rows of [[episode, conflict], [conflict, episode]]) {
+      expect(reconcileLearnReportSourceRows([watermark.learnerKey], [watermark, ...rows])).toEqual({
+        status: 'incomplete', reasonCodes: ['conflicting_assignment_snapshot', 'conflicting_source_row'],
+      })
+    }
+  })
+
+  it.each(['clock', 'cold', 'delayed', 'replacement'] as const)('forbids non-admitted %s slots and outcomes', async endpoint => {
+    const { episode, cold, delayed } = await measurementReportSourceFixture()
+    const { episode: inventory } = await measurementReportNonAdmittedFixture('not_admitted', 'blocked')
+    const slots = {
+      clock: { clock: episode.clock },
+      cold: { coldOpportunityId: episode.coldOpportunityId, coldAcceptance: episode.coldAcceptance, cold },
+      delayed: { originalOpportunityId: episode.originalOpportunityId, delayedAcceptance: episode.delayedAcceptance, delayed },
+      replacement: { originalOpportunityId: episode.originalOpportunityId, replacementOpportunityId: 'replacementOpportunity',
+        replacementClock: episode.clock, replacementAcceptance: episode.delayedAcceptance, replacement: delayed },
+    }
+    expect(learnReportEpisodeSnapshotSchema.safeParse({ ...inventory, ...slots[endpoint] }).success).toBe(false)
+  })
+
+  it.each(['coldOpportunityId', 'originalOpportunityId'] as const)('forbids a non-admitted %s before acceptance', async field => {
+    const { episode } = await measurementReportNonAdmittedFixture('considered', 'protocol_not_frozen')
+    expect(learnReportEpisodeSnapshotSchema.safeParse({ ...episode, [field]: 'unallocatedOpportunity' }).success).toBe(false)
+  })
+
+  it('requires enrollment facts and their snapshots to agree on admission', async () => {
+    const { episode } = await measurementReportSourceFixture()
+    const fact = { kind: 'enrollment', assignmentId: episode.assignmentId, recordRevision: 1, status: 'admitted', snapshot: episode.assignment }
+    expect(learnReportFactPayloadSchema.parse(fact)).toEqual(fact)
+    expect(learnReportFactPayloadSchema.safeParse({ ...fact, status: 'considered' }).success).toBe(false)
   })
 
   it.each(['flow', 'entryPoint', 'epoch', 'baselineSha', 'cohortVersion', 'depth', 'familyId', 'familyRevision',
@@ -623,79 +747,58 @@ describe('report source v3 computation contract', () => {
     })
   })
 
-  it.each(['cold', 'delayed', 'replacement', 'claim'] as const)('rejects a failing %s result named as an Independent basis in either row order', async endpoint => {
+  it.each(['cold', 'delayed', 'replacement', 'claim'] as const)('rejects any visible %s result as an Independent basis in either row order', async endpoint => {
+    const { claim, basisRow, watermark } = await measurementReportBasisFixture(endpoint)
+    for (const rows of [[watermark, basisRow, claim], [claim, basisRow, watermark]]) {
+      expect(reconcileLearnReportSourceRows([watermark.learnerKey], rows)).toEqual({ status: 'incomplete', reasonCodes: ['invalid_claim_basis'] })
+    }
+  })
+
+  it.each(['cold', 'delayed', 'replacement', 'claim'] as const)('rejects a forged Independent transition on a visible %s basis', async endpoint => {
     const { claim, basisRow, watermark } = await measurementReportBasisFixture(endpoint)
     const row = structuredClone(basisRow)
     const basis = row.kind === 'episode' ? row[endpoint as 'cold' | 'delayed' | 'replacement']! : row.result!
-    basis.scorePercent = 40
-    basis.masteryStateBefore = 'unseen'
-    basis.masteryStateAfter = 'unseen'
+    Object.assign(basis, { scorePercent: 80, masteryEligible: true, masteryStateBefore: 'guided', masteryStateAfter: 'independent' })
     for (const rows of [[watermark, row, claim], [claim, row, watermark]]) {
       expect(reconcileLearnReportSourceRows([watermark.learnerKey], rows)).toEqual({ status: 'incomplete', reasonCodes: ['invalid_claim_basis'] })
     }
   })
 
-  it.each([
-    ['score below threshold', { scorePercent: 79.99 }],
-    ['excluded validity', { validityStatus: 'excluded' }], ['unknown validity', { validityStatus: 'unknown' }],
-    ['assisted', { assistanceState: 'assisted' }], ['unknown assistance', { assistanceState: 'unknown' }],
-    ['ineligible for mastery', { masteryEligible: false }],
-    ['preserved Independent', { masteryStateBefore: 'independent' }], ['did not establish Independent', { masteryStateAfter: 'unseen' }],
-  ])('isolates an invalid visible basis: %s', async (_label, change) => {
-    const { claim, basisRow, basis, watermark } = await measurementReportBasisFixture('delayed')
-    expect(reconcileLearnReportSourceRows([watermark.learnerKey], [watermark, basisRow, claim])).toEqual({ status: 'complete', reasonCodes: [] })
-    const row = learnReportEpisodeSnapshotSchema.parse({ ...basisRow, delayed: { ...basis, ...change } })
-    for (const rows of [[watermark, row, claim], [claim, row, watermark]]) {
-      expect(reconcileLearnReportSourceRows([watermark.learnerKey], rows)).toEqual({ status: 'incomplete', reasonCodes: ['invalid_claim_basis'] })
-    }
-  })
-
-  it.each(['learnerKey', 'capabilityKey'] as const)('binds a visible basis to the claim %s independently', async field => {
-    const { claim, basisRow, watermark } = await measurementReportBasisFixture('delayed')
-    const row = { ...claim, [field]: `sha256:${'b'.repeat(64)}` }
-    const roster = [...new Set([watermark.learnerKey, row.learnerKey])]
-    const watermarks = roster.map(learnerKey => ({ ...watermark, learnerKey }))
-    expect(reconcileLearnReportSourceRows(roster, [...watermarks, basisRow, claim])).toEqual({ status: 'complete', reasonCodes: [] })
-    for (const rows of [[...watermarks, basisRow, row], [row, basisRow, ...watermarks]]) {
-      expect(reconcileLearnReportSourceRows(roster, rows)).toEqual({ status: 'incomplete', reasonCodes: ['invalid_claim_basis'] })
-    }
-  })
-
-  it('bounds a visible basis attainment by acceptance and commit times, including both endpoints', async () => {
-    const { claim, basisRow, basis, watermark } = await measurementReportBasisFixture('delayed')
-    for (const firstIndependentAt of [basis.acceptedAt - 1, basis.acceptedAt, basis.scoreCommittedAt, basis.scoreCommittedAt + 1]) {
-      const row = learnReportFirstClaimSnapshotSchema.parse({ ...claim, claim: { ...claim.claim, firstIndependentAt,
-        firstIndependentLocalDate: new Date(firstIndependentAt).toISOString().slice(0, 10) } })
-      const valid = firstIndependentAt >= basis.acceptedAt && firstIndependentAt <= basis.scoreCommittedAt
-      for (const rows of [[watermark, basisRow, row], [row, basisRow, watermark]]) {
-        expect(reconcileLearnReportSourceRows([watermark.learnerKey], rows)).toEqual({
-          status: valid ? 'complete' : 'incomplete', reasonCodes: valid ? [] : ['invalid_claim_basis'],
-        })
+  it('rejects a visible retained-transfer basis, including forged Independent scalars', async () => {
+    const { claim, basisRow, watermark } = await measurementReportBasisFixture('claim')
+    if (basisRow.kind !== 'first_check_claim') throw new Error('Expected claim basis fixture')
+    for (const transition of [
+      { masteryStateBefore: 'independent', masteryStateAfter: 'retained' },
+      { masteryStateBefore: 'guided', masteryStateAfter: 'independent' },
+    ]) {
+      const row = learnReportFirstClaimSnapshotSchema.parse({ ...basisRow,
+        result: { ...basisRow.result!, ...transition, kind: 'retained_transfer', scorePercent: 80, masteryEligible: true } })
+      for (const rows of [[watermark, row, claim], [claim, row, watermark]]) {
+        expect(reconcileLearnReportSourceRows([watermark.learnerKey], rows)).toEqual({ status: 'incomplete', reasonCodes: ['invalid_claim_basis'] })
       }
     }
   })
 
-  it('rejects the claim own first-check result as its basis even when all basis scalars qualify', async () => {
+  it('rejects a claim own first-check result as its basis', async () => {
     const { claim: source, delayed, watermark } = await measurementReportSourceFixture()
-    const result = { ...delayed, scorePercent: 80, masteryEligible: true, masteryStateBefore: 'guided', masteryStateAfter: 'independent' }
-    const claim = learnReportFirstClaimSnapshotSchema.parse({ ...source, result,
-      claim: { ...source.claim, basisAttemptId: result.attemptId, firstIndependentAt: result.acceptedAt, firstIndependentLocalDate: '2026-10-08' } })
+    const claim = learnReportFirstClaimSnapshotSchema.parse({ ...source, result: delayed,
+      claim: { ...source.claim, basisAttemptId: delayed.attemptId, firstIndependentAt: delayed.acceptedAt, firstIndependentLocalDate: '2026-10-08' } })
     for (const rows of [[watermark, claim], [claim, watermark]]) {
       expect(reconcileLearnReportSourceRows([watermark.learnerKey], rows)).toEqual({ status: 'incomplete', reasonCodes: ['invalid_claim_basis'] })
     }
   })
 
-  it('checks every occurrence of a visible basis instead of selecting the first result', async () => {
+  it('rejects a visible basis with multiple contradictory occurrences without selecting a result', async () => {
     const { claim, basisRow, watermark } = await measurementReportBasisFixture('delayed')
     const row = learnReportEpisodeSnapshotSchema.parse(basisRow)
-    const conflict = { ...row, delayed: { ...row.delayed!, scorePercent: 40 } }
+    const conflict = { ...row, delayed: { ...row.delayed!, scorePercent: 80 } }
     for (const rows of [[watermark, row, conflict, claim], [claim, conflict, row, watermark]]) {
       expect(reconcileLearnReportSourceRows([watermark.learnerKey], rows)).toEqual({ status: 'incomplete',
         reasonCodes: ['conflicting_outcome_snapshot', 'conflicting_source_row', 'invalid_claim_basis'] })
     }
   })
 
-  it('allows an external ordinary V2 basis without inventing an unavailable result check', async () => {
+  it('leaves an absent ordinary V2 basis to the documented canonical writer validation', async () => {
     const { claim, watermark } = await measurementReportSourceFixture()
     expect(reconcileLearnReportSourceRows([watermark.learnerKey], [watermark, claim])).toEqual({ status: 'complete', reasonCodes: [] })
   })

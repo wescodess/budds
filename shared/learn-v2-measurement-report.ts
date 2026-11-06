@@ -71,6 +71,7 @@ export const learnReportFirstSlotStratumSchema = z.strictObject({
   ...frozenStratum, responseKind: z.enum(LEARN_V2_REPORT_RESPONSE_KINDS), scorerConfiguration: learnReportScorerConfigurationSchema,
 })
 export const learnReportAssignmentSnapshotSchema = z.strictObject({
+  status: z.enum(['considered', 'not_admitted', 'admitted']), protocolStatus: z.enum(['protocol_not_frozen', 'blocked', 'frozen']),
   ...frozenStratum, responseKind: z.enum(LEARN_V2_REPORT_RESPONSE_KINDS).nullable(), scorerConfiguration: learnReportScorerConfigurationSchema.nullable(),
   protocolVersion: learnVersionSchema.nullable(), enrollmentAt: learnTimestampSchema.nullable(), timezone: learnTimezoneSchema.nullable(),
   anchorAt: learnTimestampSchema.nullable(), anchorKind: learnVersionSchema.nullable(), historyStatus: learnHistoryStatusSchema,
@@ -78,6 +79,16 @@ export const learnReportAssignmentSnapshotSchema = z.strictObject({
   assignedDay7: z.boolean(), assignedDay30: z.boolean(), sourceCoverage,
 }).refine(value => (value.responseKind === null) === (value.scorerConfiguration === null)
   && (value.protocolVersion === null || value.scorerConfiguration !== null), 'Frozen assignments require response and scorer strata')
+  .refine(value => (value.status === 'admitted') === (value.protocolStatus === 'frozen'), 'Admission requires frozen protocol status')
+  .refine(value => {
+    const protocolPins = [value.protocolVersion, value.enrollmentAt, value.timezone, value.anchorKind,
+      value.allocationOrder, value.responseKind, value.scorerConfiguration]
+    return value.status === 'admitted'
+      ? protocolPins.every(pin => pin !== null) && value.familyId !== null && value.familyRevision !== null
+      : protocolPins.every(pin => pin === null) && value.anchorAt === null && !value.assignedDay7 && !value.assignedDay30
+  }, 'Assignment pins must match storage admission state')
+  .refine(value => value.status !== 'admitted' || (['AB', 'BA'].includes(value.allocationOrder!)
+    ? value.assignedDay7 !== value.assignedDay30 : value.assignedDay7 && value.assignedDay30), 'Assignment horizons must match the frozen allocation')
 export const learnReportResultSnapshotSchema = z.strictObject({
   submissionId: learnIdSchema<'learnResponses'>(), attemptId: learnIdSchema<'masteryAttempts'>(), executionId: learnIdSchema<'learnScoringExecutions'>(),
   kind: z.enum(['measurement_cold', 'measurement_delayed', 'independent_application', 'retained_transfer']),
@@ -117,6 +128,11 @@ export const learnReportEpisodeSnapshotSchema = z.strictObject({
 }).refine(value => (value.cold === null || value.cold.kind === 'measurement_cold')
   && (value.delayed === null || value.delayed.kind === 'measurement_delayed')
   && (value.replacement === null || value.replacement.kind === 'measurement_delayed'), 'Incorrect measurement endpoint kind')
+  .refine(value => value.assignment.status === 'admitted' || (value.horizonDays === 7 && value.clock === null
+    && value.replacementClock === null && value.coldOpportunityId === null && value.originalOpportunityId === null && value.replacementOpportunityId === null
+    && value.coldAcceptance === null && value.delayedAcceptance === null && value.replacementAcceptance === null
+    && value.cold === null && value.delayed === null && value.replacement === null), 'Non-admitted assignments have one inventory row without slots or outcomes')
+  .refine(value => value.assignment.status !== 'admitted' || (value.horizonDays === 7 ? value.assignment.assignedDay7 : value.assignment.assignedDay30), 'Episode horizon must be assigned')
   .refine(value => acceptedResultMatches(value.coldAcceptance, value.cold) && acceptedResultMatches(value.delayedAcceptance, value.delayed)
     && acceptedResultMatches(value.replacementAcceptance, value.replacement), 'Results require their accepted submission and performance time')
   // #364 §4 freezes each opportunity's own clock; #366 §3 matures it at its own closeAt.
@@ -160,7 +176,7 @@ export function reconcileLearnReportSourceRows(roster: readonly string[], rows: 
   const capabilityScopes = new Map<string, string>()
   type OutcomeBinding = { learnerKey: string, capabilityKey: string, owner: string | null, role: 'cold' | 'delayed' | 'replacement' | 'claim' }
   const outcomes = new Map<string, (OutcomeBinding & {
-    snapshot: string, slotWindow: string | null, result: z.infer<typeof learnReportResultSnapshotSchema> | null,
+    snapshot: string, slotWindow: string | null,
   })[]>()
   const claimIdentities = new Set<string>()
   function reconcileOutcome(binding: OutcomeBinding, opportunityId: string | null,
@@ -176,7 +192,7 @@ export function reconcileLearnReportSourceRows(roster: readonly string[], rows: 
       clock.protocolVersion, clock.schedulingPolicyVersion, clock.horizonDays, clock.timezone,
       clock.dueLocalDate, clock.dueAt, clock.openAt, clock.closeAt,
     ])
-    const outcome = { ...binding, snapshot: JSON.stringify([opportunityId, acceptance, result]), slotWindow, result }
+    const outcome = { ...binding, snapshot: JSON.stringify([opportunityId, acceptance, result]), slotWindow }
     for (const key of keys) {
       const group = outcomes.get(key) ?? []
       group.push(outcome)
@@ -246,25 +262,19 @@ export function reconcileLearnReportSourceRows(roster: readonly string[], rows: 
       if (delayedSlots.length && new Set([...delayedSlots, ...claims].map(outcome => outcome.slotWindow)).size > 1) reasons.add('conflicting_slot_window')
     }
   }
-  // Basis attempts share the result-attempt namespace, across every endpoint and row kind.
-  // Ordinary V2 bases can be absent from this run; their canonical validity remains a writer obligation.
+  // Only independent_application establishes Independent (#364 §5); no source endpoint admits that kind.
+  // An absent ordinary V2 basis still requires canonical validation by the writer.
   for (const row of validatedRows) {
     if (row.kind !== 'first_check_claim') continue
-    const basisResults = outcomes.get(JSON.stringify(['attempt', row.claim.basisAttemptId])) ?? []
-    if (row.result?.attemptId === row.claim.basisAttemptId || basisResults.some(outcome => {
-      const result = outcome.result
-      return result === null || outcome.learnerKey !== row.learnerKey || outcome.capabilityKey !== row.capabilityKey
-        || result.validityStatus !== 'valid' || result.assistanceState !== 'unassisted' || !result.masteryEligible
-        || result.scorePercent < result.thresholdPercent || result.masteryStateAfter !== 'independent' || result.masteryStateBefore === 'independent'
-        || row.claim.firstIndependentAt < result.acceptedAt || row.claim.firstIndependentAt > result.scoreCommittedAt
-    })) reasons.add('invalid_claim_basis')
+    if (outcomes.has(JSON.stringify(['attempt', row.claim.basisAttemptId]))) reasons.add('invalid_claim_basis')
   }
   if (roster.some(owner => !watermarks.has(owner))) reasons.add('missing_owner_watermark')
   return { status: reasons.size ? 'incomplete' as const : 'complete' as const, reasonCodes: [...reasons].sort() }
 }
 export const learnReportFactPayloadSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('enrollment'), assignmentId: learnIdSchema<'learnMeasurementAssignments'>(), recordRevision: learnRevisionSchema,
-    status: z.enum(['considered', 'not_admitted', 'admitted']), snapshot: learnReportAssignmentSnapshotSchema }),
+    status: z.enum(['considered', 'not_admitted', 'admitted']), snapshot: learnReportAssignmentSnapshotSchema })
+    .refine(value => value.status === value.snapshot.status, 'Enrollment status must match the assignment snapshot'),
   z.strictObject({ kind: z.literal('opportunity'), assessmentOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>(), recordRevision: learnRevisionSchema,
     status: learnReportOpportunityStatusSchema, dueAt: learnTimestampSchema.nullable(), closeAt: learnTimestampSchema, clock: learnAssessmentClockSchema.nullable(), originalSlot: z.boolean() }),
   z.strictObject({ kind: z.literal('response'), submissionId: learnIdSchema<'learnResponses'>(), acceptedAt: learnTimestampSchema,

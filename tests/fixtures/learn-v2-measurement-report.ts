@@ -17,7 +17,7 @@ export async function measurementReportSourceFixture() {
     horizonDays: 7, timezone: 'UTC', dueLocalDate: '2026-10-08', dueAt: openAt, openAt, closeAt: openAt + 86_400_000 }
   const episode = learnReportEpisodeSnapshotSchema.parse({ kind: 'episode', ...keys, assignmentId: 'assignment1',
     learningVoidId: 'void1', blueprintRevisionId: 'blueprint1', objectiveId: 'objective1', horizonDays: 7,
-    assignment: { ...stratum, protocolVersion: 'protocol.v1', enrollmentAt: anchorAt - 1, timezone: 'UTC', anchorAt, anchorKind: 'sealed_cold',
+    assignment: { ...stratum, status: 'admitted', protocolStatus: 'frozen', protocolVersion: 'protocol.v1', enrollmentAt: anchorAt - 1, timezone: 'UTC', anchorAt, anchorKind: 'sealed_cold',
       historyStatus: 'prospectively_unexposed', allocationOrder: 'ABC', assignedDay7: true, assignedDay30: true, sourceCoverage: 'complete' },
     clock, coldOpportunityId: 'coldOpportunity1', originalOpportunityId: 'delayedOpportunity1', replacementOpportunityId: null,
     coldAcceptance: { submissionId: 'coldSubmission1', acceptedAt: anchorAt }, delayedAcceptance: { submissionId: 'delayedSubmission1', acceptedAt: openAt },
@@ -41,6 +41,18 @@ export async function measurementReportSourceFixture() {
   const delayed = learnReportResultSnapshotSchema.parse({ ...cold, ...episode.delayedAcceptance, attemptId: 'delayedAttempt1', executionId: 'delayedExecution1',
     kind: 'measurement_delayed', scorePercent: 40, caseId: 'caseB', itemId: 'itemB', formLabel: 'B' })
   return { keys, episode, claim, watermark, cold, delayed }
+}
+
+export async function measurementReportNonAdmittedFixture(status: 'considered' | 'not_admitted', protocolStatus: 'protocol_not_frozen' | 'blocked') {
+  const source = await measurementReportSourceFixture()
+  const episode = learnReportEpisodeSnapshotSchema.parse({ ...source.episode,
+    assignment: { ...source.episode.assignment, status, protocolStatus, protocolVersion: null, enrollmentAt: null, timezone: null,
+      anchorAt: null, anchorKind: null, allocationOrder: null, responseKind: null, scorerConfiguration: null,
+      familyId: null, familyRevision: null, familyValidationStatus: 'unknown', equivalenceVersion: null,
+      assignedDay7: false, assignedDay30: false },
+    clock: null, coldOpportunityId: null, originalOpportunityId: null, coldAcceptance: null, delayedAcceptance: null,
+    operationalEligibility: 'blocked', replacementPolicy: null, disposition: 'missing_cold', reasonCodes: [protocolStatus] })
+  return { ...source, episode }
 }
 
 export async function measurementReportIdentityFixture() {
@@ -77,12 +89,11 @@ export async function measurementReportIdentityFixture() {
   return { ...source, episode, day30, otherAssignment }
 }
 
-// Scalar snapshots isolate each basis-join predicate; canonical transition provenance still belongs to the writer.
+// A visible measurement or retained-check attempt cannot be an Independent basis (#364 §5).
 export async function measurementReportBasisFixture(endpoint: 'cold' | 'delayed' | 'replacement' | 'claim') {
   const source = await measurementReportIdentityFixture()
   const original = endpoint === 'claim' ? source.delayed : source.episode[endpoint]!
-  const basis = learnReportResultSnapshotSchema.parse({ ...original, scorePercent: 80, masteryEligible: true,
-    masteryStateBefore: 'guided', masteryStateAfter: 'independent' })
+  const basis = original
   const firstIndependentAt = basis.acceptedAt
   const openAt = firstIndependentAt + 7 * 86_400_000
   const claim = learnReportFirstClaimSnapshotSchema.parse({ ...source.claim,

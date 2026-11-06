@@ -84,6 +84,7 @@ const firstCheckClaim = v.object({
   transitionVersion: v.literal('learn-v2.mastery-transition.v1'), claimFactSequence: v.number(),
 })
 export const learnReportAssignmentSnapshotValidator = v.object({
+  status: literals(['considered', 'not_admitted', 'admitted']), protocolStatus: literals(['protocol_not_frozen', 'blocked', 'frozen']),
   ...frozenStratum, responseKind: v.union(responseKind, v.null()), scorerConfiguration: v.union(scorerConfiguration, v.null()),
   protocolVersion: nullableString, enrollmentAt: nullableNumber, timezone: nullableString, anchorAt: nullableNumber, anchorKind: nullableString,
   historyStatus: literals(['prospectively_unexposed', 'returning', 'unknown']),
