@@ -32,7 +32,14 @@ export function spawnOwnedChild(command, args, options = {}) {
     ? spawn(process.execPath, [fileURLToPath(new URL('./e2e-process-owner.mjs', import.meta.url)), command, ...args], { ...options, detached: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] })
     : spawn(command, args, { ...options, stdio: ['ignore', 'pipe', 'pipe'] }), { commandExited: false })
   const groupsFile = (options.env || process.env).BUDDS_E2E_OWNED_GROUPS_FILE
-  if (supportsProcessGroups && child.pid && groupsFile) appendFileSync(groupsFile, `${JSON.stringify({ pid: child.pid })}\n`)
+  if (supportsProcessGroups && child.pid && groupsFile) {
+    try { appendFileSync(groupsFile, `${JSON.stringify({ pid: child.pid })}\n`) }
+    catch (error) {
+      try { process.kill(-child.pid, 'SIGKILL') }
+      catch (stopError) { if (stopError.code !== 'ESRCH') throw new AggregateError([error, stopError], 'Failed to register and stop disposable process', { cause: stopError }) }
+      throw error
+    }
+  }
   trackChild(child, supportsProcessGroups)
   const exited = (code, signal) => {
     child.commandExited = true

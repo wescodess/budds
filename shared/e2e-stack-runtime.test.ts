@@ -27,6 +27,44 @@ test.skipIf(!supportsProcessGroups).each([false, true])('owned group registratio
   }
 }, 60_000)
 
+test.skipIf(!supportsProcessGroups)('registration write failure kills the spawned group and rethrows', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'budds-owned-registration-failure-'))
+  try {
+    const { stdout } = await promisify(execFile)(process.execPath, ['--input-type=module', '-e', `
+      import childProcess from 'node:child_process'
+      import { once } from 'node:events'
+      import { syncBuiltinESMExports } from 'node:module'
+      import { setTimeout } from 'node:timers/promises'
+      const spawn = childProcess.spawn
+      let child
+      let closed
+      childProcess.spawn = (...args) => {
+        child = spawn(...args)
+        closed = once(child, 'close')
+        child.stdout.resume()
+        child.stderr.resume()
+        return child
+      }
+      syncBuiltinESMExports()
+      const { spawnOwnedChild } = await import(${JSON.stringify(new URL('../scripts/e2e-stack-runtime.mjs', import.meta.url).href)})
+      let error
+      try { spawnOwnedChild(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { env: { ...process.env, BUDDS_E2E_OWNED_GROUPS_FILE: ${JSON.stringify(directory)} } }) }
+      catch (caught) { error = caught.code }
+      try {
+        await setTimeout(250)
+        let alive = true
+        try { process.kill(-child.pid, 0) } catch (error) { if (error.code === 'ESRCH') alive = false; else throw error }
+        console.log(JSON.stringify({ error, alive, pid: child.pid }))
+      } finally {
+        try { process.kill(-child.pid, 'SIGKILL') } catch (error) { if (error.code !== 'ESRCH') throw error }
+        await closed
+      }
+    `], { timeout: 10_000 })
+    expect(JSON.parse(stdout)).toEqual({ error: 'EISDIR', alive: false, pid: expect.any(Number) })
+  }
+  finally { await rm(directory, { recursive: true, force: true }) }
+}, 15_000)
+
 test('startup redaction does not release a credential split across adjacent chunks', () => {
   const secret = 'synthetic-boundary-credential'
   let emitted = ''

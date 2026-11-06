@@ -111,7 +111,7 @@ describe('verified stack group ownership', () => {
     }
   }, 10_000)
 
-  it.each(['verified', 'mismatched', 'uninspected', 'unverifiable'])('recovers registered orphan groups safely: %s', async mode => {
+  it.each(['verified', 'mismatched', 'uninspected', 'unverifiable'])('refuses live registered groups without signalling: %s', async mode => {
     const root = await mkdtemp(join(tmpdir(), 'design-capture-registered-stale-'))
     const lock = join(root, 'stack.lock')
     const release = await acquireCaptureStackLock(lock)
@@ -124,21 +124,66 @@ describe('verified stack group ownership', () => {
       if (mode === 'unverifiable') metadata.stackGroups[0].identities = []
       await writeFile(target, JSON.stringify(metadata))
       const kill = vi.spyOn(process, 'kill')
-      if (mode === 'unverifiable') {
-        await expect(acquireCaptureStackLock(lock)).rejects.toThrow('remove this lock directory and retry')
-        expect(await readdir(lock)).toHaveLength(1)
-      }
-      else {
-        const recovered = await acquireCaptureStackLock(lock)
-        if (mode === 'mismatched') expect(() => process.kill(-backend.pid!, 0)).not.toThrow()
-        else expect(() => process.kill(-backend.pid!, 0)).toThrow()
-        await recovered()
-      }
-      if (mode === 'mismatched' || mode === 'unverifiable') expect(kill.mock.calls.filter(([pid, signal]) => pid === -backend.pid! && signal !== 0)).toEqual([])
-      else expect(kill).toHaveBeenCalledWith(-backend.pid!, 'SIGTERM')
+      const recovery = acquireCaptureStackLock(lock)
+      await expect(recovery).rejects.toThrow(`PID/PGID ${backend.pid}`)
+      await expect(recovery).rejects.toThrow(`remove the lock directory at ${lock} and retry`)
+      await expect(recovery).rejects.toThrow('ps -o pid,pgid,lstart,command -g <pgid>')
+      expect(await readdir(lock)).toEqual([target.split('/').at(-1)])
+      expect(kill.mock.calls.filter(([, signal]) => signal !== 0)).toEqual([])
+      expect(() => process.kill(-backend.pid!, 0)).not.toThrow()
     }
     finally {
       vi.restoreAllMocks()
+      await stopOwnedChild(backend)
+      await rm(root, { recursive: true, force: true })
+    }
+  }, 10_000)
+
+  it.each(['alive', 'uninspectable'])('refuses a registered PID outside its own group: %s', async mode => {
+    const root = await mkdtemp(join(tmpdir(), 'design-capture-registered-pid-'))
+    const lock = join(root, 'stack.lock')
+    const release = await acquireCaptureStackLock(lock)
+    const child = spawn(process.execPath, ['-e', "setInterval(() => {}, 1000); process.stdout.write('ready')"], { stdio: ['ignore', 'pipe', 'ignore'] })
+    const closed = once(child, 'close')
+    try {
+      await once(child.stdout!, 'data')
+      await writeFile(release.groupsFile, `${JSON.stringify({ pid: child.pid })}\n`)
+      await staleOwner(lock)
+      const originalKill = process.kill.bind(process)
+      const kill = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+        if (mode === 'uninspectable' && pid === child.pid && signal === 0) throw Object.assign(new Error('inspection failed'), { code: 'EIO' })
+        return originalKill(pid, signal)
+      })
+      const recovery = acquireCaptureStackLock(lock)
+      await expect(recovery).rejects.toThrow(`PID/PGID ${child.pid}`)
+      await expect(recovery).rejects.toThrow(lock)
+      expect(kill.mock.calls.filter(([, signal]) => signal !== 0)).toEqual([])
+      expect(child.signalCode).toBeNull()
+    }
+    finally {
+      vi.restoreAllMocks()
+      child.kill('SIGKILL')
+      await closed
+      await rm(root, { recursive: true, force: true })
+    }
+  }, 10_000)
+
+  it('recovers a stale lock when every recorded and registered group is dead', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'design-capture-dead-groups-'))
+    const lock = join(root, 'stack.lock')
+    const release = await acquireCaptureStackLock(lock)
+    const backend = spawnOwnedChild(process.execPath, ['-e', "setInterval(() => {}, 1000); process.stdout.write('ready')"], { env: { ...process.env, BUDDS_E2E_OWNED_GROUPS_FILE: release.groupsFile } })
+    try {
+      await once(backend.stdout!, 'data')
+      release.readGroups()
+      await staleOwner(lock)
+      await stopOwnedChild(backend)
+      const recovered = await acquireCaptureStackLock(lock)
+      await expect(readFile(release.groupsFile)).rejects.toThrow('ENOENT')
+      await recovered()
+      await expect(readdir(lock)).rejects.toThrow('ENOENT')
+    }
+    finally {
       await stopOwnedChild(backend)
       await rm(root, { recursive: true, force: true })
     }
@@ -182,8 +227,8 @@ describe('verified stack group ownership', () => {
       await writeFile(target, JSON.stringify(metadata))
       const kill = vi.spyOn(process, 'kill')
       const recovery = acquireCaptureStackLock(lock)
-      await expect(recovery).rejects.toThrow(`Cannot verify disposable stack identity: ${lock}`)
-      await expect(recovery).rejects.toThrow('remove this lock directory and retry')
+      await expect(recovery).rejects.toThrow(`PID/PGID ${child.pid}`)
+      await expect(recovery).rejects.toThrow(`remove the lock directory at ${lock} and retry`)
       expect(kill.mock.calls.filter(([pid, signal]) => pid === -child.pid! && signal !== 0)).toEqual([])
       expect(() => process.kill(-child.pid!, 0)).not.toThrow()
       expect(await readdir(lock)).toHaveLength(1)
@@ -222,36 +267,38 @@ describe('verified stack group ownership', () => {
     }
   }, 10_000)
 
-  it('recovery stops recorded detached descendants and waits before handing over the lock', async () => {
+  it('refuses live recorded descendants without signalling and recovers after they stop', async () => {
     const root = await mkdtemp(join(tmpdir(), 'design-capture-recover-detached-'))
     const lock = join(root, 'stack.lock')
     const { stack, backendPid } = await detachedStack(root)
-    let recovering: Promise<Awaited<ReturnType<typeof acquireCaptureStackLock>>> | undefined
     try {
       const release = await acquireCaptureStackLock(lock)
       release.recordStack(stack.pid)
       await staleOwner(lock)
       stack.kill('SIGKILL')
       await once(stack, 'exit')
-      let handedOver = false
-      recovering = acquireCaptureStackLock(lock).then(value => { handedOver = true; return value })
-      await vi.waitFor(async () => expect(await readFile(join(root, 'backend-stopping'), 'utf8')).toBe('stopping'))
-      expect(handedOver).toBe(false)
+      const kill = vi.spyOn(process, 'kill')
+      const recovery = acquireCaptureStackLock(lock)
+      await expect(recovery).rejects.toThrow(`PID/PGID ${backendPid}`)
+      await expect(recovery).rejects.toThrow(lock)
+      expect(kill.mock.calls.filter(([, signal]) => signal !== 0)).toEqual([])
       expect(() => process.kill(-backendPid, 0)).not.toThrow()
-      const recovered = await recovering
-      expect(() => process.kill(-backendPid, 0)).toThrow()
+      vi.restoreAllMocks()
+      process.kill(-backendPid, 'SIGTERM')
+      await vi.waitFor(() => expect(() => process.kill(-backendPid, 0)).toThrow(), { timeout: 2000 })
+      const recovered = await acquireCaptureStackLock(lock)
       await recovered()
     }
     finally {
+      vi.restoreAllMocks()
       for (const pid of [stack.pid!, backendPid]) try { process.kill(-pid, 'SIGKILL') } catch { /* Only this test's groups. */ }
-      await recovering?.then(release => release()).catch(() => {})
       await rm(root, { recursive: true, force: true })
     }
   }, 10_000)
 })
 
 describe('capture loopback ports', () => {
-  it('claims a dead owner exclusively and stops its recorded orphan stack before returning', async () => {
+  it('refuses a crashed owner with a live recorded stack for every contender', async () => {
     const root = await mkdtemp(join(tmpdir(), 'design-capture-orphan-'))
     const lock = join(root, 'stack.lock')
     const child = spawn(process.execPath, ['--input-type=module', '-e', `
@@ -266,12 +313,18 @@ describe('capture loopback ports', () => {
       stackPid = Number(String((await once(child.stdout!, 'data'))[0]))
       child.kill('SIGKILL')
       await once(child, 'exit')
+      const kill = vi.spyOn(process, 'kill')
       const contenders = await Promise.allSettled([acquireCaptureStackLock(lock), acquireCaptureStackLock(lock)])
-      for (const contender of contenders) if (contender.status === 'fulfilled') await contender.value()
-      expect(contenders.filter(value => value.status === 'fulfilled')).toHaveLength(1)
-      expect(() => process.kill(-stackPid, 0)).toThrow()
+      expect(contenders.every(value => value.status === 'rejected')).toBe(true)
+      for (const contender of contenders) if (contender.status === 'rejected') {
+        expect(contender.reason.message).toContain(`PID/PGID ${stackPid}`)
+        expect(contender.reason.message).toContain(lock)
+      }
+      expect(kill.mock.calls.filter(([, signal]) => signal !== 0)).toEqual([])
+      expect(() => process.kill(-stackPid, 0)).not.toThrow()
     }
     finally {
+      vi.restoreAllMocks()
       if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
       if (stackPid) try { process.kill(-stackPid, 'SIGKILL') } catch { /* Only this test's recorded stack group. */ }
       await rm(root, { recursive: true, force: true })

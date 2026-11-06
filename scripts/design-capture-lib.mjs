@@ -88,7 +88,7 @@ async function signalStackGroup(group, signal, lock) {
   }
 }
 
-async function finishGroups(groups, lock, timeoutMs = 30_000, recover = false, refresh = () => {}) {
+async function finishGroups(groups, lock, timeoutMs = 30_000, refresh = () => {}) {
   const wait = async ms => {
     const deadline = Date.now() + ms
     while (true) {
@@ -104,7 +104,7 @@ async function finishGroups(groups, lock, timeoutMs = 30_000, recover = false, r
       await delay(25)
     }
   }
-  if (!recover && await wait(timeoutMs)) return
+  if (await wait(timeoutMs)) return
   refresh()
   for (const group of groups) await signalStackGroup(group, 'SIGTERM', lock)
   if (await wait(timeoutMs)) return
@@ -122,8 +122,8 @@ export async function acquireCaptureStackLock(lock = join(tmpdir(), `budds-desig
     if (typeof token !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/u.test(token)) throw inspectionError(lock)
     return `${lock}.groups-${token}.jsonl`
   }
-  const refreshGroups = () => {
-    for (const token of owner.groupsTokens) {
+  function* registeredPids(tokens) {
+    for (const token of tokens) {
       let contents
       try { contents = readFileSync(groupsPath(token), 'utf8') }
       catch (error) { if (error.code === 'ENOENT') continue; throw inspectionError(lock) }
@@ -131,16 +131,21 @@ export async function acquireCaptureStackLock(lock = join(tmpdir(), `budds-desig
         let pid
         try { ({ pid } = JSON.parse(line)) } catch { throw inspectionError(lock) }
         if (!Number.isSafeInteger(pid) || pid <= 0) throw inspectionError(lock)
-        if (owner.stackGroups.some(group => group.pid === pid)) continue
-        const group = { pid, identities: [] }
-        owner.stackGroups.push(group)
+        yield pid
+      }
+    }
+  }
+  const refreshGroups = () => {
+    for (const pid of registeredPids(owner.groupsTokens)) {
+      if (owner.stackGroups.some(group => group.pid === pid)) continue
+      const group = { pid, identities: [] }
+      owner.stackGroups.push(group)
+      save()
+      const identity = processIdentity(pid, lock)
+      if (identity) {
+        if (identity.pgid !== pid || !identity.command.includes('e2e-process-owner.mjs')) throw inspectionError(lock)
+        group.identities.push(identity)
         save()
-        const identity = processIdentity(pid, lock)
-        if (identity) {
-          if (identity.pgid !== pid || !identity.command.includes('e2e-process-owner.mjs')) throw inspectionError(lock)
-          group.identities.push(identity)
-          save()
-        }
       }
     }
   }
@@ -164,26 +169,29 @@ export async function acquireCaptureStackLock(lock = join(tmpdir(), `budds-desig
       let previous
       try { previous = JSON.parse(await readFile(join(lock, files[0]), 'utf8')) }
       catch (error) { if (error.code === 'ENOENT') continue; throw error }
+      const pending = new Set()
+      const recorded = previous.stackGroups || []
+      const tokens = previous.groupsTokens || []
+      const manualRecovery = () => new Error(`Stale disposable stack lock may have live processes: ${[...pending].map(pid => `PID/PGID ${pid}`).join(', ') || 'unknown PID/PGID'}. Inspect each group with ps -o pid,pgid,lstart,command -g <pgid>, stop the processes, then remove the lock directory at ${lock} and retry.`)
+      try {
+        if (!Array.isArray(recorded) || !Array.isArray(tokens)) throw manualRecovery()
+        const groups = [...recorded]
+        if (previous.stackPid !== undefined && !groups.some(group => group.pid === previous.stackPid)) groups.push({ pid: previous.stackPid, identities: [] })
+        for (const group of groups) {
+          try { if (groupState(group, lock) !== false) pending.add(group.pid) }
+          catch { pending.add(group.pid) }
+        }
+        for (const pid of registeredPids(tokens)) {
+          try { if (alive(pid) || alive(-pid)) pending.add(pid) }
+          catch { pending.add(pid) }
+        }
+      } catch { throw manualRecovery() }
+      if (pending.size) throw manualRecovery()
       try { renameSync(join(lock, files[0]), join(lock, ownerFile)) }
       catch (error) { if (error.code === 'ENOENT') continue; throw error }
-      owner.stackGroups = previous.stackGroups || []
-      owner.groupsTokens = previous.groupsTokens || []
-      if (!Array.isArray(owner.groupsTokens)) throw inspectionError(lock)
-      if (previous.stackPid !== undefined) {
-        if (!Number.isSafeInteger(previous.stackPid) || previous.stackPid <= 0) throw inspectionError(lock)
-        owner.stackPid = previous.stackPid
-        if (!owner.stackGroups.some(group => group.pid === owner.stackPid)) owner.stackGroups.push({ pid: owner.stackPid, identities: [] })
-      }
-      // Persist orphan identities before recovery can be interrupted.
-      save()
-      const stack = owner.stackGroups.find(group => group.pid === owner.stackPid)
-      if (stack && !owner.groupsTokens.length) owner.stackGroups = snapshotGroups(stack, owner.stackGroups, lock)
-      save()
-      await finishGroups(owner.stackGroups, lock, 30_000, true, refreshGroups)
+      owner.groupsTokens = tokens
       await removeGroupsFiles()
       owner.groupsTokens = []
-      delete owner.stackPid
-      owner.stackGroups = []
       save()
       break
     }
@@ -195,7 +203,7 @@ export async function acquireCaptureStackLock(lock = join(tmpdir(), `budds-desig
   save()
   let releasing
   const release = timeoutMs => releasing ||= (async () => {
-    await finishGroups(owner.stackGroups, lock, timeoutMs, false, refreshGroups)
+    await finishGroups(owner.stackGroups, lock, timeoutMs, refreshGroups)
     await removeGroupsFiles()
     await unlink(join(lock, ownerFile))
     await rmdir(lock).catch(error => { if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(error.code)) throw error })
