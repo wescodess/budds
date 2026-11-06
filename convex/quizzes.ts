@@ -1,8 +1,15 @@
 import { v } from 'convex/values'
 import { mutation, query, internalMutation } from './_generated/server'
+import { internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import type { MutationCtx, QueryCtx } from './_generated/server'
 import { getOptionalAuthUserId, requireAuth } from './lib/auth'
+import { createPendingAnswerAssessment } from './lib/quizAnswerAssessment'
+
+const MAX_QUIZ_QUESTIONS = 200
+const MAX_QUIZZES_PER_FOLDER = 100
+const MAX_ATTEMPTS_PER_QUIZ = 100
+const DELETE_BATCH_SIZE = 50
 
 const questionTypeValidator = v.union(
   v.literal('multiple-choice'),
@@ -31,7 +38,7 @@ const settingsValidator = v.object({
 
 async function requireQuiz(ctx: QueryCtx | MutationCtx, quizId: Id<'quizzes'>, userId: string) {
   const quiz = await ctx.db.get(quizId)
-  if (!quiz || quiz.userId !== userId) throw new Error('Quiz not found')
+  if (!quiz || quiz.userId !== userId || quiz.deletedAt !== undefined) throw new Error('Quiz not found')
   return quiz
 }
 
@@ -39,15 +46,84 @@ function normalizeForCompare(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, ' ')
 }
 
+function listFactorTokens(value: string): string[] {
+  return value
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+}
+
+function splitListFactors(value: string): string[][] {
+  return value
+    .split(/\s*(?:,|;|&|\band\b)\s*/i)
+    .map(listFactorTokens)
+    .filter(tokens => tokens.length > 0)
+}
+
+function regularPlural(token: string): string | null {
+  if (token.endsWith('s')) return null
+  if (/[^aeiou]y$/i.test(token)) return `${token.slice(0, -1)}ies`
+  if (/(?:x|ch|sh)$/i.test(token)) return `${token}es`
+  if (token.endsWith('z')) return null
+  return `${token}s`
+}
+
+function listFactorMatches(expected: string[], actual: string[]): boolean {
+  const expectedHeadIndex = expected.length - 1
+  const expectedHead = expected[expectedHeadIndex]!
+  const expectedPluralHead = regularPlural(expectedHead)
+  return actual.some(token => token === expectedHead || (expectedPluralHead !== null && token === expectedPluralHead))
+    && actual.every(token => expected.some((expectedToken, index) =>
+      token === expectedToken || (index === expectedHeadIndex && expectedPluralHead !== null && token === expectedPluralHead),
+    ))
+}
+
+function isExplicitListMatch(question: string, response: string, correctAnswer: string): boolean {
+  const directive = question.match(/^\s*(?:list|name|identify|give|provide|state)\s+(?:(?:the|any)\s+)?(two|three|four|five|[2-5])\b/i)
+  if (!directive) return false
+  const countByWord: Record<string, number> = { two: 2, three: 3, four: 4, five: 5 }
+  const requestedCount = countByWord[directive[1]!.toLowerCase()] ?? Number(directive[1])
+  if (!Number.isInteger(requestedCount) || requestedCount < 2 || requestedCount > 5) return false
+
+  const expectedFactors = splitListFactors(correctAnswer)
+  const responseFactors = splitListFactors(response)
+  if (expectedFactors.length !== requestedCount || responseFactors.length !== requestedCount) return false
+  if (responseFactors.some(tokens => tokens.some(token => ['no', 'not', 'never', 'without'].includes(token)))) return false
+
+  const expectedConcepts = expectedFactors
+  const responseConcepts = responseFactors
+
+  const expectedHeads = expectedFactors.map(tokens => tokens.at(-1)!)
+  if (expectedHeads.some(head => head.length < 4)) return false
+  if (new Set(expectedHeads).size !== expectedHeads.length) return false
+  const responseSignatures = responseConcepts.map(tokens => tokens.join(' '))
+  if (new Set(responseSignatures).size !== responseSignatures.length) return false
+  const usedExpected = new Set<number>()
+  for (const actual of responseConcepts) {
+    const matchIndex = expectedConcepts.findIndex((expected, index) =>
+      !usedExpected.has(index)
+      && listFactorMatches(expected, actual),
+    )
+    if (matchIndex < 0) return false
+    usedExpected.add(matchIndex)
+  }
+  return usedExpected.size === requestedCount
+}
+
 function scoreAnswer(
   type: string,
   response: string,
   correctAnswer: string,
+  question: string,
 ): boolean {
   if (type === 'multiple-choice' || type === 'true_false') {
     return response === correctAnswer
   }
   return normalizeForCompare(response) === normalizeForCompare(correctAnswer)
+    || isExplicitListMatch(question, response, correctAnswer)
 }
 
 function shuffleArray<T>(arr: T[]): T[] {
@@ -76,6 +152,7 @@ export const createWithQuestions = mutation({
 
     const folder = await ctx.db.get(args.folderId)
     if (!folder || folder.userId !== userId) throw new Error('Folder not found')
+    if (args.questions.length > MAX_QUIZ_QUESTIONS) throw new Error(`Quiz cannot exceed ${MAX_QUIZ_QUESTIONS} questions`)
 
     const trimmedTitle = args.title.trim().slice(0, 120) || 'Quiz'
 
@@ -132,6 +209,7 @@ export const createCourseScopedQuiz = internalMutation({
     questions: v.array(questionInput),
   },
   handler: async (ctx, args) => {
+    if (args.questions.length > MAX_QUIZ_QUESTIONS) throw new Error(`Quiz cannot exceed ${MAX_QUIZ_QUESTIONS} questions`)
     const quizId = await ctx.db.insert('quizzes', {
       userId: args.userId,
       folderId: args.folderId,
@@ -179,24 +257,29 @@ export const listByFolder = query({
     const folder = await ctx.db.get(args.folderId)
     if (!folder || folder.userId !== userId) return []
 
-    const allRows = await ctx.db
-      .query('quizzes')
-      .withIndex('by_userId_and_folderId', (q) =>
-        q.eq('userId', userId).eq('folderId', args.folderId),
-      )
-      .order('desc')
-      .collect()
-
-    const rows = allRows.filter((r) => r.courseScoped !== true)
+    const [legacyRows, explicitRows] = await Promise.all([
+      ctx.db.query('quizzes')
+        .withIndex('by_userId_and_folderId_and_courseScoped_and_deletedAt', q => q
+          .eq('userId', userId).eq('folderId', args.folderId).eq('courseScoped', undefined).eq('deletedAt', undefined))
+        .order('desc').take(MAX_QUIZZES_PER_FOLDER),
+      ctx.db.query('quizzes')
+        .withIndex('by_userId_and_folderId_and_courseScoped_and_deletedAt', q => q
+          .eq('userId', userId).eq('folderId', args.folderId).eq('courseScoped', false).eq('deletedAt', undefined))
+        .order('desc').take(MAX_QUIZZES_PER_FOLDER),
+    ])
+    const rows = [...legacyRows, ...explicitRows]
+      .sort((a, b) => b._creationTime - a._creationTime)
+      .slice(0, MAX_QUIZZES_PER_FOLDER)
 
     return await Promise.all(
       rows.map(async (row) => {
         const questions = await ctx.db
           .query('quizQuestions')
           .withIndex('by_quizId', (q) => q.eq('quizId', row._id))
-          .collect()
+          .take(MAX_QUIZ_QUESTIONS)
         return {
           _id: row._id,
+          folderId: row.folderId,
           _creationTime: row._creationTime,
           title: row.title,
           status: row.status,
@@ -218,12 +301,12 @@ export const getWithQuestions = query({
     if (!userId) return null
 
     const quiz = await ctx.db.get(args.id)
-    if (!quiz || quiz.userId !== userId) return null
+    if (!quiz || quiz.userId !== userId || quiz.deletedAt !== undefined) return null
 
     const questions = await ctx.db
       .query('quizQuestions')
       .withIndex('by_quizId', (q) => q.eq('quizId', quiz._id))
-      .collect()
+      .take(MAX_QUIZ_QUESTIONS)
 
     questions.sort((a, b) => a.order - b.order)
 
@@ -288,7 +371,8 @@ export const addQuestion = mutation({
     const existing = await ctx.db
       .query('quizQuestions')
       .withIndex('by_quizId', q => q.eq('quizId', args.quizId))
-      .collect()
+      .take(MAX_QUIZ_QUESTIONS)
+    if (existing.length >= MAX_QUIZ_QUESTIONS) throw new Error(`Quiz has reached the maximum of ${MAX_QUIZ_QUESTIONS} questions`)
 
     const maxOrder = existing.reduce((max, q) => Math.max(max, q.order), -1)
 
@@ -327,6 +411,7 @@ export const updateQuestion = mutation({
 
     const existing = await ctx.db.get(args.questionId)
     if (!existing || existing.userId !== userId) throw new Error('Question not found')
+    await requireQuiz(ctx, existing.quizId, userId)
 
     const patch: Record<string, unknown> = {}
 
@@ -377,6 +462,7 @@ export const deleteQuestion = mutation({
 
     const question = await ctx.db.get(args.questionId)
     if (!question || question.userId !== userId) throw new Error('Question not found')
+    await requireQuiz(ctx, question.quizId, userId)
 
     const quizId = question.quizId
     await ctx.db.delete(args.questionId)
@@ -384,7 +470,7 @@ export const deleteQuestion = mutation({
     const remaining = await ctx.db
       .query('quizQuestions')
       .withIndex('by_quizId', q => q.eq('quizId', quizId))
-      .collect()
+      .take(MAX_QUIZ_QUESTIONS)
 
     remaining.sort((a, b) => a.order - b.order)
     for (let i = 0; i < remaining.length; i++) {
@@ -410,7 +496,7 @@ export const startAttempt = mutation({
     const questions = await ctx.db
       .query('quizQuestions')
       .withIndex('by_quizId', q => q.eq('quizId', args.quizId))
-      .collect()
+      .take(MAX_QUIZ_QUESTIONS)
 
     if (questions.length === 0) throw new Error('Quiz has no questions')
 
@@ -419,7 +505,8 @@ export const startAttempt = mutation({
       .withIndex('by_userId_and_quizId', q =>
         q.eq('userId', userId).eq('quizId', args.quizId),
       )
-      .collect()
+      .order('desc')
+      .take(MAX_ATTEMPTS_PER_QUIZ)
     const existingInProgress = userAttempts.find(a => a.status === 'in_progress')
 
     if (!args.restart && existingInProgress) {
@@ -427,7 +514,7 @@ export const startAttempt = mutation({
       const answers = await ctx.db
         .query('attemptAnswers')
         .withIndex('by_attemptId', q => q.eq('attemptId', existingInProgress._id))
-        .collect()
+        .take(MAX_QUIZ_QUESTIONS)
       for (const a of answers) answeredIds.add(a.questionId as string)
 
       const orderedQuestions = existingInProgress.questionOrder
@@ -497,6 +584,7 @@ export const submitAnswer = mutation({
     const attempt = await ctx.db.get(args.attemptId)
     if (!attempt || attempt.userId !== userId) throw new Error('Attempt not found')
     if (attempt.status !== 'in_progress') throw new Error('Attempt is not in progress')
+    await requireQuiz(ctx, attempt.quizId, userId)
 
     const question = await ctx.db.get(args.questionId)
     if (!question) throw new Error('Question not found')
@@ -518,20 +606,28 @@ export const submitAnswer = mutation({
       }
     }
 
-    const isCorrect = scoreAnswer(question.type, args.userAnswer, question.correctAnswer)
+    const isCorrect = scoreAnswer(question.type, args.userAnswer, question.correctAnswer, question.question)
 
-    await ctx.db.insert('attemptAnswers', {
+    const attemptAnswerId = await ctx.db.insert('attemptAnswers', {
       attemptId: args.attemptId,
       questionId: args.questionId,
       userAnswer: args.userAnswer,
       isCorrect,
       answeredAt: Date.now(),
     })
+    await createPendingAnswerAssessment(ctx, {
+      userId,
+      attemptId: args.attemptId,
+      attemptAnswerId,
+      question,
+      learnerAnswer: args.userAnswer,
+      deterministicIsCorrect: isCorrect,
+    })
 
     const allAnswers = await ctx.db
       .query('attemptAnswers')
       .withIndex('by_attemptId', q => q.eq('attemptId', args.attemptId))
-      .collect()
+      .take(MAX_QUIZ_QUESTIONS)
     await ctx.db.patch(args.attemptId, {
       currentQuestionIndex: allAnswers.length,
     })
@@ -559,37 +655,46 @@ export const submitAllAnswers = mutation({
     const attempt = await ctx.db.get(args.attemptId)
     if (!attempt || attempt.userId !== userId) throw new Error('Attempt not found')
     if (attempt.status !== 'in_progress') throw new Error('Attempt is not in progress')
+    await requireQuiz(ctx, attempt.quizId, userId)
 
     const questions = await ctx.db
       .query('quizQuestions')
       .withIndex('by_quizId', q => q.eq('quizId', attempt.quizId))
-      .collect()
+      .take(MAX_QUIZ_QUESTIONS)
 
     const questionMap = new Map(questions.map(q => [q._id as string, q]))
 
     const existingAnswers = await ctx.db
       .query('attemptAnswers')
       .withIndex('by_attemptId', q => q.eq('attemptId', args.attemptId))
-      .collect()
+      .take(MAX_QUIZ_QUESTIONS)
     const alreadyAnswered = new Set(existingAnswers.map(a => a.questionId as string))
 
     const results = []
-    let correctCount = 0
+    let correctCount = existingAnswers.filter(answer => answer.isCorrect && questionMap.has(String(answer.questionId))).length
 
     for (const a of args.answers) {
       const question = questionMap.get(a.questionId as string)
       if (!question) continue
       if (alreadyAnswered.has(a.questionId as string)) continue
 
-      const isCorrect = scoreAnswer(question.type, a.userAnswer, question.correctAnswer)
+      const isCorrect = scoreAnswer(question.type, a.userAnswer, question.correctAnswer, question.question)
       if (isCorrect) correctCount++
 
-      await ctx.db.insert('attemptAnswers', {
+      const attemptAnswerId = await ctx.db.insert('attemptAnswers', {
         attemptId: args.attemptId,
         questionId: a.questionId,
         userAnswer: a.userAnswer,
         isCorrect,
         answeredAt: Date.now(),
+      })
+      await createPendingAnswerAssessment(ctx, {
+        userId,
+        attemptId: args.attemptId,
+        attemptAnswerId,
+        question,
+        learnerAnswer: a.userAnswer,
+        deterministicIsCorrect: isCorrect,
       })
       alreadyAnswered.add(a.questionId as string)
 
@@ -631,17 +736,19 @@ export const completeAttempt = mutation({
     const attempt = await ctx.db.get(args.attemptId)
     if (!attempt || attempt.userId !== userId) throw new Error('Attempt not found')
     if (attempt.status !== 'in_progress') throw new Error('Attempt is not in progress')
+    await requireQuiz(ctx, attempt.quizId, userId)
 
     const answers = await ctx.db
       .query('attemptAnswers')
       .withIndex('by_attemptId', q => q.eq('attemptId', args.attemptId))
-      .collect()
+      .take(MAX_QUIZ_QUESTIONS)
 
-    const correctCount = answers.filter(a => a.isCorrect).length
     const questions = await ctx.db
       .query('quizQuestions')
       .withIndex('by_quizId', q => q.eq('quizId', attempt.quizId))
-      .collect()
+      .take(MAX_QUIZ_QUESTIONS)
+    const questionIds = new Set(questions.map(question => String(question._id)))
+    const correctCount = answers.filter(answer => answer.isCorrect && questionIds.has(String(answer.questionId))).length
 
     const total = questions.length
     const percentage = total > 0 ? Math.round((correctCount / total) * 100) : 0
@@ -671,6 +778,7 @@ export const abandonAttempt = mutation({
 
     const attempt = await ctx.db.get(args.attemptId)
     if (!attempt || attempt.userId !== userId) throw new Error('Attempt not found')
+    await requireQuiz(ctx, attempt.quizId, userId)
 
     await ctx.db.patch(args.attemptId, { status: 'abandoned' })
     await ctx.db.patch(attempt.quizId, { latestAttemptStatus: 'abandoned' })
@@ -687,32 +795,52 @@ export const getAttemptResults = query({
     if (!attempt || attempt.userId !== userId) return null
 
     const quiz = await ctx.db.get(attempt.quizId)
+    if (!quiz || quiz.deletedAt !== undefined) return null
 
     const questions = await ctx.db
       .query('quizQuestions')
       .withIndex('by_quizId', q => q.eq('quizId', attempt.quizId))
-      .collect()
+      .take(MAX_QUIZ_QUESTIONS)
 
     const questionMap = new Map(questions.map(q => [q._id as string, q]))
 
     const attemptAnswers = await ctx.db
       .query('attemptAnswers')
       .withIndex('by_attemptId', q => q.eq('attemptId', args.attemptId))
-      .collect()
+      .take(MAX_QUIZ_QUESTIONS)
+
+    const assessments = await ctx.db
+      .query('quizAnswerAssessments')
+      .withIndex('by_userId_and_attemptId', q => q.eq('userId', userId).eq('attemptId', args.attemptId))
+      .take(MAX_QUIZ_QUESTIONS)
+    const assessmentMap = new Map(assessments.map(row => [row.attemptAnswerId as string, row]))
 
     if (attemptAnswers.length > 0) {
       const results = attemptAnswers.map(a => {
         const q = questionMap.get(a.questionId as string)
+        const assessment = assessmentMap.get(a._id as string)
         return {
           questionId: a.questionId,
-          questionText: q?.question ?? '',
-          questionType: q?.type ?? 'multiple-choice',
+          questionText: assessment?.questionSnapshot.question ?? q?.question ?? '',
+          questionType: assessment?.questionSnapshot.questionType ?? q?.type ?? 'multiple-choice',
           options: q?.options,
           userAnswer: a.userAnswer,
           isCorrect: a.isCorrect,
-          correctAnswer: q?.correctAnswer ?? '',
-          explanation: q?.explanation,
+          correctAnswer: assessment?.questionSnapshot.expectedAnswer ?? q?.correctAnswer ?? '',
+          explanation: assessment?.questionSnapshot.explanation ?? q?.explanation,
           feedback: a.feedback,
+          semanticAssessment: assessment ? {
+            status: assessment.status,
+            label: assessment.label,
+            confidence: assessment.confidence,
+            probabilities: assessment.probabilities,
+            unavailableReason: assessment.unavailableReason,
+            retryable: assessment.retryable,
+            retryDueAt: assessment.nextAttemptAt,
+            attemptCount: assessment.attemptCount ?? 0,
+            rubricVersion: assessment.rubricVersion,
+            deterministicScoreUnchanged: true,
+          } : undefined,
         }
       })
 
@@ -743,6 +871,7 @@ export const getAttemptResults = query({
           correctAnswer: q?.correctAnswer ?? '',
           explanation: q?.explanation,
           feedback: undefined,
+          semanticAssessment: undefined,
         }
       })
 
@@ -785,7 +914,7 @@ export const getQuizHistory = query({
     if (!userId) return []
 
     const quiz = await ctx.db.get(args.quizId)
-    if (!quiz || quiz.userId !== userId) return []
+    if (!quiz || quiz.userId !== userId || quiz.deletedAt !== undefined) return []
 
     const attempts = await ctx.db
       .query('quizAttempts')
@@ -826,7 +955,7 @@ export const submitAttempt = mutation({
     const questions = await ctx.db
       .query('quizQuestions')
       .withIndex('by_quizId', (q) => q.eq('quizId', args.quizId))
-      .collect()
+      .take(MAX_QUIZ_QUESTIONS)
 
     const questionMap = new Map<string, (typeof questions)[number]>(
       questions.map((q) => [q._id as unknown as string, q]),
@@ -837,12 +966,14 @@ export const submitAttempt = mutation({
       if (!q || q.userId !== userId) throw new Error('Invalid question')
     }
 
+    if (new Set(args.answers.map(answer => String(answer.questionId))).size !== args.answers.length) throw new Error('Duplicate answer')
+
     const scoredAnswers = args.answers.map((a) => {
       const q = questionMap.get(a.questionId as unknown as string)!
       return {
         questionId: a.questionId,
         response: a.response,
-        isCorrect: scoreAnswer(q.type, a.response, q.correctAnswer),
+        isCorrect: scoreAnswer(q.type, a.response, q.correctAnswer, q.question),
       }
     })
 
@@ -854,12 +985,30 @@ export const submitAttempt = mutation({
     const attemptId = await ctx.db.insert('quizAttempts', {
       userId,
       quizId: args.quizId,
-      answers: scoredAnswers,
       score: correctCount,
       total,
       completedAt,
       status: 'completed',
     })
+
+    for (const answer of scoredAnswers) {
+      const question = questionMap.get(String(answer.questionId))!
+      const attemptAnswerId = await ctx.db.insert('attemptAnswers', {
+        attemptId,
+        questionId: answer.questionId,
+        userAnswer: answer.response,
+        isCorrect: answer.isCorrect,
+        answeredAt: completedAt,
+      })
+      await createPendingAnswerAssessment(ctx, {
+        userId,
+        attemptId,
+        attemptAnswerId,
+        question,
+        learnerAnswer: answer.response,
+        deterministicIsCorrect: answer.isCorrect,
+      })
+    }
 
     await ctx.db.patch(args.quizId, {
       score: percentage,
@@ -888,15 +1037,26 @@ export const listAttempts = query({
     if (!userId) return []
 
     const quiz = await ctx.db.get(args.quizId)
-    if (!quiz || quiz.userId !== userId) return []
+    if (!quiz || quiz.userId !== userId || quiz.deletedAt !== undefined) return []
 
-    return await ctx.db
+    const attempts = await ctx.db
       .query('quizAttempts')
       .withIndex('by_userId_and_quizId', (q) =>
         q.eq('userId', userId).eq('quizId', args.quizId),
       )
       .order('desc')
-      .collect()
+      .take(20)
+    return await Promise.all(attempts.map(async (attempt) => {
+      if (attempt.answers) return attempt
+      const rows = await ctx.db
+        .query('attemptAnswers')
+        .withIndex('by_attemptId', q => q.eq('attemptId', attempt._id))
+        .take(MAX_QUIZ_QUESTIONS)
+      return {
+        ...attempt,
+        answers: rows.map(row => ({ questionId: row.questionId, response: row.userAnswer, isCorrect: row.isCorrect })),
+      }
+    }))
   },
 })
 
@@ -912,6 +1072,9 @@ export const deleteQuiz = mutation({
       .collect()
 
     for (const a of attempts) {
+      const assessments = await ctx.db.query('quizAnswerAssessments')
+        .withIndex('by_attemptId', q => q.eq('attemptId', a._id)).take(MAX_QUIZ_QUESTIONS)
+      for (const assessment of assessments) await ctx.db.delete(assessment._id)
       const answers = await ctx.db
         .query('attemptAnswers')
         .withIndex('by_attemptId', q => q.eq('attemptId', a._id))

@@ -127,10 +127,12 @@ export default defineSchema({
     questionCount: v.optional(v.number()),
     latestAttemptStatus: v.optional(v.union(v.literal('in_progress'), v.literal('completed'), v.literal('abandoned'))),
     courseScoped: v.optional(v.boolean()),
+    deletedAt: v.optional(v.number()),
   })
     .index('by_userId', ['userId'])
     .index('by_folderId', ['folderId'])
-    .index('by_userId_and_folderId', ['userId', 'folderId']),
+    .index('by_userId_and_folderId', ['userId', 'folderId'])
+    .index('by_userId_and_folderId_and_courseScoped_and_deletedAt', ['userId', 'folderId', 'courseScoped', 'deletedAt']),
 
   quizQuestions: defineTable({
     quizId: v.id('quizzes'),
@@ -312,6 +314,94 @@ export default defineSchema({
   })
     .index('by_attemptId', ['attemptId'])
     .index('by_attemptId_and_questionId', ['attemptId', 'questionId']),
+
+  quizAnswerAssessments: defineTable({
+    userId: v.string(),
+    attemptId: v.id('quizAttempts'),
+    attemptAnswerId: v.id('attemptAnswers'),
+    questionId: v.id('quizQuestions'),
+    kind: v.literal('quiz.free_response_assessment.v1'),
+    contractVersion: v.optional(v.string()),
+    snapshotVersion: v.optional(v.string()),
+    languageSnapshot: v.optional(v.string()),
+    inputDigest: v.optional(v.string()),
+    claimId: v.optional(v.string()),
+    claimedAt: v.optional(v.number()),
+    leaseExpiresAt: v.optional(v.number()),
+    attemptCount: v.optional(v.number()),
+    nextAttemptAt: v.optional(v.number()),
+    status: v.union(v.literal('pending'), v.literal('available'), v.literal('unavailable')),
+    questionSnapshot: v.object({
+      question: v.string(),
+      questionType: v.union(v.literal('free-response'), v.literal('fill_in_the_blank')),
+      expectedAnswer: v.string(),
+      evidenceExcerpt: v.string(),
+      sourceFilename: v.optional(v.string()),
+      explanation: v.optional(v.string()),
+    }),
+    learnerAnswerSnapshot: v.string(),
+    deterministicIsCorrect: v.boolean(),
+    rubricVersion: v.literal('quiz.free_response_assessment.v1'),
+    rubricSnapshot: v.array(v.object({ label: v.string(), description: v.string() })),
+    label: v.optional(v.union(
+      v.literal('fully_correct'),
+      v.literal('partially_correct'),
+      v.literal('incorrect'),
+      v.literal('uncertain'),
+    )),
+    confidence: v.optional(v.number()),
+    probabilities: v.optional(v.object({
+      fullyCorrect: v.number(),
+      partiallyCorrect: v.number(),
+      incorrect: v.number(),
+      uncertain: v.number(),
+    })),
+    provider: v.optional(v.string()),
+    modelRevision: v.optional(v.string()),
+    shadowStatus: v.optional(v.union(v.literal('available'), v.literal('unavailable'))),
+    shadowInputDigest: v.optional(v.string()),
+    shadowClaimId: v.optional(v.string()),
+    shadowClaimedAt: v.optional(v.number()),
+    shadowLeaseExpiresAt: v.optional(v.number()),
+    shadowEvaluatedAt: v.optional(v.number()),
+    shadowProvider: v.optional(v.string()),
+    shadowModelRevision: v.optional(v.string()),
+    shadowLabel: v.optional(v.union(
+      v.literal('fully_correct'),
+      v.literal('partially_correct'),
+      v.literal('incorrect'),
+      v.literal('uncertain'),
+    )),
+    shadowConfidence: v.optional(v.number()),
+    shadowReviewRequired: v.optional(v.boolean()),
+    shadowProbabilities: v.optional(v.object({
+      fullyCorrect: v.number(),
+      partiallyCorrect: v.number(),
+      incorrect: v.number(),
+      uncertain: v.number(),
+    })),
+    shadowUnavailableReason: v.optional(v.string()),
+    unavailableReason: v.optional(v.union(
+      v.literal('disabled'),
+      v.literal('unconfigured'),
+      v.literal('timeout'),
+      v.literal('unavailable'),
+      v.literal('malformed'),
+      v.literal('over_budget'),
+      v.literal('unsupported_language'),
+      v.literal('unknown_language'),
+      v.literal('missing_evidence'),
+      v.literal('oversized_evidence'),
+    )),
+    retryable: v.optional(v.boolean()),
+    requestedAt: v.number(),
+    completedAt: v.optional(v.number()),
+  })
+    .index('by_attemptId', ['attemptId'])
+    .index('by_attemptAnswerId', ['attemptAnswerId'])
+    .index('by_userId_and_attemptId', ['userId', 'attemptId'])
+    .index('by_user_attempt_status_shadow_deterministic', ['userId', 'attemptId', 'status', 'shadowStatus', 'deterministicIsCorrect'])
+    .index('by_userId_and_attemptId_and_status_and_nextAttemptAt', ['userId', 'attemptId', 'status', 'nextAttemptAt']),
 
   tasks: defineTable({
     userId: v.string(),

@@ -14,9 +14,16 @@ export interface GenerateParams {
   stream?: boolean
   maxAttempts?: number
   allowProviderFallbacks?: boolean
+  collectLogPayload?: boolean
+  requireZeroDataRetention?: boolean
+  denyProviderDataCollection?: boolean
+  skipGatewayCache?: boolean
+  providerOrder?: string[]
   jsonMode?: boolean
   signal?: AbortSignal
   maxResponseBytes?: number
+  maxRequestBytes?: number
+  redactUpstreamErrorBody?: boolean
   jsonSchema?: {
     name: string
     strict?: boolean
@@ -176,13 +183,11 @@ export async function generateCompletion(params: GenerateParams): Promise<Genera
   const { baseUrl, headers: baseHeaders } = getGatewayConfig()
   const headers = { ...baseHeaders }
   if (params.maxAttempts !== undefined) headers['cf-aig-max-attempts'] = String(params.maxAttempts)
+  if (params.collectLogPayload !== undefined) headers['cf-aig-collect-log-payload'] = String(params.collectLogPayload)
+  if (params.skipGatewayCache !== undefined) headers['cf-aig-skip-cache'] = String(params.skipGatewayCache)
   const url = `${baseUrl}/openrouter/v1/chat/completions`
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers,
-    signal: params.signal,
-    body: JSON.stringify({
+  const requestBody = JSON.stringify({
       model: params.model,
       messages: params.messages,
       temperature: params.temperature ?? 0.7,
@@ -197,20 +202,37 @@ export async function generateCompletion(params: GenerateParams): Promise<Genera
             provider: {
               require_parameters: true,
               ...(params.allowProviderFallbacks === false ? { allow_fallbacks: false } : {}),
+              ...(params.requireZeroDataRetention ? { zdr: true } : {}),
+              ...(params.denyProviderDataCollection ? { data_collection: 'deny' } : {}),
+              ...(params.providerOrder?.length ? { order: params.providerOrder, only: params.providerOrder } : {}),
             },
           }
         : params.jsonMode
         ? {
             response_format: { type: 'json_object' },
-            provider: { require_parameters: true },
+            provider: {
+              require_parameters: true,
+              ...(params.allowProviderFallbacks === false ? { allow_fallbacks: false } : {}),
+              ...(params.requireZeroDataRetention ? { zdr: true } : {}),
+              ...(params.denyProviderDataCollection ? { data_collection: 'deny' } : {}),
+              ...(params.providerOrder?.length ? { order: params.providerOrder, only: params.providerOrder } : {}),
+            },
           }
         : {}),
-    }),
+    })
+  if (params.maxRequestBytes !== undefined && new TextEncoder().encode(requestBody).byteLength > params.maxRequestBytes) {
+    throw providerError({ statusCode: 413, message: 'AI Gateway request exceeded the byte limit' }, 'not_dispatched')
+  }
+  const response = await fetch(url, {
+    method: 'POST',
+    headers,
+    signal: params.signal,
+    body: requestBody,
   })
 
   const responseText = await readBoundedResponseText(response, params.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES)
   if (!response.ok) {
-    const error = responseText
+    const error = params.redactUpstreamErrorBody ? 'Upstream provider request failed' : responseText
     const options = { statusCode: response.status, message: `AI Gateway error: ${error}` }
     throw providerError(options, response.status >= 500 ? 'outcome_unknown' : 'definitive_failure')
   }

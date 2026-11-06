@@ -74,6 +74,7 @@ import type * as lib_sm2 from "../lib/sm2.js";
 import type * as lib_streak from "../lib/streak.js";
 import type * as messages from "../messages.js";
 import type * as migrations from "../migrations.js";
+import type * as quizAnswerAssessments from "../quizAnswerAssessments.js";
 import type * as quizzes from "../quizzes.js";
 import type * as rateLimits from "../rateLimits.js";
 import type * as reviewItems from "../reviewItems.js";
@@ -154,6 +155,7 @@ declare const fullApi: ApiFromModules<{
   "lib/streak": typeof lib_streak;
   messages: typeof messages;
   migrations: typeof migrations;
+  quizAnswerAssessments: typeof quizAnswerAssessments;
   quizzes: typeof quizzes;
   rateLimits: typeof rateLimits;
   reviewItems: typeof reviewItems;
