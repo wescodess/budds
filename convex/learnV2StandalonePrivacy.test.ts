@@ -15,7 +15,8 @@ afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs() })
 
 const cases = [
   [false, 'document_deleted'], [false, 'document_unavailable'], [false, 'folder_deleted'],
-  [true, 'document_deleted'], [true, 'document_unavailable'], [true, 'document_replaced'], [true, 'folder_deleted'], [true, 'body_purged'],
+  [true, 'document_deleted'], [true, 'document_unavailable'], [true, 'document_replaced'],
+  [true, 'document_hash_replaced'], [true, 'folder_deleted'], [true, 'body_purged'],
 ] as const
 
 test('direct folder cleanup purges copies across owner and activity pages without touching other scopes or owners', async () => {
@@ -65,6 +66,7 @@ test.each(cases)('standalone aliases share source authority with canonical=%s af
   if (revocation === 'document_deleted') await f.owner.mutation(api.documents.deleteDocument, { id: f.documentId })
   if (revocation === 'document_unavailable') await t.mutation(internal.documents.updateDocumentStatus, { id: f.documentId, status: 'failed' })
   if (revocation === 'document_replaced') await t.mutation(internal.documents.updateDocumentStatus, { id: f.documentId, status: 'success', sourceRevision: 'source.r2' })
+  if (revocation === 'document_hash_replaced') await t.mutation(internal.documents.updateDocumentStatus, { id: f.documentId, status: 'success', contentHash: 'b'.repeat(64) })
   if (revocation === 'folder_deleted') await f.owner.mutation(api.folders.deleteFolder, { id: f.folderId })
   if (revocation === 'body_purged') await t.mutation(internal.learnV2Retention.purgeResponseCopies, { userId: f.userId, submissionId: f.submissionId! })
   expect((await t.run(ctx => ctx.db.get(f.activityId)))?.submittedResponse).toBe(f.answer)

@@ -14,6 +14,7 @@ import { deriveLearnAssessmentResponseContext } from '../../../shared/learn-v2-m
 import { PERSONAL_EXPORT_COLLECTIONS, PERSONAL_EXPORT_CONTENT_COLLECTIONS } from '../../../convex/lib/learnV2PersonalExportCollections'
 import { PERSONAL_EXPORT_CONTENT_CASES, measurementExportFixture, seedExportContent } from '../../../tests/fixtures/learn-v2-export-content'
 import { standaloneResponseFixture } from '../../../tests/fixtures/learn-v2-standalone-response'
+import { BACKING_SOURCE_CASES, BACKING_SOURCE_KINDS, backingResponseFixture, replaceBackingDocument, purgeBackingResponse } from '../../../tests/fixtures/learn-v2-backing-response'
 
 vi.mock('../../../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
   const original = await importOriginal<typeof import('../../../shared/learn-v2-measurement-storage-manifest')>()
@@ -112,6 +113,53 @@ describe('GET /api/export/me', () => {
     for (const key of Object.keys(recordedHeaders)) Reflect.deleteProperty(recordedHeaders, key)
     process.env.CONVEX_URL = 'https://test.convex.cloud'
   })
+
+  test.each(BACKING_SOURCE_KINDS.flatMap((kind, index) => BACKING_SOURCE_CASES.map(([change, ...allowed]) => [kind, change, allowed[index]!] as const)))(
+    'decoded ZIP uses %s backing authority after %s with disclosure=%s', async (kind, change, allowed) => {
+      vi.useFakeTimers()
+      vi.setSystemTime(1_800_000_000_001)
+      vi.stubEnv('LEARN_V2_ENABLED', 'true')
+      const f = await backingResponseFixture(convexTest(schema, import.meta.glob('../../../convex/**/*.ts')), 'https://owner.example|zip-backing-response', kind)
+      authorizeExportMock.mockImplementation(args => f.owner.mutation(api.dataExport.authorizePersonalExport, args))
+      getExportMetadataMock.mockImplementation(() => f.owner.query(api.dataExport.getExportMetadata, {}))
+      getUserDataPageMock.mockImplementation(args => f.owner.query(api.dataExport.getUserDataPage, args))
+      getAttemptAnswersPageMock.mockImplementation(args => f.owner.query(api.dataExport.getAttemptAnswersPage, args))
+      getCourseSourceDocsPageMock.mockImplementation(args => f.owner.query(api.dataExport.getCourseSourceDocsPage, args))
+      getDocumentDownloadUrlMock.mockResolvedValue(null)
+      vi.stubEnv('LEARN_V2_ENABLED', 'false')
+      const assertDisclosure = async (disclosed: boolean, purged = false) => {
+        const entries = unzipSync(await handler(makeEvent('fixture-jwt')))
+        const activities = JSON.parse(strFromU8(entries['learningThreadActivities.json']!)) as Array<Record<string, unknown>>
+        const activity = activities.find(row => row._id === f.activityId)
+        expect(activity).toMatchObject({ threadId: f.threadId, updatedAt: expect.any(Number), status: purged && kind === 'snapshot' ? 'blocked' : 'submitted' })
+        if (disclosed) expect(activity).toMatchObject({ submittedResponse: f.answer, diagnosticResponse: f.answer })
+        else {
+          expect(activity).toMatchObject({ bodyAvailability: 'unavailable' })
+          expect(activity).not.toHaveProperty('submittedResponse')
+          expect(activity).not.toHaveProperty('diagnosticResponse')
+          for (const [name, bytes] of Object.entries(entries)) if (name.endsWith('.json')) expect(strFromU8(bytes)).not.toContain(f.answer)
+        }
+        if (f.submissionId) {
+          const bodies = JSON.parse(strFromU8(entries['learnResponseBodies.json']!)) as Array<Record<string, unknown>>
+          const body = bodies.find(row => row.submissionId === f.submissionId)
+          if (disclosed) expect(body).toMatchObject({ bodyAvailability: 'available', payload: { kind: 'text', text: f.answer } })
+          else if (body) { expect(body).toMatchObject({ bodyAvailability: 'unavailable' }); expect(body).not.toHaveProperty('payload') }
+          const responses = JSON.parse(strFromU8(entries['learnResponses.json']!)) as Array<Record<string, unknown>>
+          expect(responses.find(row => row._id === f.submissionId)).toMatchObject({ acceptedAt: expect.any(Number), assistance: expect.any(Object) })
+        }
+      }
+      await assertDisclosure(true)
+      await replaceBackingDocument(f, change)
+      await assertDisclosure(allowed)
+      if (!allowed) {
+        await purgeBackingResponse(f)
+        await f.t.finishAllScheduledFunctions(vi.runAllTimers)
+        await assertDisclosure(false, true)
+        expect((await f.t.run(ctx => ctx.db.get(f.activityId)))?.submittedResponse).toBeUndefined()
+        if (f.submissionId) expect(await f.t.run(ctx => ctx.db.get(f.submissionId!))).toMatchObject({ bodyAvailability: 'purged' })
+      }
+    },
+  )
 
   test.each([[false, 'document_deleted'], [true, 'document_deleted'], [false, 'folder_deleted'], [true, 'body_purged']] as const)(
     'decoded ZIP withholds standalone aliases with canonical=%s after %s, before and after cleanup', async (canonical, revocation) => {

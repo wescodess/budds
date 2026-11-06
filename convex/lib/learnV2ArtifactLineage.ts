@@ -3,6 +3,7 @@ import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { requireAuth } from './auth'
 import { rejectAccountDeletion } from './accountDeletionTombstone'
+import { documentMatchesSnapshot } from './learnV2BackingSource'
 import { requireActiveBlueprint } from './learnV2BlueprintAuthority'
 import { liveEvidenceState } from '../learnAdaptiveRecovery'
 import type { artifactSourceDependencyValidator } from './learnV2ArtifactLineageContract'
@@ -623,10 +624,7 @@ async function sourceAvailable(ctx: ReadCtx, userId: string, source: Dependency)
     const document = await liveDocument(ctx, userId, identity.folderDocumentId)
     // Mirrors learnV2Sources.prepareFetchedSourceForReview and learnAdaptive.loadContributionSource. Compare
     // every current pin, even when the document is still marked successful.
-    if ((!document.sourceRevision && !document.contentHash)
-      || document.sourceRevision?.trim() !== snapshot.sourceRevision
-      || document.contentHash?.trim().toLowerCase() !== snapshot.contentHash
-      || document.r2Key?.trim() !== snapshot.objectKey) return false
+    if (!documentMatchesSnapshot(document, snapshot)) return false
   }
   else if (identity.origin === 'folder_document') return false
   if (source.kind === 'snapshot') return true

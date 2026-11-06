@@ -257,7 +257,8 @@ test.each(['before_acceptance', 'after_wrapper_deletion', 'replacement'] as cons
   const { t, f, owner, context, submission, target, assessmentTarget } = await fixture()
   const documentId = await t.run(async ctx => {
     const activity = (await ctx.db.get(f.activityId))!
-    const id = await ctx.db.insert('documents', { userId: OWNER.tokenIdentifier, folderId: f.folderId, filename: 'direct-scope.txt', fileSize: 1, status: 'success', sourceRevision: 'direct.r1' })
+    const id = await ctx.db.insert('documents', { userId: OWNER.tokenIdentifier, folderId: f.folderId, filename: 'direct-scope.txt', fileSize: 1,
+      status: 'success', sourceRevision: HASH, contentHash: 'a'.repeat(64) })
     const canvas = { threadId: f.threadId, threadRevision: 1, activityId: activity._id, activityRevision: activity.planRevision,
       planVersion: activity.planVersion, replayVersion: activity.replayVersion, rendererVersion: activity.rendererVersion,
       evaluationVersion: activity.evaluationContract.version, pilotConfigurationVersion: 'synthetic.v1' }
@@ -275,7 +276,7 @@ test.each(['before_acceptance', 'after_wrapper_deletion', 'replacement'] as cons
   const accepted = await accept()
   if (accepted.kind !== 'accepted') throw new Error('Expected acceptance')
   const links = await t.run(ctx => ctx.db.query('learnResponseEvidenceLinks').withIndex('by_userId_and_submissionId', q => q.eq('userId', OWNER.tokenIdentifier).eq('submissionId', accepted.submissionId)).take(8))
-  expect(links).toEqual(expect.arrayContaining([expect.objectContaining({ dependency: { kind: 'document', documentId, sourceRevision: 'direct.r1' } })]))
+  expect(links).toEqual(expect.arrayContaining([expect.objectContaining({ dependency: { kind: 'document', documentId, sourceRevision: HASH } })]))
   const query = { version: LEARN_V2_PUBLIC_API_VERSION, target: assessmentTarget }
   expect(await owner.query(api.learnV2Responses.getResponseState, query)).toMatchObject({ work: { body: { bodyAvailability: 'available' } } })
   if (revocation === 'after_wrapper_deletion') {

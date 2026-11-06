@@ -4,6 +4,7 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { requireOwnedResponseTarget } from './learnV2PublicAccess'
 import { getScopedMasteryRecord } from './learnV2MasteryScope'
 import { liveResponseAggregate, sourceBodyAvailable, threadSourceAvailable } from './learnV2ResponsePrivacy'
+import { documentHasCurrentRevision, documentMatchesSnapshot } from './learnV2BackingSource'
 import {
   acceptResponseCommandSchema, disabledResponseReceipt, disabledLearnV2Result, LEARN_V2_PUBLIC_API_VERSION,
   validateLearnMasterySubmission, parsePublicLearnRequest, terminalizeResponseSchema, authorizeAssistanceSchema,
@@ -138,7 +139,7 @@ async function snapshotDependency(ctx: ReadCtx, userId: string, learningVoidId: 
     const document = await ctx.db.get(identity.folderDocumentId)
     const folder = document && await ctx.db.get(document.folderId)
     if (!document || document.userId !== userId || document.status !== 'success' || !folder || folder.userId !== userId
-      || document.sourceRevision !== source.sourceRevision) reject('evidence_unavailable')
+      || !documentMatchesSnapshot(document, source)) reject('evidence_unavailable')
   }
   return parseLearnContract(learnResponseDependencySchema, { kind: 'snapshot', sourceSnapshotId: source._id,
     sourceSnapshotRevision: source.revision, sourceRecordRevision: source.recordRevision ?? 1, supportManifestDigest: manifest })
@@ -150,8 +151,9 @@ async function threadDependencies(ctx: ReadCtx, userId: string, thread: Doc<'lea
     const id = ctx.db.normalizeId('documents', thread.sourceScope.sourceId)
     const document = id && await ctx.db.get(id)
     const folder = document && await ctx.db.get(document.folderId)
-    if (!document || document.userId !== userId || document.status !== 'success' || !folder || folder.userId !== userId || !document.sourceRevision) reject('evidence_unavailable')
-    return [parseLearnContract(learnResponseDependencySchema, { kind: 'document', documentId: document._id, sourceRevision: document.sourceRevision })]
+    if (!document || document.userId !== userId || document.status !== 'success' || !folder || folder.userId !== userId
+      || !document.sourceRevision || !documentHasCurrentRevision(document)) reject('evidence_unavailable')
+    return [parseLearnContract(learnResponseDependencySchema, { kind: 'document', documentId: document._id, sourceRevision: document.sourceRevision.trim() })]
   }
   if (thread.sourceScope.kind !== 'folder') return []
   const id = ctx.db.normalizeId('folders', thread.sourceScope.sourceId)
@@ -543,7 +545,8 @@ async function retainedBody(ctx: ReadCtx, userId: string, response: Doc<'learnRe
     } else if (dependency.kind === 'document') {
       const document = await ctx.db.get(dependency.documentId)
       const folder = document && await ctx.db.get(document.folderId)
-      if (!document || document.userId !== userId || document.status !== 'success' || !folder || folder.userId !== userId || document.sourceRevision !== dependency.sourceRevision) return unavailable
+      if (!document || document.userId !== userId || document.status !== 'success' || !folder || folder.userId !== userId
+        || !documentHasCurrentRevision(document, dependency.sourceRevision)) return unavailable
     } else {
       const folder = await ctx.db.get(dependency.folderId)
       if (!folder || folder.userId !== userId) return unavailable

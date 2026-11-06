@@ -85,7 +85,7 @@ async function calibrationFixture() {
   return { t, f, userId, request }
 }
 
-test.each(['identity', 'snapshot', 'excerpt', 'document'] as const)('revokes %s at reservation, input, dispatch and replayed commit', async kind => {
+test.each(['identity', 'snapshot', 'excerpt', 'document', 'document_hash', 'document_object'] as const)('revokes %s at reservation, input, dispatch and replayed commit', async kind => {
   const { t, f, userId, request } = await calibrationFixture()
   const reservation = await t.mutation(internal.learnV2MapCalibration.reserveCalibrationScoring, request)
   if (reservation.kind !== 'acquired') throw new Error('Expected reservation')
@@ -97,6 +97,8 @@ test.each(['identity', 'snapshot', 'excerpt', 'document'] as const)('revokes %s 
   const commit = { ...request, serverScorePercent: 80, rubricVersion: 'rubric.v1' }
   const saved = await t.mutation(internal.learnV2MapCalibration.recordCalibrationAttempt, commit)
   const before = await t.run(ctx => ctx.db.get(saved.attemptId))
+  if (kind === 'document_hash') await t.mutation(internal.documents.updateDocumentStatus, { id: f.documentId, status: 'success', contentHash: 'b'.repeat(64) })
+  if (kind === 'document_object') await t.mutation(internal.documents.updateDocumentStatus, { id: f.documentId, status: 'success', r2Key: 'calibration/relocated.txt' })
   await t.run(async ctx => {
     if (kind === 'identity') await ctx.db.patch(f.sourceIdentityId, { tombstonedAt: Date.now() })
     if (kind === 'snapshot') await ctx.db.patch(f.sourceSnapshotId, { evidencePurgedAt: Date.now() })

@@ -100,7 +100,8 @@ describe('ready V2 adaptive Canvas', () => {
         objectiveId: pins.objectiveId, sessionContentId: content._id, submissionId: f.rows.learnResponses, attemptedAt: 123,
         idempotencyKey: 'canonical-copy-attempt', response: STORAGE_CANARIES.answer, confidence: 4, serverScorePercent: 80 })
       await ctx.db.patch(thread.currentActivityId!, { submittedResponse: STORAGE_CANARIES.answer, submittedConfidence: 4, masteryAttemptId: attemptId })
-      const documentId = await ctx.db.insert('documents', { userId: OWNER.tokenIdentifier, folderId: ids.folderId, filename: 'direct.txt', fileSize: 1, status: 'success', sourceRevision: 'direct.r1' })
+      const documentId = await ctx.db.insert('documents', { userId: OWNER.tokenIdentifier, folderId: ids.folderId, filename: 'direct.txt', fileSize: 1,
+        status: 'success', sourceRevision: `sha256:${'a'.repeat(64)}`, contentHash: 'a'.repeat(64) })
       await ctx.db.patch(thread._id, { sourceScope: { kind: 'document', sourceId: String(documentId) } })
       return { activityId: thread.currentActivityId!, documentId, blueprintRevisionId: pins.blueprintRevisionId }
     })
@@ -126,7 +127,7 @@ describe('ready V2 adaptive Canvas', () => {
     expect((await t.run(ctx => ctx.db.get(prepared.activityId)))?.submittedResponse).toBeUndefined()
   })
 
-  test.each(['tombstone', 'source_unavailable', 'document_deleted', 'document_replaced', 'folder_deleted', 'archived', 'evidence_purged'] as const)('Canvas, journey and source review deny %s before scheduled cleanup', async revocation => {
+  test.each(['tombstone', 'source_unavailable', 'document_deleted', 'document_replaced', 'document_hash_replaced', 'document_object_replaced', 'folder_deleted', 'archived', 'evidence_purged'] as const)('Canvas, journey and source review deny %s before scheduled cleanup', async revocation => {
     vi.useFakeTimers()
     const { t, owner, ids } = await fixture()
     const privateText = 'private-response-rubric-cache-canary'
@@ -136,9 +137,9 @@ describe('ready V2 adaptive Canvas', () => {
       const content = (await ctx.db.get(ids.sessionContentId))!
       const source = (await ctx.db.get(ids.sourceSnapshotId))!
       const documentId = await ctx.db.insert('documents', { userId: OWNER.tokenIdentifier, folderId: ids.folderId,
-        filename: 'gravity.txt', fileSize: 1, status: 'success', sourceRevision: 'document.r1' })
+        filename: 'gravity.txt', fileSize: 1, status: 'success', contentHash: 'a'.repeat(64), sourceRevision: `sha256:${'a'.repeat(64)}`, r2Key: 'canvas/gravity.txt' })
       await ctx.db.patch(source.sourceIdentityId, { origin: 'folder_document', folderDocumentId: documentId })
-      await ctx.db.patch(source._id, { blueprintRevisionId: content.blueprintRevisionId, sourceRevision: 'document.r1' })
+      await ctx.db.patch(source._id, { blueprintRevisionId: content.blueprintRevisionId, contentHash: 'a'.repeat(64), sourceRevision: `sha256:${'a'.repeat(64)}`, objectKey: 'canvas/gravity.txt' })
       await ctx.db.patch(ids.laterSourceSnapshotId, { blueprintRevisionId: content.blueprintRevisionId })
       await ctx.db.patch(content.objectiveId!, { assessmentContract: { version: 'learn-v2.assessment.v1', kind: 'bounded_rubric', responseFormat: 'short_text',
         instructions: 'Explain from the evidence.', passingScorePercent: 80, criteria: [{ key: 'correct', description: publicCriterion, weightPercent: 100 }] } })
@@ -184,6 +185,8 @@ describe('ready V2 adaptive Canvas', () => {
     if (revocation === 'source_unavailable') await owner.mutation(api.learnV2Sources.markUnavailable, { sourceSnapshotId: ids.sourceSnapshotId, expectedRevision: 1, idempotencyKey: 'read-privacy-revoke', reason: 'access_lost' })
     if (revocation === 'document_deleted') await owner.mutation(api.documents.deleteDocument, { id: prepared.documentId })
     if (revocation === 'document_replaced') await t.mutation(internal.documents.updateDocumentStatus, { id: prepared.documentId, status: 'success', sourceRevision: 'document.r2' })
+    if (revocation === 'document_hash_replaced') await t.mutation(internal.documents.updateDocumentStatus, { id: prepared.documentId, status: 'success', contentHash: 'b'.repeat(64) })
+    if (revocation === 'document_object_replaced') await t.mutation(internal.documents.updateDocumentStatus, { id: prepared.documentId, status: 'success', r2Key: 'read-privacy/relocated.txt' })
     if (revocation === 'folder_deleted') await owner.mutation(api.folders.deleteFolder, { id: ids.folderId })
     if (revocation === 'archived') await owner.mutation(api.learnV2Lifecycle.transitionLearningVoid, { learningVoidId: ids.learningVoidId, expectedRevision: 1, status: 'archived', idempotencyKey: 'read-privacy-archive' })
     if (revocation === 'tombstone' || revocation === 'evidence_purged') {
