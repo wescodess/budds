@@ -3,10 +3,12 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import {
   LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION, learnReportAssignmentSnapshotSchema,
   learnReportFactSchema, learnReportSourceWatermarkSchema, learnReportWatermarkSnapshotSchema,
+  deriveLearnReportLearnerKey,
   type LearnReportSourceFact,
 } from '../../shared/learn-v2-measurement-report'
 import { LEARN_MEASUREMENT_STORAGE_VERSION } from '../../shared/learn-v2-measurement-storage-manifest'
 import { parseLearnContract } from '../../shared/learn-v2-responses'
+import { deriveLearnScorerConfiguration } from '../../shared/learn-v2-measurement'
 
 type FactInput = Omit<LearnReportSourceFact, 'factVersion' | 'sequence'> & {
   learningVoidId?: Id<'learningVoids'>
@@ -62,6 +64,9 @@ export async function writeLearnMeasurementEnrollmentFact(ctx: MutationCtx, user
   const admitted = assignment.status === 'admitted' ? assignment : null
   const allocation = admitted?.allocation
   const snapshot = parseLearnContract(learnReportAssignmentSnapshotSchema, {
+    status: assignment.status, protocolStatus: assignment.protocolStatus,
+    responseKind: admitted?.responseKind ?? null,
+    scorerConfiguration: admitted ? await deriveLearnScorerConfiguration(admitted.scoringBinding) : null,
     epoch: assignment.epoch, baselineSha: assignment.baselineSha, cohortVersion: assignment.cohortVersion,
     flow: assignment.flow, entryPoint: assignment.entryPoint, depth: assignment.depth,
     protocolVersion: admitted?.protocolVersion ?? null, enrollmentAt: admitted?.enrollmentAt ?? null,
@@ -77,8 +82,10 @@ export async function writeLearnMeasurementEnrollmentFact(ctx: MutationCtx, user
   const previous = await ctx.db.query('learnMeasurementReportFacts')
     .withIndex('by_userId_and_fact_assignmentId', q => q.eq('userId', userId).eq('fact.assignmentId', assignment._id))
     .order('desc').first()
+  const previousSnapshot = previous?.fact.kind === 'enrollment'
+    ? parseLearnContract(learnReportAssignmentSnapshotSchema, previous.fact.snapshot) : null
   if (previous?.fact.kind === 'enrollment' && previous.fact.status === assignment.status
-    && JSON.stringify(previous.fact.snapshot) === JSON.stringify(snapshot)) return previous.sequence
+    && JSON.stringify(previousSnapshot) === JSON.stringify(snapshot)) return previous.sequence
   const recordRevision = previous?.fact.kind === 'enrollment' ? previous.fact.recordRevision + 1 : 1
   return await appendLearnMeasurementFact(ctx, userId, {
     epoch: assignment.epoch, occurredAt: Date.now(), learningVoidId: assignment.learningVoidId,
@@ -96,10 +103,11 @@ export async function writeLearnResponseAcceptanceFact(ctx: MutationCtx, userId:
   })
 }
 
-export async function readLearnMeasurementWatermarkSnapshot(ctx: QueryCtx | MutationCtx, userId: string) {
+export async function readLearnMeasurementWatermarkSnapshot(ctx: QueryCtx | MutationCtx, userId: string, reportRunId: Id<'learnMeasurementReportRuns'>) {
   const { watermark } = await nextLearnMeasurementSourceSequence(ctx, userId)
   return parseLearnContract(learnReportWatermarkSnapshotSchema, {
-    kind: 'owner_watermark', sequence: watermark?.sequence ?? 0, dueWorkThrough: watermark?.dueWorkThrough ?? null,
+    kind: 'owner_watermark', learnerKey: await deriveLearnReportLearnerKey(reportRunId, userId),
+    sequence: watermark?.sequence ?? 0, dueWorkThrough: watermark?.dueWorkThrough ?? null,
     historyCoverage: watermark?.historyCoverage ?? 'unknown', legacyIndependentAudit: { sourceCoverage: 'unknown', unknownCount: null },
   })
 }
