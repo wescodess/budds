@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Window } from 'happy-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { acquireCaptureStackLock, captureIdentity, compareFloor, normalizeSelector, publishCaptureOutput, readComparisonFloor, resetCaptureOutput, selectCaptureBaseUrl, stopCaptureStack, stopChild, validateSurface, violationId } from './design-capture-lib.mjs'
+import { acquireCaptureStackLock, assignViolationIds, captureIdentity, compareFloor, normalizeSelector, publishCaptureOutput, readComparisonFloor, resetCaptureOutput, selectCaptureBaseUrl, stopCaptureStack, stopChild, validateSurface, violationId } from './design-capture-lib.mjs'
 import { checkLayout } from './design-capture-checks.mjs'
 import { spawnOwnedChild, stopChild as stopOwnedChild } from './e2e-stack-runtime.mjs'
 
@@ -503,9 +503,45 @@ describe('capture coverage', () => {
 })
 
 describe('generated selectors', () => {
+  const cases = [
+    { rule: 'target-size-24', selectors: ['#reka-v-1', '#reka-v-7', '#reka-v-9'] },
+    { rule: 'axe/label', selectors: [['#reka-v-1'], ['#reka-v-7'], ['#reka-v-9']] },
+  ]
+
+  it.each(cases)('keeps repeated generated selectors distinct for $rule', ({ rule, selectors }) => {
+    const violations = assignViolationIds(selectors.map(selector => ({ rule, selector })), capture)
+    expect(new Set(violations.map(value => value.id)).size).toBe(3)
+    expect(violations.map(value => value.selector)).toEqual(selectors)
+    expect(violations[0].id).toBe(violationId(rule, capture, selectors[0]))
+    const reordered = [selectors[2], selectors[0], selectors[1]]
+    expect(assignViolationIds(reordered.map(selector => ({ rule, selector })), capture).map(value => value.id))
+      .toEqual(violations.map(value => value.id))
+  })
+
+  it.each(cases)('reports exactly one added generated selector for $rule', ({ rule, selectors }) => {
+    const baseline = { ...floor, violations: [{ id: violationId(rule, capture, selectors[0]) }] }
+    const violations = assignViolationIds(selectors.slice(1).map(selector => ({ rule, selector })), capture)
+    expect(compareFloor({ ...floor, violations }, baseline)).toEqual([violations[1]])
+  })
+
+  it('counts occurrences separately for each rule and normalized selector', () => {
+    const findings = [
+      { rule: 'target-size-24', selector: '#v-1' },
+      { rule: 'horizontal-overflow', selector: '#v-2' },
+      { rule: 'target-size-24', selector: '#save' },
+      { rule: 'target-size-24', selector: '#v-3' },
+    ]
+    const violations = assignViolationIds(findings, capture)
+    for (const index of [0, 1, 2]) expect(violations[index].id).toBe(violationId(findings[index].rule, capture, findings[index].selector))
+    expect(violations[3].id).not.toBe(violations[0].id)
+    expect(assignViolationIds(findings, capture)).toEqual(violations)
+  })
+
   it.each([['#v-0', '#v-98'], ['#v-0-1', '#v-9-88'], ['#reka-v-1', '#reka-v-7'], ['#reka-1', '#reka-33'], ['#reka-v-1-trigger-settings', '#reka-v-99-trigger-settings']])('ignores allocation counters: %s and %s', (before, after) => {
     expect(violationId('target-size-24', capture, before)).toBe(violationId('target-size-24', capture, after))
     expect(violationId('axe/label', capture, [['main', before]])).toBe(violationId('axe/label', capture, [['main', after]]))
+    expect(assignViolationIds([{ rule: 'target-size-24', selector: after }], capture)[0].id).toBe(violationId('target-size-24', capture, before))
+    expect(assignViolationIds([{ rule: 'axe/label', selector: [['main', after]] }], capture)[0].id).toBe(violationId('axe/label', capture, [['main', before]]))
   })
 
   it('keeps authored IDs and selector structure distinct', () => {

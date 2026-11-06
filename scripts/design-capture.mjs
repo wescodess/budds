@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { chromium } from '@playwright/test'
-import { acquireCaptureStackLock, captureIdentity, compareFloor, publishCaptureOutput, readComparisonFloor, resetCaptureOutput, selectCaptureBaseUrl, stopCaptureStack, validateSurface, violationId } from './design-capture-lib.mjs'
+import { acquireCaptureStackLock, assignViolationIds, captureIdentity, compareFloor, publishCaptureOutput, readComparisonFloor, resetCaptureOutput, selectCaptureBaseUrl, stopCaptureStack, validateSurface } from './design-capture-lib.mjs'
 import { checkPage } from './design-capture-checks.mjs'
 
 const execFile = promisify(execFileCallback)
@@ -155,7 +155,7 @@ export async function main() {
             const { violations, incomplete, axeVersion, ...files } = await capturePage(surface, identity, entry, baseUrl, output)
             floor.captures.push(identity)
             manifest.captures.push({ ...identity, status: 'complete', ...files, axeVersion })
-            floor.violations.push(...violations.map(violation => ({ ...violation, capture: identity, id: violationId(violation.rule, identity, violation.selector) })))
+            floor.violations.push(...assignViolationIds(violations, identity))
             floor.incomplete.push(...incomplete.map(value => ({ ...value, capture: identity })))
             console.log(`${entry.kind}/${entry.state} ${theme} ${viewport.width}x${viewport.height}: ${violations.length} violations`)
           }

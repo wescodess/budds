@@ -287,9 +287,21 @@ export function captureIdentity(surface, entry, theme, viewport) {
   return { surface, kind: entry.kind, state: entry.state, theme, viewport: { width: viewport.width, height: viewport.height } }
 }
 
-export function violationId(rule, capture, selector) {
+export function violationId(rule, capture, selector, occurrence = 1) {
   const identity = captureIdentity(capture.surface, capture, capture.theme, capture.viewport)
-  return `${rule}:${createHash('sha256').update(JSON.stringify([rule, identity, normalizeSelector(selector)])).digest('hex').slice(0, 24)}`
+  const parts = [rule, identity, normalizeSelector(selector)]
+  if (occurrence > 1) parts.push(occurrence)
+  return `${rule}:${createHash('sha256').update(JSON.stringify(parts)).digest('hex').slice(0, 24)}`
+}
+
+export function assignViolationIds(violations, capture) {
+  const occurrences = new Map()
+  return violations.map(violation => {
+    const id = violationId(violation.rule, capture, violation.selector)
+    const occurrence = (occurrences.get(id) || 0) + 1
+    occurrences.set(id, occurrence)
+    return { ...violation, capture, id: occurrence === 1 ? id : violationId(violation.rule, capture, violation.selector, occurrence) }
+  })
 }
 
 // Vue useId and Reka append allocation counters. Preserve raw selectors in reports.
