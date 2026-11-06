@@ -108,6 +108,14 @@ export const learnReportResultSnapshotValidator = v.object({
 }) satisfies Validator<z.infer<typeof learnReportResultSnapshotSchema>, 'required', string>
 const nullableResult = v.union(learnReportResultSnapshotValidator, v.null())
 const nullableAcceptance = v.union(acceptance, v.null())
+const coldReplacement = v.object({
+  assessmentOpportunityId: v.id('learnAssessmentOpportunities'), replacesOpportunityId: v.id('learnAssessmentOpportunities'),
+  replacementReason: v.string(), openAt: v.number(), closeAt: v.number(), eligibilityPolicyVersion: v.string(),
+  operationalEligibility: literals(['pending', 'eligible', 'blocked']), acceptance: nullableAcceptance,
+  validitySnapshot: v.union(v.object({ policyVersion: v.string(), status: literals(['valid', 'excluded', 'unknown']),
+    measurementEligible: v.boolean(), masteryEligible: v.boolean(), exclusionReasons: v.array(v.string()) }), v.null()),
+  result: nullableResult,
+})
 export const learnReportInputSnapshotValidator = v.union(
   v.object({ kind: v.literal('owner_watermark'), learnerKey: v.string(),
     sequence: v.number(), dueWorkThrough: nullableNumber, historyCoverage: sourceCoverage,
@@ -117,7 +125,7 @@ export const learnReportInputSnapshotValidator = v.union(
     horizonDays: v.union(v.literal(7), v.literal(30)), assignment: learnReportAssignmentSnapshotValidator, clock: v.union(reportClock, v.null()),
     coldOpportunityId: v.union(v.id('learnAssessmentOpportunities'), v.null()),
     originalOpportunityId: v.union(v.id('learnAssessmentOpportunities'), v.null()), replacementOpportunityId: v.union(v.id('learnAssessmentOpportunities'), v.null()),
-    coldAcceptance: nullableAcceptance, delayedAcceptance: nullableAcceptance, cold: nullableResult, delayed: nullableResult,
+    coldAcceptance: nullableAcceptance, delayedAcceptance: nullableAcceptance, cold: nullableResult, delayed: nullableResult, coldReplacement: v.union(coldReplacement, v.null()),
     replacementClock: v.union(reportClock, v.null()), replacementAcceptance: nullableAcceptance, replacement: nullableResult, replacementPolicy: v.union(replacementPolicy, v.null()),
     operationalEligibility: literals(['pending', 'eligible', 'blocked']), disposition: literals(LEARN_V2_REPORT_DISPOSITIONS), reasonCodes: v.array(v.string()),
     mixedFlow: v.boolean(), treatmentEpochChanged: v.boolean(),

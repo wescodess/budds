@@ -1,6 +1,6 @@
 # Phase C1 public API contract
 
-API version: `learn-v2.public-api.v1`. Implements [C1.3 #423](https://github.com/wescodess/budds/issues/423) for [C1 #413](https://github.com/wescodess/budds/issues/413). Report output is `learn-v2.measurement-report.v3`; source is v3; query and metric definitions remain v1. This contract adds no active response, delivery, scoring, assistance or report writer.
+API version: `learn-v2.public-api.v1`. Implements [C1.3 #423](https://github.com/wescodess/budds/issues/423) for [C1 #413](https://github.com/wescodess/budds/issues/413). Report output is `learn-v2.measurement-report.v3`; source is v4; query and metric definitions remain v1. This contract adds no active response, delivery, scoring, assistance or report writer.
 
 The accepted [baseline](https://github.com/wescodess/budds/issues/359#issuecomment-6651298918), [lifecycle](https://github.com/wescodess/budds/issues/360#issuecomment-6651303610), [responses](https://github.com/wescodess/budds/issues/363#issuecomment-6651831618), [items](https://github.com/wescodess/budds/issues/364#issuecomment-6651739355), [reports](https://github.com/wescodess/budds/issues/366#issuecomment-6652156993), [disclosure](https://github.com/wescodess/budds/issues/373#issuecomment-6651824980) and [scorer identity](https://github.com/wescodess/budds/issues/380#issuecomment-6651838342) resolutions remain binding.
 
@@ -33,7 +33,7 @@ Delivery mutations and prompt reads are separate. A future grant result is only 
 
 ## Frozen report output v3
 
-Report references, disabled receipts, sealed manifests, cell pages and aggregate exports use `learn-v2.measurement-report.v3`. Request queries and source facts use `learn-v2.measurement-report-query.v1` and `learn-v2.measurement-report-source.v3`; VLG and false-mastery definitions remain v1. Other public APIs retain `learn-v2.public-api.v1`. Old report-output v1/v2 and source v1/v2 shapes are rejected. These endpoints still return disabled status and perform no write.
+Report references, disabled receipts, sealed manifests, cell pages and aggregate exports use `learn-v2.measurement-report.v3`. Request queries and source facts use `learn-v2.measurement-report-query.v1` and `learn-v2.measurement-report-source.v4`; VLG and false-mastery definitions remain v1. Other public APIs retain `learn-v2.public-api.v1`. Old report-output v1/v2 and source v1/v2/v3 shapes are rejected. These endpoints still return disabled status and perform no write.
 
 `learnReportMetricValidator` in `convex/lib/learnV2MeasurementReportContract.ts` supplies the exact stored/public/exported cell fields. Before a later writer or adapter uses them, `learnReportMetricSchema` and `validateLearnMeasurementReportCells` enforce bounded integers, finite estimates, nested counts, disjoint totals, null/reason states and original-envelope/page bytes. Convex's declared validators enforce the same closed output structure. Cells remain aggregate-only, without learner/assignment/attempt rows or protected payloads.
 
@@ -76,6 +76,12 @@ Only an `independent_application` pass under the pinned mastery transition can e
 The [source storage mapping](learn-v2-c1-storage-contract.md#517-report-source-v3) defines the exact SHA-256/JSON key derivation, roster and cross-page obligations. Writers use `deriveLearnReportLearnerKey` / `deriveLearnReportComputationKeys` with the run ID, authenticated full owner `tokenIdentifier` and the settled mastery scope (owner + Blueprint revision + objective). They recompute these keys from canonical identities, never vary them per row. `reconcileLearnReportSourceRows` returns only completeness and reason codes; any missing watermark, duplicate/conflict or inconsistent assignment/key binding is incomplete. Missing/unknown owner audit makes the cohort legacy audit unknown/null, and cross-page audit equality remains a run-level check.
 
 The shared schemas enforce acceptance/strata/policy semantics; `learnV2MeasurementReportContract.ts` owns the structural validators reused by storage. Cells, public pages, safe manifests, aggregate exports and logs never include these computation keys. Both personal export paths withhold snapshots through their existing allowlists. Regressions cover public return rejection, both exports, diagnostics and log omission. No report arithmetic, writer, migration, backfill, flag or provider call is introduced.
+
+## 522 report source v4 cold replacements
+
+[#522](https://github.com/wescodess/budds/issues/522) adds required nullable assignment-scoped `coldReplacement` and advances only report source to v4. Its opportunity/link/reason/window/eligibility-policy fields project existing opportunity storage; its independent acceptance, sealed validity snapshot and nullable `measurement_cold` result project existing response/result authorities. The [storage mapping](learn-v2-c1-storage-contract.md#522-report-source-v4-cold-replacements) defines every field and the writer's original pre-teaching eligibility rule. Source v1/v2/v3 envelopes fail closed; report output remains v3.
+
+Both horizon rows must retain the identical original cold slot and cold replacement. Reconciliation rejects reused replacement identities, any claim sharing that slot, inconsistent assignment snapshots and non-admitted replacement data. The frozen assignment `replacementPolicy` governs inclusion; original cold remains primary unless that policy predeclares inclusion. Public report cells/pages/manifests/exports retain their closed shapes and contain no source keys or cold-replacement rows. No public source endpoint, writer or migration is introduced.
 
 ## Mastery and compatibility
 
