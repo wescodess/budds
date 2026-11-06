@@ -3,8 +3,7 @@ import { readdirSync } from 'node:fs'
 import { isAbsolute, join, resolve } from 'node:path'
 import { exactKeys, hash, readJson, seal, unseal, exists, VERSION } from './artifacts.mjs'
 import { LIMITS } from './contract.mjs'
-import { liveOutcome, metadataOutcome } from './run-state.mjs'
-import { openHistoricalRun } from './historical-run.mjs'
+import { liveOutcome, openRun, openRecoveryRun } from './run-state.mjs'
 
 const digest = value => typeof value === 'string' && /^sha256:[a-f0-9]{64}$/.test(value)
 const integer = value => Number.isSafeInteger(value) && value >= 0
@@ -83,7 +82,7 @@ export async function openLiveLedger(directory) {
     assert.equal(resolution.intentDigest, reservation.intentDigest)
     assert.ok(name === resolutionName(reservation) || name === resolutionName(reservation).replace('.json', `-${resolution.recordDigest.slice(7)}.json`))
     if (!runs.has(claim.directory)) {
-      const state = await openHistoricalRun(claim.directory, claim.pinsDigest)
+      const state = await openRun(claim.directory, { sealedOnly: true, expectedPinsDigest: claim.pinsDigest })
       verifyLiveRun(ledger, state)
       runs.set(claim.directory, state)
     }
@@ -115,7 +114,7 @@ function verifyResolution(state, pinsDigest, resolution) {
   assert.equal(record.digest, resolution.recordDigest)
   assert.equal(record.payload.intentDigest, resolution.intentDigest)
   const replayed = state.verifiedRecords.get(record.digest)
-  assert.deepEqual(replayed, { name: resolution.recordName, intentDigest: resolution.intentDigest, status: resolution.status }, 'Global resolution differs from authoritative replay')
+  assert.deepEqual(replayed, { name: resolution.recordName, intentDigest: resolution.intentDigest, status: resolution.status }, 'Global resolution differs from its sealed record')
 }
 
 export function unresolvedLiveDispatches(ledger) {
@@ -130,9 +129,8 @@ export async function recordLiveResolution(ledger, state, intent, record, record
   const resolution = { approvalDigest: reservation.approvalDigest, id: reservation.id, intentDigest: intent.digest,
     recordName, recordDigest: record.digest,
     status: record.kind === 'dispatch_not_sent' ? 'not_dispatched'
-      : record.kind === 'reconciled_verdict' ? (state.replay?.metadataOutcome ?? metadataOutcome)(record.payload.result)
-        : (state.replay?.liveOutcome ?? liveOutcome)(record.payload.result) }
-  verifyResolution(await openHistoricalRun(state.directory, state.pinsDigest), state.pinsDigest, resolution)
+      : record.kind === 'reconciled_verdict' ? record.payload.status : liveOutcome(record.payload.result) }
+  verifyResolution(await openRecoveryRun(state.directory), state.pinsDigest, resolution)
   if (resolution.status === 'still_unknown') return
   const base = resolutionName(reservation)
   const name = exists(join(ledger.directory, base)) && readJson(join(ledger.directory, base)).payload.status === 'still_unknown'

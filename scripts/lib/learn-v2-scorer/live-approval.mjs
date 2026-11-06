@@ -14,6 +14,11 @@ function signedDocument(file, trustKey) {
   return envelope.payload
 }
 
+export function verifySavedApproval(saved, { approvalFile, costFile, trustKey }) {
+  assert.equal(hash(signedDocument(approvalFile, trustKey)), saved.approvalDigest, 'Recovery requires the original signed approval')
+  assert.equal(hash(signedDocument(costFile, trustKey)), saved.costDigest, 'Recovery requires the original signed cost evidence')
+}
+
 export function admitLive({ pins, pinsDigest, item, request, requestPins, approvalFile, costFile, trustKey, now }) {
   assert.equal(pins.mode, 'live')
   const adapter = pins.adapters.find(adapter => adapter.id === item.adapter)

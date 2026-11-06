@@ -12,6 +12,9 @@ registerScorerImports()
 forbidNetwork()
 const adapters = await import('./adapters.mjs')
 const contract = await import('./contract.mjs')
+// Regenerate and verify the fixed corpus once per subprocess. Each consumer
+// gets an isolated clone; the CLI/corpus suites also regenerate independently.
+const verifiedCorpus = await contract.corpusInputs()
 let globalDirectory
 let interruptIntent = false
 let outcome = 'valid'
@@ -27,6 +30,7 @@ let lockReleaseFailure = false
 let markerRemovalFailure = null
 let revision = null
 let afterIntent = null
+let beforeBaselineTransport = null
 
 // Keep the production CLI's fixed global path and transport unchanged. Native
 // module mocks isolate this test process and deny every real network entry.
@@ -58,9 +62,16 @@ mock.module(new URL('./artifacts.mjs', import.meta.url).href, { namedExports: { 
   },
 } })
 mock.module(new URL('./contract.mjs', import.meta.url).href, { namedExports: { ...contract,
+  corpusInputs: async () => structuredClone(verifiedCorpus),
   runPins: options => ({ ...contract.runPins(options), implementation: { ...artifacts.implementationPins(), ...revision } }),
 } })
 mock.module(new URL('./adapters.mjs', import.meta.url).href, { namedExports: { ...adapters,
+  baselineExecution(options) {
+    return adapters.baselineExecution({ ...options, ...(options.infer ? { infer: (...args) => {
+      beforeBaselineTransport?.()
+      return options.infer(...args)
+    } } : {}) })
+  },
   async liveInfer(adapter, request) {
     calls.push({ adapter: adapter.id, requestDigest: artifacts.hash(request) })
     const body = JSON.parse(request.body)
@@ -111,6 +122,7 @@ async function workspace(t, approvalDurationMs = 600000) {
   markerRemovalFailure = null
   revision = null
   afterIntent = null
+  beforeBaselineTransport = null
   const inventory = readJson(join(artifacts.ROOT, 'tests/fixtures/learn-v2-scorer-harness/inventory.json'))
   inventory.scope = 'reviewed_published_inventory'
   inventory.epoch = 'approval-contract.v1'
@@ -178,8 +190,114 @@ test('A4 historical pins: a separately approved fresh run dispatches after commi
   assert.equal(unresolvedLiveDispatches(await openLiveLedger(globalDirectory)).length, 0)
 })
 
-test('A4 historical pins: altered historical seals and rehashed verdicts still block fresh dispatch', async t => {
-  for (const kind of ['manifest', 'approval', 'intent', 'observation', 'terminal', 'resolution', 'rehashed-verdict']) await t.test(kind, async t => {
+test('A5 historical admission: Node patch, minor, major and unavailable historical commits do not block fresh approvals', async t => {
+  for (const change of ['patch', 'minor', 'major', 'missing-commit']) await t.test(change, async t => {
+    const { createRun, approve } = await workspace(t)
+    if (change === 'missing-commit') {
+      const pins = artifacts.implementationPins()
+      revision = { repositoryCommit: '2'.repeat(40), files: { ...pins.files, 'pnpm-lock.yaml': hash('unavailable historical lockfile') } }
+    }
+    const historical = await createRun('historical')
+    await dispatchLive(historical.directory, historical.plan[0].id, approve(historical, 'historical'))
+    const [major, minor, patch] = process.versions.node.split('.').map(Number)
+    revision = change === 'missing-commit' ? null : { node: change === 'patch' ? `${major}.${minor}.${patch + 1}`
+      : change === 'minor' ? `${major}.${minor + 1}.0` : `${major + 1}.0.0` }
+    const fresh = await createRun('fresh')
+    assert.notEqual(fresh.pinsDigest, historical.pinsDigest)
+    await dispatchLive(fresh.directory, fresh.plan[0].id, approve(fresh, 'fresh'))
+    assert.equal(calls.length, 2)
+    assert.equal(metadataCalls.length, 0)
+    assert.equal(unresolvedLiveDispatches(await openLiveLedger(globalDirectory)).length, 0)
+  })
+})
+
+test('A5 historical structure: truncated, missing, orphaned and inconsistent evidence still blocks', async t => {
+  for (const change of ['truncated', 'missing-observation', 'request-digest', 'orphan', 'terminal-observation', 'resolution-status']) await t.test(change, async t => {
+    const { createRun, approve } = await workspace(t)
+    const old = await createRun('historical')
+    const id = old.plan[0].id
+    await dispatchLive(old.directory, id, approve(old, 'historical'))
+    if (change === 'truncated') writeFileSync(join(old.directory, `${id}.terminal.json`), '{')
+    if (change === 'missing-observation') rmSync(join(old.directory, `${id}.observation.json`))
+    if (change === 'request-digest') rewrite(join(old.directory, `${id}.intent.json`), value => { value.payload.requestDigest = hash('changed') })
+    if (change === 'orphan') artifacts.seal(old.directory, `item_${'f'.repeat(32)}.observation.json`, 'dispatch_observation', old.pinsDigest, {})
+    if (change === 'terminal-observation') rewrite(join(old.directory, `${id}.terminal.json`), value => { value.payload.raw = { failure: 'changed' } })
+    if (change === 'resolution-status') {
+      const name = readdirSync(globalDirectory).find(name => name.startsWith('resolution-'))
+      rewrite(join(globalDirectory, name), value => { value.payload.status = 'failed' })
+    }
+    if (change === 'terminal-observation') {
+      const { openRun } = await import('./run-state.mjs')
+      await assert.rejects(openRun(old.directory, { sealedOnly: true }), /Terminal differs from saved observation/)
+    }
+    advanceRevision()
+    const fresh = await createRun('fresh')
+    await assert.rejects(dispatchLive(fresh.directory, fresh.plan[0].id, approve(fresh, 'fresh')))
+    assert.equal(calls.length, 1)
+    assert.equal(metadataCalls.length, 0)
+  })
+})
+
+test('A5 structural intent: a saved request must match its digest before any terminal exists', async t => {
+  const { createRun, approve } = await workspace(t)
+  const state = await createRun('intent')
+  const id = state.plan[0].id
+  await dispatchLive(state.directory, id, { ...approve(state, 'intent'), crashAfterIntent: true })
+  rewrite(join(state.directory, `${id}.intent.json`), value => { value.payload.requestDigest = hash('changed request') })
+  const { openRun } = await import('./run-state.mjs')
+  await assert.rejects(openRun(state.directory, { sealedOnly: true }), /Sealed request digest changed/)
+  assert.equal(calls.length, 0)
+})
+
+test('A5 own recovery: already-sealed known outcomes recover by digest across versions without new I/O', async t => {
+  for (const evidence of ['terminal', 'reconciled', 'cancellation', 'cancellation-only']) await t.test(evidence, async t => {
+    const setup = evidence === 'reconciled' ? await pendingBaseline(t) : await canary(t, 'baseline')
+    const { state, approval, id } = setup
+    if (evidence === 'reconciled') await reconcileLive(state.directory, id, approval)
+    else {
+      if (evidence.startsWith('cancellation')) afterIntent = intent => setup.setClock(intent.deadline)
+      publicationFailures.add('live_dispatch_resolution')
+      if (evidence.startsWith('cancellation')) earlyFailures.add(evidence === 'cancellation-only' ? 'sealed_verdict' : 'live_dispatch_resolution')
+      await assert.rejects(dispatchLive(state.directory, id, approval), /Simulated/)
+      publicationFailures.clear()
+      earlyFailures.clear()
+      afterIntent = null
+    }
+    const before = calls.length
+    const lookups = metadataCalls.length
+    advanceRevision()
+    await assert.rejects(reconcileLive(state.directory, id, setup.approve(state, 'other')), /original signed approval/)
+    const summary = await reconcileLive(state.directory, id, approval)
+    assert.equal(summary.verification, 'sealed_digest_consistency')
+    assert.equal(summary.reconciliation, evidence.startsWith('cancellation') ? 'not_dispatched' : 'resolved')
+    assert.equal((await replay(state.directory)).digest, summary.digest)
+    assert.equal(summary.report, null, 'Changed implementations cannot regenerate a historical report')
+    assert.equal(summary.ambiguous, 0)
+    assert.equal((await reconcileLive(state.directory, id, approval)).digest, summary.digest)
+    assert.equal(unresolvedLiveDispatches(await openLiveLedger(globalDirectory)).length, 0)
+    assert.equal(calls.length, before)
+    assert.equal(metadataCalls.length, lookups)
+  })
+})
+
+test('A5 own recovery: an older reservation without a local intent never auto-resolves', async t => {
+  const { createRun, approve } = await workspace(t)
+  const old = await createRun('historical')
+  const approval = approve(old, 'historical')
+  interruptIntent = true
+  await assert.rejects(dispatchLive(old.directory, old.plan[0].id, approval), /Simulated/)
+  interruptIntent = false
+  advanceRevision()
+  await assert.rejects(reconcileLive(old.directory, old.plan[0].id, approval))
+  const fresh = await createRun('fresh')
+  await assert.rejects(dispatchLive(fresh.directory, fresh.plan[0].id, approve(fresh, 'fresh')), /requires reconciliation/)
+  assert.equal(unresolvedLiveDispatches(await openLiveLedger(globalDirectory)).length, 1)
+  assert.equal(calls.length, 0)
+  assert.equal(metadataCalls.length, 0)
+})
+
+test('A4 historical pins: altered historical seals still block fresh dispatch', async t => {
+  for (const kind of ['manifest', 'approval', 'intent', 'observation', 'terminal', 'resolution']) await t.test(kind, async t => {
     const { createRun, approve } = await workspace(t)
     const historical = await createRun('historical')
     const id = historical.plan[0].id
@@ -190,24 +308,17 @@ test('A4 historical pins: altered historical seals and rehashed verdicts still b
     const ledgerName = readdirSync(globalDirectory).find(name => name.startsWith(`${kind}-`))
     const path = kind === 'manifest' ? join(historical.directory, 'manifest.json')
       : ['approval', 'resolution'].includes(kind) ? join(globalDirectory, ledgerName)
-        : join(historical.directory, `${id}.${kind === 'rehashed-verdict' ? 'terminal' : kind}.json`)
-    if (kind === 'rehashed-verdict') {
-      const terminal = rewrite(path, value => { value.payload.result.scorePercent = 13 })
-      const name = readdirSync(globalDirectory).find(name => name.startsWith('resolution-'))
-      rewrite(join(globalDirectory, name), value => { value.payload.recordDigest = terminal.digest })
-    }
-    else {
-      const value = readJson(path)
-      value.payload.altered = true
-      writeFileSync(path, `${canonical(value)}\n`)
-    }
+        : join(historical.directory, `${id}.${kind}.json`)
+    const value = readJson(path)
+    value.payload.altered = true
+    writeFileSync(path, `${canonical(value)}\n`)
     await assert.rejects(dispatchLive(fresh.directory, fresh.plan[0].id, approval))
     assert.equal(calls.length, 1)
     assert.equal(metadataCalls.length, 0)
   })
 })
 
-test('A4 historical pins: saved observations and metadata reconcile across a revision change', async t => {
+test('A5 recovery: unresolved historical observations and metadata wait for matching pins', async t => {
   for (const evidence of ['observation', 'metadata']) await t.test(evidence, async t => {
     const setup = evidence === 'metadata' ? await pendingBaseline(t) : await canary(t, 'baseline')
     const { state, approval, id, createRun, approve } = setup
@@ -218,15 +329,60 @@ test('A4 historical pins: saved observations and metadata reconcile across a rev
     }
     const before = calls.length
     advanceRevision()
+    await assert.rejects(reconcileLive(state.directory, id, approval), /Older-version unresolved intent/)
+    assert.equal(calls.length, before)
+    assert.equal(metadataCalls.length, 0)
+    assert.equal(unresolvedLiveDispatches(await openLiveLedger(globalDirectory)).length, 1)
+    const blocked = await createRun('blocked')
+    await assert.rejects(dispatchLive(blocked.directory, blocked.plan[0].id, approve(blocked, 'blocked')), /requires reconciliation/)
+    revision = null
     const summary = await reconcileLive(state.directory, id, approval)
     assert.equal(summary.reconciliation, 'resolved')
     assert.equal(summary.ambiguous, 0)
     assert.equal(calls.length, before)
     assert.equal(metadataCalls.length, evidence === 'metadata' ? 1 : 0)
+    advanceRevision()
     const fresh = await createRun('fresh')
     await dispatchLive(fresh.directory, fresh.plan[0].id, approve(fresh, 'fresh'))
     assert.equal(calls.length, before + 1)
   })
+})
+
+test('A5 approval expiry: all three adapters cancel durably between intent publication and transport', async t => {
+  for (const role of ['baseline', 'claude', 'gemini']) for (const offset of [0, 1]) await t.test(`${role}/${offset}`, async t => {
+    const { state, approval, id, setClock } = await canary(t, role, 1000)
+    const before = calls.length
+    afterIntent = intent => setClock(intent.approval.validUntil + offset)
+    const summary = await dispatchLive(state.directory, id, approval)
+    afterIntent = null
+    const intent = readJson(join(state.directory, `${id}.intent.json`))
+    const cancellation = readJson(join(state.directory, `${id}.not-dispatched.json`))
+    assert.ok(cancellation.payload.checkedAt < intent.payload.deadline, 'The lease is still valid')
+    assert.equal(cancellation.payload.checkedAt, intent.payload.approval.validUntil + offset)
+    assert.equal(cancellation.payload.reason, 'approval_expired_before_transport')
+    assert.equal(readJson(join(state.directory, `${id}.terminal.json`)).payload.result.status, 'not_dispatched')
+    assert.equal(readJson(summary.report).payload.reservations.retainedMicroUsd, before * 100)
+    assert.equal(summary.dispatched, before)
+    assert.equal(summary.ambiguous, 0)
+    assert.equal((await replay(state.directory)).digest, summary.digest)
+    assert.equal((await reconcileLive(state.directory, id, approval)).reconciliation, 'not_dispatched')
+    assert.equal(unresolvedLiveDispatches(await openLiveLedger(globalDirectory)).length, 0)
+    assert.ok(!artifacts.exists(join(state.directory, `${id}.observation.json`)))
+    assert.equal(calls.length, before)
+    assert.equal(metadataCalls.length, 0)
+  })
+})
+
+test('A5 approval expiry: the baseline rechecks approval after asynchronous preparation', async t => {
+  const { state, approval, id, clock, setClock } = await canary(t, 'baseline', 1000)
+  const before = calls.length
+  beforeBaselineTransport = () => setClock(clock + 1000)
+  const summary = await dispatchLive(state.directory, id, approval)
+  beforeBaselineTransport = null
+  assert.equal(calls.length, before)
+  assert.equal(summary.ambiguous, 0)
+  assert.equal(readJson(join(state.directory, `${id}.not-dispatched.json`)).payload.reason, 'approval_expired_before_transport')
+  assert.equal(unresolvedLiveDispatches(await openLiveLedger(globalDirectory)).length, 0)
 })
 
 test('A4 lease: expiry after intent publication prevents all three transports and releases only the cancelled reservation', async t => {
@@ -670,8 +826,8 @@ test('a terminal seal failure preserves the saved generation for metadata-only r
   assert.equal(unresolvedLiveDispatches((await openLiveLedger(globalDirectory))).length, 0)
 })
 
-async function canary(t, role) {
-  const setup = await workspace(t)
+async function canary(t, role, approvalDurationMs) {
+  const setup = await workspace(t, approvalDurationMs)
   const state = await setup.createRun('crash-points')
   const approval = setup.approve(state, 'original')
   const item = state.plan.find(row => row.adapter.startsWith(`${role}_`))
@@ -876,7 +1032,7 @@ test('unknown reconciliation history accepts later saved metadata without anothe
   assert.equal(unresolvedLiveDispatches(await openLiveLedger(globalDirectory)).length, 0)
 })
 
-test('A3 M2: rehashed terminal results and response changes block other runs and original restarts', async t => {
+test('A3 M2 under A5 threat model: local replay rejects rehashed verdicts; global admission checks structure', async t => {
   for (const role of ['baseline', 'claude', 'gemini']) for (const change of ['status', 'raw', 'bytes']) await t.test(`${role}/${change}`, async t => {
     const setup = await canary(t, role)
     const { state, approval, id } = setup
@@ -899,8 +1055,15 @@ test('A3 M2: rehashed terminal results and response changes block other runs and
     await assert.rejects(replay(state.directory))
     await assert.rejects(dispatchLive(state.directory, id, approval))
     const second = await setup.createRun('other')
-    await assert.rejects(dispatchLive(second.directory, second.plan[0].id, setup.approve(second, 'other')))
-    assert.equal(calls.length, before)
+    if (change === 'status') {
+      outcome = 'valid'
+      await dispatchLive(second.directory, second.plan[0].id, setup.approve(second, 'other'))
+      assert.equal(calls.length, before + 1)
+    }
+    else {
+      await assert.rejects(dispatchLive(second.directory, second.plan[0].id, setup.approve(second, 'other')))
+      assert.equal(calls.length, before)
+    }
     assert.equal(metadataCalls.length, 0)
   })
 })
@@ -927,7 +1090,7 @@ test('global resolution-record validation rejects missing records, links, digest
   })
 })
 
-test('rehashed reconciliation results and saved metadata changes keep global uncertainty blocked', async t => {
+test('A5 threat model: reconciliation replay stays local and global metadata links stay sealed', async t => {
   for (const change of ['result', 'metadata']) await t.test(change, async t => {
     const setup = await pendingBaseline(t)
     const { state, approval, id, inferenceCalls } = setup
@@ -940,8 +1103,14 @@ test('rehashed reconciliation results and saved metadata changes keep global unc
     else rewrite(join(state.directory, `${id}.metadata-observation.json`), value => { value.payload.metadata.cancelled = true })
     await assert.rejects(replay(state.directory))
     const second = await setup.createRun('other')
-    await assert.rejects(dispatchLive(second.directory, second.plan[0].id, setup.approve(second, 'other')))
-    assert.equal(calls.length, inferenceCalls)
+    if (change === 'result') {
+      await dispatchLive(second.directory, second.plan[0].id, setup.approve(second, 'other'))
+      assert.equal(calls.length, inferenceCalls + 1)
+    }
+    else {
+      await assert.rejects(dispatchLive(second.directory, second.plan[0].id, setup.approve(second, 'other')))
+      assert.equal(calls.length, inferenceCalls)
+    }
     assert.equal(metadataCalls.length, 1)
   })
 })
@@ -1025,7 +1194,7 @@ test('publication internals: an ordinary partial write cleans its temporary inod
   assert.equal(artifacts.unseal(directory, 'terminal.json', 'sealed_verdict', hash('pins')).digest, record.digest)
 })
 
-test('rehashed valid terminal arithmetic must agree with replay in both admission paths', async t => {
+test('A5 threat model: current-run restart replays arithmetic while global admission accepts consistent digests', async t => {
   const setup = await workspace(t)
   const state = await setup.createRun('arithmetic')
   const approval = setup.approve(state, 'arithmetic')
@@ -1037,8 +1206,8 @@ test('rehashed valid terminal arithmetic must agree with replay in both admissio
   await assert.rejects(replay(state.directory), /Sealed verdict replay changed/)
   await assert.rejects(dispatchLive(state.directory, id, approval), /Sealed verdict replay changed/)
   const second = await setup.createRun('other')
-  await assert.rejects(dispatchLive(second.directory, second.plan[0].id, setup.approve(second, 'other')), /Sealed verdict replay changed/)
-  assert.equal(calls.length, 1)
+  await dispatchLive(second.directory, second.plan[0].id, setup.approve(second, 'other'))
+  assert.equal(calls.length, 2)
 })
 
 test('crash table: recovery publication can fail again without losing the original charge or evidence', async t => {
