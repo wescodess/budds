@@ -17,15 +17,15 @@ test('withholds a legacy answer with missing pins through its normalized objecti
   const legacyId = await t.run(async ctx => {
     await ctx.db.insert('learnObjectiveSources', { userId: identity.tokenIdentifier, objectiveId: f.scope.objectiveId, sourceSnapshotId: f.sourceSnapshotId, coverage: 'strong' })
     return await ctx.db.insert('masteryAttempts', { userId: identity.tokenIdentifier, objectiveId: f.scope.objectiveId,
-      attemptedAt: 123, idempotencyKey: 'legacy-without-pins', response: 'retained legacy answer', serverScorePercent: 80 })
+      attemptedAt: 123, idempotencyKey: 'legacy-without-pins', activityContractVersion: 'learn-v2.mastery-attempt.v1', response: 'retained legacy answer', serverScorePercent: 80 })
   })
   const owner = t.withIdentity(identity)
   const authorizationId = await authorizeExport(owner)
   const args = { authorizationId, collection: 'masteryAttempts' as const, paginationOpts: { cursor: null, numItems: 8 } }
-  expect((await owner.query(api.dataExport.getUserDataPage, args)).page).toMatchObject([{ response: 'retained legacy answer' }])
+  expect((await owner.query(api.dataExport.getUserDataPage, args)).page).toMatchObject([{ response: 'retained legacy answer', activityContractVersion: 'learn-v2.mastery-attempt.v1' }])
   await t.mutation(internal.learnV2Retention.purgeSourceEvidence, { userId: identity.tokenIdentifier, sourceIdentityId: f.sourceIdentityId })
   const page = await owner.query(api.dataExport.getUserDataPage, args)
-  expect(page.page[0]).toMatchObject({ bodyAvailability: 'unavailable', serverScorePercent: 80, attemptedAt: 123 })
+  expect(page.page[0]).toMatchObject({ bodyAvailability: 'unavailable', serverScorePercent: 80, attemptedAt: 123, activityContractVersion: 'learn-v2.mastery-attempt.v1' })
   expect(page.page[0]).not.toHaveProperty('response')
   expect((await t.run(ctx => ctx.db.get(legacyId)))?.response).toBe('retained legacy answer')
   await t.finishAllScheduledFunctions(vi.runAllTimers)

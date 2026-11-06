@@ -78,6 +78,7 @@ describe('ready V2 adaptive Canvas', () => {
     vi.useFakeTimers()
     const { t, owner, ids } = await fixture()
     const privateText = 'private-response-rubric-cache-canary'
+    const publicCriterion = 'Explain the capability accurately using the accepted evidence.'
     const response = 'My retained answer about gravity.'
     const prepared = await t.run(async ctx => {
       const content = (await ctx.db.get(ids.sessionContentId))!
@@ -88,7 +89,7 @@ describe('ready V2 adaptive Canvas', () => {
       await ctx.db.patch(source._id, { blueprintRevisionId: content.blueprintRevisionId, sourceRevision: 'document.r1' })
       await ctx.db.patch(ids.laterSourceSnapshotId, { blueprintRevisionId: content.blueprintRevisionId })
       await ctx.db.patch(content.objectiveId!, { assessmentContract: { version: 'learn-v2.assessment.v1', kind: 'bounded_rubric', responseFormat: 'short_text',
-        instructions: 'Explain from the evidence.', passingScorePercent: 80, criteria: [{ key: 'correct', description: privateText, weightPercent: 100 }] } })
+        instructions: 'Explain from the evidence.', passingScorePercent: 80, criteria: [{ key: 'correct', description: publicCriterion, weightPercent: 100 }] } })
       await ctx.db.patch(content.studyPlanRevisionId!, {
         inputSnapshot: JSON.stringify({ version: 'learn-v2.schedule-input.v1', timezone: 'UTC', startLocalDate: '2026-11-06', targetLocalDate: null,
           sessionMinutes: 25, minRestMinutes: 720, availability: [{ weekday: 1, start: '18:00', end: '20:00' }], blackoutDates: [], reviewIntervalsDays: [1, 3], privateRubric: privateText }),
@@ -96,7 +97,8 @@ describe('ready V2 adaptive Canvas', () => {
       })
       const attemptId = await ctx.db.insert('masteryAttempts', { userId: OWNER.tokenIdentifier, blueprintRevisionId: content.blueprintRevisionId,
         objectiveId: content.objectiveId!, kind: 'calibration', attemptedAt: 123, serverScorePercent: 80, confidence: 4, usedHint: false, usedReveal: false,
-        idempotencyKey: 'read-privacy-calibration', response, sourceSnapshotIdsJson: JSON.stringify([source._id]),
+        idempotencyKey: 'read-privacy-calibration', activityContractVersion: 'learn-v2.calibration-attempt.v1', rubricVersion: 'rubric.v1', scorerVersion: 'scorer.v1',
+        response, sourceSnapshotIdsJson: JSON.stringify([source._id]),
         requestFingerprint: JSON.stringify({ response: privateText }), rubricSnapshot: privateText, criterionResultsJson: privateText,
         feedbackProjectionJson: privateText, contentRevisionPinsJson: privateText })
       return { documentId, sourceIdentityId: source.sourceIdentityId, objectiveId: content.objectiveId!, blueprintRevisionId: content.blueprintRevisionId!, attemptId }
@@ -117,6 +119,11 @@ describe('ready V2 adaptive Canvas', () => {
     expect(liveJourney?.sources.items.find(row => row._id === ids.sourceSnapshotId)?.excerpt?.text).toBe('Gravity attracts masses.')
     expect(liveJourney?.calibration.attempts[0]).toMatchObject({ response, serverScorePercent: 80, confidence: 4 })
     expect(liveJourney?.calibration.items[0]?.prompt).toBe('Explain from the evidence.')
+    const storedObjective = (await t.run(ctx => ctx.db.get(prepared.objectiveId)))!
+    expect(liveJourney?.map?.objectives[0]).toEqual({ ...storedObjective, sourceLinks: expect.any(Array), prerequisiteObjectiveIds: [] })
+    expect(liveJourney?.calibration.items[0]?.rubric).toEqual(storedObjective.assessmentContract)
+    expect(liveJourney?.calibration.attempts[0]).toMatchObject({ userId: OWNER.tokenIdentifier, rubricVersion: 'rubric.v1', scorerVersion: 'scorer.v1', activityContractVersion: 'learn-v2.calibration-attempt.v1' })
+    expect(liveJourney?.mastery[0]?.attempts[0]).toEqual(liveJourney?.calibration.attempts[0])
     expect(liveJourney?.plan.accepted).toMatchObject({ inputSnapshot: expect.stringContaining('UTC'), resultSnapshot: expect.stringContaining('capacity_available') })
     expect(JSON.stringify(liveJourney)).not.toContain(privateText)
     expect((await owner.query(api.learnV2Sources.listSourceReview, reviewArgs)).page.find(row => row._id === ids.sourceSnapshotId)).toMatchObject({ excerpt: 'Gravity attracts masses.', rights: { access: 'available' } })
@@ -152,6 +159,8 @@ describe('ready V2 adaptive Canvas', () => {
       expect(mission).toMatchObject({ learningVoid: { _id: ids.learningVoidId }, calibration: { attempts: [{ serverScorePercent: 80, confidence: 4, bodyAvailability: 'unavailable' }] } })
       expect(mission?.sources.items.find(row => row._id === ids.sourceSnapshotId)?.excerpt).toBeNull()
       expect(mission?.calibration.items[0]?.prompt).toBeNull()
+      expect(mission?.calibration.items[0]?.rubric).toBeNull()
+      expect(mission?.map?.objectives[0]).toHaveProperty('assessmentContract', storedObjective.assessmentContract)
       expect(JSON.stringify(mission)).not.toContain(response)
       expect(JSON.stringify(mission)).not.toContain(privateText)
       expect(mission?.mastery[0]?.attempts[0]).not.toHaveProperty('response')
