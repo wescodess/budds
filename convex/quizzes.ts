@@ -9,7 +9,6 @@ import { createPendingAnswerAssessment, isQuizGradingEnabled, isRubricAssessment
 import { getQuizAttemptAnswers, getQuizAttemptAssessments, getQuizGradingState, isQuizGradingParentEligible, scheduleQuizGrading } from './lib/quizGrading'
 
 const MAX_QUIZ_QUESTIONS = 200
-const MAX_QUIZZES_PER_FOLDER = 100
 const MAX_ATTEMPTS_PER_QUIZ = 100
 
 const questionTypeValidator = v.union(
@@ -301,19 +300,17 @@ export const listByFolder = query({
     const folder = await ctx.db.get(args.folderId)
     if (!folder || folder.userId !== userId) return []
 
-    const [legacyRows, explicitRows] = await Promise.all([
-      ctx.db.query('quizzes')
+    // Existing navigation consumers require the complete folder list, including
+    // a previously selected quiz. Keep both stored scopes without a silent cap.
+    const rows: Doc<'quizzes'>[] = []
+    for (const courseScoped of [undefined, false] as const) {
+      const scopedQuizzes = ctx.db.query('quizzes')
         .withIndex('by_userId_and_folderId_and_courseScoped_and_deletedAt', q => q
-          .eq('userId', userId).eq('folderId', args.folderId).eq('courseScoped', undefined).eq('deletedAt', undefined))
-        .order('desc').take(MAX_QUIZZES_PER_FOLDER),
-      ctx.db.query('quizzes')
-        .withIndex('by_userId_and_folderId_and_courseScoped_and_deletedAt', q => q
-          .eq('userId', userId).eq('folderId', args.folderId).eq('courseScoped', false).eq('deletedAt', undefined))
-        .order('desc').take(MAX_QUIZZES_PER_FOLDER),
-    ])
-    const rows = [...legacyRows, ...explicitRows]
-      .sort((a, b) => b._creationTime - a._creationTime)
-      .slice(0, MAX_QUIZZES_PER_FOLDER)
+          .eq('userId', userId).eq('folderId', args.folderId).eq('courseScoped', courseScoped).eq('deletedAt', undefined))
+        .order('desc')
+      for await (const row of scopedQuizzes) rows.push(row)
+    }
+    rows.sort((a, b) => b._creationTime - a._creationTime)
 
     return await Promise.all(
       rows.map(async (row) => {

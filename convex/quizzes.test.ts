@@ -187,6 +187,39 @@ describe('quiz creation bounds', () => {
 
 
 describe('quizzes.listByFolder', () => {
+  test.each([undefined, false])('[P1] keeps more than 100 ordinary quizzes discoverable (courseScoped=%s)', async (courseScoped) => {
+    const t = convexTest(schema, modules)
+    const asUser = t.withIdentity(USER_A)
+    const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Quiz archive' })
+    const quizIds = []
+    for (let index = 0; index < 101; index++) {
+      const { quizId } = await asUser.mutation(api.quizzes.createWithQuestions, {
+        folderId, title: `Quiz ${index}`, questions: [sampleQuestions()[0]!], courseScoped,
+      })
+      quizIds.push(quizId)
+    }
+    const { quizId: mixedQuizId } = await asUser.mutation(api.quizzes.createWithQuestions, {
+      folderId, title: 'Other ordinary scope', questions: [sampleQuestions()[0]!],
+      courseScoped: courseScoped === false ? undefined : false,
+    })
+    await t.run(async (ctx) => {
+      await ctx.db.insert('quizzes', { userId: USER_A.tokenIdentifier, folderId, title: 'Course only', status: 'ready', courseScoped: true })
+      await ctx.db.insert('quizzes', { userId: USER_A.tokenIdentifier, folderId, title: 'Deleted', status: 'ready', deletedAt: Date.now() })
+      await ctx.db.insert('quizzes', { userId: USER_B.tokenIdentifier, folderId, title: 'Foreign owner', status: 'ready' })
+    })
+
+    const listed = await asUser.query(api.quizzes.listByFolder, { folderId })
+    expect(listed).toHaveLength(102)
+    expect(new Set(listed.map(quiz => quiz._id))).toEqual(new Set([...quizIds, mixedQuizId]))
+    expect(listed.every(quiz => quiz.questionCount === 1)).toBe(true)
+    expect(listed.map(quiz => quiz._creationTime)).toEqual(listed.map(quiz => quiz._creationTime).sort((a, b) => b - a))
+    const oldest = await asUser.query(api.quizzes.getWithQuestions, { id: quizIds[0]! })
+    expect(oldest?.quiz.title).toBe('Quiz 0')
+    expect(oldest?.questions).toHaveLength(1)
+    expect(await t.query(api.quizzes.listByFolder, { folderId })).toEqual([])
+    expect(await t.withIdentity(USER_B).query(api.quizzes.listByFolder, { folderId })).toEqual([])
+  })
+
   test('[P0] returns only caller\'s quizzes for that folder', async () => {
     const t = convexTest(schema, modules)
     const asUserA = t.withIdentity(USER_A)
