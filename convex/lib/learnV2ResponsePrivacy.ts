@@ -1,4 +1,5 @@
 import { learnResponsePayloadSchema } from '../../shared/learn-v2-responses'
+import { z } from 'zod'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 
@@ -24,17 +25,19 @@ export async function digestLegacyFingerprint(value: string) {
 
 // This is a retention/access predicate, independent of product flags. A
 // tombstone revokes every revision before its bounded byte purge completes.
-export async function sourceBodyAvailable(ctx: QueryCtx | MutationCtx, userId: string, id: Id<'learnSourceSnapshots'>) {
+export async function sourceBodyAvailable(ctx: QueryCtx | MutationCtx, userId: string, id: Id<'learnSourceSnapshots'>, options: { allowUnaccepted?: boolean } = {}) {
   const source = await ctx.db.get(id)
-  if (!source || source.userId !== userId || (source.effectiveStatus ?? source.status) !== 'user_accepted'
-    || source.status !== 'user_accepted' || source.evidencePurgedAt !== undefined
+  const allowed = options.allowUnaccepted ? ['fetched', 'evaluated', 'user_accepted'] : ['user_accepted']
+  if (!source || source.userId !== userId || !allowed.includes(source.effectiveStatus ?? source.status)
+    || !allowed.includes(source.status) || source.evidencePurgedAt !== undefined
     || source.rightsStatus === 'prohibited' || source.conflictStatus === 'unresolved') return false
   const identity = await ctx.db.get(source.sourceIdentityId)
   if (!identity || identity.userId !== userId || identity.learningVoidId !== source.learningVoidId
     || identity.tombstonedAt !== undefined) return false
   const aggregate = await ctx.db.get(source.learningVoidId)
   const folder = aggregate && await ctx.db.get(aggregate.folderId)
-  if (!aggregate || aggregate.userId !== userId || !folder || folder.userId !== userId) return false
+  if (!aggregate || aggregate.userId !== userId || aggregate.status === 'archived' || !folder || folder.userId !== userId) return false
+  if (identity.origin === 'folder_document' && !identity.folderDocumentId) return false
   if (identity.folderDocumentId) {
     const document = await ctx.db.get(identity.folderDocumentId)
     const documentFolder = document && await ctx.db.get(document.folderId)
@@ -42,6 +45,43 @@ export async function sourceBodyAvailable(ctx: QueryCtx | MutationCtx, userId: s
       || document.sourceRevision !== source.sourceRevision || !documentFolder || documentFolder.userId !== userId) return false
   }
   return true
+}
+
+export async function retainedSourceExcerpt(ctx: QueryCtx | MutationCtx, userId: string, id: Id<'learnSourceSnapshots'>, options: { allowUnaccepted?: boolean } = {}) {
+  if (!await sourceBodyAvailable(ctx, userId, id, options)) return null
+  // Locator-based scoring has its own rights policy. Retained text disclosure
+  // always requires permission on both the snapshot and the excerpt.
+  if ((await ctx.db.get(id))?.rightsStatus !== 'permitted') return null
+  const excerpt = await ctx.db.query('learnSourceExcerpts')
+    .withIndex('by_userId_and_sourceSnapshotId', q => q.eq('userId', userId).eq('sourceSnapshotId', id)).unique()
+  return excerpt?.rightsStatus === 'permitted' && excerpt.evidencePurgedAt === undefined && excerpt.excerpt?.trim() ? excerpt : null
+}
+
+// Re-serialize only scheduling preferences and closed result metadata. Stored
+// plan JSON is a cache, never authority to disclose arbitrary extra fields.
+const planDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+const planTime = z.string().regex(/^\d{2}:\d{2}$/)
+const publicPlanInput = z.object({
+  version: z.literal('learn-v2.schedule-input.v1'),
+  timezone: z.string().max(100).refine(value => { try { new Intl.DateTimeFormat('en', { timeZone: value }); return true } catch { return false } }),
+  startLocalDate: planDate, targetLocalDate: planDate.nullable(), sessionMinutes: z.number().int().min(15).max(60),
+  minRestMinutes: z.number().int().nonnegative(),
+  availability: z.array(z.object({ weekday: z.number().int().min(0).max(6), start: planTime, end: planTime })).max(28),
+  blackoutDates: z.array(planDate).max(90), reviewIntervalsDays: z.array(z.number().int().positive()).max(4),
+})
+const publicPlanResult = z.object({
+  version: z.literal('learn-v2.scheduler.v1'), status: z.enum(['feasible', 'infeasible']),
+  reasonCodes: z.array(z.enum(['capacity_available', 'prerequisites_ordered', 'reviews_spaced', 'buffer_reserved', 'insufficient_capacity', 'final_buffer_missing'])).max(8),
+  alternatives: z.array(z.object({ code: z.enum(['extend_deadline', 'add_availability', 'shorten_sessions_increase_cadence', 'reduce_depth', 'remove_lower_priority_objectives']) })).max(8),
+})
+
+export function retainedPlanCache(value: string | undefined, kind: 'input' | 'result') {
+  if (!value || value.length > 256 * 1024) return undefined
+  try {
+    const parsed = (kind === 'input' ? publicPlanInput : publicPlanResult).safeParse(JSON.parse(value))
+    return parsed.success ? JSON.stringify(parsed.data) : undefined
+  }
+  catch { return undefined }
 }
 
 export function privateFields<T extends Record<string, unknown>>(row: T & { _id: string, _creationTime: number }, names: readonly string[]) {
@@ -75,7 +115,7 @@ export async function retainedResponsePayload(ctx: QueryCtx | MutationCtx, userI
   if (response.scopeKind === 'v2') {
     const aggregate = await ctx.db.get(response.learningVoidId)
     const folder = aggregate && await ctx.db.get(aggregate.folderId)
-    if (!aggregate || aggregate.userId !== userId || !folder || folder.userId !== userId) return null
+    if (!aggregate || aggregate.userId !== userId || aggregate.status === 'archived' || !folder || folder.userId !== userId) return null
   }
   else {
     const thread = await ctx.db.get(response.threadId)
@@ -127,6 +167,6 @@ export async function legacyResponseAvailable(ctx: QueryCtx, userId: string, att
     if (links.length > 64) return false
     ids = links.map(link => link.sourceSnapshotId)
   }
-  for (const id of ids) if (!await sourceBodyAvailable(ctx, userId, id)) return false
+  for (const id of ids) if (!await retainedSourceExcerpt(ctx, userId, id)) return false
   return true
 }

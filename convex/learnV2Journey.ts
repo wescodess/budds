@@ -4,6 +4,8 @@ import type { Doc, Id } from './_generated/dataModel'
 import { requireLearnV2QueryAccess } from './lib/learnV2Access'
 import { requireActiveBlueprint } from './lib/learnV2BlueprintAuthority'
 import { getScopedMasteryRecord } from './lib/learnV2MasteryScope'
+import { retainedPlanCache, retainedSourceExcerpt } from './lib/learnV2ResponsePrivacy'
+import { exportLegacyAttempt } from './lib/learnV2PersonalExport'
 
 const MAX_VOIDS = 32
 const MAX_SOURCES = 64
@@ -89,9 +91,7 @@ async function sourceProjection(ctx: Parameters<typeof requireLearnV2QueryAccess
     else if (status === 'unavailable') counts.unavailable += 1
     else counts.pending += 1
     const identity = await ctx.db.get(source.sourceIdentityId)
-    const excerpt = status === 'user_accepted' && source.rightsStatus === 'permitted' && source.evidencePurgedAt === undefined
-      ? await ctx.db.query('learnSourceExcerpts').withIndex('by_userId_and_sourceSnapshotId_and_evidencePurgedAt', q => q.eq('userId', userId).eq('sourceSnapshotId', source._id).eq('evidencePurgedAt', undefined)).first()
-      : null
+    const excerpt = await retainedSourceExcerpt(ctx, userId, source._id)
     items.push({
       _id: source._id,
       sourceIdentityId: source.sourceIdentityId,
@@ -165,13 +165,27 @@ async function journey(ctx: Parameters<typeof requireLearnV2QueryAccess>[0], use
   for (const objective of map?.objectives ?? []) {
     const record = (await getScopedMasteryRecord(ctx, userId, blueprint!._id, objective._id)).record
     const attempts = await ctx.db.query('masteryAttempts').withIndex('by_userId_blueprintRevisionId_objectiveId_attemptedAt', q => q.eq('userId', userId).eq('blueprintRevisionId', blueprint!._id).eq('objectiveId', objective._id)).order('desc').take(MAX_ATTEMPTS_PER_OBJECTIVE)
-    mastery.push({ objectiveId: objective._id, record, attempts })
+    mastery.push({ objectiveId: objective._id, record, attempts: await Promise.all(attempts.map(attempt => exportLegacyAttempt(ctx, userId, attempt))) })
   }
+  const availableSources = new Set(sources.items.filter(source => source.excerpt !== null).map(source => source._id))
   const calibrationItems = (map?.objectives ?? []).map(objective => {
-    const rubric = objective.assessmentContract && typeof objective.assessmentContract === 'object' ? objective.assessmentContract : null
-    return { objectiveId: objective._id, title: objective.title, capability: objective.capability, prompt: rubric && 'instructions' in rubric && typeof rubric.instructions === 'string' ? rubric.instructions : null, rubric }
+    const supported = objective.sourceLinks.filter(link => link.coverage !== 'gap')
+    const available = supported.length > 0 && supported.every(link => availableSources.has(link.sourceSnapshotId))
+    const rubric = available && objective.assessmentContract && typeof objective.assessmentContract === 'object' ? objective.assessmentContract : null
+    return { objectiveId: objective._id, title: objective.title, capability: objective.capability, prompt: rubric?.instructions ?? null, rubric: null }
   })
-  return { folder, learningVoid: voidRow, currentBlueprint: blueprint, generation, nextAction: nextAction(voidRow, blueprint, sources, plan), sources, map, calibration: { attempts: calibrationAttempts, items: calibrationItems, completed: voidRow.status !== 'calibration' && calibrationAttempts.length >= 3 }, plan, mastery }
+  const safeMap = map && { ...map, objectives: map.objectives.map(objective => ({
+    _id: objective._id, _creationTime: objective._creationTime, userId: objective.userId, blueprintRevisionId: objective.blueprintRevisionId,
+    stableKey: objective.stableKey, milestoneId: objective.milestoneId, order: objective.order, title: objective.title,
+    capability: objective.capability, estimatedMinutes: objective.estimatedMinutes, depth: objective.depth,
+    coverage: objective.coverage, gapReason: objective.gapReason, sourceLinks: objective.sourceLinks, prerequisiteObjectiveIds: objective.prerequisiteObjectiveIds,
+  })) }
+  const safePlanRevision = (revision: Doc<'studyPlanRevisions'> | null) => revision && {
+    ...revision, inputSnapshot: retainedPlanCache(revision.inputSnapshot, 'input'), resultSnapshot: retainedPlanCache(revision.resultSnapshot, 'result'),
+  }
+  return { folder, learningVoid: voidRow, currentBlueprint: blueprint, generation, nextAction: nextAction(voidRow, blueprint, sources, plan), sources, map: safeMap,
+    calibration: { attempts: await Promise.all(calibrationAttempts.map(attempt => exportLegacyAttempt(ctx, userId, attempt))), items: calibrationItems, completed: voidRow.status !== 'calibration' && calibrationAttempts.length >= 3 },
+    plan: { ...plan, preview: safePlanRevision(plan.preview), accepted: safePlanRevision(plan.accepted) }, mastery }
 }
 
 export const listHub = query({

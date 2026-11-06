@@ -6,6 +6,7 @@ import schema from './schema'
 import { privateAdaptiveArtifactR2Key } from './lib/learnAdaptiveArtifacts'
 import { composeAdaptiveActivityPlan } from '../shared/learn-adaptive-activity-plan'
 import { storedPlan } from './learnAdaptiveRecovery'
+import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 
 const modules = import.meta.glob('./**/*.ts')
 const OWNER = { tokenIdentifier: 'https://auth.example.com|artifact-owner' }
@@ -216,12 +217,12 @@ describe('adaptive thread artifacts', () => {
     const privateKey = await privateAdaptiveArtifactR2Key(OWNER.tokenIdentifier, saved.value.artifactId)
     await t.run(ctx => ctx.db.patch(saved.value.artifactId, { r2ObjectKey: privateKey }))
     const input = { collection: 'learningThreadArtifacts' as const, paginationOpts: { cursor: null, numItems: 100 } }
-    const exported = await owner.query(api.dataExport.getUserDataPage, input)
+    const exported = await owner.query(api.dataExport.getUserDataPage, { ...input, authorizationId: await authorizeExport(owner) })
     expect(exported.page).toHaveLength(1)
     expect(exported.page[0]).toMatchObject({ title: 'Export note', summary: 'I understand this part.' })
     expect(exported.page[0]).not.toHaveProperty('r2ObjectKey')
     expect(JSON.stringify(exported)).not.toContain(privateKey)
-    expect((await other.query(api.dataExport.getUserDataPage, input)).page).toEqual([])
+    expect((await other.query(api.dataExport.getUserDataPage, { ...input, authorizationId: await authorizeExport(other) })).page).toEqual([])
   })
 
   test('pending deleted artifacts cannot hide an older saved artifact from the bounded read', async () => {
@@ -318,6 +319,10 @@ describe('adaptive thread artifacts', () => {
     await t.mutation(internal.learnAdaptiveCommands.runThreadDeletionJob, { jobId: job!._id })
     const cleanup = await t.run(ctx => ctx.db.query('pendingCleanup').withIndex('by_learningThreadArtifactId', q => q.eq('learningThreadArtifactId', saved.value.artifactId)).unique())
     expect(cleanup).toMatchObject({ r2Key: privateKey })
+    expect(await t.run(ctx => ctx.db.get(saved.value.artifactId))).toMatchObject({ status: 'deleted', r2ObjectKey: privateKey })
+    await t.mutation(internal.learnAdaptiveCommands.runThreadDeletionJob, { jobId: job!._id })
+    expect(await t.run(ctx => ctx.db.get(saved.value.artifactId))).toMatchObject({ r2ObjectKey: privateKey })
+    expect(await t.run(ctx => ctx.db.get(cleanup!._id))).toMatchObject({ r2Key: privateKey })
     expect(await t.run(ctx => ctx.db.get(ids.learningVoidId))).not.toBeNull()
     await t.mutation(internal.accountDeletion.removePendingCleanup, { id: cleanup!._id })
     for (let index = 0; index < 15 && await t.run(ctx => ctx.db.get(job!._id)); index++) await t.mutation(internal.learnAdaptiveCommands.runThreadDeletionJob, { jobId: job!._id })
