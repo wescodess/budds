@@ -244,6 +244,65 @@ describe('rubric assessment creation and completion', () => {
     }
   })
 
+  const listCases = [
+    { name: 'complete reordered factors', expected: 'high pressure, low temperature', response: 'low temperatures; high pressures', matches: true },
+    { name: 'omitted qualifiers', expected: 'high pressure, low temperature', response: 'pressure, temperature', matches: false },
+    { name: 'omitted quantities', expected: '20 grams, 50 millilitres', response: 'grams, millilitres', matches: false },
+    { name: 'changed numeric sign', expected: '20 grams, 50 millilitres', response: '-20 grams, 50 millilitres', matches: false },
+    { name: 'reversed roles within factors', expected: 'dog bites owner, cat scratches handler', response: 'owner bites dog, handler scratches cat', matches: false },
+  ]
+  test.each(paths.flatMap(path => listCases.map(example => ({ path, ...example }))))('$path preserves complete list factors: $name', async ({ path, expected, response, matches }) => {
+    for (const mode of ['off', 'graded']) {
+      vi.stubEnv('QUIZ_GRADING_MODE', mode)
+      for (const type of ['free-response', 'fill_in_the_blank'] as const) {
+        const t = convexTest(schema, modules)
+        const user = t.withIdentity(USER)
+        const folderId = await user.mutation(api.folders.createFolder, { name: 'Lists' })
+        const { quizId } = await user.mutation(api.quizzes.createWithQuestions, {
+          folderId, title: 'List meaning', questions: [{
+            order: 0, question: 'List two required factors.', type, correctAnswer: expected,
+            gradingCriteria: [{ key: 'complete_factors', description: `Includes both complete factors: ${expected}`, weightPercent: 100 }],
+          }],
+        })
+        const question = (await user.query(api.quizzes.getWithQuestions, { id: quizId }))!.questions[0]!
+        let attemptId
+        if (path === 'submitAttempt') {
+          ;({ attemptId } = await user.mutation(api.quizzes.submitAttempt, {
+            quizId, answers: [{ questionId: question._id, response }],
+          }))
+        }
+        else {
+          ;({ attemptId } = await user.mutation(api.quizzes.startAttempt, { quizId, settings }))
+          if (path === 'completeAttempt') {
+            await user.mutation(api.quizzes.submitAnswer, { attemptId, questionId: question._id, userAnswer: response })
+            await user.mutation(api.quizzes.completeAttempt, { attemptId })
+          }
+          else {
+            await user.mutation(api.quizzes.submitAllAnswers, { attemptId, answers: [{ questionId: question._id, userAnswer: response }] })
+          }
+        }
+        const assessment = (await t.run(ctx => ctx.db.query('quizAnswerAssessments')
+          .withIndex('by_attemptId', q => q.eq('attemptId', attemptId)).unique()))!
+        expect(assessment.deterministicIsCorrect).toBe(matches)
+        const results = (await user.query(api.quizzes.getAttemptResults, { attemptId }))!
+        expect(results.score).toBe(matches ? 1 : 0)
+        expect(results.results[0]!.isCorrect).toBe(matches)
+        if (mode === 'graded' && matches) {
+          expect(assessment).toMatchObject({ status: 'available', gradeSource: 'deterministic', credit: 1,
+            criterionResults: [{ key: type === 'free-response' ? 'complete_factors' : 'reference_answer', verdict: 'met' }] })
+          expect(results.grading).toEqual({ pending: 0, needsReview: 0, unavailable: 0 })
+        }
+        else {
+          expect(assessment.status).toBe('pending')
+          expect(assessment).not.toHaveProperty('credit')
+          expect(assessment).not.toHaveProperty('gradeSource')
+          if (mode === 'graded') expect(results.grading).toEqual({ pending: 1, needsReview: 0, unavailable: 0 })
+          else expect(results).not.toHaveProperty('grading')
+        }
+      }
+    }
+  })
+
   test.each(paths)('%s falls back to the default rubric without rejecting answers', async (path) => {
     vi.stubEnv('QUIZ_GRADING_MODE', 'graded')
     const fixture = await createQuiz()

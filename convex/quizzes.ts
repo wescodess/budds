@@ -87,10 +87,7 @@ function listFactorTokens(value: string): string[] {
   return value
     .normalize('NFKC')
     .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, ' ')
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean)
+    .match(/[\p{L}\p{N}]+|[^\s\p{L}\p{N}]/gu) ?? []
 }
 
 function splitListFactors(value: string): string[][] {
@@ -109,13 +106,14 @@ function regularPlural(token: string): string | null {
 }
 
 function listFactorMatches(expected: string[], actual: string[]): boolean {
+  // Preserve the complete factor, including quantities, signs and word order.
+  // A regular plural on the final noun is the only token-level variation.
   const expectedHeadIndex = expected.length - 1
   const expectedHead = expected[expectedHeadIndex]!
   const expectedPluralHead = regularPlural(expectedHead)
-  return actual.some(token => token === expectedHead || (expectedPluralHead !== null && token === expectedPluralHead))
-    && actual.every(token => expected.some((expectedToken, index) =>
-      token === expectedToken || (index === expectedHeadIndex && expectedPluralHead !== null && token === expectedPluralHead),
-    ))
+  return actual.length === expected.length
+    && expected.every((token, index) => actual[index] === token
+      || (index === expectedHeadIndex && expectedPluralHead !== null && actual[index] === expectedPluralHead))
 }
 
 function isExplicitListMatch(question: string, response: string, correctAnswer: string): boolean {
