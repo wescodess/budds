@@ -3,6 +3,7 @@ import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { requireOwnedResponseTarget } from './learnV2PublicAccess'
 import { getScopedMasteryRecord } from './learnV2MasteryScope'
+import { liveResponseAggregate, sourceBodyAvailable } from './learnV2ResponsePrivacy'
 import {
   acceptResponseCommandSchema, disabledResponseReceipt, disabledLearnV2Result, LEARN_V2_PUBLIC_API_VERSION,
   validateLearnMasterySubmission, parsePublicLearnRequest, terminalizeResponseSchema, authorizeAssistanceSchema,
@@ -82,6 +83,7 @@ function requireAvailable(row: { evidenceStatus: string, invalidatedAt?: number 
 async function currentScope(ctx: ReadCtx, userId: string, row: Target) {
   const pins = scope(row)
   requireAvailable(row)
+  if (!await liveResponseAggregate(ctx, userId, row)) reject('unavailable')
   if (pins.scopeKind === 'standalone') {
     const [thread, activity] = await Promise.all([ctx.db.get(pins.threadId), ctx.db.get(pins.activityId)])
     if (!thread || !activity || thread.deletionStartedAt !== undefined || ['ended', 'rollback'].includes(thread.lifecycle)) reject('unavailable')
@@ -124,6 +126,7 @@ async function currentScope(ctx: ReadCtx, userId: string, row: Target) {
 }
 
 async function snapshotDependency(ctx: ReadCtx, userId: string, learningVoidId: Id<'learningVoids'>, id: Id<'learnSourceSnapshots'>, manifest: string) {
+  if (!await sourceBodyAvailable(ctx, userId, id)) reject('evidence_unavailable')
   const source = await ctx.db.get(id)
   if (!source || source.userId !== userId || source.learningVoidId !== learningVoidId
     || source.status !== 'user_accepted' || source.effectiveStatus !== 'user_accepted' || source.conflictStatus !== 'clear'
@@ -268,7 +271,7 @@ async function matchingAssignment(ctx: ReadCtx, userId: string, row: Doc<'learnA
 
 async function assessmentValidity(ctx: ReadCtx, userId: string, row: Doc<'learnAssessmentOpportunities'>,
   authority: Awaited<ReturnType<typeof currentScope>>, assistance: LearnAssistanceSnapshot, now: number,
-  assignment: Awaited<ReturnType<typeof matchingAssignment>>) {
+  assignment: Awaited<ReturnType<typeof matchingAssignment>>, historyKnown: boolean) {
   const purpose = parseLearnContract(learnAssessmentPurposeSchema, row.purpose)
   parseLearnContract(learnScorerBindingSchema, row.scoringBinding)
   if (now < row.openAt || now >= row.closeAt) reject('outside_window')
@@ -278,8 +281,6 @@ async function assessmentValidity(ctx: ReadCtx, userId: string, row: Doc<'learnA
   if (measurement !== purpose.kind.startsWith('measurement_')
     || (purpose.kind === 'calibration' && pins.kind !== 'calibration')
     || (purpose.kind === 'independent_application' && pins.kind !== 'session_application')) reject('pins_mismatch')
-  const catalog = await ctx.db.query('learnAssessmentCatalogs').withIndex('by_userId', q => q.eq('userId', userId)).unique()
-  const historyKnown = catalog?.historyCompleteness === 'prospective_complete' && !!catalog.historyCoverageWatermark
   const caseId = measurement ? pins.itemPins.caseId : pins.caseId
   const caseRow = await ctx.db.get(caseId)
   if (!caseRow || caseRow.userId !== userId) reject('pins_mismatch')
@@ -290,7 +291,6 @@ async function assessmentValidity(ctx: ReadCtx, userId: string, row: Doc<'learnA
     && exposure.assessmentOpportunityId !== row._id)
   const novel = previous ? 'no' : historyKnown && caseRow.identityValidationId ? 'yes' as const : 'unknown' as const
   assistance.priorExposure = previous ? 'known' : historyKnown ? 'prospectively_unexposed' : 'unknown'
-  if (authority.session === null && historyKnown && assistance.state === 'unknown') assistance.state = 'unassisted'
   if (measurement) {
     const itemPins = pins.itemPins
     const [item, family, spec, validation] = await Promise.all([
@@ -354,11 +354,17 @@ async function prepareResponse(ctx: ReadCtx, userId: string, entry: Entry, row: 
     && ['teaching', 'practice', 'feedback'].includes(value.purpose))
   const unresolvedExposure = priorExposures.some(value => value.status === 'possible' || value.status === 'unknown')
   const session = authority.session
+  const catalog = 'assessmentPins' in row ? await ctx.db.query('learnAssessmentCatalogs')
+    .withIndex('by_userId', q => q.eq('userId', userId)).unique() : null
+  const historyKnown = catalog?.historyCompleteness === 'prospective_complete' && !!catalog.historyCoverageWatermark
+  // Planned measurement and calibration have no session revision. Catalogue
+  // coverage supplies history, but never resolves a pending exposure.
+  const assistanceHistoryKnown = session ? session.assistanceRevision !== undefined : historyKnown
   const hint = session?.substantiveHintUsedAt ?? null
   const reveal = session?.answerRevealedAt ?? null
   const assistance = parseLearnContract(learnAssistanceSnapshotSchema, {
     policyVersion: LEARN_V2_ASSISTANCE_POLICY_VERSION, state: actualHelp || hint !== null || reveal !== null ? 'assisted'
-      : unresolvedExposure || session?.assistanceRevision === undefined ? 'unknown' : 'unassisted',
+      : unresolvedExposure || !assistanceHistoryKnown ? 'unknown' : 'unassisted',
     assistanceRevision: session?.assistanceRevision ?? 0, substantiveHintUsedAt: hint, answerRevealedAt: reveal,
     priorExposure: 'unknown', outsideHelp: 'unknown', pasteObserved: observation.pasteObserved, focusLossObserved: observation.focusLossObserved,
     instrumentationVersion: observation.version, instrumentationProvenance: entry.instrumentation ? 'client_observation.v1' : 'missing_instrumentation.v1',
@@ -367,7 +373,7 @@ async function prepareResponse(ctx: ReadCtx, userId: string, entry: Entry, row: 
   const context = 'assessmentPins' in row ? deriveLearnAssessmentResponseContext({ contextPins: row.contextPins,
     assignment: assignment?.status === 'admitted' ? { status: 'admitted', assignmentId: assignment._id, epoch: assignment.epoch, flow: assignment.flow }
       : assignment ? { status: assignment.status } : null }) : null
-  const validity = 'assessmentPins' in row ? await assessmentValidity(ctx, userId, row, authority, assistance, now, assignment)
+  const validity = 'assessmentPins' in row ? await assessmentValidity(ctx, userId, row, authority, assistance, now, assignment, historyKnown)
     : parseLearnContract(learnValiditySnapshotSchema, { policyVersion: LEARN_V2_VALIDITY_POLICY_VERSION,
         status: 'excluded', measurementEligible: false, masteryEligible: false, exclusionReasons: ['formative'] })
   if (entry.payload.kind !== 'text' && 'stage' in row) reject('invalid_payload')
@@ -417,6 +423,7 @@ export async function acceptLearnResponseForOwner(ctx: MutationCtx, userId: stri
   const rows: Target[] = []
   for (const entry of entries) {
     const row = await requireOwnedResponseTarget(ctx, userId, entry.target)
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && !await liveResponseAggregate(ctx, userId, row)) return rejected('unavailable')
     if ('stage' in row && row.stage === 'diagnostic') {
       try { learnSerializedBytes(entry.payload, LEARN_V2_RESPONSE_LIMITS.maxDiagnosticBytes) }
       catch {
@@ -509,14 +516,7 @@ async function retainedBody(ctx: ReadCtx, userId: string, response: Doc<'learnRe
   if (response.bodyAvailability === 'purged') return { bodyAvailability: 'purged' as const, reasonCode: 'evidence_unavailable' as const, purgedAt: response.bodyPurgedAt ?? response.invalidatedAt ?? response.acceptedAt }
   const unavailable = { bodyAvailability: 'unavailable' as const, reasonCode: 'evidence_unavailable' as const }
   if (response.evidenceStatus !== 'available' || response.invalidatedAt !== undefined) return unavailable
-  if (response.scopeKind === 'standalone') {
-    const thread = await ctx.db.get(response.threadId)
-    if (!thread || thread.userId !== userId || thread.deletionStartedAt !== undefined) return unavailable
-  } else {
-    const learningVoid = await ctx.db.get(response.learningVoidId)
-    const folder = learningVoid && await ctx.db.get(learningVoid.folderId)
-    if (!learningVoid || learningVoid.userId !== userId || !folder || folder.userId !== userId) return unavailable
-  }
+  if (!await liveResponseAggregate(ctx, userId, response)) return unavailable
   const links = await ctx.db.query('learnResponseEvidenceLinks')
     .withIndex('by_userId_and_submissionId', q => q.eq('userId', userId).eq('submissionId', response._id)).take(65)
   if (links.length > 64 || (response.scopeKind === 'v2' && !links.length)) return unavailable
@@ -566,6 +566,7 @@ export async function terminalizeLearnResponseForOwner(ctx: MutationCtx, userId:
   const row = await requireOwnedResponseTarget(ctx, userId, request.target)
   if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return disabledLearnV2Result()
   const unavailable = (reason: string): LearnV2Terminalization => ({ version: LEARN_V2_PUBLIC_API_VERSION, status: 'unavailable', reasonCodes: [reason] })
+  if (!await liveResponseAggregate(ctx, userId, row)) return unavailable('unavailable')
   const { receipt, idempotencyKeyHash } = await commandReceipt(ctx, userId, request.idempotencyKey)
   if (receipt) {
     if (receipt.commandVersion !== LEARN_V2_RESPONSE_TERMINALIZATION_VERSION || receipt.result.kind !== 'terminalized'
@@ -640,6 +641,7 @@ export async function recordLearnResponseIntegrityForOwner(ctx: MutationCtx, use
   await requireOwnedResponseTarget(ctx, userId, 'assessmentOpportunityId' in response
     ? { assessmentOpportunityId: response.assessmentOpportunityId } : { responseSlotId: response.responseSlotId })
   if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return null
+  if (!await liveResponseAggregate(ctx, userId, response)) throw new Error('Learn access denied')
   const previous = await ctx.db.query('learnResponseIntegrityEvents')
     .withIndex('by_userId_and_submissionId_and_sequence', q => q.eq('userId', userId).eq('submissionId', response._id)).order('desc').first()
   if (previous?.kind === value.kind && previous.effectiveAt === value.effectiveAt && previous.reasonCode === value.reasonCode) return previous._id
