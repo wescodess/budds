@@ -35,16 +35,35 @@ pristine render hashes per format, and the complete CSS/font/asset byte digest.
 The VM check exercises browser-selected JavaScript without a browser or visual
 acceptance claim.
 
-Minimatch 10.2.5 remains affected through ESLint config-array and import-x.
-Minimatch 11 removes `makeRe`; adapting the real import-x rule to `.match()`
-changes observable legacy glob behavior for direct dot paths, package roots,
-and multiple globstars. A minimal compatibility patch did not preserve those
-outcomes, so no minimatch upgrade or import-x patch is included. The real ESLint
-contracts preserve those cases to expose the blocker in future upgrade work.
+`@eslint/config-array@0.23.5` and `eslint-plugin-import-x@4.17.1` use minimatch
+11.0.4 through scoped overrides. Import-x's maintained ESM/CJS patch replaces
+the removed `makeRe` API with matcher predicates and keeps empty patterns
+inactive. The repository does not enable its `no-internal-modules` rule.
+Consumers that enable it now receive the fixed matcher's glob semantics:
+implicit dot paths are excluded, a package root is outside `package/**`, and
+multiple globstars match nested private paths. The actual ESLint contracts
+cover these deliberate changes as well as the other supported rule branches.
+Remove the adapter when compatible upstream consumers support the fixed engine.
 
-Raw `pnpm audit` continues to flag minimatch and KaTeX 0.16.47. The backport does
-not produce a clean audit, waive any finding, or pass the release gate.
-Independent patch review, compatible minimatch remediation, the parent's full
-checks, and owner adjudication remain required. Remove these patches when
-reviewed upstream consumers provide the same fixes and compatibility contracts
-pass.
+The audit policy excludes only `GHSA-238p-pmpm-9mq7`: the registry identifies
+KaTeX by version and does not recognize this upstream security backport. This
+is an application-entrypoint exception, not a claim that the unselected
+minified artifact is fixed. The required security probe pins the sole KaTeX
+snapshot to the reviewed patch hash, verifies the exception's exact scope,
+tests inherited-property attacks in four selected formats, and checks the
+actual Mermaid browser import. It also prevents minimatch versions below the
+fixed engine from returning to the resolved graph. A missing or changed patch
+must fail these checks even if the version-based advisory is excluded.
+
+Reassess the exception whenever imports, bundler selection, package versions,
+or patches change. Remove it and the backport when compatible upstream
+consumers provide the fix. Keep raw audit observations distinct from configured
+audit-policy results; the independent release review and full checks still
+determine release readiness.
+
+With the pinned pnpm 9.12.3, ordinary `pnpm audit` applies the advisory filter
+when choosing its exit code, but its summary retains the registry's original
+counts. JSON audit mode also retains the original counts and exit code. Thus
+the configured command can pass while reporting one low version advisory;
+JSON output must not be described as a clean raw audit. The required security
+tests remain the evidence that the selected KaTeX code has the upstream fix.

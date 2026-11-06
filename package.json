@@ -117,13 +117,21 @@
       "postcss": "8.5.28",
       "valibot": "1.4.2",
       "ws": "8.21.3",
-      "@rollup/plugin-node-resolve@16.0.3>deepmerge": "-"
+      "@rollup/plugin-node-resolve@16.0.3>deepmerge": "-",
+      "@eslint/config-array@0.23.5>minimatch": "11.0.4",
+      "eslint-plugin-import-x@4.17.1>minimatch": "11.0.4"
     },
     "patchedDependencies": {
       "nuxt-convex@0.0.6": "patches/nuxt-convex@0.0.6.patch",
       "@convex-dev/better-auth@0.13.0": "patches/@convex-dev__better-auth@0.13.0.patch",
       "@rollup/plugin-node-resolve@16.0.3": "patches/@rollup__plugin-node-resolve@16.0.3.patch",
-      "katex@0.16.47": "patches/katex@0.16.47.patch"
+      "katex@0.16.47": "patches/katex@0.16.47.patch",
+      "eslint-plugin-import-x@4.17.1": "patches/eslint-plugin-import-x@4.17.1.patch"
+    },
+    "auditConfig": {
+      "ignoreGhsas": [
+        "GHSA-238p-pmpm-9mq7"
+      ]
     }
   }
 }

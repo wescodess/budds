@@ -92,6 +92,22 @@ try {
     const lock = readFileSync(new URL('../pnpm-lock.yaml', import.meta.url), 'utf8')
     assert.doesNotMatch(lock, /^ {2}deepmerge@/m)
   })
+  await test('Resolved graph: all minimatch consumers use the fixed engine', () => {
+    const lock = readFileSync(new URL('../pnpm-lock.yaml', import.meta.url), 'utf8')
+    assert.doesNotMatch(lock, /^ {2}minimatch@(?:(?:7|8|9|10)\.|11\.0\.0[:(])/m)
+  })
+  await test('KaTeX audit exception is restricted to the reviewed application backport', () => {
+    const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+    assert.deepEqual(manifest.pnpm.auditConfig.ignoreGhsas, ['GHSA-238p-pmpm-9mq7'])
+    assert.equal(manifest.pnpm.patchedDependencies['katex@0.16.47'], 'patches/katex@0.16.47.patch')
+    assert.equal(JSON.parse(readFileSync(join(katexRoot, 'package.json'), 'utf8')).version, '0.16.47')
+    const lock = readFileSync(new URL('../pnpm-lock.yaml', import.meta.url), 'utf8')
+    const snapshots = lock.split('\nsnapshots:\n')[1]
+    assert.ok(snapshots)
+    assert.deepEqual([...snapshots.matchAll(/^ {2}(katex@[^\n]+):$/gm)].map(match => match[1]), [
+      'katex@0.16.47(patch_hash=reieb5xn7rzhuqoirbcwtxkd64)',
+    ])
+  })
   for (const format of ['ESM', 'CJS']) {
     const resolver = format === 'ESM'
       ? await import(pathToFileURL(join(resolverRoot, 'dist/es/index.js')))
@@ -164,10 +180,10 @@ try {
     ['dot explicit', 'contract-pkg/lib/.hidden', { allow: ['contract-pkg/lib/.hidden'] }, 0],
     ['dot glob excluded', 'contract-pkg/lib/.hidden', { allow: ['contract-pkg/lib/*'] }, 1],
     ['dot forbid excluded', 'contract-pkg/lib/.hidden', { forbid: ['contract-pkg/**'] }, 0],
-    ['direct dot allow legacy behavior', 'contract-pkg/.hidden', { allow: ['contract-pkg/**'] }, 0],
-    ['direct dot forbid legacy behavior', 'contract-pkg/.hidden', { forbid: ['contract-pkg/**'] }, 1],
-    ['package root globstar legacy behavior', 'contract-pkg', { forbid: ['contract-pkg/**'] }, 1],
-    ['multiple globstar legacy behavior', 'contract-pkg/lib/private/nested', { forbid: ['contract-pkg/**/private/**'] }, 0],
+    ['direct dot paths require an explicit allow pattern', 'contract-pkg/.hidden', { allow: ['contract-pkg/**'] }, 1],
+    ['globstar forbid excludes implicit dot paths', 'contract-pkg/.hidden', { forbid: ['contract-pkg/**'] }, 0],
+    ['package root is outside its globstar contents', 'contract-pkg', { forbid: ['contract-pkg/**'] }, 0],
+    ['multiple globstars forbid nested private paths', 'contract-pkg/lib/private/nested', { forbid: ['contract-pkg/**/private/**'] }, 1],
     ['malformed bracket is literal', 'contract-pkg/lib/[oops', { allow: ['contract-pkg/lib/[oops'] }, 0],
     ['empty pattern allow', 'contract-pkg/lib/private', { allow: [''] }, 1],
     ['empty pattern forbid', 'contract-pkg/lib/private', { forbid: [''] }, 0],
