@@ -150,41 +150,44 @@ export function reconcileLearnReportSourceRows(roster: readonly string[], rows: 
   const reasons = new Set<string>()
   const owners = new Set(roster)
   const watermarks = new Set<string>()
-  const identities = new Map<string, string>()
+  const identities = new Map<string, { count: number, snapshots: Set<string> }>()
   const assignments = new Map<string, string>()
   const capabilityKeys = new Map<string, string>()
   const capabilityScopes = new Map<string, string>()
-  const outcomeOwners = new Map<string, string>()
-  const outcomeSnapshots = new Map<string, string>()
+  type OutcomeBinding = { learnerKey: string, capabilityKey: string, owner: string | null, role: 'cold' | 'delayed' | 'replacement' | 'claim' }
+  const outcomes = new Map<string, (OutcomeBinding & { snapshot: string })[]>()
   const claimIdentities = new Set<string>()
-  function reconcileOutcome(slotOwner: string | null, opportunityId: string | null,
+  function reconcileOutcome(binding: OutcomeBinding, opportunityId: string | null,
     acceptance: z.infer<typeof learnReportAcceptanceSnapshotSchema> | null, result: z.infer<typeof learnReportResultSnapshotSchema> | null) {
     const keys = [
       ...(opportunityId === null ? [] : [JSON.stringify(['opportunity', opportunityId])]),
       ...(acceptance === null ? [] : [JSON.stringify(['submission', acceptance.submissionId])]),
       ...(result === null ? [] : [JSON.stringify(['attempt', result.attemptId]), JSON.stringify(['execution', result.executionId])]),
     ]
-    const snapshot = JSON.stringify([opportunityId, acceptance, result])
+    const outcome = { ...binding, snapshot: JSON.stringify([opportunityId, acceptance, result]) }
     for (const key of keys) {
-      if (slotOwner !== null) {
-        if (outcomeOwners.has(key) && outcomeOwners.get(key) !== slotOwner) reasons.add('reused_outcome_identity')
-        else outcomeOwners.set(key, slotOwner)
-      }
-      if (outcomeSnapshots.has(key) && outcomeSnapshots.get(key) !== snapshot) reasons.add('conflicting_outcome_snapshot')
-      else outcomeSnapshots.set(key, snapshot)
+      const group = outcomes.get(key) ?? []
+      group.push(outcome)
+      outcomes.set(key, group)
     }
   }
   if (owners.size !== roster.length) reasons.add('duplicate_roster_owner')
-  for (const input of rows) {
-    const row = learnReportInputSnapshotSchema.parse(input)
-    if (!owners.has(row.learnerKey)) reasons.add('owner_outside_roster')
+  const validatedRows = rows.map(input => learnReportInputSnapshotSchema.parse(input))
+  for (const row of validatedRows) {
     const identity = JSON.stringify(row.kind === 'owner_watermark' ? [row.kind, row.learnerKey]
       : row.kind === 'first_check_claim' ? [row.kind, row.learnerKey, row.capabilityKey, row.stratum.epoch]
         : [row.kind, row.assignmentId, row.horizonDays])
-    const canonical = JSON.stringify(row)
-    const prior = identities.get(identity)
-    if (prior !== undefined) reasons.add(prior === canonical ? 'duplicate_source_row' : 'conflicting_source_row')
-    else identities.set(identity, canonical)
+    const group = identities.get(identity) ?? { count: 0, snapshots: new Set<string>() }
+    group.count += 1
+    group.snapshots.add(JSON.stringify(row))
+    identities.set(identity, group)
+  }
+  for (const group of identities.values()) {
+    if (group.count > group.snapshots.size) reasons.add('duplicate_source_row')
+    if (group.snapshots.size > 1) reasons.add('conflicting_source_row')
+  }
+  for (const row of validatedRows) {
+    if (!owners.has(row.learnerKey)) reasons.add('owner_outside_roster')
     if (row.kind === 'owner_watermark') watermarks.add(row.learnerKey)
     if (row.kind === 'episode') {
       const scope = JSON.stringify([row.learnerKey, row.blueprintRevisionId, row.objectiveId])
@@ -197,10 +200,11 @@ export function reconcileLearnReportSourceRows(roster: readonly string[], rows: 
         row.assignment, row.coldOpportunityId, row.coldAcceptance, row.cold, row.replacementPolicy])
       if (assignments.has(row.assignmentId) && assignments.get(row.assignmentId) !== frozen) reasons.add('conflicting_assignment_snapshot')
       assignments.set(row.assignmentId, frozen)
-      reconcileOutcome(JSON.stringify(['cold', row.assignmentId]), row.coldOpportunityId, row.coldAcceptance, row.cold)
+      const binding = { learnerKey: row.learnerKey, capabilityKey: row.capabilityKey }
+      reconcileOutcome({ ...binding, owner: JSON.stringify(['cold', row.assignmentId]), role: 'cold' }, row.coldOpportunityId, row.coldAcceptance, row.cold)
       const episode = JSON.stringify(['episode', row.assignmentId, row.horizonDays])
-      reconcileOutcome(episode, row.originalOpportunityId, row.delayedAcceptance, row.delayed)
-      reconcileOutcome(episode, row.replacementOpportunityId, row.replacementAcceptance, row.replacement)
+      reconcileOutcome({ ...binding, owner: episode, role: 'delayed' }, row.originalOpportunityId, row.delayedAcceptance, row.delayed)
+      reconcileOutcome({ ...binding, owner: episode, role: 'replacement' }, row.replacementOpportunityId, row.replacementAcceptance, row.replacement)
     }
     if (row.kind === 'first_check_claim') {
       for (const [kind, value, reason] of [
@@ -212,8 +216,19 @@ export function reconcileLearnReportSourceRows(roster: readonly string[], rows: 
         if (claimIdentities.has(key)) reasons.add(reason)
         else claimIdentities.add(key)
       }
-      // A claim may reference a measurement slot, but must preserve its authoritative snapshot.
-      reconcileOutcome(null, row.firstCheckOpportunityId, row.acceptance, row.result)
+      reconcileOutcome({ learnerKey: row.learnerKey, capabilityKey: row.capabilityKey, owner: null, role: 'claim' },
+        row.firstCheckOpportunityId, row.acceptance, row.result)
+    }
+  }
+  for (const group of outcomes.values()) {
+    const slots = group.filter(outcome => outcome.role !== 'claim')
+    if (new Set(slots.map(slot => slot.owner)).size > 1) reasons.add('reused_outcome_identity')
+    if (new Set(group.map(outcome => outcome.snapshot)).size > 1) reasons.add('conflicting_outcome_snapshot')
+    // A shared measurement outcome must independently qualify for this owner's capability and delayed check.
+    if (slots.length && group.some(outcome => outcome.role === 'claim')) {
+      if (group.some(outcome => outcome.learnerKey !== slots[0]!.learnerKey)) reasons.add('claim_learner_mismatch')
+      if (group.some(outcome => outcome.capabilityKey !== slots[0]!.capabilityKey)) reasons.add('claim_capability_mismatch')
+      if (slots.some(slot => slot.role === 'cold')) reasons.add('claim_shared_cold_slot')
     }
   }
   if (roster.some(owner => !watermarks.has(owner))) reasons.add('missing_owner_watermark')
