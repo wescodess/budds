@@ -98,7 +98,7 @@ Every round 1 assumption stands unchanged: confidence 1–5 required, no time li
 
 - **Token contrast, light theme.** Unchanged from round 1: every capture violation is `--muted-foreground` on `--background` or `--card` in light theme. Dark theme has none.
 - **Reused approved addition.** The success icon `text-green-700 dark:text-green-400`, as in round 1.
-- **Read back only.** Highlighting sentences the learner wrote reuses `border-primary` and `border-[var(--learn-attention)]`; no new colour. It does assume the scorer can return feedback anchored to spans of the answer, which is not in the current contract (#360/#363).
+- **Read back only.** Highlighting sentences the learner wrote marks parts that held with the approved success colour (`border-green-700 dark:border-green-400`) and parts that slipped with `border-[var(--learn-attention)]`; no new colour. It does assume the scorer can return feedback anchored to spans of the answer, which is not in the current contract (#360/#363).
 - **One page only.** The check would run inside Today, not the adaptive Canvas, so #442 (Canvas adapter only, “distinct from Today UI”) would need rescoping. It also gives Today the heaviest change of the five.
 
 No new colours, tokens or fonts.
