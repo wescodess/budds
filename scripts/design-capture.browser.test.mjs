@@ -95,7 +95,9 @@ test('status-tone catches neutral state icons with stable IDs and compares fixed
   const body = tone => `<style>
     :root { --foreground: oklch(0.168 0.008 49); --muted-foreground: #746b60; --warning: oklch(0.762 0.152 55.5); --learn-attention: var(--warning); }
     .dark { --foreground: #fbfbf8; --muted-foreground: oklch(0.706 0.011 73.6); }
-    [role=status], [role=alert], .paired { color: var(--foreground); }
+    body, [role=status], [role=alert], .paired { color: var(--foreground); }
+    button { color: inherit; }
+    .invisible { visibility: hidden; }
     #processing { color: var(--muted-foreground); }
     .text-\\[var\\(--learn-attention\\)\\] { color: var(--learn-attention); }
     </style>
@@ -119,6 +121,10 @@ test('status-tone catches neutral state icons with stable IDs and compares fixed
     <div id="zero-warning-spinner" role="status"><span class="text-[var(--learn-attention)]">${zeroHeightSpinner}</span><span class="${tone}">${spinner}</span>Processing</div>
     <div class="paired">${zeroIcon}<div id="zero-svg-sibling" role="status">No visible icon</div></div>
     <div class="paired">${zeroWidthSpinner.replace('class="animate-spin"', 'class="animate-spin" aria-hidden="true"')}<div id="zero-spinner-sibling" role="status">No visible spinner</div></div>
+    <div id="invisible-svg" role="status"><span class="invisible text-[var(--learn-attention)]">${icon}</span><span class="${tone}">${icon}</span>Not yet</div>
+    <div role="status"><span class="invisible">${spinner}</span>Processing</div>
+    <div class="paired ${tone}">${icon}<div id="sibling-hidden-third" role="status">Not yet</div><p style="display:none">Hidden detail</p></div>
+    <div id="nested-token" role="status"><span style="--foreground:#254870;color:var(--foreground)"><span class="${tone}">${icon}</span></span>Processing</div>
     <div>${icon}<p>Unrelated content</p><div role="status">Text only, no paired icon</div></div>
     <div class="paired"><p>Unrelated content</p>${icon}<div id="unrelated-sibling" role="status">Text only, no paired icon</div></div>
     <div data-tone="neutral">${icon}<div role="status">Saved metadata</div></div>
@@ -135,11 +141,11 @@ test('status-tone catches neutral state icons with stable IDs and compares fixed
   assert.equal(initial.code, 0, initial.output)
   const neutral = (await f.reports(f.published)).floor
   const findings = neutral.violations.filter(value => value.rule === 'status-tone')
-  assert.equal(findings.length, 20)
+  assert.equal(findings.length, 26)
   for (const theme of ['dark', 'light']) {
-    assert.deepEqual(findings.filter(value => value.capture.theme === theme).map(value => value.selector), ['#processing', '#self-spinner', '#not-yet', '#sibling-not-yet', '#sibling-spinner', '#alert-neutral', '#scoped-foreground', '#scoped-muted', '#zero-warning-svg', '#zero-warning-spinner'])
+    assert.deepEqual(findings.filter(value => value.capture.theme === theme).map(value => value.selector), ['#processing', '#self-spinner', '#not-yet', '#sibling-not-yet', '#sibling-spinner', '#alert-neutral', '#scoped-foreground', '#scoped-muted', '#zero-warning-svg', '#zero-warning-spinner', '#invisible-svg', '#sibling-hidden-third', '#nested-token'])
   }
-  assert.equal(new Set(findings.map(value => value.id)).size, 20)
+  assert.equal(new Set(findings.map(value => value.id)).size, 26)
   const baseline = join(f.root, 'neutral-baseline')
   await cp(f.published, baseline, { recursive: true })
   const unchanged = await f.start(['--compare', baseline]).done
@@ -154,7 +160,7 @@ test('status-tone catches neutral state icons with stable IDs and compares fixed
   await writeFile(join(f.root, 'fixture.html'), html(body('')))
   const regressed = await f.start(['--compare', fixedBaseline]).done
   assert.equal(regressed.code, 1, regressed.output)
-  assert.equal((await f.reports(f.published)).floor.newViolations.length, 20)
+  assert.equal((await f.reports(f.published)).floor.newViolations.length, 26)
 })
 
 test('missing required font fails with error staging', { timeout: 90_000 }, async t => {

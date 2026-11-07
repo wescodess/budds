@@ -73,7 +73,7 @@ These tokens already exist in `app/assets/css/tailwind.css`. Use the semantic to
 - A busy spinner inside a button inherits the button's color; it is not a status.
 - A state from the first four rows never renders with only a neutral icon.
 - The `status-tone` check in `pnpm design:capture` measures icons in visible `role="status"` and `role="alert"` regions. Mark genuine neutral metadata with `data-tone="neutral"` on the region or an ancestor.
-- Existing owner-approved surfaces keep their approved icon colors until changed through the UI design gate. In [quiz-grading-results](docs/design/quiz-grading-results/decision.md), partial `text-yellow-700 dark:text-yellow-400`, "Your call" `text-foreground`, and checking/not-checked muted icons are approved exceptions recorded in its decision.md and existing debt for `status-tone` if that surface is captured.
+- Existing owner-approved surfaces keep their approved icon colors until changed through the UI design gate. In [quiz-grading-results](docs/design/quiz-grading-results/decision.md), partial `text-yellow-700 dark:text-yellow-400` and "Your call" `text-foreground` are approved exceptions recorded in its decision.md. Its checking and not-checked icons use `text-muted-foreground`, as shown in [approved.html](docs/design/quiz-grading-results/approved.html) and [`ResultIcon.vue`](app/components/quiz/ResultIcon.vue), not recorded in decision.md. All are existing debt for `status-tone` if that surface is captured.
 
 Citation badges use `--primary`; source highlights use `rgba(245, 158, 11, 0.1)` as a background tint.
 
