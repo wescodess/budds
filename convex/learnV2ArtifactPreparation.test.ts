@@ -1572,3 +1572,232 @@ describe('B2 section budget envelope', { timeout: 120_000 }, () => {
     expect(await inventory(f.t)).toEqual(before)
   })
 })
+
+describe('B2 fast-path dependency regressions', { timeout: 60_000 }, () => {
+  test('a fresh indexing upload with no catalogue still classifies provisionally', async () => {
+    const f = await setup()
+    await f.t.run(async ctx => { await ctx.db.delete(f.catalogId); await ctx.db.patch(f.documentId, { status: 'indexing' }) })
+    expect(await f.asOwner.run(ctx => classifyPersonalWorkDocumentForOwner(ctx, userId, f.documentId))).toMatchObject({ classification: 'genuine_personal_work' })
+  })
+
+  test.each(['quiz_question', 'flashcard_version', 'audio_overview'] as const)('identical section preparation rechecks its invalidated %s', async component => {
+    const f = await setup()
+    await registerSource(f, true)
+    const section = await f.asOwner.run(async ctx => {
+      const written = await writeLinkedSection(ctx, f, { questions: 1, cards: 1, audio: true })
+      return { ...written, registered: await prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: written.artifacts }) }
+    })
+    const index = section.registered.references.findIndex(reference => reference.artifact.kind === component)
+    await f.t.run(ctx => ctx.db.patch(section.registered.lineageIds[index]!, { invalidatedAt: 0 }))
+    const before = await inventory(f.t)
+    await expect(f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member({ kind: 'section_block', id: section.sectionId })] }))).rejects.toThrow('unavailable')
+    expect(await inventory(f.t)).toEqual(before)
+  })
+
+  test.each(['deleted', 'invalidated', 'protected'] as const)('identical preparation rechecks a %s source document', async condition => {
+    const f = await setup()
+    const source = await registerSource(f, true)
+    const quiz = await publishQuiz(f)
+    await f.t.run(async ctx => {
+      if (condition === 'deleted') await ctx.db.delete(f.documentId)
+      else await ctx.db.patch(source.lineageIds[1]!, condition === 'invalidated' ? { invalidatedAt: 0 } : { classification: 'measurement' })
+    })
+    const before = await inventory(f.t)
+    await expect(f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member(quizArtifact(quiz.references[0]!))] }))).rejects.toThrow('unavailable')
+    expect(await inventory(f.t)).toEqual(before)
+  })
+
+  test.each(['source', 'origin'] as const)('identical payload includes a newly supplied %s in its successor', async dependency => {
+    const f = await setup()
+    await registerSource(f, true)
+    const origin = await publishQuiz(f, [{ question: 'Origin task', answer: 'Origin answer' }])
+    const extra = await publishQuiz(f, [{ question: 'Additional origin', answer: 'Additional answer' }])
+    const published = await f.asOwner.run(async ctx => {
+      const quiz = await writeQuiz(ctx, f)
+      quiz.artifacts[0]!.origins = [{ reference: origin.references[0]!, transformation: 'rewrite' }]
+      return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: quiz.artifacts })
+    })
+    const candidate = member(quizArtifact(published.references[0]!))
+    if (dependency === 'source') {
+      const documentId = await registerDocument(f, 'added-source')
+      candidate.sources = [{ kind: 'document', documentId, sourceRevision: 'source.r1' }]
+    }
+    else candidate.origins = [{ reference: extra.references[0]!, transformation: 'summary' }]
+    const next = await f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [candidate] }))
+    expect(next.references).toEqual(published.references)
+    expect(next.lineageIds).not.toEqual(published.lineageIds)
+    const state = await inventory(f.t)
+    expect(state.lineages.find(row => row._id === published.lineageIds[0])!.nextId).toBe(next.lineageIds[0])
+    expect(state.lineages.find(row => row._id === next.lineageIds[0])).toMatchObject(dependency === 'source' ? { sourceCount: 2 } : { originCount: 2 })
+    const before = await inventory(f.t)
+    expect(await f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [candidate] }))).toMatchObject({ lineageIds: next.lineageIds, catalogRevision: next.catalogRevision })
+    expect(await inventory(f.t)).toEqual(before)
+  })
+
+  test.each(['source', 'origin'] as const)('identical preparation rejects a newly supplied invalidated %s', async dependency => {
+    const f = await setup()
+    await registerSource(f, true)
+    const quiz = await publishQuiz(f)
+    const candidate = member(quizArtifact(quiz.references[0]!))
+    if (dependency === 'source') {
+      const id = await registerDocument(f, 'invalidated-source')
+      candidate.sources = [{ kind: 'document', documentId: id, sourceRevision: 'source.r1' }]
+      await f.t.run(async ctx => {
+        const row = (await ctx.db.query('learnArtifactLineages').withIndex('by_artifact_kind_and_artifact_id_and_nextId', q => q.eq('artifact.kind', 'document').eq('artifact.id', id).eq('nextId', undefined)).take(1))[0]!
+        await ctx.db.patch(row._id, { invalidatedAt: 0 })
+      })
+    }
+    else {
+      const origin = await publishQuiz(f, [{ question: 'Invalidated origin', answer: 'Origin answer' }])
+      candidate.origins = [{ reference: origin.references[0]!, transformation: 'copy' }]
+      await f.t.run(ctx => ctx.db.patch(origin.lineageIds[0]!, { invalidatedAt: 0 }))
+    }
+    const before = await inventory(f.t)
+    await expect(f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [candidate] }))).rejects.toThrow('unavailable')
+    expect(await inventory(f.t)).toEqual(before)
+  })
+
+  test('an identical payload cannot ignore a changed origin transformation', async () => {
+    const f = await setup()
+    await registerSource(f)
+    const origin = await publishQuiz(f, [{ question: 'Retained origin', answer: 'Retained answer' }])
+    const registered = await f.asOwner.run(async ctx => {
+      const quiz = await writeQuiz(ctx, f)
+      quiz.artifacts[0]!.origins = [{ reference: origin.references[0]!, transformation: 'rewrite' }]
+      return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: quiz.artifacts })
+    })
+    const candidate = member(quizArtifact(registered.references[0]!))
+    candidate.origins = [{ reference: origin.references[0]!, transformation: 'summary' }]
+    const before = await inventory(f.t)
+    await expect(f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [candidate] }))).rejects.toThrow('unavailable')
+    expect(await inventory(f.t)).toEqual(before)
+  })
+
+  test('a changed payload cannot supersede an invalidated predecessor validation', async () => {
+    const f = await setup()
+    await registerSource(f)
+    const registered = await publishQuiz(f)
+    await f.t.run(async ctx => ctx.db.patch((await ctx.db.get(registered.lineageIds[0]!))!.validationId!, { invalidatedAt: 0 }))
+    const before = await inventory(f.t)
+    await expect(f.asOwner.run(async ctx => {
+      const artifact = quizArtifact(registered.references[0]!)
+      await ctx.db.patch(artifact.id, { question: 'Changed after invalidation' })
+      return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member(artifact)] })
+    })).rejects.toThrow('unavailable')
+    expect(await inventory(f.t)).toEqual(before)
+  })
+
+  test.each((['quiz_question', 'flashcard_version', 'audio_overview'] as const).flatMap(component =>
+    (['measurement', 'private_scoring', 'unknown', 'invalidated', 'validation_invalidated'] as const).map(condition => ({ component, condition }))))('batch preparation checks every key of its $condition $component', async ({ component, condition }) => {
+    const f = await setup()
+    await registerSource(f, true)
+    const section = await f.asOwner.run(async ctx => {
+      const written = await writeLinkedSection(ctx, f, { questions: 1, cards: 1, audio: true })
+      const artifact = written.artifacts.find(candidate => candidate.artifact.kind === component)!.artifact
+      const registered = await prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [...written.artifacts, member(artifact, 'other-key')] })
+      return { ...written, registered }
+    })
+    const id = section.registered.lineageIds.at(-1)!
+    await f.t.run(async ctx => {
+      if (condition === 'validation_invalidated') await ctx.db.patch((await ctx.db.get(id))!.validationId!, { invalidatedAt: 0 })
+      else await ctx.db.patch(id, condition === 'invalidated' ? { invalidatedAt: 0 } : { classification: condition })
+    })
+    const before = await inventory(f.t)
+    for (const artifacts of [section.artifacts, [...section.artifacts].reverse()]) {
+      await expect(f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts }))).rejects.toThrow('unavailable')
+      expect(await inventory(f.t)).toEqual(before)
+    }
+  })
+
+  test.each(['document', 'document_chunk'] as const)('re-indexing %s validates its complete retained source graph', async kind => {
+    for (const condition of ['deleted', 'invalidated', 'protected'] as const) {
+      const f = await setup()
+      const other = await registerDocument(f, `retained-${condition}`)
+      const candidate = member({ kind, id: f.documentId }, kind === 'document_chunk' ? LEARN_ARTIFACT_DOCUMENT_CHUNK_SET_KEY : 'whole')
+      candidate.sources = [{ kind: 'document', documentId: other, sourceRevision: 'source.r1' }]
+      const registered = await f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [candidate] }))
+      expect(await f.asOwner.run(ctx => classifyPersonalWorkDocumentForOwner(ctx, userId, f.documentId))).toMatchObject({ classification: 'genuine_personal_work' })
+      await f.t.run(async ctx => {
+        await ctx.db.patch(f.documentId, { status: 'indexing' })
+        if (condition === 'deleted') await ctx.db.delete(other)
+        else {
+          const row = (await ctx.db.query('learnArtifactLineages').withIndex('by_artifact_kind_and_artifact_id_and_nextId', q => q.eq('artifact.kind', 'document_chunk').eq('artifact.id', other).eq('nextId', undefined)).take(1))[0]!
+          await ctx.db.patch(row._id, condition === 'invalidated' ? { invalidatedAt: 0 } : { classification: 'private_scoring' })
+        }
+      })
+      await expect(f.asOwner.run(ctx => classifyPersonalWorkDocumentForOwner(ctx, userId, f.documentId))).rejects.toThrow('unavailable')
+      await expect(f.t.run(ctx => classifyPersonalWorkDocumentForRecord(ctx, { kind: 'document', id: f.documentId }))).rejects.toThrow('unavailable')
+      expect(await f.asOwner.run(ctx => resolveArtifactLineageForOwner(ctx, userId, { reference: registered.references[0]! }))).toMatchObject({ status: 'unavailable' })
+    }
+  })
+
+  test.each(['deleted', 'invalidated', 'indexing'] as const)('re-indexing classification rejects a %s retained origin', async condition => {
+    const f = await setup()
+    const other = await registerDocument(f, 'personal-origin')
+    const registered = await registerSource(f, true)
+    await f.t.run(async ctx => {
+      const origin = (await ctx.db.query('learnArtifactLineages').withIndex('by_artifact_kind_and_artifact_id_and_nextId', q => q.eq('artifact.kind', 'document').eq('artifact.id', other).eq('nextId', undefined)).take(1))[0]!
+      const id = registered.lineageIds[1]!
+      await ctx.db.insert('learnArtifactLineageOrigins', { ...base, lineageId: id, originLineageId: origin._id, originRevision: origin.revision,
+        originPayloadDigest: origin.payloadDigest, originManifestDigest: origin.manifestDigest, classification: origin.classification, transformation: 'import' })
+      await ctx.db.patch(id, { derivation: 'derived', authority: 'server_producer', originCount: 1 })
+      const row = (await ctx.db.get(id))!
+      const origins = await ctx.db.query('learnArtifactLineageOrigins').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', id)).take(9)
+      const sources = await ctx.db.query('learnArtifactSourceLinks').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', id)).take(65)
+      const manifestDigest = await artifactManifestDigest(ctx, row, origins, [], sources)
+      await ctx.db.patch(id, { manifestDigest })
+      await ctx.db.patch(row.validationId!, { manifestDigest })
+    })
+    expect(await f.asOwner.run(ctx => classifyPersonalWorkDocumentForOwner(ctx, userId, f.documentId))).toMatchObject({ classification: 'genuine_personal_work' })
+    await f.t.run(async ctx => {
+      await ctx.db.patch(f.documentId, { status: 'indexing' })
+      if (condition === 'deleted') await ctx.db.delete(other)
+      else if (condition === 'indexing') await ctx.db.patch(other, { status: 'indexing' })
+      else {
+        const row = (await ctx.db.query('learnArtifactLineages').withIndex('by_artifact_kind_and_artifact_id_and_nextId', q => q.eq('artifact.kind', 'document').eq('artifact.id', other).eq('nextId', undefined)).take(1))[0]!
+        await ctx.db.patch(row._id, { invalidatedAt: 0 })
+      }
+    })
+    await expect(f.asOwner.run(ctx => classifyPersonalWorkDocumentForOwner(ctx, userId, f.documentId))).rejects.toThrow('unavailable')
+    await expect(f.t.run(ctx => classifyPersonalWorkDocumentForRecord(ctx, { kind: 'document', id: f.documentId }))).rejects.toThrow('unavailable')
+  })
+
+  test('re-indexing classification requires enrolled retained sources to be registered', async () => {
+    const f = await setup()
+    const other = await registerDocument(f, 'unregistered-retained-source')
+    const candidate = member({ kind: 'document', id: f.documentId })
+    candidate.sources = [{ kind: 'document', documentId: other, sourceRevision: 'source.r1' }]
+    await f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [candidate] }))
+    await f.t.run(async ctx => {
+      const rows = await ctx.db.query('learnArtifactLineages').withIndex('by_artifact_kind_and_artifact_id_and_nextId', q => q.eq('artifact.kind', 'document').eq('artifact.id', other).eq('nextId', undefined)).take(17)
+      const chunks = await ctx.db.query('learnArtifactLineages').withIndex('by_artifact_kind_and_artifact_id_and_nextId', q => q.eq('artifact.kind', 'document_chunk').eq('artifact.id', other).eq('nextId', undefined)).take(17)
+      for (const row of [...rows, ...chunks]) await ctx.db.delete(row._id)
+      await ctx.db.patch(f.documentId, { status: 'indexing' })
+    })
+    await expect(f.asOwner.run(ctx => classifyPersonalWorkDocumentForOwner(ctx, userId, f.documentId))).rejects.toThrow('unavailable')
+    await expect(f.t.run(ctx => classifyPersonalWorkDocumentForRecord(ctx, { kind: 'document', id: f.documentId }))).rejects.toThrow('unavailable')
+  })
+
+  test.each(['deleted', 'invalidated'] as const)('a sibling key cannot hide its %s retained source', async condition => {
+    const f = await setup()
+    await registerSource(f, true)
+    const other = await registerDocument(f, 'sibling-source')
+    const section = await f.asOwner.run(async ctx => {
+      const written = await writeLinkedSection(ctx, f, { questions: 1, cards: 0 })
+      const alternate = member({ kind: 'quiz_question', id: written.questions[0]! }, 'other-key')
+      alternate.sources = [{ kind: 'document', documentId: other, sourceRevision: 'source.r1' }]
+      await prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [...written.artifacts, alternate] })
+      return written
+    })
+    await f.t.run(async ctx => {
+      if (condition === 'deleted') await ctx.db.delete(other)
+      else {
+        const row = (await ctx.db.query('learnArtifactLineages').withIndex('by_artifact_kind_and_artifact_id_and_nextId', q => q.eq('artifact.kind', 'document').eq('artifact.id', other).eq('nextId', undefined)).take(1))[0]!
+        await ctx.db.patch(row._id, { invalidatedAt: 0 })
+      }
+    })
+    const before = await inventory(f.t)
+    await expect(f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: section.artifacts }))).rejects.toThrow('unavailable')
+    expect(await inventory(f.t)).toEqual(before)
+  })
+})

@@ -337,11 +337,11 @@ async function liveVoid(scope: Invocation, userId: string, id: Id<'learningVoids
   return row
 }
 
-async function liveDocument(scope: Invocation, userId: string, id: Id<'documents'>) {
-  return validated(scope, ['document', userId, id], async () => {
+async function liveDocument(scope: Invocation, userId: string, id: Id<'documents'>, indexingDocument?: Id<'documents'>) {
+  return validated(scope, ['document', userId, id, indexingDocument], async () => {
     const row = await scope.get(id)
     // Mirrors learnAdaptive.loadContributionSource; content pins are bound below.
-    if (!row || row.userId !== userId || row.status !== 'success') unavailable()
+    if (!row || row.userId !== userId || (row.status !== 'success' && !(id === indexingDocument && row.status === 'indexing'))) unavailable()
     await liveFolder(scope, userId, row.folderId)
     return row
   })
@@ -527,18 +527,18 @@ async function liveSessionBlock(scope: Invocation, userId: string, row: Artifact
   await pinned(row, await readSessionBlockContentProjection(scope, block, content), content.revision)
 }
 
-async function liveDocumentArtifact(scope: Invocation, userId: string, row: ArtifactPin, id: Id<'documents'>) {
-  const document = await liveDocument(scope, userId, id)
+async function liveDocumentArtifact(scope: Invocation, userId: string, row: ArtifactPin, id: Id<'documents'>, indexingDocument?: Id<'documents'>) {
+  const document = await liveDocument(scope, userId, id, indexingDocument)
   if (!document.sourceRevision?.trim() || !document.contentHash?.trim()) unavailable()
   await pinned(row, artifactContentProjection({ kind: row.artifact.kind === 'document_chunk' ? 'document_chunk' : 'document', document }), document.sourceRevision)
 }
 
-async function liveDocumentChunk(scope: Invocation, userId: string, row: ArtifactPin, id: Id<'documents'>) {
+async function liveDocumentChunk(scope: Invocation, userId: string, row: ArtifactPin, id: Id<'documents'>, indexingDocument?: Id<'documents'>) {
   // Chunks have no independent table: any backing revision/object change
   // revokes every component, without trusting a retrieved snippet as a pin.
   // One chunk-set row covers them all, so chunk count never sizes a batch.
   if (row.key !== LEARN_ARTIFACT_DOCUMENT_CHUNK_SET_KEY) unavailable()
-  await liveDocumentArtifact(scope, userId, row, id)
+  await liveDocumentArtifact(scope, userId, row, id, indexingDocument)
 }
 
 async function liveQuizQuestion(scope: Invocation, userId: string, row: ArtifactPin, id: Id<'quizQuestions'>) {
@@ -644,13 +644,13 @@ async function liveScoringSpec(scope: Invocation, userId: string, row: ArtifactP
   await pinned(row, artifactContentProjection({ kind: 'scoring_spec', item, family, spec }), spec.revision)
 }
 
-async function requireLiveArtifact(scope: Invocation, userId: string, row: ArtifactPin) {
-  return validated(scope, ['artifact', userId, { artifact: row.artifact, key: row.key, revision: row.revision, payloadDigest: row.payloadDigest }], async () => {
+async function requireLiveArtifact(scope: Invocation, userId: string, row: ArtifactPin, indexingDocument?: Id<'documents'>) {
+  return validated(scope, ['artifact', userId, { artifact: row.artifact, key: row.key, revision: row.revision, payloadDigest: row.payloadDigest }, indexingDocument], async () => {
     const artifact = row.artifact
     switch (artifact.kind) {
       case 'session_block': return liveSessionBlock(scope, userId, row, artifact.id)
-      case 'document': return liveDocumentArtifact(scope, userId, row, artifact.id)
-      case 'document_chunk': return liveDocumentChunk(scope, userId, row, artifact.id)
+      case 'document': return liveDocumentArtifact(scope, userId, row, artifact.id, indexingDocument)
+      case 'document_chunk': return liveDocumentChunk(scope, userId, row, artifact.id, indexingDocument)
       case 'quiz_question': return liveQuizQuestion(scope, userId, row, artifact.id)
       case 'section_block': return liveSectionBlock(scope, userId, row, artifact.id)
       case 'flashcard_version': return liveFlashcardVersion(scope, userId, row, artifact.id)
@@ -692,12 +692,12 @@ async function findLineage(scope: Invocation, userId: string, reference: LearnAr
   return matches[0]!
 }
 
-async function sourceAvailable(scope: Invocation, userId: string, source: Dependency) {
-  return validated(scope, ['source', userId, source], async () => {
+async function sourceAvailable(scope: Invocation, userId: string, source: Dependency, indexingDocument?: Id<'documents'>) {
+  return validated(scope, ['source', userId, source, indexingDocument], async () => {
     if (source.kind === 'document') {
       // inspectGraph has already verified this document's hash and object key
       // through its sealed manifest commitment, using the same read budget.
-      const document = await liveDocument(scope, userId, source.documentId)
+      const document = await liveDocument(scope, userId, source.documentId, indexingDocument)
       return document.sourceRevision === source.sourceRevision
     }
     if (source.kind === 'folder') return (await scope.get(source.folderId))?.userId === userId
@@ -709,7 +709,7 @@ async function sourceAvailable(scope: Invocation, userId: string, source: Depend
     const identity = await scope.get(snapshot.sourceIdentityId)
     if (!identity || identity.userId !== userId || identity.learningVoidId !== snapshot.learningVoidId || identity.tombstonedAt !== undefined) return false
     if (identity.folderDocumentId) {
-      const document = await liveDocument(scope, userId, identity.folderDocumentId)
+      const document = await liveDocument(scope, userId, identity.folderDocumentId, indexingDocument)
       // Mirrors learnV2Sources.prepareFetchedSourceForReview and learnAdaptive.loadContributionSource. Compare
       // every current pin, even when the document is still marked successful.
       if ((!document.sourceRevision && !document.contentHash)
@@ -740,7 +740,7 @@ export async function artifactManifestDigest(
 }
 
 async function computeArtifactManifestDigest(
-  scope: Invocation, row: Lineage, origins: Doc<'learnArtifactLineageOrigins'>[], cases: Doc<'learnArtifactCaseBindings'>[], sources: Doc<'learnArtifactSourceLinks'>[],
+  scope: Invocation, row: Lineage, origins: Doc<'learnArtifactLineageOrigins'>[], cases: Doc<'learnArtifactCaseBindings'>[], sources: Doc<'learnArtifactSourceLinks'>[], indexingDocument?: Id<'documents'>,
 ) {
   if (origins.length > limits.maxOrigins || cases.length > caseLimit(row.artifact.kind) || sources.length > limits.maxSources) unavailable()
   const sourcePins = []
@@ -750,7 +750,7 @@ async function computeArtifactManifestDigest(
     // The existing sealed manifest stores the commitment, so no new schema
     // fields are necessary. Every direct document link captures all three
     // identity pins at seal time and recomputes them at both admission seams.
-    const document = await liveDocument(scope, row.userId, source.documentId)
+    const document = await liveDocument(scope, row.userId, source.documentId, indexingDocument)
     if (document.sourceRevision !== source.sourceRevision || !document.contentHash?.trim()) unavailable()
     sourcePins.push({ ...source, contentHash: document.contentHash, objectKey: document.r2Key ?? null })
   }
@@ -766,9 +766,19 @@ async function computeArtifactManifestDigest(
   return canonicalDigest(manifest, limits.maxLookupBytes)
 }
 
-async function inspectNode(scope: Invocation, userId: string, row: Lineage, stalePins = false) {
+async function lineageValidation(scope: Invocation, userId: string, row: Lineage) {
+  if (!row.validationId) unavailable()
+  const validation = await scope.get(row.validationId)
+  if (!validation || validation.userId !== userId || !available(validation)) unavailable()
+  const parsed = learnArtifactValidationSchema.safeParse(validationProjection(validation))
+  if (!parsed.success || parsed.data.lineageId !== row._id || parsed.data.payloadDigest !== row.payloadDigest || parsed.data.manifestDigest !== row.manifestDigest
+    || parsed.data.decision !== 'pass' || parsed.data.coverage !== 'complete') unavailable()
+  return { validation, parsed }
+}
+
+async function inspectNode(scope: Invocation, userId: string, row: Lineage, stalePins = false, indexingDocument?: Id<'documents'>) {
   const ctx = scope.ctx
-  return validated(scope, ['lineage-node', userId, row, stalePins], async () => {
+  return validated(scope, ['lineage-node', userId, row, stalePins, indexingDocument], async () => {
     if (row.userId !== userId || !available(row) || row.nextId !== undefined
       || row.lineageVersion !== LEARN_ARTIFACT_LINEAGE_VERSION || row.classification === 'unknown'
       || !learnVersionSchema.safeParse(row.authorityVersion).success) unavailable()
@@ -779,17 +789,12 @@ async function inspectNode(scope: Invocation, userId: string, row: Lineage, stal
       || (row.artifact.kind === 'scoring_spec' && row.classification !== 'private_scoring')) unavailable()
     if (!learnArtifactReferenceSchema.safeParse({ artifact: row.artifact, key: row.key, revision: row.revision, payloadDigest: row.payloadDigest }).success) unavailable()
     let stale = false
-    try { await requireLiveArtifact(scope, userId, row) }
+    try { await requireLiveArtifact(scope, userId, row, indexingDocument) }
     catch (error) {
       if (!stalePins || !(error instanceof ArtifactContentChanged)) throw error
       stale = true
     }
-    if (!row.validationId) unavailable()
-    const validation = await scope.get(row.validationId)
-    if (!validation || validation.userId !== userId || !available(validation)) unavailable()
-    const parsed = learnArtifactValidationSchema.safeParse(validationProjection(validation))
-    if (!parsed.success || parsed.data.lineageId !== row._id || parsed.data.payloadDigest !== row.payloadDigest || parsed.data.manifestDigest !== row.manifestDigest
-      || parsed.data.decision !== 'pass' || parsed.data.coverage !== 'complete') unavailable()
+    const { validation, parsed } = await lineageValidation(scope, userId, row)
     const origins = await scope.read(() => ctx.db.query('learnArtifactLineageOrigins').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', row._id)).take(limits.maxOrigins + 1))
     const bindings = await scope.read(() => ctx.db.query('learnArtifactCaseBindings').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', row._id)).take(caseLimit(row.artifact.kind) + 1))
     const sources = await scope.read(() => ctx.db.query('learnArtifactSourceLinks').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', row._id)).take(limits.maxSources + 1))
@@ -799,13 +804,13 @@ async function inspectNode(scope: Invocation, userId: string, row: Lineage, stal
       || new Set(origins.map(origin => origin.originLineageId)).size !== origins.length
       || new Set(bindings.map(binding => binding.caseId)).size !== bindings.length) unavailable()
     try {
-      if (await computeArtifactManifestDigest(scope, row, origins, bindings, sources) !== row.manifestDigest) unavailable()
+      if (await computeArtifactManifestDigest(scope, row, origins, bindings, sources, indexingDocument) !== row.manifestDigest) unavailable()
     }
     catch { unavailable() }
     const dependencies: Dependency[] = []
     for (const link of sources) {
       const dependency = learnArtifactSourceDependencySchema.safeParse(link.dependency)
-      if (!available(link) || !dependency.success || !(await sourceAvailable(scope, userId, dependency.data))) unavailable()
+      if (!available(link) || !dependency.success || !(await sourceAvailable(scope, userId, dependency.data, indexingDocument))) unavailable()
       dependencies.push(dependency.data)
     }
     const caseFacts = []
@@ -833,7 +838,7 @@ async function inspectNode(scope: Invocation, userId: string, row: Lineage, stal
   })
 }
 
-async function inspectGraph(scope: Invocation, userId: string, root: Lineage, catalogRevision: number, requirePublication: boolean, stalePins = false) {
+async function inspectGraph(scope: Invocation, userId: string, root: Lineage, catalogRevision: number, requirePublication: boolean, stalePins = false, indexingDocument?: Id<'documents'>, repinOrigins = false) {
   const nodes = new Map<Id<'learnArtifactLineages'>, Lineage>()
   const heights = new Map<Id<'learnArtifactLineages'>, number>()
   const active = new Set<Id<'learnArtifactLineages'>>()
@@ -852,7 +857,7 @@ async function inspectGraph(scope: Invocation, userId: string, root: Lineage, ca
       return cachedHeight
     }
     if (nodes.size >= limits.maxNodes || row.classification !== root.classification) unavailable()
-    const fact = await inspectNode(scope, userId, row, stalePins)
+    const fact = await inspectNode(scope, userId, row, stalePins, indexingDocument)
     if (fact.validation.comparedCatalogRevision > catalogRevision) unavailable()
     const { origins, bindings, sources } = fact
     sourceCount += sources.length
@@ -875,7 +880,7 @@ async function inspectGraph(scope: Invocation, userId: string, root: Lineage, ca
           || parent.classification !== origin.classification) unavailable()
         return parent
       })
-      height = Math.max(height, 1 + await visit(parent, depth + 1))
+      height = Math.max(height, 1 + await visit(repinOrigins ? await activeOrigin(scope, userId, origin) : parent, depth + 1))
     }
     active.delete(row._id)
     heights.set(row._id, height)
@@ -1088,14 +1093,9 @@ class RestrictedLineage extends Unavailable {}
 function restrictedLineage(): never { throw new RestrictedLineage('Artifact lineage unavailable') }
 type InputBinding = Extract<LearnArtifactLookupResult, { status: 'bound' }> & { dependencies: Dependency[], origins: LearnArtifactReference[] }
 
-// A content gap rejects by default. Enrolled owners need re-registration; for
-// owners who are not enrolled, active rows that are all stale but otherwise
-// resolve as non-restrictive lineage leave the current content ordinary input.
-type RevisionGap = 'reject' | 'registration_required' | 'ordinary'
-async function inspectInputRepresentations(scope: Invocation, userId: string, artifact: LearnArtifactReference['artifact'], revisionGap: RevisionGap = 'reject') {
-  return validated(scope, ['representations', userId, artifact, revisionGap], async () => {
+async function inputLineages(scope: Invocation, userId: string, artifact: LearnArtifactReference['artifact']) {
+  return validated(scope, ['input-lineages', userId, artifact], async () => {
     const kinds = artifact.kind === 'document' || artifact.kind === 'document_chunk' ? ['document', 'document_chunk'] as const : [artifact.kind]
-    const bindings: InputBinding[] = []
     const active = []
     for (const kind of kinds) {
       active.push(...await activeArtifactLineages(scope, { kind, id: artifact.id } as LearnArtifactReference['artifact']))
@@ -1109,6 +1109,31 @@ async function inspectInputRepresentations(scope: Invocation, userId: string, ar
         if (keys.has(key)) unavailable()
         keys.add(key)
     }
+    return active
+  })
+}
+
+async function preparationLineages(scope: Invocation, userId: string, artifact: PreparationMember['artifact'], key: string, catalogRevision: number, admissions: InputAdmissionGraph) {
+  for (const row of await inputLineages(scope, userId, artifact)) {
+    await lineageValidation(scope, userId, row)
+    // The requested predecessor's cases remain history under D2; its current
+    // content, inherited provenance and registration are checked below.
+    if (row.key === key) continue
+    const graph = await inspectGraph(scope, userId, row, catalogRevision, true, true, undefined, true)
+    if ([...graph.usage.values()].some(usage => usage === 'measurement_reserved')) restrictedLineage()
+    const content = await preparationContent(scope, userId, artifact)
+    await preparationSources(scope, userId, { artifact, key: row.key, sources: [], origins: [] }, content.projection, graph.dependencies, admissions)
+  }
+}
+
+// A content gap rejects by default. Enrolled owners need re-registration; for
+// owners who are not enrolled, active rows that are all stale but otherwise
+// resolve as non-restrictive lineage leave the current content ordinary input.
+type RevisionGap = 'reject' | 'registration_required' | 'ordinary'
+async function inspectInputRepresentations(scope: Invocation, userId: string, artifact: LearnArtifactReference['artifact'], revisionGap: RevisionGap = 'reject') {
+  return validated(scope, ['representations', userId, artifact, revisionGap], async () => {
+    const active = await inputLineages(scope, userId, artifact)
+    const bindings: InputBinding[] = []
     let stale = 0
     for (const row of active) {
         const reference = learnArtifactReferenceSchema.safeParse({ artifact: row.artifact, key: row.key, revision: row.revision, payloadDigest: row.payloadDigest })
@@ -1243,7 +1268,7 @@ async function ordinaryLegacyDocument(scope: Invocation, userId: string, documen
   return true
 }
 
-async function inputReferences(scope: Invocation, userId: string, root: LearnArtifactReference, bindings: InputBinding[]) {
+async function inputReferences(scope: Invocation, userId: string, root: LearnArtifactReference, bindings: Array<Pick<InputBinding, 'dependencies' | 'origins'>>) {
   const ctx = scope.ctx
   const documents = new Set<Id<'documents'>>()
   const snapshots = new Set<Id<'learnSourceSnapshots'>>()
@@ -1734,17 +1759,7 @@ async function prepareAndRegisterBatch(scope: Invocation<MutationCtx>, userId: s
       for (const text of caseTexts(content.projection)) fingerprints.push(await normalizedInstructionalCaseFingerprints(text.scenario, text.solution))
       if (collides(fingerprints)) throw new Error('Instructional reservation check rejected')
     }
-    if (previous && previous.revision === reference.revision && previous.payloadDigest === reference.payloadDigest && !inherited.some(origin => origin.repinned)) {
-      // Identical content returns its existing registration once the current
-      // reservation corpus still passes; nothing is rewritten.
-      const resolved = await resolveForOwner(scope, userId, { reference })
-      if (resolved.status !== 'bound' || resolved.classification !== (personal ? 'genuine_personal_work' : 'teaching')
-        || resolved.cases.some(pin => pin.usageClass === 'measurement_reserved')) restrictedLineage()
-      if (!resolved.instructionalRegistered) unavailable()
-      if (!personal) await semanticCheck(content.projection, fingerprints)
-      members.push({ reference, lineageId: previous._id })
-      continue
-    }
+    if (!personal) await preparationLineages(scope, userId, member.artifact, member.key, catalog.catalogRevision, admissions)
     const cases: CasePlan[] = []
     for (const pin of new Map(fingerprints.map(pin => [canonicalJson(pin), pin])).values()) {
       const key = canonicalJson(pin)
@@ -1757,7 +1772,7 @@ async function prepareAndRegisterBatch(scope: Invocation<MutationCtx>, userId: s
     for (const { row, transformation } of inherited) if (!origins.has(row._id)) origins.set(row._id, { row, transformation })
     for (const origin of member.origins) {
       const row = await findLineage(scope, userId, origin.reference)
-      if (!origins.has(row._id)) origins.set(row._id, { row, transformation: origin.transformation })
+      origins.set(row._id, { row, transformation: origin.transformation })
     }
     if (origins.size > limits.maxOrigins) unavailable()
     for (const { row } of origins.values()) {
@@ -1766,8 +1781,21 @@ async function prepareAndRegisterBatch(scope: Invocation<MutationCtx>, userId: s
       if ([...graph.usage.values()].some(usage => usage === 'measurement_reserved')) throw new Error('Instructional reservation check rejected')
     }
     const semanticDecision = personal ? 'not_required' as const : await semanticCheck(content.projection, fingerprints)
-    const sources = await preparationSources(scope, userId, member, content.projection, previous ? await inheritedSources(scope, userId, previous) : [], admissions)
+    const retainedSources = previous ? await inheritedSources(scope, userId, previous) : []
+    const sources = await preparationSources(scope, userId, member, content.projection, retainedSources, admissions)
     if (!personal) await preparationComponents(scope, userId, reference, batch, admissions)
+    if (previous && previous.revision === reference.revision && previous.payloadDigest === reference.payloadDigest && !inherited.some(origin => origin.repinned)
+      && canonicalJson(sources.map(canonicalJson).sort()) === canonicalJson(retainedSources.map(canonicalJson).sort())
+      && canonicalJson([...origins.values()].map(({ row, transformation }) => canonicalJson([row._id, transformation])).sort())
+      === canonicalJson(inherited.map(({ row, transformation }) => canonicalJson([row._id, transformation])).sort())) {
+      // A replay revalidates dependencies and reservations before reusing its receipt.
+      const resolved = await resolveForOwner(scope, userId, { reference })
+      if (resolved.status !== 'bound' || resolved.classification !== (personal ? 'genuine_personal_work' : 'teaching')
+        || resolved.cases.some(pin => pin.usageClass === 'measurement_reserved')) restrictedLineage()
+      if (!resolved.instructionalRegistered) unavailable()
+      members.push({ reference, lineageId: previous._id })
+      continue
+    }
     const preparation = personal ? { kind: 'personal_work' as const, version: LEARN_ARTIFACT_PREPARATION_VERSION, ...history }
       : { kind: 'instructional_reservation' as const, version: LEARN_ARTIFACT_PREPARATION_VERSION, ...history, reservedCaseCount: reservations.length,
           deterministicDecision: 'pass' as const, semanticDecision, semanticVersion: instructionalReservationSemanticAdapter.version }
@@ -1853,7 +1881,7 @@ async function personalWorkDocument(scope: Invocation, userId: string, documentI
   if (!document || document.userId !== userId || !['indexing', 'success'].includes(document.status)
     || !document.sourceRevision?.trim() || !document.contentHash?.trim()) unavailable()
   await liveFolder(scope, userId, document.folderId)
-  if (preparing || document.status === 'indexing') {
+  if (preparing) {
     for (const kind of ['document', 'document_chunk'] as const) {
       for (const row of await activeArtifactLineages(scope, { kind, id: documentId })) {
         if (row.userId !== userId || !available(row)) unavailable()
@@ -1867,10 +1895,23 @@ async function personalWorkDocument(scope: Invocation, userId: string, documentI
           if (!candidate || candidate.userId !== userId) unavailable()
           if (candidate.usageClass === 'measurement_reserved' || candidate.reservedAt !== undefined) restrictedLineage()
         }
-        // A bound document re-indexing after a move or repair keeps its
-        // classification only while its lineage still matches every pin.
-        if (!preparing && (row.revision !== document.sourceRevision
-          || row.payloadDigest !== await artifactPayloadDigest(artifactContentProjection({ kind, document })))) unavailable()
+      }
+    }
+  }
+  else if (document.status === 'indexing') {
+    const admissions: InputAdmissionGraph = { active: new Set(), admitted: new Map() }
+    for (const row of await inputLineages(scope, userId, { kind: 'document', id: documentId })) {
+      const catalog = await readCatalog(scope, userId)
+      if (row.classification !== 'genuine_personal_work') restrictedLineage()
+      const graph = await inspectGraph(scope, userId, row, catalog.catalogRevision, true, false, documentId)
+      if ([...graph.usage.values()].some(usage => usage === 'measurement_reserved')) restrictedLineage()
+      const reference = { artifact: row.artifact, key: row.key, revision: row.revision, payloadDigest: row.payloadDigest }
+      const nested = await inputReferences(scope, userId, reference, [{ dependencies: graph.dependencies,
+        origins: [...graph.nodes.values()].map(node => ({ artifact: node.artifact, key: node.key, revision: node.revision, payloadDigest: node.payloadDigest })) }])
+      if (nested.ordinaryComponent) unavailable()
+      for (const child of nested.references) {
+        const admission = (await admitInput(scope, userId, { reference: child }, admissions)).result
+        if (admission.status !== 'admitted_registered') unavailable()
       }
     }
   }
