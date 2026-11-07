@@ -86,6 +86,84 @@ test('unmet readySelector fails with error staging', { timeout: 90_000 }, async 
   await assert.rejects(readFile(join(f.published, 'floor.json')), { code: 'ENOENT' })
 })
 
+test('status-tone catches neutral state icons with stable IDs and compares fixed colours and neutral opt-outs', { timeout: 90_000 }, async t => {
+  const icon = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><circle cx="12" cy="12" r="8" /></svg>'
+  const spinner = '<span class="animate-spin" style="display:inline-block;width:24px;height:24px;border:2px solid currentColor;border-radius:50%"></span>'
+  const zeroIcon = icon.replace('width="24" height="24"', 'width="0" height="0"')
+  const zeroWidthSpinner = spinner.replace('width:24px', 'width:0').replace('border:2px', 'border:0')
+  const zeroHeightSpinner = spinner.replace('height:24px', 'height:0').replace('border:2px', 'border:0')
+  const body = tone => `<style>
+    :root { --foreground: oklch(0.168 0.008 49); --muted-foreground: #746b60; --warning: oklch(0.762 0.152 55.5); --learn-attention: var(--warning); }
+    .dark { --foreground: #fbfbf8; --muted-foreground: oklch(0.706 0.011 73.6); }
+    body, [role=status], [role=alert], .paired { color: var(--foreground); }
+    button { color: inherit; }
+    .invisible { visibility: hidden; }
+    #processing { color: var(--muted-foreground); }
+    .text-\\[var\\(--learn-attention\\)\\] { color: var(--learn-attention); }
+    </style>
+    <div id="processing" role="status"><span class="${tone}">${spinner}</span>Processing</div>
+    ${icon.replace('aria-hidden="true"', `id="self-spinner" class="animate-spin ${tone}" role="status" aria-label="Checking"`)}
+    <div id="not-yet" role="status"><svg style="display:none"></svg><span class="${tone}">${icon}</span>Not yet</div>
+    <div class="paired ${tone}">${icon}<div id="sibling-not-yet" role="status">Not yet: part of this slipped</div></div>
+    <div class="paired ${tone}">${spinner.replace('class="animate-spin"', 'class="animate-spin" aria-hidden="true"')}<div id="sibling-spinner" role="status">Processing</div></div>
+    <div id="alert-neutral" role="alert"><span class="${tone}">${icon}</span>Failed</div>
+    <section style="--foreground:#254870;--muted-foreground:#68547d">
+      <div id="scoped-foreground" role="status"><span class="${tone}">${icon}</span>Processing</div>
+      <div id="scoped-muted" role="status" style="color:var(--muted-foreground)"><span class="${tone}">${icon}</span>Not yet</div>
+    </section>
+    <div id="missing-tokens" role="status" style="--foreground:initial;--muted-foreground:initial;color:black">${icon}Missing tokens</div>
+    <div id="invalid-tokens" role="status" style="--foreground:not-a-color;--muted-foreground:not-a-color;color:black">${icon}Invalid tokens</div>
+    <div id="svg-priority" role="status">${spinner}<span class="text-[var(--learn-attention)]">${icon}</span>Needs attention</div>
+    <div class="paired">${icon.replace(' aria-hidden="true"', '')}<div id="non-decorative-sibling" role="status">Not paired</div></div>
+    <div id="zero-neutral-svg" role="status">${zeroIcon}<span class="text-[var(--learn-attention)]">${icon}</span>Needs attention</div>
+    <div id="zero-warning-svg" role="status"><span class="text-[var(--learn-attention)]">${zeroIcon}</span><span class="${tone}">${icon}</span>Not yet</div>
+    <div id="zero-neutral-spinner" role="status">${zeroWidthSpinner}<span class="text-[var(--learn-attention)]">${spinner}</span>Processing</div>
+    <div id="zero-warning-spinner" role="status"><span class="text-[var(--learn-attention)]">${zeroHeightSpinner}</span><span class="${tone}">${spinner}</span>Processing</div>
+    <div class="paired">${zeroIcon}<div id="zero-svg-sibling" role="status">No visible icon</div></div>
+    <div class="paired">${zeroWidthSpinner.replace('class="animate-spin"', 'class="animate-spin" aria-hidden="true"')}<div id="zero-spinner-sibling" role="status">No visible spinner</div></div>
+    <div id="invisible-svg" role="status"><span class="invisible text-[var(--learn-attention)]">${icon}</span><span class="${tone}">${icon}</span>Not yet</div>
+    <div role="status"><span class="invisible">${spinner}</span>Processing</div>
+    <div class="paired ${tone}">${icon}<div id="sibling-hidden-third" role="status">Not yet</div><p style="display:none">Hidden detail</p></div>
+    <div id="nested-token" role="status"><span style="--foreground:#254870;color:var(--foreground)"><span class="${tone}">${icon}</span></span>Processing</div>
+    <div>${icon}<p>Unrelated content</p><div role="status">Text only, no paired icon</div></div>
+    <div class="paired"><p>Unrelated content</p>${icon}<div id="unrelated-sibling" role="status">Text only, no paired icon</div></div>
+    <div data-tone="neutral">${icon}<div role="status">Saved metadata</div></div>
+    <div role="alert"><span class="text-[var(--learn-attention)]">${icon}</span>Needs attention</div>
+    <div role="status" data-tone="neutral">${icon}Saved</div>
+    <section data-tone="neutral"><div role="alert">${icon}Three items</div></section>
+    <button aria-label="Submit"><span role="status">${spinner}</span></button>
+    <div role="status"><button aria-label="Retry">${icon}${spinner}</button></div>
+    <div role="button" tabindex="0" aria-label="Save"><span role="status">${spinner}</span></div>
+    <div class="paired ${tone}">${icon}<button role="status" aria-label="Upload">${spinner}</button></div>
+    <div role="status" style="display:none">${icon}Hidden status</div>
+    <div role="status">Text only</div>`
+  const f = await fixture(t, body(''), { themes: ['dark', 'light'] })
+  const initial = await f.start().done
+  assert.equal(initial.code, 0, initial.output)
+  const neutral = (await f.reports(f.published)).floor
+  const findings = neutral.violations.filter(value => value.rule === 'status-tone')
+  assert.equal(findings.length, 26)
+  for (const theme of ['dark', 'light']) {
+    assert.deepEqual(findings.filter(value => value.capture.theme === theme).map(value => value.selector), ['#processing', '#self-spinner', '#not-yet', '#sibling-not-yet', '#sibling-spinner', '#alert-neutral', '#scoped-foreground', '#scoped-muted', '#zero-warning-svg', '#zero-warning-spinner', '#invisible-svg', '#sibling-hidden-third', '#nested-token'])
+  }
+  assert.equal(new Set(findings.map(value => value.id)).size, 26)
+  const baseline = join(f.root, 'neutral-baseline')
+  await cp(f.published, baseline, { recursive: true })
+  const unchanged = await f.start(['--compare', baseline]).done
+  assert.equal(unchanged.code, 0, unchanged.output)
+  assert.deepEqual((await f.reports(f.published)).floor.violations.filter(value => value.rule === 'status-tone').map(value => value.id), findings.map(value => value.id))
+  await writeFile(join(f.root, 'fixture.html'), html(body('text-[var(--learn-attention)]')))
+  const fixed = await f.start(['--compare', baseline]).done
+  assert.equal(fixed.code, 0, fixed.output)
+  assert.deepEqual((await f.reports(f.published)).floor.violations.filter(value => value.rule === 'status-tone'), [])
+  const fixedBaseline = join(f.root, 'fixed-baseline')
+  await cp(f.published, fixedBaseline, { recursive: true })
+  await writeFile(join(f.root, 'fixture.html'), html(body('')))
+  const regressed = await f.start(['--compare', fixedBaseline]).done
+  assert.equal(regressed.code, 1, regressed.output)
+  assert.equal((await f.reports(f.published)).floor.newViolations.length, 26)
+})
+
 test('missing required font fails with error staging', { timeout: 90_000 }, async t => {
   const f = await fixture(t, '<p>Fallback font</p>', { requiredFonts: ['MissingCaptureFont'] })
   await f.failed(await f.start().done, /Required font was not declared: MissingCaptureFont/)

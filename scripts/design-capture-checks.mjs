@@ -62,6 +62,32 @@ export function checkLayout() {
   }
   const visible = element => element.checkVisibility({ checkVisibilityCSS: true, checkOpacity: true }) && element.getClientRects().length > 0
   const findings = []
+  for (const status of document.querySelectorAll('[role="status"], [role="alert"]')) {
+    if (!visible(status) || status.closest('button, [role="button"], [data-tone="neutral"]')) continue
+    const eligible = element => visible(element) && [...element.getClientRects()].some(rect => rect.width > 0 && rect.height > 0)
+      && !element.closest('button, [role="button"]')
+    let icon = [...status.querySelectorAll('svg')].find(eligible)
+      || [status, ...status.querySelectorAll('.animate-spin')].find(element => element.classList.contains('animate-spin') && eligible(element))
+    const sibling = status.previousElementSibling
+    if (!icon && sibling?.matches('svg[aria-hidden="true"], .animate-spin[aria-hidden="true"]')
+      && eligible(sibling) && [...status.parentElement.children].filter(visible).length === 2) icon = sibling
+    if (!icon) continue
+    const style = getComputedStyle(icon)
+    const canvas = document.createElement('canvas')
+    canvas.width = canvas.height = 1
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })
+    if (!ctx) throw new Error('Cannot resolve status icon colours')
+    const color = value => {
+      if (!CSS.supports('color', value)) return null
+      ctx.clearRect(0, 0, 1, 1)
+      ctx.fillStyle = value
+      ctx.fillRect(0, 0, 1, 1)
+      return [...ctx.getImageData(0, 0, 1, 1).data].join(',')
+    }
+    const rendered = color(style.color)
+    const neutral = ['--foreground', '--muted-foreground'].find(token => color(style.getPropertyValue(token).trim()) === rendered)
+    if (neutral) findings.push({ rule: 'status-tone', selector: selectorFor(status), message: `Status icon uses neutral ${neutral}; use the state colour from DESIGN.md or mark neutral metadata with data-tone="neutral"` })
+  }
   const width = document.documentElement.clientWidth
   if (Math.max(document.documentElement.scrollWidth, document.body.scrollWidth) > width + 1) {
     const offenders = [...document.body.querySelectorAll('*')].filter(element => {
