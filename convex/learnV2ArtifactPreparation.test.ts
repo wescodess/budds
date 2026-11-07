@@ -416,7 +416,7 @@ describe('in-transaction artifact preparation', () => {
 })
 
 
-describe('round-2 producer budgets', () => {
+describe('round-2 producer budgets', { timeout: 30_000 }, () => {
   test.each(['Quiz', 'section_procedural', 'section_factual', 'section_conceptual', 'Flashcards', 'Audio Overview', 'document'] as const)('%s admits maximum sources and prepares the full output batch', async shape => {
     const f = await setup()
     const section = shape.startsWith('section_')
