@@ -8,17 +8,29 @@ import { isRubricAssessment } from './lib/quizAnswerAssessment'
 import { getQuizGradingAnswer, getQuizGradingAttempt, getQuizGradingRows, quizGradingInput, quizGradingInputDigest, recomputeQuizGradingScore, scheduleQuizGrading } from './lib/quizGrading'
 import { admitQuizGradingAttempt, extendQuizGradingCooldown, quizGradingAdmissionRetryAt, quizGradingBudgetRetryAt, quizGradingCooldownUntil, reserveQuizGradingDispatch } from './lib/quizGradingLimits'
 import { quizCriterionResultValidator, scoreQuizCriteria } from '../shared/quiz-grading'
-import { gradeQuizAnswers, QUIZ_GRADER_POLICY, QUIZ_GRADING_BATCH_SIZE, QUIZ_GRADING_FEEDBACK_LIMIT, QUIZ_GRADING_MAX_RETRY_DELAY_MS, QUIZ_GRADING_MAX_REQUEST_BYTES, quizGradingRequestBytes, type QuizGradingFailure, type QuizGradingInput } from '../server/utils/quiz-grading'
+import { gradeQuizAnswers, quizGradingBatchLimits, quizGradingConfigurationDigest, quizGradingConfigured, quizGradingPolicy, quizGradingProvider, quizGradingRevision, QUIZ_GRADING_BATCH_SIZE, QUIZ_GRADING_FEEDBACK_LIMIT, QUIZ_GRADING_MAX_RETRY_DELAY_MS, quizGradingRequestBytes, type QuizGradingFailure, type QuizGradingInput, type QuizGradingProvider } from '../server/utils/quiz-grading'
+import { validatedProviderRetryDelay } from '../server/utils/ai-gateway'
 
 const LEASE_MS = 2 * 60_000
 const MAX_ATTEMPTS = 3
 const MAX_MANUAL_RETRIES = 2
 const failureReason = v.union(v.literal('timeout'), v.literal('over_budget'), v.literal('unconfigured'), v.literal('malformed'), v.literal('unavailable'), v.literal('oversized_evidence'))
 const claimFields = { claimId: undefined, claimedAt: undefined, leaseExpiresAt: undefined }
-const revision = `${QUIZ_GRADER_POLICY.model}@${QUIZ_GRADER_POLICY.upstreamProvider}:${QUIZ_GRADER_POLICY.promptVersion}`
 const batchClaim = { attemptId: v.id('quizAttempts'), claimId: v.string() }
 const claimItems = v.array(v.object({ assessmentId: v.id('quizAnswerAssessments'), inputDigest: v.string() }))
 type ClaimedBatch = { claimId: string, items: { assessmentId: Id<'quizAnswerAssessments'>, inputDigest: string }[] }
+
+async function settleWaiting(ctx: MutationCtx, attemptId: Id<'quizAttempts'>, reason: QuizGradingFailure['reason'], notBefore?: number) {
+  for (const row of await getQuizGradingRows(ctx, attemptId)) {
+    if (row.status !== 'pending') continue
+    await ctx.db.patch(row._id, {
+      ...claimFields, inputDigest: undefined, dispatchedAt: undefined,
+      status: 'unavailable', unavailableReason: reason, retryable: reason !== 'unconfigured',
+      nextAttemptAt: notBefore, completedAt: Date.now(),
+    })
+  }
+  await recomputeQuizGradingScore(ctx, attemptId)
+}
 
 async function continueGrading(ctx: MutationCtx, attemptId: Id<'quizAttempts'>) {
   await recomputeQuizGradingScore(ctx, attemptId)
@@ -28,22 +40,27 @@ async function continueGrading(ctx: MutationCtx, attemptId: Id<'quizAttempts'>) 
   if (waiting.length > 0) {
     const attempt = await ctx.db.get(attemptId)
     const due = Math.max(Date.now(), attempt?.gradingNotBefore ?? 0, await quizGradingCooldownUntil(ctx), Math.min(...waiting.map(row => row.nextAttemptAt ?? 0)))
+    if (due - Date.now() > QUIZ_GRADING_MAX_RETRY_DELAY_MS) {
+      await settleWaiting(ctx, attemptId, 'over_budget', due)
+      return
+    }
     await scheduleQuizGrading(ctx, attemptId, due)
   }
 }
 
 function retryDelay(row: Doc<'quizAnswerAssessments'>, retryAfterMs = 0) {
-  return Math.min(QUIZ_GRADING_MAX_RETRY_DELAY_MS, Math.max(15_000 * 2 ** Math.max(0, (row.attemptCount ?? 1) - 1), retryAfterMs))
+  return Math.max(15_000 * 2 ** Math.max(0, Math.min(MAX_ATTEMPTS, row.attemptCount ?? 1) - 1), validatedProviderRetryDelay(retryAfterMs) ?? 0)
 }
 
-async function backoffAttempt(ctx: MutationCtx, attempt: Doc<'quizAttempts'>, dueAt: number, shared = false) {
+async function backoffAttempt(ctx: MutationCtx, attempt: Doc<'quizAttempts'>, dueAt: number, shared = false, provider: QuizGradingProvider | null = quizGradingProvider()) {
   await ctx.db.patch(attempt._id, { gradingNotBefore: Math.max(attempt.gradingNotBefore ?? 0, dueAt) })
-  if (shared) await extendQuizGradingCooldown(ctx, dueAt)
+  if (shared) await extendQuizGradingCooldown(ctx, dueAt, provider)
 }
 
-async function matchesClaim(ctx: MutationCtx, row: Doc<'quizAnswerAssessments'> | null, attempt: Doc<'quizAttempts'>, claimId: string, inputDigest: string) {
+async function matchesClaim(ctx: MutationCtx, row: Doc<'quizAnswerAssessments'> | null, attempt: Doc<'quizAttempts'>, claimId: string, inputDigest: string, checkCurrentDigest = true) {
   if (!row || row.status !== 'pending' || row.claimId !== claimId || row.inputDigest !== inputDigest
     || (row.leaseExpiresAt ?? 0) <= Date.now() || !await getQuizGradingAnswer(ctx, row, attempt)) return false
+  if (!checkCurrentDigest) return true
   try { return await quizGradingInputDigest(row) === inputDigest }
   catch { return false }
 }
@@ -51,10 +68,11 @@ async function matchesClaim(ctx: MutationCtx, row: Doc<'quizAnswerAssessments'> 
 async function recordFailure(ctx: MutationCtx, row: Doc<'quizAnswerAssessments'>, failure: Omit<QuizGradingFailure, 'status'>) {
   const retryable = failure.retryable && (row.attemptCount ?? 0) < MAX_ATTEMPTS
   const delay = retryDelay(row, failure.retryAfterMs)
+  const automatic = retryable && delay <= QUIZ_GRADING_MAX_RETRY_DELAY_MS
   await ctx.db.patch(row._id, {
     ...claimFields, inputDigest: undefined, dispatchedAt: undefined,
-    status: retryable ? 'pending' : 'unavailable', unavailableReason: failure.reason, retryable,
-    nextAttemptAt: retryable ? Date.now() + delay : undefined, completedAt: retryable ? undefined : Date.now(),
+    status: automatic ? 'pending' : 'unavailable', unavailableReason: failure.reason, retryable,
+    nextAttemptAt: retryable || delay > QUIZ_GRADING_MAX_RETRY_DELAY_MS ? Date.now() + delay : undefined, completedAt: automatic ? undefined : Date.now(),
   })
 }
 
@@ -63,9 +81,16 @@ async function claimQuizBatch(ctx: MutationCtx, attemptId: Id<'quizAttempts'>): 
   if (!scope) return null
   const rows = await getQuizGradingRows(ctx, attemptId)
   if (rows.some(row => row.status === 'pending' && row.claimId)) return null
+  if (!quizGradingConfigured()) {
+    if (rows.some(row => row.status === 'pending')) console.warn('Quiz grading unavailable', { provider: quizGradingProvider() ?? 'unconfigured', reason: 'unconfigured', limiterSource: 'none' })
+    await settleWaiting(ctx, attemptId, 'unconfigured')
+    return null
+  }
+  const limits = quizGradingBatchLimits()
   const notBefore = Math.max(scope.attempt.gradingNotBefore ?? 0, await quizGradingCooldownUntil(ctx))
   if (notBefore > Date.now()) {
-    await scheduleQuizGrading(ctx, attemptId, notBefore)
+    if (notBefore - Date.now() > QUIZ_GRADING_MAX_RETRY_DELAY_MS) await settleWaiting(ctx, attemptId, 'over_budget', notBefore)
+    else await scheduleQuizGrading(ctx, attemptId, notBefore)
     return null
   }
   const ready = rows.filter(row => row.status === 'pending' && (row.nextAttemptAt ?? 0) <= Date.now())
@@ -74,7 +99,7 @@ async function claimQuizBatch(ctx: MutationCtx, attemptId: Id<'quizAttempts'>): 
   const inputs: QuizGradingInput[] = []
   let failed = 0
   for (const row of ready) {
-    if (items.length === QUIZ_GRADING_BATCH_SIZE) break
+    if (items.length === limits.batchSize) break
     if (!await getQuizGradingAnswer(ctx, row, scope.attempt)) continue
     if ((row.attemptCount ?? 0) >= MAX_ATTEMPTS) {
       await recordFailure(ctx, row, { reason: 'unavailable', retryable: false })
@@ -85,12 +110,12 @@ async function claimQuizBatch(ctx: MutationCtx, attemptId: Id<'quizAttempts'>): 
     let inputDigest: string
     try {
       input = quizGradingInput(row)
-      if (quizGradingRequestBytes([input]) > QUIZ_GRADING_MAX_REQUEST_BYTES) {
+      if (quizGradingRequestBytes([input]) > limits.maxRequestBytes) {
         await recordFailure(ctx, row, { reason: 'oversized_evidence', retryable: false })
         failed++
         continue
       }
-      if (quizGradingRequestBytes([...inputs, input]) > QUIZ_GRADING_MAX_REQUEST_BYTES) continue
+      if (quizGradingRequestBytes([...inputs, input]) > limits.maxRequestBytes) continue
       inputDigest = await quizGradingInputDigest(row)
     }
     catch {
@@ -100,7 +125,7 @@ async function claimQuizBatch(ctx: MutationCtx, attemptId: Id<'quizAttempts'>): 
     }
     await ctx.db.patch(row._id, {
       claimId, inputDigest, claimedAt: Date.now(), leaseExpiresAt: Date.now() + LEASE_MS,
-      attemptCount: (row.attemptCount ?? 0) + 1, dispatchedAt: undefined,
+      dispatchedAt: undefined,
     })
     inputs.push(input)
     items.push({ assessmentId: row._id, inputDigest })
@@ -122,10 +147,11 @@ export const claimBatch = internalMutation({
 })
 
 export const markDispatched = internalMutation({
-  args: { ...batchClaim, items: claimItems },
+  args: { ...batchClaim, items: claimItems, configurationDigest: v.optional(v.string()) },
   handler: async (ctx, args): Promise<QuizGradingInput[] | null> => {
     const scope = await getQuizGradingAttempt(ctx, args.attemptId)
-    if (!scope || args.items.length < 1 || args.items.length > QUIZ_GRADING_BATCH_SIZE || new Set(args.items.map(item => item.assessmentId)).size !== args.items.length) return null
+    if (!scope || !quizGradingConfigured() || args.items.length < 1 || args.items.length > quizGradingBatchLimits().batchSize || new Set(args.items.map(item => item.assessmentId)).size !== args.items.length) return null
+    if (args.configurationDigest !== undefined && args.configurationDigest !== await quizGradingConfigurationDigest()) return null
     const rows = []
     for (const item of args.items) {
       const row = await ctx.db.get(item.assessmentId)
@@ -136,9 +162,13 @@ export const markDispatched = internalMutation({
     if (allRows.filter(row => row.status === 'pending' && row.claimId === args.claimId).length !== rows.length) return null
     const notBefore = Math.max(scope.attempt.gradingNotBefore ?? 0, await quizGradingCooldownUntil(ctx))
     if (notBefore > Date.now()) {
+      if (notBefore - Date.now() > QUIZ_GRADING_MAX_RETRY_DELAY_MS) {
+        await settleWaiting(ctx, args.attemptId, 'over_budget', notBefore)
+        return null
+      }
       for (const row of rows) await ctx.db.patch(row._id, {
         ...claimFields, inputDigest: undefined, dispatchedAt: undefined,
-        attemptCount: Math.max(0, (row.attemptCount ?? 1) - 1), nextAttemptAt: notBefore,
+        nextAttemptAt: notBefore,
       })
       await continueGrading(ctx, args.attemptId)
       return null
@@ -149,16 +179,17 @@ export const markDispatched = internalMutation({
       // Untried rows also settle so the learner can choose self-assessment.
       for (const row of allRows.filter(row => row.status === 'pending')) await ctx.db.patch(row._id, {
         ...claimFields, inputDigest: undefined, dispatchedAt: undefined,
-        attemptCount: row.claimId === args.claimId ? Math.max(0, (row.attemptCount ?? 1) - 1) : row.attemptCount,
         status: 'unavailable', unavailableReason: 'over_budget', retryable: true,
         nextAttemptAt: retryAt, completedAt: Date.now(),
       })
       await recomputeQuizGradingScore(ctx, args.attemptId)
+      console.warn('Quiz grading unavailable', { provider: quizGradingProvider(), reason: 'over_budget', limiterSource: 'local', notBefore: retryAt })
       return null
     }
     const inputs = rows.map(quizGradingInput)
     for (const row of rows) await ctx.db.patch(row._id, {
-      dispatchedAt: Date.now(),
+      dispatchedAt: Date.now(), attemptCount: (row.attemptCount ?? 0) + 1,
+      provider: quizGradingPolicy()!.upstreamProvider, modelRevision: quizGradingRevision(),
       ...(row.manualRetryPending ? { manualRetryCount: (row.manualRetryCount ?? 0) + 1, manualRetryPending: undefined } : {}),
     })
     return inputs
@@ -182,7 +213,7 @@ export const commitBatch = internalMutation({
       if (!feedback) continue
       await ctx.db.patch(row!._id, {
         ...claimFields, ...grade, status: 'available', gradeSource: 'model', feedback, criterionResults: result.criterionResults,
-        provider: QUIZ_GRADER_POLICY.upstreamProvider, modelRevision: revision, completedAt: Date.now(),
+        completedAt: Date.now(),
         nextAttemptAt: undefined, unavailableReason: undefined, retryable: undefined,
       })
       await ctx.db.patch(row!.attemptAnswerId, { isCorrect: grade.credit === 1 })
@@ -203,15 +234,23 @@ export const failBatch = internalMutation({
     if (!scope || args.items.length > QUIZ_GRADING_BATCH_SIZE) return 0
     let changed = 0
     let dueAt = 0
+    let provider: QuizGradingProvider | null = quizGradingProvider()
     for (const item of args.items) {
       const row = await ctx.db.get(item.assessmentId)
+      // A genuine dispatched failure still fences its original provider after
+      // a configuration change. Row changes retain canonical digest validation.
+      if (!await matchesClaim(ctx, row, scope.attempt, args.claimId, item.inputDigest, false) || row!.dispatchedAt === undefined) continue
+      provider = row!.provider === 'groq' ? 'groq' : 'openrouter'
+      if (args.reason === 'over_budget' && (args.retryable || (validatedProviderRetryDelay(args.retryAfterMs) ?? 0) > 0)) {
+        await extendQuizGradingCooldown(ctx, Date.now() + retryDelay(row!, args.retryAfterMs), provider)
+      }
       if (!await matchesClaim(ctx, row, scope.attempt, args.claimId, item.inputDigest)) continue
       await recordFailure(ctx, row!, args)
-      if (args.retryable) dueAt = Math.max(dueAt, Date.now() + retryDelay(row!, args.retryAfterMs))
+      if (args.retryable || (validatedProviderRetryDelay(args.retryAfterMs) ?? 0) > 0) dueAt = Math.max(dueAt, Date.now() + retryDelay(row!, args.retryAfterMs))
       changed++
     }
     if (changed > 0) {
-      if (dueAt) await backoffAttempt(ctx, scope.attempt, dueAt, args.reason === 'over_budget')
+      if (dueAt) await backoffAttempt(ctx, scope.attempt, dueAt, args.reason === 'over_budget', provider)
       await continueGrading(ctx, args.attemptId)
     }
     return changed
@@ -229,12 +268,19 @@ export const recoverBatch = internalMutation({
       const row = await ctx.db.get(id)
       if (!row || row.status !== 'pending' || row.claimId !== args.claimId || (row.leaseExpiresAt ?? Infinity) > Date.now()
         || !await getQuizGradingAnswer(ctx, row, scope.attempt)) continue
-      await recordFailure(ctx, row, { reason: 'timeout', retryable: true })
-      dueAt = Math.max(dueAt, Date.now() + retryDelay(row))
+      if (row.dispatchedAt === undefined) {
+        // A dropped/stale action made no provider attempt. Release its lease
+        // without charging an attempt or a manual cycle, then select afresh.
+        await ctx.db.patch(row._id, { ...claimFields, inputDigest: undefined, nextAttemptAt: Date.now() })
+      }
+      else {
+        await recordFailure(ctx, row, { reason: 'timeout', retryable: true })
+        dueAt = Math.max(dueAt, Date.now() + retryDelay(row))
+      }
       recovered++
     }
     if (recovered > 0) {
-      await backoffAttempt(ctx, scope.attempt, dueAt)
+      if (dueAt) await backoffAttempt(ctx, scope.attempt, dueAt)
       await continueGrading(ctx, args.attemptId)
     }
     return recovered
@@ -262,9 +308,11 @@ export const dispatchBatch = internalAction({
   handler: async (ctx, { attemptId, claimId, items }) => {
     // Validate scope, full claim and canonical digests; reserve budget and
     // retrieve stored inputs atomically. Scheduled action arguments hold no bodies.
-    const inputs: QuizGradingInput[] | null = await ctx.runMutation(internal.quizGrading.markDispatched, { attemptId, claimId, items })
+    const configurationDigest = await quizGradingConfigurationDigest()
+    const provider = quizGradingProvider()
+    const inputs: QuizGradingInput[] | null = await ctx.runMutation(internal.quizGrading.markDispatched, { attemptId, claimId, items, configurationDigest })
     if (!inputs) return
-    const outcome = await gradeQuizAnswers(inputs)
+    const outcome = await gradeQuizAnswers(inputs, configurationDigest)
     if (outcome.status === 'graded') {
       await ctx.runMutation(internal.quizGrading.commitBatch, {
         attemptId, claimId,
@@ -275,7 +323,12 @@ export const dispatchBatch = internalAction({
       })
     }
     else {
-      const { status: _status, ...failure } = outcome
+      const { status: _status, httpStatus, ...failure } = outcome
+      console.warn('Quiz grading unavailable', {
+        provider, reason: failure.reason, limiterSource: httpStatus === 429 ? 'upstream' : 'none',
+        ...(httpStatus !== undefined ? { httpStatus } : {}),
+        ...(failure.retryAfterMs !== undefined ? { notBefore: Date.now() + failure.retryAfterMs } : {}),
+      })
       await ctx.runMutation(internal.quizGrading.failBatch, { attemptId, claimId, items, ...failure })
     }
   },
@@ -310,12 +363,14 @@ export const requestGradingRetry = mutation({
     const scope = await getQuizGradingAttempt(ctx, attemptId)
     if (!scope || scope.attempt.userId !== userId) throw new Error('Attempt not found')
     const rows = await getQuizGradingRows(ctx, attemptId)
+    if (!quizGradingConfigured()) return { retried: 0 }
+    const limits = quizGradingBatchLimits()
     const candidates = []
     for (const row of rows) {
       if (row.status !== 'unavailable' || row.gradeSource === 'self' || (row.manualRetryCount ?? 0) >= MAX_MANUAL_RETRIES
-        || row.unavailableReason === 'oversized_evidence' || !await getQuizGradingAnswer(ctx, row, scope.attempt)) continue
+        || (row.nextAttemptAt ?? 0) > Date.now() || !await getQuizGradingAnswer(ctx, row, scope.attempt)) continue
       try {
-        if (quizGradingRequestBytes([quizGradingInput(row)]) > QUIZ_GRADING_MAX_REQUEST_BYTES) continue
+        if (quizGradingRequestBytes([quizGradingInput(row)]) > limits.maxRequestBytes) continue
       }
       catch { continue }
       candidates.push(row)

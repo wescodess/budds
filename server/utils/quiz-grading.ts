@@ -1,4 +1,5 @@
-import { classifyAiGatewayFailure, generateCompletion, serializeCompletionRequest, type GenerateParams } from './ai-gateway'
+import { aiGatewayConfigurationDigest, classifyAiGatewayFailure, generateCompletion, serializeCompletionRequest, validatedProviderRetryDelay, type GenerateParams } from './ai-gateway'
+import { generateGroqQuizCompletion, GROQ_QUIZ_BATCH_SIZE, GROQ_QUIZ_MAX_REQUEST_BYTES, GROQ_QUIZ_MODEL, serializeGroqQuizRequest } from './quiz-grading-groq'
 import { validateQuizGradingCriteria, type QuizCriterionResult, type QuizGradingCriterion } from '../../shared/quiz-grading'
 
 export const QUIZ_GRADER_POLICY = Object.freeze({
@@ -6,6 +7,47 @@ export const QUIZ_GRADER_POLICY = Object.freeze({
   upstreamProvider: 'phala',
   promptVersion: 'quiz-rubric-judge.v2',
 })
+const GROQ_GRADER_POLICY = Object.freeze({
+  model: GROQ_QUIZ_MODEL, upstreamProvider: 'groq', promptVersion: QUIZ_GRADER_POLICY.promptVersion,
+  routePolicy: 'groq-free-plan-zdr.v1',
+})
+export type QuizGradingProvider = 'openrouter' | 'groq'
+export function quizGradingProvider(): QuizGradingProvider | null {
+  const selector = process.env.QUIZ_GRADING_PROVIDER
+  return selector === undefined || selector === 'openrouter' ? 'openrouter' : selector === 'groq' ? 'groq' : null
+}
+export function quizGradingPolicy() {
+  const provider = quizGradingProvider()
+  return provider === 'groq' ? GROQ_GRADER_POLICY : provider === 'openrouter' ? QUIZ_GRADER_POLICY : null
+}
+export function quizGradingConfigured() {
+  const provider = quizGradingProvider()
+  return provider === 'openrouter' || (provider === 'groq' && !!process.env.QUIZ_GRADING_GROQ_API_KEY?.trim()
+    && process.env.QUIZ_GRADING_GROQ_FREE_PLAN_CONFIRMED === 'true' && process.env.QUIZ_GRADING_GROQ_ZDR_CONFIRMED === 'true')
+}
+export function quizGradingBatchLimits() {
+  return quizGradingProvider() === 'groq'
+    ? { batchSize: GROQ_QUIZ_BATCH_SIZE, maxRequestBytes: GROQ_QUIZ_MAX_REQUEST_BYTES }
+    : { batchSize: QUIZ_GRADING_BATCH_SIZE, maxRequestBytes: QUIZ_GRADING_MAX_REQUEST_BYTES }
+}
+export function quizGradingRevision() {
+  const policy = quizGradingPolicy()
+  return policy ? `${policy.model}@${policy.upstreamProvider}:${policy.promptVersion}${'routePolicy' in policy ? `:${policy.routePolicy}` : ''}` : undefined
+}
+export async function quizGradingConfigurationDigest() {
+  const provider = quizGradingProvider()
+  // Only the hash leaves this helper. Key rotation and policy gate changes
+  // invalidate in-flight claims without persisting or logging credentials.
+  const bytes = new TextEncoder().encode(JSON.stringify({
+    provider, policy: quizGradingPolicy(),
+    ...(provider === 'groq' ? {
+      key: process.env.QUIZ_GRADING_GROQ_API_KEY ?? '',
+      freePlan: process.env.QUIZ_GRADING_GROQ_FREE_PLAN_CONFIRMED === 'true',
+      zdr: process.env.QUIZ_GRADING_GROQ_ZDR_CONFIRMED === 'true',
+    } : provider === 'openrouter' ? { gatewayDigest: await aiGatewayConfigurationDigest() } : {}),
+  }))
+  return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), byte => byte.toString(16).padStart(2, '0')).join('')
+}
 export const QUIZ_GRADING_BATCH_SIZE = 8
 export const QUIZ_GRADING_MAX_REQUEST_BYTES = 96_000
 export const QUIZ_GRADING_EVIDENCE_CHARACTERS = 1200
@@ -41,6 +83,7 @@ export type QuizGradingFailure = {
   reason: 'timeout' | 'over_budget' | 'unconfigured' | 'malformed' | 'unavailable' | 'oversized_evidence'
   retryable: boolean
   retryAfterMs?: number
+  httpStatus?: number
 }
 export type QuizGradingOutcome = {
   status: 'graded'
@@ -142,28 +185,39 @@ export function quizGradingRequest(items: QuizGradingInput[]): GenerateParams {
   }
 }
 
-export function quizGradingRequestBytes(items: QuizGradingInput[]) {
-  return new TextEncoder().encode(serializeCompletionRequest(quizGradingRequest(items))).byteLength
+export function serializeQuizGradingRequest(items: QuizGradingInput[]) {
+  const params = quizGradingRequest(items)
+  return quizGradingProvider() === 'groq' ? serializeGroqQuizRequest(params) : serializeCompletionRequest(params)
 }
 
-export async function gradeQuizAnswers(items: QuizGradingInput[]): Promise<QuizGradingOutcome> {
-  const model = requireFreeQuizGradingModel(QUIZ_GRADER_POLICY.model)
+export function quizGradingRequestBytes(items: QuizGradingInput[]) {
+  return new TextEncoder().encode(serializeQuizGradingRequest(items)).byteLength
+}
+
+export async function gradeQuizAnswers(items: QuizGradingInput[], configurationDigest?: string): Promise<QuizGradingOutcome> {
+  if (!quizGradingConfigured() || (configurationDigest !== undefined && configurationDigest !== await quizGradingConfigurationDigest())) {
+    return { status: 'unavailable', reason: 'unconfigured', retryable: false }
+  }
+  const provider = quizGradingProvider()!
+  const model = quizGradingPolicy()!.model
+  const limits = quizGradingBatchLimits()
   items = items.map(item => ({ ...item, evidenceExcerpt: boundQuizGradingEvidence(item.evidenceExcerpt) }))
   const malformed: QuizGradingFailure = { status: 'unavailable', reason: 'malformed', retryable: false }
-  if (items.length < 1 || items.length > QUIZ_GRADING_BATCH_SIZE || new Set(items.map(item => item.id)).size !== items.length) return malformed
+  if (items.length < 1 || items.length > limits.batchSize || new Set(items.map(item => item.id)).size !== items.length) return malformed
   try {
     for (const item of items) validateQuizGradingCriteria(item.criteria)
   }
   catch { return malformed }
-  if (quizGradingRequestBytes(items) > QUIZ_GRADING_MAX_REQUEST_BYTES) return { status: 'unavailable', reason: 'oversized_evidence', retryable: false }
+  if (quizGradingRequestBytes(items) > limits.maxRequestBytes) return { status: 'unavailable', reason: 'oversized_evidence', retryable: false }
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), QUIZ_GRADING_TIMEOUT_MS)
   try {
-    const completion = await generateCompletion({ ...quizGradingRequest(items), signal: controller.signal })
+    const params = { ...quizGradingRequest(items), signal: controller.signal }
+    const completion = provider === 'groq' ? await generateGroqQuizCompletion(params, process.env.QUIZ_GRADING_GROQ_API_KEY!.trim()) : await generateCompletion(params)
     if (typeof completion.usage?.cost === 'number' && completion.usage.cost > 0) {
       console.warn('Quiz free-model grading reported a nonzero provider cost')
     }
-    if (completion.model !== model && completion.model !== model.replace(/:free$/, '')
+    if ((completion.model !== model && (provider !== 'openrouter' || completion.model !== model.replace(/:free$/, '')))
       || completion.choices.length !== 1 || completion.choices[0]?.finish_reason !== 'stop') return malformed
     let payload: unknown
     try { payload = JSON.parse(completion.choices[0]!.message.content) }
@@ -179,13 +233,13 @@ export async function gradeQuizAnswers(items: QuizGradingInput[]): Promise<QuizG
     if (failure === 'invalid_response') return malformed
     if (failure === 'not_dispatched') return { status: 'unavailable', reason: 'unconfigured', retryable: false }
     const metadata = typeof error === 'object' && error !== null ? error as { statusCode?: unknown, retryAfterMs?: unknown } : {}
-    const status = Number(metadata.statusCode) || 0
-    const retryAfterMs = typeof metadata.retryAfterMs === 'number' && Number.isFinite(metadata.retryAfterMs)
-      ? Math.min(QUIZ_GRADING_MAX_RETRY_DELAY_MS, Math.max(0, metadata.retryAfterMs)) : undefined
+    const status = typeof metadata.statusCode === 'number' && Number.isInteger(metadata.statusCode) && metadata.statusCode >= 100 && metadata.statusCode <= 599 ? metadata.statusCode : 0
+    const retryAfterMs = validatedProviderRetryDelay(metadata.retryAfterMs)
     return {
       status: 'unavailable', reason: status === 429 ? 'over_budget' : status === 408 ? 'timeout' : 'unavailable',
       retryable: status === 429 || status === 408 || status >= 500 || failure === 'outcome_unknown',
       ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+      ...(status ? { httpStatus: status } : {}),
     }
   }
   finally { clearTimeout(timeout) }

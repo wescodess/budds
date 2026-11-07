@@ -4,7 +4,7 @@ import { internal } from '../_generated/api'
 import { hasAccountDeletionTombstone } from './accountDeletionTombstone'
 import { isRubricAssessment } from './quizAnswerAssessment'
 import { QUIZ_RUBRIC_GRADE_VERSION, validateQuizGradingCriteria } from '../../shared/quiz-grading'
-import { QUIZ_GRADER_POLICY, boundQuizGradingEvidence, type QuizGradingInput } from '../../server/utils/quiz-grading'
+import { quizGradingConfigurationDigest, boundQuizGradingEvidence, serializeQuizGradingRequest, type QuizGradingInput } from '../../server/utils/quiz-grading'
 
 export const MAX_QUIZ_GRADING_ROWS = 200
 
@@ -107,7 +107,7 @@ export function quizGradingInput(row: Doc<'quizAnswerAssessments'>): QuizGrading
 export async function quizGradingInputDigest(row: Doc<'quizAnswerAssessments'>) {
   const bytes = new TextEncoder().encode(JSON.stringify({
     userId: row.userId, attemptId: row.attemptId, attemptAnswerId: row.attemptAnswerId, questionId: row.questionId,
-    rubricVersion: row.rubricVersion, policy: QUIZ_GRADER_POLICY, input: quizGradingInput(row),
+    rubricVersion: row.rubricVersion, policyDigest: await quizGradingConfigurationDigest(), request: serializeQuizGradingRequest([quizGradingInput(row)]),
   }))
   return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), byte => byte.toString(16).padStart(2, '0')).join('')
 }

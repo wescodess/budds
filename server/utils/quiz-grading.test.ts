@@ -112,9 +112,9 @@ test('aborts at the deadline and classifies the timeout as retryable', async () 
 })
 
 test.each([
-  { error: { statusCode: 429, retryAfterMs: 1_000_000 }, reason: 'over_budget', retryable: true, retryAfterMs: 900_000 },
-  { error: { statusCode: 503 }, reason: 'unavailable', retryable: true },
-  { error: { statusCode: 400, aiGatewayFailureKind: 'definitive_failure' }, reason: 'unavailable', retryable: false },
+  { error: { statusCode: 429, retryAfterMs: 1_000_000 }, reason: 'over_budget', retryable: true, retryAfterMs: 1_000_000, httpStatus: 429 },
+  { error: { statusCode: 503 }, reason: 'unavailable', retryable: true, httpStatus: 503 },
+  { error: { statusCode: 400, aiGatewayFailureKind: 'definitive_failure' }, reason: 'unavailable', retryable: false, httpStatus: 400 },
   { error: { statusCode: 500, aiGatewayFailureKind: 'not_dispatched' }, reason: 'unconfigured', retryable: false },
   { error: { statusCode: 502, aiGatewayFailureKind: 'invalid_response' }, reason: 'malformed', retryable: false },
 ])('classifies transport failures without including provider text: %j', async ({ error, ...expected }) => {
