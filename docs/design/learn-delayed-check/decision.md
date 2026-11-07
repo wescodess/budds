@@ -2,7 +2,7 @@
 
 Spec: [#361](https://github.com/wescodess/budds/issues/361). Canvas adapter: [#442](https://github.com/wescodess/budds/issues/442). Approved mockup: [`approved.html`](./approved.html). Rounds and reasoning: [`notes.md`](./notes.md).
 
-**Chosen:** Today points (round 2). The adaptive Canvas is the only place the check and its result live. Today starts the check from one row and keeps the session closed until the answer is saved; after that the row only reports status in one line and, when a result is ready, links back to the Canvas with "Read it". On the Canvas the check is a quiet room: question, answer and a required 1–5 confidence, with help hidden. After submit, a receipt sits on top with the saved answer, practice on a different case opens below it, every recovery state fills the receipt slot, and the result and cited feedback read under the learner's own answer.
+**Chosen:** Today points (round 2). The adaptive Canvas is the only place the check and its result live. Today starts the check from one row and keeps the session closed until the answer is saved; after that the row only reports status in one line and, when a result is ready, links back to the Canvas with "Read it". On the Canvas the check is a quiet room: question, answer and a required 1–5 confidence, with help hidden. After submit, a receipt sits on top with the saved answer, practice on a different case opens below it, every recovery state fills the receipt slot. When the result arrives, its heading leads the card, the learner's own answer follows, and cited feedback reads under the answer.
 
 **Rejected:**
 
